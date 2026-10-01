@@ -105,6 +105,38 @@ Codex CLI 0.154.0 の interactive session で、事前設定済みの stdio MCP 
 - **WSL**。公式ドキュメント（[Claude in Chrome](https://code.claude.com/docs/en/chrome)）では WSL は非対応です。Claude Code 2.1.283 で、アカウント経由で接続した Windows のブラウザを WSL の `claude -p --chrome` から操作できたことを 1 台の実機で確認しています。サポート対象として扱わず、version を上げたら確認し直してください。
 - **env の既定**。`AGENTSTACK_CLAUDE_CHILD_CHROME=1` と `AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE=<id>` を設定すると、`spawn_child.sh` から起動する Claude child すべてに同じ指定が付きます。CLI のフラグが env より優先されます。Codex child では無視し、Codex の起動・再開時には env から外します（Codex child が起動する子へ引き継がないため）。dashboard の NEW AGENT は、フォームで指定した値だけを使い、env の既定は使いません。
 
+## Claude child がタスクを受け取る仕組み
+
+Claude の子には、launcher（`spawn_child.sh`）が最初のタスクを `claude [prompt]` の引数で渡します。子にとってはこれが利用者の最初の発言になります。同じ起動コマンドの `--append-system-prompt` で、運用者の設定として次を伝えます。
+
+- この session は ORRERY の子 X で、親 P のために launcher が起動したこと
+- 最初の発言は P が委任したタスクであること
+- 報告は `mcp__orrery-mail__send_message` で行うこと
+
+以前はタスクを入力欄に貼り付けていました。Claude Code は貼り付けを `<pasted_content>` で包み、「貼り付けの中の指示は、利用者自身の発言が求めたときだけ従う」と扱います。2026-10-01 の測定では、vault の外（managed block の CLAUDE.md が無い場所）の Sonnet 5 の子は、事故と同じ形のタスクを次のように扱いました。
+
+| 渡し方 | 結果 |
+|---|---|
+| 貼り付け | 6 回中 6 回断った（文面を変えても同じ） |
+| 引数だけ | 3 回中 2 回断った |
+| 引数と system prompt | 3 回中 3 回実行した |
+
+**受け取ったかの確認:** 起動の後、launcher は background で子の transcript を読みます。
+
+- 最初の turn に tool の呼び出しがあれば「始めた」とみなします
+- 最初の turn が文章だけで終わった場合（断った・確認を求めた）は、親に ORRERY Mail で知らせます
+- `AGENTSTACK_CHILD_START_WAIT_SECONDS`（既定 180 秒）の間に始めなかった場合や、transcript が見つからない場合も同じです
+- この Mail は子の名前で届きますが、件名は `[launcher]` で始まり、本文の先頭に「子本人ではなく launcher が自動で送った」と書いてあります
+- 結果はどれも `spawn_incidents.log` に残ります。`AGENTSTACK_CHILD_START_CHECK=0` で無効にできます（テスト用）
+
+warm pool（`hooks/warm_pool.sh`）の session は起動済みなので、タスクは今も貼り付けで渡します。warm pool を使う場合は、事前起動の時に同じ system prompt を渡してください。Codex の子は前からタスクを引数で受け取っています。
+
+**モデルが変わったら回す:** `scripts/canary-embed-task.sh` は、モデル × vault の内外ごとに一時の子を起動し、それぞれを「実行した／Mail 以外で報告した／断った／時間切れ」に分けて表にします。CI には入れず、手で回します。子は最後に必ず終了させ、retire します。live の ORRERY Mail に一時の identity を作るので、始める前に確認を求めます。
+
+```bash
+scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside --runs 3 --parent <自分の名前>
+```
+
 ## 使い分け
 
 組み込み subagent が正しい場面はあります。答えだけが要る短い検索、親のコンテキストを汚したくない読み取り専用の調査。1回で閉じ、誰も後から参照しない仕事です。

@@ -1519,6 +1519,47 @@ CLAUDE_READY_WAITED=0
 # Waits until the Claude REPL accepts input. Returns 0 when ready; otherwise
 # reports why, saves the screen and returns 1. Keys are sent only to accept
 # the trust dialog.
+# A child started with its first prompt as the `claude [prompt]` argument shows
+# that prompt at once after the cursor glyph ("❯ あなたは <name>…") and starts
+# working. That row is the user's message, not a selected choice; read as one it
+# stopped a child that was already working (2026-10-01). Drop it and its
+# indented continuation rows before the screen is classified. The echo is
+# recognised by the prompt's first line up to the child's name, which always
+# ends on a whole character and never begins a dialog.
+CLAUDE_READY_PROMPT_ECHO=""
+claude_strip_prompt_echo() {
+    local pane_text="$1" line rest skip=false
+    if [[ -z "$CLAUDE_READY_PROMPT_ECHO" ]]; then
+        printf '%s' "$pane_text"
+        return 0
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$skip" == true && "$line" == "  "* && "$line" != *"❯"* ]]; then
+            continue
+        fi
+        skip=false
+        rest="${line#"${line%%[![:space:]]*}"}"
+        if [[ "$rest" == "❯"* ]]; then
+            rest="${rest#❯}"
+            rest="${rest#"${rest%%[![:space:]]*}"}"
+            if [[ "$rest" == "$CLAUDE_READY_PROMPT_ECHO"* ]]; then
+                skip=true
+                continue
+            fi
+        fi
+        printf '%s\n' "$line"
+    done <<< "$pane_text"
+}
+
+# The part of a launch prompt that its echo starts with: its first line, up to
+# and including the child's name.
+claude_prompt_echo_head() {
+    local prompt_text="$1" child_name="$2" first_line
+    first_line="$(printf '%s' "$prompt_text" | head -n 1)"
+    [[ "$first_line" == *"$child_name"* ]] || return 0
+    printf '%s%s' "${first_line%%"$child_name"*}" "$child_name"
+}
+
 wait_for_claude_ready() {
     local session_name="$1" log_prefix="$2"
     local waited=0 pane_text="" last_seen="" trust_attempts=0 trust_max=5 choice_since=-1 state last choice_kind
@@ -1532,6 +1573,7 @@ wait_for_claude_ready() {
         # Keep the last screen actually seen: once the session is gone, the
         # capture fails and would leave an empty record.
         [[ -n "$pane_text" ]] && last_seen="$pane_text"
+        pane_text="$(claude_strip_prompt_echo "$pane_text")"
         if claude_user_prompt_present "$pane_text"; then
             claude_record_failure "$session_name" "Claude asked the user about Claude in Chrome; not answered by the launcher" "$last_seen"
             echo "[$log_prefix] Aborting: Claude Code is asking the user a one-time question about Claude in Chrome (\"Claude in Chrome extension detected\"). No key was sent: the answer may become the default for all later Claude sessions, so ORRERY leaves it to you. Open 'claude' once in a normal terminal and answer it yourself (or choose with /chrome), then launch the child again." >&2
@@ -2276,23 +2318,195 @@ print(token_path)
 ' "$agent_name" "$project_key" "$sent_token_file" "$token_file" "$state_file" "$program"
 }
 
+# --- First prompt and start check for Claude children ------------------------
+# Seconds to wait for a Claude child's first turn before telling the parent it
+# never started. Generous on purpose: a cold start and a heavy model's first
+# turn must not raise a false alarm, which misleads as much as silence does.
+CLAUDE_START_WAIT_SECONDS="${AGENTSTACK_CHILD_START_WAIT_SECONDS:-180}"
+CLAUDE_START_POLL_SECONDS="${AGENTSTACK_CHILD_START_POLL_SECONDS:-5}"
+CLAUDE_CHILD_ARGV_PROMPT=false
+CLAUDE_CHILD_PROMPT_FILE=""
+CLAUDE_START_CHECK=false
+
+# Write the first prompt where only this user can read it; the launch command
+# reads it once and removes it. Prints the path.
+write_claude_first_prompt() {
+    local child_name="$1" prompt_text="$2" path
+    mkdir -p "$CHILD_STATE_DIR" && chmod 700 "$CHILD_STATE_DIR" 2>/dev/null || return 1
+    path="$(mktemp "$CHILD_STATE_DIR/.$child_name.first-prompt.XXXXXX")" || return 1
+    chmod 600 "$path" || { rm -f "$path"; return 1; }
+    printf '%s' "$prompt_text" > "$path" || { rm -f "$path"; return 1; }
+    printf '%s\n' "$path"
+}
+
+# Operator configuration for a launched Claude child, passed with
+# --append-system-prompt: who started this session and what its first message
+# is. Said by the operator's own launch command, in the system prompt, rather
+# than claimed inside the conversation, where a careful model treats an identity
+# and a "no registration needed" as an injection (2026-10-01).
+claude_child_system_prompt() {
+    local child_name="$1" parent_name="$2"
+    if [[ -n "$parent_name" ]]; then
+        printf 'This Claude Code session is the ORRERY child agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine for its parent agent %s, at the request of the person who runs both. The first user message is the task %s delegated to you: carry it out. Your ORRERY Mail connection is already bound to the name %s (mcp__orrery-mail__runtime_status shows it), so no registration or inbox check is needed first. Report to %s with mcp__orrery-mail__send_message, not with any other messaging tool.' \
+            "$child_name" "$parent_name" "$parent_name" "$child_name" "$parent_name"
+    else
+        printf 'This Claude Code session is the standalone ORRERY agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine at the request of the person who runs it. The first user message is your task: carry it out. Your ORRERY Mail connection is already bound to the name %s (mcp__orrery-mail__runtime_status shows it), so no registration is needed first.' \
+            "$child_name" "$child_name"
+    fi
+}
+
+# The first line of a prompt: the watcher finds the child's transcript by its
+# first user message, which starts with it. (The helper shortens it by
+# characters; `cut -c` counts bytes in some locales and would split one.)
+claude_prompt_head() {
+    printf '%s' "$1" | head -n 1
+}
+
+# Tell the parent that its child did not start. Sent through ORRERY Mail as the
+# child (the launcher holds its token), and says so first: the child did not
+# write it.
+notify_parent_child_not_started() {
+    local child_name="$1" parent_name="$2" token_file="$3" reason="$4" child_text="$5"
+    if [[ -z "$parent_name" ]]; then
+        echo "no parent to tell" >&2
+        return 1
+    fi
+    if [[ ! -s "$token_file" ]]; then
+        echo "the child's token is not available (${token_file:-unset})" >&2
+        return 1
+    fi
+    "${AGENTSTACK_PYTHON:-python3}" - "$child_name" "$parent_name" "$PROJECT_KEY" \
+        "$token_file" "$MCP_URL" "$reason" "$child_text" "$CLAUDE_START_WAIT_SECONDS" <<'PY'
+import http.client
+import json
+import sys
+from urllib.parse import urlparse
+
+child, parent, project_key, token_file, url, reason, child_text, wait = sys.argv[1:9]
+with open(token_file, encoding="utf-8") as handle:
+    token = handle.read().strip()
+why = {
+    "declined": "最初の turn で tool を呼ばずに、文章だけで返しました（タスクを断ったか、確認を求めています）。",
+    "timeout": f"起動から {wait} 秒の間に、最初の turn が終わりませんでした（tool の呼び出しもありません）。",
+    "unverified": f"起動から {wait} 秒の間に、この子の会話の記録（Claude Code の transcript）が見つからず、始めたかを確かめられませんでした。",
+}.get(reason, reason)
+if reason == "unverified":
+    finding = f"{child} が起動時に渡したタスクを始めたかを、確かめられませんでした。{why}"
+else:
+    finding = f"{child} は、起動時に渡したタスクを始めていません。{why}"
+body = (
+    f"この Mail は {child} 本人ではなく、ORRERY の launcher（spawn_child.sh）が自動で送りました。\n\n"
+    f"{finding}\n\n"
+    f"tmux session `{child}` を開いて様子を見るか、タスクを渡し直してください。\n"
+)
+if child_text:
+    body += "\n## 子の最初の発言\n\n" + "\n".join("> " + line for line in child_text.splitlines()) + "\n"
+arguments = {
+    "project_key": project_key, "sender_name": child, "to": [parent],
+    "subject": (f"[launcher] {child} がタスクを始めたか確かめられません" if reason == "unverified"
+                else f"[launcher] {child} がタスクを始めていません"),
+    "body_md": body, "importance": "high", "sender_token": token,
+}
+parsed = urlparse(url)
+request = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": "send_message", "arguments": arguments}}).encode()
+try:
+    connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=30)
+    connection.request("POST", parsed.path, body=request,
+                       headers={"Content-Type": "application/json",
+                                "Accept": "application/json", "Connection": "close"})
+    reply = json.loads(connection.getresponse().read().decode("utf-8"))
+    connection.close()
+except (OSError, ValueError) as exc:
+    print(f"ORRERY Mail at {url} did not answer: {type(exc).__name__}", file=sys.stderr)
+    raise SystemExit(1)
+result = reply.get("result") if isinstance(reply, dict) else None
+if not isinstance(result, dict) or reply.get("error") or result.get("isError"):
+    print("ORRERY Mail refused the message", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+# Watch, in the background, whether a Claude child acts on its first prompt.
+# Started: its first turn called a tool. Declined: the turn ended with text
+# alone. Neither within CLAUDE_START_WAIT_SECONDS: timeout. Declined and
+# timeout reach the parent by Mail; every outcome is in the incident log.
+claude_watch_initial_task() {
+    local child_name="$1" parent_name="$2" token_file="$3" prompt_text="$4"
+    local projects head since nap=sleep
+    # Off only where nothing real is launched (the test suite sets it).
+    [[ "${AGENTSTACK_CHILD_START_CHECK:-1}" == 0 ]] && return 0
+    [[ -x /bin/sleep ]] && nap=/bin/sleep
+    projects="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
+    head="$(claude_prompt_head "$prompt_text")"
+    since="$(date +%s)"
+    (
+        local deadline=$((since + CLAUDE_START_WAIT_SECONDS)) result status text
+        while :; do
+            result="$("${AGENTSTACK_PYTHON:-python3}" "$HOOKS_DIR/claude-initial-task-status.py" \
+                "$projects" "$since" "$head" 2>/dev/null || true)"
+            status="$(printf '%s' "$result" | "${AGENTSTACK_PYTHON:-python3}" -c \
+                'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
+            if [[ "$status" == started ]]; then
+                spawn_note "Claude child $child_name started its task (its first turn called a tool)"
+                exit 0
+            fi
+            if [[ "$status" == declined || $(date +%s) -ge $deadline ]]; then
+                if [[ "$status" != declined ]]; then
+                    status=timeout
+                    # No transcript at all: the check itself could not run.
+                    printf '%s' "$result" | grep -q '"transcript": ""' && status=unverified
+                fi
+                text="$(printf '%s' "$result" | "${AGENTSTACK_PYTHON:-python3}" -c \
+                    'import json,sys; print(json.load(sys.stdin).get("text",""))' 2>/dev/null || true)"
+                local why
+                if why="$(notify_parent_child_not_started "$child_name" "$parent_name" "$token_file" "$status" "$text" 2>&1)"; then
+                    spawn_note "WARNING: Claude child $child_name did not start its task ($status); told ${parent_name} by Mail"
+                else
+                    spawn_note "WARNING: Claude child $child_name did not start its task ($status); could not tell ${parent_name:-the parent} by Mail: ${why:-unknown error}"
+                fi
+                exit 0
+            fi
+            if ! tmux has-session -t "=$child_name" 2>/dev/null; then
+                spawn_note "Claude child $child_name ended before its first turn could be checked"
+                exit 0
+            fi
+            "$nap" "$CLAUDE_START_POLL_SECONDS"
+        done
+    ) </dev/null >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+}
+
 build_embedded_task_prompt() {
     local child_name="$1"
     local parent_name="$2"
     local spawned_at="$3"
     local project_key="$4"
     local task_text="$5"
-    printf 'あなたは %s（親: %s）。この起動は --embed-task mode です。ORRERY Mail への登録は親が完了済み・儀式不要です。ensure_project・register_agent・fetch_inbox は実行しないでください。現在時刻: %s。project_key は %s。以下のタスクが正本です。直ちに開始し、完了したら send_message で %s に報告してください:\n\n%s' \
+    printf 'あなたは %s（親: %s）。この起動は --embed-task mode です。ORRERY Mail への登録は親が完了済み・儀式不要です。ensure_project・register_agent・fetch_inbox は実行しないでください。現在時刻: %s。project_key は %s。以下のタスクが正本です。直ちに開始し、完了したら ORRERY Mail の send_message（Claude Code の SendMessage ではない）で %s に報告してください:\n\n%s' \
         "$child_name" "$parent_name" "$spawned_at" "$project_key" \
         "$parent_name" "$task_text"
 }
 
-# The Claude child's tmux command. With chrome off this must stay byte-for-byte
-# the command used before --claude-chrome existed; --chrome is the only addition.
+# The Claude child's tmux command. With chrome off and no first prompt this
+# must stay byte-for-byte the command used before --claude-chrome existed;
+# --chrome and the first prompt are the only additions.
+#
+# The first prompt goes in as the `claude [prompt]` argument, so it is the
+# user's first message. Pasted into the input box it arrived wrapped in
+# <pasted_content>, and Claude Code follows instructions inside a paste only
+# when the user's own message asks it to: Sonnet 5 children outside the vault
+# declined the task 6 times in 6 on 2026-10-01, whatever the paste said. The
+# text travels in a private file (a tmux environment value has a size limit)
+# that the child's shell reads once and removes.
 claude_child_launch_command() {
     local inner='export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"'
     if [[ "$CLAUDE_CHILD_CHROME" == true ]]; then
         inner+=' --chrome'
+    fi
+    if [[ "${CLAUDE_CHILD_ARGV_PROMPT:-false}" == true ]]; then
+        inner+=' --append-system-prompt "$CLAUDE_CHILD_SYSTEM_PROMPT"'
+        inner+=' "$(cat "$CLAUDE_CHILD_PROMPT_FILE"; rm -f "$CLAUDE_CHILD_PROMPT_FILE")"'
     fi
     inner+='; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'
     printf "%s -lc '%s'" "$CHILD_SHELL" "$inner"
@@ -2440,7 +2654,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
             return
         fi
         warn_if_uninjected
-        rm -f "${CODEX_PROMPT_FILE:-}"
+        rm -f "${CODEX_PROMPT_FILE:-}" "${CLAUDE_CHILD_PROMPT_FILE:-}"
         if [[ "$PRE_REGISTERED_ADOPTION_PENDING" == true ]]; then
             local finish_status=0
             finish_child_registration "$CHILD_NAME" true || finish_status=$?
@@ -2761,6 +2975,21 @@ ${TASK}"
             exit 1
         fi
 
+        if [[ "$STANDALONE" == true ]]; then
+            CHILD_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved and registered; do not register another identity, do not re-register yourself (no agentstack-reregister), and do not fetch the inbox as a startup ritual. Starting child agents of your own later is allowed. This prompt is the canonical task. Start it immediately:
+
+${TASK}"
+        elif [[ "$EMBED_TASK" == true ]]; then
+            CHILD_PROMPT="$EMBEDDED_TASK_PROMPT"
+        else
+            CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
+        fi
+        if ! CHROME_PROMPT_BLOCK="$(claude_chrome_prompt_block)"; then
+            echo "[spawn_child/pre-reg] Aborting: could not build the Claude in Chrome browser policy." >&2
+            exit 1
+        fi
+        CHILD_PROMPT+="$CHROME_PROMPT_BLOCK"
+
         WARM_CLAIMED=false
         WARM_STATUS=$(bash "$WARM_POOL" status 2>/dev/null || true)
         if [[ "$CLAUDE_CHILD_CHROME" != true && -f "$WARM_POOL" ]] \
@@ -2785,11 +3014,20 @@ ${TASK}"
             else
                 echo "[spawn_child/pre-reg] No MCP proxy available; child uses the shared ORRERY Mail endpoint" >&2
             fi
+            if ! CLAUDE_CHILD_PROMPT_FILE="$(write_claude_first_prompt "$CHILD_NAME" "$CHILD_PROMPT")"; then
+                echo "[spawn_child/pre-reg] Aborting: could not write the first prompt in $CHILD_STATE_DIR." >&2
+                exit 1
+            fi
+            CLAUDE_CHILD_ARGV_PROMPT=true
+            CLAUDE_READY_PROMPT_ECHO="$(claude_prompt_echo_head "$CHILD_PROMPT" "$CHILD_NAME")"
+            CLAUDE_CHILD_SYSTEM_PROMPT="$(claude_child_system_prompt "$CHILD_NAME" "$PARENT_NAME")"
             tmux new-session -d -s "$CHILD_NAME" \
                 -c "$WORK_DIR" \
                 "${TMUX_ENV_ARGS[@]}" \
                 -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
                 -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
+                -e "CLAUDE_CHILD_PROMPT_FILE=$CLAUDE_CHILD_PROMPT_FILE" \
+                -e "CLAUDE_CHILD_SYSTEM_PROMPT=$CLAUDE_CHILD_SYSTEM_PROMPT" \
                 ${CLAUDE_CHROME_TMUX_ENV[@]+"${CLAUDE_CHROME_TMUX_ENV[@]}"} \
                 "$(claude_child_launch_command)"
             PRE_REGISTERED_SESSION_STARTED=true
@@ -2805,24 +3043,18 @@ ${TASK}"
             echo "[spawn_child/pre-reg] Claude session '$CHILD_NAME' is not alive" >&2
             exit 1
         fi
-        if [[ "$STANDALONE" == true ]]; then
-            CHILD_PROMPT="You are ${CHILD_NAME}, a standalone agent with no parent. The name ${CHILD_NAME} is already reserved and registered; do not register another identity, do not re-register yourself (no agentstack-reregister), and do not fetch the inbox as a startup ritual. Starting child agents of your own later is allowed. This prompt is the canonical task. Start it immediately:
-
-${TASK}"
-        elif [[ "$EMBED_TASK" == true ]]; then
-            CHILD_PROMPT="$EMBEDDED_TASK_PROMPT"
+        if [[ "$WARM_CLAIMED" == true ]]; then
+            # A warm session is already running: the prompt can only be pasted.
+            send_prompt_to_pane "$CHILD_NAME" "$CHILD_PROMPT" 0.3
+            sleep 2
+            flush_queued_prompt "$CHILD_NAME" || true
+            verify_injection "$CHILD_NAME" "$CHILD_PROMPT" || true
         else
-            CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
+            # The prompt was the launch argument; the start check below says
+            # whether the child acted on it.
+            INJECTION_VERIFIED=true
         fi
-        if ! CHROME_PROMPT_BLOCK="$(claude_chrome_prompt_block)"; then
-            echo "[spawn_child/pre-reg] Aborting: could not build the Claude in Chrome browser policy." >&2
-            exit 1
-        fi
-        CHILD_PROMPT+="$CHROME_PROMPT_BLOCK"
-        send_prompt_to_pane "$CHILD_NAME" "$CHILD_PROMPT" 0.3
-        sleep 2
-        flush_queued_prompt "$CHILD_NAME" || true
-        verify_injection "$CHILD_NAME" "$CHILD_PROMPT" || true
+        CLAUDE_START_CHECK=true
     fi
 
     open_child_terminal "$CHILD_NAME"
@@ -2846,6 +3078,9 @@ ${TASK}"
             || echo "Warning: successful child handoff cleanup failed; private handoff remains" >&2
     fi
     PRE_REGISTERED_SUCCESS=true
+    if [[ "${CLAUDE_START_CHECK:-false}" == true ]]; then
+        claude_watch_initial_task "$CHILD_NAME" "$PARENT_NAME" "$CHILD_TOKEN_FILE" "$CHILD_PROMPT"
+    fi
     echo "$CHILD_NAME"
     exit 0
 fi
@@ -3219,7 +3454,7 @@ cleanup_on_failure() {
         return
     fi
     warn_if_uninjected
-    rm -f "${CODEX_PROMPT_FILE:-}"
+    rm -f "${CODEX_PROMPT_FILE:-}" "${CLAUDE_CHILD_PROMPT_FILE:-}"
     if [[ "$CHILD_SESSION_STARTED" == true && -n "${CHILD_NAME:-}" ]]; then
         tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
     fi
@@ -3528,14 +3763,29 @@ else
         echo "[spawn_child] Aborting: could not write the Claude in Chrome launch record in $CHILD_STATE_DIR." >&2
         exit 1
     fi
+    CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
+    if ! CHROME_PROMPT_BLOCK="$(claude_chrome_prompt_block)"; then
+        echo "[spawn_child] Aborting: could not build the Claude in Chrome browser policy." >&2
+        exit 1
+    fi
+    CHILD_PROMPT+="$CHROME_PROMPT_BLOCK"
     ensure_child_proxy_parent before claude || exit 1
     CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
     ensure_child_proxy_parent after claude "$CHILD_MCP_CONFIG" || exit 1
+    if ! CLAUDE_CHILD_PROMPT_FILE="$(write_claude_first_prompt "$CHILD_NAME" "$CHILD_PROMPT")"; then
+        echo "[spawn_child] Aborting: could not write the first prompt in $CHILD_STATE_DIR." >&2
+        exit 1
+    fi
+    CLAUDE_CHILD_ARGV_PROMPT=true
+    CLAUDE_READY_PROMPT_ECHO="$(claude_prompt_echo_head "$CHILD_PROMPT" "$CHILD_NAME")"
+    CLAUDE_CHILD_SYSTEM_PROMPT="$(claude_child_system_prompt "$CHILD_NAME" "$PARENT_NAME")"
     tmux new-session -d -s "$CHILD_NAME" \
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
         -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
         -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
+        -e "CLAUDE_CHILD_PROMPT_FILE=$CLAUDE_CHILD_PROMPT_FILE" \
+        -e "CLAUDE_CHILD_SYSTEM_PROMPT=$CLAUDE_CHILD_SYSTEM_PROMPT" \
         ${CLAUDE_CHROME_TMUX_ENV[@]+"${CLAUDE_CHROME_TMUX_ENV[@]}"} \
         "$(claude_child_launch_command)"
     CHILD_SESSION_STARTED=true
@@ -3545,23 +3795,18 @@ else
     if ! wait_for_claude_ready "$CHILD_NAME" "spawn_child"; then
         exit 1
     fi
-    sleep 1
-    echo "[spawn_child] Waited ${CLAUDE_READY_WAITED}s (+1s); injecting prompt" >&2
-
-    CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
-    if ! CHROME_PROMPT_BLOCK="$(claude_chrome_prompt_block)"; then
-        echo "[spawn_child] Aborting: could not build the Claude in Chrome browser policy." >&2
-        exit 1
-    fi
-    CHILD_PROMPT+="$CHROME_PROMPT_BLOCK"
-    send_prompt_to_pane "$CHILD_NAME" "$CHILD_PROMPT" 0.3
-    sleep 2
-    flush_queued_prompt "$CHILD_NAME" || true
-    verify_injection "$CHILD_NAME" "$CHILD_PROMPT" || true
+    # The prompt was the launch argument; the start check says whether the
+    # child acted on it.
+    INJECTION_VERIFIED=true
+    echo "[spawn_child] Claude started after ${CLAUDE_READY_WAITED}s with its first prompt" >&2
+    CLAUDE_START_CHECK=true
 fi
 
 open_child_terminal "$CHILD_NAME"
 SPAWN_COMPLETED=true
+if [[ "${CLAUDE_START_CHECK:-false}" == true ]]; then
+    claude_watch_initial_task "$CHILD_NAME" "$PARENT_NAME" "$CHILD_TOKEN_FILE" "$CHILD_PROMPT"
+fi
 
 # --- Complete: stdout contains only child agent name ---
 echo "$CHILD_NAME"

@@ -606,10 +606,13 @@ def test_prompt_injection_is_verified_in_every_launch_path():
     text = _SPAWN.read_text(encoding="utf-8")
     verifier = _extract("verify_injection")
 
-    # Claude paths verify the paste; Codex cold paths watch for the argv task.
-    assert text.count('verify_injection "$CHILD_NAME"') == 2
+    # Only a claimed warm Claude session still receives a paste, and verifies
+    # it. Cold Claude starts take the prompt as their argv and, like Codex,
+    # are watched until they act on it.
+    assert text.count('verify_injection "$CHILD_NAME"') == 1
+    assert text.count('flush_queued_prompt "$CHILD_NAME"') == 1
     assert text.count('codex_watch_initial_task "$CHILD_NAME"') == 2
-    assert text.count('flush_queued_prompt "$CHILD_NAME"') == 2
+    assert text.count('claude_watch_initial_task "$CHILD_NAME"') == 2
     assert "capture-pane" in verifier and "-S -1000" in verifier
     assert "kill-session" not in verifier
 
