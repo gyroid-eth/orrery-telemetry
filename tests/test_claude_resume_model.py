@@ -132,3 +132,31 @@ def test_the_launchers_model_still_wins(mail, mail_url, tmp_path):
                                      env={"CLAUDE_CHILD_MODEL": "claude-opus-5-5"})
     assert process.returncode == 0, process.stderr
     assert registered_models(mail) == ["claude-opus-5-5"]
+
+
+BEDROCK_ARN = ("arn:aws:bedrock:us-east-1:123456789012:"
+               "application-inference-profile/sonnet-prod")
+VERTEX_ID = "claude-sonnet-4-5@20250929"
+
+
+@pytest.mark.parametrize("model", [BEDROCK_ARN, VERTEX_ID, "claude-opus-5-5[1m]"])
+def test_terminal_resume_keeps_provider_model_ids(mail, mail_url, tmp_path, model):
+    """Bedrock ARNs and Vertex ids are model ids too (code.claude.com model-config)."""
+    process = terminal_session_start(tmp_path, mail_url, payload_model=model)
+    assert process.returncode == 0, process.stderr
+    assert registered_models(mail) == [model]
+
+
+def test_terminal_resume_keeps_a_registered_arn(mail, mail_url, tmp_path):
+    StandInMail.registered_model = BEDROCK_ARN
+    process = terminal_session_start(tmp_path, mail_url)
+    assert process.returncode == 0, process.stderr
+    assert registered_models(mail) == [BEDROCK_ARN]
+
+
+@pytest.mark.parametrize("model", ["a b", "a;b", "a$(id)", "a`id`", "a'b", 'a"b', "a\nb",
+                                   "/leading-slash", "x" * 300])
+def test_terminal_resume_refuses_model_values_that_are_not_ids(mail, mail_url, tmp_path, model):
+    process = terminal_session_start(tmp_path, mail_url, payload_model=model)
+    assert process.returncode == 0, process.stderr
+    assert registered_models(mail) == ["claude-code"]

@@ -148,14 +148,17 @@ except Exception:
     print("")
 ' 2>/dev/null || echo "")"
     # The model of this session, as Claude Code reports it to SessionStart
-    # (2.1.286 sends it; older versions do not). Only a plain model id is used.
+    # (2.1.286 sends it; older versions do not). Only a model id is used:
+    # Anthropic ids, Bedrock ARNs ("arn:aws:bedrock:...:application-inference-
+    # profile/x") and Vertex ids ("claude-...@20250929") pass; whitespace,
+    # quotes and shell metacharacters do not.
     SESSION_START_MODEL="$(printf '%s' "$SESSION_START_INPUT" | python3 -c '
 import json, re, sys
 try:
     value = json.loads(sys.stdin.read(262144)).get("model", "")
 except Exception:
     value = ""
-print(value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,127}", value) else "")
+print(value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,255}", value) else "")
 ' 2>/dev/null || echo "")"
 fi
 
@@ -208,7 +211,7 @@ import json, re, sys
 def model_of(obj):
     if isinstance(obj, dict):
         value = obj.get("model")
-        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,127}", value):
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,255}", value):
             return value
     return ""
 
