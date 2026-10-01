@@ -1831,16 +1831,21 @@ codex_turn_running_on_screen() {
         | grep -qE '\(([0-9]+h )?([0-9]+m )?[0-9]+s • esc to interrupt\)'
 }
 
-# Whether Codex shows a reply to this task: the end of the task text
-# (whitespace ignored), a reply line ("• ...") somewhere after it, and an idle
-# composer at the bottom with no trust screen and no status line. A short
-# task ("reply OK") is over before the next poll, and while a reply streams
-# Codex hides its status line, so the running line alone is often never seen
-# (WSL, 2026-09-29). Known limits: the task's end must be on the visible
-# screen (a long reply pushes it off; on WSL a capture with -S -300 held no
-# more than the 24 visible lines), and a task end wrapped across two lines is
-# not matched; the wait then runs to its bound as before. Like the running line, this only stops the waiting:
-# it sends no key and is not taken as proof of the start.
+# Whether Codex shows a reply to this task, with an idle composer at the
+# bottom, no trust screen and no status line. A short task ("reply OK") is
+# over before the next poll, and while a reply streams Codex hides its status
+# line, so the running line alone is often never seen (WSL, 2026-09-29). Two
+# screens show a reply:
+# - the end of the task text (whitespace and line breaks inside it ignored)
+#   with a reply line ("• ...") somewhere after it;
+# - once a long reply has pushed the task off the screen, Codex 0.158 pins the
+#   task's first line, cut with "…", as the first line of the screen, and keeps
+#   it there. The screen is all there is: tmux holds no scrollback for Codex
+#   (an 80x24 capture with -S -300 had the same 24 lines). Without this, a
+#   poll that missed the few seconds of the task's end waited out the 90 s
+#   bound (#118).
+# Like the running line, this only stops the waiting: it sends no key and is
+# not taken as proof of the start.
 codex_turn_finished_on_screen() {
     local pane="$1" prompt="$2" region tail_key flat after utf8_locale
     region="$(printf '%s\n' "$pane" | pane_normalize_nbsp | grep -v '^[[:space:]]*$' | tail -n 6)"
@@ -1851,13 +1856,44 @@ codex_turn_finished_on_screen() {
     if [[ -n "$utf8_locale" ]]; then
         local LC_ALL="$utf8_locale"
     fi
+    codex_task_pinned_on_screen "$pane" "$prompt" && return 0
     tail_key="$(printf '%s' "${prompt: -24}" | tr -d '[:space:]')"
     [[ -n "$tail_key" ]] || return 1
-    # Lines joined by \001 so a line start survives the whitespace removal.
-    flat="$(printf '%s' "$pane" | pane_normalize_nbsp | tr '\n' '\001' | tr -d '[:space:]')"
-    [[ "$flat" == *"$tail_key"* ]] || return 1
-    after="${flat##*"$tail_key"}"
-    [[ "$after" == *$'\001•'* ]]
+    # Lines joined by \036 so a line start survives the whitespace removal
+    # (not \001: bash uses that byte internally and a regex cannot hold it).
+    flat="$(printf '%s' "$pane" | pane_normalize_nbsp | tr '\n' '\036' | tr -d '[:space:]')"
+    # The task's end may itself be wrapped across lines: let a line break
+    # (\036) stand between any two of its characters. Each character goes in
+    # a bracket so none is read as regex syntax. The leading greedy .* makes
+    # the match the last occurrence of the task's end.
+    local pattern="" char i
+    for (( i = 0; i < ${#tail_key}; i++ )); do
+        char="${tail_key:i:1}"
+        case "$char" in
+            ']') pattern+='[]]' ;;
+            '^') pattern+='\^' ;;
+            *) pattern+="[$char]" ;;
+        esac
+        pattern+=$'\036''?'
+    done
+    [[ "$flat" =~ ^.*${pattern}(.*)$ ]] || return 1
+    after="${BASH_REMATCH[1]}"
+    [[ "$after" == *$'\036•'* ]]
+}
+
+# The first line of the screen is the task's first line cut with "…" (at
+# least 16 characters of it, spaces collapsed). Call with a UTF-8 locale.
+codex_task_pinned_on_screen() {
+    local first head
+    first="$(printf '%s\n' "$1" | pane_normalize_nbsp | grep -v '^[[:space:]]*$' | head -n 1)"
+    [[ "$first" == *"…" ]] || return 1
+    first="$(printf '%s' "${first%…}" | tr -s '[:space:]' ' ')"
+    first="${first# }"
+    first="${first% }"
+    (( ${#first} >= 16 )) || return 1
+    head="$(printf '%s\n' "$2" | head -n 1 | tr -s '[:space:]' ' ')"
+    head="${head# }"
+    [[ "$head" == "$first"* ]]
 }
 
 # Watch a cold-started Codex child until its first task has started.
