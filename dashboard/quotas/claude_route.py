@@ -54,6 +54,9 @@ class ClaudeQuotaRoute:
         self._account_ids_by_label: dict[str, set[str]] = {}
         self._account_floor: int | None = None
         self._has_account_catalog = False
+        # When the account's identity became uncertain. Observer windows written
+        # after it belong to whoever is signed in now; earlier ones may not.
+        self._identity_changed_at: int | None = None
 
     def read(self) -> QuotaSnapshot:
         now = self._clock()
@@ -61,9 +64,21 @@ class ClaudeQuotaRoute:
 
         # Check identity before touching the observer. Its file is account-
         # scoped too, and may still contain the prior account's values.
-        if account.reason in {"sign_in_required", "account_identity_changed"}:
+        if account.reason == "sign_in_required":
             self._clear_identity()
+            self._identity_changed_at = None
             return replace(account, degraded=True, partial=True)
+        if account.reason == "account_identity_changed":
+            # Drop everything the previous account left, once, but keep showing
+            # what the observer sees from now on: hiding the current observation
+            # froze the header for as long as the account stayed unconfirmed
+            # (#53).
+            if self._identity_changed_at is None:
+                self._clear_identity()
+                self._identity_changed_at = int(now)
+                self._account_floor = self._identity_changed_at
+        else:
+            self._identity_changed_at = None
 
         observed = self._read_statusline()
 

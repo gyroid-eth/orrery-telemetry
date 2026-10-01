@@ -8,13 +8,15 @@ already stored on this machine, so every window the account has is present.
 
 What leaves the machine: one authenticated GET to Anthropic's usage endpoint,
 no request body, no project or agent data. The token is read from the local
-Claude credentials and is never logged or written to the snapshot.
+Claude credentials and is never logged or written to the snapshot. Which
+account the token belongs to is read locally from Claude Code's own config.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import random
 import subprocess
@@ -31,6 +33,7 @@ from typing import Any
 from .base import QuotaBucket, QuotaSnapshot
 
 
+LOGGER = logging.getLogger("agentstack.dashboard.quotas")
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 CREDENTIALS_PATH = "~/.claude/.credentials.json"
@@ -69,6 +72,7 @@ class ClaudeAccountQuotaProvider:
         clock: Callable[[], float] = time.time,
         fetch: Callable[[str, float], Mapping[str, Any]] | None = None,
         token_reader: Callable[[], str | None] | None = None,
+        identity_reader: Callable[[], str | None] | None = None,
         jitter: Callable[[float], float] | None = None,
         fetch_interval_seconds: int = FETCH_INTERVAL_SECONDS,
     ) -> None:
@@ -76,6 +80,12 @@ class ClaudeAccountQuotaProvider:
         self._clock = clock
         self._fetch = fetch or _fetch_usage
         self._token_reader = token_reader or read_access_token
+        # The account the token belongs to, as Claude Code recorded it. Only the
+        # machine's own credentials have that record: a token handed in some
+        # other way is identified by the token alone.
+        if identity_reader is None:
+            identity_reader = read_account_identity if token_reader is None else (lambda: None)
+        self._identity_reader = identity_reader
         self._jitter = jitter or (lambda maximum: random.uniform(0.0, maximum))
         self.fetch_interval_seconds = max(1, int(fetch_interval_seconds))
         self._next_fetch_at = 0.0
@@ -85,6 +95,7 @@ class ClaudeAccountQuotaProvider:
         self._last_reason = ""
         self._rate_limit_failures = 0
         self._token_fingerprint: bytes | None = None
+        self._account_identity: str | None = None
         self._identity_unconfirmed = False
 
     def read(self) -> QuotaSnapshot:
@@ -99,11 +110,22 @@ class ClaudeAccountQuotaProvider:
             self._forget_account(identity_unconfirmed=True)
             return self._unavailable(now, "sign_in_required")
         fingerprint = hashlib.sha256(token.encode("utf-8")).digest()
-        if self._token_fingerprint is not None and fingerprint != self._token_fingerprint:
-            # A different credential may name a different account. Never carry
-            # the previous account's balances across that boundary.
-            self._forget_account(identity_unconfirmed=True)
+        identity = self._read_identity()
+        if self._token_fingerprint is not None:
+            if identity and self._account_identity:
+                # Claude Code refreshes its access token routinely; the account
+                # it recorded says whether this is still the same one (#53).
+                changed = identity != self._account_identity
+            else:
+                # With no record of the account, a different credential may
+                # name a different one.
+                changed = fingerprint != self._token_fingerprint
+            if changed:
+                # Never carry the previous account's balances across that
+                # boundary.
+                self._forget_account(identity_unconfirmed=True)
         self._token_fingerprint = fingerprint
+        self._account_identity = identity
         if self._identity_unconfirmed:
             self._last_reason = "account_identity_changed"
         if now_float < self._next_fetch_at:
@@ -123,6 +145,7 @@ class ClaudeAccountQuotaProvider:
             )
             self._last_reason = "sign_in_required"
             self._schedule(self.fetch_interval_seconds)
+            self._log_failure("_AuthRequired")
             return self._unavailable(now, "sign_in_required")
         except _RateLimited as exc:
             exponential = min(
@@ -134,6 +157,7 @@ class ClaudeAccountQuotaProvider:
                 "account_identity_changed" if self._identity_unconfirmed else "rate_limited"
             )
             self._schedule(max(exc.retry_after, exponential))
+            self._log_failure("_RateLimited")
             return self._retained_or_unavailable(now, self._last_reason)
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, RuntimeError) as exc:
             self._last_reason = (
@@ -142,6 +166,7 @@ class ClaudeAccountQuotaProvider:
                 else "account_usage_failed"
             )
             self._schedule(self.fetch_interval_seconds)
+            self._log_failure(type(exc).__name__)
             if self._last_authenticated is not None:
                 return self._retained_or_unavailable(now, self._last_reason)
             if self._identity_unconfirmed:
@@ -158,6 +183,25 @@ class ClaudeAccountQuotaProvider:
         self._schedule(self.fetch_interval_seconds)
         self._last_authenticated = snapshot
         return snapshot
+
+    def _read_identity(self) -> str | None:
+        try:
+            identity = self._identity_reader()
+        except Exception:  # noqa: BLE001 - an unreadable record is no record
+            return None
+        return identity if isinstance(identity, str) and identity else None
+
+    def _log_failure(self, failure: str) -> None:
+        # One line per failed outbound read, which the budget already limits.
+        # Before #53 an unconfirmed identity could stay stuck for hours with
+        # nothing in the log but a frozen header. Never the token.
+        LOGGER.info(
+            "claude account usage: %s after %s; identity %s; next fetch in %ds",
+            self._last_reason,
+            failure,
+            "unconfirmed" if self._identity_unconfirmed else "confirmed",
+            max(0, round(self._next_fetch_at - self._clock())),
+        )
 
     def _schedule(self, seconds: int | float) -> None:
         jitter = max(0.0, float(self._jitter(JITTER_SECONDS)))
@@ -187,6 +231,7 @@ class ClaudeAccountQuotaProvider:
         # exponent, and token rotation must not buy an earlier request.
         if not preserve_fingerprint:
             self._token_fingerprint = None
+            self._account_identity = None
         self._identity_unconfirmed = identity_unconfirmed
 
     def _unavailable(self, observed_at: int, reason: str) -> QuotaSnapshot:
@@ -295,6 +340,33 @@ def read_access_token() -> str | None:
     """The token Claude Code already stored for this machine, or None."""
     env = (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
     return env or _token_from_file() or _token_from_keychain()
+
+
+def read_account_identity() -> str | None:
+    """The account Claude Code recorded for its stored login, or None.
+
+    `oauthAccount` in Claude Code's config names the account and organization
+    of the login whose tokens it keeps; it does not change when the access token
+    is refreshed. A token from CLAUDE_CODE_OAUTH_TOKEN may belong to any
+    account, so it has no recorded identity.
+    """
+    if (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip():
+        return None
+    config_dir = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
+    path = Path(config_dir).expanduser() / ".claude.json" if config_dir else Path("~/.claude.json").expanduser()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    account = data.get("oauthAccount") if isinstance(data, Mapping) else None
+    if not isinstance(account, Mapping):
+        return None
+    account_id = account.get("accountUuid")
+    if not isinstance(account_id, str) or not account_id.strip():
+        return None
+    organization = account.get("organizationUuid")
+    organization = organization.strip() if isinstance(organization, str) else ""
+    return f"{account_id.strip()}:{organization}"
 
 
 def _token_from_file(path: str = CREDENTIALS_PATH) -> str | None:

@@ -392,8 +392,9 @@ def test_failed_first_fetch_for_a_changed_credential_keeps_the_identity_gate():
     changed = route.read()
 
     assert changed.reason == "account_identity_changed"
+    # The observer is still consulted (#53), but what it wrote before the change
+    # may be the prior account's and stays behind the identity gate.
     assert changed.buckets == ()
-    assert observer.reads == 1, "the prior account's observer must stay behind the identity gate"
 
 
 def test_two_models_whose_names_collide_both_keep_a_window():
@@ -1082,3 +1083,166 @@ def test_with_the_account_source_off_a_window_does_not_outlive_its_account(monke
     observer._snapshot = second
     assert [b.id for b in route.read().buckets] == ["five_hour"], \
         "a window from the previous read must not survive into the next one"
+
+
+# --- #53: a routine access-token refresh is not an account change -----------
+
+
+def _refreshing_provider(token, identity, outcomes, now, calls=None):
+    def fetch(value, timeout):
+        if calls is not None:
+            calls.append((value, now[0]))
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    return ClaudeAccountQuotaProvider(
+        token_reader=lambda: token[0],
+        identity_reader=lambda: identity[0],
+        fetch=fetch,
+        clock=lambda: now[0],
+        jitter=lambda maximum: 0,
+    )
+
+
+def test_53_a_refreshed_access_token_for_the_same_account_keeps_its_windows():
+    """Claude Code rewrites the access token routinely; the account is the same."""
+    now = [1000.0]
+    token = ["access-1"]
+    identity = ["account-uuid:org-uuid"]
+    calls = []
+    provider = _refreshing_provider(token, identity, [USAGE_BODY, USAGE_BODY], now, calls)
+    assert provider.read().status == "ok"
+
+    token[0] = "access-2"
+    now[0] = 1100
+    refreshed = provider.read()
+    assert refreshed.reason != "account_identity_changed"
+    assert refreshed.buckets, "the same account's windows must survive a token refresh"
+    assert calls == [("access-1", 1000.0)], "a refresh is not a reason to fetch early"
+
+    now[0] = 1600
+    assert provider.read().status == "ok"
+    assert calls[-1] == ("access-2", 1600)
+
+
+def test_53_a_different_account_is_still_an_identity_change():
+    now = [1000.0]
+    token = ["access-1"]
+    identity = ["account-a:org"]
+    provider = _refreshing_provider(token, identity, [USAGE_BODY], now)
+    assert provider.read().buckets
+
+    token[0] = "access-2"
+    identity[0] = "account-b:org"
+    now[0] = 1100
+    changed = provider.read()
+    assert changed.reason == "account_identity_changed"
+    assert changed.buckets == ()
+
+
+def test_53_without_a_readable_identity_a_new_token_still_gates():
+    now = [1000.0]
+    token = ["access-1"]
+    identity = [None]
+    provider = _refreshing_provider(token, identity, [USAGE_BODY], now)
+    assert provider.read().buckets
+
+    token[0] = "access-2"
+    now[0] = 1100
+    assert provider.read().reason == "account_identity_changed"
+
+
+def test_53_the_identity_is_the_account_claude_code_recorded(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = tmp_path / ".claude.json"
+    config.write_text(json.dumps({"oauthAccount": {
+        "accountUuid": "acct-1", "organizationUuid": "org-1", "emailAddress": "a@example.com",
+    }}), encoding="utf-8")
+    assert claude_account.read_account_identity() == "acct-1:org-1"
+
+    custom = tmp_path / "custom"
+    custom.mkdir()
+    (custom / ".claude.json").write_text(json.dumps({"oauthAccount": {
+        "accountUuid": "acct-2", "organizationUuid": "org-2",
+    }}), encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(custom))
+    assert claude_account.read_account_identity() == "acct-2:org-2"
+
+    # A token from the environment may belong to any account: no identity.
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "from-env")
+    assert claude_account.read_account_identity() is None
+
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN")
+    (custom / ".claude.json").write_text("{}", encoding="utf-8")
+    assert claude_account.read_account_identity() is None
+
+
+def test_53_a_custom_token_source_never_borrows_the_machine_identity(monkeypatch):
+    monkeypatch.setattr(claude_account, "read_account_identity", lambda: "machine:org")
+    now = [1000.0]
+    token = ["access-1"]
+    provider = ClaudeAccountQuotaProvider(
+        token_reader=lambda: token[0], fetch=lambda value, timeout: USAGE_BODY,
+        clock=lambda: now[0], jitter=lambda maximum: 0,
+    )
+    assert provider.read().buckets
+    token[0] = "access-2"
+    now[0] = 1100
+    assert provider.read().reason == "account_identity_changed"
+
+
+def test_53_every_failed_account_read_says_why_and_when_it_retries(caplog):
+    now = [1000.0]
+    token = ["secret-access-1"]
+    identity = [None]
+    provider = _refreshing_provider(
+        token, identity,
+        [USAGE_BODY, claude_account._RateLimited(0), TimeoutError("offline")], now,
+    )
+    provider.read()
+    token[0] = "secret-access-2"
+    now[0] = 1600
+    with caplog.at_level("INFO", logger="agentstack.dashboard.quotas"):
+        assert provider.read().reason == "account_identity_changed"
+        now[0] = 2800
+        assert provider.read().reason == "account_identity_changed"
+
+    lines = [record.getMessage() for record in caplog.records]
+    assert len(lines) == 2, lines
+    assert "account_identity_changed" in lines[0] and "_RateLimited" in lines[0]
+    assert "next fetch in 600s" in lines[0] and "identity unconfirmed" in lines[0]
+    assert "TimeoutError" in lines[1] and "next fetch in 600s" in lines[1]
+    assert all("secret" not in line for line in lines)
+
+
+def test_53_an_unconfirmed_identity_still_shows_what_the_observer_sees_now():
+    """Clear the old account's windows, but keep the current observation."""
+    now = [1000.0]
+    token = ["access-1"]
+    identity = [None]
+    account = _refreshing_provider(
+        token, identity, [USAGE_BODY, claude_account._RateLimited(0)], now,
+    )
+    observer = _Stub(_ok("claude-statusline", observed_at=1000))
+    route = ClaudeQuotaRoute(account, observer, clock=lambda: now[0])
+    assert route.read().buckets
+
+    # The credential changes; what the observer last wrote predates that.
+    token[0] = "access-2"
+    now[0] = 1600
+    gated = route.read()
+    assert gated.reason == "account_identity_changed"
+    assert gated.buckets == ()
+
+    # A status line written after the change belongs to the current account.
+    observer._snapshot = _ok("claude-statusline", observed_at=1700)
+    now[0] = 1700
+    shown = route.read()
+    assert [bucket.id for bucket in shown.buckets] == ["five_hour"]
+    assert shown.buckets[0].source == "claude-statusline"
+    assert shown.degraded is True
+    assert shown.reason == "fallback_account_identity_changed"
