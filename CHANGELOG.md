@@ -8,11 +8,13 @@
 
 ---
 
-## 2026.10.03
+## 2026.10.03.1
 
 ### Mail を更新した後、前から開いていた端末からの update が止まっていました
 
 `--mail update` で Mail を差し替えると、`env.sh` の `AGENTSTACK_MAIL_ENV` は新しい render を指します。差し替えの前に開いた端末（`env.sh` を読み込む shell）は古い render を export したままで、その端末から update（`./scripts/install.sh`、cockpit の update・setup）を実行すると `AGENTSTACK_MAIL_ENV must equal the native service env` で止まっていました。この installer が `env.sh` に書いた値と等しいときだけ許していたためです。`env.sh` の値も引き継いだ値も、この installation の render の置き場所にある render なら、自分の出力として扱って許します。`AGENTSTACK_MAIL_SERVICE_ENV` で固定した場合や、置き場所の外の path は従来どおり止まります。
+
+## 2026.10.03
 
 ### cockpit に埋め込んだ dashboard の RESUME が何もしていませんでした
 
