@@ -159,7 +159,14 @@ def _first_install(stack: Stack) -> tuple[dict, pathlib.Path]:
     return health, old_render
 
 
-def test_a_plain_rerun_keeps_the_running_build_and_a_dry_run_changes_nothing(tmp_path):
+@pytest.mark.parametrize("keep,code", [
+    ((), "keep_default"),
+    (("--keep-mail",), "keep_requested"),
+    ({"AGENTSTACK_MAIL_UPDATE": "keep"}, "keep_requested"),
+    # An option wins over the environment (setup.sh/update.sh pass options).
+    ((("--keep-mail",), {"AGENTSTACK_MAIL_UPDATE": "auto"}), "keep_requested"),
+])
+def test_a_rerun_keeps_the_running_build_by_default_and_a_dry_run_changes_nothing(tmp_path, keep, code):
     stack = Stack(tmp_path)
     _candidate(stack.service_root, "fixture-old")
     _candidate(stack.service_root, "fixture-new")
@@ -167,13 +174,24 @@ def test_a_plain_rerun_keeps_the_running_build_and_a_dry_run_changes_nothing(tmp
         _, old_render = _first_install(stack)
         old_pid = stack.pid()
 
-        kept = stack.install("fixture-new")
+        if isinstance(keep, dict):
+            kept = stack.install("fixture-new", extra=keep)
+        elif keep and isinstance(keep[0], tuple):
+            kept = stack.install("fixture-new", *keep[0], extra=keep[1])
+        else:
+            kept = stack.install("fixture-new", *keep)
         assert kept.returncode == 0, kept.stdout + kept.stderr
         assert "Re-run with --update-mail to switch" in kept.stdout
+        assert kept.stdout.splitlines()[-1] == (
+            "mail-result: kept mode=keep from=fixture-old to=fixture-new running=fixture-old"
+            f" outage_s=0 reason={code}"
+        ), kept.stdout
         assert stack.pid() == old_pid
         assert _generated_env(stack.home)["AGENTSTACK_MAIL_ENV"] == str(
             old_render / "service.env"
         )
+        # A per-run choice: env.sh never records it, so it does not stick.
+        assert "AGENTSTACK_MAIL_UPDATE" not in (stack.home / ".agentstack" / "env.sh").read_text()
 
         planned = subprocess.run(
             ["/bin/bash", str(INSTALLER), "--update-mail", "--dry-run"],
@@ -185,7 +203,7 @@ def test_a_plain_rerun_keeps_the_running_build_and_a_dry_run_changes_nothing(tmp
             timeout=100,
         )
         assert planned.returncode == 0, planned.stdout + planned.stderr
-        assert "will switch ORRERY Mail from fixture-old" in planned.stdout
+        assert "will switch from fixture-old" in planned.stdout
         assert "DRY-RUN would verify candidate" in planned.stdout
         assert "restore the previous build if the new one is not serving" in planned.stdout
         assert not list((stack.service_root / "renders").glob("fixture-new-*"))
@@ -211,9 +229,12 @@ def test_a_plain_rerun_keeps_the_running_build_and_a_dry_run_changes_nothing(tmp
             )
             assert replanned.returncode == 0, replanned.stdout + replanned.stderr
             assert (
-                f"will switch ORRERY Mail from fixture-old ({stack.service_root}/candidates/fixture-old/venv)"
+                f"will switch from fixture-old ({stack.service_root}/candidates/fixture-old/venv)"
                 in replanned.stdout
             ), replanned.stdout
+            assert replanned.stdout.splitlines()[-1] == (
+                "mail-plan: switch mode=update running=fixture-old to=fixture-new reason=newer_build"
+            )
             assert f"stop ORRERY Mail {old_render}/service.env" in replanned.stdout
         assert stack.pid() == old_pid
     finally:
@@ -787,3 +808,172 @@ def test_reinstalling_the_same_build_with_mail_stopped_reuses_its_render(tmp_pat
         _wait_health(stack.mail_url)
     finally:
         stack.teardown()
+
+
+# --- auto (opt-in) and the result line ---------------------------------------
+#
+# AGENTSTACK_MAIL_UPDATE=auto switches to a newer build when it safely can, and
+# otherwise keeps the running one without failing the run. setup.sh and
+# update.sh read the last `mail-result:` line, so its format is part of the
+# contract.
+
+AUTO = {"AGENTSTACK_MAIL_UPDATE": "auto"}
+
+
+def _result_line(output: str) -> dict[str, str]:
+    (line,) = [line for line in output.splitlines() if line.startswith("mail-result: ")]
+    head, *pairs = line[len("mail-result: "):].split(" ")
+    assert all(pair.count("=") == 1 for pair in pairs), line
+    return {"result": head, **dict(pair.split("=", 1) for pair in pairs)}
+
+
+def test_auto_switches_to_a_newer_build(tmp_path):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        first = stack.install("fixture-old")
+        assert _result_line(first.stdout) == {
+            "result": "installed", "mode": "keep", "from": "", "to": "fixture-old",
+            "running": "fixture-old", "outage_s": "0", "reason": "no_running_mail"}
+        health = _wait_health(stack.mail_url)
+        old_pid = stack.pid()
+
+        switched = stack.install("fixture-new", extra=AUTO)
+        assert switched.returncode == 0, switched.stdout + switched.stderr
+        assert "Mail is unavailable for about" in switched.stdout
+        # Every switch says how to check running sessions, however short.
+        assert "/mcp shows orrery-mail as connected" in switched.stdout
+        line = _result_line(switched.stdout)
+        assert {key: line[key] for key in ("result", "mode", "from", "to", "running", "reason")} == {
+            "result": "switched", "mode": "auto", "from": "fixture-old", "to": "fixture-new",
+            "running": "fixture-new", "reason": "newer_build"}
+        assert 0 < float(line["outage_s"]) < 10, line
+        assert switched.stdout.rstrip().splitlines()[-1].startswith("mail-result: ")
+        assert stack.pid() != old_pid
+        assert stack.runner() == str(stack.render_of("fixture-new") / "run-agentstack-mail.sh")
+        assert _wait_health(stack.mail_url)["database_url"] == health["database_url"]
+        update = stack.manifest()["agent_mail"]["update"]
+        assert update["result"] == "switched" and update["mode"] == "auto"
+        assert update["outage_seconds"] == line["outage_s"]
+
+        again = stack.install("fixture-new", extra=AUTO)
+        assert _result_line(again.stdout)["result"] == "unchanged"
+        assert _result_line(again.stdout)["reason"] == "same_candidate"
+    finally:
+        stack.teardown()
+
+
+def test_auto_keeps_the_running_build_when_the_outage_would_be_too_long(tmp_path):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        _first_install(stack)
+        pid = stack.pid()
+        kept = stack.install("fixture-new", extra={**AUTO, "AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET": "0"})
+        assert kept.returncode == 0, kept.stdout + kept.stderr
+        assert "over the 0s budget" in kept.stderr
+        assert _result_line(kept.stdout)["result"] == "refused"
+        assert _result_line(kept.stdout)["reason"] == "outage_over_budget"
+        assert stack.pid() == pid
+        assert not (stack.service_root / "backups").exists()
+        # --update-mail is the operator choosing the outage: the budget does not apply.
+        forced = stack.install("fixture-new", "--update-mail",
+                               extra={**AUTO, "AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET": "0"})
+        assert forced.returncode == 0, forced.stdout + forced.stderr
+        assert _result_line(forced.stdout)["result"] == "switched"
+        assert _result_line(forced.stdout)["mode"] == "update"
+    finally:
+        stack.teardown()
+
+
+@pytest.mark.parametrize("broken,result,reason", [
+    ({"agentstack-mail": "#!/bin/sh\nexit 3\n"}, "refused", "verify_failed"),
+    ({"agentstack-mail-service": "#!/bin/sh\nexit 1\n"}, "rolled-back", "start_failed_rolled_back"),
+])
+def test_auto_that_cannot_switch_keeps_the_running_build_and_succeeds(tmp_path, broken, result, reason):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-broken", broken=broken)
+    try:
+        _, old_render = _first_install(stack)
+        run = stack.install("fixture-broken", extra={**AUTO, "AGENTSTACK_MAIL_UPDATE_START_GRACE": "4"})
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert "ORRERY Mail was not updated" in run.stderr
+        assert "install.sh --update-mail" in run.stderr
+        assert _result_line(run.stdout)["result"] == result
+        assert _result_line(run.stdout)["reason"] == reason
+        assert _result_line(run.stdout)["running"] == "fixture-old"
+        assert stack.runner() == str(old_render / "run-agentstack-mail.sh")
+        _wait_health(stack.mail_url)
+    finally:
+        stack.teardown()
+
+
+def test_auto_keeps_a_deployment_it_cannot_identify_without_failing(tmp_path):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        first = stack.install("fixture-old")
+        assert first.returncode == 0, first.stdout + first.stderr
+        pid = stack.pid()
+        runner_line = stack.pidfile.read_text(encoding="utf-8")
+        (stack.home / ".agentstack" / "env.sh").unlink()
+        stack.pidfile.unlink()
+        kept = stack.install("fixture-new", extra=AUTO)
+        stack.pidfile.write_text(runner_line, encoding="utf-8")
+        assert kept.returncode == 0, kept.stdout + kept.stderr
+        assert _result_line(kept.stdout)["result"] == "refused"
+        assert _result_line(kept.stdout)["reason"] == "deployment_unidentified"
+        assert stack.pid() == pid
+    finally:
+        stack.teardown()
+
+
+def _plan(stack: Stack, source: str, *args: str, extra: dict[str, str] | None = None):
+    env = {key: value for key, value in stack.env.items() if key != "AGENTSTACK_PROJECT_KEY"}
+    env.update(extra or {}, AGENTSTACK_MAIL_CANDIDATE_ID=source)
+    done = subprocess.run(["/bin/bash", str(INSTALLER), "--print-mail-plan", *args],
+                          cwd=ROOT, env=env, text=True, capture_output=True, check=False, timeout=30)
+    assert done.returncode == 0, done.stdout + done.stderr
+    (line,) = done.stdout.splitlines()
+    return line
+
+
+def test_print_mail_plan_reads_only_and_always_answers(tmp_path):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        # Nothing installed: no project key needed, nothing created.
+        assert _plan(stack, "fixture-old") == (
+            "mail-plan: install mode=keep running= to=fixture-old reason=no_running_mail")
+        assert not (stack.home / ".agentstack" / "env.sh").exists()
+        _first_install(stack)
+        pid = stack.pid()
+        assert _plan(stack, "fixture-new") == (
+            "mail-plan: keep mode=keep running=fixture-old to=fixture-new reason=keep_default")
+        assert _plan(stack, "fixture-new", extra=AUTO) == (
+            "mail-plan: switch mode=auto running=fixture-old to=fixture-new reason=newer_build")
+        assert _plan(stack, "fixture-new", "--keep-mail") == (
+            "mail-plan: keep mode=keep running=fixture-old to=fixture-new reason=keep_requested")
+        assert _plan(stack, "fixture-new", extra={"AGENTSTACK_MAIL_UPDATE": "update"}) == (
+            "mail-plan: switch mode=update running=fixture-old to=fixture-new reason=newer_build")
+        assert _plan(stack, "fixture-old") == (
+            "mail-plan: unchanged mode=keep running=fixture-old to=fixture-old reason=same_candidate")
+        assert stack.pid() == pid
+        assert not list((stack.service_root / "renders").glob("fixture-new-*"))
+    finally:
+        stack.teardown()
+
+
+def test_conflicting_or_unknown_mail_modes_are_refused():
+    both = subprocess.run(["/bin/bash", str(INSTALLER), "--update-mail", "--keep-mail", "--print-mail-plan"],
+                          cwd=ROOT, text=True, capture_output=True, check=False, timeout=30)
+    assert both.returncode == 2 and "mutually exclusive" in both.stderr
+    bad = subprocess.run(["/bin/bash", str(INSTALLER), "--print-mail-plan"], cwd=ROOT,
+                         env={**os.environ, "AGENTSTACK_MAIL_UPDATE": "sometimes"},
+                         text=True, capture_output=True, check=False, timeout=30)
+    assert bad.returncode == 2 and "must be auto, update or keep" in bad.stderr

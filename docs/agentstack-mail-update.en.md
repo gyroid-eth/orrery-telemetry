@@ -15,8 +15,11 @@ the running Mail with this checkout's build (see
 "[Replacing the build with `--update-mail`](#replacing-the-build-with---update-mail)"
 below). It builds the candidate, verifies it on a scratch port and backs up the
 database while the running Mail keeps serving, then switches, and puts the
-previous build back if the new one does not answer. The manual procedure below
-is for layouts `--update-mail` refuses, and for checking what each stage does.
+previous build back if the new one does not answer. A re-run without it
+(default `keep`) does not switch and reports the difference with a `notice:`.
+`AGENTSTACK_MAIL_UPDATE=auto` (opt-in) switches only when it safely can, and
+otherwise keeps the running build and lets the install succeed. The manual procedure below is for
+layouts `--update-mail` refuses, and for checking what each stage does.
 
 **Scope.** The commands assume the default layout: install dir `~/.agentstack`,
 no `--install-dir`, and no `AGENTSTACK_MAIL_*` overrides at install time. A
@@ -53,12 +56,12 @@ autostart units on every run. For ORRERY Mail it takes one of two paths:
   expected state database, the listener is adopted: its render is recorded in
   `env.sh` and the service is **not** touched. If the port is occupied but the
   occupant does not answer as ORRERY Mail, or serves a different database, the
-  run stops with an error. This adoption path is every ordinary re-run, which
-  is why a re-run alone never switches the Mail build. When the running build
-  differs from this checkout's, a re-run says so with a `notice:` and points at
-  `--update-mail` (it stays quiet when the package tree is identical in both
-  commits). The dashboard's `/api/version` reports the package version, not the
-  build behind the port.
+  run stops with an error. Once adopted, a running build that differs from
+  this checkout's is, by default (`keep`), only reported with a `notice:`, and
+  the service is **not** touched. `--update-mail` and `auto` go on to the
+  switch below (none of them does anything when the package tree is identical
+  in both commits). The dashboard's
+  `/api/version` reports the package version, not the build behind the port.
 - **Nothing answers.** The installer provisions a candidate for the checkout's
   exact commit (an absent candidate is built; an existing but incomplete one
   stops the run), renders a service env, starts the service through
@@ -67,15 +70,57 @@ autostart units on every run. For ORRERY Mail it takes one of two paths:
 
 A manual update is therefore "stop the old service, then run the installer",
 with the autostart unit held back so it cannot restart the old build in
-between. `--update-mail` performs the step between those two paths inside the
-installer.
+between. A switch (`auto` or `--update-mail`) performs the step between those
+two paths inside the installer.
 
 ## Replacing the build with `--update-mail`
 
 ```bash
-./scripts/install.sh --update-mail --dry-run   # show the plan only
-./scripts/install.sh --update-mail
+./scripts/install.sh --print-mail-plan         # what would happen to Mail, one line (reads only)
+./scripts/install.sh --dry-run                 # show the whole plan
+./scripts/install.sh --update-mail             # switch (exit 1 if it cannot)
+AGENTSTACK_MAIL_UPDATE=auto ./scripts/install.sh   # switch only when it safely can (opt-in)
+./scripts/install.sh                           # never switch (default keep, same as --keep-mail)
 ```
+
+| Option | When the running build differs | When it cannot switch or the switch fails |
+| --- | --- | --- |
+| `AGENTSTACK_MAIL_UPDATE=auto` (opt-in) | switch through steps 1 to 5 below, but only for a deployment managed by `agentstack-mailctl`, after verification passes, and when the expected outage is within `AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET` (default 8 s) | keep the running build, warn, exit 0 |
+| `--update-mail` (`AGENTSTACK_MAIL_UPDATE=update`) | switch; the outage budget does not apply (a person chose the time) | exit 1 |
+| none, `--keep-mail` (`AGENTSTACK_MAIL_UPDATE=keep`) | do not switch; a `notice:` reports the difference | — |
+
+An option wins over `AGENTSTACK_MAIL_UPDATE`. `AGENTSTACK_MAIL_UPDATE` is a
+per-run choice and is never recorded in `env.sh`, so a value chosen once does
+not stick to every later update. `auto` is not the default yet: before it
+becomes one, it needs an outage deadline that covers a rollback, and a check
+that the previous build still runs on the updated database
+([design note](agentstack-mail-update-design.en.md)). The
+expected outage is the time the candidate took to answer against the database
+snapshot during verification, plus 1.5 s for the stop and the health poll.
+
+The run ends with one machine-readable line; `--dry-run` prints the same
+fields as `mail-plan:`. No value contains a space, and the reason is a fixed
+code.
+
+```text
+mail-result: <installed|switched|kept|unchanged|refused|rolled-back> mode=<auto|update|keep> from=<commit> to=<commit> running=<commit> outage_s=<seconds> reason=<code>
+mail-plan: <install|switch|keep|unchanged|refuse> mode=<…> running=<commit> to=<commit> reason=<code>
+```
+
+`from` is the build serving before this run (empty when there was none or it
+could not be identified), `to` is this checkout's build, and `running` is the
+build serving now (`to` after switched or installed, otherwise `from`). A
+failed rollback, a refused `--update-mail`, or an interruption prints no line
+and exits non-zero: a reader must treat a missing line as a failure.
+
+Reason codes: `no_running_mail`, `newer_build`, `same_candidate`,
+`same_package`, `keep_default`, `keep_requested`, `not_mailctl_managed`,
+`deployment_unidentified`, `verify_failed`, `outage_over_budget`,
+`backup_failed`, `start_failed_rolled_back`, `adopted`, and (from
+`--print-mail-plan` only) `plan_unavailable`. `--print-mail-plan` reads only the
+pidfile, the render and git, needs no project key, and always exits 0 with one
+line. It is a plan, not a promise: the real run may keep the running build
+after verification.
 
 Once the adoption path has identified the running deployment, and this
 checkout's candidate (`candidates/<commit>/venv`) differs from it, the
@@ -118,20 +163,22 @@ steps 1 to 4.
 `env.sh`, the autostart unit, `connections/local.json` and
 `install-state.json` are then written from whichever deployment is actually
 serving. `agent_mail.update` in `install-state.json` records the result
-(`switched`, `rolled-back`, `not-switched`), the reason, the previous and
+(`switched`, `rolled-back`, `not-switched`), the reason and its code, the
+mode, how long Mail was actually down (`outage_seconds`), the previous and
 requested render and candidate, and the backup path.
 
-| Result | Mail | Exit status |
-| --- | --- | --- |
-| `switched` | the new build | 0 |
-| `not-switched` (failed in 1 to 3) | the previous build, never stopped | 1 |
-| `rolled-back` (4 failed, 5 succeeded) | the previous build, after an outage of seconds up to the start grace | 1 |
-| rollback failed | possibly down; the error states the state and the next action | 1 (immediately) |
-| interrupted during the switch (Ctrl-C, SIGTERM, terminal closed) | left as is if `env.sh` already names the new build; otherwise the previous build is put back | 130 |
+| Result | Mail | Exit status (`auto`) | Exit status (`--update-mail`) |
+| --- | --- | --- | --- |
+| `switched` | the new build | 0 | 0 |
+| `not-switched` (failed in 1 to 3, or the expected outage is over budget) | the previous build, never stopped | 0 (warning) | 1 |
+| `rolled-back` (4 failed, 5 succeeded) | the previous build, after an outage of seconds up to the start grace | 0 (warning) | 1 |
+| rollback failed | possibly down; the error states the state and the next action | 1 (immediately) | 1 (immediately) |
+| interrupted during the switch (Ctrl-C, SIGTERM, terminal closed) | left as is if `env.sh` already names the new build; otherwise the previous build is put back | 130 | 130 |
 
 With `not-switched` and `rolled-back` the rest of the install still completes
-against the previous build. Exit status 1 says that the update that was asked
-for did not happen.
+against the previous build. With `--update-mail`, exit status 1 says that the
+update that was asked for did not happen. Under `auto` no update was asked
+for, so the run exits 0 and reports it through a warning and the result line.
 
 **Going back to the previous build.** Pin the previous candidate and run the
 same operation. Its render comes from the same inputs, has the same path, and
@@ -147,8 +194,19 @@ AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<previous com
 
 - **Connections.** The server uses stateless HTTP, so a switch loses no
   session. Requests that arrive between the stop and the new server answering
-  (12 s in the earlier manual run) are refused and recover when the client
-  retries.
+  (12 s in the earlier manual run) are refused. How a client comes back
+  differs (measured on 2026-10-02 with a temporary HOME and a separate port):
+  the stdio proxy a launcher binds (Claude and Codex children) connects per
+  call and works again from the next call. Top-level Codex (`url` in
+  `~/.codex/config.toml`) came back on its next call even after 71 s.
+  Top-level Claude Code (`type: http` in `~/.claude.json`) reconnected by
+  itself after outages up to 15 s, but stayed disconnected after 18 s or more
+  until orrery-mail was reconnected from `/mcp`. After every stop, however
+  short, the installer prints how long Mail was down and what to check in each
+  running Claude Code session (`/mcp` shows orrery-mail as connected, and a
+  small call such as health_check succeeds). The installer's health check and
+  a selftest show that Mail answers, not that a session that was already
+  running got its connection back.
 - **Tokens and credentials.** Agent tokens live in the shared database, and the
   client-side files (`~/.agentstack/runtime` and the like) are not touched. A
   build change does not change them.
@@ -179,8 +237,9 @@ AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<previous com
 
 **Out of scope.** Only a runner started by `agentstack-mailctl` (the pidfile
 names a live runner) is replaced. A listener whose deployment cannot be
-identified and a service supervised directly by launchd are out of scope; the
-run ends with an error without stopping anything. Overrides of the state root,
+identified and a service supervised directly by launchd are out of scope, and
+nothing is stopped: `--update-mail` ends with an error, and `auto` keeps the
+running build and carries on (`refused`). Overrides of the state root,
 service root and endpoint (`AGENTSTACK_MAIL_*`, `AGENTSTACK_MCP_URL`) take the
 same path, and the tests run with them overridden. A non-default
 `--install-dir` is not refused either, but is not itself tested.
@@ -189,7 +248,8 @@ Time limits: waiting for the verification server,
 `AGENTSTACK_MAIL_UPDATE_VERIFY_TIMEOUT` (default 120 s); waiting for the new
 build to start, `AGENTSTACK_MAIL_UPDATE_START_GRACE` (default: the
 controller's `AGENTSTACK_MAIL_START_GRACE`, 180 s). The rollback start waits
-with the controller's default grace.
+with the controller's default grace. The longest expected outage `auto` will
+switch with: `AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET` (default 8 s).
 
 ## Layout
 

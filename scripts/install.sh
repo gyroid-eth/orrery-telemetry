@@ -8,13 +8,32 @@ MERGE_CLAUDE_MCP_SCRIPT="$SCRIPT_DIR/lib/merge_claude_mcp.py"
 
 DRY_RUN=false
 RETIRE_LEGACY_MAIL=false
-# --update-mail: switch a running ORRERY Mail to this checkout's candidate.
-# Without it a re-run adopts the running build and only reports the difference.
+# What a re-run does to a running ORRERY Mail built from another commit:
+#   keep   (default, --keep-mail) never switch; report the difference.
+#   update (--update-mail) switch, or exit 1 saying why it did not happen.
+#   auto   (AGENTSTACK_MAIL_UPDATE=auto, opt-in) switch when it can be done
+#          safely -- managed deployment, verified offline, short expected
+#          outage -- and otherwise keep the running build; never fails the run.
+#          Not the default yet: an outage deadline covering a rollback, and a
+#          check that the previous build still runs on the updated database,
+#          come first (docs/agentstack-mail-update-design.md).
+# An option wins over AGENTSTACK_MAIL_UPDATE. It is a per-run choice: env.sh
+# never records it, so one choice does not stick to every later update.
+MAIL_UPDATE_MODE="${AGENTSTACK_MAIL_UPDATE:-keep}"
+MAIL_UPDATE_MODE_EXPLICIT="${AGENTSTACK_MAIL_UPDATE:+x}"
+MAIL_UPDATE_MODE_FLAG=""
 UPDATE_MAIL=false
+PRINT_MAIL_PLAN=false
 MAIL_UPDATE_PLANNED=false
 MAIL_UPDATE_RESULT=""
 MAIL_UPDATE_REASON=""
 MAIL_UPDATE_BACKUP=""
+# The machine-readable outcome (the final `mail-result:` line): what happened
+# and a fixed reason code. setup.sh and update.sh read it instead of prose.
+MAIL_RESULT=""
+MAIL_RESULT_CODE=""
+MAIL_UPDATE_START_SECONDS=""
+MAIL_UPDATE_OUTAGE_SECONDS=""
 LEGACY_MAIL_SCAN_COMPLETE=false
 LEGACY_MAIL_DETECTED_LABELS=""
 LEGACY_MAIL_RETIRE_PLANNED=false
@@ -113,11 +132,22 @@ Options:
   --label-prefix PREFIX  Default: existing env.sh, else org.agentstack
   --retire-legacy-mail   Retire a previous mail service found loaded (default:
                          report it and leave it running)
-  --update-mail          Switch a running ORRERY Mail to this checkout's build:
-                         build and verify the candidate on a scratch port,
-                         back up the database, stop, start the new build, and
-                         restore the running build if the new one is not
-                         healthy (default: keep the running build)
+  --update-mail          Switch a running ORRERY Mail to this checkout's build,
+                         or exit 1 saying why not: build and verify the
+                         candidate on a scratch port, back up the database,
+                         stop, start the new build, and restore the running
+                         build if the new one is not healthy
+  --keep-mail            Keep the running ORRERY Mail build even when this
+                         checkout's build is newer (the default).
+                         AGENTSTACK_MAIL_UPDATE=auto (opt-in) switches as
+                         --update-mail does when the deployment is managed by
+                         agentstack-mailctl, the candidate passes its check and
+                         the expected outage is within
+                         AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET seconds (8), and
+                         otherwise keeps the running build without failing
+  --print-mail-plan      Print one `mail-plan:` line saying what this run would
+                         do to ORRERY Mail, then exit 0. Reads only; changes
+                         nothing
   --terminal MODE        auto, ghostty, iterm, terminal, or none (default:
                          existing env.sh, else auto)
   --reset-settings       Do not inherit settings from the existing env.sh:
@@ -173,10 +203,17 @@ while [[ $# -gt 0 ]]; do
       RETIRE_LEGACY_MAIL=true
       shift
       ;;
-    --update-mail)
-      # Explicit opt-in. Replacing the Mail build every agent is connected to
-      # is an outage, however short; the operator chooses when to take it.
-      UPDATE_MAIL=true
+    --update-mail|--keep-mail)
+      wanted="${1#--}"; wanted="${wanted%-mail}"
+      if [[ -n "$MAIL_UPDATE_MODE_FLAG" && "$MAIL_UPDATE_MODE_FLAG" != "$wanted" ]]; then
+        echo "error: --update-mail and --keep-mail are mutually exclusive" >&2
+        exit 2
+      fi
+      MAIL_UPDATE_MODE_FLAG="$wanted"
+      shift
+      ;;
+    --print-mail-plan)
+      PRINT_MAIL_PLAN=true
       shift
       ;;
     -y|--assume-yes)
@@ -280,6 +317,96 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+[[ -z "$MAIL_UPDATE_MODE_FLAG" ]] || { MAIL_UPDATE_MODE="$MAIL_UPDATE_MODE_FLAG"; MAIL_UPDATE_MODE_EXPLICIT=x; }
+MAIL_KEEP_CODE=keep_default
+[[ -z "$MAIL_UPDATE_MODE_EXPLICIT" ]] || MAIL_KEEP_CODE=keep_requested
+case "$MAIL_UPDATE_MODE" in
+  auto|keep) ;;
+  update) UPDATE_MAIL=true ;;
+  *) echo "error: AGENTSTACK_MAIL_UPDATE must be auto, update or keep (got: $MAIL_UPDATE_MODE)" >&2; exit 2 ;;
+esac
+
+# --print-mail-plan: one line for setup.sh's plan, before anything else runs.
+# It reads the pidfile, the render it names and git; it never probes Codex,
+# never needs a project key and always exits 0. A plan, not a promise: the
+# real run still verifies the candidate and may keep the running build.
+#   mail-plan: <switch|keep|unchanged|refuse|install> mode=<m> running=<id> to=<id> reason=<code>
+print_mail_plan() {
+  local service_root="${AGENTSTACK_MAIL_SERVICE_ROOT:-}" mcp_url="${AGENTSTACK_MCP_URL:-}" new_id
+  new_id="${AGENTSTACK_MAIL_CANDIDATE_ID:-$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)}"
+  python3 - "$INSTALL_DIR" "$service_root" "$mcp_url" "$REPO_ROOT" "${new_id:-source}" \
+    "$MAIL_UPDATE_MODE" "${AGENTSTACK_MAIL_PACKAGE_SOURCE:-$REPO_ROOT/packages/agentstack_mail}" "$MAIL_KEEP_CODE" <<'PY' 2>/dev/null \
+    || echo "mail-plan: refuse mode=$MAIL_UPDATE_MODE running= to=${new_id:-source} reason=plan_unavailable"
+import json, os, pathlib, re, shlex, socket, subprocess, sys
+from urllib.parse import urlparse
+
+install_dir, service_root, mcp_url, repo, new_id, mode, package, keep_code = sys.argv[1:9]
+
+
+def saved(name):
+    try:
+        lines = pathlib.Path(install_dir, "env.sh").read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return ""
+    for line in lines:
+        match = re.match(rf"^\s*export\s+{name}=(.*)$", line)
+        if match:
+            try:
+                parts = shlex.split(match.group(1), comments=True, posix=True)
+            except ValueError:
+                return ""
+            return parts[0] if len(parts) == 1 else ""
+    return ""
+
+
+def emit(action, running, reason):
+    print(f"mail-plan: {action} mode={mode} running={running} to={new_id} reason={reason}")
+    raise SystemExit(0)
+
+
+root = pathlib.Path(service_root or saved("AGENTSTACK_MAIL_DIR") or pathlib.Path(install_dir, "mail-service"))
+url = urlparse(mcp_url or saved("AGENTSTACK_MCP_URL") or "http://127.0.0.1:18765/mcp")
+try:
+    pid_text, runner = (pathlib.Path(root, "runtime", "agentstack-mail.pid").read_text().splitlines() + ["", ""])[:2]
+    os.kill(int(pid_text.split()[0]), 0)
+except (OSError, ValueError, IndexError):
+    runner = ""
+if not runner:
+    with socket.socket() as probe:
+        probe.settimeout(0.5)
+        listening = probe.connect_ex((url.hostname or "127.0.0.1", url.port or 80)) == 0
+    if not listening:
+        emit("install", "", "no_running_mail")
+    emit("keep" if mode == "keep" else "refuse", "", "deployment_unidentified")
+render = pathlib.Path(runner).parent
+try:
+    running = json.loads((render / "deployment.json").read_text(encoding="utf-8")).get("source_id") or ""
+except (OSError, ValueError, AttributeError):
+    running = ""
+running = running or render.name.rsplit("-", 1)[0]
+if running == new_id:
+    emit("unchanged", running, "same_candidate")
+
+
+def tree(commit):
+    if pathlib.Path(package).resolve() != pathlib.Path(repo, "packages", "agentstack_mail").resolve():
+        return None
+    done = subprocess.run(["git", "-C", repo, "rev-parse", "-q", "--verify", f"{commit}^{{commit}}:packages/agentstack_mail"],
+                          capture_output=True, text=True)
+    return done.stdout.strip() or None if done.returncode == 0 else None
+
+
+old_tree = tree(running)
+if old_tree is not None and old_tree == tree(new_id):
+    emit("unchanged", running, "same_package")
+emit("keep" if mode == "keep" else "switch", running, keep_code if mode == "keep" else "newer_build")
+PY
+}
+if [[ "$PRINT_MAIL_PLAN" == true ]]; then
+  print_mail_plan
+  exit 0
+fi
 
 PROJECT_CONTEXT_LIB="$REPO_ROOT/hooks/project-context.sh"
 if [[ ! -f "$PROJECT_CONTEXT_LIB" ]]; then
@@ -1689,6 +1816,12 @@ adopt_running_native_mail_render() {
     AGENT_MAIL_RUNNER=""
     AGENT_MAIL_SERVICE_KIND=""
     AGENT_MAIL_SERVICE_PATH=""
+    if [[ "$MAIL_UPDATE_MODE" == keep ]]; then
+      MAIL_RESULT=kept
+    else
+      MAIL_RESULT=refused
+    fi
+    MAIL_RESULT_CODE=deployment_unidentified
     warn "reusing the healthy ORRERY Mail listener without changing it, but its deployment is not identifiable"
     warn "enrollment is unavailable until Mail is stopped and install.sh provisions a managed deployment"
     warn "this install did not update or register ORRERY Mail autostart; any existing trigger was left untouched and restart after login is not guaranteed"
@@ -1790,24 +1923,34 @@ mail_update_decide() {
   if [[ "$NATIVE_MAIL_VENV" == "$NEW_NATIVE_MAIL_VENV" ]]; then
     [[ "$UPDATE_MAIL" != true ]] || \
       say "--update-mail: the running ORRERY Mail already uses candidate $NATIVE_MAIL_VENV; nothing to switch"
+    MAIL_RESULT=unchanged MAIL_RESULT_CODE=same_candidate
     return 0
   fi
   old_source="$OLD_NATIVE_MAIL_SOURCE_ID"
   if [[ -z "$NATIVE_MAIL_VENV_EXPLICIT" ]] && mail_package_unchanged "$old_source" "$NEW_NATIVE_MAIL_SOURCE_ID"; then
     [[ "$UPDATE_MAIL" != true ]] || \
       say "--update-mail: packages/agentstack_mail is identical in $old_source and $NEW_NATIVE_MAIL_SOURCE_ID; keeping the running build"
+    MAIL_RESULT=unchanged MAIL_RESULT_CODE=same_package
     return 0
   fi
-  if [[ "$UPDATE_MAIL" != true ]]; then
+  if [[ "$MAIL_UPDATE_MODE" == keep ]]; then
     say "notice: the running ORRERY Mail is built from $old_source; this checkout would build $NEW_NATIVE_MAIL_SOURCE_ID"
     say "notice: the running build was kept. Re-run with --update-mail to switch (docs/agentstack-mail-update.md)"
+    MAIL_RESULT=kept MAIL_RESULT_CODE="$MAIL_KEEP_CODE"
     return 0
   fi
   if [[ "$AGENT_MAIL_SERVICE_KIND" != nohup ]]; then
-    die "--update-mail can only replace an ORRERY Mail started by agentstack-mailctl, and $NATIVE_MAIL_PIDFILE does not name a live runner; nothing was stopped"
+    [[ "$UPDATE_MAIL" != true ]] || \
+      die "--update-mail can only replace an ORRERY Mail started by agentstack-mailctl, and $NATIVE_MAIL_PIDFILE does not name a live runner; nothing was stopped"
+    warn "the running ORRERY Mail is built from $old_source; this checkout would build $NEW_NATIVE_MAIL_SOURCE_ID"
+    warn "it was not started by agentstack-mailctl ($NATIVE_MAIL_PIDFILE names no live runner), so it was kept; see docs/agentstack-mail-update.md"
+    MAIL_RESULT=refused MAIL_RESULT_CODE=not_mailctl_managed
+    return 0
   fi
   MAIL_UPDATE_PLANNED=true
-  say "--update-mail: will switch ORRERY Mail from $old_source ($OLD_NATIVE_MAIL_VENV) to $NEW_NATIVE_MAIL_SOURCE_ID ($NEW_NATIVE_MAIL_VENV)"
+  say "ORRERY Mail ($MAIL_UPDATE_MODE): will switch from $old_source ($OLD_NATIVE_MAIL_VENV) to $NEW_NATIVE_MAIL_SOURCE_ID ($NEW_NATIVE_MAIL_VENV)"
+  [[ "$MAIL_UPDATE_MODE" != auto ]] || \
+    say "ORRERY Mail (auto): only after the candidate passes its check and the expected outage is short; pass --keep-mail to keep the running build"
 }
 
 check_dependencies() {
@@ -3076,6 +3219,10 @@ elif command == "wait-health":
     if pending:
         print(f"{pending[0]} did not answer health within {timeout}s ({last})", file=sys.stderr)
         raise SystemExit(1)
+    if os.environ.get("MAIL_UPDATE_READY_FILE"):
+        # How long the candidate took to answer on a copy of the real database:
+        # the start part of the outage a switch would cause.
+        pathlib.Path(os.environ["MAIL_UPDATE_READY_FILE"]).write_text(f"{time.monotonic() - started:.1f}\n")
 elif command == "schema-kept":
     # The candidate ran its startup DDL on the snapshot. Additive changes are
     # what the running build tolerates on rollback; a table or column that
@@ -3218,11 +3365,13 @@ verify_native_mail_candidate_offline() {
     # In the background and collected with `wait`: bash runs a trap only after
     # a foreground command returns, so a SIGTERM would otherwise wait out the
     # whole health timeout before anything was cleaned up.
-    mail_update_helper wait-health "$MAIL_VERIFY_SERVER_PID" "$timeout" "$scratch/state/storage.sqlite3" \
+    MAIL_UPDATE_READY_FILE="$scratch/ready.seconds" \
+      mail_update_helper wait-health "$MAIL_VERIFY_SERVER_PID" "$timeout" "$scratch/state/storage.sqlite3" \
       "http://127.0.0.1:$port$path" "http://127.0.0.1:$port/api" 2> "$scratch/probe.err" &
     MAIL_VERIFY_HELPER_PID=$!
     if wait "$MAIL_VERIFY_HELPER_PID"; then
       rc=0
+      MAIL_UPDATE_START_SECONDS="$(cat "$scratch/ready.seconds" 2>/dev/null || true)"
     else
       MAIL_UPDATE_REASON="candidate failed offline verification: $(tail -n 1 "$scratch/probe.err")"
     fi
@@ -3231,7 +3380,7 @@ verify_native_mail_candidate_offline() {
     MAIL_VERIFY_SERVER_PID=""
     if [[ "$rc" -eq 0 ]]; then
       if mail_update_helper schema-kept "$scratch/schema.json" "$scratch/state/storage.sqlite3" > "$scratch/schema.out" 2> "$scratch/schema.err"; then
-        say "candidate verified offline ($(cat "$scratch/schema.out"))"
+        say "candidate verified offline ($(cat "$scratch/schema.out"); answered in ${MAIL_UPDATE_START_SECONDS:-?}s)"
       else
         rc=1
         MAIL_UPDATE_REASON="$(tail -n 1 "$scratch/schema.err")"
@@ -3294,6 +3443,26 @@ switch_native_mail() {
   native_mail_serving_render "$NATIVE_MAIL_RUNNER"
 }
 
+mail_update_clock() {
+  "$PYTHON_BIN" -c 'import time; print(time.time())'
+}
+
+mail_update_elapsed() {  # mail_update_elapsed <start from mail_update_clock>
+  "$PYTHON_BIN" -c 'import sys, time; print(f"{time.time() - float(sys.argv[1]):.1f}")' "$1"
+}
+
+# After any stop, whatever its length: this installer's health check and a
+# selftest prove that Mail answers, not that a session already running got its
+# connection back. Proxy-connected children and Codex reconnect on their next
+# call; Claude Code's own HTTP connection (the orrery-mail entry in
+# ~/.claude.json) came back after outages up to 15 s in testing and stayed
+# disconnected after 18 s, so each running session is the one to check.
+mail_update_reconnect_hint() {
+  say "ORRERY Mail was unavailable for ${MAIL_UPDATE_OUTAGE_SECONDS:-?}s. Mail calls made meanwhile failed; send them again if they mattered"
+  say "  in each running Claude Code session: /mcp shows orrery-mail as connected, and a small call such as health_check succeeds;"
+  say "  if it shows disconnected: /mcp, then orrery-mail, then reconnect. Children (through the proxy) and Codex reconnect on their next call"
+}
+
 # Put the build that was running back. Its render, runner and candidate were
 # never modified (all three are immutable), so this is the start that was
 # already working before the update. A failure here is reported with the exact
@@ -3345,13 +3514,39 @@ update_native_mail() {
   fi
   if ! verify_native_mail_candidate_offline; then
     MAIL_UPDATE_RESULT="not-switched"
+    MAIL_RESULT_CODE=verify_failed
     warn "ORRERY Mail was not switched: $MAIL_UPDATE_REASON"
     warn "the running build $OLD_NATIVE_MAIL_ENV was not stopped (server log: $NATIVE_MAIL_SERVICE_ROOT/runtime/mail-update-verify.log)"
     mail_update_use OLD
     return
   fi
+  # The outage is the stop (well under a second) plus the time the candidate
+  # took to answer on a copy of this database, plus the health poll interval.
+  # Claude Code's direct HTTP connection gave up on outages of 18 s or more in
+  # testing (2026-10-02), so auto keeps well under that.
+  local budget estimate
+  budget="${AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET:-8}"
+  estimate="$("$PYTHON_BIN" -c 'import math, sys; print(math.ceil(float(sys.argv[1] or 0) + 1.5))' "${MAIL_UPDATE_START_SECONDS:-}" 2>/dev/null || echo 0)"
+  if [[ "$MAIL_UPDATE_MODE" == auto && ! "$budget" =~ ^[0-9]+$ ]]; then
+    MAIL_UPDATE_RESULT="not-switched"
+    MAIL_RESULT_CODE=outage_over_budget
+    MAIL_UPDATE_REASON="AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET is not a number of seconds: $budget"
+    warn "ORRERY Mail was not switched: $MAIL_UPDATE_REASON"
+    mail_update_use OLD
+    return
+  fi
+  if [[ "$MAIL_UPDATE_MODE" == auto ]] && (( estimate > budget )); then
+    MAIL_UPDATE_RESULT="not-switched"
+    MAIL_RESULT_CODE=outage_over_budget
+    MAIL_UPDATE_REASON="the switch would stop ORRERY Mail for about ${estimate}s, over the ${budget}s budget"
+    warn "ORRERY Mail was not switched: $MAIL_UPDATE_REASON; the running build was not stopped"
+    warn "to switch anyway at a time you choose: install.sh --update-mail (or raise AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET)"
+    mail_update_use OLD
+    return
+  fi
   if ! backup="$(mail_update_helper backup "$MAIL_DB" "$NATIVE_MAIL_SERVICE_ROOT/backups" "$NATIVE_MAIL_SOURCE_ID" "${AGENTSTACK_MAIL_UPDATE_BACKUPS:-3}")"; then
     MAIL_UPDATE_RESULT="not-switched"
+    MAIL_RESULT_CODE=backup_failed
     MAIL_UPDATE_REASON="could not back up $MAIL_DB"
     warn "ORRERY Mail was not switched: $MAIL_UPDATE_REASON"
     mail_update_use OLD
@@ -3359,19 +3554,28 @@ update_native_mail() {
   fi
   MAIL_UPDATE_BACKUP="$backup"
   say "backed up ORRERY Mail database to $backup"
+  say "switching ORRERY Mail from $OLD_NATIVE_MAIL_SOURCE_ID to $NATIVE_MAIL_SOURCE_ID: Mail is unavailable for about ${estimate}s"
+  say "  agents' Mail calls fail meanwhile and work again afterwards; the database, tokens and registrations are unchanged"
   render_native_mail_runner
   # Disarmed in main once env.sh names the serving build.
   MAIL_UPDATE_SWITCH_ARMED=true
   trap mail_update_switch_interrupted INT TERM HUP
+  local stopped_at
+  stopped_at="$(mail_update_clock)"
   if switch_native_mail; then
     MAIL_UPDATE_RESULT="switched"
-    say "ORRERY Mail switched from $OLD_NATIVE_MAIL_SOURCE_ID to $NATIVE_MAIL_SOURCE_ID"
+    MAIL_UPDATE_OUTAGE_SECONDS="$(mail_update_elapsed "$stopped_at")"
+    say "ORRERY Mail switched from $OLD_NATIVE_MAIL_SOURCE_ID to $NATIVE_MAIL_SOURCE_ID (unavailable for ${MAIL_UPDATE_OUTAGE_SECONDS}s)"
+    mail_update_reconnect_hint
     return
   fi
   mail_update_disarm_switch
   rollback_native_mail
+  MAIL_UPDATE_OUTAGE_SECONDS="$(mail_update_elapsed "$stopped_at")"
   MAIL_UPDATE_RESULT="rolled-back"
+  MAIL_RESULT_CODE=start_failed_rolled_back
   mail_update_use OLD
+  mail_update_reconnect_hint
 }
 
 ensure_native_agentstack_mail() {
@@ -4418,6 +4622,7 @@ write_manifest() {
     # be spliced into the Python source below.
     mail_update="$("$PYTHON_BIN" -c 'import json, sys; keys = sys.argv[1::2]; print(json.dumps(dict(zip(keys, sys.argv[2::2]))))' \
       result "$MAIL_UPDATE_RESULT" reason "$MAIL_UPDATE_REASON" \
+      mode "$MAIL_UPDATE_MODE" reason_code "$MAIL_RESULT_CODE" outage_seconds "$MAIL_UPDATE_OUTAGE_SECONDS" \
       previous_service_env "${OLD_NATIVE_MAIL_ENV:-}" previous_candidate_venv "${OLD_NATIVE_MAIL_VENV:-}" \
       requested_service_env "${NEW_NATIVE_MAIL_ENV:-}" requested_candidate_venv "${NEW_NATIVE_MAIL_VENV:-}" \
       database_backup "$MAIL_UPDATE_BACKUP")"
@@ -4766,8 +4971,16 @@ main() {
       report_managed_instructions
     fi
   fi
+  print_mail_result
   case "$MAIL_UPDATE_RESULT" in
     not-switched|rolled-back)
+      if [[ "$MAIL_UPDATE_MODE" == auto ]]; then
+        # auto chose not to, or could not, switch: the install itself is done
+        # and Mail is serving its previous build.
+        warn "ORRERY Mail was not updated ($MAIL_UPDATE_RESULT): $MAIL_UPDATE_REASON"
+        warn "ORRERY Mail still runs $NATIVE_MAIL_ENV; to retry at a time you choose: install.sh --update-mail"
+        return 0
+      fi
       # The rest of the install finished against the build that is serving, but
       # what was asked for did not happen: exit non-zero so nobody reads this
       # run as an update.
@@ -4776,6 +4989,43 @@ main() {
       exit 1
       ;;
   esac
+}
+
+# The last line about ORRERY Mail, for setup.sh/update.sh to read instead of
+# prose: key=value pairs, no value contains a space, reason is a fixed code.
+#   mail-result: <installed|switched|kept|unchanged|refused|rolled-back> mode=<m> from=<id> to=<id> running=<id> outage_s=<n> reason=<code>
+# from: the build serving before this run (empty when none, or unidentified).
+# to: the build this checkout would deploy. running: the build serving now --
+# to after a switch, from after kept/refused/rolled-back. A run that dies
+# (rollback failed, --update-mail refused) or is interrupted prints no line
+# and exits non-zero; a reader must treat a missing line as a failure.
+# A dry run prints the same fields as `mail-plan:` (nothing happened).
+print_mail_result() {
+  local result="$MAIL_RESULT" code="$MAIL_RESULT_CODE" from="${OLD_NATIVE_MAIL_SOURCE_ID:-}" to="${NEW_NATIVE_MAIL_SOURCE_ID:-}" running
+  case "$MAIL_UPDATE_RESULT" in
+    switched) result=switched code=newer_build ;;
+    not-switched) result=refused ;;
+    rolled-back) result=rolled-back ;;
+    *)
+      if [[ "$MAIL_UPDATE_PLANNED" == true ]]; then
+        result=switch code=newer_build
+      elif [[ "$PROVISION_NATIVE_MAIL" == true ]]; then
+        result=installed code=no_running_mail from="" to="$NATIVE_MAIL_SOURCE_ID"
+      fi
+      ;;
+  esac
+  [[ -n "$result" ]] || { result=unchanged; code="${code:-adopted}"; }
+  if [[ "$DRY_RUN" == true ]]; then
+    case "$result" in installed) result=install ;; refused) result=refuse ;; kept) result=keep ;; esac
+    printf 'mail-plan: %s mode=%s running=%s to=%s reason=%s\n' "$result" "$MAIL_UPDATE_MODE" "$from" "$to" "${code:-unknown}"
+    return
+  fi
+  case "$result" in
+    switched|installed) running="$to" ;;
+    *) running="$from" ;;
+  esac
+  printf 'mail-result: %s mode=%s from=%s to=%s running=%s outage_s=%s reason=%s\n' \
+    "$result" "$MAIL_UPDATE_MODE" "$from" "$to" "$running" "${MAIL_UPDATE_OUTAGE_SECONDS:-0}" "${code:-unknown}"
 }
 
 main "$@"
