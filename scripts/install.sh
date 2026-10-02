@@ -24,6 +24,7 @@ MAIL_UPDATE_MODE_EXPLICIT="${AGENTSTACK_MAIL_UPDATE:+x}"
 MAIL_UPDATE_MODE_FLAG=""
 UPDATE_MAIL=false
 PRINT_MAIL_PLAN=false
+PRINT_MAIL_ADVICE=false
 MAIL_UPDATE_PLANNED=false
 MAIL_UPDATE_RESULT=""
 MAIL_UPDATE_REASON=""
@@ -150,6 +151,12 @@ Options:
                          the expected outage is within
                          AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET seconds (8), and
                          otherwise keeps the running build without failing
+  --print-mail-update-advice
+                         When the running ORRERY Mail is shown to be older
+                         than this checkout's build (its commit is an ancestor
+                         of this checkout's), print what that costs, the risk of
+                         updating and the recovery (no update command). Reads
+                         only; prints nothing otherwise; exit 0
   --print-mail-plan      Print one `mail-plan:` line saying what this run would
                          do to ORRERY Mail, then exit 0. Reads only; changes
                          nothing
@@ -229,6 +236,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --print-mail-plan)
       PRINT_MAIL_PLAN=true
+      shift
+      ;;
+    --print-mail-update-advice)
+      PRINT_MAIL_ADVICE=true
       shift
       ;;
     -y|--assume-yes)
@@ -420,6 +431,26 @@ PY
 }
 if [[ "$PRINT_MAIL_PLAN" == true ]]; then
   print_mail_plan
+  exit 0
+fi
+# --print-mail-update-advice: the "Mail is out of date" notice (what does not
+# work, the risk of updating, the /mcp recovery) without the update command,
+# for setup.sh to show next to its own. Reads only; always exits 0; prints
+# nothing unless the running Mail is shown to be older: its commit is an
+# ancestor of this checkout's. (A missing feature alone does not show that
+# this checkout's build has it; doctor reports that case.)
+if [[ "$PRINT_MAIL_ADVICE" == true ]]; then
+  mail_plan_line="$(MAIL_UPDATE_MODE=update print_mail_plan)"
+  case "$mail_plan_line" in
+    "mail-plan: switch "*)
+      plan_running="$(sed -n 's/.* running=\([^ ]*\).*/\1/p' <<< "$mail_plan_line")"
+      plan_to="$(sed -n 's/.* to=\([^ ]*\).*/\1/p' <<< "$mail_plan_line")"
+      plan_url="${AGENTSTACK_MCP_URL:-$(sed -n 's/^export AGENTSTACK_MCP_URL=//p' "$INSTALL_DIR/env.sh" 2>/dev/null | tr -d "\"'")}"
+      python3 "$SCRIPT_DIR/lib/mail_update_notice.py" stale --without-how --only-if-stale \
+        --repo "$REPO_ROOT" --running "$plan_running" \
+        --to "$plan_to" ${plan_url:+--mcp-url "$plan_url"} 2>/dev/null || true
+      ;;
+  esac
   exit 0
 fi
 
@@ -2010,6 +2041,8 @@ validate_repo_assets() {
   [[ -f "$MERGE_SETTINGS_SCRIPT" ]] || die "missing scripts/lib/merge_settings.py"
   [[ -f "$MERGE_CLAUDE_MCP_SCRIPT" ]] || die "missing scripts/lib/merge_claude_mcp.py"
   [[ -f "$SCRIPT_DIR/lib/mcp_endpoint.py" ]] || die "missing scripts/lib/mcp_endpoint.py"
+  [[ -f "$SCRIPT_DIR/lib/mail_required_features.json" ]] || die "missing scripts/lib/mail_required_features.json"
+  [[ -f "$SCRIPT_DIR/lib/mail_update_notice.py" ]] || die "missing scripts/lib/mail_update_notice.py"
   [[ -f "$SCRIPT_DIR/lib/agentstack-persistent-launcher.sh" ]] || \
     die "missing scripts/lib/agentstack-persistent-launcher.sh"
   [[ -f "$SCRIPT_DIR/selftest.py" ]] || die "missing scripts/selftest.py"
@@ -2357,6 +2390,8 @@ install_payload() {
     cp "$MERGE_CLAUDE_MCP_SCRIPT" "$BIN_DIR/agentstack-merge-claude-mcp"
     mkdir -p "$BIN_DIR/lib"
     cp "$SCRIPT_DIR/lib/mcp_endpoint.py" "$BIN_DIR/lib/mcp_endpoint.py"
+    cp "$SCRIPT_DIR/lib/mail_required_features.json" "$BIN_DIR/lib/mail_required_features.json"
+    cp "$SCRIPT_DIR/lib/mail_update_notice.py" "$BIN_DIR/lib/mail_update_notice.py"
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-scientists.sh" "$BIN_DIR/lib/agentstack-scientists.sh"
@@ -3471,8 +3506,8 @@ mail_update_elapsed() {  # mail_update_elapsed <start from mail_update_clock>
   "$PYTHON_BIN" -c 'import sys, time; print(f"{time.monotonic() - float(sys.argv[1]):.1f}")' "$1"
 }
 
-# setup.sh shows these same lines after a switch or a rollback; this function
-# is the canonical text (change both together).
+# The text is scripts/lib/mail_update_notice.py, shared with doctor and the
+# cockpit's setup.sh so that the advice is worded once.
 # After any stop, whatever its length: this installer's health check and a
 # selftest prove that Mail answers, not that a session already running got its
 # connection back. Proxy-connected children and Codex reconnect on their next
@@ -3480,11 +3515,8 @@ mail_update_elapsed() {  # mail_update_elapsed <start from mail_update_clock>
 # ~/.claude.json) came back after outages up to 15 s in testing and stayed
 # disconnected after 18 s, so each running session is the one to check.
 mail_update_reconnect_hint() {
-  say "ORRERY Mail was unavailable for ${MAIL_UPDATE_OUTAGE_SECONDS:-?}s."
-  say "  in each running Claude Code session: /mcp shows orrery-mail as connected, and a small call such as health_check succeeds;"
-  say "  if it shows disconnected: /mcp, then orrery-mail, then reconnect. Children (through the proxy) and Codex reconnect on their next call"
-  say "  a Mail call that failed meanwhile may still have been carried out (only the answer was lost): check before repeating it --"
-  say "  a send in the recipient's inbox or your outbox, a registration with whois, a spawn or resume in the dashboard"
+  "$PYTHON_BIN" "$SCRIPT_DIR/lib/mail_update_notice.py" after-stop --outage "${MAIL_UPDATE_OUTAGE_SECONDS:-?}" || \
+    say "ORRERY Mail was unavailable for ${MAIL_UPDATE_OUTAGE_SECONDS:-?}s; check each running Claude Code session with /mcp"
 }
 
 # An interrupted switch stopped Mail too: running sessions need the same
@@ -5017,6 +5049,7 @@ main() {
   case "$MAIL_UPDATE_RESULT" in
     not-switched|rolled-back)
       if [[ "$MAIL_UPDATE_MODE" == auto ]]; then
+        print_mail_stale_notice
         print_mail_result
         # auto chose not to, or could not, switch: the install itself is done
         # and Mail is serving its previous build.
@@ -5032,7 +5065,24 @@ main() {
       exit 1
       ;;
   esac
+  print_mail_stale_notice
   print_mail_result
+}
+
+# A Mail older than this checkout that this run did not replace: say what that
+# costs, how to update, the risk of updating and the recovery, before the
+# result line (which stays the last line of stdout).
+print_mail_stale_notice() {
+  local from="${OLD_NATIVE_MAIL_SOURCE_ID:-}" to="${NEW_NATIVE_MAIL_SOURCE_ID:-}"
+  [[ "$DRY_RUN" != true && -n "$from" && -n "$to" && "$from" != "$to" ]] || return 0
+  case "${MAIL_UPDATE_RESULT:-$MAIL_RESULT}" in
+    kept|refused|not-switched|rolled-back) ;;
+    *) return 0 ;;
+  esac
+  echo
+  "$PYTHON_BIN" "$SCRIPT_DIR/lib/mail_update_notice.py" stale --running "$from" --to "$to" \
+    --repo "$REPO_ROOT" --mcp-url "$MCP_URL" || true
+  echo
 }
 
 # The last line about ORRERY Mail, for setup.sh/update.sh to read instead of

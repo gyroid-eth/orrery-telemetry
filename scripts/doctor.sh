@@ -162,6 +162,80 @@ PY
     status=1
   fi
 
+# What the running Mail cannot do yet. A Mail older than this install answers
+# health and passes every check above, while a feature the dashboard or a
+# launcher relies on is silently missing (2026-10-02: a resume fell back to a
+# conversation without Mail because register_agent had no existing_agent_id).
+# This is a warning, not a failure: Mail itself works. The last line is for
+# setup.sh to read:
+#   mail-features: status=<ok|missing|unknown> missing=<tool.parameter,...> running=<source id>
+MAIL_FEATURES_FILE="$SCRIPT_DIR/lib/mail_required_features.json"
+[[ -f "$MAIL_FEATURES_FILE" ]] || MAIL_FEATURES_FILE="$SCRIPT_DIR/../scripts/lib/mail_required_features.json"
+MAIL_FEATURES="$("$PYTHON_BIN" - "${AGENTSTACK_MCP_URL:-}" "$MAIL_FEATURES_FILE" \
+  "${AGENTSTACK_MAIL_DIR:-$INSTALL_DIR/mail-service}" <<'PY' 2>/dev/null || echo "unknown||"
+import json
+import pathlib
+import sys
+import urllib.request
+
+url, features_file, service_root = sys.argv[1:]
+try:
+    pid_text, runner = (pathlib.Path(service_root, "runtime", "agentstack-mail.pid").read_text().splitlines() + ["", ""])[:2]
+    render = pathlib.Path(runner).parent
+    running = json.loads((render / "deployment.json").read_text()).get("source_id") or render.name.rsplit("-", 1)[0]
+except (OSError, ValueError, AttributeError):
+    running = ""
+try:
+    wanted = json.loads(pathlib.Path(features_file).read_text(encoding="utf-8"))["features"]
+except (OSError, ValueError, KeyError):
+    print(f"unknown||{running}")
+    raise SystemExit(0)
+request = urllib.request.Request(
+    url,
+    data=json.dumps({"jsonrpc": "2.0", "id": "agentstack-doctor-features", "method": "tools/list", "params": {}}).encode(),
+    headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(request, timeout=3) as response:
+        raw = response.read().decode("utf-8", errors="replace")
+    for line in raw.splitlines():
+        if line.startswith("data:"):
+            raw = line[5:].strip()
+            break
+    tools = {tool.get("name"): set(((tool.get("inputSchema") or {}).get("properties") or {}))
+             for tool in json.loads(raw)["result"]["tools"]}
+except Exception:
+    print(f"unknown||{running}")
+    raise SystemExit(0)
+missing = [f for f in wanted if f["parameter"] not in tools.get(f["tool"], set())]
+print(("missing" if missing else "ok") + "|" + ",".join(f"{f['tool']}.{f['parameter']}" for f in missing) + "|" + running)
+for f in missing:
+    print(f"{f['tool']}.{f['parameter']}|{f['needed_for']}|{f['without_it']}")
+PY
+)"
+IFS='|' read -r mail_features_status mail_features_missing mail_features_running <<< "$(head -n 1 <<< "$MAIL_FEATURES")"
+case "$mail_features_status" in
+  ok) echo "ok: ORRERY Mail has every feature this install relies on" ;;
+  missing)
+    while IFS='|' read -r name needed_for without_it; do
+      echo "warn: ORRERY Mail${mail_features_running:+ (running $mail_features_running)} lacks $name, which this install relies on" >&2
+    done < <(tail -n +2 <<< "$MAIL_FEATURES")
+    MAIL_NOTICE="$SCRIPT_DIR/lib/mail_update_notice.py"
+    [[ -f "$MAIL_NOTICE" ]] || MAIL_NOTICE="$SCRIPT_DIR/../scripts/lib/mail_update_notice.py"
+    # The checkout this install came from, so the notice can tell whether the
+    # running Mail is older than it (an update from an older checkout goes back).
+    MAIL_REPO="$("$PYTHON_BIN" -c 'import json, sys; print(json.load(open(sys.argv[1])).get("repo_root") or "")' "$MANIFEST" 2>/dev/null || true)"
+    MAIL_REPO_HEAD=""
+    [[ -z "$MAIL_REPO" ]] || MAIL_REPO_HEAD="$(git -C "$MAIL_REPO" rev-parse HEAD 2>/dev/null || true)"
+    "$PYTHON_BIN" "$MAIL_NOTICE" stale --running "$mail_features_running" --missing "$mail_features_missing" \
+      --features "$MAIL_FEATURES_FILE" ${MAIL_REPO_HEAD:+--repo "$MAIL_REPO" --to "$MAIL_REPO_HEAD"} \
+      2>/dev/null | sed 's/^/      /' >&2 || true
+    ;;
+  *) echo "warn: could not read the running ORRERY Mail's tools; its features were not checked" >&2 ;;
+esac
+echo "mail-features: status=${mail_features_status:-unknown} missing=$mail_features_missing running=$mail_features_running"
+
 CLAUDE_JSON="${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"

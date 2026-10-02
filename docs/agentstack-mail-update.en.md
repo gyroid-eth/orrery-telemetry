@@ -636,6 +636,44 @@ that has already been made here. So is reading the dashboard's `/api/version`:
 that is the package version, and it changes on every re-run whether or not
 Mail was switched.
 
+**What the running build lacks.** `agentstack-doctor` reads the running Mail's
+`tools/list` once, and for each feature this install relies on
+(`scripts/lib/mail_required_features.json`; for example `existing_agent_id` on
+`register_agent`, which lets an old-format Claude child resume with Mail) that
+is missing, prints a `warn:` with the fix (`--update-mail`). Mail itself works,
+so doctor's exit status does not change. It ends with one line for setup.sh to
+read:
+
+```text
+mail-features: status=<ok|missing|unknown> missing=<tool.parameter,...> running=<commit>
+```
+
+`unknown` means Mail could not be asked, not that every feature is present.
+
+**The notice about an old Mail.** When the Mail this run did not replace is
+**shown to be** older than this checkout's build (its commit is an ancestor of
+the checkout's), install.sh prints a short notice before the result line. When
+the running build is newer, it says that the checkout is older and should be
+pulled before updating Mail from it; when which is newer cannot be told
+(diverged, or not a commit of this checkout), it says so. Neither suggests an
+update from this checkout, since an update from an older checkout would take
+Mail back. A missing feature is reported in every case, but it is not proof
+that updating from this checkout adds it, so then the notice says to update
+from a checkout at least as new as the running build. The notice gives what does not work, how to update
+(`./scripts/install.sh --mail update` / `./scripts/setup.sh --mail update`),
+the risk of updating (Mail usually stops for a few seconds, but if the new
+build does not start, the switch and the return to the old one can take
+minutes, with no short limit guaranteed; Mail calls fail meanwhile; children
+and Codex reconnect by themselves; a top-level Claude Code session may not:
+with Claude Code 2.1.287 in testing, stops of 8 s and 15 s reconnected by
+themselves and stops of 18 s and 19 s did not), and
+what to do then (in that session, `/mcp`, choose orrery-mail, shown as
+"✘ failed", then Reconnect, not Authenticate). doctor prints the same notice
+when a feature is missing. The text lives in `scripts/lib/mail_update_notice.py`;
+the cockpit's setup.sh shows it through `install.sh --print-mail-update-advice`
+(reads only, always exits 0, prints only when Mail is shown to be older, and
+leaves out the update command lines).
+
 ## History
 
 Before the bundled service, deployments were hand-run under

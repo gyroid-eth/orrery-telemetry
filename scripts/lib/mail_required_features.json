@@ -1,0 +1,11 @@
+{
+  "_comment": "ORRERY Mail tool parameters this install relies on. agentstack-doctor reads the running Mail's tools/list and reports each one it lacks. Add an entry when the dashboard, a hook or a launcher starts depending on a newer Mail; name the tool and parameter exactly as tools/list advertises them.",
+  "features": [
+    {
+      "tool": "register_agent",
+      "parameter": "existing_agent_id",
+      "needed_for": "Claude children saved in the old format keep ORRERY Mail on resume and re-spawn",
+      "without_it": "the dashboard resumes them as a conversation only, and spawn_child.sh will not adopt them"
+    }
+  ]
+}

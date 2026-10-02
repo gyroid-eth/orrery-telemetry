@@ -600,6 +600,41 @@ ps -o command= -p "$pid"          # which candidate's python is this
 です。dashboard の `/api/version` を読むのも同じ間違いで、それは package の版
 であり、Mail を切り替えたかどうかに関わらず再実行のたびに変わります。
 
+**動いている build に足りない機能。** `agentstack-doctor` は動いている Mail の
+`tools/list` を 1 回読み、この install が頼る機能（`scripts/lib/mail_required_features.json`。
+例: 旧形式の Claude の子を Mail 付きで再開する `register_agent` の `existing_agent_id`）
+のうち欠けているものごとに `warn:` を出し、直し方（`--update-mail`）を示します。
+Mail そのものは動いているので、doctor の exit status は変えません。最後に
+setup.sh が読む 1 行を出します。
+
+```text
+mail-features: status=<ok|missing|unknown> missing=<tool.parameter,...> running=<commit>
+```
+
+`unknown` は Mail に問い合わせられなかったことで、機能がそろっている意味では
+ありません。
+
+**古い Mail の案内。** install.sh は、この run で差し替えなかった Mail がこの
+checkout の build より**古いと分かるとき**（動いている build の commit がこの
+checkout の commit の祖先であるとき）、結果行の前に短い案内を出します。動いて
+いる build の方が新しいときは「checkout の方が古い。Mail をこの checkout から
+更新する前に pull する」と、どちらが新しいか分からない（分岐・この checkout に
+無い commit）ときはそう出し、どちらでもこの checkout からの更新は勧めません
+（古い checkout から更新すると Mail を戻してしまうため）。頼る機能が欠けている
+ことは、どの場合も知らせます。ただし欠けていることは「この checkout から更新
+すれば直る」根拠ではないので、そのときは「動いている build と同じか新しい
+checkout から更新する」と案内します。足りない機能、
+更新の仕方（`./scripts/install.sh --mail update`／`./scripts/setup.sh --mail update`）、
+更新のリスク（止まるのは通常は数秒。新しい build が起動しないと、切り替えと
+前の build への戻しに数分かかりうる。短い上限は保証しない。その間の Mail の
+呼び出しは失敗しうる。子と Codex は自分で戻る。top level の Claude Code は戻らない
+ことがある。Claude Code 2.1.287 の試験では 8 秒と 15 秒の停止は自分で戻り、18 秒と
+19 秒は戻らなかった）、戻らなかったときの操作（その session で `/mcp` →
+orrery-mail（✘ failed と表示）→ Reconnect。Authenticate ではない）です。doctor も
+欠けた機能があれば同じ案内を出します。文の正本は `scripts/lib/mail_update_notice.py`
+で、cockpit の setup.sh も `install.sh --print-mail-update-advice`（読むだけ・常に
+exit 0・古いと分かるときだけ出す・更新の command の行を除く）でこれを出します。
+
 ## 経緯
 
 同梱 service より前の deployment は `cutover-maintenance/` の下で

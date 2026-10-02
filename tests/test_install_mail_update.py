@@ -182,6 +182,10 @@ def test_a_rerun_keeps_the_running_build_by_default_and_a_dry_run_changes_nothin
             kept = stack.install("fixture-new", *keep)
         assert kept.returncode == 0, kept.stdout + kept.stderr
         assert "Re-run with --update-mail to switch" in kept.stdout
+        # Fixture builds are not commits: which is newer cannot be told, so the
+        # run says that and suggests no update (the git cases are below).
+        assert "ORRERY Mail runs fixture-old, a different build from this checkout (fixture-new)" in kept.stdout
+        assert "out of date" not in kept.stdout and "--mail update" not in kept.stdout
         assert kept.stdout.splitlines()[-1] == (
             "mail-result: kept mode=keep from=fixture-old to=fixture-new running=fixture-old"
             f" outage_s=0 reason={code}"
@@ -977,6 +981,15 @@ def test_print_mail_plan_reads_only_and_always_answers(tmp_path):
             "mail-plan: switch mode=update running=fixture-old to=fixture-new reason=newer_build")
         assert _plan(stack, "fixture-old") == (
             "mail-plan: unchanged mode=keep running=fixture-old to=fixture-old reason=same_candidate")
+        advice = subprocess.run(["/bin/bash", str(INSTALLER), "--print-mail-update-advice"], cwd=ROOT,
+                                env={**stack.env, "AGENTSTACK_MAIL_CANDIDATE_ID": "fixture-new"},
+                                text=True, capture_output=True, check=False, timeout=30)
+        assert advice.returncode == 0, advice.stderr
+        assert advice.stdout == ""  # different, but not shown to be older
+        same = subprocess.run(["/bin/bash", str(INSTALLER), "--print-mail-update-advice"], cwd=ROOT,
+                              env={**stack.env, "AGENTSTACK_MAIL_CANDIDATE_ID": "fixture-old"},
+                              text=True, capture_output=True, check=False, timeout=30)
+        assert same.returncode == 0 and same.stdout == ""
         assert stack.pid() == pid
         assert not list((stack.service_root / "renders").glob("fixture-new-*"))
     finally:
@@ -1060,6 +1073,7 @@ def _handler(serving: bool) -> subprocess.CompletedProcess[str]:
     script = "\n".join([
         "set -uo pipefail",
         f"PYTHON_BIN={shlex.quote(sys.executable)}",
+        f"SCRIPT_DIR={shlex.quote(str(INSTALLER.parent))}",
         f"for f in {functions}; do eval \"$(sed -n \"/^$f()/,/^}}/p\" {INSTALLER})\"; done",
         "say() { printf '%s\\n' \"$*\"; }",
         "warn() { printf 'warning: %s\\n' \"$*\" >&2; }",
@@ -1109,3 +1123,44 @@ def test_auto_refuses_when_the_outage_cannot_be_estimated(measured):
     assert "RESULT=not-switched CODE=outage_unknown" in done.stdout, done.stdout + done.stderr
     assert "BACKUP_REACHED" not in done.stdout
     assert "USE_OLD" in done.stdout
+
+
+def _package_commits() -> tuple[str, str]:
+    """Two commits of this checkout whose Mail packages differ, older first."""
+    newer = subprocess.run(["git", "-C", str(ROOT), "log", "-1", "--format=%H", "--", "packages/agentstack_mail"],
+                           text=True, capture_output=True, check=True).stdout.strip()
+    older = subprocess.run(["git", "-C", str(ROOT), "rev-parse", f"{newer}^"],
+                           text=True, capture_output=True, check=True).stdout.strip()
+    return older, newer
+
+
+@pytest.mark.parametrize("direction", ["older", "newer"])
+def test_only_a_running_mail_older_than_the_checkout_is_called_out_of_date(tmp_path, direction):
+    older, newer = _package_commits()
+    running, checkout = (older, newer) if direction == "older" else (newer, older)
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, running)
+    _candidate(stack.service_root, checkout)
+    try:
+        first = stack.install(running)
+        assert first.returncode == 0, first.stdout + first.stderr
+        _wait_health(stack.mail_url)
+        kept = stack.install(checkout)
+        assert kept.returncode == 0, kept.stdout + kept.stderr
+        advice = subprocess.run(["/bin/bash", str(INSTALLER), "--print-mail-update-advice"], cwd=ROOT,
+                                env={**stack.env, "AGENTSTACK_MAIL_CANDIDATE_ID": checkout},
+                                text=True, capture_output=True, check=False, timeout=30)
+        assert advice.returncode == 0, advice.stderr
+        if direction == "older":
+            assert f"ORRERY Mail is out of date (running {running[:7]}, this checkout {checkout[:7]})." in kept.stdout
+            assert "./scripts/install.sh --mail update" in kept.stdout
+            assert "then Reconnect (not Authenticate)" in kept.stdout
+            assert advice.stdout.startswith("ORRERY Mail is out of date")
+            assert "--mail update" not in advice.stdout
+        else:
+            # Updating from this older checkout would go back: never suggested.
+            assert "newer than this checkout" in kept.stdout
+            assert "out of date" not in kept.stdout and "--mail update" not in kept.stdout
+            assert advice.stdout == ""
+    finally:
+        stack.teardown()
