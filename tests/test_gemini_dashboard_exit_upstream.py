@@ -24,14 +24,14 @@ def test_dashboard_exit_interrupts_only_delegated_antigravity_runtime(monkeypatc
 
     monkeypatch.setattr(
         server,
-        "build_agents",
-        lambda history_days=None: [
+        "lookup_agent",
+        lambda name, _rows=[
             {
                 "name": "GrayKepler",
                 "category": "agent",
                 "attached": False,
             }
-        ],
+        ]: next((r for r in _rows if r['name'] == name), None),
     )
     monkeypatch.setattr(server, "_has_session", lambda _name: True)
     monkeypatch.setattr(server, "_agent_program", lambda _name: "antigravity")
@@ -69,14 +69,14 @@ def test_interactive_antigravity_keeps_existing_slash_exit_path(monkeypatch) -> 
 
     monkeypatch.setattr(
         server,
-        "build_agents",
-        lambda history_days=None: [
+        "lookup_agent",
+        lambda name, _rows=[
             {
                 "name": "GrayHopper",
                 "category": "agent",
                 "attached": False,
             }
-        ],
+        ]: next((r for r in _rows if r['name'] == name), None),
     )
     monkeypatch.setattr(server, "_has_session", lambda _name: True)
     monkeypatch.setattr(server, "_agent_program", lambda _name: "antigravity")
@@ -144,8 +144,8 @@ def test_jump_preserves_finished_antigravity_shell_instead_of_resuming(monkeypat
     monkeypatch.setattr(server, "_focus_existing_terminal", lambda _name: False)
     monkeypatch.setattr(
         server,
-        "build_agents",
-        lambda history_days=None: [{"name": "GrayHopper", "category": "finished"}],
+        "lookup_agent",
+        lambda name, _rows=[{"name": "GrayHopper", "category": "finished"}]: next((r for r in _rows if r['name'] == name), None),
     )
 
     def forbidden_resume(_session):

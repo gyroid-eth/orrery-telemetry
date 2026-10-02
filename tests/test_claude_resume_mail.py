@@ -288,7 +288,7 @@ def tmux_resume(resume, monkeypatch):
         return result
     monkeypatch.setattr(server, '_mcp_call', mail)
     monkeypatch.setattr(server, '_has_session', lambda name: name in sessions.values())
-    monkeypatch.setattr(server, 'build_agents', lambda _days: [{'name': NAME, 'category': 'finished'}])
+    monkeypatch.setattr(server, 'lookup_agent', lambda name, _rows=[{'name': NAME, 'category': 'finished'}]: next((r for r in _rows if r['name'] == name), None))
     def run(argv, **kw):
         state['commands'].append(argv)
         assert calls and calls[0][0] == 'register_agent'

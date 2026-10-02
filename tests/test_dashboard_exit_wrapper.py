@@ -86,15 +86,15 @@ def _run_exit(server, pane_cmd: str, tree: str, category: str):
             return _Done()
         raise AssertionError(f"unexpected command {argv}")
 
-    originals = (server.subprocess.run, server.build_agents, server._has_session, server.time.sleep)
+    originals = (server.subprocess.run, server.lookup_agent, server._has_session, server.time.sleep)
     try:
         server.subprocess.run = fake_run
-        server.build_agents = lambda history_days=None: [{"name": "SandyTuring", "category": category, "attached": False}]
+        server.lookup_agent = lambda name, _rows=[{"name": "SandyTuring", "category": category, "attached": False}]: next((r for r in _rows if r['name'] == name), None)
         server._has_session = lambda _s: True
         server.time.sleep = lambda _s: None
         result = server.do_exit("SandyTuring")
     finally:
-        server.subprocess.run, server.build_agents, server._has_session, server.time.sleep = originals
+        server.subprocess.run, server.lookup_agent, server._has_session, server.time.sleep = originals
     return result, sent
 
 

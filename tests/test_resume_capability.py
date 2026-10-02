@@ -234,8 +234,8 @@ def test_finished_husk_is_preserved_when_resume_is_not_ready(monkeypatch):
     monkeypatch.setattr(server, "_terminal_adapter", lambda: "fixture")
     monkeypatch.setattr(
         server,
-        "build_agents",
-        lambda history_days=None: [{"name": AGENT, "category": "finished"}],
+        "lookup_agent",
+        lambda name, _rows=[{"name": AGENT, "category": "finished"}]: next((r for r in _rows if r['name'] == name), None),
     )
     monkeypatch.setattr(
         server,
