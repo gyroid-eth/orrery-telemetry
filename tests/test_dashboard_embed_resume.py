@@ -2,9 +2,12 @@
 
 Embedded, jump() only handed the name to the cockpit (postMessage
 'orrery-jump'), and the cockpit only waits for a tmux session to appear. For a
-retired or gone agent nothing ever appeared: RESUME did nothing. The real
-jump() and bulkDispatch() run here in node with fetch / postMessage / toast
-stubbed.
+retired or gone agent nothing ever appeared: RESUME did nothing. Now the server
+decides first (POST /api/jump with open:false): it leaves a running session as
+it is, resumes one that is not running and replaces a husk -- from its own
+state, not from this page's DECK or NETWORK snapshot, either of which can be
+stale (#183 review). The real jump() and bulkDispatch() run here in node with
+fetch / postMessage / toast stubbed.
 """
 from __future__ import annotations
 
@@ -26,20 +29,19 @@ def _block(html: str, pattern: str) -> str:
     return match.group(0)
 
 
-def _run(script_body: str, rows: list[dict], *, embed: bool, reply: dict) -> dict:
+def _run(script_body: str, *, embed: bool, reply: dict, rows: list[dict] | None = None,
+         net_rows: list[dict] | None = None) -> dict:
     if not shutil.which("node"):
         pytest.skip("node unavailable")
     html = INDEX.read_text(encoding="utf-8")
     parts = [
-        _block(html, r"function isResumeCategory\(category\)\{.*?\n\}\n"),
-        _block(html, r"function needsResumeBeforeJump\(name\)\{.*?\n\}\n"),
         _block(html, r"async function jump\(name,ev\)\{.*?\n\}\n"),
         _block(html, r"async function bulkDispatch\(kind,names,btn\)\{.*?\n\}\n"),
     ]
     harness = f"""
 const EMBED_MODE={json.dumps(embed)};
-let lastData={json.dumps(rows)};
-const gmap=new Map();
+let lastData={json.dumps(rows or [])};
+const gmap=new Map({json.dumps([[row["name"], row] for row in (net_rows or [])])});
 const calls=[], posted=[], toasts=[];
 const location={{origin:'http://127.0.0.1:8770'}};
 const window={{parent:{{postMessage:(m,o)=>posted.push(m)}}}};
@@ -59,36 +61,48 @@ const ev={{stopPropagation(){{}}}};
     return json.loads(done.stdout)
 
 
-RETIRED = {"name": "HazyCurie", "category": "retired", "running": False}
-LIVE = {"name": "LiveCurie", "category": "agent", "running": True}
-HUSK = {"name": "HuskCurie", "category": "finished", "running": False}
+ASKED = [["/api/jump", {"session": "HazyCurie", "open": False}]]
+HANDED = [{"type": "orrery-jump", "name": "HazyCurie"}]
 
 
-@pytest.mark.parametrize("row", [RETIRED, HUSK, {"name": "GoneCurie", "category": "gone"}])
-def test_embedded_resume_asks_the_server_first_then_hands_over(row):
-    out = _run(f"await jump({json.dumps(row['name'])},ev);", [row], embed=True,
-               reply={"ok": True, "action": "resumed"})
-    assert out["calls"] == [["/api/jump", {"session": row["name"], "open": False}]]
-    assert out["posted"] == [{"type": "orrery-jump", "name": row["name"]}]
+def test_embedded_resume_asks_the_server_first_then_hands_over():
+    out = _run("await jump('HazyCurie',ev);", embed=True,
+               reply={"ok": True, "action": "resumed", "detail": "Resumed in tmux"})
+    assert out["calls"] == ASKED and out["posted"] == HANDED
+    assert out["toasts"] == [["▸ RESUME", "> HazyCurie  ::  Resumed in tmux", False]]
 
 
-def test_a_refused_embedded_resume_is_shown_and_not_handed_over():
-    out = _run("await jump('HazyCurie',ev);", [RETIRED], embed=True,
-               reply={"ok": False, "error": "Resume unavailable: no_history"})
+def test_a_running_agent_is_asked_about_and_handed_over_without_noise():
+    """The server leaves it as it is; nothing to announce."""
+    out = _run("await jump('HazyCurie',ev);", embed=True,
+               reply={"ok": True, "action": "already_running", "terminal": "detached"})
+    assert out["calls"] == ASKED and out["posted"] == HANDED and out["toasts"] == []
+
+
+@pytest.mark.parametrize("reply", [{"ok": False, "error": "Resume unavailable: no_history"},
+                                   {"ok": False, "error": "invalid session name"}])
+def test_a_refusal_is_shown_and_not_handed_over(reply):
+    out = _run("await jump('HazyCurie',ev);", embed=True, reply=reply)
     assert out["posted"] == []
-    assert out["toasts"][-1] == ["✕ FAIL", "> Resume unavailable: no_history", True]
+    assert out["toasts"][-1] == ["✕ FAIL", "> " + reply["error"], True]
 
 
-@pytest.mark.parametrize("rows", [[LIVE], []])
-def test_a_running_or_unknown_agent_is_only_handed_over(rows):
-    name = rows[0]["name"] if rows else "NobodyCurie"
-    out = _run(f"await jump({json.dumps(name)},ev);", rows, embed=True, reply={"ok": True})
-    assert out["calls"] == []
-    assert out["posted"] == [{"type": "orrery-jump", "name": name}]
+@pytest.mark.parametrize("deck,net", [
+    ({"name": "HazyCurie", "category": "retired", "running": False},
+     {"name": "HazyCurie", "category": "agent", "running": True}),
+    ({"name": "HazyCurie", "category": "agent", "running": True},
+     {"name": "HazyCurie", "category": "retired", "running": False}),
+    (None, None),
+])
+def test_page_snapshots_do_not_decide(deck, net):
+    """Stale DECK or NETWORK rows, or none at all: the server is asked every time."""
+    out = _run("await jump('HazyCurie',ev);", embed=True, reply={"ok": True, "action": "resumed"},
+               rows=[deck] if deck else [], net_rows=[net] if net else [])
+    assert out["calls"] == ASKED and out["posted"] == HANDED
 
 
 def test_the_standalone_dashboard_is_unchanged():
-    out = _run("await jump('HazyCurie',ev);", [RETIRED], embed=False, reply={"ok": True, "action": "resumed"})
+    out = _run("await jump('HazyCurie',ev);", embed=False, reply={"ok": True, "action": "resumed"})
     assert out["calls"] == [["/api/jump", {"session": "HazyCurie"}]]
     assert out["posted"] == []
 
@@ -96,10 +110,10 @@ def test_the_standalone_dashboard_is_unchanged():
 @pytest.mark.parametrize("embed,body", [(True, {"session": "HazyCurie", "open": False}),
                                         (False, {"session": "HazyCurie"})])
 def test_bulk_resume_is_headless_when_embedded(embed, body):
-    out = _run("await bulkDispatch('resume',['HazyCurie'],btn);", [RETIRED], embed=embed, reply={"ok": True})
+    out = _run("await bulkDispatch('resume',['HazyCurie'],btn);", embed=embed, reply={"ok": True})
     assert out["calls"] == [["/api/jump", body]]
 
 
 def test_bulk_exit_body_is_unchanged():
-    out = _run("await bulkDispatch('exit',['LiveCurie'],btn);", [LIVE], embed=True, reply={"ok": True})
+    out = _run("await bulkDispatch('exit',['LiveCurie'],btn);", embed=True, reply={"ok": True})
     assert out["calls"] == [["/api/exit", {"session": "LiveCurie"}]]

@@ -12,7 +12,7 @@
 
 ### cockpit に埋め込んだ dashboard の RESUME が何もしていませんでした
 
-ORRERY アプリの cockpit に埋め込まれた dashboard では、RESUME（と VERIFY & RESUME）が cockpit に名前を渡すだけで、この server に再開を頼んでいませんでした。cockpit は tmux に session が現れるのを待つだけなので、retire 済み・gone・husk の agent は何も起きずに戻っていました。埋め込みでも、tmux で動いていない agent は先に `/api/jump` を `open: false`（端末を開かない）で呼び、成功したら cockpit に渡します。断られたときは理由を表示し、cockpit には渡しません。動いている agent は従来どおり渡すだけです。埋め込みでの bulk の RESUME も `open: false` で頼みます。単独の dashboard の挙動は変わりません。
+ORRERY アプリの cockpit に埋め込まれた dashboard では、RESUME（と VERIFY & RESUME）が cockpit に名前を渡すだけで、この server に再開を頼んでいませんでした。cockpit は tmux に session が現れるのを待つだけなので、retire 済み・gone・husk の agent は何も起きずに戻っていました。埋め込みでは、先に `/api/jump` を `open: false`（端末を開かない）で呼び、server が自分の状態で決めます（動いている session はそのまま、動いていなければ再開、husk なら置き換え）。成功したら cockpit に渡し、断られたら理由を表示して渡しません。画面の DECK や NETWORK の古い表示で判断しません。埋め込みでの bulk の RESUME も `open: false` で頼みます。単独の dashboard の挙動は変わりません。
 
 ### Codex の hook が大きな payload で「Hook failed（exit 141）」になっていました
 
