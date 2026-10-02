@@ -327,6 +327,40 @@ def test_upgrade_survives_the_managed_mail_env_its_own_env_sh_exported(tmp_path)
     assert "Dry-run complete" in result.stdout
 
 
+def test_upgrade_survives_a_shell_opened_before_the_last_mail_switch(tmp_path):
+    """A terminal opened before `--mail update` still exports the render that was
+    current then; env.sh already names the newer one. Both are this
+    installation's own output, so the next update must not die on the older
+    one (2026-10-03: an update from such a terminal stopped here)."""
+    env = _env_for_a_complete_dry_run(tmp_path)
+    current = _managed_render_env(env, "render-after-the-switch")
+    stale = _managed_render_env(env, "render-before-the-switch")
+    _installed_env_sh(env, f"export AGENTSTACK_MAIL_ENV={current}\n")
+    env["AGENTSTACK_MAIL_ENV"] = stale
+
+    result = _run(env, "--dry-run")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "must equal the native service env" not in result.stderr
+    assert "ignoring a managed AGENTSTACK_MAIL_ENV" in result.stdout
+    assert "Dry-run complete" in result.stdout
+
+
+def test_a_stale_managed_value_needs_an_installed_managed_render_too(tmp_path):
+    """The waiver rests on this installation having written a managed render
+    into env.sh; a managed-looking value next to an env.sh that names some other
+    path stays an error."""
+    env = _env_for_a_complete_dry_run(tmp_path)
+    stale = _managed_render_env(env, "render-before-the-switch")
+    _installed_env_sh(env, f"export AGENTSTACK_MAIL_ENV={tmp_path / 'elsewhere' / 'service.env'}\n")
+    env["AGENTSTACK_MAIL_ENV"] = stale
+
+    result = _run(env, "--dry-run")
+
+    assert result.returncode != 0
+    assert "must equal the native service env" in result.stderr
+
+
 def test_a_matching_explicit_native_pair_is_left_alone(tmp_path):
     """Pinning both halves to the same native path keeps working untouched."""
     env = _env_for_a_complete_dry_run(tmp_path)

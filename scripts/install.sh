@@ -1739,11 +1739,19 @@ PY
       # wants a native path that outlives an upgrade pins
       # AGENTSTACK_MAIL_SERVICE_ENV; that takes precedence and is never
       # forgiven here. Any other path keeps the mismatch error.
+      #
+      # It need not equal env.sh's value today: a shell opened before the last
+      # Mail switch (--mail update) still exports the render that was current
+      # then, and env.sh already names the new one (2026-10-03, an update from
+      # such a terminal stopped here). Both are this installation's output when
+      # env.sh's literal value is itself a managed render.
+      local installed_mail_env
+      installed_mail_env="$(installed_env_mail_env)"
       if [[ -z "$NATIVE_MAIL_ENV_EXPLICIT" ]] \
-        && [[ -n "$(installed_env_mail_env)" ]] \
-        && [[ "$explicit_mail_env" == "$(installed_env_mail_env)" ]] \
+        && [[ -n "$installed_mail_env" ]] \
+        && is_managed_render_env_path "$installed_mail_env" "$NATIVE_MAIL_SERVICE_ROOT" \
         && is_managed_render_env_path "$explicit_mail_env" "$NATIVE_MAIL_SERVICE_ROOT"; then
-        say "ignoring a managed AGENTSTACK_MAIL_ENV inherited from $INSTALL_DIR/env.sh; resolving the current render"
+        say "ignoring a managed AGENTSTACK_MAIL_ENV inherited from $INSTALL_DIR/env.sh (now or before an earlier Mail switch); resolving the current render"
         MAIL_ENV_EXPLICIT=""
         unset AGENTSTACK_MAIL_ENV
       else
