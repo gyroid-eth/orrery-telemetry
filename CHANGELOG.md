@@ -8,7 +8,7 @@
 
 ---
 
-## Unreleased
+## 2026.10.03
 
 ### cockpit に埋め込んだ dashboard の RESUME が何もしていませんでした
 
