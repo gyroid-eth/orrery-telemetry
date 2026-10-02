@@ -131,3 +131,52 @@ def test_one_lookup_does_not_grow_with_the_history(world, monkeypatch):
     print(f"\nwhole history: {rows} rows, {before:.3f}s; one lookup: {after:.3f}s")
     assert calls_before == rows and calls == 0
     assert after < before / 10
+
+
+def test_lookup_and_roster_choose_the_same_registration_on_a_tie(world, tmp_path, monkeypatch):
+    """Two registrations of one name with the same last activity (another
+    project): both paths must pick the same one, or a live Codex could look
+    finished to kill (#179 review)."""
+    con = sqlite3.connect(server.DB_PATH)
+    con.execute("INSERT INTO projects VALUES (2, '/other/project')")
+    con.executemany(
+        "INSERT INTO agents (project_id, name, model, program, task_description, last_active_ts,"
+        " inception_ts, retired_at) VALUES (?, 'LiveClaude', 'm', ?, 't', '2026-10-02T00:00:00',"
+        " '2026-10-02T00:00:00', NULL)",
+        [(2, "codex-cli"), (1, "claude-code"), (2, "codex-cli")],
+    )
+    con.commit()
+    con.close()
+    roster = {row["name"]: row for row in server.build_agents(None)}["LiveClaude"]
+    found = server.lookup_agent("LiveClaude")
+    assert found["program"] == roster["program"]
+    for key in ("category", "running", "attached"):
+        assert found[key] == roster[key], key
+    assert server._mail_agent_for("LiveClaude") == server.agentmail_state()[0]["LiveClaude"]
+
+
+def test_a_retired_registration_is_never_the_chosen_one(world):
+    con = sqlite3.connect(server.DB_PATH)
+    con.execute(
+        "INSERT INTO agents (project_id, name, model, program, task_description, last_active_ts,"
+        " inception_ts, retired_at) VALUES (1, 'LiveClaude', 'm', 'codex-cli', 't',"
+        " '2026-10-02T00:00:00', '2026-10-02T00:00:00', '2026-10-02T00:00:01')")
+    con.commit()
+    con.close()
+    assert server.agentmail_state()[0]["LiveClaude"]["program"] == "claude-code"
+    assert server._mail_agent_for("LiveClaude")["program"] == "claude-code"
+
+
+def test_jump_resolves_one_agent_without_the_whole_history(world, monkeypatch):
+    def forbidden(*_a, **_k):
+        raise AssertionError("build_agents called for one agent")
+    monkeypatch.setattr(server, "build_agents", forbidden)
+    monkeypatch.setattr(server, "_has_session", lambda name: name in world)
+    monkeypatch.setattr(server, "_agent_program", lambda _name: "claude-code")
+    seen = []
+    monkeypatch.setattr(server, "_resume_capability",
+                        lambda name, program, category, **_k: seen.append((name, category)) or "no_history")
+    # A husk (finished) and a gone agent both reach the resume check by the lookup.
+    assert server.do_jump("HuskClaude")["ok"] is False
+    assert server.do_jump("GoneClaude")["ok"] is False
+    assert seen == [("HuskClaude", "finished"), ("GoneClaude", "gone")]

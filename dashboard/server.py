@@ -1057,25 +1057,7 @@ def agentmail_state() -> tuple[dict, dict]:
         con.row_factory = sqlite3.Row
         cur = con.cursor()
 
-        retired_filter = "retired_at IS NULL" if _has_retired_at() else "1=1"
-        cur.execute(
-            f"""
-            SELECT a.name, a.model, a.program, a.task_description, a.last_active_ts
-            FROM agents a
-            JOIN (
-                SELECT name, MAX(last_active_ts) m
-                FROM agents WHERE {retired_filter} GROUP BY name
-            ) x ON a.name = x.name AND a.last_active_ts = x.m
-            """
-        )
-        for r in cur.fetchall():
-            agents[r["name"]] = {
-                "model": _display_model(r["model"]),
-                "model_raw": r["model"],
-                "program": r["program"],
-                "task": r["task_description"] or "",
-                "last_active": _iso_to_epoch(r["last_active_ts"]),
-            }
+        agents.update(_mail_registrations(con))
 
         cur.execute(
             """
@@ -1374,41 +1356,60 @@ def _apply_codex_app_runtime(row: dict, runtime: dict) -> None:
         row.update(category="finished")
 
 
+def _mail_registrations(con, name: str | None = None) -> dict[str, dict]:
+    """The registration each name stands for: its unretired row with the
+    latest activity, and on a tie the one registered last (highest id).
+
+    agentmail_state() (the roster) and _mail_agent_for() (exit/kill/jump) both
+    choose through this one query, so they cannot pick different rows of the
+    same name -- on a tie they once did, and a live Codex looked finished to
+    kill (#179 review). Not scoped to a project, as the roster never was.
+    """
+    retired_filter = "retired_at IS NULL" if _has_retired_at() else "1=1"
+    rows = con.execute(
+        f"""
+        SELECT name, model, program, task_description, last_active_ts
+        FROM agents WHERE {retired_filter}{" AND name = ?" if name is not None else ""}
+        ORDER BY name, last_active_ts, id
+        """,
+        (name,) if name is not None else (),
+    ).fetchall()
+    chosen: dict[str, dict] = {}
+    for r in rows:  # ascending: the last row of a name is the one chosen
+        chosen[r["name"]] = {
+            "model": _display_model(r["model"]),
+            "model_raw": r["model"],
+            "program": r["program"],
+            "task": r["task_description"] or "",
+            "last_active": _iso_to_epoch(r["last_active_ts"]),
+        }
+    return chosen
+
+
 def _mail_agent_for(name: str) -> dict | None:
     """agentmail_state()'s entry for one name, without reading every agent and
-    the last instruction of each: the newest unretired registration."""
+    the last instruction of each."""
     if not os.path.exists(DB_PATH):
         return None
     con = None
     try:
         con = _db()
         con.row_factory = sqlite3.Row
-        retired_filter = "retired_at IS NULL" if _has_retired_at() else "1=1"
-        r = con.execute(
-            f"""
-            SELECT name, model, program, task_description, last_active_ts
-            FROM agents WHERE name = ? AND {retired_filter}
-            ORDER BY last_active_ts DESC LIMIT 1
-            """,
-            (name,),
-        ).fetchone()
+        return _mail_registrations(con, name).get(name)
     except sqlite3.Error:
         return None
     finally:
         if con is not None:
             con.close()
-    if r is None:
-        return None
-    return {"model": _display_model(r["model"]), "model_raw": r["model"],
-            "program": r["program"], "task": r["task_description"] or "",
-            "last_active": _iso_to_epoch(r["last_active_ts"])}
 
 
 def lookup_agent(name: str) -> dict | None:
     """One agent's name, category, running, attached and program, by name and
     however old it is: the same verdict build_agents(None) gives that row,
     without building every row of the whole history (each with its resume
-    capability and Mail fields). exit/kill/jump need only this; under load the
+    capability and Mail fields). It still reads the tmux snapshot (every
+    session, as the roster does) and one Mail registration; what it no longer
+    does is the per-row work for every agent ever registered. exit/kill/jump need only this; under load the
     whole history took over ten seconds (2026-10-02, a bulk exit reported
     failed while the cockpit's relay gave up after six)."""
     s = tmux_state().get(name)
