@@ -1074,6 +1074,10 @@ def recover_after_reboot(
                     outcome = "resume_cleared"
                 else:
                     continue
+                # Again, right before writing: a session may have started (and
+                # written its lease) while this waited for the lock.
+                if is_live(name) is not False:
+                    continue
                 _atomic_json(state_path, state)
                 os.chmod(token_path, 0o600)
                 recovered.append((name, outcome))
@@ -1110,8 +1114,23 @@ def prune_leases(runtime_dir: Path, *, boot: float | None = None) -> None:
     for holder in holders:
         try:
             for lease in holder.iterdir():
-                if lease.name.isdigit() and not _lease_alive(lease, boot):
-                    lease.unlink(missing_ok=True)
+                if not lease.name.isdigit():
+                    continue
+                try:
+                    judged = lease.stat()
+                except OSError:
+                    continue
+                if _lease_alive(lease, boot):
+                    continue
+                # A session may have rewritten this path (a reused PID) since
+                # it was judged; remove only the lease that was judged.
+                try:
+                    now = lease.stat()
+                except OSError:
+                    continue
+                if (now.st_ino, now.st_mtime_ns, now.st_size) != (judged.st_ino, judged.st_mtime_ns, judged.st_size):
+                    continue
+                lease.unlink(missing_ok=True)
             holder.rmdir()
         except OSError:
             continue

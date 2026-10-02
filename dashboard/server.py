@@ -8767,7 +8767,12 @@ def _child_session_live(name: str, boot: float | None) -> bool | None:
     if done.returncode == 0:
         return True
     reason = (done.stderr or "").lower()
-    if not any(text in reason for text in ("can't find session", "no server running", "error connecting")):
+    # Only these mean "no such session". Any other failure, such as a server
+    # socket this user cannot open ("error connecting … (permission denied)"),
+    # says nothing about the session and must not be read as "gone".
+    gone = ("can't find session" in reason or "no server running" in reason
+            or ("error connecting" in reason and "no such file or directory" in reason))
+    if not gone:
         return None
     return _child_resume_module().live_lease(pathlib.Path(RUNTIME_DIR), name, boot=boot)
 

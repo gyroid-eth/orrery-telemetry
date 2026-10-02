@@ -138,6 +138,8 @@ def test_the_lease_commands_answer_for_the_hooks(tmp_path):
     (1, "can't find session: X", False),
     (1, "no server running on /tmp/tmux-501/default", False),
     (1, "something unexpected", None),
+    (1, "error connecting to /tmp/tmux-501/default (No such file or directory)", False),
+    (1, "error connecting to /tmp/tmux-501/default (Permission denied)", None),
 ])
 def test_the_dashboard_tells_a_live_child_from_a_gone_one(monkeypatch, tmp_path, returncode, stderr, expected):
     monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path))
@@ -155,3 +157,32 @@ def test_the_dashboard_recovers_at_start(resume, monkeypatch):
     monkeypatch.setattr(server, "_child_session_live", lambda name, boot: False)
     server._recover_children_after_reboot()
     assert _state(runtime)["retired_at"]
+
+
+def test_a_session_that_starts_while_recovery_waits_for_the_lock_is_left_alone(resume):
+    """#182 review: liveness is checked again under the lock, before writing."""
+    runtime, registration, launches, calls = resume
+    _active_child(runtime, registration)
+    answers = iter([False, True])  # gone before the lock, live by the time it writes
+    assert child_resume.recover_after_reboot(runtime, is_live=lambda _n: next(answers),
+                                             retention_days=30, boot=_boot()) == []
+    assert _state(runtime)["retired_at"] is None
+
+
+def test_prune_keeps_a_lease_rewritten_after_it_was_judged(tmp_path, monkeypatch):
+    """#182 review: SessionStart may rewrite a stale lease path (a reused PID)."""
+    holder = tmp_path / "live-sessions" / NAME
+    holder.mkdir(parents=True)
+    lease = holder / "999999"  # no such process: judged dead
+    lease.write_text("")
+    os.utime(lease, (time.time() - 3600,) * 2)
+    original = child_resume._lease_alive
+
+    def judged_then_rewritten(path, boot):
+        verdict = original(path, boot)
+        path.write_text("rewritten")  # a session claims the path meanwhile
+        return verdict
+
+    monkeypatch.setattr(child_resume, "_lease_alive", judged_then_rewritten)
+    child_resume.prune_leases(tmp_path, boot=_boot())
+    assert lease.exists()
