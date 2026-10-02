@@ -1325,7 +1325,6 @@ def _history_cutoff(days: float | None) -> tuple[str, tuple]:
     return "AND a.last_active_ts > datetime('now', ?)", (f"-{days:g} days",)
 
 
-@_with_registration_batch
 def _tmux_row_state(name: str, s: dict, m: dict | None, process_tree) -> tuple[str, str, bool, dict | None]:
     """(program, category, running, watcher health) of one live tmux session.
 
@@ -1450,6 +1449,7 @@ def lookup_agent(name: str) -> dict | None:
     return row
 
 
+@_with_registration_batch
 def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict]:
     """Roster rows for the DECK. Live tmux sessions always appear; agents known
     only to ORRERY Mail (gone / retired) appear when their last activity falls
