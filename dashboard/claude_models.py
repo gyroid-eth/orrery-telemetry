@@ -239,17 +239,24 @@ def bind_child_cli_path(hooks_dir: str, timeout: float = 10.0) -> str | None:
     """Run hooks/claude-child-bin.sh and remember its answer ("" = none found).
 
     Starts a login shell, so callers use it only where a process may start:
-    at dashboard start and before a real launch. On failure the previous
-    answer is kept and None is returned.
+    at dashboard start and before a real launch. Without the script (an older
+    hooks dir) the launcher cannot find the binary either, so the answer is
+    "" (version unknown) on both sides. When the script fails or times out,
+    nothing is remembered and None is returned: the caller must not decide a
+    model on an old answer.
     """
     global _bound_child_path
     script = os.path.join(hooks_dir, "claude-child-bin.sh")
     if not os.path.isfile(script):
-        return None
+        with _BOUND_LOCK:
+            _bound_child_path = ""
+        return ""
     try:
         out = subprocess.run(["/bin/bash", script], stdin=subprocess.DEVNULL, capture_output=True,
                              text=True, timeout=timeout).stdout.strip().splitlines()
     except (OSError, ValueError, subprocess.SubprocessError):
+        with _BOUND_LOCK:
+            _bound_child_path = None
         return None
     path = out[-1] if out and out[-1].startswith("/") else ""
     with _BOUND_LOCK:

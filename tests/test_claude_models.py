@@ -413,5 +413,12 @@ def test_the_shared_script_answers_for_the_child_and_is_remembered(monkeypatch, 
     shell.write_text("#!/bin/sh\necho not-a-path\n")
     assert catalog.bind_child_cli_path(str(hooks)) == ""
     assert catalog._probe_cli_version() is None  # Found nothing: unknown, not a guess.
-    assert catalog.bind_child_cli_path(str(tmp_path / "no-hooks")) is None
+    # An older hooks dir without the script: the launcher cannot find it either.
+    assert catalog.bind_child_cli_path(str(tmp_path / "no-hooks")) == ""
     assert catalog.child_cli_path() == ""
+    # A failing script forgets the old answer instead of keeping it.
+    shell.write_text(f"#!/bin/sh\necho {found}\n")
+    assert catalog.bind_child_cli_path(str(hooks)) == str(found)
+    monkeypatch.setattr(catalog.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError("no shell")))
+    assert catalog.bind_child_cli_path(str(hooks)) is None
+    assert catalog._bound_child_path is None

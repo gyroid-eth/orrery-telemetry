@@ -7067,8 +7067,11 @@ def do_spawn(payload: dict) -> dict:
     if provider == "claude" and not payload.get("model") and payload.get("dry_run") is not True:
         # The omitted model becomes a formal ID here, and the launcher passes a
         # formal ID through unchecked: decide it against the claude the child
-        # will run, found the way the launcher finds it.
-        _bind_claude_child_cli_path(HOOKS_DIR)
+        # will run, found the way the launcher finds it. Without that answer,
+        # stop before registering rather than decide on an old one.
+        if _bind_claude_child_cli_path(HOOKS_DIR) is None:
+            return {"ok": False, "error": "could not find the claude a child would run "
+                    "(hooks/claude-child-bin.sh failed); choose a model explicitly or retry"}
     default_model = (
         _claude_spawn_default_model()
         if provider == "claude"

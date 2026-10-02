@@ -1417,3 +1417,47 @@ def test_ui_api_and_launcher_check_the_same_child_claude(monkeypatch, tmp_path):
     # A dry run starts no process and uses what was found.
     preview = server.do_spawn({"parent": "Parent", "task": "work", "dry_run": True})
     assert preview["model"] == cli_default, preview
+
+
+@pytest.mark.parametrize("failure", ["timeout", "oserror"])
+def test_a_failed_child_claude_check_stops_before_registration(monkeypatch, tmp_path, failure):
+    """An old answer (9.0.0) must not decide the model when the re-check fails."""
+    from dashboard import claude_models
+    monkeypatch.setattr(claude_models, "_bound_child_path", "/old/claude/versions/9.0.0")
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "claude-child-bin.sh").write_text("#!/bin/bash\n")
+
+    def broken(*args, **kwargs):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args[0], 10)
+        raise OSError("no shell")
+
+    monkeypatch.setattr(claude_models.subprocess, "run", broken)
+    monkeypatch.setattr(server, "HOOKS_DIR", str(hooks))
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda *a: pytest.fail("registered without a checked binary"))
+    result = server.do_spawn({"parent": "Parent", "task": "work"})
+    assert result["ok"] is False
+    assert "could not find the claude a child would run" in result["error"]
+    assert claude_models._bound_child_path is None  # The old answer is not reused later.
+
+
+def test_an_explicit_model_or_a_dry_run_does_not_need_the_check(monkeypatch, tmp_path):
+    from dashboard import claude_models
+    monkeypatch.setattr(claude_models.subprocess, "run", lambda *a, **k: pytest.fail("started a process"))
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "claude-child-bin.sh").write_text("#!/bin/bash\n")
+    monkeypatch.setattr(server, "HOOKS_DIR", str(hooks))
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    assert server.do_spawn({"parent": "Parent", "task": "work", "model": "claude-sonnet-5-5"}) == {"model": "claude-sonnet-5-5"}
+    assert server.do_spawn({"parent": "Parent", "task": "work", "dry_run": True}) == {"model": "claude-opus-5-5"}
+
+
+def test_hooks_without_the_script_count_as_unknown_on_both_sides(monkeypatch, tmp_path):
+    from dashboard import claude_models
+    monkeypatch.setattr(claude_models, "_bound_child_path", "/old/claude/versions/9.0.0")
+    monkeypatch.setattr(server, "HOOKS_DIR", str(tmp_path / "old-hooks"))
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    assert server.do_spawn({"parent": "Parent", "task": "work"}) == {"model": "claude-opus-5-5"}
+    assert claude_models._bound_child_path == ""
