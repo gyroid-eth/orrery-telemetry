@@ -3595,9 +3595,12 @@ _CLAUDE_MAIL_UNAVAILABLE = {
 # fix: a missing or expired credential cannot be recovered from the dashboard.
 _CLAUDE_MAIL_REMEDY = {
     "mail_schema_unsupported": (
-        "To keep Mail, update ORRERY Mail before resuming: in the orrery-telemetry checkout run "
+        "To keep Mail, update ORRERY Mail before resuming. For the Mail this project's installer "
+        "deployed: in an up-to-date orrery-telemetry checkout run "
         "./scripts/install.sh --update-mail --dry-run, then ./scripts/install.sh --update-mail. "
-        "A conversation already resumed without Mail must exit before it can resume with Mail."
+        "If the dry run refuses, stop and follow docs/agentstack-mail-update.md instead. "
+        "Afterwards this agent's resume should no longer say WITHOUT MAIL; a conversation already "
+        "resumed without Mail must exit first. Without the update, resuming stays conversation only."
     ),
 }
 
