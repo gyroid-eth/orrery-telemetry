@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### cockpit に埋め込んだ dashboard の RESUME が何もしていませんでした
+
+ORRERY アプリの cockpit に埋め込まれた dashboard では、RESUME（と VERIFY & RESUME）が cockpit に名前を渡すだけで、この server に再開を頼んでいませんでした。cockpit は tmux に session が現れるのを待つだけなので、retire 済み・gone・husk の agent は何も起きずに戻っていました。埋め込みでは、先に `/api/jump` を `open: false`（端末を開かない）で呼び、server が自分の状態で決めます（動いている session はそのまま、動いていなければ再開、husk なら置き換え）。成功したら cockpit に渡し、断られたら理由を表示して渡しません。画面の DECK や NETWORK の古い表示で判断しません。 `/api/jump` に `open: false` を渡したときは、Codex App の agent でも App を前面に出さず `already_running` を返します（埋め込みの cockpit は従来どおり「Codex App で動いている」と表示します。単独の dashboard の OPEN は変わりません）。埋め込みでの bulk の RESUME も `open: false` で頼みます。単独の dashboard の挙動は変わりません。
+
 ### 起動時の回復が、子の state でない file にも tmux を呼んでいました
 
 PC の再起動の後に子を再開できる state に戻す処理（前の項目）は、`child-agents/` の JSON を 1 つずつ見て、`*.mcp.json`（proxy の設定）や正常に retire した子にも「session が生きているか」を tmux に尋ねていました（数百回）。動いていた子・再開の途中の子だけに尋ねるようにしました。state を書き換える条件は変わりません。試験の process でこの処理が本物の runtime を読み、後の試験の stub を呼んでいた点も直しました。
