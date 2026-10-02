@@ -600,6 +600,20 @@ ps -o command= -p "$pid"          # which candidate's python is this
 です。dashboard の `/api/version` を読むのも同じ間違いで、それは package の版
 であり、Mail を切り替えたかどうかに関わらず再実行のたびに変わります。
 
+**動いている build に足りない機能。** `agentstack-doctor` は動いている Mail の
+`tools/list` を 1 回読み、この install が頼る機能（`scripts/lib/mail_required_features.json`。
+例: 旧形式の Claude の子を Mail 付きで再開する `register_agent` の `existing_agent_id`）
+のうち欠けているものごとに `warn:` を出し、直し方（`--update-mail`）を示します。
+Mail そのものは動いているので、doctor の exit status は変えません。最後に
+setup.sh が読む 1 行を出します。
+
+```text
+mail-features: status=<ok|missing|unknown> missing=<tool.parameter,...> running=<commit>
+```
+
+`unknown` は Mail に問い合わせられなかったことで、機能がそろっている意味では
+ありません。
+
 ## 経緯
 
 同梱 service より前の deployment は `cutover-maintenance/` の下で

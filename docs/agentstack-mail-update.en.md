@@ -636,6 +636,20 @@ that has already been made here. So is reading the dashboard's `/api/version`:
 that is the package version, and it changes on every re-run whether or not
 Mail was switched.
 
+**What the running build lacks.** `agentstack-doctor` reads the running Mail's
+`tools/list` once, and for each feature this install relies on
+(`scripts/lib/mail_required_features.json`; for example `existing_agent_id` on
+`register_agent`, which lets an old-format Claude child resume with Mail) that
+is missing, prints a `warn:` with the fix (`--update-mail`). Mail itself works,
+so doctor's exit status does not change. It ends with one line for setup.sh to
+read:
+
+```text
+mail-features: status=<ok|missing|unknown> missing=<tool.parameter,...> running=<commit>
+```
+
+`unknown` means Mail could not be asked, not that every feature is present.
+
 ## History
 
 Before the bundled service, deployments were hand-run under
