@@ -1083,3 +1083,29 @@ def test_an_interrupted_switch_always_says_how_to_check_running_sessions(serving
     assert "/mcp shows orrery-mail as connected" in done.stdout
     assert "check before repeating it" in done.stdout
     assert "ORRERY Mail was unavailable for 0." in done.stdout
+
+
+@pytest.mark.parametrize("measured", ["", "not-a-number", "inf"])
+def test_auto_refuses_when_the_outage_cannot_be_estimated(measured):
+    """No measured start means no estimate; no budget, even 9999, allows that."""
+    script = "\n".join([
+        "set -uo pipefail",
+        f"PYTHON_BIN={shlex.quote(sys.executable)}",
+        f"eval \"$(sed -n '/^update_native_mail()/,/^}}/p' {INSTALLER})\"",
+        "say() { printf '%s\\n' \"$*\"; }",
+        "warn() { printf 'warning: %s\\n' \"$*\" >&2; }",
+        "plan() { :; }; ensure_native_mail_candidate() { :; }; write_native_mail_env() { :; }",
+        "mail_update_use() { echo USE_$1; }",
+        f"verify_native_mail_candidate_offline() {{ MAIL_UPDATE_START_SECONDS={shlex.quote(measured)}; }}",
+        "mail_update_helper() { echo BACKUP_REACHED; return 1; }",
+        "DRY_RUN=false MAIL_UPDATE_MODE=auto MAIL_DB=/db NATIVE_MAIL_SERVICE_ROOT=/svc",
+        "NATIVE_MAIL_SOURCE_ID=new NATIVE_MAIL_VENV=/v OLD_NATIVE_MAIL_ENV=/old NATIVE_MAIL_ENV=/new OLD_NATIVE_MAIL_SOURCE_ID=old",
+        "AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET=9999",
+        "MAIL_UPDATE_RESULT= MAIL_RESULT_CODE=",
+        "update_native_mail",
+        "echo \"RESULT=$MAIL_UPDATE_RESULT CODE=$MAIL_RESULT_CODE\"",
+    ])
+    done = subprocess.run(["/bin/bash", "-c", script], text=True, capture_output=True, check=False)
+    assert "RESULT=not-switched CODE=outage_unknown" in done.stdout, done.stdout + done.stderr
+    assert "BACKUP_REACHED" not in done.stdout
+    assert "USE_OLD" in done.stdout

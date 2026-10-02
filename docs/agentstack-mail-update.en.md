@@ -118,7 +118,7 @@ and exits non-zero: a reader must treat a missing line as a failure.
 
 Reason codes: `no_running_mail`, `newer_build`, `same_candidate`,
 `same_package`, `keep_default`, `keep_requested`, `not_mailctl_managed`,
-`deployment_unidentified`, `verify_failed`, `outage_over_budget`,
+`deployment_unidentified`, `verify_failed`, `outage_over_budget`, `outage_unknown`,
 `backup_failed`, `start_failed_rolled_back`, `adopted`, and (from
 `--print-mail-plan` only) `plan_unavailable`. `--print-mail-plan` reads only the
 pidfile, the render and git, needs no project key, and always exits 0 with one

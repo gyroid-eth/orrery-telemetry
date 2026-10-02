@@ -106,7 +106,7 @@ mail-plan: <install|switch|keep|unchanged|refuse> mode=<…> running=<commit> to
 
 reason の code: `no_running_mail`、`newer_build`、`same_candidate`、`same_package`、
 `keep_default`、`keep_requested`、`not_mailctl_managed`、`deployment_unidentified`、`verify_failed`、
-`outage_over_budget`、`backup_failed`、`start_failed_rolled_back`、`adopted`、
+`outage_over_budget`、`outage_unknown`、`backup_failed`、`start_failed_rolled_back`、`adopted`、
 （`--print-mail-plan` だけ）`plan_unavailable`。`--print-mail-plan` は pidfile・
 render・git だけを読み、project key がなくても、何が起きても exit 0 で 1 行を
 出します。計画であって約束ではありません（実際の run は検証のうえで残すことがあります）。

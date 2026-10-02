@@ -3559,8 +3559,16 @@ update_native_mail() {
   # testing (2026-10-02), so auto keeps well under that.
   local budget estimate
   budget="${AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET:-8}"
-  estimate="$("$PYTHON_BIN" -c 'import math, sys; print(math.ceil(float(sys.argv[1] or 0) + 1.5))' "${MAIL_UPDATE_START_SECONDS:-}" 2>/dev/null || echo 9999)"
-  [[ "$estimate" =~ ^[0-9]{1,4}$ ]] || estimate=9999
+  estimate="$("$PYTHON_BIN" -c 'import math, sys; print(math.ceil(float(sys.argv[1]) + 1.5))' "${MAIL_UPDATE_START_SECONDS:-}" 2>/dev/null || true)"
+  # Without a measured start the outage is unknown, which no budget allows.
+  if [[ "$MAIL_UPDATE_MODE" == auto && ! "$estimate" =~ ^[0-9]{1,4}$ ]]; then
+    MAIL_UPDATE_RESULT="not-switched"
+    MAIL_RESULT_CODE=outage_unknown
+    MAIL_UPDATE_REASON="the candidate's start time was not measured, so the outage cannot be estimated"
+    warn "ORRERY Mail was not switched: $MAIL_UPDATE_REASON; the running build was not stopped"
+    mail_update_use OLD
+    return
+  fi
   # Decimal on purpose: bash arithmetic reads 08 as a bad octal number, and an
   # arithmetic error in a test is false -- which would switch over budget.
   if [[ "$MAIL_UPDATE_MODE" == auto && ! "$budget" =~ ^[0-9]{1,4}$ ]]; then
@@ -3590,7 +3598,7 @@ update_native_mail() {
   fi
   MAIL_UPDATE_BACKUP="$backup"
   say "backed up ORRERY Mail database to $backup"
-  say "switching ORRERY Mail from $OLD_NATIVE_MAIL_SOURCE_ID to $NATIVE_MAIL_SOURCE_ID: Mail is unavailable for about ${estimate}s"
+  say "switching ORRERY Mail from $OLD_NATIVE_MAIL_SOURCE_ID to $NATIVE_MAIL_SOURCE_ID: Mail is unavailable for about ${estimate:-?}s"
   say "  agents' Mail calls fail meanwhile and work again afterwards; the database, tokens and registrations are unchanged"
   render_native_mail_runner
   # Disarmed in main once env.sh names the serving build.
