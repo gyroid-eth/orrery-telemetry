@@ -277,3 +277,24 @@ def test_doctor_suggests_updating_only_from_a_checkout_newer_than_the_running_ma
         assert "then Reconnect (not Authenticate)" in result.stderr
     else:
         assert "--mail update" not in result.stderr and "Pull the checkout" in result.stderr
+
+
+def test_risk_alone_is_the_same_block_every_update_notice_carries(history):
+    """setup.sh shows it before asking to update (cockpit #7 review P2-5)."""
+    risk = _notice("risk")
+    assert risk.startswith("  Risk: ") and "no short limit is guaranteed" in risk
+    assert "then Reconnect (not Authenticate)" in risk
+    repo, old, new, side = history
+    assert risk in _stale(repo, old, new)
+    assert "--mail update" not in risk and "To update:" not in risk
+
+
+@pytest.mark.parametrize("which", ["newer", "diverged", "unknown"])
+def test_only_an_older_mail_gets_a_to_update_line(history, which):
+    """setup.sh adds its own update line only where this notice has `To update:`."""
+    repo, old, new, side = history
+    running, to = {"newer": (new, old), "diverged": (side, new), "unknown": ("fixture-build", new)}[which]
+    for missing in ("", "register_agent.existing_agent_id"):
+        text = _notice("stale", "--repo", str(repo), "--running", running, "--to", to, "--missing", missing)
+        assert "To update:" not in text
+    assert "To update:" in _stale(repo, old, new)

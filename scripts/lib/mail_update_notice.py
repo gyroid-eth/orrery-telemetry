@@ -9,6 +9,7 @@ drift apart. Plain text, English, one screen.
                                 [--missing tool.param,...] [--mcp-url URL]
                                 [--features FILE] [--without-how] [--only-if-stale]
     mail_update_notice.py after-stop [--outage SECONDS]
+    mail_update_notice.py risk
 
 `stale` calls the running Mail out of date, and suggests updating from this
 checkout, only when that is shown: its commit is an ancestor of the
@@ -199,6 +200,10 @@ def main(argv: list[str]) -> int:
     stop = sub.add_parser("after-stop")
     stop.add_argument("--outage", default="")
     stop.set_defaults(render=after_stop)
+    # What switching Mail costs and how to recover, alone: for a screen that
+    # asks before an update (setup.sh's approval), where no notice applies yet.
+    risk = sub.add_parser("risk")
+    risk.set_defaults(render=lambda _args: _risk())
     args = parser.parse_args(argv)
     lines = args.render(args)
     if lines:
