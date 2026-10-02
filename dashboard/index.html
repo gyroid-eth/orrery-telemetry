@@ -33237,11 +33237,38 @@ function toast(prefix,msg,err){
   clearTimeout(t._t); t._t=setTimeout(()=>t.className='',3400);
 }
 
+// An agent this dashboard knows is not running in tmux (finished husk, gone,
+// retired): opening it means resuming it first. Unknown rows say no, so a jump
+// on them keeps its old meaning.
+function needsResumeBeforeJump(name){
+  const g=(typeof gmap!=='undefined'&&gmap.get(name))||null;
+  const a=(lastData||[]).find(x=>x.name===name)||g;
+  if(!a)return false;
+  if(a.running||(g&&g.running))return false;
+  const category=a.category||
+    (a.retired?'retired':(a.state||(a.present?'finished':'gone')));
+  return isResumeCategory(category);
+}
+
 async function jump(name,ev){
   ev.stopPropagation();
   // Embedded in the ORRERY cockpit, the terminal lives in the host: hand the
   // session over instead of asking this server to open a separate terminal.
+  // An agent that is not running is resumed here first, headless (open:false):
+  // the cockpit only waits for the tmux session to appear, so without this a
+  // RESUME did nothing (2026-10-02). A refused resume is shown and not handed over.
   if(EMBED_MODE){
+    if(needsResumeBeforeJump(name)){
+      toast('▸ RESUME','> '+name+' …');
+      try{
+        const r=await fetch('/api/jump',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({session:name,open:false})});
+        const j=await r.json();
+        if(!j.ok){toast('✕ FAIL','> '+(j.error||'unknown'),true);return;}
+        toast('▸ RESUME','> '+name+'  ::  '+(j.mail_message||j.detail||j.action));
+      }catch(e){toast('✕ FAIL','> uplink lost: '+e,true);return;}
+    }
     window.parent.postMessage({type:'orrery-jump',name:name},location.origin);
     return;
   }
@@ -33440,9 +33467,10 @@ async function bulkDispatch(kind,names,btn){
   let ok=0,fail=0;const failNames=[];
   for(const nm of names){
     try{
+      // Embedded, a resume stays headless: the cockpit shows the tmux session.
       const r=await fetch(url,{method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({session:nm})});
+        body:JSON.stringify(EMBED_MODE&&kind==='resume'?{session:nm,open:false}:{session:nm})});
       const j=await r.json();
       if(j.ok)ok++;
       else{fail++;failNames.push(nm+':'+(j.error||'?'));console.warn('bulk '+kind+' fail',nm,j);}
