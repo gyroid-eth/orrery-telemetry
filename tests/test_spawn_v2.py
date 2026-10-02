@@ -22,10 +22,18 @@ import dashboard.server as server
 @pytest.fixture(autouse=True)
 def _no_real_claude_catalog(monkeypatch, tmp_path):
     """The real ~/.claude model catalog would decide the aliases and the default,
-    and a child claude found by an earlier test would decide its versions."""
+    and a child claude found by an earlier test would decide its versions.
+
+    Nor do the installed hooks: server.HOOKS_DIR defaults to ~/.agentstack/hooks,
+    and once an install carries hooks/claude-child-bin.sh, do_spawn binds the
+    child's claude through a login shell -- into the subprocess.run stub of
+    whichever test runs, which has no stdout. Where nothing is installed (CI)
+    the script is absent and the answer is "unknown". Every test starts there;
+    the ones about the binding give their own hooks dir."""
     from dashboard import claude_models
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-config"))
     monkeypatch.setattr(claude_models, "_bound_child_path", None)
+    monkeypatch.setattr(server, "HOOKS_DIR", str(tmp_path / "no-installed-hooks"))
 
 
 def _set_annotation_paths(monkeypatch, tmp_path):
