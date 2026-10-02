@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Codex の hook が大きな payload で「Hook failed（exit 141）」になっていました
+
+ORRERY の Codex App plugin の hook（`run-hook.sh`、子の Codex にも入る）は、payload を pipe で Python に渡します。Python 側が 64 KiB の上限を超えた payload や使わない payload を読み切らずに終わると、書いている側が SIGPIPE で死に、`set -o pipefail` によって hook が exit 141 で終わっていました（162nd のセミナーで、digest-paper の実行中にレビュー役の Codex に複数回）。道具の出力を含む PostToolUse の payload は数百 KB〜数 MB になります。`hook_entry.py` と session の索引の recorder は、使わない payload も最後まで読んでから終わります。recorder が読まずに終わったときに出ていた誤った `recorder_process_failed` も出なくなります。
+
 ### agentstack-doctor: 動いている ORRERY Mail に足りない機能を知らせます
 
 Mail が install より古いと、health は通り、ほかの検査もすべて通るのに、dashboard や launcher が頼る機能だけが欠けていました（2026-10-02: `register_agent` に `existing_agent_id` が無く、Claude の再開が Mail の無い会話だけになった）。doctor は動いている Mail の `tools/list` を 1 回読み、`scripts/lib/mail_required_features.json` の機能のうち欠けているものごとに `warn:` と直し方（`--update-mail`）を出します。Mail そのものは動いているので exit status は変えません。最後に `mail-features: status=<ok|missing|unknown> missing=<…> running=<commit>` を 1 行出し、setup.sh はこれを読めます。
