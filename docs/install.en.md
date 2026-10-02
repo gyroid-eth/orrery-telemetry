@@ -160,7 +160,10 @@ When installing from CI or a script, the four approvals (Claude settings merge, 
 --codex-network MODE    Codex child sandbox network (on | off; default on)
 --codex-add-dirs PATHS  extra writable roots for Codex children (`:`-separated)
 --retire-legacy-mail    see the appendix (retire a previous MCP Agent Mail)
---update-mail           replace the running ORRERY Mail with this checkout's build (verify, back up, restore the previous build on failure; docs/agentstack-mail-update.en.md)
+--mail auto|update|keep what to do with a running ORRERY Mail (default keep; --update-mail / --keep-mail are aliases)
+--update-mail           always replace the running ORRERY Mail with this checkout's build (exit 1 if it cannot; docs/agentstack-mail-update.en.md)
+--keep-mail             keep the running ORRERY Mail build (the default; AGENTSTACK_MAIL_UPDATE=auto switches only when it safely can)
+--print-mail-plan       print one line saying what would happen to ORRERY Mail, then exit (reads only)
 -y, --assume-yes        approval prompts only; validation errors remain fatal
 ```
 
@@ -371,7 +374,7 @@ The start of a dry-run prints the resolved project key, port, label prefix, term
 
 If your shell sources `env.sh` at startup, its `AGENTSTACK_*` values count as explicit. After re-installing from another shell, open a new shell or source `env.sh` again before using a launcher or the installer.
 
-The running ORRERY Mail build stays in use; when it differs from this checkout's build, a `notice:` says so. To replace the build too, add `--update-mail`: the candidate is verified and the database backed up while Mail keeps serving, then the build is switched, and the previous build is put back if the new one does not answer ([agentstack-mail-update.en.md](agentstack-mail-update.en.md#replacing-the-build-with---update-mail)).
+The running ORRERY Mail build stays in use; when it differs from this checkout's build, a `notice:` says so. To replace the build too, add `--update-mail`: the candidate is verified and the database backed up while Mail keeps serving, then the build is switched, and the previous build is put back if the new one does not answer. `AGENTSTACK_MAIL_UPDATE=auto` (opt-in) switches only when it safely can, and otherwise keeps the running build and lets the install succeed. The final `mail-result:` line reports the outcome ([agentstack-mail-update.en.md](agentstack-mail-update.en.md#replacing-the-build-with---update-mail)).
 
 **Keep the ORRERY Mail server running during an in-place upgrade.** The real database path resolved from the running listener takes precedence over filesystem candidate discovery. Stopping ORRERY Mail first falls back to candidate discovery, and the installer stops rather than risk choosing incorrectly in an environment with several databases.
 
