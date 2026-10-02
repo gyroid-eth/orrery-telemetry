@@ -21,6 +21,8 @@ import subprocess
 import sys
 import tempfile
 
+import pytest
+
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SPAWN = _ROOT / "hooks" / "spawn_child.sh"
 
@@ -441,14 +443,17 @@ def test_launcher_owns_the_codex_flags_and_never_hands_off_to_a_user_launcher():
     assert 'env -u OPENAI_API_KEY codex -C "$PWD"' not in text
 
 
-def _model_call(function: str, *args: str, extra_env=None) -> subprocess.CompletedProcess[str]:
+def _model_call(function: str, *args: str, extra_env=None, prelude: str = "") -> subprocess.CompletedProcess[str]:
     functions = ["normalize_claude_model", "normalize_codex_model",
                  "validate_codex_effort"]
     script = _model_catalog() + "\n" + "\n".join(
         _extract(name) for name in functions
     )
     command = " ".join([function, *(shlex.quote(arg) for arg in args)])
-    return _run_bash(script + "\n" + command + "\n", {"HOOKS_DIR": str(_ROOT / "hooks"), "CODEX_MODEL_HELPER": str(_ROOT / "dashboard/codex_models.py"), "AGENTSTACK_PYTHON": sys.executable, "CODEX_HOME": str(_ROOT / ".missing-test-codex-home"), "AGENTSTACK_CODEX_BIN": "", **(extra_env or {})})
+    if function == "normalize_claude_model":
+        # As both launch paths do: resolve the aliases in the launching shell first.
+        prelude = prelude or "load_claude_aliases || exit 1"
+    return _run_bash(script + "\n" + prelude + "\n" + command + "\n", {"HOOKS_DIR": str(_ROOT / "hooks"), "CODEX_MODEL_HELPER": str(_ROOT / "dashboard/codex_models.py"), "CLAUDE_MODEL_HELPER": str(_ROOT / "dashboard/claude_models.py"), "CLAUDE_CONFIG_DIR": str(_ROOT / ".missing-test-claude-config"), "AGENTSTACK_PYTHON": sys.executable, "CODEX_HOME": str(_ROOT / ".missing-test-codex-home"), "AGENTSTACK_CODEX_BIN": "", **(extra_env or {})})
 
 
 def test_model_catalog_fallback_preserves_aliases_and_old_ids_without_cli_version():
@@ -463,7 +468,24 @@ def test_model_catalog_fallback_preserves_aliases_and_old_ids_without_cli_versio
         ("normalize_claude_model", "opus-5-5[1m]"): "claude-opus-5-5[1m]",
         ("normalize_claude_model", "opus-5-5-1m"): "claude-opus-5-5[1m]",
         ("normalize_claude_model", "opus55[1m]"): "claude-opus-5-5[1m]",
-        ("normalize_claude_model", "sonnet"): "claude-sonnet-5",
+        ("normalize_claude_model", "sonnet"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "Sonnet 5.5"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "sonnet-5-5"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "sonnet55"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "sonnet5.5"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "sonnet-5.5"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "claude-sonnet-5-5"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "sonnet-5"): "claude-sonnet-5",
+        ("normalize_claude_model", "sonnet5"): "claude-sonnet-5",
+        ("normalize_claude_model", "claude-sonnet-5"): "claude-sonnet-5",
+        ("normalize_claude_model", "opus-5-5"): "claude-opus-5-5",
+        ("normalize_claude_model", "opus55"): "claude-opus-5-5",
+        ("normalize_claude_model", "Opus 5.5"): "claude-opus-5-5",
+        ("normalize_claude_model", "haiku"): "claude-haiku-4-5-20251001",
+        ("normalize_claude_model", "haiku-4-5"): "claude-haiku-4-5-20251001",
+        ("normalize_claude_model", "Haiku 4.5"): "claude-haiku-4-5-20251001",
+        ("normalize_claude_model", "fable-5-1"): "claude-fable-5-1",
+        ("normalize_claude_model", "Fable 5.1"): "claude-fable-5-1",
         ("normalize_claude_model", "sonnet-4-6"): "claude-sonnet-4-6",
         ("normalize_claude_model", "fable"): "claude-fable-5-1",
         ("normalize_claude_model", "claude-fable-5"): "claude-fable-5",
@@ -480,6 +502,84 @@ def test_model_catalog_fallback_preserves_aliases_and_old_ids_without_cli_versio
         result = _model_call(function, raw, extra_env={"AGENTSTACK_CHILD_SHELL": "/usr/bin/false"})
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == normalized
+
+
+def _claude_catalog_profile(tmp_path, rows, stale_in_ms=3_600_000):
+    """A Claude Code model catalog whose "main" rows name newer models."""
+    import time
+    now = int(time.time() * 1000)
+    models = [{"id": model, "section": section, "short_name": family, **extra}
+              for model, section, family, extra in rows]
+    path = tmp_path / "claude" / "cache" / "model-catalog" / "cache.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": 2, "fetchedAt": now - 1000, "staleAt": now + stale_in_ms,
+                                "catalog": {"surface": "cc", "config": {"models": models}}}))
+    return str(tmp_path / "claude")
+
+
+_NEWER = [("claude-opus-6", "main", "Opus", {}), ("claude-sonnet-6", "main", "Sonnet", {}),
+          ("claude-haiku-5", "main", "Haiku", {}), ("claude-fable-6", "main", "Fable", {}),
+          ("claude-sonnet-5-5", "overflow", "Sonnet", {})]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("", "claude-opus-6"), ("opus", "claude-opus-6"), ("sonnet", "claude-sonnet-6"),
+    ("haiku", "claude-haiku-5"), ("fable", "claude-fable-6"),
+    # Versioned aliases pin a generation and do not follow the catalog.
+    ("sonnet-5-5", "claude-sonnet-5-5"), ("sonnet-5", "claude-sonnet-5"), ("opus-5-5", "claude-opus-5-5"),
+    ("haiku-4-5", "claude-haiku-4-5-20251001"), ("opus[1m]", "claude-opus-4-8[1m]"),
+])
+def test_unversioned_aliases_follow_the_local_claude_catalog(tmp_path, raw, expected):
+    profile = _claude_catalog_profile(tmp_path, _NEWER)
+    result = _model_call("normalize_claude_model", raw, extra_env={"CLAUDE_CONFIG_DIR": profile})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
+
+
+def test_warm_pool_identities_and_report_follow_the_same_resolution(tmp_path):
+    profile = _claude_catalog_profile(tmp_path, _NEWER, stale_in_ms=-1)
+    result = _model_call(
+        "report_claude_alias", "Sonnet", "claude-sonnet-6",
+        extra_env={"CLAUDE_CONFIG_DIR": profile},
+        prelude='load_claude_aliases || exit 1; printf "%s %s\\n" "$CLAUDE_WARM_OPUS_MODEL" "$CLAUDE_WARM_SONNET_MODEL"')
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "claude-opus-6 claude-sonnet-6"
+    assert "Claude model sonnet -> claude-sonnet-6 (local_catalog: catalog is stale)" in result.stderr
+
+
+def test_alias_report_names_the_bundled_table_and_why():
+    result = _model_call("report_claude_alias", "", "claude-opus-5-5",
+                         prelude="load_claude_aliases || exit 1")
+    assert result.returncode == 0, result.stderr
+    assert ("Claude model (default opus) -> claude-opus-5-5 "
+            "(bundled: no readable local Claude Code model catalog)") in result.stderr
+    pinned = _model_call("report_claude_alias", "sonnet-5", "claude-sonnet-5",
+                         prelude="load_claude_aliases || exit 1")
+    assert pinned.stderr == ""
+
+
+def test_a_catalog_row_newer_than_the_installed_cli_is_not_used(tmp_path):
+    profile = _claude_catalog_profile(
+        tmp_path, [("claude-sonnet-6", "main", "Sonnet", {"min_claude_code_version": "9.0.0"})])
+    fake = tmp_path / "share/claude/versions/2.1.287"
+    fake.parent.mkdir(parents=True)
+    fake.write_text("#!/bin/sh\nexit 99\n")
+    fake.chmod(0o755)
+    result = _model_call("normalize_claude_model", "sonnet",
+                         extra_env={"CLAUDE_CONFIG_DIR": profile, "AGENTSTACK_CLAUDE_BIN": str(fake)})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "claude-sonnet-5-5"
+
+
+def test_unresolvable_aliases_stop_the_launch_instead_of_guessing():
+    result = _model_call("normalize_claude_model", "sonnet",
+                         extra_env={"AGENTSTACK_PYTHON": "/usr/bin/false"})
+    assert result.returncode != 0
+    assert "could not resolve the Claude model aliases" in result.stderr
+    unloaded = _model_call("normalize_claude_model", "sonnet", prelude=":")
+    assert unloaded.returncode != 0
+    assert "load_claude_aliases must run first" in unloaded.stderr
+    assert unloaded.stdout.strip() == ""
 
 
 def test_model_specific_effort_constraints_are_enforced():
@@ -508,6 +608,11 @@ def test_both_launch_paths_use_the_shared_model_catalog():
     assert '${CLAUDE_MODEL:-gpt-5.5}' not in text
     assert '"$CLAUDE_WARM_OPUS_MODEL")' in text
     assert '"$CLAUDE_WARM_SONNET_MODEL")' in text
+    # Both Claude paths resolve the aliases first and say where they pointed.
+    assert text.count("load_claude_aliases || exit 1") == 2
+    assert text.count('report_claude_alias "$CLAUDE_MODEL" "$CHILD_MODEL"') == 2
+    # No generation of an unversioned alias is fixed in the launcher.
+    assert not re.search(r'^CLAUDE_(DEFAULT|WARM)_\w*MODEL="claude-', text, re.M)
 
 
 def test_launcher_no_longer_hardcodes_full_auto():

@@ -19,6 +19,12 @@ import pytest
 import dashboard.server as server
 
 
+@pytest.fixture(autouse=True)
+def _no_real_claude_catalog(monkeypatch, tmp_path):
+    """The real ~/.claude model catalog would decide the aliases and the default."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-config"))
+
+
 def _set_annotation_paths(monkeypatch, tmp_path):
     path = tmp_path / "runtime" / "annotations.json"
     legacy = tmp_path / "dashboard" / "annotations.json"
@@ -125,14 +131,41 @@ def test_spawn_names_uses_launcher_scientist_source(monkeypatch, tmp_path):
     assert "emoji" not in data
 
 
-def test_new_agent_claude_default_matches_cli_launcher():
-    """NEW AGENT preselects the model the CLI launcher uses when none is given."""
-    spawn = (pathlib.Path(__file__).resolve().parent.parent / "hooks/spawn_child.sh").read_text(encoding="utf-8")
-    launcher_default = re.search(r'^CLAUDE_DEFAULT_MODEL="([^"]+)"', spawn, re.M).group(1)
-    assert server._CLAUDE_SPAWN_DEFAULT_MODEL == launcher_default
-    assert server._CLAUDE_SPAWN_DEFAULT_MODEL in server._SPAWN_MODELS
+def _launcher_default(env) -> str:
+    """What spawn_child.sh resolves for an omitted model, run through its own code."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    spawn = (root / "hooks/spawn_child.sh").read_text(encoding="utf-8")
+    catalog = spawn[spawn.index("# --- Child model catalog"):spawn.index("normalize_codex_model() {")]
+    import os, sys
+    result = subprocess.run(
+        ["bash", "-c", catalog + '\nload_claude_aliases || exit 1\nnormalize_claude_model ""\n'],
+        env={**os.environ, **env, "CLAUDE_MODEL_HELPER": str(root / "dashboard/claude_models.py"),
+             "AGENTSTACK_PYTHON": sys.executable},
+        capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+
+
+def test_new_agent_claude_default_matches_cli_launcher(monkeypatch, tmp_path):
+    """NEW AGENT preselects the model the CLI launcher uses when none is given,
+    with or without a local catalog that names a newer Opus."""
+    import os
+    assert _launcher_default({"CLAUDE_CONFIG_DIR": os.environ["CLAUDE_CONFIG_DIR"]}) == "claude-opus-5-5"
     claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
-    assert claude["default_model"] == launcher_default
+    assert claude["default_model"] == "claude-opus-5-5"
+    assert "claude-opus-5-5" in server._SPAWN_MODELS
+
+    profile = tmp_path / "claude"
+    path = profile / "cache/model-catalog/cache.json"
+    path.parent.mkdir(parents=True)
+    now = int(time.time() * 1000)
+    path.write_text(json.dumps({"version": 2, "fetchedAt": now - 1000, "staleAt": now + 3_600_000, "catalog": {
+        "surface": "cc", "config": {"models": [{"id": "claude-opus-6", "section": "main", "short_name": "Opus"}]}}}))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
+    assert _launcher_default({"CLAUDE_CONFIG_DIR": str(profile)}) == "claude-opus-6"
+    claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
+    assert claude["default_model"] == "claude-opus-6"
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    assert server.do_spawn({"parent": "Parent", "task": "work"}) == {"model": "claude-opus-6"}
 
 
 def test_spawn_names_status_means_any_adjective_pair_is_free(monkeypatch, tmp_path):
@@ -246,9 +279,9 @@ def test_claude_overflow_models_are_listed_without_the_default(monkeypatch):
     monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})
     claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
     assert claude["default_model"] == "claude-opus-5-5"
-    # opus-4-8 from the catalog; opus-5 from the bundled table (the catalog
-    # does not list it as main); the default is never folded.
-    assert claude["overflow_models"] == ["claude-opus-5", "claude-opus-4-8"]
+    # opus-4-8 from the catalog; opus-5 and sonnet-5 from the bundled table
+    # (the catalog does not list them as main); the default is never folded.
+    assert claude["overflow_models"] == ["claude-sonnet-5", "claude-opus-5", "claude-opus-4-8"]
     assert "claude-opus-4-8" in claude["models"]
 
 

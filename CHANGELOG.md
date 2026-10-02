@@ -22,6 +22,15 @@
 
 `auto` を既定にするのは、rollback まで含めた停止時間の上限と、更新後の database で前の build が動くことの確認を入れてからです（[設計メモ](docs/agentstack-mail-update-design.md)）。
 
+### `sonnet` が Sonnet 5.5 を起動するようになりました。別名の行き先を固定しません
+
+「Sonnet 5.5 の子を」と頼まれた agent が `--model sonnet` を渡すと、`claude-sonnet-5` が起動していました。launcher が `opus` / `sonnet` / `haiku` / `fable` の行き先を固定値で持っていたためです（dashboard の一覧は #90 でローカルの catalog に追従していましたが、launcher の別名と warm pool の照合は固定のままでした）。いまは、この 4 つの別名と省略時の既定を、Claude Code のローカル model catalog（`~/.claude/cache/model-catalog/`）がその系統の現行として示すモデル（`main` の行）に解決します。Claude Code 自身が `--model sonnet` を解決する結果と同じです。catalog が無い・読めない、または入っている Claude Code がそのモデルに必要な版より古いときは、`dashboard/claude_models.py` の同梱の表を使います。固定の値はこの表 1 か所だけで、warm pool の照合と NEW AGENT の既定も同じ解決の結果を使います。
+
+- どこから解決したか（catalog か同梱の表か、catalog が古いか）を、launcher は起動時に、`agentstack-doctor` は 1 行で出します
+- 版つきの別名は世代を固定するためのものなので、追従しません。`sonnet-5-5` / `sonnet55` / `sonnet5.5` / `Sonnet 5.5` を足しました（`claude-sonnet-5-5`）。`sonnet-5` は引き続き `claude-sonnet-5` です。`opus-5-5`・`haiku-4-5`・`fable-5-1` も同じ形で受け付けます
+- 省略時の既定は catalog の並び順の先頭ではなく、catalog が現行の Opus として指定したモデルに追従します。`AGENTSTACK_CLAUDE_MODELS` の許可リストの扱いは変わりません
+- Claude Code は catalog を 1 時間で古いと印を付けます。古い catalog は NEW AGENT の候補を増やすのには使いませんが、別名の解決には使います。同梱の表より新しい情報だからです
+
 ### Mail なしの再開で、理由と直し方が見えるようにしました
 
 古い（`existing_agent_id` を受け付けない）ORRERY Mail のもとでは、旧形式の state を持つ Claude は、親の有無にかかわらず会話だけで再開されます（MCP なし・hook 無効・Mail なし）。この判定は変えていません。変えたのは見え方です。これまでは理由（`mail_schema_unsupported`）が出ても、直し方は書かれていませんでした。また再開後は、Mail 側の行が retired で `program` が空になるため、走っている行に MAIL UNAVAILABLE が出ていませんでした。いまは、

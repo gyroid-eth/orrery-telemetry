@@ -66,10 +66,12 @@ QUOTA_SERVICE = _build_quota_service()
 
 try:
     from dashboard.claude_models import (
+        BUNDLED_ALIASES as _CLAUDE_BUNDLED_ALIASES, default_model as _claude_alias_default,
         is_model_id as _is_claude_model_id, resolve_catalog as _resolve_claude_catalog,
     )
 except ModuleNotFoundError:  # direct script execution
     from claude_models import (
+        BUNDLED_ALIASES as _CLAUDE_BUNDLED_ALIASES, default_model as _claude_alias_default,
         is_model_id as _is_claude_model_id, resolve_catalog as _resolve_claude_catalog,
     )
 
@@ -6236,15 +6238,21 @@ SPAWN_SCRIPT = _env_path(
 SOURCE_REPO = HERE  # vault 外、自前 git の親 repo
 # Claude Code の local catalog が使えない場合の bundled fallback。
 # _SPAWN_MODELS は既存 extension との互換性のため mapping のまま保つ。
-# Matches the CLI launcher default; discovery must not change it.
-_CLAUDE_SPAWN_DEFAULT_MODEL = "claude-opus-5-5"
+# The bundled candidates are the alias table's current models plus the
+# previous generation, so no second copy of the generation names lives here.
 _SPAWN_MODELS = {
-    "claude-sonnet-5": ("claude-code", "claude-sonnet-5"),
-    "claude-opus-5-5": ("claude-code", "claude-opus-5-5"),
-    "claude-opus-5": ("claude-code", "claude-opus-5"),
-    "claude-haiku-4-5-20251001": ("claude-code", "claude-haiku-4-5-20251001"),
-    "claude-fable-5-1": ("claude-code", "claude-fable-5-1"),
+    model: ("claude-code", model)
+    for model in (*_CLAUDE_BUNDLED_ALIASES.values(), "claude-sonnet-5", "claude-opus-5")
 }
+
+
+def _claude_spawn_default_model() -> str:
+    """What the CLI launcher runs for an omitted model: the current Opus.
+
+    It follows the local catalog's designated Opus (its "main" row), never the
+    first entry of a list, so an allow-list's order still cannot change it.
+    """
+    return _claude_alias_default()
 _CODEX_DEFAULT_MODEL = codex_models.DEFAULT_MODEL
 _CODEX_DEFAULT_MODELS = codex_models.DEFAULT_MODELS
 _CODEX_EFFORTS = codex_models.EFFORTS
@@ -6260,8 +6268,9 @@ def _claude_models() -> list[str]:
 
 
 def _claude_default_model(models: list[str]) -> str:
-    if _CLAUDE_SPAWN_DEFAULT_MODEL in models:
-        return _CLAUDE_SPAWN_DEFAULT_MODEL
+    default = _claude_spawn_default_model()
+    if default in models:
+        return default
     return ""  # A restrictive override requires an explicit choice, not a new default.
 
 
@@ -7048,7 +7057,7 @@ def do_spawn(payload: dict) -> dict:
     if claude_catalog and claude_catalog.error:
         return {"ok": False, "error": claude_catalog.error}
     default_model = (
-        _CLAUDE_SPAWN_DEFAULT_MODEL
+        _claude_spawn_default_model()
         if provider == "claude"
         else ""  # Codex resolves its default from the current local catalog.
     )
