@@ -1292,6 +1292,12 @@ for line in raw.splitlines():
     match = pattern.match(line)
     if match is None:
         continue
+    # Only a plain literal is evidence: a value that names a path only when
+    # the shell expands it (a variable, a command substitution in either form)
+    # is not one, whatever shlex leaves behind (#187 review). The installer
+    # never writes either. chr(96) is the backquote, kept out of this heredoc.
+    if "$" in match.group(1) or chr(96) in match.group(1):
+        raise SystemExit(0)
     try:
         parts = shlex.split(match.group(1), comments=True, posix=True)
     except ValueError:
@@ -1321,7 +1327,11 @@ is_managed_render_env_path() {
   case "$middle" in
     ""|*/*|.|..) return 1 ;;
   esac
-  return 0
+  # A render this installer writes is named "<source id>-<hash>": the same
+  # characters a source id may have. Anything else -- "$(...)", spaces, quotes
+  # left over from an env.sh that only yields a path when run -- is not one
+  # (#187 review).
+  [[ "$middle" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
 }
 
 native_mail_render_id() {
@@ -1730,20 +1740,26 @@ PY
       # and state, so the path written into env.sh by one install does not match
       # the next one. Shell startup exports that file, so the documented
       # `git pull && ./scripts/install.sh` failed on this installer's own
-      # output. Forgive that one shape and nothing else:
+      # output. Forgive that shape and nothing else:
       #
-      #   - it has to equal the value read out of the installed env.sh, and
-      #   - it has to sit where this installation keeps its managed renders.
+      #   - the installed env.sh has to name a managed render as a plain literal
+      #     (read, never run; a value that needs expanding is no evidence), and
+      #   - the inherited value has to be a managed render of this installation
+      #     too. It need not equal env.sh's: a shell opened before the last Mail
+      #     switch (--mail update) still exports the render that was current
+      #     then (2026-10-03, an update from such a terminal stopped here).
       #
-      # Equal values cannot prove who set the variable, so an operator who
-      # wants a native path that outlives an upgrade pins
-      # AGENTSTACK_MAIL_SERVICE_ENV; that takes precedence and is never
-      # forgiven here. Any other path keeps the mismatch error.
+      # Neither proves who set the variable, so an operator who wants a native
+      # path that outlives an upgrade pins AGENTSTACK_MAIL_SERVICE_ENV; that
+      # takes precedence and is never forgiven here. Any other path keeps the
+      # mismatch error.
+      local installed_mail_env
+      installed_mail_env="$(installed_env_mail_env)"
       if [[ -z "$NATIVE_MAIL_ENV_EXPLICIT" ]] \
-        && [[ -n "$(installed_env_mail_env)" ]] \
-        && [[ "$explicit_mail_env" == "$(installed_env_mail_env)" ]] \
+        && [[ -n "$installed_mail_env" ]] \
+        && is_managed_render_env_path "$installed_mail_env" "$NATIVE_MAIL_SERVICE_ROOT" \
         && is_managed_render_env_path "$explicit_mail_env" "$NATIVE_MAIL_SERVICE_ROOT"; then
-        say "ignoring a managed AGENTSTACK_MAIL_ENV inherited from $INSTALL_DIR/env.sh; resolving the current render"
+        say "ignoring a managed AGENTSTACK_MAIL_ENV inherited from $INSTALL_DIR/env.sh (now or before an earlier Mail switch); resolving the current render"
         MAIL_ENV_EXPLICIT=""
         unset AGENTSTACK_MAIL_ENV
       else

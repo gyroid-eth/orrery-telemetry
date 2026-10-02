@@ -10,6 +10,10 @@
 
 ## 2026.10.03
 
+### Mail を更新した後、前から開いていた端末からの update が止まっていました
+
+`--mail update` で Mail を差し替えると、`env.sh` の `AGENTSTACK_MAIL_ENV` は新しい render を指します。差し替えの前に開いた端末（`env.sh` を読み込む shell）は古い render を export したままで、その端末から update（`./scripts/install.sh`、cockpit の update・setup）を実行すると `AGENTSTACK_MAIL_ENV must equal the native service env` で止まっていました。この installer が `env.sh` に書いた値と等しいときだけ許していたためです。`env.sh` の値も引き継いだ値も、この installation の render の置き場所にある render なら、自分の出力として扱って許します。`AGENTSTACK_MAIL_SERVICE_ENV` で固定した場合や、置き場所の外の path は従来どおり止まります。
+
 ### cockpit に埋め込んだ dashboard の RESUME が何もしていませんでした
 
 ORRERY アプリの cockpit に埋め込まれた dashboard では、RESUME（と VERIFY & RESUME）が cockpit に名前を渡すだけで、この server に再開を頼んでいませんでした。cockpit は tmux に session が現れるのを待つだけなので、retire 済み・gone・husk の agent は何も起きずに戻っていました。埋め込みでは、先に `/api/jump` を `open: false`（端末を開かない）で呼び、server が自分の状態で決めます（動いている session はそのまま、動いていなければ再開、husk なら置き換え）。成功したら cockpit に渡し、断られたら理由を表示して渡しません。画面の DECK や NETWORK の古い表示で判断しません。 `/api/jump` に `open: false` を渡したときは、Codex App の agent でも App を前面に出さず `already_running` を返します（埋め込みの cockpit は従来どおり「Codex App で動いている」と表示します。単独の dashboard の OPEN は変わりません）。埋め込みでの bulk の RESUME も `open: false` で頼みます。単独の dashboard の挙動は変わりません。
