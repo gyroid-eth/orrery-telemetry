@@ -1061,25 +1061,7 @@ def agentmail_state() -> tuple[dict, dict]:
         con.row_factory = sqlite3.Row
         cur = con.cursor()
 
-        retired_filter = "retired_at IS NULL" if _has_retired_at() else "1=1"
-        cur.execute(
-            f"""
-            SELECT a.name, a.model, a.program, a.task_description, a.last_active_ts
-            FROM agents a
-            JOIN (
-                SELECT name, MAX(last_active_ts) m
-                FROM agents WHERE {retired_filter} GROUP BY name
-            ) x ON a.name = x.name AND a.last_active_ts = x.m
-            """
-        )
-        for r in cur.fetchall():
-            agents[r["name"]] = {
-                "model": _display_model(r["model"]),
-                "model_raw": r["model"],
-                "program": r["program"],
-                "task": r["task_description"] or "",
-                "last_active": _iso_to_epoch(r["last_active_ts"]),
-            }
+        agents.update(_mail_registrations(con))
 
         cur.execute(
             """
@@ -1329,6 +1311,149 @@ def _history_cutoff(days: float | None) -> tuple[str, tuple]:
     return "AND a.last_active_ts > datetime('now', ?)", (f"-{days:g} days",)
 
 
+def _tmux_row_state(name: str, s: dict, m: dict | None, process_tree) -> tuple[str, str, bool, dict | None]:
+    """(program, category, running, watcher health) of one live tmux session.
+
+    The one place that decides whether a session is running. build_agents()
+    and lookup_agent() both call it, so exit/kill/jump judge an agent exactly
+    as the DECK shows it (2026-05-20: a second, simpler running check in
+    do_kill killed a live session).
+    """
+    program = (m or {}).get("program") or ""
+    agent_alive = (
+        _agent_process_alive(s.get("pane_pid"), process_tree, program)
+        if m is not None
+        else None
+    )
+    cat = classify(
+        name, s["cmd"], s["title"], m is not None,
+        program=program, agent_alive=agent_alive,
+    )
+    title = s["title"].strip()
+    running = s["cmd"] in ("node", "claude") or (
+        bool(title) and _is_activity_glyph(title[:1])
+    )
+    if agent_alive is not None:
+        running = agent_alive
+    watcher_health = None
+    if name == "mail-watcher":
+        watcher_health = mail_watcher_health()
+        running = bool(watcher_health.get("watcher_running"))
+    # If process-tree measurement was unavailable, classify() preserves
+    # the historical fail-safe category; keep running in sync with it.
+    if not running and cat == "agent":
+        running = True
+    return program, cat, running, watcher_health
+
+
+def _apply_codex_app_runtime(row: dict, runtime: dict) -> None:
+    """Promote a gone Codex App agent from its provider-validated snapshot."""
+    app_live = _codex_app_live(runtime)
+    row.update(cmd="codex-app", live=app_live["live"],
+               surface="codex-app", model=runtime["model"],
+               model_raw=runtime["model"],
+               provider=_provider_of(runtime["model"]))
+    if app_live["running"]:
+        row.update(category="agent", running=True,
+                   act_state=app_live["act_state"])
+    else:
+        row.update(category="finished")
+
+
+def _mail_registrations(con, name: str | None = None) -> dict[str, dict]:
+    """The registration each name stands for: its unretired row with the
+    latest activity, and on a tie the one registered last (highest id).
+
+    agentmail_state() (the roster) and _mail_agent_for() (exit/kill/jump) both
+    choose through this one query, so they cannot pick different rows of the
+    same name -- on a tie they once did, and a live Codex looked finished to
+    kill (#179 review). Not scoped to a project, as the roster never was.
+    """
+    retired_filter = "retired_at IS NULL" if _has_retired_at() else "1=1"
+    rows = con.execute(
+        f"""
+        SELECT name, model, program, task_description, last_active_ts
+        FROM agents WHERE {retired_filter}{" AND name = ?" if name is not None else ""}
+        ORDER BY name, last_active_ts, id
+        """,
+        (name,) if name is not None else (),
+    ).fetchall()
+    chosen: dict[str, dict] = {}
+    for r in rows:  # ascending: the last row of a name is the one chosen
+        chosen[r["name"]] = {
+            "model": _display_model(r["model"]),
+            "model_raw": r["model"],
+            "program": r["program"],
+            "task": r["task_description"] or "",
+            "last_active": _iso_to_epoch(r["last_active_ts"]),
+        }
+    return chosen
+
+
+def _mail_agent_for(name: str) -> dict | None:
+    """agentmail_state()'s entry for one name, without reading every agent and
+    the last instruction of each."""
+    if not os.path.exists(DB_PATH):
+        return None
+    con = None
+    try:
+        con = _db()
+        con.row_factory = sqlite3.Row
+        return _mail_registrations(con, name).get(name)
+    except sqlite3.Error:
+        return None
+    finally:
+        if con is not None:
+            con.close()
+
+
+def lookup_agent(name: str) -> dict | None:
+    """One agent's name, category, running, attached and program, by name and
+    however old it is: the same verdict build_agents(None) gives that row,
+    without building every row of the whole history (each with its resume
+    capability and Mail fields). It still reads the tmux snapshot (every
+    session, as the roster does) and one Mail registration; what it no longer
+    does is the per-row work for every agent ever registered. exit/kill/jump need only this; under load the
+    whole history took over ten seconds (2026-10-02, a bulk exit reported
+    failed while the cockpit's relay gave up after six)."""
+    s = tmux_state().get(name)
+    if s is not None:
+        m = _mail_agent_for(name)
+        process_tree = _process_tree_snapshot() if m is not None else None
+        program, cat, running, _ = _tmux_row_state(name, s, m, process_tree)
+        return {"name": name, "category": cat, "running": running,
+                "attached": s["attached"], "program": program}
+    project_key = _project_key()
+    if not project_key:
+        return None
+    con = None
+    try:
+        con = _db()
+        con.row_factory = sqlite3.Row
+        retired_flag = "a.retired_at IS NOT NULL" if _has_retired_at() else "0"
+        r = con.execute(
+            f"""
+            SELECT a.name, a.model, a.program, {retired_flag} AS retired
+            FROM agents a JOIN projects p ON a.project_id = p.id
+            WHERE p.human_key = ? AND a.name = ?
+            ORDER BY a.last_active_ts DESC LIMIT 1
+            """,
+            (project_key, name),
+        ).fetchone()
+    finally:
+        if con is not None:
+            con.close()
+    if r is None:
+        return None
+    row = {"name": name, "category": "retired" if r["retired"] else "gone",
+           "running": False, "attached": False, "program": r["program"] or "",
+           "model": r["model"]}
+    runtime = None if r["retired"] else _codex_app_runtimes().get(name)
+    if runtime:
+        _apply_codex_app_runtime(row, runtime)
+    return row
+
+
 @_with_registration_batch
 def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict]:
     """Roster rows for the DECK. Live tmux sessions always appear; agents known
@@ -1348,35 +1473,14 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
     rows = []
     for name, s in sessions.items():
         m = mail_agents.get(name)
-        program = (m or {}).get("program") or ""
-        agent_alive = (
-            _agent_process_alive(s.get("pane_pid"), process_tree, program)
-            if m is not None
-            else None
-        )
-        cat = classify(
-            name, s["cmd"], s["title"], m is not None,
-            program=program, agent_alive=agent_alive,
-        )
+        program, cat, running, watcher_health = _tmux_row_state(name, s, m, process_tree)
         title = s["title"].strip()
         # ペインタイトルがコマンド名そのものや空ならライブ表示としては無意味
         live = ""
         if title and title not in (s["cmd"], name) and not title.startswith("/"):
             live = title
-        running = s["cmd"] in ("node", "claude") or (
-            bool(title) and _is_activity_glyph(title[:1])
-        )
-        if agent_alive is not None:
-            running = agent_alive
-        if name == "mail-watcher":
-            watcher_health = mail_watcher_health()
-            running = bool(watcher_health.get("watcher_running"))
-            if not live and watcher_health.get("watcher_mode"):
-                live = f"watcher: {watcher_health['watcher_mode']}"
-        # If process-tree measurement was unavailable, classify() preserves
-        # the historical fail-safe category; keep running in sync with it.
-        if not running and cat == "agent":
-            running = True
+        if watcher_health is not None and not live and watcher_health.get("watcher_mode"):
+            live = f"watcher: {watcher_health['watcher_mode']}"
         last_active = max(
             s["activity"],
             m["last_active"] if m else 0,
@@ -1494,16 +1598,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 # are allowed to promote it from gone/retired.
                 runtime = None if r["retired"] else codex_apps.get(r["name"])
                 if runtime:
-                    app_live = _codex_app_live(runtime)
-                    row.update(cmd="codex-app", live=app_live["live"],
-                               surface="codex-app", model=runtime["model"],
-                               model_raw=runtime["model"],
-                               provider=_provider_of(runtime["model"]))
-                    if app_live["running"]:
-                        row.update(category="agent", running=True,
-                                   act_state=app_live["act_state"])
-                    else:
-                        row.update(category="finished")
+                    _apply_codex_app_runtime(row, runtime)
                 rows.append(row)
         except Exception:
             pass  # 失敗しても tmux ベースの rows は返す
@@ -6057,10 +6152,8 @@ def do_jump(session: str, *, open_terminal: bool | None = None) -> dict:
     # 独自 running 判定を書かない＝2026-05-20 自己kill 事故の教訓）。
     cat = None
     try:
-        for r in build_agents(None):  # by name: however old the agent is
-            if r["name"] == session:
-                cat = r["category"]
-                break
+        found = lookup_agent(session)  # by name: however old the agent is
+        cat = found["category"] if found else None
     except Exception:  # noqa: BLE001
         cat = None
     # Claude/Codex finished sessions are husks whose provider-native resume
@@ -6142,10 +6235,7 @@ def do_kill(session: str, mode: str = "both") -> dict:
     # glyph) を信頼源として再利用する。
     target = None
     try:
-        for r in build_agents(None):  # by name: however old the agent is
-            if r["name"] == session:
-                target = r
-                break
+        target = lookup_agent(session)  # by name: however old the agent is
     except Exception as e:
         return {"ok": False, "error": f"failed to enumerate agents: {e}"}
     if target is None:
@@ -7842,10 +7932,7 @@ def do_exit(session: str) -> dict:
 
     target = None
     try:
-        for r in build_agents(None):  # by name: however old the agent is
-            if r["name"] == session:
-                target = r
-                break
+        target = lookup_agent(session)  # by name: however old the agent is
     except Exception as e:
         return {"ok": False, "error": f"failed to enumerate agents: {e}"}
     if target is None:
