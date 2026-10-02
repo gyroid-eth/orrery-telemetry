@@ -3416,6 +3416,7 @@ verify_native_mail_candidate_offline() {
 # render, that is consistent and is left alone; otherwise the previous build
 # is put back, as after a failed switch.
 MAIL_UPDATE_SWITCH_ARMED=false
+MAIL_UPDATE_STOPPED_AT=""
 
 mail_update_switch_interrupted() {
   trap - INT TERM HUP
@@ -3423,6 +3424,7 @@ mail_update_switch_interrupted() {
   if [[ "$(installed_env_mail_env)" == "$NATIVE_MAIL_ENV" ]] && \
      native_mail_serving_render "$NATIVE_MAIL_RUNNER"; then
     warn "installer interrupted after ORRERY Mail was switched; $NATIVE_MAIL_ENV is serving and env.sh names it. Re-run install.sh to finish the rest of the install"
+    mail_update_interrupted_hint
     exit 130
   fi
   MAIL_UPDATE_REASON="the installer was interrupted during the switch"
@@ -3430,6 +3432,7 @@ mail_update_switch_interrupted() {
   mail_update_use OLD
   write_enrollment_connection_profile
   warn "installer interrupted; ORRERY Mail was restored to $NATIVE_MAIL_ENV, which env.sh still names. Re-run install.sh --update-mail to try again"
+  mail_update_interrupted_hint
   exit 130
 }
 
@@ -3458,12 +3461,14 @@ switch_native_mail() {
   native_mail_serving_render "$NATIVE_MAIL_RUNNER"
 }
 
+# Monotonic, so a clock adjustment during the switch cannot bend the outage.
+# CLOCK_MONOTONIC is one clock for the whole system, so two processes compare.
 mail_update_clock() {
-  "$PYTHON_BIN" -c 'import time; print(time.time())'
+  "$PYTHON_BIN" -c 'import time; print(time.monotonic())'
 }
 
 mail_update_elapsed() {  # mail_update_elapsed <start from mail_update_clock>
-  "$PYTHON_BIN" -c 'import sys, time; print(f"{time.time() - float(sys.argv[1]):.1f}")' "$1"
+  "$PYTHON_BIN" -c 'import sys, time; print(f"{time.monotonic() - float(sys.argv[1]):.1f}")' "$1"
 }
 
 # setup.sh shows these same lines after a switch or a rollback; this function
@@ -3480,6 +3485,15 @@ mail_update_reconnect_hint() {
   say "  if it shows disconnected: /mcp, then orrery-mail, then reconnect. Children (through the proxy) and Codex reconnect on their next call"
   say "  a Mail call that failed meanwhile may still have been carried out (only the answer was lost): check before repeating it --"
   say "  a send in the recipient's inbox or your outbox, a registration with whois, a spawn or resume in the dashboard"
+}
+
+# An interrupted switch stopped Mail too: running sessions need the same
+# check. The outage is measured when the stop time is known.
+mail_update_interrupted_hint() {
+  MAIL_UPDATE_OUTAGE_SECONDS="?"
+  [[ -z "$MAIL_UPDATE_STOPPED_AT" ]] || \
+    MAIL_UPDATE_OUTAGE_SECONDS="$(mail_update_elapsed "$MAIL_UPDATE_STOPPED_AT" 2>/dev/null || echo "?")"
+  mail_update_reconnect_hint
 }
 
 # Put the build that was running back. Its render, runner and candidate were
@@ -3545,8 +3559,11 @@ update_native_mail() {
   # testing (2026-10-02), so auto keeps well under that.
   local budget estimate
   budget="${AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET:-8}"
-  estimate="$("$PYTHON_BIN" -c 'import math, sys; print(math.ceil(float(sys.argv[1] or 0) + 1.5))' "${MAIL_UPDATE_START_SECONDS:-}" 2>/dev/null || echo 0)"
-  if [[ "$MAIL_UPDATE_MODE" == auto && ! "$budget" =~ ^[0-9]+$ ]]; then
+  estimate="$("$PYTHON_BIN" -c 'import math, sys; print(math.ceil(float(sys.argv[1] or 0) + 1.5))' "${MAIL_UPDATE_START_SECONDS:-}" 2>/dev/null || echo 9999)"
+  [[ "$estimate" =~ ^[0-9]{1,4}$ ]] || estimate=9999
+  # Decimal on purpose: bash arithmetic reads 08 as a bad octal number, and an
+  # arithmetic error in a test is false -- which would switch over budget.
+  if [[ "$MAIL_UPDATE_MODE" == auto && ! "$budget" =~ ^[0-9]{1,4}$ ]]; then
     MAIL_UPDATE_RESULT="not-switched"
     MAIL_RESULT_CODE=outage_over_budget
     MAIL_UPDATE_REASON="AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET is not a number of seconds: $budget"
@@ -3554,7 +3571,7 @@ update_native_mail() {
     mail_update_use OLD
     return
   fi
-  if [[ "$MAIL_UPDATE_MODE" == auto ]] && (( estimate > budget )); then
+  if [[ "$MAIL_UPDATE_MODE" == auto ]] && ! (( 10#$estimate <= 10#$budget )); then
     MAIL_UPDATE_RESULT="not-switched"
     MAIL_RESULT_CODE=outage_over_budget
     MAIL_UPDATE_REASON="the switch would stop ORRERY Mail for about ${estimate}s, over the ${budget}s budget"
@@ -3579,18 +3596,17 @@ update_native_mail() {
   # Disarmed in main once env.sh names the serving build.
   MAIL_UPDATE_SWITCH_ARMED=true
   trap mail_update_switch_interrupted INT TERM HUP
-  local stopped_at
-  stopped_at="$(mail_update_clock)"
+  MAIL_UPDATE_STOPPED_AT="$(mail_update_clock)"
   if switch_native_mail; then
     MAIL_UPDATE_RESULT="switched"
-    MAIL_UPDATE_OUTAGE_SECONDS="$(mail_update_elapsed "$stopped_at")"
+    MAIL_UPDATE_OUTAGE_SECONDS="$(mail_update_elapsed "$MAIL_UPDATE_STOPPED_AT")"
     say "ORRERY Mail switched from $OLD_NATIVE_MAIL_SOURCE_ID to $NATIVE_MAIL_SOURCE_ID (unavailable for ${MAIL_UPDATE_OUTAGE_SECONDS}s)"
     mail_update_reconnect_hint
     return
   fi
   mail_update_disarm_switch
   rollback_native_mail
-  MAIL_UPDATE_OUTAGE_SECONDS="$(mail_update_elapsed "$stopped_at")"
+  MAIL_UPDATE_OUTAGE_SECONDS="$(mail_update_elapsed "$MAIL_UPDATE_STOPPED_AT")"
   MAIL_UPDATE_RESULT="rolled-back"
   MAIL_RESULT_CODE=start_failed_rolled_back
   mail_update_use OLD
@@ -4990,10 +5006,10 @@ main() {
       report_managed_instructions
     fi
   fi
-  print_mail_result
   case "$MAIL_UPDATE_RESULT" in
     not-switched|rolled-back)
       if [[ "$MAIL_UPDATE_MODE" == auto ]]; then
+        print_mail_result
         # auto chose not to, or could not, switch: the install itself is done
         # and Mail is serving its previous build.
         warn "ORRERY Mail was not updated ($MAIL_UPDATE_RESULT): $MAIL_UPDATE_REASON"
@@ -5008,6 +5024,7 @@ main() {
       exit 1
       ;;
   esac
+  print_mail_result
 }
 
 # The last line about ORRERY Mail, for setup.sh/update.sh to read instead of

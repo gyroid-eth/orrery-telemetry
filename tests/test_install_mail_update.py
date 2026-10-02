@@ -393,6 +393,9 @@ def test_update_rolls_back_when_the_new_build_does_not_serve(tmp_path):
         assert "restoring the previous ORRERY Mail build" in rolled.stderr
         assert "restored ORRERY Mail" in rolled.stdout
         assert "ORRERY Mail update rolled-back" in rolled.stderr
+        # A strict update that did not happen prints no result line (exit 1 says it).
+        assert "mail-result:" not in rolled.stdout
+        assert "/mcp shows orrery-mail as connected" in rolled.stdout
         assert stack.runner() == old_runner
         assert _wait_health(stack.mail_url)["database_url"] == health["database_url"]
         assert _generated_env(stack.home)["AGENTSTACK_MAIL_ENV"] == str(
@@ -421,6 +424,7 @@ def test_update_that_fails_offline_never_stops_the_running_build(tmp_path):
         assert refused.returncode == 1, refused.stdout + refused.stderr
         assert "ORRERY Mail was not switched" in refused.stderr
         assert "ORRERY Mail update not-switched" in refused.stderr
+        assert "mail-result:" not in refused.stdout
         # Never stopped: same runner process, no backup taken.
         assert stack.pid() == pid_before
         assert stack.runner() == str(old_render / "run-agentstack-mail.sh")
@@ -595,6 +599,7 @@ def test_update_never_uses_an_occupied_scratch_port_or_the_live_one(tmp_path):
         assert refused.returncode == 1, refused.stdout + refused.stderr
         assert f"the scratch port {busy} is in use; nothing was started on it" in refused.stderr
         assert "ORRERY Mail update not-switched" in refused.stderr
+        assert "mail-result:" not in refused.stdout
 
         live = stack.install(
             "fixture-new", "--update-mail",
@@ -717,6 +722,10 @@ def test_an_interrupted_switch_restores_the_previous_build(tmp_path, how):
         code, out, err = _interrupt(process, how)
         assert code == 130, out + err
         assert "ORRERY Mail was restored to" in err
+        # Mail was stopped, so running sessions need the same check as after a switch.
+        assert "/mcp shows orrery-mail as connected" in out
+        assert "check before repeating it" in out
+        assert "mail-result:" not in out
         assert stack.runner() == str(old_render / "run-agentstack-mail.sh")
         assert _wait_health(stack.mail_url)["database_url"] == health["database_url"]
         assert _generated_env(stack.home)["AGENTSTACK_MAIL_ENV"] == str(
@@ -996,3 +1005,81 @@ def test_unknown_mail_mode_in_the_environment_is_refused():
                          env={**os.environ, "AGENTSTACK_MAIL_UPDATE": "sometimes"},
                          text=True, capture_output=True, check=False, timeout=30)
     assert bad.returncode == 2 and "must be auto, update or keep" in bad.stderr
+
+
+@pytest.mark.parametrize("budget", ["09", "0009"])
+def test_a_budget_with_a_leading_zero_is_read_as_decimal(tmp_path, budget):
+    """bash reads 09 as a bad octal number; an arithmetic error in a test is
+    false, which once let auto switch over budget (#176 review)."""
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    real = pathlib.Path(sys.executable).parent / "agentstack-mail"
+    # Answers health after about 8 s offline, so the expected outage is 10 s or
+    # more: over a nine-second budget.
+    _candidate(stack.service_root, "fixture-slow",
+               broken={"agentstack-mail": f"#!/bin/sh\nsleep 7\nexec {real} \"$@\"\n"})
+    try:
+        _first_install(stack)
+        pid = stack.pid()
+        run = stack.install("fixture-slow", "--mail", "auto",
+                            extra={"AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET": budget})
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert "value too great for base" not in run.stderr
+        assert _result_line(run.stdout)["result"] == "refused", run.stdout
+        assert _result_line(run.stdout)["reason"] == "outage_over_budget"
+        assert f"over the {budget}s budget" in run.stderr
+        assert stack.pid() == pid
+        assert not (stack.service_root / "backups").exists()
+    finally:
+        stack.teardown()
+
+
+@pytest.mark.parametrize("budget", ["8s", "-1", "99999", "1e3"])
+def test_a_budget_that_is_not_a_small_decimal_refuses_before_stopping(tmp_path, budget):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        _first_install(stack)
+        pid = stack.pid()
+        run = stack.install("fixture-new", "--mail", "auto",
+                            extra={"AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET": budget})
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert _result_line(run.stdout)["reason"] == "outage_over_budget"
+        assert "is not a number of seconds" in run.stderr
+        assert stack.pid() == pid
+    finally:
+        stack.teardown()
+
+
+def _handler(serving: bool) -> subprocess.CompletedProcess[str]:
+    """The real interrupt handler, with the controller and probes stubbed."""
+    functions = ("mail_update_switch_interrupted mail_update_interrupted_hint "
+                 "mail_update_reconnect_hint mail_update_clock mail_update_elapsed")
+    current = "/new/service.env" if serving else "/old/service.env"
+    script = "\n".join([
+        "set -uo pipefail",
+        f"PYTHON_BIN={shlex.quote(sys.executable)}",
+        f"for f in {functions}; do eval \"$(sed -n \"/^$f()/,/^}}/p\" {INSTALLER})\"; done",
+        "say() { printf '%s\\n' \"$*\"; }",
+        "warn() { printf 'warning: %s\\n' \"$*\" >&2; }",
+        "NATIVE_MAIL_ENV=/new/service.env NATIVE_MAIL_RUNNER=/new/run",
+        f"installed_env_mail_env() {{ echo {current}; }}",
+        "native_mail_serving_render() { return 0; }",
+        "rollback_native_mail() { echo ROLLED_BACK; }",
+        "mail_update_use() { NATIVE_MAIL_ENV=/old/service.env; }",
+        "write_enrollment_connection_profile() { :; }",
+        "MAIL_UPDATE_STOPPED_AT=$(mail_update_clock)",
+        "mail_update_switch_interrupted",
+    ])
+    return subprocess.run(["/bin/bash", "-c", script], text=True, capture_output=True, check=False)
+
+
+@pytest.mark.parametrize("serving", [True, False])
+def test_an_interrupted_switch_always_says_how_to_check_running_sessions(serving):
+    done = _handler(serving)
+    assert done.returncode == 130, done.stdout + done.stderr
+    assert ("ROLLED_BACK" in done.stdout) is not serving
+    assert "/mcp shows orrery-mail as connected" in done.stdout
+    assert "check before repeating it" in done.stdout
+    assert "ORRERY Mail was unavailable for 0." in done.stdout
