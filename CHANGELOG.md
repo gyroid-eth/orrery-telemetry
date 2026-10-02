@@ -10,6 +10,16 @@
 
 ## Unreleased
 
+### Mail なしの再開で、理由と直し方が見えるようにしました
+
+古い（`existing_agent_id` を受け付けない）ORRERY Mail のもとでは、旧形式の state を持つ Claude は、親の有無にかかわらず会話だけで再開されます（MCP なし・hook 無効・Mail なし）。この判定は変えていません。変えたのは見え方です。これまでは理由（`mail_schema_unsupported`）が出ても、直し方は書かれていませんでした。また再開後は、Mail 側の行が retired で `program` が空になるため、走っている行に MAIL UNAVAILABLE が出ていませんでした。いまは、
+
+- `mail_message` と新しい `mail_remedy` に、`./scripts/install.sh --update-mail --dry-run`、続けて `--update-mail` を実行し、会話だけのセッションを終えてから再開し直す手順が入ります。再開前の要約、再開の結果、端末に出る notice のどれにも出ます。会話の中の agent には、その更新を自分で実行しないよう伝えます
+- 再開の button は、会話だけになる場合 `RESUME WITHOUT MAIL` と表示します
+- 走っている行は、`program` が空でも、tmux の目印から MAIL UNAVAILABLE を出します。codex など、ほかの program の行は従来どおりです
+
+credential が無い・保持期限切れの場合は dashboard から直せないので、`mail_remedy` は付きません。
+
 ### 登録のたびに、contact policy の設定が 1 回失敗していました（#51）
 
 登録の helper は `set_contact_policy` を owner token 付きで先に呼んでいました。同梱の ORRERY Mail の `set_contact_policy` は `registration_token` を受け付けないので、この呼び出しは毎回失敗し、token なしの呼び直しで設定されていました。token なしを先に呼び、失敗したときだけ token 付きで呼び直すようにしました。owner token を求める古い Mail にも、2 回目で設定されます。

@@ -33875,6 +33875,7 @@ async function netTick(){
         requested_name:n.requested_name||'',
         surface:n.surface||'',
         mail_status:n.mail_status||'',mail_reason:n.mail_reason||'',mail_message:n.mail_message||'',
+        resume_mode:n.resume_mode||'',
         resumeCapability:n.resume_capability||'provenance_missing'});
     }
     for(const k of[...gmap.keys()])if(!seen.has(k))gmap.delete(k);
@@ -36418,12 +36419,17 @@ function openPanelInner(name){
     openBtn.style.background=unavailable?'transparent':'';
     openBtn.style.color=unavailable?'var(--cyan)':'';
     openBtn.style.boxShadow=unavailable?'none':'';
+    // A conversation-only resume has no Mail; say so on the button itself,
+    // not only in the summary, so the choice is made before the click.
+    const withoutMail=resumeState&&capability==='ready'&&
+      (a.resume_mode||g.resume_mode)==='conversation_only';
     openBtn.textContent=resumeState
       ? (capability==='ready'
-        ? (EMBED_MODE?'RESUME IN COCKPIT':'RESUME')
+        ? (EMBED_MODE?'RESUME IN COCKPIT':'RESUME')+(withoutMail?' WITHOUT MAIL':'')
         : verificationRequired?'VERIFY & RESUME':'RESUME UNAVAILABLE')
       : (EMBED_MODE?'OPEN IN COCKPIT':'OPEN TMUX');
-    openBtn.title=resumeState?capabilityInfo.detail:'Open this live terminal session';
+    openBtn.title=withoutMail?(a.mail_message||g.mail_message||capabilityInfo.detail)
+      :resumeState?capabilityInfo.detail:'Open this live terminal session';
   }
   // gtip 相当のサマリーを tm-summary に描画 (モバイルで hover が効かない救済)
   renderPanelSummary(name, a, g);
