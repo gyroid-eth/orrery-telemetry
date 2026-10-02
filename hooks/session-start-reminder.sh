@@ -268,14 +268,20 @@ restore_retired_identity() {
 # was opened. The lease names the first non-shell ancestor (the provider CLI);
 # a dead PID is simply not a live session.
 write_live_session_lease() {
-    local name="$1" pid="$PPID" comm depth=0 lease
+    local name="$1" pid="$PPID" comm depth=0 lease helper lease_python
+    # The leases share a lock with recovery and pruning (child_resume.py). Only
+    # a missing helper falls back to plain shell; a helper that runs and fails
+    # writes nothing rather than go around the lock (#182 review).
+    helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
+    lease_python="${AGENTSTACK_PYTHON:-$(agentstack_installed_env_value AGENTSTACK_PYTHON 2>/dev/null)}"
+    lease_python="${lease_python:-python3}"
     # Leases outlive their sessions; drop the ones whose CLI has ended, for
     # every identity, so they do not pile up (#152 review P3-a).
     # Also leases from before this machine booted: their PID may now be an
     # unrelated process (child_resume.py prune-leases).
-    if [ ! -f "$HOOKS_DIR/child_resume.py" ] ||
-        ! "${AGENTSTACK_PYTHON:-python3}" "$HOOKS_DIR/child_resume.py" prune-leases \
-            --runtime-dir "$RUNTIME_DIR" >/dev/null 2>&1; then
+    if [ -f "$helper" ]; then
+        "$lease_python" "$helper" prune-leases --runtime-dir "$RUNTIME_DIR" >/dev/null 2>&1 || :
+    else
         for lease in "$RUNTIME_DIR"/live-sessions/*/*; do
             [ -f "$lease" ] || continue
             case "${lease##*/}" in ''|*[!0-9]*) continue ;; esac
@@ -292,9 +298,10 @@ write_live_session_lease() {
             *)
                 # Under the lease lock that recovery and pruning also take
                 # (child_resume.py write-lease); the plain write is the fallback.
-                if [ ! -f "$HOOKS_DIR/child_resume.py" ] ||
-                    ! "${AGENTSTACK_PYTHON:-python3}" "$HOOKS_DIR/child_resume.py" write-lease \
-                        --runtime-dir "$RUNTIME_DIR" --agent-name "$name" --pid "$pid" >/dev/null 2>&1; then
+                if [ -f "$helper" ]; then
+                    "$lease_python" "$helper" write-lease --runtime-dir "$RUNTIME_DIR" \
+                        --agent-name "$name" --pid "$pid" >/dev/null 2>&1 || :
+                else
                     mkdir -p "$RUNTIME_DIR/live-sessions/$name" 2>/dev/null &&
                         : > "$RUNTIME_DIR/live-sessions/$name/$pid" 2>/dev/null
                 fi

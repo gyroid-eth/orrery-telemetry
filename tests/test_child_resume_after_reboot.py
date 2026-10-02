@@ -184,20 +184,40 @@ def _lease_lock_is_held(runtime) -> bool:
         os.close(fd)
 
 
-def test_recovery_takes_its_last_look_and_writes_under_the_lease_lock(resume):
+def test_recovery_reads_the_leases_again_and_writes_under_the_lease_lock(resume, monkeypatch):
     """#182 review: a lease written by SessionStart cannot land between the
-    last liveness check and the write, because the writer takes the same lock."""
+    last look and the write, because the writer takes the same lock. tmux is
+    asked outside the lock, so the lock is held for milliseconds."""
     runtime, registration, launches, calls = resume
     _active_child(runtime, registration)
-    held = []
+    tmux_held, lease_held = [], []
 
     def is_live(_name):
-        held.append(_lease_lock_is_held(runtime))
+        tmux_held.append(_lease_lock_is_held(runtime))
+        return False
+
+    original = child_resume.live_lease
+    monkeypatch.setattr(child_resume, "live_lease",
+                        lambda *a, **k: lease_held.append(_lease_lock_is_held(runtime)) or original(*a, **k))
+    assert child_resume.recover_after_reboot(runtime, is_live=is_live, retention_days=30,
+                                             boot=_boot()) == [(NAME, "retired")]
+    assert tmux_held == [False, False] and lease_held == [True]
+
+
+def test_a_lease_written_just_before_the_last_look_stops_recovery(resume, monkeypatch):
+    runtime, registration, launches, calls = resume
+    _active_child(runtime, registration)
+    looks = []
+
+    def is_live(_name):
+        looks.append(1)
+        if len(looks) == 2:  # a session starts between the last tmux look and the lock
+            child_resume.write_lease(runtime, NAME, os.getpid())
         return False
 
     assert child_resume.recover_after_reboot(runtime, is_live=is_live, retention_days=30,
-                                             boot=_boot()) == [(NAME, "retired")]
-    assert held == [False, True]  # the first look is outside, the last one inside
+                                             boot=_boot()) == []
+    assert _state(runtime)["retired_at"] is None
 
 
 def test_prune_holds_the_lease_lock_while_it_judges_and_removes(tmp_path, monkeypatch):
@@ -212,21 +232,36 @@ def test_prune_holds_the_lease_lock_while_it_judges_and_removes(tmp_path, monkey
     assert held == [True] and not holder.exists()
 
 
-def test_a_lease_writer_waits_for_the_lock_then_writes_anyway(tmp_path):
+def test_a_lease_writer_waits_for_the_lock_and_never_goes_around_it(tmp_path, capsys):
     import threading
 
     with child_resume._LeaseLock(tmp_path):
         done = threading.Event()
         threading.Thread(target=lambda: (child_resume.write_lease(tmp_path, NAME, os.getpid()), done.set()),
                          daemon=True).start()
-        assert not done.wait(0.3)  # blocked while the lock is held
+        assert not done.wait(0.5)  # blocked while the lock is held
+        assert not (tmp_path / "live-sessions" / NAME / str(os.getpid())).exists()
     assert done.wait(5)
     assert (tmp_path / "live-sessions" / NAME / str(os.getpid())).exists()
-    started = time.monotonic()
-    with child_resume._LeaseLock(tmp_path):
-        with child_resume._LeaseLock(tmp_path, wait=0.2) as late:
-            assert late.descriptor is None  # gave up waiting: the caller still writes
-    assert time.monotonic() - started < 2
+
+
+def test_a_long_wait_only_warns(tmp_path, capsys):
+    import threading
+
+    held = child_resume._LeaseLock(tmp_path).__enter__()
+    try:
+        got = threading.Event()
+
+        def wait():
+            with child_resume._LeaseLock(tmp_path, warn_after=0.1):
+                got.set()
+
+        threading.Thread(target=wait, daemon=True).start()
+        assert not got.wait(0.5)  # still waiting, past the warning
+    finally:
+        held.__exit__()
+    assert got.wait(5)
+    assert "still waiting for" in capsys.readouterr().err
 
 
 def test_write_lease_command(tmp_path):

@@ -204,7 +204,7 @@ identity_live_elsewhere() {
     # forced shutdown, stale leases made identities look alive).
     local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}" rc=2
     if [[ -f "$helper" ]]; then
-        "${AGENTSTACK_PYTHON:-python3}" "$helper" live-lease --runtime-dir "$RUNTIME_DIR" \
+        "${AGENTSTACK_PYTHON:-$(agentstack_installed_env_value AGENTSTACK_PYTHON 2>/dev/null || true)}" "$helper" live-lease --runtime-dir "$RUNTIME_DIR" \
             --agent-name "$name" >/dev/null 2>&1 && rc=0 || rc=$?
         case "$rc" in
             0) return 0 ;;

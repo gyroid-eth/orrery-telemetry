@@ -21,7 +21,6 @@ import shutil
 import stat
 import tempfile
 from datetime import date, datetime, time, timedelta, timezone
-import tomllib
 from typing import Any, Callable
 
 
@@ -984,6 +983,14 @@ def purge_expired(runtime_dir: Path, *, now: datetime | None = None) -> list[str
     return removed
 
 
+def _toml():
+    """tomllib, imported where TOML is read: the lease and recovery commands
+    must also run under an older python3 (3.9 on macOS), where it is absent."""
+    import tomllib
+
+    return tomllib
+
+
 def boot_time() -> float | None:
     """When this machine last booted (epoch seconds), or None if unknown."""
     try:
@@ -1074,10 +1081,14 @@ def recover_after_reboot(
                     outcome = "resume_cleared"
                 else:
                     continue
-                # The last look and the write happen under the lease lock, which
+                # A session may have started while this waited for the child's
+                # lock: look again (tmux and leases) before taking the lease lock.
+                if is_live(name) is not False:
+                    continue
+                # Then only the leases again, and the write, under the lease lock
                 # every lease writer takes: no lease can appear in between.
                 with _LeaseLock(runtime_dir):
-                    if is_live(name) is not False:
+                    if live_lease(runtime_dir, name, boot=boot):
                         continue
                     _atomic_json(state_path, state)
                     os.chmod(token_path, 0o600)
@@ -1108,33 +1119,31 @@ class _LeaseLock:
     """One lock for every live-session lease: writing one (SessionStart), removing
     stale ones (prune_leases) and recovery's last look before it changes a
     child's state all hold it, so none of them acts on a lease the other is
-    writing (#182 review). Held for milliseconds. A writer that cannot get it
-    within `wait` seconds writes anyway: a live session keeps its lease, and the
-    others back off on the next pass."""
+    writing (#182 review). Nobody bypasses it. Holders keep it for milliseconds:
+    inside it they only read and write lease files and child state (no tmux, no
+    ps). A waiter that has waited `warn_after` seconds says so once on stderr and
+    keeps waiting."""
 
-    def __init__(self, runtime_dir: Path, *, wait: float | None = None) -> None:
+    def __init__(self, runtime_dir: Path, *, warn_after: float = 10.0) -> None:
         self.root = runtime_dir / "live-sessions"
-        self.wait = wait
+        self.warn_after = warn_after
         self.descriptor: int | None = None
 
     def __enter__(self) -> "_LeaseLock":
+        import sys as _sys
         import time as _time
 
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.descriptor = os.open(self.root / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        if self.wait is None:
-            fcntl.flock(self.descriptor, fcntl.LOCK_EX)
-            return self
-        deadline = _time.monotonic() + self.wait
+        started, warned = _time.monotonic(), False
         while True:
             try:
                 fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return self
             except BlockingIOError:
-                if _time.monotonic() >= deadline:
-                    os.close(self.descriptor)
-                    self.descriptor = None
-                    return self  # write without it rather than lose a live lease
+                if not warned and _time.monotonic() - started >= self.warn_after:
+                    print(f"child_resume: still waiting for {self.root / '.lock'}", file=_sys.stderr)
+                    warned = True
                 _time.sleep(0.02)
 
     def __exit__(self, *_exc: object) -> None:
@@ -1147,8 +1156,7 @@ def write_lease(runtime_dir: Path, agent_name: str, pid: int) -> None:
     """Record that `pid` (a provider CLI) runs `agent_name`, under the lease lock."""
     if not SAFE_NAME.fullmatch(agent_name) or pid <= 1:
         raise ResumeStateError("invalid_identity", "lease name or PID is not valid")
-    # Longer than recovery can hold the lock (its tmux check times out at 2 s).
-    with _LeaseLock(runtime_dir, wait=10.0) as lock:
+    with _LeaseLock(runtime_dir) as lock:
         holder = lock.root / agent_name
         holder.mkdir(mode=0o700, exist_ok=True)
         (holder / str(pid)).write_bytes(b"")
@@ -1444,8 +1452,8 @@ def _worktree_hook_trust(config_text: str, work_dir: Path | None) -> list[str]:
         return []
     worktree, common = found
     try:
-        state = tomllib.loads(config_text).get("hooks", {}).get("state", {})
-    except tomllib.TOMLDecodeError:
+        state = _toml().loads(config_text).get("hooks", {}).get("state", {})
+    except _toml().TOMLDecodeError:
         return []
     if not isinstance(state, dict):
         return []
@@ -1654,14 +1662,14 @@ def _build_home_unlocked(
         config_text = "\n".join(lines) + "\n"
         if overlay_setting.strip():
             try:
-                overlay = tomllib.loads(
+                overlay = _toml().loads(
                     Path(overlay_setting).read_text(encoding="utf-8")
                 )
-                config = tomllib.loads(config_text)
+                config = _toml().loads(config_text)
                 _drop_protected_overlay_tables(overlay)
                 _deep_merge(config, overlay)
                 candidate = _emit_toml(config)
-                tomllib.loads(candidate)
+                _toml().loads(candidate)
                 config_text = candidate
             except Exception as exc:
                 print(
@@ -1673,7 +1681,7 @@ def _build_home_unlocked(
                     file=os.sys.stderr,
                 )
         if mcp_profile == "orrery-only":
-            config = tomllib.loads(config_text)
+            config = _toml().loads(config_text)
             for name, server in config.get("mcp_servers", {}).items():
                 if name == "agentstack" or _looks_like_agent_mail(name):
                     continue
@@ -1686,13 +1694,13 @@ def _build_home_unlocked(
                     plugin["enabled"] = False
             config_text = _emit_toml(config)
         if tools_spec is not None:
-            config = tomllib.loads(config_text)
+            config = _toml().loads(config_text)
             try:
                 tools.codex_apply(config, tools_spec)
             except tools.ToolsError as exc:
                 raise ValueError(str(exc)) from exc
             config_text = _emit_toml(config)
-            tomllib.loads(config_text)
+            _toml().loads(config_text)
         target = temporary / "config.toml"
         target.write_text(config_text, encoding="utf-8")
         os.chmod(target, 0o600)
