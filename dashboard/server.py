@@ -6133,6 +6133,11 @@ def do_jump(session: str, *, open_terminal: bool | None = None) -> dict:
     # read-back for the finished-session policy below as well.
     program = _agent_program(session)
     if program == "codex-app" and session in _codex_app_runtimes():
+        # open:false asks for nothing to be brought forward (the embedded
+        # cockpit asks before every jump): it is running, so say so and leave
+        # the native app where it is.
+        if open_terminal is False:
+            return {"ok": True, "action": "already_running", "terminal": "codex-app"}
         return _open_codex_app(session)
     preference = {} if open_terminal is None else {"open_terminal": open_terminal}
     has_session = _has_session(session)

@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### cockpit に埋め込んだ dashboard の RESUME が何もしていませんでした
+
+ORRERY アプリの cockpit に埋め込まれた dashboard では、RESUME（と VERIFY & RESUME）が cockpit に名前を渡すだけで、この server に再開を頼んでいませんでした。cockpit は tmux に session が現れるのを待つだけなので、retire 済み・gone・husk の agent は何も起きずに戻っていました。埋め込みでは、先に `/api/jump` を `open: false`（端末を開かない）で呼び、server が自分の状態で決めます（動いている session はそのまま、動いていなければ再開、husk なら置き換え）。成功したら cockpit に渡し、断られたら理由を表示して渡しません。画面の DECK や NETWORK の古い表示で判断しません。 `/api/jump` に `open: false` を渡したときは、Codex App の agent でも App を前面に出さず `already_running` を返します（埋め込みの cockpit は従来どおり「Codex App で動いている」と表示します。単独の dashboard の OPEN は変わりません）。埋め込みでの bulk の RESUME も `open: false` で頼みます。単独の dashboard の挙動は変わりません。
+
 ### Codex の hook が大きな payload で「Hook failed（exit 141）」になっていました
 
 ORRERY の Codex App plugin の hook（`run-hook.sh`、子の Codex にも入る）は、payload を pipe で Python に渡します。Python 側が 64 KiB の上限を超えた payload や使わない payload を読み切らずに終わると、書いている側が SIGPIPE で死に、`set -o pipefail` によって hook が exit 141 で終わっていました（162nd のセミナーで、digest-paper の実行中にレビュー役の Codex に複数回）。道具の出力を含む PostToolUse の payload は数百 KB〜数 MB になります。`hook_entry.py` と session の索引の recorder は、使わない payload も最後まで読んでから終わります。recorder が読まずに終わったときに出ていた誤った `recorder_process_failed` も出なくなります。

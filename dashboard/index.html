@@ -33241,7 +33241,23 @@ async function jump(name,ev){
   ev.stopPropagation();
   // Embedded in the ORRERY cockpit, the terminal lives in the host: hand the
   // session over instead of asking this server to open a separate terminal.
+  // The server decides first, headless (open:false), from its own state and
+  // not from this page's snapshots (DECK and NETWORK refresh only while shown,
+  // so either can be stale; #183 review): a running session is left as it is
+  // ("already_running", nothing started), one that is not running is resumed,
+  // and a husk is replaced. The cockpit only waits for the tmux session to
+  // appear, so without this a RESUME did nothing (2026-10-02). A refusal is
+  // shown and not handed over.
   if(EMBED_MODE){
+    try{
+      const r=await fetch('/api/jump',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({session:name,open:false})});
+      const j=await r.json();
+      if(!j.ok){toast('✕ FAIL','> '+(j.error||'unknown'),true);return;}
+      if(j.action!=='already_running')
+        toast('▸ RESUME','> '+name+'  ::  '+(j.mail_message||j.detail||j.action));
+    }catch(e){toast('✕ FAIL','> uplink lost: '+e,true);return;}
     window.parent.postMessage({type:'orrery-jump',name:name},location.origin);
     return;
   }
@@ -33440,9 +33456,10 @@ async function bulkDispatch(kind,names,btn){
   let ok=0,fail=0;const failNames=[];
   for(const nm of names){
     try{
+      // Embedded, a resume stays headless: the cockpit shows the tmux session.
       const r=await fetch(url,{method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({session:nm})});
+        body:JSON.stringify(EMBED_MODE&&kind==='resume'?{session:nm,open:false}:{session:nm})});
       const j=await r.json();
       if(j.ok)ok++;
       else{fail++;failNames.push(nm+':'+(j.error||'?'));console.warn('bulk '+kind+' fail',nm,j);}
