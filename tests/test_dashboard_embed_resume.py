@@ -117,3 +117,22 @@ def test_bulk_resume_is_headless_when_embedded(embed, body):
 def test_bulk_exit_body_is_unchanged():
     out = _run("await bulkDispatch('exit',['LiveCurie'],btn);", embed=True, reply={"ok": True})
     assert out["calls"] == [["/api/exit", {"session": "LiveCurie"}]]
+
+
+@pytest.mark.parametrize("open_terminal,activated", [(False, False), (None, True), (True, True)])
+def test_a_codex_app_agent_is_brought_forward_only_when_asked(monkeypatch, open_terminal, activated):
+    """The embedded cockpit asks with open:false before every jump; that must not
+    bring the native Codex App forward (#183 review). OPEN still does."""
+    from dashboard import server
+
+    opened = []
+    monkeypatch.setattr(server, "_agent_program", lambda _name: "codex-app")
+    monkeypatch.setattr(server, "_codex_app_runtimes", lambda: {"AppCurie": {}})
+    monkeypatch.setattr(server, "_open_codex_app",
+                        lambda name: opened.append(name) or {"ok": True, "action": "opened"})
+    kwargs = {} if open_terminal is None else {"open_terminal": open_terminal}
+    result = server.do_jump("AppCurie", **kwargs)
+    assert result["ok"] is True
+    assert (opened == ["AppCurie"]) is activated
+    if not activated:
+        assert result == {"ok": True, "action": "already_running", "terminal": "codex-app"}
