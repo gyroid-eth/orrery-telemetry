@@ -31,12 +31,14 @@ POLICY = ROOT / "hooks" / "claude_chrome_policy.py"
 REMINDER = ROOT / "hooks" / "session-start-reminder.sh"
 
 # The Claude child's inner launch script before --claude-chrome existed
-# (hooks/spawn_child.sh at 0a43a3c, both launch sites).
+# (hooks/spawn_child.sh at 0a43a3c, both launch sites), except that the
+# binary is now the path the launcher resolved (CLAUDE_CHILD_BIN), bare
+# `claude` when it found none.
 PRE_CHROME_INNER = (
     'export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); '
     '[[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config '
     '"$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); '
-    'claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; '
+    '"${CLAUDE_CHILD_BIN:-claude}" --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"; '
     '/bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'
 )
 CHROME_INNER = PRE_CHROME_INNER.replace(
@@ -56,7 +58,11 @@ def _hooks_with_warm_pool(tmp_path: pathlib.Path) -> pathlib.Path:
     """A hooks dir identical to the repo's plus a warm pool that is always ready.
 
     No warm_pool.sh ships today; the fake proves that a Chrome request skips
-    the claim itself, not merely that no pool exists."""
+    the claim itself, not merely that no pool exists. It implements the
+    `claim-model` contract: it claims only a session whose actual model
+    (FAKE_WARM_ACTUAL, which may differ from what status said) is the one
+    asked for. FAKE_WARM_OLD=1 is a pool with only the old `claim`, and
+    FAKE_WARM_REPORT makes it report something else after claiming."""
     hooks = tmp_path / "hooks"
     hooks.mkdir()
     for entry in (ROOT / "hooks").iterdir():
@@ -65,9 +71,16 @@ def _hooks_with_warm_pool(tmp_path: pathlib.Path) -> pathlib.Path:
         hooks / "warm_pool.sh",
         "#!/bin/bash\n"
         "case \"$1\" in\n"
-        "  status) printf 'opus ready\\nsonnet ready\\n' ;;\n"
+        "  status) printf '%b\\n' \"${FAKE_WARM_STATUS:-opus ready (claude-opus-5-5)\\nsonnet ready (claude-sonnet-5-5)}\" ;;\n"
         "  claim) printf 'claim %s\\n' \"$3\" >> \"$FAKE_WARM_LOG\"; "
         "tmux new-session -d -s \"$3\" warm; printf '%s\\n' \"$3\" ;;\n"
+        "  claim-model)\n"
+        "    [[ -z \"${FAKE_WARM_OLD:-}\" ]] || exit 2\n"
+        "    actual=\" ${FAKE_WARM_ACTUAL:-opus=claude-opus-5-5 sonnet=claude-sonnet-5-5} \"\n"
+        "    [[ \"$actual\" == *\" $2=$4 \"* ]] || exit 1\n"
+        "    printf 'claim-model %s %s\\n' \"$3\" \"$4\" >> \"$FAKE_WARM_LOG\"\n"
+        "    tmux new-session -d -s \"$3\" warm\n"
+        "    printf '%s\\n' \"${FAKE_WARM_REPORT:-$3 $4}\" ;;\n"
         "esac\n",
     )
     return hooks
@@ -126,6 +139,9 @@ def _launch_env(tmp_path, *, codex=False):
     for key in ("AGENTSTACK_CLAUDE_CHILD_CHROME", "AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE"):
         env.pop(key, None)
     env["FAKE_WARM_LOG"] = str(tmp_path / "warm.log")
+    # The aliases (and so the warm pool's expected model) come from the bundled
+    # table, not from whatever the real ~/.claude catalog names today.
+    env["CLAUDE_CONFIG_DIR"] = str(tmp_path / "no-claude-config")
     return env, workdir
 
 
@@ -201,12 +217,14 @@ def test_default_spawn_matches_the_pre_chrome_launcher_exactly(tmp_path):
             _, _, rest = log.partition("\034load-buffer\034")
             prompts[label] = rest.split("\035\n", 1)[1].split("CALL", 1)[0]
         else:
-            # The new one passes the same text as the launch argument instead.
-            for variable in ("CLAUDE_CHILD_PROMPT_FILE=", "CLAUDE_CHILD_SYSTEM_PROMPT="):
+            raw_inner = launch[-1]
+            # The new one passes the same text as the launch argument instead,
+            # and runs the claude path it resolved (bare `claude` if none).
+            for variable in ("CLAUDE_CHILD_PROMPT_FILE=", "CLAUDE_CHILD_SYSTEM_PROMPT=", "CLAUDE_CHILD_BIN="):
                 index = next(i for i, arg in enumerate(launch) if arg.startswith(variable)) - 1
                 assert launch[index] == "-e"
                 del launch[index:index + 2]
-            launch[-1] = launch[-1].replace(ARGV_PROMPT, "")
+            launch[-1] = launch[-1].replace(ARGV_PROMPT, "").replace('"${CLAUDE_CHILD_BIN:-claude}"', "claude")
             prompts[label] = log.split("ARGV_TASK\034600\034", 1)[1].split("CALL", 1)[0]
             assert "\034load-buffer\034" not in log and "\034paste-buffer\034" not in log
         launches[label] = launch
@@ -214,7 +232,7 @@ def test_default_spawn_matches_the_pre_chrome_launcher_exactly(tmp_path):
     # exactly the prompt it got before; only how the prompt travels changed.
     assert launches["new"] == launches["old"]
     assert prompts["new"] == prompts["old"] and "SameChild" in prompts["new"]
-    assert launches["new"][-1].endswith(f"-lc '{PRE_CHROME_INNER}'")
+    assert raw_inner.replace(ARGV_PROMPT, "").endswith(f"-lc '{PRE_CHROME_INNER}'")
 
 
 @pytest.mark.parametrize("warm_model", ["opus", "sonnet"])
@@ -223,7 +241,48 @@ def test_default_spawn_still_claims_a_ready_warm_session(tmp_path, warm_model):
     env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
     result = _spawn(tmp_path, env, workdir, "WarmChild", "--model", warm_model)
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "warm.log").read_text() == "claim WarmChild\n"
+    model = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5"}[warm_model]
+    assert (tmp_path / "warm.log").read_text() == f"claim-model WarmChild {model}\n"
+
+
+@pytest.mark.parametrize("pool", [
+    # status said 5.5, but another spawner's claim / replenish left 6 by the time of the claim.
+    {"FAKE_WARM_ACTUAL": "opus=claude-opus-6 sonnet=claude-sonnet-5-5"},
+    # A pool that cannot be told the model is never claimed from.
+    {"FAKE_WARM_OLD": "1"},
+])
+def test_a_claim_that_cannot_promise_the_model_falls_back_to_cold_start(tmp_path, pool):
+    env, workdir = _launch_env(tmp_path)
+    env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
+    env.update(pool)
+    result = _spawn(tmp_path, env, workdir, "RaceChild", "--model", "opus")
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "warm.log").exists()
+    assert "Cold start" in result.stderr
+    launch = _new_session(env)
+    assert "CLAUDE_CHILD_MODEL=claude-opus-5-5" in launch
+
+
+def test_a_claim_reporting_another_model_is_stopped(tmp_path):
+    env, workdir = _launch_env(tmp_path)
+    env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
+    env["FAKE_WARM_REPORT"] = "LyingChild claude-opus-7"
+    result = _spawn(tmp_path, env, workdir, "LyingChild", "--model", "opus")
+    assert result.returncode != 0
+    assert "reported 'LyingChild claude-opus-7' instead of 'LyingChild claude-opus-5-5'" in result.stderr
+    assert "Cold start" not in result.stderr
+
+
+@pytest.mark.parametrize("status", ["opus ready\nsonnet ready", "opus ready (claude-opus-5)\nsonnet ready (claude-sonnet-5)"])
+def test_a_warm_session_of_another_or_unknown_model_is_not_claimed(tmp_path, status):
+    """A pool started before the aliases moved on would run the old model."""
+    env, workdir = _launch_env(tmp_path)
+    env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
+    env["FAKE_WARM_STATUS"] = status
+    result = _spawn(tmp_path, env, workdir, "ColdChild", "--model", "opus")
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "warm.log").exists()
+    assert "Cold start" in result.stderr
 
 
 def test_chrome_request_skips_a_ready_warm_session_and_adds_chrome(tmp_path):

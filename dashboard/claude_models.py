@@ -7,7 +7,11 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
+import subprocess
+import sys
+import threading
 import time
 
 MODEL_RE = re.compile(r"claude-[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\[1m\])?")
@@ -56,7 +60,21 @@ def _timestamp(value: object) -> bool:
 # Bundled models that belong under "more models" when no fresh catalog says
 # otherwise. Display-only: review this table in the same PR that changes the
 # bundled candidates or the fixed default.
-BUNDLED_OVERFLOW = ("claude-opus-5",)
+BUNDLED_OVERFLOW = ("claude-opus-5", "claude-sonnet-5")
+
+# Where the unversioned family aliases point when no fresh local catalog names
+# the current model of that family. This is the only fixed copy: the launcher,
+# its warm-pool match and the dashboard default all resolve through
+# resolve_alias(). Versioned aliases (sonnet-5, opus-5, [1m]) pin a generation
+# on purpose and stay in spawn_child.sh.
+BUNDLED_ALIASES = {
+    "opus": "claude-opus-5-5",
+    "sonnet": "claude-sonnet-5-5",
+    "haiku": "claude-haiku-4-5-20251001",
+    "fable": "claude-fable-5-1",
+}
+DEFAULT_ALIAS = "opus"
+_VERSION_RE = re.compile(r"[0-9]{1,6}(?:\.[0-9]{1,6}){0,3}")
 
 
 @dataclass(frozen=True)
@@ -66,6 +84,8 @@ class _Snapshot:
     models: tuple[str, ...]
     main: tuple[str, ...]
     overflow: tuple[str, ...]
+    # family -> (model, min_claude_code_version or ""), from "main" rows only.
+    current: tuple[tuple[str, tuple[str, str]], ...] = ()
 
 
 def _read_catalog(path: Path, now_ms: float) -> _Snapshot | None:
@@ -99,7 +119,25 @@ def _read_catalog(path: Path, now_ms: float) -> _Snapshot | None:
         return None
     main = tuple(row["id"] for row in rows if row.get("section") == "main")
     overflow = tuple(row["id"] for row in rows if row.get("section") == "overflow")
-    return _Snapshot(fetched, now_ms < stale, models, main, overflow)
+    current: dict[str, tuple[str, str] | None] = {}
+    for row in rows:
+        family = row.get("short_name")
+        if row.get("section") != "main" or not isinstance(family, str):
+            continue
+        family = family.strip().lower()
+        if family not in BUNDLED_ALIASES:
+            continue
+        if family in current:
+            current[family] = None  # Two current models: ambiguous, so not used.
+            continue
+        minimum = row.get("min_claude_code_version")
+        if (not row["id"].startswith(f"claude-{family}-")
+                or minimum is not None and not (isinstance(minimum, str) and _VERSION_RE.fullmatch(minimum))):
+            current[family] = None  # Inconsistent or unreadable metadata is not evidence.
+            continue
+        current[family] = (row["id"], minimum or "")
+    usable = tuple((family, value) for family, value in current.items() if value is not None)
+    return _Snapshot(fetched, now_ms < stale, models, main, overflow, usable)
 
 
 def _newest_snapshots(
@@ -183,3 +221,198 @@ def resolve_catalog(
     candidates = tuple(dict.fromkeys((*fallback, *models))) if models else fallback
     folded = _display_overflow(candidates, main, overflow, stale_overflow, bundled_overflow)
     return ModelCatalog(candidates, "local_cache" if models else "bundled", overflow=folded)
+
+
+def _parse_cli_version(text: str) -> tuple[int, ...] | None:
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+){1,3})", text.strip())
+    return tuple(int(part) for part in match.group(1).split(".")) if match else None
+
+
+# The child's `claude` as hooks/claude-child-bin.sh last found it (the same
+# script the launcher uses), so requests that must not start a process -- the
+# picker, dry runs -- still check the binary a child will run.
+_BOUND_LOCK = threading.Lock()
+_bound_child_path: str | None = None
+
+
+def bind_child_cli_path(hooks_dir: str, timeout: float = 10.0) -> str | None:
+    """Run hooks/claude-child-bin.sh and remember its answer ("" = none found).
+
+    Starts a login shell, so callers use it only where a process may start:
+    at dashboard start and before a real launch. Without the script (an older
+    hooks dir) the launcher cannot find the binary either, so the answer is
+    "" (version unknown) on both sides. When the script fails or times out,
+    nothing is remembered and None is returned: the caller must not decide a
+    model on an old answer.
+    """
+    global _bound_child_path
+    script = os.path.join(hooks_dir, "claude-child-bin.sh")
+    if not os.path.isfile(script):
+        with _BOUND_LOCK:
+            _bound_child_path = ""
+        return ""
+    try:
+        out = subprocess.run(["/bin/bash", script], stdin=subprocess.DEVNULL, capture_output=True,
+                             text=True, timeout=timeout).stdout.strip().splitlines()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        with _BOUND_LOCK:
+            _bound_child_path = None
+        return None
+    path = out[-1] if out and out[-1].startswith("/") else ""
+    with _BOUND_LOCK:
+        _bound_child_path = path
+    return path
+
+
+def child_cli_path() -> str:
+    """The `claude` a child runs.
+
+    The answer of hooks/claude-child-bin.sh when the dashboard has one;
+    otherwise the same rule without a login shell: ~/.local/bin, then PATH.
+    """
+    with _BOUND_LOCK:
+        bound = _bound_child_path
+    if bound is not None:
+        return bound
+    try:
+        local = Path("~/.local/bin/claude").expanduser()
+        if local.is_file() and os.access(local, os.X_OK):
+            return str(local)
+    except (OSError, RuntimeError):
+        pass
+    return shutil.which("claude") or ""
+
+
+def _probe_cli_version(path: str | None = None) -> tuple[int, ...] | None:
+    """Version of the Claude Code a child would run, from its files, or None.
+
+    Never runs the CLI. The native installer links `claude` to
+    `.../claude/versions/<version>`; an npm install keeps the version in the
+    package's package.json. An empty path means "unknown".
+    """
+    path = child_cli_path() if path is None else path
+    if not path:
+        return None
+    try:
+        real = Path(path).resolve()
+    except (OSError, RuntimeError):
+        return None
+    if real.parent.name == "versions":
+        return _parse_cli_version(real.name)
+    for directory in list(real.parents)[:4]:
+        manifest = directory / "package.json"
+        try:
+            if manifest.is_file() and manifest.stat().st_size <= MAX_BYTES:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and data.get("name") == "@anthropic-ai/claude-code":
+                    version = data.get("version")
+                    return _parse_cli_version(version) if isinstance(version, str) else None
+        except (OSError, ValueError, UnicodeError, RecursionError):
+            return None
+    return None
+
+
+@dataclass(frozen=True)
+class AliasTarget:
+    model: str
+    # "local_catalog" or "bundled"; `note` says why the bundled table was used
+    # or that the catalog was stale.
+    source: str
+    note: str = ""
+
+
+def resolve_alias(family: str, now_ms: float | None = None, cli_version=None) -> AliasTarget:
+    """Formal ID for an unversioned family alias (opus / sonnet / haiku / fable).
+
+    The newest local catalog's single "main" row for the family wins (on
+    the machine where this was written, Claude Code 2.1.287 resolved
+    `--model sonnet` to the same model; provider settings and model
+    overrides can make the CLI differ). Unlike candidate discovery, a stale
+    catalog still counts: Claude Code marks it stale an hour after fetching,
+    which would otherwise send most launches to the bundled table. A stale
+    catalog that names an older generation than the bundled table loses.
+    The bundled table is also used when no catalog names exactly one current
+    model of the family, or when the Claude Code a child runs is older than
+    the row requires. The catalog is the newest in the profile directory; it
+    is not checked against the account currently signed in.
+    """
+    family = family.strip().lower()
+    if family not in BUNDLED_ALIASES:
+        raise ValueError(f"unknown Claude model alias: {family}")
+    bundled = BUNDLED_ALIASES[family]
+    fresh, newest = _newest_snapshots(now_ms)
+    snapshot = fresh or newest
+    if snapshot is None:
+        return AliasTarget(bundled, "bundled", "no readable local Claude Code model catalog")
+    current = dict(snapshot.current).get(family)
+    if current is None:
+        return AliasTarget(bundled, "bundled", f"local catalog names no current {family} model")
+    model, minimum = current
+    if fresh is None:
+        older = _generation(model, family), _generation(bundled, family)
+        if None not in older and older[0] < older[1]:
+            # A stale catalog is not always newer than this release.
+            return AliasTarget(bundled, "bundled", f"stale catalog names an older {family} ({model})")
+    if minimum:
+        version = (cli_version or _probe_cli_version)()
+        required = tuple(int(part) for part in minimum.split("."))
+        if version is not None and version < required:
+            installed = ".".join(map(str, version))
+            return AliasTarget(bundled, "bundled",
+                               f"{model} needs Claude Code {minimum}; installed {installed}")
+    if fresh is None:
+        return AliasTarget(model, "local_catalog", "catalog is stale")
+    return AliasTarget(model, "local_catalog")
+
+
+def _generation(model: str, family: str) -> tuple[int, ...] | None:
+    """claude-opus-5-5 -> (5, 5); None when the ID has no plain version."""
+    parts = []
+    for part in model[len(f"claude-{family}-"):].split("-"):
+        if not part.isdigit() or len(part) > 8:
+            break
+        parts.append(int(part))
+    return tuple(parts) or None
+
+
+def alias_models() -> tuple[str, ...]:
+    """What the unversioned aliases launch now; the dashboard lists them."""
+    return tuple(dict.fromkeys(resolve_alias(family).model for family in BUNDLED_ALIASES))
+
+
+def default_model() -> str:
+    return resolve_alias(DEFAULT_ALIAS).model
+
+
+def alias_note() -> str:
+    """One doctor line: where opus / sonnet / haiku / fable point, and why."""
+    targets = {family: resolve_alias(family) for family in BUNDLED_ALIASES}
+    mapping = ", ".join(f"{family}={target.model}" for family, target in targets.items())
+    reasons = sorted({target.note for target in targets.values() if target.source == "bundled"})
+    if not reasons:
+        stale = any(target.note for target in targets.values())
+        return ("ok: Claude model aliases follow the local Claude Code catalog"
+                f"{' (stale; Claude Code refreshes it when it starts)' if stale else ''}: {mapping}")
+    return (f"note: Claude model aliases use the bundled table for some models ({'; '.join(reasons)}): {mapping}. "
+            "Starting Claude Code refreshes its catalog; a versioned alias such as sonnet-5-5 pins a model.")
+
+
+def main(argv: list[str]) -> int:
+    """`aliases [--claude-bin PATH]`: one `family<TAB>model<TAB>source<TAB>note`
+    line per alias, checking versions against PATH (empty: unknown).
+    `note`: the doctor line."""
+    if argv[:1] == ["aliases"] and (len(argv) == 1 or len(argv) == 3 and argv[1] == "--claude-bin"):
+        path = argv[2] if len(argv) == 3 else None
+        for family in BUNDLED_ALIASES:
+            target = resolve_alias(family, cli_version=lambda: _probe_cli_version(path))
+            print("\t".join((family, target.model, target.source, target.note)))
+    elif argv == ["note"]:
+        print(alias_note())
+    else:
+        print("usage: claude_models.py aliases [--claude-bin PATH] | note", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

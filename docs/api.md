@@ -88,11 +88,12 @@ curl -s http://127.0.0.1:8770/api/spawn-names
   "naming":"adjective+scientist",
   "dirs":["~","/path/to/project"],
   "models":[
-    "claude-sonnet-5",
     "claude-opus-5-5",
-    "claude-opus-5",
+    "claude-sonnet-5-5",
     "claude-haiku-4-5-20251001",
-    "claude-fable-5-1"
+    "claude-fable-5-1",
+    "claude-sonnet-5",
+    "claude-opus-5"
   ],
   "default_model":"claude-opus-5-5",
   "providers":[
@@ -100,7 +101,7 @@ curl -s http://127.0.0.1:8770/api/spawn-names
       "id":"claude",
       "label":"Claude",
       "program":"claude-code",
-      "models":["claude-sonnet-5","claude-opus-5-5","claude-opus-5","claude-haiku-4-5-20251001","claude-fable-5-1"],
+      "models":["claude-opus-5-5","claude-sonnet-5-5","claude-haiku-4-5-20251001","claude-fable-5-1","claude-sonnet-5","claude-opus-5"],
       "default_model":"claude-opus-5-5",
       "efforts":null
     },
@@ -496,7 +497,7 @@ curl -s -X POST http://127.0.0.1:8770/api/spawn \
     "name":"WindyFermi",
     "dir":"/path/to/project",
     "provider":"claude",
-    "model":"claude-sonnet-5",
+    "model":"claude-sonnet-5-5",
     "role":"docs",
     "group":"release",
     "task":"README を検証する",

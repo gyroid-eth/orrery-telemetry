@@ -19,6 +19,15 @@ import pytest
 import dashboard.server as server
 
 
+@pytest.fixture(autouse=True)
+def _no_real_claude_catalog(monkeypatch, tmp_path):
+    """The real ~/.claude model catalog would decide the aliases and the default,
+    and a child claude found by an earlier test would decide its versions."""
+    from dashboard import claude_models
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-config"))
+    monkeypatch.setattr(claude_models, "_bound_child_path", None)
+
+
 def _set_annotation_paths(monkeypatch, tmp_path):
     path = tmp_path / "runtime" / "annotations.json"
     legacy = tmp_path / "dashboard" / "annotations.json"
@@ -125,14 +134,41 @@ def test_spawn_names_uses_launcher_scientist_source(monkeypatch, tmp_path):
     assert "emoji" not in data
 
 
-def test_new_agent_claude_default_matches_cli_launcher():
-    """NEW AGENT preselects the model the CLI launcher uses when none is given."""
-    spawn = (pathlib.Path(__file__).resolve().parent.parent / "hooks/spawn_child.sh").read_text(encoding="utf-8")
-    launcher_default = re.search(r'^CLAUDE_DEFAULT_MODEL="([^"]+)"', spawn, re.M).group(1)
-    assert server._CLAUDE_SPAWN_DEFAULT_MODEL == launcher_default
-    assert server._CLAUDE_SPAWN_DEFAULT_MODEL in server._SPAWN_MODELS
+def _launcher_default(env) -> str:
+    """What spawn_child.sh resolves for an omitted model, run through its own code."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    spawn = (root / "hooks/spawn_child.sh").read_text(encoding="utf-8")
+    catalog = spawn[spawn.index("# --- Child model catalog"):spawn.index("normalize_codex_model() {")]
+    import os, sys
+    result = subprocess.run(
+        ["bash", "-c", catalog + '\nload_claude_aliases || exit 1\nnormalize_claude_model ""\n'],
+        env={**os.environ, **env, "CLAUDE_MODEL_HELPER": str(root / "dashboard/claude_models.py"),
+             "AGENTSTACK_PYTHON": sys.executable},
+        capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+
+
+def test_new_agent_claude_default_matches_cli_launcher(monkeypatch, tmp_path):
+    """NEW AGENT preselects the model the CLI launcher uses when none is given,
+    with or without a local catalog that names a newer Opus."""
+    import os
+    assert _launcher_default({"CLAUDE_CONFIG_DIR": os.environ["CLAUDE_CONFIG_DIR"]}) == "claude-opus-5-5"
     claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
-    assert claude["default_model"] == launcher_default
+    assert claude["default_model"] == "claude-opus-5-5"
+    assert "claude-opus-5-5" in server._SPAWN_MODELS
+
+    profile = tmp_path / "claude"
+    path = profile / "cache/model-catalog/cache.json"
+    path.parent.mkdir(parents=True)
+    now = int(time.time() * 1000)
+    path.write_text(json.dumps({"version": 2, "fetchedAt": now - 1000, "staleAt": now + 3_600_000, "catalog": {
+        "surface": "cc", "config": {"models": [{"id": "claude-opus-6", "section": "main", "short_name": "Opus"}]}}}))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
+    assert _launcher_default({"CLAUDE_CONFIG_DIR": str(profile)}) == "claude-opus-6"
+    claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
+    assert claude["default_model"] == "claude-opus-6"
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    assert server.do_spawn({"parent": "Parent", "task": "work"}) == {"model": "claude-opus-6"}
 
 
 def test_spawn_names_status_means_any_adjective_pair_is_free(monkeypatch, tmp_path):
@@ -246,9 +282,9 @@ def test_claude_overflow_models_are_listed_without_the_default(monkeypatch):
     monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})
     claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
     assert claude["default_model"] == "claude-opus-5-5"
-    # opus-4-8 from the catalog; opus-5 from the bundled table (the catalog
-    # does not list it as main); the default is never folded.
-    assert claude["overflow_models"] == ["claude-opus-5", "claude-opus-4-8"]
+    # opus-4-8 from the catalog; opus-5 and sonnet-5 from the bundled table
+    # (the catalog does not list them as main); the default is never folded.
+    assert claude["overflow_models"] == ["claude-sonnet-5", "claude-opus-5", "claude-opus-4-8"]
     assert "claude-opus-4-8" in claude["models"]
 
 
@@ -1289,3 +1325,139 @@ def test_api_omission_and_sol_use_the_same_cli_default(monkeypatch, version, exp
     if requested is not None:
         payload["model"] = requested
     assert server.do_spawn(payload) == {"ok": True, "model": expected}
+
+
+def _stale_new_opus_catalog(tmp_path, monkeypatch):
+    profile = tmp_path / "stale-claude"
+    path = profile / "cache/model-catalog/cache.json"
+    path.parent.mkdir(parents=True)
+    now = int(time.time() * 1000)
+    path.write_text(json.dumps({"version": 2, "fetchedAt": now - 7_200_000, "staleAt": now - 3_600_000, "catalog": {
+        "surface": "cc", "config": {"models": [{"id": "claude-opus-6", "section": "main", "short_name": "Opus"}]}}}))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
+    launcher_default = _launcher_default({"CLAUDE_CONFIG_DIR": str(profile)})
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Sunny\n\036Curie\n"})())
+    monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    return launcher_default
+
+
+def test_stale_catalog_keeps_picker_default_and_launcher_in_step(monkeypatch, tmp_path):
+    """A stale catalog adds no candidates, but what the aliases launch is listed."""
+    launcher_default = _stale_new_opus_catalog(tmp_path, monkeypatch)
+    monkeypatch.delenv("AGENTSTACK_CLAUDE_MODELS", raising=False)
+    claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
+    assert "claude-opus-6" in claude["models"]
+    assert claude["default_model"] == "claude-opus-6"
+    assert server.do_spawn({"parent": "Parent", "task": "work"}) == {"model": "claude-opus-6"}
+    assert launcher_default == "claude-opus-6"
+
+
+@pytest.mark.parametrize("override,default", [
+    ("claude-opus-5-5,claude-sonnet-5-5", ""),
+    ("claude-opus-6,claude-sonnet-5-5", "claude-opus-6"),
+])
+def test_an_explicit_allow_list_is_not_widened_by_the_aliases(monkeypatch, tmp_path, override, default):
+    _stale_new_opus_catalog(tmp_path, monkeypatch)
+    monkeypatch.setenv("AGENTSTACK_CLAUDE_MODELS", override)
+    claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
+    assert claude["models"] == override.split(",")
+    assert claude["default_model"] == default
+
+
+def test_ui_api_and_launcher_check_the_same_child_claude(monkeypatch, tmp_path):
+    """The dashboard's PATH has a new claude, the child's login shell an old
+    one, and there is no ~/.local/bin/claude: the omitted model must be one
+    the child's claude can run, the same in the picker, the API and the CLI."""
+    import os
+    from dashboard import claude_models
+
+    def native(directory, version):
+        path = tmp_path / directory / "claude" / "versions" / version
+        path.parent.mkdir(parents=True)
+        path.write_text("#!/bin/sh\nexit 99\n")
+        path.chmod(0o755)
+        return path
+
+    old, new = native("child", "2.0.0"), native("service", "9.0.0")
+    (tmp_path / "service-bin").mkdir()
+    (tmp_path / "service-bin/claude").symlink_to(new)
+    login_shell = tmp_path / "login-shell"
+    login_shell.write_text(f"#!/bin/sh\n# what the child's login profile puts first on PATH\necho {old}\n")
+    login_shell.chmod(0o755)
+    profile = tmp_path / "claude"
+    path = profile / "cache/model-catalog/cache.json"
+    path.parent.mkdir(parents=True)
+    now = int(time.time() * 1000)
+    path.write_text(json.dumps({"version": 2, "fetchedAt": now - 1000, "staleAt": now + 3_600_000, "catalog": {
+        "surface": "cc", "config": {"models": [
+            {"id": "claude-opus-6", "section": "main", "short_name": "Opus", "min_claude_code_version": "8.0.0"}]}}}))
+    env = {"CLAUDE_CONFIG_DIR": str(profile), "HOME": str(tmp_path / "home"),
+           "AGENTSTACK_CHILD_SHELL": str(login_shell),
+           "PATH": f"{tmp_path / 'service-bin'}:/usr/bin:/bin"}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    hooks = pathlib.Path(__file__).resolve().parent.parent / "hooks"
+    monkeypatch.setattr(server, "HOOKS_DIR", str(hooks))
+
+    # Before the dashboard has asked the child's shell, it can only guess from its own PATH.
+    assert claude_models.child_cli_path() == str(tmp_path / "service-bin/claude")
+    cli_default = _launcher_default({**env, "CHILD_SHELL": str(login_shell), "HOOKS_DIR": str(hooks)})
+    assert cli_default == "claude-opus-5-5"
+
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    assert server.do_spawn({"parent": "Parent", "task": "work"}) == {"model": cli_default}
+    assert claude_models.child_cli_path() == str(old)
+    names = server.subprocess.run
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Sunny\n\036Curie\n"})())
+    monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})
+    claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
+    assert claude["default_model"] == cli_default
+    monkeypatch.setattr(server.subprocess, "run", names)
+    # A dry run starts no process and uses what was found.
+    preview = server.do_spawn({"parent": "Parent", "task": "work", "dry_run": True})
+    assert preview["model"] == cli_default, preview
+
+
+@pytest.mark.parametrize("failure", ["timeout", "oserror"])
+def test_a_failed_child_claude_check_stops_before_registration(monkeypatch, tmp_path, failure):
+    """An old answer (9.0.0) must not decide the model when the re-check fails."""
+    from dashboard import claude_models
+    monkeypatch.setattr(claude_models, "_bound_child_path", "/old/claude/versions/9.0.0")
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "claude-child-bin.sh").write_text("#!/bin/bash\n")
+
+    def broken(*args, **kwargs):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args[0], 10)
+        raise OSError("no shell")
+
+    monkeypatch.setattr(claude_models.subprocess, "run", broken)
+    monkeypatch.setattr(server, "HOOKS_DIR", str(hooks))
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda *a: pytest.fail("registered without a checked binary"))
+    result = server.do_spawn({"parent": "Parent", "task": "work"})
+    assert result["ok"] is False
+    assert "could not find the claude a child would run" in result["error"]
+    assert claude_models._bound_child_path is None  # The old answer is not reused later.
+
+
+def test_an_explicit_model_or_a_dry_run_does_not_need_the_check(monkeypatch, tmp_path):
+    from dashboard import claude_models
+    monkeypatch.setattr(claude_models.subprocess, "run", lambda *a, **k: pytest.fail("started a process"))
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "claude-child-bin.sh").write_text("#!/bin/bash\n")
+    monkeypatch.setattr(server, "HOOKS_DIR", str(hooks))
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    assert server.do_spawn({"parent": "Parent", "task": "work", "model": "claude-sonnet-5-5"}) == {"model": "claude-sonnet-5-5"}
+    assert server.do_spawn({"parent": "Parent", "task": "work", "dry_run": True}) == {"model": "claude-opus-5-5"}
+
+
+def test_hooks_without_the_script_count_as_unknown_on_both_sides(monkeypatch, tmp_path):
+    from dashboard import claude_models
+    monkeypatch.setattr(claude_models, "_bound_child_path", "/old/claude/versions/9.0.0")
+    monkeypatch.setattr(server, "HOOKS_DIR", str(tmp_path / "old-hooks"))
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    assert server.do_spawn({"parent": "Parent", "task": "work"}) == {"model": "claude-opus-5-5"}
+    assert claude_models._bound_child_path == ""

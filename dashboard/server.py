@@ -35,7 +35,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _dataclass_replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.parse
@@ -66,10 +66,14 @@ QUOTA_SERVICE = _build_quota_service()
 
 try:
     from dashboard.claude_models import (
+        BUNDLED_ALIASES as _CLAUDE_BUNDLED_ALIASES, alias_models as _claude_alias_models,
+        bind_child_cli_path as _bind_claude_child_cli_path, default_model as _claude_alias_default,
         is_model_id as _is_claude_model_id, resolve_catalog as _resolve_claude_catalog,
     )
 except ModuleNotFoundError:  # direct script execution
     from claude_models import (
+        BUNDLED_ALIASES as _CLAUDE_BUNDLED_ALIASES, alias_models as _claude_alias_models,
+        bind_child_cli_path as _bind_claude_child_cli_path, default_model as _claude_alias_default,
         is_model_id as _is_claude_model_id, resolve_catalog as _resolve_claude_catalog,
     )
 
@@ -6236,15 +6240,21 @@ SPAWN_SCRIPT = _env_path(
 SOURCE_REPO = HERE  # vault 外、自前 git の親 repo
 # Claude Code の local catalog が使えない場合の bundled fallback。
 # _SPAWN_MODELS は既存 extension との互換性のため mapping のまま保つ。
-# Matches the CLI launcher default; discovery must not change it.
-_CLAUDE_SPAWN_DEFAULT_MODEL = "claude-opus-5-5"
+# The bundled candidates are the alias table's current models plus the
+# previous generation, so no second copy of the generation names lives here.
 _SPAWN_MODELS = {
-    "claude-sonnet-5": ("claude-code", "claude-sonnet-5"),
-    "claude-opus-5-5": ("claude-code", "claude-opus-5-5"),
-    "claude-opus-5": ("claude-code", "claude-opus-5"),
-    "claude-haiku-4-5-20251001": ("claude-code", "claude-haiku-4-5-20251001"),
-    "claude-fable-5-1": ("claude-code", "claude-fable-5-1"),
+    model: ("claude-code", model)
+    for model in (*_CLAUDE_BUNDLED_ALIASES.values(), "claude-sonnet-5", "claude-opus-5")
 }
+
+
+def _claude_spawn_default_model() -> str:
+    """What the CLI launcher runs for an omitted model: the current Opus.
+
+    It follows the local catalog's designated Opus (its "main" row), never the
+    first entry of a list, so an allow-list's order still cannot change it.
+    """
+    return _claude_alias_default()
 _CODEX_DEFAULT_MODEL = codex_models.DEFAULT_MODEL
 _CODEX_DEFAULT_MODELS = codex_models.DEFAULT_MODELS
 _CODEX_EFFORTS = codex_models.EFFORTS
@@ -6252,7 +6262,13 @@ SPAWN_SCIENTISTS_SCRIPT = os.path.join(os.path.dirname(HERE), "bin", "lib", "age
 
 
 def _claude_catalog():
-    return _resolve_claude_catalog(tuple(_SPAWN_MODELS))
+    catalog = _resolve_claude_catalog(tuple(_SPAWN_MODELS))
+    if catalog.source == "override" or catalog.error:
+        return catalog  # An explicit allow-list is never widened.
+    # What the aliases launch is a candidate even when the catalog that named
+    # it has gone stale, so the picker's default matches the launcher's.
+    extra = tuple(model for model in _claude_alias_models() if model not in catalog.models)
+    return _dataclass_replace(catalog, models=catalog.models + extra) if extra else catalog
 
 
 def _claude_models() -> list[str]:
@@ -6260,8 +6276,9 @@ def _claude_models() -> list[str]:
 
 
 def _claude_default_model(models: list[str]) -> str:
-    if _CLAUDE_SPAWN_DEFAULT_MODEL in models:
-        return _CLAUDE_SPAWN_DEFAULT_MODEL
+    default = _claude_spawn_default_model()
+    if default in models:
+        return default
     return ""  # A restrictive override requires an explicit choice, not a new default.
 
 
@@ -7047,8 +7064,16 @@ def do_spawn(payload: dict) -> dict:
     claude_catalog = _claude_catalog() if provider == "claude" else None
     if claude_catalog and claude_catalog.error:
         return {"ok": False, "error": claude_catalog.error}
+    if provider == "claude" and not payload.get("model") and payload.get("dry_run") is not True:
+        # The omitted model becomes a formal ID here, and the launcher passes a
+        # formal ID through unchecked: decide it against the claude the child
+        # will run, found the way the launcher finds it. Without that answer,
+        # stop before registering rather than decide on an old one.
+        if _bind_claude_child_cli_path(HOOKS_DIR) is None:
+            return {"ok": False, "error": "could not find the claude a child would run "
+                    "(hooks/claude-child-bin.sh failed); choose a model explicitly or retry"}
     default_model = (
-        _CLAUDE_SPAWN_DEFAULT_MODEL
+        _claude_spawn_default_model()
         if provider == "claude"
         else ""  # Codex resolves its default from the current local catalog.
     )
@@ -8708,6 +8733,9 @@ def main():
         # Optional cleanup must not prevent startup on hosts without pkill.
         pass
     threading.Thread(target=_ttyd_reaper, daemon=True).start()
+    # The picker's Claude default checks the claude a child runs; find it once
+    # here, where starting a login shell is allowed (requests may not).
+    threading.Thread(target=_bind_claude_child_cli_path, args=(HOOKS_DIR,), daemon=True).start()
     srv = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
     print(f"agent-dashboard listening on http://{BIND_HOST}:{PORT}/")
     try:

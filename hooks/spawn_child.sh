@@ -34,17 +34,21 @@
 #   これは子への方針であって、技術的な隔離ではない。
 #
 # モデル指定（--model。Codex は CLI 0.159.0+ なら gpt-6.1-sol 既定、古ければ gpt-6-sol）:
-#   --model 省略/opus    → claude-opus-5-5（200K。warm pool 対象）
+#   --model 省略/opus    → 現行の Opus（ローカルの Claude Code model catalog の main 行。
+#                          読めなければ dashboard/claude_models.py の同梱表。warm pool 対象）
+#   --model opus-5-5 / opus55 → claude-opus-5-5（版つき。追従しない）
 #   --model opus[1m]     → claude-opus-4-8[1m]（legacy 1M。要シングルクォート: glob 回避）
 #   --model opus-1m      → claude-opus-4-8[1m]（旧来の friendly 表記を正規化）
 #   --model opus-5-5[1m] → claude-opus-5-5[1m]（current 1M。要シングルクォート: glob 回避）
 #   --model claude-opus-5 / opus-5 → 旧 200K Opus を明示指定（引き続き有効）
-#   --model sonnet       → claude-sonnet-5（200K。warm pool 対象）
-#   --model haiku/fable  → claude-haiku-4-5-20251001 / claude-fable-5-1
+#   --model sonnet       → 現行の Sonnet（opus と同じ解決。warm pool 対象）
+#   --model sonnet-5-5 / sonnet55 → claude-sonnet-5-5、sonnet-5 / sonnet5 → claude-sonnet-5（版つき）
+#   --model haiku/fable  → 現行の Haiku / Fable（同じ解決）。haiku-4-5 / fable-5-1 は版つき
+#   版の区切りは . でもよい（sonnet-5.5 / sonnet5.5 / opus-5.5 → それぞれ 5-5 と同じ）
 #   --codex --model 省略 → gpt-6.1-sol（CLI が古ければ gpt-6-sol、版不明なら catalog 判定）。sol も同じ。luna / astra → GPT-6、terra → GPT-5.6。
 #   未知の形             → 明確なエラーで停止（claude-* 接頭の正式 ID は前方互換で素通り）
 #   ※ 正規化は normalize_claude_model() / normalize_codex_model() が担当。warm pool は要求モデルが
-#     事前起動モデル（opus=claude-opus-5-5/200K, sonnet=claude-sonnet-5/200K）と
+#     事前起動モデル（opus / sonnet の別名の解決結果）と
 #     完全一致するときだけ claim する（[1m]/fable 等は cold-start で正しく起動）。
 #
 # リソース管理:
@@ -85,6 +89,7 @@ set -euo pipefail
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # Policy belongs to this launcher version, not an optional hooks override.
 CODEX_MODEL_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/dashboard/codex_models.py"
+CLAUDE_MODEL_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/dashboard/claude_models.py"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
@@ -868,10 +873,15 @@ prepare_codex_launch_binding() {
 }
 
 # --- Child model catalog -------------------------------------------------
-# Keep defaults and warm-pool identities here. Both launch paths normalize
-# through the functions below instead of carrying their own generation names.
-CLAUDE_DEFAULT_MODEL="claude-opus-5-5"
-CLAUDE_DEFAULT_SONNET_MODEL="claude-sonnet-5"
+# Both launch paths normalize through the functions below instead of carrying
+# their own generation names. The unversioned aliases (omitted / opus / sonnet
+# / haiku / fable) and the warm-pool identities are not fixed here: they come
+# from dashboard/claude_models.py (local Claude Code catalog, else its bundled
+# table) via load_claude_aliases. The IDs below are versioned aliases, which
+# pin a generation on purpose.
+CLAUDE_OPUS_5_5_MODEL="claude-opus-5-5"
+CLAUDE_SONNET_5_5_MODEL="claude-sonnet-5-5"
+CLAUDE_SONNET_5_MODEL="claude-sonnet-5"
 CLAUDE_CURRENT_OPUS_1M_MODEL="claude-opus-5-5[1m]"
 CLAUDE_LEGACY_OPUS_5_MODEL="claude-opus-5"
 CLAUDE_LEGACY_OPUS_5_1M_MODEL="claude-opus-5[1m]"
@@ -879,15 +889,110 @@ CLAUDE_LEGACY_OPUS_MODEL="claude-opus-4-8"
 CLAUDE_LEGACY_OPUS_1M_MODEL="claude-opus-4-8[1m]"
 CLAUDE_LEGACY_SONNET_MODEL="claude-sonnet-4-6"
 CLAUDE_LEGACY_SONNET_1M_MODEL="claude-sonnet-4-6[1m]"
-CLAUDE_HAIKU_MODEL="claude-haiku-4-5-20251001"
-CLAUDE_FABLE_MODEL="claude-fable-5-1"
-CLAUDE_WARM_OPUS_MODEL="$CLAUDE_DEFAULT_MODEL"
-CLAUDE_WARM_SONNET_MODEL="$CLAUDE_DEFAULT_SONNET_MODEL"
+CLAUDE_HAIKU_4_5_MODEL="claude-haiku-4-5-20251001"
+CLAUDE_FABLE_5_1_MODEL="claude-fable-5-1"
+CLAUDE_ALIASES_LOADED=false
+CLAUDE_ALIAS_OPUS="" CLAUDE_ALIAS_SONNET="" CLAUDE_ALIAS_HAIKU="" CLAUDE_ALIAS_FABLE=""
+CLAUDE_WARM_OPUS_MODEL="" CLAUDE_WARM_SONNET_MODEL=""
 # Codex candidates, aliases and effort policy live in dashboard/codex_models.py.
+
+# Resolve the unversioned aliases once, in the launching shell (not in a
+# command substitution, or the result would be lost). Fails closed: a guessed
+# model would launch something the operator did not ask for.
+load_claude_aliases() {
+    [[ "$CLAUDE_ALIASES_LOADED" == true ]] && return 0
+    local out family model source note
+    # Check versions against the binary the child will run, and pin it below.
+    resolve_claude_child_bin
+    if ! out="$("${AGENTSTACK_PYTHON:-python3}" "$CLAUDE_MODEL_HELPER" aliases --claude-bin "$CLAUDE_CHILD_BIN")"; then
+        echo "Error: could not resolve the Claude model aliases with $CLAUDE_MODEL_HELPER" >&2
+        return 1
+    fi
+    while IFS=$'\t' read -r family model source note; do
+        [[ -n "$note" ]] && source="$source: $note"
+        case "$family" in
+            opus)   CLAUDE_ALIAS_OPUS="$model";   CLAUDE_ALIAS_OPUS_ORIGIN="$source" ;;
+            sonnet) CLAUDE_ALIAS_SONNET="$model"; CLAUDE_ALIAS_SONNET_ORIGIN="$source" ;;
+            haiku)  CLAUDE_ALIAS_HAIKU="$model";  CLAUDE_ALIAS_HAIKU_ORIGIN="$source" ;;
+            fable)  CLAUDE_ALIAS_FABLE="$model";  CLAUDE_ALIAS_FABLE_ORIGIN="$source" ;;
+        esac
+    done <<< "$out"
+    if [[ -z "$CLAUDE_ALIAS_OPUS" || -z "$CLAUDE_ALIAS_SONNET" || -z "$CLAUDE_ALIAS_HAIKU" || -z "$CLAUDE_ALIAS_FABLE" ]]; then
+        echo "Error: $CLAUDE_MODEL_HELPER did not resolve every Claude model alias" >&2
+        return 1
+    fi
+    CLAUDE_WARM_OPUS_MODEL="$CLAUDE_ALIAS_OPUS"
+    CLAUDE_WARM_SONNET_MODEL="$CLAUDE_ALIAS_SONNET"
+    CLAUDE_ALIASES_LOADED=true
+}
+
+# The `claude` the child's login shell finds once ~/.local/bin is first on
+# PATH (hooks/claude-child-bin.sh, which the dashboard runs too) --
+# claude_child_launch_command then runs this exact path. Empty when it cannot
+# be found; the child then runs bare `claude` and its version counts as unknown.
+CLAUDE_CHILD_BIN=""
+resolve_claude_child_bin() {
+    CLAUDE_CHILD_BIN=""
+    if ! declare -F claude_child_bin >/dev/null && [[ -f "$HOOKS_DIR/claude-child-bin.sh" ]]; then
+        . "$HOOKS_DIR/claude-child-bin.sh"
+    fi
+    declare -F claude_child_bin >/dev/null || return 0
+    CLAUDE_CHILD_BIN="$(claude_child_bin "$CHILD_SHELL")"
+}
+
+# A warm session may have been started before the catalog changed. The status
+# line for that type must name the exact model ID in parentheses, e.g.
+# "opus ready (claude-opus-5-5)" -- a cheap pre-check only; the claim itself is
+# claim_warm_session below.
+warm_pool_has_model() {
+    local warm_type="$1" model="$2" status="$3"
+    [[ -n "$model" && "$warm_type" != "__skip_warm__" ]] || return 1
+    printf '%s\n' "$status" | grep -E "^[[:space:]]*${warm_type}[^[:alnum:]].*ready" | grep -qF "($model)"
+}
+
+# Claim a warm session started with exactly $3. The pool must implement
+# `claim-model <type> <child> <model>`: claim atomically only a session started
+# with that model, and print "<child> <model>". A pool without it (the older
+# `claim <type> <child>` cannot be told the model) fails here, and the caller
+# cold starts. A claim that reports another model is stopped: that session
+# would run a model other than the one registered.
+claim_warm_session() {
+    local warm_type="$1" child="$2" model="$3" out
+    out="$(bash "$WARM_POOL" claim-model "$warm_type" "$child" "$model" 2>/dev/null)" || return 1
+    out="$(printf '%s\n' "$out" | tail -n 1)"
+    [[ "$out" == "$child $model" ]] && return 0
+    echo "Error: the warm pool claimed a session for $child but reported '${out}' instead of '$child $model'; stopping it" >&2
+    tmux kill-session -t "=$child" 2>/dev/null || true
+    return 2
+}
+
+claude_alias_value() {
+    if [[ -z "${1:-}" ]]; then
+        echo "Error: Claude model aliases were not resolved (load_claude_aliases must run first)" >&2
+        return 1
+    fi
+    printf '%s\n' "$1"
+}
+
+# Say where an unversioned alias pointed, so a stale or unreadable catalog is
+# visible in the launcher output rather than only in the running model.
+report_claude_alias() {
+    local m origin=""
+    m="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    case "$m" in
+        ""|opus) origin="$CLAUDE_ALIAS_OPUS_ORIGIN" ;;
+        sonnet)  origin="$CLAUDE_ALIAS_SONNET_ORIGIN" ;;
+        haiku)   origin="$CLAUDE_ALIAS_HAIKU_ORIGIN" ;;
+        fable)   origin="$CLAUDE_ALIAS_FABLE_ORIGIN" ;;
+        *) return 0 ;;
+    esac
+    echo "[spawn_child] Claude model ${m:-(default opus)} -> $2 ($origin)" >&2
+}
 
 # --- Claude モデル名の正規化 ---
 # friendly エイリアス / 略記を `claude --model` が受け付ける正式 model string に変換する。
-#   - unqualified opus / sonnet track the current 200K generation and warm pool.
+#   - unversioned opus / sonnet / haiku / fable follow load_claude_aliases
+#     (call it first); versioned forms (sonnet-5, opus-5-5 ...) pin a generation.
 #   - generic 1M aliases remain on the known legacy 1M models; old explicit
 #     model IDs remain valid for existing automation.
 #   - 未知の形は stderr に明確なエラーを出して非ゼロで返す（set -e 下で呼び出し側が停止する）。
@@ -898,10 +1003,14 @@ normalize_claude_model() {
     # 小文字化 + 空白除去で正規化キーを作る（出力は固定の正式文字列）
     local m
     m="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    # 「Sonnet 5.5」の版区切り . は - と同じに扱う（sonnet5.5 → sonnet5-5。正式 ID には触れない）
+    case "$m" in claude-*) ;; *) m="${m//./-}" ;; esac
 
     case "$m" in
-        ""|opus|"$CLAUDE_DEFAULT_MODEL")
-            printf '%s\n' "$CLAUDE_DEFAULT_MODEL" ;;
+        ""|opus)
+            claude_alias_value "$CLAUDE_ALIAS_OPUS" || return 1 ;;
+        opus-5-5|opus55|opus5-5|"$CLAUDE_OPUS_5_5_MODEL")
+            printf '%s\n' "$CLAUDE_OPUS_5_5_MODEL" ;;
         opus-5|opus5|"$CLAUDE_LEGACY_OPUS_5_MODEL")
             printf '%s\n' "$CLAUDE_LEGACY_OPUS_5_MODEL" ;;
         opus-1m|opus1m|"opus[1m]"|claude-opus-4-8-1m|"$CLAUDE_LEGACY_OPUS_1M_MODEL")
@@ -910,24 +1019,32 @@ normalize_claude_model() {
             printf '%s\n' "$CLAUDE_LEGACY_OPUS_MODEL" ;;
         opus-5-1m|opus51m|"opus-5[1m]"|"opus5[1m]"|"$CLAUDE_LEGACY_OPUS_5_1M_MODEL")
             printf '%s\n' "$CLAUDE_LEGACY_OPUS_5_1M_MODEL" ;;
-        opus-5-5-1m|opus551m|"opus-5-5[1m]"|"opus55[1m]"|"$CLAUDE_CURRENT_OPUS_1M_MODEL")
+        opus-5-5-1m|opus551m|"opus-5-5[1m]"|"opus55[1m]"|"opus5-5[1m]"|"$CLAUDE_CURRENT_OPUS_1M_MODEL")
             printf '%s\n' "$CLAUDE_CURRENT_OPUS_1M_MODEL" ;;
-        sonnet|sonnet-5|sonnet5|"$CLAUDE_DEFAULT_SONNET_MODEL")
-            printf '%s\n' "$CLAUDE_DEFAULT_SONNET_MODEL" ;;
+        sonnet)
+            claude_alias_value "$CLAUDE_ALIAS_SONNET" || return 1 ;;
+        sonnet-5-5|sonnet55|sonnet5-5|"$CLAUDE_SONNET_5_5_MODEL")
+            printf '%s\n' "$CLAUDE_SONNET_5_5_MODEL" ;;
+        sonnet-5|sonnet5|"$CLAUDE_SONNET_5_MODEL")
+            printf '%s\n' "$CLAUDE_SONNET_5_MODEL" ;;
         sonnet-4-6|sonnet46|"$CLAUDE_LEGACY_SONNET_MODEL")
             printf '%s\n' "$CLAUDE_LEGACY_SONNET_MODEL" ;;
         sonnet-1m|sonnet1m|"sonnet[1m]"|"$CLAUDE_LEGACY_SONNET_1M_MODEL")
             printf '%s\n' "$CLAUDE_LEGACY_SONNET_1M_MODEL" ;;
-        haiku|claude-haiku-4-5|"$CLAUDE_HAIKU_MODEL")
-            printf '%s\n' "$CLAUDE_HAIKU_MODEL" ;;
-        fable|"$CLAUDE_FABLE_MODEL")
-            printf '%s\n' "$CLAUDE_FABLE_MODEL" ;;
+        haiku)
+            claude_alias_value "$CLAUDE_ALIAS_HAIKU" || return 1 ;;
+        haiku-4-5|haiku45|haiku4-5|claude-haiku-4-5|"$CLAUDE_HAIKU_4_5_MODEL")
+            printf '%s\n' "$CLAUDE_HAIKU_4_5_MODEL" ;;
+        fable)
+            claude_alias_value "$CLAUDE_ALIAS_FABLE" || return 1 ;;
+        fable-5-1|fable51|fable5-1|"$CLAUDE_FABLE_5_1_MODEL")
+            printf '%s\n' "$CLAUDE_FABLE_5_1_MODEL" ;;
         *)
             if [[ "$m" == claude-* ]]; then
                 # 正式 ID は前方互換で素通り（新モデル ID 対応）
                 printf '%s\n' "$m"
             else
-                echo "Error: unknown model '$raw'. Valid forms: opus / opus[1m] / opus-5[1m] / opus-5-5[1m] / claude-opus-5 / claude-opus-4-8 / sonnet / sonnet-4-6 / haiku / fable / claude-<id>" >&2
+                echo "Error: unknown model '$raw'. Valid forms: opus / opus-5-5 / opus[1m] / opus-5[1m] / opus-5-5[1m] / claude-opus-5 / claude-opus-4-8 / sonnet / sonnet-5-5 / sonnet-5 / sonnet-4-6 / haiku / fable / claude-<id>" >&2
                 return 1
             fi
             ;;
@@ -2563,7 +2680,7 @@ build_embedded_task_prompt() {
 # text travels in a private file (a tmux environment value has a size limit)
 # that the child's shell reads once and removes.
 claude_child_launch_command() {
-    local inner='export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"'
+    local inner='export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); "${CLAUDE_CHILD_BIN:-claude}" --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"'
     if [[ -n "${CLAUDE_CHILD_TOOL_FLAGS:-}" ]]; then
         inner+=" $CLAUDE_CHILD_TOOL_FLAGS"
     fi
@@ -2731,7 +2848,9 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         CHILD_MODEL="$(AGENTSTACK_CODEX_BIN="$CODEX_BIN_RESOLVED" normalize_codex_model "$CLAUDE_MODEL")"
         CODEX_EFFORT="$(validate_codex_effort "$CHILD_MODEL" "$CODEX_EFFORT")"
     else
+        load_claude_aliases || exit 1
         CHILD_MODEL="$(normalize_claude_model "$CLAUDE_MODEL")"
+        report_claude_alias "$CLAUDE_MODEL" "$CHILD_MODEL"
     fi
     if [[ "$STANDALONE" == true ]]; then
         PARENT_NAME=""
@@ -3085,9 +3204,9 @@ ${TASK}"
     else
         # Claude Code startup (--pre-registered mode).
         WARM_POOL="$HOOKS_DIR/warm_pool.sh"
-        # warm pool は current 200K opus / sonnet generation で
-        # 事前起動している。要求モデル（正規化済み CHILD_MODEL）が warm の事前起動モデルと
-        # 完全一致するときだけ claim する。それ以外（legacy [1m] / fable / haiku /
+        # warm の種類は opus / sonnet の別名の解決結果（load_claude_aliases）で選ぶ。
+        # 事前起動後に catalog が変わることがあるので、claim は pool の status が
+        # 要求モデル（正規化済み CHILD_MODEL）の正式 ID を示すときだけ（warm_pool_has_model）。それ以外（legacy [1m] / fable / haiku /
         # sonnet[1m] 等）は __skip_warm__ で cold-start し、$CLAUDE_CHILD_MODEL を尊重する。
         # 旧実装は部分一致（*opus* + *[1m]* skip）だったため、opus[1m] は skip できても
         # fable 等の非デフォルトモデルが warm-sonnet に握り潰されていた（RainyKepler 事例）。
@@ -3142,13 +3261,17 @@ ${TASK}"
         WARM_CLAIMED=false
         WARM_STATUS=$(bash "$WARM_POOL" status 2>/dev/null || true)
         if [[ "$CLAUDE_CHILD_CHROME" != true && "$CHILD_TOOLS_RESTRICTIVE" != true && -f "$WARM_POOL" ]] \
-            && echo "$WARM_STATUS" | grep -q "${WARM_TYPE}.*ready"; then
-            echo "[spawn_child/pre-reg] Claiming warm pool session ($WARM_TYPE)..." >&2
-            if CLAIMED_NAME=$(bash "$WARM_POOL" claim "$WARM_TYPE" "$CHILD_NAME" 2>/dev/null); then
+            && warm_pool_has_model "$WARM_TYPE" "$CHILD_MODEL" "$WARM_STATUS"; then
+            echo "[spawn_child/pre-reg] Claiming warm pool session ($WARM_TYPE, $CHILD_MODEL)..." >&2
+            WARM_CLAIM_STATUS=0
+            claim_warm_session "$WARM_TYPE" "$CHILD_NAME" "$CHILD_MODEL" || WARM_CLAIM_STATUS=$?
+            if [[ "$WARM_CLAIM_STATUS" == 0 ]]; then
                 WARM_CLAIMED=true
                 PRE_REGISTERED_SESSION_STARTED=true
                 SPAWN_TRAP_SESSION="$CHILD_NAME"
                 echo "[spawn_child/pre-reg] Warm session claimed -> $CHILD_NAME" >&2
+            elif [[ "$WARM_CLAIM_STATUS" == 2 ]]; then
+                exit 1
             fi
         fi
 
@@ -3180,6 +3303,7 @@ ${TASK}"
                 -c "$WORK_DIR" \
                 "${TMUX_ENV_ARGS[@]}" \
                 -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
+                -e "CLAUDE_CHILD_BIN=$CLAUDE_CHILD_BIN" \
                 -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
                 -e "CLAUDE_CHILD_PROMPT_FILE=$CLAUDE_CHILD_PROMPT_FILE" \
                 -e "CLAUDE_CHILD_SYSTEM_PROMPT=$CLAUDE_CHILD_SYSTEM_PROMPT" \
@@ -3534,7 +3658,9 @@ if [[ "$USE_CODEX" == true ]]; then
 else
     CHILD_PROGRAM="claude-code"
     # Claude 子は model catalog の current generation へ正規化する。
+    load_claude_aliases || exit 1
     CHILD_MODEL="$(normalize_claude_model "$CLAUDE_MODEL")"
+    report_claude_alias "$CLAUDE_MODEL" "$CHILD_MODEL"
 fi
 
 if ! CHILD_NAME_CANDIDATE="$(pick_available_child_agent_name)"; then
@@ -3968,6 +4094,7 @@ else
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
         -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
+        -e "CLAUDE_CHILD_BIN=$CLAUDE_CHILD_BIN" \
         -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
         -e "CLAUDE_CHILD_PROMPT_FILE=$CLAUDE_CHILD_PROMPT_FILE" \
         -e "CLAUDE_CHILD_SYSTEM_PROMPT=$CLAUDE_CHILD_SYSTEM_PROMPT" \

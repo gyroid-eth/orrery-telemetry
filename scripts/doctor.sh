@@ -749,6 +749,15 @@ report_codex_history_binding_prereqs "$CODEX_LAUNCHER_BIN" "$CODEX_HOME"
 report_codex_model_default "$INSTALL_DIR/dashboard/codex_models.py" "$CODEX_HOME"
 check_managed_block "Codex AGENTS.md" agentstack-codex-setup CODEX_HOME="$CODEX_HOME"
 
+report_claude_model_aliases() {
+  local helper="$1"
+  if [[ -f "$helper" ]]; then
+    "$PYTHON_BIN" "$helper" note || echo "warn: could not resolve the Claude model aliases with $helper" >&2
+  fi
+}
+
+report_claude_model_aliases "$INSTALL_DIR/dashboard/claude_models.py"
+
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 WORKTREE_ROOT="${AGENTSTACK_WORKTREE_ROOT:-$INSTALL_DIR/worktrees}"
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
