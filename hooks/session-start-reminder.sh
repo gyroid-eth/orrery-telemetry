@@ -290,8 +290,14 @@ write_live_session_lease() {
         case "$comm" in
             ''|bash|sh|zsh|dash|fish|ksh|tcsh|csh) ;;
             *)
-                mkdir -p "$RUNTIME_DIR/live-sessions/$name" 2>/dev/null &&
-                    : > "$RUNTIME_DIR/live-sessions/$name/$pid" 2>/dev/null
+                # Under the lease lock that recovery and pruning also take
+                # (child_resume.py write-lease); the plain write is the fallback.
+                if [ ! -f "$HOOKS_DIR/child_resume.py" ] ||
+                    ! "${AGENTSTACK_PYTHON:-python3}" "$HOOKS_DIR/child_resume.py" write-lease \
+                        --runtime-dir "$RUNTIME_DIR" --agent-name "$name" --pid "$pid" >/dev/null 2>&1; then
+                    mkdir -p "$RUNTIME_DIR/live-sessions/$name" 2>/dev/null &&
+                        : > "$RUNTIME_DIR/live-sessions/$name/$pid" 2>/dev/null
+                fi
                 return 0
                 ;;
         esac

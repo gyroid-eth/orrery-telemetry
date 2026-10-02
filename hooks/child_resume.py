@@ -1074,12 +1074,13 @@ def recover_after_reboot(
                     outcome = "resume_cleared"
                 else:
                     continue
-                # Again, right before writing: a session may have started (and
-                # written its lease) while this waited for the lock.
-                if is_live(name) is not False:
-                    continue
-                _atomic_json(state_path, state)
-                os.chmod(token_path, 0o600)
+                # The last look and the write happen under the lease lock, which
+                # every lease writer takes: no lease can appear in between.
+                with _LeaseLock(runtime_dir):
+                    if is_live(name) is not False:
+                        continue
+                    _atomic_json(state_path, state)
+                    os.chmod(token_path, 0o600)
                 recovered.append((name, outcome))
         except (ResumeStateError, OSError, UnicodeDecodeError):
             continue
@@ -1103,37 +1104,75 @@ def _lease_alive(lease: Path, boot: float | None) -> bool:
         return False
 
 
+class _LeaseLock:
+    """One lock for every live-session lease: writing one (SessionStart), removing
+    stale ones (prune_leases) and recovery's last look before it changes a
+    child's state all hold it, so none of them acts on a lease the other is
+    writing (#182 review). Held for milliseconds. A writer that cannot get it
+    within `wait` seconds writes anyway: a live session keeps its lease, and the
+    others back off on the next pass."""
+
+    def __init__(self, runtime_dir: Path, *, wait: float | None = None) -> None:
+        self.root = runtime_dir / "live-sessions"
+        self.wait = wait
+        self.descriptor: int | None = None
+
+    def __enter__(self) -> "_LeaseLock":
+        import time as _time
+
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.descriptor = os.open(self.root / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        if self.wait is None:
+            fcntl.flock(self.descriptor, fcntl.LOCK_EX)
+            return self
+        deadline = _time.monotonic() + self.wait
+        while True:
+            try:
+                fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except BlockingIOError:
+                if _time.monotonic() >= deadline:
+                    os.close(self.descriptor)
+                    self.descriptor = None
+                    return self  # write without it rather than lose a live lease
+                _time.sleep(0.02)
+
+    def __exit__(self, *_exc: object) -> None:
+        if self.descriptor is not None:
+            os.close(self.descriptor)
+            self.descriptor = None
+
+
+def write_lease(runtime_dir: Path, agent_name: str, pid: int) -> None:
+    """Record that `pid` (a provider CLI) runs `agent_name`, under the lease lock."""
+    if not SAFE_NAME.fullmatch(agent_name) or pid <= 1:
+        raise ResumeStateError("invalid_identity", "lease name or PID is not valid")
+    # Longer than recovery can hold the lock (its tmux check times out at 2 s).
+    with _LeaseLock(runtime_dir, wait=10.0) as lock:
+        holder = lock.root / agent_name
+        holder.mkdir(mode=0o700, exist_ok=True)
+        (holder / str(pid)).write_bytes(b"")
+
+
 def prune_leases(runtime_dir: Path, *, boot: float | None = None) -> None:
     """Drop leases whose process has ended or that predate the last boot."""
     boot = boot_time() if boot is None else boot
     root = runtime_dir / "live-sessions"
-    try:
-        holders = list(root.iterdir()) if root.is_dir() else []
-    except OSError:
+    if not root.is_dir():
         return
-    for holder in holders:
+    with _LeaseLock(runtime_dir):
         try:
-            for lease in holder.iterdir():
-                if not lease.name.isdigit():
-                    continue
-                try:
-                    judged = lease.stat()
-                except OSError:
-                    continue
-                if _lease_alive(lease, boot):
-                    continue
-                # A session may have rewritten this path (a reused PID) since
-                # it was judged; remove only the lease that was judged.
-                try:
-                    now = lease.stat()
-                except OSError:
-                    continue
-                if (now.st_ino, now.st_mtime_ns, now.st_size) != (judged.st_ino, judged.st_mtime_ns, judged.st_size):
-                    continue
-                lease.unlink(missing_ok=True)
-            holder.rmdir()
+            holders = [path for path in root.iterdir() if path.is_dir()]
         except OSError:
-            continue
+            return
+        for holder in holders:
+            try:
+                for lease in holder.iterdir():
+                    if lease.name.isdigit() and not _lease_alive(lease, boot):
+                        lease.unlink(missing_ok=True)
+                holder.rmdir()
+            except OSError:
+                continue
 
 
 def live_lease(runtime_dir: Path, agent_name: str, *, exclude_pid: int | None = None,
@@ -1787,6 +1826,10 @@ def main() -> int:
     purge.add_argument("agent_name", nargs="?")
     prune = sub.add_parser("prune-leases")
     prune.add_argument("--runtime-dir", required=True)
+    write = sub.add_parser("write-lease")
+    write.add_argument("--runtime-dir", required=True)
+    write.add_argument("--agent-name", required=True)
+    write.add_argument("--pid", type=int, required=True)
     lease = sub.add_parser("live-lease")
     lease.add_argument("--runtime-dir", required=True)
     lease.add_argument("--agent-name", required=True)
@@ -1845,6 +1888,8 @@ def main() -> int:
                                      project_key=args.project_key, program=args.program))
         elif args.command == "prune-leases":
             prune_leases(runtime)
+        elif args.command == "write-lease":
+            write_lease(runtime, args.agent_name, args.pid)
         elif args.command == "live-lease":
             if not SAFE_NAME.fullmatch(args.agent_name):
                 return 2

@@ -8760,8 +8760,9 @@ def _child_session_live(name: str, boot: float | None) -> bool | None:
     ignored: its PID may belong to an unrelated process now.
     """
     try:
+        # Under the lease lock: keep it shorter than a lease writer waits (10 s).
         done = subprocess.run(["tmux", "has-session", "-t", f"={name}"],
-                              capture_output=True, text=True, timeout=5)
+                              capture_output=True, text=True, timeout=2)
     except (OSError, subprocess.SubprocessError):
         return None
     if done.returncode == 0:

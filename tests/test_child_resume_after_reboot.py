@@ -169,20 +169,72 @@ def test_a_session_that_starts_while_recovery_waits_for_the_lock_is_left_alone(r
     assert _state(runtime)["retired_at"] is None
 
 
-def test_prune_keeps_a_lease_rewritten_after_it_was_judged(tmp_path, monkeypatch):
-    """#182 review: SessionStart may rewrite a stale lease path (a reused PID)."""
+def _lease_lock_is_held(runtime) -> bool:
+    import fcntl
+
+    (runtime / "live-sessions").mkdir(exist_ok=True)
+    fd = os.open(runtime / "live-sessions" / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+
+
+def test_recovery_takes_its_last_look_and_writes_under_the_lease_lock(resume):
+    """#182 review: a lease written by SessionStart cannot land between the
+    last liveness check and the write, because the writer takes the same lock."""
+    runtime, registration, launches, calls = resume
+    _active_child(runtime, registration)
+    held = []
+
+    def is_live(_name):
+        held.append(_lease_lock_is_held(runtime))
+        return False
+
+    assert child_resume.recover_after_reboot(runtime, is_live=is_live, retention_days=30,
+                                             boot=_boot()) == [(NAME, "retired")]
+    assert held == [False, True]  # the first look is outside, the last one inside
+
+
+def test_prune_holds_the_lease_lock_while_it_judges_and_removes(tmp_path, monkeypatch):
     holder = tmp_path / "live-sessions" / NAME
     holder.mkdir(parents=True)
-    lease = holder / "999999"  # no such process: judged dead
-    lease.write_text("")
-    os.utime(lease, (time.time() - 3600,) * 2)
+    (holder / "999999").write_text("")
+    held = []
     original = child_resume._lease_alive
-
-    def judged_then_rewritten(path, boot):
-        verdict = original(path, boot)
-        path.write_text("rewritten")  # a session claims the path meanwhile
-        return verdict
-
-    monkeypatch.setattr(child_resume, "_lease_alive", judged_then_rewritten)
+    monkeypatch.setattr(child_resume, "_lease_alive",
+                        lambda path, boot: held.append(_lease_lock_is_held(tmp_path)) or original(path, boot))
     child_resume.prune_leases(tmp_path, boot=_boot())
-    assert lease.exists()
+    assert held == [True] and not holder.exists()
+
+
+def test_a_lease_writer_waits_for_the_lock_then_writes_anyway(tmp_path):
+    import threading
+
+    with child_resume._LeaseLock(tmp_path):
+        done = threading.Event()
+        threading.Thread(target=lambda: (child_resume.write_lease(tmp_path, NAME, os.getpid()), done.set()),
+                         daemon=True).start()
+        assert not done.wait(0.3)  # blocked while the lock is held
+    assert done.wait(5)
+    assert (tmp_path / "live-sessions" / NAME / str(os.getpid())).exists()
+    started = time.monotonic()
+    with child_resume._LeaseLock(tmp_path):
+        with child_resume._LeaseLock(tmp_path, wait=0.2) as late:
+            assert late.descriptor is None  # gave up waiting: the caller still writes
+    assert time.monotonic() - started < 2
+
+
+def test_write_lease_command(tmp_path):
+    helper = child_resume.__file__
+    done = subprocess.run(["python3", helper, "write-lease", "--runtime-dir", str(tmp_path),
+                           "--agent-name", NAME, "--pid", str(os.getpid())], capture_output=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert child_resume.live_lease(tmp_path, NAME, boot=_boot()) is True
+    bad = subprocess.run(["python3", helper, "write-lease", "--runtime-dir", str(tmp_path),
+                          "--agent-name", "../x", "--pid", "5"], capture_output=True, check=False)
+    assert bad.returncode != 0 and not (tmp_path / "x").exists()
