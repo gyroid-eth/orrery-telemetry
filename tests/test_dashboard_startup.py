@@ -25,6 +25,9 @@ def test_main_serves_dashboard_with_optional_pkill(monkeypatch, cleanup_status):
     monkeypatch.setattr(server, "subprocess", SimpleNamespace(run=cleanup))
     monkeypatch.setattr(server, "_start_supervisor_watchdog", lambda: None)
     monkeypatch.setattr(server, "_ttyd_reaper", lambda: None)
+    # Its first pass reads the real runtime and runs tmux per child; a thread
+    # left running from here called later tests' subprocess stubs.
+    monkeypatch.setattr(server, "_start_child_resume_maintenance", lambda: None)
     monkeypatch.setattr(server, "BIND_HOST", "127.0.0.1")
     monkeypatch.setattr(server, "PORT", 0)
 

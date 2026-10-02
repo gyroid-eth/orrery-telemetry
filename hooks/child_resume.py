@@ -1010,6 +1010,14 @@ def boot_time() -> float | None:
         return None
 
 
+def _recovery_candidate(state: dict[str, Any]) -> bool:
+    if not _retained_shape(state):
+        return False
+    running = state.get("retired_at") is None and state.get("resume_in_progress_at") is None
+    cut_off = state.get("retired_at") is not None and state.get("resume_in_progress_at") is not None
+    return running or cut_off
+
+
 def recover_after_reboot(
     runtime_dir: Path,
     *,
@@ -1050,6 +1058,11 @@ def recover_after_reboot(
         state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, name)
         try:
             if state_path.lstat().st_mtime >= boot:
+                continue
+            # Only a child left running or mid-resume is a candidate. Ask nothing
+            # about the rest (proxy configs, retired children, other files): the
+            # liveness question runs tmux, once per candidate.
+            if not _recovery_candidate(_load_state(state_path)):
                 continue
             if is_live(name) is not False:
                 continue

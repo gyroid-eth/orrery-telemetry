@@ -273,3 +273,21 @@ def test_write_lease_command(tmp_path):
     bad = subprocess.run(["python3", helper, "write-lease", "--runtime-dir", str(tmp_path),
                           "--agent-name", "../x", "--pid", "5"], capture_output=True, check=False)
     assert bad.returncode != 0 and not (tmp_path / "x").exists()
+
+
+def test_only_children_left_running_or_mid_resume_are_asked_about(resume, tmp_path):
+    """The liveness check runs tmux: ask it only about candidates, never about
+    proxy configs or children retired normally (#183: 273 tmux calls at start)."""
+    runtime, registration, launches, calls = resume
+    path = _active_child(runtime, registration)
+    retired = runtime / "child-agents" / "RetiredCurie.json"
+    private(retired, json.dumps({**json.loads(path.read_text()), "agent_name": "RetiredCurie",
+                                 "retired_at": "2026-09-01T00:00:00Z",
+                                 "resume_expires_at": "2026-10-01T00:00:00Z"}))
+    private(runtime / "child-agents" / f"{NAME}.mcp.json", '{"mcpServers": {}}')
+    for item in (retired, runtime / "child-agents" / f"{NAME}.mcp.json"):
+        os.utime(item, (time.time() - 3600,) * 2)
+    asked = []
+    child_resume.recover_after_reboot(runtime, is_live=lambda name: asked.append(name) or True,
+                                      retention_days=30, boot=_boot())
+    assert asked == [NAME, ]

@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### 起動時の回復が、子の state でない file にも tmux を呼んでいました
+
+PC の再起動の後に子を再開できる state に戻す処理（前の項目）は、`child-agents/` の JSON を 1 つずつ見て、`*.mcp.json`（proxy の設定）や正常に retire した子にも「session が生きているか」を tmux に尋ねていました（数百回）。動いていた子・再開の途中の子だけに尋ねるようにしました。state を書き換える条件は変わりません。試験の process でこの処理が本物の runtime を読み、後の試験の stub を呼んでいた点も直しました。
+
 ### Codex の hook が大きな payload で「Hook failed（exit 141）」になっていました
 
 ORRERY の Codex App plugin の hook（`run-hook.sh`、子の Codex にも入る）は、payload を pipe で Python に渡します。Python 側が 64 KiB の上限を超えた payload や使わない payload を読み切らずに終わると、書いている側が SIGPIPE で死に、`set -o pipefail` によって hook が exit 141 で終わっていました（162nd のセミナーで、digest-paper の実行中にレビュー役の Codex に複数回）。道具の出力を含む PostToolUse の payload は数百 KB〜数 MB になります。`hook_entry.py` と session の索引の recorder は、使わない payload も最後まで読んでから終わります。recorder が読まずに終わったときに出ていた誤った `recorder_process_failed` も出なくなります。
