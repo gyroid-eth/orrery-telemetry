@@ -24,12 +24,15 @@
 
 ### `sonnet` が Sonnet 5.5 を起動するようになりました。別名の行き先を固定しません
 
-「Sonnet 5.5 の子を」と頼まれた agent が `--model sonnet` を渡すと、`claude-sonnet-5` が起動していました。launcher が `opus` / `sonnet` / `haiku` / `fable` の行き先を固定値で持っていたためです（dashboard の一覧は #90 でローカルの catalog に追従していましたが、launcher の別名と warm pool の照合は固定のままでした）。いまは、この 4 つの別名と省略時の既定を、Claude Code のローカル model catalog（`~/.claude/cache/model-catalog/`）がその系統の現行として示すモデル（`main` の行）に解決します。Claude Code 自身が `--model sonnet` を解決する結果と同じです。catalog が無い・読めない、または入っている Claude Code がそのモデルに必要な版より古いときは、`dashboard/claude_models.py` の同梱の表を使います。固定の値はこの表 1 か所だけで、warm pool の照合と NEW AGENT の既定も同じ解決の結果を使います。
+「Sonnet 5.5 の子を」と頼まれた agent が `--model sonnet` を渡すと、`claude-sonnet-5` が起動していました。launcher が `opus` / `sonnet` / `haiku` / `fable` の行き先を固定値で持っていたためです（dashboard の一覧は #90 でローカルの catalog に追従していましたが、launcher の別名と warm pool の照合は固定のままでした）。いまは、この 4 つの別名と省略時の既定を、Claude Code のローカル model catalog（`~/.claude/cache/model-catalog/`）がその系統の現行として示すモデル（系統ごとに 1 つの `main` 行）に解決します。手元の Claude Code 2.1.287 が `--model sonnet` などを解決した結果とは一致しました（provider の設定や model の上書きがあると、CLI の解決は変わり得ます）。catalog が無い・読めない・系統の行が 1 つに決まらないとき、子が使う Claude Code がそのモデルに必要な版より古いときは、`dashboard/claude_models.py` の同梱の表を使います。固定の値はこの表 1 か所だけで、warm pool の照合と NEW AGENT の既定も同じ解決の結果を使います。
 
 - どこから解決したか（catalog か同梱の表か、catalog が古いか）を、launcher は起動時に、`agentstack-doctor` は 1 行で出します
 - 版つきの別名は世代を固定するためのものなので、追従しません。`sonnet-5-5` / `sonnet55` / `sonnet5.5` / `Sonnet 5.5` を足しました（`claude-sonnet-5-5`）。`sonnet-5` は引き続き `claude-sonnet-5` です。`opus-5-5`・`haiku-4-5`・`fable-5-1` も同じ形で受け付けます
 - 省略時の既定は catalog の並び順の先頭ではなく、catalog が現行の Opus として指定したモデルに追従します。`AGENTSTACK_CLAUDE_MODELS` の許可リストの扱いは変わりません
-- Claude Code は catalog を 1 時間で古いと印を付けます。古い catalog は NEW AGENT の候補を増やすのには使いませんが、別名の解決には使います。同梱の表より新しい情報だからです
+- Claude Code は catalog を取得から 1 時間で古いと印を付けます。新しい catalog だけを使うと、ほとんどの起動が同梱の表に戻ってしまうので、別名の解決には古い catalog も使います。ただし古い catalog が同梱の表より古い世代を示すときは、同梱の表を使います。古い catalog は NEW AGENT の候補を増やすのには使いませんが、別名が今起動するモデルは候補に入れるので、画面の既定と launcher は一致します
+- 版の確認と起動は同じ binary で行います。launcher は子の login shell で `~/.local/bin` を先頭にして `claude` を探し、その版で別名を決め、子はその path を実行します
+- warm pool は、status がその種類の行に要求モデルの正式 ID を括弧で示す（例 `opus ready (claude-opus-5-5)`）ときだけ claim します。示さない pool や、別のモデルで事前起動した pool は cold start になります
+- catalog は profile の中で最も新しいものを使い、今ログインしている account のものかは確かめません
 
 ### Mail なしの再開で、理由と直し方が見えるようにしました
 

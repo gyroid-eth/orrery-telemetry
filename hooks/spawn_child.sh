@@ -902,7 +902,9 @@ CLAUDE_WARM_OPUS_MODEL="" CLAUDE_WARM_SONNET_MODEL=""
 load_claude_aliases() {
     [[ "$CLAUDE_ALIASES_LOADED" == true ]] && return 0
     local out family model source note
-    if ! out="$("${AGENTSTACK_PYTHON:-python3}" "$CLAUDE_MODEL_HELPER" aliases)"; then
+    # Check versions against the binary the child will run, and pin it below.
+    resolve_claude_child_bin
+    if ! out="$("${AGENTSTACK_PYTHON:-python3}" "$CLAUDE_MODEL_HELPER" aliases --claude-bin "$CLAUDE_CHILD_BIN")"; then
         echo "Error: could not resolve the Claude model aliases with $CLAUDE_MODEL_HELPER" >&2
         return 1
     fi
@@ -922,6 +924,31 @@ load_claude_aliases() {
     CLAUDE_WARM_OPUS_MODEL="$CLAUDE_ALIAS_OPUS"
     CLAUDE_WARM_SONNET_MODEL="$CLAUDE_ALIAS_SONNET"
     CLAUDE_ALIASES_LOADED=true
+}
+
+# The `claude` the child's login shell finds once ~/.local/bin is first on
+# PATH -- the same rule as claude_child_launch_command, which then runs this
+# exact path. Empty when it cannot be found; the child then runs bare `claude`
+# and its version counts as unknown.
+CLAUDE_CHILD_BIN=""
+resolve_claude_child_bin() {
+    local found
+    found="$("$CHILD_SHELL" -lc 'export PATH="$HOME/.local/bin:$PATH"; command -v claude' 2>/dev/null </dev/null | tail -n 1)" || found=""
+    if [[ "$found" == /* && -x "$found" ]]; then
+        CLAUDE_CHILD_BIN="$found"
+    else
+        CLAUDE_CHILD_BIN=""
+    fi
+}
+
+# A warm session may have been started before the catalog changed. Claim it
+# only when the pool's status line for that type names the exact model ID in
+# parentheses, e.g. "opus ready (claude-opus-5-5)"; a pool that does not
+# report its model gets a cold start.
+warm_pool_has_model() {
+    local warm_type="$1" model="$2" status="$3"
+    [[ -n "$model" && "$warm_type" != "__skip_warm__" ]] || return 1
+    printf '%s\n' "$status" | grep -E "^[[:space:]]*${warm_type}[^[:alnum:]].*ready" | grep -qF "($model)"
 }
 
 claude_alias_value() {
@@ -2638,7 +2665,7 @@ build_embedded_task_prompt() {
 # text travels in a private file (a tmux environment value has a size limit)
 # that the child's shell reads once and removes.
 claude_child_launch_command() {
-    local inner='export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); claude --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"'
+    local inner='export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); "${CLAUDE_CHILD_BIN:-claude}" --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"'
     if [[ -n "${CLAUDE_CHILD_TOOL_FLAGS:-}" ]]; then
         inner+=" $CLAUDE_CHILD_TOOL_FLAGS"
     fi
@@ -3162,9 +3189,9 @@ ${TASK}"
     else
         # Claude Code startup (--pre-registered mode).
         WARM_POOL="$HOOKS_DIR/warm_pool.sh"
-        # warm pool は opus / sonnet の別名の解決結果（load_claude_aliases）で
-        # 事前起動している。要求モデル（正規化済み CHILD_MODEL）が warm の事前起動モデルと
-        # 完全一致するときだけ claim する。それ以外（legacy [1m] / fable / haiku /
+        # warm の種類は opus / sonnet の別名の解決結果（load_claude_aliases）で選ぶ。
+        # 事前起動後に catalog が変わることがあるので、claim は pool の status が
+        # 要求モデル（正規化済み CHILD_MODEL）の正式 ID を示すときだけ（warm_pool_has_model）。それ以外（legacy [1m] / fable / haiku /
         # sonnet[1m] 等）は __skip_warm__ で cold-start し、$CLAUDE_CHILD_MODEL を尊重する。
         # 旧実装は部分一致（*opus* + *[1m]* skip）だったため、opus[1m] は skip できても
         # fable 等の非デフォルトモデルが warm-sonnet に握り潰されていた（RainyKepler 事例）。
@@ -3219,7 +3246,7 @@ ${TASK}"
         WARM_CLAIMED=false
         WARM_STATUS=$(bash "$WARM_POOL" status 2>/dev/null || true)
         if [[ "$CLAUDE_CHILD_CHROME" != true && "$CHILD_TOOLS_RESTRICTIVE" != true && -f "$WARM_POOL" ]] \
-            && echo "$WARM_STATUS" | grep -q "${WARM_TYPE}.*ready"; then
+            && warm_pool_has_model "$WARM_TYPE" "$CHILD_MODEL" "$WARM_STATUS"; then
             echo "[spawn_child/pre-reg] Claiming warm pool session ($WARM_TYPE)..." >&2
             if CLAIMED_NAME=$(bash "$WARM_POOL" claim "$WARM_TYPE" "$CHILD_NAME" 2>/dev/null); then
                 WARM_CLAIMED=true
@@ -3257,6 +3284,7 @@ ${TASK}"
                 -c "$WORK_DIR" \
                 "${TMUX_ENV_ARGS[@]}" \
                 -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
+                -e "CLAUDE_CHILD_BIN=$CLAUDE_CHILD_BIN" \
                 -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
                 -e "CLAUDE_CHILD_PROMPT_FILE=$CLAUDE_CHILD_PROMPT_FILE" \
                 -e "CLAUDE_CHILD_SYSTEM_PROMPT=$CLAUDE_CHILD_SYSTEM_PROMPT" \
@@ -4047,6 +4075,7 @@ else
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
         -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
+        -e "CLAUDE_CHILD_BIN=$CLAUDE_CHILD_BIN" \
         -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
         -e "CLAUDE_CHILD_PROMPT_FILE=$CLAUDE_CHILD_PROMPT_FILE" \
         -e "CLAUDE_CHILD_SYSTEM_PROMPT=$CLAUDE_CHILD_SYSTEM_PROMPT" \

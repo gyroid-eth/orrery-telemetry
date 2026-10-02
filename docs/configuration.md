@@ -206,7 +206,7 @@ worktree root を変える場合は、たとえば `AGENTSTACK_WORKTREE_ROOT=/sr
 
 自動表示を止めるには、`AGENTSTACK_AUTO_OPEN_CHILD=0 ./scripts/install.sh ...` として installer に渡してください。設定は `env.sh`、Dashboard service、install-state に保存され、再インストールでも保持されます。未設定の旧 install は `1` となり、これまでと挙動は変わりません。明示した `0` / `1` は保存値より優先されます。`AGENTSTACK_FOCUS_CHILD=1` は自動表示が有効なときだけ効きます。直接 shell から起動する場合は、その shell に同じ変数を export します。child から孫への新規起動と、Claude / Codex session の再開先へも設定を渡します。Gemini の別 launcher に OS terminal 自動表示を追加する設定ではありません。
 
-child の model は spawner の単一 model catalog と正規化関数から決まります。Claude の無指定 / `opus` / `sonnet` / `haiku` / `fable` は、Claude Code のローカル model catalog がその系統の現行として示すモデルに解決します（catalog が無い・読めない・入っている Claude Code より新しい版を要するときは `dashboard/claude_models.py` の同梱の表。今は `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-haiku-4-5-20251001` / `claude-fable-5-1`）。`sonnet-5-5`・`sonnet-5`・`opus-5-5` のような版つきの別名は世代を固定します。Codex の無指定と明示 `sol` はどちらも起動対象 CLI が 0.159.0 以上なら `gpt-6.1-sol`、古い版なら `gpt-6-sol` です。版不明なら新鮮な catalog で判定します（[Codex model catalog](#codex-model-catalog) 参照）。旧世代を固定する場合は `gpt-6-sol` のように正式 ID を指定します。旧 `claude-opus-5`、`claude-opus-4-8`、`claude-sonnet-4-6`、`gpt-5.5` の明示指定は引き続き有効です。generic な `opus[1m]` / `sonnet[1m]` は既知の legacy 1M model に正規化されます。
+child の model は spawner の単一 model catalog と正規化関数から決まります。Claude の無指定 / `opus` / `sonnet` / `haiku` / `fable` は、Claude Code のローカル model catalog がその系統の現行として示すモデル（系統ごとに 1 つの `main` 行）に解決します（catalog が無い・読めない・系統の行が 1 つに決まらない・子が使う Claude Code より新しい版を要する・古い catalog が同梱の表より古い世代を示すときは `dashboard/claude_models.py` の同梱の表。今は `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-haiku-4-5-20251001` / `claude-fable-5-1`）。`sonnet-5-5`・`sonnet-5`・`opus-5-5` のような版つきの別名は世代を固定します。Codex の無指定と明示 `sol` はどちらも起動対象 CLI が 0.159.0 以上なら `gpt-6.1-sol`、古い版なら `gpt-6-sol` です。版不明なら新鮮な catalog で判定します（[Codex model catalog](#codex-model-catalog) 参照）。旧世代を固定する場合は `gpt-6-sol` のように正式 ID を指定します。旧 `claude-opus-5`、`claude-opus-4-8`、`claude-sonnet-4-6`、`gpt-5.5` の明示指定は引き続き有効です。generic な `opus[1m]` / `sonnet[1m]` は既知の legacy 1M model に正規化されます。
 
 Codex の reasoning effort は `--effort` から決まり、`AGENTSTACK_CODEX_MODEL` と `AGENTSTACK_CODEX_EFFORT` として child session へ渡します。対応情報があれば既定は `xhigh` またはそのモデルの既定、情報がなければCLI既定です。`gpt-5.6-luna` / `gpt-6-luna` は `ultra` を、旧 `gpt-5.5` は `max` / `ultra` をサポートしないため spawner が拒否します。これらは spawner が設定する値なので、手動で export しても top-level launcher の挙動は変わりません。
 
@@ -316,9 +316,11 @@ AGENTSTACK_CLAUDE_MODELS="claude-sonnet-5-5,claude-opus-5-5" ./scripts/install.s
 
 重複、空要素、前後の空白は除去します。不正な明示IDでは許可リストを勝手に広げず、Claude の起動を止めます。NEW AGENT は Claude のタブを残して設定エラーを表示し、Codex と Gemini は選択できます。再インストール時の省略は以前のモデル設定を保持し、明示的な `AGENTSTACK_CLAUDE_MODELS=""` は自動探索へ戻します。
 
-既定モデルは一覧の並び順に関係なく、上と同じ解決による現行の Opus（今は `claude-opus-5-5`）です。明示した許可リストにこのIDがない場合、画面では先頭候補を勝手に選ばず、利用者のモデル選択を求めます。APIでモデルを省略すると固定の既定モデルを要求するため、その許可リストでは拒否されます。許可されたIDを明示して選んだ場合は、そのまま起動へ渡します。
+既定モデルは一覧の並び順に関係なく、上と同じ解決による現行の Opus（今は `claude-opus-5-5`）です。明示した許可リストにこのIDがない場合、画面では先頭候補を勝手に選ばず、利用者のモデル選択を求めます。APIでモデルを省略すると、この既定モデル（同じ解決の結果）を要求するため、その許可リストでは拒否されます。許可されたIDを明示して選んだ場合は、そのまま起動へ渡します。
 
-明示した許可リストがない場合、正しい形式の Claude 正式IDは cache 内の有無や期限とは独立して起動へ渡せます。local catalog は画面の候補を増やすためだけに使い、起動権限の判定には使いません。明示指定は引き続き厳格な許可リストで、不正形式や他providerのIDは拒否します。表示後に cache が失効しても、選択したIDを拒否したり別モデルへ置き換えたりしません。
+明示した許可リストがない場合、正しい形式の Claude 正式IDは cache 内の有無や期限とは独立して起動へ渡せます。local catalog は、画面の候補を増やすこと（新しい catalog だけ）と、別名・既定の行き先を決めること（古い catalog も）に使い、起動権限の判定には使いません。別名が今起動するモデルは、catalog が古くなっても画面の候補に残すので、画面の既定と launcher の既定は一致します。明示指定は引き続き厳格な許可リストで、不正形式や他providerのIDは拒否します。表示後に cache が失効しても、選択したIDを拒否したり別モデルへ置き換えたりしません。
+
+別名の解決には次の限界があります。catalog は profile（`CLAUDE_CONFIG_DIR`、既定 `~/.claude`）の中で最も新しいものを使い、今ログインしている account のものかは確かめません。古い catalog は同梱の表より必ず新しいとは限らないので、同梱の表より古い世代を示す古い catalog は使いません。Claude Code 自身の別名の解決は provider の設定や model の上書きの影響も受けるので、Orrery の解決と常に一致するとは限りません。起動後は Claude Code の `/model` などで実際のモデルを確かめてください。
 
 候補の発見はアカウントの利用権限を保証しません。Orrery は選択された正式IDを CLI へ渡します。短縮名 `fable` は現行版を指す既存動作を保ち、明示した `claude-fable-5` は維持します。Claude Code 自身の認可・自動fallback方針は変更しません。候補表示や tmux の ready 状態だけでは実APIの利用可否は保証できません。CLI 自身の方針は [Claude Code のモデル設定](https://code.claude.com/docs/en/model-config) を参照してください。
 

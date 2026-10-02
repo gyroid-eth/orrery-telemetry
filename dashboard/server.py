@@ -35,7 +35,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _dataclass_replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.parse
@@ -66,12 +66,14 @@ QUOTA_SERVICE = _build_quota_service()
 
 try:
     from dashboard.claude_models import (
-        BUNDLED_ALIASES as _CLAUDE_BUNDLED_ALIASES, default_model as _claude_alias_default,
+        BUNDLED_ALIASES as _CLAUDE_BUNDLED_ALIASES, alias_models as _claude_alias_models,
+        default_model as _claude_alias_default,
         is_model_id as _is_claude_model_id, resolve_catalog as _resolve_claude_catalog,
     )
 except ModuleNotFoundError:  # direct script execution
     from claude_models import (
-        BUNDLED_ALIASES as _CLAUDE_BUNDLED_ALIASES, default_model as _claude_alias_default,
+        BUNDLED_ALIASES as _CLAUDE_BUNDLED_ALIASES, alias_models as _claude_alias_models,
+        default_model as _claude_alias_default,
         is_model_id as _is_claude_model_id, resolve_catalog as _resolve_claude_catalog,
     )
 
@@ -6260,7 +6262,13 @@ SPAWN_SCIENTISTS_SCRIPT = os.path.join(os.path.dirname(HERE), "bin", "lib", "age
 
 
 def _claude_catalog():
-    return _resolve_claude_catalog(tuple(_SPAWN_MODELS))
+    catalog = _resolve_claude_catalog(tuple(_SPAWN_MODELS))
+    if catalog.source == "override" or catalog.error:
+        return catalog  # An explicit allow-list is never widened.
+    # What the aliases launch is a candidate even when the catalog that named
+    # it has gone stale, so the picker's default matches the launcher's.
+    extra = tuple(model for model in _claude_alias_models() if model not in catalog.models)
+    return _dataclass_replace(catalog, models=catalog.models + extra) if extra else catalog
 
 
 def _claude_models() -> list[str]:

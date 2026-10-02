@@ -558,17 +558,63 @@ def test_alias_report_names_the_bundled_table_and_why():
     assert pinned.stderr == ""
 
 
-def test_a_catalog_row_newer_than_the_installed_cli_is_not_used(tmp_path):
+def _versioned_claude(path: pathlib.Path, version: str) -> pathlib.Path:
+    # Native installs link `claude` to .../claude/versions/<version>.
+    target = path.parent.parent / f"share-{version}" / "claude" / "versions" / version
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("#!/bin/sh\nexit 99\n")
+    target.chmod(0o755)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.symlink_to(target)
+    return path
+
+
+def test_versions_are_checked_against_the_claude_the_child_runs(tmp_path):
+    """~/.local/bin wins in the child; a newer claude elsewhere on PATH or in
+    AGENTSTACK_CLAUDE_BIN must not unlock a model the child cannot run."""
     profile = _claude_catalog_profile(
-        tmp_path, [("claude-sonnet-6", "main", "Sonnet", {"min_claude_code_version": "9.0.0"})])
-    fake = tmp_path / "share/claude/versions/2.1.287"
-    fake.parent.mkdir(parents=True)
-    fake.write_text("#!/bin/sh\nexit 99\n")
-    fake.chmod(0o755)
-    result = _model_call("normalize_claude_model", "sonnet",
-                         extra_env={"CLAUDE_CONFIG_DIR": profile, "AGENTSTACK_CLAUDE_BIN": str(fake)})
+        tmp_path, [("claude-sonnet-6", "main", "Sonnet", {"min_claude_code_version": "8.0.0"})])
+    home = tmp_path / "home"
+    child_claude = _versioned_claude(home / ".local/bin/claude", "2.0.0")
+    newer = _versioned_claude(tmp_path / "pathbin/claude", "9.0.0")
+    env = {"CLAUDE_CONFIG_DIR": profile, "HOME": str(home), "CHILD_SHELL": "/bin/bash",
+           "PATH": f"{newer.parent}:/usr/bin:/bin", "AGENTSTACK_CLAUDE_BIN": str(newer)}
+    result = _model_call("normalize_claude_model", "sonnet", extra_env=env,
+                         prelude='load_claude_aliases || exit 1; echo "bin=$CLAUDE_CHILD_BIN" >&2')
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "claude-sonnet-5-5"
+    assert f"bin={child_claude}" in result.stderr
+
+    # The same binary is the one the child's command runs.
+    launch = _run_bash(_extract("claude_child_launch_command") + "\nclaude_child_launch_command\n",
+                       {"CHILD_SHELL": "/bin/bash"})
+    assert '"${CLAUDE_CHILD_BIN:-claude}" --model "$CLAUDE_CHILD_MODEL"' in launch.stdout
+    text = _SPAWN.read_text(encoding="utf-8")
+    assert text.count('-e "CLAUDE_CHILD_BIN=$CLAUDE_CHILD_BIN"') == 2
+
+    # With the child's claude new enough, the catalog row is used.
+    (home / ".local/bin/claude").unlink()
+    _versioned_claude(home / ".local/bin/claude", "8.0.0")
+    result = _model_call("normalize_claude_model", "sonnet", extra_env=env)
+    assert result.stdout.strip() == "claude-sonnet-6", result.stderr
+
+
+@pytest.mark.parametrize("status,warm_type,model,claims", [
+    ("opus ready (claude-opus-5-5)", "opus", "claude-opus-5-5", True),
+    # Started before the catalog moved on: not the requested model.
+    ("opus ready (claude-opus-5-5)", "opus", "claude-opus-6", False),
+    # A pool that does not say which model it started is not trusted.
+    ("opus ready", "opus", "claude-opus-5-5", False),
+    ("sonnet ready (claude-opus-6)", "opus", "claude-opus-6", False),
+    ("opus starting (claude-opus-6)", "opus", "claude-opus-6", False),
+    ("opus ready (claude-opus-6[1m])", "opus", "claude-opus-6", False),
+    ("opus ready (claude-opus-6)\nsonnet ready (claude-sonnet-6)", "sonnet", "claude-sonnet-6", True),
+    ("opus ready (claude-opus-6)", "__skip_warm__", "claude-opus-6", False),
+])
+def test_warm_pool_is_claimed_only_for_the_model_it_started(status, warm_type, model, claims):
+    result = _run_bash(_model_catalog() + f"\nwarm_pool_has_model {shlex.quote(warm_type)} {shlex.quote(model)} {shlex.quote(status)}\n")
+    assert (result.returncode == 0) is claims, result.stderr
+    assert 'warm_pool_has_model "$WARM_TYPE" "$CHILD_MODEL" "$WARM_STATUS"' in _SPAWN.read_text(encoding="utf-8")
 
 
 def test_unresolvable_aliases_stop_the_launch_instead_of_guessing():

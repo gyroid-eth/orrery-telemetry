@@ -294,31 +294,100 @@ def test_unknown_alias_is_rejected():
         catalog.resolve_alias("sonnet-5")
 
 
-def test_cli_version_is_read_from_the_install_without_running_it(monkeypatch, tmp_path):
-    monkeypatch.setattr(catalog.shutil, "which", lambda name: name if os.path.exists(name) else None)
+def test_cli_version_is_read_from_the_install_without_running_it(tmp_path):
     native = tmp_path / "share/claude/versions/2.1.287"
     native.parent.mkdir(parents=True)
     native.write_text("#!/bin/sh\nexit 99\n")
     link = tmp_path / "bin/claude"
     link.parent.mkdir()
     link.symlink_to(native)
-    monkeypatch.setenv("AGENTSTACK_CLAUDE_BIN", str(link))
-    assert catalog._probe_cli_version() == (2, 1, 287)
+    assert catalog._probe_cli_version(str(link)) == (2, 1, 287)
 
     package = tmp_path / "node_modules/@anthropic-ai/claude-code"
     package.mkdir(parents=True)
     (package / "package.json").write_text(json.dumps({"name": "@anthropic-ai/claude-code", "version": "2.1.250"}))
     (package / "cli.js").write_text("")
-    monkeypatch.setenv("AGENTSTACK_CLAUDE_BIN", str(package / "cli.js"))
-    assert catalog._probe_cli_version() == (2, 1, 250)
+    assert catalog._probe_cli_version(str(package / "cli.js")) == (2, 1, 250)
 
     other = tmp_path / "other/claude"
     other.parent.mkdir()
     other.write_text("")
-    monkeypatch.setenv("AGENTSTACK_CLAUDE_BIN", str(other))
-    assert catalog._probe_cli_version() is None
-    monkeypatch.setenv("AGENTSTACK_CLAUDE_BIN", str(tmp_path / "missing"))
-    assert catalog._probe_cli_version() is None
+    assert catalog._probe_cli_version(str(other)) is None
+    assert catalog._probe_cli_version("") is None  # The launcher could not find it.
+
+
+def test_dashboard_checks_the_claude_a_child_runs_not_the_first_on_path(monkeypatch, tmp_path):
+    """Children put ~/.local/bin first on PATH; AGENTSTACK_CLAUDE_BIN is not theirs."""
+    home = tmp_path / "home"
+    old = home / ".local/share/claude/versions/2.0.0"
+    old.parent.mkdir(parents=True)
+    old.write_text("")
+    old.chmod(0o755)
+    (home / ".local/bin").mkdir(parents=True)
+    (home / ".local/bin/claude").symlink_to(old)
+    new = tmp_path / "elsewhere/versions/9.0.0"
+    new.parent.mkdir(parents=True)
+    new.write_text("")
+    new.chmod(0o755)
+    (tmp_path / "pathbin").mkdir()
+    (tmp_path / "pathbin/claude").symlink_to(new)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", str(tmp_path / "pathbin"))
+    monkeypatch.setenv("AGENTSTACK_CLAUDE_BIN", str(tmp_path / "pathbin/claude"))
+    assert catalog.child_cli_path() == str(home / ".local/bin/claude")
+    assert catalog._probe_cli_version() == (2, 0, 0)
+    (home / ".local/bin/claude").unlink()
+    assert catalog._probe_cli_version() == (9, 0, 0)
+
+
+def test_a_family_with_two_current_models_is_ambiguous(profile):
+    write(profile, _aliased([("claude-opus-6", "main", "Opus", None), ("claude-opus-7", "main", "Opus", None),
+                             ("claude-sonnet-6", "main", "Sonnet", None)]))
+    opus = catalog.resolve_alias("opus", cli_version=_new_cli)
+    assert (opus.model, opus.source) == (catalog.BUNDLED_ALIASES["opus"], "bundled")
+    assert catalog.resolve_alias("sonnet", cli_version=_new_cli).model == "claude-sonnet-6"
+
+
+def test_a_row_whose_id_is_not_its_family_is_not_trusted(profile):
+    write(profile, _aliased([("claude-haiku-9", "main", "Opus", None)]))
+    assert catalog.resolve_alias("opus", cli_version=_new_cli).source == "bundled"
+
+
+@pytest.mark.parametrize("minimum", ["9" * 5000, "1234567.0", "1.2.3.4.5"])
+def test_an_oversized_version_requirement_falls_back_without_failing(profile, minimum):
+    write(profile, _aliased([("claude-opus-6", "main", "Opus", minimum)]))
+    target = catalog.resolve_alias("opus", cli_version=_new_cli)
+    assert (target.model, target.source) == (catalog.BUNDLED_ALIASES["opus"], "bundled")
+
+
+def test_a_stale_catalog_naming_an_older_generation_loses_to_the_bundled_table(profile):
+    write(profile, _aliased([("claude-opus-5", "main", "Opus", None)], fetched=100, stale=500))
+    target = catalog.resolve_alias("opus", cli_version=_new_cli)
+    assert (target.model, target.source) == ("claude-opus-5-5", "bundled")
+    assert target.note == "stale catalog names an older opus (claude-opus-5)"
+    # A fresh catalog is the vendor's current word, even when older.
+    write(profile, _aliased([("claude-opus-5", "main", "Opus", None)]))
+    assert catalog.resolve_alias("opus", cli_version=_new_cli).model == "claude-opus-5"
+
+
+def test_alias_models_lists_what_the_aliases_launch(monkeypatch, profile):
+    monkeypatch.setattr(catalog, "_probe_cli_version", _new_cli)
+    write(profile, _aliased(CURRENT, fetched=100, stale=500))
+    assert catalog.alias_models() == ("claude-opus-6", "claude-sonnet-6", "claude-haiku-5", "claude-fable-6")
+
+
+def test_helper_checks_the_binary_the_launcher_passes(profile, tmp_path, capsys):
+    write(profile, _aliased(CURRENT))
+    old = tmp_path / "versions/2.1.0"
+    old.parent.mkdir()
+    old.write_text("")
+    assert catalog.main(["aliases", "--claude-bin", str(old)]) == 0
+    lines = dict(line.split("\t", 1) for line in capsys.readouterr().out.splitlines())
+    assert lines["opus"].startswith("claude-opus-5-5\tbundled\tclaude-opus-6 needs Claude Code 2.2.0")
+    assert lines["sonnet"].startswith("claude-sonnet-6\tlocal_catalog")
+    assert catalog.main(["aliases", "--claude-bin", ""]) == 0
+    assert "claude-opus-6\tlocal_catalog" in capsys.readouterr().out
+    assert catalog.main(["aliases", "--claude-bin"]) == 2
 
 
 def test_doctor_reports_where_the_aliases_resolve():

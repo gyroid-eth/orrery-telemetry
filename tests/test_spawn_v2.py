@@ -1322,3 +1322,41 @@ def test_api_omission_and_sol_use_the_same_cli_default(monkeypatch, version, exp
     if requested is not None:
         payload["model"] = requested
     assert server.do_spawn(payload) == {"ok": True, "model": expected}
+
+
+def _stale_new_opus_catalog(tmp_path, monkeypatch):
+    profile = tmp_path / "stale-claude"
+    path = profile / "cache/model-catalog/cache.json"
+    path.parent.mkdir(parents=True)
+    now = int(time.time() * 1000)
+    path.write_text(json.dumps({"version": 2, "fetchedAt": now - 7_200_000, "staleAt": now - 3_600_000, "catalog": {
+        "surface": "cc", "config": {"models": [{"id": "claude-opus-6", "section": "main", "short_name": "Opus"}]}}}))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
+    launcher_default = _launcher_default({"CLAUDE_CONFIG_DIR": str(profile)})
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Sunny\n\036Curie\n"})())
+    monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    return launcher_default
+
+
+def test_stale_catalog_keeps_picker_default_and_launcher_in_step(monkeypatch, tmp_path):
+    """A stale catalog adds no candidates, but what the aliases launch is listed."""
+    launcher_default = _stale_new_opus_catalog(tmp_path, monkeypatch)
+    monkeypatch.delenv("AGENTSTACK_CLAUDE_MODELS", raising=False)
+    claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
+    assert "claude-opus-6" in claude["models"]
+    assert claude["default_model"] == "claude-opus-6"
+    assert server.do_spawn({"parent": "Parent", "task": "work"}) == {"model": "claude-opus-6"}
+    assert launcher_default == "claude-opus-6"
+
+
+@pytest.mark.parametrize("override,default", [
+    ("claude-opus-5-5,claude-sonnet-5-5", ""),
+    ("claude-opus-6,claude-sonnet-5-5", "claude-opus-6"),
+])
+def test_an_explicit_allow_list_is_not_widened_by_the_aliases(monkeypatch, tmp_path, override, default):
+    _stale_new_opus_catalog(tmp_path, monkeypatch)
+    monkeypatch.setenv("AGENTSTACK_CLAUDE_MODELS", override)
+    claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
+    assert claude["models"] == override.split(",")
+    assert claude["default_model"] == default
