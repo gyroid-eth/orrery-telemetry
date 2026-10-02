@@ -3591,6 +3591,19 @@ _CLAUDE_MAIL_UNAVAILABLE = {
     "mail_schema_unsupported": "The running ORRERY Mail needs an update and restart for owner authentication.",
 }
 
+# What the person running the machine can do about it. Only an old Mail has a
+# fix: a missing or expired credential cannot be recovered from the dashboard.
+_CLAUDE_MAIL_REMEDY = {
+    "mail_schema_unsupported": (
+        "To keep Mail, update ORRERY Mail before resuming. For the Mail this project's installer "
+        "deployed: in an up-to-date orrery-telemetry checkout run "
+        "./scripts/install.sh --update-mail --dry-run, then ./scripts/install.sh --update-mail. "
+        "If the dry run refuses, stop and follow docs/agentstack-mail-update.md instead. "
+        "Afterwards this agent's resume should no longer say WITHOUT MAIL; a conversation already "
+        "resumed without Mail must exit first. Without the update, resuming stays conversation only."
+    ),
+}
+
 
 def _claude_conversation_reason(session: str) -> tuple[dict, str | None]:
     """Inspect all existing material before classifying a known safe absence.
@@ -3707,8 +3720,11 @@ def _claude_conversation_reason(session: str) -> tuple[dict, str | None]:
 
 
 def _conversation_mail_fields(reason: str) -> dict:
+    remedy = _CLAUDE_MAIL_REMEDY.get(reason, "")
     return {"mail_status": "unavailable", "mail_reason": reason,
-            "mail_message": "This agent cannot send or receive ORRERY Mail. " + _CLAUDE_MAIL_UNAVAILABLE[reason]}
+            "mail_message": " ".join(filter(None, (
+                "This agent cannot send or receive ORRERY Mail.", _CLAUDE_MAIL_UNAVAILABLE[reason], remedy))),
+            **({"mail_remedy": remedy} if remedy else {})}
 
 
 def _launch_claude_conversation(session: str, sid: str, cwd: str, reason: str, *,
@@ -3729,6 +3745,9 @@ def _launch_claude_conversation(session: str, sid: str, cwd: str, reason: str, *
                 "AGENTSTACK_AUTO_OPEN_CHILD": _env_text("AGENTSTACK_AUTO_OPEN_CHILD", "1"),
             }
             notice = fields["mail_message"] + " Do not register, recover credentials, or use Mail from this conversation."
+            if fields.get("mail_remedy"):
+                # The remedy restarts the shared Mail: it is the person's to choose, not this agent's.
+                notice += " Leave the Mail update to the person running this machine; do not run it yourself."
             command = [ABS_CLAUDE, "--resume", sid, "-n", session,
                        "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
                        "--settings", '{"disableAllHooks":true}', "--no-chrome",
@@ -3755,10 +3774,13 @@ def _launch_claude_conversation(session: str, sid: str, cwd: str, reason: str, *
 
 
 def _claude_row_mail_fields(row: dict, *, category: str, session_state: dict | None = None) -> dict:
-    if not (row.get("program") or "").startswith("claude"):
+    program = row.get("program") or ""
+    if program and not program.startswith("claude"):
         return {}
     # A running conversation-only session retains its explicit warning across
-    # dashboard restarts. There is no inferred/secret runtime sidecar.
+    # dashboard restarts. There is no inferred/secret runtime sidecar. Only
+    # _launch_claude_conversation sets the tmux marker, so an empty program is
+    # read too: the running row of a retired owner has no Mail program.
     if row.get("running"):
         if session_state is not None:
             reason = session_state.get("mail_disabled_reason", "") if session_state.get("mail_disabled") == "1" else ""
@@ -3769,6 +3791,8 @@ def _claude_row_mail_fields(row: dict, *, category: str, session_state: dict | N
             except (OSError, subprocess.SubprocessError):
                 reason = ""
         return _conversation_mail_fields(reason) if reason in _CLAUDE_MAIL_UNAVAILABLE else {}
+    if not program:
+        return {}
     # `resume_capability` says whether the conversation can be resumed; it is
     # `ready` for conversation-only resumes too. `resume_mode` is what
     # /api/jump will do (#145): `mail` authenticates the owner and unretires

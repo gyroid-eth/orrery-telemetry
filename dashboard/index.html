@@ -32880,6 +32880,19 @@ function resumeCapabilityInfo(code){
 function isResumeCategory(category){
   return category==='finished'||category==='gone'||category==='retired';
 }
+// The panel's open/resume button. A conversation-only resume has no Mail; the
+// button says so itself, for a resume that still needs verification too, so
+// the choice is made before the click (the summary alone is easy to miss).
+function resumeButtonView(resumeState,capability,mode,mailMessage,embed){
+  const info=resumeCapabilityInfo(capability);
+  if(!resumeState)return{text:embed?'OPEN IN COCKPIT':'OPEN TMUX',title:'Open this live terminal session'};
+  const verify=capability==='verification_required';
+  if(capability!=='ready'&&!verify)return{text:'RESUME UNAVAILABLE',title:info.detail};
+  const noMail=mode==='conversation_only';
+  const text=(verify?'VERIFY & RESUME':embed?'RESUME IN COCKPIT':'RESUME')+(noMail?' WITHOUT MAIL':'');
+  const mail=noMail?(mailMessage||'This agent cannot send or receive ORRERY Mail.'):'';
+  return{text,title:verify?[info.detail,mail].filter(Boolean).join(' '):(mail||info.detail)};
+}
 /* ── Report JS exceptions to the server ──────────────────────────────
    This page is frequently viewed inside a webview with no devtools, where a
    thrown exception leaves no trace at all — it only ever looks like "clicking
@@ -33875,6 +33888,7 @@ async function netTick(){
         requested_name:n.requested_name||'',
         surface:n.surface||'',
         mail_status:n.mail_status||'',mail_reason:n.mail_reason||'',mail_message:n.mail_message||'',
+        resume_mode:n.resume_mode||'',
         resumeCapability:n.resume_capability||'provenance_missing'});
     }
     for(const k of[...gmap.keys()])if(!seen.has(k))gmap.delete(k);
@@ -36407,7 +36421,6 @@ function openPanelInner(name){
   const resumeState=isResumeCategory(resumeCategory);
   const capability=a.resume_capability||a.resumeCapability||
     g.resumeCapability||(resumeState?'provenance_missing':'not_required');
-  const capabilityInfo=resumeCapabilityInfo(capability);
   const openBtn=TM('tm-open');
   if(openBtn){
     const verificationRequired=capability==='verification_required';
@@ -36418,12 +36431,10 @@ function openPanelInner(name){
     openBtn.style.background=unavailable?'transparent':'';
     openBtn.style.color=unavailable?'var(--cyan)':'';
     openBtn.style.boxShadow=unavailable?'none':'';
-    openBtn.textContent=resumeState
-      ? (capability==='ready'
-        ? (EMBED_MODE?'RESUME IN COCKPIT':'RESUME')
-        : verificationRequired?'VERIFY & RESUME':'RESUME UNAVAILABLE')
-      : (EMBED_MODE?'OPEN IN COCKPIT':'OPEN TMUX');
-    openBtn.title=resumeState?capabilityInfo.detail:'Open this live terminal session';
+    const view=resumeButtonView(resumeState,capability,a.resume_mode||g.resume_mode,
+      a.mail_message||g.mail_message,EMBED_MODE);
+    openBtn.textContent=view.text;
+    openBtn.title=view.title;
   }
   // gtip 相当のサマリーを tm-summary に描画 (モバイルで hover が効かない救済)
   renderPanelSummary(name, a, g);

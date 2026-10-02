@@ -342,3 +342,52 @@ def test_conversation_startup_failure_keeps_material_and_mail_untouched(legacy, 
     assert not result['ok'] and prepared == [True] and not calls
     assert result['mail_status'] == 'unavailable' and result['rollback_errors']
     same_material(before)
+
+
+@pytest.mark.parametrize('supported', [False, True])
+def test_top_level_owner_with_legacy_state_says_why_mail_is_missing_and_how_to_fix_it(legacy, monkeypatch, supported):
+    """A parentless Claude with agent_token_<name> and a legacy child-agents state.
+
+    The legacy state needs existing-owner authentication. Against an old Mail
+    the resume is conversation only, and the row says so, with the fix, before
+    the click, in the result, in the terminal notice, and on the running row,
+    whose Mail row is retired and so has no program.
+    """
+    runtime, registration, launches, calls, state, *_ = legacy
+    assert set(json.loads(state.read_text())) == {'agent_name', 'project_key', 'registration_token'}
+    assert (runtime / f'agent_token_{NAME}').read_text() == TOKEN
+    assert 'parent' not in registration
+    fields = {'project_key', 'name', 'program', 'model', 'task_description', 'registration_token'}
+    monkeypatch.setattr(server, '_mcp_tool_parameters',
+                        lambda _tool: fields | {'existing_agent_id'} if supported else fields)
+    before = snapshot(runtime)
+    forecast = server._claude_row_mail_fields(
+        {'name': NAME, 'program': 'claude-code', 'resume_capability': 'ready'}, category='retired')
+    if supported:
+        assert forecast == {'resume_mode': 'mail'}
+        return
+    assert forecast['resume_mode'] == 'conversation_only'
+    assert forecast['mail_reason'] == 'mail_schema_unsupported'
+    assert '--update-mail' in forecast['mail_remedy'] and forecast['mail_remedy'] in forecast['mail_message']
+    monkeypatch.setattr(server, '_mcp_call', lambda *_a, **_k: pytest.fail('Mail tool called'))
+    result = server.do_resume(NAME, open_terminal=False)
+    assert result['ok'] and result['resume_mode'] == 'conversation_only'
+    assert result['mail_remedy'] == forecast['mail_remedy']
+    command = launches[-1][-1]
+    assert '--update-mail' in command and 'do not run it yourself' in command
+    assert 'AGENTSTACK_MAIL_DISABLED_REASON=mail_schema_unsupported' in command
+    assert TOKEN not in command + json.dumps(result)
+    same_material(before)
+    # Running, the retired owner has no Mail program; the tmux marker still speaks.
+    running = server._claude_row_mail_fields(
+        {'name': NAME, 'program': '', 'running': True}, category='agent',
+        session_state={'mail_disabled': '1', 'mail_disabled_reason': 'mail_schema_unsupported'})
+    assert running['mail_status'] == 'unavailable' and running['mail_remedy'] == forecast['mail_remedy']
+    assert server._claude_row_mail_fields(
+        {'name': NAME, 'program': '', 'running': True}, category='agent', session_state={}) == {}
+
+
+@pytest.mark.parametrize('reason', ['credential_absent', 'retention_expired'])
+def test_unrecoverable_reasons_offer_no_update_remedy(reason):
+    fields = server._conversation_mail_fields(reason)
+    assert 'mail_remedy' not in fields and '--update-mail' not in fields['mail_message']
