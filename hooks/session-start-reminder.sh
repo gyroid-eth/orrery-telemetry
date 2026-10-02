@@ -271,12 +271,18 @@ write_live_session_lease() {
     local name="$1" pid="$PPID" comm depth=0 lease
     # Leases outlive their sessions; drop the ones whose CLI has ended, for
     # every identity, so they do not pile up (#152 review P3-a).
-    for lease in "$RUNTIME_DIR"/live-sessions/*/*; do
-        [ -f "$lease" ] || continue
-        case "${lease##*/}" in ''|*[!0-9]*) continue ;; esac
-        kill -0 "${lease##*/}" 2>/dev/null || rm -f "$lease"
-    done
-    rmdir "$RUNTIME_DIR"/live-sessions/*/ 2>/dev/null
+    # Also leases from before this machine booted: their PID may now be an
+    # unrelated process (child_resume.py prune-leases).
+    if [ ! -f "$HOOKS_DIR/child_resume.py" ] ||
+        ! "${AGENTSTACK_PYTHON:-python3}" "$HOOKS_DIR/child_resume.py" prune-leases \
+            --runtime-dir "$RUNTIME_DIR" >/dev/null 2>&1; then
+        for lease in "$RUNTIME_DIR"/live-sessions/*/*; do
+            [ -f "$lease" ] || continue
+            case "${lease##*/}" in ''|*[!0-9]*) continue ;; esac
+            kill -0 "${lease##*/}" 2>/dev/null || rm -f "$lease"
+        done
+        rmdir "$RUNTIME_DIR"/live-sessions/*/ 2>/dev/null
+    fi
     case "$name" in ''|*[!A-Za-z0-9_.-]*) return 0 ;; esac
     while [ "$depth" -lt 6 ] && [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
         comm="$(ps -o comm= -p "$pid" 2>/dev/null)"

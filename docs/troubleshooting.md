@@ -493,6 +493,14 @@ stale な top-level environment を継承した可能性がある場合は、新
 
 transcript が存在しない agent は mail timeline だけが見えることがあります。
 
+## PC の再起動・強制終了の後に Resume が拒否される
+
+`/delegate` の子は、動いている間は state が「動作中」で、正常に終わると retire され、保持期間のあいだ再開できる state になります。PC が落ちる（強制終了・電源断・OS の再起動で終了の処理が走らない）と retire されないまま残り、dashboard の RESUME も端末の `claude --resume` も「This child did not end normally …」で拒否します。再開を起動した直後に落ちた場合は「A resume of this child started and did not finish …」です。
+
+dashboard は起動したとき（と、その後 1 時間ごと）に、**この machine が起動する前に書かれたまま**の「動作中」の state と、終わらなかった再開を、再開できる state に戻します。その名前の tmux session があるとき、起動の後に書かれた live-session の lease の process が生きているとき、tmux の状態が分からないとき、登録や旧形式の移行が途中のとき、owner credential が state と一致しないときは何も変えません。再起動の後に dashboard が動いていれば、手で retire する必要はありません。まだ拒否されるなら、その子の tmux session が残っていないかを確かめてください。
+
+起動の前に書かれた live-session の lease（`runtime/live-sessions/<name>/<pid>`）は、PID が別の process に再利用されていることがあるので、生きている印として数えません。
+
 ## Terminal が開かない
 
 - `AGENTSTACK_TERMINAL` の値を確認

@@ -3769,6 +3769,8 @@ def _claude_conversation_reason(session: str) -> tuple[dict, str | None]:
                                           project_key=registration["project_key"], program=registration["program"])
                 if not module._retained_shape(state) or state.get("program") != registration["program"]:
                     raise module.ResumeStateError("config_unrestorable", "Claude state is incomplete")
+                if state.get("resume_in_progress_at") is None:
+                    module.require_retired(state)
                 module._parse_timestamp(state.get("retired_at"), "retired_at")
                 expiry = module._parse_timestamp(state.get("resume_expires_at"), "resume_expires_at")
                 expired = module._utc_now(None) >= expiry
@@ -3782,7 +3784,7 @@ def _claude_conversation_reason(session: str) -> tuple[dict, str | None]:
             if token is not None and not secrets.compare_digest(token.encode(), saved_bytes):
                 raise module.ResumeStateError("identity_mismatch", "Claude credentials belong to different registrations")
             if state.get("resume_in_progress_at") is not None:
-                raise module.ResumeStateError("config_unrestorable", "Claude resume is already pending")
+                raise module.ResumeStateError("config_unrestorable", module.RESUME_NOT_FINISHED)
         except module.ResumeStateError as exc:
             raise _ResumeCapabilityError(exc.code, str(exc)) from exc
     # Pending wins over missing/expiry, even when no state remains.
@@ -8750,11 +8752,56 @@ def _start_supervisor_watchdog():
     threading.Thread(target=_watch_supervisor, daemon=True).start()
 
 
+def _child_session_live(name: str, boot: float | None) -> bool | None:
+    """Is a session of this child running now? None when that cannot be told.
+
+    A tmux session of that name, or a live-session lease written since this
+    machine booted whose process is alive. A lease from before the boot is
+    ignored: its PID may belong to an unrelated process now.
+    """
+    try:
+        done = subprocess.run(["tmux", "has-session", "-t", f"={name}"],
+                              capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode == 0:
+        return True
+    reason = (done.stderr or "").lower()
+    if not any(text in reason for text in ("can't find session", "no server running", "error connecting")):
+        return None
+    return _child_resume_module().live_lease(pathlib.Path(RUNTIME_DIR), name, boot=boot)
+
+
+def _recover_children_after_reboot() -> None:
+    """Children a reboot stopped mid-run become resumable (child_resume.recover_after_reboot)."""
+    module = _child_resume_module()
+    try:
+        retention = int(_env_text("AGENTSTACK_CHILD_RESUME_RETENTION_DAYS", "30"))
+    except ValueError:
+        return
+    boot = module.boot_time()
+    recovered = module.recover_after_reboot(
+        pathlib.Path(RUNTIME_DIR), retention_days=retention, boot=boot,
+        is_live=lambda name: _child_session_live(name, boot),
+    )
+    for name, outcome in recovered:
+        logging.info("child %s stopped by a reboot is resumable again (%s)", name, outcome)
+        _invalidate_resume_capability_cache(name)
+
+
 def _start_child_resume_maintenance() -> None:
-    """Purge expired private resume material while the dashboard is running."""
+    """Purge expired private resume material while the dashboard is running.
+
+    The first pass, at start, also makes children that a reboot stopped
+    mid-run resumable again (see _recover_children_after_reboot).
+    """
 
     def worker() -> None:
         while True:
+            try:
+                _recover_children_after_reboot()
+            except Exception as exc:  # maintenance must not stop the dashboard
+                logging.warning("child resume recovery after reboot failed: %s", exc)
             try:
                 removed = _child_resume_module().purge_expired(
                     pathlib.Path(RUNTIME_DIR)

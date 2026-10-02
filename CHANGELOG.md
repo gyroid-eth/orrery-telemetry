@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### PC の再起動・強制終了の後に、子の Resume が拒否されていました
+
+`/delegate` の子の state は、正常に終わったときに retire されます。PC が落ちると retire されないまま残り、dashboard の RESUME も端末の `claude --resume` も `retired_at is missing` で拒否していました（162nd のセミナー: 再起動のたびに手で retire してから戻していた）。dashboard は起動時（と 1 時間ごと）に、この machine が起動する前に書かれたまま、session も生きた lease も無い「動作中」の state と、終わらなかった再開を、再開できる state に戻します。拒否の文も「正常に終わらなかった（PC の強制終了など）」と言い、どうすれば戻るかを示します。起動の前に書かれた live-session の lease は、PID が再利用されうるので生きている印に数えません（[troubleshooting](docs/troubleshooting.md)）。
+
 ### agentstack-doctor: 動いている ORRERY Mail に足りない機能を知らせます
 
 Mail が install より古いと、health は通り、ほかの検査もすべて通るのに、dashboard や launcher が頼る機能だけが欠けていました（2026-10-02: `register_agent` に `existing_agent_id` が無く、Claude の再開が Mail の無い会話だけになった）。doctor は動いている Mail の `tools/list` を 1 回読み、`scripts/lib/mail_required_features.json` の機能のうち欠けているものごとに `warn:` と直し方（`--update-mail`）を出します。Mail そのものは動いているので exit status は変えません。最後に `mail-features: status=<ok|missing|unknown> missing=<…> running=<commit>` を 1 行出し、setup.sh はこれを読めます。
