@@ -74,6 +74,18 @@ def _short(build: str) -> str:
     return build[:7] if len(build) >= 12 and all(c in "0123456789abcdef" for c in build) else build
 
 
+def _risk() -> list[str]:
+    """What updating costs and how to recover: shown with every suggestion to update."""
+    return [
+        "  Risk: Mail stops while it switches, usually a few seconds; if the new build does not start,",
+        "        the switch and the return to the old one can take minutes (no short limit is guaranteed).",
+        "        Agents' Mail calls fail meanwhile. Children and Codex reconnect by themselves.",
+        "        A top-level Claude Code session may not: with Claude Code 2.1.287 in testing, stops of",
+        "        8 s and 15 s reconnected by themselves, stops of 18 s and 19 s did not.",
+        f"  If one shows orrery-mail as failed afterwards, {RECONNECT}.",
+    ]
+
+
 def _relation(repo: str, running: str, to: str) -> str:
     """older / newer / diverged / unknown: how the running build stands to the checkout's.
 
@@ -142,6 +154,7 @@ def stale(args: argparse.Namespace) -> list[str]:
             lines += lacks("Not working")
             lines.append("  Update ORRERY Mail from an orrery-telemetry checkout at least as new as the running"
                          " build (docs/agentstack-mail-update.md).")
+            lines += _risk()
         return lines
     lines = [f"ORRERY Mail is out of date{f' ({builds})' if builds else ''}."]
     if missing:
@@ -153,15 +166,7 @@ def stale(args: argparse.Namespace) -> list[str]:
             "  To update: ./scripts/install.sh --mail update   (orrery-telemetry checkout)",
             "         or: ./scripts/setup.sh --mail update     (ORRERY cockpit checkout)",
         ]
-    lines += [
-        "  Risk: Mail stops while it switches, usually a few seconds; if the new build does not start,",
-        "        the switch and the return to the old one can take minutes (no short limit is guaranteed).",
-        "        Agents' Mail calls fail meanwhile. Children and Codex reconnect by themselves.",
-        "        A top-level Claude Code session may not: with Claude Code 2.1.287 in testing, stops of",
-        "        8 s and 15 s reconnected by themselves, stops of 18 s and 19 s did not.",
-        f"  If one shows orrery-mail as failed afterwards, {RECONNECT}.",
-    ]
-    return lines
+    return lines + _risk()
 
 
 def after_stop(args: argparse.Namespace) -> list[str]:

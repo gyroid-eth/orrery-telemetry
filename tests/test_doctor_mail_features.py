@@ -231,11 +231,14 @@ def test_a_missing_feature_is_reported_but_only_an_older_mail_gets_the_update_co
     else:
         assert "out of date" not in text and "--mail update" not in text
         assert "at least as new as the running build" in text
+    # Every notice that urges an update carries the shared risk and recovery.
+    assert "no short limit is guaranteed" in text and "then Reconnect (not Authenticate)" in text
 
 
 def test_a_missing_feature_without_a_checkout_does_not_suggest_an_update():
     text = _notice("stale", "--running", "abc", "--missing", "register_agent.existing_agent_id")
     assert "lacks features this install relies on" in text and "--mail update" not in text
+    assert "no short limit is guaranteed" in text and "then Reconnect (not Authenticate)" in text
 
 
 def test_the_risk_does_not_promise_a_short_stop_and_states_observations_as_such(history):
