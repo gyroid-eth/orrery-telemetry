@@ -13,6 +13,8 @@ import threading
 
 import tomllib
 
+import pytest
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 INSTALLER = ROOT / "scripts" / "install.sh"
@@ -359,6 +361,23 @@ def test_a_stale_managed_value_needs_an_installed_managed_render_too(tmp_path):
 
     assert result.returncode != 0
     assert "must equal the native service env" in result.stderr
+
+
+@pytest.mark.parametrize("middle", ["$(printf old)", "$WH_RENDER", "`printf old`", "${OLD}x", "old render", "-old", "old;x"])
+def test_an_env_sh_that_only_names_a_render_when_run_is_not_evidence(tmp_path, middle):
+    """#187 review: shlex leaves "$(...)" in the literal, which used to pass as a
+    render directory name; only names an install writes count."""
+    env = _env_for_a_complete_dry_run(tmp_path)
+    stale = _managed_render_env(env, "render-before-the-switch")
+    renders = pathlib.Path(stale).parent.parent
+    _installed_env_sh(env, f'export AGENTSTACK_MAIL_ENV="{renders}/{middle}/service.env"\n')
+    env["AGENTSTACK_MAIL_ENV"] = stale
+
+    result = _run(env, "--dry-run")
+
+    assert result.returncode != 0
+    assert "must equal the native service env" in result.stderr
+    assert "ignoring a managed AGENTSTACK_MAIL_ENV" not in result.stdout
 
 
 def test_a_matching_explicit_native_pair_is_left_alone(tmp_path):
