@@ -18,7 +18,7 @@
 - `--update-mail`: 従来どおり差し替える。できなければ exit 1
 - `AGENTSTACK_MAIL_UPDATE=auto`（opt-in）: `agentstack-mailctl` 管理の配置で、検証が通り、止まる時間の見込みが `AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET`（既定 8 秒）以内のときだけ差し替える。だめなら今の build を残して exit 0
 
-option は `AGENTSTACK_MAIL_UPDATE` より優先し、`env.sh` には記録しません。どの場合も最後に `mail-result: <installed|switched|kept|unchanged|refused|rolled-back> mode=… from=… to=… running=… outage_s=… reason=<code>` を 1 行出します（`--dry-run` では `mail-plan:`）。`install.sh --print-mail-plan` は、何をするかを `mail-plan:` の 1 行で出して終わります（読むだけ・project key 不要・常に exit 0）。差し替えや rollback の後には、止まっていた秒数と、動いている Claude Code の session で `/mcp` の接続と小さい呼び出しを確かめる手順を出します。`install-state.json` の `agent_mail.update` には mode・reason の code・止まっていた秒数も残ります。setup.sh・update.sh は、文の grep ではなくこの行を読めます。
+選び方は `--mail auto|update|keep` で、`--update-mail` / `--keep-mail` はその別名です。option は `AGENTSTACK_MAIL_UPDATE` より優先し、`env.sh` には記録しません。どの場合も最後に `mail-result: <installed|switched|kept|unchanged|refused|rolled-back> mode=… from=… to=… running=… outage_s=… reason=<code>` を 1 行出します（`--dry-run` では `mail-plan:`）。`install.sh --print-mail-plan` は、何をするかを `mail-plan:` の 1 行で出して終わります（読むだけ・project key 不要・常に exit 0）。差し替えや rollback の後には、止まっていた秒数と、動いている Claude Code の session で `/mcp` の接続と小さい呼び出しを確かめる手順、止まっている間に失敗した操作は繰り返す前に実行済みかを確かめること、を出します。`install-state.json` の `agent_mail.update` には mode・reason の code・止まっていた秒数も残ります。setup.sh・update.sh は、文の grep ではなくこの行を読めます。
 
 `auto` を既定にするのは、rollback まで含めた停止時間の上限と、更新後の database で前の build が動くことの確認を入れてからです（[設計メモ](docs/agentstack-mail-update-design.md)）。
 

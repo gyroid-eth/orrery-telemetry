@@ -132,6 +132,11 @@ Options:
   --label-prefix PREFIX  Default: existing env.sh, else org.agentstack
   --retire-legacy-mail   Retire a previous mail service found loaded (default:
                          report it and leave it running)
+  --mail auto|update|keep
+                         What to do with a running ORRERY Mail built from another
+                         commit (default keep; AGENTSTACK_MAIL_UPDATE sets it too,
+                         and this option wins). --update-mail and --keep-mail
+                         are the same as --mail update and --mail keep
   --update-mail          Switch a running ORRERY Mail to this checkout's build,
                          or exit 1 saying why not: build and verify the
                          candidate on a scratch port, back up the database,
@@ -203,10 +208,20 @@ while [[ $# -gt 0 ]]; do
       RETIRE_LEGACY_MAIL=true
       shift
       ;;
-    --update-mail|--keep-mail)
-      wanted="${1#--}"; wanted="${wanted%-mail}"
+    --mail|--mail=*|--update-mail|--keep-mail)
+      # --mail auto|update|keep; --update-mail and --keep-mail are aliases.
+      case "$1" in
+        --mail) [[ $# -ge 2 ]] || { echo "error: --mail needs auto, update or keep" >&2; exit 2; }
+                wanted="$2"; shift ;;
+        --mail=*) wanted="${1#--mail=}" ;;
+        *) wanted="${1#--}"; wanted="${wanted%-mail}" ;;
+      esac
+      case "$wanted" in
+        auto|update|keep) ;;
+        *) echo "error: --mail must be auto, update or keep (got: $wanted)" >&2; exit 2 ;;
+      esac
       if [[ -n "$MAIL_UPDATE_MODE_FLAG" && "$MAIL_UPDATE_MODE_FLAG" != "$wanted" ]]; then
-        echo "error: --update-mail and --keep-mail are mutually exclusive" >&2
+        echo "error: conflicting ORRERY Mail options: --mail $MAIL_UPDATE_MODE_FLAG and --mail $wanted" >&2
         exit 2
       fi
       MAIL_UPDATE_MODE_FLAG="$wanted"
@@ -3451,6 +3466,8 @@ mail_update_elapsed() {  # mail_update_elapsed <start from mail_update_clock>
   "$PYTHON_BIN" -c 'import sys, time; print(f"{time.time() - float(sys.argv[1]):.1f}")' "$1"
 }
 
+# setup.sh shows these same lines after a switch or a rollback; this function
+# is the canonical text (change both together).
 # After any stop, whatever its length: this installer's health check and a
 # selftest prove that Mail answers, not that a session already running got its
 # connection back. Proxy-connected children and Codex reconnect on their next
@@ -3458,9 +3475,11 @@ mail_update_elapsed() {  # mail_update_elapsed <start from mail_update_clock>
 # ~/.claude.json) came back after outages up to 15 s in testing and stayed
 # disconnected after 18 s, so each running session is the one to check.
 mail_update_reconnect_hint() {
-  say "ORRERY Mail was unavailable for ${MAIL_UPDATE_OUTAGE_SECONDS:-?}s. Mail calls made meanwhile failed; send them again if they mattered"
+  say "ORRERY Mail was unavailable for ${MAIL_UPDATE_OUTAGE_SECONDS:-?}s."
   say "  in each running Claude Code session: /mcp shows orrery-mail as connected, and a small call such as health_check succeeds;"
   say "  if it shows disconnected: /mcp, then orrery-mail, then reconnect. Children (through the proxy) and Codex reconnect on their next call"
+  say "  a Mail call that failed meanwhile may still have been carried out (only the answer was lost): check before repeating it --"
+  say "  a send in the recipient's inbox or your outbox, a registration with whois, a spawn or resume in the dashboard"
 }
 
 # Put the build that was running back. Its render, runner and candidate were

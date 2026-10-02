@@ -164,6 +164,7 @@ CI や script から入れる場合、既定のままだと 4 つの承認（Cla
 --codex-network MODE    Codex child の sandbox network（on | off、既定 on）
 --codex-add-dirs PATHS  Codex child に追加で書込を許す root（`:` 区切り）
 --retire-legacy-mail    付録参照（以前の MCP Agent Mail を退役させる）
+--mail auto|update|keep 稼働中の ORRERY Mail をどうするか（既定 keep。--update-mail / --keep-mail はその別名）
 --update-mail           稼働中の ORRERY Mail をこの checkout の build に必ず差し替える（できなければ exit 1。docs/agentstack-mail-update.md）
 --keep-mail             稼働中の ORRERY Mail の build を差し替えない（既定。AGENTSTACK_MAIL_UPDATE=auto は安全なときだけ差し替える）
 --print-mail-plan       ORRERY Mail をどうするかを 1 行出して終わる（読むだけ）

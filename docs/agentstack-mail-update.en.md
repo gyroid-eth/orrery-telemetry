@@ -89,7 +89,10 @@ AGENTSTACK_MAIL_UPDATE=auto ./scripts/install.sh   # switch only when it safely 
 | `--update-mail` (`AGENTSTACK_MAIL_UPDATE=update`) | switch; the outage budget does not apply (a person chose the time) | exit 1 |
 | none, `--keep-mail` (`AGENTSTACK_MAIL_UPDATE=keep`) | do not switch; a `notice:` reports the difference | — |
 
-An option wins over `AGENTSTACK_MAIL_UPDATE`. `AGENTSTACK_MAIL_UPDATE` is a
+The option is `--mail auto|update|keep` (or `--mail=VALUE`); `--update-mail`
+and `--keep-mail` are aliases. An option wins over `AGENTSTACK_MAIL_UPDATE`
+(cockpit's update.sh passes an option, so an outer environment value cannot
+override it). `AGENTSTACK_MAIL_UPDATE` is a
 per-run choice and is never recorded in `env.sh`, so a value chosen once does
 not stick to every later update. `auto` is not the default yet: before it
 becomes one, it needs an outage deadline that covers a rollback, and a check
@@ -204,7 +207,12 @@ AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<previous com
   until orrery-mail was reconnected from `/mcp`. After every stop, however
   short, the installer prints how long Mail was down and what to check in each
   running Claude Code session (`/mcp` shows orrery-mail as connected, and a
-  small call such as health_check succeeds). The installer's health check and
+  small call such as health_check succeeds). A Mail call that failed during the
+  stop may still have been carried out, with only the answer lost, so check
+  before repeating it (a send in the recipient's inbox or your outbox, a
+  registration with `whois`, a spawn or resume in the dashboard). The canonical
+  text is `mail_update_reconnect_hint` in `scripts/install.sh`; setup.sh shows
+  the same lines. The installer's health check and
   a selftest show that Mail answers, not that a session that was already
   running got its connection back.
 - **Tokens and credentials.** Agent tokens live in the shared database, and the

@@ -160,6 +160,7 @@ When installing from CI or a script, the four approvals (Claude settings merge, 
 --codex-network MODE    Codex child sandbox network (on | off; default on)
 --codex-add-dirs PATHS  extra writable roots for Codex children (`:`-separated)
 --retire-legacy-mail    see the appendix (retire a previous MCP Agent Mail)
+--mail auto|update|keep what to do with a running ORRERY Mail (default keep; --update-mail / --keep-mail are aliases)
 --update-mail           always replace the running ORRERY Mail with this checkout's build (exit 1 if it cannot; docs/agentstack-mail-update.en.md)
 --keep-mail             keep the running ORRERY Mail build (the default; AGENTSTACK_MAIL_UPDATE=auto switches only when it safely can)
 --print-mail-plan       print one line saying what would happen to ORRERY Mail, then exit (reads only)

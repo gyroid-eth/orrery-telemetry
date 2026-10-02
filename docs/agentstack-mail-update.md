@@ -81,7 +81,9 @@ AGENTSTACK_MAIL_UPDATE=auto ./scripts/install.sh   # 安全に差し替えられ
 | `--update-mail`（`AGENTSTACK_MAIL_UPDATE=update`） | 差し替える。止まる時間の予算は使わない（時期を人が選んだ） | exit 1 |
 | なし、`--keep-mail`（`AGENTSTACK_MAIL_UPDATE=keep`） | 差し替えず、`notice:` で差を示す | — |
 
-option は `AGENTSTACK_MAIL_UPDATE` より優先します。`AGENTSTACK_MAIL_UPDATE` は
+選び方は `--mail auto|update|keep`（`--mail=VALUE` も可）で、`--update-mail` と
+`--keep-mail` はその別名です。option は `AGENTSTACK_MAIL_UPDATE` より優先します
+（cockpit の update.sh は option で渡すので、外側の環境の値に負けません）。`AGENTSTACK_MAIL_UPDATE` は
 毎回の指定で、`env.sh` には記録しません（一度選んだ値が以後ずっと効かないように）。
 `auto` はまだ既定ではありません。既定にする前に、rollback まで含めた停止時間の
 上限と、更新後の database で前の build が動くことの確認を入れます
@@ -182,7 +184,11 @@ AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<前の commi
   orrery-mail を reconnect する必要がありました。installer は実際に止まっていた
   秒数と、動いている Claude Code の session ごとに確かめる手順（`/mcp` で
   orrery-mail が connected か、health_check などの小さい呼び出しが通るか）を、
-  止まった時間の長さに関わらず毎回出します。installer の health check や
+  止まった時間の長さに関わらず毎回出します。止まっている間に失敗と表示された
+  Mail の操作は、server が実行した後で返事だけ失われた場合があるので、繰り返す
+  前に実行済みかを確かめてください（送信は相手の inbox や送信履歴、登録は
+  `whois`、spawn・resume は dashboard）。文の正本は `scripts/install.sh` の
+  `mail_update_reconnect_hint` で、setup.sh も同じ文を出します。installer の health check や
   selftest は Mail が応答することの確認で、すでに動いていた session の接続が
   戻ったことの確認ではありません。
 - **token と credential。** agent の token は共有 database にあり、client 側の

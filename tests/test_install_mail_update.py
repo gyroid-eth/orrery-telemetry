@@ -844,6 +844,7 @@ def test_auto_switches_to_a_newer_build(tmp_path):
         assert "Mail is unavailable for about" in switched.stdout
         # Every switch says how to check running sessions, however short.
         assert "/mcp shows orrery-mail as connected" in switched.stdout
+        assert "check before repeating it" in switched.stdout
         line = _result_line(switched.stdout)
         assert {key: line[key] for key in ("result", "mode", "from", "to", "running", "reason")} == {
             "result": "switched", "mode": "auto", "from": "fixture-old", "to": "fixture-new",
@@ -957,8 +958,12 @@ def test_print_mail_plan_reads_only_and_always_answers(tmp_path):
             "mail-plan: keep mode=keep running=fixture-old to=fixture-new reason=keep_default")
         assert _plan(stack, "fixture-new", extra=AUTO) == (
             "mail-plan: switch mode=auto running=fixture-old to=fixture-new reason=newer_build")
-        assert _plan(stack, "fixture-new", "--keep-mail") == (
-            "mail-plan: keep mode=keep running=fixture-old to=fixture-new reason=keep_requested")
+        for keep in (("--keep-mail",), ("--mail", "keep"), ("--mail=keep",)):
+            assert _plan(stack, "fixture-new", *keep) == (
+                "mail-plan: keep mode=keep running=fixture-old to=fixture-new reason=keep_requested")
+        # The option wins over the environment, as update.sh relies on.
+        assert _plan(stack, "fixture-new", "--mail", "auto", extra={"AGENTSTACK_MAIL_UPDATE": "keep"}) == (
+            "mail-plan: switch mode=auto running=fixture-old to=fixture-new reason=newer_build")
         assert _plan(stack, "fixture-new", extra={"AGENTSTACK_MAIL_UPDATE": "update"}) == (
             "mail-plan: switch mode=update running=fixture-old to=fixture-new reason=newer_build")
         assert _plan(stack, "fixture-old") == (
@@ -969,10 +974,24 @@ def test_print_mail_plan_reads_only_and_always_answers(tmp_path):
         stack.teardown()
 
 
-def test_conflicting_or_unknown_mail_modes_are_refused():
-    both = subprocess.run(["/bin/bash", str(INSTALLER), "--update-mail", "--keep-mail", "--print-mail-plan"],
+@pytest.mark.parametrize("args", [
+    ("--update-mail", "--keep-mail"), ("--mail", "auto", "--keep-mail"), ("--mail=update", "--mail", "keep"),
+])
+def test_conflicting_mail_options_are_refused(args):
+    both = subprocess.run(["/bin/bash", str(INSTALLER), *args, "--print-mail-plan"],
                           cwd=ROOT, text=True, capture_output=True, check=False, timeout=30)
-    assert both.returncode == 2 and "mutually exclusive" in both.stderr
+    assert both.returncode == 2 and "conflicting ORRERY Mail options" in both.stderr
+
+
+@pytest.mark.parametrize("args", [("--mail", "sometimes"), ("--mail=",), ("--mail",)])
+def test_an_unknown_mail_option_value_is_refused(args):
+    bad = subprocess.run(["/bin/bash", str(INSTALLER), *args, "--print-mail-plan"] if args != ("--mail",)
+                         else ["/bin/bash", str(INSTALLER), "--mail"],
+                         cwd=ROOT, text=True, capture_output=True, check=False, timeout=30)
+    assert bad.returncode == 2 and "auto, update or keep" in bad.stderr
+
+
+def test_unknown_mail_mode_in_the_environment_is_refused():
     bad = subprocess.run(["/bin/bash", str(INSTALLER), "--print-mail-plan"], cwd=ROOT,
                          env={**os.environ, "AGENTSTACK_MAIL_UPDATE": "sometimes"},
                          text=True, capture_output=True, check=False, timeout=30)
