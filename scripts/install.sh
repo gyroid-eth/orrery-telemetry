@@ -152,8 +152,9 @@ Options:
                          AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET seconds (8), and
                          otherwise keeps the running build without failing
   --print-mail-update-advice
-                         When the running ORRERY Mail is older than this
-                         checkout's build, print what that costs, the risk of
+                         When the running ORRERY Mail is shown to be older
+                         than this checkout's build (an ancestor commit, or a
+                         missing feature), print what that costs, the risk of
                          updating and the recovery (no update command). Reads
                          only; prints nothing otherwise; exit 0
   --print-mail-plan      Print one `mail-plan:` line saying what this run would
@@ -435,7 +436,8 @@ fi
 # --print-mail-update-advice: the "Mail is out of date" notice (what does not
 # work, the risk of updating, the /mcp recovery) without the update command,
 # for setup.sh to show next to its own. Reads only; always exits 0; prints
-# nothing when the running Mail is this checkout's build or none is running.
+# nothing unless the running Mail is shown to be older: its commit is an
+# ancestor of this checkout's, or it lacks a feature this install relies on.
 if [[ "$PRINT_MAIL_ADVICE" == true ]]; then
   mail_plan_line="$(MAIL_UPDATE_MODE=update print_mail_plan)"
   case "$mail_plan_line" in
@@ -443,7 +445,8 @@ if [[ "$PRINT_MAIL_ADVICE" == true ]]; then
       plan_running="$(sed -n 's/.* running=\([^ ]*\).*/\1/p' <<< "$mail_plan_line")"
       plan_to="$(sed -n 's/.* to=\([^ ]*\).*/\1/p' <<< "$mail_plan_line")"
       plan_url="${AGENTSTACK_MCP_URL:-$(sed -n 's/^export AGENTSTACK_MCP_URL=//p' "$INSTALL_DIR/env.sh" 2>/dev/null | tr -d "\"'")}"
-      python3 "$SCRIPT_DIR/lib/mail_update_notice.py" stale --without-how --running "$plan_running" \
+      python3 "$SCRIPT_DIR/lib/mail_update_notice.py" stale --without-how --only-if-stale \
+        --repo "$REPO_ROOT" --running "$plan_running" \
         --to "$plan_to" ${plan_url:+--mcp-url "$plan_url"} 2>/dev/null || true
       ;;
   esac
@@ -5077,7 +5080,7 @@ print_mail_stale_notice() {
   esac
   echo
   "$PYTHON_BIN" "$SCRIPT_DIR/lib/mail_update_notice.py" stale --running "$from" --to "$to" \
-    --mcp-url "$MCP_URL" || true
+    --repo "$REPO_ROOT" --mcp-url "$MCP_URL" || true
   echo
 }
 

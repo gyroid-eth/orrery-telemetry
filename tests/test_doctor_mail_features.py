@@ -131,16 +131,16 @@ def test_the_stale_notice_says_what_breaks_how_to_update_the_risk_and_the_recove
     assert FEATURES[0]["needed_for"] in text and FEATURES[0]["without_it"] in text
     assert "./scripts/install.sh --mail update" in text and "./scripts/setup.sh --mail update" in text
     assert "Children and Codex reconnect by themselves" in text
-    assert "18 s or more" in text
+    assert "18 s and 19 s did not" in text
     # The Claude Code screens as they are: /mcp, the failed server, Reconnect.
     assert "/mcp, choose orrery-mail (shown as \u2718 failed), then Reconnect (not Authenticate)" in text
     assert len(text.splitlines()) <= 10
 
 
 def test_without_how_leaves_the_update_command_to_the_caller():
-    text = _notice("stale", "--missing", "", "--without-how")
+    text = _notice("stale", "--missing", "register_agent.existing_agent_id", "--without-how")
     assert "--mail update" not in text
-    assert "have not reached you yet" in text and "Reconnect" in text
+    assert text.startswith("ORRERY Mail is out of date") and "Reconnect" in text
 
 
 def test_the_after_stop_notice_is_the_same_recovery():
@@ -149,6 +149,77 @@ def test_the_after_stop_notice_is_the_same_recovery():
     assert "then Reconnect (not Authenticate)" in text and "check before repeating it" in text
 
 
-def test_an_unreachable_mail_is_not_reported_as_complete():
-    text = _notice("stale", "--mcp-url", "http://127.0.0.1:9/mcp")
-    assert "have not reached you yet" in text
+def test_an_unreachable_mail_proves_nothing_either_way():
+    # Unreachable: neither "complete" nor "out of date"; only what is known.
+    text = _notice("stale", "--mcp-url", "http://127.0.0.1:9/mcp", "--running", "build-a", "--to", "build-b")
+    assert "out of date" not in text and "cannot be told" in text
+    assert _notice("stale", "--mcp-url", "http://127.0.0.1:9/mcp", "--running", "build-a",
+                   "--to", "build-b", "--only-if-stale") == ""
+
+
+@pytest.fixture
+def history(tmp_path):
+    """A checkout with an older build, a newer one and a diverged one."""
+    repo = tmp_path / "repo"
+    package = repo / "packages" / "agentstack_mail"
+    package.mkdir(parents=True)
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, text=True,
+                              capture_output=True, env={**os.environ, "GIT_AUTHOR_NAME": "t",
+                              "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
+                              "GIT_COMMITTER_EMAIL": "t@example.invalid"}).stdout.strip()
+
+    def commit(text):
+        (package / "app.py").write_text(text)
+        git("add", "-A")
+        git("commit", "-q", "-m", text)
+        return git("rev-parse", "HEAD")
+
+    git("init", "-q", "-b", "main")
+    old = commit("old")
+    new = commit("new")
+    git("switch", "-q", "-c", "side", old)
+    side = commit("side")
+    git("switch", "-q", "main")
+    return repo, old, new, side
+
+
+def _stale(repo, running, to, *extra):
+    return _notice("stale", "--repo", str(repo), "--running", running, "--to", to, "--missing", "", *extra)
+
+
+def test_only_an_older_running_mail_is_called_out_of_date(history):
+    repo, old, new, side = history
+    older = _stale(repo, old, new)
+    assert older.startswith("ORRERY Mail is out of date") and "--mail update" in older
+    # Newer than the checkout: updating from it would go back. Say so instead.
+    newer = _stale(repo, new, old)
+    assert "out of date" not in newer and "--mail update" not in newer
+    assert "newer than this checkout" in newer
+    # Diverged or not a commit of this checkout: which is newer cannot be told.
+    for running in (side, "fixture-build"):
+        text = _stale(repo, running, new)
+        assert "out of date" not in text and "--mail update" not in text
+        assert "cannot be told" in text
+
+
+def test_only_if_stale_prints_nothing_unless_the_running_mail_is_older(history):
+    repo, old, new, side = history
+    assert _stale(repo, old, new, "--only-if-stale").startswith("ORRERY Mail is out of date")
+    for running in (new, side, "fixture-build"):
+        assert _stale(repo, running, old if running == new else new, "--only-if-stale") == ""
+
+
+def test_a_feature_proven_missing_is_out_of_date_whatever_the_history(history):
+    repo, old, new, side = history
+    text = _notice("stale", "--repo", str(repo), "--running", side, "--to", new,
+                   "--missing", "register_agent.existing_agent_id")
+    assert text.startswith("ORRERY Mail is out of date") and FEATURES[0]["needed_for"] in text
+
+
+def test_the_risk_does_not_promise_a_short_stop_and_states_observations_as_such():
+    text = _notice("stale", "--missing", "register_agent.existing_agent_id")
+    assert "usually a few seconds" in text
+    assert "no short limit is guaranteed" in text
+    assert "Claude Code 2.1.287" in text and "18 s and 19 s" in text and "8 s and 15 s" in text

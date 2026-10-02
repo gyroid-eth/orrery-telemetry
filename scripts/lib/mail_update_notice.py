@@ -5,11 +5,16 @@ install.sh, agentstack-doctor and the cockpit's setup.sh all print these
 lines; they call this file instead of keeping copies, so the advice cannot
 drift apart. Plain text, English, one screen.
 
-    mail_update_notice.py stale [--running ID] [--to ID] [--missing tool.param,...]
-                                [--mcp-url URL] [--features FILE] [--without-how]
+    mail_update_notice.py stale [--running ID] [--to ID] [--repo CHECKOUT]
+                                [--missing tool.param,...] [--mcp-url URL]
+                                [--features FILE] [--without-how] [--only-if-stale]
     mail_update_notice.py after-stop [--outage SECONDS]
 
-`stale` lists what the running Mail cannot do: the names given with
+`stale` calls the running Mail out of date only when that is shown: its
+commit is an ancestor of the checkout's (--repo), or a feature is missing.
+Otherwise it says what is known (newer, or which is newer cannot be told) and
+suggests nothing; with --only-if-stale it then prints nothing. It lists what
+the running Mail cannot do: the names given with
 --missing, or, with --mcp-url, whatever its tools/list lacks from the
 features file. --without-how leaves out the two "To update" lines, for a
 caller that words its own (setup.sh, whose one-line form differs). `after-stop` is what to check once Mail answers again after a
@@ -24,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import subprocess
 import sys
 import urllib.request
 
@@ -66,6 +72,31 @@ def _short(build: str) -> str:
     return build[:7] if len(build) >= 12 and all(c in "0123456789abcdef" for c in build) else build
 
 
+def _relation(repo: str, running: str, to: str) -> str:
+    """older / newer / diverged / unknown: how the running build stands to the checkout's.
+
+    Only an ancestor of the checkout's commit is "older". A different build is
+    not by itself an old one: a running Mail can be newer than a checkout that
+    was not pulled, and recommending an update from that checkout would go back.
+    """
+    if not (repo and running and to):
+        return "unknown"
+
+    def ancestor(a: str, b: str) -> bool | None:
+        done = subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", a, b],
+                              capture_output=True, text=True)
+        return {0: True, 1: False}.get(done.returncode)
+
+    forward, backward = ancestor(running, to), ancestor(to, running)
+    if forward is None or backward is None:
+        return "unknown"
+    if forward:
+        return "older"
+    if backward:
+        return "newer"
+    return "diverged"
+
+
 def stale(args: argparse.Namespace) -> list[str]:
     wanted = _features(pathlib.Path(args.features))
     if args.missing is not None:
@@ -75,9 +106,20 @@ def stale(args: argparse.Namespace) -> list[str]:
     else:
         missing = None
     known = {f"{f['tool']}.{f['parameter']}": f for f in wanted}
+    relation = _relation(args.repo, args.running, args.to)
+    running, to = _short(args.running), _short(args.to)
     builds = ", ".join(part for part in (
-        f"running {_short(args.running)}" if args.running else "",
-        f"this checkout {_short(args.to)}" if args.to else "") if part)
+        f"running {running}" if args.running else "",
+        f"this checkout {to}" if args.to else "") if part)
+    if not missing and relation != "older":
+        # Different, but not shown to be older: say what is known, suggest nothing.
+        if args.only_if_stale or not (args.running and args.to):
+            return []
+        if relation == "newer":
+            return [f"ORRERY Mail runs {running}, which is newer than this checkout ({to});"
+                    " this run left it as it is. Pull the checkout before updating Mail from it."]
+        return [f"ORRERY Mail runs {running}, a different build from this checkout ({to});"
+                " which is newer cannot be told here, so no update is suggested."]
     lines = [f"ORRERY Mail is out of date{f' ({builds})' if builds else ''}."]
     if missing:
         for name in missing:
@@ -95,9 +137,11 @@ def stale(args: argparse.Namespace) -> list[str]:
             "         or: ./scripts/setup.sh --mail update     (ORRERY cockpit checkout)",
         ]
     lines += [
-        "  Risk: Mail stops for a few seconds while it switches, and agents' Mail calls fail meanwhile.",
-        "        Children and Codex reconnect by themselves. A top-level Claude Code session may not",
-        "        reconnect, and did not in testing when the stop lasted 18 s or more.",
+        "  Risk: Mail stops while it switches, usually a few seconds; if the new build does not start,",
+        "        the switch and the return to the old one can take minutes (no short limit is guaranteed).",
+        "        Agents' Mail calls fail meanwhile. Children and Codex reconnect by themselves.",
+        "        A top-level Claude Code session may not: with Claude Code 2.1.287 in testing, stops of",
+        "        8 s and 15 s reconnected by themselves, stops of 18 s and 19 s did not.",
         f"  If one shows orrery-mail as failed afterwards, {RECONNECT}.",
     ]
     return lines
@@ -127,12 +171,16 @@ def main(argv: list[str]) -> int:
     old.add_argument("--mcp-url", default="")
     old.add_argument("--features", default=str(FEATURES))
     old.add_argument("--without-how", action="store_true")
+    old.add_argument("--repo", default="")
+    old.add_argument("--only-if-stale", action="store_true")
     old.set_defaults(render=stale)
     stop = sub.add_parser("after-stop")
     stop.add_argument("--outage", default="")
     stop.set_defaults(render=after_stop)
     args = parser.parse_args(argv)
-    print("\n".join(args.render(args)))
+    lines = args.render(args)
+    if lines:
+        print("\n".join(lines))
     return 0
 
 

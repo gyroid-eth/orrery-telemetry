@@ -615,15 +615,22 @@ mail-features: status=<ok|missing|unknown> missing=<tool.parameter,...> running=
 ありません。
 
 **古い Mail の案内。** install.sh は、この run で差し替えなかった Mail がこの
-checkout の build より古いとき、結果行の前に短い案内を出します。足りない機能、
+checkout の build より**古いと分かるとき**（動いている build の commit がこの
+checkout の commit の祖先であるとき、または頼る機能が欠けているとき）、結果行の
+前に短い案内を出します。動いている build の方が新しいときは「checkout の方が
+古い。Mail をこの checkout から更新する前に pull する」とだけ、どちらが新しいか
+分からない（分岐・この checkout に無い commit）ときはそう 1 行出し、更新は勧め
+ません（古い checkout から更新すると Mail を戻してしまうため）。足りない機能、
 更新の仕方（`./scripts/install.sh --mail update`／`./scripts/setup.sh --mail update`）、
-更新のリスク（数秒止まり、その間の Mail の呼び出しは失敗しうる。子と Codex は
-自分で戻る。top level の Claude Code は戻らないことがあり、試験では 18 秒以上の
-停止で戻らなかった）、戻らなかったときの操作（その session で `/mcp` →
+更新のリスク（止まるのは通常は数秒。新しい build が起動しないと、切り替えと
+前の build への戻しに数分かかりうる。短い上限は保証しない。その間の Mail の
+呼び出しは失敗しうる。子と Codex は自分で戻る。top level の Claude Code は戻らない
+ことがある。Claude Code 2.1.287 の試験では 8 秒と 15 秒の停止は自分で戻り、18 秒と
+19 秒は戻らなかった）、戻らなかったときの操作（その session で `/mcp` →
 orrery-mail（✘ failed と表示）→ Reconnect。Authenticate ではない）です。doctor も
 欠けた機能があれば同じ案内を出します。文の正本は `scripts/lib/mail_update_notice.py`
 で、cockpit の setup.sh も `install.sh --print-mail-update-advice`（読むだけ・常に
-exit 0・差が無ければ何も出さない・更新の command の行を除く）でこれを出します。
+exit 0・古いと分かるときだけ出す・更新の command の行を除く）でこれを出します。
 
 ## 経緯
 

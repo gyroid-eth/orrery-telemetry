@@ -223,8 +223,14 @@ case "$mail_features_status" in
     done < <(tail -n +2 <<< "$MAIL_FEATURES")
     MAIL_NOTICE="$SCRIPT_DIR/lib/mail_update_notice.py"
     [[ -f "$MAIL_NOTICE" ]] || MAIL_NOTICE="$SCRIPT_DIR/../scripts/lib/mail_update_notice.py"
+    # The checkout this install came from, so the notice can tell whether the
+    # running Mail is older than it (an update from an older checkout goes back).
+    MAIL_REPO="$("$PYTHON_BIN" -c 'import json, sys; print(json.load(open(sys.argv[1])).get("repo_root") or "")' "$MANIFEST" 2>/dev/null || true)"
+    MAIL_REPO_HEAD=""
+    [[ -z "$MAIL_REPO" ]] || MAIL_REPO_HEAD="$(git -C "$MAIL_REPO" rev-parse HEAD 2>/dev/null || true)"
     "$PYTHON_BIN" "$MAIL_NOTICE" stale --running "$mail_features_running" --missing "$mail_features_missing" \
-      --features "$MAIL_FEATURES_FILE" 2>/dev/null | sed 's/^/      /' >&2 || true
+      --features "$MAIL_FEATURES_FILE" ${MAIL_REPO_HEAD:+--repo "$MAIL_REPO" --to "$MAIL_REPO_HEAD"} \
+      2>/dev/null | sed 's/^/      /' >&2 || true
     ;;
   *) echo "warn: could not read the running ORRERY Mail's tools; its features were not checked" >&2 ;;
 esac
