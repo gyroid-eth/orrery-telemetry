@@ -24,7 +24,7 @@ from test_claude_resume_mail import NAME, ROOT, TOKEN, child, private, resume
 RETIRED_AT = "2026-09-30T14:32:36Z"
 
 
-def session_start(runtime, registration, cwd, source="resume"):
+def session_start(runtime, registration, cwd, source="resume", extra=None):
     env = {
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
         "HOME": os.environ["HOME"],
@@ -37,6 +37,7 @@ def session_start(runtime, registration, cwd, source="resume"):
         "AGENTSTACK_HOOKS_DIR": str(ROOT / "hooks"),
         "AGENTSTACK_REGISTER_LIB": str(ROOT / "bin/lib/agentstack-register.sh"),
         "AGENTSTACK_PYTHON": sys.executable,
+        **(extra or {}),
     }
     os.makedirs(env["HOME"], exist_ok=True)
     payload = {"session_id": "sess-terminal-1", "hook_event_name": "SessionStart", "cwd": str(cwd)}
@@ -145,3 +146,14 @@ def test_session_start_sweeps_leases_of_ended_sessions(resume, mail, tmp_path):
     assert live.exists()
     # This session's own lease (the pytest process runs the hook) is written.
     assert (runtime / "live-sessions" / NAME / str(os.getpid())).exists()
+
+
+def test_a_failing_lease_helper_writes_nothing_instead_of_going_around_the_lock(resume, mail, tmp_path):
+    """#182 review: only a missing helper falls back to a plain write. A helper
+    that runs and fails (an older python3, say) must not write a lease outside
+    the lock that recovery and pruning hold."""
+    runtime, registration, *_ = resume
+    failing = tmp_path / "failing_helper.py"
+    failing.write_text("import sys\nsys.exit(3)\n")
+    session_start(runtime, registration, tmp_path, extra={"AGENTSTACK_CHILD_RESUME_HELPER": str(failing)})
+    assert not (runtime / "live-sessions" / NAME / str(os.getpid())).exists()

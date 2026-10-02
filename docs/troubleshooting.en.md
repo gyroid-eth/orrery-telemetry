@@ -474,6 +474,14 @@ If stale top-level environment may have been inherited, relaunch from a new term
 
 An agent with no transcript may show only its mail timeline.
 
+## Resume is refused after a reboot or a forced shutdown
+
+A `/delegate` child's state says "running" while it runs; a normal exit retires it, and it can then be resumed for the retention period. When the computer goes down (forced off, power loss, or an OS restart that skips the exit), the child is never retired, and both the dashboard's RESUME and a terminal `claude --resume` refuse it with "This child did not end normally …". A resume cut off right after it launched is refused with "A resume of this child started and did not finish …".
+
+When the dashboard starts (and hourly after that), it makes resumable again any "running" state, and any unfinished resume, **last written before this machine booted**. It changes nothing while a tmux session of that name exists, while a live-session lease written since the boot names a live process, when the tmux state cannot be read, while a registration or legacy migration is pending, or when the owner credential does not match the state. With the dashboard running after a reboot, no manual retire is needed. If a resume is still refused, check whether a tmux session of that child is still there.
+
+A live-session lease (`runtime/live-sessions/<name>/<pid>`) written before the boot does not count as alive: a reboot may have given that PID to an unrelated process.
+
 ## Terminal does not open
 
 - check `AGENTSTACK_TERMINAL`

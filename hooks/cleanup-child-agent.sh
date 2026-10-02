@@ -199,6 +199,18 @@ identity_live_elsewhere() {
     elif [[ -n "${TMUX:-}" ]]; then
         return 0
     fi
+    # A lease written before this machine booted names a PID that may now be
+    # another process; child_resume.py ignores those (162nd seminar: after a
+    # forced shutdown, stale leases made identities look alive).
+    local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}" rc=2
+    if [[ -f "$helper" ]]; then
+        "${AGENTSTACK_PYTHON:-$(agentstack_installed_env_value AGENTSTACK_PYTHON 2>/dev/null || true)}" "$helper" live-lease --runtime-dir "$RUNTIME_DIR" \
+            --agent-name "$name" >/dev/null 2>&1 && rc=0 || rc=$?
+        case "$rc" in
+            0) return 0 ;;
+            1) return 1 ;;
+        esac
+    fi
     for lease in "$RUNTIME_DIR/live-sessions/$name"/*; do
         [[ -f "$lease" ]] || continue
         pid="${lease##*/}"

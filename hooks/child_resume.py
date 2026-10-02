@@ -21,7 +21,6 @@ import shutil
 import stat
 import tempfile
 from datetime import date, datetime, time, timedelta, timezone
-import tomllib
 from typing import Any, Callable
 
 
@@ -59,6 +58,26 @@ def _retained_shape(state: dict[str, Any]) -> bool:
                 and state["codex_mcp_profile"] in MCP_PROFILES)
         )
     )
+
+
+# What a person reads when a resume is refused for state a crash left behind.
+NOT_ENDED_NORMALLY = (
+    "This child did not end normally (for example, the computer was shut down or "
+    "forced off), so it was never retired. The dashboard makes such a child "
+    "resumable when it starts after a reboot; if it is still refused, a session of "
+    "this child may still be running (look for its tmux session)."
+)
+RESUME_NOT_FINISHED = (
+    "A resume of this child started and did not finish (for example, the computer "
+    "went off right after). The dashboard clears this when it starts after a "
+    "reboot; if it is still refused, the resumed session may still be starting."
+)
+
+
+def require_retired(state: dict[str, Any]) -> None:
+    """Refuse a child state a crash left running, saying so in plain words."""
+    if state.get("retired_at") is None and state.get("resume_in_progress_at") is None:
+        raise ResumeStateError("config_unrestorable", NOT_ENDED_NORMALLY)
 
 
 class ResumeStateError(ValueError):
@@ -774,9 +793,8 @@ def inspect_retained(
                 "config_unrestorable", "child resume state is incomplete"
             )
         if state.get("resume_in_progress_at") is not None:
-            raise ResumeStateError(
-                "config_unrestorable", "child resume is already in progress"
-            )
+            raise ResumeStateError("config_unrestorable", RESUME_NOT_FINISHED)
+        require_retired(state)
         _parse_timestamp(state.get("retired_at"), "retired_at")
         expires_at = _parse_timestamp(state.get("resume_expires_at"), "resume_expires_at")
         if _utc_now(now) >= expires_at:
@@ -963,6 +981,218 @@ def purge_expired(runtime_dir: Path, *, now: datetime | None = None) -> list[str
         ):
             removed.append(name)
     return removed
+
+
+def _toml():
+    """tomllib, imported where TOML is read: the lease and recovery commands
+    must also run under an older python3 (3.9 on macOS), where it is absent."""
+    import tomllib
+
+    return tomllib
+
+
+def boot_time() -> float | None:
+    """When this machine last booted (epoch seconds), or None if unknown."""
+    try:
+        for line in Path("/proc/stat").read_text(encoding="ascii").splitlines():
+            if line.startswith("btime "):
+                return float(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        import subprocess
+
+        raw = subprocess.run(["sysctl", "-n", "kern.boottime"], capture_output=True,
+                             text=True, timeout=5, check=False).stdout
+        match = re.search(r"sec = (\d+)", raw)
+        return float(match.group(1)) if match else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def recover_after_reboot(
+    runtime_dir: Path,
+    *,
+    is_live: Callable[[str], bool | None],
+    retention_days: int,
+    boot: float | None = None,
+    now: datetime | None = None,
+) -> list[tuple[str, str]]:
+    """Make children that a reboot stopped mid-run resumable again.
+
+    A child's state says "running" (retired_at null) until its normal exit
+    retires it. A forced shutdown skips that exit, and every resume then
+    refused with "retired_at is missing" (162nd seminar: after each reboot the
+    agents could not resume until retired by hand). Likewise a resume that
+    launched and was cut off before its session started stays "pending".
+
+    Only state last written before this machine booted is touched: no process
+    from before a boot can still be running, so that is proof, not a guess.
+    It must also have no tmux session now (is_live: True = live, False = not
+    live, None = cannot tell, which skips it), a matching owner credential,
+    and no pending registration or migration (left as they are). Everything is
+    re-read under the child's lock. Returns (name, "retired" | "resume_cleared").
+    """
+    recovered: list[tuple[str, str]] = []
+    if retention_days <= 0:
+        return recovered
+    boot = boot_time() if boot is None else boot
+    if boot is None:
+        return recovered
+    try:
+        candidates = tuple((runtime_dir / "child-agents").glob("*.json"))
+    except OSError:
+        return recovered
+    for path in candidates:
+        name = path.stem
+        if not SAFE_NAME.fullmatch(name):
+            continue
+        state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, name)
+        try:
+            if state_path.lstat().st_mtime >= boot:
+                continue
+            if is_live(name) is not False:
+                continue
+            with _AgentLock(lock_path, exclusive=True):
+                if state_path.lstat().st_mtime >= boot:
+                    continue
+                pending = state_path.with_name(f".{name}.registration-pending.json")
+                if any(item.exists() or item.is_symlink() for item in (pending, _legacy_pending(state_path))):
+                    continue
+                state = _load_state(state_path)
+                _validate_identity(state, agent_name=name)
+                if not _retained_shape(state):
+                    continue
+                canonical = _read_private(token_path, "canonical child credential",
+                                          MAX_TOKEN_BYTES).decode("utf-8").strip()
+                token = state.get("registration_token")
+                if (not isinstance(token, str) or not token or not canonical
+                        or not hmac.compare_digest(canonical.encode("utf-8"), token.encode("utf-8"))):
+                    continue
+                if state.get("retired_at") is None and state.get("resume_in_progress_at") is None:
+                    retired = _utc_now(now)
+                    state["retired_at"] = _timestamp(retired)
+                    state["resume_expires_at"] = _timestamp(retired + timedelta(days=retention_days))
+                    outcome = "retired"
+                elif state.get("retired_at") is not None and state.get("resume_in_progress_at") is not None:
+                    _parse_timestamp(state.get("retired_at"), "retired_at")
+                    _parse_timestamp(state.get("resume_expires_at"), "resume_expires_at")
+                    state.pop("resume_in_progress_at")
+                    outcome = "resume_cleared"
+                else:
+                    continue
+                # A session may have started while this waited for the child's
+                # lock: look again (tmux and leases) before taking the lease lock.
+                if is_live(name) is not False:
+                    continue
+                # Then only the leases again, and the write, under the lease lock
+                # every lease writer takes: no lease can appear in between.
+                with _LeaseLock(runtime_dir):
+                    if live_lease(runtime_dir, name, boot=boot):
+                        continue
+                    _atomic_json(state_path, state)
+                    os.chmod(token_path, 0o600)
+                recovered.append((name, outcome))
+        except (ResumeStateError, OSError, UnicodeDecodeError):
+            continue
+    return recovered
+
+
+def _lease_alive(lease: Path, boot: float | None) -> bool:
+    """A live-session lease names a running process only if it was written since
+    this machine booted and that PID is alive. Before a boot, the PID may now
+    belong to an unrelated process (a reboot reuses PIDs)."""
+    if not lease.name.isdigit():
+        return False
+    try:
+        if boot is not None and lease.stat().st_mtime < boot:
+            return False
+        os.kill(int(lease.name), 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+class _LeaseLock:
+    """One lock for every live-session lease: writing one (SessionStart), removing
+    stale ones (prune_leases) and recovery's last look before it changes a
+    child's state all hold it, so none of them acts on a lease the other is
+    writing (#182 review). Nobody bypasses it. Holders keep it for milliseconds:
+    inside it they only read and write lease files and child state (no tmux, no
+    ps). A waiter that has waited `warn_after` seconds says so once on stderr and
+    keeps waiting."""
+
+    def __init__(self, runtime_dir: Path, *, warn_after: float = 10.0) -> None:
+        self.root = runtime_dir / "live-sessions"
+        self.warn_after = warn_after
+        self.descriptor: int | None = None
+
+    def __enter__(self) -> "_LeaseLock":
+        import sys as _sys
+        import time as _time
+
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.descriptor = os.open(self.root / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        started, warned = _time.monotonic(), False
+        while True:
+            try:
+                fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except BlockingIOError:
+                if not warned and _time.monotonic() - started >= self.warn_after:
+                    print(f"child_resume: still waiting for {self.root / '.lock'}", file=_sys.stderr)
+                    warned = True
+                _time.sleep(0.02)
+
+    def __exit__(self, *_exc: object) -> None:
+        if self.descriptor is not None:
+            os.close(self.descriptor)
+            self.descriptor = None
+
+
+def write_lease(runtime_dir: Path, agent_name: str, pid: int) -> None:
+    """Record that `pid` (a provider CLI) runs `agent_name`, under the lease lock."""
+    if not SAFE_NAME.fullmatch(agent_name) or pid <= 1:
+        raise ResumeStateError("invalid_identity", "lease name or PID is not valid")
+    with _LeaseLock(runtime_dir) as lock:
+        holder = lock.root / agent_name
+        holder.mkdir(mode=0o700, exist_ok=True)
+        (holder / str(pid)).write_bytes(b"")
+
+
+def prune_leases(runtime_dir: Path, *, boot: float | None = None) -> None:
+    """Drop leases whose process has ended or that predate the last boot."""
+    boot = boot_time() if boot is None else boot
+    root = runtime_dir / "live-sessions"
+    if not root.is_dir():
+        return
+    with _LeaseLock(runtime_dir):
+        try:
+            holders = [path for path in root.iterdir() if path.is_dir()]
+        except OSError:
+            return
+        for holder in holders:
+            try:
+                for lease in holder.iterdir():
+                    if lease.name.isdigit() and not _lease_alive(lease, boot):
+                        lease.unlink(missing_ok=True)
+                holder.rmdir()
+            except OSError:
+                continue
+
+
+def live_lease(runtime_dir: Path, agent_name: str, *, exclude_pid: int | None = None,
+               boot: float | None = None) -> bool:
+    """Is a session of this identity alive, by its leases (not counting exclude_pid)?"""
+    boot = boot_time() if boot is None else boot
+    holder = runtime_dir / "live-sessions" / agent_name
+    try:
+        leases = list(holder.iterdir()) if holder.is_dir() else []
+    except OSError:
+        return True  # cannot tell: say yes, as identity_live_elsewhere does
+    return any(lease.name != str(exclude_pid) and _lease_alive(lease, boot) for lease in leases)
 
 
 def _looks_like_agent_mail(name: str) -> bool:
@@ -1222,8 +1452,8 @@ def _worktree_hook_trust(config_text: str, work_dir: Path | None) -> list[str]:
         return []
     worktree, common = found
     try:
-        state = tomllib.loads(config_text).get("hooks", {}).get("state", {})
-    except tomllib.TOMLDecodeError:
+        state = _toml().loads(config_text).get("hooks", {}).get("state", {})
+    except _toml().TOMLDecodeError:
         return []
     if not isinstance(state, dict):
         return []
@@ -1432,14 +1662,14 @@ def _build_home_unlocked(
         config_text = "\n".join(lines) + "\n"
         if overlay_setting.strip():
             try:
-                overlay = tomllib.loads(
+                overlay = _toml().loads(
                     Path(overlay_setting).read_text(encoding="utf-8")
                 )
-                config = tomllib.loads(config_text)
+                config = _toml().loads(config_text)
                 _drop_protected_overlay_tables(overlay)
                 _deep_merge(config, overlay)
                 candidate = _emit_toml(config)
-                tomllib.loads(candidate)
+                _toml().loads(candidate)
                 config_text = candidate
             except Exception as exc:
                 print(
@@ -1451,7 +1681,7 @@ def _build_home_unlocked(
                     file=os.sys.stderr,
                 )
         if mcp_profile == "orrery-only":
-            config = tomllib.loads(config_text)
+            config = _toml().loads(config_text)
             for name, server in config.get("mcp_servers", {}).items():
                 if name == "agentstack" or _looks_like_agent_mail(name):
                     continue
@@ -1464,13 +1694,13 @@ def _build_home_unlocked(
                     plugin["enabled"] = False
             config_text = _emit_toml(config)
         if tools_spec is not None:
-            config = tomllib.loads(config_text)
+            config = _toml().loads(config_text)
             try:
                 tools.codex_apply(config, tools_spec)
             except tools.ToolsError as exc:
                 raise ValueError(str(exc)) from exc
             config_text = _emit_toml(config)
-            tomllib.loads(config_text)
+            _toml().loads(config_text)
         target = temporary / "config.toml"
         target.write_text(config_text, encoding="utf-8")
         os.chmod(target, 0o600)
@@ -1602,6 +1832,16 @@ def main() -> int:
     purge.add_argument("--runtime-dir", required=True)
     purge.add_argument("--expired", action="store_true")
     purge.add_argument("agent_name", nargs="?")
+    prune = sub.add_parser("prune-leases")
+    prune.add_argument("--runtime-dir", required=True)
+    write = sub.add_parser("write-lease")
+    write.add_argument("--runtime-dir", required=True)
+    write.add_argument("--agent-name", required=True)
+    write.add_argument("--pid", type=int, required=True)
+    lease = sub.add_parser("live-lease")
+    lease.add_argument("--runtime-dir", required=True)
+    lease.add_argument("--agent-name", required=True)
+    lease.add_argument("--exclude-pid", type=int, default=None)
     discard = sub.add_parser("discard-generated")
     discard.add_argument("--runtime-dir", required=True)
     discard.add_argument("--agent-name", required=True)
@@ -1654,6 +1894,14 @@ def main() -> int:
         elif args.command == "resume-eligibility":
             print(resume_eligibility(runtime, args.agent_name, agent_id=args.agent_id,
                                      project_key=args.project_key, program=args.program))
+        elif args.command == "prune-leases":
+            prune_leases(runtime)
+        elif args.command == "write-lease":
+            write_lease(runtime, args.agent_name, args.pid)
+        elif args.command == "live-lease":
+            if not SAFE_NAME.fullmatch(args.agent_name):
+                return 2
+            return 0 if live_lease(runtime, args.agent_name, exclude_pid=args.exclude_pid) else 1
         elif args.command == "mark-retired":
             print(
                 "retained"
