@@ -652,12 +652,14 @@ mail-features: status=<ok|missing|unknown> missing=<tool.parameter,...> running=
 
 **The notice about an old Mail.** When the Mail this run did not replace is
 **shown to be** older than this checkout's build (its commit is an ancestor of
-the checkout's, or it lacks a feature this install relies on), install.sh
-prints a short notice before the result line. When the running build is newer,
-it says only that the checkout is older and should be pulled before updating
-Mail from it; when which is newer cannot be told (diverged, or not a commit of
-this checkout), it says so in one line. Neither suggests an update, since an
-update from an older checkout would take Mail back. The notice gives what does not work, how to update
+the checkout's), install.sh prints a short notice before the result line. When
+the running build is newer, it says that the checkout is older and should be
+pulled before updating Mail from it; when which is newer cannot be told
+(diverged, or not a commit of this checkout), it says so. Neither suggests an
+update from this checkout, since an update from an older checkout would take
+Mail back. A missing feature is reported in every case, but it is not proof
+that updating from this checkout adds it, so then the notice says to update
+from a checkout at least as new as the running build. The notice gives what does not work, how to update
 (`./scripts/install.sh --mail update` / `./scripts/setup.sh --mail update`),
 the risk of updating (Mail usually stops for a few seconds, but if the new
 build does not start, the switch and the return to the old one can take

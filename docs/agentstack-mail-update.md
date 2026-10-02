@@ -616,11 +616,14 @@ mail-features: status=<ok|missing|unknown> missing=<tool.parameter,...> running=
 
 **古い Mail の案内。** install.sh は、この run で差し替えなかった Mail がこの
 checkout の build より**古いと分かるとき**（動いている build の commit がこの
-checkout の commit の祖先であるとき、または頼る機能が欠けているとき）、結果行の
-前に短い案内を出します。動いている build の方が新しいときは「checkout の方が
-古い。Mail をこの checkout から更新する前に pull する」とだけ、どちらが新しいか
-分からない（分岐・この checkout に無い commit）ときはそう 1 行出し、更新は勧め
-ません（古い checkout から更新すると Mail を戻してしまうため）。足りない機能、
+checkout の commit の祖先であるとき）、結果行の前に短い案内を出します。動いて
+いる build の方が新しいときは「checkout の方が古い。Mail をこの checkout から
+更新する前に pull する」と、どちらが新しいか分からない（分岐・この checkout に
+無い commit）ときはそう出し、どちらでもこの checkout からの更新は勧めません
+（古い checkout から更新すると Mail を戻してしまうため）。頼る機能が欠けている
+ことは、どの場合も知らせます。ただし欠けていることは「この checkout から更新
+すれば直る」根拠ではないので、そのときは「動いている build と同じか新しい
+checkout から更新する」と案内します。足りない機能、
 更新の仕方（`./scripts/install.sh --mail update`／`./scripts/setup.sh --mail update`）、
 更新のリスク（止まるのは通常は数秒。新しい build が起動しないと、切り替えと
 前の build への戻しに数分かかりうる。短い上限は保証しない。その間の Mail の

@@ -10,10 +10,12 @@ drift apart. Plain text, English, one screen.
                                 [--features FILE] [--without-how] [--only-if-stale]
     mail_update_notice.py after-stop [--outage SECONDS]
 
-`stale` calls the running Mail out of date only when that is shown: its
-commit is an ancestor of the checkout's (--repo), or a feature is missing.
-Otherwise it says what is known (newer, or which is newer cannot be told) and
-suggests nothing; with --only-if-stale it then prints nothing. It lists what
+`stale` calls the running Mail out of date, and suggests updating from this
+checkout, only when that is shown: its commit is an ancestor of the
+checkout's (--repo). A missing feature is reported either way, but is not by
+itself proof that this checkout's build adds it. Otherwise it says what is
+known (newer, or which is newer cannot be told) and suggests no update from
+here; with --only-if-stale it then prints nothing. It lists what
 the running Mail cannot do: the names given with
 --missing, or, with --mcp-url, whatever its tools/list lacks from the
 features file. --without-how leaves out the two "To update" lines, for a
@@ -111,24 +113,39 @@ def stale(args: argparse.Namespace) -> list[str]:
     builds = ", ".join(part for part in (
         f"running {running}" if args.running else "",
         f"this checkout {to}" if args.to else "") if part)
-    if not missing and relation != "older":
-        # Different, but not shown to be older: say what is known, suggest nothing.
-        if args.only_if_stale or not (args.running and args.to):
+    def lacks(prefix: str) -> list[str]:
+        out = []
+        for name in missing or []:
+            feature = known.get(name)
+            out.append(f"  {prefix}: {feature['needed_for']} (now {feature['without_it']})."
+                       if feature else f"  {prefix}: {name}.")
+        return out
+
+    if relation != "older":
+        # Not shown to be older than this checkout. A missing feature proves
+        # that Mail lacks it, not that updating from this checkout adds it: a
+        # newer running build would be taken back. Say what is known; never
+        # suggest an update from here.
+        if args.only_if_stale:
             return []
+        lines = []
         if relation == "newer":
-            return [f"ORRERY Mail runs {running}, which is newer than this checkout ({to});"
-                    " this run left it as it is. Pull the checkout before updating Mail from it."]
-        return [f"ORRERY Mail runs {running}, a different build from this checkout ({to});"
-                " which is newer cannot be told here, so no update is suggested."]
+            lines.append(f"ORRERY Mail runs {running}, which is newer than this checkout ({to});"
+                         " this run left it as it is. Pull the checkout before updating Mail from it.")
+        elif args.running and args.to:
+            lines.append(f"ORRERY Mail runs {running}, a different build from this checkout ({to});"
+                         " which is newer cannot be told here, so no update is suggested.")
+        if missing:
+            if not lines:
+                lines.append(f"ORRERY Mail{f' ({builds})' if builds else ''} lacks features this install relies on;"
+                             " whether this checkout's build has them cannot be told here.")
+            lines += lacks("Not working")
+            lines.append("  Update ORRERY Mail from an orrery-telemetry checkout at least as new as the running"
+                         " build (docs/agentstack-mail-update.md).")
+        return lines
     lines = [f"ORRERY Mail is out of date{f' ({builds})' if builds else ''}."]
     if missing:
-        for name in missing:
-            feature = known.get(name)
-            if feature:
-                lines.append(f"  Not working until it is updated: {feature['needed_for']} "
-                             f"(now {feature['without_it']}).")
-            else:
-                lines.append(f"  Not working until it is updated: {name}.")
+        lines += lacks("Not working until it is updated")
     else:
         lines.append("  Fixes and features in the newer Mail have not reached you yet.")
     if not args.without_how:

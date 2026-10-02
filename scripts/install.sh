@@ -153,8 +153,8 @@ Options:
                          otherwise keeps the running build without failing
   --print-mail-update-advice
                          When the running ORRERY Mail is shown to be older
-                         than this checkout's build (an ancestor commit, or a
-                         missing feature), print what that costs, the risk of
+                         than this checkout's build (its commit is an ancestor
+                         of this checkout's), print what that costs, the risk of
                          updating and the recovery (no update command). Reads
                          only; prints nothing otherwise; exit 0
   --print-mail-plan      Print one `mail-plan:` line saying what this run would
@@ -437,7 +437,8 @@ fi
 # work, the risk of updating, the /mcp recovery) without the update command,
 # for setup.sh to show next to its own. Reads only; always exits 0; prints
 # nothing unless the running Mail is shown to be older: its commit is an
-# ancestor of this checkout's, or it lacks a feature this install relies on.
+# ancestor of this checkout's. (A missing feature alone does not show that
+# this checkout's build has it; doctor reports that case.)
 if [[ "$PRINT_MAIL_ADVICE" == true ]]; then
   mail_plan_line="$(MAIL_UPDATE_MODE=update print_mail_plan)"
   case "$mail_plan_line" in

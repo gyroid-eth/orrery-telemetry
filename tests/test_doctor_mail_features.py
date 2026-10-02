@@ -48,12 +48,15 @@ def _server(register_params: set[str]):
     return server
 
 
-def _doctor(tmp_path: pathlib.Path, url: str) -> subprocess.CompletedProcess[str]:
+def _doctor(tmp_path: pathlib.Path, url: str, running: str = "abc1234",
+            repo: pathlib.Path | None = None) -> subprocess.CompletedProcess[str]:
     home = tmp_path / "home"
     service = home / ".agentstack" / "mail-service"
-    render = service / "renders" / "abc1234-0001"
+    render = service / "renders" / f"{running}-0001"
     render.mkdir(parents=True)
-    (render / "deployment.json").write_text(json.dumps({"source_id": "abc1234"}))
+    (render / "deployment.json").write_text(json.dumps({"source_id": running}))
+    if repo is not None:
+        (home / ".agentstack" / "install-state.json").write_text(json.dumps({"repo_root": str(repo)}))
     (service / "runtime").mkdir(parents=True)
     (service / "runtime" / "agentstack-mail.pid").write_text(f"1\n{render}/run-agentstack-mail.sh\n")
     return subprocess.run(
@@ -91,9 +94,11 @@ def test_a_missing_feature_is_a_warning_with_a_fix_not_a_failure(tmp_path, param
     if status == "missing":
         assert ("warn: ORRERY Mail (running abc1234) lacks register_agent.existing_agent_id"
                 in result.stderr)
-        # The shared notice: how to update, the risk, and the /mcp recovery.
-        assert "./scripts/install.sh --mail update" in result.stderr
-        assert "then Reconnect (not Authenticate)" in result.stderr
+        # Without the install's checkout the direction is unknown: the lack is
+        # reported, but no update from some checkout is suggested.
+        assert FEATURES[0]["needed_for"] in result.stderr
+        assert "--mail update" not in result.stderr
+        assert "at least as new as the running build" in result.stderr
     else:
         assert "ORRERY Mail has every feature this install relies on" in result.stdout
         assert "lacks" not in result.stderr
@@ -124,10 +129,11 @@ def _notice(*args: str) -> str:
     return done.stdout
 
 
-def test_the_stale_notice_says_what_breaks_how_to_update_the_risk_and_the_recovery():
-    text = _notice("stale", "--running", "52d76241ffe9", "--to", "e00cd38aaaa00",
+def test_the_stale_notice_says_what_breaks_how_to_update_the_risk_and_the_recovery(history):
+    repo, old, new, side = history
+    text = _notice("stale", "--repo", str(repo), "--running", old, "--to", new,
                    "--missing", "register_agent.existing_agent_id")
-    assert text.splitlines()[0] == "ORRERY Mail is out of date (running 52d7624, this checkout e00cd38)."
+    assert text.splitlines()[0] == f"ORRERY Mail is out of date (running {old[:7]}, this checkout {new[:7]})."
     assert FEATURES[0]["needed_for"] in text and FEATURES[0]["without_it"] in text
     assert "./scripts/install.sh --mail update" in text and "./scripts/setup.sh --mail update" in text
     assert "Children and Codex reconnect by themselves" in text
@@ -137,8 +143,10 @@ def test_the_stale_notice_says_what_breaks_how_to_update_the_risk_and_the_recove
     assert len(text.splitlines()) <= 10
 
 
-def test_without_how_leaves_the_update_command_to_the_caller():
-    text = _notice("stale", "--missing", "register_agent.existing_agent_id", "--without-how")
+def test_without_how_leaves_the_update_command_to_the_caller(history):
+    repo, old, new, side = history
+    text = _notice("stale", "--repo", str(repo), "--running", old, "--to", new,
+                   "--missing", "register_agent.existing_agent_id", "--without-how")
     assert "--mail update" not in text
     assert text.startswith("ORRERY Mail is out of date") and "Reconnect" in text
 
@@ -211,15 +219,58 @@ def test_only_if_stale_prints_nothing_unless_the_running_mail_is_older(history):
         assert _stale(repo, running, old if running == new else new, "--only-if-stale") == ""
 
 
-def test_a_feature_proven_missing_is_out_of_date_whatever_the_history(history):
+@pytest.mark.parametrize("which", ["older", "diverged", "unknown"])
+def test_a_missing_feature_is_reported_but_only_an_older_mail_gets_the_update_command(history, which):
     repo, old, new, side = history
-    text = _notice("stale", "--repo", str(repo), "--running", side, "--to", new,
+    running = {"older": old, "diverged": side, "unknown": "fixture-build"}[which]
+    text = _notice("stale", "--repo", str(repo), "--running", running, "--to", new,
                    "--missing", "register_agent.existing_agent_id")
-    assert text.startswith("ORRERY Mail is out of date") and FEATURES[0]["needed_for"] in text
+    assert FEATURES[0]["needed_for"] in text
+    if which == "older":
+        assert text.startswith("ORRERY Mail is out of date") and "--mail update" in text
+    else:
+        assert "out of date" not in text and "--mail update" not in text
+        assert "at least as new as the running build" in text
 
 
-def test_the_risk_does_not_promise_a_short_stop_and_states_observations_as_such():
-    text = _notice("stale", "--missing", "register_agent.existing_agent_id")
+def test_a_missing_feature_without_a_checkout_does_not_suggest_an_update():
+    text = _notice("stale", "--running", "abc", "--missing", "register_agent.existing_agent_id")
+    assert "lacks features this install relies on" in text and "--mail update" not in text
+
+
+def test_the_risk_does_not_promise_a_short_stop_and_states_observations_as_such(history):
+    repo, old, new, side = history
+    text = _stale(repo, old, new)
     assert "usually a few seconds" in text
     assert "no short limit is guaranteed" in text
     assert "Claude Code 2.1.287" in text and "18 s and 19 s" in text and "8 s and 15 s" in text
+
+
+def test_a_missing_feature_on_a_newer_running_mail_never_suggests_updating_from_this_checkout(history):
+    """Missing proves Mail lacks a feature, not that this older checkout would add it."""
+    repo, old, new, side = history
+    text = _notice("stale", "--repo", str(repo), "--running", new, "--to", old,
+                   "--missing", "register_agent.existing_agent_id")
+    assert FEATURES[0]["needed_for"] in text
+    assert "--mail update" not in text and "out of date" not in text
+    assert "newer than this checkout" in text and "Pull the checkout" in text
+    assert _notice("stale", "--repo", str(repo), "--running", new, "--to", old,
+                   "--missing", "register_agent.existing_agent_id", "--only-if-stale") == ""
+
+
+@pytest.mark.parametrize("direction", ["older", "newer"])
+def test_doctor_suggests_updating_only_from_a_checkout_newer_than_the_running_mail(tmp_path, history, direction):
+    repo, old, new, side = history
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", new if direction == "older" else old], check=True)
+    running = old if direction == "older" else new
+    server = _server({"name"})
+    try:
+        result = _doctor(tmp_path, f"http://127.0.0.1:{server.server_port}/mcp", running=running, repo=repo)
+    finally:
+        server.shutdown()
+    assert FEATURES[0]["needed_for"] in result.stderr
+    if direction == "older":
+        assert "./scripts/install.sh --mail update" in result.stderr
+        assert "then Reconnect (not Authenticate)" in result.stderr
+    else:
+        assert "--mail update" not in result.stderr and "Pull the checkout" in result.stderr
