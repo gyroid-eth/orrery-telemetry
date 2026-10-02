@@ -337,12 +337,28 @@ def hook_output(
     }
 
 
+def _drain_stdin() -> None:
+    """Read and discard the rest of stdin.
+
+    run-hook.sh pipes the payload in under `set -o pipefail`; leaving part of
+    it unread kills the writer with SIGPIPE and Codex reports the hook failed
+    with exit 141 (seen at the 162nd seminar while digest-paper ran: a
+    PostToolUse payload carries the tool's output and can be megabytes).
+    """
+    try:
+        while sys.stdin.buffer.read(1 << 16):
+            pass
+    except (OSError, ValueError):
+        pass
+
+
 def main() -> int:
     """Read one hook payload from stdin and fail open for the Codex task."""
 
     try:
         raw = sys.stdin.buffer.read(MAX_EVENT_BYTES + 1)
         if len(raw) > MAX_EVENT_BYTES:
+            _drain_stdin()
             return 0
         payload = json.loads(raw)
         if not isinstance(payload, dict):
