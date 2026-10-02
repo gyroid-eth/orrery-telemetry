@@ -219,10 +219,12 @@ case "$mail_features_status" in
   ok) echo "ok: ORRERY Mail has every feature this install relies on" ;;
   missing)
     while IFS='|' read -r name needed_for without_it; do
-      echo "warn: ORRERY Mail${mail_features_running:+ (running $mail_features_running)} lacks $name, which this install relies on: $needed_for; without it $without_it" >&2
+      echo "warn: ORRERY Mail${mail_features_running:+ (running $mail_features_running)} lacks $name, which this install relies on" >&2
     done < <(tail -n +2 <<< "$MAIL_FEATURES")
-    echo "      Fix: update ORRERY Mail. For the Mail this project's installer deployed, in the orrery-telemetry checkout:" >&2
-    echo "      ./scripts/install.sh --update-mail --dry-run, then ./scripts/install.sh --update-mail (docs/agentstack-mail-update.md)" >&2
+    MAIL_NOTICE="$SCRIPT_DIR/lib/mail_update_notice.py"
+    [[ -f "$MAIL_NOTICE" ]] || MAIL_NOTICE="$SCRIPT_DIR/../scripts/lib/mail_update_notice.py"
+    "$PYTHON_BIN" "$MAIL_NOTICE" stale --running "$mail_features_running" --missing "$mail_features_missing" \
+      --features "$MAIL_FEATURES_FILE" 2>/dev/null | sed 's/^/      /' >&2 || true
     ;;
   *) echo "warn: could not read the running ORRERY Mail's tools; its features were not checked" >&2 ;;
 esac

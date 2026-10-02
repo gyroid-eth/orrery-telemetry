@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -90,7 +91,9 @@ def test_a_missing_feature_is_a_warning_with_a_fix_not_a_failure(tmp_path, param
     if status == "missing":
         assert ("warn: ORRERY Mail (running abc1234) lacks register_agent.existing_agent_id"
                 in result.stderr)
-        assert "./scripts/install.sh --update-mail" in result.stderr
+        # The shared notice: how to update, the risk, and the /mcp recovery.
+        assert "./scripts/install.sh --mail update" in result.stderr
+        assert "then Reconnect (not Authenticate)" in result.stderr
     else:
         assert "ORRERY Mail has every feature this install relies on" in result.stdout
         assert "lacks" not in result.stderr
@@ -111,3 +114,41 @@ def test_an_unreachable_mail_is_unknown_not_ok(tmp_path):
     result = _doctor(tmp_path, "http://127.0.0.1:9/mcp")
     assert _features_line(result.stdout) == "mail-features: status=unknown missing= running=abc1234"
     assert "its features were not checked" in result.stderr
+
+
+NOTICE = ROOT / "scripts" / "lib" / "mail_update_notice.py"
+
+
+def _notice(*args: str) -> str:
+    done = subprocess.run([sys.executable, str(NOTICE), *args], text=True, capture_output=True, check=True)
+    return done.stdout
+
+
+def test_the_stale_notice_says_what_breaks_how_to_update_the_risk_and_the_recovery():
+    text = _notice("stale", "--running", "52d76241ffe9", "--to", "e00cd38aaaa00",
+                   "--missing", "register_agent.existing_agent_id")
+    assert text.splitlines()[0] == "ORRERY Mail is out of date (running 52d7624, this checkout e00cd38)."
+    assert FEATURES[0]["needed_for"] in text and FEATURES[0]["without_it"] in text
+    assert "./scripts/install.sh --mail update" in text and "./scripts/setup.sh --mail update" in text
+    assert "Children and Codex reconnect by themselves" in text
+    assert "18 s or more" in text
+    # The Claude Code screens as they are: /mcp, the failed server, Reconnect.
+    assert "/mcp, choose orrery-mail (shown as \u2718 failed), then Reconnect (not Authenticate)" in text
+    assert len(text.splitlines()) <= 10
+
+
+def test_without_how_leaves_the_update_command_to_the_caller():
+    text = _notice("stale", "--missing", "", "--without-how")
+    assert "--mail update" not in text
+    assert "have not reached you yet" in text and "Reconnect" in text
+
+
+def test_the_after_stop_notice_is_the_same_recovery():
+    text = _notice("after-stop", "--outage", "3.2")
+    assert text.startswith("ORRERY Mail was unavailable for 3.2s.")
+    assert "then Reconnect (not Authenticate)" in text and "check before repeating it" in text
+
+
+def test_an_unreachable_mail_is_not_reported_as_complete():
+    text = _notice("stale", "--mcp-url", "http://127.0.0.1:9/mcp")
+    assert "have not reached you yet" in text

@@ -614,6 +614,17 @@ mail-features: status=<ok|missing|unknown> missing=<tool.parameter,...> running=
 `unknown` は Mail に問い合わせられなかったことで、機能がそろっている意味では
 ありません。
 
+**古い Mail の案内。** install.sh は、この run で差し替えなかった Mail がこの
+checkout の build より古いとき、結果行の前に短い案内を出します。足りない機能、
+更新の仕方（`./scripts/install.sh --mail update`／`./scripts/setup.sh --mail update`）、
+更新のリスク（数秒止まり、その間の Mail の呼び出しは失敗しうる。子と Codex は
+自分で戻る。top level の Claude Code は戻らないことがあり、試験では 18 秒以上の
+停止で戻らなかった）、戻らなかったときの操作（その session で `/mcp` →
+orrery-mail（✘ failed と表示）→ Reconnect。Authenticate ではない）です。doctor も
+欠けた機能があれば同じ案内を出します。文の正本は `scripts/lib/mail_update_notice.py`
+で、cockpit の setup.sh も `install.sh --print-mail-update-advice`（読むだけ・常に
+exit 0・差が無ければ何も出さない・更新の command の行を除く）でこれを出します。
+
 ## 経緯
 
 同梱 service より前の deployment は `cutover-maintenance/` の下で

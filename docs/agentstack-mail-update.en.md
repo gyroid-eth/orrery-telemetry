@@ -650,6 +650,20 @@ mail-features: status=<ok|missing|unknown> missing=<tool.parameter,...> running=
 
 `unknown` means Mail could not be asked, not that every feature is present.
 
+**The notice about an old Mail.** When the Mail this run did not replace is
+older than this checkout's build, install.sh prints a short notice before the
+result line: what does not work, how to update
+(`./scripts/install.sh --mail update` / `./scripts/setup.sh --mail update`),
+the risk of updating (Mail stops for a few seconds and Mail calls fail
+meanwhile; children and Codex reconnect by themselves; a top-level Claude Code
+session may not, and in testing did not after a stop of 18 s or more), and
+what to do then (in that session, `/mcp`, choose orrery-mail, shown as
+"✘ failed", then Reconnect, not Authenticate). doctor prints the same notice
+when a feature is missing. The text lives in `scripts/lib/mail_update_notice.py`;
+the cockpit's setup.sh shows it through `install.sh --print-mail-update-advice`
+(reads only, always exits 0, prints nothing when there is no difference, and
+leaves out the update command lines).
+
 ## History
 
 Before the bundled service, deployments were hand-run under

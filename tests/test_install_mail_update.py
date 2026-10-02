@@ -182,6 +182,10 @@ def test_a_rerun_keeps_the_running_build_by_default_and_a_dry_run_changes_nothin
             kept = stack.install("fixture-new", *keep)
         assert kept.returncode == 0, kept.stdout + kept.stderr
         assert "Re-run with --update-mail to switch" in kept.stdout
+        # The end of the run says what an old Mail costs, how to update and the risk.
+        assert "ORRERY Mail is out of date (running fixture-old, this checkout fixture-new)." in kept.stdout
+        assert "./scripts/install.sh --mail update" in kept.stdout
+        assert "then Reconnect (not Authenticate)" in kept.stdout
         assert kept.stdout.splitlines()[-1] == (
             "mail-result: kept mode=keep from=fixture-old to=fixture-new running=fixture-old"
             f" outage_s=0 reason={code}"
@@ -977,6 +981,16 @@ def test_print_mail_plan_reads_only_and_always_answers(tmp_path):
             "mail-plan: switch mode=update running=fixture-old to=fixture-new reason=newer_build")
         assert _plan(stack, "fixture-old") == (
             "mail-plan: unchanged mode=keep running=fixture-old to=fixture-old reason=same_candidate")
+        advice = subprocess.run(["/bin/bash", str(INSTALLER), "--print-mail-update-advice"], cwd=ROOT,
+                                env={**stack.env, "AGENTSTACK_MAIL_CANDIDATE_ID": "fixture-new"},
+                                text=True, capture_output=True, check=False, timeout=30)
+        assert advice.returncode == 0, advice.stderr
+        assert advice.stdout.startswith("ORRERY Mail is out of date (running fixture-old, this checkout fixture-new).")
+        assert "--mail update" not in advice.stdout and "Reconnect" in advice.stdout
+        same = subprocess.run(["/bin/bash", str(INSTALLER), "--print-mail-update-advice"], cwd=ROOT,
+                              env={**stack.env, "AGENTSTACK_MAIL_CANDIDATE_ID": "fixture-old"},
+                              text=True, capture_output=True, check=False, timeout=30)
+        assert same.returncode == 0 and same.stdout == ""
         assert stack.pid() == pid
         assert not list((stack.service_root / "renders").glob("fixture-new-*"))
     finally:
@@ -1060,6 +1074,7 @@ def _handler(serving: bool) -> subprocess.CompletedProcess[str]:
     script = "\n".join([
         "set -uo pipefail",
         f"PYTHON_BIN={shlex.quote(sys.executable)}",
+        f"SCRIPT_DIR={shlex.quote(str(INSTALLER.parent))}",
         f"for f in {functions}; do eval \"$(sed -n \"/^$f()/,/^}}/p\" {INSTALLER})\"; done",
         "say() { printf '%s\\n' \"$*\"; }",
         "warn() { printf 'warning: %s\\n' \"$*\" >&2; }",

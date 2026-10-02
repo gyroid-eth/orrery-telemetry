@@ -13,6 +13,8 @@
 ### agentstack-doctor: 動いている ORRERY Mail に足りない機能を知らせます
 
 Mail が install より古いと、health は通り、ほかの検査もすべて通るのに、dashboard や launcher が頼る機能だけが欠けていました（2026-10-02: `register_agent` に `existing_agent_id` が無く、Claude の再開が Mail の無い会話だけになった）。doctor は動いている Mail の `tools/list` を 1 回読み、`scripts/lib/mail_required_features.json` の機能のうち欠けているものごとに `warn:` と直し方（`--update-mail`）を出します。Mail そのものは動いているので exit status は変えません。最後に `mail-features: status=<ok|missing|unknown> missing=<…> running=<commit>` を 1 行出し、setup.sh はこれを読めます。
+
+install.sh も、この run で差し替えなかった Mail がこの checkout の build より古いとき、結果行の前に同じ案内を出します。足りない機能、更新の仕方（`--mail update`）、更新のリスク（数秒止まる。子と Codex は自分で戻るが、top level の Claude Code は戻らないことがある）、戻らなかったときの操作（その session で `/mcp` → orrery-mail → Reconnect）です。文は `scripts/lib/mail_update_notice.py` の 1 か所にあり、差し替えの後の案内もここから出します。cockpit の setup.sh は `install.sh --print-mail-update-advice`（読むだけ）で同じ文を出せます。
 ### install.sh: ORRERY Mail の扱いを 3 値にし、結果を 1 行で出します
 
 再実行で、稼働中の ORRERY Mail をどうするかを選べるようにしました。既定は従来どおり差し替えません。
