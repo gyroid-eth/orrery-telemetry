@@ -58,7 +58,11 @@ def _hooks_with_warm_pool(tmp_path: pathlib.Path) -> pathlib.Path:
     """A hooks dir identical to the repo's plus a warm pool that is always ready.
 
     No warm_pool.sh ships today; the fake proves that a Chrome request skips
-    the claim itself, not merely that no pool exists."""
+    the claim itself, not merely that no pool exists. It implements the
+    `claim-model` contract: it claims only a session whose actual model
+    (FAKE_WARM_ACTUAL, which may differ from what status said) is the one
+    asked for. FAKE_WARM_OLD=1 is a pool with only the old `claim`, and
+    FAKE_WARM_REPORT makes it report something else after claiming."""
     hooks = tmp_path / "hooks"
     hooks.mkdir()
     for entry in (ROOT / "hooks").iterdir():
@@ -70,6 +74,13 @@ def _hooks_with_warm_pool(tmp_path: pathlib.Path) -> pathlib.Path:
         "  status) printf '%b\\n' \"${FAKE_WARM_STATUS:-opus ready (claude-opus-5-5)\\nsonnet ready (claude-sonnet-5-5)}\" ;;\n"
         "  claim) printf 'claim %s\\n' \"$3\" >> \"$FAKE_WARM_LOG\"; "
         "tmux new-session -d -s \"$3\" warm; printf '%s\\n' \"$3\" ;;\n"
+        "  claim-model)\n"
+        "    [[ -z \"${FAKE_WARM_OLD:-}\" ]] || exit 2\n"
+        "    actual=\" ${FAKE_WARM_ACTUAL:-opus=claude-opus-5-5 sonnet=claude-sonnet-5-5} \"\n"
+        "    [[ \"$actual\" == *\" $2=$4 \"* ]] || exit 1\n"
+        "    printf 'claim-model %s %s\\n' \"$3\" \"$4\" >> \"$FAKE_WARM_LOG\"\n"
+        "    tmux new-session -d -s \"$3\" warm\n"
+        "    printf '%s\\n' \"${FAKE_WARM_REPORT:-$3 $4}\" ;;\n"
         "esac\n",
     )
     return hooks
@@ -230,7 +241,36 @@ def test_default_spawn_still_claims_a_ready_warm_session(tmp_path, warm_model):
     env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
     result = _spawn(tmp_path, env, workdir, "WarmChild", "--model", warm_model)
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "warm.log").read_text() == "claim WarmChild\n"
+    model = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5"}[warm_model]
+    assert (tmp_path / "warm.log").read_text() == f"claim-model WarmChild {model}\n"
+
+
+@pytest.mark.parametrize("pool", [
+    # status said 5.5, but another spawner's claim / replenish left 6 by the time of the claim.
+    {"FAKE_WARM_ACTUAL": "opus=claude-opus-6 sonnet=claude-sonnet-5-5"},
+    # A pool that cannot be told the model is never claimed from.
+    {"FAKE_WARM_OLD": "1"},
+])
+def test_a_claim_that_cannot_promise_the_model_falls_back_to_cold_start(tmp_path, pool):
+    env, workdir = _launch_env(tmp_path)
+    env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
+    env.update(pool)
+    result = _spawn(tmp_path, env, workdir, "RaceChild", "--model", "opus")
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "warm.log").exists()
+    assert "Cold start" in result.stderr
+    launch = _new_session(env)
+    assert "CLAUDE_CHILD_MODEL=claude-opus-5-5" in launch
+
+
+def test_a_claim_reporting_another_model_is_stopped(tmp_path):
+    env, workdir = _launch_env(tmp_path)
+    env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
+    env["FAKE_WARM_REPORT"] = "LyingChild claude-opus-7"
+    result = _spawn(tmp_path, env, workdir, "LyingChild", "--model", "opus")
+    assert result.returncode != 0
+    assert "reported 'LyingChild claude-opus-7' instead of 'LyingChild claude-opus-5-5'" in result.stderr
+    assert "Cold start" not in result.stderr
 
 
 @pytest.mark.parametrize("status", ["opus ready\nsonnet ready", "opus ready (claude-opus-5)\nsonnet ready (claude-sonnet-5)"])

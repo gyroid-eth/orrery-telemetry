@@ -927,28 +927,43 @@ load_claude_aliases() {
 }
 
 # The `claude` the child's login shell finds once ~/.local/bin is first on
-# PATH -- the same rule as claude_child_launch_command, which then runs this
-# exact path. Empty when it cannot be found; the child then runs bare `claude`
-# and its version counts as unknown.
+# PATH (hooks/claude-child-bin.sh, which the dashboard runs too) --
+# claude_child_launch_command then runs this exact path. Empty when it cannot
+# be found; the child then runs bare `claude` and its version counts as unknown.
 CLAUDE_CHILD_BIN=""
 resolve_claude_child_bin() {
-    local found
-    found="$("$CHILD_SHELL" -lc 'export PATH="$HOME/.local/bin:$PATH"; command -v claude' 2>/dev/null </dev/null | tail -n 1)" || found=""
-    if [[ "$found" == /* && -x "$found" ]]; then
-        CLAUDE_CHILD_BIN="$found"
-    else
-        CLAUDE_CHILD_BIN=""
+    CLAUDE_CHILD_BIN=""
+    if ! declare -F claude_child_bin >/dev/null && [[ -f "$HOOKS_DIR/claude-child-bin.sh" ]]; then
+        . "$HOOKS_DIR/claude-child-bin.sh"
     fi
+    declare -F claude_child_bin >/dev/null || return 0
+    CLAUDE_CHILD_BIN="$(claude_child_bin "$CHILD_SHELL")"
 }
 
-# A warm session may have been started before the catalog changed. Claim it
-# only when the pool's status line for that type names the exact model ID in
-# parentheses, e.g. "opus ready (claude-opus-5-5)"; a pool that does not
-# report its model gets a cold start.
+# A warm session may have been started before the catalog changed. The status
+# line for that type must name the exact model ID in parentheses, e.g.
+# "opus ready (claude-opus-5-5)" -- a cheap pre-check only; the claim itself is
+# claim_warm_session below.
 warm_pool_has_model() {
     local warm_type="$1" model="$2" status="$3"
     [[ -n "$model" && "$warm_type" != "__skip_warm__" ]] || return 1
     printf '%s\n' "$status" | grep -E "^[[:space:]]*${warm_type}[^[:alnum:]].*ready" | grep -qF "($model)"
+}
+
+# Claim a warm session started with exactly $3. The pool must implement
+# `claim-model <type> <child> <model>`: claim atomically only a session started
+# with that model, and print "<child> <model>". A pool without it (the older
+# `claim <type> <child>` cannot be told the model) fails here, and the caller
+# cold starts. A claim that reports another model is stopped: that session
+# would run a model other than the one registered.
+claim_warm_session() {
+    local warm_type="$1" child="$2" model="$3" out
+    out="$(bash "$WARM_POOL" claim-model "$warm_type" "$child" "$model" 2>/dev/null)" || return 1
+    out="$(printf '%s\n' "$out" | tail -n 1)"
+    [[ "$out" == "$child $model" ]] && return 0
+    echo "Error: the warm pool claimed a session for $child but reported '${out}' instead of '$child $model'; stopping it" >&2
+    tmux kill-session -t "=$child" 2>/dev/null || true
+    return 2
 }
 
 claude_alias_value() {
@@ -3247,12 +3262,16 @@ ${TASK}"
         WARM_STATUS=$(bash "$WARM_POOL" status 2>/dev/null || true)
         if [[ "$CLAUDE_CHILD_CHROME" != true && "$CHILD_TOOLS_RESTRICTIVE" != true && -f "$WARM_POOL" ]] \
             && warm_pool_has_model "$WARM_TYPE" "$CHILD_MODEL" "$WARM_STATUS"; then
-            echo "[spawn_child/pre-reg] Claiming warm pool session ($WARM_TYPE)..." >&2
-            if CLAIMED_NAME=$(bash "$WARM_POOL" claim "$WARM_TYPE" "$CHILD_NAME" 2>/dev/null); then
+            echo "[spawn_child/pre-reg] Claiming warm pool session ($WARM_TYPE, $CHILD_MODEL)..." >&2
+            WARM_CLAIM_STATUS=0
+            claim_warm_session "$WARM_TYPE" "$CHILD_NAME" "$CHILD_MODEL" || WARM_CLAIM_STATUS=$?
+            if [[ "$WARM_CLAIM_STATUS" == 0 ]]; then
                 WARM_CLAIMED=true
                 PRE_REGISTERED_SESSION_STARTED=true
                 SPAWN_TRAP_SESSION="$CHILD_NAME"
                 echo "[spawn_child/pre-reg] Warm session claimed -> $CHILD_NAME" >&2
+            elif [[ "$WARM_CLAIM_STATUS" == 2 ]]; then
+                exit 1
             fi
         fi
 

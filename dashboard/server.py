@@ -67,13 +67,13 @@ QUOTA_SERVICE = _build_quota_service()
 try:
     from dashboard.claude_models import (
         BUNDLED_ALIASES as _CLAUDE_BUNDLED_ALIASES, alias_models as _claude_alias_models,
-        default_model as _claude_alias_default,
+        bind_child_cli_path as _bind_claude_child_cli_path, default_model as _claude_alias_default,
         is_model_id as _is_claude_model_id, resolve_catalog as _resolve_claude_catalog,
     )
 except ModuleNotFoundError:  # direct script execution
     from claude_models import (
         BUNDLED_ALIASES as _CLAUDE_BUNDLED_ALIASES, alias_models as _claude_alias_models,
-        default_model as _claude_alias_default,
+        bind_child_cli_path as _bind_claude_child_cli_path, default_model as _claude_alias_default,
         is_model_id as _is_claude_model_id, resolve_catalog as _resolve_claude_catalog,
     )
 
@@ -7064,6 +7064,11 @@ def do_spawn(payload: dict) -> dict:
     claude_catalog = _claude_catalog() if provider == "claude" else None
     if claude_catalog and claude_catalog.error:
         return {"ok": False, "error": claude_catalog.error}
+    if provider == "claude" and not payload.get("model") and payload.get("dry_run") is not True:
+        # The omitted model becomes a formal ID here, and the launcher passes a
+        # formal ID through unchecked: decide it against the claude the child
+        # will run, found the way the launcher finds it.
+        _bind_claude_child_cli_path(HOOKS_DIR)
     default_model = (
         _claude_spawn_default_model()
         if provider == "claude"
@@ -8725,6 +8730,9 @@ def main():
         # Optional cleanup must not prevent startup on hosts without pkill.
         pass
     threading.Thread(target=_ttyd_reaper, daemon=True).start()
+    # The picker's Claude default checks the claude a child runs; find it once
+    # here, where starting a login shell is allowed (requests may not).
+    threading.Thread(target=_bind_claude_child_cli_path, args=(HOOKS_DIR,), daemon=True).start()
     srv = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
     print(f"agent-dashboard listening on http://{BIND_HOST}:{PORT}/")
     try:

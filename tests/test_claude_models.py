@@ -19,6 +19,7 @@ def profile(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root))
     monkeypatch.delenv("AGENTSTACK_CLAUDE_MODELS", raising=False)
     monkeypatch.setattr(catalog.time, "time", lambda: NOW / 1000)
+    monkeypatch.setattr(catalog, "_bound_child_path", None)
     return root
 
 
@@ -394,3 +395,23 @@ def test_doctor_reports_where_the_aliases_resolve():
     doctor = (Path(__file__).resolve().parent.parent / "scripts/doctor.sh").read_text(encoding="utf-8")
     assert 'report_claude_model_aliases "$INSTALL_DIR/dashboard/claude_models.py"' in doctor
     assert '"$PYTHON_BIN" "$helper" note' in doctor
+
+
+def test_the_shared_script_answers_for_the_child_and_is_remembered(monkeypatch, tmp_path):
+    hooks = Path(__file__).resolve().parent.parent / "hooks"
+    found = tmp_path / "versions/2.0.0"
+    found.parent.mkdir()
+    found.write_text("")
+    found.chmod(0o755)
+    shell = tmp_path / "shell"
+    shell.write_text(f"#!/bin/sh\necho noise from a profile\necho {found}\n")
+    shell.chmod(0o755)
+    monkeypatch.setenv("AGENTSTACK_CHILD_SHELL", str(shell))
+    assert catalog.bind_child_cli_path(str(hooks)) == str(found)
+    assert catalog.child_cli_path() == str(found)
+    assert catalog._probe_cli_version() == (2, 0, 0)
+    shell.write_text("#!/bin/sh\necho not-a-path\n")
+    assert catalog.bind_child_cli_path(str(hooks)) == ""
+    assert catalog._probe_cli_version() is None  # Found nothing: unknown, not a guess.
+    assert catalog.bind_child_cli_path(str(tmp_path / "no-hooks")) is None
+    assert catalog.child_cli_path() == ""

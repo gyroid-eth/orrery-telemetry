@@ -21,8 +21,11 @@ import dashboard.server as server
 
 @pytest.fixture(autouse=True)
 def _no_real_claude_catalog(monkeypatch, tmp_path):
-    """The real ~/.claude model catalog would decide the aliases and the default."""
+    """The real ~/.claude model catalog would decide the aliases and the default,
+    and a child claude found by an earlier test would decide its versions."""
+    from dashboard import claude_models
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-config"))
+    monkeypatch.setattr(claude_models, "_bound_child_path", None)
 
 
 def _set_annotation_paths(monkeypatch, tmp_path):
@@ -1360,3 +1363,57 @@ def test_an_explicit_allow_list_is_not_widened_by_the_aliases(monkeypatch, tmp_p
     claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
     assert claude["models"] == override.split(",")
     assert claude["default_model"] == default
+
+
+def test_ui_api_and_launcher_check_the_same_child_claude(monkeypatch, tmp_path):
+    """The dashboard's PATH has a new claude, the child's login shell an old
+    one, and there is no ~/.local/bin/claude: the omitted model must be one
+    the child's claude can run, the same in the picker, the API and the CLI."""
+    import os
+    from dashboard import claude_models
+
+    def native(directory, version):
+        path = tmp_path / directory / "claude" / "versions" / version
+        path.parent.mkdir(parents=True)
+        path.write_text("#!/bin/sh\nexit 99\n")
+        path.chmod(0o755)
+        return path
+
+    old, new = native("child", "2.0.0"), native("service", "9.0.0")
+    (tmp_path / "service-bin").mkdir()
+    (tmp_path / "service-bin/claude").symlink_to(new)
+    login_shell = tmp_path / "login-shell"
+    login_shell.write_text(f"#!/bin/sh\n# what the child's login profile puts first on PATH\necho {old}\n")
+    login_shell.chmod(0o755)
+    profile = tmp_path / "claude"
+    path = profile / "cache/model-catalog/cache.json"
+    path.parent.mkdir(parents=True)
+    now = int(time.time() * 1000)
+    path.write_text(json.dumps({"version": 2, "fetchedAt": now - 1000, "staleAt": now + 3_600_000, "catalog": {
+        "surface": "cc", "config": {"models": [
+            {"id": "claude-opus-6", "section": "main", "short_name": "Opus", "min_claude_code_version": "8.0.0"}]}}}))
+    env = {"CLAUDE_CONFIG_DIR": str(profile), "HOME": str(tmp_path / "home"),
+           "AGENTSTACK_CHILD_SHELL": str(login_shell),
+           "PATH": f"{tmp_path / 'service-bin'}:/usr/bin:/bin"}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    hooks = pathlib.Path(__file__).resolve().parent.parent / "hooks"
+    monkeypatch.setattr(server, "HOOKS_DIR", str(hooks))
+
+    # Before the dashboard has asked the child's shell, it can only guess from its own PATH.
+    assert claude_models.child_cli_path() == str(tmp_path / "service-bin/claude")
+    cli_default = _launcher_default({**env, "CHILD_SHELL": str(login_shell), "HOOKS_DIR": str(hooks)})
+    assert cli_default == "claude-opus-5-5"
+
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    assert server.do_spawn({"parent": "Parent", "task": "work"}) == {"model": cli_default}
+    assert claude_models.child_cli_path() == str(old)
+    names = server.subprocess.run
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Sunny\n\036Curie\n"})())
+    monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})
+    claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
+    assert claude["default_model"] == cli_default
+    monkeypatch.setattr(server.subprocess, "run", names)
+    # A dry run starts no process and uses what was found.
+    preview = server.do_spawn({"parent": "Parent", "task": "work", "dry_run": True})
+    assert preview["model"] == cli_default, preview

@@ -9,7 +9,9 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import subprocess
 import sys
+import threading
 import time
 
 MODEL_RE = re.compile(r"claude-[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\[1m\])?")
@@ -226,13 +228,45 @@ def _parse_cli_version(text: str) -> tuple[int, ...] | None:
     return tuple(int(part) for part in match.group(1).split(".")) if match else None
 
 
-def child_cli_path() -> str:
-    """The `claude` a child runs: the launcher puts ~/.local/bin first on PATH.
+# The child's `claude` as hooks/claude-child-bin.sh last found it (the same
+# script the launcher uses), so requests that must not start a process -- the
+# picker, dry runs -- still check the binary a child will run.
+_BOUND_LOCK = threading.Lock()
+_bound_child_path: str | None = None
 
-    The launcher itself resolves the binary in the child's login shell and
-    passes it with --claude-bin; this mirrors that without starting a shell,
-    for the dashboard, whose requests (including dry runs) must not.
+
+def bind_child_cli_path(hooks_dir: str, timeout: float = 10.0) -> str | None:
+    """Run hooks/claude-child-bin.sh and remember its answer ("" = none found).
+
+    Starts a login shell, so callers use it only where a process may start:
+    at dashboard start and before a real launch. On failure the previous
+    answer is kept and None is returned.
     """
+    global _bound_child_path
+    script = os.path.join(hooks_dir, "claude-child-bin.sh")
+    if not os.path.isfile(script):
+        return None
+    try:
+        out = subprocess.run(["/bin/bash", script], stdin=subprocess.DEVNULL, capture_output=True,
+                             text=True, timeout=timeout).stdout.strip().splitlines()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    path = out[-1] if out and out[-1].startswith("/") else ""
+    with _BOUND_LOCK:
+        _bound_child_path = path
+    return path
+
+
+def child_cli_path() -> str:
+    """The `claude` a child runs.
+
+    The answer of hooks/claude-child-bin.sh when the dashboard has one;
+    otherwise the same rule without a login shell: ~/.local/bin, then PATH.
+    """
+    with _BOUND_LOCK:
+        bound = _bound_child_path
+    if bound is not None:
+        return bound
     try:
         local = Path("~/.local/bin/claude").expanduser()
         if local.is_file() and os.access(local, os.X_OK):

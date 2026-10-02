@@ -30,8 +30,8 @@
 - 版つきの別名は世代を固定するためのものなので、追従しません。`sonnet-5-5` / `sonnet55` / `sonnet5.5` / `Sonnet 5.5` を足しました（`claude-sonnet-5-5`）。`sonnet-5` は引き続き `claude-sonnet-5` です。`opus-5-5`・`haiku-4-5`・`fable-5-1` も同じ形で受け付けます
 - 省略時の既定は catalog の並び順の先頭ではなく、catalog が現行の Opus として指定したモデルに追従します。`AGENTSTACK_CLAUDE_MODELS` の許可リストの扱いは変わりません
 - Claude Code は catalog を取得から 1 時間で古いと印を付けます。新しい catalog だけを使うと、ほとんどの起動が同梱の表に戻ってしまうので、別名の解決には古い catalog も使います。ただし古い catalog が同梱の表より古い世代を示すときは、同梱の表を使います。古い catalog は NEW AGENT の候補を増やすのには使いませんが、別名が今起動するモデルは候補に入れるので、画面の既定と launcher は一致します
-- 版の確認と起動は同じ binary で行います。launcher は子の login shell で `~/.local/bin` を先頭にして `claude` を探し、その版で別名を決め、子はその path を実行します
-- warm pool は、status がその種類の行に要求モデルの正式 ID を括弧で示す（例 `opus ready (claude-opus-5-5)`）ときだけ claim します。示さない pool や、別のモデルで事前起動した pool は cold start になります
+- 版の確認と起動は同じ binary で行います。`hooks/claude-child-bin.sh` が子の login shell で `~/.local/bin` を先頭にして `claude` を探し、launcher はその版で別名を決め、子はその path を実行します。dashboard も起動時とモデル省略の起動の前に同じ script を実行するので、dashboard と子で PATH が違っても、既定は子の `claude` が動かせるモデルになります
+- warm pool は、status がその種類の行に要求モデルの正式 ID を括弧で示し（例 `opus ready (claude-opus-5-5)`）、`claim-model <種類> <子> <正式 ID>` がそのモデルの session を不可分に claim できたときだけ使います。`claim-model` の無い pool・別のモデルで事前起動した pool は cold start、別のモデルを報告した claim は起動を中止します
 - catalog は profile の中で最も新しいものを使い、今ログインしている account のものかは確かめません
 
 ### Mail なしの再開で、理由と直し方が見えるようにしました
