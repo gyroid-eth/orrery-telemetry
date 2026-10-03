@@ -8,6 +8,12 @@
 
 ---
 
+## Unreleased
+
+### 「子を作って話して」と頼むと、Claude Code の組み込み Agent と SendMessage で済ませていました
+
+managed block が context に無いセッションでは（block は `--project-key` の dir の CLAUDE.md に入るため、それ以外の dir で起動した場合）、「Start one child agent and play shiritori with it over 3 turns」に対して 3 回とも組み込みの Agent が子を作り、SendMessage でしりとりを最後まで進めていました。ORRERY Mail には何も残らず、dashboard にも出ません。Claude Code 2.1.224 以降の組み込み `SendMessage` / `ListAgents` は、tmux の ORRERY child にも直接届きます。そのため、`/delegate` で作った子と話すときにも、同じ回避の経路がありました。どのセッションでも context に入る `/delegate` skill の description に、子を作るのも子と話すのも組み込みの道具ではなく `/delegate` と `send_message` で、と書きました。block の禁止文にも `SendMessage`・`ListAgents`・agent teams を足しました。修正後は同じ条件で、3 回とも `/delegate` から始めました。tmux の子への送信も 3 回とも `send_message` でした。組み込みの経路を設定で断る deny rule は、組み込み subagent への送信も消すので既定では入れず、[docs/launchers.md](docs/launchers.md) に opt-in として書きました。
+
 ## 2026.10.03.1
 
 ### Mail を更新した後、前から開いていた端末からの update が止まっていました

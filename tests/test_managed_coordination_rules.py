@@ -41,6 +41,26 @@ def test_delegation_is_an_example_of_the_general_rule_not_an_exception():
     assert "report the exact failure and stop delegation" in skill
 
 
+def test_children_are_created_and_talked_to_through_orrery_not_built_ins():
+    """Without the block in context, Sonnet 5 created the child with the
+    built-in Agent tool and played shiritori over SendMessage (3/3), and sent
+    to an ORRERY child in tmux with ListAgents + SendMessage (3/3). The skill
+    description is the only text present in every session, so it carries the
+    rule; the block repeats it for sessions that load it."""
+    claude = _read("claude/CLAUDE.md")
+    skill = _read("skills/delegate/SKILL.md")
+    description = next(
+        line for line in skill.splitlines() if line.startswith("description:")
+    )
+
+    for name in ("Agent or Task tool", "agent teams", "send_message", "SendMessage"):
+        assert name in description, name
+    assert "report that exact failure and stop; do not fall back to a built-in agent" in skill
+    assert "Talk to ORRERY agents over ORRERY Mail only." in claude
+    assert "`SendMessage` and `ListAgents`" in claude
+    assert "Talking to a child is part of the same rule" in claude
+
+
 def test_both_blocks_carry_the_operational_rules_learned_in_production():
     """Rules that only lived in one maintainer's vault until 2026-09-03.
 
