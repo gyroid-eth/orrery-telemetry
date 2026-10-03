@@ -1,6 +1,6 @@
 ---
 name: delegate
-description: Delegate a bounded task to a child Claude or Codex agent, prepare risk-aware instructions, spawn the child, annotate it in the dashboard, monitor progress, and verify completion.
+description: Start, spawn or delegate to a child Claude or Codex agent and talk to it. Use this whenever the user asks for a child, sub or helper agent, or to have one do something (a task, review, research, or a game), instead of Claude Code's built-in Agent or Task tool or agent teams; talk to the child only over ORRERY Mail send_message, not the built-in SendMessage. Prepares risk-aware instructions, spawns the child, annotates it in the dashboard, monitors progress, and verifies completion.
 allowed-tools: Bash, CronCreate, CronDelete, CronList, Read, Grep, Glob, mcp__orrery-mail__send_message, mcp__orrery-mail__fetch_inbox, mcp__orrery-mail__set_contact_policy, mcp__orrery-mail__macro_contact_handshake, mcp__orrery-mail__respond_contact, mcp__orrery-mail__file_reservation_paths, mcp__orrery-mail__release_file_reservations, mcp__orrery-mail__renew_file_reservations
 user-invocable: true
 ---
@@ -8,6 +8,8 @@ user-invocable: true
 # Delegate A Task
 
 Use this skill when the user asks you to delegate work to another agent, spawn a child agent, or run a parallel implementation/review/research task.
+
+Do not use Claude Code's built-in Agent or Task tool, agent teams, or `SendMessage` / `ListAgents` for this: the built-in tools can reach a child's tmux session, but nothing goes through ORRERY Mail, so the child has no inbox record and the dashboard shows no conversation. Every message to the child, and every reply you send it, goes through the ORRERY Mail `send_message` you were given; its exact tool name follows the connection's actual schema (for example `mcp__orrery-mail__send_message`, `mcp__orrery_mail__send_message` or `agentstack.send_message`), and a different prefix is not a missing connection. If the spawn helper or launcher fails, or you have no ORRERY Mail send and fetch tools at all, report that exact failure and stop; do not fall back to a built-in agent or another transport.
 
 The goal is not only to launch a child. The parent agent remains responsible for scoping the task, reducing collision risk, monitoring the child, reading the result, and reporting a verified outcome to the user.
 
