@@ -32848,6 +32848,21 @@ if(EMBED_MODE){
   if(tmOpen)tmOpen.textContent='OPEN IN COCKPIT';
 }
 
+// Successful embedded interactions; no tasks, message bodies or credentials.
+// The host owns its tour state and validates source + origin before marking.
+function notifyTourAction(action){
+  if(!EMBED_MODE||window.parent===window)return false;
+  if(!['exit','edge','select','replay','resume','settings','return'].includes(action))return false;
+  try{
+    window.parent.postMessage({type:'orrery-tour-action',version:1,action},location.origin);
+    return true;
+  }catch(_){return false;}
+}
+function notifyTourSelection(){
+  if(selectMode&&[...selectedSet].filter(name=>gmap.has(name)).length>=2)
+    notifyTourAction('select');
+}
+
 const CATLABEL={agent:"ACTIVE AGENTS",
   finished:"FINISHED — stale registration (retire / kill)",
   unnamed:"UNNAMED — pending rename",
@@ -33254,10 +33269,12 @@ async function jump(name,ev){
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({session:name,open:false})});
       const j=await r.json();
-      if(!j.ok){toast('✕ FAIL','> '+(j.error||'unknown'),true);return;}
+      if(!r.ok||!j.ok){toast('✕ FAIL','> '+(j.error||'unknown'),true);return;}
       if(j.action!=='already_running')
         toast('▸ RESUME','> '+name+'  ::  '+(j.mail_message||j.detail||j.action));
+      if(r.ok&&j.action==='resumed')notifyTourAction('resume');
     }catch(e){toast('✕ FAIL','> uplink lost: '+e,true);return;}
+    notifyTourAction('return');
     window.parent.postMessage({type:'orrery-jump',name:name},location.origin);
     return;
   }
@@ -33340,6 +33357,7 @@ async function exitAgent(ev,name){
     if(j.ok){
       const warn=(j.actions||[]).includes('warn-attached')?' (attached)':'';
       toast('▸ EXIT','> '+name+'  ::  /exit sent'+warn);
+      if(r.ok&&(j.actions||[]).includes('exit-sent'))notifyTourAction('exit');
     }else toast('✕ FAIL','> '+(j.error||'unknown'),true);
   }catch(e){
     card.classList.remove('exiting');
@@ -33365,7 +33383,7 @@ function toggleSel(name){
   if(!selectMode)return;
   if(selectedSet.has(name))selectedSet.delete(name);
   else selectedSet.add(name);
-  refreshSelClasses();updateSelBar();
+  refreshSelClasses();updateSelBar();notifyTourSelection();
 }
 function clearSel(){
   if(selectedSet.size===0){updateSelBar();return;}
@@ -33461,6 +33479,7 @@ async function bulkDispatch(kind,names,btn){
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify(EMBED_MODE&&kind==='resume'?{session:nm,open:false}:{session:nm})});
       const j=await r.json();
+      if(kind==='resume'&&r.ok&&j.ok&&j.action==='resumed')notifyTourAction('resume');
       if(j.ok)ok++;
       else{fail++;failNames.push(nm+':'+(j.error||'?'));console.warn('bulk '+kind+' fail',nm,j);}
     }catch(e){fail++;failNames.push(nm+':'+e);console.warn('bulk '+kind+' err',nm,e);}
@@ -34286,6 +34305,7 @@ async function openDrawer(a,b){
     if(seq!==_edSeq) return;       // 別 edge をクリック済み: 古い結果を捨てる
     if(!j.ok){ renderDrawerError(j.error||'unknown'); return; }
     renderDrawerThread(j);
+    if(r.ok)notifyTourAction('edge');
     // 直近メッセージを最大 3 件、古い順に staggered で comet 再アニメ
     // (drawer の文字情報と同期した可視リプレイ)
     const recent=(j.messages||[]).slice(0,3).reverse();
@@ -34619,6 +34639,7 @@ const _panEnd=ev=>{
       refreshSelClasses();updateSelBar();
     }
     if(selRect.el&&selRect.el.parentNode)selRect.el.remove();
+    if(ev.type==='pointerup'&&(W>=2||H>=2))notifyTourSelection();
     selRect=null;
     return;
   }
@@ -34857,7 +34878,9 @@ function initNetCtl(){
     const inp=row.querySelector('input');
     ncSyncRow(row);
     inp.addEventListener('input',()=>{
-      cfg.set(+inp.value); ncSyncRow(row); ncApply(cfg.apply);
+      const before=cfg.get(),next=+inp.value;
+      cfg.set(next); ncSyncRow(row); ncApply(cfg.apply);
+      if(next!==before&&cfg.get()===next)notifyTourAction('settings');
     });
   });
   document.getElementById('nc-reset').addEventListener('click',()=>{
@@ -36063,6 +36086,7 @@ async function startReplay(names){
     if(RP.timeTravel) qs.push('include_pane_states=1');
     const r=await fetch('/api/agent-history?'+qs.join('&'));
     j=await r.json();
+    if(!r.ok)j=null;
   }catch(e){
     toast('▸ REPLAY','fetch failed',true);
     return;
@@ -36160,6 +36184,7 @@ async function startReplay(names){
   toast('▸ REPLAY',j.events.length+' events · '+names.length+' agents'+ttLab);
   // 自動 play
   _rbPlay();
+  if(RP.active&&RP.events.length)notifyTourAction('replay');
 }
 function _rbSyncTimeTravelBtn(){
   const btn=_rb('rbTimeTravel'); if(!btn) return;

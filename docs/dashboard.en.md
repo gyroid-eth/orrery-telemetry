@@ -327,6 +327,8 @@ The normal install root is `~/.agentstack`; set `AGENTSTACK_WORKTREE_ROOT` when 
 
 `/?embed=1` or a same-origin iframe uses embed mode with a compact header. [ORRERY cockpit](https://github.com/gyroid-eth/orrery) embeds the dashboard in this mode from the `TELEMETRY` button in its header.
 
+Host checklists can follow successful interactions through same-origin parent notifications. See [Embedded interaction notifications](embedded-tour-events.md) for the envelope, success boundaries and receiver validation. Standalone pages send none.
+
 From the parent window:
 
 ```js

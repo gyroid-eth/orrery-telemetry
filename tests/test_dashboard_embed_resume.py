@@ -35,6 +35,7 @@ def _run(script_body: str, *, embed: bool, reply: dict, rows: list[dict] | None 
         pytest.skip("node unavailable")
     html = INDEX.read_text(encoding="utf-8")
     parts = [
+        _block(html, r"function notifyTourAction\(action\)\{.*?\n\}\n"),
         _block(html, r"async function jump\(name,ev\)\{.*?\n\}\n"),
         _block(html, r"async function bulkDispatch\(kind,names,btn\)\{.*?\n\}\n"),
     ]
@@ -47,14 +48,14 @@ const location={{origin:'http://127.0.0.1:8770'}};
 const window={{parent:{{postMessage:(m,o)=>posted.push(m)}}}};
 function toast(p,m,err){{toasts.push([p,m,!!err]);}}
 async function fetch(url,opts){{calls.push([url,JSON.parse(opts.body)]);
-  return {{json:async()=>({json.dumps(reply)})}};}}
+  return {{ok:true,json:async()=>({json.dumps(reply)})}};}}
 let bulkBusy=false; const selectedSet=new Set();
 function refreshSelClasses(){{}} function updateSelBar(){{}}
 const btn={{classList:{{add(){{}},remove(){{}}}},querySelector:()=>({{textContent:''}})}};
 const ev={{stopPropagation(){{}}}};
 {''.join(parts)}
 (async()=>{{ {script_body}
-  console.log(JSON.stringify({{calls,posted,toasts}})); }})();
+  console.log(JSON.stringify({{calls,posted:posted.filter(m=>m.type==='orrery-jump'),toasts}})); }})();
 """
     done = subprocess.run(["node", "-e", harness], capture_output=True, text=True, check=False, timeout=30)
     assert done.returncode == 0, done.stderr
