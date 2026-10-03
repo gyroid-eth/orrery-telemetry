@@ -31,7 +31,7 @@
 - [WSL2](install.md#windowswsl2で入れる) — 標準の Windows 導入は Ubuntu 内で行い、Windows のブラウザで開く。
 - [native Windows helper（実験的）](windows-local.md) — 標準 WSL2 導入とは別の、community による Mail/dashboard 起動。
 - [native Windows Codex launcher（実験的）](windows-codex-launcher.md) — 事前登録した子を専用 Windows tmux から起動する境界。
-- [native Windows spawn（実験的）](windows-spawn.md) — community lane の起動と対応範囲を調べる。
+- [native Windows spawn（実験的）](windows-spawn.md) — native NEW AGENT の名前 catalog 取得と、SPAWN が無効である境界を読む。
 
 ## 困ったとき
 

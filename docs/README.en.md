@@ -31,7 +31,7 @@ Start with **Your first flight → help map → Full tour** on screen, from cock
 - [WSL2](install.en.md#installing-on-windows-wsl2) — Install inside Ubuntu for the standard Windows route; open it in a Windows browser.
 - [Native Windows helper (experimental)](windows-local.en.md) — Community Mail/dashboard startup, separate from the standard WSL2 install.
 - [Native Windows Codex launcher (experimental)](windows-codex-launcher.en.md) — Launch a preregistered child using a dedicated Windows tmux server.
-- [Native Windows spawn (experimental)](windows-spawn.en.md) — Read startup and support boundaries in the community lane.
+- [Native Windows spawn (experimental)](windows-spawn.en.md) — Read native NEW AGENT name-catalog retrieval and the boundary that keeps SPAWN disabled.
 
 ## Troubleshoot
 
