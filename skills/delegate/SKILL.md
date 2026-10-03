@@ -9,7 +9,7 @@ user-invocable: true
 
 Use this skill when the user asks you to delegate work to another agent, spawn a child agent, or run a parallel implementation/review/research task.
 
-Do not use Claude Code's built-in Agent or Task tool, agent teams, or `SendMessage` / `ListAgents` for this: the built-in tools can reach a child's tmux session, but nothing goes through ORRERY Mail, so the child has no inbox record and the dashboard shows no conversation. Every message to the child, and every reply you send it, goes through `mcp__orrery-mail__send_message`. If the spawn helper or launcher fails, or you cannot see your `mcp__orrery-mail__*` send and fetch tools, report that exact failure and stop; do not fall back to a built-in agent.
+Do not use Claude Code's built-in Agent or Task tool, agent teams, or `SendMessage` / `ListAgents` for this: the built-in tools can reach a child's tmux session, but nothing goes through ORRERY Mail, so the child has no inbox record and the dashboard shows no conversation. Every message to the child, and every reply you send it, goes through the ORRERY Mail `send_message` you were given; its exact tool name follows the connection's actual schema (for example `mcp__orrery-mail__send_message`, `mcp__orrery_mail__send_message` or `agentstack.send_message`), and a different prefix is not a missing connection. If the spawn helper or launcher fails, or you have no ORRERY Mail send and fetch tools at all, report that exact failure and stop; do not fall back to a built-in agent or another transport.
 
 The goal is not only to launch a child. The parent agent remains responsible for scoping the task, reducing collision risk, monitoring the child, reading the result, and reporting a verified outcome to the user.
 

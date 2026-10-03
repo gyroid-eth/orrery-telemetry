@@ -56,6 +56,7 @@ def test_children_are_created_and_talked_to_through_orrery_not_built_ins():
     for name in ("Agent or Task tool", "agent teams", "send_message", "SendMessage"):
         assert name in description, name
     assert "report that exact failure and stop; do not fall back to a built-in agent" in skill
+    assert "follows the connection's actual schema" in skill
     assert "Talk to ORRERY agents over ORRERY Mail only." in claude
     assert "`SendMessage` and `ListAgents`" in claude
     assert "Talking to a child is part of the same rule" in claude
