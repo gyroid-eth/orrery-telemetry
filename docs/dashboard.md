@@ -350,6 +350,8 @@ branch: exp/<child-name>
 
 `/?embed=1` または same-origin iframe では compact header の embed mode になります。[ORRERY cockpit](https://github.com/gyroid-eth/orrery) は、header の `TELEMETRY` からこの mode で dashboard を埋め込みます。
 
+操作に追従する host の checklist 向けに、成功した操作だけを same-origin parent へ通知します。通知の型・成功条件・受信側の検証は [Embedded interaction notifications](embedded-tour-events.md) にあります。単独表示では通知しません。
+
 parent window から:
 
 ```js
