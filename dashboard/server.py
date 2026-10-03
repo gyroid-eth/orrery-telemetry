@@ -175,6 +175,9 @@ THEME_ASSETS = {
         "text/javascript; charset=utf-8",
     ),
     "/theme_light.css": (os.path.join(HERE, "theme_light.css"), "text/css; charset=utf-8"),
+    # The help map is served the same way: a fixed file next to the page.
+    "/help_map.js": (os.path.join(HERE, "help_map.js"), "text/javascript; charset=utf-8"),
+    "/help_map.css": (os.path.join(HERE, "help_map.css"), "text/css; charset=utf-8"),
 }
 DB_PATH = _resolve_mail_db()
 MAIL_ENV_PATH = _env_path("AGENTSTACK_MAIL_ENV", "~/.agentstack/mail/.env")
