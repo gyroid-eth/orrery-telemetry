@@ -221,6 +221,16 @@ A Claude Code session that was open before installation does not discover the ne
 
 ORRERY Telemetry delegation must be entered with the leading slash as `/delegate ...`. `delegate ...` is an ordinary prompt, not an invocation of this skill. If Claude handles it with a built-in subagent / Agent tool, it may produce an artifact, but it does not create ORRERY Telemetry identity, reservations, a dedicated tmux session, or dashboard telemetry. Do not use the built-in Agent tool in place of `/delegate` when the objective is to create an ORRERY Telemetry-monitored child.
 
+Talking to the child has the same boundary. Claude Code 2.1.224 and later can message other local sessions with the built-in `SendMessage` / `ListAgents`, and an ORRERY child in tmux is one of them, so a message sent that way arrives but leaves no ORRERY Mail record and nothing on the dashboard. The `/delegate` skill description and the managed block both tell Claude to use `send_message`. If you want Claude Code to refuse the built-in route outright, add a deny rule yourself; the installer does not, because the same rule also removes messaging to built-in subagents and agent-team teammates:
+
+```json
+{
+  "permissions": {
+    "deny": ["SendMessage", "ListAgents"]
+  }
+}
+```
+
 | Item | Details |
 | --- | --- |
 | Trigger | A request to delegate to a child, launch a subagent, or perform parallel work |

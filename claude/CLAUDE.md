@@ -162,6 +162,12 @@ hook blocks an unreserved `Edit`/`Write` under a protected root.
 
 ## Messaging Other Agents
 
+- **Talk to ORRERY agents over ORRERY Mail only.** A child, a parent or any
+  other agent with an ORRERY name gets messages through `send_message`.
+  Claude Code's built-in `SendMessage` and `ListAgents` can also reach those
+  sessions, because they are local Claude Code sessions, but nothing then
+  goes through ORRERY Mail: no inbox record, no contact policy, nothing on
+  the dashboard. Do not use them, or agent teams, for ORRERY agents.
 - **Send pointers, not files.** A message body is a path plus what changed
   (`path: src/x.py — added the retry branch`), never the file's contents. The
   recipient reads the file itself; pasting it only burns their context.
@@ -223,8 +229,10 @@ The installed skill sources live under `__AGENTSTACK_HOME__/skills`.
   read/ack semantics, wake delivery, and the configured project identity.
 - Delegation is one instance of this general rule. When the user asks to create,
   spawn, or delegate to a child, use `/delegate`. Do not substitute Claude
-  Code's built-in Agent or Task tool: those children have no ORRERY Telemetry
-  identity, inbox, reservation, dedicated tmux session, or dashboard telemetry.
+  Code's built-in Agent or Task tool or agent teams: those children have no
+  ORRERY Telemetry identity, inbox, reservation, dedicated tmux session, or
+  dashboard telemetry. Talking to a child is part of the same rule: use
+  `send_message`, not the built-in `SendMessage`.
   The child is registered by the shell helper `agentstack-preregister-child`
   as a separate identity; that is not re-registering yourself, and it does not
   need `register_agent`, `ensure_project` or contact tools on your connection.

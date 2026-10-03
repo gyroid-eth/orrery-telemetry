@@ -223,6 +223,16 @@ install 前から開いていた Claude Code session は追加された skill �
 
 ORRERY Telemetry の委譲は、必ず先頭の slash を付けて `/delegate ...` と入力します。`delegate ...` は通常の prompt であり、この skill の呼び出しではありません。Claude が組み込み subagent / Agent tool で処理した場合、成果物ができても ORRERY Telemetry の identity、reservation、専用 tmux session、dashboard telemetry には載りません。ORRERY Telemetry で監視する child を作る目的では、組み込み Agent tool を `/delegate` の代わりに使わないでください。
 
+child とのやりとりにも同じ境界があります。Claude Code 2.1.224 以降は組み込みの `SendMessage` / `ListAgents` で同じ machine の他 session に送れて、tmux の ORRERY child もその対象です。そのため、その経路で送ると届きはしますが、ORRERY Mail に記録が残らず dashboard にも出ません。`/delegate` skill の description と managed block は、どちらも `send_message` を使うよう指示しています。組み込みの経路を Claude Code に断らせたい場合は、deny rule を自分で足してください。同じ rule で組み込み subagent や agent team の teammate への送信も消えるため、installer は入れません:
+
+```json
+{
+  "permissions": {
+    "deny": ["SendMessage", "ListAgents"]
+  }
+}
+```
+
 | 項目 | 内容 |
 | --- | --- |
 | トリガー | child への委譲、subagent 起動、並列作業を依頼されたとき |
