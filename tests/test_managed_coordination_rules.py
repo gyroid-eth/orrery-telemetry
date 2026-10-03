@@ -45,8 +45,9 @@ def test_children_are_created_and_talked_to_through_orrery_not_built_ins():
     """Without the block in context, Sonnet 5 created the child with the
     built-in Agent tool and played shiritori over SendMessage (3/3), and sent
     to an ORRERY child in tmux with ListAgents + SendMessage (3/3). The skill
-    description is the only text present in every session, so it carries the
-    rule; the block repeats it for sessions that load it."""
+    description is usually listed outside the block too (it can be cut when the
+    skill listing is over budget), so it carries the rule up front; the block
+    repeats it for sessions that load it."""
     claude = _read("claude/CLAUDE.md")
     skill = _read("skills/delegate/SKILL.md")
     description = next(
