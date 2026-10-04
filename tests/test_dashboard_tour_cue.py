@@ -51,11 +51,15 @@ def test_every_telemetry_step_of_the_full_tour_has_controls():
     steps = node(f"const c=require({json.dumps(str(CUE))});console.log(JSON.stringify(c.STEPS));")
     assert sorted(steps) == sorted(['full-exit', 'full-edge', 'full-select', 'full-replay',
                                     'full-resume', 'full-network-settings', 'full-return'])
-    # A selector, or [selector, label text] for a control whose label decides its action.
+    # A selector, [selector, label text] for a control whose label decides its
+    # action, or [selector, null, 'pair'] for the edge of the cue's pair.
     for sels in steps.values():
         for entry in sels:
             assert (isinstance(entry, str) and entry) or (
-                isinstance(entry, list) and len(entry) == 2 and all(isinstance(x, str) and x for x in entry)), entry
+                isinstance(entry, list) and len(entry) == 2 and all(isinstance(x, str) and x for x in entry)) or (
+                isinstance(entry, list) and len(entry) == 3 and isinstance(entry[0], str) and entry[0]
+                and entry[1] is None and entry[2] == 'pair'), entry
+    assert steps['full-edge'][0] == ['#net .edge-count', None, 'pair']
 
 
 def test_here_tag_placement_matches_the_cockpit_rule():
@@ -83,8 +87,9 @@ def embedded(tmp_path):
         '<!doctype html><meta charset="utf-8"><style>html,body{margin:0;height:100%}'
         'iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style>'
         '<iframe id="f" src="index.html?embed=1"></iframe>'
-        '<script>window.cue=(step,avoid)=>document.getElementById("f").contentWindow'
-        '.postMessage({type:"orrery-tour-cue",version:1,step,avoid},location.origin);</script>')
+        '<script>window.cue=(step,avoid,pair)=>document.getElementById("f").contentWindow'
+        '.postMessage({type:"orrery-tour-cue",version:1,step,avoid,...(pair?{pair}:{})},location.origin);'
+        'window.covers=[];addEventListener("message",e=>{if(e.data&&e.data.type==="orrery-tour-cover")covers.push(e.data.rects);});</script>')
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(bundle)))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     request = urllib.request.Request(endpoint + "/json/new?about:blank", method="PUT")
@@ -139,8 +144,13 @@ CUE_STATE = """(()=>{
 })()"""
 
 
-def _cue(evaluate, inner, step, avoid=None):
-    evaluate(f"cue({json.dumps(step)},{json.dumps(avoid)})")
+# The two ends of the network's first edge count, as the cockpit would send them.
+FIRST_PAIR = """(()=>{const b=gEls.badge.find(o=>o.tx.getBoundingClientRect().width>0);
+  const n=e=>e&&typeof e==='object'?e.name??e.id:e;return [n(b.s),n(b.t)];})()"""
+
+
+def _cue(evaluate, inner, step, avoid=None, pair=None):
+    evaluate(f"cue({json.dumps(step)},{json.dumps(avoid)},{json.dumps(pair)})")
     time.sleep(.3)
     return inner(CUE_STATE)
 
@@ -153,7 +163,7 @@ def test_each_step_rings_the_control_on_screen(embedded):
     inner("setView('net')")
     wait("[...document.querySelectorAll('#net .edge-count')].some(e=>e.getBoundingClientRect().width>0)", 30)
     time.sleep(2)
-    rows['edge'] = _cue(evaluate, inner, 'full-edge')
+    rows['edge'] = _cue(evaluate, inner, 'full-edge', pair=inner(FIRST_PAIR))
     rows['select'] = _cue(evaluate, inner, 'full-select')
     rows['replay-before-selecting'] = _cue(evaluate, inner, 'full-replay')
     rows['settings'] = _cue(evaluate, inner, 'full-network-settings')
@@ -249,25 +259,99 @@ def test_an_edge_count_under_anything_but_its_own_hit_line_is_covered(embedded):
     inner("setView('net')")
     wait("[...document.querySelectorAll('#net .edge-count')].some(e=>e.getBoundingClientRect().width>0)", 30)
     time.sleep(2)
-    free = _cue(evaluate, inner, 'full-edge')
+    pair = inner(FIRST_PAIR)
+    free = _cue(evaluate, inner, 'full-edge', pair=pair)
     # Lay another SVG shape over every count.
     inner("""(()=>{const svg=document.querySelector('#net svg')||document.getElementById('gsvg');
       for(const tx of document.querySelectorAll('#net .edge-count')){const b=tx.getBBox();
         const r=document.createElementNS('http://www.w3.org/2000/svg','rect');
         for(const [k,v] of Object.entries({x:b.x-4,y:b.y-4,width:b.width+8,height:b.height+8,fill:'transparent','class':'qa-cover'}))r.setAttribute(k,v);
         r.style.pointerEvents='all';tx.parentNode.appendChild(r);}})()""")
-    covered = _cue(evaluate, inner, 'full-edge')
+    covered = _cue(evaluate, inner, 'full-edge', pair=pair)
     inner("document.querySelectorAll('.qa-cover').forEach(n=>n.remove())")
     # A mail card over every count covers it too.
     inner("""(()=>{for(const tx of document.querySelectorAll('#net .edge-count')){const b=tx.getBoundingClientRect();
       const d=document.createElement('div');d.className='mail-card on qa-cover';
       Object.assign(d.style,{position:'fixed',left:(b.left-6)+'px',top:(b.top-6)+'px',width:(b.width+12)+'px',height:(b.height+12)+'px'});
       document.body.appendChild(d);}})()""")
-    carded = _cue(evaluate, inner, 'full-edge')
+    carded = _cue(evaluate, inner, 'full-edge', pair=pair)
     inner("document.querySelectorAll('.qa-cover').forEach(n=>n.remove())")
     assert free['target'] == 'edge-count', free
     assert covered['target'] == 'viewtog', covered
     assert carded['target'] == 'viewtog', carded
+
+
+def test_only_the_games_edge_is_ringed(embedded):
+    """The recording ringed an edge between two other agents: the step names
+    the game's parent and child, so only their edge is pointed at; without
+    them no edge is, and the ring stays on the view toggle."""
+    _client, evaluate, inner, wait = embedded
+    inner("setView('net')")
+    wait("gEls.badge.filter(o=>o.tx.getBoundingClientRect().width>0).length>1", 30)
+    time.sleep(2)
+    pairs = inner("""(()=>{const n=e=>e&&typeof e==='object'?e.name??e.id:e;
+      return gEls.badge.filter(o=>o.tx.getBoundingClientRect().width>0).map(o=>[n(o.s),n(o.t)]);})()""")
+    ringed = []
+    for pair in pairs[:3]:
+        _cue(evaluate, inner, 'full-edge', pair=pair[::-1])
+        # A mail card can pass over a count for a moment; wait for it to show.
+        got, deadline = None, time.monotonic() + 5
+        while got is None and time.monotonic() < deadline:
+            got = inner("""(()=>{const el=TelemetryTourCue.pick('full-edge',%s);
+              const n=e=>e&&typeof e==='object'?e.name??e.id:e;const b=el&&gEls.badge.find(o=>o.tx===el);
+              return b?[n(b.s),n(b.t)]:null;})()""" % json.dumps(pair[::-1]))
+            if got is None:
+                time.sleep(.2)
+        ringed.append(got)
+    assert ringed == pairs[:3]
+    none = _cue(evaluate, inner, 'full-edge')
+    unknown = _cue(evaluate, inner, 'full-edge', pair=['NoSuchParent', 'NoSuchChild'])
+    assert none['target'] == 'viewtog' and unknown['target'] == 'viewtog'
+
+
+def test_an_open_panel_is_reported_so_the_checklist_can_fold(embedded):
+    """The checklist hid the edge drawer and the agent panel in the recording:
+    while a step is on, the page tells the cockpit what it has open."""
+    _client, evaluate, inner, wait = embedded
+    _cue(evaluate, inner, 'full-network-settings')
+    # A page's first report is sent even when nothing is open, so one loaded
+    # again clears what the page before it reported.
+    first = evaluate("covers.slice()")
+    inner("document.getElementById('settings-btn').click()")
+    # Settings slides in; the page reports again as it moves, so wait for the
+    # report to match where the panel settles.
+    box_js = "(()=>{const b=document.getElementById('settings').getBoundingClientRect();return {l:Math.round(b.left),r:Math.round(b.right)};})()"
+    opened, box, deadline = None, None, time.monotonic() + 8
+    while time.monotonic() < deadline:
+        box = inner(box_js)
+        opened = evaluate("covers.length?covers.at(-1):null")
+        if opened and len(opened) == 1 and (opened[0]['l'], opened[0]['r']) == (box['l'], box['r']):
+            break
+        time.sleep(.2)
+    inner("document.getElementById('settings-close').click()")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and evaluate("covers.at(-1).length"):
+        time.sleep(.1)
+    closed = evaluate("covers.at(-1)")
+    # No step, nothing reported even with a panel open.
+    inner("document.getElementById('settings-btn').click()")
+    _cue(evaluate, inner, None)
+    time.sleep(1)
+    after = evaluate("covers.at(-1)")
+    inner("document.getElementById('settings-close').click()")
+    assert len(opened) == 1 and (opened[0]['l'], opened[0]['r']) == (box['l'], box['r']), (opened, box)
+    assert closed == [] and after == []
+    assert first == [[]], first
+
+
+def test_a_toast_sits_above_the_selection_bar(embedded):
+    # The replay's summary toast covered the bar's RESUME in the recording.
+    _client, _evaluate, inner, _wait = embedded
+    boxes = inner("""(()=>{const bar=document.getElementById('selbar');bar.classList.add('show');
+      toast('▸ REPLAY','8 events · 2 agents');
+      return new Promise(done=>setTimeout(()=>{const t=document.getElementById('toast').getBoundingClientRect(),
+        b=bar.getBoundingClientRect();bar.classList.remove('show');done({toastBottom:t.bottom,barTop:b.top});},400));})()""")
+    assert boxes['toastBottom'] <= boxes['barTop'], boxes
 
 
 def test_the_tag_keeps_clear_of_what_the_cockpit_lays_over_it(embedded):
