@@ -11,16 +11,22 @@
 (function(root){
 'use strict';
 // Each step's controls, in order; the first one showing is ringed. A later
-// entry is the way to the control (the view toggle, a card to open).
+// entry is the way to the control (the view toggle, a card to open). An
+// entry [selector, text] also needs its label to match: the panel's one
+// button reads RESUME IN COCKPIT for an ended agent and OPEN IN COCKPIT for
+// a live one, and only one of them is the step's action.
 const STEPS=Object.freeze({
   'full-exit':['.bay .exitbtn','.viewtog'],
   'full-edge':['#net .edge-count','.viewtog'],
   'full-select':['#selToggle','.viewtog'],
   'full-replay':['#selbarReplay','#selToggle','.viewtog'],
-  'full-resume':['#tm-open','#selbarResume','.bay .top'],
+  // An ended agent shows outside LIVE: its card, else the history range.
+  // A panel open on the other kind of agent is closed first (#tm-x).
+  'full-resume':[['#tm-open','RESUME'],'#selbarResume','.bay.cat-gone .top','#history','#tm-x'],
   'full-network-settings':['#settings-btn','.viewtog'],
-  'full-return':['#tm-open','.bay .top'],
+  'full-return':[['#tm-open','OPEN IN COCKPIT'],'.bay.cat-agent .top','#tm-x'],
 });
+const own=step=>typeof step==='string'&&Object.prototype.hasOwnProperty.call(STEPS,step);
 // Where the HERE tag sits beside the ring: below, above, right or left, inside
 // the view and clear of what it must not cover; null when no side has room.
 // The same rule as the cockpit's placeHereTag.
@@ -45,24 +51,44 @@ root.TelemetryTourCue=API;
 const doc=root.document;
 if(!doc)return;
 
+// The network's edge counts carry no pair of their own; the page's badge list
+// (gEls.badge: {tx, s, t}) knows which pair each one belongs to, and each hit
+// line carries its pair in data-s / data-t.
+function ownHitLine(el,top){
+  if(!el.classList||!el.classList.contains('edge-count')||!top.classList||!top.classList.contains('edge-hit'))return false;
+  // A classic script sees the page's top-level gEls; a page without it has no edges.
+  /* global gEls */
+  const badges=typeof gEls!=='undefined'&&gEls?gEls.badge:null;
+  const badge=Array.isArray(badges)&&badges.find(item=>item.tx===el);
+  if(!badge)return false;
+  const s=top.dataset.s,t=top.dataset.t;
+  return (s===badge.s&&t===badge.t)||(s===badge.t&&t===badge.s);
+}
 function showing(el){
+  // A control that cannot be pressed now is not the next one to press.
+  if(el.disabled||el.getAttribute('aria-disabled')==='true')return null;
   const b=el.getBoundingClientRect(),W=root.innerWidth,H=root.innerHeight;
   if(b.width<2||b.height<2||b.right<=0||b.bottom<=0||b.left>=W||b.top>=H)return null;
   const cs=root.getComputedStyle(el);
   if(cs.visibility==='hidden'||cs.display==='none'||+cs.opacity===0)return null;
-  // Under a drawer or dialog: not what can be pressed now. Two things above
-  // a control do not cover it: the mail cards that drift over the network as
-  // Mail flows, and the rest of its own drawing (an edge's count sits under
-  // the wider line that takes the edge's clicks).
+  // Under anything else (a drawer, a dialog, a mail card passing over the
+  // network): not what can be pressed now. One exception: an edge's count
+  // lies under that edge's own wider hit line, which takes the edge's clicks.
   const x=Math.min(W-1,Math.max(0,(b.left+b.right)/2)),y=Math.min(H-1,Math.max(0,(b.top+b.bottom)/2));
   const top=doc.elementFromPoint(x,y);
-  const sameDrawing=!!(el.ownerSVGElement&&top&&top.ownerSVGElement===el.ownerSVGElement);
-  if(top&&top!==el&&!el.contains(top)&&!sameDrawing&&!top.closest('.mail-card'))return null;
+  if(top&&top!==el&&!el.contains(top)&&!ownHitLine(el,top))return null;
   return b;
 }
 // The first control of the step that is on screen and not covered.
 function pick(step){
-  for(const sel of STEPS[step]||[])for(const el of doc.querySelectorAll(sel)){const b=showing(el);if(b)return {el,b};}
+  if(!own(step))return null;
+  for(const entry of STEPS[step]){
+    const [sel,text]=Array.isArray(entry)?entry:[entry,null];
+    for(const el of doc.querySelectorAll(sel)){
+      if(text&&!(el.textContent||'').toUpperCase().includes(text))continue;
+      const b=showing(el);if(b)return {el,b};
+    }
+  }
   return null;
 }
 API.pick=step=>{const p=pick(step);return p&&p.el;};
@@ -94,7 +120,7 @@ function mount(){
     Object.assign(here.style,{left:spot.x+'px',top:spot.y+'px',visibility:''});
   }
   function set(next,rects){
-    step=next&&STEPS[next]?next:null;
+    step=own(next)?next:null;
     avoid=Array.isArray(rects)?rects.filter(a=>a&&[a.l,a.t,a.r,a.b].every(Number.isFinite)):[];
     clearInterval(timer);place();
     // Cards stream in and views switch without a tour change: follow them.

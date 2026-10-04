@@ -51,7 +51,11 @@ def test_every_telemetry_step_of_the_full_tour_has_controls():
     steps = node(f"const c=require({json.dumps(str(CUE))});console.log(JSON.stringify(c.STEPS));")
     assert sorted(steps) == sorted(['full-exit', 'full-edge', 'full-select', 'full-replay',
                                     'full-resume', 'full-network-settings', 'full-return'])
-    assert all(isinstance(sel, str) and sel for sels in steps.values() for sel in sels)
+    # A selector, or [selector, label text] for a control whose label decides its action.
+    for sels in steps.values():
+        for entry in sels:
+            assert (isinstance(entry, str) and entry) or (
+                isinstance(entry, list) and len(entry) == 2 and all(isinstance(x, str) and x for x in entry)), entry
 
 
 def test_here_tag_placement_matches_the_cockpit_rule():
@@ -157,13 +161,17 @@ def test_each_step_rings_the_control_on_screen(embedded):
     time.sleep(.5)
     inner("openPanel(document.querySelector('.bay').dataset.name)")
     time.sleep(1)
-    rows['resume'] = _cue(evaluate, inner, 'full-resume')
+    # The demo's agents are live: the panel offers OPEN IN COCKPIT, which is
+    # the Return step's action, not Resume's (review of #202). The panel
+    # covers the rest, so Resume points at closing it.
+    rows['resume-of-a-live-agent'] = _cue(evaluate, inner, 'full-resume')
     rows['return'] = _cue(evaluate, inner, 'full-return')
     targets = {k: (v['ring'], v.get('target')) for k, v in rows.items()}
     assert targets == {
         'exit': (True, 'exitbtn'), 'edge-on-deck': (True, 'viewtog'), 'edge': (True, 'edge-count'),
         'select': (True, 'selToggle'), 'replay-before-selecting': (True, 'selToggle'),
-        'settings': (True, 'settings-btn'), 'resume': (True, 'tm-open'), 'return': (True, 'tm-open')}, rows
+        'settings': (True, 'settings-btn'), 'resume-of-a-live-agent': (True, 'tm-x'),
+        'return': (True, 'tm-open')}, rows
     for name, row in rows.items():
         assert row['colour'] == 'rgb(63, 210, 230)' and row['pulse'] == 'tour-cue-pulse', (name, row)
         assert row['arrowMatches'] and row['hereOnScreen'], (name, row)
@@ -180,6 +188,61 @@ def test_the_cue_ends_and_only_the_cockpit_can_send_it(embedded):
     unknown = _cue(evaluate, inner, 'full-start')
     assert shown['ring'] and stopped == {'ring': False, 'here': False}
     assert forged == {'ring': False, 'here': False} and unknown == {'ring': False, 'here': False}
+
+
+def test_resume_needs_the_resume_label_and_nothing_disabled_is_ringed(embedded):
+    _client, evaluate, inner, _wait = embedded
+    inner("openPanel(document.querySelector('.bay').dataset.name)")
+    time.sleep(1)
+    # The same panel button, as it reads for an ended agent.
+    inner("document.getElementById('tm-open').textContent='RESUME IN COCKPIT'")
+    resume = _cue(evaluate, inner, 'full-resume')
+    returning = _cue(evaluate, inner, 'full-return')
+    inner("document.getElementById('tm-open').textContent='OPEN IN COCKPIT';document.getElementById('tm-open').disabled=true")
+    disabled = _cue(evaluate, inner, 'full-return')
+    inner("document.getElementById('tm-open').disabled=false")
+    assert (resume['ring'], resume['target']) == (True, 'tm-open')
+    # Return is not RESUME, and a disabled OPEN is not pressed: close the panel.
+    assert (returning['ring'], returning['target']) == (True, 'tm-x'), returning
+    assert (disabled['ring'], disabled['target']) == (True, 'tm-x'), disabled
+
+
+def test_names_of_object_properties_are_not_steps(embedded):
+    # They used to reach the table's inherited properties, throw, and leave
+    # the previous step's ring on screen.
+    _client, evaluate, inner, _wait = embedded
+    for name in ('__proto__', 'constructor', 'toString'):
+        before = _cue(evaluate, inner, 'full-exit')
+        state = _cue(evaluate, inner, name)
+        assert before['ring'] and state == {'ring': False, 'here': False}, (name, state)
+
+
+def test_an_edge_count_under_anything_but_its_own_hit_line_is_covered(embedded):
+    """Review of #202: any SVG over an edge count, or a mail card (they take
+    clicks), covers it; only that edge's own hit line does not."""
+    _client, evaluate, inner, wait = embedded
+    inner("setView('net')")
+    wait("[...document.querySelectorAll('#net .edge-count')].some(e=>e.getBoundingClientRect().width>0)", 30)
+    time.sleep(2)
+    free = _cue(evaluate, inner, 'full-edge')
+    # Lay another SVG shape over every count.
+    inner("""(()=>{const svg=document.querySelector('#net svg')||document.getElementById('gsvg');
+      for(const tx of document.querySelectorAll('#net .edge-count')){const b=tx.getBBox();
+        const r=document.createElementNS('http://www.w3.org/2000/svg','rect');
+        for(const [k,v] of Object.entries({x:b.x-4,y:b.y-4,width:b.width+8,height:b.height+8,fill:'transparent','class':'qa-cover'}))r.setAttribute(k,v);
+        r.style.pointerEvents='all';tx.parentNode.appendChild(r);}})()""")
+    covered = _cue(evaluate, inner, 'full-edge')
+    inner("document.querySelectorAll('.qa-cover').forEach(n=>n.remove())")
+    # A mail card over every count covers it too.
+    inner("""(()=>{for(const tx of document.querySelectorAll('#net .edge-count')){const b=tx.getBoundingClientRect();
+      const d=document.createElement('div');d.className='mail-card on qa-cover';
+      Object.assign(d.style,{position:'fixed',left:(b.left-6)+'px',top:(b.top-6)+'px',width:(b.width+12)+'px',height:(b.height+12)+'px'});
+      document.body.appendChild(d);}})()""")
+    carded = _cue(evaluate, inner, 'full-edge')
+    inner("document.querySelectorAll('.qa-cover').forEach(n=>n.remove())")
+    assert free['target'] == 'edge-count', free
+    assert covered['target'] == 'viewtog', covered
+    assert carded['target'] == 'viewtog', carded
 
 
 def test_the_tag_keeps_clear_of_what_the_cockpit_lays_over_it(embedded):
