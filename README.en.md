@@ -22,7 +22,7 @@ For Telemetry without cockpit, use the [standalone installation procedure](docs/
 
 Try **Your first flight → help map → Full tour** in cockpit. Learn the basics with the seven-item guide on the right on your first visit; look around with `Settings → Getting started → Show help map`; then choose `Full tour` there for sixteen steps in order.
 
-In the Telemetry header, choose `HELP MAP` (beside `SETTINGS` in NETWORK) to annotate the visible DECK / NETWORK controls. With an agent detail panel open, it explains that panel instead. The same entry works when Telemetry is embedded in cockpit. If the annotations do not fit, they appear as a legend; press `Esc` or choose `Close` to dismiss it.
+In the Telemetry header, choose `HELP MAP` (beside `SETTINGS` in NETWORK) to annotate the visible DECK / NETWORK controls. Close an open agent detail panel before choosing it. The same entry works when Telemetry is embedded in cockpit. If the annotations do not fit, they appear as a legend; press `Esc` or choose `Close` to dismiss it.
 
 Full tour guides you through creating one child with `/delegate`, playing three shiritori round trips over ORRERY Mail, arranging terminals, and trying Telemetry EXIT / RESUME and NETWORK / REPLAY. Follow the controls described on screen to advance. See the [current quick start](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) and [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/en/FULL_TOUR.md).
 
