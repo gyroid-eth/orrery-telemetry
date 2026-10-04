@@ -4,7 +4,7 @@
 
 Start with **Your first flight → help map → Full tour** on screen, from cockpit’s `Settings → Getting started`. This index is for install/update, troubleshooting, and detailed references when you need them.
 
-Explore Telemetry’s own controls with `HELP MAP` in its header (beside `SETTINGS` in NETWORK). It annotates DECK / NETWORK controls, whether Telemetry is standalone or embedded in cockpit. Close an open detail panel first.
+Explore Telemetry’s own controls with `HELP MAP` in its header (beside `SETTINGS` in NETWORK). It annotates DECK / NETWORK controls, whether Telemetry is standalone or embedded in cockpit. In an agent detail panel, choose the panel’s own `HELP MAP` to annotate that panel’s controls.
 
 ## Start here
 
