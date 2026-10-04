@@ -261,6 +261,34 @@ def test_agent_panel_is_annotated_alone(demo_page):
     _assert_annotated(evaluate(LAYOUT), ["tabs", "actions", "role"])
 
 
+def test_the_open_panel_has_its_own_way_into_the_help_map(demo_page):
+    """The panel's backdrop sits above the header, so the header's Help map
+    could not be pressed while the panel was open (review of #196)."""
+    _client, evaluate, size, open_page = demo_page
+    open_page()
+    evaluate("openPanel(document.querySelector('.bay').dataset.name)")
+    time.sleep(1)
+    reach = evaluate("""(()=>{
+      const top=el=>{const r=el.getBoundingClientRect();return document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2);};
+      const header=document.getElementById('helpmap-btn'),panel=document.getElementById('tm-helpmap');
+      return {headerCovered:top(header)!==header,panelReachable:top(panel)===panel,label:panel.textContent};
+    })()""")
+    assert reach == {"headerCovered": True, "panelReachable": True, "label": "HELP MAP"}
+    evaluate("document.getElementById('tm-helpmap').click()")
+    result = evaluate(LAYOUT)
+    _assert_annotated(result, ["tabs", "actions", "role"])
+    after = evaluate("""(()=>{
+      const pressed=[...document.querySelectorAll('#helpmap-btn,#tm-helpmap')].map(b=>b.getAttribute('aria-pressed'));
+      document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+      return {pressed,mapHidden:document.querySelector('.help-map').hidden,
+        panelOpen:document.getElementById('term').classList.contains('on'),
+        focusInPanel:document.getElementById('term').contains(document.activeElement),
+        focus:document.activeElement&&(document.activeElement.id||document.activeElement.className)};
+    })()""")
+    assert {k: after[k] for k in ("pressed", "mapHidden", "panelOpen", "focusInPanel")} == {
+        "pressed": ["true", "true"], "mapHidden": True, "panelOpen": True, "focusInPanel": True}, after
+
+
 def test_embedded_page_annotates_what_its_header_keeps(demo_page):
     _client, evaluate, size, open_page = demo_page
     size(1100, 760)

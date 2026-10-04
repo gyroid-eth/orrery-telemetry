@@ -127,6 +127,16 @@ function mount(){
   button.setAttribute('aria-pressed','false');button.title='Help map: what each control on this screen does';
   button.textContent='Help map';
   if(settingsBtn)settingsBtn.before(button);else header.append(button);
+  // The agent panel covers the header (its backdrop sits above it), so the
+  // panel carries its own way in; both open the same map, which then
+  // annotates the panel.
+  const panelButton=doc.createElement('button');
+  panelButton.type='button';panelButton.className='tm-open tm-helpmap';panelButton.id='tm-helpmap';
+  panelButton.setAttribute('aria-pressed','false');panelButton.title='Help map: what each control in this panel does';
+  panelButton.textContent='HELP MAP';
+  const panelExit=doc.getElementById('tm-exit-btn');
+  if(panelExit)panelExit.before(panelButton);
+  const buttons=[button,panelButton];
 
   const map=doc.createElement('section');
   map.className='help-map';map.hidden=true;map.setAttribute('aria-label','Telemetry help map');
@@ -239,18 +249,25 @@ function mount(){
     }
   }
   let watch=0;
-  function show(){
-    open=true;previousFocus=doc.activeElement;map.hidden=false;button.setAttribute('aria-pressed','true');
+  // opener: the button that opened the map, which gets focus back on close
+  // (a click does not focus a button in every browser).
+  function show(opener){
+    // Already open: lay it out again, keep where focus returns to.
+    if(open){lastKey='';place(true);return;}
+    open=true;previousFocus=opener&&opener.isConnected?opener:doc.activeElement;map.hidden=false;buttons.forEach(b=>b.setAttribute('aria-pressed','true'));
     lastKey='';place(true);map.querySelector('.help-map-close').focus();
     // The network settles and the deck streams in; follow the controls while open.
     clearInterval(watch);watch=setInterval(()=>place(false),700);
   }
   function hide(){
     if(!open)return;
-    open=false;map.hidden=true;button.setAttribute('aria-pressed','false');clearInterval(watch);
-    if(previousFocus&&previousFocus.isConnected&&previousFocus!==doc.body)previousFocus.focus();else button.focus();
+    open=false;map.hidden=true;buttons.forEach(b=>b.setAttribute('aria-pressed','false'));clearInterval(watch);
+    // Back to where the reader was; else to the way in they can reach now
+    // (the header's button is under the panel while it is open).
+    if(previousFocus&&previousFocus.isConnected&&previousFocus!==doc.body)previousFocus.focus();
+    else (panelOpen()?panelButton:button).focus();
   }
-  button.addEventListener('click',()=>{if(open)hide();else show();});
+  buttons.forEach(b=>b.addEventListener('click',()=>{if(open)hide();else show(b);}));
   map.querySelector('.help-map-close').addEventListener('click',hide);
   // Anywhere outside the compact legend closes the map; the legend itself scrolls.
   map.addEventListener('click',event=>{
