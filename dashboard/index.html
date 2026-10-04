@@ -846,6 +846,8 @@
     opacity:0;pointer-events:none;transition:.22s;z-index:99;
     max-width:78vw;clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,10px 100%,0 calc(100% - 10px))}
   #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+  /* Above the selection bar while it shows, not over its buttons. */
+  body:has(#selbar.show) #toast{bottom:96px}
   #toast.err{border-color:var(--alert);box-shadow:0 0 24px rgba(255,77,58,.3)}
   #toast .p{color:var(--cyan)}
   #toast.err .p{color:var(--alert)}
