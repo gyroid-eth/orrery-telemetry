@@ -84,20 +84,25 @@ def test_an_agent_that_has_already_ended_is_reported_in_words(error):
     assert result['toasts'][-1]['text'] == '> Pilot has already exited'
 
 
-@pytest.mark.parametrize('agents,elapsed,kept,warned', [
-    ([{'name': 'Pilot', 'category': 'agent'}], 5000, True, False),      # still ending
-    ([{'name': 'Pilot', 'category': 'gone'}], 5000, False, False),      # left LIVE
-    ([], 5000, False, False),                                           # not listed
-    ([{'name': 'Pilot', 'category': 'agent'}], 30000, False, True),     # still running after 30s
+RUNNING = {'name': 'Pilot', 'category': 'agent', 'running': True}
+STOPPED = {'name': 'Pilot', 'category': 'finished', 'running': False}
+
+
+@pytest.mark.parametrize('agents,elapsed,kept,note', [
+    ([RUNNING], 5000, True, None),                                      # still ending
+    ([{'name': 'Pilot', 'category': 'gone'}], 5000, False, None),       # left LIVE
+    ([], 5000, False, None),                                            # not listed
+    ([RUNNING], 30000, False, 'Pilot is still running 30s after /exit; EXIT is available again'),
+    # Review of #197: a stopped agent's card has no EXIT button to offer.
+    ([STOPPED], 30000, False, 'Pilot has stopped but its session is still open 30s after /exit; '
+                              'KILL or its panel can end it'),
 ])
-def test_the_exiting_state_ends_when_the_agent_leaves_live_or_after_30s(agents, elapsed, kept, warned):
+def test_the_exiting_state_ends_when_the_agent_leaves_live_or_after_30s(agents, elapsed, kept, note):
     js = (f"exitSentAt.set('Pilot',1000);settleExitSent({json.dumps(agents)},{1000 + elapsed});"
           "console.log(JSON.stringify({kept:exitSentAt.has('Pilot'),toasts}));")
     result = run(js, (200, {'ok': True}))
     assert result['kept'] is kept
-    assert bool(result['toasts']) is warned
-    if warned:
-        assert 'still running 30s after /exit; EXIT is available again' in result['toasts'][0]['text']
+    assert [t['text'] for t in result['toasts']] == ([] if note is None else ['> ' + note])
 
 
 def test_render_and_tick_keep_the_state_across_redraws():

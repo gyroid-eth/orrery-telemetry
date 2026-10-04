@@ -33409,7 +33409,12 @@ function settleExitSent(agents,now=Date.now()){
     if(!a||!SHOW_DEFAULT.has(a.category)){exitSentAt.delete(name);continue;}
     if(now-at>=EXIT_SETTLE_MS){
       exitSentAt.delete(name);
-      toast('↩ EXIT','> '+name+' is still running '+Math.round(EXIT_SETTLE_MS/1000)+'s after /exit; EXIT is available again',true);
+      const secs=Math.round(EXIT_SETTLE_MS/1000);
+      // A card shows EXIT only while its agent runs; a stopped agent whose
+      // session stays open is ended from KILL or its panel instead.
+      toast('↩ EXIT','> '+(a.running
+        ?name+' is still running '+secs+'s after /exit; EXIT is available again'
+        :name+' has stopped but its session is still open '+secs+'s after /exit; KILL or its panel can end it'),true);
     }
   }
 }
