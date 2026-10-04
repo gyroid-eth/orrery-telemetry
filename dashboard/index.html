@@ -33772,7 +33772,10 @@ function bay(a,i){
   </div>`;
 }
 
-function render(){
+// Every redraw of the deck, whatever asked for it (a poll, the filter, the
+// range), is when a card can slide into a confirmed EXIT's place.
+function render(){renderDeck();watchExitCards();}
+function renderDeck(){
   const q=document.getElementById('q').value.toLowerCase().trim();
   const live=historyRange==='live';
   const wrap=document.getElementById('wrap');
@@ -33886,7 +33889,6 @@ async function tick(){
     const y=window.scrollY;
     render();
     window.scrollTo(0,y);
-    watchExitCards();
     renderCrew(j.agents);
   }catch(e){
     document.getElementById('wrap').innerHTML=

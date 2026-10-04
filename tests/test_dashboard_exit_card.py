@@ -114,8 +114,10 @@ def test_the_exiting_state_ends_when_the_agent_leaves_live_or_after_30s(agents, 
 
 
 def test_render_and_tick_keep_the_state_across_redraws():
-    render = function('render')
+    render = function('renderDeck')
     assert 'for(const nm of exitSentAt.keys())' in render and 'showExitSent(' in render
+    # Every redraw compares the confirmed EXITs' cards, whatever asked for it.
+    assert 'function render(){renderDeck();watchExitCards();}' in SOURCE
     tick = function('tick')
     assert tick.index('settleExitSent(j.agents)') < tick.index('render()')
 
