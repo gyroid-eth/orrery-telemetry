@@ -182,6 +182,8 @@ The Tier 1 merge uses the JSON parser in `scripts/lib/merge_settings.py`.
 
 Permission `deny` entries are limited to **irreversible operations with no recovery mechanism**. Even destructive operations are left out of both allow and deny when they are recoverable, leaving them to runtime human approval. An operation is also not added to deny when the same state can be reached through another allowed tool, because doing so would provide no safety. The current three denied operations are `hard_delete_agent`, `hard_delete_project`, and `purge_old_messages`.
 
+The skills the installer places (`~/.agentstack/skills` and the `~/.claude/skills/<name>` symlinks that point into it) go into `additionalDirectories`, so an agent can read them without being asked even though they are outside its working directory. Without this, a parent agent in a fresh environment stops at Claude Code's question about reading outside the working directory the moment it reads the `/delegate` SKILL.md. To keep this to reading, `Edit` on the same location is added to deny. A skill of the same name that the user placed themselves is not included.
+
 The installer parses and merges structure rather than performing simple string replacement so that reinstall and uninstall do not sweep up user settings.
 
 `skillsDirectories` is not a Claude Code setting, and the installer does not add a new value. Canonical skill payloads remain in `~/.agentstack/skills/<name>`, with absolute symlinks from Claude Code's standard path at `~/.claude/skills/<name>`.
