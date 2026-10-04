@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### agent の詳細パネルを開いている間、Help map を押せませんでした
+
+詳細パネルの背景は header より上に重なるため、header の「Help map」は見えていても押せませんでした。help map には、パネルを開いているときにパネルの 3 か所（History と Output、Exit・Open・Close、Role）を注記する機能がありますが、その入口が塞がれていました。
+
+パネルの操作の列に「HELP MAP」を置きました。header の Help map と同じ map を開き、パネルの注記が出ます。閉じると、開いたボタンに focus が戻ります。
 ### Deck で EXIT した後も、カードが LIVE に数秒残り、もう一度押すと 400 になっていました
 
 EXIT が届いた後も、tmux の session が終わるまでの数秒間、カードは「↩ EXIT」に戻ったまま LIVE に残っていました。もう一度押すと `/api/exit` に再び届き、すでに終わりかけの agent に対して 400 が返っていました。
