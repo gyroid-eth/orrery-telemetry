@@ -25,7 +25,7 @@ PRELUDE = """
   const notifyTourAction=()=>{};
   const SHOW_DEFAULT=new Set(['agent','finished','unnamed']);
   const exitingSet=new Set(),exitTimers=new Map(),exitSentAt=new Map(),ARM_MS=5000,EXIT_SETTLE_MS=30000;
-  const EXIT_SHIFT_GUARD_MS=2000;let exitShiftUntil=0,exitShiftTimer=0;
+  const EXIT_SHIFT_GUARD_MS=2000;let exitShiftUntil=0,exitShiftTimer=0;const exitInFlight=new Set();
   const classes=new Set(),button={textContent:'↩ EXIT'};
   const card={classList:{add:c=>classes.add(c),remove:c=>classes.delete(c),contains:c=>classes.has(c)},
               querySelector:()=>button};
@@ -164,3 +164,30 @@ def test_a_press_just_after_an_exited_card_leaves_arms_nothing():
       console.log(JSON.stringify({sentBefore,armedDuringGuard,armedAfter:exitingSet.has('Pilot'),requests:requests.length}));
     })();""", (200, {'ok': True, 'actions': ['exit-sent']}))
     assert result == {'sentBefore': 1, 'armedDuringGuard': False, 'armedAfter': True, 'requests': 1}
+
+
+def test_a_card_that_leaves_before_the_reply_still_starts_the_pause():
+    """Review of #207: the agent can end and leave the list before /api/exit
+    answers; the pause must not wait for the reply."""
+    if not shutil.which('node'):
+        pytest.skip('node unavailable')
+    script = PRELUDE + (
+        "let reply;async function fetch(url,init){requests.push(JSON.parse(init.body));"
+        "return new Promise(done=>{reply=()=>done({ok:true,status:200,json:async()=>({ok:true,actions:['exit-sent']})});});}"
+    )
+    script += "".join(function(name) for name in
+                      ('notifyExitSent', 'exitFailureText', 'canKill', 'showExitSent', 'holdExitButtons',
+                       'settleExitSent', 'exitAgent'))
+    script += """(async()=>{await press();const pending=press();
+      await new Promise(r=>setImmediate(r));
+      settleExitSent([]);
+      const paused=Date.now()<exitShiftUntil;
+      exitingSet.clear();
+      exitAgent({stopPropagation(){}},'Other');
+      const otherArmed=exitingSet.has('Other');
+      reply();await pending;
+      console.log(JSON.stringify({paused,otherArmed,inFlight:[...exitInFlight],sent:[...exitSentAt.keys()],requests:requests.length}));
+    })();"""
+    result = subprocess.run(['node', '-e', script], text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {'paused': True, 'otherArmed': False, 'inFlight': [], 'sent': [], 'requests': 1}

@@ -93,7 +93,7 @@ EXIT_OUTCOMES = [
 @pytest.mark.parametrize('payload,http_ok,expected', EXIT_OUTCOMES)
 def test_deck_exit_arming_failures_and_cleanup_do_not_complete(payload, http_ok, expected):
     js = """
-      const exitingSet=new Set(),exitTimers=new Map(),ARM_MS=5000;let exitShiftUntil=0,exitShiftTimer=0;
+      const exitingSet=new Set(),exitTimers=new Map(),ARM_MS=5000;let exitShiftUntil=0,exitShiftTimer=0;const exitInFlight=new Set();
       const card={classList:{add(){},remove(){}},querySelector:()=>({textContent:''})};
       const document={querySelector:()=>card},CSS={escape:x=>x};
       const setTimeout=()=>1,clearTimeout=()=>{};
