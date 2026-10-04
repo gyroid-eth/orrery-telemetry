@@ -22,6 +22,8 @@ Telemetry だけ入れる場合は[単独の導入手順](docs/getting-started.m
 
 cockpit の **Your first flight → help map → Full tour** を順に試します。初回に右側へ出る7項目のガイドで基本を押さえ、`Settings → Getting started → Show help map` で主要な部品を見回し、同じ場所の `Full tour` で16段を順に触ります。
 
+Telemetry の header の `HELP MAP`（NETWORK では `SETTINGS` の隣）を押すと、いま表示されている DECK / NETWORK の操作に注記が付きます。agent の詳細パネルを開いている場合は、閉じてから押します。cockpit 内に埋め込まれた Telemetry でも同じ入口です。注記が収まらない場合は凡例で表示し、`Esc` または `Close` で閉じられます。
+
 Full tour は `/delegate` で子を1体作り、ORRERY Mail でしりとりを3往復し、端末の配置、Telemetry の EXIT / RESUME、NETWORK / REPLAY を試す案内です。画面の説明に従って操作すると進みます。[現在のクイックスタート](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート)と [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/FULL_TOUR.md)を参照してください。
 
 端末で仕事をするのは cockpit、チームの状態や履歴を見るのが Telemetry です。画面内のガイドを入口にし、詳しい参照は[目的別索引](docs/README.md)から開けます。
