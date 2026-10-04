@@ -33413,8 +33413,8 @@ function settleExitSent(agents,now=Date.now()){
     if(now-at>=EXIT_SETTLE_MS){
       exitSentAt.delete(name);
       const secs=Math.round(EXIT_SETTLE_MS/1000);
-      // A card shows EXIT only while its agent runs; a stopped agent whose
-      // session stays open is ended from KILL or its panel instead.
+      // A card (and the panel) offers EXIT only while its agent runs. For a
+      // stopped agent the note names KILL only when its card shows it.
       toast('↩ EXIT','> '+(a.running
         ?name+' is still running '+secs+'s after /exit; EXIT is available again'
         :name+' has stopped but its session is still open '+secs+'s after /exit'+
