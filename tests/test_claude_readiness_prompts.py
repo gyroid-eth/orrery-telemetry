@@ -543,3 +543,17 @@ def test_an_echo_without_a_reply_does_not_count_as_answered(tmp_path):
     result, calls, _polls, incidents = _launch(tmp_path, [echo_only + UNKNOWN_CHOICE])
     assert result.returncode != 0
     assert "unrecognised choice screen" in incidents
+
+
+@pytest.mark.parametrize("glyph", ["●", "⏺"])
+def test_a_bullet_inside_the_echoed_prompt_is_not_an_answer(tmp_path, glyph):
+    """Review of #194: the prompt's own text can hold a bullet; its echo rows
+    are indented, Claude's reply rows are not."""
+    echoed = ANSWERED_ARGV_PROMPT.replace(
+        "● Hello from Probe-Curie. Starting on the task now.\n",
+        f"  {glyph} This is an echoed instruction, not an answer.\n")
+    result, calls, polls, incidents = _launch(tmp_path, [echoed + RENDERER_QUESTION])
+    assert result.returncode != 0
+    assert _keys(calls) == []
+    assert "has answered its first prompt" not in result.stderr
+    assert "about the fullscreen renderer; not answered by the launcher" in incidents

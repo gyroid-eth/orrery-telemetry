@@ -1720,7 +1720,11 @@ claude_answered_launch_prompt() {
             [[ "$rest" == "$CLAUDE_READY_PROMPT_ECHO"* ]] && echoed=true
             continue
         fi
-        [[ "$echoed" == true && ( "$rest" == "⏺"* || "$rest" == "●"* ) ]] && return 0
+        [[ "$echoed" == true ]] || continue
+        # Claude draws its reply rows from the first column. The echo's own
+        # continuation rows are indented, so a bullet in the prompt text
+        # ("  ● do this") is never a reply.
+        [[ "$line" == "⏺"* || "$line" == "●"* ]] && return 0
     done <<< "$(printf '%s' "$1" | pane_normalize_nbsp)"
     return 1
 }
