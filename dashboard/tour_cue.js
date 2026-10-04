@@ -120,14 +120,34 @@ function pick(step,pair=null){
 }
 API.pick=(step,pair)=>{const p=pick(step,cuePair(pair));return p&&p.el;};
 
+// Panels this page opens that the step's reader needs to see; the cockpit's
+// checklist folds out of their way while they are open (orrery-tour-cover).
+const COVER='#edrawer.on,#settings.on,#term.on .tm-box';
+function coverRects(){
+  const W=root.innerWidth,H=root.innerHeight,out=[];
+  for(const el of doc.querySelectorAll(COVER)){
+    const b=el.getBoundingClientRect();
+    if(b.width<2||b.height<2||b.right<=0||b.bottom<=0||b.left>=W||b.top>=H)continue;
+    out.push({l:Math.round(b.left),t:Math.round(b.top),r:Math.round(b.right),b:Math.round(b.bottom)});
+  }
+  return out;
+}
+API.coverRects=coverRects;
 function mount(){
   const ring=doc.createElement('div');ring.className='tour-cue-ring';ring.hidden=true;ring.setAttribute('aria-hidden','true');
   const here=doc.createElement('div');here.className='tour-cue-here';here.hidden=true;here.setAttribute('aria-hidden','true');
   doc.body.append(ring,here);
-  let step=null,avoid=[],pair=null,timer=0;
+  let step=null,avoid=[],pair=null,timer=0,lastCover='[]';
+  function reportCover(){
+    const rects=step?coverRects():[],key=JSON.stringify(rects);
+    if(key===lastCover||root.parent===root)return;
+    lastCover=key;
+    try{root.parent.postMessage({type:'orrery-tour-cover',version:1,rects},root.location.origin);}catch(_){}
+  }
   const label=side=>side==='below'?'▲ HERE':side==='above'?'▼ HERE':side==='right'?'◀ HERE':'HERE ▶';
   function place(){
     const hide=()=>{ring.hidden=true;here.hidden=true;delete ring.dataset.target;};
+    reportCover();
     const found=step&&pick(step,pair);
     if(!found)return hide();
     const {el,b}=found,W=root.innerWidth,H=root.innerHeight,pad=4;

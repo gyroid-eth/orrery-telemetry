@@ -88,7 +88,8 @@ def embedded(tmp_path):
         'iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style>'
         '<iframe id="f" src="index.html?embed=1"></iframe>'
         '<script>window.cue=(step,avoid,pair)=>document.getElementById("f").contentWindow'
-        '.postMessage({type:"orrery-tour-cue",version:1,step,avoid,...(pair?{pair}:{})},location.origin);</script>')
+        '.postMessage({type:"orrery-tour-cue",version:1,step,avoid,...(pair?{pair}:{})},location.origin);'
+        'window.covers=[];addEventListener("message",e=>{if(e.data&&e.data.type==="orrery-tour-cover")covers.push(e.data.rects);});</script>')
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(bundle)))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     request = urllib.request.Request(endpoint + "/json/new?about:blank", method="PUT")
@@ -293,13 +294,45 @@ def test_only_the_games_edge_is_ringed(embedded):
     ringed = []
     for pair in pairs[:3]:
         _cue(evaluate, inner, 'full-edge', pair=pair[::-1])
-        ringed.append(inner("""(()=>{const el=TelemetryTourCue.pick('full-edge',%s);
-          const n=e=>e&&typeof e==='object'?e.name??e.id:e;const b=el&&gEls.badge.find(o=>o.tx===el);
-          return b?[n(b.s),n(b.t)]:null;})()""" % json.dumps(pair[::-1])))
+        # A mail card can pass over a count for a moment; wait for it to show.
+        got, deadline = None, time.monotonic() + 5
+        while got is None and time.monotonic() < deadline:
+            got = inner("""(()=>{const el=TelemetryTourCue.pick('full-edge',%s);
+              const n=e=>e&&typeof e==='object'?e.name??e.id:e;const b=el&&gEls.badge.find(o=>o.tx===el);
+              return b?[n(b.s),n(b.t)]:null;})()""" % json.dumps(pair[::-1]))
+            if got is None:
+                time.sleep(.2)
+        ringed.append(got)
     assert ringed == pairs[:3]
     none = _cue(evaluate, inner, 'full-edge')
     unknown = _cue(evaluate, inner, 'full-edge', pair=['NoSuchParent', 'NoSuchChild'])
     assert none['target'] == 'viewtog' and unknown['target'] == 'viewtog'
+
+
+def test_an_open_panel_is_reported_so_the_checklist_can_fold(embedded):
+    """The checklist hid the edge drawer and the agent panel in the recording:
+    while a step is on, the page tells the cockpit what it has open."""
+    _client, evaluate, inner, wait = embedded
+    _cue(evaluate, inner, 'full-network-settings')
+    inner("document.getElementById('settings-btn').click()")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not (evaluate("covers.length&&covers.at(-1).length")):
+        time.sleep(.1)
+    opened = evaluate("covers.at(-1)")
+    box = inner("(()=>{const b=document.getElementById('settings').getBoundingClientRect();return {l:Math.round(b.left),r:Math.round(b.right)};})()")
+    inner("document.getElementById('settings-close').click()")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and evaluate("covers.at(-1).length"):
+        time.sleep(.1)
+    closed = evaluate("covers.at(-1)")
+    # No step, nothing reported even with a panel open.
+    inner("document.getElementById('settings-btn').click()")
+    _cue(evaluate, inner, None)
+    time.sleep(1)
+    after = evaluate("covers.at(-1)")
+    inner("document.getElementById('settings-close').click()")
+    assert len(opened) == 1 and (opened[0]['l'], opened[0]['r']) == (box['l'], box['r']), (opened, box)
+    assert closed == [] and after == []
 
 
 def test_a_toast_sits_above_the_selection_bar(embedded):
