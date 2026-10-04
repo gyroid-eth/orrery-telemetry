@@ -43,7 +43,7 @@ def run(js, response):
         f"return {{ok:{str(status == 200).lower()},status:{status},json:async()=>({json.dumps(payload)})}};}}"
     )
     script += "".join(function(name) for name in
-                      ('notifyExitSent', 'exitFailureText', 'showExitSent', 'settleExitSent', 'exitAgent'))
+                      ('notifyExitSent', 'exitFailureText', 'canKill', 'showExitSent', 'settleExitSent', 'exitAgent'))
     script += js
     result = subprocess.run(['node', '-e', script], text=True, capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr
@@ -85,7 +85,8 @@ def test_an_agent_that_has_already_ended_is_reported_in_words(error):
 
 
 RUNNING = {'name': 'Pilot', 'category': 'agent', 'running': True}
-STOPPED = {'name': 'Pilot', 'category': 'finished', 'running': False}
+STOPPED = {'name': 'Pilot', 'category': 'finished', 'running': False, 'attached': False}
+WATCHED = {'name': 'Pilot', 'category': 'finished', 'running': False, 'attached': True}
 
 
 @pytest.mark.parametrize('agents,elapsed,kept,note', [
@@ -93,9 +94,11 @@ STOPPED = {'name': 'Pilot', 'category': 'finished', 'running': False}
     ([{'name': 'Pilot', 'category': 'gone'}], 5000, False, None),       # left LIVE
     ([], 5000, False, None),                                            # not listed
     ([RUNNING], 30000, False, 'Pilot is still running 30s after /exit; EXIT is available again'),
-    # Review of #197: a stopped agent's card has no EXIT button to offer.
+    # Review of #197: a stopped agent's card and panel have no EXIT; its card
+    # has KILL only when no one is attached, so KILL is named only then.
     ([STOPPED], 30000, False, 'Pilot has stopped but its session is still open 30s after /exit; '
-                              'KILL or its panel can end it'),
+                              'KILL on its card can end it'),
+    ([WATCHED], 30000, False, 'Pilot has stopped but its session is still open 30s after /exit'),
 ])
 def test_the_exiting_state_ends_when_the_agent_leaves_live_or_after_30s(agents, elapsed, kept, note):
     js = (f"exitSentAt.set('Pilot',1000);settleExitSent({json.dumps(agents)},{1000 + elapsed});"
@@ -110,3 +113,37 @@ def test_render_and_tick_keep_the_state_across_redraws():
     assert 'for(const nm of exitSentAt.keys())' in render and 'showExitSent(' in render
     tick = function('tick')
     assert tick.index('settleExitSent(j.agents)') < tick.index('render()')
+
+
+def _card_buttons(agent):
+    """The buttons the real bay() draws for an agent. bay() reads many display
+    helpers; inside a catch-all scope every name it does not get here is a
+    function returning '', so only canKill and the agent decide the buttons."""
+    if not shutil.which('node'):
+        pytest.skip('node unavailable')
+    script = (
+        "const scope=new Proxy({},{has:(t,k)=>!(k in globalThis)&&k!=='a'&&k!=='i',"
+        "get:(t,k)=>k===Symbol.unscopables?undefined:(()=>'')});"
+        + function('canKill')
+        + "with(scope){" + re.search(r'function bay\(a,i\)\{.*?\n}', SOURCE, re.S).group()
+        + f"\nconsole.log(JSON.stringify(bay({json.dumps(agent)},0)));}}"
+    )
+    result = subprocess.run(['node', '-e', script], text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    html = json.loads(result.stdout)
+    return {'kill': 'class="killbtn"' in html, 'exit': 'class="exitbtn"' in html}
+
+
+@pytest.mark.parametrize('agent,kill_named', [(STOPPED, True), (WATCHED, False)])
+def test_the_note_names_kill_only_when_the_card_shows_it(agent, kill_named):
+    """Review of #197: name only an action that is on screen at that moment."""
+    js = (f"exitSentAt.set('Pilot',1000);settleExitSent({json.dumps([agent])},31000);"
+          "console.log(JSON.stringify(toasts));")
+    note = run(js, (200, {'ok': True}))[0]['text']
+    assert ('KILL' in note) is kill_named
+    assert _card_buttons({**agent, 'task': '', 'live': ''}) == {'kill': kill_named, 'exit': False}
+
+
+def test_the_card_rendering_used_above_shows_exit_for_a_running_agent():
+    # The catch-all scope still renders real buttons: a running agent has EXIT, not KILL.
+    assert _card_buttons({**RUNNING, 'attached': False, 'task': '', 'live': ''}) == {'kill': False, 'exit': True}

@@ -33394,6 +33394,9 @@ async function exitAgent(ev,name){
   }
 }
 
+// When a card offers KILL: an agent that is not running, and no one watching
+// it (attached). The 30s note below names KILL only under the same rule.
+function canKill(a){return (a.category==='finished'||a.category==='gone') && !a.attached;}
 function showExitSent(card){
   if(!card)return;
   card.classList.remove('exit-arming');card.classList.add('exiting');
@@ -33414,7 +33417,8 @@ function settleExitSent(agents,now=Date.now()){
       // session stays open is ended from KILL or its panel instead.
       toast('↩ EXIT','> '+(a.running
         ?name+' is still running '+secs+'s after /exit; EXIT is available again'
-        :name+' has stopped but its session is still open '+secs+'s after /exit; KILL or its panel can end it'),true);
+        :name+' has stopped but its session is still open '+secs+'s after /exit'+
+          (canKill(a)?'; KILL on its card can end it':'')),true);
     }
   }
 }
@@ -33678,7 +33682,7 @@ function bay(a,i){
   // attached=True は「人間が画面で見ている」サイン。running 判定が /compact 中などに
   // false negative になっても、attached が出ているうちは絶対に kill ボタンを出さない。
   // (2026-05-20 SilverBoltzmann kill → SwiftFaraday 連鎖事故の防止)
-  const killBtn=(a.category==='finished'||a.category==='gone') && !a.attached
+  const killBtn=canKill(a)
     ?`<button class="killbtn" onclick="killAgent(event,'${esc(a.name)}')" title="kill (click twice to confirm)">✕ KILL</button>`
     :'';
   // exit button: running エージェントのみ表示（attached は除外しない — 意図的中断）
