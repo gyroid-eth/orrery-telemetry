@@ -4,7 +4,7 @@
 
 Several Claude Code / Codex agents can talk directly, divide the work, and check each other's results. ORRERY Telemetry shows their work and Mail round trips in one screen. Start with [ORRERY cockpit](https://github.com/gyroid-eth/orrery) to use their terminals in the same workspace.
 
-![ORRERY Telemetry demo](assets/demo.gif)
+![A child joins the open NETWORK view, sends ready, and exchanges three shiritori Mail round trips](docs/img/network-mail.gif)
 
 ## Install with one line
 
@@ -22,13 +22,15 @@ For Telemetry without cockpit, use the [standalone installation procedure](docs/
 
 Try **Your first flight → help map → Full tour** in cockpit. Learn the basics with the seven-item guide on the right on your first visit; look around with `Settings → Getting started → Show help map`; then choose `Full tour` there for sixteen steps in order.
 
-Full tour guides you through creating one child with `/delegate`, playing three shiritori round trips over ORRERY Mail, arranging terminals, and trying Telemetry EXIT / RESUME and NETWORK / REPLAY. Follow the controls described on screen to advance. See the [current quick start](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) and [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/FULL_TOUR.md).
+Full tour guides you through creating one child with `/delegate`, playing three shiritori round trips over ORRERY Mail, arranging terminals, and trying Telemetry EXIT / RESUME and NETWORK / REPLAY. Follow the controls described on screen to advance. See the [current quick start](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) and [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/en/FULL_TOUR.md).
 
 Cockpit is where you work in terminals; Telemetry is where you view the team's status and history. Start with the in-app guides, then use the [documentation index](docs/README.en.md) for detailed references.
 
-## Return to finished work
+## Resume a retired agent
 
 In Telemetry, choose DECK history `30d` / `all`, or NETWORK's `ALL` range, to find exited agents. Use **RESUME** on an agent that can resume to return to the same work. When history, credentials, or the original working directory cannot be verified, the UI explains why and stops the resume.
+
+![Choose RESUME IN COCKPIT for a retired agent, then confirm the last word in its restored terminal](docs/img/resume-retired-agent.gif)
 
 [Dashboard search and resume](docs/dashboard.en.md#search) and [Launcher Claude resume](docs/launchers.en.md#dashboard-claude-resume) cover cases that need verification and cases that cannot resume.
 
