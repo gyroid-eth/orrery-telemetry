@@ -32959,10 +32959,33 @@ const EXIT_SETTLE_MS=30000;
 // presses are not taken (a second click there would arm another agent).
 const EXIT_SHIFT_GUARD_MS=2000;
 let exitShiftUntil=0,exitShiftTimer=0;
-// EXITs confirmed whose reply has not come yet: the agent can end and leave
-// the list before /api/exit answers, and its card leaving starts the pause
-// all the same.
-const exitInFlight=new Set();
+// EXITs confirmed in the last EXIT_SETTLE_MS, with where each card stood. The
+// pause starts with the confirming press, whatever the reply, and starts again
+// whenever that card moves or changes section (it leaves LIVE, it moves to
+// finished, ...): those are the moments another card slides into its place.
+const exitWatch=new Map();
+function exitCardSpot(name){
+  const c=document.querySelector(`.bay[data-name="${CSS.escape(name)}"]`);
+  if(!c)return null;
+  const r=c.getBoundingClientRect();
+  return {cat:(c.className.match(/\bcat-[\w-]+/)||[''])[0],x:r.left+scrollX,y:r.top+scrollY};
+}
+// A card's own state (arming, exiting) shifts it by a pixel or two; a card
+// sliding into its place moves by a card's width or height.
+const EXIT_SPOT_SLACK=8;
+function exitCardMoved(a,b){
+  if(!a||!b)return a!==b;
+  return a.cat!==b.cat||Math.abs(a.x-b.x)>EXIT_SPOT_SLACK||Math.abs(a.y-b.y)>EXIT_SPOT_SLACK;
+}
+function watchExitCards(now=Date.now()){
+  for(const [name,w] of [...exitWatch]){
+    if(now>w.until){exitWatch.delete(name);continue;}
+    const spot=exitCardSpot(name);
+    if(!exitCardMoved(w.spot,spot))continue;
+    w.spot=spot;holdExitButtons(now+EXIT_SHIFT_GUARD_MS);
+    if(!spot)exitWatch.delete(name);
+  }
+}
 // The pause shows on the buttons (dimmed, not-allowed), so a press that is not
 // taken does not look like EXIT failing.
 function holdExitButtons(until){
@@ -33395,17 +33418,16 @@ async function exitAgent(ev,name){
   card.classList.remove('exit-arming');
   card.classList.add('exiting');
   const btn=getBtn(card);if(btn)btn.textContent='…';
-  exitInFlight.add(name);
+  holdExitButtons(Date.now()+EXIT_SHIFT_GUARD_MS);
+  exitWatch.set(name,{spot:exitCardSpot(name),until:Date.now()+EXIT_SETTLE_MS});
   try{
     const r=await fetch('/api/exit',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({session:name})});
     const j=await r.json();
-    const gone=!exitInFlight.has(name);exitInFlight.delete(name);
     if(r.ok&&j.ok){
       // Delivered: stay "exiting" until the agent leaves LIVE (see render).
-      // Already gone (the list came first): its pause has started.
-      if(!gone)exitSentAt.set(name,Date.now());
+      exitSentAt.set(name,Date.now());
       showExitSent(getCard());
       const warn=(j.actions||[]).includes('warn-attached')?' (attached)':'';
       toast('▸ EXIT','> '+name+'  ::  /exit sent'+warn);
@@ -33416,7 +33438,6 @@ async function exitAgent(ev,name){
     if(btn)btn.textContent='↩ EXIT';
     toast('✕ FAIL','> '+exitFailureText(name,j),true);
   }catch(e){
-    exitInFlight.delete(name);
     card.classList.remove('exiting');
     if(btn)btn.textContent='↩ EXIT';
     toast('✕ FAIL','> exit err: '+e,true);
@@ -33436,15 +33457,9 @@ function showExitSent(card){
 // button back (the agent may be busy and finish its turn first).
 function settleExitSent(agents,now=Date.now()){
   const live=new Map(agents.map(a=>[a.name,a]));
-  for(const name of [...exitInFlight]){
-    const a=live.get(name);
-    if(!a||!SHOW_DEFAULT.has(a.category)){exitInFlight.delete(name);holdExitButtons(now+EXIT_SHIFT_GUARD_MS);}
-  }
   for(const [name,at] of [...exitSentAt]){
     const a=live.get(name);
-    if(!a||!SHOW_DEFAULT.has(a.category)){
-      exitSentAt.delete(name);holdExitButtons(now+EXIT_SHIFT_GUARD_MS);continue;
-    }
+    if(!a||!SHOW_DEFAULT.has(a.category)){exitSentAt.delete(name);continue;}
     if(now-at>=EXIT_SETTLE_MS){
       exitSentAt.delete(name);
       const secs=Math.round(EXIT_SETTLE_MS/1000);
@@ -33871,6 +33886,7 @@ async function tick(){
     const y=window.scrollY;
     render();
     window.scrollTo(0,y);
+    watchExitCards();
     renderCrew(j.agents);
   }catch(e){
     document.getElementById('wrap').innerHTML=

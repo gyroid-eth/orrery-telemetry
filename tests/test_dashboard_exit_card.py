@@ -25,11 +25,14 @@ PRELUDE = """
   const notifyTourAction=()=>{};
   const SHOW_DEFAULT=new Set(['agent','finished','unnamed']);
   const exitingSet=new Set(),exitTimers=new Map(),exitSentAt=new Map(),ARM_MS=5000,EXIT_SETTLE_MS=30000;
-  const EXIT_SHIFT_GUARD_MS=2000;let exitShiftUntil=0,exitShiftTimer=0;const exitInFlight=new Set();
+  const EXIT_SHIFT_GUARD_MS=2000,EXIT_SPOT_SLACK=8;let exitShiftUntil=0,exitShiftTimer=0;const exitWatch=new Map();
   const classes=new Set(),button={textContent:'↩ EXIT'};
+  // Where the card stands: its section (cat-*) and place; gone when null.
+  const spot={cat:'cat-agent',top:100,gone:false};
   const card={classList:{add:c=>classes.add(c),remove:c=>classes.delete(c),contains:c=>classes.has(c)},
-              querySelector:()=>button};
-  const document={querySelector:()=>card},CSS={escape:x=>x};
+              querySelector:()=>button,get className(){return 'bay '+spot.cat;},
+              getBoundingClientRect:()=>({left:20,top:spot.top})};
+  const document={querySelector:()=>spot.gone?null:card},CSS={escape:x=>x},scrollX=0,scrollY=0;
   const setTimeout=()=>1,clearTimeout=()=>{};
   const press=()=>exitAgent({stopPropagation(){}},'Pilot');
 """
@@ -44,7 +47,8 @@ def run(js, response):
         f"return {{ok:{str(status == 200).lower()},status:{status},json:async()=>({json.dumps(payload)})}};}}"
     )
     script += "".join(function(name) for name in
-                      ('notifyExitSent', 'exitFailureText', 'canKill', 'showExitSent', 'holdExitButtons', 'settleExitSent', 'exitAgent'))
+                      ('notifyExitSent', 'exitFailureText', 'canKill', 'showExitSent', 'holdExitButtons', 'exitCardSpot',
+                       'exitCardMoved', 'watchExitCards', 'settleExitSent', 'exitAgent'))
     script += js
     result = subprocess.run(['node', '-e', script], text=True, capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr
@@ -150,44 +154,36 @@ def test_the_card_rendering_used_above_shows_exit_for_a_running_agent():
     assert _card_buttons({**RUNNING, 'attached': False, 'task': '', 'live': ''}) == {'kill': False, 'exit': True}
 
 
-def test_a_press_just_after_an_exited_card_leaves_arms_nothing():
-    """Full tour recording: after the child's EXIT was confirmed and its card
-    left, the parent's EXIT slid under the pointer; a further click armed it."""
-    result = run("""(async()=>{await press();await press();
-      settleExitSent([]);
-      const sentBefore=requests.length;classes.clear();button.textContent='↩ EXIT';
-      exitSentAt.clear();
-      await press();
-      const armedDuringGuard=exitingSet.has('Pilot');
-      exitShiftUntil=Date.now()-1;
-      await press();
-      console.log(JSON.stringify({sentBefore,armedDuringGuard,armedAfter:exitingSet.has('Pilot'),requests:requests.length}));
-    })();""", (200, {'ok': True, 'actions': ['exit-sent']}))
-    assert result == {'sentBefore': 1, 'armedDuringGuard': False, 'armedAfter': True, 'requests': 1}
-
-
-def test_a_card_that_leaves_before_the_reply_still_starts_the_pause():
-    """Review of #207: the agent can end and leave the list before /api/exit
-    answers; the pause must not wait for the reply."""
-    if not shutil.which('node'):
-        pytest.skip('node unavailable')
-    script = PRELUDE + (
-        "let reply;async function fetch(url,init){requests.push(JSON.parse(init.body));"
-        "return new Promise(done=>{reply=()=>done({ok:true,status:200,json:async()=>({ok:true,actions:['exit-sent']})});});}"
-    )
-    script += "".join(function(name) for name in
-                      ('notifyExitSent', 'exitFailureText', 'canKill', 'showExitSent', 'holdExitButtons',
-                       'settleExitSent', 'exitAgent'))
-    script += """(async()=>{await press();const pending=press();
+def _guard(js, response):
+    """Confirm Pilot's EXIT, then run js; report whether Other could be armed."""
+    return run("""(async()=>{await press();const sent=press();
       await new Promise(r=>setImmediate(r));
-      settleExitSent([]);
-      const paused=Date.now()<exitShiftUntil;
-      exitingSet.clear();
-      exitAgent({stopPropagation(){}},'Other');
+      """ + js + """
+      exitingSet.clear();exitAgent({stopPropagation(){}},'Other');
       const otherArmed=exitingSet.has('Other');
-      reply();await pending;
-      console.log(JSON.stringify({paused,otherArmed,inFlight:[...exitInFlight],sent:[...exitSentAt.keys()],requests:requests.length}));
-    })();"""
-    result = subprocess.run(['node', '-e', script], text=True, capture_output=True, timeout=20)
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {'paused': True, 'otherArmed': False, 'inFlight': [], 'sent': [], 'requests': 1}
+      exitShiftUntil=0;exitingSet.clear();exitAgent({stopPropagation(){}},'Other');
+      console.log(JSON.stringify({otherArmed,armedAfter:exitingSet.has('Other'),requests:requests.length,
+        watching:[...exitWatch.keys()]}));
+    })();""", response)
+
+
+def test_the_pause_starts_with_the_confirming_press_whatever_the_reply():
+    """Full tour recording: right after the child's EXIT was confirmed, the
+    parent's EXIT slid under the pointer and one more click armed it."""
+    for response in [(200, {'ok': True, 'actions': ['exit-sent']}), (400, {'ok': False, 'error': 'boom'})]:
+        result = _guard("await sent;", response)
+        assert result['otherArmed'] is False and result['armedAfter'] is True, (response, result)
+        assert result['requests'] == 1
+
+
+@pytest.mark.parametrize('move,paused', [('spot.gone=true;', True), ("spot.cat='cat-finished';spot.top=600;", True),
+                                         ('spot.top=400;', True), ('spot.top=102;', False)],
+                         ids=['card-leaves', 'card-moves-to-finished', 'card-moves', 'own-state-nudge'])
+def test_the_pause_starts_again_when_the_card_moves_even_before_the_reply(move, paused):
+    """Review of #207: the card can leave LIVE or move to finished before
+    /api/exit answers, or long after; each is when another card takes its
+    place. Here the pause from the press has run out, the reply is still
+    pending, and the card moves."""
+    result = _guard("exitShiftUntil=0;" + move + "watchExitCards();", (200, {'ok': True, 'actions': ['exit-sent']}))
+    # A nudge of a pixel or two from the card's own state is not a move.
+    assert result['otherArmed'] is (not paused) and result['armedAfter'] is True, result

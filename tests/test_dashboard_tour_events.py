@@ -93,15 +93,17 @@ EXIT_OUTCOMES = [
 @pytest.mark.parametrize('payload,http_ok,expected', EXIT_OUTCOMES)
 def test_deck_exit_arming_failures_and_cleanup_do_not_complete(payload, http_ok, expected):
     js = """
-      const exitingSet=new Set(),exitTimers=new Map(),ARM_MS=5000;let exitShiftUntil=0,exitShiftTimer=0;const exitInFlight=new Set();
-      const card={classList:{add(){},remove(){}},querySelector:()=>({textContent:''})};
-      const document={querySelector:()=>card},CSS={escape:x=>x};
+      const exitingSet=new Set(),exitTimers=new Map(),ARM_MS=5000,EXIT_SETTLE_MS=30000,EXIT_SHIFT_GUARD_MS=2000;
+      let exitShiftUntil=0,exitShiftTimer=0;const exitWatch=new Map();
+      const card={classList:{add(){},remove(){}},querySelector:()=>({textContent:''}),className:'bay cat-agent',
+                  getBoundingClientRect:()=>({left:0,top:0})};
+      const document={querySelector:()=>card},CSS={escape:x=>x},scrollX=0,scrollY=0;
       const setTimeout=()=>1,clearTimeout=()=>{};
       let requests=0;
     """
     js += f"async function fetch(){{requests++;return {{ok:{str(http_ok).lower()},json:async()=>({json.dumps(payload)})}};}}"
     js += "const exitSentAt=new Map();" + function('exitFailureText') + function('showExitSent')
-    js += function('exitAgent') + """
+    js += function('holdExitButtons') + function('exitCardSpot') + function('exitAgent') + """
       (async()=>{await exitAgent({stopPropagation(){}},'Pilot');
       const armed={events:[...events],requests};
       await exitAgent({stopPropagation(){}},'Pilot');
