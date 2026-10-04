@@ -2,219 +2,57 @@
 
 [English](README.en.md)
 
-Claude Code、Codex CLI、Gemini など、提供元の異なる coding agent を複数動かすと、agent 同士をつなぐ役目は人間に回ってきます。片方の出力をもう片方に貼り直し、アプリやタブを行き来して、それぞれがいま何をしているかを確かめる。ORRERY Telemetry は、その伝言役を agent 同士の直接の通信に置き換え、全員の働きを一枚の画面で俯瞰し、必要なときにだけ人間が介入できるようにするツールです。agent 間の通信、同じファイルを同時に書き換えないための予約、誰が誰を起動したかの系譜を同梱の基盤が記録し、dashboard がそれを人の目で追える形に描きます。
+複数の Claude Code / Codex が直接話し、仕事を分担し、結果を確かめ合う。その働きと Mail の往復を一枚の画面で見渡せるのが ORRERY Telemetry です。端末も同じ画面で使う [ORRERY cockpit](https://github.com/gyroid-eth/orrery) と一緒に始められます。
 
-![ORRERY Telemetry demo](assets/demo.gif)
+![ORRERY Telemetry のデモ](assets/demo.gif)
 
-**まずデモで体験する**: [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) は、本物の dashboard を台本データで動かした公開デモです。agent が起動し、通信を交わし、child を作って終えるまでを 4 分でループ再生し、字幕が「いま何が起きているか」を説明します。インストールせずに、実際に近い画面でどんな体験が得られるかを掴めます。ここを 1 周見てから、以下に進んでください。
+## 1行で入れる
 
-**紹介動画**: 「Orrery」（約 90 秒・日本語）は、agent どうしが直接話すことで AI の間の仲介が要らなくなる、という ORRERY の考え方を図解で説明する動画です（実際の画面ではありません）。
-
-[![紹介動画「Orrery」（YouTube）](https://i.ytimg.com/vi/JXoa93TQolU/hqdefault.jpg)](https://youtu.be/JXoa93TQolU)
-
-## 誰のためのものか
-
-- **対象は chat ではなく coding agent を使う人**: ChatGPT のような chat ではなく、Claude Code や Codex のように、指示を受けて自律的にコードを書き、ファイルを変え、command を実行する agent を、すでに手元で動かしている人向けです。terminal からでも、Claude Desktop や ChatGPT app のような desktop app からでも構いません
-- **向いている人**: agent を複数動かしていて、その連携を人間が仲介している人。Codex の出力を Claude Code に貼り直す、アプリやタブを行き来して各 agent の様子を確かめる、といった手作業をなくし、全体を一枚の画面で俯瞰したい人
-- **向いていない人**: agent は 1 体で足りている人。このツールの価値は複数 agent の協調と、その観測にあります
-- **対応する agent**: Claude Code と Codex CLI が中心です。Codex Desktop の task と subagent、Google Antigravity / Gemini は、core install のあとに追加できる optional provider として同じ dashboard に載せられます
-
-## 言葉の説明
-
-以下の 6 語だけ覚えれば、この README と docs はすべて読めます。
-
-| 言葉 | 意味 |
-| --- | --- |
-| agent | terminal で動いている Claude Code / Codex CLI の 1 セッション。それぞれに科学者の名前が付きます |
-| child | ある agent が「この作業をやって」と頼んで起動した別の agent。頼んだ側が親です。親が `/delegate` を使うと child が生まれ、child は終わると親に報告して消えます |
-| ORRERY Mail | agent 同士がメッセージを送り合い、名前と file の予約を管理する同梱の小さなサーバー |
-| dashboard | ブラウザで開く画面。全 agent の状態、親子関係、メッセージの往来を表示します |
-| project key | agent たちに作業させる project フォルダの絶対パス。「どの project の agent か」を区別する鍵です |
-| skill | agent に「こういう頼まれ方をしたらこの手順で動け」と教える手順書。`/delegate` のように先頭に slash を付けて呼びます。このツールは `/delegate` と `/log` の 2 つを同梱します（[下で説明](#同梱する-2-つの-skill)） |
-
-## クイックスタート
-
-macOS と Windows で同じ手順です。必要なのは Python 3.11 以上、`git`、`tmux`、`uv` で、macOS なら `brew install tmux uv` で揃います。
-
-**Windows の人へ**: WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux なので、以下の手順がそのまま使え、dashboard は Windows のブラウザで、agent の terminal は Windows Terminal のタブで開きます。WSL2 の準備から Claude Code / Codex のログインまでを順に書いた手順が[インストールの WSL2 節](docs/install.md#windowswsl2で入れる)にあるので、Windows の人はまずそこを開いてください。
-
-### 1. 入れる
+Mac のターミナル、または Windows の **WSL2 Ubuntu 内**で実行します。cockpit と Telemetry をまとめて入れます。
 
 ```bash
-git clone https://github.com/gyroid-eth/orrery-telemetry.git
-cd orrery-telemetry
-./scripts/install.sh --project-key /absolute/path/to/your-project
+curl -fsSL https://raw.githubusercontent.com/gyroid-eth/orrery/master/scripts/get.sh | bash
 ```
 
-`--project-key` には、agent に作業させたい project フォルダの絶対パスを渡します。この repository 自体のパスではありません。
+表示される計画を読んで承認し、doctor と Mail の確認結果が成功してから、表示された cockpit の URL を開きます。agent を動かすには同じ環境でログイン済みの Claude Code か Codex CLI が必要です。前提条件と変更する設定は [ORRERY のインストール](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md)を参照してください。
 
-installer は、あなたの Claude Code / Codex の設定に触れる前に変更内容を表示し、合計 4 回 `yes` を求めます。既存の設定は保持し、変更前の backup を `~/.agentstack/backups` に置きます。先に変更内容だけ見たいときは `--dry-run` を付けます。
+Telemetry だけ入れる場合は[単独の導入手順](docs/getting-started.md#telemetry-単独の導入と確認)へ。現在の設定の backup、`--dry-run`、手動での確認もそこにあります。
 
-**成功**: 最後に `Install complete: http://127.0.0.1:8770/` と出て、`~/.agentstack/` ができています。
+## 画面のガイドで始める
 
-### 2. 動くか確かめる
+cockpit の **Your first flight → help map → Full tour** を順に試します。初回に右側へ出る7項目のガイドで基本を押さえ、`Settings → Getting started → Show help map` で主要な部品を見回し、同じ場所の `Full tour` で16段を順に触ります。
 
-```bash
-export PATH="$HOME/.agentstack/bin:$PATH"
-agentstack-doctor
-agentstack-selftest
-```
+Full tour は `/delegate` で子を1体作り、ORRERY Mail でしりとりを3往復し、端末の配置、Telemetry の EXIT / RESUME、NETWORK / REPLAY を試す案内です。画面の説明に従って操作すると進みます。[現在のクイックスタート](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート)と [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/FULL_TOUR.md)を参照してください。
 
-**成功**: `agentstack-doctor` の各行が `ok:` で始まり（`warn:` は直し方がその下に書かれます）、`agentstack-selftest` が `self-test passed: two agents registered, exchanged messages, ...` で終わります。どこかで止まったら[トラブルシューティング](docs/troubleshooting.md)の該当節へ進んでください。
+端末で仕事をするのは cockpit、チームの状態や履歴を見るのが Telemetry です。画面内のガイドを入口にし、詳しい参照は[目的別索引](docs/README.md)から開けます。
 
-### 3. 最初の agent を起動し、dashboard で見る
+## 終わった仕事に戻る
 
-```bash
-agent-start ~/code/my-project          # Codex CLI なら agent-start-codex ~/code/my-project
-```
+Telemetry の DECK の history を `30d` / `all`、または NETWORK の範囲を `ALL` にすると、退出した agent の履歴も探せます。再開できる agent の **RESUME** から、同じ仕事に戻ります。履歴・認証・元の作業フォルダなどを検証できない場合は、理由を表示して再開を止めます。
 
-別の terminal で dashboard を開きます。
+[Dashboard の再開手順](docs/dashboard.md#検索)と[Launcher の Claude resume](docs/launchers.md#dashboard-からの-claude-resume)に、検証が必要な場合と復帰できない場合の扱いがあります。
 
-```bash
-open http://127.0.0.1:8770/
-```
+## 困ったとき・更新する
 
-**成功**: いつもの Claude Code または Codex が起動し、dashboard の DECK に科学者名の付いたカードが 1 枚現れます。カードには model と context 残量が表示されます。
-
-### 4. child を 1 体作る
-
-起動した agent の中で、次のように頼みます。Claude Code でも Codex でも同じです。
-
-```text
-/delegate child agent を作って、自分の名前と今日の日付を答えさせて
-```
-
-**成功**: dashboard に 2 枚目のカードが現れ、親から child へ線が引かれます。child が終わると、親の terminal に「完了しました」というメッセージが届きます。NETWORK タブを開くと、2 体の間のメッセージの往来が見えます。
-
-child の OS terminal は既定で背面に自動で開きます。dashboard から child を見る場合は、`AGENTSTACK_AUTO_OPEN_CHILD=0` にすると窓が増えず、必要な child だけ Deck の Open tmux で開けます（[設定](docs/configuration.md#child-spawn)）。
-
-### 5. しりとりで通しの確認をする
-
-install が本当にできたかを一度に確かめるには、Claude Code と Codex の child にしりとりをさせるのが手軽です。名前の登録、ORRERY Mail の往復、通知の差し込み、dashboard の描画がすべて動いていないと、しりとりは一巡もしません。
-
-```text
-/delegate Codex の child を 1 体作り、その child としりとりをしてください。1 ターンごとに ORRERY Mail で単語を送り合い、10 往復したら結果を報告してください
-```
-
-Codex から始めるなら child は Claude Code にします。どちらから始めても、2 社の agent の間でしりとりが回ることを確かめるのが目的です。
-
-**成功**: NETWORK に 2 体の間を往復する線が流れ続け、DECK の両カードの最後の指示が単語ごとに更新されます。作者の環境では 1 人あたり 1 ターン 5〜6 秒で回りました（[動画つきの投稿](https://x.com/i/status/2095650715008168255)、倍速再生）。
-
-ここまで通れば、あとは普段どおり agent を使うだけです。詳しい設定は[インストール](docs/install.md)と[設定](docs/configuration.md)、child の仕組みは[委任と child agent](docs/delegation.md)を参照してください。
-
-## 同梱する 2 つの skill
-
-skill は、agent に渡す手順書です。Claude Code はこれを `~/.claude/skills/` から自動で見つけ、`/delegate` のように先頭に slash を付けて呼ぶとその手順どおりに動きます。Codex では installer が置く管理下の指示（`~/.codex/AGENTS.md`）が同じ手順書の場所を教えるので、こちらも `/delegate` と打てば同じ手順で動きます。
-
-### `/delegate` : 仕事を child に頼む
-
-`/delegate <頼みたいこと>` と打つと、agent は新しい child を 1 体起動し、頼んだ内容を渡し、child が終わるまで見守り、結果を受け取ります。裏では child の名前登録、触るファイルの予約、tmux session の作成、完了報告の受け取りまでを一続きで行うので、child は起動した瞬間から dashboard に載り、他の agent と同じファイルをぶつけずに動きます。
-
-Claude Code にも Codex にも、もともと「subagent」という似た仕組みがありますが、そちらで作った子は dashboard に載りません。ORRERY Telemetry で見守りたい子は、必ず `/delegate` で作ってください。違いの詳しい説明は[委任と child agent](docs/delegation.md)にあります。
-
-### `/log` : この session で何をしたかを残す
-
-`/log` と打つと、agent はその session で決めたこと、変えたファイル、確かめたこと、次にやることを 1 本の Markdown に整理して `logs/` に書きます。Obsidian を使っている人は、環境変数を 1 つ設定すると vault の中に書いて Daily Note からリンクされるようになります（[設定](docs/configuration.md)）。dashboard の各カードの Output に並ぶのが、この log です。
-
-skill の置き場所と仕組みは [Launcher と identity](docs/launchers.md#skills2件と-file-reservation) を参照してください。
-
-## ORRERY cockpit と一緒に使う
-
-[ORRERY cockpit](https://github.com/gyroid-eth/orrery) は、agent の端末と ORRERY Telemetry を 1 つの画面にまとめた作業台です。左に agent の一覧、中央に各 agent の端末、右に ORRERY Mail と系譜を並べ、この dashboard は header の `TELEMETRY` から cockpit の中に開きます。人の判断を待っている agent が点滅して分かり、指示は端末とは別の入力欄から送れるので、何体動かしていても窓を渡り歩かずに済みます。Mac（`ORRERY.app` かブラウザ）と Windows（WSL2 とブラウザ）で使え、ORRERY Telemetry を入れたあとに足します。
-
-![ORRERY cockpit。左に agent の一覧、中央に 3 体の端末、右に系譜と ORRERY Mail](<https://raw.githubusercontent.com/gyroid-eth/orrery/master/docs/images/cockpit_overview.png>)
-
-入れ方は cockpit の [インストール](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md) の「はじめて入れる人へ」を見てください。
-
-## Obsidian と一緒に使う
-
-Obsidian の vault を作業場所にすると、agent の作業ログ・論文ノート・タスクがそのまま Markdown のノートになり、人は Daily Note と Kanban で見るだけで済みます。ORRERY Telemetry は Obsidian が無くても使えます。これは便利な使い方の 1 つです。
-
-![左に Obsidian、右に ORRERY から独立させた 1 agent の窓。窓の agent に /adddone と打つと、Obsidian の Daily Note の「今日完了した」に完了したタスクが増える](docs/img/obsidian-daily.gif)
-
-使い方は [Obsidian と一緒に使う](docs/obsidian.md)、すぐ試せるひな形は [orrery-demo-vault](https://github.com/gyroid-eth/orrery-demo-vault) にあります。
-
-## 何が見えるか
-
-### DECK
-
-agent 1 体が 1 枚のカードです。running / standby / finished / gone の状態、いま何をしているか、model、context 残量、最後の指示、成果物を表示します。カードから terminal を開いたり、二段確認付きで agent を終了させたりできます。
-
-![DECK view](docs/img/deck.jpg)
-
-### NETWORK と DIGEST REPLAY
-
-誰が誰を起動し、誰が誰にメッセージを送ったかを、線で結んだ図として表示します。複数 agent を選ぶと、通信と状態の変化を速度を変えながら再生でき、時間を巻き戻すこともできます。
-
-![NETWORK view](docs/img/network.jpg)
-
-![DIGEST REPLAY](docs/img/digest-replay.jpg)
-
-### NEW AGENT
-
-dashboard から新しい agent を起動できます。Claude / Codex、model、作業フォルダ、頼む内容を指定して `Spawn` を押すだけです。既存 agent の終了、再開、役割ラベル付けも同じ画面から行えます。
-
-![NEW AGENT modal](docs/img/new-agent.jpg)
-
-### 裏で動いているもの
-
-- **ORRERY Mail**: agent の名前、inbox、file の予約を一つに管理します。dashboard を落としてもここに正本が残ります
-- **launcher**: `agent-start` が名前の登録、tmux session の作成、CLI の起動を一続きで行い、dashboard からの jump や通知の宛先が一意に決まるようにします
-- **hook**: Claude event hook 8件が、登録なしの session や予約なしの書き込みを止め、届いたメッセージを agent の入力欄に差し込みます
-
-これらの仕組みと API の詳細は [Hooks](docs/hooks.md)、[Launcher](docs/launchers.md)、[API reference](docs/api.md) にあります。dashboard の表示・操作はすべて local HTTP API から使えます。
-
-## 対応環境
-
-| 環境 | サポート |
-| --- | --- |
-| macOS | 対応 |
-| Windows（WSL2） | 対応。Windows 11 + Ubuntu 26.04 / WSL 2.7 で、install から child の起動、dashboard からの terminal jump まで実機確認済み。手順は[インストールの WSL2 節](docs/install.md#windowswsl2で入れる) |
-| Linux | 利用報告あり。Ubuntu 24.04 / tmux 3.4 で install、dashboard、Codex agent が動いたという実機報告を受け、そこで見つかった 2 件（[#26](https://github.com/gyroid-eth/orrery-telemetry/issues/26)、[#27](https://github.com/gyroid-eth/orrery-telemetry/issues/27)）は修正済みです。`systemd --user` での常駐登録は作者側で未検証なので、結果は issue で報告してください |
-| Windows native（WSL2 なし） | 正式対応は WSL2 経由ですが、community の貢献で PowerShell から Mail と dashboard を起動する helper と、Codex child の native 起動が実験的に動きます（[起動 helper](docs/windows-local.md)、[Codex launcher](docs/windows-codex-launcher.md)）。方針は [#3](https://github.com/gyroid-eth/orrery-telemetry/issues/3) |
-
-Python 3.11 以上、`git`、`tmux`、`uv` が必須で、実行時には Claude Code か Codex CLI の少なくとも一方が要ります。installer は書き込む前にこれらを検査して、足りなければ何も変えずに止まります。検査の詳細と任意の依存（`fswatch`、`fzf`、Ghostty、Obsidian）は[インストールの動作環境](docs/install.md#動作環境)を参照してください。
+- 動かない: `~/.agentstack/bin/agentstack-doctor` で不足箇所、`~/.agentstack/bin/agentstack-selftest` で Mail の往復を確認し、[トラブルシューティング](docs/troubleshooting.md)へ。
+- 更新: cockpit と一緒なら上の1行、Telemetry だけなら[Upgrade](docs/install.md#upgrade)。取り除く手順は[Uninstall](docs/install.md#uninstall)。
+- Windows: [WSL2 の準備とログイン](docs/install.md#windowswsl2で入れる)。native Windows の helper は[実験的な別経路](docs/windows-local.md)です。
+- 対応環境・用語・単独での起動: [getting-started](docs/getting-started.md)。
 
 ## ドキュメント
 
-日本語文書が正本です。主要文書には英語版があります。
+日本語文書が正本です。英語の入口は [English index](docs/README.en.md)。
 
-| 文書 | 内容 |
+| 読みたいこと | 入口 |
 | --- | --- |
-| [インストール](docs/install.md) | 動作環境、install の詳細、WSL2、upgrade / uninstall |
-| [Launcher と identity](docs/launchers.md) | `agent-start`、命名、token、`CLAUDECODE` |
-| [委任と child agent](docs/delegation.md) | 組み込み subagent との違い、いまどちらが動いているかの見分け方 |
-| [Hooks と運用 helper](docs/hooks.md) | Claude event hook 8 件、発火条件、block / release / cleanup |
-| [Codex App 統合](docs/codex-app.md) | Codex Desktop の root task / subagent を同じ dashboard に載せる |
-| [Google Antigravity / Gemini provider](docs/antigravity.md) | optional provider の導入と制約 |
-| [Dashboard](docs/dashboard.md) | DECK、NETWORK、SELECT、REPLAY、NEW AGENT、embed |
-| [Obsidian と一緒に使う](docs/obsidian.md) | 作業ログ・論文ノート・タスクを vault に置き、Daily Note と Kanban で見る |
-| [API reference](docs/api.md) | 全 route、query / request、response schema |
-| [設定](docs/configuration.md) | `AGENTSTACK_*` 環境変数とカスタマイズ |
-| [トラブルシューティング](docs/troubleshooting.md) | `NOT CONFIGURED`、service、通知、spawn、認証 |
-| [デザイン言語](docs/design.md) | dashboard の見え方と動きの正本。UI を足す前に読む |
-| [第三者コンポーネント](docs/third-party.md) | ORRERY Mail、license、credits |
+| 目的から資料を探す | [全 docs の索引](docs/README.md) |
+| Telemetry 単独で始める・言葉を調べる | [Getting started](docs/getting-started.md) |
+| install・update・要件を確認する | [インストール](docs/install.md) |
+| 困ったところを調べる | [トラブルシューティング](docs/troubleshooting.md) |
 
-端末とこの dashboard を 1 画面で使う作業台は、別の repository の [ORRERY cockpit](https://github.com/gyroid-eth/orrery) にあります。
+[Obsidian と一緒に使う](docs/obsidian.md)と公開の [demo vault](https://github.com/gyroid-eth/orrery-demo-vault)で、作業ログ・論文ノート・タスクをノートにできます。Obsidian は必須ではありません。CLI 以外の [Codex App](docs/codex-app.md)、[Antigravity / Gemini](docs/antigravity.md)は optional provider です。
 
-同梱サーバーの内部構成は [ORRERY Mail の設計文書](docs/agentstack-mail.md)、コードへ変更を送る場合は [CONTRIBUTING.md](CONTRIBUTING.md)（英語）も参照してください。
-
-## 仕組み
-
-```text
-Claude Code / Codex CLI
-        │ launcher + hooks
-        ▼
-tmux session ── telemetry ──► dashboard
-        │                         ▲
-        │                         │ sanitized snapshot
-        │                  Codex App Bridge ◄── plugin hooks ── Codex Desktop
-        │                         │
-        └──────── ORRERY Mail ◄────┘
-                  identity / inbox / reservations
-```
-
-同梱の ORRERY Mail を正本にし、その上に launcher、運用 guard、可視化、control plane を重ねます。dashboard が落ちても identity・mail・reservation の正本は失われません。
+install 前に雰囲気を見るなら[公開デモ](https://agentstack-demo.pages.dev/)、考え方の図解は[紹介動画](https://youtu.be/JXoa93TQolU)。開発への変更は [CONTRIBUTING.md](CONTRIBUTING.md)を参照してください。
 
 ## License
 

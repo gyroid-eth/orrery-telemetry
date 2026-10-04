@@ -3,7 +3,8 @@
 Each check exists because a reader found the docs contradicting the code
 (2026-09-03 first-look review): the ORRERY Mail port in AGENTS.md, the number
 of approval prompts in install.md, the hook count and guide list in the
-English README.
+English README. The compact README now routes standalone setup facts to
+getting-started and the complete document lists to the indexes.
 """
 from __future__ import annotations
 
@@ -53,9 +54,9 @@ def test_docs_state_the_real_number_of_approval_prompts() -> None:
     count = _approval_prompt_count()
     assert count == 4, count
     assert f"{count} つの承認" in _read("docs/install.md")
-    assert f"{count} 回 `yes`" in _read("README.md")
+    assert f"{count} 回 `yes`" in _read("docs/getting-started.md")
     words = {4: "four"}
-    assert f"`yes` {words[count]} times" in _read("README.en.md")
+    assert f"`yes` {words[count]} times" in _read("docs/getting-started.en.md")
     assert f"`yes` {words[count]} times" in _read("AGENTS.md")
     assert "once more" not in _read("AGENTS.md")
 
@@ -73,27 +74,39 @@ def _event_hook_count() -> int:
 def test_hook_count_matches_the_settings_template() -> None:
     count = _event_hook_count()
     assert f"event hook は{count}件" in _read("docs/hooks.md")
-    assert f"Claude event hook {count}件" in _read("README.md")
+    assert f"Claude event hook {count}件" in _read("docs/getting-started.md")
     words = {8: "Eight"}
-    assert f"{words[count]} Claude event hooks" in _read("README.en.md")
+    assert f"{words[count]} Claude event hooks" in _read("docs/getting-started.en.md")
 
 
 def test_english_readme_lists_every_guide_the_japanese_readme_lists() -> None:
-    ja_pattern = re.compile(r"^\| \[[^\]]+\]\((docs/[\w-]+\.md)\) \|", re.M)
-    en_pattern = re.compile(r"^\| \[[^\]]+\]\((docs/[\w-]+(?:\.en)?\.md)\) \|", re.M)
+    ja_pattern = re.compile(r"^\|[^\n]*\[[^\]]+\]\((docs/[\w-]+\.md)\) \|", re.M)
+    en_pattern = re.compile(r"^\|[^\n]*\[[^\]]+\]\((docs/[\w-]+(?:\.en)?\.md)\) \|", re.M)
     ja = ja_pattern.findall(_read("README.md"))
     en = [path.replace(".en.md", ".md") for path in en_pattern.findall(_read("README.en.md"))]
     assert ja, "no guide table in README.md"
     assert set(ja) == set(en), sorted(set(ja) ^ set(en))
 
 
-def test_both_readmes_share_the_quick_start_commands() -> None:
-    for name in ("README.md", "README.en.md"):
+def test_both_readmes_route_to_guides_and_standalone_setup() -> None:
+    for name, setup, index in (("README.md", "docs/getting-started.md", "docs/README.md"),
+                               ("README.en.md", "docs/getting-started.en.md", "docs/README.en.md")):
         text = _read(name)
-        for needle in ("--dry-run", "agentstack-doctor", "agentstack-selftest", "/delegate", "http://127.0.0.1:8770/"):
+        for needle in ("https://raw.githubusercontent.com/gyroid-eth/orrery/master/scripts/get.sh",
+                       "Your first flight", "Show help map", "Full tour", setup, index):
             assert needle in text, (name, needle)
-        for image in ("docs/img/deck.jpg", "docs/img/network.jpg", "docs/img/new-agent.jpg"):
-            assert image in text, (name, image)
+        for needle in ("--dry-run", "agentstack-doctor", "agentstack-selftest", "/delegate", "http://127.0.0.1:8770/"):
+            assert needle in _read(setup), (setup, needle)
+    for image in ("img/deck.jpg", "img/network.jpg", "img/new-agent.jpg"):
+        assert image in _read("docs/getting-started.md"), image
+        assert image in _read("docs/getting-started.en.md"), image
+
+
+def test_documentation_indexes_cover_the_actual_tree() -> None:
+    import runpy
+
+    checker = runpy.run_path(str(ROOT / "scripts/check_docs_index.py"))
+    assert checker["check"](ROOT) == []
 
 
 def test_api_docs_state_the_served_api_generation_and_when_it_changes() -> None:

@@ -2,219 +2,57 @@
 
 [日本語](README.md)
 
-Run several coding agents from different vendors, such as Claude Code, Codex CLI, and Gemini, and the job of connecting them lands on you: pasting one agent's output into another, hopping between apps and tabs to see what each one is doing. ORRERY Telemetry replaces that human relay with direct communication between the agents, puts everyone's work on a single screen, and lets you step in only when you need to. The bundled infrastructure records the messages agents exchange, the file reservations that keep them from overwriting each other, and the lineage of who spawned whom, and the dashboard turns that into something a person can follow.
+Several Claude Code / Codex agents can talk directly, divide the work, and check each other's results. ORRERY Telemetry shows their work and Mail round trips in one screen. Start with [ORRERY cockpit](https://github.com/gyroid-eth/orrery) to use their terminals in the same workspace.
 
 ![ORRERY Telemetry demo](assets/demo.gif)
 
-**Start with the demo**: [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) is the real dashboard driven by scripted data. It loops through agents starting, exchanging messages, spawning a child and finishing, in four minutes, with captions saying what is happening. Nothing to install; it gives you a feel for the experience on a screen close to the real thing. Watch it once through before continuing.
+## Install with one line
 
-**Introduction video**: "Orrery" (90 s) is an illustrated explainer of the idea behind ORRERY: agents talk to each other directly, so you no longer relay between AIs. It does not show the actual screens. A [Japanese version](https://youtu.be/JXoa93TQolU) is also available.
-
-[![Introduction video "Orrery" (YouTube)](https://i.ytimg.com/vi/Jpc1ad7c90k/hqdefault.jpg)](https://youtu.be/Jpc1ad7c90k)
-
-## Who this is for
-
-- **People who run coding agents, not chat**: not chat in the ChatGPT sense, but agents like Claude Code or Codex that take an instruction, write code, change files, and run commands on their own. It does not matter whether you drive them from a terminal or from a desktop app such as Claude Desktop or the ChatGPT app.
-- **A good fit**: you run several agents and find yourself acting as the go-between: pasting Codex output into Claude Code, or hopping between apps and tabs to check on each one. You want that manual relay gone and the whole picture on one screen.
-- **Not a fit**: one agent is enough for you. The value here is in coordinating several agents and watching them.
-- **Supported agents**: Claude Code and Codex CLI are the core. Codex Desktop tasks and subagents, and Google Antigravity / Gemini, are optional providers you can add after the core install, and they appear on the same dashboard.
-
-## Six words
-
-These six terms are all you need to read this README and the guides.
-
-| Term | Meaning |
-| --- | --- |
-| agent | One Claude Code / Codex CLI session running in a terminal. Each one gets a scientist's name. |
-| child | Another agent that an agent started by asking it to do a job. The one that asked is the parent. A parent creates a child with `/delegate`; when the child is done it reports back to the parent and goes away. |
-| ORRERY Mail | The small bundled server through which agents message each other and that manages names and file reservations. |
-| dashboard | The page you open in a browser. It shows every agent's state, the parent-child tree, and the messages going back and forth. |
-| project key | The absolute path of the project folder the agents work on. It is the key that tells which project an agent belongs to. |
-| skill | A playbook that tells an agent "when asked like this, follow these steps". You call one with a leading slash, as in `/delegate`. This tool ships two: `/delegate` and `/log` ([explained below](#the-two-bundled-skills)). |
-
-## Quick start
-
-The steps are the same on macOS and Windows. You need Python 3.11 or newer, `git`, `tmux`, and `uv`; on macOS, `brew install tmux uv` covers the last two.
-
-**On Windows**: install inside the Ubuntu of WSL2. Ubuntu is Linux, so the steps below apply unchanged; the dashboard opens in your Windows browser and agent terminals open as Windows Terminal tabs. The [WSL2 section of the install guide](docs/install.en.md#installing-on-windows-wsl2) walks from setting up WSL2 to logging in to Claude Code / Codex, so Windows readers should open that first.
-
-### 1. Install
+Run this in a Mac terminal, or **inside WSL2 Ubuntu** on Windows. It installs cockpit and Telemetry together.
 
 ```bash
-git clone https://github.com/gyroid-eth/orrery-telemetry.git
-cd orrery-telemetry
-./scripts/install.sh --project-key /absolute/path/to/your-project
+curl -fsSL https://raw.githubusercontent.com/gyroid-eth/orrery/master/scripts/get.sh | bash
 ```
 
-`--project-key` is the absolute path of the project folder you want the agents to work on, not the path of this repository.
+Read and confirm the plan. After doctor and the Mail checks succeed, open the printed cockpit URL. To run agents, sign in to Claude Code or Codex CLI in that same environment. See [ORRERY Installation](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install.md) for prerequisites and settings changes.
 
-Before touching your Claude Code / Codex configuration the installer shows each change and asks for `yes` four times in total. Existing settings are kept, and a backup of the previous state goes to `~/.agentstack/backups`. Add `--dry-run` to see the planned changes without applying them.
+For Telemetry without cockpit, use the [standalone installation procedure](docs/getting-started.en.md#standalone-installation-and-verification). It also covers settings backups, `--dry-run`, and manual checks.
 
-**Success**: the last line reads `Install complete: http://127.0.0.1:8770/` and `~/.agentstack/` exists.
+## Start with the guides on screen
 
-### 2. Check that it works
+Try **Your first flight → help map → Full tour** in cockpit. Learn the basics with the seven-item guide on the right on your first visit; look around with `Settings → Getting started → Show help map`; then choose `Full tour` there for sixteen steps in order.
 
-```bash
-export PATH="$HOME/.agentstack/bin:$PATH"
-agentstack-doctor
-agentstack-selftest
-```
+Full tour guides you through creating one child with `/delegate`, playing three shiritori round trips over ORRERY Mail, arranging terminals, and trying Telemetry EXIT / RESUME and NETWORK / REPLAY. Follow the controls described on screen to advance. See the [current quick start](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) and [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/FULL_TOUR.md).
 
-**Success**: every `agentstack-doctor` line starts with `ok:` (a `warn:` line has its fix printed right under it), and `agentstack-selftest` ends with `self-test passed: two agents registered, exchanged messages, ...`. If either stops, go to the matching section of [Troubleshooting](docs/troubleshooting.en.md).
+Cockpit is where you work in terminals; Telemetry is where you view the team's status and history. Start with the in-app guides, then use the [documentation index](docs/README.en.md) for detailed references.
 
-### 3. Start the first agent and watch it on the dashboard
+## Return to finished work
 
-```bash
-agent-start ~/code/my-project          # for Codex CLI: agent-start-codex ~/code/my-project
-```
+In Telemetry, choose DECK history `30d` / `all`, or NETWORK's `ALL` range, to find exited agents. Use **RESUME** on an agent that can resume to return to the same work. When history, credentials, or the original working directory cannot be verified, the UI explains why and stops the resume.
 
-Open the dashboard from another terminal.
+[Dashboard search and resume](docs/dashboard.en.md#search) and [Launcher Claude resume](docs/launchers.en.md#dashboard-claude-resume) cover cases that need verification and cases that cannot resume.
 
-```bash
-open http://127.0.0.1:8770/
-```
+## Troubleshoot and update
 
-**Success**: your usual Claude Code or Codex starts, and one card with a scientist's name appears in the dashboard's DECK, showing the model and remaining context.
-
-### 4. Spawn one child
-
-Inside the running agent, ask for a child. This is the same in Claude Code and Codex.
-
-```text
-/delegate create a child agent and have it answer with its name and today's date
-```
-
-**Success**: a second card appears on the dashboard with a line from the parent to the child. When the child finishes, a "done" message arrives in the parent's terminal. The NETWORK tab shows the messages passing between the two.
-
-By default the child's OS terminal opens automatically in the background. If you watch children from the dashboard, set `AGENTSTACK_AUTO_OPEN_CHILD=0` to stop the extra windows and open only the child you need with Deck Open tmux (see [Configuration](docs/configuration.en.md#child-spawn)).
-
-### 5. Play shiritori as an end-to-end check
-
-The quickest way to confirm the whole install at once is a game of shiritori (Japanese word chain) between a Claude Code agent and a Codex child. Name registration, ORRERY Mail round trips, notification injection, and dashboard rendering all have to work for even one round to complete.
-
-```text
-/delegate spawn one Codex child and play shiritori with it: exchange one word per turn over ORRERY Mail, and report the result after ten rounds
-```
-
-If you start from Codex, make the child a Claude Code agent. Either way, the point is to see the game go round between agents from two vendors.
-
-**Success**: lines keep flowing back and forth between the two agents in NETWORK, and the "last instruction" on both DECK cards updates word by word. On the author's machine each turn took about five to six seconds per agent ([post with video](https://x.com/i/status/2095650715008168255), played at double speed).
-
-Once you are here, just use your agents as usual. See [Installation](docs/install.en.md) and [Configuration](docs/configuration.en.md) for settings, and [Delegation and child agents](docs/delegation.en.md) for how children work.
-
-## The two bundled skills
-
-A skill is a playbook handed to an agent. Claude Code discovers them under `~/.claude/skills/` and, when you type one with a leading slash such as `/delegate`, follows its steps. In Codex, the managed instructions the installer writes to `~/.codex/AGENTS.md` point at the same playbook, so typing `/delegate` there runs the same steps.
-
-### `/delegate`: hand a job to a child
-
-Type `/delegate <what you want done>` and the agent starts one new child, passes it the request, watches until it finishes, and collects the result. Underneath, it registers the child's name, reserves the files it will touch, creates the tmux session, and receives the completion report as one sequence, so the child is on the dashboard from the moment it starts and never collides with another agent on the same file.
-
-Both Claude Code and Codex have a similar built-in feature called subagents, but children made that way do not appear on the dashboard. A child you want ORRERY Telemetry to watch must be created with `/delegate`. The difference is explained in [Delegation and child agents](docs/delegation.en.md).
-
-### `/log`: keep a record of the session
-
-Type `/log` and the agent writes one Markdown file under `logs/` summarizing what was decided, which files changed, what was verified, and what comes next. Obsidian users can set one environment variable to have it written inside the vault and linked from the Daily Note ([Configuration](docs/configuration.en.md)). These logs are what the Output panel of each dashboard card lists.
-
-Where the skills live and how they are wired is covered in [Launchers and identity](docs/launchers.en.md#skills-2-and-file-reservations).
-
-## Using it with ORRERY cockpit
-
-[ORRERY cockpit](https://github.com/gyroid-eth/orrery) is a workbench that puts your agents' terminals and ORRERY Telemetry on one screen: the agent list on the left, each agent's terminal in the middle, ORRERY Mail and the lineage on the right, and this dashboard opens inside it from the `TELEMETRY` button in its header. Agents waiting for your decision blink, and you type instructions in an input box separate from the terminal, so however many agents you run, you do not have to hop between windows. It runs on Mac (`ORRERY.app` or a browser) and on Windows (WSL2 and a browser), and you add it after installing ORRERY Telemetry.
-
-![ORRERY cockpit: the agent list on the left, three terminals in the middle, the lineage and ORRERY Mail on the right](<https://raw.githubusercontent.com/gyroid-eth/orrery/master/docs/images/cockpit_overview.png>)
-
-See "For first-time installers" in the cockpit's [installation guide](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install.md) to set it up.
-
-## Using it with Obsidian
-
-When you use an Obsidian vault as the place where agents work, their work logs, paper notes, and tasks become Markdown notes as they are, and you only need to read them in the Daily Note and on a Kanban board. ORRERY Telemetry works without Obsidian; this is one useful way to work.
-
-![Obsidian on the left and one agent's window popped out of ORRERY on the right. Typing /adddone to the agent adds the finished task to "Done today" in the Obsidian Daily Note](docs/img/obsidian-daily.gif)
-
-See [Using it with Obsidian](docs/obsidian.en.md) for how to set it up, and [orrery-demo-vault](https://github.com/gyroid-eth/orrery-demo-vault) for a vault you can try right away.
-
-## What you see
-
-### DECK
-
-One card per agent. It shows running / standby / finished / gone, what the agent is doing now, the model, remaining context, the last instruction, and its artifacts. From the card you can open the terminal or exit the agent behind a two-step confirmation.
-
-![DECK view](docs/img/deck.jpg)
-
-### NETWORK and DIGEST REPLAY
-
-A graph of who spawned whom and who messaged whom. Select several agents and you can replay their messages and state changes at different speeds, and travel back in time.
-
-![NETWORK view](docs/img/network.jpg)
-
-![DIGEST REPLAY](docs/img/digest-replay.jpg)
-
-### NEW AGENT
-
-Start a new agent from the dashboard: pick Claude / Codex, the model, the working folder, and the task, then press `Spawn`. Exiting, resuming, and labeling the role of existing agents happen on the same screen.
-
-![NEW AGENT modal](docs/img/new-agent.jpg)
-
-### What runs underneath
-
-- **ORRERY Mail**: one place for agent names, inboxes, and file reservations. It remains the source of truth even if the dashboard goes down.
-- **Launchers**: `agent-start` registers the name, creates the tmux session, and starts the CLI in one step, so dashboard jumps and notification targets resolve to exactly one place.
-- **Hooks**: Eight Claude event hooks stop unregistered sessions and unreserved writes, and inject arriving messages into the agent's prompt.
-
-Details of these mechanisms and the API are in [Hooks](docs/hooks.en.md), [Launchers](docs/launchers.en.md), and the [API reference](docs/api.en.md). Every dashboard view and control is available through the local HTTP API.
-
-## Supported environments
-
-| Environment | Support |
-| --- | --- |
-| macOS | Supported |
-| Windows (WSL2) | Supported. Verified on Windows 11 + Ubuntu 26.04 / WSL 2.7 from install through spawning a child and jumping to a terminal from the dashboard. Steps: [WSL2 section of the install guide](docs/install.en.md#installing-on-windows-wsl2) |
-| Linux | Field reports received. On Ubuntu 24.04 / tmux 3.4, install, the dashboard, and Codex agents worked, and the two problems found there ([#26](https://github.com/gyroid-eth/orrery-telemetry/issues/26), [#27](https://github.com/gyroid-eth/orrery-telemetry/issues/27)) are fixed. The author has not verified `systemd --user` registration, so please report results as issues |
-| Windows native (without WSL2) | The supported route is WSL2, but community contributions provide an experimental PowerShell helper that starts Mail and the dashboard, and a native Codex child launcher ([startup helper](docs/windows-local.en.md), [Codex launcher](docs/windows-codex-launcher.en.md)). Policy: [#3](https://github.com/gyroid-eth/orrery-telemetry/issues/3) |
-
-Python 3.11 or newer, `git`, `tmux`, and `uv` are required, and at runtime at least one of Claude Code or Codex CLI. The installer checks these before writing anything and stops without changes if something is missing. The details of the checks and the optional dependencies (`fswatch`, `fzf`, Ghostty, Obsidian) are in the [install guide's environment section](docs/install.en.md#supported-environment).
+- Not working: run `~/.agentstack/bin/agentstack-doctor` for missing pieces and `~/.agentstack/bin/agentstack-selftest` for Mail round trips, then use [Troubleshooting](docs/troubleshooting.en.md).
+- Update: use the same one line with cockpit, or [Upgrade](docs/install.en.md#upgrade) for standalone Telemetry. See [Uninstall](docs/install.en.md#uninstall) to remove it.
+- Windows: [WSL2 setup and sign-in](docs/install.en.md#installing-on-windows-wsl2). Native Windows helpers are a [separate experimental route](docs/windows-local.en.md).
+- Environments, terms, and standalone startup: [Getting started](docs/getting-started.en.md).
 
 ## Documentation
 
-The Japanese documentation is canonical. The main guides have English versions.
+Japanese documents are the source of truth. The English entry point is the [English index](docs/README.en.md).
 
-| Guide | Coverage |
+| What you want to read | Entry point |
 | --- | --- |
-| [Installation](docs/install.en.md) | Environment, install details, WSL2, upgrade / uninstall |
-| [Launchers and identity](docs/launchers.en.md) | `agent-start`, naming, tokens, `CLAUDECODE` |
-| [Delegation and child agents](docs/delegation.en.md) | How children differ from built-in subagents and how to tell which one is running |
-| [Hooks and operational helpers](docs/hooks.en.md) | Eight Claude event hooks, triggers, block / release / cleanup |
-| [Codex App integration](docs/codex-app.en.md) | Putting Codex Desktop root tasks / subagents on the same dashboard |
-| [Google Antigravity / Gemini provider](docs/antigravity.en.md) | Installing the optional provider and its limits |
-| [Dashboard](docs/dashboard.en.md) | DECK, NETWORK, SELECT, REPLAY, NEW AGENT, embed |
-| [Using it with Obsidian](docs/obsidian.en.md) | Keep work logs, paper notes, and tasks in a vault and read them in the Daily Note and on Kanban |
-| [API reference](docs/api.en.md) | Every route, query / request fields, response schemas |
-| [Configuration](docs/configuration.en.md) | `AGENTSTACK_*` environment variables and customization |
-| [Troubleshooting](docs/troubleshooting.en.md) | `NOT CONFIGURED`, services, notifications, spawn, authentication |
-| [Design language](docs/design.en.md) | The canonical account of how the dashboard looks and moves. Read before adding UI |
-| [Third-party components](docs/third-party.md) | ORRERY Mail, licensing, credits |
+| Find material by purpose | [All docs](docs/README.en.md) |
+| Start Telemetry on its own or look up a term | [Getting started](docs/getting-started.en.md) |
+| Check installation, updates, and requirements | [Installation](docs/install.en.md) |
+| Diagnose a problem | [Troubleshooting](docs/troubleshooting.en.md) |
 
-The workbench that uses your terminals and this dashboard on one screen lives in a separate repository, [ORRERY cockpit](https://github.com/gyroid-eth/orrery).
+[Using it with Obsidian](docs/obsidian.en.md) and the public [demo vault](https://github.com/gyroid-eth/orrery-demo-vault) turn logs, paper notes, and tasks into notes; Obsidian is optional. [Codex App](docs/codex-app.en.md) and [Antigravity / Gemini](docs/antigravity.en.md) are optional providers beyond the CLIs.
 
-For the internals of the bundled server see the [ORRERY Mail design document](docs/agentstack-mail.en.md), and see [CONTRIBUTING.md](CONTRIBUTING.md) before sending code changes.
-
-## How it fits together
-
-```text
-Claude Code / Codex CLI
-        │ launchers + hooks
-        ▼
-tmux session ── telemetry ──► dashboard
-        │                         ▲
-        │                         │ sanitized snapshot
-        │                  Codex App Bridge ◄── plugin hooks ── Codex Desktop
-        │                         │
-        └──────── ORRERY Mail ◄────┘
-                  identity / inbox / reservations
-```
-
-The bundled ORRERY Mail server is the source of truth, with launchers, operational guards, visualization, and a control plane layered on top. If the dashboard stops, identities, mail, and reservations remain in their source of truth.
+Look before installing with the [public demo](https://agentstack-demo.pages.dev/); the [introduction video](https://youtu.be/Jpc1ad7c90k) illustrates the idea ([Japanese version](https://youtu.be/JXoa93TQolU)). See [CONTRIBUTING.md](CONTRIBUTING.md) before contributing code.
 
 ## License
 
