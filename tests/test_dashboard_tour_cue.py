@@ -314,12 +314,20 @@ def test_an_open_panel_is_reported_so_the_checklist_can_fold(embedded):
     while a step is on, the page tells the cockpit what it has open."""
     _client, evaluate, inner, wait = embedded
     _cue(evaluate, inner, 'full-network-settings')
+    # A page's first report is sent even when nothing is open, so one loaded
+    # again clears what the page before it reported.
+    first = evaluate("covers.slice()")
     inner("document.getElementById('settings-btn').click()")
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and not (evaluate("covers.length&&covers.at(-1).length")):
-        time.sleep(.1)
-    opened = evaluate("covers.at(-1)")
-    box = inner("(()=>{const b=document.getElementById('settings').getBoundingClientRect();return {l:Math.round(b.left),r:Math.round(b.right)};})()")
+    # Settings slides in; the page reports again as it moves, so wait for the
+    # report to match where the panel settles.
+    box_js = "(()=>{const b=document.getElementById('settings').getBoundingClientRect();return {l:Math.round(b.left),r:Math.round(b.right)};})()"
+    opened, box, deadline = None, None, time.monotonic() + 8
+    while time.monotonic() < deadline:
+        box = inner(box_js)
+        opened = evaluate("covers.length?covers.at(-1):null")
+        if opened and len(opened) == 1 and (opened[0]['l'], opened[0]['r']) == (box['l'], box['r']):
+            break
+        time.sleep(.2)
     inner("document.getElementById('settings-close').click()")
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline and evaluate("covers.at(-1).length"):
@@ -333,6 +341,7 @@ def test_an_open_panel_is_reported_so_the_checklist_can_fold(embedded):
     inner("document.getElementById('settings-close').click()")
     assert len(opened) == 1 and (opened[0]['l'], opened[0]['r']) == (box['l'], box['r']), (opened, box)
     assert closed == [] and after == []
+    assert first == [[]], first
 
 
 def test_a_toast_sits_above_the_selection_bar(embedded):

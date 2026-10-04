@@ -137,7 +137,10 @@ function mount(){
   const ring=doc.createElement('div');ring.className='tour-cue-ring';ring.hidden=true;ring.setAttribute('aria-hidden','true');
   const here=doc.createElement('div');here.className='tour-cue-here';here.hidden=true;here.setAttribute('aria-hidden','true');
   doc.body.append(ring,here);
-  let step=null,avoid=[],pair=null,timer=0,lastCover='[]';
+  // null, not '[]': a page loaded again (the cockpit's frame reloads) tells
+  // the cockpit at once, even that nothing is open, so an earlier report from
+  // the page it replaced does not linger.
+  let step=null,avoid=[],pair=null,timer=0,lastCover=null;
   function reportCover(){
     const rects=step?coverRects():[],key=JSON.stringify(rects);
     if(key===lastCover||root.parent===root)return;
