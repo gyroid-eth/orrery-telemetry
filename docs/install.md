@@ -184,7 +184,9 @@ Tier 1 の merge は `scripts/lib/merge_settings.py` による JSON parser ベ�
 - managed block は marker 間だけを idempotent に更新
 - `install-state.json` を uninstall の削除範囲の正本にする
 
-permissions の `deny` は、**不可逆で復旧手段がない操作だけ**に限定します。破壊的でも復旧できる操作は allow にも deny にも入れず、実行時の人間による確認に委ねます。また、allow 済みの別 tool で同じ状態へ到達できる場合は、deny に追加しても安全上の意味がないため追加しません。現在 deny するのは `hard_delete_agent`、`hard_delete_project`、`purge_old_messages` の 3 つです。
+ORRERY Mail の tool に対する permissions の `deny` は、**不可逆で復旧手段がない操作だけ**に限定します。破壊的でも復旧できる操作は allow にも deny にも入れず、実行時の人間による確認に委ねます。また、allow 済みの別 tool で同じ状態へ到達できる場合は、deny に追加しても安全上の意味がないため追加しません。現在 deny する ORRERY Mail の tool は `hard_delete_agent`、`hard_delete_project`、`purge_old_messages` の 3 つです。これとは別に、下の skill directory への `Edit` を 1 つ deny します。
+
+installer が置いた skill（`~/.agentstack/skills` と、そこを指す `~/.claude/skills/<name>` の symlink）は `additionalDirectories` に入れ、作業 directory の外でも確認なしで読めるようにします。新しい環境の親 agent が `/delegate` の SKILL.md を読む時点で、作業 directory の外を読むかどうかの確認で止まらないためです。読み取りだけに絞るため、同じ場所への `Edit` は deny に入れます。この deny が止めるのは Claude Code の file tool（Edit・Write など）と、それと分かる Bash の書き込みです。sandbox なしで動く Python や Node を通した間接的な書き込みまでは止めません。利用者が自分で置いた同名の skill は対象にしません。
 
 単純な文字列置換ではなく構造を読んで merge するのは、再インストールと uninstall でユーザー設定を巻き込まないためです。
 

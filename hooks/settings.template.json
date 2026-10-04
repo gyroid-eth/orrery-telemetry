@@ -27,7 +27,11 @@
     "deny": [
       "mcp__orrery-mail__hard_delete_agent",
       "mcp__orrery-mail__hard_delete_project",
-      "mcp__orrery-mail__purge_old_messages"
+      "mcp__orrery-mail__purge_old_messages",
+      "Edit(/__AGENTSTACK_SKILLS_DIR__/**)"
+    ],
+    "additionalDirectories": [
+      "__AGENTSTACK_SKILLS_DIR__"
     ]
   },
   "hooks": {
