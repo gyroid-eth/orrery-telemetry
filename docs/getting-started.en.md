@@ -150,4 +150,4 @@ Python 3.11 or newer, `git`, `tmux`, and `uv` are required, and at runtime at le
 
 ## Look before installing
 
-The [public demo](https://agentstack-demo.pages.dev/) is a four-minute loop of the dashboard with scripted data and explanatory captions. It does not verify your own CLI, Mail, or delegation. The [“Orrery” introduction video](https://youtu.be/JXoa93TQolU) (about 90 seconds, Japanese) illustrates the idea rather than recording the real screen.
+The [public demo](https://agentstack-demo.pages.dev/) is a four-minute loop of the dashboard with scripted data and explanatory captions. It does not verify your own CLI, Mail, or delegation. The [“Orrery” introduction video](https://youtu.be/Jpc1ad7c90k) (about 90 seconds, English; [Japanese version](https://youtu.be/JXoa93TQolU) also available) illustrates the idea rather than recording the real screen.

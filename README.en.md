@@ -34,7 +34,7 @@ In Telemetry, choose DECK history `30d` / `all`, or NETWORK's `ALL` range, to fi
 
 ## Troubleshoot and update
 
-- Not working: run `agentstack-doctor` for missing pieces and `agentstack-selftest` for Mail round trips, then use [Troubleshooting](docs/troubleshooting.en.md).
+- Not working: run `~/.agentstack/bin/agentstack-doctor` for missing pieces and `~/.agentstack/bin/agentstack-selftest` for Mail round trips, then use [Troubleshooting](docs/troubleshooting.en.md).
 - Update: use the same one line with cockpit, or [Upgrade](docs/install.en.md#upgrade) for standalone Telemetry. See [Uninstall](docs/install.en.md#uninstall) to remove it.
 - Windows: [WSL2 setup and sign-in](docs/install.en.md#installing-on-windows-wsl2). Native Windows helpers are a [separate experimental route](docs/windows-local.en.md).
 - Environments, terms, and standalone startup: [Getting started](docs/getting-started.en.md).
@@ -52,7 +52,7 @@ Japanese documents are the source of truth. The English entry point is the [Engl
 
 [Using it with Obsidian](docs/obsidian.en.md) and the public [demo vault](https://github.com/gyroid-eth/orrery-demo-vault) turn logs, paper notes, and tasks into notes; Obsidian is optional. [Codex App](docs/codex-app.en.md) and [Antigravity / Gemini](docs/antigravity.en.md) are optional providers beyond the CLIs.
 
-Look before installing with the [public demo](https://agentstack-demo.pages.dev/); the [introduction video](https://youtu.be/JXoa93TQolU) illustrates the idea. See [CONTRIBUTING.md](CONTRIBUTING.md) before contributing code.
+Look before installing with the [public demo](https://agentstack-demo.pages.dev/); the [introduction video](https://youtu.be/Jpc1ad7c90k) illustrates the idea ([Japanese version](https://youtu.be/JXoa93TQolU)). See [CONTRIBUTING.md](CONTRIBUTING.md) before contributing code.
 
 ## License
 

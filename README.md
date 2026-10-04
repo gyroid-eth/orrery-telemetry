@@ -34,7 +34,7 @@ Telemetry の DECK の history を `30d` / `all`、または NETWORK の範囲�
 
 ## 困ったとき・更新する
 
-- 動かない: `agentstack-doctor` で不足箇所、`agentstack-selftest` で Mail の往復を確認し、[トラブルシューティング](docs/troubleshooting.md)へ。
+- 動かない: `~/.agentstack/bin/agentstack-doctor` で不足箇所、`~/.agentstack/bin/agentstack-selftest` で Mail の往復を確認し、[トラブルシューティング](docs/troubleshooting.md)へ。
 - 更新: cockpit と一緒なら上の1行、Telemetry だけなら[Upgrade](docs/install.md#upgrade)。取り除く手順は[Uninstall](docs/install.md#uninstall)。
 - Windows: [WSL2 の準備とログイン](docs/install.md#windowswsl2で入れる)。native Windows の helper は[実験的な別経路](docs/windows-local.md)です。
 - 対応環境・用語・単独での起動: [getting-started](docs/getting-started.md)。
