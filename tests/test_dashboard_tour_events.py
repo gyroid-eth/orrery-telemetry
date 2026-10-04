@@ -100,6 +100,7 @@ def test_deck_exit_arming_failures_and_cleanup_do_not_complete(payload, http_ok,
       let requests=0;
     """
     js += f"async function fetch(){{requests++;return {{ok:{str(http_ok).lower()},json:async()=>({json.dumps(payload)})}};}}"
+    js += "const exitSentAt=new Map();" + function('exitFailureText') + function('showExitSent')
     js += function('exitAgent') + """
       (async()=>{await exitAgent({stopPropagation(){}},'Pilot');
       const armed={events:[...events],requests};

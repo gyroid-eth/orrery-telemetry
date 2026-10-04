@@ -32945,6 +32945,18 @@ const armingSet=new Set();
 const armTimers=new Map();
 const exitingSet=new Set();
 const exitTimers=new Map();
+// Agents whose EXIT was delivered, with when. The tmux session takes a few
+// seconds to end; until it leaves LIVE the card stays "exiting" and a second
+// press sends nothing (it used to reach /api/exit again and get a 400).
+const exitSentAt=new Map();
+const EXIT_SETTLE_MS=30000;
+// What a failed EXIT means, in words. The server says "not found" or
+// "category=gone" once the agent has already ended.
+function exitFailureText(name,j){
+  const error=String(j&&j.error||'');
+  if(/not found|category=gone/.test(error))return name+' has already exited';
+  return error||'unknown';
+}
 
 // ── network view: 矩形多選択モード ─────────────────────────────────
 // selectMode ON 時のみ動作。ノードクリックで toggle / SVG ドラッグで矩形範囲指定。
@@ -33343,6 +33355,7 @@ async function exitAgent(ev,name){
   ev.stopPropagation();
   function getCard(){return document.querySelector(`.bay[data-name="${CSS.escape(name)}"]`);}
   function getBtn(c){return c?c.querySelector('.exitbtn'):null;}
+  if(exitSentAt.has(name))return;
   if(!exitingSet.has(name)){
     exitingSet.add(name);
     const c=getCard();if(c){c.classList.add('exit-arming');const b=getBtn(c);if(b)b.textContent='confirm';}
@@ -33362,17 +33375,42 @@ async function exitAgent(ev,name){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({session:name})});
     const j=await r.json();
-    card.classList.remove('exiting');
-    if(btn)btn.textContent='↩ EXIT';
-    if(j.ok){
+    if(r.ok&&j.ok){
+      // Delivered: stay "exiting" until the agent leaves LIVE (see render).
+      exitSentAt.set(name,Date.now());
+      showExitSent(getCard());
       const warn=(j.actions||[]).includes('warn-attached')?' (attached)':'';
       toast('▸ EXIT','> '+name+'  ::  /exit sent'+warn);
       notifyExitSent(r,j);
-    }else toast('✕ FAIL','> '+(j.error||'unknown'),true);
+      return;
+    }
+    card.classList.remove('exiting');
+    if(btn)btn.textContent='↩ EXIT';
+    toast('✕ FAIL','> '+exitFailureText(name,j),true);
   }catch(e){
     card.classList.remove('exiting');
     if(btn)btn.textContent='↩ EXIT';
     toast('✕ FAIL','> exit err: '+e,true);
+  }
+}
+
+function showExitSent(card){
+  if(!card)return;
+  card.classList.remove('exit-arming');card.classList.add('exiting');
+  const b=card.querySelector('.exitbtn');if(b)b.textContent='exiting…';
+}
+// Called with each new agents list: an agent that has left LIVE no longer
+// needs its exiting state; one still there after EXIT_SETTLE_MS gets its
+// button back (the agent may be busy and finish its turn first).
+function settleExitSent(agents,now=Date.now()){
+  const live=new Map(agents.map(a=>[a.name,a]));
+  for(const [name,at] of [...exitSentAt]){
+    const a=live.get(name);
+    if(!a||!SHOW_DEFAULT.has(a.category)){exitSentAt.delete(name);continue;}
+    if(now-at>=EXIT_SETTLE_MS){
+      exitSentAt.delete(name);
+      toast('↩ EXIT','> '+name+' is still running '+Math.round(EXIT_SETTLE_MS/1000)+'s after /exit; EXIT is available again',true);
+    }
   }
 }
 
@@ -33727,6 +33765,8 @@ function render(){
     const b=c.querySelector('.exitbtn');
     if(b)b.textContent='confirm';
   }
+  for(const nm of exitSentAt.keys())
+    showExitSent(wrap.querySelector(`.bay[data-name="${CSS.escape(nm)}"]`));
 }
 
 /* Crew state in the header, from each agent's act_state (the same field the
@@ -33783,6 +33823,7 @@ async function tick(){
     const j=await r.json();
     if(seq!==tickSeq)return;   // a newer range was requested while this was in flight
     lastData=j.agents;
+    settleExitSent(j.agents);
     const y=window.scrollY;
     render();
     window.scrollTo(0,y);

@@ -10,6 +10,12 @@
 
 ## Unreleased
 
+### Deck で EXIT した後も、カードが LIVE に数秒残り、もう一度押すと 400 になっていました
+
+EXIT が届いた後も、tmux の session が終わるまでの数秒間、カードは「↩ EXIT」に戻ったまま LIVE に残っていました。もう一度押すと `/api/exit` に再び届き、すでに終わりかけの agent に対して 400 が返っていました。
+
+EXIT が届いたカードは「exiting…」の表示にし、押せないようにしました。この表示は再描画しても続きます。agent が LIVE から外れた時点で状態を外し、30 秒経っても残っている場合は、その旨を知らせて EXIT を押せる状態に戻します。終わった agent への EXIT が 400 になった場合は、サーバーの文面をそのまま出すのではなく「<名前> has already exited」と知らせます。
+
 ### 詳細パネルの Exit と、選択の一括 EXIT で、Full tour の「Exit」の段が進みませんでした
 
 cockpit に埋め込んだ Telemetry の Full tour は、EXIT が届いた知らせで「Exit」の段を完了にします。この知らせを出していたのは Deck のカードの EXIT だけで、詳細パネルの「↩ Exit」と、選択した agent の一括 EXIT からは出ていませんでした。
