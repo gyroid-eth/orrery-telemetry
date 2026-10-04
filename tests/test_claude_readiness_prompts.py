@@ -36,6 +36,52 @@ CHROME_PROMPT = """\
     Yes, use my browser
   Enter to confirm · Esc to keep browser tools off
 """
+# Claude Code 2.1.289's first-run setup, captured 2026-10-04 in a HOME whose
+# ~/.claude.json has no hasCompletedOnboarding (theme already in settings.json).
+ONBOARDING_THEME = """\
+ Let's get started.
+ Choose the text style that looks best with your terminal
+ To change this later, run /theme
+     Auto (match terminal)
+ ❯ ✔ Dark mode
+     Light mode
+     Dark mode (colorblind-friendly)
+     Light mode (colorblind-friendly)
+     Dark mode (ANSI colors only)
+     Light mode (ANSI colors only)
+ ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  1  function greet() {
+  2 -  console.log("Hello, World!");
+  2 +  console.log("Hello, Claude!");
+  3  }
+ ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  Syntax theme: Monokai Extended (ctrl+t to disable)
+"""
+ONBOARDING_LOGIN = """\
+ Claude Code can be used with your Claude subscription or billed based on API usage through your Console account.
+ Select login method:
+ ❯ 1. Claude account with subscription · Pro, Max, Team, or Enterprise
+   2. Anthropic Console account · API usage billing
+   3. 3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI
+"""
+# The two screens after login, as reported from a 2.1.289 run on a fresh WSL
+# (2026-10-04); the launcher keys on "Press Enter to continue" plus the heading.
+ONBOARDING_LOGIN_DONE = " Login successful. Press Enter to continue…\n"
+ONBOARDING_SECURITY = """\
+ Security notes:
+ 1. Claude can make mistakes
+    You should always review Claude's responses, especially when
+    running code.
+ 2. Due to prompt injection risks, only use it with code you trust
+ Press Enter to continue…
+"""
+FIRST_RUN_REASON = (
+    "Claude Code's first-run setup is not finished on this machine. Run 'claude' "
+    "once in a terminal and go through text style, login, Security notes and "
+    "trusting the folder until the normal input prompt appears, then /exit (if a "
+    "'claude' window is still on those screens, finish it there). Then launch the "
+    "child again."
+)
 TRUST_OLD = "Do you trust the files in this folder?\n  Yes\n  No\n"
 READY = "\n❯ \n"
 TRUST_NEW_UNSELECTED = "Quick safety check\n  \u276f No, exit\n    Yes, I trust this folder\n"
@@ -159,6 +205,39 @@ def test_chrome_question_stops_at_once_without_any_key(tmp_path):
     assert "|   Enter to confirm" in incidents
     # The session is cleaned up as before.
     assert any(c.startswith("kill-session") for c in calls)
+
+
+@pytest.mark.parametrize("screen", [ONBOARDING_THEME, ONBOARDING_LOGIN, ONBOARDING_LOGIN_DONE, ONBOARDING_SECURITY],
+                         ids=["theme", "login", "login-done", "security-notes"])
+def test_first_run_setup_stops_at_once_with_a_reason_and_no_key(tmp_path, screen):
+    """Before the fix the theme screen read as no choice at all, so the child
+    sat out the 60s timeout and the cockpit said only that it closed."""
+    result, calls, polls, incidents = _launch(tmp_path, [screen])
+    assert result.returncode != 0
+    assert _keys(calls) == []
+    assert polls == 1
+    assert "readiness timeout" not in result.stderr
+    assert "first-run setup (text style, login or Security notes). No key was sent" in result.stderr
+    assert "first-run setup is not finished; not answered by the launcher (Probe-Curie)" in incidents
+    reasons = [line for line in result.stderr.splitlines()
+               if line.startswith("[spawn_child] reason: ")]
+    assert reasons == [
+        "[spawn_child] reason: " + FIRST_RUN_REASON
+    ]
+    assert any(c.startswith("kill-session") for c in calls)
+
+
+def test_chrome_question_also_leaves_a_reason_line(tmp_path):
+    result, calls, polls, incidents = _launch(tmp_path, [CHROME_PROMPT])
+    assert "[spawn_child] reason: Claude Code is asking a one-time question about Claude in Chrome." in result.stderr
+
+
+def test_the_theme_screen_alone_is_not_mistaken_for_first_run_setup(tmp_path):
+    """/theme opened by a user shows the same list but not the first-run
+    heading; two cues are required."""
+    later = ONBOARDING_THEME.replace("Choose the text style that looks best with your terminal", "Theme")
+    result, calls, polls, incidents = _launch(tmp_path, [later, READY])
+    assert "first-run setup" not in result.stderr
 
 
 def test_chrome_question_replacing_the_trust_dialog_gets_no_key(tmp_path):
@@ -405,3 +484,62 @@ def test_a_real_choice_below_the_echoed_prompt_still_stops_the_launch(tmp_path):
     assert result.returncode != 0
     assert "unrecognised choice screen" in incidents
     assert _keys(calls) == []
+
+
+# From the incident log of a fresh Windows/WSL machine, 2.1.289 (2026-10-04):
+# the child answered its launch prompt, then Claude offered the new renderer.
+# WSL draws the reply row with "●"; macOS draws "⏺".
+RENDERER_QUESTION = """\
+────────────────────────────────────────────────────────────────────────────────
+  Try the new fullscreen renderer?
+  · Flicker-free output — fixes the flashing you see during long responses
+  · Mouse support — click to move your cursor or expand results
+  · Selected text auto-copies to your clipboard
+  ❯ 1. Yes, try it
+    2. Not now
+  Enter to confirm · Esc to cancel
+"""
+ANSWERED_ARGV_PROMPT = """\
+❯ Child agent startup. AGENT_NAME=Probe-Curie; parent=ParentAgent. Follow the
+  child-agent startup procedure in CLAUDE.md and start the task immediately.
+● Hello from Probe-Curie. Starting on the task now.
+✻ Cogitated for 2s · done 9:21 AM
+"""
+
+
+@pytest.mark.parametrize("glyph", ["●", "⏺"])
+def test_a_question_after_the_child_answered_its_prompt_does_not_remove_it(tmp_path, glyph):
+    answered = ANSWERED_ARGV_PROMPT.replace("● ", glyph + " ")
+    result, calls, polls, incidents = _launch(tmp_path, [answered + RENDERER_QUESTION])
+    assert result.returncode == 0, result.stderr
+    assert _keys(calls) == []
+    assert not any(c.startswith("kill-session") for c in calls)
+    assert "unrecognised choice screen" not in incidents
+    assert "has answered its first prompt and is now showing a question for you" in result.stderr
+
+
+def test_an_unknown_choice_after_the_answer_is_also_left_to_the_user(tmp_path):
+    result, calls, polls, incidents = _launch(tmp_path, [ANSWERED_ARGV_PROMPT + UNKNOWN_CHOICE])
+    assert result.returncode == 0, result.stderr
+    assert _keys(calls) == []
+    assert "unrecognised choice screen" not in incidents
+
+
+def test_the_renderer_question_before_any_answer_stops_with_a_reason(tmp_path):
+    result, calls, polls, incidents = _launch(tmp_path, [RENDERER_QUESTION])
+    assert result.returncode != 0
+    assert _keys(calls) == []
+    assert polls == 1
+    assert "about the fullscreen renderer; not answered by the launcher (Probe-Curie)" in incidents
+    assert ("[spawn_child] reason: Claude Code is asking a one-time question (Try the new "
+            "fullscreen renderer?). Run 'claude' once in a terminal and answer it, then "
+            "launch the child again.") in result.stderr
+
+
+def test_an_echo_without_a_reply_does_not_count_as_answered(tmp_path):
+    """The echo alone is not an answer: a choice below it still stops (see
+    test_a_real_choice_below_the_echoed_prompt_still_stops_the_launch)."""
+    echo_only = ANSWERED_ARGV_PROMPT.replace("● Hello from Probe-Curie. Starting on the task now.\n", "")
+    result, calls, _polls, incidents = _launch(tmp_path, [echo_only + UNKNOWN_CHOICE])
+    assert result.returncode != 0
+    assert "unrecognised choice screen" in incidents

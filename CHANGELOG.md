@@ -10,6 +10,19 @@
 
 ## Unreleased
 
+### Claude Code の初回設定が終わっていないと、子が理由を告げずに消えていました
+
+初回設定（text style・ログイン・Security notes・フォルダの信頼）を途中で閉じると、`~/.claude.json` に `hasCompletedOnboarding` が付きません。そのまま NEW AGENT で子を起動すると、子は最初の text style の画面で止まっていました。launcher はこの画面を選択画面と見分けられず 60 秒待ってから子を片付け、cockpit には「closed」としか出ませんでした。
+
+- launcher は初回設定の画面（text style・login method・Login successful・Security notes）を見分け、キーを送らずにすぐ止めます。答えは利用者の設定なので、ORRERY は代わりに答えません。
+- 止めた理由は `[spawn_child] reason:` の 1 行で出します。dashboard はそれを spawn の error の先頭に入れるので、cockpit の失敗の知らせに「端末で `claude` を一度起動し、入力欄が出るまで進めてから /exit」と表示されます。Claude in Chrome の一度きりの質問も同じ扱いです。
+- doctor は `hasCompletedOnboarding` が無いと warn します（値そのものは表示しません）。
+
+あわせて直したこと:
+
+- 子が最初の prompt に返答した後に一度きりの質問（「Try the new fullscreen renderer?」）が出ると、10 秒後に「unrecognised choice screen」として、動いていた子を片付けていました。prompt の echo の下に Claude の返答（`⏺`、WSL では `●`）があれば起動は成功として扱い、質問は子の pane で利用者が答えるものとして残します。返答の前にこの質問が出た場合は、キーを送らずに止め、理由を返します。
+- 親のいない（standalone の）子についても最初の turn を見張り、普通に返事をしただけで「declined; could not tell the parent by Mail: no parent to tell」と記録していました。知らせる相手がいないので、standalone では見張りません。
+
 ### 「子を作って話して」と頼むと、Claude Code の組み込み Agent と SendMessage で済ませていました
 
 managed block が context に無いセッションでは（block は `--project-key` の dir の CLAUDE.md に入るため、それ以外の dir で起動した場合）、「Start one child agent and play shiritori with it over 3 turns」に対して 3 回とも組み込みの Agent が子を作り、SendMessage でしりとりを最後まで進めていました。ORRERY Mail には何も残らず、dashboard にも出ません。Claude Code 2.1.224 以降の組み込み `SendMessage` / `ListAgents` は、tmux の ORRERY child にも直接届きます。そのため、`/delegate` で作った子と話すときにも、同じ回避の経路がありました。`/delegate` skill の description の先頭に、子を作るのも子と話すのも組み込みの道具ではなく `/delegate` と `send_message` で、と書きました。block の禁止文にも `SendMessage`・`ListAgents`・agent teams を足しました。skill の description は block の外でも context に入ることが多く、その場合は道具を選ぶ手掛かりになります。ただし skill の一覧が予算を超えると description は削られるので、どのセッションでも入るとは限りません。入っているかは `/context` や `/doctor` で確かめられます。確実に通すには、明示の `/delegate` を使います。修正後は同じ条件で、3 回とも `/delegate` から始めました（stub の Mail を使った少数回の比較で、全セッションでの保証ではありません）。tmux の子への送信も 3 回とも `send_message` でした。組み込みの経路を設定で断る deny rule は、組み込み subagent への送信も消すので既定では入れず、[docs/launchers.md](docs/launchers.md) に opt-in として書きました。

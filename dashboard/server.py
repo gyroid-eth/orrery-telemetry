@@ -6820,6 +6820,29 @@ def _spawn_launch_record(name: str, result: dict) -> None:
         }
 
 
+_SPAWN_REASON_PREFIX = "[spawn_child] reason: "
+
+
+def _spawn_log_tail_and_reason(log_path) -> tuple[str, str]:
+    """The launcher log's last 1000 characters, and its last reason line.
+
+    spawn_child.sh writes "[spawn_child] reason: ..." when it stops on
+    something only the user can resolve (Claude Code's first-run setup, its
+    Chrome question). That line becomes the launch error the cockpit shows;
+    without it the user saw only an exit status.
+    """
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return "", ""
+    reason = ""
+    for line in text.splitlines():
+        if line.startswith(_SPAWN_REASON_PREFIX):
+            reason = line[len(_SPAWN_REASON_PREFIX):].strip()
+    return text[-1000:], reason[:500]
+
+
 def spawn_launch_status(name: str) -> dict:
     with _SPAWN_LAUNCHES_LOCK:
         entry = _SPAWN_LAUNCHES.get(name)
@@ -7734,14 +7757,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                 if returncode != 0:
                     kill_spawn_session()
                     remove_spawn_credentials()
-                    tail = ""
-                    try:
-                        with open(log_path, encoding="utf-8", errors="replace") as f:
-                            tail = f.read()[-1000:]
-                    except OSError:
-                        pass
+                    tail, reason = _spawn_log_tail_and_reason(log_path)
+                    error = f"spawn launcher exited with status {returncode}"
                     return retained_registration_error(
-                        f"spawn launcher exited with status {returncode}",
+                        f"{reason} ({error})" if reason else error,
                         detail=tail)
 
             probe = subprocess.run(
@@ -7750,14 +7769,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             if probe.returncode:
                 kill_spawn_session()
                 remove_spawn_credentials()
-                tail = ""
-                try:
-                    with open(log_path, encoding="utf-8", errors="replace") as f:
-                        tail = f.read()[-1000:]
-                except OSError:
-                    pass
+                tail, reason = _spawn_log_tail_and_reason(log_path)
+                error = "spawn launcher exited before a live tmux session was created"
                 return retained_registration_error(
-                    "spawn launcher exited before a live tmux session was created",
+                    f"{reason} ({error})" if reason else error,
                     detail=tail)
             return {
                 "ok": True,
