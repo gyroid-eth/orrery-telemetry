@@ -207,6 +207,31 @@ def test_resume_needs_the_resume_label_and_nothing_disabled_is_ringed(embedded):
     assert (disabled['ring'], disabled['target']) == (True, 'tm-x'), disabled
 
 
+@pytest.mark.parametrize('category', ['retired', 'finished', 'gone'])
+def test_resume_rings_an_ended_card_whose_resume_is_ready(embedded, category):
+    """Review of #202: only gone cards were candidates, but the child after
+    EXIT is usually retired (and finished counts too, as isResumeCategory)."""
+    _client, evaluate, inner, _wait = embedded
+    def add_card(capability):
+        inner(f"""(()=>{{document.querySelectorAll('.qa-ended').forEach(n=>n.remove());
+          const row={{name:'QaEnded',category:{json.dumps(category)},running:false,present:false,
+            resume_capability:{json.dumps(capability)},model:'claude-sonnet-5-5',provider:'anthropic',
+            task:'shiritori',live:'',rel:'1m',state:'',ctx_used:null}};
+          const box=document.createElement('div');box.className='qa-ended';box.innerHTML=bay(row,99);
+          document.getElementById('wrap').prepend(box);}})()""")
+    add_card('ready')
+    ready = _cue(evaluate, inner, 'full-resume')
+    ready_name = inner("(()=>{const r=document.querySelector('.tour-cue-ring').getBoundingClientRect(),"
+                       "t=document.querySelector('.qa-ended .top').getBoundingClientRect();"
+                       "return r.left<=t.left&&r.top<=t.top&&r.right>=t.right&&r.bottom>=t.bottom})()")
+    add_card('verification_required')
+    verify = _cue(evaluate, inner, 'full-resume')
+    inner("document.querySelectorAll('.qa-ended').forEach(n=>n.remove())")
+    assert (ready['ring'], ready['target'], ready_name) == (True, 'top', True), ready
+    # A card whose resume is not ready is not the step's action.
+    assert verify['target'] == 'history', verify
+
+
 def test_names_of_object_properties_are_not_steps(embedded):
     # They used to reach the table's inherited properties, throw, and leave
     # the previous step's ring on screen.

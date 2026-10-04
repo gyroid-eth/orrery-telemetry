@@ -20,9 +20,12 @@ const STEPS=Object.freeze({
   'full-edge':['#net .edge-count','.viewtog'],
   'full-select':['#selToggle','.viewtog'],
   'full-replay':['#selbarReplay','#selToggle','.viewtog'],
-  // An ended agent shows outside LIVE: its card, else the history range.
-  // A panel open on the other kind of agent is closed first (#tm-x).
-  'full-resume':[['#tm-open','RESUME'],'#selbarResume','.bay.cat-gone .top','#history','#tm-x'],
+  // An ended agent (finished, gone or retired, as isResumeCategory; a child
+  // after EXIT is usually retired) whose card says its resume is ready, else
+  // the history range it shows in. A panel open on the other kind of agent
+  // is closed first (#tm-x).
+  'full-resume':[['#tm-open','RESUME'],'#selbarResume',
+    ['.bay.cat-retired .top,.bay.cat-finished .top,.bay.cat-gone .top','RESUME READY'],'#history','#tm-x'],
   'full-network-settings':['#settings-btn','.viewtog'],
   'full-return':[['#tm-open','OPEN IN COCKPIT'],'.bay.cat-agent .top','#tm-x'],
 });
