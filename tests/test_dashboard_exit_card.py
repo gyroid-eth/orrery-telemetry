@@ -25,6 +25,7 @@ PRELUDE = """
   const notifyTourAction=()=>{};
   const SHOW_DEFAULT=new Set(['agent','finished','unnamed']);
   const exitingSet=new Set(),exitTimers=new Map(),exitSentAt=new Map(),ARM_MS=5000,EXIT_SETTLE_MS=30000;
+  const EXIT_SHIFT_GUARD_MS=2000;let exitShiftUntil=0;
   const classes=new Set(),button={textContent:'↩ EXIT'};
   const card={classList:{add:c=>classes.add(c),remove:c=>classes.delete(c),contains:c=>classes.has(c)},
               querySelector:()=>button};
@@ -147,3 +148,19 @@ def test_the_note_names_kill_only_when_the_card_shows_it(agent, kill_named):
 def test_the_card_rendering_used_above_shows_exit_for_a_running_agent():
     # The catch-all scope still renders real buttons: a running agent has EXIT, not KILL.
     assert _card_buttons({**RUNNING, 'attached': False, 'task': '', 'live': ''}) == {'kill': False, 'exit': True}
+
+
+def test_a_press_just_after_an_exited_card_leaves_arms_nothing():
+    """Full tour recording: after the child's EXIT was confirmed and its card
+    left, the parent's EXIT slid under the pointer; a further click armed it."""
+    result = run("""(async()=>{await press();await press();
+      settleExitSent([]);
+      const sentBefore=requests.length;classes.clear();button.textContent='↩ EXIT';
+      exitSentAt.clear();
+      await press();
+      const armedDuringGuard=exitingSet.has('Pilot');
+      exitShiftUntil=Date.now()-1;
+      await press();
+      console.log(JSON.stringify({sentBefore,armedDuringGuard,armedAfter:exitingSet.has('Pilot'),requests:requests.length}));
+    })();""", (200, {'ok': True, 'actions': ['exit-sent']}))
+    assert result == {'sentBefore': 1, 'armedDuringGuard': False, 'armedAfter': True, 'requests': 1}

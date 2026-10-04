@@ -32952,6 +32952,11 @@ const exitTimers=new Map();
 // press sends nothing (it used to reach /api/exit again and get a 400).
 const exitSentAt=new Map();
 const EXIT_SETTLE_MS=30000;
+// When an exited agent's card leaves, the cards after it close up and the next
+// one's EXIT lands under the pointer that just confirmed: for a moment, EXIT
+// presses are not taken (a second click there would arm another agent).
+const EXIT_SHIFT_GUARD_MS=2000;
+let exitShiftUntil=0;
 // What a failed EXIT means, in words. The server says "not found" or
 // "category=gone" once the agent has already ended.
 function exitFailureText(name,j){
@@ -33358,6 +33363,7 @@ async function exitAgent(ev,name){
   function getCard(){return document.querySelector(`.bay[data-name="${CSS.escape(name)}"]`);}
   function getBtn(c){return c?c.querySelector('.exitbtn'):null;}
   if(exitSentAt.has(name))return;
+  if(Date.now()<exitShiftUntil)return;
   if(!exitingSet.has(name)){
     exitingSet.add(name);
     const c=getCard();if(c){c.classList.add('exit-arming');const b=getBtn(c);if(b)b.textContent='confirm';}
@@ -33411,7 +33417,9 @@ function settleExitSent(agents,now=Date.now()){
   const live=new Map(agents.map(a=>[a.name,a]));
   for(const [name,at] of [...exitSentAt]){
     const a=live.get(name);
-    if(!a||!SHOW_DEFAULT.has(a.category)){exitSentAt.delete(name);continue;}
+    if(!a||!SHOW_DEFAULT.has(a.category)){
+      exitSentAt.delete(name);exitShiftUntil=Math.max(exitShiftUntil,now+EXIT_SHIFT_GUARD_MS);continue;
+    }
     if(now-at>=EXIT_SETTLE_MS){
       exitSentAt.delete(name);
       const secs=Math.round(EXIT_SETTLE_MS/1000);

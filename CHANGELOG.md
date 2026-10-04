@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### EXIT を確定した直後、隣のカードを誤って EXIT しないようにしました
+
+EXIT した agent のカードが LIVE から消えると、後ろのカードが詰まり、直前に押した位置へ次のカードの EXIT が来ます。そこをもう一度押すと、別の agent の EXIT を構えてしまいました（Full tour の録画で、子を EXIT した直後に親の EXIT がカーソルの下に来た）。カードが消えてから 2 秒間は、EXIT を押しても受け付けません。
+
 ### cockpit の Full tour の後半で、Telemetry の中の押すボタンを示せるようにしました
 
 cockpit の tour は、次に押す control をシアンの脈打つ輪と HERE の札で示します。Full tour の後半の 7 段（EXIT、Network の edge、Select、Replay、Resume、Network の Settings、Open in cockpit）は、cockpit に埋め込んだ Telemetry の中のボタンを押す段です。cockpit はその中に手を出せないので、これまでは Telemetry の画面全体を指すだけでした。
