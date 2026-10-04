@@ -1,0 +1,13 @@
+/* The cockpit's tour cue inside Telemetry (tour_cue.js): the same cyan ring
+   and HERE tag as the cockpit's own (gyroid-eth/orrery bridge/cockpit_tour.css).
+   Cyan, not the gold the page uses; still with reduced motion. */
+:root{--tour-cue:#3fd2e6;--tour-cue-ink:#04222a;--tour-cue-glow:rgba(63,210,230,.55)}
+:root[data-color-theme="light"]{--tour-cue:#0a8fa3;--tour-cue-ink:#ffffff;--tour-cue-glow:rgba(10,143,163,.45)}
+.tour-cue-ring,.tour-cue-here{position:fixed;z-index:3000;pointer-events:none}
+.tour-cue-ring[hidden],.tour-cue-here[hidden]{display:none!important}
+.tour-cue-ring{box-sizing:border-box;border:2px solid var(--tour-cue);border-radius:10px;box-shadow:0 0 14px 2px var(--tour-cue-glow)}
+.tour-cue-ring::after{content:"";position:absolute;inset:-2px;border-radius:10px;animation:tour-cue-pulse 1.6s ease-out infinite}
+@keyframes tour-cue-pulse{from{box-shadow:0 0 0 0 var(--tour-cue)}to{box-shadow:0 0 0 10px transparent}}
+.tour-cue-here{padding:5px 9px;border-radius:999px;background:var(--tour-cue);color:var(--tour-cue-ink);
+  font:600 10px/1 var(--mono,ui-monospace,monospace);letter-spacing:.14em;white-space:nowrap;box-shadow:0 2px 10px rgba(0,0,0,.35)}
+@media (prefers-reduced-motion: reduce){.tour-cue-ring::after{animation:none;opacity:0}}

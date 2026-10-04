@@ -8,6 +8,20 @@
 
 ---
 
+## Unreleased
+
+### cockpit の Full tour の後半で、Telemetry の中の押すボタンを示せるようにしました
+
+cockpit の tour は、次に押す control をシアンの脈打つ輪と HERE の札で示します。Full tour の後半の 7 段（EXIT、Network の edge、Select、Replay、Resume、Network の Settings、Open in cockpit）は、cockpit に埋め込んだ Telemetry の中のボタンを押す段です。cockpit はその中に手を出せないので、これまでは Telemetry の画面全体を指すだけでした。
+
+Telemetry は、cockpit から段の名前（`orrery-tour-cue`）を受け取り、自分の画面の該当するボタンに同じ輪と札を描くようになりました（`dashboard/tour_cue.js`）。
+
+- 段ごとに候補を順に試し、画面に出ていて覆われていない最初のものを指します。ボタンがまだ出ていなければ、そこへ行く手前の操作（Deck／Network の切り替え、card）を指します。
+- 受け取るのは埋め込みのときだけで、送り主が親の cockpit・同じ origin の場合に限ります。cockpit の tour の欄がかぶる範囲を受け取れば、札はそこを避けます。
+- 指すのは「その種類のボタン」です。どの agent のボタンかまでは分かりません。EXIT なら画面で最初に見つかった EXIT を指すので、段の文が言う「しりとりの子」のものとは限りません。
+
+cockpit 側から段の名前を送る変更は、gyroid-eth/orrery で別に入れます。
+
 ## 2026.10.04
 
 ### agent の詳細パネルを開いている間、Help map を押せませんでした

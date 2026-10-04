@@ -178,6 +178,9 @@ THEME_ASSETS = {
     # The help map is served the same way: a fixed file next to the page.
     "/help_map.js": (os.path.join(HERE, "help_map.js"), "text/javascript; charset=utf-8"),
     "/help_map.css": (os.path.join(HERE, "help_map.css"), "text/css; charset=utf-8"),
+    # The cockpit tour's cue inside this page (tour_cue.js).
+    "/tour_cue.js": (os.path.join(HERE, "tour_cue.js"), "text/javascript; charset=utf-8"),
+    "/tour_cue.css": (os.path.join(HERE, "tour_cue.css"), "text/css; charset=utf-8"),
 }
 DB_PATH = _resolve_mail_db()
 MAIL_ENV_PATH = _env_path("AGENTSTACK_MAIL_ENV", "~/.agentstack/mail/.env")
