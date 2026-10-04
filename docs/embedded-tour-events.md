@@ -16,7 +16,7 @@ agent tasks, Mail bodies, credentials, or commands. It never requests an action.
 
 | Action | Completion boundary |
 | --- | --- |
-| `exit` | A Deck card's confirmed EXIT receives HTTP success, `ok: true`, and `exit-sent`. Arming, failures and shell cleanup do not count. |
+| `exit` | An EXIT from a Deck card (after its confirming click), the detail panel, or the bulk EXIT of a selection receives HTTP success, `ok: true`, and `exit-sent` (the `/exit` keys were sent to the agent) or `shell-exit-sent` (a finished agent left in its shell was sent `exit`). It means the exit was delivered, not that the session has ended. Arming, failures and an empty `actions` do not count. |
 | `edge` | The selected edge's thread loads successfully and renders; stale responses and errors do not count. |
 | `select` | A user node selection or completed rectangle contains at least two registered nodes. A cancelled rectangle does not notify. |
 | `replay` | History loads successfully, contains events, and Replay starts. |

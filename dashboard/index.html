@@ -32860,6 +32860,14 @@ function notifyTourAction(action){
     return true;
   }catch(_){return false;}
 }
+// Every EXIT path (Deck card, detail panel, bulk) completes the tour step the
+// same way: only a request that the server says reached the agent. A finished
+// agent left in its shell gets "exit" typed into the shell (shell-exit-sent);
+// that ends the session just as /exit does.
+function notifyExitSent(r,j){
+  if(r&&r.ok&&j&&j.ok&&(j.actions||[]).some(a=>a==='exit-sent'||a==='shell-exit-sent'))
+    notifyTourAction('exit');
+}
 function notifyTourSelection(){
   if(selectMode&&[...selectedSet].filter(name=>gmap.has(name)).length>=2)
     notifyTourAction('select');
@@ -33359,7 +33367,7 @@ async function exitAgent(ev,name){
     if(j.ok){
       const warn=(j.actions||[]).includes('warn-attached')?' (attached)':'';
       toast('▸ EXIT','> '+name+'  ::  /exit sent'+warn);
-      if(r.ok&&(j.actions||[]).includes('exit-sent'))notifyTourAction('exit');
+      notifyExitSent(r,j);
     }else toast('✕ FAIL','> '+(j.error||'unknown'),true);
   }catch(e){
     card.classList.remove('exiting');
@@ -33482,6 +33490,7 @@ async function bulkDispatch(kind,names,btn){
         body:JSON.stringify(EMBED_MODE&&kind==='resume'?{session:nm,open:false}:{session:nm})});
       const j=await r.json();
       if(kind==='resume'&&r.ok&&j.ok&&j.action==='resumed')notifyTourAction('resume');
+      if(kind==='exit')notifyExitSent(r,j);
       if(j.ok)ok++;
       else{fail++;failNames.push(nm+':'+(j.error||'?'));console.warn('bulk '+kind+' fail',nm,j);}
     }catch(e){fail++;failNames.push(nm+':'+e);console.warn('bulk '+kind+' err',nm,e);}
@@ -36903,7 +36912,7 @@ async function loadHistory(){
 
 TM('tm-x').addEventListener('click',closeTerm);
 TM('term').addEventListener('click',e=>{if(e.target.id==='term')closeTerm();});
-TM('tm-exit-btn').addEventListener('click',async()=>{
+async function exitPanelAgent(){
   if(!panelName)return;
   const btn=TM('tm-exit-btn');
   btn.textContent='…';btn.disabled=true;
@@ -36916,7 +36925,8 @@ TM('tm-exit-btn').addEventListener('click',async()=>{
     if(j.ok){
       const warn=(j.actions||[]).includes('warn-attached')?' (attached)':'';
       toast('▸ EXIT','> '+panelName+'  ::  /exit sent'+warn);
-      btn.textContent='↩ Exit';}
+      btn.textContent='↩ Exit';
+      notifyExitSent(r,j);}
     else{toast('✕ FAIL','> '+(j.error||'unknown'),true);
       btn.textContent='↩ Exit';}
   }catch(e){
@@ -36924,7 +36934,8 @@ TM('tm-exit-btn').addEventListener('click',async()=>{
     btn.textContent='↩ Exit';
     toast('✕ FAIL','> exit err: '+e,true);
   }
-});
+}
+TM('tm-exit-btn').addEventListener('click',exitPanelAgent);
 addEventListener('keydown',e=>{if(e.key==='Escape'&&panelName)closeTerm();});
 TM('tm-tabs').addEventListener('click',e=>{
   const b=e.target.closest('button[data-tab]');if(b)setTab(b.dataset.tab);

@@ -17,7 +17,7 @@ def function(name):
 def run(js, embedded=True):
     if not shutil.which('node'):
         pytest.skip('node unavailable')
-    helper = function('notifyTourAction')
+    helper = function('notifyTourAction') + '\n' + function('notifyExitSent')
     prelude = f"const EMBED_MODE={str(embedded).lower()};" + """
       const events=[];const location={origin:'http://localhost:1234'};
       const window={parent:{postMessage:(message,origin)=>events.push({...message,origin})}};
@@ -78,12 +78,19 @@ def test_bulk_resume_only_notifies_completed_resume(ok, http_ok, action, expecte
     assert actions(run(js)) == expected
 
 
-@pytest.mark.parametrize('payload,http_ok,expected', [
+# The same outcomes for every EXIT path. A finished agent left in its shell
+# gets "exit" typed there (shell-exit-sent), which ends the session too.
+EXIT_OUTCOMES = [
     ({'ok': True, 'actions': ['exit-sent']}, True, ['exit']),
-    ({'ok': True, 'actions': ['shell-exit-sent']}, True, []),
+    ({'ok': True, 'actions': ['warn-attached', 'exit-sent']}, True, ['exit']),
+    ({'ok': True, 'actions': ['shell-exit-sent', 'zombie-pane:zsh']}, True, ['exit']),
+    ({'ok': True, 'actions': []}, True, []),
     ({'ok': False, 'actions': ['exit-sent']}, True, []),
     ({'ok': True, 'actions': ['exit-sent']}, False, []),
-])
+]
+
+
+@pytest.mark.parametrize('payload,http_ok,expected', EXIT_OUTCOMES)
 def test_deck_exit_arming_failures_and_cleanup_do_not_complete(payload, http_ok, expected):
     js = """
       const exitingSet=new Set(),exitTimers=new Map(),ARM_MS=5000;
@@ -103,6 +110,50 @@ def test_deck_exit_arming_failures_and_cleanup_do_not_complete(payload, http_ok,
     assert result['armed'] == {'events': [], 'requests': 0}
     assert result['requests'] == 1
     assert actions(result['events']) == expected
+
+
+@pytest.mark.parametrize('payload,http_ok,expected', EXIT_OUTCOMES)
+def test_detail_panel_exit_completes_like_the_deck(payload, http_ok, expected):
+    """The detail panel's Exit used to leave the tour's Exit step open."""
+    js = """
+      let panelName='Pilot';
+      const button={textContent:'',disabled:false};
+      const TM=()=>button;
+    """
+    js += f"async function fetch(){{return {{ok:{str(http_ok).lower()},json:async()=>({json.dumps(payload)})}};}}"
+    js += function('exitPanelAgent') + "exitPanelAgent().then(()=>console.log(JSON.stringify(events)));"
+    assert actions(run(js)) == expected
+
+
+def test_detail_panel_exit_transport_failure_does_not_complete():
+    js = "let panelName='Pilot';const button={textContent:''};const TM=()=>button;"
+    js += "async function fetch(){throw Error('offline');}"
+    js += function('exitPanelAgent') + "exitPanelAgent().then(()=>console.log(JSON.stringify(events)));"
+    assert actions(run(js)) == []
+
+
+@pytest.mark.parametrize('payload,http_ok,expected', EXIT_OUTCOMES)
+def test_bulk_exit_completes_like_the_deck(payload, http_ok, expected):
+    """The bulk EXIT of a selection used to leave the tour's Exit step open."""
+    js = """
+      let bulkBusy=false;const selectedSet=new Set(['Pilot']);
+      const btn={classList:{add(){},remove(){}},querySelector:()=>({textContent:''})};
+      const refreshSelClasses=()=>{},updateSelBar=()=>{};
+    """
+    js += f"async function fetch(){{return {{ok:{str(http_ok).lower()},json:async()=>({json.dumps(payload)})}};}}"
+    js += function('bulkDispatch') + "bulkDispatch('exit',['Pilot'],btn).then(()=>console.log(JSON.stringify(events)));"
+    assert actions(run(js)) == expected
+
+
+def test_bulk_resume_never_completes_the_exit_step():
+    js = """
+      let bulkBusy=false;const selectedSet=new Set(['Pilot']);
+      const btn={classList:{add(){},remove(){}},querySelector:()=>({textContent:''})};
+      const refreshSelClasses=()=>{},updateSelBar=()=>{};
+    """
+    js += "async function fetch(){return {ok:true,json:async()=>({ok:true,actions:['exit-sent'],action:'already_running'})};}"
+    js += function('bulkDispatch') + "bulkDispatch('resume',['Pilot'],btn).then(()=>console.log(JSON.stringify(events)));"
+    assert actions(run(js)) == []
 
 
 @pytest.mark.parametrize('count,mode,expected', [(0, True, []), (1, True, []),

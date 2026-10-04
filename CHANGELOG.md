@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### 詳細パネルの Exit と、選択の一括 EXIT で、Full tour の「Exit」の段が進みませんでした
+
+cockpit に埋め込んだ Telemetry の Full tour は、EXIT が届いた知らせで「Exit」の段を完了にします。この知らせを出していたのは Deck のカードの EXIT だけで、詳細パネルの「↩ Exit」と、選択した agent の一括 EXIT からは出ていませんでした。
+
+EXIT が届いた時の知らせを 1 つの関数にまとめ、3 つの経路すべてから呼びます。知らせを出す条件は 3 つとも同じで、次のすべてを満たすときです。
+
+- 応答が成功している（`ok`）
+- 実際に送られた（`exit-sent`）か、終わった agent が shell に残っていて `exit` を打ち込んだ（`shell-exit-sent`）
 ### Claude Code の初回設定が終わっていないと、子が理由を告げずに消えていました
 
 初回設定（text style・ログイン・Security notes・フォルダの信頼）を途中で閉じると、`~/.claude.json` に `hasCompletedOnboarding` が付きません。そのまま NEW AGENT で子を起動すると、子は最初の text style の画面で止まっていました。launcher はこの画面を選択画面と見分けられず 60 秒待ってから子を片付け、cockpit には「closed」としか出ませんでした。
