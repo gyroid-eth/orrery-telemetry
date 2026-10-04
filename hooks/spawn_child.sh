@@ -1670,6 +1670,65 @@ claude_user_prompt_present() {
         && printf '%s' "$text" | grep -qiF "use my browser"
 }
 
+# Claude Code's first-run setup appears in every new session until it has been
+# finished once. In 2.1.289 it runs: text style, login method, "Login
+# successful. Press Enter to continue", Security notes, then the folder trust
+# dialog and the normal prompt. It is gated on hasCompletedOnboarding
+# in ~/.claude.json, not on the theme already saved in settings.json (2.1.289,
+# 2026-10-04: a child stopped on it while the user's first `claude` was still
+# open on its setup screens). Picking a theme or a login method would decide
+# the user's settings, so the launcher never answers it. Two cues per screen.
+claude_onboarding_present() {
+    local text
+    text="$(printf '%s' "$1" | pane_normalize_nbsp)"
+    if printf '%s' "$text" | grep -qiF "Choose the text style" \
+        && printf '%s' "$text" | grep -qiF "/theme"; then
+        return 0
+    fi
+    if printf '%s' "$text" | grep -qiF "Select login method" \
+        && printf '%s' "$text" | grep -qiE "Claude account with subscription|Anthropic Console account"; then
+        return 0
+    fi
+    printf '%s' "$text" | grep -qiF "Press Enter to continue" \
+        && printf '%s' "$text" | grep -qiE "Security notes|Login successful"
+}
+
+# Another one-time question for the user, seen on a fresh Windows/WSL machine
+# with 2.1.289 (2026-10-04): "Try the new fullscreen renderer?" with "Yes" and
+# "Not now". Like the Chrome question its answer is the user's setting.
+claude_renderer_question_present() {
+    local text
+    text="$(printf '%s' "$1" | pane_normalize_nbsp)"
+    printf '%s' "$text" | grep -qiF "fullscreen renderer" \
+        && printf '%s' "$text" | grep -qiF "Not now"
+}
+
+# The child has already answered its launch prompt: the prompt's echo
+# ("❯ <first line up to the child's name>") with one of Claude's reply rows
+# ("⏺ ...", or "●" where the terminal draws that) below it. The prompt was delivered and acted on, so the launch has
+# succeeded; a question Claude shows after that (2026-10-04: the fullscreen
+# renderer offer, right after the child's first reply) is for the user to
+# answer in the child's pane, not a reason to remove a working child.
+claude_answered_launch_prompt() {
+    [[ -n "$CLAUDE_READY_PROMPT_ECHO" ]] || return 1
+    local line rest echoed=false
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        rest="${line#"${line%%[![:space:]]*}"}"
+        if [[ "$echoed" == false && "$rest" == "❯"* ]]; then
+            rest="${rest#❯}"
+            rest="${rest#"${rest%%[![:space:]]*}"}"
+            [[ "$rest" == "$CLAUDE_READY_PROMPT_ECHO"* ]] && echoed=true
+            continue
+        fi
+        [[ "$echoed" == true ]] || continue
+        # Claude draws its reply rows from the first column. The echo's own
+        # continuation rows are indented, so a bullet in the prompt text
+        # ("  ● do this") is never a reply.
+        [[ "$line" == "⏺"* || "$line" == "●"* ]] && return 0
+    done <<< "$(printf '%s' "$1" | pane_normalize_nbsp)"
+    return 1
+}
+
 # Diagnostics only: the last 40 non-blank lines, blank lines anywhere removed.
 # capture-pane pads to the window height and a dialog can sit above a run of
 # blank rows, so a plain tail may hold only blank lines. Readiness checks keep
@@ -1760,10 +1819,30 @@ wait_for_claude_ready() {
         # Keep the last screen actually seen: once the session is gone, the
         # capture fails and would leave an empty record.
         [[ -n "$pane_text" ]] && last_seen="$pane_text"
+        if claude_answered_launch_prompt "$pane_text"; then
+            if claude_user_prompt_present "$pane_text" || claude_renderer_question_present "$pane_text" \
+                || [[ "$(claude_choice_block_kind "$(claude_strip_prompt_echo "$pane_text")")" != none ]]; then
+                echo "[$log_prefix] Claude has answered its first prompt and is now showing a question for you; it is left unanswered in the child's pane: $(printf '%s' "$pane_text" | pane_normalize_nbsp | pane_nonblank_tail 1 | cut -c1-120)" >&2
+            fi
+            return 0
+        fi
         pane_text="$(claude_strip_prompt_echo "$pane_text")"
         if claude_user_prompt_present "$pane_text"; then
             claude_record_failure "$session_name" "Claude asked the user about Claude in Chrome; not answered by the launcher" "$last_seen"
             echo "[$log_prefix] Aborting: Claude Code is asking the user a one-time question about Claude in Chrome (\"Claude in Chrome extension detected\"). No key was sent: the answer may become the default for all later Claude sessions, so ORRERY leaves it to you. Open 'claude' once in a normal terminal and answer it yourself (or choose with /chrome), then launch the child again." >&2
+            spawn_reason "Claude Code is asking a one-time question about Claude in Chrome. Run 'claude' once in a terminal and answer it, then launch the child again."
+            return 1
+        fi
+        if claude_renderer_question_present "$pane_text"; then
+            claude_record_failure "$session_name" "Claude asked the user about the fullscreen renderer; not answered by the launcher" "$last_seen"
+            echo "[$log_prefix] Aborting: Claude Code is asking a one-time question (\"Try the new fullscreen renderer?\"). No key was sent: the answer is your setting, so ORRERY leaves it to you." >&2
+            spawn_reason "Claude Code is asking a one-time question (Try the new fullscreen renderer?). Run 'claude' once in a terminal and answer it, then launch the child again."
+            return 1
+        fi
+        if claude_onboarding_present "$pane_text"; then
+            claude_record_failure "$session_name" "Claude Code's first-run setup is not finished; not answered by the launcher" "$last_seen"
+            echo "[$log_prefix] Aborting: Claude Code is showing its first-run setup (text style, login or Security notes). No key was sent: the choices are your settings, so ORRERY leaves them to you." >&2
+            spawn_reason "Claude Code's first-run setup is not finished on this machine. Run 'claude' once in a terminal and go through text style, login, Security notes and trusting the folder until the normal input prompt appears, then /exit (if a 'claude' window is still on those screens, finish it there). Then launch the child again."
             return 1
         fi
         choice_kind="$(claude_choice_block_kind "$pane_text")"
@@ -1825,6 +1904,13 @@ spawn_note() {
     mkdir -p "$(dirname "$SPAWN_INCIDENT_LOG")" 2>/dev/null || true
     printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$message" \
         >> "$SPAWN_INCIDENT_LOG" 2>/dev/null || true
+}
+
+# One line, for a stop the user has to resolve themselves. The dashboard shows
+# the last such line as the launch error (the cockpit toast), instead of only
+# the launcher's exit status; everything else stays in the log tail.
+spawn_reason() {
+    spawn_note "reason: $1"
 }
 
 # Claude can accept a submit while startup is still settling but leave it as a
@@ -2643,6 +2729,12 @@ claude_watch_initial_task() {
     local child_name="$1" parent_name="$2" token_file="$3" prompt_text="$4"
     # Off only where nothing real is launched (the test suite sets it).
     [[ "${AGENTSTACK_CHILD_START_CHECK:-1}" == 0 ]] && return 0
+    # The watch tells the parent whether the child took up its task. A
+    # standalone child has no parent and is not asked to report, so a first
+    # turn that ends in text is its normal answer, not "declined" (2026-10-04:
+    # "declined; could not tell the parent by Mail: no parent to tell" for a
+    # standalone child that was working as asked).
+    [[ -n "$parent_name" ]] || return 0
     CHILD_START_TOKEN_FILE="$token_file" \
     CHILD_START_MCP_URL="$MCP_URL" \
     CHILD_START_PROJECT_KEY="$PROJECT_KEY" \

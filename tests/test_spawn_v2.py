@@ -815,6 +815,40 @@ def test_process_group_launcher_cleanup_outlives_the_canonical_5s_grace(monkeypa
     assert _group_gone(int((tmp_path / "mark.pid").read_text()))
 
 
+_REASON_LAUNCHER = """#!/bin/bash
+echo $$ > "$TEST_MARK.pid"
+echo "[spawn_child] Claude Code's first-run setup is not finished; not answered by the launcher (QuietCurie). Last screen:" >&2
+echo "[spawn_child] reason: Run 'claude' once in a terminal and finish its setup." >&2
+echo "[spawn_child] WARNING: session QuietCurie ended before prompt injection was verified" >&2
+exit 1
+"""
+
+
+def test_a_launcher_reason_line_becomes_the_error_the_cockpit_shows(monkeypatch, tmp_path):
+    launcher, runtime = _prepare_real_spawn(monkeypatch, tmp_path, script=_REASON_LAUNCHER)
+    monkeypatch.setattr(server, "_SPAWN_READINESS_TIMEOUT_SECONDS", 20)
+    spec = _cleanup_spec(launcher, tmp_path, cleanup_seconds=0)
+    result = server.spawn_with_launch_spec(
+        {"standalone": True, "name": "QuietCurie", "task": "work", "dir": str(tmp_path)}, spec)
+    assert result["ok"] is False
+    assert result["error"].startswith(
+        "Run 'claude' once in a terminal and finish its setup. "
+        "(spawn launcher exited with status 1); child registration 'QuietCurie'")
+    assert "ended before prompt injection was verified" in result["detail"]
+
+
+def test_without_a_reason_line_the_error_is_the_exit_status_as_before(monkeypatch, tmp_path):
+    script = _REASON_LAUNCHER.replace(
+        'echo "[spawn_child] reason: Run \'claude\' once in a terminal and finish its setup." >&2\n', "")
+    assert "reason:" not in script
+    launcher, runtime = _prepare_real_spawn(monkeypatch, tmp_path, script=script)
+    monkeypatch.setattr(server, "_SPAWN_READINESS_TIMEOUT_SECONDS", 20)
+    spec = _cleanup_spec(launcher, tmp_path, cleanup_seconds=0)
+    result = server.spawn_with_launch_spec(
+        {"standalone": True, "name": "QuietCurie", "task": "work", "dir": str(tmp_path)}, spec)
+    assert result["error"].startswith("spawn launcher exited with status 1; child registration")
+
+
 def test_cleanup_killed_past_its_grace_is_reported_and_keeps_owner_credential(monkeypatch, tmp_path):
     import time as _time
     launcher, runtime = _prepare_real_spawn(monkeypatch, tmp_path)

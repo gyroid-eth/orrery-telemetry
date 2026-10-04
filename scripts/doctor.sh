@@ -294,6 +294,39 @@ else
     "$INSTALL_DIR/backups" "$INSTALL_DIR/runtime/claude-mcp-merge-result.json" >&2
 fi
 
+# Claude Code shows its first-run setup (text style, login) in every new
+# session until it has been finished once, which ~/.claude.json records as
+# hasCompletedOnboarding. A child launched before that stops on the setup
+# screen, so say so here. Only whether the flag is set is printed; the launcher
+# never answers the setup and nothing here writes it.
+if command -v claude >/dev/null 2>&1; then
+  CLAUDE_ONBOARDING_STATE="$("$PYTHON_BIN" - "$CLAUDE_JSON" <<'PY' 2>/dev/null || true
+import json
+import pathlib
+import sys
+
+try:
+    config = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+except FileNotFoundError:
+    print("not-done")
+except (OSError, ValueError):
+    print("unreadable")
+else:
+    print("done" if isinstance(config, dict) and config.get("hasCompletedOnboarding") is True else "not-done")
+PY
+)"
+  case "$CLAUDE_ONBOARDING_STATE" in
+    done) echo "ok: Claude Code first-run setup finished" ;;
+    not-done)
+      echo "warn: Claude Code's first-run setup is not finished ($CLAUDE_JSON has no hasCompletedOnboarding)" >&2
+      echo "      Children launched now stop on its setup screens. Run 'claude' once in a terminal and go" >&2
+      echo "      through text style, login, Security notes and trusting the folder until the normal" >&2
+      echo "      input prompt appears; answer any other one-time question it asks, then /exit." >&2
+      ;;
+    *) echo "warn: could not read $CLAUDE_JSON to check Claude Code's first-run setup" >&2 ;;
+  esac
+fi
+
 if [[ -f "$INSTALL_DIR/dashboard/server.py" && \
       -f "$INSTALL_DIR/dashboard/service_runner.py" ]]; then
   echo "ok: dashboard installed"

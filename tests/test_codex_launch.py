@@ -1494,3 +1494,27 @@ def test_the_dashboard_never_kills_a_codex_updating_itself(monkeypatch):
     body = source[source.index("    def kill_spawn_session() -> None:"):]
     body = body[:body.index("\n\n")]
     assert body.index("_codex_self_update_on_screen") < body.index('"kill-session"')
+
+
+@pytest.mark.parametrize("parent, started", [("", False), ("ParentAgent", True)])
+def test_the_first_turn_watch_runs_only_when_there_is_a_parent_to_tell(tmp_path, parent, started):
+    """A standalone child is not asked to report; watching its first turn only
+    produced "declined; could not tell the parent by Mail: no parent to tell"
+    for a child that was working as asked (2026-10-04)."""
+    mark = tmp_path / "watch-started"
+    fake_python = tmp_path / "python"
+    fake_python.write_text(f"#!/bin/sh\ntouch '{mark}'\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    script = _extract("claude_watch_initial_task") + "\n" + (
+        'claude_prompt_head() { printf "%s" "$1"; }\n'
+        f'claude_watch_initial_task Probe-Curie "{parent}" /nonexistent "task text"\n'
+        "wait\n"
+    )
+    result = _run_bash(script, {"AGENTSTACK_CHILD_START_CHECK": "1",
+                                "AGENTSTACK_PYTHON": str(fake_python), "HOOKS_DIR": str(tmp_path)})
+    assert result.returncode == 0, result.stderr
+    import time
+    deadline = time.monotonic() + 5
+    while started and not mark.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert mark.exists() is started
