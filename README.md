@@ -4,7 +4,7 @@
 
 複数の Claude Code / Codex が直接話し、仕事を分担し、結果を確かめ合う。その働きと Mail の往復を一枚の画面で見渡せるのが ORRERY Telemetry です。端末も同じ画面で使う [ORRERY cockpit](https://github.com/gyroid-eth/orrery) と一緒に始められます。
 
-![ORRERY Telemetry のデモ](assets/demo.gif)
+![NETWORK を開いたまま子が加わり、ready の後にしりとりの Mail が3往復する](docs/img/network-mail.gif)
 
 ## 1行で入れる
 
@@ -26,9 +26,11 @@ Full tour は `/delegate` で子を1体作り、ORRERY Mail でしりとりを3�
 
 端末で仕事をするのは cockpit、チームの状態や履歴を見るのが Telemetry です。画面内のガイドを入口にし、詳しい参照は[目的別索引](docs/README.md)から開けます。
 
-## 終わった仕事に戻る
+## 退出した agent を再開する
 
 Telemetry の DECK の history を `30d` / `all`、または NETWORK の範囲を `ALL` にすると、退出した agent の履歴も探せます。再開できる agent の **RESUME** から、同じ仕事に戻ります。履歴・認証・元の作業フォルダなどを検証できない場合は、理由を表示して再開を止めます。
+
+![RETIRED の agent で RESUME IN COCKPIT を選び、復帰した端末で最後の単語を確認する](docs/img/resume-retired-agent.gif)
 
 [Dashboard の再開手順](docs/dashboard.md#検索)と[Launcher の Claude resume](docs/launchers.md#dashboard-からの-claude-resume)に、検証が必要な場合と復帰できない場合の扱いがあります。
 
