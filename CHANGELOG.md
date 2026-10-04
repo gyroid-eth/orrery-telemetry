@@ -51,7 +51,7 @@ managed block が context に無いセッションでは（block は `--project-
 ### Telemetry にも help map を付け、README と docs の索引を画面のガイド中心に作り直しました
 
 - Telemetry の header に「HELP MAP」を置きました。cockpit の help map と同じ見た目（金の角括弧と引き出し線）で、Deck・Network・詳細パネルの主な操作に注記します。置き場所が足りない狭い窓では凡例にします。
-- README（日英）を、何ができるか → 1 行の install → 画面のガイド → 終わった仕事に戻る、の順に作り直しました。冒頭に Mail が流れる NETWORK の GIF、「終わった仕事に戻る」に RESUME の GIF を置きました。
+- README（日英）を、何ができるか → 1 行の install → 画面のガイド → 退出した agent を再開する、の順に作り直しました。冒頭に Mail が流れる NETWORK の GIF、「退出した agent を再開する」に RESUME の GIF を置きました。
 - docs の索引（日英）を目的別に作り、全文書を載せました。索引の漏れと存在しないリンクは検査で止まります。
 - 詳細パネルの「HELP MAP」の案内を README と索引に足しました。
 
