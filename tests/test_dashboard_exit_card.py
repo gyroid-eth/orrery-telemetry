@@ -156,24 +156,42 @@ def test_the_card_rendering_used_above_shows_exit_for_a_running_agent():
     assert _card_buttons({**RUNNING, 'attached': False, 'task': '', 'live': ''}) == {'kill': False, 'exit': True}
 
 
-def _guard(js, response):
-    """Confirm Pilot's EXIT, then run js; report whether Other could be armed."""
-    return run("""(async()=>{await press();const sent=press();
+def _guard(js, response, hold=False):
+    """Confirm Pilot's EXIT, then run js; report whether Other could be armed.
+    With hold, /api/exit does not answer until after js and the checks."""
+    if not shutil.which('node'):
+        pytest.skip('node unavailable')
+    status, payload = response
+    script = PRELUDE + (
+        "let answer;const replied=new Promise(r=>{answer=r;});"
+        "async function fetch(url,init){requests.push(JSON.parse(init.body));"
+        + ("await replied;" if hold else "") +
+        f"return {{ok:{str(status == 200).lower()},status:{status},json:async()=>({json.dumps(payload)})}};}}"
+    )
+    script += "".join(function(name) for name in
+                      ('notifyExitSent', 'exitFailureText', 'canKill', 'showExitSent', 'holdExitButtons', 'exitCardSpot',
+                       'exitCardMoved', 'watchExitCards', 'settleExitSent', 'exitAgent'))
+    script += """(async()=>{await press();const sent=press();
       await new Promise(r=>setImmediate(r));
+      const pendingDuring=requests.length===1&&exitSentAt.size===0;
       """ + js + """
       exitingSet.clear();exitAgent({stopPropagation(){}},'Other');
       const otherArmed=exitingSet.has('Other');
       exitShiftUntil=0;exitingSet.clear();exitAgent({stopPropagation(){}},'Other');
-      console.log(JSON.stringify({otherArmed,armedAfter:exitingSet.has('Other'),requests:requests.length,
-        watching:[...exitWatch.keys()]}));
-    })();""", response)
+      const armedAfter=exitingSet.has('Other');
+      answer();await sent;
+      console.log(JSON.stringify({pendingDuring,otherArmed,armedAfter,requests:requests.length}));
+    })();"""
+    result = subprocess.run(['node', '-e', script], text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
 
 
 def test_the_pause_starts_with_the_confirming_press_whatever_the_reply():
     """Full tour recording: right after the child's EXIT was confirmed, the
     parent's EXIT slid under the pointer and one more click armed it."""
     for response in [(200, {'ok': True, 'actions': ['exit-sent']}), (400, {'ok': False, 'error': 'boom'})]:
-        result = _guard("await sent;", response)
+        result = _guard("", response)
         assert result['otherArmed'] is False and result['armedAfter'] is True, (response, result)
         assert result['requests'] == 1
 
@@ -186,6 +204,7 @@ def test_the_pause_starts_again_when_the_card_moves_even_before_the_reply(move, 
     /api/exit answers, or long after; each is when another card takes its
     place. Here the pause from the press has run out, the reply is still
     pending, and the card moves."""
-    result = _guard("exitShiftUntil=0;" + move + "watchExitCards();", (200, {'ok': True, 'actions': ['exit-sent']}))
+    result = _guard("exitShiftUntil=0;" + move + "watchExitCards();", (200, {'ok': True, 'actions': ['exit-sent']}), hold=True)
+    assert result['pendingDuring'] is True, result
     # A nudge of a pixel or two from the card's own state is not a move.
     assert result['otherArmed'] is (not paused) and result['armedAfter'] is True, result
