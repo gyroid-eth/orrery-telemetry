@@ -4,6 +4,8 @@
 
 操作の入口は画面内の **Your first flight → help map → Full tour**。cockpit の `Settings → Getting started` から開けます。ここは install・update・困ったときと、必要に応じて読む詳しい参照の目次です。
 
+Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS` の隣）から見回せます。単独の画面でも cockpit 内の埋め込みでも、いま見ている画面に注記します。
+
 ## はじめる
 
 - [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート) — 1行で両方を入れ、画面の初回ガイドから始める。

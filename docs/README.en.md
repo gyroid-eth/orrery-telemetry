@@ -4,6 +4,8 @@
 
 Start with **Your first flight → help map → Full tour** on screen, from cockpit’s `Settings → Getting started`. This index is for install/update, troubleshooting, and detailed references when you need them.
 
+Explore Telemetry’s own controls with `HELP MAP` in its header (beside `SETTINGS` in NETWORK). It annotates the current view, whether Telemetry is standalone or embedded in cockpit.
+
 ## Start here
 
 - [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) — Install both with one line and start with the on-screen first-flight guide.
