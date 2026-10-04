@@ -18,19 +18,19 @@ const NOTES=Object.freeze([
   // Same words as the cockpit's help map, which annotates the same LEFT.
   {id:'usage',label:'Usage left',target:['#usage-pill'],copy:'LEFT shows how much account allowance remains for Claude and Codex. Open it to see each window and when it resets.'},
   {id:'filter',label:'Filter',target:['#q'],copy:'Find agents by name or task.'},
-  {id:'history',label:'Live, 7D, 30D, All',target:['#history'],copy:'Running agents only, or also the agents that ended in the last week, month, or ever.'},
+  {id:'history',label:'Live, 7D, 30D, All',target:['#history'],copy:'Live shows running and finished sessions; 7D, 30D and All add agents that are gone or retired, from the last week, month, or ever.'},
   {id:'new',label:'New agent',target:['#newbtn'],copy:'Start an agent with a task and a model.'},
   {id:'card',label:'Agent card',target:['.bay .top'],copy:'One agent: its model, context left, task and state. Click the card for the details.'},
-  {id:'exit',label:'Exit',target:['.bay .exitbtn'],copy:'End the agent gracefully. It can be resumed later.'},
+  {id:'exit',label:'Exit',target:['.bay .exitbtn'],copy:'End the agent gracefully. An agent whose session can be resumed comes back later with Resume.'},
   {id:'window',label:'Time window',target:['#winsel'],copy:'How far back the network reaches. ALL shows everything.'},
   {id:'select',label:'Select',target:['#selToggle'],copy:'Pick several agents, then exit, resume or replay them from the bar below.'},
   {id:'settings',label:'Settings',target:['#settings-btn'],copy:'The theme, and how the network is drawn.'},
   {id:'agent',label:'Agent',target:['#net g.node .node-halo'],copy:'An agent, with its role. Click it for the details.'},
   {id:'link',label:'Link',target:['#net .edge-count'],copy:'Mail between two agents, and how many. Click the line to read them.'},
   {id:'replay',label:'Replay',target:['#selbarReplay'],copy:'Watch the selected agents work together again.'},
-  {id:'resume',label:'Resume',target:['#selbarResume'],copy:'Bring the selected agents back if they have ended.'},
+  {id:'resume',label:'Resume',target:['#selbarResume'],copy:'Bring back the selected agents that have ended, where their session can be resumed.'},
   {id:'tabs',panel:true,label:'History and Output',target:['#tm-tabs'],copy:'What the agent did, step by step, and the files it produced.'},
-  {id:'actions',panel:true,label:'Exit, Open, Close',target:['#tm-exit-btn','#tm-open','#tm-x'],copy:'End the agent, open its terminal (or resume it if it has ended), or close this panel.'},
+  {id:'actions',panel:true,label:'Exit, Open, Close',target:['#tm-exit-btn','#tm-open','#tm-x'],copy:'End the agent, open its terminal (or resume it, when an ended session can be resumed), or close this panel.'},
   {id:'role',panel:true,label:'Role',target:['#tm-annot'],copy:'Give the agent a role label, shown with it in the network.'},
 ]);
 const API={NOTES};
