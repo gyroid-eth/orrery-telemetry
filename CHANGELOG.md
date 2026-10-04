@@ -8,13 +8,14 @@
 
 ---
 
-## Unreleased
+## 2026.10.04
 
 ### agent の詳細パネルを開いている間、Help map を押せませんでした
 
 詳細パネルの背景は header より上に重なるため、header の「Help map」は見えていても押せませんでした。help map には、パネルを開いているときにパネルの 3 か所（History と Output、Exit・Open・Close、Role）を注記する機能がありますが、その入口が塞がれていました。
 
 パネルの操作の列に「HELP MAP」を置きました。header の Help map と同じ map を開き、パネルの注記が出ます。閉じると、開いたボタンに focus が戻ります。
+
 ### Deck で EXIT した後も、カードが LIVE に数秒残り、もう一度押すと 400 になっていました
 
 EXIT が届いた後も、tmux の session が終わるまでの数秒間、カードは「↩ EXIT」に戻ったまま LIVE に残っていました。もう一度押すと `/api/exit` に再び届き、すでに終わりかけの agent に対して 400 が返っていました。
@@ -29,6 +30,7 @@ EXIT が届いた時の知らせを 1 つの関数にまとめ、3 つの経路�
 
 - 応答が成功している（`ok`）
 - 実際に送られた（`exit-sent`）か、終わった agent が shell に残っていて `exit` を打ち込んだ（`shell-exit-sent`）
+
 ### Claude Code の初回設定が終わっていないと、子が理由を告げずに消えていました
 
 初回設定（text style・ログイン・Security notes・フォルダの信頼）を途中で閉じると、`~/.claude.json` に `hasCompletedOnboarding` が付きません。そのまま NEW AGENT で子を起動すると、子は最初の text style の画面で止まっていました。launcher はこの画面を選択画面と見分けられず 60 秒待ってから子を片付け、cockpit には「closed」としか出ませんでした。
@@ -45,6 +47,13 @@ EXIT が届いた時の知らせを 1 つの関数にまとめ、3 つの経路�
 ### 「子を作って話して」と頼むと、Claude Code の組み込み Agent と SendMessage で済ませていました
 
 managed block が context に無いセッションでは（block は `--project-key` の dir の CLAUDE.md に入るため、それ以外の dir で起動した場合）、「Start one child agent and play shiritori with it over 3 turns」に対して 3 回とも組み込みの Agent が子を作り、SendMessage でしりとりを最後まで進めていました。ORRERY Mail には何も残らず、dashboard にも出ません。Claude Code 2.1.224 以降の組み込み `SendMessage` / `ListAgents` は、tmux の ORRERY child にも直接届きます。そのため、`/delegate` で作った子と話すときにも、同じ回避の経路がありました。`/delegate` skill の description の先頭に、子を作るのも子と話すのも組み込みの道具ではなく `/delegate` と `send_message` で、と書きました。block の禁止文にも `SendMessage`・`ListAgents`・agent teams を足しました。skill の description は block の外でも context に入ることが多く、その場合は道具を選ぶ手掛かりになります。ただし skill の一覧が予算を超えると description は削られるので、どのセッションでも入るとは限りません。入っているかは `/context` や `/doctor` で確かめられます。確実に通すには、明示の `/delegate` を使います。修正後は同じ条件で、3 回とも `/delegate` から始めました（stub の Mail を使った少数回の比較で、全セッションでの保証ではありません）。tmux の子への送信も 3 回とも `send_message` でした。組み込みの経路を設定で断る deny rule は、組み込み subagent への送信も消すので既定では入れず、[docs/launchers.md](docs/launchers.md) に opt-in として書きました。
+
+### Telemetry にも help map を付け、README と docs の索引を画面のガイド中心に作り直しました
+
+- Telemetry の header に「HELP MAP」を置きました。cockpit の help map と同じ見た目（金の角括弧と引き出し線）で、Deck・Network・詳細パネルの主な操作に注記します。置き場所が足りない狭い窓では凡例にします。
+- README（日英）を、何ができるか → 1 行の install → 画面のガイド → 終わった仕事に戻る、の順に作り直しました。冒頭に Mail が流れる NETWORK の GIF、「終わった仕事に戻る」に RESUME の GIF を置きました。
+- docs の索引（日英）を目的別に作り、全文書を載せました。索引の漏れと存在しないリンクは検査で止まります。
+- 詳細パネルの「HELP MAP」の案内を README と索引に足しました。
 
 ## 2026.10.03.1
 
