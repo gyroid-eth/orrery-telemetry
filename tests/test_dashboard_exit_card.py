@@ -25,7 +25,7 @@ PRELUDE = """
   const notifyTourAction=()=>{};
   const SHOW_DEFAULT=new Set(['agent','finished','unnamed']);
   const exitingSet=new Set(),exitTimers=new Map(),exitSentAt=new Map(),ARM_MS=5000,EXIT_SETTLE_MS=30000;
-  const EXIT_SHIFT_GUARD_MS=2000;let exitShiftUntil=0;
+  const EXIT_SHIFT_GUARD_MS=2000;let exitShiftUntil=0,exitShiftTimer=0;
   const classes=new Set(),button={textContent:'↩ EXIT'};
   const card={classList:{add:c=>classes.add(c),remove:c=>classes.delete(c),contains:c=>classes.has(c)},
               querySelector:()=>button};
@@ -44,7 +44,7 @@ def run(js, response):
         f"return {{ok:{str(status == 200).lower()},status:{status},json:async()=>({json.dumps(payload)})}};}}"
     )
     script += "".join(function(name) for name in
-                      ('notifyExitSent', 'exitFailureText', 'canKill', 'showExitSent', 'settleExitSent', 'exitAgent'))
+                      ('notifyExitSent', 'exitFailureText', 'canKill', 'showExitSent', 'holdExitButtons', 'settleExitSent', 'exitAgent'))
     script += js
     result = subprocess.run(['node', '-e', script], text=True, capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr
