@@ -68,7 +68,9 @@ def test_template_ships_a_permissions_block():
         assert f"mcp__orrery-mail__{tool}" in permissions["allow"], tool
     # Only irreversible tools without a recovery path are denied outright.
     denied = {
-        rule.removeprefix("mcp__orrery-mail__") for rule in permissions["deny"]
+        rule.removeprefix("mcp__orrery-mail__")
+        for rule in permissions["deny"]
+        if rule.startswith("mcp__")
     }
     assert denied == {
         "hard_delete_agent",
@@ -108,6 +110,7 @@ def test_merge_installs_permissions_into_fresh_settings():
             "mcp__orrery-mail__hard_delete_agent",
             "mcp__orrery-mail__hard_delete_project",
             "mcp__orrery-mail__purge_old_messages",
+            f"Edit(/{tmpdir / 'skills'}/**)",
         ]
         # The Bash rule is rendered with the real bin directory, not the token.
         assert any(str(tmpdir / "bin") in rule for rule in allow), allow
@@ -117,6 +120,68 @@ def test_merge_installs_permissions_into_fresh_settings():
         assert detail["skills_dirs"] == {
             "added": [], "skipped_existing": [], "removed_legacy": []
         }
+
+
+def test_installed_skills_are_readable_but_not_editable():
+    # A fresh workshop parent was stopped by Claude Code's question about
+    # reading outside the working directory the first time it read the
+    # delegate skill.  Only the installed skills are opened up, and only for
+    # reading: edits there stay denied.
+    template = json.loads(_TEMPLATE.read_text(encoding="utf-8"))
+    assert template["permissions"]["additionalDirectories"] == [
+        "__AGENTSTACK_SKILLS_DIR__"
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        written, detail, rc = _merge(tmpdir, {})
+        assert rc == 0, detail
+        skills = str(tmpdir / "skills")
+        assert written["permissions"]["additionalDirectories"] == [skills]
+        assert f"Edit(/{skills}/**)" in written["permissions"]["deny"]
+        assert detail["permissions"]["added"]["additionalDirectories"] == [skills]
+        assert "__AGENTSTACK_SKILLS_DIR__" not in json.dumps(written)
+
+
+def test_only_links_into_the_install_are_made_readable():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        for name in ("delegate", "log", "mine"):
+            (tmpdir / "skills" / name).mkdir(parents=True)
+            (tmpdir / "skills" / name / "SKILL.md").write_text("x", encoding="utf-8")
+        claude_skills = tmpdir / "claude-skills"
+        claude_skills.mkdir()
+        (claude_skills / "delegate").symlink_to(tmpdir / "skills" / "delegate")
+        (claude_skills / "log").symlink_to(tmpdir / "skills" / "log")
+        # The user's own skill of the same name is left out.
+        (claude_skills / "mine").mkdir()
+        written, detail, rc = _merge(
+            tmpdir, {}, "--claude-skills-dir", str(claude_skills)
+        )
+        assert rc == 0, detail
+        assert written["permissions"]["additionalDirectories"] == [
+            str(tmpdir / "skills"),
+            str(claude_skills / "delegate"),
+            str(claude_skills / "log"),
+        ]
+
+
+def test_skills_token_without_skills_dir_is_an_error_not_a_literal():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        settings_path = tmpdir / "settings.json"
+        settings_path.write_text("{}", encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(_MERGE),
+             "--settings", str(settings_path),
+             "--template", str(_TEMPLATE),
+             "--hooks-dir", str(tmpdir / "hooks"),
+             "--bin-dir", str(tmpdir / "bin"),
+             "--backup-dir", str(tmpdir / "backups")],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        assert proc.returncode != 0
+        assert "--skills-dir" in proc.stderr
+        assert settings_path.read_text(encoding="utf-8") == "{}", "settings rewritten on error"
 
 
 def test_merge_removes_only_legacy_agentstack_skills_directory():
@@ -234,6 +299,7 @@ def test_remove_takes_back_only_what_the_installer_added():
         permissions = written_after.get("permissions", {})
         assert permissions.get("allow") == ["Bash(git status:*)"], permissions
         assert permissions.get("deny") == ["Bash(rm:*)"], permissions
+        assert "additionalDirectories" not in permissions, permissions
 
 
 def test_remove_keeps_backward_compatibility_with_old_skills_manifest():
@@ -280,6 +346,7 @@ def test_bin_token_without_bin_dir_is_an_error_not_a_literal():
 def test_installer_passes_the_bin_dir():
     install = (_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
     assert "--bin-dir \"$BIN_DIR\"" in install
+    assert "--claude-skills-dir \"$CLAUDE_SKILLS_DIR\"" in install
 
 
 def _main() -> int:

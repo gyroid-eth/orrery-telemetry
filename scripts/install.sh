@@ -2545,6 +2545,7 @@ safe_merge_settings() {
     --hooks-dir "$HOOKS_DIR"
     --bin-dir "$BIN_DIR"
     --skills-dir "$SKILLS_DIR"
+    --claude-skills-dir "$CLAUDE_SKILLS_DIR"
     --backup-dir "$BACKUPS_DIR"
     --installed-entries "$RUNTIME_DIR/settings-installed-entries.json"
   )

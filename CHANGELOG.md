@@ -26,6 +26,13 @@ Telemetry は、cockpit から段の名前（`orrery-tour-cue`）を受け取り
 
 cockpit 側から段の名前を送る変更は、gyroid-eth/orrery で別に入れます。
 
+### Full tour の録画で見つかった、Telemetry の中の輪と札の置き場所を直しました
+
+- **Network の edge の段**は、cockpit がしりとりの親と子の名前（`pair`）を送ったときだけ、その 2 人の edge を指します。名前が来ない、またはその edge が画面にないときは、edge は指さずに Deck／Network の切り替えを指します。これまでは画面で最初に見つかった edge を指したので、関係ない 2 人の edge に輪が付くことがありました。
+- **HERE の札**は、ほかのボタンや入力欄に重なる側を避けます。どの側も空いていなければ、輪だけを出します。
+- **通知（toast）**は、選択の操作バー（selection bar）が出ている間はその上に出ます。Replay の件数の通知が、操作バーの RESUME を隠していました。
+- tour の段が進んでいる間は、右側に開いている edge の drawer・agent の詳細・Settings の範囲を cockpit に知らせます（`orrery-tour-cover`）。cockpit の tour の欄は、それに重なる間は自動で畳まれます（cockpit 側は gyroid-eth/orrery で別に入れます）。
+
 ## 2026.10.04
 
 ### agent の詳細パネルを開いている間、Help map を押せませんでした

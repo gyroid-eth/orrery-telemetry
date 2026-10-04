@@ -30,9 +30,11 @@ Full tour は `/delegate` で子を1体作り、ORRERY Mail でしりとりを3�
 
 ## 退出した agent を再開する
 
-Telemetry の DECK の history を `30d` / `all`、または NETWORK の範囲を `ALL` にすると、退出した agent の履歴も探せます。再開できる agent の **RESUME** から、同じ仕事に戻ります。履歴・認証・元の作業フォルダなどを検証できない場合は、理由を表示して再開を止めます。
+Telemetry の DECK の history を `7D` / `30D` / `ALL`、または NETWORK の範囲を `ALL` にすると、退出した agent の履歴も探せます。再開できる agent の詳細パネルで **RESUME** を押すと、同じ仕事に戻ります。履歴・認証・元の作業フォルダなどを検証できない場合は、理由を表示して再開を止めます。
 
-![RETIRED の agent で RESUME IN COCKPIT を選び、復帰した端末で最後の単語を確認する](docs/img/resume-retired-agent.gif)
+Telemetry 単体での例: 名前で絞り込み、`7D` の `RETIRED` / `RESUME READY` の agent を開いて `RESUME`。会話を tmux で再開したという通知の後、`LIVE` に戻して `ONLINE` を確認します。
+
+![Telemetry 単体で7Dの退出した agent を再開し、LIVEでONLINEへの復帰を確認する](docs/img/resume-retired-agent.gif)
 
 [Dashboard の再開手順](docs/dashboard.md#検索)と[Launcher の Claude resume](docs/launchers.md#dashboard-からの-claude-resume)に、検証が必要な場合と復帰できない場合の扱いがあります。
 

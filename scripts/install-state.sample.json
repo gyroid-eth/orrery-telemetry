@@ -315,16 +315,22 @@
         "deny": [
           "mcp__orrery-mail__hard_delete_agent",
           "mcp__orrery-mail__hard_delete_project",
-          "mcp__orrery-mail__purge_old_messages"
+          "mcp__orrery-mail__purge_old_messages",
+          "Edit(//home/alice/.agentstack/skills/**)"
+        ],
+        "additionalDirectories": [
+          "/home/alice/.agentstack/skills"
         ]
       },
       "migrated_legacy": {
         "allow": [],
-        "deny": []
+        "deny": [],
+        "additionalDirectories": []
       },
       "skipped_existing": {
         "allow": [],
-        "deny": []
+        "deny": [],
+        "additionalDirectories": []
       }
     },
     "respected_removals": [],

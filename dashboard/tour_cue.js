@@ -6,7 +6,9 @@
  * step instead ({type:'orrery-tour-cue', version:1, step, avoid}), and this
  * page draws the same cyan ring and HERE tag on its own control. The step
  * names a kind of control, not an agent: "EXIT" rings the first EXIT on
- * screen, which need not be the one the step's text means.
+ * screen, which need not be the one the step's text means. The one exception
+ * is the Network edge: the cue may carry the game's pair ({pair:[parent,
+ * child]}), and only that pair's edge is ringed; without it no edge is.
  */
 (function(root){
 'use strict';
@@ -17,7 +19,7 @@
 // a live one, and only one of them is the step's action.
 const STEPS=Object.freeze({
   'full-exit':['.bay .exitbtn','.viewtog'],
-  'full-edge':['#net .edge-count','.viewtog'],
+  'full-edge':[['#net .edge-count',null,'pair'],'.viewtog'],
   'full-select':['#selToggle','.viewtog'],
   'full-replay':['#selbarReplay','#selToggle','.viewtog'],
   // An ended agent (finished, gone or retired, as isResumeCategory; a child
@@ -33,7 +35,7 @@ const own=step=>typeof step==='string'&&Object.prototype.hasOwnProperty.call(STE
 // Where the HERE tag sits beside the ring: below, above, right or left, inside
 // the view and clear of what it must not cover; null when no side has room.
 // The same rule as the cockpit's placeHereTag.
-function placeHereTag(r,size,view,avoid=[],gap=8,margin=6){
+function placeHereTag(r,size,view,avoid=[],gap=8,margin=6,blocked=null){
   const cx=(r.l+r.r)/2,cy=(r.t+r.b)/2;
   const sides=[
     ['below',cx-size.w/2,r.b+gap],['above',cx-size.w/2,r.t-gap-size.h],
@@ -44,11 +46,20 @@ function placeHereTag(r,size,view,avoid=[],gap=8,margin=6){
     const box={l:x,t:y,r:x+size.w,b:y+size.h};
     if(box.l<margin||box.t<margin||box.r>view.w-margin||box.b>view.h-margin)continue;
     if(avoid.some(a=>a&&box.l<a.r&&box.r>a.l&&box.t<a.b&&box.b>a.t))continue;
+    if(blocked&&blocked(box))continue;
     return {x,y,side};
   }
   return null;
 }
-const API={STEPS,placeHereTag};
+// What the HERE tag must not cover: the page's other controls.
+const KEEP_CLEAR='button,a[href],input,textarea,select,[role="button"],[contenteditable="true"]';
+// A cue's pair: two different, non-empty agent names, or none.
+function cuePair(raw){
+  if(!Array.isArray(raw)||raw.length!==2)return null;
+  const [a,b]=raw;
+  return typeof a==='string'&&typeof b==='string'&&a&&b&&a!==b?[a,b]:null;
+}
+const API={STEPS,placeHereTag,cuePair};
 if(typeof module!=='undefined'&&module.exports)module.exports=API;
 root.TelemetryTourCue=API;
 const doc=root.document;
@@ -60,12 +71,23 @@ if(!doc)return;
 function ownHitLine(el,top){
   if(!el.classList||!el.classList.contains('edge-count')||!top.classList||!top.classList.contains('edge-hit'))return false;
   // A classic script sees the page's top-level gEls; a page without it has no edges.
-  /* global gEls */
-  const badges=typeof gEls!=='undefined'&&gEls?gEls.badge:null;
-  const badge=Array.isArray(badges)&&badges.find(item=>item.tx===el);
+  const badge=badgeOf(el);
   if(!badge)return false;
   const s=top.dataset.s,t=top.dataset.t;
   return (s===badge.s&&t===badge.t)||(s===badge.t&&t===badge.s);
+}
+// The two ends of an edge count, from the page's badge list.
+/* global gEls */
+function badgeOf(el){
+  const badges=typeof gEls!=='undefined'&&gEls?gEls.badge:null;
+  return Array.isArray(badges)&&badges.find(item=>item.tx===el)||null;
+}
+const endName=end=>end&&typeof end==='object'?end.name??end.id:end;
+function isPairEdge(el,pair){
+  const badge=pair&&badgeOf(el);
+  if(!badge)return false;
+  const s=endName(badge.s),t=endName(badge.t);
+  return (s===pair[0]&&t===pair[1])||(s===pair[1]&&t===pair[0]);
 }
 function showing(el){
   // A control that cannot be pressed now is not the next one to press.
@@ -83,28 +105,53 @@ function showing(el){
   return b;
 }
 // The first control of the step that is on screen and not covered.
-function pick(step){
+function pick(step,pair=null){
   if(!own(step))return null;
   for(const entry of STEPS[step]){
-    const [sel,text]=Array.isArray(entry)?entry:[entry,null];
+    const [sel,text,needs]=Array.isArray(entry)?entry:[entry,null,null];
+    if(needs==='pair'&&!pair)continue;
     for(const el of doc.querySelectorAll(sel)){
       if(text&&!(el.textContent||'').toUpperCase().includes(text))continue;
+      if(needs==='pair'&&!isPairEdge(el,pair))continue;
       const b=showing(el);if(b)return {el,b};
     }
   }
   return null;
 }
-API.pick=step=>{const p=pick(step);return p&&p.el;};
+API.pick=(step,pair)=>{const p=pick(step,cuePair(pair));return p&&p.el;};
 
+// Panels this page opens that the step's reader needs to see; the cockpit's
+// checklist folds out of their way while they are open (orrery-tour-cover).
+const COVER='#edrawer.on,#settings.on,#term.on .tm-box';
+function coverRects(){
+  const W=root.innerWidth,H=root.innerHeight,out=[];
+  for(const el of doc.querySelectorAll(COVER)){
+    const b=el.getBoundingClientRect();
+    if(b.width<2||b.height<2||b.right<=0||b.bottom<=0||b.left>=W||b.top>=H)continue;
+    out.push({l:Math.round(b.left),t:Math.round(b.top),r:Math.round(b.right),b:Math.round(b.bottom)});
+  }
+  return out;
+}
+API.coverRects=coverRects;
 function mount(){
   const ring=doc.createElement('div');ring.className='tour-cue-ring';ring.hidden=true;ring.setAttribute('aria-hidden','true');
   const here=doc.createElement('div');here.className='tour-cue-here';here.hidden=true;here.setAttribute('aria-hidden','true');
   doc.body.append(ring,here);
-  let step=null,avoid=[],timer=0;
+  // null, not '[]': a page loaded again (the cockpit's frame reloads) tells
+  // the cockpit at once, even that nothing is open, so an earlier report from
+  // the page it replaced does not linger.
+  let step=null,avoid=[],pair=null,timer=0,lastCover=null;
+  function reportCover(){
+    const rects=step?coverRects():[],key=JSON.stringify(rects);
+    if(key===lastCover||root.parent===root)return;
+    lastCover=key;
+    try{root.parent.postMessage({type:'orrery-tour-cover',version:1,rects},root.location.origin);}catch(_){}
+  }
   const label=side=>side==='below'?'▲ HERE':side==='above'?'▼ HERE':side==='right'?'◀ HERE':'HERE ▶';
   function place(){
     const hide=()=>{ring.hidden=true;here.hidden=true;delete ring.dataset.target;};
-    const found=step&&pick(step);
+    reportCover();
+    const found=step&&pick(step,pair);
     if(!found)return hide();
     const {el,b}=found,W=root.innerWidth,H=root.innerHeight,pad=4;
     const r={l:Math.max(2,b.left-pad),t:Math.max(2,b.top-pad),r:Math.min(W-2,b.right+pad),b:Math.min(H-2,b.bottom+pad)};
@@ -112,9 +159,17 @@ function mount(){
     ring.hidden=false;ring.dataset.target=el.id||el.getAttribute('class')||el.tagName.toLowerCase();
     // Measure the finished tag; settle when its side gives back its arrow.
     here.hidden=false;here.style.visibility='hidden';here.textContent=here.textContent||label('below');
+    // Nor on another control: a few points across the spot say what is there.
+    const blocked=box=>{
+      const xs=[box.l+2,(box.l+box.r)/2,box.r-2],ys=[box.t+2,(box.t+box.b)/2,box.b-2];
+      return xs.some(x=>ys.some(y=>{
+        const hit=doc.elementFromPoint(x,y);
+        return !!hit&&hit!==el&&!el.contains(hit)&&!!hit.closest(KEEP_CLEAR);
+      }));
+    };
     let spot=null;
     for(let i=0;i<3;i++){
-      spot=placeHereTag(r,{w:here.offsetWidth,h:here.offsetHeight},{w:W,h:H},avoid);
+      spot=placeHereTag(r,{w:here.offsetWidth,h:here.offsetHeight},{w:W,h:H},avoid,8,6,blocked);
       if(!spot||label(spot.side)===here.textContent)break;
       here.textContent=label(spot.side);
     }
@@ -122,8 +177,9 @@ function mount(){
     here.dataset.side=spot.side;
     Object.assign(here.style,{left:spot.x+'px',top:spot.y+'px',visibility:''});
   }
-  function set(next,rects){
+  function set(next,rects,pairs){
     step=own(next)?next:null;
+    pair=cuePair(pairs);
     avoid=Array.isArray(rects)?rects.filter(a=>a&&[a.l,a.t,a.r,a.b].every(Number.isFinite)):[];
     clearInterval(timer);place();
     // Cards stream in and views switch without a tour change: follow them.
@@ -132,7 +188,7 @@ function mount(){
   root.addEventListener('message',event=>{
     const d=event.data;
     if(event.origin!==root.location.origin||event.source!==root.parent||!d||d.type!=='orrery-tour-cue'||d.version!==1)return;
-    set(typeof d.step==='string'?d.step:null,d.avoid);
+    set(typeof d.step==='string'?d.step:null,d.avoid,d.pair);
   });
   root.addEventListener('resize',place);
   root.addEventListener('scroll',place,true);
