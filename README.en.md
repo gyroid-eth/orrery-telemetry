@@ -30,9 +30,11 @@ Cockpit is where you work in terminals; Telemetry is where you view the team's s
 
 ## Resume a retired agent
 
-In Telemetry, choose DECK history `30d` / `all`, or NETWORK's `ALL` range, to find exited agents. Use **RESUME** on an agent that can resume to return to the same work. When history, credentials, or the original working directory cannot be verified, the UI explains why and stops the resume.
+In Telemetry, choose DECK history `7D` / `30D` / `ALL`, or NETWORK's `ALL` range, to find exited agents. Open an agent that can resume and choose **RESUME** in its detail panel to return to the same work. When history, credentials, or the original working directory cannot be verified, the UI explains why and stops the resume.
 
-![Choose RESUME IN COCKPIT for a retired agent, then confirm the last word in its restored terminal](docs/img/resume-retired-agent.gif)
+Standalone Telemetry example: filter by name, find the `RETIRED` / `RESUME READY` agent in `7D`, open it, and choose `RESUME`. After the notification confirms the conversation resumed in tmux, switch to `LIVE` and check that the agent is `ONLINE`.
+
+![Resume a retired agent from 7D in standalone Telemetry and confirm it returns ONLINE in LIVE](docs/img/resume-retired-agent.gif)
 
 [Dashboard search and resume](docs/dashboard.en.md#search) and [Launcher Claude resume](docs/launchers.en.md#dashboard-claude-resume) cover cases that need verification and cases that cannot resume.
 
