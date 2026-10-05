@@ -57,6 +57,7 @@ Usage (the launcher and the dashboard):
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -804,6 +805,70 @@ def prompt_text(spec: dict, provider: str, standalone: bool = False) -> str:
             "technical lock.")
 
 
+def resolve_defaults(selection: str, provider: str, *, cwd: str,
+                     chrome: bool = False, chrome_device: str = "",
+                     claude_json: str = "", codex_config: dict | None = None,
+                     platform: str | None = None) -> dict:
+    """Keep applicable installer defaults, without weakening explicit requests.
+
+    Each candidate is checked together with the previously accepted choices.
+    Only defaults enter this function; resume records keep the resulting spec
+    and are validated normally, without re-reading the installer defaults.
+    """
+    accepted: list[str] = []
+    omitted: list[str] = []
+    spec = normalize()
+    for item in selection.split(",") if selection.strip() else []:
+        item = item.strip()
+        label = "invalid selection"
+        try:
+            normalize(None, parse_cli([item]))
+            label = item  # validated names/device IDs contain no shell delimiters
+            candidate = normalize(None, parse_cli(accepted + [item]))
+            check_provider(candidate, provider)
+            merge_chrome(candidate, chrome, chrome_device)
+            if provider == "codex":
+                codex_apply(copy.deepcopy(codex_config or {}), candidate)
+            else:
+                claude_plan(candidate, cwd=cwd, chrome=chrome,
+                            claude_json=claude_json, platform=platform)
+        except (ToolsError, OSError):
+            # Do not echo settings contents or exception text (config may hold
+            # credentials). The selected tool and omission are sufficient.
+            omitted.append(f"Default tool {label} is unavailable on this machine and was omitted.")
+            continue
+        accepted.append(item)
+        spec = candidate
+    merged_chrome, device = merge_chrome(spec, chrome, chrome_device)
+    return {"spec": spec, "chrome": merged_chrome, "device": device,
+            "omitted": omitted}
+
+
+def _defaults_codex_config(path: str, overlay: str) -> dict:
+    """Read transport definitions with the same overlay merge as build-home.
+
+    This reads no auth.json or credential file, and never prints config values.
+    An unreadable base leaves no applicable MCP defaults; an invalid overlay is
+    ignored, matching the build-home overlay contract.
+    """
+    import child_resume
+    from pathlib import Path
+    try:
+        config_path = Path(path)
+        config = child_resume._toml().loads(config_path.read_text(encoding="utf-8")) \
+            if config_path.exists() else {}
+    except (OSError, ValueError):
+        return {}
+    if overlay.strip():
+        try:
+            extra = child_resume._toml().loads(Path(overlay).read_text(encoding="utf-8"))
+            child_resume._drop_protected_overlay_tables(extra)
+            child_resume._deep_merge(config, extra)
+        except (OSError, ValueError):
+            pass
+    return config
+
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -826,6 +891,15 @@ def main(argv: list[str]) -> int:
     p.add_argument("--tools", action="append", default=[])
     p.add_argument("--chrome", default="0")
     p.add_argument("--chrome-device", default="")
+    defaults = sub.add_parser("defaults")
+    defaults.add_argument("--selection", required=True)
+    defaults.add_argument("--provider", required=True, choices=("claude", "codex"))
+    defaults.add_argument("--cwd", required=True)
+    defaults.add_argument("--chrome", default="0")
+    defaults.add_argument("--chrome-device", default="")
+    defaults.add_argument("--claude-json", default=os.path.expanduser("~/.claude.json"))
+    defaults.add_argument("--codex-config", default="")
+    defaults.add_argument("--overlay", default="")
     plan = sub.add_parser("claude-plan")
     plan.add_argument("--spec", required=True)
     plan.add_argument("--cwd", required=True)
@@ -852,6 +926,18 @@ def main(argv: list[str]) -> int:
     ws.add_argument("--spec", required=True)
     args = parser.parse_args(argv[1:])
     try:
+        if args.command == "defaults":
+            config = _defaults_codex_config(args.codex_config, args.overlay) \
+                if args.provider == "codex" else None
+            result = resolve_defaults(args.selection, args.provider, cwd=args.cwd,
+                                      chrome=args.chrome == "1", chrome_device=args.chrome_device,
+                                      claude_json=args.claude_json, codex_config=config)
+            spec = result["spec"]
+            sys.stdout.write("|".join((
+                json.dumps(spec, sort_keys=True, separators=(",", ":")),
+                "1" if result["chrome"] else "0", result["device"],
+                "true" if restrictive(spec) else "false", " ".join(result["omitted"]))) + "\n")
+            return 0
         if args.command == "parse":
             tools = parse_cli(args.tools)
             spec = normalize(args.base or None, tools)

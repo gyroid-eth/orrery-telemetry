@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":7}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":8}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -541,8 +541,10 @@ Request:
 | `worktree_base` | no | Base revision; default `HEAD` |
 | `claude_chrome` | Claude only | Boolean. `true` adds `--chrome` to the child. Omitted or `false` means inherit (the user's Claude settings decide). The launcher's env defaults are not used. See [Claude in Chrome](delegation.en.md#claude-children-and-browser-control-claude-in-chrome) |
 | `claude_chrome_device` | Claude only | deviceId of the browser to use (`[A-Za-z0-9._:-]{1,128}`). Implies `claude_chrome: true`; combining it with `claude_chrome: false` is rejected |
-| `base` | Claude / Codex | `"default"` (same as omitted: the launch as before) or `"mail-only"` (ORRERY Mail and only what `tools` selects). Since api 7 |
-| `tools` | Claude / Codex | Object: `browser` (`true` or `{"device": "<deviceId>"}`, Claude only), `screen` (`"read"` / `"operate"` or `{"access": ..., "server": "<name>"}`; without a server it is the macOS computer use, Claude only), `mcp` (array of server names; no tool is approved), `approve_all` (servers in `mcp` whose every tool is approved; rejected for a version not in the table). Rejected when its deviceId differs from `claude_chrome_device`. Since api 7. See [Choosing the tools a child gets](delegation.en.md#choosing-the-tools-a-child-gets---base----tools) |
+| `base` | Claude / Codex | `"default"` (explicitly suppresses installer tool defaults) or `"mail-only"` (ORRERY Mail and only what `tools` selects). Since api 7 |
+| `tools` | Claude / Codex | Object: `browser` (`true` for Claude/Codex, `{"device": "<deviceId>"}` with a Claude-only deviceId), `screen` (`"read"` / `"operate"` or `{"access": ..., "server": "<name>"}`; without a server it is the macOS computer use, Claude only), `mcp` (array of server names; no tool is approved), `approve_all` (servers in `mcp` whose every tool is approved; rejected for a version not in the table). Rejected when its deviceId differs from `claude_chrome_device`. Since api 7. See [Choosing the tools a child gets](delegation.en.md#choosing-the-tools-a-child-gets---base----tools) |
+
+In API 8, explicit `tools: {}` or `base: "default"` passes `--base default`. Dashboard/API launches honor the form selection and remove installer `AGENTSTACK_CHILD_DEFAULT_TOOLS` from the launcher environment, so removed choices are not appended again. Unavailable explicit tools stop the launch. Only CLI launches omitting base/tools/MCP profile use the path that omits unavailable defaults with a notice.
 
 A child with a `base` or `tools` selection is not started when the selection cannot be applied (no Mail proxy, a server that cannot be copied, `mail-only` in a project where the computer use is enabled, ...). Malformed selections return 400 here; errors that depend on the child's directory are returned as a launcher failure. Other providers such as Gemini reject `mail-only` and `tools`.
 

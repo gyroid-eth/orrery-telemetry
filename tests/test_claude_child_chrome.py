@@ -794,6 +794,7 @@ def test_new_agent_rejects_invalid_requests(monkeypatch, payload, message):
 def test_new_agent_strips_the_cli_env_defaults_from_the_launcher(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENTSTACK_CLAUDE_CHILD_CHROME", "1")
     monkeypatch.setenv("AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE", "from-env")
+    monkeypatch.setenv("AGENTSTACK_CHILD_DEFAULT_TOOLS", "browser,screen:operate")
     launcher = tmp_path / "launcher.sh"
     launcher.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
     launcher.chmod(0o755)
@@ -827,6 +828,7 @@ def test_new_agent_strips_the_cli_env_defaults_from_the_launcher(monkeypatch, tm
     assert "--claude-chrome" not in args and "--claude-chrome-device" not in args
     assert "AGENTSTACK_CLAUDE_CHILD_CHROME" not in env
     assert "AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE" not in env
+    assert "AGENTSTACK_CHILD_DEFAULT_TOOLS" not in env
 
 
 def test_new_agent_form_offers_chrome_only_for_claude():

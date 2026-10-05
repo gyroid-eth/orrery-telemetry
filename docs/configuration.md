@@ -188,6 +188,7 @@ install 時の project ではなく `/path/to/other` に登録し、protected ro
 | `AGENTSTACK_CODEX_CHILD_APPROVAL` | `never` | Codex child の `--ask-for-approval`。installer の `--codex-approval` で永続化 |
 | `AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY` | 未設定 | macOS/Linux の全 Codex child の `config.toml` に重ねる TOML fragment の絶対 path。installer の `--codex-child-overlay <path>` で永続化 |
 | `AGENTSTACK_CODEX_NETWORK` | `on` | Codex child の sandbox network（`-c sandbox_workspace_write.network_access=true`）。`--codex-network off` で切る |
+| `AGENTSTACK_CHILD_DEFAULT_TOOLS` | 空 | installer で選ぶ子の道具。`--tools` と同じ文法。明示の base/tools/MCP profile が優先し、不適用の既定項目は通知して外す |
 | `AGENTSTACK_CODEX_ADD_DIRS` | 未設定 | Codex child に追加で書込を許す root（`:` 区切り）。`--codex-add-dirs` で永続化 |
 | `AGENTSTACK_WORKTREE_ROOT` | `$AGENTSTACK_HOME/worktrees` | 新規 isolated worktree の永続 root。installer 実行時の環境変数で上書き・永続化 |
 | `AGENTSTACK_CLAUDE_CHILD_CHROME` | 未設定 | `1` で `spawn_child.sh` が起動する Claude child に `--chrome` を付ける（Claude in Chrome）。未設定・`0` は inherit（起動コマンドを変えない）。CLI の `--claude-chrome` が優先。Codex child では無視。[詳細](delegation.md#claude-child-とブラウザ操作claude-in-chrome) |

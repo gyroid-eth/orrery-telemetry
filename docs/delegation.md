@@ -199,6 +199,12 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 
 - Mac の組み込み computer use と、Mac の Codex の画面・ブラウザ（`node_repl` という任意の JS を実行する tool を通る）は、読むと操作を tool で分けられないので「読むだけ」を選べません
 
+### installer の既定の道具
+
+`--child-default-tools 'browser,screen:operate'` は `AGENTSTACK_CHILD_DEFAULT_TOOLS` を env.sh・service 定義・install-state に保存します。既定は空です。launcher が適用するのは `--base`・`--tools`・`--codex-mcp` を明示していないときだけで、`--base default` を明示するとその起動には既定を追加しません。
+
+provider と最終の作業フォルダで、既定の項目を1つずつ確認します。使えない項目だけを外して使える項目は保ち、外したことを spawn の出力と子の最初の指示に残します。明示した base/tools/MCP profile は既定より優先し、既定を適用しなかった理由も出力と最初の指示に残します。明示指定は従来どおり、適用できなければ起動を止めます。道具以外の Mail proxy・認証・起動の失敗は、この項目別の省略では回避しません。選んだ結果は既存の Claude launch record／Codex tools record に保存し、resume は installer の現在の既定を足さず同じ道具を再構築します。Mac の Codex は server 名なしの `screen:operate` を外し、node_repl を自動承認しません。
+
 ### 承認
 
 承認は child の起動の中だけで、表で分かる tool ごとに渡します。利用者の `settings.json`・`~/.codex/config.toml` と全体の承認方針（Codex の `never`）は変えず、server 全体（Claude の `mcp__<server>`、Codex の `default_tools_approval_mode`）を承認することはありません。

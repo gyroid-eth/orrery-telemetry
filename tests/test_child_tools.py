@@ -591,6 +591,103 @@ def test_launcher_default_is_the_command_used_before(tmp_path):
     assert _records(env, "PlainChild") == []
 
 
+def test_defaults_keep_available_browser_and_omit_only_unavailable_tools(tmp_path):
+    result = child_tools.resolve_defaults("browser,screen:operate,mcp:missing", "codex",
+        cwd=str(tmp_path), codex_config={"mcp_servers": {"cdp": dict(CHROME_DEVTOOLS)}})
+    assert result["spec"] == _spec(None, {"browser": True})
+    assert len(result["omitted"]) == 2
+    assert "screen:operate" in result["omitted"][0]
+    assert "mcp:missing" in result["omitted"][1]
+
+
+def test_defaults_check_computer_use_in_final_worktree_directory(tmp_path):
+    original = str(tmp_path / "source")
+    worktree = str(tmp_path / "worktree")
+    cj = _claude_json(tmp_path / "c.json",
+        projects={original: {"enabledMcpServers": ["computer-use"]}})
+    ready = child_tools.resolve_defaults("browser,screen:operate", "claude",
+        cwd=original, claude_json=cj, platform="darwin")
+    moved = child_tools.resolve_defaults("browser,screen:operate", "claude",
+        cwd=worktree, claude_json=cj, platform="darwin")
+    assert set(ready["spec"]["tools"]) == {"browser", "screen"}
+    assert set(moved["spec"]["tools"]) == {"browser"}
+    assert len(moved["omitted"]) == 1
+
+
+def test_invalid_default_does_not_remove_other_choices_or_echo_its_contents(tmp_path):
+    result = child_tools.resolve_defaults("unrecognized-value,browser", "codex",
+        cwd=str(tmp_path), codex_config={"mcp_servers": {"cdp": dict(CHROME_DEVTOOLS)}})
+    assert set(result["spec"]["tools"]) == {"browser"}
+    assert len(result["omitted"]) == 1
+    assert "unrecognized-value" not in result["omitted"][0]
+
+
+@pytest.mark.parametrize("overlay_text, browser", [
+    ('[mcp_servers.cdp]\ncommand = "node"\nargs = ["/tmp/chrome-devtools-mcp"]\n', False),
+    ('not valid TOML [', True),
+])
+def test_codex_defaults_check_the_merged_overlay_without_echoing_config(tmp_path, overlay_text, browser):
+    source = tmp_path / "config.toml"
+    source.write_text('[mcp_servers.cdp]\ncommand = "npx"\n'
+                      'args = ["chrome-devtools-mcp@latest"]\n', encoding="utf-8")
+    overlay = tmp_path / "overlay.toml"
+    overlay.write_text(overlay_text, encoding="utf-8")
+    result = subprocess.run([
+        sys.executable, str(ROOT / "hooks" / "child_tools.py"), "defaults",
+        "--provider", "codex", "--selection", "browser", "--cwd", str(tmp_path),
+        "--codex-config", str(source), "--overlay", str(overlay),
+    ], text=True, capture_output=True, check=True)
+    spec, _chrome, _device, _restrictive, notice = result.stdout.strip().split("|")
+    assert ("browser" in json.loads(spec)["tools"]) is browser
+    assert bool(notice) is not browser
+    assert overlay_text.strip() not in result.stdout + result.stderr
+
+
+def test_launcher_defaults_partial_omission_is_in_output_prompt_and_effective_record(tmp_path):
+    env, workdir = _env(tmp_path)
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser,mcp:missing"
+    result = _launch(tmp_path, env, workdir, "DefaultBrowser")
+    assert result.returncode == 0, result.stderr
+    assert "--chrome" in _inner(env)
+    notice = "Default tool mcp:missing is unavailable on this machine and was omitted."
+    assert notice in result.stderr
+    assert notice in _log_text(env)
+    record = json.loads(_records(env, "DefaultBrowser")[0].read_text())
+    assert record["tools"] == {"browser": {"device": ""}}
+
+
+def test_launcher_all_defaults_omitted_still_launches_and_announces_it(tmp_path):
+    env, workdir = _env(tmp_path)
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "mcp:missing"
+    result = _launch(tmp_path, env, workdir, "DefaultNone")
+    assert result.returncode == 0, result.stderr
+    assert _inner(env) == _launched()
+    assert _records(env, "DefaultNone") == []
+    notice = "Default tool mcp:missing is unavailable on this machine and was omitted."
+    assert notice in result.stderr and notice in _log_text(env)
+
+
+@pytest.mark.parametrize("flags", [("--base", "default"),
+                                  ("--tools", "browser")])
+def test_explicit_selection_bypasses_defaults_even_when_defaults_are_invalid(tmp_path, flags):
+    env, workdir = _env(tmp_path)
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "invalid-default"
+    result = _launch(tmp_path, env, workdir, "ExplicitChild", *flags)
+    assert result.returncode == 0, result.stderr
+    assert "omitted" not in result.stderr and "omitted" not in _log_text(env)
+    notice = "Default tools were not applied because an explicit base, tools or MCP profile takes precedence."
+    assert notice in result.stderr and notice in _log_text(env)
+
+
+def test_explicit_unavailable_tools_still_fail_with_defaults_configured(tmp_path):
+    env, workdir = _env(tmp_path)
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser"
+    result = _launch(tmp_path, env, workdir, "ExplicitMissing", "--tools", "mcp:missing")
+    assert result.returncode != 0
+    assert _no_launch(env)
+    assert "omitted" not in result.stderr
+
+
 def test_launcher_explicit_default_base_is_the_same_launch(tmp_path):
     env, workdir = _env(tmp_path)
     result = _launch(tmp_path, env, workdir, "PlainChild", "--base", "default")
@@ -759,6 +856,36 @@ def test_codex_default_launch_writes_no_record(tmp_path):
     assert "enabled" not in _codex_child_config(env, "CodexPlain")["mcp_servers"]["windows-mcp"]
 
 
+def test_codex_default_browser_records_effective_selection_and_omission(tmp_path):
+    env, workdir = _codex_env(tmp_path, CODEX_CONFIG + 'args = ["chrome-devtools-mcp@latest"]\n')
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser,screen:operate"
+    result = _launch(tmp_path, env, workdir, "CodexDefaults", codex=True)
+    assert result.returncode == 0, result.stderr
+    record = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents" / "CodexDefaults.tools.json"
+    assert child_tools.read_codex_record(str(record)) == _spec(None, {"browser": True})
+    server_cfg = _codex_child_config(env, "CodexDefaults")["mcp_servers"]["chrome-devtools"]
+    assert len(server_cfg["enabled_tools"]) == 30
+    notice = "Default tool screen:operate is unavailable on this machine and was omitted."
+    assert notice in result.stderr and notice in _log_text(env)
+
+
+@pytest.mark.parametrize("profile", ["orrery-only", "inherit"])
+def test_explicit_codex_profile_wins_over_default_browser(tmp_path, profile):
+    env, workdir = _codex_env(tmp_path, CODEX_CONFIG + 'args = ["chrome-devtools-mcp@latest"]\n')
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser"
+    result = _launch(tmp_path, env, workdir, "CodexProfile", "--codex-mcp", profile, codex=True)
+    assert result.returncode == 0, result.stderr
+    config = _codex_child_config(env, "CodexProfile")
+    chrome = config["mcp_servers"]["chrome-devtools"]
+    if profile == "orrery-only":
+        assert chrome["enabled"] is False
+    assert "enabled_tools" not in chrome and "tools" not in chrome
+    record = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents" / "CodexProfile.tools.json"
+    assert not record.exists()
+    notice = "Default tools were not applied because an explicit base, tools or MCP profile takes precedence."
+    assert notice in result.stderr and notice in _log_text(env)
+
+
 def test_codex_fails_closed_on_an_unknown_server(tmp_path):
     env, workdir = _codex_env(tmp_path, CODEX_CONFIG)
     result = _launch(tmp_path, env, workdir, "CodexMissing", "--base", "mail-only",
@@ -817,6 +944,19 @@ def test_api_passes_base_and_tools_to_the_launcher(monkeypatch):
     assert captured[0].provider_args == ("--tools", "mcp:a", "--tools", "mcp:b:all")
 
 
+@pytest.mark.parametrize("payload", [{"tools": {}}, {"base": "default"},
+                                     {"base": "default", "tools": {}}])
+def test_api_explicit_empty_tools_suppresses_installer_defaults(payload):
+    args, error = server._spawn_tools_args(payload, "claude", False, "")
+    assert error is None
+    assert args == ("--base", "default")
+    assert server._spawn_tools_args({}, "claude", False, "") == ((), None)
+
+
+def test_api_empty_selection_keeps_other_providers_legacy_launcher_arguments():
+    assert server._spawn_tools_args({"tools": {}}, "gemini", False, "") == ((), None)
+
+
 @pytest.mark.parametrize("payload, message", [
     ({"base": "all"}, "base must be"),
     ({"tools": ["mcp"]}, "tools must be an object"),
@@ -864,6 +1004,8 @@ def test_resume_rebuilds_the_selected_config_and_flags(resume, monkeypatch, tmp_
     runtime, registration, launches, calls = resume
     cj = _claude_json(tmp_path / "c.json", servers={"notes": {"command": "/bin/notes"}})
     monkeypatch.setenv("AGENTSTACK_CLAUDE_JSON", cj)
+    # Changing installer defaults must not add browser access during resume.
+    monkeypatch.setenv("AGENTSTACK_CHILD_DEFAULT_TOOLS", "browser")
     child(runtime, registration)
     _bound_tools_record(runtime, _spec("mail-only", {"mcp": ["notes"]}))
     result = server.do_resume(NAME)
@@ -912,9 +1054,10 @@ def test_resume_stops_when_a_selected_server_is_gone(resume, monkeypatch, tmp_pa
     assert not launches and not calls
 
 
-def test_codex_resume_build_applies_the_record_or_fails(tmp_path):
+def test_codex_resume_build_applies_the_record_or_fails(tmp_path, monkeypatch):
     """build-home (used by spawn and by the dashboard resume) reads the record."""
     from hooks import child_resume
+    monkeypatch.setenv("AGENTSTACK_CHILD_DEFAULT_TOOLS", "browser")
     runtime = tmp_path / "runtime"
     source = tmp_path / "codex"
     source.mkdir()
