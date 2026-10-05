@@ -8,7 +8,26 @@
 
 ---
 
-## Unreleased
+## 2026.10.05
+
+### 新しい環境で、ワークショップのしりとりが「作業フォルダの外を読むか」の確認で止まっていました
+
+しりとりの prompt は、親に installer が置いた `/delegate` skill（`~/.agentstack/skills/delegate/SKILL.md`）を読ませます。この path は作業フォルダの外なので、Claude Code が初回に「外を読んでよいか」を確認し、答えるまで親が止まっていました（Full tour の録画で約 10 分止まった）。
+
+installer は、ORRERY が置いた skill の場所だけを `permissions.additionalDirectories` に足します。対象は `~/.agentstack/skills` と、そこを指す `~/.claude/skills/<name>` の symlink だけで、利用者が置いた同名の skill は入れません。同じ場所への `Edit` は deny にして、読み取りだけに絞っています。uninstall では、manifest にある分だけを外します。
+
+- この deny が止めるのは file の道具（Edit・Write など）と、それと分かる Bash の書き込みです。sandbox なしの Python や Node を通した間接的な書き込みまでは覆いません（[docs/install.md](docs/install.md)）。
+- 既知の制限: 再 install の後に uninstall すると、installer が足した設定が残ります（allow・deny・hooks と同じ既存の構造。gyroid-eth/orrery-telemetry#205 で直します）。
+
+### NEW AGENT の既定の作業フォルダを、project folder にしました
+
+1 行の install（fresh install）は `AGENTSTACK_SPAWN_DIRS` を空で書き、dashboard は空のとき NEW AGENT の候補を `~` だけにしていました。そのため NEW AGENT で起動した agent が home で動き、project folder の `CLAUDE.md`（ORRERY の指示）を読まず、`/delegate` を使わないので親子の線も出ませんでした（2 人目の Mac 利用者の試走で見つかった）。
+
+- `AGENTSTACK_SPAWN_DIRS` が空なら、候補は project folder、`~` の順になります。明示した `--spawn-dirs` は変わりません。
+
+### README の入口を作り直しました
+
+冒頭に 1 行の install を置き、入るもの・置き場所の表、作業フォルダの変え方（Obsidian の vault を project key にする）、完全に消す手順を足しました。Telemetry 単独の install と、cockpit との関係、両方を入れる 1 行の順に並べ、cockpit と Telemetry の関係図を入れました。
 
 ### 開いたままの詳細パネルのボタンが、agent の状態に合わせて変わるようにしました
 
@@ -38,14 +57,14 @@ Telemetry は、cockpit から段の名前（`orrery-tour-cue`）を受け取り
 - 受け取るのは埋め込みのときだけで、送り主が親の cockpit・同じ origin の場合に限ります。cockpit の tour の欄がかぶる範囲を受け取れば、札はそこを避けます。
 - 指すのは「その種類のボタン」です。どの agent のボタンかまでは分かりません。EXIT なら画面で最初に見つかった EXIT を指すので、段の文が言う「しりとりの子」のものとは限りません。
 
-cockpit 側から段の名前を送る変更は、gyroid-eth/orrery で別に入れます。
+cockpit 側から段の名前を送る変更は、gyroid-eth/orrery に入っています。
 
 ### Full tour の録画で見つかった、Telemetry の中の輪と札の置き場所を直しました
 
 - **Network の edge の段**は、cockpit がしりとりの親と子の名前（`pair`）を送ったときだけ、その 2 人の edge を指します。名前が来ない、またはその edge が画面にないときは、edge は指さずに Deck／Network の切り替えを指します。これまでは画面で最初に見つかった edge を指したので、関係ない 2 人の edge に輪が付くことがありました。
 - **HERE の札**は、ほかのボタンや入力欄に重なる側を避けます。どの側も空いていなければ、輪だけを出します。
 - **通知（toast）**は、選択の操作バー（selection bar）が出ている間はその上に出ます。Replay の件数の通知が、操作バーの RESUME を隠していました。
-- tour の段が進んでいる間は、右側に開いている edge の drawer・agent の詳細・Settings の範囲を cockpit に知らせます（`orrery-tour-cover`）。cockpit の tour の欄は、それに重なる間は自動で畳まれます（cockpit 側は gyroid-eth/orrery で別に入れます）。
+- tour の段が進んでいる間は、右側に開いている edge の drawer・agent の詳細・Settings の範囲を cockpit に知らせます（`orrery-tour-cover`）。cockpit の tour の欄は、それに重なる間は自動で畳まれます（cockpit 側は gyroid-eth/orrery に入っています）。
 
 ## 2026.10.04
 
