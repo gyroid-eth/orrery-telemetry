@@ -355,6 +355,46 @@ def test_an_open_panel_follows_the_newest_list(embedded, case):
     inner("window.__mut={};document.getElementById('tm-x').click();setView('deck')")
 
 
+def test_back_on_the_deck_the_first_list_puts_the_panel_right(embedded):
+    """The view on screen decides (its own list and window); right after a
+    switch the older list may show until the view's first tick, which must
+    put the buttons right."""
+    _client, evaluate, inner, wait = embedded
+    name = inner("document.querySelector('.bay').dataset.name")
+    inner(MUTATE)
+    inner("setView('net')")
+    wait("gmap.size>0", 30)
+    inner("window.__mut=%s" % json.dumps({'name': name, 'agent': RETIRED, 'node': RETIRED}))
+    inner("netTick()")
+    time.sleep(.5)
+    inner("view='deck'")
+    inner("openPanel(%s)" % json.dumps(name))
+    inner("tick()")
+    time.sleep(.8)
+    after = inner(BUTTONS)
+    inner("window.__mut={};document.getElementById('tm-x').click();setView('deck')")
+    assert after['open'] == 'RESUME IN COCKPIT' and not after['exit'], after
+
+
+@pytest.mark.parametrize('button,api', [('tm-exit-btn', '/api/exit'), ('tm-open', '/api/jump')])
+def test_a_press_on_an_older_state_shows_the_servers_refusal(embedded, button, api):
+    """The server decides from its own state (exit: only running agents;
+    jump: resume or leave as it is); a refusal is said on screen."""
+    _client, _evaluate, inner, _wait = embedded
+    name = inner("document.querySelector('.bay').dataset.name")
+    inner("openPanel(%s)" % json.dumps(name))
+    inner("""(()=>{window.__toasts=[];const t=toast;window.toast=(a,b,c)=>{window.__toasts.push([a,b,!!c]);return t(a,b,c);};
+      const orig=window.fetch;window.__origFetch=orig;
+      window.fetch=(u,i)=>String(u).includes(%s)?Promise.resolve(new Response(JSON.stringify({ok:false,
+        error:"agent '"+%s+"' category=retired - only running/finished are exitable"}),{status:400,headers:{'Content-Type':'application/json'}})):orig(u,i);})()"""
+          % (json.dumps(api), json.dumps(name)))
+    inner("document.getElementById(%s).click()" % json.dumps(button))
+    time.sleep(.6)
+    toasts = inner("window.__toasts")
+    inner("window.fetch=window.__origFetch;document.getElementById('tm-x').click()")
+    assert any(t[0] == '✕ FAIL' and t[2] and 'retired' in t[1] for t in toasts), toasts
+
+
 def test_an_exit_on_its_way_keeps_its_button(embedded):
     _client, _evaluate, inner, _wait = embedded
     name = inner("document.querySelector('.bay').dataset.name")
