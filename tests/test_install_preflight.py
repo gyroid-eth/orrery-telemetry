@@ -307,6 +307,32 @@ def _env_for_a_complete_dry_run(tmp_path: pathlib.Path) -> dict[str, str]:
     return env
 
 
+def test_child_default_tools_accepts_cli_grammar_before_installing(tmp_path):
+    env = _env_for_a_complete_dry_run(tmp_path)
+    result = _run(env, "--dry-run", "--child-default-tools", "browser,screen:operate")
+    assert result.returncode == 0, result.stderr
+    assert "child default tools: browser,screen:operate" in result.stdout
+
+
+def test_child_default_tools_rejects_invalid_syntax_before_writing(tmp_path):
+    env = _env_for_a_complete_dry_run(tmp_path)
+    result = _run(env, "--dry-run", "--child-default-tools", "browser,shell")
+    assert result.returncode != 0
+    assert "--child-default-tools must use the --tools grammar" in result.stderr
+    assert not pathlib.Path(env["AGENTSTACK_HOME"]).exists()
+
+
+@pytest.mark.parametrize("override, expected", [(None, "browser"), ("", "none"),
+                                               ("mcp:notes", "mcp:notes")])
+def test_child_default_tools_upgrade_preserves_saved_choice_and_explicit_clear(tmp_path, override, expected):
+    env = _env_for_a_complete_dry_run(tmp_path)
+    _installed_env_sh(env, 'export AGENTSTACK_CHILD_DEFAULT_TOOLS="browser"\n')
+    flags = [] if override is None else ["--child-default-tools", override]
+    result = _run(env, "--dry-run", *flags)
+    assert result.returncode == 0, result.stderr
+    assert f"child default tools: {expected}" in result.stdout
+
+
 def test_upgrade_survives_the_managed_mail_env_its_own_env_sh_exported(tmp_path):
     """`git pull && ./scripts/install.sh` must not die on the installer's output.
 

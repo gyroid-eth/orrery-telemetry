@@ -10,6 +10,12 @@
 
 ## 2026.10.05
 
+### 子に渡す道具の既定を installer で選べるようにしました
+
+`--child-default-tools` / `AGENTSTACK_CHILD_DEFAULT_TOOLS` は `--tools` と同じ文法で、既定は空です。明示の `--base` / `--tools` が優先します。使えない既定の項目だけを外し、起動の出力と子の最初の指示に残します。子の記録には実際の選択を保存し、resume 時に現在の既定を追加しません。
+
+API 8 では `/api/spawn` の `tools: {}` または `base: "default"` がこの既定を抑止します。CLI で両方省略したときだけ既定を適用します。dashboard/API ではフォームの選択を正とし、installer の env を黙って追加しません。
+
 ### 新しい環境で、ワークショップのしりとりが「作業フォルダの外を読むか」の確認で止まっていました
 
 しりとりの prompt は、親に installer が置いた `/delegate` skill（`~/.agentstack/skills/delegate/SKILL.md`）を読ませます。この path は作業フォルダの外なので、Claude Code が初回に「外を読んでよいか」を確認し、答えるまで親が止まっていました（Full tour の録画で約 10 分止まった）。

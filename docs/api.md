@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":7}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":8}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -541,8 +541,10 @@ request:
 | `worktree_base` | no | base revision。既定 `HEAD` |
 | `claude_chrome` | Claude only | boolean。`true` で child に `--chrome` を付ける。省略・`false` は inherit（利用者の Claude 設定に従う）。launcher の env 既定は使わない。[Claude in Chrome](delegation.md#claude-child-とブラウザ操作claude-in-chrome) |
 | `claude_chrome_device` | Claude only | 使うブラウザの deviceId（`[A-Za-z0-9._:-]{1,128}`）。指定すると `claude_chrome: true` と同じ。`claude_chrome: false` との併用は拒否 |
-| `base` | Claude / Codex | `"default"`（省略と同じ。従来の起動）または `"mail-only"`（ORRERY Mail と `tools` で選んだものだけ）。api 7 から |
-| `tools` | Claude / Codex | object。`browser`（`true` または `{"device": "<deviceId>"}`。Claude only）、`screen`（`"read"` / `"operate"` または `{"access": ..., "server": "<name>"}`。server を省くと Mac の computer use で Claude only）、`mcp`（server 名の配列。tool は承認しない）、`approve_all`（`mcp` のうち全 tool を承認する server。表に無い版は拒否）。`claude_chrome_device` と deviceId が食い違えば拒否。api 7 から。[子に渡す道具を選ぶ](delegation.md#子に渡す道具を選ぶ--base----tools) |
+| `base` | Claude / Codex | `"default"`（明示すると installer の道具の既定を適用しない）または `"mail-only"`（ORRERY Mail と `tools` で選んだものだけ）。api 7 から |
+| `tools` | Claude / Codex | object。`browser`（`true` は Claude/Codex、`{"device": "<deviceId>"}` の deviceId は Claude only）、`screen`（`"read"` / `"operate"` または `{"access": ..., "server": "<name>"}`。server を省くと Mac の computer use で Claude only）、`mcp`（server 名の配列。tool は承認しない）、`approve_all`（`mcp` のうち全 tool を承認する server。表に無い版は拒否）。`claude_chrome_device` と deviceId が食い違えば拒否。api 7 から。[子に渡す道具を選ぶ](delegation.md#子に渡す道具を選ぶ--base----tools) |
+
+API 8 では、`tools: {}` または `base: "default"` を明示すると `--base default` を渡します。dashboard/API はフォームの選択を正とし、installer の `AGENTSTACK_CHILD_DEFAULT_TOOLS` を launcher の env から外して、選択から外した道具を追加しません。明示した道具が使えなければ起動を止めます。CLI で base/tools を省略したときだけ、使えない既定の項目を通知して外す経路を使います。
 
 `base` か `tools` で選択した child は、選択どおりにできなければ（Mail の proxy が無い、server を写せない、computer use が有効な project での `mail-only` など）起動しません。形の誤りはここで 400、child の起動ディレクトリで決まる誤りは launcher の失敗として返ります。Gemini など他の provider では、`mail-only` と `tools` を拒否します。
 

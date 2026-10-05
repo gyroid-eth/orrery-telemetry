@@ -149,6 +149,8 @@ source 専用 helper で、`RESOLVED_AGENT` と解決 source を caller へ返�
 
 `--resources` による対象宣言を既定で必須にし、競合を確認してから child を起動します。Claude / Codex、model、pre-registered identity、child-owned token file、per-child MCP proxy、任意 worktree に対応します。tmux REPL が ready または早期終了と判定されるまで待ち、正本 task を注入します。引数 / server / worktree failure は exit 1、resource 未宣言は2、reservation conflict は21です。通常は直接叩かず、[/delegate](launchers.md#delegate) または dashboard から利用します。
 
+`AGENTSTACK_CHILD_DEFAULT_TOOLS` は `--base` / `--tools` が無い CLI 起動だけに適用します。最終の作業フォルダと provider で確認して使えない既定項目だけを外し、spawn 出力と最初の指示に残します。明示選択と resume は既存の fail-closed 経路です。[既定の道具](delegation.md#installer-の既定の道具)。
+
 ### `cleanup-child-agent.sh`
 
 child の Claude / Codex command の後段へ連結され、REPL が戻った時だけ実行されます。全 reservation を release し、child owner token で identity を retire します。remote release / retire と managed-list 更新は従来どおり best-effort で試し、その後に local child state を片付けます。

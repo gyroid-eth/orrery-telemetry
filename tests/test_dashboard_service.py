@@ -93,6 +93,7 @@ def _isolated_installer_repo(tmp_path: pathlib.Path) -> pathlib.Path:
         shutil.copytree(ROOT / directory, repo / directory)
     (repo / "hooks").mkdir()
     shutil.copy2(ROOT / "hooks" / "project-context.sh", repo / "hooks")
+    shutil.copy2(ROOT / "hooks" / "child_tools.py", repo / "hooks")
     shutil.copy2(ROOT / "VERSION", repo / "VERSION")
     return repo
 
@@ -228,6 +229,7 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     assert plist["EnvironmentVariables"]["AGENTSTACK_WORKTREE_ROOT"] == "__WORKTREE_ROOT__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_CHILD_APPROVAL"] == "__CODEX_CHILD_APPROVAL__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_NETWORK"] == "__CODEX_NETWORK__"
+    assert plist["EnvironmentVariables"]["AGENTSTACK_CHILD_DEFAULT_TOOLS"] == "__CHILD_DEFAULT_TOOLS__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_ADD_DIRS"] == "__CODEX_ADD_DIRS__"
     assert (
         plist["EnvironmentVariables"]["AGENTSTACK_CHILD_RESUME_RETENTION_DAYS"]
@@ -437,6 +439,7 @@ exit 0
     env, install_dir = _installer_upgrade_env(tmp_path, fake_bin, port)
     old_server = tmp_path / "old-dashboard.py"
     _write_marker_dashboard(old_server, "old-launchd")
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser,screen:read:windows-mcp"
     old_process = subprocess.Popen(
         [sys.executable, str(old_server)],
         env=env,
@@ -475,11 +478,18 @@ exit 0
             (install_dir / "install-state.json").read_text(encoding="utf-8")
         )
         assert manifest["services"][0]["kind"] == "launchd"
+        assert manifest["env"]["AGENTSTACK_CHILD_DEFAULT_TOOLS"] == "browser,screen:read:windows-mcp"
+        with open(manifest["services"][0]["path"], "rb") as handle:
+            installed_plist = plistlib.load(handle)
+        assert installed_plist["EnvironmentVariables"]["AGENTSTACK_CHILD_DEFAULT_TOOLS"] == \
+            "browser,screen:read:windows-mcp"
     finally:
-        subprocess.run(
-            [str(install_dir / "bin" / "agentstack-mailctl"), "stop"],
-            env=env, text=True, capture_output=True, check=False,
-        )
+        mailctl = install_dir / "bin" / "agentstack-mailctl"
+        if mailctl.exists():
+            subprocess.run(
+                [str(mailctl), "stop"],
+                env=env, text=True, capture_output=True, check=False,
+            )
         if new_pidfile.exists():
             try:
                 os.kill(int(new_pidfile.read_text().strip()), signal.SIGTERM)

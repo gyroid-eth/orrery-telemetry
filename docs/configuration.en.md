@@ -162,6 +162,7 @@ These variables change `spawn_child.sh` and `agentstack-preregister-child` behav
 | `AGENTSTACK_CODEX_CHILD_APPROVAL` | `never` | Codex child `--ask-for-approval`, persisted by installer `--codex-approval` |
 | `AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY` | unset | Absolute path to a TOML fragment overlaid on every macOS/Linux Codex child's `config.toml`, persisted by installer `--codex-child-overlay <path>` |
 | `AGENTSTACK_CODEX_NETWORK` | `on` | Codex child sandbox network (`-c sandbox_workspace_write.network_access=true`). Disable with `--codex-network off` |
+| `AGENTSTACK_CHILD_DEFAULT_TOOLS` | empty | Installer-selected child tools, using the `--tools` grammar; explicit base/tools wins. Unavailable defaults are omitted with a notice |
 | `AGENTSTACK_CODEX_ADD_DIRS` | unset | Additional writable roots for Codex children (`:`-separated), persisted by `--codex-add-dirs` |
 | `AGENTSTACK_WORKTREE_ROOT` | `$AGENTSTACK_HOME/worktrees` | Persistent root for new isolated worktrees; override and persist it by setting the variable when running the installer |
 | `AGENTSTACK_CLAUDE_CHILD_CHROME` | unset | `1` makes `spawn_child.sh` start Claude children with `--chrome` (Claude in Chrome). Unset or `0` means inherit (the launch command is unchanged). The CLI `--claude-chrome` takes precedence. Ignored for Codex children. [Details](delegation.en.md#claude-children-and-browser-control-claude-in-chrome) |

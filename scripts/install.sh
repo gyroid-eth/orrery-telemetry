@@ -74,6 +74,7 @@ WORKTREE_ROOT_SETTING="${AGENTSTACK_WORKTREE_ROOT:-}"
 CODEX_CHILD_APPROVAL_SETTING="${AGENTSTACK_CODEX_CHILD_APPROVAL:-}"
 CODEX_CHILD_CONFIG_OVERLAY_SETTING="${AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY:-}"
 CODEX_NETWORK_SETTING="${AGENTSTACK_CODEX_NETWORK:-}"
+CHILD_DEFAULT_TOOLS_SETTING="${AGENTSTACK_CHILD_DEFAULT_TOOLS:-}"
 CODEX_ADD_DIRS_SETTING="${AGENTSTACK_CODEX_ADD_DIRS:-}"
 CHILD_RESUME_RETENTION_DAYS_SETTING="${AGENTSTACK_CHILD_RESUME_RETENTION_DAYS:-}"
 # Where the Codex CLI lives. The dashboard runs under launchd / systemd with
@@ -182,6 +183,7 @@ Options:
                          Absolute path to a TOML fragment merged over every
                          macOS/Linux Codex child's config.toml (default:
                          existing env.sh, else disabled)
+  --child-default-tools SPEC  default child tools (same grammar as --tools; empty by default)
   --codex-network MODE   on or off: sandbox network access for Codex children
                          (default: existing env.sh, else on)
   --codex-bin PATH       Codex CLI executable used by the dashboard and child
@@ -310,6 +312,15 @@ while [[ $# -gt 0 ]]; do
     --codex-child-overlay)
       CODEX_CHILD_CONFIG_OVERLAY_SETTING="$2"
       OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"
+      shift 2
+      ;;
+    --child-default-tools)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --child-default-tools requires a value (empty clears it)" >&2
+        exit 2
+      fi
+      CHILD_DEFAULT_TOOLS_SETTING="$2"
+      OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_CHILD_DEFAULT_TOOLS"
       shift 2
       ;;
     --codex-network)
@@ -594,6 +605,7 @@ resolve_setting WORKTREE_ROOT_SETTING AGENTSTACK_WORKTREE_ROOT "$INSTALL_DIR/wor
 resolve_setting CODEX_CHILD_APPROVAL_SETTING AGENTSTACK_CODEX_CHILD_APPROVAL never
 resolve_setting CODEX_CHILD_CONFIG_OVERLAY_SETTING AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY
 resolve_setting CODEX_NETWORK_SETTING AGENTSTACK_CODEX_NETWORK on
+resolve_setting CHILD_DEFAULT_TOOLS_SETTING AGENTSTACK_CHILD_DEFAULT_TOOLS
 resolve_setting CODEX_ADD_DIRS_SETTING AGENTSTACK_CODEX_ADD_DIRS
 resolve_setting CHILD_RESUME_RETENTION_DAYS_SETTING AGENTSTACK_CHILD_RESUME_RETENTION_DAYS 30
 # --- codex launcher resolution (tests extract from here to the end marker) ---
@@ -1256,6 +1268,12 @@ preflight_python() {
   fi
   if ! select_python; then
     preflight_error "$PYTHON_SELECTION_ERROR"
+    return
+  fi
+  if [[ -n "$CHILD_DEFAULT_TOOLS_SETTING" ]] && ! "$PYTHON_BIN" \
+      "$REPO_ROOT/hooks/child_tools.py" parse --provider claude \
+      --tools "$CHILD_DEFAULT_TOOLS_SETTING" >/dev/null; then
+    preflight_error "--child-default-tools must use the --tools grammar"
   fi
 }
 
@@ -2767,6 +2785,7 @@ values = {
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
     "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
+    "AGENTSTACK_CHILD_DEFAULT_TOOLS": "$CHILD_DEFAULT_TOOLS_SETTING",
     "AGENTSTACK_CODEX_ADD_DIRS": "$CODEX_ADD_DIRS_SETTING",
     "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "$CHILD_RESUME_RETENTION_DAYS_SETTING",
     "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
@@ -4416,6 +4435,7 @@ render_launchd_plist() {
       __WORKTREE_ROOT__ "$WORKTREE_ROOT_SETTING"
       __CODEX_CHILD_APPROVAL__ "$CODEX_CHILD_APPROVAL_SETTING"
       __CODEX_NETWORK__ "$CODEX_NETWORK_SETTING"
+      __CHILD_DEFAULT_TOOLS__ "$CHILD_DEFAULT_TOOLS_SETTING"
       __CODEX_ADD_DIRS__ "$CODEX_ADD_DIRS_SETTING"
       __CHILD_RESUME_RETENTION_DAYS__ "$CHILD_RESUME_RETENTION_DAYS_SETTING"
       __CODEX_BIN__ "$CODEX_BIN_SETTING"
@@ -4500,6 +4520,7 @@ env = {
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
     "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
+    "AGENTSTACK_CHILD_DEFAULT_TOOLS": "$CHILD_DEFAULT_TOOLS_SETTING",
     "AGENTSTACK_CODEX_ADD_DIRS": "$CODEX_ADD_DIRS_SETTING",
     "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "$CHILD_RESUME_RETENTION_DAYS_SETTING",
     "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
@@ -4916,6 +4937,7 @@ manifest = {
         "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
         "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
         "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
+        "AGENTSTACK_CHILD_DEFAULT_TOOLS": "$CHILD_DEFAULT_TOOLS_SETTING",
         "AGENTSTACK_CODEX_ADD_DIRS": "$CODEX_ADD_DIRS_SETTING",
         "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "$CHILD_RESUME_RETENTION_DAYS_SETTING",
         "AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING",
@@ -5021,6 +5043,7 @@ main() {
   say "codex child approval: $CODEX_CHILD_APPROVAL_SETTING"
   say "codex child config overlay: ${CODEX_CHILD_CONFIG_OVERLAY_SETTING:-(disabled)}"
   say "codex network: $CODEX_NETWORK_SETTING"
+  say "child default tools: ${CHILD_DEFAULT_TOOLS_SETTING:-none}"
   say "codex bin: ${CODEX_BIN_SETTING:-(not found on PATH; Codex spawns will fail until --codex-bin is set)}"
   say "codex add dirs: ${CODEX_ADD_DIRS_SETTING:-(none beyond project, spawn dirs/roots, install dir, worktrees, ~/.claude, ~/.codex)}"
   say "Claude/Codex child resume retention: $CHILD_RESUME_RETENTION_DAYS_SETTING day(s)"

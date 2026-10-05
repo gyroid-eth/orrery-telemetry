@@ -268,6 +268,8 @@ CHILD_TOOLS_BASE=""
 CHILD_TOOLS_ARGS=()
 CHILD_TOOLS_SPEC=""
 CHILD_TOOLS_RESTRICTIVE=false
+CHILD_TOOLS_FROM_DEFAULTS=false
+CHILD_DEFAULT_TOOLS_NOTICE=""
 CLAUDE_CHILD_TOOL_FLAGS=""
 WORKTREE_BASE="${AGENTSTACK_WORKTREE_ROOT:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/worktrees}"
 if [[ "$WORKTREE_BASE" == "~" ]]; then
@@ -425,6 +427,12 @@ fi
 # Tools selection. Parsed here so that an invalid request stops before any
 # registration or tmux work; what can only be checked in the child's final
 # directory (servers, computer use) is checked again just before launch.
+if [[ -z "$CHILD_TOOLS_BASE" && ${#CHILD_TOOLS_ARGS[@]} -eq 0 \
+        && -n "${AGENTSTACK_CHILD_DEFAULT_TOOLS:-}" ]]; then
+    # Resolve defaults only after the final directory is known. Explicit base
+    # or tools bypass them entirely, including an explicit --base default.
+    CHILD_TOOLS_FROM_DEFAULTS=true
+fi
 if [[ -n "$CHILD_TOOLS_BASE" || ${#CHILD_TOOLS_ARGS[@]} -gt 0 ]]; then
     if [[ "$CHILD_TOOLS_BASE" == "mail-only" || ${#CHILD_TOOLS_ARGS[@]} -gt 0 ]]; then
         CHILD_TOOLS_RESTRICTIVE=true
@@ -2817,6 +2825,32 @@ claude_tools_plan() {
     CLAUDE_CHILD_TOOL_FLAGS="$flags"
 }
 
+# Installer defaults are best effort. Explicit selections never enter this
+# resolver and keep their fail-closed checks. Keep the effective spec in the
+# existing launch/resume records, without reapplying defaults during resume.
+resolve_child_default_tools() {
+    [[ "$CHILD_TOOLS_FROM_DEFAULTS" == true ]] || return 0
+    local resolved tools_chrome tools_device
+    resolved="$(python3 "$HOOKS_DIR/child_tools.py" defaults \
+        --selection "$AGENTSTACK_CHILD_DEFAULT_TOOLS" \
+        --provider "$([[ "$USE_CODEX" == true ]] && echo codex || echo claude)" \
+        --cwd "$WORK_DIR" \
+        --chrome "$([[ "$CLAUDE_CHILD_CHROME" == true ]] && echo 1 || echo 0)" \
+        --chrome-device "$CLAUDE_CHILD_CHROME_DEVICE" \
+        --claude-json "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}" \
+        --codex-config "${CODEX_HOME:-$HOME/.codex}/config.toml" \
+        --overlay "${AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY:-}")" || return 1
+    IFS='|' read -r CHILD_TOOLS_SPEC tools_chrome tools_device \
+        CHILD_TOOLS_RESTRICTIVE CHILD_DEFAULT_TOOLS_NOTICE <<< "$resolved"
+    if [[ "$USE_CODEX" != true ]]; then
+        CLAUDE_CHILD_CHROME="$([[ "$tools_chrome" == 1 ]] && echo true || echo false)"
+        CLAUDE_CHILD_CHROME_DEVICE="$tools_device"
+    fi
+    if [[ -n "$CHILD_DEFAULT_TOOLS_NOTICE" ]]; then
+        echo "[spawn_child] Warning: $CHILD_DEFAULT_TOOLS_NOTICE" >&2
+    fi
+}
+
 # On WSL, warn when a selected screen server would run in Windows session 0
 # (no desktop). Never stops the launch; see child_tools.windows_session_warning.
 warn_windows_screen_session() {
@@ -2826,6 +2860,9 @@ warn_windows_screen_session() {
 
 # Appended to the child's first prompt when tools were selected.
 child_tools_prompt_block() {
+    if [[ -n "$CHILD_DEFAULT_TOOLS_NOTICE" ]]; then
+        printf '\n\n%s' "$CHILD_DEFAULT_TOOLS_NOTICE"
+    fi
     [[ "$CHILD_TOOLS_RESTRICTIVE" == true ]] || return 0
     local text
     text="$(python3 "$HOOKS_DIR/child_tools.py" prompt --spec "$CHILD_TOOLS_SPEC" \
@@ -2894,8 +2931,8 @@ build_codex_mail_task_prompt() {
 append_codex_mcp_profile_notice() {
     local prompt="$1"
     printf '%s' "$prompt"
+    child_tools_prompt_block || return 1
     if [[ "$CHILD_TOOLS_RESTRICTIVE" == true ]]; then
-        child_tools_prompt_block
         return
     fi
     if [[ "$CODEX_MCP_PROFILE" == "orrery-only" ]]; then
@@ -3141,6 +3178,8 @@ PY
         echo "[spawn_child/pre-reg] WORK_DIR overridden to worktree: $WORK_DIR" >&2
     fi
 
+    resolve_child_default_tools || exit 1
+
     if ! grep -qxF "$CHILD_NAME" "$MANAGED_FILE" 2>/dev/null; then
         mkdir -p "$(dirname "$MANAGED_FILE")"
         echo "$CHILD_NAME" >> "$MANAGED_FILE"
@@ -3307,7 +3346,8 @@ ${TASK}"
             # A claimed warm session may retain a parent environment. Cold
             # start standalone children so PARENT_AGENT is guaranteed absent.
             WARM_TYPE="__skip_warm__"
-        elif [[ "$CLAUDE_CHILD_CHROME" == true || "$CHILD_TOOLS_RESTRICTIVE" == true ]]; then
+        elif [[ "$CLAUDE_CHILD_CHROME" == true || "$CHILD_TOOLS_RESTRICTIVE" == true \
+                || -n "$CHILD_DEFAULT_TOOLS_NOTICE" ]]; then
             # A warm session was started without --chrome or the tool flags,
             # and a claim cannot add a CLI flag to a running process. Cold
             # start instead.
@@ -3352,7 +3392,8 @@ ${TASK}"
 
         WARM_CLAIMED=false
         WARM_STATUS=$(bash "$WARM_POOL" status 2>/dev/null || true)
-        if [[ "$CLAUDE_CHILD_CHROME" != true && "$CHILD_TOOLS_RESTRICTIVE" != true && -f "$WARM_POOL" ]] \
+        if [[ "$CLAUDE_CHILD_CHROME" != true && "$CHILD_TOOLS_RESTRICTIVE" != true \
+                && -z "$CHILD_DEFAULT_TOOLS_NOTICE" && -f "$WARM_POOL" ]] \
             && warm_pool_has_model "$WARM_TYPE" "$CHILD_MODEL" "$WARM_STATUS"; then
             echo "[spawn_child/pre-reg] Claiming warm pool session ($WARM_TYPE, $CHILD_MODEL)..." >&2
             WARM_CLAIM_STATUS=0
@@ -3949,6 +3990,8 @@ if [[ "$USE_WORKTREE" == true ]]; then
     WORK_DIR="$WORKTREE_DIR"
     echo "[spawn_child] WORK_DIR overridden to worktree: $WORK_DIR" >&2
 fi
+
+resolve_child_default_tools || exit 1
 
 # --- 3. タスクメッセージを子エージェントに送信 ---
 SUBJECT="Task request: ${TASK:0:50}"

@@ -18,6 +18,8 @@ cd orrery-telemetry
 
 `--project-key` is the absolute path of the folder where agents work (not this repository). The changes are shown and applied only after you confirm. Afterwards, check with `~/.agentstack/bin/agentstack-doctor` and `~/.agentstack/bin/agentstack-selftest`, with Claude Code or Codex CLI installed and signed in in the same environment, start an agent with `~/.agentstack/bin/agent-start <project folder>` for Claude Code or `~/.agentstack/bin/agent-start-codex <project folder>` for Codex CLI, and open `http://127.0.0.1:8770/`. The steps are in the [standalone installation procedure](docs/getting-started.en.md#standalone-installation-and-verification).
 
+Installer `--child-default-tools` selects default child tools (empty by default). Explicit choices win; unavailable default items are omitted with a notice. See [tool selection](docs/delegation.en.md#installer-defaults).
+
 **What works standalone**: the dashboard's Telemetry screen (DECK, NETWORK, REPLAY, RESUME of retired agents, NEW AGENT), starting agents with `agent-start` or `agent-start-codex`, creating children with `/delegate`, and ORRERY Mail between agents. Agent terminals open in your OS terminal (a Windows Terminal tab on Windows).
 
 **What is not included**: the cockpit screen that arranges and drives terminals in the browser (composer, Split, Planetarium, `ORRERY.app`).

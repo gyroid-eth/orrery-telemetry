@@ -199,6 +199,12 @@ What a screen selection exposes and approves is decided by the classification ta
 
 - The built-in macOS computer use and the macOS Codex screen and browser (which go through `node_repl`, a tool that runs arbitrary JS) cannot be read only, because their reading and operating are not separate tools
 
+### Installer defaults
+
+`--child-default-tools 'browser,screen:operate'` writes `AGENTSTACK_CHILD_DEFAULT_TOOLS` into env.sh, the service definition and install-state. The default is empty. The launcher uses it only when neither `--base` nor `--tools` is explicit; `--base default` clears the installer choice for that launch.
+
+Defaults are checked for the provider and final directory, one item at a time. An unavailable item is omitted while applicable items remain; the omission appears in spawn output and the child's first instructions. Explicit selections keep failing closed. The effective selection is saved in the existing Claude launch record or Codex tools record, so resume uses that selection instead of current installer defaults. On macOS Codex, `screen:operate` without a named server is omitted and node_repl is not automatically approved.
+
 ### Approval
 
 Approval is given only inside the child's own launch, tool by tool, for tools the table knows. The user's `settings.json`, `~/.codex/config.toml` and the global approval policy (Codex `never`) are not changed, and a whole server (Claude `mcp__<server>`, Codex `default_tools_approval_mode`) is never approved.
