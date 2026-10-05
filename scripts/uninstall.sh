@@ -62,7 +62,8 @@ if [[ ! -x "$MCP_MERGE_TOOL" && -f "$SCRIPT_DIR/lib/merge_claude_mcp.py" ]]; the
 fi
 
 # env.sh is removed below, so read the work folder first.
-PROJECT_FOLDER="$(sed -n 's/^export AGENTSTACK_PROJECT_KEY=//p' "$INSTALL_DIR/env.sh" 2>/dev/null | head -n 1 | tr -d "'\"")"
+# The line is only for the closing note: a missing or odd env.sh must not stop the uninstall.
+PROJECT_FOLDER="$({ sed -n 's/^export AGENTSTACK_PROJECT_KEY=//p' "$INSTALL_DIR/env.sh" 2>/dev/null | head -n 1 | tr -d "'\"" ; } || true)"
 
 python3 - "$MANIFEST" "$DRY_RUN" "$PURGE_DATA" "$MERGE_TOOL" \
   "$MCP_MERGE_TOOL" <<'PY'
