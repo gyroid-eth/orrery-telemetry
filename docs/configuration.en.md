@@ -262,7 +262,7 @@ Two values determine the NEW AGENT launch directory. Because the dashboard runs 
 
 Running the installer with environment variables `AGENTSTACK_SPAWN_DIRS` / `AGENTSTACK_SPAWN_ROOTS` is equivalent. Precedence is command line > environment variables > existing `env.sh` at the install destination, and a reinstall with no new value retains the previous one. A nonexistent directory is accepted with a warning so a future checkout can be registered before cloning. A relative path is an error and stops installation.
 
-- `SPAWN_DIRS` means “quick-select chips shown first.” `GET /api/spawn-names` returns the `:`-split values in order. The default is `["~"]`. The API preserves `~` symbolically and expands it only during actual spawn
+- `SPAWN_DIRS` means “quick-select chips shown first.” `GET /api/spawn-names` returns the `:`-split values in order. When unset it is the project key followed by `~` (`[project key, "~"]`), so the project folder is the default. The API preserves `~` symbolically and expands it only during actual spawn
 - `SPAWN_ROOTS` means “scope visible through typeahead.” `GET /api/fs/dirs` returns only child directories inside these roots. The default sole root is `$HOME`. The server validates the boundary with `realpath` and rejects `..`, paths outside roots, hidden directories, and symlinks outside roots
 
 `SPAWN_ROOTS` is not derived automatically from `SPAWN_DIRS`. A chip outside the roots can be entered as an exact path, but suggestions below it are not shown. In most cases the default `$HOME` contains the chips, so setting only `SPAWN_DIRS` is sufficient.

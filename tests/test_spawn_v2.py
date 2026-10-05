@@ -219,9 +219,26 @@ def test_spawn_name_status_fails_closed_when_db_missing(monkeypatch):
 
 def test_spawn_names_keeps_home_preset_symbolic(monkeypatch):
     monkeypatch.delenv("AGENTSTACK_SPAWN_DIRS", raising=False)
+    monkeypatch.setattr(server, "PROJECT_KEY", "")
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Curie\\n"})())
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
     assert server.spawn_names_payload()["dirs"] == ["~"]
+
+
+def test_spawn_names_defaults_to_the_project_folder_first(monkeypatch):
+    monkeypatch.delenv("AGENTSTACK_SPAWN_DIRS", raising=False)
+    monkeypatch.setattr(server, "PROJECT_KEY", "/work/proj")
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Curie\\n"})())
+    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+    assert server.spawn_names_payload()["dirs"] == ["/work/proj", "~"]
+
+
+def test_spawn_names_keeps_an_explicit_spawn_dirs_unchanged(monkeypatch):
+    monkeypatch.setenv("AGENTSTACK_SPAWN_DIRS", "/a:/b")
+    monkeypatch.setattr(server, "PROJECT_KEY", "/work/proj")
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Curie\\n"})())
+    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+    assert server.spawn_names_payload()["dirs"] == ["/a", "/b"]
 
 
 def test_spawn_names_advertises_codex_provider(monkeypatch):

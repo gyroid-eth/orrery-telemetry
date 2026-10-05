@@ -172,7 +172,7 @@ Options:
                          just that setting.
                          AGENTSTACK_RESET_SETTINGS=1 does the same.
   --spawn-dirs PATHS     ':'-separated NEW AGENT launch-directory presets
-                         (absolute or ~; default: existing env.sh, else ~)
+                         (absolute or ~; default: existing env.sh, else the project key then ~)
   --spawn-roots PATHS    ':'-separated roots the directory typeahead may
                          browse (default: existing env.sh, else $HOME)
   --codex-approval MODE  Codex child --ask-for-approval: never, on-request,
@@ -4979,7 +4979,7 @@ main() {
   say "label prefix: $LABEL_PREFIX"
   say "terminal: $TERMINAL"
   say "ORRERY Mail MCP URL: $MCP_URL"
-  say "spawn dirs: ${SPAWN_DIRS_SETTING:-(default: ~)}"
+  say "spawn dirs: ${SPAWN_DIRS_SETTING:-(default: the project key, then ~)}"
   say "spawn roots: ${SPAWN_ROOTS_SETTING:-(default: \$HOME)}"
   say "worktree root: $WORKTREE_ROOT_SETTING"
   say "automatically open child terminals: $AUTO_OPEN_CHILD_SETTING (set AGENTSTACK_AUTO_OPEN_CHILD=0 on reinstall to disable auto-open while keeping Deck Open tmux)"
