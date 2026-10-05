@@ -108,9 +108,10 @@ def test_chrome_fields_and_tools_browser_must_agree():
         child_tools.merge_chrome(spec, True, "b")
 
 
-def test_codex_has_no_claude_in_chrome_and_no_builtin_screen():
-    with pytest.raises(child_tools.ToolsError, match="Claude in Chrome"):
-        child_tools.check_provider(_spec(None, {"browser": True}), "codex")
+def test_codex_browser_is_chrome_devtools_and_has_no_device_or_builtin_screen():
+    child_tools.check_provider(_spec(None, {"browser": True}), "codex")
+    with pytest.raises(child_tools.ToolsError, match="deviceId"):
+        child_tools.check_provider(_spec(None, {"browser": {"device": "d"}}), "codex")
     with pytest.raises(child_tools.ToolsError, match="no built-in screen"):
         child_tools.check_provider(_spec(None, {"screen": "operate"}), "codex")
 
@@ -258,6 +259,186 @@ def test_codex_operate_exposes_and_approves_only_screen_tools():
     assert node == {"command": "/usr/bin/node_repl", "enabled": True}
     for server_cfg in config["mcp_servers"].values():
         assert "default_tools_approval_mode" not in server_cfg
+
+
+CHROME_DEVTOOLS = {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest", "--autoConnect"]}
+ARBITRARY = ("evaluate_script", "upload_file", "take_heapsnapshot",
+             "performance_start_trace", "performance_stop_trace", "lighthouse_audit",
+             "get_network_request", "take_screenshot", "take_snapshot")
+
+
+def test_chrome_devtools_table_splits_every_tool_into_one_class():
+    table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["1.10.1"]
+    tiers = [set(table["read"]), set(table["operate"])]
+    assert set().union(*tiers) == set(table["all"]) and sum(map(len, tiers)) == 30
+    # the name-classified entry exposes exactly the same names, and no "all"
+    star = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["*"]
+    assert star["read"] == table["read"] and star["operate"] == table["operate"]
+    assert "all" not in star
+
+
+@pytest.mark.parametrize("args", [
+    ["-y", "chrome-devtools-mcp@latest", "--autoConnect"],
+    ["chrome-devtools-mcp", "--autoConnect"],
+    ["-y", "chrome-devtools-mcp@9.9.9"],
+    ["-y", "chrome-devtools-mcp@1.10.1"],
+])
+def test_codex_browser_exposes_and_approves_only_the_listed_names(args):
+    config = {"mcp_servers": {"chrome-devtools": {
+        "command": "npx", "args": args,
+        "default_tools_approval_mode": "approve",
+        "tools": {"new_unknown_tool": {"approval_mode": "approve"}}}}}
+    child_tools.codex_apply(config, _spec(None, {"browser": True}))
+    server = config["mcp_servers"]["chrome-devtools"]
+    table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["*"]
+    names = set(table["read"]) | set(table["operate"])
+    assert server["enabled"] is True
+    assert set(server["enabled_tools"]) == names == set(server["tools"])
+    assert all(v == {"approval_mode": "approve"} for v in server["tools"].values())
+    assert "default_tools_approval_mode" not in server
+    for tool in ARBITRARY:
+        assert server["tools"][tool] == {"approval_mode": "approve"}
+    assert "new_unknown_tool" not in server["enabled_tools"]
+
+
+def test_codex_browser_read_only_through_the_screen_form():
+    config = {"mcp_servers": {"chrome-devtools": dict(CHROME_DEVTOOLS)}}
+    child_tools.codex_apply(config, _spec(None, {
+        "screen": {"access": "read", "server": "chrome-devtools"}}))
+    table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["*"]
+    assert set(config["mcp_servers"]["chrome-devtools"]["enabled_tools"]) == set(table["read"])
+
+
+def test_browser_read_cannot_approve_host_file_output_arguments():
+    config = {"mcp_servers": {"chrome-devtools": dict(CHROME_DEVTOOLS)}}
+    child_tools.codex_apply(config, _spec(None, {
+        "screen": {"access": "read", "server": "chrome-devtools"}}))
+    approved = config["mcp_servers"]["chrome-devtools"]["tools"]
+    assert not {"take_snapshot", "take_screenshot", "get_network_request"} & approved.keys()
+    assert not {"navigate_page", "evaluate_script", "upload_file"} & approved.keys()
+
+
+def test_browser_operate_approves_all_known_names_without_a_version_pin():
+    config = {"mcp_servers": {"chrome-devtools": dict(CHROME_DEVTOOLS)}}
+    child_tools.codex_apply(config, _spec(None, {
+        "screen": {"access": "operate", "server": "chrome-devtools"}}))
+    server = config["mcp_servers"]["chrome-devtools"]
+    known = set(child_tools.TOOL_TABLE["chrome-devtools-mcp"]["1.10.1"]["all"])
+    assert set(server["enabled_tools"]) == set(server["tools"]) == known
+    assert "default_tools_approval_mode" not in server
+
+
+@pytest.mark.parametrize("definition", [
+    {"command": "node", "args": ["/tmp/chrome-devtools-mcp"]},
+    {"command": "node", "args": ["/tmp/chrome-devtools-mcp@1.10.1"]},
+    {"command": "npx", "args": ["--package", "chrome-devtools-mcp@1.10.1",
+                                "node", "/tmp/custom-mcp.js"]},
+    {"command": "npx", "args": ["-p", "chrome-devtools-mcp@latest", "other-server"]},
+    {"command": "npx", "args": ["other-server", "chrome-devtools-mcp@1.10.1"]},
+    {"command": "npx", "args": ["--", "-y", "chrome-devtools-mcp@1.10.1"]},
+])
+def test_chrome_package_in_wrapper_or_dependency_never_gets_approved(definition):
+    assert child_tools.table_entry(definition) is None
+    for selection in ({"browser": True},
+                      {"screen": {"access": "read", "server": "chrome-devtools"}},
+                      {"mcp": ["chrome-devtools"], "approve_all": ["chrome-devtools"]}):
+        with pytest.raises(child_tools.ToolsError):
+            child_tools.codex_apply({"mcp_servers": {"chrome-devtools": definition.copy()}},
+                                    _spec(None, selection))
+
+
+def test_browser_server_name_does_not_classify_a_different_package():
+    with pytest.raises(child_tools.ToolsError, match="does not run chrome-devtools"):
+        child_tools.codex_apply({"mcp_servers": {"chrome-devtools": {
+            "command": "uvx", "args": ["windows-mcp@0.8.6"]}}},
+            _spec(None, {"browser": True}))
+
+
+@pytest.mark.parametrize("access", ["read", "operate"])
+def test_codex_browser_and_another_screen_have_independent_approvals(access):
+    config = {"mcp_servers": {
+        "cdp": dict(CHROME_DEVTOOLS),
+        "windows-mcp": {"command": "uvx", "args": ["windows-mcp@0.8.6"]}}}
+    child_tools.codex_apply(config, _spec(None, {
+        "browser": True, "screen": {"access": access, "server": "windows-mcp"}}))
+    chrome = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["*"]
+    assert set(config["mcp_servers"]["cdp"]["enabled_tools"]) == \
+        set(chrome["read"] + chrome["operate"])
+    windows = {"Screenshot", "Snapshot"}
+    if access == "operate":
+        windows.update(SCREEN_OPERATE)
+    assert set(config["mcp_servers"]["windows-mcp"]["enabled_tools"]) == windows
+
+
+def test_claude_pinned_chrome_read_explicitly_denies_operating_and_file_tools(tmp_path):
+    cj = _claude_json(tmp_path / "c.json", servers={"cdp": {
+        "command": "/usr/local/bin/npx", "args": ["chrome-devtools-mcp@1.10.1"]}})
+    plan = child_tools.claude_plan(_spec(None, {
+        "screen": {"access": "read", "server": "cdp"}}), cwd=str(tmp_path),
+        chrome=False, claude_json=cj, platform="linux")
+    flags = plan["flags"]
+    allowed = set(flags[flags.index("--allowed-tools") + 1].split(","))
+    denied = set(flags[flags.index("--disallowed-tools") + 1].split(","))
+    table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["1.10.1"]
+    assert allowed == {f"mcp__cdp__{tool}" for tool in table["read"]}
+    assert denied == {f"mcp__cdp__{tool}" for tool in table["all"] if tool not in table["read"]}
+    assert {"mcp__cdp__navigate_page", "mcp__cdp__evaluate_script", "mcp__cdp__upload_file"} <= denied
+
+
+def test_claude_pinned_chrome_operate_approves_scripts_and_file_tools(tmp_path):
+    cj = _claude_json(tmp_path / "c.json", servers={"cdp": {
+        "command": "/usr/local/bin/npx", "args": ["chrome-devtools-mcp@1.10.1"]}})
+    plan = child_tools.claude_plan(_spec(None, {
+        "screen": {"access": "operate", "server": "cdp"}}), cwd=str(tmp_path),
+        chrome=False, claude_json=cj, platform="linux")
+    flags = plan["flags"]
+    assert "--disallowed-tools" not in flags
+    allowed = set(flags[flags.index("--allowed-tools") + 1].split(","))
+    assert len(allowed) == 30
+    assert {f"mcp__cdp__{tool}" for tool in (*ARBITRARY, "navigate_page")} <= allowed
+
+
+@pytest.mark.parametrize("version", ["latest", "9.9.9", ""])
+@pytest.mark.parametrize("access", ["read", "operate"])
+def test_claude_unknown_chrome_version_cannot_hide_unknown_tools(tmp_path, version, access):
+    package = "chrome-devtools-mcp" + ("@" + version if version else "")
+    cj = _claude_json(tmp_path / "c.json", servers={"cdp": {
+        "command": "/usr/local/bin/npx", "args": [package]}})
+    with pytest.raises(child_tools.ToolsError, match="must pin"):
+        child_tools.claude_plan(_spec(None, {
+            "screen": {"access": access, "server": "cdp"}}), cwd=str(tmp_path),
+            chrome=False, claude_json=cj, platform="linux")
+
+
+def test_codex_browser_finds_a_renamed_server_and_needs_one():
+    config = {"mcp_servers": {"cdp": dict(CHROME_DEVTOOLS)}}
+    child_tools.codex_apply(config, _spec(None, {"browser": True}))
+    assert config["mcp_servers"]["cdp"]["enabled"] is True
+    with pytest.raises(child_tools.ToolsError, match="chrome-devtools MCP server"):
+        child_tools.codex_apply({"mcp_servers": {"x": {"command": "/bin/x"}}},
+                                _spec(None, {"browser": True}))
+    with pytest.raises(child_tools.ToolsError, match="wrapper"):
+        child_tools.codex_apply(
+            {"mcp_servers": {"chrome-devtools": {"command": "/home/me/cdp.sh"}}},
+            _spec(None, {"browser": True}))
+
+
+def test_codex_browser_all_needs_a_pinned_version_and_adds_evaluate_script():
+    unpinned = {"mcp_servers": {"chrome-devtools": dict(CHROME_DEVTOOLS)}}
+    with pytest.raises(child_tools.ToolsError, match="cannot list"):
+        child_tools.codex_apply(unpinned, _spec(None, {
+            "mcp": ["chrome-devtools"], "approve_all": ["chrome-devtools"]}))
+    pinned = {"mcp_servers": {"chrome-devtools": {
+        "command": "npx", "args": ["-y", "chrome-devtools-mcp@1.10.1"]}}}
+    child_tools.codex_apply(pinned, _spec(None, {
+        "mcp": ["chrome-devtools"], "approve_all": ["chrome-devtools"]}))
+    assert "evaluate_script" in pinned["mcp_servers"]["chrome-devtools"]["tools"]
+
+
+def test_codex_browser_mail_only_keeps_other_servers_off_and_describes_itself():
+    spec = _spec("mail-only", {"browser": True})
+    assert "chrome-devtools MCP server" in child_tools.prompt_text(spec, "codex")
+    assert "Claude in Chrome" in child_tools.prompt_text(spec, "claude")
 
 
 def test_codex_all_needs_a_known_version():
@@ -510,7 +691,7 @@ def test_launcher_stops_when_a_server_cannot_be_copied(tmp_path):
     (["--base", "all"], "base must be"),
     (["--tools", "shell"], "unknown --tools entry"),
     (["--tools", "mcp:orrery-mail"], "is ORRERY Mail"),
-    (["--codex", "--tools", "browser"], "Claude in Chrome"),
+    (["--codex", "--tools", "browser:dev"], "deviceId"),
     (["--codex", "--codex-mcp", "inherit", "--base", "mail-only"], "contradicts"),
 ])
 def test_launcher_rejects_invalid_selections_before_launch(tmp_path, flags, message):
@@ -641,7 +822,7 @@ def test_api_passes_base_and_tools_to_the_launcher(monkeypatch):
     ({"tools": ["mcp"]}, "tools must be an object"),
     ({"tools": {"mcp": ["orrery-mail"]}}, "is ORRERY Mail"),
     ({"claude_chrome_device": "a", "tools": {"browser": {"device": "b"}}}, "different browsers"),
-    ({"provider": "codex", "tools": {"browser": True}}, "Claude in Chrome"),
+    ({"provider": "codex", "tools": {"browser": {"device": "d"}}}, "deviceId"),
 ])
 def test_api_rejects_invalid_selections(monkeypatch, payload, message):
     captured = []
