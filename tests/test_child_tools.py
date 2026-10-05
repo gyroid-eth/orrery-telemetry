@@ -108,9 +108,10 @@ def test_chrome_fields_and_tools_browser_must_agree():
         child_tools.merge_chrome(spec, True, "b")
 
 
-def test_codex_has_no_claude_in_chrome_and_no_builtin_screen():
-    with pytest.raises(child_tools.ToolsError, match="Claude in Chrome"):
-        child_tools.check_provider(_spec(None, {"browser": True}), "codex")
+def test_codex_browser_is_chrome_devtools_and_has_no_device_or_builtin_screen():
+    child_tools.check_provider(_spec(None, {"browser": True}), "codex")
+    with pytest.raises(child_tools.ToolsError, match="deviceId"):
+        child_tools.check_provider(_spec(None, {"browser": {"device": "d"}}), "codex")
     with pytest.raises(child_tools.ToolsError, match="no built-in screen"):
         child_tools.check_provider(_spec(None, {"screen": "operate"}), "codex")
 
@@ -258,6 +259,80 @@ def test_codex_operate_exposes_and_approves_only_screen_tools():
     assert node == {"command": "/usr/bin/node_repl", "enabled": True}
     for server_cfg in config["mcp_servers"].values():
         assert "default_tools_approval_mode" not in server_cfg
+
+
+CHROME_DEVTOOLS = {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest", "--autoConnect"]}
+ARBITRARY = ("evaluate_script", "upload_file", "take_heapsnapshot",
+             "performance_start_trace", "performance_stop_trace", "lighthouse_audit")
+
+
+def test_chrome_devtools_table_splits_every_tool_into_one_class():
+    table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["1.10.1"]
+    tiers = [set(table["read"]), set(table["operate"]), set(ARBITRARY)]
+    assert set().union(*tiers) == set(table["all"]) and sum(map(len, tiers)) == 30
+    # the name-classified entry exposes exactly the same names, and no "all"
+    star = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["*"]
+    assert star["read"] == table["read"] and star["operate"] == table["operate"]
+    assert "all" not in star
+
+
+@pytest.mark.parametrize("args", [
+    ["-y", "chrome-devtools-mcp@latest", "--autoConnect"],
+    ["chrome-devtools-mcp", "--autoConnect"],
+    ["-y", "chrome-devtools-mcp@9.9.9"],
+    ["-y", "chrome-devtools-mcp@1.10.1"],
+])
+def test_codex_browser_exposes_and_approves_only_the_listed_names(args):
+    config = {"mcp_servers": {"chrome-devtools": {"command": "npx", "args": args}}}
+    child_tools.codex_apply(config, _spec(None, {"browser": True}))
+    server = config["mcp_servers"]["chrome-devtools"]
+    table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["*"]
+    names = set(table["read"]) | set(table["operate"])
+    assert server["enabled"] is True
+    assert set(server["enabled_tools"]) == names == set(server["tools"])
+    assert all(v == {"approval_mode": "approve"} for v in server["tools"].values())
+    assert "default_tools_approval_mode" not in server
+    for tool in ARBITRARY:
+        assert tool not in server["enabled_tools"]
+
+
+def test_codex_browser_read_only_through_the_screen_form():
+    config = {"mcp_servers": {"chrome-devtools": dict(CHROME_DEVTOOLS)}}
+    child_tools.codex_apply(config, _spec(None, {
+        "screen": {"access": "read", "server": "chrome-devtools"}}))
+    table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["*"]
+    assert set(config["mcp_servers"]["chrome-devtools"]["enabled_tools"]) == set(table["read"])
+
+
+def test_codex_browser_finds_a_renamed_server_and_needs_one():
+    config = {"mcp_servers": {"cdp": dict(CHROME_DEVTOOLS)}}
+    child_tools.codex_apply(config, _spec(None, {"browser": True}))
+    assert config["mcp_servers"]["cdp"]["enabled"] is True
+    with pytest.raises(child_tools.ToolsError, match="chrome-devtools MCP server"):
+        child_tools.codex_apply({"mcp_servers": {"x": {"command": "/bin/x"}}},
+                                _spec(None, {"browser": True}))
+    with pytest.raises(child_tools.ToolsError, match="wrapper"):
+        child_tools.codex_apply(
+            {"mcp_servers": {"chrome-devtools": {"command": "/home/me/cdp.sh"}}},
+            _spec(None, {"browser": True}))
+
+
+def test_codex_browser_all_needs_a_pinned_version_and_adds_evaluate_script():
+    unpinned = {"mcp_servers": {"chrome-devtools": dict(CHROME_DEVTOOLS)}}
+    with pytest.raises(child_tools.ToolsError, match="cannot list"):
+        child_tools.codex_apply(unpinned, _spec(None, {
+            "mcp": ["chrome-devtools"], "approve_all": ["chrome-devtools"]}))
+    pinned = {"mcp_servers": {"chrome-devtools": {
+        "command": "npx", "args": ["-y", "chrome-devtools-mcp@1.10.1"]}}}
+    child_tools.codex_apply(pinned, _spec(None, {
+        "mcp": ["chrome-devtools"], "approve_all": ["chrome-devtools"]}))
+    assert "evaluate_script" in pinned["mcp_servers"]["chrome-devtools"]["tools"]
+
+
+def test_codex_browser_mail_only_keeps_other_servers_off_and_describes_itself():
+    spec = _spec("mail-only", {"browser": True})
+    assert "chrome-devtools MCP server" in child_tools.prompt_text(spec, "codex")
+    assert "Claude in Chrome" in child_tools.prompt_text(spec, "claude")
 
 
 def test_codex_all_needs_a_known_version():
@@ -510,7 +585,7 @@ def test_launcher_stops_when_a_server_cannot_be_copied(tmp_path):
     (["--base", "all"], "base must be"),
     (["--tools", "shell"], "unknown --tools entry"),
     (["--tools", "mcp:orrery-mail"], "is ORRERY Mail"),
-    (["--codex", "--tools", "browser"], "Claude in Chrome"),
+    (["--codex", "--tools", "browser:dev"], "deviceId"),
     (["--codex", "--codex-mcp", "inherit", "--base", "mail-only"], "contradicts"),
 ])
 def test_launcher_rejects_invalid_selections_before_launch(tmp_path, flags, message):
@@ -641,7 +716,7 @@ def test_api_passes_base_and_tools_to_the_launcher(monkeypatch):
     ({"tools": ["mcp"]}, "tools must be an object"),
     ({"tools": {"mcp": ["orrery-mail"]}}, "is ORRERY Mail"),
     ({"claude_chrome_device": "a", "tools": {"browser": {"device": "b"}}}, "different browsers"),
-    ({"provider": "codex", "tools": {"browser": True}}, "Claude in Chrome"),
+    ({"provider": "codex", "tools": {"browser": {"device": "d"}}}, "deviceId"),
 ])
 def test_api_rejects_invalid_selections(monkeypatch, payload, message):
     captured = []

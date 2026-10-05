@@ -100,6 +100,41 @@ TOOL_TABLE: dict[str, dict[str, dict[str, tuple[str, ...]]]] = {
         },
     },
 }
+# Browser MCP: chrome-devtools-mcp. Source: the tools/list of 1.10.1 (30
+# tools, read with an MCP initialize + tools/list on 2026-10-05). The real
+# definition is usually unpinned (``npx chrome-devtools-mcp@latest``), so a
+# version that is not listed, or no version at all, is classified by tool NAME
+# (the "*" entry): only the names below are exposed and approved, one by one,
+# and a tool a newer version adds is neither exposed nor approved. "all" is
+# listed only for a pinned version, so ``mcp:<server>:all`` still needs one.
+# Not browser tools, and approved only by an explicit :all: evaluate_script
+# (arbitrary page script), upload_file (reads a local file into a page),
+# take_heapsnapshot, performance_start_trace, performance_stop_trace and
+# lighthouse_audit (write files on the host).
+_CHROME_DEVTOOLS_READ = (
+    "get_console_message", "get_css_styles", "get_network_request",
+    "list_console_messages", "list_network_requests", "list_pages",
+    "performance_analyze_insight", "select_page", "take_screenshot",
+    "take_snapshot", "wait_for",
+)
+_CHROME_DEVTOOLS_OPERATE = (
+    "click", "close_page", "drag", "emulate", "fill", "fill_form",
+    "handle_dialog", "hover", "navigate_page", "new_page", "press_key",
+    "resize_page", "type_text",
+)
+TOOL_TABLE["chrome-devtools-mcp"] = {
+    "*": {"read": _CHROME_DEVTOOLS_READ, "operate": _CHROME_DEVTOOLS_OPERATE},
+    "1.10.1": {
+        "read": _CHROME_DEVTOOLS_READ,
+        "operate": _CHROME_DEVTOOLS_OPERATE,
+        "all": tuple(sorted(_CHROME_DEVTOOLS_READ + _CHROME_DEVTOOLS_OPERATE + (
+            "evaluate_script", "upload_file", "take_heapsnapshot",
+            "performance_start_trace", "performance_stop_trace",
+            "lighthouse_audit"))),
+    },
+}
+# Packages whose unpinned or unlisted-version definition is classified by name.
+NAME_CLASSIFIED = ("chrome-devtools-mcp",)
 _PACKAGE_VERSION_RE = re.compile(
     r"(?:^|[/\\\s])([A-Za-z0-9_.-]+?)(?:@|==)(\d+(?:\.\d+){1,3})$")
 
@@ -250,10 +285,12 @@ def restrictive(spec: dict) -> bool:
 def check_provider(spec: dict, provider: str) -> None:
     tools = spec["tools"]
     if provider == "codex":
-        if "browser" in tools:
+        browser = tools.get("browser")
+        if browser is not None and browser["device"]:
             raise ToolsError(
-                "tools.browser is Claude in Chrome; for a Codex child select the "
-                "user's browser MCP server with mcp:<name>")
+                "a deviceId selects a Claude in Chrome browser; a Codex child "
+                "uses the user's chrome-devtools MCP server, so give plain "
+                "\"browser\" without a deviceId")
         screen = tools.get("screen")
         if screen and screen["server"] is None:
             raise ToolsError(
@@ -297,16 +334,25 @@ def table_entry(definition: dict) -> tuple[str, str, dict] | None:
         entry = TOOL_TABLE.get(package, {}).get(version)
         if entry is not None:
             return package, version, entry
+    for index, word in enumerate(words):
+        if not isinstance(word, str):
+            continue
+        if index > 0 and words[index - 1] in ("--with", "-w"):
+            continue
+        package = re.split(r"[@=]", word.strip().rsplit("/", 1)[-1], 1)[0].lower()
+        if package in NAME_CLASSIFIED:
+            return package, "*", TOOL_TABLE[package]["*"]
     return None
 
 
-def _describe(spec: dict) -> list[str]:
+def _describe(spec: dict, provider: str = "claude") -> list[str]:
     tools = spec["tools"]
     parts = []
     browser = tools.get("browser")
     if browser is not None:
         parts.append("browser (Claude in Chrome"
-                     + (f", deviceId {browser['device']})" if browser["device"] else ")"))
+                     + (f", deviceId {browser['device']})" if browser["device"] else ")")
+                     if provider != "codex" else "browser (the chrome-devtools MCP server)")
     screen = tools.get("screen")
     if screen is not None:
         where = f"MCP server {screen['server']}" if screen["server"] else "computer use"
@@ -318,15 +364,19 @@ def _describe(spec: dict) -> list[str]:
     return parts
 
 
-def _approval(spec: dict, name: str, definition: dict) -> tuple[list[str], list[str]]:
+def _approval(spec: dict, name: str, definition: dict,
+              browser_server: str | None = None) -> tuple[list[str], list[str]]:
     """(tools to expose and approve, tools to hide) for one selected server.
 
     Empty lists mean: copy/enable the server, approve nothing, hide nothing."""
     tools = spec["tools"]
     screen = tools.get("screen")
+    if screen is None and name == browser_server:
+        # A Codex child's browser: the user's browser MCP server, operated.
+        screen = {"access": "operate", "server": name}
     entry = table_entry(definition)
     if name in tools.get("approve_all", ()):
-        if entry is None:
+        if entry is None or "all" not in entry[2]:
             raise ToolsError(
                 f"MCP server {name!r} is not a server version in the classification table, so ORRERY "
                 "cannot list its tools to approve them all (mcp:<name>:all); select "
@@ -345,7 +395,7 @@ def _approval(spec: dict, name: str, definition: dict) -> tuple[list[str], list[
     exposed = list(table["read"])
     if screen["access"] == "operate":
         exposed += list(table["operate"])
-    return exposed, [tool for tool in table["all"] if tool not in exposed]
+    return exposed, [tool for tool in table.get("all", ()) if tool not in exposed]
 
 
 # --------------------------------------------------------------------------- #
@@ -534,6 +584,27 @@ def write_private_json(path: str, payload: dict) -> None:
 # --------------------------------------------------------------------------- #
 # Codex
 # --------------------------------------------------------------------------- #
+def codex_browser_server(servers: dict) -> str:
+    """The name of the user's browser MCP server in a Codex config.toml.
+
+    ``chrome-devtools`` when it is there, else the one server whose command
+    runs chrome-devtools-mcp."""
+    found = [name for name, definition in servers.items()
+             if isinstance(definition, dict)
+             and name != "agentstack" and not looks_like_agent_mail(name)
+             and (name == "chrome-devtools" or (
+                 (table_entry(definition) or ("",))[0] in NAME_CLASSIFIED))]
+    if "chrome-devtools" in found:
+        return "chrome-devtools"
+    if len(found) == 1:
+        return found[0]
+    raise ToolsError(
+        "tools.browser for a Codex child needs the user's chrome-devtools MCP "
+        "server in config.toml (a [mcp_servers.chrome-devtools] table, or one "
+        "server that runs chrome-devtools-mcp)"
+        + (": several match" if found else ""))
+
+
 def codex_apply(config: dict, spec: dict) -> None:
     """Apply a selection to a child's parsed config.toml, in place.
 
@@ -550,6 +621,11 @@ def codex_apply(config: dict, spec: dict) -> None:
     screen = tools.get("screen")
     if screen is not None:
         names.append(screen["server"])
+    browser_server = None
+    if "browser" in tools:
+        browser_server = codex_browser_server(servers)
+        if browser_server not in names:
+            names.append(browser_server)
     for name in names:
         server = servers.get(name)
         if not isinstance(server, dict):
@@ -558,9 +634,19 @@ def codex_apply(config: dict, spec: dict) -> None:
         server["enabled"] = True
     for name in names:
         server = servers[name]
-        exposed, hidden = _approval(spec, name, server)
-        if hidden:
-            # A screen selection: publish only the screen tools, approved.
+        exposed, hidden = _approval(spec, name, server, browser_server)
+        if name == browser_server and name not in tools.get("approve_all", ()) \
+                and not exposed:
+            raise ToolsError(
+                f"MCP server {name!r} does not run chrome-devtools-mcp "
+                "directly (a wrapper script is not classified), so its tools "
+                "cannot be approved for tools.browser; run it as "
+                "npx chrome-devtools-mcp[@version]")
+        restrict = name not in tools.get("approve_all", ()) and (
+            name == browser_server
+            or (screen is not None and screen["server"] == name))
+        if hidden or (restrict and exposed):
+            # A browser or screen selection: publish only those tools, approved.
             server["enabled_tools"] = exposed
             server.pop("default_tools_approval_mode", None)
             server["tools"] = {tool: {"approval_mode": "approve"} for tool in exposed}
@@ -652,7 +738,7 @@ def prompt_text(spec: dict, provider: str, standalone: bool = False) -> str:
     if not restrictive(spec):
         return ""
     report_to = "the operator" if standalone else "your parent agent"
-    given = _describe(spec)
+    given = _describe(spec, provider)
     if spec["base"] == "mail-only":
         head = ("Tools: this child was started with base mail-only: besides "
                 "shell/files and authenticated ORRERY Mail it was given only "
