@@ -229,12 +229,12 @@ Adding tools to a running child, changing tools on resume (`tools` in `/api/jump
 
 ## Browser and screen: what is reachable, and what a person does
 
-Agents that ORRERY starts (children and NEW AGENT) were tested for browser and whole-screen control in eight combinations: Claude / Codex × Mac / Windows (WSL2) (2026-09-30 and 10-01; Claude Code 2.1.285, Codex CLI 0.159.x). Every combination worked once its conditions were met. None works with no setup at all.
+Agents that ORRERY starts (children and NEW AGENT) were checked for whether browser and whole-screen tools reach them and can be called, in eight combinations: Claude / Codex × Mac / Windows (WSL2) (2026-09-30 and 10-01; Claude Code 2.1.285, Codex CLI 0.159.x). Every combination reached and called its tools once its conditions were met, but this is a reachability and call check, not a check that every one was operated. It includes measurements on an older ORRERY version and tests with settings outside the product. None works with no setup at all.
 
 | | Mac | Windows (WSL2) |
 |---|---|---|
 | Claude × browser | Reachable; the browser extension must be connected | Reachable; a deviceId is required |
-| Claude × whole screen | Only when computer use is enabled for the launch directory's project; each app is allowed by a person | Hand Windows-MCP or similar over with `--tools screen:operate:<server>` ([selection](#choosing-the-tools-a-child-gets---base----tools) above) |
+| Claude × whole screen | Reachable only when computer use is enabled for the launch directory's project. The tool responded; operating it was not tried (each app is allowed by a person) | Hand Windows-MCP or similar over with `--tools screen:operate:<server>` ([selection](#choosing-the-tools-a-child-gets---base----tools) above). Successful operation was measured with a `claude -p` whose strict config had Windows-MCP added outside the product, not through this `--tools` path |
 | Codex × browser | Reachable once chrome-devtools tools are approved ([approvals](#codex-children-and-mcp-approvals) above) | Provide the server through the user's config or an overlay and approve its tools. One run with an overlay showed no tool; the cause is not established |
 | Codex × whole screen | Goes through `node_repl` and the bundled plugin. Listing apps was confirmed; each app is allowed by a person | Hand it over with `screen:<read\|operate>:<server>` |
 
@@ -244,17 +244,17 @@ How each launch path is affected:
 |---|---|
 | `/delegate` child | `--tools`, `--claude-chrome(-device)` and the overlay apply |
 | NEW AGENT (no parent, `--standalone`) | Codex builds the same generated home with the same approval policy as a child, so the overlay and a `--tools` record apply. Claude uses only what the NEW AGENT form says and ignores the `AGENTSTACK_CLAUDE_CHILD_CHROME` environment default. NEW AGENT has no `--tools` field yet |
-| resume | Codex rebuilds the home on every launch and resume, so the overlay applies. Claude restores the same settings from the launch record (an older child without a record gets nothing) |
+| resume | Codex rebuilds the home on every launch and resume, so the overlay applies. Claude restores the same settings from the launch record (a child without a record gets no ORRERY selection restored and simply inherits the user's Claude settings; that does not mean browser or computer use is absent) |
 | `claude` / `codex` a person starts directly in a terminal | Out of scope. Only the real `~/.claude` and `~/.codex` settings decide, and ORRERY does not change them |
 
 If a person starting Codex directly wants the same permission, they write `default_tools_approval_mode = "approve"` (or a per-tool `approval_mode`) under `[mcp_servers.chrome-devtools]` in their own `~/.codex/config.toml`. That approves every tool of the server, including `evaluate_script`, which runs arbitrary page script. In an interactive launch where a person is watching, leaving it unset and answering the approval prompt is safer.
 
-### What a person does once
+### What a person does (setup, and permission at connection time)
 
-These walls cannot be opened from ORRERY's code. A person clears them once, before the agent runs.
+These walls cannot be opened from ORRERY's code. A person clears the first and the third to fifth once before the agent runs; the chrome-devtools connection permission is answered by a person every time a connection is made.
 
 - **Claude in Chrome**: install the extension in the browser, sign in and keep it connected (a stopped extension fails even with correct agent settings). Pick a deviceId when several browsers are connected
-- **chrome-devtools (Codex)**: start the Chrome that `--autoConnect` attaches to and grant the connection on the Chrome side
+- **chrome-devtools (Codex)**: start the Chrome that `--autoConnect` attaches to (once). The connection permission is not once: Chrome asks a person each time the MCP server requests a connection, so a new child or a reconnect needs an answer. Approving the tool in Codex does not skip this Chrome prompt. An unattended child sees no tools until it is answered and cannot proceed
 - **Computer use (Mac)**: the per-app permission (`request_access`) is granted by a person on screen. It is separate from Codex's approval policy and is the same under `never` and `on-request`; an agent cannot proceed in an app that was not allowed beforehand. Screen Recording and Accessibility are granted once in macOS settings. Computer use runs in one session at a time across the whole Mac
 - **Claude computer use (Mac)**: enable it for the project you will launch in, from `/mcp` (`projects[<dir>].enabledMcpServers` in `~/.claude.json`)
 - **Windows screen control**: run Windows-MCP in an interactive session such as RDP. WSL started from ssh is in session 0 and cannot capture the screen
