@@ -2,7 +2,7 @@
 
 [日本語](README.md)
 
-Several Claude Code / Codex agents can talk directly, divide the work, and check each other's results. ORRERY Telemetry shows their work and Mail round trips in one screen. Pair it with [ORRERY cockpit](https://github.com/gyroid-eth/orrery) to use their terminals in the same workspace.
+Multiple Claude Code / Codex agents can talk directly, divide the work, and check each other's results. ORRERY Telemetry shows their work and Mail round trips in one screen. Pair it with [ORRERY cockpit](https://github.com/gyroid-eth/orrery) to use their terminals in the same workspace.
 
 ![A child joins the open NETWORK view, sends ready, and exchanges three shiritori Mail round trips](docs/img/network-mail.gif)
 
