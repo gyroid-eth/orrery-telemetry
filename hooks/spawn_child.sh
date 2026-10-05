@@ -2814,13 +2814,16 @@ claude_chrome_prompt_block() {
 
 # Checks the tools selection against the child's final directory and the
 # user's Claude settings, and sets the extra claude flags (--no-chrome,
-# --allowed-tools/--disallowed-tools for read-only screen access). Fails when
+# --allowed-tools for Chrome and screen, --disallowed-tools for screen). Fails when
 # the selection cannot be honoured; the caller then stops before tmux.
 claude_tools_plan() {
     CLAUDE_CHILD_TOOL_FLAGS=""
-    [[ "$CHILD_TOOLS_RESTRICTIVE" == true ]] || return 0
-    local flags
-    flags="$(python3 "$HOOKS_DIR/child_tools.py" claude-plan --spec "$CHILD_TOOLS_SPEC" \
+    [[ "$CHILD_TOOLS_RESTRICTIVE" == true || "$CLAUDE_CHILD_CHROME" == true ]] || return 0
+    local flags spec
+    spec="$CHILD_TOOLS_SPEC"
+    # Legacy --claude-chrome requests have no parsed base/tools selection.
+    [[ -n "$spec" ]] || spec='{"base":"default","tools":{}}'
+    flags="$(python3 "$HOOKS_DIR/child_tools.py" claude-plan --spec "$spec" \
         --cwd "$WORK_DIR" \
         --chrome "$([[ "$CLAUDE_CHILD_CHROME" == true ]] && echo 1 || echo 0)" \
         --claude-json "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}")" || return 1
