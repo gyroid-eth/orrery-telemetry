@@ -36636,7 +36636,9 @@ function openPanelInner(name){
   TM('tm-meta').textContent=
     stat+(a.model?' · '+a.model:'')+(a.ctx_window?' · '+a.ctx_window:'')
     +(rel?' · last '+rel:'');
-  renderPanelButtons(a,g);
+  // The buttons read the newest source from the start, as refreshes do.
+  const now=panelAgentState(name);
+  if(now)renderPanelButtons(now.a,now.g);else renderPanelButtons(a,g);
   // gtip 相当のサマリーを tm-summary に描画 (モバイルで hover が効かない救済)
   renderPanelSummary(name, a, g);
   renderAnnotEditor(name, (g&&g.annot)||a.annot||null);

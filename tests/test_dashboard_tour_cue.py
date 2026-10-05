@@ -270,7 +270,7 @@ BUTTONS = """(()=>{const o=document.getElementById('tm-open'),x=document.getElem
   return {open:o.textContent.trim(),disabled:o.disabled,exit:x.style.display!=='none',return:p?(p.id||p.className):null};})()"""
 
 
-@pytest.mark.parametrize('case', ['net-retired-then-running', 'net-gone', 'net-then-deck', 'deck-gone'])
+@pytest.mark.parametrize('case', ['net-retired-then-running', 'net-gone', 'net-then-deck', 'deck-gone', 'net-reopen'])
 def test_an_open_panel_follows_the_newest_list(embedded, case):
     """Review of #211: in Network only netTick runs, and a panel whose agent
     left the list kept a pressable OPEN IN COCKPIT and Exit."""
@@ -310,6 +310,16 @@ def test_an_open_panel_follows_the_newest_list(embedded, case):
         gone = inner(BUTTONS)
         assert gone['open'] == 'NO LONGER LISTED' and gone['disabled'] and not gone['exit'], gone
         assert gone['return'] != 'tm-x', gone
+    elif case == 'net-reopen':
+        # Review of #211: reopened right after the graph changed, the panel
+        # drew from the older deck list until the next netTick.
+        mut({'agent': RETIRED, 'node': RETIRED})
+        inner("netTick()")
+        time.sleep(.5)
+        inner("document.getElementById('tm-x').click()")
+        inner("openPanel(%s)" % json.dumps(name))
+        reopened = inner(BUTTONS)
+        assert reopened['open'] == 'RESUME IN COCKPIT' and not reopened['exit'], reopened
     else:
         mut({'agent': RETIRED, 'node': RETIRED})
         inner("netTick()")
