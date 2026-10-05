@@ -16,7 +16,7 @@ cd orrery-telemetry
 ./scripts/install.sh --project-key /absolute/path/to/your-project
 ```
 
-`--project-key` は、agent に作業させる folder の絶対パスです（この repository ではありません）。変更内容は表示され、承認してから入ります。終わったら `~/.agentstack/bin/agentstack-doctor` と `~/.agentstack/bin/agentstack-selftest` で確かめ、同じ環境でログイン済みの Claude Code か Codex CLI を用意して、`~/.agentstack/bin/agent-start <project folder>` で agent を起動して `http://127.0.0.1:8770/` を開きます。手順は[単独の導入手順](docs/getting-started.md#telemetry-単独の導入と確認)にあります。
+`--project-key` は、agent に作業させる folder の絶対パスです（この repository ではありません）。変更内容は表示され、承認してから入ります。終わったら `~/.agentstack/bin/agentstack-doctor` と `~/.agentstack/bin/agentstack-selftest` で確かめ、同じ環境でログイン済みの Claude Code か Codex CLI を用意して、Claude Code なら `~/.agentstack/bin/agent-start <project folder>`、Codex CLI なら `~/.agentstack/bin/agent-start-codex <project folder>` で agent を起動して `http://127.0.0.1:8770/` を開きます。手順は[単独の導入手順](docs/getting-started.md#telemetry-単独の導入と確認)にあります。
 
 **単独で使えるもの**: dashboard の Telemetry 画面（DECK・NETWORK・REPLAY・退出した agent の RESUME・NEW AGENT）、`agent-start` での agent 起動、`/delegate` での子の作成、agent 同士の ORRERY Mail。agent の端末は OS の terminal（Windows は Windows Terminal のタブ）で開きます。
 
