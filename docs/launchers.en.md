@@ -5,7 +5,7 @@
 [Previous: Installation](install.en.md) · [Back to README](../README.en.md) · [Next: Delegation and child agents](delegation.en.md)
 
 
-To change tools in the same conversation, complete EXIT, confirm the child stopped, and use `agentstack-resume <NAME> --tools <spec>`. Do not preregister or create another child. See [procedure and limits](delegation.en.md#resume-a-stopped-child-with-different-tools).
+To change tools in the same conversation, complete EXIT, confirm the child stopped, and use `"${AGENTSTACK_HOME:-$HOME/.agentstack}/bin/agentstack-resume" <NAME> --tools <spec>`. Do not preregister or create another child. See [procedure and limits](delegation.en.md#resume-a-stopped-child-with-different-tools).
 
 ## Launch commands
 
