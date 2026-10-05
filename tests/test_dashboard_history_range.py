@@ -47,12 +47,13 @@ def test_build_agents_default_stays_thirty_days():
 
 def test_by_name_lookups_search_the_whole_history():
     src = (ROOT / "dashboard" / "server.py").read_text(encoding="utf-8")
-    # jump / kill / exit resolve an agent by name; an agent older than the
+    # Ordinary jump, jump with changed tools, kill and exit resolve an agent
+    # by name; an agent older than the
     # DECK window must still be found or `all` history could show a card that
     # its own buttons refuse to act on.
     # They look up that one agent (lookup_agent has no history cutoff; its
     # behaviour is tested in test_agent_lookup.py), never the windowed roster.
-    assert src.count("lookup_agent(session)") == 3
+    assert src.count("lookup_agent(session)") == 4
     assert "for r in build_agents():" not in src
     assert "for r in build_agents(None)" not in src
 
