@@ -16,7 +16,14 @@ set -euo pipefail
 MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.agentstack/mail}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$MAIL_HOME/signals}"
 POLL_INTERVAL=2  # seconds (fallback if fswatch unavailable)
-WATCHER_LOCK_DIR="${AGENTSTACK_MAIL_WATCHER_LOCK_DIR:-/tmp/orrery-mail-watcher.lock}"
+# 既定は利用者ごと（$HOME 配下）。1 台の Mac に複数利用者がいても lock dir が
+# 衝突しない。AGENTSTACK_MAIL_WATCHER_LOCK_DIR / _PIDFILE / _HEARTBEAT で明示した
+# path が他人の物（以前の /tmp 既定を踏襲した設定など）を指すときは、奪いにも
+# 別の場所へ切り替えにも行かず、何も書かずに止まって直し方を出す（2026-10-05 の
+# fresh install で 2 人目の利用者の watcher が共通 /tmp lock を取れず無限リトライ
+# し続けた件）。
+DEFAULT_WATCHER_LOCK_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/mail-watcher.lock"
+WATCHER_LOCK_DIR="${AGENTSTACK_MAIL_WATCHER_LOCK_DIR:-$DEFAULT_WATCHER_LOCK_DIR}"
 WATCHER_PIDFILE="${AGENTSTACK_MAIL_WATCHER_PIDFILE:-${WATCHER_LOCK_DIR}/watcher.pid}"
 WATCHER_HEARTBEAT="${AGENTSTACK_MAIL_WATCHER_HEARTBEAT:-${WATCHER_LOCK_DIR}/heartbeat}"
 WATCH_FIFO=""
@@ -283,13 +290,101 @@ is_pid_running() {
     [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
 }
 
+# stat(1) の所有者 UID の取り方は GNU (Linux/WSL, BusyBox も含む) の `-c` と
+# BSD (macOS) の `-f` で違う。GNU の `-f` は「ファイルシステム情報」を意味し、
+# 未知の directive (%u) でも先にファイルシステム情報を stdout へ出してから
+# 失敗する。`-f` を先に試すと、2>/dev/null で消えるのは stderr だけなので、
+# その出力が後続の `-c` の結果に混ざり、UID の比較が常に不一致になる
+# （2026-10-05 WSL・GNU coreutils 9.4 実機で確認、ext4）。`-c` を先に試す:
+# GNU/BusyBox ではそのまま正しい UID を返し、BSD では「unknown option」を
+# stderr にだけ出して stdout は空のまま失敗するので、`-f` へ安全に落ちる。
+lock_owner_uid() {
+    # $2 = L: symlink を辿った先の所有者（既定は path 自体。symlink なら link の持ち主）
+    if [[ "${2:-}" == L ]]; then
+        stat -L -c '%u' "$1" 2>/dev/null || stat -L -f '%u' "$1" 2>/dev/null || true
+    else
+        stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1" 2>/dev/null || true
+    fi
+}
+
 write_heartbeat() {
     mkdir -p "$(dirname "$WATCHER_HEARTBEAT")"
     : > "$WATCHER_HEARTBEAT"
 }
 
+# True only for a path that exists and, itself or (for a symlink) through its
+# target, belongs to a different UID. A path that does not exist yet is not
+# foreign: we are about to create it.
+path_is_foreign() {
+    local target="$1" owner me
+    [[ -e "$target" || -L "$target" ]] || return 1
+    me="$(id -u)"
+    owner="$(lock_owner_uid "$target")"
+    [[ -n "$owner" && "$owner" != "$me" ]] && return 0
+    owner="$(lock_owner_uid "$target" L)"
+    [[ -n "$owner" && "$owner" != "$me" ]]
+}
+
+# A pid counts as "an old watcher of mine" only if it is alive, is this user's
+# own process, and its command line is this script. A pidfile left behind by a
+# dead watcher can name a pid since reused by something unrelated; treating
+# that as a live watcher would refuse to start and tell the user to kill it.
+is_own_watcher_process() {
+    local pid="${1:-}" cmd uid
+    is_pid_running "$pid" || return 1
+    cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    [[ "$cmd" == *watch_agent_mail_signals.sh* ]] || return 1
+    uid="$(ps -p "$pid" -o uid= 2>/dev/null | tr -d '[:space:]' || true)"
+    [[ -n "$uid" && "$uid" == "$(id -u)" ]]
+}
+
+# The legacy, pre-2026-10-05 default: shared by every account on the Mac. Only
+# ever consulted to avoid starting a second watcher while one from before the
+# per-user default still runs there (see the LEGACY block in acquire_lock).
+LEGACY_WATCHER_LOCK_DIR="/tmp/orrery-mail-watcher.lock"
+
 acquire_lock() {
     local existing_pid=""
+
+    # The default lock is per-user (under $HOME), so the only way any of
+    # these three paths can belong to someone else is an explicit override
+    # (AGENTSTACK_MAIL_WATCHER_LOCK_DIR / _PIDFILE / _HEARTBEAT) that still
+    # points at another account's path (e.g. the pre-2026-10-05 shared /tmp
+    # default, carried over by hand). Taking such a path over either fails
+    # forever with "Permission denied" (the 2026-10-05 bug: "Stale watcher
+    # lock detected" retried every 5s and never started) or, worse, could
+    # succeed and corrupt or kill someone else's watcher. There is no safe
+    # fallback here either: a dashboard or agent-start started with the same
+    # override would keep reading the overridden path, not whatever this
+    # process quietly switched to, and would report the watcher as down while
+    # it was actually running elsewhere. So: touch nothing, say which path and
+    # whose it is, and stop.
+    local culprit owner_uid
+    for culprit in "$WATCHER_LOCK_DIR" "$(dirname "$WATCHER_PIDFILE")" "$(dirname "$WATCHER_HEARTBEAT")" \
+        "$WATCHER_PIDFILE" "$WATCHER_HEARTBEAT"; do
+        if path_is_foreign "$culprit"; then
+            owner_uid="$(lock_owner_uid "$culprit")"
+            [[ -n "$owner_uid" && "$owner_uid" != "$(id -u)" ]] || owner_uid="$(lock_owner_uid "$culprit" L)"
+            log "${culprit} belongs to another user (uid ${owner_uid}); not writing there. Remove the override (AGENTSTACK_MAIL_WATCHER_LOCK_DIR / _PIDFILE / _HEARTBEAT) or point it at a path only this user can write, then run this again."
+            exit 1
+        fi
+    done
+
+    # A watcher started before 2026-10-05 (or by hand per this file's own
+    # Usage comment, which install.sh's service restart cannot stop) may still
+    # be running on the old shared default. Since it is a different directory
+    # now, acquiring our own lock would not catch it, and both would deliver
+    # the same mail. Defer to it rather than risk a second instance.
+    if [[ "$WATCHER_LOCK_DIR" == "$DEFAULT_WATCHER_LOCK_DIR" && "$LEGACY_WATCHER_LOCK_DIR" != "$WATCHER_LOCK_DIR" ]] \
+        && [[ -f "${LEGACY_WATCHER_LOCK_DIR}/watcher.pid" ]] \
+        && ! path_is_foreign "$LEGACY_WATCHER_LOCK_DIR"; then
+        local legacy_pid
+        legacy_pid="$(<"${LEGACY_WATCHER_LOCK_DIR}/watcher.pid")"
+        if is_own_watcher_process "$legacy_pid"; then
+            log "A watcher from before 2026-10-05 is still running on the old shared lock (${LEGACY_WATCHER_LOCK_DIR}, PID ${legacy_pid}); not starting a second one. Stop it (kill ${legacy_pid}, or its tmux/background job) and run this again."
+            exit 1
+        fi
+    fi
 
     if mkdir "$WATCHER_LOCK_DIR" 2>/dev/null; then
         mkdir -p "$(dirname "$WATCHER_PIDFILE")"
@@ -299,6 +394,7 @@ acquire_lock() {
         return 0
     fi
 
+    # The dir already exists and (checked above) is ours.
     if [[ -f "$WATCHER_PIDFILE" ]]; then
         existing_pid=$(<"$WATCHER_PIDFILE")
     fi

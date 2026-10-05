@@ -4241,6 +4241,40 @@ PY_UNIT
   mv "$AGENT_MAIL_WATCHER_PATH.tmp" "$AGENT_MAIL_WATCHER_PATH"
 } # end render_mail_watcher_unit
 
+# Before 2026-10-05 the watcher lock defaulted to /tmp (shared by every
+# account on the Mac). Updating leaves the new per-user default empty while a
+# dir nobody will ever look at again lingers at the old /tmp path. Clear it
+# only if it is this user's own: a still-running old watcher is terminated by
+# the service restart below and cleans up its own lock via its EXIT trap, and
+# a dir owned by someone else (a second account on the same Mac) is never
+# touched here.
+migrate_legacy_mail_watcher_lock() {
+  # Overridable only so tests can point this at an isolated tmp path instead
+  # of the real, machine-wide /tmp default; there is no reason to set this in
+  # a real install.
+  local legacy_dir="${AGENTSTACK_TEST_LEGACY_MAIL_WATCHER_LOCK_DIR:-/tmp/orrery-mail-watcher.lock}"
+  [[ -e "$legacy_dir" ]] || return 0
+  local owner_uid my_uid
+  # -c (GNU/BusyBox) before -f (BSD): GNU's -f means "filesystem status", and
+  # even when the %u directive itself is invalid it still prints the
+  # filesystem's default report to stdout before failing, which then runs
+  # into -c's output under `||` and corrupts the UID comparison (confirmed on
+  # WSL, GNU coreutils 9.4, ext4). -c fails on BSD with nothing on stdout
+  # (the error goes to stderr only), so it falls through to -f safely there.
+  owner_uid="$(stat -c '%u' "$legacy_dir" 2>/dev/null || stat -f '%u' "$legacy_dir" 2>/dev/null || true)"
+  my_uid="$(id -u)"
+  [[ -n "$owner_uid" && "$owner_uid" == "$my_uid" ]] || return 0
+  local pid=""
+  [[ -f "$legacy_dir/watcher.pid" ]] && pid="$(head -n1 "$legacy_dir/watcher.pid" 2>/dev/null | tr -d '[:space:]')"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  plan "remove the leftover pre-2026-10-05 watcher lock $legacy_dir (owned by this user, no live process)"
+  [[ "$DRY_RUN" == true ]] && return 0
+  rm -rf "$legacy_dir"
+  say "removed the leftover pre-2026-10-05 watcher lock $legacy_dir"
+} # end migrate_legacy_mail_watcher_lock
+
 # A watcher left behind by agent-start (tmux session `mail-watcher`) holds the
 # single-instance lock; the managed unit would then exit as a duplicate on
 # every restart until that session dies. Retire it before registering.
@@ -4277,6 +4311,7 @@ enable_mail_watcher() {
   fi
 
   render_mail_watcher_unit "$kind"
+  migrate_legacy_mail_watcher_lock
 
   if [[ "$DRY_RUN" == true ]]; then
     if [[ "$kind" == "launchd" ]]; then

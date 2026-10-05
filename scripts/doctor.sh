@@ -376,6 +376,52 @@ raise SystemExit(0 if healthy else 1)
 PY
 }
 
+# Fetches /api/mail-watcher-health from the already-serving dashboard and
+# warns using the exact same watcher_running / status fields the cockpit
+# shows, so doctor cannot report "ok" while the cockpit shows the watcher red.
+report_mail_watcher_health() {
+  local python_bin="$1"
+  local port="$2"
+  local record
+  record="$("$python_bin" - "$port" <<'PY' 2>/dev/null || true
+import json
+import sys
+import urllib.request
+
+try:
+    port = int(sys.argv[1])
+    with urllib.request.urlopen(
+        f"http://127.0.0.1:{port}/api/mail-watcher-health", timeout=2
+    ) as response:
+        health = json.load(response)
+except Exception:
+    health = {}
+running = bool(health.get("watcher_running"))
+hstatus = health.get("status") or "unknown"
+age = health.get("last_success_age_s")
+print("|".join((
+    "1" if running else "0",
+    str(hstatus),
+    "" if age is None else str(age),
+)))
+PY
+)"
+  local running hstatus age
+  IFS='|' read -r running hstatus age <<< "$record"
+  # Judge by status, not just watcher_running: the same /api/mail-watcher-health
+  # can report watcher_running=true with status=red (>50 pending signals) or
+  # status=yellow (signals pending with no recent delivery) when the watcher
+  # process is alive but not actually draining mail. Checking watcher_running
+  # alone left doctor reporting "ok" in exactly the case the cockpit shows red.
+  if [[ "$hstatus" == "green" ]]; then
+    echo "ok: mail watcher healthy (status: green, watcher_running=${running:-0})"
+  else
+    echo "warn: mail watcher health is ${hstatus:-unknown} (dashboard /api/mail-watcher-health: watcher_running=${running:-0}${age:+, last success ${age}s ago})" >&2
+    echo "      mail delivered to an agent waiting for input may not wake it; see docs/troubleshooting*.md (mail watcher)" >&2
+    status=1
+  fi
+}
+
 report_dashboard_service() {
   local python_bin="${AGENTSTACK_PYTHON:-python3}"
   local port="${AGENTSTACK_PORT:-8770}"
@@ -387,6 +433,14 @@ report_dashboard_service() {
   else
     echo "warn: dashboard endpoint is not serving an ORRERY Telemetry API at http://127.0.0.1:$port/api/version"
     status=1
+  fi
+
+  # Reuse the dashboard's own /api/mail-watcher-health judgment (same code the
+  # cockpit reads) instead of re-deriving it here: all items can be "ok" while
+  # the watcher is actually down, which is exactly what went unreported in the
+  # 2026-10-05 two-user-on-one-Mac lock collision.
+  if [[ "$endpoint_serving" -eq 1 ]]; then
+    report_mail_watcher_health "$python_bin" "$port"
   fi
   record="$("$python_bin" - "$MANIFEST" <<'PY' 2>/dev/null || true
 import json

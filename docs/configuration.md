@@ -239,7 +239,8 @@ export AGENTSTACK_OBSIDIAN_APP="/Applications/Obsidian.app/Contents/MacOS/Obsidi
 | `AGENTSTACK_MCP_PROXY` | `$AGENTSTACK_HOME/integrations/codex_app/plugin/scripts/run-mcp.sh` | spawned child ごとの認証済み stdio proxy runner |
 | `AGENTSTACK_PREREGISTER_CHILD` | `$AGENTSTACK_HOME/bin/agentstack-preregister-child` | `/delegate` が child-owned token を生成する helper |
 | `AGENTSTACK_MAIL_WATCHER_SESSION` | `mail-watcher` | launcher が起動・再利用する watcher の tmux session 名 |
-| `AGENTSTACK_MAIL_WATCHER_PIDFILE` | `/tmp/orrery-mail-watcher.lock/watcher.pid` | dashboard が非 launchd watcher の実プロセスを照合する pidfile |
+| `AGENTSTACK_MAIL_WATCHER_LOCK_DIR` | `$AGENTSTACK_RUNTIME_DIR/mail-watcher.lock`（利用者ごと） | watcher の単一起動 lock dir。`_PIDFILE`・`_HEARTBEAT` を含め、他人が所有する path（file・symlink の参照先も）を指す設定のときは、何も書かずに止まって直し方を log に出す |
+| `AGENTSTACK_MAIL_WATCHER_PIDFILE` | lock dir の `watcher.pid` | dashboard が非 launchd watcher の実プロセスを照合する pidfile |
 | `AGENTSTACK_MAIL_WATCHER_HEARTBEAT` | pidfile と同じ directory の `heartbeat` | process command を取得できない環境で使う watcher heartbeat |
 | `AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE` | `low`（＝全通） | 通知として**割り込ませる**下限。`low` \| `normal` \| `high` \| `urgent` |
 | `AGENTSTACK_MAIL_WATCHER_SCAN_INTERVAL` | Linux `2`、macOS `30` | watcher が signal を見直す回復 scan の間隔（秒、1 以上の整数）。同じ message の再試行間隔（30秒）とは別 |

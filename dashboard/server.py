@@ -200,9 +200,15 @@ MAIL_HOME = _env_path("AGENTSTACK_MAIL_HOME", "~/.agentstack/mail")
 SIGNALS_DIR = _env_path("AGENTSTACK_SIGNALS_DIR", os.path.join(MAIL_HOME, "signals"))
 MAIL_WATCHER_LABEL = f"{LABEL_PREFIX}.mail-watcher"
 NOTIFY_DAEMON_LABEL = f"{LABEL_PREFIX}.notify-daemon"
+# Per-user default (matches watch_agent_mail_signals.sh): a shared /tmp path
+# let a second account on the same Mac collide with the first one's lock.
+MAIL_WATCHER_LOCK_DIR = _env_path(
+    "AGENTSTACK_MAIL_WATCHER_LOCK_DIR",
+    os.path.join(RUNTIME_DIR, "mail-watcher.lock"),
+)
 MAIL_WATCHER_PIDFILE = _env_path(
     "AGENTSTACK_MAIL_WATCHER_PIDFILE",
-    "/tmp/orrery-mail-watcher.lock/watcher.pid",
+    os.path.join(MAIL_WATCHER_LOCK_DIR, "watcher.pid"),
 )
 MAIL_WATCHER_HEARTBEAT = _env_path(
     "AGENTSTACK_MAIL_WATCHER_HEARTBEAT",

@@ -925,7 +925,7 @@ ags_start_mail_watcher() {
   # (or any other) watcher holds the single-instance lock, a tmux copy would
   # only start, print "duplicate", and exit — so this is a fallback, not the
   # primary path.
-  local pidfile="${AGENTSTACK_MAIL_WATCHER_PIDFILE:-${AGENTSTACK_MAIL_WATCHER_LOCK_DIR:-/tmp/orrery-mail-watcher.lock}/watcher.pid}"
+  local pidfile="${AGENTSTACK_MAIL_WATCHER_PIDFILE:-${AGENTSTACK_MAIL_WATCHER_LOCK_DIR:-${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/mail-watcher.lock}/watcher.pid}"
   if [[ -f "$pidfile" ]]; then
     local watcher_pid
     watcher_pid="$(head -n 1 "$pidfile" 2>/dev/null | tr -d '[:space:]')"
