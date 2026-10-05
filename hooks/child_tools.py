@@ -110,12 +110,13 @@ TOOL_TABLE: dict[str, dict[str, dict[str, tuple[str, ...]]]] = {
 # Not browser tools, and approved only by an explicit :all: evaluate_script
 # (arbitrary page script), upload_file (reads a local file into a page),
 # take_heapsnapshot, performance_start_trace, performance_stop_trace and
-# lighthouse_audit (write files on the host).
+# lighthouse_audit (write files on the host). get_network_request,
+# take_screenshot and take_snapshot also accept host output paths; approval
+# cannot distinguish their arguments, so they too require explicit :all.
 _CHROME_DEVTOOLS_READ = (
-    "get_console_message", "get_css_styles", "get_network_request",
+    "get_console_message", "get_css_styles",
     "list_console_messages", "list_network_requests", "list_pages",
-    "performance_analyze_insight", "select_page", "take_screenshot",
-    "take_snapshot", "wait_for",
+    "performance_analyze_insight", "select_page", "wait_for",
 )
 _CHROME_DEVTOOLS_OPERATE = (
     "click", "close_page", "drag", "emulate", "fill", "fill_form",
@@ -130,7 +131,8 @@ TOOL_TABLE["chrome-devtools-mcp"] = {
         "all": tuple(sorted(_CHROME_DEVTOOLS_READ + _CHROME_DEVTOOLS_OPERATE + (
             "evaluate_script", "upload_file", "take_heapsnapshot",
             "performance_start_trace", "performance_stop_trace",
-            "lighthouse_audit"))),
+            "lighthouse_audit", "get_network_request", "take_screenshot",
+            "take_snapshot"))),
     },
 }
 # Packages whose unpinned or unlisted-version definition is classified by name.
@@ -314,13 +316,48 @@ def merge_chrome(spec: dict, chrome: bool, device: str) -> tuple[bool, str]:
     return True, browser["device"] or device
 
 
+def _direct_chrome_package(definition: dict) -> str | None:
+    """Recognize a direct npx package invocation, never an incidental argument.
+
+    Only launcher flags that do not change the executed package are accepted.
+    In particular, --package/-p and -c may run an entirely different program.
+    """
+    command = definition.get("command")
+    args = definition.get("args") or []
+    if not isinstance(command, str) or not isinstance(args, list):
+        return None
+    if re.split(r"[/\\]", command)[-1] not in ("npx", "npx.cmd", "npx.exe"):
+        return None
+    options = True
+    for word in args:
+        if options and word == "--":
+            options = False
+            continue
+        if options and word in ("-y", "--yes", "--no"):
+            continue
+        if not isinstance(word, str):
+            return None
+        if re.fullmatch(r"chrome-devtools-mcp(?:@[A-Za-z0-9_.-]+)?", word):
+            return word
+        return None
+    return None
+
+
 def table_entry(definition: dict) -> tuple[str, str, dict] | None:
     """The classification-table entry for a server definition, if known.
 
     The package and version are read from the command line (``pkg@1.2.3`` or
     ``pkg==1.2.3``, e.g. ``uvx windows-mcp@0.8.6``). A wrapper script or an
-    unpinned package is not in the table, and neither is a package that is
-    only added next to the server (``uvx --with pkg@1.2.3 other``)."""
+    unpinned package is not in the table, except for a direct npx invocation
+    of chrome-devtools-mcp, classified by name. An incidental dependency
+    (``uvx --with pkg@1.2.3 other``) is not the executed server."""
+    chrome_package = _direct_chrome_package(definition)
+    if chrome_package is not None:
+        package = "chrome-devtools-mcp"
+        version = chrome_package.partition("@")[2]
+        versions = TOOL_TABLE[package]
+        version = version if version in versions else "*"
+        return package, version, versions[version]
     words = [definition.get("command")] + list(definition.get("args") or [])
     for index, word in enumerate(words):
         if not isinstance(word, str):
@@ -331,17 +368,11 @@ def table_entry(definition: dict) -> tuple[str, str, dict] | None:
         if not match:
             continue
         package, version = match.group(1).lower(), match.group(2)
+        if package in NAME_CLASSIFIED:
+            continue
         entry = TOOL_TABLE.get(package, {}).get(version)
         if entry is not None:
             return package, version, entry
-    for index, word in enumerate(words):
-        if not isinstance(word, str):
-            continue
-        if index > 0 and words[index - 1] in ("--with", "-w"):
-            continue
-        package = re.split(r"[@=]", word.strip().rsplit("/", 1)[-1], 1)[0].lower()
-        if package in NAME_CLASSIFIED:
-            return package, "*", TOOL_TABLE[package]["*"]
     return None
 
 
@@ -371,7 +402,7 @@ def _approval(spec: dict, name: str, definition: dict,
     Empty lists mean: copy/enable the server, approve nothing, hide nothing."""
     tools = spec["tools"]
     screen = tools.get("screen")
-    if screen is None and name == browser_server:
+    if name == browser_server and (screen is None or screen["server"] != name):
         # A Codex child's browser: the user's browser MCP server, operated.
         screen = {"access": "operate", "server": name}
     entry = table_entry(definition)
@@ -516,6 +547,13 @@ def claude_plan(spec: dict, *, cwd: str, chrome: bool, claude_json: str,
         servers[name] = _copyable_definition(name, settings, cwd)
 
     for name in names:
+        if screen is not None and screen["server"] == name:
+            entry = table_entry(servers[name])
+            if entry is not None and entry[0] in NAME_CLASSIFIED and entry[1] == "*":
+                raise ToolsError(
+                    f"MCP server {name!r} must pin a version in the classification "
+                    "table for Claude screen selection (e.g. chrome-devtools-mcp@1.10.1); "
+                    "Claude cannot hide unknown tools with a name allowlist")
         exposed, hidden = _approval(spec, name, servers[name])
         allowed += [f"mcp__{name}__{tool}" for tool in exposed]
         disallowed += [f"mcp__{name}__{tool}" for tool in hidden]
@@ -624,6 +662,13 @@ def codex_apply(config: dict, spec: dict) -> None:
     browser_server = None
     if "browser" in tools:
         browser_server = codex_browser_server(servers)
+        entry = table_entry(servers[browser_server])
+        if entry is None or entry[0] not in NAME_CLASSIFIED:
+            raise ToolsError(
+                f"MCP server {browser_server!r} does not run chrome-devtools-mcp "
+                "directly (a wrapper script is not classified), so its tools "
+                "cannot be approved for tools.browser; run it as "
+                "npx chrome-devtools-mcp[@version]")
         if browser_server not in names:
             names.append(browser_server)
     for name in names:

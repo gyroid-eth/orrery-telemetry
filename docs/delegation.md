@@ -185,12 +185,14 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 
 | 分類 | chrome-devtools-mcp の tool |
 |---|---|
-| 読む（`read`） | get_console_message・get_css_styles・get_network_request・list_console_messages・list_network_requests・list_pages・performance_analyze_insight・select_page・take_screenshot・take_snapshot・wait_for |
+| 読む（`read`） | get_console_message・get_css_styles・list_console_messages・list_network_requests・list_pages・performance_analyze_insight・select_page・wait_for |
 | 操作する（`operate`） | click・close_page・drag・emulate・fill・fill_form・handle_dialog・hover・navigate_page・new_page・press_key・resize_page・type_text |
-| 承認しない | evaluate_script（ページ内で任意のスクリプトを実行）・upload_file（ホストのファイルをページへ送る）・take_heapsnapshot・performance_start_trace・performance_stop_trace・lighthouse_audit（ホストにファイルを書く） |
+| 承認しない | get_network_request・take_screenshot・take_snapshot（任意のホスト出力パス）・evaluate_script（ページ内で任意のスクリプトを実行）・upload_file（ホストのファイルをページへ送る）・take_heapsnapshot・performance_start_trace・performance_stop_trace・lighthouse_audit（ホストにファイルを書く） |
 
 - `browser`（Codex）は「読む」と「操作する」を、`screen:read:chrome-devtools` は「読む」だけを公開して承認します。残りは `enabled_tools` から外れて見えません
 - 実際の定義は版を固定しない `npx chrome-devtools-mcp@latest` が普通なので、この server だけは版が分からなくても**名前**で分類します。表に載った名前の tool だけを tool ごとに承認し、新しい版で増えた tool は公開も承認もされません。Windows-MCP の版固定とは違い、tool の名前と意味が対応し、任意実行が `evaluate_script` などの名前で分かるためです
+- 承認は引数別ではなく tool 全体に適用されます。`take_snapshot.filePath`、`take_screenshot.filePath`、`get_network_request.requestFilePath` / `responseFilePath` はホストへ書き込めるため、3 tool は「読む」と「操作する」の両方から除きます。Claude の `screen:read:<chrome>` / `screen:operate:<chrome>` は分類表にある版の固定が必要です。Claude は未知 tool を allowlist で非公開にできないため、未固定版や未知版では起動を止めます。固定版は他の tool を `--disallowed-tools` に指定します。Claude in Chrome の `browser` は従来どおりです。
+- 分類するのは `npx [-y|--yes] chrome-devtools-mcp[@version]` による直接の起動です。wrapper や `npx --package chrome-devtools-mcp@version other-program` は分類しません。browser と別の screen server は併用でき、それぞれの承認範囲を保ちます。
 - 「承認しない」tool は `mcp:chrome-devtools:all` のときだけ承認します。こちらは版を固定した定義（`chrome-devtools-mcp@1.10.1`）が要ります
 - 承認は Codex の tool 承認だけです。`--autoConnect` の Chrome 側の接続許可は別で、Chrome の接続許可を人が答える点は変わりません
 

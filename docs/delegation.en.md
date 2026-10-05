@@ -185,12 +185,14 @@ What a screen selection exposes and approves is decided by the classification ta
 
 | Class | chrome-devtools-mcp tools |
 |---|---|
-| Read (`read`) | get_console_message, get_css_styles, get_network_request, list_console_messages, list_network_requests, list_pages, performance_analyze_insight, select_page, take_screenshot, take_snapshot, wait_for |
+| Read (`read`) | get_console_message, get_css_styles, list_console_messages, list_network_requests, list_pages, performance_analyze_insight, select_page, wait_for |
 | Operate (`operate`) | click, close_page, drag, emulate, fill, fill_form, handle_dialog, hover, navigate_page, new_page, press_key, resize_page, type_text |
-| Never approved | evaluate_script (runs arbitrary script in the page), upload_file (sends a host file to the page), take_heapsnapshot, performance_start_trace, performance_stop_trace, lighthouse_audit (write files on the host) |
+| Never approved | get_network_request, take_screenshot, take_snapshot (optional host output paths), evaluate_script (runs arbitrary script in the page), upload_file (sends a host file to the page), take_heapsnapshot, performance_start_trace, performance_stop_trace, lighthouse_audit (write files on the host) |
 
 - `browser` (Codex) exposes and approves the read and operate tools; `screen:read:chrome-devtools` only the read tools. The rest is left out of `enabled_tools` and is not visible
 - The real definition is usually the unpinned `npx chrome-devtools-mcp@latest`, so this one server is classified by tool **name** even when its version is unknown. Only the names in the table are approved, one by one; a tool a newer version adds is neither exposed nor approved. This differs from the Windows-MCP version pin because names map to meanings and arbitrary execution is identifiable by name (`evaluate_script` and the like)
+- Approval applies to a whole tool, not its arguments. `take_snapshot.filePath`, `take_screenshot.filePath`, and `get_network_request.requestFilePath` / `responseFilePath` can write host files, so these tools are excluded from both read and operate. Claude `screen:read:<chrome>` / `screen:operate:<chrome>` requires a version pin listed in the table: Claude cannot hide unknown tools with an allowlist, so an unpinned or unknown version stops the launch. A known pinned version receives `--disallowed-tools` for the remaining tools. Claude in Chrome `browser` is unchanged.
+- Classification requires a direct `npx [-y|--yes] chrome-devtools-mcp[@version]` invocation. A wrapper or `npx --package chrome-devtools-mcp@version other-program` is not classified. Browser and a different screen server may be selected together; each keeps its own approval scope.
 - The "never approved" tools are approved only by `mcp:chrome-devtools:all`, which needs a pinned definition (`chrome-devtools-mcp@1.10.1`)
 - This is Codex's tool approval only. The Chrome-side `--autoConnect` connection permission is separate, and a person still answers the Chrome connection prompt
 
