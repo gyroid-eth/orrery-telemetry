@@ -144,7 +144,7 @@ This source-only helper returns `RESOLVED_AGENT` and the resolution source to it
 
 By default, a target declaration through `--resources` is required, and conflicts are checked before a child starts. It supports Claude / Codex, model selection, a preregistered identity, a child-owned token file, a per-child MCP proxy, and an optional worktree. It waits until the tmux REPL is ready or has exited early, then injects the canonical task. Argument / server / worktree failures exit 1, missing resource declarations exit 2, and reservation conflicts exit 21. It is normally used through [/delegate](launchers.en.md#delegate) or the dashboard rather than called directly.
 
-`AGENTSTACK_CHILD_DEFAULT_TOOLS` applies only to CLI launches without `--base` / `--tools`. The final directory and provider determine which default items are usable; omissions appear in spawn output and first instructions. Explicit selections and resume retain their fail-closed path. See [defaults](delegation.en.md#installer-defaults).
+`AGENTSTACK_CHILD_DEFAULT_TOOLS` applies only to CLI launches without `--base` / `--tools` / `--codex-mcp`. The final directory and provider determine which default items are usable; omissions appear in spawn output and first instructions. Explicit selections and resume retain their fail-closed path. See [defaults](delegation.en.md#installer-defaults).
 
 ### `cleanup-child-agent.sh`
 

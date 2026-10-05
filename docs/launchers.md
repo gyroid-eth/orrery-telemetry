@@ -244,7 +244,7 @@ child とのやりとりにも同じ境界があります。Claude Code 2.1.224 
 
 `--base mail-only` と `--tools browser[:<deviceId>]` / `screen[:read|:operate]` / `screen:<read|operate>:<server>` / `mcp:<server>[:all]` で、child に渡す道具を選べます。選択がある child は、指定どおりにできなければ起動しません（[子に渡す道具を選ぶ](delegation.md#子に渡す道具を選ぶ--base----tools)）。
 
-base/tools を省略した CLI 起動は installer の `AGENTSTACK_CHILD_DEFAULT_TOOLS`（既定は空）を使い、使えない既定項目だけを通知して外します。`--base default` の明示で既定を適用しない起動にできます。resume は記録済みの選択を復元します（[既定の道具](delegation.md#installer-の既定の道具)）。
+base/tools/MCP profile を省略した CLI 起動は installer の `AGENTSTACK_CHILD_DEFAULT_TOOLS`（既定は空）を使い、使えない既定項目だけを通知して外します。`--base default` の明示で既定を適用しない起動にできます。resume は記録済みの選択を復元します（[既定の道具](delegation.md#installer-の既定の道具)）。
 
 Codex child の MCP は既定で `inherit`（従来互換）です。`/delegate --codex-mcp orrery-only` は認証済み ORRERY Mail と session-binding plugin を残して、他の継承 MCP/plugin を無効化します。plugin skill や外部 app tool が必要な task では使いません。
 

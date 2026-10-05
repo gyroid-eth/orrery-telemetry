@@ -242,7 +242,7 @@ The parent agent does not finish when it hands off the task. It remains responsi
 
 `--base mail-only` and `--tools browser[:<deviceId>]` / `screen[:read|:operate]` / `screen:<read|operate>:<server>` / `mcp:<server>[:all]` choose the tools a child gets. A child with a selection is not started when the selection cannot be applied ([Choosing the tools a child gets](delegation.en.md#choosing-the-tools-a-child-gets---base----tools)).
 
-A CLI launch that omits both base/tools uses the installer's `AGENTSTACK_CHILD_DEFAULT_TOOLS` (empty by default), reporting and omitting only unavailable default items. Explicit `--base default` suppresses those defaults. Resume restores the recorded selection ([Installer defaults](delegation.en.md#installer-defaults)).
+A CLI launch that omits base/tools/MCP profile uses the installer's `AGENTSTACK_CHILD_DEFAULT_TOOLS` (empty by default), reporting and omitting only unavailable default items. Explicit `--base default` suppresses those defaults. Resume restores the recorded selection ([Installer defaults](delegation.en.md#installer-defaults)).
 
 Codex children default to MCP profile `inherit` for backward compatibility. `/delegate --codex-mcp orrery-only` keeps authenticated ORRERY Mail and the session-binding plugin while disabling other inherited MCP servers and plugins. Do not use it for tasks that require plugin skills or external app tools.
 

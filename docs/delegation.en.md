@@ -201,9 +201,9 @@ What a screen selection exposes and approves is decided by the classification ta
 
 ### Installer defaults
 
-`--child-default-tools 'browser,screen:operate'` writes `AGENTSTACK_CHILD_DEFAULT_TOOLS` into env.sh, the service definition and install-state. The default is empty. The launcher uses it only when neither `--base` nor `--tools` is explicit; `--base default` clears the installer choice for that launch.
+`--child-default-tools 'browser,screen:operate'` writes `AGENTSTACK_CHILD_DEFAULT_TOOLS` into env.sh, the service definition and install-state. The default is empty. The launcher uses it only when none of `--base`, `--tools` or `--codex-mcp` is explicit; `--base default` clears the installer choice for that launch.
 
-Defaults are checked for the provider and final directory, one item at a time. An unavailable item is omitted while applicable items remain; the omission appears in spawn output and the child's first instructions. Explicit selections keep failing closed. The effective selection is saved in the existing Claude launch record or Codex tools record, so resume uses that selection instead of current installer defaults. On macOS Codex, `screen:operate` without a named server is omitted and node_repl is not automatically approved.
+Defaults are checked for the provider and final directory, one item at a time. An unavailable item is omitted while applicable items remain; the omission appears in spawn output and the child's first instructions. Explicit base/tools/MCP profiles take precedence over defaults; output and the first instruction also state when defaults were not applied. Explicit selections keep failing closed. Mail proxy, authentication and startup failures are outside per-item default omission and stop a selected launch. The effective selection is saved in the existing Claude launch record or Codex tools record, so resume uses that selection instead of current installer defaults. On macOS Codex, `screen:operate` without a named server is omitted and node_repl is not automatically approved.
 
 ### Approval
 

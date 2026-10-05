@@ -427,11 +427,17 @@ fi
 # Tools selection. Parsed here so that an invalid request stops before any
 # registration or tmux work; what can only be checked in the child's final
 # directory (servers, computer use) is checked again just before launch.
-if [[ -z "$CHILD_TOOLS_BASE" && ${#CHILD_TOOLS_ARGS[@]} -eq 0 \
-        && -n "${AGENTSTACK_CHILD_DEFAULT_TOOLS:-}" ]]; then
+if [[ -n "${AGENTSTACK_CHILD_DEFAULT_TOOLS:-}" ]]; then
     # Resolve defaults only after the final directory is known. Explicit base
-    # or tools bypass them entirely, including an explicit --base default.
-    CHILD_TOOLS_FROM_DEFAULTS=true
+    # or tools/profile bypass them entirely, including --base default and the
+    # legacy --codex-mcp reduction. Defaults must never widen that reduction.
+    if [[ -z "$CHILD_TOOLS_BASE" && ${#CHILD_TOOLS_ARGS[@]} -eq 0 \
+            && "$CODEX_MCP_PROFILE_CLI" != true ]]; then
+        CHILD_TOOLS_FROM_DEFAULTS=true
+    else
+        CHILD_DEFAULT_TOOLS_NOTICE="Default tools were not applied because an explicit base, tools or MCP profile takes precedence."
+        echo "[spawn_child] Notice: $CHILD_DEFAULT_TOOLS_NOTICE" >&2
+    fi
 fi
 if [[ -n "$CHILD_TOOLS_BASE" || ${#CHILD_TOOLS_ARGS[@]} -gt 0 ]]; then
     if [[ "$CHILD_TOOLS_BASE" == "mail-only" || ${#CHILD_TOOLS_ARGS[@]} -gt 0 ]]; then

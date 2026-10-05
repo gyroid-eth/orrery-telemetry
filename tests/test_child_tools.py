@@ -675,6 +675,8 @@ def test_explicit_selection_bypasses_defaults_even_when_defaults_are_invalid(tmp
     result = _launch(tmp_path, env, workdir, "ExplicitChild", *flags)
     assert result.returncode == 0, result.stderr
     assert "omitted" not in result.stderr and "omitted" not in _log_text(env)
+    notice = "Default tools were not applied because an explicit base, tools or MCP profile takes precedence."
+    assert notice in result.stderr and notice in _log_text(env)
 
 
 def test_explicit_unavailable_tools_still_fail_with_defaults_configured(tmp_path):
@@ -864,6 +866,23 @@ def test_codex_default_browser_records_effective_selection_and_omission(tmp_path
     server_cfg = _codex_child_config(env, "CodexDefaults")["mcp_servers"]["chrome-devtools"]
     assert len(server_cfg["enabled_tools"]) == 30
     notice = "Default tool screen:operate is unavailable on this machine and was omitted."
+    assert notice in result.stderr and notice in _log_text(env)
+
+
+@pytest.mark.parametrize("profile", ["orrery-only", "inherit"])
+def test_explicit_codex_profile_wins_over_default_browser(tmp_path, profile):
+    env, workdir = _codex_env(tmp_path, CODEX_CONFIG + 'args = ["chrome-devtools-mcp@latest"]\n')
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser"
+    result = _launch(tmp_path, env, workdir, "CodexProfile", "--codex-mcp", profile, codex=True)
+    assert result.returncode == 0, result.stderr
+    config = _codex_child_config(env, "CodexProfile")
+    chrome = config["mcp_servers"]["chrome-devtools"]
+    if profile == "orrery-only":
+        assert chrome["enabled"] is False
+    assert "enabled_tools" not in chrome and "tools" not in chrome
+    record = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents" / "CodexProfile.tools.json"
+    assert not record.exists()
+    notice = "Default tools were not applied because an explicit base, tools or MCP profile takes precedence."
     assert notice in result.stderr and notice in _log_text(env)
 
 
