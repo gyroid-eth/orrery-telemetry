@@ -227,6 +227,40 @@ WSL から起動した Windows のプロセスは、その WSL が動く Windows
 
 動いている child に道具を足す・resume で道具を変える（`/api/jump` の `tools`）、roster と DECK への表示、NEW AGENT の欄は、まだありません。
 
+## ブラウザと画面操作: 何が届くか、人がやること
+
+ORRERY から起動した agent（child・NEW AGENT）に、ブラウザと画面全体の道具が届き、呼べるかを、Claude / Codex × Mac / Windows（WSL2）の 8 通りで調べました（2026-09-30 と 10-01、Claude Code 2.1.285、Codex CLI 0.159.x）。8 通りとも条件を満たせば届き、呼べましたが、これは到達と呼び出しの調査で、操作まで確かめたものばかりではありません。旧版の ORRERY での実測や、製品の外の設定での試験を含みます。設定なしで使えるものはありません。
+
+| | Mac | Windows（WSL2） |
+|---|---|---|
+| Claude × ブラウザ | 届く。ブラウザの拡張が接続中であること | 届く。deviceId の指定が要る |
+| Claude × 画面全体 | 起動ディレクトリの project で computer use が有効なときだけ届く。tool が応答するところまで確認し、操作は試していない（アプリごとに人が許可） | `--tools screen:operate:<server>` で Windows-MCP などを渡す（上の[選択](#子に渡す道具を選ぶ--base----tools)）。操作の成功は、製品の外で strict の設定に Windows-MCP を足した `claude -p` での実測で、この `--tools` の経路では確かめていない |
+| Codex × ブラウザ | chrome-devtools の tool を承認すれば届く（上の[承認](#codex-child-と-mcp-承認)） | 利用者の設定か overlay で server を渡し、tool を承認する。overlay で渡したとき tool が出なかった例があり、原因は未確定 |
+| Codex × 画面全体 | `node_repl` と同梱 plugin を通る。アプリの一覧を読むところまで確認済みで、操作はアプリごとに人が許可 | `screen:<read\|operate>:<server>` で渡す |
+
+起動の経路ごとの違いです。
+
+| 経路 | 届き方 |
+|---|---|
+| `/delegate` の child | `--tools`・`--claude-chrome(-device)`・overlay が効く |
+| NEW AGENT（親なし、`--standalone`） | Codex は child と同じ生成 home・同じ承認方針なので、overlay と `--tools` の記録が効く。Claude は NEW AGENT のフォームで指定した値だけを使い、`AGENTSTACK_CLAUDE_CHILD_CHROME` の env は使いません。`--tools` の欄は NEW AGENT にまだありません |
+| resume | Codex は起動と resume のたびに home を作り直すので overlay が効きます。Claude は起動の記録から同じ設定を復元します（記録が無い child は ORRERY の選択を復元せず、利用者の Claude 設定をそのまま継承します。ブラウザや computer use が付かないことを意味しません） |
+| 人が端末で直接起動した `claude` / `codex` | 対象外です。実際の `~/.claude`・`~/.codex` の設定だけで決まり、ORRERY は変えません |
+
+人が端末で直接 Codex を起動する場合に同じ許可が欲しければ、利用者自身が `~/.codex/config.toml` の `[mcp_servers.chrome-devtools]` に `default_tools_approval_mode = "approve"`（または tool ごとの `approval_mode`）を書きます。この許可は server の全 tool を含み、任意のページスクリプトを動かす `evaluate_script` も承認なしになります。人が画面を見ている対話の起動なら、書かずに承認を画面で出すほうが安全です。
+
+### 人がやること（事前の設定と、接続時の許可）
+
+ORRERY のコードでは開けない壁です。次の 1 つ目と 3〜5 つ目は agent が実行する前に人が一度済ませ、chrome-devtools の接続許可だけは接続のたびに人が答えます。
+
+- **Claude in Chrome**: ブラウザに拡張を入れてログインし、接続中にする（拡張が止まっていると、agent の設定が正しくても動きません）。複数のブラウザがつながっているときは deviceId を選ぶ
+- **chrome-devtools（Codex）**: `--autoConnect` で繋ぐ Chrome を起動しておく（一度）。接続の許可は一度では済みません。MCP server が接続を要求するたびに Chrome が人に許可を求めるので、新しい child や再接続のたびに人が答えます。Codex 側で tool を `approve` にしても、この Chrome の許可は省けません。tool は見えていても、無人の child は Chrome の接続許可が出るまで呼び出しが進みません
+- **Computer use（Mac）**: アプリごとの許可（`request_access`）は人が画面で出します。Codex の approval policy とは別の仕組みなので、`never` でも `on-request` でも変わりません。事前にそのアプリを許可していないと agent は進めません。画面収録とアクセシビリティの許可も、macOS の設定で一度出します。computer use は Mac 全体で同時に 1 セッションだけです
+- **Claude の computer use（Mac）**: 使いたい project で `/mcp` から有効にします（`~/.claude.json` の `projects[<dir>].enabledMcpServers`）
+- **Windows の画面操作**: Windows-MCP は RDP などの対話セッションで動かします。ssh から起動した WSL はセッション 0 で、画面が取れません
+
+承認の入口は 1 つに保ってください。全 Codex child に一括で渡すなら overlay、child ごとに選ぶなら `--tools` です。overlay の `default_tools_approval_mode = "approve"` は、その server の全 tool（chrome-devtools の `evaluate_script` を含む）を承認します。
+
 ## 使い分け
 
 組み込み subagent が正しい場面はあります。答えだけが要る短い検索、親のコンテキストを汚したくない読み取り専用の調査。1回で閉じ、誰も後から参照しない仕事です。
