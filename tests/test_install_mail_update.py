@@ -134,7 +134,9 @@ class Stack:
 
     def teardown(self) -> None:
         _stop_mail(self.home, self.state_root, self.mail_port)
-        stop_dashboard(self.home, label_prefix=self.env["AGENTSTACK_LABEL_PREFIX"])
+        # This fixture runs the installer with a Linux uname stub; it cannot
+        # create launchd jobs even when pytest itself runs on macOS.
+        stop_dashboard(self.home, label_prefix=self.env["AGENTSTACK_LABEL_PREFIX"], launchd=False)
 
 
 def _ensure_project(url: str, project_key: str) -> None:

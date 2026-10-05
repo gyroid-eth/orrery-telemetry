@@ -241,15 +241,15 @@ WSL から起動した Windows のプロセスは、その WSL が動く Windows
 作業の区切りで、親または人が `/delegate --resume <NAME> --tools <spec>` を指定できます。子に Mail で保存と予約の解放を依頼し、`POST /api/exit` の完了後、`GET /api/agents` で `gone` / `finished` を確認してください。resume は同じ名前・native session ID・作業ディレクトリで会話を続けます。動作中の道具をその場で変える機能ではありません。
 
 ```bash
-agentstack-resume <NAME> --tools browser --tools mcp:<server>
-agentstack-resume <NAME> --clear-tools --detached
+"${AGENTSTACK_HOME:-$HOME/.agentstack}/bin/agentstack-resume" <NAME> --tools browser --tools mcp:<server>
+"${AGENTSTACK_HOME:-$HOME/.agentstack}/bin/agentstack-resume" <NAME> --clear-tools --detached
 ```
 
 `tools` は全置換です。残したい項目もすべて指定し、`--clear-tools`（API の `tools: {}`）で追加の道具を外します。base 省略は既存の base を維持し、`--base` だけの指定は道具を維持します。両方省略すると従来の選択で resume します。installer の既定は追加しません。grammar・provider・cwd・分類表・MCP コピーと既存の Mail 認証を検証し、適用できない明示指定は止めます。変更できるのは retained state がある Claude/Codex CLI child だけで、standalone・古い移行前の子・conversation-only・Codex App は拒否します。
 
-子ごとの排他と世代を使って候補を準備し、既存 resume の起動成功で確定します。起動失敗はその世代の旧記録・生成設定に戻します。別の登録・変更を古い rollback で上書きしません。Claude の置換記録は version 4 で、空の選択も保存でき、既存 version 2/3 は読めます。API 成功は起動の確認であり MCP 呼び出しの成功ではないため、再開した子に Mail で同じ会話と必要な道具の実呼び出しを確認してください。
+子ごとの排他と世代を使って候補を準備し、既存 resume の起動成功で確定します。起動失敗はその世代の旧記録・生成設定に戻します。別の登録・変更を古い rollback で上書きしません。Claude の置換記録は version 4 で、空の選択も保存でき、既存 version 2/3 は読めます。API 成功は tmux／terminal が起動を受け付けたことを意味し、shell 内の bootstrap／認証の完了や MCP 呼び出しの成功は待ちません。後から bootstrap が失敗しても新しい道具の記録は確定したまま残り、次の resume にも使います。再開した子から Mail で同じ会話と必要な道具の実呼び出しの報告を受け、受信を確認してください。/delegate の最後の受信確認は省略できません。
 
-変更中にプロセスが落ちると pending の世代を残して resume / purge を止めます。tmux が無く子が停止していることを確認し、エラーに出る世代だけを使って、`python3 "$AGENTSTACK_HOME/hooks/child_resume.py" rollback-tools-change --runtime-dir "$AGENTSTACK_RUNTIME_DIR" --agent-name <NAME> --generation <GENERATION>` で戻します。起動中・resume 中や世代が変わった子はこの手順も拒否します。credential や private state の中身を表示・手修正しないでください。
+変更中にプロセスが落ちると pending の世代を残して resume / purge を止めます。tmux が無く子が停止していることを確認し、エラーに出る世代だけを使って、`python3 "$AGENTSTACK_HOME/hooks/child_resume.py" rollback-tools-change --runtime-dir "$AGENTSTACK_RUNTIME_DIR" --agent-name <NAME> --generation <GENERATION>` で回収します。開始途中・復元途中は旧選択へ戻し、確定を journal に記録済みなら新しい選択を保って後片付けを完了します。途中で落ちても同じ世代で再実行できます。復元は起動中・resume 中や世代が変わった子には拒否します。credential や private state の中身を表示・手修正しないでください。
 
 実機確認（2026-10-05）: Claude Code 2.1.289 は道具無しから同じ会話を `--resume` し、新たな chrome-devtools MCP の `new_page about:blank` を実際に成功させました。sandbox 内で Chrome を起動できないため、既存 CDP サービスへ接続した試験です。Codex CLI 0.159.2 は resume で道具を変えても呼び出しへ反映されない既知の制限があり、未解決です。同じ session ID と marker は維持し、native `/mcp` には chrome-devtools connected / 30 tools が出ましたが、model は新しい道具を unavailable と返し、実呼び出しは確認できませんでした。`--no-daemon` の対照も成功せず、原因は未確定です。この版の Codex で途中の道具追加が使えるとは扱いません。
 

@@ -41,6 +41,7 @@ def stopped(request, tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_claude_chrome_policy_module", lambda: claude_chrome_policy)
     monkeypatch.setattr(server, "_agent_program", lambda name: request.param)
     monkeypatch.setattr(server, "_has_session", lambda name: False)
+    monkeypatch.setattr(server, "_child_session_live", lambda name, boot: False)
     monkeypatch.setattr(server, "_resume_capability", lambda *a, **k: "ready")
     registration = {k: state[k] for k in ["agent_id", "project_key", "program"]}
     transcript = project / f"{SID}.jsonl"
@@ -147,6 +148,7 @@ def test_running_or_unknown_child_is_rejected(stopped, monkeypatch, category):
     _, record, _, _ = stopped
     original = record.read_bytes()
     monkeypatch.setattr(server, "_has_session", lambda name: True)
+    monkeypatch.setattr(server, "_child_session_live", lambda name, boot: True)
     monkeypatch.setattr(server, "lookup_agent", lambda name: {"category": category})
     assert not server.do_jump(NAME, tools={})["ok"]
     assert record.read_bytes() == original
@@ -296,3 +298,186 @@ def test_empty_replacement_does_not_require_source_config(stopped, monkeypatch):
     (Path(os.environ["CODEX_HOME"]) / "config.toml").unlink()
     monkeypatch.setattr(server, "do_resume", lambda *a, **k: {"ok": True, "action": "resumed"})
     assert server.do_jump(NAME, tools={})["ok"]
+
+
+@pytest.mark.parametrize("stopped", ["codex"], indirect=True)
+def test_codex_forecast_accepts_missing_source_config_for_empty_selection(stopped, monkeypatch):
+    runtime, record, _, state = stopped
+    (Path(os.environ["CODEX_HOME"]) / "config.toml").unlink()
+    monkeypatch.setenv("AGENTSTACK_MCP_PROXY", sys.executable)
+    child_tools.write_codex_record(str(record), child_tools.normalize("mail-only", {}))
+    registration = {key: state[key] for key in ("agent_id", "project_key", "program")}
+    home, profile = server._codex_resume_child_home(NAME, registration)
+    assert home == str(runtime / "child-agents" / f"{NAME}.codex-home")
+    assert profile == "orrery-only"
+
+
+@pytest.mark.parametrize("provider", ["codex-app", "gemini", ""])
+def test_unsupported_provider_never_changes_or_activates(stopped, monkeypatch, provider):
+    _, record, _, _ = stopped
+    raw = record.read_bytes()
+    monkeypatch.setattr(server, "_agent_program", lambda name: provider)
+    monkeypatch.setattr(server, "_open_codex_app", lambda name: pytest.fail("must not activate"))
+    assert not server.do_jump(NAME, tools={})["ok"]
+    assert record.read_bytes() == raw
+
+
+class SimulatedCrash(BaseException):
+    pass
+
+
+@pytest.mark.parametrize("point", ["journal", "state", "home", "mcp", "record", "ready"])
+def test_begin_crash_recovers_via_canonical_cli(stopped, monkeypatch, point):
+    runtime, record, _, state = stopped
+    original = record.read_bytes()
+    directory = record.parent
+    state_path = directory / f"{NAME}.json"
+    journal = child_resume._tools_journal(state_path)
+    atomic = child_resume._atomic_json
+    raw_write = child_resume._atomic_bytes
+    replace = child_resume.os.replace
+    def write(path, payload):
+        atomic(path, payload)
+        if (point == "journal" and path == journal and payload.get("phase") == "prepared"
+                or point == "ready" and path == journal and payload.get("phase") == "ready"
+                or point == "state" and path == state_path):
+            raise SimulatedCrash()
+    def write_raw(path, raw, mode=0o600):
+        raw_write(path, raw, mode)
+        if point == "record" and path == record:
+            raise SimulatedCrash()
+    def move(source, target):
+        replace(source, target)
+        if (point == "home" and Path(source).name == f"{NAME}.codex-home"
+                or point == "mcp" and Path(source).name == f"{NAME}.mcp.json"):
+            raise SimulatedCrash()
+    with monkeypatch.context() as patch:
+        patch.setattr(child_resume, "_atomic_json", write)
+        patch.setattr(child_resume, "_atomic_bytes", write_raw)
+        patch.setattr(child_resume.os, "replace", move)
+        with pytest.raises(SimulatedCrash):
+            child_resume.begin_tools_change(runtime, NAME, state, record, {"base": "default", "tools": {}}, "inherit" if state["provider"] == "codex" else None)
+    generation = json.loads(journal.read_text())["generation"]
+    with pytest.raises(child_resume.ResumeStateError, match="pending"):
+        child_resume._check_tools_change(child_resume._load_state(state_path), state_path)
+    assert not child_resume.purge_one(runtime, NAME, reason="purged")
+    result = subprocess.run([sys.executable, str(ROOT / "hooks/child_resume.py"), "rollback-tools-change",
+        "--runtime-dir", str(runtime), "--agent-name", NAME, "--generation", generation],
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert record.read_bytes() == original
+    assert not journal.exists()
+    assert child_resume._load_state(state_path) == state
+    assert (directory / f"{NAME}.codex-home" / "old-config").read_text() == "old"
+    assert (directory / f"{NAME}.mcp.json").read_bytes() == b"old-generated"
+    assert (runtime.parent / "never-delete").read_text() == "preserve"
+
+
+@pytest.mark.parametrize("commit,point", [(False, p) for p in ["decision", "record", "home", "mcp", "state"]]
+    + [(True, p) for p in ["decision", "remove", "state"]])
+@pytest.mark.parametrize("absent_record", [False, True])
+def test_finish_crash_retries_durable_decision(stopped, monkeypatch, commit, point, absent_record):
+    runtime, record, _, state = stopped
+    old = record.read_bytes() if not absent_record else None
+    if absent_record:
+        record.unlink()
+    candidate = {"base": "default", "tools": {}}
+    generation = child_resume.begin_tools_change(runtime, NAME, state, record, candidate, "inherit" if state["provider"] == "codex" else None)
+    directory = record.parent
+    state_path = directory / f"{NAME}.json"
+    journal = child_resume._tools_journal(state_path)
+    atomic = child_resume._atomic_json
+    raw_write = child_resume._atomic_bytes
+    replace = child_resume.os.replace
+    remove = child_resume._remove_exact
+    unlink = Path.unlink
+    def write(path, payload):
+        atomic(path, payload)
+        if (point == "decision" and path == journal or point == "state" and path == state_path):
+            raise SimulatedCrash()
+    def write_raw(path, raw, mode=0o600):
+        raw_write(path, raw, mode)
+        if point == "record" and path == record:
+            raise SimulatedCrash()
+    def delete(path, *args, **kwargs):
+        unlink(path, *args, **kwargs)
+        if point == "record" and path == record:
+            raise SimulatedCrash()
+    def move(source, target):
+        replace(source, target)
+        if (point == "home" and Path(target).name == f"{NAME}.codex-home"
+                or point == "mcp" and Path(target).name == f"{NAME}.mcp.json"):
+            raise SimulatedCrash()
+    def remove_path(path):
+        remove(path)
+        if point == "remove":
+            raise SimulatedCrash()
+    with monkeypatch.context() as patch:
+        patch.setattr(child_resume, "_atomic_json", write)
+        patch.setattr(child_resume, "_atomic_bytes", write_raw)
+        patch.setattr(child_resume.os, "replace", move)
+        patch.setattr(child_resume, "_remove_exact", remove_path)
+        patch.setattr(Path, "unlink", delete)
+        with pytest.raises(SimulatedCrash):
+            child_resume.finish_tools_change(runtime, NAME, generation, commit=commit)
+    # The rollback CLI completes a recorded commit, instead of undoing it.
+    result = subprocess.run([sys.executable, str(ROOT / "hooks/child_resume.py"), "rollback-tools-change",
+        "--runtime-dir", str(runtime), "--agent-name", NAME, "--generation", generation],
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert not journal.exists()
+    if commit:
+        assert json.loads(record.read_text()) == candidate
+    elif old is None:
+        assert not record.exists()
+    else:
+        assert record.read_bytes() == old
+    if not commit:
+        assert child_resume._load_state(state_path) == state
+        assert (directory / f"{NAME}.codex-home" / "old-config").read_text() == "old"
+        assert (directory / f"{NAME}.mcp.json").read_bytes() == b"old-generated"
+    assert (runtime.parent / "never-delete").read_text() == "preserve"
+
+
+@pytest.mark.parametrize("failure", ["permission", "timeout", "absent", "finished"])
+def test_tmux_probe_unknown_refuses_before_staging(stopped, monkeypatch, failure):
+    runtime, record, _, _ = stopped
+    original = record.read_bytes()
+    monkeypatch.setattr(server, "_child_session_live", REAL_LIVE_PROBE)
+    monkeypatch.setattr(child_resume, "live_lease", lambda *a, **k: False)
+    def run(*args, **kwargs):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired("tmux", 2)
+        return subprocess.CompletedProcess(args[0], 0 if failure == "finished" else 1,
+            stdout="", stderr="can't find session" if failure == "absent" else "Permission denied")
+    monkeypatch.setattr(server.subprocess, "run", run)
+    monkeypatch.setattr(server, "_has_session", lambda name: failure == "finished")
+    monkeypatch.setattr(server, "lookup_agent", lambda name: {"category": "finished"})
+    monkeypatch.setattr(server, "do_resume", lambda *a, **k: {"ok": True, "action": "resumed"})
+    result = server.do_jump(NAME, tools={})
+    assert result["ok"] is (failure in {"absent", "finished"})
+    if failure in {"permission", "timeout"}:
+        assert "Cannot confirm" in result["error"]
+        assert record.read_bytes() == original
+        assert not child_resume._tools_journal(record.parent / f"{NAME}.json").exists()
+
+
+REAL_LIVE_PROBE = server._child_session_live
+
+
+def test_accepted_launch_cleanup_error_is_pending_success(stopped, monkeypatch):
+    runtime, record, _, state = stopped
+    monkeypatch.setattr(server, "do_resume", lambda *a, **k: {"ok": True, "action": "resumed"})
+    def fail(path):
+        raise OSError("fixture cleanup failure")
+    with monkeypatch.context() as patch:
+        patch.setattr(child_resume, "_remove_exact", fail)
+        result = server.do_jump(NAME, tools={})
+    assert result["ok"] and result["tools_changed"]
+    assert "cleanup is pending" in result["warning"]
+    journal = child_resume._tools_journal(record.parent / f"{NAME}.json")
+    saved = json.loads(journal.read_text())
+    assert saved["phase"] == "commit"
+    child_resume.finish_tools_change(runtime, NAME, saved["generation"], commit=False)
+    assert json.loads(record.read_text())["tools"] == {}
+    assert not journal.exists()

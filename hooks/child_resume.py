@@ -109,8 +109,16 @@ def owned_tools_change(generation: str):
         _TOOLS_CHANGE.reset(token)
 
 
-def _check_tools_change(state: dict) -> None:
+def _tools_journal(state_path: Path) -> Path:
+    return state_path.with_name(f".{state_path.stem}.tools-change.json")
+
+
+def _check_tools_change(state: dict, state_path: Path) -> None:
     pending = state.get("tools_change_generation")
+    journal = _tools_journal(state_path)
+    if os.path.lexists(journal):
+        saved = json.loads(_read_private(journal, "tools change journal", 16384))
+        pending = saved.get("generation") or "invalid"
     if pending and pending != tools_change_generation():
         label = pending if isinstance(pending, str) and re.fullmatch(r"[a-f0-9]{32}", pending) else "invalid"
         raise ResumeStateError("config_unrestorable", f"A tools change ({label}) is still pending; finish or roll back that generation first")
@@ -121,96 +129,130 @@ def tools_change_lock(runtime: Path, name: str):
     return _AgentLock(state.with_name(f".{name}.tools-change.lock"), exclusive=True)
 
 
+def _tools_record_is_canonical(runtime: Path, name: str, record: Path) -> bool:
+    state_path, *_ = _paths(runtime, name)
+    return record.parent == state_path.parent and (record == tools_record_path(runtime, name) or
+        re.fullmatch(re.escape(name) + r"\.claude-launch\.[A-Za-z0-9-]{8,128}\.json", record.name) is not None)
+
+
+def _file_identity(path: Path) -> list[int] | None:
+    try:
+        info = path.lstat()
+        return [info.st_dev, info.st_ino]
+    except FileNotFoundError:
+        return None
+
+
 def begin_tools_change(runtime: Path, name: str, validated: dict,
                        record: Path, candidate: dict, profile: str | None) -> str:
-    """Stage a non-secret selection; move generated config without reading it."""
+    """Write intent before staging; recovery never reads generated config."""
     state_path, _, home, mcp, lock = _paths(runtime, name)
-    # Only canonical selection paths, never a path supplied by an API caller.
-    allowed = record == tools_record_path(runtime, name) or (
-        record.parent == state_path.parent and
-        re.fullmatch(re.escape(name) + r"\.claude-launch\.[A-Za-z0-9-]{8,128}\.json", record.name))
-    if not allowed:
+    if not _tools_record_is_canonical(runtime, name, record):
         raise ResumeStateError("invalid_identity", "Tools record is not canonical")
     raw_candidate = (json.dumps(candidate, separators=(",", ":"), sort_keys=True) + "\n").encode()
     if len(raw_candidate) > 4096:
         raise ResumeStateError("config_unrestorable", "The tools selection is too large")
     generation = secrets.token_hex(16)
-    journal = state_path.with_name(f".{name}.tools-change.json")
-    staged = False
+    journal = _tools_journal(state_path)
     created = False
     try:
         with _AgentLock(lock, exclusive=True):
             state = _load_state(state_path)
-            if state != validated or state.get("tools_change_generation") or journal.exists() or journal.is_symlink():
+            if state != validated or state.get("tools_change_generation") or os.path.lexists(journal):
                 raise ResumeStateError("config_unrestorable", "Child state changed before the tools change")
             old = _read_private(record, "tools selection", 4096).hex() if os.path.lexists(record) else None
-            saved = {"generation": generation, "agent_id": state["agent_id"],
+            saved = {"generation": generation,
+                     "identity": {key: state.get(key) for key in ("agent_id", "agent_name", "project_key", "program")},
                      "record": record.name, "old_record": old,
                      "old_profile": state.get("codex_mcp_profile"),
+                     "new_profile": profile if profile is not None else state.get("codex_mcp_profile"),
                      "candidate_sha256": hashlib.sha256(raw_candidate).hexdigest(),
-                     "generated": [path.name for path in (home, mcp) if os.path.lexists(path)], "ready": False}
+                     "generated": {path.name: _file_identity(path) for path in (home, mcp)},
+                     "phase": "prepared"}
             _atomic_json(journal, saved)
             created = True
             state["tools_change_generation"] = generation
             if profile is not None:
                 state["codex_mcp_profile"] = profile
             _atomic_json(state_path, state)
-            staged = True
             for path in (home, mcp):
-                if path.name in saved["generated"]:
+                if saved["generated"][path.name] is not None:
                     os.replace(path, path.with_name(f".{path.name}.tools-{generation}"))
             _atomic_json(record, candidate)
-            saved["ready"] = True
+            saved["phase"] = "ready"
             _atomic_json(journal, saved)
-    except BaseException:
-        if staged:
+    except Exception:
+        if created:
             finish_tools_change(runtime, name, generation, commit=False)
-        elif created:
-            journal.unlink(missing_ok=True)
         raise
     return generation
 
 
 def finish_tools_change(runtime: Path, name: str, generation: str, *, commit: bool) -> None:
+    """Persist the decision, then perform idempotent recovery of that decision.
+
+    A durable commit cannot later be undone by a rollback retry. A journal left
+    before the state marker, or after its removal, still owns the same identity.
+    """
     state_path, _, home, mcp, lock = _paths(runtime, name)
     if not re.fullmatch(r"[a-f0-9]{32}", generation):
         raise ResumeStateError("invalid_identity", "Invalid tools change generation")
-    journal = state_path.with_name(f".{name}.tools-change.json")
+    journal = _tools_journal(state_path)
     with _AgentLock(lock, exclusive=True):
         saved = json.loads(_read_private(journal, "tools change journal", 16384))
         state = _load_state(state_path)
-        if (saved.get("generation") != generation or state.get("tools_change_generation") != generation
-                or saved.get("agent_id") != state.get("agent_id")):
+        phase = saved.get("phase")
+        if (saved.get("generation") != generation or phase not in {"prepared", "ready", "rollback", "commit"}
+                or state.get("tools_change_generation") not in (None, generation)
+                or saved.get("identity") != {key: state.get(key) for key in ("agent_id", "agent_name", "project_key", "program")}):
             raise ResumeStateError("identity_mismatch", "Tools change generation no longer owns this child")
         record = state_path.with_name(saved["record"])
-        # The journal is private, but its paths must still be canonical.
-        if not (record == tools_record_path(runtime, name) or
-                re.fullmatch(re.escape(name) + r"\.claude-launch\.[A-Za-z0-9-]{8,128}\.json", record.name)):
+        if not _tools_record_is_canonical(runtime, name, record):
             raise ResumeStateError("invalid_identity", "Invalid tools change record")
-        if saved.get("ready") and hashlib.sha256(_read_private(record, "tools selection", 4096)).hexdigest() != saved["candidate_sha256"]:
+        raw = _read_private(record, "tools selection", 4096) if os.path.lexists(record) else None
+        old = bytes.fromhex(saved["old_record"]) if saved["old_record"] is not None else None
+        candidate_matches = raw is not None and hashlib.sha256(raw).hexdigest() == saved["candidate_sha256"]
+        if not candidate_matches and not (phase in {"prepared", "rollback"} and raw == old):
             raise ResumeStateError("identity_mismatch", "The staged tools selection has changed")
-        if not commit:
+        # Once recorded, the decision is authoritative on every retry.
+        if phase not in {"rollback", "commit"}:
+            if commit and phase != "ready":
+                raise ResumeStateError("config_unrestorable", "Tools change was not fully staged")
+            phase = "commit" if commit else "rollback"
+            if phase == "rollback" and (state.get("retired_at") is None or state.get("resume_in_progress_at") is not None):
+                raise ResumeStateError("config_unrestorable", "Cannot roll back a child whose resume is running")
+            saved["phase"] = phase
+            _atomic_json(journal, saved)
+        if phase == "rollback":
             if state.get("retired_at") is None or state.get("resume_in_progress_at") is not None:
                 raise ResumeStateError("config_unrestorable", "Cannot roll back a child whose resume is running")
-            if saved["old_record"] is None:
+            # Validate every original before touching any generated path. An
+            # absent backup can mean either not yet moved or already restored.
+            for path in (home, mcp):
+                backup = path.with_name(f".{path.name}.tools-{generation}")
+                original = saved["generated"][path.name]
+                witness = backup if os.path.lexists(backup) else path
+                if original is not None and _file_identity(witness) != original:
+                    raise ResumeStateError("identity_mismatch", "Original generated settings no longer match")
+            if old is None:
                 record.unlink(missing_ok=True)
-            else:
-                _atomic_bytes(record, bytes.fromhex(saved["old_record"]))
+            elif raw != old:
+                _atomic_bytes(record, old)
+            for path in (home, mcp):
+                backup = path.with_name(f".{path.name}.tools-{generation}")
+                if os.path.lexists(backup):
+                    _remove_exact(path)
+                    os.replace(backup, path)
+                elif saved["generated"][path.name] is None:
+                    _remove_exact(path)
             if saved["old_profile"] is not None:
                 state["codex_mcp_profile"] = saved["old_profile"]
-        for path in (home, mcp):
-            backup = path.with_name(f".{path.name}.tools-{generation}")
-            if commit:
-                _remove_exact(backup)
-            elif os.path.lexists(backup):
-                _remove_exact(path)
-                os.replace(backup, path)
-            elif path.name not in saved["generated"]:
-                _remove_exact(path)
+        else:
+            for path in (home, mcp):
+                _remove_exact(path.with_name(f".{path.name}.tools-{generation}"))
         state.pop("tools_change_generation", None)
         _atomic_json(state_path, state)
         journal.unlink()
-
 
 def _utc_now(now: datetime | None = None) -> datetime:
     value = now or datetime.now(timezone.utc)
@@ -425,7 +467,7 @@ def prepare_active_state(
             if not _registration_matches(pending, generation):
                 raise ResumeStateError("identity_mismatch", "Child registration attempt has changed")
         state = _load_state(state_path)
-        _check_tools_change(state)
+        _check_tools_change(state, state_path)
         _validate_identity(state, agent_name=agent_name, project_key=project_key, program=program)
         state_token = state.get("registration_token")
         try:
@@ -798,7 +840,7 @@ def begin_resume(
         if any(path.exists() or path.is_symlink() for path in (pending, _legacy_pending(state_path))):
             raise ResumeStateError("config_unrestorable", "Child preregistration is still pending")
         state = _load_state(state_path)
-        _check_tools_change(state)
+        _check_tools_change(state, state_path)
         _validate_identity(
             state,
             agent_name=agent_name,
@@ -905,7 +947,7 @@ def inspect_retained(
         if any(path.exists() or path.is_symlink() for path in (pending, _legacy_pending(state_path))):
             raise ResumeStateError("config_unrestorable", "Child preregistration is still pending")
         state = _load_state(state_path)
-        _check_tools_change(state)
+        _check_tools_change(state, state_path)
         _validate_identity(
             state,
             agent_name=agent_name,
@@ -1035,6 +1077,7 @@ def purge_one(
             or state.get("provider") != _provider(state.get("program"))
             or state.get("resume_in_progress_at") is not None
             or state.get("tools_change_generation") is not None
+            or os.path.lexists(_tools_journal(state_path))
         ):
             return False
         if reason == "retention_expired":
@@ -1895,7 +1938,7 @@ def build_home(
         raise ValueError("generated Codex home is not canonical for this child")
     with _AgentLock(lock_path, exclusive=True):
         if _state.exists():
-            _check_tools_change(_load_state(_state))
+            _check_tools_change(_load_state(_state), _state)
         if not parent_agent:
             # A resume rebuilds the home without being told the parent; the
             # launcher recorded it in the child's state.

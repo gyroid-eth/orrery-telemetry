@@ -20,7 +20,7 @@ cd orrery-telemetry
 
 子に渡す道具の既定は installer の `--child-default-tools`（既定は空）で選べます。明示の指定を優先し、使えない既定の項目は通知して外します。[道具の選び方](docs/delegation.md#installer-の既定の道具)を参照してください。
 
-作業の区切りで子を EXIT し、`agentstack-resume <NAME> --tools <spec>` で同じ会話の道具を変更できます。[resume の道具変更](docs/delegation.md#停止した子の道具を変更して-resume-する)を参照してください。
+作業の区切りで子を EXIT し、`~/.agentstack/bin/agentstack-resume <NAME> --tools <spec>` で同じ会話の道具を変更できます。[resume の道具変更](docs/delegation.md#停止した子の道具を変更して-resume-する)を参照してください。
 
 **単独で使えるもの**: dashboard の Telemetry 画面（DECK・NETWORK・REPLAY・退出した agent の RESUME・NEW AGENT）、`agent-start` / `agent-start-codex` での agent 起動、`/delegate` での子の作成、agent 同士の ORRERY Mail。agent の端末は OS の terminal（Windows は Windows Terminal のタブ）で開きます。
 

@@ -6175,7 +6175,10 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal):
     provider = "codex" if program in _CODEX_PROGRAMS else "claude" if program in {"claude", "claude-code"} else None
     if provider is None:
         return {"ok": False, "error": "Tools changes require a retained Claude or Codex CLI child"}
-    if _has_session(session):
+    live = _child_session_live(session, module.boot_time())
+    if live is None:
+        return {"ok": False, "error": "Cannot confirm whether the child has stopped"}
+    if live:
         found = lookup_agent(session)
         if not found or found.get("category") != "finished":
             return {"ok": False, "error": "Exit the child and confirm it has stopped before changing tools"}
@@ -6248,11 +6251,20 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal):
             result = _do_jump(session, open_terminal=open_terminal)
         if result.get("ok") and result.get("action") != "resumed":
             result = {"ok": False, "error": "The child became active before the tools-changing resume"}
-        module.finish_tools_change(runtime, session, generation, commit=result.get("ok") is True)
     except Exception:
         # Only this generation may restore the previous selection/config.
         module.finish_tools_change(runtime, session, generation, commit=False)
         raise
+    if result.get("ok"):
+        try:
+            module.finish_tools_change(runtime, session, generation, commit=True)
+        except Exception:
+            # Launch has already been accepted. Do not undo a selection used
+            # by a running child or report that accepted launch as a failure.
+            result = {**result, "warning": "; ".join(filter(None, (
+                result.get("warning"), f"Tools change ({generation}) cleanup is pending; recover this generation before another resume")))}
+    else:
+        module.finish_tools_change(runtime, session, generation, commit=False)
     _invalidate_resume_capability_cache(session)
     if result.get("ok"):
         result = {**result, "tools_changed": True, "base": spec["base"], "tools": spec["tools"]}

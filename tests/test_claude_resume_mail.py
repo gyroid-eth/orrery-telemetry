@@ -465,3 +465,53 @@ def test_pending_preregistration_cannot_be_resumed_concurrently(resume):
         child_resume.begin_resume(runtime, NAME, agent_id=73, project_key=registration['project_key'], program='claude-code')
     child_resume.finish_registration(runtime, NAME, generation='a' * 32, rollback=True)
     assert child_resume.inspect_retained(runtime, NAME, agent_id=73, project_key=registration['project_key'], program='claude-code')
+
+
+@pytest.mark.parametrize("failure", ["register_agent", "unretire_agent", "tmux", "late-cli"])
+def test_tools_change_real_resume_auth_and_launch_boundary(resume, monkeypatch, failure):
+    from hooks import claude_chrome_policy
+    runtime, registration, launches, calls = resume
+    child(runtime, registration)
+    monkeypatch.setattr(server, "_child_session_live", lambda *a: False)
+    monkeypatch.setattr(server, "_has_session", lambda *a: False)
+    monkeypatch.setattr(server, "_resume_capability", lambda *a, **k: "ready")
+    monkeypatch.setattr(server, "_claude_conversation_reason", lambda *a: ({}, None))
+    directory = runtime / "child-agents"
+    record = Path(claude_chrome_policy.session_path(str(directory), NAME, SID))
+    claude_chrome_policy._write(str(record), {"version": 4, "agent_name": NAME,
+        "session_id": SID, "launch_id": "prior-launch-id", "standalone": False,
+        "claude_chrome": False, "chrome_device": "", "base": "default", "tools": {}})
+    old = record.read_bytes()
+    original = server._mcp_call
+    if failure in {"register_agent", "unretire_agent"}:
+        def failing_call(name, args):
+            if name == failure:
+                calls.append((name, args))
+                return {"ok": False, "error": TOKEN}
+            return original(name, args)
+        monkeypatch.setattr(server, "_mcp_call", failing_call)
+    elif failure == "tmux":
+        monkeypatch.setattr(server, "_launch_claude_resume_tmux",
+            lambda *a, **k: {"ok": False, "error": "fixture startup failure"})
+    else:
+        # Execute the fixture provider only after launch was accepted. A later CLI exit cannot turn the HTTP acceptance into a
+        # failed transaction or undo its selection.
+        Path(server.ABS_CLAUDE).write_text("#!/bin/bash\nexit 42\n")
+    result = server.do_jump(NAME, base="mail-only", tools={}, open_terminal=False)
+    assert result["ok"] is (failure == "late-cli"), result
+    assert TOKEN not in json.dumps(result)
+    assert not child_resume._tools_journal(directory / f"{NAME}.json").exists()
+    if failure in {"register_agent", "unretire_agent"}:
+        assert failure in [method for method, _ in calls]
+    if failure != "late-cli":
+        assert record.read_bytes() == old
+        retained = child_resume.inspect_retained(runtime, NAME, agent_id=73,
+            project_key=registration["project_key"], program="claude-code")
+        assert "resume_in_progress_at" not in retained
+    else:
+        assert json.loads(record.read_text())["base"] == "mail-only"
+        # Run the provider command directly, since cleanup requires a test
+        # Mail transport and is already covered by real-Mail fixtures above.
+        done = subprocess.run([server.ABS_CLAUDE, "--resume", SID], check=False)
+        assert done.returncode == 42
+        assert json.loads(record.read_text())["base"] == "mail-only"

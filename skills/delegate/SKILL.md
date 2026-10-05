@@ -85,6 +85,8 @@ MCP defaults are deliberately backward-compatible: omit `--codex-mcp` or use `--
 
 ## Resume an existing child with different tools
 
+A tools-changing resume succeeds when tmux/the terminal accepts startup; it does not wait for shell bootstrap/authentication. A later failure keeps the committed tools record for the next resume. The final child report/receipt confirmation in this procedure must not be skipped.
+
 Route `/delegate --resume <NAME> [--base default|mail-only] [--tools <spec>]` here **before preregistration**. This changes an existing child, so do not name, register or spawn a new agent.
 
 1. Agree on a work boundary over ORRERY Mail, let the child save its work, and release its reservations. Send instructions through Mail; never through its tmux pane.

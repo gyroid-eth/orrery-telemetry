@@ -79,6 +79,14 @@ def _no_inherited_agentstack_env():
 
 
 @pytest.fixture(autouse=True)
+def _checkout_dashboard_helpers(monkeypatch):
+    """Workers must load this checkout's helpers, never an installed old copy."""
+    from pathlib import Path
+    from dashboard import server
+    monkeypatch.setattr(server, "HOOKS_DIR", str(Path(__file__).resolve().parents[1] / "hooks"))
+
+
+@pytest.fixture(autouse=True)
 def _no_child_start_watcher(monkeypatch):
     """A Claude child launched by spawn_child.sh gets a background watcher that
     reports to its parent by Mail when the child does not start its task.

@@ -213,10 +213,13 @@ def bootout_install_jobs(home, label_prefix: str) -> list[str]:
 
 
 def stop_dashboard(home, *, appear_timeout: float = 8.0,
-                   label_prefix: str = TEST_LABEL_PREFIX) -> None:
+                   label_prefix: str = TEST_LABEL_PREFIX,
+                   launchd: bool = True) -> None:
     """Terminate the dashboard this install started, launchd or supervised.
 
-    Every other launchd job the same install loaded is booted out as well."""
+    Every other launchd job the same install loaded is booted out as well.
+    A fixture that explicitly emulates Linux may pass launchd=False; this
+    changes no process-provenance checks for its recorded supervisor."""
     home = pathlib.Path(home)
     # launchd is macOS only; on Linux the installer uses systemd or a plain
     # supervisor, and there is no launchctl to call. The dashboard job is
@@ -224,7 +227,8 @@ def stop_dashboard(home, *, appear_timeout: float = 8.0,
     # that the job belongs to this install: a bare bootout of
     # "<prefix>.agentdashboard" stopped a concurrent test's dashboard, and
     # with the live prefix the real one (#168 review).
-    bootout_install_jobs(home, label_prefix)
+    if launchd:
+        bootout_install_jobs(home, label_prefix)
     marker = str(home.resolve() / ".agentstack" / "dashboard")
     pidfile = home / ".agentstack" / "runtime" / "dashboard.pid"
 
