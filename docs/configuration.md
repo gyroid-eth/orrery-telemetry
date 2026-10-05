@@ -239,7 +239,8 @@ export AGENTSTACK_OBSIDIAN_APP="/Applications/Obsidian.app/Contents/MacOS/Obsidi
 | `AGENTSTACK_MCP_PROXY` | `$AGENTSTACK_HOME/integrations/codex_app/plugin/scripts/run-mcp.sh` | spawned child ごとの認証済み stdio proxy runner |
 | `AGENTSTACK_PREREGISTER_CHILD` | `$AGENTSTACK_HOME/bin/agentstack-preregister-child` | `/delegate` が child-owned token を生成する helper |
 | `AGENTSTACK_MAIL_WATCHER_SESSION` | `mail-watcher` | launcher が起動・再利用する watcher の tmux session 名 |
-| `AGENTSTACK_MAIL_WATCHER_PIDFILE` | `/tmp/orrery-mail-watcher.lock/watcher.pid` | dashboard が非 launchd watcher の実プロセスを照合する pidfile |
+| `AGENTSTACK_MAIL_WATCHER_LOCK_DIR` | `$AGENTSTACK_RUNTIME_DIR/mail-watcher.lock`（利用者ごと） | watcher の単一起動 lock dir。`_PIDFILE`・`_HEARTBEAT` を含め、他人が所有する path（file・symlink の参照先も）を指す設定のときは、何も書かずに止まって直し方を log に出す |
+| `AGENTSTACK_MAIL_WATCHER_PIDFILE` | lock dir の `watcher.pid` | dashboard が非 launchd watcher の実プロセスを照合する pidfile |
 | `AGENTSTACK_MAIL_WATCHER_HEARTBEAT` | pidfile と同じ directory の `heartbeat` | process command を取得できない環境で使う watcher heartbeat |
 | `AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE` | `low`（＝全通） | 通知として**割り込ませる**下限。`low` \| `normal` \| `high` \| `urgent` |
 | `AGENTSTACK_MAIL_WATCHER_SCAN_INTERVAL` | Linux `2`、macOS `30` | watcher が signal を見直す回復 scan の間隔（秒、1 以上の整数）。同じ message の再試行間隔（30秒）とは別 |
@@ -295,7 +296,7 @@ installer に渡して `env.sh`・service 定義・`install-state.json` に永�
 優先順位は「command-line > 環境変数 > install 先の既存 `env.sh`」で、再インストール時に何も指定しなければ前回の値を引き継ぎます。
 存在しない directory は warning だけ出して受け付けます（後で clone する checkout を先に登録できます）。相対パスは error で停止します。
 
-- `SPAWN_DIRS` は「最初に見せる quick-select chip」。`GET /api/spawn-names` が `:` で分割した値を順番に返します。未設定時は `["~"]` です。`~` は API では symbolic のまま保持し、実際の spawn 時に展開します
+- `SPAWN_DIRS` は「最初に見せる quick-select chip」。`GET /api/spawn-names` が `:` で分割した値を順番に返します。未設定時は project key、続けて `~` の順（`[project key, "~"]`）で、先頭の project folder が既定です。`~` は API では symbolic のまま保持し、実際の spawn 時に展開します
 - `SPAWN_ROOTS` は「typeahead で閲覧できる範囲」。`GET /api/fs/dirs` はこの root 内の child directory だけを返します。未設定時は `$HOME` が唯一の root です。server は `realpath` で境界を検証し、`..`、root 外、hidden directory、root 外への symlink を拒否します
 
 `SPAWN_ROOTS` は `SPAWN_DIRS` から自動導出しません。chip が root 外を指す構成では exact path として入力できますが、その配下の suggestion は表示されません。多くの場合は既定の `$HOME` が chip を含むので、`SPAWN_DIRS` だけ指定すれば足ります。

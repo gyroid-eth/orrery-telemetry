@@ -608,7 +608,7 @@ exit 0
     # only through this directory so nothing else leaks in.
     for name in ("sed", "cat", "mkdir", "rm", "dirname", "basename", "printf",
                  "id", "python3", "awk", "ps", "kill", "mv", "cp", "chmod",
-                 "sleep", "touch"):
+                 "sleep", "touch", "stat", "head", "tr"):
         real = shutil.which(name)
         if real:
             (fake / name).symlink_to(real)

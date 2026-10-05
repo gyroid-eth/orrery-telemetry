@@ -6,6 +6,10 @@
 
 Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS` の隣）から見回せます。単独の画面でも cockpit 内の埋め込みでも、DECK / NETWORK の操作に注記します。agent の詳細パネルでは、パネル内の `HELP MAP` からパネルの操作を説明できます。
 
+全体像: cockpit は terminal を操作する画面、Telemetry は dashboard と agent graph の画面です。cockpit は Telemetry の画面を埋め込めます。
+
+![cockpit は terminal を操作する画面、Telemetry は dashboard と agent graph の画面。cockpit は Telemetry の画面を埋め込める。agent は tmux の中で動き、両方の画面から見え、Mail で話す](https://raw.githubusercontent.com/gyroid-eth/orrery/master/docs/images/cockpit_telemetry_relation.svg)
+
 ## はじめる
 
 - [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート) — 1行で両方を入れ、画面の初回ガイドから始める。
