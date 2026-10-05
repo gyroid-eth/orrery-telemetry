@@ -277,3 +277,22 @@ def test_failed_staging_restores_generated_config(stopped, monkeypatch):
     assert record.read_bytes() == original
     assert (runtime / "child-agents" / f"{NAME}.codex-home" / "old-config").read_text() == "old"
     assert "tools_change_generation" not in child_resume._load_state(runtime / "child-agents" / f"{NAME}.json")
+
+
+
+def test_oversize_selection_is_refused_before_staging(stopped):
+    runtime, record, _, state = stopped
+    original = record.read_bytes()
+    with pytest.raises(child_resume.ResumeStateError, match="too large"):
+        child_resume.begin_tools_change(runtime, NAME, state, record,
+                                       {"version": 1, "tools": {"mcp": ["x" * 4096]}}, None)
+    assert record.read_bytes() == original
+    assert not list((runtime / "child-agents").glob("*.tools-change.json"))
+    assert (runtime / "child-agents" / f"{NAME}.codex-home" / "old-config").exists()
+
+
+def test_empty_replacement_does_not_require_source_config(stopped, monkeypatch):
+    _, _, _, _ = stopped
+    (Path(os.environ["CODEX_HOME"]) / "config.toml").unlink()
+    monkeypatch.setattr(server, "do_resume", lambda *a, **k: {"ok": True, "action": "resumed"})
+    assert server.do_jump(NAME, tools={})["ok"]

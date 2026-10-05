@@ -4,7 +4,8 @@ or with a tools selection (--base / --tools, hooks/child_tools.py).
 
 A record says "this Claude conversation was started with --chrome, and this is
 the browser it was told to use", and (version 3) which base and tools it was
-given. It holds no credential. Version 2 records (Chrome only) are still read;
+given. Version 4 records an explicit resume replacement, including an empty
+selection. It holds no credential. Version 2 records (Chrome only) are still read;
 their base is "default".
 
 Records are bound to one conversation, never to an agent name alone, so a later

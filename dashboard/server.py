@@ -3607,8 +3607,7 @@ def _codex_resume_child_home(
                 import tomllib  # only here: build-home already needs Python 3.11
 
                 config_path = os.path.join(source_home, "config.toml")
-                with open(config_path, "rb") as handle:
-                    config = tomllib.load(handle)
+                config = tomllib.loads(pathlib.Path(config_path).read_text()) if os.path.exists(config_path) else {}
                 overlay = os.environ.get("AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY", "").strip()
                 if overlay:
                     try:

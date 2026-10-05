@@ -131,6 +131,9 @@ def begin_tools_change(runtime: Path, name: str, validated: dict,
         re.fullmatch(re.escape(name) + r"\.claude-launch\.[A-Za-z0-9-]{8,128}\.json", record.name))
     if not allowed:
         raise ResumeStateError("invalid_identity", "Tools record is not canonical")
+    raw_candidate = (json.dumps(candidate, separators=(",", ":"), sort_keys=True) + "\n").encode()
+    if len(raw_candidate) > 4096:
+        raise ResumeStateError("config_unrestorable", "The tools selection is too large")
     generation = secrets.token_hex(16)
     journal = state_path.with_name(f".{name}.tools-change.json")
     staged = False
@@ -144,7 +147,7 @@ def begin_tools_change(runtime: Path, name: str, validated: dict,
             saved = {"generation": generation, "agent_id": state["agent_id"],
                      "record": record.name, "old_record": old,
                      "old_profile": state.get("codex_mcp_profile"),
-                     "candidate_sha256": hashlib.sha256((json.dumps(candidate, separators=(",", ":"), sort_keys=True) + "\n").encode()).hexdigest(),
+                     "candidate_sha256": hashlib.sha256(raw_candidate).hexdigest(),
                      "generated": [path.name for path in (home, mcp) if os.path.lexists(path)], "ready": False}
             _atomic_json(journal, saved)
             created = True
