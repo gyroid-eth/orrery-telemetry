@@ -29,7 +29,10 @@ const STEPS=Object.freeze({
   'full-resume':[['#tm-open','RESUME'],'#selbarResume',
     ['.bay.cat-retired .top,.bay.cat-finished .top,.bay.cat-gone .top','RESUME READY'],'#history','#tm-x'],
   'full-network-settings':['#settings-btn','.viewtog'],
-  'full-return':[['#tm-open','OPEN IN COCKPIT'],'.bay.cat-agent .top','#tm-x'],
+  // Not the panel's Close: a "return" ring on Close misleads in every state.
+  // With no running agent's OPEN IN COCKPIT to point at, no ring; the
+  // checklist's text guides instead.
+  'full-return':[['#tm-open','OPEN IN COCKPIT'],'.bay.cat-agent .top'],
 });
 const own=step=>typeof step==='string'&&Object.prototype.hasOwnProperty.call(STEPS,step);
 // Where the HERE tag sits beside the ring: below, above, right or left, inside

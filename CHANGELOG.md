@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### 開いたままの詳細パネルのボタンが、agent の状態に合わせて変わるようにしました
+
+詳細パネルの OPEN IN COCKPIT／RESUME IN COCKPIT と Exit のボタンは、パネルを開いた時点の状態のまま変わりませんでした。パネルを開いたまま子を Resume すると、ボタンは RESUME IN COCKPIT のまま残り、cockpit の Full tour の「Return to your agent」の輪が、パネルの Close に付いていました。ボタンは、Deck の一覧か Network の graph のどちらかを受け取るたびに、新しい方の状態で描き直します（送信中の Exit はそのまま）。どちらにも agent が無くなったときは、ボタンを押せない「NO LONGER LISTED」にします。また、Full tour の「Return」の段は Close を指さなくなりました。running の agent の OPEN IN COCKPIT が無いときは輪を出さず、tour の欄の文で案内します。
+
 ### mail watcher の lock を利用者ごとにし、doctor が watcher の停止を検出するようにしました
 
 1 台の Mac に 2 人目の利用者が fresh install すると、既定の lock dir（`/tmp/orrery-mail-watcher.lock`）が全利用者で共通だったため、先にいる利用者の watcher が持つ lock を 2 人目が取れず、`mkdir: ... Permission denied` → 「Stale watcher lock detected; taking ownership」を 5 秒おきに繰り返して一度も動きませんでした。入力待ちの agent に Mail が届いても起こされず、`agentstack-doctor` は全項目 ok のまま watcher の停止を報告しませんでした（dashboard の `/api/mail-watcher-health` は `watcher_running: false`・status red を返していました）。

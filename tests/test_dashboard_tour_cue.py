@@ -212,9 +212,199 @@ def test_resume_needs_the_resume_label_and_nothing_disabled_is_ringed(embedded):
     disabled = _cue(evaluate, inner, 'full-return')
     inner("document.getElementById('tm-open').disabled=false")
     assert (resume['ring'], resume['target']) == (True, 'tm-open')
-    # Return is not RESUME, and a disabled OPEN is not pressed: close the panel.
-    assert (returning['ring'], returning['target']) == (True, 'tm-x'), returning
-    assert (disabled['ring'], disabled['target']) == (True, 'tm-x'), disabled
+    # Return is not RESUME, and a disabled OPEN is not pressed. Nor is the
+    # panel's Close a way back to the cockpit: no ring, the checklist guides.
+    assert returning == {'ring': False, 'here': False}, returning
+    assert disabled == {'ring': False, 'here': False}, disabled
+
+
+@pytest.mark.parametrize('before,after,label', [
+    ({'category': 'retired', 'running': False, 'retired': True, 'resume_capability': 'ready'},
+     {'category': 'agent', 'running': True, 'retired': False}, 'OPEN IN COCKPIT'),
+    ({'category': 'agent', 'running': True, 'retired': False},
+     {'category': 'retired', 'running': False, 'retired': True, 'resume_capability': 'ready'}, 'RESUME IN COCKPIT'),
+], ids=['resumed-while-open', 'exited-while-open'])
+def test_an_open_panel_follows_the_agent(embedded, before, after, label):
+    """Full tour on a Mac: with the panel left open on the child, RESUME took
+    it running but the button kept saying RESUME IN COCKPIT, and Return's ring
+    went to the panel's Close. The button now follows each new agents list."""
+    _client, evaluate, inner, _wait = embedded
+    name = inner("document.querySelector('.bay').dataset.name")
+    patch = lambda row: inner(
+        "(()=>{lastData=lastData.map(a=>a.name===%s?{...a,...%s}:a);})()" % (json.dumps(name), json.dumps(row)))
+    patch(before)
+    inner("openPanel(%s)" % json.dumps(name))
+    time.sleep(.5)
+    first = inner("document.getElementById('tm-open').textContent.trim()")
+    patch(after)
+    inner("refreshPanelButtons()")
+    second = inner("document.getElementById('tm-open').textContent.trim()")
+    returning = _cue(evaluate, inner, 'full-return')
+    inner("document.getElementById('tm-x').click()")
+    assert first != label and second == label, (first, second)
+    if label == 'OPEN IN COCKPIT':
+        assert (returning['ring'], returning['target']) == (True, 'tm-open'), returning
+    else:
+        assert returning.get('target') != 'tm-x', returning
+
+
+# Edits the page's own /api/agents and /api/graph answers for one agent, so
+# the real tick and netTick see it change: window.__mut = {name, agent, node,
+# gone}.
+MUTATE = """(()=>{if(window.__mutOn)return;window.__mutOn=true;window.__mut={};
+  const orig=window.fetch;
+  window.fetch=async(u,i)=>{const r=await orig(u,i);const url=String(u);
+    if(!/\\/api\\/(agents|graph)/.test(url))return r;
+    const m=window.__mut;if(!m.name)return r;
+    const j=await r.clone().json();
+    if(Array.isArray(j.agents))j.agents=j.agents.filter(a=>!(m.gone&&a.name===m.name))
+      .map(a=>a.name===m.name&&m.agent?{...a,...m.agent}:a);
+    if(Array.isArray(j.nodes))j.nodes=j.nodes.filter(n=>!(m.gone&&n.name===m.name))
+      .map(n=>n.name===m.name&&m.node?{...n,...m.node}:n);
+    return new Response(JSON.stringify(j),{status:200,headers:{'Content-Type':'application/json'}});};})()"""
+
+RETIRED = {'running': False, 'retired': True, 'category': 'retired', 'resume_capability': 'ready'}
+RUNNING = {'running': True, 'retired': False, 'category': 'agent'}
+BUTTONS = """(()=>{const o=document.getElementById('tm-open'),x=document.getElementById('tm-exit-btn');
+  const p=TelemetryTourCue.pick('full-return');
+  return {open:o.textContent.trim(),disabled:o.disabled,exit:x.style.display!=='none',return:p?(p.id||p.className):null};})()"""
+
+
+@pytest.mark.parametrize('case', ['net-retired-then-running', 'net-gone', 'net-then-deck', 'deck-gone', 'net-reopen',
+                                  'net-gone-reopen', 'deck-shows-what-graph-left-out'])
+def test_an_open_panel_follows_the_newest_list(embedded, case):
+    """Review of #211: in Network only netTick runs, and a panel whose agent
+    left the list kept a pressable OPEN IN COCKPIT and Exit."""
+    _client, evaluate, inner, wait = embedded
+    name = inner("document.querySelector('.bay').dataset.name")
+    inner(MUTATE)
+    mut = lambda m: inner("window.__mut=%s" % json.dumps(dict(m, name=name)))
+    if case == 'deck-gone':
+        inner("openPanel(%s)" % json.dumps(name))
+        mut({'gone': True})
+        inner("tick()")
+        time.sleep(.5)
+        gone = inner(BUTTONS)
+        inner("window.__mut={};document.getElementById('tm-x').click()")
+        assert gone['open'] == 'NO LONGER LISTED' and gone['disabled'] and not gone['exit'], gone
+        assert gone['return'] != 'tm-x', gone
+        return
+    inner("setView('net')")
+    wait("gmap.size>0", 30)
+    inner("openPanel(%s)" % json.dumps(name))
+    time.sleep(.3)
+    if case == 'net-retired-then-running':
+        mut({'agent': RETIRED, 'node': RETIRED})
+        inner("netTick()")
+        time.sleep(.5)
+        retired = inner(BUTTONS)
+        mut({'agent': RUNNING, 'node': RUNNING})
+        inner("netTick()")
+        time.sleep(.5)
+        running = inner(BUTTONS)
+        assert retired['open'] == 'RESUME IN COCKPIT' and not retired['exit'], retired
+        assert running['open'] == 'OPEN IN COCKPIT' and running['exit'] and running['return'] == 'tm-open', running
+    elif case == 'net-gone':
+        mut({'gone': True})
+        inner("netTick()")
+        time.sleep(.5)
+        gone = inner(BUTTONS)
+        assert gone['open'] == 'NO LONGER LISTED' and gone['disabled'] and not gone['exit'], gone
+        assert gone['return'] != 'tm-x', gone
+    elif case == 'net-gone-reopen':
+        # Review of #211: gone from the newest graph but still running in the
+        # older deck list, reopened: it must not offer OPEN and Exit.
+        mut({'gone': True})
+        inner("netTick()")
+        time.sleep(.5)
+        inner("document.getElementById('tm-x').click()")
+        inner("openPanel(%s)" % json.dumps(name))
+        reopened = inner(BUTTONS)
+        assert reopened['open'] == 'NO LONGER LISTED' and reopened['disabled'] and not reopened['exit'], reopened
+    elif case == 'deck-shows-what-graph-left-out':
+        # The graph's window can leave out an agent the deck shows; back on the
+        # deck, before its next list, a card opened is not "no longer listed".
+        mut({'gone': True})
+        inner("netTick()")
+        time.sleep(.5)
+        inner("document.getElementById('tm-x').click()")
+        inner("window.__mut={};view='deck'")
+        inner("openPanel(%s)" % json.dumps(name))
+        opened = inner(BUTTONS)
+        assert opened['open'] == 'OPEN IN COCKPIT' and opened['exit'], opened
+    elif case == 'net-reopen':
+        # Review of #211: reopened right after the graph changed, the panel
+        # drew from the older deck list until the next netTick.
+        mut({'agent': RETIRED, 'node': RETIRED})
+        inner("netTick()")
+        time.sleep(.5)
+        inner("document.getElementById('tm-x').click()")
+        inner("openPanel(%s)" % json.dumps(name))
+        reopened = inner(BUTTONS)
+        assert reopened['open'] == 'RESUME IN COCKPIT' and not reopened['exit'], reopened
+    else:
+        mut({'agent': RETIRED, 'node': RETIRED})
+        inner("netTick()")
+        time.sleep(.5)
+        mut({'agent': RUNNING, 'node': RUNNING})
+        inner("setView('deck')")
+        inner("tick()")
+        time.sleep(.8)
+        back = inner(BUTTONS)
+        assert back['open'] == 'OPEN IN COCKPIT' and back['exit'], back
+    inner("window.__mut={};document.getElementById('tm-x').click();setView('deck')")
+
+
+def test_back_on_the_deck_the_first_list_puts_the_panel_right(embedded):
+    """The view on screen decides (its own list and window); right after a
+    switch the older list may show until the view's first tick, which must
+    put the buttons right."""
+    _client, evaluate, inner, wait = embedded
+    name = inner("document.querySelector('.bay').dataset.name")
+    inner(MUTATE)
+    inner("setView('net')")
+    wait("gmap.size>0", 30)
+    inner("window.__mut=%s" % json.dumps({'name': name, 'agent': RETIRED, 'node': RETIRED}))
+    inner("netTick()")
+    time.sleep(.5)
+    inner("view='deck'")
+    inner("openPanel(%s)" % json.dumps(name))
+    inner("tick()")
+    time.sleep(.8)
+    after = inner(BUTTONS)
+    inner("window.__mut={};document.getElementById('tm-x').click();setView('deck')")
+    assert after['open'] == 'RESUME IN COCKPIT' and not after['exit'], after
+
+
+@pytest.mark.parametrize('button,api', [('tm-exit-btn', '/api/exit'), ('tm-open', '/api/jump')])
+def test_a_press_on_an_older_state_shows_the_servers_refusal(embedded, button, api):
+    """The server decides from its own state (exit: only running agents;
+    jump: resume or leave as it is); a refusal is said on screen."""
+    _client, _evaluate, inner, _wait = embedded
+    name = inner("document.querySelector('.bay').dataset.name")
+    inner("openPanel(%s)" % json.dumps(name))
+    inner("""(()=>{window.__toasts=[];const t=toast;window.toast=(a,b,c)=>{window.__toasts.push([a,b,!!c]);return t(a,b,c);};
+      const orig=window.fetch;window.__origFetch=orig;
+      window.fetch=(u,i)=>String(u).includes(%s)?Promise.resolve(new Response(JSON.stringify({ok:false,
+        error:"agent '"+%s+"' category=retired - only running/finished are exitable"}),{status:400,headers:{'Content-Type':'application/json'}})):orig(u,i);})()"""
+          % (json.dumps(api), json.dumps(name)))
+    inner("document.getElementById(%s).click()" % json.dumps(button))
+    time.sleep(.6)
+    toasts = inner("window.__toasts")
+    inner("window.fetch=window.__origFetch;document.getElementById('tm-x').click()")
+    assert any(t[0] == '✕ FAIL' and t[2] and 'retired' in t[1] for t in toasts), toasts
+
+
+def test_an_exit_on_its_way_keeps_its_button(embedded):
+    _client, _evaluate, inner, _wait = embedded
+    name = inner("document.querySelector('.bay').dataset.name")
+    inner("openPanel(%s)" % json.dumps(name))
+    time.sleep(.5)
+    inner("(()=>{const b=document.getElementById('tm-exit-btn');b.textContent='…';b.disabled=true;})()")
+    inner("refreshPanelButtons()")
+    kept = inner("(()=>{const b=document.getElementById('tm-exit-btn');return [b.textContent,b.disabled];})()")
+    inner("(()=>{const b=document.getElementById('tm-exit-btn');b.textContent='Exit';b.disabled=false;document.getElementById('tm-x').click();})()")
+    assert kept == ['…', True], kept
 
 
 @pytest.mark.parametrize('category', ['retired', 'finished', 'gone'])

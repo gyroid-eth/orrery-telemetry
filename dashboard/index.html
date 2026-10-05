@@ -32946,6 +32946,9 @@ window.addEventListener('unhandledrejection',e=>
 
 const SHOW_DEFAULT=new Set(["agent","finished","unnamed"]);
 let lastData=[], booted=false;
+// When each source of agent state last arrived: the deck's list (tick) and
+// the network's graph (netTick). The open panel reads the newer one.
+let deckStateAt=0,graphStateAt=0;
 const ARM_MS=5000; // kill/exit 両方の確認タイムアウト
 const armingSet=new Set();
 const armTimers=new Map();
@@ -33886,8 +33889,9 @@ async function tick(){
     if(r.status===503)return;
     const j=await r.json();
     if(seq!==tickSeq)return;   // a newer range was requested while this was in flight
-    lastData=j.agents;
+    lastData=j.agents;deckStateAt=Date.now();
     settleExitSent(j.agents);
+    refreshPanelButtons();
     const y=window.scrollY;
     render();
     window.scrollTo(0,y);
@@ -34044,6 +34048,8 @@ async function netTick(){
         resumeCapability:n.resume_capability||'provenance_missing'});
     }
     for(const k of[...gmap.keys()])if(!seen.has(k))gmap.delete(k);
+    graphStateAt=Date.now();
+    refreshPanelButtons();
     gedges=j.edges.filter(e=>gmap.has(e.source)&&gmap.has(e.target));
     gspawn=j.spawn.filter(e=>gmap.has(e.source)&&gmap.has(e.target));
     for(const e of gedges){const a=gmap.get(e.source),b=gmap.get(e.target);
@@ -36548,30 +36554,13 @@ function openPanel(name){
     if(meta)meta.textContent='could not render some details (see logs/js-errors.log)';
   }
 }
-function openPanelInner(name){
-  panelName=name;
-  const a=(lastData||[]).find(x=>x.name===name)||
-          (typeof gmap!=='undefined'&&gmap.get(name))||{};
-  // gmap の補完 (network view では role 等が gmap 側だけにある)
-  const g=(typeof gmap!=='undefined'&&gmap.get(name))||{};
-  const run=!!a.running, rel=a.last_active_rel||a.rel||'';
-  const stat=a.retired?'RETIRED':run?'● ONLINE':
-    a.category==='finished'?'EXITED':a.present===false?'○ REGISTERED':'○ SHELL';
-  const portrait=TM('tm-portrait'),avatar=avatarKeyOf(name);
-  portrait.hidden=!avatar;
-  portrait.style.display='';
-  portrait.dataset.portraitFallback='0';
-  portrait.alt=avatar?`${name} portrait`:'';
-  if(avatar)portrait.src=portURL(avatar,true);
-  else portrait.removeAttribute('src');
-  TM('tm-nm').textContent=name;
-  const T=TM('term');
-  T.classList.toggle('s-run',run);
-  TM('tm-meta').textContent=
-    stat+(a.model?' · '+a.model:'')+(a.ctx_window?' · '+a.ctx_window:'')
-    +(rel?' · last '+rel:'');
+// The panel's EXIT and OPEN/RESUME buttons follow the agent's state: drawn when
+// the panel opens and again with each new agents list while it stays open (an
+// agent resumed or exited meanwhile changes what the button does).
+function renderPanelButtons(a,g,{keepExit=false}={}){
+  const run=!!a.running;
   const exitBtn=TM('tm-exit-btn');
-  if(exitBtn){exitBtn.style.display=run?'':'none';
+  if(exitBtn&&!keepExit){exitBtn.style.display=run?'':'none';
     exitBtn.classList.remove('arming');exitBtn.disabled=false;
     exitBtn.textContent='Exit';}
   const resumeCategory=a.category||
@@ -36594,6 +36583,73 @@ function openPanelInner(name){
     openBtn.textContent=view.text;
     openBtn.title=view.title;
   }
+}
+// The panel agent's state: a deck row, or a graph node in the same shape
+// renderPanelButtons reads; null when that source no longer lists the agent.
+// The view on screen refreshes its own source and the other one goes stale,
+// so the view's source decides once it has arrived; until then, the newer.
+// (The two have their own time windows: one may leave out an agent the other
+// shows.)
+function panelAgentState(name){
+  const g=(typeof gmap!=='undefined'&&gmap.get(name))||null;
+  const fromGraph=view==='net'&&graphStateAt?true:view==='deck'&&deckStateAt?false:graphStateAt>deckStateAt;
+  if(fromGraph){
+    if(!g)return null;
+    return {a:{running:!!g.running,retired:!!g.retired,present:!!g.present,state:g.state||'',
+      resume_capability:g.resumeCapability,resume_mode:g.resume_mode,mail_message:g.mail_message},g};
+  }
+  const a=(lastData||[]).find(x=>x.name===name);
+  return a?{a,g:g||{}}:null;
+}
+// Called after either source updates. An agent neither lists any more gets
+// buttons that cannot be pressed and say so; an Exit on its way keeps its.
+function refreshPanelButtons(){
+  if(!panelName||!TM('term').classList.contains('on'))return;
+  const exitBtn=TM('tm-exit-btn');
+  const keepExit=!!exitBtn&&exitBtn.disabled&&exitBtn.textContent==='…';
+  const now=panelAgentState(panelName);
+  if(now)renderPanelButtons(now.a,now.g,{keepExit});else renderPanelGone({keepExit});
+}
+// The agent is no longer listed: nothing to press, and the button says so.
+function renderPanelGone({keepExit=false}={}){
+  const exitBtn=TM('tm-exit-btn');
+  if(exitBtn&&!keepExit)exitBtn.style.display='none';
+  const openBtn=TM('tm-open');
+  if(openBtn){
+    openBtn.disabled=true;openBtn.style.opacity='.5';openBtn.style.cursor='not-allowed';
+    openBtn.style.background='transparent';openBtn.style.color='var(--cyan)';openBtn.style.boxShadow='none';
+    openBtn.textContent='NO LONGER LISTED';
+    openBtn.title='This agent is no longer in the list. Close this panel.';
+  }
+}
+function openPanelInner(name){
+  panelName=name;
+  const a=(lastData||[]).find(x=>x.name===name)||
+          (typeof gmap!=='undefined'&&gmap.get(name))||{};
+  // gmap の補完 (network view では role 等が gmap 側だけにある)
+  const g=(typeof gmap!=='undefined'&&gmap.get(name))||{};
+  const run=!!a.running, rel=a.last_active_rel||a.rel||'';
+  const stat=a.retired?'RETIRED':run?'● ONLINE':
+    a.category==='finished'?'EXITED':a.present===false?'○ REGISTERED':'○ SHELL';
+  const portrait=TM('tm-portrait'),avatar=avatarKeyOf(name);
+  portrait.hidden=!avatar;
+  portrait.style.display='';
+  portrait.dataset.portraitFallback='0';
+  portrait.alt=avatar?`${name} portrait`:'';
+  if(avatar)portrait.src=portURL(avatar,true);
+  else portrait.removeAttribute('src');
+  TM('tm-nm').textContent=name;
+  const T=TM('term');
+  T.classList.toggle('s-run',run);
+  TM('tm-meta').textContent=
+    stat+(a.model?' · '+a.model:'')+(a.ctx_window?' · '+a.ctx_window:'')
+    +(rel?' · last '+rel:'');
+  // The buttons read the newest source from the start, as refreshes do. Before
+  // either has arrived (a link opened at start) nothing is known to be gone.
+  const now=panelAgentState(name);
+  if(now)renderPanelButtons(now.a,now.g);
+  else if(deckStateAt||graphStateAt)renderPanelGone();
+  else renderPanelButtons(a,g);
   // gtip 相当のサマリーを tm-summary に描画 (モバイルで hover が効かない救済)
   renderPanelSummary(name, a, g);
   renderAnnotEditor(name, (g&&g.annot)||a.annot||null);
