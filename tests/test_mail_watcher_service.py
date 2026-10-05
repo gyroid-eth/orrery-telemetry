@@ -518,12 +518,14 @@ def _fake_stat_dir(td: pathlib.Path, foreign_suffix: str, *, only_when_following
     """
     fake = td / "fake-stat-bin"
     fake.mkdir()
+    # Built outside the f-string: Python < 3.12 rejects a backslash inside {...}.
+    condition = '"$follow" = 1' if only_when_following else "true"
     (fake / "stat").write_text(
         "#!/bin/sh\n"
         "follow=0; last=\n"
         "for a in \"$@\"; do [ \"$a\" = -L ] && follow=1; last=$a; done\n"
         f"case \"$last\" in *{foreign_suffix})\n"
-        f"  if [ {'\"$follow\" = 1' if only_when_following else 'true'} ]; then echo 4242; exit 0; fi ;;\n"
+        f"  if [ {condition} ]; then echo 4242; exit 0; fi ;;\n"
         "esac\n"
         "id -u\n",
         encoding="utf-8",
