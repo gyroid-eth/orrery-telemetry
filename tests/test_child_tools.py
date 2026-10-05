@@ -385,6 +385,19 @@ def test_claude_pinned_chrome_read_explicitly_denies_operating_and_file_tools(tm
     assert {"mcp__cdp__navigate_page", "mcp__cdp__evaluate_script", "mcp__cdp__upload_file"} <= denied
 
 
+def test_claude_pinned_chrome_operate_approves_scripts_and_file_tools(tmp_path):
+    cj = _claude_json(tmp_path / "c.json", servers={"cdp": {
+        "command": "/usr/local/bin/npx", "args": ["chrome-devtools-mcp@1.10.1"]}})
+    plan = child_tools.claude_plan(_spec(None, {
+        "screen": {"access": "operate", "server": "cdp"}}), cwd=str(tmp_path),
+        chrome=False, claude_json=cj, platform="linux")
+    flags = plan["flags"]
+    assert "--disallowed-tools" not in flags
+    allowed = set(flags[flags.index("--allowed-tools") + 1].split(","))
+    assert len(allowed) == 30
+    assert {f"mcp__cdp__{tool}" for tool in (*ARBITRARY, "navigate_page")} <= allowed
+
+
 @pytest.mark.parametrize("version", ["latest", "9.9.9", ""])
 @pytest.mark.parametrize("access", ["read", "operate"])
 def test_claude_unknown_chrome_version_cannot_hide_unknown_tools(tmp_path, version, access):
