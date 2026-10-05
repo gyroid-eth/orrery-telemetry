@@ -2,21 +2,41 @@
 
 [English](README.en.md)
 
-複数の Claude Code / Codex が直接話し、仕事を分担し、結果を確かめ合う。その働きと Mail の往復を一枚の画面で見渡せるのが ORRERY Telemetry です。端末も同じ画面で使う [ORRERY cockpit](https://github.com/gyroid-eth/orrery) と一緒に始められます。
+複数の Claude Code / Codex が直接話し、仕事を分担し、結果を確かめ合う。その働きと Mail の往復を一枚の画面で見渡せるのが ORRERY Telemetry です。端末も同じ画面で使う [ORRERY cockpit](https://github.com/gyroid-eth/orrery) と組み合わせて使えます。
 
 ![NETWORK を開いたまま子が加わり、ready の後にしりとりの Mail が3往復する](docs/img/network-mail.gif)
 
-## 1行で入れる
+## Telemetry だけを入れる
 
-Mac のターミナル、または Windows の **WSL2 Ubuntu 内**で実行します。cockpit と Telemetry をまとめて入れます。
+この repository だけで入る、裏で動く側です。Python 3.11 以上、`git`、`tmux`、`uv` が要ります（Mac なら `brew install tmux uv`）。Windows は WSL2 の Ubuntu 内で実行します。
+
+```bash
+git clone https://github.com/gyroid-eth/orrery-telemetry.git
+cd orrery-telemetry
+./scripts/install.sh --project-key /absolute/path/to/your-project
+```
+
+`--project-key` は、agent に作業させる folder の絶対パスです（この repository ではありません）。変更内容は表示され、承認してから入ります。終わったら `~/.agentstack/bin/agentstack-doctor` と `agentstack-selftest` で確かめ、`agent-start <project folder>` で agent を起動して `http://127.0.0.1:8770/` を開きます。手順は[単独の導入手順](docs/getting-started.md#telemetry-単独の導入と確認)にあります。
+
+**単独で使えるもの**: dashboard の Telemetry 画面（DECK・NETWORK・REPLAY・退出した agent の RESUME・NEW AGENT）、`agent-start` での agent 起動、`/delegate` での子の作成、agent 同士の ORRERY Mail。agent の端末は OS の terminal（Windows は Windows Terminal のタブ）で開きます。
+
+**入らないもの**: ブラウザの中で端末を並べて操作する cockpit の画面（composer・Split・Planetarium・`ORRERY.app`）。
+
+## cockpit との関係
+
+- **Telemetry** は、agent・Mail・dashboard を動かす裏方と、その状態を見る Telemetry 画面です。
+- **[cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.md)** は、端末を並べて操作する画面です。agent の起動・Mail・Telemetry 画面は Telemetry が担うので、cockpit は Telemetry と組み合わせて使います（端末だけなら Telemetry が止まっていても開けます）。
+- cockpit 側から入れると、**両方まとめて入ります。**
+
+## 両方入れるなら（orrery の 1 行）
+
+Mac のターミナル、または WSL2 Ubuntu 内で、次の 1 行です。cockpit と Telemetry を一緒に入れます。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gyroid-eth/orrery/master/scripts/get.sh | bash
 ```
 
-表示される計画を読んで承認し、doctor と Mail の確認結果が成功してから、表示された cockpit の URL を開きます。agent を動かすには同じ環境でログイン済みの Claude Code か Codex CLI が必要です。前提条件と変更する設定は [ORRERY のインストール](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md)を参照してください。
-
-Telemetry だけ入れる場合は[単独の導入手順](docs/getting-started.md#telemetry-単独の導入と確認)へ。現在の設定の backup、`--dry-run`、手動での確認もそこにあります。
+入る場所（`~/orrery`・`~/orrery-telemetry`・`~/.agentstack`・`~/orrery-work`）と port、作業 folder の変え方、完全に消す手順は、[orrery の README](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート)にあります。単独で入れた Telemetry の取り除き方は[Uninstall](docs/install.md#uninstall)です。
 
 ## 画面のガイドで始める
 
@@ -41,7 +61,7 @@ Telemetry 単体での例: 名前で絞り込み、`7D` の `RETIRED` / `RESUME 
 ## 困ったとき・更新する
 
 - 動かない: `~/.agentstack/bin/agentstack-doctor` で不足箇所、`~/.agentstack/bin/agentstack-selftest` で Mail の往復を確認し、[トラブルシューティング](docs/troubleshooting.md)へ。
-- 更新: cockpit と一緒なら上の1行、Telemetry だけなら[Upgrade](docs/install.md#upgrade)。取り除く手順は[Uninstall](docs/install.md#uninstall)。
+- 更新: cockpit と一緒なら orrery の 1 行、Telemetry だけなら[Upgrade](docs/install.md#upgrade)。取り除く手順は[Uninstall](docs/install.md#uninstall)。
 - Windows: [WSL2 の準備とログイン](docs/install.md#windowswsl2で入れる)。native Windows の helper は[実験的な別経路](docs/windows-local.md)です。
 - 対応環境・用語・単独での起動: [getting-started](docs/getting-started.md)。
 

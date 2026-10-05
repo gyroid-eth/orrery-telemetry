@@ -61,6 +61,9 @@ if [[ ! -x "$MCP_MERGE_TOOL" && -f "$SCRIPT_DIR/lib/merge_claude_mcp.py" ]]; the
   MCP_MERGE_TOOL="$SCRIPT_DIR/lib/merge_claude_mcp.py"
 fi
 
+# env.sh is removed below, so read the work folder first.
+PROJECT_FOLDER="$(sed -n 's/^export AGENTSTACK_PROJECT_KEY=//p' "$INSTALL_DIR/env.sh" 2>/dev/null | head -n 1 | tr -d "'\"")"
+
 python3 - "$MANIFEST" "$DRY_RUN" "$PURGE_DATA" "$MERGE_TOOL" \
   "$MCP_MERGE_TOOL" <<'PY'
 import json
@@ -282,3 +285,12 @@ for raw in sorted(data.get("owned_dirs", []), key=lambda p: len(str(p)), reverse
         except OSError:
             print(f"kept non-empty directory: {path}", file=sys.stderr)
 PY
+
+echo
+if [[ "$DRY_RUN" == true ]]; then echo "Left in place (dry run; nothing was removed above):"; else echo "Left in place:"; fi
+echo "  source folders  ~/orrery-telemetry, and the folder you cloned this from if elsewhere (remove: rm -rf ~/orrery-telemetry)"
+if [[ -n "$PROJECT_FOLDER" ]]; then
+  echo "  work folder     $PROJECT_FOLDER   (yours; its CLAUDE.md keeps the ORRERY block)"
+fi
+echo "  ORRERY cockpit  ~/orrery   (stop it first, then: rm -rf ~/orrery)"
+echo "  uv              ~/.local/bin/uv, if the installer added it"
