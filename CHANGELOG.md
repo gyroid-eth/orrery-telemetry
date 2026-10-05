@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### 開いたままの詳細パネルのボタンが、agent の状態に合わせて変わるようにしました
+
+詳細パネルの OPEN IN COCKPIT／RESUME IN COCKPIT と Exit のボタンは、パネルを開いた時点の状態のまま変わりませんでした。パネルを開いたまま子を Resume すると、ボタンは RESUME IN COCKPIT のまま残り、cockpit の Full tour の「Return to your agent」の輪が、パネルの Close に付いていました。ボタンは、agent の一覧を受け取るたびに今の状態で描き直します（送信中の Exit はそのまま）。また、Full tour の「Return」の段は Close を指さなくなりました。running の agent の OPEN IN COCKPIT が無いときは輪を出さず、tour の欄の文で案内します。
+
 ### EXIT を確定した直後、隣のカードを誤って EXIT しないようにしました
 
 EXIT した agent のカードが LIVE から消えたり finished の区画へ移ったりすると、後ろのカードが詰まり、直前に押した位置へ次のカードの EXIT が来ます。そこをもう一度押すと、別の agent の EXIT を構えてしまいました（Full tour の録画で、子を EXIT した直後に親の EXIT がカーソルの下に来た）。EXIT を確定してから 2 秒間、またその後 30 秒の間にそのカードが動いたり区画が変わったり消えたりしたときはその時点から 2 秒間、EXIT を押しても受け付けません。その間は EXIT ボタンを薄く表示し、カーソルも「押せない」形にして、効かない理由が見えるようにしました。

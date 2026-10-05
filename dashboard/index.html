@@ -33888,6 +33888,7 @@ async function tick(){
     if(seq!==tickSeq)return;   // a newer range was requested while this was in flight
     lastData=j.agents;
     settleExitSent(j.agents);
+    refreshPanelButtons();
     const y=window.scrollY;
     render();
     window.scrollTo(0,y);
@@ -36548,30 +36549,13 @@ function openPanel(name){
     if(meta)meta.textContent='could not render some details (see logs/js-errors.log)';
   }
 }
-function openPanelInner(name){
-  panelName=name;
-  const a=(lastData||[]).find(x=>x.name===name)||
-          (typeof gmap!=='undefined'&&gmap.get(name))||{};
-  // gmap の補完 (network view では role 等が gmap 側だけにある)
-  const g=(typeof gmap!=='undefined'&&gmap.get(name))||{};
-  const run=!!a.running, rel=a.last_active_rel||a.rel||'';
-  const stat=a.retired?'RETIRED':run?'● ONLINE':
-    a.category==='finished'?'EXITED':a.present===false?'○ REGISTERED':'○ SHELL';
-  const portrait=TM('tm-portrait'),avatar=avatarKeyOf(name);
-  portrait.hidden=!avatar;
-  portrait.style.display='';
-  portrait.dataset.portraitFallback='0';
-  portrait.alt=avatar?`${name} portrait`:'';
-  if(avatar)portrait.src=portURL(avatar,true);
-  else portrait.removeAttribute('src');
-  TM('tm-nm').textContent=name;
-  const T=TM('term');
-  T.classList.toggle('s-run',run);
-  TM('tm-meta').textContent=
-    stat+(a.model?' · '+a.model:'')+(a.ctx_window?' · '+a.ctx_window:'')
-    +(rel?' · last '+rel:'');
+// The panel's EXIT and OPEN/RESUME buttons follow the agent's state: drawn when
+// the panel opens and again with each new agents list while it stays open (an
+// agent resumed or exited meanwhile changes what the button does).
+function renderPanelButtons(a,g,{keepExit=false}={}){
+  const run=!!a.running;
   const exitBtn=TM('tm-exit-btn');
-  if(exitBtn){exitBtn.style.display=run?'':'none';
+  if(exitBtn&&!keepExit){exitBtn.style.display=run?'':'none';
     exitBtn.classList.remove('arming');exitBtn.disabled=false;
     exitBtn.textContent='Exit';}
   const resumeCategory=a.category||
@@ -36594,6 +36578,38 @@ function openPanelInner(name){
     openBtn.textContent=view.text;
     openBtn.title=view.title;
   }
+}
+function refreshPanelButtons(){
+  if(!panelName||!TM('term').classList.contains('on'))return;
+  const a=(lastData||[]).find(x=>x.name===panelName);if(!a)return;
+  const g=(typeof gmap!=='undefined'&&gmap.get(panelName))||{};
+  // An Exit on its way (exitPanelAgent) keeps its button; the rest follows.
+  const exitBtn=TM('tm-exit-btn');
+  renderPanelButtons(a,g,{keepExit:!!exitBtn&&exitBtn.disabled&&exitBtn.textContent==='…'});
+}
+function openPanelInner(name){
+  panelName=name;
+  const a=(lastData||[]).find(x=>x.name===name)||
+          (typeof gmap!=='undefined'&&gmap.get(name))||{};
+  // gmap の補完 (network view では role 等が gmap 側だけにある)
+  const g=(typeof gmap!=='undefined'&&gmap.get(name))||{};
+  const run=!!a.running, rel=a.last_active_rel||a.rel||'';
+  const stat=a.retired?'RETIRED':run?'● ONLINE':
+    a.category==='finished'?'EXITED':a.present===false?'○ REGISTERED':'○ SHELL';
+  const portrait=TM('tm-portrait'),avatar=avatarKeyOf(name);
+  portrait.hidden=!avatar;
+  portrait.style.display='';
+  portrait.dataset.portraitFallback='0';
+  portrait.alt=avatar?`${name} portrait`:'';
+  if(avatar)portrait.src=portURL(avatar,true);
+  else portrait.removeAttribute('src');
+  TM('tm-nm').textContent=name;
+  const T=TM('term');
+  T.classList.toggle('s-run',run);
+  TM('tm-meta').textContent=
+    stat+(a.model?' · '+a.model:'')+(a.ctx_window?' · '+a.ctx_window:'')
+    +(rel?' · last '+rel:'');
+  renderPanelButtons(a,g);
   // gtip 相当のサマリーを tm-summary に描画 (モバイルで hover が効かない救済)
   renderPanelSummary(name, a, g);
   renderAnnotEditor(name, (g&&g.annot)||a.annot||null);

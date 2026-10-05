@@ -212,9 +212,52 @@ def test_resume_needs_the_resume_label_and_nothing_disabled_is_ringed(embedded):
     disabled = _cue(evaluate, inner, 'full-return')
     inner("document.getElementById('tm-open').disabled=false")
     assert (resume['ring'], resume['target']) == (True, 'tm-open')
-    # Return is not RESUME, and a disabled OPEN is not pressed: close the panel.
-    assert (returning['ring'], returning['target']) == (True, 'tm-x'), returning
-    assert (disabled['ring'], disabled['target']) == (True, 'tm-x'), disabled
+    # Return is not RESUME, and a disabled OPEN is not pressed. Nor is the
+    # panel's Close a way back to the cockpit: no ring, the checklist guides.
+    assert returning == {'ring': False, 'here': False}, returning
+    assert disabled == {'ring': False, 'here': False}, disabled
+
+
+@pytest.mark.parametrize('before,after,label', [
+    ({'category': 'retired', 'running': False, 'retired': True, 'resume_capability': 'ready'},
+     {'category': 'agent', 'running': True, 'retired': False}, 'OPEN IN COCKPIT'),
+    ({'category': 'agent', 'running': True, 'retired': False},
+     {'category': 'retired', 'running': False, 'retired': True, 'resume_capability': 'ready'}, 'RESUME IN COCKPIT'),
+], ids=['resumed-while-open', 'exited-while-open'])
+def test_an_open_panel_follows_the_agent(embedded, before, after, label):
+    """Full tour on a Mac: with the panel left open on the child, RESUME took
+    it running but the button kept saying RESUME IN COCKPIT, and Return's ring
+    went to the panel's Close. The button now follows each new agents list."""
+    _client, evaluate, inner, _wait = embedded
+    name = inner("document.querySelector('.bay').dataset.name")
+    patch = lambda row: inner(
+        "(()=>{lastData=lastData.map(a=>a.name===%s?{...a,...%s}:a);})()" % (json.dumps(name), json.dumps(row)))
+    patch(before)
+    inner("openPanel(%s)" % json.dumps(name))
+    time.sleep(.5)
+    first = inner("document.getElementById('tm-open').textContent.trim()")
+    patch(after)
+    inner("refreshPanelButtons()")
+    second = inner("document.getElementById('tm-open').textContent.trim()")
+    returning = _cue(evaluate, inner, 'full-return')
+    inner("document.getElementById('tm-x').click()")
+    assert first != label and second == label, (first, second)
+    if label == 'OPEN IN COCKPIT':
+        assert (returning['ring'], returning['target']) == (True, 'tm-open'), returning
+    else:
+        assert returning.get('target') != 'tm-x', returning
+
+
+def test_an_exit_on_its_way_keeps_its_button(embedded):
+    _client, _evaluate, inner, _wait = embedded
+    name = inner("document.querySelector('.bay').dataset.name")
+    inner("openPanel(%s)" % json.dumps(name))
+    time.sleep(.5)
+    inner("(()=>{const b=document.getElementById('tm-exit-btn');b.textContent='…';b.disabled=true;})()")
+    inner("refreshPanelButtons()")
+    kept = inner("(()=>{const b=document.getElementById('tm-exit-btn');return [b.textContent,b.disabled];})()")
+    inner("(()=>{const b=document.getElementById('tm-exit-btn');b.textContent='Exit';b.disabled=false;document.getElementById('tm-x').click();})()")
+    assert kept == ['…', True], kept
 
 
 @pytest.mark.parametrize('category', ['retired', 'finished', 'gone'])
