@@ -15,8 +15,8 @@
 1 台の Mac に 2 人目の利用者が fresh install すると、既定の lock dir（`/tmp/orrery-mail-watcher.lock`）が全利用者で共通だったため、先にいる利用者の watcher が持つ lock を 2 人目が取れず、`mkdir: ... Permission denied` → 「Stale watcher lock detected; taking ownership」を 5 秒おきに繰り返して一度も動きませんでした。入力待ちの agent に Mail が届いても起こされず、`agentstack-doctor` は全項目 ok のまま watcher の停止を報告しませんでした（dashboard の `/api/mail-watcher-health` は `watcher_running: false`・status red を返していました）。
 
 - watcher の lock の既定を利用者ごと（`$AGENTSTACK_RUNTIME_DIR/mail-watcher.lock`）にしました。既定が利用者ごとになったので、他人の lock に当たるのは `AGENTSTACK_MAIL_WATCHER_LOCK_DIR`・`_PIDFILE`・`_HEARTBEAT` を明示で他人の物に向けたときだけです
-- 所有者が自分でない path には、何も書かず（fallback もせず）、そのことを一度だけ log に出して止まります。黙って別の場所へ切り替えると、同じ override を見ている dashboard や agent-start が元の（他人の）path を読み続け、watcher は動いているのに「止まっている」と誤って報告するため
-- 2026-10-05 より前の既定（`/tmp/orrery-mail-watcher.lock`）に自分の watcher がまだ生きていれば、新しい path では起動せず、旧 watcher を止める案内を出して止まります（二重配送の防止）。update 時、同じ旧既定に自分の物で使われていない lock が残っていれば片付けます。どちらも他人の物には触れません
+- 所有者が自分でない path（lock dir・pidfile・heartbeat の親 dir とそれぞれの既存 file、symlink ならその参照先も）には、何も書かず（別の場所への切り替えもせず）、そのことを一度だけ log に出して止まります。黙って別の場所へ切り替えると、同じ override を見ている dashboard や agent-start が元の（他人の）path を読み続け、watcher は動いているのに「止まっている」と誤って報告するため
+- 2026-10-05 より前の既定（`/tmp/orrery-mail-watcher.lock`）に自分の watcher がまだ生きていれば（pid の process が自分の UID で command line が `watch_agent_mail_signals.sh` のときだけ。pid が再利用された無関係の process は stale 扱い）、新しい path では起動せず、旧 watcher を止める案内を出して止まります（二重配送の防止）。update 時、同じ旧既定に自分の物で使われていない lock が残っていれば片付けます。どちらも他人の物には触れません
 - 所有者 UID の取得は GNU（Linux/WSL）と BSD（macOS）の両方で UID だけを安全に取れる順に直しました（GNU の `stat -f` は「ファイルシステム情報」を意味し、未知の directive でも stdout を汚してから失敗するため、所有者比較が常に不一致になるおそれがありました）
 - `agentstack-doctor` が、dashboard の `/api/mail-watcher-health` と同じ判定で watcher の停止・status の red/yellow・heartbeat の停滞を warn するようになりました（`watcher_running` だけでは、signal が溜まっていたり直近の配送が無かったりする red/yellow な watcher を ok と報告していました）
 

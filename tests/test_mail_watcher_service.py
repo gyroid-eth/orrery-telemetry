@@ -371,6 +371,8 @@ def _acquire_lock_against(
     *,
     legacy_lock: "pathlib.Path | None" = None,
     fake_uid: "int | None" = None,
+    pidfile: "pathlib.Path | None" = None,
+    fake_stat_dir: "pathlib.Path | None" = None,
 ) -> "subprocess.CompletedProcess[str]":
     """Run the watcher's real acquire_lock() against a pre-populated lock dir.
 
@@ -382,10 +384,15 @@ def _acquire_lock_against(
     """
     funcs = " ".join(
         f"/^{name}()/,/^}}/p;"
-        for name in ("log", "is_pid_running", "lock_owner_uid", "path_is_foreign", "write_heartbeat", "acquire_lock")
+        for name in (
+            "log", "is_pid_running", "lock_owner_uid", "path_is_foreign",
+            "is_own_watcher_process", "write_heartbeat", "acquire_lock",
+        )
     )
     script = lock.parent / "acquire.sh"
     preamble = "set -euo pipefail\nLOCK_ACQUIRED=0\n"
+    if fake_stat_dir is not None:
+        preamble += f"export PATH='{fake_stat_dir}':\"$PATH\"\n"
     if fake_uid is not None:
         preamble += f"id() {{ echo {fake_uid}; }}\n"
     legacy = legacy_lock if legacy_lock is not None else lock.parent / "no-such-legacy-lock"
@@ -394,7 +401,7 @@ def _acquire_lock_against(
         + f"DEFAULT_WATCHER_LOCK_DIR='{lock}'\n"
         + f"LEGACY_WATCHER_LOCK_DIR='{legacy}'\n"
         + f"WATCHER_LOCK_DIR='{lock}'\n"
-        + f"WATCHER_PIDFILE='{lock}/watcher.pid'\n"
+        + f"WATCHER_PIDFILE='{pidfile or lock / 'watcher.pid'}'\n"
         + f"WATCHER_HEARTBEAT='{lock}/heartbeat'\n"
         + f"eval \"$(sed -n '{funcs}' {WATCHER})\"\n"
         + "acquire_lock\n"
@@ -475,7 +482,10 @@ def test_watcher_stops_for_an_explicit_pidfile_override_owned_by_someone_else():
         (foreign_pidfile_dir / "watcher.pid").write_text("999\n", encoding="utf-8")
         funcs = " ".join(
             f"/^{name}()/,/^}}/p;"
-            for name in ("log", "is_pid_running", "lock_owner_uid", "path_is_foreign", "write_heartbeat", "acquire_lock")
+            for name in (
+                "log", "is_pid_running", "lock_owner_uid", "path_is_foreign",
+                "is_own_watcher_process", "write_heartbeat", "acquire_lock",
+            )
         )
         script = pathlib.Path(td) / "acquire.sh"
         script.write_text(
@@ -499,6 +509,68 @@ def test_watcher_stops_for_an_explicit_pidfile_override_owned_by_someone_else():
         assert (foreign_pidfile_dir / "watcher.pid").read_text(encoding="utf-8").strip() == "999"
 
 
+def _fake_stat_dir(td: pathlib.Path, foreign_suffix: str, *, only_when_following: bool) -> pathlib.Path:
+    """A `stat` that reports another UID for paths ending in foreign_suffix.
+
+    With only_when_following the foreign UID is reported only for `stat -L`
+    (a symlink we own that points at someone else's file); otherwise for both.
+    Every other path gets the caller's real UID.
+    """
+    fake = td / "fake-stat-bin"
+    fake.mkdir()
+    (fake / "stat").write_text(
+        "#!/bin/sh\n"
+        "follow=0; last=\n"
+        "for a in \"$@\"; do [ \"$a\" = -L ] && follow=1; last=$a; done\n"
+        f"case \"$last\" in *{foreign_suffix})\n"
+        f"  if [ {'\"$follow\" = 1' if only_when_following else 'true'} ]; then echo 4242; exit 0; fi ;;\n"
+        "esac\n"
+        "id -u\n",
+        encoding="utf-8",
+    )
+    (fake / "stat").chmod(0o755)
+    return fake
+
+
+def test_watcher_stops_for_an_existing_pidfile_owned_by_someone_else():
+    # Parent dir is ours, only the existing file belongs to someone else.
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        lock = tmp / "own-lock"
+        lock.mkdir()
+        (lock / "watcher.pid").write_text("999\n", encoding="utf-8")
+        fake = _fake_stat_dir(tmp, "watcher.pid", only_when_following=False)
+        r = _acquire_lock_against(lock, os.getpid(), fake_stat_dir=fake)
+        assert r.returncode == 1
+        assert "belongs to another user" in r.stdout
+        assert "acquired=" not in r.stdout
+        assert (lock / "watcher.pid").read_text(encoding="utf-8").strip() == "999"
+
+
+def test_watcher_stops_for_a_pidfile_symlink_pointing_at_someone_elses_file():
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        lock = tmp / "own-lock"
+        lock.mkdir()
+        elsewhere = tmp / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "target.pid").write_text("999\n", encoding="utf-8")
+        (lock / "watcher.pid").symlink_to(elsewhere / "target.pid")
+        fake = _fake_stat_dir(tmp, "watcher.pid", only_when_following=True)
+        r = _acquire_lock_against(lock, os.getpid(), fake_stat_dir=fake)
+        assert r.returncode == 1
+        assert "belongs to another user" in r.stdout
+        assert (elsewhere / "target.pid").read_text(encoding="utf-8").strip() == "999"
+
+
+def _spawn_fake_watcher() -> "subprocess.Popen":
+    # A real process whose command line names the script, as an old watcher's does.
+    return subprocess.Popen(
+        ["/bin/bash", "-c", "sleep 60; true", "watch_agent_mail_signals.sh"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+
 def test_watcher_defers_to_a_live_legacy_holder():
     # A watcher from before 2026-10-05 (or one started by hand per this
     # file's own Usage comment, which install.sh's service restart does not
@@ -510,12 +582,33 @@ def test_watcher_defers_to_a_live_legacy_holder():
         own_lock = pathlib.Path(td) / "own-lock"
         legacy = pathlib.Path(td) / "legacy-lock"
         legacy.mkdir()
-        (legacy / "watcher.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
-        r = _acquire_lock_against(own_lock, os.getpid(), legacy_lock=legacy)
+        old = _spawn_fake_watcher()
+        try:
+            (legacy / "watcher.pid").write_text(f"{old.pid}\n", encoding="utf-8")
+            r = _acquire_lock_against(own_lock, os.getpid(), legacy_lock=legacy)
+        finally:
+            old.kill()
+            old.wait()
         assert r.returncode == 1
         assert "still running on the old shared lock" in r.stdout
         assert "acquired=" not in r.stdout
         assert not own_lock.exists()
+
+
+def test_watcher_does_not_mistake_a_reused_pid_for_a_live_legacy_watcher():
+    # The old pidfile can name a pid since reused by an unrelated process.
+    # Refusing to start and telling the user to kill it would be wrong on
+    # both counts; only a live process of this user whose command line is
+    # this script counts.
+    with tempfile.TemporaryDirectory() as td:
+        own_lock = pathlib.Path(td) / "own-lock"
+        legacy = pathlib.Path(td) / "legacy-lock"
+        legacy.mkdir()
+        (legacy / "watcher.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+        r = _acquire_lock_against(own_lock, os.getpid(), legacy_lock=legacy)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "acquired=1" in r.stdout
+        assert "kill" not in r.stdout
 
 
 def test_watcher_starts_normally_when_the_legacy_lock_is_stale():

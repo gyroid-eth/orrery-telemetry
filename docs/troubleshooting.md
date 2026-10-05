@@ -235,7 +235,7 @@ tail -3 ~/.agentstack/runtime/mail-watcher.log
 
 repo を更新して `bash scripts/install.sh` を再実行すれば、以後の takeover は残り物があっても通ります。
 
-**1 台の Mac に複数の利用者がいて、`log` に `Permission denied` と `Stale watcher lock detected` が交互に数秒おきに並び、watcher が一度も動かない**なら、lock dir を他人の watcher と共有しています（2026-10-05 以前は既定が `/tmp/orrery-mail-watcher.lock` で全利用者共通だったため、1 台の Mac の 2 人目の利用者が先にいる利用者の lock を取れず無限リトライしていました）。既定は利用者ごと（`$AGENTSTACK_RUNTIME_DIR/mail-watcher.lock`）になっており、repo を更新するだけで解決します。`AGENTSTACK_MAIL_WATCHER_LOCK_DIR` を手で/tmp 配下などの共有パスに設定している場合は、それぞれの利用者だけが書ける場所に変えてください（他人が所有する lock を watcher が検出すると、奪わずに一度だけ log へ記録し、利用者ごとの既定へ自動的に戻ります）。`agentstack-doctor` も、watcher が動いていない／heartbeat が古い場合に warn します。
+**1 台の Mac に複数の利用者がいて、`log` に `Permission denied` と `Stale watcher lock detected` が交互に数秒おきに並び、watcher が一度も動かない**なら、lock dir を他人の watcher と共有しています（2026-10-05 以前は既定が `/tmp/orrery-mail-watcher.lock` で全利用者共通だったため、1 台の Mac の 2 人目の利用者が先にいる利用者の lock を取れず無限リトライしていました）。既定は利用者ごと（`$AGENTSTACK_RUNTIME_DIR/mail-watcher.lock`）になっており、repo を更新して `bash scripts/install.sh` を再実行すれば解決します。`AGENTSTACK_MAIL_WATCHER_LOCK_DIR`・`_PIDFILE`・`_HEARTBEAT` を手で他人の path（`/tmp` 配下の共有 path など）に向けている場合、watcher は**何も書かず、別の場所へ切り替えもせず**に止まり、log に「この path は別の利用者の物。override を外すか自分の path に」と一度だけ出します。設定を外す（または自分だけが書ける場所に変える）と動きます。2026-10-05 より前の既定に自分の古い watcher がまだ生きている場合も、二重配送を避けるため新しい watcher は起動せず、止める案内を出します（その pid が watcher の process でなければ、stale として扱います）。`agentstack-doctor` も、watcher が動いていない・status が red / yellow・heartbeat が古い場合に warn します。
 
 ## Dashboard spawn がすぐ消える
 
