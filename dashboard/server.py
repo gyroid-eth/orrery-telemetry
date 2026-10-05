@@ -6620,7 +6620,9 @@ def spawn_names_payload() -> dict:
     statuses = _spawn_scientist_statuses(adjectives, scientists)
     raw_dirs = os.environ.get("AGENTSTACK_SPAWN_DIRS", "").split(":")
     # Keep `~` symbolic in the API; do_spawn expands it only at launch time.
-    dirs = [value for value in raw_dirs if value] or ["~"]
+    # Unset: the project folder first (the first chip is the default, and only
+    # there does the agent get the project's CLAUDE.md), then home.
+    dirs = [value for value in raw_dirs if value] or [d for d in (PROJECT_KEY, "~") if d]
     claude_catalog = _claude_catalog()
     claude_models = list(claude_catalog.models)
     claude_default = _claude_default_model(claude_models)
