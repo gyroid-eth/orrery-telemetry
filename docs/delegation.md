@@ -170,7 +170,7 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 
 ### 分類表と、読むだけ・操作も
 
-画面の選択で何を公開し承認するかは、分類表（`TOOL_TABLE`）で決まります。今の表は Windows-MCP 0.8.6（全 20 tool）と chrome-devtools-mcp（1.10.1 の全 30 tool）で、tool を 3 つに分けています。
+画面の選択で何を公開し承認するかは、分類表（`TOOL_TABLE`）で決まります。今の表は Windows-MCP 0.8.6（全 20 tool）と chrome-devtools-mcp（1.10.1 の全 30 tool）で、Windows は3分類、Chrome は read と operate の2分類です。
 
 | 分類 | Windows-MCP 0.8.6 の tool |
 |---|---|
@@ -181,19 +181,20 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 - `screen:read` は「読む」だけを、`screen:operate` は「読む」と「画面を操作する」を公開して承認します。残りは隠します（Claude は `--disallowed-tools`、Codex は `enabled_tools` から外す）。画面を選んでも PowerShell やレジストリは渡りません
 - 「画面ではない」tool まで渡すのは、`mcp:<server>:all` を別に指定したときだけです。これはその server の全 tool を承認し、Windows なら**ホストで任意のコードを人の承認なしに動かせる**ことになります。child の最初の prompt にもそう書きます
 - 版は server の起動コマンドから読みます（`uvx windows-mcp@0.8.6` のように版を固定した形。`--with` で足しただけの package は数えません）。wrapper script、版を固定しない定義、表に無い版では、`screen:read` と `mcp:<server>:all` を選べず起動を止めます。`screen:operate` は、server を写す・有効にするだけで、tool は 1 つも承認しません
+
 ### chrome-devtools の分類（Codex の `--tools browser`）
 
 | 分類 | chrome-devtools-mcp の tool |
 |---|---|
 | 読む（`read`） | get_console_message・get_css_styles・list_console_messages・list_network_requests・list_pages・performance_analyze_insight・select_page・wait_for |
-| 操作する（`operate`） | click・close_page・drag・emulate・fill・fill_form・handle_dialog・hover・navigate_page・new_page・press_key・resize_page・type_text |
-| 承認しない | get_network_request・take_screenshot・take_snapshot（任意のホスト出力パス）・evaluate_script（ページ内で任意のスクリプトを実行）・upload_file（ホストのファイルをページへ送る）・take_heapsnapshot・performance_start_trace・performance_stop_trace・lighthouse_audit（ホストにファイルを書く） |
+| 操作する（`operate`） | click・close_page・drag・emulate・fill・fill_form・handle_dialog・hover・navigate_page・new_page・press_key・resize_page・type_text・evaluate_script・upload_file・take_heapsnapshot・performance_start_trace・performance_stop_trace・lighthouse_audit・get_network_request・take_screenshot・take_snapshot |
 
-- `browser`（Codex）は「読む」と「操作する」を、`screen:read:chrome-devtools` は「読む」だけを公開して承認します。残りは `enabled_tools` から外れて見えません
-- 実際の定義は版を固定しない `npx chrome-devtools-mcp@latest` が普通なので、この server だけは版が分からなくても**名前**で分類します。表に載った名前の tool だけを tool ごとに承認し、新しい版で増えた tool は公開も承認もされません。Windows-MCP の版固定とは違い、tool の名前と意味が対応し、任意実行が `evaluate_script` などの名前で分かるためです
-- 承認は引数別ではなく tool 全体に適用されます。`take_snapshot.filePath`、`take_screenshot.filePath`、`get_network_request.requestFilePath` / `responseFilePath` はホストへ書き込めるため、3 tool は「読む」と「操作する」の両方から除きます。Claude の `screen:read:<chrome>` / `screen:operate:<chrome>` は分類表にある版の固定が必要です。Claude は未知 tool を allowlist で非公開にできないため、未固定版や未知版では起動を止めます。固定版は他の tool を `--disallowed-tools` に指定します。Claude in Chrome の `browser` は従来どおりです。
+- `browser`（Codex）は「読む」と「操作する」を、`screen:read:chrome-devtools` は「読む」だけを公開して承認します。read のときは残りを `enabled_tools` から外します
+- 実際の定義は版を固定しない `npx chrome-devtools-mcp@latest` が普通なので、この server だけは版が分からなくても**名前**で分類します。表に載った名前の tool だけを tool ごとに承認し、新しい版で増えた tool は公開も承認もされません。Windows-MCP の版固定とは違い、任意実行を含む既知の名前が選んだ範囲を定義し、新しい名前は範囲外に保つためです
+- Codex の `browser` または Chrome の `screen:operate` を選ぶと、既知の全30 toolを承認します。任意の JavaScript 実行（`evaluate_script` と `navigate_page.initScript`）、ホストへの保存、ローカルファイルの upload も含み、任意の出力パスなど引数込みで tool 全体を承認します。範囲を絞りたいときは `screen:read:<server>`、または browser/operate を選ばず overlay を使います（browser/operate の選択は tool の allowlist を置き換えます）。read は `take_snapshot.filePath`、`take_screenshot.filePath`、`get_network_request.requestFilePath` / `responseFilePath` を持つ3 tool を除外します。
+- Claude の Chrome MCP screen 選択は既知固定版が必要です。未知版は allowlist で未知 tool を隠せないため止め、固定版の read では残りを `--disallowed-tools` に指定します。Claude in Chrome の browser は従来どおりです。
 - 分類するのは `npx [-y|--yes] chrome-devtools-mcp[@version]` による直接の起動です。wrapper や `npx --package chrome-devtools-mcp@version other-program` は分類しません。browser と別の screen server は併用でき、それぞれの承認範囲を保ちます。
-- 「承認しない」tool は `mcp:chrome-devtools:all` のときだけ承認します。こちらは版を固定した定義（`chrome-devtools-mcp@1.10.1`）が要ります
+- `mcp:chrome-devtools:all` は引き続き既知固定版（`chrome-devtools-mcp@1.10.1`）が必要です。Codex の browser/operate は版が固定されていなくても既知の名前を承認します
 - 承認は Codex の tool 承認だけです。`--autoConnect` の Chrome 側の接続許可は別で、Chrome の接続許可を人が答える点は変わりません
 
 - Mac の組み込み computer use と、Mac の Codex の画面・ブラウザ（`node_repl` という任意の JS を実行する tool を通る）は、読むと操作を tool で分けられないので「読むだけ」を選べません

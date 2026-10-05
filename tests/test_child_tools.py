@@ -269,7 +269,7 @@ ARBITRARY = ("evaluate_script", "upload_file", "take_heapsnapshot",
 
 def test_chrome_devtools_table_splits_every_tool_into_one_class():
     table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["1.10.1"]
-    tiers = [set(table["read"]), set(table["operate"]), set(ARBITRARY)]
+    tiers = [set(table["read"]), set(table["operate"])]
     assert set().union(*tiers) == set(table["all"]) and sum(map(len, tiers)) == 30
     # the name-classified entry exposes exactly the same names, and no "all"
     star = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["*"]
@@ -284,7 +284,10 @@ def test_chrome_devtools_table_splits_every_tool_into_one_class():
     ["-y", "chrome-devtools-mcp@1.10.1"],
 ])
 def test_codex_browser_exposes_and_approves_only_the_listed_names(args):
-    config = {"mcp_servers": {"chrome-devtools": {"command": "npx", "args": args}}}
+    config = {"mcp_servers": {"chrome-devtools": {
+        "command": "npx", "args": args,
+        "default_tools_approval_mode": "approve",
+        "tools": {"new_unknown_tool": {"approval_mode": "approve"}}}}}
     child_tools.codex_apply(config, _spec(None, {"browser": True}))
     server = config["mcp_servers"]["chrome-devtools"]
     table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["*"]
@@ -294,7 +297,8 @@ def test_codex_browser_exposes_and_approves_only_the_listed_names(args):
     assert all(v == {"approval_mode": "approve"} for v in server["tools"].values())
     assert "default_tools_approval_mode" not in server
     for tool in ARBITRARY:
-        assert tool not in server["enabled_tools"]
+        assert server["tools"][tool] == {"approval_mode": "approve"}
+    assert "new_unknown_tool" not in server["enabled_tools"]
 
 
 def test_codex_browser_read_only_through_the_screen_form():
@@ -305,13 +309,23 @@ def test_codex_browser_read_only_through_the_screen_form():
     assert set(config["mcp_servers"]["chrome-devtools"]["enabled_tools"]) == set(table["read"])
 
 
-@pytest.mark.parametrize("access", ["read", "operate"])
-def test_browser_selection_cannot_approve_host_file_output_arguments(access):
+def test_browser_read_cannot_approve_host_file_output_arguments():
     config = {"mcp_servers": {"chrome-devtools": dict(CHROME_DEVTOOLS)}}
     child_tools.codex_apply(config, _spec(None, {
-        "screen": {"access": access, "server": "chrome-devtools"}}))
+        "screen": {"access": "read", "server": "chrome-devtools"}}))
     approved = config["mcp_servers"]["chrome-devtools"]["tools"]
     assert not {"take_snapshot", "take_screenshot", "get_network_request"} & approved.keys()
+    assert not {"navigate_page", "evaluate_script", "upload_file"} & approved.keys()
+
+
+def test_browser_operate_approves_all_known_names_without_a_version_pin():
+    config = {"mcp_servers": {"chrome-devtools": dict(CHROME_DEVTOOLS)}}
+    child_tools.codex_apply(config, _spec(None, {
+        "screen": {"access": "operate", "server": "chrome-devtools"}}))
+    server = config["mcp_servers"]["chrome-devtools"]
+    known = set(child_tools.TOOL_TABLE["chrome-devtools-mcp"]["1.10.1"]["all"])
+    assert set(server["enabled_tools"]) == set(server["tools"]) == known
+    assert "default_tools_approval_mode" not in server
 
 
 @pytest.mark.parametrize("definition", [
@@ -368,6 +382,7 @@ def test_claude_pinned_chrome_read_explicitly_denies_operating_and_file_tools(tm
     table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["1.10.1"]
     assert allowed == {f"mcp__cdp__{tool}" for tool in table["read"]}
     assert denied == {f"mcp__cdp__{tool}" for tool in table["all"] if tool not in table["read"]}
+    assert {"mcp__cdp__navigate_page", "mcp__cdp__evaluate_script", "mcp__cdp__upload_file"} <= denied
 
 
 @pytest.mark.parametrize("version", ["latest", "9.9.9", ""])

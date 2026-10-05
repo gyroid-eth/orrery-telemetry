@@ -107,12 +107,10 @@ TOOL_TABLE: dict[str, dict[str, dict[str, tuple[str, ...]]]] = {
 # (the "*" entry): only the names below are exposed and approved, one by one,
 # and a tool a newer version adds is neither exposed nor approved. "all" is
 # listed only for a pinned version, so ``mcp:<server>:all`` still needs one.
-# Not browser tools, and approved only by an explicit :all: evaluate_script
-# (arbitrary page script), upload_file (reads a local file into a page),
-# take_heapsnapshot, performance_start_trace, performance_stop_trace and
-# lighthouse_audit (write files on the host). get_network_request,
-# take_screenshot and take_snapshot also accept host output paths; approval
-# cannot distinguish their arguments, so they too require explicit :all.
+# Browser / operate explicitly approves all known names, including arbitrary
+# page JS (evaluate_script and navigate_page.initScript), host file output and
+# upload. Read excludes every tool with a host output-path argument: approval
+# cannot distinguish its arguments.
 _CHROME_DEVTOOLS_READ = (
     "get_console_message", "get_css_styles",
     "list_console_messages", "list_network_requests", "list_pages",
@@ -122,17 +120,16 @@ _CHROME_DEVTOOLS_OPERATE = (
     "click", "close_page", "drag", "emulate", "fill", "fill_form",
     "handle_dialog", "hover", "navigate_page", "new_page", "press_key",
     "resize_page", "type_text",
+    "evaluate_script", "upload_file", "take_heapsnapshot",
+    "performance_start_trace", "performance_stop_trace", "lighthouse_audit",
+    "get_network_request", "take_screenshot", "take_snapshot",
 )
 TOOL_TABLE["chrome-devtools-mcp"] = {
     "*": {"read": _CHROME_DEVTOOLS_READ, "operate": _CHROME_DEVTOOLS_OPERATE},
     "1.10.1": {
         "read": _CHROME_DEVTOOLS_READ,
         "operate": _CHROME_DEVTOOLS_OPERATE,
-        "all": tuple(sorted(_CHROME_DEVTOOLS_READ + _CHROME_DEVTOOLS_OPERATE + (
-            "evaluate_script", "upload_file", "take_heapsnapshot",
-            "performance_start_trace", "performance_stop_trace",
-            "lighthouse_audit", "get_network_request", "take_screenshot",
-            "take_snapshot"))),
+        "all": tuple(sorted(_CHROME_DEVTOOLS_READ + _CHROME_DEVTOOLS_OPERATE)),
     },
 }
 # Packages whose unpinned or unlisted-version definition is classified by name.
@@ -799,6 +796,9 @@ def prompt_text(spec: dict, provider: str, standalone: bool = False) -> str:
         head += (" Every tool of " + ", ".join(spec["tools"]["approve_all"])
                  + " is approved, including tools that run arbitrary code on that "
                  "host: use only what the task needs.")
+    if provider == "codex" and "browser" in spec["tools"]:
+        head += (" Browser approves all known chrome-devtools tools, including "
+                 "arbitrary JavaScript, saving host files and uploading local files.")
     return (head + " If a tool you need is missing, report it to " + report_to
             + " instead of working around it. This is an instruction, not a "
             "technical lock.")
