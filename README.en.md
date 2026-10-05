@@ -24,6 +24,8 @@ cd orrery-telemetry
 
 ## How it relates to cockpit
 
+![The cockpit is the screen for operating terminals; Telemetry is the dashboard and agent-graph screen. The cockpit can embed the Telemetry screen. Agents run in tmux, are visible from both screens, and talk through Mail](https://raw.githubusercontent.com/gyroid-eth/orrery/master/docs/images/cockpit_telemetry_relation.svg)
+
 - **Telemetry** is what runs agents, Mail, and the dashboard behind the scenes, plus the Telemetry screen that shows their state.
 - **[Cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.en.md)** is the screen where you arrange and drive terminals. Starting agents, Mail, and the Telemetry screen are handled by Telemetry, so cockpit is used together with Telemetry (its terminals open even when Telemetry is not running).
 - Installing from the cockpit side **installs both.**

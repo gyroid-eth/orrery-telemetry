@@ -24,6 +24,8 @@ cd orrery-telemetry
 
 ## cockpit との関係
 
+![cockpit は terminal を操作する画面、Telemetry は dashboard と agent graph の画面。cockpit は Telemetry の画面を埋め込める。agent は tmux の中で動き、両方の画面から見え、Mail で話す](https://raw.githubusercontent.com/gyroid-eth/orrery/master/docs/images/cockpit_telemetry_relation.svg)
+
 - **Telemetry** は、agent・Mail・dashboard を動かす裏方と、その状態を見る Telemetry 画面です。
 - **[cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.md)** は、端末を並べて操作する画面です。agent の起動・Mail・Telemetry 画面は Telemetry が担うので、cockpit は Telemetry と組み合わせて使います（端末だけなら Telemetry が止まっていても開けます）。
 - cockpit 側から入れると、**両方まとめて入ります。**
