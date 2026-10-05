@@ -59,6 +59,9 @@ def _make_repo(tmp_path: pathlib.Path, links: dict[str, str] | None = None,
         (repo / relative).parent.mkdir(parents=True, exist_ok=True)
         (repo / relative).write_text("x\n", encoding="utf-8")
     _git("init", "-q", str(repo), cwd=tmp_path)
+    # Keep Git's background maintenance out of the dry-run side-effect snapshot.
+    _git("config", "maintenance.auto", "false", cwd=repo)
+    _git("config", "gc.auto", "0", cwd=repo)
     if root_escape:
         (repo / "escape").symlink_to(outside, target_is_directory=True)
     (repo / "src" / "shared").symlink_to("../docs", target_is_directory=True)
