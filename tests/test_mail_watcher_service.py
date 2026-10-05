@@ -76,6 +76,7 @@ def _run_enable(tmp: pathlib.Path, platform: str, *, fail: bool = False) -> tupl
         "plan() { :; }\n"
         f"eval \"$(sed -n '/^mail_watcher_environment()/,/^}} # end mail_watcher_environment/p' {INSTALLER})\"\n"
         f"eval \"$(sed -n '/^render_mail_watcher_unit()/,/^}} # end render_mail_watcher_unit/p' {INSTALLER})\"\n"
+        f"eval \"$(sed -n '/^migrate_legacy_mail_watcher_lock()/,/^}} # end migrate_legacy_mail_watcher_lock/p' {INSTALLER})\"\n"
         f"eval \"$(sed -n '/^stop_tmux_mail_watcher()/,/^}} # end stop_tmux_mail_watcher/p' {INSTALLER})\"\n"
         f"eval \"$(sed -n '/^wait_for_launchd_unload()/,/^}} # end wait_for_launchd_unload/p' {INSTALLER})\"\n"
         f"eval \"$(sed -n '/^enable_mail_watcher()/,/^}} # end enable_mail_watcher/p' {INSTALLER})\"\n"
@@ -275,21 +276,38 @@ if __name__ == "__main__":
 WATCHER = ROOT / "hooks" / "watch_agent_mail_signals.sh"
 
 
-def _acquire_lock_against(lock: pathlib.Path, pid: int) -> "subprocess.CompletedProcess[str]":
-    """Run the watcher's real acquire_lock() against a pre-populated lock dir."""
+def _acquire_lock_against(
+    lock: pathlib.Path,
+    pid: int,
+    *,
+    default_lock: "pathlib.Path | None" = None,
+    fake_uid: "int | None" = None,
+) -> "subprocess.CompletedProcess[str]":
+    """Run the watcher's real acquire_lock() against a pre-populated lock dir.
+
+    default_lock/fake_uid exercise the "lock owned by another user" path: we
+    cannot chown a tempdir to an actual other UID in a test, so a fake `id`
+    shell function stands in for a different caller UID against a dir that is
+    really owned by the test process.
+    """
     funcs = " ".join(
-        f"/^{name}()/,/^}}/p;" for name in ("log", "is_pid_running", "write_heartbeat", "acquire_lock")
+        f"/^{name}()/,/^}}/p;"
+        for name in ("log", "is_pid_running", "lock_owner_uid", "write_heartbeat", "acquire_lock")
     )
     script = lock.parent / "acquire.sh"
+    preamble = "set -euo pipefail\nLOCK_ACQUIRED=0\n"
+    if fake_uid is not None:
+        preamble += f"id() {{ echo {fake_uid}; }}\n"
     script.write_text(
-        "set -euo pipefail\n"
-        "LOCK_ACQUIRED=0\n"
-        f"WATCHER_LOCK_DIR='{lock}'\n"
-        f"WATCHER_PIDFILE='{lock}/watcher.pid'\n"
-        f"WATCHER_HEARTBEAT='{lock}/heartbeat'\n"
-        f"eval \"$(sed -n '{funcs}' {WATCHER})\"\n"
-        "acquire_lock\n"
-        "echo acquired=$LOCK_ACQUIRED\n",
+        preamble
+        + f"DEFAULT_WATCHER_LOCK_DIR='{default_lock or lock}'\n"
+        + f"WATCHER_LOCK_DIR='{lock}'\n"
+        + f"WATCHER_PIDFILE='{lock}/watcher.pid'\n"
+        + f"WATCHER_HEARTBEAT='{lock}/heartbeat'\n"
+        + f"eval \"$(sed -n '{funcs}' {WATCHER})\"\n"
+        + "acquire_lock\n"
+        + "echo acquired=$LOCK_ACQUIRED\n"
+        + "echo lockdir=$WATCHER_LOCK_DIR\n",
         encoding="utf-8",
     )
     return subprocess.run(["/bin/bash", str(script)], capture_output=True, text=True, timeout=60)
@@ -324,3 +342,43 @@ def test_watcher_still_yields_to_a_live_holder():
         assert r.returncode == 0, r.stdout + r.stderr
         assert "already running" in r.stdout
         assert (lock / "watcher.pid").read_text(encoding="utf-8").strip() == str(os.getpid())
+
+
+def test_watcher_falls_back_to_its_own_default_for_a_lock_owned_by_someone_else():
+    # 2026-10-05: before the lock default moved under $HOME, a second account
+    # on the same Mac shared the first account's /tmp lock dir, could never
+    # write into it, and retried "Stale watcher lock detected" every few
+    # seconds forever. A lock this process cannot claim as its own must never
+    # be treated as stale; it should fall back to its own per-user default and
+    # actually start instead of looping.
+    with tempfile.TemporaryDirectory() as td:
+        shared = pathlib.Path(td) / "shared-by-someone-else"
+        shared.mkdir()
+        (shared / "watcher.pid").write_text(f"{2**31 - 2}\n", encoding="utf-8")
+        own_default = pathlib.Path(td) / "own-default"
+        r = _acquire_lock_against(
+            shared, os.getpid(), default_lock=own_default, fake_uid=os.getuid() + 1
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "owned by another user" in r.stdout
+        assert "using the per-user default instead" in r.stdout
+        assert "Stale watcher lock detected" not in r.stdout
+        assert "acquired=1" in r.stdout
+        assert f"lockdir={own_default}" in r.stdout
+        assert (own_default / "watcher.pid").read_text(encoding="utf-8").strip().isdigit()
+        # The dir someone else owns is left exactly as it was found.
+        assert (shared / "watcher.pid").read_text(encoding="utf-8").strip() == str(2**31 - 2)
+
+
+def test_watcher_stops_when_even_its_own_default_is_owned_by_someone_else():
+    with tempfile.TemporaryDirectory() as td:
+        shared = pathlib.Path(td) / "shared-by-someone-else"
+        shared.mkdir()
+        (shared / "watcher.pid").write_text(f"{2**31 - 2}\n", encoding="utf-8")
+        r = _acquire_lock_against(
+            shared, os.getpid(), default_lock=shared, fake_uid=os.getuid() + 1
+        )
+        assert r.returncode == 1
+        assert "not taking it over" in r.stdout
+        assert "acquired=" not in r.stdout
+        assert (shared / "watcher.pid").read_text(encoding="utf-8").strip() == str(2**31 - 2)

@@ -4241,6 +4241,31 @@ PY_UNIT
   mv "$AGENT_MAIL_WATCHER_PATH.tmp" "$AGENT_MAIL_WATCHER_PATH"
 } # end render_mail_watcher_unit
 
+# Before 2026-10-05 the watcher lock defaulted to /tmp (shared by every
+# account on the Mac). Updating leaves the new per-user default empty while a
+# dir nobody will ever look at again lingers at the old /tmp path. Clear it
+# only if it is this user's own: a still-running old watcher is terminated by
+# the service restart below and cleans up its own lock via its EXIT trap, and
+# a dir owned by someone else (a second account on the same Mac) is never
+# touched here.
+migrate_legacy_mail_watcher_lock() {
+  local legacy_dir="/tmp/orrery-mail-watcher.lock"
+  [[ -e "$legacy_dir" ]] || return 0
+  local owner_uid my_uid
+  owner_uid="$(stat -f '%u' "$legacy_dir" 2>/dev/null || stat -c '%u' "$legacy_dir" 2>/dev/null || true)"
+  my_uid="$(id -u)"
+  [[ -n "$owner_uid" && "$owner_uid" == "$my_uid" ]] || return 0
+  local pid=""
+  [[ -f "$legacy_dir/watcher.pid" ]] && pid="$(head -n1 "$legacy_dir/watcher.pid" 2>/dev/null | tr -d '[:space:]')"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  plan "remove the leftover pre-2026-10-05 watcher lock $legacy_dir (owned by this user, no live process)"
+  [[ "$DRY_RUN" == true ]] && return 0
+  rm -rf "$legacy_dir"
+  say "removed the leftover pre-2026-10-05 watcher lock $legacy_dir"
+} # end migrate_legacy_mail_watcher_lock
+
 # A watcher left behind by agent-start (tmux session `mail-watcher`) holds the
 # single-instance lock; the managed unit would then exit as a duplicate on
 # every restart until that session dies. Retire it before registering.
@@ -4277,6 +4302,7 @@ enable_mail_watcher() {
   fi
 
   render_mail_watcher_unit "$kind"
+  migrate_legacy_mail_watcher_lock
 
   if [[ "$DRY_RUN" == true ]]; then
     if [[ "$kind" == "launchd" ]]; then

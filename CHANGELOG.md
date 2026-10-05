@@ -10,6 +10,15 @@
 
 ## Unreleased
 
+### mail watcher の lock を利用者ごとにし、doctor が watcher の停止を検出するようにしました
+
+1 台の Mac に 2 人目の利用者が fresh install すると、既定の lock dir（`/tmp/orrery-mail-watcher.lock`）が全利用者で共通だったため、先にいる利用者の watcher が持つ lock を 2 人目が取れず、`mkdir: ... Permission denied` → 「Stale watcher lock detected; taking ownership」を 5 秒おきに繰り返して一度も動きませんでした。入力待ちの agent に Mail が届いても起こされず、`agentstack-doctor` は全項目 ok のまま watcher の停止を報告しませんでした（dashboard の `/api/mail-watcher-health` は `watcher_running: false`・status red を返していました）。
+
+- watcher の lock の既定を利用者ごと（`$AGENTSTACK_RUNTIME_DIR/mail-watcher.lock`）にしました。`AGENTSTACK_MAIL_WATCHER_LOCK_DIR` での上書きは今までどおりです
+- 所有者が自分でない lock は、たとえ `AGENTSTACK_MAIL_WATCHER_LOCK_DIR` でその場所を指していても stale とはみなさず奪いに行きません。その旨を一度だけ log に出し、既定（上書きしていない場合）はそのまま、上書きしていた場合は利用者ごとの既定に自動で戻って起動します
+- update 時、以前の既定（`/tmp/orrery-mail-watcher.lock`）に自分の物でもう使われていない lock が残っていれば片付けます。他人の物には触れません
+- `agentstack-doctor` が、dashboard の `/api/mail-watcher-health` と同じ判定で watcher の停止／heartbeat の停滞を warn するようになりました
+
 ### EXIT を確定した直後、隣のカードを誤って EXIT しないようにしました
 
 EXIT した agent のカードが LIVE から消えたり finished の区画へ移ったりすると、後ろのカードが詰まり、直前に押した位置へ次のカードの EXIT が来ます。そこをもう一度押すと、別の agent の EXIT を構えてしまいました（Full tour の録画で、子を EXIT した直後に親の EXIT がカーソルの下に来た）。EXIT を確定してから 2 秒間、またその後 30 秒の間にそのカードが動いたり区画が変わったり消えたりしたときはその時点から 2 秒間、EXIT を押しても受け付けません。その間は EXIT ボタンを薄く表示し、カーソルも「押せない」形にして、効かない理由が見えるようにしました。

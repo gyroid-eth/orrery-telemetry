@@ -16,7 +16,13 @@ set -euo pipefail
 MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.agentstack/mail}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$MAIL_HOME/signals}"
 POLL_INTERVAL=2  # seconds (fallback if fswatch unavailable)
-WATCHER_LOCK_DIR="${AGENTSTACK_MAIL_WATCHER_LOCK_DIR:-/tmp/orrery-mail-watcher.lock}"
+# 既定は利用者ごと（$HOME 配下）。1 台の Mac に複数利用者がいても lock dir が
+# 衝突しない。AGENTSTACK_MAIL_WATCHER_LOCK_DIR で上書きした場合は、それが
+# 他人の所有であっても（以前の /tmp 既定を踏襲した設定など）奪いには行かず
+# acquire_lock 内でこの既定へ自動的に戻る（2026-10-05 の fresh install で
+# 2 人目の利用者の watcher が共通 /tmp lock を取れず無限リトライし続けた件）。
+DEFAULT_WATCHER_LOCK_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/mail-watcher.lock"
+WATCHER_LOCK_DIR="${AGENTSTACK_MAIL_WATCHER_LOCK_DIR:-$DEFAULT_WATCHER_LOCK_DIR}"
 WATCHER_PIDFILE="${AGENTSTACK_MAIL_WATCHER_PIDFILE:-${WATCHER_LOCK_DIR}/watcher.pid}"
 WATCHER_HEARTBEAT="${AGENTSTACK_MAIL_WATCHER_HEARTBEAT:-${WATCHER_LOCK_DIR}/heartbeat}"
 WATCH_FIFO=""
@@ -283,6 +289,11 @@ is_pid_running() {
     [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
 }
 
+# stat(1) の所有者 UID の取り方は BSD (macOS) と GNU (Linux) で違う。両方試す。
+lock_owner_uid() {
+    stat -f '%u' "$1" 2>/dev/null || stat -c '%u' "$1" 2>/dev/null || true
+}
+
 write_heartbeat() {
     mkdir -p "$(dirname "$WATCHER_HEARTBEAT")"
     : > "$WATCHER_HEARTBEAT"
@@ -297,6 +308,30 @@ acquire_lock() {
         LOCK_ACQUIRED=1
         write_heartbeat
         return 0
+    fi
+
+    # The dir already exists. Before touching anything inside it, check who
+    # owns it. A dir we cannot write into likely belongs to another user (a
+    # second account on the same Mac still pointed at a shared lock dir by an
+    # old/custom AGENTSTACK_MAIL_WATCHER_LOCK_DIR) — taking it over either
+    # fails forever with "Permission denied" (the 2026-10-05 bug: the
+    # "Stale watcher lock detected" retry never stops) or, worse, could
+    # succeed and kill someone else's watcher. Never treat another user's
+    # lock as stale.
+    local owner_uid my_uid
+    owner_uid="$(lock_owner_uid "$WATCHER_LOCK_DIR")"
+    my_uid="$(id -u)"
+    if [[ -n "$owner_uid" && "$owner_uid" != "$my_uid" ]]; then
+        if [[ "$WATCHER_LOCK_DIR" != "$DEFAULT_WATCHER_LOCK_DIR" ]]; then
+            log "Lock at ${WATCHER_LOCK_DIR} is owned by another user (uid ${owner_uid}); using the per-user default instead: ${DEFAULT_WATCHER_LOCK_DIR}"
+            WATCHER_LOCK_DIR="$DEFAULT_WATCHER_LOCK_DIR"
+            WATCHER_PIDFILE="${AGENTSTACK_MAIL_WATCHER_PIDFILE:-${WATCHER_LOCK_DIR}/watcher.pid}"
+            WATCHER_HEARTBEAT="${AGENTSTACK_MAIL_WATCHER_HEARTBEAT:-${WATCHER_LOCK_DIR}/heartbeat}"
+            acquire_lock
+            return
+        fi
+        log "Lock at ${WATCHER_LOCK_DIR} is owned by another user (uid ${owner_uid}); not taking it over. Point AGENTSTACK_MAIL_WATCHER_LOCK_DIR at a path only this user can write and run this again."
+        exit 1
     fi
 
     if [[ -f "$WATCHER_PIDFILE" ]]; then

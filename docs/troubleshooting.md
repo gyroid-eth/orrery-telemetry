@@ -229,11 +229,13 @@ tail ~/.agentstack/runtime/mail-watcher.log
 **mail は inbox に届くのに tmux に通知が入らず、log に `Stale watcher lock detected; taking ownership` と `mkdir: ... File exists` が数秒おきに並ぶ**なら、watcher が lock の取り直しに失敗して service manager に再起動され続けています。前の watcher が EXIT trap を通らずに死ぬ（SIGKILL、host のクラッシュ、process を差し替える deploy）と lock dir に heartbeat が残り、2026-09-12 より前の watcher はそれを片付けられませんでした。`launchctl print` の `runs` が数千になっているのが目印です。復旧は lock dir を消すだけです（keepalive が次の起動で取り直します）:
 
 ```bash
-rm -rf /tmp/orrery-mail-watcher.lock   # AGENTSTACK_MAIL_WATCHER_LOCK_DIR を変えていればそのパス
+rm -rf ~/.agentstack/runtime/mail-watcher.lock   # AGENTSTACK_MAIL_WATCHER_LOCK_DIR を変えていればそのパス
 tail -3 ~/.agentstack/runtime/mail-watcher.log
 ```
 
 repo を更新して `bash scripts/install.sh` を再実行すれば、以後の takeover は残り物があっても通ります。
+
+**1 台の Mac に複数の利用者がいて、`log` に `Permission denied` と `Stale watcher lock detected` が交互に数秒おきに並び、watcher が一度も動かない**なら、lock dir を他人の watcher と共有しています（2026-10-05 以前は既定が `/tmp/orrery-mail-watcher.lock` で全利用者共通だったため、1 台の Mac の 2 人目の利用者が先にいる利用者の lock を取れず無限リトライしていました）。既定は利用者ごと（`$AGENTSTACK_RUNTIME_DIR/mail-watcher.lock`）になっており、repo を更新するだけで解決します。`AGENTSTACK_MAIL_WATCHER_LOCK_DIR` を手で/tmp 配下などの共有パスに設定している場合は、それぞれの利用者だけが書ける場所に変えてください（他人が所有する lock を watcher が検出すると、奪わずに一度だけ log へ記録し、利用者ごとの既定へ自動的に戻ります）。`agentstack-doctor` も、watcher が動いていない／heartbeat が古い場合に warn します。
 
 ## Dashboard spawn がすぐ消える
 

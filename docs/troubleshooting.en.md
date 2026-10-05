@@ -214,11 +214,13 @@ Confirm that `AGENTSTACK_MAIL_HOME` and `AGENTSTACK_SIGNALS_DIR` match between s
 **If mail reaches inboxes but nothing is injected into tmux, and the log repeats `Stale watcher lock detected; taking ownership` followed by `mkdir: ... File exists` every few seconds**, the watcher is failing to take over its lock and the service manager keeps restarting it. A previous watcher that died without running its EXIT trap (SIGKILL, a host crash, a deploy that replaced the process) leaves its heartbeat inside the lock dir, and watchers before 2026-09-12 could not clear it. A `runs` count in the thousands under `launchctl print` is the tell. Recovery is removing the lock dir; keepalive picks it up on the next start:
 
 ```bash
-rm -rf /tmp/orrery-mail-watcher.lock   # or your AGENTSTACK_MAIL_WATCHER_LOCK_DIR
+rm -rf ~/.agentstack/runtime/mail-watcher.lock   # or your AGENTSTACK_MAIL_WATCHER_LOCK_DIR
 tail -3 ~/.agentstack/runtime/mail-watcher.log
 ```
 
 Update the repo and re-run `bash scripts/install.sh`; from then on takeover succeeds regardless of leftovers.
+
+**If a second account on the same Mac has a watcher that never runs, with the log alternating `Permission denied` and `Stale watcher lock detected` every few seconds**, the lock dir is shared with another user's watcher (before 2026-10-05 the default was the shared `/tmp/orrery-mail-watcher.lock`, so a second account on the same Mac could never take the first account's lock and retried forever). The default is now per user (`$AGENTSTACK_RUNTIME_DIR/mail-watcher.lock`), so updating the repo resolves this. If you've pointed `AGENTSTACK_MAIL_WATCHER_LOCK_DIR` at a shared path (somewhere under `/tmp`, say), change it to a path only that user can write — a watcher that finds a lock owned by someone else never takes it over; it logs that fact once and falls back to the per-user default instead. `agentstack-doctor` now also warns when the watcher isn't running or its heartbeat is stale.
 
 ## Dashboard spawn disappears immediately
 
