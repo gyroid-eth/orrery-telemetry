@@ -270,7 +270,8 @@ BUTTONS = """(()=>{const o=document.getElementById('tm-open'),x=document.getElem
   return {open:o.textContent.trim(),disabled:o.disabled,exit:x.style.display!=='none',return:p?(p.id||p.className):null};})()"""
 
 
-@pytest.mark.parametrize('case', ['net-retired-then-running', 'net-gone', 'net-then-deck', 'deck-gone', 'net-reopen'])
+@pytest.mark.parametrize('case', ['net-retired-then-running', 'net-gone', 'net-then-deck', 'deck-gone', 'net-reopen',
+                                  'net-gone-reopen', 'deck-shows-what-graph-left-out'])
 def test_an_open_panel_follows_the_newest_list(embedded, case):
     """Review of #211: in Network only netTick runs, and a panel whose agent
     left the list kept a pressable OPEN IN COCKPIT and Exit."""
@@ -310,6 +311,27 @@ def test_an_open_panel_follows_the_newest_list(embedded, case):
         gone = inner(BUTTONS)
         assert gone['open'] == 'NO LONGER LISTED' and gone['disabled'] and not gone['exit'], gone
         assert gone['return'] != 'tm-x', gone
+    elif case == 'net-gone-reopen':
+        # Review of #211: gone from the newest graph but still running in the
+        # older deck list, reopened: it must not offer OPEN and Exit.
+        mut({'gone': True})
+        inner("netTick()")
+        time.sleep(.5)
+        inner("document.getElementById('tm-x').click()")
+        inner("openPanel(%s)" % json.dumps(name))
+        reopened = inner(BUTTONS)
+        assert reopened['open'] == 'NO LONGER LISTED' and reopened['disabled'] and not reopened['exit'], reopened
+    elif case == 'deck-shows-what-graph-left-out':
+        # The graph's window can leave out an agent the deck shows; back on the
+        # deck, before its next list, a card opened is not "no longer listed".
+        mut({'gone': True})
+        inner("netTick()")
+        time.sleep(.5)
+        inner("document.getElementById('tm-x').click()")
+        inner("window.__mut={};view='deck'")
+        inner("openPanel(%s)" % json.dumps(name))
+        opened = inner(BUTTONS)
+        assert opened['open'] == 'OPEN IN COCKPIT' and opened['exit'], opened
     elif case == 'net-reopen':
         # Review of #211: reopened right after the graph changed, the panel
         # drew from the older deck list until the next netTick.

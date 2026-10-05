@@ -36584,12 +36584,16 @@ function renderPanelButtons(a,g,{keepExit=false}={}){
     openBtn.title=view.title;
   }
 }
-// The panel agent's state from whichever source arrived last: a deck row, or
-// a graph node in the same shape renderPanelButtons reads. null when that
-// newest source no longer lists the agent.
+// The panel agent's state: a deck row, or a graph node in the same shape
+// renderPanelButtons reads; null when that source no longer lists the agent.
+// The view on screen refreshes its own source and the other one goes stale,
+// so the view's source decides once it has arrived; until then, the newer.
+// (The two have their own time windows: one may leave out an agent the other
+// shows.)
 function panelAgentState(name){
   const g=(typeof gmap!=='undefined'&&gmap.get(name))||null;
-  if(graphStateAt>deckStateAt){
+  const fromGraph=view==='net'&&graphStateAt?true:view==='deck'&&deckStateAt?false:graphStateAt>deckStateAt;
+  if(fromGraph){
     if(!g)return null;
     return {a:{running:!!g.running,retired:!!g.retired,present:!!g.present,state:g.state||'',
       resume_capability:g.resumeCapability,resume_mode:g.resume_mode,mail_message:g.mail_message},g};
@@ -36604,7 +36608,11 @@ function refreshPanelButtons(){
   const exitBtn=TM('tm-exit-btn');
   const keepExit=!!exitBtn&&exitBtn.disabled&&exitBtn.textContent==='…';
   const now=panelAgentState(panelName);
-  if(now){renderPanelButtons(now.a,now.g,{keepExit});return;}
+  if(now)renderPanelButtons(now.a,now.g,{keepExit});else renderPanelGone({keepExit});
+}
+// The agent is no longer listed: nothing to press, and the button says so.
+function renderPanelGone({keepExit=false}={}){
+  const exitBtn=TM('tm-exit-btn');
   if(exitBtn&&!keepExit)exitBtn.style.display='none';
   const openBtn=TM('tm-open');
   if(openBtn){
@@ -36636,9 +36644,12 @@ function openPanelInner(name){
   TM('tm-meta').textContent=
     stat+(a.model?' · '+a.model:'')+(a.ctx_window?' · '+a.ctx_window:'')
     +(rel?' · last '+rel:'');
-  // The buttons read the newest source from the start, as refreshes do.
+  // The buttons read the newest source from the start, as refreshes do. Before
+  // either has arrived (a link opened at start) nothing is known to be gone.
   const now=panelAgentState(name);
-  if(now)renderPanelButtons(now.a,now.g);else renderPanelButtons(a,g);
+  if(now)renderPanelButtons(now.a,now.g);
+  else if(deckStateAt||graphStateAt)renderPanelGone();
+  else renderPanelButtons(a,g);
   // gtip 相当のサマリーを tm-summary に描画 (モバイルで hover が効かない救済)
   renderPanelSummary(name, a, g);
   renderAnnotEditor(name, (g&&g.annot)||a.annot||null);
