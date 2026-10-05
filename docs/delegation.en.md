@@ -162,7 +162,7 @@ You can choose a child's tools when you start it, for example `/delegate "<task>
 
 | `--tools` | Claude child | Codex child |
 |---|---|---|
-| `browser` / `browser:<deviceId>` | `--chrome` plus the deviceId instruction (the same as [Claude in Chrome](#claude-children-and-browser-control-claude-in-chrome); rejected when it names a different deviceId than `--claude-chrome-device`) | Not available. Select the user's browser server with `mcp:<name>` |
+| `browser` / `browser:<deviceId>` | `--chrome` plus the deviceId instruction (the same as [Claude in Chrome](#claude-children-and-browser-control-claude-in-chrome); rejected when it names a different deviceId than `--claude-chrome-device`) | Enables the user's chrome-devtools server from `config.toml` (named `chrome-devtools`, or the one server that runs `chrome-devtools-mcp`), exposes only the tools in the table below and approves them one by one. A deviceId is Claude-only and is rejected. The launch stops when there is no such server or a wrapper script keeps the tools from being classified |
 | `screen` / `screen:operate` | The built-in macOS computer use. Starts only when it is enabled for the project of the child's directory (listed in `projects[<dir>].enabledMcpServers` of `~/.claude.json` and not in `disabledMcpServers`); otherwise the launch stops | Not available (a server name is required) |
 | `screen:<read\|operate>:<server>` | Copies the user's screen server (such as Windows-MCP on WSL) into the strict config | Enables that server in the child's `config.toml` |
 | `mcp:<server>` | Copies the user's server definition into the strict config (no tool approved) | Enables that server in the child's `config.toml` (no tool approved) |
@@ -170,7 +170,7 @@ You can choose a child's tools when you start it, for example `/delegate "<task>
 
 ### The classification table: read only and operate
 
-What a screen selection exposes and approves is decided by the classification table (`TOOL_TABLE`). It currently lists only Windows-MCP 0.8.6 (20 tools), split into three classes.
+What a screen selection exposes and approves is decided by the classification table (`TOOL_TABLE`). It currently lists Windows-MCP 0.8.6 (20 tools) and chrome-devtools-mcp (all 30 tools of 1.10.1), each split into classes.
 
 | Class | Windows-MCP 0.8.6 tools |
 |---|---|
@@ -181,6 +181,19 @@ What a screen selection exposes and approves is decided by the classification ta
 - `screen:read` exposes and approves only the read tools; `screen:operate` the read and operate tools. The rest is hidden (Claude `--disallowed-tools`, Codex left out of `enabled_tools`). Selecting the screen never passes PowerShell or the registry
 - Only a separate `mcp:<server>:all` passes the non-screen tools too. It approves every tool of that server, which on Windows means **running arbitrary code on the host without a person approving it**. The child's first prompt says so as well
 - The version is read from the server's command line, which must pin it (such as `uvx windows-mcp@0.8.6`; a package only added with `--with` does not count). With a wrapper script, an unpinned definition or a version that is not in the table, `screen:read` and `mcp:<server>:all` stop the launch, and `screen:operate` copies or enables the server without approving any tool
+### The chrome-devtools classes (Codex `--tools browser`)
+
+| Class | chrome-devtools-mcp tools |
+|---|---|
+| Read (`read`) | get_console_message, get_css_styles, get_network_request, list_console_messages, list_network_requests, list_pages, performance_analyze_insight, select_page, take_screenshot, take_snapshot, wait_for |
+| Operate (`operate`) | click, close_page, drag, emulate, fill, fill_form, handle_dialog, hover, navigate_page, new_page, press_key, resize_page, type_text |
+| Never approved | evaluate_script (runs arbitrary script in the page), upload_file (sends a host file to the page), take_heapsnapshot, performance_start_trace, performance_stop_trace, lighthouse_audit (write files on the host) |
+
+- `browser` (Codex) exposes and approves the read and operate tools; `screen:read:chrome-devtools` only the read tools. The rest is left out of `enabled_tools` and is not visible
+- The real definition is usually the unpinned `npx chrome-devtools-mcp@latest`, so this one server is classified by tool **name** even when its version is unknown. Only the names in the table are approved, one by one; a tool a newer version adds is neither exposed nor approved. This differs from the Windows-MCP version pin because names map to meanings and arbitrary execution is identifiable by name (`evaluate_script` and the like)
+- The "never approved" tools are approved only by `mcp:chrome-devtools:all`, which needs a pinned definition (`chrome-devtools-mcp@1.10.1`)
+- This is Codex's tool approval only. The Chrome-side `--autoConnect` connection permission is separate, and a person still answers the Chrome connection prompt
+
 - The built-in macOS computer use and the macOS Codex screen and browser (which go through `node_repl`, a tool that runs arbitrary JS) cannot be read only, because their reading and operating are not separate tools
 
 ### Approval
