@@ -41,7 +41,9 @@ def _autostart_helpers():
     return module
 
 
-def _run_enable(tmp: pathlib.Path, platform: str, *, fail: bool = False) -> tuple[subprocess.CompletedProcess, str]:
+def _run_enable(
+    tmp: pathlib.Path, platform: str, *, fail: bool = False, legacy_dir: "pathlib.Path | None" = None
+) -> tuple[subprocess.CompletedProcess, str]:
     helpers = _autostart_helpers()
     home = tmp / "home"
     (home / "Library" / "LaunchAgents").mkdir(parents=True, exist_ok=True)
@@ -55,6 +57,10 @@ def _run_enable(tmp: pathlib.Path, platform: str, *, fail: bool = False) -> tupl
         fake, "tmux",
         f'#!/bin/sh\nprintf "tmux %s\\n" "$*" >> {log}\n[ "$1" = has-session ] && exit 1\nexit 0\n',
     )
+    # Never the real, machine-wide /tmp default: migrate_legacy_mail_watcher_lock
+    # reads AGENTSTACK_TEST_LEGACY_MAIL_WATCHER_LOCK_DIR instead when set, so
+    # tests can exercise it (live/stale/foreign) without touching a real path.
+    isolated_legacy = legacy_dir if legacy_dir is not None else tmp / "no-such-legacy-lock"
     script = tmp / "enable.sh"
     script.write_text(
         "set -euo pipefail\n"
@@ -69,11 +75,12 @@ def _run_enable(tmp: pathlib.Path, platform: str, *, fail: bool = False) -> tupl
         f"PYTHON_BIN='{sys.executable}'\n"
         "PATH_VALUE=/usr/bin:/bin\n"
         f"MAIL_WATCHER_LABEL={LABEL_PREFIX}.mail-watcher\n"
+        f"AGENTSTACK_TEST_LEGACY_MAIL_WATCHER_LOCK_DIR='{isolated_legacy}'\n"
         "AGENT_MAIL_WATCHER_KIND=\n"
         "AGENT_MAIL_WATCHER_PATH=\n"
         "say() { printf 'SAY %s\\n' \"$*\"; }\n"
         "warn() { printf 'WARN %s\\n' \"$*\"; }\n"
-        "plan() { :; }\n"
+        "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
         f"eval \"$(sed -n '/^mail_watcher_environment()/,/^}} # end mail_watcher_environment/p' {INSTALLER})\"\n"
         f"eval \"$(sed -n '/^render_mail_watcher_unit()/,/^}} # end render_mail_watcher_unit/p' {INSTALLER})\"\n"
         f"eval \"$(sed -n '/^migrate_legacy_mail_watcher_lock()/,/^}} # end migrate_legacy_mail_watcher_lock/p' {INSTALLER})\"\n"
@@ -133,6 +140,88 @@ def test_systemd_unit_restarts_the_watcher():
     assert f"systemctl --user enable --now {LABEL_PREFIX}.mail-watcher.service" in calls, calls
     # `enable --now` leaves an already-running service on the old unit file.
     assert f"systemctl --user restart {LABEL_PREFIX}.mail-watcher.service" in calls, calls
+
+
+def test_enable_removes_its_own_stale_legacy_lock():
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        legacy = tmp / "legacy-lock"
+        legacy.mkdir()
+        (legacy / "watcher.pid").write_text(f"{2**31 - 2}\n", encoding="utf-8")
+        r, _ = _run_enable(tmp, "Darwin", legacy_dir=legacy)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "remove the leftover pre-2026-10-05 watcher lock" in r.stdout, r.stdout
+        assert not legacy.exists()
+
+
+def test_enable_leaves_its_own_live_legacy_lock_alone():
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        legacy = tmp / "legacy-lock"
+        legacy.mkdir()
+        (legacy / "watcher.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+        r, _ = _run_enable(tmp, "Darwin", legacy_dir=legacy)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "remove the leftover" not in r.stdout, r.stdout
+        assert legacy.exists()
+        assert (legacy / "watcher.pid").read_text(encoding="utf-8").strip() == str(os.getpid())
+
+
+def test_enable_leaves_a_legacy_lock_owned_by_someone_else_alone():
+    # Simulated the same way as the watcher's own tests: a fake `id` stands in
+    # for a different caller UID against a dir the test process really owns.
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        legacy = tmp / "legacy-lock"
+        legacy.mkdir()
+        (legacy / "watcher.pid").write_text("123\n", encoding="utf-8")
+        helpers = _autostart_helpers()
+        home = tmp / "home"
+        (home / "Library" / "LaunchAgents").mkdir(parents=True, exist_ok=True)
+        (home / ".config" / "systemd" / "user").mkdir(parents=True, exist_ok=True)
+        hooks = home / ".agentstack" / "hooks"
+        hooks.mkdir(parents=True)
+        (hooks / "watch_agent_mail_signals.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+        fake, log = helpers._fake_manager_bin(tmp, "Darwin")
+        helpers._write_command(
+            fake, "tmux",
+            f'#!/bin/sh\nprintf "tmux %s\\n" "$*" >> {log}\n[ "$1" = has-session ] && exit 1\nexit 0\n',
+        )
+        script = tmp / "enable.sh"
+        script.write_text(
+            "set -euo pipefail\n"
+            f"export PATH={fake}\n"
+            "DRY_RUN=false\n"
+            f"HOME='{home}'\n"
+            f"BIN_DIR='{home}/.agentstack/bin'\n"
+            f"HOOKS_DIR='{hooks}'\n"
+            f"RUNTIME_DIR='{home}/.agentstack/runtime'\n"
+            f"MAIL_HOME='{home}/.agentstack/mail'\n"
+            f"SIGNALS_DIR='{home}/.agentstack/mail/signals'\n"
+            f"PYTHON_BIN='{sys.executable}'\n"
+            "PATH_VALUE=/usr/bin:/bin\n"
+            f"MAIL_WATCHER_LABEL={LABEL_PREFIX}.mail-watcher\n"
+            f"AGENTSTACK_TEST_LEGACY_MAIL_WATCHER_LOCK_DIR='{legacy}'\n"
+            f"id() {{ if [ \"$1\" = -u ]; then echo {os.getuid() + 1}; else command id \"$@\"; fi; }}\n"
+            "AGENT_MAIL_WATCHER_KIND=\nAGENT_MAIL_WATCHER_PATH=\n"
+            "say() { printf 'SAY %s\\n' \"$*\"; }\n"
+            "warn() { printf 'WARN %s\\n' \"$*\"; }\n"
+            "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+            f"eval \"$(sed -n '/^mail_watcher_environment()/,/^}} # end mail_watcher_environment/p' {INSTALLER})\"\n"
+            f"eval \"$(sed -n '/^render_mail_watcher_unit()/,/^}} # end render_mail_watcher_unit/p' {INSTALLER})\"\n"
+            f"eval \"$(sed -n '/^migrate_legacy_mail_watcher_lock()/,/^}} # end migrate_legacy_mail_watcher_lock/p' {INSTALLER})\"\n"
+            f"eval \"$(sed -n '/^stop_tmux_mail_watcher()/,/^}} # end stop_tmux_mail_watcher/p' {INSTALLER})\"\n"
+            f"eval \"$(sed -n '/^wait_for_launchd_unload()/,/^}} # end wait_for_launchd_unload/p' {INSTALLER})\"\n"
+            f"eval \"$(sed -n '/^enable_mail_watcher()/,/^}} # end enable_mail_watcher/p' {INSTALLER})\"\n"
+            "enable_mail_watcher\n"
+            'printf "KIND=%s\\nPATH_OUT=%s\\n" "$AGENT_MAIL_WATCHER_KIND" "$AGENT_MAIL_WATCHER_PATH"\n',
+            encoding="utf-8",
+        )
+        r = subprocess.run(["/bin/bash", str(script)], capture_output=True, text=True, timeout=180)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "remove the leftover" not in r.stdout, r.stdout
+        assert legacy.exists()
+        assert (legacy / "watcher.pid").read_text(encoding="utf-8").strip() == "123"
 
 
 def test_a_failed_registration_cleans_up_and_reports():
@@ -280,27 +369,30 @@ def _acquire_lock_against(
     lock: pathlib.Path,
     pid: int,
     *,
-    default_lock: "pathlib.Path | None" = None,
+    legacy_lock: "pathlib.Path | None" = None,
     fake_uid: "int | None" = None,
 ) -> "subprocess.CompletedProcess[str]":
     """Run the watcher's real acquire_lock() against a pre-populated lock dir.
 
-    default_lock/fake_uid exercise the "lock owned by another user" path: we
-    cannot chown a tempdir to an actual other UID in a test, so a fake `id`
-    shell function stands in for a different caller UID against a dir that is
-    really owned by the test process.
+    fake_uid exercises the "path owned by another user" check: we cannot
+    chown a tempdir to an actual other UID in a test, so a fake `id` shell
+    function stands in for a different caller UID against a dir that is
+    really owned by the test process. legacy_lock isolates the pre-2026-10-05
+    shared default (tests must never point this at the real /tmp path).
     """
     funcs = " ".join(
         f"/^{name}()/,/^}}/p;"
-        for name in ("log", "is_pid_running", "lock_owner_uid", "write_heartbeat", "acquire_lock")
+        for name in ("log", "is_pid_running", "lock_owner_uid", "path_is_foreign", "write_heartbeat", "acquire_lock")
     )
     script = lock.parent / "acquire.sh"
     preamble = "set -euo pipefail\nLOCK_ACQUIRED=0\n"
     if fake_uid is not None:
         preamble += f"id() {{ echo {fake_uid}; }}\n"
+    legacy = legacy_lock if legacy_lock is not None else lock.parent / "no-such-legacy-lock"
     script.write_text(
         preamble
-        + f"DEFAULT_WATCHER_LOCK_DIR='{default_lock or lock}'\n"
+        + f"DEFAULT_WATCHER_LOCK_DIR='{lock}'\n"
+        + f"LEGACY_WATCHER_LOCK_DIR='{legacy}'\n"
         + f"WATCHER_LOCK_DIR='{lock}'\n"
         + f"WATCHER_PIDFILE='{lock}/watcher.pid'\n"
         + f"WATCHER_HEARTBEAT='{lock}/heartbeat'\n"
@@ -344,41 +436,150 @@ def test_watcher_still_yields_to_a_live_holder():
         assert (lock / "watcher.pid").read_text(encoding="utf-8").strip() == str(os.getpid())
 
 
-def test_watcher_falls_back_to_its_own_default_for_a_lock_owned_by_someone_else():
+def test_watcher_stops_without_touching_anything_for_a_lock_owned_by_someone_else():
     # 2026-10-05: before the lock default moved under $HOME, a second account
     # on the same Mac shared the first account's /tmp lock dir, could never
     # write into it, and retried "Stale watcher lock detected" every few
-    # seconds forever. A lock this process cannot claim as its own must never
-    # be treated as stale; it should fall back to its own per-user default and
-    # actually start instead of looping.
+    # seconds forever. A path this process cannot claim as its own must never
+    # be treated as stale or taken over. An earlier draft of this fix fell
+    # back to the per-user default instead of stopping, but a dashboard or
+    # agent-start started with the same override would keep reading the
+    # overridden (foreign) path and never notice the fallback, reporting the
+    # watcher as down while it actually ran elsewhere — so it must stop
+    # instead, leaving every consumer of the override consistently wrong in
+    # the same, detectable way (watcher not running at all).
     with tempfile.TemporaryDirectory() as td:
         shared = pathlib.Path(td) / "shared-by-someone-else"
         shared.mkdir()
         (shared / "watcher.pid").write_text(f"{2**31 - 2}\n", encoding="utf-8")
-        own_default = pathlib.Path(td) / "own-default"
-        r = _acquire_lock_against(
-            shared, os.getpid(), default_lock=own_default, fake_uid=os.getuid() + 1
-        )
-        assert r.returncode == 0, r.stdout + r.stderr
-        assert "owned by another user" in r.stdout
-        assert "using the per-user default instead" in r.stdout
+        r = _acquire_lock_against(shared, os.getpid(), fake_uid=os.getuid() + 1)
+        assert r.returncode == 1
+        assert "belongs to another user" in r.stdout
         assert "Stale watcher lock detected" not in r.stdout
-        assert "acquired=1" in r.stdout
-        assert f"lockdir={own_default}" in r.stdout
-        assert (own_default / "watcher.pid").read_text(encoding="utf-8").strip().isdigit()
+        assert "acquired=" not in r.stdout
         # The dir someone else owns is left exactly as it was found.
         assert (shared / "watcher.pid").read_text(encoding="utf-8").strip() == str(2**31 - 2)
 
 
-def test_watcher_stops_when_even_its_own_default_is_owned_by_someone_else():
+def test_watcher_stops_for_an_explicit_pidfile_override_owned_by_someone_else():
+    # The lock dir itself can be this user's own fresh dir while an explicit
+    # AGENTSTACK_MAIL_WATCHER_PIDFILE/_HEARTBEAT still points into someone
+    # else's directory (carried over from an old shared-lock config). Since
+    # PIDFILE/HEARTBEAT are not derived from WATCHER_LOCK_DIR once set
+    # explicitly, acquire_lock must check their directories independently
+    # instead of writing a pidfile into a path it does not own.
     with tempfile.TemporaryDirectory() as td:
-        shared = pathlib.Path(td) / "shared-by-someone-else"
-        shared.mkdir()
-        (shared / "watcher.pid").write_text(f"{2**31 - 2}\n", encoding="utf-8")
-        r = _acquire_lock_against(
-            shared, os.getpid(), default_lock=shared, fake_uid=os.getuid() + 1
+        own_lock = pathlib.Path(td) / "own-lock"
+        foreign_pidfile_dir = pathlib.Path(td) / "foreign-pidfile-dir"
+        foreign_pidfile_dir.mkdir()
+        (foreign_pidfile_dir / "watcher.pid").write_text("999\n", encoding="utf-8")
+        funcs = " ".join(
+            f"/^{name}()/,/^}}/p;"
+            for name in ("log", "is_pid_running", "lock_owner_uid", "path_is_foreign", "write_heartbeat", "acquire_lock")
         )
+        script = pathlib.Path(td) / "acquire.sh"
+        script.write_text(
+            "set -euo pipefail\nLOCK_ACQUIRED=0\n"
+            f"id() {{ echo {os.getuid() + 1}; }}\n"
+            f"DEFAULT_WATCHER_LOCK_DIR='{own_lock}'\n"
+            f"LEGACY_WATCHER_LOCK_DIR='{pathlib.Path(td) / 'no-such-legacy-lock'}'\n"
+            f"WATCHER_LOCK_DIR='{own_lock}'\n"
+            f"WATCHER_PIDFILE='{foreign_pidfile_dir}/watcher.pid'\n"
+            f"WATCHER_HEARTBEAT='{own_lock}/heartbeat'\n"
+            f"eval \"$(sed -n '{funcs}' {WATCHER})\"\n"
+            "acquire_lock\n"
+            "echo acquired=$LOCK_ACQUIRED\n",
+            encoding="utf-8",
+        )
+        r = subprocess.run(["/bin/bash", str(script)], capture_output=True, text=True, timeout=60)
         assert r.returncode == 1
-        assert "not taking it over" in r.stdout
+        assert "belongs to another user" in r.stdout
         assert "acquired=" not in r.stdout
-        assert (shared / "watcher.pid").read_text(encoding="utf-8").strip() == str(2**31 - 2)
+        assert not own_lock.exists()
+        assert (foreign_pidfile_dir / "watcher.pid").read_text(encoding="utf-8").strip() == "999"
+
+
+def test_watcher_defers_to_a_live_legacy_holder():
+    # A watcher from before 2026-10-05 (or one started by hand per this
+    # file's own Usage comment, which install.sh's service restart does not
+    # reach) can still be running on the old shared default while this
+    # process starts fresh on the new per-user default. Since the two lock
+    # dirs no longer coincide, acquiring the new one would not detect the old
+    # one, and both would deliver the same mail.
+    with tempfile.TemporaryDirectory() as td:
+        own_lock = pathlib.Path(td) / "own-lock"
+        legacy = pathlib.Path(td) / "legacy-lock"
+        legacy.mkdir()
+        (legacy / "watcher.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+        r = _acquire_lock_against(own_lock, os.getpid(), legacy_lock=legacy)
+        assert r.returncode == 1
+        assert "still running on the old shared lock" in r.stdout
+        assert "acquired=" not in r.stdout
+        assert not own_lock.exists()
+
+
+def test_watcher_starts_normally_when_the_legacy_lock_is_stale():
+    with tempfile.TemporaryDirectory() as td:
+        own_lock = pathlib.Path(td) / "own-lock"
+        legacy = pathlib.Path(td) / "legacy-lock"
+        legacy.mkdir()
+        (legacy / "watcher.pid").write_text(f"{2**31 - 2}\n", encoding="utf-8")
+        r = _acquire_lock_against(own_lock, os.getpid(), legacy_lock=legacy)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "acquired=1" in r.stdout
+        assert own_lock.exists()
+        # The stale legacy lock is install.sh's migration's job, not the
+        # watcher's; it is left exactly as it was found.
+        assert legacy.exists()
+
+
+def test_watcher_ignores_a_legacy_lock_owned_by_someone_else():
+    with tempfile.TemporaryDirectory() as td:
+        own_lock = pathlib.Path(td) / "own-lock"
+        legacy = pathlib.Path(td) / "legacy-lock"
+        legacy.mkdir()
+        (legacy / "watcher.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+        r = _acquire_lock_against(
+            own_lock, os.getpid(), legacy_lock=legacy, fake_uid=os.getuid() + 1
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "acquired=1" in r.stdout
+        assert "still running on the old shared lock" not in r.stdout
+        assert (legacy / "watcher.pid").read_text(encoding="utf-8").strip() == str(os.getpid())
+
+
+def test_lock_owner_uid_ignores_gnu_dash_f_filesystem_noise():
+    # GNU `stat -f FORMAT` means "filesystem status", not BSD's "use this
+    # FORMAT" - an unknown directive like %u still prints the filesystem's
+    # default multi-line report to stdout before failing (confirmed on WSL,
+    # GNU coreutils 9.4, ext4). Trying `-f` before `-c` let that leak through
+    # `2>/dev/null` (which only hides stderr) and get concatenated with `-c`'s
+    # real answer under `||`, so the owner check always disagreed with the
+    # real UID. This fakes exactly that GNU shape and checks our `-c`-first
+    # order reads a clean UID without ever reaching the noisy `-f` branch.
+    with tempfile.TemporaryDirectory() as td:
+        target = pathlib.Path(td) / "dir"
+        target.mkdir()
+        fake_bin = pathlib.Path(td) / "fakebin"
+        fake_bin.mkdir()
+        (fake_bin / "stat").write_text(
+            "#!/bin/sh\n"
+            "case \"$1\" in\n"
+            "  -c) printf '%s\\n' 4242; exit 0 ;;\n"
+            "  -f) printf 'File: %s\\n  ID: 1 Namelen: 255 Type: ext4\\n"
+            "Block size: 4096 Fundamental block size: 4096\\n"
+            "Blocks: Total: 1 Free: 1 Available: 1\\n"
+            "Inodes: Total: 1 Free: 1\\n' \"$3\"; exit 1 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        (fake_bin / "stat").chmod(0o755)
+        wrapper = pathlib.Path(td) / "owner.sh"
+        wrapper.write_text(
+            f"export PATH='{fake_bin}:'\"$PATH\"\n"
+            f"eval \"$(sed -n '/^lock_owner_uid()/,/^}}/p' {WATCHER})\"\n"
+            f"lock_owner_uid '{target}'\n",
+            encoding="utf-8",
+        )
+        owner = subprocess.run(["/bin/bash", str(wrapper)], capture_output=True, text=True, timeout=60)
+        assert owner.stdout.strip() == "4242", (owner.stdout, owner.stderr)

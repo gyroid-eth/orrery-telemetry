@@ -4249,10 +4249,19 @@ PY_UNIT
 # a dir owned by someone else (a second account on the same Mac) is never
 # touched here.
 migrate_legacy_mail_watcher_lock() {
-  local legacy_dir="/tmp/orrery-mail-watcher.lock"
+  # Overridable only so tests can point this at an isolated tmp path instead
+  # of the real, machine-wide /tmp default; there is no reason to set this in
+  # a real install.
+  local legacy_dir="${AGENTSTACK_TEST_LEGACY_MAIL_WATCHER_LOCK_DIR:-/tmp/orrery-mail-watcher.lock}"
   [[ -e "$legacy_dir" ]] || return 0
   local owner_uid my_uid
-  owner_uid="$(stat -f '%u' "$legacy_dir" 2>/dev/null || stat -c '%u' "$legacy_dir" 2>/dev/null || true)"
+  # -c (GNU/BusyBox) before -f (BSD): GNU's -f means "filesystem status", and
+  # even when the %u directive itself is invalid it still prints the
+  # filesystem's default report to stdout before failing, which then runs
+  # into -c's output under `||` and corrupts the UID comparison (confirmed on
+  # WSL, GNU coreutils 9.4, ext4). -c fails on BSD with nothing on stdout
+  # (the error goes to stderr only), so it falls through to -f safely there.
+  owner_uid="$(stat -c '%u' "$legacy_dir" 2>/dev/null || stat -f '%u' "$legacy_dir" 2>/dev/null || true)"
   my_uid="$(id -u)"
   [[ -n "$owner_uid" && "$owner_uid" == "$my_uid" ]] || return 0
   local pid=""

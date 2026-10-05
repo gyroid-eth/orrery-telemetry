@@ -408,11 +408,16 @@ PY
 )"
   local running hstatus age
   IFS='|' read -r running hstatus age <<< "$record"
-  if [[ "$running" == "1" ]]; then
-    echo "ok: mail watcher running (status: ${hstatus:-unknown})"
+  # Judge by status, not just watcher_running: the same /api/mail-watcher-health
+  # can report watcher_running=true with status=red (>50 pending signals) or
+  # status=yellow (signals pending with no recent delivery) when the watcher
+  # process is alive but not actually draining mail. Checking watcher_running
+  # alone left doctor reporting "ok" in exactly the case the cockpit shows red.
+  if [[ "$hstatus" == "green" ]]; then
+    echo "ok: mail watcher healthy (status: green, watcher_running=${running:-0})"
   else
-    echo "warn: mail watcher is not running (dashboard /api/mail-watcher-health reports watcher_running=false, status=${hstatus:-unknown})" >&2
-    echo "      mail delivered to an agent waiting for input will not wake it; see docs/troubleshooting*.md (mail watcher)" >&2
+    echo "warn: mail watcher health is ${hstatus:-unknown} (dashboard /api/mail-watcher-health: watcher_running=${running:-0}${age:+, last success ${age}s ago})" >&2
+    echo "      mail delivered to an agent waiting for input may not wake it; see docs/troubleshooting*.md (mail watcher)" >&2
     status=1
   fi
 }
