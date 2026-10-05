@@ -248,6 +248,81 @@ def test_an_open_panel_follows_the_agent(embedded, before, after, label):
         assert returning.get('target') != 'tm-x', returning
 
 
+# Edits the page's own /api/agents and /api/graph answers for one agent, so
+# the real tick and netTick see it change: window.__mut = {name, agent, node,
+# gone}.
+MUTATE = """(()=>{if(window.__mutOn)return;window.__mutOn=true;window.__mut={};
+  const orig=window.fetch;
+  window.fetch=async(u,i)=>{const r=await orig(u,i);const url=String(u);
+    if(!/\\/api\\/(agents|graph)/.test(url))return r;
+    const m=window.__mut;if(!m.name)return r;
+    const j=await r.clone().json();
+    if(Array.isArray(j.agents))j.agents=j.agents.filter(a=>!(m.gone&&a.name===m.name))
+      .map(a=>a.name===m.name&&m.agent?{...a,...m.agent}:a);
+    if(Array.isArray(j.nodes))j.nodes=j.nodes.filter(n=>!(m.gone&&n.name===m.name))
+      .map(n=>n.name===m.name&&m.node?{...n,...m.node}:n);
+    return new Response(JSON.stringify(j),{status:200,headers:{'Content-Type':'application/json'}});};})()"""
+
+RETIRED = {'running': False, 'retired': True, 'category': 'retired', 'resume_capability': 'ready'}
+RUNNING = {'running': True, 'retired': False, 'category': 'agent'}
+BUTTONS = """(()=>{const o=document.getElementById('tm-open'),x=document.getElementById('tm-exit-btn');
+  const p=TelemetryTourCue.pick('full-return');
+  return {open:o.textContent.trim(),disabled:o.disabled,exit:x.style.display!=='none',return:p?(p.id||p.className):null};})()"""
+
+
+@pytest.mark.parametrize('case', ['net-retired-then-running', 'net-gone', 'net-then-deck', 'deck-gone'])
+def test_an_open_panel_follows_the_newest_list(embedded, case):
+    """Review of #211: in Network only netTick runs, and a panel whose agent
+    left the list kept a pressable OPEN IN COCKPIT and Exit."""
+    _client, evaluate, inner, wait = embedded
+    name = inner("document.querySelector('.bay').dataset.name")
+    inner(MUTATE)
+    mut = lambda m: inner("window.__mut=%s" % json.dumps(dict(m, name=name)))
+    if case == 'deck-gone':
+        inner("openPanel(%s)" % json.dumps(name))
+        mut({'gone': True})
+        inner("tick()")
+        time.sleep(.5)
+        gone = inner(BUTTONS)
+        inner("window.__mut={};document.getElementById('tm-x').click()")
+        assert gone['open'] == 'NO LONGER LISTED' and gone['disabled'] and not gone['exit'], gone
+        assert gone['return'] != 'tm-x', gone
+        return
+    inner("setView('net')")
+    wait("gmap.size>0", 30)
+    inner("openPanel(%s)" % json.dumps(name))
+    time.sleep(.3)
+    if case == 'net-retired-then-running':
+        mut({'agent': RETIRED, 'node': RETIRED})
+        inner("netTick()")
+        time.sleep(.5)
+        retired = inner(BUTTONS)
+        mut({'agent': RUNNING, 'node': RUNNING})
+        inner("netTick()")
+        time.sleep(.5)
+        running = inner(BUTTONS)
+        assert retired['open'] == 'RESUME IN COCKPIT' and not retired['exit'], retired
+        assert running['open'] == 'OPEN IN COCKPIT' and running['exit'] and running['return'] == 'tm-open', running
+    elif case == 'net-gone':
+        mut({'gone': True})
+        inner("netTick()")
+        time.sleep(.5)
+        gone = inner(BUTTONS)
+        assert gone['open'] == 'NO LONGER LISTED' and gone['disabled'] and not gone['exit'], gone
+        assert gone['return'] != 'tm-x', gone
+    else:
+        mut({'agent': RETIRED, 'node': RETIRED})
+        inner("netTick()")
+        time.sleep(.5)
+        mut({'agent': RUNNING, 'node': RUNNING})
+        inner("setView('deck')")
+        inner("tick()")
+        time.sleep(.8)
+        back = inner(BUTTONS)
+        assert back['open'] == 'OPEN IN COCKPIT' and back['exit'], back
+    inner("window.__mut={};document.getElementById('tm-x').click();setView('deck')")
+
+
 def test_an_exit_on_its_way_keeps_its_button(embedded):
     _client, _evaluate, inner, _wait = embedded
     name = inner("document.querySelector('.bay').dataset.name")

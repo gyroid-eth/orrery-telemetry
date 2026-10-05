@@ -12,7 +12,7 @@
 
 ### 開いたままの詳細パネルのボタンが、agent の状態に合わせて変わるようにしました
 
-詳細パネルの OPEN IN COCKPIT／RESUME IN COCKPIT と Exit のボタンは、パネルを開いた時点の状態のまま変わりませんでした。パネルを開いたまま子を Resume すると、ボタンは RESUME IN COCKPIT のまま残り、cockpit の Full tour の「Return to your agent」の輪が、パネルの Close に付いていました。ボタンは、agent の一覧を受け取るたびに今の状態で描き直します（送信中の Exit はそのまま）。また、Full tour の「Return」の段は Close を指さなくなりました。running の agent の OPEN IN COCKPIT が無いときは輪を出さず、tour の欄の文で案内します。
+詳細パネルの OPEN IN COCKPIT／RESUME IN COCKPIT と Exit のボタンは、パネルを開いた時点の状態のまま変わりませんでした。パネルを開いたまま子を Resume すると、ボタンは RESUME IN COCKPIT のまま残り、cockpit の Full tour の「Return to your agent」の輪が、パネルの Close に付いていました。ボタンは、Deck の一覧か Network の graph のどちらかを受け取るたびに、新しい方の状態で描き直します（送信中の Exit はそのまま）。どちらにも agent が無くなったときは、ボタンを押せない「NO LONGER LISTED」にします。また、Full tour の「Return」の段は Close を指さなくなりました。running の agent の OPEN IN COCKPIT が無いときは輪を出さず、tour の欄の文で案内します。
 
 ### EXIT を確定した直後、隣のカードを誤って EXIT しないようにしました
 

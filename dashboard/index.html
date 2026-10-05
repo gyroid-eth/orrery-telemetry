@@ -32946,6 +32946,9 @@ window.addEventListener('unhandledrejection',e=>
 
 const SHOW_DEFAULT=new Set(["agent","finished","unnamed"]);
 let lastData=[], booted=false;
+// When each source of agent state last arrived: the deck's list (tick) and
+// the network's graph (netTick). The open panel reads the newer one.
+let deckStateAt=0,graphStateAt=0;
 const ARM_MS=5000; // kill/exit 両方の確認タイムアウト
 const armingSet=new Set();
 const armTimers=new Map();
@@ -33886,7 +33889,7 @@ async function tick(){
     if(r.status===503)return;
     const j=await r.json();
     if(seq!==tickSeq)return;   // a newer range was requested while this was in flight
-    lastData=j.agents;
+    lastData=j.agents;deckStateAt=Date.now();
     settleExitSent(j.agents);
     refreshPanelButtons();
     const y=window.scrollY;
@@ -34045,6 +34048,8 @@ async function netTick(){
         resumeCapability:n.resume_capability||'provenance_missing'});
     }
     for(const k of[...gmap.keys()])if(!seen.has(k))gmap.delete(k);
+    graphStateAt=Date.now();
+    refreshPanelButtons();
     gedges=j.edges.filter(e=>gmap.has(e.source)&&gmap.has(e.target));
     gspawn=j.spawn.filter(e=>gmap.has(e.source)&&gmap.has(e.target));
     for(const e of gedges){const a=gmap.get(e.source),b=gmap.get(e.target);
@@ -36579,13 +36584,35 @@ function renderPanelButtons(a,g,{keepExit=false}={}){
     openBtn.title=view.title;
   }
 }
+// The panel agent's state from whichever source arrived last: a deck row, or
+// a graph node in the same shape renderPanelButtons reads. null when that
+// newest source no longer lists the agent.
+function panelAgentState(name){
+  const g=(typeof gmap!=='undefined'&&gmap.get(name))||null;
+  if(graphStateAt>deckStateAt){
+    if(!g)return null;
+    return {a:{running:!!g.running,retired:!!g.retired,present:!!g.present,state:g.state||'',
+      resume_capability:g.resumeCapability,resume_mode:g.resume_mode,mail_message:g.mail_message},g};
+  }
+  const a=(lastData||[]).find(x=>x.name===name);
+  return a?{a,g:g||{}}:null;
+}
+// Called after either source updates. An agent neither lists any more gets
+// buttons that cannot be pressed and say so; an Exit on its way keeps its.
 function refreshPanelButtons(){
   if(!panelName||!TM('term').classList.contains('on'))return;
-  const a=(lastData||[]).find(x=>x.name===panelName);if(!a)return;
-  const g=(typeof gmap!=='undefined'&&gmap.get(panelName))||{};
-  // An Exit on its way (exitPanelAgent) keeps its button; the rest follows.
   const exitBtn=TM('tm-exit-btn');
-  renderPanelButtons(a,g,{keepExit:!!exitBtn&&exitBtn.disabled&&exitBtn.textContent==='…'});
+  const keepExit=!!exitBtn&&exitBtn.disabled&&exitBtn.textContent==='…';
+  const now=panelAgentState(panelName);
+  if(now){renderPanelButtons(now.a,now.g,{keepExit});return;}
+  if(exitBtn&&!keepExit)exitBtn.style.display='none';
+  const openBtn=TM('tm-open');
+  if(openBtn){
+    openBtn.disabled=true;openBtn.style.opacity='.5';openBtn.style.cursor='not-allowed';
+    openBtn.style.background='transparent';openBtn.style.color='var(--cyan)';openBtn.style.boxShadow='none';
+    openBtn.textContent='NO LONGER LISTED';
+    openBtn.title='This agent is no longer in the list. Close this panel.';
+  }
 }
 function openPanelInner(name){
   panelName=name;
