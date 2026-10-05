@@ -8,6 +8,9 @@
 
 [`hooks/settings.template.json`](../hooks/settings.template.json) defines event-to-command mappings, and [`hooks/README.md`](../hooks/README.md) defines the safety policy for settings merges. This document is the user reference explaining when each component actually runs and what it guarantees.
 
+
+`agentstack-resume` changes a stopped child through `/api/jump`; `child_resume.py` owns the change generation and generated-setting rollback. See [tool changes](delegation.en.md#resume-a-stopped-child-with-different-tools).
+
 ## Claude Code event hooks (8)
 
 After the installer merges `settings.template.json` into `~/.claude/settings.json`, the following events run automatically.

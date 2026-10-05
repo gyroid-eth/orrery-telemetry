@@ -48,7 +48,7 @@ response body は、画像と HTML を除き JSON です。dashboard 自体に l
 | GET | `/api/mail-watcher-health` | なし | watcher / signal health |
 | GET | `/portrait` | `name`, `hi` | PNG または fallback SVG |
 | GET | `/assets/<file>` | `.svg` / `.png` の basename | static asset |
-| POST | `/api/jump` | `{session}` | open / focus / resume action |
+| POST | `/api/jump` | `{session, open?, base?, tools?}` | open / focus / resume action |
 | POST | `/api/exit` | `{session}` | graceful exit action |
 | POST | `/api/kill` | `{session, mode}` | kill / retire action |
 | POST | `/api/annotate` | `{name, role, emoji, group}` | saved annotation |
@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":8}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":9}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -437,6 +437,8 @@ Claude は保存済み owner credential で同じ project・数値 ID・name・p
 Claude の起動準備が失敗した場合、元の husk を残し、元が retired だった Mail を再 retire します。元から active の identity は retire しません。復元にも失敗した場合は `rollback_errors` を返し、成功したようには報告しません。CLI は tmux と窓の準備が成功するまで待機します。
 
 旧3項目形式の Claude child は、private token と既存の正式 owner 登録が検証できれば `ready` になります。表示 GET は読み取りだけです。実際の認証・同じ identity の新形式への移行は明示 resume 時に行い、認証失敗では起動しません（[移行条件・保持期限・失敗時の復元](launchers.md)）。
+
+API 9 は任意の `base` / `tools` を受け付けます。`tools` は全置換、`{}` は追加の道具の解除です。base 省略は既存 base、base だけの指定は既存 tools を維持し、両方省略した呼び出しは従来の動作です。動作中・状態不明・retained state が無い子・standalone・conversation-only・Codex App は道具変更を拒否します。まず `/api/exit` を終え、`gone` / `finished` を確認します。変更は子ごとに直列化し、既存の認証と native resume を使い、起動失敗時に当該世代の旧記録・生成設定へ戻します。成功応答に `tools_changed: true`, `base`, `tools` を追加します。installer の既定は追加しません。[手順と制限](delegation.md#停止した子の道具を変更して-resume-する)。
 
 ## POST `/api/exit`
 

@@ -4,6 +4,9 @@
 
 [前: インストール](install.md) · [README に戻る](../README.md) · [次: 委任と child agent](delegation.md)
 
+
+同じ会話の道具を変更する場合は、EXIT 後に停止を確認し、`agentstack-resume <NAME> --tools <spec>` を使います。再登録や新しい子の作成はしません。[手順と制限](delegation.md#停止した子の道具を変更して-resume-する)。
+
 ## 起動コマンド
 
 ```bash

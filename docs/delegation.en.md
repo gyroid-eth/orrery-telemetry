@@ -95,7 +95,7 @@ The default is `inherit`, preserving the user's MCP/plugin configuration exactly
 
 #### When another MCP is needed partway through a task
 
-If a child started with `orrery-only` needs another tool, ask the parent agent for help (or the operator in standalone mode). The parent can take over that part of the work or launch a new child through the regular `/delegate` procedure with the required MCP enabled, passing the necessary context explicitly. The new child does not automatically continue the original conversation.
+If a child started with `orrery-only` needs another tool, ask the parent agent for help (or the operator in standalone mode). The parent can take over that part of the work or launch a new child through the regular `/delegate` procedure with the required MCP enabled, passing the necessary context explicitly. The new child does not automatically continue the original conversation. The [EXIT/resume API](#resume-a-stopped-child-with-different-tools) also changes the recorded selection, but reflected Codex tool calls remain unresolved.
 
 In one limited interactive measurement with Codex CLI 0.154.0, a preconfigured stdio MCP was changed from disabled to enabled. Although `/mcp` then refreshed its inventory and started the server, no tool call was confirmed, and one control that resumed the same conversation did not succeed either. A fresh process with a new conversation did succeed, so the current guidance does not treat a config change, `/mcp`, or resume as a reliable mid-session switch. This result is not generalized to other versions, HTTP/OAuth or plugin-provided servers, or newly added MCP servers.
 
@@ -236,9 +236,26 @@ A `--worktree` child runs in its own directory (its own project), so the macOS c
 
 A Windows process started from WSL runs in the Windows session that WSL runs in. WSL started over ssh is in session 0 (no desktop): Windows-MCP starts, but Screenshot fails with `screen grab failed`. Inside a tmux server started from an RDP or console session it works. When a screen server is selected on WSL, the launcher asks PowerShell for its session number and warns when it is 0. It does not stop the launch, because the launcher and the child's tmux server can be in different sessions.
 
+### Resume a stopped child with different tools
+
+At a work boundary, the parent or operator can request `/delegate --resume <NAME> --tools <spec>`. Ask the child over Mail to save its work and release reservations. Complete `POST /api/exit`, then confirm `gone` / `finished` through `GET /api/agents`. Resume keeps the same name, native session ID and working directory, continuing the conversation.
+
+```bash
+agentstack-resume <NAME> --tools browser --tools mcp:<server>
+agentstack-resume <NAME> --clear-tools --detached
+```
+
+`tools` replaces the whole selection: include everything you want to keep. `--clear-tools` (API `tools: {}`) removes extra tools. Omitted base keeps the recorded base; base alone keeps the recorded tools. Omitting both resumes with the prior selection. Installer defaults are never appended. Grammar, provider, cwd, classification, MCP copying and the existing Mail authentication are checked; unavailable explicit choices stop the launch. Only retained Claude/Codex CLI children support changes. Standalone, unmigrated legacy, conversation-only and Codex App entries refuse them.
+
+Per-child exclusion and a generation stage the candidate for the existing resume path. Startup success commits it; startup failure restores that generation's prior record and generated settings. An older rollback cannot overwrite a new registration or selection. Claude replacement records use version 4, including empty choices, while versions 2/3 remain readable. API success confirms startup, not an MCP call: ask the resumed child over Mail to confirm the same conversation and actually call the required tool.
+
+A process crash during the change leaves a pending generation and blocks resume/purge. Confirm no tmux session or running child remains, then use only the generation shown in the error: `python3 "$AGENTSTACK_HOME/hooks/child_resume.py" rollback-tools-change --runtime-dir "$AGENTSTACK_RUNTIME_DIR" --agent-name <NAME> --generation <GENERATION>`. This also refuses an active/in-progress child or changed generation. Never display credentials or manually edit private state.
+
+Native CLI verification (2026-10-05): Claude Code 2.1.289 resumed the same conversation from no tools and actually succeeded with `new_page about:blank` on a newly attached chrome-devtools MCP. The test connected to an existing CDP service because the sandbox cannot launch Chrome. Codex CLI 0.159.2 has an unresolved known limitation: tools changed on resume were not reflected in actual calls. The same session ID and marker survived; native `/mcp` showed chrome-devtools connected with 30 tools, but the model reported the new tool unavailable and no call was confirmed. The `--no-daemon` control also failed, and the cause remains undetermined. Do not treat mid-task tool addition on this Codex version as working.
+
 ### Records and resume
 
-- Claude: the selection is kept as `base` and `tools` in the same launch record as [Claude in Chrome](#claude-children-and-browser-control-claude-in-chrome) (`<name>.claude-launch.<session-id>.json`, version 3), bound to the conversation. A dashboard resume rebuilds the same strict config and flags from this record and the current user settings. When it cannot (a server was removed, the computer use was enabled, ...), or when the child has no state so strict cannot be applied, the resume stops and returns the reason. The SessionStart hook repeats the given tools to the child at every start, resume and compaction
+- Claude: the selection is kept as `base` and `tools` in the same launch record as [Claude in Chrome](#claude-children-and-browser-control-claude-in-chrome) (`<name>.claude-launch.<session-id>.json`, launch version 3 / replacement version 4), bound to the conversation. A dashboard resume rebuilds the same strict config and flags from this record and the current user settings. When it cannot (a server was removed, the computer use was enabled, ...), or when the child has no state so strict cannot be applied, the resume stops and returns the reason. The SessionStart hook repeats the given tools to the child at every start, resume and compaction
 - Codex: the selection is kept in `AGENTSTACK_RUNTIME_DIR/child-agents/<name>.tools.json` (0600), and `child_resume.py build-home` applies it to the child's `config.toml` at every launch and resume. A damaged record builds no home, so the launch or resume stops
 
 ### What is promised
@@ -247,7 +264,7 @@ A Windows process started from WSL runs in the Windows session that WSL runs in.
 
 This is a policy for the child, not technical isolation. The child runs with the user's permissions and can edit its own config files and records, and the dashboard API does not authenticate its callers. Put the real guard for screen control where it is enforced: the per-application permission of the macOS computer use (granted by a person on screen), and the side that starts Windows-MCP (which tools it publishes).
 
-Adding tools to a running child, changing tools on resume (`tools` in `/api/jump`), showing tools in the roster and DECK, and a NEW AGENT field do not exist yet.
+Tools changes use EXIT and resume. Adding tools in a running process and UI tool fields remain unavailable.
 
 ## Browser and screen: what is reachable, and what a person does
 

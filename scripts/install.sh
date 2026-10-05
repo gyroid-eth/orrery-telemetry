@@ -2445,6 +2445,7 @@ install_payload() {
     cp "$REPO_ROOT/bin/agentstack-preregister-child" "$BIN_DIR/agentstack-preregister-child"
     cp "$REPO_ROOT/bin/agentstack-await-reply" "$BIN_DIR/agentstack-await-reply"
     cp "$REPO_ROOT/bin/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-bootstrap"
+    cp "$REPO_ROOT/bin/agentstack-resume" "$BIN_DIR/agentstack-resume"
     cp "$REPO_ROOT/bin/agentstack-purge-child-resume" "$BIN_DIR/agentstack-purge-child-resume"
     cp "$REPO_ROOT/bin/agentstack-codex-setup" "$BIN_DIR/agentstack-codex-setup"
     cp "$REPO_ROOT/bin/agentstack-claude-setup" "$BIN_DIR/agentstack-claude-setup"
@@ -2455,7 +2456,7 @@ install_payload() {
       "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-reregister" "$BIN_DIR/agentstack-enroll" \
       "$BIN_DIR/agentstack-persistent" "$BIN_DIR/agentstack-persistent-deliver" \
       "$BIN_DIR/agentstack-preregister-child" "$BIN_DIR/agentstack-await-reply" \
-      "$BIN_DIR/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-purge-child-resume" "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup" \
+      "$BIN_DIR/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-resume" "$BIN_DIR/agentstack-purge-child-resume" "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup" \
       "$BIN_DIR/agentstack-mailctl"
   fi
 }

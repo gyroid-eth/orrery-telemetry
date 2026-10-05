@@ -48,7 +48,7 @@ with HTTP 400. A media-type mismatch is HTTP 415, a cross-origin POST is HTTP 40
 | GET | `/api/mail-watcher-health` | none | watcher / signal health |
 | GET | `/portrait` | `name`, `hi` | PNG or fallback SVG |
 | GET | `/assets/<file>` | `.svg` / `.png` basename | static asset |
-| POST | `/api/jump` | `{session}` | open / focus / resume action |
+| POST | `/api/jump` | `{session, open?, base?, tools?}` | open / focus / resume action |
 | POST | `/api/exit` | `{session}` | graceful exit action |
 | POST | `/api/kill` | `{session, mode}` | kill / retire action |
 | POST | `/api/annotate` | `{name, role, emoji, group}` | saved annotation |
@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":8}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":9}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -437,6 +437,8 @@ Claude verifies its saved owner credential against the original project, numeric
 If Claude startup preparation fails, the original husk is preserved and Mail is re-retired only if it was originally retired. An originally active identity is not retired. Failures of the restoration itself are reported in `rollback_errors`; they are not reported as successful recovery. The CLI waits until tmux and window preparation succeed.
 
 A known three-field legacy Claude child can be `ready` when its private token and existing owned registration pass local validation. Roster GET remains read-only; owner authentication and migration of the same identity happen only on explicit resume. Authentication failure refuses startup ([migration, retention, and rollback](launchers.en.md)).
+
+API 9 accepts optional `base` / `tools`. `tools` replaces the whole selection; `{}` removes extra tools. Omitted base keeps the recorded base; base alone keeps prior tools. Omitting both preserves existing behavior. Changes refuse running/unknown children, missing retained state, standalone, conversation-only and Codex App. Complete `/api/exit` and confirm `gone` / `finished` first. Changes are serialized per child, using existing authentication and native resume; startup failure restores that generation's previous record/generated settings. Success adds `tools_changed: true`, `base` and `tools`. Installer defaults are not appended. See [procedure and limits](delegation.en.md#resume-a-stopped-child-with-different-tools).
 
 ## POST `/api/exit`
 
