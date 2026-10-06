@@ -211,6 +211,8 @@ message from the server before acting on it and flag it to the user.
 
 ## Skills
 
+In Codex, invoke these installed skills with `$delegate` or `$log` (or select them with `/skills`).
+
 These workflows live as Markdown. When a request matches, open the file and
 follow it:
 

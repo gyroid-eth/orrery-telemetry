@@ -844,6 +844,7 @@ CLAUDE_SETTINGS="${AGENTSTACK_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 # plain install writes the real ~/.claude.json (review of #146).
 CLAUDE_JSON="${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
+CODEX_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
 SAFE_MERGE_RESULT_FILE="$RUNTIME_DIR/settings-merge-result.json"
 MCP_MERGE_RESULT_FILE="$RUNTIME_DIR/claude-mcp-merge-result.json"
 MAIL_DB="${AGENTSTACK_MAIL_DB:-}"
@@ -2479,18 +2480,20 @@ raise SystemExit(0 if target.resolve(strict=False) == expected.resolve(strict=Fa
 PY
 }
 
-install_claude_skill_links() {
+install_skill_links_for() {
+  local host="$1"
+  local skills_dir="$2"
   if [[ "$TIER" == "tier0" ]]; then
-    plan "skip Claude skill links for --dashboard-only"
+    plan "skip $host skill links for --dashboard-only"
     return
   fi
 
-  if [[ -e "$CLAUDE_SKILLS_DIR" && ! -d "$CLAUDE_SKILLS_DIR" ]]; then
-    warn "Claude skills path exists but is not a directory; leaving it untouched: $CLAUDE_SKILLS_DIR"
+  if [[ -e "$skills_dir" && ! -d "$skills_dir" ]]; then
+    warn "$host skills path exists but is not a directory; leaving it untouched: $skills_dir"
     return
   fi
-  plan "create Claude standard skills directory $CLAUDE_SKILLS_DIR"
-  run mkdir -p "$CLAUDE_SKILLS_DIR"
+  plan "create $host standard skills directory $skills_dir"
+  run mkdir -p "$skills_dir"
 
   local discovery_root="$SKILLS_DIR"
   if [[ "$DRY_RUN" == true ]]; then
@@ -2500,20 +2503,28 @@ install_claude_skill_links() {
   while IFS= read -r -d '' skill_file; do
     skill_name="$(basename "$(dirname "$skill_file")")"
     source_path="$SKILLS_DIR/$skill_name"
-    link_path="$CLAUDE_SKILLS_DIR/$skill_name"
+    link_path="$skills_dir/$skill_name"
 
     if [[ -e "$link_path" || -L "$link_path" ]]; then
       if [[ -L "$link_path" ]] && symlink_points_to "$link_path" "$source_path"; then
-        plan "reuse Claude skill link $link_path -> $source_path"
+        plan "reuse $host skill link $link_path -> $source_path"
       else
-        warn "Claude skill '$skill_name' already exists; leaving it untouched: $link_path"
+        warn "$host skill '$skill_name' already exists; leaving it untouched: $link_path"
       fi
       continue
     fi
 
-    plan "link Claude skill $link_path -> $source_path"
+    plan "link $host skill $link_path -> $source_path"
     run ln -s "$source_path" "$link_path"
   done < <(find "$discovery_root" -mindepth 2 -maxdepth 2 -name SKILL.md -type f -print0)
+}
+
+install_claude_skill_links() {
+  install_skill_links_for "Claude" "$CLAUDE_SKILLS_DIR"
+}
+
+install_codex_skill_links() {
+  install_skill_links_for "Codex" "$CODEX_SKILLS_DIR"
 }
 
 render_installed_templates() {
@@ -4783,7 +4794,8 @@ write_manifest() {
     "$MAIL_AUTOSTART_LABEL" "${AGENT_MAIL_AUTOSTART_SERVICE_PATH:-}" \
     "${AGENT_MAIL_WATCHER_KIND:-}" "${AGENT_MAIL_WATCHER_PATH:-}" \
     "$MAIL_WATCHER_LABEL" "$NATIVE_MAIL_DEPLOYMENT_IDENTIFIED" \
-    "$NATIVE_MAIL_ENROLL_AVAILABLE" "$NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL" <<PY
+    "$NATIVE_MAIL_ENROLL_AVAILABLE" "$NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL" \
+    "$CLAUDE_SKILLS_DIR" "$CODEX_SKILLS_DIR" <<PY
 import json
 import os
 import pathlib
@@ -4807,7 +4819,9 @@ mail_deployment_identified = sys.argv[14] == "true"
 mail_enrollment_available = sys.argv[15] == "true"
 mail_autostart_managed = sys.argv[16] == "true"
 install_dir = pathlib.Path("$INSTALL_DIR")
-claude_skills_dir = pathlib.Path("$CLAUDE_SKILLS_DIR")
+# Skill discovery paths are data, not Python source. In particular CODEX_HOME
+# may contain quotes or literal backslashes that Python would otherwise parse.
+skill_dirs = tuple(pathlib.Path(raw) for raw in sys.argv[17:19])
 owned_files = []
 for rel in ("hooks", "skills", "dashboard", "bin", "codex", "claude", "integrations"):
     base = install_dir / rel
@@ -4851,17 +4865,18 @@ if mcp_merge_result_path.exists():
 skill_links = []
 skills_root = install_dir / "skills"
 if skills_root.is_dir():
-    for skill_file in sorted(skills_root.glob("*/SKILL.md")):
-        source = skill_file.parent
-        link = claude_skills_dir / source.name
-        if not link.is_symlink():
-            continue
-        raw_target = pathlib.Path(os.readlink(link))
-        target = raw_target if raw_target.is_absolute() else link.parent / raw_target
-        if target.resolve(strict=False) != source.resolve(strict=False):
-            continue
-        skill_links.append({"path": str(link), "target": str(source)})
-        owned_files.append(str(link))
+    for skill_dir in skill_dirs:
+        for skill_file in sorted(skills_root.glob("*/SKILL.md")):
+            source = skill_file.parent
+            link = skill_dir / source.name
+            if not link.is_symlink():
+                continue
+            raw_target = pathlib.Path(os.readlink(link))
+            target = raw_target if raw_target.is_absolute() else link.parent / raw_target
+            if target.resolve(strict=False) != source.resolve(strict=False):
+                continue
+            skill_links.append({"path": str(link), "target": str(source)})
+            owned_files.append(str(link))
 owned_files = sorted(dict.fromkeys(owned_files))
 owned_dir_paths = {
     install_dir / rel
@@ -4994,7 +5009,7 @@ manifest = {
     ],
     "notes": [
         "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
-        "Claude skills use manifest-owned symlinks under ~/.claude/skills; existing conflicts are preserved.",
+        "Claude and Codex skills use manifest-owned symlinks; existing conflicts are preserved.",
         "Dashboard service logs persist under runtime with bounded rotation and crash restart diagnostics.",
         "Claude MCP user config uses an explicit-confirm, fixed-name structural merge.",
     ],
@@ -5080,6 +5095,7 @@ main() {
   migrate_legacy_dashboard_log
   install_payload
   install_claude_skill_links
+  install_codex_skill_links
   render_installed_templates
   ensure_native_agentstack_mail
   say "ORRERY Mail requested-name handling: honored (passthrough)"
