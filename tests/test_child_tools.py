@@ -243,6 +243,11 @@ def test_read_only_windows_mcp_allows_only_the_table_tools(tmp_path):
         cwd=str(tmp_path), chrome=False, claude_json=cj, platform="linux")
     assert plan["servers"] == {"windows-mcp": WINDOWS_MCP}
     assert plan["flags"] == ["--no-chrome", *READ_FLAGS]
+    prompt = child_tools.prompt_text(
+        _spec("mail-only", {"screen": {"access": "read", "server": "windows-mcp"}}),
+        "claude")
+    assert "computer use, read (MCP server windows-mcp)" in prompt
+    assert "The computer use tools are read only: do not click, type or open applications." in prompt
 
 
 SCREEN_OPERATE = ("App", "Click", "DisplayInventory", "Move", "MultiEdit", "MultiSelect",
@@ -311,7 +316,8 @@ def test_codex_operate_exposes_and_approves_only_screen_tools():
     assert set(windows["enabled_tools"]) == screen
     assert set(windows["tools"]) == screen
     node = config["mcp_servers"]["node_repl"]
-    assert node == {"command": "/usr/bin/node_repl", "enabled": True}
+    assert node == {"command": "/usr/bin/node_repl", "enabled": True,
+                    "required": True, "startup_timeout_sec": 60}
     for server_cfg in config["mcp_servers"].values():
         assert "default_tools_approval_mode" not in server_cfg
 
@@ -595,6 +601,66 @@ def test_codex_read_only_exposes_and_approves_only_the_table_tools():
 def test_codex_selected_server_must_exist():
     with pytest.raises(child_tools.ToolsError, match="not in the user's Codex"):
         child_tools.codex_apply({"mcp_servers": {}}, _spec("mail-only", {"mcp": ["x"]}))
+
+
+@pytest.mark.parametrize("selection", [
+    {"browser": True},
+    {"screen": {"access": "operate", "server": "chosen"}},
+    {"mcp": ["chosen"]},
+])
+def test_codex_only_selected_servers_become_required(selection):
+    import copy
+    definition = {**CHROME_DEVTOOLS, "enabled": False, "required": False,
+                  "startup_timeout_sec": 120, "tool_timeout_sec": 75,
+                  "env": {"MODE": "fixture"}}
+    config = {"mcp_servers": {"chosen": definition, "other": {"command": "/bin/other"},
+                              "agentstack": {"command": "/bin/mail"},
+                              "orrery-mail": {"url": "http://localhost/mail"}}}
+    before = copy.deepcopy(config)
+    child_tools.codex_apply(config, _spec(None, selection))
+    chosen = config["mcp_servers"]["chosen"]
+    assert chosen["required"] is True and chosen["enabled"] is True
+    for key in ("command", "args", "startup_timeout_sec", "tool_timeout_sec", "env"):
+        assert chosen[key] == before["mcp_servers"]["chosen"][key]
+    for name in ("other", "agentstack", "orrery-mail"):
+        assert config["mcp_servers"][name] == before["mcp_servers"][name]
+
+
+@pytest.mark.parametrize("timeouts, expected", [
+    ({}, {"startup_timeout_sec": 60}),
+    ({"startup_timeout_sec": 10}, {"startup_timeout_sec": 60}),
+    ({"startup_timeout_sec": 120}, {"startup_timeout_sec": 120}),
+    ({"startup_timeout_ms": 10000}, {"startup_timeout_ms": 60000}),
+    ({"startup_timeout_ms": 120000}, {"startup_timeout_ms": 120000}),
+])
+def test_codex_selected_startup_timeout_has_a_floor(timeouts, expected):
+    config = {"mcp_servers": {"chosen": {"command": "/bin/chosen", **timeouts}}}
+    child_tools.codex_apply(config, _spec(None, {"mcp": ["chosen"]}))
+    assert config["mcp_servers"]["chosen"] == {
+        "command": "/bin/chosen", "enabled": True, "required": True, **expected}
+
+
+def test_codex_no_selection_and_mail_proxy_keep_startup_policy():
+    config = {"mcp_servers": {"agentstack": {"command": "/bin/mail"},
+                              "other": {"command": "/bin/other", "required": False}}}
+    child_tools.codex_apply(config, _spec())
+    assert config["mcp_servers"]["other"] == {"command": "/bin/other", "required": False}
+    assert config["mcp_servers"]["agentstack"] == {"command": "/bin/mail"}
+    child_tools.codex_apply(config, _spec(None, {"mcp": ["agentstack"]}))
+    assert config["mcp_servers"]["agentstack"] == {"command": "/bin/mail", "enabled": True}
+
+
+@pytest.mark.parametrize("grace", [None, 0, 1000, 5000])
+def test_codex_selection_keeps_global_optional_startup_grace(grace):
+    config = {"mcp_servers": {"chosen": {"command": "/bin/chosen"}}}
+    if grace is not None:
+        config["mcp_optional_startup_grace_ms"] = grace
+    child_tools.codex_apply(config, _spec(None, {"mcp": ["chosen"]}))
+    assert config["mcp_servers"]["chosen"]["required"] is True
+    if grace is None:
+        assert "mcp_optional_startup_grace_ms" not in config
+    else:
+        assert config["mcp_optional_startup_grace_ms"] == grace
 
 
 # --------------------------------------------------------------------------- #
@@ -1142,6 +1208,11 @@ def test_codex_resume_build_applies_the_record_or_fails(tmp_path, monkeypatch):
     home = build("orrery-only")
     config = tomllib.loads((home / "config.toml").read_text())
     assert config["mcp_servers"]["windows-mcp"]["enabled_tools"] == ["Screenshot", "Snapshot"]
+    assert config["mcp_servers"]["windows-mcp"]["required"] is True
+    assert config["mcp_servers"]["windows-mcp"]["startup_timeout_sec"] == 60
+    assert "required" not in config["mcp_servers"]["chrome-devtools"]
+    assert "required" not in config["mcp_servers"]["agentstack"]
+    assert (source / "config.toml").read_text() == CODEX_CONFIG
     # A damaged record stops the build instead of widening the child.
     record.write_text("{", encoding="utf-8")
     with pytest.raises(ValueError, match="not valid JSON"):

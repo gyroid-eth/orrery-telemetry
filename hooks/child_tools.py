@@ -12,8 +12,8 @@ A selection has two parts:
     gets nothing beyond ORRERY Mail except what ``tools`` names.
 
 ``tools``
-    ``browser`` (Claude in Chrome, optionally a deviceId), ``screen`` (the
-    whole screen, ``read`` or ``operate``; either the built-in macOS computer
+    ``browser`` (Claude in Chrome, optionally a deviceId), ``screen`` (
+    computer use, ``read`` or ``operate``; either the built-in macOS computer
     use of Claude Code or a user MCP server such as Windows-MCP), ``mcp``
     (user MCP servers chosen by name) and ``approve_all`` (servers in ``mcp``
     whose every tool is approved; the CLI form is ``mcp:<server>:all``).
@@ -396,7 +396,7 @@ def _describe(spec: dict, provider: str = "claude") -> list[str]:
     screen = tools.get("screen")
     if screen is not None:
         where = f"MCP server {screen['server']}" if screen["server"] else "computer use"
-        parts.append(f"whole screen, {screen['access']} ({where})")
+        parts.append(f"computer use, {screen['access']} ({where})")
     approve_all = set(tools.get("approve_all", ()))
     for name in tools.get("mcp", ()):
         parts.append(f"MCP server {name}"
@@ -664,7 +664,8 @@ def codex_apply(config: dict, spec: dict) -> None:
     The base (mail-only = the orrery-only profile) is applied by the caller
     first; this enables the selected servers, exposes and approves only the
     table's screen tools of the screen server, and approves every tool of a
-    server in approve_all. A server-wide approval is never written."""
+    server in approve_all. Selected non-Mail servers must initialize before
+    the task starts. A server-wide approval is never written."""
     tools = spec["tools"]
     check_provider(spec, "codex")
     servers = config.get("mcp_servers")
@@ -692,6 +693,17 @@ def codex_apply(config: dict, spec: dict) -> None:
             raise ToolsError(
                 f"MCP server {name!r} is not in the user's Codex config.toml")
         server["enabled"] = True
+        if name != "agentstack" and not looks_like_agent_mail(name):
+            server["required"] = True
+            # Codex defaults to 10s; npx / WSL uvx.exe may still be starting.
+            # Give explicitly selected tools at least 60s, retaining longer
+            # user timeouts and the milliseconds alias without writing both.
+            key = ("startup_timeout_ms" if "startup_timeout_ms" in server
+                   and "startup_timeout_sec" not in server else "startup_timeout_sec")
+            timeout = server.get(key, 0)
+            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+                raise ToolsError(f"MCP server {name!r} has a non-numeric {key}")
+            server[key] = max(timeout, 60000 if key.endswith("_ms") else 60)
     for name in names:
         server = servers[name]
         exposed, hidden = _approval(spec, name, server, browser_server)
@@ -808,7 +820,7 @@ def prompt_text(spec: dict, provider: str, standalone: bool = False) -> str:
                 + ", ".join(given) + ".")
     screen = spec["tools"].get("screen")
     if screen is not None and screen["access"] == "read":
-        head += (" The whole-screen tools are read only: do not click, type or "
+        head += (" The computer use tools are read only: do not click, type or "
                  "open applications.")
     if spec["tools"].get("approve_all"):
         head += (" Every tool of " + ", ".join(spec["tools"]["approve_all"])
