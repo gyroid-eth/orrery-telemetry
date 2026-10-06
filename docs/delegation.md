@@ -236,7 +236,7 @@ provider と最終の作業フォルダで、既定の項目を1つずつ確認�
 - `mail-only` で computer use を選んでいないのに、起動ディレクトリの project で computer use が有効（Mac）。strict の設定では computer use が外れず、外す手段がまだ確かめられていないためです。別のディレクトリで起動するか、`screen:operate` を選んでください
 - `screen:read` か `mcp:<server>:all` で、表に無い server・版
 
-`--worktree` の child は子ごとに別のディレクトリ（別の project）で動くので、Mac の computer use は原則として届きません。computer use は Mac 全体で同時に 1 セッションしか使えないので、child に渡すと、その間は親も使えません。
+`--worktree` の child は子ごとに別のディレクトリ（別の project）で動くので、Mac の computer use は原則として届きません。
 
 ### WSL の画面とWindows のセッション
 

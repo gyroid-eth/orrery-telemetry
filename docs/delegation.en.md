@@ -236,7 +236,7 @@ A child started with `--base mail-only` or any `--tools` is stopped before tmux 
 - `mail-only` without the computer use selected, in a project where the computer use is enabled (macOS). The strict config does not remove the computer use, and a way to remove it has not been verified yet. Start the child in another directory or select `screen:operate`
 - `screen:read` or `mcp:<server>:all` with a server or version that is not in the table
 
-A `--worktree` child runs in its own directory (its own project), so the macOS computer use normally does not reach it. Only one session on the Mac can use the computer use at a time: while a child has it, the parent cannot use it.
+A `--worktree` child runs in its own directory (its own project), so the macOS computer use normally does not reach it.
 
 ### Screen on WSL and the Windows session
 
