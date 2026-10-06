@@ -268,20 +268,20 @@ Native CLI verification (2026-10-05): Claude Code 2.1.289 resumed the same conve
 
 `mail-only` restricts MCP servers, the browser and the computer use. The tools built into Claude Code or Codex (shell, files, WebFetch, ...) and the user's hooks and skills stay.
 
-This is a policy for the child, not technical isolation. The child runs with the user's permissions and can edit its own config files and records, and the dashboard API does not authenticate its callers. Put the real guard for screen control where it is enforced: the per-application permission of the macOS computer use (granted by a person on screen), and the side that starts Windows-MCP (which tools it publishes).
+This is a policy for the child, not technical isolation. The child runs with the user's permissions and can edit its own config files and records, and the dashboard API does not authenticate its callers. Put the real guard for computer use where it is enforced: the per-application permission of the macOS computer use (granted by a person on screen), and the side that starts Windows-MCP (which tools it publishes).
 
 Tools changes use EXIT and resume. Adding tools in a running process and UI tool fields remain unavailable.
 
-## Browser and screen: what is reachable, and what a person does
+## Browser and computer use: what is reachable, and what a person does
 
-Agents that ORRERY starts (children and NEW AGENT) were checked for whether browser and whole-screen tools reach them and can be called, in eight combinations: Claude / Codex × Mac / Windows (WSL2) (2026-09-30 and 10-01; Claude Code 2.1.285, Codex CLI 0.159.x). Every combination reached and called its tools once its conditions were met, but this is a reachability and call check, not a check that every one was operated. It includes measurements on an older ORRERY version and tests with settings outside the product. None works with no setup at all.
+Agents that ORRERY starts (children and NEW AGENT) were checked for whether browser and computer use tools reach them and can be called, in eight combinations: Claude / Codex × Mac / Windows (WSL2) (2026-09-30 and 10-01; Claude Code 2.1.285, Codex CLI 0.159.x). Every combination reached and called its tools once its conditions were met, but this is a reachability and call check, not a check that every one was operated. It includes measurements on an older ORRERY version and tests with settings outside the product. None works with no setup at all.
 
 | | Mac | Windows (WSL2) |
 |---|---|---|
 | Claude × browser | Reachable; the browser extension must be connected | Reachable; a deviceId is required |
-| Claude × whole screen | Reachable only when computer use is enabled for the launch directory's project. The tool responded; operating it was not tried (each app is allowed by a person). Built-in computer use is limited to one Claude session across the whole Mac. If another Claude session is running in a project with computer use enabled, the child stops with `Computer use is in use by another Claude session` (measured on 2026-10-06 with Claude Code on Mac) | Hand Windows-MCP or similar over with `--tools screen:operate:<server>` ([selection](#choosing-the-tools-a-child-gets---base----tools) above). Successful operation was measured with a `claude -p` whose strict config had Windows-MCP added outside the product, not through this `--tools` path |
+| Claude × computer use | Reachable only when computer use is enabled for the launch directory's project. The tool responded; operating it was not tried (each app is allowed by a person). | Hand Windows-MCP (an alternative to computer use) or similar over with `--tools screen:operate:<server>` ([selection](#choosing-the-tools-a-child-gets---base----tools) above). Successful operation was measured with a `claude -p` whose strict config had Windows-MCP added outside the product, not through this `--tools` path |
 | Codex × browser | Selecting `--tools browser` adds child-only `required = true` and at least 60 seconds of startup wait to chrome-devtools; initialization failure stops startup. Tool approval is also needed ([approvals](#codex-children-and-mcp-approvals) above) | Provide the server through user config or an overlay. Selecting `--tools browser` adds child-only `required = true` and at least 60 seconds of startup wait; initialization failure stops startup. Tool approval and Chrome connection permission are separate |
-| Codex × whole screen | Goes through `node_repl` and the bundled plugin. Listing apps was confirmed; each app is allowed by a person | Hand it over with `screen:<read\|operate>:<server>`; the selected server receives child-only `required = true` and at least 60 seconds of startup wait |
+| Codex × computer use | Goes through `node_repl` and the bundled plugin. Listing apps was confirmed; each app is allowed by a person | Hand Windows-MCP (an alternative to computer use) over with `screen:<read\|operate>:<server>`; the selected server receives child-only `required = true` and at least 60 seconds of startup wait |
 
 How each launch path is affected:
 
@@ -300,9 +300,9 @@ These walls cannot be opened from ORRERY's code. A person clears the first and t
 
 - **Claude in Chrome**: install the extension in the browser, sign in and keep it connected (a stopped extension fails even with correct agent settings). Pick a deviceId when several browsers are connected
 - **chrome-devtools (Codex)**: start the Chrome that `--autoConnect` attaches to (once). The connection permission is not once: Chrome asks a person each time the MCP server requests a connection, so a new child or a reconnect needs an answer. Approving the tool in Codex does not skip this Chrome prompt. The tools may be visible, but an unattended child cannot get a call to proceed until the Chrome connection prompt is answered
-- **Computer use (Mac)**: the per-app permission (`request_access`) is granted by a person on screen. It is separate from Codex's approval policy and is the same under `never` and `on-request`; an agent cannot proceed in an app that was not allowed beforehand. Screen Recording and Accessibility are granted once in macOS settings. Computer use runs in one session at a time across the whole Mac
+- **Computer use (Mac)**: the per-app permission (`request_access`) is granted by a person on screen. It is separate from Codex's approval policy and is the same under `never` and `on-request`; an agent cannot proceed in an app that was not allowed beforehand. Screen Recording and Accessibility are granted once in macOS settings. Claude’s built-in computer use runs in one session at a time across the whole Mac. If another Claude session is running in a project with computer use enabled, the child stops with `Computer use is in use by another Claude session` (measured on 2026-10-06 with Claude Code on Mac)
 - **Claude computer use (Mac)**: enable it for the project you will launch in, from `/mcp` (`projects[<dir>].enabledMcpServers` in `~/.claude.json`)
-- **Windows screen control**: run Windows-MCP in an interactive session such as RDP. WSL started from ssh is in session 0 and cannot capture the screen
+- **Windows computer use (Windows-MCP)**: run Windows-MCP in an interactive session such as RDP. WSL started from ssh is in session 0 and cannot capture the screen
 
 Keep a single entry point for approvals: the overlay to give every Codex child the same approval, `--tools` to choose per child. The overlay's `default_tools_approval_mode = "approve"` approves every tool of that server, including chrome-devtools' `evaluate_script`.
 

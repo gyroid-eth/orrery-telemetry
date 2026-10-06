@@ -188,6 +188,11 @@ def test_read_only_windows_mcp_allows_only_the_table_tools(tmp_path):
         cwd=str(tmp_path), chrome=False, claude_json=cj, platform="linux")
     assert plan["servers"] == {"windows-mcp": WINDOWS_MCP}
     assert plan["flags"] == ["--no-chrome", *READ_FLAGS]
+    prompt = child_tools.prompt_text(
+        _spec("mail-only", {"screen": {"access": "read", "server": "windows-mcp"}}),
+        "claude")
+    assert "computer use, read (MCP server windows-mcp)" in prompt
+    assert "The computer use tools are read only: do not click, type or open applications." in prompt
 
 
 SCREEN_OPERATE = ("App", "Click", "DisplayInventory", "Move", "MultiEdit", "MultiSelect",

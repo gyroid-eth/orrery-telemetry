@@ -12,8 +12,8 @@ A selection has two parts:
     gets nothing beyond ORRERY Mail except what ``tools`` names.
 
 ``tools``
-    ``browser`` (Claude in Chrome, optionally a deviceId), ``screen`` (the
-    whole screen, ``read`` or ``operate``; either the built-in macOS computer
+    ``browser`` (Claude in Chrome, optionally a deviceId), ``screen`` (
+    computer use, ``read`` or ``operate``; either the built-in macOS computer
     use of Claude Code or a user MCP server such as Windows-MCP), ``mcp``
     (user MCP servers chosen by name) and ``approve_all`` (servers in ``mcp``
     whose every tool is approved; the CLI form is ``mcp:<server>:all``).
@@ -385,7 +385,7 @@ def _describe(spec: dict, provider: str = "claude") -> list[str]:
     screen = tools.get("screen")
     if screen is not None:
         where = f"MCP server {screen['server']}" if screen["server"] else "computer use"
-        parts.append(f"whole screen, {screen['access']} ({where})")
+        parts.append(f"computer use, {screen['access']} ({where})")
     approve_all = set(tools.get("approve_all", ()))
     for name in tools.get("mcp", ()):
         parts.append(f"MCP server {name}"
@@ -803,7 +803,7 @@ def prompt_text(spec: dict, provider: str, standalone: bool = False) -> str:
                 + ", ".join(given) + ".")
     screen = spec["tools"].get("screen")
     if screen is not None and screen["access"] == "read":
-        head += (" The whole-screen tools are read only: do not click, type or "
+        head += (" The computer use tools are read only: do not click, type or "
                  "open applications.")
     if spec["tools"].get("approve_all"):
         head += (" Every tool of " + ", ".join(spec["tools"]["approve_all"])
