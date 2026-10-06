@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 import threading
 import urllib.error
 import urllib.request
@@ -33,6 +34,7 @@ def preview_env(monkeypatch, tmp_path):
     monkeypatch.setattr(server.subprocess, "Popen", forbidden)
     monkeypatch.delenv("AGENTSTACK_CLAUDE_MODELS", raising=False)
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
     return tmp_path, str(script)
 
 
@@ -84,6 +86,35 @@ def test_codex_preview_uses_the_selected_cli_policy(
                               model, "--effort", "high", "review", str(directory)]
     assert result["launcher_env"] == {"AGENTSTACK_CODEX_BIN": "/selected/codex"}
     assert not (directory / "runtime").exists()
+
+
+@pytest.mark.parametrize("module", [server, provider_server])
+@pytest.mark.parametrize("age", [0, 3600])
+@pytest.mark.parametrize("requested", ["", "sol", "gpt-6.1-sol"])
+def test_codex_preview_cache_fallback_and_notice(monkeypatch, preview_env, module, age, requested):
+    directory, _ = preview_env
+    cache_home = directory / "codex"
+    cache_home.mkdir()
+    fetched = (datetime.now(timezone.utc) - timedelta(seconds=age)).isoformat()
+    (cache_home / "models_cache.json").write_text(json.dumps({
+        "fetched_at": fetched, "identity": "opaque-account",
+        "models": [{"slug": "gpt-6-luna"}],
+    }))
+    monkeypatch.setattr(module.codex_models, "resolve_launcher", lambda:
+                        module.codex_models.LauncherPolicy(binary="/selected/codex", version=(0, 160, 1)))
+    result = module.do_spawn({"standalone": True, "task": "review", "dir": str(directory),
+                              "provider": "codex", "model": requested, "dry_run": True})
+    assert result["ok"] is True
+    expected = "gpt-6.1-sol" if requested.startswith("gpt-") else "gpt-6-luna"
+    assert result["model"] == expected
+    assert result["argv"][result["argv"].index("--model") + 1] == expected
+    if requested.startswith("gpt-"):
+        assert "model_note" not in result
+    else:
+        assert "from gpt-6.1-sol to gpt-6-luna" in result["model_note"]
+        if age:
+            assert fetched in result["model_note"]
+            assert "Start codex once" in result["model_note"]
 
 
 @pytest.fixture

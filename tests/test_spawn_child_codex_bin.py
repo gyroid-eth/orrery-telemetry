@@ -374,14 +374,18 @@ def test_model_policy_and_api_use_the_child_runner_and_selected_binary(tmp_path,
             "models": [{"slug": slug, "visibility": "list"}],
         }))
         assert models.cli_version() == tuple(map(int, version.split(".")))
+        resolved = "gpt-6-sol" if slug == "gpt-6-sol" else expected
         for requested in ("", "sol"):
-            assert models.normalize_model(requested) == expected
+            assert models.normalize_model(requested) == resolved
             assert server.do_spawn({"standalone": True, "task": "regression", "provider": "codex", "model": requested}) == {"ok": True}
-            assert specs[-1].model == expected
+            assert specs[-1].model == resolved
             assert dict(specs[-1].launcher_env)["AGENTSTACK_CODEX_BIN"] == str(binary)
         result = subprocess.run([sys.executable, str(ROOT / "dashboard" / "codex_models.py"), "resolve", ""], capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout) == {"model": expected, "codex_bin": str(binary), "cli_version": version, "default_source": "cli_version"}
+        payload = json.loads(result.stdout)
+        note = payload.pop("model_note", "")
+        assert payload == {"model": resolved, "codex_bin": str(binary), "cli_version": version, "default_source": "cli_version"}
+        assert bool(note) is (resolved != models.DEFAULT_MODEL)
     # Formal generation pins remain explicit even on the older CLI.
     assert models.normalize_model("gpt-6.1-sol") == "gpt-6.1-sol"
     models._VERSION_CACHE.clear()
@@ -432,14 +436,15 @@ def test_slow_usable_cli_keeps_launcher_api_and_delegate_defaults_stable(tmp_pat
     try:
         for slug in ("gpt-6.1-sol", "gpt-6-sol", "gpt-6.1-sol"):
             (catalog / "models_cache.json").write_text(json.dumps({"fetched_at": datetime.now(timezone.utc).isoformat(), "models": [{"slug": slug, "visibility": "list"}]}))
+            resolved = "gpt-6-sol" if slug == "gpt-6-sol" else expected
             for requested in ("", "sol"):
                 assert server.do_spawn({"standalone": True, "task": "work", "provider": "codex", "model": requested}) == {"ok": True}
-                assert specs[-1].model == expected
+                assert specs[-1].model == resolved
                 assert dict(specs[-1].launcher_env)["AGENTSTACK_CODEX_BIN"] == str(binary)
             # The actual launcher's normalize_codex_model calls this command
             # after prime with the selected binary; exercise that boundary.
             result = subprocess.run([sys.executable, str(ROOT / "dashboard" / "codex_models.py"), "normalize", ""], env={**os.environ, "AGENTSTACK_CODEX_BIN": selected}, capture_output=True, text=True, timeout=20)
-            assert result.returncode == 0 and result.stdout.strip() == expected, result.stderr
+            assert result.returncode == 0 and result.stdout.strip() == resolved, result.stderr
         result = subprocess.run([sys.executable, str(ROOT / "dashboard" / "codex_models.py"), "resolve", ""], capture_output=True, text=True, timeout=20)
         policy = json.loads(result.stdout)
         assert (policy["model"], policy["codex_bin"], policy["cli_version"]) == (expected, str(binary), version)

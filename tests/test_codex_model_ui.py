@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import subprocess
 
@@ -31,6 +32,26 @@ def provider(monkeypatch, tmp_path):
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
     monkeypatch.setattr(codex_models, "cli_version", lambda: (0, 159, 1))
     return codex_models.provider_catalog()
+
+
+@pytest.mark.parametrize("age", [0, 3600])
+def test_free_cache_selects_luna_and_shows_notice_in_new_agent(provider, tmp_path, age):
+    (tmp_path / "models_cache.json").write_text(json.dumps({
+        "fetched_at": (datetime.now(timezone.utc) - timedelta(seconds=age)).isoformat(),
+        "models": [{"slug": "gpt-6-luna"}],
+    }))
+    provider = codex_models.provider_catalog()
+    result = run_ui(provider, """
+out.initial=state();out.note=SPM('spm-model-note').textContent;
+out.hidden=SPM('spm-model-note').hidden;
+selectSpawnModel('gpt-6.1-sol');out.explicit=state();
+out.explicitHidden=SPM('spm-model-note').hidden;
+""")
+    assert result["initial"]["payload"]["model"] == "gpt-6-luna"
+    assert "from gpt-6.1-sol to gpt-6-luna" in result["note"]
+    assert result["hidden"] is False
+    assert result["explicit"]["payload"]["model"] == "gpt-6.1-sol"
+    assert result["explicitHidden"] is True
 
 
 def test_model_switch_removes_unsupported_effort_and_preserves_id(provider):

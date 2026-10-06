@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -1533,3 +1534,40 @@ def test_the_first_turn_watch_runs_only_when_there_is_a_parent_to_tell(tmp_path,
     while started and not mark.exists() and time.monotonic() < deadline:
         time.sleep(0.05)
     assert mark.exists() is started
+
+
+@pytest.mark.parametrize("age", [0, 3600])
+def test_delegate_launcher_default_falls_back_and_prints_notice(tmp_path, age):
+    binary = tmp_path / "codex"
+    binary.write_text('#!/bin/sh\n[ "$1" = --version ] || exit 2\necho "codex-cli 0.160.1"\n')
+    binary.chmod(0o755)
+    fetched = (datetime.now(timezone.utc) - timedelta(seconds=age)).isoformat()
+    (tmp_path / "models_cache.json").write_text(json.dumps({
+        "fetched_at": fetched, "models": [{"slug": "gpt-6-luna"}],
+    }))
+    env = {"AGENTSTACK_CODEX_BIN": str(binary), "CODEX_HOME": str(tmp_path)}
+    for requested in ("", "sol"):
+        result = _model_call("normalize_codex_model", requested, extra_env=env)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "gpt-6-luna"
+        assert "from gpt-6.1-sol to gpt-6-luna" in result.stderr
+        if age:
+            assert fetched in result.stderr and "Start codex once" in result.stderr
+    explicit = _model_call("normalize_codex_model", "gpt-6.1-sol", extra_env=env)
+    assert explicit.stdout.strip() == "gpt-6.1-sol"
+    assert explicit.stderr == ""
+    # /delegate captures resolve's JSON before preregistration and later passes
+    # its formal ID to the launcher. The note must survive that capture.
+    resolve_env = {**os.environ, **env, "AGENTSTACK_CHILD_SHELL": "/bin/bash"}
+    for requested in ("", "sol", "gpt-6.1-sol"):
+        result = subprocess.run([sys.executable, str(_ROOT / "dashboard/codex_models.py"),
+                                 "resolve", requested], env=resolve_env,
+                                capture_output=True, text=True, timeout=20)
+        assert result.returncode == 0, result.stderr
+        policy = json.loads(result.stdout)
+        if requested.startswith("gpt-"):
+            assert policy["model"] == requested
+            assert "model_note" not in policy and result.stderr == ""
+        else:
+            assert policy["model"] == "gpt-6-luna"
+            assert policy["model_note"] in result.stderr

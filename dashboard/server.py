@@ -7051,6 +7051,7 @@ class SpawnLaunchSpec:
     # Seconds a signalled launcher may spend exiting before SIGKILL.  None
     # selects the canonical grace for this kind of launcher.
     termination_grace: float | None = None
+    model_note: str = ""
 
     def __post_init__(self) -> None:
         grace = self.termination_grace
@@ -7402,13 +7403,16 @@ def do_spawn(payload: dict) -> dict:
     elif provider == "codex":
         try:
             launcher = codex_models.resolve_launcher()
-            model = codex_models.normalize_model(model, launcher=launcher)
-            effort = codex_models.resolve_effort(model, effort, codex_models.resolve_catalog(launcher=launcher))
+            catalog = codex_models.resolve_catalog(launcher=launcher)
+            model_note = catalog.note if not model or model.lower() == "sol" else ""
+            model = codex_models.normalize_model(model, catalog=catalog)
+            effort = codex_models.resolve_effort(model, effort, catalog)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         spec = SpawnLaunchSpec(
             provider="codex", program="codex-cli", model=model,
-            script=SPAWN_SCRIPT, effort=effort, provider_args=("--codex",) + tools_args,
+            script=SPAWN_SCRIPT, effort=effort, model_note=model_note,
+            provider_args=("--codex",) + tools_args,
             launcher_env=(("AGENTSTACK_CODEX_BIN", launcher.binary),) if launcher.binary else (),
             effort_arg=bool(effort),
         )
@@ -7513,6 +7517,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     program = spec.program
     model_str = spec.model
     effort = spec.effort
+    model_notice = {"model_note": spec.model_note} if spec.model_note else {}
 
     if standalone and not spec.standalone_supported:
         return {"ok": False,
@@ -7534,6 +7539,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     if request["dry_run"]:
         return {
             "ok": True, "dry_run": True, "provider": provider,
+            **model_notice,
             "model": model_str, "effort": effort, "dir": work_dir,
             "standalone": standalone, "worktree": worktree,
             "argv": _spawn_argv(request, spec, requested_name or "<child-name>",
@@ -7601,6 +7607,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         registration_status = "may remain" if registration_may_remain else "remains"
         result = {
             "ok": False,
+            **model_notice,
             "error": (
                 f"{error}; child registration '{child_name}' {registration_status} because "
                 "the dashboard server has no permission to delete it"
@@ -7855,6 +7862,8 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             f"\n=== {ts} spawn child={child_name} parent={parent} "
             f"provider={provider} model={model_str} effort={effort or '-'} "
             f"standalone={standalone} worktree={worktree} ===\n".encode())
+        if spec.model_note:
+            log_fh.write(f"note: {spec.model_note}\n".encode())
         proc = subprocess.Popen(args, stdout=log_fh, stderr=log_fh, env=env,
                                 start_new_session=True)
 
@@ -7936,6 +7945,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                     detail=tail)
             return {
                 "ok": True,
+                **model_notice,
                 "child_name": child_name,
                 "requested_name": requested_name,
                 "name_substituted": name_substituted,
@@ -7955,6 +7965,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             # rest of the UI. The thread owns the log handle from here.
             pending = {
                 "ok": True,
+                **model_notice,
                 "pending": True,
                 "child_name": child_name,
                 "requested_name": requested_name,
@@ -8480,7 +8491,7 @@ class Handler(BaseHTTPRequestHandler):
             # API (ORRERY cockpit): raise it only when something they rely on
             # is added or changes meaning, and say so in the CHANGELOG. It is
             # managed this way from 2 on; every earlier release reported 1.
-            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 9}).encode(), "application/json; charset=utf-8")
+            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 10}).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")

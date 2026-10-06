@@ -113,6 +113,7 @@ def test_cache_failure_is_bundled_fallback(failure):
     result = models.resolve_catalog()
     assert result.models == models.DEFAULT_MODELS
     assert result.source == "bundled" and result.error == ""
+    assert result.default_model == models.DEFAULT_MODEL
     assert models.normalize_model("gpt-future-outside-cache") == "gpt-future-outside-cache"
 
 
@@ -444,13 +445,13 @@ def test_explicit_allowlist_keeps_a_model_the_cache_hides(monkeypatch):
 
 
 @pytest.mark.parametrize("version", [(0, 158, 0), (0, 159, 0), (0, 159, 1), (1, 0, 0), None])
-def test_cli_version_wins_over_shared_catalog_rewrites(monkeypatch, version):
+def test_cli_version_caps_default_and_cache_can_lower_it(monkeypatch, version):
     monkeypatch.setattr(models, "cli_version", lambda: version)
     for client, rows in [("0.159.1", [row()]), ("0.158.0", [row("gpt-6-sol")]),
                          ("0.159.0", [row()]), ("0.157.0", [row("gpt-6-sol")])]:
         cache(rows, client_version=client)
         preferred = version >= models.CLI_MIN_VERSION if version else client.startswith("0.159")
-        expected = models.DEFAULT_MODEL if preferred else models.FALLBACK_MODEL
+        expected = models.DEFAULT_MODEL if preferred and client.startswith("0.159") else models.FALLBACK_MODEL
         catalog = models.resolve_catalog()
         assert catalog.default_model == expected
         assert models.normalize_model() == models.normalize_model(" SoL ") == expected
@@ -458,11 +459,92 @@ def test_cli_version_wins_over_shared_catalog_rewrites(monkeypatch, version):
         assert (models.DEFAULT_MODEL in catalog.models) is preferred
         assert models.FALLBACK_MODEL in catalog.models
         assert expected not in catalog.overflow
-        assert bool(catalog.note) is not preferred
-        if catalog.note:
+        assert bool(catalog.note) is (expected != models.DEFAULT_MODEL)
+        if not preferred:
             assert "0.159.0 or later" in catalog.note
         # Formal IDs remain exact, including a deliberate request on an old CLI.
         assert models.normalize_model(models.DEFAULT_MODEL) == models.DEFAULT_MODEL
+
+
+@pytest.mark.parametrize("age", [0, models.CACHE_TTL_SECONDS, models.CACHE_TTL_SECONDS + 1, 86_400])
+def test_free_account_cache_lowers_implicit_default_and_notifies(age):
+    path = cache([row("gpt-5.6-luna"), row("gpt-5.6-terra"), row("gpt-6-luna"),
+                  row("gpt-reserve"), row("gpt-5.5"), {"slug": "codex-auto-review"}],
+                 age=age, identity="opaque-free-account")
+    catalog = models.resolve_catalog()
+    assert models.normalize_model() == models.normalize_model(" SoL ") == "gpt-6-luna"
+    assert catalog.default_model == models.provider_catalog()["default_model"] == "gpt-6-luna"
+    assert catalog.default_model not in catalog.overflow
+    assert "from gpt-6.1-sol to gpt-6-luna" in catalog.note
+    assert "does not contain" in catalog.note
+    assert models.provider_catalog()["model_note"] == catalog.note
+    if age > models.CACHE_TTL_SECONDS:
+        assert "stale" in catalog.note
+        assert json.loads(path.read_text())["fetched_at"] in catalog.note
+        assert "Start codex once" in catalog.note
+        assert "gpt-reserve" not in catalog.models
+        assert catalog.source == "bundled"
+    else:
+        assert "fresh" in catalog.note
+        assert "gpt-reserve" in catalog.models
+
+
+@pytest.mark.parametrize("age", [0, 86_400])
+def test_paid_account_cache_keeps_preferred_default(age):
+    cache([row("gpt-6-luna"), row("gpt-6-sol"), row(), row("gpt-6-astra")],
+          age=age, identity="opaque-paid-account")
+    assert models.normalize_model() == models.normalize_model("sol") == models.DEFAULT_MODEL
+    assert models.provider_catalog()["model_note"] == ""
+
+
+@pytest.mark.parametrize("available,expected", [
+    (["gpt-6-sol", "gpt-6-luna"], "gpt-6-sol"),
+    (["gpt-5.6-luna", "gpt-5.6-terra"], "gpt-5.6-terra"),
+    (["gpt-5.6-luna"], "gpt-5.6-luna"),
+    (["gpt-reserve"], models.DEFAULT_MODEL),
+])
+def test_default_preference_uses_slug_presence_not_cache_order_or_effort_schema(available, expected):
+    cache([{"slug": model} for model in reversed(available)])
+    assert models.normalize_model() == expected
+
+
+@pytest.mark.parametrize("version", [(0, 158, 0), (0, 159, 1), None])
+@pytest.mark.parametrize("age", [0, 86_400])
+def test_free_cache_fallback_respects_cli_compatibility_ceiling(monkeypatch, version, age):
+    monkeypatch.setattr(models, "cli_version", lambda: version)
+    cache([row("gpt-6-luna"), row("gpt-5.6-terra")], age=age)
+    assert models.normalize_model() == "gpt-6-luna"
+    assert models.normalize_model("gpt-6.1-sol") == "gpt-6.1-sol"
+
+
+@pytest.mark.parametrize("requested", ["gpt-6.1-sol", "gpt-6-sol", "astra", "terra", "luna"])
+def test_free_cache_preserves_explicit_requests(requested):
+    cache([row("gpt-6-luna")])
+    assert models.normalize_model(requested) == models.ALIASES.get(requested, requested)
+
+
+def test_stale_snapshot_cannot_add_models_hide_models_or_override_efforts():
+    cache([row("gpt-6-luna", ("medium",)), row("gpt-6-sol", visibility="hide"),
+           row("gpt-new-cache-only")], age=86_400)
+    catalog = models.resolve_catalog()
+    # Presence includes hidden IDs, so the next Sol is preferred over Luna.
+    assert catalog.default_model == "gpt-6-sol"
+    assert "gpt-new-cache-only" not in catalog.models
+    assert catalog.efforts["gpt-6-luna"] == models.BUNDLED_EFFORTS["gpt-6-luna"]
+    assert models.discover_models() == {}
+
+
+def test_unreadable_cache_keeps_version_default(monkeypatch):
+    cache([row("gpt-6-luna")])
+    monkeypatch.setattr(models.os, "open", lambda *a, **kw: (_ for _ in ()).throw(PermissionError()))
+    assert models.normalize_model() == models.DEFAULT_MODEL
+
+
+def test_cache_fallback_does_not_bypass_explicit_allowlist(monkeypatch):
+    cache([row("gpt-6-luna")])
+    monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", models.DEFAULT_MODEL)
+    with pytest.raises(ValueError, match="gpt-6-luna"):
+        models.normalize_model()
 
 
 @pytest.mark.parametrize("failure", ["missing", "expired", "malformed", "hidden"])

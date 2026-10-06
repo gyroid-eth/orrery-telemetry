@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":9}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":10}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -113,6 +113,7 @@ curl -s http://127.0.0.1:8770/api/spawn-names
       "default_model":"gpt-6.1-sol",
       "model_source":"bundled",
       "model_error":"",
+      "model_note":"",
       "efforts":["low","medium","high","xhigh","max","ultra"],
       "effort_default":"xhigh"
     }
@@ -124,7 +125,7 @@ The scientist rail's `status` indicates whether at least one pairing of that sci
 
 The adjectives are synchronized word-for-word with ORRERY Mail's canonical `SIMPLE_ADJECTIVES` Round 3 list, and the launcher, catalog, and suggestion API use the same source. Custom additions are prohibited because they diverge from name validation in strict deployments.
 
-Codex augments bundled candidates with fresh local CLI cache entries. Explicit `AGENTSTACK_CODEX_MODELS` restricts candidates to that allowlist; invalid configuration appears in `model_error`. `model_source` is `bundled`, `local_cache`, or `override`. The default is `gpt-6.1-sol` when the selected CLI is 0.159.0 or later (fresh catalog evidence is used if its version is unknown); otherwise it is `gpt-6-sol`. Candidate order never chooses the default. Codex CLI 0.159.0 or later is required for GPT-6.1 Sol; doctor reports fallback and update guidance. Use a formal ID such as `gpt-6-sol` to pin the previous generation. Provider dictionaries `model_efforts` and `model_effort_defaults`, keyed by model ID, take precedence in the UI. An empty effort list means omit effort and use the CLI default. See [configuration](configuration.en.md#codex-model-catalog).
+Codex augments bundled candidates with local CLI cache entries fetched within 300 seconds. Explicit `AGENTSTACK_CODEX_MODELS` restricts candidates to that allowlist; invalid configuration appears in `model_error`. `model_source` is `bundled`, `local_cache`, or `override`. For omission and `sol`, the initial default is `gpt-6.1-sol` with selected CLI 0.159.0+, otherwise `gpt-6-sol`; unknown versions use fresh catalog evidence. If that ID is absent from the selected `CODEX_HOME` cache, choose the next cached candidate in order: `gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna`. Expired snapshots can lower the default too, but an older CLI never moves up to GPT-6.1 Sol. Without a usable cache or next candidate, the existing default remains. Explicit formal IDs are never substituted. Provider `model_note` is empty when the preferred default is unchanged, otherwise it reports both IDs and the reason; a stale snapshot also supplies its timestamp and guidance to start `codex` to refresh it. Cache `identity` is not checked against the current login, and fallback does not prove account authorization. Provider dictionaries `model_efforts` and `model_effort_defaults`, keyed by model ID, take precedence in the UI. An empty effort list means omit effort and use the CLI default. See [configuration](configuration.en.md#codex-model-catalog).
 
 ## GET `/api/name-status`
 
@@ -570,6 +571,8 @@ Adding `"dry_run": true` validates the request and resolves provider, model, eff
 ```
 
 `argv` uses the same builder as an actual launch. `<child-name>` represents the name that a real launch would select when `name` is omitted; a supplied name is checked and shown directly. The server may normalize it during registration. `<child-token-file>` and, for Gemini, `<gemini-task-file>` in `launcher_env` stand for files created only by a real launch. `launcher_env` contains provider-specific overrides, not the inherited environment. The preview registers no identity, takes no reservation, sends no Mail, starts no tmux session or agent process, and creates no token, task, annotation, log or worktree files. Parent credentials are not required for a preview. Validation can run read-only Git checks and the existing bounded Codex `--version` probe to resolve the actual CLI/model policy. `async: true` still returns only this preview. Names and resources are not reserved, so their availability can change before a real launch.
+
+When an omitted Codex model or `sol` changes the default, preview, synchronous, asynchronous pending and final results include `model_note`. It reports both IDs and the reason, plus the timestamp and refresh guidance for a stale snapshot. Explicit formal-ID requests do not receive a substitution notice.
 
 Success:
 
