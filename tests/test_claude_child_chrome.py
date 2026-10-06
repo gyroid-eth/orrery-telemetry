@@ -23,6 +23,7 @@ from test_spawn_child_embed_task import (  # noqa: E402
 )
 
 import dashboard.server as server  # noqa: E402
+from hooks import child_tools  # noqa: E402
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -48,7 +49,9 @@ CHROME_INNER = PRE_CHROME_INNER.replace(
 # argument, read once from a private file (see claude_child_launch_command).
 ARGV_PROMPT = (' --append-system-prompt "$CLAUDE_CHILD_SYSTEM_PROMPT"'
                ' "$(cat "$CLAUDE_CHILD_PROMPT_FILE"; rm -f "$CLAUDE_CHILD_PROMPT_FILE")"')
-LAUNCHED_CHROME_INNER = CHROME_INNER.replace("--chrome;", "--chrome" + ARGV_PROMPT + ";")
+CHROME_APPROVAL = " --allowed-tools " + ",".join(child_tools.claude_chrome_allowed_tools())
+LAUNCHED_CHROME_INNER = CHROME_INNER.replace(
+    " --chrome;", CHROME_APPROVAL + " --chrome" + ARGV_PROMPT + ";")
 
 
 # --------------------------------------------------------------------------- #
@@ -663,7 +666,8 @@ def test_resume_of_a_chrome_child_adds_chrome(monkeypatch, tmp_path):
     _bound_record(tmp_path)
     _result, launched = _resume(monkeypatch, tmp_path)
     inner = launched[0][-1]
-    assert inner.endswith(f"--resume {SID} -n ResumeChild --chrome")
+    assert inner.endswith(f"--resume {SID} -n ResumeChild --chrome" + CHROME_APPROVAL)
+    assert inner.count("--allowed-tools") == 1
     assert f"export AGENTSTACK_CLAUDE_LAUNCH_ID={LAUNCH}; " in inner
     assert f"export AGENTSTACK_RUNTIME_DIR={tmp_path / 'runtime'}; " in inner
 

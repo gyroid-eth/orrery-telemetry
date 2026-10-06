@@ -135,6 +135,17 @@ TOOL_TABLE["chrome-devtools-mcp"] = {
 }
 # Packages whose unpinned or unlisted-version definition is classified by name.
 NAME_CLASSIFIED = ("chrome-devtools-mcp",)
+# Claude in Chrome: 22 tool names observed in Claude Code 2.1.289 on
+# 2026-10-05. Checked against that version's bundled tool definitions.
+# Approve by name for this launch only; new tools are not approved implicitly.
+CLAUDE_CHROME_TOOLS = (
+    "browser_batch", "computer", "file_upload", "find", "form_input",
+    "get_page_text", "gif_creator", "javascript_tool", "list_connected_browsers",
+    "navigate", "read_console_messages", "read_network_requests", "read_page",
+    "resize_window", "select_browser", "shortcuts_execute", "shortcuts_list",
+    "switch_browser", "tabs_close_mcp", "tabs_context_mcp", "tabs_create_mcp",
+    "upload_image",
+)
 _PACKAGE_VERSION_RE = re.compile(
     r"(?:^|[/\\\s])([A-Za-z0-9_.-]+?)(?:@|==)(\d+(?:\.\d+){1,3})$")
 
@@ -501,6 +512,11 @@ def _copyable_definition(name: str, settings: dict, cwd: str) -> dict:
     return dict(definition)
 
 
+def claude_chrome_allowed_tools() -> list[str]:
+    """Known Claude in Chrome tools approved only for a Chrome launch."""
+    return [f"mcp__claude-in-chrome__{tool}" for tool in CLAUDE_CHROME_TOOLS]
+
+
 def claude_plan(spec: dict, *, cwd: str, chrome: bool, claude_json: str,
                 platform: str | None = None) -> dict:
     """What a Claude child is launched with: extra servers and CLI flags.
@@ -508,11 +524,12 @@ def claude_plan(spec: dict, *, cwd: str, chrome: bool, claude_json: str,
     Raises ToolsError whenever the selection cannot be honoured."""
     platform = platform or sys.platform
     tools = spec["tools"]
+    chrome = chrome or "browser" in tools
     mail_only = spec["base"] == "mail-only"
     settings = _load_claude_settings(claude_json)
     servers: dict[str, dict] = {}
     flags: list[str] = []
-    allowed: list[str] = []
+    allowed: list[str] = claude_chrome_allowed_tools() if chrome else []
     disallowed: list[str] = []
 
     screen = tools.get("screen")
