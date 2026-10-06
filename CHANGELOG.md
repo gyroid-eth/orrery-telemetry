@@ -8,18 +8,63 @@
 
 ---
 
-## 2026.10.05
+## 2026.10.06
 
-### 停止した子の道具を変更して同じ会話を再開できます
+### Codex の既定モデルを、そのアカウントで使えるものに下げます
 
-API 9 の `/api/jump` に `base` / `tools` を追加し、`agentstack-resume` と `/delegate --resume` の手順を用意しました。`tools` は全置換、`{}` は追加の道具の解除、base 省略は現在の base を維持します。両方省略した resume と UI は従来のままです。Claude の同一会話で新しい Chrome MCP 呼び出しを実測しました。Codex 0.159.2 は新しい道具が呼び出しに反映されない既知の制限が未解決です。動作中・状態不明・retained state が無い子は変更を拒否します。変更は子ごとに直列化し、起動失敗時には当該世代の道具記録と生成設定を戻します。
+モデルを省略した Codex の子と NEW AGENT の既定は `gpt-6.1-sol` でした。無料の ChatGPT の plan など、このモデルを使えないアカウントでは、起動の直後に 400 で止まっていました。選択された `CODEX_HOME` の CLI ローカル cache にその ID が無ければ、`gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna` の順で、掲載されている次の候補へ下げます。既定を下げる判断には期限切れの cache も使い、変更があれば provider の `model_note` に変更前後と理由を返します（API 10）。
 
+正式 ID の明示要求は置き換えません。cache の `identity` は現在のログインと照合しておらず、fallback は利用権限の証明ではありません。2026-10-06、無料の ChatGPT の Codex（`gpt-6-luna` medium）で、Full tour のしりとりが最後まで通ることを確かめました。詳しくは [設定](docs/configuration.md#codex-model-catalog) を参照してください。
+
+### Codex でも `$delegate` と `$log` を使えます
+
+installer は `delegate` と `log` の skill を、`~/.claude/skills` に加えて Codex の skills（`$CODEX_HOME/skills`、既定は `~/.codex/skills`）にもリンクし、manifest に記録します。Codex の入力欄では `/` から始まる語が Codex 自身のコマンドとして扱われ、skill が無いと `/delegate` は `Unrecognized command` になっていました。Codex では `$delegate` / `$log` と書きます。`~/.codex/AGENTS.md` の managed block もこの書き方に合わせました。
+
+同じ名前の skill がすでにあれば上書きせず、installer が warn を出します。uninstall は ORRERY が作ったリンクだけを取り除きます。
+
+### Codex の子が、選んだ MCP の起動を待つようにしました
+
+ブラウザなどの MCP server が起動中のまま最初の道具一覧から省略され、子が道具を持たずに作業を始める場合がありました。`--tools` と installer の既定で選んだ browser・computer use・`mcp:<name>` の server は、子の生成設定だけで `required = true` とし、起動待ちを最低60秒にします。既存の長い timeout は保ち、初期化に失敗すれば Codex の起動・resume を止めます。
+
+選択しない継承 server と ORRERY Mail の待機設定は変えず、利用者の設定も変更しません。installer の既定で設定を解決できない項目は従来どおり外しますが、採用された server の実行時の初期化失敗は停止として扱います。Chrome 側の接続許可は別で、人が答える必要があります。Codex 0.159.2 の途中の道具追加が呼び出しに反映されない制限は、この変更では解決しません。
+
+### Claude の browser 子の tool を、起動ごとに承認します
+
+Claude in Chrome を付けた子は、既知の22 tool を1本の `--allowed-tools` にまとめ、Claude Code 側で承認します。`javascript_tool`・`computer`・`file_upload`・`upload_image`・`form_input` も含みます。`--tools browser`、installer の browser 既定、旧 `claude_chrome` 指定とその resume に適用し、利用者の設定は変えません。新しい名前の tool は自動承認しません。
+
+Claude in Chrome 自身の操作確認は別です。タブを開く等の操作では **人が Chrome 側の Allow を押す**必要があり、headless の子はその確認で止まります。拡張の接続・アクセス許可も人の操作のままです。2026-10-06、WSL2 の Ubuntu、Claude Code 2.1.290 でも、22 tool の承認後にこの確認で停止することを実測しました。
+
+### Codex の子に chrome-devtools の browser を渡せるようにしました
+
+Codex の `--tools browser` は、利用者の設定にある chrome-devtools MCP server を選び、既知の全30 tool を公開して個別に承認します。Codex と既知固定版の Claude の `screen:operate:<server>` でも、chrome-devtools の同じ30 tool を承認します。任意 JavaScript 実行、ホストへのファイル保存、ローカルファイルの upload を含む許可です。未知の新しい tool は公開・承認しません。
+
+読み取りに絞る `screen:read:<server>` は8 tool を公開し、保存引数を持つ tool や任意 JavaScript・upload は含めません。Claude の chrome-devtools 選択は既知固定版が必要です。browser と別の computer use server は、それぞれの承認範囲で併用できます。詳しくは [delegation](docs/delegation.md#子に渡す道具を選ぶ--base----tools) を参照してください。
 
 ### 子に渡す道具の既定を installer で選べるようにしました
 
-`--child-default-tools` / `AGENTSTACK_CHILD_DEFAULT_TOOLS` は `--tools` と同じ文法で、既定は空です。明示の `--base` / `--tools` が優先します。使えない既定の項目だけを外し、起動の出力と子の最初の指示に残します。子の記録には実際の選択を保存し、resume 時に現在の既定を追加しません。
+`--child-default-tools` / `AGENTSTACK_CHILD_DEFAULT_TOOLS` は `--tools` と同じ文法で、既定は空です。明示の `--base` / `--tools` / `--codex-mcp` が優先します。使えない既定の項目だけを外し、起動の出力と子の最初の指示に残します。子の記録には実際の選択を保存し、resume 時に現在の既定を追加しません。
 
-API 8 では `/api/spawn` の `tools: {}` または `base: "default"` がこの既定を抑止します。CLI で両方省略したときだけ既定を適用します。dashboard/API ではフォームの選択を正とし、installer の env を黙って追加しません。
+API 8 では `/api/spawn` の `tools: {}` または `base: "default"` がこの既定を抑止します。CLI で base・tools・MCP profile を省略した新規起動に既定を適用します。dashboard/API ではフォームの選択を正とし、installer の env を黙って追加しません。
+
+### 停止した子の道具を変更して同じ会話を再開できます
+
+API 9 の `/api/jump` に `base` / `tools` を追加し、`agentstack-resume` と `/delegate --resume` の手順を用意しました。作業の区切りで EXIT した子を、同じ名前・会話・作業ディレクトリで再開します。`tools` は全置換、`{}` は追加の道具の解除、base 省略は現在の base を維持します。両方省略した resume と UI は従来のままです。動作中・状態不明・道具の記録が無い子などは変更を拒否します。
+
+変更は子ごとに直列化し、端末が起動を受け付ける前の失敗には、その変更の道具記録と生成設定を戻します。API の成功は端末の起動受理を意味し、その後の認証や MCP 呼び出しの成功を保証しません。起動受理後の失敗には新しい選択が残るため、再開した子から同じ会話と実際の道具の呼び出しを報告してもらってください。
+
+Claude Code 2.1.289 では、同じ会話の native resume で新しい chrome-devtools MCP を呼び出せることを実測しました。**Codex 0.159.2 は、途中で追加した道具が呼び出しに反映されない既知の制限が未解決です。** この版の API 世代は、2026.10.05 の 7 から、既定の道具で 8、道具変更 resume で 9、Codex の既定モデルの `model_note` で 10 に上がります。
+
+### ブラウザと computer use の届き方、人が行う許可をまとめました
+
+日英 [delegation](docs/delegation.md#ブラウザと-computer-use-何が届くか人がやること) に Claude / Codex × Mac / Windows（WSL2）の8通りと、子・NEW AGENT・resume ごとの届き方をまとめ、README から案内します。「画面全体」「画面操作」の表記は computer use に揃え、WSL 側の道具は Windows-MCP と明記しました。指定名の `screen` は変わりません。
+
+Chrome の接続許可は接続のたびに人が答え、Mac の computer use のアプリ単位の許可も人が出します。Claude の組み込み computer use は Mac 全体で同時に1セッションだけです。ロックは computer use を一度使ったセッションが終わるまで外れず、その間に起動した子は `Computer use is in use by another Claude session` で止まります。Windows-MCP は RDP などの対話セッションで動かす必要があります。英語 README 冒頭の agent の数を限定する表現も直しました。
+
+### Gemini の dry-run テストの不安定な判定を直しました
+
+試験用の Git repository に自動 maintenance の lock が生成されると、dry-run の副作用と誤判定していました。試験用 repository の自動 maintenance と gc を止め、Git のメタデータも含めた副作用の確認を保ちます。製品の Gemini の起動や dry-run の動作は変わりません。
+
+## 2026.10.05
 
 ### 新しい環境で、ワークショップのしりとりが「作業フォルダの外を読むか」の確認で止まっていました
 
