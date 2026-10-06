@@ -8,6 +8,8 @@ Both Claude Code and Codex Desktop have built-in subagent mechanisms. The **chil
 
 This page explains the differences between the two and how to tell which one you are currently using.
 
+In Codex, invoke this skill with `$delegate` (or select it with `/skills`). In Claude Code, use `/delegate`. The installer links `${CODEX_HOME:-$HOME/.codex}/skills/delegate`. If a same-name user skill exists, it is preserved with a warning, so check that you selected the ORRERY skill when a conflict occurs.
+
 ## In one sentence
 
 - A **built-in subagent** is a **call** opened inside its parent, returning an answer and then closing. It leaves nothing externally visible.
@@ -19,7 +21,7 @@ The former is enough for a short investigation. The latter is necessary when **p
 
 | | Built-in subagent | Child agent (this stack) |
 |---|---|---|
-| How it is created | The parent calls the `Agent` / `Task` tool | `/delegate` (which uses `spawn_child.sh` internally) |
+| How it is created | The parent calls the `Agent` / `Task` tool | Claude Code: `/delegate`, Codex: `$delegate` (which uses `spawn_child.sh` internally) |
 | Identity | None. An internal ID for each call (a hexadecimal value such as `a1798ced…`) | A name registered with ORRERY Mail (an adjective and scientist name such as `Teal-Darwin`) |
 | Process | Same process as the parent | Independent tmux session (and optionally a terminal window) |
 | Dashboard | **Does not appear** (it does not exist even as a node) | Appears as a node, with a line connecting it to its parent |
@@ -51,7 +53,7 @@ This stack prevents that behavior in three layers.
 
 1. **The installer registers ORRERY Mail as an MCP server.** Previously, the registration procedure was undocumented and silently assumed that users had already completed it
 2. **`agentstack-doctor` reports missing or inconsistent registration.** It also displays the repair command
-3. **The managed instructions (`claude/CLAUDE.md` / `codex/AGENTS.md`) state that delegation must use only `/delegate`, and that when the tools are absent the agent must report the problem and stop instead of substituting another mechanism**
+3. **The managed instructions (`claude/CLAUDE.md` / `codex/AGENTS.md`) state that delegation must use only the delegate skill (Claude Code: `/delegate`, Codex: `$delegate`), and that when the tools are absent the agent must report the problem and stop instead of substituting another mechanism**
 
 Run `agentstack-selftest` immediately after installation. It verifies **functionality**, not mere presence (registration validation → spawning two actual agents → mail delivery in both directions).
 

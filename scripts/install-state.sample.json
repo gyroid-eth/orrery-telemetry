@@ -93,7 +93,7 @@
   "install_dir": "/home/alice/.agentstack",
   "notes": [
     "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
-    "Claude skills use manifest-owned symlinks under ~/.claude/skills; existing conflicts are preserved.",
+    "Claude and Codex skills use manifest-owned symlinks; existing conflicts are preserved.",
     "Dashboard service logs persist under runtime with bounded rotation and crash restart diagnostics.",
     "Claude MCP user config uses an explicit-confirm, fixed-name structural merge."
   ],
@@ -138,6 +138,8 @@
     "/home/alice/.agentstack/runtime/claude-mcp-merge-result.json",
     "/home/alice/.claude/skills/delegate",
     "/home/alice/.claude/skills/log",
+    "/home/alice/.codex/skills/delegate",
+    "/home/alice/.codex/skills/log",
     "/home/alice/.config/systemd/user/org.agentstack.agentdashboard.service",
     "/home/alice/.config/systemd/user/org.agentstack.mail-watcher.service"
   ],
@@ -351,6 +353,14 @@
     },
     {
       "path": "/home/alice/.claude/skills/log",
+      "target": "/home/alice/.agentstack/skills/log"
+    },
+    {
+      "path": "/home/alice/.codex/skills/delegate",
+      "target": "/home/alice/.agentstack/skills/delegate"
+    },
+    {
+      "path": "/home/alice/.codex/skills/log",
       "target": "/home/alice/.agentstack/skills/log"
     }
   ],

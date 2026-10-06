@@ -876,9 +876,10 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     ) in manifest["owned_files"]
     expected_skill_links = [
         {
-            "path": str(home / ".claude" / "skills" / name),
+            "path": str(home / host / "skills" / name),
             "target": str(install_dir / "skills" / name),
         }
+        for host in (".claude", ".codex")
         for name in ("delegate", "log")
     ]
     assert manifest["skill_links"] == expected_skill_links
@@ -1069,6 +1070,8 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert not (install_dir / "integrations").exists()
     assert not (home / ".claude" / "skills" / "delegate").exists()
     assert not (home / ".claude" / "skills" / "log").exists()
+    assert not (home / ".codex" / "skills" / "delegate").is_symlink()
+    assert not (home / ".codex" / "skills" / "log").is_symlink()
     claude_remaining = {
         str(path.relative_to(home / ".claude"))
         for path in (home / ".claude").rglob("*")

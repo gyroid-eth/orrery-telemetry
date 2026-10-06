@@ -57,7 +57,7 @@ installer は途中で 3 つの変更を preview し、それぞれ `yes` を求
 installer が置くもの:
 
 - `~/.agentstack/` に dashboard、launcher、hook、skill、同梱の ORRERY Mail、`env.sh`、`VERSION`、`install-state.json`
-- `~/.claude/skills/delegate` と `~/.claude/skills/log`（`~/.agentstack/skills/` への symlink）
+- `~/.claude/skills/{delegate,log}` と `${CODEX_HOME:-~/.codex}/skills/{delegate,log}`（`~/.agentstack/skills/` への symlink）
 - 常駐 service 2 つ: dashboard（port 8770）と ORRERY Mail（`http://127.0.0.1:18765/mcp`、state は `~/.agentstack/mail`）。それぞれ launchd（macOS）に登録し、できなければ supervised background mode で起動します
 
 `env.sh` は mode `0600` で、token は書き込みません。shell の dotfile は変更しません。
@@ -85,7 +85,7 @@ agent-start /path/to/your-project
 agent-start-codex /path/to/your-project
 ```
 
-`agent-start` は ORRERY Mail の identity と同名の tmux session を作ります。dashboard の jump、mail 通知、token 復旧はこの名前で結びつきます。起動した Claude Code では `/delegate` のように先頭の slash を付けて skill を呼びます。初回の child 起動は [Skills と file reservation](launchers.md#skills2件と-file-reservation) を参照してください。
+`agent-start` は ORRERY Mail の identity と同名の tmux session を作ります。dashboard の jump、mail 通知、token 復旧はこの名前で結びつきます。起動した Claude Code では `/delegate` のように先頭の slash を付けて skill を呼びます。Codex では `$delegate`（ログは `$log`）または `/skills` で選択します。初回の child 起動は [Skills と file reservation](launchers.md#skills2件と-file-reservation) を参照してください。
 
 ## Windows（WSL2）で入れる
 
@@ -147,7 +147,7 @@ CI や script から入れる場合、既定のままだと 4 つの承認（Cla
 
 | 呼び出し | Tier | 内容 |
 | --- | --- | --- |
-| `./scripts/install.sh` | Tier 1 / default | 全 payload と Claude skill link。hooks・permissions と Codex / Claude managed block は preview 後、承認時だけ merge |
+| `./scripts/install.sh` | Tier 1 / default | 全 payload と Claude / Codex skill link。hooks・permissions と Codex / Claude managed block は preview 後、承認時だけ merge |
 | `./scripts/install.sh --dashboard-only` | Tier 0 | dashboard と helper のみ。hooks、skills、Codex / Claude template は導入しない |
 | `./scripts/install.sh --scoped` | Tier 2 placeholder | payload は導入するが、user settings / managed docs は変更しない |
 | `./scripts/install.sh --dry-run` | preview | 変更予定を表示し、file や service を変更しない |
@@ -194,14 +194,18 @@ installer が置いた skill（`~/.agentstack/skills` と、そこを指す `~/.
 
 単純な文字列置換ではなく構造を読んで merge するのは、再インストールと uninstall でユーザー設定を巻き込まないためです。
 
-`skillsDirectories` は Claude Code の setting ではなく、installer は新しい値を追加しません。skill payload の正本は `~/.agentstack/skills/<name>` のままにし、Claude Code が標準で読む `~/.claude/skills/<name>` へ絶対 symlink を作ります。
+`skillsDirectories` は Claude Code の setting ではなく、installer は新しい値を追加しません。skill payload の正本は `~/.agentstack/skills/<name>` のままにし、Claude Code が標準で読む `~/.claude/skills/<name>` および Codex の `${CODEX_HOME:-$HOME/.codex}/skills/<name>` へ絶対 symlink を作ります。
 
 ```text
 ~/.claude/skills/delegate -> ~/.agentstack/skills/delegate
 ~/.claude/skills/log      -> ~/.agentstack/skills/log
+~/.codex/skills/delegate  -> ~/.agentstack/skills/delegate
+~/.codex/skills/log       -> ~/.agentstack/skills/log
 ```
 
 同じ ORRERY Telemetry payload を指す symlink がすでにある場合は再利用し、manifest に所有登録します。この link は payload と一緒に無効になるため、uninstall では削除対象です。同名の file、directory、または別 target の symlink がある場合は warning を出して保持し、所有登録しません。uninstall は manifest の path と実際の symlink target を照合し、所有登録された、ORRERY Telemetry payload を指す symlink だけを削除します。利用者が file や directory に置き換えた path、または retarget した symlink は残します。
+
+上の Codex の例は `CODEX_HOME` が未設定の場合です。設定済みなら、その directory の `skills` に置きます。リンクの再利用・競合保持・manifest 記録・uninstall の規則は両方に適用します。Codex の managed block の呼び出し案内は、通常の `agentstack-codex-setup` の preview / 承認による更新で反映します。
 
 旧 installer が `skillsDirectories` に `~/.agentstack/skills` を追加していた環境では、Tier 1 の settings merge を承認した再インストール時にその旧 ORRERY Telemetry entry だけを削除します。同じ配列の他の user value と、それ以外の settings は保持します。
 

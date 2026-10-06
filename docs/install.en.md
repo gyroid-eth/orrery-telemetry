@@ -53,7 +53,7 @@ All existing content is preserved, and a backup from before each merge is stored
 The installer places:
 
 - the dashboard, launchers, hooks, skills, bundled ORRERY Mail, `env.sh`, `VERSION`, and `install-state.json` under `~/.agentstack/`
-- `~/.claude/skills/delegate` and `~/.claude/skills/log`, as symlinks into `~/.agentstack/skills/`
+- `~/.claude/skills/{delegate,log}` and `${CODEX_HOME:-~/.codex}/skills/{delegate,log}`, as symlinks into `~/.agentstack/skills/`
 - two resident services: the dashboard on port 8770 and ORRERY Mail at `http://127.0.0.1:18765/mcp`, with state under `~/.agentstack/mail`. Each is registered with launchd on macOS or started in supervised-background mode when registration is unavailable
 
 `env.sh` uses mode `0600` and contains no token. Shell dotfiles are not changed.
@@ -81,7 +81,7 @@ agent-start /path/to/your-project
 agent-start-codex /path/to/your-project
 ```
 
-`agent-start` creates a tmux session with the same name as the ORRERY Mail identity. Dashboard jumps, mail notifications, and token recovery are joined by this name. In the launched Claude Code session, invoke skills with a leading slash, as in `/delegate`. See [Skills and file reservations](launchers.en.md#skills-2-and-file-reservations) for the first child launch.
+`agent-start` creates a tmux session with the same name as the ORRERY Mail identity. Dashboard jumps, mail notifications, and token recovery are joined by this name. In the launched Claude Code session, invoke skills with a leading slash, as in `/delegate`. In Codex, invoke `$delegate` (or `$log` for logs), or select the skill with `/skills`. See [Skills and file reservations](launchers.en.md#skills-2-and-file-reservations) for the first child launch.
 
 ## Installing on Windows (WSL2)
 
@@ -143,7 +143,7 @@ When installing from CI or a script, the four approvals (Claude settings merge, 
 
 | Invocation | Tier | Behavior |
 | --- | --- | --- |
-| `./scripts/install.sh` | Tier 1 / default | Install all payloads and Claude skill links. Merge hooks, permissions, and Codex / Claude managed blocks only when approved after preview |
+| `./scripts/install.sh` | Tier 1 / default | Install all payloads and Claude / Codex skill links. Merge hooks, permissions, and Codex / Claude managed blocks only when approved after preview |
 | `./scripts/install.sh --dashboard-only` | Tier 0 | Dashboard and helpers only. Do not install hooks, skills, or Codex / Claude templates |
 | `./scripts/install.sh --scoped` | Tier 2 placeholder | Install payloads but do not change user settings / managed documents |
 | `./scripts/install.sh --dry-run` | preview | Display planned changes without changing files or services |
@@ -190,14 +190,18 @@ The skills the installer places (`~/.agentstack/skills` and the `~/.claude/skill
 
 The installer parses and merges structure rather than performing simple string replacement so that reinstall and uninstall do not sweep up user settings.
 
-`skillsDirectories` is not a Claude Code setting, and the installer does not add a new value. Canonical skill payloads remain in `~/.agentstack/skills/<name>`, with absolute symlinks from Claude Code's standard path at `~/.claude/skills/<name>`.
+`skillsDirectories` is not a Claude Code setting, and the installer does not add a new value. Canonical skill payloads remain in `~/.agentstack/skills/<name>`, with absolute symlinks from Claude Code's standard path at `~/.claude/skills/<name>` and Codex's `${CODEX_HOME:-$HOME/.codex}/skills/<name>`.
 
 ```text
 ~/.claude/skills/delegate -> ~/.agentstack/skills/delegate
 ~/.claude/skills/log      -> ~/.agentstack/skills/log
+~/.codex/skills/delegate  -> ~/.agentstack/skills/delegate
+~/.codex/skills/log       -> ~/.agentstack/skills/log
 ```
 
 An existing symlink to the same ORRERY Telemetry payload is reused and recorded as owned in the manifest. Because the link becomes invalid with the payload, it is removed on uninstall. An existing same-name file, directory, or symlink to another target is preserved with a warning and is not recorded as owned. Uninstall compares the manifest path with the actual symlink target and removes only an owned symlink that points to the ORRERY Telemetry payload. A path replaced by the user with a file or directory, or a retargeted symlink, remains.
+
+The Codex examples above assume `CODEX_HOME` is unset. When set, links go into its `skills` directory. Reuse, conflict preservation, manifest recording, and uninstall rules apply to both hosts. In Codex, invoke `$delegate` or `$log`, or select them with `/skills`. The invocation hint in the managed block is applied through the usual `agentstack-codex-setup` preview and approval flow.
 
 On systems where an old installer added `~/.agentstack/skills` to `skillsDirectories`, a reinstall with the Tier 1 settings merge approved removes only that old ORRERY Telemetry entry. Other user values in the same array and all other settings are preserved.
 

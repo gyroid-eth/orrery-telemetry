@@ -22,7 +22,7 @@ Installer `--child-default-tools` selects default child tools (empty by default)
 
 At a work boundary, EXIT a child and change its tools in the same conversation with `~/.agentstack/bin/agentstack-resume <NAME> --tools <spec>`. See [changing tools on resume](docs/delegation.en.md#resume-a-stopped-child-with-different-tools).
 
-**What works standalone**: the dashboard's Telemetry screen (DECK, NETWORK, REPLAY, RESUME of retired agents, NEW AGENT), starting agents with `agent-start` or `agent-start-codex`, creating children with `/delegate`, and ORRERY Mail between agents. Agent terminals open in your OS terminal (a Windows Terminal tab on Windows).
+**What works standalone**: the dashboard's Telemetry screen (DECK, NETWORK, REPLAY, RESUME of retired agents, NEW AGENT), starting agents with `agent-start` or `agent-start-codex`, creating children with the delegate skill (Claude Code: `/delegate`, Codex: `$delegate`), and ORRERY Mail between agents. Agent terminals open in your OS terminal (a Windows Terminal tab on Windows).
 
 **What is not included**: the cockpit screen that arranges and drives terminals in the browser (composer, Split, Planetarium, `ORRERY.app`).
 
@@ -50,7 +50,7 @@ Try **Your first flight → help map → Full tour** in cockpit. Learn the basic
 
 In the Telemetry header, choose `HELP MAP` (beside `SETTINGS` in NETWORK) to annotate the visible DECK / NETWORK controls. In an agent detail panel, choose the `HELP MAP` button in its action row to annotate the panel’s controls. These entries also work when Telemetry is embedded in cockpit. If the annotations do not fit, they appear as a legend; press `Esc` or choose `Close` to dismiss it.
 
-Full tour guides you through creating one child with `/delegate`, playing three shiritori round trips over ORRERY Mail, arranging terminals, and trying Telemetry EXIT / RESUME and NETWORK / REPLAY. Follow the controls described on screen to advance. See the [current quick start](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) and [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/en/FULL_TOUR.md).
+Full tour guides you through creating one child with the delegate skill (Claude Code: `/delegate`, Codex: `$delegate`), playing three shiritori round trips over ORRERY Mail, arranging terminals, and trying Telemetry EXIT / RESUME and NETWORK / REPLAY. Follow the controls described on screen to advance. See the [current quick start](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) and [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/en/FULL_TOUR.md).
 
 Cockpit is where you work in terminals; Telemetry is where you view the team's status and history. Start with the in-app guides, then use the [documentation index](docs/README.en.md) for detailed references.
 

@@ -8,6 +8,8 @@ Claude Code にも Codex Desktop にも、最初から subagent の仕組みが�
 
 このページはその2つの違いと、いま自分がどちらを使っているかの見分け方を扱います。
 
+Codex では `$delegate` でこの skill を呼びます（`/skills` でも選択できます）。Claude Code では `/delegate` です。installer は `${CODEX_HOME:-$HOME/.codex}/skills/delegate` にリンクを作ります。同名の利用者 skill があれば警告して保持するため、競合時は ORRERY の skill が選ばれているか確認してください。
+
 ## 一言でいうと
 
 - **組み込み subagent** は、親の中で開かれ、答えを返して閉じる**呼び出し**です。外から見えるものは何も残しません。
@@ -19,7 +21,7 @@ Claude Code にも Codex Desktop にも、最初から subagent の仕組みが�
 
 | | 組み込み subagent | child agent（このスタック） |
 |---|---|---|
-| 作り方 | 親が `Agent` / `Task` ツールを呼ぶ | `/delegate`（内部で `spawn_child.sh`） |
+| 作り方 | 親が `Agent` / `Task` ツールを呼ぶ | Claude Code: `/delegate`、Codex: `$delegate`（内部で `spawn_child.sh`） |
 | identity | 無し。呼び出しごとの内部 ID（`a1798ced…` のような16進） | ORRERY Mail に登録された名前（`Teal-Darwin` のような形容詞＋科学者名） |
 | プロセス | 親と同じプロセス | 独立した tmux session（＋任意で端末ウィンドウ） |
 | dashboard | **現れない**（ノードとしても存在しない） | ノードとして立ち、親との間に線が引かれる |
@@ -51,7 +53,7 @@ Claude Code にも Codex Desktop にも、最初から subagent の仕組みが�
 
 1. **install が ORRERY Mail を MCP サーバーとして登録する。** 以前は登録手順がどこにも書かれておらず、ユーザーが登録済みであることを暗黙の前提にしていました
 2. **`agentstack-doctor` が登録の欠落・不一致を報告する。** 修復コマンドも表示します
-3. **管理下の指示（`claude/CLAUDE.md` / `codex/AGENTS.md`）が、委任は `/delegate` だけで行うこと、ツールが無いときは代替せず報告して止まることを明示する**
+3. **管理下の指示（`claude/CLAUDE.md` / `codex/AGENTS.md`）が、委任は delegate skill（Claude Code: `/delegate`、Codex: `$delegate`）だけで行うこと、ツールが無いときは代替せず報告して止まることを明示する**
 
 導入直後は `agentstack-selftest` を実行してください。存在ではなく**機能**を確認します（登録の検証 → 実際の2体の spawn → 相互のメール到達まで）。
 
