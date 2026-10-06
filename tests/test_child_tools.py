@@ -60,6 +60,61 @@ def _claude_json(path: pathlib.Path, *, servers=None, projects=None) -> str:
     return str(path)
 
 
+CLAUDE_CHROME_NAMES = {
+    "browser_batch", "computer", "file_upload", "find", "form_input",
+    "get_page_text", "gif_creator", "javascript_tool", "list_connected_browsers",
+    "navigate", "read_console_messages", "read_network_requests", "read_page",
+    "resize_window", "select_browser", "shortcuts_execute", "shortcuts_list",
+    "switch_browser", "tabs_close_mcp", "tabs_context_mcp", "tabs_create_mcp",
+    "upload_image",
+}
+
+
+@pytest.mark.parametrize("source", ["browser", "legacy", "installer-default"])
+@pytest.mark.parametrize("base", ["default", "mail-only"])
+def test_claude_browser_approves_exactly_known_names(tmp_path, source, base):
+    cj = _claude_json(tmp_path / "c.json")
+    spec = _spec(base, {"browser": True} if source == "browser" else None)
+    chrome = source == "legacy"
+    if source == "installer-default":
+        defaults = child_tools.resolve_defaults(
+            "browser", provider="claude", cwd=str(tmp_path), claude_json=cj,
+            platform="linux")
+        spec, chrome = defaults["spec"], defaults["chrome"]
+        spec["base"] = base
+    plan = child_tools.claude_plan(spec, cwd=str(tmp_path), chrome=chrome,
+                                   claude_json=cj, platform="linux")
+    assert plan["servers"] == {}
+    assert plan["flags"] == ["--allowed-tools", ",".join(
+        f"mcp__claude-in-chrome__{name}" for name in sorted(CLAUDE_CHROME_NAMES))]
+    assert len(CLAUDE_CHROME_NAMES) == 22
+    assert len(child_tools.CLAUDE_CHROME_TOOLS) == 22
+    assert pathlib.Path(cj).read_text() == json.dumps({"mcpServers": {}, "projects": {}})
+
+
+@pytest.mark.parametrize("base, flags", [("default", []), ("mail-only", ["--no-chrome"])])
+def test_claude_without_browser_keeps_original_plan(tmp_path, base, flags):
+    cj = _claude_json(tmp_path / "c.json")
+    assert child_tools.claude_plan(_spec(base), cwd=str(tmp_path), chrome=False,
+                                   claude_json=cj, platform="linux") == {
+        "servers": {}, "flags": flags}
+
+
+def test_claude_browser_and_screen_share_one_allowed_flag(tmp_path):
+    cj = _claude_json(tmp_path / "c.json", servers={"windows-mcp": WINDOWS_MCP})
+    spec = _spec(None, {"browser": True,
+                       "screen": {"access": "read", "server": "windows-mcp"}})
+    flags = child_tools.claude_plan(spec, cwd=str(tmp_path), chrome=False,
+                                    claude_json=cj, platform="linux")["flags"]
+    assert flags.count("--allowed-tools") == 1
+    allowed = flags[flags.index("--allowed-tools") + 1].split(",")
+    assert len(allowed) == 24
+    assert set(allowed) == {
+        *(f"mcp__claude-in-chrome__{name}" for name in CLAUDE_CHROME_NAMES),
+        "mcp__windows-mcp__Screenshot", "mcp__windows-mcp__Snapshot"}
+    assert flags[2:] == READ_FLAGS[2:]
+
+
 # --------------------------------------------------------------------------- #
 # the selection
 # --------------------------------------------------------------------------- #
@@ -126,7 +181,7 @@ def test_mail_only_adds_no_chrome_unless_a_browser_was_chosen(tmp_path):
     assert plan == {"servers": {}, "flags": ["--no-chrome"]}
     plan = child_tools.claude_plan(_spec("mail-only", {"browser": True}), cwd=str(tmp_path),
                                    chrome=True, claude_json=cj, platform="darwin")
-    assert plan["flags"] == []
+    assert plan["flags"] == ["--allowed-tools", ",".join(child_tools.claude_chrome_allowed_tools())]
 
 
 def test_default_base_with_a_server_does_not_touch_chrome(tmp_path):
@@ -799,7 +854,9 @@ def test_launcher_browser_tool_is_claude_in_chrome(tmp_path):
                      "--base", "mail-only", "--tools", "browser:win-brave")
     assert result.returncode == 0, result.stderr
     inner = _inner(env)
-    assert inner == _launched(" --chrome")
+    assert inner == _launched(" --allowed-tools " + ",".join(
+        child_tools.claude_chrome_allowed_tools()) + " --chrome")
+    assert inner.count("--allowed-tools") == 1
     assert "--no-chrome" not in inner
     assert "deviceId win-brave" in _log_text(env)
 
@@ -1032,6 +1089,7 @@ def test_api_empty_selection_keeps_other_providers_legacy_launcher_arguments():
 ])
 def test_api_rejects_invalid_selections(monkeypatch, payload, message):
     captured = []
+    monkeypatch.setattr(server, "_child_tools_module", lambda: child_tools)
     monkeypatch.setattr(server, "_spawn_unavailable_error", lambda: None)
     monkeypatch.setattr(server, "_spawn_request", lambda _p: ({}, None))
     monkeypatch.setattr(server, "_claude_catalog", lambda: type(

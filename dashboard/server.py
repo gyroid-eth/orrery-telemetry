@@ -3203,6 +3203,11 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
             f'exec {shlex.quote(ABS_CLAUDE)} --resume {sid} -n {session}'
             + (' --chrome' if chrome else '')
         )
+        if chrome and tools_plan is None:
+            # Legacy Chrome records have no base/tools selection to rebuild.
+            # Restore the launch's browser approvals without changing MCP scope.
+            allowed = _child_tools_module().claude_chrome_allowed_tools()
+            inner += ' --allowed-tools ' + shlex.quote(','.join(allowed))
 
     try:
         _, conversation_reason = _claude_conversation_reason(session)
