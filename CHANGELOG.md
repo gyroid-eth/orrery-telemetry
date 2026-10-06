@@ -10,6 +10,11 @@
 
 ## 2026.10.05
 
+### 停止した子の道具を変更して同じ会話を再開できます
+
+API 9 の `/api/jump` に `base` / `tools` を追加し、`agentstack-resume` と `/delegate --resume` の手順を用意しました。`tools` は全置換、`{}` は追加の道具の解除、base 省略は現在の base を維持します。両方省略した resume と UI は従来のままです。Claude の同一会話で新しい Chrome MCP 呼び出しを実測しました。Codex 0.159.2 は新しい道具が呼び出しに反映されない既知の制限が未解決です。動作中・状態不明・retained state が無い子は変更を拒否します。変更は子ごとに直列化し、起動失敗時には当該世代の道具記録と生成設定を戻します。
+
+
 ### 子に渡す道具の既定を installer で選べるようにしました
 
 `--child-default-tools` / `AGENTSTACK_CHILD_DEFAULT_TOOLS` は `--tools` と同じ文法で、既定は空です。明示の `--base` / `--tools` が優先します。使えない既定の項目だけを外し、起動の出力と子の最初の指示に残します。子の記録には実際の選択を保存し、resume 時に現在の既定を追加しません。

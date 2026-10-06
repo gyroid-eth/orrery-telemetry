@@ -95,7 +95,7 @@ launcher は、子の `CODEX_HOME` の `config.toml` だけに、元の checkout
 
 #### 途中で必要な MCP が増えたとき
 
-`orrery-only` で始めた child に別の道具が必要になったら、親 agent（standalone なら operator）へ相談してください。親がその作業を引き取るか、必要な MCP を有効にした新しい child を正規の `/delegate` 手順で起動し、必要な文脈を明示的に渡します。新しい child は元の会話を自動では継続しません。
+`orrery-only` で始めた child に別の道具が必要になったら、親 agent（standalone なら operator）へ相談してください。親がその作業を引き取るか、必要な MCP を有効にした新しい child を正規の `/delegate` 手順で起動し、必要な文脈を明示的に渡します。新しい child は元の会話を自動では継続しません。 記録上の道具変更には [EXIT と resume の API](#停止した子の道具を変更して-resume-する)もありますが、Codex の呼び出し反映は未解決です。
 
 Codex CLI 0.154.0 の interactive session で、事前設定済みの stdio MCP を disabled から enabled へ変えた限定実測では、config の変更後に `/mcp` が一覧を更新して server を起動しても tool call は確認できず、同じ会話を resume した1対照も成功しませんでした。新しい process と新しい会話の対照では成功したため、現行案内では config の変更、`/mcp`、resume を確実な途中切替として扱いません。この結果を他の version、HTTP/OAuth、plugin 由来の server、新規 MCP 追加へ一般化するものではありません。
 
@@ -236,9 +236,26 @@ provider と最終の作業フォルダで、既定の項目を1つずつ確認�
 
 WSL から起動した Windows のプロセスは、その WSL が動く Windows のセッションで動きます。ssh から起動した WSL はセッション 0（デスクトップ無し）で、Windows-MCP は起動しても Screenshot が `screen grab failed` になります。RDP やコンソールの中で起動した tmux サーバーの中なら取れます。launcher は WSL で画面の server を選んだとき、PowerShell で自分のセッション番号を読み、0 なら警告します（起動は止めません。launcher と child の tmux サーバーが別のセッションにいることがあるため）。
 
+### 停止した子の道具を変更して resume する
+
+作業の区切りで、親または人が `/delegate --resume <NAME> --tools <spec>` を指定できます。子に Mail で保存と予約の解放を依頼し、`POST /api/exit` の完了後、`GET /api/agents` で `gone` / `finished` を確認してください。resume は同じ名前・native session ID・作業ディレクトリで会話を続けます。動作中の道具をその場で変える機能ではありません。
+
+```bash
+"${AGENTSTACK_HOME:-$HOME/.agentstack}/bin/agentstack-resume" <NAME> --tools browser --tools mcp:<server>
+"${AGENTSTACK_HOME:-$HOME/.agentstack}/bin/agentstack-resume" <NAME> --clear-tools --detached
+```
+
+`tools` は全置換です。残したい項目もすべて指定し、`--clear-tools`（API の `tools: {}`）で追加の道具を外します。base 省略は既存の base を維持し、`--base` だけの指定は道具を維持します。両方省略すると従来の選択で resume します。installer の既定は追加しません。grammar・provider・cwd・分類表・MCP コピーと既存の Mail 認証を検証し、適用できない明示指定は止めます。変更できるのは retained state がある Claude/Codex CLI child だけで、standalone・古い移行前の子・conversation-only・Codex App は拒否します。
+
+子ごとの排他と世代を使って候補を準備し、既存 resume の起動成功で確定します。起動失敗はその世代の旧記録・生成設定に戻します。別の登録・変更を古い rollback で上書きしません。Claude の置換記録は version 4 で、空の選択も保存でき、既存 version 2/3 は読めます。API 成功は tmux／terminal が起動を受け付けたことを意味し、shell 内の bootstrap／認証の完了や MCP 呼び出しの成功は待ちません。後から bootstrap が失敗しても新しい道具の記録は確定したまま残り、次の resume にも使います。再開した子から Mail で同じ会話と必要な道具の実呼び出しの報告を受け、受信を確認してください。/delegate の最後の受信確認は省略できません。
+
+変更中にプロセスが落ちると pending の世代を残して resume / purge を止めます。tmux が無く子が停止していることを確認し、エラーに出る世代だけを使って、`python3 "$AGENTSTACK_HOME/hooks/child_resume.py" rollback-tools-change --runtime-dir "$AGENTSTACK_RUNTIME_DIR" --agent-name <NAME> --generation <GENERATION>` で回収します。開始途中・復元途中は旧選択へ戻し、確定を journal に記録済みなら新しい選択を保って後片付けを完了します。途中で落ちても同じ世代で再実行できます。復元は起動中・resume 中や世代が変わった子には拒否します。credential や private state の中身を表示・手修正しないでください。
+
+実機確認（2026-10-05）: Claude Code 2.1.289 は道具無しから同じ会話を `--resume` し、新たな chrome-devtools MCP の `new_page about:blank` を実際に成功させました。sandbox 内で Chrome を起動できないため、既存 CDP サービスへ接続した試験です。Codex CLI 0.159.2 は resume で道具を変えても呼び出しへ反映されない既知の制限があり、未解決です。同じ session ID と marker は維持し、native `/mcp` には chrome-devtools connected / 30 tools が出ましたが、model は新しい道具を unavailable と返し、実呼び出しは確認できませんでした。`--no-daemon` の対照も成功せず、原因は未確定です。この版の Codex で途中の道具追加が使えるとは扱いません。
+
 ### 記録と resume
 
-- Claude: 選択は [Claude in Chrome](#claude-child-とブラウザ操作claude-in-chrome) と同じ起動の記録（`<name>.claude-launch.<session-id>.json`、version 3）に `base` と `tools` として残り、会話に結び付きます。dashboard の resume は、この記録と今の利用者の設定から同じ strict の設定と flag を作り直します。作れなければ（server が消えた、computer use が有効になった等）、または child の state が無く strict を付けられないときは、resume を止めて理由を返します。SessionStart hook は、起動・resume・compaction のたびに渡された道具を child に伝え直します
+- Claude: 選択は [Claude in Chrome](#claude-child-とブラウザ操作claude-in-chrome) と同じ起動の記録（`<name>.claude-launch.<session-id>.json`、起動 version 3 / resume の置換 version 4）に `base` と `tools` として残り、会話に結び付きます。dashboard の resume は、この記録と今の利用者の設定から同じ strict の設定と flag を作り直します。作れなければ（server が消えた、computer use が有効になった等）、または child の state が無く strict を付けられないときは、resume を止めて理由を返します。SessionStart hook は、起動・resume・compaction のたびに渡された道具を child に伝え直します
 - Codex: 選択は `AGENTSTACK_RUNTIME_DIR/child-agents/<name>.tools.json`（0600）に残り、`child_resume.py build-home` が起動と resume のたびに子の `config.toml` に当てます。記録が壊れていれば home を作らず、起動・resume は止まります
 
 ### 約束の水準
@@ -247,7 +264,7 @@ WSL から起動した Windows のプロセスは、その WSL が動く Windows
 
 これは child への方針であって、技術的な隔離ではありません。child は利用者と同じ権限で動き、自分の設定ファイルや記録を書き換えられます。dashboard の API にも呼び出し元の認証はありません。画面操作の本当の歯止めは、Mac の computer use のアプリごとの許可（人が画面で出す）と、Windows-MCP を起動する側（公開する tool を絞る）に置いてください。
 
-動いている child に道具を足す・resume で道具を変える（`/api/jump` の `tools`）、roster と DECK への表示、NEW AGENT の欄は、まだありません。
+道具変更は EXIT と resume で行います。動作中の process への追加や UI の道具欄はありません。
 
 ## ブラウザと画面操作: 何が届くか、人がやること
 

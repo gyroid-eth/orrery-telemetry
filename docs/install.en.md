@@ -6,6 +6,9 @@
 
 This document is for people installing ORRERY Telemetry (this repository) for the first time. It takes three commands to install, two to verify, and one to start the first agent. Migration instructions for previous users of the third-party MCP Agent Mail are collected in the [appendix](#appendix-for-previous-mcp-agent-mail-users) at the end.
 
+
+The installer also installs `bin/agentstack-resume`, used by the [stopped-child tool change procedure](delegation.en.md#resume-a-stopped-child-with-different-tools).
+
 ## Supported environment
 
 macOS is the primary target. The launchers and hooks are implemented to work with the system Bash 3.2 on macOS.

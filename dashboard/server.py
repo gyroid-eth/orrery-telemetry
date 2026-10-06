@@ -3069,7 +3069,7 @@ def _claude_child_tools(session: str, sid: str) -> tuple[dict | None, str]:
     if state is None:
         return None, ""
     spec = {"base": state["base"], "tools": state["tools"]}
-    return (spec if tools_module.restrictive(spec) else None), ""
+    return (spec if state["version"] == 4 or tools_module.restrictive(spec) else None), ""
 
 
 def _claude_resume_tools(session: str, sid: str, cwd: str,
@@ -3607,8 +3607,15 @@ def _codex_resume_child_home(
                 import tomllib  # only here: build-home already needs Python 3.11
 
                 config_path = os.path.join(source_home, "config.toml")
-                with open(config_path, "rb") as handle:
-                    config = tomllib.load(handle)
+                config = tomllib.loads(pathlib.Path(config_path).read_text()) if os.path.exists(config_path) else {}
+                overlay = os.environ.get("AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY", "").strip()
+                if overlay:
+                    try:
+                        extra = tomllib.loads(pathlib.Path(overlay).read_text())
+                        module._drop_protected_overlay_tables(extra)
+                        module._deep_merge(config, extra)
+                    except (ValueError, OSError):
+                        pass
                 tools_module.codex_apply(config, spec)
         except (OSError, ValueError) as exc:
             raise _ResumeCapabilityError(
@@ -4461,7 +4468,8 @@ def _rebuild_codex_child_home(
     ]
     try:
         result = subprocess.run(
-            command, capture_output=True, text=True, timeout=30, check=False
+            command, capture_output=True, text=True, timeout=30, check=False,
+            env={**os.environ, "AGENTSTACK_TOOLS_CHANGE_GENERATION": _child_resume_module().tools_change_generation()},
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise _ResumeCapabilityError(
@@ -4545,6 +4553,9 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None) -> dict
         f'export AGENTSTACK_CODEX_LAUNCH_ORIGIN={shlex.quote(launch_origin)}; '
     )
     if launch_origin == "child":
+        generation = _child_resume_module().tools_change_generation()
+        if generation:
+            launch_prefix += f'export AGENTSTACK_TOOLS_CHANGE_GENERATION={shlex.quote(generation)}; '
         child_home_env = (
             f'export CODEX_HOME={shlex.quote(child_home)}; '
             f'export CODEX_SHARED_CODEX_DIR={shlex.quote(child_home)}; '
@@ -6137,7 +6148,130 @@ def _ttyd_cleanup() -> None:
         _ttyd_kill(rec)
 
 
-def do_jump(session: str, *, open_terminal: bool | None = None) -> dict:
+_TOOLS_UNSET = object()
+
+
+def do_jump(session: str, *, open_terminal: bool | None = None,
+            base=_TOOLS_UNSET, tools=_TOOLS_UNSET) -> dict:
+    """A tools request replaces a stopped managed child's selection."""
+    if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_.\-]+", session):
+        return {"ok": False, "error": "invalid session name"}
+    requested = base is not _TOOLS_UNSET or tools is not _TOOLS_UNSET
+    if not requested and not os.path.lexists(os.path.join(RUNTIME_DIR, "child-agents", f"{session}.json")):
+        return _do_jump(session, open_terminal=open_terminal)
+    try:
+        module = _child_resume_module()
+        with module.tools_change_lock(pathlib.Path(RUNTIME_DIR), session):
+            if requested:
+                return _jump_with_tools(session, module, base=base, tools=tools,
+                                        open_terminal=open_terminal)
+            return _do_jump(session, open_terminal=open_terminal)
+    except (ValueError, OSError) as exc:
+        return {"ok": False, "error": str(exc), "resume_capability": "config_unrestorable"}
+
+
+def _jump_with_tools(session, module, *, base, tools, open_terminal):
+    program = _agent_program(session)
+    provider = "codex" if program in _CODEX_PROGRAMS else "claude" if program in {"claude", "claude-code"} else None
+    if provider is None:
+        return {"ok": False, "error": "Tools changes require a retained Claude or Codex CLI child"}
+    live = _child_session_live(session, module.boot_time())
+    if live is None:
+        return {"ok": False, "error": "Cannot confirm whether the child has stopped"}
+    if live:
+        found = lookup_agent(session)
+        if not found or found.get("category") != "finished":
+            return {"ok": False, "error": "Exit the child and confirm it has stopped before changing tools"}
+    selection = _child_tools_module()
+    if base is not _TOOLS_UNSET and base not in ("default", "mail-only"):
+        return {"ok": False, "error": "base must be default or mail-only"}
+    if tools is not _TOOLS_UNSET and not isinstance(tools, dict):
+        return {"ok": False, "error": "tools must be an object"}
+    runtime = pathlib.Path(RUNTIME_DIR)
+    if provider == "codex":
+        path = _codex_transcript_path(session)
+        sid, cwd = _codex_meta(path) if path else (None, None)
+        registration = _codex_registration(session)
+        if not path or not registration or not sid or not cwd:
+            return {"ok": False, "error": "The child's conversation and registration cannot be verified"}
+        provenance, error = _codex_resume_provenance(session, registration=registration, transcript_path=path)
+        if error or not provenance or provenance.get("launch_origin") != "child":
+            return {"ok": False, "error": "Tools changes require a retained child conversation"}
+        state = module.inspect_retained(runtime, session, agent_id=registration["agent_id"],
+                                        project_key=registration["project_key"], program=registration["program"])
+        record = runtime / "child-agents" / f"{session}.tools.json"
+        old = selection.read_codex_record(str(record)) or {
+            "base": "mail-only" if state["codex_mcp_profile"] == "orrery-only" else "default", "tools": {}}
+    else:
+        path = _transcript_path(session)
+        sid = os.path.basename(path)[:-6] if path else ""
+        cwd = _transcript_cwd(path) if path else ""
+        if not sid or not cwd or _claude_conversation_reason(session)[1]:
+            return {"ok": False, "error": "Tools changes require a retained child conversation"}
+        registration, _token, state = _claude_resume_material(session)
+        if state is None or "_legacy_sha256" in state:
+            return {"ok": False, "error": "Tools changes require a retained child conversation"}
+        policy = _claude_chrome_policy_module()
+        record = pathlib.Path(policy.session_path(str(runtime / "child-agents"), session, sid))
+        prior = policy.session_record(str(record.parent), session, sid)
+        old = {"base": prior["base"], "tools": prior["tools"]} if prior else {"base": "default", "tools": {}}
+        if prior and prior["claude_chrome"] and "browser" not in old["tools"]:
+            old["tools"] = {**old["tools"], "browser": {"device": prior["chrome_device"]}}
+    spec = selection.normalize(old["base"] if base is _TOOLS_UNSET else base,
+                               old["tools"] if tools is _TOOLS_UNSET else tools)
+    selection.check_provider(spec, provider)
+    if provider == "codex":
+        source = pathlib.Path(os.path.expanduser(os.environ.get("CODEX_HOME", "").strip() or "~/.codex"))
+        config_path = source / "config.toml"
+        config = module._toml().loads(config_path.read_text()) if config_path.exists() else {}
+        overlay = os.environ.get("AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY", "").strip()
+        if overlay:
+            try:
+                extra = module._toml().loads(pathlib.Path(overlay).read_text())
+                module._drop_protected_overlay_tables(extra)
+                module._deep_merge(config, extra)
+            except (ValueError, OSError):
+                pass  # Same optional overlay contract as build-home.
+        selection.codex_apply(config, spec)
+        candidate = {"version": selection.CODEX_RECORD_VERSION, **spec}
+        profile = "orrery-only" if spec["base"] == "mail-only" else "inherit"
+    else:
+        chrome = "browser" in spec["tools"]
+        selection.claude_plan(spec, cwd=cwd, chrome=chrome,
+                             claude_json=_env_path("AGENTSTACK_CLAUDE_JSON", "~/.claude.json"))
+        candidate = {"version": 4, "agent_name": session, "session_id": sid,
+                     "launch_id": secrets.token_hex(16), "standalone": False,
+                     "claude_chrome": chrome,
+                     "chrome_device": spec["tools"].get("browser", {}).get("device", ""), **spec}
+        profile = None
+    generation = module.begin_tools_change(runtime, session, state, record, candidate, profile)
+    try:
+        with module.owned_tools_change(generation):
+            _invalidate_resume_capability_cache(session)
+            result = _do_jump(session, open_terminal=open_terminal)
+        if result.get("ok") and result.get("action") != "resumed":
+            result = {"ok": False, "error": "The child became active before the tools-changing resume"}
+    except Exception:
+        # Only this generation may restore the previous selection/config.
+        module.finish_tools_change(runtime, session, generation, commit=False)
+        raise
+    if result.get("ok"):
+        try:
+            module.finish_tools_change(runtime, session, generation, commit=True)
+        except Exception:
+            # Launch has already been accepted. Do not undo a selection used
+            # by a running child or report that accepted launch as a failure.
+            result = {**result, "warning": "; ".join(filter(None, (
+                result.get("warning"), f"Tools change ({generation}) cleanup is pending; recover this generation before another resume")))}
+    else:
+        module.finish_tools_change(runtime, session, generation, commit=False)
+    _invalidate_resume_capability_cache(session)
+    if result.get("ok"):
+        result = {**result, "tools_changed": True, "base": spec["base"], "tools": spec["tools"]}
+    return result
+
+
+def _do_jump(session: str, *, open_terminal: bool | None = None) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_.\-]+", session or ""):
         return {"ok": False, "error": "invalid session name"}
     # Codex App lives outside tmux and its provider owns the safe activation
@@ -8341,7 +8475,7 @@ class Handler(BaseHTTPRequestHandler):
             # API (ORRERY cockpit): raise it only when something they rely on
             # is added or changes meaning, and say so in the CHANGELOG. It is
             # managed this way from 2 on; every earlier release reported 1.
-            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 8}).encode(), "application/json; charset=utf-8")
+            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 9}).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")
@@ -8655,10 +8789,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/jump":
             if "open" in body and type(body["open"]) is not bool:
                 result = {"ok": False, "error": "open must be a boolean"}
-            elif "open" in body:
-                result = do_jump(session, open_terminal=body["open"])
             else:
-                result = do_jump(session)
+                options = {key: body[key] for key in ("base", "tools") if key in body}
+                if "open" in body:
+                    options["open_terminal"] = body["open"]
+                result = do_jump(session, **options)
         elif path == "/api/exit":
             result = do_exit(session)
         elif path == "/api/annotate":

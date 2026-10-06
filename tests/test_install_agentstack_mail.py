@@ -755,7 +755,8 @@ def test_reinstall_adopts_the_running_candidate_enroll_cli_and_wrapper_inspects(
         assert json.loads(inspected.stdout)["ready"] is True
     finally:
         _stop_mail(home, state_root, mail_port)
-        stop_dashboard(home, label_prefix=env["AGENTSTACK_LABEL_PREFIX"])
+        # The installer ran under _fake_linux_bin; it never loaded launchd.
+        stop_dashboard(home, label_prefix=env["AGENTSTACK_LABEL_PREFIX"], launchd=False)
 
 
 def _copy_persistent_launcher(stack: pathlib.Path) -> pathlib.Path:

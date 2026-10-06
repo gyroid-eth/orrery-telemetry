@@ -491,7 +491,8 @@ def test_real_install_reuses_unknown_listener_without_claiming_deployment_or_tri
     finally:
         dashboard_pidfile = home / ".agentstack" / "runtime" / "dashboard.pid"
         if dashboard_pidfile.exists():
-            stop_dashboard(home, label_prefix=f"{TEST_LABEL_PREFIX}.mail-probe")
+            # _run_unknown_listener_install uses a Linux uname stub.
+            stop_dashboard(home, label_prefix=f"{TEST_LABEL_PREFIX}.mail-probe", launchd=False)
         server.shutdown()
 
     assert result.returncode == 0, result.stdout + result.stderr

@@ -66,7 +66,7 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 | `--claude-chrome` | Start a Claude child with `--chrome` (Claude in Chrome). Claude children only |
 | `--claude-chrome-device <deviceId>` | Same, and tell the child which connected browser to use |
 | `--base mail-only` | Give the child ORRERY Mail and only what `--tools` selects (Claude also gets `--no-chrome` unless a browser is selected; Codex gets the `orrery-only` profile) |
-| `--tools <spec>` | Add a tool; repeatable or comma separated: `browser[:<deviceId>]` (Claude only), `screen` / `screen:operate` (macOS computer use, Claude only), `screen:<read\|operate>:<server>`, `mcp:<server>` (copied, no tool approved), `mcp:<server>:all` (every tool approved, including arbitrary code on that host; only when the user asked for it) |
+| `--tools <spec>` | Add a tool; repeatable or comma separated: `browser[:<deviceId>]` (Claude in Chrome on Claude; chrome-devtools on Codex), `screen` / `screen:operate` (macOS computer use, Claude only), `screen:<read\|operate>:<server>`, `mcp:<server>` (copied, no tool approved), `mcp:<server>:all` (every tool approved, including arbitrary code on that host; only when the user asked for it) |
 | anything else | part of the task text |
 
 The child's name is never taken from the arguments. Only an explicit `--name <Adjective-Scientist>` names a child; otherwise the registration helper picks one. A word such as `terra` is a model, not a name.
@@ -82,6 +82,19 @@ python3 "$AGENTSTACK_HOME/dashboard/claude_models.py" aliases   # family<TAB>mod
 Register the formal ID, and pass the same ID to `spawn_child.sh` with `--model`.
 
 MCP defaults are deliberately backward-compatible: omit `--codex-mcp` or use `--codex-mcp inherit` to preserve the user's configured MCP/plugin surface. Use `--codex-mcp orrery-only` for a Codex child whose task needs shell/files plus ORRERY coordination but no inherited browser, application, or account tools. This is an explicit capability reduction: do not select it when the task depends on a plugin skill or any non-ORRERY MCP server.
+
+## Resume an existing child with different tools
+
+A tools-changing resume succeeds when tmux/the terminal accepts startup; it does not wait for shell bootstrap/authentication. A later failure keeps the committed tools record for the next resume. The final child report/receipt confirmation in this procedure must not be skipped.
+
+Route `/delegate --resume <NAME> [--base default|mail-only] [--tools <spec>]` here **before preregistration**. This changes an existing child, so do not name, register or spawn a new agent.
+
+1. Agree on a work boundary over ORRERY Mail, let the child save its work, and release its reservations. Send instructions through Mail; never through its tmux pane.
+2. Use the dashboard `POST /api/exit` for that exact child, then confirm its category is `gone` or `finished` using `GET /api/agents`. Do not change tools while it is running or its state is unknown.
+3. Run `"${AGENTSTACK_HOME:-$HOME/.agentstack}/bin/agentstack-resume" <NAME> --tools <spec>` (same repeated/comma grammar as spawn). `--clear-tools` removes extra tools; `--base` alone retains existing tools. `--detached` avoids opening a terminal. A provided tools list replaces the whole list, so include choices you want to keep. Omitted base retains the child's base; omitting both preserves its selection. Installer defaults are never added on resume.
+4. Require a successful API response, then ask the resumed child over ORRERY Mail to confirm the same conversation and actually call the needed tool. API success confirms startup, not a successful MCP call. Report an unavailable tool without claiming it works or launching a substitute child silently.
+
+Only retained Claude/Codex CLI children are supported; standalone/legacy/conversation-only entries and Codex App refuse changes. The native session ID and directory stay the same. The API serializes changes and restores that generation's previous selection/generated settings when startup fails. A crash leaves a pending generation fail-closed; use the documented recovery in `docs/delegation.md` rather than editing private state or reading tokens. Claude resume with newly attached Chrome MCP was verified on 2.1.289; Codex 0.159.2 did not reflect changed tools in calls on resume: native `/mcp` connected inventory was visible but the model reported the tool unavailable. This is an unresolved known limitation; do not claim Codex mid-task tool addition works.
 
 ## 1. Analyze Risk Before Spawning
 

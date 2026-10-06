@@ -6,6 +6,9 @@
 
 この文書は、はじめて ORRERY Telemetry（この repository）を入れる人向けです。3 コマンドで入れて、2 コマンドで確かめ、1 コマンドで最初の agent を起動します。以前 third-party の MCP Agent Mail を使っていた人向けの移行手順は、末尾の[付録](#付録-以前-mcp-agent-mail-を使っていた場合)にまとめました。
 
+
+installer は `bin/agentstack-resume` も配置します。停止した子の道具を変更する [resume の手順](delegation.md#停止した子の道具を変更して-resume-する)で使います。
+
 ## 動作環境
 
 主対象は macOS です。launcher と hook は macOS 標準 Bash 3.2 でも動くよう実装されています。

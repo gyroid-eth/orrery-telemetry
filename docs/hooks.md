@@ -8,6 +8,9 @@
 
 [`hooks/settings.template.json`](../hooks/settings.template.json) は event と command の対応を定義し、[`hooks/README.md`](../hooks/README.md) は settings merge の安全方針を定義します。この文書は、実際にいつ起動し、何を保証するかを説明する利用者向け reference です。
 
+
+停止した子の道具を変更する `agentstack-resume` は `/api/jump` を呼びます。`child_resume.py` が変更世代と生成設定の復元を管理します。[道具変更](delegation.md#停止した子の道具を変更して-resume-する)を参照してください。
+
 ## Claude Code event hook（8件）
 
 installer が `settings.template.json` を `~/.claude/settings.json` へ merge すると、次の event で自動実行されます。

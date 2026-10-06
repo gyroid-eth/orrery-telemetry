@@ -626,20 +626,47 @@ def _stop_any_dashboard_this_module_started(tmp_path):
             continue
         deadline = time.monotonic() + 5.0
         while True:
-            command = subprocess.run(
-                ["ps", "-ww", "-o", "command=", "-p", str(pid)],
-                capture_output=True, text=True, check=False,
-            ).stdout
-            alive = bool(command.strip()) and runner in command
-            if not alive or time.monotonic() > deadline:
+            # A controller may return before its runner exits. Positive PID
+            # absence needs no process inventory, which a sandbox can forbid.
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
                 break
-            time.sleep(0.2)
-        if alive:
-            os.kill(pid, signal.SIGTERM)
-            failures.append(
-                f"ORRERY Mail runner pid {pid} was still running after the test "
-                f"(recorded in {pidfile}); the uninstall or teardown left it behind"
-            )
+            except PermissionError:
+                failures.append(f"cannot establish ownership of Mail runner pid {pid}")
+                break
+            if time.monotonic() < deadline:
+                time.sleep(0.2)
+                continue
+            try:
+                inspected = subprocess.run(
+                    ["ps", "-ww", "-o", "command=", "-p", str(pid)],
+                    capture_output=True, text=True, check=False,
+                )
+            except OSError as exc:
+                failures.append(f"cannot inspect recorded Mail runner pid {pid}: {exc}")
+                break
+            if inspected.returncode or inspected.stderr.strip():
+                failures.append(f"cannot inspect recorded Mail runner pid {pid}")
+                break
+            if not inspected.stdout.strip():
+                # An empty inventory is not proof that a formerly live PID
+                # exited. Confirm absence with the kernel before accepting it.
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                except PermissionError:
+                    pass
+                failures.append(f"cannot inspect recorded Mail runner pid {pid}")
+                break
+            if runner in inspected.stdout:
+                os.kill(pid, signal.SIGTERM)
+                failures.append(
+                    f"ORRERY Mail runner pid {pid} was still running after the test "
+                    f"(recorded in {pidfile}); the uninstall or teardown left it behind"
+                )
+            break
 
     # The fake system manager used by this module records its pid here rather
     # than in the install's runtime directory.
@@ -655,7 +682,9 @@ def _stop_any_dashboard_this_module_started(tmp_path):
         if not (home / ".agentstack" / "runtime" / "dashboard.pid").is_file():
             continue
         try:
-            stop_dashboard(home, appear_timeout=0.1)
+            # Every installer rehearsal in this module uses a Linux uname
+            # stub and a fake system manager; it cannot create launchd jobs.
+            stop_dashboard(home, appear_timeout=0.1, launchd=False)
         except Exception as exc:  # noqa: BLE001 - reported below, not hidden
             failures.append(f"{home}: {exc}")
 

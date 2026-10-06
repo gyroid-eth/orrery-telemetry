@@ -471,7 +471,11 @@ def _fake_codex_launch_env(
         "printf '\\035\\n'; } >> \"$FAKE_TMUX_LOG\"\n"
         "case \"${1:-}\" in\n"
         "  new-session) : > \"$FAKE_TMUX_ALIVE\" ;;\n"
-        "  capture-pane) printf '\\ngpt-5.6-terra medium · ~/workspace\\n' ;;\n"
+        # This binding fixture launches a running child. An idle model header
+        # alone makes the launcher exhaust its initial-task watch; fake sleep
+        # removes the delays but still leaves 30 polls near the outer timeout.
+        "  capture-pane) printf '\\ngpt-5.6-terra medium · ~/workspace\\n"
+        "Working (1s • esc to interrupt)\\n' ;;\n"
         "  has-session) [[ -f \"$FAKE_TMUX_ALIVE\" ]] ;;\n"
         "  kill-session) rm -f \"$FAKE_TMUX_ALIVE\" ;;\n"
         "  display-message) printf 'ParentAgent\\n' ;;\n"
