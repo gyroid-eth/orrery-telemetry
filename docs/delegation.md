@@ -112,8 +112,9 @@ Codex CLI 0.154.0 の interactive session で、事前設定済みの stdio MCP 
   - 記録が無い: 従来どおり（inherit）で再開します。**もともと指定なしだったのか、記録の保存に失敗したのかは区別できません。指定したブラウザの復元も、ブラウザを使わせないことも保証しません。**
 - **既知の限界**。記録の保存に失敗したセッション（例: `/clear` 後の新しい session ID で書き込めなかった場合）には、その場で hook が「ブラウザを使わない」と伝えます。ただし、その session ID を後で resume すると、記録が無い扱い（inherit）になります。記録を確認できない会話でブラウザ作業を続ける必要があるときは、deviceId を指定した新しい cold の child を起動してください。SessionStart hook は、記録がある会話にだけ、起動・resume・compaction のたびに同じ方針を伝え直します。
 - **WSL**。公式ドキュメント（[Claude in Chrome](https://code.claude.com/docs/en/chrome)）では WSL は非対応です。Claude Code 2.1.283 で、アカウント経由で接続した Windows のブラウザを WSL の `claude -p --chrome` から操作できたことを 1 台の実機で確認しています。サポート対象として扱わず、version を上げたら確認し直してください。
-- **起動ごとの承認**。Claude in Chrome を付けた子（installer の既定・旧 `claude_chrome` 指定も含む）は、既知の22 tool を1本の `--allowed-tools` で承認します: `browser_batch`, `computer`, `file_upload`, `find`, `form_input`, `get_page_text`, `gif_creator`, `javascript_tool`, `list_connected_browsers`, `navigate`, `read_console_messages`, `read_network_requests`, `read_page`, `resize_window`, `select_browser`, `shortcuts_execute`, `shortcuts_list`, `switch_browser`, `tabs_close_mcp`, `tabs_context_mcp`, `tabs_create_mcp`, `upload_image`。名前の表は `hooks/child_tools.py` の `TOOL_TABLE` と同じ場所にあり、新しい名前は承認しません。
-  選択した screen/MCP の承認と結合し、その起動だけに適用します。利用者の設定・Chrome なしの子は変わりません。Chrome 拡張側の接続・アクセス許可は引き続き人が操作します。
+- **起動ごとの承認**。Claude in Chrome を付けた子（installer の既定・旧 `claude_chrome` 指定も含む）は、Claude Code 側の tool 許可確認を出さないため、既知の22 tool を1本の `--allowed-tools` で承認します: `browser_batch`, `computer`, `file_upload`, `find`, `form_input`, `get_page_text`, `gif_creator`, `javascript_tool`, `list_connected_browsers`, `navigate`, `read_console_messages`, `read_network_requests`, `read_page`, `resize_window`, `select_browser`, `shortcuts_execute`, `shortcuts_list`, `switch_browser`, `tabs_close_mcp`, `tabs_context_mcp`, `tabs_create_mcp`, `upload_image`。名前の表は `hooks/child_tools.py` の `TOOL_TABLE` と同じ場所にあり、新しい名前は承認しません。
+  選択した screen/MCP の承認と結合し、その起動だけに適用します。利用者の設定・Chrome なしの子は変わりません。Claude in Chrome 自身には別の permission mode（既定 `ask`）があり、タブを開く等のブラウザ操作は Chrome 側の確認で**人が Allow を押す**前提です。headless の子はその確認で止まります。拡張の接続・アクセス許可も人の操作のままで、`--allowed-tools` はこれらを省略しません。
+  2026-10-06、WSL2 の Ubuntu、Claude Code 2.1.290 で実測: `tools.browser` の子の起動に22 tool の `--allowed-tools` が付いても、`tabs_create_mcp` で Claude in Chrome の Allow/Deny が出て停止しました。`-p` では `bypassPermissions`・`--dangerously-skip-permissions` でも `select_browser` が `Claude in Chrome requires permission` で拒否されました。ORRERY は人の確認を前提とし、この Chrome の permission mode を bypass しません。
 - **env の既定**。`AGENTSTACK_CLAUDE_CHILD_CHROME=1` と `AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE=<id>` を設定すると、`spawn_child.sh` から起動する Claude child すべてに同じ指定が付きます。CLI のフラグが env より優先されます。Codex child では無視し、Codex の起動・再開時には env から外します（Codex child が起動する子へ引き継がないため）。dashboard の NEW AGENT は、フォームで指定した値だけを使い、env の既定は使いません。
 
 ## Claude child がタスクを受け取る仕組み
@@ -164,7 +165,7 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 
 | `--tools` | Claude child | Codex child |
 |---|---|---|
-| `browser` / `browser:<deviceId>` | `--chrome`、既知の22 tool の起動ごとの承認、deviceId の指示（[Claude in Chrome](#claude-child-とブラウザ操作claude-in-chrome) と同じ。`--claude-chrome-device` と deviceId が食い違えば拒否） | 利用者の `config.toml` の chrome-devtools server（`chrome-devtools` という名前、または `chrome-devtools-mcp` を起動する 1 つの server）を有効にし、下の表の tool だけを公開して tool ごとに承認します。`browser:<deviceId>` の deviceId は Claude 専用なので拒否します。server が無い、wrapper script で tool を分類できないときは起動を止めます |
+| `browser` / `browser:<deviceId>` | `--chrome`、既知の22 tool の Claude Code 側の承認、deviceId の指示。ブラウザ操作の確認は人が Allow を押し、headless の子はそこで止まる（[Claude in Chrome](#claude-child-とブラウザ操作claude-in-chrome) と同じ。`--claude-chrome-device` と deviceId が食い違えば拒否） | 利用者の `config.toml` の chrome-devtools server（`chrome-devtools` という名前、または `chrome-devtools-mcp` を起動する 1 つの server）を有効にし、下の表の tool だけを公開して tool ごとに承認します。`browser:<deviceId>` の deviceId は Claude 専用なので拒否します。server が無い、wrapper script で tool を分類できないときは起動を止めます |
 | `screen` / `screen:operate` | Mac の組み込み computer use。子の起動ディレクトリの project で有効（`~/.claude.json` の `projects[<dir>].enabledMcpServers` にあり、`disabledMcpServers` に無い）なときだけ起動します。無効なら止めます | 使えません（server 名が要ります） |
 | `screen:<read\|operate>:<server>` | 利用者の画面系 server（WSL の Windows-MCP など）を strict の設定に写します | 子の `config.toml` でその server を有効にします |
 | `mcp:<server>` | 利用者の server の定義を strict の設定に写します（tool は承認しない） | 子の `config.toml` でその server を有効にします（tool は承認しない） |
@@ -194,7 +195,7 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 - `browser`（Codex）は「読む」と「操作する」を、`screen:read:chrome-devtools` は「読む」だけを公開して承認します。read のときは残りを `enabled_tools` から外します
 - 実際の定義は版を固定しない `npx chrome-devtools-mcp@latest` が普通なので、この server だけは版が分からなくても**名前**で分類します。表に載った名前の tool だけを tool ごとに承認し、新しい版で増えた tool は公開も承認もされません。Windows-MCP の版固定とは違い、任意実行を含む既知の名前が選んだ範囲を定義し、新しい名前は範囲外に保つためです
 - Codex の `browser`、または Codex と Claude（既知固定版のみ）の Chrome MCP `screen:operate` を選ぶと、既知の全30 toolを承認します。任意の JavaScript 実行（`evaluate_script` と `navigate_page.initScript`）、ホストへの保存、ローカルファイルの upload も含み、任意の出力パスなど引数込みで tool 全体を承認します。範囲を絞りたいときは `screen:read:<server>`、または browser/operate を選ばず overlay を使います（browser/operate の選択は tool の allowlist を置き換えます）。read は `take_snapshot.filePath`、`take_screenshot.filePath`、`get_network_request.requestFilePath` / `responseFilePath` を持つ3 tool を除外します。
-- Claude の Chrome MCP screen 選択は既知固定版が必要です。未知版は allowlist で未知 tool を隠せないため止め、固定版の read では残りを `--disallowed-tools` に指定します。Claude in Chrome の browser は、上の別の22 tool の名前の表で起動ごとに承認します。
+- Claude の Chrome MCP screen 選択は既知固定版が必要です。未知版は allowlist で未知 tool を隠せないため止め、固定版の read では残りを `--disallowed-tools` に指定します。Claude in Chrome の browser は、上の別の22 tool の名前の表で Claude Code 側を承認しますが、Chrome 自身のブラウザ操作の確認には人が Allow を押します。
 - 分類するのは `npx [-y|--yes] chrome-devtools-mcp[@version]` による直接の起動です。wrapper や `npx --package chrome-devtools-mcp@version other-program` は分類しません。browser と別の screen server は併用でき、それぞれの承認範囲を保ちます。
 - `mcp:chrome-devtools:all` は引き続き既知固定版（`chrome-devtools-mcp@1.10.1`）が必要です。Codex の browser/operate は版が固定されていなくても既知の名前を承認します
 - 承認は Codex の tool 承認だけです。`--autoConnect` の Chrome 側の接続許可は別で、Chrome の接続許可を人が答える点は変わりません
@@ -211,7 +212,7 @@ provider と最終の作業フォルダで、既定の項目を1つずつ確認�
 
 承認は child の起動の中だけで、表で分かる tool ごとに渡します。利用者の `settings.json`・`~/.codex/config.toml` と全体の承認方針（Codex の `never`）は変えず、server 全体（Claude の `mcp__<server>`、Codex の `default_tools_approval_mode`）を承認することはありません。
 
-- Claude は `--allowed-tools`、Codex は tool ごとの `approval_mode = "approve"` で渡します
+- Claude は `--allowed-tools`、Codex は tool ごとの `approval_mode = "approve"` で渡します。Claude in Chrome 自身の操作確認は別で、人が Allow を押す必要があります
 - `mcp:<server>`（`:all` なし）で選んだ server と、版の分からない server は、写す・有効にするだけです。その tool を呼ぶには、利用者が自分の設定で承認します（Codex なら installer の overlay）。承認が無いと、無人の child は最初の呼び出しで止まります（WSL の Claude で、許可が無いと拒否され、`--allowed-tools` で許可すると呼べることを確かめました）
 - 承認は起動・resume のたびに、その時の server の版と表から決め直します。resume の前に server が表に無い版へ上がっていれば、承認は起動時より狭くなり（`screen:read` と `:all` は止まり）、広がることはありません
 
@@ -274,7 +275,7 @@ ORRERY から起動した agent（child・NEW AGENT）に、ブラウザと画�
 
 | | Mac | Windows（WSL2） |
 |---|---|---|
-| Claude × ブラウザ | 届く。Chrome を付けた起動ごとに既知の22 tool を承認。拡張の接続・アクセス許可は人が操作 | 届く。deviceId の指定が要る。Chrome を付けた起動ごとに既知の22 tool を承認し、拡張の接続・アクセス許可は人が操作 |
+| Claude × ブラウザ | 届く。Chrome を付けた起動ごとに22 tool を Claude Code 側で承認。拡張の接続・アクセス許可とブラウザ操作の確認は人が操作し、Allow を押す。headless の子は確認で止まる | 届く。deviceId の指定が要る。22 tool の承認でも Claude in Chrome の Allow/Deny は残る（2026-10-06、WSL2 の Ubuntu、Claude Code 2.1.290、`tabs_create_mcp` で実測）。人が Allow を押し、headless の子はそこで止まる |
 | Claude × 画面全体 | 起動ディレクトリの project で computer use が有効なときだけ届く。tool が応答するところまで確認し、操作は試していない（アプリごとに人が許可） | `--tools screen:operate:<server>` で Windows-MCP などを渡す（上の[選択](#子に渡す道具を選ぶ--base----tools)）。操作の成功は、製品の外で strict の設定に Windows-MCP を足した `claude -p` での実測で、この `--tools` の経路では確かめていない |
 | Codex × ブラウザ | chrome-devtools の tool を承認すれば届く（上の[承認](#codex-child-と-mcp-承認)） | 利用者の設定か overlay で server を渡し、tool を承認する。overlay で渡したとき tool が出なかった例があり、原因は未確定 |
 | Codex × 画面全体 | `node_repl` と同梱 plugin を通る。アプリの一覧を読むところまで確認済みで、操作はアプリごとに人が許可 | `screen:<read\|operate>:<server>` で渡す |
@@ -290,11 +291,11 @@ ORRERY から起動した agent（child・NEW AGENT）に、ブラウザと画�
 
 人が端末で直接 Codex を起動する場合に同じ許可が欲しければ、利用者自身が `~/.codex/config.toml` の `[mcp_servers.chrome-devtools]` に `default_tools_approval_mode = "approve"`（または tool ごとの `approval_mode`）を書きます。この許可は server の全 tool を含み、任意のページスクリプトを動かす `evaluate_script` も承認なしになります。人が画面を見ている対話の起動なら、書かずに承認を画面で出すほうが安全です。
 
-### 人がやること（事前の設定と、接続時の許可）
+### 人がやること（事前の設定と、接続・操作時の許可）
 
-ORRERY のコードでは開けない壁です。次の 1 つ目と 3〜5 つ目は agent が実行する前に人が一度済ませ、chrome-devtools の接続許可だけは接続のたびに人が答えます。
+事前の設定に加え、Claude in Chrome のブラウザ操作の確認と chrome-devtools の接続許可には、表示されたときに人が答えます。tool の起動ごとの承認ではこれらを省略しません。
 
-- **Claude in Chrome**: ブラウザに拡張を入れてログインし、接続中にする（拡張が止まっていると、agent の設定が正しくても動きません）。複数のブラウザがつながっているときは deviceId を選ぶ
+- **Claude in Chrome**: ブラウザに拡張を入れてログインし、接続中にする（拡張が止まっていると、agent の設定が正しくても動きません）。複数のブラウザがつながっているときは deviceId を選ぶ。ブラウザ操作の確認には人が Allow を押す。22 tool の Claude Code 側の承認でも、headless の子はその確認で止まる
 - **chrome-devtools（Codex）**: `--autoConnect` で繋ぐ Chrome を起動しておく（一度）。接続の許可は一度では済みません。MCP server が接続を要求するたびに Chrome が人に許可を求めるので、新しい child や再接続のたびに人が答えます。Codex 側で tool を `approve` にしても、この Chrome の許可は省けません。tool は見えていても、無人の child は Chrome の接続許可が出るまで呼び出しが進みません
 - **Computer use（Mac）**: アプリごとの許可（`request_access`）は人が画面で出します。Codex の approval policy とは別の仕組みなので、`never` でも `on-request` でも変わりません。事前にそのアプリを許可していないと agent は進めません。画面収録とアクセシビリティの許可も、macOS の設定で一度出します。computer use は Mac 全体で同時に 1 セッションだけです
 - **Claude の computer use（Mac）**: 使いたい project で `/mcp` から有効にします（`~/.claude.json` の `projects[<dir>].enabledMcpServers`）
