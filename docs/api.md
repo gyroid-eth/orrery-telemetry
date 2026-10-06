@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":9}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":10}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -113,6 +113,7 @@ curl -s http://127.0.0.1:8770/api/spawn-names
       "default_model":"gpt-6.1-sol",
       "model_source":"bundled",
       "model_error":"",
+      "model_note":"",
       "efforts":["low","medium","high","xhigh","max","ultra"],
       "effort_default":"xhigh"
     }
@@ -124,7 +125,7 @@ scientist rail の `status` は、その scientist と134語の adjective の組
 
 adjective は ORRERY Mail の正典 `SIMPLE_ADJECTIVES` Round 3 と逐語同期し、launcher・catalog・suggestion API が同じ source を使います。独自追加は strict deployment の name validation と乖離するため禁止です。
 
-Codex は同梱候補に期限内のCLIローカルcacheの候補を追加します。`AGENTSTACK_CODEX_MODELS` 明示時はその許可リストだけを使い、不正設定は `model_error` に返します。`model_source` は `bundled` / `local_cache` / `override` です。既定モデルは、起動対象 CLI が 0.159.0 以上なら `gpt-6.1-sol`、古い版なら `gpt-6-sol` です。版不明なら新鮮な catalog で判定します。候補順では決まりません。GPT-6.1 Sol には Codex CLI 0.159.0 以上が必要で、doctor は fallback と更新方法を note に出します。以前の世代を使う場合は `gpt-6-sol` のように正式 ID を指定してください。providerの `model_efforts` と `model_effort_defaults` はモデルIDをkeyとする辞書で、UIはこちらを優先します。空のeffort一覧はCLI既定を使うため、effortを省略してください。詳細は [設定](configuration.md#codex-model-catalog) を参照してください。
+Codex は同梱候補に取得から300秒以内のCLIローカルcacheの候補を追加します。`AGENTSTACK_CODEX_MODELS` 明示時はその許可リストだけを使い、不正設定は `model_error` に返します。`model_source` は `bundled` / `local_cache` / `override` です。モデル省略と `sol` の既定候補は、起動対象 CLI が 0.159.0 以上なら `gpt-6.1-sol`、古い版なら `gpt-6-sol`、版不明なら新鮮な catalog で初期判定します。その ID が選択された `CODEX_HOME` の cache に無ければ、`gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna` の順で次の掲載候補へ下げます。既定を下げる判断には期限切れの cache も使いますが、古い CLI を GPT-6.1 Sol へ上げることはありません。使える cache や次の候補が無ければ従来の既定を維持します。正式 ID の明示要求は置き換えません。provider の `model_note` は優先する既定から変更が無ければ空文字列で、変更があれば変更前後と理由を伝え、期限切れの場合は取得日時と `codex` 起動による更新案内も含みます。cache の `identity` は現在のログインと照合しておらず、fallback は利用権限の証明ではありません。provider の `model_efforts` と `model_effort_defaults` はモデルIDをkeyとする辞書で、UIはこちらを優先します。空のeffort一覧はCLI既定を使うため、effortを省略してください。詳細は [設定](configuration.md#codex-model-catalog) を参照してください。
 
 ## GET `/api/name-status`
 
@@ -570,6 +571,8 @@ API 8 では、`tools: {}` または `base: "default"` を明示すると `--bas
 ```
 
 `argv` は実起動と同じ builder で組み立てます。`name` を省略した場合の `<child-name>` は実起動で選ぶ名前の仮置きです。指定名は検証してそのまま表示しますが、登録時にサーバーが正規化する場合があります。`<child-token-file>` と Gemini の `launcher_env` にある `<gemini-task-file>` は、実起動でだけ作るファイルの仮置きです。`launcher_env` は provider 固有の上書き値で、継承する環境全体は含みません。プレビューでは identity 登録・予約・Mail・tmux・agent process 起動を行わず、token・task・annotation・log・worktree のファイルも作りません。parent の認証情報も不要です。検証では read-only の Git 確認と、実際の CLI/model の組を解決するため既存の時間制限付き Codex `--version` probe を実行する場合があります。`async: true` を併用してもプレビューだけを返します。名前や resources は予約しないため、実起動までに使用状況が変わる場合があります。
+
+Codex のモデル省略または `sol` で既定を変更した場合、preview・同期結果・非同期の pending と最終結果に `model_note` を含みます。変更前後の ID と理由を伝え、期限切れの cache の場合は取得日時と更新方法も示します。正式 ID を指定した要求にはこの置換通知を付けません。
 
 成功:
 

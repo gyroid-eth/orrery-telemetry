@@ -249,6 +249,7 @@ def test_spawn_names_advertises_codex_provider(monkeypatch):
         "id": "codex", "label": "Codex", "program": "codex-cli",
         "models": ["gpt-test-a", "gpt-test-b"], "default_model": "gpt-6.1-sol",
         "model_source": "override", "model_error": "", "overflow_models": [],
+        "model_note": "",
         "model_efforts": {"gpt-test-a": [], "gpt-test-b": []},
         "model_effort_defaults": {"gpt-test-a": "", "gpt-test-b": ""},
         "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"], "effort_default": "xhigh",
@@ -425,12 +426,29 @@ def test_mcp_call_shapes_credentials_to_the_live_server_schema(monkeypatch):
     }
 
 
-@pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6-pro"])
-def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path, model):
+@pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6-pro", "", "sol"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path, model, asynchronous):
     launcher = tmp_path / "spawn_child.sh"
     launcher.write_text("#!/bin/bash\n")
     launcher.chmod(0o755)
     calls, launched, environments = [], [], []
+    records = []
+    settled = threading.Event()
+    resolved = model if model and model != "sol" else "gpt-6-luna"
+    if resolved != model:
+        cache_home = tmp_path / "codex"
+        cache_home.mkdir()
+        monkeypatch.setenv("CODEX_HOME", str(cache_home))
+        (cache_home / "models_cache.json").write_text(json.dumps({
+            "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "models": [{"slug": "gpt-6-luna"}],
+        }))
+    def record(name, result):
+        records.append(result)
+        if not result.get("pending"):
+            settled.set()
+    monkeypatch.setattr(server, "_spawn_launch_record", record)
     monkeypatch.delenv("AGENTSTACK_PYTHON", raising=False)
 
     def mcp(method, args, timeout=15):
@@ -456,9 +474,20 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
     monkeypatch.setattr(server.time, "sleep", lambda _: None)
     monkeypatch.setattr(server.subprocess, "Popen", lambda args, **kwargs: (environments.append(kwargs["env"]), launched.append(args))[-1])
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
-    result = server.do_spawn({"parent": "Parent", "name": "Sunny-Curie", "task": "work", "dir": str(tmp_path), "provider": "codex", "model": model, "effort": "high"})
+    result = server.do_spawn({"parent": "Parent", "name": "Sunny-Curie", "task": "work", "dir": str(tmp_path), "provider": "codex", "model": model, "effort": "high", "async": asynchronous})
 
     assert result["ok"] is True
+    assert result["model"] == resolved
+    if asynchronous:
+        assert settled.wait(2), "mock launcher did not settle"
+        assert records[-1]["model"] == resolved
+    if resolved != model:
+        assert "from gpt-6.1-sol to gpt-6-luna" in result["model_note"]
+        assert result["model_note"] in (tmp_path / "logs/spawn.log").read_text()
+        if asynchronous:
+            assert records[0]["model_note"] == records[-1]["model_note"] == result["model_note"]
+    else:
+        assert "model_note" not in result
     assert environments[0]["AGENTSTACK_PYTHON"] == server.sys.executable
     assert result["requested_name"] == "Sunny-Curie"
     assert result["child_name"] == "SunnyCurie"
@@ -479,7 +508,7 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
         "project_key": "/project",
         "program": "codex-cli",
     }
-    assert launched[0][1:] == ["--pre-registered", "SunnyCurie", "--child-token-file", launched[0][4], "--codex", "--model", model, "--effort", "high", "work", str(tmp_path)]
+    assert launched[0][1:] == ["--pre-registered", "SunnyCurie", "--child-token-file", launched[0][4], "--codex", "--model", resolved, "--effort", "high", "work", str(tmp_path)]
 
 
 def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path):

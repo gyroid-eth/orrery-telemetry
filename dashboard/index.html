@@ -2914,6 +2914,7 @@ OFF = legacy snapshot+comet mode">
              aria-label="Model">
           <div class="spm-load">loading engine catalog</div>
         </div>
+        <div class="spm-hint" id="spm-model-note" aria-live="polite" hidden></div>
         <div class="spm-effort-row" id="spm-effort-row" hidden>
           <span class="spm-effort-label">EFFORT</span>
           <div class="spm-efforts" id="spm-efforts"
@@ -37968,6 +37969,7 @@ function normalizeSpawnProviders(catalog){
       modelEfforts:provider&&provider.model_efforts||null,
       modelEffortDefaults:provider&&provider.model_effort_defaults||{},
       modelError:String(provider&&provider.model_error||'').trim(),
+      modelNote:String(provider&&provider.model_note||'').trim(),
       overflowModels:(Array.isArray(provider&&provider.overflow_models)
         ? provider.overflow_models:[]).map(value=>String(value||'').trim())
         .filter(Boolean),
@@ -38260,6 +38262,10 @@ function renderSpawnEngineNote(){
     displayModel,spmSelectedEffort].filter(Boolean);
   SPM('spm-engine-note').textContent=parts.length
     ? parts.join(' · '):'provider · model';
+  const note=SPM('spm-model-note');
+  note.textContent=provider&&spmSelectedModel===provider.defaultModel
+    ?provider.modelNote||'':'';
+  note.hidden=!note.textContent;
 }
 
 async function loadSpawnCatalog(seq){
@@ -38363,6 +38369,8 @@ function openSpawnModal(){
   restoreSpawnAdvanced();
   SPM('spm-providers').innerHTML='';
   SPM('spm-engine-note').textContent='provider · model';
+  SPM('spm-model-note').textContent='';
+  SPM('spm-model-note').hidden=true;
   SPM('spm-models').innerHTML=
     '<div class="spm-load">loading engine catalog</div>';
   SPM('spm-efforts').innerHTML='';
