@@ -300,7 +300,7 @@ ORRERY のコードでは開けない壁です。次の 1 つ目と 3〜5 つ目
 
 - **Claude in Chrome**: ブラウザに拡張を入れてログインし、接続中にする（拡張が止まっていると、agent の設定が正しくても動きません）。複数のブラウザがつながっているときは deviceId を選ぶ
 - **chrome-devtools（Codex）**: `--autoConnect` で繋ぐ Chrome を起動しておく（一度）。接続の許可は一度では済みません。MCP server が接続を要求するたびに Chrome が人に許可を求めるので、新しい child や再接続のたびに人が答えます。Codex 側で tool を `approve` にしても、この Chrome の許可は省けません。tool は見えていても、無人の child は Chrome の接続許可が出るまで呼び出しが進みません
-- **Computer use（Mac）**: アプリごとの許可（`request_access`）は人が画面で出します。Codex の approval policy とは別の仕組みなので、`never` でも `on-request` でも変わりません。事前にそのアプリを許可していないと agent は進めません。画面収録とアクセシビリティの許可も、macOS の設定で一度出します。Claude の組み込み computer use は Mac 全体で同時に 1 セッションだけです。有効な project で別の Claude セッションが動いていると、子は `Computer use is in use by another Claude session` で止まります（2026-10-06、Mac、Claude Code で実測）
+- **Computer use（Mac）**: アプリごとの許可（`request_access`）は人が画面で出します。Codex の approval policy とは別の仕組みなので、`never` でも `on-request` でも変わりません。事前にそのアプリを許可していないと agent は進めません。画面収録とアクセシビリティの許可も、macOS の設定で一度出します。Claude の組み込み computer use は Mac 全体で同時に 1 セッションだけです。ロックは、computer use を一度使った Claude セッションが終わるまで外れません。そのセッションが今は computer use を呼んでいなくても、子は `Computer use is in use by another Claude session` で止まり、許可の画面も出ません（2026-10-06、Mac、Claude Code で実測）
 - **Claude の computer use（Mac）**: 使いたい project で `/mcp` から有効にします（`~/.claude.json` の `projects[<dir>].enabledMcpServers`）
 - **Windows の computer use（Windows-MCP）**: Windows-MCP は RDP などの対話セッションで動かします。ssh から起動した WSL はセッション 0 で、画面が取れません
 
