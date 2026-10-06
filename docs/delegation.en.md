@@ -78,6 +78,12 @@ default_tools_approval_mode = "approve"
 
 The overlay currently applies only to macOS/Linux `spawn_child.sh`. WSL2 uses that path, but the community-lane native-Windows launcher does not apply it.
 
+Browser, screen and `mcp:<name>` servers selected with `--tools` (including installer defaults) receive `required = true` and a startup timeout of at least 60 seconds only in the child's `CODEX_HOME/config.toml` (longer existing timeouts are kept). This prevents pending optional servers from being omitted; initialization failure stops Codex startup/resume ([official configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)). Unselected inherited servers and ORRERY Mail receive no additions, and user settings stay unchanged. The `--codex-mcp inherit/orrery-only` profiles alone do not select tool servers.
+
+The global optional-server wait, `mcp_optional_startup_grace_ms` (default 1000ms; 0 waits for each server's timeout), is neither added nor overridden. Setting it to 0 would also extend the wait for unselected inherited servers. Installer defaults remain best-effort when resolving configured tools: unavailable choices are omitted at that stage, while runtime initialization failure of an adopted server stops startup.
+
+If the child exits during the startup watch, the launcher reports failure and Codex diagnostics are printed if the pane can still be captured at that point. Exit after the bounded watch is not guaranteed to be reported as a failed spawn. Tool replacement on resume applies the same generated config settings, but does not resolve the known Codex mid-session tool-addition limitation below.
+
 ### Codex children in a worktree and hook trust
 
 Codex records that a project's hooks (`<checkout>/.codex/hooks.json`) are trusted in the user's `~/.codex/config.toml`, keyed by the path of that `hooks.json` (`[hooks.state."<path>:<event>:<i>:<j>"]` with a `trusted_hash`). A `--worktree` child reads the same hooks at another path, finds no record, and stops on the "N hooks need review" screen; none of those hooks run meanwhile.
@@ -273,9 +279,9 @@ Agents that ORRERY starts (children and NEW AGENT) were checked for whether brow
 | | Mac | Windows (WSL2) |
 |---|---|---|
 | Claude × browser | Reachable; the browser extension must be connected | Reachable; a deviceId is required |
-| Claude × whole screen | Reachable only when computer use is enabled for the launch directory's project. The tool responded; operating it was not tried (each app is allowed by a person) | Hand Windows-MCP or similar over with `--tools screen:operate:<server>` ([selection](#choosing-the-tools-a-child-gets---base----tools) above). Successful operation was measured with a `claude -p` whose strict config had Windows-MCP added outside the product, not through this `--tools` path |
-| Codex × browser | Reachable once chrome-devtools tools are approved ([approvals](#codex-children-and-mcp-approvals) above) | Provide the server through the user's config or an overlay and approve its tools. One run with an overlay showed no tool; the cause is not established |
-| Codex × whole screen | Goes through `node_repl` and the bundled plugin. Listing apps was confirmed; each app is allowed by a person | Hand it over with `screen:<read\|operate>:<server>` |
+| Claude × whole screen | Reachable only when computer use is enabled for the launch directory's project. The tool responded; operating it was not tried (each app is allowed by a person). Built-in computer use is limited to one Claude session across the whole Mac. If another Claude session is running in a project with computer use enabled, the child stops with `Computer use is in use by another Claude session` (measured on 2026-10-06 with Claude Code on Mac) | Hand Windows-MCP or similar over with `--tools screen:operate:<server>` ([selection](#choosing-the-tools-a-child-gets---base----tools) above). Successful operation was measured with a `claude -p` whose strict config had Windows-MCP added outside the product, not through this `--tools` path |
+| Codex × browser | Selecting `--tools browser` adds child-only `required = true` and at least 60 seconds of startup wait to chrome-devtools; initialization failure stops startup. Tool approval is also needed ([approvals](#codex-children-and-mcp-approvals) above) | Provide the server through user config or an overlay. Selecting `--tools browser` adds child-only `required = true` and at least 60 seconds of startup wait; initialization failure stops startup. Tool approval and Chrome connection permission are separate |
+| Codex × whole screen | Goes through `node_repl` and the bundled plugin. Listing apps was confirmed; each app is allowed by a person | Hand it over with `screen:<read\|operate>:<server>`; the selected server receives child-only `required = true` and at least 60 seconds of startup wait |
 
 How each launch path is affected:
 

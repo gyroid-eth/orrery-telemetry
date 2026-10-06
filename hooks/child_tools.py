@@ -647,7 +647,8 @@ def codex_apply(config: dict, spec: dict) -> None:
     The base (mail-only = the orrery-only profile) is applied by the caller
     first; this enables the selected servers, exposes and approves only the
     table's screen tools of the screen server, and approves every tool of a
-    server in approve_all. A server-wide approval is never written."""
+    server in approve_all. Selected non-Mail servers must initialize before
+    the task starts. A server-wide approval is never written."""
     tools = spec["tools"]
     check_provider(spec, "codex")
     servers = config.get("mcp_servers")
@@ -675,6 +676,17 @@ def codex_apply(config: dict, spec: dict) -> None:
             raise ToolsError(
                 f"MCP server {name!r} is not in the user's Codex config.toml")
         server["enabled"] = True
+        if name != "agentstack" and not looks_like_agent_mail(name):
+            server["required"] = True
+            # Codex defaults to 10s; npx / WSL uvx.exe may still be starting.
+            # Give explicitly selected tools at least 60s, retaining longer
+            # user timeouts and the milliseconds alias without writing both.
+            key = ("startup_timeout_ms" if "startup_timeout_ms" in server
+                   and "startup_timeout_sec" not in server else "startup_timeout_sec")
+            timeout = server.get(key, 0)
+            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+                raise ToolsError(f"MCP server {name!r} has a non-numeric {key}")
+            server[key] = max(timeout, 60000 if key.endswith("_ms") else 60)
     for name in names:
         server = servers[name]
         exposed, hidden = _approval(spec, name, server, browser_server)

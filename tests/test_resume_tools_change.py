@@ -132,6 +132,42 @@ def test_failed_launch_restores_record_profile_and_generated_settings(stopped, m
         assert child_resume._load_state(directory / f"{NAME}.json")["codex_mcp_profile"] == "orrery-only"
 
 
+def test_codex_replacement_and_following_resume_require_new_server(stopped, monkeypatch):
+    runtime, record, provider, old = stopped
+    if provider != "codex":
+        pytest.skip("Codex generated config only")
+    source = Path(os.environ["CODEX_HOME"])
+    config_text = ('[mcp_servers.reader]\ncommand="/bin/true"\n'
+                   '[mcp_servers.writer]\ncommand="/bin/true"\nstartup_timeout_sec=120\n')
+    source.joinpath("config.toml").write_text(config_text)
+    runner = runtime.parent / "run-mcp.sh"
+    runner.write_text("#!/bin/sh\nexit 0\n")
+    runner.chmod(0o700)
+    configs = []
+
+    def resume(name, **kwargs):
+        home = child_resume.build_home(
+            home=runtime / "child-agents" / f"{name}.codex-home", source=source,
+            runner=runner, child=name, project_key=old["project_key"],
+            token_file=runtime / f"agent_token_{name}", mcp_url="http://localhost:1/mcp",
+            mail_env="", runtime_dir=runtime, bearer_mode="auto", python_bin="",
+            mcp_profile="orrery-only")
+        configs.append(child_resume._toml().loads(home.joinpath("config.toml").read_text()))
+        return {"ok": True, "action": "resumed"}
+
+    monkeypatch.setattr(server, "do_resume", resume)
+    assert server.do_jump(NAME, tools={"mcp": ["writer"]})["ok"]
+    assert server.do_jump(NAME)["ok"]
+    for config in configs:
+        servers = config["mcp_servers"]
+        assert servers["writer"]["required"] is True
+        assert servers["writer"]["startup_timeout_sec"] == 120
+        assert servers["reader"]["enabled"] is False
+        assert "required" not in servers["reader"]
+        assert "required" not in servers["agentstack"]
+    assert source.joinpath("config.toml").read_text() == config_text
+
+
 @pytest.mark.parametrize("options", [{"tools": None}, {"tools": []}, {"base": None},
     {"base": "unknown"}, {"tools": {"shell": True}}, {"tools": {"mcp": ["missing"]}}])
 def test_invalid_requests_do_not_mutate_or_launch(stopped, monkeypatch, options):
