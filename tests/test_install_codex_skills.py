@@ -88,10 +88,10 @@ def _uninstall(home, install_dir):
     )
 
 
-@pytest.mark.parametrize("custom_home", [False, True])
-def test_install_reinstall_and_uninstall_codex_links(tmp_path, custom_home):
+@pytest.mark.parametrize("codex_home_name", [None, "custom codex", 'codex"home', r"codex	home"])
+def test_install_reinstall_and_uninstall_codex_links(tmp_path, codex_home_name):
     home = tmp_path / "home"
-    codex_home = tmp_path / "custom codex" if custom_home else None
+    codex_home = tmp_path / codex_home_name if codex_home_name is not None else None
     skills_dir = (codex_home or home / ".codex") / "skills"
     _, install_dir = _install(home, codex_home=codex_home)
     manifest = _manifest(install_dir)
@@ -103,7 +103,7 @@ def test_install_reinstall_and_uninstall_codex_links(tmp_path, custom_home):
         link = pathlib.Path(record["path"])
         assert link.is_symlink() and str(link.resolve()) == record["target"]
         assert record["path"] in manifest["owned_files"]
-    if custom_home:
+    if codex_home is not None:
         assert not (home / ".codex/skills").exists()
     result, _ = _install(home, codex_home=codex_home)
     assert "reuse Codex skill link" in result.stdout

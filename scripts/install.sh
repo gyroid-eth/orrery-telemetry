@@ -4794,7 +4794,8 @@ write_manifest() {
     "$MAIL_AUTOSTART_LABEL" "${AGENT_MAIL_AUTOSTART_SERVICE_PATH:-}" \
     "${AGENT_MAIL_WATCHER_KIND:-}" "${AGENT_MAIL_WATCHER_PATH:-}" \
     "$MAIL_WATCHER_LABEL" "$NATIVE_MAIL_DEPLOYMENT_IDENTIFIED" \
-    "$NATIVE_MAIL_ENROLL_AVAILABLE" "$NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL" <<PY
+    "$NATIVE_MAIL_ENROLL_AVAILABLE" "$NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL" \
+    "$CLAUDE_SKILLS_DIR" "$CODEX_SKILLS_DIR" <<PY
 import json
 import os
 import pathlib
@@ -4818,7 +4819,9 @@ mail_deployment_identified = sys.argv[14] == "true"
 mail_enrollment_available = sys.argv[15] == "true"
 mail_autostart_managed = sys.argv[16] == "true"
 install_dir = pathlib.Path("$INSTALL_DIR")
-skill_dirs = (pathlib.Path("$CLAUDE_SKILLS_DIR"), pathlib.Path("$CODEX_SKILLS_DIR"))
+# Skill discovery paths are data, not Python source. In particular CODEX_HOME
+# may contain quotes or literal backslashes that Python would otherwise parse.
+skill_dirs = tuple(pathlib.Path(raw) for raw in sys.argv[17:19])
 owned_files = []
 for rel in ("hooks", "skills", "dashboard", "bin", "codex", "claude", "integrations"):
     base = install_dir / rel
