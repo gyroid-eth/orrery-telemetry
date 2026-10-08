@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import time
 
 
@@ -63,9 +64,34 @@ def check_registry(snapshot, plugin_id, name, root):
     return bool(selected), bool(market), in_use
 
 
+def linux_start_token(pid, proc_root=Path('/proc')):
+    """Kernel start ticks and boot identity, independent of wall-clock display."""
+    process = proc_root / str(pid)
+    try:
+        raw = (process / 'stat').read_text()
+        boot = (proc_root / 'sys/kernel/random/boot_id').read_text().strip()
+    except FileNotFoundError:
+        if not process.exists():
+            return None
+        raise OwnershipUnknown('kernel process identity is unavailable')
+    # comm may contain spaces or closing parentheses; fields after its final
+    # closing parenthesis begin with field 3 (state), starttime is field 22.
+    head, separator, tail = raw.rpartition(')')
+    fields = tail.split()
+    if not separator or not head.startswith(str(pid)+' (') or len(fields) < 20 or not boot or not fields[19].isdigit():
+        raise OwnershipUnknown('kernel process identity is incomplete')
+    if fields[0] == 'Z':
+        return None
+    return 'linux:'+boot+':'+fields[19]
+
+
 def process_identity(pid):
     """Unknown inspection is different from an observed missing/zombie process."""
-    result = subprocess.run(['ps', '-p', str(pid), '-o', 'uid=', '-o', 'lstart=',
+    linux = sys.platform.startswith('linux')
+    before = linux_start_token(pid) if linux else None
+    if linux and before is None:
+        return None
+    result = subprocess.run(['ps', '-ww', '-p', str(pid), '-o', 'uid=', '-o', 'lstart=',
                              '-o', 'stat=', '-o', 'command='],
                             env=dict(os.environ, LC_ALL='C'),
                             capture_output=True, text=True, timeout=2)
@@ -80,7 +106,15 @@ def process_identity(pid):
         raise OwnershipUnknown('process inspection is incomplete')
     if fields[6].startswith('Z'):
         return None
-    return {'pid': pid, 'uid': int(fields[0]), 'start': ' '.join(fields[1:6]),
+    start = ' '.join(fields[1:6])
+    if linux:
+        after = linux_start_token(pid)
+        if after is None:
+            return None
+        if after != before:
+            raise OwnershipUnknown('process changed during inspection')
+        start = after
+    return {'pid': pid, 'uid': int(fields[0]), 'start': start,
             'command': fields[7]}
 
 
@@ -95,7 +129,8 @@ def check_process(saved, runner):
         raise OwnershipUnknown('saved process does not belong to this integration')
     current = process_identity(saved['pid'])
     if current is not None and current != {k: saved[k] for k in ('pid', 'uid', 'start', 'command')}:
-        raise OwnershipUnknown('current process differs from its receipt')
+        changed = ','.join(k for k in ('pid', 'uid', 'start', 'command') if current.get(k) != saved.get(k))
+        raise OwnershipUnknown('current process differs from its receipt (changed: '+changed+')')
     return current
 
 
@@ -106,6 +141,20 @@ def capture_process(pidfile, runner):
         raise OwnershipUnknown('supervisor is not running')
     check_process(identity, runner)
     return identity
+
+
+def record_process(pidfile, runner):
+    """Wait for the expected runner after exec; never persist a transient parent."""
+    from codex_plugin_trust import atomic_json
+    for attempt in range(20):
+        try:
+            identity = capture_process(pidfile, runner)
+            atomic_json(Path(str(pidfile)+'.identity.json'), identity)
+            return identity
+        except OwnershipUnknown:
+            if attempt == 19:
+                raise
+            time.sleep(.05)
 
 
 def preflight_supervisor(pidfile, runner, saved=None):
@@ -176,7 +225,6 @@ def owned_arguments(arguments, install_dir):
 def main():
     import argparse
     import sys
-    from codex_plugin_trust import atomic_json
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=['record', 'stop'])
     parser.add_argument('--pidfile', required=True)
@@ -184,15 +232,7 @@ def main():
     args = parser.parse_args()
     try:
         if args.operation == 'record':
-            for attempt in range(10):
-                try:
-                    identity = capture_process(args.pidfile, args.runner)
-                    break
-                except OwnershipUnknown:
-                    if attempt == 9:
-                        raise
-                    time.sleep(.05)
-            atomic_json(Path(args.pidfile+'.identity.json'), identity)
+            record_process(args.pidfile, args.runner)
         else:
             stop_supervisor(args.pidfile, args.runner)
         return 0

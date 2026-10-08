@@ -390,3 +390,75 @@ def test_verified_launchd_definition_and_observed_absence_are_distinct(tmp_path,
     assert ownership.check_launchd({'label': 'fixture.bridge', 'path': str(plist)}, root) is True
     result.returncode = 113; result.stderr = 'Could not find service "fixture.bridge" in domain for user gui'
     assert ownership.check_launchd({'label': 'fixture.bridge', 'path': str(plist)}, root) is False
+
+
+def test_linux_kernel_start_token_preserves_ticks_and_boot_identity(tmp_path):
+    proc = tmp_path/'proc'; (proc/'424242').mkdir(parents=True)
+    boot = proc/'sys/kernel/random/boot_id'; boot.parent.mkdir(parents=True)
+    boot.write_text('fixture-boot\n')
+    fields = ['S']+['0']*18+['987654321']
+    (proc/'424242/stat').write_text('424242 (runner ) with spaces) '+' '.join(fields))
+    assert ownership.linux_start_token(424242, proc) == 'linux:fixture-boot:987654321'
+    boot.write_text('different-boot\n')
+    assert ownership.linux_start_token(424242, proc) == 'linux:different-boot:987654321'
+
+
+def test_linux_displayed_start_time_jitter_does_not_change_process_identity(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(ownership.sys, 'platform', 'linux')
+    monkeypatch.setattr(ownership, 'linux_start_token', lambda pid: 'linux:fixture-boot:987654321')
+    times = iter(['Wed Oct 8 22:20:00 2026', 'Wed Oct 8 22:20:01 2026'])
+    def inspect(*args, **kwargs):
+        assert '-ww' in args[0]
+        return SimpleNamespace(returncode=0, stdout=f'{os.getuid()} {next(times)} S /bin/bash /fixture/runner\n')
+    monkeypatch.setattr(ownership.subprocess, 'run', inspect)
+    first = ownership.process_identity(424242)
+    second = ownership.process_identity(424242)
+    assert first == second and first['start'] == 'linux:fixture-boot:987654321'
+
+
+def test_linux_pid_replacement_during_inspection_is_rejected(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(ownership.sys, 'platform', 'linux')
+    tokens = iter(['linux:fixture-boot:100', 'linux:fixture-boot:101'])
+    monkeypatch.setattr(ownership, 'linux_start_token', lambda pid: next(tokens))
+    monkeypatch.setattr(ownership.subprocess, 'run', lambda *a, **kw: SimpleNamespace(
+        returncode=0, stdout=f'{os.getuid()} Wed Oct 8 22:20:00 2026 S /bin/bash /fixture/runner\n'))
+    with pytest.raises(ownership.OwnershipUnknown, match='changed during inspection'):
+        ownership.process_identity(424242)
+
+
+def test_linux_missing_or_incomplete_kernel_identity_is_not_owned(tmp_path):
+    proc = tmp_path/'proc'; proc.mkdir()
+    assert ownership.linux_start_token(424242, proc) is None
+    (proc/'424242').mkdir()
+    with pytest.raises(ownership.OwnershipUnknown, match='unavailable'):
+        ownership.linux_start_token(424242, proc)
+
+
+def test_process_record_waits_for_exec_and_only_persists_verified_runner(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT/'scripts'))
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    runner = tmp_path/'bin/run-bridge'
+    expected = {'pid': 424242, 'uid': os.getuid(), 'start': 'linux:fixture-boot:100',
+                'command': '/bin/bash '+str(runner)}
+    observations = iter([dict(expected, command='/bin/bash /installer'), expected, expected])
+    monkeypatch.setattr(ownership, 'process_identity', lambda pid: next(observations))
+    waits = []; monkeypatch.setattr(ownership.time, 'sleep', lambda delay: waits.append(delay))
+    assert ownership.record_process(pidfile, runner) == expected
+    assert waits == [.05]
+    assert json.loads(Path(str(pidfile)+'.identity.json').read_text()) == expected
+
+
+def test_unstable_process_record_never_persists_unverified_identity(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT/'scripts'))
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    runner = tmp_path/'bin/run-bridge'
+    expected = {'pid': 424242, 'uid': os.getuid(), 'start': 'linux:fixture-boot:100',
+                'command': '/bin/bash '+str(runner)}
+    observations = iter([expected, dict(expected, start='linux:fixture-boot:101')]*20)
+    monkeypatch.setattr(ownership, 'process_identity', lambda pid: next(observations))
+    waits = []; monkeypatch.setattr(ownership.time, 'sleep', lambda delay: waits.append(delay))
+    with pytest.raises(ownership.OwnershipUnknown, match='changed: start'):
+        ownership.record_process(pidfile, runner)
+    assert len(waits) == 19 and not Path(str(pidfile)+'.identity.json').exists()

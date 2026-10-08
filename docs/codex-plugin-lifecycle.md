@@ -20,7 +20,9 @@
 
 解除は保存した共有 HOME で行います。削除前に現在の plugin と marketplace の registry を取得し、ID・local source・root を保存した所有情報と照合します。service の所有確認も先に行い、別の所有者への付替えや確認不能を検出したら、登録・payload・runtime を保持して非0で終了します。CLI の戻り値だけで成功にせず、解除後の registry を再取得します。途中で plugin だけ解除できた場合も、残った marketplace の所有を確認して再実行できます。他の plugin が使う marketplace とその snapshot payload は残します。
 
-nohup service は起動時に PID・UID・command・起動時刻を記録し、停止前と待機中に同じ process かを照合します。再利用された PID や、生きている旧 pidfile に識別情報がない場合、`ps` で確認できない場合には signal を送りません。launchd は label に加えて plist の所有者・実行引数と現在の job の実行引数を確認します。PID の照合には `ps` の秒単位の起動時刻を使うため、同じ秒に同じ UID・command・PID が再利用される場合や、照合直後の process の置換を完全には区別できません。
+nohup service は起動時に PID・UID・command・起動時刻を記録し、停止前と待機中に同じ process かを照合します。起動時の記録は期待した runner の command が現れ、続く観測でも一致してから行います。再利用された PID や、生きている旧 pidfile に識別情報がない場合、`ps` で確認できない場合には signal を送りません。launchd は label に加えて plist の所有者・実行引数と現在の job の実行引数を確認します。
+
+Linux/WSL の起動識別は `/proc` の boot ID と process の starttime tick を使い、`ps` の表示時刻の揺れを比較に含めません。UID/command の取得前後でも tick が同じかを照合します。kernel 情報の取得不能や途中の process の置換は拒否します。Mac の起動時刻は `ps` の秒単位の値なので、同じ秒に同じ UID・command・PID が再利用される場合には識別の限界があります。いずれの環境でも照合直後の process の置換を完全には防げません。
 
 `remove_registration` の終了時には plugin.enabled を false にし、JSON の結果を stdout に出します。service_stop_requested は停止処理の要求であり、service_stopped は process の終了または launchd job の不在を確認した結果です。未確認を成功として記録しません。core 全体の撤去と最終 report は後続の変更です。
 
