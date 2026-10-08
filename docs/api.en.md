@@ -61,13 +61,17 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":11}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":12}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
 
 - `version`: when the release was made (a date; see the [CHANGELOG](../CHANGELOG.md)). It is not a compatibility promise
 - `api`: the **compatibility generation** for the programs that use this API ([ORRERY cockpit](https://github.com/gyroid-eth/orrery) and others). It goes up by one only when an endpoint or field those programs rely on is **added or changes meaning**, and the CHANGELOG says so; it does not go up with every release. A program should decide whether a feature it needs is there from `api`, not from the date in `version` (the cockpit warns at startup when `api` is lower than it needs). This scheme starts at `api` 2; every earlier release reports 1, whatever it can do
+
+### Bundled Mail identity (API 12)
+
+In API 12 distributions, bundled ORRERY Mail's MCP `health_check` returns `server_instance_id`, the same persistent UUID as management-socket inspect. It is neither a secret nor authentication. Daemons compare both transports with the operator-pinned connection UUID, refusing older builds without the field or mismatches. Existing `status`, `environment`, `http_host`, and `http_port` fields remain. This adds no dashboard HTTP route. See [daemon bindings and notifications](daemon-agents.en.md).
 
 ## GET `/api/spawn-names`
 

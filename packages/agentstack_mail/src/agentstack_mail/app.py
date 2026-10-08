@@ -5298,6 +5298,7 @@ def build_mcp_server() -> FastMCP:
         dict
             {
               "status": "ok" | "degraded" | "error",
+              "server_instance_id": str,  # Persistent UUID, not a credential
               "environment": str,
               "http_host": str,
               "http_port": int,
@@ -5316,8 +5317,13 @@ def build_mcp_server() -> FastMCP:
         - If status != ok, sleep/retry with backoff and log `environment`/`http_host`/`http_port`.
         """
         await ctx.info("Running health check.")
+        # The HTTP endpoint and operator management socket must prove that
+        # they address the same persistent Mail instance. This is not a token.
+        from .enrollment import ensure_mail_instance
+        instance = await ensure_mail_instance()
         return {
             "status": "ok",
+            "server_instance_id": instance.instance_id,
             "environment": settings.environment,
             "http_host": settings.http.host,
             "http_port": settings.http.port,

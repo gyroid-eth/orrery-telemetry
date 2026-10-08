@@ -473,3 +473,7 @@ The installer does not automatically switch back to the third-party version. If 
 - [Configuration](configuration.en.md)
 - [Troubleshooting](troubleshooting.en.md)
 - [Third-party components](third-party.md)
+
+## Local deterministic daemon helper
+
+[Dedicated bindings and notifications](daemon-agents.en.md) use a fixed local source release, not a newly installed general launcher. They require a Mail build advertising its UUID in HTTP health. Do not impersonate a Claude/Codex profile; live Mail updates, identity creation and deployment require separate operator approval.

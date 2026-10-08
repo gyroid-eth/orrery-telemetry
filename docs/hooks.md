@@ -189,3 +189,7 @@ Codex Desktop はさらに別の plugin hook / Bridge lifecycle を使います�
 - [Codex App 統合](codex-app.md)
 - [設定](configuration.md)
 - [トラブルシューティング](troubleshooting.md)
+
+## 決定的daemonのlocal entry
+
+[daemon-agents.md](daemon-agents.md) の新しいoperator専用CLIは、既存bound proxyとagentstack-await-replyの共通wait primitiveを使います。通常のlifecycle hookやchild registrationは変更しません。live配備は別承認です。

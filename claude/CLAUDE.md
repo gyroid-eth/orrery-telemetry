@@ -240,3 +240,7 @@ The installed skill sources live under `__AGENTSTACK_HOME__/skills`.
   `mcp__orrery-mail__*` send/fetch tools, or the helper or launcher fails,
   report that exact failure and stop the delegation attempt. Do not switch to a
   built-in agent, direct-mode launcher, or another improvised path.
+
+## Deterministic daemon development
+
+The local operator-only daemon entry is documented in `docs/daemon-agents.md`. It does not change your existing coordination route or authorize you to create/enroll a live identity.

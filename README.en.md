@@ -83,6 +83,7 @@ Japanese documents are the source of truth. The English entry point is the [Engl
 | Start Telemetry on its own or look up a term | [Getting started](docs/getting-started.en.md) |
 | Check installation, updates, and requirements | [Installation](docs/install.en.md) |
 | Diagnose a problem | [Troubleshooting](docs/troubleshooting.en.md) |
+| Develop a local deterministic daemon helper | [Dedicated bindings and notifications](docs/daemon-agents.en.md) (deployment requires separate approval) |
 
 [Using it with Obsidian](docs/obsidian.en.md) and the public [demo vault](https://github.com/gyroid-eth/orrery-demo-vault) turn logs, paper notes, and tasks into notes; Obsidian is optional. [Codex App](docs/codex-app.en.md) and [Antigravity / Gemini](docs/antigravity.en.md) are optional providers beyond the CLIs.
 

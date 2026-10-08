@@ -30,6 +30,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Codex App integration](codex-app.en.md) — Add Desktop tasks/subagents as an optional provider.
 - [Antigravity / Gemini](antigravity.en.md) — Add an optional provider and understand authentication and feature boundaries.
 - [Persistent agents](persistent-agents.en.md) — Enrollment, interactive/headless startup, and credential recovery.
+- [Deterministic daemons](daemon-agents.en.md) — Dedicated identity, canonical binding, notification waits, and shutdown.
 - [Mail service updates](agentstack-mail-update.en.md) — Operational procedure to verify and replace a running Mail build.
 
 ## Windows and WSL

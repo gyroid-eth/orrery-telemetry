@@ -61,13 +61,17 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":11}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":12}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
 
 - `version`: いつの配布物か（日付。[CHANGELOG](../CHANGELOG.md)）。互換性の約束ではありません
 - `api`: この API を使う側（[ORRERY cockpit](https://github.com/gyroid-eth/orrery) など）との**互換の世代**です。利用者が頼る endpoint や field を**足す・意味を変える**ときだけ 1 つ上げ、CHANGELOG に書きます。release のたびには上げません。利用者は、必要な機能があるかを `version` の日付ではなく `api` で判定してください（cockpit は、`api` が必要な世代に足りないと起動時に警告します）。この運用は `api` 2 からで、それより前の版はどれも、中身にかかわらず 1 を返します
+
+### 同梱 Mail の識別子（API 12）
+
+API 12の配布物では、同梱 ORRERY Mail の MCP `health_check` が `server_instance_id` を返します。これは管理 socket の inspect と同じ永続 UUID で、秘密や認証の代わりにはなりません。常駐 daemon は両方の transport の UUID と確認済みの connection pin を照合し、field の無い旧 build や不一致では停止します。既存の `status` / `environment` / `http_host` / `http_port` は維持します。これは dashboard の新しい HTTP route ではありません。[専用 binding と通知](daemon-agents.md)を参照してください。
 
 ## GET `/api/spawn-names`
 
