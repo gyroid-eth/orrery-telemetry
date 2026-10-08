@@ -241,12 +241,18 @@ def _read_generated_env(path: Path) -> dict[str, str]:
 def test_installer_guides_hook_review_after_plugin_install(tmp_path):
     home = _prepare_home(tmp_path)
     codex_binary, codex_log = _fake_codex(tmp_path)
+    selected = home / ".codex/plugins/cache/agentstack-local/agentstack-codex-app/0.1.0"
+    subprocess.run([sys.executable, str(MARKETPLACE_BUILDER),
+                    str(ROOT / "integrations/codex_app"), str(tmp_path / "fixture-market")], check=True)
+    shutil.copytree(tmp_path / "fixture-market/plugins/agentstack-codex-app", selected)
     environment = _environment(home)
     environment.update(
         {
             "AGENTSTACK_TEST_CODEX_LOG": str(codex_log),
             "AGENTSTACK_TEST_PLUGIN_LIST": json.dumps({"installed": []}),
-            "AGENTSTACK_TEST_PLUGIN_ADD": "{}",
+            "AGENTSTACK_TEST_PLUGIN_ADD": json.dumps({"pluginId": PLUGIN_ID,
+                "name": "agentstack-codex-app", "marketplaceName": "agentstack-local",
+                "version": "0.1.0", "installedPath": str(selected)}),
         }
     )
     args = _install_args(home)
@@ -264,6 +270,12 @@ def test_installer_guides_hook_review_after_plugin_install(tmp_path):
     assert "open /hooks" in result.stdout
     assert "review/approve the AgentStack lifecycle hooks" in result.stdout
     assert "start a new Codex process" in result.stdout
+
+    manifest = json.loads((home / ".agentstack/integrations/codex_app/install-state.json").read_text())
+    assert manifest["shared_codex_home"] == str(home / ".codex")
+    assert manifest["plugin"]["selected_path"] == str(selected)
+    assert manifest["plugin"]["payload_digest"] and manifest["history"] == "unobserved"
+    assert manifest["hook_trust"] == "needs_review"
 
 
 @needs_codex_cli
@@ -560,6 +572,16 @@ def test_installer_skip_git_check_is_explicit_and_persisted(tmp_path):
     )
 
 
+def _can_inspect_own_process():
+    try:
+        result = subprocess.run(["ps", "-p", str(os.getpid()), "-o", "uid="],
+                                capture_output=True, text=True, timeout=2)
+        return result.returncode == 0 and result.stdout.strip() == str(os.getuid())
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+@pytest.mark.skipif(not _can_inspect_own_process(), reason="native service ownership requires ps access")
 def test_launchd_bootstrap_failure_uses_supervised_background(tmp_path):
     home = _prepare_home(tmp_path)
     environment = _environment(home)
@@ -617,6 +639,12 @@ exit 0
         supervisor_pid = int(pidfile.read_text(encoding="utf-8").strip())
         os.kill(supervisor_pid, 0)
         assert manifest["service"]["kind"] == "nohup"
+        identity = manifest["service"]["process_identity"]
+        assert identity["pid"] == supervisor_pid
+        assert identity["uid"] == os.getuid()
+        assert identity["start"] and identity["command"].startswith("/bin/bash ")
+        identity_path = Path(str(pidfile) + ".identity.json")
+        assert json.loads(identity_path.read_text()) == identity
         assert manifest["launchd"]["enabled"] is False
         live_plist = (
             home
