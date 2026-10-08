@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":10}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":11}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -396,15 +396,20 @@ response は少なくとも次の診断を返します。
 
 ```json
 {
-  "status":"ok",
+  "status":"green",
   "watcher_running":true,
   "signal_count":0,
+  "actionable_signal_count":0,
+  "orphan_signal_count":0,
+  "signal_sessions_known":true,
   "last_success_age_s":4,
-  "recent_results":{"delivered":3}
+  "recent_results":{"success":3}
 }
 ```
 
 watcher process、signal backlog、直近成功時刻、直近10分の配送結果を header indicator が使います。
+
+API 11 から、`signal_count` は残っている全 signal（legacy を含む）の数、`actionable_signal_count` は health 判定に使う数、`orphan_signal_count` は24時間以上古く、tmux session の不在を確認できた数です。headless runtime manifest がある宛先と新しい signal は常に判定に残します。tmux の測定失敗時は `signal_sessions_known: false` とし、除外しません。watcher 不在か actionable が50件を超えると `red`、actionable が残り直近成功が120秒以上前（または成功なし）なら `yellow`、それ以外は `green` です。
 
 ## GET `/portrait`
 

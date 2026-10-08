@@ -167,7 +167,7 @@ Dangerous-command pattern checking is enabled only with `AGENTSTACK_MONITOR_DANG
 
 ### `watch_agent_mail_signals.sh`
 
-It uses event watching when `fswatch` is available and two-second polling otherwise. It does not delete signal files, which are server-owned dirty bits; runtime delivery state and a short lease suppress duplicate injection of the same `(agent, message)`. A periodic scan every 30 seconds recovers missed events.
+It uses event watching when `fswatch` is available and two-second polling otherwise. Runtime delivery state and a short lease suppress duplicate injection of the same `(agent, message)`. On success the watcher deletes per-message signals; `fetch_inbox` clears legacy signals. Failures such as `session_not_found` retain signals for retry. A periodic scan (30 seconds on macOS, two seconds on Linux) recovers missed events. See [troubleshooting](troubleshooting.en.md#mail-watcher-is-yellow--red) for health classification and optional cleanup of old signals with absent recipients.
 
 The delivery target is only the tmux session whose name exactly matches the agent. After sending notification text literally, it submits with a separate `C-m` call, avoiding bare shells and unrelated sessions. tmux calls run in timeout-controlled workers so a server stall cannot stop the entire watcher.
 
