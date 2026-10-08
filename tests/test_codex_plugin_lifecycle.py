@@ -428,12 +428,64 @@ def test_linux_pid_replacement_during_inspection_is_rejected(monkeypatch):
         ownership.process_identity(424242)
 
 
-def test_linux_missing_or_incomplete_kernel_identity_is_not_owned(tmp_path):
+def test_linux_missing_or_incomplete_kernel_identity_is_not_owned(tmp_path, monkeypatch):
+    def absent(pid, sig):
+        assert sig == 0
+        raise ProcessLookupError()
+    monkeypatch.setattr(ownership.os, 'kill', absent)
     proc = tmp_path/'proc'; proc.mkdir()
     assert ownership.linux_start_token(424242, proc) is None
     (proc/'424242').mkdir()
     with pytest.raises(ownership.OwnershipUnknown, match='unavailable'):
         ownership.linux_start_token(424242, proc)
+
+
+@pytest.mark.parametrize('view', ['missing_root', 'hidden_pid', 'permission_denied'])
+def test_unavailable_proc_view_preserves_live_or_unknown_process_receipts(tmp_path, monkeypatch, view):
+    proc = tmp_path/'proc'
+    if view == 'hidden_pid':
+        proc.mkdir()
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'linux:fixture-boot:100',
+             'command': '/bin/bash '+str(runner)}
+    pidfile = tmp_path/'service.pid'; pidfile.write_text('424242\n')
+    receipt = Path(str(pidfile)+'.identity.json'); receipt.write_text(json.dumps(saved))
+    monkeypatch.setattr(ownership.sys, 'platform', 'linux')
+    token = ownership.linux_start_token
+    monkeypatch.setattr(ownership, 'linux_start_token', lambda pid: token(pid, proc))
+    calls = []
+    def probe(pid, sig):
+        calls.append((pid, sig))
+        assert sig == 0, 'never signal a live or unknown process'
+        if view == 'permission_denied':
+            raise PermissionError()
+    monkeypatch.setattr(ownership.os, 'kill', probe)
+    def forbid_ps(*args, **kwargs):
+        raise AssertionError('missing kernel identity cannot authorize stop through ps')
+    monkeypatch.setattr(ownership.subprocess, 'run', forbid_ps)
+    with pytest.raises(ownership.OwnershipUnknown):
+        ownership.stop_supervisor(pidfile, runner)
+    assert calls == [(424242, 0)]
+    assert pidfile.read_text() == '424242\n' and json.loads(receipt.read_text()) == saved
+
+
+def test_missing_proc_view_only_confirms_exit_after_kernel_liveness_esrch(tmp_path, monkeypatch):
+    proc = tmp_path/'unavailable-proc'
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'linux:fixture-boot:100',
+             'command': '/bin/bash '+str(runner)}
+    pidfile = tmp_path/'service.pid'; pidfile.write_text('424242\n')
+    receipt = Path(str(pidfile)+'.identity.json'); receipt.write_text(json.dumps(saved))
+    monkeypatch.setattr(ownership.sys, 'platform', 'linux')
+    token = ownership.linux_start_token
+    monkeypatch.setattr(ownership, 'linux_start_token', lambda pid: token(pid, proc))
+    calls = []
+    def absent(pid, sig):
+        calls.append((pid, sig)); assert sig == 0
+        raise ProcessLookupError()
+    monkeypatch.setattr(ownership.os, 'kill', absent)
+    ownership.stop_supervisor(pidfile, runner)
+    assert calls == [(424242, 0)] and not pidfile.exists() and not receipt.exists()
 
 
 def test_process_record_waits_for_exec_and_only_persists_verified_runner(tmp_path, monkeypatch):

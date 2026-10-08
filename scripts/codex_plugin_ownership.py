@@ -71,9 +71,17 @@ def linux_start_token(pid, proc_root=Path('/proc')):
         raw = (process / 'stat').read_text()
         boot = (proc_root / 'sys/kernel/random/boot_id').read_text().strip()
     except FileNotFoundError:
-        if not process.exists():
+        if process.exists():
+            raise OwnershipUnknown('kernel process identity is unavailable')
+        # Missing procfs, hidden PIDs, and actual exit can all look like ENOENT.
+        # Only a separate kernel liveness check may establish process absence.
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
             return None
-        raise OwnershipUnknown('kernel process identity is unavailable')
+        except OSError as exc:
+            raise OwnershipUnknown('process absence could not be verified') from exc
+        raise OwnershipUnknown('kernel identity is unavailable for a live process')
     # comm may contain spaces or closing parentheses; fields after its final
     # closing parenthesis begin with field 3 (state), starttime is field 22.
     head, separator, tail = raw.rpartition(')')
