@@ -13,6 +13,7 @@ from agentstack_mail.authorization import (
     catalog_as_plain_data,
 )
 from agentstack_mail.contract import COMPATIBILITY_TOOLS
+from agentstack_mail.namespace_contract import SCOPE_ARGUMENTS, load_namespace_contract
 
 
 async def verify() -> None:
@@ -67,6 +68,27 @@ async def verify() -> None:
         raise SystemExit("installed wheel must publish zero MCP resource templates")
     if prompts:
         raise SystemExit("installed wheel must publish zero MCP prompts")
+    candidate = load_namespace_contract()
+    if (
+        candidate["default_runtime"] != "legacy-v1"
+        or candidate["activation_enabled"] is not False
+        or set(candidate["tools"]) != COMPATIBILITY_TOOLS
+    ):
+        raise SystemExit("installed wheel candidate namespace contract mismatch")
+    for name in tools:
+        properties = dict(candidate["tools"][name]["input_schema"]["properties"])
+        if name == "send_message":
+            properties.pop("reply_to")
+        if name == "summarize_thread":
+            properties.pop("message_id")
+            properties["thread_id"] = actual[name]["inputSchema"]["properties"]["thread_id"]
+        current = {
+            key: value
+            for key, value in actual[name]["inputSchema"]["properties"].items()
+            if key not in SCOPE_ARGUMENTS
+        }
+        if properties != current:
+            raise SystemExit("installed wheel candidate argument mismatch: " + name)
     # Pin the additive #140 recovery guard separately from the frozen surface.
     registration_schema = actual["register_agent"]["inputSchema"]
     recovery_guard = registration_schema["properties"].pop("existing_agent_id", None)
