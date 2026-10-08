@@ -53,6 +53,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Embedded tour events](embedded-tour-events.md) — Contract for embedded Telemetry to report real actions to a cockpit checklist.
 - [ORRERY Mail internals](agentstack-mail.en.md) — Bundled-package boundaries, provenance, cutover, and authority.
 - [Namespace contract and migration planning](project-removal-plan.en.md) — PR1 candidate APIs and gates; defaults stay unchanged and cutover belongs to later PRs.
+- [Absolute reservation candidate](absolute-reservations.en.md) — PR2 shared normalizer, authenticated isolated store, client adapters and per-lease activity/GC; legacy mode remains the default.
 - [Mail update design](agentstack-mail-update-design.en.md) — Rationale and open decisions; use the update procedure for operations.
 - [Mail performance gate design](agentstack-mail-performance-gate.en.md) — Design-only benchmark and adoption criteria, not a deployed benchmark procedure.
 - [Claim/enrollment design](agentstack-mail-claim-enrollment-design.en.md) — Enrollment design supporting the product-decision ledger.

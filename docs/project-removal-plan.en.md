@@ -1,5 +1,7 @@
 # Project removal contract and migration plan (PR1)
 
+Absolute reservations are validated by [the PR2 candidate contract](absolute-reservations.en.md). PR1 activation remains false and legacy mode remains the default.
+
 [日本語](project-removal-plan.md)
 
 This prepares [#213](https://github.com/gyroid-eth/orrery-telemetry/issues/213). The published 25 tools, project-scoped delivery, database, installer and hooks retain their current behavior. Candidate APIs require explicit calls and cannot activate live cutover.

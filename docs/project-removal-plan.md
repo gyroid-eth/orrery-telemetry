@@ -1,5 +1,7 @@
 # project 廃止の契約と移行計画（PR1）
 
+絶対 path の予約は [PR2 の候補契約](absolute-reservations.md)で検証します。PR1 の activation false と既定の旧 mode は保ちます。
+
 [English](project-removal-plan.en.md)
 
 この版は [#213](https://github.com/gyroid-eth/orrery-telemetry/issues/213) の準備です。公開中の 25 tool、project ごとの配送、DB、installer、hook の動作は従来どおりです。新しい契約と計画 API は明示した candidate 呼出にだけ使い、live の切替には接続していません。

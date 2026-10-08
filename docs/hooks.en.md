@@ -188,3 +188,5 @@ Codex Desktop uses a further, separate plugin hook / Bridge lifecycle. See [Code
 ## Local entry for deterministic daemons
 
 The operator-only CLI in [daemon-agents.en.md](daemon-agents.en.md) reuses the bound proxy and canonical await-reply primitive. Ordinary lifecycle hooks and child registration are unchanged; live deployment requires separate approval.
+
+The [absolute reservation candidate](absolute-reservations.en.md) supplies explicit guard/release adapters and a shared normalizer. Existing hooks remain in legacy mode and do not automatically call the candidate helper. Applying reservations to all folders of participating sessions and connecting the real binding resolver belongs to the later cutover PR.

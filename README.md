@@ -84,6 +84,7 @@ Telemetry 単体での例: 名前で絞り込み、`7D` の `RETIRED` / `RESUME 
 | install・update・要件を確認する | [インストール](docs/install.md) |
 | 困ったところを調べる | [トラブルシューティング](docs/troubleshooting.md) |
 | 決定的daemonのlocal helperを開発する | [専用bindingと通知](docs/daemon-agents.md)（配備は別承認） |
+| 絶対 path の予約候補を検証する | [候補の契約と試験](docs/absolute-reservations.md)（既定は旧 mode） |
 
 [Obsidian と一緒に使う](docs/obsidian.md)と公開の [demo vault](https://github.com/gyroid-eth/orrery-demo-vault)で、作業ログ・論文ノート・タスクをノートにできます。Obsidian は必須ではありません。CLI 以外の [Codex App](docs/codex-app.md)、[Antigravity / Gemini](docs/antigravity.md)は optional provider です。
 

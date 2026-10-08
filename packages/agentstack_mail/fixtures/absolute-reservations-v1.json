@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "activation": false,
+  "filesystem": "server-local",
+  "relative_anchor": "observed-client-cwd-or-explicit-migration-evidence",
+  "scope_arguments": "accepted-ignored",
+  "unicode": {"rule_evidence": "read-only-target-filesystem", "unknown": "reject-acquire-and-prevent-stale", "spelling": "preserved", "non_ascii_case_insensitive": "CASE_RULES_UNKNOWN"},
+  "probe_limits": {"timeout_seconds": 3, "entries": 1000},
+  "overlap_cases": [
+    {"left": "a/src/file.py", "right": "b/src/file.py", "conflict": false},
+    {"left": "a/src/file.py", "right": "a/src/file.py", "conflict": true},
+    {"left": "a/b/**", "right": "a/bb/file.py", "conflict": false},
+    {"left": "a/*/file.py", "right": "a/src/file.py", "conflict": true},
+    {"left": "a/*.py", "right": "a/src/file.py", "conflict": false},
+    {"left": "a/**/file.py", "right": "a/file.py", "conflict": true},
+    {"left": "a/**/file.py", "right": "a/src/deep/file.py", "conflict": true},
+    {"left": "a/[xy].py", "right": "a/z.py", "conflict": false},
+    {"left": "a/[xy].py", "right": "a/x.py", "conflict": true},
+    {"left": "a/space dir/new file.py", "right": "a/space dir/new file.py", "conflict": true}
+  ],
+  "unknown_is_not_stale": ["permission-denied", "timeout", "entry-limit", "anchor-unknown", "git-error"]
+}
