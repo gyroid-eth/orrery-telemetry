@@ -192,6 +192,16 @@ Additional checks:
 
 ## Mail watcher is yellow / red
 
+Signals older than 24 hours with a confirmed absent tmux recipient are reported as `orphan_signal_count` and excluded from health backlog. The watcher retains `session_not_found` signals for retry. Live recipients, recent signals, headless runtime manifests and unknown tmux measurements remain actionable. Doctor warns with the orphan count and cleanup instructions; this warning alone does not fail a green health check.
+
+Preview candidates after loading the installed environment. Add `--prune` to recheck session absence immediately before deleting only old regular signal files beneath signals. The helper never opens the Mail DB or modifies inboxes or notify-state, follows no symlinks, and refuses deletion when tmux cannot be measured. Resume a recipient first if it should receive the retained notification.
+
+```sh
+source ~/.agentstack/env.sh
+"${AGENTSTACK_PYTHON:-python3}" ~/.agentstack/dashboard/mail_signals.py
+"${AGENTSTACK_PYTHON:-python3}" ~/.agentstack/dashboard/mail_signals.py --prune
+```
+
 ```bash
 curl -s http://127.0.0.1:8770/api/mail-watcher-health
 ```

@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":10}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":11}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -396,15 +396,20 @@ The response includes at least these diagnostics:
 
 ```json
 {
-  "status":"ok",
+  "status":"green",
   "watcher_running":true,
   "signal_count":0,
+  "actionable_signal_count":0,
+  "orphan_signal_count":0,
+  "signal_sessions_known":true,
   "last_success_age_s":4,
-  "recent_results":{"delivered":3}
+  "recent_results":{"success":3}
 }
 ```
 
 The header indicator uses the watcher process, signal backlog, most recent success time, and delivery results from the last ten minutes.
+
+API 11 keeps `signal_count` as the total, including legacy signals, and adds `actionable_signal_count`, `orphan_signal_count` and `signal_sessions_known`. Only signals at least 24 hours old with a confirmed absent tmux recipient and no persistent headless runtime manifest are orphans. Measurement failures keep all signals actionable. A stopped watcher or more than 50 actionable signals is `red`; a pending actionable signal with no success in the last 120 seconds is `yellow`; otherwise health is `green`.
 
 ## GET `/portrait`
 

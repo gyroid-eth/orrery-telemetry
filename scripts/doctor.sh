@@ -403,20 +403,27 @@ print("|".join((
     "1" if running else "0",
     str(hstatus),
     "" if age is None else str(age),
+    str(health.get("signal_count", 0)),
+    str(health.get("actionable_signal_count", health.get("signal_count", 0))),
+    str(health.get("orphan_signal_count", 0)),
 )))
 PY
 )"
-  local running hstatus age
-  IFS='|' read -r running hstatus age <<< "$record"
+  local running hstatus age signals actionable orphans
+  IFS='|' read -r running hstatus age signals actionable orphans <<< "$record"
   # Judge by status, not just watcher_running: the same /api/mail-watcher-health
   # can report watcher_running=true with status=red (>50 pending signals) or
   # status=yellow (signals pending with no recent delivery) when the watcher
   # process is alive but not actually draining mail. Checking watcher_running
   # alone left doctor reporting "ok" in exactly the case the cockpit shows red.
+  if [[ "${orphans:-0}" != "0" ]]; then
+    echo "warn: ${orphans} old Mail signals have no session (total=${signals}, actionable=${actionable}); notification files retained, Mail inbox unchanged" >&2
+    printf '      preview with the installed env: source %q; %q %q; add --prune to remove only old signals whose sessions are still absent\n' "$INSTALL_DIR/env.sh" "$python_bin" "$INSTALL_DIR/dashboard/mail_signals.py" >&2
+  fi
   if [[ "$hstatus" == "green" ]]; then
     echo "ok: mail watcher healthy (status: green, watcher_running=${running:-0})"
   else
-    echo "warn: mail watcher health is ${hstatus:-unknown} (dashboard /api/mail-watcher-health: watcher_running=${running:-0}${age:+, last success ${age}s ago})" >&2
+    echo "warn: mail watcher health is ${hstatus:-unknown} (dashboard /api/mail-watcher-health: watcher_running=${running:-0}${age:+, last success ${age}s ago}, signals=${signals:-0}, actionable=${actionable:-0}, orphan=${orphans:-0})" >&2
     echo "      mail delivered to an agent waiting for input may not wake it; see docs/troubleshooting*.md (mail watcher)" >&2
     status=1
   fi

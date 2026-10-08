@@ -172,7 +172,7 @@ dangerous command pattern の検査は `AGENTSTACK_MONITOR_DANGER_CHECK=1` の�
 
 ### `watch_agent_mail_signals.sh`
 
-`fswatch` があれば event watch、なければ2秒 polling を使います。signal file は server-owned dirty bit として削除せず、runtime の delivery state と短期 lease で同じ `(agent, message)` の重複注入を抑えます。30秒の periodic scan が取りこぼしを救済します。
+`fswatch` があれば event watch、なければ2秒 polling を使います。runtime の delivery state と短期 lease で同じ `(agent, message)` の重複注入を抑えます。配送成功時は per-message signal を削除し、legacy signal は `fetch_inbox` が消します。`session_not_found` などの失敗時は signal を残して再試行します。periodic scan（macOS は30秒、Linux は2秒）が取りこぼしを救済します。古くて session が無い signal の health 判定と任意の片付け方は [トラブルシューティング](troubleshooting.md#mail-watcher-が-yellow--red) を参照してください。
 
 配送先は agent 名と完全一致する tmux session だけです。bare shell や無関係 session を避け、通知 text を literal send した後、submit を別 call の `C-m` で送ります。tmux call は timeout 付き worker に分離し、server stall が watcher 全体を止めないようにします。
 

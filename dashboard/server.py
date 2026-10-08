@@ -45,9 +45,10 @@ from urllib.parse import urlparse, parse_qs
 # `server.py` is both an executable script and an importable dashboard module
 # in the tests.  Support both import roots without coupling callers to cwd.
 try:
-    from dashboard import codex_models
+    from dashboard import codex_models, mail_signals
 except ModuleNotFoundError:  # direct `python dashboard/server.py`
     import codex_models
+    import mail_signals
 
 try:
     from dashboard.providers.codex_app import CodexAppRuntimeProvider
@@ -8373,20 +8374,7 @@ def mail_watcher_health() -> dict:
         except (json.JSONDecodeError, OSError):
             pass
 
-    try:
-        count = 0
-        for signal_dir in _signal_agent_dirs():
-            if not os.path.isdir(signal_dir):
-                continue
-            for agent_dir in os.scandir(signal_dir):
-                if not agent_dir.is_dir():
-                    continue
-                for f in os.scandir(agent_dir.path):
-                    if f.name.endswith(".signal"):
-                        count += 1
-        result["signal_count"] = count
-    except OSError:
-        pass
+    result.update(mail_signals.counts(_signal_agent_dirs(), RUNTIME_DIR, now))
 
     # 配送本体は mail-watcher に統合。GUI launchd domain が使えない環境でも
     # watcher 自身が持つ pidfile と command line を照合して実プロセスを判定する。
@@ -8408,9 +8396,10 @@ def mail_watcher_health() -> dict:
     result["daemon_running"] = _launchctl_job_running(NOTIFY_DAEMON_LABEL)
 
     age = result.get("last_success_age_s")
-    signals = result["signal_count"]
+    signals = result["actionable_signal_count"]
     watcher = result["watcher_running"]
-    # red:    watcher 不在 / signal 大量滞留 (>50, 通常は配送時に即 unlink される)
+    # red:    watcher 不在 / 生きている宛先・直近24時間の signal 大量滞留 (>50)
+    # session 不在が確認できた古い signal だけを分ける。測定失敗や headless は除外しない。
     # yellow: watcher 生存だが pending signal が捌けていない (滞留 + 直近配送なし
     #         = 配送が遅れている兆候)
     # green:  それ以外。watcher 生存かつ (backlog 無し or 直近配送あり)。トラフィック
@@ -8491,7 +8480,7 @@ class Handler(BaseHTTPRequestHandler):
             # API (ORRERY cockpit): raise it only when something they rely on
             # is added or changes meaning, and say so in the CHANGELOG. It is
             # managed this way from 2 on; every earlier release reported 1.
-            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 10}).encode(), "application/json; charset=utf-8")
+            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 11}).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")
