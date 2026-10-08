@@ -27,9 +27,13 @@ python -m agentstack_mail.reservation_clients --wsl-drive c=/mnt/c 'C:\workspace
 
 新規 file の ASCII case の比較も、同じ volume の既存 directory に case alias があると確認できた場合だけ同一視します。名前の末尾は書き換えず、case-sensitive volume は別名として扱います。Unicode の無条件な casefold/NFC 変換はしません。
 
+Unicode は対象 directory の filesystem を read-only の native metadata で確認します。現行 APFS の canonical-equivalence と HFS+ の Unicode 3.2/exclusion の規則を、未作成 leaf、glob の照合、activity 展開に共用します。名前の保存表記は変えません。Linux は既知の byte 区別する filesystem と directory の casefold flag を確認し、NFC/NFD の別 file を同一視しません。不明な mount/API/Unicode 版は `UNICODE_RULES_UNKNOWN`（Linux casefold directory は `FILESYSTEM_RULES_UNKNOWN`）として取得を拒否し、probe は unknown として早期回収を止めます。OS 名だけで一律に NFC 化せず、runtime の確認のために file を作ることもありません。[APFS の名前の契約](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/APFS_Guide/FAQ/FAQ.html)と[HFS+ の Unicode 規則](https://developer.apple.com/library/archive/technotes/tn/tn1150.html)を根拠にします。
+
 `ReservationClient` は authenticated binding resolver と candidate dispatch を必須とし、acquire/check/renew/release で同じ正規化を使います。既存 proxy の `candidate_reservations()` は、既存 `_resolve()` で各呼出の binding/token を確認し、観測した cwd と明示した backend でこの client を作ります。既定の `tools/call` には接続しません。旧 proxy の相対 path 制約も維持します。
 
 `hook_guard()` と `hook_release()` は同じ client を使います。resolver が未参加と確認した session は noop、認証済みの参加 session はどのフォルダでも予約を要求します。binding 不明、認証失敗、通信断は block です。勝手な登録や token 探索は行いません。共通 shell の `reservation_absolute_paths()` は同じ CLI に明示した cwd を渡す候補 helper で、既存 hook からの呼出はありません。sandbox、OS の権限、Codex add-dir、閲覧許可は変更しません。
+
+release adapter は旧 hook と同じ失敗結果の判定を保ちます。tool_result/tool_response/tool_output の error、success:false、failed/blocked status、エラー文字列（入れ子を含む）は noop で、binding 解決と release の dispatch を行いません。成功した Edit の後は解放でき、失敗後の再試行では予約を維持します。
 
 server の batch acquire は競合が1件でもあれば全件拒否します。共有同士は許可し、片方が exclusive なら競合です。check は具体的な file に限ります。renew/release は owner を確認し、path selector は正規化した同一の予約 pattern を選びます。ID と path の両指定は和集合です。selector 省略はその owner の予約全件、明示した空 path list は拒否します。TTL/延長は60–86,400秒で、期限切れを renew して復活させません。
 

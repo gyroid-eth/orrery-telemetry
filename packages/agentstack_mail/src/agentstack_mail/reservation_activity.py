@@ -21,6 +21,7 @@ from .reservation_paths import (
     reservation_scopes,
     case_insensitive_at,
     component_matches,
+    unicode_rule_at,
 )
 
 
@@ -77,6 +78,10 @@ def _probe_activity(
             return
         segment, rest = segments[0], segments[1:]
         fold = case_insensitive_at(directory)
+        unicode_rule = unicode_rule_at(directory)
+        # Even an empty directory cannot prove a Unicode glob unmatched when
+        # this directory's comparison rules are unknown.
+        component_matches("", segment, fold=fold, unicode_rule=unicode_rule)
         if segment == "**":
             yield from expand(directory, rest)
         try:
@@ -88,7 +93,9 @@ def _probe_activity(
                             yield from expand(Path(entry.path), segments)
                         elif not rest:
                             yield Path(entry.path)
-                    elif component_matches(entry.name, segment, fold=fold):
+                    elif component_matches(
+                        entry.name, segment, fold=fold, unicode_rule=unicode_rule
+                    ):
                         if rest:
                             if entry.is_dir(follow_symlinks=True):
                                 yield from expand(Path(entry.path), rest)

@@ -22,6 +22,7 @@ from agentstack_mail.reservation_paths import (
     normalize_path,
     paths_overlap,
 )
+from agentstack_mail import reservation_paths
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURE = json.loads(
@@ -163,6 +164,150 @@ def test_unicode_preserved_when_filesystem_distinguishes_it(tmp_path):
     a, b = normalize_path(str(composed)), normalize_path(str(decomposed))
     assert a.value != b.value
     assert paths_overlap(a, b) is composed.samefile(decomposed)
+
+
+@pytest.mark.parametrize("casefold", [0, 1, 2, None])
+def test_linux_native_directory_flags_fail_closed(tmp_path, monkeypatch, casefold):
+    import ctypes
+    import fcntl
+
+    def statfs(path, buffer):
+        ctypes.c_long.from_buffer(buffer).value = 0xEF53
+        return 0
+
+    class Native:
+        pass
+
+    native = Native()
+    native.statfs = statfs
+    closed = []
+
+    def ioctl(descriptor, request, output, mutate):
+        assert descriptor == 12345
+        if casefold is None:
+            raise OSError("unsupported directory flags")
+        if len(output) == 1:
+            output[0] = 0x40000000 if casefold == 1 else 0
+        else:
+            output[0] = 0x00040000 if casefold == 2 else 0
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "platform", "linux")
+        patch.setattr(ctypes, "CDLL", lambda *args, **kwargs: native)
+        patch.setattr(os, "open", lambda *args: 12345)
+        patch.setattr(os, "close", closed.append)
+        patch.setattr(fcntl, "ioctl", ioctl)
+        if casefold in {1, 2}:
+            with pytest.raises(ReservationError, match="FILESYSTEM_RULES_UNKNOWN"):
+                reservation_paths.unicode_rule_at(tmp_path)
+        else:
+            assert reservation_paths.unicode_rule_at(tmp_path) == (
+                "exact" if casefold == 0 else None
+            )
+    assert closed == [12345]
+
+
+def test_missing_unicode_leaves_follow_actual_filesystem(server, tmp_path):
+    # Only this fixture writes a witness. Runtime policy detection is read-only.
+    witness = tmp_path / "é-witness.py"
+    witness.touch()
+    aliases = (tmp_path / "e\u0301-witness.py").exists()
+    a, b = tmp_path / "é-new.py", tmp_path / "e\u0301-new.py"
+    left, right = normalize_path(str(a)), normalize_path(str(b))
+    assert not a.exists() and not b.exists()
+    assert left.value != right.value  # Preserve supplied spelling.
+    assert paths_overlap(left, right) is aliases
+    service, _ = server
+    client(service, tmp_path).call("reserve_files", paths=[a.name])
+    if aliases:
+        with pytest.raises(ReservationError, match="CONFLICT"):
+            client(service, tmp_path, "beta").call("reserve_files", paths=[b.name])
+        a.touch()
+        assert a.samefile(b)
+    else:
+        client(service, tmp_path, "beta").call("reserve_files", paths=[b.name])
+        a.touch()
+        b.touch()
+        assert not a.samefile(b)
+
+
+def test_unicode_glob_overlap_and_recent_activity(server, tmp_path):
+    file = tmp_path / "é-existing.py"
+    file.touch()
+    aliases = (tmp_path / "e\u0301-existing.py").exists()
+    pattern = normalize_path(str(tmp_path / "e\u0301-*.py"))
+    assert paths_overlap(pattern, normalize_path(str(file))) is aliases
+    probe = probe_activity(pattern)
+    assert probe.complete and probe.matched is aliases
+    assert (probe.filesystem is not None) is aliases
+    if aliases:
+        service, now = server
+        now[0] = time.time()
+        lease = client(service, tmp_path).call("reserve_files", paths=["e\u0301-*.py"])[
+            0
+        ]
+        now[0] += 200
+        os.utime(file, (now[0], now[0]))
+        assert service.collect([lease.id]) == {lease.id: "active"}
+
+
+def test_distinguishing_unicode_rules_preserve_missing_names(tmp_path, monkeypatch):
+    # An explicit byte-distinguishing filesystem contract, also exercised by
+    # the actual Linux filesystem in test_missing_unicode_leaves_follow_actual_filesystem.
+    monkeypatch.setattr(reservation_paths, "unicode_rule_at", lambda _: "exact")
+    a = normalize_path(str(tmp_path / "é-new.py"))
+    b = normalize_path(str(tmp_path / "e\u0301-new.py"))
+    assert not paths_overlap(a, b)
+    assert not reservation_paths.component_matches(
+        "é-file.py", "e\u0301-*.py", unicode_rule="exact"
+    )
+
+
+def test_unknown_unicode_rules_reject_acquire_and_prevent_stale(
+    server, tmp_path, monkeypatch
+):
+    service, now = server
+    path = normalize_path(str(tmp_path / "e\u0301-*.py"))
+    lease = client(service, tmp_path).call("reserve_files", paths=[path.value])[0]
+    now[0] += 200
+    monkeypatch.setattr(reservation_paths, "unicode_rule_at", lambda _: None)
+    assert not probe_activity(path).complete
+    assert service.collect([lease.id]) == {lease.id: "activity_unknown"}
+    with pytest.raises(ReservationError, match="UNICODE_RULES_UNKNOWN"):
+        client(service, tmp_path, "beta").call("reserve_files", paths=["é-new.py"])
+    assert len(service._leases) == 1
+
+
+def test_unknown_unicode_directory_cannot_prove_empty_glob(tmp_path, monkeypatch):
+    from agentstack_mail import reservation_activity
+
+    path = normalize_path(str(tmp_path / "e\u0301-*.py"))
+    monkeypatch.setattr(reservation_activity, "unicode_rule_at", lambda _: None)
+    activity = probe_activity(path)
+    assert not activity.complete and not activity.matched
+
+
+@pytest.mark.parametrize("rule", ["apfs", "hfs"])
+def test_supported_unicode_rules_match_canonical_variants(rule):
+    assert reservation_paths.component_matches(
+        "é-file.py", "e\u0301-*.py", unicode_rule=rule
+    )
+    assert reservation_paths.component_matches(
+        "e\u0301-file.py", "é-*.py", unicode_rule=rule
+    )
+    assert reservation_paths.component_matches("é", "?", unicode_rule=rule)
+
+
+def test_hfs_exclusions_and_unknown_apfs_unicode_version():
+    assert not reservation_paths.component_matches(
+        "Å-file.py", "Å-*.py", unicode_rule="hfs"
+    )
+    assert reservation_paths.component_matches(
+        "Å-file.py", "Å-*.py", unicode_rule="apfs"
+    )
+    # U+1AB0 is a combining mark introduced after the pinned safe repertoire.
+    with pytest.raises(ReservationError, match="UNICODE_RULES_UNKNOWN"):
+        reservation_paths.component_matches("a\u1ab0", "*", unicode_rule="apfs")
 
 
 def test_case_alias_follows_filesystem(tmp_path):
@@ -462,6 +607,7 @@ def test_candidate_hook_any_folder_unmanaged_and_bound_outage(server, tmp_path):
         )
         == 2
     )
+
     client(service, cwd).call("reserve_files", paths=["new.py"])
     assert (
         hook_guard(
@@ -490,6 +636,67 @@ def test_candidate_hook_any_folder_unmanaged_and_bound_outage(server, tmp_path):
         )
         == 2
     )
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        {"tool_response": {"success": False, "error": "permission denied"}},
+        {"tool_response": {"success": False}},
+        {"tool_result": {"status": "failed"}},
+        {"tool_result": {"status": "blocked"}},
+        {"tool_output": "ERROR: rejected"},
+        {"tool_output": "PreToolUse: blocked"},
+        {"tool_output": ["ok", {"nested": {"error": "denied"}}]},
+        {"error": "blocked"},
+        {"success": False},
+        {"status": "blocked"},
+    ],
+)
+def test_failed_candidate_edit_keeps_lease_without_dispatch(server, tmp_path, outcome):
+    service, _ = server
+    lease = client(service, tmp_path).call("reserve_files", paths=["new.py"])[0]
+    document = {
+        "session_id": "fixture",
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "new.py"},
+        **outcome,
+    }
+
+    def forbidden(*args):
+        raise AssertionError("failed Edit must not resolve or dispatch")
+
+    assert (
+        hook_release(
+            document, cwd=tmp_path, resolve_session=forbidden, dispatch=forbidden
+        )
+        == 0
+    )
+    assert not service._leases[lease.id].released
+    with pytest.raises(ReservationError, match="CONFLICT"):
+        client(service, tmp_path, "beta").call("reserve_files", paths=["new.py"])
+
+
+def test_successful_candidate_edit_releases_lease(server, tmp_path):
+    service, _ = server
+    lease = client(service, tmp_path).call("reserve_files", paths=["new.py"])[0]
+    document = {
+        "session_id": "fixture",
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "new.py"},
+        "tool_response": {"success": True},
+    }
+    assert (
+        hook_release(
+            document,
+            cwd=tmp_path,
+            resolve_session=lambda _: Binding("alpha", "test-alpha"),
+            dispatch=service.dispatch,
+        )
+        == 0
+    )
+    assert service._leases[lease.id].released
+    assert client(service, tmp_path, "beta").call("reserve_files", paths=["new.py"])
 
 
 def test_cli_and_bash32_hook_same_normalizer(tmp_path):

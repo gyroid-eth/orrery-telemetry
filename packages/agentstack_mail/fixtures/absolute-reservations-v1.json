@@ -4,6 +4,7 @@
   "filesystem": "server-local",
   "relative_anchor": "observed-client-cwd-or-explicit-migration-evidence",
   "scope_arguments": "accepted-ignored",
+  "unicode": {"rule_evidence": "read-only-target-filesystem", "unknown": "reject-acquire-and-prevent-stale", "spelling": "preserved"},
   "probe_limits": {"timeout_seconds": 3, "entries": 1000},
   "overlap_cases": [
     {"left": "a/src/file.py", "right": "b/src/file.py", "conflict": false},

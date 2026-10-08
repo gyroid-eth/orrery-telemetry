@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -112,6 +113,8 @@ def hook_release(
     resolve_session: Callable[[str], Binding | None],
     dispatch: Callable[[str, Mapping[str, Any]], Any],
 ) -> int:
+    if not _tool_succeeded(document):
+        return 0
     try:
         session = document.get("session_id")
         if not isinstance(session, str) or not session:
@@ -129,6 +132,48 @@ def hook_release(
         return 0
     except Exception:
         return 2
+
+
+_FAIL_PREFIX = re.compile(
+    r"^(?:error:|pretooluse:|posttooluse:|blocked(?:\b|:)|permission denied\b)",
+    re.IGNORECASE,
+)
+
+
+def _tool_succeeded(document: Mapping[str, Any]) -> bool:
+    """Match the installed release hook's failed-result boundary."""
+
+    def failed(value: Any) -> bool:
+        if isinstance(value, dict):
+            if (
+                value.get("error") not in (None, "", False)
+                or value.get("success") is False
+            ):
+                return True
+            status = value.get("status")
+            if isinstance(status, str) and status.lower() in {
+                "error",
+                "failed",
+                "blocked",
+            }:
+                return True
+            return any(failed(item) for item in value.values())
+        if isinstance(value, list):
+            return any(failed(item) for item in value)
+        if isinstance(value, str):
+            return bool(_FAIL_PREFIX.match(value.strip()))
+        return False
+
+    if not isinstance(document, Mapping):
+        return False
+    if any(
+        failed({field: document.get(field)}) for field in ("error", "success", "status")
+    ):
+        return False
+    return not any(
+        failed(document.get(field))
+        for field in ("tool_result", "tool_response", "tool_output")
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> None:

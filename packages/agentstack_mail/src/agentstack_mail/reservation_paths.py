@@ -10,7 +10,9 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import sys
 import time
+import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -30,6 +32,7 @@ class ReservationPath:
     value: str
     prefix: str | None = None
     case_insensitive: bool = False
+    unicode_rule: str | None = None
 
     @property
     def is_glob(self) -> bool:
@@ -108,9 +111,148 @@ def normalize_path(
         resolved = _canonical(path)
         prefix = resolved.parent
         value = str(resolved)
+    unicode_rule = unicode_rule_at(prefix)
+    _unicode_key(value, unicode_rule)  # Unknown Unicode rules cannot grant a lease.
     return ReservationPath(
-        "filesystem", value, str(prefix), case_insensitive_at(prefix)
+        "filesystem", value, str(prefix), case_insensitive_at(prefix), unicode_rule
     )
+
+
+def _existing_directory(directory: Path) -> Path:
+    while True:
+        try:
+            directory.stat()
+            return directory
+        except FileNotFoundError:
+            if directory.is_symlink() or directory.parent == directory:
+                raise ReservationError("PATH_ANCHOR_UNKNOWN")
+            directory = directory.parent
+        except OSError as exc:
+            raise ReservationError("PATH_ANCHOR_UNKNOWN") from exc
+
+
+def unicode_rule_at(directory: Path) -> str | None:
+    """Read-only filesystem evidence, never an OS-wide Unicode assumption.
+
+    APFS uses canonical-equivalence comparison (Unicode 9); HFS+ uses 3.2
+    with exclusions. Unknown mounts/APIs remain unknown. Linux's normalizing
+    casefold directories are deliberately not guessed from an ext4 mount name.
+    """
+    import ctypes
+
+    directory = _existing_directory(directory)
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        if sys.platform == "darwin":
+            # Darwin statfs64 ABI: bsize/iosize, five uint64 counters, fsid,
+            # owner/type/flags/subtype, then the 16-byte filesystem type name.
+            # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/mount.h
+            statfs = libc.statfs64
+            statfs.argtypes = [ctypes.c_char_p, ctypes.c_void_p]
+            statfs.restype = ctypes.c_int
+            buffer = ctypes.create_string_buffer(4096)
+            if statfs(os.fsencode(directory), buffer) != 0:
+                return None
+            filesystem = buffer.raw[72:88].split(b"\0", 1)[0]
+            if filesystem == b"hfs":
+                import struct
+
+                # Distinguish HFS+/HFSX from legacy HFS by volume signature.
+                # ATTR_VOL_INFO | ATTR_VOL_SIGNATURE, no contents or disk reads.
+                attrs = ctypes.create_string_buffer(
+                    struct.pack("=HHIIIII", 5, 0, 0, 0x80000002, 0, 0, 0)
+                )
+                result = ctypes.create_string_buffer(16)
+                getattrlist = libc.getattrlist
+                getattrlist.argtypes = [
+                    ctypes.c_char_p,
+                    ctypes.c_void_p,
+                    ctypes.c_void_p,
+                    ctypes.c_size_t,
+                    ctypes.c_ulong,
+                ]
+                getattrlist.restype = ctypes.c_int
+                if (
+                    getattrlist(os.fsencode(directory), attrs, result, len(result), 0)
+                    != 0
+                ):
+                    return None
+                size, signature = struct.unpack_from("=II", result)
+                return "hfs" if size >= 8 and signature in {0x482B, 0x4858} else None
+            # Early APFS previews were normalization-sensitive; do not apply
+            # the modern contract to an old or unidentifiable kernel.
+            if filesystem == b"apfs" and int(os.uname().release.split(".")[0]) >= 17:
+                return "apfs"
+        elif sys.platform == "linux":
+            statfs = libc.statfs
+            statfs.argtypes = [ctypes.c_char_p, ctypes.c_void_p]
+            statfs.restype = ctypes.c_int
+            buffer = ctypes.create_string_buffer(4096)
+            if statfs(os.fsencode(directory), buffer) != 0:
+                return None
+            magic = ctypes.c_long.from_buffer(buffer).value
+            # Known Linux filesystems require both legacy and modern directory
+            # flags: FS_CASEFOLD_FL and FS_XFLAG_CASEFOLD. Unknown APIs fail closed.
+            # https://github.com/torvalds/linux/blob/master/include/uapi/linux/fs.h
+            if magic in {0x58465342, 0x9123683E, 0xEF53, 0x01021994, 0x794C7630}:
+                import array
+                import fcntl
+
+                flags = array.array("L", [0])
+                extended = array.array("I", [0] * 7)
+                descriptor = os.open(
+                    directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+                )
+                try:
+                    fcntl.ioctl(
+                        descriptor, 0x80006601 | (flags.itemsize << 16), flags, True
+                    )
+                    fcntl.ioctl(descriptor, 0x801C581F, extended, True)
+                finally:
+                    os.close(descriptor)
+                if not flags[0] & 0x40000000 and not extended[0] & 0x00040000:
+                    return "exact"
+                raise ReservationError("FILESYSTEM_RULES_UNKNOWN")
+    except ReservationError:
+        raise
+    except (OSError, AttributeError, ValueError):
+        return None
+    return None
+
+
+def _unicode_key(value: str, rule: str | None) -> str:
+    if value.isascii() or rule == "exact":
+        return value
+    if rule == "apfs":
+        # Normalization stability makes the common pre-3.2 repertoire safe on
+        # APFS Unicode 9. Newer decomposable/combining characters need a pinned
+        # Unicode-9 table; refuse them rather than using a newer Python table.
+        for character in value:
+            if unicodedata.ucd_3_2_0.category(character) == "Cn" and (
+                unicodedata.combining(character)
+                or unicodedata.normalize("NFD", character) != character
+            ):
+                raise ReservationError("UNICODE_RULES_UNKNOWN")
+        return unicodedata.normalize("NFC", value)
+    if rule == "hfs":
+        # Apple HFS+ excludes these ranges from canonical decomposition. Keep
+        # them as segment boundaries so NFC cannot accidentally alias them.
+        result, pending = [], []
+        for character in value:
+            code = ord(character)
+            if (
+                0x2000 <= code <= 0x2FFF
+                or 0xF900 <= code <= 0xFAFF
+                or 0x2F800 <= code <= 0x2FAFF
+            ):
+                result.append(unicodedata.ucd_3_2_0.normalize("NFC", "".join(pending)))
+                pending = []
+                result.append(character)
+            else:
+                pending.append(character)
+        result.append(unicodedata.ucd_3_2_0.normalize("NFC", "".join(pending)))
+        return "".join(result)
+    raise ReservationError("UNICODE_RULES_UNKNOWN")
 
 
 def case_insensitive_at(directory: Path) -> bool:
@@ -143,7 +285,12 @@ def normalize_paths(values: Sequence[str], **kwargs: object) -> list[Reservation
     return [normalize_path(value, **kwargs) for value in values]
 
 
-def component_matches(value: str, pattern: str, *, fold: bool = False) -> bool:
+def component_matches(
+    value: str, pattern: str, *, fold: bool = False, unicode_rule: str | None = None
+) -> bool:
+    value, pattern = _unicode_key(value, unicode_rule), _unicode_key(
+        pattern, unicode_rule
+    )
     if fold:
         table = str.maketrans(
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
@@ -152,7 +299,16 @@ def component_matches(value: str, pattern: str, *, fold: bool = False) -> bool:
     return fnmatch.fnmatchcase(value, pattern)
 
 
-def _component_overlap(left: str, right: str, *, fold: bool = False) -> bool:
+def _component_overlap(
+    left: str,
+    right: str,
+    *,
+    fold: bool = False,
+    unicode_rules: tuple[str | None, str | None] = (None, None),
+) -> bool:
+    left, right = _unicode_key(left, unicode_rules[0]), _unicode_key(
+        right, unicode_rules[1]
+    )
     if fold:
         table = str.maketrans(
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
@@ -211,7 +367,10 @@ def _lexical_overlap(left: ReservationPath, right: ReservationPath) -> bool:
             i < len(a)
             and j < len(b)
             and _component_overlap(
-                a[i], b[j], fold=left.case_insensitive and right.case_insensitive
+                a[i],
+                b[j],
+                fold=left.case_insensitive and right.case_insensitive,
+                unicode_rules=(left.unicode_rule, right.unicode_rule),
             )
             and visit(i + 1, j + 1)
         )
@@ -251,6 +410,8 @@ def reservation_scopes(
         result.append(normalize_path(str(canonical.joinpath(*parts[index:]))))
         segment = parts[index]
         fold = case_insensitive_at(directory)
+        unicode_rule = unicode_rule_at(directory)
+        _unicode_key(segment, unicode_rule)
         last = index == len(parts) - 1
         if last and not any(c in segment for c in GLOB_MARKERS):
             return
@@ -265,7 +426,7 @@ def reservation_scopes(
                     if steps > 1000 or time.monotonic() >= deadline:
                         raise ReservationError("GLOB_SCOPE_UNKNOWN")
                     if segment == "**" or component_matches(
-                        entry.name, segment, fold=fold
+                        entry.name, segment, fold=fold, unicode_rule=unicode_rule
                     ):
                         if last:
                             result.append(normalize_path(entry.path))
