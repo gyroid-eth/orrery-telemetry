@@ -6,10 +6,8 @@ import asyncio
 import json
 import shutil
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
@@ -33,12 +31,11 @@ from agentstack_mail.namespace_plan import (
     plan_agent_names,
     plan_windows,
 )
-from agentstack_mail.namespace_threads import (
+from agentstack_mail.namespace_replies import (
     CallerEvidence,
-    LegacyThread,
-    ThreadCatalog,
-    ThreadDecision,
-    ThreadResolutionError,
+    MessageRecord,
+    ReplyCatalog,
+    ReplyError,
 )
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -56,28 +53,15 @@ def scenario():
     return json.loads((FIXTURES / "namespace-plan-v1.json").read_text())
 
 
-def records(scenario):
-    return [
-        LegacyThread(
-            **{
-                **row,
-                "participants": frozenset(row["participants"]),
-                "message_ids": frozenset(row["message_ids"]),
-            }
-        )
-        for row in scenario["threads"]
-    ]
-
-
 def catalog(scenario):
-    value = ThreadCatalog(records(scenario))
-    value.apply(
+    return ReplyCatalog(
         [
-            ThreadDecision((21, 22), "separate", confirmed=True),
-            ThreadDecision((31, 32), "group", confirmed=True),
+            MessageRecord.from_legacy(
+                **{**row, **{key: tuple(row[key]) for key in ("to", "cc", "bcc")}}
+            )
+            for row in scenario["messages"]
         ]
     )
-    return value
 
 
 def fence(generation="fixture-generation-1"):
@@ -100,7 +84,7 @@ def evidence(snapshot, candidate, **overrides):
 
 def final_receipt(scenario):
     snapshot = SourceSnapshot.capture(scenario["generation"], scenario)
-    resolutions = {"unresolved": [], "thread_catalog": catalog(scenario).export()}
+    resolutions = {"unresolved": [], "reply_catalog": catalog(scenario).export()}
     receipt = (
         MigrationReceipt.create(snapshot, resolutions)
         .advance("prepared")
@@ -133,10 +117,9 @@ def test_candidate_schema_is_separate_and_audits_all_legacy_scope_fields():
         ignored = set(schema["properties"]) & SCOPE_ARGUMENTS
         assert set(candidate["accepted_ignored_arguments"]) == ignored
         assert not set(candidate["input_schema"]["properties"]) & SCOPE_ARGUMENTS
-        assert (
-            set(candidate["input_schema"]["required"])
-            == set(schema.get("required", [])) - ignored
-        )
+        assert set(candidate["input_schema"]["required"]) == set(
+            schema.get("required", [])
+        ) - ignored - ({"thread_id"} if tool["name"] == "summarize_thread" else set())
 
 
 @pytest.mark.parametrize("tool", sorted(COMPATIBILITY_TOOLS))
@@ -147,6 +130,8 @@ def test_old_scope_values_never_reach_candidate_dispatch(tool):
     arguments = {
         key: "fixture-value" for key in spec["input_schema"].get("required", [])
     }
+    if tool == "summarize_thread":
+        arguments["thread_id"] = "101"
     expected = adapter.dispatch(tool, arguments, lambda name, values: (name, values))
     for value in ("legacy-a", "legacy-b", "", {"not": "a routing input"}):
         scoped = {
@@ -225,100 +210,170 @@ def test_window_map_keeps_both_identities_and_generated_ids_replay(scenario):
         plan_windows(rows, {12: "other", 34: "generate"}, prior_targets=plan.targets)
 
 
-def test_independent_and_cross_project_threads_preserve_reply_paths(scenario):
+def test_per_message_reply_permissions_preserve_distinct_recipients_after_restore(
+    scenario,
+):
+    original = catalog(scenario)
+    restored = ReplyCatalog.from_export(json.loads(json.dumps(original.export())))
+    assert restored.export() == original.export()
+    for value in (original, restored):
+        for agent, allowed, denied in ((2, 101, 102), (3, 102, 101)):
+            actor = CallerEvidence(agent, True)
+            assert value.resolve(actor, reply_to=allowed) == allowed
+            with pytest.raises(ReplyError, match="MESSAGE_UNAVAILABLE"):
+                value.resolve(actor, reply_to=denied)
+        assert value.resolve(CallerEvidence(1, True), reply_to=101) == 101
+        assert value.resolve(CallerEvidence(1, True), reply_to=102) == 102
+        assert (
+            value.resolve(CallerEvidence(4, True), reply_to=201) == 201
+        )  # bcc counts for access
+        with pytest.raises(ReplyError, match="CALLER_UNCONFIRMED"):
+            value.resolve(CallerEvidence(1, False), reply_to=101)
+        with pytest.raises(ReplyError, match="MESSAGE_UNAVAILABLE"):
+            value.resolve(CallerEvidence(1, True), reply_to=999)
+
+
+def test_numeric_legacy_inputs_are_roots_and_named_labels_are_read_only(scenario):
     value = catalog(scenario)
     actor = CallerEvidence(1, True)
-    assert value.resolve("CROSS-1", actor) == value.resolve(None, actor, reply_to=201)
-    assert value.resolve(None, actor, reply_to=201) == value.resolve(
-        None, actor, reply_to=202
-    )
-    with pytest.raises(ThreadResolutionError) as error:
-        value.resolve("TKT-1", actor)
-    assert error.value.code == "LEGACY_THREAD_AMBIGUOUS"
-    assert error.value.candidates == 2
-    a = value.resolve("TKT-1", replace(actor, legacy_sources=frozenset({"legacy-a"})))
-    b = value.resolve("TKT-1", replace(actor, legacy_sources=frozenset({"legacy-b"})))
-    assert a != b
-    assert value.resolve(None, actor, reply_to=101) == a
-    assert value.resolve(None, actor, reply_to=102) == b
-    with pytest.raises(ThreadResolutionError, match="MESSAGE_UNAVAILABLE"):
-        value.resolve(None, CallerEvidence(2, True), reply_to=202)
-    with pytest.raises(ThreadResolutionError, match="CALLER_UNCONFIRMED"):
-        value.resolve("TKT-1", replace(actor, confirmed=False))
-
-
-def test_duplicate_legacy_threads_are_not_split_without_decisions(scenario):
-    value = ThreadCatalog(records(scenario))
-    with pytest.raises(ThreadResolutionError, match="THREAD_DECISION_REQUIRED"):
-        value.apply([])
-    assert value.export()["threads"] == []
-    with pytest.raises(ThreadResolutionError, match="THREAD_CONFIRMATION_REQUIRED"):
-        value.apply([ThreadDecision((21, 22), "group")])
-    assert value.export()["record_targets"] == {}
-
-
-def test_unknown_relationship_requires_message_reply(scenario):
-    value = ThreadCatalog(records(scenario))
-    value.apply(
-        [
-            ThreadDecision((21, 22), "separate", True, True),
-            ThreadDecision((31, 32), "group", True),
-        ]
-    )
-    with pytest.raises(ThreadResolutionError, match="LEGACY_THREAD_UPDATE_REQUIRED"):
-        value.resolve("TKT-1", CallerEvidence(1, True))
-    assert value.resolve(None, CallerEvidence(1, True), reply_to=101) != value.resolve(
-        None, CallerEvidence(1, True), reply_to=102
-    )
-
-
-def test_thread_ids_are_unique_and_never_reuse_a_legacy_canonical_shape():
-    legacy = LegacyThread(
-        1, "legacy-a", "th-" + "0" * 32, frozenset({1}), frozenset({7})
-    )
-    sequence = iter(["0" * 32, "1" * 32])
-    value = ThreadCatalog([legacy], uuid_factory=lambda: next(sequence))
-    value.apply([])
-    assert value.resolve(legacy.alias, CallerEvidence(1, True)) == "th-" + "1" * 32
-    fresh = ThreadCatalog()
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        ids = list(
-            pool.map(
-                lambda _: fresh.create(CallerEvidence(1, True), label="same-label"),
-                range(100),
-            )
-        )
-    assert len(set(ids)) == 100
-    with pytest.raises(ThreadResolutionError, match="LEGACY_THREAD_UNKNOWN"):
-        fresh.resolve("same-label", CallerEvidence(1, True))
-
-
-def test_new_deliveries_and_receipt_replay_keep_ids(scenario):
-    value = catalog(scenario)
-    actor = CallerEvidence(1, True)
-    new_id = value.resolve(None, actor, new_thread=True, label="same-label")
-    value.record_delivery(new_id, 999, frozenset({1, 2}))
-    value.record_delivery(new_id, 999, frozenset({1, 2}))
-    restored = ThreadCatalog.from_export(
-        records(scenario), json.loads(json.dumps(value.export()))
-    )
-    assert restored.export() == value.export()
-    assert restored.resolve(None, CallerEvidence(2, True), reply_to=999) == new_id
-    restored.apply(
-        [
-            ThreadDecision((21, 22), "separate", True),
-            ThreadDecision((31, 32), "group", True),
-        ]
-    )
-    assert restored.export() == value.export()
-    changed_records = records(scenario)
-    changed_records[0] = replace(changed_records[0], source="different-source")
-    with pytest.raises(ThreadResolutionError, match="INVALID_THREAD_RECEIPT"):
-        ThreadCatalog.from_export(changed_records, value.export())
+    assert value.resolve(actor) is None
+    assert value.resolve(actor, legacy_thread_id="101") == 101
+    assert value.resolve(actor, legacy_thread_id="101", reply_to=101) == 101
+    with pytest.raises(ReplyError, match="REPLY_INPUT_CONFLICT"):
+        value.resolve(actor, legacy_thread_id="101", reply_to=102)
+    with pytest.raises(ReplyError, match="LEGACY_THREAD_READ_ONLY"):
+        value.resolve(actor, legacy_thread_id="historic-label")
+    assert value.legacy_read("historic-label", actor)[0].message_ids == (201,)
+    assert value.legacy_read("historic-label", actor)[1].message_ids == (202,)
+    assert value.legacy_read("101,102", actor)[0].message_ids == (101, 102)
+    # Old root input need not be accessible to a later recipient. Update to
+    # that recipient's actual message, rather than weakening the root check.
+    with pytest.raises(ReplyError, match="MESSAGE_UNAVAILABLE"):
+        value.resolve(CallerEvidence(3, True), legacy_thread_id="101")
+    assert value.resolve(CallerEvidence(3, True), reply_to=102) == 102
     state = value.export()
-    state["message_targets"]["999"] = "missing-thread"
-    with pytest.raises(ThreadResolutionError, match="INVALID_THREAD_RECEIPT"):
-        ThreadCatalog.from_export(records(scenario), state)
+    assert state["messages"][1]["reply_to"] == 101
+    assert state["messages"][2]["legacy_thread_label"] == "historic-label"
+
+
+def test_adapter_converts_numeric_legacy_reply_and_summary_without_losing_auth():
+    adapter = NamespaceAdapter(load_namespace_contract())
+    send = dict(
+        sender_name="fixture",
+        to=["other"],
+        subject="fixture",
+        body_md="fixture",
+        sender_token="dummy-token",
+    )
+    result = adapter.arguments(
+        "send_message", {**send, "thread_id": "101", "project_key": "ignored"}
+    )
+    assert result == {**send, "reply_to": 101}
+    with pytest.raises(ReplyError, match="LEGACY_THREAD_READ_ONLY"):
+        adapter.arguments("send_message", {**send, "thread_id": "old-label"})
+    with pytest.raises(ReplyError, match="REPLY_INPUT_CONFLICT"):
+        adapter.arguments("send_message", {**send, "thread_id": "101", "reply_to": 102})
+    assert adapter.arguments("summarize_thread", {"thread_id": "101"}) == {
+        "message_id": 101
+    }
+    assert adapter.arguments("summarize_thread", {"thread_id": "old-label"}) == {
+        "thread_id": "old-label"
+    }
+    assert adapter.arguments("summarize_thread", {"thread_id": "101,102"}) == {
+        "thread_id": "101,102"
+    }
+    with pytest.raises(ReplyError, match="SUMMARY_INPUT_REQUIRED"):
+        adapter.arguments("summarize_thread", {})
+    with pytest.raises(ReplyError, match="REPLY_INPUT_CONFLICT"):
+        adapter.arguments("summarize_thread", {"thread_id": "101", "message_id": 102})
+
+
+@pytest.mark.parametrize(
+    "rows, code",
+    [
+        ([MessageRecord(1, "source", 1, reply_to=2)], "DANGLING_REPLY"),
+        ([MessageRecord(1, "source", 1, reply_to=1)], "REPLY_CYCLE"),
+        (
+            [
+                MessageRecord(1, "source", 1, reply_to=2),
+                MessageRecord(2, "source", 1, reply_to=1),
+            ],
+            "REPLY_CYCLE",
+        ),
+    ],
+)
+def test_missing_self_and_cyclic_parents_block_migration_and_restore(rows, code):
+    with pytest.raises(ReplyError, match=code):
+        ReplyCatalog(rows)
+    with pytest.raises(ReplyError, match="INVALID_REPLY_RECEIPT"):
+        from dataclasses import asdict
+
+        ReplyCatalog.from_export(
+            {"version": 1, "messages": [asdict(row) for row in rows]}
+        )
+
+
+def test_views_and_topics_do_not_expose_hidden_messages_or_join_labels(scenario):
+    value = catalog(scenario)
+    view = value.conversation(102, CallerEvidence(3, True))
+    assert view.message_ids == (102,) and view.incomplete and not view.has_more
+    assert value.conversation(101, CallerEvidence(2, True)).message_ids == (101,)
+    assert value.conversation(101, CallerEvidence(1, True), limit=1).has_more
+    assert value.topic_ids("fixture", CallerEvidence(1, True)) == (101, 102)
+    assert value.topic_ids("fixture", CallerEvidence(3, True)) == (102,)
+    # Same named label does not make an edge or expose the other source.
+    assert value.conversation(201, CallerEvidence(1, True)).message_ids == (201,)
+    assert value.conversation(202, CallerEvidence(1, True)).message_ids == (202,)
+    assert value.legacy_read("historic-label", CallerEvidence(4, True))[
+        0
+    ].message_ids == (201,)
+
+
+def test_direct_reply_and_replay_keep_message_ids_and_reject_changed_state(scenario):
+    value = catalog(scenario)
+    row = MessageRecord(301, "candidate", 3, (1,), reply_to=102)
+    value.record_delivery(row, CallerEvidence(3, True))
+    value.record_delivery(row, CallerEvidence(3, True))
+    restored = ReplyCatalog.from_export(json.loads(json.dumps(value.export())))
+    assert restored.export() == value.export()
+    assert restored.conversation(301, CallerEvidence(3, True)).message_ids == (102, 301)
+    assert restored.export()["messages"][-1]["reply_to"] == 102
+    with pytest.raises(ReplyError, match="MESSAGE_ALREADY_MAPPED"):
+        value.record_delivery(replace(row, reply_to=101), CallerEvidence(3, True))
+    with pytest.raises(ReplyError, match="INVALID_NEW_MESSAGE"):
+        value.record_delivery(replace(row, message_id=302), CallerEvidence(1, True))
+
+
+def test_purge_holds_transitive_ancestors_and_never_cascades_new_children():
+    value = ReplyCatalog(
+        [
+            MessageRecord(1, "old", 1, (2,)),
+            MessageRecord(2, "old", 1, (2,), reply_to=1),
+            MessageRecord(3, "new", 1, (2,), reply_to=2),
+            MessageRecord(4, "old", 1, (2,), reply_to=1),
+        ]
+    )
+    plan = value.plan_purge([1, 2, 4])
+    assert plan.delete_ids == (4,) and plan.held_ids == (1, 2)
+    actual = value.purge([1, 2, 4])
+    assert actual == plan
+    restored = ReplyCatalog.from_export(json.loads(json.dumps(value.export())))
+    assert restored.conversation(3, CallerEvidence(2, True)).message_ids == (1, 2, 3)
+    assert restored.purge([1, 2, 3]).delete_ids == (1, 2, 3)
+    assert restored.export()["messages"] == []
+
+
+def test_purge_rechecks_reply_race_in_both_commit_orders():
+    actor = CallerEvidence(2, True)
+    before = ReplyCatalog([MessageRecord(1, "old", 1, (2,))])
+    assert before.plan_purge([1]).delete_ids == (1,)
+    before.record_delivery(MessageRecord(2, "new", 2, (1,), reply_to=1), actor)
+    assert before.purge([1]).held_ids == (1,)  # reply committed first
+    after = ReplyCatalog([MessageRecord(1, "old", 1, (2,))])
+    assert after.purge([1]).delete_ids == (1,)
+    with pytest.raises(ReplyError, match="MESSAGE_UNAVAILABLE"):
+        after.record_delivery(MessageRecord(2, "new", 2, (1,), reply_to=1), actor)
+    assert after.export()["messages"] == []
 
 
 def test_final_receipt_round_trip_does_not_activate_cutover(scenario, monkeypatch):
@@ -414,6 +469,43 @@ def test_incomplete_final_checks_and_tampered_receipt_are_rejected(scenario, res
         )
 
 
+def test_fence_cannot_shrink_its_own_expected_and_observed_writer_sets(scenario):
+    receipt, snapshot, candidate, proof = final_receipt(scenario)
+    reduced = replace(
+        proof, expected_writers=("mail",), writer_states={"mail": "stopped"}
+    )
+    restored = MigrationReceipt.from_json(receipt.to_json())
+    assert restored.writer_roster == tuple(sorted(scenario["expected_writers"]))
+    assert not restored.gate(snapshot, candidate, reduced).ready
+    with pytest.raises(PlanningError, match="WRITER_FENCE_UNCONFIRMED"):
+        replace(restored, phase="prevalidated").quiesce(reduced)
+    with pytest.raises(PlanningError, match="WRITER_FENCE_UNCONFIRMED"):
+        replace(restored, phase="quiesced").verify_final(
+            snapshot, candidate, evidence(snapshot, candidate), reduced
+        )
+    # A changed final snapshot roster also requires replanning even if its
+    # fence is internally consistent and its final evidence is current.
+    changed = SourceSnapshot.capture(
+        snapshot.generation, {**scenario, "expected_writers": ["mail"]}
+    )
+    assert not restored.gate(changed, candidate, reduced).ready
+    with pytest.raises(PlanningError, match="WRITER_ROSTER_CHANGED"):
+        replace(restored, phase="quiesced").verify_final(
+            changed, candidate, evidence(changed, candidate), proof
+        )
+
+
+@pytest.mark.parametrize(
+    "roster", [None, [], ["mail", "mail"], ["mail", ""], ["mail", None]]
+)
+def test_plans_require_a_known_complete_writer_inventory(scenario, roster):
+    snapshot = SourceSnapshot.capture(
+        scenario["generation"], {**scenario, "expected_writers": roster}
+    )
+    with pytest.raises(PlanningError, match="INVALID_WRITER_ROSTER"):
+        MigrationReceipt.create(snapshot, {"unresolved": []})
+
+
 def test_default_mcp_still_routes_by_project_and_preserves_v1_schema(
     monkeypatch, tmp_path
 ):
@@ -456,14 +548,19 @@ def test_default_mcp_still_routes_by_project_and_preserves_v1_schema(
                 )
                 assert "project_key" in send_schema["required"]
                 assert "new_thread" not in send_schema["properties"]
+                assert "reply_to" not in send_schema["properties"]
                 candidate_tools = load_namespace_contract()["tools"]
                 for tool in tools:
                     properties = dict(
                         candidate_tools[tool.name]["input_schema"]["properties"]
                     )
                     if tool.name == "send_message":
-                        properties.pop("new_thread")
-                        properties.pop("thread_label")
+                        properties.pop("reply_to")
+                    if tool.name == "summarize_thread":
+                        properties.pop("message_id")
+                        properties["thread_id"] = tool.inputSchema["properties"][
+                            "thread_id"
+                        ]
                     assert properties == {
                         key: value
                         for key, value in tool.inputSchema["properties"].items()

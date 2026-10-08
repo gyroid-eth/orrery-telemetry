@@ -20,7 +20,7 @@ FINAL_CHECKS = frozenset(
     {
         "agent_names_unique",
         "window_mapping_complete",
-        "thread_mapping_complete",
+        "reply_references_preserved",
         "lease_anchors_resolved",
         "message_ids_preserved",
         "recipient_read_ack_preserved",
@@ -193,6 +193,17 @@ def plan_windows(
     )
 
 
+def validate_roster(values: Any) -> tuple[str, ...]:
+    if (
+        not isinstance(values, (tuple, list))
+        or not values
+        or any(not isinstance(value, str) or not value.strip() for value in values)
+        or len(set(values)) != len(values)
+    ):
+        raise PlanningError("INVALID_WRITER_ROSTER")
+    return tuple(sorted(values))
+
+
 @dataclass(frozen=True, slots=True)
 class SourceSnapshot:
     generation: str
@@ -203,6 +214,10 @@ class SourceSnapshot:
         if not isinstance(generation, str) or not generation:
             raise PlanningError("INVALID_SOURCE_GENERATION")
         return cls(generation, _json(manifest))
+
+    @property
+    def writer_roster(self) -> tuple[str, ...]:
+        return validate_roster(json.loads(self.manifest_json).get("expected_writers"))
 
     @property
     def digest(self) -> str:
@@ -221,11 +236,12 @@ class FenceEvidence:
     connections_closed: bool = False
     inflight_wakes: int | None = None
 
-    def ready(self, generation: str) -> bool:
+    def ready(self, generation: str, planned_roster: tuple[str, ...]) -> bool:
         expected = set(self.expected_writers)
         return bool(
             self.generation == generation
             and expected
+            and expected == set(planned_roster)
             and len(expected) == len(self.expected_writers)
             and set(self.writer_states) == expected
             and all(state == "stopped" for state in self.writer_states.values())
@@ -274,6 +290,7 @@ class MigrationReceipt:
     receipt_id: str
     planned_source_digest: str
     resolutions_json: str
+    writer_roster: tuple[str, ...]
     phase: str = "planned"
     final_source_digest: str | None = None
     final_generation: str | None = None
@@ -285,7 +302,9 @@ class MigrationReceipt:
     def create(
         cls, snapshot: SourceSnapshot, resolutions: Mapping[str, Any]
     ) -> MigrationReceipt:
-        return cls(uuid4().hex, snapshot.digest, _json(resolutions))
+        return cls(
+            uuid4().hex, snapshot.digest, _json(resolutions), snapshot.writer_roster
+        )
 
     def advance(self, phase: str) -> MigrationReceipt:
         if (self.phase, phase) not in {
@@ -296,7 +315,9 @@ class MigrationReceipt:
         return replace(self, phase=phase)
 
     def quiesce(self, fence: FenceEvidence) -> MigrationReceipt:
-        if self.phase != "prevalidated" or not fence.ready(fence.generation):
+        if self.phase != "prevalidated" or not fence.ready(
+            fence.generation, self.writer_roster
+        ):
             raise PlanningError("WRITER_FENCE_UNCONFIRMED")
         return replace(self, phase="quiesced")
 
@@ -307,8 +328,12 @@ class MigrationReceipt:
         evidence: FinalValidationEvidence,
         fence: FenceEvidence,
     ) -> MigrationReceipt:
-        if self.phase != "quiesced" or not fence.ready(snapshot.generation):
+        if self.phase != "quiesced" or not fence.ready(
+            snapshot.generation, self.writer_roster
+        ):
             raise PlanningError("WRITER_FENCE_UNCONFIRMED")
+        if snapshot.writer_roster != self.writer_roster:
+            raise PlanningError("WRITER_ROSTER_CHANGED")
         if (
             evidence.source_digest != snapshot.digest
             or evidence.candidate_digest != fingerprint(candidate_manifest)
@@ -342,6 +367,11 @@ class MigrationReceipt:
         fence: FenceEvidence,
     ) -> CutoverGate:
         reasons: list[str] = []
+        try:
+            if snapshot.writer_roster != self.writer_roster:
+                reasons.append("WRITER_ROSTER_CHANGED")
+        except PlanningError:
+            reasons.append("WRITER_ROSTER_CHANGED")
         if self.phase != "final_verified" or set(self.final_checks) != FINAL_CHECKS:
             reasons.append("FINAL_VALIDATION_REQUIRED")
         if (
@@ -356,7 +386,7 @@ class MigrationReceipt:
             "resolutions_digest"
         ) != fingerprint(resolutions):
             reasons.append("RESOLUTIONS_CHANGED")
-        if not fence.ready(snapshot.generation):
+        if not fence.ready(snapshot.generation, self.writer_roster):
             reasons.append("WRITER_FENCE_UNCONFIRMED")
         return CutoverGate(not reasons, tuple(reasons))
 
@@ -374,6 +404,7 @@ class MigrationReceipt:
             ] != fingerprint(payload):
                 raise ValueError
             payload["final_checks"] = tuple(payload["final_checks"])
+            payload["writer_roster"] = validate_roster(payload["writer_roster"])
             receipt = cls(**payload)
 
             def digest_shape(value: Any, length: int = 64) -> bool:

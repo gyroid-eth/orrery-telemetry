@@ -1181,10 +1181,6 @@
             "default": "normal",
             "type": "string"
           },
-          "new_thread": {
-            "default": false,
-            "type": "boolean"
-          },
           "sender_name": {
             "type": "string"
           },
@@ -1213,18 +1209,6 @@
             ],
             "default": null
           },
-          "thread_label": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
           "to": {
             "items": {
               "type": "string"
@@ -1235,6 +1219,18 @@
             "anyOf": [
               {
                 "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reply_to": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -1326,12 +1322,31 @@
             "type": "integer"
           },
           "thread_id": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Legacy summary selector: numeric message roots or read-only labels."
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
-        "required": [
-          "thread_id"
-        ],
+        "required": [],
         "type": "object"
       }
     },
@@ -1399,5 +1414,12 @@
         "type": "object"
       }
     }
+  },
+  "reply_contract": {
+    "storage": "per-message reply_to",
+    "legacy_numeric": "copy preserved message ID",
+    "legacy_named": "read-only label with source provenance",
+    "no_thread_issuance": true,
+    "parent_purge": "hold ancestors referenced by surviving children"
   }
 }

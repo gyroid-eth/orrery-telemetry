@@ -14,6 +14,8 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+from .namespace_replies import ReplyError, numeric_legacy, valid_id
+
 NAMESPACE_CONTRACT_VERSION = 2
 SCOPE_ARGUMENTS = frozenset({"project_key", "human_key", "to_project", "from_project"})
 
@@ -59,6 +61,38 @@ class NamespaceAdapter:
         )
         if set(spec["input_schema"].get("required", [])) - set(normalized):
             raise NamespaceContractError("missing namespace arguments")
+        if (
+            tool == "send_message"
+            and normalized.get("reply_to") is not None
+            and not valid_id(normalized["reply_to"])
+        ):
+            raise ReplyError("INVALID_REPLY_ID")
+        if tool == "send_message" and normalized.get("thread_id") is not None:
+            parent = numeric_legacy(normalized.pop("thread_id"))
+            if parent is None:
+                raise ReplyError("LEGACY_THREAD_READ_ONLY")
+            if (
+                normalized.get("reply_to") is not None
+                and normalized["reply_to"] != parent
+            ):
+                raise ReplyError("REPLY_INPUT_CONFLICT")
+            normalized["reply_to"] = parent
+        if tool == "summarize_thread":
+            legacy = normalized.get("thread_id")
+            message_id = normalized.get("message_id")
+            if message_id is not None and not valid_id(message_id):
+                raise ReplyError("INVALID_REPLY_ID")
+            if legacy is None and message_id is None:
+                raise ReplyError("SUMMARY_INPUT_REQUIRED")
+            if legacy is not None and message_id is not None:
+                if numeric_legacy(legacy) != message_id:
+                    raise ReplyError("REPLY_INPUT_CONFLICT")
+                normalized.pop("thread_id")
+            elif legacy is not None and "," not in legacy:
+                parent = numeric_legacy(legacy)
+                if parent is not None:
+                    normalized.pop("thread_id")
+                    normalized["message_id"] = parent
         return normalized
 
     def dispatch(

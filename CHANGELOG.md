@@ -18,7 +18,7 @@
 
 ### project 廃止に向けた契約と移行計画を準備
 
-旧 scope 引数を受けて無視する candidate adapter、thread の発行と旧入力の解決、agent 名と window UUID の衝突・解決、最終 snapshot の再検証に結び付いた receipt と gate を追加しました。計画の fixture と一時 HOME の試験で、旧会話の継続、曖昧な入力の拒否、再開時の ID 保存、writer 再侵入時の停止条件を確認します。
+旧 scope 引数を受けて無視する candidate adapter、message ごとの reply_to と旧数字 thread の変換、名前付き旧値の読取、agent 名と window UUID の衝突・解決を追加しました。返信は元 message ごとの送信者・宛先で照合し、残る子が参照する親は purge から保留します。最終 snapshot の再検証と固定した予定 writer 集合に結び付く receipt/gate も fixture で確かめます。
 
 これは準備の PR で、公開中の tool・project ごとの配送・DB・installer・hook は従来どおりです。新 API は明示した candidate だけで使い、gate が ready でも切替は有効になりません。詳細は[契約と移行計画](docs/project-removal-plan.md)を参照してください。
 

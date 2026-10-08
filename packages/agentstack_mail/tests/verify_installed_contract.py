@@ -78,8 +78,10 @@ async def verify() -> None:
     for name in tools:
         properties = dict(candidate["tools"][name]["input_schema"]["properties"])
         if name == "send_message":
-            properties.pop("new_thread")
-            properties.pop("thread_label")
+            properties.pop("reply_to")
+        if name == "summarize_thread":
+            properties.pop("message_id")
+            properties["thread_id"] = actual[name]["inputSchema"]["properties"]["thread_id"]
         current = {
             key: value
             for key, value in actual[name]["inputSchema"]["properties"].items()

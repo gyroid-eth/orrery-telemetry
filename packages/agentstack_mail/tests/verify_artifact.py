@@ -1118,7 +1118,7 @@ REQUIRED_RUNTIME_MODULES = {
     "models.py",
     "namespace_contract.py",
     "namespace_plan.py",
-    "namespace_threads.py",
+    "namespace_replies.py",
     "path_alias.py",
     "rich_logger.py",
     "restore_acceptance.py",

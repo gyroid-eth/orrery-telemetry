@@ -2,50 +2,56 @@
 
 [English](project-removal-plan.en.md)
 
-この版は [#213](https://github.com/gyroid-eth/orrery-telemetry/issues/213) の最初の準備です。**公開中の tool、project ごとの配送、DB、installer、hook の動作は変わりません。** 新しい契約と計画 API は明示的な fixture/candidate の呼出にだけ使い、live の切替には接続していません。
+この版は [#213](https://github.com/gyroid-eth/orrery-telemetry/issues/213) の準備です。公開中の 25 tool、project ごとの配送、DB、installer、hook の動作は従来どおりです。新しい契約と計画 API は明示した candidate 呼出にだけ使い、live の切替には接続していません。
 
-## この版に入るもの
+## Candidate 契約
 
-- `namespace-tools-v2.json`: 25 tool の candidate input schema。既存の v1 fixture/公開契約は維持します。移行期間に受ける旧 scope 引数を tool ごとに列挙し、通常の引数と分けています。
-- `NamespaceAdapter`: `project_key`、macro の `human_key`、contact の `to_project/from_project` を、対応する tool で受けて無視します。未指定・異なる値でも candidate dispatcher に渡す内容は同じです。owner token 等はそのまま渡し、backend の操作別の検証を代行しません。未知の引数を黙って捨てません。
-- `ThreadCatalog`: server 側で ID を発行する契約、旧 thread 入力、message ID の reply、明示した group/separate の計画。DB は開かず、計画内の排他と一意性を検査します。永続 DB の unique 制約と実 tool の配線は後続 PR です。
-- `plan_agent_names` / `plan_windows`: 退役済みを含む exact/normalized 名の衝突と、window row ID による UUID の解決。自動の改名・同名 agent の合体・UUID の勝者選択をしません。
-- `MigrationReceipt` / `FinalValidationEvidence`: 計画の replay、最終 snapshot に結び付いた検証結果、writer 停止の evidence と gate。ファイル保存、収集、実 DB の検証、writer の停止自体は後続 PR です。
+`namespace-tools-v2.json` と `NamespaceAdapter` は、旧 `project_key`、macro の `human_key`、contact の `to_project/from_project` を対応する tool で受けて無視します。値の違い・未指定で候補 backend の宛先を変えません。owner token、既存 owner の復旧引数などは保持し、未知の引数を黙って捨てません。candidate の `ensure_project` は no-op です。現在公開している tool は従来どおり project を作ります。
 
-## Candidate adapter
+`NamespaceAdapter.dispatch(tool, arguments, backend)` は明示した candidate backend 専用です。本人の確認、操作別の値検証、配送先の contact policy を backend が保ちます。既存の project 必須の関数へそのまま繋ぐ API ではありません。
 
-`NamespaceAdapter(load_namespace_contract()).dispatch(tool, arguments, backend)` は candidate backend を明示した場合だけ使います。現在の project 必須の tool 関数へそのまま繋ぐ API ではありません。`ensure_project` は candidate では no-op ですが、現在公開している tool では従来どおり project を作ります。
+## Thread を持たない返信
 
-scope 値を捨てることと、本人の確認を捨てることは別です。raw/proxy/operator の現在の保護を操作ごとに保ちます。thread の `CallerEvidence` は認証/binding 層が確認した情報であり、tool の引数から作ってはいけません。
+`ReplyCatalog` は message ごとの `reply_to` を扱います。thread の UUID 発行・名前空間・対応表・旧 alias resolver はありません。返信先を省略すれば独立した message です。`CallerEvidence` は trusted な認証/binding 境界が確認した agent ID であり、tool の入力から作ってはいけません。
 
-## Thread の継続
+旧 message の数字 `thread_id` は保存した message ID への `reply_to` に写します。旧値は会話の root を指す場合があり、当時の直接の親を推測しません。名前付き旧値は source の provenance とともに `legacy_thread_label` として読取専用で残します。同じラベル・件名・topic から返信 edge を作りません。欠落、自己参照、循環、不正な ID は移行と restore を拒否します。
 
-新しい ID は `th-<UUID>` です。ID なしの送信と明示的な新規作成は新しい ID を返し、ラベルが同じでも会話を合体しません。既存 canonical ID、確認済みの旧 alias、元 message ID の reply を区別します。旧 alias が canonical の形でも対応表を確認し、発行 ID が旧 alias と重ならないようにします。
+返信してよいかは、元 message ごとの sender または to/cc/bcc recipient かで確認します。会話全体の参加者で代用しません。message101 が A/B、message102 が A/C なら、B は101へ返信でき、102へは返信できません。数字の旧入力でも root の非参加者は要更新です。参照できる102への直接の返信を使い、root のチェックを緩めません。
 
-異なる旧 source の同じ thread は、独立した会話の場合と、既存の橋渡し会話の場合があります。重複する alias は確認済みの `ThreadDecision` が必要です。関連を確認した group だけを結び、separate は個別の履歴を保ちます。関連不明を個別保存すると決めた場合は旧 ID の継続を要更新とし、元 message からの reply を使えます。本文や時刻の類似から自動結合しません。
+`send_message` の候補 adapter は旧数字 `thread_id` を `reply_to` に変換します。両方を指定する場合は同じ ID のみ受け、違えば `REPLY_INPUT_CONFLICT`。名前付きの書込は `LEGACY_THREAD_READ_ONLY` として更新を求めます。参照先と本人の照合は候補 backend の `ReplyCatalog.resolve()` が行います。
 
-旧 alias は確認済み caller の旧 binding/参加履歴から候補が一つの場合だけ解決します。`project_key` は resolver に入りません。曖昧なら `LEGACY_THREAD_AMBIGUOUS`、関連不明なら `LEGACY_THREAD_UPDATE_REQUIRED`、未知なら `LEGACY_THREAD_UNKNOWN` を返し、第三の同名 thread を作りません。確認できない caller と本人が参照できない message は拒否します。
+`reply_message(message_id)` の候補 backend は、その ID を直接の親として使う返信 wrapper です。元 thread を継ぐ処理はやめます。宛先既定・件名 prefix・importance/ack/topic 継承の実配線は後続 PR です。
 
-`ThreadCatalog.export()` と `from_export()` は確定した ID/message 対応を保ちます。再開時に発行し直さず、壊れた対応を拒否します。新規配送の記録は backend の owner/contact 検証後だけ `record_delivery()` へ渡します。
+`summarize_thread` は互換入口として、新しい `message_id` または旧 `thread_id` を受けます。数字は message 起点へ変換し、comma 区切りは各起点、名前付きは履歴ラベルの読取として扱います。`legacy_read()` の各 view を集計する backend は重複 message を二重計上しません。旧名の撤去と正規の `summarize_conversation` の公開は client inventory を確認した後です。`fetch_topic` は現在も topic タグ検索なので、その用途を保ちます。
 
-## Window の入力
+`conversation()` は返信のつながりを辿り、caller が参照できる message ID だけを返します。見えない message の ID・bcc・本文・件数は返さず、一部省略があることだけを示します。返された ID を表示/要約へ渡すときも、backend は message ごとの閲覧と bcc の非表示を維持します。実 UI、本文の rendering、LLM 要約はこの PR では実装しません。旧ラベルの読取は source ごとに分け、同名ラベルを会話と断定しません。
 
-`plan_windows(records, {12: "keep", 34: "generate"})` のように row ID を指定します。重複 UUID は全ての行に明示した対応が必要です。`generate` の結果は receipt に保管し、再開時は `prior_targets` と同じ choices を渡します。入力が変われば再計画を求めます。期限切れの行と binding も保持し、新たに同じ UUID にした行は unresolved とします。
+`record_delivery()` は owner/contact 検証済みの backend が呼びます。元 message の確認と登録を計画内の lock でまとめ、同じ message の再記録は idempotent、異なる edge への付替えは拒否します。`export()` / `from_export()` は ID、sender/個々の宛先、reply_to、topic、旧 label/source を保ち、参照を再検証します。本文や credential を入力・保存しません。
 
-## 最終の確かめ直しと gate
+## 削除する親と残る子
 
-receipt の準備 phase は `planned → prepared → prevalidated → quiesced → final_verified` です。`switched/committed` は予約した将来の phase で、この版では遷移できません。
+候補の `plan_purge()` / `purge()` は、残る子の祖先を再帰的に保留します。古い親＋新しい子は親を保留し、全て期限切れで残る子がなければ親子とも削除できます。子の cascade、reply_to の null 化、親の付替え、tombstone は行いません。候補数・予定削除/保留と実削除/保留を分けます。
 
-初回の検証後にも source は変わります。最終差分適用後に、agent/window/thread/lease の対応、message/recipient/read/ack、credential 世代、添付/FTS、配送 state、contact policy、binding/block hash の **13 項目を全て再検証**します。後続の trusted verifier が `FinalValidationEvidence.record(snapshot, candidate, results)` で、実際に確かめた source/candidate の digest と結果を記録します。件数から FTS や所有権の正しさを推定せず、初回の結果を別の世代へ流用できません。PR1 の fixture に渡す合成結果は、live の検証成功を意味しません。
+実行時に削除計画を再確認するため、dry-run 後に返信が登録されていれば親は保留します。親の削除が先なら返信は `MESSAGE_UNAVAILABLE`。これは in-memory lock の契約試験です。実 DB の同一 write transaction、RESTRICT/NO ACTION の FK、削除順序と runtime purge への接続は後続 PR3/4 で行います。
 
-`FenceEvidence` は共通 authority、旧 supervisor の抑止、全ての予定 writer の停止、connection の終了、inflight wake が 0 と分かることを要求します。空の inventory、unknown、writer 再起動は gate を通しません。共通 authority の取得と観測は後続 PR で実装します。
+## 名前と window
 
-`receipt.gate(current_snapshot, current_candidate, current_fence)` は最終検証の世代/照合値と現在の状態を比較します。遅れた変更、unresolved、欠けた検証、停止不明なら ready は false。**ready が true でも `activation_enabled` は常に false** です。環境変数でもこの版の切替を有効にできません。
+`plan_agent_names()` は退役済みを含む exact/normalized 名前の衝突を全件示します。自動の改名や同名 agent の合体はしません。
 
-receipt は明示的な JSON の serialize/deserialize のみを提供します。検査用 digest は偶発的な変更を検出するもので、署名や caller 認証を代替しません。保存と更新の権限・atomic な出版は後続 PR で扱います。snapshot の本文を receipt に保存せず digest にし、確定した非秘密の解決入力を保持します。
+`plan_windows(records, {12: "keep", 34: "generate"})` は row ID を指定する入力です。重複する全行を明示し、生成 UUID は receipt に保持します。再開は同じ choices と `prior_targets` を使い、別 UUID を発行しません。期限切れの行と binding も保ち、新しい重複や入力変更は解決を求めます。
 
-## 確認と残る範囲
+## 最終検証と固定した writer 集合
 
-`packages/agentstack_mail/tests/test_namespace_contract_plan.py` は一時 HOME で v2 adapter、衝突/解決/replay、独立/橋渡し thread、最終差分後の stale evidence、writer 再侵入、receipt と無効な切替を検査します。同じ試験は fixture DB を使った実際の v1 MCP 呼出も行い、公開 schema と project 別の inbox が従来どおりであることを確かめます。
+receipt の準備 phase は `planned → prepared → prevalidated → quiesced → final_verified` です。この版では `switched/committed` に遷移できません。
 
-実 DB の統合、Codex App 配送 DB の変換、filesystem activity/GC、service の停止/切替、旧 block の撤去/UI、installer/client の更新はこの PR に入りません。通常利用者が新しい migration helper を実行できる版でもありません。既定の利用手順・README・managed block に変更は不要です。
+計画 snapshot の非空・重複なしの `expected_writers` を receipt の `writer_roster` に固定します。quiesce/final 検証/current gate は evidence の expected と states の両方をこの roster と照合します。expected と states を同時に縮めても通りません。final snapshot の roster が計画と違えば再計画し、保存/復元後も同じ集合を要求します。trusted collector が対象を列挙する実装は後続 PR です。
+
+最終差分適用後に、名前/window、reply 参照と旧 label、lease、message ID、recipient/read/ack、credential 世代、添付、FTS、配送 state、contact policy、binding、block hash の **13 項目を再検証**します。`FinalValidationEvidence.record(snapshot, candidate, results)` は trusted verifier が実際に検証した snapshot/candidate と結果を結び付けます。古い結果、変化した source/candidate、欠けた検証、未解決、writer 再起動/不明、connection/wake が残る場合は gate を通しません。件数から FTS や所有権を推定しません。
+
+ready でも `activation_enabled` は常に false です。環境変数でも切替を有効にできません。receipt は JSON の明示的な serialize/deserialize だけです。digest は偶発的な変更を検出し、署名や caller 認証を代替しません。保存の権限・atomic な出版、実 collector/停止と authority handoff は後続 PR です。
+
+## 検証と残る範囲
+
+一時 HOME の fixture で message ごとの返信可否、旧数字/ラベル、参照/循環、表示の範囲、purge の両順序、export/restore、名前/window、writer 集合の同時縮小、stale evidence、無効な activation を検査します。同じ試験は fixture DB を使った実際の v1 MCP 呼出も行い、公開 schema と project 別 inbox が従来どおりであることを確かめます。
+
+実 DB/配送 DB の変換、persistent FK/transaction、filesystem activity/GC、サービス停止/切替、installer/runtime/client/旧 block/UI の変更は含めません。準備 fixture の成功を live の移行成功や raw tool 全体の強制認証と説明しません。通常利用者向けの新しい migration CLI もまだありません。
