@@ -60,4 +60,3 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Development entry](../CONTRIBUTING.md) — Build, validation, and contribution procedures.
 
 Documents without a translation are labelled with their original language. Images/GIFs accompany their articles. From the repository root, run `python3 scripts/check_docs_index.py` to check index coverage.
-
