@@ -22,6 +22,8 @@
 
 nohup service は起動時に PID・UID・command・起動時刻を記録し、停止前と待機中に同じ process かを照合します。起動時の記録は期待した runner の command が現れ、続く観測でも一致してから行います。再利用された PID や、生きている旧 pidfile に識別情報がない場合、`ps` で確認できない場合には signal を送りません。launchd は label に加えて plist の所有者・実行引数と現在の job の実行引数を確認します。
 
+macOS の `ps` は、引数を取得できないと[括弧付きの実行名へ表示を変える場合があります](https://github.com/apple-oss-distributions/adv_cmds/blob/main/ps/print.c)。隔離した終了観測40回中32回で、TERM 後に同じ UID・起動時刻の command が `(bash)` となり、その次に process が消滅しました。こちらが所有を厳密に確認して signal を送った後の待機だけ、同じ UID・起動時刻かつ実行名の basename が一致するこの括弧形を許します。この状態で追加 signal や receipt の削除は行いません。消滅を観測するまで待ち、期限時に command を厳密に確認できなければ停止を未確認として記録を保持します。TERM/KILL の送信直前、起動時の記録と停止前の確認は、全て従来通り command も厳密に照合します。
+
 Linux/WSL の起動識別は `/proc` の boot ID と process の starttime tick を使い、`ps` の表示時刻の揺れを比較に含めません。UID/command の取得前後でも tick が同じかを照合します。kernel 情報の取得不能や途中の process の置換は拒否します。`/proc` 自体の欠如や非表示の PID を process 消滅とは扱わず、独立した `kill(pid, 0)` が ESRCH を返した場合だけ不在と認定します。生存・権限不足・確認不能なら receipt と payload を保持します。Mac の起動時刻は `ps` の秒単位の値なので、同じ秒に同じ UID・command・PID が再利用される場合には識別の限界があります。いずれの環境でも照合直後の process の置換を完全には防げません。
 
 `remove_registration` の終了時には plugin.enabled を false にし、JSON の結果を stdout に出します。service_stop_requested は停止処理の要求であり、service_stopped は process の終了または launchd job の不在を確認した結果です。未確認を成功として記録しません。core 全体の撤去と最終 report は後続の変更です。

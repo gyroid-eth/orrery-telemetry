@@ -126,7 +126,7 @@ def process_identity(pid):
             'command': fields[7]}
 
 
-def check_process(saved, runner):
+def check_process(saved, runner, *, waiting_for_exit=False):
     if not isinstance(saved, dict) or not isinstance(saved.get('pid'), int) or saved['pid'] <= 1:
         raise OwnershipUnknown('saved process identity is unavailable')
     command = saved.get('command', '')
@@ -138,6 +138,11 @@ def check_process(saved, runner):
     current = process_identity(saved['pid'])
     if current is not None and current != {k: saved[k] for k in ('pid', 'uid', 'start', 'command')}:
         changed = ','.join(k for k in ('pid', 'uid', 'start', 'command') if current.get(k) != saved.get(k))
+        if (waiting_for_exit and sys.platform == 'darwin' and changed == 'command'
+                and current['command'] == '('+Path(command.split(None, 1)[0]).name+')'):
+            # ps may lose argv while an already-signalled process exits.
+            # This authorizes only waiting, never a signal or receipt removal.
+            return current
         raise OwnershipUnknown('current process differs from its receipt (changed: '+changed+')')
     return current
 
@@ -188,12 +193,12 @@ def stop_supervisor(pidfile, runner, saved=None):
     if owned is not None and check_process(owned, runner) is not None:
         os.kill(owned['pid'], signal.SIGTERM)
         deadline = time.monotonic()+5
-        while time.monotonic() < deadline and check_process(owned, runner) is not None:
+        while time.monotonic() < deadline and check_process(owned, runner, waiting_for_exit=True) is not None:
             time.sleep(.05)
         if check_process(owned, runner) is not None:
             os.kill(owned['pid'], signal.SIGKILL)
             deadline = time.monotonic()+2
-            while time.monotonic() < deadline and check_process(owned, runner) is not None:
+            while time.monotonic() < deadline and check_process(owned, runner, waiting_for_exit=True) is not None:
                 time.sleep(.05)
             if check_process(owned, runner) is not None:
                 raise OwnershipUnknown('service exit was not observed')

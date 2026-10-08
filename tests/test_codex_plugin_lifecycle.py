@@ -357,6 +357,95 @@ def test_pid_identity_changed_after_term_is_preserved_without_kill(tmp_path, mon
     assert signals == [signal.SIGTERM] and pidfile.exists()
 
 
+def test_after_term_command_fallback_waits_for_observed_exit_without_more_signals(tmp_path, monkeypatch):
+    import signal
+    monkeypatch.setattr(ownership.sys, 'platform', 'darwin')
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    receipt = Path(str(pidfile)+'.identity.json'); receipt.write_text(json.dumps(saved))
+    state = {'signalled': False}
+    exiting = iter([dict(saved, command='(bash)'), dict(saved, command='(bash)')])
+    observations = []
+    def inspect(pid):
+        if not state['signalled']:
+            return saved
+        current = next(exiting, None)
+        observations.append(current)
+        if current is not None:
+            assert pidfile.exists() and receipt.exists()
+        return current
+    monkeypatch.setattr(ownership, 'process_identity', inspect)
+    signals = []
+    def send(pid, sig):
+        signals.append(sig); state['signalled'] = True
+    monkeypatch.setattr(ownership.os, 'kill', send)
+    monkeypatch.setattr(ownership.time, 'sleep', lambda delay: None)
+    ownership.stop_supervisor(pidfile, runner, saved)
+    assert signals == [signal.SIGTERM]
+    assert observations[0]['command'] == '(bash)' and observations[1]['command'] == '(bash)'
+    assert None in observations and not pidfile.exists() and not receipt.exists()
+
+
+@pytest.mark.parametrize('changed_command', ['/bin/bash /unrelated/runner', '(bash)'])
+def test_changed_command_after_term_never_authorizes_kill_or_receipt_removal(tmp_path, monkeypatch, changed_command):
+    import signal
+    monkeypatch.setattr(ownership.sys, 'platform', 'darwin')
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    state = {'current': dict(saved)}
+    monkeypatch.setattr(ownership, 'process_identity', lambda pid: state['current'])
+    signals = []
+    def send(pid, sig):
+        signals.append(sig); state['current']['command'] = changed_command
+    monkeypatch.setattr(ownership.os, 'kill', send)
+    clock = iter([0, 6]); monkeypatch.setattr(ownership.time, 'monotonic', lambda: next(clock))
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    receipt = Path(str(pidfile)+'.identity.json'); receipt.write_text(json.dumps(saved))
+    with pytest.raises(ownership.OwnershipUnknown, match='changed: command'):
+        ownership.stop_supervisor(pidfile, runner, saved)
+    assert signals == [signal.SIGTERM] and pidfile.exists() and receipt.exists()
+
+
+def test_command_fallback_before_term_never_authorizes_a_signal(tmp_path, monkeypatch):
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    monkeypatch.setattr(ownership, 'process_identity', lambda pid: dict(saved, command='(bash)'))
+    signals = []; monkeypatch.setattr(ownership.os, 'kill', lambda pid, sig: signals.append(sig))
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    with pytest.raises(ownership.OwnershipUnknown, match='changed: command'):
+        ownership.stop_supervisor(pidfile, runner, saved)
+    assert signals == [] and pidfile.exists()
+
+
+@pytest.mark.parametrize('difference', ['uid', 'start', 'unknown', 'wrong_name', 'other_command'])
+def test_after_term_fallback_never_bypasses_replacement_or_unknown(tmp_path, monkeypatch, difference):
+    import signal
+    monkeypatch.setattr(ownership.sys, 'platform', 'darwin')
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    current = dict(saved, command='(bash)')
+    if difference == 'uid': current['uid'] += 1
+    elif difference == 'start': current['start'] = 'replacement-start'
+    elif difference == 'wrong_name': current['command'] = '(python)'
+    elif difference == 'other_command': current['command'] = '/bin/bash /unrelated/runner'
+    state = {'signalled': False}
+    def inspect(pid):
+        if not state['signalled']: return saved
+        if difference == 'unknown': raise ownership.OwnershipUnknown('inspection unavailable')
+        return current
+    monkeypatch.setattr(ownership, 'process_identity', inspect)
+    signals = []
+    def send(pid, sig):
+        signals.append(sig); state['signalled'] = True
+    monkeypatch.setattr(ownership.os, 'kill', send)
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    receipt = Path(str(pidfile)+'.identity.json'); receipt.write_text(json.dumps(saved))
+    with pytest.raises(ownership.OwnershipUnknown):
+        ownership.stop_supervisor(pidfile, runner, saved)
+    assert signals == [signal.SIGTERM] and pidfile.exists() and receipt.exists()
+
+
 @pytest.mark.parametrize('foreign', ['plist', 'loaded_job', 'unknown'])
 def test_launchd_label_alone_does_not_authorize_stopping(tmp_path, monkeypatch, foreign):
     import plistlib
