@@ -1097,6 +1097,11 @@ EXPECTED_CUTOVER_APPROVAL = {
 }
 
 REQUIRED_RUNTIME_MODULES = {
+    "namespace_state_io.py",
+    "namespace_transform.py",
+    "namespace_migration.py",
+    "namespace_store.py",
+    "namespace_delivery.py",
     "__init__.py",
     "app.py",
     "authorization.py",
@@ -1145,9 +1150,16 @@ WHEEL_REQUIRED_SUFFIXES = {
     "agentstack_mail/fixtures/namespace-tools-v2.json",
     "agentstack_mail/fixtures/namespace-plan-v1.json",
     "agentstack_mail/fixtures/absolute-reservations-v1.json",
+    "agentstack_mail/fixtures/namespace-state-v2.json",
+    "agentstack_mail/fixtures/namespace-legacy-delivery-v1.sql",
 } | {f"agentstack_mail/{module}" for module in REQUIRED_RUNTIME_MODULES}
 
 SDIST_REQUIRED_SUFFIXES = {
+    "/tests/test_namespace_state_migration.py",
+    "/tests/test_namespace_state_runtime.py",
+    "/tests/fixtures/namespace_state.py",
+    "/fixtures/namespace-state-v2.json",
+    "/fixtures/namespace-legacy-delivery-v1.sql",
     "/AGENTSTACK_LICENSE",
     "/UPSTREAM_LICENSE",
     "/NOTICE.md",

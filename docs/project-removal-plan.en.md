@@ -1,6 +1,7 @@
 # Project removal contract and migration plan (PR1)
 
 Absolute reservations are validated by [the PR2 candidate contract](absolute-reservations.en.md). PR1 activation remains false and legacy mode remains the default.
+DB and delivery migration are validated by [the isolated PR3 candidate](namespace-state-migration.en.md); production cutover is deferred.
 
 [日本語](project-removal-plan.md)
 

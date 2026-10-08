@@ -1,6 +1,7 @@
 # project 廃止の契約と移行計画（PR1）
 
 絶対 path の予約は [PR2 の候補契約](absolute-reservations.md)で検証します。PR1 の activation false と既定の旧 mode は保ちます。
+DB と配送の移行は [PR3 の隔離候補](namespace-state-migration.md)で検証します。実運用への切替は行いません。
 
 [English](project-removal-plan.en.md)
 
