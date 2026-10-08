@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### project 廃止に向けた絶対 path 予約の候補を準備
+
+共通の path 正規化、認証と owner を確かめる候補 server、bound proxy・hook・CLI の adapter、予約ごとの filesystem/Git 活動と GC を追加しました。別 cwd の同じ相対名を分け、同一 file と glob 内の symlink の先の新規 file は競合させます。未知の探査結果では早期解放せず、TTL と owner release は維持します。候補は明示した隔離 store で試験し、既定の公開 tool・DB・installer・既存 hook は旧 mode のままです。永続化と切替は後続 PR で行います。詳細は[絶対 path の予約候補](docs/absolute-reservations.md)を参照してください。
+
 ### 常駐 daemon が Mail の識別子を確認し、共通の通知待機を使えます
 
 同梱 Mail の `health_check` に、管理 socket と同じ永続的な `server_instance_id` を追加します。秘密ではない UUID で、別の Mail への誤接続を拒否できます。利用する側が必要な field を判定できるよう、互換世代を11から12に上げました。API 11の watcher health と古い signal の扱いは保ちます。
