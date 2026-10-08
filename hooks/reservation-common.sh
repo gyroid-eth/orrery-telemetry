@@ -107,6 +107,13 @@ legacy_bearer_enabled() {
     esac
 }
 
+reservation_absolute_paths() {
+    # Explicit candidate helper only; no caller in the installed legacy hooks.
+    # All adapters use the packaged normalizer. Cwd is observed here, rather
+    # than inferred from PROJECT_KEY or PROTECTED_ROOTS. Missing package fails.
+    "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.reservation_clients --cwd "$(pwd -P)" "$@"
+}
+
 # Populate SESSION_ID, FILE_PATH, MATCHED_ROOT, REL_PATH, and
 # RESERVATION_PROJECT_KEY from an Edit/Write hook document. Return 1 for the
 # intentional no-op cases (no file or a file outside all protected roots).
