@@ -27,6 +27,7 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [Update](install.md#upgrade) — 既存設定を引き継いで更新する手順。
 - [インストール](install.md) — 要件、単独 install、検証、upgrade/uninstall と移行手順。
 - [設定](configuration.md) — AGENTSTACK_*、保存・公開範囲、model・child の設定を調べる。
+- [Codex plugin 導入処理の再利用](codex-plugin-lifecycle.md) — 本体 install 接続前の共通処理、対象 hook の信頼と隔離確認。
 - [Codex App 統合](codex-app.md) — optional provider として Desktop の task/subagent を載せる。
 - [Antigravity / Gemini](antigravity.md) — optional provider の追加と認証・機能の境界。
 - [常駐 agent](persistent-agents.md) — enrollment、interactive/headless 起動、credential の復旧。

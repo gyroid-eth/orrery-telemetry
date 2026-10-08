@@ -193,3 +193,5 @@ Codex Desktop はさらに別の plugin hook / Bridge lifecycle を使います�
 ## 決定的daemonのlocal entry
 
 [daemon-agents.md](daemon-agents.md) の新しいoperator専用CLIは、既存bound proxyとagentstack-await-replyの共通wait primitiveを使います。通常のlifecycle hookやchild registrationは変更しません。live配備は別承認です。
+
+Codex plugin の対象 hook だけを承認する API と未確認時の `/hooks` 案内は [導入処理の再利用](codex-plugin-lifecycle.md#hook-の定義確認と信頼) に記載しています。

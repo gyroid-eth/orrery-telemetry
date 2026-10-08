@@ -89,6 +89,8 @@ Japanese documents are the source of truth. The English entry point is the [Engl
 
 Look before installing with the [public demo](https://agentstack-demo.pages.dev/); the [introduction video](https://youtu.be/Jpc1ad7c90k) illustrates the idea ([Japanese version](https://youtu.be/JXoa93TQolU)). See [CONTRIBUTING.md](CONTRIBUTING.md) before contributing code.
 
+[Reusable Codex plugin lifecycle and isolated verification (Japanese)](docs/codex-plugin-lifecycle.md).
+
 ## License
 
 This repository uses the **PolyForm Perimeter License 1.0.1**. It is source-available, not open source in the OSI sense. See [LICENSE](LICENSE) for the complete terms.

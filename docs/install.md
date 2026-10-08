@@ -482,3 +482,5 @@ installer は third-party 版への自動切替を行いません。必要なら
 ## 決定的daemonのlocal helper
 
 [専用bindingと通知](daemon-agents.md) は固定source releaseから実行するlocal entryで、一般installerの配備対象にはまだ加えていません。HTTP healthのMail UUID対応buildが必要です。通常のClaude/Codex profileにdaemonを偽装せず、live Mail更新・identity作成・配備は別のoperator承認を経てください。
+
+Codex の専用 installer の再利用単位・hook 承認の引渡し・隔離試験は [Codex plugin 導入処理の再利用](codex-plugin-lifecycle.md) を参照してください。本体 install への接続は別の変更です。

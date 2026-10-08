@@ -27,6 +27,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Update](install.en.md#upgrade) — Update while keeping existing settings.
 - [Installation](install.en.md) — Requirements, standalone install, verification, upgrade/uninstall, and migration.
 - [Configuration](configuration.en.md) — Look up AGENTSTACK_*, storage/exposure, model, and child settings.
+- [Reusable Codex plugin lifecycle (Japanese)](codex-plugin-lifecycle.md) — Shared operations, scoped hook trust, and isolated verification.
 - [Codex App integration](codex-app.en.md) — Add Desktop tasks/subagents as an optional provider.
 - [Antigravity / Gemini](antigravity.en.md) — Add an optional provider and understand authentication and feature boundaries.
 - [Persistent agents](persistent-agents.en.md) — Enrollment, interactive/headless startup, and credential recovery.
@@ -59,3 +60,4 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Development entry](../CONTRIBUTING.md) — Build, validation, and contribution procedures.
 
 Documents without a translation are labelled with their original language. Images/GIFs accompany their articles. From the repository root, run `python3 scripts/check_docs_index.py` to check index coverage.
+

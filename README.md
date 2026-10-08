@@ -89,6 +89,8 @@ Telemetry 単体での例: 名前で絞り込み、`7D` の `RETIRED` / `RESUME 
 
 install 前に雰囲気を見るなら[公開デモ](https://agentstack-demo.pages.dev/)、考え方の図解は[紹介動画](https://youtu.be/JXoa93TQolU)。開発への変更は [CONTRIBUTING.md](CONTRIBUTING.md)を参照してください。
 
+[Codex plugin 導入処理の再利用と隔離確認](docs/codex-plugin-lifecycle.md)。
+
 ## License
 
 本 repository は **PolyForm Perimeter License 1.0.1** です。source-available であり、OSI の意味での open source ではありません。全文は [LICENSE](LICENSE) を参照してください。

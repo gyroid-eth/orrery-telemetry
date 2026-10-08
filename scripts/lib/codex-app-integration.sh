@@ -1,0 +1,1039 @@
+# Source-only lifecycle entry points. Each operation runs in a subshell so
+# installer globals, shell options and exit do not affect the core caller.
+agentstack_codex_app_apply() (
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SOURCE_DIR="$REPO_ROOT/integrations/codex_app"
+DRY_RUN=false
+NO_SERVICE=false
+NO_PLUGIN=false
+REFRESH_PLUGIN_ONLY=false
+APPROVED_HOOK_PLAN=""
+SHARED_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+HOOK_TRUST=needs_review
+PLUGIN_SELECTED_PATH=""
+INSTALL_DIR="${AGENTSTACK_CODEX_APP_INSTALL_DIR:-$HOME/.agentstack/integrations/codex_app}"
+RUNTIME_DIR="${AGENTSTACK_CODEX_APP_RUNTIME_DIR:-$HOME/.agentstack/runtime/codex-app}"
+PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
+MCP_URL="${AGENTSTACK_MCP_URL:-}"
+# ORRERY Mail keeps its state and signal tree under AgentStack.
+MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
+SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$HOME/.agentstack/mail/signals}"
+HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
+LABEL="${AGENTSTACK_CODEX_APP_LAUNCHD_LABEL:-org.agentstack.codex-app-bridge}"
+MARKETPLACE_NAME="${AGENTSTACK_CODEX_APP_MARKETPLACE:-agentstack-local}"
+WAKE_LIMIT="${AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR:-12}"
+STALE_AFTER="${AGENTSTACK_CODEX_APP_STALE_AFTER_SECONDS:-3600}"
+RETRY_MAX_ATTEMPTS="${AGENTSTACK_CODEX_APP_RETRY_MAX_ATTEMPTS:-12}"
+RETRY_MAX_AGE="${AGENTSTACK_CODEX_APP_RETRY_MAX_AGE_SECONDS:-3600}"
+RETRY_MAX_BACKOFF="${AGENTSTACK_CODEX_APP_RETRY_MAX_BACKOFF_SECONDS:-300}"
+RESTART_DELAY="${AGENTSTACK_CODEX_APP_RESTART_DELAY:-5}"
+SKIP_GIT_CHECK="${AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK:-0}"
+PYTHON_BIN="${AGENTSTACK_PYTHON:-$(command -v python3 2>/dev/null || true)}"
+# Explicit (--codex-bin, or AGENTSTACK_CODEX_BINARY as before) is used as given
+# and must work; otherwise resolve_codex_bin below picks one by the core
+# installer's rules.
+CODEX_BIN="${AGENTSTACK_CODEX_BINARY:-}"
+
+usage() {
+  cat <<'EOF'
+Usage: install-codex-app-integration.sh [options]
+
+Installs the Codex App integration source, a token-free env.sh, a local
+marketplace snapshot, and an optional persistent Bridge service.
+
+Options:
+  --dry-run                 Validate and print actions without writing
+  --no-service              Render but do not start launchd or background service
+                            (the default outside macOS, where there is no launchd)
+  --no-plugin               Build but do not register/install the Codex plugin
+  --refresh-plugin-only     Refresh an existing enabled plugin without changing Bridge state
+  --install-dir PATH        Default: ~/.agentstack/integrations/codex_app
+  --runtime-dir PATH        Default: ~/.agentstack/runtime/codex-app
+  --project-key PATH        Required absolute project key
+  --agent-mail-url URL      Required ORRERY Mail JSON-RPC /api/ endpoint
+  --agent-mail-env PATH     Bearer reference file; token is not copied
+  --signals-dir PATH        Agent-mail signals directory
+  --label LABEL             launchd label
+  --marketplace-name NAME   Default: agentstack-local
+  --wake-limit COUNT        Default: 12 per hour
+  --stale-after SECONDS     Waiting runtime dormancy threshold; default: 3600
+  --retry-max-attempts N    Registration retry call limit; default: 12
+  --retry-max-age SECONDS   Registration retry lifetime; default: 3600
+  --retry-max-backoff SECONDS
+                            Registration retry backoff cap; default: 300
+  --skip-git-check          Explicitly allow resume outside a trusted git repo
+  --python-bin PATH         Python executable
+  --codex-bin PATH          Codex executable (default: AGENTSTACK_CODEX_BIN, else
+                            the one the core installer saved in env.sh, else the
+                            first usable codex on PATH; under WSL a Windows
+                            install under /mnt is skipped)
+  -h, --help                Show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    --no-service) NO_SERVICE=true; shift ;;
+    --no-plugin) NO_PLUGIN=true; shift ;;
+    --refresh-plugin-only) REFRESH_PLUGIN_ONLY=true; shift ;;
+    --shared-codex-home) SHARED_CODEX_HOME="$2"; shift 2 ;;
+    --approved-hook-plan) APPROVED_HOOK_PLAN="$2"; shift 2 ;;
+    --install-dir) INSTALL_DIR="$2"; shift 2 ;;
+    --runtime-dir) RUNTIME_DIR="$2"; shift 2 ;;
+    --project-key) PROJECT_KEY="$2"; shift 2 ;;
+    --agent-mail-url) MCP_URL="$2"; shift 2 ;;
+    --agent-mail-env) MAIL_ENV="$2"; shift 2 ;;
+    --signals-dir) SIGNALS_DIR="$2"; shift 2 ;;
+    --label) LABEL="$2"; shift 2 ;;
+    --marketplace-name) MARKETPLACE_NAME="$2"; shift 2 ;;
+    --wake-limit) WAKE_LIMIT="$2"; shift 2 ;;
+    --stale-after) STALE_AFTER="$2"; shift 2 ;;
+    --retry-max-attempts) RETRY_MAX_ATTEMPTS="$2"; shift 2 ;;
+    --retry-max-age) RETRY_MAX_AGE="$2"; shift 2 ;;
+    --retry-max-backoff) RETRY_MAX_BACKOFF="$2"; shift 2 ;;
+    --skip-git-check) SKIP_GIT_CHECK=1; shift ;;
+    --python-bin) PYTHON_BIN="$2"; shift 2 ;;
+    --codex-bin) CODEX_BIN="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+[[ "$SHARED_CODEX_HOME" == /* ]] || { echo "shared Codex home must be absolute" >&2; exit 2; }
+export CODEX_HOME="$SHARED_CODEX_HOME"
+MARKETPLACE_ROOT="$INSTALL_DIR/marketplace"
+MANIFEST="$INSTALL_DIR/install-state.json"
+ENV_FILE="$INSTALL_DIR/env.sh"
+RUNNER="$INSTALL_DIR/bin/run-bridge"
+PLIST_INSTALLED="$INSTALL_DIR/launchd/$LABEL.plist"
+PLIST_LIVE="$HOME/Library/LaunchAgents/$LABEL.plist"
+BACKGROUND_PIDFILE="$RUNTIME_DIR/bridge-supervisor.pid"
+SERVICE_KIND="disabled"
+SERVICE_PATH=""
+
+say() { printf '%s\n' "$*"; }
+warn() { printf 'warning: %s\n' "$*" >&2; }
+
+say_hook_approval_guidance() {
+  if [[ "$HOOK_TRUST" == observed_current ]]; then
+    say "ORRERY hook trust verified. History binding and Resume are not yet observed."
+    return
+  fi
+  # Run the codex chosen above, not whatever `codex` is first on PATH: on WSL
+  # that is often the Windows install, which cannot run inside Ubuntu.
+  say "Next: start Codex with the codex this installer used:"
+  if [[ -n "$PROJECT_KEY" ]]; then
+    say "  $(printf '%q' "$CODEX_BIN") -C $(printf '%q' "$PROJECT_KEY")"
+  else
+    say "  $(printf '%q' "$CODEX_BIN")"
+  fi
+  say "then open /hooks and review/approve the AgentStack lifecycle hooks."
+  say "Then start a new Codex process before checking history binding; existing processes may not refire SessionStart."
+}
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+plan() {
+  if [[ "$DRY_RUN" == true ]]; then
+    say "DRY-RUN would $*"
+  else
+    say "$*"
+  fi
+}
+
+# Codex candidate rules shared with the core installer, doctor and
+# spawn_child.sh (hooks/codex-bin.sh: under WSL a codex under /mnt is the
+# Windows npm shim and cannot run; any candidate must answer --version), and
+# the env.sh reader (hooks/project-context.sh). Both only define functions.
+# shellcheck disable=SC1091
+. "$REPO_ROOT/hooks/codex-bin.sh"
+# shellcheck disable=SC1091
+. "$REPO_ROOT/hooks/project-context.sh"
+
+# The codex this integration registers the plugin with and records in its
+# env.sh. On WSL, `command -v codex` found the Windows npm shim first on PATH,
+# and the install failed with "Missing optional dependency
+# @openai/codex-linux-x64" although the core installer had saved a working
+# codex in ~/.agentstack/env.sh (2026-09-29). Order: explicit (--codex-bin or
+# AGENTSTACK_CODEX_BINARY; checked the same way and never replaced),
+# AGENTSTACK_CODEX_BIN,
+# the value the core installer saved, then the first usable codex on PATH and
+# the usual per-user Node prefixes. A rejected candidate is reported with why.
+resolve_codex_bin() {
+  local candidate source problem
+  codex_probe_budget_start
+  if [[ -n "$CODEX_BIN" ]]; then
+    # Same check as every other candidate, but never replaced: an explicit
+    # codex that cannot run stops the install before anything is written.
+    problem="$(codex_bin_problem "$CODEX_BIN")"
+    [[ -z "$problem" ]] || die "codex $CODEX_BIN cannot be used: $problem"
+    return 0
+  fi
+  for source in environment env.sh; do
+    if [[ "$source" == environment ]]; then
+      candidate="${AGENTSTACK_CODEX_BIN:-}"
+    else
+      candidate="$(agentstack_installed_env_value AGENTSTACK_CODEX_BIN)"
+    fi
+    [[ -n "$candidate" ]] || continue
+    [[ "$CODEX_JUDGED" != *":$candidate:"* ]] || continue
+    CODEX_JUDGED="$CODEX_JUDGED$candidate:"
+    problem="$(codex_bin_problem "$candidate")"
+    if [[ -z "$problem" ]]; then
+      CODEX_BIN="$candidate"
+      return 0
+    fi
+    warn "skipping AGENTSTACK_CODEX_BIN from $source ($candidate): $problem"
+  done
+  local nvm extra="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.nodebrew/current/bin:/opt/homebrew/bin:/usr/local/bin"
+  for nvm in "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin; do
+    [[ -d "$nvm" ]] && extra="$extra:$nvm"
+  done
+  CODEX_BIN="$(find_usable_codex_bin_in "$PATH:$extra")"
+}
+
+# launchd exists only on macOS. Elsewhere (WSL, Linux) the Bridge service is
+# not installed unless asked for, instead of stopping the install.
+default_service_mode() {
+  if [[ "$NO_SERVICE" != true && "$(uname -s)" != "Darwin" ]]; then
+    NO_SERVICE=true
+    say "Bridge service: not installed (launchd is macOS-only; this is the same as --no-service)"
+  fi
+}
+
+validate() {
+  [[ -d "$SOURCE_DIR/src/agentstack_codex_app" ]] || die "missing integration source"
+  [[ -f "$SOURCE_DIR/plugin/.codex-plugin/plugin.json" ]] || die "missing plugin manifest"
+  [[ -f "$SOURCE_DIR/launchd/org.agentstack.codex-app-bridge.plist.template" ]] \
+    || die "missing launchd template"
+  [[ -x "$PYTHON_BIN" ]] || die "python executable is not runnable: $PYTHON_BIN"
+  [[ "$PROJECT_KEY" == /* ]] || die "--project-key must be an absolute path"
+  [[ "$INSTALL_DIR" == /* ]] || die "--install-dir must be an absolute path"
+  [[ "$RUNTIME_DIR" == /* ]] || die "--runtime-dir must be an absolute path"
+  [[ "$MAIL_ENV" == /* ]] || die "--agent-mail-env must be an absolute path"
+  [[ "$SIGNALS_DIR" == /* ]] || die "--signals-dir must be an absolute path"
+  [[ "$MCP_URL" == http://* || "$MCP_URL" == https://* ]] \
+    || die "--agent-mail-url must be http(s)"
+  [[ "$LABEL" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid launchd label"
+  [[ "$MARKETPLACE_NAME" =~ ^[a-z0-9-]+$ ]] || die "invalid marketplace name"
+  [[ "$WAKE_LIMIT" =~ ^[0-9]+$ ]] || die "--wake-limit must be an integer"
+  (( WAKE_LIMIT >= 1 && WAKE_LIMIT <= 120 )) || die "--wake-limit must be 1..120"
+  [[ "$STALE_AFTER" =~ ^[0-9]+$ ]] || die "--stale-after must be an integer"
+  (( STALE_AFTER >= 300 && STALE_AFTER <= 604800 )) \
+    || die "--stale-after must be 300..604800"
+  [[ "$RETRY_MAX_ATTEMPTS" =~ ^[0-9]+$ ]] \
+    || die "--retry-max-attempts must be an integer"
+  (( RETRY_MAX_ATTEMPTS >= 1 && RETRY_MAX_ATTEMPTS <= 100 )) \
+    || die "--retry-max-attempts must be 1..100"
+  [[ "$RETRY_MAX_AGE" =~ ^[0-9]+$ ]] \
+    || die "--retry-max-age must be an integer"
+  (( RETRY_MAX_AGE >= 60 && RETRY_MAX_AGE <= 604800 )) \
+    || die "--retry-max-age must be 60..604800"
+  [[ "$RETRY_MAX_BACKOFF" =~ ^[0-9]+$ ]] \
+    || die "--retry-max-backoff must be an integer"
+  (( RETRY_MAX_BACKOFF >= 1 && RETRY_MAX_BACKOFF <= 3600 )) \
+    || die "--retry-max-backoff must be 1..3600"
+  [[ "$RESTART_DELAY" =~ ^[0-9]+$ ]] \
+    || die "AGENTSTACK_CODEX_APP_RESTART_DELAY must be an integer"
+  (( RESTART_DELAY >= 0 && RESTART_DELAY <= 3600 )) \
+    || die "AGENTSTACK_CODEX_APP_RESTART_DELAY must be 0..3600"
+  [[ "$SKIP_GIT_CHECK" == "0" || "$SKIP_GIT_CHECK" == "1" ]] \
+    || die "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK must be 0 or 1"
+  [[ "$HTTP_BEARER_MODE" == "auto" || "$HTTP_BEARER_MODE" == "enabled" || \
+     "$HTTP_BEARER_MODE" == "disabled" ]] || \
+    die "AGENTSTACK_MAIL_HTTP_BEARER_MODE must be auto, enabled, or disabled"
+  if [[ "$NO_PLUGIN" != true ]]; then
+    [[ -n "$CODEX_BIN" ]] || die "no usable codex found (reasons above, if any candidate was found); install Codex where this shell can run it (in WSL: npm install -g @openai/codex under your Linux user), or pass --codex-bin"
+    [[ -x "$CODEX_BIN" ]] || die "codex executable is not runnable: $CODEX_BIN"
+  fi
+  if [[ ! -f "$MAIL_ENV" ]]; then
+    warn "bearer reference does not exist yet: $MAIL_ENV"
+  fi
+}
+
+copy_payload() {
+  plan "install integration source under $INSTALL_DIR"
+  [[ "$DRY_RUN" == true ]] && return
+  "$PYTHON_BIN" - "$SOURCE_DIR" "$INSTALL_DIR" <<'PY'
+import pathlib
+import shutil
+import sys
+
+source = pathlib.Path(sys.argv[1])
+destination = pathlib.Path(sys.argv[2])
+destination.mkdir(parents=True, exist_ok=True)
+for name in ("src", "schemas", "plugin", "launchd"):
+    target = destination / name
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(
+        source / name,
+        target,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache", ".DS_Store"),
+    )
+for name in ("README.md", "pyproject.toml", "env.sh.sample", "export-manifest.txt"):
+    item = source / name
+    if item.exists():
+        shutil.copy2(item, destination / name)
+PY
+  mkdir -p "$INSTALL_DIR/bin/lib" "$RUNTIME_DIR"
+  cp "$SCRIPT_DIR/lib/codex-app-integration.sh" "$INSTALL_DIR/bin/lib/"
+  cp "$SCRIPT_DIR/codex_plugin_trust.py" "$INSTALL_DIR/bin/"
+  chmod 700 "$INSTALL_DIR" "$INSTALL_DIR/bin" "$RUNTIME_DIR"
+  cp "$SCRIPT_DIR/run-codex-app-bridge.sh" "$RUNNER"
+  cp "$SCRIPT_DIR/uninstall-codex-app-integration.sh" \
+    "$INSTALL_DIR/bin/uninstall-codex-app-integration"
+  cp "$SCRIPT_DIR/doctor-codex-app-integration.sh" \
+    "$INSTALL_DIR/bin/doctor-codex-app-integration"
+  chmod +x "$RUNNER" \
+    "$INSTALL_DIR/bin/uninstall-codex-app-integration" \
+    "$INSTALL_DIR/bin/doctor-codex-app-integration" \
+    "$INSTALL_DIR/plugin/scripts/run-hook.sh" \
+    "$INSTALL_DIR/plugin/scripts/record-codex-session-index.py" \
+    "$INSTALL_DIR/plugin/scripts/run-mcp.sh"
+}
+
+write_env() {
+  plan "write token-free env $ENV_FILE with mode 0600"
+  [[ "$DRY_RUN" == true ]] && return
+  umask 077
+  "$PYTHON_BIN" - "$ENV_FILE" "$INSTALL_DIR" "$RUNTIME_DIR" "$PROJECT_KEY" \
+    "$MCP_URL" "$MAIL_ENV" "$SIGNALS_DIR" "$LABEL" "$WAKE_LIMIT" \
+    "$STALE_AFTER" "$RETRY_MAX_ATTEMPTS" "$RETRY_MAX_AGE" \
+    "$RETRY_MAX_BACKOFF" "$MARKETPLACE_NAME" "$SKIP_GIT_CHECK" \
+    "$CODEX_BIN" "$PYTHON_BIN" "$RESTART_DELAY" "$HTTP_BEARER_MODE" <<'PY'
+import pathlib
+import shlex
+import sys
+
+(
+    output,
+    install_dir,
+    runtime_dir,
+    project_key,
+    mcp_url,
+    mail_env,
+    signals_dir,
+    label,
+    wake_limit,
+    stale_after,
+    retry_max_attempts,
+    retry_max_age,
+    retry_max_backoff,
+    marketplace_name,
+    skip_git_check,
+    codex_bin,
+    python_bin,
+    restart_delay,
+    http_bearer_mode,
+) = sys.argv[1:]
+values = {
+    "AGENTSTACK_CODEX_APP_INSTALL_DIR": install_dir,
+    "AGENTSTACK_CODEX_APP_RUNTIME_DIR": runtime_dir,
+    "AGENTSTACK_CODEX_APP_SOCKET": str(pathlib.Path(runtime_dir) / "bridge.sock"),
+    "AGENTSTACK_CODEX_APP_SNAPSHOT": str(pathlib.Path(runtime_dir) / "snapshot.json"),
+    "AGENTSTACK_CODEX_APP_DELIVERY_DB": str(pathlib.Path(runtime_dir) / "delivery.sqlite3"),
+    "AGENTSTACK_PROJECT_KEY": project_key,
+    "AGENTSTACK_MCP_URL": mcp_url,
+    "AGENTSTACK_MAIL_ENV": mail_env,
+    "AGENTSTACK_MAIL_HTTP_BEARER_MODE": http_bearer_mode,
+    "AGENTSTACK_SIGNALS_DIR": signals_dir,
+    "AGENTSTACK_CODEX_APP_LAUNCHD_LABEL": label,
+    "AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR": wake_limit,
+    "AGENTSTACK_CODEX_APP_STALE_AFTER_SECONDS": stale_after,
+    "AGENTSTACK_CODEX_APP_RETRY_MAX_ATTEMPTS": retry_max_attempts,
+    "AGENTSTACK_CODEX_APP_RETRY_MAX_AGE_SECONDS": retry_max_age,
+    "AGENTSTACK_CODEX_APP_RETRY_MAX_BACKOFF_SECONDS": retry_max_backoff,
+    "AGENTSTACK_CODEX_APP_PLUGIN_ID": f"agentstack-codex-app@{marketplace_name}",
+    "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK": skip_git_check,
+    "AGENTSTACK_CODEX_BINARY": codex_bin,
+    "AGENTSTACK_PYTHON": python_bin,
+    "AGENTSTACK_CODEX_APP_RESTART_DELAY": restart_delay,
+}
+lines = [
+    "# Generated by install-codex-app-integration.sh",
+    "# Token-free: bearer material remains in AGENTSTACK_MAIL_ENV.",
+    "",
+]
+lines.extend(f"export {key}={shlex.quote(value)}" for key, value in values.items())
+path = pathlib.Path(output)
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+path.chmod(0o600)
+PY
+}
+
+build_marketplace() {
+  plan "build local marketplace snapshot at $MARKETPLACE_ROOT"
+  [[ "$DRY_RUN" == true ]] && return
+  "$PYTHON_BIN" "$SCRIPT_DIR/build-codex-app-marketplace.py" \
+    "$INSTALL_DIR" "$MARKETPLACE_ROOT" \
+    --marketplace-name "$MARKETPLACE_NAME" >/dev/null
+  chmod +x \
+    "$MARKETPLACE_ROOT/plugins/agentstack-codex-app/scripts/run-hook.sh" \
+    "$MARKETPLACE_ROOT/plugins/agentstack-codex-app/scripts/record-codex-session-index.py" \
+    "$MARKETPLACE_ROOT/plugins/agentstack-codex-app/scripts/run-mcp.sh"
+}
+
+inspect_refresh_registry() {
+  local plugin_id="agentstack-codex-app@$MARKETPLACE_NAME"
+  local registry_json registry_state
+  if ! registry_json="$("$CODEX_BIN" plugin list --json)"; then
+    die "could not read the Codex plugin registry"
+  fi
+  if ! registry_state="$(AGENTSTACK_REFRESH_REGISTRY_JSON="$registry_json" \
+    "$PYTHON_BIN" - "$plugin_id" "$MARKETPLACE_ROOT" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+
+def fail(message: str) -> None:
+    print(f"plugin refresh registry check failed: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+plugin_id, expected_root_value = sys.argv[1:]
+try:
+    payload = json.loads(os.environ["AGENTSTACK_REFRESH_REGISTRY_JSON"])
+except (OSError, ValueError, json.JSONDecodeError) as exc:
+    fail(f"invalid `codex plugin list --json` output: {exc}")
+installed = payload.get("installed")
+if not isinstance(installed, list):
+    fail("registry output has no installed list")
+matches = [item for item in installed if isinstance(item, dict) and item.get("pluginId") == plugin_id]
+if len(matches) > 1:
+    fail(f"registry contains duplicate entries for {plugin_id}")
+if not matches or matches[0].get("installed") is not True:
+    print("skip\tnot installed")
+    raise SystemExit(0)
+item = matches[0]
+if item.get("enabled") is not True:
+    print("skip\tdisabled")
+    raise SystemExit(0)
+
+marketplace = item.get("marketplaceSource")
+if not isinstance(marketplace, dict) or marketplace.get("sourceType") != "local":
+    fail(f"{plugin_id} is not installed from a local marketplace")
+source = marketplace.get("source")
+if not isinstance(source, str) or not source:
+    fail(f"{plugin_id} has no local marketplace root")
+try:
+    expected_root = pathlib.Path(expected_root_value).expanduser().resolve(strict=True)
+    actual_root = pathlib.Path(source).expanduser().resolve(strict=True)
+except OSError as exc:
+    fail(f"could not resolve the configured marketplace root: {exc}")
+if actual_root != expected_root:
+    fail(f"configured marketplace root is {actual_root}, expected {expected_root}")
+
+plugin_source = item.get("source")
+expected_source = (expected_root / "plugins" / "agentstack-codex-app").resolve(strict=True)
+if not isinstance(plugin_source, dict) or plugin_source.get("source") != "local":
+    fail(f"{plugin_id} does not have a local plugin source")
+source_path = plugin_source.get("path")
+if not isinstance(source_path, str) or not source_path:
+    fail(f"{plugin_id} has no plugin source path")
+try:
+    actual_source = pathlib.Path(source_path).expanduser().resolve(strict=True)
+except OSError as exc:
+    fail(f"could not resolve the configured plugin source: {exc}")
+if actual_source != expected_source:
+    fail(f"configured plugin source is {actual_source}, expected {expected_source}")
+print(f"ready\t{expected_root}")
+PY
+  )"; then
+    die "Codex plugin registry does not match the requested refresh target"
+  fi
+  printf '%s\n' "$registry_state"
+}
+
+validate_refresh_payload() {
+  [[ "$INSTALL_DIR" == /* ]] || die "--install-dir must be an absolute path"
+  [[ "$MARKETPLACE_NAME" =~ ^[a-z0-9-]+$ ]] || die "invalid marketplace name"
+  [[ -x "$PYTHON_BIN" ]] || die "python executable is not runnable: $PYTHON_BIN"
+  [[ -x "$CODEX_BIN" ]] || die "codex executable is not runnable: $CODEX_BIN"
+  [[ -f "$SCRIPT_DIR/build-codex-app-marketplace.py" ]] \
+    || die "missing marketplace builder"
+  [[ -d "$INSTALL_DIR/src/agentstack_codex_app" ]] \
+    || die "installed integration source is missing: $INSTALL_DIR/src"
+  [[ -f "$INSTALL_DIR/plugin/.codex-plugin/plugin.json" ]] \
+    || die "installed plugin manifest is missing"
+  [[ -f "$INSTALL_DIR/plugin/hooks/hooks.json" ]] \
+    || die "installed plugin hooks are missing"
+  [[ -x "$INSTALL_DIR/plugin/scripts/run-hook.sh" ]] \
+    || die "installed plugin runner is missing or not executable"
+  [[ -x "$INSTALL_DIR/plugin/scripts/record-codex-session-index.py" ]] \
+    || die "installed Codex session recorder is missing or not executable"
+}
+
+verify_refreshed_plugin() {
+  local install_json="$1"
+  local plugin_id="agentstack-codex-app@$MARKETPLACE_NAME"
+  AGENTSTACK_REFRESH_INSTALL_JSON="$install_json" "$PYTHON_BIN" - \
+    "$MARKETPLACE_ROOT/plugins/agentstack-codex-app" \
+    "$plugin_id" "$MARKETPLACE_NAME" <<'PY'
+import json
+import os
+import pathlib
+import stat
+import sys
+
+
+def fail(message: str) -> None:
+    print(f"plugin refresh verification failed: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+expected_value, plugin_id, marketplace_name = sys.argv[1:]
+try:
+    result = json.loads(os.environ["AGENTSTACK_REFRESH_INSTALL_JSON"])
+except (OSError, ValueError, json.JSONDecodeError) as exc:
+    fail(f"invalid `codex plugin add --json` output: {exc}")
+if not isinstance(result, dict):
+    fail("install result is not an object")
+if result.get("pluginId") != plugin_id:
+    fail(f"CLI selected plugin {result.get('pluginId')!r}, expected {plugin_id!r}")
+if result.get("name") != "agentstack-codex-app":
+    fail("CLI selected a different plugin name")
+if result.get("marketplaceName") != marketplace_name:
+    fail("CLI selected a different marketplace")
+installed_value = result.get("installedPath")
+if not isinstance(installed_value, str) or not installed_value:
+    fail("CLI did not report installedPath")
+try:
+    expected = pathlib.Path(expected_value).resolve(strict=True)
+    installed = pathlib.Path(installed_value).expanduser().resolve(strict=True)
+except OSError as exc:
+    fail(f"could not resolve selected payload: {exc}")
+if not installed.is_dir():
+    fail(f"selected payload is not a directory: {installed}")
+
+def object_at(root: pathlib.Path, relative: str) -> dict:
+    try:
+        value = json.loads((root / relative).read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        fail(f"invalid {relative} under {root}: {exc}")
+    if not isinstance(value, dict):
+        fail(f"{relative} under {root} is not an object")
+    return value
+
+
+expected_manifest = object_at(expected, ".codex-plugin/plugin.json")
+installed_manifest = object_at(installed, ".codex-plugin/plugin.json")
+for key in ("name", "version"):
+    if installed_manifest.get(key) != expected_manifest.get(key):
+        fail(f"selected manifest {key} does not match the rebuilt marketplace")
+if result.get("version") != expected_manifest.get("version"):
+    fail("CLI selected version does not match the rebuilt marketplace")
+
+for relative in (
+    "hooks/hooks.json",
+    "scripts/run-hook.sh",
+    "scripts/record-codex-session-index.py",
+):
+    expected_file = expected / relative
+    installed_file = installed / relative
+    try:
+        if expected_file.read_bytes() != installed_file.read_bytes():
+            fail(f"selected {relative} does not match the rebuilt marketplace")
+    except OSError as exc:
+        fail(f"could not read selected {relative}: {exc}")
+
+for relative in ("scripts/run-hook.sh", "scripts/record-codex-session-index.py"):
+    selected_file = installed / relative
+    try:
+        mode = selected_file.stat().st_mode
+    except OSError as exc:
+        fail(f"could not stat selected {relative}: {exc}")
+    if not stat.S_ISREG(mode) or not mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
+        fail(f"selected {relative} is not an executable regular file")
+print(installed)
+PY
+}
+
+refresh_plugin_only() {
+  local registry_state state reason install_json selected_path
+  [[ "$NO_PLUGIN" != true ]] || die "--refresh-plugin-only cannot be combined with --no-plugin"
+  [[ "$INSTALL_DIR" == /* ]] || die "--install-dir must be an absolute path"
+  [[ "$MARKETPLACE_NAME" =~ ^[a-z0-9-]+$ ]] || die "invalid marketplace name"
+  [[ -x "$PYTHON_BIN" ]] || die "python executable is not runnable: $PYTHON_BIN"
+  [[ -x "$CODEX_BIN" ]] || die "codex executable is not runnable: $CODEX_BIN"
+
+  registry_state="$(inspect_refresh_registry)"
+  state="${registry_state%%$'\t'*}"
+  reason="${registry_state#*$'\t'}"
+  if [[ "$state" == "skip" ]]; then
+    say "Plugin refresh skipped: agentstack-codex-app@$MARKETPLACE_NAME is $reason."
+    return 0
+  fi
+  [[ "$state" == "ready" ]] || die "unexpected plugin registry state"
+  validate_refresh_payload
+
+  plan "rebuild installed marketplace $MARKETPLACE_ROOT"
+  plan "refresh agentstack-codex-app@$MARKETPLACE_NAME through Codex CLI"
+  if [[ "$DRY_RUN" == true ]]; then
+    say "Dry-run complete: plugin snapshot, config, cache, and Bridge state were not changed."
+    return 0
+  fi
+
+  build_marketplace
+  if ! install_json="$("$CODEX_BIN" plugin add \
+    "agentstack-codex-app@$MARKETPLACE_NAME" --json)"; then
+    die "Codex CLI could not refresh agentstack-codex-app@$MARKETPLACE_NAME"
+  fi
+  if ! selected_path="$(verify_refreshed_plugin "$install_json")"; then
+    die "Codex CLI selected a payload that failed refresh verification"
+  fi
+  PLUGIN_SELECTED_PATH="$selected_path"
+  say "Plugin refresh complete: agentstack-codex-app@$MARKETPLACE_NAME -> $selected_path"
+  record_hook_trust
+  say_hook_approval_guidance
+}
+
+render_plist() {
+  plan "render launchd plist $PLIST_INSTALLED"
+  [[ "$DRY_RUN" == true ]] && return
+  "$PYTHON_BIN" - \
+    "$INSTALL_DIR/launchd/org.agentstack.codex-app-bridge.plist.template" \
+    "$PLIST_INSTALLED" "$LABEL" "$RUNNER" "$RUNTIME_DIR" <<'PY'
+import pathlib
+import plistlib
+import sys
+
+source, output, label, runner, runtime_dir = sys.argv[1:]
+text = pathlib.Path(source).read_text(encoding="utf-8")
+for key, value in {
+    "__LABEL__": label,
+    "__RUNNER__": runner,
+    "__RUNTIME_DIR__": runtime_dir,
+}.items():
+    text = text.replace(key, value)
+path = pathlib.Path(output)
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(text, encoding="utf-8")
+with path.open("rb") as handle:
+    plistlib.load(handle)
+PY
+}
+
+install_plugin() {
+  local install_json
+  if [[ "$NO_PLUGIN" == true ]]; then
+    plan "skip Codex marketplace/plugin registration"
+    return
+  fi
+  plan "register marketplace $MARKETPLACE_NAME and install agentstack-codex-app"
+  [[ "$DRY_RUN" == true ]] && return
+  "$CODEX_BIN" plugin marketplace add "$MARKETPLACE_ROOT" --json >/dev/null
+  install_json="$("$CODEX_BIN" plugin add "agentstack-codex-app@$MARKETPLACE_NAME" --json)"
+  PLUGIN_SELECTED_PATH="$(verify_refreshed_plugin "$install_json")"
+}
+
+install_service() {
+  if [[ "$NO_SERVICE" == true ]]; then
+    plan "skip launchd registration"
+    SERVICE_KIND="disabled"
+    return
+  fi
+  plan "install and bootstrap launchd service $LABEL"
+  [[ "$DRY_RUN" == true ]] && return
+  stop_supervised_background
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cp "$PLIST_INSTALLED" "$PLIST_LIVE"
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+  if launchctl bootstrap "gui/$(id -u)" "$PLIST_LIVE" && \
+     launchctl enable "gui/$(id -u)/$LABEL" && \
+     launchctl kickstart -k "gui/$(id -u)/$LABEL"
+  then
+    SERVICE_KIND="launchd"
+    SERVICE_PATH="$PLIST_LIVE"
+    return
+  fi
+
+  warn "launchd could not start $LABEL in gui/$(id -u); falling back to supervised background mode"
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+  rm -f "$PLIST_LIVE"
+  start_supervised_background
+}
+
+stop_supervised_background() {
+  local pid attempts=0
+  pid="$(sed -n '1p' "$BACKGROUND_PIDFILE" 2>/dev/null || true)"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    while kill -0 "$pid" 2>/dev/null && (( attempts < 50 )); do
+      sleep 0.1
+      attempts=$((attempts + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  fi
+  rm -f "$BACKGROUND_PIDFILE"
+}
+
+start_supervised_background() {
+  local supervisor_pid
+  SERVICE_KIND="nohup"
+  SERVICE_PATH="$BACKGROUND_PIDFILE"
+  plan "start Bridge in supervised background mode, pidfile $BACKGROUND_PIDFILE"
+  [[ "$DRY_RUN" == true ]] && return
+  mkdir -p "$RUNTIME_DIR"
+  (
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    AGENTSTACK_CODEX_APP_SELF_RESTART=1 \
+      nohup /bin/bash "$RUNNER" >> "$RUNTIME_DIR/bridge.stdout.log" \
+      2>> "$RUNTIME_DIR/bridge.stderr.log" &
+    echo $! > "$BACKGROUND_PIDFILE"
+  )
+  supervisor_pid="$(sed -n '1p' "$BACKGROUND_PIDFILE" 2>/dev/null || true)"
+  if [[ "$supervisor_pid" =~ ^[0-9]+$ ]] && kill -0 "$supervisor_pid" 2>/dev/null; then
+    return
+  fi
+  warn "could not start the supervised background Bridge"
+  rm -f "$BACKGROUND_PIDFILE"
+  SERVICE_KIND="manual"
+  SERVICE_PATH=""
+}
+
+record_hook_trust() {
+  [[ "$DRY_RUN" != true && -n "$APPROVED_HOOK_PLAN" ]] || return 0
+  # The reviewed plan is supplied by the caller's existing approval; no extra
+  # prompt and no trust-all or bypass flag are introduced here.
+  if "$PYTHON_BIN" "$SCRIPT_DIR/codex_plugin_trust.py" apply \
+      --approved-plan "$APPROVED_HOOK_PLAN" --receipt "$INSTALL_DIR/hook-trust-result.json" \
+      --shared-codex-home "$SHARED_CODEX_HOME" --codex-binary "$CODEX_BIN" \
+      --plugin-id "agentstack-codex-app@$MARKETPLACE_NAME"; then
+    HOOK_TRUST=observed_current
+  else
+    HOOK_TRUST=needs_review
+    warn "ORRERY hook trust could not be verified; review the hooks in /hooks."
+  fi
+}
+
+write_manifest() {
+  plan "write install manifest $MANIFEST"
+  [[ "$DRY_RUN" == true ]] && return
+  "$PYTHON_BIN" - "$MANIFEST" "$INSTALL_DIR" "$RUNTIME_DIR" "$PROJECT_KEY" \
+    "$MCP_URL" "$MAIL_ENV" "$SIGNALS_DIR" "$LABEL" "$MARKETPLACE_NAME" \
+    "$MARKETPLACE_ROOT" "$PLIST_LIVE" "$NO_PLUGIN" \
+    "$CODEX_BIN" "$PYTHON_BIN" "$SERVICE_KIND" "$SERVICE_PATH" "$SHARED_CODEX_HOME" "$HOOK_TRUST" "$PLUGIN_SELECTED_PATH" "$SCRIPT_DIR" <<'PY'
+import json
+import pathlib
+import sys
+import time
+
+(
+    output,
+    install_dir,
+    runtime_dir,
+    project_key,
+    mcp_url,
+    mail_env,
+    signals_dir,
+    label,
+    marketplace_name,
+    marketplace_root,
+    live_plist,
+    no_plugin,
+    codex_binary,
+    python_binary,
+    service_kind,
+    service_path,
+    shared_codex_home,
+    hook_trust,
+    selected_path,
+    script_dir,
+) = sys.argv[1:]
+sys.path.insert(0, script_dir)
+from codex_plugin_trust import atomic_json, payload_digest
+manifest = {
+    "schema_version": 1,
+    "tool": "agentstack-codex-app",
+    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    "install_dir": install_dir,
+    "runtime_dir": runtime_dir,
+    "project_key": project_key,
+    "agent_mail_url": mcp_url,
+    "agent_mail_env": mail_env,
+    "signals_dir": signals_dir,
+    "codex_binary": codex_binary,
+    "shared_codex_home": shared_codex_home,
+    "hook_trust": hook_trust,
+    "history": "unobserved",
+    "ownership": {"plugin_id": f"agentstack-codex-app@{marketplace_name}",
+                  "marketplace_root": marketplace_root, "install_dir": install_dir},
+    "python_binary": python_binary,
+    "launchd": {
+        "enabled": service_kind == "launchd",
+        "label": label,
+        "path": live_plist,
+    },
+    "service": {
+        "kind": service_kind,
+        **({"label": label, "path": service_path} if service_kind == "launchd" else {}),
+        **({"pidfile": service_path} if service_kind == "nohup" else {}),
+    },
+    "plugin": {
+        "enabled": no_plugin != "true",
+        "selected_path": selected_path or None,
+        "payload_digest": payload_digest(pathlib.Path(selected_path)) if selected_path else None,
+        "id": f"agentstack-codex-app@{marketplace_name}",
+        "marketplace_name": marketplace_name,
+        "marketplace_root": marketplace_root,
+    },
+    "retained_paths": [runtime_dir],
+    "purge_paths": [runtime_dir],
+}
+path = pathlib.Path(output)
+atomic_json(path, manifest)
+path.chmod(0o600)
+PY
+}
+
+main() {
+  resolve_codex_bin
+  if [[ "$REFRESH_PLUGIN_ONLY" == true ]]; then
+    refresh_plugin_only
+    return
+  fi
+  say "AgentStack Codex App integration installer"
+  say "install dir: $INSTALL_DIR"
+  say "runtime dir: $RUNTIME_DIR"
+  say "project key: $PROJECT_KEY"
+  say "codex: ${CODEX_BIN:-(none found)}"
+  default_service_mode
+  validate
+  copy_payload
+  write_env
+  build_marketplace
+  render_plist
+  install_plugin
+  install_service
+  if [[ "$NO_PLUGIN" != true ]]; then
+    record_hook_trust
+  fi
+  write_manifest
+  if [[ "$DRY_RUN" == true ]]; then
+    say "Dry-run complete: no files were written."
+  else
+    say "Install complete."
+    case "$SERVICE_KIND" in
+      launchd) say "Service mode: launchd" ;;
+      nohup) say "Service mode: supervised background (pidfile $BACKGROUND_PIDFILE)" ;;
+      disabled) say "Service mode: disabled (no launchd service; the Bridge is not needed for Codex history binding)" ;;
+      *)
+        say "Service mode: manual"
+        say "Manual supervised start:"
+        say "  AGENTSTACK_CODEX_APP_SELF_RESTART=1 nohup /bin/bash $RUNNER >> $RUNTIME_DIR/bridge.stdout.log 2>> $RUNTIME_DIR/bridge.stderr.log &"
+        ;;
+    esac
+    if [[ "$NO_PLUGIN" != true ]]; then
+      say_hook_approval_guidance
+    fi
+    say "Doctor: $INSTALL_DIR/bin/doctor-codex-app-integration"
+  fi
+}
+
+main "$@"
+)
+
+agentstack_codex_app_plan() (
+  agentstack_codex_app_apply --dry-run "$@"
+)
+
+agentstack_codex_app_refresh() (
+  agentstack_codex_app_apply --refresh-plugin-only "$@"
+)
+
+agentstack_codex_app_remove() (
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DEFAULT_INSTALL_DIR="$HOME/.agentstack/integrations/codex_app"
+if [[ -f "$SCRIPT_DIR/../install-state.json" ]]; then
+  DEFAULT_INSTALL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
+INSTALL_DIR="${AGENTSTACK_CODEX_APP_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+DRY_RUN=false
+PURGE_DATA=false
+KEEP_PAYLOAD=false
+
+usage() {
+  cat <<'EOF'
+Usage: uninstall-codex-app-integration.sh [options]
+
+Options:
+  --dry-run          Print actions without modifying files
+  --purge-data       Also remove the exact runtime directory from the manifest
+  --install-dir PATH Default: ~/.agentstack/integrations/codex_app
+  -h, --help         Show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    --purge-data) PURGE_DATA=true; shift ;;
+    --keep-payload) KEEP_PAYLOAD=true; shift ;;
+    --install-dir) INSTALL_DIR="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+MANIFEST="$INSTALL_DIR/install-state.json"
+[[ -f "$MANIFEST" ]] || {
+  echo "No Codex App integration manifest found: $MANIFEST" >&2
+  exit 1
+}
+
+python3 - "$MANIFEST" "$DRY_RUN" "$PURGE_DATA" "$KEEP_PAYLOAD" "$SCRIPT_DIR" <<'PY'
+import json
+import os
+import pathlib
+import signal
+import shutil
+import subprocess
+import sys
+import time
+
+manifest_path = pathlib.Path(sys.argv[1]).expanduser()
+dry_run = sys.argv[2] == "true"
+purge_data = sys.argv[3] == "true"
+keep_payload = sys.argv[4] == "true"
+data = json.loads(manifest_path.read_text(encoding="utf-8"))
+install_dir = pathlib.Path(data["install_dir"]).expanduser()
+if data.get("tool") != "agentstack-codex-app" or install_dir.resolve() != manifest_path.parent.resolve():
+    raise RuntimeError("integration manifest ownership mismatch")
+runtime_dir = pathlib.Path(data["runtime_dir"]).expanduser()
+home = pathlib.Path.home()
+
+def safe(path: pathlib.Path) -> pathlib.Path:
+    resolved = path.resolve()
+    if resolved in {pathlib.Path("/"), home.resolve()}:
+        raise RuntimeError(f"refusing unsafe removal: {resolved}")
+    return resolved
+
+def run(argv: list[str]) -> None:
+    if dry_run:
+        print("DRY-RUN would run: " + " ".join(argv))
+    else:
+        subprocess.run(argv, check=True, env=command_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+plugin = data.get("plugin", {})
+if plugin.get("enabled") and plugin.get("id") != "agentstack-codex-app@" + str(plugin.get("marketplace_name", "")):
+    raise RuntimeError("plugin ownership mismatch")
+codex_binary = str(data.get("codex_binary") or "codex")
+codex_home = str(data.get("shared_codex_home") or os.environ.get("CODEX_HOME") or home / ".codex")
+command_env = dict(os.environ, CODEX_HOME=codex_home)
+if plugin.get("enabled"):
+    run([codex_binary, "plugin", "remove", str(plugin["id"]), "--json"])
+    if not dry_run:
+        observed = subprocess.run([codex_binary, "plugin", "list", "--json"], check=True,
+                                  env=command_env, capture_output=True, text=True)
+        installed = json.loads(observed.stdout).get("installed")
+        if not isinstance(installed, list) or any(item.get("pluginId") == plugin["id"] for item in installed):
+            raise RuntimeError("plugin removal was not observed")
+        marketplace_in_use = any(item.get("marketplaceName") == plugin["marketplace_name"] for item in installed)
+    else:
+        marketplace_in_use = False
+    if not marketplace_in_use:
+        run([codex_binary, "plugin", "marketplace", "remove", str(plugin["marketplace_name"])])
+    else:
+        print("retained marketplace: other plugins still use it")
+
+launchd = data.get("launchd", {})
+service = data.get("service", {})
+service_kind = str(service.get("kind") or ("launchd" if launchd.get("enabled") else "disabled"))
+if service_kind == "launchd":
+    label = str(launchd["label"])
+    run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
+    plist = safe(pathlib.Path(launchd["path"]).expanduser())
+    print(("DRY-RUN would remove" if dry_run else "remove") + f": {plist}")
+    if not dry_run:
+        try:
+            plist.unlink()
+        except FileNotFoundError:
+            pass
+elif service_kind == "nohup":
+    pidfile_value = str(service.get("pidfile", ""))
+    if not pidfile_value:
+        raise RuntimeError("supervised Bridge manifest is missing pidfile")
+    pidfile = safe(pathlib.Path(pidfile_value).expanduser())
+    if dry_run:
+        print(f"DRY-RUN would stop supervised Bridge from {pidfile}")
+    else:
+        try:
+            pid = int(pidfile.read_text(encoding="utf-8").splitlines()[0])
+        except (OSError, ValueError, IndexError):
+            pid = 0
+        if pid > 1:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.05)
+            else:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        try:
+            pidfile.unlink()
+        except FileNotFoundError:
+            pass
+
+install_dir = safe(install_dir)
+print(("DRY-RUN would remove" if dry_run else "remove") + f": {install_dir}" if not keep_payload else f"retain shared payload: {install_dir}")
+if not dry_run and not keep_payload:
+    shutil.rmtree(install_dir)
+if keep_payload:
+    print(f"retained shared payload: {install_dir}")
+
+if purge_data:
+    runtime_dir = safe(runtime_dir)
+    print(("DRY-RUN would purge" if dry_run else "purge") + f": {runtime_dir}")
+    if not dry_run:
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+else:
+    print(f"retained runtime: {runtime_dir}")
+if not dry_run:
+    result = {"schema_version": 1, "tool": "agentstack-codex-app",
+              "operation": "remove", "plugin_removed": bool(plugin.get("enabled")),
+              "marketplace_retained": bool(plugin.get("enabled") and marketplace_in_use),
+              "service_stop_requested": service_kind != "disabled",
+              "payload_removed": not keep_payload, "runtime_retained": not purge_data,
+              "shared_codex_home": codex_home}
+    if keep_payload:
+        data["plugin"]["enabled"] = False
+        sys.path.insert(0, sys.argv[5])
+        from codex_plugin_trust import atomic_json
+        data["service"] = {"kind": "disabled"}
+        data.setdefault("launchd", {})["enabled"] = False
+        atomic_json(manifest_path, data)
+    print(json.dumps(result, sort_keys=True))
+PY
+)
+
+# Remove registration/service before the core removes shared payload.
+agentstack_codex_app_remove_registration() (
+  agentstack_codex_app_remove --keep-payload "$@"
+)

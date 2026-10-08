@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### Codex plugin の導入処理を共通化
+
+- Codex の専用 installer を再利用できる処理へ分け、共有 HOME・cache の所有情報と対象 hook の承認結果を記録します。
+- 承認済みの対象定義だけを公式 API で信頼し、未確認なら `/hooks` へ案内します。Mac/Linux/WSL の隔離確認 script を追加します。本体 install への接続は後続です。
+
 ### 常駐 daemon が Mail の識別子を確認し、共通の通知待機を使えます
 
 同梱 Mail の `health_check` に、管理 socket と同じ永続的な `server_instance_id` を追加します。秘密ではない UUID で、別の Mail への誤接続を拒否できます。利用する側が必要な field を判定できるよう、互換世代を11から12に上げました。API 11の watcher health と古い signal の扱いは保ちます。
