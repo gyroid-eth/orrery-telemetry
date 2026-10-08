@@ -301,6 +301,10 @@ def test_shared_marketplace_retains_other_plugin_and_snapshot_payload(tmp_path):
     report = json.loads(result.stdout.splitlines()[-1])
     assert report['marketplace_retained'] is True and report['payload_removed'] is False
     assert (fixture[0]/'run-mcp.sh').read_text() == 'core proxy'
+    again = remove_fixture(fixture, tmp_path, registration_only=False)
+    assert again.returncode == 0, again.stderr
+    assert json.loads(fixture[2].read_text()) == final
+    assert (fixture[0]/'run-mcp.sh').exists()
 
 
 @pytest.mark.parametrize('difference', ['uid', 'command', 'start', 'unknown', 'legacy'])

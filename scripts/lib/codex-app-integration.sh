@@ -936,7 +936,8 @@ from codex_plugin_trust import atomic_json
 plugin = data.get("plugin", {})
 plugin_id = str(plugin.get("id", ""))
 marketplace_name = str(plugin.get("marketplace_name", ""))
-if plugin.get("enabled") and plugin_id != "agentstack-codex-app@" + marketplace_name:
+inspect_registration = bool(plugin.get("enabled") or data.get("ownership", {}).get("marketplace_retained"))
+if inspect_registration and plugin_id != "agentstack-codex-app@" + marketplace_name:
     raise OwnershipUnknown("plugin ownership mismatch")
 codex_binary = str(data.get("codex_binary") or "codex")
 codex_home = str(data.get("shared_codex_home") or os.environ.get("CODEX_HOME") or home / ".codex")
@@ -944,7 +945,7 @@ command_env = dict(os.environ, CODEX_HOME=codex_home)
 marketplace_root = data.get("ownership", {}).get("marketplace_root") or plugin.get("marketplace_root")
 marketplace_in_use = False
 plugin_removed = False
-if plugin.get("enabled"):
+if inspect_registration:
     presence = check_registry(registry_snapshot(codex_binary, codex_home), plugin_id,
                               marketplace_name, marketplace_root)
 
@@ -966,7 +967,7 @@ elif service_kind == "nohup":
 elif service_kind not in {"disabled", "manual"}:
     raise OwnershipUnknown("unknown service kind")
 
-if plugin.get("enabled"):
+if inspect_registration:
     if presence[0]:
         run([codex_binary, "plugin", "remove", plugin_id, "--json"])
     if not dry_run:
@@ -1022,13 +1023,14 @@ else:
 if not dry_run:
     result = {"schema_version": 1, "tool": "agentstack-codex-app",
               "operation": "remove", "plugin_removed": plugin_removed,
-              "marketplace_retained": bool(plugin.get("enabled") and marketplace_in_use),
+              "marketplace_retained": bool(inspect_registration and marketplace_in_use),
               "service_stop_requested": service_kind != "disabled",
               "service_stopped": service_kind in {"disabled", "launchd", "nohup"},
               "payload_removed": not keep_payload, "runtime_retained": not purge_data,
               "shared_codex_home": codex_home}
     if keep_payload:
         data["plugin"]["enabled"] = False
+        data.setdefault("ownership", {})["marketplace_retained"] = marketplace_in_use
         sys.path.insert(0, sys.argv[5])
         from codex_plugin_trust import atomic_json
         data["service"] = {"kind": "disabled"}
