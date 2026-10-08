@@ -40,6 +40,7 @@ import pathlib
 import subprocess
 import sys
 import time
+import threading
 import urllib.error
 import urllib.request
 
@@ -126,6 +127,29 @@ def _pick(messages: list[dict], sender: str | None, after_id: int | None) -> dic
     return min(candidates, key=lambda m: m.get("id") or 0)
 
 
+def wait_for_reply(fetch, *, timeout, interval=3.0, sender=None, after_id=None,
+                   cancelled=None):
+    """The canonical wait primitive, with an authenticated fetch supplied by a helper.
+
+    No ACK/read mutation. Cancellation interrupts idle waits; the supplied fetch
+    must itself have a bounded network timeout. Existing CLI semantics are retained.
+    """
+    cancelled = cancelled if cancelled is not None else threading.Event()
+    deadline = time.monotonic() + timeout
+    ever_reached = False
+    while not cancelled.is_set():
+        messages = fetch()
+        if messages is not None:
+            ever_reached = True
+            match = _pick(messages, sender, after_id)
+            if match is not None:
+                return 0, match
+        if time.monotonic() >= deadline:
+            return (124 if ever_reached else 1), None
+        cancelled.wait(min(interval, max(0, deadline - time.monotonic())))
+    return 125, None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agentstack-await-reply", add_help=True)
     parser.add_argument("--agent-name", required=True)
@@ -146,9 +170,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     url = _mcp_url()
-    deadline = time.monotonic() + args.timeout
-    ever_reached = False
-    while True:
+    def fetch():
         try:
             response = _call(
                 url,
@@ -162,26 +184,19 @@ def main(argv: list[str] | None = None) -> int:
             )
         except (urllib.error.URLError, OSError, ValueError):
             response = None
-        if response is not None:
-            ever_reached = True
-            match = _pick(_messages(response), args.sender, args.after_id)
-            if match is not None:
-                print(json.dumps(match, ensure_ascii=False))
-                return 0
-        if time.monotonic() >= deadline:
-            if not ever_reached:
-                print("agentstack-await-reply: mail server unreachable for the whole wait", file=sys.stderr)
-                return 1
-            waited = args.timeout
-            target = f"from {args.sender}" if args.sender else "any sender"
-            print(
-                f"agentstack-await-reply: no matching message ({target}"
-                + (f", id > {args.after_id}" if args.after_id is not None else "")
-                + f") within {waited:g}s",
-                file=sys.stderr,
-            )
-            return 124
-        time.sleep(min(args.interval, max(0.1, deadline - time.monotonic())))
+        return _messages(response) if response is not None else None
+    code, match = wait_for_reply(fetch, timeout=args.timeout, interval=args.interval,
+                                 sender=args.sender, after_id=args.after_id)
+    if match is not None:
+        print(json.dumps(match, ensure_ascii=False))
+    elif code == 1:
+        print("agentstack-await-reply: mail server unreachable for the whole wait", file=sys.stderr)
+    else:
+        target = f"from {args.sender}" if args.sender else "any sender"
+        print(f"agentstack-await-reply: no matching message ({target}"
+              + (f", id > {args.after_id}" if args.after_id is not None else "")
+              + f") within {args.timeout:g}s", file=sys.stderr)
+    return code
 
 
 if __name__ == "__main__":

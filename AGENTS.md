@@ -133,6 +133,8 @@ once instead of over several rounds of questions.
 
 ## Reference
 
+For local daemon helper development use [docs/daemon-agents.md](docs/daemon-agents.md). Its operator-only creation is not a startup ritual for ordinary agents; live enrollment and deployment require separate approval.
+
 | Topic | File |
 |---|---|
 | Install, requirements, service modes | `docs/install.md` |

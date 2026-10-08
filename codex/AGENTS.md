@@ -222,3 +222,7 @@ follow it:
   is `__AGENTSTACK_HOME__/hooks/spawn_child.sh`; do not invent a parallel flow.
 - **log** — write a structured session log
   (`__AGENTSTACK_HOME__/skills/log/SKILL.md`). Triggers: "log this", "ログ残して".
+
+## Deterministic daemon development
+
+The local operator-only daemon entry is documented in `docs/daemon-agents.md`. It does not change your existing coordination route or authorize you to create/enroll a live identity.

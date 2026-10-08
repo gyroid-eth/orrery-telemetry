@@ -40,12 +40,14 @@ class HttpJsonRpcTransport:
         *,
         bearer_token: str | None = None,
         timeout: float = 10.0,
+        allow_redirects: bool = True,
     ) -> None:
         if not endpoint:
             raise ValueError("ORRERY Mail endpoint must be configured")
         self.endpoint = endpoint
         self.bearer_token = bearer_token
         self.timeout = timeout
+        self.opener = urllib.request if allow_redirects else urllib.request.build_opener(_NoRedirect())
 
     def __call__(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         headers = {
@@ -62,13 +64,19 @@ class HttpJsonRpcTransport:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with (self.opener.urlopen(request, timeout=self.timeout) if self.opener is urllib.request
+                  else self.opener.open(request, timeout=self.timeout)) as response:
                 body = json.loads(response.read())
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
             raise AgentMailError("ORRERY Mail HTTP request failed") from exc
         if not isinstance(body, dict):
             raise AgentMailError("ORRERY Mail returned a non-object response")
         return body
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise AgentMailError("ORRERY Mail redirect rejected")
 
 
 class AgentMailClient:

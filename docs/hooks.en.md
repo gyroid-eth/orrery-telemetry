@@ -184,3 +184,7 @@ Codex Desktop uses a further, separate plugin hook / Bridge lifecycle. See [Code
 - [Codex App integration](codex-app.en.md)
 - [Configuration](configuration.en.md)
 - [Troubleshooting](troubleshooting.en.md)
+
+## Local entry for deterministic daemons
+
+The operator-only CLI in [daemon-agents.en.md](daemon-agents.en.md) reuses the bound proxy and canonical await-reply primitive. Ordinary lifecycle hooks and child registration are unchanged; live deployment requires separate approval.

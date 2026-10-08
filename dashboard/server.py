@@ -8480,7 +8480,7 @@ class Handler(BaseHTTPRequestHandler):
             # API (ORRERY cockpit): raise it only when something they rely on
             # is added or changes meaning, and say so in the CHANGELOG. It is
             # managed this way from 2 on; every earlier release reported 1.
-            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 11}).encode(), "application/json; charset=utf-8")
+            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 12}).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")

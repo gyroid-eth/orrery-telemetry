@@ -24,6 +24,10 @@ from service_teardown import (  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 INSTALL_STATE_SAMPLE = ROOT / "scripts" / "install-state.sample.json"
+# These operator-only source entries are deliberately not installer payload.
+# Keep this literal list narrow: all other tracked bin entries must be copied.
+# Contract: docs/daemon-agents.md and docs/daemon-agents.en.md.
+SOURCE_ONLY_ENTRIES = frozenset({"bin/agentstack-daemon"})
 
 
 def _fake_systemctl() -> str:
@@ -153,7 +157,26 @@ def _tracked_core_payload_files() -> list[str]:
         check=True,
     ).stdout.split("\0")
     provider_owned = _provider_installer_files()
-    return [path for path in tracked if path and path not in provider_owned]
+    return [
+        path for path in tracked
+        if path and path not in provider_owned and path not in SOURCE_ONLY_ENTRIES
+    ]
+
+
+def test_source_only_payload_exception_does_not_hide_unlisted_bin(monkeypatch):
+    # An additional, unlisted command must still fail the installed-manifest
+    # comparison if the installer does not copy it.
+    paths = ["bin/agentstack-daemon", "bin/agentstack-unlisted", "bin/agentstack-enroll"]
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout="\0".join(paths) + "\0"
+        ),
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_provider_installer_files", lambda: set())
+    expected = {f"/installed/{path}" for path in _tracked_core_payload_files()}
+    actual = {"/installed/bin/agentstack-enroll"}
+    assert expected - actual == {"/installed/bin/agentstack-unlisted"}
 
 
 def _provider_installer_files() -> set[str]:
@@ -866,6 +889,9 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         for relative in _tracked_core_payload_files()
     }
     assert expected_payload_files <= set(manifest["owned_files"])
+    for relative in SOURCE_ONLY_ENTRIES:
+        assert not (install_dir / relative).exists()
+        assert str(install_dir / relative) not in manifest["owned_files"]
     assert str(install_dir / "VERSION") in manifest["owned_files"]
     assert str(installed_selftest) in manifest["owned_files"]
     assert str(
