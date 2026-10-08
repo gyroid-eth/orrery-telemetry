@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from uuid import uuid4
 from dataclasses import asdict, dataclass
 from threading import RLock
 from typing import Iterable
@@ -75,6 +77,19 @@ class ConversationView:
     message_ids: tuple[int, ...]
     incomplete: bool
     has_more: bool
+    next_cursor: str | None = None
+    scan_exhausted: bool = False
+
+
+@dataclass(slots=True)
+class _ReadState:
+    query: tuple
+    agent_id: int
+    frames: list[tuple[int, int]]
+    seen: set[int]
+    position: int = 0
+    incomplete: bool = False
+    expires: float = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +110,33 @@ class ReplyCatalog:
             raise ReplyError("DUPLICATE_MESSAGE_ID")
         self._lock = RLock()
         self._validate()
+        self._cursors: dict[str, _ReadState] = {}
+        self._reindex()
+
+    def _reindex(self) -> None:
+        neighbors = {key: [] for key in self._records}
+        labels: dict[tuple[str, str, int], list[int]] = {}
+        sources: dict[tuple[str, int], set[str]] = {}
+        for key, row in self._records.items():
+            if row.reply_to is not None:
+                neighbors[key].append(row.reply_to)
+                neighbors[row.reply_to].append(key)
+            if row.legacy_thread_label is not None:
+                for agent in {row.sender_id, *row.to, *row.cc, *row.bcc}:
+                    labels.setdefault(
+                        (row.legacy_thread_label, row.source, agent), []
+                    ).append(key)
+                    sources.setdefault((row.legacy_thread_label, agent), set()).add(
+                        row.source
+                    )
+        self._neighbors = {
+            key: tuple(sorted(values)) for key, values in neighbors.items()
+        }
+        self._labels = {key: tuple(sorted(values)) for key, values in labels.items()}
+        self._label_sources = {
+            key: tuple(sorted(values)) for key, values in sources.items()
+        }
+        self._cursors.clear()  # Every mutation requires a fresh read snapshot.
 
     def _validate(self) -> None:
         for row in self._records.values():
@@ -173,68 +215,163 @@ class ReplyCatalog:
             except Exception:
                 del self._records[row.message_id]
                 raise
+            self._reindex()
+
+    def _resume(self, cursor: str, agent: int) -> _ReadState:
+        if not isinstance(cursor, str):
+            raise ReplyError("INVALID_CURSOR")
+        state = self._cursors.get(cursor)
+        if (
+            state is None
+            or state.agent_id != agent
+            or state.expires <= time.monotonic()
+        ):
+            raise ReplyError("INVALID_CURSOR")
+        return state
+
+    def _page(
+        self, query: tuple, agent: int, limit: int, scan_limit: int, cursor: str | None
+    ) -> ConversationView:
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ReplyError("INVALID_LIMIT")
+        if type(scan_limit) is not int or not 1 <= scan_limit <= 1000:
+            raise ReplyError("INVALID_SCAN_LIMIT")
+        if cursor is not None:
+            state = self._resume(cursor, agent)
+            if state.query != query:
+                raise ReplyError("INVALID_CURSOR")
+            self._cursors.pop(cursor)  # Single-use continuation, caller-bound.
+        else:
+            state = _ReadState(
+                query,
+                agent,
+                [(query[1], -1)] if query[0] == "conversation" else [],
+                set(),
+            )
+        output: list[int] = []
+        steps = 0
+        if query[0] == "conversation":
+            # Indexed depth-first traversal. Each node/edge step consumes a
+            # budget unit; even a high-degree node is expanded incrementally.
+            while state.frames and steps < scan_limit and len(output) < limit:
+                key, position = state.frames[-1]
+                steps += 1
+                if position == -1:
+                    if key in state.seen:
+                        state.frames.pop()
+                        continue
+                    state.seen.add(key)
+                    state.frames[-1] = (key, 0)
+                    if self._records[key].permits(agent):
+                        output.append(key)
+                    else:
+                        state.incomplete = True
+                elif position >= len(self._neighbors[key]):
+                    state.frames.pop()
+                else:
+                    neighbor = self._neighbors[key][position]
+                    state.frames[-1] = (key, position + 1)
+                    if neighbor not in state.seen:
+                        state.frames.append((neighbor, -1))
+            pending = bool(state.frames)
+        else:
+            keys = self._labels[(query[1], query[2], agent)]
+            while (
+                state.position < len(keys)
+                and steps < scan_limit
+                and len(output) < limit
+            ):
+                key = keys[state.position]
+                state.position += 1
+                steps += 1
+                if self._records[key].permits(agent):
+                    output.append(key)
+            pending = state.position < len(keys)
+        next_cursor = None
+        if pending:
+            now = time.monotonic()
+            self._cursors = {
+                key: value
+                for key, value in self._cursors.items()
+                if value.expires > now
+            }
+            if len(self._cursors) >= 128:
+                raise ReplyError("CURSOR_CAPACITY")
+            next_cursor = uuid4().hex
+            state.expires = now + 300
+            self._cursors[next_cursor] = state
+        return ConversationView(
+            tuple(output),
+            state.incomplete,
+            pending,
+            next_cursor,
+            pending and steps >= scan_limit,
+        )
 
     def conversation(
-        self, message_id: int, caller: CallerEvidence, *, limit: int = 50
+        self,
+        message_id: int,
+        caller: CallerEvidence,
+        *,
+        limit: int = 50,
+        scan_limit: int = 1000,
+        cursor: str | None = None,
     ) -> ConversationView:
         agent = caller.require_agent()
         if not valid_id(message_id):
             raise ReplyError("INVALID_REPLY_ID")
-        if type(limit) is not int or not 1 <= limit <= 1000:
-            raise ReplyError("INVALID_LIMIT")
         with self._lock:
             self.resolve(caller, reply_to=message_id)
-            neighbors = {key: set() for key in self._records}
-            for key, row in self._records.items():
-                if row.reply_to is not None:
-                    neighbors[key].add(row.reply_to)
-                    neighbors[row.reply_to].add(key)
-            seen: set[int] = set()
-            pending = [message_id]
-            while pending:
-                key = pending.pop()
-                if key in seen:
-                    continue
-                seen.add(key)
-                pending.extend(neighbors[key] - seen)
-            allowed = sorted(key for key in seen if self._records[key].permits(agent))
-            # No hidden IDs, recipients or hidden-message count are returned.
-            return ConversationView(
-                tuple(allowed[:limit]), len(allowed) != len(seen), len(allowed) > limit
+            return self._page(
+                ("conversation", message_id), agent, limit, scan_limit, cursor
             )
 
     def legacy_read(
-        self, value: str, caller: CallerEvidence, *, limit: int = 50
+        self,
+        value: str,
+        caller: CallerEvidence,
+        *,
+        limit: int = 50,
+        scan_limit: int = 1000,
+        cursor: str | None = None,
     ) -> tuple[ConversationView, ...]:
-        """Compatibility summary selection; labels are filters, never edges."""
+        """Resume each returned view with its opaque cursor and the same input."""
         agent = caller.require_agent()
-        if type(limit) is not int or not 1 <= limit <= 1000:
-            raise ReplyError("INVALID_LIMIT")
         if not isinstance(value, str) or not value or len(value) > 1024:
             raise ReplyError("INVALID_LEGACY_THREAD")
-        results = []
         with self._lock:
+            if cursor is not None:
+                state = self._resume(cursor, agent)
+                if state.query[-1] != value or state.query[0] not in {
+                    "legacy_label",
+                    "conversation",
+                }:
+                    raise ReplyError("INVALID_CURSOR")
+                return (self._page(state.query, agent, limit, scan_limit, cursor),)
+            results = []
             for item in value.split(","):
                 number = numeric_legacy(item)
                 if number is not None:
-                    results.append(self.conversation(number, caller, limit=limit))
+                    self.resolve(caller, reply_to=number)
+                    results.append(
+                        self._page(
+                            ("conversation", number, value),
+                            agent,
+                            limit,
+                            scan_limit,
+                            None,
+                        )
+                    )
                 else:
-                    # Keep sources separate in the read result, without exposing
-                    # records the caller cannot see or joining them by label.
-                    sources: dict[str, list[int]] = {}
-                    for key, row in self._records.items():
-                        if row.legacy_thread_label == item.strip() and row.permits(
-                            agent
-                        ):
-                            sources.setdefault(row.source, []).append(key)
-                    if not sources:
+                    queries = [
+                        ("legacy_label", item.strip(), source, value)
+                        for source in self._label_sources.get((item.strip(), agent), ())
+                    ]
+                    if not queries:
                         raise ReplyError("MESSAGE_UNAVAILABLE")
-                    for source in sorted(sources):
-                        keys = sorted(sources[source])
+                    for query in queries:
                         results.append(
-                            ConversationView(
-                                tuple(keys[:limit]), False, len(keys) > limit
-                            )
+                            self._page(query, agent, limit, scan_limit, None)
                         )
             return tuple(results)
 
@@ -281,6 +418,8 @@ class ReplyCatalog:
             for key in plan.delete_ids:
                 del self._records[key]
             self._validate()
+            if plan.delete_ids:
+                self._reindex()
             return plan
 
     def export(self) -> dict:

@@ -6,11 +6,6 @@
     "ensure_project"
   ],
   "planning": {
-    "legacy_resolution": [
-      "canonical",
-      "confirmed_legacy_binding",
-      "message_reply"
-    ],
     "phases": [
       "planned",
       "prepared",
@@ -24,12 +19,18 @@
       "committed"
     ],
     "scope_values_used_for_routing": false,
-    "thread_id_prefix": "th-",
     "window_decisions": [
       "keep",
       "generate",
       "explicit_uuid"
-    ]
+    ],
+    "read_pagination": {
+      "continuation": "opaque caller-bound single-use cursor",
+      "visible_limit_max": 1000,
+      "scan_budget_max": 1000,
+      "cursor_ttl_seconds": 300,
+      "mutation": "invalidate cursors"
+    }
   },
   "stage": "candidate-planning-only",
   "tools": {

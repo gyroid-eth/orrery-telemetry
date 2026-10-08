@@ -24,7 +24,9 @@
 
 `summarize_thread` は互換入口として、新しい `message_id` または旧 `thread_id` を受けます。数字は message 起点へ変換し、comma 区切りは各起点、名前付きは履歴ラベルの読取として扱います。`legacy_read()` の各 view を集計する backend は重複 message を二重計上しません。旧名の撤去と正規の `summarize_conversation` の公開は client inventory を確認した後です。`fetch_topic` は現在も topic タグ検索なので、その用途を保ちます。
 
-`conversation()` は返信のつながりを辿り、caller が参照できる message ID だけを返します。見えない message の ID・bcc・本文・件数は返さず、一部省略があることだけを示します。返された ID を表示/要約へ渡すときも、backend は message ごとの閲覧と bcc の非表示を維持します。実 UI、本文の rendering、LLM 要約はこの PR では実装しません。旧ラベルの読取は source ごとに分け、同名ラベルを会話と断定しません。
+`conversation()` は返信のつながりを辿り、caller が参照できる message ID だけを返します。見えない message の ID・bcc・本文・件数は返さず、一部省略があることだけを示します。読み取りは初期化/更新時の索引を使い、毎ページ全 record を走査しません。`limit`（可視結果、最大1000）と `scan_limit`（node/edge 探索手順、最大1000）を別に設けます。`next_cursor` を同じ caller/起点へ渡すと続きを取得でき、全ページで各可視 message を一度ずつ返します。順序は起点からの決まった探索順で、日時順が必要なら backend が取得後に並べます。探索上限で空のページになる場合も cursor があれば続けます。`scan_exhausted` は探索上限、`has_more` は未探索が残ることを表し、可視結果が必ず残るという意味ではありません。
+
+cursor は内部の frontier/visited/hidden ID を含まない不透明な値で、caller/選択条件に結び付け、単回使用・5分期限・最大128個とします。候補データの変更、期限切れ、不一致は `INVALID_CURSOR` で初めからの再取得を求めます。export/restore に cursor は保存しません。旧 label と旧数字の `legacy_read()` も各 view の cursor を元の入力に渡して継続でき、label は caller が参照できる source だけを返します。探索 budget は各 view ごとです。返された ID を表示/要約へ渡すときも、backend は message ごとの閲覧と bcc の非表示を維持します。実 UI、本文の rendering、LLM 要約はこの PR では実装しません。旧ラベルの読取は source ごとに分け、同名ラベルを会話と断定しません。
 
 `record_delivery()` は owner/contact 検証済みの backend が呼びます。元 message の確認と登録を計画内の lock でまとめ、同じ message の再記録は idempotent、異なる edge への付替えは拒否します。`export()` / `from_export()` は ID、sender/個々の宛先、reply_to、topic、旧 label/source を保ち、参照を再検証します。本文や credential を入力・保存しません。
 
@@ -52,6 +54,6 @@ ready でも `activation_enabled` は常に false です。環境変数でも切
 
 ## 検証と残る範囲
 
-一時 HOME の fixture で message ごとの返信可否、旧数字/ラベル、参照/循環、表示の範囲、purge の両順序、export/restore、名前/window、writer 集合の同時縮小、stale evidence、無効な activation を検査します。同じ試験は fixture DB を使った実際の v1 MCP 呼出も行い、公開 schema と project 別 inbox が従来どおりであることを確かめます。
+一時 HOME の fixture で message ごとの返信可否、旧数字/ラベル、参照/循環、表示の範囲、1001通以上の全ページ/隠れた中間/旧 label/cursor の拒否、purge の両順序、export/restore、名前/window、writer 集合の同時縮小、stale evidence、無効な activation を検査します。同じ試験は fixture DB を使った実際の v1 MCP 呼出も行い、公開 schema と project 別 inbox が従来どおりであることを確かめます。
 
 実 DB/配送 DB の変換、persistent FK/transaction、filesystem activity/GC、サービス停止/切替、installer/runtime/client/旧 block/UI の変更は含めません。準備 fixture の成功を live の移行成功や raw tool 全体の強制認証と説明しません。通常利用者向けの新しい migration CLI もまだありません。

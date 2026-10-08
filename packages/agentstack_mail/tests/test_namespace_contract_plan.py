@@ -108,6 +108,8 @@ def test_candidate_schema_is_separate_and_audits_all_legacy_scope_fields():
     assert contract["default_runtime"] == "legacy-v1"
     assert contract["activation_enabled"] is False
     assert set(contract["tools"]) == COMPATIBILITY_TOOLS
+    assert "thread_id_prefix" not in contract["planning"]
+    assert "legacy_resolution" not in contract["planning"]
     legacy = json.loads((FIXTURES / "live-tools-list.json").read_text())
     for tool in legacy["tools"]:
         if tool["name"] not in COMPATIBILITY_TOOLS:
@@ -336,7 +338,7 @@ def test_direct_reply_and_replay_keep_message_ids_and_reject_changed_state(scena
     value.record_delivery(row, CallerEvidence(3, True))
     restored = ReplyCatalog.from_export(json.loads(json.dumps(value.export())))
     assert restored.export() == value.export()
-    assert restored.conversation(301, CallerEvidence(3, True)).message_ids == (102, 301)
+    assert restored.conversation(301, CallerEvidence(3, True)).message_ids == (301, 102)
     assert restored.export()["messages"][-1]["reply_to"] == 102
     with pytest.raises(ReplyError, match="MESSAGE_ALREADY_MAPPED"):
         value.record_delivery(replace(row, reply_to=101), CallerEvidence(3, True))
@@ -358,7 +360,7 @@ def test_purge_holds_transitive_ancestors_and_never_cascades_new_children():
     actual = value.purge([1, 2, 4])
     assert actual == plan
     restored = ReplyCatalog.from_export(json.loads(json.dumps(value.export())))
-    assert restored.conversation(3, CallerEvidence(2, True)).message_ids == (1, 2, 3)
+    assert restored.conversation(3, CallerEvidence(2, True)).message_ids == (3, 2, 1)
     assert restored.purge([1, 2, 3]).delete_ids == (1, 2, 3)
     assert restored.export()["messages"] == []
 
@@ -617,3 +619,110 @@ def test_default_mcp_still_routes_by_project_and_preserves_v1_schema(
         db.reset_database_state()
         config.clear_settings_cache()
         shutil.rmtree(management_root)
+
+
+def test_pagination_returns_every_message_once_without_scanning_all_rows():
+    value = ReplyCatalog(
+        [
+            MessageRecord(
+                key, "fixture", 1, (2,), reply_to=key - 1 if key > 1 else None
+            )
+            for key in range(1, 1002)
+        ]
+    )
+
+    class IndexedOnly(dict):
+        def items(self):
+            pytest.fail("pagination rebuilt a full record index")
+
+        def values(self):
+            pytest.fail("pagination scanned all records")
+
+    value._records = IndexedOnly(value._records)
+    actor = CallerEvidence(2, True)
+    page = value.conversation(1001, actor, limit=1, scan_limit=1)
+    assert page.message_ids == (1001,) and page.scan_exhausted
+    output = list(page.message_ids)
+    while page.next_cursor:
+        page = value.conversation(
+            1001, actor, limit=137, scan_limit=113, cursor=page.next_cursor
+        )
+        output.extend(page.message_ids)
+    assert len(output) == len(set(output)) == 1001
+    assert set(output) == set(range(1, 1002))
+    assert not page.has_more
+
+
+def test_bounded_hidden_middle_pages_have_no_hidden_ids_or_counts():
+    value = ReplyCatalog(
+        [
+            MessageRecord(1, "fixture", 1, (2,)),
+            *[
+                MessageRecord(key, "fixture", 1, (3,), reply_to=key - 1)
+                for key in range(2, 1202)
+            ],
+            MessageRecord(1202, "fixture", 1, (2,), reply_to=1201),
+        ]
+    )
+    actor = CallerEvidence(2, True)
+    page = value.conversation(1, actor, limit=50, scan_limit=10)
+    output = list(page.message_ids)
+    saw_empty = False
+    while page.next_cursor:
+        assert len(page.next_cursor) == 32  # opaque token, no encoded frontier
+        page = value.conversation(
+            1, actor, limit=50, scan_limit=10, cursor=page.next_cursor
+        )
+        output.extend(page.message_ids)
+        saw_empty |= not page.message_ids
+    assert output == [1, 1202]
+    assert saw_empty and page.incomplete
+
+
+def test_label_pagination_is_caller_bound_source_separate_and_resumable():
+    value = ReplyCatalog(
+        [
+            MessageRecord(key, "source-a", 1, (2,), legacy_thread_label="historic")
+            for key in range(1, 1002)
+        ]
+        + [MessageRecord(2001, "source-b", 1, (3,), legacy_thread_label="historic")]
+    )
+    actor = CallerEvidence(2, True)
+    pages = value.legacy_read("historic", actor, limit=1, scan_limit=1)
+    assert len(pages) == 1 and pages[0].message_ids == (1,)
+    page = pages[0]
+    with pytest.raises(ReplyError, match="INVALID_CURSOR"):
+        value.legacy_read("historic", CallerEvidence(3, True), cursor=page.next_cursor)
+    with pytest.raises(ReplyError, match="INVALID_CURSOR"):
+        value.legacy_read("other", actor, cursor=page.next_cursor)
+    output = list(page.message_ids)
+    while page.next_cursor:
+        (page,) = value.legacy_read(
+            "historic", actor, limit=97, scan_limit=83, cursor=page.next_cursor
+        )
+        output.extend(page.message_ids)
+    assert output == list(range(1, 1002))
+
+
+def test_cursor_is_single_use_and_mutation_invalidates_read_snapshot():
+    value = ReplyCatalog(
+        [
+            MessageRecord(1, "fixture", 1, (2,)),
+            MessageRecord(2, "fixture", 1, (2,), reply_to=1),
+        ]
+    )
+    actor = CallerEvidence(2, True)
+    page = value.conversation(1, actor, limit=1)
+    cursor = page.next_cursor
+    with pytest.raises(ReplyError, match="INVALID_CURSOR"):
+        value.conversation(2, actor, cursor=cursor)
+    value.conversation(1, actor, cursor=cursor)
+    with pytest.raises(ReplyError, match="INVALID_CURSOR"):
+        value.conversation(1, actor, cursor=cursor)
+    cursor = value.conversation(1, actor, limit=1).next_cursor
+    value.record_delivery(MessageRecord(3, "fixture", 2, (1,), reply_to=2), actor)
+    with pytest.raises(ReplyError, match="INVALID_CURSOR"):
+        value.conversation(1, actor, cursor=cursor)
+    numeric = value.legacy_read("1,2", actor, limit=1)[0]
+    (resumed,) = value.legacy_read("1,2", actor, cursor=numeric.next_cursor)
+    assert 1 not in resumed.message_ids
