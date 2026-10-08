@@ -85,6 +85,7 @@ Japanese documents are the source of truth. The English entry point is the [Engl
 | Diagnose a problem | [Troubleshooting](docs/troubleshooting.en.md) |
 | Develop a local deterministic daemon helper | [Dedicated bindings and notifications](docs/daemon-agents.en.md) (deployment requires separate approval) |
 | Validate candidate absolute reservations | [Candidate contract and tests](docs/absolute-reservations.en.md) (legacy mode remains the default) |
+| Validate candidate Mail and delivery migration | [State migration and recovery](docs/namespace-state-migration.en.md) (activation false) |
 
 [Using it with Obsidian](docs/obsidian.en.md) and the public [demo vault](https://github.com/gyroid-eth/orrery-demo-vault) turn logs, paper notes, and tasks into notes; Obsidian is optional. [Codex App](docs/codex-app.en.md) and [Antigravity / Gemini](docs/antigravity.en.md) are optional providers beyond the CLIs.
 

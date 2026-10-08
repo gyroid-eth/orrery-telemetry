@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "activation": false,
+  "source": "explicit-local-snapshot",
+  "mail_instance_id": "preserved",
+  "identity": "stable-agent-id-and-owner-token",
+  "reply_to": "numeric-root-reference-preserved-without-inferred-direct-parent",
+  "named_threads": "read-only-label-and-source",
+  "delivery_key": ["mail_instance_id", "agent_id", "message_id"],
+  "delivery_statuses": ["pending", "leased", "delivered", "failed", "dead_letter"],
+  "delivery_policy": "versioned-and-snapshotted",
+  "leased_recovery": "explicit-stopped-unfinished-recovery-after-original-expiry-at-least-once",
+  "phases": ["planned", "prepared", "prevalidated", "quiesced", "final_verified", "switched", "committed"],
+  "pointer": "candidate-workspace-rehearsal-only",
+  "rollback": "refuse-after-any-new-candidate-write",
+  "retention": "hold-surviving-descendants-ancestors-in-same-write-transaction",
+  "block_scope": "explicit-empty-until-block-collector-is-integrated",
+  "default": "legacy-runtime-unchanged"
+}

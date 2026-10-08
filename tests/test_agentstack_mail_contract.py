@@ -72,5 +72,22 @@ def test_distribution_contract_lists_every_runtime_module_and_cutover_test() -> 
 
 
 
+def test_distributed_delivery_schema_matches_persistent_candidate():
+    from agentstack_mail.namespace_transform import (
+        DELIVERY_SQL,
+        DELIVERY_TRANSITION_SQL,
+    )
 
-
+    root = Path(__file__).resolve().parents[1]
+    first = (root / "schemas/migrations/002_namespace_candidate.sql").read_text()
+    assert (
+        first
+        == (
+            root
+            / "integrations/codex_app/schemas/migrations/002_namespace_candidate.sql"
+        ).read_text()
+    )
+    assert (
+        first.split("\n", 1)[1]
+        == DELIVERY_SQL + ";\n\n" + DELIVERY_TRANSITION_SQL + ";\n"
+    )
