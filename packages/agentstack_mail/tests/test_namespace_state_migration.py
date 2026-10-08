@@ -631,3 +631,116 @@ def test_interrupted_rollback_can_be_repeated_without_losing_candidate(
     assert run.rollback()["phase"] == "prepared"
     assert (run.workspace / "candidate/mail.sqlite3").read_bytes() == before
     assert run.resume(fence=fence)["phase"] == "committed"
+
+
+@pytest.mark.asyncio
+async def test_metadata_disabled_signal_from_legacy_writer_migrates_without_enrichment(
+    state,
+):
+    from types import SimpleNamespace
+    from agentstack_mail.storage import emit_notification_signal, _SIGNAL_DEBOUNCE
+    from agentstack_mail.namespace_transform import plan_report
+
+    source, choices, run = state
+    signal = source.signals / "projects/two/agents/Alpha/103.signal"
+    signal.unlink()
+    _SIGNAL_DEBOUNCE.clear()
+    settings = SimpleNamespace(
+        notifications=SimpleNamespace(
+            enabled=True,
+            signals_dir=str(source.signals),
+            include_metadata=False,
+            debounce_ms=0,
+        )
+    )
+    assert await emit_notification_signal(
+        settings,
+        "two",
+        "Alpha",
+        {"id": 103, "from": "Alpha", "subject": "private fixture subject"},
+    )
+    original = signal.read_bytes()
+    assert "message" not in json.loads(original)
+    assert not plan_report(source, choices)["needs_action"]
+    assert run.resume(fence=fence)["phase"] == "committed"
+    root = run.workspace / "candidate"
+    document = json.loads((root / "signals/agents/2/103.signal").read_text())
+    assert document["message_id"] == 103 and document["message"] is None
+    assert document["needs_inbox"]
+    assert "private fixture subject" not in json.dumps(document)
+    assert (root / document["legacy_signal_path"]).read_bytes() == original
+    assert run.resume(fence=fence)["phase"] == "committed"
+
+
+@pytest.mark.parametrize("metadata", [True, False])
+def test_legacy_and_per_message_signal_share_id_without_overwrite(state, metadata):
+    from agentstack_mail.namespace_transform import plan_report
+
+    source, choices, run = state
+    per = source.signals / "projects/two/agents/Alpha/103.signal"
+    old = source.signals / "projects/two/agents/Alpha.signal"
+    old.write_bytes(per.read_bytes())
+    if not metadata:
+        payload = json.loads(per.read_text())
+        payload.pop("message")
+        per.write_text(json.dumps(payload))
+    originals = {
+        path.relative_to(source.signals).as_posix(): path.read_bytes()
+        for path in (per, old)
+    }
+    assert not plan_report(source, choices)["needs_action"]
+    assert run.resume(fence=fence)["phase"] == "committed"
+    root = run.workspace / "candidate"
+    envelopes = json.loads((root / "mapping.json").read_text())["signals"]
+    assert len({item["path"] for item in envelopes.values()}) == 2
+    for relative, item in envelopes.items():
+        assert item["payload"]["message_id"] == 103
+        assert json.loads((root / item["path"]).read_text()) == item["payload"]
+        assert (root / item["payload"]["legacy_signal_path"]).read_bytes() == originals[
+            relative
+        ]
+
+
+def test_invalid_signal_is_visible_in_readonly_plan(state):
+    from agentstack_mail.namespace_transform import plan_report
+
+    source, choices, _ = state
+    signal = source.signals / "projects/two/agents/Alpha/103.signal"
+    document = json.loads(signal.read_text())
+    document["message"]["id"] = 104
+    signal.write_text(json.dumps(document))
+    before = source.manifest()
+    report = plan_report(source, choices)
+    assert report["needs_action"]
+    assert report["signal_unresolved"] == [
+        {
+            "path": "projects/two/agents/Alpha/103.signal",
+            "reason": "SIGNAL_IDENTITY_MISMATCH",
+        }
+    ]
+    assert source.manifest() == before
+
+
+@pytest.mark.parametrize("mid", [999, 102])
+def test_metadata_disabled_signal_rejects_missing_message_or_wrong_recipient(
+    state, mid
+):
+    from agentstack_mail.namespace_transform import plan_report
+
+    source, choices, run = state
+    old = source.signals / "projects/two/agents/Alpha/103.signal"
+    payload = json.loads(old.read_text())
+    payload.pop("message")
+    old.unlink()
+    signal = old.with_name(str(mid) + ".signal")
+    signal.write_text(json.dumps(payload))
+    before = source.manifest()
+    report = plan_report(source, choices)
+    assert (
+        report["needs_action"]
+        and report["signal_unresolved"][0]["reason"] == "SIGNAL_MESSAGE_UNAVAILABLE"
+    )
+    with pytest.raises(StateMigrationError, match="SIGNAL_MESSAGE_UNAVAILABLE"):
+        run.resume(fence=fence)
+    assert not run.pointer_path.exists()
+    assert source.manifest() == before

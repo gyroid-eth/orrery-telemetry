@@ -59,3 +59,5 @@ case-insensitive filesystem の非 ASCII path は #232 の未解決のため予�
 試験は一時 HOME の旧 schema fixture から始め、実 DB を読みません。配布物の wheel / sdist と、checkout を参照しない installed candidate も確認します。
 
 pointer の authority・receipt ID・generation・activation が違えば、完了済みからの resume も停止します。rollback の pointer 更新後に中断した場合は、candidate が変わっていなければ同じ `rollback()` を再実行して receipt を確定し、その後に resume できます。
+
+signal の metadata 省略設定も保持します。per-message file の ID は file 名から照合し、subject・送信者・本文を補いません。旧単一 signal と per-message が同じ ID を持つ場合は、`legacy-<ID>.signal` と `<ID>.signal` に分けて来歴と元 bytes を残します。無効な signal は plan に path と reason を出します。予約の Mail 活動は送信・受信の全時刻を UTC へ変換してから最新を選び、offset の表記差で早期解放しません。

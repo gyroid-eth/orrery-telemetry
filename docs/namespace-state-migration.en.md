@@ -59,3 +59,5 @@ The unresolved #232 restriction rejects non-ASCII paths on case-insensitive file
 Tests start from legacy-schema fixtures in temporary HOME directories without reading production state. Wheel, sdist and an installed candidate independent of checkout imports are verified separately.
 
 A mismatch in pointer authority, receipt ID, generation or activation stops even a committed resume. If rollback is interrupted after pointer replacement, repeat `rollback()` while the candidate is unchanged to finalize the receipt, then resume.
+
+Signal metadata omission is preserved. Per-message IDs are validated from filenames without adding subjects, senders or bodies. A legacy single signal and a per-message signal for the same ID use distinct `legacy-<ID>.signal` and `<ID>.signal` envelopes, retaining provenance and original bytes. Invalid signals appear in the plan with path and reason. Reservation Mail activity selects the latest instant after converting every sent/received timestamp to UTC, preventing early release due to offset spelling.

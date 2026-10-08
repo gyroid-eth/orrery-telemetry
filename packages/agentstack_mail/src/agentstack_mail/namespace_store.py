@@ -310,13 +310,19 @@ class PersistentReservations:
                 )
             server._next_id = max(original, default=0) + 1
             for row in rows(database, "agents"):
-                mail = database.execute(
-                    "SELECT MAX(m.created_ts) FROM messages m WHERE m.sender_id=? OR EXISTS(SELECT 1 FROM message_recipients r WHERE r.message_id=m.id AND r.agent_id=?)",
-                    (row["id"], row["id"]),
-                ).fetchone()[0]
+                mail = max(
+                    (
+                        timestamp(value[0]).timestamp()
+                        for value in database.execute(
+                            "SELECT m.created_ts FROM messages m WHERE m.sender_id=? OR EXISTS(SELECT 1 FROM message_recipients r WHERE r.message_id=m.id AND r.agent_id=?)",
+                            (row["id"], row["id"]),
+                        )
+                    ),
+                    default=None,
+                )
                 server._activity[str(row["id"])] = (
                     timestamp(row["last_active_ts"]).timestamp(),
-                    timestamp(mail).timestamp() if mail else None,
+                    mail,
                     0,
                 )
             before = dict(server._leases)

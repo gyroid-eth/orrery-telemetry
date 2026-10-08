@@ -522,3 +522,44 @@ def test_delivery_terminal_transition_is_enforced_by_database(migrated):
             database.execute(
                 "UPDATE codex_app_delivery_state SET status='pending' WHERE message_id=101"
             )
+
+
+@pytest.mark.parametrize("kind", ["sent", "received"])
+@pytest.mark.parametrize(
+    "earlier,recent",
+    [
+        ("2026-10-08T23:00:00+14:00", "2026-10-08T09:59:00Z"),
+        ("2026-10-08T09:00:00+00:00", "2026-10-07T23:59:00-10:00"),
+    ],
+)
+def test_reservation_latest_mail_is_selected_by_utc_instant(
+    migrated, kind, earlier, recent
+):
+    _, _, _, root, current = migrated
+    path = root / "mail.sqlite3"
+    with connection(path, write=True) as database:
+        database.execute("UPDATE messages SET created_ts='2026-10-08T08:00:00+00:00'")
+    mail = store(root)
+    for created in (earlier, recent):
+        mail.reply(
+            "Alpha" if kind == "sent" else "Beta",
+            "fixture-owner-one" if kind == "sent" else "fixture-owner-two",
+            subject="fixture activity",
+            body_md="fixture",
+            recipients={"to": (2 if kind == "sent" else 1,)},
+            expected_generation=current,
+            created_at=created,
+        )
+    service = PersistentReservations(
+        path,
+        clock=lambda: timestamp("2026-10-08T10:00:00Z").timestamp(),
+        probe=lambda scope: Activity(True, matched=True),
+    )
+    assert service.collect([1], expected_generation=current) == {1: "active"}
+    with connection(path) as database:
+        assert (
+            database.execute(
+                "SELECT released_ts FROM file_reservations WHERE id=1"
+            ).fetchone()[0]
+            is None
+        )

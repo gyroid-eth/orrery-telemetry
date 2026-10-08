@@ -895,65 +895,108 @@ def nullable_provenance(path: Path) -> None:
             raise StateMigrationError("CANDIDATE_FOREIGN_KEY_INVALID")
 
 
-def signal_envelopes(source: SourceBundle, resolved: dict) -> dict:
+def _signal_envelope(
+    source, resolved, relative, projects, agents, messages, recipients
+):
+    parts = Path(relative).parts
+    if (
+        len(parts) not in (4, 5)
+        or parts[0] != "projects"
+        or parts[2] != "agents"
+        or parts[1] not in projects
+    ):
+        raise StateMigrationError("SIGNAL_LAYOUT_UNKNOWN")
+    per_message = len(parts) == 5
+    name = parts[3] if per_message else parts[3].removesuffix(".signal")
+    if not per_message and not parts[3].endswith(".signal"):
+        raise StateMigrationError("SIGNAL_LAYOUT_UNKNOWN")
+    agent = agents.get((projects[parts[1]], name))
+    if agent is None:
+        raise StateMigrationError("SIGNAL_AGENT_UNKNOWN")
+    try:
+        payload = json.loads((source.signals / relative).read_text())
+    except (ValueError, UnicodeError):
+        raise StateMigrationError("SIGNAL_PAYLOAD_INVALID") from None
+    if not isinstance(payload, dict):
+        raise StateMigrationError("SIGNAL_PAYLOAD_INVALID")
+    if payload.get("project") != parts[1] or payload.get("agent") != name:
+        raise StateMigrationError("SIGNAL_IDENTITY_MISMATCH")
+    metadata = payload.get("message")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise StateMigrationError("SIGNAL_PAYLOAD_INVALID")
+    message = (metadata or {}).get("id")
+    if per_message:
+        stem = parts[4].removesuffix(".signal")
+        if (
+            not stem.isascii()
+            or not 1 <= len(stem) <= 19
+            or not stem.isdecimal()
+            or int(stem) <= 0
+            or parts[4] != str(int(stem)) + ".signal"
+        ):
+            raise StateMigrationError("SIGNAL_FILE_ID_INVALID")
+        file_id = int(stem)
+        if message is not None and (type(message) is not int or message != file_id):
+            raise StateMigrationError("SIGNAL_IDENTITY_MISMATCH")
+        message = file_id
+    if message is not None:
+        if (
+            type(message) is not int
+            or message <= 0
+            or message not in messages
+            or (message, agent) not in recipients
+        ):
+            raise StateMigrationError("SIGNAL_MESSAGE_UNAVAILABLE")
+        if metadata is not None:
+            # Do not enrich metadata-disabled signals with subjects, sender or body.
+            metadata = {
+                **metadata,
+                "sender_id": messages[message]["sender_id"],
+                "from": resolved["names"][str(messages[message]["sender_id"])],
+            }
+    filename = (
+        (str(message) + ".signal")
+        if per_message
+        else (
+            "legacy-" + str(message) + ".signal"
+            if message is not None
+            else "legacy.signal"
+        )
+    )
+    return {
+        "path": "signals/agents/" + str(agent) + "/" + filename,
+        "payload": {
+            "mail_instance_id": resolved["instance_id"],
+            "agent_id": agent,
+            "timestamp": payload.get("timestamp"),
+            "message_id": message,
+            "message": metadata,
+            "needs_inbox": message is None or metadata is None,
+            "legacy_signal_path": "legacy-signals/" + relative,
+        },
+    }
+
+
+def signal_envelopes(
+    source: SourceBundle, resolved: dict, *, problems: list | None = None
+) -> dict:
     mail = mail_rows(source.mail)
     projects = {row["slug"]: row["id"] for row in mail["projects"]}
     agents = {(row["project_id"], row["name"]): row["id"] for row in mail["agents"]}
     messages = {row["id"]: row for row in mail["messages"]}
+    recipients = {
+        (row["message_id"], row["agent_id"]) for row in mail["message_recipients"]
+    }
     result = {}
     for relative in tree_manifest(source.signals):
-        parts = Path(relative).parts
-        if (
-            len(parts) not in (4, 5)
-            or parts[0] != "projects"
-            or parts[2] != "agents"
-            or parts[1] not in projects
-        ):
-            raise StateMigrationError("SIGNAL_LAYOUT_UNKNOWN")
-        name = parts[3].removesuffix(".signal") if len(parts) == 4 else parts[3]
-        agent = agents.get((projects[parts[1]], name))
-        if agent is None:
-            raise StateMigrationError("SIGNAL_AGENT_UNKNOWN")
         try:
-            payload = json.loads((source.signals / relative).read_text())
-        except (ValueError, UnicodeError):
-            raise StateMigrationError("SIGNAL_PAYLOAD_INVALID") from None
-        if payload.get("project") != parts[1] or payload.get("agent") != name:
-            raise StateMigrationError("SIGNAL_IDENTITY_MISMATCH")
-        message = (payload.get("message") or {}).get("id")
-        metadata = None
-        if message is not None:
-            if (
-                type(message) is not int
-                or message <= 0
-                or message not in messages
-                or not any(
-                    row["message_id"] == message and row["agent_id"] == agent
-                    for row in mail["message_recipients"]
-                )
-            ):
-                raise StateMigrationError("SIGNAL_MESSAGE_UNAVAILABLE")
-            if len(parts) == 5 and parts[4] != str(message) + ".signal":
-                raise StateMigrationError("SIGNAL_IDENTITY_MISMATCH")
-            metadata = {
-                **payload["message"],
-                "sender_id": messages[message]["sender_id"],
-                "from": resolved["names"][str(messages[message]["sender_id"])],
-            }
-        elif len(parts) == 5:
-            raise StateMigrationError("SIGNAL_MESSAGE_UNAVAILABLE")
-        filename = str(message) + ".signal" if message is not None else "legacy.signal"
-        result[relative] = {
-            "path": "signals/agents/" + str(agent) + "/" + filename,
-            "payload": {
-                "mail_instance_id": resolved["instance_id"],
-                "agent_id": agent,
-                "timestamp": payload.get("timestamp"),
-                "message": metadata,
-                "needs_inbox": message is None,
-                "legacy_signal_path": "legacy-signals/" + relative,
-            },
-        }
+            result[relative] = _signal_envelope(
+                source, resolved, relative, projects, agents, messages, recipients
+            )
+        except StateMigrationError as error:
+            if problems is None:
+                raise
+            problems.append({"path": relative, "reason": str(error)})
     return result
 
 
@@ -1107,8 +1150,24 @@ def plan_report(source: SourceBundle, choices: dict) -> dict:
         ]
         for group in names.conflicts
     ]
+    signal_issues = []
+    try:
+        signal_envelopes(
+            source,
+            {
+                "instance_id": mail["mail_instances"][0]["instance_id"],
+                "names": {
+                    str(key): names.names.get(key, row["name"])
+                    for key, row in agents.items()
+                },
+            },
+            problems=signal_issues,
+        )
+    except StateMigrationError as error:
+        signal_issues.append({"path": ".", "reason": str(error)})
     result = {
         "activation": False,
+        "signal_unresolved": signal_issues,
         "agent_conflicts": conflicts,
         "window_unresolved": list(windows.unresolved),
         "lease_unresolved": unknown_leases,
@@ -1116,7 +1175,12 @@ def plan_report(source: SourceBundle, choices: dict) -> dict:
         "delivery_unresolved": delivery,
     }
     result["needs_action"] = bool(
-        conflicts or windows.unresolved or unknown_leases or reply_issues or delivery
+        conflicts
+        or windows.unresolved
+        or unknown_leases
+        or reply_issues
+        or delivery
+        or signal_issues
     )
     return result
 
