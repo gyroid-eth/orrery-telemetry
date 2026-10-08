@@ -16,6 +16,12 @@
 
 `agentstack-await-reply` の認証済み fetch を渡せる待機処理を共通化し、取消しに対応しました。常駐 daemon 用の厳密な binding profile と operator 専用 CLI は、同じ owner・数値ID・project・固定送信先を照合します。待機は本文取得や ACK を行いません。CLI は固定 source から実行する対象で、一般の installer には追加しません。identity 作成と実際の配備は operator が別途確認します。
 
+### project 廃止に向けた契約と移行計画を準備
+
+旧 scope 引数を受けて無視する candidate adapter、thread の発行と旧入力の解決、agent 名と window UUID の衝突・解決、最終 snapshot の再検証に結び付いた receipt と gate を追加しました。計画の fixture と一時 HOME の試験で、旧会話の継続、曖昧な入力の拒否、再開時の ID 保存、writer 再侵入時の停止条件を確認します。
+
+これは準備の PR で、公開中の tool・project ごとの配送・DB・installer・hook は従来どおりです。新 API は明示した candidate だけで使い、gate が ready でも切替は有効になりません。詳細は[契約と移行計画](docs/project-removal-plan.md)を参照してください。
+
 ### session の無い宛先の古い Mail signal で health が red になる誤警報を修正
 
 watcher は `session_not_found` の signal を再試行用に残していました。health は24時間以上古く、tmux session が無いと確認できた signal を残留数として別に報告します。生きている宛先・直近24時間・headless runtime の未配送は従来どおり数え、50件超なら red にします。測定に失敗した場合も除外しません。doctor は残留数と確認・削除のコマンドを warn で示しますが、この残留だけでは終了コードを1にしません。

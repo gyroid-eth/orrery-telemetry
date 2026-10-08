@@ -1,0 +1,26 @@
+{
+  "fixture_version": 1,
+  "generation": "fixture-generation-1",
+  "agents": [
+    {"agent_id": 1, "source": "legacy-a", "name": "BlueLake", "retired": false},
+    {"agent_id": 2, "source": "legacy-b", "name": "bluelake", "retired": true},
+    {"agent_id": 3, "source": "legacy-c", "name": "Blue-Lake", "retired": false}
+  ],
+  "windows": [
+    {"row_id": 12, "source": "legacy-a", "window_uuid": "old-window", "display_name": "BlueLake", "bindings": ["session-a"], "expired": false},
+    {"row_id": 34, "source": "legacy-b", "window_uuid": "old-window", "display_name": "bluelake", "bindings": ["session-b"], "expired": true}
+  ],
+  "threads": [
+    {"record_id": 21, "source": "legacy-a", "alias": "TKT-1", "participants": [1, 2], "message_ids": [101]},
+    {"record_id": 22, "source": "legacy-b", "alias": "TKT-1", "participants": [1, 3], "message_ids": [102]},
+    {"record_id": 31, "source": "legacy-a", "alias": "CROSS-1", "participants": [1, 2], "message_ids": [201]},
+    {"record_id": 32, "source": "legacy-b", "alias": "CROSS-1", "participants": [1, 3], "message_ids": [202]}
+  ],
+  "expected_writers": ["mail", "watcher", "proxy-wake"],
+  "required_final_checks": [
+    "agent_names_unique", "attachments_preserved", "bindings_verified", "block_hashes_verified",
+    "contact_policy_preserved", "credential_generations_preserved", "delivery_states_preserved",
+    "fts_valid", "lease_anchors_resolved", "message_ids_preserved", "recipient_read_ack_preserved",
+    "thread_mapping_complete", "window_mapping_complete"
+  ]
+}

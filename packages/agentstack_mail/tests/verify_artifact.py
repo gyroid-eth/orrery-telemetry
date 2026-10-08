@@ -1116,6 +1116,9 @@ REQUIRED_RUNTIME_MODULES = {
     "migration.py",
     "model_normalize.py",
     "models.py",
+    "namespace_contract.py",
+    "namespace_plan.py",
+    "namespace_threads.py",
     "path_alias.py",
     "rich_logger.py",
     "restore_acceptance.py",
@@ -1135,6 +1138,8 @@ WHEEL_REQUIRED_SUFFIXES = {
     "agentstack_mail/fixtures/compatibility-tools-v1.json",
     f"agentstack_mail/fixtures/{DIVERGENCE_MANIFEST}",
     "agentstack_mail/fixtures/live-tools-list.json",
+    "agentstack_mail/fixtures/namespace-tools-v2.json",
+    "agentstack_mail/fixtures/namespace-plan-v1.json",
 } | {f"agentstack_mail/{module}" for module in REQUIRED_RUNTIME_MODULES}
 
 SDIST_REQUIRED_SUFFIXES = {
@@ -1146,6 +1151,8 @@ SDIST_REQUIRED_SUFFIXES = {
     "/fixtures/compatibility-tools-v1.json",
     f"/fixtures/{DIVERGENCE_MANIFEST}",
     "/fixtures/live-tools-list.json",
+    "/fixtures/namespace-tools-v2.json",
+    "/fixtures/namespace-plan-v1.json",
     "/pyproject.toml",
     "/tests/test_decision_manifest.py",
     "/tests/cutover_readiness.py",
@@ -1159,6 +1166,7 @@ SDIST_REQUIRED_SUFFIXES = {
     "/tests/test_pending_decision_d10.py",
     "/tests/test_pending_decision_d11_d12.py",
     "/tests/test_migration.py",
+    "/tests/test_namespace_contract_plan.py",
     "/tests/test_restore_acceptance.py",
     "/tests/test_consumer.py",
     "/tests/test_cutover_evidence.py",

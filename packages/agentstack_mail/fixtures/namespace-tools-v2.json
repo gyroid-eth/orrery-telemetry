@@ -1,0 +1,1403 @@
+{
+  "activation_enabled": false,
+  "contract_version": 2,
+  "default_runtime": "legacy-v1",
+  "legacy_noop_tools": [
+    "ensure_project"
+  ],
+  "planning": {
+    "legacy_resolution": [
+      "canonical",
+      "confirmed_legacy_binding",
+      "message_reply"
+    ],
+    "phases": [
+      "planned",
+      "prepared",
+      "prevalidated",
+      "quiesced",
+      "final_verified"
+    ],
+    "receipt_version": 1,
+    "reserved_cutover_phases": [
+      "switched",
+      "committed"
+    ],
+    "scope_values_used_for_routing": false,
+    "thread_id_prefix": "th-",
+    "window_decisions": [
+      "keep",
+      "generate",
+      "explicit_uuid"
+    ]
+  },
+  "stage": "candidate-planning-only",
+  "tools": {
+    "acknowledge_message": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent_name",
+          "message_id"
+        ],
+        "type": "object"
+      }
+    },
+    "ensure_project": {
+      "accepted_ignored_arguments": [
+        "human_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "identity_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "fetch_inbox": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "include_bodies": {
+            "default": false,
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 20,
+            "type": "integer"
+          },
+          "since_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "urgent_only": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agent_name"
+        ],
+        "type": "object"
+      }
+    },
+    "fetch_summary": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 5,
+            "type": "integer"
+          },
+          "since_hours": {
+            "default": 24.0,
+            "type": "number"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "fetch_topic": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "include_bodies": {
+            "default": true,
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 50,
+            "type": "integer"
+          },
+          "since_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "topic_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic_name"
+        ],
+        "type": "object"
+      }
+    },
+    "file_reservation_paths": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "exclusive": {
+            "default": true,
+            "type": "boolean"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "default": "",
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "default": 3600,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent_name",
+          "paths"
+        ],
+        "type": "object"
+      }
+    },
+    "health_check": {
+      "accepted_ignored_arguments": [],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "list_contacts": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "agent_name"
+        ],
+        "type": "object"
+      }
+    },
+    "macro_contact_handshake": {
+      "accepted_ignored_arguments": [
+        "project_key",
+        "to_project"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "auto_accept": {
+            "default": false,
+            "type": "boolean"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "program": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reason": {
+            "default": "",
+            "type": "string"
+          },
+          "register_if_missing": {
+            "default": true,
+            "type": "boolean"
+          },
+          "requester": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ttl_seconds": {
+            "default": 604800,
+            "type": "integer"
+          },
+          "welcome_body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "welcome_subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "macro_file_reservation_cycle": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "auto_release": {
+            "default": false,
+            "type": "boolean"
+          },
+          "exclusive": {
+            "default": true,
+            "type": "boolean"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "default": "macro-file_reservation",
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "default": 3600,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent_name",
+          "paths"
+        ],
+        "type": "object"
+      }
+    },
+    "macro_start_session": {
+      "accepted_ignored_arguments": [
+        "human_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "file_reservation_paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "file_reservation_reason": {
+            "default": "macro-session",
+            "type": "string"
+          },
+          "file_reservation_ttl_seconds": {
+            "default": 3600,
+            "type": "integer"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "inbox_limit": {
+            "default": 10,
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "program": {
+            "type": "string"
+          },
+          "task_description": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "program",
+          "model"
+        ],
+        "type": "object"
+      }
+    },
+    "mark_message_read": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent_name",
+          "message_id"
+        ],
+        "type": "object"
+      }
+    },
+    "register_agent": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "attachments_policy": {
+            "default": "auto",
+            "type": "string"
+          },
+          "existing_agent_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "program": {
+            "type": "string"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_description": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "program",
+          "model"
+        ],
+        "type": "object"
+      }
+    },
+    "release_file_reservations": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "file_reservation_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "agent_name"
+        ],
+        "type": "object"
+      }
+    },
+    "renew_file_reservations": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "extend_seconds": {
+            "default": 1800,
+            "type": "integer"
+          },
+          "file_reservation_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "agent_name"
+        ],
+        "type": "object"
+      }
+    },
+    "reply_message": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "bcc": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "body_md": {
+            "type": "string"
+          },
+          "cc": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message_id": {
+            "type": "integer"
+          },
+          "sender_name": {
+            "type": "string"
+          },
+          "subject_prefix": {
+            "default": "Re:",
+            "type": "string"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "message_id",
+          "sender_name",
+          "body_md"
+        ],
+        "type": "object"
+      }
+    },
+    "request_contact": {
+      "accepted_ignored_arguments": [
+        "project_key",
+        "to_project"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "from_agent": {
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "program": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reason": {
+            "default": "",
+            "type": "string"
+          },
+          "register_if_missing": {
+            "default": true,
+            "type": "boolean"
+          },
+          "task_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_agent": {
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "default": 604800,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from_agent",
+          "to_agent"
+        ],
+        "type": "object"
+      }
+    },
+    "respond_contact": {
+      "accepted_ignored_arguments": [
+        "from_project",
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "accept": {
+            "type": "boolean"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "from_agent": {
+            "type": "string"
+          },
+          "to_agent": {
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "default": 2592000,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "to_agent",
+          "from_agent",
+          "accept"
+        ],
+        "type": "object"
+      }
+    },
+    "retire_agent": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "agent_name"
+        ],
+        "type": "object"
+      }
+    },
+    "search_messages": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 20,
+            "type": "integer"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    "send_message": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "ack_required": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attachment_paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "auto_contact_if_blocked": {
+            "default": false,
+            "type": "boolean"
+          },
+          "bcc": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "body_md": {
+            "type": "string"
+          },
+          "broadcast": {
+            "default": false,
+            "type": "boolean"
+          },
+          "cc": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "convert_images": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "importance": {
+            "default": "normal",
+            "type": "string"
+          },
+          "new_thread": {
+            "default": false,
+            "type": "boolean"
+          },
+          "sender_name": {
+            "type": "string"
+          },
+          "sender_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "subject": {
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "thread_label": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "sender_name",
+          "to",
+          "subject",
+          "body_md"
+        ],
+        "type": "object"
+      }
+    },
+    "set_contact_policy": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "policy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_name",
+          "policy"
+        ],
+        "type": "object"
+      }
+    },
+    "summarize_thread": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "include_examples": {
+            "default": false,
+            "type": "boolean"
+          },
+          "llm_mode": {
+            "default": true,
+            "type": "boolean"
+          },
+          "llm_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "per_thread_limit": {
+            "default": 50,
+            "type": "integer"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id"
+        ],
+        "type": "object"
+      }
+    },
+    "unretire_agent": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "agent_name"
+        ],
+        "type": "object"
+      }
+    },
+    "whois": {
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "commit_limit": {
+            "default": 5,
+            "type": "integer"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "include_recent_commits": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agent_name"
+        ],
+        "type": "object"
+      }
+    }
+  }
+}
