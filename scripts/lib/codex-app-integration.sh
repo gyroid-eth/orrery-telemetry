@@ -284,7 +284,7 @@ for name in ("README.md", "pyproject.toml", "env.sh.sample", "export-manifest.tx
 PY
   mkdir -p "$INSTALL_DIR/bin/lib" "$RUNTIME_DIR"
   cp "$SCRIPT_DIR/lib/codex-app-integration.sh" "$INSTALL_DIR/bin/lib/"
-  cp "$SCRIPT_DIR/codex_plugin_trust.py" "$INSTALL_DIR/bin/"
+  cp "$SCRIPT_DIR/codex_plugin_trust.py" "$SCRIPT_DIR/codex_plugin_ownership.py" "$INSTALL_DIR/bin/"
   chmod 700 "$INSTALL_DIR" "$INSTALL_DIR/bin" "$RUNTIME_DIR"
   cp "$SCRIPT_DIR/run-codex-app-bridge.sh" "$RUNNER"
   cp "$SCRIPT_DIR/uninstall-codex-app-integration.sh" \
@@ -663,19 +663,11 @@ install_service() {
 }
 
 stop_supervised_background() {
-  local pid attempts=0
-  pid="$(sed -n '1p' "$BACKGROUND_PIDFILE" 2>/dev/null || true)"
-  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
-    while kill -0 "$pid" 2>/dev/null && (( attempts < 50 )); do
-      sleep 0.1
-      attempts=$((attempts + 1))
-    done
-    if kill -0 "$pid" 2>/dev/null; then
-      kill -KILL "$pid" 2>/dev/null || true
-    fi
+  if [[ -f "$BACKGROUND_PIDFILE" || -f "$BACKGROUND_PIDFILE.identity.json" ]]; then
+    "$PYTHON_BIN" "$SCRIPT_DIR/codex_plugin_ownership.py" stop \
+      --pidfile "$BACKGROUND_PIDFILE" --runner "$RUNNER" \
+      || die "existing Bridge ownership could not be verified; retained its service"
   fi
-  rm -f "$BACKGROUND_PIDFILE"
 }
 
 start_supervised_background() {
@@ -695,6 +687,9 @@ start_supervised_background() {
   )
   supervisor_pid="$(sed -n '1p' "$BACKGROUND_PIDFILE" 2>/dev/null || true)"
   if [[ "$supervisor_pid" =~ ^[0-9]+$ ]] && kill -0 "$supervisor_pid" 2>/dev/null; then
+    "$PYTHON_BIN" "$SCRIPT_DIR/codex_plugin_ownership.py" record \
+      --pidfile "$BACKGROUND_PIDFILE" --runner "$RUNNER" \
+      || warn "Bridge process identity is unavailable; automatic removal will retain its files."
     return
   fi
   warn "could not start the supervised background Bridge"
@@ -778,6 +773,8 @@ manifest = {
     },
     "service": {
         "kind": service_kind,
+        "process_identity": (json.loads(pathlib.Path(service_path + ".identity.json").read_text())
+                             if service_kind == "nohup" and pathlib.Path(service_path + ".identity.json").is_file() else None),
         **({"label": label, "path": service_path} if service_kind == "launchd" else {}),
         **({"pidfile": service_path} if service_kind == "nohup" else {}),
     },
@@ -899,7 +896,7 @@ MANIFEST="$INSTALL_DIR/install-state.json"
   exit 1
 }
 
-python3 - "$MANIFEST" "$DRY_RUN" "$PURGE_DATA" "$KEEP_PAYLOAD" "$SCRIPT_DIR" <<'PY'
+PYTHONDONTWRITEBYTECODE=1 python3 - "$MANIFEST" "$DRY_RUN" "$PURGE_DATA" "$KEEP_PAYLOAD" "$SCRIPT_DIR" <<'PY'
 import json
 import os
 import pathlib
@@ -932,74 +929,81 @@ def run(argv: list[str]) -> None:
     else:
         subprocess.run(argv, check=True, env=command_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+sys.path.insert(0, sys.argv[5])
+from codex_plugin_ownership import (registry_snapshot, check_registry, preflight_supervisor,
+                                    stop_supervisor, check_launchd, OwnershipUnknown)
+from codex_plugin_trust import atomic_json
 plugin = data.get("plugin", {})
-if plugin.get("enabled") and plugin.get("id") != "agentstack-codex-app@" + str(plugin.get("marketplace_name", "")):
-    raise RuntimeError("plugin ownership mismatch")
+plugin_id = str(plugin.get("id", ""))
+marketplace_name = str(plugin.get("marketplace_name", ""))
+if plugin.get("enabled") and plugin_id != "agentstack-codex-app@" + marketplace_name:
+    raise OwnershipUnknown("plugin ownership mismatch")
 codex_binary = str(data.get("codex_binary") or "codex")
 codex_home = str(data.get("shared_codex_home") or os.environ.get("CODEX_HOME") or home / ".codex")
 command_env = dict(os.environ, CODEX_HOME=codex_home)
+marketplace_root = data.get("ownership", {}).get("marketplace_root") or plugin.get("marketplace_root")
+marketplace_in_use = False
+plugin_removed = False
 if plugin.get("enabled"):
-    run([codex_binary, "plugin", "remove", str(plugin["id"]), "--json"])
-    if not dry_run:
-        observed = subprocess.run([codex_binary, "plugin", "list", "--json"], check=True,
-                                  env=command_env, capture_output=True, text=True)
-        installed = json.loads(observed.stdout).get("installed")
-        if not isinstance(installed, list) or any(item.get("pluginId") == plugin["id"] for item in installed):
-            raise RuntimeError("plugin removal was not observed")
-        marketplace_in_use = any(item.get("marketplaceName") == plugin["marketplace_name"] for item in installed)
-    else:
-        marketplace_in_use = False
-    if not marketplace_in_use:
-        run([codex_binary, "plugin", "marketplace", "remove", str(plugin["marketplace_name"])])
-    else:
-        print("retained marketplace: other plugins still use it")
+    presence = check_registry(registry_snapshot(codex_binary, codex_home), plugin_id,
+                              marketplace_name, marketplace_root)
 
+# Read-only service checks precede every mutation; unknown ownership preserves all files.
 launchd = data.get("launchd", {})
 service = data.get("service", {})
 service_kind = str(service.get("kind") or ("launchd" if launchd.get("enabled") else "disabled"))
+runner = install_dir / "bin/run-bridge"
+pidfile = None
 if service_kind == "launchd":
-    label = str(launchd["label"])
-    run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
+    check_launchd(launchd, install_dir)
+elif service_kind == "nohup":
+    if not service.get("pidfile"):
+        raise OwnershipUnknown("supervised Bridge manifest is missing pidfile")
+    pidfile = safe(pathlib.Path(service["pidfile"]).expanduser())
+    if not service.get("process_identity") and not pidfile.exists():
+        raise OwnershipUnknown("legacy service has no observed process identity")
+    preflight_supervisor(pidfile, runner, service.get("process_identity"))
+elif service_kind not in {"disabled", "manual"}:
+    raise OwnershipUnknown("unknown service kind")
+
+if plugin.get("enabled"):
+    if presence[0]:
+        run([codex_binary, "plugin", "remove", plugin_id, "--json"])
+    if not dry_run:
+        snapshot = registry_snapshot(codex_binary, codex_home)
+        present, market_present, marketplace_in_use = check_registry(snapshot, plugin_id,
+                                                                     marketplace_name, marketplace_root)
+        if present:
+            raise OwnershipUnknown("plugin removal was not observed")
+        plugin_removed = True
+        if market_present and not marketplace_in_use:
+            run([codex_binary, "plugin", "marketplace", "remove", marketplace_name])
+            final_presence = check_registry(registry_snapshot(codex_binary, codex_home), plugin_id,
+                                            marketplace_name, marketplace_root)
+            if final_presence[0] or final_presence[1]:
+                raise OwnershipUnknown("marketplace removal was not observed")
+        if marketplace_in_use:
+            # Other plugins reference this local snapshot: retain the snapshot payload too.
+            keep_payload = True
+    elif presence[1] and not presence[2]:
+        run([codex_binary, "plugin", "marketplace", "remove", marketplace_name])
+
+if service_kind == "launchd":
+    if dry_run:
+        run(["launchctl", "bootout", f"gui/{os.getuid()}/{launchd['label']}"])
+    elif check_launchd(launchd, install_dir):
+        run(["launchctl", "bootout", f"gui/{os.getuid()}/{launchd['label']}"])
+        if check_launchd(launchd, install_dir):
+            raise OwnershipUnknown("launchd service exit was not observed")
     plist = safe(pathlib.Path(launchd["path"]).expanduser())
     print(("DRY-RUN would remove" if dry_run else "remove") + f": {plist}")
     if not dry_run:
-        try:
-            plist.unlink()
-        except FileNotFoundError:
-            pass
+        plist.unlink(missing_ok=True)
 elif service_kind == "nohup":
-    pidfile_value = str(service.get("pidfile", ""))
-    if not pidfile_value:
-        raise RuntimeError("supervised Bridge manifest is missing pidfile")
-    pidfile = safe(pathlib.Path(pidfile_value).expanduser())
     if dry_run:
-        print(f"DRY-RUN would stop supervised Bridge from {pidfile}")
+        print(f"DRY-RUN would stop verified Bridge from {pidfile}")
     else:
-        try:
-            pid = int(pidfile.read_text(encoding="utf-8").splitlines()[0])
-        except (OSError, ValueError, IndexError):
-            pid = 0
-        if pid > 1:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline:
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    break
-                time.sleep(0.05)
-            else:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-        try:
-            pidfile.unlink()
-        except FileNotFoundError:
-            pass
+        stop_supervisor(pidfile, runner, service.get("process_identity"))
 
 install_dir = safe(install_dir)
 print(("DRY-RUN would remove" if dry_run else "remove") + f": {install_dir}" if not keep_payload else f"retain shared payload: {install_dir}")
@@ -1017,9 +1021,10 @@ else:
     print(f"retained runtime: {runtime_dir}")
 if not dry_run:
     result = {"schema_version": 1, "tool": "agentstack-codex-app",
-              "operation": "remove", "plugin_removed": bool(plugin.get("enabled")),
+              "operation": "remove", "plugin_removed": plugin_removed,
               "marketplace_retained": bool(plugin.get("enabled") and marketplace_in_use),
               "service_stop_requested": service_kind != "disabled",
+              "service_stopped": service_kind in {"disabled", "launchd", "nohup"},
               "payload_removed": not keep_payload, "runtime_retained": not purge_data,
               "shared_codex_home": codex_home}
     if keep_payload:

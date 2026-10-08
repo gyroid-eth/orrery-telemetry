@@ -18,7 +18,11 @@
 
 呼出側は `--shared-codex-home` で解決済みの共有 HOME を渡せます。install-state.json に binary、共有 HOME、plugin ID、marketplace/root、選択 cache と payload digest、所有情報、hook_trust と history を記録します。enabled だけで信頼や履歴対応を認定しません。設定には token 本体や transcript を追加しません。
 
-解除は保存した共有 HOME で行い、CLI の戻り値と registry の再取得を確認してから撤去します。他の plugin が使う marketplace は残します。`remove_registration` の終了時には plugin.enabled を false にし、JSON の結果を stdout に出します。service_stop_requested は停止処理の要求であり、停止の実観測を意味しません。core 全体の撤去と最終 report は後続の変更です。
+解除は保存した共有 HOME で行います。削除前に現在の plugin と marketplace の registry を取得し、ID・local source・root を保存した所有情報と照合します。service の所有確認も先に行い、別の所有者への付替えや確認不能を検出したら、登録・payload・runtime を保持して非0で終了します。CLI の戻り値だけで成功にせず、解除後の registry を再取得します。途中で plugin だけ解除できた場合も、残った marketplace の所有を確認して再実行できます。他の plugin が使う marketplace とその snapshot payload は残します。
+
+nohup service は起動時に PID・UID・command・起動時刻を記録し、停止前と待機中に同じ process かを照合します。再利用された PID や、生きている旧 pidfile に識別情報がない場合、`ps` で確認できない場合には signal を送りません。launchd は label に加えて plist の所有者・実行引数と現在の job の実行引数を確認します。PID の照合には `ps` の秒単位の起動時刻を使うため、同じ秒に同じ UID・command・PID が再利用される場合や、照合直後の process の置換を完全には区別できません。
+
+`remove_registration` の終了時には plugin.enabled を false にし、JSON の結果を stdout に出します。service_stop_requested は停止処理の要求であり、service_stopped は process の終了または launchd job の不在を確認した結果です。未確認を成功として記録しません。core 全体の撤去と最終 report は後続の変更です。
 
 ## hook の定義確認と信頼
 

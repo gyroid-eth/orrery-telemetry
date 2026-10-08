@@ -572,6 +572,16 @@ def test_installer_skip_git_check_is_explicit_and_persisted(tmp_path):
     )
 
 
+def _can_inspect_own_process():
+    try:
+        result = subprocess.run(["ps", "-p", str(os.getpid()), "-o", "uid="],
+                                capture_output=True, text=True, timeout=2)
+        return result.returncode == 0 and result.stdout.strip() == str(os.getuid())
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+@pytest.mark.skipif(not _can_inspect_own_process(), reason="native service ownership requires ps access")
 def test_launchd_bootstrap_failure_uses_supervised_background(tmp_path):
     home = _prepare_home(tmp_path)
     environment = _environment(home)
@@ -629,6 +639,12 @@ exit 0
         supervisor_pid = int(pidfile.read_text(encoding="utf-8").strip())
         os.kill(supervisor_pid, 0)
         assert manifest["service"]["kind"] == "nohup"
+        identity = manifest["service"]["process_identity"]
+        assert identity["pid"] == supervisor_pid
+        assert identity["uid"] == os.getuid()
+        assert identity["start"] and identity["command"].startswith("/bin/bash ")
+        identity_path = Path(str(pidfile) + ".identity.json")
+        assert json.loads(identity_path.read_text()) == identity
         assert manifest["launchd"]["enabled"] is False
         live_plist = (
             home

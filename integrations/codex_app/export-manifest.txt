@@ -17,6 +17,7 @@ integrations/codex_app/tests
 schemas
 scripts/build-codex-app-marketplace.py
 scripts/codex_plugin_trust.py
+scripts/codex_plugin_ownership.py
 scripts/check-codex-plugin-isolated.py
 scripts/doctor-codex-app-integration.sh
 scripts/export-component.sh

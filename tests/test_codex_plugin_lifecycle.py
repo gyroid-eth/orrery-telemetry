@@ -14,6 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('codex_plugin_trust', ROOT/'scripts/codex_plugin_trust.py')
 trust = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(trust)
+OWN_SPEC = importlib.util.spec_from_file_location('codex_plugin_ownership', ROOT/'scripts/codex_plugin_ownership.py')
+ownership = importlib.util.module_from_spec(OWN_SPEC)
+OWN_SPEC.loader.exec_module(ownership)
 PLUGIN_ID = 'agentstack-codex-app@agentstack-local'
 
 
@@ -141,23 +144,16 @@ def test_remove_registration_failure_retains_payload_and_runtime(tmp_path):
 
 
 def test_registration_only_removal_targets_saved_home_and_keeps_proxy(tmp_path):
-    install = tmp_path/'integration'; install.mkdir()
-    runtime = tmp_path/'runtime'; runtime.mkdir()
-    proxy = install/'run-mcp.sh'; proxy.write_text('core proxy')
-    binary = tmp_path/'codex'; seen = tmp_path/'seen'
-    binary.write_text(f'#!/bin/sh\nprintf "%s\\n" "$CODEX_HOME" >> "{seen}"\nif [ "$2" = list ]; then echo \'{{"installed": []}}\'; fi\nexit 0\n'); binary.chmod(0o755)
-    manifest = {'tool': 'agentstack-codex-app', 'install_dir': str(install), 'runtime_dir': str(runtime),
-                'shared_codex_home': str(tmp_path/'shared-home'), 'codex_binary': str(binary),
-                'plugin': {'enabled': True, 'id': PLUGIN_ID, 'marketplace_name': 'agentstack-local'},
-                'service': {'kind': 'disabled'}}
-    (install/'install-state.json').write_text(json.dumps(manifest))
-    result = subprocess.run(['/bin/bash', '-c', 'source "$1"; agentstack_codex_app_remove_registration --install-dir "$2"',
-                             'bash', str(ROOT/'scripts/lib/codex-app-integration.sh'), str(install)],
-                            env=dict(os.environ, HOME=str(tmp_path), CODEX_HOME=str(tmp_path/'ambient-wrong-home')),
-                            capture_output=True, text=True)
+    fixture = removal_fixture(tmp_path)
+    install, runtime, state_path, log_path = fixture
+    result = remove_fixture(fixture, tmp_path)
     assert result.returncode == 0, result.stderr
-    assert proxy.read_text() == 'core proxy' and runtime.exists()
-    assert seen.read_text().splitlines() == [str(tmp_path/'shared-home')]*3
+    assert (install/'run-mcp.sh').read_text() == 'core proxy' and runtime.exists()
+    calls = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert {call['home'] for call in calls} == {str(tmp_path/'shared-home')}
+    assert calls[0]['argv'] == ['plugin', 'list', '--json']
+    assert calls[1]['argv'] == ['plugin', 'marketplace', 'list', '--json']
+    assert json.loads(state_path.read_text())['installed'] == []
     assert json.loads((install/'install-state.json').read_text())['plugin']['enabled'] is False
 
 
@@ -183,3 +179,210 @@ def test_isolated_check_failure_still_produces_json_and_exit_code(tmp_path):
     assert result.returncode == report['exit_code'] == 1
     assert report['phase'] == 'version' and report['model_thread_login_requested'] is False
     assert report['history'] == 'unobserved'
+
+
+def removal_fixture(tmp_path):
+    install = tmp_path/'integration'; install.mkdir()
+    runtime = tmp_path/'runtime'; runtime.mkdir()
+    (install/'run-mcp.sh').write_text('core proxy')
+    market = install/'marketplace'; market.mkdir()
+    entry = {'pluginId': PLUGIN_ID, 'marketplaceName': 'agentstack-local',
+             'marketplaceSource': {'sourceType': 'local', 'source': str(market)},
+             'source': {'source': 'local', 'path': str(market/'plugins/agentstack-codex-app')}}
+    state_path, log_path = tmp_path/'registry.json', tmp_path/'commands.jsonl'
+    state_path.write_text(json.dumps({'installed': [entry], 'marketplaces': [
+        {'name': 'agentstack-local', 'root': str(market), 'marketplaceSource': entry['marketplaceSource']}]}))
+    binary = tmp_path/'codex'
+    binary.write_text('#!'+sys.executable+'\n'
+                     'import json, os, sys\nfrom pathlib import Path\n'
+                     f'STATE=Path({str(state_path)!r})\nLOG=Path({str(log_path)!r})\n'+r'''
+state=json.loads(STATE.read_text())
+argv=sys.argv[1:]
+with LOG.open('a') as stream:
+    stream.write(json.dumps({'argv': argv, 'home': os.environ['CODEX_HOME']})+'\n')
+if state.get('malformed'):
+    print('invalid registry'); raise SystemExit(0)
+if argv[:3] == ['plugin', 'marketplace', 'list']:
+    print(json.dumps({'marketplaces': state['marketplaces']}))
+elif argv[:2] == ['plugin', 'list']:
+    print(json.dumps({'installed': state['installed']}))
+elif argv[:2] == ['plugin', 'remove']:
+    if state.get('fail_plugin'):
+        raise SystemExit(6)
+    state['installed']=[p for p in state['installed'] if p['pluginId'] != argv[2]]
+elif argv[:3] == ['plugin', 'marketplace', 'remove']:
+    if state.pop('fail_market_once', False):
+        STATE.write_text(json.dumps(state)); raise SystemExit(7)
+    state['marketplaces']=[m for m in state['marketplaces'] if m['name'] != argv[3]]
+else:
+    raise SystemExit(9)
+STATE.write_text(json.dumps(state))
+''')
+    binary.chmod(0o755)
+    manifest = {'tool': 'agentstack-codex-app', 'install_dir': str(install), 'runtime_dir': str(runtime),
+                'shared_codex_home': str(tmp_path/'shared-home'), 'codex_binary': str(binary),
+                'ownership': {'marketplace_root': str(market)},
+                'plugin': {'enabled': True, 'id': PLUGIN_ID, 'marketplace_name': 'agentstack-local'},
+                'service': {'kind': 'disabled'}}
+    (install/'install-state.json').write_text(json.dumps(manifest))
+    return install, runtime, state_path, log_path
+
+
+def remove_fixture(fixture, tmp_path, registration_only=True):
+    operation = 'agentstack_codex_app_remove_registration' if registration_only else 'agentstack_codex_app_remove'
+    return subprocess.run(['/bin/bash', '-c', f'source "$1"; {operation} --install-dir "$2"',
+                           'bash', str(ROOT/'scripts/lib/codex-app-integration.sh'), str(fixture[0])],
+                          env=dict(os.environ, HOME=str(tmp_path), CODEX_HOME=str(tmp_path/'ambient-wrong-home')),
+                          capture_output=True, text=True)
+
+
+@pytest.mark.parametrize('bad_registry', ['foreign_root', 'duplicate_id', 'malformed'])
+def test_current_unowned_or_unknown_registry_prevents_all_removals(tmp_path, bad_registry):
+    fixture = removal_fixture(tmp_path)
+    state = json.loads(fixture[2].read_text())
+    if bad_registry == 'foreign_root':
+        root = tmp_path/'foreign-marketplace'
+        state['marketplaces'][0].update(root=str(root), marketplaceSource={'sourceType': 'local', 'source': str(root)})
+        state['installed'][0].update(marketplaceSource={'sourceType': 'local', 'source': str(root)},
+                                     source={'source': 'local', 'path': str(root/'plugins/agentstack-codex-app')})
+    elif bad_registry == 'duplicate_id':
+        state['installed'].append(copy.deepcopy(state['installed'][0]))
+    else:
+        state['malformed'] = True
+    fixture[2].write_text(json.dumps(state))
+    manifest_before = (fixture[0]/'install-state.json').read_bytes()
+    result = remove_fixture(fixture, tmp_path, registration_only=False)
+    assert result.returncode != 0
+    calls = [json.loads(line)['argv'] for line in fixture[3].read_text().splitlines()]
+    assert all('remove' not in call for call in calls)
+    assert json.loads(fixture[2].read_text()) == state
+    assert (fixture[0]/'install-state.json').read_bytes() == manifest_before
+    assert fixture[1].exists()
+
+
+def test_retry_after_partial_plugin_removal_keeps_payload_until_observed(tmp_path):
+    fixture = removal_fixture(tmp_path)
+    state = json.loads(fixture[2].read_text()); state['fail_market_once'] = True
+    fixture[2].write_text(json.dumps(state))
+    first = remove_fixture(fixture, tmp_path)
+    assert first.returncode != 0 and (fixture[0]/'run-mcp.sh').exists() and fixture[1].exists()
+    assert json.loads(fixture[2].read_text())['installed'] == []
+    second = remove_fixture(fixture, tmp_path)
+    assert second.returncode == 0, second.stderr
+    calls = [json.loads(line)['argv'] for line in fixture[3].read_text().splitlines()]
+    assert sum(call[:2] == ['plugin', 'remove'] for call in calls) == 1
+    assert json.loads(fixture[2].read_text())['marketplaces'] == []
+
+
+def test_owned_plugin_command_failure_retains_registry_payload_and_runtime(tmp_path):
+    fixture = removal_fixture(tmp_path)
+    state = json.loads(fixture[2].read_text()); state['fail_plugin'] = True
+    fixture[2].write_text(json.dumps(state))
+    manifest_before = (fixture[0]/'install-state.json').read_bytes()
+    result = remove_fixture(fixture, tmp_path, registration_only=False)
+    assert result.returncode != 0
+    calls = [json.loads(line)['argv'] for line in fixture[3].read_text().splitlines()]
+    assert any(call[:2] == ['plugin', 'remove'] for call in calls)
+    assert not any(call[:3] == ['plugin', 'marketplace', 'remove'] for call in calls)
+    assert json.loads(fixture[2].read_text()) == state
+    assert (fixture[0]/'install-state.json').read_bytes() == manifest_before
+    assert (fixture[0]/'run-mcp.sh').exists() and fixture[1].exists()
+
+
+def test_shared_marketplace_retains_other_plugin_and_snapshot_payload(tmp_path):
+    fixture = removal_fixture(tmp_path)
+    state = json.loads(fixture[2].read_text())
+    other = dict(state['installed'][0], pluginId='other@agentstack-local')
+    state['installed'].append(other); fixture[2].write_text(json.dumps(state))
+    result = remove_fixture(fixture, tmp_path, registration_only=False)
+    assert result.returncode == 0, result.stderr
+    final = json.loads(fixture[2].read_text())
+    assert final['installed'] == [other] and final['marketplaces'] == state['marketplaces']
+    report = json.loads(result.stdout.splitlines()[-1])
+    assert report['marketplace_retained'] is True and report['payload_removed'] is False
+    assert (fixture[0]/'run-mcp.sh').read_text() == 'core proxy'
+
+
+@pytest.mark.parametrize('difference', ['uid', 'command', 'start', 'unknown', 'legacy'])
+def test_unowned_or_unknown_pid_never_receives_a_stop_signal(tmp_path, monkeypatch, difference):
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    current = dict(saved)
+    if difference in {'uid', 'command', 'start'}:
+        current[difference] = {'uid': os.getuid()+1, 'command': '/bin/bash /unrelated/runner', 'start': 'new-start'}[difference]
+    def probe(pid):
+        if difference == 'unknown': raise ownership.OwnershipUnknown('inspection unavailable')
+        return current
+    monkeypatch.setattr(ownership, 'process_identity', probe)
+    signals = []; monkeypatch.setattr(ownership.os, 'kill', lambda pid, sig: signals.append(sig))
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    with pytest.raises(ownership.OwnershipUnknown):
+        ownership.stop_supervisor(pidfile, runner, None if difference == 'legacy' else saved)
+    assert signals == [] and pidfile.exists()
+
+
+def test_verified_supervisor_stops_and_clears_only_its_owned_receipt(tmp_path, monkeypatch):
+    import signal
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    state = {'current': saved}
+    monkeypatch.setattr(ownership, 'process_identity', lambda pid: state['current'])
+    signals = []
+    def send(pid, sig):
+        signals.append((pid, sig)); state['current'] = None
+    monkeypatch.setattr(ownership.os, 'kill', send)
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    identity_path = Path(str(pidfile)+'.identity.json'); identity_path.write_text(json.dumps(saved))
+    ownership.stop_supervisor(pidfile, runner, saved)
+    assert signals == [(424242, signal.SIGTERM)] and not pidfile.exists() and not identity_path.exists()
+
+
+def test_pid_identity_changed_after_term_is_preserved_without_kill(tmp_path, monkeypatch):
+    import signal
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    state = {'current': dict(saved)}
+    monkeypatch.setattr(ownership, 'process_identity', lambda pid: state['current'])
+    signals = []
+    def send(pid, sig):
+        signals.append(sig); state['current']['start'] = 'replacement-start'
+    monkeypatch.setattr(ownership.os, 'kill', send)
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    with pytest.raises(ownership.OwnershipUnknown):
+        ownership.stop_supervisor(pidfile, runner, saved)
+    assert signals == [signal.SIGTERM] and pidfile.exists()
+
+
+@pytest.mark.parametrize('foreign', ['plist', 'loaded_job', 'unknown'])
+def test_launchd_label_alone_does_not_authorize_stopping(tmp_path, monkeypatch, foreign):
+    import plistlib
+    from types import SimpleNamespace
+    root = tmp_path/'integration'; root.mkdir()
+    expected = ['/bin/bash', str(root/'bin/run-bridge')]
+    definition = {'Label': 'fixture.bridge', 'ProgramArguments': expected}
+    if foreign == 'plist': definition['ProgramArguments'] = ['/bin/bash', '/unrelated/runner']
+    plist = tmp_path/'bridge.plist'; plist.write_bytes(plistlib.dumps(definition))
+    args = ['/bin/bash', '/unrelated/runner'] if foreign == 'loaded_job' else expected
+    result = SimpleNamespace(returncode=1 if foreign == 'unknown' else 0,
+                             stderr='inspection unavailable', stdout='\n arguments = {\n'+'\n'.join(args)+'\n }\n')
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv); return result
+    monkeypatch.setattr(ownership.subprocess, 'run', run)
+    with pytest.raises(ownership.OwnershipUnknown):
+        ownership.check_launchd({'label': 'fixture.bridge', 'path': str(plist)}, root)
+    assert all(call[:2] == ['launchctl', 'print'] for call in calls) and plist.exists()
+
+
+def test_verified_launchd_definition_and_observed_absence_are_distinct(tmp_path, monkeypatch):
+    import plistlib
+    from types import SimpleNamespace
+    root = tmp_path/'integration'; root.mkdir()
+    args = ['/bin/bash', str(root/'bin/run-bridge')]
+    plist = tmp_path/'bridge.plist'
+    plist.write_bytes(plistlib.dumps({'Label': 'fixture.bridge', 'ProgramArguments': args}))
+    result = SimpleNamespace(returncode=0, stderr='', stdout='\n arguments = {\n'+'\n'.join(args)+'\n }\n')
+    monkeypatch.setattr(ownership.subprocess, 'run', lambda *a, **kw: result)
+    assert ownership.check_launchd({'label': 'fixture.bridge', 'path': str(plist)}, root) is True
+    result.returncode = 113; result.stderr = 'Could not find service "fixture.bridge" in domain for user gui'
+    assert ownership.check_launchd({'label': 'fixture.bridge', 'path': str(plist)}, root) is False
