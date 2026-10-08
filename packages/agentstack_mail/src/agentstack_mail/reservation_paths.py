@@ -113,8 +113,10 @@ def normalize_path(
         value = str(resolved)
     unicode_rule = unicode_rule_at(prefix)
     _unicode_key(value, unicode_rule)  # Unknown Unicode rules cannot grant a lease.
+    case_insensitive = case_insensitive_at(prefix)
+    _case_key(value, case_insensitive)
     return ReservationPath(
-        "filesystem", value, str(prefix), case_insensitive_at(prefix), unicode_rule
+        "filesystem", value, str(prefix), case_insensitive, unicode_rule
     )
 
 
@@ -285,17 +287,26 @@ def normalize_paths(values: Sequence[str], **kwargs: object) -> list[Reservation
     return [normalize_path(value, **kwargs) for value in values]
 
 
+def _case_key(value: str, fold: bool) -> str:
+    if not fold:
+        return value
+    # An existing ASCII directory alias proves case-insensitivity, not the
+    # filesystem's versioned non-ASCII case table. No Python-wide casefold.
+    # Refuse acquisition and keep probes unknown until that table is supported.
+    if not value.isascii():
+        raise ReservationError("CASE_RULES_UNKNOWN")
+    return value.translate(
+        str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+    )
+
+
 def component_matches(
     value: str, pattern: str, *, fold: bool = False, unicode_rule: str | None = None
 ) -> bool:
     value, pattern = _unicode_key(value, unicode_rule), _unicode_key(
         pattern, unicode_rule
     )
-    if fold:
-        table = str.maketrans(
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
-        )
-        value, pattern = value.translate(table), pattern.translate(table)
+    value, pattern = _case_key(value, fold), _case_key(pattern, fold)
     return fnmatch.fnmatchcase(value, pattern)
 
 
@@ -309,11 +320,7 @@ def _component_overlap(
     left, right = _unicode_key(left, unicode_rules[0]), _unicode_key(
         right, unicode_rules[1]
     )
-    if fold:
-        table = str.maketrans(
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
-        )
-        left, right = left.translate(table), right.translate(table)
+    left, right = _case_key(left, fold), _case_key(right, fold)
     left_glob = any(c in left for c in GLOB_MARKERS)
     right_glob = any(c in right for c in GLOB_MARKERS)
     if not left_glob:

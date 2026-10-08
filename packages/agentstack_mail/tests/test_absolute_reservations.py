@@ -161,6 +161,10 @@ def test_unicode_preserved_when_filesystem_distinguishes_it(tmp_path):
     composed, decomposed = tmp_path / "é.py", tmp_path / "e\u0301.py"
     composed.write_text("one")
     decomposed.write_text("two")
+    if reservation_paths.case_insensitive_at(tmp_path):
+        with pytest.raises(ReservationError, match="CASE_RULES_UNKNOWN"):
+            normalize_path(str(composed))
+        return
     a, b = normalize_path(str(composed)), normalize_path(str(decomposed))
     assert a.value != b.value
     assert paths_overlap(a, b) is composed.samefile(decomposed)
@@ -213,6 +217,12 @@ def test_missing_unicode_leaves_follow_actual_filesystem(server, tmp_path):
     witness.touch()
     aliases = (tmp_path / "e\u0301-witness.py").exists()
     a, b = tmp_path / "é-new.py", tmp_path / "e\u0301-new.py"
+    if reservation_paths.case_insensitive_at(tmp_path):
+        for path in (a, b):
+            with pytest.raises(ReservationError, match="CASE_RULES_UNKNOWN"):
+                normalize_path(str(path))
+        assert not server[0]._leases
+        return
     left, right = normalize_path(str(a)), normalize_path(str(b))
     assert not a.exists() and not b.exists()
     assert left.value != right.value  # Preserve supplied spelling.
@@ -235,6 +245,10 @@ def test_unicode_glob_overlap_and_recent_activity(server, tmp_path):
     file = tmp_path / "é-existing.py"
     file.touch()
     aliases = (tmp_path / "e\u0301-existing.py").exists()
+    if reservation_paths.case_insensitive_at(tmp_path):
+        with pytest.raises(ReservationError, match="CASE_RULES_UNKNOWN"):
+            normalize_path(str(tmp_path / "e\u0301-*.py"))
+        return
     pattern = normalize_path(str(tmp_path / "e\u0301-*.py"))
     assert paths_overlap(pattern, normalize_path(str(file))) is aliases
     probe = probe_activity(pattern)
@@ -255,6 +269,7 @@ def test_distinguishing_unicode_rules_preserve_missing_names(tmp_path, monkeypat
     # An explicit byte-distinguishing filesystem contract, also exercised by
     # the actual Linux filesystem in test_missing_unicode_leaves_follow_actual_filesystem.
     monkeypatch.setattr(reservation_paths, "unicode_rule_at", lambda _: "exact")
+    monkeypatch.setattr(reservation_paths, "case_insensitive_at", lambda _: False)
     a = normalize_path(str(tmp_path / "é-new.py"))
     b = normalize_path(str(tmp_path / "e\u0301-new.py"))
     assert not paths_overlap(a, b)
@@ -267,6 +282,7 @@ def test_unknown_unicode_rules_reject_acquire_and_prevent_stale(
     server, tmp_path, monkeypatch
 ):
     service, now = server
+    monkeypatch.setattr(reservation_paths, "case_insensitive_at", lambda _: False)
     path = normalize_path(str(tmp_path / "e\u0301-*.py"))
     lease = client(service, tmp_path).call("reserve_files", paths=[path.value])[0]
     now[0] += 200
@@ -281,6 +297,7 @@ def test_unknown_unicode_rules_reject_acquire_and_prevent_stale(
 def test_unknown_unicode_directory_cannot_prove_empty_glob(tmp_path, monkeypatch):
     from agentstack_mail import reservation_activity
 
+    monkeypatch.setattr(reservation_paths, "case_insensitive_at", lambda _: False)
     path = normalize_path(str(tmp_path / "e\u0301-*.py"))
     monkeypatch.setattr(reservation_activity, "unicode_rule_at", lambda _: None)
     activity = probe_activity(path)
@@ -317,6 +334,75 @@ def test_case_alias_follows_filesystem(tmp_path):
     assert paths_overlap(
         normalize_path(str(upper)), normalize_path(str(lower))
     ) is upper.samefile(lower)
+
+
+def test_missing_nonascii_case_alias_never_grants_twice(server, tmp_path):
+    service, _ = server
+    paths = [tmp_path / "É-case.py", tmp_path / "é-case.py"]
+    if reservation_paths.case_insensitive_at(tmp_path):
+        for owner, path in zip(("alpha", "beta"), paths):
+            with pytest.raises(ReservationError, match="CASE_RULES_UNKNOWN"):
+                client(service, tmp_path, owner).call(
+                    "reserve_files", paths=[path.name]
+                )
+        assert not service._leases
+        paths[0].touch()
+        assert paths[0].samefile(paths[1])
+    else:
+        for owner, path in zip(("alpha", "beta"), paths):
+            client(service, tmp_path, owner).call("reserve_files", paths=[path.name])
+            path.touch()
+        assert not paths[0].samefile(paths[1])
+
+
+@pytest.mark.parametrize("name", ["É-case.py", "é-case.py", "Σ*.py", "日本語.py"])
+def test_nonascii_case_table_unknown_rejects_initial_acquire(
+    server, tmp_path, monkeypatch, name
+):
+    monkeypatch.setattr(reservation_paths, "unicode_rule_at", lambda _: "apfs")
+    monkeypatch.setattr(reservation_paths, "case_insensitive_at", lambda _: True)
+    service, _ = server
+    with pytest.raises(ReservationError, match="CASE_RULES_UNKNOWN"):
+        client(service, tmp_path).call("reserve_files", paths=[name])
+    assert not service._leases
+
+
+def test_nonascii_case_glob_activity_unknown_prevents_collection(
+    server, tmp_path, monkeypatch
+):
+    from agentstack_mail import reservation_activity
+
+    monkeypatch.setattr(reservation_paths, "unicode_rule_at", lambda _: "apfs")
+    monkeypatch.setattr(reservation_paths, "case_insensitive_at", lambda _: True)
+    monkeypatch.setattr(reservation_activity, "unicode_rule_at", lambda _: "apfs")
+    monkeypatch.setattr(reservation_activity, "case_insensitive_at", lambda _: True)
+    service, now = server
+    now[0] = time.time()
+    lease = client(service, tmp_path).call("reserve_files", paths=["*.py"])[0]
+    (tmp_path / "É-existing.py").touch()
+    now[0] += 200
+    activity = probe_activity(lease.path)
+    assert not activity.complete
+    assert service.collect([lease.id]) == {lease.id: "activity_unknown"}
+    assert not lease.released
+    # A lease from the earlier candidate version is also not proved stale,
+    # including an empty non-ASCII glob (no directory entry to validate).
+    old = reservation_paths.ReservationPath(
+        "filesystem", str(tmp_path / "é-empty*.py"), str(tmp_path), True, "apfs"
+    )
+    assert not probe_activity(old).complete
+
+
+def test_case_sensitive_unicode_case_names_stay_distinct(server, tmp_path, monkeypatch):
+    monkeypatch.setattr(reservation_paths, "unicode_rule_at", lambda _: "apfs")
+    monkeypatch.setattr(reservation_paths, "case_insensitive_at", lambda _: False)
+    service, _ = server
+    a = client(service, tmp_path).call("reserve_files", paths=["É-case.py"])[0]
+    b = client(service, tmp_path, "beta").call("reserve_files", paths=["é-case.py"])[0]
+    assert not paths_overlap(a.path, b.path)
+    assert reservation_paths.component_matches(
+        "é.py", "e\u0301.py", unicode_rule="apfs"
+    )
 
 
 def test_future_file_under_case_alias_and_case_variant(server, tmp_path):

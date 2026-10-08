@@ -29,6 +29,9 @@ python -m agentstack_mail.reservation_clients --wsl-drive c=/mnt/c 'C:\workspace
 
 Unicode は対象 directory の filesystem を read-only の native metadata で確認します。現行 APFS の canonical-equivalence と HFS+ の Unicode 3.2/exclusion の規則を、未作成 leaf、glob の照合、activity 展開に共用します。名前の保存表記は変えません。Linux は既知の byte 区別する filesystem と directory の casefold flag を確認し、NFC/NFD の別 file を同一視しません。不明な mount/API/Unicode 版は `UNICODE_RULES_UNKNOWN`（Linux casefold directory は `FILESYSTEM_RULES_UNKNOWN`）として取得を拒否し、probe は unknown として早期回収を止めます。OS 名だけで一律に NFC 化せず、runtime の確認のために file を作ることもありません。[APFS の名前の契約](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/APFS_Guide/FAQ/FAQ.html)と[HFS+ の Unicode 規則](https://developer.apple.com/library/archive/technotes/tn/tn1150.html)を根拠にします。
 
+
+case-insensitive な filesystem の候補では、非 ASCII を含む path（directory 名を含む）を `CASE_RULES_UNKNOWN` として取得拒否します。ASCII directory の別名を確認しても、filesystem の版付き非 ASCII case table を保証できないためです。Python の無条件な casefold は使いません。非 ASCII glob、過去の候補 lease、ASCII glob が非 ASCII の entry を探査する場合も unknown として早期回収を止めます。case-sensitive な filesystem の Unicode canonical-equivalence と名前の区別は維持します。この制限は版を固定した filesystem の case table を実装するまで続き、既定の旧 mode には影響しません。
+
 `ReservationClient` は authenticated binding resolver と candidate dispatch を必須とし、acquire/check/renew/release で同じ正規化を使います。既存 proxy の `candidate_reservations()` は、既存 `_resolve()` で各呼出の binding/token を確認し、観測した cwd と明示した backend でこの client を作ります。既定の `tools/call` には接続しません。旧 proxy の相対 path 制約も維持します。
 
 `hook_guard()` と `hook_release()` は同じ client を使います。resolver が未参加と確認した session は noop、認証済みの参加 session はどのフォルダでも予約を要求します。binding 不明、認証失敗、通信断は block です。勝手な登録や token 探索は行いません。共通 shell の `reservation_absolute_paths()` は同じ CLI に明示した cwd を渡す候補 helper で、既存 hook からの呼出はありません。sandbox、OS の権限、Codex add-dir、閲覧許可は変更しません。
