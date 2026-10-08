@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -633,8 +634,7 @@ def test_interrupted_rollback_can_be_repeated_without_losing_candidate(
     assert run.resume(fence=fence)["phase"] == "committed"
 
 
-@pytest.mark.asyncio
-async def test_metadata_disabled_signal_from_legacy_writer_migrates_without_enrichment(
+def test_metadata_disabled_signal_from_legacy_writer_migrates_without_enrichment(
     state,
 ):
     from types import SimpleNamespace
@@ -653,11 +653,13 @@ async def test_metadata_disabled_signal_from_legacy_writer_migrates_without_enri
             debounce_ms=0,
         )
     )
-    assert await emit_notification_signal(
-        settings,
-        "two",
-        "Alpha",
-        {"id": 103, "from": "Alpha", "subject": "private fixture subject"},
+    assert asyncio.run(
+        emit_notification_signal(
+            settings,
+            "two",
+            "Alpha",
+            {"id": 103, "from": "Alpha", "subject": "private fixture subject"},
+        )
     )
     original = signal.read_bytes()
     assert "message" not in json.loads(original)
