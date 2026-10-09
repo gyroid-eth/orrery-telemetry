@@ -784,3 +784,89 @@ def test_legacy_source_format_does_not_depend_on_user_version(prepared):
         fence=fence,
     )
     assert result["phase"] == "complete"
+
+
+def test_normal_write_and_replay_do_not_scan_history(prepared, monkeypatch):
+    import agentstack_mail.global_s2a as implementation
+
+    runtime = S2aRuntime(prepared["config_path"])
+
+    def refuse_scan(*args, **kwargs):
+        raise AssertionError("full receipt scan on the normal path")
+
+    monkeypatch.setattr(implementation, "validate_receipts", refuse_scan)
+    monkeypatch.setattr(implementation, "integrity", refuse_scan)
+    args = owner(prepared, request_id=str(uuid.uuid4()), policy="auto")
+    result = runtime.apply("set_contact_policy", args)
+    assert runtime.apply("set_contact_policy", args) == result
+    with runtime.transaction() as db:
+        window = db.execute(
+            "SELECT id,window_uuid FROM window_identities WHERE agent_id=2"
+        ).fetchone()
+    runtime.apply(
+        "touch_window_identity",
+        owner(prepared, window_row_id=window["id"], window_uuid=window["window_uuid"]),
+    )
+
+
+def test_full_read_integrity_never_duplicates_database_in_memory(prepared, monkeypatch):
+    import agentstack_mail.global_s2a as implementation
+
+    original = implementation.sqlite3.connect
+
+    def connect(path, *args, **kwargs):
+        assert str(path) != ":memory:", "whole database must not be copied into RAM"
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(implementation.sqlite3, "connect", connect)
+    S2aRuntime(prepared["config_path"])
+
+
+def test_full_inspect_and_matched_replay_reject_corrupt_receipt(prepared):
+    runtime = S2aRuntime(prepared["config_path"])
+    args = owner(prepared, request_id=str(uuid.uuid4()), policy="auto")
+    runtime.apply("set_contact_policy", args)
+    with connection(Path(prepared["config"]["database"]), write=True) as db:
+        db.execute("UPDATE global_operation_receipts SET receipt_sha256='broken'")
+    with pytest.raises(GlobalError, match="REQUEST_RECEIPT_INVALID"):
+        runtime.apply("set_contact_policy", args)
+    with runtime.transaction() as db:
+        with pytest.raises(GlobalError, match="REQUEST_RECEIPT_INVALID"):
+            runtime.inspect(db, 2)
+    with pytest.raises(GlobalError, match="REQUEST_RECEIPT_INVALID"):
+        S2aRuntime(prepared["config_path"])
+
+
+@pytest.mark.parametrize("unsafe", ["lock-replace", "database-mode"])
+def test_incident_uses_common_exclusive_fence_before_authority_write(prepared, unsafe):
+    from agentstack_mail.global_incident import inspect_incident, quarantine
+
+    with connection(Path(prepared["config"]["database"]), write=True) as db:
+        db.execute(
+            "UPDATE namespace_metadata SET value='2' WHERE key='write_generation'"
+        )
+    inspected = inspect_incident(prepared["config_path"])
+    authority = Path(prepared["config"]["authority"])
+    before = authority.read_bytes()
+
+    def fault(point):
+        if point == "after_incident":
+            if unsafe == "lock-replace":
+                path = Path(prepared["config"]["authority_lock"])
+                replacement = path.with_suffix(".replacement")
+                replacement.touch(mode=0o600)
+                replacement.replace(path)
+            else:
+                Path(prepared["config"]["database"]).chmod(0o644)
+
+    with pytest.raises(GlobalError, match="AUTHORITY_LOCK_REPLACED|DATABASE_UNSAFE"):
+        quarantine(
+            prepared["config_path"],
+            request_id=str(uuid.uuid4()),
+            incident_digest=inspected["incident_digest"],
+            tracked_revision=inspected["manifest"]["tracked_revision"],
+            current_revision=inspected["manifest"]["current_revision"],
+            confirm=True,
+            fault=fault,
+        )
+    assert authority.read_bytes() == before

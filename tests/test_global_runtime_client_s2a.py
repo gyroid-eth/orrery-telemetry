@@ -19,9 +19,12 @@ spec.loader.exec_module(s2)
 
 
 @pytest.fixture
-def server(monkeypatch):
+def server(monkeypatch, request):
     prep = s2.prepared.__wrapped__(monkeypatch)
     state = next(prep)
+    if getattr(request, "param", None) is not None:
+        state["config"]["operation_receipt_limit"] = request.param
+        state["config_path"].write_text(json.dumps(state["config"]))
     service = s2.server.__wrapped__(state)
     try:
         next(service)
@@ -288,3 +291,281 @@ def test_mismatched_mutation_result_preserves_pending_for_valid_replay(
     replay = RuntimeClient(client.path).call("set_contact_policy", {"policy": "auto"})
     assert replay["request_id"] == pending["request_id"]
     assert not client.outputs["mutation"].exists()
+
+
+@pytest.mark.parametrize("server", [1], indirect=True)
+@pytest.mark.parametrize("condition", ["quota-used", "lost-response-pending"])
+def test_default_mapped_reconnect_never_writes_policy_or_changes_pending(
+    server, monkeypatch, condition
+):
+    monkeypatch.delenv("AGENTSTACK_CONTACT_POLICY", raising=False)
+    client = context(server)
+    original = client.rpc
+
+    def lose(method, params):
+        reply = original(method, params)
+        if method == "tools/call" and params["name"] == "set_contact_policy":
+            raise ClientError("TRANSPORT_FAILED")
+        return reply
+
+    if condition == "lost-response-pending":
+        monkeypatch.setattr(client, "rpc", lose)
+        with pytest.raises(ClientError, match="TRANSPORT_FAILED"):
+            client.call("set_contact_policy", {"policy": "auto"})
+    else:
+        client.call("set_contact_policy", {"policy": "auto"})
+    pending_path = client.outputs["mutation"]
+    before = pending_path.read_bytes() if pending_path.exists() else None
+    observed = RuntimeClient(client.path).reconnect()
+    assert observed["window_ready"]
+    assert (pending_path.read_bytes() if pending_path.exists() else None) == before
+    with s2.connection(Path(server["config"]["database"])) as db:
+        assert (
+            db.execute("SELECT count(*) FROM global_operation_receipts").fetchone()[0]
+            == 1
+        )
+        assert (
+            db.execute("SELECT contact_policy FROM agents WHERE id=2").fetchone()[0]
+            == "auto"
+        )
+
+
+@pytest.mark.parametrize(
+    "field,bad", [("policy", "not-a-policy"), ("committed_at", "not-a-date")]
+)
+def test_output_schema_mismatch_keeps_planned_and_replays_same_uuid(
+    server, monkeypatch, field, bad
+):
+    client = context(server)
+    original = client.rpc
+
+    def corrupt(method, params):
+        reply = original(method, params)
+        if method == "tools/call" and params["name"] == "set_contact_policy":
+            result = api["result_value"](reply)
+            result[field] = bad
+            return {
+                "result": {"content": [{"type": "text", "text": json.dumps(result)}]}
+            }
+        return reply
+
+    monkeypatch.setattr(client, "rpc", corrupt)
+    with pytest.raises(ClientError, match="RESPONSE_INVALID"):
+        client.call("set_contact_policy", {"policy": "auto"})
+    pending = api["read_json"](client.outputs["mutation"])
+    assert pending["phase"] == "planned" and pending["receipt"] is None
+    replay = RuntimeClient(client.path).call("set_contact_policy", {"policy": "auto"})
+    assert replay["request_id"] == pending["request_id"]
+    assert not client.outputs["mutation"].exists()
+    with s2.connection(Path(server["config"]["database"])) as db:
+        assert (
+            db.execute("SELECT count(*) FROM global_operation_receipts").fetchone()[0]
+            == 1
+        )
+
+
+def test_installed_stdlib_wrapper_uses_canonical_output_validator(server):
+    import shutil
+    import subprocess
+    import sys
+
+    client = context(server)
+    installed_root = server["root"] / "installed-wrapper"
+    library = installed_root / "bin/lib"
+    library.mkdir(parents=True)
+    canonical = ROOT / "packages/agentstack_mail/src/agentstack_mail/schema_contract.py"
+    shutil.copy2(ROOT / "bin/lib/runtime_client.py", library / "runtime_client.py")
+    shutil.copy2(canonical, library / "schema_contract.py")
+    shutil.copy2(
+        ROOT / "packages/agentstack_mail/fixtures/global-server-s2a.json",
+        library / "global-server-s2a.json",
+    )
+    assert (library / "schema_contract.py").read_bytes() == canonical.read_bytes()
+    config = api["read_json"](client.path)
+    config["wrapper_root"] = str(installed_root)
+    api["atomic_json"](client.path, config)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            str(library / "runtime_client.py"),
+            "--context",
+            str(client.path),
+            "call",
+            "set_contact_policy",
+            "policy=auto",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["policy"] == "auto"
+
+
+def test_definite_rejection_clears_pending_and_allows_next_intent(server):
+    client = context(server, window=False)
+    with pytest.raises(ClientError, match="TARGET_UNAVAILABLE"):
+        client.call("request_contact", {"to_agent_id": 999999})
+    assert not client.outputs["mutation"].exists()
+    assert client.call("set_contact_policy", {"policy": "auto"})["policy"] == "auto"
+    assert client.reconnect()["agent_id"] == 2
+
+
+@pytest.mark.parametrize(
+    "tool,arguments",
+    [
+        ("refresh_registration", {"task_description": None}),
+        ("refresh_registration", {"task_description": ""}),
+        ("set_contact_policy", {"policy": "auto"}),
+        (
+            "request_contact",
+            {"to_agent_id": 3, "ttl_seconds": 1, "to_project": "ignored"},
+        ),
+        (
+            "respond_contact",
+            {"from_agent_id": 3, "accept": False, "from_project": "ignored"},
+        ),
+        ("macro_contact_handshake", {"to_agent_id": 3, "auto_accept": False}),
+    ],
+)
+def test_all_receipt_tools_share_exact_preimage_bytes(
+    server, monkeypatch, tool, arguments
+):
+    client = context(server)
+    original = client.rpc
+
+    def lose(method, params):
+        value = original(method, params)
+        if method == "tools/call" and params.get("name") == tool:
+            raise ClientError("TRANSPORT_FAILED")
+        return value
+
+    monkeypatch.setattr(client, "rpc", lose)
+    with pytest.raises(ClientError, match="TRANSPORT_FAILED"):
+        client.call(tool, arguments)
+    pending = api["read_json"](client.outputs["mutation"])
+    canonical = api["wire_contract"]()["canonical"](pending["canonical_payload"])
+    with s2.connection(Path(server["config"]["database"])) as db:
+        row = db.execute(
+            "SELECT * FROM global_operation_receipts WHERE request_id=?",
+            (pending["request_id"],),
+        ).fetchone()
+    assert row["canonical_request_json"] == canonical
+    assert row["request_hash"] == pending["request_hash"]
+    fresh = RuntimeClient(client.path)
+    assert fresh.call(tool, arguments)["request_id"] == pending["request_id"]
+    assert not fresh.outputs["mutation"].exists()
+
+
+@pytest.mark.parametrize(
+    "refusal", ["UNKNOWN_SERVER_REASON", "CREDENTIAL_GENERATION_MISMATCH"]
+)
+def test_uncertain_existing_request_preserves_exact_pending(
+    server, monkeypatch, refusal
+):
+    client = context(server)
+    original = client.rpc
+
+    def lose(method, params):
+        response = original(method, params)
+        if method == "tools/call" and params.get("name") == "set_contact_policy":
+            raise ClientError("TRANSPORT_FAILED")
+        return response
+
+    monkeypatch.setattr(client, "rpc", lose)
+    with pytest.raises(ClientError, match="TRANSPORT_FAILED"):
+        client.call("set_contact_policy", {"policy": "auto"})
+    saved = client.outputs["mutation"].read_bytes()
+
+    def reject(method, params):
+        if method == "tools/call" and params.get("name") == "set_contact_policy":
+            return {
+                "result": {
+                    "isError": True,
+                    "content": [{"type": "text", "text": refusal}],
+                }
+            }
+        return original(method, params)
+
+    monkeypatch.setattr(client, "rpc", reject)
+    with pytest.raises(
+        ClientError, match="TOOL_REJECTED|CREDENTIAL_GENERATION_MISMATCH"
+    ):
+        client.call("set_contact_policy", {"policy": "auto"})
+    assert client.outputs["mutation"].read_bytes() == saved
+    monkeypatch.setattr(client, "rpc", original)
+    client.call("set_contact_policy", {"policy": "auto"})
+    assert not client.outputs["mutation"].exists()
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        "TARGET_UNAVAILABLE",
+        "SELF_CONTACT_NOT_SUPPORTED",
+        "CONTACT_TARGET_CONSENT_REQUIRED",
+    ],
+)
+def test_definite_tool_refusals_do_not_poison_next_mutation(server, refusal):
+    tool, arguments = {
+        "TARGET_UNAVAILABLE": ("request_contact", {"to_agent_id": 999999}),
+        "SELF_CONTACT_NOT_SUPPORTED": ("request_contact", {"to_agent_id": 2}),
+        "CONTACT_TARGET_CONSENT_REQUIRED": (
+            "macro_contact_handshake",
+            {"to_agent_id": 3, "auto_accept": True},
+        ),
+    }[refusal]
+    client = context(server)
+    with pytest.raises(ClientError, match=refusal):
+        client.call(tool, arguments)
+    assert not client.outputs["mutation"].exists()
+    assert client.call("set_contact_policy", {"policy": "auto"})["policy"] == "auto"
+    assert client.reconnect()["window_ready"]
+
+
+@pytest.mark.parametrize("server", [1], indirect=True)
+def test_quota_rejection_has_no_pending_and_preserves_mapped_reconnect(server):
+    client = context(server)
+    client.call("set_contact_policy", {"policy": "auto"})
+    with pytest.raises(ClientError, match="REQUEST_RECEIPT_CAPACITY_REACHED"):
+        client.call("set_contact_policy", {"policy": "open"})
+    assert not client.outputs["mutation"].exists()
+    assert client.reconnect()["window_ready"]
+
+
+@pytest.mark.parametrize("prior_unknown", [False, True])
+def test_credential_rotation_refusal_distinguishes_old_unknown_commit(
+    server, monkeypatch, prior_unknown
+):
+    client = context(server)
+    original = client.rpc
+    saved = None
+    if prior_unknown:
+
+        def lose(method, params):
+            value = original(method, params)
+            if method == "tools/call" and params.get("name") == "set_contact_policy":
+                raise ClientError("TRANSPORT_FAILED")
+            return value
+
+        monkeypatch.setattr(client, "rpc", lose)
+        with pytest.raises(ClientError, match="TRANSPORT_FAILED"):
+            client.call("set_contact_policy", {"policy": "auto"})
+        saved = client.outputs["mutation"].read_bytes()
+        monkeypatch.setattr(client, "rpc", original)
+    result = client.management(
+        "recover",
+        agent_id=2,
+        request_id="rotate-for-refusal",
+        expected_generation=9,
+        new_credential="fixture-new-owner-token-0000002",
+    )
+    assert result["new_generation"] == 10
+    with pytest.raises(ClientError, match="OWNER_REQUIRED"):
+        client.call("set_contact_policy", {"policy": "auto"})
+    if prior_unknown:
+        assert client.outputs["mutation"].read_bytes() == saved
+    else:
+        assert not client.outputs["mutation"].exists()

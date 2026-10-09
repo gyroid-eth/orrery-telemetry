@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import sqlite3
+import tempfile
+from pathlib import Path
 
 from fastmcp.tools.tool import Tool, ToolResult
 from pydantic import PrivateAttr
 
 from .global_server import (
     GlobalRuntime,
+    ENROLLMENT_DDL,
     GlobalError,
     TOOLS as S1_TOOLS,
     build_global_server,
@@ -29,10 +33,6 @@ from .global_s2a_contract import (
 )
 from .namespace_store import changed
 
-ENROLLMENT_DDL = {
-    "global_enrollment_requests": "CREATE TABLE global_enrollment_requests(request_id TEXT PRIMARY KEY,request_hash TEXT NOT NULL,receipt TEXT NOT NULL)",
-    "global_enrollment_audit": "CREATE TABLE global_enrollment_audit(id INTEGER PRIMARY KEY,request_id TEXT NOT NULL,created_ts TEXT NOT NULL,receipt TEXT NOT NULL)",
-}
 EXTENSION_NAMES = {
     "global_runtime_contract",
     "global_operation_receipts",
@@ -91,120 +91,123 @@ def integrity(db, *, writable=False):
         or db.execute("PRAGMA foreign_key_check").fetchall()
     ):
         raise GlobalError("RUNTIME_CANDIDATE_INVALID")
-    # A read snapshot must not issue INSERT to its source. SQLite backup reads
-    # this established snapshot, including WAL, into an independent memory DB.
-    checker = db if writable else sqlite3.connect(":memory:")
+    # Keep the established read snapshot (including WAL) and bound RAM use.
+    # SQLite's FTS integrity command needs a writable DB; only this private
+    # disposable disk backup receives that command, never the source snapshot.
     try:
-        if not writable:
-            db.backup(checker)
-        checker.execute(
-            "INSERT INTO fts_messages(fts_messages) VALUES('integrity-check')"
-        )
+        if writable:
+            db.execute(
+                "INSERT INTO fts_messages(fts_messages) VALUES('integrity-check')"
+            )
+        else:
+            with tempfile.TemporaryDirectory(prefix="orrery-fts-check-") as directory:
+                path = Path(directory) / "check.sqlite3"
+                path.touch(mode=0o600)
+                with closing(sqlite3.connect(path)) as checker:
+                    db.backup(checker)
+                    checker.execute(
+                        "INSERT INTO fts_messages(fts_messages) VALUES('integrity-check')"
+                    )
     except sqlite3.Error:
         raise GlobalError("RUNTIME_CANDIDATE_INVALID") from None
-    finally:
-        if checker is not db:
-            checker.close()
+
+
+def validate_receipt(db, row, instance, candidate):
+    try:
+        request = unique_document(row["canonical_request_json"])
+        response = unique_document(row["receipt_json"])
+        tool = row["tool"]
+        if tool not in TOOLS or TOOLS[tool]["operation"] != "write":
+            raise ValueError
+        if set(request) != set(
+            FIXTURE["candidate_validation_contract"]["request_preimage"][
+                "exact_top_level_keys"
+            ]
+        ):
+            raise ValueError
+        supplied = {
+            **request["arguments"],
+            "expected_server_instance_id": request["server_instance_id"],
+            **{
+                k: request[k]
+                for k in (
+                    "candidate_generation",
+                    "authority_epoch",
+                    "agent_id",
+                    "expected_credential_generation",
+                )
+            },
+            "registration_token": "validation-only",
+            "request_id": row["request_id"],
+        }
+        normalized = arguments(tool, supplied)
+        text, request_hash = preimage(tool, normalized)
+        if (
+            text != row["canonical_request_json"]
+            or request_hash != row["request_hash"]
+            or request["server_instance_id"] != row["server_instance_id"]
+            or row["server_instance_id"] != instance
+            or request["candidate_generation"] != row["candidate_generation"]
+            or row["candidate_generation"] != candidate
+            or request["authority_epoch"] != row["authority_epoch"]
+            or request["agent_id"] != row["agent_id"]
+            or request["expected_credential_generation"] != row["credential_generation"]
+            or response["request_id"] != row["request_id"]
+            or response["committed_at"] != row["committed_at"]
+            or response["mutation_revision"] != row["mutation_revision"]
+            or not 1 <= row["mutation_revision"] <= revision(db)
+            or canonical(response) != row["receipt_json"]
+            or digest(response) != row["receipt_sha256"]
+        ):
+            raise ValueError
+        validate(response, TOOLS[tool]["output_schema"], "REQUEST_RECEIPT_INVALID")
+        if tool in ("refresh_registration", "set_contact_policy"):
+            if (
+                any(
+                    response[k] != request[k]
+                    for k in (
+                        "server_instance_id",
+                        "candidate_generation",
+                        "authority_epoch",
+                        "agent_id",
+                    )
+                )
+                or response["credential_generation"]
+                != request["expected_credential_generation"]
+            ):
+                raise ValueError
+        if tool in (
+            "request_contact",
+            "respond_contact",
+            "macro_contact_handshake",
+        ):
+            contact = (
+                response["contact"] if tool == "macro_contact_handshake" else response
+            )
+            source = (
+                request["arguments"]["from_agent_id"]
+                if tool == "respond_contact"
+                else request["agent_id"]
+            )
+            target = (
+                request["agent_id"]
+                if tool == "respond_contact"
+                else request["arguments"]["to_agent_id"]
+            )
+            if contact["from_agent_id"] != source or contact["to_agent_id"] != target:
+                raise ValueError
+        if (
+            tool == "set_contact_policy"
+            and response["policy"] != request["arguments"]["policy"]
+        ):
+            raise ValueError
+    except (ValueError, KeyError, TypeError, UnicodeError, GlobalError):
+        raise GlobalError("REQUEST_RECEIPT_INVALID") from None
 
 
 def validate_receipts(db, instance, candidate):
     for row in db.execute("SELECT * FROM global_operation_receipts"):
-        try:
-            request = unique_document(row["canonical_request_json"])
-            response = unique_document(row["receipt_json"])
-            tool = row["tool"]
-            if tool not in TOOLS or TOOLS[tool]["operation"] != "write":
-                raise ValueError
-            if set(request) != set(
-                FIXTURE["candidate_validation_contract"]["request_preimage"][
-                    "exact_top_level_keys"
-                ]
-            ):
-                raise ValueError
-            supplied = {
-                **request["arguments"],
-                "expected_server_instance_id": request["server_instance_id"],
-                **{
-                    k: request[k]
-                    for k in (
-                        "candidate_generation",
-                        "authority_epoch",
-                        "agent_id",
-                        "expected_credential_generation",
-                    )
-                },
-                "registration_token": "validation-only",
-                "request_id": row["request_id"],
-            }
-            normalized = arguments(tool, supplied)
-            text, request_hash = preimage(tool, normalized)
-            if (
-                text != row["canonical_request_json"]
-                or request_hash != row["request_hash"]
-                or request["server_instance_id"] != row["server_instance_id"]
-                or row["server_instance_id"] != instance
-                or request["candidate_generation"] != row["candidate_generation"]
-                or row["candidate_generation"] != candidate
-                or request["authority_epoch"] != row["authority_epoch"]
-                or request["agent_id"] != row["agent_id"]
-                or request["expected_credential_generation"]
-                != row["credential_generation"]
-                or response["request_id"] != row["request_id"]
-                or response["committed_at"] != row["committed_at"]
-                or response["mutation_revision"] != row["mutation_revision"]
-                or not 1 <= row["mutation_revision"] <= revision(db)
-                or canonical(response) != row["receipt_json"]
-                or digest(response) != row["receipt_sha256"]
-            ):
-                raise ValueError
-            validate(response, TOOLS[tool]["output_schema"], "REQUEST_RECEIPT_INVALID")
-            if tool in ("refresh_registration", "set_contact_policy"):
-                if (
-                    any(
-                        response[k] != request[k]
-                        for k in (
-                            "server_instance_id",
-                            "candidate_generation",
-                            "authority_epoch",
-                            "agent_id",
-                        )
-                    )
-                    or response["credential_generation"]
-                    != request["expected_credential_generation"]
-                ):
-                    raise ValueError
-            if tool in (
-                "request_contact",
-                "respond_contact",
-                "macro_contact_handshake",
-            ):
-                contact = (
-                    response["contact"]
-                    if tool == "macro_contact_handshake"
-                    else response
-                )
-                source = (
-                    request["arguments"]["from_agent_id"]
-                    if tool == "respond_contact"
-                    else request["agent_id"]
-                )
-                target = (
-                    request["agent_id"]
-                    if tool == "respond_contact"
-                    else request["arguments"]["to_agent_id"]
-                )
-                if (
-                    contact["from_agent_id"] != source
-                    or contact["to_agent_id"] != target
-                ):
-                    raise ValueError
-            if (
-                tool == "set_contact_policy"
-                and response["policy"] != request["arguments"]["policy"]
-            ):
-                raise ValueError
-        except (ValueError, KeyError, TypeError, UnicodeError, GlobalError):
-            raise GlobalError("REQUEST_RECEIPT_INVALID") from None
+        validate_receipt(db, row, instance, candidate)
 
 
 def validate_runtime_candidate(db, *, full=False, writable=False, allow_gap=False):
@@ -298,16 +301,22 @@ class S2aRuntime(GlobalRuntime):
             ).fetchone()
             self.register_previous_activity = old[0] if old else None
 
+    def receipts_used(self, db, agent_id):
+        # Use the existing receipt PK prefix instead of scanning other owners.
+        # No duplicate persistent quota counter is maintained.
+        return db.execute(
+            "SELECT count(*) FROM global_operation_receipts WHERE server_instance_id=? AND agent_id=?",
+            (self.instance, agent_id),
+        ).fetchone()[0]
+
     def inspect(self, db, agent_id):
+        validate_runtime_candidate(db, full=True)
         result = super().inspect(db, agent_id)
         cursor = getattr(self, "capacity_cursor", None)
         limit = getattr(self, "capacity_limit", 100)
 
         def owner_count(aid):
-            used = db.execute(
-                "SELECT count(*) FROM global_operation_receipts WHERE agent_id=?",
-                (aid,),
-            ).fetchone()[0]
+            used = self.receipts_used(db, aid)
             return {
                 "agent_id": aid,
                 "used": used,
@@ -439,7 +448,7 @@ class S2aRuntime(GlobalRuntime):
                 "UPDATE global_runtime_contract SET last_validated_revision=? WHERE id=1",
                 (revision(db),),
             )
-            validate_runtime_candidate(db, full=True, writable=True)
+            validate_runtime_candidate(db)
 
     def peer(self, db, aid):
         row = db.execute("SELECT * FROM agents WHERE id=?", (aid,)).fetchone()
@@ -574,15 +583,11 @@ class S2aRuntime(GlobalRuntime):
                 if prior:
                     if prior["request_hash"] != hashed:
                         raise GlobalError("REQUEST_ID_CONFLICT")
-                    validate_receipts(db, self.instance, self.candidate_generation)
+                    validate_receipt(
+                        db, prior, self.instance, self.candidate_generation
+                    )
                     return unique_document(prior["receipt_json"])
-                if (
-                    db.execute(
-                        "SELECT count(*) FROM global_operation_receipts WHERE agent_id=?",
-                        (owner["id"],),
-                    ).fetchone()[0]
-                    >= self.receipt_limit
-                ):
+                if self.receipts_used(db, owner["id"]) >= self.receipt_limit:
                     raise GlobalError("REQUEST_RECEIPT_CAPACITY_REACHED")
             stamp = utc(now())
             self.fault("before_state")
@@ -744,6 +749,13 @@ class S2aRuntime(GlobalRuntime):
                         digest(result),
                     ),
                 )
+                # Inspect exactly the stored new row, including output/preimage
+                # and digest, inside this transaction before it can commit.
+                inserted = db.execute(
+                    "SELECT * FROM global_operation_receipts WHERE server_instance_id=? AND agent_id=? AND request_id=?",
+                    (self.instance, owner["id"], args["request_id"]),
+                ).fetchone()
+                validate_receipt(db, inserted, self.instance, self.candidate_generation)
                 self.fault("after_receipt")
             self.fault("before_commit")
         self.fault("after_commit")

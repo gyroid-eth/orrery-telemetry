@@ -204,7 +204,7 @@ source の形式確認は immutable read-only で行い、PR3 candidate の name
 
 ### receipt と活動、旧 mode との違い
 
-receipt 対象の5 tool は通信前に client の固定 `runtime/mutation-pending.json` に UUID と canonical payload を保存します。`runtime/mutation.lock` は binding 非依存の local mutex です。応答喪失後も同じ intent は同 UUID を使い、別 intent は拒否します。server は preimage/hash と result/digest を domain 変更と同じ transaction に保存します。現在の token/generation/binding の認証後にだけ replay でき、返る値は現在値でなく確定時の結果です。
+program/model 無指定の mapped reconnect は touch/observe だけを行い、contact policy は明示した変更入口で適用します。receipt 対象の5 tool は通信前に client の固定 `runtime/mutation-pending.json` に UUID と canonical payload を保存します。`runtime/mutation.lock` は binding 非依存の local mutex です。応答喪失後も同じ intent は同 UUID を使い、別 intent は拒否します。tools/list の outputSchema と owner/binding/UUID の照合後にだけ pending を消し、不適合な応答では planned を保ちます。schema の検証関数は server/client の共通正本です。server は preimage/hash と result/digest を domain 変更と同じ transaction に保存します。現在の token/generation/binding の認証後にだけ replay でき、返る値は現在値でなく確定時の結果です。
 
 既定 quota は owner ごと100000件で、自動削除はありません。満杯の owner の新 receipt 操作だけ `REQUEST_RECEIPT_CAPACITY_REACHED` になり、replay、別 owner、正確な window の touch は維持します。管理 inspect の `receipt_capacity` で owner の残数と keyset page を確認でき、明示 config の `operation_receipt_limit` を増やして制御した restart ができます。candidate 全体の disk quota は保証していません。touch/verify は未解消の正当な pending や保持中の mutation mutex を使わず、独立した current credential で認証します。
 
@@ -222,3 +222,7 @@ receipt 対象の5 tool は通信前に client の固定 `runtime/mutation-pendi
 `RUNTIME_WRITER_MISMATCH` は通常 domain 操作を止めます。`agentstack-mail-global-incident inspect --config FILE` は同じ read snapshot で tracker/current revision・table digest を診断し、token/本文を表示しません。tracker 一致だけを免除し、schema3 の schema/integrity/私有 file 検査は維持します。receipt の無い root は DB を開かずに拒否します。不正な schema3 を修復する入口ではありません。
 
 意図的に退役させる operator は inspect の `incident_digest`、`tracked_revision` / `current_revision` を使い、`agentstack-mail-global-incident quarantine --config FILE --request-id UUID --incident-digest DIGEST --tracked-revision N --current-revision N --confirm-quarantine` を実行します。EX 下で再照合し、固定 `global-runtime/incident.json`、authority の fencing/retirement、`quarantine.json` を記録します。各境界の中断は同 UUID で退役の完了だけを再実行します。DB/receipt/tracker を削除・巻戻し・adopt せず、その場に証拠を残します。再稼働は別の candidate と current enrollment に限ります。同 UID の非協調 process による検査と open/commit 間の競合、および外側の書込みの巻戻し不能という S1 の限界は残ります。
+
+全件の quick_check/FK/FTS と過去 receipt の検証は起動時と明示した管理 inspect で行います。通常の書込みは同じ transaction 内で schema/profile/tracker と今回触った行・新 receipt の preimage/output/digest を検証し、replay は一致した1件だけを検証します。過去 receipt の全走査を touch や通常の書込みへ持ち込みません。read snapshot の FTS 検証は私有の一時 disk DB を使い、DB 全体をメモリへ複製しません。incident の SH/EX も通常処理と同じ authority/fence/transaction 入口です。
+
+client の pending は結果不明の証跡です。`TARGET_UNAVAILABLE`・quota 等の確定した tool 拒否では、自分の保存 bytes を mutex 下で再照合して消します。理由語と拒否時点の正本は wire fixture の `client_uuid_contract.definite_rejections` です。transport 失敗、schema/binding 不適合、未知の理由語は保持します。既存 pending に対する認証・fence 拒否は以前の commit の有無を証明しないため保持し、明示 resolution を使います。初回試行の確定した事前拒否とは区別します。

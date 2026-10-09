@@ -136,3 +136,9 @@ finally:
 Observe-only reconnect leaves them server-unverified. A read-only server window capability and registration refresh without changing program/model are S2 candidates. PR4a does not change the S1 fixture or wire for its own convenience.
 
 With an explicit S2a schema3 server, capabilities enable metadata-preserving refresh, read-only server window verification, and receipt UUID continuity. S1 behavior is retained. For another candidate/client root, follow [schema2 refusal and caller redirection](global-server.en.md#when-schema2-is-refused).
+
+S2a reconnect without explicit program/model only refreshes activity and verifies the binding; it does not automatically apply contact policy. Change policy through the explicit `set_contact_policy` tool or `runtime_client.py --context CONFIG policy` with `AGENTSTACK_CONTACT_POLICY` set. Quota or existing pending only constrains explicit policy mutations, not mapped reconnect.
+
+Before clearing pending, the client validates a receipt against tools/list outputSchema and the expected owner/binding/UUID. An invalid response leaves planned intact for a normal same-UUID replay. Server and stdlib client use one canonical `schema_contract.py`; installation copies that source into wrapper `bin/lib/`. There is no independent client validator or new external dependency.
+
+Canonical preimages, defaults and TTL normalization also use that same stdlib source. Tool classification and fixed reasons come from the wire fixture, which the installer copies beside the helper into `bin/lib/`. Definite refusals (unavailable target, quota, etc.) clear the exact own pending bytes and allow another intended operation. Transport failures, invalid responses and unknown reasons retain pending. Authentication/fence rejection of existing pending cannot prove its earlier outcome and retains it. `client_uuid_contract.definite_rejections` is the canonical list of reasons and refusal stages.

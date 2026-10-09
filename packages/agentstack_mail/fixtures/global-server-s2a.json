@@ -1954,7 +1954,7 @@
       "uq_global_contact_pair": "UNIQUE INDEX agent_links(a_agent_id,b_agent_id); new link legacy_a_project_id/legacy_b_project_id=NULL; migrated legacy values kept. Detect duplicate stable pair BEFORE DDL or any operation and report CONTACT_PAIR_DUPLICATE with link IDs to operator; never choose/delete/merge automatically"
     },
     "init_transaction": "Inside private unpublished staging ONLY: BEGIN IMMEDIATE, validate base proof/definitions, create fixed S2a DDL and pair index, user_version3, increment staged mutation_revision once to initialized_revision=last_validated_revision=1, COMMIT. Postvalidate in separate snapshot before final manifest/gate/publication. No external active authority is changed; startup only validates completed profile readonly. An interrupted staging operation is recovered by its owned preparation receipt, never a runtime upgrader.",
-    "post_write": "quick_check/FK/FTS and exact allowed base+extension definitions; verify unique contact pairs, receipt owner/tool/version/three binding/hash/UTF8 JSON/output schema/digest/committed revision <=current revision, nondecreasing generation counters and retained baseline mapping. Row changes allowed only as supported runtime operations, not compared to original source rows. Unknown table/trigger/index/version/schema refused Canonical request preimage and response digest validated separately per request_preimage, even after local pending has been cleared. Require marker3/profile s2a-v1 and tracker=current mutation_revision. Historical receipts need not cover every revision: S1-compatible actions and heartbeat have different provenance, but all stage-aware writes atomically advance tracker. Runtime validator requires schema3/profile s2a-v1 only. Schema2 is refused; no diagnostic upgrade profile exists. Fixed management extension creation, domain changes, audit and receipt insertion all update tracker in the same transaction.",
+    "post_write": "Bounded operation validation in the same fenced transaction: schema/profile/tracker, touched domain row constraints and complete inserted receipt preimage/output/digests. Update tracker atomically. Full quick_check/FK/FTS and all historical receipts run at startup and explicit inspect only; replay validates the matched receipt only. No whole history scan on ordinary writes/touch. Unknown schema/profile/tracker remains refused.",
     "manifest": "return profile/instance/candidate/epoch/current revision, schema digests and table count+canonical digest summary; not tokens/raw receipt content. Baseline checkpoint remains immutable; runtime manifest is distinct from migration preservation proof",
     "retention": "retain all successful full receipts for lifetime of isolated candidate; no expiry/delete/reuse. operation_receipt_limit now PER OWNER, default100000, positive explicit config increase under controlled restart. No candidate-wide receipt cap in this stage, so one owner cannot consume another quota. Per-owner admission and receipt count in one transaction, replay before quota check. Quota-exempt touch produces no receipt and remains available. Receipt storage grows with number of admitted owners; S2a does not claim a global disk quota; runtime operators monitor total bytes/count.",
     "rollback": "Any published initialized runtime has revision>=1 and cannot use the original pristine snapshot rollback gate. Never reset revision or delete extensions. Failed unpublished staging may only be resumed/rebuilt according to its owned preparation plan; it was never an authority. Published evidence is preserved; incident quarantine and another separately prepared candidate are the supported exits. No automatic import/export of used schema2 writes; PR7 or separate migration design required.",
@@ -2130,7 +2130,8 @@
         "incident": "incident.json kind orrery-global-runtime-incident-v1",
         "quarantine": "quarantine.json kind orrery-global-runtime-quarantine-v1"
       }
-    }
+    },
+    "full_validation": "Startup and explicit inspect scan current snapshot for quick_check/FK/FTS plus every stored receipt. Read-only FTS verification uses a private temporary disk database, never a whole in-memory backup; source snapshot and bytes remain unchanged."
   },
   "client_uuid_contract": {
     "fixed_slot": "derived client_root/runtime/mutation-pending.json ONLY; magic orrery-global-operation-pending-v1; one pending mutation per client, no arbitrary path/history scan",
@@ -2156,7 +2157,36 @@
     "operator_resolution": "Explicit operator-only resolve-mutation --ack/--abandon with expected SHA256 of old pending. Acquire same fixed mutation.lock, validate old pending own magic/private/nlink/full schema/old binding, keep it separate from new context; reread exact digest under lock before unlink. Authenticate current context/credential/server binding in read-only calls, display old and new binding, UUID/tool/status and current state without token. Same stable ID required within same instance; epoch may differ. Across instance/candidate require explicit --accept-binding-change plus complete old/new binding arguments and current-owner authentication; never infer numeric ID continuity across instances. Action deletes/acknowledges ONLY local pending, no remote resend or rollback; local completion cannot prove old outcome. No rewriting old pending to new epoch, no new UUID automatically. Constructor has a narrowly scoped resolution reader so stale journal cannot block this entrance; foreign role/magic/owner is always refused. Normal mutations still blocked until explicit resolution Across instance/candidate, explicit old/new agent IDs are required too; operator acknowledges identity continuity is unproven and only disposes a local stale request. A different-ID pending is never accepted for network owner calls or receipt activation. Mutex has no server binding header, so clearing legitimate stale pending leaves the same mutex usable for new intended operation under valid current context. Across instance/agent changes operator reads old root via dedicated resolution reader and authenticates a separately supplied EXISTING current-context input from a new fixed client root; only old pending is disposed, old context/credential not rewritten, next normal operation uses new current root. The input is readonly, not arbitrary output path.",
     "binding_change": "Normal entry fails closed on instance/candidate/epoch mismatch. S2a never changes an existing candidate epoch for initialization. Different candidate/instance requires independently verified current enrollment in a new fixed client_name root; do not copy old credential based on numeric ID or recreate old binding automatically. Current authenticated root may explicitly resolve old pending via the separately scoped reader. Same-candidate credential rotation uses existing #236 enroll/finalize recovery, not repin.",
     "lock_role": "fixed runtime/mutation.lock: immutable JSON {kind:orrery-client-local-mutex-v1}; no instance/candidate/epoch/agent ID fields. Role belongs to fixed client root + OS UID, private regular nlink1, NOFOLLOW and pinned dev/inode within open operation. Create O_EXCL once with fsync before first network, validate exact magic/schema for every open, never unlink/rename/recreate while held. Does not authenticate server owner; context/credential/pending retain strict binding. Foreign old-bound header not auto-converted: explicit new client root required for obsolete unpublished layout.",
-    "liveness_exception": "touch_window_identity/verify/readonly observe do not acquire mutation.lock and never read pending as routing/authentication evidence. An own-magic pending for same instance+agent (possibly old candidate/epoch/generation) may remain structurally validated but unresolved; it does not block liveness using independently current context/credential/authority. No adoption/resend of old payload, no journal writes/deletes. A foreign role/magic/private-file error still refuses. If current context/credential themselves stale, no network exemption: explicit current-root reconciliation is required first. instance/agent change uses new current client root, never pretends numeric ID continuity."
+    "liveness_exception": "touch_window_identity/verify/readonly observe do not acquire mutation.lock and never read pending as routing/authentication evidence. An own-magic pending for same instance+agent (possibly old candidate/epoch/generation) may remain structurally validated but unresolved; it does not block liveness using independently current context/credential/authority. No adoption/resend of old payload, no journal writes/deletes. A foreign role/magic/private-file error still refuses. If current context/credential themselves stale, no network exemption: explicit current-root reconciliation is required first. instance/agent change uses new current client root, never pretends numeric ID continuity.",
+    "definite_rejections": {
+      "after_receipt_lookup": [
+        "TARGET_UNAVAILABLE",
+        "CONTACT_TARGET_CONSENT_REQUIRED",
+        "CONTACT_MESSAGE_REQUIRES_S2B",
+        "CONTACT_REQUEST_UNAVAILABLE",
+        "SELF_CONTACT_NOT_SUPPORTED",
+        "REQUEST_RECEIPT_CAPACITY_REACHED",
+        "WINDOW_INPUT_REQUIRED",
+        "WINDOW_OWNER_MISMATCH",
+        "CONTACT_TTL_INVALID",
+        "TIMESTAMP_INVALID",
+        "REQUEST_ID_CONFLICT"
+      ],
+      "before_receipt_lookup": [
+        "ARGUMENTS_UNSUPPORTED",
+        "REQUEST_ID_INVALID",
+        "REQUEST_INPUT_TOO_LARGE",
+        "CONTACT_TTL_INVALID",
+        "CONTACT_POLICY_INVALID",
+        "TASK_DESCRIPTION_INVALID",
+        "CREDENTIAL_GENERATION_MISMATCH",
+        "OWNER_REQUIRED",
+        "STALE_RUNTIME_BINDING",
+        "WRITER_FENCED",
+        "RUNTIME_WRITER_MISMATCH"
+      ],
+      "contract": "Only an authenticated fixed tool rejection clears the exact own planned bytes under the local mutex. Existing pending survives pre-lookup authentication/fence rejection: that response cannot disprove an earlier commit. Transport, schema/binding mismatch, unknown reasons and request ID conflicts preserve pending. No automatic replacement UUID."
+    }
   },
   "contact_transition_table": [
     {

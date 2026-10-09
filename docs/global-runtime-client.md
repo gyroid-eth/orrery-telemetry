@@ -136,3 +136,9 @@ finally:
 window の read-only server 照合 capability は S2 への候補です。S1 の fixture と wire を4aの都合で変更しません。
 
 S2a の明示 schema3 server に接続すると、能力に応じて program/model を保つ登録更新・server 側の read-only window 照合・receipt の UUID 引継ぎを使います。S1 の動きは維持します。新 candidate と client root を選ぶときは [schema2 の拒否と呼出し側の向け直し](global-server.md#schema2-を拒否されたとき)を確認してください。
+
+S2a の program/model 無指定 reconnect は活動更新と照合だけを行い、contact policy を自動適用しません。変更は明示した `set_contact_policy` tool、または `AGENTSTACK_CONTACT_POLICY` を指定した `runtime_client.py --context CONFIG policy` で行います。容量上限や既存 pending は mapped reconnect を止めず、policy の明示変更だけに適用します。
+
+receipt の応答は tools/list の outputSchema と owner/binding/UUID を確認してから pending を消します。schema 不適合なら planned を保ち、同 UUID で正常応答を replay します。server と stdlib client は同じ `schema_contract.py` を使い、installer はその正本を wrapper の `bin/lib/` にコピーします。client 用の別 validator や新しい外部依存はありません。
+
+canonical preimage・既定値・TTL 補正も同じ stdlib 正本を使います。tool の分類と固定 reason は wire fixture から読み、installer はその fixture も helper と同じ `bin/lib/` にコピーします。確定した拒否（相手不存在・quota 等）では自分の pending bytes を再照合して解除し、別の意図の操作へ進めます。通信失敗・応答不適合・未知 reason は保持します。既存 pending の認証/fence 拒否は以前の結果を証明しないため保持します。固定 reason とその拒否時点の一覧は `client_uuid_contract.definite_rejections` が正本です。

@@ -1105,6 +1105,7 @@ REQUIRED_RUNTIME_MODULES = {
     "global_server.py",
     "global_s2a.py",
     "global_s2a_contract.py",
+    "schema_contract.py",
     "global_prepare.py",
     "global_incident.py",
     "__init__.py",

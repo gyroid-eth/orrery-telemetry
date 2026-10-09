@@ -20,7 +20,6 @@ import sqlite3
 import stat
 import tempfile
 from datetime import datetime, timezone
-import uuid
 
 from .boundary import CompatibilityFastMCP
 from .enrollment import _peer_uid
@@ -91,6 +90,18 @@ def now():
 def instant(value):
     date = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return date if date.tzinfo is not None else date.replace(tzinfo=timezone.utc)
+
+
+ENROLLMENT_DDL = {
+    "global_enrollment_requests": "CREATE TABLE global_enrollment_requests(request_id TEXT PRIMARY KEY,request_hash TEXT NOT NULL,receipt TEXT NOT NULL)",
+    "global_enrollment_audit": "CREATE TABLE global_enrollment_audit(id INTEGER PRIMARY KEY,request_id TEXT NOT NULL,created_ts TEXT NOT NULL,receipt TEXT NOT NULL)",
+}
+
+
+def create_enrollment_table(db, name):
+    db.execute(
+        ENROLLMENT_DDL[name].replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1)
+    )
 
 
 class GlobalRuntime:
@@ -207,19 +218,50 @@ class GlobalRuntime:
         self.handlers = set()
         self.writers = set()
 
+    def authority_states(self):
+        return (
+            {
+                "kind": "orrery-global-authority-v1",
+                "phase": "active",
+                "root_status": "active",
+                "runtime_root": str(self.runtime_root),
+                "mail_instance_id": self.instance,
+                "candidate_generation": self.candidate_generation,
+                "authority_epoch": self.epoch,
+            },
+        )
+
     def authority(self):
         value = document(self.paths["authority"])
-        if (
-            value.get("kind") != "orrery-global-authority-v1"
-            or value.get("phase") != "active"
-            or value.get("root_status") != "active"
-            or value.get("runtime_root") != str(self.runtime_root)
-            or value.get("mail_instance_id") != self.instance
-            or value.get("candidate_generation") != self.candidate_generation
-            or value.get("authority_epoch") != self.epoch
+        if not any(
+            all(value.get(k) == v for k, v in expected.items())
+            for expected in self.authority_states()
         ):
             raise GlobalError("WRITER_FENCED")
         return value
+
+    def authority_transition(self, before, after, *, exclusive):
+        return before == after
+
+    def check_fence_files(self, fd=None):
+        # Used by ordinary transactions and between operator filesystem writes.
+        if fd is None:
+            try:
+                opened = os.open(
+                    self.paths["authority_lock"],
+                    os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                )
+            except OSError:
+                raise GlobalError("AUTHORITY_LOCK_UNAVAILABLE") from None
+            try:
+                return self.check_fence_files(opened)
+            finally:
+                os.close(opened)
+        self.check_authority_lock(fd)
+        self.check_sqlite_files()
+        if private(self.config_path) != self.config_raw:
+            raise GlobalError("CONFIG_CHANGED")
+        return self.authority()
 
     def check_sqlite_files(self):
         def safe(info):
@@ -253,7 +295,8 @@ class GlobalRuntime:
                     current = path.lstat()
                     if (
                         (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)
-                        or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+                        or (opened.st_dev, opened.st_ino)
+                        != (current.st_dev, current.st_ino)
                         or not safe(opened)
                         or not safe(current)
                     ):
@@ -264,7 +307,7 @@ class GlobalRuntime:
                 raise GlobalError(reason) from None
 
     @contextmanager
-    def transaction(self, *, write=False, binding=None):
+    def transaction(self, *, write=False, binding=None, exclusive=False):
         try:
             fd = os.open(
                 self.paths["authority_lock"],
@@ -275,13 +318,12 @@ class GlobalRuntime:
         try:
             self.check_authority_lock(fd)
             try:
-                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                fcntl.flock(
+                    fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB
+                )
             except BlockingIOError:
                 raise GlobalError("WRITER_FENCED") from None
-            before = self.authority()
-            self.check_authority_lock(fd)
-            if private(self.config_path) != self.config_raw:
-                raise GlobalError("CONFIG_CHANGED")
+            before = self.check_fence_files(fd)
             if binding is not None:
                 expected = (self.instance, self.candidate_generation, self.epoch)
                 if tuple(binding) != expected:
@@ -304,14 +346,8 @@ class GlobalRuntime:
                 self.after_operation(db, write=write)
                 # These metadata constraints can change without replacing an
                 # inode. Detect them before the connection context commits.
-                self.check_sqlite_files()
-                self.check_authority_lock(fd)
-                current_db = self.paths["database"].lstat()
-                if (
-                    self.authority() != before
-                    or private(self.config_path) != self.config_raw
-                    or self.db_identity != (current_db.st_dev, current_db.st_ino)
-                ):
+                current = self.check_fence_files(fd)
+                if not self.authority_transition(before, current, exclusive=exclusive):
                     raise GlobalError("WRITER_FENCED")
         except (sqlite3.Error, OSError, KeyError):
             raise GlobalError("STATE_UNAVAILABLE") from None
@@ -332,7 +368,10 @@ class GlobalRuntime:
         identity = (opened.st_dev, opened.st_ino)
         if self.lock_identity is None:
             self.lock_identity = identity
-        if identity != self.lock_identity or identity != (current.st_dev, current.st_ino):
+        if identity != self.lock_identity or identity != (
+            current.st_dev,
+            current.st_ino,
+        ):
             raise GlobalError("AUTHORITY_LOCK_REPLACED")
 
     def before_operation(self, db, *, write):
@@ -501,9 +540,7 @@ class GlobalRuntime:
                 # Fenced/unknown callers cannot obtain a side-channel write.
                 with suppress(GlobalError):
                     with self.transaction(write=True, binding=binding) as db:
-                        db.execute(
-                            "CREATE TABLE IF NOT EXISTS global_enrollment_audit(id INTEGER PRIMARY KEY,request_id TEXT NOT NULL,created_ts TEXT NOT NULL,receipt TEXT NOT NULL)"
-                        )
+                        create_enrollment_table(db, "global_enrollment_audit")
                         request_id = request.get("request_id")
                         receipt = {
                             "ok": False,
@@ -605,9 +642,7 @@ class GlobalRuntime:
                 ).encode()
             ).hexdigest()
             if not exists:
-                db.execute(
-                    "CREATE TABLE global_enrollment_requests(request_id TEXT PRIMARY KEY,request_hash TEXT NOT NULL,receipt TEXT NOT NULL)"
-                )
+                create_enrollment_table(db, "global_enrollment_requests")
             prior = db.execute(
                 "SELECT request_hash,receipt FROM global_enrollment_requests WHERE request_id=?",
                 (request_id,),
@@ -648,9 +683,7 @@ class GlobalRuntime:
                 "INSERT INTO global_enrollment_requests VALUES (?,?,?)",
                 (request_id, request_hash, json.dumps(receipt, sort_keys=True)),
             )
-            db.execute(
-                "CREATE TABLE IF NOT EXISTS global_enrollment_audit(id INTEGER PRIMARY KEY,request_id TEXT NOT NULL,created_ts TEXT NOT NULL,receipt TEXT NOT NULL)"
-            )
+            create_enrollment_table(db, "global_enrollment_audit")
             db.execute(
                 "INSERT INTO global_enrollment_audit(request_id,created_ts,receipt) VALUES (?,?,?)",
                 (request_id, now(), json.dumps(receipt, sort_keys=True)),
