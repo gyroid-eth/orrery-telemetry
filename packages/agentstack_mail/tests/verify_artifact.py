@@ -1102,6 +1102,7 @@ REQUIRED_RUNTIME_MODULES = {
     "namespace_migration.py",
     "namespace_store.py",
     "namespace_delivery.py",
+    "global_server.py",
     "__init__.py",
     "app.py",
     "authorization.py",
@@ -1151,10 +1152,13 @@ WHEEL_REQUIRED_SUFFIXES = {
     "agentstack_mail/fixtures/namespace-plan-v1.json",
     "agentstack_mail/fixtures/absolute-reservations-v1.json",
     "agentstack_mail/fixtures/namespace-state-v2.json",
+    "agentstack_mail/fixtures/global-server-s1.json",
     "agentstack_mail/fixtures/namespace-legacy-delivery-v1.sql",
 } | {f"agentstack_mail/{module}" for module in REQUIRED_RUNTIME_MODULES}
 
 SDIST_REQUIRED_SUFFIXES = {
+    "/tests/test_global_server.py",
+    "/fixtures/global-server-s1.json",
     "/tests/test_namespace_state_migration.py",
     "/tests/test_namespace_state_runtime.py",
     "/tests/fixtures/namespace_state.py",

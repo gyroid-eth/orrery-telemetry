@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### project 廃止に向けた隔離 global server の登録・復旧能力を準備
+
+明示した一時設定でだけ起動する S1 server を追加しました。実 HTTP の登録・既存 token の再接続・自己 inbox・window owner 照合と管理 socket の enrollment を、stable ID と世代で確認します。candidate 世代、書込みカウンタ、runtime authority epoch を分け、切替中や退役した root の操作を拒否します。既定は旧 mode の25 tool、activation は false のままです。送信・返信・contact・予約・archive/signal writer の結線は S2 に残します。詳細は[global server の準備](docs/global-server.md)を参照してください。
+
 ### Codex plugin の導入処理を共通化
 
 - Codex の専用 installer を再利用できる処理へ分け、共有 HOME・cache の所有情報と対象 hook の承認結果を記録します。

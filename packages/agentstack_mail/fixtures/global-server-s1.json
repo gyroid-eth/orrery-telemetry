@@ -1,0 +1,433 @@
+{
+  "wire_version": 1,
+  "stage": "isolated-server-s1",
+  "activation_enabled": false,
+  "default_runtime": "legacy-v1",
+  "tools": [
+    "ensure_project",
+    "fetch_inbox",
+    "health_check",
+    "register_agent",
+    "retire_agent",
+    "unretire_agent",
+    "whois"
+  ],
+  "resources": [],
+  "binding_fields": {
+    "expected_server_instance_id": "stable Mail instance ID",
+    "candidate_generation": "PR3 candidate generation; fixed across ordinary writes",
+    "authority_epoch": "opaque runtime authority epoch; independent of mutation revision"
+  },
+  "owner_fields": [
+    "agent_id",
+    "registration_token"
+  ],
+  "ignored_scope_arguments": [
+    "project_key"
+  ],
+  "health_fields": [
+    "status",
+    "mode",
+    "wire_version",
+    "namespace_contract_version",
+    "server_instance_id",
+    "candidate_generation",
+    "authority_epoch",
+    "mutation_revision",
+    "activation_enabled",
+    "supported_tools",
+    "resources_supported"
+  ],
+  "management": {
+    "version": 1,
+    "actions": [
+      "inspect",
+      "claim",
+      "recover",
+      "request_status"
+    ],
+    "identity_fields": [
+      "agent_id"
+    ],
+    "cas_fields": [
+      "request_id",
+      "expected_generation",
+      "new_credential"
+    ],
+    "receipt_kind": "orrery-global-enrollment-receipt-v1"
+  },
+  "unimplemented": [
+    "acknowledge_message",
+    "fetch_summary",
+    "fetch_topic",
+    "file_reservation_paths",
+    "list_contacts",
+    "macro_contact_handshake",
+    "macro_file_reservation_cycle",
+    "macro_start_session",
+    "mark_message_read",
+    "release_file_reservations",
+    "renew_file_reservations",
+    "reply_message",
+    "request_contact",
+    "respond_contact",
+    "search_messages",
+    "send_message",
+    "set_contact_policy",
+    "summarize_thread"
+  ],
+  "generations": {
+    "candidate_generation": "namespace_metadata.generation",
+    "mutation_revision": "namespace_metadata.write_generation",
+    "authority_epoch": "private common authority receipt; never inferred from either DB value"
+  },
+  "tool_schemas": {
+    "ensure_project": {
+      "properties": {
+        "human_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "project_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
+    "fetch_inbox": {
+      "properties": {
+        "expected_server_instance_id": {
+          "type": "string"
+        },
+        "candidate_generation": {
+          "type": "string"
+        },
+        "authority_epoch": {
+          "type": "string"
+        },
+        "agent_id": {
+          "type": "integer"
+        },
+        "registration_token": {
+          "type": "string"
+        },
+        "agent_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "project_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "limit": {
+          "default": 20,
+          "type": "integer"
+        },
+        "include_bodies": {
+          "default": true,
+          "type": "boolean"
+        },
+        "urgent_only": {
+          "default": false,
+          "type": "boolean"
+        },
+        "since_ts": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "expected_server_instance_id",
+        "candidate_generation",
+        "authority_epoch",
+        "agent_id",
+        "registration_token"
+      ],
+      "type": "object"
+    },
+    "health_check": {
+      "properties": {},
+      "type": "object"
+    },
+    "register_agent": {
+      "properties": {
+        "expected_server_instance_id": {
+          "type": "string"
+        },
+        "candidate_generation": {
+          "type": "string"
+        },
+        "authority_epoch": {
+          "type": "string"
+        },
+        "program": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "registration_token": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "task_description": {
+          "default": "",
+          "type": "string"
+        },
+        "window_row_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "window_uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "project_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "expected_server_instance_id",
+        "candidate_generation",
+        "authority_epoch",
+        "program",
+        "model"
+      ],
+      "type": "object"
+    },
+    "retire_agent": {
+      "properties": {
+        "expected_server_instance_id": {
+          "type": "string"
+        },
+        "candidate_generation": {
+          "type": "string"
+        },
+        "authority_epoch": {
+          "type": "string"
+        },
+        "agent_id": {
+          "type": "integer"
+        },
+        "registration_token": {
+          "type": "string"
+        },
+        "agent_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "project_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "expected_server_instance_id",
+        "candidate_generation",
+        "authority_epoch",
+        "agent_id",
+        "registration_token"
+      ],
+      "type": "object"
+    },
+    "unretire_agent": {
+      "properties": {
+        "expected_server_instance_id": {
+          "type": "string"
+        },
+        "candidate_generation": {
+          "type": "string"
+        },
+        "authority_epoch": {
+          "type": "string"
+        },
+        "agent_id": {
+          "type": "integer"
+        },
+        "registration_token": {
+          "type": "string"
+        },
+        "agent_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "project_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "expected_server_instance_id",
+        "candidate_generation",
+        "authority_epoch",
+        "agent_id",
+        "registration_token"
+      ],
+      "type": "object"
+    },
+    "whois": {
+      "properties": {
+        "expected_server_instance_id": {
+          "type": "string"
+        },
+        "candidate_generation": {
+          "type": "string"
+        },
+        "authority_epoch": {
+          "type": "string"
+        },
+        "agent_id": {
+          "type": "integer"
+        },
+        "registration_token": {
+          "type": "string"
+        },
+        "agent_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "project_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "expected_server_instance_id",
+        "candidate_generation",
+        "authority_epoch",
+        "agent_id",
+        "registration_token"
+      ],
+      "type": "object"
+    }
+  }
+}
