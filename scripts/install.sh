@@ -3,8 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-RUNTIME_SCHEMA_SOURCE="$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/schema_contract.py"
-RUNTIME_FIXTURE_SOURCE="$REPO_ROOT/packages/agentstack_mail/fixtures/global-server-s2a.json"
 MERGE_SETTINGS_SCRIPT="$SCRIPT_DIR/lib/merge_settings.py"
 MERGE_CLAUDE_MCP_SCRIPT="$SCRIPT_DIR/lib/merge_claude_mcp.py"
 
@@ -2327,6 +2325,8 @@ copy_tree() {
 # together; a core reinstall overwriting only the hooks would pair an old
 # runtime with a new adapter (or the reverse). The core neither copies nor
 # removes these: an existing provider install keeps all of its files.
+RUNTIME_SCHEMA_SOURCE="$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/schema_contract.py"
+RUNTIME_FIXTURE_SOURCE="$REPO_ROOT/packages/agentstack_mail/fixtures/global-server-s2a.json"
 OPTIONAL_PROVIDER_PAYLOAD=(
   "dashboard/provider_server.py"
   "dashboard/gemini_provider_runtime.py"
