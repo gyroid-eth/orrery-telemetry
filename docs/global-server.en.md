@@ -102,6 +102,7 @@ HOME="$check_root/home" TMUX_TMPDIR="$check_root/tmux" \
 | Stale binding / root | `test_stale_wire_binding_rejects_http_and_management` / `test_common_authority_fences_current_http_management_and_restarted_wrapper` | STALE_RUNTIME_BINDING / WRITER_FENCED |
 | Updater / replaced lock | `test_updater_exclusive_gate_prevents_new_request` / `test_replaced_startup_lock_fences_http_and_management` | Exclusive gate and replaced inode rejected; revision unchanged |
 | SQLite sidecar | `test_sqlite_sidecars_cannot_write_outside_isolation` | Startup/HTTP reject unsafe files; outside sentinel unchanged |
+| Main DB after startup / precommit | `test_main_database_becoming_unsafe_fences_existing_runtime` / `test_rejected_main_alias_preserves_independently_committed_wal` / `test_sqlite_files_becoming_unsafe_before_commit_roll_back` | HTTP/management reject added links or public modes; alias WAL commit survives; mid-operation changes roll back |
 | Enrollment | `test_management_recovery_cas_replay_and_secret_free_receipt` / `test_null_token_claim_is_operator_only_and_audited` | CAS/audit/same receipt on retry; old token/generation rejected |
 | Credential | `test_accepted_unicode_credential_authenticates_owner` | New/recovered/preserved token authenticates; different token rejected |
 
@@ -126,7 +127,9 @@ This fences cooperating writers. OS supervisor shutdown, complete writer invento
 
 The server pins the validated startup lock dev/inode and checks it at operation entry and before commit. Replacing a lock while the runtime is running is unsupported. A legitimate replacement requires stopping every old writer, updating authority epoch/configuration and starting a new runtime as a PR7 handoff. Replacing the path cannot let an old runtime continue.
 
-Before the first SQLite open and each transaction, existing `-wal`, `-shm` and `-journal` files are also checked. Symlinks, multiple hardlinks, different owners or public modes are rejected with `SQLITE_SIDECAR_UNSAFE`. Credential verification uses constant-time UTF-8 byte comparison without normalization; accepted non-ASCII tokens and tokens preserved by PR3 authenticate with the same value.
+The main database and existing `-wal`, `-shm` and `-journal` files are checked before and immediately after the initial SQLite open, and before/after each transaction's open and before commit. Symlinks, multiple hardlinks, different owners or public modes are rejected with `DATABASE_UNSAFE` for the main database or `SQLITE_SIDECAR_UNSAFE` for sidecars. The same conditions apply after startup; changes detected during an operation roll back the database transaction. Credential verification uses constant-time UTF-8 byte comparison without normalization; accepted non-ASCII tokens and tokens preserved by PR3 authenticate with the same value.
+
+These checks cover cooperating writers that honor the common lock. After the validated descriptors close, SQLite reopens paths by name. Validation/open and final validation/commit are not atomic filesystem operations. A non-cooperating process with the same UID can still change links or paths in those intervals. Post-open and precommit checks narrow the intervals and detect changes, but rollback cannot guarantee reversal of writes already made to an outside sidecar. This race itself was not measured in these tests. Stopping all old writers and installed handoff remain PR7 work.
 
 ## Management socket
 

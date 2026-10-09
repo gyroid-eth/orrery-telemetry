@@ -154,9 +154,10 @@ class GlobalRuntime:
             self.db_identity = (db_info.st_dev, db_info.st_ino)
         finally:
             os.close(db_fd)
-        self.check_sqlite_sidecars()
+        self.check_sqlite_files()
         try:
             with connection(self.paths["database"]) as db:
+                self.check_sqlite_files()
                 metadata = dict(db.execute("SELECT key,value FROM namespace_metadata"))
                 instances = list(db.execute("SELECT instance_id FROM mail_instances"))
                 columns = {row[1] for row in db.execute("PRAGMA table_info(agents)")}
@@ -212,38 +213,47 @@ class GlobalRuntime:
             raise GlobalError("WRITER_FENCED")
         return value
 
-    def check_sqlite_sidecars(self):
-        # SQLite can open these even when the main database itself is safe.
-        # Validate before *any* SQLite connection, including schema inspection.
-        for suffix in ("-wal", "-shm", "-journal"):
+    def check_sqlite_files(self):
+        def safe(info):
+            return (
+                stat.S_ISREG(info.st_mode)
+                and info.st_uid == os.getuid()
+                and not info.st_mode & 0o077
+                and info.st_nlink == 1
+            )
+
+        # Recheck the main database too: its links/mode can change while its
+        # inode remains pinned. SQLite still reopens names, so this cannot be
+        # an atomic filesystem boundary against non-cooperating same-UID code.
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            reason = "SQLITE_SIDECAR_UNSAFE" if suffix else "DATABASE_UNSAFE"
             path = Path(str(self.paths["database"]) + suffix)
             try:
                 info = path.lstat()
             except FileNotFoundError:
-                continue
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or info.st_uid != os.getuid()
-                or info.st_mode & 0o077
-                or info.st_nlink != 1
-            ):
-                raise GlobalError("SQLITE_SIDECAR_UNSAFE")
+                if suffix:
+                    continue
+                raise GlobalError(reason) from None
+            if not suffix and self.db_identity != (info.st_dev, info.st_ino):
+                raise GlobalError("DATABASE_REPLACED")
+            if not safe(info):
+                raise GlobalError(reason)
             try:
                 fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 try:
                     opened = os.fstat(fd)
+                    current = path.lstat()
                     if (
                         (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)
-                        or not stat.S_ISREG(opened.st_mode)
-                        or opened.st_uid != os.getuid()
-                        or opened.st_mode & 0o077
-                        or opened.st_nlink != 1
+                        or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+                        or not safe(opened)
+                        or not safe(current)
                     ):
-                        raise GlobalError("SQLITE_SIDECAR_UNSAFE")
+                        raise GlobalError(reason)
                 finally:
                     os.close(fd)
             except OSError:
-                raise GlobalError("SQLITE_SIDECAR_UNSAFE") from None
+                raise GlobalError(reason) from None
 
     @contextmanager
     def transaction(self, *, write=False, binding=None):
@@ -288,13 +298,18 @@ class GlobalRuntime:
             database_info = self.paths["database"].lstat()
             if self.db_identity != (database_info.st_dev, database_info.st_ino):
                 raise GlobalError("DATABASE_REPLACED")
-            self.check_sqlite_sidecars()
+            self.check_sqlite_files()
             with connection(self.paths["database"], write=write) as db:
+                # Narrow the name-reopen window before issuing operation SQL.
+                self.check_sqlite_files()
                 if write:
                     db.execute("BEGIN IMMEDIATE")
                 if generation(db) != self.candidate_generation:
                     raise GlobalError("CANDIDATE_CHANGED")
                 yield db
+                # These metadata constraints can change without replacing an
+                # inode. Detect them before the connection context commits.
+                self.check_sqlite_files()
                 current_lock = self.paths["authority_lock"].lstat()
                 current_db = self.paths["database"].lstat()
                 if (

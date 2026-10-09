@@ -1,6 +1,7 @@
 """S1 acceptance over actual HTTP, Unix control socket and migrated SQLite."""
 
 import asyncio
+from contextlib import contextmanager
 import fcntl
 import importlib.util
 import json
@@ -621,6 +622,142 @@ def test_private_wal_sidecars_allow_normal_registration(server):
             model="fixture",
         )
         assert result["id"] > 4
+
+
+@pytest.mark.parametrize("layout", ["hardlink", "public-mode"])
+@pytest.mark.parametrize("operation", ["register_agent", "whois", "inspect"])
+def test_main_database_becoming_unsafe_fences_existing_runtime(
+    server, tmp_path, layout, operation
+):
+    database = Path(server["config"]["database"])
+    with connection(database) as db:
+        revision = db.execute(
+            "SELECT value FROM namespace_metadata WHERE key='write_generation'"
+        ).fetchone()[0]
+    outside = tmp_path / "outside-alias.sqlite3"
+    assert server["root"] not in outside.resolve().parents
+    if layout == "hardlink":
+        os.link(database, outside)
+    else:
+        database.chmod(0o644)
+    before = database.read_bytes()
+    try:
+        if operation == "inspect":
+            assert control(server, action="inspect", agent_id=2)["reason"] == "DATABASE_UNSAFE"
+        else:
+            values = owner(server)
+            if operation == "register_agent":
+                values.update(program="fixture", model="must-not-write")
+            with pytest.raises(Exception, match="DATABASE_UNSAFE"):
+                call(server, operation, **values)
+        assert database.read_bytes() == before
+        if layout == "hardlink":
+            assert outside.read_bytes() == before
+    finally:
+        outside.unlink(missing_ok=True)
+        database.chmod(0o600)
+    with connection(database) as db:
+        assert db.execute(
+            "SELECT value FROM namespace_metadata WHERE key='write_generation'"
+        ).fetchone()[0] == revision
+
+
+def test_rejected_main_alias_preserves_independently_committed_wal(server, tmp_path):
+    database = Path(server["config"]["database"])
+    with connection(database, write=True) as db:
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        revision = db.execute(
+            "SELECT value FROM namespace_metadata WHERE key='write_generation'"
+        ).fetchone()[0]
+    outside = tmp_path / "outside-alias.sqlite3"
+    assert server["root"] not in outside.resolve().parents
+    os.link(database, outside)
+    try:
+        with connection(outside, write=True) as alias:
+            alias.execute("PRAGMA wal_autocheckpoint=0")
+            alias.execute("UPDATE agents SET model='alias-committed' WHERE id=2")
+            alias.commit()
+            alias_wal = Path(str(outside) + "-wal")
+            before_wal = alias_wal.read_bytes()
+            with pytest.raises(Exception, match="DATABASE_UNSAFE"):
+                call(
+                    server, "register_agent", **server["binding"], name="SplitOwner",
+                    program="fixture", model="fixture",
+                )
+            assert alias_wal.read_bytes() == before_wal
+            assert alias.execute("SELECT model FROM agents WHERE id=2").fetchone()[0] == "alias-committed"
+    finally:
+        outside.unlink(missing_ok=True)
+    with connection(database) as db:
+        assert db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert db.execute("SELECT model FROM agents WHERE id=2").fetchone()[0] == "alias-committed"
+        assert not db.execute("SELECT id FROM agents WHERE name='SplitOwner'").fetchall()
+        assert db.execute(
+            "SELECT value FROM namespace_metadata WHERE key='write_generation'"
+        ).fetchone()[0] == revision
+
+
+@pytest.mark.parametrize("layout", ["main-hardlink", "main-mode", "wal-mode", "shm-mode", "journal-mode"])
+def test_sqlite_files_becoming_unsafe_before_commit_roll_back(server, tmp_path, layout):
+    runtime = GlobalRuntime(server["root"] / "config.json")
+    database = Path(server["config"]["database"])
+    outside = tmp_path / "late-alias.sqlite3"
+    target = database if layout.startswith("main-") else Path(str(database) + "-" + layout.split("-")[0])
+    try:
+        reason = "DATABASE_UNSAFE" if layout.startswith("main-") else "SQLITE_SIDECAR_UNSAFE"
+        with pytest.raises(GlobalError, match=reason):
+            with runtime.transaction(write=True) as db:
+                db.execute("UPDATE agents SET model='must-not-commit' WHERE id=2")
+                db.execute("UPDATE namespace_metadata SET value='1' WHERE key='write_generation'")
+                if layout == "main-hardlink":
+                    os.link(database, outside)
+                else:
+                    if not target.exists():
+                        target.write_bytes(b"fixture")
+                    target.chmod(0o644)
+    finally:
+        outside.unlink(missing_ok=True)
+        if target == database:
+            database.chmod(0o600)
+        elif target.exists():
+            target.unlink()
+    with connection(database) as db:
+        assert db.execute("SELECT model FROM agents WHERE id=2").fetchone()[0] != "must-not-commit"
+        assert db.execute(
+            "SELECT value FROM namespace_metadata WHERE key='write_generation'"
+        ).fetchone()[0] == "0"
+
+
+@pytest.mark.parametrize("layout", ["main-mode", "wal-mode"])
+def test_unsafe_file_after_sqlite_open_is_rejected_before_operation_sql(
+    server, monkeypatch, layout
+):
+    import agentstack_mail.global_server as module
+
+    runtime = GlobalRuntime(server["root"] / "config.json")
+    database = Path(server["config"]["database"])
+    target = database if layout == "main-mode" else Path(str(database) + "-wal")
+    original_connection = module.connection
+
+    @contextmanager
+    def changed_after_open(path, *, write=False):
+        with original_connection(path, write=write) as db:
+            if target != database:
+                target.write_bytes(b"fixture")
+            target.chmod(0o644)
+            yield db
+
+    monkeypatch.setattr(module, "connection", changed_after_open)
+    try:
+        reason = "DATABASE_UNSAFE" if target == database else "SQLITE_SIDECAR_UNSAFE"
+        with pytest.raises(GlobalError, match=reason):
+            with runtime.transaction(write=True):
+                pytest.fail("unsafe open reached operation SQL")
+    finally:
+        if target == database:
+            database.chmod(0o600)
+        else:
+            target.unlink(missing_ok=True)
 
 
 def test_unmigrated_database_rejected_without_schema_changes(server):

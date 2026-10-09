@@ -102,6 +102,7 @@ HOME="$check_root/home" TMUX_TMPDIR="$check_root/tmux" \
 | 古い binding / root | `test_stale_wire_binding_rejects_http_and_management` / `test_common_authority_fences_current_http_management_and_restarted_wrapper` | STALE_RUNTIME_BINDING / WRITER_FENCED |
 | updater / lock差し替え | `test_updater_exclusive_gate_prevents_new_request` / `test_replaced_startup_lock_fences_http_and_management` | EX lock中は拒否、別inodeでも拒否しrevision不変 |
 | SQLite sidecar | `test_sqlite_sidecars_cannot_write_outside_isolation` | startup/HTTPでunsafeを拒否、外側sentinel不変 |
+| 起動後の main DB / commit 前 | `test_main_database_becoming_unsafe_fences_existing_runtime` / `test_rejected_main_alias_preserves_independently_committed_wal` / `test_sqlite_files_becoming_unsafe_before_commit_roll_back` | hardlink/mode変更でHTTP/管理を拒否、別名WALのcommit保持、途中変更はrollback |
 | enrollment | `test_management_recovery_cas_replay_and_secret_free_receipt` / `test_null_token_claim_is_operator_only_and_audited` | CAS/監査/同receipt再実行、旧token・古いgeneration拒否 |
 | credential | `test_accepted_unicode_credential_authenticates_owner` | 新規/復旧/保存済みtokenでwhois成功、別token拒否 |
 
@@ -129,7 +130,9 @@ authority の正本は `kind=orrery-global-authority-v1`、`phase=active`、`roo
 
 server は起動時に検査した lock の dev/inode を固定し、操作の開始と commit 前に同じものか確かめます。起動中に lock を交換する更新はできません。正規の交換は旧 writer を全て終了させ、authority epoch と設定を更新して新 runtime を起動する handoff として PR7 で扱います。単に lock を交換して旧 runtime を継続させません。
 
-SQLite の初回 open と各 transaction の前には、既存の `-wal`・`-shm`・`-journal` も検査します。symlink、複数 hardlink、異なる owner、公開 mode は `SQLITE_SIDECAR_UNSAFE` で拒否します。credential は UTF-8 bytes の定時間比較で照合し、保存値を正規化しません。受け付けた非 ASCII token と PR3 が保存した token も、同値で認証できます。
+SQLite の初回 open 前・直後と、各 transaction の open 前・直後・commit 前に、main DB と既存の `-wal`・`-shm`・`-journal` を検査します。symlink、複数 hardlink、異なる owner、公開 mode は main DB なら `DATABASE_UNSAFE`、sidecar なら `SQLITE_SIDECAR_UNSAFE` で拒否します。起動後も同じ基準を使い、途中で検出した変更は DB transaction を rollback します。credential は UTF-8 bytes の定時間比較で照合し、保存値を正規化しません。受け付けた非 ASCII token と PR3 が保存した token も、同値で認証できます。
+
+この検査は協調する writer が共通 lock を守る範囲を対象とします。検査した fd を閉じた後で SQLite は path を開き直すため、検査と open の間、最後の検査と commit の間は filesystem に対して原子的ではありません。同じ UID の非協調 process がその間に link や path を変える競合は残ります。直後・commit 前の再検査はこの窓を狭めて異常を検出しますが、既に隔離外の sidecar に行われた書込みまで rollback で取り消せる保証はありません。この競合自体は今回の試験では実測していません。旧 writer の全停止と実 handoff は PR7 の対象です。
 
 ## 管理 socket
 
