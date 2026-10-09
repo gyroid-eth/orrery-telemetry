@@ -21,11 +21,13 @@ Only before new registration, set identity to null and use `agentstack-runtime-c
 
 ## Entrypoints
 
-`agentstack-reregister` reconnects by stored ID/token and displays the canonical server name. Deprecated name arguments do not route. Contact policy is called only when advertised; S1 has no such capability. `agentstack-await-reply` reads the bound owner's inbox and retains sender/after-ID/timeout semantics, without read/ack mutation or signal clearing in S1.
+`agentstack-reregister` reconnects by stored ID/token and displays the canonical server name. Deprecated name arguments do not route. Explicit program/model arguments, environment settings and provider models are honored and saved as context `registration_metadata` after success. An unspecified reconnect resends these saved values. Without saved metadata, S1 whois cannot supply program/model: reconnect does not call register, returns `reconnect_mode=observe-only` / `registration_verified=false`, and preserves the server row. Contact policy is called only when advertised; S1 has no such capability. `agentstack-await-reply` reads the bound owner's inbox and retains sender/after-ID/timeout semantics, without read/ack mutation or signal clearing in S1. Transient `TRANSPORT_FAILED` retries until timeout; authority changes fail immediately.
 
 Sourced provider bootstraps export the canonical identity. Explicit global `agent-start`, `agent-start-codex` and `agent-start-gemini` register through the context and execute in the current terminal; this preparation path does not create a new tmux session. Legacy picker/tmux startup remains unchanged. Tests use shell provider stubs, never actual model processes.
 
-Name resolution and session policy validate the same context. New session records use schema 3 / `global-self` with instance, stable agent ID, credential generation, authority epoch and window. A foreign registration response cannot bind the current session. Legacy schema 2 remains on its existing path. Read-only inspect reports mapped windows as `window_verification=local-only-server-unverified`, without ready=true. Reconnect verifies them through S1 register and reports `server-verified-by-register`. A read-only server window capability is an S2 candidate.
+Name resolution and session policy validate the same context. New session records use schema 3 / `global-self` with instance, stable agent ID, credential generation, authority epoch and window. A foreign registration response cannot bind the current session. Legacy schema 2 remains on its existing path. Read-only inspect reports mapped windows as `window_verification=local-only-server-unverified`, without ready=true. Reconnect with explicit or saved program/model verifies them through S1 register and reports `server-verified-by-register`. Observe-only reconnect leaves them server-unverified. A read-only server window capability and registration refresh without changing program/model are S2 candidates.
+
+Credential, authority, lock, context, management socket and pending journal paths are checked for equal paths, resolved paths and device/inode identities before and after calls. Aliases fail with `CONTEXT_PATH_ROLE_CONFLICT`; profiles cannot overwrite these roles either. A broken implicit context symlink also fails closed instead of selecting legacy mode.
 
 ## Operator recovery and profiles
 
@@ -107,4 +109,4 @@ finally:
 | Gemini stdio | Authority validation and fixed rejection reason | Stdio proxy: PR4c |
 | Native Windows launcher | Context/authority inspection and fixed Unix-contract rejection | Global transport needs separate platform design; WSL uses the Unix client |
 
-A read-only server window capability is an S2 candidate. PR4a does not change the S1 fixture or wire for its own convenience.
+Observe-only reconnect leaves them server-unverified. A read-only server window capability and registration refresh without changing program/model are S2 candidates. PR4a does not change the S1 fixture or wire for its own convenience.

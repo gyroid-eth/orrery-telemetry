@@ -194,6 +194,13 @@ def main(argv: list[str] | None = None) -> int:
                     "include_bodies": True,
                 },
             )
+        except runtime_api['ClientError'] as exc:
+            if str(exc) != 'TRANSPORT_FAILED':
+                raise
+            # A network outage is retryable; authority changes still fail closed.
+            with client.fence():
+                pass
+            response = None
         except (urllib.error.URLError, OSError, ValueError):
             response = None
         return _messages(response) if response is not None else None

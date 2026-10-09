@@ -480,8 +480,8 @@ def wait_until_ready_and_submit(spec: dict, state: Path, ready_timeout: float) -
 
 
 def resume(state: Path, ready_timeout: float) -> dict:
-    reject_global_preparation()
     """Continue a non-interactive launch after its trust decision is made."""
+    reject_global_preparation()
     if not math.isfinite(ready_timeout) or not 1 <= ready_timeout <= 300:
         raise ValueError('Ready timeout must be between 1 and 300 seconds')
     require_private(state)

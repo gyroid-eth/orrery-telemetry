@@ -78,7 +78,7 @@ def run(state, tool, *args, bash=False, extra=None):
 def test_real_s1_reconnect_ignores_old_scope_and_name(prepared):
     c = client(prepared)
     before = c.call('health_check')['mutation_revision']
-    row = c.reconnect()
+    row = c.reconnect(program='fixture', model='fixture')
     assert row['agent_id'] == 1
     assert row['name'] != 'UnrelatedName'
     assert c.call('health_check')['mutation_revision'] == before + 1
@@ -264,10 +264,10 @@ def test_confirmed_window_owner_mapping(prepared, valid):
     private(credential_path, {**api['read_json'](credential_path), **config['identity']})
     private(prepared['client_path'], config)
     if valid:
-        assert client(prepared).reconnect()['window_uuid'] == row['window_uuid']
+        assert client(prepared).reconnect(program='fixture', model='fixture')['window_uuid'] == row['window_uuid']
     else:
         with pytest.raises(ClientError, match='WINDOW_OWNER_MISMATCH'):
-            client(prepared).reconnect()
+            client(prepared).reconnect(program='fixture', model='fixture')
 
 
 def test_stale_replayed_receipt_cannot_activate_old_token(prepared):
@@ -360,7 +360,7 @@ def test_window_inspect_reports_local_only_and_not_ready(prepared):
     c = client(prepared)
     observed = c.observe()
     assert observed['window_verification'] == 'local-only-server-unverified'
-    assert c.reconnect()['window_verification'] == 'server-verified-by-register'
+    assert c.reconnect(program='fixture', model='fixture')['window_verification'] == 'server-verified-by-register'
     profile = prepared['root'] / 'window-profile.json'
     private(profile, {'kind': api['PROFILE_KIND'], 'client_config': str(c.path), **observed})
     inspected = api['profile_operation'](profile, 'inspect')
@@ -566,6 +566,12 @@ def test_operator_daemon_creation_uses_shared_global_profile_without_project(pre
             '--journal', str(profile), '--agent-id', str(row['agent_id']), '--operator')
     assert r.returncode == 0, r.stderr
     assert client(prepared).observe()['agent_id'] == row['agent_id']
+    r = run(prepared, 'bin/agentstack-persistent', 'reconnect', '--profile', str(profile))
+    assert r.returncode == 0, r.stderr
+    from agentstack_mail.namespace_state_io import connection
+    with connection(Path(prepared['config']['database'])) as db:
+        metadata = tuple(db.execute('SELECT program, model FROM agents WHERE id=?', (row['agent_id'],)).fetchone())
+    assert metadata == ('daemon', 'deterministic')
 
 
 def test_uncertain_registration_finalizes_same_id_without_register_retry(prepared, monkeypatch):
@@ -590,3 +596,146 @@ def test_uncertain_registration_finalizes_same_id_without_register_retry(prepare
     assert row['agent_id'] == registered['agent_id']
     assert s1.call(prepared, 'health_check')['mutation_revision'] == revision
     assert c.local_owner() == registered['registration_token']
+
+
+def metadata_row(state):
+    from agentstack_mail.namespace_state_io import connection
+    with connection(Path(state['config']['database'])) as db:
+        return tuple(db.execute('SELECT program, model FROM agents WHERE id=1').fetchone())
+
+
+@pytest.mark.parametrize('source', ['position', 'environment'])
+def test_reregister_respects_explicit_metadata(prepared, source):
+    if source == 'position':
+        result = run(prepared, 'bin/agentstack-reregister', 'obsolete-name', 'claude-code', 'explicit-model', bash=True)
+    else:
+        result = run(prepared, 'bin/agentstack-reregister', 'obsolete-name', bash=True,
+                     extra={'AGENTSTACK_REREGISTER_PROGRAM': 'claude-code',
+                            'AGENTSTACK_REREGISTER_MODEL': 'explicit-model'})
+    assert result.returncode == 0, result.stderr
+    assert metadata_row(prepared) == ('claude-code', 'explicit-model')
+    assert api['read_json'](prepared['client_path'])['registration_metadata'] == {
+        'program': 'claude-code', 'model': 'explicit-model'}
+
+
+def test_unspecified_reconnect_observes_without_overwriting_unknown_metadata(prepared, monkeypatch):
+    c = client(prepared)
+    before = metadata_row(prepared)
+    original = c.call
+    def forbid_register(tool, *args, **kwargs):
+        assert tool != 'register_agent'
+        return original(tool, *args, **kwargs)
+    monkeypatch.setattr(c, 'call', forbid_register)
+    row = c.reconnect()
+    assert row['reconnect_mode'] == 'observe-only'
+    assert row['registration_verified'] is False
+    assert metadata_row(prepared) == before
+
+
+def test_saved_metadata_reconnect_resends_without_relabeling(prepared, monkeypatch):
+    c = client(prepared)
+    c.reconnect(program='claude-code', model='saved-model')
+    c = client(prepared)
+    original = c.call
+    sent = []
+    def capture(tool, args=None):
+        if tool == 'register_agent':
+            sent.append(args)
+        return original(tool, args)
+    monkeypatch.setattr(c, 'call', capture)
+    assert c.reconnect()['reconnect_mode'] == 'register'
+    assert sent == [{'program': 'claude-code', 'model': 'saved-model'}]
+    assert metadata_row(prepared) == ('claude-code', 'saved-model')
+
+
+@pytest.mark.parametrize('provider,program', [('claude', 'claude-code'), ('codex', 'codex'), ('gemini', 'antigravity')])
+def test_exports_respects_provider_model_and_quotes_environment_names(prepared, monkeypatch, provider, program):
+    marker = prepared['root'] / 'shell-injection-marker'
+    malicious = 'AGENTSTACK_LOOKUP_X;touch ' + str(marker) + ';:'
+    monkeypatch.setenv(malicious, 'unused')
+    monkeypatch.setenv('AGENTSTACK_' + provider.upper() + '_MODEL', 'provider-specific-model')
+    exports = client(prepared).exports(provider)
+    result = subprocess.run(['/bin/bash', '-c', exports + '; printf shell-safe'],
+                            text=True, capture_output=True, env=os.environ, timeout=10)
+    assert result.returncode == 0
+    assert result.stdout == 'shell-safe'
+    assert not marker.exists()
+    assert metadata_row(prepared) == (program, 'provider-specific-model')
+
+
+def test_daemon_profile_reconnect_preserves_registration_metadata(prepared):
+    c = client(prepared)
+    c.reconnect(program='daemon', model='deterministic')
+    profile = prepared['root'] / 'daemon-profile.json'
+    c.save_profile(profile)
+    result = run(prepared, 'bin/agentstack-persistent', 'reconnect', '--profile', str(profile))
+    assert result.returncode == 0, result.stderr
+    assert metadata_row(prepared) == ('daemon', 'deterministic')
+
+
+def test_global_await_retries_transport_until_timeout(prepared):
+    import time
+    config = prepared['client_config']
+    config['mcp_url'] = 'http://127.0.0.1:1/mcp'
+    private(prepared['client_path'], config)
+    start = time.monotonic()
+    result = run(prepared, 'bin/agentstack-await-reply', '--agent-name', 'obsolete',
+                 '--timeout', '0.4', '--interval', '0.1')
+    assert result.returncode == 1, result.stderr
+    assert time.monotonic() - start >= 0.4
+    assert 'mail server unreachable for the whole wait' in result.stderr
+
+
+def test_global_await_outage_does_not_retry_fenced_authority(prepared):
+    config = prepared['client_config']
+    config['mcp_url'] = 'http://127.0.0.1:1/mcp'
+    private(prepared['client_path'], config)
+    authority = Path(config['authority'])
+    private(authority, {**api['read_json'](authority), 'phase': 'quiescing'})
+    result = run(prepared, 'bin/agentstack-await-reply', '--agent-name', 'obsolete',
+                 '--timeout', '10', '--interval', '1')
+    assert result.returncode == 2
+    assert 'WRITER_FENCED' in result.stderr
+
+
+@pytest.mark.parametrize('role', ['authority', 'authority_lock', 'management_socket', 'client_context'])
+def test_credential_role_overlap_rejected_before_server_recovery(prepared, role):
+    config = prepared['client_config']
+    target = prepared['client_path'] if role == 'client_context' else Path(config[role])
+    config['credential_file'] = str(target)
+    authority = Path(config['authority'])
+    authority_before = authority.read_bytes()
+    with pytest.raises(ClientError, match='CONTEXT_PATH_ROLE_CONFLICT'):
+        private(prepared['client_path'], config)
+        client(prepared).enroll('recover', 'overlap-recovery', config['identity']['credential_generation'])
+    assert authority.read_bytes() == authority_before
+    inspected = s1.control(prepared, action='inspect', agent_id=1)
+    assert inspected['credential_generation'] == config['identity']['credential_generation']
+
+
+def test_profile_cannot_overwrite_authority_or_credentials(prepared):
+    c = client(prepared)
+    for path in [c.authority, c.path, c.credential, c.lock]:
+        before = path.read_bytes()
+        with pytest.raises(ClientError, match='PROFILE_PATH_ROLE_CONFLICT'):
+            c.save_profile(path)
+        assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('link_kind', ['symlink', 'hardlink'])
+def test_late_credential_role_alias_rejected_before_cas(prepared, link_kind):
+    c = client(prepared)
+    before = c.management('inspect', agent_id=1)['credential_generation']
+    authority_before = c.authority.read_bytes()
+    c.credential.unlink()
+    if link_kind == 'symlink':
+        c.credential.symlink_to(c.authority)
+    else:
+        os.link(c.authority, c.credential)
+    try:
+        with pytest.raises(ClientError, match='CONTEXT_PATH_ROLE_CONFLICT'):
+            c.enroll('recover', 'late-alias-recovery', before)
+        assert c.authority.read_bytes() == authority_before
+    finally:
+        c.credential.unlink()
+    assert s1.control(prepared, action='inspect', agent_id=1)['credential_generation'] == before

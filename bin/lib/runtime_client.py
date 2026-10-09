@@ -180,6 +180,7 @@ class RuntimeClient:
             raise ClientError('ENDPOINT_NOT_LOCAL')
         self.endpoint = c['mcp_url']
         self.credential = absolute(c['credential_file'])
+        self.validate_path_roles()
         self.identity = c.get('identity')
         if self.identity is not None and (not isinstance(self.identity, dict)
                 or not integer(self.identity.get('agent_id'), 1)
@@ -189,6 +190,23 @@ class RuntimeClient:
                 or ('window_row_id' in self.identity and (not integer(self.identity['window_row_id'], 1)
                     or not isinstance(self.identity['window_uuid'], str) or not self.identity['window_uuid']))):
             raise ClientError('WINDOW_BINDING_INVALID')
+
+    def validate_path_roles(self):
+        # Reject role aliases before any server mutation, including recovery.
+        roles = [self.path, self.authority, self.lock, self.credential,
+                 absolute(self.config['management_socket']),
+                 self.credential.with_suffix('.registration-pending.json'),
+                 self.credential.with_suffix('.enrollment-pending.json')]
+        resolved = [path.resolve() for path in roles]
+        if len(set(resolved)) != len(resolved):
+            raise ClientError('CONTEXT_PATH_ROLE_CONFLICT')
+        identities = []
+        for path in roles:
+            if path.exists():
+                info = path.stat()
+                identities.append((info.st_dev, info.st_ino))
+        if len(set(identities)) != len(identities):
+            raise ClientError('CONTEXT_PATH_ROLE_CONFLICT')
 
     def _authority(self):
         a = read_json(self.authority)
@@ -217,6 +235,7 @@ class RuntimeClient:
             except BlockingIOError as exc:
                 raise ClientError('WRITER_FENCED') from exc
             def check():
+                self.validate_path_roles()
                 current = os.lstat(self.lock)
                 if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
                     raise ClientError('AUTHORITY_LOCK_REPLACED')
@@ -343,10 +362,27 @@ class RuntimeClient:
                 'runtime_dir': str(self.runtime_dir), 'window_verification': 'local-only-server-unverified' if 'window_row_id' in self.identity else 'not-mapped',
                 **{k: self.identity[k] for k in ('window_row_id', 'window_uuid') if k in self.identity}}
 
-    def reconnect(self, *, program='codex', model='codex'):
-        self.call('register_agent', {'program': program, 'model': model})
+    def reconnect(self, *, program=None, model=None):
+        metadata = self.config.get('registration_metadata', {})
+        if program is None:
+            program = metadata.get('program')
+        if model is None:
+            model = metadata.get('model')
+        registered = program is not None or model is not None
+        if registered:
+            if not all(isinstance(v, str) and v for v in (program, model)):
+                raise ClientError('REGISTRATION_METADATA_REQUIRED')
+            self.call('register_agent', {'program': program, 'model': model})
+            with self.fence():
+                self.config = {**self.config, 'registration_metadata': {'program': program, 'model': model}}
+                atomic_json(self.path, self.config)
+                self.raw = read_private(self.path)
+        # S1 whois omits program/model. Without locally known metadata, only
+        # authenticate/observe; never invent labels that overwrite the server.
         observation = self.observe()
-        if 'window_row_id' in self.identity:
+        observation['registration_verified'] = registered
+        observation['reconnect_mode'] = 'register' if registered else 'observe-only'
+        if registered and 'window_row_id' in self.identity:
             observation['window_verification'] = 'server-verified-by-register'
         self.apply_contact_policy()
         return observation
@@ -392,11 +428,13 @@ class RuntimeClient:
                 raise ClientError('MANAGEMENT_IDENTITY_MISMATCH')
             return reply
 
-    def activate_credential(self, token, row):
+    def activate_credential(self, token, row, metadata=None):
         identity = {k: row[k] for k in ('agent_id', 'credential_generation', 'name')}
         if self.identity:
             identity.update({k: self.identity[k] for k in ('window_row_id', 'window_uuid') if k in self.identity})
         config = {**self.config, 'identity': identity}
+        if metadata is not None:
+            config['registration_metadata'] = metadata
         credential = {'kind': 'orrery-global-credential-v1', **self.binding,
                       **identity, 'registration_token': token}
         with self.fence():
@@ -419,7 +457,7 @@ class RuntimeClient:
             if journal.exists():
                 raise ClientError('REGISTRATION_PENDING_OPERATOR_REQUIRED')
             token = secrets.token_urlsafe(32)
-            atomic_json(journal, {'name': name, 'registration_token': token, **self.binding})
+            atomic_json(journal, {'name': name, 'program': program, 'model': model, 'registration_token': token, **self.binding})
             _, schemas = self.capabilities()
             if 'register_agent' not in schemas:
                 raise ClientError('CAPABILITY_UNAVAILABLE')
@@ -438,8 +476,8 @@ class RuntimeClient:
                     or row.get('name') != name or row.get('registration_token') != token):
                 raise ClientError('REGISTRATION_RESPONSE_MISMATCH')
             atomic_json(journal, {'row': {k: v for k, v in row.items() if k != 'registration_token'},
-                                  'registration_token': token, **self.binding})
-        self.activate_credential(token, row)
+                                  'program': program, 'model': model, 'registration_token': token, **self.binding})
+        self.activate_credential(token, row, {'program': program, 'model': model})
         journal.unlink()
         return self.observe()
 
@@ -447,6 +485,13 @@ class RuntimeClient:
         path = absolute(str(path))
         if not path.is_relative_to(self.isolation) or not path.resolve().is_relative_to(self.isolation.resolve()):
             raise ClientError('PROFILE_OUTSIDE_ISOLATION')
+        roles = [self.path, self.authority, self.lock, self.credential,
+                 absolute(self.config['management_socket']),
+                 self.credential.with_suffix('.registration-pending.json'),
+                 self.credential.with_suffix('.enrollment-pending.json')]
+        if any(path.resolve() == target.resolve() or (path.exists() and target.exists()
+                   and path.samefile(target)) for target in roles):
+            raise ClientError('PROFILE_PATH_ROLE_CONFLICT')
         row = self.observe()
         value = {'kind': PROFILE_KIND, 'client_config': str(self.path), **row}
         with self.fence():
@@ -476,7 +521,8 @@ class RuntimeClient:
                         ('server_instance_id', 'expected_server_instance_id'),
                         ('candidate_generation', 'candidate_generation'), ('authority_epoch', 'authority_epoch')))):
                 raise ClientError('REGISTRATION_IDENTITY_MISMATCH')
-        self.activate_credential(token, row)
+        metadata = {k: saved[k] for k in ('program', 'model') if k in saved}
+        self.activate_credential(token, row, metadata if len(metadata) == 2 else None)
         pending.unlink()
         return self.observe()
 
@@ -549,7 +595,9 @@ class RuntimeClient:
 
     def exports(self, provider):
         programs = {'claude': 'claude-code', 'codex': 'codex', 'gemini': 'antigravity'}
-        row = self.reconnect(program=programs[provider], model=provider)
+        defaults = {'claude': 'claude-code', 'codex': 'codex', 'gemini': 'gemini-3.8-flash-high'}
+        model = os.environ.get('AGENTSTACK_' + provider.upper() + '_MODEL') or defaults[provider]
+        row = self.reconnect(program=programs[provider], model=model)
         values = {'AGENT_NAME': row['name'], 'AGENTSTACK_AGENT_ID': str(row['agent_id']),
                   'AGENTSTACK_CLIENT_CONFIG': str(self.path), 'AGENTSTACK_RUNTIME_DIR': str(self.runtime_dir),
                   'AGENTSTACK_MCP_URL': self.endpoint, 'AGENTSTACK_RUNTIME_MODE': self.mode}
@@ -563,7 +611,7 @@ class RuntimeClient:
                  'AGENTSTACK_PROXY_AGENT_NAME', 'AGENTSTACK_PROXY_TOKEN_FILE', 'AGENTSTACK_PROXY_PROGRAM',
                  'AGENTSTACK_CODEX_LAUNCH_BINDING', 'AGENTSTACK_CODEX_LAUNCH_ID', 'AGENTSTACK_CODEX_LAUNCH_KIND']
         stale.extend(k for k in os.environ if k.startswith('AGENTSTACK_LOOKUP_'))
-        return 'unset ' + ' '.join(stale) + ';\n' + '\n'.join(
+        return 'unset ' + ' '.join(shlex.quote(key) for key in stale) + ';\n' + '\n'.join(
             'export ' + key + '=' + shlex.quote(value) for key, value in values.items())
 
     def launch(self, provider, directory):
@@ -644,7 +692,8 @@ def main(argv=None):
         if a.operation == 'observe':
             value = client.observe()
         elif a.operation == 'reconnect':
-            value = client.reconnect()
+            value = client.reconnect(program=a.args[0] if a.args else None,
+                                     model=a.args[1] if len(a.args) > 1 else None)
         elif a.operation == 'bootstrap':
             print(client.exports(a.args[0]))
             return 0

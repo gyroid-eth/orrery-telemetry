@@ -124,7 +124,8 @@ def main():
         return EXIT_NOT_APPLICABLE
 
     helper = Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'
-    if os.environ.get('AGENTSTACK_CLIENT_CONFIG') or (helper.parents[2] / 'runtime-client.json').exists():
+    implicit_context = helper.parents[2] / 'runtime-client.json'
+    if os.environ.get('AGENTSTACK_CLIENT_CONFIG') or implicit_context.exists() or implicit_context.is_symlink():
         try:
             api = runpy.run_path(str(helper))
             client = api['configured']()

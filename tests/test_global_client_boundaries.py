@@ -53,3 +53,34 @@ def test_native_global_has_fixed_reason_before_legacy_registration(windows, tmp_
 def test_native_absent_context_keeps_legacy(windows, monkeypatch):
     monkeypatch.delenv('AGENTSTACK_CLIENT_CONFIG', raising=False)
     assert windows.reject_global_preparation() is None
+
+
+def test_implicit_broken_context_never_writes_legacy_session_index(tmp_path):
+    import shutil
+    import subprocess
+
+    installed = tmp_path / 'installed'
+    for relative in ('hooks/record-session-index.py', 'bin/lib/runtime_client.py'):
+        target = installed / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, target)
+    (installed / 'runtime-client.json').symlink_to(installed / 'missing-context.json')
+    home = tmp_path / 'home'
+    home.mkdir()
+    runtime = home / 'runtime'
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(('AGENTSTACK_', 'AGS_'))}
+    env.update(HOME=str(home), AGENTSTACK_RUNTIME_DIR=str(runtime),
+               AGENTSTACK_REGISTERING_AGENT='Fixture', AGENTSTACK_REGISTERING_SOURCE='env')
+    payload = {'session_id': 'broken-context-session',
+               'tool_response': {'id': 1, 'name': 'Fixture'},
+               'tool_input': {'project_key': 'legacy-project'}}
+    hook = subprocess.run([sys.executable, str(installed / 'hooks/record-session-index.py')],
+                          input=json.dumps(payload), text=True, capture_output=True,
+                          env=env, timeout=10)
+    mode = subprocess.run([sys.executable, str(installed / 'bin/lib/runtime_client.py'), 'mode'],
+                          text=True, capture_output=True, env=env, timeout=10)
+    assert mode.returncode == 2
+    assert 'PRIVATE_FILE_UNAVAILABLE' in mode.stderr
+    assert hook.returncode == 5
+    assert not (runtime / 'session_index').exists()
