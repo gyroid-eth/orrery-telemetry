@@ -39,6 +39,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", metavar="HOST", help="loopback bind host")
     parser.add_argument("--port", metavar="PORT", type=int, help="HTTP listen port")
     parser.add_argument("--path", metavar="PATH", help="MCP HTTP path")
+    parser.add_argument(
+        "--global-config",
+        metavar="FILE",
+        help="explicit isolated global S1 preparation configuration",
+    )
     return parser
 
 
@@ -88,7 +93,13 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
         )
 
-    _build_mcp_server().run(
+    if args.global_config is None:
+        server = _build_mcp_server()
+    else:
+        from .global_server import build_global_server
+
+        server = build_global_server(args.global_config)
+    server.run(
         transport="streamable-http",
         host=host,
         port=port,

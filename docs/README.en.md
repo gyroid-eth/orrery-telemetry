@@ -55,6 +55,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Namespace contract and migration planning](project-removal-plan.en.md) — PR1 candidate APIs and gates; defaults stay unchanged and cutover belongs to later PRs.
 - [Absolute reservation candidate](absolute-reservations.en.md) — PR2 shared normalizer, authenticated isolated store, client adapters and per-lease activity/GC; legacy mode remains the default.
 - [Candidate Mail and delivery state migration](namespace-state-migration.en.md) — PR3 isolated snapshots, persistent stores and phase recovery; activation stays false.
+- [Global server S1 preparation](global-server.en.md) — Isolated HTTP registration/reconnection, inbox, enrollment and authority epoch; legacy mode stays default.
 - [Mail update design](agentstack-mail-update-design.en.md) — Rationale and open decisions; use the update procedure for operations.
 - [Mail performance gate design](agentstack-mail-performance-gate.en.md) — Design-only benchmark and adoption criteria, not a deployed benchmark procedure.
 - [Claim/enrollment design](agentstack-mail-claim-enrollment-design.en.md) — Enrollment design supporting the product-decision ledger.
