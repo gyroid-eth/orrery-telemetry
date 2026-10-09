@@ -242,9 +242,31 @@ def server(prepared):
         )
         try:
             deadline = time.monotonic() + 25
-            while not Path(prepared["config"]["management_socket"]).exists():
-                if proc.poll() is not None or time.monotonic() > deadline:
-                    pytest.fail((prepared["root"] / "server.log").read_text())
+            last_error = "HTTP health has not answered"
+            while True:
+                remaining = deadline - time.monotonic()
+                if proc.poll() is not None or remaining <= 0:
+                    pytest.fail(
+                        f"Server startup failed: {last_error}\n"
+                        + (prepared["root"] / "server.log").read_text()
+                    )
+                if Path(prepared["config"]["management_socket"]).exists():
+                    try:
+                        health = asyncio.run(
+                            asyncio.wait_for(
+                                http(prepared, "health_check"),
+                                timeout=min(1, remaining),
+                            )
+                        )
+                    except Exception as exc:
+                        last_error = f"{type(exc).__name__}: {exc}"
+                    else:
+                        if (health.get("status"), health.get("runtime_profile")) == (
+                            "ok",
+                            "s2a-v1",
+                        ):
+                            break
+                        last_error = f"Unexpected HTTP health: {health!r}"
                 time.sleep(0.05)
             yield prepared
         finally:
@@ -255,6 +277,42 @@ def server(prepared):
                 proc.kill()
                 proc.wait(timeout=5)
             assert not Path(prepared["config"]["management_socket"]).exists()
+
+
+def test_server_fixture_waits_for_http_after_management_socket(tmp_path, monkeypatch):
+    management = tmp_path / "management.sock"
+    management.touch()
+    state = {
+        "root": tmp_path,
+        "config": {"management_socket": str(management)},
+        "config_path": tmp_path / "server-config.json",
+    }
+    calls = []
+
+    class Process:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            management.unlink()
+
+        def wait(self, timeout):
+            return 0
+
+    async def delayed_http(state, name, args=None):
+        calls.append(name)
+        if len(calls) < 3:
+            raise ConnectionRefusedError("synthetic HTTP startup delay")
+        return {"status": "ok", "runtime_profile": "s2a-v1"}
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.setitem(globals(), "http", delayed_http)
+    fixture = server.__wrapped__(state)
+    try:
+        assert next(fixture) is state
+        assert calls == ["health_check"] * 3
+    finally:
+        fixture.close()
 
 
 async def http(state, name, args=None):
