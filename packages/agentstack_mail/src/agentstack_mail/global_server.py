@@ -94,13 +94,17 @@ def instant(value):
 
 
 class GlobalRuntime:
+    config_kind = "orrery-global-server-s1"
+    schema_version = 2
+    tools = TOOLS
+
     def __init__(self, config):
         self.config_path = Path(config)
         self.config_raw = private(self.config_path)
         self.config = document(self.config_path)
         cfg = self.config
         if (
-            cfg.get("kind") != "orrery-global-server-s1"
+            cfg.get("kind") != self.config_kind
             or cfg.get("activation_enabled") is not False
         ):
             raise GlobalError("ISOLATED_CONFIG_REQUIRED")
@@ -141,6 +145,7 @@ class GlobalRuntime:
             self.paths[key] = path
         if self.runtime_root not in self.paths["database"].resolve().parents:
             raise GlobalError("DATABASE_OUTSIDE_RUNTIME_ROOT")
+        self.initial_preflight()
         db_fd = os.open(self.paths["database"], os.O_RDONLY | os.O_NOFOLLOW)
         try:
             db_info = os.fstat(db_fd)
@@ -158,6 +163,8 @@ class GlobalRuntime:
         try:
             with connection(self.paths["database"]) as db:
                 self.check_sqlite_files()
+                if self.schema_version == 3:
+                    db.execute("BEGIN DEFERRED")
                 metadata = dict(db.execute("SELECT key,value FROM namespace_metadata"))
                 instances = list(db.execute("SELECT instance_id FROM mail_instances"))
                 columns = {row[1] for row in db.execute("PRAGMA table_info(agents)")}
@@ -165,7 +172,8 @@ class GlobalRuntime:
                     row[1] for row in db.execute("PRAGMA table_info(messages)")
                 }
                 if (
-                    db.execute("PRAGMA user_version").fetchone()[0] != 2
+                    db.execute("PRAGMA user_version").fetchone()[0]
+                    != self.schema_version
                     or metadata.get("activation") != "false"
                     or len(instances) != 1
                     or not {"lookup_key", "legacy_project_id", "credential_generation"}
@@ -265,30 +273,13 @@ class GlobalRuntime:
         except OSError:
             raise GlobalError("AUTHORITY_LOCK_UNAVAILABLE") from None
         try:
-            info = os.fstat(fd)
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or info.st_uid != os.getuid()
-                or info.st_mode & 0o077
-                or info.st_nlink != 1
-            ):
-                raise GlobalError("AUTHORITY_LOCK_UNSAFE")
-            identity = (info.st_dev, info.st_ino)
-            if self.lock_identity is None:
-                self.lock_identity = identity
-            elif identity != self.lock_identity:
-                raise GlobalError("AUTHORITY_LOCK_REPLACED")
+            self.check_authority_lock(fd)
             try:
                 fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise GlobalError("WRITER_FENCED") from None
             before = self.authority()
-            lock_path_info = self.paths["authority_lock"].lstat()
-            if (info.st_dev, info.st_ino) != (
-                lock_path_info.st_dev,
-                lock_path_info.st_ino,
-            ):
-                raise GlobalError("AUTHORITY_LOCK_REPLACED")
+            self.check_authority_lock(fd)
             if private(self.config_path) != self.config_raw:
                 raise GlobalError("CONFIG_CHANGED")
             if binding is not None:
@@ -304,19 +295,21 @@ class GlobalRuntime:
                 self.check_sqlite_files()
                 if write:
                     db.execute("BEGIN IMMEDIATE")
+                elif self.schema_version == 3:
+                    db.execute("BEGIN DEFERRED")
                 if generation(db) != self.candidate_generation:
                     raise GlobalError("CANDIDATE_CHANGED")
+                self.before_operation(db, write=write)
                 yield db
+                self.after_operation(db, write=write)
                 # These metadata constraints can change without replacing an
                 # inode. Detect them before the connection context commits.
                 self.check_sqlite_files()
-                current_lock = self.paths["authority_lock"].lstat()
+                self.check_authority_lock(fd)
                 current_db = self.paths["database"].lstat()
                 if (
                     self.authority() != before
                     or private(self.config_path) != self.config_raw
-                    or (info.st_dev, info.st_ino)
-                    != (current_lock.st_dev, current_lock.st_ino)
                     or self.db_identity != (current_db.st_dev, current_db.st_ino)
                 ):
                     raise GlobalError("WRITER_FENCED")
@@ -324,6 +317,32 @@ class GlobalRuntime:
             raise GlobalError("STATE_UNAVAILABLE") from None
         finally:
             os.close(fd)
+
+    def check_authority_lock(self, fd):
+        opened = os.fstat(fd)
+        current = self.paths["authority_lock"].lstat()
+        for info in (opened, current):
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_mode & 0o077
+                or info.st_nlink != 1
+            ):
+                raise GlobalError("AUTHORITY_LOCK_UNSAFE")
+        identity = (opened.st_dev, opened.st_ino)
+        if self.lock_identity is None:
+            self.lock_identity = identity
+        if identity != self.lock_identity or identity != (current.st_dev, current.st_ino):
+            raise GlobalError("AUTHORITY_LOCK_REPLACED")
+
+    def before_operation(self, db, *, write):
+        pass
+
+    def initial_preflight(self):
+        pass
+
+    def after_operation(self, db, *, write):
+        pass
 
     def owner(self, db, agent_id, token, *, retired=False):
         if not integer(agent_id) or not isinstance(token, str) or not token:
@@ -700,8 +719,15 @@ class S1FastMCP(CompatibilityFastMCP):
         return super(CompatibilityFastMCP, self).tool(function, **kwargs)
 
 
-def build_global_server(config):
-    runtime = GlobalRuntime(config)
+def build_global_server(config, *, runtime_class=GlobalRuntime, server_class=S1FastMCP):
+    if (
+        runtime_class is GlobalRuntime
+        and document(config).get("kind") == "orrery-global-server-s2a-v1"
+    ):
+        from .global_s2a import build_s2a_server
+
+        return build_s2a_server(config)
+    runtime = runtime_class(config)
 
     @asynccontextmanager
     async def lifespan(server):
@@ -714,7 +740,7 @@ def build_global_server(config):
             with anyio.CancelScope(shield=True):
                 await runtime.close()
 
-    server = S1FastMCP(
+    server = server_class(
         name="ORRERY Mail",
         lifespan=lifespan,
         instructions="Isolated global S1 preparation. Only advertised capabilities are supported.",
@@ -736,8 +762,9 @@ def build_global_server(config):
             "authority_epoch": runtime.epoch,
             "mutation_revision": int(revision),
             "activation_enabled": False,
-            "supported_tools": sorted(TOOLS),
+            "supported_tools": sorted(runtime.tools),
             "resources_supported": False,
+            **getattr(runtime, "health_fields", {}),
         }
 
     @server.tool

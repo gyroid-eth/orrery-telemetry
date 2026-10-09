@@ -134,3 +134,5 @@ finally:
 | native Windows launcher | context/authority の検査と Unix 契約対象外の固定 reason | global transport の platform 設計は別。WSL は Unix client |
 
 window の read-only server 照合 capability は S2 への候補です。S1 の fixture と wire を4aの都合で変更しません。
+
+S2a の明示 schema3 server に接続すると、能力に応じて program/model を保つ登録更新・server 側の read-only window 照合・receipt の UUID 引継ぎを使います。S1 の動きは維持します。新 candidate と client root を選ぶときは [schema2 の拒否と呼出し側の向け直し](global-server.md#schema2-を拒否されたとき)を確認してください。

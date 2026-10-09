@@ -1,5 +1,5 @@
 {
-  "proposal_only": true,
+  "proposal_only": false,
   "base": {
     "master": "84d9381",
     "s1_wire": "packages/agentstack_mail/fixtures/global-server-s1.json"
@@ -1838,7 +1838,7 @@
     "resolve": "authenticated exact current canonical lookup_key resolution only, no ambiguous aliases or project-qualified interpretation, no listing or prefix search; returns target stable ID/name/retired flag. Retired is displayable here/list, contact mutations still refuse retired target. Unknown TARGET_UNAVAILABLE"
   },
   "delivery_policy_for_s2b": {
-    "status": "Parent-approved A, message15704; implementation remains pending wire review",
+    "status": "S2a provides the shared authorization primitive; actual message writes remain S2b.",
     "approved_expiry": "ignore for migrated and new approved links, like released delivery; no cutover mass expiry and no timestamp rewrite",
     "direction": "sender a_agent_id → recipient b_agent_id only, block in reverse direction never inferred",
     "self": "active owner self-send allowed",
@@ -2232,7 +2232,7 @@
     }
   ],
   "contract_precedence": "v3 is a complete replacement for v2.5. Removed upgrade operations/roles/reasons/acceptances are not inherited. Tool output_schema, canonical request preimage, quota, snapshot and fixed mutex contracts remain normative. Preparation has its own unpublished staging receipt, never an existing runtime upgrade journal.",
-  "proposal_boundaries": "wire and operator contracts only; no implementation, runtime start or tests yet. Legacy default and activation=false retained. No in-place schema upgrade or epoch repin.",
+  "proposal_boundaries": "Implemented isolated S2a contract, legacy default and activation=false retained. No in-place schema upgrade or epoch repin.",
   "fresh_candidate_preparation": {
     "scope": "Explicit isolated operator preparation only, not public MCP tool/installer/doctor/live cutover. New profile s2a-v1 in PR3 preparation API, default PR3 path still emits2. Proposed console entry agentstack-mail-global-prepare --plan FILE calls this profile; no schema2 runtime argument and no upgrade subcommands.",
     "inputs": "Typed private plan with explicit supported legacy SourceBundle seven input paths, resolutions, expected writer roster/fence/final evidence, isolation_root, new candidate_name and operation UUID. candidate_name lower-case [a-z0-9][a-z0-9_-]{0,63}. Inputs are read-only paths; no current service discovery or arbitrary output destinations.",

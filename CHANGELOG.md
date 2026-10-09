@@ -10,6 +10,12 @@
 
 ## Unreleased
 
+### 隔離 global server の登録更新・window・contact を準備
+
+S2a の明示した schema3 設定に9つの公開 tool と capability を追加しました。program/model を保つ登録更新、read-only の window 照合、単調な活動更新、相手 owner が承認する contact を扱います。request の canonical preimage と結果を同じ transaction に保存し、共通 client は固定 slot の UUID を引き継いで再送します。owner 別 quota、receipt を使わない touch、同じ read snapshot と write tracker を照合します。
+
+既存 schema2 は SQLite 接続前に不変で拒否し、別 workspace に source から schema3 を新規準備します。in-place upgrade・旧 authority 復帰・epoch repin は含みません。preparation と明示 quarantine は各保存境界の中断から再実行し、旧 root の書込みを自動移行・破棄しません。新 client root へ env/wrapper/hook/profile を向け直す手順と、旧 mode との contact 判定差を日英で記載しました。既定の旧 mode と S1 の契約・activation=false は維持します。送信と通知は S2b、予約は S2c、実切替は PR7 に残します。詳細は[global server の準備](docs/global-server.md#s2a-schema3-の新規準備)を参照してください。
+
 ### project 廃止に向けた runtime client の登録・復旧・待機を準備
 
 明示した隔離 context で S1 server に接続する共通 client を追加しました。既定は旧 mode、activation は false のままです。stable ID と credential・instance・candidate・authority epoch を照合し、旧 project/name env を routing に使いません。原子的な名前競合、能力に応じた contact policy、専用 HOME の operator 復旧、window/session index と profile の再接続入口を準備しました。proxy/daemon の実行は4c、子の manifest/skill は4b、実切替と全 writer 停止は PR7 に残します。再接続時は program/model の明示値・保存値を維持し、保存値が無ければ observe のみとします。保存先の役割重複と broken context を拒否し、通信障害の待機を継続します。固定の親の直下にある client 名から layout を導出し、任意の root/role path を登録前に拒否します。provider の HOME や履歴を探索せず、通常のファイル増加で停止しません。明示 operator の復旧は pending・credential・server を照合し、各保存段階の中断から同じ ID を回収します。local credential の無い未 claim の row も、中断後の同じ pending で回収できます。Codex の再登録は環境指定を優先し、Claude の再登録は claude-code を明示します。client の保存先を Mail の状態領域から分け、既存ファイルの形式・owner を network 前と rename 前に検査します。program/model は別ファイルに保存し、observe のみの再登録は表示と終了コードを区別します。詳細は[global runtime client の準備](docs/global-runtime-client.md)を参照してください。

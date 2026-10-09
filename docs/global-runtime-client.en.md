@@ -134,3 +134,5 @@ finally:
 | Native Windows launcher | Context/authority inspection and fixed Unix-contract rejection | Global transport needs separate platform design; WSL uses the Unix client |
 
 Observe-only reconnect leaves them server-unverified. A read-only server window capability and registration refresh without changing program/model are S2 candidates. PR4a does not change the S1 fixture or wire for its own convenience.
+
+With an explicit S2a schema3 server, capabilities enable metadata-preserving refresh, read-only server window verification, and receipt UUID continuity. S1 behavior is retained. For another candidate/client root, follow [schema2 refusal and caller redirection](global-server.en.md#when-schema2-is-refused).
