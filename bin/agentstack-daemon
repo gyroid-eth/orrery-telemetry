@@ -2,6 +2,8 @@
 """Local operator CLI; never an MCP tool or automatic enrollment fallback."""
 import argparse
 import json
+import os
+import runpy
 from pathlib import Path
 import sys
 
@@ -23,7 +25,7 @@ def main():
         "create", help="operator-only, single-attempt identity creation"
     )
     create.add_argument("--connection", required=True)
-    create.add_argument("--project-key", required=True)
+    create.add_argument("--project-key", required=not (os.environ.get("AGENTSTACK_CLIENT_CONFIG") or (ROOT / "runtime-client.json").exists()))
     create.add_argument("--name", required=True)
     create.add_argument("--journal", required=True)
     create.add_argument("--operator", action="store_true", required=True)
@@ -41,6 +43,24 @@ def main():
     inspect.add_argument("--profile", required=True)
     args = parser.parse_args()
     try:
+        if args.operation in {'create', 'finalize-create'}:
+            api = runpy.run_path(str(ROOT / 'bin/lib/runtime_client.py'))
+            try:
+                client = api['configured']()
+                if client is not None:
+                    with client.fence():
+                        pass
+                    if Path(args.connection).absolute() != client.path:
+                        raise api['ClientError']('PROFILE_CONTEXT_MISMATCH')
+                    if args.operation == 'create':
+                        row = client.create(args.name, 'daemon', 'deterministic')
+                    else:
+                        row = client.finalize_registration(args.agent_id)
+                    saved = client.save_profile(args.journal)
+                    print(json.dumps({**saved, **row, 'runtime_execution': 'requires-pr4c'}))
+                    return 0
+            except api['ClientError'] as exc:
+                raise DaemonError(str(exc)) from None
         if args.operation == "create":
             result = create_identity(
                 args.connection,
@@ -53,6 +73,14 @@ def main():
                 args.connection, journal_path=args.journal, agent_id=args.agent_id
             )
         else:
+            api = runpy.run_path(str(ROOT / 'bin/lib/runtime_client.py'))
+            try:
+                global_result = api['profile_operation'](args.profile, 'inspect')
+            except api['ClientError'] as exc:
+                raise DaemonError(str(exc)) from None
+            if global_result is not None:
+                print(json.dumps(global_result))
+                return 0
             runtime = DaemonRuntime.open(args.profile)
             try:
                 result = runtime.call("runtime_status", {})

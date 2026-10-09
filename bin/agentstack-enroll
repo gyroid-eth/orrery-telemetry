@@ -3,6 +3,14 @@
 
 set -euo pipefail
 
+# Explicit operator selection precedes installed legacy env loading.
+if [[ "${1:-}" == "--global-context" ]]; then
+  shift
+  context="${1:?global context path required}"
+  shift
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  exec python3 "$SCRIPT_DIR/lib/runtime_client.py" --context "$context" "$@"
+fi
 AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 if [[ -f "$AGENTSTACK_HOME_DIR/env.sh" ]]; then
   # shellcheck disable=SC1090

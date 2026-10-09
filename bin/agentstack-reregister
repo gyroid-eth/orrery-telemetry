@@ -37,6 +37,15 @@ fail_diagnostic() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$SCRIPT_DIR/../runtime-client.json" || -L "$SCRIPT_DIR/../runtime-client.json" ]]; then
+  _ags_mode="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" mode)" || exit 1
+  if [[ "$_ags_mode" == "global" ]]; then
+    _ags_result="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" reconnect)" || exit 1
+    _ags_name="$(printf '%s' "$_ags_result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')"
+    printf 'agentstack-reregister: registered %s\n' "$_ags_name"
+    exit 0
+  fi
+fi
 
 load_env_file() {
   local envf="$1"

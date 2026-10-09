@@ -8,6 +8,17 @@
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 RESOLVED_AGENT=""
 RESOLVED_AGENT_SRC="none"
+_ags_client="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/lib/runtime_client.py"
+if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$(dirname "$_ags_client")/../../runtime-client.json" || -L "$(dirname "$_ags_client")/../../runtime-client.json" ]]; then
+  _ags_mode="$(python3 "$_ags_client" mode)" || { RESOLVED_AGENT_SRC="identity-conflict"; return 1 2>/dev/null || exit 1; }
+  if [[ "$_ags_mode" == "global" ]]; then
+    _ags_row="$(python3 "$_ags_client" observe)" || { RESOLVED_AGENT_SRC="identity-conflict"; return 1 2>/dev/null || exit 1; }
+    RESOLVED_AGENT="$(printf '%s' "$_ags_row" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')"
+    RESOLVED_AGENT_SRC="global-context"
+    RUNTIME_DIR="$(printf '%s' "$_ags_row" | python3 -c 'import json,sys; print(json.load(sys.stdin)["runtime_dir"])')"
+    return 0 2>/dev/null || exit 0
+  fi
+fi
 
 # One definition, shared with the guards. Keeping a private copy here meant the
 # same value could be "not an identity" to one caller and a claim to another --
