@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
+import fcntl
+import os
+import re
+import shutil
 import sqlite3
+import stat
 import tempfile
 from pathlib import Path
 
@@ -86,6 +91,45 @@ def extension_schema(db):
     return [r for r in schema_objects(db) if r[1] in EXTENSION_NAMES]
 
 
+@contextmanager
+def fts_snapshot(db):
+    main = next(
+        row[2] for row in db.execute("PRAGMA database_list") if row[1] == "main"
+    )
+    if not main or not Path(main).is_absolute():
+        raise GlobalError("RUNTIME_CANDIDATE_INVALID")
+    parent = Path(main).parent / ".fts-validation"
+    safe_directory(parent, create=True)
+    # Lock the existing fixed private directory itself: no extra lock file or
+    # stored ownership index. Shared authority readers may inspect concurrently.
+    fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        safe_directory(parent)
+        opened, current = os.fstat(fd), parent.lstat()
+        if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+            raise GlobalError("ISOLATION_ROOT_UNSAFE")
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                if not re.fullmatch(r"snapshot-[a-z0-9_]{8}", entry.name):
+                    continue
+                info = entry.stat(follow_symlinks=False)
+                if (
+                    stat.S_ISDIR(info.st_mode)
+                    and info.st_uid == os.getuid()
+                    and not info.st_mode & 0o077
+                ):
+                    # fd-relative rmtree does not follow replaced directories
+                    # or symlinks nested inside a stale own snapshot.
+                    shutil.rmtree(entry.name, dir_fd=fd)
+        with tempfile.TemporaryDirectory(prefix="snapshot-", dir=parent) as directory:
+            path = Path(directory) / "check.sqlite3"
+            path.touch(mode=0o600)
+            yield path
+    finally:
+        os.close(fd)
+
+
 def integrity(db, *, writable=False):
     if (
         db.execute("PRAGMA quick_check").fetchone()[0] != "ok"
@@ -101,26 +145,13 @@ def integrity(db, *, writable=False):
                 "INSERT INTO fts_messages(fts_messages) VALUES('integrity-check')"
             )
         else:
-            main = next(
-                row[2] for row in db.execute("PRAGMA database_list") if row[1] == "main"
-            )
-            if not main or not Path(main).is_absolute():
-                raise GlobalError("RUNTIME_CANDIDATE_INVALID")
-            parent = Path(main).parent / ".fts-validation"
-            # The source database is already admitted inside the isolated
-            # candidate. Never let the system TMPDIR receive its private data.
-            safe_directory(parent, create=True)
-            with tempfile.TemporaryDirectory(
-                prefix="snapshot-", dir=parent
-            ) as directory:
-                path = Path(directory) / "check.sqlite3"
-                path.touch(mode=0o600)
+            with fts_snapshot(db) as path:
                 with closing(sqlite3.connect(path)) as checker:
                     db.backup(checker)
                     checker.execute(
                         "INSERT INTO fts_messages(fts_messages) VALUES('integrity-check')"
                     )
-    except sqlite3.Error:
+    except (sqlite3.Error, OSError):
         raise GlobalError("RUNTIME_CANDIDATE_INVALID") from None
 
 

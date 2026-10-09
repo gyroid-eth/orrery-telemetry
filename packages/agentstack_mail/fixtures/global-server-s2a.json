@@ -2131,7 +2131,7 @@
         "quarantine": "quarantine.json kind orrery-global-runtime-quarantine-v1"
       }
     },
-    "full_validation": "Startup and explicit inspect scan current snapshot for quick_check/FK/FTS plus every stored receipt. Read-only FTS verification uses a private temporary disk database under the candidate database directory/.fts-validation (0700), never system TMPDIR or a whole in-memory backup. The per-check snapshot directory is removed on success and exceptions; source snapshot and bytes remain unchanged."
+    "full_validation": "Startup and explicit inspect scan current snapshot for quick_check/FK/FTS plus every stored receipt. Read-only FTS verification uses a private temporary disk database under the candidate database directory/.fts-validation (0700), never system TMPDIR or a whole in-memory backup. The per-check snapshot directory is removed on success and exceptions; source snapshot and bytes remain unchanged. The fixed directory itself is flocked exclusively during recovery, backup and cleanup, without a separate lock file. Before copying, remove only own-private non-symlink snapshot directories matching snapshot-[a-z0-9_]{8}; fd-relative removal never follows nested symlinks. Preserve unrelated entries."
   },
   "client_uuid_contract": {
     "fixed_slot": "derived client_root/runtime/mutation-pending.json ONLY; magic orrery-global-operation-pending-v1; one pending mutation per client, no arbitrary path/history scan",

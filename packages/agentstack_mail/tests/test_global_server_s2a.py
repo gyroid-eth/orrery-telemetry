@@ -889,8 +889,20 @@ def test_fts_snapshot_stays_inside_candidate_and_cleans_up(
             )
     outside = tmp_path / "system-tmp"
     outside.mkdir(mode=0o700)
-    monkeypatch.setenv("TMPDIR", str(outside))
-    monkeypatch.setattr(implementation.tempfile, "tempdir", str(outside))
+    # Preserve the admitted temporary root, including on Linux where there is
+    # no /private/tmp fallback. Catch any default-directory snapshot in a
+    # separate monitored sink instead of changing tempfile.gettempdir().
+    temporary_root = implementation.tempfile.gettempdir()
+    original_directory = implementation.tempfile.TemporaryDirectory
+
+    def monitored_directory(*args, **kwargs):
+        if kwargs.get("dir") is None:
+            kwargs["dir"] = outside
+        return original_directory(*args, **kwargs)
+
+    monkeypatch.setattr(
+        implementation.tempfile, "TemporaryDirectory", monitored_directory
+    )
     original = implementation.sqlite3.connect
     checked = []
 
@@ -941,6 +953,7 @@ def test_fts_snapshot_stays_inside_candidate_and_cleans_up(
     else:
         run()
     assert checked
+    assert implementation.tempfile.gettempdir() == temporary_root
     assert not list(outside.iterdir())
     assert all(not path.exists() and not path.parent.exists() for path in checked)
     assert all(
@@ -963,3 +976,83 @@ def test_fts_snapshot_refuses_unsafe_fixed_directory(prepared, tmp_path, unsafe)
     assert not list(outside.iterdir())
     if unsafe == "public-mode":
         assert not list(directory.iterdir())
+
+
+def test_fts_recovers_only_own_stale_snapshots_without_following_symlinks(
+    prepared, tmp_path
+):
+    directory = Path(prepared["config"]["database"]).parent / ".fts-validation"
+    stale = directory / "snapshot-dead0001"
+    stale.mkdir(mode=0o700)
+    (stale / "check.sqlite3").write_bytes(b"private stale fixture token and body")
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    sentinel = outside / "sentinel"
+    sentinel.write_bytes(b"unchanged outside data")
+    (stale / "external-link").symlink_to(outside, target_is_directory=True)
+    alias = directory / "snapshot-link0001"
+    alias.symlink_to(outside, target_is_directory=True)
+    unrelated = directory / "keep-note"
+    unrelated.write_bytes(b"unrelated private data")
+    foreign = directory / "snapshot-mode0001"
+    foreign.mkdir(mode=0o755)
+    (foreign / "keep").write_bytes(b"not an own private snapshot")
+    S2aRuntime(prepared["config_path"])
+    assert not stale.exists()
+    assert sentinel.read_bytes() == b"unchanged outside data"
+    assert alias.is_symlink()
+    assert unrelated.read_bytes() == b"unrelated private data"
+    assert (foreign / "keep").read_bytes() == b"not an own private snapshot"
+    assert {path.name for path in directory.iterdir()} == {
+        alias.name,
+        unrelated.name,
+        foreign.name,
+    }
+
+
+def test_fts_snapshot_recovery_waits_for_same_private_directory_lock(
+    prepared, monkeypatch
+):
+    import fcntl
+    import stat
+    import threading
+    import agentstack_mail.global_s2a as implementation
+
+    directory = Path(prepared["config"]["database"]).parent / ".fts-validation"
+    stale = directory / "snapshot-dead0001"
+    stale.mkdir(mode=0o700)
+    (stale / "check.sqlite3").write_bytes(b"stale private snapshot")
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    original = fcntl.flock
+    original(fd, fcntl.LOCK_EX)
+    entered = threading.Event()
+    results, errors = [], []
+
+    def flock(candidate_fd, operation):
+        if stat.S_ISDIR(os.fstat(candidate_fd).st_mode) and operation == fcntl.LOCK_EX:
+            entered.set()
+        return original(candidate_fd, operation)
+
+    monkeypatch.setattr(implementation.fcntl, "flock", flock)
+
+    def inspect():
+        try:
+            results.append(S2aRuntime(prepared["config_path"]))
+        except Exception as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=inspect)
+    thread.start()
+    try:
+        assert entered.wait(10), errors
+        assert thread.is_alive()
+        assert stale.exists()  # a parallel reader cannot recover while locked
+        assert list(directory.iterdir()) == [stale]
+    finally:
+        original(fd, fcntl.LOCK_UN)
+        os.close(fd)
+        thread.join(timeout=10)
+    assert not thread.is_alive()
+    assert not errors
+    assert len(results) == 1
+    assert not list(directory.iterdir())
