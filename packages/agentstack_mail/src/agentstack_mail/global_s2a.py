@@ -20,6 +20,7 @@ from .global_server import (
     document,
     integer,
     now,
+    safe_directory,
 )
 from .global_s2a_contract import (
     FIXTURE,
@@ -100,7 +101,18 @@ def integrity(db, *, writable=False):
                 "INSERT INTO fts_messages(fts_messages) VALUES('integrity-check')"
             )
         else:
-            with tempfile.TemporaryDirectory(prefix="orrery-fts-check-") as directory:
+            main = next(
+                row[2] for row in db.execute("PRAGMA database_list") if row[1] == "main"
+            )
+            if not main or not Path(main).is_absolute():
+                raise GlobalError("RUNTIME_CANDIDATE_INVALID")
+            parent = Path(main).parent / ".fts-validation"
+            # The source database is already admitted inside the isolated
+            # candidate. Never let the system TMPDIR receive its private data.
+            safe_directory(parent, create=True)
+            with tempfile.TemporaryDirectory(
+                prefix="snapshot-", dir=parent
+            ) as directory:
                 path = Path(directory) / "check.sqlite3"
                 path.touch(mode=0o600)
                 with closing(sqlite3.connect(path)) as checker:

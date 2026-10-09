@@ -45,6 +45,18 @@ class GlobalError(ValueError):
     """Bounded errors never include credentials, SQL, paths or peer data."""
 
 
+def safe_directory(path, *, create=False):
+    if not path.exists() and create:
+        path.mkdir(mode=0o700, exist_ok=True)
+    info = path.lstat()
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+    ):
+        raise GlobalError("ISOLATION_ROOT_UNSAFE")
+
+
 def private(path):
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)

@@ -14,7 +14,7 @@ import stat
 import tempfile
 import uuid
 
-from .global_server import GlobalError, document, private
+from .global_server import GlobalError, document, private, safe_directory
 from .global_s2a import (
     base_schema,
     extension_schema,
@@ -71,18 +71,6 @@ def require_legacy_source(path):
             raise GlobalError("SOURCE_DATABASE_INVALID") from None
     finally:
         os.close(fd)
-
-
-def safe_directory(path, *, create=False):
-    if not path.exists() and create:
-        path.mkdir(mode=0o700)
-    info = path.lstat()
-    if (
-        not stat.S_ISDIR(info.st_mode)
-        or info.st_uid != os.getuid()
-        or info.st_mode & 0o077
-    ):
-        raise GlobalError("ISOLATION_ROOT_UNSAFE")
 
 
 def write_role(path, value, kind):

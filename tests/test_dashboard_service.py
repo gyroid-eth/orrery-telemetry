@@ -27,6 +27,10 @@ from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "dashboard" / "service_runner.py"
 PLIST_TEMPLATE = ROOT / "dashboard" / "agentdashboard.plist.template"
+RUNTIME_CONTRACT_SOURCES = (
+    "packages/agentstack_mail/src/agentstack_mail/schema_contract.py",
+    "packages/agentstack_mail/fixtures/global-server-s2a.json",
+)
 
 
 class _DashboardVersionHandler(http.server.BaseHTTPRequestHandler):
@@ -95,6 +99,10 @@ def _isolated_installer_repo(tmp_path: pathlib.Path) -> pathlib.Path:
     shutil.copy2(ROOT / "hooks" / "project-context.sh", repo / "hooks")
     shutil.copy2(ROOT / "hooks" / "child_tools.py", repo / "hooks")
     shutil.copy2(ROOT / "VERSION", repo / "VERSION")
+    for name in RUNTIME_CONTRACT_SOURCES:
+        destination = repo / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, destination)
     return repo
 
 
@@ -1394,3 +1402,43 @@ while True:
 
     state = pathlib.Path(env["AGENTSTACK_DASHBOARD_RUN_STATE"])
     assert state.exists(), "SIGKILL must leave a marker for the next service-manager restart"
+
+
+@pytest.mark.parametrize("missing", RUNTIME_CONTRACT_SOURCES)
+def test_installer_refuses_missing_runtime_contract_before_writing(tmp_path, missing):
+    repo = _isolated_installer_repo(tmp_path)
+    (repo / missing).unlink()
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "tmux": "#!/bin/sh\nexit 0\n",
+        "uname": "#!/bin/sh\necho Linux\n",
+        "uv": "#!/bin/sh\nexit 0\n",
+    }.items():
+        path = fake_bin / name
+        path.write_text(body)
+        path.chmod(0o755)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    env, install_dir = _installer_upgrade_env(tmp_path, fake_bin, port)
+    result = subprocess.run(
+        ["bash", str(repo / "scripts/install.sh"), "--dashboard-only", "--dry-run"],
+        env=env, cwd=repo, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert f"missing runtime client contract: {missing}" in result.stderr
+    assert not install_dir.exists()
+
+
+def test_runtime_contract_sources_survive_source_archive():
+    import io
+    import tarfile
+
+    archive = subprocess.check_output(
+        ["git", "archive", "--format=tar", "HEAD", "--", *RUNTIME_CONTRACT_SOURCES],
+        cwd=ROOT,
+    )
+    with tarfile.open(fileobj=io.BytesIO(archive)) as source:
+        for name in RUNTIME_CONTRACT_SOURCES:
+            assert source.extractfile(name).read() == (ROOT / name).read_bytes()

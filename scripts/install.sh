@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+RUNTIME_SCHEMA_SOURCE="$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/schema_contract.py"
+RUNTIME_FIXTURE_SOURCE="$REPO_ROOT/packages/agentstack_mail/fixtures/global-server-s2a.json"
 MERGE_SETTINGS_SCRIPT="$SCRIPT_DIR/lib/merge_settings.py"
 MERGE_CLAUDE_MCP_SCRIPT="$SCRIPT_DIR/lib/merge_claude_mcp.py"
 
@@ -2062,6 +2064,10 @@ check_agent_mail_provisioning_dependencies() {
 }
 
 validate_repo_assets() {
+  local source
+  for source in "$RUNTIME_SCHEMA_SOURCE" "$RUNTIME_FIXTURE_SOURCE"; do
+    [[ -f "$source" ]] || die "missing runtime client contract: ${source#"$REPO_ROOT"/}; use a complete source checkout or archive"
+  done
   [[ -f "$REPO_ROOT/dashboard/server.py" ]] || die "missing dashboard/server.py"
   [[ -f "$REPO_ROOT/dashboard/index.html" ]] || die "missing dashboard/index.html"
   [[ -d "$REPO_ROOT/dashboard/assets" ]] || die "missing dashboard/assets"
@@ -2430,8 +2436,8 @@ install_payload() {
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
     cp "$REPO_ROOT/bin/lib/runtime_client.py" "$BIN_DIR/lib/runtime_client.py"
-    cp "$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/schema_contract.py" "$BIN_DIR/lib/schema_contract.py"
-    cp "$REPO_ROOT/packages/agentstack_mail/fixtures/global-server-s2a.json" "$BIN_DIR/lib/global-server-s2a.json"
+    cp "$RUNTIME_SCHEMA_SOURCE" "$BIN_DIR/lib/schema_contract.py"
+    cp "$RUNTIME_FIXTURE_SOURCE" "$BIN_DIR/lib/global-server-s2a.json"
     cp "$REPO_ROOT/bin/agentstack-runtime-client" "$BIN_DIR/agentstack-runtime-client"
     cp "$REPO_ROOT/bin/lib/agentstack-scientists.sh" "$BIN_DIR/lib/agentstack-scientists.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-managed-block.sh" "$BIN_DIR/lib/agentstack-managed-block.sh"

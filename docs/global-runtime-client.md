@@ -141,4 +141,4 @@ S2a の program/model 無指定 reconnect は活動更新と照合だけを行�
 
 receipt の応答は tools/list の outputSchema と owner/binding/UUID を確認してから pending を消します。schema 不適合なら planned を保ち、同 UUID で正常応答を replay します。server と stdlib client は同じ `schema_contract.py` を使い、installer はその正本を wrapper の `bin/lib/` にコピーします。client 用の別 validator や新しい外部依存はありません。
 
-canonical preimage・既定値・TTL 補正も同じ stdlib 正本を使います。tool の分類と固定 reason は wire fixture から読み、installer はその fixture も helper と同じ `bin/lib/` にコピーします。確定した拒否（相手不存在・quota 等）では自分の pending bytes を再照合して解除し、別の意図の操作へ進めます。通信失敗・応答不適合・未知 reason は保持します。既存 pending の認証/fence 拒否は以前の結果を証明しないため保持します。固定 reason とその拒否時点の一覧は `client_uuid_contract.definite_rejections` が正本です。
+canonical preimage・既定値・TTL 補正も同じ stdlib 正本を使います。tool の分類と固定 reason は wire fixture から読み、installer はその fixture も helper と同じ `bin/lib/` にコピーします。確定した拒否（相手不存在・quota 等）では自分の pending bytes を再照合して解除し、別の意図の操作へ進めます。通信失敗・応答不適合・未知 reason は保持します。既存 pending の認証/fence 拒否は以前の結果を証明しないため保持します。同じ UUID に別の意図がある `REQUEST_ID_CONFLICT` も pending を保持し、operator の明示 resolution に回します。固定 reason とその拒否時点の一覧は `client_uuid_contract.definite_rejections` が正本です。

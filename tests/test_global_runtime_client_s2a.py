@@ -569,3 +569,93 @@ def test_credential_rotation_refusal_distinguishes_old_unknown_commit(
         assert client.outputs["mutation"].read_bytes() == saved
     else:
         assert not client.outputs["mutation"].exists()
+
+
+@pytest.mark.parametrize("lost_conflict_response", [False, True])
+def test_cross_root_uuid_conflict_preserves_pending_until_operator_resolution(
+    server, monkeypatch, lost_conflict_response
+):
+    import hashlib
+    import subprocess
+    import sys
+    import uuid
+
+    first = context(server, "committed-root")
+    second = context(server, "conflicting-root")
+    request_id = str(uuid.uuid4())
+    first.call("set_contact_policy", {"policy": "open", "request_id": request_id})
+    dbpath = Path(server["config"]["database"])
+
+    def receipt_state():
+        with s2.connection(dbpath) as db:
+            return (
+                [
+                    dict(row)
+                    for row in db.execute("SELECT * FROM global_operation_receipts")
+                ],
+                s2.revision(db),
+            )
+
+    before = receipt_state()
+    saved = []
+    save = second.save_mutation
+
+    def record(pending):
+        save(pending)
+        saved.append(second.outputs["mutation"].read_bytes())
+
+    monkeypatch.setattr(second, "save_mutation", record)
+    original = second.rpc
+    arguments = {"policy": "auto", "request_id": request_id}
+    if lost_conflict_response:
+
+        def lose(method, params):
+            value = original(method, params)
+            if method == "tools/call" and params.get("name") == "set_contact_policy":
+                raise ClientError("TRANSPORT_FAILED")
+            return value
+
+        monkeypatch.setattr(second, "rpc", lose)
+        with pytest.raises(ClientError, match="TRANSPORT_FAILED"):
+            second.call("set_contact_policy", arguments)
+        monkeypatch.setattr(second, "rpc", original)
+    with pytest.raises(ClientError, match="REQUEST_ID_CONFLICT"):
+        second.call("set_contact_policy", arguments)
+    assert second.outputs["mutation"].read_bytes() == saved[0]
+    assert receipt_state() == before
+    with pytest.raises(ClientError, match="MUTATION_PENDING_CONFLICT"):
+        second.call("set_contact_policy", {"policy": "contacts_only"})
+    assert second.outputs["mutation"].read_bytes() == saved[0]
+    binding = {
+        "server_instance_id": first.binding["expected_server_instance_id"],
+        **{k: first.binding[k] for k in ("candidate_generation", "authority_epoch")},
+    }
+    proof = {
+        "expected_old": binding,
+        "expected_new": binding,
+        "old_agent_id": 2,
+        "new_agent_id": 2,
+        "confirm": True,
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "bin/lib/runtime_client.py"),
+            "--context",
+            str(second.path),
+            "resolve-mutation",
+            hashlib.sha256(saved[0]).hexdigest(),
+            str(first.path),
+            json.dumps(proof),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["old_outcome"] == "unknown-no-resend"
+    assert not second.outputs["mutation"].exists()
+    assert receipt_state() == before
+    outcome = second.call("set_contact_policy", {"policy": "auto"})
+    assert outcome["request_id"] != request_id
+    assert receipt_state()[0][0] == before[0][0]

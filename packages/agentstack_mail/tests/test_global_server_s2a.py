@@ -870,3 +870,96 @@ def test_incident_uses_common_exclusive_fence_before_authority_write(prepared, u
             fault=fault,
         )
     assert authority.read_bytes() == before
+
+
+@pytest.mark.parametrize("entry", ["startup", "inspect", "incident", "prepare"])
+@pytest.mark.parametrize("fail_fts", [False, True])
+def test_fts_snapshot_stays_inside_candidate_and_cleans_up(
+    prepared, monkeypatch, tmp_path, entry, fail_fts
+):
+    import agentstack_mail.global_s2a as implementation
+    from agentstack_mail.global_incident import inspect_incident
+    import stat
+
+    runtime = S2aRuntime(prepared["config_path"])
+    if entry == "incident":
+        with connection(Path(prepared["config"]["database"]), write=True) as db:
+            db.execute(
+                "UPDATE namespace_metadata SET value='2' WHERE key='write_generation'"
+            )
+    outside = tmp_path / "system-tmp"
+    outside.mkdir(mode=0o700)
+    monkeypatch.setenv("TMPDIR", str(outside))
+    monkeypatch.setattr(implementation.tempfile, "tempdir", str(outside))
+    original = implementation.sqlite3.connect
+    checked = []
+
+    # Native subclass preserves SQLite backup()'s target type and observes
+    # the actual FTS command after the copied private file exists.
+    class NativeChecker(implementation.sqlite3.Connection):
+        def execute(self, sql, *args, **kwargs):
+            if "integrity-check" in sql:
+                path = Path(super().execute("PRAGMA database_list").fetchone()[2])
+                assert prepared["root"] in path.parents
+                assert path.parent.parent.name == ".fts-validation"
+                assert stat.S_IMODE(path.stat().st_mode) == 0o600
+                assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+                assert stat.S_IMODE(path.parent.parent.stat().st_mode) == 0o700
+                assert not list(outside.iterdir())
+                checked.append(path)
+                if fail_fts:
+                    raise implementation.sqlite3.DatabaseError("synthetic FTS failure")
+            return super().execute(sql, *args, **kwargs)
+
+    def connect(path, *args, **kwargs):
+        if Path(str(path)).name == "check.sqlite3":
+            kwargs["factory"] = NativeChecker
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(implementation.sqlite3, "connect", connect)
+
+    def run():
+        if entry == "startup":
+            return S2aRuntime(prepared["config_path"])
+        if entry == "inspect":
+            with runtime.transaction() as db:
+                return runtime.inspect(db, 2)
+        if entry == "incident":
+            return inspect_incident(prepared["config_path"])
+        return prepare(
+            prepared["source"],
+            prepared["root"],
+            "fts-second",
+            prepared["choices"],
+            request_id=str(uuid.uuid4()),
+            fence=fence,
+        )
+
+    if fail_fts:
+        with pytest.raises(GlobalError, match="RUNTIME_CANDIDATE_INVALID"):
+            run()
+    else:
+        run()
+    assert checked
+    assert not list(outside.iterdir())
+    assert all(not path.exists() and not path.parent.exists() for path in checked)
+    assert all(
+        not list(path.iterdir()) for path in prepared["root"].rglob(".fts-validation")
+    )
+
+
+@pytest.mark.parametrize("unsafe", ["symlink", "public-mode"])
+def test_fts_snapshot_refuses_unsafe_fixed_directory(prepared, tmp_path, unsafe):
+    directory = Path(prepared["config"]["database"]).parent / ".fts-validation"
+    directory.rmdir()  # preparation leaves only the empty fixed private directory
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    if unsafe == "symlink":
+        directory.symlink_to(outside, target_is_directory=True)
+    else:
+        directory.mkdir(mode=0o755)
+    with pytest.raises(GlobalError, match="ISOLATION_ROOT_UNSAFE"):
+        S2aRuntime(prepared["config_path"])
+    assert not list(outside.iterdir())
+    if unsafe == "public-mode":
+        assert not list(directory.iterdir())

@@ -2131,7 +2131,7 @@
         "quarantine": "quarantine.json kind orrery-global-runtime-quarantine-v1"
       }
     },
-    "full_validation": "Startup and explicit inspect scan current snapshot for quick_check/FK/FTS plus every stored receipt. Read-only FTS verification uses a private temporary disk database, never a whole in-memory backup; source snapshot and bytes remain unchanged."
+    "full_validation": "Startup and explicit inspect scan current snapshot for quick_check/FK/FTS plus every stored receipt. Read-only FTS verification uses a private temporary disk database under the candidate database directory/.fts-validation (0700), never system TMPDIR or a whole in-memory backup. The per-check snapshot directory is removed on success and exceptions; source snapshot and bytes remain unchanged."
   },
   "client_uuid_contract": {
     "fixed_slot": "derived client_root/runtime/mutation-pending.json ONLY; magic orrery-global-operation-pending-v1; one pending mutation per client, no arbitrary path/history scan",
@@ -2169,8 +2169,7 @@
         "WINDOW_INPUT_REQUIRED",
         "WINDOW_OWNER_MISMATCH",
         "CONTACT_TTL_INVALID",
-        "TIMESTAMP_INVALID",
-        "REQUEST_ID_CONFLICT"
+        "TIMESTAMP_INVALID"
       ],
       "before_receipt_lookup": [
         "ARGUMENTS_UNSUPPORTED",
@@ -2185,7 +2184,8 @@
         "WRITER_FENCED",
         "RUNTIME_WRITER_MISMATCH"
       ],
-      "contract": "Only an authenticated fixed tool rejection clears the exact own planned bytes under the local mutex. Existing pending survives pre-lookup authentication/fence rejection: that response cannot disprove an earlier commit. Transport, schema/binding mismatch, unknown reasons and request ID conflicts preserve pending. No automatic replacement UUID."
+      "contract": "The lists are the sole authority for fixed rejection reasons and stages. Only an authenticated listed tool rejection clears the exact own planned bytes under the local mutex. Existing pending survives listed pre-lookup rejection because that response cannot disprove an earlier commit. All other outcomes preserve pending; no automatic replacement UUID.",
+      "stage_note": "CONTACT_TTL_INVALID can occur before lookup for argument validation or after lookup for expiry overflow."
     }
   },
   "contact_transition_table": [
