@@ -148,7 +148,8 @@ def test_credential_binding_cannot_select_another_owner(prepared, key, value):
     credential = api['read_json'](path)
     credential[key] = value
     private(path, credential)
-    with pytest.raises(ClientError, match='CREDENTIAL_BINDING_MISMATCH'):
+    reason = 'OUTPUT_OWNER_CONFLICT' if key == 'agent_id' else 'CREDENTIAL_BINDING_MISMATCH' if key == 'credential_generation' else 'OUTPUT_SCHEMA_INVALID'
+    with pytest.raises(ClientError, match=reason):
         client(prepared).reconnect()
 
 
@@ -275,7 +276,7 @@ def test_stale_replayed_receipt_cannot_activate_old_token(prepared):
     token = 'first-recovery-token-fixture-123456'
     generation = c.identity['credential_generation']
     pending = c.credential.with_suffix('.enrollment-pending.json')
-    private(pending, {'action': 'recover', 'agent_id': 1, 'request_id': 'stale-request',
+    private(pending, {'kind': api['ENROLL_PENDING_KIND'], 'action': 'recover', 'agent_id': 1, 'request_id': 'stale-request',
                      'expected_generation': generation, 'new_credential': token, **c.binding})
     c.management('recover', agent_id=1, request_id='stale-request',
                  expected_generation=generation, new_credential=token)
@@ -397,7 +398,7 @@ def test_installed_payload_reconnects_from_its_own_root(prepared):
         shutil.copy2(ROOT / path, installed / path)
     config = {**prepared['client_config'], 'wrapper_root': str(installed)}
     private(prepared['client_path'], config)
-    r = subprocess.run(['/bin/bash', str(installed / 'bin/agentstack-reregister'), 'ObsoleteName'],
+    r = subprocess.run(['/bin/bash', str(installed / 'bin/agentstack-reregister'), 'ObsoleteName', 'codex', 'fixture'],
                        env={**os.environ, 'PATH': str(ROOT / '.venv/bin') + ':' + os.environ['PATH']},
                        text=True, capture_output=True, timeout=30)
     assert r.returncode == 0, r.stderr
@@ -614,8 +615,8 @@ def test_reregister_respects_explicit_metadata(prepared, source):
                             'AGENTSTACK_REREGISTER_MODEL': 'explicit-model'})
     assert result.returncode == 0, result.stderr
     assert metadata_row(prepared) == ('claude-code', 'explicit-model')
-    assert api['read_json'](prepared['client_path'])['registration_metadata'] == {
-        'program': 'claude-code', 'model': 'explicit-model'}
+    assert client(prepared).registration_metadata()['program'] == 'claude-code'
+    assert client(prepared).registration_metadata()['model'] == 'explicit-model'
 
 
 def test_unspecified_reconnect_observes_without_overwriting_unknown_metadata(prepared, monkeypatch):
@@ -739,3 +740,166 @@ def test_late_credential_role_alias_rejected_before_cas(prepared, link_kind):
     finally:
         c.credential.unlink()
     assert s1.control(prepared, action='inspect', agent_id=1)['credential_generation'] == before
+
+
+def test_mail_state_cannot_be_client_output_before_recovery(prepared, monkeypatch):
+    config = prepared['client_config']
+    database = Path(prepared['config']['database'])
+    database.parent.chmod(0o700)
+    original_bytes = database.read_bytes()  # Synthetic fixture only.
+    before = client(prepared).management('inspect', agent_id=1)['credential_generation']
+    config['credential_file'] = str(database)
+    private(prepared['client_path'], config)
+    with pytest.raises(ClientError, match='CLIENT_OUTPUT_IN_MAIL_STATE'):
+        client(prepared).enroll('recover', 'mail-output-recovery', before)
+    assert database.read_bytes() == original_bytes
+    assert s1.control(prepared, action='inspect', agent_id=1)['credential_generation'] == before
+
+
+def test_every_client_output_rejects_foreign_format_before_network(prepared, monkeypatch):
+    import sqlite3
+    c = client(prepared)
+    before = c.call('health_check')['mutation_revision']
+    sqlite_file = prepared['root'] / 'foreign-sqlite.db'
+    with sqlite3.connect(sqlite_file) as db:
+        db.execute('CREATE TABLE foreign_data(value TEXT)')
+    payloads = [b'user-owned text\n', sqlite_file.read_bytes()]
+    directory = c.runtime_dir / 'session_index'
+    directory.mkdir(mode=0o700)
+    paths = {'context': c.path, 'credential': c.credential,
+             'registration': c.credential.with_suffix('.registration-pending.json'),
+             'enrollment': c.credential.with_suffix('.enrollment-pending.json'),
+             'metadata': c.metadata_path, 'profile': prepared['root'] / 'profile.json',
+             'session': directory / '1.json'}
+    def no_network(*args, **kwargs):
+        pytest.fail('network called before rejecting a foreign output format')
+    monkeypatch.setattr(c, 'rpc', no_network)
+    for role, path in paths.items():
+        original = path.read_bytes() if path.exists() else None
+        try:
+            for payload in payloads:
+                path.write_bytes(payload)
+                path.chmod(0o600)
+                with pytest.raises(ClientError, match='CONTEXT_CHANGED' if role == 'context' else 'OUTPUT_SCHEMA_INVALID'):
+                    if role == 'profile':
+                        c.save_profile(path)
+                    else:
+                        c.reconnect(program='fixture', model='fixture')
+                assert path.read_bytes() == payload
+        finally:
+            if original is None:
+                path.unlink()
+            else:
+                path.write_bytes(original)
+    assert client(prepared).call('health_check')['mutation_revision'] == before
+
+
+def test_client_output_in_mail_root_or_alias_is_rejected(prepared):
+    c = client(prepared)
+    database = Path(prepared['config']['database'])
+    before = database.read_bytes()  # Synthetic fixture only.
+    for path in [database, c.runtime / 'new-profile.json']:
+        with pytest.raises(ClientError, match='CLIENT_OUTPUT_IN_MAIL_STATE'):
+            c.save_profile(path)
+    alias = prepared['root'] / 'mail-alias'
+    alias.symlink_to(c.runtime, target_is_directory=True)
+    with pytest.raises(ClientError, match='CLIENT_OUTPUT_IN_MAIL_STATE'):
+        c.save_profile(alias / 'new-profile.json')
+    outside = prepared['root'] / 'outside-hardlink.db'
+    os.link(database, outside)
+    try:
+        with pytest.raises(ClientError, match='OUTPUT_FILE_UNSAFE'):
+            c.save_profile(outside)
+        assert database.read_bytes() == before
+    finally:
+        outside.unlink()
+
+
+def test_reregister_observe_only_has_distinct_output_and_status(prepared):
+    before = metadata_row(prepared)
+    result = run(prepared, 'bin/agentstack-reregister', 'obsolete-name', bash=True)
+    assert result.returncode == 3
+    assert 'observed' in result.stdout and 'registration not refreshed; pass program/model' in result.stdout
+    assert 'registered' not in result.stdout
+    assert metadata_row(prepared) == before
+
+
+def test_waiting_client_survives_another_process_metadata_update(prepared, monkeypatch):
+    module = runpy.run_path(str(ROOT / 'bin/agentstack-await-reply'))
+    context_before = prepared['client_path'].read_bytes()
+    def waiting(fetch, **kwargs):
+        assert isinstance(fetch(), list)
+        result = run(prepared, 'bin/agentstack-reregister', 'obsolete-name', 'claude-code', 'changed-model', bash=True)
+        assert result.returncode == 0, result.stderr
+        assert isinstance(fetch(), list)
+        return 124, None
+    monkeypatch.setitem(module['main'].__globals__, 'wait_for_reply', waiting)
+    assert module['main'](['--agent-name', 'obsolete-name', '--timeout', '5']) == 124
+    assert prepared['client_path'].read_bytes() == context_before
+    assert metadata_row(prepared) == ('claude-code', 'changed-model')
+    assert client(prepared).registration_metadata()['model'] == 'changed-model'
+
+
+
+def test_foreign_file_appearing_before_rename_is_not_overwritten(prepared, monkeypatch):
+    c = client(prepared)
+    destination = prepared['root'] / 'new-profile.json'
+    original = api['atomic_json'].__globals__['os'].fsync
+    def create_foreign_file(fd):
+        original(fd)
+        destination.write_text('user-owned concurrent file')
+        destination.chmod(0o600)
+    monkeypatch.setattr(api['atomic_json'].__globals__['os'], 'fsync', create_foreign_file)
+    with pytest.raises(ClientError, match='OUTPUT_SCHEMA_INVALID'):
+        c.write_output(destination, {'kind': api['PROFILE_KIND'], **c.binding,
+            'agent_id': 1, 'client_config': str(c.path)}, 'profile')
+    assert destination.read_text() == 'user-owned concurrent file'
+
+
+@pytest.mark.parametrize('role', ['credential', 'profile', 'session'])
+def test_released_files_require_explicit_import_before_network(prepared, monkeypatch, role):
+    c = client(prepared)
+    before = c.call('health_check')['mutation_revision']
+    files = []
+    if role == 'credential':
+        path = c.credential
+        path.write_text('released-owner-token-00000001' + '\n')
+        sidecar = path.with_name(path.name + '.identity.json')
+        private(sidecar, {'kind': 'orrery-enrollment-active-v1',
+                          'server_instance_id': prepared['binding']['expected_server_instance_id'],
+                          'project_key': '/legacy/scope', 'agent_id': 1, 'agent_name': 'OldAlpha',
+                          'request_id': 'released-request', 'credential_generation': c.identity['credential_generation'],
+                          'credential_fingerprint': 'preserved-fingerprint'})
+        files.append(sidecar)
+    elif role == 'profile':
+        path = prepared['root'] / 'released-profile.json'
+        private(path, {'kind': 'orrery-persistent-agent-v1', 'name': 'OldAlpha',
+                       'agent_id': 1, 'project_key': '/legacy/scope', 'provider': 'codex',
+                       'parentless': True, 'lifecycle': 'persistent', 'interaction': 'headless',
+                       'connection': 'connection.json', 'state_dir': 'state',
+                       'working_directory': '.', 'command': ['fixture-provider'], 'environment': {}})
+    else:
+        directory = c.runtime_dir / 'session_index'
+        directory.mkdir(mode=0o700)
+        path = directory / '1.json'
+        private(path, {'schema_version': 2, 'binding_kind': 'self', 'agent_id': 1,
+                       'agent_name': 'OldAlpha', 'session_id': 'released-session',
+                       'project_key': '/legacy/scope', 'registered_by': 'OldAlpha',
+                       'transcript_path': 'fixture.jsonl', 'cwd': '.', 'ts': '2026-10-01T00:00:00Z'})
+    files.append(path)
+    original = {p: p.read_bytes() for p in files}
+    def no_network(*args, **kwargs):
+        pytest.fail('network called before rejecting a released output format')
+    monkeypatch.setattr(c, 'rpc', no_network)
+    with pytest.raises(ClientError, match='LEGACY_FILE_REQUIRES_IMPORT'):
+        if role == 'profile':
+            c.save_profile(path)
+        else:
+            c.reconnect(program='fixture', model='fixture')
+    assert {p: p.read_bytes() for p in files} == original
+    for p in files:
+        p.unlink()
+    if role == 'credential':
+        private(path, {'kind': 'orrery-global-credential-v1', **c.binding,
+                       **c.identity, 'registration_token': prepared['token']})
+    assert client(prepared).call('health_check')['mutation_revision'] == before

@@ -21,13 +21,17 @@
 
 ## 実際の entrypoint
 
-`agentstack-reregister` は保存済み ID/token で再接続し、server の canonical name を表示します。旧名前の引数は routing に使いません。program/model の明示引数・env・provider model は登録に反映し、成功した値を context の `registration_metadata` に保存します。無指定の再接続は保存値で再送します。保存値が無い既存 identity は S1 whois が program/model を返さないため register を呼ばず、`reconnect_mode=observe-only` / `registration_verified=false` を返し、server row を上書きしません。contact policy は `tools/list` を見て、その能力が無い S1 には呼びません。`agentstack-await-reply` は同じ owner の inbox を読み、従来の sender/after-id/timeout の動作を保ちます。一時的な `TRANSPORT_FAILED` は timeout まで再試行し、authority の変更は即停止します。S1 では read/ack と signal clear を変更しません。
+`agentstack-reregister` は保存済み ID/token で再接続し、server の canonical name を表示します。旧名前の引数は routing に使いません。program/model の明示引数・env・provider model は登録に反映し、成功した値を private な `runtime_dir/registration-metadata.json`（`orrery-global-registration-metadata-v1`）に保存します。context は変えないので、別 process の通常再登録で待機中の client を止めません。旧 context の `registration_metadata` は読込み互換だけ維持します。無指定の再接続は保存値で再送します。保存値が無い既存 identity は S1 whois が program/model を返さないため register を呼ばず、`reconnect_mode=observe-only` / `registration_verified=false` を返し、server row を上書きしません。この場合の reregister は `observed ... (registration not refreshed; pass program/model)`、exit 3 です。明示または保存値で register を行った場合だけ `registered`、exit 0 になります。contact policy は `tools/list` を見て、その能力が無い S1 には呼びません。`agentstack-await-reply` は同じ owner の inbox を読み、従来の sender/after-id/timeout の動作を保ちます。一時的な `TRANSPORT_FAILED` は timeout まで再試行し、authority の変更は即停止します。S1 では read/ack と signal clear を変更しません。
 
 provider bootstrap は source した shell に canonical identity を export します。global の `agent-start`、`agent-start-codex`、`agent-start-gemini` は明示した context で登録して provider を起動します。この隔離準備経路は現在の terminal で実行し、新しい tmux session を自動生成しません。旧 mode の picker/tmux 起動は従来どおりです。試験では provider を shell stub に置き換え、実 LLM を起動しません。
 
 名前解決と session policy は同じ context を照合します。session index の新形式は schema 3 / `global-self` で、instance・agent ID・credential generation・authority epoch と window を持ちます。別 agent の登録結果を自分の session に保存しません。旧 schema 2 は旧経路に残します。read-only inspect の window は `window_verification=local-only-server-unverified` と表示し、ready を立てません。明示または保存した program/model で register する再接続時には S1 register で server 照合し `server-verified-by-register` を返します。observe のみの再接続は server 未照合のままです。read-only window capability と、program/model を変更せず登録を更新する能力は S2 の候補です。
 
-credential・authority・lock・config・管理 socket・pending journal の保存先が同じ path / 解決先 / dev・inode を指す場合は、各呼出し前後に `CONTEXT_PATH_ROLE_CONFLICT` で拒否します。profile にこれらの保存先を使うことも拒否します。implicit context が broken symlink の場合も不在扱いにせず停止します。
+credential・authority・lock・config・管理 socket・pending journal の保存先が同じ path / 解決先 / dev・inode を指す場合は、各呼出し前後に `CONTEXT_PATH_ROLE_CONFLICT` で拒否します。profile にこれらの保存先を使うことも拒否します。implicit context が broken symlink の場合も不在扱いにせず停止します。client context・credential・journal・metadata・profile・session index は Mail の `runtime_root` 配下と、その symlink の解決先を保存先にできません。既存の出力先は role の magic/schema と binding・owner を確認し、SQLite・任意テキスト・別 owner の形式は network 前に拒否します。symlink・複数 hardlink も拒否します。新しい0600の一時ファイルは O_EXCL で作り、rename の直前にも既存出力先の形式を再検査します。非協調の同 UID actor が最後の検査と rename の間に名前を差し替える競合まで原子的に排除する保証ではありません。
+
+保存形式の magic は context の `orrery-runtime-client-s1`、credential の `orrery-global-credential-v1`、登録 pending の `orrery-global-registration-pending-v1`、復旧 pending の `orrery-global-enrollment-pending-v1`、metadata の `orrery-global-registration-metadata-v1`、profile の `orrery-global-client-profile-v1` です。session index は schema 3 / `global-self` です。型・binding・owner が違う既存ファイルは自動で移行や上書きをせず、入力先を直す operator 操作が必要です。
+
+released 版の raw token（任意の identity sidecar）、旧 persistent profile、schema 2 / self の session index を global の保存先へ選ぶと、`LEGACY_FILE_REQUIRES_IMPORT` で network 前に拒否し、bytes を維持します。これらの明示 operator import は PR7 の担当で、4a は自動変換しません。
 
 ## operator の復旧と profile
 

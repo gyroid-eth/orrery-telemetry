@@ -25,6 +25,9 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parents[2]
 KIND = 'orrery-runtime-client-s1'
 PROFILE_KIND = 'orrery-global-client-profile-v1'
+METADATA_KIND = 'orrery-global-registration-metadata-v1'
+REG_PENDING_KIND = 'orrery-global-registration-pending-v1'
+ENROLL_PENDING_KIND = 'orrery-global-enrollment-pending-v1'
 S1_ERRORS = frozenset({'NAME_CONFLICT', 'NAME_INVALID', 'OWNER_REQUIRED', 'WRITER_FENCED',
     'STALE_RUNTIME_BINDING', 'WINDOW_INPUT_REQUIRED', 'WINDOW_OWNER_MISMATCH',
     'EXISTING_WINDOW_REQUIRED', 'CREDENTIAL_INVALID', 'CREDENTIAL_GENERATION_CONFLICT',
@@ -66,7 +69,7 @@ def read_json(path):
         raise ClientError('PRIVATE_JSON_INVALID') from exc
 
 
-def atomic_json(path, value):
+def atomic_json(path, value, before_replace=None):
     path = Path(path)
     if path.exists() or path.is_symlink():
         read_private(path)
@@ -76,6 +79,8 @@ def atomic_json(path, value):
             json.dump(value, stream)
             stream.flush()
             os.fsync(stream.fileno())
+        if before_replace is not None:
+            before_replace()
         os.replace(temporary, path)
     finally:
         if os.path.exists(temporary):
@@ -180,7 +185,7 @@ class RuntimeClient:
             raise ClientError('ENDPOINT_NOT_LOCAL')
         self.endpoint = c['mcp_url']
         self.credential = absolute(c['credential_file'])
-        self.validate_path_roles()
+        self.metadata_path = self.runtime_dir / 'registration-metadata.json'
         self.identity = c.get('identity')
         if self.identity is not None and (not isinstance(self.identity, dict)
                 or not integer(self.identity.get('agent_id'), 1)
@@ -191,12 +196,14 @@ class RuntimeClient:
                     or not isinstance(self.identity['window_uuid'], str) or not self.identity['window_uuid']))):
             raise ClientError('WINDOW_BINDING_INVALID')
 
+        self.validate_path_roles()
+
     def validate_path_roles(self):
         # Reject role aliases before any server mutation, including recovery.
         roles = [self.path, self.authority, self.lock, self.credential,
                  absolute(self.config['management_socket']),
                  self.credential.with_suffix('.registration-pending.json'),
-                 self.credential.with_suffix('.enrollment-pending.json')]
+                 self.credential.with_suffix('.enrollment-pending.json'), self.metadata_path]
         resolved = [path.resolve() for path in roles]
         if len(set(resolved)) != len(resolved):
             raise ClientError('CONTEXT_PATH_ROLE_CONFLICT')
@@ -207,6 +214,99 @@ class RuntimeClient:
                 identities.append((info.st_dev, info.st_ino))
         if len(set(identities)) != len(identities):
             raise ClientError('CONTEXT_PATH_ROLE_CONFLICT')
+        self.reject_mail_output(self.runtime_dir)
+        outputs = [(self.path, 'context'), (self.credential, 'credential'),
+                   (self.credential.with_suffix('.registration-pending.json'), 'registration'),
+                   (self.credential.with_suffix('.enrollment-pending.json'), 'enrollment'),
+                   (self.metadata_path, 'metadata')]
+        for path, role in outputs:
+            self.validate_output(path, role)
+        directory = self.runtime_dir / 'session_index'
+        self.reject_mail_output(directory)
+        if directory.exists() or directory.is_symlink():
+            info = directory.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise ClientError('SESSION_DIRECTORY_UNSAFE')
+            for path in directory.glob('*.json'):
+                self.validate_output(path, 'session')
+
+    def reject_mail_output(self, path):
+        path = Path(path)
+        if (path.is_relative_to(self.runtime) or path.resolve().is_relative_to(self.runtime.resolve())):
+            raise ClientError('CLIENT_OUTPUT_IN_MAIL_STATE')
+        if not path.resolve().is_relative_to(self.isolation.resolve()):
+            raise ClientError('PATH_OUTSIDE_ISOLATION')
+
+    def validate_output(self, path, role):
+        path = Path(path)
+        self.reject_mail_output(path)
+        if not path.exists() and not path.is_symlink():
+            return
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or info.st_nlink != 1):
+            raise ClientError('OUTPUT_FILE_UNSAFE')
+        try:
+            row = read_json(path)
+        except ClientError as exc:
+            # Released enrollment writes a private raw token and an identity
+            # sidecar. Recognize it without authenticating or converting it.
+            if role == 'credential':
+                raw = read_private(path).decode('utf-8', errors='replace').strip()
+                sidecar = path.with_name(path.name + '.identity.json')
+                if 20 <= len(raw) <= 64 and sidecar.exists():
+                    identity = read_json(sidecar)
+                    if identity.get('kind') == 'orrery-enrollment-active-v1':
+                        raise ClientError('LEGACY_FILE_REQUIRES_IMPORT') from exc
+                if path.name.startswith('agent_token_') and 20 <= len(raw) <= 64:
+                    raise ClientError('LEGACY_FILE_REQUIRES_IMPORT') from exc
+            raise ClientError('OUTPUT_SCHEMA_INVALID') from exc
+        if ((role == 'profile' and row.get('kind') == 'orrery-persistent-agent-v1')
+                or (role == 'session' and row.get('schema_version') == 2
+                    and row.get('binding_kind') == 'self')):
+            raise ClientError('LEGACY_FILE_REQUIRES_IMPORT')
+        kinds = {'context': KIND, 'credential': 'orrery-global-credential-v1',
+                 'registration': REG_PENDING_KIND, 'enrollment': ENROLL_PENDING_KIND,
+                 'metadata': METADATA_KIND, 'profile': PROFILE_KIND}
+        valid = (row.get('schema_version') == 3 and row.get('binding_kind') == 'global-self') if role == 'session' else row.get('kind') == kinds[role]
+        if not valid or any(row.get(k) != v for k, v in self.binding.items()):
+            raise ClientError('OUTPUT_SCHEMA_INVALID')
+        if role in {'credential', 'enrollment', 'metadata', 'profile', 'session'}:
+            owner = getattr(self, '_activating_identity', self.identity)
+            if (not integer(row.get('agent_id'), 1) or (owner and row.get('agent_id') != owner['agent_id'])
+                    or (not owner and role != 'credential')):
+                raise ClientError('OUTPUT_OWNER_CONFLICT')
+        if role == 'credential' and (not integer(row.get('credential_generation'))
+                or not (row.get('registration_token') is None or isinstance(row.get('registration_token'), str))):
+            raise ClientError('OUTPUT_SCHEMA_INVALID')
+        if role == 'metadata' and not all(isinstance(row.get(k), str) and row[k] for k in ('program', 'model')):
+            raise ClientError('OUTPUT_SCHEMA_INVALID')
+        if role == 'registration' and (not isinstance(row.get('registration_token'), str)
+                or not all(isinstance(row.get(k), str) and row[k] for k in ('program', 'model'))):
+            raise ClientError('OUTPUT_SCHEMA_INVALID')
+        if role == 'enrollment' and (not integer(row.get('expected_generation'))
+                or row.get('action') not in {'claim', 'recover'} or not isinstance(row.get('new_credential'), str)):
+            raise ClientError('OUTPUT_SCHEMA_INVALID')
+        if role == 'profile' and row.get('client_config') != str(self.path):
+            raise ClientError('OUTPUT_OWNER_CONFLICT')
+
+    def write_output(self, path, value, role):
+        # mkstemp uses O_EXCL for the private temporary file; rename only after
+        # the destination's own format/owner and Mail-root boundary are checked.
+        self.validate_output(path, role)
+        atomic_json(path, value, before_replace=lambda: self.validate_output(path, role))
+
+    def registration_metadata(self):
+        if self.metadata_path.exists() or self.metadata_path.is_symlink():
+            self.validate_output(self.metadata_path, 'metadata')
+            return read_json(self.metadata_path)
+        # Read compatibility only: old contexts stay pinned and are not edited.
+        return self.config.get('registration_metadata', {})
+
+    def save_metadata(self, program, model):
+        with self.fence():
+            self.write_output(self.metadata_path, {'kind': METADATA_KIND, **self.binding,
+                'agent_id': self.identity['agent_id'], 'program': program, 'model': model}, 'metadata')
 
     def _authority(self):
         a = read_json(self.authority)
@@ -235,13 +335,13 @@ class RuntimeClient:
             except BlockingIOError as exc:
                 raise ClientError('WRITER_FENCED') from exc
             def check():
-                self.validate_path_roles()
                 current = os.lstat(self.lock)
                 if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
                     raise ClientError('AUTHORITY_LOCK_REPLACED')
                 read_private(self.lock)
                 if read_private(self.path) != self.raw:
                     raise ClientError('CONTEXT_CHANGED')
+                self.validate_path_roles()
                 return self._authority()
             authority = check()
             if self.mode == 'legacy':
@@ -363,7 +463,7 @@ class RuntimeClient:
                 **{k: self.identity[k] for k in ('window_row_id', 'window_uuid') if k in self.identity}}
 
     def reconnect(self, *, program=None, model=None):
-        metadata = self.config.get('registration_metadata', {})
+        metadata = self.registration_metadata()
         if program is None:
             program = metadata.get('program')
         if model is None:
@@ -373,10 +473,7 @@ class RuntimeClient:
             if not all(isinstance(v, str) and v for v in (program, model)):
                 raise ClientError('REGISTRATION_METADATA_REQUIRED')
             self.call('register_agent', {'program': program, 'model': model})
-            with self.fence():
-                self.config = {**self.config, 'registration_metadata': {'program': program, 'model': model}}
-                atomic_json(self.path, self.config)
-                self.raw = read_private(self.path)
+            self.save_metadata(program, model)
         # S1 whois omits program/model. Without locally known metadata, only
         # authenticate/observe; never invent labels that overwrite the server.
         observation = self.observe()
@@ -433,19 +530,21 @@ class RuntimeClient:
         if self.identity:
             identity.update({k: self.identity[k] for k in ('window_row_id', 'window_uuid') if k in self.identity})
         config = {**self.config, 'identity': identity}
-        if metadata is not None:
-            config['registration_metadata'] = metadata
         credential = {'kind': 'orrery-global-credential-v1', **self.binding,
                       **identity, 'registration_token': token}
+        self._activating_identity = identity
         with self.fence():
-            atomic_json(self.credential, credential)
+            self.write_output(self.credential, credential, 'credential')
         with self.fence():
-            atomic_json(self.path, config)
+            self.write_output(self.path, config, 'context')
             # Our intentional local configuration update is accepted, but any
             # concurrent replacement before it was rejected by the fence.
             self.raw = read_private(self.path)
             self.config = config
             self.identity = identity
+        del self._activating_identity
+        if metadata is not None:
+            self.save_metadata(metadata['program'], metadata['model'])
 
     def create(self, name, program, model):
         if self.identity is not None:
@@ -457,7 +556,7 @@ class RuntimeClient:
             if journal.exists():
                 raise ClientError('REGISTRATION_PENDING_OPERATOR_REQUIRED')
             token = secrets.token_urlsafe(32)
-            atomic_json(journal, {'name': name, 'program': program, 'model': model, 'registration_token': token, **self.binding})
+            self.write_output(journal, {'kind': REG_PENDING_KIND, 'name': name, 'program': program, 'model': model, 'registration_token': token, **self.binding}, 'registration')
             _, schemas = self.capabilities()
             if 'register_agent' not in schemas:
                 raise ClientError('CAPABILITY_UNAVAILABLE')
@@ -475,27 +574,32 @@ class RuntimeClient:
                     or not integer(row.get('agent_id'), 1) or row.get('credential_generation') != 1
                     or row.get('name') != name or row.get('registration_token') != token):
                 raise ClientError('REGISTRATION_RESPONSE_MISMATCH')
-            atomic_json(journal, {'row': {k: v for k, v in row.items() if k != 'registration_token'},
-                                  'program': program, 'model': model, 'registration_token': token, **self.binding})
+            self.write_output(journal, {'kind': REG_PENDING_KIND, 'row': {k: v for k, v in row.items() if k != 'registration_token'},
+                                  'program': program, 'model': model, 'registration_token': token, **self.binding}, 'registration')
         self.activate_credential(token, row, {'program': program, 'model': model})
         journal.unlink()
         return self.observe()
 
-    def save_profile(self, path):
+    def check_profile_destination(self, path):
         path = absolute(str(path))
         if not path.is_relative_to(self.isolation) or not path.resolve().is_relative_to(self.isolation.resolve()):
             raise ClientError('PROFILE_OUTSIDE_ISOLATION')
         roles = [self.path, self.authority, self.lock, self.credential,
                  absolute(self.config['management_socket']),
                  self.credential.with_suffix('.registration-pending.json'),
-                 self.credential.with_suffix('.enrollment-pending.json')]
+                 self.credential.with_suffix('.enrollment-pending.json'), self.metadata_path]
         if any(path.resolve() == target.resolve() or (path.exists() and target.exists()
                    and path.samefile(target)) for target in roles):
             raise ClientError('PROFILE_PATH_ROLE_CONFLICT')
+        self.validate_output(path, 'profile')
+        return path
+
+    def save_profile(self, path):
+        path = self.check_profile_destination(path)
         row = self.observe()
         value = {'kind': PROFILE_KIND, 'client_config': str(self.path), **row}
         with self.fence():
-            atomic_json(path, value)
+            self.write_output(path, value, 'profile')
         return {'ok': True, 'kind': PROFILE_KIND, 'agent_id': row['agent_id'], 'ready': False}
 
     def finalize_registration(self, agent_id):
@@ -530,7 +634,7 @@ class RuntimeClient:
         if not self.identity:
             raise ClientError('IDENTITY_REQUIRED')
         pending = self.credential.with_suffix('.enrollment-pending.json')
-        values = {'agent_id': self.identity['agent_id'], 'request_id': request_id,
+        values = {'kind': ENROLL_PENDING_KIND, 'agent_id': self.identity['agent_id'], 'request_id': request_id,
                   'expected_generation': expected_generation, 'action': action, **self.binding}
         with self.fence():
             if pending.exists():
@@ -540,7 +644,7 @@ class RuntimeClient:
                 token = saved['new_credential']
             else:
                 token = secrets.token_urlsafe(32)
-                atomic_json(pending, {**values, 'new_credential': token})
+                self.write_output(pending, {**values, 'new_credential': token}, 'enrollment')
         receipt = self.management(action, agent_id=self.identity['agent_id'], request_id=request_id,
                                   expected_generation=expected_generation, new_credential=token)
         current = self.management('inspect', agent_id=self.identity['agent_id'])
@@ -590,7 +694,7 @@ class RuntimeClient:
             value = {'schema_version': 3, 'binding_kind': 'global-self', **row,
                      'agent_name': row['name'], 'session_id': session_id,
                      'transcript_path': payload.get('transcript_path', ''), 'cwd': payload.get('cwd', '')}
-            atomic_json(directory / (str(row['agent_id']) + '.json'), value)
+            self.write_output(directory / (str(row['agent_id']) + '.json'), value, 'session')
         return value
 
     def exports(self, provider):

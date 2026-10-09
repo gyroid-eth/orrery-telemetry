@@ -52,6 +52,7 @@ def main():
                         pass
                     if Path(args.connection).absolute() != client.path:
                         raise api['ClientError']('PROFILE_CONTEXT_MISMATCH')
+                    client.check_profile_destination(args.journal)
                     if args.operation == 'create':
                         row = client.create(args.name, 'daemon', 'deterministic')
                     else:
