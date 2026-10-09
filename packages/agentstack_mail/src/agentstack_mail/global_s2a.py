@@ -253,12 +253,21 @@ def validate_receipts(db, instance, candidate):
         validate_receipt(db, row, instance, candidate)
 
 
-def validate_runtime_candidate(db, *, full=False, writable=False, allow_gap=False):
+def validate_runtime_candidate(
+    db,
+    *,
+    full=False,
+    writable=False,
+    allow_gap=False,
+    schema_version=3,
+    profile="s2a-v1",
+    receipt_validator=validate_receipt,
+):
     try:
-        if db.execute("PRAGMA user_version").fetchone()[0] != 3:
+        if db.execute("PRAGMA user_version").fetchone()[0] != schema_version:
             raise GlobalError("RUNTIME_SCHEMA_UNSUPPORTED")
         contracts = list(db.execute("SELECT * FROM global_runtime_contract"))
-        if len(contracts) != 1 or contracts[0]["schema_version"] != "s2a-v1":
+        if len(contracts) != 1 or contracts[0]["schema_version"] != profile:
             raise GlobalError("RUNTIME_SCHEMA_UNSUPPORTED")
         contract = contracts[0]
         if (
@@ -282,7 +291,9 @@ def validate_runtime_candidate(db, *, full=False, writable=False, allow_gap=Fals
             candidate = db.execute(
                 "SELECT value FROM namespace_metadata WHERE key='generation'"
             ).fetchone()[0]
-            validate_receipts(db, instance, candidate)
+
+            for row in db.execute("SELECT * FROM global_operation_receipts"):
+                receipt_validator(db, row, instance, candidate)
     except sqlite3.Error:
         raise GlobalError("RUNTIME_SCHEMA_UNSUPPORTED") from None
 
@@ -309,7 +320,13 @@ class S2aRuntime(GlobalRuntime):
         if self.config.get("contact_enforcement", True) is not True:
             raise GlobalError("CONFIG_CONTACT_ENFORCEMENT_UNSUPPORTED")
         with self.transaction() as db:
-            validate_runtime_candidate(db, full=True)
+            self.validate_candidate(db, full=True)
+
+    def validate_candidate(self, db, **options):
+        validate_runtime_candidate(db, **options)
+
+    def validate_receipt(self, db, row):
+        validate_receipt(db, row, self.instance, self.candidate_generation)
 
     def initial_preflight(self):
         # Publication is the single admission boundary, before even opening the
@@ -336,7 +353,7 @@ class S2aRuntime(GlobalRuntime):
 
     def before_operation(self, db, *, write):
         self.initial_preflight()
-        validate_runtime_candidate(db)
+        self.validate_candidate(db)
         registering = getattr(self, "register_window", None)
         if registering and registering[0] is not None:
             old = db.execute(
@@ -353,7 +370,7 @@ class S2aRuntime(GlobalRuntime):
         ).fetchone()[0]
 
     def inspect(self, db, agent_id):
-        validate_runtime_candidate(db, full=True)
+        self.validate_candidate(db, full=True)
         result = super().inspect(db, agent_id)
         cursor = getattr(self, "capacity_cursor", None)
         limit = getattr(self, "capacity_limit", 100)
@@ -491,7 +508,7 @@ class S2aRuntime(GlobalRuntime):
                 "UPDATE global_runtime_contract SET last_validated_revision=? WHERE id=1",
                 (revision(db),),
             )
-            validate_runtime_candidate(db)
+            self.validate_candidate(db)
 
     def peer(self, db, aid):
         row = db.execute("SELECT * FROM agents WHERE id=?", (aid,)).fetchone()
@@ -626,9 +643,7 @@ class S2aRuntime(GlobalRuntime):
                 if prior:
                     if prior["request_hash"] != hashed:
                         raise GlobalError("REQUEST_ID_CONFLICT")
-                    validate_receipt(
-                        db, prior, self.instance, self.candidate_generation
-                    )
+                    self.validate_receipt(db, prior)
                     return unique_document(prior["receipt_json"])
                 if self.receipts_used(db, owner["id"]) >= self.receipt_limit:
                     raise GlobalError("REQUEST_RECEIPT_CAPACITY_REACHED")
@@ -798,7 +813,7 @@ class S2aRuntime(GlobalRuntime):
                     "SELECT * FROM global_operation_receipts WHERE server_instance_id=? AND agent_id=? AND request_id=?",
                     (self.instance, owner["id"], args["request_id"]),
                 ).fetchone()
-                validate_receipt(db, inserted, self.instance, self.candidate_generation)
+                self.validate_receipt(db, inserted)
                 self.fault("after_receipt")
             self.fault("before_commit")
         self.fault("after_commit")
@@ -846,10 +861,10 @@ class S2aTool(Tool):
         return ToolResult(content=result, structured_content=result)
 
 
-def build_s2a_server(config):
+def build_s2a_server(config, *, runtime_class=S2aRuntime):
     captured = []
 
-    class Runtime(S2aRuntime):
+    class Runtime(runtime_class):
         def __init__(self, path):
             super().__init__(path)
             captured.append(self)

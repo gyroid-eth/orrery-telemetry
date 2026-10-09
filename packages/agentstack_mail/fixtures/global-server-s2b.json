@@ -2892,7 +2892,7 @@
       "decision": "Q4 A（決定）: S2aのrequest/respond/macro schema/outputはそのまま、welcomeは固定reason拒否を維持。S2bのnotificationはmessage signalだけ。",
       "boundary": "公開追加は8 tool＋message hintに限定。contact welcomeは別PRへ。後続へ節を参照。"
     },
-    "health_inspect": "supported_tools=24/resources=false。S2b capability/profile/schema digest、signal dirty pending/blocked件数・最古age/reason、owner attachment usage/limit/over_limitを表示。DB committedとsignal照合済みとconsumer配送完了は区別。pending回収中degraded、恒久blockedはred。sessionの無い宛先は既存healthの区別を継承。"
+    "health_inspect": "supported_tools=24/resources=false。S2b capability/profile/schema digest、signal dirty pending/blocked件数・最古age/reason、owner attachment usage/limit/over_limitを表示。DB committedとsignal照合済みとconsumer配送完了は区別。top-level statusはserver readinessのみ。signal.statusにpending回収中degraded・恒久blocked redを置き、4a clientを配送状態で拒否しない。sessionの無い宛先とdashboardのsignal接続は4c/PR6へ。"
   },
   "receipt_contract": {
     "reuse": "global_operation_receiptsのPK/DDL/quota/UUID跨tool一意性/現auth・binding先行/確定拒否一覧はS2a共通正本を拡張し再利用。新receipt table無し。",
@@ -3088,7 +3088,7 @@
         ],
         "additionalProperties": false
       },
-      "semantics": "message_ids入力順応答。構文/binding/recipient agent検証、known非recipient1件なら全rollback DELIVERY_RECIPIENT_MISMATCH。unknown messageはunknown/notified_at=null＋dirty upsert、他owner情報を返さない。全knownに初回notified_tsだけset＋dirty、同transactionでrevision最大1、完全no-opで0。未知IDのdirty upsertが変化ならrevision1。再申告は新timestampを作らず同DB factへ。read/ack済みも通知の初回時刻はconsumer実申告時で記録可能。"
+      "semantics": "message_ids入力順応答。構文/binding/recipient agent検証、known非recipient1件なら全rollback DELIVERY_RECIPIENT_MISMATCH。unknown messageはunknown/notified_at=null＋dirty upsert、他owner情報を返さない。未消費のknownに初回delivered:<UTC> factだけset＋dirty、同transactionでrevision最大1、完全no-opで0。未知IDのdirty upsertが変化ならrevision1。再申告は新timestampを作らず同DB factへ。read/ack済みも通知の初回時刻はconsumer実申告時で記録可能。"
     },
     "reconcile_outputs": {
       "request_schema": {

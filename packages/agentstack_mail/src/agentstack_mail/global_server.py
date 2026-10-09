@@ -186,7 +186,7 @@ class GlobalRuntime:
         try:
             with connection(self.paths["database"]) as db:
                 self.check_sqlite_files()
-                if self.schema_version == 3:
+                if self.schema_version >= 3:
                     db.execute("BEGIN DEFERRED")
                 metadata = dict(db.execute("SELECT key,value FROM namespace_metadata"))
                 instances = list(db.execute("SELECT instance_id FROM mail_instances"))
@@ -229,6 +229,9 @@ class GlobalRuntime:
         self.control = None
         self.handlers = set()
         self.writers = set()
+
+    def health_details(self, db=None):
+        return {}
 
     def authority_states(self):
         return (
@@ -349,7 +352,7 @@ class GlobalRuntime:
                 self.check_sqlite_files()
                 if write:
                     db.execute("BEGIN IMMEDIATE")
-                elif self.schema_version == 3:
+                elif self.schema_version >= 3:
                     db.execute("BEGIN DEFERRED")
                 if generation(db) != self.candidate_generation:
                     raise GlobalError("CANDIDATE_CHANGED")
@@ -772,6 +775,13 @@ def build_global_server(config, *, runtime_class=GlobalRuntime, server_class=S1F
         from .global_s2a import build_s2a_server
 
         return build_s2a_server(config)
+    if (
+        runtime_class is GlobalRuntime
+        and document(config).get("kind") == "orrery-global-server-s2b-v1"
+    ):
+        from .global_s2b import build_s2b_server
+
+        return build_s2b_server(config)
     runtime = runtime_class(config)
 
     @asynccontextmanager
@@ -797,6 +807,7 @@ def build_global_server(config, *, runtime_class=GlobalRuntime, server_class=S1F
             revision = dict(db.execute("SELECT key,value FROM namespace_metadata"))[
                 "write_generation"
             ]
+            details = runtime.health_details(db)
         return {
             "status": "ok",
             "mode": "global-preparation",
@@ -810,6 +821,7 @@ def build_global_server(config, *, runtime_class=GlobalRuntime, server_class=S1F
             "supported_tools": sorted(runtime.tools),
             "resources_supported": False,
             **getattr(runtime, "health_fields", {}),
+            **details,
         }
 
     @server.tool

@@ -45,6 +45,7 @@ classifiers = [
 
 [project.scripts]
 agentstack-mail = "agentstack_mail.cli:main"
+agentstack-mail-global-prepare-s2b = "agentstack_mail.global_prepare_s2b:main"
 agentstack-mail-global-prepare = "agentstack_mail.global_prepare:main"
 agentstack-mail-global-incident = "agentstack_mail.global_incident:main"
 agentstack-enroll = "agentstack_mail.enrollment_cli:main"

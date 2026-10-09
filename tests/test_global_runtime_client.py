@@ -414,6 +414,11 @@ def test_installed_payload_reconnects_from_its_own_root(prepared):
     for path in ('bin/lib/runtime_client.py', 'bin/agentstack-runtime-client',
                  'bin/agentstack-reregister', 'bin/agentstack-codex-bootstrap'):
         shutil.copy2(ROOT / path, installed / path)
+    # Mirror the installer payload, including the shared catalog validator.
+    shutil.copy2(ROOT / 'packages/agentstack_mail/src/agentstack_mail/schema_contract.py',
+                 installed / 'bin/lib/schema_contract.py')
+    shutil.copy2(ROOT / 'packages/agentstack_mail/fixtures/global-server-s2a.json',
+                 installed / 'bin/lib/global-server-s2a.json')
     config = {**prepared['client_config'], 'wrapper_root': str(installed)}
     private(prepared['client_path'], config)
     r = subprocess.run(['/bin/bash', str(installed / 'bin/agentstack-reregister'), 'ObsoleteName', 'codex', 'fixture'],
