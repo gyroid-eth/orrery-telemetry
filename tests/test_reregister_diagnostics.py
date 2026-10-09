@@ -567,3 +567,24 @@ def test_contact_policy_failures_do_not_end_a_set_e_caller():
         made = calls.read_text().splitlines()
     assert len(made) == 2
     assert "registration_token=" not in made[0] and "registration_token=owner-token" in made[1]
+
+
+@pytest.mark.parametrize('template,default', [('codex/AGENTS.md', 'codex'), ('claude/CLAUDE.md', 'claude-code')])
+@pytest.mark.parametrize('override', [None, 'custom-provider'])
+def test_template_reregister_preserves_legacy_program_override(tmp_path, template, default, override):
+    env, log = _fixture_env(tmp_path)
+    env['AGENT_NAME'] = AGENT_NAME
+    env.pop('AGENTSTACK_CLIENT_CONFIG', None)
+    env.pop('AGENTSTACK_REREGISTER_PROGRAM', None)
+    if override is not None:
+        env['AGENTSTACK_REREGISTER_PROGRAM'] = override
+    line = next(line for line in (ROOT / template).read_text().splitlines()
+                if 'bin/agentstack-reregister "$AGENT_NAME"' in line)
+    command = line.replace('__AGENTSTACK_HOME__/bin/agentstack-reregister', shlex.quote(str(REREGISTER))).replace('__AGENTSTACK_PROJECT_KEY__', '/fixture/project')
+    result = subprocess.run([BASH, '-c', command], cwd=tmp_path, env=env,
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    registered = next(call for call in calls if call['tool'] == 'register_agent')
+    assert registered['arguments']['program'] == ((override or default) if template.startswith('codex/') else 'claude-code')
+    _assert_no_secrets(result)

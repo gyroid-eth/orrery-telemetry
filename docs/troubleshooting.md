@@ -350,6 +350,8 @@ AGENTSTACK_PROJECT_KEY=/absolute/project/path \
 
 を実行します。
 
+明示 global context の exit 3 は `observed`（登録は未更新）です。program/model を指定して helper を再実行してください。
+
 失敗時の stderr は、秘密を含まない定型診断です。たとえば
 `stage=ensure_project reason=transport-failed curl_exit=7` は通信前半、
 `stage=register_agent reason=http-rejected http_status=403` は HTTP 拒否、

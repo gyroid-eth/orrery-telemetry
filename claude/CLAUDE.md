@@ -67,6 +67,8 @@ the command; do not generate or substitute another name. Then run:
 AGENTSTACK_PROJECT_KEY="__AGENTSTACK_PROJECT_KEY__" __AGENTSTACK_HOME__/bin/agentstack-reregister "$AGENT_NAME" claude-code
 ```
 
+In an explicit global context, exit 3 means `observed` without refreshing registration; pass program/model and rerun the helper to refresh it.
+
 The helper restores the owner token from runtime state without printing it. A
 successful run prints `agentstack-reregister: registered <name>` and exits 0;
 do not call `register_agent` afterward. Authenticate the raw MCP session as in

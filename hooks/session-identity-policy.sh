@@ -399,6 +399,15 @@ agentstack_invalid_endpoint_message() {
 #
 # Prints "ok", "conflict", or "none".
 agentstack_session_binding_conflict() {
+    local runtime_client runtime_mode
+    runtime_client="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/lib/runtime_client.py"
+    if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$(dirname "$runtime_client")/../../runtime-client.json" || -L "$(dirname "$runtime_client")/../../runtime-client.json" ]]; then
+        runtime_mode="$(python3 "$runtime_client" mode 2>/dev/null)" || { printf 'conflict\n'; return 0; }
+        if [[ "$runtime_mode" == "global" ]]; then
+            if python3 "$runtime_client" observe >/dev/null 2>&1; then printf 'ok\n'; else printf 'conflict\n'; fi
+            return 0
+        fi
+    fi
     local session_id="$1" project="$2" env_name="$3"
     case "$session_id" in
         ""|*[!a-zA-Z0-9_-]*) printf 'none\n'; return 0 ;;

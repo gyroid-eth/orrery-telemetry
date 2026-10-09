@@ -20,6 +20,13 @@ AGS_PROG="agent-start-gemini"
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/agentstack-launch.sh
 . "$BIN_DIR/lib/agentstack-launch.sh"
+AGS_RUNTIME_CLIENT="$BIN_DIR/lib/runtime_client.py"
+if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$BIN_DIR/../runtime-client.json" || -L "$BIN_DIR/../runtime-client.json" ]]; then
+  AGS_RUNTIME_MODE="$(python3 "$AGS_RUNTIME_CLIENT" mode)" || exit 1
+  if [[ "$AGS_RUNTIME_MODE" == "global" ]]; then
+    exec python3 "$AGS_RUNTIME_CLIENT" launch gemini "${1:-$PWD}"
+  fi
+fi
 ags_load_env
 
 GEMINI_BIN="${AGENTSTACK_GEMINI_BIN:-agy}"

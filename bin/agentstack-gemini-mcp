@@ -9,6 +9,14 @@ set -euo pipefail
 
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-$(cd "$BIN_DIR/.." && pwd)}"
+if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$BIN_DIR/../runtime-client.json" || -L "$BIN_DIR/../runtime-client.json" ]]; then
+  _ags_mode="$(python3 "$BIN_DIR/lib/runtime_client.py" mode)" || exit 1
+  if [[ "$_ags_mode" == "global" ]]; then
+    python3 "$BIN_DIR/lib/runtime_client.py" observe >/dev/null || exit 1
+    echo 'agentstack-gemini-mcp: GLOBAL_STDIO_REQUIRES_PR4C' >&2
+    exit 1
+  fi
+fi
 # shellcheck source=lib/agentstack-register.sh
 . "$BIN_DIR/lib/agentstack-register.sh"
 

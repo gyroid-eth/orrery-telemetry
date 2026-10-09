@@ -328,6 +328,8 @@ AGENTSTACK_PROJECT_KEY=/absolute/project/path \
   ~/.agentstack/bin/agentstack-reregister "$AGENT_NAME"
 ```
 
+In an explicit global context, exit 3 means `observed` without refreshing registration; pass program/model and rerun the helper.
+
 On failure, stderr contains a fixed, secret-free diagnostic. For example,
 `stage=ensure_project reason=transport-failed curl_exit=7` identifies the first
 transport step; `stage=register_agent reason=http-rejected http_status=403`

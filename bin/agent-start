@@ -25,6 +25,13 @@ BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$BIN_DIR/lib/agentstack-launch.sh"
 # shellcheck source=lib/agentstack-register.sh
 . "$BIN_DIR/lib/agentstack-register.sh"
+AGS_RUNTIME_CLIENT="$BIN_DIR/lib/runtime_client.py"
+if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$BIN_DIR/../runtime-client.json" || -L "$BIN_DIR/../runtime-client.json" ]]; then
+  AGS_RUNTIME_MODE="$(python3 "$AGS_RUNTIME_CLIENT" mode)" || exit 1
+  if [[ "$AGS_RUNTIME_MODE" == "global" ]]; then
+    exec python3 "$AGS_RUNTIME_CLIENT" launch claude "${1:-$PWD}"
+  fi
+fi
 ags_load_env
 
 CLAUDE_BIN="${AGENTSTACK_CLAUDE_BIN:-claude}"

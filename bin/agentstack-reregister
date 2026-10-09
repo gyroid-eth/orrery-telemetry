@@ -37,6 +37,32 @@ fail_diagnostic() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$SCRIPT_DIR/../runtime-client.json" || -L "$SCRIPT_DIR/../runtime-client.json" ]]; then
+  _ags_mode="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" mode)" || exit 1
+  if [[ "$_ags_mode" == "global" ]]; then
+    _ags_program="${2:-${AGENTSTACK_REREGISTER_PROGRAM:-}}"
+    _ags_model="${3:-${AGENTSTACK_REREGISTER_MODEL:-}}"
+    if [[ -n "$_ags_program" || -n "$_ags_model" ]]; then
+      _ags_program="${_ags_program:-codex}"
+      case "$_ags_program" in
+        codex) _ags_default_model="${AGENTSTACK_CODEX_MODEL:-codex}" ;;
+        claude-code) _ags_default_model="${AGENTSTACK_CLAUDE_MODEL:-claude-code}" ;;
+        *) _ags_default_model="$_ags_program" ;;
+      esac
+      _ags_result="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" reconnect "$_ags_program" "${_ags_model:-$_ags_default_model}")" || exit 1
+    else
+      _ags_result="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" reconnect)" || exit 1
+    fi
+    _ags_name="$(printf '%s' "$_ags_result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')"
+    _ags_reconnect_mode="$(printf '%s' "$_ags_result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reconnect_mode"])')"
+    if [[ "$_ags_reconnect_mode" == "observe-only" ]]; then
+      printf 'agentstack-reregister: observed %s (registration not refreshed; pass program/model)\n' "$_ags_name"
+      exit 3
+    fi
+    printf 'agentstack-reregister: registered %s\n' "$_ags_name"
+    exit 0
+  fi
+fi
 
 load_env_file() {
   local envf="$1"

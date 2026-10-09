@@ -37,6 +37,7 @@ import argparse
 import json
 import os
 import pathlib
+import runpy
 import subprocess
 import sys
 import time
@@ -159,7 +160,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--interval", type=float, default=3.0)
     args = parser.parse_args(argv)
-    if args.project_key is None:
+    runtime_api = runpy.run_path(str(pathlib.Path(__file__).resolve().parent / 'lib/runtime_client.py'))
+    try:
+        client = runtime_api['configured']()
+        if client is not None:
+            with client.fence():
+                pass
+    except runtime_api['ClientError'] as exc:
+        print(f"agentstack-await-reply: {exc}", file=sys.stderr)
+        return 2
+    if args.project_key is None and (client is None or client.mode == 'legacy'):
         try:
             args.project_key = _resolved_project_key()
         except RuntimeError as exc:
@@ -172,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
     url = _mcp_url()
     def fetch():
         try:
+            if client is not None and client.mode == 'global':
+                return client.call('fetch_inbox', {'limit': 20, 'include_bodies': True})
             response = _call(
                 url,
                 "fetch_inbox",
@@ -182,11 +194,22 @@ def main(argv: list[str] | None = None) -> int:
                     "include_bodies": True,
                 },
             )
+        except runtime_api['ClientError'] as exc:
+            if str(exc) != 'TRANSPORT_FAILED':
+                raise
+            # A network outage is retryable; authority changes still fail closed.
+            with client.fence():
+                pass
+            response = None
         except (urllib.error.URLError, OSError, ValueError):
             response = None
         return _messages(response) if response is not None else None
-    code, match = wait_for_reply(fetch, timeout=args.timeout, interval=args.interval,
-                                 sender=args.sender, after_id=args.after_id)
+    try:
+        code, match = wait_for_reply(fetch, timeout=args.timeout, interval=args.interval,
+                                     sender=args.sender, after_id=args.after_id)
+    except runtime_api['ClientError'] as exc:
+        print(f"agentstack-await-reply: {exc}", file=sys.stderr)
+        return 2
     if match is not None:
         print(json.dumps(match, ensure_ascii=False))
     elif code == 1:

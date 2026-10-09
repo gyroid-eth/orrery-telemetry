@@ -24,6 +24,14 @@
 WORK_DIR="${1:-.}"
 if [ -n "${BASH_SOURCE:-}" ]; then _ags_bootstrap_src="${BASH_SOURCE[0]}"; else _ags_bootstrap_src="$0"; fi
 SCRIPT_DIR="$(cd "$(dirname "$_ags_bootstrap_src")" && pwd)"
+if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$SCRIPT_DIR/../runtime-client.json" || -L "$SCRIPT_DIR/../runtime-client.json" ]]; then
+  _ags_global_mode="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" mode)" || { return 1 2>/dev/null || exit 1; }
+  if [[ "$_ags_global_mode" == "global" ]]; then
+    _ags_global_exports="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" bootstrap codex)" || { return 1 2>/dev/null || exit 1; }
+    eval "$_ags_global_exports"
+    return 0 2>/dev/null || exit 0
+  fi
+fi
 if [ -z "${AGENTSTACK_PROJECT_KEY:-}" ] && [ -f "$SCRIPT_DIR/../env.sh" ]; then . "$SCRIPT_DIR/../env.sh"; fi
 
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
