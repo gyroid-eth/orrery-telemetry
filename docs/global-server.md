@@ -1,4 +1,4 @@
-# global server の S1 準備
+# global server の S1 / S2a 準備
 
 [English](global-server.en.md)
 
@@ -149,3 +149,80 @@ owner UID の Unix socket でのみ `version=1` の global 管理契約を使い
 S1 が公開するのは health/ensure/register/whois/inbox/retire/unretire の7 tool だけです。残り18 tool（正本 fixture の `unimplemented`）は S2 に残ります。送信・返信・read/ack・search・contact・summary/topic・予約と macro、archive/添付/Git writer、global signal の生成/clear、生成 Git guard の結線は未対応です。resources は公開しません。従来の未公開 resource/tool body を、新しい公開要件として勝手に追加しません。
 
 順番は S1 → 4a → S2 → 4b → 4c です。S1 の成功は global の全機能完成や実切替完了を意味しません。現行 mode の回帰と、この7 tool/管理 socket の実 HTTP 試験を区別して検証します。
+
+## S2a: schema3 の新規準備
+
+S2a は明示した隔離設定 `orrery-global-server-s2a-v1` だけを対象とし、既定の旧 mode と S1 の設定・7 tool は維持します。公開契約は [S2a fixture](../packages/agentstack_mail/fixtures/global-server-s2a.json) です。health の `capabilities` は対応 ID の整列済み配列で、未対応能力へ旧 mode の fallback はしません。dashboard API の世代は変わりません。
+
+| 追加 tool | capability | 動作 |
+|---|---|---|
+| `refresh_registration` | `registration_refresh_v1` | program/model/token/世代を保つ登録更新。task の null は保持、空文字は消去 |
+| `verify_window_identity` | `window_verify_readonly_v1` | 正確な owner/row/UUID と期限を読取り、revision を変えない |
+| `touch_window_identity` | `window_touch_v1` | 既存 window と owner の活動・有限期限を単調更新。receipt/quota の対象外 |
+| `resolve_agent_identity` | `identity_resolve_v1` | canonical name から stable ID と表示情報を解決。peer の token は返さない |
+| `request_contact` / `respond_contact` / `list_contacts` / `set_contact_policy` / `macro_contact_handshake` | `contact_state_v1` | 既存 stable ID の directed link と本人の policy。相手 owner の承認が必要 |
+
+送信・返信・通知・archive/signal writer は S2b、予約と GC は S2c、実切替は PR7 です。macro は request-only で、`auto_accept=true` と welcome 本文はそれぞれ固定 reason で拒否します。approved link の期限は旧配送と同じく参考値で、期限だけで承認を取り消しません。pending の期限は再要求の更新を決め、blocked は相手 owner が明示的に解除するまで有効です。
+
+### 隔離 fixture で試す
+
+[開発用 venv](../CONTRIBUTING.md#test-environment) を用意し、専用 HOME で serial に実行します。2つの file は合成旧 DB から新 schema3 を準備し、本物の loopback HTTP と Unix 管理 socket を起動・終了します。外部 provider は起動しません。
+
+```sh
+check_root="$(mktemp -d)"
+mkdir "$check_root/home" "$check_root/tmux"
+HOME="$check_root/home" TMUX_TMPDIR="$check_root/tmux" \
+  AGENTSTACK_MAIL_ENV_FILE="$check_root/absent.env" \
+  PYTHONPATH=.:packages/agentstack_mail/src \
+  .venv/bin/python -m pytest -q \
+  packages/agentstack_mail/tests/test_global_server_s2a.py \
+  tests/test_global_runtime_client_s2a.py
+```
+
+新規 preparation の operator 入口は `agentstack-mail-global-prepare --plan FILE` です。plan は0600の `orrery-s2a-preparation-plan-v1` JSON で、`activation_enabled=false`、0700の一時 `isolation_root`、新しい `candidate_name`、canonical UUID の `request_id`、`source_paths`（mail/delivery/archive/signals/history/bindings/config）、`choices`、`fence_evidence` を含めます。source と evidence は [PR3 の明示 snapshot / writer roster / fence](namespace-state-migration.md) と同じで、実 service の停止を推測した evidence を作ってはいけません。完全な合成 source と choices の生成例は [fixture](../packages/agentstack_mail/tests/fixtures/namespace_state.py)、API の呼出し例は `test_fresh_preparation_and_restart` です。
+
+source の形式確認は immutable read-only で行い、PR3 candidate の namespace metadata/global columns を legacy source として受け入れません。user_version の数値だけでは判別しません。拒否する既存 candidate の WAL/SHM を作成・checkpoint しません。
+
+出力は `isolation_root/s2a-candidates/candidate_name/` の固定 layout です。`preparation-owner.json`、`preparation-receipt.json`、非公開 `staging/`、完成した `candidate/` から導出し、任意の role path は受け取りません。source の厳密な保存確認後、staging の transaction で固定拡張・marker3・初期 revision1 を作り、拡張後の内容と最終差分・fence・gate を照合します。ready manifest を保存してから rename し、complete receipt を確定します。complete 前の server 起動は `PREPARATION_INCOMPLETE` です。同じ plan/UUID を再実行すると自分の途中結果を検証して完了し、別 plan/foreign root は上書きしません。source が変わった場合や owned marker より前の作成失敗で所有を証明できない場合は、旧出力を保存して新しい candidate_name を使います。
+
+完成後は `candidate/server-config.json` を `agentstack-mail --global-config` に明示します。上の S1 例と同じ passthrough・専用 HOME・存在しない env file・空き port の条件を守ります。installed pointer、実 HOME、旧 authority は変更しません。通常 restart は検証だけで DDL・初期 revision を繰り返しません。
+
+### schema2 を拒否されたとき
+
+`CANDIDATE_SCHEMA_REQUIRES_REPREPARE` は既存 schema2 をその場で upgrade しないという意味です。完成した preparation receipt の無い root は DB ファイルを開く前に拒否し、main/WAL/SHM/journal を変えません。schema2 を見分けるための別検査は持ちません。receipt は準備完了と binding を示し、稼働後の DB の内容そのものは保証しないため、receipt の照合後に通常の schema3 検証を行います。旧 root を保存し、supported source から **別 workspace の新しい candidate_name** で schema3 を準備してください。未 release の master の PR3 Python API で作った schema2 も同じ扱いです。旧 S1 だけで増えた agent/message/token/window は自動移行も破棄もしません。それらの継続が必要なら root を保持して PR7 または別の明示移行を待ちます。旧 snapshot の rollback や extension の削除で pristine に見せる操作は行いません。
+
+旧 client root は実行用として併用せず、旧 caller を止めたうえで復旧証跡として保管します。credential/context のコピーによって同じ identity の実行用 root を2つ作りません。以下の向け直しを終えてから新 caller を開始します。
+
+新しい candidate では、新しい fixed `client_name` の root を作り、現在の instance/candidate/epoch と ID/token-state/generation を inspect してから [operator enrollment と明示 finalize](global-runtime-client.md) を実施します。旧 token や同じ数値 ID から連続性を推測しません。新しい `runtime-client.json` で whois、自己 inbox、window の照合を確かめ、次の呼出し元を向け直します。
+
+1. `AGENTSTACK_CLIENT_CONFIG` を新しい `runtime-client.json` の絶対 path に設定します。旧値を継いだ terminal/tmux pane は明示的に更新します。
+2. wrapper/hook の暗黙値はその wrapper checkout の `runtime-client.json` です。暗黙値に頼らず、試験用 wrapper と hook を呼ぶ環境に新しい `AGENTSTACK_CLIENT_CONFIG` を渡します。実 installed 設定の自動変更はありません。
+3. persistent profile は新 client で固定 `profile.json` を作り直し、その profile を指定します。`client_config` が旧 root を指す profile を手書きで上書き・再利用しません。
+4. `CONTEXT_CHANGED` / `WRITER_FENCED` / `STALE_RUNTIME_BINDING` / `MUTATION_PENDING_REQUIRES_RESOLUTION` が旧入口から出たら、まず env と profile の `client_config` を確認します。schema2 reason だけから新 root を自動探索しません。operator が選んだ新 candidate_name/client_name と完成 receipt を入口にします。
+
+旧 root の pending がある場合は保持し、新 current context の認証後にのみ `resolve-mutation` で明示的に解消します。`bin/lib/runtime_client.py --context OLD_CONTEXT resolve-mutation DIGEST NEW_CONTEXT PROOF_JSON` の proof は `expected_old` / `expected_new`（server_instance_id/candidate_generation/authority_epoch）、`old_agent_id` / `new_agent_id` と `confirm=true` を含みます。DIGEST は旧 `runtime/mutation-pending.json` の SHA256 です。結果は「旧 outcome は不明・再送しない」とし、旧 local pending だけを処理します。旧 token の無条件コピー、payload の新 binding への書換え、新 UUID による自動再送はしません。
+
+### receipt と活動、旧 mode との違い
+
+program/model 無指定の mapped reconnect は touch/observe だけを行い、contact policy は明示した変更入口で適用します。receipt 対象の5 tool は通信前に client の固定 `runtime/mutation-pending.json` に UUID と canonical payload を保存します。`runtime/mutation.lock` は binding 非依存の local mutex です。応答喪失後も同じ intent は同 UUID を使い、別 intent は拒否します。tools/list の outputSchema と owner/binding/UUID の照合後にだけ pending を消し、不適合な応答では planned を保ちます。schema の検証関数は server/client の共通正本です。server は preimage/hash と result/digest を domain 変更と同じ transaction に保存します。現在の token/generation/binding の認証後にだけ replay でき、返る値は現在値でなく確定時の結果です。
+
+既定 quota は owner ごと100000件で、自動削除はありません。満杯の owner の新 receipt 操作だけ `REQUEST_RECEIPT_CAPACITY_REACHED` になり、replay、別 owner、正確な window の touch は維持します。管理 inspect の `receipt_capacity` で owner の残数と keyset page を確認でき、明示 config の `operation_receipt_limit` を増やして制御した restart ができます。candidate 全体の disk quota は保証していません。touch/verify は未解消の正当な pending や保持中の mutation mutex を使わず、独立した current credential で認証します。
+
+| 旧 mode | 明示 global S2a / S2b の判定 |
+|---|---|
+| 予約の重なりが block_all より先に許可することがある | directed blocked と block_all が優先。自己送信は許可 |
+| requester の自動 handshake 承認がある | target owner の明示承認が必要 |
+| enforcement=false で検査を止められる | 明示 global では拒否 |
+| 配送が blocked link を見ない | directed blocked を拒否 |
+
+この違いは旧 mode を変更しません。PR7 の切替案内にも載せる必要があります。auto の最近の交換は明示 config の `contact_auto_ttl_seconds`（既定86400秒）で、naive UTC / offset / Z を時点に直して比較します。活動は `max(保存値, 操作時刻)`、有限期限は `max(保存値, 操作時刻+TTL)` で、時計逆行時も戻しません。
+
+### tracker mismatch からの出口
+
+`RUNTIME_WRITER_MISMATCH` は通常 domain 操作を止めます。`agentstack-mail-global-incident inspect --config FILE` は同じ read snapshot で tracker/current revision・table digest を診断し、token/本文を表示しません。tracker 一致だけを免除し、schema3 の schema/integrity/私有 file 検査は維持します。receipt の無い root は DB を開かずに拒否します。不正な schema3 を修復する入口ではありません。
+
+意図的に退役させる operator は inspect の `incident_digest`、`tracked_revision` / `current_revision` を使い、`agentstack-mail-global-incident quarantine --config FILE --request-id UUID --incident-digest DIGEST --tracked-revision N --current-revision N --confirm-quarantine` を実行します。EX 下で再照合し、固定 `global-runtime/incident.json`、authority の fencing/retirement、`quarantine.json` を記録します。各境界の中断は同 UUID で退役の完了だけを再実行します。DB/receipt/tracker を削除・巻戻し・adopt せず、その場に証拠を残します。再稼働は別の candidate と current enrollment に限ります。同 UID の非協調 process による検査と open/commit 間の競合、および外側の書込みの巻戻し不能という S1 の限界は残ります。
+
+全件の quick_check/FK/FTS と過去 receipt の検証は起動時と明示した管理 inspect で行います。通常の書込みは同じ transaction 内で schema/profile/tracker と今回触った行・新 receipt の preimage/output/digest を検証し、replay は一致した1件だけを検証します。過去 receipt の全走査を touch や通常の書込みへ持ち込みません。read snapshot の FTS 検証は candidate DB と同じ隔離領域の固定 `.fts-validation`（0700）内に一時 disk DB を作り、成功時も例外時も検査用 directory ごと削除します。固定 directory 自体を flock して回収と検査を直列化し、次の検査の開始時に強制終了で残った自分の命名規則・owner・private mode に一致する snapshot だけを削除します。symlink は辿らず、無関係なファイルや directory は消しません。system の TMPDIR やメモリへ DB 全体を複製しません。incident の SH/EX も通常処理と同じ authority/fence/transaction 入口です。
+
+client の pending は結果不明の証跡です。`TARGET_UNAVAILABLE`・quota 等の確定した tool 拒否では、自分の保存 bytes を mutex 下で再照合して消します。理由語と拒否時点の正本は wire fixture の `client_uuid_contract.definite_rejections` です。transport 失敗、schema/binding 不適合、未知の理由語は保持します。既存 pending に対する認証・fence 拒否は以前の commit の有無を証明しないため保持し、明示 resolution を使います。初回試行の確定した事前拒否とは区別します。同じ UUID に別の意図がある `REQUEST_ID_CONFLICT` も pending を保持し、operator の明示 resolution に回します。

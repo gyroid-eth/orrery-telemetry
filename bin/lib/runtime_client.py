@@ -1,6 +1,6 @@
-"""Explicit isolated S1 client; an absent context preserves the legacy path.
+"""Explicit isolated global client; an absent context preserves the legacy path.
 
-The server wire remains fixtures/global-server-s1.json. No DB reads, ambient
+The advertised server wire is fixed by the S1/S2a fixtures. No DB reads, ambient
 project routing, automatic enrollment, installed cutover or proxy are added.
 """
 from __future__ import annotations
@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import secrets
 import shlex
 import socket
@@ -20,6 +21,7 @@ import stat
 import sys
 import tempfile
 import urllib.request
+import uuid
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,7 +34,8 @@ ENROLL_PENDING_KIND = 'orrery-global-enrollment-pending-v1'
 CLIENT_LAYOUT = {'context': 'runtime-client.json', 'credential': 'credential.json',
     'registration': 'credential.registration-pending.json',
     'enrollment': 'credential.enrollment-pending.json',
-    'metadata': 'runtime/registration-metadata.json', 'profile': 'profile.json'}
+    'metadata': 'runtime/registration-metadata.json', 'profile': 'profile.json',
+    'mutation': 'runtime/mutation-pending.json', 'mutex': 'runtime/mutation.lock'}
 CLIENT_DIRECTORIES = ('runtime', 'runtime/session_index')
 S1_ERRORS = frozenset({'NAME_CONFLICT', 'NAME_INVALID', 'OWNER_REQUIRED', 'WRITER_FENCED',
     'STALE_RUNTIME_BINDING', 'WINDOW_INPUT_REQUIRED', 'WINDOW_OWNER_MISMATCH',
@@ -43,8 +46,41 @@ S1_ERRORS = frozenset({'NAME_CONFLICT', 'NAME_INVALID', 'OWNER_REQUIRED', 'WRITE
     'LIMIT_INVALID', 'TIMESTAMP_INVALID'})
 
 
+
+
 class ClientError(RuntimeError):
     pass
+
+
+_CONTRACT = None
+
+
+def wire_contract():
+    global _CONTRACT
+    if _CONTRACT is None:
+        installed = Path(__file__).with_name('schema_contract.py')
+        source = ROOT / 'packages/agentstack_mail/src/agentstack_mail/schema_contract.py'
+        try:
+            module = runpy.run_path(str(installed if installed.is_file() else source))
+            module['fixture'] = module['s2a_fixture']()
+        except (OSError, KeyError, ValueError) as exc:
+            raise ClientError('SCHEMA_VALIDATOR_UNAVAILABLE') from exc
+        _CONTRACT = module
+    return _CONTRACT
+
+
+def s2a_tools(*, receipt=False):
+    return {name for name, value in wire_contract()['fixture']['tool_contracts'].items()
+            if not receipt or value['operation'] == 'write'}
+
+
+def known_error(reason):
+    if reason in S1_ERRORS:
+        return True
+    try:
+        return reason in wire_contract()['fixture']['fixed_reasons']
+    except ClientError:
+        return False
 
 
 def read_private(path):
@@ -129,7 +165,7 @@ def result_value(reply):
         # the S1 fixed uppercase error at the end of FastMCP's error envelope.
         for part in result.get('content', []):
             match = re.search(r'(?:^|: )([A-Z][A-Z_]{2,63})$', part.get('text', ''))
-            if match and match[1] in S1_ERRORS:
+            if match and known_error(match[1]):
                 raise ClientError(match[1])
         raise ClientError('TOOL_REJECTED')
     structured = result.get('structuredContent')
@@ -237,7 +273,7 @@ class RuntimeClient:
 
     def prepare_recovery_owner(self):
         """Only explicit operator recovery may inspect an interrupted activation."""
-        if self.recovery is None:
+        if self.recovery is None or self.recovery == ('resolve-mutation', None):
             return
         action, agent_id = self.recovery
         role = 'registration' if action == 'finalize-create' else 'enrollment'
@@ -341,6 +377,39 @@ class RuntimeClient:
                 or (role == 'session' and row.get('schema_version') == 2
                     and row.get('binding_kind') == 'self')):
             raise ClientError('LEGACY_FILE_REQUIRES_IMPORT')
+        if role == 'mutex':
+            if row != {'kind': 'orrery-client-local-mutex-v1'}:
+                raise ClientError('OUTPUT_SCHEMA_INVALID')
+            return
+        if role == 'mutation':
+            required = {'kind','tool','request_id','server_instance_id','candidate_generation','authority_epoch',
+                        'agent_id','credential_generation','canonical_payload','request_hash','phase','receipt'}
+            if (set(row) != required or row.get('kind') != 'orrery-global-operation-pending-v1'
+                    or row.get('tool') not in s2a_tools(receipt=True) or row.get('phase') not in {'planned','committed'}
+                    or not integer(row.get('agent_id'),1) or not integer(row.get('credential_generation'))
+                    or not isinstance(row.get('canonical_payload'),dict)
+                    or not isinstance(row.get('request_id'),str)
+                    or re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',row['request_id']) is None):
+                raise ClientError('OUTPUT_SCHEMA_INVALID')
+            payload = row['canonical_payload']
+            if (set(payload) != {'version','tool','server_instance_id','candidate_generation','authority_epoch','agent_id','expected_credential_generation','arguments'}
+                    or not isinstance(payload.get('arguments'),dict)
+                    or set(payload['arguments']) & {'registration_token','request_id','project_key','to_project','from_project'}):
+                raise ClientError('OUTPUT_SCHEMA_INVALID')
+            raw = wire_contract()['canonical'](payload)
+            if (hashlib.sha256(raw.encode()).hexdigest() != row['request_hash']
+                    or payload.get('version') != 'orrery-global-operation-request-v1'
+                    or any(payload.get(k) != row[k] for k in ('tool','server_instance_id','candidate_generation','authority_epoch','agent_id'))
+                    or payload.get('expected_credential_generation') != row['credential_generation']
+                    or not isinstance(payload.get('arguments'),dict)):
+                raise ClientError('OUTPUT_SCHEMA_INVALID')
+            # Own stale binding is evidence for explicit resolution, never auth.
+            # Other identity/instance is only readable through operator recovery.
+            if (self.recovery != ('resolve-mutation', None) and
+                    (row['server_instance_id'] != self.binding['expected_server_instance_id']
+                     or not self.identity or row['agent_id'] != self.identity['agent_id'])):
+                raise ClientError('OUTPUT_OWNER_CONFLICT')
+            return
         kinds = {'context': KIND, 'credential': 'orrery-global-credential-v1',
                  'registration': REG_PENDING_KIND, 'enrollment': ENROLL_PENDING_KIND,
                  'metadata': METADATA_KIND, 'profile': PROFILE_KIND}
@@ -473,6 +542,8 @@ class RuntimeClient:
         listing = self.rpc('tools/list', {}).get('result', {}).get('tools')
         if not isinstance(listing, list):
             raise ClientError('CAPABILITY_INVALID')
+        self.output_schemas = {t['name']: t.get('outputSchema') for t in listing
+                               if isinstance(t, dict) and isinstance(t.get('name'), str)}
         return health, {t['name']: t['inputSchema'] for t in listing
                         if isinstance(t, dict) and isinstance(t.get('inputSchema'), dict)}
 
@@ -514,6 +585,8 @@ class RuntimeClient:
             if tool not in {'health_check', 'ensure_project'}:
                 args.update(self.binding, agent_id=self.identity['agent_id'] if self.identity else None,
                             registration_token=self.local_owner())
+            if 'expected_credential_generation' in schemas[tool].get('properties', {}):
+                args['expected_credential_generation'] = self.identity['credential_generation']
             if tool == 'register_agent':
                 # A valid token alone does not prove the pinned local credential
                 # generation. Check it before this operation changes the row.
@@ -532,6 +605,8 @@ class RuntimeClient:
                 args.update(window_row_id=self.identity['window_row_id'], window_uuid=self.identity['window_uuid'])
             if set(args) - set(schemas[tool].get('properties', {})):
                 raise ClientError('ARGUMENTS_UNSUPPORTED')
+            if 'request_id' in schemas[tool].get('required', []) and tool in s2a_tools(receipt=True):
+                return self.s2a_mutation(tool, args, schemas[tool])
             result = result_value(self.rpc('tools/call', {'name': tool, 'arguments': args}))
             if tool in {'whois', 'register_agent'}:
                 self.validate_identity(result)
@@ -543,14 +618,181 @@ class RuntimeClient:
                 raise ClientError('RESPONSE_INVALID')
             return result
 
+    @contextmanager
+    def mutation_mutex(self):
+        path = self.outputs['mutex']
+        if not path.exists() and not path.is_symlink():
+            # O_EXCL owns this one immutable inode. Never replace a held lock.
+            try:
+                fd = os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+                with os.fdopen(fd,'w') as stream:
+                    json.dump({'kind':'orrery-client-local-mutex-v1'},stream)
+                    stream.flush();os.fsync(stream.fileno())
+            except FileExistsError:
+                pass
+        self.validate_output(path,'mutex')
+        fd = os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        try:
+            identity = os.fstat(fd)
+            try:
+                fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ClientError('MUTATION_PENDING_CONFLICT') from exc
+            if (identity.st_dev,identity.st_ino) != (path.stat().st_dev,path.stat().st_ino):
+                raise ClientError('PRIVATE_FILE_UNSAFE')
+            self.validate_output(path,'mutex')
+            yield
+            if (identity.st_dev,identity.st_ino) != (path.stat().st_dev,path.stat().st_ino):
+                raise ClientError('PRIVATE_FILE_UNSAFE')
+        finally:
+            os.close(fd)
+
+    def save_mutation(self, value):
+        self.write_output(self.outputs['mutation'],value,'mutation')
+        fd=os.open(self.runtime_dir,os.O_RDONLY)
+        try:os.fsync(fd)
+        finally:os.close(fd)
+
+    def s2a_mutation(self, tool, args, schema):
+        contract = wire_contract()
+        tool_contract = contract['fixture']['tool_contracts'][tool]
+        # UUID has a separate local lifecycle; all semantic defaults, TTL and
+        # preimage bytes come from exactly the server's stdlib implementation.
+        candidate = {**args, 'request_id': args.get('request_id', str(uuid.uuid4()))}
+        values = contract['normalize_arguments'](candidate, schema, error_type=ClientError)
+        raw, hashed = contract['request_preimage'](tool, values, tool_contract['accepted_ignored_arguments'], error_type=ClientError)
+        payload = json.loads(raw)
+        path=self.outputs['mutation']
+        with self.mutation_mutex():
+            existing_pending = path.exists() or path.is_symlink()
+            if existing_pending:
+                self.validate_output(path,'mutation')
+                pending=read_json(path)
+                if (pending['server_instance_id']!=self.binding['expected_server_instance_id']
+                    or pending['candidate_generation']!=self.binding['candidate_generation']
+                    or pending['authority_epoch']!=self.binding['authority_epoch']
+                    or pending['agent_id']!=self.identity['agent_id']
+                    or pending['credential_generation']!=self.identity['credential_generation']):
+                    raise ClientError('MUTATION_PENDING_REQUIRES_RESOLUTION')
+                if pending['request_hash']!=hashed or ('request_id' in args and args['request_id']!=pending['request_id']):
+                    raise ClientError('MUTATION_PENDING_CONFLICT')
+            else:
+                request_id=args.get('request_id',str(uuid.uuid4()))
+                if not isinstance(request_id,str) or re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',request_id) is None:
+                    raise ClientError('REQUEST_ID_INVALID')
+                pending={'kind':'orrery-global-operation-pending-v1','tool':tool,'request_id':request_id,
+                    'server_instance_id':self.binding['expected_server_instance_id'],
+                    **{k:values[k] for k in ('candidate_generation','authority_epoch','agent_id')},
+                    'credential_generation':self.identity['credential_generation'],'canonical_payload':payload,
+                    'request_hash':hashed,'phase':'planned','receipt':None}
+                self.save_mutation(pending)
+            values['request_id']=pending['request_id']
+            planned_bytes = read_private(path)
+            reply = None
+            try:
+                # Clear only a recognized rejection received from the tool;
+                # a transport/local validation exception never proves outcome.
+                reply = self.rpc('tools/call', {'name': tool, 'arguments': values})
+                result = result_value(reply)
+            except ClientError as exc:
+                envelope = reply.get('result', {}) if isinstance(reply, dict) else {}
+                if (isinstance(envelope, dict) and envelope.get('isError') is True
+                        and contract['definitive_rejection'](str(exc), existing_pending=existing_pending, contract=contract['fixture'])):
+                    self.clear_mutation(planned_bytes)
+                raise
+            self.validate_mutation_output(tool, result)
+            if result['request_id'] != pending['request_id']:
+                raise ClientError('RESPONSE_INVALID')
+            if tool in {'refresh_registration', 'set_contact_policy'}:
+                self.validate_identity(result)
+            else:
+                contact = result.get('contact') if tool == 'macro_contact_handshake' else result
+                source = values['from_agent_id'] if tool == 'respond_contact' else self.identity['agent_id']
+                target = self.identity['agent_id'] if tool == 'respond_contact' else values['to_agent_id']
+                if (not isinstance(contact, dict) or contact.get('from_agent_id') != source
+                        or contact.get('to_agent_id') != target):
+                    raise ClientError('RESPONSE_INVALID')
+            pending.update(phase='committed',receipt=result)
+            self.save_mutation(pending)
+            # A matching result is durable before acknowledging the local slot.
+            self.clear_mutation(read_private(path))
+            return result
+
+    def clear_mutation(self, expected_bytes):
+        path = self.outputs['mutation']
+        self.validate_output(path, 'mutation')
+        if read_private(path) != expected_bytes:
+            raise ClientError('MUTATION_PENDING_CONFLICT')
+        path.unlink()
+        fd = os.open(self.runtime_dir, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def validate_mutation_output(self, tool, result):
+        schema = self.output_schemas.get(tool)
+        if not isinstance(schema, dict) or schema.get('type') != 'object':
+            raise ClientError('CAPABILITY_INVALID')
+        try:
+            wire_contract()['validate_schema'](result, schema, 'RESPONSE_INVALID', error_type=ClientError)
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ClientError('RESPONSE_INVALID') from exc
+
+    def resolve_mutation(self, current, expected_digest, *, expected_old, expected_new, old_agent_id, new_agent_id, confirm=False):
+        if not confirm:raise ClientError('MUTATION_PENDING_REQUIRES_RESOLUTION')
+        path=self.outputs['mutation']
+        with self.mutation_mutex():
+            self.validate_output(path,'mutation')
+            raw=read_private(path);pending=json.loads(raw)
+            if hashlib.sha256(raw).hexdigest()!=expected_digest:
+                raise ClientError('MUTATION_PENDING_CONFLICT')
+            old={k:pending[k] for k in ('server_instance_id','candidate_generation','authority_epoch')}
+            new={'server_instance_id':current.binding['expected_server_instance_id'],
+                 **{k:current.binding[k] for k in ('candidate_generation','authority_epoch')}}
+            if old!=expected_old or new!=expected_new or pending['agent_id']!=old_agent_id or current.identity['agent_id']!=new_agent_id:
+                raise ClientError('MUTATION_PENDING_BINDING_CHANGED')
+            if old['server_instance_id']==new['server_instance_id'] and old['candidate_generation']==new['candidate_generation'] and old_agent_id!=new_agent_id:
+                raise ClientError('OUTPUT_OWNER_CONFLICT')
+            current.call('whois')
+            # Only dispose the old local evidence; never replay/repin/rotate.
+            self.validate_output(path,'mutation')
+            if read_private(path)!=raw:raise ClientError('MUTATION_PENDING_CONFLICT')
+            path.unlink()
+            fd=os.open(self.runtime_dir,os.O_RDONLY)
+            try:os.fsync(fd)
+            finally:os.close(fd)
+            return {'resolved':True,'request_id':pending['request_id'],'old_outcome':'unknown-no-resend'}
+
     def observe(self):
         row = self.call('whois')
-        return {'mode': self.mode, **self.binding, 'agent_id': row['agent_id'],
-                'name': row['name'], 'credential_generation': row['credential_generation'],
-                'runtime_dir': str(self.runtime_dir), 'window_verification': 'local-only-server-unverified' if 'window_row_id' in self.identity else 'not-mapped',
-                **{k: self.identity[k] for k in ('window_row_id', 'window_uuid') if k in self.identity}}
+        result={'mode':self.mode,**self.binding,'agent_id':row['agent_id'],'name':row['name'],
+            'credential_generation':row['credential_generation'],'runtime_dir':str(self.runtime_dir),
+            'window_verification':'local-only-server-unverified' if 'window_row_id' in self.identity else 'not-mapped',
+            **{k:self.identity[k] for k in ('window_row_id','window_uuid') if k in self.identity}}
+        if 'window_row_id' in self.identity:
+            with self.fence():
+                _,schemas=self.capabilities()
+            if 'verify_window_identity' in schemas:
+                verified=self.call('verify_window_identity',{k:self.identity[k] for k in ('window_row_id','window_uuid')})
+                self.validate_identity(verified)
+                result.update(window_verification=verified['verification'],window_ready=verified['ready'])
+        return result
 
     def reconnect(self, *, program=None, model=None):
+        if program is None and model is None:
+            with self.fence():
+                _,schemas=self.capabilities()
+            if 'refresh_registration' in schemas:
+                if 'window_row_id' in self.identity and 'touch_window_identity' in schemas:
+                    self.call('touch_window_identity',{k:self.identity[k] for k in ('window_row_id','window_uuid')})
+                else:
+                    self.call('refresh_registration')
+                observation=self.observe()
+                observation.update(registration_verified=True,reconnect_mode='refresh-preserving-metadata')
+                # Liveness cannot depend on a receipt-bearing policy mutation.
+                # Apply policy only through its explicit operator/tool entrance.
+                return observation
         metadata = self.registration_metadata()
         if program is None:
             program = metadata.get('program')
@@ -598,13 +840,13 @@ class RuntimeClient:
                 raw = b''
                 while not raw.endswith(b'\n'):
                     block = stream.recv(16384)
-                    if not block or len(raw) + len(block) > 16384:
+                    if not block or len(raw) + len(block) > 1048576:
                         raise ClientError('MANAGEMENT_RESPONSE_INVALID')
                     raw += block
             reply = json.loads(raw)
             if not isinstance(reply, dict) or not reply.get('ok'):
                 reason = reply.get('reason', '') if isinstance(reply, dict) else ''
-                raise ClientError(reason if reason in S1_ERRORS else 'MANAGEMENT_REJECTED')
+                raise ClientError(reason if known_error(reason) else 'MANAGEMENT_REJECTED')
             if any(reply.get(k) != self.binding[v] for k, v in (
                     ('server_instance_id', 'expected_server_instance_id'),
                     ('candidate_generation', 'candidate_generation'), ('authority_epoch', 'authority_epoch'))):
@@ -874,11 +1116,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--context')
     parser.add_argument('operation', choices=['mode', 'observe', 'reconnect', 'bootstrap', 'launch', 'call',
-                                             'register', 'session', 'inspect', 'claim', 'recover', 'request-status', 'policy', 'save-profile'])
+                                             'register', 'session', 'inspect', 'claim', 'recover', 'request-status', 'policy', 'save-profile', 'resolve-mutation'])
     parser.add_argument('args', nargs='*')
     a = parser.parse_args(argv)
     try:
         recovery = None
+        if a.operation == 'resolve-mutation':
+            recovery = ('resolve-mutation', None)
         if a.operation in {'claim', 'recover'}:
             selected = a.context or os.environ.get('AGENTSTACK_CLIENT_CONFIG') or str(ROOT / 'runtime-client.json')
             config = read_json(Path(selected))
@@ -905,10 +1149,10 @@ def main(argv=None):
             return 0
         elif a.operation == 'call':
             args = dict(x.split('=', 1) for x in a.args[1:])
-            for k in ('agent_id', 'limit', 'window_row_id'):
+            for k in ('agent_id', 'limit', 'window_row_id','to_agent_id','from_agent_id','after_id','ttl_seconds'):
                 if k in args:
                     args[k] = int(args[k])
-            for k in ('include_bodies', 'urgent_only'):
+            for k in ('include_bodies', 'urgent_only','accept','auto_accept'):
                 if k in args:
                     args[k] = args[k].lower() == 'true'
             value = client.call(a.args[0], args)
@@ -923,6 +1167,10 @@ def main(argv=None):
         elif a.operation == 'policy':
             client.apply_contact_policy()
             value = {'ok': True}
+        elif a.operation == 'resolve-mutation':
+            proof=json.loads(a.args[2])
+            current=configured(a.args[1])
+            value=client.resolve_mutation(current,a.args[0],**proof)
         elif a.operation == 'request-status':
             value = client.management('request_status', request_id=a.args[0])
         else:

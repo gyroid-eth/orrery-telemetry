@@ -1,0 +1,2330 @@
+{
+  "proposal_only": false,
+  "base": {
+    "master": "84d9381",
+    "s1_wire": "packages/agentstack_mail/fixtures/global-server-s1.json"
+  },
+  "stage": "isolated-server-s2a",
+  "wire_version": 1,
+  "namespace_contract_version": 2,
+  "activation_enabled": false,
+  "default_runtime": "legacy-v1",
+  "public_tools_added": [
+    "refresh_registration",
+    "verify_window_identity",
+    "request_contact",
+    "respond_contact",
+    "list_contacts",
+    "set_contact_policy",
+    "macro_contact_handshake",
+    "resolve_agent_identity",
+    "touch_window_identity"
+  ],
+  "existing_s1_tools": "all 7 names/signatures retained unchanged",
+  "capabilities_added": {
+    "registration_refresh_v1": [
+      "refresh_registration"
+    ],
+    "window_verify_readonly_v1": [
+      "verify_window_identity"
+    ],
+    "contact_state_v1": [
+      "request_contact",
+      "respond_contact",
+      "list_contacts",
+      "set_contact_policy",
+      "macro_contact_handshake"
+    ],
+    "identity_resolve_v1": [
+      "resolve_agent_identity"
+    ],
+    "window_touch_v1": [
+      "touch_window_identity"
+    ]
+  },
+  "health_change": {
+    "capabilities": "add optional sorted list of capability IDs; S1 fields and meaning unchanged",
+    "supported_tools": "exact tools/list names: unchanged S1 seven plus S2a nine",
+    "resources_supported": false
+  },
+  "tool_contracts": {
+    "refresh_registration": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "window_row_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "window_uuid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "operation": "write",
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retired_at": {
+            "type": "null"
+          },
+          "program": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "last_active_ts": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "registration_updated": {
+            "const": true
+          },
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "window_row_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "window_uuid": {
+                    "type": "string"
+                  },
+                  "last_active_ts": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "expires_ts": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "window_row_id",
+                  "window_uuid",
+                  "last_active_ts",
+                  "expires_ts"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "retired_at",
+          "program",
+          "model",
+          "last_active_ts",
+          "request_id",
+          "mutation_revision",
+          "registration_updated",
+          "id",
+          "result_as_of",
+          "committed_at",
+          "window"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "verify_window_identity": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "window_row_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "window_uuid": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "window_row_id",
+          "window_uuid"
+        ],
+        "additionalProperties": false
+      },
+      "operation": "read-only",
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retired_at": {
+            "type": "null"
+          },
+          "window_row_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "window_uuid": {
+            "type": "string"
+          },
+          "verification": {
+            "const": "server-verified-read-only"
+          },
+          "ready": {
+            "const": true
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "result_as_of": {
+            "const": "read"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_active_ts": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_ts": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "retired_at",
+          "window_row_id",
+          "window_uuid",
+          "verification",
+          "ready",
+          "mutation_revision",
+          "id",
+          "result_as_of",
+          "observed_at",
+          "last_active_ts",
+          "expires_ts"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "request_contact": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 512,
+            "default": ""
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 604800
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "to_agent_id",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "operation": "write",
+      "accepted_ignored_arguments": [
+        "project_key",
+        "to_project"
+      ],
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "from_agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "to_agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "from_identity": {
+            "type": "object",
+            "properties": {
+              "agent_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "name": {
+                "type": "string"
+              },
+              "retired_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "agent_id",
+              "name",
+              "retired_at"
+            ],
+            "additionalProperties": false
+          },
+          "to_identity": {
+            "type": "object",
+            "properties": {
+              "agent_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "name": {
+                "type": "string"
+              },
+              "retired_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "agent_id",
+              "name",
+              "retired_at"
+            ],
+            "additionalProperties": false
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "blocked"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "created_ts": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_ts": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_ts": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effective": {
+            "type": "boolean"
+          },
+          "approval_expiry_mode": {
+            "const": "informational-compatible"
+          },
+          "notification": {
+            "const": "not-supported-until-s2b"
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "from_agent_id",
+          "to_agent_id",
+          "from_identity",
+          "to_identity",
+          "status",
+          "reason",
+          "created_ts",
+          "updated_ts",
+          "expires_ts",
+          "effective",
+          "approval_expiry_mode",
+          "notification",
+          "request_id",
+          "mutation_revision",
+          "result_as_of",
+          "committed_at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "respond_contact": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "from_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "from_agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "accept": {
+            "type": "boolean"
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 2592000
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "from_agent_id",
+          "accept",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "operation": "write",
+      "accepted_ignored_arguments": [
+        "project_key",
+        "from_project"
+      ],
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "from_agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "to_agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "from_identity": {
+            "type": "object",
+            "properties": {
+              "agent_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "name": {
+                "type": "string"
+              },
+              "retired_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "agent_id",
+              "name",
+              "retired_at"
+            ],
+            "additionalProperties": false
+          },
+          "to_identity": {
+            "type": "object",
+            "properties": {
+              "agent_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "name": {
+                "type": "string"
+              },
+              "retired_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "agent_id",
+              "name",
+              "retired_at"
+            ],
+            "additionalProperties": false
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "blocked"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "created_ts": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_ts": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_ts": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effective": {
+            "type": "boolean"
+          },
+          "approval_expiry_mode": {
+            "const": "informational-compatible"
+          },
+          "notification": {
+            "const": "not-supported-until-s2b"
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "from_agent_id",
+          "to_agent_id",
+          "from_identity",
+          "to_identity",
+          "status",
+          "reason",
+          "created_ts",
+          "updated_ts",
+          "expires_ts",
+          "effective",
+          "approval_expiry_mode",
+          "notification",
+          "request_id",
+          "mutation_revision",
+          "result_as_of",
+          "committed_at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "list_contacts": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "incoming",
+              "outgoing",
+              "both"
+            ],
+            "default": "both"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100
+          },
+          "after_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation"
+        ],
+        "additionalProperties": false
+      },
+      "operation": "read-only",
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "from_agent_id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "to_agent_id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "from_identity": {
+                  "type": "object",
+                  "properties": {
+                    "agent_id": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "retired_at": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "agent_id",
+                    "name",
+                    "retired_at"
+                  ],
+                  "additionalProperties": false
+                },
+                "to_identity": {
+                  "type": "object",
+                  "properties": {
+                    "agent_id": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "retired_at": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "agent_id",
+                    "name",
+                    "retired_at"
+                  ],
+                  "additionalProperties": false
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "approved",
+                    "blocked"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "created_ts": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "updated_ts": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "expires_ts": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "effective": {
+                  "type": "boolean"
+                },
+                "approval_expiry_mode": {
+                  "const": "informational-compatible"
+                },
+                "notification": {
+                  "const": "not-supported-until-s2b"
+                }
+              },
+              "required": [
+                "id",
+                "from_agent_id",
+                "to_agent_id",
+                "from_identity",
+                "to_identity",
+                "status",
+                "reason",
+                "created_ts",
+                "updated_ts",
+                "expires_ts",
+                "effective",
+                "approval_expiry_mode",
+                "notification"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next_after_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result_as_of": {
+            "const": "read"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "next_after_id",
+          "result_as_of",
+          "observed_at",
+          "mutation_revision"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "set_contact_policy": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "policy": {
+            "type": "string",
+            "enum": [
+              "open",
+              "auto",
+              "contacts_only",
+              "block_all"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "policy",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "operation": "write",
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retired_at": {
+            "type": "null"
+          },
+          "policy": {
+            "type": "string",
+            "enum": [
+              "open",
+              "auto",
+              "contacts_only",
+              "block_all"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "name",
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "retired_at",
+          "policy",
+          "request_id",
+          "mutation_revision",
+          "id",
+          "result_as_of",
+          "committed_at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "macro_contact_handshake": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 512,
+            "default": ""
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 604800
+          },
+          "auto_accept": {
+            "type": "boolean",
+            "default": false
+          },
+          "welcome_subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "welcome_body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "to_agent_id",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "operation": "write",
+      "accepted_ignored_arguments": [
+        "project_key",
+        "to_project"
+      ],
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "contact": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "from_agent_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "to_agent_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "from_identity": {
+                "type": "object",
+                "properties": {
+                  "agent_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "retired_at": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "agent_id",
+                  "name",
+                  "retired_at"
+                ],
+                "additionalProperties": false
+              },
+              "to_identity": {
+                "type": "object",
+                "properties": {
+                  "agent_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "retired_at": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "agent_id",
+                  "name",
+                  "retired_at"
+                ],
+                "additionalProperties": false
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "approved",
+                  "blocked"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "created_ts": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_ts": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "expires_ts": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "effective": {
+                "type": "boolean"
+              },
+              "approval_expiry_mode": {
+                "const": "informational-compatible"
+              },
+              "notification": {
+                "const": "not-supported-until-s2b"
+              }
+            },
+            "required": [
+              "id",
+              "from_agent_id",
+              "to_agent_id",
+              "from_identity",
+              "to_identity",
+              "status",
+              "reason",
+              "created_ts",
+              "updated_ts",
+              "expires_ts",
+              "effective",
+              "approval_expiry_mode",
+              "notification"
+            ],
+            "additionalProperties": false
+          },
+          "stage": {
+            "const": "request-only"
+          },
+          "notification": {
+            "const": "not-supported-until-s2b"
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "approval_required": {
+            "type": "boolean"
+          },
+          "approval_required_from_agent_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "contact",
+          "stage",
+          "notification",
+          "request_id",
+          "mutation_revision",
+          "result_as_of",
+          "committed_at",
+          "approval_required",
+          "approval_required_from_agent_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "resolve_agent_identity": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "target_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "target_name"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "agent_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "name": {
+                "type": "string"
+              },
+              "retired_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "agent_id",
+              "name",
+              "retired_at"
+            ],
+            "additionalProperties": false
+          },
+          "result_as_of": {
+            "const": "read"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "target",
+          "result_as_of",
+          "observed_at",
+          "mutation_revision"
+        ],
+        "additionalProperties": false
+      },
+      "operation": "read-only",
+      "accepted_ignored_arguments": [
+        "project_key"
+      ]
+    },
+    "touch_window_identity": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "window_row_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "window_uuid": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "window_row_id",
+          "window_uuid"
+        ],
+        "additionalProperties": false
+      },
+      "operation": "write-without-receipt",
+      "accepted_ignored_arguments": [
+        "project_key"
+      ],
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retired_at": {
+            "type": "null"
+          },
+          "window_row_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "window_uuid": {
+            "type": "string"
+          },
+          "verification": {
+            "const": "server-verified-by-touch"
+          },
+          "ready": {
+            "const": true
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "last_active_ts": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_ts": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "name",
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "retired_at",
+          "window_row_id",
+          "window_uuid",
+          "verification",
+          "ready",
+          "mutation_revision",
+          "id",
+          "result_as_of",
+          "last_active_ts",
+          "expires_ts",
+          "committed_at"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "common_rules": {
+    "owner": "all nine new tools accept existing credential generation >=0; token required and compared before generation; null-token or retired owner OWNER_REQUIRED; no enrollment/rotation merely to use generation0",
+    "unknown_fields": "reject before mutation, even if framework would drop extra input; no name aliases or arbitrary paths",
+    "target": "contact mutation targets existing active stable ID only, missing/retired TARGET_UNAVAILABLE; no implicit registration; resolve/list display canonical name and retired_at without tokens or peer program/model",
+    "generation_error": "owner token authentication precedes expected generation comparison",
+    "writes": "receipt-bearing writes: single S1 fenced transaction, first successful UUID increments mutation_revision once including domain no-op, replay/read/reject zero. Exception touch_window_identity is quota-exempt bounded in-place activity update with no receipt/UUID; actual changed row increments revision once, no-op zero",
+    "replay": "fixed candidate receipt key(instance_id,agent_id,request_id) spans all tools and epochs; identical hash under currently matching binding/auth returns original commit result, not current domain state; different payload/epoch same UUID REQUEST_ID_CONFLICT after normal fence checks",
+    "payload_hash": "Normative canonical preimage and exact bytes defined in candidate_validation_contract.request_preimage; same string/hash used for client pending, server dedup and candidate historical verification. No reconstruction from results.",
+    "replay_authorization": "current owner/token/generation/fence first; replay does not bypass current credentials; old-token replay after recover refused. New credentials may inspect current state, but cannot relabel old UUID/generation as new success",
+    "no_op": "For receipt-bearing operations, new UUID always records one receipt/revision even if domain unchanged; same UUID replay changes no revision/time/expiry. No automatic UUID replacement after unknown outcome. Quota-exempt touch has no UUID/receipt and only increments revision for actual in-place activity changes.",
+    "contact_request": "existing approved or blocked unchanged for any expiry; approved expiry informational. Existing live pending unchanged. Expired pending only is renewed by new UUID, same link ID. New link pending. Self request SELF_CONTACT_NOT_SUPPORTED",
+    "contact_response": "target owner may preapprove or preblock absent link (active requester required). accept true writes approved and now+max(60,ttl); false writes blocked/expires null and ignores supplied TTL after type validation. Same accept with new UUID explicitly renews approved; false remains indefinite. Same UUID never renews",
+    "macro": "auto_accept=true fails CONTACT_TARGET_CONSENT_REQUIRED; any non-null welcome field fails CONTACT_MESSAGE_REQUIRES_S2B before write. Otherwise same request primitive. approval_required=(returned status!=approved), approval_required_from_agent_id=target ID if required else null. Blocked requires target owner to explicitly unblock, not requester retry",
+    "list": "SQL owner endpoint filter plus id>after_id ORDER BY id ASC LIMIT limit+1; join endpoint names/retired flags, never token. No SQL TEXT timestamp filtering. Returned contact effective/status evaluated at one observed_at",
+    "refresh": "same authenticated identity only, program/model/token/generation unchanged. task null preserves, empty clears, max2048. Optional window row/UUID must be both present and exact owner match; renew last_active and finite expiry in same transaction/receipt; no new mapping/rebind. Missing pair means no window mutation Owning-agent last_active also uses max(parsed previous,t) even without window; t is one operation timestamp. Exact saved receipt replay does not call touch again.",
+    "window": "Read-only verify exact owner/row/UUID in explicit shared DB snapshot; null expiry unbounded, finite expiry<=observed_at WINDOW_EXPIRED. Explicit refresh/register/dedicated touch may renew existing expired exact binding, never create/rebind. Touch available despite own quota and unresolved legitimate pending; credential/fence/current binding still mandatory. Existing S1-only behavior unchanged.",
+    "storage": "no new user output path; persistent dedup receipts in additive table of fixed candidate DB; transactional initialization/restart; candidate generation unchanged",
+    "interruption": "before commit rolls back state+receipt; after commit/before HTTP response replay returns stored outcome; no local output to complete before entry can recover",
+    "request_uuid": "canonical lowercase hyphenated UUID only; uppercase/braces/noncanonical REQUEST_ID_INVALID, not a second key; UUID syntax validated in handler too",
+    "contact_expiry": "approved expiry is informational for BOTH migrated and newly approved links, preserving released delivery behavior; pending expiry governs renewal only; blocked expiry is ignored and block remains until target owner accept=true",
+    "contact_effective": "link-only formula: status==approved, independent of expiry, policy and retired flags. Not permission-to-send. Endpoint retired flags supplied separately. At write/replay it is COMMIT-time value; list is READ-time; S2b always reauthorizes current rows in its transaction",
+    "window_touch": "Normative formula at operation timestamp t captured once after DB transaction/auth checks: window.last_active=max(parseUTC(old_window_last_active),t), owner.last_active=max(parseUTC(old_owner_last_active),t). For finite expiry new_expires=max(parseUTC(old_expires),t+configuredTTL); null stays null. Future saved activity never moves backward; clock rollback may be all-row no-op. Preserve old timestamp bytes for unchanged values, write changed values UTC ISO. For refresh/register same touch primitive runs within their existing receipt/revision logic. Dedicated touch uses no UUID/receipt/quota and increments mutation_revision/tracker ONCE iff any window/owner target value actually changes, else zero. No new row/rebind/task/program/model/token changes. Returns committed_at=t (observation timestamp of successful transaction, not a promise about clock at physical COMMIT), activity fields may exceed t.",
+    "time": "all persisted legacy naive timestamps parse as UTC; offset/Z parsed then compared as UTC datetime/epoch, never lexical TEXT/MAX comparison. Newly written values UTC ISO8601 with +00:00. Preserve old bytes unless legitimately updated. Invalid compared value TIMESTAMP_INVALID before domain/receipt mutation",
+    "ttl": "no 30day product cap; integer>=0 clamped to minimum60 like released. reject bool/nonint/negative or datetime overflow CONTACT_TTL_INVALID; accept=false does not compute expiry",
+    "identity_schema": "output_schema only is normative, explanatory response duplicate removed. Identity-shaped outputs include both id and agent_id as S1 does; credential_generation minimum0",
+    "resolve": "authenticated exact current canonical lookup_key resolution only, no ambiguous aliases or project-qualified interpretation, no listing or prefix search; returns target stable ID/name/retired flag. Retired is displayable here/list, contact mutations still refuse retired target. Unknown TARGET_UNAVAILABLE"
+  },
+  "delivery_policy_for_s2b": {
+    "status": "S2a provides the shared authorization primitive; actual message writes remain S2b.",
+    "approved_expiry": "ignore for migrated and new approved links, like released delivery; no cutover mass expiry and no timestamp rewrite",
+    "direction": "sender a_agent_id → recipient b_agent_id only, block in reverse direction never inferred",
+    "self": "active owner self-send allowed",
+    "proposed_order": "retired recipient denied; self allowed; directed blocked or recipient block_all denied; open allowed; contacts_only needs approved (expiry ignored); auto approved OR recent exchange in either direction",
+    "recent_exchange": "configured contact_auto_ttl_seconds explicit S2a/S2b isolated config scalar, default86400, no ambient legacy env inference; normalize stored naive as UTC and offsets to UTC before comparison",
+    "already_existing_default": "S1 new-agent open retained, migrated agent stored policy retained incl auto; legacy model defaultauto unchanged",
+    "legacy_differences_approved": [
+      "legacy reservation overlap auto-allow precedes block_all; recommended global never overrides explicit block with a reservation",
+      "legacy auto handshake defaulttrue can autoapprove without target owner; recommended global no consent bypass",
+      "legacy contact_enforcement_enabled switch can disable checks; recommended explicit global true only, false CONFIG_CONTACT_ENFORCEMENT_UNSUPPORTED",
+      "legacy blocked links ignored in delivery; recommended global directed block wins over open/auto"
+    ],
+    "documentation_contract": "PR body and paired docs must include one legacy/global differences table; carry same differences to PR7 cutover guide before enabling installed global mode"
+  },
+  "fixed_reasons": [
+    "ARGUMENTS_UNSUPPORTED",
+    "CANDIDATE_QUARANTINED",
+    "CANDIDATE_SCHEMA_REQUIRES_REPREPARE",
+    "CONFIG_CONTACT_ENFORCEMENT_UNSUPPORTED",
+    "CONTACT_MESSAGE_REQUIRES_S2B",
+    "CONTACT_PAIR_DUPLICATE",
+    "CONTACT_POLICY_INVALID",
+    "CONTACT_REQUEST_UNAVAILABLE",
+    "CONTACT_TARGET_CONSENT_REQUIRED",
+    "CONTACT_TTL_INVALID",
+    "CREDENTIAL_GENERATION_MISMATCH",
+    "INCIDENT_DIGEST_MISMATCH",
+    "MUTATION_PENDING_BINDING_CHANGED",
+    "MUTATION_PENDING_CONFLICT",
+    "MUTATION_PENDING_REQUIRES_RESOLUTION",
+    "OWNER_REQUIRED",
+    "PREPARATION_INCOMPLETE",
+    "PREPARATION_MANIFEST_MISMATCH",
+    "PREPARATION_PLAN_CONFLICT",
+    "RECOVERY_PENDING_MISMATCH",
+    "REQUEST_ID_CONFLICT",
+    "REQUEST_ID_INVALID",
+    "REQUEST_INPUT_TOO_LARGE",
+    "REQUEST_RECEIPT_CAPACITY_REACHED",
+    "REQUEST_RECEIPT_INVALID",
+    "RUNTIME_CANDIDATE_INVALID",
+    "RUNTIME_SCHEMA_UNSUPPORTED",
+    "RUNTIME_WRITER_MISMATCH",
+    "SELF_CONTACT_NOT_SUPPORTED",
+    "TARGET_UNAVAILABLE",
+    "TASK_DESCRIPTION_INVALID",
+    "TIMESTAMP_INVALID",
+    "WINDOW_EXPIRED",
+    "WINDOW_OWNER_MISMATCH",
+    "WRITER_FENCED"
+  ],
+  "client_handoff": {
+    "one_location": "bin/lib/runtime_client.py capability/schema adapter",
+    "S1": "unchanged endpoint remains valid, no refresh/window/lookup capability means existing S1 behavior; no fallback into legacy",
+    "S2a_refresh": "absent explicit program/model and no task change with pinned window: use quota-exempt touch_window_identity plus observe, no mutation journal/receipt. If task update or full refresh requested use journaled refresh_registration with expected generation>=0. Quota refusal never makes client invent metadata or suppress valid touch. Unmapped identity refresh remains owner-quota-limited with explicit capacity reason.",
+    "S2a_window": "expired verify reports not ready; explicit owner reconnect/touch renews exact mapping even if receipts quota exhausted, subsequent readonly verify ready. Observe alone never touches. Liveness invokes separate current-binding reader and does not acquire receipt mutation mutex or require pending cleared.",
+    "explicit_metadata": "existing explicit register_agent path retained",
+    "contact": "fixed journal handles mutating policy/contact calls, UUID/generation injected in one adapter. target names resolved through resolve_agent_identity then stable ID; display peer names from list, no whois peer misuse"
+  },
+  "review_questions": [],
+  "acceptance_cases": [
+    "Actual HTTP tools/list exactly matches expanded schemas; S1 default catalog unchanged; management instance matches HTTP.",
+    "Read-only verify valid/foreign row/wrong UUID/expired/retired/stale epoch, revision unchanged in all cases.",
+    "Refresh preserves exact program/model/token/generation/window; null task preserves, empty clears; credential generation mismatch never updates.",
+    "Contact two owners request/respond/list with incoming/outgoing paging; unrelated caller cannot approve or list private link.",
+    "All four policy outcomes with synthetic existing messages/links/expiry and timezone offsets; shared authorization runs inside caller transaction.",
+    "Unknown/missing/self target, invalid TTL/policy, auto_accept, welcome fields, unknown paths rejected before row creation.",
+    "Every receipt-bearing new write: before state, after state before receipt, after receipt before commit, after commit before response interruption and restart/replay, same revision/ID/expiry.",
+    "Same UUID+changed payload conflicts, ignored project argument differences replay same receipt, revoked token/stale generation cannot replay.",
+    "Supported legacy source contacts/tokens/window records preserved in fresh candidate, unknown released formats unchanged on refusal; SQLite main/sidecar/fence hardlink checks retained.",
+    "Common client actual S1 and S2a endpoints; no saved metadata refresh, explicit metadata register, local/server window verification distinctly reported.",
+    "Wheel/sdist isolated HTTP/socket catalog test, docs fixture concordance, related serial and external full/WSL runner.",
+    "Migrated token present/gen0 all nine new tools succeed, outputsgen0; null-token/gen0 and wrong token refuse; recover forbids old replay.",
+    "Expired/near-expiry/null window compare with naiveUTC/offset/Z, refresh restores exact binding, register same primitive, verify remains read-only.",
+    "Migrated approved past expiry remains effective, request unchanged, owner can renew or preapprove/preblock; no expiry byte rewrite at init.",
+    "Duplicate stable pair IDs including legacy NULL scope refuse before DDL/mutation; concurrent distinct UUID request for same pair yields one link ID.",
+    "Incoming contact shows canonical peer name/retired flag; authenticated resolve then request, no token/program/model exposure.",
+    "UTC-naive and signed offsets mixed in stored columns for pending expiry/window/recent exchange; lexical comparison counterexamples retained.",
+    "Client restart after response loss preserves UUID in fixed role; substituted/foreign journal refused, current credential rotation requires explicit resolution.",
+    "Expired historical receipt still replayed as original commit-time result; current list state/authorized delivery reevaluated independently.",
+    "Canonical lowercase UUID only, unknown new fields rejected while unchanged S1 schemas retain historical unknown-field handling.",
+    "Parent-approved A: directed blocked/block_all deny despite reservation overlap; requester autoapproval and enforcement=false refused; old mode actual behavior remains unchanged",
+    "Readonly management inspect receipt_capacity reflects default/configured limit and remaining; new UUID capacity rejection and existing UUID replay at full verified",
+    "After successful operation clears local pending, candidate-only runtime validator verifies canonical request JSON/hash/output digest: task=null versus empty string, approved-link no-op with different reason/TTL, clamp before/after lower bound, ignored scope differences and historical epoch",
+    "Corrupt only request JSON, only request hash, only row binding or only result digest: REQUEST_RECEIPT_INVALID and no silent regeneration; unknown preimage keys/duplicate JSON keys rejected",
+    "Crash between domain change/preimage/receipt insert/commit rolls back all or stores one complete matching request/result; restarted replay uses exact stored request hash",
+    "OwnerA exhausts its quota: ownerB can write, A and B touch windows beyond quota, receipt count stays constant, verify recovers expired binding",
+    "Epoch changes after lost response: ordinary mutation refuses, explicit resolution with old/new binding and expected pending digest under fixed lock can clear without resubmitting; wrong digest/foreign role refuses bytes unchanged",
+    "Every readonly boundary: inject concurrent normal touch/receipt commit between counter and domain reads; one explicit snapshot returns old or new coherent state without false gap. Inject noncooperative revision gap at same points: old snapshot coherent or new gap refused.",
+    "Own pending at old epoch/candidate remains unresolved while current-context touch/verify succeed without mutex acquisition; simultaneously hold mutation.lock in another receipt-bearing client operation. Foreign pending role/private file still refused. No pending bytes changed by touch.",
+    "After explicit old-pending resolution, binding-independent mutex remains usable; new intended mutation in same-instance updated current context or new root for new instance/agent starts exactly once. Wrong digest/symlink/hardlink/foreign magic refuses.",
+    "Window and agent future timestamps, clock rollback and equal values: activity/expiry never regress, bytes retained for no-op, revision+tracker increment only on actual change.",
+    "Tracker mismatch operator inspect/quarantine without standard runtime constructor: readonly digest/range, explicit confirm, all intermediate crash points, root retired and evidence retained; no silent tracker acceptance.",
+    "enrollment activation interrupted before/after credential save in the CURRENT candidate: same-binding request receipt+current inspect/fingerprint confirms only correct new token/gen; absent proof refused without new registration",
+    "Quarantine after claim/recover token change → different candidate: old credential reuse refused, explicit current inspect→claim/recover→new receipt/local activation→whois/inbox succeeds; never infer ID/token continuity from old root",
+    "Schema2 existing unused/S1-written roots refused at S2a server and preparation entrances with CANDIDATE_SCHEMA_REQUIRES_REPREPARE; exact main/WAL/SHM/journal/authority/credential/rows/revision preserved.",
+    "New schema3 from supported source in another fixed-name workspace: exact base migration proof, final extensions validation, source/fence/gate hashes reflect final artifacts, activationfalse, old default PR3 still schema2.",
+    "Preparation interruption before/after each transaction/manifest/rename/receipt: only owned staging resumed; incomplete publication cannot start; once completed restart never performs DDL/init increment.",
+    "Old S1 startup rejects completed3 before domain writes; separate old2 S1 may commit without modifying new candidate; no live authority rotation.",
+    "Duplicate pairs/invalid data refuse preparation before final publication; original root/source unchanged, no silent merge or lost S1-only writes.",
+    "New fixed current root independent enrollment plus all #236 activation interruption recovery; retained old pending resolved via current-context proof without old payload replay."
+  ],
+  "proposal_revision": "3",
+  "previous_proposal_sha256": "a465696fbe78c2ce926db17eb3ea6f1c00b6e967b9da0fb88d3f88e1c24d8e45",
+  "candidate_validation_contract": {
+    "pristine": "Existing namespace_transform.validate_bundle and default PR3 schema2 preparation remain strict and unchanged. S2a explicit preparation first verifies the source-preserving base in its OWN UNPUBLISHED staging, then separately validates the fixed schema3 extensions and records both proofs in its final publication manifest. Never pass a running/used candidate to the pristine validator or relax its exact table/source equality.",
+    "runtime_validator": "new separate validate_runtime_candidate profile s2a-v1, used at explicit S2a startup and management inspection and exposed for later PR7 gate; not a relaxation of validate_bundle",
+    "initialization_preconditions": "Fresh owned unpublished staging only, built from explicit supported legacy project SourceBundle with PR3 choices/fence/final validation. Existing final/runtime root (schema2 or schema3) is NEVER an initialization target. Schema2 input/runtime root returns CANDIDATE_SCHEMA_REQUIRES_REPREPARE unchanged. Complete deterministic schema/data/pair/FK/FTS/attachment/timestamp checks before creating final profile or publishing. No enrollment-history or S1-runtime import inferred from a developer candidate.",
+    "existing_s1": "Existing schema2 S1-used roots are refused without DDL, metadata, authority, token or revision changes. Their rows are not silently copied, merged or discarded. S1 enrollment extension DDL remains an explicitly known allowed runtime schema in S2a for its own management operations; absence in fresh prepared base is valid. Source historical tokens and generation0 remain preserved by normal source transformation.",
+    "extensions": {
+      "global_runtime_contract": "singleton id=1, schema_version=s2a-v1, base_schema_digest TEXT, extension_schema_digest TEXT, initialized_revision INTEGER; exact schema fixed in implementation fixture before merge; last_validated_revision INTEGER, tracks every committed S2a-stage transaction including existing seven tools, management/audit and receipt-free touch",
+      "global_operation_receipts": "server_instance_id TEXT, agent_id INTEGER FK agents(id), request_id TEXT, tool TEXT, request_hash TEXT, canonical_request_json TEXT, authority_epoch TEXT, candidate_generation TEXT, credential_generation INTEGER>=0, committed_at TEXT, mutation_revision INTEGER, receipt_json TEXT, receipt_sha256 TEXT; PRIMARY KEY(server_instance_id,agent_id,request_id)",
+      "uq_global_contact_pair": "UNIQUE INDEX agent_links(a_agent_id,b_agent_id); new link legacy_a_project_id/legacy_b_project_id=NULL; migrated legacy values kept. Detect duplicate stable pair BEFORE DDL or any operation and report CONTACT_PAIR_DUPLICATE with link IDs to operator; never choose/delete/merge automatically"
+    },
+    "init_transaction": "Inside private unpublished staging ONLY: BEGIN IMMEDIATE, validate base proof/definitions, create fixed S2a DDL and pair index, user_version3, increment staged mutation_revision once to initialized_revision=last_validated_revision=1, COMMIT. Postvalidate in separate snapshot before final manifest/gate/publication. No external active authority is changed; startup only validates completed profile readonly. An interrupted staging operation is recovered by its owned preparation receipt, never a runtime upgrader.",
+    "post_write": "Bounded operation validation in the same fenced transaction: schema/profile/tracker, touched domain row constraints and complete inserted receipt preimage/output/digests. Update tracker atomically. Full quick_check/FK/FTS and all historical receipts run at startup and explicit inspect only; replay validates the matched receipt only. No whole history scan on ordinary writes/touch. Unknown schema/profile/tracker remains refused.",
+    "manifest": "return profile/instance/candidate/epoch/current revision, schema digests and table count+canonical digest summary; not tokens/raw receipt content. Baseline checkpoint remains immutable; runtime manifest is distinct from migration preservation proof",
+    "retention": "retain all successful full receipts for lifetime of isolated candidate; no expiry/delete/reuse. operation_receipt_limit now PER OWNER, default100000, positive explicit config increase under controlled restart. No candidate-wide receipt cap in this stage, so one owner cannot consume another quota. Per-owner admission and receipt count in one transaction, replay before quota check. Quota-exempt touch produces no receipt and remains available. Receipt storage grows with number of admitted owners; S2a does not claim a global disk quota; runtime operators monitor total bytes/count.",
+    "rollback": "Any published initialized runtime has revision>=1 and cannot use the original pristine snapshot rollback gate. Never reset revision or delete extensions. Failed unpublished staging may only be resumed/rebuilt according to its owned preparation plan; it was never an authority. Published evidence is preserved; incident quarantine and another separately prepared candidate are the supported exits. No automatic import/export of used schema2 writes; PR7 or separate migration design required.",
+    "acceptance": [
+      "default PR3 preparation remains schema2 and strict validate_bundle unchanged; explicit S2a fresh preparation validates source preservation before adding extensions and separately validates final schema3 manifest",
+      "schema2 untouched and S1-used existing roots refuse before any writer open or authority/revision/DB-family change, fixed reason and docs path",
+      "preparation faults at each stage persist owned evidence, never publish incomplete root; resume yields one complete schema3 profile/init revision, foreign plan/root untouched",
+      "runtime refresh/contact/replay validate, unknown schema/receipt/hash fail; duplicate stable pair IDs refuse before publication without automatic merge",
+      "old source and old S1 root remain unchanged; new source preparation does not claim to preserve writes made only in old S1 root",
+      "per-owner quota/replay/touch and immutable runtime rollback refusal retained"
+    ],
+    "extension_ddl": [
+      "CREATE TABLE global_runtime_contract (id INTEGER PRIMARY KEY CHECK(id=1), schema_version TEXT NOT NULL CHECK(schema_version='s2a-v1'), base_schema_digest TEXT NOT NULL, extension_schema_digest TEXT NOT NULL, initialized_revision INTEGER NOT NULL CHECK(initialized_revision>=1), last_validated_revision INTEGER NOT NULL CHECK(last_validated_revision>=initialized_revision))",
+      "CREATE TABLE global_operation_receipts (server_instance_id TEXT NOT NULL, agent_id INTEGER NOT NULL REFERENCES agents(id), request_id TEXT NOT NULL, tool TEXT NOT NULL, request_hash TEXT NOT NULL, canonical_request_json TEXT NOT NULL, authority_epoch TEXT NOT NULL, candidate_generation TEXT NOT NULL, credential_generation INTEGER NOT NULL CHECK(credential_generation>=0), committed_at TEXT NOT NULL, mutation_revision INTEGER NOT NULL CHECK(mutation_revision>=1), receipt_json TEXT NOT NULL, receipt_sha256 TEXT NOT NULL, PRIMARY KEY(server_instance_id,agent_id,request_id))",
+      "CREATE UNIQUE INDEX uq_global_contact_pair ON agent_links(a_agent_id,b_agent_id)"
+    ],
+    "historical_binding": "receipt instance/candidate must match containing candidate; historical opaque authority_epoch may differ from current epoch and is retained as history, never authorized for current replay. Validate stored hash/receipt consistency using its recorded binding, not a false requirement that all historical rows equal current epoch",
+    "capacity_inspection": {
+      "entry": "S2a management inspect: additive receipt_capacity field, read-only; S1-only output unchanged",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "per_owner_limit",
+          "owner",
+          "total_used",
+          "owners",
+          "next_owner_id",
+          "retention"
+        ],
+        "properties": {
+          "per_owner_limit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "owner": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "agent_id",
+              "used",
+              "remaining",
+              "new_requests_allowed"
+            ],
+            "properties": {
+              "agent_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "used": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "remaining": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "new_requests_allowed": {
+                "type": "boolean"
+              }
+            }
+          },
+          "total_used": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "owners": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "agent_id",
+                "used",
+                "remaining",
+                "new_requests_allowed"
+              ],
+              "properties": {
+                "agent_id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "used": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "remaining": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "new_requests_allowed": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "next_owner_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retention": {
+            "const": "candidate-lifetime-no-auto-delete"
+          }
+        }
+      },
+      "management_input_additions": {
+        "capacity_after_agent_id": "optional positive integer, defaultnull",
+        "capacity_limit": "integer1..1000 default100"
+      },
+      "rules": "owner corresponds to requested inspect agent_id; used count only that owner receipts; remaining=max(0,per_owner_limit-used); total_used separate informational COUNT, not admission gate. Owners breakdown keyset agent_id ascending LIMIT+1, include all existing agents with count0 too. One read transaction; no init/activity/receipt/revision. Fixed capacity rejection refers to authenticated owner counts. No observer can infer admission from total count",
+      "config": "operation_receipt_limit per owner positive integer default100000; increase controlled restart/current pinned bindings. No per-candidate admission limit in S2a",
+      "acceptance": [
+        "ownerA reaches quota, ownerB new operation succeeds; A new write refuses unchanged",
+        "A replay still succeeds, A/B exact-window touches continue without receipt rows even beyond quota",
+        "management inspect requested owner/count page/remaining accurate; >100 owners paginate; revision unchanged",
+        "after valid restart explicit per-owner quota increase admits A without receipt deletion"
+      ]
+    },
+    "request_preimage": {
+      "version": "orrery-global-operation-request-v1",
+      "exact_top_level_keys": [
+        "version",
+        "tool",
+        "server_instance_id",
+        "candidate_generation",
+        "authority_epoch",
+        "agent_id",
+        "expected_credential_generation",
+        "arguments"
+      ],
+      "arguments": "all semantic args of this tool with defaults expanded and TTL lower-bound clamp applied; task null versus empty string remains distinct. Exclude binding/auth fields already at top level, raw registration_token, project_key/to_project/from_project, request_id. Reject unknown fields before canonicalization",
+      "serialization": "UTF8 json.dumps(obj,sort_keys=True,separators=(comma,colon),ensure_ascii=False,allow_nan=False), comma and colon are literal single-character separators. Store the exact canonical string as canonical_request_json; SHA256 of its UTF8 bytes is request_hash. Do not normalize user text or reconstruct request from response/current rows",
+      "transaction": "same fenced BEGIN IMMEDIATE transaction inserts canonical_request_json, hash, output receipt/digest and domain state; no successful receipt may omit preimage",
+      "validation": "candidate alone parses preimage with duplicate keys/nonfinite values rejected, verifies exact version/top-level keys and supported tool semantic schema/default normalization, reserializes to identical bytes, recomputes hash. Match tool/instance/candidate/epoch/agent/generation against row columns and every corresponding output receipt field (request_id against row key). Validate output schema and receipt_sha256 independently. Historical epoch compared to stored row/preimage, not current epoch; no attempt to infer original task/reason/TTL from receipt or present state",
+      "limits": "canonical_request_json bounded 16384 UTF8 bytes before domain mutation; oversized input REQUEST_INPUT_TOO_LARGE; no raw credential in stored preimage or exposed manifests",
+      "not_authenticity_proof": "hash/digest are internal consistency checks, not signatures against a same-UID actor coherently rewriting DB; existing private file/inode/fence boundary remains"
+    },
+    "mixed_binary_contract": {
+      "schema_marker": "Explicit fresh S2a candidate has user_version3 before publication; existing S1 binary requires2 and refuses3 before domain writes. S1-only config still accepts only2; S2a config accepts only completed3. Default legacy unchanged.",
+      "running_s1_detection": "There is no upgrade of a running S1 candidate. New final root is absent/unpublished until complete; server authority is created ONLY in that new root. An S1 configured with its old schema2 root may continue there and cannot be mistaken for the new schema3 candidate. No old authority epoch transition occurs. New candidate startup on old binary refuses3.",
+      "limits": "Noncooperative same-UID direct DB writes remain outside the cooperative fence; tracker mismatch rejects normal S2a operations, not a complete tamper-proof history. Keep fixed diagnostic/quarantine procedure; never silently adopt tracker.",
+      "initialization": "Explicit fresh preparation only, never startup DDL or existing root conversion. Schema2 reason CANDIDATE_SCHEMA_REQUIRES_REPREPARE; retain root and manually review uncarried S1 writes before choosing another source/candidate.",
+      "acceptance": [
+        "old S1 binary refuses new3 before domain write; old2 continues independently",
+        "S2a refuses old2 unchanged; no authority rotation/repin/abort",
+        "all stage-aware domain/enrollment/audit/touch writes advance tracker atomically; coherent read snapshot",
+        "noncooperative tracker gap refuses without automatic reset"
+      ]
+    },
+    "snapshot_contract": {
+      "read": "Every S2a read entry explicitly BEGIN DEFERRED before its first DB SELECT. Marker/profile/revision/tracker/owner/domain/receipt counts and observed revision all use this same connection+snapshot until output computed. Retain authority shared lock plus before/after file/authority checks. Never issue helper SELECT on another connection or in autocommit. S1-only and legacy unchanged",
+      "write": "BEGIN IMMEDIATE before checking marker/profile/revision/tracker/auth; all domain writes/receipt/tracker update in that transaction. Reads do not modify revision. Health/management/list/verify/resolve/whois/fetch all covered, not only capacity inspect",
+      "interleavings": "A read established before B normal commit returns coherent old state/revision, or A established after B returns coherent new state/revision; no false gap. Old noncooperative writer commit yields coherent old snapshot or mismatched new snapshot rejected, never fresh domain rows with old revision",
+      "operator_exception": "incident operator inspect intentionally permits tracker gap but explicitly reports it in same read snapshot; does not label it validated runtime state"
+    },
+    "incident_operator_contract": {
+      "choice": "quarantine only in S2a, not tracker adoption; no invisible forward-fix path claimed",
+      "inspect-runtime-incident": "same-UID isolated operator CLI, typed config/binding and private pinned files. Acquire authority shared lock, explicit BEGIN DEFERRED. Permit ONLY tracker equality check bypass, still enforce instance/candidate/schema/integrity/owner/mode/sidecars. Return old tracked/current revision, marker/profile, per-table canonical digest/count and relevant receipt hashes, incident digest. No tokens/raw messages, no writes and no full runtime startup required. Schema3-specific, no schema2 conversion/cancel/abort entrance. Integrity/schema failure refuses normal inspection; unsafe file bodies are never followed or adopted.",
+      "quarantine-runtime": "explicit operator command with expected incident digest, expected old tracker/current revision range, operation UUID and --confirm-quarantine. Acquire same pinned authority LOCK_EX, re-snapshot exact digests/range, preflight all fixed roles before writing. Wrong digest/range/private schema rejects. Persist incident.json then authority quiescing at fresh epoch, then root_status=retired (phase remains quiescing), then quarantine.json complete receipt containing manifest/digests/old+new binding. Retain DB and all candidate files IN PLACE; no rename/delete/reset of DB/tracker/receipts, no network domain operation. A quarantined root never resumes in S2a. Only schema3 tracker-gap incident satisfying strict inspect preconditions is handled here. Malformed/unsafe input is refused and retained unchanged for external manual diagnosis; do not advertise this command as repairing or retiring arbitrary corrupt schema2 roots.",
+      "interruption": "fixed incident/quarantine phase records plus actual authority reconciled under EX on repeat same UUID. Before retirement authority stays quiescing; resume only completes retirement/receipt. If failure before authority change old candidate still fails tracker; no success claimed. Foreign file cannot be overwritten. Counters/revisions remain intact; authority epoch rotation intentionally fences old writers",
+      "return_to_service": "After quarantine, DIFFERENT isolated candidate and new client_name root only. Compare source/current candidate identity mappings and enrollment ID/generation/fingerprint inventory to retained quarantine manifest; claims/recovers performed only in quarantined candidate are NOT automatically present in new candidate. Do not copy stale credential JSON or assume token valid because numeric ID matches. Explicit operator enroll on NEW candidate: inspect current instance/candidate/agent ID/token-state/generation; claim if null-token, recover if token present, using its expected generation and fresh request UUID. Activate new local credential only against that current candidate CAS receipt and authenticated whois; verify inbox/read paths and new window binding. If token and generation actually match, any reuse still needs explicit current-binding authentication/receipt, never implicit fallback. Quarantined writes remain uncarried until reviewed; keep old evidence.",
+      "reason": "RUNTIME_WRITER_MISMATCH message points directly to these inspect/quarantine operator commands and states domain tools are stopped. Quarantine receipt never says repaired or adopted",
+      "acceptance": "gap still permits operator readonly inspect; wrong incident digest refuses unchanged; deliberate quarantine blocks all S1/S2a domain operations and retains DB/receipts; repeat after each output/authority step completes same receipt; another fresh isolated candidate can serve without modifying quarantined evidence",
+      "fixed_layout": {
+        "directory": "runtime_root/global-runtime/",
+        "incident": "incident.json kind orrery-global-runtime-incident-v1",
+        "quarantine": "quarantine.json kind orrery-global-runtime-quarantine-v1"
+      }
+    },
+    "full_validation": "Startup and explicit inspect scan current snapshot for quick_check/FK/FTS plus every stored receipt. Read-only FTS verification uses a private temporary disk database under the candidate database directory/.fts-validation (0700), never system TMPDIR or a whole in-memory backup. The per-check snapshot directory is removed on success and exceptions; source snapshot and bytes remain unchanged. The fixed directory itself is flocked exclusively during recovery, backup and cleanup, without a separate lock file. Before copying, remove only own-private non-symlink snapshot directories matching snapshot-[a-z0-9_]{8}; fd-relative removal never follows nested symlinks. Preserve unrelated entries."
+  },
+  "client_uuid_contract": {
+    "fixed_slot": "derived client_root/runtime/mutation-pending.json ONLY; magic orrery-global-operation-pending-v1; one pending mutation per client, no arbitrary path/history scan",
+    "schema_fields": [
+      "kind",
+      "tool",
+      "request_id",
+      "server_instance_id",
+      "candidate_generation",
+      "authority_epoch",
+      "agent_id",
+      "credential_generation",
+      "canonical_payload",
+      "request_hash",
+      "phase",
+      "receipt"
+    ],
+    "preflight": "fixed layout/output_plan validates pending+mutex roles and file type/private mode/nlink before network. Normal receipt-bearing mutation requires pending current binding/identity and serial mutex. Dedicated liveness and explicit-resolution readers have separately stated stale-pending handling; never accept foreign role/magic as own. No unbounded root scan.. Existing #236 operator enrollment/finalize reader remains separate from normal all-role preflight; receipt/mutex roles are typed and fixed. No upgrade recreation role added.",
+    "begin": "before HTTP create UUID once, atomic private write planned payload under per-client nonblocking private file flock using fixed runtime/mutation.lock; this lock is also a fixed role, never touch external authority lock. Same pending exact intent resumes UUID, conflicting intent MUTATION_PENDING_CONFLICT before HTTP. Read-only observe and operator enrollment recovery remain usable Pending canonical_payload stores the identical request preimage defined in candidate_validation_contract.request_preimage; request_hash must recompute from these bytes. This applies only to receipt-bearing writes. Liveness has no pending gate or mutex acquisition; explicit resolution alone owns the stale pending cleanup.",
+    "complete": "authenticated schema/binding/request ID matched server result saved as phase=committed plus receipt atomically, then clear pending once result is durably available for reporting. Crash before clear replays same UUID; network uncertainty never replaces pending or generates new UUID Dedicated touch has no journal and is exempt from these UUID-completion steps.",
+    "crash_points": "planned journal before request, server commit/response lost, receipt save, pending unlink; restart invokes same exact tool/payload/UUID and no second server revision. Disk failure preserves prior valid pending for explicit retry; no completed flag without validated receipt",
+    "credential_rotation": "old token/generation pending cannot authenticate replay; current authenticated same identity may read current state and use explicit resolution under old digest. Old journal is not adopted; after deliberate resolution a NEW intended operation may use new UUID, without claiming old outcome was absent.",
+    "operator_resolution": "Explicit operator-only resolve-mutation --ack/--abandon with expected SHA256 of old pending. Acquire same fixed mutation.lock, validate old pending own magic/private/nlink/full schema/old binding, keep it separate from new context; reread exact digest under lock before unlink. Authenticate current context/credential/server binding in read-only calls, display old and new binding, UUID/tool/status and current state without token. Same stable ID required within same instance; epoch may differ. Across instance/candidate require explicit --accept-binding-change plus complete old/new binding arguments and current-owner authentication; never infer numeric ID continuity across instances. Action deletes/acknowledges ONLY local pending, no remote resend or rollback; local completion cannot prove old outcome. No rewriting old pending to new epoch, no new UUID automatically. Constructor has a narrowly scoped resolution reader so stale journal cannot block this entrance; foreign role/magic/owner is always refused. Normal mutations still blocked until explicit resolution Across instance/candidate, explicit old/new agent IDs are required too; operator acknowledges identity continuity is unproven and only disposes a local stale request. A different-ID pending is never accepted for network owner calls or receipt activation. Mutex has no server binding header, so clearing legitimate stale pending leaves the same mutex usable for new intended operation under valid current context. Across instance/agent changes operator reads old root via dedicated resolution reader and authenticates a separately supplied EXISTING current-context input from a new fixed client root; only old pending is disposed, old context/credential not rewritten, next normal operation uses new current root. The input is readonly, not arbitrary output path.",
+    "binding_change": "Normal entry fails closed on instance/candidate/epoch mismatch. S2a never changes an existing candidate epoch for initialization. Different candidate/instance requires independently verified current enrollment in a new fixed client_name root; do not copy old credential based on numeric ID or recreate old binding automatically. Current authenticated root may explicitly resolve old pending via the separately scoped reader. Same-candidate credential rotation uses existing #236 enroll/finalize recovery, not repin.",
+    "lock_role": "fixed runtime/mutation.lock: immutable JSON {kind:orrery-client-local-mutex-v1}; no instance/candidate/epoch/agent ID fields. Role belongs to fixed client root + OS UID, private regular nlink1, NOFOLLOW and pinned dev/inode within open operation. Create O_EXCL once with fsync before first network, validate exact magic/schema for every open, never unlink/rename/recreate while held. Does not authenticate server owner; context/credential/pending retain strict binding. Foreign old-bound header not auto-converted: explicit new client root required for obsolete unpublished layout.",
+    "liveness_exception": "touch_window_identity/verify/readonly observe do not acquire mutation.lock and never read pending as routing/authentication evidence. An own-magic pending for same instance+agent (possibly old candidate/epoch/generation) may remain structurally validated but unresolved; it does not block liveness using independently current context/credential/authority. No adoption/resend of old payload, no journal writes/deletes. A foreign role/magic/private-file error still refuses. If current context/credential themselves stale, no network exemption: explicit current-root reconciliation is required first. instance/agent change uses new current client root, never pretends numeric ID continuity.",
+    "definite_rejections": {
+      "after_receipt_lookup": [
+        "TARGET_UNAVAILABLE",
+        "CONTACT_TARGET_CONSENT_REQUIRED",
+        "CONTACT_MESSAGE_REQUIRES_S2B",
+        "CONTACT_REQUEST_UNAVAILABLE",
+        "SELF_CONTACT_NOT_SUPPORTED",
+        "REQUEST_RECEIPT_CAPACITY_REACHED",
+        "WINDOW_INPUT_REQUIRED",
+        "WINDOW_OWNER_MISMATCH",
+        "CONTACT_TTL_INVALID",
+        "TIMESTAMP_INVALID"
+      ],
+      "before_receipt_lookup": [
+        "ARGUMENTS_UNSUPPORTED",
+        "REQUEST_ID_INVALID",
+        "REQUEST_INPUT_TOO_LARGE",
+        "CONTACT_TTL_INVALID",
+        "CONTACT_POLICY_INVALID",
+        "TASK_DESCRIPTION_INVALID",
+        "CREDENTIAL_GENERATION_MISMATCH",
+        "OWNER_REQUIRED",
+        "STALE_RUNTIME_BINDING",
+        "WRITER_FENCED",
+        "RUNTIME_WRITER_MISMATCH"
+      ],
+      "contract": "The lists are the sole authority for fixed rejection reasons and stages. Only an authenticated listed tool rejection clears the exact own planned bytes under the local mutex. Existing pending survives listed pre-lookup rejection because that response cannot disprove an earlier commit. All other outcomes preserve pending; no automatic replacement UUID.",
+      "stage_note": "CONTACT_TTL_INVALID can occur before lookup for argument validation or after lookup for expiry overflow."
+    }
+  },
+  "contact_transition_table": [
+    {
+      "operation": "request",
+      "before": "absent",
+      "after": "pending, expiry now+clampedTTL"
+    },
+    {
+      "operation": "request",
+      "before": "pending live/null expiry",
+      "after": "unchanged"
+    },
+    {
+      "operation": "request",
+      "before": "pending finite expiry<=now",
+      "after": "same ID pending, reason/expiry updated"
+    },
+    {
+      "operation": "request",
+      "before": "approved any expiry",
+      "after": "unchanged, effective true"
+    },
+    {
+      "operation": "request",
+      "before": "blocked any expiry",
+      "after": "unchanged, effective false, target must unblock"
+    },
+    {
+      "operation": "respond true by target",
+      "before": "absent/pending/approved/blocked",
+      "after": "approved, expiry now+clampedTTL (informational)"
+    },
+    {
+      "operation": "respond false by target",
+      "before": "absent/pending/approved/blocked",
+      "after": "blocked, expiry null"
+    },
+    {
+      "operation": "same UUID replay",
+      "before": "any current state",
+      "after": "no mutation; historical commit result returned"
+    }
+  ],
+  "parent_decisions": {
+    "source_message_id": 15704,
+    "delivery_exceptions": "A approved: directed blocked/block_all precede open/auto; no reservation override, requester autoapproval or enforcement=false",
+    "receipt_capacity": "A as amended by message15710: operation_receipt_limit default100000 PER OWNER, explicit config increase, only exhausted owner new receipt-bearing operations refused; replay and bounded receipt-free touch retained; no automatic deletion or candidate-wide admission cap",
+    "capacity_amendment": "message15710: per-owner receipt quota plus owner breakdown, same-window touch outside receipt quota",
+    "in_place_upgrade": "message15733: remove schema2→3 in-place upgrade from S2a; existing root refused unchanged, fresh schema3 preparation only; released migration deferred PR7/separate PR"
+  },
+  "capacity_revision_note": "v2.1 candidate-wide cap statements are superseded by per-owner quota/no shared admission cap; touch is a deliberate exception to all-new-writes-have-receipts",
+  "state_transitions": [
+    {
+      "from": "own old-binding mutation pending/new current root exists",
+      "actor": "operator",
+      "operation": "resolve old digest under local mutex using new current-context auth",
+      "to": "old pending disposed, next new intent in current root",
+      "exit": "wrong digest/foreign source refuses; no old payload replay"
+    },
+    {
+      "from": "noncooperative tracker mismatch/version3",
+      "actor": "operator",
+      "operation": "incident readonly inspect→confirmed digest/range quarantine under EX",
+      "to": "retired retained root",
+      "exit": "same UUID resumes only schema3 owned incident retirement; unsafe/malformed states refuse unchanged; no tracker adoption"
+    },
+    {
+      "from": "quarantined root, enrollment changed only there",
+      "actor": "operator",
+      "operation": "review uncarried state; different candidate identity inventory/current inspect, explicit claim/recover and new-root activation",
+      "to": "separate validated candidate with verified current credential",
+      "exit": "old token/ID/gen continuity not assumed, re-enrollment may be required; preserve old evidence"
+    }
+  ],
+  "contract_precedence": "v3 is a complete replacement for v2.5. Removed upgrade operations/roles/reasons/acceptances are not inherited. Tool output_schema, canonical request preimage, quota, snapshot and fixed mutex contracts remain normative. Preparation has its own unpublished staging receipt, never an existing runtime upgrade journal.",
+  "proposal_boundaries": "Implemented isolated S2a contract, legacy default and activation=false retained. No in-place schema upgrade or epoch repin.",
+  "fresh_candidate_preparation": {
+    "scope": "Explicit isolated operator preparation only, not public MCP tool/installer/doctor/live cutover. New profile s2a-v1 in PR3 preparation API, default PR3 path still emits2. Proposed console entry agentstack-mail-global-prepare --plan FILE calls this profile; no schema2 runtime argument and no upgrade subcommands.",
+    "inputs": "Typed private plan with explicit supported legacy SourceBundle seven input paths, resolutions, expected writer roster/fence/final evidence, isolation_root, new candidate_name and operation UUID. candidate_name lower-case [a-z0-9][a-z0-9_-]{0,63}. Inputs are read-only paths; no current service discovery or arbitrary output destinations.",
+    "layout": {
+      "parent": "isolation_root/s2a-candidates/",
+      "workspace": "parent/candidate_name/",
+      "owner": "workspace/preparation-owner.json kind orrery-s2a-preparation-owner-v1",
+      "receipt": "workspace/preparation-receipt.json kind orrery-s2a-preparation-receipt-v1",
+      "staging": "workspace/staging/",
+      "runtime_root": "workspace/candidate/"
+    },
+    "preflight": "Single output plan before first write: validate isolated parent/new-name ownership, disjoint input source/client/external authority roots, private UID/mode/nlink/schema/magic and fixed slot aliases; root must be absent or exact owned incomplete same-UUID/plan. Existing candidate root never rebuilt/overwritten, even if empty-looking. Unsupported source schema2 refused before writer opens. Read source with existing PR3 snapshot/backup/sidecar guarantees; never modify logical source state. Fixed reason covers main/WAL/SHM/journal unchanged for refused candidate inputs.",
+    "stages": [
+      "O_EXCL private owned workspace plan/UUID/digest; candidate final path absent",
+      "PR3 snapshot + resolve choices + strict source preservation proof in unpublished staging; fence writer roster and final difference verification unchanged",
+      "BEGIN IMMEDIATE staged S2a extension init/profile/marker3/revision1; commit",
+      "independent final runtime validation + source mapping/rows/files preservation proof + extension/counter/receipt-empty proof; final manifest binds both proofs and final artifact hashes",
+      "recheck source/fence/final gate and actual staged manifest; persist ready publication receipt with hashes/UUID before directory rename",
+      "atomic staging→candidate rename in same workspace/filesystem; fsync directory; persist complete preparation receipt. Fixed authority/config for NEW candidate established as owned staged artifacts before publication; phase active/activationfalse does not imply installed live pointer. No update to old root authority or installed pointer"
+    ],
+    "proofs": "Preservation validator is exact for base stage; final validator verifies same expected transformed source rows/files plus exactly defined S2a tables/index/initialized counters and empty operation receipts. Do not rerun the old validator and suppress its extra-table error. Final source/fence/gate uses schema3 artifact manifest, not pre-extension schema2 digest. candidate_generation follows PR3 definition and is never replaced with mutation revision. New initial authority_epoch is fresh opaque value, not rotation of any existing binding.",
+    "interruption": "Before publication only own unpublished staging is resumable; receipt plan/source generation/schema/profile/digests determine whether to continue or refuse. Transactions all-or-nothing; own incomplete init may be resumed without double revision. After rename before complete receipt, same UUID verifies final artifact against persisted ready manifest and records completion WITHOUT DDL or requiring runtime bytes to remain pristine after normal service use: normal server requires complete publication receipt, so serving is impossible until completion. Final published root and completion receipt are never reset/rebuilt. Different UUID/plan/source drift refuses and requires new candidate_name; no foreign root deletion.",
+    "schema2_refusal": "CANDIDATE_SCHEMA_REQUIRES_REPREPARE: preserve old root and prepare from supported source in a NEW workspace; it is not a command to rerun into old workspace. S1-only developer writes are not included in a source-only rebuild. Need continuity of those writes? Retain evidence and defer explicit migration/import to PR7 or separate PR.",
+    "docs_and_pr": "Document fixed reason, operator plan/source/new-name command and normal isolated start with explicit completed config; include one developer note that unreleased master Python API can create schema2 and such roots must be retained. UI/live migration not introduced. State current release2026.10.06 has no PR3/S1 while master API exists; do not claim actual absence of all manually created candidates.",
+    "server_config": "Explicit kind orrery-global-server-s2a-v1 pins completed schema3 profile/current instance/candidate/epoch and preparation receipt. Existing S1 kind/schema2 path retains exactly S1 behavior; default no-global-config remains legacy. An S2a startup on schema2 fails fixed reason before any writer/admin/runtime side-effect. Proposed operator new preparation publishes only isolated config and authority with activation=false, never installed env/service.",
+    "identity_validation": "Source format checks distinguish a namespace schema2 candidate (namespace_metadata/global columns) from supported legacy project schema; do not rely on user_version alone as a legacy-format discriminator. Unsupported source namespace2 gets CANDIDATE_SCHEMA_REQUIRES_REPREPARE, unsupported other schema gets existing source schema reason."
+  },
+  "current_client_root_procedure": {
+    "scope": "Keep upgrade-independent existing #236 create/enroll/finalize workflows, fixed new client_name, all-output preflight and separate explicit recovery reader. No new recreate-for-upgrade command/receipt/magic, no old epoch repin.",
+    "new_candidate": "Use new fixed root with explicitly provided current authority/config and independently operator-selected current agent ID. Inspect current candidate token-state/generation; explicit claim/recover uses its own request UUID and CAS receipt. If choosing to reuse an actual current credential, prove its complete current binding/token/generation via whois; never activate a credential bound to old candidate solely because ID matches.",
+    "interruption": "Existing registration/enrollment pending records support explicit finalize after each credential/context/metadata/profile/session save. Recovery reader recognizes its own partial outputs and validates receipt/token/ID/generation/binding; before-request/unknown-ID/unproven state fails RECOVERY_PENDING_MISMATCH, no fresh registration escape. Preserve source root. No automatic historical receipt import from another candidate.",
+    "old_pending": "New current root authenticates to its own server. Explicit resolve-mutation reads old own pending under its binding-independent local mutex, requires digest, full old/new bindings+IDs and acknowledgement of unknown old outcome. Deletes ONLY old local pending; does not resend or copy old request into new candidate, rotate token or rewrite old context. New intended mutation in new root has a fresh UUID after deliberate resolution.",
+    "acceptance": [
+      "new candidate independent inspect/enroll/finalize→whois/inbox; old source/root unchanged",
+      "all existing #236 activation save boundaries recover same ID/token/gen and one CAS",
+      "unproven/before-request/foreign pending refuses, no alias/new registration fallback",
+      "old pending resolution then new intent uses same binding-independent mutex semantics; liveness unaffected by legitimate unresolved pending with valid current credentials"
+    ]
+  },
+  "removed_or_deferred": {
+    "removed_from_s2a": [
+      "in-place version2→3 upgrade",
+      "upgrade.json and its phases/attempt history",
+      "upgrade-inspect/cancel/abort/resume",
+      "initialization epoch rotation and old authority restoration",
+      "recreate-client-root-for-upgrade and recreation-specific new roles",
+      "upgrade-specific state table/acceptances/reasons"
+    ],
+    "PR7_or_separate_PR": [
+      "explicit migration/import for any existing used schema2 candidate",
+      "released installed live cutover and rollback policy",
+      "epoch repin if future released contract requires it",
+      "preserving/merging old S1-only writes into a new candidate with verified identity/token mapping"
+    ],
+    "retained": [
+      "9 tools and additive capabilities",
+      "canonical request preimage and candidate-only receipt validation",
+      "per-owner quota and bounded quota-exempt touch",
+      "explicit shared read snapshots and atomic write tracker",
+      "binding-independent local mutex and explicit pending resolution",
+      "schema3 incident quarantine/evidence and separately enrolled different candidate",
+      "upgrade-independent #236 fixed current-root construction and activation recovery"
+    ]
+  }
+}

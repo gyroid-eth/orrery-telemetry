@@ -9,6 +9,8 @@
 
 installer は `bin/agentstack-resume` も配置します。停止した子の道具を変更する [resume の手順](delegation.md#停止した子の道具を変更して-resume-する)で使います。
 
+installer は完全な repository checkout または source archive から実行してください。`packages/agentstack_mail/src/agentstack_mail/schema_contract.py` と `packages/agentstack_mail/fixtures/global-server-s2a.json` は runtime client と一緒に配置する正本なので、dashboard-only でも必要です。不足時は配備前に `missing runtime client contract` と不足ファイルを表示して停止します。通常の clone・1 行 install・WSL の導入では repository 全体を取得します。
+
 ## 動作環境
 
 主対象は macOS です。launcher と hook は macOS 標準 Bash 3.2 でも動くよう実装されています。

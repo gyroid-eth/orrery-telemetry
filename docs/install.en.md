@@ -9,6 +9,8 @@ This document is for people installing ORRERY Telemetry (this repository) for th
 
 The installer also installs `bin/agentstack-resume`, used by the [stopped-child tool change procedure](delegation.en.md#resume-a-stopped-child-with-different-tools).
 
+Run the installer from a complete repository checkout or source archive. `packages/agentstack_mail/src/agentstack_mail/schema_contract.py` and `packages/agentstack_mail/fixtures/global-server-s2a.json` are canonical inputs installed beside the runtime client, including dashboard-only installs. Missing inputs stop installation before deployment with `missing runtime client contract` and the missing file. Normal clones, the one-line installer and WSL installation obtain the whole repository.
+
 ## Supported environment
 
 macOS is the primary target. The launchers and hooks are implemented to work with the system Bash 3.2 on macOS.

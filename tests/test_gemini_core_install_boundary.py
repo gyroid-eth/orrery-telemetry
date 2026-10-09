@@ -43,8 +43,8 @@ def _function(text: str, name: str) -> str:
 
 
 def _payload_declaration(text: str) -> str:
-    match = re.search(r"^OPTIONAL_PROVIDER_PAYLOAD=\(\n.*?^\)\n", text, re.DOTALL | re.MULTILINE)
-    assert match, "OPTIONAL_PROVIDER_PAYLOAD declaration missing"
+    match = re.search(r"^RUNTIME_SCHEMA_SOURCE=.*\nRUNTIME_FIXTURE_SOURCE=.*\nOPTIONAL_PROVIDER_PAYLOAD=\(\n.*?^\)\n", text, re.DOTALL | re.MULTILINE)
+    assert match, "core payload declarations missing"
     return match.group(0)
 
 
@@ -126,6 +126,12 @@ def test_fresh_core_install_omits_provider_payload_and_runs_core_server(tmp_path
                      "hooks/project-context.sh"):
         assert (install_dir / relative).read_bytes() == (ROOT / relative).read_bytes(), relative
     assert (install_dir / "dashboard" / "providers" / "codex_app.py").is_file()
+    for source, installed in (
+        ("packages/agentstack_mail/src/agentstack_mail/schema_contract.py", "schema_contract.py"),
+        ("packages/agentstack_mail/fixtures/global-server-s2a.json", "global-server-s2a.json"),
+    ):
+        assert (install_dir / "bin/lib" / installed).read_bytes() == (ROOT / source).read_bytes()
+
 
     monkeypatch.setattr(service_runner, "HERE", install_dir / "dashboard")
     assert service_runner._default_server_path() == install_dir / "dashboard" / "server.py"
