@@ -73,7 +73,12 @@ def control(server, **values):
 
 @pytest.fixture
 def server(monkeypatch):
-    root = Path(tempfile.mkdtemp(prefix="rhs1-", dir="/private/tmp"))
+    # Keep Unix socket paths short on macOS, without requiring that directory
+    # on Linux/WSL. This fixture always creates its own private directory.
+    temporary_root = (
+        "/private/tmp" if Path("/private/tmp").is_dir() else tempfile.gettempdir()
+    )
+    root = Path(tempfile.mkdtemp(prefix="rhs1-", dir=temporary_root))
     root.chmod(0o700)
     home = root / "home"
     home.mkdir()
@@ -287,6 +292,47 @@ def test_registration_creates_global_identity_and_conflict_is_closed(server):
         call(server, "register_agent", **values)
 
 
+@pytest.mark.parametrize("route", ["register", "recover", "migrated"])
+def test_accepted_unicode_credential_authenticates_owner(server, route):
+    token = "界" * 24
+    agent_id = 2
+    if route == "register":
+        result = call(
+            server,
+            "register_agent",
+            **server["binding"],
+            name="UnicodeOwner",
+            program="fixture",
+            model="fixture",
+            registration_token=token,
+        )
+        agent_id = result["id"]
+        assert result["registration_token"] == token
+    elif route == "recover":
+        receipt = control(
+            server,
+            action="recover",
+            agent_id=agent_id,
+            request_id="unicode-recovery",
+            expected_generation=9,
+            new_credential=token,
+        )
+        assert receipt["ok"] and receipt["new_generation"] == 10
+        assert token not in json.dumps(receipt, ensure_ascii=False)
+    else:
+        # PR3 preserves credentials verbatim; S1 must authenticate them too.
+        with connection(Path(server["config"]["database"]), write=True) as db:
+            db.execute(
+                "UPDATE agents SET registration_token=? WHERE id=?", (token, agent_id)
+            )
+    assert (
+        call(server, "whois", **owner(server, agent_id=agent_id, token=token))["id"]
+        == agent_id
+    )
+    with pytest.raises(Exception, match="OWNER_REQUIRED"):
+        call(server, "whois", **owner(server, agent_id=agent_id, token="外" * 24))
+
+
 def test_inbox_privacy_and_owner_auth(server):
     inbox = call(server, "fetch_inbox", **owner(server))
     assert any(message["id"] == 101 for message in inbox)
@@ -400,6 +446,43 @@ def test_updater_exclusive_gate_prevents_new_request(server):
         os.close(fd)
 
 
+@pytest.mark.parametrize("exclusive", [False, True])
+def test_replaced_startup_lock_fences_http_and_management(server, exclusive):
+    path = Path(server["config"]["authority_lock"])
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        if exclusive:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        replacement = path.with_name("replacement.lock")
+        replacement.write_bytes(b"")
+        replacement.chmod(0o600)
+        replacement.replace(path)
+        with connection(Path(server["config"]["database"])) as db:
+            revision = db.execute(
+                "SELECT value FROM namespace_metadata WHERE key='write_generation'"
+            ).fetchone()[0]
+        with pytest.raises(Exception, match="AUTHORITY_LOCK_REPLACED"):
+            call(
+                server,
+                "register_agent",
+                **owner(server, program="fixture", model="fixture"),
+            )
+        assert (
+            control(server, action="inspect", agent_id=2)["reason"]
+            == "AUTHORITY_LOCK_REPLACED"
+        )
+        # Releasing the updater's old lock must not restore this old runtime.
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        with pytest.raises(Exception, match="AUTHORITY_LOCK_REPLACED"):
+            call(server, "whois", **owner(server))
+        with connection(Path(server["config"]["database"])) as db:
+            assert db.execute(
+                "SELECT value FROM namespace_metadata WHERE key='write_generation'"
+            ).fetchone()[0] == revision
+    finally:
+        os.close(fd)
+
+
 def test_retirement_requires_owner_and_unretire_preserves_token(server):
     assert call(server, "retire_agent", **owner(server))["status"] == "retired"
     with pytest.raises(Exception, match="OWNER_REQUIRED"):
@@ -475,6 +558,69 @@ def test_new_runtime_root_fences_old_process_with_same_candidate_and_epoch(serve
     with pytest.raises(Exception, match="WRITER_FENCED"):
         call(server, "whois", **owner(server))
     write(path, original)
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm", "-journal"])
+@pytest.mark.parametrize("layout", ["hardlink", "symlink", "public-mode"])
+@pytest.mark.parametrize("entry", ["http", "startup"])
+def test_sqlite_sidecars_cannot_write_outside_isolation(
+    server, tmp_path, suffix, layout, entry
+):
+    database = Path(server["config"]["database"])
+    with connection(database, write=True) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+    outside = tmp_path / "outside-sentinel"
+    assert server["root"] not in outside.resolve().parents
+    before = b"UNCHANGED" + b"X" * 8192
+    outside.write_bytes(before)
+    outside.chmod(0o600)
+    sidecar = Path(str(database) + suffix)
+    assert not sidecar.exists()
+    if layout == "hardlink":
+        os.link(outside, sidecar)
+    elif layout == "symlink":
+        sidecar.symlink_to(outside)
+    else:
+        sidecar.write_bytes(before)
+        sidecar.chmod(0o644)
+    try:
+        with pytest.raises(Exception, match="SQLITE_SIDECAR_UNSAFE"):
+            if entry == "startup":
+                GlobalRuntime(server["root"] / "config.json")
+            else:
+                call(
+                    server,
+                    "register_agent",
+                    **server["binding"],
+                    name="SidecarOwner",
+                    program="fixture",
+                    model="fixture",
+                )
+        assert outside.read_bytes() == before
+        assert outside.stat().st_size == len(before)
+    finally:
+        sidecar.unlink(missing_ok=True)
+
+
+def test_private_wal_sidecars_allow_normal_registration(server):
+    database = Path(server["config"]["database"])
+    with connection(database, write=True) as db:
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        # Keep a cooperating connection open so SQLite's regular sidecars exist.
+        db.execute("SELECT id FROM agents").fetchall()
+        for suffix in ("-wal", "-shm"):
+            path = Path(str(database) + suffix)
+            assert path.is_file() and path.stat().st_nlink == 1
+            assert path.stat().st_mode & 0o077 == 0
+        result = call(
+            server,
+            "register_agent",
+            **server["binding"],
+            name="PrivateWalOwner",
+            program="fixture",
+            model="fixture",
+        )
+        assert result["id"] > 4
 
 
 def test_unmigrated_database_rejected_without_schema_changes(server):

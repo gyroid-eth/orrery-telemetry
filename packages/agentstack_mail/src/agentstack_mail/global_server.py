@@ -154,6 +154,7 @@ class GlobalRuntime:
             self.db_identity = (db_info.st_dev, db_info.st_ino)
         finally:
             os.close(db_fd)
+        self.check_sqlite_sidecars()
         try:
             with connection(self.paths["database"]) as db:
                 metadata = dict(db.execute("SELECT key,value FROM namespace_metadata"))
@@ -188,6 +189,9 @@ class GlobalRuntime:
             or cfg.get("mail_instance_id") != self.instance
         ):
             raise GlobalError("CANDIDATE_BINDING_MISMATCH")
+        # Pin the first validated lock inode before this runtime is published.
+        # Every later operation must share the updater's same lock object.
+        self.lock_identity = None
         with self.transaction():
             pass
         self.control = None
@@ -208,6 +212,39 @@ class GlobalRuntime:
             raise GlobalError("WRITER_FENCED")
         return value
 
+    def check_sqlite_sidecars(self):
+        # SQLite can open these even when the main database itself is safe.
+        # Validate before *any* SQLite connection, including schema inspection.
+        for suffix in ("-wal", "-shm", "-journal"):
+            path = Path(str(self.paths["database"]) + suffix)
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                continue
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_mode & 0o077
+                or info.st_nlink != 1
+            ):
+                raise GlobalError("SQLITE_SIDECAR_UNSAFE")
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                try:
+                    opened = os.fstat(fd)
+                    if (
+                        (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)
+                        or not stat.S_ISREG(opened.st_mode)
+                        or opened.st_uid != os.getuid()
+                        or opened.st_mode & 0o077
+                        or opened.st_nlink != 1
+                    ):
+                        raise GlobalError("SQLITE_SIDECAR_UNSAFE")
+                finally:
+                    os.close(fd)
+            except OSError:
+                raise GlobalError("SQLITE_SIDECAR_UNSAFE") from None
+
     @contextmanager
     def transaction(self, *, write=False, binding=None):
         try:
@@ -226,6 +263,11 @@ class GlobalRuntime:
                 or info.st_nlink != 1
             ):
                 raise GlobalError("AUTHORITY_LOCK_UNSAFE")
+            identity = (info.st_dev, info.st_ino)
+            if self.lock_identity is None:
+                self.lock_identity = identity
+            elif identity != self.lock_identity:
+                raise GlobalError("AUTHORITY_LOCK_REPLACED")
             try:
                 fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
             except BlockingIOError:
@@ -246,6 +288,7 @@ class GlobalRuntime:
             database_info = self.paths["database"].lstat()
             if self.db_identity != (database_info.st_dev, database_info.st_ino):
                 raise GlobalError("DATABASE_REPLACED")
+            self.check_sqlite_sidecars()
             with connection(self.paths["database"], write=write) as db:
                 if write:
                     db.execute("BEGIN IMMEDIATE")
@@ -271,10 +314,19 @@ class GlobalRuntime:
         if not integer(agent_id) or not isinstance(token, str) or not token:
             raise GlobalError("OWNER_REQUIRED")
         row = db.execute("SELECT * FROM agents WHERE id=?", (agent_id,)).fetchone()
+        try:
+            token_matches = (
+                row is not None
+                and isinstance(row["registration_token"], str)
+                and hmac.compare_digest(
+                    row["registration_token"].encode("utf-8"), token.encode("utf-8")
+                )
+            )
+        except UnicodeEncodeError:
+            token_matches = False
         if (
             row is None
-            or not isinstance(row["registration_token"], str)
-            or not hmac.compare_digest(row["registration_token"], token)
+            or not token_matches
             or (row["retired_at"] is not None and not retired)
         ):
             raise GlobalError("OWNER_REQUIRED")
