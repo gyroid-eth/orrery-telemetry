@@ -1270,3 +1270,66 @@ def test_journal_saved_before_request_is_not_proof_of_registration(prepared, mon
     assert not c.credential.exists()
     assert c.outputs['registration'].read_bytes() == saved
     assert s1.call(prepared, 'health_check')['mutation_revision'] == before
+
+
+@pytest.mark.parametrize('stage', [None, 'enrollment', 'credential', 'context'])
+def test_claim_without_local_credential_and_saved_slot_replay(prepared, monkeypatch, stage):
+    from agentstack_mail.namespace_state_io import connection
+    with connection(Path(prepared['config']['database']), write=True) as db:
+        db.execute('UPDATE agents SET registration_token=NULL,credential_generation=0 WHERE id=1')
+    config = prepared['client_config']
+    config['identity']['credential_generation'] = 0
+    private(prepared['client_path'], config)
+    c = client(prepared)
+    c.credential.unlink()
+    before = s1.call(prepared, 'health_check')['mutation_revision']
+    if stage is not None:
+        original = c.write_output
+        def interrupted(path, value, role):
+            original(path, value, role)
+            if role == stage:
+                raise OSError('synthetic missing-credential saved-slot interruption')
+        monkeypatch.setattr(c, 'write_output', interrupted)
+        with pytest.raises(OSError, match='saved-slot'):
+            c.enroll('claim', 'missing-credential-claim', 0)
+        pending = api['read_json'](c.outputs['enrollment'])
+        assert pending['previous_credential_generation'] is None
+        assert pending['previous_credential_fingerprint'] is None
+        assert s1.call(prepared, 'health_check')['mutation_revision'] == before + (stage != 'enrollment')
+    result = run(prepared, 'bin/agentstack-enroll', '--global-context', str(c.path),
+                 'claim', 'missing-credential-claim', '0', bash=True)
+    assert result.returncode == 0, result.stderr
+    active = client(prepared)
+    assert active.observe()['agent_id'] == 1
+    assert active.identity['credential_generation'] == 1
+    assert not active.outputs['enrollment'].exists()
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before + 1
+
+
+def test_missing_credential_claim_pending_rejects_an_unrelated_appearing_credential(prepared, monkeypatch):
+    from agentstack_mail.namespace_state_io import connection
+    with connection(Path(prepared['config']['database']), write=True) as db:
+        db.execute('UPDATE agents SET registration_token=NULL,credential_generation=0 WHERE id=1')
+    config = prepared['client_config']
+    config['identity']['credential_generation'] = 0
+    private(prepared['client_path'], config)
+    c = client(prepared)
+    c.credential.unlink()
+    original = c.write_output
+    def interrupted(path, value, role):
+        original(path, value, role)
+        if role == 'enrollment':
+            raise OSError('before claim request')
+    monkeypatch.setattr(c, 'write_output', interrupted)
+    with pytest.raises(OSError):
+        c.enroll('claim', 'missing-credential-refusal', 0)
+    private(c.credential, {'kind': 'orrery-global-credential-v1', **c.binding,
+                          **c.identity, 'registration_token': 'unrelated-local-token-0000001'})
+    files = [c.path, c.credential, c.outputs['enrollment']]
+    before = {p: p.read_bytes() for p in files}
+    revision = s1.call(prepared, 'health_check')['mutation_revision']
+    result = run(prepared, 'bin/agentstack-enroll', '--global-context', str(c.path),
+                 'claim', 'missing-credential-refusal', '0', bash=True)
+    assert result.returncode == 2 and 'RECOVERY_CREDENTIAL_MISMATCH' in result.stderr
+    assert {p: p.read_bytes() for p in files} == before
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == revision

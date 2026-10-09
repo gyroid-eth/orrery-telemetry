@@ -586,5 +586,5 @@ def test_template_reregister_preserves_legacy_program_override(tmp_path, templat
     assert result.returncode == 0, result.stderr
     calls = [json.loads(line) for line in log.read_text().splitlines()]
     registered = next(call for call in calls if call['tool'] == 'register_agent')
-    assert registered['arguments']['program'] == (override or default)
+    assert registered['arguments']['program'] == ((override or default) if template.startswith('codex/') else 'claude-code')
     _assert_no_secrets(result)

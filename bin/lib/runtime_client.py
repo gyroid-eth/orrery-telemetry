@@ -732,10 +732,10 @@ class RuntimeClient:
                 token = saved['new_credential']
             else:
                 token = secrets.token_urlsafe(32)
-                previous = read_json(self.credential)
+                previous = read_json(self.credential) if self.credential.exists() or self.credential.is_symlink() else None
                 self.write_output(pending, {**values, 'new_credential': token,
-                    'previous_credential_generation': previous['credential_generation'],
-                    'previous_credential_fingerprint': hashlib.sha256(str(previous.get('registration_token')).encode()).hexdigest()}, 'enrollment')
+                    'previous_credential_generation': previous['credential_generation'] if previous is not None else None,
+                    'previous_credential_fingerprint': hashlib.sha256(str(previous.get('registration_token')).encode()).hexdigest() if previous is not None else None}, 'enrollment')
         receipt = self.management(action, agent_id=self.identity['agent_id'], request_id=request_id,
                                   expected_generation=expected_generation, new_credential=token)
         current = self.management('inspect', agent_id=self.identity['agent_id'])
