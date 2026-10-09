@@ -103,14 +103,14 @@ def integer(value, minimum=0):
     return type(value) is int and value >= minimum
 
 
-def configured(path=None):
+def configured(path=None, *, recovery=None):
     explicit = path or os.environ.get('AGENTSTACK_CLIENT_CONFIG')
     selected = absolute(str(explicit)) if explicit else ROOT / 'runtime-client.json'
     if not selected.exists() and not selected.is_symlink():
         if explicit:
             raise ClientError('CONTEXT_UNAVAILABLE')
         return None
-    return RuntimeClient(selected)
+    return RuntimeClient(selected, recovery=recovery)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -146,7 +146,7 @@ def result_value(reply):
 
 
 class RuntimeClient:
-    def __init__(self, path):
+    def __init__(self, path, *, recovery=None):
         self.path = absolute(str(path))
         self.raw = read_private(self.path)
         self.config = read_json(self.path)
@@ -164,19 +164,26 @@ class RuntimeClient:
         roots = [Path(tempfile.gettempdir()).resolve(), Path('/private/tmp').resolve()]
         if not any(self.isolation.resolve().is_relative_to(p) for p in roots):
             raise ClientError('ISOLATION_REQUIRED')
-        if 'runtime_dir' in c or 'credential_file' in c or 'client_root' not in c:
+        if any(k in c for k in ('runtime_dir', 'credential_file', 'client_root')) or not all(k in c for k in ('agentstack_home', 'client_name')):
             raise ClientError('FIXED_LAYOUT_CONTEXT_REQUIRED')
-        self.client_root = absolute(c['client_root'])
+        name = c['client_name']
+        if not isinstance(name, str) or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', name):
+            raise ClientError('CLIENT_NAME_INVALID')
+        self.client_home = absolute(c['agentstack_home'])
+        if self.client_home != self.isolation / 'agentstack':
+            raise ClientError('CLIENT_HOME_MISMATCH')
+        self.clients_parent = self.client_home / 'clients'
+        self.client_root = self.clients_parent / name
         self.outputs = {role: self.client_root / relative for role, relative in CLIENT_LAYOUT.items()}
         if self.path != self.outputs['context']:
             raise ClientError('FIXED_LAYOUT_CONTEXT_REQUIRED')
-        for key in ('runtime_root', 'client_root', 'authority', 'authority_lock', 'management_socket'):
+        for key in ('runtime_root', 'agentstack_home', 'authority', 'authority_lock', 'management_socket'):
             value = absolute(c.get(key))
             if not value.is_relative_to(self.isolation) or not value.resolve().is_relative_to(self.isolation.resolve()):
                 raise ClientError('PATH_OUTSIDE_ISOLATION')
         self.runtime = absolute(c['runtime_root'])
         self.runtime_dir = self.client_root / 'runtime'
-        for path in {self.isolation, self.client_root, self.runtime_dir}:
+        for path in {self.isolation, self.client_home, self.clients_parent, self.client_root, self.runtime_dir}:
             info = path.lstat()
             if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
                     or info.st_mode & 0o077):
@@ -208,6 +215,8 @@ class RuntimeClient:
                     or not isinstance(self.identity['window_uuid'], str) or not self.identity['window_uuid']))):
             raise ClientError('WINDOW_BINDING_INVALID')
 
+        self.recovery = recovery
+        self.prepare_recovery_owner()
         self.validate_path_roles()
 
     def directory_contains(self, directory, path):
@@ -218,9 +227,7 @@ class RuntimeClient:
         if not directory.exists():
             return False
         owned = directory.stat()
-        for index, parent in enumerate((path, *path.parents)):
-            if index > 64:
-                raise ClientError('CLIENT_ROOT_OWNERSHIP_UNKNOWN')
+        for parent in (path, *path.parents):
             if parent.exists():
                 current = parent.stat()
                 if (stat.S_ISDIR(current.st_mode)
@@ -228,46 +235,52 @@ class RuntimeClient:
                     return True
         return False
 
-    def check_root_ownership(self):
-        # Only fixed context filenames are observed; never read another root's
-        # contents or walk outside the selected isolated client subtree.
-        for base in {self.client_root, self.client_root.resolve()}:
-            for ancestor in base.parents:
-                if not ancestor.is_relative_to(self.isolation.resolve()):
-                    break
-                marker = ancestor / CLIENT_LAYOUT['context']
-                if marker.exists() or marker.is_symlink():
-                    raise ClientError('CLIENT_ROOT_OVERLAP')
-        pending = [self.client_root]
-        entries = 0
-        directories = 0
-        while pending:
-            directory = pending.pop()
-            directories += 1
-            # Reserve room for our own later mkdir/atomic outputs before RPC.
-            if directories > 128 - len(CLIENT_DIRECTORIES):
-                raise ClientError('CLIENT_ROOT_OWNERSHIP_UNKNOWN')
-            marker = directory / CLIENT_LAYOUT['context']
-            if directory != self.client_root and (marker.exists() or marker.is_symlink()):
-                raise ClientError('CLIENT_ROOT_OVERLAP')
-            with os.scandir(directory) as listing:
-                for entry in listing:
-                    entries += 1
-                    if entries > 1024 - (len(CLIENT_LAYOUT) + len(CLIENT_DIRECTORIES) + 2):
-                        raise ClientError('CLIENT_ROOT_OWNERSHIP_UNKNOWN')
-                    if entry.is_dir(follow_symlinks=False):
-                        pending.append(Path(entry.path))
+    def prepare_recovery_owner(self):
+        """Only explicit operator recovery may inspect an interrupted activation."""
+        if self.recovery is None:
+            return
+        action, agent_id = self.recovery
+        role = 'registration' if action == 'finalize-create' else 'enrollment'
+        pending = self.outputs[role]
+        if not pending.exists():
+            return
+        saved = read_json(pending)
+        expected = REG_PENDING_KIND if role == 'registration' else ENROLL_PENDING_KIND
+        if saved.get('kind') != expected or any(saved.get(k) != v for k, v in self.binding.items()):
+            raise ClientError('RECOVERY_PENDING_MISMATCH')
+        row = saved.get('row', {}) if role == 'registration' else saved
+        if not isinstance(row, dict):
+            raise ClientError('RECOVERY_PENDING_MISMATCH')
+        if role == 'enrollment' and (not integer(saved.get('expected_generation'))
+                or saved.get('action') != action or not isinstance(saved.get('new_credential'), str)
+                or not saved['new_credential']):
+            raise ClientError('RECOVERY_PENDING_MISMATCH')
+        if row.get('agent_id', agent_id) != agent_id or (self.identity and self.identity['agent_id'] != agent_id):
+            raise ClientError('RECOVERY_PENDING_MISMATCH')
+        if not integer(agent_id, 1):
+            raise ClientError('RECOVERY_PENDING_MISMATCH')
+        self._recovery_identity = {'agent_id': agent_id}
+        self._recovery_pending = saved
+
+    def clear_recovery_owner(self):
+        for field in ('_recovery_identity', '_recovery_pending'):
+            if hasattr(self, field):
+                delattr(self, field)
 
     def output_plan(self):
         """Preflight the complete fixed output set before any network operation."""
         external = [self.authority, self.lock, absolute(self.config['management_socket'])]
-        if (self.directory_contains(self.runtime, self.client_root)
-                or self.directory_contains(self.client_root, self.runtime)):
+        if (self.directory_contains(self.runtime, self.clients_parent)
+                or self.directory_contains(self.clients_parent, self.runtime)):
             raise ClientError('CLIENT_ROOT_OVERLAP')
         for path in external:
-            if self.directory_contains(self.client_root, path):
+            if self.directory_contains(self.clients_parent, path):
                 raise ClientError('CLIENT_ROOT_OVERLAP')
-        self.check_root_ownership()
+        # Immediate children cannot nest; inspect only the fixed parent chain.
+        for directory in (self.client_home, self.clients_parent, self.client_root):
+            info = directory.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise ClientError('PRIVATE_DIRECTORY_REQUIRED')
         for relative in CLIENT_DIRECTORIES:
             directory = self.client_root / relative
             if directory.exists() or directory.is_symlink():
@@ -281,10 +294,7 @@ class RuntimeClient:
             raise ClientError('CONTEXT_PATH_ROLE_CONFLICT')
         for role, path in self.outputs.items():
             self.validate_output(path, role)
-        directory = self.runtime_dir / 'session_index'
-        if directory.exists():
-            for path in directory.glob('*.json'):
-                self.validate_output(path, 'session')
+        self.validate_output(self.runtime_dir / 'session_index/self.json', 'session')
         return dict(self.outputs)
 
     def validate_path_roles(self):
@@ -301,7 +311,7 @@ class RuntimeClient:
         path = Path(path)
         if role == 'session':
             expected = self.runtime_dir / 'session_index'
-            if path.parent != expected or not re.fullmatch(r'[1-9][0-9]*\.json', path.name):
+            if path.parent != expected or path.name != 'self.json':
                 raise ClientError('FIXED_LAYOUT_PATH_NOT_SUPPORTED')
         elif role not in self.outputs or path != self.outputs[role]:
             raise ClientError('FIXED_LAYOUT_PATH_NOT_SUPPORTED')
@@ -338,10 +348,21 @@ class RuntimeClient:
         if not valid or any(row.get(k) != v for k, v in self.binding.items()):
             raise ClientError('OUTPUT_SCHEMA_INVALID')
         if role in {'credential', 'enrollment', 'metadata', 'profile', 'session'}:
-            owner = getattr(self, '_activating_identity', self.identity)
+            owner = getattr(self, '_activating_identity', getattr(self, '_recovery_identity', self.identity))
             if (not integer(row.get('agent_id'), 1) or (owner and row.get('agent_id') != owner['agent_id'])
                     or not owner):
                 raise ClientError('RUNTIME_DIR_BELONGS_TO_OTHER_IDENTITY' if role in {'metadata', 'session'} or not owner else 'OUTPUT_OWNER_CONFLICT')
+        if role == 'credential' and hasattr(self, '_recovery_pending'):
+            pending = self._recovery_pending
+            if pending['kind'] == REG_PENDING_KIND:
+                if row.get('registration_token') != pending.get('registration_token') or row.get('credential_generation') != pending.get('row', {}).get('credential_generation', 1):
+                    raise ClientError('RECOVERY_CREDENTIAL_MISMATCH')
+            else:
+                generation = pending.get('expected_generation')
+                if row.get('credential_generation') == generation + 1 and row.get('registration_token') == pending.get('new_credential'):
+                    pass
+                elif row.get('credential_generation') != pending.get('previous_credential_generation') or hashlib.sha256(str(row.get('registration_token')).encode()).hexdigest() != pending.get('previous_credential_fingerprint'):
+                    raise ClientError('RECOVERY_CREDENTIAL_MISMATCH')
         if role == 'credential' and (not integer(row.get('credential_generation'))
                 or not (row.get('registration_token') is None or isinstance(row.get('registration_token'), str))):
             raise ClientError('OUTPUT_SCHEMA_INVALID')
@@ -599,21 +620,22 @@ class RuntimeClient:
         config = {**self.config, 'identity': identity}
         credential = {'kind': 'orrery-global-credential-v1', **self.binding,
                       **identity, 'registration_token': token}
+        # One activation order for create and enrollment, including replay.
+        outputs = [(self.credential, credential, 'credential'), (self.path, config, 'context')]
+        if metadata is not None:
+            outputs.append((self.metadata_path, {'kind': METADATA_KIND, **self.binding,
+                'agent_id': identity['agent_id'], **metadata}, 'metadata'))
         self._activating_identity = identity
         try:
-            with self.fence():
-                self.write_output(self.credential, credential, 'credential')
-            with self.fence():
-                self.write_output(self.path, config, 'context')
-                # Our intentional local configuration update is accepted, but any
-                # concurrent replacement before it was rejected by the fence.
-                self.raw = read_private(self.path)
-                self.config = config
-                self.identity = identity
+            for path, value, role in outputs:
+                with self.fence():
+                    self.write_output(path, value, role)
+                    if role == 'context':
+                        self.raw = read_private(self.path)
+                        self.config = config
+                        self.identity = identity
         finally:
             del self._activating_identity
-        if metadata is not None:
-            self.save_metadata(metadata['program'], metadata['model'])
 
     def create(self, name, program, model):
         if self.identity is not None:
@@ -664,18 +686,22 @@ class RuntimeClient:
                 'profile_path': str(path), 'ready': False}
 
     def finalize_registration(self, agent_id):
-        if self.identity:
+        pending = self.outputs['registration']
+        if self.identity and not pending.exists():
             if self.observe()['agent_id'] != agent_id:
                 raise ClientError('REGISTRATION_IDENTITY_MISMATCH')
             return self.observe()
-        pending = self.credential.with_suffix('.registration-pending.json')
         saved = read_json(pending)
         if any(saved.get(k) != v for k, v in self.binding.items()):
             raise ClientError('REGISTRATION_BINDING_MISMATCH')
         token = saved.get('registration_token')
         if not isinstance(token, str) or not token:
             raise ClientError('REGISTRATION_PENDING_INVALID')
+        if saved.get('row', {}).get('agent_id', agent_id) != agent_id:
+            raise ClientError('REGISTRATION_IDENTITY_MISMATCH')
         current = self.management('inspect', agent_id=agent_id)
+        if saved.get('row') and saved['row'].get('credential_generation') != current.get('credential_generation'):
+            raise ClientError('REGISTRATION_CREDENTIAL_MISMATCH')
         if current.get('credential_fingerprint') != hashlib.sha256(token.encode()).hexdigest()[:16]:
             raise ClientError('REGISTRATION_CREDENTIAL_MISMATCH')
         with self.fence():
@@ -689,6 +715,7 @@ class RuntimeClient:
         metadata = {k: saved[k] for k in ('program', 'model') if k in saved}
         self.activate_credential(token, row, metadata if len(metadata) == 2 else None)
         pending.unlink()
+        self.clear_recovery_owner()
         return self.observe()
 
     def enroll(self, action, request_id, expected_generation):
@@ -705,7 +732,10 @@ class RuntimeClient:
                 token = saved['new_credential']
             else:
                 token = secrets.token_urlsafe(32)
-                self.write_output(pending, {**values, 'new_credential': token}, 'enrollment')
+                previous = read_json(self.credential)
+                self.write_output(pending, {**values, 'new_credential': token,
+                    'previous_credential_generation': previous['credential_generation'],
+                    'previous_credential_fingerprint': hashlib.sha256(str(previous.get('registration_token')).encode()).hexdigest()}, 'enrollment')
         receipt = self.management(action, agent_id=self.identity['agent_id'], request_id=request_id,
                                   expected_generation=expected_generation, new_credential=token)
         current = self.management('inspect', agent_id=self.identity['agent_id'])
@@ -725,6 +755,7 @@ class RuntimeClient:
                 raise ClientError('ENROLLMENT_RECEIPT_STALE')
         self.activate_credential(token, row)
         pending.unlink()
+        self.clear_recovery_owner()
         return receipt
 
     def record_session(self, payload):
@@ -747,15 +778,15 @@ class RuntimeClient:
             info = directory.lstat()
             if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
                 raise ClientError('SESSION_DIRECTORY_UNSAFE')
-            for path in directory.glob('*.json'):
-                previous = read_json(path)
-                if previous.get('session_id') == session_id and any(previous.get(k) != row.get(k)
-                        for k in ('agent_id', 'expected_server_instance_id')):
+            previous_path = directory / 'self.json'
+            if previous_path.exists():
+                previous = read_json(previous_path)
+                if any(previous.get(k) != row.get(k) for k in ('agent_id', 'expected_server_instance_id')):
                     raise ClientError('SESSION_OWNER_CONFLICT')
             value = {'schema_version': 3, 'binding_kind': 'global-self', **row,
                      'agent_name': row['name'], 'session_id': session_id,
                      'transcript_path': payload.get('transcript_path', ''), 'cwd': payload.get('cwd', '')}
-            self.write_output(directory / (str(row['agent_id']) + '.json'), value, 'session')
+            self.write_output(directory / 'self.json', value, 'session')
         return value
 
     def exports(self, provider):
@@ -847,7 +878,12 @@ def main(argv=None):
     parser.add_argument('args', nargs='*')
     a = parser.parse_args(argv)
     try:
-        client = configured(a.context)
+        recovery = None
+        if a.operation in {'claim', 'recover'}:
+            selected = a.context or os.environ.get('AGENTSTACK_CLIENT_CONFIG') or str(ROOT / 'runtime-client.json')
+            config = read_json(Path(selected))
+            recovery = (a.operation, (config.get('identity') or {}).get('agent_id'))
+        client = configured(a.context, recovery=recovery)
         if a.operation == 'mode':
             if client is not None:
                 with client.fence():

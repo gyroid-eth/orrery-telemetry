@@ -10,7 +10,7 @@ Explicitly select an owned 0600 JSON with `AGENTSTACK_CLIENT_CONFIG`. Cwd, inher
 
 Use kind `orrery-runtime-client-s1`, mode `global`, `activation_enabled=false` and the helper's checkout/install `wrapper_root`. `isolation_root` is a dedicated private 0700 temporary directory. Include:
 
-- One private `client_root`, separate from Mail `runtime_root` and the authority/lock/socket inputs. Create the root and its `runtime` directory with mode 0700; context is always `client_root/runtime-client.json`.
+- `agentstack_home` must be exactly `isolation_root/agentstack`. Its fixed `clients` parent contains immediate children selected by `client_name` (`[a-z0-9][a-z0-9_-]{0,63}`), a local slot name, not a Mail routing name. The derived client root is `agentstack_home/clients/client_name`. Create home, parent, client root and its `runtime` directory with mode 0700; context is always `client_root/runtime-client.json`. Arbitrary home placement fails with `CLIENT_HOME_MISMATCH`; invalid slot names fail with `CLIENT_NAME_INVALID`.
 - S1's `runtime_root`, `authority`, `authority_lock`, `management_socket` and loopback `mcp_url`.
 - `expected_server_instance_id`, `candidate_generation` and `authority_epoch`. Ordinary writes change mutation revision, which is not a pinned generation.
 - `lock_identity`: the common lock's `[st_dev, st_ino]`, checked even after wrapper restart.
@@ -21,7 +21,7 @@ Use a new `client_root` for each new identity. Metadata/session records belongin
 
 ## Fixed local layout decided in PR4a
 
-Only `client_root` is selectable. A context containing old `runtime_dir` or `credential_file` path fields, or located outside `client_root/runtime-client.json`, fails with `FIXED_LAYOUT_CONTEXT_REQUIRED`. Global profile writes take no path argument; `--journal` and an argument to `save-profile` fail with `FIXED_LAYOUT_PATH_NOT_SUPPORTED` before registration. The result returns the fixed `profile_path`.
+Select only a single-component `client_name` under the fixed parent. Old `client_root`, `runtime_dir` or `credential_file` path fields, or context outside the derived `client_root/runtime-client.json`, fail with `FIXED_LAYOUT_CONTEXT_REQUIRED`. Global profile writes take no path argument; `--journal` and an argument to `save-profile` fail with `FIXED_LAYOUT_PATH_NOT_SUPPORTED` before registration. The result returns the fixed `profile_path`.
 
 | Role | Path relative to client_root |
 | --- | --- |
@@ -31,9 +31,9 @@ Only `client_root` is selectable. A context containing old `runtime_dir` or `cre
 | enrollment pending | `credential.enrollment-pending.json` |
 | registration metadata | `runtime/registration-metadata.json` |
 | profile | `profile.json` |
-| self session records | `runtime/session_index/ID.json` |
+| self session records | `runtime/session_index/self.json` |
 
-Only fixed context filenames are observed to reject nested client roots; no other root contents are read. The ownership scan stays within the selected isolated subtree and is bounded to 128 directories / 1024 entries, reserving capacity for planned output slots before network calls. An incomplete scan fails with `CLIENT_ROOT_OWNERSHIP_UNKNOWN`; choose a fresh dedicated root instead of treating unknown as ready.
+Sibling client roots cannot nest. The fixed parent must be disjoint from Mail runtime_root and must not contain authority/lock/socket inputs. Its private directory chain rejects symlinks. Neither sibling roots nor descendants nor provider HOME/history are scanned. A root can contain thousands of provider files or historical records without changing readiness. Each root has one current session slot, `runtime/session_index/self.json`; it is checked with other fixed outputs and keeps the stable agent ID inside the record. Unrelated history files are not routing or ownership evidence.
 
 A single preflight plan checks this entire output set before network calls. It rejects overlaps between client/Mail roots in either direction, authority/lock/socket inside the client root (`CLIENT_ROOT_OVERLAP`), aliases, unsafe directories and foreign formats. Writers can only use their fixed slot; unknown roles and another role's directory cannot be selected. An unsafe slot therefore cannot first commit registration and then fail local validation. Network success followed by disk I/O failure remains a separate uncertain outcome: preserve pending journal/receipt and explicitly finalize the same identity; do not report atomic rollback of remote commits.
 
@@ -56,6 +56,8 @@ Released raw tokens (with an optional identity sidecar), legacy persistent profi
 `agentstack-enroll --global-context CONFIG inspect` uses S1's management socket. Explicit operator `claim REQUEST_ID EXPECTED_GENERATION` and `recover REQUEST_ID EXPECTED_GENERATION` persist a new credential in a private pending journal before CAS; identical retries reuse it. Authentication errors never trigger automatic enrollment. A replayed receipt alone cannot activate a token: current inspect generation/fingerprint and whois authentication must agree before local credential/context replacement. A dedicated HOME still reconnects the explicitly selected stable identity.
 
 `agentstack-runtime-client save-profile` saves project-free kind `orrery-global-client-profile-v1`. `agentstack-persistent inspect|reconnect --profile PROFILE` and `agentstack-daemon inspect --profile PROFILE` validate bindings. Global proxy/daemon execution remains PR4c; PR4a `run` rejects with `GLOBAL_PROXY_RUNTIME_REQUIRES_PR4C` and never reports ready=true. Legacy profiles remain executable without a global context. Mixing an explicit global context with a legacy profile rejects with `LEGACY_PROFILE_CONTEXT_CONFLICT`. Operator `agentstack-daemon create --connection CONFIG --name NAME --operator` reuses the same global registration/profile store; it takes no project input. `finalize-create --connection CONFIG --agent-id ID --operator` verifies a pending credential against the supplied stable ID without registering again. These commands do not start the daemon.
+
+Explicit `finalize-create` and claim/recover replay may use the identity from the fixed pending journal only for recovery. Journal binding/ID, the current credential token/generation and the authenticated server row must agree. Ordinary identity-null entrypoints still reject previously owned roots. Activation has one write order: credential, context, then registration metadata when present. Each saved-slot interruption is tested; replay restores the same ID without another register/CAS. The registration pending record is removed after activation; a later profile write failure can be repaired by explicit finalize on the already verified identity. A journal saved before any request is not proof that a row exists. Mismatches leave local bytes and server state unchanged. Enrollment pending also records the previous local credential generation/fingerprint, so replay verifies either the before-save or after-save state. Explicit claim also supports a stale local credential for an unclaimed row, checked against the same pending and CAS receipt.
 
 ## Fence and remaining work
 

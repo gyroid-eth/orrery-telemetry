@@ -10,7 +10,7 @@
 
 設定の kind は `orrery-runtime-client-s1`、mode は `global`、`activation_enabled=false`。`wrapper_root` はこの helper の install/checkout root、`isolation_root` は0700の専用一時 directoryです。以下を指定します。
 
-- private な `client_root` を1つ指定します。Mail の `runtime_root` と authority/lock/socket の入力から分離し、root とその `runtime` directory は0700で用意します。context は必ず `client_root/runtime-client.json` です。
+- `agentstack_home` は必ず `isolation_root/agentstack` です。固定の `clients` 親の直下を、単一成分の `client_name`（`[a-z0-9][a-z0-9_-]{0,63}`）で選びます。これは local slot 名で、Mail の宛先名ではありません。client root は `agentstack_home/clients/client_name` から導出します。home・親・client root・その `runtime` directory は0700で用意し、context は固定の `client_root/runtime-client.json` です。任意の home 配置は `CLIENT_HOME_MISMATCH`、不正な slot 名は `CLIENT_NAME_INVALID` で拒否します。
 - S1 と同じ `runtime_root`、`authority`、`authority_lock`、`management_socket`、loopback の `mcp_url`。
 - `expected_server_instance_id`、`candidate_generation`、`authority_epoch`。mutation revision は普通の書込みで変わるため、固定した世代として扱いません。
 - `lock_identity` は共通 lock の `[st_dev, st_ino]`。wrapper 再起動でも保存した inode を照合します。
@@ -21,7 +21,7 @@
 
 ## PR4a で決めた固定 local layout
 
-利用者が選べるのは `client_root` だけです。旧 `runtime_dir` / `credential_file` の path 指定を含む context と、`client_root/runtime-client.json` 以外の context は `FIXED_LAYOUT_CONTEXT_REQUIRED` で拒否します。global の profile 保存には path を渡しません。`--journal` や `save-profile` の引数は `FIXED_LAYOUT_PATH_NOT_SUPPORTED` で登録前に拒否し、成功時は固定の `profile_path` を返します。
+固定の親の直下にある単一成分の `client_name` だけを選びます。旧 `client_root` / `runtime_dir` / `credential_file` の任意 path 指定と、導出した `client_root/runtime-client.json` 以外の context は `FIXED_LAYOUT_CONTEXT_REQUIRED` で拒否します。global の profile 保存には path を渡しません。`--journal` や `save-profile` の引数は `FIXED_LAYOUT_PATH_NOT_SUPPORTED` で登録前に拒否し、成功時は固定の `profile_path` を返します。
 
 | role | client_root からの固定 path |
 | --- | --- |
@@ -31,9 +31,9 @@
 | 復旧 pending | `credential.enrollment-pending.json` |
 | 登録 metadata | `runtime/registration-metadata.json` |
 | profile | `profile.json` |
-| 自分の session 記録 | `runtime/session_index/ID.json` |
+| 自分の session 記録 | `runtime/session_index/self.json` |
 
-client root 同士の入れ子も、固定 context のファイル名の所在だけを見て拒否します。他 root の内容は読みません。選択した隔離 subtree 内を予定出力の増加分を network 前に確保したうえで128 directory / 1024 entryまで確認し、完了できなければ `CLIENT_ROOT_OWNERSHIP_UNKNOWN` で拒否します。未知をreadyと扱わず、新しい専用 root を用意してください。
+client root は兄弟なので入れ子になりません。固定の親と Mail runtime_root の双方向の重なり、親の中の authority/lock/socket を拒否し、private な親から root の chain に symlink がないことを検査します。兄弟・子孫・provider HOME/履歴は探索しません。数千の provider file や過去の記録があっても ready の判定は変わりません。1 root の現在の session 記録は `runtime/session_index/self.json` の1 slotで、stable agent ID は内容に保存し、他の固定出力と一緒に照合します。無関係な履歴ファイルを routing や所有権の根拠にしません。
 
 1か所の preflight plan が、この全出力を network 前に検査します。client と Mail の root の双方向の重なり、client root 内の authority/lock/socket は `CLIENT_ROOT_OVERLAP`、alias・不正 directory・外国形式も拒否します。writer は固定 slot だけを書き、未知 role や別 role の directory を指定できません。保存先の不正を登録 commit 後に初めて発見する動作をなくします。network 成功後の disk I/O 失敗は別の不確定結果で、pending journal/receipt を残し、同じ identity を明示 finalize します。remote commit を原子的に巻き戻したとは表示しません。
 
@@ -56,6 +56,8 @@ released 版の raw token（任意の identity sidecar）、旧 persistent profi
 `agentstack-enroll --global-context CONFIG inspect` は S1 の管理 socket に接続します。`claim REQUEST_ID EXPECTED_GENERATION` と `recover REQUEST_ID EXPECTED_GENERATION` は operator が明示して実行する入口です。モデルの認証失敗から自動実行しません。新 credential を0600の pending journal に保存してから CAS を要求し、同じ入力の再実行は同じ値を使います。receipt の再取得だけで成功とはせず、現在の inspect の generation/fingerprint と whois 認証を照合してから local credential と context を有効にします。専用 HOME に替えても明示した context が同じ ID を選びます。
 
 `agentstack-runtime-client save-profile` は project を持たない `orrery-global-client-profile-v1` を保存します。`agentstack-persistent inspect|reconnect --profile PROFILE` と `agentstack-daemon inspect --profile PROFILE` が binding を照合します。新 profile の proxy/daemon 実行は4cが担当します。4a の `run` は `GLOBAL_PROXY_RUNTIME_REQUIRES_PR4C` で拒否し、ready を true にしません。global context の無い旧 profile の実行は維持します。global context と旧 profile を混ぜた場合は `LEGACY_PROFILE_CONTEXT_CONFLICT` で拒否します。operator の `agentstack-daemon create --connection CONFIG --name NAME --operator` は同じ登録・profile 保存処理を使い、project を入力しません。`finalize-create --connection CONFIG --agent-id ID --operator` は、保存した pending credential を指定 stable ID で照合し、再登録せずに同じ profile を確定します。daemon 自体は起動しません。
+
+明示した `finalize-create` と claim/recover の再実行に限り、固定 pending journal の identity を復旧用 owner として照合します。journal の binding/ID、現在の credential の token/generation、認証した server row が一致する場合だけ復旧します。通常の identity=null 入口は使用済み root を引き続き拒否します。有効化の書込み順は credential → context → 登録 metadata（存在する場合）の1か所に統一し、各 slot 保存後の中断を回帰で確認します。再実行は register/CAS を追加せず同じ ID に戻します。登録 pending は有効化後に消し、それ以降の profile 保存失敗は検証済み identity の明示 finalize で修復できます。request 前に保存した journal だけでは server row の存在を証明しません。不一致なら local bytes と server を変更しません。 credential 更新 pending には更新前の credential の世代と fingerprint も保存し、保存前後のどちらの途中状態かを照合します。未 claim の row に古い local credential が残る場合も、明示 claim の同じ pending と CAS receipt で確認します。
 
 ## fence と残る作業
 

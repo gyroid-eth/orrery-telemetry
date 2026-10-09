@@ -46,7 +46,7 @@ def main():
         if args.operation in {'create', 'finalize-create'}:
             api = runpy.run_path(str(ROOT / 'bin/lib/runtime_client.py'))
             try:
-                client = api['configured']()
+                client = api['configured'](recovery=('finalize-create', args.agent_id) if args.operation == 'finalize-create' else None)
                 if client is not None:
                     with client.fence():
                         pass

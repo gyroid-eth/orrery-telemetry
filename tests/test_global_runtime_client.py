@@ -31,13 +31,16 @@ def prepared(monkeypatch):
     state = next(fixture)
     try:
         c = state['config']
-        client_root = state['root'] / 'client'
+        client_home = state['root'] / 'agentstack'
+        client_home.mkdir(mode=0o700)
+        (client_home / 'clients').mkdir(mode=0o700)
+        client_root = client_home / 'clients/client'
         client_root.mkdir(mode=0o700)
         (client_root / 'runtime').mkdir(mode=0o700)
         info = Path(c['authority_lock']).stat()
         config = {'kind': api['KIND'], 'mode': 'global', 'activation_enabled': False,
                   'wrapper_root': str(ROOT), 'isolation_root': c['isolation_root'],
-                  'runtime_root': c['runtime_root'], 'client_root': str(client_root), 'authority': c['authority'],
+                  'runtime_root': c['runtime_root'], 'agentstack_home': str(client_home), 'client_name': 'client', 'authority': c['authority'],
                   'authority_lock': c['authority_lock'], 'lock_identity': [info.st_dev, info.st_ino],
                   'management_socket': c['management_socket'],
                   'mcp_url': state['url'], **state['binding'],
@@ -49,7 +52,7 @@ def prepared(monkeypatch):
             row = dict(db.execute('SELECT * FROM agents WHERE id=1').fetchone())
         config['identity']['credential_generation'] = row['credential_generation']
         private(client_root / 'runtime-client.json', config)
-        private(Path(config['client_root']) / 'credential.json', {'kind': 'orrery-global-credential-v1', **state['binding'],
+        private(local_root(config) / 'credential.json', {'kind': 'orrery-global-credential-v1', **state['binding'],
              **config['identity'], 'registration_token': row['registration_token']})
         state.update(client_path=client_root / 'runtime-client.json', client_config=config,
                      token=row['registration_token'])
@@ -64,13 +67,17 @@ def prepared(monkeypatch):
 
 
 def fresh_context(state, config, name):
-    root = state['root'] / name
+    root = Path(config['agentstack_home']) / 'clients' / name
     root.mkdir(mode=0o700)
     (root / 'runtime').mkdir(mode=0o700)
-    config['client_root'] = str(root)
+    config['client_name'] = name
     state['client_path'] = root / 'runtime-client.json'
     private(state['client_path'], config)
     os.environ['AGENTSTACK_CLIENT_CONFIG'] = str(state['client_path'])
+
+
+def local_root(config):
+    return Path(config['agentstack_home']) / 'clients' / config['client_name']
 
 
 def client(state):
@@ -156,7 +163,7 @@ def test_lock_replacement_and_exclusive_updater_gate(prepared):
                                      ('authority_epoch', 'other-epoch'),
                                      ('agent_id', 999), ('credential_generation', 99)])
 def test_credential_binding_cannot_select_another_owner(prepared, key, value):
-    path = Path(prepared['client_config']['client_root']) / 'credential.json'
+    path = local_root(prepared['client_config']) / 'credential.json'
     credential = api['read_json'](path)
     credential[key] = value
     private(path, credential)
@@ -272,7 +279,7 @@ def test_confirmed_window_owner_mapping(prepared, valid):
         row = dict(db.execute('SELECT * FROM window_identities WHERE agent_id=1 LIMIT 1').fetchone())
     config = prepared['client_config']
     config['identity'].update(window_row_id=row['id'], window_uuid=row['window_uuid'] if valid else 'wrong-window')
-    credential_path = Path(config['client_root']) / 'credential.json'
+    credential_path = local_root(config) / 'credential.json'
     private(credential_path, {**api['read_json'](credential_path), **config['identity']})
     private(prepared['client_path'], config)
     if valid:
@@ -351,7 +358,7 @@ def test_common_shell_register_does_not_preflight_names_or_scopes(prepared):
 def test_matching_but_stale_local_generation_cannot_mutate_server(prepared):
     config = prepared['client_config']
     config['identity']['credential_generation'] += 1
-    credential = Path(config['client_root']) / 'credential.json'
+    credential = local_root(config) / 'credential.json'
     private(credential, {**api['read_json'](credential), **config['identity']})
     private(prepared['client_path'], config)
     before = s1.call(prepared, 'health_check')['mutation_revision']
@@ -366,7 +373,7 @@ def test_window_inspect_reports_local_only_and_not_ready(prepared):
         window = dict(db.execute('SELECT * FROM window_identities WHERE agent_id=1 LIMIT 1').fetchone())
     config = prepared['client_config']
     config['identity'].update(window_row_id=window['id'], window_uuid=window['window_uuid'])
-    credential = Path(config['client_root']) / 'credential.json'
+    credential = local_root(config) / 'credential.json'
     private(credential, {**api['read_json'](credential), **config['identity']})
     private(prepared['client_path'], config)
     c = client(prepared)
@@ -387,7 +394,7 @@ def test_session_hook_records_only_authenticated_self(prepared):
     r = subprocess.run([sys.executable, str(ROOT / 'hooks/record-session-index.py')],
                        input=data, text=True, capture_output=True, env=os.environ, timeout=30)
     assert r.returncode == 0, r.stderr
-    record = api['read_json'](Path(prepared['client_config']['client_root']) / 'runtime/session_index/1.json')
+    record = api['read_json'](local_root(prepared['client_config']) / 'runtime/session_index/self.json')
     assert record['binding_kind'] == 'global-self'
     assert record['agent_id'] == 1
     assert 'project_key' not in record
@@ -483,7 +490,7 @@ def test_new_registration_cannot_overwrite_existing_credential(prepared):
     config = prepared['client_config']
     config['identity'] = None
     private(prepared['client_path'], config)
-    credential = Path(config['client_root']) / 'credential.json'
+    credential = local_root(config) / 'credential.json'
     original = api['read_private'](credential)
     with pytest.raises(ClientError, match='RUNTIME_DIR_BELONGS_TO_OTHER_IDENTITY'):
         client(prepared).create('AnotherOwner', 'codex', 'fixture')
@@ -537,7 +544,7 @@ def test_actual_global_await_returns_oldest_unseen_and_preserves_read_ack(prepar
         before = list(db.execute('SELECT message_id,read_ts,ack_ts FROM message_recipients WHERE agent_id=2'))
     config = prepared['client_config']
     config['identity'] = {'agent_id': 2, 'credential_generation': owner['credential_generation'], 'name': owner['name']}
-    private(Path(config['client_root']) / 'credential.json', {'kind': 'orrery-global-credential-v1',
+    private(local_root(config) / 'credential.json', {'kind': 'orrery-global-credential-v1',
         **prepared['binding'], **config['identity'], 'registration_token': owner['registration_token']})
     private(prepared['client_path'], config)
     r = run(prepared, 'bin/agentstack-await-reply', '--agent-name', 'StaleDisplayName',
@@ -777,7 +784,7 @@ def test_every_client_output_rejects_foreign_format_before_network(prepared, mon
              'registration': c.credential.with_suffix('.registration-pending.json'),
              'enrollment': c.credential.with_suffix('.enrollment-pending.json'),
              'metadata': c.metadata_path, 'profile': client(prepared).profile_path,
-             'session': directory / '1.json'}
+             'session': directory / 'self.json'}
     def no_network(*args, **kwargs):
         pytest.fail('network called before rejecting a foreign output format')
     monkeypatch.setattr(c, 'rpc', no_network)
@@ -888,7 +895,7 @@ def test_released_files_require_explicit_import_before_network(prepared, monkeyp
     else:
         directory = c.runtime_dir / 'session_index'
         directory.mkdir(mode=0o700)
-        path = directory / '1.json'
+        path = directory / 'self.json'
         private(path, {'schema_version': 2, 'binding_kind': 'self', 'agent_id': 1,
                        'agent_name': 'OldAlpha', 'session_id': 'released-session',
                        'project_key': '/legacy/scope', 'registered_by': 'OldAlpha',
@@ -921,13 +928,12 @@ def test_new_identity_requires_a_fresh_runtime_directory(prepared, monkeypatch, 
     else:
         c.record_session({'session_id': 'fresh-directory-session', 'cwd': '.',
                           'tool_response': c.call('register_agent', {'program': 'fixture', 'model': 'fixture'})})
-        saved = c.runtime_dir / 'session_index/1.json'
+        saved = c.runtime_dir / 'session_index/self.json'
     original = saved.read_bytes()
     before = c.call('health_check')['mutation_revision']
     original_credential = c.credential.read_bytes()
     c.credential.unlink()
-    config = {**prepared['client_config'], 'identity': None,
-              'client_root': str(c.client_root)}
+    config = {**prepared['client_config'], 'identity': None}
     private(prepared['client_path'], config)
     monkeypatch.setattr(RuntimeClient, 'rpc', lambda *a, **k: pytest.fail('network before fresh-runtime refusal'))
     with pytest.raises(ClientError, match='RUNTIME_DIR_BELONGS_TO_OTHER_IDENTITY'):
@@ -981,22 +987,13 @@ def test_daemon_arbitrary_profile_slot_is_rejected_before_registration(prepared,
 @pytest.mark.parametrize('overlap', ['same_mail_root', 'contains_mail_root', 'inside_mail_root'])
 def test_client_root_and_mail_root_must_be_disjoint(prepared, monkeypatch, overlap):
     c = client(prepared)
-    before = c.call('health_check')['mutation_revision']
-    if overlap == 'same_mail_root':
-        root = c.runtime
-    elif overlap == 'contains_mail_root':
-        root = prepared['root']
-    else:
-        root = c.runtime / 'client-inside-mail'
-        root.mkdir(mode=0o700)
-    root.chmod(0o700)
-    (root / 'runtime').mkdir(mode=0o700, exist_ok=True)
-    config = {**prepared['client_config'], 'client_root': str(root)}
-    path = root / 'runtime-client.json'
-    private(path, config)
-    monkeypatch.setattr(RuntimeClient, 'rpc', lambda *a, **k: pytest.fail('network before root refusal'))
+    before = s1.call(prepared, 'health_check')['mutation_revision']
+    target = c.clients_parent if overlap == 'same_mail_root' else c.client_home if overlap == 'contains_mail_root' else c.client_root / 'mail'
+    config = {**prepared['client_config'], 'runtime_root': str(target)}
+    private(c.path, config)
+    monkeypatch.setattr(RuntimeClient, 'rpc', lambda *a, **k: pytest.fail('network before parent refusal'))
     with pytest.raises(ClientError, match='CLIENT_ROOT_OVERLAP'):
-        RuntimeClient(path)
+        client(prepared)
     assert s1.call(prepared, 'health_check')['mutation_revision'] == before
 
 
@@ -1017,7 +1014,7 @@ def test_bad_fixed_profile_preflight_cannot_commit_a_new_identity(prepared):
     config = prepared['client_config']
     config['identity'] = None
     fresh_context(prepared, config, 'invalid-profile-client')
-    path = Path(config['client_root']) / 'profile.json'
+    path = local_root(config) / 'profile.json'
     path.write_text('user-owned notes\n')
     path.chmod(0o600)
     before = s1.call(prepared, 'health_check')['mutation_revision']
@@ -1032,7 +1029,7 @@ def test_bad_fixed_profile_preflight_cannot_commit_a_new_identity(prepared):
 def test_fixed_writer_rejects_unknown_role_and_another_role_slot(prepared):
     c = client(prepared)
     before = c.call('health_check')['mutation_revision']
-    for path, role in [(c.runtime_dir / 'session_index/1.json', 'profile'),
+    for path, role in [(c.runtime_dir / 'session_index/self.json', 'profile'),
                        (c.profile_path, 'unknown')]:
         with pytest.raises(ClientError, match='FIXED_LAYOUT_PATH_NOT_SUPPORTED'):
             c.write_output(path, {}, role)
@@ -1059,7 +1056,7 @@ def test_documented_codex_recovery_refreshes_without_saved_metadata(prepared):
     template = (ROOT / 'codex/AGENTS.md').read_text()
     command = next(line for line in template.splitlines()
                    if 'bin/agentstack-reregister "$AGENT_NAME"' in line)
-    assert command.endswith('"$AGENT_NAME" codex')
+    assert command.endswith('"$AGENT_NAME" "${AGENTSTACK_REREGISTER_PROGRAM:-codex}"')
     result = run(prepared, 'bin/agentstack-reregister', 'OldAlpha', 'codex', bash=True,
                  extra={'AGENTSTACK_CODEX_MODEL': 'documented-model'})
     assert result.returncode == 0 and 'registered' in result.stdout
@@ -1067,35 +1064,6 @@ def test_documented_codex_recovery_refreshes_without_saved_metadata(prepared):
     with connection(Path(prepared['config']['database'])) as db:
         row = db.execute('SELECT program,model FROM agents WHERE id=1').fetchone()
     assert tuple(row) == ('codex', 'documented-model')
-
-
-@pytest.mark.parametrize('direction', ['ancestor', 'descendant'])
-def test_client_roots_cannot_nest_inside_another_identity_root(prepared, monkeypatch, direction):
-    c = client(prepared)
-    before = s1.call(prepared, 'health_check')['mutation_revision']
-    original = c.credential.read_bytes()
-    nested = c.client_root / 'nested-client'
-    nested.mkdir(mode=0o700)
-    (nested / 'runtime').mkdir(mode=0o700)
-    config = {**prepared['client_config'], 'client_root': str(nested), 'identity': None}
-    path = nested / 'runtime-client.json'
-    private(path, config)
-    monkeypatch.setattr(RuntimeClient, 'rpc', lambda *a, **k: pytest.fail('network before nested-root refusal'))
-    with pytest.raises(ClientError, match='CLIENT_ROOT_OVERLAP'):
-        RuntimeClient(path if direction == 'ancestor' else c.path)
-    assert c.credential.read_bytes() == original
-    assert s1.call(prepared, 'health_check')['mutation_revision'] == before
-
-
-def test_root_ownership_scan_is_bounded_and_unknown_is_not_ready(prepared, monkeypatch):
-    c = client(prepared)
-    before = s1.call(prepared, 'health_check')['mutation_revision']
-    for index in range(1025):
-        (c.client_root / ('entry-' + str(index))).touch()
-    monkeypatch.setattr(RuntimeClient, 'rpc', lambda *a, **k: pytest.fail('network before unknown-root refusal'))
-    with pytest.raises(ClientError, match='CLIENT_ROOT_OWNERSHIP_UNKNOWN'):
-        client(prepared)
-    assert s1.call(prepared, 'health_check')['mutation_revision'] == before
 
 
 @pytest.mark.parametrize('role', ['runtime_root', 'authority'])
@@ -1113,42 +1081,192 @@ def test_filesystem_case_alias_cannot_hide_root_overlap(prepared, monkeypatch, r
     assert s1.call(prepared, 'health_check')['mutation_revision'] == before
 
 
-def test_child_root_marker_uses_filesystem_lookup_not_entry_spelling(prepared):
+
+@pytest.mark.parametrize('name', ['../other', 'a/b', '.', 'UPPER', '', 'é'])
+def test_client_name_cannot_select_a_path(prepared, name):
     c = client(prepared)
-    nested = c.client_root / 'nested-marker'
-    nested.mkdir(mode=0o700)
-    marker = nested / 'RUNTIME-CLIENT.JSON'
-    marker.write_text('marker-only, contents must not be read')
-    if not (nested / 'runtime-client.json').exists():
-        pytest.skip('filesystem distinguishes marker spellings')
+    original = c.credential.read_bytes()
+    private(c.path, {**prepared['client_config'], 'client_name': name})
     before = s1.call(prepared, 'health_check')['mutation_revision']
-    with pytest.raises(ClientError, match='CLIENT_ROOT_OVERLAP'):
+    with pytest.raises(ClientError, match='CLIENT_NAME_INVALID'):
         client(prepared)
-    assert marker.read_text() == 'marker-only, contents must not be read'
+    assert c.credential.read_bytes() == original
     assert s1.call(prepared, 'health_check')['mutation_revision'] == before
 
-@pytest.mark.parametrize('capacity', ['files', 'directories'])
-def test_preflight_reserves_room_for_its_own_future_outputs(prepared, capacity):
+
+def test_arbitrary_client_root_and_home_cannot_create_nested_clients(prepared):
+    c = client(prepared)
+    for changes, reason in [({'client_root': str(c.client_root / 'nested')}, 'FIXED_LAYOUT_CONTEXT_REQUIRED'),
+                            ({'agentstack_home': str(c.client_root)}, 'CLIENT_HOME_MISMATCH')]:
+        private(c.path, {**prepared['client_config'], **changes})
+        with pytest.raises(ClientError, match=reason):
+            client(prepared)
+    assert not (c.client_root / 'nested').exists()
+
+
+@pytest.mark.parametrize('directory', ['parent', 'root'])
+def test_client_fixed_parent_or_root_cannot_be_a_symlink(prepared, directory):
+    c = client(prepared)
+    path = c.clients_parent if directory == 'parent' else c.client_root
+    original = path.with_name(path.name + '-original')
+    path.rename(original)
+    path.symlink_to(original, target_is_directory=True)
+    with pytest.raises(ClientError, match='PRIVATE_DIRECTORY_REQUIRED'):
+        client(prepared)
+
+
+@pytest.mark.parametrize('population', ['provider_files', 'directories', 'session_history'])
+def test_regular_growth_never_blocks_register_profile_session_or_fresh_client(prepared, population):
+    config = prepared['client_config']
+    config['identity'] = None
+    fresh_context(prepared, config, 'growth-client')
+    c = client(prepared)
+    if population == 'provider_files':
+        directory = c.client_root / 'provider-home/.codex/sessions'
+        directory.mkdir(mode=0o700, parents=True)
+        for index in range(1100):
+            (directory / (str(index) + '.jsonl')).write_text('provider history')
+    elif population == 'directories':
+        for index in range(130):
+            (c.client_root / ('extra-' + str(index))).mkdir(mode=0o700)
+    else:
+        directory = c.runtime_dir / 'session_index'
+        directory.mkdir(mode=0o700)
+        for index in range(1100):
+            (directory / (str(index + 100) + '.json')).write_text('unrelated history')
+    row = c.create('GrowthOwner', 'codex', 'growth-model')
+    assert c.save_profile()['agent_id'] == row['agent_id']
+    c.record_session({'session_id': 'growth-first', 'tool_response': c.call('whois')})
+    for session in ['growth-second', 'growth-third']:
+        active = client(prepared)
+        assert active.observe()['agent_id'] == row['agent_id']
+        assert active.reconnect()['agent_id'] == row['agent_id']
+        active.record_session({'session_id': session, 'tool_response': active.call('whois')})
+        assert active.save_profile()['agent_id'] == row['agent_id']
+        assert active.call('health_check')['activation_enabled'] is False
+        assert active.exports('codex')
+    assert api['read_json'](c.runtime_dir / 'session_index/self.json')['session_id'] == 'growth-third'
+    result = run(prepared, 'bin/agentstack-daemon', 'inspect', '--profile', str(c.profile_path))
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('stage', ['registration', 'credential', 'context', 'metadata', 'profile'])
+def test_each_registration_output_interruption_finalizes_same_identity(prepared, monkeypatch, stage):
+    config = prepared['client_config']
+    config['identity'] = None
+    fresh_context(prepared, config, 'interrupted-client')
     c = client(prepared)
     before = s1.call(prepared, 'health_check')['mutation_revision']
-    if capacity == 'files':
+    original = c.write_output
+    def interrupted(path, value, role):
+        original(path, value, role)
+        if role == stage and (role != 'registration' or 'row' in value):
+            raise OSError('synthetic saved-slot interruption')
+    monkeypatch.setattr(c, 'write_output', interrupted)
+    with pytest.raises(OSError, match='saved-slot'):
+        c.create('InterruptedOwner', 'daemon', 'deterministic')
+        c.save_profile()
+    from agentstack_mail.namespace_state_io import connection
+    with connection(Path(prepared['config']['database'])) as db:
+        agent_id = db.execute("SELECT id FROM agents WHERE name='InterruptedOwner'").fetchone()[0]
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before + 1
+    result = run(prepared, 'bin/agentstack-daemon', 'finalize-create', '--connection', str(c.path),
+                 '--agent-id', str(agent_id), '--operator')
+    assert result.returncode == 0, result.stderr
+    active = client(prepared)
+    assert active.observe()['agent_id'] == agent_id
+    assert active.registration_metadata() == {'kind': api['METADATA_KIND'], **active.binding,
+        'agent_id': agent_id, 'program': 'daemon', 'model': 'deterministic'}
+    assert api['read_json'](active.profile_path)['agent_id'] == agent_id
+    assert not active.outputs['registration'].exists()
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before + 1
+
+
+@pytest.mark.parametrize('action', ['recover', 'claim'])
+@pytest.mark.parametrize('stage', ['enrollment', 'credential', 'context'])
+def test_each_enrollment_output_interruption_recovers_same_cas(prepared, monkeypatch, stage, action):
+    if action == 'claim':
+        from agentstack_mail.namespace_state_io import connection
+        with connection(Path(prepared['config']['database']), write=True) as db:
+            db.execute('UPDATE agents SET registration_token=NULL,credential_generation=0 WHERE id=1')
         config = prepared['client_config']
-        config['identity'] = None
-        fresh_context(prepared, config, 'capacity-client')
-        root = Path(config['client_root'])
-        for index in range(1020):
-            (root / ('extra-' + str(index))).touch()
-        original = prepared['client_path'].read_bytes()
-        with pytest.raises(ClientError, match='CLIENT_ROOT_OWNERSHIP_UNKNOWN'):
-            client(prepared).create('CapacityOwner', 'fixture', 'fixture')
-        assert prepared['client_path'].read_bytes() == original
-        assert not (root / 'credential.json').exists()
+        config['identity']['credential_generation'] = 0
+        private(prepared['client_path'], config)
+    c = client(prepared)
+    generation = c.identity['credential_generation']
+    before = s1.call(prepared, 'health_check')['mutation_revision']
+    original = c.write_output
+    def interrupted(path, value, role):
+        original(path, value, role)
+        if role == stage:
+            raise OSError('synthetic saved-slot interruption')
+    monkeypatch.setattr(c, 'write_output', interrupted)
+    with pytest.raises(OSError, match='saved-slot'):
+        c.enroll(action, 'interrupted-recovery', generation)
+    result = run(prepared, 'bin/agentstack-enroll', '--global-context', str(c.path),
+                 action, 'interrupted-recovery', str(generation), bash=True)
+    assert result.returncode == 0, result.stderr
+    active = client(prepared)
+    assert active.observe()['agent_id'] == 1
+    assert active.identity['credential_generation'] == generation + 1
+    assert not active.outputs['enrollment'].exists()
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before + 1
+
+
+@pytest.mark.parametrize('mismatch', ['token', 'agent_id', 'generation', 'pending_binding', 'server_token'])
+def test_explicit_finalize_rejects_inconsistent_interrupted_state(prepared, monkeypatch, mismatch):
+    config = prepared['client_config']
+    config['identity'] = None
+    fresh_context(prepared, config, 'inconsistent-client')
+    c = client(prepared)
+    original = c.write_output
+    def interrupted(path, value, role):
+        original(path, value, role)
+        if role == 'credential':
+            raise OSError('synthetic interruption')
+    monkeypatch.setattr(c, 'write_output', interrupted)
+    with pytest.raises(OSError):
+        c.create('InconsistentOwner', 'daemon', 'deterministic')
+    credential = api['read_json'](c.credential)
+    agent_id = credential['agent_id']
+    if mismatch == 'pending_binding':
+        saved = api['read_json'](c.outputs['registration'])
+        private(c.outputs['registration'], {**saved, 'authority_epoch': 'other-epoch'})
+    elif mismatch == 'server_token':
+        s1.control(prepared, action='recover', agent_id=agent_id, request_id='foreign-recovery',
+                     expected_generation=1, new_credential='different-owner-token-000000001')
     else:
-        for index in range(126):
-            (c.client_root / ('extra-' + str(index))).mkdir(mode=0o700)
-        with pytest.raises(ClientError, match='CLIENT_ROOT_OWNERSHIP_UNKNOWN'):
-            active = client(prepared)
-            row = active.call('register_agent', {'program': 'fixture', 'model': 'capacity-model'})
-            active.record_session({'session_id': 'capacity-session', 'tool_response': row})
-        assert not (c.runtime_dir / 'session_index').exists()
+        key, value = {'token': ('registration_token', 'different-owner-token-000000001'),
+                      'agent_id': ('agent_id', 1), 'generation': ('credential_generation', 8)}[mismatch]
+        private(c.credential, {**credential, key: value})
+    paths = [c.path, c.credential, c.outputs['registration']]
+    original_bytes = {p: p.read_bytes() for p in paths}
+    before = s1.call(prepared, 'health_check')['mutation_revision']
+    result = run(prepared, 'bin/agentstack-daemon', 'finalize-create', '--connection', str(c.path),
+                 '--agent-id', str(agent_id), '--operator')
+    assert result.returncode == 2
+    assert {p: p.read_bytes() for p in paths} == original_bytes
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before
+
+
+def test_journal_saved_before_request_is_not_proof_of_registration(prepared, monkeypatch):
+    config = prepared['client_config']
+    config['identity'] = None
+    fresh_context(prepared, config, 'prepared-only-client')
+    c = client(prepared)
+    before = s1.call(prepared, 'health_check')['mutation_revision']
+    original = c.write_output
+    def interrupted(path, value, role):
+        original(path, value, role)
+        if role == 'registration':
+            raise OSError('before first request')
+    monkeypatch.setattr(c, 'write_output', interrupted)
+    with pytest.raises(OSError):
+        c.create('PreparedOnlyOwner', 'daemon', 'deterministic')
+    saved = c.outputs['registration'].read_bytes()
+    result = run(prepared, 'bin/agentstack-daemon', 'finalize-create', '--connection', str(c.path),
+                 '--agent-id', '1', '--operator')
+    assert result.returncode == 2
+    assert not c.credential.exists()
+    assert c.outputs['registration'].read_bytes() == saved
     assert s1.call(prepared, 'health_check')['mutation_revision'] == before
