@@ -10,18 +10,36 @@
 
 設定の kind は `orrery-runtime-client-s1`、mode は `global`、`activation_enabled=false`。`wrapper_root` はこの helper の install/checkout root、`isolation_root` は0700の専用一時 directoryです。以下を指定します。
 
-- client の session/profile bookkeeping 用の private な `runtime_dir`。Mail state を示す S1 の `runtime_root` と分け、両方を隔離 root 内に置きます。
+- private な `client_root` を1つ指定します。Mail の `runtime_root` と authority/lock/socket の入力から分離し、root とその `runtime` directory は0700で用意します。context は必ず `client_root/runtime-client.json` です。
 - S1 と同じ `runtime_root`、`authority`、`authority_lock`、`management_socket`、loopback の `mcp_url`。
 - `expected_server_instance_id`、`candidate_generation`、`authority_epoch`。mutation revision は普通の書込みで変わるため、固定した世代として扱いません。
 - `lock_identity` は共通 lock の `[st_dev, st_ino]`。wrapper 再起動でも保存した inode を照合します。
-- `credential_file` は一時 root 内の0600 JSON。kind は `orrery-global-credential-v1`、同じ3 binding と `agent_id`、`credential_generation`、`registration_token` を保存します。token を argv に入れません。
+- 固定の `client_root/credential.json` は0600 JSON。kind は `orrery-global-credential-v1`、同じ3 binding と `agent_id`、`credential_generation`、`registration_token` を保存します。token を argv に入れません。
 - `identity` は stable `agent_id`、0以上の `credential_generation`、表示用 `name`。window の再接続を使うときは確定した `window_row_id` と `window_uuid` の両方を保存します。
 
-新規登録の前だけ identity を null にし、`agentstack-runtime-client register NAME PROGRAM MODEL` を使います。whois で名前の空きを推測せず、原子的な register の `NAME_CONFLICT` を示します。未知の配送結果は pending journal を残して再登録を拒否します。新しい名前や token を自動で作って回避しません。既存 row の token が無ければ operator の claim が必要です。
+新規 identity には新しい `client_root` を用意します。使用済みディレクトリの metadata/session が別 identity に属する場合は `RUNTIME_DIR_BELONGS_TO_OTHER_IDENTITY` で network 前に拒否し、自動で削除・置換しません。新規登録の前だけ identity を null にし、`agentstack-runtime-client register NAME PROGRAM MODEL` を使います。whois で名前の空きを推測せず、原子的な register の `NAME_CONFLICT` を示します。未知の配送結果は pending journal を残して再登録を拒否します。新しい名前や token を自動で作って回避しません。既存 row の token が無ければ operator の claim が必要です。
+
+## PR4a で決めた固定 local layout
+
+利用者が選べるのは `client_root` だけです。旧 `runtime_dir` / `credential_file` の path 指定を含む context と、`client_root/runtime-client.json` 以外の context は `FIXED_LAYOUT_CONTEXT_REQUIRED` で拒否します。global の profile 保存には path を渡しません。`--journal` や `save-profile` の引数は `FIXED_LAYOUT_PATH_NOT_SUPPORTED` で登録前に拒否し、成功時は固定の `profile_path` を返します。
+
+| role | client_root からの固定 path |
+| --- | --- |
+| context | `runtime-client.json` |
+| credential | `credential.json` |
+| 登録 pending | `credential.registration-pending.json` |
+| 復旧 pending | `credential.enrollment-pending.json` |
+| 登録 metadata | `runtime/registration-metadata.json` |
+| profile | `profile.json` |
+| 自分の session 記録 | `runtime/session_index/ID.json` |
+
+client root 同士の入れ子も、固定 context のファイル名の所在だけを見て拒否します。他 root の内容は読みません。選択した隔離 subtree 内を予定出力の増加分を network 前に確保したうえで128 directory / 1024 entryまで確認し、完了できなければ `CLIENT_ROOT_OWNERSHIP_UNKNOWN` で拒否します。未知をreadyと扱わず、新しい専用 root を用意してください。
+
+1か所の preflight plan が、この全出力を network 前に検査します。client と Mail の root の双方向の重なり、client root 内の authority/lock/socket は `CLIENT_ROOT_OVERLAP`、alias・不正 directory・外国形式も拒否します。writer は固定 slot だけを書き、未知 role や別 role の directory を指定できません。保存先の不正を登録 commit 後に初めて発見する動作をなくします。network 成功後の disk I/O 失敗は別の不確定結果で、pending journal/receipt を残し、同じ identity を明示 finalize します。remote commit を原子的に巻き戻したとは表示しません。
 
 ## 実際の entrypoint
 
-`agentstack-reregister` は保存済み ID/token で再接続し、server の canonical name を表示します。旧名前の引数は routing に使いません。program/model の明示引数・env・provider model は登録に反映し、成功した値を private な `runtime_dir/registration-metadata.json`（`orrery-global-registration-metadata-v1`）に保存します。context は変えないので、別 process の通常再登録で待機中の client を止めません。旧 context の `registration_metadata` は読込み互換だけ維持します。無指定の再接続は保存値で再送します。保存値が無い既存 identity は S1 whois が program/model を返さないため register を呼ばず、`reconnect_mode=observe-only` / `registration_verified=false` を返し、server row を上書きしません。この場合の reregister は `observed ... (registration not refreshed; pass program/model)`、exit 3 です。明示または保存値で register を行った場合だけ `registered`、exit 0 になります。contact policy は `tools/list` を見て、その能力が無い S1 には呼びません。`agentstack-await-reply` は同じ owner の inbox を読み、従来の sender/after-id/timeout の動作を保ちます。一時的な `TRANSPORT_FAILED` は timeout まで再試行し、authority の変更は即停止します。S1 では read/ack と signal clear を変更しません。
+`agentstack-reregister` は保存済み ID/token で再接続し、server の canonical name を表示します。旧名前の引数は routing に使いません。program/model の明示引数・env・provider model は登録に反映し、成功した値を private な `client_root/runtime/registration-metadata.json`（`orrery-global-registration-metadata-v1`）に保存します。context は変えないので、別 process の通常再登録で待機中の client を止めません。旧 context の `registration_metadata` は読込み互換だけ維持します。無指定の再接続は保存値で再送します。保存値が無い既存 identity は S1 whois が program/model を返さないため register を呼ばず、`reconnect_mode=observe-only` / `registration_verified=false` を返し、server row を上書きしません。この場合の reregister は `observed ... (registration not refreshed; pass program/model)`、exit 3 です。明示または保存値で register を行った場合だけ `registered`、exit 0 になります。contact policy は `tools/list` を見て、その能力が無い S1 には呼びません。`agentstack-await-reply` は同じ owner の inbox を読み、従来の sender/after-id/timeout の動作を保ちます。一時的な `TRANSPORT_FAILED` は timeout まで再試行し、authority の変更は即停止します。S1 では read/ack と signal clear を変更しません。
 
 provider bootstrap は source した shell に canonical identity を export します。global の `agent-start`、`agent-start-codex`、`agent-start-gemini` は明示した context で登録して provider を起動します。この隔離準備経路は現在の terminal で実行し、新しい tmux session を自動生成しません。旧 mode の picker/tmux 起動は従来どおりです。試験では provider を shell stub に置き換え、実 LLM を起動しません。
 
@@ -31,13 +49,13 @@ credential・authority・lock・config・管理 socket・pending journal の保�
 
 保存形式の magic は context の `orrery-runtime-client-s1`、credential の `orrery-global-credential-v1`、登録 pending の `orrery-global-registration-pending-v1`、復旧 pending の `orrery-global-enrollment-pending-v1`、metadata の `orrery-global-registration-metadata-v1`、profile の `orrery-global-client-profile-v1` です。session index は schema 3 / `global-self` です。型・binding・owner が違う既存ファイルは自動で移行や上書きをせず、入力先を直す operator 操作が必要です。
 
-released 版の raw token（任意の identity sidecar）、旧 persistent profile、schema 2 / self の session index を global の保存先へ選ぶと、`LEGACY_FILE_REQUIRES_IMPORT` で network 前に拒否し、bytes を維持します。これらの明示 operator import は PR7 の担当で、4a は自動変換しません。
+released 版の raw token（任意の identity sidecar）、旧 persistent profile、schema 2 / self の session index を global の固定保存先に置くと、`LEGACY_FILE_REQUIRES_IMPORT` で network 前に拒否し、bytes を維持します。これらの明示 operator import は PR7 の担当で、4a は自動変換しません。
 
 ## operator の復旧と profile
 
 `agentstack-enroll --global-context CONFIG inspect` は S1 の管理 socket に接続します。`claim REQUEST_ID EXPECTED_GENERATION` と `recover REQUEST_ID EXPECTED_GENERATION` は operator が明示して実行する入口です。モデルの認証失敗から自動実行しません。新 credential を0600の pending journal に保存してから CAS を要求し、同じ入力の再実行は同じ値を使います。receipt の再取得だけで成功とはせず、現在の inspect の generation/fingerprint と whois 認証を照合してから local credential と context を有効にします。専用 HOME に替えても明示した context が同じ ID を選びます。
 
-`agentstack-runtime-client save-profile /absolute/private/profile.json` は project を持たない `orrery-global-client-profile-v1` を保存します。`agentstack-persistent inspect|reconnect --profile PROFILE` と `agentstack-daemon inspect --profile PROFILE` が binding を照合します。新 profile の proxy/daemon 実行は4cが担当します。4a の `run` は `GLOBAL_PROXY_RUNTIME_REQUIRES_PR4C` で拒否し、ready を true にしません。global context の無い旧 profile の実行は維持します。global context と旧 profile を混ぜた場合は `LEGACY_PROFILE_CONTEXT_CONFLICT` で拒否します。operator の `agentstack-daemon create --connection CONFIG --name NAME --journal PROFILE --operator` は同じ登録・profile 保存処理を使い、project を入力しません。`finalize-create --connection CONFIG --journal PROFILE --agent-id ID --operator` は、保存した pending credential を指定 stable ID で照合し、再登録せずに同じ profile を確定します。daemon 自体は起動しません。
+`agentstack-runtime-client save-profile` は project を持たない `orrery-global-client-profile-v1` を保存します。`agentstack-persistent inspect|reconnect --profile PROFILE` と `agentstack-daemon inspect --profile PROFILE` が binding を照合します。新 profile の proxy/daemon 実行は4cが担当します。4a の `run` は `GLOBAL_PROXY_RUNTIME_REQUIRES_PR4C` で拒否し、ready を true にしません。global context の無い旧 profile の実行は維持します。global context と旧 profile を混ぜた場合は `LEGACY_PROFILE_CONTEXT_CONFLICT` で拒否します。operator の `agentstack-daemon create --connection CONFIG --name NAME --operator` は同じ登録・profile 保存処理を使い、project を入力しません。`finalize-create --connection CONFIG --agent-id ID --operator` は、保存した pending credential を指定 stable ID で照合し、再登録せずに同じ profile を確定します。daemon 自体は起動しません。
 
 ## fence と残る作業
 

@@ -31,13 +31,15 @@ def prepared(monkeypatch):
     state = next(fixture)
     try:
         c = state['config']
-        (state['root'] / 'client-runtime').mkdir(mode=0o700)
+        client_root = state['root'] / 'client'
+        client_root.mkdir(mode=0o700)
+        (client_root / 'runtime').mkdir(mode=0o700)
         info = Path(c['authority_lock']).stat()
         config = {'kind': api['KIND'], 'mode': 'global', 'activation_enabled': False,
                   'wrapper_root': str(ROOT), 'isolation_root': c['isolation_root'],
-                  'runtime_root': c['runtime_root'], 'runtime_dir': str(state['root'] / 'client-runtime'), 'authority': c['authority'],
+                  'runtime_root': c['runtime_root'], 'client_root': str(client_root), 'authority': c['authority'],
                   'authority_lock': c['authority_lock'], 'lock_identity': [info.st_dev, info.st_ino],
-                  'management_socket': c['management_socket'], 'credential_file': str(state['root'] / 'credential.json'),
+                  'management_socket': c['management_socket'],
                   'mcp_url': state['url'], **state['binding'],
                   'identity': {'agent_id': 1, 'credential_generation': 3, 'name': 'OldAlpha'}}
         # Read only synthetic migration fixture metadata to obtain preserved
@@ -46,10 +48,10 @@ def prepared(monkeypatch):
         with connection(Path(c['database'])) as db:
             row = dict(db.execute('SELECT * FROM agents WHERE id=1').fetchone())
         config['identity']['credential_generation'] = row['credential_generation']
-        private(state['root'] / 'client.json', config)
-        private(Path(config['credential_file']), {'kind': 'orrery-global-credential-v1', **state['binding'],
+        private(client_root / 'runtime-client.json', config)
+        private(Path(config['client_root']) / 'credential.json', {'kind': 'orrery-global-credential-v1', **state['binding'],
              **config['identity'], 'registration_token': row['registration_token']})
-        state.update(client_path=state['root'] / 'client.json', client_config=config,
+        state.update(client_path=client_root / 'runtime-client.json', client_config=config,
                      token=row['registration_token'])
         monkeypatch.setenv('AGENTSTACK_CLIENT_CONFIG', str(state['client_path']))
         monkeypatch.setenv('AGENTSTACK_PROJECT_KEY', '/obsolete/scope')
@@ -59,6 +61,16 @@ def prepared(monkeypatch):
         yield state
     finally:
         fixture.close()
+
+
+def fresh_context(state, config, name):
+    root = state['root'] / name
+    root.mkdir(mode=0o700)
+    (root / 'runtime').mkdir(mode=0o700)
+    config['client_root'] = str(root)
+    state['client_path'] = root / 'runtime-client.json'
+    private(state['client_path'], config)
+    os.environ['AGENTSTACK_CLIENT_CONFIG'] = str(state['client_path'])
 
 
 def client(state):
@@ -144,7 +156,7 @@ def test_lock_replacement_and_exclusive_updater_gate(prepared):
                                      ('authority_epoch', 'other-epoch'),
                                      ('agent_id', 999), ('credential_generation', 99)])
 def test_credential_binding_cannot_select_another_owner(prepared, key, value):
-    path = Path(prepared['client_config']['credential_file'])
+    path = Path(prepared['client_config']['client_root']) / 'credential.json'
     credential = api['read_json'](path)
     credential[key] = value
     private(path, credential)
@@ -156,8 +168,7 @@ def test_credential_binding_cannot_select_another_owner(prepared, key, value):
 def test_new_registration_atomic_conflict_and_no_name_preflight(prepared):
     c = prepared['client_config']
     c['identity'] = None
-    c['credential_file'] = str(prepared['root'] / 'new-credential.json')
-    private(prepared['client_path'], c)
+    fresh_context(prepared, c, 'new-client')
     instance = client(prepared)
     canonical = s1.call(prepared, 'whois', **prepared['binding'], agent_id=1, registration_token=prepared['token'])['name']
     with pytest.raises(ClientError, match='NAME_CONFLICT'):
@@ -219,8 +230,8 @@ def test_launcher_runs_only_stub_with_context_and_sanitized_environment(prepared
 
 
 def test_profile_save_inspect_reconnect_and_explicit_runtime_boundary(prepared):
-    profile = prepared['root'] / 'profile.json'
-    r = run(prepared, 'bin/lib/runtime_client.py', 'save-profile', str(profile))
+    profile = client(prepared).profile_path
+    r = run(prepared, 'bin/lib/runtime_client.py', 'save-profile')
     assert r.returncode == 0, r.stderr
     assert 'project_key' not in api['read_json'](profile)
     for entry in ('bin/agentstack-persistent', 'bin/agentstack-daemon'):
@@ -261,7 +272,7 @@ def test_confirmed_window_owner_mapping(prepared, valid):
         row = dict(db.execute('SELECT * FROM window_identities WHERE agent_id=1 LIMIT 1').fetchone())
     config = prepared['client_config']
     config['identity'].update(window_row_id=row['id'], window_uuid=row['window_uuid'] if valid else 'wrong-window')
-    credential_path = Path(config['credential_file'])
+    credential_path = Path(config['client_root']) / 'credential.json'
     private(credential_path, {**api['read_json'](credential_path), **config['identity']})
     private(prepared['client_path'], config)
     if valid:
@@ -314,12 +325,12 @@ def test_late_context_replacement_blocks_callback(prepared):
 def test_profile_mismatch_is_readonly_before_reconnect(prepared):
     c = client(prepared)
     row = c.observe()
-    profile = prepared['root'] / 'mismatched-profile.json'
-    private(profile, {'kind': api['PROFILE_KIND'], 'client_config': str(c.path), **row, 'agent_id': 2})
+    profile = c.profile_path
     revision = c.call('health_check')['mutation_revision']
-    with pytest.raises(ClientError, match='PROFILE_BINDING_MISMATCH'):
+    private(profile, {'kind': api['PROFILE_KIND'], 'client_config': str(c.path), **row, 'agent_id': 2})
+    with pytest.raises(ClientError, match='OUTPUT_OWNER_CONFLICT'):
         api['profile_operation'](profile, 'reconnect')
-    assert c.call('health_check')['mutation_revision'] == revision
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == revision
 
 
 def test_gemini_stdio_global_is_explicitly_blocked_before_legacy_proxy(prepared):
@@ -340,7 +351,7 @@ def test_common_shell_register_does_not_preflight_names_or_scopes(prepared):
 def test_matching_but_stale_local_generation_cannot_mutate_server(prepared):
     config = prepared['client_config']
     config['identity']['credential_generation'] += 1
-    credential = Path(config['credential_file'])
+    credential = Path(config['client_root']) / 'credential.json'
     private(credential, {**api['read_json'](credential), **config['identity']})
     private(prepared['client_path'], config)
     before = s1.call(prepared, 'health_check')['mutation_revision']
@@ -355,14 +366,14 @@ def test_window_inspect_reports_local_only_and_not_ready(prepared):
         window = dict(db.execute('SELECT * FROM window_identities WHERE agent_id=1 LIMIT 1').fetchone())
     config = prepared['client_config']
     config['identity'].update(window_row_id=window['id'], window_uuid=window['window_uuid'])
-    credential = Path(config['credential_file'])
+    credential = Path(config['client_root']) / 'credential.json'
     private(credential, {**api['read_json'](credential), **config['identity']})
     private(prepared['client_path'], config)
     c = client(prepared)
     observed = c.observe()
     assert observed['window_verification'] == 'local-only-server-unverified'
     assert c.reconnect(program='fixture', model='fixture')['window_verification'] == 'server-verified-by-register'
-    profile = prepared['root'] / 'window-profile.json'
+    profile = client(prepared).profile_path
     private(profile, {'kind': api['PROFILE_KIND'], 'client_config': str(c.path), **observed})
     inspected = api['profile_operation'](profile, 'inspect')
     assert inspected['window_verification'] == 'local-only-server-unverified'
@@ -376,7 +387,7 @@ def test_session_hook_records_only_authenticated_self(prepared):
     r = subprocess.run([sys.executable, str(ROOT / 'hooks/record-session-index.py')],
                        input=data, text=True, capture_output=True, env=os.environ, timeout=30)
     assert r.returncode == 0, r.stderr
-    record = api['read_json'](Path(prepared['client_config']['runtime_dir']) / 'session_index/1.json')
+    record = api['read_json'](Path(prepared['client_config']['client_root']) / 'runtime/session_index/1.json')
     assert record['binding_kind'] == 'global-self'
     assert record['agent_id'] == 1
     assert 'project_key' not in record
@@ -450,8 +461,7 @@ def test_actual_dedicated_tmux_server_stale_environment_does_not_route(prepared)
 def test_unknown_registration_outcome_keeps_pending_and_refuses_retry(prepared, monkeypatch):
     config = prepared['client_config']
     config['identity'] = None
-    config['credential_file'] = str(prepared['root'] / 'uncertain-credential.json')
-    private(prepared['client_path'], config)
+    fresh_context(prepared, config, 'uncertain-client')
     c = client(prepared)
     rpc = c.rpc
     def uncertain(method, params):
@@ -473,9 +483,9 @@ def test_new_registration_cannot_overwrite_existing_credential(prepared):
     config = prepared['client_config']
     config['identity'] = None
     private(prepared['client_path'], config)
-    credential = Path(config['credential_file'])
+    credential = Path(config['client_root']) / 'credential.json'
     original = api['read_private'](credential)
-    with pytest.raises(ClientError, match='CREDENTIAL_ALREADY_PRESENT'):
+    with pytest.raises(ClientError, match='RUNTIME_DIR_BELONGS_TO_OTHER_IDENTITY'):
         client(prepared).create('AnotherOwner', 'codex', 'fixture')
     assert api['read_private'](credential) == original
 
@@ -527,8 +537,7 @@ def test_actual_global_await_returns_oldest_unseen_and_preserves_read_ack(prepar
         before = list(db.execute('SELECT message_id,read_ts,ack_ts FROM message_recipients WHERE agent_id=2'))
     config = prepared['client_config']
     config['identity'] = {'agent_id': 2, 'credential_generation': owner['credential_generation'], 'name': owner['name']}
-    config['credential_file'] = str(prepared['root'] / 'recipient-credential.json')
-    private(Path(config['credential_file']), {'kind': 'orrery-global-credential-v1',
+    private(Path(config['client_root']) / 'credential.json', {'kind': 'orrery-global-credential-v1',
         **prepared['binding'], **config['identity'], 'registration_token': owner['registration_token']})
     private(prepared['client_path'], config)
     r = run(prepared, 'bin/agentstack-await-reply', '--agent-name', 'StaleDisplayName',
@@ -552,11 +561,10 @@ def test_global_context_cannot_fall_back_to_legacy_profile(prepared):
 def test_operator_daemon_creation_uses_shared_global_profile_without_project(prepared):
     config = prepared['client_config']
     config['identity'] = None
-    config['credential_file'] = str(prepared['root'] / 'daemon-credential.json')
-    private(prepared['client_path'], config)
-    profile = prepared['root'] / 'daemon-profile.json'
+    fresh_context(prepared, config, 'daemon-client')
+    profile = client(prepared).profile_path
     r = run(prepared, 'bin/agentstack-daemon', 'create', '--connection', str(prepared['client_path']),
-            '--name', 'PreparedDaemon', '--journal', str(profile), '--operator')
+            '--name', 'PreparedDaemon', '--operator')
     assert r.returncode == 0, r.stderr
     row = json.loads(r.stdout)
     assert row['ready'] is False
@@ -564,7 +572,7 @@ def test_operator_daemon_creation_uses_shared_global_profile_without_project(pre
     saved = api['read_json'](profile)
     assert saved['kind'] == api['PROFILE_KIND'] and 'project_key' not in saved
     r = run(prepared, 'bin/agentstack-daemon', 'finalize-create', '--connection', str(prepared['client_path']),
-            '--journal', str(profile), '--agent-id', str(row['agent_id']), '--operator')
+            '--agent-id', str(row['agent_id']), '--operator')
     assert r.returncode == 0, r.stderr
     assert client(prepared).observe()['agent_id'] == row['agent_id']
     r = run(prepared, 'bin/agentstack-persistent', 'reconnect', '--profile', str(profile))
@@ -578,8 +586,7 @@ def test_operator_daemon_creation_uses_shared_global_profile_without_project(pre
 def test_uncertain_registration_finalizes_same_id_without_register_retry(prepared, monkeypatch):
     config = prepared['client_config']
     config['identity'] = None
-    config['credential_file'] = str(prepared['root'] / 'finalize-credential.json')
-    private(prepared['client_path'], config)
+    fresh_context(prepared, config, 'finalize-client')
     c = client(prepared)
     rpc = c.rpc
     registered = {}
@@ -667,8 +674,8 @@ def test_exports_respects_provider_model_and_quotes_environment_names(prepared, 
 def test_daemon_profile_reconnect_preserves_registration_metadata(prepared):
     c = client(prepared)
     c.reconnect(program='daemon', model='deterministic')
-    profile = prepared['root'] / 'daemon-profile.json'
-    c.save_profile(profile)
+    profile = client(prepared).profile_path
+    c.save_profile()
     result = run(prepared, 'bin/agentstack-persistent', 'reconnect', '--profile', str(profile))
     assert result.returncode == 0, result.stderr
     assert metadata_row(prepared) == ('daemon', 'deterministic')
@@ -706,7 +713,7 @@ def test_credential_role_overlap_rejected_before_server_recovery(prepared, role)
     config['credential_file'] = str(target)
     authority = Path(config['authority'])
     authority_before = authority.read_bytes()
-    with pytest.raises(ClientError, match='CONTEXT_PATH_ROLE_CONFLICT'):
+    with pytest.raises(ClientError, match='FIXED_LAYOUT_CONTEXT_REQUIRED'):
         private(prepared['client_path'], config)
         client(prepared).enroll('recover', 'overlap-recovery', config['identity']['credential_generation'])
     assert authority.read_bytes() == authority_before
@@ -718,7 +725,7 @@ def test_profile_cannot_overwrite_authority_or_credentials(prepared):
     c = client(prepared)
     for path in [c.authority, c.path, c.credential, c.lock]:
         before = path.read_bytes()
-        with pytest.raises(ClientError, match='PROFILE_PATH_ROLE_CONFLICT'):
+        with pytest.raises(ClientError, match='FIXED_LAYOUT_PATH_NOT_SUPPORTED'):
             c.save_profile(path)
         assert path.read_bytes() == before
 
@@ -750,7 +757,7 @@ def test_mail_state_cannot_be_client_output_before_recovery(prepared, monkeypatc
     before = client(prepared).management('inspect', agent_id=1)['credential_generation']
     config['credential_file'] = str(database)
     private(prepared['client_path'], config)
-    with pytest.raises(ClientError, match='CLIENT_OUTPUT_IN_MAIL_STATE'):
+    with pytest.raises(ClientError, match='FIXED_LAYOUT_CONTEXT_REQUIRED'):
         client(prepared).enroll('recover', 'mail-output-recovery', before)
     assert database.read_bytes() == original_bytes
     assert s1.control(prepared, action='inspect', agent_id=1)['credential_generation'] == before
@@ -769,7 +776,7 @@ def test_every_client_output_rejects_foreign_format_before_network(prepared, mon
     paths = {'context': c.path, 'credential': c.credential,
              'registration': c.credential.with_suffix('.registration-pending.json'),
              'enrollment': c.credential.with_suffix('.enrollment-pending.json'),
-             'metadata': c.metadata_path, 'profile': prepared['root'] / 'profile.json',
+             'metadata': c.metadata_path, 'profile': client(prepared).profile_path,
              'session': directory / '1.json'}
     def no_network(*args, **kwargs):
         pytest.fail('network called before rejecting a foreign output format')
@@ -782,7 +789,7 @@ def test_every_client_output_rejects_foreign_format_before_network(prepared, mon
                 path.chmod(0o600)
                 with pytest.raises(ClientError, match='CONTEXT_CHANGED' if role == 'context' else 'OUTPUT_SCHEMA_INVALID'):
                     if role == 'profile':
-                        c.save_profile(path)
+                        c.save_profile()
                     else:
                         c.reconnect(program='fixture', model='fixture')
                 assert path.read_bytes() == payload
@@ -799,16 +806,16 @@ def test_client_output_in_mail_root_or_alias_is_rejected(prepared):
     database = Path(prepared['config']['database'])
     before = database.read_bytes()  # Synthetic fixture only.
     for path in [database, c.runtime / 'new-profile.json']:
-        with pytest.raises(ClientError, match='CLIENT_OUTPUT_IN_MAIL_STATE'):
+        with pytest.raises(ClientError, match='FIXED_LAYOUT_PATH_NOT_SUPPORTED'):
             c.save_profile(path)
     alias = prepared['root'] / 'mail-alias'
     alias.symlink_to(c.runtime, target_is_directory=True)
-    with pytest.raises(ClientError, match='CLIENT_OUTPUT_IN_MAIL_STATE'):
+    with pytest.raises(ClientError, match='FIXED_LAYOUT_PATH_NOT_SUPPORTED'):
         c.save_profile(alias / 'new-profile.json')
     outside = prepared['root'] / 'outside-hardlink.db'
     os.link(database, outside)
     try:
-        with pytest.raises(ClientError, match='OUTPUT_FILE_UNSAFE'):
+        with pytest.raises(ClientError, match='FIXED_LAYOUT_PATH_NOT_SUPPORTED'):
             c.save_profile(outside)
         assert database.read_bytes() == before
     finally:
@@ -843,7 +850,7 @@ def test_waiting_client_survives_another_process_metadata_update(prepared, monke
 
 def test_foreign_file_appearing_before_rename_is_not_overwritten(prepared, monkeypatch):
     c = client(prepared)
-    destination = prepared['root'] / 'new-profile.json'
+    destination = c.profile_path
     original = api['atomic_json'].__globals__['os'].fsync
     def create_foreign_file(fd):
         original(fd)
@@ -872,7 +879,7 @@ def test_released_files_require_explicit_import_before_network(prepared, monkeyp
                           'credential_fingerprint': 'preserved-fingerprint'})
         files.append(sidecar)
     elif role == 'profile':
-        path = prepared['root'] / 'released-profile.json'
+        path = c.profile_path
         private(path, {'kind': 'orrery-persistent-agent-v1', 'name': 'OldAlpha',
                        'agent_id': 1, 'project_key': '/legacy/scope', 'provider': 'codex',
                        'parentless': True, 'lifecycle': 'persistent', 'interaction': 'headless',
@@ -893,7 +900,7 @@ def test_released_files_require_explicit_import_before_network(prepared, monkeyp
     monkeypatch.setattr(c, 'rpc', no_network)
     with pytest.raises(ClientError, match='LEGACY_FILE_REQUIRES_IMPORT'):
         if role == 'profile':
-            c.save_profile(path)
+            c.save_profile()
         else:
             c.reconnect(program='fixture', model='fixture')
     assert {p: p.read_bytes() for p in files} == original
@@ -903,3 +910,245 @@ def test_released_files_require_explicit_import_before_network(prepared, monkeyp
         private(path, {'kind': 'orrery-global-credential-v1', **c.binding,
                        **c.identity, 'registration_token': prepared['token']})
     assert client(prepared).call('health_check')['mutation_revision'] == before
+
+
+@pytest.mark.parametrize('role', ['metadata', 'session'])
+def test_new_identity_requires_a_fresh_runtime_directory(prepared, monkeypatch, role):
+    c = client(prepared)
+    if role == 'metadata':
+        c.reconnect(program='fixture', model='fixture')
+        saved = c.metadata_path
+    else:
+        c.record_session({'session_id': 'fresh-directory-session', 'cwd': '.',
+                          'tool_response': c.call('register_agent', {'program': 'fixture', 'model': 'fixture'})})
+        saved = c.runtime_dir / 'session_index/1.json'
+    original = saved.read_bytes()
+    before = c.call('health_check')['mutation_revision']
+    original_credential = c.credential.read_bytes()
+    c.credential.unlink()
+    config = {**prepared['client_config'], 'identity': None,
+              'client_root': str(c.client_root)}
+    private(prepared['client_path'], config)
+    monkeypatch.setattr(RuntimeClient, 'rpc', lambda *a, **k: pytest.fail('network before fresh-runtime refusal'))
+    with pytest.raises(ClientError, match='RUNTIME_DIR_BELONGS_TO_OTHER_IDENTITY'):
+        client(prepared)
+    assert saved.read_bytes() == original
+    private(prepared['client_path'], prepared['client_config'])
+    c.credential.write_bytes(original_credential)
+    c.credential.chmod(0o600)
+    monkeypatch.undo()
+    assert client(prepared).call('health_check')['mutation_revision'] == before
+
+@pytest.mark.parametrize('target', ['authority', 'mail_db', 'session_index'])
+def test_old_arbitrary_output_context_is_rejected_before_network(prepared, monkeypatch, target):
+    c = client(prepared)
+    before = c.call('health_check')['mutation_revision']
+    paths = {'authority': c.authority, 'mail_db': Path(prepared['config']['database']),
+             'session_index': c.runtime_dir / 'session_index/new-credential.json'}
+    destination = paths[target]
+    original = destination.read_bytes() if destination.exists() else None
+    config = {**prepared['client_config'], 'credential_file': str(destination)}
+    private(c.path, config)
+    monkeypatch.setattr(RuntimeClient, 'rpc', lambda *a, **k: pytest.fail('network before layout refusal'))
+    with pytest.raises(ClientError, match='FIXED_LAYOUT_CONTEXT_REQUIRED'):
+        client(prepared)
+    assert (destination.read_bytes() if destination.exists() else None) == original
+    private(c.path, prepared['client_config'])
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before
+
+
+@pytest.mark.parametrize('target', ['authority', 'mail_db', 'session_index'])
+def test_daemon_arbitrary_profile_slot_is_rejected_before_registration(prepared, target):
+    config = prepared['client_config']
+    config['identity'] = None
+    fresh_context(prepared, config, 'daemon-path-refusal')
+    c = client(prepared)
+    before = s1.call(prepared, 'health_check')['mutation_revision']
+    paths = {'authority': c.authority, 'mail_db': Path(prepared['config']['database']),
+             'session_index': c.runtime_dir / 'session_index/new-profile.json'}
+    path = paths[target]
+    original = path.read_bytes() if path.exists() else None
+    result = run(prepared, 'bin/agentstack-daemon', 'create', '--connection', str(c.path),
+                 '--name', 'RefusedProfileOwner', '--journal', str(path), '--operator')
+    assert result.returncode == 2
+    assert 'FIXED_LAYOUT_PATH_NOT_SUPPORTED' in result.stderr
+    assert (path.read_bytes() if path.exists() else None) == original
+    assert not c.credential.exists() and not c.profile_path.exists()
+    assert client(prepared).identity is None
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before
+
+
+@pytest.mark.parametrize('overlap', ['same_mail_root', 'contains_mail_root', 'inside_mail_root'])
+def test_client_root_and_mail_root_must_be_disjoint(prepared, monkeypatch, overlap):
+    c = client(prepared)
+    before = c.call('health_check')['mutation_revision']
+    if overlap == 'same_mail_root':
+        root = c.runtime
+    elif overlap == 'contains_mail_root':
+        root = prepared['root']
+    else:
+        root = c.runtime / 'client-inside-mail'
+        root.mkdir(mode=0o700)
+    root.chmod(0o700)
+    (root / 'runtime').mkdir(mode=0o700, exist_ok=True)
+    config = {**prepared['client_config'], 'client_root': str(root)}
+    path = root / 'runtime-client.json'
+    private(path, config)
+    monkeypatch.setattr(RuntimeClient, 'rpc', lambda *a, **k: pytest.fail('network before root refusal'))
+    with pytest.raises(ClientError, match='CLIENT_ROOT_OVERLAP'):
+        RuntimeClient(path)
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before
+
+
+@pytest.mark.parametrize('role', ['authority', 'authority_lock', 'management_socket'])
+def test_client_root_cannot_own_external_fence_inputs(prepared, monkeypatch, role):
+    c = client(prepared)
+    before = c.call('health_check')['mutation_revision']
+    config = {**prepared['client_config'], role: str(c.client_root / 'external-input')}
+    private(c.path, config)
+    monkeypatch.setattr(RuntimeClient, 'rpc', lambda *a, **k: pytest.fail('network before root refusal'))
+    with pytest.raises(ClientError, match='CLIENT_ROOT_OVERLAP'):
+        client(prepared)
+    private(c.path, prepared['client_config'])
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before
+
+
+def test_bad_fixed_profile_preflight_cannot_commit_a_new_identity(prepared):
+    config = prepared['client_config']
+    config['identity'] = None
+    fresh_context(prepared, config, 'invalid-profile-client')
+    path = Path(config['client_root']) / 'profile.json'
+    path.write_text('user-owned notes\n')
+    path.chmod(0o600)
+    before = s1.call(prepared, 'health_check')['mutation_revision']
+    result = run(prepared, 'bin/agentstack-daemon', 'create', '--connection', str(prepared['client_path']),
+                 '--name', 'NotCommittedOwner', '--operator')
+    assert result.returncode == 2 and 'OUTPUT_SCHEMA_INVALID' in result.stderr
+    assert path.read_text() == 'user-owned notes\n'
+    assert not (path.parent / 'credential.json').exists()
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before
+
+
+def test_fixed_writer_rejects_unknown_role_and_another_role_slot(prepared):
+    c = client(prepared)
+    before = c.call('health_check')['mutation_revision']
+    for path, role in [(c.runtime_dir / 'session_index/1.json', 'profile'),
+                       (c.profile_path, 'unknown')]:
+        with pytest.raises(ClientError, match='FIXED_LAYOUT_PATH_NOT_SUPPORTED'):
+            c.write_output(path, {}, role)
+        assert not path.exists()
+    assert c.call('health_check')['mutation_revision'] == before
+
+
+@pytest.mark.parametrize('sidecar', [True, False])
+def test_released_raw_token_in_fixed_slot_requires_import(prepared, sidecar):
+    c = client(prepared)
+    before = s1.call(prepared, 'health_check')['mutation_revision']
+    raw = 'released-owner-token-00000001\n'
+    c.credential.write_text(raw)
+    identity = c.credential.with_name(c.credential.name + '.identity.json')
+    if sidecar:
+        private(identity, {'kind': 'orrery-enrollment-active-v1'})
+    with pytest.raises(ClientError, match='LEGACY_FILE_REQUIRES_IMPORT'):
+        client(prepared)
+    assert c.credential.read_text() == raw
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before
+
+
+def test_documented_codex_recovery_refreshes_without_saved_metadata(prepared):
+    template = (ROOT / 'codex/AGENTS.md').read_text()
+    command = next(line for line in template.splitlines()
+                   if 'bin/agentstack-reregister "$AGENT_NAME"' in line)
+    assert command.endswith('"$AGENT_NAME" codex')
+    result = run(prepared, 'bin/agentstack-reregister', 'OldAlpha', 'codex', bash=True,
+                 extra={'AGENTSTACK_CODEX_MODEL': 'documented-model'})
+    assert result.returncode == 0 and 'registered' in result.stdout
+    from agentstack_mail.namespace_state_io import connection
+    with connection(Path(prepared['config']['database'])) as db:
+        row = db.execute('SELECT program,model FROM agents WHERE id=1').fetchone()
+    assert tuple(row) == ('codex', 'documented-model')
+
+
+@pytest.mark.parametrize('direction', ['ancestor', 'descendant'])
+def test_client_roots_cannot_nest_inside_another_identity_root(prepared, monkeypatch, direction):
+    c = client(prepared)
+    before = s1.call(prepared, 'health_check')['mutation_revision']
+    original = c.credential.read_bytes()
+    nested = c.client_root / 'nested-client'
+    nested.mkdir(mode=0o700)
+    (nested / 'runtime').mkdir(mode=0o700)
+    config = {**prepared['client_config'], 'client_root': str(nested), 'identity': None}
+    path = nested / 'runtime-client.json'
+    private(path, config)
+    monkeypatch.setattr(RuntimeClient, 'rpc', lambda *a, **k: pytest.fail('network before nested-root refusal'))
+    with pytest.raises(ClientError, match='CLIENT_ROOT_OVERLAP'):
+        RuntimeClient(path if direction == 'ancestor' else c.path)
+    assert c.credential.read_bytes() == original
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before
+
+
+def test_root_ownership_scan_is_bounded_and_unknown_is_not_ready(prepared, monkeypatch):
+    c = client(prepared)
+    before = s1.call(prepared, 'health_check')['mutation_revision']
+    for index in range(1025):
+        (c.client_root / ('entry-' + str(index))).touch()
+    monkeypatch.setattr(RuntimeClient, 'rpc', lambda *a, **k: pytest.fail('network before unknown-root refusal'))
+    with pytest.raises(ClientError, match='CLIENT_ROOT_OWNERSHIP_UNKNOWN'):
+        client(prepared)
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before
+
+
+@pytest.mark.parametrize('role', ['runtime_root', 'authority'])
+def test_filesystem_case_alias_cannot_hide_root_overlap(prepared, monkeypatch, role):
+    c = client(prepared)
+    alias = c.client_root.with_name(c.client_root.name.upper())
+    if not alias.exists() or not alias.samefile(c.client_root):
+        pytest.skip('filesystem distinguishes these directory names')
+    before = s1.call(prepared, 'health_check')['mutation_revision']
+    config = {**prepared['client_config'], role: str(alias if role == 'runtime_root' else alias / 'authority.json')}
+    private(c.path, config)
+    monkeypatch.setattr(RuntimeClient, 'rpc', lambda *a, **k: pytest.fail('network before inode root refusal'))
+    with pytest.raises(ClientError, match='CLIENT_ROOT_OVERLAP'):
+        client(prepared)
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before
+
+
+def test_child_root_marker_uses_filesystem_lookup_not_entry_spelling(prepared):
+    c = client(prepared)
+    nested = c.client_root / 'nested-marker'
+    nested.mkdir(mode=0o700)
+    marker = nested / 'RUNTIME-CLIENT.JSON'
+    marker.write_text('marker-only, contents must not be read')
+    if not (nested / 'runtime-client.json').exists():
+        pytest.skip('filesystem distinguishes marker spellings')
+    before = s1.call(prepared, 'health_check')['mutation_revision']
+    with pytest.raises(ClientError, match='CLIENT_ROOT_OVERLAP'):
+        client(prepared)
+    assert marker.read_text() == 'marker-only, contents must not be read'
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before
+
+@pytest.mark.parametrize('capacity', ['files', 'directories'])
+def test_preflight_reserves_room_for_its_own_future_outputs(prepared, capacity):
+    c = client(prepared)
+    before = s1.call(prepared, 'health_check')['mutation_revision']
+    if capacity == 'files':
+        config = prepared['client_config']
+        config['identity'] = None
+        fresh_context(prepared, config, 'capacity-client')
+        root = Path(config['client_root'])
+        for index in range(1020):
+            (root / ('extra-' + str(index))).touch()
+        original = prepared['client_path'].read_bytes()
+        with pytest.raises(ClientError, match='CLIENT_ROOT_OWNERSHIP_UNKNOWN'):
+            client(prepared).create('CapacityOwner', 'fixture', 'fixture')
+        assert prepared['client_path'].read_bytes() == original
+        assert not (root / 'credential.json').exists()
+    else:
+        for index in range(126):
+            (c.client_root / ('extra-' + str(index))).mkdir(mode=0o700)
+        with pytest.raises(ClientError, match='CLIENT_ROOT_OWNERSHIP_UNKNOWN'):
+            active = client(prepared)
+            row = active.call('register_agent', {'program': 'fixture', 'model': 'capacity-model'})
+            active.record_session({'session_id': 'capacity-session', 'tool_response': row})
+        assert not (c.runtime_dir / 'session_index').exists()
+    assert s1.call(prepared, 'health_check')['mutation_revision'] == before

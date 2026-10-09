@@ -10,18 +10,36 @@ Explicitly select an owned 0600 JSON with `AGENTSTACK_CLIENT_CONFIG`. Cwd, inher
 
 Use kind `orrery-runtime-client-s1`, mode `global`, `activation_enabled=false` and the helper's checkout/install `wrapper_root`. `isolation_root` is a dedicated private 0700 temporary directory. Include:
 
-- Private client `runtime_dir` for session/profile bookkeeping, separate from S1's Mail-state `runtime_root`; both remain inside the isolated root.
+- One private `client_root`, separate from Mail `runtime_root` and the authority/lock/socket inputs. Create the root and its `runtime` directory with mode 0700; context is always `client_root/runtime-client.json`.
 - S1's `runtime_root`, `authority`, `authority_lock`, `management_socket` and loopback `mcp_url`.
 - `expected_server_instance_id`, `candidate_generation` and `authority_epoch`. Ordinary writes change mutation revision, which is not a pinned generation.
 - `lock_identity`: the common lock's `[st_dev, st_ino]`, checked even after wrapper restart.
-- `credential_file`: private JSON inside the isolated root, kind `orrery-global-credential-v1`, the same three bindings, agent ID, credential generation and registration token. Tokens are never command arguments.
+- Fixed `client_root/credential.json`: private JSON, kind `orrery-global-credential-v1`, the same three bindings, agent ID, credential generation and registration token. Tokens are never command arguments.
 - `identity`: stable `agent_id`, nonnegative `credential_generation` and display name. To reconnect a mapped window, save both confirmed `window_row_id` and `window_uuid`.
 
-Only before new registration, set identity to null and use `agentstack-runtime-client register NAME PROGRAM MODEL`. It handles atomic `NAME_CONFLICT` instead of probing other names with self-only whois. Unknown registration outcomes leave a pending journal and block another attempt. It does not escape by generating another identity. An existing row without a token requires explicit operator claim.
+Use a new `client_root` for each new identity. Metadata/session records belonging to another identity fail before network calls with `RUNTIME_DIR_BELONGS_TO_OTHER_IDENTITY`; they are never deleted or replaced automatically. Only before new registration, set identity to null and use `agentstack-runtime-client register NAME PROGRAM MODEL`. It handles atomic `NAME_CONFLICT` instead of probing other names with self-only whois. Unknown registration outcomes leave a pending journal and block another attempt. It does not escape by generating another identity. An existing row without a token requires explicit operator claim.
+
+## Fixed local layout decided in PR4a
+
+Only `client_root` is selectable. A context containing old `runtime_dir` or `credential_file` path fields, or located outside `client_root/runtime-client.json`, fails with `FIXED_LAYOUT_CONTEXT_REQUIRED`. Global profile writes take no path argument; `--journal` and an argument to `save-profile` fail with `FIXED_LAYOUT_PATH_NOT_SUPPORTED` before registration. The result returns the fixed `profile_path`.
+
+| Role | Path relative to client_root |
+| --- | --- |
+| context | `runtime-client.json` |
+| credential | `credential.json` |
+| registration pending | `credential.registration-pending.json` |
+| enrollment pending | `credential.enrollment-pending.json` |
+| registration metadata | `runtime/registration-metadata.json` |
+| profile | `profile.json` |
+| self session records | `runtime/session_index/ID.json` |
+
+Only fixed context filenames are observed to reject nested client roots; no other root contents are read. The ownership scan stays within the selected isolated subtree and is bounded to 128 directories / 1024 entries, reserving capacity for planned output slots before network calls. An incomplete scan fails with `CLIENT_ROOT_OWNERSHIP_UNKNOWN`; choose a fresh dedicated root instead of treating unknown as ready.
+
+A single preflight plan checks this entire output set before network calls. It rejects overlaps between client/Mail roots in either direction, authority/lock/socket inside the client root (`CLIENT_ROOT_OVERLAP`), aliases, unsafe directories and foreign formats. Writers can only use their fixed slot; unknown roles and another role's directory cannot be selected. An unsafe slot therefore cannot first commit registration and then fail local validation. Network success followed by disk I/O failure remains a separate uncertain outcome: preserve pending journal/receipt and explicitly finalize the same identity; do not report atomic rollback of remote commits.
 
 ## Entrypoints
 
-`agentstack-reregister` reconnects by stored ID/token and displays the canonical server name. Deprecated name arguments do not route. Explicit program/model arguments, environment settings and provider models are honored and saved after success in private `runtime_dir/registration-metadata.json` (`orrery-global-registration-metadata-v1`). Context stays unchanged, so another process can reregister without stopping an awaiting client. Old context `registration_metadata` remains read-compatible only. An unspecified reconnect resends these saved values. Without saved metadata, S1 whois cannot supply program/model: reconnect does not call register, returns `reconnect_mode=observe-only` / `registration_verified=false`, and preserves the server row. This reregister path prints `observed ... (registration not refreshed; pass program/model)` and exits 3. Only an actual register with explicit or saved metadata prints `registered` and exits 0. Contact policy is called only when advertised; S1 has no such capability. `agentstack-await-reply` reads the bound owner's inbox and retains sender/after-ID/timeout semantics, without read/ack mutation or signal clearing in S1. Transient `TRANSPORT_FAILED` retries until timeout; authority changes fail immediately.
+`agentstack-reregister` reconnects by stored ID/token and displays the canonical server name. Deprecated name arguments do not route. Explicit program/model arguments, environment settings and provider models are honored and saved after success in private `client_root/runtime/registration-metadata.json` (`orrery-global-registration-metadata-v1`). Context stays unchanged, so another process can reregister without stopping an awaiting client. Old context `registration_metadata` remains read-compatible only. An unspecified reconnect resends these saved values. Without saved metadata, S1 whois cannot supply program/model: reconnect does not call register, returns `reconnect_mode=observe-only` / `registration_verified=false`, and preserves the server row. This reregister path prints `observed ... (registration not refreshed; pass program/model)` and exits 3. Only an actual register with explicit or saved metadata prints `registered` and exits 0. Contact policy is called only when advertised; S1 has no such capability. `agentstack-await-reply` reads the bound owner's inbox and retains sender/after-ID/timeout semantics, without read/ack mutation or signal clearing in S1. Transient `TRANSPORT_FAILED` retries until timeout; authority changes fail immediately.
 
 Sourced provider bootstraps export the canonical identity. Explicit global `agent-start`, `agent-start-codex` and `agent-start-gemini` register through the context and execute in the current terminal; this preparation path does not create a new tmux session. Legacy picker/tmux startup remains unchanged. Tests use shell provider stubs, never actual model processes.
 
@@ -31,13 +49,13 @@ Credential, authority, lock, context, management socket and pending journal path
 
 Local magic values are `orrery-runtime-client-s1` (context), `orrery-global-credential-v1` (credential), `orrery-global-registration-pending-v1` (registration pending), `orrery-global-enrollment-pending-v1` (recovery pending), `orrery-global-registration-metadata-v1` (metadata), and `orrery-global-client-profile-v1` (profile). Session records use schema 3 / `global-self`. Existing files with another type, binding or owner are never automatically migrated or overwritten; an operator must correct the destination.
 
-Released raw tokens (with an optional identity sidecar), legacy persistent profiles and schema 2 / self session records selected as global output destinations fail before network calls with `LEGACY_FILE_REQUIRES_IMPORT`, preserving their bytes. Explicit operator import belongs to PR7; PR4a never converts them automatically.
+Released raw tokens (with an optional identity sidecar), legacy persistent profiles and schema 2 / self session records placed in the fixed global output locations fail before network calls with `LEGACY_FILE_REQUIRES_IMPORT`, preserving their bytes. Explicit operator import belongs to PR7; PR4a never converts them automatically.
 
 ## Operator recovery and profiles
 
 `agentstack-enroll --global-context CONFIG inspect` uses S1's management socket. Explicit operator `claim REQUEST_ID EXPECTED_GENERATION` and `recover REQUEST_ID EXPECTED_GENERATION` persist a new credential in a private pending journal before CAS; identical retries reuse it. Authentication errors never trigger automatic enrollment. A replayed receipt alone cannot activate a token: current inspect generation/fingerprint and whois authentication must agree before local credential/context replacement. A dedicated HOME still reconnects the explicitly selected stable identity.
 
-`agentstack-runtime-client save-profile /absolute/private/profile.json` saves project-free kind `orrery-global-client-profile-v1`. `agentstack-persistent inspect|reconnect --profile PROFILE` and `agentstack-daemon inspect --profile PROFILE` validate bindings. Global proxy/daemon execution remains PR4c; PR4a `run` rejects with `GLOBAL_PROXY_RUNTIME_REQUIRES_PR4C` and never reports ready=true. Legacy profiles remain executable without a global context. Mixing an explicit global context with a legacy profile rejects with `LEGACY_PROFILE_CONTEXT_CONFLICT`. Operator `agentstack-daemon create --connection CONFIG --name NAME --journal PROFILE --operator` reuses the same global registration/profile store; it takes no project input. `finalize-create --connection CONFIG --journal PROFILE --agent-id ID --operator` verifies a pending credential against the supplied stable ID without registering again. These commands do not start the daemon.
+`agentstack-runtime-client save-profile` saves project-free kind `orrery-global-client-profile-v1`. `agentstack-persistent inspect|reconnect --profile PROFILE` and `agentstack-daemon inspect --profile PROFILE` validate bindings. Global proxy/daemon execution remains PR4c; PR4a `run` rejects with `GLOBAL_PROXY_RUNTIME_REQUIRES_PR4C` and never reports ready=true. Legacy profiles remain executable without a global context. Mixing an explicit global context with a legacy profile rejects with `LEGACY_PROFILE_CONTEXT_CONFLICT`. Operator `agentstack-daemon create --connection CONFIG --name NAME --operator` reuses the same global registration/profile store; it takes no project input. `finalize-create --connection CONFIG --agent-id ID --operator` verifies a pending credential against the supplied stable ID without registering again. These commands do not start the daemon.
 
 ## Fence and remaining work
 

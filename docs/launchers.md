@@ -142,6 +142,8 @@ AGENTSTACK_PROJECT_KEY=/path/to/project \
   ~/.agentstack/bin/agentstack-reregister "$AGENT_NAME"
 ```
 
+明示 global context の exit 3 は `observed`（登録は未更新）です。program/model を指定して helper を再実行してください。
+
 helper は owner token を runtime state から読み、同名 identity を復元します。同名登録に失敗しても別名を作らないでください。別名は inbox、thread、reservation、監査履歴を分断します。
 
 `agentstack-reregister` は既存 token を使う helper であり、token を新規発行しません。launcher を一度も通らない parentless bot、`server-null` row の初回 claim、または exact `stage=local-token reason=credential-unavailable` からの明示 recovery は、モデルではなく operator が [常駐 agent の enrollment と起動](persistent-agents.md) に従って行います。通常の再起動では enrollment を繰り返しません。

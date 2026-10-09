@@ -140,6 +140,8 @@ AGENTSTACK_PROJECT_KEY=/path/to/project \
   ~/.agentstack/bin/agentstack-reregister "$AGENT_NAME"
 ```
 
+In an explicit global context, exit 3 means `observed` without refreshing registration; pass program/model and rerun the helper.
+
 The helper reads the owner token from runtime state and restores the identity with the same name. Do not create a different name when same-name registration fails. A different name separates the inbox, thread, reservations, and audit history.
 
 `agentstack-reregister` consumes an existing token; it does not issue one. For a parentless bot that never passed through a launcher, an initial claim of a `server-null` row, or explicit recovery after the exact `stage=local-token reason=credential-unavailable` diagnostic, an operator—not the model—follows [Persistent-agent enrollment and startup](persistent-agents.en.md). Ordinary restarts do not repeat enrollment.

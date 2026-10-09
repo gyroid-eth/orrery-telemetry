@@ -65,8 +65,10 @@ reminder or tmux, set `AGENT_NAME` to that exact existing name before running
 the command; do not generate or substitute another name. Then run:
 
 ```bash
-AGENTSTACK_PROJECT_KEY="__AGENTSTACK_PROJECT_KEY__" __AGENTSTACK_HOME__/bin/agentstack-reregister "$AGENT_NAME"
+AGENTSTACK_PROJECT_KEY="__AGENTSTACK_PROJECT_KEY__" __AGENTSTACK_HOME__/bin/agentstack-reregister "$AGENT_NAME" codex
 ```
+
+In an explicit global context, exit 3 means `observed` without refreshing registration; pass program/model and rerun the helper to refresh it.
 
 The helper restores the owner token from runtime state without printing it. A
 successful run prints `agentstack-reregister: registered <name>` and exits 0;

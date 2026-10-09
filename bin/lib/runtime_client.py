@@ -28,6 +28,12 @@ PROFILE_KIND = 'orrery-global-client-profile-v1'
 METADATA_KIND = 'orrery-global-registration-metadata-v1'
 REG_PENDING_KIND = 'orrery-global-registration-pending-v1'
 ENROLL_PENDING_KIND = 'orrery-global-enrollment-pending-v1'
+# The sole client output layout. No caller-selected role paths are accepted.
+CLIENT_LAYOUT = {'context': 'runtime-client.json', 'credential': 'credential.json',
+    'registration': 'credential.registration-pending.json',
+    'enrollment': 'credential.enrollment-pending.json',
+    'metadata': 'runtime/registration-metadata.json', 'profile': 'profile.json'}
+CLIENT_DIRECTORIES = ('runtime', 'runtime/session_index')
 S1_ERRORS = frozenset({'NAME_CONFLICT', 'NAME_INVALID', 'OWNER_REQUIRED', 'WRITER_FENCED',
     'STALE_RUNTIME_BINDING', 'WINDOW_INPUT_REQUIRED', 'WINDOW_OWNER_MISMATCH',
     'EXISTING_WINDOW_REQUIRED', 'CREDENTIAL_INVALID', 'CREDENTIAL_GENERATION_CONFLICT',
@@ -158,14 +164,19 @@ class RuntimeClient:
         roots = [Path(tempfile.gettempdir()).resolve(), Path('/private/tmp').resolve()]
         if not any(self.isolation.resolve().is_relative_to(p) for p in roots):
             raise ClientError('ISOLATION_REQUIRED')
-        for key in ('runtime_root', 'runtime_dir', 'authority', 'authority_lock', 'management_socket',
-                    'credential_file'):
+        if 'runtime_dir' in c or 'credential_file' in c or 'client_root' not in c:
+            raise ClientError('FIXED_LAYOUT_CONTEXT_REQUIRED')
+        self.client_root = absolute(c['client_root'])
+        self.outputs = {role: self.client_root / relative for role, relative in CLIENT_LAYOUT.items()}
+        if self.path != self.outputs['context']:
+            raise ClientError('FIXED_LAYOUT_CONTEXT_REQUIRED')
+        for key in ('runtime_root', 'client_root', 'authority', 'authority_lock', 'management_socket'):
             value = absolute(c.get(key))
             if not value.is_relative_to(self.isolation) or not value.resolve().is_relative_to(self.isolation.resolve()):
                 raise ClientError('PATH_OUTSIDE_ISOLATION')
         self.runtime = absolute(c['runtime_root'])
-        self.runtime_dir = absolute(c['runtime_dir'])
-        for path in {self.isolation, self.runtime_dir, self.path.parent, absolute(c['credential_file']).parent}:
+        self.runtime_dir = self.client_root / 'runtime'
+        for path in {self.isolation, self.client_root, self.runtime_dir}:
             info = path.lstat()
             if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
                     or info.st_mode & 0o077):
@@ -184,8 +195,9 @@ class RuntimeClient:
                 or not url.port or url.username or url.password or url.query or url.fragment):
             raise ClientError('ENDPOINT_NOT_LOCAL')
         self.endpoint = c['mcp_url']
-        self.credential = absolute(c['credential_file'])
-        self.metadata_path = self.runtime_dir / 'registration-metadata.json'
+        self.credential = self.outputs['credential']
+        self.metadata_path = self.outputs['metadata']
+        self.profile_path = self.outputs['profile']
         self.identity = c.get('identity')
         if self.identity is not None and (not isinstance(self.identity, dict)
                 or not integer(self.identity.get('agent_id'), 1)
@@ -198,37 +210,85 @@ class RuntimeClient:
 
         self.validate_path_roles()
 
-    def validate_path_roles(self):
-        # Reject role aliases before any server mutation, including recovery.
-        roles = [self.path, self.authority, self.lock, self.credential,
-                 absolute(self.config['management_socket']),
-                 self.credential.with_suffix('.registration-pending.json'),
-                 self.credential.with_suffix('.enrollment-pending.json'), self.metadata_path]
-        resolved = [path.resolve() for path in roles]
-        if len(set(resolved)) != len(resolved):
-            raise ClientError('CONTEXT_PATH_ROLE_CONFLICT')
-        identities = []
-        for path in roles:
-            if path.exists():
-                info = path.stat()
-                identities.append((info.st_dev, info.st_ino))
+    def directory_contains(self, directory, path):
+        # Path.resolve does not canonicalize APFS case/Unicode aliases. Match
+        # existing directory identities, without folding names on Linux.
+        if path.is_relative_to(directory) or path.resolve().is_relative_to(directory.resolve()):
+            return True
+        if not directory.exists():
+            return False
+        owned = directory.stat()
+        for index, parent in enumerate((path, *path.parents)):
+            if index > 64:
+                raise ClientError('CLIENT_ROOT_OWNERSHIP_UNKNOWN')
+            if parent.exists():
+                current = parent.stat()
+                if (stat.S_ISDIR(current.st_mode)
+                        and (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino)):
+                    return True
+        return False
+
+    def check_root_ownership(self):
+        # Only fixed context filenames are observed; never read another root's
+        # contents or walk outside the selected isolated client subtree.
+        for base in {self.client_root, self.client_root.resolve()}:
+            for ancestor in base.parents:
+                if not ancestor.is_relative_to(self.isolation.resolve()):
+                    break
+                marker = ancestor / CLIENT_LAYOUT['context']
+                if marker.exists() or marker.is_symlink():
+                    raise ClientError('CLIENT_ROOT_OVERLAP')
+        pending = [self.client_root]
+        entries = 0
+        directories = 0
+        while pending:
+            directory = pending.pop()
+            directories += 1
+            # Reserve room for our own later mkdir/atomic outputs before RPC.
+            if directories > 128 - len(CLIENT_DIRECTORIES):
+                raise ClientError('CLIENT_ROOT_OWNERSHIP_UNKNOWN')
+            marker = directory / CLIENT_LAYOUT['context']
+            if directory != self.client_root and (marker.exists() or marker.is_symlink()):
+                raise ClientError('CLIENT_ROOT_OVERLAP')
+            with os.scandir(directory) as listing:
+                for entry in listing:
+                    entries += 1
+                    if entries > 1024 - (len(CLIENT_LAYOUT) + len(CLIENT_DIRECTORIES) + 2):
+                        raise ClientError('CLIENT_ROOT_OWNERSHIP_UNKNOWN')
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(Path(entry.path))
+
+    def output_plan(self):
+        """Preflight the complete fixed output set before any network operation."""
+        external = [self.authority, self.lock, absolute(self.config['management_socket'])]
+        if (self.directory_contains(self.runtime, self.client_root)
+                or self.directory_contains(self.client_root, self.runtime)):
+            raise ClientError('CLIENT_ROOT_OVERLAP')
+        for path in external:
+            if self.directory_contains(self.client_root, path):
+                raise ClientError('CLIENT_ROOT_OVERLAP')
+        self.check_root_ownership()
+        for relative in CLIENT_DIRECTORIES:
+            directory = self.client_root / relative
+            if directory.exists() or directory.is_symlink():
+                info = directory.lstat()
+                if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                        or info.st_mode & 0o077):
+                    raise ClientError('PRIVATE_DIRECTORY_REQUIRED')
+        paths = list(self.outputs.values()) + external
+        identities = [(p.stat().st_dev, p.stat().st_ino) for p in paths if p.exists()]
         if len(set(identities)) != len(identities):
             raise ClientError('CONTEXT_PATH_ROLE_CONFLICT')
-        self.reject_mail_output(self.runtime_dir)
-        outputs = [(self.path, 'context'), (self.credential, 'credential'),
-                   (self.credential.with_suffix('.registration-pending.json'), 'registration'),
-                   (self.credential.with_suffix('.enrollment-pending.json'), 'enrollment'),
-                   (self.metadata_path, 'metadata')]
-        for path, role in outputs:
+        for role, path in self.outputs.items():
             self.validate_output(path, role)
         directory = self.runtime_dir / 'session_index'
-        self.reject_mail_output(directory)
-        if directory.exists() or directory.is_symlink():
-            info = directory.lstat()
-            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-                raise ClientError('SESSION_DIRECTORY_UNSAFE')
+        if directory.exists():
             for path in directory.glob('*.json'):
                 self.validate_output(path, 'session')
+        return dict(self.outputs)
+
+    def validate_path_roles(self):
+        return self.output_plan()
 
     def reject_mail_output(self, path):
         path = Path(path)
@@ -239,6 +299,12 @@ class RuntimeClient:
 
     def validate_output(self, path, role):
         path = Path(path)
+        if role == 'session':
+            expected = self.runtime_dir / 'session_index'
+            if path.parent != expected or not re.fullmatch(r'[1-9][0-9]*\.json', path.name):
+                raise ClientError('FIXED_LAYOUT_PATH_NOT_SUPPORTED')
+        elif role not in self.outputs or path != self.outputs[role]:
+            raise ClientError('FIXED_LAYOUT_PATH_NOT_SUPPORTED')
         self.reject_mail_output(path)
         if not path.exists() and not path.is_symlink():
             return
@@ -258,7 +324,7 @@ class RuntimeClient:
                     identity = read_json(sidecar)
                     if identity.get('kind') == 'orrery-enrollment-active-v1':
                         raise ClientError('LEGACY_FILE_REQUIRES_IMPORT') from exc
-                if path.name.startswith('agent_token_') and 20 <= len(raw) <= 64:
+                if 20 <= len(raw) <= 64 and re.fullmatch(r'[A-Za-z0-9_-]+', raw):
                     raise ClientError('LEGACY_FILE_REQUIRES_IMPORT') from exc
             raise ClientError('OUTPUT_SCHEMA_INVALID') from exc
         if ((role == 'profile' and row.get('kind') == 'orrery-persistent-agent-v1')
@@ -274,8 +340,8 @@ class RuntimeClient:
         if role in {'credential', 'enrollment', 'metadata', 'profile', 'session'}:
             owner = getattr(self, '_activating_identity', self.identity)
             if (not integer(row.get('agent_id'), 1) or (owner and row.get('agent_id') != owner['agent_id'])
-                    or (not owner and role != 'credential')):
-                raise ClientError('OUTPUT_OWNER_CONFLICT')
+                    or not owner):
+                raise ClientError('RUNTIME_DIR_BELONGS_TO_OTHER_IDENTITY' if role in {'metadata', 'session'} or not owner else 'OUTPUT_OWNER_CONFLICT')
         if role == 'credential' and (not integer(row.get('credential_generation'))
                 or not (row.get('registration_token') is None or isinstance(row.get('registration_token'), str))):
             raise ClientError('OUTPUT_SCHEMA_INVALID')
@@ -293,6 +359,7 @@ class RuntimeClient:
     def write_output(self, path, value, role):
         # mkstemp uses O_EXCL for the private temporary file; rename only after
         # the destination's own format/owner and Mail-root boundary are checked.
+        self.output_plan()
         self.validate_output(path, role)
         atomic_json(path, value, before_replace=lambda: self.validate_output(path, role))
 
@@ -533,16 +600,18 @@ class RuntimeClient:
         credential = {'kind': 'orrery-global-credential-v1', **self.binding,
                       **identity, 'registration_token': token}
         self._activating_identity = identity
-        with self.fence():
-            self.write_output(self.credential, credential, 'credential')
-        with self.fence():
-            self.write_output(self.path, config, 'context')
-            # Our intentional local configuration update is accepted, but any
-            # concurrent replacement before it was rejected by the fence.
-            self.raw = read_private(self.path)
-            self.config = config
-            self.identity = identity
-        del self._activating_identity
+        try:
+            with self.fence():
+                self.write_output(self.credential, credential, 'credential')
+            with self.fence():
+                self.write_output(self.path, config, 'context')
+                # Our intentional local configuration update is accepted, but any
+                # concurrent replacement before it was rejected by the fence.
+                self.raw = read_private(self.path)
+                self.config = config
+                self.identity = identity
+        finally:
+            del self._activating_identity
         if metadata is not None:
             self.save_metadata(metadata['program'], metadata['model'])
 
@@ -580,27 +649,19 @@ class RuntimeClient:
         journal.unlink()
         return self.observe()
 
-    def check_profile_destination(self, path):
-        path = absolute(str(path))
-        if not path.is_relative_to(self.isolation) or not path.resolve().is_relative_to(self.isolation.resolve()):
-            raise ClientError('PROFILE_OUTSIDE_ISOLATION')
-        roles = [self.path, self.authority, self.lock, self.credential,
-                 absolute(self.config['management_socket']),
-                 self.credential.with_suffix('.registration-pending.json'),
-                 self.credential.with_suffix('.enrollment-pending.json'), self.metadata_path]
-        if any(path.resolve() == target.resolve() or (path.exists() and target.exists()
-                   and path.samefile(target)) for target in roles):
-            raise ClientError('PROFILE_PATH_ROLE_CONFLICT')
-        self.validate_output(path, 'profile')
-        return path
+    def check_profile_destination(self, path=None):
+        if path is not None:
+            raise ClientError('FIXED_LAYOUT_PATH_NOT_SUPPORTED')
+        return self.output_plan()['profile']
 
-    def save_profile(self, path):
+    def save_profile(self, path=None):
         path = self.check_profile_destination(path)
         row = self.observe()
         value = {'kind': PROFILE_KIND, 'client_config': str(self.path), **row}
         with self.fence():
             self.write_output(path, value, 'profile')
-        return {'ok': True, 'kind': PROFILE_KIND, 'agent_id': row['agent_id'], 'ready': False}
+        return {'ok': True, 'kind': PROFILE_KIND, 'agent_id': row['agent_id'],
+                'profile_path': str(path), 'ready': False}
 
     def finalize_registration(self, agent_id):
         if self.identity:
@@ -764,6 +825,8 @@ def profile_operation(path, operation):
     client = configured(absolute(p.get('client_config')))
     if client is None or client.mode != 'global':
         raise ClientError('PROFILE_CONTEXT_REQUIRED')
+    if absolute(str(path)) != client.profile_path:
+        raise ClientError('FIXED_LAYOUT_PATH_NOT_SUPPORTED')
     row = client.observe()
     if any(p.get(k) != row.get(k) for k in ('agent_id', 'credential_generation',
             'expected_server_instance_id', 'candidate_generation', 'authority_epoch', 'window_row_id', 'window_uuid')):
@@ -827,7 +890,7 @@ def main(argv=None):
         elif a.operation == 'request-status':
             value = client.management('request_status', request_id=a.args[0])
         else:
-            value = client.save_profile(a.args[0])
+            value = client.save_profile(a.args[0] if a.args else None)
         print(json.dumps(value))
         return 0
     except (ClientError, OSError, ValueError, TypeError, KeyError, IndexError) as exc:
