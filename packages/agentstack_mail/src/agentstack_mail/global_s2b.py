@@ -95,16 +95,18 @@ def message_digest(db, row):
     )
 
 
-def validate_receipt(db, row, instance, candidate):
-    if row["tool"] not in TOOLS:
+def validate_receipt(
+    db, row, instance, candidate, *, contracts=TOOLS, request_schema=preimage_schema
+):
+    if row["tool"] not in contracts:
         return s2a_receipt(db, row, instance, candidate)
     try:
         req = unique_document(row["canonical_request_json"])
         out = unique_document(row["receipt_json"])
-        if TOOLS[row["tool"]]["operation"] != "write":
+        if contracts[row["tool"]]["operation"] != "write":
             raise ValueError
         validate(
-            req["arguments"], preimage_schema(row["tool"]), "REQUEST_RECEIPT_INVALID"
+            req["arguments"], request_schema(row["tool"]), "REQUEST_RECEIPT_INVALID"
         )
         if set(req) != {
             "version",
@@ -129,7 +131,10 @@ def validate_receipt(db, row, instance, candidate):
             ("agent_id", "agent_id"),
             ("expected_credential_generation", "credential_generation"),
         ]:
-            if req[k] != row[field] or out[field] != row[field]:
+            if req[k] != row[field] or (
+                field in contracts[row["tool"]]["output_schema"]["properties"]
+                and out[field] != row[field]
+            ):
                 raise ValueError
         if (
             row["server_instance_id"] != instance
@@ -154,7 +159,9 @@ def validate_receipt(db, row, instance, candidate):
             or not 1 <= row["mutation_revision"] <= revision(db)
         ):
             raise ValueError
-        validate(out, TOOLS[row["tool"]]["output_schema"], "REQUEST_RECEIPT_INVALID")
+        validate(
+            out, contracts[row["tool"]]["output_schema"], "REQUEST_RECEIPT_INVALID"
+        )
         if row["tool"] in ("send_message", "reply_message"):
             m = db.execute(
                 "SELECT * FROM messages WHERE id=?", (out["message_id"],)
@@ -184,6 +191,8 @@ def validate_receipt(db, row, instance, candidate):
 
 class S2bRuntime(S2aRuntime):
     config_kind = "orrery-global-server-s2b-v1"
+    profile = "s2b"
+    receipt_validator = staticmethod(validate_receipt)
     schema_version = 4
     tools = S2aRuntime.tools | TOOLS.keys()
     health_fields = {
@@ -209,7 +218,7 @@ class S2bRuntime(S2aRuntime):
             raise GlobalError("CANDIDATE_SCHEMA_REQUIRES_REPREPARE")
         receipt = document(path)
         if (
-            receipt.get("kind") != "orrery-s2b-preparation-receipt-v1"
+            receipt.get("kind") != "orrery-" + self.profile + "-preparation-receipt-v1"
             or receipt.get("phase") != "complete"
             or any(
                 receipt.get(k) != self.config.get(v)
@@ -222,7 +231,8 @@ class S2bRuntime(S2aRuntime):
         ):
             raise GlobalError("PREPARATION_INCOMPLETE")
         if (
-            self.runtime_root.parent.parent != self.root / "s2b-candidates"
+            self.runtime_root.parent.parent
+            != self.root / (self.profile + "-candidates")
             or self.runtime_root.name != "candidate"
             or self.paths["database"] != self.runtime_root / "mail.sqlite3"
         ):
@@ -231,9 +241,9 @@ class S2bRuntime(S2aRuntime):
     def validate_candidate(self, db, **options):
         validate_runtime_candidate(
             db,
-            schema_version=4,
-            profile="s2b-v1",
-            receipt_validator=validate_receipt,
+            schema_version=self.schema_version,
+            profile=self.profile + "-v1",
+            receipt_validator=self.receipt_validator,
             **options,
         )
         if options.get("full"):
@@ -420,10 +430,43 @@ class S2bRuntime(S2aRuntime):
             "outputs_as_of_commit": "pending",
         }
 
+    mutation_contracts = TOOLS
+    mutation_arguments = staticmethod(arguments)
+    mutation_preimage = staticmethod(preimage)
+
+    def mutate_domain(self, db, tool, owner, args, stamp):
+        if tool in ("send_message", "reply_message"):
+            return self.publish(db, tool, owner, args, stamp)
+        r = db.execute(
+            "SELECT * FROM message_recipients WHERE message_id=? AND agent_id=?",
+            (args["message_id"], owner["id"]),
+        ).fetchone()
+        if r is None:
+            raise GlobalError("MESSAGE_UNAVAILABLE")
+        read = iso(r["read_ts"]) or stamp.isoformat()
+        ack = iso(r["ack_ts"]) or stamp.isoformat()
+        db.execute(
+            "UPDATE message_recipients SET read_ts=?"
+            + (",ack_ts=?" if tool == "acknowledge_message" else "")
+            + " WHERE message_id=? AND agent_id=?",
+            (
+                (read, ack, args["message_id"], owner["id"])
+                if tool == "acknowledge_message"
+                else (read, args["message_id"], owner["id"])
+            ),
+        )
+        dirty(db, args["message_id"], owner["id"])
+        result = {"message_id": args["message_id"], "read_at": read}
+        if tool == "mark_message_read":
+            result["read"] = True
+        else:
+            result.update(acknowledged=True, acknowledged_at=ack)
+        return result
+
     def apply(self, tool, supplied):
-        if tool not in TOOLS:
+        if tool not in self.mutation_contracts:
             return super().apply(tool, supplied)
-        args = arguments(tool, supplied)
+        args = self.mutation_arguments(tool, supplied)
         binding = tuple(
             args[k]
             for k in (
@@ -432,14 +475,14 @@ class S2bRuntime(S2aRuntime):
                 "authority_epoch",
             )
         )
-        write = TOOLS[tool]["operation"] == "write"
+        write = self.mutation_contracts[tool]["operation"] == "write"
         with self.transaction(write=write, binding=binding) as db:
             owner = self.owner(db, args["agent_id"], args["registration_token"])
             if owner["credential_generation"] != args["expected_credential_generation"]:
                 raise GlobalError("CREDENTIAL_GENERATION_MISMATCH")
             if not write:
                 return self.query(db, tool, owner, args)
-            raw, hashed = preimage(tool, args)
+            raw, hashed = self.mutation_preimage(tool, args)
             old = db.execute(
                 "SELECT * FROM global_operation_receipts WHERE server_instance_id=? AND agent_id=? AND request_id=?",
                 (self.instance, owner["id"], args["request_id"]),
@@ -453,33 +496,7 @@ class S2bRuntime(S2aRuntime):
                 raise GlobalError("REQUEST_RECEIPT_CAPACITY_REACHED")
             stamp = utc(now())
             self.fault("before_state")
-            if tool in ("send_message", "reply_message"):
-                result = self.publish(db, tool, owner, args, stamp)
-            else:
-                r = db.execute(
-                    "SELECT * FROM message_recipients WHERE message_id=? AND agent_id=?",
-                    (args["message_id"], owner["id"]),
-                ).fetchone()
-                if r is None:
-                    raise GlobalError("MESSAGE_UNAVAILABLE")
-                read = iso(r["read_ts"]) or stamp.isoformat()
-                ack = iso(r["ack_ts"]) or stamp.isoformat()
-                db.execute(
-                    "UPDATE message_recipients SET read_ts=?"
-                    + (",ack_ts=?" if tool == "acknowledge_message" else "")
-                    + " WHERE message_id=? AND agent_id=?",
-                    (
-                        (read, ack, args["message_id"], owner["id"])
-                        if tool == "acknowledge_message"
-                        else (read, args["message_id"], owner["id"])
-                    ),
-                )
-                dirty(db, args["message_id"], owner["id"])
-                result = {"message_id": args["message_id"], "read_at": read}
-                if tool == "mark_message_read":
-                    result["read"] = True
-                else:
-                    result.update(acknowledged=True, acknowledged_at=ack)
+            result = self.mutate_domain(db, tool, owner, args, stamp)
             self.fault("after_state")
             changed(db)
             result.update(
@@ -494,15 +511,20 @@ class S2bRuntime(S2aRuntime):
                         "candidate_generation",
                         "authority_epoch",
                     )
+                    and k
+                    in self.mutation_contracts[tool]["output_schema"]["properties"]
                 },
                 request_id=args["request_id"],
                 mutation_revision=revision(db),
                 result_as_of="commit",
                 committed_at=stamp.isoformat(),
             )
-            # identity() includes name; receipt schemas intentionally do not.
-            result.pop("name", None)
-            validate(result, TOOLS[tool]["output_schema"], "RESPONSE_INVALID")
+            ensure_budget(result)
+            validate(
+                result,
+                self.mutation_contracts[tool]["output_schema"],
+                "RESPONSE_INVALID",
+            )
             db.execute(
                 "INSERT INTO global_operation_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
@@ -533,36 +555,37 @@ class S2bRuntime(S2aRuntime):
 
     def purge(self, message_ids, *, dry_run=False):
         """Operator/internal deletion with the shared ancestor-hold contract."""
+        with self.transaction(write=not dry_run) as db:
+            return self.purge_into(db, message_ids, dry_run=dry_run)
+
+    def purge_into(self, db, message_ids, *, dry_run=False):
         from .namespace_store import reply_catalog
 
-        with self.transaction(write=not dry_run) as db:
-            plan = reply_catalog(db).plan_purge(message_ids)
-            if not dry_run:
-                db.execute("PRAGMA defer_foreign_keys=ON")
-                for mid in plan.delete_ids:
-                    for row in db.execute(
-                        "SELECT agent_id FROM message_recipients WHERE message_id=?",
-                        (mid,),
-                    ).fetchall():
-                        dirty(db, mid, row[0])
-                    db.execute(
-                        "DELETE FROM global_message_attachments WHERE message_id=?",
-                        (mid,),
-                    )
-                    db.execute(
-                        "DELETE FROM message_recipients WHERE message_id=?", (mid,)
-                    )
-                    db.execute("DELETE FROM messages WHERE id=?", (mid,))
-                if plan.delete_ids:
-                    db.execute(
-                        "DELETE FROM global_attachment_blobs WHERE sha256 NOT IN (SELECT sha256 FROM global_message_attachments)"
-                    )
-                    changed(db)
-            return {
-                "delete_ids": list(plan.delete_ids),
-                "held_ids": list(plan.held_ids),
-                "dry_run": dry_run,
-            }
+        plan = reply_catalog(db).plan_purge(message_ids)
+        if not dry_run:
+            db.execute("PRAGMA defer_foreign_keys=ON")
+            for mid in plan.delete_ids:
+                for row in db.execute(
+                    "SELECT agent_id FROM message_recipients WHERE message_id=?",
+                    (mid,),
+                ).fetchall():
+                    dirty(db, mid, row[0])
+                db.execute(
+                    "DELETE FROM global_message_attachments WHERE message_id=?",
+                    (mid,),
+                )
+                db.execute("DELETE FROM message_recipients WHERE message_id=?", (mid,))
+                db.execute("DELETE FROM messages WHERE id=?", (mid,))
+            if plan.delete_ids:
+                db.execute(
+                    "DELETE FROM global_attachment_blobs WHERE sha256 NOT IN (SELECT sha256 FROM global_message_attachments)"
+                )
+                changed(db)
+        return {
+            "delete_ids": list(plan.delete_ids),
+            "held_ids": list(plan.held_ids),
+            "dry_run": dry_run,
+        }
 
     def cursor(self, tool, owner, args):
         query = {
@@ -847,28 +870,47 @@ class S2bRuntime(S2aRuntime):
                 != args["expected_credential_generation"]
             ):
                 raise GlobalError("CREDENTIAL_GENERATION_MISMATCH")
-            clause = "r.agent_id=?"
-            params = [owner["id"]]
-            if before is not None:
-                clause += " AND m.id<?"
-                params.append(before)
-            if cutoff is not None:
-                clause += " AND julianday(m.created_ts)>julianday(?)"
-                params.append(cutoff)
-            if args["urgent_only"]:
-                clause += " AND m.importance IN ('high','urgent')"
-            rows = db.execute(
-                "SELECT m.* FROM messages m JOIN message_recipients r ON r.message_id=m.id WHERE "
-                + clause
-                + " ORDER BY m.id DESC LIMIT ?",
-                (*params, limit),
-            ).fetchall()
-            return ensure_budget(
-                [
-                    self.projection(db, r, owner["id"], args["include_bodies"])
-                    for r in rows
-                ]
+            return self.inbox_snapshot(
+                db,
+                owner["id"],
+                limit=limit,
+                before=before,
+                cutoff=cutoff,
+                urgent_only=args["urgent_only"],
+                include_bodies=args["include_bodies"],
             )
+
+    def inbox_snapshot(
+        self,
+        db,
+        aid,
+        *,
+        limit,
+        before=None,
+        cutoff=None,
+        urgent_only=False,
+        include_bodies=False,
+    ):
+        """Select and project inbox rows inside the caller's transaction."""
+        clause = "r.agent_id=?"
+        params = [aid]
+        if before is not None:
+            clause += " AND m.id<?"
+            params.append(before)
+        if cutoff is not None:
+            clause += " AND julianday(m.created_ts)>julianday(?)"
+            params.append(cutoff)
+        if urgent_only:
+            clause += " AND m.importance IN ('high','urgent')"
+        rows = db.execute(
+            "SELECT m.* FROM messages m JOIN message_recipients r ON r.message_id=m.id WHERE "
+            + clause
+            + " ORDER BY m.id DESC LIMIT ?",
+            (*params, limit),
+        ).fetchall()
+        return ensure_budget(
+            [self.projection(db, r, aid, include_bodies) for r in rows]
+        )
 
     def signal_stats(self, db):
         row = db.execute(
@@ -1073,10 +1115,10 @@ class S2bTool(Tool):
         )
 
 
-def build_s2b_server(config):
+def build_s2b_server(config, *, runtime_class=S2bRuntime):
     captured = []
 
-    class Runtime(S2bRuntime):
+    class Runtime(runtime_class):
         def __init__(self, path):
             super().__init__(path)
             captured.append(self)

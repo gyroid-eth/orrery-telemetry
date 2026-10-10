@@ -87,35 +87,38 @@ def _proxy(tmp_path):
     return AgentStackProxy(identities, snapshots, mail), mail
 
 
-def test_absolute_candidate_keeps_default_proxy_contract(tmp_path):
-    from agentstack_mail.reservation_candidate import ReservationServer
-    from agentstack_mail.reservation_paths import ReservationError
+def test_absolute_candidate_keeps_default_proxy_contract(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    import time
+
+    package_tests = (
+        Path(__file__).resolve().parents[3] / "packages/agentstack_mail/tests"
+    )
+    monkeypatch.syspath_prepend(str(package_tests))
+    from test_global_server_s2b import prepared_for
+    from agentstack_mail.global_prepare_s2c import prepare
+    from fixtures.sql_reservations import SQLTransport
 
     proxy, mail = _proxy(tmp_path)
     proxy.bootstrap("session-example")
-
-    def authenticate(name, token):
-        if name != "Calm-Noether" or token != "owner-secret":
-            raise ReservationError("AUTHENTICATION_REQUIRED")
-        return name
-
-    backend = ReservationServer(authenticate)
-    candidate = proxy.candidate_reservations(
-        "session-example", cwd=tmp_path, dispatch=backend.dispatch
-    )
-    granted = candidate.call("reserve_files", paths=["new.py"])
-    assert granted[0].path.value == str(tmp_path / "new.py")
-    assert candidate.call("check_reservations", paths=[str(tmp_path / "new.py")])
-    assert not mail.calls
-    with pytest.raises(ProxyError, match="project-relative"):
-        proxy.reserve_files("session-example", [str(tmp_path / "new.py")])
-    proxy.reserve_files("session-example", ["new.py"])
-    assert mail.calls[-1][1]["paths"] == ["new.py"]
-    other = proxy.candidate_reservations(
-        "wrong-session", cwd=tmp_path, dispatch=backend.dispatch
-    )
-    with pytest.raises(ProxyError):
-        other.call("reserve_files", paths=["new.py"])
+    with contextmanager(prepared_for)(monkeypatch, prepare, "s2c") as state:
+        backend = SQLTransport(state, time.time, {"Calm-Noether": (2, "owner-secret")})
+        candidate = proxy.candidate_reservations(
+            "session-example", cwd=tmp_path, dispatch=backend.dispatch
+        )
+        granted = candidate.call("reserve_files", paths=["new.py"])
+        assert granted[0].path.value == str(tmp_path / "new.py")
+        assert candidate.call("check_reservations", paths=[str(tmp_path / "new.py")])
+        assert not mail.calls
+        with pytest.raises(ProxyError, match="project-relative"):
+            proxy.reserve_files("session-example", [str(tmp_path / "new.py")])
+        proxy.reserve_files("session-example", ["new.py"])
+        assert mail.calls[-1][1]["paths"] == ["new.py"]
+        other = proxy.candidate_reservations(
+            "wrong-session", cwd=tmp_path, dispatch=backend.dispatch
+        )
+        with pytest.raises(ProxyError):
+            other.call("reserve_files", paths=["new.py"])
 
 
 def test_bootstrap_binds_process_and_runtime_status_never_exposes_token(tmp_path):

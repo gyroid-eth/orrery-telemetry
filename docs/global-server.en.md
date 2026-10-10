@@ -129,7 +129,7 @@ The server pins the validated startup lock dev/inode and checks it at operation 
 
 The main database and existing `-wal`, `-shm` and `-journal` files are checked before and immediately after the initial SQLite open, and before/after each transaction's open and before commit. Symlinks, multiple hardlinks, different owners or public modes are rejected with `DATABASE_UNSAFE` for the main database or `SQLITE_SIDECAR_UNSAFE` for sidecars. The same conditions apply after startup; changes detected during an operation roll back the database transaction. Credential verification uses constant-time UTF-8 byte comparison without normalization; accepted non-ASCII tokens and tokens preserved by PR3 authenticate with the same value.
 
-These checks cover cooperating writers that honor the common lock. After the validated descriptors close, SQLite reopens paths by name. Validation/open and final validation/commit are not atomic filesystem operations. A non-cooperating process with the same UID can still change links or paths in those intervals. Post-open and precommit checks narrow the intervals and detect changes, but rollback cannot guarantee reversal of writes already made to an outside sidecar. The alias WAL regression preserves the commit while the alias remains and validation can detect multiple links to the main database. WAL files left after the alias is removed are outside this guarantee. If a non-cooperating process unlinks the alias, nlink returns to one; the server cannot detect the pending alias WAL, and a subsequent server write may lose that commit. This race itself was not measured in these tests. Stopping all old writers and installed handoff remain PR7 work.
+These checks cover cooperating writers that honor the common lock. Metadata validation and SQLite opening a path are separate operations. Validation/open and final validation/commit are not atomic filesystem operations. A non-cooperating process with the same UID can still change links or paths in those intervals. Post-open and precommit checks narrow the intervals and detect changes, but rollback cannot guarantee reversal of writes already made to an outside sidecar. The alias WAL regression preserves the commit while the alias remains and validation can detect multiple links to the main database. WAL files left after the alias is removed are outside this guarantee. If a non-cooperating process unlinks the alias, nlink returns to one; the server cannot detect the pending alias WAL, and a subsequent server write may lose that commit. This race itself was not measured in these tests. Stopping all old writers and installed handoff remain PR7 work.
 
 ## Management socket
 
@@ -223,3 +223,27 @@ Client pending records represent unknown outcomes. Definitive tool refusals such
 ## S2b messages and notifications
 
 Use a separate schema4 workspace for send/reply/read/ack/query/topic/digest and signals. See the [S2b contract and synthetic verification](global-messages.en.md). Legacy remains the default.
+
+## S2c reservations and welcome
+
+[Isolated global reservations](global-reservations.en.md) adds fresh schema5 preparation, one SQL engine, management inspect/force/purge and welcome. Existing profiles and default legacy mode remain unchanged.
+
+
+### SQLite file validation and locks
+
+This fixes a defect introduced in S1: main DB and sidecar validation now uses only `lstat`. Opening and closing an independent descriptor to the same inode can release the process's SQLite POSIX locks. Source admission also avoids raw database descriptors. Inode, owner, mode and link-count checks, including precommit checks, remain. Metadata checks and name opens are not atomic; the same-UID race limitations above still apply.
+
+| Path | Connection lifetime / audit result |
+|---|---|
+| `GlobalRuntime` / `check_sqlite_files` | Runs with SQLite connections open; initial identity and subsequent checks now use only `lstat` |
+| `require_legacy_source` | A caller may hold another connection; raw fd removed, using `lstat` and SQLite immutable reads |
+| `fts_snapshot` / `integrity` | SQLite backup API copies the source; raw fd locks a distinct directory inode. Snapshot touch precedes its SQLite open; deletion follows close |
+| `namespace_state_io.backup` / `database_manifest`, `convert_mail` / `convert_delivery` | SQLite backup API and SQL row digests; no raw database-file reads |
+| `global_prepare_s2b`, `namespace_migration`, S2a/S2b/S2c receipts | Reads/hashes attachments, signals, mapping and JSON or SQL rows; no raw DB/sidecar bytes |
+| Fresh preparation artifact manifest | Raw hash after all SQLite connections to the new unpublished candidate close. Runtime cannot start before complete; complete replay returns before hashing |
+| `migration.copy_state` / `_copy_database` | Holds source writer guard and uses SQLite backup API. The new destination creation fd closes before its SQLite open |
+| Cold backup/restore and `restore_acceptance` raw-family validation | Requires stopped services. Raw copies/hashes precede SQLite validation of a separate disposable copy, which is closed afterward; never used as active transaction validation |
+| `storage.create_diagnostic_backup` / `restore_from_backup` | Same raw main/WAL/SHM copy pattern remains; no callers in repository runtime code or tests. Unchanged here; separate unused-code cleanup |
+| Dashboard / Codex App delivery / hooks / CLI | SQLite APIs or delegates above; no matching independent DB-descriptor lifecycle found |
+
+Regressions cover startup/read/write raw-open prohibition, source admission, and a second process failing to acquire the held SQLite writer lock (`test_sqlite_family_validation_preserves_cross_process_writer_lock`).

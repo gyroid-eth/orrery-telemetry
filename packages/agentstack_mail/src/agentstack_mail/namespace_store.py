@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import hmac
-import json
 import sqlite3
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from .namespace_replies import CallerEvidence, MessageRecord, ReplyCatalog, ReplyError
+from .namespace_replies import CallerEvidence, MessageRecord, ReplyCatalog
 from .namespace_state_io import StateMigrationError, connection, rows
 from .namespace_transform import timestamp, iso
-from .reservation_candidate import Lease, ReservationServer
-from .reservation_paths import ReservationPath, normalize_path
 from .utils import sanitize_agent_name
 
 
@@ -260,123 +256,3 @@ class CandidateMailStore:
                     (query, owner, owner),
                 )
             )
-
-
-class PersistentReservations:
-    """PR2 semantics inside an SQLite write transaction; IDs and activity survive restart."""
-
-    def __init__(self, path: Path, *, clock=time.time, probe=None):
-        self.path = path
-        self.clock = clock
-        self.probe = probe
-
-    def dispatch(self, tool: str, arguments: dict, *, expected_generation: str):
-        with connection(self.path, write=True) as database:
-            database.execute("BEGIN IMMEDIATE")
-            authority(database, expected_generation)
-            kwargs = {"clock": self.clock}
-            if self.probe is not None:
-                kwargs["probe"] = self.probe
-            server = ReservationServer(
-                lambda name, token: str(authenticate(database, name, token)), **kwargs
-            )
-            original = {row["id"]: row for row in rows(database, "file_reservations")}
-            for row in original.values():
-                try:
-                    scope = (
-                        normalize_path(row["path_pattern"])
-                        if not row["path_unknown"]
-                        else ReservationPath("filesystem", row["path_pattern"])
-                    )
-                except ValueError:
-                    if (
-                        row["released_ts"] is None
-                        and timestamp(row["expires_ts"]).timestamp() > self.clock()
-                    ):
-                        raise StateMigrationError(
-                            "ACTIVE_LEASE_RULES_UNKNOWN"
-                        ) from None
-                    scope = ReservationPath("filesystem", row["path_pattern"])
-                server._leases[row["id"]] = Lease(
-                    row["id"],
-                    str(row["agent_id"]),
-                    scope,
-                    timestamp(row["created_ts"]).timestamp(),
-                    timestamp(row["expires_ts"]).timestamp(),
-                    bool(row["exclusive"]),
-                    row["reason"],
-                    row["released_ts"] is not None,
-                    row["revision"],
-                )
-            server._next_id = max(original, default=0) + 1
-            for row in rows(database, "agents"):
-                mail = max(
-                    (
-                        timestamp(value[0]).timestamp()
-                        for value in database.execute(
-                            "SELECT m.created_ts FROM messages m WHERE m.sender_id=? OR EXISTS(SELECT 1 FROM message_recipients r WHERE r.message_id=m.id AND r.agent_id=?)",
-                            (row["id"], row["id"]),
-                        )
-                    ),
-                    default=None,
-                )
-                server._activity[str(row["id"])] = (
-                    timestamp(row["last_active_ts"]).timestamp(),
-                    mail,
-                    0,
-                )
-            before = dict(server._leases)
-            result = (
-                server.collect(arguments["ids"])
-                if tool == "_candidate_collect"
-                else server.dispatch(tool, arguments)
-            )
-            for key, lease in server._leases.items():
-                if before.get(key) == lease:
-                    continue
-                old = original.get(key)
-                expires = iso(datetime.fromtimestamp(lease.expires, timezone.utc))
-                released = (
-                    (
-                        old["released_ts"]
-                        if old and old["released_ts"]
-                        else iso(datetime.fromtimestamp(self.clock(), timezone.utc))
-                    )
-                    if lease.released
-                    else None
-                )
-                if old:
-                    database.execute(
-                        "UPDATE file_reservations SET expires_ts=?,released_ts=?,revision=? WHERE id=?",
-                        (expires, released, lease.revision, key),
-                    )
-                else:
-                    database.execute(
-                        "INSERT INTO file_reservations(id,legacy_project_id,agent_id,path_pattern,exclusive,reason,created_ts,expires_ts,released_ts,legacy_path_pattern,path_unknown,revision) VALUES (?,NULL,?,?,?,?,?,?,?,NULL,0,?)",
-                        (
-                            key,
-                            int(lease.owner),
-                            lease.path.value,
-                            lease.exclusive,
-                            lease.reason,
-                            iso(datetime.fromtimestamp(lease.created, timezone.utc)),
-                            expires,
-                            released,
-                            lease.revision,
-                        ),
-                    )
-                changed(database)
-            for owner, (active, mail, revision) in server._activity.items():
-                if revision:
-                    database.execute(
-                        "UPDATE agents SET last_active_ts=? WHERE id=?",
-                        (iso(datetime.fromtimestamp(active, timezone.utc)), int(owner)),
-                    )
-                    changed(database)
-            return result
-
-    def collect(self, ids: list[int], *, expected_generation: str):
-        # Use the same locked import/flush path as tool dispatch.
-        return self.dispatch(
-            "_candidate_collect", {"ids": ids}, expected_generation=expected_generation
-        )
