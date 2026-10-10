@@ -722,6 +722,10 @@ else
     # the next install may have found it if it had more time (a slow PATH, a
     # loaded machine), where "nothing is installed" would not change.
     if [[ -z "$CODEX_BIN_SETTING" && -n "$CODEX_PROBE_DEADLINE" ]] && (( SECONDS >= CODEX_PROBE_DEADLINE )); then
+      # Distinct from plain "not found" in the summary too (not just stderr):
+      # the next install may find it with more time, where "not found" would
+      # not change (#243).
+      CODEX_CONTEXT_NOTE="not checked: the ${CODEX_PROBE_BUDGET_SECONDS}s candidate-probe budget ran out before every candidate on PATH could be tried"
       echo "note: Codex detection stopped after the ${CODEX_PROBE_BUDGET_SECONDS}s candidate-probe budget was spent, before every candidate on PATH could be tried; AGENTSTACK_CODEX_BIN is left unset. Pass --codex-bin /path/to/codex, or remove/fix the slow candidate on PATH and re-run install." >&2
     fi
   fi

@@ -203,7 +203,8 @@ def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeo
     )
     marker = "# --- end codex launcher resolution ---\n"
     block = block.replace(marker, marker + overrides, 1)
-    script = stubs + block + '\nprintf "RESOLVED=%s\\n" "$CODEX_BIN_SETTING"\n'
+    script = (stubs + block + '\nprintf "RESOLVED=%s\\n" "$CODEX_BIN_SETTING"\n'
+              'printf "CONTEXT_NOTE=%s\\n" "${CODEX_CONTEXT_NOTE:-}" >&2\n')
     env = {
         "HOME": str(home),
         "PATH": ":".join(str(d) for d in path_dirs) + path_suffix,
@@ -315,6 +316,9 @@ def test_nothing_usable_leaves_the_setting_empty(tmp_path):
     windows = _windows_codex(tmp_path)
     code, resolved, stderr = _resolve(tmp_path, path_dirs=[windows.parent], wsl=True)
     assert code == 0 and resolved == ""
+    # A real "nothing is installed" must read differently in the summary
+    # from the budget-exhaustion and no-login-shell cases below (#243).
+    assert "CONTEXT_NOTE=\n" in stderr
 
 
 def test_no_login_shell_skips_detection_without_saving_a_new_value(tmp_path):
@@ -377,6 +381,9 @@ def test_slow_candidates_exhaust_the_probe_budget_before_a_working_one(tmp_path)
     assert "AGENTSTACK_CODEX_BIN is left unset" in stderr
     assert "--codex-bin" in stderr
     assert "not probed: the 1s budget for trying codex candidates is spent" in stderr
+    # The summary ("codex bin: ...") must not read the same as a plain "not
+    # found": a later install may find it with more time (#243).
+    assert "CONTEXT_NOTE=not checked: the 1s candidate-probe budget ran out" in stderr
 
 
 def test_installed_windows_codex_is_stale_and_resolved_again(tmp_path):
