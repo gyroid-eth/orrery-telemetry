@@ -66,3 +66,6 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Development entry](../CONTRIBUTING.md) — Build, validation, and contribution procedures.
 
 Documents without a translation are labelled with their original language. Images/GIFs accompany their articles. From the repository root, run `python3 scripts/check_docs_index.py` to check index coverage.
+
+- [Global child client preparation](global-child-client.en.md) — Fixed layout, registration intent replay, shared end and reservation hooks.
+- [Caller, interruption and acceptance tables](global-child-client-contract.md) — Contract tables generated from the global client fixture.

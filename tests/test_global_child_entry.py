@@ -211,3 +211,53 @@ def test_gemini_lifecycle_helper_passes_typed_paths_without_legacy_fields(server
         assert output.returncode == 0, output.stderr
         value = json.loads(output.stdout)
         assert value["granted" if action == "reserve" else "released"]
+
+
+@pytest.mark.parametrize(
+    "old_library",
+    ["ags_register() { return 0; }\n", "ags_global_entry() { return 125; }\n"],
+)
+def test_resume_global_partial_library_never_accepts_empty_success(server, old_library):
+    parent = client(server)
+    root = parent.isolation / "partial-resume"
+    (root / "hooks").mkdir(parents=True)
+    (root / "bin/lib").mkdir(parents=True)
+    for rel in ("bin/agentstack-resume", "hooks/child_tools.py"):
+        (root / rel).write_bytes((Path(api["ROOT"]) / rel).read_bytes())
+    (root / "bin/lib/agentstack-register.sh").write_text(old_library)
+    output = subprocess.run(
+        [
+            str(Path(api["ROOT"]) / ".venv/bin/python"),
+            str(root / "bin/agentstack-resume"),
+            "ChildAlpha",
+        ],
+        env={**os.environ, "AGENTSTACK_CLIENT_CONFIG": str(parent.path)},
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert output.returncode == 2 and "GLOBAL_ENTRY_UNAVAILABLE" in output.stderr
+    assert not output.stdout
+
+
+def test_resume_cli_uses_existing_global_front_door(server):
+    parent = client(server)
+    parent.prepare_child(
+        {"child_client_name": "child_01", "name": "ChildAlpha", "prepare_only": True}
+    )
+    output = subprocess.run(
+        [
+            str(Path(api["ROOT"]) / ".venv/bin/python"),
+            str(Path(api["ROOT"]) / "bin/agentstack-resume"),
+            "--client-name",
+            "child_01",
+            "--prepare-only",
+            "--detached",
+        ],
+        env={**os.environ, "AGENTSTACK_CLIENT_CONFIG": str(parent.path)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert output.returncode == 0, output.stderr
+    assert json.loads(output.stdout)["runtime_ready"] is False

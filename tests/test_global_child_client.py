@@ -46,6 +46,7 @@ def shell(c, rel, args=(), payload=None, extra=None):
         "AGENTSTACK_CLIENT_CONFIG": str(c.path),
         "HOME": str(c.isolation / "home"),
         "AGENTSTACK_HOME": str(c.isolation / "agentstack"),
+        "AGENTSTACK_LABEL_PREFIX": f"org.agentstack.test.global-child.{c.isolation.name}",
     }
     env.update(extra or {})
     return subprocess.run(
