@@ -206,7 +206,13 @@ def _run_codex_home_process(
     env["HOOKS_DIR"] = str(_ROOT / "hooks")
     env["CODEX_HOME"] = str(source_home)
     if corrupt_emitted_candidate:
-        altered = tmpdir / "child_resume_corrupt.py"
+        altered_root = tmpdir / "altered-payload"
+        (altered_root / "hooks").mkdir(parents=True)
+        library = altered_root / "bin" / "lib"
+        library.mkdir(parents=True)
+        for name in ("global-client-loader.sh", "runtime_client.py", "agentstack-register.sh"):
+            (library / name).write_bytes((_ROOT / "bin" / "lib" / name).read_bytes())
+        altered = altered_root / "hooks" / "child_resume.py"
         source = (_ROOT / "hooks" / "child_resume.py").read_text(encoding="utf-8")
         altered.write_text(
             source.replace(
