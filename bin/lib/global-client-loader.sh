@@ -23,7 +23,9 @@ ags_client_select() {
   response="$(python3 "$AGS_CLIENT_LOADER_DIR/runtime_client.py" select "$@" </dev/null)" && status=0 || status=$?
   if [[ "$status" != 0 ]]; then return "$status"; fi
   case "$response" in
-    orrery-client-global-v1) return 0 ;;
+    "orrery-client-global-v1"$'\n'*)
+      export AGENTSTACK_CLIENT_CONFIG="${response#*$'\n'}"
+      return 0 ;;
     orrery-client-legacy-v1) return 125 ;;
     *) ags_client_missing_admission "$@" ;;
   esac

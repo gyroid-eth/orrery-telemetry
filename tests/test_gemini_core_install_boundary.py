@@ -128,6 +128,7 @@ def test_fresh_core_install_omits_provider_payload_and_runs_core_server(tmp_path
         assert (install_dir / relative).read_bytes() == (ROOT / relative).read_bytes(), relative
     assert (install_dir / "dashboard" / "providers" / "codex_app.py").is_file()
     for source, installed in (
+        ("bin/lib/global-client-loader.sh", "global-client-loader.sh"),
         ("packages/agentstack_mail/src/agentstack_mail/schema_contract.py", "schema_contract.py"),
         ("packages/agentstack_mail/fixtures/global-server-s2a.json", "global-server-s2a.json"),
         ("packages/agentstack_mail/src/agentstack_mail/global_s2b_contract.py", "global_s2b_contract.py"),

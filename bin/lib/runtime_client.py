@@ -1928,7 +1928,8 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == 'select':
         try:
-            print('orrery-client-global-v1' if selected(argv[1:]) is not None else 'orrery-client-legacy-v1')
+            context = selected(argv[1:])
+            print('orrery-client-global-v1\n' + str(context) if context is not None else 'orrery-client-legacy-v1')
             return 0
         except ClientError as exc:
             print('runtime-client: ' + str(exc), file=sys.stderr)

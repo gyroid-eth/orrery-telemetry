@@ -109,6 +109,8 @@ class ReleaseHookTests(unittest.TestCase):
         if install_worker:
             shutil.copy2(WORKER, hooks / WORKER.name)
         if install_resolver:
+            (root / "bin/lib").mkdir(parents=True, exist_ok=True)
+            (root / "bin/lib/global-client-loader.sh").write_bytes((ROOT / "bin/lib/global-client-loader.sh").read_bytes())
             shutil.copy2(RESOLVER, hooks / RESOLVER.name)
 
         env = os.environ.copy()

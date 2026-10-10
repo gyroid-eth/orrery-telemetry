@@ -199,6 +199,8 @@ class ReservationHookTests(unittest.TestCase):
         runtime.mkdir(exist_ok=True)
         hooks.mkdir(exist_ok=True)
         if install_resolver:
+            (root / "bin/lib").mkdir(parents=True, exist_ok=True)
+            (root / "bin/lib/global-client-loader.sh").write_bytes((ROOT / "bin/lib/global-client-loader.sh").read_bytes())
             (hooks / "resolve-agent-name.sh").write_bytes(
                 RESOLVER.read_bytes() if resolver_bytes is None else resolver_bytes
             )

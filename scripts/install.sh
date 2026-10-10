@@ -2256,6 +2256,7 @@ copy_tree() {
 RUNTIME_SCHEMA_SOURCE="$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/schema_contract.py"
 RUNTIME_FIXTURE_SOURCE="$REPO_ROOT/packages/agentstack_mail/fixtures/global-server-s2a.json"
 RUNTIME_CLIENT_CONTRACT_SOURCES=(
+  "$REPO_ROOT/bin/lib/global-client-loader.sh"
   "$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/global_s2b_contract.py"
   "$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/global_s2c_contract.py"
   "$REPO_ROOT/packages/agentstack_mail/fixtures/global-server-s2b.json"
@@ -2371,7 +2372,6 @@ install_payload() {
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
     cp "$REPO_ROOT/bin/lib/runtime_client.py" "$BIN_DIR/lib/runtime_client.py"
-    cp "$REPO_ROOT/bin/lib/global-client-loader.sh" "$BIN_DIR/lib/global-client-loader.sh"
     cp "$RUNTIME_SCHEMA_SOURCE" "$BIN_DIR/lib/schema_contract.py"
     cp "$RUNTIME_FIXTURE_SOURCE" "$BIN_DIR/lib/global-server-s2a.json"
     local runtime_source

@@ -1905,6 +1905,6 @@
     "normal_selector": "runtime_client.selected(argv), exactly one normal context selector",
     "partial_install_admission": "One common loader checks context presence only if runtime/register helper is missing or has no selector protocol; context refuses GLOBAL_ENTRY_UNAVAILABLE, absent context preserves legacy",
     "mail_disabled": "AGENTSTACK_MAIL_DISABLED=1 skips hooks before context/owner/network",
-    "child_root": "Existing standalone identity without child-state refuses CLIENT_ROOT_NOT_CHILD; existing same-parent child preserves registration pending"
+    "child_root": "Existing standalone identity without child-state refuses CLIENT_ROOT_NOT_CHILD. Existing child requires same parent and registration_intent_digest; changed name/program/model/task refuses CHILD_REGISTRATION_INTENT_CONFLICT without duplicate payload/token."
   }
 }

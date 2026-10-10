@@ -515,7 +515,7 @@ def test_failure_before_codex_exec_discards_home_but_keeps_retired_credential(
     (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "bin/lib/global-client-loader.sh", install_home / "bin/lib")
     bootstrap = install_home / "bin" / "agentstack-codex-bootstrap"
-    bootstrap.parent.mkdir(parents=True)
+    bootstrap.parent.mkdir(parents=True, exist_ok=True)
     bootstrap.write_text("return 17\n", encoding="utf-8")
     runner = (
         install_home

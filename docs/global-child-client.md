@@ -6,7 +6,7 @@
 
 ## 入口と固定 layout
 
-登録・子・resume の shell 入口は `bin/lib/agentstack-register.sh` の1本です。通常の context 判定は `runtime_client.selected(argv)` の1関数で、共通 loader が register の入口へ渡します。各 launcher は旧 env を読む前に判定します。古い partial install で helper が無い場合だけ、loader が context の有無を確認し、あれば `GLOBAL_ENTRY_UNAVAILABLE`、無ければ旧経路です。context が無ければ旧動作、不正・壊れた symlink は拒否です。global で name/project/token file の旧探索へ戻りません。
+登録・子・resume の shell 入口は `bin/lib/agentstack-register.sh` の1本です。通常の context 判定は `runtime_client.selected(argv)` の1関数で、共通 loader が register の入口へ渡します。各 launcher は旧 env を読む前に判定します。古い partial install で helper が無い場合だけ、loader が context の有無を確認し、あれば `GLOBAL_ENTRY_UNAVAILABLE`、無ければ旧経路です。context が無ければ旧動作、不正・壊れた symlink は拒否です。global で name/project/token file の旧探索へ戻りません。wrapper と loader は同じ配布単位で、loader 自体の欠落は不完全な配布として拒否します。installer は配備前に同じ契約ファイル一覧で欠落を確認します。
 
 `AGENTSTACK_CLIENT_CONFIG` は親の固定 `runtime-client.json` を指します。子は同じ `agentstack/clients/` 直下の別の `client_name` へ置きます。資格情報は既存の `credential.json` のみです。`runtime/child-state.json` は親の stable ID・task/tools・準備の状態だけを持ち、子の token や identity のコピーを持ちません。任意の token/profile 出力先は受け付けません。新 identity は新しい root を使います。既存 standalone の root を子に転用すると `CLIENT_ROOT_NOT_CHILD` で拒否します。既存 child は同じ親と登録 intent の digest を照合し、異なる name/program/model/task は `CHILD_REGISTRATION_INTENT_CONFLICT` で拒否します。token や payload の別コピーは持ちません。
 

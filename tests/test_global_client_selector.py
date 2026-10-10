@@ -51,3 +51,24 @@ def test_normal_selector_resolves_cli_env_and_implicit_once(tmp_path, monkeypatc
     assert selected(["--context=" + str(context)]) == context
     with pytest.raises(api["ClientError"], match="CONTEXT_UNAVAILABLE"):
         selected(["--context"])
+
+
+def test_loader_propagates_resolved_cli_context_to_existing_front_doors(tmp_path):
+    context = tmp_path / "explicit.json"
+    context.write_text("{}")
+    loader = ROOT / "bin/lib/global-client-loader.sh"
+    value = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            'source "$1"; ags_client_select --context "$2" || exit $?; printf "%s" "$AGENTSTACK_CLIENT_CONFIG"',
+            "selector",
+            str(loader),
+            str(context),
+        ],
+        env={k: v for k, v in os.environ.items() if k != "AGENTSTACK_CLIENT_CONFIG"},
+        text=True,
+        capture_output=True,
+    )
+    assert value.returncode == 0, value.stderr
+    assert value.stdout == str(context)

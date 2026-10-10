@@ -24,7 +24,10 @@ BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/agentstack-launch.sh
 . "$BIN_DIR/lib/agentstack-launch.sh"
 AGS_RUNTIME_CLIENT="$BIN_DIR/lib/runtime_client.py"
-if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$BIN_DIR/../runtime-client.json" || -L "$BIN_DIR/../runtime-client.json" ]]; then
+. "$BIN_DIR/lib/global-client-loader.sh" || exit 2
+ags_client_select "$@" && _ags_selected_rc=0 || _ags_selected_rc=$?
+[[ "$_ags_selected_rc" == 0 || "$_ags_selected_rc" == 125 ]] || exit "$_ags_selected_rc"
+if [[ "$_ags_selected_rc" == 0 ]]; then
   AGS_RUNTIME_MODE="$(python3 "$AGS_RUNTIME_CLIENT" mode)" || exit 1
   if [[ "$AGS_RUNTIME_MODE" == "global" ]]; then
     exec python3 "$AGS_RUNTIME_CLIENT" launch codex "${1:-$PWD}"

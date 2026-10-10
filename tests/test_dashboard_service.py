@@ -28,6 +28,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "dashboard" / "service_runner.py"
 PLIST_TEMPLATE = ROOT / "dashboard" / "agentdashboard.plist.template"
 RUNTIME_CONTRACT_SOURCES = (
+    "bin/lib/global-client-loader.sh",
     "packages/agentstack_mail/src/agentstack_mail/schema_contract.py",
     "packages/agentstack_mail/fixtures/global-server-s2a.json",
     "packages/agentstack_mail/src/agentstack_mail/global_s2b_contract.py",
