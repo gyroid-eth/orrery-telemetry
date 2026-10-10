@@ -72,3 +72,28 @@ def test_loader_propagates_resolved_cli_context_to_existing_front_doors(tmp_path
     )
     assert value.returncode == 0, value.stderr
     assert value.stdout == str(context)
+
+
+def test_old_register_front_door_cannot_return_legacy_after_global_selection(tmp_path):
+    lib = tmp_path / "bin/lib"
+    lib.mkdir(parents=True)
+    for name in ["global-client-loader.sh", "runtime_client.py"]:
+        (lib / name).write_bytes((ROOT / "bin/lib" / name).read_bytes())
+    (lib / "agentstack-register.sh").write_text("ags_global_entry() { return 125; }\n")
+    context = tmp_path / "explicit.json"
+    context.write_text("{}")
+    value = subprocess.run(
+        [
+            "/bin/bash",
+            str(lib / "global-client-loader.sh"),
+            "spawn-child",
+            "--context",
+            str(context),
+        ],
+        env={k: v for k, v in os.environ.items() if k != "AGENTSTACK_CLIENT_CONFIG"},
+        text=True,
+        capture_output=True,
+    )
+    assert value.returncode == 2, value.stderr
+    assert "GLOBAL_ENTRY_UNAVAILABLE" in value.stderr
+    assert not value.stdout

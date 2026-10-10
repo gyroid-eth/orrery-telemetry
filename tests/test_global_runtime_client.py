@@ -411,7 +411,7 @@ def test_installed_payload_reconnects_from_its_own_root(prepared):
     installed = prepared['root'] / 'installed'
     (installed / 'bin/lib').mkdir(parents=True)
     (installed / 'hooks').mkdir()
-    for path in ('bin/lib/runtime_client.py', 'bin/agentstack-runtime-client',
+    for path in ('bin/lib/runtime_client.py', 'bin/lib/global-client-loader.sh', 'bin/lib/agentstack-register.sh', 'bin/agentstack-runtime-client',
                  'bin/agentstack-reregister', 'bin/agentstack-codex-bootstrap'):
         shutil.copy2(ROOT / path, installed / path)
     # Mirror the installer payload, including the shared catalog validator.

@@ -44,7 +44,11 @@ ags_client_entry() {
   if ! declare -F ags_global_entry >/dev/null; then
     ags_client_missing_admission "$@"; return $?
   fi
-  ags_global_entry "$entry" "$@"
+  ags_global_entry "$entry" "$@" && status=0 || status=$?
+  if [[ "$status" == 125 ]]; then
+    ags_client_missing_admission "$@"; return $?
+  fi
+  return "$status"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
