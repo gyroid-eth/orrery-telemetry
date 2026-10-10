@@ -1745,7 +1745,9 @@ def entry_operation(entry, argv):
     parser.add_argument('--expected-digest')
     parser.add_argument('positionals', nargs='*')
     # First determine mode without parsing legacy-specific flags.
-    selected = None
+    selected = next((arg.split('=', 1)[1] for arg in argv if arg.startswith('--context=')), None)
+    if selected == '':
+        raise ClientError('CONTEXT_UNAVAILABLE')
     if '--context' in argv:
         index = argv.index('--context')
         if len(argv) <= index+1:

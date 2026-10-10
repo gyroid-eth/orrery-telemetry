@@ -151,3 +151,63 @@ def test_real_ps_other_session_keeps_leases_until_process_exits(server):
         if process.poll() is None:
             process.kill()
         process.wait(timeout=5)
+
+
+def test_explicit_global_refuses_an_old_library_without_dispatch(server):
+    parent = client(server)
+    root = parent.isolation / "old-install"
+    (root / "hooks").mkdir(parents=True)
+    (root / "bin/lib").mkdir(parents=True)
+    hook = root / "hooks/cleanup-child-agent.sh"
+    hook.write_bytes((Path(api["ROOT"]) / "hooks/cleanup-child-agent.sh").read_bytes())
+    (root / "bin/lib/agentstack-register.sh").write_text(
+        "ags_register() { return 0; }\n"
+    )
+    output = shell(parent, str(hook), payload={"session_id": "s"})
+    assert (
+        output.returncode == 2
+        and "GLOBAL_REGISTER_LIBRARY_UNAVAILABLE" in output.stderr
+    )
+
+
+def test_context_equals_works_without_ambient_global_selector(server):
+    parent = client(server)
+    output = shell(
+        parent,
+        "bin/agentstack-preregister-child",
+        [
+            "--context=" + str(parent.path),
+            "--child-client-name",
+            "equal",
+            "--name",
+            "ChildEqual",
+            "--prepare-only",
+        ],
+        extra={"AGENTSTACK_CLIENT_CONFIG": ""},
+    )
+    assert output.returncode == 0, output.stderr
+    assert json.loads(output.stdout)["runtime_ready"] is False
+
+
+def test_gemini_lifecycle_helper_passes_typed_paths_without_legacy_fields(server):
+    parent = client(server)
+    helper = Path(api["ROOT"]) / "bin/agentstack-gemini-child-mail"
+    paths = json.dumps([str(parent.isolation / "with space.py")])
+    env = {**os.environ, "AGENTSTACK_CLIENT_CONFIG": str(parent.path)}
+    for action in ("reserve", "release"):
+        output = subprocess.run(
+            [
+                str(Path(api["ROOT"]) / ".venv/bin/python"),
+                str(helper),
+                action,
+                "--paths-json",
+                paths,
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert output.returncode == 0, output.stderr
+        value = json.loads(output.stdout)
+        assert value["granted" if action == "reserve" else "released"]

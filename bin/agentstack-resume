@@ -15,11 +15,14 @@ import child_tools
 
 def main():
     library = Path(__file__).resolve().parent / 'lib/agentstack-register.sh'
-    if library.is_file():
+    implicit = library.parents[2] / 'runtime-client.json'
+    explicit = os.environ.get('AGENTSTACK_CLIENT_CONFIG') or any(arg == '--context' or arg.startswith('--context=') for arg in sys.argv[1:])
+    selected = explicit or implicit.exists() or implicit.is_symlink()
+    if selected and library.is_file():
         result = subprocess.run(['/bin/bash',str(library),'resume-child',*sys.argv[1:]])
         if result.returncode != 125:
             return result.returncode
-    elif os.environ.get('AGENTSTACK_CLIENT_CONFIG') or '--context' in sys.argv:
+    elif selected:
         print('agentstack-resume: GLOBAL_ENTRY_UNAVAILABLE',file=sys.stderr)
         return 2
     parser = argparse.ArgumentParser(description=__doc__)

@@ -4,6 +4,8 @@
 _ags_global_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/agentstack-register.sh"
 if [[ -f "$_ags_global_lib" ]]; then
   . "$_ags_global_lib"
+fi
+if declare -F ags_global_entry >/dev/null; then
   _ags_global_error="$(ags_global_entry pre-edit "$@" 2>&1)" && _ags_global_rc=0 || _ags_global_rc=$?
   if [[ "$_ags_global_rc" == 0 ]]; then exit 0; fi
   if [[ "$_ags_global_rc" != 125 ]]; then
@@ -48,9 +50,7 @@ handle_reservation_outage() {
     agentstack_audit_unmanaged "check-file-reservation" "$SESSION_ID" "$detail transport=unreachable policy=$(agentstack_mail_outage_policy)"
     if [ "$(agentstack_mail_outage_policy)" = "warn-open" ]; then
         if agentstack_should_report_outage "$SESSION_ID" "unreachable"; then
-            if agentstack_should_report_outage "${AGENTSTACK_SESSION_ID:-global}" "unreachable"; then
-          agentstack_emit_visible_warning "$(agentstack_outage_warning_text)"
-        fi
+            agentstack_emit_visible_warning "$(agentstack_outage_warning_text)"
         fi
         exit 0
     fi

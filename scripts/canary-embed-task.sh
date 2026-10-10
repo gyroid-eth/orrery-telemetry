@@ -3,6 +3,8 @@
 _ags_global_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/agentstack-register.sh"
 if [[ -f "$_ags_global_lib" ]]; then
   . "$_ags_global_lib"
+fi
+if declare -F ags_global_entry >/dev/null; then
   if ags_global_entry spawn-child "$@"; then exit 0; else _ags_global_rc=$?; fi
   [[ "$_ags_global_rc" == 125 ]] || exit "$_ags_global_rc"
 elif [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$(dirname "$_ags_global_lib")/../../runtime-client.json" || -L "$(dirname "$_ags_global_lib")/../../runtime-client.json" ]]; then

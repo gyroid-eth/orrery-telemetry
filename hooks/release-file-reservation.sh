@@ -4,6 +4,8 @@
 _ags_global_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/agentstack-register.sh"
 if [[ -f "$_ags_global_lib" ]]; then
   . "$_ags_global_lib"
+fi
+if declare -F ags_global_entry >/dev/null; then
   _ags_global_error="$(ags_global_entry post-edit "$@" 2>&1)" && _ags_global_rc=0 || _ags_global_rc=$?
   if [[ "$_ags_global_rc" == 0 ]]; then exit 0; fi
   if [[ "$_ags_global_rc" != 125 ]]; then

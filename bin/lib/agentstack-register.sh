@@ -219,7 +219,7 @@ ags_mcp_call() {
   local tool="$1"; shift
   local runtime_client
   runtime_client="$AGS_REGISTER_LIB_DIR/runtime_client.py"
-  if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$AGS_REGISTER_LIB_DIR/../../runtime-client.json" || -L "$AGS_REGISTER_LIB_DIR/../../runtime-client.json" ]]; then
+  if ags_global_context_selected; then
     local runtime_mode
     runtime_mode="$(python3 "$runtime_client" mode)" || return 1
     if [[ "$runtime_mode" == "global" ]]; then
@@ -605,7 +605,7 @@ PY
 }
 
 ags_apply_contact_policy() {
-  if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$AGS_REGISTER_LIB_DIR/../../runtime-client.json" || -L "$AGS_REGISTER_LIB_DIR/../../runtime-client.json" ]]; then
+  if ags_global_context_selected; then
     local context_mode
     context_mode="$(python3 "$AGS_REGISTER_LIB_DIR/runtime_client.py" mode)" || return 1
     if [[ "$context_mode" == "global" ]]; then
@@ -671,7 +671,7 @@ ags_sanitize_agent_name() {
 }
 
 ags_agent_name_status_once() {
-  if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$AGS_REGISTER_LIB_DIR/../../runtime-client.json" || -L "$AGS_REGISTER_LIB_DIR/../../runtime-client.json" ]]; then
+  if ags_global_context_selected; then
     local context_mode
     context_mode="$(python3 "$AGS_REGISTER_LIB_DIR/runtime_client.py" mode)" || { printf 'unknown\n'; return 0; }
     if [[ "$context_mode" == "global" ]]; then printf 'unknown\n'; return 0; fi
@@ -750,7 +750,7 @@ ags_pick_scientist_name() {
 AGS_NAME_UNKNOWN_LIMIT="${AGENTSTACK_NAME_UNKNOWN_LIMIT:-3}"
 
 ags_pick_available_agent_name() {
-  if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$AGS_REGISTER_LIB_DIR/../../runtime-client.json" || -L "$AGS_REGISTER_LIB_DIR/../../runtime-client.json" ]]; then
+  if ags_global_context_selected; then
     local context_mode
     context_mode="$(python3 "$AGS_REGISTER_LIB_DIR/runtime_client.py" mode)" || return 1
     if [[ "$context_mode" == "global" ]]; then
@@ -832,7 +832,7 @@ ags_register_session() {
   AGS_AGENT_NAME_SUBSTITUTED=0
   ags_registration_diag_reset
 
-  if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$AGS_REGISTER_LIB_DIR/../../runtime-client.json" || -L "$AGS_REGISTER_LIB_DIR/../../runtime-client.json" ]]; then
+  if ags_global_context_selected; then
     local context_mode context_row
     context_mode="$(python3 "$AGS_REGISTER_LIB_DIR/runtime_client.py" mode)" || return 1
     if [[ "$context_mode" == "global" ]]; then
@@ -932,7 +932,7 @@ ags_register_session() {
 # eligible. Only the Mail call and its read-back live here: the caller decides
 # when (and whether) a retired identity may come back.
 ags_unretire_owned_identity() {
-  if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$AGS_REGISTER_LIB_DIR/../../runtime-client.json" || -L "$AGS_REGISTER_LIB_DIR/../../runtime-client.json" ]]; then
+  if ags_global_context_selected; then
     local context_mode
     context_mode="$(python3 "$AGS_REGISTER_LIB_DIR/runtime_client.py" mode)" || return 1
     if [[ "$context_mode" == "global" ]]; then
@@ -1061,7 +1061,17 @@ ags_global_call_json() {
 }
 
 # Explicit global child operations; 125 means the default legacy path continues.
+ags_global_context_selected() {
+  local explicit="${AGENTSTACK_CLIENT_CONFIG:-}" argument context
+  for argument in "$@"; do
+    case "$argument" in --context|--context=*) explicit=1 ;; esac
+  done
+  context="$AGS_REGISTER_LIB_DIR/../../runtime-client.json"
+  [[ -n "$explicit" || -e "$context" || -L "$context" ]]
+}
+
 ags_global_entry() {
+  ags_global_context_selected "$@" || return 125
   python3 "$AGS_REGISTER_LIB_DIR/runtime_client.py" entry "$@"
 }
 
