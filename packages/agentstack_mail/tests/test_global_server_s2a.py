@@ -1114,3 +1114,19 @@ def test_fts_snapshot_recovery_waits_for_same_private_directory_lock(
     assert not errors
     assert len(results) == 1
     assert not list(directory.iterdir())
+
+
+def test_source_admission_never_opens_raw_database_descriptor(prepared, monkeypatch):
+    from agentstack_mail.global_prepare import require_legacy_source
+
+    source = prepared["source"].mail
+    original = os.open
+
+    def guarded(path, *args, **kwargs):
+        assert Path(path) != source, "source admission closes SQLite's POSIX locks"
+        return original(path, *args, **kwargs)
+
+    with connection(source) as held:
+        held.execute("SELECT id FROM agents LIMIT 1").fetchall()
+        monkeypatch.setattr(os, "open", guarded)
+        require_legacy_source(source)

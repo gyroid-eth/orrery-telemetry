@@ -199,7 +199,13 @@ class S2cRuntime(S2bRuntime):
                 )
             return result
         if tool in ("renew_file_reservations", "release_file_reservations"):
-            rows = leases.selected(db, aid, args, stamp)
+            rows = leases.selected(
+                db,
+                aid,
+                args,
+                stamp,
+                missing_paths_ok=tool == "release_file_reservations",
+            )
             if tool == "renew_file_reservations":
                 return {
                     "renewed": [

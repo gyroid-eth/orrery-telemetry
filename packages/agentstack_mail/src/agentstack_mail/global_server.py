@@ -169,19 +169,17 @@ class GlobalRuntime:
         if self.runtime_root not in self.paths["database"].resolve().parents:
             raise GlobalError("DATABASE_OUTSIDE_RUNTIME_ROOT")
         self.initial_preflight()
-        db_fd = os.open(self.paths["database"], os.O_RDONLY | os.O_NOFOLLOW)
-        try:
-            db_info = os.fstat(db_fd)
-            if (
-                not stat.S_ISREG(db_info.st_mode)
-                or db_info.st_uid != os.getuid()
-                or db_info.st_mode & 0o077
-                or db_info.st_nlink != 1
-            ):
-                raise GlobalError("DATABASE_UNSAFE")
-            self.db_identity = (db_info.st_dev, db_info.st_ino)
-        finally:
-            os.close(db_fd)
+        # Do not open a second descriptor for a SQLite inode: closing it
+        # releases this process's POSIX locks held by other SQLite connections.
+        db_info = self.paths["database"].lstat()
+        if (
+            not stat.S_ISREG(db_info.st_mode)
+            or db_info.st_uid != os.getuid()
+            or db_info.st_mode & 0o077
+            or db_info.st_nlink != 1
+        ):
+            raise GlobalError("DATABASE_UNSAFE")
+        self.db_identity = (db_info.st_dev, db_info.st_ino)
         self.check_sqlite_files()
         try:
             with connection(self.paths["database"]) as db:
@@ -387,6 +385,7 @@ class GlobalRuntime:
                 and info.st_nlink == 1
             )
 
+        # lstat only: independent open/close cancels SQLite POSIX locks.
         # Recheck the main database too: its links/mode can change while its
         # inode remains pinned. SQLite still reopens names, so this cannot be
         # an atomic filesystem boundary against non-cooperating same-UID code.
@@ -403,23 +402,6 @@ class GlobalRuntime:
                 raise GlobalError("DATABASE_REPLACED")
             if not safe(info):
                 raise GlobalError(reason)
-            try:
-                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-                try:
-                    opened = os.fstat(fd)
-                    current = path.lstat()
-                    if (
-                        (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)
-                        or (opened.st_dev, opened.st_ino)
-                        != (current.st_dev, current.st_ino)
-                        or not safe(opened)
-                        or not safe(current)
-                    ):
-                        raise GlobalError(reason)
-                finally:
-                    os.close(fd)
-            except OSError:
-                raise GlobalError(reason) from None
 
     @contextmanager
     def transaction(self, *, write=False, binding=None, exclusive=False):

@@ -1991,7 +1991,7 @@
     "active": "共通SQL断片 ACTIVE = (released_ts IS NULL AND expires_ts > :now_utc)。acquire/renew/check/list/inspect、省略/path selectorのrenew/release、retire hookがこの一つを使う。owner退役条件無し。期限到達時は導出だけが変わり、row/revisionを更新しない。明示IDのreleaseだけはownerの意思としてexpired rowも選べる。",
     "acquire": "全paths normalize/preflight→同IMMEDIATE内にactive衝突検査。別ownerでどちらかexclusiveなら全件RESERVATION_CONFLICT、partial grantしない。自己ACTIVEの同一path/exclusiveだけ既存IDを再利用（expired履歴は書かず新ID）、expiry=max(old,now+ttl)。reasonは既存を保持。別owner情報はstable ID/path/expiry/revisionだけ（token無し）。",
     "renew": "pathsかidsの片方、省略双方nullは自分の全active、明示[]はLEASE_SELECTOR_EMPTY、両方はLEASE_SELECTOR_CONFLICT。選択が100件を超えたら書込み前LEASE_SELECTION_TOO_LARGE、list_file_reservationsのID keysetから明示100件ずつ。ID不存在/別ownerは全件拒否、released/expiredの明示選択はLEASE_EXPIRED。expiry=old+extend_seconds（PR2既存）、最大期限を既存rowへ遡及適用しない。 path選択は正規化した同一patternの自己ACTIVEだけ。履歴と他ownerを含めず、該当無しはLEASE_NOT_FOUND。",
-    "release": "pathと省略は自己ACTIVEだけ。明示IDは自己expiredも解放可、own releasedは既存ts/revision維持でalready_released_idsへ。全件preflight、明示IDの他owner拒否。",
+    "release": "pathと省略は自己ACTIVEだけ。明示IDは自己expiredも解放可、own releasedは既存ts/revision維持でalready_released_idsへ。全件preflight、明示IDの他owner拒否。 pathの未一致は無視し、省略/pathで自己ACTIVEが0件でも成功・released=[]・already_released_ids=[]。新UUIDなら新しい0件receipt、同UUIDなら元receiptのreplay。",
     "check": "純粋read、concrete pathだけ。activeな自己leaseで全pathがcoveredか。falseは詳細items、他人のtoken/内容を返さない。各pathのcoverage witnessは最小ID1件だけで足りるので巨大ID配列を作らない。readでtouch/quota/GCはしない。 knownなwitnessがあればunknownな別行に関係なく成功。witness無しでunknownが残る場合はACTIVE_LEASE_RULES_UNKNOWN、unknown無しの場合だけfalse。",
     "list": "認証済みownerから共有lease metadataだけ読取。stable owner IDで任意filter、token/本文は無し。S2bと共通の署名無しkeyset codec。cursor={version,tool,agent_id,query_hash,max_reservation_id,after_id}。初頁MAXは同snapshotのlease集合（message不可視IDとは別）、filter/owner/toolのhash不一致は拒否、範囲と型も検査。未来の新規leaseは継続pageに混ぜず、既存leaseのexpiry/releaseは各pageのcurrent snapshotで読む（不変snapshotの約束ではない）。moreはlimit+1、released履歴もactive_only=falseでpaged読取。",
     "bounds": "新しいpaths1..100、IDはSQLite signed64正整数・新規ID overflowはreceipt lookup後・書込み前LEASE_ID_CAPACITY_REACHED、1path<=4096、ttl/extend60..86400、reason<=500はPR2入力契約。importされた旧長reason/長期限はそのまま読める、renew/releaseを新規入力上限で拒否しない。旧ID保持、released rowはtombstoneとして保持してID再利用を防ぐ。",
@@ -2485,7 +2485,8 @@
     "部分索引のあるSQLでowner横断ACTIVE競合候補検索のEXPLAIN QUERY PLANがSEARCH ix_global_reservation_active_expiryとなる（SCANを許容しない）。",
     "timestamp helper一つを全writer/freshで使用、CHECKで短桁/offset/Z/非数字/null不正を拒否、startupでもhelper roundtripを照合。S2a timeの例外は固定UTC列のみ。",
     "inspect拡張のforce_recovery_expectations全行とoverflow_expectations、WRITER_FENCED複数分類優先。schema concrete assemblyはlease8参照。",
-    "engine_test_inventoryの全test名とrepo ASTが集合一致、移設漏れ4件のassertをSQL/HTTPで確認。"
+    "engine_test_inventoryの全test名とrepo ASTが集合一致、移設漏れ4件のassertをSQL/HTTPで確認。",
+    "同じpathと省略selectorのreleaseを異なるUUIDで2回実行し、2回目成功0件・新receipt。各UUIDのreplayは元receiptと同一、lease row不変。未一致pathは無視、明示IDの不存在/他ownerは全件拒否、renew path不一致はLEASE_NOT_FOUND。"
   ],
   "not_implemented": [
     "wire案のみ、server/clientの実装・pytest・HTTP/native processは未実行",
@@ -3136,6 +3137,12 @@
       "legacy": "旧toolのselector/返却形。PR2候補はIDとpathの和集合も許す",
       "global": "ID XOR path、省略/pathはown ACTIVEだけ。100件超は拒否（expired履歴を数えない）",
       "followup": "list keysetで明示100件ずつ。4b/4cの引数変換を固定。"
+    },
+    {
+      "topic": "解放の再実行と不存在ID",
+      "legacy": "解放済み/不存在の予約はno-op",
+      "global": "path/省略は自己ACTIVE 0件でも成功0件。明示IDの不存在/他ownerは全件拒否。renew path不一致はLEASE_NOT_FOUNDを維持",
+      "followup": "4b/4cのpath releaseは繰返し安全。0件の新receiptと同UUID replayを区別。"
     },
     {
       "topic": "owner / scope / paths",

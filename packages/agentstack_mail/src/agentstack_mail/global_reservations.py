@@ -79,7 +79,7 @@ def active_rows(db, stamp, owner=None):
     ).fetchall()
 
 
-def selected(db, owner, args, stamp):
+def selected(db, owner, args, stamp, *, missing_paths_ok=False):
     ids, paths = args.get("file_reservation_ids"), args.get("paths")
     if ids is None and paths is None:
         rows = active_rows(db, stamp, owner)
@@ -105,7 +105,7 @@ def selected(db, owner, args, stamp):
             + ") ORDER BY id",
             params,
         ).fetchall()
-        if set(patterns) - {r["path_pattern"] for r in rows}:
+        if not missing_paths_ok and set(patterns) - {r["path_pattern"] for r in rows}:
             raise GlobalError("LEASE_NOT_FOUND")
     if any(r["agent_id"] != owner for r in rows):
         raise GlobalError("LEASE_OWNER_REQUIRED")

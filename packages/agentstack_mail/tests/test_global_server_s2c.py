@@ -839,10 +839,14 @@ def test_path_selector_does_not_select_self_expired(prepared, tool):
         )
         changed(db)
     before = snapshot(runtime)
-    with pytest.raises(GlobalError, match="LEASE_NOT_FOUND"):
-        call(prepared, tool, paths=[path])
-    assert snapshot(runtime) == before
-    if tool == "release_file_reservations":
+    if tool == "renew_file_reservations":
+        with pytest.raises(GlobalError, match="LEASE_NOT_FOUND"):
+            call(prepared, tool, paths=[path])
+        assert snapshot(runtime) == before
+    else:
+        result = call(prepared, tool, paths=[path])
+        assert result["released"] == result["already_released_ids"] == []
+        assert snapshot(runtime)[1] == before[1]
         assert (
             call(prepared, tool, file_reservation_ids=[key])["released"][0]["id"] == key
         )
@@ -928,3 +932,77 @@ def test_coverage_known_witness_overrides_unknown(
         ]
         is known_covers
     )
+
+
+@pytest.mark.parametrize("omit_selector", [False, True])
+def test_release_empty_selection_is_new_noop_receipt_not_replay(
+    prepared, omit_selector
+):
+    runtime = S2cRuntime(prepared["config_path"])
+    path = "tool://repeated-release"
+    key = call(prepared, "file_reservation_paths", paths=[path])["granted"][0]["id"]
+    selector = {} if omit_selector else {"paths": [path]}
+    first_args = owner(prepared, request_id=str(uuid.uuid4()), **selector)
+    first = runtime.apply("release_file_reservations", first_args)
+    assert [row["id"] for row in first["released"]] == [key]
+    before = snapshot(runtime)
+    second_args = {**first_args, "request_id": str(uuid.uuid4())}
+    second = runtime.apply("release_file_reservations", second_args)
+    assert second["released"] == second["already_released_ids"] == []
+    assert second["request_id"] != first["request_id"]
+    assert second["mutation_revision"] > first["mutation_revision"]
+    after = snapshot(runtime)
+    assert after[1] == before[1]
+    assert len(after[2]) == len(before[2]) + 1
+    assert runtime.apply("release_file_reservations", second_args) == second
+    assert runtime.apply("release_file_reservations", first_args) == first
+    assert snapshot(runtime) == after
+
+
+def test_release_paths_ignore_missing_and_foreign_history(prepared):
+    runtime = S2cRuntime(prepared["config_path"])
+    foreign = "tool://foreign-only-release"
+    own = "tool://own-release"
+    call(prepared, "file_reservation_paths", aid=1, paths=[foreign])
+    key = call(prepared, "file_reservation_paths", paths=[own])["granted"][0]["id"]
+    before = snapshot(runtime)
+    result = call(
+        prepared,
+        "release_file_reservations",
+        paths=[foreign, own, "tool://never-reserved"],
+    )
+    assert [row["id"] for row in result["released"]] == [key]
+    with runtime.transaction() as db:
+        assert [
+            tuple(row)
+            for row in db.execute(
+                "SELECT * FROM file_reservations WHERE id<>? ORDER BY id", (key,)
+            )
+        ] == [row for row in before[1] if row[0] != key]
+    again = call(
+        prepared,
+        "release_file_reservations",
+        paths=[foreign, own, "tool://never-reserved"],
+    )
+    assert again["released"] == again["already_released_ids"] == []
+
+
+@pytest.mark.parametrize("foreign", [False, True])
+def test_release_explicit_id_still_rejects_whole_batch(prepared, foreign):
+    runtime = S2cRuntime(prepared["config_path"])
+    own = call(prepared, "file_reservation_paths", paths=["tool://explicit-own"])[
+        "granted"
+    ][0]["id"]
+    other = (
+        call(
+            prepared, "file_reservation_paths", aid=1, paths=["tool://explicit-foreign"]
+        )["granted"][0]["id"]
+        if foreign
+        else 2**63 - 1
+    )
+    before = snapshot(runtime)
+    with pytest.raises(
+        GlobalError, match="LEASE_OWNER_REQUIRED" if foreign else "LEASE_NOT_FOUND"
+    ):
+        call(prepared, "release_file_reservations", file_reservation_ids=[own, other])
+    assert snapshot(runtime) == before
