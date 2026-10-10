@@ -15,6 +15,8 @@ import sys
 
 import pytest
 
+from _installed_client_payload import copy_client_library
+
 ROOT = Path(__file__).resolve().parents[1]
 api = runpy.run_path(str(ROOT / 'bin/lib/runtime_client.py'))
 RuntimeClient, ClientError = api['RuntimeClient'], api['ClientError']
@@ -411,14 +413,11 @@ def test_installed_payload_reconnects_from_its_own_root(prepared):
     installed = prepared['root'] / 'installed'
     (installed / 'bin/lib').mkdir(parents=True)
     (installed / 'hooks').mkdir()
-    for path in ('bin/lib/runtime_client.py', 'bin/agentstack-runtime-client',
-                 'bin/agentstack-reregister', 'bin/agentstack-codex-bootstrap'):
+    copy_client_library(installed)
+    for path in ('bin/agentstack-runtime-client', 'bin/agentstack-reregister',
+                 'bin/agentstack-codex-bootstrap'):
         shutil.copy2(ROOT / path, installed / path)
-    # Mirror the installer payload, including the shared catalog validator.
-    shutil.copy2(ROOT / 'packages/agentstack_mail/src/agentstack_mail/schema_contract.py',
-                 installed / 'bin/lib/schema_contract.py')
-    shutil.copy2(ROOT / 'packages/agentstack_mail/fixtures/global-server-s2a.json',
-                 installed / 'bin/lib/global-server-s2a.json')
+
     config = {**prepared['client_config'], 'wrapper_root': str(installed)}
     private(prepared['client_path'], config)
     r = subprocess.run(['/bin/bash', str(installed / 'bin/agentstack-reregister'), 'ObsoleteName', 'codex', 'fixture'],

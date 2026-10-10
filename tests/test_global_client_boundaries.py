@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+from _installed_client_payload import copy_client_library
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -60,7 +62,8 @@ def test_implicit_broken_context_never_writes_legacy_session_index(tmp_path):
     import subprocess
 
     installed = tmp_path / 'installed'
-    for relative in ('hooks/record-session-index.py', 'bin/lib/runtime_client.py'):
+    copy_client_library(installed)
+    for relative in ('hooks/record-session-index.py',):
         target = installed / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / relative, target)

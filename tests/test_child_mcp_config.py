@@ -22,6 +22,8 @@ import sys
 import tempfile
 import tomllib
 
+from _installed_client_payload import copy_client_library
+
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SPAWN = _ROOT / "hooks" / "spawn_child.sh"
 _CODEX_PROXY_TOOLS = (
@@ -206,7 +208,12 @@ def _run_codex_home_process(
     env["HOOKS_DIR"] = str(_ROOT / "hooks")
     env["CODEX_HOME"] = str(source_home)
     if corrupt_emitted_candidate:
-        altered = tmpdir / "child_resume_corrupt.py"
+        altered_root = tmpdir / "altered-payload"
+        (altered_root / "hooks").mkdir(parents=True)
+        library = altered_root / "bin" / "lib"
+        library.mkdir(parents=True)
+        copy_client_library(altered_root)
+        altered = altered_root / "hooks" / "child_resume.py"
         source = (_ROOT / "hooks" / "child_resume.py").read_text(encoding="utf-8")
         altered.write_text(
             source.replace(

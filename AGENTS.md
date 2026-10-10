@@ -149,3 +149,5 @@ If you are changing this repository rather than installing it, read
 the mail package's dependencies are not importable from a bare `python3`),
 and run `PYTHONPATH=. .venv/bin/python -m pytest -q` before you report a
 change as done.
+
+隔離 global client の子・再開・予約 hook の準備は [global child client](docs/global-child-client.md) を参照してください。既定の旧運用は維持し、実起動と切替は後続です。

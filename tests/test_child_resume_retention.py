@@ -13,6 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from _installed_client_payload import copy_client_library
+
 from dashboard import server
 
 
@@ -341,6 +343,7 @@ def test_resume_bootstrap_preserves_child_provenance_before_unretire(
     hooks = install_home / "hooks"
     libdir = bindir / "lib"
     libdir.mkdir(parents=True)
+    copy_client_library(install_home)
     hooks.mkdir(parents=True)
     bootstrap = bindir / "agentstack-codex-bootstrap"
     shutil.copy2(ROOT / "bin" / "agentstack-codex-bootstrap", bootstrap)
@@ -509,8 +512,10 @@ def test_failure_before_codex_exec_discards_home_but_keeps_retired_credential(
     hooks = install_home / "hooks"
     hooks.mkdir(parents=True)
     shutil.copy2(ROOT / "hooks" / "child_resume.py", hooks)
+    (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
+    copy_client_library(install_home)
     bootstrap = install_home / "bin" / "agentstack-codex-bootstrap"
-    bootstrap.parent.mkdir(parents=True)
+    bootstrap.parent.mkdir(parents=True, exist_ok=True)
     bootstrap.write_text("return 17\n", encoding="utf-8")
     runner = (
         install_home
@@ -612,6 +617,7 @@ def test_real_resume_command_can_cleanup_and_resume_again(
     libdir = bindir / "lib"
     hooks = install_home / "hooks"
     libdir.mkdir(parents=True)
+    copy_client_library(install_home)
     hooks.mkdir(parents=True)
     for source, target in (
         (ROOT / "bin" / "agentstack-codex-bootstrap", bindir / "agentstack-codex-bootstrap"),

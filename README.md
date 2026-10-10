@@ -87,6 +87,7 @@ Telemetry 単体での例: 名前で絞り込み、`7D` の `RETIRED` / `RESUME 
 | 絶対 path の予約候補を検証する | [候補の契約と試験](docs/absolute-reservations.md)（既定は旧 mode） |
 | Mail と配送の移行候補を検証する | [記録の移行と復旧](docs/namespace-state-migration.md)（activation false） |
 | 隔離 global server S1 / S2a を検証する | [wire 契約と対応能力](docs/global-server.md)（既定は旧 mode） |
+| [global child client](docs/global-child-client.md) | 固定 root の子登録・再開と hook の準備 |
 | 隔離 global 予約・welcome を検証する | [S2c 契約と復旧](docs/global-reservations.md)（既定は旧 mode） |
 | 隔離 message と通知を検証する | [S2b の DB・signal 契約](docs/global-messages.md)（既定は旧 mode） |
 | 隔離 runtime client を検証する | [登録・復旧・待機の4a準備](docs/global-runtime-client.md)（既定は旧 mode） |

@@ -474,6 +474,18 @@ def cleanup(mail: AgentMail, project_key: str, pair: list[str], report: Reporter
 
 
 def main() -> int:
+    import runpy
+    helper=pathlib.Path(__file__).resolve().parents[1]/'bin/lib/runtime_client.py'
+    selection = subprocess.run(['/bin/bash', str(helper.with_name('global-client-loader.sh')), 'select', *sys.argv[1:]])
+    if selection.returncode not in (0, 125):
+        return 2
+    if selection.returncode == 0:
+        try:
+            api=runpy.run_path(str(helper));client=api['configured']()
+            with client.fence():pass
+        except (RuntimeError,ValueError,OSError):
+            print('selftest: GLOBAL_CONTEXT_INVALID',file=sys.stderr);return 2
+        print('selftest: GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C',file=sys.stderr);return 2
     parser = argparse.ArgumentParser(
         description="Check that an installed agent stack actually works.",
     )

@@ -7,6 +7,10 @@ from pathlib import Path
 import re
 
 
+class ContractError(ValueError):
+    """Bounded wire errors shared by server and stdlib clients."""
+
+
 def _nonnegative_integer(value):
     return type(value) is int and value >= 0
 

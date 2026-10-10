@@ -1,4 +1,27 @@
 #!/bin/bash
+
+# Decide explicit global context before loading any legacy environment/state.
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader" || exit 2
+if declare -F ags_client_entry >/dev/null; then
+  _ags_global_error="$(ags_client_entry pre-edit "$@" 2>&1)" && _ags_global_rc=0 || _ags_global_rc=$?
+  if [[ "$_ags_global_rc" == 0 ]]; then exit 0; fi
+  if [[ "$_ags_global_rc" != 125 ]]; then
+    . "$(dirname "${BASH_SOURCE[0]}")/session-identity-policy.sh"
+    if [[ "$_ags_global_error" == *INITIAL_TRANSPORT_UNREACHABLE* ]]; then
+      agentstack_audit_unmanaged "pre-edit" "${AGENTSTACK_SESSION_ID:-global}" "transport=unreachable policy=$(agentstack_mail_outage_policy)"
+      if [[ "$(agentstack_mail_outage_policy)" == warn-open ]]; then
+        if agentstack_should_report_outage "${AGENTSTACK_SESSION_ID:-global}" "unreachable"; then
+          agentstack_emit_visible_warning "$(agentstack_outage_warning_text)"
+        fi
+        exit 0
+      fi
+    fi
+    printf '%s\n' "$_ags_global_error" >&2
+    exit "$_ags_global_rc"
+  fi
+
+fi
 # check-file-reservation.sh
 # PreToolUse hook: require an existing reservation before editing protected files.
 # Exit 2 = block, 0 = allow.

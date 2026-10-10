@@ -4,6 +4,11 @@ description: Start, spawn or delegate to a child Claude or Codex agent and talk 
 allowed-tools: Bash, CronCreate, CronDelete, CronList, Read, Grep, Glob, mcp__orrery-mail__send_message, mcp__orrery-mail__fetch_inbox, mcp__orrery-mail__set_contact_policy, mcp__orrery-mail__macro_contact_handshake, mcp__orrery-mail__respond_contact, mcp__orrery-mail__file_reservation_paths, mcp__orrery-mail__release_file_reservations, mcp__orrery-mail__renew_file_reservations
 user-invocable: true
 ---
+## Explicit global preparation
+
+When `AGENTSTACK_CLIENT_CONFIG` selects global mode, use the fixed client context and stable IDs. Do not apply the legacy project/name/raw-token registration procedure below. Child preparation uses `agentstack-preregister-child --child-client-name child_01 --name ChildAlpha --program codex --model explicit-model --task-description "Task summary" --prepare-only`; repeat the same command to recover its saved registration intent. Registration dispatch remains in `bin/lib/agentstack-register.sh`. Global child execution/proxy/wake is pending4c: ordinary spawn/resume refuses, and prepare-only never means a running child. Do not use another launcher to bypass that refusal. Message writes use typed JSON through `agentstack-runtime-client call-json send_message` with `to_agent_ids`; replay saved message bytes with `replay-pending`. Follow the actual bound proxy schema when proxy tools are provided. See `docs/global-child-client.md` / `docs/global-child-client.en.md`.
+
+
 
 # Delegate A Task
 

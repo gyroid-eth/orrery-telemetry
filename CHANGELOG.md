@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### global client の子登録・再開・hook を準備
+
+既定の旧 mode を維持し、固定 client root を使う明示 prepare-only の子登録・再開を追加しました。登録の中断は同じ name/token の再送と owner 照合で回収し、SessionEnd と cleanup を共通化しました。予約は期限の閾値以下だけ更新し、応答喪失時は次の hook が同じ UUID を再送します。schema・拒否表・message intent は server と共有します。既存 standalone の子への転用を拒否し、global 選択後・owner material の前に Mail 無効化を確認します。解放は旧 grace 設定（既定90秒）と lease ごとの slot を使い、更新された予約を保ちます。次の編集 hook は保存済みの全種類の mutation を再送し、通常の context 判定と partial install の admission は各1か所へ集約しました。context が無いときの mode 判定では Python を起動せず、旧 runtime が select 未対応でも旧経路を保ちます。実行と wake は後続のまま、activation=false・公開 Mail tool31個は不変です。dashboard の明示 global resume 入力に合わせ API 世代を13にしました。
+
 ### 未使用の診断 backup と restore を削除
 
 呼出し元のない診断 backup／restore／一覧の3関数と専用 manifest、および空になる節を削除し、SQLite の raw copy を再び利用する入口を減らしました。global server の監査表は、内部 candidate manifest と rehearsal の raw hash も接続の寿命とともに明記しています。公開 tool・既定の旧 mode の動作は変わりません。

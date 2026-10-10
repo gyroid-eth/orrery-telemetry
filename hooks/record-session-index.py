@@ -28,6 +28,7 @@ from pathlib import Path
 import runpy
 import os
 import sys
+import subprocess
 import time
 
 
@@ -124,8 +125,12 @@ def main():
         return EXIT_NOT_APPLICABLE
 
     helper = Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'
-    implicit_context = helper.parents[2] / 'runtime-client.json'
-    if os.environ.get('AGENTSTACK_CLIENT_CONFIG') or implicit_context.exists() or implicit_context.is_symlink():
+    selection = subprocess.run(['/bin/bash', str(helper.with_name('global-client-loader.sh')), 'select', *sys.argv[1:]])
+    if selection.returncode not in (0, 125):
+        return EXIT_CALLER_UNRESOLVED
+    if selection.returncode == 0:
+        if os.environ.get('AGENTSTACK_MAIL_DISABLED') == '1':
+            return EXIT_NOT_APPLICABLE
         try:
             api = runpy.run_path(str(helper))
             client = api['configured']()
@@ -133,6 +138,7 @@ def main():
                 pass
             if client.mode == 'global':
                 client.record_session(d)
+                client.record_live(d)
                 return EXIT_BOUND
         except Exception:
             return EXIT_CALLER_UNRESOLVED

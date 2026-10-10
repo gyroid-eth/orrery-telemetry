@@ -13,6 +13,8 @@ import subprocess
 import sys
 import tempfile
 
+from _installed_client_payload import copy_client_library
+
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -188,6 +190,7 @@ def _run_root_claude_substitution(*, collision: bool):
     bindir = tmpdir / "bin"
     libdir = bindir / "lib"
     libdir.mkdir(parents=True)
+    copy_client_library(tmpdir)
     launcher = bindir / "agent-start"
     launcher.write_text(_read("bin/agent-start"), encoding="utf-8")
     launcher.chmod(0o755)
@@ -286,6 +289,7 @@ def test_reserved_bootstrap_refuses_to_resume_without_prepare_helper(tmp_path):
     bindir = tmp_path / "bin"
     libdir = bindir / "lib"
     libdir.mkdir(parents=True)
+    copy_client_library(tmp_path)
     bootstrap = bindir / "agentstack-codex-bootstrap"
     bootstrap.write_text(_read("bin/agentstack-codex-bootstrap"), encoding="utf-8")
     (libdir / "agentstack-register.sh").write_text(
@@ -373,6 +377,7 @@ def _bootstrap_resume_fixture(
     hooks = tmp_path / "hooks"
     libdir.mkdir(parents=True)
     hooks.mkdir()
+    copy_client_library(tmp_path)
     bootstrap = bindir / "agentstack-codex-bootstrap"
     bootstrap.write_text(_read("bin/agentstack-codex-bootstrap"), encoding="utf-8")
     for helper in ("prepare-codex-session-binding.py", "child_resume.py"):

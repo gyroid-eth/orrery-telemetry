@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":12}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":13}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -431,6 +431,8 @@ overlay、高解像度 bundle、64px bundle の順で PNG を探します。安�
 `dashboard/assets` 直下の basename だけを配信します。許可 extension は `.svg` と `.png` です。`/`、`..`、その他 extension は 404 です。
 
 ## POST `/api/jump`
+
+API13: `/api/jump` は明示 `runtime_mode=global`・`client_config`・`client_name`・`prepare_only=true`・`open=false` で固定 root の再開準備を受け取ります。返り値の runtime_ready は false、旧 session 入力は不変です。
 
 request:
 

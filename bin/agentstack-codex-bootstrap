@@ -24,7 +24,10 @@
 WORK_DIR="${1:-.}"
 if [ -n "${BASH_SOURCE:-}" ]; then _ags_bootstrap_src="${BASH_SOURCE[0]}"; else _ags_bootstrap_src="$0"; fi
 SCRIPT_DIR="$(cd "$(dirname "$_ags_bootstrap_src")" && pwd)"
-if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$SCRIPT_DIR/../runtime-client.json" || -L "$SCRIPT_DIR/../runtime-client.json" ]]; then
+. "$SCRIPT_DIR/lib/global-client-loader.sh" || { return 2 2>/dev/null || exit 2; }
+ags_client_select "$@" && _ags_selected_rc=0 || _ags_selected_rc=$?
+[[ "$_ags_selected_rc" == 0 || "$_ags_selected_rc" == 125 ]] || { return "$_ags_selected_rc" 2>/dev/null || exit "$_ags_selected_rc"; }
+if [[ "$_ags_selected_rc" == 0 ]]; then
   _ags_global_mode="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" mode)" || { return 1 2>/dev/null || exit 1; }
   if [[ "$_ags_global_mode" == "global" ]]; then
     _ags_global_exports="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" bootstrap codex)" || { return 1 2>/dev/null || exit 1; }

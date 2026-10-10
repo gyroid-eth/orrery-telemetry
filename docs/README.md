@@ -66,3 +66,6 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [開発への入口](../CONTRIBUTING.md) — build・検証・変更を送るときの手順。
 
 英語版の無い文書は原語を明記しています。画像/GIFは各文書に付随する資料です。索引の網羅性は `python3 scripts/check_docs_index.py`（repository の根から）で確認できます。
+
+- [global client の子・再開の準備](global-child-client.md) — 固定 layout、同じ登録 intent の再送、共通 end と予約 hook。
+- [呼び手・中断・受け入れの表](global-child-client-contract.md) — global client の fixture から生成した契約の一覧。

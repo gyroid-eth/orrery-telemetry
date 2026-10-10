@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":12}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":13}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -431,6 +431,8 @@ PNG files are searched in the order overlay, high-resolution bundle, then 64px b
 Only basenames immediately under `dashboard/assets` are served. Allowed extensions are `.svg` and `.png`. `/`, `..`, and other extensions return 404.
 
 ## POST `/api/jump`
+
+API13: `/api/jump` accepts explicit `runtime_mode=global`, `client_config`, `client_name`, `prepare_only=true`, `open=false` for fixed-root resume preparation. `runtime_ready` remains false; legacy session input is unchanged.
 
 Request:
 

@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+
+# Decide explicit global context before loading any legacy environment/state.
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader" || exit 2
+if declare -F ags_client_entry >/dev/null; then
+  if ags_client_entry spawn-child "$@"; then exit 0; else _ags_global_rc=$?; fi
+  if [[ "$_ags_global_rc" != 125 ]]; then
+    exit "$_ags_global_rc"
+  fi
+
+fi
 # Dashboard adapter for a Gemini child that ORRERY Mail already registered.
 # Accepts the same pre-registered contract used by dashboard/server.py, then
 # launches Antigravity headless in an isolated worktree.

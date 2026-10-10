@@ -9,7 +9,10 @@ RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 RESOLVED_AGENT=""
 RESOLVED_AGENT_SRC="none"
 _ags_client="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/lib/runtime_client.py"
-if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$(dirname "$_ags_client")/../../runtime-client.json" || -L "$(dirname "$_ags_client")/../../runtime-client.json" ]]; then
+. "$(dirname "$_ags_client")/global-client-loader.sh" || { RESOLVED_AGENT_SRC="identity-conflict"; return 1 2>/dev/null || exit 1; }
+ags_client_select "$@" && _ags_selected_rc=0 || _ags_selected_rc=$?
+[[ "$_ags_selected_rc" == 0 || "$_ags_selected_rc" == 125 ]] || { RESOLVED_AGENT_SRC="identity-conflict"; return 1 2>/dev/null || exit 1; }
+if [[ "$_ags_selected_rc" == 0 ]]; then
   _ags_mode="$(python3 "$_ags_client" mode)" || { RESOLVED_AGENT_SRC="identity-conflict"; return 1 2>/dev/null || exit 1; }
   if [[ "$_ags_mode" == "global" ]]; then
     _ags_row="$(python3 "$_ags_client" observe)" || { RESOLVED_AGENT_SRC="identity-conflict"; return 1 2>/dev/null || exit 1; }

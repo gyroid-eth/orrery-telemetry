@@ -25,6 +25,7 @@ from .boundary import CompatibilityFastMCP
 from .enrollment import _peer_uid
 from .namespace_state_io import connection
 from .namespace_store import changed, generation
+from .schema_contract import ContractError as GlobalError
 from .utils import sanitize_agent_name
 
 TOOLS = frozenset(
@@ -38,11 +39,11 @@ TOOLS = frozenset(
         "unretire_agent",
     }
 )
+
+
 WIRE_VERSION = 1
 
 
-class GlobalError(ValueError):
-    """Bounded errors never include credentials, SQL, paths or peer data."""
 
 
 def safe_directory(path, *, create=False):

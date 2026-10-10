@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 
 
+from _installed_client_payload import copy_client_library
+
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "hooks" / "check-file-reservation.sh"
 RESOLVER = ROOT / "hooks" / "resolve-agent-name.sh"
@@ -199,6 +201,7 @@ class ReservationHookTests(unittest.TestCase):
         runtime.mkdir(exist_ok=True)
         hooks.mkdir(exist_ok=True)
         if install_resolver:
+            copy_client_library(root)
             (hooks / "resolve-agent-name.sh").write_bytes(
                 RESOLVER.read_bytes() if resolver_bytes is None else resolver_bytes
             )

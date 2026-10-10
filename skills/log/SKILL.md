@@ -20,6 +20,10 @@ date '+%Y-%m-%dT%H%M'
 date '+%Y-%m-%d'
 ```
 
+## Global context
+
+In global mode the log destination is an explicit vault/work folder, not a Mail project key. Ask for a destination when it is absent; do not infer it from agent identity or use a Mail scope. Logging itself does not register an agent or fetch an inbox. Existing legacy destination selection below remains available outside global mode.
+
 ## Destination Strategy
 
 Use a two-layer destination strategy.

@@ -43,7 +43,7 @@ def _function(text: str, name: str) -> str:
 
 
 def _payload_declaration(text: str) -> str:
-    match = re.search(r"^RUNTIME_SCHEMA_SOURCE=.*\nRUNTIME_FIXTURE_SOURCE=.*\nOPTIONAL_PROVIDER_PAYLOAD=\(\n.*?^\)\n", text, re.DOTALL | re.MULTILINE)
+    match = re.search(r"^RUNTIME_SCHEMA_SOURCE=.*\nRUNTIME_FIXTURE_SOURCE=.*\nRUNTIME_CLIENT_CONTRACT_SOURCES=\(\n.*?^\)\nOPTIONAL_PROVIDER_PAYLOAD=\(\n.*?^\)\n", text, re.DOTALL | re.MULTILINE)
     assert match, "core payload declarations missing"
     return match.group(0)
 
@@ -88,7 +88,8 @@ def _run_install_payload(install_dir: pathlib.Path, *, tier: str = "tier1",
 
 def test_core_exclusions_cover_every_provider_contract_file_it_would_copy():
     provider_files = _provider_installer_files()
-    declared = re.findall(r'^  "([^"]+)"$', _payload_declaration(_installer_text()), re.MULTILINE)
+    provider_declaration = _payload_declaration(_installer_text()).split('OPTIONAL_PROVIDER_PAYLOAD=(\n', 1)[1]
+    declared = re.findall(r'^  "([^"]+)"$', provider_declaration, re.MULTILINE)
     assert declared == list(PROVIDER_PAYLOAD)
     assert set(declared) <= set(provider_files)
 
@@ -127,8 +128,14 @@ def test_fresh_core_install_omits_provider_payload_and_runs_core_server(tmp_path
         assert (install_dir / relative).read_bytes() == (ROOT / relative).read_bytes(), relative
     assert (install_dir / "dashboard" / "providers" / "codex_app.py").is_file()
     for source, installed in (
+        ("bin/lib/global-client-loader.sh", "global-client-loader.sh"),
         ("packages/agentstack_mail/src/agentstack_mail/schema_contract.py", "schema_contract.py"),
         ("packages/agentstack_mail/fixtures/global-server-s2a.json", "global-server-s2a.json"),
+        ("packages/agentstack_mail/src/agentstack_mail/global_s2b_contract.py", "global_s2b_contract.py"),
+        ("packages/agentstack_mail/src/agentstack_mail/global_s2c_contract.py", "global_s2c_contract.py"),
+        ("packages/agentstack_mail/fixtures/global-server-s2b.json", "global-server-s2b.json"),
+        ("packages/agentstack_mail/fixtures/global-server-s2c.json", "global-server-s2c.json"),
+        ("packages/agentstack_mail/fixtures/global-client-4b.json", "global-client-4b.json"),
     ):
         assert (install_dir / "bin/lib" / installed).read_bytes() == (ROOT / source).read_bytes()
 

@@ -7,6 +7,8 @@ import runpy
 
 import pytest
 
+from _installed_client_payload import copy_client_library
+
 ROOT = Path(__file__).resolve().parents[1]
 api = runpy.run_path(str(ROOT / "bin/lib/runtime_client.py"))
 RuntimeClient, ClientError = api["RuntimeClient"], api["ClientError"]
@@ -365,7 +367,6 @@ def test_output_schema_mismatch_keeps_planned_and_replays_same_uuid(
 
 
 def test_installed_stdlib_wrapper_uses_canonical_output_validator(server):
-    import shutil
     import subprocess
     import sys
 
@@ -374,12 +375,8 @@ def test_installed_stdlib_wrapper_uses_canonical_output_validator(server):
     library = installed_root / "bin/lib"
     library.mkdir(parents=True)
     canonical = ROOT / "packages/agentstack_mail/src/agentstack_mail/schema_contract.py"
-    shutil.copy2(ROOT / "bin/lib/runtime_client.py", library / "runtime_client.py")
-    shutil.copy2(canonical, library / "schema_contract.py")
-    shutil.copy2(
-        ROOT / "packages/agentstack_mail/fixtures/global-server-s2a.json",
-        library / "global-server-s2a.json",
-    )
+    copy_client_library(installed_root)
+
     assert (library / "schema_contract.py").read_bytes() == canonical.read_bytes()
     config = api["read_json"](client.path)
     config["wrapper_root"] = str(installed_root)
