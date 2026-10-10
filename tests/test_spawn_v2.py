@@ -1645,7 +1645,8 @@ def test_all_failed_candidates_report_omitted_count_within_limit(tmp_path):
     notes = [f"note: skipping codex /synthetic/{index}: " + "x" * 130 for index in range(8)]
     log.write_text("\n".join([*notes, "Error: no usable Codex CLI found"]))
     reason = server._spawn_log_tail_and_reason(log)[1]
-    assert reason == "; ".join(notes[:2]) + "; (+6 more skipped candidates)"
+    assert reason == ("; ".join(notes[:2]) + "; (+6 more skipped candidates); "
+                      "Error: no usable Codex CLI found")
     assert len(reason) <= 500
 
 
@@ -1655,5 +1656,16 @@ def test_a_single_oversized_candidate_still_leaves_room_for_omitted_count(tmp_pa
                    "\nnote: skipping codex /second: missing node\nError: no usable Codex CLI found")
     reason = server._spawn_log_tail_and_reason(log)[1]
     assert reason.startswith("note: skipping codex /")
-    assert reason.endswith("…; (+1 more skipped candidates)")
+    assert reason.endswith("…; (+1 more skipped candidates); Error: no usable Codex CLI found")
+    assert len(reason) == 500
+
+
+def test_single_oversized_candidate_keeps_final_resolution_error(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("note: skipping codex /" + "x" * 600 +
+                   "\nError: no usable Codex CLI found")
+    reason = server._spawn_log_tail_and_reason(log)[1]
+    assert reason.startswith("note: skipping codex /")
+    assert reason.endswith("…; Error: no usable Codex CLI found")
+    assert "more skipped" not in reason
     assert len(reason) == 500
