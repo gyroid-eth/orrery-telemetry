@@ -480,6 +480,11 @@ if [[ -z "$PROJECT_KEY" ]]; then
 fi
 PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$PROJECT_KEY_INPUT" "$INSTALL_DIR/env.sh")"
 
+# --dashboard-only copies no hooks/ and never launches a Codex child
+# (spawn_child.sh): nothing on that path needs hooks/codex-bin.sh, so it must
+# not be required to exist there either. Everything that loads or calls it
+# is skipped for that tier, below (#243).
+if [[ "$TIER" != tier0 ]]; then
 # --- codex helper load (tests extract from here to the end marker) ---
 # The launcher, doctor and installer resolve and probe Codex through the same
 # functions (hooks/codex-bin.sh, #242); the installer keeps no copy of its
@@ -502,6 +507,7 @@ for CODEX_HELPER_FN in codex_bin_problem find_usable_codex_bin_in codex_launch_s
 done
 unset CODEX_HELPER_FN
 # --- end codex helper load ---
+fi
 case "$RESET_SETTINGS" in
   0|"") RESET_SETTINGS=0 ;;
   1) ;;
@@ -644,6 +650,10 @@ find_usable_codex_bin() {
 # --- end codex launcher resolution ---
 
 resolve_setting CODEX_BIN_SETTING AGENTSTACK_CODEX_BIN "" found
+if [[ "$TIER" == tier0 ]]; then
+  # --dashboard-only: see the note above where the helper would otherwise load.
+  CODEX_CONTEXT_NOTE="not checked: --dashboard-only does not use Codex"
+else
 # A candidate must be probed the way a spawned child will actually run it —
 # its own login shell, with codex_launch_path's PATH (the resolved target's
 # own bin, so an npm shim finds the node it was installed with) — not under
@@ -651,30 +661,53 @@ resolve_setting CODEX_BIN_SETTING AGENTSTACK_CODEX_BIN "" found
 # that the launcher then rejects, or reject one (an nvm-style codex whose
 # node is not on this shell's PATH) that the launcher would have accepted
 # (#239, #243). codex_launch_context sets this up; doctor and the launcher
-# (spawn_child.sh) call the same function.
+# (spawn_child.sh) call the same function. There is no second, direct-PATH
+# way to probe a candidate here: a PATH with neither zsh nor bash means no
+# entry point can judge a candidate the way the child will actually run it,
+# so none of them do, rather than installer alone falling back to a
+# different (and looser) judgment that the launcher would then reject.
 #
-# Deferred to here (not right after loading the helper, above): this is the
-# first point a candidate is actually probed, and a PATH with neither zsh nor
-# bash is itself one of preflight's problems (run_preflight, further down) —
-# stopping here instead, before preflight's aggregated report ever runs,
-# once turned one "4 problem(s)" report into a single unrelated-looking error
-# (#243). Falling back to an unset CODEX_PROBE_RUNNER (probing under this
-# shell's own PATH, the pre-#243 behavior) is what happens if nothing is found.
+# codex_launch_context's own failure is not one of preflight's checks
+# (run_preflight, further down, only requires git and tmux) and is not fatal
+# here either: a person not using Codex must not have their install stopped
+# over it. Deferred to here, not right after loading the helper above: that
+# used to run before preflight at all, turning preflight's aggregated "N
+# problem(s)" report into a single unrelated-looking error for anyone
+# missing git or tmux too (#243).
+CODEX_CONTEXT_AVAILABLE=1
 if ! codex_launch_context; then
-  echo "note: Codex launcher checks will probe candidates under this installer's own PATH: no login shell (zsh or bash) was found on PATH (set AGENTSTACK_CHILD_SHELL, or see preflight below if this is unexpected)" >&2
+  CODEX_CONTEXT_AVAILABLE=0
 fi
-# codex_probe_budget_start must run in this shell, not inside a $(...)
-# subshell: a subshell's CODEX_PROBE_DEADLINE cannot be read back here, which
-# would silently drop the budget check below. One budget, started once,
-# covers the installed/stale check and the PATH scan together, so a path
-# that appears in both is judged (and timed) only once (#243).
-codex_probe_budget_start
-if [[ "$SETTING_SOURCE" != explicit ]]; then
+if [[ "$SETTING_SOURCE" == explicit ]]; then
+  # An explicit --codex-bin / AGENTSTACK_CODEX_BIN is a direct request: it is
+  # rejected, not silently left unchecked, when it cannot be judged at all.
+  if [[ "$CODEX_CONTEXT_AVAILABLE" != 1 ]]; then
+    echo "error: --codex-bin / AGENTSTACK_CODEX_BIN cannot be used: no login shell (zsh or bash) found on PATH to probe it under; set AGENTSTACK_CHILD_SHELL" >&2
+    exit 2
+  fi
+  codex_probe_budget_start
+  if codex_explicit_reason="$(codex_bin_problem "$CODEX_BIN_SETTING")" && [[ -n "$codex_explicit_reason" ]]; then
+    echo "error: --codex-bin / AGENTSTACK_CODEX_BIN cannot be used: $CODEX_BIN_SETTING ($codex_explicit_reason)" >&2
+    exit 2
+  fi
+elif [[ "$CODEX_CONTEXT_AVAILABLE" != 1 ]]; then
+  # No candidate can be judged: do not search, do not save a new value, and
+  # do not touch a saved one either (it is not "stale" — it was never
+  # checked this run). codex bin: in the summary says so explicitly.
+  CODEX_CONTEXT_NOTE="not checked: no login shell (zsh or bash) found on PATH for the probe context; set AGENTSTACK_CHILD_SHELL"
+  echo "note: Codex launcher checks skipped: $CODEX_CONTEXT_NOTE" >&2
+else
+  # codex_probe_budget_start must run in this shell, not inside a $(...)
+  # subshell: a subshell's CODEX_PROBE_DEADLINE cannot be read back here,
+  # which would silently drop the budget check below. One budget, started
+  # once, covers the installed/stale check and the PATH scan together, so a
+  # path that appears in both is judged (and timed) only once (#243).
+  codex_probe_budget_start
   if [[ -n "$CODEX_BIN_SETTING" ]]; then
     # A stale path from an earlier install (Node upgraded, prefix moved, or a
     # Windows shim picked up under WSL) must not pin the dashboard to a binary
     # that cannot run. An explicit --codex-bin that cannot run is rejected
-    # below instead.
+    # above instead.
     CODEX_JUDGED="$CODEX_JUDGED$CODEX_BIN_SETTING:"
     codex_stale_reason="$(codex_bin_problem "$CODEX_BIN_SETTING")"
     if [[ -n "$codex_stale_reason" ]]; then
@@ -692,9 +725,7 @@ if [[ "$SETTING_SOURCE" != explicit ]]; then
       echo "note: Codex detection stopped after the ${CODEX_PROBE_BUDGET_SECONDS}s candidate-probe budget was spent, before every candidate on PATH could be tried; AGENTSTACK_CODEX_BIN is left unset. Pass --codex-bin /path/to/codex, or remove/fix the slow candidate on PATH and re-run install." >&2
     fi
   fi
-elif codex_explicit_reason="$(codex_bin_problem "$CODEX_BIN_SETTING")" && [[ -n "$codex_explicit_reason" ]]; then
-  echo "error: --codex-bin / AGENTSTACK_CODEX_BIN cannot be used: $CODEX_BIN_SETTING ($codex_explicit_reason)" >&2
-  exit 2
+fi
 fi
 # A Node-installed `codex` is a wrapper that loads its platform package through
 # whichever `node` is first on PATH; under the service's own PATH that is a
@@ -4963,7 +4994,11 @@ main() {
   say "codex child config overlay: ${CODEX_CHILD_CONFIG_OVERLAY_SETTING:-(disabled)}"
   say "codex network: $CODEX_NETWORK_SETTING"
   say "child default tools: ${CHILD_DEFAULT_TOOLS_SETTING:-none}"
-  say "codex bin: ${CODEX_BIN_SETTING:-(not found on PATH; Codex spawns will fail until --codex-bin is set)}"
+  if [[ -n "${CODEX_CONTEXT_NOTE:-}" ]]; then
+    say "codex bin: ($CODEX_CONTEXT_NOTE)"
+  else
+    say "codex bin: ${CODEX_BIN_SETTING:-(not found on PATH; Codex spawns will fail until --codex-bin is set)}"
+  fi
   say "codex add dirs: ${CODEX_ADD_DIRS_SETTING:-(none beyond project, spawn dirs/roots, install dir, worktrees, ~/.claude, ~/.codex)}"
   say "Claude/Codex child resume retention: $CHILD_RESUME_RETENTION_DAYS_SETTING day(s)"
   validate_assume_yes

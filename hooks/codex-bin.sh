@@ -313,11 +313,7 @@ codex_launch_search_path() {
 # own PATH. spawn_child.sh, doctor, the installer and this file's own
 # `policy` entrypoint all call this once before any codex_bin_problem /
 # codex_find_bin check, so the context is one definition instead of each
-# caller repeating it (#239, #243). spawn_child.sh still names its own
-# resolve_child_shell / run_like_codex_child wrappers around
-# codex_launch_shell / codex_launch_runner (existing tests pin those names,
-# and CODEX_PROBE_RUNNER is read by name elsewhere in that file), but the
-# context itself comes from here, not a second implementation.
+# caller repeating it (#239, #243).
 codex_launch_context() {
     CHILD_SHELL="$(codex_launch_shell)" || return 1
     CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"

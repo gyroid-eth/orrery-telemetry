@@ -1204,16 +1204,10 @@ load_codex_launch_context() {
 }
 load_codex_launch_context || exit 1
 
-# Names kept for callers below (CODEX_PROBE_RUNNER, read elsewhere by name)
-# and for tests that exercise them directly; the context itself (CHILD_SHELL,
-# CODEX_CHILD_PATH_SETUP, CODEX_PROBE_RUNNER) is one definition shared with
-# doctor and the installer (codex_launch_context, hooks/codex-bin.sh, #243).
-resolve_child_shell() {
-    codex_launch_shell "$@"
-}
-run_like_codex_child() {
-    codex_launch_runner "$@"
-}
+# CHILD_SHELL, CODEX_CHILD_PATH_SETUP and CODEX_PROBE_RUNNER (read by name
+# below) are one definition shared with doctor and the installer
+# (codex_launch_context, hooks/codex-bin.sh, #243).
+#
 # How a Codex child's shell sets PATH before it runs codex: a login shell of
 # CHILD_SHELL (the user's profile may add nvm, nodebrew, ...) and ~/.local/bin in
 # front. Both Codex launch commands splice in this one string, and the codex

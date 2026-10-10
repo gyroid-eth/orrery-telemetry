@@ -39,6 +39,16 @@ def _helper_load_block() -> str:
     return text[start:end]
 
 
+def _dashboard_only_block() -> str:
+    # The TIER guard around the helper load, through the codex resolution's
+    # own TIER guard and its final fi: this is the whole span --dashboard-only
+    # must get through without hooks/codex-bin.sh existing at all (#243).
+    text = INSTALL.read_text(encoding="utf-8")
+    start = text.index("# --dashboard-only copies no hooks/")
+    end = text.index("# A Node-installed `codex` is a wrapper", start)
+    return text[start:end]
+
+
 _PROBE_FN = "echo LOADED=$(declare -F codex_bin_problem >/dev/null 2>&1 && echo yes || echo no)\necho HELPER=$CODEX_HELPER\n"
 
 
@@ -102,6 +112,36 @@ def test_codex_helper_missing_required_function_stops_instead_of_skipping_detect
     assert "missing required function" in result.stderr
 
 
+def test_dashboard_only_does_not_require_the_codex_helper_to_exist(tmp_path):
+    # --dashboard-only copies no hooks/ and never launches a Codex child, so
+    # it must get through Codex resolution without hooks/codex-bin.sh
+    # existing at all — not just without it being missing-but-checked (#243).
+    # A test_dashboard_service.py installer-repo fixture built for this tier
+    # legitimately omits hooks/codex-bin.sh; this must not become "error:
+    # missing Codex launcher helper" before whatever check that fixture is
+    # actually exercising gets to run.
+    repo_root = tmp_path / "checkout-without-hooks"
+    repo_root.mkdir()
+    install_dir = tmp_path / "install"
+    script = (
+        f"REPO_ROOT={shlex.quote(str(repo_root))}\n"
+        f"INSTALL_DIR={shlex.quote(str(install_dir))}\n"
+        "TIER=tier0\n"
+        "RESET_SETTINGS=0\nOPTION_GIVEN=\nCODEX_BIN_SETTING=''\n"
+        "agentstack_installed_env_value() { printf '%s\\n' ''; }\n"
+        "SETTING_SOURCE=''\n"
+        "resolve_setting() { SETTING_SOURCE=default; printf -v \"$1\" '%s' \"\"; }\n"
+        + _dashboard_only_block()
+        + '\nprintf "RESOLVED=%s\\n" "$CODEX_BIN_SETTING"\n'
+        + 'printf "NOTE=%s\\n" "$CODEX_CONTEXT_NOTE"\n'
+    )
+    result = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert "RESOLVED=\n" in result.stdout
+    assert "NOTE=not checked: --dashboard-only does not use Codex" in result.stdout
+    assert "missing Codex launcher helper" not in result.stderr
+
+
 def _script(path: pathlib.Path, body: str) -> pathlib.Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
@@ -122,7 +162,8 @@ WORKS = 'echo "codex-cli 0.157.0"\n'
 BROKEN = 'echo "Error: Missing optional dependency @openai/codex-linux-x64" >&2\nexit 1\n'
 
 
-def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeout=5, budget=15, extra_env=None):
+def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeout=5, budget=15, extra_env=None,
+             path_suffix=":/usr/bin:/bin"):
     """Run the block; returns (exit code, resolved CODEX_BIN_SETTING, stderr).
 
     The default probe budget is generous so a working fake codex is not failed
@@ -142,6 +183,9 @@ def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeo
         # them up the same way install.sh itself does, including the
         # child-login-shell probe context (#243).
         + _helper_load_block() + "\n"
+        # install.sh's own top-of-script default (TIER="tier1"); the block
+        # under test reads it to skip Codex entirely for --dashboard-only (#243).
+        "TIER=tier1\n"
         "RESET_SETTINGS=0\n"
         # An explicit value is what --codex-bin / AGENTSTACK_CODEX_BIN supplies.
         f"OPTION_GIVEN={'AGENTSTACK_CODEX_BIN' if explicit else ''}\n"
@@ -162,7 +206,7 @@ def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeo
     script = stubs + block + '\nprintf "RESOLVED=%s\\n" "$CODEX_BIN_SETTING"\n'
     env = {
         "HOME": str(home),
-        "PATH": ":".join(str(d) for d in path_dirs) + ":/usr/bin:/bin",
+        "PATH": ":".join(str(d) for d in path_dirs) + path_suffix,
     }
     if extra_env:
         env.update(extra_env)
@@ -271,6 +315,42 @@ def test_nothing_usable_leaves_the_setting_empty(tmp_path):
     windows = _windows_codex(tmp_path)
     code, resolved, stderr = _resolve(tmp_path, path_dirs=[windows.parent], wsl=True)
     assert code == 0 and resolved == ""
+
+
+def test_no_login_shell_skips_detection_without_saving_a_new_value(tmp_path):
+    # Nothing saved, no zsh/bash on PATH at all: there is no context to judge
+    # a candidate under, so none is searched for and none is saved (#243) —
+    # not a silent fallback to a direct, installer-only PATH probe.
+    working = _script(tmp_path / "linux-bin" / "codex", WORKS)
+    code, resolved, stderr = _resolve(tmp_path, path_dirs=[working.parent], path_suffix="")
+    assert code == 0
+    assert resolved == ""
+    assert "not checked: no login shell" in stderr
+    assert "note: Codex launcher checks skipped" in stderr
+
+
+def test_no_login_shell_leaves_a_saved_value_untouched(tmp_path):
+    # A saved value is not "stale" just because this run cannot judge
+    # anything: it was never checked this run, so it must not be cleared,
+    # re-searched or re-saved.
+    saved = tmp_path / "saved-bin" / "codex"
+    code, resolved, stderr = _resolve(
+        tmp_path, path_dirs=[], installed=str(saved), path_suffix="")
+    assert code == 0
+    assert resolved == str(saved)
+    assert "not checked: no login shell" in stderr
+    assert "is stale" not in stderr
+
+
+def test_no_login_shell_stops_an_explicit_codex_bin_instead_of_skipping_it(tmp_path):
+    # An explicit --codex-bin / AGENTSTACK_CODEX_BIN is a direct request:
+    # unlike the auto/saved cases, it must not be silently left unchecked.
+    explicit = tmp_path / "explicit-bin" / "codex"
+    code, resolved, stderr = _resolve(
+        tmp_path, path_dirs=[], explicit=str(explicit), path_suffix="")
+    assert code == 2
+    assert f"cannot be used: {explicit}" not in stderr  # not probed, so no probe reason
+    assert "cannot be used: no login shell" in stderr
     # Every candidate was judged and rejected for a real reason; this must not
     # read like the budget-exhaustion case below, where some were never tried.
     assert "candidate-probe budget was spent" not in stderr

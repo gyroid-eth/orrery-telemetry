@@ -49,12 +49,11 @@ def _script(path: pathlib.Path, body: str) -> pathlib.Path:
 
 
 def _runner() -> str:
-    """The child PATH setup and the probe runner, as spawn_child.sh defines them."""
+    """The child PATH setup and the probe runner, as spawn_child.sh sets them up."""
     text = SPAWN.read_text(encoding="utf-8")
-    start = text.index("resolve_child_shell() {")
     marker = "codex_launch_context || exit 1\n"
-    end = text.index(marker, start) + len(marker)
-    return text[start:end]
+    assert marker in text, "spawn_child.sh no longer sets up the context this way"
+    return marker
 
 
 def _loader():
@@ -204,12 +203,9 @@ def test_the_probe_runs_codex_with_the_path_the_child_will_have(tmp_path):
 def test_both_codex_launches_use_the_one_path_setup():
     text = SPAWN.read_text(encoding="utf-8")
     assert text.count("\'\"$CODEX_CHILD_PATH_SETUP_QUOTED\"\';") == 2
-    runner_start = text.index("run_like_codex_child() {")
-    runner = text[runner_start:text.index("\n}\n", runner_start) + 3]
-    assert "codex_launch_runner" in runner
-    # Context assembly (CHILD_SHELL / CODEX_CHILD_PATH_SETUP / CODEX_PROBE_RUNNER)
-    # is codex_launch_context's job now (hooks/codex-bin.sh, #243), shared with
-    # doctor and the installer; this file keeps its own names for the probes below.
+    # Context assembly (CHILD_SHELL / CODEX_CHILD_PATH_SETUP / CODEX_PROBE_RUNNER,
+    # the latter naming codex_launch_runner) is codex_launch_context's job now
+    # (hooks/codex-bin.sh, #243), shared with doctor and the installer.
     assert "codex_launch_context || exit 1" in text
     # The approval probe (--help) goes through the same runner.
     approval = text[text.index("codex_approval_flags() {"):]
@@ -335,7 +331,7 @@ def test_the_probe_shell_has_the_guards_the_child_session_has(tmp_path):
     (home / ".bash_profile").write_text(
         '[ "$CLAUDECODE" = 1 ] && [ "$AGENTSTACK_RESERVED_IDENTITY" = 1 ] || exit 23\n', encoding="utf-8")
     codex = _script(tmp_path / "bin" / "codex", WORKS)
-    script = f'HOOKS_DIR={shlex.quote(str(ROOT / "hooks"))}\n' + _loader() + "AGENTSTACK_CHILD_SHELL=/bin/bash\n" + _runner() + f"run_like_codex_child {shlex.quote(str(codex))} --version\n"
+    script = f'HOOKS_DIR={shlex.quote(str(ROOT / "hooks"))}\n' + _loader() + "AGENTSTACK_CHILD_SHELL=/bin/bash\n" + _runner() + f"codex_launch_runner {shlex.quote(str(codex))} --version\n"
     result = subprocess.run(["/bin/bash", "-c", script], env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
