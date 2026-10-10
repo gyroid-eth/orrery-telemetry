@@ -246,11 +246,12 @@ S1 からの不具合の修正として、main DB と sidecar の検査を `lsta
 | `global_prepare.require_legacy_source` | 呼出し側が接続を保持し得る。raw fd を廃止し `lstat`＋SQLite の immutable 読取へ |
 | `global_s2a.fts_snapshot` / `integrity` | 元 DB は SQLite backup API でコピー。raw fd は別 inode の固定 directory の lock のみ。コピーの touch はコピーの SQLite open 前、削除は close 後 |
 | `namespace_state_io.backup` / `database_manifest`、`namespace_transform.convert_mail` / `convert_delivery` | DB の copy・hash は SQLite backup API／SQL 行の digest。DB ファイルの raw open は無し |
-| `global_prepare_s2b`、`namespace_migration`、S2a/S2b/S2c receipt | 添付・signal・mapping・JSON の read/hash と SQL row の digest。DB/sidecar の bytes は直接読まない |
-| `global_prepare.prepare` の artifact manifest | 新規非公開 candidate の全 SQLite connection を閉じた後に raw hash。complete 前は runtime 起動不可、complete の再実行は hash 前に return |
+| `global_prepare_s2b`、S2a/S2b/S2c receipt | 添付・signal・mapping・JSON の read/hash と SQL row の digest。DB/sidecar の bytes は直接読まない |
+| 内部 candidate manifest（`NamespaceMigration._candidate_manifest`）/ `global_prepare.prepare` の artifact manifest | 両方が非公開 candidate の接続を閉じた後に `tree_manifest` で DB/sidecar bytes を raw hash。内部 manifest は SQL 行の digest 読取を閉じてから resource tree を hash。準備の artifact manifest も complete 前に行い、complete 前は runtime 起動不可、complete の再実行は hash 前に return |
+| `evidence._sqlite_state` | 自身の SQLite open 前に family を raw hash。rehearsal の呼出し側も同 process の接続を保持しない。復旧後 server が別 process で動く場合も、観測側 fd の close はその lock を解除しない。physical hash は観測値であり、整合した SQL snapshot ではない |
 | `migration.copy_state` / `_copy_database` | source writer guard を保持するが DB は SQLite backup API。新しい destination の作成 fd はその SQLite open 前に close |
 | `migration.cold_backup_database` / `cold_restore_database` と `restore_acceptance` の raw family 検証 | services-stopped の cold 操作。raw copy/hash の後に別の disposable copy を SQLite で検証し close。稼働中 transaction の検査には使わない |
-| `storage.create_diagnostic_backup` / `restore_from_backup` | 同型の raw main/WAL/SHM copy が残る。repo の実行コード・試験から呼出し元なし。今回は変更せず、未使用旧コードの別整理対象 |
+| `storage.create_diagnostic_backup` / `restore_from_backup` | repo の実行コード・試験から呼出し元のない raw main/WAL/SHM copy の2関数と、専用の `BackupManifest` を削除 |
 | dashboard / Codex App delivery / hooks / CLI | DB 読取は SQLite API、または上記共通処理への委譲。同型の独立 DB fd 開閉は見つからず |
 
 回帰は `test_sqlite_family_validation_never_opens_independent_descriptors`（起動・read・write）、`test_source_admission_never_opens_raw_database_descriptor` と `test_sqlite_family_validation_preserves_cross_process_writer_lock` です。最後の試験は保持中の writer lock を別 process が取得できないことを直接確かめます。

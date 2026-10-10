@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### 未使用の診断 backup と restore を削除
+
+呼出し元のない診断 backup／restore と専用 manifest を削除し、SQLite の raw copy を再び利用する入口を減らしました。global server の監査表は、内部 candidate manifest と rehearsal の raw hash も接続の寿命とともに明記しています。公開 tool・既定の旧 mode の動作は変わりません。
+
+
 ### global SQLite の POSIX lock を保つ
 
 S1 からの不具合を修正しました。main DB と sidecar の安全確認、および source の形式確認で独立した fd を開閉せず、`lstat` を使います。同じ process の SQLite lock が解除され、並行処理で DB が壊れる経路を取り除きました。別 process が保持中の writer lock を取得できない回帰と、DB/sidecar の raw open を禁止する回帰を追加しました。監査結果は日英の global server ガイドに記録しています。
