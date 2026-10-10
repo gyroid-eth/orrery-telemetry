@@ -430,8 +430,6 @@ def _codex_entrypoint_layout(tmp_path: Path, layout: str) -> dict[str, Path]:
         copy_client_library(root)
         for relative in (
             "bin/agentstack-preregister-child",
-            "bin/lib/agentstack-register.sh",
-            "bin/lib/agentstack-scientists.sh",
             "hooks/spawn_child.sh",
             "hooks/codex-bin.sh",
             "dashboard/codex_models.py",

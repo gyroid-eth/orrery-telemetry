@@ -179,3 +179,28 @@ def test_absent_context_does_not_start_python(tmp_path, shell):
                             input="preserved stdin", text=True, capture_output=True)
     assert result.returncode == 125
     assert not result.stdout and not result.stderr
+
+
+@pytest.mark.parametrize("explicit_context", [False, True])
+def test_new_entry_without_loader_refuses_before_legacy_registration(tmp_path, explicit_context):
+    # This is deliberately an old core with a new entry, not a complete install.
+    lib = tmp_path / "bin/lib"
+    lib.mkdir(parents=True)
+    marker = tmp_path / "legacy-loaded"
+    (lib / "agentstack-register.sh").write_text('touch "' + str(marker) + '"\n')
+    wrapper = tmp_path / "bin/agentstack-preregister-child"
+    wrapper.write_bytes((ROOT / "bin/agentstack-preregister-child").read_bytes())
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("AGENTSTACK_", "AGS_"))
+           and k not in {"TMUX", "TMUX_PANE", "PROJECT_KEY"}}
+    env.update(HOME=str(tmp_path), AGENTSTACK_HOME=str(tmp_path))
+    if explicit_context:
+        env["AGENTSTACK_CLIENT_CONFIG"] = str(tmp_path / "runtime-client.json")
+    token = tmp_path / "token"
+    result = subprocess.run(
+        ["/bin/bash", str(wrapper), "--name", "FixtureChild", "--program", "codex",
+         "--model", "fixture", "--token-file-out", str(token)],
+        env=env, text=True, capture_output=True, timeout=10)
+    assert result.returncode == 2, result.stderr
+    assert "global-client-loader.sh" in result.stderr
+    assert not result.stdout and not token.exists() and not marker.exists()
