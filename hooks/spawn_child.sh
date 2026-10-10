@@ -1204,18 +1204,23 @@ load_codex_launch_context() {
 }
 load_codex_launch_context || exit 1
 
+# Names kept for callers below (CODEX_PROBE_RUNNER, read elsewhere by name)
+# and for tests that exercise them directly; the context itself (CHILD_SHELL,
+# CODEX_CHILD_PATH_SETUP, CODEX_PROBE_RUNNER) is one definition shared with
+# doctor and the installer (codex_launch_context, hooks/codex-bin.sh, #243).
 resolve_child_shell() {
     codex_launch_shell "$@"
 }
-CHILD_SHELL="$(resolve_child_shell)" || exit 1
-
+run_like_codex_child() {
+    codex_launch_runner "$@"
+}
 # How a Codex child's shell sets PATH before it runs codex: a login shell of
 # CHILD_SHELL (the user's profile may add nvm, nodebrew, ...) and ~/.local/bin in
 # front. Both Codex launch commands splice in this one string, and the codex
-# probes (--version, --help) run through run_like_codex_child, so a candidate is
+# probes (--version, --help) run through CODEX_PROBE_RUNNER, so a candidate is
 # judged under the PATH it will run with. Probing with the launcher's own PATH
 # rejected a codex whose `#!/usr/bin/env node` finds node only there (2026-09-29).
-CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"
+codex_launch_context || exit 1
 # tmux receives a shell command containing a single-quoted login script.
 # Escape the shared setup for that outer shell; probes use the raw script.
 CODEX_CHILD_PATH_SETUP_QUOTED="$(printf '%s' "$CODEX_CHILD_PATH_SETUP" | sed "s/'/'\\\\''/g")"
@@ -1223,10 +1228,6 @@ CODEX_CHILD_PATH_SETUP_QUOTED="$(printf '%s' "$CODEX_CHILD_PATH_SETUP" | sed "s/
 # The probe's login shell also gets the guard variables the child's session
 # has (TMUX_ENV_ARGS below): a profile or exit hook that checks CLAUDECODE, or
 # the reserved-identity marker, must behave as it will for the child.
-run_like_codex_child() {
-    codex_launch_runner "$@"
-}
-CODEX_PROBE_RUNNER=run_like_codex_child
 # The latest point, in seconds of this launcher's run, at which the Codex start
 # watch ends: the dashboard signals a launcher after 120s, and a poll plus the
 # final note need a few seconds after the deadline.

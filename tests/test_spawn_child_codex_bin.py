@@ -51,8 +51,9 @@ def _script(path: pathlib.Path, body: str) -> pathlib.Path:
 def _runner() -> str:
     """The child PATH setup and the probe runner, as spawn_child.sh defines them."""
     text = SPAWN.read_text(encoding="utf-8")
-    start = text.index("CODEX_CHILD_PATH_SETUP=")
-    end = text.index("CODEX_PROBE_RUNNER=run_like_codex_child\n", start) + len("CODEX_PROBE_RUNNER=run_like_codex_child\n")
+    start = text.index("resolve_child_shell() {")
+    marker = "codex_launch_context || exit 1\n"
+    end = text.index(marker, start) + len(marker)
     return text[start:end]
 
 
@@ -73,7 +74,7 @@ def _resolve(tmp_path, *, path_dirs, env_bin=None, installed=None, wsl=False, li
     script = (
         f"HOOKS_DIR={shlex.quote(str(ROOT / 'hooks') if lib else str(tmp_path / 'old-hooks'))}\n"
         + loader
-        + ("CHILD_SHELL=/bin/bash\n" + _runner() if runner else "")
+        + ("AGENTSTACK_CHILD_SHELL=/bin/bash\n" + _runner() if runner else "")
         # Stub the platform after the library is loaded; /mnt cannot exist on macOS CI.
         + ("running_under_wsl() { return 0; }\n" if wsl else "running_under_wsl() { return 1; }\n")
         + f"WSL_WINDOWS_MOUNT_ROOT={shlex.quote(str(tmp_path / 'mnt'))}\n"
@@ -203,8 +204,13 @@ def test_the_probe_runs_codex_with_the_path_the_child_will_have(tmp_path):
 def test_both_codex_launches_use_the_one_path_setup():
     text = SPAWN.read_text(encoding="utf-8")
     assert text.count("\'\"$CODEX_CHILD_PATH_SETUP_QUOTED\"\';") == 2
-    runner = text[text.index("run_like_codex_child() {"):text.index("CODEX_PROBE_RUNNER=run_like_codex_child")]
+    runner_start = text.index("run_like_codex_child() {")
+    runner = text[runner_start:text.index("\n}\n", runner_start) + 3]
     assert "codex_launch_runner" in runner
+    # Context assembly (CHILD_SHELL / CODEX_CHILD_PATH_SETUP / CODEX_PROBE_RUNNER)
+    # is codex_launch_context's job now (hooks/codex-bin.sh, #243), shared with
+    # doctor and the installer; this file keeps its own names for the probes below.
+    assert "codex_launch_context || exit 1" in text
     # The approval probe (--help) goes through the same runner.
     approval = text[text.index("codex_approval_flags() {"):]
     assert '${CODEX_PROBE_RUNNER:-} "$codex_bin" --help' in approval[:approval.index("\n}\n")]
@@ -231,7 +237,7 @@ def _spawn_resolution(tmp_path, *, path_dirs, installed=None, timeout=5, budget=
     text = SPAWN.read_text(encoding="utf-8")
     loader = _loader()
     script = (
-        f"HOOKS_DIR={shlex.quote(str(ROOT / 'hooks'))}\nCHILD_SHELL=/bin/bash\n" + loader + _runner()
+        f"HOOKS_DIR={shlex.quote(str(ROOT / 'hooks'))}\nAGENTSTACK_CHILD_SHELL=/bin/bash\n" + loader + _runner()
         + "running_under_wsl() { return 1; }\n"
         + f"CODEX_VERSION_TIMEOUT_SECONDS={timeout}\n"
         + (f"CODEX_PROBE_BUDGET_SECONDS={budget}\n" if budget is not None else "")
@@ -329,7 +335,7 @@ def test_the_probe_shell_has_the_guards_the_child_session_has(tmp_path):
     (home / ".bash_profile").write_text(
         '[ "$CLAUDECODE" = 1 ] && [ "$AGENTSTACK_RESERVED_IDENTITY" = 1 ] || exit 23\n', encoding="utf-8")
     codex = _script(tmp_path / "bin" / "codex", WORKS)
-    script = f'HOOKS_DIR={shlex.quote(str(ROOT / "hooks"))}\n' + _loader() + "CHILD_SHELL=/bin/bash\n" + _runner() + f"run_like_codex_child {shlex.quote(str(codex))} --version\n"
+    script = f'HOOKS_DIR={shlex.quote(str(ROOT / "hooks"))}\n' + _loader() + "AGENTSTACK_CHILD_SHELL=/bin/bash\n" + _runner() + f"run_like_codex_child {shlex.quote(str(codex))} --version\n"
     result = subprocess.run(["/bin/bash", "-c", script], env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr

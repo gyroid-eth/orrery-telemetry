@@ -310,9 +310,14 @@ codex_launch_search_path() {
 # Sets CHILD_SHELL, CODEX_CHILD_PATH_SETUP and CODEX_PROBE_RUNNER: the context
 # a caller must probe (or launch) Codex under so a candidate is judged the way
 # a spawned child's own login shell actually runs it, not under the caller's
-# own PATH. The launcher, doctor and installer call this once before any
-# codex_bin_problem / codex_find_bin check, so the three entry points share
-# one definition of that context instead of each repeating it (#239, #243).
+# own PATH. spawn_child.sh, doctor, the installer and this file's own
+# `policy` entrypoint all call this once before any codex_bin_problem /
+# codex_find_bin check, so the context is one definition instead of each
+# caller repeating it (#239, #243). spawn_child.sh still names its own
+# resolve_child_shell / run_like_codex_child wrappers around
+# codex_launch_shell / codex_launch_runner (existing tests pin those names,
+# and CODEX_PROBE_RUNNER is read by name elsewhere in that file), but the
+# context itself comes from here, not a second implementation.
 codex_launch_context() {
     CHILD_SHELL="$(codex_launch_shell)" || return 1
     CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"
@@ -355,9 +360,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     set -euo pipefail
     context="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-context.sh"
     [[ -f "$context" ]] && . "$context"
-    CHILD_SHELL="$(codex_launch_shell)"
-    CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"
-    CODEX_PROBE_RUNNER=codex_launch_runner
+    codex_launch_context
     # Keep the exact spawner defaults (10s / 15s): a slow but usable CLI
     # must not be discarded here and then accepted after preregistration.
     # FD 3 bypasses the nested command substitutions used for candidate

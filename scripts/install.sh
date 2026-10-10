@@ -501,15 +501,6 @@ for CODEX_HELPER_FN in codex_bin_problem find_usable_codex_bin_in codex_launch_s
   fi
 done
 unset CODEX_HELPER_FN
-# A candidate must be probed the way a spawned child will actually run it —
-# its own login shell, with codex_launch_path's PATH (the resolved target's
-# own bin, so an npm shim finds the node it was installed with) — not under
-# this installer's own PATH. Judging it any other way can save a value here
-# that the launcher then rejects, or reject one (an nvm-style codex whose
-# node is not on this shell's PATH) that the launcher would have accepted
-# (#239, #243). codex_launch_context sets this up; doctor and the launcher
-# call the same function.
-codex_launch_context || exit 2
 # --- end codex helper load ---
 case "$RESET_SETTINGS" in
   0|"") RESET_SETTINGS=0 ;;
@@ -653,6 +644,25 @@ find_usable_codex_bin() {
 # --- end codex launcher resolution ---
 
 resolve_setting CODEX_BIN_SETTING AGENTSTACK_CODEX_BIN "" found
+# A candidate must be probed the way a spawned child will actually run it —
+# its own login shell, with codex_launch_path's PATH (the resolved target's
+# own bin, so an npm shim finds the node it was installed with) — not under
+# this installer's own PATH. Judging it any other way can save a value here
+# that the launcher then rejects, or reject one (an nvm-style codex whose
+# node is not on this shell's PATH) that the launcher would have accepted
+# (#239, #243). codex_launch_context sets this up; doctor and the launcher
+# (spawn_child.sh) call the same function.
+#
+# Deferred to here (not right after loading the helper, above): this is the
+# first point a candidate is actually probed, and a PATH with neither zsh nor
+# bash is itself one of preflight's problems (run_preflight, further down) —
+# stopping here instead, before preflight's aggregated report ever runs,
+# once turned one "4 problem(s)" report into a single unrelated-looking error
+# (#243). Falling back to an unset CODEX_PROBE_RUNNER (probing under this
+# shell's own PATH, the pre-#243 behavior) is what happens if nothing is found.
+if ! codex_launch_context; then
+  echo "note: Codex launcher checks will probe candidates under this installer's own PATH: no login shell (zsh or bash) was found on PATH (set AGENTSTACK_CHILD_SHELL, or see preflight below if this is unexpected)" >&2
+fi
 # codex_probe_budget_start must run in this shell, not inside a $(...)
 # subshell: a subshell's CODEX_PROBE_DEADLINE cannot be read back here, which
 # would silently drop the budget check below. One budget, started once,
