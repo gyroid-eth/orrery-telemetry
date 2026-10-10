@@ -1234,11 +1234,15 @@ def test_invalid_legacy_delivery_timestamp_requires_resolution_unless_read(
         ("topic", " Re: ", "Re: topic"),
         (" topic ", "", "topic"),
         ("topic", "   ", "topic"),
-        ("x" * 200, "Re:", None),
-        ("🦊" * 200, "Re:", None),
+        ("🦊" * 200, "Re:", "Re: " + "🦊" * 200),
+    ]
+    + [
+        ("x" * length, prefix, ("Re: " if prefix else "") + "x" * length)
+        for length in (196, 197, 200)
+        for prefix in ("Re:", "")
     ],
 )
-def test_reply_subject_matches_legacy_prefix_and_checks_derived_limit(
+def test_reply_subject_matches_legacy_prefix_and_bounds_inputs_only(
     prepared, base, prefix, expected
 ):
     runtime = S2bRuntime(prepared["config_path"])
@@ -1253,32 +1257,74 @@ def test_reply_subject_matches_legacy_prefix_and_checks_derived_limit(
         body_md="reply",
         request_id=str(uuid.uuid4()),
     )
+    result = runtime.apply("reply_message", args)
+    assert runtime.apply("reply_message", args) == result
+    with runtime.transaction() as db:
+        assert (
+            db.execute(
+                "SELECT subject FROM messages WHERE id=?", (result["message_id"],)
+            ).fetchone()[0]
+            == expected
+        )
+
+
+@pytest.mark.parametrize("prefix", ["Re:", ""])
+def test_imported_204_character_reply_subject_remains_replyable(prepared, prefix):
+    source = prepared["source"]
+    expected = "Re: " + "x" * 200
+    with connection(source.mail, write=True) as db:
+        db.execute("UPDATE messages SET subject=? WHERE id=107", (expected,))
+    prepare(
+        source,
+        prepared["root"],
+        "long-subject",
+        prepared["choices"],
+        request_id=str(uuid.uuid4()),
+        fence=fence,
+    )
+    path = prepared["root"] / "s2b-candidates/long-subject/candidate/server-config.json"
+    state = {**prepared, "config": json.loads(path.read_text())}
+    runtime = S2bRuntime(path)
+    result = runtime.apply(
+        "reply_message",
+        owner(
+            state,
+            2,
+            message_id=107,
+            subject_prefix=prefix,
+            body_md="reply",
+            request_id=str(uuid.uuid4()),
+        ),
+    )
+    with runtime.transaction() as db:
+        assert (
+            db.execute(
+                "SELECT subject FROM messages WHERE id=?", (result["message_id"],)
+            ).fetchone()[0]
+            == expected
+        )
+
+
+@pytest.mark.parametrize(
+    "tool,extra",
+    [
+        ("send_message", {"subject": "x" * 201}),
+        ("reply_message", {"message_id": 107, "subject_prefix": "x" * 33}),
+    ],
+)
+def test_subject_input_overflow_is_rejected_before_mutation(prepared, tool, extra):
+    runtime = S2bRuntime(prepared["config_path"])
+    args = (
+        {**send(prepared), **extra}
+        if tool == "send_message"
+        else owner(prepared, 2, body_md="reply", request_id=str(uuid.uuid4()), **extra)
+    )
     with runtime.transaction() as db:
         before = revision(db)
-        maximum = db.execute(
-            "SELECT value FROM namespace_metadata WHERE key='message_id_high_water'"
-        ).fetchone()[0]
-    if expected is None:
-        with pytest.raises(GlobalError, match="PAYLOAD_TOO_LARGE"):
-            runtime.apply("reply_message", args)
-        with runtime.transaction() as db:
-            assert revision(db) == before
-            assert (
-                db.execute(
-                    "SELECT value FROM namespace_metadata WHERE key='message_id_high_water'"
-                ).fetchone()[0]
-                == maximum
-            )
-    else:
-        result = runtime.apply("reply_message", args)
-        assert runtime.apply("reply_message", args) == result
-        with runtime.transaction() as db:
-            assert (
-                db.execute(
-                    "SELECT subject FROM messages WHERE id=?", (result["message_id"],)
-                ).fetchone()[0]
-                == expected
-            )
+    with pytest.raises(GlobalError, match="ARGUMENTS_UNSUPPORTED|PAYLOAD_TOO_LARGE"):
+        runtime.apply(tool, args)
+    with runtime.transaction() as db:
+        assert revision(db) == before
 
 
 def test_provenance_has_one_location_and_is_immutable_under_purge(prepared):
@@ -1336,6 +1382,26 @@ def test_reconcile_more_reports_only_unselected_targets_not_blocked(prepared):
         ("maxItems", -1),
         ("uniqueItems", 1),
         ("uniqueItems", "true"),
+        ("maxLength", -3),
+        ("minLength", True),
+        ("maxLength", 1.5),
+        ("minimum", "1"),
+        ("maximum", True),
+        ("pattern", 5),
+        ("pattern", "["),
+        ("required", "ab"),
+        ("required", [1]),
+        ("enum", "ab"),
+        ("properties", []),
+        ("properties", {"x": 3}),
+        ("anyOf", {}),
+        ("anyOf", [3]),
+        ("type", "unimplemented"),
+        ("type", ["string"]),
+        ("format", 1),
+        ("title", []),
+        ("description", 5),
+        ("x-fastmcp-wrap-result", "true"),
     ],
 )
 def test_schema_admission_rejects_unsupported_keyword_value_shapes(key, value):
@@ -1345,22 +1411,31 @@ def test_schema_admission_rejects_unsupported_keyword_value_shapes(key, value):
         validate_schema_definition({"type": "array", key: value})
 
 
-def test_orphan_delivery_is_explicit_in_notification_proof(prepared):
+def test_orphan_delivery_initializer_asserts_upstream_invariant(prepared):
     from agentstack_mail.global_prepare_s2b import initialize_notifications
-    from agentstack_mail.global_s2a_contract import digest
 
     runtime = S2bRuntime(prepared["config_path"])
     orphan = {"message_id": 999, "agent_id": 2, "status": "failed", "attempt_count": 4}
     with runtime.transaction(write=True) as db:
-        proof = initialize_notifications(
-            db, [orphan], {}, {}, "2026-10-10T00:00:00+00:00"
-        )
-        assert proof["orphan_delivery"] == [orphan]
-        assert proof["source_delivery_digest"] == digest([orphan])
-        assert not any(p["message_id"] == 999 for p in proof["pairs"])
-        assert not db.execute(
-            "SELECT 1 FROM global_signal_dirty WHERE message_id=999"
-        ).fetchone()
+        with pytest.raises(GlobalError, match="PREPARATION_MANIFEST_MISMATCH"):
+            initialize_notifications(db, [orphan], {}, {}, "2026-10-10T00:00:00+00:00")
+    proof = json.loads((runtime.runtime_root / "notification-proof.json").read_text())
+    assert "orphan_delivery" not in proof
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "string", "pattern": "[a-z]+", "minLength": 0, "maxLength": 3},
+        {"type": "integer", "minimum": -1, "maximum": 1.5},
+        {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]},
+        {"anyOf": [{"enum": [1, "x", None]}, {"type": "null"}]},
+    ],
+)
+def test_schema_admission_preserves_supported_keyword_shapes(schema):
+    from agentstack_mail.schema_contract import validate_schema_definition
+
+    validate_schema_definition(schema)
 
 
 @pytest.mark.parametrize(

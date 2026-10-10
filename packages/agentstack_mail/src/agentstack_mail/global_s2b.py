@@ -35,7 +35,6 @@ from .global_s2b_contract import (
     preimage_schema,
     validate,
     ensure_budget,
-    check_subject,
 )
 from .namespace_store import changed
 
@@ -376,7 +375,6 @@ class S2bRuntime(S2aRuntime):
                 if prefix and base.lower().startswith(prefix.lower())
                 else f"{prefix} {base}".strip()
             )
-        check_subject(subject)
         db.execute(
             "INSERT INTO messages(id,sender_id,subject,body_md,importance,ack_required,topic,created_ts,reply_to) VALUES(?,?,?,?,?,?,?,?,?)",
             (

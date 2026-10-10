@@ -70,9 +70,9 @@ cursor の上限は同じ read transaction の**可視集合 MAX**（空は0）�
 
 S1/S2a の inbox item は raw row ですが、S2b は `sender`・`to/cc/bcc`・`read_at`・`acknowledged_at` を持つ共通 message projection です。外側の list と純粋 read は維持します。4b/4c の consumer は profile/capability に合わせます。
 
-recipient の無い旧 delivery row は通知 proof の `orphan_delivery` に全 row を列挙し、source digest と結び付けます。PR3 の recipient 整合検査を緩めず、active dirty pair を推測で作りません。旧添付の MIME 型は JSON の `media_type` の記録を使い、無ければ固定の `application/octet-stream` です。
+recipient の無い旧 delivery row は PR3 の `DELIVERY_MESSAGE_UNAVAILABLE` で拒否します。S2b に別の列挙・受入れ経路は作りません。旧添付の MIME 型は JSON の `media_type` の記録を使い、無ければ固定の `application/octet-stream` です。
 
-返信件名は prefix を trim し、大小文字を無視して既存 prefix を維持します。新しく付けるときは空白で区切り、導出後も200文字/800 bytesを超えれば `PAYLOAD_TOO_LARGE` で拒否します。`reconcile_outputs.more` は選択上限を超えた未選択対象だけを示し、処理済み blocked の残数は `blocked_count` を使います。
+返信件名は prefix を trim し、大小文字を無視して既存 prefix を維持します。新しく付けるときは空白で区切り、入力の subject と subject_prefix だけを制限し、合成後の件名は再制限しません。旧 mode が作った長い返信件名も引き継げます。`reconcile_outputs.more` は選択上限を超えた未選択対象だけを示し、処理済み blocked の残数は `blocked_count` を使います。
 
 ## 自分で確かめる
 

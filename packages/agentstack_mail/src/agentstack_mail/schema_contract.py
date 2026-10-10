@@ -2,50 +2,72 @@
 
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 
 
-SCHEMA_KEYWORDS = {
-    "additionalProperties",
-    "anyOf",
-    "const",
-    "default",
-    "enum",
-    "format",
-    "items",
-    "maxLength",
-    "maximum",
-    "minLength",
-    "minimum",
-    "pattern",
-    "properties",
-    "required",
-    "type",
-    "title",
-    "description",
-    "minItems",
-    "maxItems",
-    "uniqueItems",
-    "x-fastmcp-wrap-result",  # Existing S1 list-result envelope annotation.
+def _nonnegative_integer(value):
+    return type(value) is int and value >= 0
+
+
+def _number(value):
+    return type(value) is int or (type(value) is float and math.isfinite(value))
+
+
+def _pattern(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        re.compile(value)
+        return True
+    except re.error:
+        return False
+
+
+SCHEMA_TYPES = {
+    "object": dict,
+    "array": list,
+    "integer": int,
+    "string": str,
+    "boolean": bool,
+    "null": type(None),
+}
+
+
+# Admission and supported keyword names have one source. Child schemas are
+# traversed below only after these shapes have been checked.
+SCHEMA_VALUE_RULES = {
+    "additionalProperties": lambda v: type(v) is bool,
+    "anyOf": lambda v: isinstance(v, list) and bool(v),
+    "const": lambda v: True,
+    "default": lambda v: True,
+    "enum": lambda v: isinstance(v, list),
+    "format": lambda v: isinstance(v, str),
+    "items": lambda v: isinstance(v, dict),
+    "maxLength": _nonnegative_integer,
+    "maximum": _number,
+    "minLength": _nonnegative_integer,
+    "minimum": _number,
+    "pattern": _pattern,
+    "properties": lambda v: isinstance(v, dict) and all(isinstance(k, str) for k in v),
+    "required": lambda v: isinstance(v, list) and all(isinstance(k, str) for k in v),
+    "type": lambda v: isinstance(v, str) and v in SCHEMA_TYPES,
+    "title": lambda v: isinstance(v, str),
+    "description": lambda v: isinstance(v, str),
+    "minItems": _nonnegative_integer,
+    "maxItems": _nonnegative_integer,
+    "uniqueItems": lambda v: type(v) is bool,
+    "x-fastmcp-wrap-result": lambda v: type(v) is bool,
 }
 
 
 def validate_schema_definition(schema, *, error_type=ValueError):
     """Inspect every schema branch once when a fixture is admitted."""
-    if not isinstance(schema, dict) or set(schema) - SCHEMA_KEYWORDS:
-        raise error_type("CAPABILITY_INVALID")
-    if (
-        "additionalProperties" in schema
-        and type(schema["additionalProperties"]) is not bool
+    if not isinstance(schema, dict) or any(
+        key not in SCHEMA_VALUE_RULES or not SCHEMA_VALUE_RULES[key](value)
+        for key, value in schema.items()
     ):
-        raise error_type("CAPABILITY_INVALID")
-    if "items" in schema and not isinstance(schema["items"], dict):
-        raise error_type("CAPABILITY_INVALID")
-    for key in ("minItems", "maxItems"):
-        if key in schema and (type(schema[key]) is not int or schema[key] < 0):
-            raise error_type("CAPABILITY_INVALID")
-    if "uniqueItems" in schema and type(schema["uniqueItems"]) is not bool:
         raise error_type("CAPABILITY_INVALID")
     for child in schema.get("anyOf", []):
         validate_schema_definition(child, error_type=error_type)
@@ -105,15 +127,7 @@ def validate_schema(
     if "enum" in schema and value not in schema["enum"]:
         raise error_type(reason)
     kind = schema.get("type")
-    types = {
-        "object": dict,
-        "array": list,
-        "integer": int,
-        "string": str,
-        "boolean": bool,
-        "null": type(None),
-    }
-    if kind and (kind not in types or type(value) is not types[kind]):
+    if kind and (kind not in SCHEMA_TYPES or type(value) is not SCHEMA_TYPES[kind]):
         raise error_type(reason)
     if kind == "object":
         props = schema.get("properties", {})

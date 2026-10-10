@@ -2841,7 +2841,7 @@
   "send_contract": {
     "recipients": "server wireはto_agent_ids/cc_agent_ids/bcc_agent_idsだけ。旧to/cc/bcc namesはARGUMENTS_UNSUPPORTEDでnetwork前にclientが拒否、後続client adapterでS2a resolve_agent_identity→IDだけへ正規化し、pendingへ保存してからnetwork。同名再resolveをreplayで行わない。最大100・to>cc>bcc重複排除・空集合拒否。active/retired/contactはinsertと同TX、全成功か全拒否。",
     "contact": "S2aRuntime.authorize_deliveryを同DBtransactionで全宛先へ使用。blocked/block_all優先、reservation/reply参加者による迂回無し。自己宛はS2a規則。",
-    "reply": "send.thread_idはnull/省略のみ、非nullはLEGACY_THREAD_WRITE_NOT_SUPPORTED。返信はsend.reply_toまたはreply_message.message_id。reply_messageではto_agent_idsのnull/省略だけ元senderを既定、明示[]は空として保持。cc/bccのnullは空。返信元message自身のsender/recipient参加者であることと新宛先contact認可を同TX照合。subject prefix/importance/ack/topic継承は設計どおり。旧numeric/comma/labelはsummarize_threadの読取resolverへ。 非null thread_idは汎用schema validationより先に同固定reasonで拒否し、null-only schemaとreasonを両端で一致させる。 件名prefixはtrimし、親件名が大小文字を無視して既に同prefixで始まれば維持。それ以外は空白で区切って連結しtrim。導出後にもsendと同じ200文字/800bytes上限、超過PAYLOAD_TOO_LARGE。",
+    "reply": "send.thread_idはnull/省略のみ、非nullはLEGACY_THREAD_WRITE_NOT_SUPPORTED。返信はsend.reply_toまたはreply_message.message_id。reply_messageではto_agent_idsのnull/省略だけ元senderを既定、明示[]は空として保持。cc/bccのnullは空。返信元message自身のsender/recipient参加者であることと新宛先contact認可を同TX照合。subject prefix/importance/ack/topic継承は設計どおり。旧numeric/comma/labelはsummarize_threadの読取resolverへ。 非null thread_idは汎用schema validationより先に同固定reasonで拒否し、null-only schemaとreasonを両端で一致させる。 件名prefixはtrimし、親件名が大小文字を無視して既に同prefixで始まれば維持。それ以外は空白で区切って連結しtrim。上限検査は入力subjectとsubject_prefixだけ。合成後は上限検査せず、旧modeの長い返信件名も引き継ぐ。",
     "snapshot": "ID/作成UTC/recipient/添付digest/reply_toを1回確定。rename/retire/contact変更後も同UUID replayは現在のauth/binding照合後、既存commit receiptだけ返し、旧宛先を再resolve/再送しない。",
     "limits": "subject UTF8<=800bytes/200文字、body UTF8<=65536bytes、importance enum、topic ASCII<=64、宛先100。超過は切り詰めず拒否。markdownのfile path/data URIを自動read/convertしない。",
     "bcc_notification": "決定: 新規send/replyはto/cc/bcc全受信者に同じdesired規則でsignalを出す。旧modeはto/ccだけだった差分としてdocs/PR本文/PR7案内へ一行。hintは受信者自身のstable ID/message IDだけ、他BCC情報を増やさない。"
@@ -3826,7 +3826,6 @@
     "proof": "source recipient/pair→inventory/delivery root digest/row key→新notify/read/ack/provenance/notify_after/dirtyを変換proofへ列挙。choiceも同digestに束縛、未解決needs_actionでpublication拒否。PR3写像の旧hintは新active signals/agentsへ残さず、immutable preservationだけへ。ready前後killも同proofからfact/初期dirtyを再生成、source bytes/ID/token/status/試行/backoff/leaseの保存を照合。",
     "retired": "retired宛はdesired=false/初期dirty無し、message保持。後続の再有効化があればそのTXで該当未完pair再照合を必須化。",
     "legacy_boundary": "旧sendがsignal生成失敗を握り潰した場合の未配送を、過去message全件の再wakeで推測補完しない。この境界をPR7移行案内に明記。",
-    "orphan_delivery": "対応recipientの無いdelivery rowはsource digestに加えnotification-proof.orphan_deliveryへ全rowを列挙、active pair/dirtyへ変換せず黙って捨てない。PR3のsource recipient整合検証は緩めない。",
     "attachment_media_type": "旧JSONのmedia_type記録を保存、記録が無ければ固定application/octet-stream。hostのMIME推測を使わない。"
   },
   "legacy_mode_differences": [

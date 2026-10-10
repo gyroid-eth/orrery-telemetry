@@ -68,14 +68,15 @@ def initialize_notifications(db, delivery, signals, resolutions, stamp):
     if unknown:
         raise GlobalError("NOTIFICATION_SOURCE_REQUIRES_RESOLUTION")
     rows = {(r["message_id"], r["agent_id"]): r for r in delivery}
-    orphan_delivery = [
-        dict(r)
-        for r in delivery
-        if not db.execute(
+    # PR3 rejects orphan deliveries before this initializer is reached.
+    if any(
+        not db.execute(
             "SELECT 1 FROM message_recipients WHERE message_id=? AND agent_id=?",
             (r["message_id"], r["agent_id"]),
         ).fetchone()
-    ]
+        for r in delivery
+    ):
+        raise GlobalError("PREPARATION_MANIFEST_MISMATCH")
     proof = []
     for row in db.execute(
         "SELECT r.*,a.retired_at FROM message_recipients r JOIN agents a ON a.id=r.agent_id ORDER BY r.message_id,r.agent_id"
@@ -152,7 +153,6 @@ def initialize_notifications(db, delivery, signals, resolutions, stamp):
         "source_signals_digest": digest(signals),
         "resolutions": resolutions,
         "pairs": proof,
-        "orphan_delivery": orphan_delivery,
         "needs_action": False,
     }
 

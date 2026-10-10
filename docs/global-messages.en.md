@@ -68,9 +68,9 @@ Internal purge reuses the existing ancestor-hold plan: parents of surviving chil
 
 S1/S2a inbox items are raw rows; S2b uses the shared message projection with `sender`, `to/cc/bcc`, `read_at`, and `acknowledged_at`. The outer list and pure read remain. Consumers in 4b/4c must follow the profile/capability.
 
-Old delivery rows without recipients are listed in full in notification proof `orphan_delivery` and bound to the source digest. PR3 recipient integrity checks remain strict; no active dirty pair is inferred. Imported attachment MIME types come from recorded JSON `media_type`, or the fixed `application/octet-stream` default.
+PR3 rejects old delivery rows without recipients with `DELIVERY_MESSAGE_UNAVAILABLE`. S2b adds no separate enumeration or admission path. Imported attachment MIME types come from recorded JSON `media_type`, or the fixed `application/octet-stream` default.
 
-Reply subjects trim the prefix, preserve an existing prefix case-insensitively, and otherwise join with one space. The derived subject is also bounded to 200 characters/800 bytes; excess raises `PAYLOAD_TOO_LARGE`. `reconcile_outputs.more` reports only targets beyond the selection limit; use `blocked_count` for processed blocked targets.
+Reply subjects trim the prefix, preserve an existing prefix case-insensitively, and otherwise join with one space. Only caller-supplied subject and subject_prefix inputs are bounded; derived subjects are not checked again, so long legacy reply subjects remain usable. `reconcile_outputs.more` reports only targets beyond the selection limit; use `blocked_count` for processed blocked targets.
 
 ## Verify it yourself
 
