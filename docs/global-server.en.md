@@ -239,11 +239,12 @@ This fixes a defect introduced in S1: main DB and sidecar validation now uses on
 | `require_legacy_source` | A caller may hold another connection; raw fd removed, using `lstat` and SQLite immutable reads |
 | `fts_snapshot` / `integrity` | SQLite backup API copies the source; raw fd locks a distinct directory inode. Snapshot touch precedes its SQLite open; deletion follows close |
 | `namespace_state_io.backup` / `database_manifest`, `convert_mail` / `convert_delivery` | SQLite backup API and SQL row digests; no raw database-file reads |
-| `global_prepare_s2b`, `namespace_migration`, S2a/S2b/S2c receipts | Reads/hashes attachments, signals, mapping and JSON or SQL rows; no raw DB/sidecar bytes |
-| Fresh preparation artifact manifest | Raw hash after all SQLite connections to the new unpublished candidate close. Runtime cannot start before complete; complete replay returns before hashing |
+| `global_prepare_s2b`, S2a/S2b/S2c receipts | Reads/hashes attachments, signals, mapping and JSON or SQL rows; no raw DB/sidecar bytes |
+| Internal candidate manifest (`NamespaceMigration._candidate_manifest`) / fresh preparation artifact manifest | Both use `tree_manifest` to hash raw candidate DB/sidecar bytes after connections to the unpublished candidate close. The internal manifest first closes its SQL row-digest reads, then hashes the resource tree. The preparation artifact manifest also runs before complete; runtime cannot start before complete and complete replay returns before hashing |
+| `evidence._sqlite_state` | Raw family hash precedes its own SQLite open; no same-process connection is held by the rehearsal caller. A recovered server may run in a separate process: closing observer descriptors does not release that process's locks. These physical hashes are observations, not a consistent SQL snapshot |
 | `migration.copy_state` / `_copy_database` | Holds source writer guard and uses SQLite backup API. The new destination creation fd closes before its SQLite open |
 | Cold backup/restore and `restore_acceptance` raw-family validation | Requires stopped services. Raw copies/hashes precede SQLite validation of a separate disposable copy, which is closed afterward; never used as active transaction validation |
-| `storage.create_diagnostic_backup` / `restore_from_backup` | Same raw main/WAL/SHM copy pattern remains; no callers in repository runtime code or tests. Unchanged here; separate unused-code cleanup |
+| `storage.create_diagnostic_backup` / `restore_from_backup` / `list_backups` | Removed all three unused diagnostic backup/restore/list functions and their exclusive `BackupManifest` helper, including the entire raw main/WAL/SHM copy section; no callers in repository runtime code or tests |
 | Dashboard / Codex App delivery / hooks / CLI | SQLite APIs or delegates above; no matching independent DB-descriptor lifecycle found |
 
 Regressions cover startup/read/write raw-open prohibition, source admission, and a second process failing to acquire the held SQLite writer lock (`test_sqlite_family_validation_preserves_cross_process_writer_lock`).
