@@ -1,0 +1,3846 @@
+{
+  "base": {
+    "master": "50ad9187694189e197ecdb543a6d7db702c387ca",
+    "s2a_fixture": "packages/agentstack_mail/fixtures/global-server-s2a.json",
+    "s2a_fixture_sha256": "611cc490712a8e678cad64a40cc128bb1fee7bf9385200ba0b5ee6a67f270b7d"
+  },
+  "stage": "isolated-server-s2b",
+  "wire_version": 1,
+  "namespace_contract_version": 2,
+  "activation_enabled": false,
+  "default_runtime": "legacy-v1",
+  "public_tools_added": [
+    "send_message",
+    "reply_message",
+    "mark_message_read",
+    "acknowledge_message",
+    "search_messages",
+    "fetch_topic",
+    "fetch_summary",
+    "summarize_thread"
+  ],
+  "existing_contracts": "既定legacy-v1/activation=false。S1/S2a rootは既存runtimeのまま、S2bはfresh schema4の別candidateのみ。contact schema/outputとwelcome固定拒否は維持。S2b内fetch_inboxはoptional before_idのみ追加、list/純粋readを維持。新公開toolは8件。",
+  "capabilities_added": {
+    "message_send_v1": [
+      "send_message",
+      "reply_message"
+    ],
+    "message_receipt_v1": [
+      "mark_message_read",
+      "acknowledge_message"
+    ],
+    "message_query_v1": [
+      "search_messages",
+      "fetch_topic"
+    ],
+    "message_digest_v1": [
+      "fetch_summary",
+      "summarize_thread"
+    ],
+    "message_attachments_inline_v1": [
+      "send_message",
+      "reply_message",
+      "search_messages"
+    ],
+    "durable_message_outputs_v1": [
+      "send_message",
+      "reply_message"
+    ]
+  },
+  "tool_contracts": {
+    "send_message": {
+      "operation": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_agent_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "default": []
+          },
+          "cc_agent_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "default": []
+          },
+          "bcc_agent_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "default": []
+          },
+          "subject": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "body_md": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "importance": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ],
+            "default": "normal"
+          },
+          "ack_required": {
+            "type": "boolean",
+            "default": false
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reply_to": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "thread_id": {
+            "type": "null",
+            "default": null
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "filename": {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                "media_type": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "content_base64": {
+                  "type": "string",
+                  "maxLength": 349528
+                }
+              },
+              "required": [
+                "filename",
+                "media_type",
+                "content_base64"
+              ],
+              "additionalProperties": false
+            },
+            "default": []
+          },
+          "attachment_paths": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "convert_images": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "broadcast": {
+            "type": "boolean",
+            "default": false
+          },
+          "auto_contact_if_blocked": {
+            "type": "boolean",
+            "default": false
+          },
+          "sender_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "sender_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "subject",
+          "body_md",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reply_to": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "recipient_agent_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "durability": {
+            "const": "db-committed"
+          },
+          "outputs_as_of_commit": {
+            "const": "pending"
+          }
+        },
+        "required": [
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "request_id",
+          "mutation_revision",
+          "result_as_of",
+          "committed_at",
+          "message_id",
+          "reply_to",
+          "message_sha256",
+          "recipient_agent_ids",
+          "durability",
+          "outputs_as_of_commit"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key",
+        "agent_name",
+        "sender_name",
+        "format",
+        "sender_token"
+      ]
+    },
+    "reply_message": {
+      "operation": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_agent_ids": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "cc_agent_ids": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "bcc_agent_ids": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "body_md": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "subject_prefix": {
+            "type": "string",
+            "maxLength": 32,
+            "default": "Re:"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "filename": {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                "media_type": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "content_base64": {
+                  "type": "string",
+                  "maxLength": 349528
+                }
+              },
+              "required": [
+                "filename",
+                "media_type",
+                "content_base64"
+              ],
+              "additionalProperties": false
+            },
+            "default": []
+          },
+          "sender_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "message_id",
+          "body_md",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reply_to": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "recipient_agent_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "durability": {
+            "const": "db-committed"
+          },
+          "outputs_as_of_commit": {
+            "const": "pending"
+          }
+        },
+        "required": [
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "request_id",
+          "mutation_revision",
+          "result_as_of",
+          "committed_at",
+          "message_id",
+          "reply_to",
+          "message_sha256",
+          "recipient_agent_ids",
+          "durability",
+          "outputs_as_of_commit"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key",
+        "agent_name",
+        "sender_name",
+        "format"
+      ]
+    },
+    "mark_message_read": {
+      "operation": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "message_id",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "read": {
+            "const": true
+          },
+          "read_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "request_id",
+          "mutation_revision",
+          "result_as_of",
+          "committed_at",
+          "message_id",
+          "read",
+          "read_at"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key",
+        "agent_name",
+        "format"
+      ]
+    },
+    "acknowledge_message": {
+      "operation": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "message_id",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "acknowledged": {
+            "const": true
+          },
+          "acknowledged_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "read_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "request_id",
+          "mutation_revision",
+          "result_as_of",
+          "committed_at",
+          "message_id",
+          "acknowledged",
+          "acknowledged_at",
+          "read_at"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key",
+        "agent_name",
+        "format"
+      ]
+    },
+    "search_messages": {
+      "operation": "read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "include_bodies": {
+            "type": "boolean",
+            "default": false
+          },
+          "attachment_sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "sender": {
+                  "type": "object",
+                  "properties": {
+                    "agent_id": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "agent_id",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                "to": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "agent_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "agent_id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "cc": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "agent_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "agent_id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "bcc": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "agent_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "agent_id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "body_md": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "importance": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "normal",
+                    "high",
+                    "urgent"
+                  ]
+                },
+                "ack_required": {
+                  "type": "boolean"
+                },
+                "topic": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "reply_to": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "legacy_thread_label": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "created_ts": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "attachments": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "filename": {
+                        "type": "string"
+                      },
+                      "media_type": {
+                        "type": "string"
+                      },
+                      "byte_size": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "content_ref": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "db-blob"
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "sha256"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "sha256",
+                      "filename",
+                      "media_type",
+                      "byte_size",
+                      "content_ref"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "read_at": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "acknowledged_at": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "history_incomplete": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "sender",
+                "to",
+                "cc",
+                "bcc",
+                "subject",
+                "body_md",
+                "importance",
+                "ack_required",
+                "topic",
+                "reply_to",
+                "legacy_thread_label",
+                "created_ts",
+                "attachments",
+                "read_at",
+                "acknowledged_at",
+                "history_incomplete"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "as_of_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "max_message_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attachment": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "byte_size": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "content_base64": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sha256",
+                  "byte_size",
+                  "content_base64"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "as_of_revision",
+          "truncated",
+          "max_message_id",
+          "attachment"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key",
+        "agent_name",
+        "format"
+      ]
+    },
+    "fetch_topic": {
+      "operation": "read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "topic_name": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "since_ts": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "include_bodies": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "topic_name"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "sender": {
+                  "type": "object",
+                  "properties": {
+                    "agent_id": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "agent_id",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                "to": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "agent_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "agent_id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "cc": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "agent_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "agent_id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "bcc": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "agent_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "agent_id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "body_md": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "importance": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "normal",
+                    "high",
+                    "urgent"
+                  ]
+                },
+                "ack_required": {
+                  "type": "boolean"
+                },
+                "topic": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "reply_to": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "legacy_thread_label": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "created_ts": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "attachments": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "filename": {
+                        "type": "string"
+                      },
+                      "media_type": {
+                        "type": "string"
+                      },
+                      "byte_size": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "content_ref": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "db-blob"
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "sha256"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "sha256",
+                      "filename",
+                      "media_type",
+                      "byte_size",
+                      "content_ref"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "read_at": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "acknowledged_at": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "history_incomplete": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "sender",
+                "to",
+                "cc",
+                "bcc",
+                "subject",
+                "body_md",
+                "importance",
+                "ack_required",
+                "topic",
+                "reply_to",
+                "legacy_thread_label",
+                "created_ts",
+                "attachments",
+                "read_at",
+                "acknowledged_at",
+                "history_incomplete"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "as_of_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "max_message_id": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "as_of_revision",
+          "truncated",
+          "max_message_id"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key",
+        "agent_name",
+        "format"
+      ]
+    },
+    "fetch_summary": {
+      "operation": "read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "since_hours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8760,
+            "default": 24
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 5
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "origin": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "conversation",
+                        "legacy-label",
+                        "recent"
+                      ]
+                    },
+                    "message_id": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null
+                    },
+                    "legacy_label": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null
+                    },
+                    "source_provenance": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "message_id",
+                    "legacy_label",
+                    "source_provenance"
+                  ],
+                  "additionalProperties": false
+                },
+                "kind": {
+                  "const": "visible-message-digest-v1"
+                },
+                "source_message_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "participants": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "agent_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "name": {
+                        "type": "string",
+                        "maxLength": 128
+                      }
+                    },
+                    "required": [
+                      "agent_id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "key_points": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 2048
+                  }
+                },
+                "action_items": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 2048
+                  }
+                },
+                "examples": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "sender": {
+                        "type": "object",
+                        "properties": {
+                          "agent_id": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "agent_id",
+                          "name"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "to": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "agent_id": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "agent_id",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "cc": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "agent_id": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "agent_id",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "bcc": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "agent_id": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "agent_id",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "subject": {
+                        "type": "string"
+                      },
+                      "body_md": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "importance": {
+                        "type": "string",
+                        "enum": [
+                          "low",
+                          "normal",
+                          "high",
+                          "urgent"
+                        ]
+                      },
+                      "ack_required": {
+                        "type": "boolean"
+                      },
+                      "topic": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "reply_to": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "legacy_thread_label": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "created_ts": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "attachments": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "filename": {
+                              "type": "string"
+                            },
+                            "media_type": {
+                              "type": "string"
+                            },
+                            "byte_size": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "content_ref": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "db-blob"
+                                },
+                                "sha256": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{64}$"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "sha256"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "sha256",
+                            "filename",
+                            "media_type",
+                            "byte_size",
+                            "content_ref"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "read_at": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "acknowledged_at": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "history_incomplete": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "sender",
+                      "to",
+                      "cc",
+                      "bcc",
+                      "subject",
+                      "body_md",
+                      "importance",
+                      "ack_required",
+                      "topic",
+                      "reply_to",
+                      "legacy_thread_label",
+                      "created_ts",
+                      "attachments",
+                      "read_at",
+                      "acknowledged_at",
+                      "history_incomplete"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "history_incomplete": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "origin",
+                "kind",
+                "source_message_ids",
+                "participants",
+                "key_points",
+                "action_items",
+                "examples",
+                "history_incomplete"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "as_of_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "max_message_id": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "as_of_revision",
+          "truncated",
+          "max_message_id"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key",
+        "agent_name",
+        "format"
+      ]
+    },
+    "summarize_thread": {
+      "operation": "read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1024
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "include_examples": {
+            "type": "boolean",
+            "default": false
+          },
+          "llm_mode": {
+            "type": "boolean",
+            "default": false
+          },
+          "llm_model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "per_thread_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "origin": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "conversation",
+                        "legacy-label",
+                        "recent"
+                      ]
+                    },
+                    "message_id": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null
+                    },
+                    "legacy_label": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null
+                    },
+                    "source_provenance": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "message_id",
+                    "legacy_label",
+                    "source_provenance"
+                  ],
+                  "additionalProperties": false
+                },
+                "kind": {
+                  "const": "visible-message-digest-v1"
+                },
+                "source_message_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "participants": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "agent_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "name": {
+                        "type": "string",
+                        "maxLength": 128
+                      }
+                    },
+                    "required": [
+                      "agent_id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "key_points": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 2048
+                  }
+                },
+                "action_items": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 2048
+                  }
+                },
+                "examples": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "sender": {
+                        "type": "object",
+                        "properties": {
+                          "agent_id": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "agent_id",
+                          "name"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "to": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "agent_id": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "agent_id",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "cc": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "agent_id": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "agent_id",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "bcc": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "agent_id": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "agent_id",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "subject": {
+                        "type": "string"
+                      },
+                      "body_md": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "importance": {
+                        "type": "string",
+                        "enum": [
+                          "low",
+                          "normal",
+                          "high",
+                          "urgent"
+                        ]
+                      },
+                      "ack_required": {
+                        "type": "boolean"
+                      },
+                      "topic": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "reply_to": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "legacy_thread_label": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "created_ts": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "attachments": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "filename": {
+                              "type": "string"
+                            },
+                            "media_type": {
+                              "type": "string"
+                            },
+                            "byte_size": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "content_ref": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "db-blob"
+                                },
+                                "sha256": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{64}$"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "sha256"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "sha256",
+                            "filename",
+                            "media_type",
+                            "byte_size",
+                            "content_ref"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "read_at": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "acknowledged_at": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "history_incomplete": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "sender",
+                      "to",
+                      "cc",
+                      "bcc",
+                      "subject",
+                      "body_md",
+                      "importance",
+                      "ack_required",
+                      "topic",
+                      "reply_to",
+                      "legacy_thread_label",
+                      "created_ts",
+                      "attachments",
+                      "read_at",
+                      "acknowledged_at",
+                      "history_incomplete"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "history_incomplete": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "origin",
+                "kind",
+                "source_message_ids",
+                "participants",
+                "key_points",
+                "action_items",
+                "examples",
+                "history_incomplete"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "as_of_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "max_message_id": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "as_of_revision",
+          "truncated",
+          "max_message_id"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key",
+        "agent_name",
+        "format"
+      ]
+    }
+  },
+  "schema_policy": {
+    "normative": "S2b正本fixtureからserver/client/catalog/installed helperが同じschema_contractを使う。required/default/unknown keysは両端共通。管理wireのarray境界を完全に表すためminItems/maxItems/uniqueItemsだけを共通validatorへ追加する（既存S2a schema/正規化/hashは不変）。UTF8/decoded/合計bytesは一つの共通semantic normalizer、$ref/number不使用。 未知keyword/壊れたschemaの検査はfixture読込時にschema treeを全枝再帰して一度だけ実施し、CAPABILITY_INVALIDでfail-closed。入力値のARGUMENTS_UNSUPPORTEDとは分離、anyOfの枝で未知keywordを握り潰さない。値validatorには検査済schemaのみ渡す。新3keyword無しのS2aの受理/拒否/hashは維持。",
+    "common_owner": "S2aと同じstable ID/token/generation>=0/instance/candidate/epoch。token確認がgeneration比較より先。全readもowner必須。",
+    "format": "format=null/jsonのみ、他はFORMAT_NOT_SUPPORTED。ignored project_key/agent_name/sender_nameは監査文字列のみ、routing/ACL/hashには使わない。sender_tokenがあればregistration_tokenと同じ時だけ可、不一致CREDENTIAL_INPUT_CONFLICT。",
+    "read_projection": "read_projection_schemaを唯一のmessage型としてschema構築時に共用。tool出力にはその型を展開するが個別定義/validatorを手書きしない。新規writeの長さ上限をreadへ流用しない。"
+  },
+  "send_contract": {
+    "recipients": "server wireはto_agent_ids/cc_agent_ids/bcc_agent_idsだけ。旧to/cc/bcc namesはARGUMENTS_UNSUPPORTEDでnetwork前にclientが拒否、後続client adapterでS2a resolve_agent_identity→IDだけへ正規化し、pendingへ保存してからnetwork。同名再resolveをreplayで行わない。最大100・to>cc>bcc重複排除・空集合拒否。active/retired/contactはinsertと同TX、全成功か全拒否。",
+    "contact": "S2aRuntime.authorize_deliveryを同DBtransactionで全宛先へ使用。blocked/block_all優先、reservation/reply参加者による迂回無し。自己宛はS2a規則。",
+    "reply": "send.thread_idはnull/省略のみ、非nullはLEGACY_THREAD_WRITE_NOT_SUPPORTED。返信はsend.reply_toまたはreply_message.message_id。reply_messageではto_agent_idsのnull/省略だけ元senderを既定、明示[]は空として保持。cc/bccのnullは空。返信元message自身のsender/recipient参加者であることと新宛先contact認可を同TX照合。subject prefix/importance/ack/topic継承は設計どおり。旧numeric/comma/labelはsummarize_threadの読取resolverへ。 非null thread_idは汎用schema validationより先に同固定reasonで拒否し、null-only schemaとreasonを両端で一致させる。 件名prefixはtrimし、親件名が大小文字を無視して既に同prefixで始まれば維持。それ以外は空白で区切って連結しtrim。上限検査は入力subjectとsubject_prefixだけ。合成後は上限検査せず、旧modeの長い返信件名も引き継ぐ。",
+    "snapshot": "ID/作成UTC/recipient/添付digest/reply_toを1回確定。rename/retire/contact変更後も同UUID replayは現在のauth/binding照合後、既存commit receiptだけ返し、旧宛先を再resolve/再送しない。",
+    "limits": "subject UTF8<=800bytes/200文字、body UTF8<=65536bytes、importance enum、topic ASCII<=64、宛先100。超過は切り詰めず拒否。markdownのfile path/data URIを自動read/convertしない。",
+    "bcc_notification": "決定: 新規send/replyはto/cc/bcc全受信者に同じdesired規則でsignalを出す。旧modeはto/ccだけだった差分としてdocs/PR本文/PR7案内へ一行。hintは受信者自身のstable ID/message IDだけ、他BCC情報を増やさない。"
+  },
+  "attachment_contract": {
+    "decision": "Q1 A決定。新規inline base64→同transaction DB BLOB、任意path/upload staging/添付projection無し。",
+    "bounds": "最大8件、1件decoded<=256KiB、合計decoded<=512KiB、strict canonical base64、SHA256/byte_sizeをserver再計算。filenameは表示用basenameのみ、空/..区切り/絶対path/NUL/セパレータ拒否。MIMEはmetadataで、実行/HTML inline表示しない。",
+    "legacy": "attachment_paths非空はATTACHMENT_PATHS_NOT_SUPPORTED。convert_images=trueはIMAGE_CONVERSION_NOT_SUPPORTED、null/falseは不変bytes。画像変換は後続clientで行いserverにsource pathを渡さない。",
+    "read": "bytes取得はsearch_messages.attachment_sha256一つだけ。nullはmetadata-only、非nullは現在callerが見えるmessageの参照を同read transactionで確認し、選択blobをoutput.attachmentに1部だけ返す。query/limitのpageに現れなくてもcaller可視参照があれば取得可。不可視/不存在digestは同じATTACHMENT_UNAVAILABLE。inbox/topic/summary/examplesはcontent_ref/実byte_size/digestだけ、bytesを返さない。",
+    "response_budget": "search/topic/summaryは最終MCP JSONRPC（text＋structuredContent二重包み込み）<=1048576 bytes。complete item単位でpageを切りnext_cursorを必ず返す。最初の1item又は選択blob単体が収まらないとMESSAGE_RESPONSE_TOO_LARGE、黙って落とさない。searchではblob指定時limit=1/include_bodies=falseを要求し、合わなければARGUMENTS_UNSUPPORTED。旧長subject/body等を勝手に切断しない。metadata-onlyも収まらない旧rowは同固定理由でoperator exportを案内。",
+    "source_import": "新規write上限は旧添付へ適用しない。PR3 attachment map/保存済source bytesを検証し、全旧添付を実サイズのDB blobとして保全する（SQLite自体の実装上限を超える場合はSOURCE_ATTACHMENT_NOT_REPRESENTABLEでprepare全体拒否、source不変）。300KiBでもmetadata実サイズを返し、wire予算内ならsearchのdigest選択で取得可。予算超過は参照metadataのみ取得可、bytes要求だけ固定理由→one-shot operator export。旧archiveは参照fallbackとして稼働させない。",
+    "quota": {
+      "legacy": "fresh importは上限超過も保存し、inspectにusage/limit/over_limitを表示。超過ownerは追加0bytesのsend/replay/readは可能、新digestだけ拒否。purgeで最後のowner参照が消えれば集計から減る。既存dataを切り詰めない。",
+      "contract": "owner当たりlive添付distinct digestの合計268435456 bytesを既定、正のconfigで増量。SQLite集計はmessages.sender_id＋attachment relation＋blobをowner/digest単位GROUP BY、別quota counter/tableを作らない。新規receipt lookup後・insert前に同TXで新distinct bytesを加算、超過ATTACHMENT_OWNER_CAPACITY_REACHED。shared blobは各ownerへ全サイズ課金。同ownerの同digest再利用追加0。"
+    }
+  },
+  "visibility_contract": {
+    "canonical_predicate": "messages.sender_id=caller OR EXISTS message_recipients(message_id,agent_id=caller)。この1つをinbox/search/topic/summary/reply/attachmentへ適用。recipient metadataはsenderに全員、recipientにto/cc＋自己BCCのみ。他BCC/name/countを返さない。",
+    "graph": "reply_toで可視成分をread時に導出。不可視親はreply_to=null/history_incomplete=true、不可視message/ID/countを漏らさず隠れたedgeを辿ってACLを広げない。legacy labelはPR1のsource provenanceを保つ読取だけ。新しいconversation namespace/table/cacheを作らない。",
+    "search": "parameterized FTS5＋共通visibility。全readの順序はid DESC。bm25順位をcursorに使わない。初頁のMAXもmessages.sender_id=caller OR recipient.agent_id=callerという同じ可視predicateを適用し、可視集合のMAX(id)（空は0）だけを同read transactionの共通処理で算出する。全体MAXはoutput/cursor/logへ出さない。以後id<=max_message_id AND id<before_id。query不正QUERY_INVALID。各pageでowner再認証＋1 read transaction。",
+    "summary": "可視message pageから決定的partial digestをread時に算出。source_message_idsはpage内だけ、examplesは共通metadata projection。旧保存summaryはimmutable保管のみ。LLM/cache無し。summarize_threadはmessage_idまたは旧numeric/comma/label、両方同時はARGUMENTS_UNSUPPORTED。visible componentを単一SQL recursive query（UNIONでcycleを除く）によりID上限内で求めてkeysetでpage化、server側visited/cursor state無し。scan_limit引数は削除しARGUMENTS_UNSUPPORTED、探索queryには時間budgetを置き超過QUERY_WORK_LIMIT_EXCEEDED（途中結果を完了と見せない）。1001chainは正常継続対象。",
+    "pagination": "stateless keysetのみ。cursorはversion/tool/agent_id/query_sha256/max_message_id/before_id/since_cutoffだけ。server_instance_id/candidate_generation/authority_epochはcursorに入れず、呼出しcontextのbinding一か所で通常のauthority/fenceを照合する。初頁上限は可視集合MAX（空は0）。base64url canonical JSON、署名key/期限/server状態無し。cursor schema/owner/tool/query不一致はCURSOR_INVALID、毎page可視predicateで改ざんも権限を広げない。revisionはas_of_revisionの観測だけ。fetch_summaryのsince_hoursは初頁cutoffへ一度変換、続頁はそのcutoff。",
+    "changes": "ID再利用無し、新messageは初頁の可視MAXより大なので継続列に含めない。worker/touch/read/ack/renameで失効しない。purge rowはskipし存続子の祖先を保留。token世代/retireは通常auth拒否、呼出しcontextのbinding変更は通常fence。cursor自身に別binding検査を作らない。固定DBsnapshot保存とは主張せず、表示名/read/ackはpage時点。"
+  },
+  "existing_tool_changes": {
+    "fetch_inbox": {
+      "profile": "S2bだけoptional before_id追加、既存listと純粋readを維持。bytes flag無し。",
+      "input_delta": {
+        "before_id": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "pagination": "id DESC、SQL WHEREでrecipient/time/urgentをlimit前適用、id<before_idで継続。従来limitだけで件数を選びwire予算に合わせて黙ってitemを落とさない。",
+      "projection": "添付は共通metadata/content_refだけ。既存list形式にtruncatedを足さない。最終MCP応答が予算を超えればMESSAGE_RESPONSE_TOO_LARGEで全拒否しlimit縮小/include_bodies=falseかsearch envelopeを案内。1rowのmetadataも超えるならoperator export。",
+      "signal": "fetchでtimestamp/dirty/signalに一切触らない。",
+      "item_shape": "S1/S2aのraw rowとは異なりS2bはsender/to/cc/bcc/read_at/acknowledged_atを持つ共通message projection。外側listと純粋readは維持。4b/4c consumerはcapability/profileに合わせて読む。"
+    },
+    "contact_notifications": {
+      "decision": "Q4 A（決定）: S2aのrequest/respond/macro schema/outputはそのまま、welcomeは固定reason拒否を維持。S2bのnotificationはmessage signalだけ。",
+      "boundary": "公開追加は8 tool＋message hintに限定。contact welcomeは別PRへ。後続へ節を参照。"
+    },
+    "health_inspect": "supported_tools=24/resources=false。S2b capability/profile/schema digest、signal dirty pending/blocked件数・最古age/reason、owner attachment usage/limit/over_limitを表示。DB committedとsignal照合済みとconsumer配送完了は区別。top-level statusはserver readinessのみ。signal.statusにpending回収中degraded・恒久blocked redを置き、4a clientを配送状態で拒否しない。sessionの無い宛先とdashboardのsignal接続は4c/PR6へ。"
+  },
+  "receipt_contract": {
+    "reuse": "global_operation_receiptsのPK/DDL/quota/UUID跨tool一意性/現auth・binding先行/確定拒否一覧はS2a共通正本を拡張し再利用。新receipt table無し。",
+    "canonical_preimage": "S2a共通request_preimageのsend/replyだけbody_mdをUTF8 sha256/length、attachments.content_base64をdecoded sha256/lengthへ置換。server保存はこのsemantic preimageだけ、raw body/blobをauditへ複製しない。clientは単一local intentから同関数で導出しdigest版payloadを別保存しない。binding/auth/ignored/UUID/sender_token/format除外は既存契約どおり。",
+    "validation": "preimage canonical JSON/hash、receipt schema/digest/owner bindingを同TXで照合。send/reply receipt message_sha256は確定message＋recipient snapshot＋attachment descriptorsをcanonical化。live messageがある間はbody/attachment digestを同messageに照合、purge後はhistorical receiptのpreimage/digest/bindingのみ検証し本文を復活させない。",
+    "result": "outputs_as_of_commit=pendingはsignal再照合待ちだけを意味するimmutable receipt。現時点はhealth/inspect、同UUID replayは元receipt。DB commit後signal失敗をsend拒否へ変えない。",
+    "read_ack": "read/ackはrecipient自己。新UUID no-opもreceipt/revision1、replay0。初回UTCを保持。ackはreadも同TX。通知済みと同じdesired-signal=falseとなり同pairのdirty印をupsert。",
+    "preimage_schema_generation": {
+      "source": "各toolのinput schemaからbinding/auth/ignored/UUIDを除いたsemantic schemaを共通関数で導出、S2a既存toolは無変換。send/replyだけ下記置換、第二の手書きschemaは置かない。",
+      "transform": {
+        "body_md": [
+          "body_utf8_sha256: ^[0-9a-f]{64}$",
+          "body_utf8_byte_size: integer0..65536"
+        ],
+        "attachments[].content_base64": [
+          "attachments[].sha256: ^[0-9a-f]{64}$",
+          "attachments[].byte_size: integer0..262144"
+        ]
+      },
+      "historical_validation": "exact argument keys/default/nullable intent/array orderingを導出schemaで再検証、canonical bytesを直接hash。body/blobを持たないpreimageへwire input schemaを誤適用しない。",
+      "size": "S2aと同じcanonical_request_json<=16384 UTF8 bytes。subject/recipient/filename等で超過すればREQUEST_INPUT_TOO_LARGE、DB前拒否。"
+    },
+    "message_digest_fields": [
+      "id",
+      "sender_id",
+      "recipient agent_id/kind sorted by kind then ID",
+      "subject",
+      "body UTF8 sha256/byte_size",
+      "importance",
+      "ack_required",
+      "topic",
+      "reply_to",
+      "created_ts UTC",
+      "attachment ordinal/sha256/byte_size/filename/media_type"
+    ],
+    "message_digest_immutability": "immutable message/recipient kind/attachmentだけ。read/ack/notifiedとlive display nameを除外、rename/既読でreceiptは無効にならない。"
+  },
+  "fixed_layout": {
+    "root": "runtime_rootからのみ導出。追加外部path config無し。全dir0700/files0600、同UID、nlink1、no symlink/hardlink、root disjointは既存S1境界を継承。",
+    "canonical_db": "<runtime_root>/mail.sqlite3。message/recipient/blob/FTS/receiptとsignal再照合dirty印。",
+    "projection_mutex": "<runtime_root>/signals/agents/ directory自体をflock。別lockfile/全root scan無し。",
+    "signals": "<runtime_root>/signals/agents/<stable_agent_id>/<message_id>.signal。PR3のglobal layoutを1つだけ使用。inline snippet無しのversion/instance/candidate/epoch/recipient/message ID hints、metadata include=falseも常にIDあり。",
+    "audit": "DB operation receiptを唯一の監査正本とし独立audit log無し。",
+    "legacy": "PR3が保存した旧archive/Git/添付/signal/historyはimmutable保管物。新signal active領域へ旧hintを残さずfresh proofで分離。",
+    "staging": "signal recipient dir内の.<message_id>.signal.tmp固定slotのみ。directory lock下でregular/private/nlink1/同UIDを検査して回収。symlinkを辿らない。",
+    "export": "archive md/添付.bin/Gitの常時projection無し。必要ならoperatorのone-shot exportをDB snapshotから生成（後続、今回8tool/managementへ隠れて追加しない）。"
+  },
+  "db_extensions": {
+    "profile": "schema4/runtime profile s2b-v1, new config kind orrery-global-server-s2b-v1, completed preparation receipt必須。既存schema2/3 rootへDDL/open/writeしない。別candidateでlegacy supported sourceからfresh prepare。",
+    "ddl": [
+      "CREATE TABLE global_attachment_blobs(sha256 TEXT PRIMARY KEY CHECK(length(sha256)=64),byte_size INTEGER NOT NULL CHECK(byte_size>=0),content BLOB NOT NULL CHECK(length(content)=byte_size))",
+      "CREATE TABLE global_message_attachments(message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE RESTRICT,ordinal INTEGER NOT NULL CHECK(ordinal>=0),sha256 TEXT NOT NULL REFERENCES global_attachment_blobs(sha256) ON DELETE RESTRICT,filename TEXT NOT NULL,media_type TEXT NOT NULL,PRIMARY KEY(message_id,ordinal))",
+      "ALTER TABLE message_recipients ADD COLUMN notification_fact TEXT CHECK(notification_fact IS NULL OR notification_fact='imported-consumed' OR notification_fact LIKE 'delivered:%')",
+      "ALTER TABLE message_recipients ADD COLUMN notify_after_ts TEXT",
+      "CREATE TABLE global_signal_dirty(message_id INTEGER NOT NULL CHECK(message_id>0),recipient_agent_id INTEGER NOT NULL CHECK(recipient_agent_id>0),state TEXT NOT NULL CHECK(state IN ('pending','blocked')),last_reason TEXT,PRIMARY KEY(message_id,recipient_agent_id))",
+      "CREATE INDEX global_signal_pending ON global_signal_dirty(state,message_id,recipient_agent_id)"
+    ],
+    "normalization": "新messageのattachments canonical metadataはglobal_message_attachmentsのみ。既存messages.attachments/namespace_attachment_mapはfresh import proof後historical provenanceとして保持しruntime読取に使わない。新messageは既存JSON列に[]を置き、同一descriptorを二重保存しない。blob hash/sizeはSQLite constraints＋touched blob確認、全blob再hashはstartup/inspectだけ。",
+    "outbox": "global_signal_dirtyはUNIQUE(message,recipient)の再照合印。kind/UUID5/request_id/payload/番兵/complete履歴なし。通常send/read/ack/consumer/purgeは同TXで同pairをpendingへupsert。desired notificationはmessage/recipientが存在し、agent active、notification_fact/read/ack全nullの場合だけ。to/cc/bcc全kind同じ。signalの作成はdesired=trueかつnotify_after_ts到達時だけ、未来ならdirty保持し期限待ち。dirty成功削除、失敗blocked。FK無しでpurge後clearも可能。fresh時だけdesired=trueのpairへdirtyを作り、消費済みの過去全件をscan/起床させない。",
+    "tracker": "既存S2a tracker/全transaction hookを共通使用。message/ref/FTS/notify/dirtyの変更を同revisionに接続。cursorにはrevisionを入れない。full検証startup/inspectのみ、通常TXは対象row/receiptだけ。",
+    "prepared_validation": "PR3 pristine preservation proof→S2b添付canonicalization＋notification_importの差分proof→schema4/profile/FTS/blob/ACL/reply/receipt/dirty検証→最終manifest/gate→ready/rename/complete。旧rootへin-place変更無し。receipt無しはDB前REPREPARE。complete前runtime起動不可、初期active signalはruntime workerがDB factから生成。",
+    "purge_integration": "後続purgeは存続子の祖先を保留。削除するmessageの全recipient pairをdirtyへ同TXでupsert→attachment relation/message削除。dirtyにFK無し、projectorは不存在からsignal削除を導出できる。最後のblob参照0なら同TX削除。receiptは歴史hash/bindingを残し本文復活を要求しない。consumer未知IDはno-op＋同pair再照合印で孤立hintを消せる。",
+    "provenance_sql": [
+      "DROP TABLE namespace_attachment_map",
+      "ALTER TABLE messages DROP COLUMN attachments"
+    ],
+    "provenance_conversion": "fresh staging内で旧map/添付JSONをprovenance/attachments.jsonへ保存し、blob/relation変換と保存照合後に旧table/列を除く。runtimeはglobal_message_attachmentsだけを保守する。"
+  },
+  "output_protocol": {
+    "preflight": "signalだけの固定root/recipient dir/ID slot、型/UID/mode/nlink/symlinkと外部authority identityを単一preflight。書込直前も照合。自分のmagic/binding/ID一致だけ置換/消去、別形式はblocked。file fsync→rename→dir fsync。残る同UID非協調actorの名前open/rename競合はS1同様開示。",
+    "worker": "server lifecycle内の1 signal worker、固定batch最大100。pending pairをID順で処理、blocked pairは自動busy retryせず他pairの処理は継続（全員の通知を止めない）。HTTP health readiness前のstartup検証後開始。notify_after未来のpairはpending保持し期限へsleep、別pairを妨げない。",
+    "lock_order": "signals/agents directory flock→authority SH→BEGIN IMMEDIATEのfenced DB write transaction。このBEGIN IMMEDIATE後に対象message/recipient/provenance/read/ack/notified/notify_afterを読みdesiredを導出し、その同一TXでsignal一個のfsync/rename/unlink＋dirty削除/blocked記録まで行う。事前readや別DEFERRED snapshotで導出しない。read/ack/purge writeと直列化するのでversion列は増やさない。既存authorityのみwriteは後からdirectory lockを取らない。EX cutoverはSH終了待ち。",
+    "reconcile": "BEGIN IMMEDIATEの後、同TXの最新factからdesiredを導出し作成/削除。filesystem後DB commit前killはdirty rollback→同pair再照合。read/ack/purgeが先にcommitした場合そのfactを読む、worker先なら相手はworker commit後dirtyを立てる。通知消費済みprovenance/read/ack/notifiedから古いsignalを再emitしない。",
+    "signal_delivery": "hintは配送成功でない。consumer inject成功→sameUID delivery_completed、実通知時刻初回＋dirty upsertを同TX。unknown messageはno-op＋dirty（残留hint削除用）、known非recipientはbatch全拒否。応答喪失再申告は同timestamp、receipt/UUID無し。ack前killは重複wake可、message重複不可。",
+    "consumer_boundary": "S2bは合成consumerで管理ackとinbox接続を試験。live watcher/CLI接続は4b/4c、global activation gateはその確認まで不可。既存watcherの直接unlinkをglobalへ流用しない。管理ackのcall schemaはmanagement_contractに固定。",
+    "completion": "dirty無し=signalが直近DB factと照合済み、配送完了とは別。health/inspectはpending/blockedを区別、send receipt成功はDB committedだけ。",
+    "immutable_provenance": "旧archive/添付bytes・delivery.sqlite3・legacy/preserved signal・history/bindings/config・添付map/JSONはcandidate/provenance/に一括保管。旧保管物はimmutableでpurge対象外。mapping.jsonは一回のPR3変換proofでruntime routingには使わない。"
+  },
+  "management_contract": {
+    "envelope": "S1既存sameUID Unix管理socket、version/operation/expected binding必須、HTTP toolへ公開しない。全input/outputに共通schema_contract validator。通常fenced SH（EXは既存cutover/quarantineだけ）。errorは同envelopeでok=false/reason、version/operation以外の秘密なし。",
+    "delivery_completed": {
+      "request_schema": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "operation": {
+            "const": "delivery_completed"
+          },
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "recipient_agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "message_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minItems": 1,
+            "maxItems": 100,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "version",
+          "operation",
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "recipient_agent_id",
+          "message_ids"
+        ],
+        "additionalProperties": false
+      },
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "ok": {
+            "const": true
+          },
+          "operation": {
+            "const": "delivery_completed"
+          },
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "message_id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "recorded",
+                    "already-completed",
+                    "unknown"
+                  ]
+                },
+                "notified_at": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              },
+              "required": [
+                "message_id",
+                "state",
+                "notified_at"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "version",
+          "ok",
+          "operation",
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "mutation_revision",
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "semantics": "message_ids入力順応答。構文/binding/recipient agent検証、known非recipient1件なら全rollback DELIVERY_RECIPIENT_MISMATCH。unknown messageはunknown/notified_at=null＋dirty upsert、他owner情報を返さない。未消費のknownに初回delivered:<UTC> factだけset＋dirty、同transactionでrevision最大1、完全no-opで0。未知IDのdirty upsertが変化ならrevision1。再申告は新timestampを作らず同DB factへ。read/ack済みも通知の初回時刻はconsumer実申告時で記録可能。"
+    },
+    "reconcile_outputs": {
+      "request_schema": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "operation": {
+                "const": "reconcile_outputs"
+              },
+              "expected_server_instance_id": {
+                "type": "string"
+              },
+              "candidate_generation": {
+                "type": "string"
+              },
+              "authority_epoch": {
+                "type": "string"
+              },
+              "pairs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "message_id": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "recipient_agent_id": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "required": [
+                    "message_id",
+                    "recipient_agent_id"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 100,
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "version",
+              "operation",
+              "expected_server_instance_id",
+              "candidate_generation",
+              "authority_epoch",
+              "pairs"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "operation": {
+                "const": "reconcile_outputs"
+              },
+              "expected_server_instance_id": {
+                "type": "string"
+              },
+              "candidate_generation": {
+                "type": "string"
+              },
+              "authority_epoch": {
+                "type": "string"
+              },
+              "batch_limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "version",
+              "operation",
+              "expected_server_instance_id",
+              "candidate_generation",
+              "authority_epoch",
+              "batch_limit"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "ok": {
+            "const": true
+          },
+          "operation": {
+            "const": "reconcile_outputs"
+          },
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "message_id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "recipient_agent_id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "blocked",
+                    "complete"
+                  ]
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "OUTPUT_SLOT_CONFLICT",
+                        "OUTPUT_IO_FAILED",
+                        "OUTPUT_BINDING_CHANGED"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              },
+              "required": [
+                "message_id",
+                "recipient_agent_id",
+                "state",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "pending_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blocked_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "more": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "version",
+          "ok",
+          "operation",
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "mutation_revision",
+          "items",
+          "pending_count",
+          "blocked_count",
+          "more"
+        ],
+        "additionalProperties": false
+      },
+      "semantics": "同期で最大100pairを同worker関数で一度照合して返す（受付だけでない）。pairsはexact IDで重複拒否、state無しpairもDB factからdirtyへ登録後照合、存在しないmessageはclear、存在しないagentはTARGET_UNAVAILABLE全拒否。batchはpending/blockedをmessage_id,recipient_id順に先頭limit、blocked再試行を明示許可。各pair独立TX、返却stateはその処理直後、全体atomic完了は主張しない。恒久slot不一致はblockedを残し他pair継続。moreは選択上限を超える未選択対象の有無（LIMIT n+1）。処理済みblockedの再試行可否はblocked_countで扱い、moreへ含めない。",
+      "lost_response": "同pair再実行でDB factを再導出するだけ、message/receipt/notify時刻増加無し。dirty無しはcomplete。"
+    },
+    "error_schema": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "ok": {
+          "const": false
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "delivery_completed",
+            "reconcile_outputs"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "ARGUMENTS_UNSUPPORTED",
+            "WRITER_FENCED",
+            "TARGET_UNAVAILABLE",
+            "DELIVERY_RECIPIENT_MISMATCH",
+            "OUTPUT_SLOT_CONFLICT",
+            "OUTPUT_IO_FAILED",
+            "OUTPUT_BINDING_CHANGED"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "ok",
+        "operation",
+        "reason"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "state_transitions": [
+    {
+      "from": "未commit",
+      "actor": "caller",
+      "operation": "input/auth/contact/quota検証→単一TX",
+      "to": "DB committed＋pair dirty",
+      "recovery": "commit前はrollback、local intentから同UUID"
+    },
+    {
+      "from": "planned local intent",
+      "actor": "再起動client",
+      "operation": "保存intent＋現credential照合→同UUID",
+      "to": "元receipt又は初回commit",
+      "recovery": "caller元bytes不要、異なるowner/世代/intentは保持拒否"
+    },
+    {
+      "from": "pending pair",
+      "actor": "worker/reconcile",
+      "operation": "DB factからdesired signal導出",
+      "to": "publish又はclear",
+      "recovery": "signal fixed slot＋directory flock＋authority SH"
+    },
+    {
+      "from": "filesystem確定・DB未commit",
+      "actor": "worker",
+      "operation": "dirty削除＋tracker commit",
+      "to": "dirty無し",
+      "recovery": "killでdirty rollback、同pair同factから再実行"
+    },
+    {
+      "from": "hint有り",
+      "actor": "consumer",
+      "operation": "inject成功→delivery_completed",
+      "to": "notified fact＋dirty",
+      "recovery": "ack前はwake重複可、ack後signal再emit不可"
+    },
+    {
+      "from": "message有り",
+      "actor": "recipient",
+      "operation": "read/ack",
+      "to": "初回read/ack＋dirty",
+      "recovery": "同UUIDreceipt、別UUIDno-opも既存receipt規則"
+    },
+    {
+      "from": "message有り",
+      "actor": "後続purge",
+      "operation": "recipient pair dirty＋message/ref削除同TX",
+      "to": "message無し＋dirty",
+      "recovery": "FK無しdirtyから残留hint clear、祖先保留"
+    },
+    {
+      "from": "pending/blocked",
+      "actor": "worker",
+      "operation": "IO/slot不一致",
+      "to": "pair blocked",
+      "recovery": "他pair継続。operator修復→明示reconcile同pair"
+    },
+    {
+      "from": "任意",
+      "actor": "updater",
+      "operation": "authority EX/quarantine",
+      "to": "fenced",
+      "recovery": "SH終了待ち、新candidateへ旧pair暗黙転送無し"
+    }
+  ],
+  "fixed_reasons": {
+    "pre_receipt": [
+      "ARGUMENTS_UNSUPPORTED",
+      "REQUEST_ID_INVALID",
+      "OWNER_REQUIRED",
+      "CREDENTIAL_GENERATION_MISMATCH",
+      "WRITER_FENCED",
+      "CREDENTIAL_INPUT_CONFLICT",
+      "FORMAT_NOT_SUPPORTED"
+    ],
+    "new_intent_only": [
+      "TARGET_UNAVAILABLE",
+      "RECIPIENTS_EMPTY",
+      "CONTACT_BLOCKED",
+      "MESSAGE_UNAVAILABLE",
+      "ATTACHMENT_PATHS_NOT_SUPPORTED",
+      "IMAGE_CONVERSION_NOT_SUPPORTED",
+      "ATTACHMENT_INVALID",
+      "PAYLOAD_TOO_LARGE",
+      "BROADCAST_NOT_SUPPORTED",
+      "AUTO_CONTACT_NOT_SUPPORTED",
+      "REQUEST_RECEIPT_CAPACITY_REACHED",
+      "REQUEST_INPUT_TOO_LARGE",
+      "LEGACY_THREAD_WRITE_NOT_SUPPORTED",
+      "ATTACHMENT_OWNER_CAPACITY_REACHED"
+    ],
+    "read_only": [
+      "QUERY_INVALID",
+      "CURSOR_INVALID",
+      "MESSAGE_RESPONSE_TOO_LARGE",
+      "LLM_SUMMARY_NOT_SUPPORTED",
+      "ATTACHMENT_UNAVAILABLE",
+      "QUERY_WORK_LIMIT_EXCEEDED"
+    ],
+    "preserve_pending": [
+      "REQUEST_ID_CONFLICT",
+      "TRANSPORT_FAILED",
+      "RESPONSE_INVALID",
+      "WRITER_FENCED"
+    ],
+    "operator_output_only": [
+      "OUTPUT_SLOT_CONFLICT",
+      "OUTPUT_IO_FAILED",
+      "OUTPUT_BINDING_CHANGED"
+    ],
+    "prepare_only": [
+      "NOTIFICATION_SOURCE_REQUIRES_RESOLUTION",
+      "SOURCE_ATTACHMENT_NOT_REPRESENTABLE",
+      "CANDIDATE_SCHEMA_REQUIRES_REPREPARE"
+    ],
+    "management_only": [
+      "DELIVERY_RECIPIENT_MISMATCH"
+    ]
+  },
+  "acceptance_cases": [
+    "default旧mode/activation=false/S1/S2a root不変、fresh schema4 proof/gate/complete前起動拒否、receipt無しroot DB family/listing/bytes不変。",
+    "send/reply stable IDのみ、旧names未知引数拒否、adapterはnetwork前resolve、numeric send.thread非null固定拒否、reply_message/null対[]継承、owner/contact/BCC/retired/missing/100宛先を全TX照合。",
+    "local intent保存前後/HTTP前/DB commit前後/response前後/receipt保存前後kill、元args無し同UUIDresume、message/blob/receipt1つ、owner/generation/intent相違でpending保持、raw token無し。",
+    "signal temp/fsync/rename/unlink/dirty delete/commit各前後kill、同pair再照合・notify/read/ack/purge並行で古いhint再emit不可。purge後consumer unknown no-op＋clear、known非recipient batch全reject。",
+    "pair blockedが別agentの通知を止めず、operator修復同pair、authority EX/SH競合とpath差し替えsentinel不変、HTTP healthまで待つfixture。",
+    "keyset1001chain/複数page中worker完了/notify/clear/touch/別message追加で無関係失効無し・欠落重複無し。purge skip、owner/binding/query偽装拒否、new ID上限、stateless/no CURSOR_STALE。",
+    "300KiB/1MiB超旧添付metadataの実サイズ/digest/content_ref、可能blobはsearch digest選択、予算超過固定reason/export案内。旧長subject/body/topic/labelはread schema可、wire超過は切断無し拒否。",
+    "添付bytes入口searchだけ、false flag削除、inbox/topic/summary metadata-only。最終二重MCP wrapper budget、list inboxはitemを黙って落とさず全拒否、envelopeはnext keyset。",
+    "owner quota同TX、新distinct/同digest/共有owner/legacy超過/read/replay/増量/purge後回復、inspect usage正確。",
+    "fresh旧metadata無しper-message・同ID単一共存・ID不明・delivered/pending/failed/leased/dead_letter/結果不明/read/ack/未来backoffを対応表どおり、未解決needs_action/ready拒否、source bytes保持、factから初期signal再生成。",
+    "管理input/output完全schema、delivery応答喪失再申告/known非recipient全reject/unknown no-op、reconcile pairs/batch排他・同pair再実行・bounded sync結果。",
+    "旧8tool/16tool/installed artifact/common validator/preimage互換、semantic preimage16KiB/local intent1MiB別境界。全検証startup/inspect、通常write全履歴scan無し。installerコピー元増分棚卸し、作者全体実行有無報告。",
+    "可視0件＋他ownerの大ID、可視小ID＋不可視大ID、4read＋cursor/outputへ全体MAX漏れ無し。可視MAX/初頁pageは同read TX。",
+    "fresh過去10000件hint/delivery無しはimported-consumed・notified=null・dirty0・wake0、未読でも再wake無し。残留hint/pending/failedだけdirty（retired/read/ack除外）、future期限保持。旧PR3 hintはactive pathへ出力しない。",
+    "新規to/cc/bcc全kind signal、各recipient自己metadataのみ。旧BCC移行は再wake無し。",
+    "workerのBEGIN IMMEDIATE後readを固定、read/ack commitとの両順序で古いhint無し/dirty喪失無し。",
+    "fixture全枝未知keywordはload時CAPABILITY_INVALID、入力値不正ARGUMENTS_UNSUPPORTEDと分離。S2a受理/拒否/hash不変。",
+    "cursor schemaにbinding3field無し、通常call contextでfence。継続時に別のbinding複製照合を作らない。"
+  ],
+  "deferred": {
+    "heading": "後続へ",
+    "contact_welcome": "S2aの「S2bへ」のcontact welcomeは今回には含めず、別PR（S2cまたは4b、担当は親が後で確定）へ移す。S2bは固定拒否を維持し、schema/outputを増やさない。実装PR本文にも同じ「後続へ」欄を置く。",
+    "consumer": "実watcher/consumerのdelivery_completed接続は4b/4c。合成consumerの契約試験と実運用のactivation条件を混同しない。"
+  },
+  "capability_semantics": {
+    "durable_message_outputs_v1": "唯一の外部出力signalをDB factから再生成可能。archive md/添付.bin/Gitの常時projectionを意味しない。",
+    "message_attachments_inline_v1": "新規send/reply inline入力＋search_messagesだけのdigest選択取得。inbox/topic/summaryはmetadata-only。"
+  },
+  "read_projection_schema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "sender": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "to": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "agent_id",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "cc": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "agent_id",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "bcc": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "agent_id",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "subject": {
+        "type": "string"
+      },
+      "body_md": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "importance": {
+        "type": "string",
+        "enum": [
+          "low",
+          "normal",
+          "high",
+          "urgent"
+        ]
+      },
+      "ack_required": {
+        "type": "boolean"
+      },
+      "topic": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "reply_to": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "minimum": 1
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "legacy_thread_label": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "created_ts": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "attachments": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "filename": {
+              "type": "string"
+            },
+            "media_type": {
+              "type": "string"
+            },
+            "byte_size": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "content_ref": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "db-blob"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "kind",
+                "sha256"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "sha256",
+            "filename",
+            "media_type",
+            "byte_size",
+            "content_ref"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "read_at": {
+        "anyOf": [
+          {
+            "type": "string",
+            "format": "date-time"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "acknowledged_at": {
+        "anyOf": [
+          {
+            "type": "string",
+            "format": "date-time"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "history_incomplete": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "sender",
+      "to",
+      "cc",
+      "bcc",
+      "subject",
+      "body_md",
+      "importance",
+      "ack_required",
+      "topic",
+      "reply_to",
+      "legacy_thread_label",
+      "created_ts",
+      "attachments",
+      "read_at",
+      "acknowledged_at",
+      "history_incomplete"
+    ],
+    "additionalProperties": false
+  },
+  "keyset_cursor_schema": {
+    "type": "object",
+    "properties": {
+      "version": {
+        "const": 1
+      },
+      "tool": {
+        "type": "string",
+        "enum": [
+          "search_messages",
+          "fetch_topic",
+          "fetch_summary",
+          "summarize_thread"
+        ]
+      },
+      "agent_id": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "query_sha256": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "max_message_id": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "before_id": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "since_cutoff": {
+        "anyOf": [
+          {
+            "type": "string",
+            "format": "date-time"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "version",
+      "tool",
+      "agent_id",
+      "query_sha256",
+      "max_message_id",
+      "before_id",
+      "since_cutoff"
+    ],
+    "additionalProperties": false
+  },
+  "client_intent_contract": {
+    "scope": "S2b receipt-bearing writeの固定runtime/mutation-pending.json。S2a既存pending/preimage bytesは変更しない。magicをS2b intent種別へ分け、旧pendingを暗黙解釈せず既存明示resolveへ。後続4b/4cもこのfixtureを正本として使う。",
+    "single_payload": "wire schema/defaultで正規化したto/cc/bcc stable IDs＋本文＋base64を単一canonical_intentとして保存。token/sender_token/ignored scope/formatは保存しない。UUID/owner/generation/binding/phase/receiptはjournal header。semantic hashはこのintentから共通関数でその都度導出、canonical_preimage/payloadを別local field/fileに持たない。",
+    "bounds": "資格情報無しcanonical_intent UTF8最大1048576 bytes、固定private0600 slot・directory0700、既存4a preflight/O_EXCL temp→fsync→rename→dir fsync、固定local mutex。server semantic preimage16384 bytes上限と混同しない。escape後に最大wireがこのlocal上限を超えればnetwork前PAYLOAD_TOO_LARGE。",
+    "resume": "planned保存後HTTP前の中断・commit応答喪失とも保存intentから同UUIDでwireを再構成。元caller args無しのresume入口を後続clientに必須化。現在credentialのowner/generation/bindingをheaderへ照合して注入、相違拒否/pending保持。送信済みrowの現在宛先名を再resolveしない。",
+    "complete": "schema/binding/request ID matched receiptをphase committedと同slotへatomic保存→報告可能後に削除。commit receiptは本文/base64を含まない。各保存前後killでも同UUID、違うintentはMUTATION_PENDING_CONFLICT、raw token未保存。 local intentは結果未確定中だけの再送記録で、成功報告後の常時同期copy/別archiveにはしない。serverにcommitが存在しても応答未確定の間だけbytesが一時的に残ることは中断回復上必要。"
+  },
+  "notification_import": {
+    "authority": "旧通知状態の正本は旧signal inventory、Codex Appはdelivery行。message未読だけから未配送を推測しない。PR3 source/旧copy/status/attempt/backoff/leaseはimmutable proofへ保持、旧deliveryを第二の稼働writerにはしない。",
+    "consumed_fact": "hintもdelivery行も無い既存pairはnotification_fact=imported-consumed（実配送時刻なし）。prepare時刻はproofにだけ実測時刻として記録、配送時刻を捏造しない。このprovenanceはruntime recipient rowの唯一の消費済みfactで、proofは一回の変換根拠。新規sendではprovenance=null。",
+    "precedence": "read/ack → valid delivered → unresolved delivery → pending/failed → known old hint → inventory absent(imported-consumed)。Codex App delivery行があればそれがhintより優先し、deliveredと残留hintを未配送へ戻さない。read/ackならwake不要。",
+    "rows": [
+      {
+        "source": "recipient read_tsまたはack_tsあり",
+        "fact": "read/ack保存、実通知時刻はvalid delivered_atがあれば保存。無ければnull、imported-consumedでなくてもread/ackでdesired=false",
+        "dirty": "初期dirty無し。旧hintはactiveから除外し保管"
+      },
+      {
+        "source": "status delivered＋有効delivered_at",
+        "fact": "notification_fact=delivered:<delivered_at UTC>。残留hintより優先",
+        "dirty": "初期dirty無し、再emitしない"
+      },
+      {
+        "source": "delivery pending/failed＋exact pair",
+        "fact": "notification_fact=null。notify_after=PR3 next_attempt/coalesce最大有効期限、無ければ即時",
+        "dirty": "active未読なら1行、未来は期限待ちで保持。read/ack/retiredなら無し"
+      },
+      {
+        "source": "delivery leased/dead_letter/結果不明/不整合完了日時",
+        "fact": "NOTIFICATION_SOURCE_REQUIRES_RESOLUTION、needs_action/ready拒否。source digest＋exact pairへoperator retry_after又は証拠付きdeliveredを明示",
+        "dirty": "choice後のdesired=true pairだけ。読了ならread/ack優先"
+      },
+      {
+        "source": "配送行無し＋既知旧hint（metadata無しper-message/旧単一と同ID共存を含む）",
+        "fact": "検証済path/envelopeからexact message/recipientを確定、notification_fact=null。hintの重複は1pairへ",
+        "dirty": "active未読なら1行、新hint1個。旧copyは保管だけ"
+      },
+      {
+        "source": "ID不明/対応するmessage又はrecipient無し旧hint",
+        "fact": "NOTIFICATION_SOURCE_REQUIRES_RESOLUTION、ready拒否。source sha＋旧pathへ明示map又はobsolete-hint discard。勝手な割当無し",
+        "dirty": "mapは既存exact pairへ未配送fact、discardはその旧hintをactiveへ持込まない。通常pairのfactを任意に配送済みへ変えない"
+      },
+      {
+        "source": "signalもdelivery rowも無い既存recipient（read/ackの有無にかかわらず）",
+        "fact": "notification_fact=imported-consumed（実配送時刻なし）。旧modeの消費済みとして扱う",
+        "dirty": "初期dirty無し、過去message全件をwakeしない。旧BCC hint無しも同じ"
+      }
+    ],
+    "proof": "source recipient/pair→inventory/delivery root digest/row key→新notify/read/ack/provenance/notify_after/dirtyを変換proofへ列挙。choiceも同digestに束縛、未解決needs_actionでpublication拒否。PR3写像の旧hintは新active signals/agentsへ残さず、immutable preservationだけへ。ready前後killも同proofからfact/初期dirtyを再生成、source bytes/ID/token/status/試行/backoff/leaseの保存を照合。",
+    "retired": "retired宛はdesired=false/初期dirty無し、message保持。後続の再有効化があればそのTXで該当未完pair再照合を必須化。",
+    "legacy_boundary": "旧sendがsignal生成失敗を握り潰した場合の未配送を、過去message全件の再wakeで推測補完しない。この境界をPR7移行案内に明記。",
+    "attachment_media_type": "旧JSONのmedia_type記録を保存、記録が無ければ固定application/octet-stream。hostのMIME推測を使わない。"
+  },
+  "legacy_mode_differences": [
+    {
+      "area": "BCC wake",
+      "legacy": "to/ccだけsignal、BCCには出さない",
+      "s2b": "to/cc/bcc全recipientへ同じ規則でsignal",
+      "migration": "旧hint無しBCCはimported-consumed、過去BCCを一括wakeしない。新規sendから同規則。"
+    }
+  ],
+  "contract_revision": "s2b-v1",
+  "notification_fact_contract": {
+    "representation": "単一nullable TEXT notification_fact: null=通知未完、imported-consumed=旧運用で消費済み、delivered:<実測UTC ISO8601>=consumer確認済み。時刻列へ番兵を置かず、実測時刻無しの消費済みを同じ通知factのtagとして表す。",
+    "predicate": "notification_pendingの共通SQL式/関数一つでmessage/recipient存在・active・notification_fact IS NULL・read/ack IS NULLを判定。worker/health/inspect/consumer already-completedはこの正本を使う。",
+    "wire": "notified_atはdelivered tagの実UTCだけ、imported-consumedはalready-completed/notified_at=null。実replyは新row notification_fact=null。",
+    "supersedes": "設計案のnotified_ts＋notification_provenance二列を置かない。notification_importの二列表現は同じtagged factへ一回で変換し、二列を保持しない。"
+  }
+}

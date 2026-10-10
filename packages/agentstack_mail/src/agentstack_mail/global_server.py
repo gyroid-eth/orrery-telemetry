@@ -186,7 +186,7 @@ class GlobalRuntime:
         try:
             with connection(self.paths["database"]) as db:
                 self.check_sqlite_files()
-                if self.schema_version == 3:
+                if self.schema_version >= 3:
                     db.execute("BEGIN DEFERRED")
                 metadata = dict(db.execute("SELECT key,value FROM namespace_metadata"))
                 instances = list(db.execute("SELECT instance_id FROM mail_instances"))
@@ -229,6 +229,109 @@ class GlobalRuntime:
         self.control = None
         self.handlers = set()
         self.writers = set()
+
+    inbox_extensions = ()
+
+    def inbox(self, args):
+        (
+            expected_server_instance_id,
+            candidate_generation,
+            authority_epoch,
+            agent_id,
+            registration_token,
+            limit,
+            include_bodies,
+            urgent_only,
+            since_ts,
+        ) = (
+            args[k]
+            for k in (
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch",
+                "agent_id",
+                "registration_token",
+                "limit",
+                "include_bodies",
+                "urgent_only",
+                "since_ts",
+            )
+        )
+        if not 1 <= limit <= 1000:
+            raise GlobalError("LIMIT_INVALID")
+        if since_ts is not None:
+            try:
+                cutoff = datetime.fromisoformat(since_ts.replace("Z", "+00:00"))
+                if cutoff.tzinfo is None:
+                    raise ValueError
+            except ValueError:
+                raise GlobalError("TIMESTAMP_INVALID") from None
+        with self.transaction(
+            binding=(expected_server_instance_id, candidate_generation, authority_epoch)
+        ) as db:
+            self.owner(db, agent_id, registration_token)
+            values = []
+            for row in db.execute(
+                "SELECT m.*,r.kind,r.read_ts,r.ack_ts,a.name AS sender_name FROM messages m JOIN message_recipients r ON r.message_id=m.id JOIN agents a ON a.id=m.sender_id WHERE r.agent_id=? ORDER BY m.id DESC",
+                (agent_id,),
+            ):
+                value = dict(row)
+                if urgent_only and value["importance"] not in {"high", "urgent"}:
+                    continue
+                if since_ts is not None and instant(value["created_ts"]) <= cutoff:
+                    continue
+                if not include_bodies:
+                    value.pop("body_md", None)
+                value["from"] = value.pop("sender_name")
+                # Historical scope/label fields are not routing input and
+                # should not leak another BCC recipient.
+                values.append(value)
+                if len(values) >= limit:
+                    break
+            return values
+
+    def lifecycle(self, args, retire):
+        (
+            expected_server_instance_id,
+            candidate_generation,
+            authority_epoch,
+            agent_id,
+            registration_token,
+        ) = (
+            args[k]
+            for k in (
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch",
+                "agent_id",
+                "registration_token",
+            )
+        )
+        with self.transaction(
+            write=True,
+            binding=(
+                expected_server_instance_id,
+                candidate_generation,
+                authority_epoch,
+            ),
+        ) as db:
+            self.owner(db, agent_id, registration_token, retired=True)
+            db.execute(
+                "UPDATE agents SET retired_at=? WHERE id=?",
+                (now() if retire else None, agent_id),
+            )
+            self.after_lifecycle(db, agent_id)
+            changed(db)
+            return {
+                "status": "retired" if retire else "active",
+                "agent_id": agent_id,
+            }
+
+    def after_lifecycle(self, db, agent_id):
+        pass
+
+    def health_details(self, db=None):
+        return {}
 
     def authority_states(self):
         return (
@@ -349,7 +452,7 @@ class GlobalRuntime:
                 self.check_sqlite_files()
                 if write:
                     db.execute("BEGIN IMMEDIATE")
-                elif self.schema_version == 3:
+                elif self.schema_version >= 3:
                     db.execute("BEGIN DEFERRED")
                 if generation(db) != self.candidate_generation:
                     raise GlobalError("CANDIDATE_CHANGED")
@@ -772,6 +875,13 @@ def build_global_server(config, *, runtime_class=GlobalRuntime, server_class=S1F
         from .global_s2a import build_s2a_server
 
         return build_s2a_server(config)
+    if (
+        runtime_class is GlobalRuntime
+        and document(config).get("kind") == "orrery-global-server-s2b-v1"
+    ):
+        from .global_s2b import build_s2b_server
+
+        return build_s2b_server(config)
     runtime = runtime_class(config)
 
     @asynccontextmanager
@@ -797,6 +907,7 @@ def build_global_server(config, *, runtime_class=GlobalRuntime, server_class=S1F
             revision = dict(db.execute("SELECT key,value FROM namespace_metadata"))[
                 "write_generation"
             ]
+            details = runtime.health_details(db)
         return {
             "status": "ok",
             "mode": "global-preparation",
@@ -810,6 +921,7 @@ def build_global_server(config, *, runtime_class=GlobalRuntime, server_class=S1F
             "supported_tools": sorted(runtime.tools),
             "resources_supported": False,
             **getattr(runtime, "health_fields", {}),
+            **details,
         }
 
     @server.tool
@@ -861,7 +973,6 @@ def build_global_server(config, *, runtime_class=GlobalRuntime, server_class=S1F
         ) as db:
             return runtime.identity(runtime.owner(db, agent_id, registration_token))
 
-    @server.tool
     async def fetch_inbox(
         expected_server_instance_id: str,
         candidate_generation: str,
@@ -874,39 +985,25 @@ def build_global_server(config, *, runtime_class=GlobalRuntime, server_class=S1F
         include_bodies: bool = True,
         urgent_only: bool = False,
         since_ts: str | None = None,
+        before_id: int | None = None,
+        expected_credential_generation: int | None = None,
     ) -> list[dict]:
-        if not 1 <= limit <= 1000:
-            raise GlobalError("LIMIT_INVALID")
-        if since_ts is not None:
-            try:
-                cutoff = datetime.fromisoformat(since_ts.replace("Z", "+00:00"))
-                if cutoff.tzinfo is None:
-                    raise ValueError
-            except ValueError:
-                raise GlobalError("TIMESTAMP_INVALID") from None
-        with runtime.transaction(
-            binding=(expected_server_instance_id, candidate_generation, authority_epoch)
-        ) as db:
-            runtime.owner(db, agent_id, registration_token)
-            values = []
-            for row in db.execute(
-                "SELECT m.*,r.kind,r.read_ts,r.ack_ts,a.name AS sender_name FROM messages m JOIN message_recipients r ON r.message_id=m.id JOIN agents a ON a.id=m.sender_id WHERE r.agent_id=? ORDER BY m.id DESC",
-                (agent_id,),
-            ):
-                value = dict(row)
-                if urgent_only and value["importance"] not in {"high", "urgent"}:
-                    continue
-                if since_ts is not None and instant(value["created_ts"]) <= cutoff:
-                    continue
-                if not include_bodies:
-                    value.pop("body_md", None)
-                value["from"] = value.pop("sender_name")
-                # Historical scope/label fields are not routing input and
-                # should not leak another BCC recipient.
-                values.append(value)
-                if len(values) >= limit:
-                    break
-            return values
+        return runtime.inbox(locals())
+
+    # One function/tool definition. S1/S2a retain their frozen schemas; only
+    # the explicit S2b runtime admits the additional read arguments.
+    from inspect import signature
+
+    original = signature(fetch_inbox)
+    extensions = {"before_id", "expected_credential_generation"}
+    fetch_inbox.__signature__ = original.replace(
+        parameters=[
+            p
+            for p in original.parameters.values()
+            if p.name not in extensions or p.name in runtime.inbox_extensions
+        ]
+    )
+    server.tool(fetch_inbox)
 
     def lifecycle(retire):
         async def action(
@@ -918,24 +1015,7 @@ def build_global_server(config, *, runtime_class=GlobalRuntime, server_class=S1F
             agent_name: str | None = None,
             project_key: str | None = None,
         ) -> dict:
-            with runtime.transaction(
-                write=True,
-                binding=(
-                    expected_server_instance_id,
-                    candidate_generation,
-                    authority_epoch,
-                ),
-            ) as db:
-                runtime.owner(db, agent_id, registration_token, retired=True)
-                db.execute(
-                    "UPDATE agents SET retired_at=? WHERE id=?",
-                    (now() if retire else None, agent_id),
-                )
-                changed(db)
-                return {
-                    "status": "retired" if retire else "active",
-                    "agent_id": agent_id,
-                }
+            return runtime.lifecycle(locals(), retire)
 
         return action
 
