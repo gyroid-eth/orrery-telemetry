@@ -483,26 +483,33 @@ PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$PROJECT_K
 # --- codex helper load (tests extract from here to the end marker) ---
 # The launcher, doctor and installer resolve and probe Codex through the same
 # functions (hooks/codex-bin.sh, #242); the installer keeps no copy of its
-# own. The checkout's own copy is preferred so install.sh validates against
-# the code it is running from; an already-installed hooks/ is the fallback
-# only when that copy is unavailable (install.sh run on its own, outside its
-# checkout). A missing or incompatible helper is a packaging error, not a
-# reason to skip Codex detection silently.
+# own. install.sh is never run from an install destination (it copies
+# $REPO_ROOT/hooks there, never the reverse), so the checkout's own copy is
+# the only one that can ever be current; a missing or incompatible helper is
+# a packaging error, not a reason to skip Codex detection silently.
 CODEX_HELPER="$REPO_ROOT/hooks/codex-bin.sh"
-[[ -f "$CODEX_HELPER" ]] || CODEX_HELPER="$INSTALL_DIR/hooks/codex-bin.sh"
 if [[ ! -f "$CODEX_HELPER" ]]; then
   echo "error: missing Codex launcher helper: $CODEX_HELPER" >&2
   exit 2
 fi
 # shellcheck disable=SC1090
 . "$CODEX_HELPER"
-for CODEX_HELPER_FN in codex_bin_problem find_usable_codex_bin_in codex_launch_search_path codex_probe_budget_start; do
+for CODEX_HELPER_FN in codex_bin_problem find_usable_codex_bin_in codex_launch_search_path codex_probe_budget_start codex_launch_context; do
   if ! declare -F "$CODEX_HELPER_FN" >/dev/null; then
     echo "error: Codex launcher helper is missing required function $CODEX_HELPER_FN: $CODEX_HELPER" >&2
     exit 2
   fi
 done
 unset CODEX_HELPER_FN
+# A candidate must be probed the way a spawned child will actually run it —
+# its own login shell, with codex_launch_path's PATH (the resolved target's
+# own bin, so an npm shim finds the node it was installed with) — not under
+# this installer's own PATH. Judging it any other way can save a value here
+# that the launcher then rejects, or reject one (an nvm-style codex whose
+# node is not on this shell's PATH) that the launcher would have accepted
+# (#239, #243). codex_launch_context sets this up; doctor and the launcher
+# call the same function.
+codex_launch_context || exit 2
 # --- end codex helper load ---
 case "$RESET_SETTINGS" in
   0|"") RESET_SETTINGS=0 ;;
@@ -646,12 +653,19 @@ find_usable_codex_bin() {
 # --- end codex launcher resolution ---
 
 resolve_setting CODEX_BIN_SETTING AGENTSTACK_CODEX_BIN "" found
+# codex_probe_budget_start must run in this shell, not inside a $(...)
+# subshell: a subshell's CODEX_PROBE_DEADLINE cannot be read back here, which
+# would silently drop the budget check below. One budget, started once,
+# covers the installed/stale check and the PATH scan together, so a path
+# that appears in both is judged (and timed) only once (#243).
+codex_probe_budget_start
 if [[ "$SETTING_SOURCE" != explicit ]]; then
   if [[ -n "$CODEX_BIN_SETTING" ]]; then
     # A stale path from an earlier install (Node upgraded, prefix moved, or a
     # Windows shim picked up under WSL) must not pin the dashboard to a binary
     # that cannot run. An explicit --codex-bin that cannot run is rejected
     # below instead.
+    CODEX_JUDGED="$CODEX_JUDGED$CODEX_BIN_SETTING:"
     codex_stale_reason="$(codex_bin_problem "$CODEX_BIN_SETTING")"
     if [[ -n "$codex_stale_reason" ]]; then
       echo "note: installed AGENTSTACK_CODEX_BIN=$CODEX_BIN_SETTING is stale ($codex_stale_reason); resolving codex again" >&2
@@ -659,10 +673,6 @@ if [[ "$SETTING_SOURCE" != explicit ]]; then
     fi
   fi
   if [[ -z "$CODEX_BIN_SETTING" ]]; then
-    # codex_probe_budget_start must run in this shell, not inside the
-    # $(...) below: a subshell's CODEX_PROBE_DEADLINE cannot be read back
-    # here, which would silently drop the budget check that follows.
-    codex_probe_budget_start
     CODEX_BIN_SETTING="$(find_usable_codex_bin)"
     # A candidate that is never reached, or is reached only after the shared
     # probe budget ran out, must not read the same as "nothing is installed":

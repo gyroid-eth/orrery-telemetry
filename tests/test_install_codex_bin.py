@@ -42,8 +42,10 @@ def _helper_load_block() -> str:
 _PROBE_FN = "echo LOADED=$(declare -F codex_bin_problem >/dev/null 2>&1 && echo yes || echo no)\necho HELPER=$CODEX_HELPER\n"
 
 
-def test_codex_helper_loads_from_the_source_checkout(tmp_path):
-    # install.sh run from a normal clone: hooks/ sits next to scripts/.
+def test_codex_helper_loads_from_the_checkout(tmp_path):
+    # install.sh only ever runs from its own checkout (it copies
+    # $REPO_ROOT/hooks to the install destination, never the reverse), so
+    # $REPO_ROOT/hooks/codex-bin.sh is the only copy it reads (#243).
     repo_root = tmp_path / "checkout"
     (repo_root / "hooks").mkdir(parents=True)
     (repo_root / "hooks" / "codex-bin.sh").write_text(
@@ -60,9 +62,11 @@ def test_codex_helper_loads_from_the_source_checkout(tmp_path):
     assert f"HELPER={repo_root}/hooks/codex-bin.sh" in result.stdout
 
 
-def test_codex_helper_falls_back_to_the_installed_copy(tmp_path):
-    # install.sh run on its own, without a hooks/ sibling (e.g. copied out of
-    # its checkout): the already-installed tree's own hooks/ is used instead.
+def test_codex_helper_missing_from_the_checkout_stops_instead_of_skipping_detection(tmp_path):
+    # Even with an already-installed hooks/ elsewhere, install.sh must not
+    # fall back to it: that copy can only be stale relative to this checkout,
+    # and if the checkout's own hooks/codex-bin.sh is missing, the later copy
+    # step that would need it is already broken (#243).
     repo_root = tmp_path / "checkout-without-hooks"
     repo_root.mkdir()
     install_dir = tmp_path / "install"
@@ -72,28 +76,12 @@ def test_codex_helper_falls_back_to_the_installed_copy(tmp_path):
     script = (
         f"REPO_ROOT={shlex.quote(str(repo_root))}\n"
         f"INSTALL_DIR={shlex.quote(str(install_dir))}\n"
-        + _helper_load_block() + "\n" + _PROBE_FN
-    )
-    result = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=10)
-    assert result.returncode == 0, result.stderr
-    assert "LOADED=yes" in result.stdout
-    assert f"HELPER={install_dir}/hooks/codex-bin.sh" in result.stdout
-
-
-def test_codex_helper_missing_everywhere_stops_instead_of_skipping_detection(tmp_path):
-    repo_root = tmp_path / "checkout-without-hooks"
-    repo_root.mkdir()
-    install_dir = tmp_path / "install-without-hooks"
-    install_dir.mkdir()
-    script = (
-        f"REPO_ROOT={shlex.quote(str(repo_root))}\n"
-        f"INSTALL_DIR={shlex.quote(str(install_dir))}\n"
         + _helper_load_block()
     )
     result = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=10)
     assert result.returncode == 2
     assert "missing Codex launcher helper" in result.stderr
-    assert str(install_dir / "hooks" / "codex-bin.sh") in result.stderr
+    assert str(repo_root / "hooks" / "codex-bin.sh") in result.stderr
 
 
 def test_codex_helper_missing_required_function_stops_instead_of_skipping_detection(tmp_path):
@@ -121,11 +109,20 @@ def _script(path: pathlib.Path, body: str) -> pathlib.Path:
     return path
 
 
+def _raw_script(path: pathlib.Path, body: str) -> pathlib.Path:
+    # Unlike _script, does not prepend a shebang: the caller's first line
+    # (e.g. "#!/usr/bin/env node") is the one the kernel actually reads.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
 WORKS = 'echo "codex-cli 0.157.0"\n'
 BROKEN = 'echo "Error: Missing optional dependency @openai/codex-linux-x64" >&2\nexit 1\n'
 
 
-def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeout=5, budget=15):
+def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeout=5, budget=15, extra_env=None):
     """Run the block; returns (exit code, resolved CODEX_BIN_SETTING, stderr).
 
     The default probe budget is generous so a working fake codex is not failed
@@ -138,10 +135,13 @@ def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeo
     stubs = (
         "set -euo pipefail\n"
         f". {shlex.quote(str(INSTALL.parents[1] / 'hooks' / 'project-context.sh'))}\n"
-        # The resolution block now only wraps hooks/codex-bin.sh's shared
-        # functions (#242); it no longer defines them itself.
-        f". {shlex.quote(str(INSTALL.parents[1] / 'hooks' / 'codex-bin.sh'))}\n"
+        f"REPO_ROOT={shlex.quote(str(INSTALL.parents[1]))}\n"
         f"INSTALL_DIR={shlex.quote(str(tmp_path / 'install'))}\n"
+        # The resolution block now only wraps hooks/codex-bin.sh's shared
+        # functions (#242); the helper-load block (which it depends on) sets
+        # them up the same way install.sh itself does, including the
+        # child-login-shell probe context (#243).
+        + _helper_load_block() + "\n"
         "RESET_SETTINGS=0\n"
         # An explicit value is what --codex-bin / AGENTSTACK_CODEX_BIN supplies.
         f"OPTION_GIVEN={'AGENTSTACK_CODEX_BIN' if explicit else ''}\n"
@@ -164,6 +164,8 @@ def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeo
         "HOME": str(home),
         "PATH": ":".join(str(d) for d in path_dirs) + ":/usr/bin:/bin",
     }
+    if extra_env:
+        env.update(extra_env)
     result = subprocess.run(["/bin/bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
     resolved = ""
     for line in result.stdout.splitlines():
@@ -213,6 +215,56 @@ def test_the_per_user_npm_prefix_is_found_when_not_on_path(tmp_path):
     npm_global = _script(tmp_path / "home" / ".npm-global" / "bin" / "codex", WORKS)
     _, resolved, _ = _resolve(tmp_path, path_dirs=[windows.parent], wsl=True)
     assert resolved == str(npm_global)
+
+
+def _login_shell_with_fixed_path(tmp_path, minimal_path) -> pathlib.Path:
+    # Overrides codex_launch_shell's own pick (AGENTSTACK_CHILD_SHELL): the
+    # spawned child's actual login profile sets a PATH independent of this
+    # test process's own, which is exactly the gap #243 found (the installer
+    # judged a candidate under its own PATH instead of this one).
+    return _script(tmp_path / "login-shell",
+                    f'export PATH={shlex.quote(str(minimal_path))}\nshift\nexec /bin/bash -c "$@"\n')
+
+
+def test_an_nvm_npm_style_codex_is_selected_the_same_way_the_launcher_picks_it(tmp_path):
+    # hooks/codex-bin.sh's own nvm search dir, not path_dirs: codex_launch_path
+    # must put this bin dir (it has an adjacent node) ahead of the child's own
+    # PATH for the probe to answer, the same way spawn_child.sh and doctor.sh
+    # already do (#239). Before #243 the installer probed under its own PATH
+    # and never looked here at all.
+    home = tmp_path / "home"
+    nvm_bin = home / ".nvm" / "versions" / "node" / "v24.0.0" / "bin"
+    codex = _raw_script(nvm_bin / "codex", "#!/usr/bin/env node\n")
+    _script(nvm_bin / "node", 'shift\ncase "$1" in\n --version) echo "codex-cli 0.159.2";;\nesac\n')
+    minimal = tmp_path / "minimal-path"
+    minimal.mkdir()
+    login = _login_shell_with_fixed_path(tmp_path, minimal)
+    code, resolved, stderr = _resolve(
+        tmp_path, path_dirs=[],
+        extra_env={"AGENTSTACK_CHILD_SHELL": str(login)})
+    assert code == 0, stderr
+    assert resolved == str(codex)
+
+
+def test_an_npm_global_codex_without_adjacent_node_is_rejected_the_same_way_the_launcher_rejects_it(tmp_path):
+    # node sits on this test process's own PATH (what the installer's probe
+    # used before #243) but not on the child login shell's PATH (what the
+    # dashboard's spawned Codex child actually gets). A candidate accepted
+    # here and rejected at launch time is the #239 symptom; the installer must
+    # now reject it up front too, matching doctor and the launcher.
+    home = tmp_path / "home"
+    codex = _raw_script(home / ".npm-global" / "bin" / "codex", "#!/usr/bin/env node\n")
+    node_only_on_this_path = tmp_path / "only-this-process-sees-this"
+    _script(node_only_on_this_path / "node", 'shift\ncase "$1" in\n --version) echo "codex-cli 0.159.2";;\nesac\n')
+    minimal = tmp_path / "minimal-path"
+    minimal.mkdir()
+    login = _login_shell_with_fixed_path(tmp_path, minimal)
+    code, resolved, stderr = _resolve(
+        tmp_path, path_dirs=[node_only_on_this_path],
+        extra_env={"AGENTSTACK_CHILD_SHELL": str(login)})
+    assert code == 0, stderr
+    assert resolved == ""
+    assert "env: node" in stderr or "No such file" in stderr or "note: skipping" in stderr
 
 
 def test_nothing_usable_leaves_the_setting_empty(tmp_path):
@@ -267,6 +319,25 @@ def test_installed_codex_that_fails_version_is_stale(tmp_path):
     assert re.search(r"--version' exited with status 1 after \d+s:", stderr)
     assert "Missing optional dependency @openai/codex-linux-x64" in stderr
     assert "within" not in stderr
+
+
+def test_a_stale_installed_candidate_also_on_path_is_judged_only_once(tmp_path):
+    # A stale saved value that also happens to be the first candidate on PATH
+    # must be probed once, under one shared budget, not once unbudgeted for
+    # the stale check and again (its own fresh budget) for the PATH scan
+    # (#243). timeout=2 keeps a single probe fast; two would push this well
+    # past the 3s bound below.
+    hung = _script(tmp_path / "hung-bin" / "codex", "sleep 30\n")
+    linux = _script(tmp_path / "linux-bin" / "codex", WORKS)
+    started = time.monotonic()
+    _, resolved, stderr = _resolve(
+        tmp_path, path_dirs=[hung.parent, linux.parent], installed=str(hung), timeout=2, budget=90)
+    elapsed = time.monotonic() - started
+    assert resolved == str(linux)
+    assert elapsed < 3, f"took {elapsed}s: the stale candidate looks like it was probed twice"
+    # Already judged (as the stale installed value): the PATH scan must skip
+    # it silently, not probe it again and note it as a fresh rejection.
+    assert f"skipping codex {hung}" not in stderr
 
 
 def test_installed_working_codex_is_kept(tmp_path):
