@@ -22,22 +22,13 @@ import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
+from _installed_client_payload import runtime_contract_sources  # noqa: E402
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "dashboard" / "service_runner.py"
 PLIST_TEMPLATE = ROOT / "dashboard" / "agentdashboard.plist.template"
-RUNTIME_CONTRACT_SOURCES = (
-    "bin/lib/global-client-loader.sh",
-    "packages/agentstack_mail/src/agentstack_mail/schema_contract.py",
-    "packages/agentstack_mail/fixtures/global-server-s2a.json",
-    "packages/agentstack_mail/src/agentstack_mail/global_s2b_contract.py",
-    "packages/agentstack_mail/src/agentstack_mail/global_s2c_contract.py",
-    "packages/agentstack_mail/fixtures/global-server-s2b.json",
-    "packages/agentstack_mail/fixtures/global-server-s2c.json",
-    "packages/agentstack_mail/fixtures/global-client-4b.json",
-
-)
+RUNTIME_CONTRACT_SOURCES = runtime_contract_sources()
 
 
 class _DashboardVersionHandler(http.server.BaseHTTPRequestHandler):

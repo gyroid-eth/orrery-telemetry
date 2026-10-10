@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from _installed_client_payload import copy_client_library
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
 
@@ -192,7 +194,7 @@ def _invoke_resume_entry(monkeypatch, tmp_path, project, runtime):
     installed_hooks.mkdir()
     shutil.copy2(ROOT / "hooks" / "child_resume.py", installed_hooks)
     (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / "bin/lib/global-client-loader.sh", install_home / "bin/lib")
+    copy_client_library(install_home)
     runner = (
         install_home
         / "integrations"
@@ -284,7 +286,7 @@ def test_resume_sources_the_installed_product_bootstrap(policy_env, monkeypatch)
     hooks.mkdir()
     shutil.copy2(ROOT / "hooks" / "child_resume.py", hooks)
     (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / "bin/lib/global-client-loader.sh", install_home / "bin/lib")
+    copy_client_library(install_home)
     runner = (
         install_home / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh"
     )
@@ -443,7 +445,7 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     libdir = bindir / "lib"
     hooks = install_home / "hooks"
     libdir.mkdir(parents=True)
-    shutil.copy2(ROOT / "bin/lib/global-client-loader.sh", libdir)
+    copy_client_library(install_home)
     hooks.mkdir(parents=True)
     shutil.copy2(ROOT / "bin" / "agentstack-codex-bootstrap", bindir)
     shutil.copy2(ROOT / "hooks" / "prepare-codex-session-binding.py", hooks)
@@ -1017,7 +1019,7 @@ def test_resume_valid_state_without_home_regenerates_private_home(
     installed_hooks.mkdir()
     shutil.copy2(ROOT / "hooks" / "child_resume.py", installed_hooks)
     (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / "bin/lib/global-client-loader.sh", install_home / "bin/lib")
+    copy_client_library(install_home)
     runner = (
         install_home / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh"
     )
@@ -1058,7 +1060,7 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
     libdir = bindir / "lib"
     hooks = install_home / "hooks"
     libdir.mkdir(parents=True)
-    shutil.copy2(ROOT / "bin/lib/global-client-loader.sh", libdir)
+    copy_client_library(install_home)
     hooks.mkdir(parents=True)
     bootstrap = bindir / "agentstack-codex-bootstrap"
     bootstrap.write_text(
@@ -1073,8 +1075,6 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
         encoding="utf-8",
     )
     shutil.copy2(ROOT / "hooks" / "child_resume.py", hooks)
-    (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / "bin/lib/global-client-loader.sh", install_home / "bin/lib")
     (libdir / "agentstack-register.sh").write_text(
         "ags_mail_load_token() { :; }\n"
         "ags_mcp_call() { printf '{\"result\":{}}\\n'; }\n"
@@ -1143,7 +1143,7 @@ def test_top_level_bootstrap_records_standalone_origin(policy_env):
     libdir = bindir / "lib"
     hooks = install_home / "hooks"
     libdir.mkdir(parents=True)
-    shutil.copy2(ROOT / "bin/lib/global-client-loader.sh", libdir)
+    copy_client_library(install_home)
     hooks.mkdir(parents=True)
     bootstrap = bindir / "agentstack-codex-bootstrap"
     shutil.copy2(ROOT / "bin" / "agentstack-codex-bootstrap", bootstrap)
@@ -1245,7 +1245,7 @@ def test_reserved_resume_stops_before_exec_when_binding_preconditions_fail(
     bindir = install_home / "bin"
     libdir = bindir / "lib"
     libdir.mkdir(parents=True)
-    shutil.copy2(ROOT / "bin/lib/global-client-loader.sh", libdir)
+    copy_client_library(install_home)
     bootstrap = bindir / "agentstack-codex-bootstrap"
     bootstrap.write_text(
         (ROOT / "bin" / "agentstack-codex-bootstrap").read_text(encoding="utf-8"),

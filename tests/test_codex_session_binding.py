@@ -20,6 +20,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
+from _installed_client_payload import copy_client_library  # noqa: E402
 
 from dashboard import server
 
@@ -426,6 +427,7 @@ def _codex_entrypoint_layout(tmp_path: Path, layout: str) -> dict[str, Path]:
         root = ROOT
     else:
         root = tmp_path / "installed-agentstack"
+        copy_client_library(root)
         for relative in (
             "bin/agentstack-preregister-child",
             "bin/lib/agentstack-register.sh",
@@ -1059,6 +1061,7 @@ def test_no_arg_codex_spawn_rejects_untrusted_canonical_state_before_cli(
             empty_hooks.mkdir()
             shutil.copy2(ROOT / "hooks" / "child_resume.py", empty_hooks)
             shutil.copy2(ROOT / "hooks" / "codex-bin.sh", empty_hooks)
+            copy_client_library(tmp_path)
             env["AGENTSTACK_HOOKS_DIR"] = str(empty_hooks)
     env["AGENTSTACK_CODEX_LAUNCH_BINDING"] = "/parent/launch.json"
     env["AGENTSTACK_CODEX_LAUNCH_ID"] = "parent-launch"

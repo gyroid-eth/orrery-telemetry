@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 
+from _installed_client_payload import copy_client_library
+
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_HOOK = ROOT / "hooks" / "check-file-reservation.sh"
 RELEASE_HOOK = ROOT / "hooks" / "release-file-reservation.sh"
@@ -109,8 +111,7 @@ class ReleaseHookTests(unittest.TestCase):
         if install_worker:
             shutil.copy2(WORKER, hooks / WORKER.name)
         if install_resolver:
-            (root / "bin/lib").mkdir(parents=True, exist_ok=True)
-            (root / "bin/lib/global-client-loader.sh").write_bytes((ROOT / "bin/lib/global-client-loader.sh").read_bytes())
+            copy_client_library(root)
             shutil.copy2(RESOLVER, hooks / RESOLVER.name)
 
         env = os.environ.copy()

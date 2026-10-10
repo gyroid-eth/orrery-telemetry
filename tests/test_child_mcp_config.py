@@ -22,6 +22,8 @@ import sys
 import tempfile
 import tomllib
 
+from _installed_client_payload import copy_client_library
+
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SPAWN = _ROOT / "hooks" / "spawn_child.sh"
 _CODEX_PROXY_TOOLS = (
@@ -210,8 +212,7 @@ def _run_codex_home_process(
         (altered_root / "hooks").mkdir(parents=True)
         library = altered_root / "bin" / "lib"
         library.mkdir(parents=True)
-        for name in ("global-client-loader.sh", "runtime_client.py", "agentstack-register.sh"):
-            (library / name).write_bytes((_ROOT / "bin" / "lib" / name).read_bytes())
+        copy_client_library(altered_root)
         altered = altered_root / "hooks" / "child_resume.py"
         source = (_ROOT / "hooks" / "child_resume.py").read_text(encoding="utf-8")
         altered.write_text(
