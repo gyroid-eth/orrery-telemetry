@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import time
@@ -31,6 +32,88 @@ def _block() -> str:
     return text[start:end]
 
 
+def _helper_load_block() -> str:
+    text = INSTALL.read_text(encoding="utf-8")
+    start = text.index("# --- codex helper load")
+    end = text.index("# --- end codex helper load ---", start) + len("# --- end codex helper load ---\n")
+    return text[start:end]
+
+
+_PROBE_FN = "echo LOADED=$(declare -F codex_bin_problem >/dev/null 2>&1 && echo yes || echo no)\necho HELPER=$CODEX_HELPER\n"
+
+
+def test_codex_helper_loads_from_the_source_checkout(tmp_path):
+    # install.sh run from a normal clone: hooks/ sits next to scripts/.
+    repo_root = tmp_path / "checkout"
+    (repo_root / "hooks").mkdir(parents=True)
+    (repo_root / "hooks" / "codex-bin.sh").write_text(
+        (ROOT / "hooks" / "codex-bin.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    install_dir = tmp_path / "install"  # not yet populated; must not be needed
+    script = (
+        f"REPO_ROOT={shlex.quote(str(repo_root))}\n"
+        f"INSTALL_DIR={shlex.quote(str(install_dir))}\n"
+        + _helper_load_block() + "\n" + _PROBE_FN
+    )
+    result = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert "LOADED=yes" in result.stdout
+    assert f"HELPER={repo_root}/hooks/codex-bin.sh" in result.stdout
+
+
+def test_codex_helper_falls_back_to_the_installed_copy(tmp_path):
+    # install.sh run on its own, without a hooks/ sibling (e.g. copied out of
+    # its checkout): the already-installed tree's own hooks/ is used instead.
+    repo_root = tmp_path / "checkout-without-hooks"
+    repo_root.mkdir()
+    install_dir = tmp_path / "install"
+    (install_dir / "hooks").mkdir(parents=True)
+    (install_dir / "hooks" / "codex-bin.sh").write_text(
+        (ROOT / "hooks" / "codex-bin.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    script = (
+        f"REPO_ROOT={shlex.quote(str(repo_root))}\n"
+        f"INSTALL_DIR={shlex.quote(str(install_dir))}\n"
+        + _helper_load_block() + "\n" + _PROBE_FN
+    )
+    result = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert "LOADED=yes" in result.stdout
+    assert f"HELPER={install_dir}/hooks/codex-bin.sh" in result.stdout
+
+
+def test_codex_helper_missing_everywhere_stops_instead_of_skipping_detection(tmp_path):
+    repo_root = tmp_path / "checkout-without-hooks"
+    repo_root.mkdir()
+    install_dir = tmp_path / "install-without-hooks"
+    install_dir.mkdir()
+    script = (
+        f"REPO_ROOT={shlex.quote(str(repo_root))}\n"
+        f"INSTALL_DIR={shlex.quote(str(install_dir))}\n"
+        + _helper_load_block()
+    )
+    result = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 2
+    assert "missing Codex launcher helper" in result.stderr
+    assert str(install_dir / "hooks" / "codex-bin.sh") in result.stderr
+
+
+def test_codex_helper_missing_required_function_stops_instead_of_skipping_detection(tmp_path):
+    # A helper file is present but incompatible (e.g. a much older copy):
+    # installer must not run with half the shared contract missing.
+    repo_root = tmp_path / "checkout"
+    (repo_root / "hooks").mkdir(parents=True)
+    (repo_root / "hooks" / "codex-bin.sh").write_text(
+        "#!/bin/bash\ncodex_bin_problem() { :; }\n", encoding="utf-8")
+    install_dir = tmp_path / "install"
+    script = (
+        f"REPO_ROOT={shlex.quote(str(repo_root))}\n"
+        f"INSTALL_DIR={shlex.quote(str(install_dir))}\n"
+        + _helper_load_block()
+    )
+    result = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 2
+    assert "missing required function" in result.stderr
+
+
 def _script(path: pathlib.Path, body: str) -> pathlib.Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
@@ -42,11 +125,12 @@ WORKS = 'echo "codex-cli 0.157.0"\n'
 BROKEN = 'echo "Error: Missing optional dependency @openai/codex-linux-x64" >&2\nexit 1\n'
 
 
-def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeout=5):
+def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeout=5, budget=15):
     """Run the block; returns (exit code, resolved CODEX_BIN_SETTING, stderr).
 
     The default probe budget is generous so a working fake codex is not failed
-    by a loaded machine; the hang tests pass a short timeout explicitly.
+    by a loaded machine; the hang and budget-exhaustion tests pass a short
+    timeout/budget explicitly.
     """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
@@ -54,6 +138,9 @@ def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeo
     stubs = (
         "set -euo pipefail\n"
         f". {shlex.quote(str(INSTALL.parents[1] / 'hooks' / 'project-context.sh'))}\n"
+        # The resolution block now only wraps hooks/codex-bin.sh's shared
+        # functions (#242); it no longer defines them itself.
+        f". {shlex.quote(str(INSTALL.parents[1] / 'hooks' / 'codex-bin.sh'))}\n"
         f"INSTALL_DIR={shlex.quote(str(tmp_path / 'install'))}\n"
         "RESET_SETTINGS=0\n"
         # An explicit value is what --codex-bin / AGENTSTACK_CODEX_BIN supplies.
@@ -68,6 +155,7 @@ def _resolve(tmp_path, *, path_dirs, wsl=False, explicit="", installed="", timeo
         ("running_under_wsl() { return 0; }\n" if wsl else "running_under_wsl() { return 1; }\n")
         + f"WSL_WINDOWS_MOUNT_ROOT={shlex.quote(str(tmp_path / 'mnt'))}\n"
         + f"CODEX_VERSION_TIMEOUT_SECONDS={timeout}\n"
+        + f"CODEX_PROBE_BUDGET_SECONDS={budget}\n"
     )
     marker = "# --- end codex launcher resolution ---\n"
     block = block.replace(marker, marker + overrides, 1)
@@ -113,7 +201,9 @@ def test_a_codex_that_fails_version_is_skipped(tmp_path):
 def test_a_codex_that_hangs_on_version_is_skipped_within_the_timeout(tmp_path):
     hung = _script(tmp_path / "hung-bin" / "codex", "sleep 30\n")
     linux = _script(tmp_path / "linux-bin" / "codex", WORKS)
-    _, resolved, _ = _resolve(tmp_path, path_dirs=[hung.parent, linux.parent], timeout=1)
+    # budget is generous: this is about the per-candidate timeout, not the
+    # shared probe budget, and the kill/reap wait eats into that budget too.
+    _, resolved, _ = _resolve(tmp_path, path_dirs=[hung.parent, linux.parent], timeout=1, budget=90)
     assert resolved == str(linux)
 
 
@@ -127,8 +217,34 @@ def test_the_per_user_npm_prefix_is_found_when_not_on_path(tmp_path):
 
 def test_nothing_usable_leaves_the_setting_empty(tmp_path):
     windows = _windows_codex(tmp_path)
-    code, resolved, _ = _resolve(tmp_path, path_dirs=[windows.parent], wsl=True)
+    code, resolved, stderr = _resolve(tmp_path, path_dirs=[windows.parent], wsl=True)
     assert code == 0 and resolved == ""
+    # Every candidate was judged and rejected for a real reason; this must not
+    # read like the budget-exhaustion case below, where some were never tried.
+    assert "candidate-probe budget was spent" not in stderr
+
+
+def test_slow_candidates_exhaust_the_probe_budget_before_a_working_one(tmp_path):
+    # Two candidates ahead of a working one are each slow enough that the
+    # shared probe budget (not any one candidate's own timeout) runs out
+    # first. The working one is never tried, so it must not resolve, and the
+    # installer must say that detection was cut short -- not that nothing was
+    # found (#242).
+    hung_1 = _script(tmp_path / "hung-1-bin" / "codex", "sleep 30\n")
+    hung_2 = _script(tmp_path / "hung-2-bin" / "codex", "sleep 30\n")
+    working = _script(tmp_path / "linux-bin" / "codex", WORKS)
+    code, resolved, stderr = _resolve(
+        tmp_path,
+        path_dirs=[hung_1.parent, hung_2.parent, working.parent],
+        timeout=10,
+        budget=1,
+    )
+    assert code == 0
+    assert resolved == ""
+    assert "Codex detection stopped after the 1s candidate-probe budget was spent" in stderr
+    assert "AGENTSTACK_CODEX_BIN is left unset" in stderr
+    assert "--codex-bin" in stderr
+    assert "not probed: the 1s budget for trying codex candidates is spent" in stderr
 
 
 def test_installed_windows_codex_is_stale_and_resolved_again(tmp_path):
@@ -148,7 +264,7 @@ def test_installed_codex_that_fails_version_is_stale(tmp_path):
     _, resolved, stderr = _resolve(tmp_path, path_dirs=[linux.parent], installed=str(broken))
     assert resolved == str(linux)
     # It ended at once with an error: say so, not that it ran out of time (#121).
-    assert "--version' exited with status 1 after 0." in stderr
+    assert re.search(r"--version' exited with status 1 after \d+s:", stderr)
     assert "Missing optional dependency @openai/codex-linux-x64" in stderr
     assert "within" not in stderr
 
@@ -196,7 +312,14 @@ def test_a_codex_that_ignores_term_is_still_bounded(tmp_path):
     stubborn.chmod(0o755)
     linux = _script(tmp_path / "linux-bin" / "codex", WORKS)
     started = time.monotonic()
-    _, resolved, _ = _resolve(tmp_path, path_dirs=[stubborn.parent, linux.parent], timeout=1)
+    # budget is generous: this test is about the stop/cleanup path reaching
+    # the next candidate, not about the shared probe budget (see
+    # test_slow_candidates_exhaust_the_probe_budget_before_a_working_one for
+    # that), and the cleanup itself eats into the shared budget. timeout=2,
+    # not 1: hooks/codex-bin.sh bounds the probe with the whole-second `SECONDS`
+    # builtin, so a 1s timeout can fire after under 1s of real wait when the
+    # probe starts a hair before a tick; 2s keeps clear of that floor.
+    _, resolved, _ = _resolve(tmp_path, path_dirs=[stubborn.parent, linux.parent], timeout=2, budget=90)
     assert resolved == str(linux)
     assert time.monotonic() - started < 8
 
@@ -230,7 +353,8 @@ def test_a_native_child_that_ignores_term_is_not_left_behind(tmp_path):
     wrapper, pidfile = _wrapper_with_stubborn_native(tmp_path)
     linux = _script(tmp_path / "linux-bin" / "codex", WORKS)
     try:
-        _, resolved, _ = _resolve(tmp_path, path_dirs=[wrapper.parent, linux.parent], timeout=1)
+        # budget and timeout are generous for the same reasons as the test above.
+        _, resolved, _ = _resolve(tmp_path, path_dirs=[wrapper.parent, linux.parent], timeout=2, budget=90)
         assert resolved == str(linux)
         native_pid = int(pidfile.read_text())
         deadline = time.monotonic() + 3
@@ -246,7 +370,10 @@ def test_a_native_child_that_ignores_term_is_not_left_behind(tmp_path):
 
 
 def _stop_functions(script: str) -> str:
-    source = ROOT / "hooks/codex-bin.sh" if script == "doctor.sh" else ROOT / "scripts" / script
+    # install.sh and doctor.sh both share codex_probe_stop / codex_process_start
+    # from hooks/codex-bin.sh now (#242); `script` is kept as a parametrize
+    # label so a regression in either caller's use of them still shows up.
+    source = ROOT / "hooks/codex-bin.sh"
     text = source.read_text(encoding="utf-8")
     parts = []
     for name in ("codex_probe_stop", "codex_process_start"):
@@ -354,5 +481,5 @@ def test_an_explicit_codex_that_fails_silently_says_there_was_no_output(tmp_path
     silent = _script(tmp_path / "silent-bin" / "codex", "exit 7\n")
     code, _, stderr = _resolve(tmp_path, path_dirs=[], explicit=str(silent))
     assert code == 2
-    assert "--version' exited with status 7 after 0." in stderr
+    assert re.search(r"--version' exited with status 7 after \d+s:", stderr)
     assert "(no error output)" in stderr

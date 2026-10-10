@@ -5,8 +5,8 @@
 # there is the Windows npm shim: run by the Linux node it dies at once with
 # "Missing optional dependency @openai/codex-linux-x64". A candidate is
 # therefore used only if it is not under a Windows drive mount (WSL only) and
-# answers `--version` within a short time. The launch policy and doctor share
-# these functions; installer resolution is still implemented separately.
+# answers `--version` within a short time. The launch policy, doctor and
+# installer share these functions.
 #
 # Sourcing defines functions and two settings only; it runs nothing. A caller
 # that runs codex under another PATH sets CODEX_PROBE_RUNNER to a command that

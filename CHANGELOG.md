@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### installer の Codex 探索・確認を launcher・doctor と共通化
+
+installer が独自に持っていた Codex の探索 PATH・`--version` 確認・probe の後始末を削除し、同梱の共通処理を読み込んで判定します。nvm 配下も launcher・doctor と同じ対象に入ります。承認の流れ、保存する値と形式、明示 `--codex-bin` が使えないときの失敗は変えません。候補の確認全体に共有の時間上限を設け、時間切れで確認し切れなかった場合は「何も見つからなかった」とは別の表示にして、値を書かずに止まります。
+
 ### nvm の Codex を dashboard の最小 PATH から起動できます
 
 選んだ Codex の解決先、または npm shim と同じ bin にある node を、確認と起動に共通の PATH 処理で使います。doctor も子の login shell と同じ処理で CLI を確認し、起動失敗の表示は launcher の原因を登録の後始末より先に出します。既存 CLI の版の確認だけを一時 HOME で行う WSL 用 runner を追加しました。API の field と世代は変えません。
