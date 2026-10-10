@@ -30,7 +30,7 @@ def _spawn_text() -> str:
 
 def test_no_hard_coded_zsh_launch():
     text = _spawn_text()
-    assert "/bin/zsh" not in text, "child launch must go through resolve_child_shell"
+    assert "/bin/zsh" not in text, "child launch must go through codex_launch_shell"
     assert text.count('"$CHILD_SHELL"\' -lc \'') == 2, (
         "both Codex launch sites use the resolved shell"
     )
@@ -88,12 +88,10 @@ def test_codex_snippet_splits_dirs_and_flags_the_same_in_both_shells(shell):
 
 
 def _resolve_child_shell(env: dict) -> subprocess.CompletedProcess:
-    # Run only the function definition, not the launcher.
-    text = _spawn_text()
-    m = re.search(r"(resolve_child_shell\(\) \{.*?\n\})", text, re.S)
-    assert m, "resolve_child_shell not found"
+    # spawn_child.sh resolves the child's shell through codex_launch_shell
+    # directly (hooks/codex-bin.sh, #243); no wrapper of its own to extract.
     return subprocess.run(
-        ["bash", "-c", f'. {shlex.quote(str(ROOT / "hooks/codex-bin.sh"))}\n' + m.group(1) + "\nresolve_child_shell"],
+        ["bash", "-c", f'. {shlex.quote(str(ROOT / "hooks/codex-bin.sh"))}\ncodex_launch_shell'],
         env=env, capture_output=True, text=True,
     )
 

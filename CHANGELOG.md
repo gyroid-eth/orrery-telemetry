@@ -14,6 +14,10 @@
 
 既定の旧 mode を維持し、固定 client root を使う明示 prepare-only の子登録・再開を追加しました。登録の中断は同じ name/token の再送と owner 照合で回収し、SessionEnd と cleanup を共通化しました。予約は期限の閾値以下だけ更新し、応答喪失時は次の hook が同じ UUID を再送します。schema・拒否表・message intent は server と共有します。既存 standalone の子への転用を拒否し、Mail 無効化を先に確認します。解放は旧 grace 設定（既定90秒）と lease ごとの slot を使い、更新された予約を保ちます。次の編集 hook は保存済みの全種類の mutation を再送し、通常の context 判定と helper 欠落時の admission は各1か所へ集約しました。実行と wake は後続のまま、activation=false・公開 Mail tool31個は不変です。dashboard の明示 global resume 入力に合わせ API 世代を13にしました。
 
+### installer の Codex 探索・確認を launcher・doctor と共通化
+
+installer が独自に持っていた Codex の探索 PATH・`--version` 確認・probe の後始末を削除し、同梱の共通処理を読み込んで判定します。候補を実行する PATH も launcher・doctor と同じ文脈（子の login shell・resolve した候補の隣の node）に揃え、nvm・npm-global 配下などで3か所の判定が揃うようにしました。承認の流れ、保存する値と形式、明示 `--codex-bin` が使えないときの失敗は変えません。候補の確認全体（保存済み候補の再確認も含む）に共有の時間上限を設け、同じ候補を二度確認しません。時間切れで確認し切れなかった場合は「何も見つからなかった」とは別の表示にして、値を書かずに止まります。
+
 ### global SQLite の POSIX lock を保つ
 
 S1 からの不具合を修正しました。main DB と sidecar の安全確認、および source の形式確認で独立した fd を開閉せず、`lstat` を使います。同じ process の SQLite lock が解除され、並行処理で DB が壊れる経路を取り除きました。別 process が保持中の writer lock を取得できない回帰と、DB/sidecar の raw open を禁止する回帰を追加しました。監査結果は日英の global server ガイドに記録しています。

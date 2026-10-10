@@ -568,10 +568,9 @@ if declare -F codex_launch_path >/dev/null && \
    declare -F codex_launch_shell >/dev/null && \
    declare -F codex_launch_runner >/dev/null && \
    declare -F codex_find_bin >/dev/null && \
-   CHILD_SHELL="$(codex_launch_shell)" && \
-   CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"; then
+   declare -F codex_launch_context >/dev/null && \
+   codex_launch_context; then
   CODEX_LAUNCHER_CONTEXT_READY=1
-  CODEX_PROBE_RUNNER=codex_launch_runner
 else
   echo "warn: Codex launcher checks unavailable: hooks/codex-bin.sh is missing or incompatible"
 fi
