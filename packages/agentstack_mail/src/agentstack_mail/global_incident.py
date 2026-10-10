@@ -64,17 +64,23 @@ class IncidentRuntime(S2aRuntime):
 
 
 def incident_runtime(config):
-    if document(config).get("kind") == "orrery-global-server-s2b-v1":
-        from .global_s2b import S2bRuntime
+    from .global_s2b import S2bRuntime
+    from .global_s2c import S2cRuntime
 
-        class MessageIncidentRuntime(IncidentRuntime, S2bRuntime):
-            config_kind = S2bRuntime.config_kind
-            schema_version = S2bRuntime.schema_version
-            initial_preflight = S2bRuntime.initial_preflight
-            validate_candidate = S2bRuntime.validate_candidate
+    runtime_class = {
+        S2bRuntime.config_kind: S2bRuntime,
+        S2cRuntime.config_kind: S2cRuntime,
+    }.get(document(config).get("kind"))
+    if runtime_class is None:
+        return IncidentRuntime(config)
 
-        return MessageIncidentRuntime(config)
-    return IncidentRuntime(config)
+    class ExtendedIncidentRuntime(IncidentRuntime, runtime_class):
+        config_kind = runtime_class.config_kind
+        schema_version = runtime_class.schema_version
+        initial_preflight = runtime_class.initial_preflight
+        validate_candidate = runtime_class.validate_candidate
+
+    return ExtendedIncidentRuntime(config)
 
 
 def manifest(db):

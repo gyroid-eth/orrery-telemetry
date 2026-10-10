@@ -1,0 +1,3903 @@
+{
+  "removed_from_v1": [
+    {
+      "item": "collector / collect_reservations / gc config / background task",
+      "replacement": "期限はSQLのactive式で導出。退役時だけ既存retire hookで解放。"
+    },
+    {
+      "item": "release_cause=ttl-expired / owner退役をactiveへ重ねる条件",
+      "replacement": "released_ts IS NULL AND expires_ts > :now_utc。expires_tsは固定幅UTC。"
+    },
+    {
+      "item": "ReservationServer / PersistentReservations / reservation_activity",
+      "replacement": "旧未配線engineと活動probeを削除。reservation_pathsだけをS2c SQL engineから使用。"
+    },
+    {
+      "item": "macro_prepare_thread / thread_context_v1",
+      "replacement": "既存summarize_threadとfetch_inboxを個別に呼ぶ。continuationはsummarize_threadの既存cursor。"
+    },
+    {
+      "item": "平たいfixed_reasons / 既存8reasonの写し / 新たな分類器",
+      "replacement": "S2b正本表へのphase付き追加分だけ。既存client classifierへ同じcatalogから渡す。"
+    },
+    {
+      "item": "7か所のlease schemaの写し",
+      "replacement": "lease_schema一つ。catalog生成時に固定のschema_refを展開。"
+    },
+    {
+      "item": "Q1〜Q4の未決状態",
+      "replacement": "親の決定を本文へ統合。未決の問い無し。"
+    }
+  ],
+  "proposal_only": false,
+  "proposal_revision": "v3",
+  "base": {
+    "commit": "702f0ffc2991842c9bb5f0bc1856d3d3e1598dbe",
+    "legacy_contract": "packages/agentstack_mail/fixtures/namespace-tools-v2.json",
+    "legacy_full_catalog": "packages/agentstack_mail/fixtures/live-tools-list.json",
+    "global_profiles": [
+      "global-server-s1.json",
+      "global-server-s2a.json",
+      "global-server-s2b.json"
+    ]
+  },
+  "tool_inventory": {
+    "legacy_contract_count": 25,
+    "legacy_contract_rows": [
+      {
+        "tool": "acknowledge_message",
+        "status": "S2b"
+      },
+      {
+        "tool": "ensure_project",
+        "status": "S1"
+      },
+      {
+        "tool": "fetch_inbox",
+        "status": "S1"
+      },
+      {
+        "tool": "fetch_summary",
+        "status": "S2b"
+      },
+      {
+        "tool": "fetch_topic",
+        "status": "S2b"
+      },
+      {
+        "tool": "file_reservation_paths",
+        "status": "S2c追加"
+      },
+      {
+        "tool": "health_check",
+        "status": "S1"
+      },
+      {
+        "tool": "list_contacts",
+        "status": "S2a"
+      },
+      {
+        "tool": "macro_contact_handshake",
+        "status": "S2a実装済み・S2c welcome拡張"
+      },
+      {
+        "tool": "macro_file_reservation_cycle",
+        "status": "S2c追加"
+      },
+      {
+        "tool": "macro_start_session",
+        "status": "S2c追加"
+      },
+      {
+        "tool": "mark_message_read",
+        "status": "S2b"
+      },
+      {
+        "tool": "register_agent",
+        "status": "S1"
+      },
+      {
+        "tool": "release_file_reservations",
+        "status": "S2c追加"
+      },
+      {
+        "tool": "renew_file_reservations",
+        "status": "S2c追加"
+      },
+      {
+        "tool": "reply_message",
+        "status": "S2b"
+      },
+      {
+        "tool": "request_contact",
+        "status": "S2a"
+      },
+      {
+        "tool": "respond_contact",
+        "status": "S2a"
+      },
+      {
+        "tool": "retire_agent",
+        "status": "S1"
+      },
+      {
+        "tool": "search_messages",
+        "status": "S2b"
+      },
+      {
+        "tool": "send_message",
+        "status": "S2b"
+      },
+      {
+        "tool": "set_contact_policy",
+        "status": "S2a"
+      },
+      {
+        "tool": "summarize_thread",
+        "status": "S2b"
+      },
+      {
+        "tool": "unretire_agent",
+        "status": "S1"
+      },
+      {
+        "tool": "whois",
+        "status": "S1"
+      }
+    ],
+    "legacy_missing_exact": [
+      "file_reservation_paths",
+      "macro_file_reservation_cycle",
+      "macro_start_session",
+      "release_file_reservations",
+      "renew_file_reservations"
+    ],
+    "global_only_existing": [
+      "refresh_registration",
+      "resolve_agent_identity",
+      "touch_window_identity",
+      "verify_window_identity"
+    ],
+    "legacy_full_catalog_extra": {
+      "deregister_agent": "退役は既存retire_agent。破壊的aliasは公開しない",
+      "archive_project": "project廃止、公開しない",
+      "unarchive_project": "project廃止、公開しない",
+      "hard_delete_project": "project廃止、公開しない",
+      "hard_delete_agent": "stable ID/参照/tombstoneを維持、S2cで物理削除しない",
+      "create_agent_identity": "S1 register＋管理claim/recover、window新規生成は既存S1境界。名前経路追加なし",
+      "list_window_identities": "S2a verify_window_identityで自己照合。全owner列挙は本PR対象外",
+      "rename_window": "window管理の追加は本PR対象外、4b/4c inventoryに未接続を明記",
+      "expire_window": "window管理の追加は本PR対象外、S1既存expiryを尊重",
+      "purge_old_messages": "管理socket purge_messagesへ、agent公開toolにしない",
+      "macro_prepare_thread": "追加しない。contract.pyの互換対象外分類を維持。既存summarize_thread＋fetch_inboxを個別利用。",
+      "summarize_recent": "S2b fetch_summaryの読取digestを使用、保存summary/別aliasを増やさない",
+      "install_precommit_guard": "serverが利用者repoへ書くtoolを追加しない、hook配備は4b/4c",
+      "uninstall_precommit_guard": "同上、4b/4c",
+      "force_release_file_reservation": "管理socket force_release_reservationのみ、agentの他owner強制解放は不可"
+    },
+    "conditional_legacy_extra": [
+      "acquire_build_slot",
+      "renew_build_slot",
+      "release_build_slot",
+      "ensure_product",
+      "products_link",
+      "search_messages_product",
+      "fetch_inbox_product",
+      "summarize_thread_product"
+    ],
+    "global_existing_count": 24,
+    "proposed_global_count": 31,
+    "proposed_new_public": [
+      "file_reservation_paths",
+      "renew_file_reservations",
+      "release_file_reservations",
+      "list_file_reservations",
+      "check_file_reservations",
+      "macro_file_reservation_cycle",
+      "macro_start_session"
+    ],
+    "extended_public": [
+      "macro_contact_handshake"
+    ],
+    "note": "25は既存namespace契約のtool集合。旧appの無filter全catalogは40、追加15も全件分類。build/productのconfig条件付き8toolは別機能で本段階のnamespace対象外。25を全raw公開数と呼ばない。"
+  },
+  "stage": "S2c予約・後片付け・macro・contact welcome、wire案のみ",
+  "wire_version": 1,
+  "namespace_contract_version": 5,
+  "activation_enabled": false,
+  "default_runtime": "legacy",
+  "public_tools_added": [
+    "file_reservation_paths",
+    "renew_file_reservations",
+    "release_file_reservations",
+    "list_file_reservations",
+    "check_file_reservations",
+    "macro_file_reservation_cycle",
+    "macro_start_session"
+  ],
+  "capabilities_added": [
+    "file_reservations_v1",
+    "reservation_check_v1",
+    "reservation_list_v1",
+    "session_snapshot_v1",
+    "contact_welcome_v1"
+  ],
+  "tool_contracts": {
+    "file_reservation_paths": {
+      "operation": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "const": "json"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 86400,
+            "default": 3600
+          },
+          "exclusive": {
+            "type": "boolean",
+            "default": true
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "default": ""
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "paths",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "granted": {
+            "type": "array",
+            "items": {
+              "schema_ref": "lease"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "request_id",
+          "mutation_revision",
+          "committed_at",
+          "result_as_of",
+          "granted"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key"
+      ]
+    },
+    "renew_file_reservations": {
+      "operation": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "const": "json"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "minItems": 1,
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "file_reservation_ids": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "minItems": 1,
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "extend_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 86400,
+            "default": 1800
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "renewed": {
+            "type": "array",
+            "items": {
+              "schema_ref": "lease"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "request_id",
+          "mutation_revision",
+          "committed_at",
+          "result_as_of",
+          "renewed"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key"
+      ]
+    },
+    "release_file_reservations": {
+      "operation": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "const": "json"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "minItems": 1,
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "file_reservation_ids": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "minItems": 1,
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "released": {
+            "type": "array",
+            "items": {
+              "schema_ref": "lease"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "already_released_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minItems": 0,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "request_id",
+          "mutation_revision",
+          "committed_at",
+          "result_as_of",
+          "released",
+          "already_released_ids"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key"
+      ]
+    },
+    "list_file_reservations": {
+      "operation": "read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "const": "json"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "owner_agent_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "active_only": {
+            "type": "boolean",
+            "default": true
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 100
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "observed_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "schema_ref": "lease"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "max_reservation_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "more": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "observed_revision",
+          "items",
+          "max_reservation_id",
+          "next_cursor",
+          "more"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key"
+      ]
+    },
+    "check_file_reservations": {
+      "operation": "read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "const": "json"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "minItems": 1,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "paths"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "observed_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "covered": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "covered": {
+                  "type": "boolean"
+                },
+                "reservation_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "minItems": 0,
+                  "maxItems": 100
+                }
+              },
+              "required": [
+                "path",
+                "covered",
+                "reservation_ids"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 0,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "observed_revision",
+          "covered",
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key"
+      ]
+    },
+    "macro_file_reservation_cycle": {
+      "operation": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "const": "json"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 86400,
+            "default": 3600
+          },
+          "exclusive": {
+            "type": "boolean",
+            "default": true
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "default": ""
+          },
+          "auto_release": {
+            "type": "boolean",
+            "default": false
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "paths",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "granted": {
+            "type": "array",
+            "items": {
+              "schema_ref": "lease"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "released_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minItems": 0,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "request_id",
+          "mutation_revision",
+          "committed_at",
+          "result_as_of",
+          "granted",
+          "released_ids"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key"
+      ]
+    },
+    "macro_start_session": {
+      "operation": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "format": {
+            "anyOf": [
+              {
+                "const": "json"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "file_reservation_paths": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "minItems": 1,
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "file_reservation_reason": {
+            "type": "string",
+            "maxLength": 500,
+            "default": "macro-session"
+          },
+          "file_reservation_ttl_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 86400,
+            "default": 3600
+          },
+          "inbox_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 10
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "agent": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "server_instance_id": {
+                "type": "string"
+              },
+              "candidate_generation": {
+                "type": "string"
+              },
+              "authority_epoch": {
+                "type": "string"
+              },
+              "agent_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "credential_generation": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "retired_at": {
+                "type": "null"
+              },
+              "program": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "last_active_ts": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "id": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "name",
+              "server_instance_id",
+              "candidate_generation",
+              "authority_epoch",
+              "agent_id",
+              "credential_generation",
+              "retired_at",
+              "program",
+              "model",
+              "last_active_ts",
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          "file_reservations": {
+            "type": "array",
+            "items": {
+              "schema_ref": "lease"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "inbox": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "sender": {
+                  "type": "object",
+                  "properties": {
+                    "agent_id": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "agent_id",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                "to": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "agent_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "agent_id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "cc": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "agent_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "agent_id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "bcc": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "agent_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "agent_id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "body_md": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "importance": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "normal",
+                    "high",
+                    "urgent"
+                  ]
+                },
+                "ack_required": {
+                  "type": "boolean"
+                },
+                "topic": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "reply_to": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "legacy_thread_label": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "created_ts": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "attachments": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "filename": {
+                        "type": "string"
+                      },
+                      "media_type": {
+                        "type": "string"
+                      },
+                      "byte_size": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "content_ref": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "db-blob"
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "sha256"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "sha256",
+                      "filename",
+                      "media_type",
+                      "byte_size",
+                      "content_ref"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "read_at": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "acknowledged_at": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "history_incomplete": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "sender",
+                "to",
+                "cc",
+                "bcc",
+                "subject",
+                "body_md",
+                "importance",
+                "ack_required",
+                "topic",
+                "reply_to",
+                "legacy_thread_label",
+                "created_ts",
+                "attachments",
+                "read_at",
+                "acknowledged_at",
+                "history_incomplete"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 0,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "credential_generation",
+          "request_id",
+          "mutation_revision",
+          "committed_at",
+          "result_as_of",
+          "agent",
+          "file_reservations",
+          "inbox"
+        ],
+        "additionalProperties": false
+      },
+      "accepted_ignored_arguments": [
+        "project_key"
+      ]
+    }
+  },
+  "existing_tool_changes": {
+    "macro_contact_handshake": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "registration_token": {
+            "type": "string"
+          },
+          "expected_credential_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "project_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 512,
+            "default": ""
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 604800
+          },
+          "auto_accept": {
+            "type": "boolean",
+            "default": false
+          },
+          "welcome_subject": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "welcome_body": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 65536
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id",
+          "registration_token",
+          "expected_credential_generation",
+          "to_agent_id",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "operation": "write",
+      "accepted_ignored_arguments": [
+        "project_key",
+        "to_project"
+      ],
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "contact": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "from_agent_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "to_agent_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "from_identity": {
+                "type": "object",
+                "properties": {
+                  "agent_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "retired_at": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "agent_id",
+                  "name",
+                  "retired_at"
+                ],
+                "additionalProperties": false
+              },
+              "to_identity": {
+                "type": "object",
+                "properties": {
+                  "agent_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "retired_at": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "agent_id",
+                  "name",
+                  "retired_at"
+                ],
+                "additionalProperties": false
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "approved",
+                  "blocked"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "created_ts": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_ts": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "expires_ts": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "effective": {
+                "type": "boolean"
+              },
+              "approval_expiry_mode": {
+                "const": "informational-compatible"
+              }
+            },
+            "required": [
+              "id",
+              "from_agent_id",
+              "to_agent_id",
+              "from_identity",
+              "to_identity",
+              "status",
+              "reason",
+              "created_ts",
+              "updated_ts",
+              "expires_ts",
+              "effective",
+              "approval_expiry_mode"
+            ],
+            "additionalProperties": false
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "request-only",
+              "welcome-sent"
+            ]
+          },
+          "notification": {
+            "type": "string",
+            "enum": [
+              "not-emitted",
+              "signal-pending"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mutation_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "result_as_of": {
+            "const": "commit"
+          },
+          "committed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "approval_required": {
+            "type": "boolean"
+          },
+          "approval_required_from_agent_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "welcome": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "message_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "recipient_agent_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "subject": {
+                    "type": "string"
+                  },
+                  "body_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "message_id",
+                  "recipient_agent_id",
+                  "subject",
+                  "body_sha256"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "contact",
+          "stage",
+          "notification",
+          "request_id",
+          "mutation_revision",
+          "result_as_of",
+          "committed_at",
+          "approval_required",
+          "approval_required_from_agent_id",
+          "welcome"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "shared_contract": {
+    "owner": "S1/S2aのinstance/candidate/epoch/stable agent ID/token generation、世代0を許す。retiredは通常tool拒否、unretireは既存S1。scopeは受けて無視、name/cwd/envでownerやrootを推測しない。",
+    "catalog": "S1→S2a→S2b→S2cの単一catalogを組み立て、明示S2c overrideはmacro_contact_handshakeだけ。handler/argument/preimage/output/receipt-validatorはこの同じtool descriptorを引き、別catalogや二重tool登録を作らない。旧profileは旧catalogをそのまま使う。",
+    "schemas": "schema_contract.pyの値型表/共通validator。受入はcatalog load1回、全anyOf/properties/items枝。既存profileのschema不変、新S2c profileでのみ追加。 leaseだけはschema_assemblyの固定参照展開後に同じvalidatorへ渡す。",
+    "transactions": "readはauthority SH＋BEGIN DEFERRED、writeはSH＋BEGIN IMMEDIATE。owner/domain/tracker/receiptを同connection/snapshot。full DB/receipt/FTS検証は起動と明示inspectだけ。",
+    "receipt": "既存global_operation_receiptsの1表とowner quota（既定100000、増量可、自動削除無し）。canonical_request_json+hash+validated resultを同TX。auth/静的入力検査→対象receipt lookup→新規だけdomain判定/容量検査の順。期限/現在contact/現在leaseをhistorical replay前に再判定しない。新reasonはrejection_deltaだけをS2b正本へ追加する。分類器はschema_contractの既存1本。",
+    "local_intent": "4b/4c用契約: 固定rootの単一pendingに元の全intentとUUID/bindingをHTTP前保存。semantic preimageと再送intentを別用途と区別し、別のwelcome queue/lease cacheを保存しない。S2cでclient entrypointは配線しない。"
+  },
+  "reservation_contract": {
+    "canonical": "reservation_paths.normalize_paths/paths_overlapだけを使う。serverは絶対pathまたはtool://,resource://,service://。relative/tilde/未知driveを拒否、clientだけobserved cwd/明示WSL mappingで絶対化。空白/Unicode/新規file/glob/symlinkはPR2そのまま。",
+    "storage": "file_reservationsを唯一のlease正本とするSQL engine一つ。ReservationServerとPersistentReservationsの予約部分、reservation_activityを削除し、並存engineやcopy→flushを残さない。namespace_storeの返信/配送等は保持。reservation_pathsの正規化/重なり判定だけ共有し、既定旧appの独立した既存活動処理は変更しない。",
+    "active": "共通SQL断片 ACTIVE = (released_ts IS NULL AND expires_ts > :now_utc)。acquire/renew/check/list/inspect、省略selectorのrenew/release、retire hookがこの一つを使う。owner退役条件無し。期限到達時は導出だけが変わり、row/revisionを更新しない。明示ID/pathのreleaseだけはownerの意思としてexpired rowも選べる。",
+    "acquire": "全paths normalize/preflight→同IMMEDIATE内にactive衝突検査。別ownerでどちらかexclusiveなら全件RESERVATION_CONFLICT、partial grantしない。自己ACTIVEの同一path/exclusiveだけ既存IDを再利用（expired履歴は書かず新ID）、expiry=max(old,now+ttl)。reasonは既存を保持。別owner情報はstable ID/path/expiry/revisionだけ（token無し）。",
+    "renew": "pathsかidsの片方、省略双方nullは自分の全active、明示[]はLEASE_SELECTOR_EMPTY、両方はLEASE_SELECTOR_CONFLICT。選択が100件を超えたら書込み前LEASE_SELECTION_TOO_LARGE、list_file_reservationsのID keysetから明示100件ずつ。ID不存在/別ownerは全件拒否、released/expiredの明示選択はLEASE_EXPIRED。expiry=old+extend_seconds（PR2既存）、最大期限を既存rowへ遡及適用しない。",
+    "release": "同selector規則。own releasedは既存ts/revision維持でalready_released_idsへ。expiredでもownerが明示release可。全件preflight、他owner拒否。",
+    "check": "純粋read、concrete pathだけ。activeな自己leaseで全pathがcoveredか。falseは詳細items、他人のtoken/内容を返さない。各pathのcoverage witnessは最小ID1件だけで足りるので巨大ID配列を作らない。readでtouch/quota/GCはしない。",
+    "list": "認証済みownerから共有lease metadataだけ読取。stable owner IDで任意filter、token/本文は無し。S2bと共通の署名無しkeyset codec。cursor={version,tool,agent_id,query_hash,max_reservation_id,after_id}。初頁MAXは同snapshotのlease集合（message不可視IDとは別）、filter/owner/toolのhash不一致は拒否、範囲と型も検査。未来の新規leaseは継続pageに混ぜず、既存leaseのexpiry/releaseは各pageのcurrent snapshotで読む（不変snapshotの約束ではない）。moreはlimit+1、released履歴もactive_only=falseでpaged読取。",
+    "bounds": "新しいpaths1..100、IDはSQLite signed64正整数・新規ID overflowはreceipt lookup後・書込み前LEASE_ID_CAPACITY_REACHED、1path<=4096、ttl/extend60..86400、reason<=500はPR2入力契約。importされた旧長reason/長期限はそのまま読める、renew/releaseを新規入力上限で拒否しない。旧ID保持、released rowはtombstoneとして保持してID再利用を防ぐ。",
+    "unknown": "activeなpath_unknown/比較証拠unknownが衝突判定やcoverageへ影響すればACTIVE_LEASE_RULES_UNKNOWN。楽観grant無し。期限切れ/releasedはSQLで除外。新規scopeの正規化証拠unknownも同reason。未知anchorを勝手に修正しない、PR7の明示mappingへ。",
+    "result_preflight": "semantic結果とinput/output schema、budgetをcommit前の同TXで検証。不正/予算超過ならdomain/receipt/FTS/dirty全rollback。read projection/summary/inboxを合わせた応答予算はS2bの共通builderを使い、continuationを明示。",
+    "schema_extension": [
+      "ALTER TABLE file_reservations ADD COLUMN release_cause TEXT CHECK(release_cause IS NULL OR release_cause IN ('legacy','owner','retired','operator'))",
+      "ALTER TABLE file_reservations ADD COLUMN release_note TEXT NOT NULL DEFAULT ''",
+      "CREATE INDEX ix_global_reservation_owner ON file_reservations(agent_id,released_ts,expires_ts,id)",
+      "CREATE INDEX ix_global_reservation_active_expiry ON file_reservations(expires_ts) WHERE released_ts IS NULL"
+    ],
+    "release_import": "fresh planの既存choices.as_ofを固定境界とし、sourceの退役ownerが持つas_ofでACTIVEなrowだけをsource retired_atで解放（cause=retired）。期限切れ未解放はNULLのまま、旧releasedはcause=legacy。全timestampは同instantの固定幅UTCへ一回正規化。ID/owner/reason/path/instantと許可したretired変換をfresh proofで全件照合。旧bytesはimmutable provenanceへ。as_ofを再開時の時計で取り直さない。以後の退役はACTIVE hookだけ、unretireで復活無し。release_noteは管理理由の記録で復旧条件に使わない。",
+    "timestamp_contract": {
+      "format": "YYYY-MM-DDTHH:MM:SS.ffffff+00:00",
+      "write": "timezone付き日時をUTCへ変換しisoformat(timespec=\"microseconds\")で固定幅32文字にする。nowはtransactionごとに1回取得。同じSQL ACTIVEへ渡す。created_ts/expires_ts/released_tsはfresh変換と以後の書込でこの形式を必須にする。",
+      "import": "旧offset/Z/桁違いを同じinstantの固定幅UTCへ正規化し、全rowで旧新instant一致をfresh proofに含める。parse不能はprepare拒否、推測時刻無し。旧bytesはimmutable provenanceへ保持。",
+      "comparison": "固定幅UTCのexpiryをSQLで比較しowner/expiry索引を使う。Pythonのrow全件parse・TEXTのoffset混在比較・活動probe無し。",
+      "helper": "新共通 lease_timestamp(value) 一つがS2a utc parserで旧naive=UTC/offset/Zを解釈し、UTC datetime.isoformat(timespec=\"microseconds\")を返す。nullable releasedだけNone可。fresh/acquire/renew/release/retire/force/now境界すべてこのhelperを使い、別formatterを持たない。overflow/不正calendarは既存TIMESTAMP_INVALID。",
+      "source_rule_update": {
+        "path": "packages/agentstack_mail/fixtures/global-server-s2a.json#/common_rules/time",
+        "append": "例外: schema5 file_reservationsのCHECKで固定幅UTCを保証した時刻列だけは、共通ACTIVEによるSQL TEXT比較を許す。その他の時刻は既存のUTC datetime/epoch比較を維持。"
+      }
+    },
+    "selector_matching": "path selectorは正規化後の同一pattern。ID XOR path、両方指定は拒否。両方省略のrenew/releaseは自己ACTIVEだけ。期限切れ未解放の履歴は選択件数に数えない。明示IDは存在/ownerを全件検査、releaseならexpired可、renewならLEASE_EXPIRED。APIの選択上限100はACTIVE/明示選択だけに適用し、超えた場合はpaged listで明示100件ずつ。retire hookの内部set UPDATEにAPIの100上限を適用しない。",
+    "schema_checks": "fresh schema5のfile_reservations CREATE TABLEへtimestamp_check_templateから3つのtable CHECKを生成。旧column/FK/PK/metadata/revision制約・索引を維持した確定DDLをschema manifestへ。中間schemaの表を作り直す場合も未公開staging内の同transactionだけ、source/旧candidateのALTERは行わない。row/ID/instant proofとFK checkを再照合しpublish前manifestへ。"
+  },
+  "macro_contract": {
+    "composition": "tool registryへnested呼出・nested transaction・内部HTTP無し。共有domain primitiveを同TXへ渡す。public macroも通常単一request UUID/receipt、内側のsubreceipt/UUID/queue無し。",
+    "macro_file_reservation_cycle": "reserveと同じ全件atomic規則。auto_release=trueは同TXで自分が今回新規作成したleaseのみ直ちにrelease、以前から保持する自己leaseは解放しない。返却grantedは最終state、released_idsがその部分集合。実作業を挟むcontext managerではない。",
+    "macro_start_session": "既存ownerのみ、project作成/名前登録/window生成/program/model更新無し。必要ならPR4a registerを先に呼ぶ。自己last_activeを単調touch、任意指定paths取得、inbox snapshotを同TXで返す。read/ack/signal clear無し。path競合/入力不正ならtouch含めrollback。"
+  },
+  "welcome_contract": {
+    "one_truth": "welcomeは普通のmessages+message_recipients、receiptに確定message ID。専用welcome table/job/file無し。S2b publish/FTS/dirty primitiveを同TXで利用。",
+    "input": "welcome_subjectとwelcome_bodyは双方nullならrequest-only、片方nullならWELCOME_INPUT_INCOMPLETE。両方指定はsubject<=200文字/800bytes、body<=65536bytes、添付無し。auto_accept=trueは引続きCONTACT_TARGET_CONSENT_REQUIRED。",
+    "pending": "未承認contactならrequestだけ確定、stage=request-only、welcome=null、approval_required=true。本文は自動保存/予約しない。承認後は新UUIDで同macroを明示呼出。同UUID replayは元のrequest-only結果のまま（Q2）。",
+    "approved": "同TXにtarget active/contact blocked/block_allを再確認し、通常配送認可が通る場合だけwelcomeを送る。approved link期限はS2aのinformational-compatibleを維持し、勝手に実期限へ変えない。",
+    "blocked": "blocked/block_allを優先、welcomeはCONTACT_BLOCKEDで操作全体rollback。contact拒否をrequestで上書きしない。",
+    "receipt": "macroのcanonical preimageは共通semantic builderでbodyをdigest化、全scope/token/UUIDを除く意味値を保存。approved/no-opとpending両方の結果を検証し、welcome message ID/recipient/subject/body_sha256を同candidate単体照合。purge後のhistorical receiptはdigestと当時bindingを既存S2b規則で照合。",
+    "notification": "welcomeのrecipient.notification_fact=NULL→既存UNCONSUMED/PENDING→既存signal workerだけ。contact承認待ちそのものの新通知は作らない。S2c macroのcontact projectionからnotificationの古いliteralを削り、welcome sentかnot-emittedを明示。S1/S2a/S2b profileと旧receipt validatorは凍結。"
+  },
+  "management_contract": {
+    "force_release": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "operation": {
+            "const": "force_release_reservation"
+          },
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "reservation_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expected_lease_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expected_owner_agent_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "confirm": {
+            "const": true
+          }
+        },
+        "required": [
+          "version",
+          "operation",
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "reservation_id",
+          "expected_lease_revision",
+          "expected_owner_agent_id",
+          "note",
+          "confirm"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "version": {
+            "const": 1
+          },
+          "operation": {
+            "const": "force_release_reservation"
+          },
+          "observed_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lease": {
+            "schema_ref": "lease"
+          },
+          "changed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "version",
+          "operation",
+          "observed_revision",
+          "lease",
+          "changed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "purge": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "operation": {
+            "const": "purge_messages"
+          },
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "cutoff_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "after_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "dry_run": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "version",
+          "operation",
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "cutoff_at",
+          "after_id",
+          "limit",
+          "dry_run"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "version": {
+            "const": 1
+          },
+          "operation": {
+            "const": "purge_messages"
+          },
+          "observed_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deleted_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "held_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "cutoff_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "more": {
+            "type": "boolean"
+          },
+          "next_after_id": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "ok",
+          "version",
+          "operation",
+          "observed_revision",
+          "deleted_ids",
+          "held_ids",
+          "cutoff_at",
+          "more",
+          "next_after_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "error_schema": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": false
+        },
+        "version": {
+          "const": 1
+        },
+        "operation": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "version",
+        "operation",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "envelope": "既存same-UID Unix管理socket、private config/binding/authority/fence検査。HTTPに公開せず、任意path/SQL/owner tokenは受けない。全input/outputを共通validatorへ。operator操作もtrackerを同transactionで更新。force/purgeは状態に対する冪等な管理操作、agent receipt quotaを使わない。",
+    "inspect_extension": {
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "action": {
+            "const": "inspect"
+          },
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          },
+          "reservation_id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          },
+          "capacity_after_agent_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9223372036854775807
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capacity_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100
+          }
+        },
+        "required": [
+          "version",
+          "action",
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch",
+          "agent_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_extension_schema": {
+        "type": "object",
+        "properties": {
+          "reservation": {
+            "schema_ref": "lease"
+          },
+          "observed_revision": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "reservation",
+          "observed_revision"
+        ],
+        "additionalProperties": false
+      },
+      "compose": "既存inspect outputに追加fragmentをmergeする共通builder。完全shapeを複製しない。reservation_id未指定ならfragment無し・旧shape保持。指定時だけ共通leaseとobserved_revision必須。追加後のbinding/revision/leaseを同transactionで検証。",
+      "select": "same-UID管理、既存agent_idは期待owner。単一IDをSELECTし、不在LEASE_NOT_FOUND、異なるowner LEASE_OWNER_REQUIRED。retired ownerでも管理inspectは可。既存authority SH＋read transactionでidentity/lease/revisionを同snapshotから読む。tokenを要求/返却しない。",
+      "recovery": "初回forceのexpected revisionはこのinspectから。応答喪失/STALE後はinspectで現在revision/released_ts/release_causeだけ確認し、状態として報告する。release_noteの照合は復旧条件から外し、lease_schemaを増やさない。新revisionへの自動差替え/自動force無し。"
+    }
+  },
+  "cleanup_contract": {
+    "operator": "force/purgeはsame-UID管理だけ。agentが他owner leaseを解放/全message削除するtoolは公開しない。CLIは固定config/socketを使い任意出力path無し。",
+    "force": "expectedowner/lease revision付き、間違いはSTALE_LEASE_REVISIONで不変。already releasedは既存stateを返し再release無し。release_cause/noteとtrackerは同TX。自動messageやnotify_previousの別出力は作らない（Q3）。",
+    "retire": "既存retire lifecycle hookの同TXで、共通ACTIVEを満たす自己rowだけをretiredとして解放。期限切れ履歴は変更しない。内部set UPDATEはactive全件で、API selectorの100件上限を適用しない。unretireはleaseに触らない。S2b dirty lifecycle hookは維持。",
+    "purge": "cutoff_atを全pageで固定、after_idからcutoff対象のmessageをID昇順にlimit件走査し、同TXで祖先hold/deleteを判定する。deleted_idsは削除したID（dry_runは予定ID）、held_idsは今回走査したhold ID。next_after_idは今回走査した最大ID、走査0なら入力after_id。moreは同じcutoff対象にnext_after_idより大きい未走査rowがあるか（limit+1）。held件数/削除件数だけでmoreを決めない。呼出し側はmore=falseで停止、trueならnext_after_idで続行。S2b ancestor hold/FTS/recipient/blob/dirty primitive一つ。provenance/receipts/high-waterは不変。",
+    "signals": "独立のsignal sweep/直接unlinkを追加しない。UNCONSUMED/PENDING/dirtyと既存worker/reconcile_outputsで消す。foreign/symlink/hardlink/mode不一致はblocked、他pairを継続。",
+    "operator_retry": "force/purgeはobserve-current-state操作。途中commit前はrollback、commit後の応答喪失は再readで既存release/deleteを観測、再通知/新ID/再timestamp無し。exact response replayを約束せず、agent mutation UUID/receiptとは区別。管理の決定証跡はlease release_cause/note/tsまたは既存purge/receipt証跡、別のDB・file receiptを増やさない。",
+    "expiry": "期限切れは導出だけでrow/revision/receiptを書かない。定期処理・管理collector・活動probe・expiry journal無し。"
+  },
+  "fresh_preparation": {
+    "profile": "s2c/schema5、complete preparation receipt必須。旧schema2/3/4をin-placeで変更せず、sourceから別s2c-candidates/<name>/へ新規prepare。完成receiptのないrootはDBを一切開かず拒否、旧main/WAL/SHM/journal/files一覧不変。",
+    "inherit": "PR3→S2a→S2bの同じfresh publication。base proof→S2b変換→S2c拡張DDL/全予約timestamp正規化/as_ofでACTIVEの退役owner rowだけ変換→manifest/gate→ready→rename→complete。expected transformのrow/instant照合を全stageで行い、同plan中断再開。別のupgrade手順無し。",
+    "existing_receipts": "sourceはPR3の正規旧sourceだけ。未release schema3/4 candidateをsourceにしたりreceipt移植しない。新rootは旧token/IDのsource mapping保存、既存client rootはcurrent enrollment手順で新client_nameへ。",
+    "layout": "DB/schema/config/notification-proof/provenance/signals/authorityはS2b固定layoutを引継ぐ。新しい予約artifact/JSON lease台帳/GC journal/welcome spoolは作らない。",
+    "callers": "AGENTSTACK_CLIENT_CONFIG、wrapperの既定、hook、profile.client_configを新client rootへ明示変更。旧pendingは旧bindingの明示ack/abandonで閉じる。旧rootへfallback/自動repinしない。配線4b/4c、実activation PR7。"
+  },
+  "reservation_cursor_schema": {
+    "type": "object",
+    "properties": {
+      "version": {
+        "const": 1
+      },
+      "tool": {
+        "const": "list_file_reservations"
+      },
+      "agent_id": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "query_hash": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "max_reservation_id": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "after_id": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "required": [
+      "version",
+      "tool",
+      "agent_id",
+      "query_hash",
+      "max_reservation_id",
+      "after_id"
+    ],
+    "additionalProperties": false
+  },
+  "runtime_config": {
+    "kind": "orrery-global-server-s2c-v1",
+    "schema_version": 5,
+    "receipt_capacity": "既存100000/owner・明示増量のみ",
+    "health": "top-level readinessとsignal.statusはS2bのまま。予約のactive件数は共通SQL ACTIVEをinspect時に導出しcounterを保存しない。collector/status/error自体を追加しない。force/purge失敗は同期管理error schemaで返し、不明なcommit結果は同bindingのinspect拡張で選択leaseを読んで明示再実行。authority不能はreadiness不可。"
+  },
+  "state_transitions": [
+    {
+      "from": "new intent",
+      "actor": "owner / mutation",
+      "to": "固定rootへintent/UUIDを保存→静的検査→対象receipt lookup→新規domain検査",
+      "interruption": "HTTP前/応答不明は同UUID。拒否は正本phase表のみでpending処理。"
+    },
+    {
+      "from": "conflict / unknown / expired explicit renew",
+      "actor": "owner / new mutation",
+      "to": "全件拒否、domain/receipt/revision不変",
+      "interruption": "確定after拒否はown pendingを解除し、新intentで再試行。"
+    },
+    {
+      "from": "all paths admitted",
+      "actor": "owner / reserve-renew-release",
+      "to": "lease+tracker+receiptを同commit",
+      "interruption": "before_state/after_lease/after_receipt/before_commitはrollback、同UUIDで再試行。"
+    },
+    {
+      "from": "committed; expiry reached",
+      "actor": "clock / next read",
+      "to": "active=falseだけ、row/revision不変",
+      "interruption": "collector無し。active ownerの同UUID replayは当時receipt。"
+    },
+    {
+      "from": "committed; owner retires",
+      "actor": "S1 retire hook",
+      "to": "同TXで自己ACTIVE leaseだけをretiredとして解放",
+      "interruption": "退役中replayはOWNER_REQUIRED、既存pending/receipt不変。"
+    },
+    {
+      "from": "retired owner with old pending",
+      "actor": "explicit unretire / same owner replay",
+      "to": "元receiptを返す、現在leaseは inactive（退役時 ACTIVE なら解放済み、既に期限切れなら released_ts=NULL のまま）",
+      "interruption": "token/generation違いは既存明示resolution。lease復活無し。"
+    },
+    {
+      "from": "contact pending + welcome intent",
+      "actor": "requester / handshake",
+      "to": "申請だけreceipt確定、welcome=null",
+      "interruption": "承認後も同UUIDは元結果、新UUIDだけwelcome送信。"
+    },
+    {
+      "from": "contact approved + welcome intent",
+      "actor": "requester / handshake",
+      "to": "contact+message+recipient+FTS+dirty+receipt同commit",
+      "interruption": "各DB保存点で全rollbackか全commit。subreceipt/queue無し。"
+    },
+    {
+      "from": "DB committed; signal absent",
+      "actor": "existing S2b worker",
+      "to": "DB factからhint生成→dirty完了",
+      "interruption": "rename/clear/worker commit前後は既存reconcile。独立出力無し。"
+    },
+    {
+      "from": "operator dry-run / response uncertain",
+      "actor": "same-UID force / purge",
+      "to": "新snapshotでrevision/祖先を再確認、同期結果と継続位置を返す",
+      "interruption": "commit前rollback。応答喪失は現在state読取→再実行。exact response replayは約束しない。"
+    },
+    {
+      "from": "fresh staging / ready / rename incomplete",
+      "actor": "operator / same prepare plan",
+      "to": "expected transformとmanifest再照合→complete",
+      "interruption": "complete前起動拒否、旧root不変、foreign slotは拒否。"
+    }
+  ],
+  "review_questions": [],
+  "acceptance_cases": [
+    "旧25+raw追加15+条件付き8の全数照合、global24→31、新規7/handshake拡張1。default legacy/activation=false、旧profile schema不変。",
+    "reservation_pathsの既存normalizer/alias/Unicode/case/glob/WSL試験を維持。2cwd独立・同abs競合・shared/shared許可・全件atomic・unknownで楽観grant無し。",
+    "SQL ACTIVEの唯一式と固定幅UTC。expires==nowでinactive、1microsecond前active。offset/Z/小数0のsourceを同instantへ変換し旧bytes/proof一致。",
+    "TTL到達後にread/check/inspectしてもrow/revision/receipt不変、collector task/管理operation/活動probe無し。scope外の活動/Git/unknownで期限前解放しない。",
+    "source退役済みACTIVE rowの一回変換、retire hook同TXで自己ACTIVEだけrelease→unretireで復活無し。",
+    "retired中の同UUIDはOWNER_REQUIRED・既存pending/receipt bytes不変。unretire後の同owner/token/generationで元receipt、現在leaseは inactive（退役時 ACTIVE なら解放済み、既に期限切れなら released_ts=NULL のまま）のまま。",
+    "全新reason×existing_pending有無のrejection_expectations。beforeは新規だけclear、afterは同intent無receipt確認後clear。read/managementは不変。UUID conflict/transport/schema不明は保持。",
+    "ID不存在/別owner/selector両方/空/100件超/ID overflow/expired renewの固定拒否、renew overflowは既存TIMESTAMP_INVALID。既存長reason/204文字返信/長期限/世代0は出力受理。",
+    "lease_schemaを1定義・7参照から展開し共通admission、private参照markerをMCPへ漏らさない。不明参照はload拒否、release_causeの管理/public一致。",
+    "macro_startのreserve競合でtouch含めrollback、owner/program/model/window不変、inbox pure read。thread macroはcatalogに無し、既存summary cursorで1001連鎖を継続。",
+    "cycle reason既定空文字/start既定macro-session、auto_releaseは今回新規のみ、再利用自己IDを維持。1outer receipt、各保存点で全rollback。",
+    "welcome片側/null/empty/UTF8境界、blocked/block_all優先・相手ownerだけ承認、approved期限S2a互換。申請replay不変、承認後新UUIDでmessage1通。",
+    "welcome各DB/FTS/receipt/dirty保存中断とcommit応答喪失、既存signal worker rename/clear前後中断。別queue/出力正本無し。",
+    "purge_continuation_cases全行、held-only非終端でも位置が進む・終端停止、同cutoff・dry_run不変、reply競合はancestor hold。provenance/receipt/high-water保持。",
+    "force expectedowner/revision拒否とalready-released不変、retire/renew/reserveとのIMMEDIATE順序整合。管理応答喪失は現在stateから再実行。",
+    "schema5 fresh全phase中断/同plan再開、timestamp/retired期待変換と最終manifest gate。receipt無しDB open0、旧main/WAL/SHM/journal/files不変。",
+    "engine_test_migrationに従い価値ある試験をSQL経路へ移す。ReservationServer/PersistentReservations/activity probe import無し、既定旧appの活動試験は保持。",
+    "実HTTP fixtureは正profile/readinessまで待つ、Linux TMPDIR前提保持。signal redでもclient tool成功・auth不能はreadiness ok無し。",
+    "wheel/sdist/wheel-only contract、installer copy元は宣言1か所。installer全試験の内外一覧と実際に全体を流したかを最終報告。",
+    "implicit_selection_expectations全行。expired履歴10000件は選択上限/更新対象外、active101ならAPI上限は意図した拒否・retire内部更新は成功。",
+    "部分索引のあるSQLでowner横断ACTIVE競合候補検索のEXPLAIN QUERY PLANがSEARCH ix_global_reservation_active_expiryとなる（SCANを許容しない）。",
+    "timestamp helper一つを全writer/freshで使用、CHECKで短桁/offset/Z/非数字/null不正を拒否、startupでもhelper roundtripを照合。S2a timeの例外は固定UTC列のみ。",
+    "inspect拡張のforce_recovery_expectations全行とoverflow_expectations、WRITER_FENCED複数分類優先。schema concrete assemblyはlease8参照。",
+    "engine_test_inventoryの全test名とrepo ASTが集合一致、移設漏れ4件のassertをSQL/HTTPで確認。"
+  ],
+  "not_implemented": [
+    "wire案のみ、server/clientの実装・pytest・HTTP/native processは未実行",
+    "live HOME/Mail DB/service/別版Codex/子の操作無し",
+    "4b/4cのclient/hook/proxy/consumerとPR7activationは先取りしない"
+  ],
+  "lease_schema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "owner_agent_id": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "path_pattern": {
+        "type": "string"
+      },
+      "exclusive": {
+        "type": "boolean"
+      },
+      "reason": {
+        "type": "string"
+      },
+      "created_ts": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "expires_ts": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "released_ts": {
+        "anyOf": [
+          {
+            "type": "string",
+            "format": "date-time"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "revision": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "path_unknown": {
+        "type": "boolean"
+      },
+      "release_cause": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "owner",
+              "retired",
+              "operator"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "owner_agent_id",
+      "path_pattern",
+      "exclusive",
+      "reason",
+      "created_ts",
+      "expires_ts",
+      "released_ts",
+      "revision",
+      "path_unknown",
+      "release_cause"
+    ],
+    "additionalProperties": false
+  },
+  "schema_assembly": {
+    "definition": "lease_schemaが唯一のlease定義。schema_refはfixture組立ての固定マーカー（値leaseだけ）。catalog生成の共通関数がdeep-copy展開し、生成後に既存schema_contractの全枝admissionを1回実行。MCPで公開するinputSchema/outputSchemaは具体schema。validatorに新keyword/$ref/任意URL/ファイル参照を追加しない。",
+    "references": 8,
+    "scope": "publicとmanagementで同じ展開関数。未知名/マーカーと別keywordの混在はcatalog load失敗。現行profileは参照無しでそのまま通す。"
+  },
+  "purge_continuation_cases": [
+    {
+      "case": "empty",
+      "after_id": 20,
+      "scanned_ids": [],
+      "deleted_ids": [],
+      "held_ids": [],
+      "next_after_id": 20,
+      "more": false,
+      "next": "停止"
+    },
+    {
+      "case": "held-only terminal",
+      "after_id": 0,
+      "scanned_ids": [
+        2,
+        5
+      ],
+      "deleted_ids": [],
+      "held_ids": [
+        2,
+        5
+      ],
+      "next_after_id": 5,
+      "more": false,
+      "next": "停止"
+    },
+    {
+      "case": "held-only with later eligible row",
+      "after_id": 0,
+      "scanned_ids": [
+        2,
+        5
+      ],
+      "deleted_ids": [],
+      "held_ids": [
+        2,
+        5
+      ],
+      "next_after_id": 5,
+      "more": true,
+      "next": "同cutoff/after_id=5"
+    },
+    {
+      "case": "mixed nonterminal",
+      "after_id": 0,
+      "scanned_ids": [
+        2,
+        5
+      ],
+      "deleted_ids": [
+        2
+      ],
+      "held_ids": [
+        5
+      ],
+      "next_after_id": 5,
+      "more": true,
+      "next": "同cutoff/after_id=5"
+    },
+    {
+      "case": "mixed terminal",
+      "after_id": 5,
+      "scanned_ids": [
+        9,
+        12
+      ],
+      "deleted_ids": [
+        12
+      ],
+      "held_ids": [
+        9
+      ],
+      "next_after_id": 12,
+      "more": false,
+      "next": "停止"
+    }
+  ],
+  "rejection_delta": {
+    "canonical_table": "packages/agentstack_mail/fixtures/global-server-s2b.json#/fixed_reasons",
+    "classifier": "共通catalog assemblyでinheritanceの順に一つのphase表を生成し、schema_contract.definitive_rejection一つへ渡す。preserve_pendingはbefore/afterセットに入れない。既存reasonの写しをS2c fixtureへ置かない。S2bとS2c clientの実配線は4b/4c。",
+    "append": {
+      "pre_receipt": [
+        "LEASE_SELECTOR_CONFLICT",
+        "LEASE_SELECTOR_EMPTY",
+        "ABSOLUTE_PATH_REQUIRED",
+        "TTL_OUT_OF_RANGE",
+        "WELCOME_INPUT_INCOMPLETE"
+      ],
+      "new_intent_only": [
+        "RESERVATION_CONFLICT",
+        "LEASE_OWNER_REQUIRED",
+        "LEASE_NOT_FOUND",
+        "LEASE_EXPIRED",
+        "LEASE_SELECTION_TOO_LARGE",
+        "ACTIVE_LEASE_RULES_UNKNOWN",
+        "LEASE_ID_CAPACITY_REACHED"
+      ],
+      "read_only": [
+        "CHECK_REQUIRES_CONCRETE_PATH"
+      ],
+      "management_only": [
+        "STALE_LEASE_REVISION"
+      ]
+    },
+    "phase": "pre_receiptはauth/静的入力の後・receipt lookup前。new_intent_onlyは認証済み同intent receiptが無いことを確かめた後。schema validation/不正pathの構造エラーは既存ARGUMENTS_UNSUPPORTED、filesystem evidence unknownはACTIVE_LEASE_RULES_UNKNOWNへ共通boundaryで変換。新mutationのfilesystem正規化/比較はreceipt lookup後、静的path文字列検査だけlookup前。既存receiptならfilesystemを再probeしない。renew期限overflowは既存TIMESTAMP_INVALIDのafter分類を引く。",
+    "read": "check/listで同reasonが出てもpure readなのでpendingへ触らない。mutation classifierをreadへ適用しない。",
+    "precedence": "REQUEST_ID_CONFLICT/TRANSPORT_FAILED/RESPONSE_INVALIDは常に保持。既存reasonのphase規則を変更しない。retired OWNER_REQUIREDはpreで既存pending保持。出力不正/応答喪失はreasonが無くても保持。managementはagent pending対象外。",
+    "inheritance": "S2c assemblyはS2b fixed_reasons優先、S2b未掲載だけS2a client_uuid_contract.definite_rejectionsを継承し、未定義だけS2c delta追記。同S2b表内preserve_pendingは他分類より優先。既存S1/S2a/S2b profile readerは変更しない。",
+    "sources": [
+      "packages/agentstack_mail/fixtures/global-server-s2a.json#/client_uuid_contract/definite_rejections",
+      "packages/agentstack_mail/fixtures/global-server-s2b.json#/fixed_reasons"
+    ]
+  },
+  "rejection_expectations": [
+    {
+      "reason": "LEASE_SELECTOR_CONFLICT",
+      "operation": "write",
+      "phase": "before_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "LEASE_SELECTOR_CONFLICT",
+      "operation": "write",
+      "phase": "before_receipt_lookup",
+      "existing_pending": true,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "LEASE_SELECTOR_EMPTY",
+      "operation": "write",
+      "phase": "before_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "LEASE_SELECTOR_EMPTY",
+      "operation": "write",
+      "phase": "before_receipt_lookup",
+      "existing_pending": true,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "ABSOLUTE_PATH_REQUIRED",
+      "operation": "write",
+      "phase": "before_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "ABSOLUTE_PATH_REQUIRED",
+      "operation": "write",
+      "phase": "before_receipt_lookup",
+      "existing_pending": true,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "ABSOLUTE_PATH_REQUIRED",
+      "operation": "read",
+      "phase": "read_only",
+      "existing_pending": false,
+      "action": "unchanged",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "ABSOLUTE_PATH_REQUIRED",
+      "operation": "read",
+      "phase": "read_only",
+      "existing_pending": true,
+      "action": "unchanged",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "TTL_OUT_OF_RANGE",
+      "operation": "write",
+      "phase": "before_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "TTL_OUT_OF_RANGE",
+      "operation": "write",
+      "phase": "before_receipt_lookup",
+      "existing_pending": true,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "WELCOME_INPUT_INCOMPLETE",
+      "operation": "write",
+      "phase": "before_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "WELCOME_INPUT_INCOMPLETE",
+      "operation": "write",
+      "phase": "before_receipt_lookup",
+      "existing_pending": true,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "RESERVATION_CONFLICT",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "RESERVATION_CONFLICT",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": true,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "LEASE_OWNER_REQUIRED",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "LEASE_OWNER_REQUIRED",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": true,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "LEASE_NOT_FOUND",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "LEASE_NOT_FOUND",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": true,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "LEASE_EXPIRED",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "LEASE_EXPIRED",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": true,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "LEASE_SELECTION_TOO_LARGE",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "LEASE_SELECTION_TOO_LARGE",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": true,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "ACTIVE_LEASE_RULES_UNKNOWN",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "ACTIVE_LEASE_RULES_UNKNOWN",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": true,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "ACTIVE_LEASE_RULES_UNKNOWN",
+      "operation": "read",
+      "phase": "read_only",
+      "existing_pending": false,
+      "action": "unchanged",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "ACTIVE_LEASE_RULES_UNKNOWN",
+      "operation": "read",
+      "phase": "read_only",
+      "existing_pending": true,
+      "action": "unchanged",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "LEASE_ID_CAPACITY_REACHED",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "LEASE_ID_CAPACITY_REACHED",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": true,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "CHECK_REQUIRES_CONCRETE_PATH",
+      "operation": "read",
+      "phase": "read_only",
+      "existing_pending": false,
+      "action": "unchanged",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "CHECK_REQUIRES_CONCRETE_PATH",
+      "operation": "read",
+      "phase": "read_only",
+      "existing_pending": true,
+      "action": "unchanged",
+      "server_receipt": "unchanged",
+      "condition": "authenticated fixed rejection; existing_pending=false means this invocation just saved its own planned intent"
+    },
+    {
+      "reason": "STALE_LEASE_REVISION",
+      "operation": "management",
+      "phase": "management_only",
+      "existing_pending": "either",
+      "action": "unchanged",
+      "server_receipt": "unchanged"
+    },
+    {
+      "reason": "OWNER_REQUIRED",
+      "operation": "write",
+      "phase": "before_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "inherited": true
+    },
+    {
+      "reason": "OWNER_REQUIRED",
+      "operation": "write",
+      "phase": "before_receipt_lookup",
+      "existing_pending": true,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "inherited": true
+    },
+    {
+      "reason": "REQUEST_ID_CONFLICT",
+      "operation": "write",
+      "phase": "preserve_pending",
+      "existing_pending": false,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "inherited": true
+    },
+    {
+      "reason": "REQUEST_ID_CONFLICT",
+      "operation": "write",
+      "phase": "preserve_pending",
+      "existing_pending": true,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "inherited": true
+    },
+    {
+      "reason": "TRANSPORT_FAILED",
+      "operation": "write",
+      "phase": "preserve_pending",
+      "existing_pending": false,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "inherited": true
+    },
+    {
+      "reason": "TRANSPORT_FAILED",
+      "operation": "write",
+      "phase": "preserve_pending",
+      "existing_pending": true,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "inherited": true
+    },
+    {
+      "reason": "RESPONSE_INVALID",
+      "operation": "write",
+      "phase": "preserve_pending",
+      "existing_pending": false,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "inherited": true
+    },
+    {
+      "reason": "RESPONSE_INVALID",
+      "operation": "write",
+      "phase": "preserve_pending",
+      "existing_pending": true,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "inherited": true
+    },
+    {
+      "reason": "UNLISTED_SYNTHETIC_REASON",
+      "operation": "write",
+      "phase": "preserve_pending",
+      "existing_pending": false,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "inherited": true
+    },
+    {
+      "reason": "UNLISTED_SYNTHETIC_REASON",
+      "operation": "write",
+      "phase": "preserve_pending",
+      "existing_pending": true,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "inherited": true
+    },
+    {
+      "reason": "TIMESTAMP_INVALID",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "inherited": true
+    },
+    {
+      "reason": "TIMESTAMP_INVALID",
+      "operation": "write",
+      "phase": "after_receipt_lookup",
+      "existing_pending": true,
+      "action": "clear_exact_own_planned",
+      "server_receipt": "unchanged",
+      "inherited": true
+    },
+    {
+      "reason": "WRITER_FENCED",
+      "operation": "write",
+      "phase": "preserve_pending",
+      "existing_pending": false,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "inherited": true
+    },
+    {
+      "reason": "WRITER_FENCED",
+      "operation": "write",
+      "phase": "preserve_pending",
+      "existing_pending": true,
+      "action": "preserve_exact_bytes",
+      "server_receipt": "unchanged",
+      "inherited": true
+    }
+  ],
+  "retired_replay_contract": {
+    "order": "owner認証はlookup前。退役中はOWNER_REQUIRED、receiptを返さず既存pending/receipt bytesを変えない。新規intentは既存pre拒否規則の対象。",
+    "unretire": "明示unretire後、同stable owner/同token/generationで同UUID・同intentを再送すると当時のreceiptを返す。現在leaseはinactive。退役時ACTIVEだったrowだけcause=retiredで解放済み、退役前から期限切れのrowはreleased_ts=NULLのまま。current stateは別check/listで読む。",
+    "credential_rotation": "token/generationが変わった場合はhistorical replay可能としない。既存operator resolve-mutationの手順で旧pendingを明示処理。"
+  },
+  "legacy_mode_differences": [
+    {
+      "topic": "予約競合",
+      "legacy": "競合以外を部分付与しconflicts/holdersを返す",
+      "global": "全件atomic RESERVATION_CONFLICT、conflicts配列無し",
+      "followup": "4b/4cはdomain拒否をblockへ変換。grantedや空conflictsを成功として捏造しない。"
+    },
+    {
+      "topic": "期限切れrenew",
+      "legacy": "max(old expiry,now)から延長し復活する",
+      "global": "明示選択はLEASE_EXPIRED、省略選択はactiveだけ",
+      "followup": "取り直しは新intentでreserve。"
+    },
+    {
+      "topic": "cycle reason既定",
+      "legacy": "macro-file_reservation",
+      "global": "空文字。start_sessionのmacro-sessionは維持",
+      "followup": "省略時の履歴値の変更を切替docsへ。"
+    },
+    {
+      "topic": "auto_release",
+      "legacy": "今回指定した既存自己pathも解放",
+      "global": "今回新規作成したleaseだけ解放",
+      "followup": "自己再利用IDを維持。"
+    },
+    {
+      "topic": "期限・活動・回収",
+      "legacy": "既存appのactivity/grace/stale sweep、expiry cleanup",
+      "global": "固定幅UTCの期限導出のみ。collectorも活動probeも無し",
+      "followup": "期限前はowner明示releaseかoperator force、退役hookだけ。"
+    },
+    {
+      "topic": "selector / batch",
+      "legacy": "旧toolのselector/返却形。PR2候補はIDとpathの和集合も許す",
+      "global": "ID XOR path、省略はown ACTIVEだけ。100件超は拒否（expired履歴を数えない）",
+      "followup": "list keysetで明示100件ずつ。4b/4cの引数変換を固定。"
+    },
+    {
+      "topic": "owner / scope / paths",
+      "legacy": "project/nameと相対path",
+      "global": "stable ID/token/binding、projectは無視、abs/virtual scope",
+      "followup": "clientだけobserved cwd/明示WSL mappingで絶対化。"
+    },
+    {
+      "topic": "macro_start_session",
+      "legacy": "project/登録と予約/inboxのmacro",
+      "global": "既存ownerだけ、touch/reserve/inboxの同TX",
+      "followup": "先に4a登録。program/model/token/windowを変更しない。"
+    },
+    {
+      "topic": "thread macro",
+      "legacy": "raw catalogにmacro_prepare_thread（namespace互換対象外）",
+      "global": "追加しない",
+      "followup": "summarize_threadのcursorとfetch_inboxを個別使用。"
+    },
+    {
+      "topic": "force / purge",
+      "legacy": "raw agent catalogの強制解放/期限削除",
+      "global": "same-UID管理socketのみ",
+      "followup": "operator dry-run/明示confirm、purgeはcutoffとnext_after_id。"
+    },
+    {
+      "topic": "welcome",
+      "legacy": "旧handshakeの申請/送信の振舞い",
+      "global": "未承認は申請だけ、相手承認後新UUID。blocked優先",
+      "followup": "自動承認/queue無し、approved expiryはS2a互換を維持。"
+    },
+    {
+      "topic": "入力と旧実値",
+      "legacy": "長reason/offset日時/旧ID",
+      "global": "新入力paths100/reason500/TTL60..86400。旧reason/IDは保存、日時instantだけ正規化",
+      "followup": "旧bytesはprovenance、出力schemaへ入力上限を転用しない。"
+    },
+    {
+      "topic": "通知・既定運用",
+      "legacy": "既存project modeは現状どおり",
+      "global": "signalはS2b1本、default legacy/activation=false",
+      "followup": "この段階で切替無し。旧公開文面は維持、PR7で切替案内。"
+    }
+  ],
+  "pr7_wording_updates": [
+    {
+      "path": "docs/absolute-reservations.md / docs/absolute-reservations.en.md",
+      "sections": [
+        "適用範囲 / Scope",
+        "候補の呼出経路 / Candidate calls",
+        "活動と回収 / Activity and collection"
+      ],
+      "change": "PR2 engine/probeを残す説明を撤去。唯一SQL engine/TTL導出/selector/全件atomic/expired renew/auto_releaseと新global呼出を説明。S2c実装docsで削除APIは先に訂正し、PR7で利用者の切替手順を加える。"
+    },
+    {
+      "path": "docs/project-removal-plan.md / docs/project-removal-plan.en.md",
+      "sections": [
+        "Candidate 契約",
+        "検証と残る範囲"
+      ],
+      "change": "予約候補への参照をS2c正本へ。旧運用→globalの変更表へリンク。"
+    },
+    {
+      "path": "docs/global-runtime-client.md / docs/global-runtime-client.en.md / docs/hooks.md / docs/hooks.en.md",
+      "sections": [
+        "global予約の呼出とguard/releaseの説明"
+      ],
+      "change": "4b/4c対応するabs/owner/context入口、all-or-nothing拒否、TTL前に自動解放しない、失敗editは維持を明記。"
+    },
+    {
+      "path": "claude/CLAUDE.md",
+      "sections": [
+        "File Reservations"
+      ],
+      "change": "project-relative/旧token引数にglobalの明示routeを追加。失敗なら編集不可、atomic拒否、TTL切れはreserve取り直し。"
+    },
+    {
+      "path": "codex/AGENTS.md",
+      "sections": [
+        "File reservations — REQUIRED before editing (Codex is not auto-guarded)"
+      ],
+      "change": "同じglobal route/TTL/atomic規則。bound schema外のcaller字段を加えない。"
+    },
+    {
+      "path": "packages/agentstack_mail/src/agentstack_mail/tool_descriptions.py",
+      "sections": [
+        "file_reservation_paths / macro_file_reservation_cycle"
+      ],
+      "change": "旧mode用は保持。global descriptionは共通S2c descriptorから生成、partial conflictsという旧文言を流用しない。"
+    }
+  ],
+  "engine_test_migration": [
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "tests": [
+        "test_two_cwds_and_ignored_scope",
+        "test_symlink_dotdot_new_file_and_lifecycle",
+        "test_glob_symlink_directory_conflicts_for_future_file",
+        "test_missing_unicode_leaves_follow_actual_filesystem",
+        "test_shared_and_atomic_conflicts",
+        "test_owner_and_token_enforced",
+        "test_ttl_validation",
+        "test_missing_nonascii_case_alias_never_grants_twice",
+        "test_case_sensitive_unicode_case_names_stay_distinct",
+        "test_future_file_under_case_alias_and_case_variant"
+      ],
+      "target": "新test_global_server_s2c.pyのSQL/実HTTP予約回帰（normalizer単体試験は同fileに残す）"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "tests": [
+        "test_unknown_no_early_release_but_ttl_and_owner_work",
+        "test_renew_extends_current_expiry_and_noop_is_not_activity",
+        "test_expired_gc_does_not_need_filesystem_evidence"
+      ],
+      "target": "unknownでもTTL前row不変、境界でactiveのみ変化・row不変、renewはold expiry+extend、expired明示選択は拒否、SQL経路で置換"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "tests": [
+        "test_candidate_hook_any_folder_unmanaged_and_bound_outage",
+        "test_failed_candidate_edit_keeps_lease_without_dispatch",
+        "test_successful_candidate_edit_releases_lease"
+      ],
+      "target": "候補adapter試験のbackendを唯一SQL runtimeへ。4b/4cの本配線は先取りせず、成功/失敗edit/bound outageの性質を維持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "tests": [
+        "test_persistent_reservations_preserve_imported_ids_and_owner_on_restart",
+        "test_persistent_lease_unknown_does_not_release_early_but_ttl_still_expires",
+        "test_old_writer_generation_cannot_update_mail_leases_or_delivery",
+        "test_reservation_latest_mail_is_selected_by_utc_instant"
+      ],
+      "target": "import ID/owner/token再起動とwriter fenceはSQL S2cへ。最後のMail活動判定は削除し、offset混在expiryの固定UTC変換/境界比較へ移す。他の返信/配送assertionは元試験に残す"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "tests": [
+        "test_absolute_candidate_keeps_default_proxy_contract"
+      ],
+      "target": "候補backendをSQL S2cへの明示fixture transportに置換し旧proxyの相対path/default不変を維持。旧conflictsをglobal成功へ変換しない境界も追加"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py / tests/verify_artifact.py",
+      "tests": [
+        "activity probe専用・collect/grace/git/benchmark関連検査",
+        "reservation_activity.performance.57_concrete / artifact module list"
+      ],
+      "target": "削除engineにだけ属する試験/配布moduleを削除。57_concrete performance selectorは旧appを直接計測するため保持。normalizer・SQL lifecycleと旧appのactivity/liveness試験を維持。"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "tests": [
+        "test_unicode_glob_overlap_and_recent_activity",
+        "test_unknown_unicode_rules_reject_acquire_and_prevent_stale",
+        "test_nonascii_case_table_unknown_rejects_initial_acquire",
+        "test_raw_candidate_tool_names_share_lifecycle"
+      ],
+      "target": "engine_test_inventoryのnamed対応で混合assertを分割、SQL/HTTPへ移す。probeと旧dispatch aliasは削除。"
+    }
+  ],
+  "review_disposition": [
+    {
+      "decision": 1,
+      "status": "採用",
+      "implementation": "v3 proposal only"
+    },
+    {
+      "decision": 2,
+      "status": "採用",
+      "implementation": "v3 proposal only"
+    },
+    {
+      "decision": 3,
+      "status": "採用",
+      "implementation": "v3 proposal only"
+    },
+    {
+      "decision": 4,
+      "status": "採用",
+      "implementation": "v3 proposal only"
+    },
+    {
+      "decision": 5,
+      "status": "採用",
+      "implementation": "v3 proposal only"
+    },
+    {
+      "decision": 6,
+      "status": "採用",
+      "implementation": "v3 proposal only"
+    }
+  ],
+  "changes_from_v2": [
+    {
+      "decision": 1,
+      "change": "省略renew/release・retire hook・source退役変換を自己ACTIVEだけに統一。期限切れ履歴を選択上限に数えない。明示ID/pathのreleaseは維持。"
+    },
+    {
+      "decision": 2,
+      "change": "既存action=inspectへoptional reservation_idと共通lease投影、初回force/応答喪失/STALEからの戻り方を固定。note照合は復旧条件から外す。"
+    },
+    {
+      "decision": 3,
+      "change": "expires_tsの未解放部分索引を追加、EXPLAIN SEARCHを受入れに。"
+    },
+    {
+      "decision": 4,
+      "change": "固定UTC helper一つ、fresh schema5の3時刻列へCHECK、S2a time規則にこの表だけの例外。"
+    },
+    {
+      "decision": 5,
+      "change": "S2b優先・未掲載はS2a継承・preserve優先を共通assemblyへ。TIMESTAMP_INVALID overflow期待を追加。"
+    },
+    {
+      "decision": 6,
+      "change": "不足4試験を明記、対象module全試験をAST/rgで全数照合し処遇を記録。"
+    }
+  ],
+  "timestamp_check_template": {
+    "sql": "typeof({column})='text' AND length({column})=32 AND {column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00' AND substr({column},1,4)>='0001' AND substr({column},6,2) BETWEEN '01' AND '12' AND substr({column},9,2) BETWEEN '01' AND '31' AND substr({column},12,2) BETWEEN '00' AND '23' AND substr({column},15,2) BETWEEN '00' AND '59' AND substr({column},18,2) BETWEEN '00' AND '59'",
+    "columns": {
+      "created_ts": false,
+      "expires_ts": false,
+      "released_ts": true
+    },
+    "nullable": "Trueの列だけIS NULL OR (...)で包む。created/expiresはNOT NULLも維持。",
+    "calendar": "CHECKは固定幅UTCとnumeric範囲を保証、実calendarの検査は共通helperで行う。DB full validationでも同helper roundtrip一致を検証。"
+  },
+  "implicit_selection_expectations": [
+    {
+      "operation": "release omitted",
+      "expired_unreleased": 10000,
+      "active": 0,
+      "selected": 0,
+      "result": "ok",
+      "expired_rows": "unchanged"
+    },
+    {
+      "operation": "release omitted",
+      "expired_unreleased": 10000,
+      "active": 2,
+      "selected": 2,
+      "result": "ok",
+      "expired_rows": "unchanged"
+    },
+    {
+      "operation": "renew omitted",
+      "expired_unreleased": 10000,
+      "active": 0,
+      "selected": 0,
+      "result": "ok",
+      "expired_rows": "unchanged"
+    },
+    {
+      "operation": "renew omitted",
+      "expired_unreleased": 10000,
+      "active": 2,
+      "selected": 2,
+      "result": "ok",
+      "expired_rows": "unchanged"
+    },
+    {
+      "operation": "retire hook",
+      "expired_unreleased": 10000,
+      "active": 0,
+      "selected": 0,
+      "result": "ok",
+      "expired_rows": "unchanged"
+    },
+    {
+      "operation": "retire hook",
+      "expired_unreleased": 10000,
+      "active": 2,
+      "selected": 2,
+      "result": "ok",
+      "expired_rows": "unchanged"
+    },
+    {
+      "operation": "fresh retired owner as_of",
+      "expired_unreleased": 10000,
+      "active": 0,
+      "selected": 0,
+      "result": "ok",
+      "expired_rows": "unchanged"
+    },
+    {
+      "operation": "fresh retired owner as_of",
+      "expired_unreleased": 10000,
+      "active": 2,
+      "selected": 2,
+      "result": "ok",
+      "expired_rows": "unchanged"
+    },
+    {
+      "operation": "release omitted",
+      "expired_unreleased": 10000,
+      "active": 101,
+      "selected": 101,
+      "result": "LEASE_SELECTION_TOO_LARGE",
+      "expired_rows": "unchanged"
+    },
+    {
+      "operation": "retire hook",
+      "expired_unreleased": 10000,
+      "active": 101,
+      "selected": 101,
+      "result": "ok",
+      "expired_rows": "unchanged"
+    },
+    {
+      "operation": "release explicit expired ID",
+      "expired_unreleased": 10000,
+      "active": 0,
+      "selected": 1,
+      "result": "ok",
+      "expired_rows": "only explicit ID changes"
+    }
+  ],
+  "force_recovery_expectations": [
+    {
+      "case": "initial force",
+      "input": "inspect action/owner=1/reservation_id=7",
+      "output": "reservation id7 owner1 revision3 unreleased + binding/observed_revision",
+      "next": "同owner/id/revision3をforceへ明示指定",
+      "read_mutation": "none"
+    },
+    {
+      "case": "force committed, response lost",
+      "input": "同inspect",
+      "output": "id7 revision4 released、同snapshot binding/observed_revision",
+      "next": "現在解放済みとして報告。exact receipt/自身のforceの証明とはしない",
+      "read_mutation": "none"
+    },
+    {
+      "case": "concurrent renew then stale force",
+      "input": "force revision3→STALE_LEASE_REVISION、同inspect",
+      "output": "id7 revision4 unreleased",
+      "next": "状態を提示し、必要なら現在revisionで別の明示force。自動再実行無し",
+      "read_mutation": "none"
+    },
+    {
+      "case": "retired owner",
+      "input": "同inspect、owner退役済み",
+      "output": "管理読取成功、現在inactiveのrowを返す。退役時ACTIVEなら解放済み、既に期限切れならreleased_ts=NULLのまま。",
+      "next": "状態報告",
+      "read_mutation": "none"
+    },
+    {
+      "case": "missing ID",
+      "input": "inspect reservation_id=999999",
+      "output": "LEASE_NOT_FOUND",
+      "next": "IDを再確認",
+      "read_mutation": "none"
+    },
+    {
+      "case": "different owner",
+      "input": "inspect agent_id=2/reservation_id=7(owner1)",
+      "output": "LEASE_OWNER_REQUIRED",
+      "next": "期待ownerを再確認",
+      "read_mutation": "none"
+    },
+    {
+      "case": "no reservation selector",
+      "input": "旧inspect入力",
+      "output": "旧inspect shapeのまま",
+      "next": "通常管理",
+      "read_mutation": "none"
+    }
+  ],
+  "overflow_expectations": [
+    {
+      "case": "new UUID, year9999 valid legacy expiry + extend overflow",
+      "phase": "after auth and receipt lookup absent, before row/receipt mutation",
+      "reason": "TIMESTAMP_INVALID",
+      "existing_pending": false,
+      "action": "clear_exact_own_planned",
+      "database_revision_receipt": "unchanged"
+    },
+    {
+      "case": "new UUID, year9999 valid legacy expiry + extend overflow",
+      "phase": "after auth and receipt lookup absent, before row/receipt mutation",
+      "reason": "TIMESTAMP_INVALID",
+      "existing_pending": true,
+      "action": "clear_exact_own_planned",
+      "database_revision_receipt": "unchanged"
+    },
+    {
+      "case": "same UUID with committed receipt; expiry now overflow-sensitive",
+      "phase": "receipt lookup finds exact intent",
+      "reason": null,
+      "action": "return original receipt; do not perform current expiry arithmetic",
+      "database_revision_receipt": "unchanged"
+    }
+  ],
+  "engine_test_inventory": [
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_overlap_fixture",
+      "disposition": "維持: normalizer/CLI/hookの単体検査。削除engine/probe importsとmodule fixtureを整理"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_two_cwds_and_ignored_scope",
+      "disposition": "SQLへ: 唯一S2c runtimeのfixture/実HTTPにbackend差替え、normalizer/owner/guard/releaseのassert保持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_symlink_dotdot_new_file_and_lifecycle",
+      "disposition": "SQLへ: 唯一S2c runtimeのfixture/実HTTPにbackend差替え、normalizer/owner/guard/releaseのassert保持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_glob_symlink_directory_conflicts_for_future_file",
+      "disposition": "SQLへ: 唯一S2c runtimeのfixture/実HTTPにbackend差替え、normalizer/owner/guard/releaseのassert保持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_glob_symlink_file_and_bounded_unknown",
+      "disposition": "維持: normalizer/CLI/hookの単体検査。削除engine/probe importsとmodule fixtureを整理"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_ambiguous_paths_rejected",
+      "disposition": "維持: normalizer/CLI/hookの単体検査。削除engine/probe importsとmodule fixtureを整理"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_unicode_preserved_when_filesystem_distinguishes_it",
+      "disposition": "維持: normalizer/CLI/hookの単体検査。削除engine/probe importsとmodule fixtureを整理"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_linux_native_directory_flags_fail_closed",
+      "disposition": "維持: normalizer/CLI/hookの単体検査。削除engine/probe importsとmodule fixtureを整理"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_missing_unicode_leaves_follow_actual_filesystem",
+      "disposition": "SQLへ: 唯一S2c runtimeのfixture/実HTTPにbackend差替え、normalizer/owner/guard/releaseのassert保持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_unicode_glob_overlap_and_recent_activity",
+      "disposition": "分割: glob/concrete alias重なりをSQLへ、probe/collect recent枝は削除"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_distinguishing_unicode_rules_preserve_missing_names",
+      "disposition": "維持: normalizer/CLI/hookの単体検査。削除engine/probe importsとmodule fixtureを整理"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_unknown_unicode_rules_reject_acquire_and_prevent_stale",
+      "disposition": "分割: unknown追加grant拒否・SQL row不変とTTL前保持へ、probe/stale枝は削除"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_unknown_unicode_directory_cannot_prove_empty_glob",
+      "disposition": "削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_supported_unicode_rules_match_canonical_variants",
+      "disposition": "維持: normalizer/CLI/hookの単体検査。削除engine/probe importsとmodule fixtureを整理"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_hfs_exclusions_and_unknown_apfs_unicode_version",
+      "disposition": "維持: normalizer/CLI/hookの単体検査。削除engine/probe importsとmodule fixtureを整理"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_case_alias_follows_filesystem",
+      "disposition": "維持: normalizer/CLI/hookの単体検査。削除engine/probe importsとmodule fixtureを整理"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_missing_nonascii_case_alias_never_grants_twice",
+      "disposition": "SQLへ: 唯一S2c runtimeのfixture/実HTTPにbackend差替え、normalizer/owner/guard/releaseのassert保持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_nonascii_case_table_unknown_rejects_initial_acquire",
+      "disposition": "SQLへ: 非ASCII4paramの初回grant拒否、DB/revision/receipt不変"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_nonascii_case_glob_activity_unknown_prevents_collection",
+      "disposition": "削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_case_sensitive_unicode_case_names_stay_distinct",
+      "disposition": "SQLへ: 唯一S2c runtimeのfixture/実HTTPにbackend差替え、normalizer/owner/guard/releaseのassert保持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_future_file_under_case_alias_and_case_variant",
+      "disposition": "SQLへ: 唯一S2c runtimeのfixture/実HTTPにbackend差替え、normalizer/owner/guard/releaseのassert保持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_explicit_wsl_mapping_and_virtual_type",
+      "disposition": "維持: normalizer/CLI/hookの単体検査。削除engine/probe importsとmodule fixtureを整理"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_shared_and_atomic_conflicts",
+      "disposition": "SQLへ: 唯一S2c runtimeのfixture/実HTTPにbackend差替え、normalizer/owner/guard/releaseのassert保持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_owner_and_token_enforced",
+      "disposition": "SQLへ: 唯一S2c runtimeのfixture/実HTTPにbackend差替え、normalizer/owner/guard/releaseのassert保持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_ttl_validation",
+      "disposition": "SQLへ: 唯一S2c runtimeのfixture/実HTTPにbackend差替え、normalizer/owner/guard/releaseのassert保持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_unknown_no_early_release_but_ttl_and_owner_work",
+      "disposition": "SQLへ: unknownでもTTL前はrow不変、期限到達は導出のみ、明示owner release可"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_renew_extends_current_expiry_and_noop_is_not_activity",
+      "disposition": "SQLへ: old expiry+extend、noop row不変。旧activity機構assertは削除"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_expired_gc_does_not_need_filesystem_evidence",
+      "disposition": "SQLへ: expired行のread後bytes/revision不変、collector無し"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_raw_candidate_tool_names_share_lifecycle",
+      "disposition": "SQL/実HTTPへ: public取得→renew→release同ID、削除engine専用alias assertは削除"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_unmatched_initial_grace_then_stale",
+      "disposition": "削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_probe_permission_timeout_cap_and_unknown_anchor",
+      "disposition": "削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_each_lease_actual_repo_git_activity_and_symlink",
+      "disposition": "削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_broad_glob_multiple_repos_and_git_failure",
+      "disposition": "削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_recent_deletion_commit_keeps_empty_scope_active",
+      "disposition": "削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_gc_rechecks_activity_after_probe",
+      "disposition": "削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_candidate_hook_any_folder_unmanaged_and_bound_outage",
+      "disposition": "SQLへ: 唯一S2c runtimeのfixture/実HTTPにbackend差替え、normalizer/owner/guard/releaseのassert保持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_failed_candidate_edit_keeps_lease_without_dispatch",
+      "disposition": "SQLへ: 唯一S2c runtimeのfixture/実HTTPにbackend差替え、normalizer/owner/guard/releaseのassert保持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_successful_candidate_edit_releases_lease",
+      "disposition": "SQLへ: 唯一S2c runtimeのfixture/実HTTPにbackend差替え、normalizer/owner/guard/releaseのassert保持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_cli_and_bash32_hook_same_normalizer",
+      "disposition": "維持: normalizer/CLI/hookの単体検査。削除engine/probe importsとmodule fixtureを整理"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
+      "test": "test_candidate_not_published_or_activated",
+      "disposition": "更新して維持: default legacy/activation=false、唯一SQL runtimeの未配線を確認"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_window_reconnect_preserves_id_token_and_distinguishes_resolved_uuid",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_reply_permission_is_per_message_and_new_edge_is_direct",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_named_legacy_thread_and_conflicting_input_remain_rejected",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_retention_holds_ancestors_and_removes_complete_expired_sets",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_reply_first_serializes_purge_in_the_same_write_transaction",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_read_ack_and_bcc_are_retained_without_cross_recipient_leak",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_persistent_reservations_preserve_imported_ids_and_owner_on_restart",
+      "disposition": "SQL移設/分割: engine_test_migrationの対応でlease assert保持、同じ試験の返信/配送/default proxy assertは維持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_persistent_lease_unknown_does_not_release_early_but_ttl_still_expires",
+      "disposition": "SQL移設/分割: engine_test_migrationの対応でlease assert保持、同じ試験の返信/配送/default proxy assertは維持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_delivery_terminal_observe_preserves_status_attempts_and_backoff",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_delivery_expired_lease_recovers_without_restarting_old_wake",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_same_message_id_is_independent_in_another_mail_instance",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_old_writer_generation_cannot_update_mail_leases_or_delivery",
+      "disposition": "SQL移設/分割: engine_test_migrationの対応でlease assert保持、同じ試験の返信/配送/default proxy assertは維持"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_delivery_legacy_expiry_compares_instants_at_boundary",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_delivery_terminal_transition_is_enforced_by_database",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "packages/agentstack_mail/tests/test_namespace_state_runtime.py",
+      "test": "test_reservation_latest_mail_is_selected_by_utc_instant",
+      "disposition": "SQL移設/分割: engine_test_migrationの対応でlease assert保持、同じ試験の返信/配送/default proxy assertは維持"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_absolute_candidate_keeps_default_proxy_contract",
+      "disposition": "SQL移設/分割: engine_test_migrationの対応でlease assert保持、同じ試験の返信/配送/default proxy assertは維持"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_bootstrap_binds_process_and_runtime_status_never_exposes_token",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_bridge_binding_wins_over_misleading_shell_identity",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_missing_bridge_binding_stops_without_guessing_a_name",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_subagent_bootstrap_waits_for_bridge_observed_pair_and_parent",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_subagent_bootstrap_rejects_unobserved_agent_id",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_allowlisted_tools_inject_bound_identity_and_owner_token",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_session_bound_surface_needs_no_caller_identity_after_bootstrap",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_unbound_status_fails_closed_without_identity_candidates",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_bridge_tools_reject_caller_supplied_identity_after_bootstrap",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_proxy_rejects_cross_binding_and_unsafe_reservation_paths",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_stdio_server_lists_only_allowlisted_tools_and_rejects_passthrough",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_operator_enrollment_is_absent_from_proxy_catalog_and_dispatch",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_only_bootstrap_accepts_caller_supplied_runtime_identity",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_mcp_server_script_runs_directly_without_plugin_root_env",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_whois_lets_a_child_confirm_a_recipient_name",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    },
+    {
+      "source": "integrations/codex_app/tests/test_mcp_server.py",
+      "test": "test_server_error_text_reaches_the_model_with_secrets_redacted",
+      "disposition": "維持: 削除engineに依存しない既存試験"
+    }
+  ],
+  "engine_test_inventory_method": {
+    "command": "rg -n \"ReservationServer|PersistentReservations|reservation_activity|probe_activity\" packages/agentstack_mail/src packages/agentstack_mail/tests integrations/codex_app/tests",
+    "ast": "そのimportを持つtest_absolute_reservations.py/test_namespace_state_runtime.py/test_mcp_server.pyの全test defをAST抽出し、engine_test_inventoryに一対一対応。server fixture依存も対象。module-level importをfixtureの内部importへ残して延命しない。",
+    "artifact": "verify_artifact.pyの配布module一覧から削除engineを外しS2cを追加。57_concrete selectorはreservation_performance_gate.pyが旧appを直接計測するため保持し、承認時の削除想定との差を本文へ記録。",
+    "remaining": "実装commitで同rgを再実行し、productionの削除engine import 0・全残存試験import可・配布file一覧一致を確認。提案時点の削除済みとは報告しない。"
+  }
+}

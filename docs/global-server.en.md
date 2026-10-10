@@ -223,3 +223,7 @@ Client pending records represent unknown outcomes. Definitive tool refusals such
 ## S2b messages and notifications
 
 Use a separate schema4 workspace for send/reply/read/ack/query/topic/digest and signals. See the [S2b contract and synthetic verification](global-messages.en.md). Legacy remains the default.
+
+## S2c reservations and welcome
+
+[Isolated global reservations](global-reservations.en.md) adds fresh schema5 preparation, one SQL engine, management inspect/force/purge and welcome. Existing profiles and default legacy mode remain unchanged.

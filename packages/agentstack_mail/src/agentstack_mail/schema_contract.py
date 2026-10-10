@@ -87,6 +87,26 @@ def fixture(name="global-server-s2a.json"):
         if path.is_file():
             value = json.loads(path.read_text())
 
+            # Fixed named definitions are expanded before schema admission.
+            # schema_ref is a fixture compiler marker, never a wire keyword.
+            if name == "global-server-s2c.json":
+
+                def expand(node):
+                    if isinstance(node, dict):
+                        if "schema_ref" in node:
+                            if node != {"schema_ref": "lease"}:
+                                raise ValueError("CAPABILITY_INVALID")
+                            return expand(value["lease_schema"])
+                        return {k: expand(v) for k, v in node.items()}
+                    if isinstance(node, list):
+                        return [expand(v) for v in node]
+                    return node
+
+                value = expand(value)
+                value["client_uuid_contract"] = {
+                    "definite_rejections": assemble_rejections(value)
+                }
+
             def definitions(node):
                 if isinstance(node, dict):
                     for key, child in node.items():
@@ -266,3 +286,28 @@ def definitive_rejection(reason, *, existing_pending, contract):
     return reason in rules["after_receipt_lookup"] or (
         not existing_pending and reason in rules["before_receipt_lookup"]
     )
+
+
+def assemble_rejections(s2c):
+    """Compile phase deltas once; runtime uses definitive_rejection only."""
+    phases = fixture("global-server-s2b.json")["fixed_reasons"]
+    preserve = set(phases["preserve_pending"])
+    before = set(phases["pre_receipt"]) - preserve
+    after = set(phases["new_intent_only"]) - preserve
+    known = set().union(*map(set, phases.values()))
+    inherited = fixture("global-server-s2a.json")["client_uuid_contract"][
+        "definite_rejections"
+    ]
+    for target, source in (
+        (before, "before_receipt_lookup"),
+        (after, "after_receipt_lookup"),
+    ):
+        target.update(set(inherited[source]) - known)
+    known.update(before | after)
+    delta = s2c["rejection_delta"]["append"]
+    before.update(set(delta["pre_receipt"]) - known)
+    after.update(set(delta["new_intent_only"]) - known)
+    return {
+        "before_receipt_lookup": sorted(before),
+        "after_receipt_lookup": sorted(after),
+    }

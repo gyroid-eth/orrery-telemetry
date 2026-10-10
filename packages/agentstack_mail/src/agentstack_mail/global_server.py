@@ -882,6 +882,13 @@ def build_global_server(config, *, runtime_class=GlobalRuntime, server_class=S1F
         from .global_s2b import build_s2b_server
 
         return build_s2b_server(config)
+    if (
+        runtime_class is GlobalRuntime
+        and document(config).get("kind") == "orrery-global-server-s2c-v1"
+    ):
+        from .global_s2c import build_s2c_server
+
+        return build_s2c_server(config)
     runtime = runtime_class(config)
 
     @asynccontextmanager

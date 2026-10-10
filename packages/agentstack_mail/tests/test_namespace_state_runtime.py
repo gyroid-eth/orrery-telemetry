@@ -14,15 +14,17 @@ from agentstack_mail.namespace_plan import FenceEvidence
 from agentstack_mail.namespace_state_io import StateMigrationError, connection, rows
 from agentstack_mail.namespace_store import (
     CandidateMailStore,
-    PersistentReservations,
     generation,
     reply_catalog,
 )
 from agentstack_mail.namespace_delivery import CandidateDelivery
 from agentstack_mail.namespace_replies import ReplyError, CallerEvidence
-from agentstack_mail.namespace_transform import timestamp, iso
-from agentstack_mail.reservation_paths import ReservationError
-from agentstack_mail.reservation_activity import Activity
+from agentstack_mail.namespace_transform import timestamp
+from test_global_server_s2c import prepared as prepared
+from test_global_server_s2b import owner
+from agentstack_mail.global_s2c import S2cRuntime
+from agentstack_mail.global_server import GlobalError
+import uuid
 
 spec = importlib.util.spec_from_file_location(
     "runtime_fixture", Path(__file__).parent / "fixtures/namespace_state.py"
@@ -257,87 +259,55 @@ def test_read_ack_and_bcc_are_retained_without_cross_recipient_leak(migrated):
         )
 
 
-def test_persistent_reservations_preserve_imported_ids_and_owner_on_restart(migrated):
-    _, choices, run, root, current = migrated
-    now = [timestamp(choices["as_of"]).timestamp()]
-    first = PersistentReservations(root / "mail.sqlite3", clock=lambda: now[0])
-    target = str(Path(choices["lease_anchors"]["1"]) / "src/a.py")
-    assert first.dispatch(
-        "check_reservations",
-        {
-            "agent_name": "Alpha",
-            "registration_token": "fixture-owner-one",
-            "paths": [target],
-        },
-        expected_generation=current,
-    )
-    renewed = first.dispatch(
+def test_persistent_reservations_preserve_imported_ids_and_owner_on_restart(
+    prepared, monkeypatch
+):
+    stamp = prepared["choices"]["as_of"]
+    monkeypatch.setattr("agentstack_mail.global_s2b.now", lambda: stamp)
+    first = S2cRuntime(prepared["config_path"])
+    renewed = first.apply(
         "renew_file_reservations",
-        {
-            "agent_name": "Alpha",
-            "registration_token": "fixture-owner-one",
-            "file_reservation_ids": [1],
-            "extend_seconds": 600,
-        },
-        expected_generation=current,
+        owner(
+            prepared,
+            1,
+            request_id=str(uuid.uuid4()),
+            file_reservation_ids=[1],
+            extend_seconds=600,
+        ),
     )
-    assert renewed[0].id == 1
-    second = PersistentReservations(root / "mail.sqlite3", clock=lambda: now[0])
-    with pytest.raises(ReservationError, match="LEASE_OWNER_REQUIRED"):
-        second.dispatch(
+    assert renewed["renewed"][0]["id"] == 1
+    second = S2cRuntime(prepared["config_path"])
+    with pytest.raises(GlobalError, match="LEASE_OWNER_REQUIRED"):
+        second.apply(
             "release_file_reservations",
-            {
-                "agent_name": "Beta",
-                "registration_token": "fixture-owner-two",
-                "file_reservation_ids": [1],
-            },
-            expected_generation=current,
+            owner(prepared, 2, request_id=str(uuid.uuid4()), file_reservation_ids=[1]),
         )
-    second.dispatch(
+    result = second.apply(
         "release_file_reservations",
-        {
-            "agent_name": "Alpha",
-            "registration_token": "fixture-owner-one",
-            "file_reservation_ids": [1],
-        },
-        expected_generation=current,
+        owner(prepared, 1, request_id=str(uuid.uuid4()), file_reservation_ids=[1]),
     )
-    leases = second.dispatch(
-        "file_reservation_paths",
-        {
-            "agent_name": "Beta",
-            "registration_token": "fixture-owner-two",
-            "paths": [target],
-        },
-        expected_generation=current,
-    )
-    assert leases[0].id > 3 and leases[0].owner == "2"
-    with connection(root / "mail.sqlite3") as database:
-        assert database.execute(
+    assert result["released"][0]["owner_agent_id"] == 1
+    with second.transaction() as db:
+        assert db.execute(
             "SELECT released_ts FROM file_reservations WHERE id=1"
         ).fetchone()[0]
-        assert (
-            database.execute(
-                "SELECT agent_id FROM file_reservations WHERE id=?", (leases[0].id,)
-            ).fetchone()[0]
-            == 2
-        )
-    assert not run.status()["rollback_allowed"]
 
 
 def test_persistent_lease_unknown_does_not_release_early_but_ttl_still_expires(
-    migrated,
+    prepared, monkeypatch
 ):
-    _, choices, _, root, current = migrated
-    now = [timestamp(choices["as_of"]).timestamp() + 1000]
-    leases = PersistentReservations(
-        root / "mail.sqlite3",
-        clock=lambda: now[0],
-        probe=lambda path: Activity(False, reason="fixture_unknown"),
-    )
-    assert leases.collect([1], expected_generation=current) == {1: "activity_unknown"}
-    now[0] += 8000
-    assert leases.collect([1], expected_generation=current) == {1: "ttl_expired"}
+    runtime = S2cRuntime(prepared["config_path"])
+    with runtime.transaction() as db:
+        before = rows(db, "file_reservations")
+    for stamp in (prepared["choices"]["as_of"], "2026-12-01T00:00:00Z"):
+        monkeypatch.setattr("agentstack_mail.global_s2c.now", lambda: stamp)
+        result = runtime.apply(
+            "list_file_reservations", owner(prepared, active_only=True)
+        )
+        if stamp.startswith("2026-12"):
+            assert not result["items"]
+        with runtime.transaction() as db:
+            assert rows(db, "file_reservations") == before
 
 
 def test_delivery_terminal_observe_preserves_status_attempts_and_backoff(migrated):
@@ -450,8 +420,20 @@ def test_same_message_id_is_independent_in_another_mail_instance(migrated):
     assert 101 not in delivery.ready("fixture-instance", 2, expected_generation=current)
 
 
-def test_old_writer_generation_cannot_update_mail_leases_or_delivery(migrated):
+def test_old_writer_generation_cannot_update_mail_leases_or_delivery(
+    migrated, prepared
+):
     _, _, _, root, current = migrated
+    with pytest.raises(GlobalError, match="STALE_RUNTIME_BINDING"):
+        S2cRuntime(prepared["config_path"]).apply(
+            "release_file_reservations",
+            owner(
+                prepared,
+                candidate_generation="old-generation",
+                request_id=str(uuid.uuid4()),
+                file_reservation_ids=[1],
+            ),
+        )
     with pytest.raises(StateMigrationError, match="STALE_CANDIDATE_WRITER"):
         store(root).reply(
             "Alpha",
@@ -459,16 +441,6 @@ def test_old_writer_generation_cannot_update_mail_leases_or_delivery(migrated):
             subject="late",
             body_md="fixture",
             recipients={"to": (2,)},
-            expected_generation="old-generation",
-        )
-    with pytest.raises(StateMigrationError, match="STALE_CANDIDATE_WRITER"):
-        PersistentReservations(root / "mail.sqlite3").dispatch(
-            "release_file_reservations",
-            {
-                "agent_name": "Alpha",
-                "registration_token": "fixture-owner-one",
-                "file_reservation_ids": [1],
-            },
             expected_generation="old-generation",
         )
     with pytest.raises(StateMigrationError, match="STALE_CANDIDATE_WRITER"):
@@ -533,33 +505,21 @@ def test_delivery_terminal_transition_is_enforced_by_database(migrated):
     ],
 )
 def test_reservation_latest_mail_is_selected_by_utc_instant(
-    migrated, kind, earlier, recent
+    prepared, kind, earlier, recent, monkeypatch
 ):
-    _, _, _, root, current = migrated
-    path = root / "mail.sqlite3"
-    with connection(path, write=True) as database:
-        database.execute("UPDATE messages SET created_ts='2026-10-08T08:00:00+00:00'")
-    mail = store(root)
-    for created in (earlier, recent):
-        mail.reply(
-            "Alpha" if kind == "sent" else "Beta",
-            "fixture-owner-one" if kind == "sent" else "fixture-owner-two",
-            subject="fixture activity",
-            body_md="fixture",
-            recipients={"to": (2 if kind == "sent" else 1,)},
-            expected_generation=current,
-            created_at=created,
-        )
-    service = PersistentReservations(
-        path,
-        clock=lambda: timestamp("2026-10-08T10:00:00Z").timestamp(),
-        probe=lambda scope: Activity(True, matched=True),
+    # Mail activity no longer affects TTL. Offset-equivalent instants share the
+    # same fixed-width expiry boundary and leave imported history unchanged.
+    from agentstack_mail.global_reservations import lease_timestamp, ACTIVE
+
+    runtime = S2cRuntime(prepared["config_path"])
+    with runtime.transaction() as db:
+        before = rows(db, "file_reservations")
+        for stamp in (earlier, recent):
+            db.execute(
+                "SELECT id FROM file_reservations WHERE " + ACTIVE,
+                {"now_utc": lease_timestamp(stamp)},
+            ).fetchall()
+        assert rows(db, "file_reservations") == before
+    assert lease_timestamp("2026-10-08T23:00:00+14:00") == lease_timestamp(
+        "2026-10-08T09:00:00Z"
     )
-    assert service.collect([1], expected_generation=current) == {1: "active"}
-    with connection(path) as database:
-        assert (
-            database.execute(
-                "SELECT released_ts FROM file_reservations WHERE id=1"
-            ).fetchone()[0]
-            is None
-        )

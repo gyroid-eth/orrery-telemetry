@@ -230,3 +230,7 @@ client の pending は結果不明の証跡です。`TARGET_UNAVAILABLE`・quota
 ## S2b の message と通知
 
 別の schema4 workspace で送信・返信・既読・ack・検索・topic・digest と signal を準備します。[S2b の契約と合成試験](global-messages.md)を参照してください。既定は旧 mode のままです。
+
+## S2c の予約・welcome
+
+[隔離 global 予約](global-reservations.md)は schema5 の新規準備、唯一 SQL engine、管理 inspect/force/purge と welcome を追加します。既存 profile と既定旧 mode は維持します。

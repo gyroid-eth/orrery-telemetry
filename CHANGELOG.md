@@ -10,6 +10,12 @@
 
 ## Unreleased
 
+### 隔離 global server の予約・contact welcome を準備
+
+S2c の schema5 に7つの公開 tool と既存 handshake の welcome を追加しました。予約は SQLite の未解放・期限前の行だけを ACTIVE とし、期限切れ履歴を書き換えません。旧 candidate の別 engine と activity/collector を削除し、共通 normalizer、S2b の transaction/receipt、通知の経路を共有します。更新・解放の省略選択、退役解放、管理 inspect/force/purge、歓迎 message の承認と中断後の再送を固定しました。
+
+完成した receipt を持つ新規 candidate だけを起動し、旧 root は不変で拒否します。時刻の instant・ID・旧長 reason を保存する fresh proof と各保存境界の回帰を追加しました。既定旧 mode・既存 profile・activation=false は維持し、client/hook の結線と切替は後続です。[S2c の契約と移設](docs/global-reservations.md)を参照してください。
+
 ### project 廃止に向けた message と通知の server 契約を準備
 
 明示した隔離 schema4 に送信・返信・既読・ack・検索・topic・digest の8 toolを追加しました。本文・添付 blob・FTS・監査 receipt と通知の再照合印を同じ DB transaction で確定し、応答喪失は同 UUID で回収します。外部出力は固定 layout の signal だけに絞り、archive・Git・保存 summary の第二正本を作りません。通知の消費を1列にまとめ、旧 hint と配送 row がない過去の message は時刻を捏造せず消費済みとして import します。可視集合の keyset、巨大な旧添付の metadata 読取、準備・通知の各中断点と明示再照合を追加しました。

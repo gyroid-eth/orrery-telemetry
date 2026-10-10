@@ -1,12 +1,10 @@
-# 絶対 path の予約候補（PR2）
+# 絶対 path の正規化と予約 adapter
 
 [English](absolute-reservations.en.md)
 
 ## 適用範囲
 
-#213 の PR2 は、共通 normalizer、認証・owner を検証する候補 server、bound proxy の明示 factory、hook の guard/release adapter、CLI の正規化、予約ごとの activity/GC を用意します。既定の Mail tool、DB schema、proxy の tool 呼出、install 設定、既存 hook は旧 mode のままです。環境変数で候補へ切り替える設定はありません。merge だけでは運用は変わりません。
-
-`ReservationServer` は明示的に作る隔離された in-memory store です。認証 callback は必須で、caller が owner ID を指定する API はありません。永続 DB への adapter、旧 lease の import、instance/binding の切替、実 hook の session resolver 接続は後続 PR です。候補 store を production server として使わないでください。dashboard の API 世代も変えません。
+共通 normalizer と明示した proxy/hook/CLI adapter を提供します。候補予約の唯一の server は [S2c の SQLite runtime](global-reservations.md)です。PR2 の in-memory ReservationServer・PersistentReservations の copy/flush・reservation_activity の probe/collector は削除しました。既定の Mail・proxy・hook は旧 mode のままで、activation=false。明示した fixture transport でだけ候補 adapter を接続します。
 
 ## 同じ正規化
 
@@ -27,10 +25,10 @@ python -m agentstack_mail.reservation_clients --wsl-drive c=/mnt/c 'C:\workspace
 
 新規 file の ASCII case の比較も、同じ volume の既存 directory に case alias があると確認できた場合だけ同一視します。名前の末尾は書き換えず、case-sensitive volume は別名として扱います。Unicode の無条件な casefold/NFC 変換はしません。
 
-Unicode は対象 directory の filesystem を read-only の native metadata で確認します。現行 APFS の canonical-equivalence と HFS+ の Unicode 3.2/exclusion の規則を、未作成 leaf、glob の照合、activity 展開に共用します。名前の保存表記は変えません。Linux は既知の byte 区別する filesystem と directory の casefold flag を確認し、NFC/NFD の別 file を同一視しません。不明な mount/API/Unicode 版は `UNICODE_RULES_UNKNOWN`（Linux casefold directory は `FILESYSTEM_RULES_UNKNOWN`）として取得を拒否し、probe は unknown として早期回収を止めます。OS 名だけで一律に NFC 化せず、runtime の確認のために file を作ることもありません。[APFS の名前の契約](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/APFS_Guide/FAQ/FAQ.html)と[HFS+ の Unicode 規則](https://developer.apple.com/library/archive/technotes/tn/tn1150.html)を根拠にします。
+Unicode は対象 directory の filesystem を read-only の native metadata で確認します。現行 APFS の canonical-equivalence と HFS+ の Unicode 3.2/exclusion の規則を、未作成 leaf、glob の照合、glob 比較に共用します。名前の保存表記は変えません。Linux は既知の byte 区別する filesystem と directory の casefold flag を確認し、NFC/NFD の別 file を同一視しません。不明な mount/API/Unicode 版は `UNICODE_RULES_UNKNOWN`（Linux casefold directory は `FILESYSTEM_RULES_UNKNOWN`）として取得を拒否します。OS 名だけで一律に NFC 化せず、runtime の確認のために file を作ることもありません。[APFS の名前の契約](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/APFS_Guide/FAQ/FAQ.html)と[HFS+ の Unicode 規則](https://developer.apple.com/library/archive/technotes/tn/tn1150.html)を根拠にします。
 
 
-case-insensitive な filesystem の候補では、非 ASCII を含む path（directory 名を含む）を `CASE_RULES_UNKNOWN` として取得拒否します。ASCII directory の別名を確認しても、filesystem の版付き非 ASCII case table を保証できないためです。Python の無条件な casefold は使いません。非 ASCII glob、過去の候補 lease、ASCII glob が非 ASCII の entry を探査する場合も unknown として早期回収を止めます。case-sensitive な filesystem の Unicode canonical-equivalence と名前の区別は維持します。この制限は版を固定した filesystem の case table を実装するまで続き、既定の旧 mode には影響しません。
+case-insensitive な filesystem の候補では、非 ASCII を含む path（directory 名を含む）を `CASE_RULES_UNKNOWN` として取得拒否します。ASCII directory の別名を確認しても、filesystem の版付き非 ASCII case table を保証できないためです。Python の無条件な casefold は使いません。非 ASCII glob や ASCII glob が非 ASCII entry を探査する場合も、不明な比較は取得・coverageを拒否します。case-sensitive な filesystem の Unicode canonical-equivalence と名前の区別は維持します。この制限は版を固定した filesystem の case table を実装するまで続き、既定の旧 mode には影響しません。
 
 `ReservationClient` は authenticated binding resolver と candidate dispatch を必須とし、acquire/check/renew/release で同じ正規化を使います。既存 proxy の `candidate_reservations()` は、既存 `_resolve()` で各呼出の binding/token を確認し、観測した cwd と明示した backend でこの client を作ります。既定の `tools/call` には接続しません。旧 proxy の相対 path 制約も維持します。
 
@@ -38,16 +36,10 @@ case-insensitive な filesystem の候補では、非 ASCII を含む path（dir
 
 release adapter は旧 hook と同じ失敗結果の判定を保ちます。tool_result/tool_response/tool_output の error、success:false、failed/blocked status、エラー文字列（入れ子を含む）は noop で、binding 解決と release の dispatch を行いません。成功した Edit の後は解放でき、失敗後の再試行では予約を維持します。
 
-server の batch acquire は競合が1件でもあれば全件拒否します。共有同士は許可し、片方が exclusive なら競合です。check は具体的な file に限ります。renew/release は owner を確認し、path selector は正規化した同一の予約 pattern を選びます。ID と path の両指定は和集合です。selector 省略はその owner の予約全件、明示した空 path list は拒否します。TTL/延長は60–86,400秒で、期限切れを renew して復活させません。
+server の batch acquire は競合が1件でもあれば全件拒否します。共有同士は許可し、片方が exclusive なら競合です。check は具体的な file に限ります。renew/release は owner を確認し、path selector は正規化した同一の予約 pattern を選びます。ID と path は片方だけを指定します。selector 省略はその owner の ACTIVE 予約だけ、明示した空 path list は拒否します。TTL/延長は60–86,400秒で、期限切れを renew して復活させません。
 
-## 活動と回収
+## 期限と解放
 
-renew は有効な現在の期限に延長秒数を足します。対象の無い renew は agent の活動を更新しません。
+S2c は未解放かつ期限前だけを ACTIVE とします。期限切れは導出だけで、履歴の解放時刻や revision を書き換えません。活動 probe、Git activity、grace と collector はありません。renew は現在の期限へ延長秒数を足し、期限切れを復活させません。owner の明示解放・退役時の ACTIVE 解放・管理 force のみが状態を変えます。詳細と旧 mode との差、試験移設は [S2c の契約](global-reservations.md)を参照してください。
 
-`probe_activity()` は各予約の固定 prefix と実対象の metadata を調べ、各実対象の所属 repo と repo-relative pathspec の Git timestamp を調べます。複数 repo や symlink の先も、それぞれの repo を調べます。file 内容と Mail DB は読みません。空 glob/新規 file でも正しい anchor を確認し、対象を消した直近の Git commit を探査します。probe 全体は3秒/1,000 steps、Git subprocess は残り時間で timeout します。権限拒否、timeout、上限、anchor の変更、不明な repo/Git 失敗は `activity_unknown` です。最近の file/Git/Mail/agent 活動と初回書込 grace を守り、unknown は stale の証拠にしません。virtual は filesystem 探査を行いません。
-
-`collect()` は内部の明示 GC で1回100件までを扱います。stale 候補は再 probe し、lease revision と agent/Mail activity の世代を commit 前に再確認します。probe 中の renew/Mail 活動、最終 probe の file 活動があれば早期解放しません。最後の metadata 確認の後の OS file 書込を排除する transaction は保証しません。期限切れと owner release は unknown と独立で、unknown を理由に TTL を延ばしません。
-
-## 検証と後続
-
-一時 HOME の fixture で別 cwd、同じ絶対 file、symlink・新規 file・glob・Unicode・case・空白・WSL、認証・owner・TTL、別 repo の Git 活動、空 glob、削除 commit、probe unknown、probe 中の活動変更、候補 hook の未参加と通信断、既存 proxy の旧 mode を確かめます。日常運用で新方式を使えるようにするのは、永続化/移行の検証と writer gate、hook/binding 接続を実装した後の切替 PR です。
+既定 app の活動/liveness と57-path performance gateは別の既存実装として維持します。実 client/hook の結線は後続 4b/4c、運用切替は PR7 です。
