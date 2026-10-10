@@ -239,14 +239,11 @@ class S2cRuntime(S2bRuntime):
                 retired_at=None,
                 last_active_ts=fresh["last_active_ts"],
             )
-            inbox = db.execute(
-                "SELECT m.* FROM messages m JOIN message_recipients r ON r.message_id=m.id WHERE r.agent_id=? ORDER BY m.id DESC LIMIT ?",
-                (aid, args["inbox_limit"]),
-            ).fetchall()
+            inbox = self.inbox_snapshot(db, aid, limit=args["inbox_limit"])
             return {
                 "agent": agent,
                 "file_reservations": [leases.projection(r) for r in rows],
-                "inbox": [self.projection(db, r, aid, bodies=True) for r in inbox],
+                "inbox": inbox,
             }
         released_ids = []
         if tool == "macro_file_reservation_cycle" and args["auto_release"]:
@@ -280,10 +277,21 @@ class S2cRuntime(S2bRuntime):
             rows = leases.active_rows(db, stamp, owner["id"])
             items = []
             for path in paths:
-                witness = next(
-                    (r["id"] for r in rows if leases.overlap(path, leases.scope(r))),
-                    None,
-                )
+                witness = None
+                unknown = False
+                for row in rows:
+                    try:
+                        covered = leases.overlap(path, leases.scope(row))
+                    except GlobalError as exc:
+                        if str(exc) != "ACTIVE_LEASE_RULES_UNKNOWN":
+                            raise
+                        unknown = True
+                        continue
+                    if covered:
+                        witness = row["id"]
+                        break
+                if witness is None and unknown:
+                    raise GlobalError("ACTIVE_LEASE_RULES_UNKNOWN")
                 items.append(
                     {
                         "path": path.value,

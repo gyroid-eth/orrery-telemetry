@@ -665,3 +665,10 @@ def test_candidate_not_published_or_activated():
 
     assert FIXTURE["activation"] is False
     assert load_namespace_contract()["activation_enabled"] is False
+
+
+def test_probe_permission_timeout_cap_and_unknown_anchor(tmp_path):
+    # Probe/collector were removed; preserve the independent normalizer boundary.
+    (tmp_path / "dangling").symlink_to(tmp_path / "absent")
+    with pytest.raises(ReservationError, match="ANCHOR_UNKNOWN"):
+        normalize_path(str(tmp_path / "dangling/new.py"))

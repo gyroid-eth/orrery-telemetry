@@ -27,11 +27,14 @@ server は絶対 path または `tool://`・`resource://`・`service://` を受�
 
 別 owner の予約と重なり、いずれかが exclusive なら batch 全件を拒否します。共有同士は共存します。自己 ACTIVE の同一 pattern/exclusive は同じ ID を再利用して期限を最大値へ延ばし、reason は保ちます。期限切れの自己履歴は変更せず、新規 ID を割り当てます。
 
-更新・解放は ID と path の片方を選び、両方指定は `LEASE_SELECTOR_CONFLICT`、明示した空配列は `LEASE_SELECTOR_EMPTY`。省略時は自己 ACTIVE だけです。path は正規化後の同一 pattern を選びます。明示 ID の不存在・他 owner は全件拒否。更新は現在期限へ延長秒数を足し、期限切れの更新は `LEASE_EXPIRED`。明示解放は期限切れ行も解放できます。TTL/延長は60–86400秒、取得100 path・選択100行・新しい reason500文字。旧長 reason/期限は読取・更新・解放で維持します。共通 preimage の16KiB・応答の1MiB上限も適用し、macro の出力超過は全件 rollback します。
+更新・解放は ID と path の片方を選び、両方指定は `LEASE_SELECTOR_CONFLICT`、明示した空配列は `LEASE_SELECTOR_EMPTY`。省略時は自己 ACTIVE だけです。path は正規化後の同一 pattern の自己 ACTIVE だけを選び、該当無しは LEASE_NOT_FOUND。他 owner・自己の履歴は選択しません。明示 ID の不存在・他 owner は全件拒否。更新は現在期限へ延長秒数を足し、期限切れの更新は `LEASE_EXPIRED`。明示 ID の解放は期限切れ行も解放できます。TTL/延長は60–86400秒、取得100 path・選択100行・新しい reason500文字。旧長 reason/期限は読取・更新・解放で維持します。共通 preimage の16KiB・応答の1MiB上限も適用し、macro の出力超過は全件 rollback します。
 
 `list_file_reservations` は ID keyset で100行ずつ。cursor の owner/tool/query が違えば拒否します。最初の MAX を固定して新規 ID を続きへ混ぜず、既存行の期限・解放は各 page の現在状態を返します。check/list は活動・quota・通知を更新しません。check は concrete path の最小 ID の witness 一つを返します。
 
 `macro_file_reservation_cycle(auto_release=true)` は今回作った行だけを解放し、自己再利用行は残します。`macro_start_session` は既存 owner の活動更新・取得・純粋な inbox 読取を同じ transaction で行います。登録・program/model/window 更新・read/ack はしません。
+
+coverage は既知の witness があれば別行の規則が不明でも成功します。witness がなく不明な行が残る場合は ACTIVE_LEASE_RULES_UNKNOWN とし、false と断定しません。session macro は fetch_inbox と選択処理を共有して body_md=null の metadata を返し、read/ack 状態を変えません。
+
 
 ## 旧 mode との差
 
@@ -42,7 +45,7 @@ server は絶対 path または `tool://`・`resource://`・`service://` を受�
 | cycle reason既定 | macro-file_reservation | 空文字。start_sessionのmacro-sessionは維持 |
 | auto_release | 今回指定した既存自己pathも解放 | 今回新規作成したleaseだけ解放 |
 | 期限・活動・回収 | 既存appのactivity/grace/stale sweep、expiry cleanup | 固定幅UTCの期限導出のみ。collectorも活動probeも無し |
-| selector / batch | 旧toolのselector/返却形。PR2候補はIDとpathの和集合も許す | ID XOR path、省略はown ACTIVEだけ。100件超は拒否（expired履歴を数えない） |
+| selector / batch | 旧toolのselector/返却形。PR2候補はIDとpathの和集合も許す | ID XOR path、省略/pathはown ACTIVEだけ。100件超は拒否（expired履歴を数えない） |
 | owner / scope / paths | project/nameと相対path | stable ID/token/binding、projectは無視、abs/virtual scope |
 | macro_start_session | project/登録と予約/inboxのmacro | 既存ownerだけ、touch/reserve/inboxの同TX |
 | thread macro | raw catalogにmacro_prepare_thread（namespace互換対象外） | 追加しない |
@@ -196,7 +199,7 @@ HOME="$fixture" TMUX_TMPDIR="$fixture" .venv/bin/python -m pytest -q -o addopts=
 | packages/agentstack_mail/tests/test_absolute_reservations.py / test_expired_gc_does_not_need_filesystem_evidence | SQLへ: expired行のread後bytes/revision不変、collector無し |
 | packages/agentstack_mail/tests/test_absolute_reservations.py / test_raw_candidate_tool_names_share_lifecycle | SQL/実HTTPへ: public取得→renew→release同ID、削除engine専用alias assertは削除 |
 | packages/agentstack_mail/tests/test_absolute_reservations.py / test_unmatched_initial_grace_then_stale | 削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す |
-| packages/agentstack_mail/tests/test_absolute_reservations.py / test_probe_permission_timeout_cap_and_unknown_anchor | 削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す |
+| packages/agentstack_mail/tests/test_absolute_reservations.py / test_probe_permission_timeout_cap_and_unknown_anchor | 廃止 probe/collector 枝だけを削除し、dangling-anchor の独立 normalizer assertion を保持 |
 | packages/agentstack_mail/tests/test_absolute_reservations.py / test_each_lease_actual_repo_git_activity_and_symlink | 削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す |
 | packages/agentstack_mail/tests/test_absolute_reservations.py / test_broad_glob_multiple_repos_and_git_failure | 削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す |
 | packages/agentstack_mail/tests/test_absolute_reservations.py / test_recent_deletion_commit_keeps_empty_scope_active | 削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す |

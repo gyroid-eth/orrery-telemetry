@@ -94,12 +94,16 @@ def selected(db, owner, args, stamp):
             rows.append(row)
     else:
         patterns = [p.value for p in normalize(paths)]
-        marks = ",".join("?" for _ in patterns)
+        params = {f"pattern_{i}": value for i, value in enumerate(patterns)}
+        marks = ",".join(":" + key for key in params)
+        params.update(owner=owner, now_utc=lease_timestamp(stamp))
         rows = db.execute(
-            "SELECT * FROM file_reservations WHERE path_pattern IN ("
+            "SELECT * FROM file_reservations WHERE agent_id=:owner AND "
+            + ACTIVE
+            + " AND path_pattern IN ("
             + marks
             + ") ORDER BY id",
-            patterns,
+            params,
         ).fetchall()
         if set(patterns) - {r["path_pattern"] for r in rows}:
             raise GlobalError("LEASE_NOT_FOUND")

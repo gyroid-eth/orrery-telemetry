@@ -27,11 +27,14 @@ The server requires absolute paths or exact virtual `tool://`, `resource://`, `s
 
 Acquire is all-or-nothing: overlapping owners conflict if either lease is exclusive; shared/shared coexist. An identical own ACTIVE pattern/exclusivity reuses its ID, preserves reason and extends expiry to the maximum. Expired history is unchanged and acquisition allocates a new ID.
 
-Renew/release accept IDs XOR paths. Both selectors yield `LEASE_SELECTOR_CONFLICT`; explicit empty arrays yield `LEASE_SELECTOR_EMPTY`; omitted selectors select only the owner's ACTIVE rows. Path selectors use identical normalized patterns. Missing or foreign IDs reject the entire batch. Renewal adds seconds to the previous expiry and rejects expired/released rows. Explicit owner release may release expired rows. Limits are 100 paths/selected rows, 60–86400 seconds TTL/extension and 500 characters for a new reason. Imported long reasons/expirations remain readable and releasable/renewable. Shared 16KiB preimage and 1MiB response budgets also apply; an oversized macro result rolls back the entire transaction.
+Renew/release accept IDs XOR paths. Both selectors yield `LEASE_SELECTOR_CONFLICT`; explicit empty arrays yield `LEASE_SELECTOR_EMPTY`; omitted selectors select only the owner's ACTIVE rows. Path selectors select only the owner's ACTIVE rows with identical normalized patterns; no match returns LEASE_NOT_FOUND. Foreign and own historical rows never enter path selection. Missing or foreign IDs reject the entire batch. Renewal adds seconds to the previous expiry and rejects expired/released rows. Explicit owner release by ID may release expired rows. Limits are 100 paths/selected rows, 60–86400 seconds TTL/extension and 500 characters for a new reason. Imported long reasons/expirations remain readable and releasable/renewable. Shared 16KiB preimage and 1MiB response budgets also apply; an oversized macro result rolls back the entire transaction.
 
 Listing uses bounded ID keysets, with tool/owner/query binding and a fixed first-page MAX. New IDs do not enter continuation pages; existing leases reflect each page's current expiry/release state. Coverage returns one minimum-ID witness per concrete path. Both reads preserve activity, quota and notification state.
 
 `auto_release=true` releases only newly allocated rows, preserving reused own rows. Start-session updates only existing-owner activity, reservations and pure inbox reading in one transaction. It never registers identities, changes program/model/window or marks messages read/acknowledged.
+
+Coverage accepts a known witness even when another ACTIVE row has unknown rules. Without a witness, unknown rules produce ACTIVE_LEASE_RULES_UNKNOWN, never a negative assertion. The session macro shares inbox selection with fetch_inbox and returns metadata with body_md=null; read/ack state remains unchanged.
+
 
 ## Differences from legacy mode
 
@@ -42,7 +45,7 @@ Listing uses bounded ID keysets, with tool/owner/query binding and a fixed first
 | Default cycle reason | macro-file_reservation | Empty string; start-session retains macro-session |
 | Auto-release | Releases specified reused own paths too | Releases only newly allocated leases |
 | Expiry/activity/collection | Existing app activity/grace/stale sweep and expiry cleanup | Derived fixed-width UTC expiry; no activity probe or collector |
-| Selectors/batches | Legacy tool shapes; PR2 candidate also allowed the union of IDs and paths | IDs XOR paths; omitted selects own ACTIVE only; reject over 100 selected rows without counting expired history |
+| Selectors/batches | Legacy tool shapes; PR2 candidate also allowed the union of IDs and paths | IDs XOR paths; omitted/path select own ACTIVE only; reject over 100 selected rows without counting expired history |
 | Owner/scope/paths | Project/name and relative paths | Stable ID/token/binding, ignored project scope, absolute/virtual paths |
 | Start-session macro | Project/registration/reservations/inbox composition | Existing owner only; touch/reserve/inbox in one transaction |
 | Thread macro | Raw catalog macro_prepare_thread, outside namespace compatibility | Not added |
@@ -184,7 +187,7 @@ The approved inventory contains 72 named tests. Pure normalization, legacy app a
 | packages/agentstack_mail/tests/test_absolute_reservations.py / test_expired_gc_does_not_need_filesystem_evidence | Move lease assertions to S2c SQL/HTTP; retain independent Mail/delivery/proxy assertions |
 | packages/agentstack_mail/tests/test_absolute_reservations.py / test_raw_candidate_tool_names_share_lifecycle | Move lease assertions to S2c SQL/HTTP; retain independent Mail/delivery/proxy assertions |
 | packages/agentstack_mail/tests/test_absolute_reservations.py / test_unmatched_initial_grace_then_stale | Remove obsolete probe/collector-only test |
-| packages/agentstack_mail/tests/test_absolute_reservations.py / test_probe_permission_timeout_cap_and_unknown_anchor | Remove obsolete probe/collector-only test |
+| packages/agentstack_mail/tests/test_absolute_reservations.py / test_probe_permission_timeout_cap_and_unknown_anchor | Remove probe/collector branches; retain the independent dangling-anchor normalizer assertion |
 | packages/agentstack_mail/tests/test_absolute_reservations.py / test_each_lease_actual_repo_git_activity_and_symlink | Remove obsolete probe/collector-only test |
 | packages/agentstack_mail/tests/test_absolute_reservations.py / test_broad_glob_multiple_repos_and_git_failure | Remove obsolete probe/collector-only test |
 | packages/agentstack_mail/tests/test_absolute_reservations.py / test_recent_deletion_commit_keeps_empty_scope_active | Remove obsolete probe/collector-only test |

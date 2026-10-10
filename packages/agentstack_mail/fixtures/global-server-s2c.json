@@ -1988,11 +1988,11 @@
   "reservation_contract": {
     "canonical": "reservation_paths.normalize_paths/paths_overlapだけを使う。serverは絶対pathまたはtool://,resource://,service://。relative/tilde/未知driveを拒否、clientだけobserved cwd/明示WSL mappingで絶対化。空白/Unicode/新規file/glob/symlinkはPR2そのまま。",
     "storage": "file_reservationsを唯一のlease正本とするSQL engine一つ。ReservationServerとPersistentReservationsの予約部分、reservation_activityを削除し、並存engineやcopy→flushを残さない。namespace_storeの返信/配送等は保持。reservation_pathsの正規化/重なり判定だけ共有し、既定旧appの独立した既存活動処理は変更しない。",
-    "active": "共通SQL断片 ACTIVE = (released_ts IS NULL AND expires_ts > :now_utc)。acquire/renew/check/list/inspect、省略selectorのrenew/release、retire hookがこの一つを使う。owner退役条件無し。期限到達時は導出だけが変わり、row/revisionを更新しない。明示ID/pathのreleaseだけはownerの意思としてexpired rowも選べる。",
+    "active": "共通SQL断片 ACTIVE = (released_ts IS NULL AND expires_ts > :now_utc)。acquire/renew/check/list/inspect、省略/path selectorのrenew/release、retire hookがこの一つを使う。owner退役条件無し。期限到達時は導出だけが変わり、row/revisionを更新しない。明示IDのreleaseだけはownerの意思としてexpired rowも選べる。",
     "acquire": "全paths normalize/preflight→同IMMEDIATE内にactive衝突検査。別ownerでどちらかexclusiveなら全件RESERVATION_CONFLICT、partial grantしない。自己ACTIVEの同一path/exclusiveだけ既存IDを再利用（expired履歴は書かず新ID）、expiry=max(old,now+ttl)。reasonは既存を保持。別owner情報はstable ID/path/expiry/revisionだけ（token無し）。",
-    "renew": "pathsかidsの片方、省略双方nullは自分の全active、明示[]はLEASE_SELECTOR_EMPTY、両方はLEASE_SELECTOR_CONFLICT。選択が100件を超えたら書込み前LEASE_SELECTION_TOO_LARGE、list_file_reservationsのID keysetから明示100件ずつ。ID不存在/別ownerは全件拒否、released/expiredの明示選択はLEASE_EXPIRED。expiry=old+extend_seconds（PR2既存）、最大期限を既存rowへ遡及適用しない。",
-    "release": "同selector規則。own releasedは既存ts/revision維持でalready_released_idsへ。expiredでもownerが明示release可。全件preflight、他owner拒否。",
-    "check": "純粋read、concrete pathだけ。activeな自己leaseで全pathがcoveredか。falseは詳細items、他人のtoken/内容を返さない。各pathのcoverage witnessは最小ID1件だけで足りるので巨大ID配列を作らない。readでtouch/quota/GCはしない。",
+    "renew": "pathsかidsの片方、省略双方nullは自分の全active、明示[]はLEASE_SELECTOR_EMPTY、両方はLEASE_SELECTOR_CONFLICT。選択が100件を超えたら書込み前LEASE_SELECTION_TOO_LARGE、list_file_reservationsのID keysetから明示100件ずつ。ID不存在/別ownerは全件拒否、released/expiredの明示選択はLEASE_EXPIRED。expiry=old+extend_seconds（PR2既存）、最大期限を既存rowへ遡及適用しない。 path選択は正規化した同一patternの自己ACTIVEだけ。履歴と他ownerを含めず、該当無しはLEASE_NOT_FOUND。",
+    "release": "pathと省略は自己ACTIVEだけ。明示IDは自己expiredも解放可、own releasedは既存ts/revision維持でalready_released_idsへ。全件preflight、明示IDの他owner拒否。",
+    "check": "純粋read、concrete pathだけ。activeな自己leaseで全pathがcoveredか。falseは詳細items、他人のtoken/内容を返さない。各pathのcoverage witnessは最小ID1件だけで足りるので巨大ID配列を作らない。readでtouch/quota/GCはしない。 knownなwitnessがあればunknownな別行に関係なく成功。witness無しでunknownが残る場合はACTIVE_LEASE_RULES_UNKNOWN、unknown無しの場合だけfalse。",
     "list": "認証済みownerから共有lease metadataだけ読取。stable owner IDで任意filter、token/本文は無し。S2bと共通の署名無しkeyset codec。cursor={version,tool,agent_id,query_hash,max_reservation_id,after_id}。初頁MAXは同snapshotのlease集合（message不可視IDとは別）、filter/owner/toolのhash不一致は拒否、範囲と型も検査。未来の新規leaseは継続pageに混ぜず、既存leaseのexpiry/releaseは各pageのcurrent snapshotで読む（不変snapshotの約束ではない）。moreはlimit+1、released履歴もactive_only=falseでpaged読取。",
     "bounds": "新しいpaths1..100、IDはSQLite signed64正整数・新規ID overflowはreceipt lookup後・書込み前LEASE_ID_CAPACITY_REACHED、1path<=4096、ttl/extend60..86400、reason<=500はPR2入力契約。importされた旧長reason/長期限はそのまま読める、renew/releaseを新規入力上限で拒否しない。旧ID保持、released rowはtombstoneとして保持してID再利用を防ぐ。",
     "unknown": "activeなpath_unknown/比較証拠unknownが衝突判定やcoverageへ影響すればACTIVE_LEASE_RULES_UNKNOWN。楽観grant無し。期限切れ/releasedはSQLで除外。新規scopeの正規化証拠unknownも同reason。未知anchorを勝手に修正しない、PR7の明示mappingへ。",
@@ -2021,7 +2021,7 @@
   "macro_contract": {
     "composition": "tool registryへnested呼出・nested transaction・内部HTTP無し。共有domain primitiveを同TXへ渡す。public macroも通常単一request UUID/receipt、内側のsubreceipt/UUID/queue無し。",
     "macro_file_reservation_cycle": "reserveと同じ全件atomic規則。auto_release=trueは同TXで自分が今回新規作成したleaseのみ直ちにrelease、以前から保持する自己leaseは解放しない。返却grantedは最終state、released_idsがその部分集合。実作業を挟むcontext managerではない。",
-    "macro_start_session": "既存ownerのみ、project作成/名前登録/window生成/program/model更新無し。必要ならPR4a registerを先に呼ぶ。自己last_activeを単調touch、任意指定paths取得、inbox snapshotを同TXで返す。read/ack/signal clear無し。path競合/入力不正ならtouch含めrollback。"
+    "macro_start_session": "既存ownerのみ、project作成/名前登録/window生成/program/model更新無し。必要ならPR4a registerを先に呼ぶ。自己last_activeを単調touch、任意指定paths取得、inbox snapshotを同TXで返す。read/ack/signal clear無し。path競合/入力不正ならtouch含めrollback。 inbox選択/projectionはS2b fetch_inboxの共通処理を同TXで使い、include_bodies=false（body_md=null）。"
   },
   "welcome_contract": {
     "one_truth": "welcomeは普通のmessages+message_recipients、receiptに確定message ID。専用welcome table/job/file無し。S2b publish/FTS/dirty primitiveを同TXで利用。",
@@ -2470,7 +2470,7 @@
     "retired中の同UUIDはOWNER_REQUIRED・既存pending/receipt bytes不変。unretire後の同owner/token/generationで元receipt、現在leaseは inactive（退役時 ACTIVE なら解放済み、既に期限切れなら released_ts=NULL のまま）のまま。",
     "全新reason×existing_pending有無のrejection_expectations。beforeは新規だけclear、afterは同intent無receipt確認後clear。read/managementは不変。UUID conflict/transport/schema不明は保持。",
     "ID不存在/別owner/selector両方/空/100件超/ID overflow/expired renewの固定拒否、renew overflowは既存TIMESTAMP_INVALID。既存長reason/204文字返信/長期限/世代0は出力受理。",
-    "lease_schemaを1定義・7参照から展開し共通admission、private参照markerをMCPへ漏らさない。不明参照はload拒否、release_causeの管理/public一致。",
+    "lease_schemaを1定義・8参照から展開し共通admission、private参照markerをMCPへ漏らさない。不明参照はload拒否、release_causeの管理/public一致。",
     "macro_startのreserve競合でtouch含めrollback、owner/program/model/window不変、inbox pure read。thread macroはcatalogに無し、既存summary cursorで1001連鎖を継続。",
     "cycle reason既定空文字/start既定macro-session、auto_releaseは今回新規のみ、再利用自己IDを維持。1outer receipt、各保存点で全rollback。",
     "welcome片側/null/empty/UTF8境界、blocked/block_all優先・相手ownerだけ承認、approved期限S2a互換。申請replay不変、承認後新UUIDでmessage1通。",
@@ -3134,7 +3134,7 @@
     {
       "topic": "selector / batch",
       "legacy": "旧toolのselector/返却形。PR2候補はIDとpathの和集合も許す",
-      "global": "ID XOR path、省略はown ACTIVEだけ。100件超は拒否（expired履歴を数えない）",
+      "global": "ID XOR path、省略/pathはown ACTIVEだけ。100件超は拒否（expired履歴を数えない）",
       "followup": "list keysetで明示100件ずつ。4b/4cの引数変換を固定。"
     },
     {
@@ -3333,7 +3333,7 @@
   "changes_from_v2": [
     {
       "decision": 1,
-      "change": "省略renew/release・retire hook・source退役変換を自己ACTIVEだけに統一。期限切れ履歴を選択上限に数えない。明示ID/pathのreleaseは維持。"
+      "change": "省略renew/release・retire hook・source退役変換を自己ACTIVEだけに統一。期限切れ履歴を選択上限に数えない。明示IDのreleaseは維持。"
     },
     {
       "decision": 2,
@@ -3686,7 +3686,7 @@
     {
       "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",
       "test": "test_probe_permission_timeout_cap_and_unknown_anchor",
-      "disposition": "削除: 廃止probe/collector専用。正規化/overlapの独立assertがあれば同named caseへ残す"
+      "disposition": "分割: probe/collector枝を削除し、dangling symlinkの独立normalizer assertionを同named caseへ保持"
     },
     {
       "source": "packages/agentstack_mail/tests/test_absolute_reservations.py",

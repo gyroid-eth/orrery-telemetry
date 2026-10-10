@@ -870,28 +870,47 @@ class S2bRuntime(S2aRuntime):
                 != args["expected_credential_generation"]
             ):
                 raise GlobalError("CREDENTIAL_GENERATION_MISMATCH")
-            clause = "r.agent_id=?"
-            params = [owner["id"]]
-            if before is not None:
-                clause += " AND m.id<?"
-                params.append(before)
-            if cutoff is not None:
-                clause += " AND julianday(m.created_ts)>julianday(?)"
-                params.append(cutoff)
-            if args["urgent_only"]:
-                clause += " AND m.importance IN ('high','urgent')"
-            rows = db.execute(
-                "SELECT m.* FROM messages m JOIN message_recipients r ON r.message_id=m.id WHERE "
-                + clause
-                + " ORDER BY m.id DESC LIMIT ?",
-                (*params, limit),
-            ).fetchall()
-            return ensure_budget(
-                [
-                    self.projection(db, r, owner["id"], args["include_bodies"])
-                    for r in rows
-                ]
+            return self.inbox_snapshot(
+                db,
+                owner["id"],
+                limit=limit,
+                before=before,
+                cutoff=cutoff,
+                urgent_only=args["urgent_only"],
+                include_bodies=args["include_bodies"],
             )
+
+    def inbox_snapshot(
+        self,
+        db,
+        aid,
+        *,
+        limit,
+        before=None,
+        cutoff=None,
+        urgent_only=False,
+        include_bodies=False,
+    ):
+        """Select and project inbox rows inside the caller's transaction."""
+        clause = "r.agent_id=?"
+        params = [aid]
+        if before is not None:
+            clause += " AND m.id<?"
+            params.append(before)
+        if cutoff is not None:
+            clause += " AND julianday(m.created_ts)>julianday(?)"
+            params.append(cutoff)
+        if urgent_only:
+            clause += " AND m.importance IN ('high','urgent')"
+        rows = db.execute(
+            "SELECT m.* FROM messages m JOIN message_recipients r ON r.message_id=m.id WHERE "
+            + clause
+            + " ORDER BY m.id DESC LIMIT ?",
+            (*params, limit),
+        ).fetchall()
+        return ensure_budget(
+            [self.projection(db, r, aid, include_bodies) for r in rows]
+        )
 
     def signal_stats(self, db):
         row = db.execute(

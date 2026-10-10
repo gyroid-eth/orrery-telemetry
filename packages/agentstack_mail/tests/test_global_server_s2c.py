@@ -704,15 +704,24 @@ def test_management_large_sql_id_is_structured_rejection(prepared, operation):
 def test_imported_large_output_rolls_back_macro_and_bounds_read(prepared):
     runtime = S2cRuntime(prepared["config_path"])
     with runtime.transaction(write=True) as db:
+        # This imported row has no historical operation receipt. Keep it ACTIVE
+        # so the macro reuses and projects its imported long reason.
         db.execute("UPDATE messages SET body_md=? WHERE id=107", ("x" * 1100000,))
-        db.execute("UPDATE file_reservations SET reason=? WHERE id=1", ("r" * 1100000,))
+        db.execute(
+            "UPDATE file_reservations SET reason=?,expires_ts=? WHERE id=1",
+            ("r" * 1100000, lease_timestamp("9999-01-01T00:00:00Z")),
+        )
+        path = db.execute(
+            "SELECT path_pattern FROM file_reservations WHERE id=1"
+        ).fetchone()[0]
         changed(db)
     before = snapshot(runtime)
     with pytest.raises(GlobalError, match="MESSAGE_RESPONSE_TOO_LARGE"):
         call(
             prepared,
             "macro_start_session",
-            file_reservation_paths=["tool://oversized-inbox"],
+            aid=1,
+            file_reservation_paths=[path],
         )
     assert snapshot(runtime) == before
     with pytest.raises(GlobalError, match="MESSAGE_RESPONSE_TOO_LARGE"):
@@ -754,3 +763,168 @@ def test_fresh_retired_owner_preserves_expired_null_history(prepared):
         retired = db.execute("SELECT retired_at FROM agents WHERE id=4").fetchone()[0]
         assert rows[12]["released_ts"] == lease_timestamp(retired)
     assert file_state(prepared["source"].mail.parent) == source_before
+
+
+@pytest.mark.parametrize(
+    "tool", ["renew_file_reservations", "release_file_reservations"]
+)
+@pytest.mark.parametrize(
+    "history",
+    ["shared", "foreign-expired", "foreign-released", "own-released", "101-history"],
+)
+def test_path_selector_uses_only_self_active(prepared, tool, history):
+    runtime = S2cRuntime(prepared["config_path"])
+    path = "tool://selector-history"
+    old_owner = 2 if history in {"own-released", "101-history"} else 1
+    old = call(
+        prepared, "file_reservation_paths", aid=old_owner, paths=[path], exclusive=False
+    )["granted"][0]["id"]
+    if history != "shared":
+        if history == "foreign-expired":
+            with runtime.transaction(write=True) as db:
+                db.execute(
+                    "UPDATE file_reservations SET expires_ts=created_ts WHERE id=?",
+                    (old,),
+                )
+                changed(db)
+        else:
+            call(
+                prepared,
+                "release_file_reservations",
+                aid=old_owner,
+                file_reservation_ids=[old],
+            )
+    if history == "101-history":
+        with runtime.transaction(write=True) as db:
+            for _ in range(100):
+                db.execute(
+                    "INSERT INTO file_reservations(agent_id,path_pattern,exclusive,reason,created_ts,expires_ts,released_ts,path_unknown,revision,release_cause,release_note) SELECT agent_id,path_pattern,exclusive,reason,created_ts,expires_ts,released_ts,path_unknown,revision,release_cause,release_note FROM file_reservations WHERE id=?",
+                    (old,),
+                )
+            changed(db)
+    current = call(prepared, "file_reservation_paths", paths=[path], exclusive=False)[
+        "granted"
+    ][0]["id"]
+    with runtime.transaction() as db:
+        history_before = [
+            tuple(row)
+            for row in db.execute(
+                "SELECT * FROM file_reservations WHERE id<>? ORDER BY id", (current,)
+            )
+        ]
+    result = call(prepared, tool, paths=[path])
+    rows = result["renewed" if tool == "renew_file_reservations" else "released"]
+    assert [row["id"] for row in rows] == [current]
+    if tool == "release_file_reservations":
+        assert result["already_released_ids"] == []
+    with runtime.transaction() as db:
+        assert history_before == [
+            tuple(row)
+            for row in db.execute(
+                "SELECT * FROM file_reservations WHERE id<>? ORDER BY id", (current,)
+            )
+        ]
+
+
+@pytest.mark.parametrize(
+    "tool", ["renew_file_reservations", "release_file_reservations"]
+)
+def test_path_selector_does_not_select_self_expired(prepared, tool):
+    runtime = S2cRuntime(prepared["config_path"])
+    path = "tool://selector-expired"
+    key = call(prepared, "file_reservation_paths", paths=[path])["granted"][0]["id"]
+    with runtime.transaction(write=True) as db:
+        db.execute(
+            "UPDATE file_reservations SET expires_ts=created_ts WHERE id=?", (key,)
+        )
+        changed(db)
+    before = snapshot(runtime)
+    with pytest.raises(GlobalError, match="LEASE_NOT_FOUND"):
+        call(prepared, tool, paths=[path])
+    assert snapshot(runtime) == before
+    if tool == "release_file_reservations":
+        assert (
+            call(prepared, tool, file_reservation_ids=[key])["released"][0]["id"] == key
+        )
+
+
+def test_macro_inbox_large_bodies_shares_metadata_selection(server):
+    from test_global_server_s2b import send
+
+    prepared = server
+
+    runtime = S2cRuntime(prepared["config_path"])
+    for _ in range(9):
+        runtime.apply("send_message", {**send(prepared), "body_md": "x" * 60000})
+    before = asyncio.run(
+        http(server, "fetch_inbox", owner(prepared, limit=9, include_bodies=False))
+    )
+    with runtime.transaction() as db:
+        recipients = [
+            tuple(row)
+            for row in db.execute(
+                "SELECT * FROM message_recipients ORDER BY message_id,agent_id"
+            )
+        ]
+    result = call(prepared, "macro_start_session", inbox_limit=9)
+    assert result["inbox"] == before
+    assert len(result["inbox"]) == 9
+    assert all(row["body_md"] is None for row in result["inbox"])
+    with runtime.transaction() as db:
+        assert recipients == [
+            tuple(row)
+            for row in db.execute(
+                "SELECT * FROM message_recipients ORDER BY message_id,agent_id"
+            )
+        ]
+        receipt = db.execute(
+            "SELECT receipt_json FROM global_operation_receipts WHERE tool='macro_start_session'"
+        ).fetchone()[0]
+        assert len(receipt.encode()) < 20000
+
+
+@pytest.mark.parametrize("unknown_first", [True, False])
+@pytest.mark.parametrize("known_covers", [True, False])
+def test_coverage_known_witness_overrides_unknown(
+    prepared, unknown_first, known_covers
+):
+    runtime = S2cRuntime(prepared["config_path"])
+    path = "tool://coverage-target"
+    patterns = [
+        "tool://coverage-unknown",
+        path if known_covers else "tool://coverage-other",
+    ]
+    if not unknown_first:
+        patterns.reverse()
+    rows = call(prepared, "file_reservation_paths", paths=patterns)["granted"]
+    unknown_id = next(
+        row["id"] for row in rows if row["path_pattern"] == "tool://coverage-unknown"
+    )
+    with runtime.transaction(write=True) as db:
+        db.execute(
+            "UPDATE file_reservations SET path_unknown=1 WHERE id=?", (unknown_id,)
+        )
+        changed(db)
+    before = snapshot(runtime)
+    if known_covers:
+        result = runtime.apply("check_file_reservations", owner(prepared, paths=[path]))
+        assert result["covered"]
+        assert result["items"][0]["reservation_ids"] == [
+            next(row["id"] for row in rows if row["path_pattern"] == path)
+        ]
+    else:
+        with pytest.raises(GlobalError, match="ACTIVE_LEASE_RULES_UNKNOWN"):
+            runtime.apply("check_file_reservations", owner(prepared, paths=[path]))
+    assert snapshot(runtime) == before
+    with runtime.transaction(write=True) as db:
+        db.execute(
+            "UPDATE file_reservations SET expires_ts=created_ts WHERE id=?",
+            (unknown_id,),
+        )
+        changed(db)
+    assert (
+        runtime.apply("check_file_reservations", owner(prepared, paths=[path]))[
+            "covered"
+        ]
+        is known_covers
+    )
