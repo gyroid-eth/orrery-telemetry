@@ -479,6 +479,35 @@ if [[ -z "$PROJECT_KEY" ]]; then
   exit 2
 fi
 PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$PROJECT_KEY_INPUT" "$INSTALL_DIR/env.sh")"
+
+# --dashboard-only copies no hooks/ and never launches a Codex child
+# (spawn_child.sh): nothing on that path needs hooks/codex-bin.sh, so it must
+# not be required to exist there either. Everything that loads or calls it
+# is skipped for that tier, below (#243).
+if [[ "$TIER" != tier0 ]]; then
+# --- codex helper load (tests extract from here to the end marker) ---
+# The launcher, doctor and installer resolve and probe Codex through the same
+# functions (hooks/codex-bin.sh, #242); the installer keeps no copy of its
+# own. install.sh is never run from an install destination (it copies
+# $REPO_ROOT/hooks there, never the reverse), so the checkout's own copy is
+# the only one that can ever be current; a missing or incompatible helper is
+# a packaging error, not a reason to skip Codex detection silently.
+CODEX_HELPER="$REPO_ROOT/hooks/codex-bin.sh"
+if [[ ! -f "$CODEX_HELPER" ]]; then
+  echo "error: missing Codex launcher helper: $CODEX_HELPER" >&2
+  exit 2
+fi
+# shellcheck disable=SC1090
+. "$CODEX_HELPER"
+for CODEX_HELPER_FN in codex_bin_problem find_usable_codex_bin_in codex_launch_search_path codex_probe_budget_start codex_launch_context; do
+  if ! declare -F "$CODEX_HELPER_FN" >/dev/null; then
+    echo "error: Codex launcher helper is missing required function $CODEX_HELPER_FN: $CODEX_HELPER" >&2
+    exit 2
+  fi
+done
+unset CODEX_HELPER_FN
+# --- end codex helper load ---
+fi
 case "$RESET_SETTINGS" in
   0|"") RESET_SETTINGS=0 ;;
   1) ;;
@@ -609,187 +638,77 @@ resolve_setting CHILD_DEFAULT_TOOLS_SETTING AGENTSTACK_CHILD_DEFAULT_TOOLS
 resolve_setting CODEX_ADD_DIRS_SETTING AGENTSTACK_CODEX_ADD_DIRS
 resolve_setting CHILD_RESUME_RETENTION_DAYS_SETTING AGENTSTACK_CHILD_RESUME_RETENTION_DAYS 30
 # --- codex launcher resolution (tests extract from here to the end marker) ---
-# Under WSL, PATH also carries the Windows PATH (/mnt/c/...). A `codex` found
-# there is the Windows npm shim: run by the Linux node it dies at once with
-# "Missing optional dependency @openai/codex-linux-x64", and every Codex child
-# spawned from the dashboard ends before its prompt arrives. A candidate is
-# therefore used only if it is not under a Windows drive mount (WSL only) and
-# answers `--version` within a short time.
-WSL_WINDOWS_MOUNT_ROOT=/mnt
-CODEX_VERSION_TIMEOUT_SECONDS=10
-
-running_under_wsl() {
-  [[ -r /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null
-}
-
-# Succeeds when `$1 --version` exits 0 within the timeout (portable: no
-# coreutils `timeout` on macOS).
-codex_version_answers() {
-  local bin="$1" out="${2:-/dev/null}" pid tick=0 limit=$((CODEX_VERSION_TIMEOUT_SECONDS * 10))
-  local err status=0
-  # Why it failed, for codex_version_failure: a probe that ran out of time and
-  # one that exited at once (a wrong node on PATH dies in a few hundredths of a
-  # second) need different fixes, and used to read the same.
-  CODEX_VERSION_STATUS=""
-  CODEX_VERSION_ERROR=""
-  CODEX_VERSION_ELAPSED=""
-  err="$(mktemp "${TMPDIR:-/tmp}/agentstack-codex-stderr.XXXXXX" 2>/dev/null || true)"
-  "$bin" --version </dev/null >"$out" 2>"${err:-/dev/null}" &
-  pid=$!
-  while kill -0 "$pid" 2>/dev/null; do
-    if [[ "$tick" -ge "$limit" ]]; then
-      codex_probe_stop "$pid"
-      CODEX_VERSION_STATUS=timeout
-      [[ -n "$err" ]] && rm -f "$err"
-      return 1
-    fi
-    sleep 0.1
-    tick=$((tick + 1))
-  done
-  wait "$pid" || status=$?
-  CODEX_VERSION_STATUS="$status"
-  CODEX_VERSION_ELAPSED="$((tick / 10)).$((tick % 10))"
-  if [[ -n "$err" ]]; then
-    # First non-blank line, bounded: it is shown inside a one-line warning.
-    CODEX_VERSION_ERROR="$(sed -n '/[^[:space:]]/{p;q;}' "$err" 2>/dev/null | cut -c1-200 || true)"
-    rm -f "$err"
-  fi
-  return "$status"
-}
-
-# One line saying why the last codex_version_answers failed.
-codex_version_failure() {
-  local bin="$1"
-  if [[ "$CODEX_VERSION_STATUS" == timeout ]]; then
-    echo "'$bin --version' did not finish within ${CODEX_VERSION_TIMEOUT_SECONDS}s and was stopped"
-  else
-    echo "'$bin --version' exited with status ${CODEX_VERSION_STATUS:-unknown} after ${CODEX_VERSION_ELAPSED:-0.0}s: ${CODEX_VERSION_ERROR:-(no error output)}"
-  fi
-}
-
-# Stop a probe that overran. Every wait here is a kill -0 poll with a
-# deadline (one second of grace, one second for the probe to go after KILL),
-# so waiting on `codex --version` and on the cleanup after it is bounded. The
-# system commands used on the way (pgrep, ps) are not bounded: if they
-# themselves stop responding, so does this function.
-#
-# The probe itself ($!) is this shell's own child, so it gets TERM and then
-# KILL without further checks. Its descendants (an npm wrapper's native codex)
-# are recorded first, while they are still attached to it, because a wrapper
-# that exits on TERM orphans them out of reach of `pgrep -P`. They get TERM
-# too; a descendant seen gone during the grace period is dropped, and KILL goes
-# only to one whose `ps -o lstart=` start time (one-second resolution) still
-# matches what was recorded. This is a best-effort identity check: a PID reused
-# within the same second is not told apart. A still-running descendant whose
-# start time cannot be read or no longer matches is left without KILL, with a
-# note on stderr; one that received KILL is not checked again. A probe still present after its second of reaping is left with a note.
-codex_probe_stop() {
-  local pid="$1" level="$1" descendants="" next p t start depth round
-  # PID lists are space-separated; a caller may have narrowed IFS (the PATH
-  # scan in find_usable_codex_bin splits on ":").
-  local IFS=$' \t\n'
-  if command -v pgrep >/dev/null 2>&1; then
-    for depth in 1 2 3 4; do
-      next=""
-      for p in $level; do
-        next="$next $(pgrep -P "$p" 2>/dev/null | tr '\n' ' ' || true)"
-      done
-      next="$(echo $next)"
-      [[ -n "$next" ]] || break
-      for p in $next; do
-        descendants="$descendants $p/$(codex_process_start "$p")"
-      done
-      level="$next"
-    done
-  fi
-  kill -TERM "$pid" 2>/dev/null || true
-  for t in $descendants; do
-    kill -TERM "${t%%/*}" 2>/dev/null || true
-  done
-  # One second of grace for everything to exit on TERM.
-  for round in 1 2 3 4 5 6 7 8 9 10; do
-    next=""
-    for t in $descendants; do
-      kill -0 "${t%%/*}" 2>/dev/null && next="$next $t"
-    done
-    descendants="$(echo $next)"
-    if [[ -z "$descendants" ]] && ! kill -0 "$pid" 2>/dev/null; then
-      break
-    fi
-    sleep 0.1
-  done
-  kill -KILL "$pid" 2>/dev/null || true
-  for t in $descendants; do
-    p="${t%%/*}"
-    start="${t#*/}"
-    if [[ -n "$start" && "$(codex_process_start "$p")" == "$start" ]]; then
-      kill -KILL "$p" 2>/dev/null || true
-    elif kill -0 "$p" 2>/dev/null; then
-      echo "note: left process $p from the codex --version probe (its identity could not be confirmed)" >&2
-    fi
-  done
-  # Reap the probe only once it is gone; never block on it.
-  for round in 1 2 3 4 5 6 7 8 9 10; do
-    kill -0 "$pid" 2>/dev/null || break
-    sleep 0.1
-  done
-  if kill -0 "$pid" 2>/dev/null; then
-    echo "note: the codex --version probe (pid $pid) did not exit after KILL; leaving it" >&2
-  else
-    wait "$pid" 2>/dev/null || true
-  fi
-}
-
-# The process start time as one word (empty when ps cannot tell), used to
-# recognise the same process again under the same PID.
-codex_process_start() {
-  ps -o lstart= -p "$1" 2>/dev/null | tr -d ' \n' || true
-}
-
-# Prints why a codex candidate cannot be used; prints nothing when it can.
-codex_bin_problem() {
-  local bin="$1"
-  if running_under_wsl && [[ "$bin" == "$WSL_WINDOWS_MOUNT_ROOT"/?/* ]]; then
-    echo "it is a Windows install under $WSL_WINDOWS_MOUNT_ROOT (install Codex inside WSL; the Windows npm shim cannot run here)"
-    return 0
-  fi
-  if [[ ! -x "$bin" ]]; then
-    echo "it is not executable"
-    return 0
-  fi
-  if ! codex_version_answers "$bin"; then
-    codex_version_failure "$bin"
-  fi
-}
-
-# First usable `codex` on PATH, then the per-user install locations that
-# hooks/spawn_child.sh also searches (a fresh WSL shell may not have
-# ~/.npm-global/bin on PATH yet).
+# Candidate search and probing (WSL Windows-shim rejection, the `--version`
+# timeout, the probe-kill cleanup) live in hooks/codex-bin.sh, loaded above,
+# so the installer judges a codex the same way the launcher and doctor do.
+# Only the per-user search locations differ by caller; codex_launch_search_path
+# already matches hooks/spawn_child.sh's own list (including nvm), so the
+# installer no longer keeps a separate, narrower one.
 find_usable_codex_bin() {
-  local search="$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.nodebrew/current/bin:/opt/homebrew/bin:/usr/local/bin"
-  local dir candidate seen=":"
-  local IFS=:
-  for dir in $search; do
-    [[ -n "$dir" && "$seen" != *":$dir:"* ]] || continue
-    seen="$seen$dir:"
-    candidate="$dir/codex"
-    [[ -f "$candidate" || -L "$candidate" ]] || continue
-    if [[ -z "$(codex_bin_problem "$candidate")" ]]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 0
+  find_usable_codex_bin_in "$(codex_launch_search_path)"
 }
 # --- end codex launcher resolution ---
 
 resolve_setting CODEX_BIN_SETTING AGENTSTACK_CODEX_BIN "" found
-if [[ "$SETTING_SOURCE" != explicit ]]; then
+if [[ "$TIER" == tier0 ]]; then
+  # --dashboard-only: see the note above where the helper would otherwise load.
+  CODEX_CONTEXT_NOTE="not checked: --dashboard-only does not use Codex"
+else
+# A candidate must be probed the way a spawned child will actually run it —
+# its own login shell, with codex_launch_path's PATH (the resolved target's
+# own bin, so an npm shim finds the node it was installed with) — not under
+# this installer's own PATH. Judging it any other way can save a value here
+# that the launcher then rejects, or reject one (an nvm-style codex whose
+# node is not on this shell's PATH) that the launcher would have accepted
+# (#239, #243). codex_launch_context sets this up; doctor and the launcher
+# (spawn_child.sh) call the same function. There is no second, direct-PATH
+# way to probe a candidate here: a PATH with neither zsh nor bash means no
+# entry point can judge a candidate the way the child will actually run it,
+# so none of them do, rather than installer alone falling back to a
+# different (and looser) judgment that the launcher would then reject.
+#
+# codex_launch_context's own failure is not one of preflight's checks
+# (run_preflight, further down, only requires git and tmux) and is not fatal
+# here either: a person not using Codex must not have their install stopped
+# over it. Deferred to here, not right after loading the helper above: that
+# used to run before preflight at all, turning preflight's aggregated "N
+# problem(s)" report into a single unrelated-looking error for anyone
+# missing git or tmux too (#243).
+CODEX_CONTEXT_AVAILABLE=1
+if ! codex_launch_context; then
+  CODEX_CONTEXT_AVAILABLE=0
+fi
+if [[ "$SETTING_SOURCE" == explicit ]]; then
+  # An explicit --codex-bin / AGENTSTACK_CODEX_BIN is a direct request: it is
+  # rejected, not silently left unchecked, when it cannot be judged at all.
+  if [[ "$CODEX_CONTEXT_AVAILABLE" != 1 ]]; then
+    echo "error: --codex-bin / AGENTSTACK_CODEX_BIN cannot be used: no login shell (zsh or bash) found on PATH to probe it under; set AGENTSTACK_CHILD_SHELL" >&2
+    exit 2
+  fi
+  codex_probe_budget_start
+  if codex_explicit_reason="$(codex_bin_problem "$CODEX_BIN_SETTING")" && [[ -n "$codex_explicit_reason" ]]; then
+    echo "error: --codex-bin / AGENTSTACK_CODEX_BIN cannot be used: $CODEX_BIN_SETTING ($codex_explicit_reason)" >&2
+    exit 2
+  fi
+elif [[ "$CODEX_CONTEXT_AVAILABLE" != 1 ]]; then
+  # No candidate can be judged: do not search, do not save a new value, and
+  # do not touch a saved one either (it is not "stale" — it was never
+  # checked this run). codex bin: in the summary says so explicitly.
+  CODEX_CONTEXT_NOTE="not checked: no login shell (zsh or bash) found on PATH for the probe context; set AGENTSTACK_CHILD_SHELL"
+  echo "note: Codex launcher checks skipped: $CODEX_CONTEXT_NOTE" >&2
+else
+  # codex_probe_budget_start must run in this shell, not inside a $(...)
+  # subshell: a subshell's CODEX_PROBE_DEADLINE cannot be read back here,
+  # which would silently drop the budget check below. One budget, started
+  # once, covers the installed/stale check and the PATH scan together, so a
+  # path that appears in both is judged (and timed) only once (#243).
+  codex_probe_budget_start
   if [[ -n "$CODEX_BIN_SETTING" ]]; then
     # A stale path from an earlier install (Node upgraded, prefix moved, or a
     # Windows shim picked up under WSL) must not pin the dashboard to a binary
     # that cannot run. An explicit --codex-bin that cannot run is rejected
-    # below instead.
+    # above instead.
+    CODEX_JUDGED="$CODEX_JUDGED$CODEX_BIN_SETTING:"
     codex_stale_reason="$(codex_bin_problem "$CODEX_BIN_SETTING")"
     if [[ -n "$codex_stale_reason" ]]; then
       echo "note: installed AGENTSTACK_CODEX_BIN=$CODEX_BIN_SETTING is stale ($codex_stale_reason); resolving codex again" >&2
@@ -798,10 +717,19 @@ if [[ "$SETTING_SOURCE" != explicit ]]; then
   fi
   if [[ -z "$CODEX_BIN_SETTING" ]]; then
     CODEX_BIN_SETTING="$(find_usable_codex_bin)"
+    # A candidate that is never reached, or is reached only after the shared
+    # probe budget ran out, must not read the same as "nothing is installed":
+    # the next install may have found it if it had more time (a slow PATH, a
+    # loaded machine), where "nothing is installed" would not change.
+    if [[ -z "$CODEX_BIN_SETTING" && -n "$CODEX_PROBE_DEADLINE" ]] && (( SECONDS >= CODEX_PROBE_DEADLINE )); then
+      # Distinct from plain "not found" in the summary too (not just stderr):
+      # the next install may find it with more time, where "not found" would
+      # not change (#243).
+      CODEX_CONTEXT_NOTE="not checked: the ${CODEX_PROBE_BUDGET_SECONDS}s candidate-probe budget ran out before every candidate on PATH could be tried"
+      echo "note: Codex detection stopped after the ${CODEX_PROBE_BUDGET_SECONDS}s candidate-probe budget was spent, before every candidate on PATH could be tried; AGENTSTACK_CODEX_BIN is left unset. Pass --codex-bin /path/to/codex, or remove/fix the slow candidate on PATH and re-run install." >&2
+    fi
   fi
-elif codex_explicit_reason="$(codex_bin_problem "$CODEX_BIN_SETTING")" && [[ -n "$codex_explicit_reason" ]]; then
-  echo "error: --codex-bin / AGENTSTACK_CODEX_BIN cannot be used: $CODEX_BIN_SETTING ($codex_explicit_reason)" >&2
-  exit 2
+fi
 fi
 # A Node-installed `codex` is a wrapper that loads its platform package through
 # whichever `node` is first on PATH; under the service's own PATH that is a
@@ -5070,7 +4998,11 @@ main() {
   say "codex child config overlay: ${CODEX_CHILD_CONFIG_OVERLAY_SETTING:-(disabled)}"
   say "codex network: $CODEX_NETWORK_SETTING"
   say "child default tools: ${CHILD_DEFAULT_TOOLS_SETTING:-none}"
-  say "codex bin: ${CODEX_BIN_SETTING:-(not found on PATH; Codex spawns will fail until --codex-bin is set)}"
+  if [[ -n "${CODEX_CONTEXT_NOTE:-}" ]]; then
+    say "codex bin: ($CODEX_CONTEXT_NOTE)"
+  else
+    say "codex bin: ${CODEX_BIN_SETTING:-(not found on PATH; Codex spawns will fail until --codex-bin is set)}"
+  fi
   say "codex add dirs: ${CODEX_ADD_DIRS_SETTING:-(none beyond project, spawn dirs/roots, install dir, worktrees, ~/.claude, ~/.codex)}"
   say "Claude/Codex child resume retention: $CHILD_RESUME_RETENTION_DAYS_SETTING day(s)"
   validate_assume_yes

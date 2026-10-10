@@ -5,8 +5,8 @@
 # there is the Windows npm shim: run by the Linux node it dies at once with
 # "Missing optional dependency @openai/codex-linux-x64". A candidate is
 # therefore used only if it is not under a Windows drive mount (WSL only) and
-# answers `--version` within a short time. The launch policy and doctor share
-# these functions; installer resolution is still implemented separately.
+# answers `--version` within a short time. The launch policy, doctor and
+# installer share these functions.
 #
 # Sourcing defines functions and two settings only; it runs nothing. A caller
 # that runs codex under another PATH sets CODEX_PROBE_RUNNER to a command that
@@ -307,6 +307,19 @@ codex_launch_search_path() {
     codex_launch_path
 }
 
+# Sets CHILD_SHELL, CODEX_CHILD_PATH_SETUP and CODEX_PROBE_RUNNER: the context
+# a caller must probe (or launch) Codex under so a candidate is judged the way
+# a spawned child's own login shell actually runs it, not under the caller's
+# own PATH. spawn_child.sh, doctor, the installer and this file's own
+# `policy` entrypoint all call this once before any codex_bin_problem /
+# codex_find_bin check, so the context is one definition instead of each
+# caller repeating it (#239, #243).
+codex_launch_context() {
+    CHILD_SHELL="$(codex_launch_shell)" || return 1
+    CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"
+    CODEX_PROBE_RUNNER=codex_launch_runner
+}
+
 codex_find_bin() {
     if [[ -n "${CODEX_BIN_PRIMED:-}" ]]; then
         printf '%s\n' "$CODEX_BIN_RESOLVED"
@@ -343,9 +356,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     set -euo pipefail
     context="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-context.sh"
     [[ -f "$context" ]] && . "$context"
-    CHILD_SHELL="$(codex_launch_shell)"
-    CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"
-    CODEX_PROBE_RUNNER=codex_launch_runner
+    codex_launch_context
     # Keep the exact spawner defaults (10s / 15s): a slow but usable CLI
     # must not be discarded here and then accepted after preregistration.
     # FD 3 bypasses the nested command substitutions used for candidate
