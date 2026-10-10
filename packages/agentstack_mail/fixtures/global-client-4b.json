@@ -1,0 +1,1899 @@
+{
+  "proposal_only": false,
+  "proposal_revision": "v2-implementation",
+  "stage": "PR4b-runtime-client",
+  "base": "a21951c8617348f85e7328e8c734021d081547f9",
+  "activation_enabled": false,
+  "default_runtime": "legacy",
+  "caller_tool_table": [
+    {
+      "id": "B01",
+      "caller": "bin/agentstack-preregister-child",
+      "legacy_tool": "ensure_project / whois(name) / register_agent / set_contact_policy",
+      "global_tool": "register.sh → register_agent(same pending) / NAME_CONFLICT时resolve_agent_identity(parent) + whois(child) / explicit set_contact_policy",
+      "change": "固定root、同intent再送。名前availability事前照会無し。token-file-outはglobal拒否。"
+    },
+    {
+      "id": "B02",
+      "caller": "hooks/spawn_child.sh direct / --pre-registered",
+      "legacy_tool": "register_agent / whois / unretire_agent / file_reservation_paths / send_message",
+      "global_tool": "register.sh child operation + register_agent / owner inspect / unretire_agent / file_reservation_paths / send_message",
+      "change": "直接起動も共通 preregister に委譲。embedded task は task file のみ、重複 task mail なし。"
+    },
+    {
+      "id": "B03",
+      "caller": "hooks/spawn_gemini_child.sh / spawn_gemini_preregistered.sh",
+      "legacy_tool": "旧 helper の register / reservation / report / retire",
+      "global_tool": "register.sh の child 操作 + file_reservation_paths / send_message / retire_agent",
+      "change": "headless と interactive の identity 処理を共有。global stdio/proxy の実行は4c。"
+    },
+    {
+      "id": "B04",
+      "caller": "bin/agentstack-gemini-child-mail",
+      "legacy_tool": "reserve_files / release_reservations / send_message / retire_agent (legacy client methods)",
+      "global_tool": "file_reservation_paths / release_file_reservations / send_message / retire_agent",
+      "change": "parent は stable ID、報告 intent は共通 message pending。結果 log は provider artifact、Mail の第二正本にしない。"
+    },
+    {
+      "id": "B05",
+      "caller": "hooks/child_resume.py stage_registration / prepare_active_state / begin_resume",
+      "legacy_tool": "直接 tool 無し、project/name/token を含む retained state",
+      "global_tool": "RuntimeClient reference + register.sh child operation",
+      "change": "global は旧 retained state を読まず新固定 slot。旧コードは legacy branch のまま。"
+    },
+    {
+      "id": "B06",
+      "caller": "hooks/child_tools.py / generated Claude MCP・Codex HOME",
+      "legacy_tool": "proxy config に旧 project/name/token path",
+      "global_tool": "4c 用の固定 launch handoff (公開 tool 追加無し)",
+      "change": "選んだ base/tools は child-state の1定義、生成 config は派生物。制約不明なら launch 不可。"
+    },
+    {
+      "id": "B07",
+      "caller": "hooks/cleanup-child-agent.sh",
+      "legacy_tool": "release_file_reservations / retire_agent + name-keyed token deletion",
+      "global_tool": "retire_agent (S2c の ACTIVE 解放に委譲) / management inspect",
+      "change": "SessionEndと共通end、別session live/unknownは解放/retire無し。最後のchildはS2c retire1本。"
+    },
+    {
+      "id": "B08",
+      "caller": "bin/agentstack-purge-child-resume / expiry maintenance",
+      "legacy_tool": "child_resume.purge_one (local), 旧退役照合",
+      "global_tool": "common child inspect/purge (local) + management inspect",
+      "change": "固定生成物だけを対象。provider 履歴/credential の破棄は retention policy と明示 purge、未完了の操作では禁止。"
+    },
+    {
+      "id": "B09",
+      "caller": "dashboard/server.py do_resume / _register_claude_resume / _resume_registration",
+      "legacy_tool": "DB の project/name SELECT / register_agent / unretire_agent / retire_agent",
+      "global_tool": "register.sh の child 操作 / management inspect / unretire_agent / whois / refresh_registration",
+      "change": "global resume writer は旧 DB/cache に触れない。UI 一覧・graph・DB reader 全体は PR6。"
+    },
+    {
+      "id": "B10",
+      "caller": "dashboard/server.py _do_resume_codex / bin/agentstack-resume",
+      "legacy_tool": "/api/jump session=name / shell bootstrap register_agent",
+      "global_tool": "/api/jump explicit client_name / common resume adapter",
+      "change": "global は client_name で固定 root を選択。表示名変更で root/history を rename しない。旧 session/name だけで global を選ばない。"
+    },
+    {
+      "id": "B11",
+      "caller": "bin/agentstack-codex-bootstrap / provider resume wrappers",
+      "legacy_tool": "register_agent(name/project) / codex resume SESSION_ID",
+      "global_tool": "common mode/owner + refresh_registration or touch_window_identity / provider resume SESSION_ID",
+      "change": "provider session ID と Mail ID を区別。同じ provider transcript、同じ stable Mail ID を使用。external proxy binding は4c。"
+    },
+    {
+      "id": "B12",
+      "caller": "hooks/mark-agent-registered.sh / check-agent-registered.sh",
+      "legacy_tool": "register_agent posttool を自己登録の flag とする",
+      "global_tool": "whois + existing schema3 self session index",
+      "change": "子の登録を親の自己登録と認めない。古い /tmp flag だけでは global の登録証明にしない。"
+    },
+    {
+      "id": "B13",
+      "caller": "hooks/session-start-reminder.sh",
+      "legacy_tool": "health_check / reregister(register_agent)",
+      "global_tool": "common health + observe/refresh, capability による touch",
+      "change": "startup/resume/clear/compact の実 payload を使う。embedded task の起動儀式は追加しない。"
+    },
+    {
+      "id": "B14",
+      "caller": "hooks/check-file-reservation.sh",
+      "legacy_tool": "renew_file_reservations paths=[relative,absolute]",
+      "global_tool": "check_file_reservations(absolute) → renew_file_reservations(explicit owned IDs)",
+      "change": "glob の cover は server 判定のみ。renew 後に check し ACTIVE cover を確かめる。予約の新規自動取得はしない。"
+    },
+    {
+      "id": "B15",
+      "caller": "hooks/release-file-reservation.sh / worker / release-all-reservations.sh",
+      "legacy_tool": "release_file_reservations(relative paths or omitted)",
+      "global_tool": "release_file_reservations(checked IDs or normalized absolute pattern)",
+      "change": "PostToolUse graceを維持。SessionEndは共通endから最後のstandaloneだけACTIVEをbatch解放、childはretireへ。"
+    },
+    {
+      "id": "B16",
+      "caller": "skills/delegate/SKILL.md",
+      "legacy_tool": "旧 preregister argv / reserve / contact / send / await / retire",
+      "global_tool": "global CLI contract + actual bound tools; file_reservation_paths / contact / send / retire",
+      "change": "proxy に caller/token を足さない。global helper は child-client-name を使い任意 token file を作らない。親 connection の故障を child helper で逃げない。"
+    },
+    {
+      "id": "B17",
+      "caller": "skills/log/SKILL.md",
+      "legacy_tool": "Mail tool 直接利用無し、AGENTSTACK_PROJECT_KEY を vault destination に利用",
+      "global_tool": "Mail tool 追加無し、filesystem destination を Mail routing から独立",
+      "change": "明示 log destination / configured vault / cwd logs の順。project_key を復活させない。書込予約は提供された接続の schema に従う。"
+    },
+    {
+      "id": "B18",
+      "caller": "integrations/codex_app/plugin/skills/coordinate/SKILL.md",
+      "legacy_tool": "session-bound bootstrap / proxy tools",
+      "global_tool": "同じ bound tool schema (global proxy 実結線は4c)",
+      "change": "skill は mode 非依存の bound 契約。bootstrap で無条件に再登録しない。session binding がある接続へ追加儀式なし。"
+    },
+    {
+      "id": "B19",
+      "caller": "claude/CLAUDE.md / codex/AGENTS.md / embedded prompt",
+      "legacy_tool": "raw project/name tools と proxy route の案内",
+      "global_tool": "mode-aware helper / global owner context / stable peer IDs",
+      "change": "managed block の置き場所や既存 block 移行は PR5。4b は同梱本文の呼び方だけ。"
+    },
+    {
+      "id": "B20",
+      "caller": "scripts/canary-embed-task.sh / dashboard spawn registration writer",
+      "legacy_tool": "旧 preregister / send / retire / registration SELECT",
+      "global_tool": "共通 preregister/lifecycle adapter",
+      "change": "canary は provider stub のみ実試験、実 LLM 実行はしない。dashboard spawn UI 変更は PR6。"
+    }
+  ],
+  "public_server_wire": {
+    "added_tools": [],
+    "changed_tools": [],
+    "server_catalog_count": 31,
+    "authority": "global-server-s1/s2a/s2b/s2c fixtures at base; resolved schemas from schema_contract.fixture; no handwritten replacement schemas"
+  },
+  "change_table": [
+    {
+      "id": "C01",
+      "files": "bin/lib/runtime_client.py + schema_contract.py",
+      "change": "tool/schema/preimage/rejection を S1〜S2c の正本から1回 compile。S2a-only の contact 型出力 branch を family dispatcher に置換。",
+      "boundary": "server tool/schema 変更なし、std lib client のみ"
+    },
+    {
+      "id": "C02",
+      "files": "global_s2b_contract.py の pure contract 関数",
+      "change": "make_intent / resume_intent / complete_intent の正本を dependency-free 共通層へ移し server/client が同じ関数を使用。GlobalError は error_type で注入。",
+      "boundary": "第二の message validator を作らない"
+    },
+    {
+      "id": "C03",
+      "files": "bin/agentstack-preregister-child / spawn helpers",
+      "change": "既存 register.sh の mode 分岐/child操作を拡張。preregister/spawn/reregister/bootstrap/dashboard はこの入口に委譲し、その global branch から既存 RuntimeClient を呼ぶ。配列/null/booleanはtyped JSON。",
+      "boundary": "既定 legacy の stdout と argv を維持"
+    },
+    {
+      "id": "C04",
+      "files": "hooks/child_resume.py / cleanup / dashboard resume",
+      "change": "global lifecycle/end は register.sh から既存 RuntimeClient/child_resume の共通処理へ。SessionEnd/cleanup/dashboard resume が同じ操作を呼ぶ。旧 SQL lookup/名前別credential複製を経由しない。",
+      "boundary": "legacy retained state と明示 import は PR7 に残す"
+    },
+    {
+      "id": "C05",
+      "files": "registration/session/reservation hooks",
+      "change": "mode を旧 env sourcing 前に解決、global は1つの context から owner/authority を照合。",
+      "boundary": "低 TTL/別 cwd/旧 tmp flag から identity を推測しない"
+    },
+    {
+      "id": "C06",
+      "files": "bundled skills / templates / docs",
+      "change": "global helper argv・stable IDs・中断後の operator 入口、旧との違いを記載。",
+      "boundary": "managed block 移行/配置変更を行わない"
+    },
+    {
+      "id": "C07",
+      "files": "scripts/install.sh payload declaration + installer tests",
+      "change": "pure contract と必要 fixture を正本の宣言部で1回だけ列挙。既存 helper がコピーされるか bytes で確認。",
+      "boundary": "fresh/core/reinstall/dashboard-only/archive の全 installer 試験を分けて確認"
+    }
+  ],
+  "source_audit": {
+    "bin/agentstack-preregister-child": "c390c7b6f4fc98e8861ed6cbe1f0b7522cfac967d327b7f983082dda61ea0657",
+    "bin/lib/runtime_client.py": "4dc56e54f7d2640660715bb15193cacce02003fb30951788f9544f67903bb986",
+    "hooks/spawn_child.sh": "043a3b42929a7888660515605225e1dd0a810fcd4669e4f3c115ab39a7191d09",
+    "hooks/child_resume.py": "82532a2e8deed6925805897d14e354d95ad892911b5fce17f7dbd988dc99f27c",
+    "hooks/child_tools.py": "33143521397ec1331cd81dc424b359f0b85415390bab2a790d0c27822effbf90",
+    "hooks/cleanup-child-agent.sh": "71fbfe3934c8d9c154cc497adf9b42f9be1399c151bf373de1aff0e031e5d9c5",
+    "dashboard/server.py": "45016ebcb9d8d722741c97974f4eb5bac126b9839e47adf43f00c06c5fdca168",
+    "hooks/check-file-reservation.sh": "2bf3bfb1e328711920bdf183e97517af155b153e86cbeefc204c087491f0be85",
+    "hooks/release-file-reservation-worker.py": "fdb7871a31e4d69a73f6ef386c639485dd141b520000a0b2d877e79e43fa07a9",
+    "skills/delegate/SKILL.md": "21f1682a8d3904c32b0cd87e56988ff9d65ec1edf4c4668b9873d99b7a2b55a6",
+    "skills/log/SKILL.md": "007a7a9784db6ebc3241719da4ae84e4452324fe4dd10723b9e43224d70a8db1",
+    "integrations/codex_app/plugin/skills/coordinate/SKILL.md": "377e7e181550fa32e0b1519d31b287ab2ac4e57939e7c6e4e11cd6e2f19e5421"
+  },
+  "single_authority": {
+    "mode": "configured() / RuntimeClient fence only; determine before loading legacy env. No context => legacy; invalid context != absent. Never infer mode or caller ID from cwd/project/name/tmux/child CLI flags.",
+    "identity": "context.identity stable ID/generation and fixed credential.json are sole mutable owner state. Child manifest references context; no token/name/project/window copies. Name is refreshed display only. Per-operation binding snapshot is immutable evidence, not a second authority.",
+    "mutation": "one fixed runtime/mutation-pending.json + binding-independent mutex for S2a/S2b/S2c write operations; family-specific format discriminator allowed, no simultaneous journals for same mutation. Raw message intent is the sole resend source; semantic hash derived, not saved as another payload.",
+    "lifecycle": "one fixed runtime/child-state.json for provider/task/tools/parent IDs/history reference/retention/lifecycle phase. No name-keyed child JSON or raw-token mirror in global. Registration pending is existing 4a slot, not copied into lifecycle. Each lifecycle stage only refers to one current mutation request ID if needed.",
+    "scope": "work folder/vault destination remains filesystem metadata, never Mail scope. Shell arguments are typed JSON through helper stdin, not ad-hoc key=value serialization for arrays/null/booleans.",
+    "database": "no DB file paths in child API and no SQLite opens/raw reads/copies/hashes in client process. Global dashboard resume bypasses legacy DB/cache branches.",
+    "dispatch": "bin/lib/agentstack-register.sh remains the sole shell mode dispatch for registration/child operations. Existing source callers invoke its functions. Dashboard calls its executable JSON operation entrypoint, not a second Python adapter. Only its global branch delegates to existing RuntimeClient operations; legacy internals stay as legacy implementation, not dual writes. RuntimeClient remains lower-level owner/schema/HTTP authority."
+  },
+  "fixed_layout": {
+    "root": "<isolation>/agentstack/clients/<client_name>, existing lowercase safe-name rule; root siblings disjoint, new identity=new root",
+    "retained": "existing CLIENT_LAYOUT plus runtime/child-state.json, runtime/child.lock, runtime/task.md and runtime/release-debounce.json; session evidence in runtime/live-sessions/; provider outputs deferred4c",
+    "no_arbitrary_output": "global rejects --token-file-out/--child-token-file/--profile arbitrary destinations. Task source is read-only input snapshotted to fixed task.md. Generated provider config never authorizes independent token file.",
+    "preflight": "all fixed slots registered in one RuntimeClient output_plan before network/write, type+private mode+owner+nlink checks; no recursive ownership scan. Helpers share schema and allowed slot registry.",
+    "lifecycle_lock": "binding-independent private lock with fixed magic; child helper and dashboard use same operation lock, no per-entrypoint lock implementations. Lock order child lock → authority shared fence → mutation mutex (no inverse acquisition). The fixed operation mutex applies to standalone identity roots too, without requiring child-state.json; live SessionStart/resume/end share it.",
+    "retention": "fixed generated provider artifacts can be regenerated. Provider transcript is retained source within fixed provider home; no backup copy. credential persists for resume; explicit forget/purge credential is operator-only."
+  },
+  "local_cli_contract": {
+    "preregister": {
+      "global_argv": [
+        "agentstack-preregister-child",
+        "--context",
+        "PARENT_CONTEXT",
+        "--child-client-name",
+        "child_01",
+        "--program",
+        "codex",
+        "--model",
+        "EXPLICIT_MODEL",
+        "--task-description",
+        "TASK",
+        "--prepare-only"
+      ],
+      "output": {
+        "mode": "global",
+        "client_name": "child_01",
+        "agent_id": 42,
+        "name": "display-name",
+        "client_config": "derived-fixed-path",
+        "prepared": true,
+        "runtime_ready": false,
+        "execution_reason": "GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C"
+      },
+      "token_output": false,
+      "legacy_stdout": "existing name only; no change",
+      "retry": "Repeat the same --context and --child-client-name --prepare-only invocation. Existing registration pending supplies immutable name/token/metadata/binding; caller cannot overwrite it with changed arguments. Registration recovery is this same entrypoint, not a second resume adapter."
+    },
+    "spawn": {
+      "global_argv": [
+        "spawn_child.sh",
+        "--child-client-name",
+        "child_01",
+        "--embed-task",
+        "--task-file",
+        "TASK_SOURCE",
+        "--prepare-only",
+        "WORKDIR"
+      ],
+      "explicit_context": "parent entrypoint context required; child config derived fixed sibling root; missing/ambiguous reference is an error",
+      "normal_execution": "default launch requires 4c capability before registration or mutation; 4b prepare-only never creates tmux/LLM"
+    },
+    "resume": {
+      "global_argv": [
+        "agentstack-resume",
+        "--client-name",
+        "child_01",
+        "--prepare-only",
+        "--detached"
+      ],
+      "api_payload": {
+        "runtime_mode": "global",
+        "client_name": "child_01",
+        "prepare_only": true,
+        "open": false
+      },
+      "history": "provider session ID from verified self session record, immutable Mail ID from context; never infer from latest rollout/mtime/name"
+    },
+    "operator": [
+      "inspect-child --client-name child_01",
+      "finalize-child --client-name child_01 --agent-id 42 --operator",
+      "cancel-child-resume --client-name child_01 --launch-id UUID --operator"
+    ],
+    "input_schema": "CLI argument parsing and local JSON schemas proposed here; names/flags provisional until review. Server schemas unchanged, inherited by fixture references."
+  },
+  "server_dispatch_contract": {
+    "catalog": "compile union of S1 + S2a + S2b + S2c from their exact fixtures. Capability-gated only; absent => CAPABILITY_UNAVAILABLE. shared schema validator + assemble_rejections; no parallel classifier.",
+    "registration": "Reuse existing create/finalize/activate order and S1 input limits. Once registration pending is saved, same name/token/metadata/binding only; NAME_CONFLICT keeps pending through parent resolve and child owner verification. Candidate name selection is before that saved intent, never an automatic retry under a new name.",
+    "metadata": "resume/reconnect no explicit program/model => refresh/touch. Explicit provider metadata uses saved values, no codex/codex default overwrite. No auto policy writes.",
+    "mutation": "S2a/S2c canonical arguments via common schema helper; S2b uses existing make_intent/resume_intent/complete_intent moved to pure shared module. Preserve server byte/hash acceptance; JSON typed CLI prevents split/quote errors.",
+    "peer": "resolve names at initial explicit intent only, save stable target IDs. Retry does not resolve names again; parent rename does not redirect report.",
+    "read": "fetch pure read does not clear signals. Hooks/reminder do not poll inbox merely to register. await/wake runtime remains4c. Reading result does not imply read/ack.",
+    "response": "all output schemas plus current binding/owner/request ID and semantic identity fields validated before clearing pending. Never reuse contact-only S2a output assumptions for leases/messages.",
+    "refusal": "schema_contract.assemble_rejections(S2c) + definitive_rejection only. Existing pending auth/fence/unknown/request-ID conflict preserved. Known definite domain rejection clears only same saved bytes under mutex.",
+    "retire": "retire_agent owns ACTIVE release in same server transaction; no extra release in child cleanup. Repeated lifecycle request may update timestamps/revision (S1 is not receipt-idempotent); current target status check avoids blind repeat. retired authentication via same-UID inspect+fingerprint before unretire, then whois."
+  },
+  "reservation_hook_contract": {
+    "pre_edit": "Replay a pending renew with the same UUID before check. Read coverage and own ACTIVE expiry; renew only with remaining TTL <= client RENEW_THRESHOLD_SECONDS (600), new TTL1800. No receipt below threshold.",
+    "post_edit": "captured owned lease IDs and hook local generation; grace worker rechecks exact context/binding/owner and current generation. Stale worker never releases newer lease IDs. Duplicate completion/no match is success no-op.",
+    "session_end": "共通end判定へ。別session live/unknownは全件release無し。最後のchildはretireのみ。最後のstandaloneのみ自己ACTIVEをkeysetで<=100ID batch release。詳細end_contract。",
+    "outage": "Q4=B決定。既存session-identity-policy.shの既定warn-open/明示warn-open/明示blockを共用。初期transport outageに限り編集を許可して同じ警告/監査、その他の既存拒否を維持。refuseは説明上の呼称、実設定値はblock。",
+    "renew_recovery": "Next PreToolUse replays the saved renew intent with the same UUID before a new check. Unknown/auth/binding/schema outcomes preserve pending and refuse editing."
+  },
+  "state_transitions": [
+    {
+      "id": "T01",
+      "from": "context 未選択",
+      "actor": "entrypoint",
+      "operation": "共通 mode selector、明示/implicit context の private/binding 確認",
+      "to": "legacy または global-preflight",
+      "recovery": "不明/broken symlink/途中変更は拒否。旧 transport へ戻らない。"
+    },
+    {
+      "id": "T02",
+      "from": "global-preflight",
+      "actor": "parent helper",
+      "operation": "capability・4c 実行可否・入力・固定 root/全 slot・provider/作業folder/tools/task を確認",
+      "to": "prepared child root(identity=null)",
+      "recovery": "通常 spawn の4c不足はここで止める。明示 prepare-only に限り登録へ進む。"
+    },
+    {
+      "id": "T03",
+      "from": "prepared child root",
+      "actor": "preregister",
+      "operation": "4a登録 pending に token/name/program/model/task を原子的保存",
+      "to": "registration planned",
+      "recovery": "中断後も同じ name/token/metadata/binding を register(new) へ再送。新しい値で再登録しない。"
+    },
+    {
+      "id": "T04",
+      "from": "registration planned",
+      "actor": "helper",
+      "operation": "同じ保存intentでS1 register(new)。NAME_CONFLICT時だけ親resolve→子token whois→owner照合。",
+      "to": "registered row or registration unknown",
+      "recovery": "未送信/既着/遅延を同じ再送で扱う。通信不明は保持して同intent再試行。確定した別ownerだけoperator例外。"
+    },
+    {
+      "id": "T05",
+      "from": "registered row",
+      "actor": "common finalize",
+      "operation": "credential → context → metadata の既存4a順で保存",
+      "to": "identity active; child-state未完成でも可",
+      "recovery": "各保存後中断は4a explicit finalize-create 同IDで再開。新 token/name/root を作らない。"
+    },
+    {
+      "id": "T06",
+      "from": "identity active",
+      "actor": "prepare helper",
+      "operation": "child-state/tools/task 確定、明示 policy/予約/task-mail があれば共通 mutation",
+      "to": "prepared",
+      "recovery": "途中は固定 lifecycle intent を再提示、message/予約は同UUID。embedded は task-mail なし。"
+    },
+    {
+      "id": "T07",
+      "from": "prepared",
+      "actor": "launcher",
+      "operation": "4c capability/launch handoff確認→tmuxの新paneへ唯一のlaunch_idを付与",
+      "to": "launch pending",
+      "recovery": "4c無しはready=falseで停止。tmux起動前・後中断は同launch_idのpane/runtime receiptを観測、blind再起動しない。"
+    },
+    {
+      "id": "T08",
+      "from": "launch pending",
+      "actor": "operator retry",
+      "operation": "専用 tmux/server/process証跡の再観測",
+      "to": "running / prepared / launch unknown",
+      "recovery": "matching pane ありは二重起動禁止。確実に未実行は同準備から再開。unknownは非破壊inspectで止める。"
+    },
+    {
+      "id": "T09",
+      "from": "running",
+      "actor": "cleanup owner",
+      "operation": "SessionEnd/cleanup共通endで別sessionのlive/unknownを先に判定、最後のchildならretireのみ。",
+      "to": "retire pending → retained",
+      "recovery": "live/unknownなら解放もretireも無し。retire応答喪失はinspectで現在status確認、owner material保持。"
+    },
+    {
+      "id": "T10",
+      "from": "retained retired",
+      "actor": "explicit resume",
+      "operation": "root/provider/session/retention/tools/authorityとcredential fingerprint照合、resume intent保存",
+      "to": "resume planned",
+      "recovery": "retired whoisは使えないので先に管理inspect。legacy rootを変換しない。"
+    },
+    {
+      "id": "T11",
+      "from": "resume planned",
+      "actor": "resume helper",
+      "operation": "inspect target status→必要ならunretire→whois→refresh/touch/verify",
+      "to": "resume identity active",
+      "recovery": "unretire応答喪失は管理inspect。token/ID/generation維持、明示recover/claimは実行しない。"
+    },
+    {
+      "id": "T12",
+      "from": "resume identity active",
+      "actor": "resume launcher",
+      "operation": "同じprovider session IDとtoolsから派生HOME/configを準備→4c handoff",
+      "to": "launch pending",
+      "recovery": "部分HOME生成は同固定派生dirだけ再生成。確定した未execは明示cancelで退役へ、exec unknownは戻さない。"
+    },
+    {
+      "id": "T13",
+      "from": "retire pending / resume planned / launch unknown",
+      "actor": "operator",
+      "operation": "inspect-child(client_name)",
+      "to": "同状態・読取結果",
+      "recovery": "結果を3値で提示。DB/OS未観測をfalseとみなさない。固定local operation lock内で照合。"
+    },
+    {
+      "id": "T14",
+      "from": "retained・期限切れ",
+      "actor": "operator purge / retention maintenance",
+      "operation": "pending無し/実行無し/retired確認→固定生成物削除",
+      "to": "purged generated state",
+      "recovery": "credential/root/historyの破棄は別の明示forget。途中削除はmanifestに固定slot結果を記録し同操作再開。"
+    },
+    {
+      "id": "T15",
+      "from": "any pending",
+      "actor": "operator",
+      "operation": "pending種別別: registration同intent再送、mutation既存resolve-mutation、launch同launch_id観測/明示cancel。",
+      "to": "blocked with preserved evidence",
+      "recovery": "結果不明は証拠保持。S2a resolve-mutationをregistration/launchへ渡さない。binding変化は自動repin/UUID再生成/旧fallback禁止。"
+    }
+  ],
+  "legacy_differences": [
+    [
+      "routing",
+      "project/name + env",
+      "explicit context/stable ID; malformed context never legacy fallback"
+    ],
+    [
+      "preregister output",
+      "name stdout + caller-selected token file",
+      "typed non-secret JSON + fixed root; old output only legacy"
+    ],
+    [
+      "new register unknown",
+      "historical name/register retry",
+      "same saved name/token/metadata/binding replay, NAME_CONFLICT時のみtoken owner確認"
+    ],
+    [
+      "child credential",
+      "raw token plus state copy",
+      "credential.json only, child-state reference"
+    ],
+    [
+      "resume",
+      "project/name DB lookup + legacy adopt",
+      "current context + management inspect + same stable ID; import PR7"
+    ],
+    [
+      "window",
+      "local/session name can drive setup",
+      "existing mapping touch/verify only, no claim new mapping ready"
+    ],
+    [
+      "cleanup",
+      "best effort release + retire + token deletion",
+      "SessionEnd/cleanup共通endで別session live/unknownを保持、最後のchild retireのみ"
+    ],
+    [
+      "reservation paths",
+      "relative+absolute, old guard renew matching",
+      "absolute normalizer, server coverage then owned ID renew; no alias probes"
+    ],
+    [
+      "release",
+      "safe repeated no-op",
+      "same no-op for missing own ACTIVE paths; explicit foreign/missing ID still reject"
+    ],
+    [
+      "outage",
+      "既定warn-open / 明示warn-open / block",
+      "同じ既定/明示warn-openとblock、初期outageだけ許可・警告・監査"
+    ],
+    [
+      "task",
+      "mail task or embedded",
+      "same selection, embedded has no duplicate task mail; nonembed send uses common UUID intent"
+    ],
+    [
+      "readiness",
+      "spawn/config presence may look runnable",
+      "prepared != runtime_ready; 4c capability required for execution"
+    ]
+  ],
+  "acceptance_cases": [
+    {
+      "id": "A01",
+      "area": "mode",
+      "case": "旧 env project/name/token と明示global contextが食い違ってもglobalの同ID。broken implicit symlinkは旧登録/flagを作らない。"
+    },
+    {
+      "id": "A02",
+      "area": "preflight",
+      "case": "任意token-file/profile/root/session namespace入力、他root/symlink/hardlink/DB入力はnetwork前拒否、bytes/revision不変。"
+    },
+    {
+      "id": "A03",
+      "area": "register",
+      "case": "実 preregister の --program/--model/--task-description がrowへ。stdoutにtoken無し、生成名競合はNAME_CONFLICTのみで判断。"
+    },
+    {
+      "id": "A04",
+      "area": "register-unknown",
+      "case": "同じname/token/metadata/bindingの未送信・既着・遅延両順序をregistration_retry_contract表で固定。各rowは1件、同ID/tokenで有効化。"
+    },
+    {
+      "id": "A05",
+      "area": "activation",
+      "case": "credential/context/metadataの各保存直後で中断→正規finalize同ID/token/generation、register回数1。"
+    },
+    {
+      "id": "A06",
+      "area": "registration-mismatch",
+      "case": "他owner競合は子token whoisで拒否、通信失敗は同pending保持。別binding/偽resolve応答をownerとして採用せず、新token/nameを作らない。"
+    },
+    {
+      "id": "A07",
+      "area": "local-finish",
+      "case": "child-state/task/tools保存前後中断→同intent再開、schema不適合は未完了。1100 provider filesでも全入口動作。"
+    },
+    {
+      "id": "A08",
+      "area": "policy",
+      "case": "未指定policyのreconnectは書込無し。明示policyだけUUID mutation、quota/pendingを勝手に解消しない。"
+    },
+    {
+      "id": "A09",
+      "area": "launch",
+      "case": "通常spawnの4c不足は登録前拒否。prepare-onlyはready=false。tmux前/後の中断で同launch_id再照合、unknownで二重起動/retire無し。"
+    },
+    {
+      "id": "A10",
+      "area": "provider",
+      "case": "Claude/Codex/Geminiの実CLI argvをstubで確認、元provider session ID維持。native Windows/Gemini stdioの固定reason維持。実LLM/別版binary無し。"
+    },
+    {
+      "id": "A11",
+      "area": "rename",
+      "case": "表示名変更後もclient_name/root/agent_id/transcript不変、親の送信は保存stable ID。name-keyed旧ファイルを探さない。"
+    },
+    {
+      "id": "A12",
+      "area": "resume",
+      "case": "retired inspect→unretire前/応答喪失/後→whois→metadata/派生HOME→tmux/exec各点。明示cancelは確定未execのみ、unknownは証跡保持。"
+    },
+    {
+      "id": "A13",
+      "area": "resume-mismatch",
+      "case": "provider/session/header/ID/gen/window/instance/tools破損拒否。expired windowは同mapping touch→verify、新規mappingはreadyにしない。"
+    },
+    {
+      "id": "A14",
+      "area": "cleanup",
+      "case": "実SessionEnd→cleanup、逆順、重複のA/B同ID連鎖。別session live/ps・tmux unknownは予約不変、最後childだけretire、expiredはreleased NULL維持。"
+    },
+    {
+      "id": "A15",
+      "area": "hooks-self",
+      "case": "PostToolUse register childが親のschema3 index/flag/titleを変えない。startup/resume/compact/clear実payload、false旧flag拒否。"
+    },
+    {
+      "id": "A16",
+      "area": "hooks-path",
+      "case": "Edit/Write/MultiEdit等の実payload、2cwd相対名/同absolute/symlink/未作成/glob/Unicode/空白/WSL。coverageはserver check→ID renew、relative+absolute二重送信無し。"
+    },
+    {
+      "id": "A17",
+      "area": "hook-race",
+      "case": "grace workerに昔のcontext/owner/epoch/lease ID→新contextの予約を解放しない。再予約後のworkerはlocal generationで無効化。"
+    },
+    {
+      "id": "A18",
+      "area": "release",
+      "case": "PostToolUse duplicate path release no-op。最後standaloneの101以上ACTIVEをkeyset+100ID batch、他owner履歴無視。中断は同UUID、別session稼働なら全件保持。"
+    },
+    {
+      "id": "A19",
+      "area": "message-intent",
+      "case": "helper send/reportのbody/base64/宛先IDsをlocal単一intentに保存。HTTP前中断とcommit応答喪失→再起動だけで同bytes/UUID replay、別intent拒否。"
+    },
+    {
+      "id": "A20",
+      "area": "shared-contract",
+      "case": "全31toolのcatalog/入力・出力schema/phase拒否表を正本からcompile。REQUEST_ID_CONFLICT/未知理由/schema不適合でpending保持。definitiveのみ解除。"
+    },
+    {
+      "id": "A21",
+      "area": "retired-replay",
+      "case": "read/write current owner認証が必要。retired/generation変更はpending保持、unretire後同UUIDのhistorical receiptは現在stateと区別。"
+    },
+    {
+      "id": "A22",
+      "area": "skill",
+      "case": "delegateの旧argvと新globalコマンドを抜き出して実shell stubへ。logはMail project無しで保存先を選ぶ。proxy skillは実schema以外のcaller fieldを足さない。"
+    },
+    {
+      "id": "A23",
+      "area": "legacy",
+      "case": "旧token-file-out/name/stdout/retained schema/argv、既存docstringの冪等・cancel・専用HOME・tools保持を既存試験で確認。globalの新formatを旧へ二重保存しない。"
+    },
+    {
+      "id": "A24",
+      "area": "layout",
+      "case": "client root 固定親/name、child slot追加も全preflightに1回登録。rootは1100files/130dirs/history増加でもbounded scan無し。"
+    },
+    {
+      "id": "A25",
+      "area": "installer",
+      "case": "fresh core / full / provider-preserving / dashboard-only / archive切出し / dry-runで宣言正本、helper/fixture bytes一致。"
+    },
+    {
+      "id": "A26",
+      "area": "sqlite",
+      "case": "client/child/hook/dashboard global branchでsqlite3.connect/DB os.open/close/hash/copyゼロ。S2cの別processwriter lock回帰も実serverで維持。"
+    },
+    {
+      "id": "A27",
+      "area": "health",
+      "case": "signal.status redでもtop-level okならtoolを呼べる。auth/authority不明はreadyを立てない。HTTP health一致までfixtureがyieldしない。"
+    },
+    {
+      "id": "A28",
+      "area": "purge",
+      "case": "pending/unknown/live sessionならcredential/history保持。期限切れの正常retained生成物だけ対象、partial purge→同fixedslotで再開。"
+    },
+    {
+      "id": "A29",
+      "area": "outage-real-hooks",
+      "case": "tests/test_check_file_reservation.py の実Edit/Write payloadをlegacy/globalへ。初期connection refused/timeout × 未指定/明示warn-open/block。0+既存warning/audit、2+拒否をoutage_contractに一致。"
+    },
+    {
+      "id": "A30",
+      "area": "outage-classification",
+      "case": "同payloadでcontext/owner/binding不正・401/403/5xx・MCP isError/schema不適合・definitive zero後retry outageを与える。どちらのpolicyでも既存拒否、pending非破壊。"
+    },
+    {
+      "id": "A31",
+      "area": "posttool-real-call",
+      "case": "tests/test_release_file_reservation.py のsuccess/tool_response/file_path/cwd/session_idとgrace worker実argvで通信断。edit巻戻し無し、exit0+監査、warn-open既存警告、unknown解放を成功扱いしない。別sessionendとは共通判定。"
+    },
+    {
+      "id": "A32",
+      "area": "single-registration-frontdoor",
+      "case": "source5入口(preregister/reregister/codex-bootstrap/agent-start/spawn)とdashboard JSON entrypointを追跡。全global dispatchがregister.shを通り、同じRuntimeClient処理、legacy byte/argv/stdout維持。"
+    },
+    {
+      "id": "A33",
+      "area": "caller-inventory",
+      "case": "基準grep48fileとsample/test9行、間接入口をinventory表と照合。未分類0、各changed/retained/deferredの根拠。"
+    },
+    {
+      "id": "A34",
+      "area": "renew-budget",
+      "case": "連続N編集で期限閾値までreceipt増加0、閾値以下でrenew1回、その後増加0"
+    },
+    {
+      "id": "A35",
+      "area": "renew-replay",
+      "case": "renew応答喪失→次の実PreToolUseで同UUID replay→receipt1件、coverage確認"
+    }
+  ],
+  "verification": {
+    "v1": "static repo/fixture/old docstring investigation only. No implementation, pytest, HTTP/server/tmux process, child, live data or Mail DB reads.",
+    "implementation": "Actual HTTP and shell-hook regression results are recorded per head in the PR. Full suite runs outside the sandbox.",
+    "installer": "run all installer-related tests, classify actual ps/launchctl/browser restricted nodes by name and send external runner to parent; do not claim full suite unless run",
+    "outside": "full suite run by parent; list omitted/failed/skipped nodes and exact log tail; no live changes"
+  },
+  "deferred": {
+    "PR4c": [
+      "global proxy and Gemini stdio execution",
+      "external session/launch binding",
+      "wake/reply watcher/delivery status and callbacks",
+      "daemon runtime"
+    ],
+    "PR5": [
+      "managed block location/migration"
+    ],
+    "PR6": [
+      "dashboard UI/graph/list readers; global resume writer is4b"
+    ],
+    "PR7": [
+      "activation/cutover/legacy root import/new window enrollment decision",
+      "OS writer stop/handoff"
+    ],
+    "not_added": [
+      "server schema/tool",
+      "SQLite state access",
+      "global auto contact approval",
+      "name availability API"
+    ]
+  },
+  "local_schemas": {
+    "child_state": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "orrery-global-child-state-v1"
+        },
+        "parent": {
+          "type": "object",
+          "properties": {
+            "client_name": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+            },
+            "server_instance_id": {
+              "type": "string"
+            },
+            "agent_id": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "client_name",
+            "server_instance_id",
+            "agent_id"
+          ],
+          "additionalProperties": false
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "const": "prepared"
+            },
+            {
+              "const": "launch-pending"
+            },
+            {
+              "const": "running"
+            },
+            {
+              "const": "launch-unknown"
+            },
+            {
+              "const": "retire-pending"
+            },
+            {
+              "const": "retained"
+            },
+            {
+              "const": "resume-planned"
+            },
+            {
+              "const": "resume-active"
+            },
+            {
+              "const": "purging"
+            },
+            {
+              "const": "purged"
+            }
+          ]
+        },
+        "launch_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "working_directory": {
+          "type": "string"
+        },
+        "tools_selection": {
+          "type": "object",
+          "properties": {
+            "base": {
+              "anyOf": [
+                {
+                  "const": "default"
+                },
+                {
+                  "const": "mail-only"
+                }
+              ]
+            },
+            "tools": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "base",
+            "tools"
+          ],
+          "additionalProperties": false
+        },
+        "task_delivery": {
+          "anyOf": [
+            {
+              "const": "embedded"
+            },
+            {
+              "const": "mail"
+            }
+          ]
+        },
+        "resume_expires_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active_request_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "parent",
+        "phase",
+        "launch_id",
+        "working_directory",
+        "tools_selection",
+        "task_delivery",
+        "resume_expires_at",
+        "active_request_id"
+      ],
+      "additionalProperties": false
+    },
+    "notes": [
+      "context/credential/schema3 self session record remain sole owner/provider-history authorities; child-state has no credential or duplicate child agent ID/window/provider session ID",
+      "tools_selection.tools is admitted by existing child_tools.normalize, not a second handwritten provider schema; same serialized selection feeds derived configs",
+      "working_directory is read-only filesystem input and must be a real absolute directory; no Mail routing effect",
+      "launch_id and active_request_id nullable is schema admission only; lifecycle transition code requires exact nonnull ID in active stages and fixed local reference checks",
+      "parent relationship snapshot is not authentication; current parent context and child credential authorize helper actions separately",
+      "local state is proposal-only; no new server tool or fixture output schema overrides"
+    ]
+  },
+  "previous_proposal_sha256": "ec7c277bcd353f899bc22496c6ec05f927f66246029df53690a9c3d244b0ea5a",
+  "revision_delta": {
+    "removed": [
+      "row無し/unknownに対する通常の登録再送禁止",
+      "row無しからoperator ID指定/abandonへ進む通常経路",
+      "register.shと並列の新しいchild adapter",
+      "無条件のglobal SessionEnd全件解放",
+      "globalの初期通信断を一律blockするQ4=A案"
+    ],
+    "added": [
+      "旧tool grep48 fileの全数表＋sample/test9補助行＋tool名が直接出ない間接入口の個別割当",
+      "同じname/token/metadata/binding再送の期待表7行",
+      "共通endの判定表と実SessionEnd→cleanup/逆順/重複の試験",
+      "Q1=A/Q2=同intent再送/Q3=A/Q4=Bの決定",
+      "実PreToolUse/PostToolUse payloadとphase別outage期待表"
+    ],
+    "review_response": [
+      {
+        "review": "HM P2-1",
+        "disposition": "採用",
+        "change": "既存register.shを唯一の入口、48 file全数表・間接入口へ展開"
+      },
+      {
+        "review": "HM P2-2 / WH P2-1",
+        "disposition": "採用",
+        "change": "同じintentの再送、衝突時だけowner照合、未送信専用abandon不要"
+      },
+      {
+        "review": "WH P2-2",
+        "disposition": "採用",
+        "change": "SessionEnd/cleanup共通end、別session live/unknown保護"
+      },
+      {
+        "review": "WH P3-1",
+        "disposition": "採用（Q4当否は決定済み）",
+        "change": "Q4=B、実hook入力とwarning/audit/exit期待を固定"
+      }
+    ]
+  },
+  "registration_retry_contract": {
+    "sole_pending": "existing credential.registration-pending.json; same name/token/program/model/task/binding replay. No second registration journal, new token/name, or server tool.",
+    "sequence": [
+      "validate fixed context/pending and shared child lock",
+      "retry S1 register(new) with identical saved values",
+      "if success validate row and activate through existing4a finalize order",
+      "only NAME_CONFLICT: authenticated parent resolve_agent_identity(saved name) → child token whois(candidate ID) → validate exact binding/generation/fingerprint → activate same ID"
+    ],
+    "existing_create_change": "do not delete child pending on NAME_CONFLICT before owner check. Definitive NAME_INVALID has no retry value and reports invalid input; never silently chooses a different name for an existing pending.",
+    "communication_failure": "retain same pending and retry same intent after transport restoration. Parent unavailable/resolve unavailable is not proof another owner claimed the name. No routine operator abandon/new root for row-less/unknown.",
+    "foreign_owner": "only a definite child owner credential rejection after resolving the conflicting ID goes to minimal explicit operator inspection/abandon. Wrong binding/schema/network remains unknown, not foreign owner.",
+    "exception_exit": "operator compares expected pending SHA256 under same child lock, acknowledges conflicting ownership, marks that same pending terminal without deleting credential evidence; current root cannot register/launch again. New identity requires explicit new root. Separate export/backup copy is not made. Never retire the foreign ID.",
+    "late_activation": "same root helper serializes whole register→activation with child lock; before every output verifies current pending. Terminal exception blocks ordinary create/finalize. Late remote outcome remains observation; operator exception is not rollback.",
+    "namespace_boundary": "repeat safety relies on same name remaining the registration key while intent unresolved; concurrent external rename/delete is not covered as unconditional idempotence. Such operator mutation must preserve/reconcile pending, not cause automatic re-registration under a new key.",
+    "expectation_rows": [
+      [
+        "unsent",
+        "retry same name/token",
+        "create once",
+        "same ID/token activation"
+      ],
+      [
+        "committed response lost",
+        "retry → NAME_CONFLICT → parent resolve → child whois",
+        "existing row only",
+        "same ID finalize"
+      ],
+      [
+        "first delayed, retry first",
+        "retry creates; delayed request NAME_CONFLICT",
+        "one row",
+        "same ID/token"
+      ],
+      [
+        "first delayed, first commits before retry",
+        "retry NAME_CONFLICT → owner check",
+        "one row",
+        "same ID/token"
+      ],
+      [
+        "foreign row uses name",
+        "NAME_CONFLICT → resolve → child whois definitive owner refusal",
+        "foreign row unchanged",
+        "retain evidence; explicit exception only"
+      ],
+      [
+        "retry/resolve transport fails",
+        "retain pending",
+        "unknown",
+        "same intent when restored"
+      ],
+      [
+        "binding/schema/credential generation mismatch",
+        "reject; do not adopt candidate ID",
+        "unchanged",
+        "preserve evidence, explicit binding diagnosis"
+      ]
+    ]
+  },
+  "end_contract": {
+    "one_entry": "register.sh end operation, shared by release-all SessionEnd and cleanup; global SessionStart/resume use same local operation lock. Liveness implementation is shared, not duplicated in hook.",
+    "identity": "stable ID+current context, current session_id/pane_id/launch_id excluded only after verifying same binding. name and PID alone do not prove ownership; pre-boot PID is not current evidence.",
+    "rows": [
+      [
+        "other session live",
+        "skip release",
+        "skip retire",
+        "keep rows/credential"
+      ],
+      [
+        "other session unknown",
+        "skip release + audit reason",
+        "skip retire + audit reason",
+        "keep rows/credential"
+      ],
+      [
+        "last verified standalone",
+        "release self ACTIVE in keyset<=100-ID batches",
+        "no retire",
+        "keep owner credential"
+      ],
+      [
+        "last verified child",
+        "delegate to same end; no separate release",
+        "retire once and let S2c release ACTIVE",
+        "retained credential/history"
+      ]
+    ],
+    "race": "liveness enter/end is serialized in same local mutex; never hold inverse lock order. Unknown external process/session evidence is kept as unknown. Session liveness records are execution evidence, not new lease ownership state.",
+    "cleanup_repeat": "inspect before retrying non-receipt retire; target already retired means preserve retained state and finish local bookkeeping, do not re-stamp retirement blindly.",
+    "standalone_batch": "list own ACTIVE keyset at frozen max ID; exact<=100IDs per existing mutation intent. New reservations after page0 excluded. No new session lease table.",
+    "legacy": "existing legacy end chain unchanged; its unconditional SessionEnd release is a known separate limitation, not fixed by global-only dispatch."
+  },
+  "outage_contract": {
+    "policy_source": "hooks/session-identity-policy.sh: agentstack_mail_outage_policy / agentstack_outage_warning_text / agentstack_should_report_outage / audit; one implementation shared legacy/global",
+    "config": {
+      "variable": "AGENTSTACK_MAIL_OUTAGE_POLICY",
+      "default": "warn-open",
+      "accepted": [
+        "warn-open",
+        "block"
+      ],
+      "unknown_value": "block",
+      "refuse_label": "existing value block; no new refuse alias"
+    },
+    "warning": "reuse exact agentstack_outage_warning_text with safe endpoint/recovery substitution. Must retain: Editing continues, uncoordinated: another agent may be changing the same files and neither side will see it. Existing report-throttling/audit semantics unchanged.",
+    "rows": [
+      [
+        "PreToolUse initial connection refused/timeout",
+        "default or explicit warn-open",
+        "exit0 + existing warning + audit",
+        "no fabricated coverage/registration and no pending deletion"
+      ],
+      [
+        "PreToolUse initial connection refused/timeout",
+        "block",
+        "exit2 + existing refusal/recovery text + audit",
+        "no edit permission"
+      ],
+      [
+        "PreToolUse context/owner/binding/schema/HTTP/MCP refusal",
+        "either",
+        "exit2 + exact classified reason",
+        "never converted to transport outage"
+      ],
+      [
+        "PreToolUse definitive not-covered then retry transport fails",
+        "either",
+        "exit2 + existing became-unreachable warning",
+        "negative coverage is not overwritten by outage opt-out"
+      ],
+      [
+        "PreToolUse renew may have committed, response lost",
+        "either",
+        "exit2 + pending preserved",
+        "same intent replay required before claiming checked coverage"
+      ],
+      [
+        "PostToolUse release transport fails",
+        "either",
+        "completed edit is not rolled back; hook exit0 + failure audit; warn-open also uses common visible outage warning",
+        "release outcome unknown/pending preserved; worker does not report released"
+      ],
+      [
+        "PostToolUse context/owner/binding invalid",
+        "either",
+        "hook exit0 + classified failure audit, no release",
+        "not converted to warn-open; next PreToolUse blocks until corrected"
+      ]
+    ],
+    "why_post_exit0": "PostToolUse follows an already completed edit and the existing release hook is best-effort. block controls permission before edits; a release hook cannot retroactively refuse/undo a write. This distinction is explicit in docs/tests.",
+    "audit": "current endpoint and non-secret stable caller reference only; no token/raw body. Unmanaged flag/identity is not manufactured for warn-open."
+  },
+  "decisions": [
+    {
+      "id": "Q1",
+      "selected": "A",
+      "contract": "4b明示prepare-only、global通常起動は4c不足を登録前拒否"
+    },
+    {
+      "id": "Q2",
+      "selected": "same-intent-retry",
+      "contract": "registration_retry_contractに統合、server tool追加無し"
+    },
+    {
+      "id": "Q3",
+      "selected": "A",
+      "contract": "新規unmapped、既存mappingだけtouch/verify"
+    },
+    {
+      "id": "Q4",
+      "selected": "B",
+      "contract": "globalも既定warn-open/警告/監査とblock維持"
+    }
+  ],
+  "review_questions": [],
+  "caller_file_inventory": {
+    "base": "a21951c8617348f85e7328e8c734021d081547f9",
+    "grep_pattern": "(register_agent|whois|file_reservation_paths|renew_file_reservations|release_file_reservations|retire_agent|unretire_agent|send_message|set_contact_policy|health_check|fetch_inbox|ensure_project|macro_contact_handshake|respond_contact)",
+    "search_roots": [
+      "bin",
+      "hooks",
+      "skills",
+      "scripts",
+      "dashboard",
+      "integrations/codex_app",
+      "claude",
+      "codex"
+    ],
+    "counts": {
+      "source_and_docs": 48,
+      "sample": 1,
+      "integration_test": 8,
+      "indirect_extra": 12
+    },
+    "rows": [
+      {
+        "id": "F11",
+        "file": "bin/lib/agentstack-register.sh",
+        "legacy_tools": [
+          "ensure_project",
+          "register_agent",
+          "set_contact_policy",
+          "unretire_agent",
+          "whois"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "253cfa9461f39b32f8b0548d9de8ddfe383c093ef00b3b38f23df3d28ee10b52"
+      },
+      {
+        "id": "F01",
+        "file": "bin/agent-start",
+        "legacy_tools": [
+          "health_check"
+        ],
+        "assigned": "4b (既存4a保持/接点確認)",
+        "action": "retained-or-minimal-wiring",
+        "global_target": "register.sh → 既存RuntimeClient/自己schema3 index/共通policy",
+        "reason": "旧name/project再探索無し。必要なchild接点だけ改修",
+        "source_sha256": "cd2fef0324d75fe8470795d25b6b2411da06f4f925a774056236e7b86931a1a7"
+      },
+      {
+        "id": "F02",
+        "file": "bin/agentstack-await-reply",
+        "legacy_tools": [
+          "fetch_inbox"
+        ],
+        "assigned": "4c",
+        "action": "deferred",
+        "global_target": "既存global固定拒否を維持、transport/proxy/wakeは4c",
+        "reason": "4bでは準備できてもこの実行をreadyとしない",
+        "source_sha256": "0287978a321bbedc335ca3ba6eef45cd444c8c21b9fd42aa7e4b527cd306bdd2"
+      },
+      {
+        "id": "F03",
+        "file": "bin/agentstack-codex-bootstrap",
+        "legacy_tools": [
+          "ensure_project",
+          "health_check",
+          "register_agent",
+          "unretire_agent"
+        ],
+        "assigned": "4b (既存4a保持/接点確認)",
+        "action": "retained-or-minimal-wiring",
+        "global_target": "register.sh → 既存RuntimeClient/自己schema3 index/共通policy",
+        "reason": "旧name/project再探索無し。必要なchild接点だけ改修",
+        "source_sha256": "81f742ce75461db9e481f962781d796fae7fbaabdce3ec4b4b31c318af733310"
+      },
+      {
+        "id": "F04",
+        "file": "bin/agentstack-daemon",
+        "legacy_tools": [
+          "whois"
+        ],
+        "assigned": "4c",
+        "action": "deferred",
+        "global_target": "既存global固定拒否を維持、transport/proxy/wakeは4c",
+        "reason": "4bでは準備できてもこの実行をreadyとしない",
+        "source_sha256": "afbbe378afa7b3d89b1e4fc671946da612218fe3600e966793e154ad2c31a3be"
+      },
+      {
+        "id": "F05",
+        "file": "bin/agentstack-gemini-bootstrap",
+        "legacy_tools": [
+          "health_check"
+        ],
+        "assigned": "4b (既存4a保持/接点確認)",
+        "action": "retained-or-minimal-wiring",
+        "global_target": "register.sh → 既存RuntimeClient/自己schema3 index/共通policy",
+        "reason": "旧name/project再探索無し。必要なchild接点だけ改修",
+        "source_sha256": "a634edffe2b18641cab1520e5d614447192d0164b1b642d0740517c696b8ed7e"
+      },
+      {
+        "id": "F06",
+        "file": "bin/agentstack-gemini-child-mail",
+        "legacy_tools": [
+          "retire_agent",
+          "send_message"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "1ad99d4154f84b49b426d18269876a5ca3ccb46699eab69a709fd2fd9f6ee09c"
+      },
+      {
+        "id": "F07",
+        "file": "bin/agentstack-mailctl",
+        "legacy_tools": [
+          "health_check"
+        ],
+        "assigned": "PR6",
+        "action": "deferred",
+        "global_target": "画面/diagnostic reader。4bの新規server schema追加無し",
+        "reason": "dashboard/server.py内のresume writerだけ4bへ切り出す",
+        "source_sha256": "cdf90755c59ab3608d9084a8c1bd06dffa89be78b732f206ff56b9d71a3833d7"
+      },
+      {
+        "id": "F08",
+        "file": "bin/agentstack-persistent",
+        "legacy_tools": [
+          "fetch_inbox",
+          "send_message",
+          "whois"
+        ],
+        "assigned": "4b (既存4a保持/接点確認)",
+        "action": "retained-or-minimal-wiring",
+        "global_target": "register.sh → 既存RuntimeClient/自己schema3 index/共通policy",
+        "reason": "旧name/project再探索無し。必要なchild接点だけ改修",
+        "source_sha256": "e10bf9ea77d9a01bb71fe5213cc8606ae6331430b6e1dc4f2499325d9e785915"
+      },
+      {
+        "id": "F09",
+        "file": "bin/agentstack-preregister-child",
+        "legacy_tools": [
+          "ensure_project",
+          "register_agent",
+          "whois"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "c390c7b6f4fc98e8861ed6cbe1f0b7522cfac967d327b7f983082dda61ea0657"
+      },
+      {
+        "id": "F10",
+        "file": "bin/agentstack-reregister",
+        "legacy_tools": [
+          "register_agent"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "d3c36d4a0f2da3870b94d3cf8a0dc77742ab2c70e3374cbe10d1fcb147b8a1af"
+      },
+      {
+        "id": "F12",
+        "file": "bin/lib/agentstack-scientists.sh",
+        "legacy_tools": [
+          "register_agent"
+        ],
+        "assigned": "4b",
+        "action": "retained",
+        "global_target": "候補name生成のみ、availability判定はregister.shのNAME_CONFLICT",
+        "reason": "コメントのtool名hitで直接HTTP callerではない",
+        "source_sha256": "65adb369be19b43c854184ae35fdf4c876d21165c3135d5670875821306e145e"
+      },
+      {
+        "id": "F13",
+        "file": "bin/lib/runtime_client.py",
+        "legacy_tools": [
+          "ensure_project",
+          "fetch_inbox",
+          "health_check",
+          "macro_contact_handshake",
+          "register_agent",
+          "respond_contact",
+          "retire_agent",
+          "set_contact_policy",
+          "unretire_agent",
+          "whois"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "4dc56e54f7d2640660715bb15193cacce02003fb30951788f9544f67903bb986"
+      },
+      {
+        "id": "F14",
+        "file": "claude/CLAUDE.md",
+        "legacy_tools": [
+          "ensure_project",
+          "fetch_inbox",
+          "file_reservation_paths",
+          "register_agent",
+          "release_file_reservations",
+          "renew_file_reservations",
+          "send_message",
+          "whois"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "55fd02c5f2124e9aeebe21105f8080719f90c30514132d2782708428d6c5ffc8"
+      },
+      {
+        "id": "F15",
+        "file": "codex/AGENTS.md",
+        "legacy_tools": [
+          "ensure_project",
+          "fetch_inbox",
+          "file_reservation_paths",
+          "register_agent",
+          "release_file_reservations",
+          "renew_file_reservations",
+          "send_message",
+          "whois"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "384800a8a8d808c3d6e21f2f4355b0fc156685f2718c45989871b98bfed1ccfc"
+      },
+      {
+        "id": "F16",
+        "file": "dashboard/index.html",
+        "legacy_tools": [
+          "register_agent",
+          "send_message"
+        ],
+        "assigned": "PR6",
+        "action": "deferred",
+        "global_target": "画面/diagnostic reader。4bの新規server schema追加無し",
+        "reason": "dashboard/server.py内のresume writerだけ4bへ切り出す",
+        "source_sha256": "00bb8a8f4f05a88aebce508ec3b60276ed20befcbab4309fef23705d68391db3"
+      },
+      {
+        "id": "F17",
+        "file": "dashboard/server.py",
+        "legacy_tools": [
+          "fetch_inbox",
+          "register_agent",
+          "retire_agent",
+          "send_message",
+          "set_contact_policy",
+          "unretire_agent"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "45016ebcb9d8d722741c97974f4eb5bac126b9839e47adf43f00c06c5fdca168"
+      },
+      {
+        "id": "F18",
+        "file": "hooks/check-agent-registered.sh",
+        "legacy_tools": [
+          "ensure_project",
+          "fetch_inbox",
+          "register_agent"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "d38609bf286da0daf065e08fc800424dd4df2518e2be9aec9b9d78e69a8fb39a"
+      },
+      {
+        "id": "F19",
+        "file": "hooks/check-file-reservation.sh",
+        "legacy_tools": [
+          "register_agent",
+          "renew_file_reservations"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "2bf3bfb1e328711920bdf183e97517af155b153e86cbeefc204c087491f0be85"
+      },
+      {
+        "id": "F20",
+        "file": "hooks/child_resume.py",
+        "legacy_tools": [
+          "fetch_inbox",
+          "send_message",
+          "whois"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "82532a2e8deed6925805897d14e354d95ad892911b5fce17f7dbd988dc99f27c"
+      },
+      {
+        "id": "F21",
+        "file": "hooks/claude-initial-task-status.py",
+        "legacy_tools": [
+          "send_message"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "8e6a2981b48b7b2d18e29511457e10c404e502c5332bedda0ae0185eace92034"
+      },
+      {
+        "id": "F22",
+        "file": "hooks/cleanup-child-agent.sh",
+        "legacy_tools": [
+          "register_agent",
+          "release_file_reservations",
+          "retire_agent"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "71fbfe3934c8d9c154cc497adf9b42f9be1399c151bf373de1aff0e031e5d9c5"
+      },
+      {
+        "id": "F23",
+        "file": "hooks/mark-agent-registered.sh",
+        "legacy_tools": [
+          "register_agent"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "c0eced401896e1b0097f5fa616c30618190961cb22daaa709c17ee8d3442c65e"
+      },
+      {
+        "id": "F24",
+        "file": "hooks/record-session-index.py",
+        "legacy_tools": [
+          "register_agent"
+        ],
+        "assigned": "4b (既存4a保持/接点確認)",
+        "action": "retained-or-minimal-wiring",
+        "global_target": "register.sh → 既存RuntimeClient/自己schema3 index/共通policy",
+        "reason": "旧name/project再探索無し。必要なchild接点だけ改修",
+        "source_sha256": "52cdcbeaac026a1d9d585822b37b09ec4254e76ac9b19fe4caab76ffcdffdddb"
+      },
+      {
+        "id": "F25",
+        "file": "hooks/reservation-common.sh",
+        "legacy_tools": [
+          "release_file_reservations"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "fe3f2d12a80f5c20292b119f31184ad8bee0261497a1ff277e3a97853dcbac23"
+      },
+      {
+        "id": "F26",
+        "file": "hooks/resolve-agent-name.sh",
+        "legacy_tools": [
+          "register_agent"
+        ],
+        "assigned": "4b (既存4a保持/接点確認)",
+        "action": "retained-or-minimal-wiring",
+        "global_target": "register.sh → 既存RuntimeClient/自己schema3 index/共通policy",
+        "reason": "旧name/project再探索無し。必要なchild接点だけ改修",
+        "source_sha256": "e69288a7e252e9ae5b63fb25294335c802307e36f708633490a7f69325aa5a36"
+      },
+      {
+        "id": "F27",
+        "file": "hooks/session-identity-policy.sh",
+        "legacy_tools": [
+          "register_agent"
+        ],
+        "assigned": "4b (既存4a保持/接点確認)",
+        "action": "retained-or-minimal-wiring",
+        "global_target": "register.sh → 既存RuntimeClient/自己schema3 index/共通policy",
+        "reason": "旧name/project再探索無し。必要なchild接点だけ改修",
+        "source_sha256": "ede224c7e3a7f94b1bb061daa71c5cc73b1bdc29d49f6f1bc1f659871e8667c7"
+      },
+      {
+        "id": "F28",
+        "file": "hooks/session-start-reminder.sh",
+        "legacy_tools": [
+          "ensure_project",
+          "fetch_inbox",
+          "health_check",
+          "register_agent",
+          "whois"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "177c9bba18e847e589919a8e559c42198ee26c522b6d2f068e54130e57cd2604"
+      },
+      {
+        "id": "F29",
+        "file": "hooks/settings.template.json",
+        "legacy_tools": [
+          "ensure_project",
+          "fetch_inbox",
+          "file_reservation_paths",
+          "health_check",
+          "register_agent",
+          "release_file_reservations",
+          "renew_file_reservations",
+          "respond_contact",
+          "send_message",
+          "set_contact_policy",
+          "whois"
+        ],
+        "assigned": "4b",
+        "action": "changed-if-needed",
+        "global_target": "旧tool名はglobalでも同名、既存hook matcherを全31catalogと照合",
+        "reason": "新matcherを並行追加せず既存マッチ規則を共有",
+        "source_sha256": "fbd98c46ea24777d2f00ba94c3c2a57885e2041d90ee56d4fa763f6885d928e8"
+      },
+      {
+        "id": "F30",
+        "file": "hooks/spawn_child.sh",
+        "legacy_tools": [
+          "ensure_project",
+          "fetch_inbox",
+          "file_reservation_paths",
+          "health_check",
+          "register_agent",
+          "release_file_reservations",
+          "renew_file_reservations",
+          "retire_agent",
+          "send_message",
+          "whois"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "043a3b42929a7888660515605225e1dd0a810fcd4669e4f3c115ab39a7191d09"
+      },
+      {
+        "id": "F31",
+        "file": "hooks/watch_agent_mail_signals.sh",
+        "legacy_tools": [
+          "fetch_inbox"
+        ],
+        "assigned": "4c",
+        "action": "deferred",
+        "global_target": "既存global固定拒否を維持、transport/proxy/wakeは4c",
+        "reason": "4bでは準備できてもこの実行をreadyとしない",
+        "source_sha256": "bb74304ae98e9ae153a663e4ea7018b35a65d8b88215c42965b988007defd7b6"
+      },
+      {
+        "id": "F32",
+        "file": "integrations/codex_app/README.md",
+        "legacy_tools": [
+          "register_agent"
+        ],
+        "assigned": "4c",
+        "action": "deferred",
+        "global_target": "proxy利用説明、実契約は4c",
+        "reason": "同梱coordinate skillの文言は4b、proxy実行対応は未完了",
+        "source_sha256": "6fa634175ef4899712fa568361dd7c62452a89b03765ce9fb78fe3d2d121404b"
+      },
+      {
+        "id": "F33",
+        "file": "integrations/codex_app/plugin/skills/coordinate/SKILL.md",
+        "legacy_tools": [
+          "fetch_inbox"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "377e7e181550fa32e0b1519d31b287ab2ac4e57939e7c6e4e11cd6e2f19e5421"
+      },
+      {
+        "id": "F34",
+        "file": "integrations/codex_app/src/agentstack_codex_app/agent_mail_client.py",
+        "legacy_tools": [
+          "fetch_inbox",
+          "file_reservation_paths",
+          "register_agent",
+          "release_file_reservations",
+          "renew_file_reservations",
+          "retire_agent",
+          "send_message",
+          "whois"
+        ],
+        "assigned": "4c",
+        "action": "deferred",
+        "global_target": "既存global固定拒否を維持、transport/proxy/wakeは4c",
+        "reason": "4bでは準備できてもこの実行をreadyとしない",
+        "source_sha256": "d00bb7d9592c82abe4b0482da976e61ae8d439dabd47d229c8bb1e55d5085aeb"
+      },
+      {
+        "id": "F35",
+        "file": "integrations/codex_app/src/agentstack_codex_app/daemon.py",
+        "legacy_tools": [
+          "register_agent",
+          "retire_agent",
+          "whois"
+        ],
+        "assigned": "4c",
+        "action": "deferred",
+        "global_target": "既存global固定拒否を維持、transport/proxy/wakeは4c",
+        "reason": "4bでは準備できてもこの実行をreadyとしない",
+        "source_sha256": "ff0c98979745258667c32cb8fd7a41cabd568417263480e13ff6bd3ddfe7b1b3"
+      },
+      {
+        "id": "F36",
+        "file": "integrations/codex_app/src/agentstack_codex_app/daemon_runtime.py",
+        "legacy_tools": [
+          "fetch_inbox",
+          "health_check",
+          "register_agent",
+          "send_message",
+          "whois"
+        ],
+        "assigned": "4c",
+        "action": "deferred",
+        "global_target": "既存global固定拒否を維持、transport/proxy/wakeは4c",
+        "reason": "4bでは準備できてもこの実行をreadyとしない",
+        "source_sha256": "63056f09aad80d1ccb5ae8fdbbf4ea18b519e13e59cbc0f35c3b968df61f0240"
+      },
+      {
+        "id": "F37",
+        "file": "integrations/codex_app/src/agentstack_codex_app/hook_entry.py",
+        "legacy_tools": [
+          "fetch_inbox"
+        ],
+        "assigned": "4c",
+        "action": "deferred",
+        "global_target": "既存global固定拒否を維持、transport/proxy/wakeは4c",
+        "reason": "4bでは準備できてもこの実行をreadyとしない",
+        "source_sha256": "646f2a44648a36fbd3565a989dea6035e89cc8f64bd0ed797f1396a02ab059fa"
+      },
+      {
+        "id": "F38",
+        "file": "integrations/codex_app/src/agentstack_codex_app/mcp_server.py",
+        "legacy_tools": [
+          "fetch_inbox",
+          "send_message",
+          "whois"
+        ],
+        "assigned": "4c",
+        "action": "deferred",
+        "global_target": "既存global固定拒否を維持、transport/proxy/wakeは4c",
+        "reason": "4bでは準備できてもこの実行をreadyとしない",
+        "source_sha256": "268bd0e2f41adee42be357dba3c3d683ed4ca042f0ada8c7c13f63fe0f49f2be"
+      },
+      {
+        "id": "F39",
+        "file": "integrations/codex_app/src/agentstack_codex_app/wake.py",
+        "legacy_tools": [
+          "fetch_inbox",
+          "send_message",
+          "whois"
+        ],
+        "assigned": "4c",
+        "action": "deferred",
+        "global_target": "既存global固定拒否を維持、transport/proxy/wakeは4c",
+        "reason": "4bでは準備できてもこの実行をreadyとしない",
+        "source_sha256": "0e041894bc388e87db5ef0fc1b3588e8ca0bf36f55a65556333df6ded9498e13"
+      },
+      {
+        "id": "F40",
+        "file": "scripts/canary-embed-task.sh",
+        "legacy_tools": [
+          "retire_agent",
+          "send_message"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "469e8d599bdfe335e95fff274d6231ca03a6d005fcba273c8762b474a89cae3e"
+      },
+      {
+        "id": "F41",
+        "file": "scripts/doctor.sh",
+        "legacy_tools": [
+          "health_check",
+          "register_agent"
+        ],
+        "assigned": "PR6",
+        "action": "deferred",
+        "global_target": "画面/diagnostic reader。4bの新規server schema追加無し",
+        "reason": "dashboard/server.py内のresume writerだけ4bへ切り出す",
+        "source_sha256": "4b69a17578a56c2339895b575778277c27ebab8a1d23dd543767ba11e2224304"
+      },
+      {
+        "id": "F42",
+        "file": "scripts/install.sh",
+        "legacy_tools": [
+          "health_check"
+        ],
+        "assigned": "4b payload / health; activationはPR7",
+        "action": "minimal-wiring",
+        "global_target": "必要pure helper/fixtureを既存宣言1か所、legacy health契約維持",
+        "reason": "インストール後のglobal切替を先取りしない",
+        "source_sha256": "ece8fb5f10b0f7b5c59bf65157cd24fa9fc9286544cfcc45b729369008546282"
+      },
+      {
+        "id": "F43",
+        "file": "scripts/lib/mail_required_features.json",
+        "legacy_tools": [
+          "register_agent"
+        ],
+        "assigned": "PR7",
+        "action": "deferred",
+        "global_target": "旧tool必要能力のcutover/update gate",
+        "reason": "activation=false維持、released requirementを4bで切り替えない",
+        "source_sha256": "52561289570bf2220d63ac5d77f80891975554aad49ba5048161ff25138cc5cf"
+      },
+      {
+        "id": "F44",
+        "file": "scripts/lib/mail_update_notice.py",
+        "legacy_tools": [
+          "health_check",
+          "whois"
+        ],
+        "assigned": "PR6",
+        "action": "deferred",
+        "global_target": "画面/diagnostic reader。4bの新規server schema追加無し",
+        "reason": "dashboard/server.py内のresume writerだけ4bへ切り出す",
+        "source_sha256": "cd81032ba343418d75f4cc3d40d4073a1ddec5c9cfe60aded5697c49eb6f8099"
+      },
+      {
+        "id": "F45",
+        "file": "scripts/selftest.py",
+        "legacy_tools": [
+          "ensure_project",
+          "fetch_inbox",
+          "file_reservation_paths",
+          "health_check",
+          "register_agent",
+          "release_file_reservations",
+          "respond_contact",
+          "retire_agent",
+          "send_message"
+        ],
+        "assigned": "4b (global入口拒否/案内)、実E2Eは4c",
+        "action": "minimal-wiring",
+        "global_target": "globalでlegacy selftestを誤実行しない、GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C",
+        "reason": "未配線委任を成功と判定しない。旧selftest不変",
+        "source_sha256": "592a00c34692dc015e7bde9ca9796659dbd5778feca26574a818d80b966ec1c4"
+      },
+      {
+        "id": "F46",
+        "file": "scripts/windows/codex_launcher.py",
+        "legacy_tools": [
+          "fetch_inbox",
+          "send_message",
+          "whois"
+        ],
+        "assigned": "対象外",
+        "action": "retained",
+        "global_target": "S1 Unix契約対象外の固定拒否を維持",
+        "reason": "native Windowsのtransport代替は別設計、WSLはUnix client",
+        "source_sha256": "3f7ec93bfc1586ad82cb16b86152846d111b031f9e4e4e921cb6e18046d2346d"
+      },
+      {
+        "id": "F47",
+        "file": "scripts/windows/windows_local.py",
+        "legacy_tools": [
+          "health_check"
+        ],
+        "assigned": "対象外",
+        "action": "retained",
+        "global_target": "S1 Unix契約対象外の固定拒否を維持",
+        "reason": "native Windowsのtransport代替は別設計、WSLはUnix client",
+        "source_sha256": "d65064023b1a589667d5a55748eb87d0a40a8cd6a40ce27c63ae853949dea2d8"
+      },
+      {
+        "id": "F48",
+        "file": "skills/delegate/SKILL.md",
+        "legacy_tools": [
+          "ensure_project",
+          "fetch_inbox",
+          "file_reservation_paths",
+          "macro_contact_handshake",
+          "register_agent",
+          "release_file_reservations",
+          "renew_file_reservations",
+          "respond_contact",
+          "send_message",
+          "set_contact_policy",
+          "whois"
+        ],
+        "assigned": "4b",
+        "action": "changed",
+        "global_target": "既存register.sh のmode dispatch → RuntimeClientとserver正本tool",
+        "reason": "各具体toolは20群の対応表を参照、旧mode不変",
+        "source_sha256": "21f1682a8d3904c32b0cd87e56988ff9d65ec1edf4c4668b9873d99b7a2b55a6"
+      }
+    ],
+    "supplemental_hits": [
+      {
+        "file": "integrations/codex_app/tests/test_agent_mail_client.py",
+        "assigned": "4cの既存proxy試験（保持、4b実装成功と扱わない）"
+      },
+      {
+        "file": "integrations/codex_app/tests/test_agent_mail_client_integration.py",
+        "assigned": "4cの既存proxy試験（保持、4b実装成功と扱わない）"
+      },
+      {
+        "file": "integrations/codex_app/tests/test_daemon.py",
+        "assigned": "4cの既存proxy試験（保持、4b実装成功と扱わない）"
+      },
+      {
+        "file": "integrations/codex_app/tests/test_direct_binding.py",
+        "assigned": "4cの既存proxy試験（保持、4b実装成功と扱わない）"
+      },
+      {
+        "file": "integrations/codex_app/tests/test_hook_entry.py",
+        "assigned": "4cの既存proxy試験（保持、4b実装成功と扱わない）"
+      },
+      {
+        "file": "integrations/codex_app/tests/test_mcp_server.py",
+        "assigned": "4cの既存proxy試験（保持、4b実装成功と扱わない）"
+      },
+      {
+        "file": "integrations/codex_app/tests/test_session_bound_e2e.py",
+        "assigned": "4cの既存proxy試験（保持、4b実装成功と扱わない）"
+      },
+      {
+        "file": "integrations/codex_app/tests/test_token_strict_auth.py",
+        "assigned": "4cの既存proxy試験（保持、4b実装成功と扱わない）"
+      },
+      {
+        "file": "scripts/install-state.sample.json",
+        "assigned": "installer fixture照合"
+      }
+    ],
+    "indirect_rows": [
+      {
+        "file": "bin/agentstack-enroll",
+        "assigned": "4a保持",
+        "reason": "旧tool文字列なしの間接helper。4bは既存register.sh/RuntimeClientの入口へ接続、4aは保持、4cのbinding実装は未対応",
+        "source_sha256": "dda6851078c8dccbacdf35d7ca3b5a0c7136c4325232113b6e652b5daf2a8c69"
+      },
+      {
+        "file": "bin/agentstack-runtime-client",
+        "assigned": "4a保持",
+        "reason": "旧tool文字列なしの間接helper。4bは既存register.sh/RuntimeClientの入口へ接続、4aは保持、4cのbinding実装は未対応",
+        "source_sha256": "fc3a553b1b599aa527a3b840123d366c70e6fa285317ea4a993136d1d5d5a3ea"
+      },
+      {
+        "file": "bin/agentstack-purge-child-resume",
+        "assigned": "4b",
+        "reason": "旧tool文字列なしの間接helper。4bは既存register.sh/RuntimeClientの入口へ接続、4aは保持、4cのbinding実装は未対応",
+        "source_sha256": "e4d4f5e9752d62cfb3c06f0f9f83ed0a57fa6a3884d8d659e9625e2d64eee6a1"
+      },
+      {
+        "file": "bin/agentstack-resume",
+        "assigned": "4b",
+        "reason": "旧tool文字列なしの間接helper。4bは既存register.sh/RuntimeClientの入口へ接続、4aは保持、4cのbinding実装は未対応",
+        "source_sha256": "cab5bdd4574d7d59bdfcc9513ff9172d0513d29861b1704b65415cf8b0e89ff6"
+      },
+      {
+        "file": "hooks/spawn_gemini_child.sh",
+        "assigned": "4b",
+        "reason": "旧tool文字列なしの間接helper。4bは既存register.sh/RuntimeClientの入口へ接続、4aは保持、4cのbinding実装は未対応",
+        "source_sha256": "89cabfdd4b986a7ffc799435582e29d983b90b149bdc20b08ae1e21c5bf1ea96"
+      },
+      {
+        "file": "hooks/spawn_gemini_preregistered.sh",
+        "assigned": "4b",
+        "reason": "旧tool文字列なしの間接helper。4bは既存register.sh/RuntimeClientの入口へ接続、4aは保持、4cのbinding実装は未対応",
+        "source_sha256": "53d82721b77cdb1b1ca1612835afa235119c4714b2fea0647ef0f90da63e2f6f"
+      },
+      {
+        "file": "hooks/child_tools.py",
+        "assigned": "4b",
+        "reason": "旧tool文字列なしの間接helper。4bは既存register.sh/RuntimeClientの入口へ接続、4aは保持、4cのbinding実装は未対応",
+        "source_sha256": "33143521397ec1331cd81dc424b359f0b85415390bab2a790d0c27822effbf90"
+      },
+      {
+        "file": "hooks/release-file-reservation.sh",
+        "assigned": "4b",
+        "reason": "旧tool文字列なしの間接helper。4bは既存register.sh/RuntimeClientの入口へ接続、4aは保持、4cのbinding実装は未対応",
+        "source_sha256": "666660dd20e345bd57ce9efb70716d07bdcea18544d8d62aa735269e09228180"
+      },
+      {
+        "file": "hooks/release-file-reservation-worker.py",
+        "assigned": "4b",
+        "reason": "旧tool文字列なしの間接helper。4bは既存register.sh/RuntimeClientの入口へ接続、4aは保持、4cのbinding実装は未対応",
+        "source_sha256": "fdb7871a31e4d69a73f6ef386c639485dd141b520000a0b2d877e79e43fa07a9"
+      },
+      {
+        "file": "hooks/release-all-reservations.sh",
+        "assigned": "4b",
+        "reason": "旧tool文字列なしの間接helper。4bは既存register.sh/RuntimeClientの入口へ接続、4aは保持、4cのbinding実装は未対応",
+        "source_sha256": "c9242da506aa6e0a7436fd476de1e22491676d8406f5812304bd5ae67c2df6ce"
+      },
+      {
+        "file": "skills/log/SKILL.md",
+        "assigned": "4b",
+        "reason": "旧tool文字列なしの間接helper。4bは既存register.sh/RuntimeClientの入口へ接続、4aは保持、4cのbinding実装は未対応",
+        "source_sha256": "007a7a9784db6ebc3241719da4ae84e4452324fe4dd10723b9e43224d70a8db1"
+      },
+      {
+        "file": "hooks/prepare-codex-session-binding.py",
+        "assigned": "4c",
+        "reason": "旧tool文字列なしの間接helper。4bは既存register.sh/RuntimeClientの入口へ接続、4aは保持、4cのbinding実装は未対応",
+        "source_sha256": "94e2ca2718d1180d4dc4fbb8f178e2c56c6556dba65141843c61b4094a0ce59d"
+      }
+    ],
+    "coverage_rule": "broad grep hit57=48source/docs + sample1 + integration tests8. Each hit has exactly one row; direct call vs comment/matcher/docs is not inferred from hit count."
+  }
+}

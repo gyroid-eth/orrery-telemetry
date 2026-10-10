@@ -1055,3 +1055,21 @@ ags_warn_tcc_access() {
   } >&2
   return 0
 }
+
+ags_global_call_json() {
+  python3 "$AGS_REGISTER_LIB_DIR/runtime_client.py" call-json "$1"
+}
+
+# Explicit global child operations; 125 means the default legacy path continues.
+ags_global_entry() {
+  python3 "$AGS_REGISTER_LIB_DIR/runtime_client.py" entry "$@"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  if [[ "${1:-}" == call-json ]]; then
+    shift
+    ags_global_call_json "$@"
+  else
+    ags_global_entry "$@"
+  fi
+fi

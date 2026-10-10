@@ -23,6 +23,8 @@ import re
 import shutil
 import stat
 import tempfile
+import runpy
+import sys
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Callable
 
@@ -1963,6 +1965,17 @@ def build_home(
 
 
 def main() -> int:
+    helper=Path(__file__).resolve().parents[1]/'bin/lib/runtime_client.py'
+    implicit=helper.parents[2]/'runtime-client.json'
+    if os.environ.get('AGENTSTACK_CLIENT_CONFIG') or implicit.exists() or implicit.is_symlink():
+        try:
+            api=runpy.run_path(str(helper));client=api['configured']()
+            if client is not None:
+                with client.fence():pass
+                raise api['ClientError']('GLOBAL_CHILD_USE_REGISTER_ENTRY')
+        except (ValueError,RuntimeError,OSError) as exc:
+            print('child-resume: '+str(exc),file=sys.stderr)
+            return 2
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     recovery = sub.add_parser("rollback-tools-change")

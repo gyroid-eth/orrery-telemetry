@@ -380,6 +380,11 @@ def test_installed_stdlib_wrapper_uses_canonical_output_validator(server):
         ROOT / "packages/agentstack_mail/fixtures/global-server-s2a.json",
         library / "global-server-s2a.json",
     )
+    for name in ('global-server-s2b.json','global-server-s2c.json','global-client-4b.json'):
+        shutil.copy2(ROOT / 'packages/agentstack_mail/fixtures' / name, library / name)
+    for name in ('global_s2b_contract.py','global_s2c_contract.py'):
+        shutil.copy2(ROOT / 'packages/agentstack_mail/src/agentstack_mail' / name, library / name)
+
     assert (library / "schema_contract.py").read_bytes() == canonical.read_bytes()
     config = api["read_json"](client.path)
     config["wrapper_root"] = str(installed_root)

@@ -1,4 +1,30 @@
 #!/bin/bash
+
+# Decide explicit global context before loading any legacy environment/state.
+_ags_global_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/agentstack-register.sh"
+if [[ -f "$_ags_global_lib" ]]; then
+  . "$_ags_global_lib"
+  _ags_global_error="$(ags_global_entry post-edit "$@" 2>&1)" && _ags_global_rc=0 || _ags_global_rc=$?
+  if [[ "$_ags_global_rc" == 0 ]]; then exit 0; fi
+  if [[ "$_ags_global_rc" != 125 ]]; then
+    . "$(dirname "${BASH_SOURCE[0]}")/session-identity-policy.sh"
+    if [[ "$_ags_global_error" == *INITIAL_TRANSPORT_UNREACHABLE* ]]; then
+      agentstack_audit_unmanaged "post-edit" "${AGENTSTACK_SESSION_ID:-global}" "transport=unreachable policy=$(agentstack_mail_outage_policy)"
+      if [[ "$(agentstack_mail_outage_policy)" == warn-open ]]; then
+        if agentstack_should_report_outage "${AGENTSTACK_SESSION_ID:-global}" "unreachable"; then
+          agentstack_emit_visible_warning "$(agentstack_outage_warning_text)"
+        fi
+        exit 0
+      fi
+    fi
+    agentstack_audit_unmanaged "post-edit" "${AGENTSTACK_SESSION_ID:-global}" "global-release-failed"
+    printf '%s\n' "$_ags_global_error" >&2
+    exit 0 # The completed edit cannot be rolled back by PostToolUse.
+  fi
+elif [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$(dirname "$_ags_global_lib")/../../runtime-client.json" || -L "$(dirname "$_ags_global_lib")/../../runtime-client.json" ]]; then
+  printf '%s\n' 'GLOBAL_REGISTER_LIBRARY_UNAVAILABLE' >&2
+  exit 0
+fi
 # PostToolUse(Edit|Write): after a successful edit, release its reservation.
 #
 # Release is deliberately debounced. Immediate release makes the next Edit in

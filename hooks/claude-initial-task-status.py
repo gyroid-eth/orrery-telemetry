@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import runpy
 import os
 import subprocess
 import sys
@@ -320,6 +321,18 @@ def notice(kind: str, child: str, parent: str, wait: int, text: str) -> tuple[st
 
 def send_notice(kind: str, child: str, parent: str, wait: int, text: str) -> str:
     """Send as the child, with its token. Returns "" or why it could not."""
+    helper=Path(__file__).resolve().parents[1]/'bin/lib/runtime_client.py'
+    implicit=helper.parents[2]/'runtime-client.json'
+    if os.environ.get('AGENTSTACK_CLIENT_CONFIG') or implicit.exists() or implicit.is_symlink():
+        try:
+            api=runpy.run_path(str(helper));client=api['configured']()
+            state=api['read_json'](client.outputs['child'])
+            subject,body=notice(kind,child,parent,wait,text)
+            client.call('send_message',{'to_agent_ids':[state['parent']['agent_id']],
+                'subject':subject,'body_md':body,'importance':'normal' if kind in ('started','thinking') else 'high'})
+            return ''
+        except (RuntimeError,ValueError,OSError,KeyError):
+            return 'global report pending or unavailable; use replay-pending'
     token_file = os.environ.get("CHILD_START_TOKEN_FILE", "")
     url = os.environ.get("CHILD_START_MCP_URL", "")
     project_key = os.environ.get("CHILD_START_PROJECT_KEY", "")

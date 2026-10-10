@@ -197,3 +197,5 @@ Codex Desktop はさらに別の plugin hook / Bridge lifecycle を使います�
 Codex plugin の対象 hook だけを承認する API と未確認時の `/hooks` 案内は [導入処理の再利用](codex-plugin-lifecycle.md#hook-の定義確認と信頼) に記載しています。
 
 絶対 path の[予約候補](absolute-reservations.md)は明示的な guard/release adapter と共通 normalizer を用意します。既存 hook は旧 mode のままで、候補 helper を自動で呼びません。参加 session の全フォルダへの適用と実 binding resolver の接続は後続の切替 PR です。
+
+隔離 global client の準備は [global child client](global-child-client.md) を参照してください。既定の旧運用は維持します。

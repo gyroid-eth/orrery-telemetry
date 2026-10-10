@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import urllib.error
 import urllib.request
 
@@ -13,6 +14,14 @@ import child_tools
 
 
 def main():
+    library = Path(__file__).resolve().parent / 'lib/agentstack-register.sh'
+    if library.is_file():
+        result = subprocess.run(['/bin/bash',str(library),'resume-child',*sys.argv[1:]])
+        if result.returncode != 125:
+            return result.returncode
+    elif os.environ.get('AGENTSTACK_CLIENT_CONFIG') or '--context' in sys.argv:
+        print('agentstack-resume: GLOBAL_ENTRY_UNAVAILABLE',file=sys.stderr)
+        return 2
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("name")
     parser.add_argument("--base", choices=["default", "mail-only"])

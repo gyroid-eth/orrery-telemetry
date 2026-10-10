@@ -1,5 +1,15 @@
 #!/bin/bash
 
+_ags_global_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/agentstack-register.sh"
+if [[ -f "$_ags_global_lib" ]]; then
+  . "$_ags_global_lib"
+  if ags_global_entry session-start "$@"; then exit 0; else _ags_global_rc=$?; fi
+  [[ "$_ags_global_rc" == 125 ]] || exit "$_ags_global_rc"
+elif [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$(dirname "$_ags_global_lib")/../../runtime-client.json" || -L "$(dirname "$_ags_global_lib")/../../runtime-client.json" ]]; then
+  printf '%s\n' 'GLOBAL_REGISTER_LIBRARY_UNAVAILABLE' >&2
+  exit 2
+fi
+
 # Conversation-only resume must not touch ORRERY Mail or owner material.
 if [[ "${AGENTSTACK_MAIL_DISABLED:-0}" == "1" ]]; then
     exit 0

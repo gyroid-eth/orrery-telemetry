@@ -133,6 +133,7 @@ def main():
                 pass
             if client.mode == 'global':
                 client.record_session(d)
+                client.record_live(d)
                 return EXIT_BOUND
         except Exception:
             return EXIT_CALLER_UNRESOLVED

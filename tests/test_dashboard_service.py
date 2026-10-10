@@ -30,6 +30,12 @@ PLIST_TEMPLATE = ROOT / "dashboard" / "agentdashboard.plist.template"
 RUNTIME_CONTRACT_SOURCES = (
     "packages/agentstack_mail/src/agentstack_mail/schema_contract.py",
     "packages/agentstack_mail/fixtures/global-server-s2a.json",
+    "packages/agentstack_mail/src/agentstack_mail/global_s2b_contract.py",
+    "packages/agentstack_mail/src/agentstack_mail/global_s2c_contract.py",
+    "packages/agentstack_mail/fixtures/global-server-s2b.json",
+    "packages/agentstack_mail/fixtures/global-server-s2c.json",
+    "packages/agentstack_mail/fixtures/global-client-4b.json",
+
 )
 
 

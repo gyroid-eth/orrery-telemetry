@@ -4,9 +4,22 @@ from copy import deepcopy
 import hashlib
 from pathlib import PurePosixPath
 
-from .global_server import GlobalError
-from .global_s2b_contract import check_subject, validate as validate
-from .schema_contract import fixture, normalize_arguments, request_preimage
+try:
+    from .schema_contract import (
+        ContractError as GlobalError,
+        fixture,
+        normalize_arguments,
+        request_preimage,
+    )
+    from .global_s2b_contract import check_subject, validate as validate
+except ImportError:
+    from schema_contract import (
+        ContractError as GlobalError,
+        fixture,
+        normalize_arguments,
+        request_preimage,
+    )
+    from global_s2b_contract import check_subject, validate as validate
 
 FIXTURE = fixture("global-server-s2c.json")
 TOOLS = FIXTURE["tool_contracts"] | FIXTURE["existing_tool_changes"]

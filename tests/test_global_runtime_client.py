@@ -419,6 +419,11 @@ def test_installed_payload_reconnects_from_its_own_root(prepared):
                  installed / 'bin/lib/schema_contract.py')
     shutil.copy2(ROOT / 'packages/agentstack_mail/fixtures/global-server-s2a.json',
                  installed / 'bin/lib/global-server-s2a.json')
+    for name in ('global-server-s2b.json','global-server-s2c.json','global-client-4b.json'):
+        shutil.copy2(ROOT / 'packages/agentstack_mail/fixtures' / name, installed / 'bin/lib' / name)
+    for name in ('global_s2b_contract.py','global_s2c_contract.py'):
+        shutil.copy2(ROOT / 'packages/agentstack_mail/src/agentstack_mail' / name, installed / 'bin/lib' / name)
+
     config = {**prepared['client_config'], 'wrapper_root': str(installed)}
     private(prepared['client_path'], config)
     r = subprocess.run(['/bin/bash', str(installed / 'bin/agentstack-reregister'), 'ObsoleteName', 'codex', 'fixture'],

@@ -3459,6 +3459,22 @@ class _ResumeCapabilityError(ValueError):
 _CHILD_RESUME_MODULES: dict[str, object] = {}
 
 
+def global_child_resume(body: dict) -> dict:
+    """Explicit stable client root only; no legacy registration lookup."""
+    name = body.get('client_name')
+    config = body.get('client_config')
+    if not isinstance(name,str) or not isinstance(config,str):
+        return {'ok':False,'error':'CONTEXT_REQUIRED'}
+    if body.get('prepare_only') is not True or (body.get('open') is not None and body.get('open') is not False):
+        return {'ok':False,'error':'GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C'}
+    library = pathlib.Path(__file__).resolve().parents[1] / 'bin/lib/agentstack-register.sh'
+    completed = subprocess.run(['/bin/bash',str(library),'resume-child','--context',config,
+        '--client-name',name,'--prepare-only','--detached'],capture_output=True,text=True,timeout=60)
+    if completed.returncode:
+        return {'ok':False,'error':completed.stderr.strip() or 'GLOBAL_RESUME_FAILED'}
+    return json.loads(completed.stdout)
+
+
 def _child_resume_helper_path() -> str:
     configured = os.environ.get("AGENTSTACK_CHILD_RESUME_HELPER", "").strip()
     install_home = os.environ.get("AGENTSTACK_HOME", "").strip()
@@ -8517,7 +8533,7 @@ class Handler(BaseHTTPRequestHandler):
             # API (ORRERY cockpit): raise it only when something they rely on
             # is added or changes meaning, and say so in the CHANGELOG. It is
             # managed this way from 2 on; every earlier release reported 1.
-            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 12}).encode(), "application/json; charset=utf-8")
+            self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": 13}).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")
@@ -8829,7 +8845,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         session = body.get("session", "")
         if path == "/api/jump":
-            if "open" in body and type(body["open"]) is not bool:
+            if body.get('runtime_mode') == 'global':
+                result = global_child_resume(body)
+            elif "open" in body and type(body["open"]) is not bool:
                 result = {"ok": False, "error": "open must be a boolean"}
             else:
                 options = {key: body[key] for key in ("base", "tools") if key in body}

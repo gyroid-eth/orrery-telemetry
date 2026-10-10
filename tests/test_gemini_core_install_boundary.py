@@ -43,7 +43,7 @@ def _function(text: str, name: str) -> str:
 
 
 def _payload_declaration(text: str) -> str:
-    match = re.search(r"^RUNTIME_SCHEMA_SOURCE=.*\nRUNTIME_FIXTURE_SOURCE=.*\nOPTIONAL_PROVIDER_PAYLOAD=\(\n.*?^\)\n", text, re.DOTALL | re.MULTILINE)
+    match = re.search(r"^RUNTIME_SCHEMA_SOURCE=.*\nRUNTIME_FIXTURE_SOURCE=.*\nRUNTIME_CLIENT_CONTRACT_SOURCES=\(\n.*?^\)\nOPTIONAL_PROVIDER_PAYLOAD=\(\n.*?^\)\n", text, re.DOTALL | re.MULTILINE)
     assert match, "core payload declarations missing"
     return match.group(0)
 

@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+
+_ags_global_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/agentstack-register.sh"
+if [[ -f "$_ags_global_lib" ]]; then
+  . "$_ags_global_lib"
+  if ags_global_entry spawn-child "$@"; then exit 0; else _ags_global_rc=$?; fi
+  [[ "$_ags_global_rc" == 125 ]] || exit "$_ags_global_rc"
+elif [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$(dirname "$_ags_global_lib")/../../runtime-client.json" || -L "$(dirname "$_ags_global_lib")/../../runtime-client.json" ]]; then
+  printf '%s\n' 'GLOBAL_REGISTER_LIBRARY_UNAVAILABLE' >&2
+  exit 2
+fi
 # canary-embed-task.sh — does each Claude model act on a launched task?
 #
 # Run by hand after a Claude model or Claude Code update; not part of CI. It

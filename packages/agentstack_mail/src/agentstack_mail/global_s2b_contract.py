@@ -4,14 +4,24 @@ import base64
 import hashlib
 from copy import deepcopy
 
-from .global_server import GlobalError
-from .schema_contract import (
-    fixture,
-    normalize_arguments,
-    request_preimage,
-    canonical,
-    validate_schema,
-)
+try:
+    from .schema_contract import (
+        ContractError as GlobalError,
+        fixture,
+        normalize_arguments,
+        request_preimage,
+        canonical,
+        validate_schema,
+    )
+except ImportError:  # Installed stdlib client copy, without service dependencies.
+    from schema_contract import (
+        ContractError as GlobalError,
+        fixture,
+        normalize_arguments,
+        request_preimage,
+        canonical,
+        validate_schema,
+    )
 
 FIXTURE = fixture("global-server-s2b.json")
 TOOLS = FIXTURE["tool_contracts"]
@@ -275,6 +285,9 @@ def complete_intent(intent, receipt, owner):
         "credential_generation",
         "request_id",
     ):
-        if receipt[key] != intent[key]:
+        # S2c contact receipts bind the operation by request_id and carry
+        # contact fields instead of the S2b top-level owner header. Required
+        # fields are enforced by the tool's single normative output schema.
+        if key in receipt and receipt[key] != intent[key]:
             raise GlobalError("RESPONSE_INVALID")
     return {**intent, "phase": "committed", "receipt": receipt}
