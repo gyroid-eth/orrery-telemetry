@@ -1,12 +1,10 @@
 #!/bin/bash
 
 # Decide explicit global context before loading any legacy environment/state.
-_ags_global_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/agentstack-register.sh"
-if [[ -f "$_ags_global_lib" ]]; then
-  . "$_ags_global_lib"
-fi
-if declare -F ags_global_entry >/dev/null; then
-  _ags_global_error="$(ags_global_entry post-edit "$@" 2>&1)" && _ags_global_rc=0 || _ags_global_rc=$?
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader" || exit 2
+if declare -F ags_client_entry >/dev/null; then
+  _ags_global_error="$(ags_client_entry post-edit "$@" 2>&1)" && _ags_global_rc=0 || _ags_global_rc=$?
   if [[ "$_ags_global_rc" == 0 ]]; then exit 0; fi
   if [[ "$_ags_global_rc" != 125 ]]; then
     . "$(dirname "${BASH_SOURCE[0]}")/session-identity-policy.sh"
@@ -23,9 +21,7 @@ if declare -F ags_global_entry >/dev/null; then
     printf '%s\n' "$_ags_global_error" >&2
     exit 0 # The completed edit cannot be rolled back by PostToolUse.
   fi
-elif [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$(dirname "$_ags_global_lib")/../../runtime-client.json" || -L "$(dirname "$_ags_global_lib")/../../runtime-client.json" ]]; then
-  printf '%s\n' 'GLOBAL_REGISTER_LIBRARY_UNAVAILABLE' >&2
-  exit 0
+
 fi
 # PostToolUse(Edit|Write): after a successful edit, release its reservation.
 #

@@ -25,6 +25,7 @@ import stat
 import tempfile
 import runpy
 import sys
+import subprocess
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Callable
 
@@ -1966,8 +1967,10 @@ def build_home(
 
 def main() -> int:
     helper=Path(__file__).resolve().parents[1]/'bin/lib/runtime_client.py'
-    implicit=helper.parents[2]/'runtime-client.json'
-    if os.environ.get('AGENTSTACK_CLIENT_CONFIG') or implicit.exists() or implicit.is_symlink():
+    selection = subprocess.run(['/bin/bash', str(helper.with_name('global-client-loader.sh')), 'select', *sys.argv[1:]])
+    if selection.returncode not in (0, 125):
+        return 2
+    if selection.returncode == 0:
         try:
             api=runpy.run_path(str(helper));client=api['configured']()
             if client is not None:

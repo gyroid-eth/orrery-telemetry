@@ -322,8 +322,10 @@ def notice(kind: str, child: str, parent: str, wait: int, text: str) -> tuple[st
 def send_notice(kind: str, child: str, parent: str, wait: int, text: str) -> str:
     """Send as the child, with its token. Returns "" or why it could not."""
     helper=Path(__file__).resolve().parents[1]/'bin/lib/runtime_client.py'
-    implicit=helper.parents[2]/'runtime-client.json'
-    if os.environ.get('AGENTSTACK_CLIENT_CONFIG') or implicit.exists() or implicit.is_symlink():
+    selection = subprocess.run(['/bin/bash', str(helper.with_name('global-client-loader.sh')), 'select', *sys.argv[1:]])
+    if selection.returncode not in (0, 125):
+        return 'global report unavailable'
+    if selection.returncode == 0:
         try:
             api=runpy.run_path(str(helper));client=api['configured']()
             state=api['read_json'](client.outputs['child'])

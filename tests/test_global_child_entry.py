@@ -122,13 +122,14 @@ def test_explicit_context_never_falls_back_when_register_library_missing(server)
     parent = client(server)
     root = parent.isolation / "partial"
     (root / "hooks").mkdir(parents=True)
+    (root / "bin/lib").mkdir(parents=True, exist_ok=True)
+    (root / "bin/lib/global-client-loader.sh").write_bytes(
+        (Path(api["ROOT"]) / "bin/lib/global-client-loader.sh").read_bytes()
+    )
     hook = root / "hooks/cleanup-child-agent.sh"
     hook.write_bytes((Path(api["ROOT"]) / "hooks/cleanup-child-agent.sh").read_bytes())
     output = shell(parent, str(hook), payload={"session_id": "s"})
-    assert (
-        output.returncode == 2
-        and "GLOBAL_REGISTER_LIBRARY_UNAVAILABLE" in output.stderr
-    )
+    assert output.returncode == 2 and "GLOBAL_ENTRY_UNAVAILABLE" in output.stderr
 
 
 def test_real_ps_other_session_keeps_leases_until_process_exits(server):
@@ -157,17 +158,18 @@ def test_explicit_global_refuses_an_old_library_without_dispatch(server):
     parent = client(server)
     root = parent.isolation / "old-install"
     (root / "hooks").mkdir(parents=True)
-    (root / "bin/lib").mkdir(parents=True)
+    (root / "bin/lib").mkdir(parents=True, exist_ok=True)
+    (root / "bin/lib/global-client-loader.sh").write_bytes(
+        (Path(api["ROOT"]) / "bin/lib/global-client-loader.sh").read_bytes()
+    )
+    (root / "bin/lib").mkdir(parents=True, exist_ok=True)
     hook = root / "hooks/cleanup-child-agent.sh"
     hook.write_bytes((Path(api["ROOT"]) / "hooks/cleanup-child-agent.sh").read_bytes())
     (root / "bin/lib/agentstack-register.sh").write_text(
         "ags_register() { return 0; }\n"
     )
     output = shell(parent, str(hook), payload={"session_id": "s"})
-    assert (
-        output.returncode == 2
-        and "GLOBAL_REGISTER_LIBRARY_UNAVAILABLE" in output.stderr
-    )
+    assert output.returncode == 2 and "GLOBAL_ENTRY_UNAVAILABLE" in output.stderr
 
 
 def test_context_equals_works_without_ambient_global_selector(server):
@@ -221,7 +223,11 @@ def test_resume_global_partial_library_never_accepts_empty_success(server, old_l
     parent = client(server)
     root = parent.isolation / "partial-resume"
     (root / "hooks").mkdir(parents=True)
-    (root / "bin/lib").mkdir(parents=True)
+    (root / "bin/lib").mkdir(parents=True, exist_ok=True)
+    (root / "bin/lib/global-client-loader.sh").write_bytes(
+        (Path(api["ROOT"]) / "bin/lib/global-client-loader.sh").read_bytes()
+    )
+    (root / "bin/lib").mkdir(parents=True, exist_ok=True)
     for rel in ("bin/agentstack-resume", "hooks/child_tools.py"):
         (root / rel).write_bytes((Path(api["ROOT"]) / rel).read_bytes())
     (root / "bin/lib/agentstack-register.sh").write_text(old_library)

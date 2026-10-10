@@ -2443,6 +2443,7 @@ install_payload() {
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
     cp "$REPO_ROOT/bin/lib/runtime_client.py" "$BIN_DIR/lib/runtime_client.py"
+    cp "$REPO_ROOT/bin/lib/global-client-loader.sh" "$BIN_DIR/lib/global-client-loader.sh"
     cp "$RUNTIME_SCHEMA_SOURCE" "$BIN_DIR/lib/schema_contract.py"
     cp "$RUNTIME_FIXTURE_SOURCE" "$BIN_DIR/lib/global-server-s2a.json"
     local runtime_source

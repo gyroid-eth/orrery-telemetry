@@ -507,23 +507,22 @@ def test_s2c_welcome_uses_shared_raw_intent(server, monkeypatch):
 def test_debounce_worker_stale_generation_cannot_release_new_lease(server, monkeypatch):
     c = client(server)
     path, key = reserve(c)
-    monkeypatch.setenv("FILE_RESERVATION_RELEASE_DELAY_SECONDS", "0")
-    old = "00000000-0000-4000-8000-000000000001"
-    new = "00000000-0000-4000-8000-000000000002"
-    c.write_output(
-        c.outputs["release"],
-        {
-            "kind": "orrery-global-release-debounce-v1",
-            **c.binding,
-            "agent_id": 2,
-            "generation": new,
-            "ids": [key],
-        },
-        "release",
+    jobs = []
+    monkeypatch.setattr(
+        api["subprocess"], "Popen", lambda args, **kw: jobs.append(args)
     )
-    assert c.release_worker(old)["stale"] is True
+    monkeypatch.setattr(api["time"], "sleep", lambda _: None)
+    payload = {"cwd": str(c.isolation), "tool_input": {"file_path": path}}
+    c.post_edit(payload)
+    c.post_edit(payload)
+
+    def run(job):
+        i = job.index("release-worker")
+        return c.release_worker(job[i + 1], [int(k) for k in job[i + 2 :]])
+
+    assert run(jobs[0])["stale"] is True
     assert c.call("check_file_reservations", {"paths": [path]})["covered"] is True
-    c.release_worker(new)
+    run(jobs[1])
     assert c.call("check_file_reservations", {"paths": [path]})["covered"] is False
 
 
@@ -644,7 +643,7 @@ def test_failed_actual_posttool_never_schedules_release(server, failure):
         },
     )
     assert output.returncode == 0, output.stderr
-    assert not c.outputs["release"].exists()
+    assert not list((c.runtime_dir / "release-debounce").glob("*.json"))
     assert c.call("check_file_reservations", {"paths": [path]})["covered"] is True
 
 

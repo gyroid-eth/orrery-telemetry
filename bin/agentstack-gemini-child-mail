@@ -14,6 +14,7 @@ import runpy
 import os
 import pathlib
 import sys
+import subprocess
 from typing import Any
 
 
@@ -137,11 +138,15 @@ def _append_notice(response: str, notice: str) -> str:
 
 def main() -> int:
     helper=pathlib.Path(__file__).resolve().parent/'lib/runtime_client.py'
-    implicit=helper.parents[2]/'runtime-client.json'
-    if os.environ.get('AGENTSTACK_CLIENT_CONFIG') or implicit.exists() or implicit.is_symlink():
+    selection = subprocess.run(['/bin/bash', str(helper.with_name('global-client-loader.sh')), 'select', *sys.argv[1:]])
+    if selection.returncode not in (0, 125):
+        return 2
+    if selection.returncode == 0:
         try:
             api=runpy.run_path(str(helper));client=api['configured']()
+            if client is None: raise api['ClientError']('CONTEXT_REQUIRED')
             parser=argparse.ArgumentParser()
+            parser.add_argument('--context')
             parser.add_argument('action',choices=['reserve','release','report','retire'])
             parser.add_argument('--paths-json',default='[]')
             parser.add_argument('--ttl',type=int,default=14400)

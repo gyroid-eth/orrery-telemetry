@@ -1062,16 +1062,12 @@ ags_global_call_json() {
 
 # Explicit global child operations; 125 means the default legacy path continues.
 ags_global_context_selected() {
-  local explicit="${AGENTSTACK_CLIENT_CONFIG:-}" argument context
-  for argument in "$@"; do
-    case "$argument" in --context|--context=*) explicit=1 ;; esac
-  done
-  context="$AGS_REGISTER_LIB_DIR/../../runtime-client.json"
-  [[ -n "$explicit" || -e "$context" || -L "$context" ]]
+  . "$AGS_REGISTER_LIB_DIR/global-client-loader.sh"
+  ags_client_select "$@" && return 0
+  [[ "$?" != 125 ]]
 }
 
 ags_global_entry() {
-  ags_global_context_selected "$@" || return 125
   python3 "$AGS_REGISTER_LIB_DIR/runtime_client.py" entry "$@"
 }
 

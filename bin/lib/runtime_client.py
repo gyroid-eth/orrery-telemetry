@@ -39,8 +39,8 @@ CLIENT_LAYOUT = {'context': 'runtime-client.json', 'credential': 'credential.jso
     'enrollment': 'credential.enrollment-pending.json',
     'metadata': 'runtime/registration-metadata.json', 'profile': 'profile.json',
     'mutation': 'runtime/mutation-pending.json', 'mutex': 'runtime/mutation.lock', 'child': 'runtime/child-state.json',
-    'operation_lock': 'runtime/child.lock', 'task': 'runtime/task.md', 'release': 'runtime/release-debounce.json'}
-CLIENT_DIRECTORIES = ('runtime', 'runtime/session_index', 'runtime/live-sessions', 'runtime/provider')
+    'operation_lock': 'runtime/child.lock', 'task': 'runtime/task.md'}
+CLIENT_DIRECTORIES = ('runtime', 'runtime/session_index', 'runtime/live-sessions', 'runtime/provider', 'runtime/release-debounce')
 S1_ERRORS = frozenset({'NAME_CONFLICT', 'NAME_INVALID', 'OWNER_REQUIRED', 'WRITER_FENCED',
     'STALE_RUNTIME_BINDING', 'WINDOW_INPUT_REQUIRED', 'WINDOW_OWNER_MISMATCH',
     'EXISTING_WINDOW_REQUIRED', 'CREDENTIAL_INVALID', 'CREDENTIAL_GENERATION_CONFLICT',
@@ -210,14 +210,31 @@ def integer(value, minimum=0):
     return type(value) is int and value >= minimum
 
 
-def configured(path=None, *, recovery=None):
-    explicit = path or os.environ.get('AGENTSTACK_CLIENT_CONFIG')
-    selected = absolute(str(explicit)) if explicit else ROOT / 'runtime-client.json'
-    if not selected.exists() and not selected.is_symlink():
+def selected(argv=None, *, path=None):
+    """The sole normal context selector; never parse legacy-specific flags."""
+    argv = list(argv or [])
+    explicit = path
+    for index, argument in enumerate(argv):
+        if argument.startswith('--context='):
+            explicit = argument.split('=', 1)[1]
+            if not explicit:
+                raise ClientError('CONTEXT_UNAVAILABLE')
+        elif argument == '--context':
+            if index + 1 == len(argv) or argv[index + 1].startswith('--'):
+                raise ClientError('CONTEXT_UNAVAILABLE')
+            explicit = argv[index + 1]
+    explicit = explicit or os.environ.get('AGENTSTACK_CLIENT_CONFIG')
+    context = absolute(str(explicit)) if explicit else ROOT / 'runtime-client.json'
+    if not context.exists() and not context.is_symlink():
         if explicit:
             raise ClientError('CONTEXT_UNAVAILABLE')
         return None
-    return RuntimeClient(selected, recovery=recovery)
+    return context
+
+
+def configured(path=None, *, recovery=None):
+    context = selected(sys.argv[1:] if path is None else [], path=path)
+    return RuntimeClient(context, recovery=recovery) if context is not None else None
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -420,6 +437,9 @@ class RuntimeClient:
             expected = self.runtime_dir / 'session_index'
             if path.parent != expected or path.name != 'self.json':
                 raise ClientError('FIXED_LAYOUT_PATH_NOT_SUPPORTED')
+        elif role == 'release':
+            if path.parent != self.runtime_dir / 'release-debounce' or not re.fullmatch(r'[1-9][0-9]*\.json', path.name):
+                raise ClientError('FIXED_LAYOUT_PATH_NOT_SUPPORTED')
         elif role not in self.outputs or path != self.outputs[role]:
             raise ClientError('FIXED_LAYOUT_PATH_NOT_SUPPORTED')
         self.reject_mail_output(path)
@@ -452,7 +472,14 @@ class RuntimeClient:
                     and row.get('binding_kind') == 'self')):
             raise ClientError('LEGACY_FILE_REQUIRES_IMPORT')
         if role == 'release':
-            if (not isinstance(row.get('ids'), list) or any(not integer(i, 1) for i in row['ids']) or len(set(row['ids'])) != len(row['ids']) or not isinstance(row.get('generation'), str) or not re.fullmatch(r'[0-9a-f-]{36}', row['generation'])) or row.get('kind') != 'orrery-global-release-debounce-v1' or row.get('agent_id') != (self.identity or {}).get('agent_id') or any(row.get(k) != v for k,v in self.binding.items()):
+            if (row.get('kind') != 'orrery-global-release-debounce-v2'
+                    or row.get('agent_id') != (self.identity or {}).get('agent_id')
+                    or not integer(row.get('lease_id'), 1) or path.stem != str(row['lease_id'])
+                    or not integer(row.get('lease_revision'), 0)
+                    or not isinstance(row.get('expires_ts'), str)
+                    or not isinstance(row.get('generation'), str)
+                    or not re.fullmatch(r'[0-9a-f-]{36}', row['generation'])
+                    or any(row.get(k) != v for k,v in self.binding.items())):
                 raise ClientError('OUTPUT_SCHEMA_INVALID')
             return
         if role == 'child':
@@ -1106,13 +1133,11 @@ class RuntimeClient:
                 raise
             raise ClientError(str(exc)) from exc
 
-    def replay_pending(self, *, renew_only=False):
+    def replay_pending(self):
         path = self.outputs['mutation']
         if not path.exists() and not path.is_symlink():
             return None
         pending = read_json(path)
-        if renew_only and pending.get('tool') != 'renew_file_reservations':
-            raise ClientError('MUTATION_PENDING_CONFLICT')
         if pending.get('kind') == 'orrery-global-message-intent-v1':
             args = dict(pending['canonical_intent'])
         else:
@@ -1135,7 +1160,7 @@ class RuntimeClient:
         # Only the very first transport failure may use warn-open. Any pending
         # renewal outcome or a failure after a definite check remains blocked.
         if self.outputs['mutation'].exists() or self.outputs['mutation'].is_symlink():
-            self.replay_pending(renew_only=True)
+            self.replay_pending()
         path = hook_path(payload)
         try:
             checked = self.call('check_file_reservations', {'paths': [path]})
@@ -1168,29 +1193,65 @@ class RuntimeClient:
             if str(exc) == 'TRANSPORT_FAILED':
                 raise ClientError('INITIAL_TRANSPORT_UNREACHABLE') from exc
             raise
-        ids = sorted({key for item in checked['items'] for key in item['reservation_ids']})
-        # A fixed debounce slot contains only checked IDs and a generation;
-        # stale workers can never reselect a newer lease by path.
+        ids = {key for item in checked['items'] for key in item['reservation_ids']}
+        leases = {row['id']: row for page in self.all_leases() for row in page if row['id'] in ids}
         generation = str(uuid.uuid4())
-        value = {'kind': 'orrery-global-release-debounce-v1', **self.binding,
-                 'agent_id': self.identity['agent_id'], 'generation': generation, 'ids': ids}
+        directory = self.runtime_dir / 'release-debounce'
         with self.operation_mutex(), self.fence():
-            self.write_output(self.outputs['release'], value, 'release')
-        if ids:
+            directory.mkdir(mode=0o700, exist_ok=True)
+            safe_private_directory(directory)
+            for key, row in leases.items():
+                value = {'kind': 'orrery-global-release-debounce-v2', **self.binding,
+                    'agent_id': self.identity['agent_id'], 'generation': generation,
+                    'lease_id': key, 'lease_revision': row['revision'], 'expires_ts': row['expires_ts']}
+                self.write_output(self.release_slot(key), value, 'release')
+        if leases and self.release_grace_seconds() == 0:
+            return self.release_worker(generation, sorted(leases))
+        if leases:
             subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--context', str(self.path),
-                'release-worker', generation], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
-        return {'ok': True, 'scheduled': len(ids)}
+                'release-worker', generation, *map(str, sorted(leases))], stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+        return {'ok': True, 'scheduled': len(leases)}
 
-    def release_worker(self, generation):
-        time.sleep(float(os.environ.get('FILE_RESERVATION_RELEASE_DELAY_SECONDS', '2')))
+    def release_slot(self, key):
+        if not integer(key, 1):
+            raise ClientError('LEASE_ID_INVALID')
+        directory = self.runtime_dir / 'release-debounce'
+        safe_private_directory(directory)
+        return directory / (str(key) + '.json')
+
+    @staticmethod
+    def release_grace_seconds():
+        value = (os.environ.get('AGENTSTACK_RELEASE_GRACE_SECONDS')
+            or os.environ.get('FILE_RESERVATION_RELEASE_GRACE_SECONDS') or '90')
+        return int(value) if re.fullmatch(r'[0-9]+', value) else 90
+
+    def release_worker(self, generation, ids):
+        time.sleep(self.release_grace_seconds())
         with self.operation_mutex(), self.fence():
-            saved = read_json(self.outputs['release'])
-            if saved['generation'] != generation:
-                return {'ok': True, 'stale': True}
-            for start in range(0, len(saved['ids']), 100):
-                self.call('release_file_reservations', {'file_reservation_ids': saved['ids'][start:start+100]})
-            return {'ok': True}
+            current = {row['id']: row for page in self.all_leases() for row in page if row['id'] in ids}
+            eligible = []
+            slots = []
+            for key in ids:
+                slot = self.release_slot(key)
+                if not slot.exists() and not slot.is_symlink():
+                    continue
+                self.validate_output(slot, 'release')
+                saved = read_json(slot)
+                if saved['generation'] != generation:
+                    continue
+                slots.append(slot)
+                lease = current.get(key)
+                if (lease and lease['revision'] == saved['lease_revision']
+                        and lease['expires_ts'] == saved['expires_ts']):
+                    eligible.append(key)
+            for start in range(0, len(eligible), 100):
+                self.call('release_file_reservations', {'file_reservation_ids': eligible[start:start+100]})
+            for slot in slots:
+                # Holding the operation mutex keeps newer post-edit plans intact.
+                self.validate_output(slot, 'release')
+                slot.unlink()
+            return {'ok': True, 'released': len(eligible), 'stale': not bool(slots)}
 
     def record_live(self, payload, *, refresh=False):
         session = payload.get('session_id')
@@ -1301,6 +1362,8 @@ class RuntimeClient:
         if (saved.get('wrapper_root') != self.config['wrapper_root']
                 or any(saved.get(k) != v for k,v in self.binding.items())):
             raise ClientError('CHILD_BINDING_MISMATCH')
+        if saved.get('identity') and not (root / CLIENT_LAYOUT['child']).exists():
+            raise ClientError('CLIENT_ROOT_NOT_CHILD')
         pending_path = root / CLIENT_LAYOUT['registration']
         pending = read_json(pending_path) if pending_path.exists() else None
         recovery = None
@@ -1312,15 +1375,19 @@ class RuntimeClient:
             program = options.get('program', 'claude-code')
             model = options.get('model', program)
             task = options.get('task_description', 'Delegated child agent')
+            intent_digest = hashlib.sha256(json.dumps({'name': options.get('name', name),
+                'program': program, 'model': model, 'task_description': task}, sort_keys=True).encode()).hexdigest()
             if child.outputs['child'].exists():
                 state = read_json(child.outputs['child'])
+                if state.get('registration_intent_digest') != intent_digest:
+                    raise ClientError('CHILD_REGISTRATION_INTENT_CONFLICT')
                 if state['tools_selection'] != {'base': options.get('base', 'default'), 'tools': options.get('parsed_tools', {})}:
                     raise ClientError('CHILD_TOOLS_PENDING_CONFLICT')
                 if state['parent'] != {'client_name': self.config['client_name'],
                         'server_instance_id': self.binding['expected_server_instance_id'], 'agent_id': parent['agent_id']}:
                     raise ClientError('CHILD_PARENT_MISMATCH')
             else:
-                state = {'kind': 'orrery-global-child-state-v1',
+                state = {'kind': 'orrery-global-child-state-v1', 'registration_intent_digest': intent_digest,
                     'parent': {'client_name': self.config['client_name'],
                         'server_instance_id': self.binding['expected_server_instance_id'], 'agent_id': parent['agent_id']},
                     'phase': 'prepared', 'launch_id': None, 'working_directory': options.get('workdir', str(self.isolation)),
@@ -1726,6 +1793,8 @@ def profile_operation(path, operation):
 
 
 def entry_operation(entry, argv):
+    if os.environ.get('AGENTSTACK_MAIL_DISABLED') == '1' and entry in ('pre-edit', 'post-edit', 'end-session', 'session-start', 'registered', 'record-self'):
+        return 0
     parser = argparse.ArgumentParser(prog=entry)
     parser.add_argument('--context')
     parser.add_argument('--child-client-name', '--client-name', dest='child_client_name')
@@ -1744,21 +1813,11 @@ def entry_operation(entry, argv):
     parser.add_argument('--agent-id', type=int)
     parser.add_argument('--expected-digest')
     parser.add_argument('positionals', nargs='*')
-    # First determine mode without parsing legacy-specific flags.
-    selected = next((arg.split('=', 1)[1] for arg in argv if arg.startswith('--context=')), None)
-    if selected == '':
-        raise ClientError('CONTEXT_UNAVAILABLE')
-    if '--context' in argv:
-        index = argv.index('--context')
-        if len(argv) <= index+1:
-            raise ClientError('CONTEXT_UNAVAILABLE')
-        selected = argv[index+1]
-    explicit = selected or os.environ.get('AGENTSTACK_CLIENT_CONFIG')
-    default = ROOT / 'runtime-client.json'
-    if not explicit and not default.exists() and not default.is_symlink():
+    context = selected(argv)
+    if context is None:
         return 125
     if entry in ('spawn-child','resume-child') and '--prepare-only' not in argv:
-        existing = configured(selected)
+        existing = configured(context)
         if existing is not None:
             with existing.fence():pass
             raise ClientError('GLOBAL_CHILD_RUNTIME_REQUIRES_PR4C')
@@ -1867,6 +1926,13 @@ def entry_operation(entry, argv):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == 'select':
+        try:
+            print('orrery-client-global-v1' if selected(argv[1:]) is not None else 'orrery-client-legacy-v1')
+            return 0
+        except ClientError as exc:
+            print('runtime-client: ' + str(exc), file=sys.stderr)
+            return 2
     if argv and argv[0] == 'entry':
         try:
             return entry_operation(argv[1], argv[2:])
@@ -1884,8 +1950,10 @@ def main(argv=None):
         if a.operation == 'resolve-mutation':
             recovery = ('resolve-mutation', None)
         if a.operation in {'claim', 'recover'}:
-            selected = a.context or os.environ.get('AGENTSTACK_CLIENT_CONFIG') or str(ROOT / 'runtime-client.json')
-            config = read_json(Path(selected))
+            context_path = selected(path=a.context)
+            if context_path is None:
+                raise ClientError('CONTEXT_REQUIRED')
+            config = read_json(context_path)
             recovery = (a.operation, (config.get('identity') or {}).get('agent_id'))
         client = configured(a.context, recovery=recovery)
         if a.operation == 'mode':
@@ -1910,7 +1978,7 @@ def main(argv=None):
         elif a.operation == 'call-json':
             value = client.call(a.args[0], json.load(sys.stdin))
         elif a.operation == 'release-worker':
-            value = client.release_worker(a.args[0])
+            value = client.release_worker(a.args[0], [int(key) for key in a.args[1:]])
         elif a.operation == 'replay-pending':
             value = client.replay_pending()
         elif a.operation == 'call':
@@ -1948,9 +2016,12 @@ def main(argv=None):
         if a.operation == 'release-worker' and 'client' in locals() and client is not None:
             try:
                 with client.operation_mutex(), client.fence():
-                    saved = read_json(client.outputs['release'])
-                    if saved['generation'] == a.args[0]:
-                        client.write_output(client.outputs['release'], {**saved, 'last_error': reason}, 'release')
+                    for key in a.args[1:]:
+                        slot = client.release_slot(int(key))
+                        client.validate_output(slot, 'release')
+                        saved = read_json(slot)
+                        if saved['generation'] == a.args[0]:
+                            client.write_output(slot, {**saved, 'last_error': reason}, 'release')
             except (ClientError, OSError, ValueError, KeyError):
                 pass  # A changed fence forbids even a local audit write.
         print('runtime-client: ' + reason, file=sys.stderr)

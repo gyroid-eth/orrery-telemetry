@@ -6,9 +6,9 @@ This is explicit preparation against an isolated global candidate. Legacy remain
 
 ## One entry and fixed layout
 
-`bin/lib/agentstack-register.sh` is the shell registration/child/resume front door. It checks explicit context before loading legacy environment. Missing context preserves legacy; invalid context and dangling symlinks refuse. Global never falls back to project/name/token-file discovery.
+`bin/lib/agentstack-register.sh` is the shell registration/child/resume front door. Normal context selection belongs to `runtime_client.selected(argv)`, called through a shared loader before legacy environment. Only a partial install missing helpers uses one context-presence admission: a context returns `GLOBAL_ENTRY_UNAVAILABLE`; absence preserves legacy. Missing context preserves legacy; invalid context and dangling symlinks refuse. Global never falls back to project/name/token-file discovery.
 
-Point `AGENTSTACK_CLIENT_CONFIG` to the parent's fixed `runtime-client.json`. Children occupy another safe `client_name` immediately under the same `agentstack/clients/`. `credential.json` is the sole owner credential. `runtime/child-state.json` stores parent stable ID, task/tools and lifecycle references without copying child token or identity. Arbitrary output destinations are rejected. New identities require new roots.
+Point `AGENTSTACK_CLIENT_CONFIG` to the parent's fixed `runtime-client.json`. Children occupy another safe `client_name` immediately under the same `agentstack/clients/`. `credential.json` is the sole owner credential. `runtime/child-state.json` stores parent stable ID, task/tools and lifecycle references without copying child token or identity. Arbitrary output destinations are rejected. New identities require new roots. An existing standalone root cannot become a child (`CLIENT_ROOT_NOT_CHILD`). Existing children require the same parent and registration-intent digest; changed name/program/model/task returns `CHILD_REGISTRATION_INTENT_CONFLICT` without keeping another token or payload copy.
 
 ```bash
 agentstack-preregister-child --child-client-name child_01 --name ChildAlpha \
@@ -26,7 +26,7 @@ Repeat the same preregister command. It reuses the saved name/token/program/mode
 
 Interruptions after credential, context or metadata saving complete activation through the same pending. Transport/binding uncertainty is not foreign ownership. External operator rename/delete of an unresolved name requires pending reconciliation before retry.
 
-Only definite foreign ownership allows `abandon-child-registration --operator --expected-digest SHA256` with the child's context. It verifies the pending digest and current owner refusal, marking that same pending terminal. It does not retire another owner or delete credential evidence. A new identity requires a new root. Network success followed by disk failure retains pending and does not claim rollback.
+Only definite foreign ownership allows `abandon-child-registration --operator --expected-digest SHA256` with the child's context. It verifies the pending digest and current owner refusal, marking that same pending terminal. It does not retire another owner or delete credential evidence. A new identity requires a new root. An existing standalone root cannot become a child (`CLIENT_ROOT_NOT_CHILD`). Network success followed by disk failure retains pending and does not claim rollback.
 
 ```bash
 bash "$AGENTSTACK_HOME/bin/lib/agentstack-register.sh" inspect-child --context CHILD_CONTEXT
@@ -36,9 +36,9 @@ bash "$AGENTSTACK_HOME/bin/lib/agentstack-register.sh" finalize-child \
 
 ## Hooks and end
 
-PreToolUse reads absolute-path coverage and own ACTIVE lease expiry. The sole client threshold is `RENEW_THRESHOLD_SECONDS=600`; only leases with600 seconds or less receive an1800-second renewal. Repeated edits alone do not create receipts. A lost renewal response blocks editing; the next PreToolUse first replays that saved intent with the same UUID. An unrelated pending mutation is never replayed automatically.
+PreToolUse reads absolute-path coverage and own ACTIVE lease expiry. The sole client threshold is `RENEW_THRESHOLD_SECONDS=600`; only leases with600 seconds or less receive an1800-second renewal. Repeated edits alone do not create receipts. A lost mutation response blocks editing; the next PreToolUse first replays the saved intent of any mutation kind with the same UUID. Only a definite rejection in the shared rejection table clears pending; an uncertain result blocks editing.
 
-Default/explicit `warn-open` permits an initial transport outage with the existing warning/audit. Refusal uses the existing value `AGENTSTACK_MAIL_OUTAGE_POLICY=block`. Context/owner/binding/schema failures, HTTP/MCP rejection and uncertain renewal outcomes remain blocked. PostToolUse cannot undo completed edits and audits failure. A grace worker verifies fixed-slot generation and captured lease IDs, never reselecting a newer lease by path.
+Default/explicit `warn-open` permits an initial transport outage with the existing warning/audit. Refusal uses the existing value `AGENTSTACK_MAIL_OUTAGE_POLICY=block`. Context/owner/binding/schema failures, HTTP/MCP rejection and uncertain renewal outcomes remain blocked. PostToolUse cannot undo completed edits and audits failure. Grace uses the legacy `AGENTSTACK_RELEASE_GRACE_SECONDS` setting (fallback: `FILE_RESERVATION_RELEASE_GRACE_SECONDS`), default90 seconds. Per-lease `runtime/release-debounce/<lease-id>.json` slots preserve independent files. A worker verifies generation, captured lease ID, revision and expiry, preserving renewed/reacquired leases. `AGENTSTACK_MAIL_DISABLED=1` skips hooks before context/owner material and network.
 
 SessionEnd and cleanup use the same end operation. Another live same-ID session, or unknown ps/tmux evidence, prevents release and retirement. The last child calls server retire once, which releases ACTIVE leases. The last standalone only releases its own ACTIVE leases. Execution evidence lives in fixed `runtime/live-sessions/`; no session-specific reservation ownership table is introduced. Unavailable process birth evidence stays unknown.
 

@@ -14,32 +14,10 @@ import child_tools
 
 
 def main():
-    library = Path(__file__).resolve().parent / 'lib/agentstack-register.sh'
-    implicit = library.parents[2] / 'runtime-client.json'
-    explicit = os.environ.get('AGENTSTACK_CLIENT_CONFIG') or any(arg == '--context' or arg.startswith('--context=') for arg in sys.argv[1:])
-    selected = explicit or implicit.exists() or implicit.is_symlink()
-    if selected and library.is_file():
-        # Older partial installs may contain a source-only register library.
-        # Check its front door explicitly before accepting any success status.
-        dispatch = '''source "$1"
-shift
-if ! declare -F ags_global_entry >/dev/null; then
-  echo 'agentstack-resume: GLOBAL_ENTRY_UNAVAILABLE' >&2
-  exit 2
-fi
-ags_global_entry resume-child "$@"
-status=$?
-if [[ "$status" == 125 ]]; then
-  echo 'agentstack-resume: GLOBAL_ENTRY_UNAVAILABLE' >&2
-  exit 2
-fi
-exit "$status"
-'''
-        result = subprocess.run(['/bin/bash', '-c', dispatch, 'agentstack-resume', str(library), *sys.argv[1:]])
+    loader = Path(__file__).resolve().parent / 'lib/global-client-loader.sh'
+    result = subprocess.run(['/bin/bash', str(loader), 'resume-child', *sys.argv[1:]])
+    if result.returncode != 125:
         return result.returncode
-    elif selected:
-        print('agentstack-resume: GLOBAL_ENTRY_UNAVAILABLE',file=sys.stderr)
-        return 2
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("name")
     parser.add_argument("--base", choices=["default", "mail-only"])

@@ -1,18 +1,14 @@
 #!/usr/bin/env bash
 
 # Decide explicit global context before loading any legacy environment/state.
-_ags_global_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/agentstack-register.sh"
-if [[ -f "$_ags_global_lib" ]]; then
-  . "$_ags_global_lib"
-fi
-if declare -F ags_global_entry >/dev/null; then
-  if ags_global_entry spawn-child "$@"; then exit 0; else _ags_global_rc=$?; fi
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader" || exit 2
+if declare -F ags_client_entry >/dev/null; then
+  if ags_client_entry spawn-child "$@"; then exit 0; else _ags_global_rc=$?; fi
   if [[ "$_ags_global_rc" != 125 ]]; then
     exit "$_ags_global_rc"
   fi
-elif [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -e "$(dirname "$_ags_global_lib")/../../runtime-client.json" || -L "$(dirname "$_ags_global_lib")/../../runtime-client.json" ]]; then
-  printf '%s\n' 'GLOBAL_REGISTER_LIBRARY_UNAVAILABLE' >&2
-  exit 2
+
 fi
 # spawn_gemini_child.sh — launch one delegated Google Antigravity child in an
 # isolated git worktree, with ORRERY Mail identity/reservations bound by a local

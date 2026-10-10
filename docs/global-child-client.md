@@ -6,9 +6,9 @@
 
 ## 入口と固定 layout
 
-登録・子・resume の shell 入口は `bin/lib/agentstack-register.sh` の1本です。各 launcher は旧 env を読む前に明示 context を確認します。context が無ければ旧動作、不正・壊れた symlink は拒否です。global で name/project/token file の旧探索へ戻りません。
+登録・子・resume の shell 入口は `bin/lib/agentstack-register.sh` の1本です。通常の context 判定は `runtime_client.selected(argv)` の1関数で、共通 loader が register の入口へ渡します。各 launcher は旧 env を読む前に判定します。古い partial install で helper が無い場合だけ、loader が context の有無を確認し、あれば `GLOBAL_ENTRY_UNAVAILABLE`、無ければ旧経路です。context が無ければ旧動作、不正・壊れた symlink は拒否です。global で name/project/token file の旧探索へ戻りません。
 
-`AGENTSTACK_CLIENT_CONFIG` は親の固定 `runtime-client.json` を指します。子は同じ `agentstack/clients/` 直下の別の `client_name` へ置きます。資格情報は既存の `credential.json` のみです。`runtime/child-state.json` は親の stable ID・task/tools・準備の状態だけを持ち、子の token や identity のコピーを持ちません。任意の token/profile 出力先は受け付けません。新 identity は新しい root を使います。
+`AGENTSTACK_CLIENT_CONFIG` は親の固定 `runtime-client.json` を指します。子は同じ `agentstack/clients/` 直下の別の `client_name` へ置きます。資格情報は既存の `credential.json` のみです。`runtime/child-state.json` は親の stable ID・task/tools・準備の状態だけを持ち、子の token や identity のコピーを持ちません。任意の token/profile 出力先は受け付けません。新 identity は新しい root を使います。既存 standalone の root を子に転用すると `CLIENT_ROOT_NOT_CHILD` で拒否します。既存 child は同じ親と登録 intent の digest を照合し、異なる name/program/model/task は `CHILD_REGISTRATION_INTENT_CONFLICT` で拒否します。token や payload の別コピーは持ちません。
 
 ```bash
 agentstack-preregister-child --child-client-name child_01 --name ChildAlpha \
@@ -36,9 +36,9 @@ bash "$AGENTSTACK_HOME/bin/lib/agentstack-register.sh" finalize-child \
 
 ## hook と終了
 
-PreToolUse は絶対 path の coverage と自己 ACTIVE の期限を read で確認します。更新閾値は client の `RENEW_THRESHOLD_SECONDS=600` の1か所です。残り600秒以下だけ1800秒の renew を送ります。連続編集だけで receipt を増やしません。renew の応答を失ったら編集は拒否し、次の PreToolUse が同じ pending/UUID を先に replay します。別の mutation pending を勝手に実行しません。
+PreToolUse は絶対 path の coverage と自己 ACTIVE の期限を read で確認します。更新閾値は client の `RENEW_THRESHOLD_SECONDS=600` の1か所です。残り600秒以下だけ1800秒の renew を送ります。連続編集だけで receipt を増やしません。mutation の応答を失ったら編集は拒否し、次の PreToolUse が種類を問わず保存済み intent を同じ UUID で先に replay します。確定拒否だけが共通の拒否表に従って pending を解消し、結果不明は編集を止めます。
 
-既定/明示 `warn-open` の初期 transport 通信断は、旧 hook と同じ警告・監査付きで編集を許可します。拒否の実設定値は `AGENTSTACK_MAIL_OUTAGE_POLICY=block` です。context/owner/binding/schema 不正、HTTP/MCP の拒否、結果不明の renew は warn-open の対象外です。PostToolUse は完了済み編集を戻せず、失敗を監査します。grace worker は固定 slot の世代と捕捉済み lease ID を照合し、新しい予約を path で選び直しません。
+既定/明示 `warn-open` の初期 transport 通信断は、旧 hook と同じ警告・監査付きで編集を許可します。拒否の実設定値は `AGENTSTACK_MAIL_OUTAGE_POLICY=block` です。context/owner/binding/schema 不正、HTTP/MCP の拒否、結果不明の renew は warn-open の対象外です。PostToolUse は完了済み編集を戻せず、失敗を監査します。grace は旧設定 `AGENTSTACK_RELEASE_GRACE_SECONDS`（fallback: `FILE_RESERVATION_RELEASE_GRACE_SECONDS`）、既定90秒です。`runtime/release-debounce/<lease-id>.json` の slot は別 file の編集で上書きしません。worker は世代・捕捉済み lease ID・revision・期限を照合し、遅延中に更新・再取得された予約を解放しません。`AGENTSTACK_MAIL_DISABLED=1` は hook の context/owner 読込みと通信より先に skip します。
 
 SessionEnd と cleanup は同じ end 操作です。同 ID の別 session が live または ps/tmux の結果が unknown なら、解放も退役もしません。最後の child は server の retire 1本（ACTIVE の解放を含む）、最後の standalone は自己 ACTIVE の release だけです。実行の証拠は固定 `runtime/live-sessions/` に保存し、予約の session 別所有表は作りません。provider PID の出生時刻が確認できなければ unknown を保ちます。
 

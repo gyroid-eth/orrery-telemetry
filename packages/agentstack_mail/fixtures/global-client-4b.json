@@ -222,7 +222,7 @@
   },
   "fixed_layout": {
     "root": "<isolation>/agentstack/clients/<client_name>, existing lowercase safe-name rule; root siblings disjoint, new identity=new root",
-    "retained": "existing CLIENT_LAYOUT plus runtime/child-state.json, runtime/child.lock, runtime/task.md and runtime/release-debounce.json; session evidence in runtime/live-sessions/; provider outputs deferred4c",
+    "retained": "existing CLIENT_LAYOUT plus runtime/child-state.json, runtime/child.lock, runtime/task.md and runtime/release-debounce/<lease-id>.json; session evidence in runtime/live-sessions/; provider outputs deferred4c",
     "no_arbitrary_output": "global rejects --token-file-out/--child-token-file/--profile arbitrary destinations. Task source is read-only input snapshotted to fixed task.md. Generated provider config never authorizes independent token file.",
     "preflight": "all fixed slots registered in one RuntimeClient output_plan before network/write, type+private mode+owner+nlink checks; no recursive ownership scan. Helpers share schema and allowed slot registry.",
     "lifecycle_lock": "binding-independent private lock with fixed magic; child helper and dashboard use same operation lock, no per-entrypoint lock implementations. Lock order child lock → authority shared fence → mutation mutex (no inverse acquisition). The fixed operation mutex applies to standalone identity roots too, without requiring child-state.json; live SessionStart/resume/end share it.",
@@ -307,8 +307,8 @@
     "retire": "retire_agent owns ACTIVE release in same server transaction; no extra release in child cleanup. Repeated lifecycle request may update timestamps/revision (S1 is not receipt-idempotent); current target status check avoids blind repeat. retired authentication via same-UID inspect+fingerprint before unretire, then whois."
   },
   "reservation_hook_contract": {
-    "pre_edit": "Replay a pending renew with the same UUID before check. Read coverage and own ACTIVE expiry; renew only with remaining TTL <= client RENEW_THRESHOLD_SECONDS (600), new TTL1800. No receipt below threshold.",
-    "post_edit": "captured owned lease IDs and hook local generation; grace worker rechecks exact context/binding/owner and current generation. Stale worker never releases newer lease IDs. Duplicate completion/no match is success no-op.",
+    "pre_edit": "Replay any saved mutation intent with the same UUID before check. Read coverage and own ACTIVE expiry; renew only with remaining TTL <= RENEW_THRESHOLD_SECONDS (600), TTL1800. Known definite rejection uses shared table; uncertain result blocks editing.",
+    "post_edit": "Legacy AGENTSTACK_RELEASE_GRACE_SECONDS / FILE_RESERVATION_RELEASE_GRACE_SECONDS fallback, default90. Per-lease fixed slots capture generation, lease ID, revision and expires_ts. Empty edit preserves other slots; renewed/reacquired lease is never released.",
     "session_end": "共通end判定へ。別session live/unknownは全件release無し。最後のchildはretireのみ。最後のstandaloneのみ自己ACTIVEをkeysetで<=100ID batch release。詳細end_contract。",
     "outage": "Q4=B決定。既存session-identity-policy.shの既定warn-open/明示warn-open/明示blockを共用。初期transport outageに限り編集を許可して同じ警告/監査、その他の既存拒否を維持。refuseは説明上の呼称、実設定値はblock。",
     "renew_recovery": "Next PreToolUse replays the saved renew intent with the same UUID before a new check. Unknown/auth/binding/schema outcomes preserve pending and refuse editing."
@@ -835,6 +835,10 @@
               "type": "null"
             }
           ]
+        },
+        "registration_intent_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       },
       "required": [
@@ -846,7 +850,8 @@
         "tools_selection",
         "task_delivery",
         "resume_expires_at",
-        "active_request_id"
+        "active_request_id",
+        "registration_intent_digest"
       ],
       "additionalProperties": false
     },
@@ -1895,5 +1900,11 @@
       }
     ],
     "coverage_rule": "broad grep hit57=48source/docs + sample1 + integration tests8. Each hit has exactly one row; direct call vs comment/matcher/docs is not inferred from hit count."
+  },
+  "reviewfix1_contract": {
+    "normal_selector": "runtime_client.selected(argv), exactly one normal context selector",
+    "partial_install_admission": "One common loader checks context presence only if runtime/register helper is missing or has no selector protocol; context refuses GLOBAL_ENTRY_UNAVAILABLE, absent context preserves legacy",
+    "mail_disabled": "AGENTSTACK_MAIL_DISABLED=1 skips hooks before context/owner/network",
+    "child_root": "Existing standalone identity without child-state refuses CLIENT_ROOT_NOT_CHILD; existing same-parent child preserves registration pending"
   }
 }

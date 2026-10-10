@@ -12,7 +12,7 @@
 
 ### global client の子登録・再開・hook を準備
 
-既定の旧 mode を維持し、固定 client root を使う明示 prepare-only の子登録・再開を追加しました。登録の中断は同じ name/token の再送と owner 照合で回収し、SessionEnd と cleanup を共通化しました。予約は期限の閾値以下だけ更新し、応答喪失時は次の hook が同じ UUID を再送します。schema・拒否表・message intent は server と共有します。実行と wake は後続のまま、activation=false・公開 Mail tool31個は不変です。dashboard の明示 global resume 入力に合わせ API 世代を13にしました。
+既定の旧 mode を維持し、固定 client root を使う明示 prepare-only の子登録・再開を追加しました。登録の中断は同じ name/token の再送と owner 照合で回収し、SessionEnd と cleanup を共通化しました。予約は期限の閾値以下だけ更新し、応答喪失時は次の hook が同じ UUID を再送します。schema・拒否表・message intent は server と共有します。既存 standalone の子への転用を拒否し、Mail 無効化を先に確認します。解放は旧 grace 設定（既定90秒）と lease ごとの slot を使い、更新された予約を保ちます。次の編集 hook は保存済みの全種類の mutation を再送し、通常の context 判定と helper 欠落時の admission は各1か所へ集約しました。実行と wake は後続のまま、activation=false・公開 Mail tool31個は不変です。dashboard の明示 global resume 入力に合わせ API 世代を13にしました。
 
 ### global SQLite の POSIX lock を保つ
 
