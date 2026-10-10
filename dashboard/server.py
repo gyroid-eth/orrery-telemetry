@@ -7029,7 +7029,7 @@ def _spawn_log_tail_and_reason(log_path, start_offset: int = 0) -> tuple[str, st
                         visible.append(candidate)
                     else:
                         reason = "; ".join(visible)
-                reason = f"{reason}; {error}" if budget else error
+                reason = f"{reason}; {error}" if budget and len(reason) <= budget else error
     return text[-1000:], reason[:500]
 
 

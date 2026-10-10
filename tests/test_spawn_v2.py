@@ -1669,3 +1669,12 @@ def test_single_oversized_candidate_keeps_final_resolution_error(tmp_path):
     assert reason.endswith("…; Error: no usable Codex CLI found")
     assert "more skipped" not in reason
     assert len(reason) == 500
+
+
+def test_long_error_remains_whole_when_candidate_count_exceeds_budget(tmp_path):
+    log = tmp_path / "spawn.log"
+    error = "Error: no usable Codex CLI found " + "E" * 438
+    assert len(error) == 471
+    log.write_text("note: skipping codex /first: " + "x" * 600 +
+                   "\nnote: skipping codex /second: missing node\n" + error)
+    assert server._spawn_log_tail_and_reason(log)[1] == error
