@@ -6978,7 +6978,7 @@ _SPAWN_REASON_PREFIX = "[spawn_child] reason: "
 
 
 def _spawn_log_tail_and_reason(log_path) -> tuple[str, str]:
-    """The launcher log's last 1000 characters, and its last reason line.
+    """The launcher log's last 1000 characters, and its first cause line.
 
     spawn_child.sh writes "[spawn_child] reason: ..." when it stops on
     something only the user can resolve (Claude Code's first-run setup, its
@@ -6991,9 +6991,18 @@ def _spawn_log_tail_and_reason(log_path) -> tuple[str, str]:
     except OSError:
         return "", ""
     reason = ""
-    for line in text.splitlines():
+    # Explicit readiness failures outrank rejected candidates that the launcher
+    # may have successfully replaced. Within each class keep the first cause.
+    lines = text.splitlines()
+    for line in lines:
         if line.startswith(_SPAWN_REASON_PREFIX):
             reason = line[len(_SPAWN_REASON_PREFIX):].strip()
+            break
+    if not reason:
+        for line in lines:
+            if line.startswith("note: skipping ") or line.startswith("Error:"):
+                reason = line.strip()
+                break
     return text[-1000:], reason[:500]
 
 

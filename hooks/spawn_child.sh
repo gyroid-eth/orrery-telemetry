@@ -1215,7 +1215,15 @@ CHILD_SHELL="$(resolve_child_shell)" || exit 1
 # probes (--version, --help) run through run_like_codex_child, so a candidate is
 # judged under the PATH it will run with. Probing with the launcher's own PATH
 # rejected a codex whose `#!/usr/bin/env node` finds node only there (2026-09-29).
-CODEX_CHILD_PATH_SETUP='export PATH="$HOME/.local/bin:$PATH"'
+if declare -F codex_launch_path_setup >/dev/null; then
+    CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"
+else
+    CODEX_CHILD_PATH_SETUP='export PATH="$HOME/.local/bin:$PATH"'
+fi
+# tmux receives a shell command containing a single-quoted login script.
+# Escape the shared setup for that outer shell; probes use the raw script.
+CODEX_CHILD_PATH_SETUP_QUOTED="$(printf '%s' "$CODEX_CHILD_PATH_SETUP" | sed "s/'/'\\\\''/g")"
+
 # The probe's login shell also gets the guard variables the child's session
 # has (TMUX_ENV_ARGS below): a profile or exit hook that checks CLAUDECODE, or
 # the reserved-identity marker, must behave as it will for the child.
@@ -3282,7 +3290,7 @@ ${TASK}"
             -c "$WORK_DIR" \
             "${TMUX_ENV_ARGS[@]}" \
             "$CHILD_SHELL"' -lc '"'"'
-                '"$CODEX_CHILD_PATH_SETUP"';
+                '"$CODEX_CHILD_PATH_SETUP_QUOTED"';
                 # The child never sources a user-side bootstrap: identity comes
                 # from the reserved name and token file, and a failing script
                 # under set -e would take the whole session with it (2026-09-03).
@@ -4146,7 +4154,7 @@ if [[ "$USE_CODEX" == true ]]; then
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
         "$CHILD_SHELL"' -lc '"'"'
-                '"$CODEX_CHILD_PATH_SETUP"';
+                '"$CODEX_CHILD_PATH_SETUP_QUOTED"';
             # See the pre-registered path: no user-side bootstrap is sourced.
             # See the pre-registered path: the product owns the launch flags and
             # never hands off to a user-side launcher.

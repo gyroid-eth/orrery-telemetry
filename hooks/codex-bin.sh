@@ -234,19 +234,56 @@ codex_launch_shell() {
     printf '%s\n' "$shell"
 }
 
+# Compute the execution PATH after the login profile has run. npm's codex
+# symlink often points into lib/node_modules, while node lives beside the shim.
+# Prefer node beside the resolved target; otherwise use the selected shim's bin.
+# Do not add a different nvm version merely because it was searched.
+codex_launch_path() {
+    local bin="${1:-}" target dir link count=0
+    local launch_path="$HOME/.local/bin:$PATH" extra candidate
+    # No candidate yet: the same function supplies the discovery PATH.
+    if [[ -z "$bin" ]]; then
+        extra="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.nodebrew/current/bin:/opt/homebrew/bin:/usr/local/bin"
+        for candidate in "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin; do
+            [[ -d "$candidate" ]] && extra="$extra:$candidate"
+        done
+        printf '%s\n' "$PATH:$extra"
+        return 0
+    fi
+    target="$bin"
+    while [[ -L "$target" ]]; do
+        count=$((count + 1))
+        (( count <= 40 )) || break
+        link="$(readlink "$target")" || break
+        case "$link" in
+            /*) target="$link" ;;
+            *) target="${target%/*}/$link" ;;
+        esac
+    done
+    for dir in "${target%/*}" "${bin%/*}"; do
+        dir="$(cd -P "$dir" 2>/dev/null && pwd)" || continue
+        if [[ -f "$dir/node" && -x "$dir/node" ]]; then
+            printf '%s\n' "$dir:$launch_path"
+            return 0
+        fi
+    done
+    printf '%s\n' "$launch_path"
+}
+
+# Embed this one function in both tmux launch snippets and the probe shell.
+# No second PATH formula or dependency on an inherited shell function.
+codex_launch_path_setup() {
+    declare -f codex_launch_path
+    printf '%s\n' 'export PATH="$(codex_launch_path "$AGENTSTACK_CODEX_BIN")"'
+}
+
 codex_launch_runner() {
-    env CLAUDECODE=1 AGENTSTACK_RESERVED_IDENTITY=1 \
+    env CLAUDECODE=1 AGENTSTACK_RESERVED_IDENTITY=1 AGENTSTACK_CODEX_BIN="$1" \
         "$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"'; exec "$0" "$@"' "$@"
 }
 
 codex_launch_search_path() {
-    local extra="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.nodebrew/current/bin:/opt/homebrew/bin:/usr/local/bin"
-    local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
-    local candidate
-    for candidate in "$nvm_dir"/versions/node/*/bin; do
-        [[ -d "$candidate" ]] && extra="$extra:$candidate"
-    done
-    printf '%s\n' "$PATH:$extra"
+    codex_launch_path
 }
 
 codex_find_bin() {
@@ -286,7 +323,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     context="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-context.sh"
     [[ -f "$context" ]] && . "$context"
     CHILD_SHELL="$(codex_launch_shell)"
-    CODEX_CHILD_PATH_SETUP='export PATH="$HOME/.local/bin:$PATH"'
+    CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"
     CODEX_PROBE_RUNNER=codex_launch_runner
     # Keep the exact spawner defaults (10s / 15s): a slow but usable CLI
     # must not be discarded here and then accepted after preregistration.

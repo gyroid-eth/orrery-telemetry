@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### nvm の Codex を dashboard の最小 PATH から起動できます
+
+選んだ Codex の解決先、または npm shim と同じ bin にある node を、確認と起動に共通の PATH 処理で使います。doctor も子の login shell と同じ処理で CLI を確認し、起動失敗の表示は launcher の原因を登録の後始末より先に出します。既存 CLI の版の確認だけを一時 HOME で行う WSL 用 runner を追加しました。API の field と世代は変えません。
+
 ### 隔離 global server の登録更新・window・contact を準備
 
 S2a の明示した schema3 設定に9つの公開 tool と capability を追加しました。program/model を保つ登録更新、read-only の window 照合、単調な活動更新、相手 owner が承認する contact を扱います。request の canonical preimage と結果を同じ transaction に保存し、共通 client は固定 slot の UUID を引き継いで再送します。owner 別 quota、receipt を使わない touch、同じ read snapshot と write tracker を照合します。 mapped reconnect から policy の自動書込みを分け、quota/pending があっても活動更新を継続します。応答 schema は server/client の共通正本で確認し、不適合な応答では pending を消さず同 UUID の replay を待ちます。

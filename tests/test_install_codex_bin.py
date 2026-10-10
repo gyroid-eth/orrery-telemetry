@@ -246,7 +246,8 @@ def test_a_native_child_that_ignores_term_is_not_left_behind(tmp_path):
 
 
 def _stop_functions(script: str) -> str:
-    text = (ROOT / "scripts" / script).read_text(encoding="utf-8")
+    source = ROOT / "hooks/codex-bin.sh" if script == "doctor.sh" else ROOT / "scripts" / script
+    text = source.read_text(encoding="utf-8")
     parts = []
     for name in ("codex_probe_stop", "codex_process_start"):
         start = text.index(f"\n{name}() {{") + 1

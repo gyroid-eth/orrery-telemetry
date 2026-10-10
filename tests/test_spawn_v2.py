@@ -1549,3 +1549,35 @@ def test_hooks_without_the_script_count_as_unknown_on_both_sides(monkeypatch, tm
     monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
     assert server.do_spawn({"parent": "Parent", "task": "work"}) == {"model": "claude-opus-5-5"}
     assert claude_models._bound_child_path == ""
+
+
+def test_nvm_node_failure_precedes_registration_cleanup_in_spawn_error(monkeypatch, tmp_path):
+    script = '''#!/bin/bash
+echo $$ > "$TEST_MARK.pid"
+echo "note: skipping codex /synthetic/nvm/bin/codex: '/synthetic/nvm/bin/codex --version' exited with status 127: env: node: No such file or directory" >&2
+echo "Error: no usable Codex CLI found" >&2
+exit 1
+'''
+    launcher, runtime = _prepare_real_spawn(monkeypatch, tmp_path, script=script)
+    monkeypatch.setattr(server, "_SPAWN_READINESS_TIMEOUT_SECONDS", 20)
+    result = server.spawn_with_launch_spec(
+        {"standalone": True, "name": "QuietCurie", "task": "work", "dir": str(tmp_path)},
+        _cleanup_spec(launcher, tmp_path, cleanup_seconds=0))
+    assert not result["ok"]
+    assert result["error"].startswith("note: skipping codex /synthetic/nvm/bin/codex:")
+    assert result["error"].index("node: No such file") < result["error"].index("child registration")
+    assert "no permission to delete" in result["error"]
+
+
+def test_first_launcher_reason_is_retained_before_later_cleanup_reason(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("[spawn_child] reason: original failure\n[spawn_child] reason: cleanup failure\n")
+    _, reason = server._spawn_log_tail_and_reason(log)
+    assert reason == "original failure"
+
+
+def test_readiness_reason_outranks_an_earlier_rejected_candidate(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("note: skipping codex /synthetic/obsolete: rejected\n"
+                   "[spawn_child] reason: selected CLI needs setup\n")
+    assert server._spawn_log_tail_and_reason(log)[1] == "selected CLI needs setup"

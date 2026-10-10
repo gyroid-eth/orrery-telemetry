@@ -51,7 +51,7 @@ def _script(path: pathlib.Path, body: str) -> pathlib.Path:
 def _runner() -> str:
     """The child PATH setup and the probe runner, as spawn_child.sh defines them."""
     text = SPAWN.read_text(encoding="utf-8")
-    start = text.index("CODEX_CHILD_PATH_SETUP=")
+    start = text.index("if declare -F codex_launch_path_setup >/dev/null; then")
     end = text.index("CODEX_PROBE_RUNNER=run_like_codex_child\n", start) + len("CODEX_PROBE_RUNNER=run_like_codex_child\n")
     return text[start:end]
 
@@ -68,8 +68,8 @@ def _resolve(tmp_path, *, path_dirs, env_bin=None, installed=None, wsl=False, li
     loader = text[start:text.index("codex_search_path() {", start)]
     script = (
         f"HOOKS_DIR={shlex.quote(str(ROOT / 'hooks') if lib else str(tmp_path / 'old-hooks'))}\n"
-        + ("CHILD_SHELL=/bin/bash\n" + _runner() if runner else "")
         + loader
+        + ("CHILD_SHELL=/bin/bash\n" + _runner() if runner else "")
         # Stub the platform after the library is loaded; /mnt cannot exist on macOS CI.
         + ("running_under_wsl() { return 0; }\n" if wsl else "running_under_wsl() { return 1; }\n")
         + f"WSL_WINDOWS_MOUNT_ROOT={shlex.quote(str(tmp_path / 'mnt'))}\n"
@@ -190,16 +190,16 @@ def test_the_probe_runs_codex_with_the_path_the_child_will_have(tmp_path):
     rc, out, err = _resolve(tmp_path, path_dirs=[])
     assert rc == 0, err
     assert out == str(codex)
-    # Probing with the launcher's PATH instead would reject it.
+    # Probing without the launcher runner still rejects it.
     rc, _, err = _resolve(tmp_path, path_dirs=[], runner=False)
     assert rc == 1 and "--version' exited with status" in err
 
 
 def test_both_codex_launches_use_the_one_path_setup():
     text = SPAWN.read_text(encoding="utf-8")
-    assert text.count("\'\"$CODEX_CHILD_PATH_SETUP\"\';") == 2
+    assert text.count("\'\"$CODEX_CHILD_PATH_SETUP_QUOTED\"\';") == 2
     runner = text[text.index("run_like_codex_child() {"):text.index("CODEX_PROBE_RUNNER=run_like_codex_child")]
-    assert '"$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"' in runner
+    assert "codex_launch_runner" in runner
     # The approval probe (--help) goes through the same runner.
     approval = text[text.index("codex_approval_flags() {"):]
     assert '${CODEX_PROBE_RUNNER:-} "$codex_bin" --help' in approval[:approval.index("\n}\n")]
@@ -227,7 +227,7 @@ def _spawn_resolution(tmp_path, *, path_dirs, installed=None, timeout=5, budget=
     start = text.index("# Codex candidate rules, and the env.sh reader")
     loader = text[start:text.index("codex_search_path() {", start)]
     script = (
-        f"HOOKS_DIR={shlex.quote(str(ROOT / 'hooks'))}\nCHILD_SHELL=/bin/bash\n" + _runner() + loader
+        f"HOOKS_DIR={shlex.quote(str(ROOT / 'hooks'))}\nCHILD_SHELL=/bin/bash\n" + loader + _runner()
         + "running_under_wsl() { return 1; }\n"
         + f"CODEX_VERSION_TIMEOUT_SECONDS={timeout}\n"
         + (f"CODEX_PROBE_BUDGET_SECONDS={budget}\n" if budget is not None else "")
