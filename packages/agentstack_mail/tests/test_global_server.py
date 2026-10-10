@@ -918,3 +918,70 @@ def test_default_cli_keeps_real_legacy_tools_database_and_management(server):
             process.wait(timeout=5)
         log.close()
         assert not (root / "legacy.sock").exists()
+
+
+@pytest.mark.parametrize("entry", ["startup", "read", "write"])
+def test_sqlite_family_validation_never_opens_independent_descriptors(
+    server, monkeypatch, entry
+):
+    import builtins
+    import io
+    import sqlite3
+
+    database = Path(server["config"]["database"])
+    family = {str(database) + suffix for suffix in ("", "-wal", "-shm", "-journal")}
+    runtime = GlobalRuntime(server["root"] / "config.json")
+
+    def guarded(original):
+        def check(path, *args, **kwargs):
+            if isinstance(path, (str, bytes, os.PathLike)):
+                assert os.fsdecode(path) not in family, (
+                    "independent SQLite file open releases POSIX locks"
+                )
+            return original(path, *args, **kwargs)
+
+        return check
+
+    # SQLite C-level opens remain allowed. Raw Python opens (including
+    # Path.read_bytes and copy helpers) must not close any DB-family inode.
+    with connection(database) as held:
+        held.execute("SELECT id FROM agents LIMIT 1").fetchall()
+        monkeypatch.setattr(os, "open", guarded(os.open))
+        monkeypatch.setattr(builtins, "open", guarded(builtins.open))
+        monkeypatch.setattr(io, "open", guarded(io.open))
+        if entry == "startup":
+            runtime = GlobalRuntime(server["root"] / "config.json")
+        else:
+            with runtime.transaction(write=entry == "write") as db:
+                assert db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+                if entry == "write":
+                    db.execute("UPDATE agents SET model=model WHERE id=2")
+        runtime.check_sqlite_files()
+    with sqlite3.connect(database) as db:
+        assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_sqlite_family_validation_preserves_cross_process_writer_lock(server):
+    database = Path(server["config"]["database"])
+    runtime = GlobalRuntime(server["root"] / "config.json")
+    probe = """
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1], timeout=0) as db:
+    try:
+        db.execute('BEGIN IMMEDIATE')
+    except sqlite3.OperationalError as exc:
+        assert 'locked' in str(exc), str(exc)
+    else:
+        raise AssertionError('another process acquired the held SQLite writer lock')
+"""
+    with runtime.transaction(write=True) as db:
+        runtime.check_sqlite_files()
+        result = subprocess.run(
+            [sys.executable, "-c", probe, str(database)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        db.execute("UPDATE agents SET model=model WHERE id=2")

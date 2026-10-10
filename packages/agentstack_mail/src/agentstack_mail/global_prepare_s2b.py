@@ -361,7 +361,7 @@ class S2bFreshMigration(FreshMigration):
             "orrery-s2b-notification-proof-v1",
         )
         cfg = document(target / "server-config.json")
-        cfg["kind"] = "orrery-global-server-s2b-v1"
+        cfg["kind"] = self.config_kind
         write_role(target / "server-config.json", cfg, cfg["kind"])
         report.update(
             runtime_profile="s2b-v1",
@@ -379,23 +379,25 @@ def prepare(*args, **kwargs):
     return prepare_fresh(*args, migration_class=S2bFreshMigration, **kwargs)
 
 
-def main(argv=None):
+def main(argv=None, *, profile="s2b", prepare_function=prepare):
     parser = argparse.ArgumentParser(
-        description="Prepare a fresh isolated schema4 candidate, never upgrade existing roots."
+        description="Prepare a fresh isolated "
+        + profile
+        + " candidate, never upgrade existing roots."
     )
     parser.add_argument("--plan", required=True)
     args = parser.parse_args(argv)
     try:
         plan = document(args.plan)
         if (
-            plan.get("kind") != "orrery-s2b-preparation-plan-v1"
+            plan.get("kind") != "orrery-" + profile + "-preparation-plan-v1"
             or plan.get("activation_enabled") is not False
         ):
             raise GlobalError("ISOLATED_CONFIG_REQUIRED")
         from .namespace_plan import FenceEvidence
 
         source = SourceBundle(**{k: Path(v) for k, v in plan["source_paths"].items()})
-        result = prepare(
+        result = prepare_function(
             source,
             Path(plan["isolation_root"]),
             plan["candidate_name"],

@@ -56,6 +56,7 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [絶対 path の予約候補](absolute-reservations.md) — PR2 の normalizer、認証付き隔離 store、client adapter と予約ごとの activity/GC。既定は旧 mode。
 - [Mail と配送の記録の移行候補](namespace-state-migration.md) — PR3 の隔離 snapshot、永続 store と phase ごとの復旧。activation false。
 - [global server の S1 準備](global-server.md) — 隔離 HTTP の登録・再接続・inbox・enrollment と authority epoch。既定は旧 mode。
+- [隔離 global 予約・welcome](global-reservations.md) — S2c の唯一 SQL engine、TTL、管理復旧、試験移設。既定は旧 mode。
 - [隔離 global message と通知（S2b）](global-messages.md) — 8 tool・DB 添付・純粋 inbox・signal の再照合。既定は旧 mode。
 - [global runtime client の4a準備](global-runtime-client.md) — S1 の登録・復旧・待機、専用 HOME と profile の再接続。
 - [Mail 更新の設計メモ](agentstack-mail-update-design.md) — 差し替え方式の理由と未決事項。操作は更新手順を参照。

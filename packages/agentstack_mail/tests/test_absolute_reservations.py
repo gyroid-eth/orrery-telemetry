@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from agentstack_mail.reservation_activity import Activity, probe_activity
-from agentstack_mail.reservation_candidate import ReservationServer
+from test_global_server_s2c import prepared as prepared
+from fixtures.sql_reservations import SQLTransport
 from agentstack_mail.reservation_clients import (
     Binding,
     ReservationClient,
@@ -45,12 +45,9 @@ def authenticate(name, token):
 
 
 @pytest.fixture
-def server():
-    now = [10_000.0]
-    candidate = ReservationServer(
-        authenticate, clock=lambda: now[0], inactivity=100, grace=100
-    )
-    return candidate, now
+def server(prepared):
+    now = [time.time()]
+    return SQLTransport(prepared, lambda: now[0]), now
 
 
 def client(server, cwd, owner="alpha"):
@@ -251,18 +248,11 @@ def test_unicode_glob_overlap_and_recent_activity(server, tmp_path):
         return
     pattern = normalize_path(str(tmp_path / "e\u0301-*.py"))
     assert paths_overlap(pattern, normalize_path(str(file))) is aliases
-    probe = probe_activity(pattern)
-    assert probe.complete and probe.matched is aliases
-    assert (probe.filesystem is not None) is aliases
+    service, _ = server
+    client(service, tmp_path).call("reserve_files", paths=[pattern.value])
     if aliases:
-        service, now = server
-        now[0] = time.time()
-        lease = client(service, tmp_path).call("reserve_files", paths=["e\u0301-*.py"])[
-            0
-        ]
-        now[0] += 200
-        os.utime(file, (now[0], now[0]))
-        assert service.collect([lease.id]) == {lease.id: "active"}
+        with pytest.raises(ReservationError, match="CONFLICT"):
+            client(service, tmp_path, "beta").call("reserve_files", paths=[str(file)])
 
 
 def test_distinguishing_unicode_rules_preserve_missing_names(tmp_path, monkeypatch):
@@ -287,21 +277,10 @@ def test_unknown_unicode_rules_reject_acquire_and_prevent_stale(
     lease = client(service, tmp_path).call("reserve_files", paths=[path.value])[0]
     now[0] += 200
     monkeypatch.setattr(reservation_paths, "unicode_rule_at", lambda _: None)
-    assert not probe_activity(path).complete
-    assert service.collect([lease.id]) == {lease.id: "activity_unknown"}
+    assert not service._leases[lease.id].released
     with pytest.raises(ReservationError, match="UNICODE_RULES_UNKNOWN"):
         client(service, tmp_path, "beta").call("reserve_files", paths=["é-new.py"])
     assert len(service._leases) == 1
-
-
-def test_unknown_unicode_directory_cannot_prove_empty_glob(tmp_path, monkeypatch):
-    from agentstack_mail import reservation_activity
-
-    monkeypatch.setattr(reservation_paths, "case_insensitive_at", lambda _: False)
-    path = normalize_path(str(tmp_path / "e\u0301-*.py"))
-    monkeypatch.setattr(reservation_activity, "unicode_rule_at", lambda _: None)
-    activity = probe_activity(path)
-    assert not activity.complete and not activity.matched
 
 
 @pytest.mark.parametrize("rule", ["apfs", "hfs"])
@@ -365,32 +344,6 @@ def test_nonascii_case_table_unknown_rejects_initial_acquire(
     with pytest.raises(ReservationError, match="CASE_RULES_UNKNOWN"):
         client(service, tmp_path).call("reserve_files", paths=[name])
     assert not service._leases
-
-
-def test_nonascii_case_glob_activity_unknown_prevents_collection(
-    server, tmp_path, monkeypatch
-):
-    from agentstack_mail import reservation_activity
-
-    monkeypatch.setattr(reservation_paths, "unicode_rule_at", lambda _: "apfs")
-    monkeypatch.setattr(reservation_paths, "case_insensitive_at", lambda _: True)
-    monkeypatch.setattr(reservation_activity, "unicode_rule_at", lambda _: "apfs")
-    monkeypatch.setattr(reservation_activity, "case_insensitive_at", lambda _: True)
-    service, now = server
-    now[0] = time.time()
-    lease = client(service, tmp_path).call("reserve_files", paths=["*.py"])[0]
-    (tmp_path / "É-existing.py").touch()
-    now[0] += 200
-    activity = probe_activity(lease.path)
-    assert not activity.complete
-    assert service.collect([lease.id]) == {lease.id: "activity_unknown"}
-    assert not lease.released
-    # A lease from the earlier candidate version is also not proved stale,
-    # including an empty non-ASCII glob (no directory entry to validate).
-    old = reservation_paths.ReservationPath(
-        "filesystem", str(tmp_path / "é-empty*.py"), str(tmp_path), True, "apfs"
-    )
-    assert not probe_activity(old).complete
 
 
 def test_case_sensitive_unicode_case_names_stay_distinct(server, tmp_path, monkeypatch):
@@ -476,34 +429,29 @@ def test_ttl_validation(server, tmp_path, ttl):
 
 def test_unknown_no_early_release_but_ttl_and_owner_work(server, tmp_path):
     service, now = server
-    service.probe = lambda _: Activity(False, reason="PROBE_UNKNOWN")
     lease = client(service, tmp_path).call(
-        "reserve_files", paths=["new"], ttl_seconds=600
+        "reserve_files", paths=["*.py"], ttl_seconds=60
     )[0]
-    now[0] += 200
-    assert service.collect([lease.id]) == {lease.id: "activity_unknown"}
-    assert service._leases[lease.id].expires == lease.expires
-    now[0] += 500
-    assert service.collect([lease.id]) == {lease.id: "ttl_expired"}
-    assert not client(service, tmp_path).call(
-        "renew_reservations", file_reservation_ids=[lease.id]
+    before = service._leases[lease.id]
+    assert not before.released
+    now[0] += 61
+    assert not client(service, tmp_path).call("check_reservations", paths=["new.py"])
+    assert service._leases[lease.id] == before
+    client(service, tmp_path).call(
+        "release_reservations", file_reservation_ids=[lease.id]
     )
-    other = client(service, tmp_path).call("reserve_files", paths=["new"])[0]
-    assert client(service, tmp_path).call(
-        "release_reservations", file_reservation_ids=[other.id]
-    )
+    assert service._leases[lease.id].released
 
 
 def test_renew_extends_current_expiry_and_noop_is_not_activity(server, tmp_path):
     service, now = server
-    bound = client(service, tmp_path)
-    lease = bound.call("reserve_files", paths=["new.py"], ttl_seconds=600)[0]
-    now[0] += 50
-    renewed = bound.call("renew_reservations", paths=["new.py"], extend_seconds=60)[0]
-    assert renewed.expires == lease.expires + 60
-    now[0] += 200
-    assert bound.call("renew_reservations", paths=["other.py"]) == []
-    assert service.collect([lease.id]) == {lease.id: "stale"}
+    lease = client(service, tmp_path).call("reserve_files", paths=["new.py"])[0]
+    renewed = client(service, tmp_path).call(
+        "renew_reservations", file_reservation_ids=[lease.id], extend_seconds=600
+    )[0]
+    assert renewed.expires == lease.expires + 600
+    assert client(service, tmp_path).call("check_reservations", paths=["new.py"])
+    assert service._leases[lease.id] == renewed
 
 
 def test_expired_gc_does_not_need_filesystem_evidence(server, tmp_path):
@@ -511,13 +459,9 @@ def test_expired_gc_does_not_need_filesystem_evidence(server, tmp_path):
     lease = client(service, tmp_path).call(
         "reserve_files", paths=["new.py"], ttl_seconds=60
     )[0]
-    now[0] += 61
-
-    def forbidden(_):
-        raise AssertionError("expired lease must not be probed")
-
-    service.probe = forbidden
-    assert service.collect([lease.id]) == {lease.id: "ttl_expired"}
+    now[0] += 60
+    assert not client(service, tmp_path).call("check_reservations", paths=["new.py"])
+    assert service._leases[lease.id] == lease
 
 
 def test_raw_candidate_tool_names_share_lifecycle(server, tmp_path):
@@ -533,37 +477,6 @@ def test_raw_candidate_tool_names_share_lifecycle(server, tmp_path):
     renewed = service.dispatch("renew_file_reservations", arguments)[0]
     assert renewed.id == lease.id and renewed.expires > lease.expires
     assert service.dispatch("release_file_reservations", arguments)[0].id == lease.id
-
-
-@pytest.mark.parametrize("pattern", ["new.py", "empty/*.py", "tool://editor/write"])
-def test_unmatched_initial_grace_then_stale(server, tmp_path, pattern):
-    service, now = server
-    service.inactivity = 10
-    lease = client(service, tmp_path).call("reserve_files", paths=[pattern])[0]
-    now[0] += 20
-    first = service.collect([lease.id])[lease.id]
-    assert first == ("stale" if pattern.startswith("tool://") else "active")
-    if first == "active":
-        now[0] += 101
-        assert service.collect([lease.id]) == {lease.id: "stale"}
-
-
-def test_probe_permission_timeout_cap_and_unknown_anchor(tmp_path, monkeypatch):
-    file = tmp_path / "a.py"
-    file.write_text("x")
-    pattern = normalize_path(str(tmp_path / "*.py"))
-    assert not probe_activity(pattern, max_entries=1).complete
-    assert not probe_activity(pattern, timeout=0).complete
-    with monkeypatch.context() as patch:
-
-        def denied(*args):
-            raise PermissionError("denied")
-
-        patch.setattr(os, "scandir", denied)
-        assert not probe_activity(pattern).complete
-    (tmp_path / "dangling").symlink_to(tmp_path / "absent")
-    with pytest.raises(ReservationError, match="ANCHOR_UNKNOWN"):
-        normalize_path(str(tmp_path / "dangling/new.py"))
 
 
 def git(repo, *args, env=None):
@@ -592,88 +505,6 @@ def make_repo(path, stamp):
     git(path, "commit", "-qm", "fixture", env=env)
     os.utime(file, (stamp, stamp))
     return file
-
-
-def test_each_lease_actual_repo_git_activity_and_symlink(server, tmp_path):
-    service, now = server
-    now[0] = time.time()
-    old = now[0] - 1000
-    a = make_repo(tmp_path / "a", now[0])
-    b = make_repo(tmp_path / "b", old)
-    # Git alone keeps a alive; its mtime is deliberately old.
-    os.utime(a, (old, old))
-    link = tmp_path / "link"
-    link.symlink_to(a.parent, target_is_directory=True)
-    assert probe_activity(normalize_path(str(link / a.name))).git >= now[0] - 1
-    leases = client(service, tmp_path).call("reserve_files", paths=[str(a), str(b)])
-    now[0] += 110
-    service.grace = 200
-    assert service.collect([lease.id for lease in leases]) == {
-        leases[0].id: "active",
-        leases[1].id: "stale",
-    }
-
-
-def test_broad_glob_multiple_repos_and_git_failure(tmp_path, monkeypatch):
-    old = time.time() - 1000
-    make_repo(tmp_path / "a", old)
-    make_repo(tmp_path / "b", time.time())
-    path = normalize_path(str(tmp_path / "*/file.py"))
-    assert probe_activity(path).git > old
-    original = subprocess.run
-
-    def fail_one(command, **kwargs):
-        if str(tmp_path / "b") in command:
-            raise subprocess.TimeoutExpired(command, 0.01)
-        return original(command, **kwargs)
-
-    monkeypatch.setattr(subprocess, "run", fail_one)
-    assert not probe_activity(path).complete
-
-
-@pytest.mark.parametrize("pattern", ["a/file.py", "*/file.py"])
-def test_recent_deletion_commit_keeps_empty_scope_active(tmp_path, pattern):
-    stamp = time.time()
-    file = make_repo(tmp_path / "a", stamp - 1000)
-    file.unlink()
-    git(file.parent, "add", "-u")
-    env = dict(
-        os.environ,
-        GIT_AUTHOR_DATE=f"@{int(stamp)} +0000",
-        GIT_COMMITTER_DATE=f"@{int(stamp)} +0000",
-    )
-    git(file.parent, "commit", "-qm", "delete", env=env)
-    activity = probe_activity(normalize_path(str(tmp_path / pattern)))
-    assert activity.complete and not activity.matched
-    assert activity.git >= stamp - 1
-
-
-@pytest.mark.parametrize("change", ["mail", "renew", "filesystem"])
-def test_gc_rechecks_activity_after_probe(server, tmp_path, change):
-    service, now = server
-    lease = client(service, tmp_path).call("reserve_files", paths=["file.py"])[0]
-    now[0] += 200
-    count = 0
-
-    def probe(_):
-        nonlocal count
-        count += 1
-        if count == 1:
-            return Activity(True, matched=True, filesystem=0)
-        if change == "mail":
-            service.record_activity("alpha", "test-alpha", mail=True)
-        elif change == "renew":
-            client(service, tmp_path).call(
-                "renew_reservations", file_reservation_ids=[lease.id]
-            )
-        return Activity(
-            True, matched=True, filesystem=now[0] if change == "filesystem" else 0
-        )
-
-    service.probe = probe
-    assert service.collect([lease.id])[lease.id] in {"active", "activity_changed"}
-    assert not service._leases[lease.id].released
-    assert count == 2
 
 
 def test_candidate_hook_any_folder_unmanaged_and_bound_outage(server, tmp_path):
@@ -834,3 +665,10 @@ def test_candidate_not_published_or_activated():
 
     assert FIXTURE["activation"] is False
     assert load_namespace_contract()["activation_enabled"] is False
+
+
+def test_probe_permission_timeout_cap_and_unknown_anchor(tmp_path):
+    # Probe/collector were removed; preserve the independent normalizer boundary.
+    (tmp_path / "dangling").symlink_to(tmp_path / "absent")
+    with pytest.raises(ReservationError, match="ANCHOR_UNKNOWN"):
+        normalize_path(str(tmp_path / "dangling/new.py"))

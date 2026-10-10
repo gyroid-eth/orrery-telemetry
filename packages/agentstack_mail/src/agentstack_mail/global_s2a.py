@@ -819,6 +819,12 @@ class S2aRuntime(GlobalRuntime):
         self.fault("after_commit")
         return result
 
+    @staticmethod
+    def contact_is_blocked(target, link):
+        return (link is not None and link["status"] == "blocked") or target[
+            "contact_policy"
+        ] == "block_all"
+
     def authorize_delivery(self, db, sender_id, target_id, stamp=None):
         """Shared S2b primitive; caller owns the same authenticated transaction."""
         stamp = stamp or utc(now())
@@ -830,9 +836,7 @@ class S2aRuntime(GlobalRuntime):
             "SELECT status FROM agent_links WHERE a_agent_id=? AND b_agent_id=?",
             (sender_id, target_id),
         ).fetchone()
-        if (link and link["status"] == "blocked") or target[
-            "contact_policy"
-        ] == "block_all":
+        if self.contact_is_blocked(target, link):
             return False
         if target["contact_policy"] == "open" or (
             link and link["status"] == "approved"

@@ -132,7 +132,7 @@ server は起動時に検査した lock の dev/inode を固定し、操作の�
 
 SQLite の初回 open 前・直後と、各 transaction の open 前・直後・commit 前に、main DB と既存の `-wal`・`-shm`・`-journal` を検査します。symlink、複数 hardlink、異なる owner、公開 mode は main DB なら `DATABASE_UNSAFE`、sidecar なら `SQLITE_SIDECAR_UNSAFE` で拒否します。起動後も同じ基準を使い、途中で検出した変更は DB transaction を rollback します。credential は UTF-8 bytes の定時間比較で照合し、保存値を正規化しません。受け付けた非 ASCII token と PR3 が保存した token も、同値で認証できます。
 
-この検査は協調する writer が共通 lock を守る範囲を対象とします。検査した fd を閉じた後で SQLite は path を開き直すため、検査と open の間、最後の検査と commit の間は filesystem に対して原子的ではありません。同じ UID の非協調 process がその間に link や path を変える競合は残ります。直後・commit 前の再検査はこの窓を狭めて異常を検出しますが、既に隔離外の sidecar に行われた書込みまで rollback で取り消せる保証はありません。別名経由の WAL commit を保持する回帰は、別名が残り、検査時に main DB の複数 link を検出できる条件です。別名を削除した後に残った WAL は対象外です。非協調 process が別名を unlink すると nlink が1に戻り、server は別名側の保留 WAL を検出できず、その後の server 書込みでその commit が失われる可能性があります。この競合自体は今回の試験では実測していません。旧 writer の全停止と実 handoff は PR7 の対象です。
+この検査は協調する writer が共通 lock を守る範囲を対象とします。メタデータの検査と SQLite による path の open は別操作のため、検査と open の間、最後の検査と commit の間は filesystem に対して原子的ではありません。同じ UID の非協調 process がその間に link や path を変える競合は残ります。直後・commit 前の再検査はこの窓を狭めて異常を検出しますが、既に隔離外の sidecar に行われた書込みまで rollback で取り消せる保証はありません。別名経由の WAL commit を保持する回帰は、別名が残り、検査時に main DB の複数 link を検出できる条件です。別名を削除した後に残った WAL は対象外です。非協調 process が別名を unlink すると nlink が1に戻り、server は別名側の保留 WAL を検出できず、その後の server 書込みでその commit が失われる可能性があります。この競合自体は今回の試験では実測していません。旧 writer の全停止と実 handoff は PR7 の対象です。
 
 ## 管理 socket
 
@@ -230,3 +230,27 @@ client の pending は結果不明の証跡です。`TARGET_UNAVAILABLE`・quota
 ## S2b の message と通知
 
 別の schema4 workspace で送信・返信・既読・ack・検索・topic・digest と signal を準備します。[S2b の契約と合成試験](global-messages.md)を参照してください。既定は旧 mode のままです。
+
+## S2c の予約・welcome
+
+[隔離 global 予約](global-reservations.md)は schema5 の新規準備、唯一 SQL engine、管理 inspect/force/purge と welcome を追加します。既存 profile と既定旧 mode は維持します。
+
+
+### SQLite のファイル検査と lock
+
+S1 からの不具合の修正として、main DB と sidecar の検査を `lstat` のみに統一しました。接続中に同じ inode を別の fd で開いて閉じると、process の SQLite POSIX lock まで解除されるためです。source の形式確認も raw fd を開きません。inode・owner・mode・link 数の検査と commit 前の再照合は維持します。メタデータの確認と名前の open は原子的ではなく、上記の同 UID の競合に対する制限も変わりません。
+
+| 経路 | SQLite 接続との関係・監査結果 |
+|---|---|
+| `global_server.GlobalRuntime` / `check_sqlite_files` | 接続中にも呼ばれる。初期 identity を含め `lstat` だけへ修正 |
+| `global_prepare.require_legacy_source` | 呼出し側が接続を保持し得る。raw fd を廃止し `lstat`＋SQLite の immutable 読取へ |
+| `global_s2a.fts_snapshot` / `integrity` | 元 DB は SQLite backup API でコピー。raw fd は別 inode の固定 directory の lock のみ。コピーの touch はコピーの SQLite open 前、削除は close 後 |
+| `namespace_state_io.backup` / `database_manifest`、`namespace_transform.convert_mail` / `convert_delivery` | DB の copy・hash は SQLite backup API／SQL 行の digest。DB ファイルの raw open は無し |
+| `global_prepare_s2b`、`namespace_migration`、S2a/S2b/S2c receipt | 添付・signal・mapping・JSON の read/hash と SQL row の digest。DB/sidecar の bytes は直接読まない |
+| `global_prepare.prepare` の artifact manifest | 新規非公開 candidate の全 SQLite connection を閉じた後に raw hash。complete 前は runtime 起動不可、complete の再実行は hash 前に return |
+| `migration.copy_state` / `_copy_database` | source writer guard を保持するが DB は SQLite backup API。新しい destination の作成 fd はその SQLite open 前に close |
+| `migration.cold_backup_database` / `cold_restore_database` と `restore_acceptance` の raw family 検証 | services-stopped の cold 操作。raw copy/hash の後に別の disposable copy を SQLite で検証し close。稼働中 transaction の検査には使わない |
+| `storage.create_diagnostic_backup` / `restore_from_backup` | 同型の raw main/WAL/SHM copy が残る。repo の実行コード・試験から呼出し元なし。今回は変更せず、未使用旧コードの別整理対象 |
+| dashboard / Codex App delivery / hooks / CLI | DB 読取は SQLite API、または上記共通処理への委譲。同型の独立 DB fd 開閉は見つからず |
+
+回帰は `test_sqlite_family_validation_never_opens_independent_descriptors`（起動・read・write）、`test_source_admission_never_opens_raw_database_descriptor` と `test_sqlite_family_validation_preserves_cross_process_writer_lock` です。最後の試験は保持中の writer lock を別 process が取得できないことを直接確かめます。

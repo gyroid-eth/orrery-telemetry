@@ -40,37 +40,33 @@ def require_legacy_source(path):
     publish their namespace schema in the main file; runtime-only writes are
     deliberately not imported by this new-source preparation entrance.
     """
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    # The caller may already hold a SQLite connection to this source. Never
+    # open/close an independent descriptor for its inode (POSIX lock lifetime).
+    info = Path(path).lstat()
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_nlink != 1
+    ):
+        raise GlobalError("DATABASE_UNSAFE")
     try:
-        info = os.fstat(fd)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.getuid()
-            or info.st_nlink != 1
-        ):
-            raise GlobalError("DATABASE_UNSAFE")
+        db = sqlite3.connect(
+            Path(path).resolve().as_uri() + "?mode=ro&immutable=1", uri=True
+        )
         try:
-            db = sqlite3.connect(
-                Path(path).resolve().as_uri() + "?mode=ro&immutable=1", uri=True
-            )
-            try:
-                names = {
-                    r[0]
-                    for r in db.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table'"
-                    )
-                }
-                columns = {r[1] for r in db.execute("PRAGMA table_info(agents)")}
-                if "namespace_metadata" in names or "lookup_key" in columns:
-                    raise GlobalError("CANDIDATE_SCHEMA_REQUIRES_REPREPARE")
-                if "projects" not in names or "project_id" not in columns:
-                    raise GlobalError("SOURCE_DATABASE_INVALID")
-            finally:
-                db.close()
-        except sqlite3.Error:
-            raise GlobalError("SOURCE_DATABASE_INVALID") from None
-    finally:
-        os.close(fd)
+            names = {
+                r[0]
+                for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            columns = {r[1] for r in db.execute("PRAGMA table_info(agents)")}
+            if "namespace_metadata" in names or "lookup_key" in columns:
+                raise GlobalError("CANDIDATE_SCHEMA_REQUIRES_REPREPARE")
+            if "projects" not in names or "project_id" not in columns:
+                raise GlobalError("SOURCE_DATABASE_INVALID")
+        finally:
+            db.close()
+    except sqlite3.Error:
+        raise GlobalError("SOURCE_DATABASE_INVALID") from None
 
 
 def write_role(path, value, kind):

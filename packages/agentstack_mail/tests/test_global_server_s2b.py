@@ -37,8 +37,7 @@ def fence(gen, roster):
     )
 
 
-@pytest.fixture
-def prepared(monkeypatch):
+def prepared_for(monkeypatch, prepare_function=prepare, profile="s2b"):
     root = Path(
         tempfile.mkdtemp(
             prefix="s2a-", dir="/private/tmp" if Path("/private/tmp").is_dir() else None
@@ -60,8 +59,10 @@ def prepared(monkeypatch):
             "INSERT INTO message_recipients(message_id,agent_id,kind) VALUES(107,2,'to')"
         )
     request_id = str(uuid.uuid4())
-    result = prepare(source, root, "one", choices, request_id=request_id, fence=fence)
-    candidate = root / "s2b-candidates/one/candidate"
+    result = prepare_function(
+        source, root, "one", choices, request_id=request_id, fence=fence
+    )
+    candidate = root / (profile + "-candidates/one/candidate")
     cfg = json.loads((candidate / "server-config.json").read_text())
     state = {
         "root": root,
@@ -76,6 +77,11 @@ def prepared(monkeypatch):
         yield state
     finally:
         shutil.rmtree(root)
+
+
+@pytest.fixture
+def prepared(monkeypatch):
+    yield from prepared_for(monkeypatch)
 
 
 def owner(state, aid=2, **extra):
@@ -232,8 +238,7 @@ def test_signal_interruption_same_pair(prepared, point):
     ).exists()
 
 
-@pytest.fixture
-def server(prepared):
+def server_for(prepared, profile="s2b"):
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
@@ -286,7 +291,7 @@ def server(prepared):
                     else:
                         if (health.get("status"), health.get("runtime_profile")) == (
                             "ok",
-                            "s2b-v1",
+                            profile + "-v1",
                         ):
                             break
                         last_error = f"Unexpected HTTP health: {health!r}"
@@ -300,6 +305,11 @@ def server(prepared):
                 proc.kill()
                 proc.wait(timeout=5)
             assert not Path(prepared["config"]["management_socket"]).exists()
+
+
+@pytest.fixture
+def server(prepared):
+    yield from server_for(prepared)
 
 
 async def http(state, name, args=None):

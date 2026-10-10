@@ -87,6 +87,7 @@ Japanese documents are the source of truth. The English entry point is the [Engl
 | Validate candidate absolute reservations | [Candidate contract and tests](docs/absolute-reservations.en.md) (legacy mode remains the default) |
 | Validate candidate Mail and delivery migration | [State migration and recovery](docs/namespace-state-migration.en.md) (activation false) |
 | Validate isolated global server S1 / S2a | [Wire contract and capabilities](docs/global-server.en.md) (legacy mode remains default) |
+| Validate isolated global reservations/welcome | [S2c contract and recovery](docs/global-reservations.en.md) (legacy remains default) |
 | Validate isolated messages and signals | [S2b DB and notification contract](docs/global-messages.en.md) (legacy mode remains default) |
 | Validate isolated runtime clients | [PR4a registration, recovery and await](docs/global-runtime-client.en.md) (legacy mode remains default) |
 
