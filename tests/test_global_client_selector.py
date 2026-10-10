@@ -3,14 +3,18 @@
 import os
 from pathlib import Path
 import runpy
+import shutil
 import subprocess
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+ZSH = shutil.which("zsh")
+SHELLS = ["/bin/bash", pytest.param(ZSH or "zsh", marks=pytest.mark.skipif(
+    ZSH is None, reason="zsh is not installed"))]
 
 
-@pytest.mark.parametrize("shell", ["/bin/bash", "/bin/zsh"])
+@pytest.mark.parametrize("shell", SHELLS)
 @pytest.mark.parametrize("arguments", [[], ["--context"], ["--context=/missing"]])
 def test_partial_install_admission_is_shared(tmp_path, arguments, shell):
     lib = tmp_path / "bin/lib"
@@ -158,7 +162,7 @@ def test_absent_context_keeps_legacy_entry_even_when_disabled(tmp_path, entry):
     assert not result.stdout and not result.stderr
 
 
-@pytest.mark.parametrize("shell", ["/bin/bash", "/bin/zsh"])
+@pytest.mark.parametrize("shell", SHELLS)
 def test_absent_context_does_not_start_python(tmp_path, shell):
     lib = tmp_path / "bin/lib"
     lib.mkdir(parents=True)
