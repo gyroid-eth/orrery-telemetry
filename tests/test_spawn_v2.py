@@ -1629,3 +1629,31 @@ def test_spawn_failure_reads_only_the_current_append_interval(monkeypatch, tmp_p
     assert "obsolete" not in result["error"] + result["detail"]
     assert "過去の起動" not in result["detail"]
     assert old_line in log.read_text()  # The shared historical log is retained.
+
+
+def test_all_failed_candidates_keep_windows_and_node_notes_in_order(tmp_path):
+    log = tmp_path / "spawn.log"
+    notes = ["note: skipping codex /mnt/c/npm/codex: Windows shim",
+             "note: skipping codex /synthetic/nvm/bin/codex: env: node: No such file or directory"]
+    log.write_text("\n".join([*notes, "Error: no usable Codex CLI found"]))
+    assert server._spawn_log_tail_and_reason(log)[1] == "; ".join(
+        [*notes, "Error: no usable Codex CLI found"])
+
+
+def test_all_failed_candidates_report_omitted_count_within_limit(tmp_path):
+    log = tmp_path / "spawn.log"
+    notes = [f"note: skipping codex /synthetic/{index}: " + "x" * 130 for index in range(8)]
+    log.write_text("\n".join([*notes, "Error: no usable Codex CLI found"]))
+    reason = server._spawn_log_tail_and_reason(log)[1]
+    assert reason == "; ".join(notes[:2]) + "; (+6 more skipped candidates)"
+    assert len(reason) <= 500
+
+
+def test_a_single_oversized_candidate_still_leaves_room_for_omitted_count(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("note: skipping codex /" + "x" * 600 +
+                   "\nnote: skipping codex /second: missing node\nError: no usable Codex CLI found")
+    reason = server._spawn_log_tail_and_reason(log)[1]
+    assert reason.startswith("note: skipping codex /")
+    assert reason.endswith("…; (+1 more skipped candidates)")
+    assert len(reason) == 500

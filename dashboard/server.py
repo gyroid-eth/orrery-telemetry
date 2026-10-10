@@ -7005,10 +7005,29 @@ def _spawn_log_tail_and_reason(log_path, start_offset: int = 0) -> tuple[str, st
         # A discarded candidate is relevant only when resolution exhausted
         # every candidate. If a replacement CLI later fails, show that error.
         if error.startswith("Error: no usable Codex CLI found"):
-            candidate = next((line.strip() for line in lines
-                              if line.startswith("note: skipping ")), "")
-            if candidate:
-                reason = f"{candidate}; {error}"
+            candidates = [line.strip() for line in lines
+                          if line.startswith("note: skipping ")]
+            if candidates:
+                reason = "; ".join([*candidates, error])
+                if len(reason) > 500:
+                    visible = []
+                    for index, candidate in enumerate(candidates):
+                        remaining = len(candidates) - index - 1
+                        suffix = f"; (+{remaining} more skipped candidates)" if remaining else ""
+                        joined = "; ".join([*visible, candidate])
+                        if len(joined + suffix) > 500:
+                            remaining += 1
+                            suffix = f"; (+{remaining} more skipped candidates)"
+                            if not visible:
+                                # Even one candidate may contain a very long path.
+                                remaining -= 1
+                                suffix = f"; (+{remaining} more skipped candidates)" if remaining else ""
+                                visible = [candidate[:499 - len(suffix)] + "…"]
+                            reason = "; ".join(visible) + suffix
+                            break
+                        visible.append(candidate)
+                    else:
+                        reason = "; ".join(visible)
     return text[-1000:], reason[:500]
 
 
