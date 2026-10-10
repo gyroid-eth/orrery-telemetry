@@ -3,7 +3,7 @@
 import argparse
 import hashlib
 import json
-import mimetypes
+from dataclasses import replace
 import os
 from pathlib import Path
 
@@ -17,7 +17,7 @@ from .global_prepare import (
 from .global_s2a import base_schema, extension_schema, validate_runtime_candidate, utc
 from .global_s2a_contract import digest, canonical
 from .global_s2b import PENDING, dirty, validate_receipt
-from .global_s2b_contract import DDL
+from .global_s2b_contract import DDL, FIXTURE
 from .namespace_state_io import (
     connection,
     tree_manifest,
@@ -68,6 +68,14 @@ def initialize_notifications(db, delivery, signals, resolutions, stamp):
     if unknown:
         raise GlobalError("NOTIFICATION_SOURCE_REQUIRES_RESOLUTION")
     rows = {(r["message_id"], r["agent_id"]): r for r in delivery}
+    orphan_delivery = [
+        dict(r)
+        for r in delivery
+        if not db.execute(
+            "SELECT 1 FROM message_recipients WHERE message_id=? AND agent_id=?",
+            (r["message_id"], r["agent_id"]),
+        ).fetchone()
+    ]
     proof = []
     for row in db.execute(
         "SELECT r.*,a.retired_at FROM message_recipients r JOIN agents a ON a.id=r.agent_id ORDER BY r.message_id,r.agent_id"
@@ -144,6 +152,7 @@ def initialize_notifications(db, delivery, signals, resolutions, stamp):
         "source_signals_digest": digest(signals),
         "resolutions": resolutions,
         "pairs": proof,
+        "orphan_delivery": orphan_delivery,
         "needs_action": False,
     }
 
@@ -151,6 +160,18 @@ def initialize_notifications(db, delivery, signals, resolutions, stamp):
 class S2bFreshMigration(FreshMigration):
     profile = "s2b"
     config_kind = "orrery-global-server-s2b-v1"
+
+    def _candidate_bundle(self, root):
+        original = super()._candidate_bundle(root)
+        saved = root / "provenance"
+        return replace(
+            original,
+            delivery=saved / "delivery.sqlite3",
+            archive=saved / "archive",
+            history=saved / "history",
+            bindings=saved / "bindings.json",
+            config=saved / "legacy-config.json",
+        )
 
     def _build(self, snapshot, receipt, generation):
         # First obtain the unchanged PR3+S2a preservation proof. These are not
@@ -165,6 +186,8 @@ class S2bFreshMigration(FreshMigration):
                     "SELECT * FROM codex_app_delivery_state ORDER BY message_id,agent_id"
                 )
             ]
+        provenance = target / "provenance"
+        provenance.mkdir(mode=0o700)
         self.fault_hook("s2b_before_extension")
         with connection(target / "mail.sqlite3", write=True) as db:
             db.execute("BEGIN IMMEDIATE")
@@ -196,6 +219,20 @@ class S2bFreshMigration(FreshMigration):
                     (item["message_id"],),
                 ).fetchone()[0]
                 filename = Path(item["legacy_path"]).name
+                message = next(
+                    r for r in before["messages"] if r["id"] == item["message_id"]
+                )
+                metadata = next(
+                    (
+                        a
+                        for a in json.loads(message["attachments"])
+                        if a.get("path") == item["legacy_path"]
+                    ),
+                    {},
+                )
+                media_type = metadata.get("media_type")
+                if not isinstance(media_type, str) or not media_type:
+                    media_type = "application/octet-stream"
                 db.execute(
                     "INSERT INTO global_message_attachments VALUES(?,?,?,?,?)",
                     (
@@ -203,9 +240,24 @@ class S2bFreshMigration(FreshMigration):
                         ordinal,
                         sha,
                         filename,
-                        mimetypes.guess_type(filename)[0] or "application/octet-stream",
+                        media_type,
                     ),
                 )
+            attachment_provenance = {
+                "kind": "orrery-s2b-legacy-attachments-v1",
+                "attachment_map": before["namespace_attachment_map"],
+                "message_attachments": [
+                    {"id": r["id"], "attachments": r["attachments"]}
+                    for r in before["messages"]
+                ],
+            }
+            write_role(
+                provenance / "attachments.json",
+                attachment_provenance,
+                attachment_provenance["kind"],
+            )
+            for statement in FIXTURE["db_extensions"]["provenance_sql"]:
+                db.execute(statement)
             notifications = initialize_notifications(
                 db,
                 delivery,
@@ -275,11 +327,32 @@ class S2bFreshMigration(FreshMigration):
                 for r in restored["namespace_metadata"]
                 if r["key"] != "message_id_high_water"
             ]
+            saved_attachments = document(provenance / "attachments.json")
+            restored["namespace_attachment_map"] = saved_attachments["attachment_map"]
+            old_json = {
+                r["id"]: r["attachments"]
+                for r in saved_attachments["message_attachments"]
+            }
+            for row in restored["messages"]:
+                row["attachments"] = old_json[row["id"]]
+            restored["messages"].sort(key=lambda row: json.dumps(row, sort_keys=True))
             restored["global_runtime_contract"] = original["global_runtime_contract"]
             if restored != original:
                 raise GlobalError("PREPARATION_MANIFEST_MISMATCH")
-        preserved = target / "preserved-signals"
+        preserved = provenance / "preserved-signals"
         os.rename(target / "signals", preserved)
+        for name in (
+            "archive",
+            "delivery.sqlite3",
+            "legacy-signals",
+            "history",
+            "bindings.json",
+            "legacy-config.json",
+        ):
+            old = target / name
+            if old.exists():
+                os.rename(old, provenance / name)
+        self.fault_hook("s2b_after_provenance")
         (target / "signals").mkdir(mode=0o700)
         (target / "signals/agents").mkdir(mode=0o700)
         write_role(

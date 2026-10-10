@@ -35,6 +35,18 @@ def validate_schema_definition(schema, *, error_type=ValueError):
     """Inspect every schema branch once when a fixture is admitted."""
     if not isinstance(schema, dict) or set(schema) - SCHEMA_KEYWORDS:
         raise error_type("CAPABILITY_INVALID")
+    if (
+        "additionalProperties" in schema
+        and type(schema["additionalProperties"]) is not bool
+    ):
+        raise error_type("CAPABILITY_INVALID")
+    if "items" in schema and not isinstance(schema["items"], dict):
+        raise error_type("CAPABILITY_INVALID")
+    for key in ("minItems", "maxItems"):
+        if key in schema and (type(schema[key]) is not int or schema[key] < 0):
+            raise error_type("CAPABILITY_INVALID")
+    if "uniqueItems" in schema and type(schema["uniqueItems"]) is not bool:
+        raise error_type("CAPABILITY_INVALID")
     for child in schema.get("anyOf", []):
         validate_schema_definition(child, error_type=error_type)
     for child in schema.get("properties", {}).values():

@@ -19,7 +19,7 @@ S2b は完成した schema4 candidate を明示した場合だけ使う server �
 
 ## 新規の準備と起動
 
-[S2a の準備](global-server.md#s2a-schema3-の新規準備)と同じ source snapshot・writer fence・最終 gate を使い、別 workspace の `s2b-candidates/<name>/candidate/` に schema4 を新規作成します。公開前に既存 row と ID・token の保存を検証し、その後の添付 blob 化と通知 import の差分を別の proof で照合します。旧 archive・Git・signal は immutable な保管物で、新しい active signal と分離します。archive md・添付ファイル・Git の継続 writer は作りません。必要な export は将来の一回限りの operator 操作に残します。
+[S2a の準備](global-server.md#s2a-schema3-の新規準備)と同じ source snapshot・writer fence・最終 gate を使い、別 workspace の `s2b-candidates/<name>/candidate/` に schema4 を新規作成します。公開前に既存 row と ID・token の保存を検証し、その後の添付 blob 化と通知 import の差分を別の proof で照合します。旧 archive・Git・添付 bytes・配送 DB・signal・添付 map/JSON は `candidate/provenance/` の immutable な保管物で、新しい active signal と分離します。archive md・添付ファイル・Git の継続 writer は作りません。必要な export は将来の一回限りの operator 操作に残します。
 
 明示 plan の `kind` は `orrery-s2b-preparation-plan-v1`、`activation_enabled` は false です。source_paths / isolation_root / candidate_name / choices / request_id / fence_evidence は既存準備と同じです。
 
@@ -57,7 +57,7 @@ consumer は注入成功後だけ same-UID Unix socket の `delivery_completed` 
 
 cursor の上限は同じ read transaction の**可視集合 MAX**（空は0）です。不可視 message の ID・件数を公開せず、worker/read/ack/touch で失効しません。cursor に binding の複製は持たず、呼出し context だけを照合します。新しい message は継続 page に混ぜず、purge 済み row は飛ばします。返信グラフは可視 vertex だけの読取 SQL で辿り、保存 namespace や cursor 用 server 状態を増やしません。
 
-内部の purge は既存の祖先保留計画を使い、存続する子の parent を消しません。削除する recipient pair を同 transaction で dirty にし、relation と最後の参照を失った blob を削除します。receipt は歴史の hash/binding を保持し、replay で本文を復活させません。message ID の high-water は purge 後も保持します。書込み tracker がずれた場合の inspect/quarantine は schema4 にも共通の記録付き入口を使い、未知の変更を自動採用しません。
+内部の purge は既存の祖先保留計画を使い、存続する子の parent を消しません。削除する recipient pair を同 transaction で dirty にし、relation と最後の参照を失った blob を削除します。receipt は歴史の hash/binding を保持し、replay で本文を復活させません。旧保管物は immutable で purge の対象外です。runtime は旧添付 map/JSON を持たず、DB の blob/relation だけを保守します。message ID の high-water は purge 後も保持します。書込み tracker がずれた場合の inspect/quarantine は schema4 にも共通の記録付き入口を使い、未知の変更を自動採用しません。
 
 | 旧 mode との違い | S2b の明示 global mode |
 |---|---|
@@ -67,6 +67,12 @@ cursor の上限は同じ read transaction の**可視集合 MAX**（空は0）�
 | 添付 path / image conversion / broadcast / 自動 contact | 固定 reason で拒否 |
 | thread 書込み / LLM summary | 返信は reply_to、旧 label は読取だけ。summary は読取 digest |
 | archive / Git | immutable 旧保管物だけ。新しい同期出力を作らない |
+
+S1/S2a の inbox item は raw row ですが、S2b は `sender`・`to/cc/bcc`・`read_at`・`acknowledged_at` を持つ共通 message projection です。外側の list と純粋 read は維持します。4b/4c の consumer は profile/capability に合わせます。
+
+recipient の無い旧 delivery row は通知 proof の `orphan_delivery` に全 row を列挙し、source digest と結び付けます。PR3 の recipient 整合検査を緩めず、active dirty pair を推測で作りません。旧添付の MIME 型は JSON の `media_type` の記録を使い、無ければ固定の `application/octet-stream` です。
+
+返信件名は prefix を trim し、大小文字を無視して既存 prefix を維持します。新しく付けるときは空白で区切り、導出後も200文字/800 bytesを超えれば `PAYLOAD_TOO_LARGE` で拒否します。`reconcile_outputs.more` は選択上限を超えた未選択対象だけを示し、処理済み blocked の残数は `blocked_count` を使います。
 
 ## 自分で確かめる
 

@@ -818,6 +818,7 @@ def test_incident_inspection_and_quarantine_schema4(prepared):
         "s2b_before_extension_commit",
         "s2b_after_extension_commit",
         "s2b_after_staged_control",
+        "s2b_after_provenance",
         "pr3_final_verified_after",
         "before_ready",
         "after_ready",
@@ -875,7 +876,7 @@ def test_1001_chain_keyset_never_loses_tail(prepared):
         parent = None
         for mid in range(1000, 2001):
             db.execute(
-                "INSERT INTO messages(id,sender_id,subject,body_md,importance,ack_required,created_ts,attachments,reply_to) VALUES(?,1,'chain','body','normal',0,'2026-10-10T00:00:00+00:00','[]',?)",
+                "INSERT INTO messages(id,sender_id,subject,body_md,importance,ack_required,created_ts,reply_to) VALUES(?,1,'chain','body','normal',0,'2026-10-10T00:00:00+00:00',?)",
                 (mid, parent),
             )
             db.execute(
@@ -1137,7 +1138,7 @@ def test_ten_thousand_absent_legacy_hints_do_not_create_backlog(prepared):
     runtime = S2bRuntime(prepared["config_path"])
     with runtime.transaction(write=True) as db:
         db.executemany(
-            "INSERT INTO messages(id,sender_id,subject,body_md,importance,ack_required,created_ts,attachments) VALUES(?,1,'history','old','normal',0,'2026-10-08T00:00:00+00:00','[]')",
+            "INSERT INTO messages(id,sender_id,subject,body_md,importance,ack_required,created_ts) VALUES(?,1,'history','old','normal',0,'2026-10-08T00:00:00+00:00')",
             ((i,) for i in range(1000, 11000)),
         )
         db.executemany(
@@ -1223,3 +1224,178 @@ def test_invalid_legacy_delivery_timestamp_requires_resolution_unless_read(
                 initialize_notifications(
                     db, delivery, {}, {}, "2026-10-10T00:00:00+00:00"
                 )
+
+
+@pytest.mark.parametrize(
+    "base,prefix,expected",
+    [
+        ("Re: topic", "Re:", "Re: topic"),
+        ("rE: topic", " RE: ", "rE: topic"),
+        ("topic", " Re: ", "Re: topic"),
+        (" topic ", "", "topic"),
+        ("topic", "   ", "topic"),
+        ("x" * 200, "Re:", None),
+        ("🦊" * 200, "Re:", None),
+    ],
+)
+def test_reply_subject_matches_legacy_prefix_and_checks_derived_limit(
+    prepared, base, prefix, expected
+):
+    runtime = S2bRuntime(prepared["config_path"])
+    parent = runtime.apply("send_message", {**send(prepared), "subject": base})[
+        "message_id"
+    ]
+    args = owner(
+        prepared,
+        2,
+        message_id=parent,
+        subject_prefix=prefix,
+        body_md="reply",
+        request_id=str(uuid.uuid4()),
+    )
+    with runtime.transaction() as db:
+        before = revision(db)
+        maximum = db.execute(
+            "SELECT value FROM namespace_metadata WHERE key='message_id_high_water'"
+        ).fetchone()[0]
+    if expected is None:
+        with pytest.raises(GlobalError, match="PAYLOAD_TOO_LARGE"):
+            runtime.apply("reply_message", args)
+        with runtime.transaction() as db:
+            assert revision(db) == before
+            assert (
+                db.execute(
+                    "SELECT value FROM namespace_metadata WHERE key='message_id_high_water'"
+                ).fetchone()[0]
+                == maximum
+            )
+    else:
+        result = runtime.apply("reply_message", args)
+        assert runtime.apply("reply_message", args) == result
+        with runtime.transaction() as db:
+            assert (
+                db.execute(
+                    "SELECT subject FROM messages WHERE id=?", (result["message_id"],)
+                ).fetchone()[0]
+                == expected
+            )
+
+
+def test_provenance_has_one_location_and_is_immutable_under_purge(prepared):
+    runtime = S2bRuntime(prepared["config_path"])
+    provenance = runtime.runtime_root / "provenance"
+    assert (provenance / "archive").is_dir()
+    assert (provenance / "delivery.sqlite3").is_file()
+    assert (provenance / "legacy-signals").is_dir()
+    assert (provenance / "preserved-signals").is_dir()
+    saved = json.loads((provenance / "attachments.json").read_text())
+    assert saved["attachment_map"] and saved["message_attachments"]
+    before = file_state(provenance)
+    for name in ("archive", "delivery.sqlite3", "legacy-signals", "preserved-signals"):
+        assert not (runtime.runtime_root / name).exists()
+    with runtime.transaction() as db:
+        assert not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='namespace_attachment_map'"
+        ).fetchone()
+        assert "attachments" not in {
+            r["name"] for r in db.execute("PRAGMA table_info(messages)")
+        }
+    runtime.purge((101, 102, 103, 104, 105, 106, 107))
+    runtime.reconcile()
+    assert file_state(provenance) == before
+
+
+def test_reconcile_more_reports_only_unselected_targets_not_blocked(prepared):
+    runtime = S2bRuntime(prepared["config_path"])
+    ids = [
+        runtime.apply("send_message", send(prepared))["message_id"] for _ in range(3)
+    ]
+    folder = runtime.runtime_root / "signals/agents/2"
+    folder.mkdir(mode=0o700)
+    bad = folder / f"{ids[0]}.signal"
+    bad.write_text("foreign")
+    bad.chmod(0o600)
+    first = runtime.reconcile(batch_limit=1, retry_blocked=True)
+    assert len(first["items"]) == 1 and first["more"] is True
+    result = runtime.reconcile(batch_limit=100, retry_blocked=True)
+    assert result["blocked_count"] == 1 and result["more"] is False
+    again = runtime.reconcile(batch_limit=100, retry_blocked=True)
+    assert len(again["items"]) == 1 and again["more"] is False
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("additionalProperties", {}),
+        ("additionalProperties", None),
+        ("items", []),
+        ("items", None),
+        ("minItems", True),
+        ("minItems", -1),
+        ("maxItems", 1.5),
+        ("maxItems", -1),
+        ("uniqueItems", 1),
+        ("uniqueItems", "true"),
+    ],
+)
+def test_schema_admission_rejects_unsupported_keyword_value_shapes(key, value):
+    from agentstack_mail.schema_contract import validate_schema_definition
+
+    with pytest.raises(ValueError, match="CAPABILITY_INVALID"):
+        validate_schema_definition({"type": "array", key: value})
+
+
+def test_orphan_delivery_is_explicit_in_notification_proof(prepared):
+    from agentstack_mail.global_prepare_s2b import initialize_notifications
+    from agentstack_mail.global_s2a_contract import digest
+
+    runtime = S2bRuntime(prepared["config_path"])
+    orphan = {"message_id": 999, "agent_id": 2, "status": "failed", "attempt_count": 4}
+    with runtime.transaction(write=True) as db:
+        proof = initialize_notifications(
+            db, [orphan], {}, {}, "2026-10-10T00:00:00+00:00"
+        )
+        assert proof["orphan_delivery"] == [orphan]
+        assert proof["source_delivery_digest"] == digest([orphan])
+        assert not any(p["message_id"] == 999 for p in proof["pairs"])
+        assert not db.execute(
+            "SELECT 1 FROM global_signal_dirty WHERE message_id=999"
+        ).fetchone()
+
+
+@pytest.mark.parametrize(
+    "recorded,expected",
+    [
+        (None, "application/octet-stream"),
+        ("application/x-fixture", "application/x-fixture"),
+    ],
+)
+def test_import_attachment_media_type_uses_recorded_value_or_fixed_default(
+    prepared, recorded, expected
+):
+    source = prepared["source"]
+    with connection(source.mail, write=True) as db:
+        row = db.execute("SELECT attachments FROM messages WHERE id=101").fetchone()
+        values = json.loads(row[0])
+        if recorded is not None:
+            values[0]["media_type"] = recorded
+        db.execute(
+            "UPDATE messages SET attachments=? WHERE id=101", (json.dumps(values),)
+        )
+    prepare(
+        source,
+        prepared["root"],
+        "media",
+        prepared["choices"],
+        request_id=str(uuid.uuid4()),
+        fence=fence,
+    )
+    with connection(
+        prepared["root"] / "s2b-candidates/media/candidate/mail.sqlite3"
+    ) as db:
+        assert (
+            db.execute(
+                "SELECT media_type FROM global_message_attachments WHERE message_id=101"
+            ).fetchone()[0]
+            == expected
+        )

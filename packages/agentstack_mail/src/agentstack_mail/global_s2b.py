@@ -35,13 +35,15 @@ from .global_s2b_contract import (
     preimage_schema,
     validate,
     ensure_budget,
+    check_subject,
 )
 from .namespace_store import changed
 
 VISIBLE = "(m.sender_id=? OR EXISTS(SELECT 1 FROM message_recipients vr WHERE vr.message_id=m.id AND vr.agent_id=?))"
 # Single SQL predicate used by worker, management and health. The fact itself
 # is a tagged union: no invented timestamp and no parallel provenance column.
-PENDING = "(r.notification_fact IS NULL AND r.read_ts IS NULL AND r.ack_ts IS NULL AND a.retired_at IS NULL)"
+UNCONSUMED = "(r.notification_fact IS NULL AND r.read_ts IS NULL AND r.ack_ts IS NULL)"
+PENDING = "(" + UNCONSUMED + " AND a.retired_at IS NULL)"
 
 
 def notified_at(fact):
@@ -365,13 +367,18 @@ class S2bRuntime(S2aRuntime):
             "UPDATE namespace_metadata SET value=? WHERE key='message_id_high_water'",
             (str(mid),),
         )
-        subject = (
-            args["subject"]
-            if tool == "send_message"
-            else args["subject_prefix"] + parent["subject"]
-        )
+        subject = args.get("subject")
+        if tool == "reply_message":
+            prefix = args["subject_prefix"].strip()
+            base = parent["subject"]
+            subject = (
+                base
+                if prefix and base.lower().startswith(prefix.lower())
+                else f"{prefix} {base}".strip()
+            )
+        check_subject(subject)
         db.execute(
-            "INSERT INTO messages(id,sender_id,subject,body_md,importance,ack_required,topic,created_ts,attachments,reply_to) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO messages(id,sender_id,subject,body_md,importance,ack_required,topic,created_ts,reply_to) VALUES(?,?,?,?,?,?,?,?,?)",
             (
                 mid,
                 owner["id"],
@@ -381,7 +388,6 @@ class S2bRuntime(S2aRuntime):
                 args.get("ack_required", parent["ack_required"] if parent else False),
                 args.get("topic", parent["topic"] if parent else None),
                 stamp.isoformat(),
-                "[]",
                 parent_id,
             ),
         )
@@ -543,10 +549,6 @@ class S2bRuntime(S2aRuntime):
                         dirty(db, mid, row[0])
                     db.execute(
                         "DELETE FROM global_message_attachments WHERE message_id=?",
-                        (mid,),
-                    )
-                    db.execute(
-                        "DELETE FROM namespace_attachment_map WHERE message_id=?",
                         (mid,),
                     )
                     db.execute(
@@ -809,30 +811,15 @@ class S2bRuntime(S2aRuntime):
         validate(result, TOOLS[tool]["output_schema"], "RESPONSE_INVALID")
         return result
 
-    def lifecycle(self, args, retire):
-        binding = tuple(
-            args[k]
-            for k in (
-                "expected_server_instance_id",
-                "candidate_generation",
-                "authority_epoch",
-            )
-        )
-        with self.transaction(write=True, binding=binding) as db:
-            self.owner(db, args["agent_id"], args["registration_token"], retired=True)
-            db.execute(
-                "UPDATE agents SET retired_at=? WHERE id=?",
-                (now() if retire else None, args["agent_id"]),
-            )
-            db.execute(
-                "INSERT INTO global_signal_dirty SELECT message_id,agent_id,'pending',NULL FROM message_recipients WHERE agent_id=? AND notification_fact IS NULL AND read_ts IS NULL AND ack_ts IS NULL ON CONFLICT(message_id,recipient_agent_id) DO UPDATE SET state='pending',last_reason=NULL",
-                (args["agent_id"],),
-            )
-            changed(db)
-        return {
-            "status": "retired" if retire else "active",
-            "agent_id": args["agent_id"],
-        }
+    inbox_extensions = ("before_id", "expected_credential_generation")
+
+    def after_lifecycle(self, db, agent_id):
+        for row in db.execute(
+            "SELECT r.message_id FROM message_recipients r WHERE r.agent_id=? AND "
+            + UNCONSUMED,
+            (agent_id,),
+        ).fetchall():
+            dirty(db, row[0], agent_id)
 
     def inbox(self, args):
         limit = args["limit"]
@@ -1097,41 +1084,6 @@ def build_s2b_server(config):
             captured.append(self)
 
     server = build_s2a_server(config, runtime_class=Runtime)
-
-    @server.tool
-    async def fetch_inbox(
-        expected_server_instance_id: str,
-        candidate_generation: str,
-        authority_epoch: str,
-        agent_id: int,
-        registration_token: str,
-        agent_name: str | None = None,
-        project_key: str | None = None,
-        limit: int = 20,
-        include_bodies: bool = True,
-        urgent_only: bool = False,
-        since_ts: str | None = None,
-        before_id: int | None = None,
-        expected_credential_generation: int | None = None,
-    ) -> list[dict]:
-        return captured[0].inbox(locals())
-
-    def lifecycle_tool(retire):
-        async def action(
-            expected_server_instance_id: str,
-            candidate_generation: str,
-            authority_epoch: str,
-            agent_id: int,
-            registration_token: str,
-            agent_name: str | None = None,
-            project_key: str | None = None,
-        ) -> dict:
-            return captured[0].lifecycle(locals(), retire)
-
-        return action
-
-    server.tool(name="retire_agent")(lifecycle_tool(True))
-    server.tool(name="unretire_agent")(lifecycle_tool(False))
 
     for name, contract in TOOLS.items():
         tool = S2bTool(

@@ -17,7 +17,7 @@ S2b runs only with an explicit, completed schema4 candidate. The default legacy 
 
 ## Fresh preparation and startup
 
-Use the source snapshot, writer fence and final gate from [S2a preparation](global-server.en.md#s2a-prepare-a-fresh-schema3-candidate), with a separate `s2b-candidates/<name>/candidate/` workspace. Preparation first proves preservation of existing rows, IDs and tokens, then proves the explicit attachment/blob and notification conversion delta. Old archive/Git artifacts and signals remain immutable preservation material outside the new active signals directory. There is no ongoing archive Markdown, attachment-file or Git projection. A future operator export can generate a one-time bundle from the DB.
+Use the source snapshot, writer fence and final gate from [S2a preparation](global-server.en.md#s2a-prepare-a-fresh-schema3-candidate), with a separate `s2b-candidates/<name>/candidate/` workspace. Preparation first proves preservation of existing rows, IDs and tokens, then proves the explicit attachment/blob and notification conversion delta. Old archive/Git/attachment bytes, delivery DB, signals and attachment map/JSON are grouped as immutable preservation material in `candidate/provenance/`, outside the new active signals directory. There is no ongoing archive Markdown, attachment-file or Git projection. A future operator export can generate a one-time bundle from the DB.
 
 The explicit preparation plan has `kind=orrery-s2b-preparation-plan-v1` and `activation_enabled=false`. Its source_paths, isolation_root, candidate_name, choices, request_id and fence_evidence follow the existing preparation API.
 
@@ -55,7 +55,7 @@ New attachments use strict base64: at most eight, 256KiB each and 512KiB total. 
 
 The keyset upper bound is the **visible MAX** from the same read transaction, zero for an empty visible set. It reveals no invisible message ID/count and survives worker/read/ack/touch changes. Binding is checked once through the caller context, not duplicated in the cursor. New messages stay outside continuation pages, while purged rows are skipped. Reply graphs use visible vertices and read-time SQL, without a stored conversation namespace or server cursor state.
 
-Internal purge reuses the existing ancestor-hold plan: parents of surviving children are retained. Deleted recipient pairs become dirty in the same transaction; attachment relations and unreferenced blobs are removed. Historical receipts retain hashes/binding without resurrecting bodies on replay. The message-ID high-water survives purge. Schema4 also uses the recorded inspect/quarantine entrypoint for writer tracker mismatch; unknown writes are never automatically adopted.
+Internal purge reuses the existing ancestor-hold plan: parents of surviving children are retained. Deleted recipient pairs become dirty in the same transaction; attachment relations and unreferenced blobs are removed. Historical receipts retain hashes/binding without resurrecting bodies on replay. Old preservation artifacts are immutable and outside purge. The runtime drops the old attachment map/JSON and maintains only DB blobs/relations. The message-ID high-water survives purge. Schema4 also uses the recorded inspect/quarantine entrypoint for writer tracker mismatch; unknown writes are never automatically adopted.
 
 | Legacy difference | Explicit S2b global behavior |
 |---|---|
@@ -65,6 +65,12 @@ Internal purge reuses the existing ancestor-hold plan: parents of surviving chil
 | Attachment paths, conversion, broadcast, automatic contact | Fixed refusal reasons |
 | Thread writes and LLM summary | reply_to for replies; legacy labels read-only; read-time digest |
 | Archive/Git | Immutable legacy preservation only, no ongoing second source |
+
+S1/S2a inbox items are raw rows; S2b uses the shared message projection with `sender`, `to/cc/bcc`, `read_at`, and `acknowledged_at`. The outer list and pure read remain. Consumers in 4b/4c must follow the profile/capability.
+
+Old delivery rows without recipients are listed in full in notification proof `orphan_delivery` and bound to the source digest. PR3 recipient integrity checks remain strict; no active dirty pair is inferred. Imported attachment MIME types come from recorded JSON `media_type`, or the fixed `application/octet-stream` default.
+
+Reply subjects trim the prefix, preserve an existing prefix case-insensitively, and otherwise join with one space. The derived subject is also bounded to 200 characters/800 bytes; excess raises `PAYLOAD_TOO_LARGE`. `reconcile_outputs.more` reports only targets beyond the selection limit; use `blocked_count` for processed blocked targets.
 
 ## Verify it yourself
 

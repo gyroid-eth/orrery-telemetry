@@ -2841,7 +2841,7 @@
   "send_contract": {
     "recipients": "server wireはto_agent_ids/cc_agent_ids/bcc_agent_idsだけ。旧to/cc/bcc namesはARGUMENTS_UNSUPPORTEDでnetwork前にclientが拒否、後続client adapterでS2a resolve_agent_identity→IDだけへ正規化し、pendingへ保存してからnetwork。同名再resolveをreplayで行わない。最大100・to>cc>bcc重複排除・空集合拒否。active/retired/contactはinsertと同TX、全成功か全拒否。",
     "contact": "S2aRuntime.authorize_deliveryを同DBtransactionで全宛先へ使用。blocked/block_all優先、reservation/reply参加者による迂回無し。自己宛はS2a規則。",
-    "reply": "send.thread_idはnull/省略のみ、非nullはLEGACY_THREAD_WRITE_NOT_SUPPORTED。返信はsend.reply_toまたはreply_message.message_id。reply_messageではto_agent_idsのnull/省略だけ元senderを既定、明示[]は空として保持。cc/bccのnullは空。返信元message自身のsender/recipient参加者であることと新宛先contact認可を同TX照合。subject prefix/importance/ack/topic継承は設計どおり。旧numeric/comma/labelはsummarize_threadの読取resolverへ。 非null thread_idは汎用schema validationより先に同固定reasonで拒否し、null-only schemaとreasonを両端で一致させる。",
+    "reply": "send.thread_idはnull/省略のみ、非nullはLEGACY_THREAD_WRITE_NOT_SUPPORTED。返信はsend.reply_toまたはreply_message.message_id。reply_messageではto_agent_idsのnull/省略だけ元senderを既定、明示[]は空として保持。cc/bccのnullは空。返信元message自身のsender/recipient参加者であることと新宛先contact認可を同TX照合。subject prefix/importance/ack/topic継承は設計どおり。旧numeric/comma/labelはsummarize_threadの読取resolverへ。 非null thread_idは汎用schema validationより先に同固定reasonで拒否し、null-only schemaとreasonを両端で一致させる。 件名prefixはtrimし、親件名が大小文字を無視して既に同prefixで始まれば維持。それ以外は空白で区切って連結しtrim。導出後にもsendと同じ200文字/800bytes上限、超過PAYLOAD_TOO_LARGE。",
     "snapshot": "ID/作成UTC/recipient/添付digest/reply_toを1回確定。rename/retire/contact変更後も同UUID replayは現在のauth/binding照合後、既存commit receiptだけ返し、旧宛先を再resolve/再送しない。",
     "limits": "subject UTF8<=800bytes/200文字、body UTF8<=65536bytes、importance enum、topic ASCII<=64、宛先100。超過は切り詰めず拒否。markdownのfile path/data URIを自動read/convertしない。",
     "bcc_notification": "決定: 新規send/replyはto/cc/bcc全受信者に同じdesired規則でsignalを出す。旧modeはto/ccだけだった差分としてdocs/PR本文/PR7案内へ一行。hintは受信者自身のstable ID/message IDだけ、他BCC情報を増やさない。"
@@ -2854,9 +2854,8 @@
     "response_budget": "search/topic/summaryは最終MCP JSONRPC（text＋structuredContent二重包み込み）<=1048576 bytes。complete item単位でpageを切りnext_cursorを必ず返す。最初の1item又は選択blob単体が収まらないとMESSAGE_RESPONSE_TOO_LARGE、黙って落とさない。searchではblob指定時limit=1/include_bodies=falseを要求し、合わなければARGUMENTS_UNSUPPORTED。旧長subject/body等を勝手に切断しない。metadata-onlyも収まらない旧rowは同固定理由でoperator exportを案内。",
     "source_import": "新規write上限は旧添付へ適用しない。PR3 attachment map/保存済source bytesを検証し、全旧添付を実サイズのDB blobとして保全する（SQLite自体の実装上限を超える場合はSOURCE_ATTACHMENT_NOT_REPRESENTABLEでprepare全体拒否、source不変）。300KiBでもmetadata実サイズを返し、wire予算内ならsearchのdigest選択で取得可。予算超過は参照metadataのみ取得可、bytes要求だけ固定理由→one-shot operator export。旧archiveは参照fallbackとして稼働させない。",
     "quota": {
-      "proposal": "owner当たりlive添付distinct digestの合計268435456 bytesを既定、正のconfigで増量。SQLite集計はmessages.sender_id＋attachment relation＋blobをowner/digest単位GROUP BY、別quota counter/tableを作らない。新規receipt lookup後・insert前に同TXで新distinct bytesを加算、超過ATTACHMENT_OWNER_CAPACITY_REACHED。shared blobは各ownerへ全サイズ課金。同ownerの同digest再利用追加0。",
       "legacy": "fresh importは上限超過も保存し、inspectにusage/limit/over_limitを表示。超過ownerは追加0bytesのsend/replay/readは可能、新digestだけ拒否。purgeで最後のowner参照が消えれば集計から減る。既存dataを切り詰めない。",
-      "status": "HM P3-4への採用案。値は親/講評の確認対象。"
+      "contract": "owner当たりlive添付distinct digestの合計268435456 bytesを既定、正のconfigで増量。SQLite集計はmessages.sender_id＋attachment relation＋blobをowner/digest単位GROUP BY、別quota counter/tableを作らない。新規receipt lookup後・insert前に同TXで新distinct bytesを加算、超過ATTACHMENT_OWNER_CAPACITY_REACHED。shared blobは各ownerへ全サイズ課金。同ownerの同digest再利用追加0。"
     }
   },
   "visibility_contract": {
@@ -2886,7 +2885,8 @@
       },
       "pagination": "id DESC、SQL WHEREでrecipient/time/urgentをlimit前適用、id<before_idで継続。従来limitだけで件数を選びwire予算に合わせて黙ってitemを落とさない。",
       "projection": "添付は共通metadata/content_refだけ。既存list形式にtruncatedを足さない。最終MCP応答が予算を超えればMESSAGE_RESPONSE_TOO_LARGEで全拒否しlimit縮小/include_bodies=falseかsearch envelopeを案内。1rowのmetadataも超えるならoperator export。",
-      "signal": "fetchでtimestamp/dirty/signalに一切触らない。"
+      "signal": "fetchでtimestamp/dirty/signalに一切触らない。",
+      "item_shape": "S1/S2aのraw rowとは異なりS2bはsender/to/cc/bcc/read_at/acknowledged_atを持つ共通message projection。外側listと純粋readは維持。4b/4c consumerはcapability/profileに合わせて読む。"
     },
     "contact_notifications": {
       "decision": "Q4 A（決定）: S2aのrequest/respond/macro schema/outputはそのまま、welcomeは固定reason拒否を維持。S2bのnotificationはmessage signalだけ。",
@@ -2954,7 +2954,12 @@
     "outbox": "global_signal_dirtyはUNIQUE(message,recipient)の再照合印。kind/UUID5/request_id/payload/番兵/complete履歴なし。通常send/read/ack/consumer/purgeは同TXで同pairをpendingへupsert。desired notificationはmessage/recipientが存在し、agent active、notification_fact/read/ack全nullの場合だけ。to/cc/bcc全kind同じ。signalの作成はdesired=trueかつnotify_after_ts到達時だけ、未来ならdirty保持し期限待ち。dirty成功削除、失敗blocked。FK無しでpurge後clearも可能。fresh時だけdesired=trueのpairへdirtyを作り、消費済みの過去全件をscan/起床させない。",
     "tracker": "既存S2a tracker/全transaction hookを共通使用。message/ref/FTS/notify/dirtyの変更を同revisionに接続。cursorにはrevisionを入れない。full検証startup/inspectのみ、通常TXは対象row/receiptだけ。",
     "prepared_validation": "PR3 pristine preservation proof→S2b添付canonicalization＋notification_importの差分proof→schema4/profile/FTS/blob/ACL/reply/receipt/dirty検証→最終manifest/gate→ready/rename/complete。旧rootへin-place変更無し。receipt無しはDB前REPREPARE。complete前runtime起動不可、初期active signalはruntime workerがDB factから生成。",
-    "purge_integration": "後続purgeは存続子の祖先を保留。削除するmessageの全recipient pairをdirtyへ同TXでupsert→attachment relation/message削除。dirtyにFK無し、projectorは不存在からsignal削除を導出できる。最後のblob参照0なら同TX削除。receiptは歴史hash/bindingを残し本文復活を要求しない。consumer未知IDはno-op＋同pair再照合印で孤立hintを消せる。"
+    "purge_integration": "後続purgeは存続子の祖先を保留。削除するmessageの全recipient pairをdirtyへ同TXでupsert→attachment relation/message削除。dirtyにFK無し、projectorは不存在からsignal削除を導出できる。最後のblob参照0なら同TX削除。receiptは歴史hash/bindingを残し本文復活を要求しない。consumer未知IDはno-op＋同pair再照合印で孤立hintを消せる。",
+    "provenance_sql": [
+      "DROP TABLE namespace_attachment_map",
+      "ALTER TABLE messages DROP COLUMN attachments"
+    ],
+    "provenance_conversion": "fresh staging内で旧map/添付JSONをprovenance/attachments.jsonへ保存し、blob/relation変換と保存照合後に旧table/列を除く。runtimeはglobal_message_attachmentsだけを保守する。"
   },
   "output_protocol": {
     "preflight": "signalだけの固定root/recipient dir/ID slot、型/UID/mode/nlink/symlinkと外部authority identityを単一preflight。書込直前も照合。自分のmagic/binding/ID一致だけ置換/消去、別形式はblocked。file fsync→rename→dir fsync。残る同UID非協調actorの名前open/rename競合はS1同様開示。",
@@ -2963,7 +2968,8 @@
     "reconcile": "BEGIN IMMEDIATEの後、同TXの最新factからdesiredを導出し作成/削除。filesystem後DB commit前killはdirty rollback→同pair再照合。read/ack/purgeが先にcommitした場合そのfactを読む、worker先なら相手はworker commit後dirtyを立てる。通知消費済みprovenance/read/ack/notifiedから古いsignalを再emitしない。",
     "signal_delivery": "hintは配送成功でない。consumer inject成功→sameUID delivery_completed、実通知時刻初回＋dirty upsertを同TX。unknown messageはno-op＋dirty（残留hint削除用）、known非recipientはbatch全拒否。応答喪失再申告は同timestamp、receipt/UUID無し。ack前killは重複wake可、message重複不可。",
     "consumer_boundary": "S2bは合成consumerで管理ackとinbox接続を試験。live watcher/CLI接続は4b/4c、global activation gateはその確認まで不可。既存watcherの直接unlinkをglobalへ流用しない。管理ackのcall schemaはmanagement_contractに固定。",
-    "completion": "dirty無し=signalが直近DB factと照合済み、配送完了とは別。health/inspectはpending/blockedを区別、send receipt成功はDB committedだけ。"
+    "completion": "dirty無し=signalが直近DB factと照合済み、配送完了とは別。health/inspectはpending/blockedを区別、send receipt成功はDB committedだけ。",
+    "immutable_provenance": "旧archive/添付bytes・delivery.sqlite3・legacy/preserved signal・history/bindings/config・添付map/JSONはcandidate/provenance/に一括保管。旧保管物はimmutableでpurge対象外。mapping.jsonは一回のPR3変換proofでruntime routingには使わない。"
   },
   "management_contract": {
     "envelope": "S1既存sameUID Unix管理socket、version/operation/expected binding必須、HTTP toolへ公開しない。全input/outputに共通schema_contract validator。通常fenced SH（EXは既存cutover/quarantineだけ）。errorは同envelopeでok=false/reason、version/operation以外の秘密なし。",
@@ -3281,7 +3287,7 @@
         ],
         "additionalProperties": false
       },
-      "semantics": "同期で最大100pairを同worker関数で一度照合して返す（受付だけでない）。pairsはexact IDで重複拒否、state無しpairもDB factからdirtyへ登録後照合、存在しないmessageはclear、存在しないagentはTARGET_UNAVAILABLE全拒否。batchはpending/blockedをmessage_id,recipient_id順に先頭limit、blocked再試行を明示許可。各pair独立TX、返却stateはその処理直後、全体atomic完了は主張しない。恒久slot不一致はblockedを残し他pair継続。moreは未処理対象の有無。",
+      "semantics": "同期で最大100pairを同worker関数で一度照合して返す（受付だけでない）。pairsはexact IDで重複拒否、state無しpairもDB factからdirtyへ登録後照合、存在しないmessageはclear、存在しないagentはTARGET_UNAVAILABLE全拒否。batchはpending/blockedをmessage_id,recipient_id順に先頭limit、blocked再試行を明示許可。各pair独立TX、返却stateはその処理直後、全体atomic完了は主張しない。恒久slot不一致はblockedを残し他pair継続。moreは選択上限を超える未選択対象の有無（LIMIT n+1）。処理済みblockedの再試行可否はblocked_countで扱い、moreへ含めない。",
       "lost_response": "同pair再実行でDB factを再導出するだけ、message/receipt/notify時刻増加無し。dirty無しはcomplete。"
     },
     "error_schema": {
@@ -3819,7 +3825,9 @@
     ],
     "proof": "source recipient/pair→inventory/delivery root digest/row key→新notify/read/ack/provenance/notify_after/dirtyを変換proofへ列挙。choiceも同digestに束縛、未解決needs_actionでpublication拒否。PR3写像の旧hintは新active signals/agentsへ残さず、immutable preservationだけへ。ready前後killも同proofからfact/初期dirtyを再生成、source bytes/ID/token/status/試行/backoff/leaseの保存を照合。",
     "retired": "retired宛はdesired=false/初期dirty無し、message保持。後続の再有効化があればそのTXで該当未完pair再照合を必須化。",
-    "legacy_boundary": "旧sendがsignal生成失敗を握り潰した場合の未配送を、過去message全件の再wakeで推測補完しない。この境界をPR7移行案内に明記。"
+    "legacy_boundary": "旧sendがsignal生成失敗を握り潰した場合の未配送を、過去message全件の再wakeで推測補完しない。この境界をPR7移行案内に明記。",
+    "orphan_delivery": "対応recipientの無いdelivery rowはsource digestに加えnotification-proof.orphan_deliveryへ全rowを列挙、active pair/dirtyへ変換せず黙って捨てない。PR3のsource recipient整合検証は緩めない。",
+    "attachment_media_type": "旧JSONのmedia_type記録を保存、記録が無ければ固定application/octet-stream。hostのMIME推測を使わない。"
   },
   "legacy_mode_differences": [
     {

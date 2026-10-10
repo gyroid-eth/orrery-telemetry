@@ -111,6 +111,7 @@ def reconcile(runtime, *, pairs=None, batch_limit=None, retry_blocked=False):
     root = runtime.runtime_root / "signals/agents"
     root_fd = directory(root)
     items = []
+    more = False
     try:
         fcntl.flock(root_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         check_directory(root, root_fd)
@@ -130,10 +131,14 @@ def reconcile(runtime, *, pairs=None, batch_limit=None, retry_blocked=False):
                 selected = [
                     tuple(r)
                     for r in db.execute(
-                        "SELECT d.message_id,d.recipient_agent_id FROM global_signal_dirty d LEFT JOIN message_recipients r ON r.message_id=d.message_id AND r.agent_id=d.recipient_agent_id LEFT JOIN agents a ON a.id=d.recipient_agent_id WHERE (d.state='pending' OR ?) AND (r.notify_after_ts IS NULL OR julianday(r.notify_after_ts)<=julianday(?) OR r.notification_fact IS NOT NULL OR r.read_ts IS NOT NULL OR r.ack_ts IS NOT NULL OR a.retired_at IS NOT NULL) ORDER BY d.message_id,d.recipient_agent_id LIMIT ?",
-                        (retry_blocked, now(), batch_limit or 100),
+                        "SELECT d.message_id,d.recipient_agent_id FROM global_signal_dirty d LEFT JOIN message_recipients r ON r.message_id=d.message_id AND r.agent_id=d.recipient_agent_id LEFT JOIN agents a ON a.id=d.recipient_agent_id WHERE (d.state='pending' OR ?) AND (r.notify_after_ts IS NULL OR julianday(r.notify_after_ts)<=julianday(?) OR NOT "
+                        + PENDING
+                        + ") ORDER BY d.message_id,d.recipient_agent_id LIMIT ?",
+                        (retry_blocked, now(), (batch_limit or 100) + 1),
                     )
                 ]
+                more = len(selected) > (batch_limit or 100)
+                selected = selected[: batch_limit or 100]
         for mid, aid in selected:
             try:
                 check_directory(root, root_fd)
@@ -229,7 +234,7 @@ def reconcile(runtime, *, pairs=None, batch_limit=None, retry_blocked=False):
             "mutation_revision": rev,
             "pending_count": counts.get("pending", 0),
             "blocked_count": counts.get("blocked", 0),
-            "more": sum(counts.values()) > 0,
+            "more": more,
         }
     except BlockingIOError:
         raise GlobalError("OUTPUT_IO_FAILED") from None

@@ -51,6 +51,11 @@ def attachments(values):
     return result
 
 
+def check_subject(subject):
+    if len(subject) > 200 or len(subject.encode("utf-8")) > 800:
+        raise GlobalError("PAYLOAD_TOO_LARGE")
+
+
 def arguments(tool, supplied):
     if tool == "send_message" and supplied.get("thread_id") is not None:
         raise GlobalError("LEGACY_THREAD_WRITE_NOT_SUPPORTED")
@@ -76,10 +81,8 @@ def arguments(tool, supplied):
             raise GlobalError("BROADCAST_NOT_SUPPORTED")
         if args.get("auto_contact_if_blocked"):
             raise GlobalError("AUTO_CONTACT_NOT_SUPPORTED")
-        if (
-            len(args["body_md"].encode("utf-8")) > 65536
-            or len(args.get("subject", "").encode("utf-8")) > 800
-        ):
+        check_subject(args.get("subject", ""))
+        if len(args["body_md"].encode("utf-8")) > 65536:
             raise GlobalError("PAYLOAD_TOO_LARGE")
         attachments(args["attachments"])
     if (
