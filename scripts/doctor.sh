@@ -556,15 +556,24 @@ check_managed_block() {
 }
 
 # Use the launcher's library and login-shell execution context, including nvm.
-CODEX_HELPER="$INSTALL_DIR/hooks/codex-bin.sh"
-[[ -f "$CODEX_HELPER" ]] || CODEX_HELPER="$SCRIPT_DIR/../hooks/codex-bin.sh"
+CODEX_LAUNCHER_CONTEXT_READY=0
+CODEX_HELPER="$SCRIPT_DIR/../hooks/codex-bin.sh"
+[[ -f "$CODEX_HELPER" ]] || CODEX_HELPER="$INSTALL_DIR/hooks/codex-bin.sh"
 if [[ -f "$CODEX_HELPER" ]]; then
   . "$CODEX_HELPER"
-  CHILD_SHELL="$(codex_launch_shell)"
-  CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"
+fi
+if declare -F codex_launch_path >/dev/null && \
+   declare -F codex_bin_problem >/dev/null && \
+   declare -F codex_launch_path_setup >/dev/null && \
+   declare -F codex_launch_shell >/dev/null && \
+   declare -F codex_launch_runner >/dev/null && \
+   declare -F codex_find_bin >/dev/null && \
+   CHILD_SHELL="$(codex_launch_shell)" && \
+   CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"; then
+  CODEX_LAUNCHER_CONTEXT_READY=1
   CODEX_PROBE_RUNNER=codex_launch_runner
 else
-  echo "warn: Codex launcher checks unavailable: hooks/codex-bin.sh is missing"
+  echo "warn: Codex launcher checks unavailable: hooks/codex-bin.sh is missing or incompatible"
 fi
 
 codex_launcher_search_path() {
@@ -572,12 +581,12 @@ codex_launcher_search_path() {
 }
 
 resolve_launcher_codex_bin() {
-  declare -F codex_find_bin >/dev/null || return 0
+  [[ "${CODEX_LAUNCHER_CONTEXT_READY:-0}" == 1 ]] || return 0
   codex_find_bin
 }
 
 codex_launcher_problem() {
-  if ! declare -F codex_bin_problem >/dev/null; then
+  if [[ "${CODEX_LAUNCHER_CONTEXT_READY:-0}" != 1 ]]; then
     echo "launcher checks unavailable: hooks/codex-bin.sh is missing"
     return 0
   fi

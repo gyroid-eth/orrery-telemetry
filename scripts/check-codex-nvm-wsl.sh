@@ -66,7 +66,7 @@ process.exit(result.status === null ? 1 : result.status);
              f'. {shlex.quote(str(repo / "hooks/codex-bin.sh"))}\n'
              'CHILD_SHELL="$(codex_launch_shell)"\n'
              'CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"\n'
-             'CODEX_PROBE_RUNNER=codex_launch_runner\n')
+             'CODEX_PROBE_RUNNER=codex_launch_runner\nCODEX_LAUNCHER_CONTEXT_READY=1\n')
     def check(body, good=True):
         proc = subprocess.Popen(["/bin/bash", "-c", setup + doctor + "\n" + body],
                                 env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

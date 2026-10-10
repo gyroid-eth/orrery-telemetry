@@ -22,7 +22,7 @@ def _doctor_functions(source, end):
         f'. {shlex.quote(str(ROOT / "hooks/codex-bin.sh"))}\n'
         'CHILD_SHELL=/bin/bash\n'
         'CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"\n'
-        'CODEX_PROBE_RUNNER=codex_launch_runner\n'
+        'CODEX_PROBE_RUNNER=codex_launch_runner\nCODEX_LAUNCHER_CONTEXT_READY=1\n'
         + source[source.index("codex_launcher_search_path() {"):source.index(end)]
     )
 

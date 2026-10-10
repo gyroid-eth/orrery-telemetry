@@ -51,9 +51,14 @@ def _script(path: pathlib.Path, body: str) -> pathlib.Path:
 def _runner() -> str:
     """The child PATH setup and the probe runner, as spawn_child.sh defines them."""
     text = SPAWN.read_text(encoding="utf-8")
-    start = text.index("if declare -F codex_launch_path_setup >/dev/null; then")
+    start = text.index("CODEX_CHILD_PATH_SETUP=")
     end = text.index("CODEX_PROBE_RUNNER=run_like_codex_child\n", start) + len("CODEX_PROBE_RUNNER=run_like_codex_child\n")
     return text[start:end]
+
+
+def _loader():
+    return (_extract("load_codex_launch_context") + "load_codex_launch_context || exit 1\n"
+            + f'. {shlex.quote(str(CONTEXT))}\n')
 
 
 def _resolve(tmp_path, *, path_dirs, env_bin=None, installed=None, wsl=False, lib=True, runner=True):
@@ -64,8 +69,7 @@ def _resolve(tmp_path, *, path_dirs, env_bin=None, installed=None, wsl=False, li
         (home / ".agentstack" / "env.sh").write_text(
             f"export AGENTSTACK_CODEX_BIN={shlex.quote(installed)}\n", encoding="utf-8")
     text = SPAWN.read_text(encoding="utf-8")
-    start = text.index("# Codex candidate rules, and the env.sh reader")
-    loader = text[start:text.index("codex_search_path() {", start)]
+    loader = _loader()
     script = (
         f"HOOKS_DIR={shlex.quote(str(ROOT / 'hooks') if lib else str(tmp_path / 'old-hooks'))}\n"
         + loader
@@ -155,10 +159,11 @@ def test_outside_wsl_a_path_under_mnt_is_an_ordinary_candidate(tmp_path):
     assert rc == 0 and out == str(windows)
 
 
-def test_an_older_hooks_dir_without_the_library_keeps_the_previous_rules(tmp_path):
+def test_missing_library_stops_instead_of_reimplementing_the_rules(tmp_path):
     first = _script(tmp_path / "first-bin" / "codex", BROKEN)
-    rc, out, _ = _resolve(tmp_path, path_dirs=[first.parent], lib=False)
-    assert rc == 0 and out == str(first)
+    rc, out, err = _resolve(tmp_path, path_dirs=[first.parent], lib=False)
+    assert rc == 1 and out == ""
+    assert "required launcher helper is missing" in err
 
 
 def test_the_installed_env_sh_is_read_not_sourced(tmp_path):
@@ -224,8 +229,7 @@ def _spawn_resolution(tmp_path, *, path_dirs, installed=None, timeout=5, budget=
         (home / ".agentstack" / "env.sh").write_text(
             f"export AGENTSTACK_CODEX_BIN={shlex.quote(installed)}\n", encoding="utf-8")
     text = SPAWN.read_text(encoding="utf-8")
-    start = text.index("# Codex candidate rules, and the env.sh reader")
-    loader = text[start:text.index("codex_search_path() {", start)]
+    loader = _loader()
     script = (
         f"HOOKS_DIR={shlex.quote(str(ROOT / 'hooks'))}\nCHILD_SHELL=/bin/bash\n" + loader + _runner()
         + "running_under_wsl() { return 1; }\n"
@@ -325,7 +329,7 @@ def test_the_probe_shell_has_the_guards_the_child_session_has(tmp_path):
     (home / ".bash_profile").write_text(
         '[ "$CLAUDECODE" = 1 ] && [ "$AGENTSTACK_RESERVED_IDENTITY" = 1 ] || exit 23\n', encoding="utf-8")
     codex = _script(tmp_path / "bin" / "codex", WORKS)
-    script = "CHILD_SHELL=/bin/bash\n" + _runner() + f"run_like_codex_child {shlex.quote(str(codex))} --version\n"
+    script = f'HOOKS_DIR={shlex.quote(str(ROOT / "hooks"))}\n' + _loader() + "CHILD_SHELL=/bin/bash\n" + _runner() + f"run_like_codex_child {shlex.quote(str(codex))} --version\n"
     result = subprocess.run(["/bin/bash", "-c", script], env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
@@ -515,3 +519,13 @@ def test_dry_run_real_policy_uses_no_temporary_files(tmp_path, monkeypatch, vers
         assert sorted(tmp_path.rglob("*")) == before
     finally:
         models._VERSION_CACHE.clear()
+
+
+def test_incompatible_library_stops_before_a_candidate_is_executed(tmp_path):
+    marker = tmp_path / "executed"
+    first = _script(tmp_path / "first-bin/codex", f"touch {shlex.quote(str(marker))}\n")
+    _script(tmp_path / "old-hooks/codex-bin.sh", 'codex_launch_shell() { echo /bin/bash; }\n')
+    rc, out, err = _resolve(tmp_path, path_dirs=[first.parent], lib=False)
+    assert rc == 1 and out == ""
+    assert "launcher helper is incompatible" in err
+    assert not marker.exists()

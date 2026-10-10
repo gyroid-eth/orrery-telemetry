@@ -1581,3 +1581,51 @@ def test_readiness_reason_outranks_an_earlier_rejected_candidate(tmp_path):
     log.write_text("note: skipping codex /synthetic/obsolete: rejected\n"
                    "[spawn_child] reason: selected CLI needs setup\n")
     assert server._spawn_log_tail_and_reason(log)[1] == "selected CLI needs setup"
+
+
+def test_replaced_codex_candidate_does_not_hide_the_actual_launch_error(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("note: skipping codex /synthetic/obsolete: missing node\n"
+                   "Error: could not prepare the Codex MCP profile\n"
+                   "Error: cleanup failed\n")
+    assert server._spawn_log_tail_and_reason(log)[1] == (
+        "Error: could not prepare the Codex MCP profile")
+
+
+def test_all_codex_candidates_failed_keeps_node_detail_before_cleanup(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("note: skipping codex /synthetic/obsolete: missing node\n"
+                   "Error: no usable Codex CLI found\n"
+                   "Error: cleanup failed\n")
+    assert server._spawn_log_tail_and_reason(log)[1] == (
+        "note: skipping codex /synthetic/obsolete: missing node; "
+        "Error: no usable Codex CLI found")
+
+
+def test_discarded_codex_note_alone_is_not_a_launch_failure_reason(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("note: skipping codex /synthetic/obsolete: missing node\n")
+    assert server._spawn_log_tail_and_reason(log)[1] == ""
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+@pytest.mark.parametrize("old_line", [
+    "[spawn_child] reason: obsolete setup failure\n",
+    "note: skipping codex /synthetic/windows: obsolete Windows install\n",
+])
+def test_spawn_failure_reads_only_the_current_append_interval(monkeypatch, tmp_path, returncode, old_line):
+    script = ('#!/bin/bash\necho $$ > "$TEST_MARK.pid"\n'
+              'echo "Error: current launch failure" >&2\n'
+              f"exit {returncode}\n")
+    launcher, _ = _prepare_real_spawn(monkeypatch, tmp_path, script=script)
+    log = tmp_path / "logs/spawn.log"
+    log.parent.mkdir()
+    log.write_text("過去の起動\n" + old_line)
+    result = server.spawn_with_launch_spec(
+        {"standalone": True, "name": "QuietCurie", "task": "work", "dir": str(tmp_path)},
+        _cleanup_spec(launcher, tmp_path, cleanup_seconds=0))
+    assert not result["ok"]
+    assert result["error"].startswith("Error: current launch failure")
+    assert "obsolete" not in result["error"] + result["detail"]
+    assert "過去の起動" not in result["detail"]
+    assert old_line in log.read_text()  # The shared historical log is retained.

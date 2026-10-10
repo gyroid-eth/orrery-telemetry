@@ -53,7 +53,7 @@ def run(env, body):
         f'. {shlex.quote(str(ROOT / "hooks/codex-bin.sh"))}\n'
         'CHILD_SHELL="$(codex_launch_shell)"\n'
         'CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"\n'
-        'CODEX_PROBE_RUNNER=codex_launch_runner\n'
+        'CODEX_PROBE_RUNNER=codex_launch_runner\nCODEX_LAUNCHER_CONTEXT_READY=1\n'
     )
     return subprocess.run(["/bin/bash", "-c", setup + body], env=env,
                           capture_output=True, text=True, timeout=20)
@@ -124,3 +124,93 @@ def test_inherited_node_still_runs_a_cli_without_adjacent_node(tmp_path):
                  'codex_launch_runner "$AGENTSTACK_CODEX_BIN" --synthetic-launch\n')
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "inherited-node-ok"
+
+
+@pytest.mark.parametrize("already_present", [True, False])
+def test_shared_prefix_preserves_python_priority(tmp_path, already_present):
+    env, binary, _ = fixture(tmp_path, node=False)
+    shared = tmp_path / "shared-prefix/bin"
+    shared.mkdir(parents=True)
+    binary.rename(shared / "codex")
+    binary = shared / "codex"
+    script(shared / "node", '#!/bin/sh\nshift\necho shared-node-ok\n')
+    script(shared / "python3", '#!/bin/sh\necho wrong-python\n')
+    pyenv = tmp_path / "pyenv/shims"
+    script(pyenv / "python3", '#!/bin/sh\necho selected-python\n')
+    baseline = f"{pyenv}:{env['PATH']}" + (f":{shared}" if already_present else "")
+    env.update(PATH=baseline, TEST_MINIMAL_PATH=baseline, AGENTSTACK_CODEX_BIN=str(binary))
+    result = run(env, '"$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"\'; python3; exec "$0" --synthetic-launch\' "$AGENTSTACK_CODEX_BIN"\n')
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["selected-python", "shared-node-ok"]
+    result = run(env, f"codex_launch_path {shlex.quote(str(binary))}\n")
+    expected = f"{env['HOME']}/.local/bin:{baseline}" + ("" if already_present else f":{shared}")
+    assert result.stdout.strip() == expected
+
+
+def test_nvm_candidate_still_selects_its_node_over_another_version(tmp_path):
+    env, binary, _ = fixture(tmp_path)
+    other = Path(env["HOME"]) / ".nvm/versions/node/other/bin"
+    script(other / "node", '#!/bin/sh\necho wrong-node >&2\nexit 99\n')
+    baseline = f"{other}:{env['PATH']}:{binary.parent}"
+    env.update(PATH=baseline, TEST_MINIMAL_PATH=baseline, AGENTSTACK_CODEX_BIN=str(binary))
+    result = run(env, 'codex_launch_runner "$AGENTSTACK_CODEX_BIN" --synthetic-launch\n')
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "synthetic-launch-ok"
+
+
+def test_doctor_prefers_its_own_helper_over_an_old_install(tmp_path):
+    env, binary, _ = fixture(tmp_path)
+    script_dir = tmp_path / "checkout/scripts"
+    script_dir.mkdir(parents=True)
+    hooks = script_dir.parent / "hooks"
+    hooks.mkdir()
+    shutil.copyfile(ROOT / "hooks/codex-bin.sh", hooks / "codex-bin.sh")
+    installed = tmp_path / "installed"
+    script(installed / "hooks/codex-bin.sh", 'echo stale-helper-was-loaded >&2\n')
+    source = (ROOT / "scripts/doctor.sh").read_text()
+    loader = source[source.index('CODEX_HELPER="$SCRIPT_DIR/../hooks/codex-bin.sh"'):source.index("# GPT-6.1 Sol requires")]
+    body = (f"SCRIPT_DIR={shlex.quote(str(script_dir))}\nINSTALL_DIR={shlex.quote(str(installed))}\n"
+            + loader + f'\n[[ -z "$(codex_launcher_problem {shlex.quote(str(binary))})" ]]\n')
+    # Run without preloading this checkout's functions; use the actual doctor loader.
+    result = subprocess.run(["/bin/bash", "-c", "set -euo pipefail\n" + body], env=env,
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert "stale-helper" not in result.stdout + result.stderr
+
+
+def test_doctor_warns_before_probing_with_incompatible_helper(tmp_path):
+    env, _, _ = fixture(tmp_path)
+    installed = tmp_path / "old-install"
+    script(installed / "hooks/codex-bin.sh", 'codex_find_bin() { echo must-not-be-used; }\n')
+    source = (ROOT / "scripts/doctor.sh").read_text()
+    loader = source[source.index('CODEX_HELPER="$SCRIPT_DIR/../hooks/codex-bin.sh"'):source.index("# GPT-6.1 Sol requires")]
+    body = (f"SCRIPT_DIR={shlex.quote(str(tmp_path / 'missing/scripts'))}\nINSTALL_DIR={shlex.quote(str(installed))}\n"
+            + loader + '\nresolve_launcher_codex_bin\n')
+    result = subprocess.run(["/bin/bash", "-c", "set -euo pipefail\n" + body], env=env,
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert "checks unavailable" in result.stdout
+    assert "must-not-be-used" not in result.stdout
+    assert "syntax error" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("shell", ["bash", "zsh"])
+def test_shared_prefix_order_is_portable_across_child_shells(tmp_path, shell):
+    shell_path = shutil.which(shell)
+    if not shell_path:
+        pytest.skip(f"{shell} is unavailable")
+    env, binary, _ = fixture(tmp_path, node=False)
+    shared = tmp_path / "shared/bin"
+    shared.mkdir(parents=True)
+    binary.rename(shared / "codex")
+    script(shared / "node", '#!/bin/sh\necho shared-node-ok\n')
+    script(shared / "python3", '#!/bin/sh\necho wrong-python\n')
+    chosen = tmp_path / "pyenv/shims"
+    script(chosen / "python3", '#!/bin/sh\necho chosen-python\n')
+    env.update(PATH=f"{chosen}:{shared}:{env['PATH']}", AGENTSTACK_CODEX_BIN=str(shared / "codex"))
+    setup = run(env, "codex_launch_path_setup\n")
+    assert setup.returncode == 0, setup.stderr
+    result = subprocess.run([shell_path, "-c", setup.stdout + '\npython3\n"$AGENTSTACK_CODEX_BIN" --synthetic-launch\n'],
+                            env=env, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["chosen-python", "shared-node-ok"]
