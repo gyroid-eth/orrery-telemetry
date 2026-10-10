@@ -38,6 +38,8 @@ def test_standalone_root_cannot_be_adopted_as_child(server):
         "cleanup-child-agent.sh",
         "release-all-reservations.sh",
         "session-start-reminder.sh",
+        "check-agent-registered.sh",
+        "mark-agent-registered.sh",
     ],
 )
 def test_mail_disabled_skips_global_before_owner_material(server, hook):

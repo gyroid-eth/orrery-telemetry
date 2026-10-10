@@ -1,6 +1,7 @@
 #!/bin/bash
 # One loader for partial installations. Normal selection belongs to Python.
-AGS_CLIENT_LOADER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${BASH_SOURCE:-}" ]]; then _ags_client_loader_src="${BASH_SOURCE[0]}"; else _ags_client_loader_src="$0"; fi
+AGS_CLIENT_LOADER_DIR="$(cd "$(dirname "$_ags_client_loader_src")" && pwd)"
 
 ags_client_missing_admission() {
   local argument context
@@ -16,12 +17,16 @@ ags_client_missing_admission() {
 }
 
 ags_client_select() {
-  local response status
+  local response ags_selection_rc
+  ags_client_missing_admission "$@" 2>/dev/null && ags_selection_rc=0 || ags_selection_rc=$?
+  [[ "$ags_selection_rc" != 125 ]] || return 125
   if [[ ! -f "$AGS_CLIENT_LOADER_DIR/runtime_client.py" || ! -f "$AGS_CLIENT_LOADER_DIR/agentstack-register.sh" ]]; then
     ags_client_missing_admission "$@"; return $?
   fi
-  response="$(python3 "$AGS_CLIENT_LOADER_DIR/runtime_client.py" select "$@" </dev/null)" && status=0 || status=$?
-  if [[ "$status" != 0 ]]; then return "$status"; fi
+  response="$(python3 "$AGS_CLIENT_LOADER_DIR/runtime_client.py" select "$@" </dev/null)" && ags_selection_rc=0 || ags_selection_rc=$?
+  if [[ "$ags_selection_rc" != 0 ]]; then
+    ags_client_missing_admission "$@"; return $?
+  fi
   case "$response" in
     "orrery-client-global-v1"$'\n'*)
       export AGENTSTACK_CLIENT_CONFIG="${response#*$'\n'}"
@@ -32,23 +37,23 @@ ags_client_select() {
 }
 
 ags_client_entry() {
-  local entry="$1" status
+  local entry="$1" ags_selection_rc
   shift
+  ags_client_select "$@" && ags_selection_rc=0 || ags_selection_rc=$?
+  [[ "$ags_selection_rc" == 0 ]] || return "$ags_selection_rc"
   case "$entry" in
     pre-edit|post-edit|end-session|session-start|registered|record-self)
       [[ "${AGENTSTACK_MAIL_DISABLED:-}" != 1 ]] || return 0 ;;
   esac
-  ags_client_select "$@" && status=0 || status=$?
-  [[ "$status" == 0 ]] || return "$status"
   . "$AGS_CLIENT_LOADER_DIR/agentstack-register.sh"
   if ! declare -F ags_global_entry >/dev/null; then
     ags_client_missing_admission "$@"; return $?
   fi
-  ags_global_entry "$entry" "$@" && status=0 || status=$?
-  if [[ "$status" == 125 ]]; then
+  ags_global_entry "$entry" "$@" && ags_selection_rc=0 || ags_selection_rc=$?
+  if [[ "$ags_selection_rc" == 125 ]]; then
     ags_client_missing_admission "$@"; return $?
   fi
-  return "$status"
+  return "$ags_selection_rc"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

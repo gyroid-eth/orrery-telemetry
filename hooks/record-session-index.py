@@ -119,8 +119,6 @@ def _bindings_for(out_dir, session_id):
 
 
 def main():
-    if os.environ.get('AGENTSTACK_MAIL_DISABLED') == '1':
-        return EXIT_NOT_APPLICABLE
     try:
         d = json.loads(sys.stdin.read())
     except Exception:
@@ -131,6 +129,8 @@ def main():
     if selection.returncode not in (0, 125):
         return EXIT_CALLER_UNRESOLVED
     if selection.returncode == 0:
+        if os.environ.get('AGENTSTACK_MAIL_DISABLED') == '1':
+            return EXIT_NOT_APPLICABLE
         try:
             api = runpy.run_path(str(helper))
             client = api['configured']()
