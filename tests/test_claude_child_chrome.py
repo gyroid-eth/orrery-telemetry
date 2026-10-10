@@ -11,6 +11,8 @@ import json
 import os
 import pathlib
 import re
+import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -319,9 +321,9 @@ def test_cli_device_wins_over_env_device(tmp_path):
 
 def _codex_inner(env) -> str:
     command = _new_session(env)[-1]
-    prefix, _, rest = command.partition(" -lc '")
-    assert rest.endswith("'"), command
-    return rest[:-1]
+    argv = shlex.split(command)
+    assert argv[-2] == "-lc", command
+    return argv[-1]
 
 
 def test_env_default_is_ignored_for_codex_children(tmp_path):
@@ -360,6 +362,7 @@ def test_codex_child_process_does_not_inherit_the_chrome_env(tmp_path):
     _executable(fake_codex, f"#!/bin/bash\nenv > {dump}\n")
     hooks = tmp_path / "noop-hooks"
     hooks.mkdir()
+    shutil.copy2(ROOT / "hooks" / "codex-bin.sh", hooks)
     _executable(hooks / "cleanup-child-agent.sh", "#!/bin/bash\nexit 0\n")
     run_env = {
         "PATH": "/usr/bin:/bin",
@@ -371,8 +374,9 @@ def test_codex_child_process_does_not_inherit_the_chrome_env(tmp_path):
         "AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE": "from-server",
         **tmux_env,
     }
-    subprocess.run(["/bin/bash", "-c", inner], env=run_env, cwd=workdir,
-                   capture_output=True, text=True, timeout=60, check=False)
+    result = subprocess.run(["/bin/bash", "-c", inner], env=run_env, cwd=workdir,
+                            capture_output=True, text=True, timeout=60, check=False)
+    assert result.returncode == 0, result.stderr
     seen = dump.read_text(encoding="utf-8")
     assert "AGENTSTACK_CODEX_MODEL=gpt-6-sol" in seen  # the fake really ran
     assert "AGENTSTACK_CLAUDE_CHILD_CHROME" not in seen

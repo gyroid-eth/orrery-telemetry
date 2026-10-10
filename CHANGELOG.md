@@ -23,6 +23,10 @@ path による更新・解放を自己 ACTIVE だけに限定し、他 owner と
 
 完成した receipt を持つ新規 candidate だけを起動し、旧 root は不変で拒否します。時刻の instant・ID・旧長 reason を保存する fresh proof と各保存境界の回帰を追加しました。既定旧 mode・既存 profile・activation=false は維持し、client/hook の結線と切替は後続です。[S2c の契約と移設](docs/global-reservations.md)を参照してください。
 
+### nvm の Codex を dashboard の最小 PATH から起動できます
+
+選んだ Codex の解決先、または npm shim と同じ bin にある node を、確認と起動に共通の PATH 処理で使います。doctor も子の login shell と同じ処理で CLI を確認し、起動失敗の表示は launcher の原因を登録の後始末より先に出します。既存 CLI の版の確認だけを一時 HOME で行う WSL 用 runner を追加しました。API の field と世代は変えません。
+
 ### project 廃止に向けた message と通知の server 契約を準備
 
 明示した隔離 schema4 に送信・返信・既読・ack・検索・topic・digest の8 toolを追加しました。本文・添付 blob・FTS・監査 receipt と通知の再照合印を同じ DB transaction で確定し、応答喪失は同 UUID で回収します。外部出力は固定 layout の signal だけに絞り、archive・Git・保存 summary の第二正本を作りません。通知の消費を1列にまとめ、旧 hint と配送 row がない過去の message は時刻を捏造せず消費済みとして import します。可視集合の keyset、巨大な旧添付の metadata 読取、準備・通知の各中断点と明示再照合を追加しました。

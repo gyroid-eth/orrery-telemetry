@@ -6977,8 +6977,8 @@ def _spawn_launch_record(name: str, result: dict) -> None:
 _SPAWN_REASON_PREFIX = "[spawn_child] reason: "
 
 
-def _spawn_log_tail_and_reason(log_path) -> tuple[str, str]:
-    """The launcher log's last 1000 characters, and its last reason line.
+def _spawn_log_tail_and_reason(log_path, start_offset: int = 0) -> tuple[str, str]:
+    """The current launch interval's tail and first applicable cause line.
 
     spawn_child.sh writes "[spawn_child] reason: ..." when it stops on
     something only the user can resolve (Claude Code's first-run setup, its
@@ -6986,14 +6986,50 @@ def _spawn_log_tail_and_reason(log_path) -> tuple[str, str]:
     without it the user saw only an exit status.
     """
     try:
-        with open(log_path, encoding="utf-8", errors="replace") as f:
-            text = f.read()
+        with open(log_path, "rb") as f:
+            f.seek(start_offset)
+            text = f.read().decode("utf-8", errors="replace")
     except OSError:
         return "", ""
     reason = ""
-    for line in text.splitlines():
+    # Explicit readiness failures outrank rejected candidates that the launcher
+    # may have successfully replaced. Within each class keep the first cause.
+    lines = text.splitlines()
+    for line in lines:
         if line.startswith(_SPAWN_REASON_PREFIX):
             reason = line[len(_SPAWN_REASON_PREFIX):].strip()
+            break
+    if not reason:
+        error = next((line.strip() for line in lines if line.startswith("Error:")), "")
+        reason = error
+        # A discarded candidate is relevant only when resolution exhausted
+        # every candidate. If a replacement CLI later fails, show that error.
+        if error.startswith("Error: no usable Codex CLI found"):
+            candidates = [line.strip() for line in lines
+                          if line.startswith("note: skipping ")]
+            if candidates:
+                budget = max(0, 500 - len("; " + error))
+                reason = "; ".join(candidates)
+                if len(reason) > budget:
+                    visible = []
+                    for index, candidate in enumerate(candidates):
+                        remaining = len(candidates) - index - 1
+                        suffix = f"; (+{remaining} more skipped candidates)" if remaining else ""
+                        joined = "; ".join([*visible, candidate])
+                        if len(joined + suffix) > budget:
+                            remaining += 1
+                            suffix = f"; (+{remaining} more skipped candidates)"
+                            if not visible:
+                                # Even one candidate may contain a very long path.
+                                remaining -= 1
+                                suffix = f"; (+{remaining} more skipped candidates)" if remaining else ""
+                                visible = [candidate[:max(0, budget - len(suffix) - 1)] + "…"]
+                            reason = "; ".join(visible) + suffix
+                            break
+                        visible.append(candidate)
+                    else:
+                        reason = "; ".join(visible)
+                reason = f"{reason}; {error}" if budget and len(reason) <= budget else error
     return text[-1000:], reason[:500]
 
 
@@ -7858,6 +7894,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, "spawn.log")
         log_fh = open(log_path, "ab", buffering=0)
+        log_start_offset = log_fh.tell()
         ts = datetime.now(timezone.utc).isoformat()
         log_fh.write(
             f"\n=== {ts} spawn child={child_name} parent={parent} "
@@ -7927,7 +7964,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                 if returncode != 0:
                     kill_spawn_session()
                     remove_spawn_credentials()
-                    tail, reason = _spawn_log_tail_and_reason(log_path)
+                    tail, reason = _spawn_log_tail_and_reason(log_path, log_start_offset)
                     error = f"spawn launcher exited with status {returncode}"
                     return retained_registration_error(
                         f"{reason} ({error})" if reason else error,
@@ -7939,7 +7976,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             if probe.returncode:
                 kill_spawn_session()
                 remove_spawn_credentials()
-                tail, reason = _spawn_log_tail_and_reason(log_path)
+                tail, reason = _spawn_log_tail_and_reason(log_path, log_start_offset)
                 error = "spawn launcher exited before a live tmux session was created"
                 return retained_registration_error(
                     f"{reason} ({error})" if reason else error,

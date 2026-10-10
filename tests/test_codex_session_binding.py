@@ -431,6 +431,7 @@ def _codex_entrypoint_layout(tmp_path: Path, layout: str) -> dict[str, Path]:
             "bin/lib/agentstack-register.sh",
             "bin/lib/agentstack-scientists.sh",
             "hooks/spawn_child.sh",
+            "hooks/codex-bin.sh",
             "dashboard/codex_models.py",
             "hooks/child_resume.py",
             "hooks/prepare-codex-session-binding.py",
@@ -1057,6 +1058,7 @@ def test_no_arg_codex_spawn_rejects_untrusted_canonical_state_before_cli(
             empty_hooks = tmp_path / "hooks-without-prepare"
             empty_hooks.mkdir()
             shutil.copy2(ROOT / "hooks" / "child_resume.py", empty_hooks)
+            shutil.copy2(ROOT / "hooks" / "codex-bin.sh", empty_hooks)
             env["AGENTSTACK_HOOKS_DIR"] = str(empty_hooks)
     env["AGENTSTACK_CODEX_LAUNCH_BINDING"] = "/parent/launch.json"
     env["AGENTSTACK_CODEX_LAUNCH_ID"] = "parent-launch"
