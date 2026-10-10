@@ -13,6 +13,7 @@ import os
 import pathlib
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -92,7 +93,7 @@ def _resolve_child_shell(env: dict) -> subprocess.CompletedProcess:
     m = re.search(r"(resolve_child_shell\(\) \{.*?\n\})", text, re.S)
     assert m, "resolve_child_shell not found"
     return subprocess.run(
-        ["bash", "-c", m.group(1) + "\nresolve_child_shell"],
+        ["bash", "-c", f'. {shlex.quote(str(ROOT / "hooks/codex-bin.sh"))}\n' + m.group(1) + "\nresolve_child_shell"],
         env=env, capture_output=True, text=True,
     )
 

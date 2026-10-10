@@ -28,6 +28,14 @@ agent-start
 
 優先順位は明示引数、`fzf` picker、現在 directory の順です。
 
+## Codex と Node.js の PATH
+
+Codex の子は `hooks/codex-bin.sh` の共通処理で CLI を選び、login shell 内で `codex --version` を確認してから起動します。doctor も同じ選択・確認処理を使います。nvm の bin は探索対象です。選んだ Codex の symlink を解決した先の directory に実行可能な `node` があれば、その directory を実行時の PATH に追加します。nvm の version directory は先頭に置き、共有 prefix は既存の順序を保って後ろに追加します。既にその node が見えている場合は変更しません。npm の symlink の先に node がない場合は、選んだ shim と同じ bin の node を使います。どちらにも node がなければ、login shell の PATH と `~/.local/bin` を使います。
+
+launcher は同梱の `codex-bin.sh` を必須とし、欠落・互換性不足なら再 install の案内付きで停止します。doctor は自身と同じ配置の helper を優先し、利用できなければ未確認と表示します。
+
+dashboard の `SPAWN FAILED` は、今回の起動区間の launcher の原因を登録の後始末のエラーより先に表示します。明示 reason、通常の Error の順で確認し、全候補失敗の場合だけ候補の拒否理由を添えます。node が見つからない場合は、CLI の置き場所に対応する Node.js が使えるかを確認してください。実際の WSL 環境の確認手順は [トラブルシューティング](troubleshooting.md#nvm-の-codex-で-node-が見つからない) を参照してください。
+
 ## tmux session
 
 tmux 外から起動すると、新しい named session を作って現在の terminal tab を置き換えます。tmux 内からは current session を rename し、その場で CLI を `exec` します。

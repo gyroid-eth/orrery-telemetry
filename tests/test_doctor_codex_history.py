@@ -17,6 +17,16 @@ DOCTOR = ROOT / "scripts" / "doctor.sh"
 PLUGIN_ID = "agentstack-codex-app@agentstack-local"
 
 
+def _doctor_functions(source, end):
+    return (
+        f'. {shlex.quote(str(ROOT / "hooks/codex-bin.sh"))}\n'
+        'CHILD_SHELL=/bin/bash\n'
+        'CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"\n'
+        'CODEX_PROBE_RUNNER=codex_launch_runner\nCODEX_LAUNCHER_CONTEXT_READY=1\n'
+        + source[source.index("codex_launcher_search_path() {"):source.index(end)]
+    )
+
+
 def _fake_commands(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
@@ -119,7 +129,7 @@ def _probe(tmp_path, payload, *, returncode=0, delay=0, missing_binary=False, mi
         (codex_home / "config.toml").write_text("# user-owned; do not modify\n")
     log = tmp_path / "codex-calls.jsonl"
     source = DOCTOR.read_text()
-    functions = source[source.index("codex_launcher_search_path() {"):source.index('\nCODEX_HOME="')]
+    functions = _doctor_functions(source, '\nCODEX_HOME="')
     script = (
         "set -euo pipefail\n"
         + f"PYTHON_BIN={shlex.quote(sys.executable)}\n"
@@ -129,6 +139,8 @@ def _probe(tmp_path, payload, *, returncode=0, delay=0, missing_binary=False, mi
     )
     env = dict(
         os.environ,
+        HOME=str(tmp_path),
+        AGENTSTACK_HOME=str(tmp_path / ".agentstack"),
         AGENTSTACK_TEST_PLUGIN_LIST=payload if isinstance(payload, str) else json.dumps(payload),
         AGENTSTACK_TEST_CODEX_RC=str(returncode),
         AGENTSTACK_TEST_CODEX_DELAY=str(delay),
@@ -199,12 +211,12 @@ def test_claude_only_or_missing_home_is_informational(tmp_path, missing):
 def test_binary_resolution_matches_child_launcher(tmp_path, explicit):
     fake_bin, codex = _fake_commands(tmp_path)
     source = DOCTOR.read_text()
-    functions = source[source.index("codex_launcher_search_path() {"):source.index("report_codex_history_binding_prereqs() {")]
+    functions = _doctor_functions(source, "report_codex_history_binding_prereqs() {")
     # An invalid configured path falls back to PATH, just as find_codex_bin does.
     configured = str(codex) if explicit else str(tmp_path / "removed-codex")
     result = subprocess.run(
         ["/bin/bash", "-c", "set -euo pipefail\n" + functions + "\nresolve_launcher_codex_bin"],
-        env=dict(os.environ, AGENTSTACK_CODEX_BIN=configured, PATH=f"{fake_bin}:{os.environ['PATH']}"),
+        env=dict(os.environ, HOME=str(tmp_path), AGENTSTACK_HOME=str(tmp_path / ".agentstack"), AGENTSTACK_CODEX_BIN=configured, PATH=f"{fake_bin}:{os.environ['PATH']}"),
         capture_output=True,
         text=True,
         check=True,
@@ -216,7 +228,7 @@ def test_binary_resolution_matches_child_launcher(tmp_path, explicit):
 
 def _report(tmp_path, codex, *, wsl=False, mount_root=None):
     source = DOCTOR.read_text()
-    functions = source[source.index("codex_launcher_search_path() {"):source.index('\nCODEX_HOME="')]
+    functions = _doctor_functions(source, '\nCODEX_HOME="')
     overrides = ""
     if wsl:
         overrides += "running_under_wsl() { return 0; }\n"
@@ -229,7 +241,7 @@ def _report(tmp_path, codex, *, wsl=False, mount_root=None):
     home = tmp_path / "codex-home"
     home.mkdir(exist_ok=True)
     return subprocess.run(["/bin/bash", "-c", script, "doctor-probe", str(codex), str(home)],
-                          env=dict(os.environ, AGENTSTACK_TEST_PLUGIN_LIST="{}"),
+                          env=dict(os.environ, HOME=str(tmp_path), AGENTSTACK_HOME=str(tmp_path / ".agentstack"), AGENTSTACK_TEST_PLUGIN_LIST="{}"),
                           capture_output=True, text=True, timeout=20)
 
 
@@ -246,7 +258,7 @@ def test_codex_whose_version_fails_is_a_warning_with_a_fix(tmp_path):
     result = _report(tmp_path, codex)
     assert result.returncode == 0, result.stderr
     assert f"warn: Codex launcher binary {codex} cannot start Codex" in result.stdout
-    assert "--version' exited with status 1 after 0." in result.stdout
+    assert "--version' exited with status 1 after" in result.stdout
     assert "Missing optional dependency @openai/codex-linux-x64" in result.stdout
     assert "within" not in result.stdout
     assert "hint: install Codex where this shell can run it" in result.stdout
@@ -257,7 +269,7 @@ def test_windows_codex_under_wsl_is_a_warning_naming_the_reason(tmp_path):
     mount = tmp_path / "mnt"
     codex = _script(mount / "c" / "Users" / "someone" / "AppData" / "Roaming" / "npm" / "codex", "exit 0\n")
     result = _report(tmp_path, codex, wsl=True, mount_root=mount)
-    assert "cannot start Codex: it is the Windows install under" in result.stdout
+    assert "cannot start Codex: it is a Windows install under" in result.stdout
     assert "ok: Codex launcher binary" not in result.stdout
     # Outside WSL the same path is an ordinary, runnable binary.
     result = _report(tmp_path, codex, wsl=False, mount_root=mount)

@@ -556,3 +556,15 @@ manifest がない状態で推測削除は行いません。settings や mail da
 - [Codex App 統合](codex-app.md)
 - [Dashboard](dashboard.md)
 - [設定](configuration.md)
+
+## nvm の Codex で node が見つからない
+
+dashboard の最小 PATH に nvm がなくても、検出した Codex と同じ bin（または symlink の解決先）に node があれば、確認と起動の両方で同じ PATH を使います。doctor の `Codex launcher binary` も同じ環境で `--version` に答えるかを確かめます。node がどちらにもなく login shell の PATH にもなければ、理由付きで候補を拒否します。
+
+WSL の検査は、対象の checkout で次を実行します。
+
+```bash
+bash scripts/check-codex-nvm-wsl.sh /absolute/path/to/codex python3
+```
+
+Python 3.11 以上が必要です。追加 package は不要です。既にある CLI と Node.js だけを使い、一時 HOME / CODEX_HOME、最小 PATH で `--version` を確認します。model、login、thread、子の登録や tmux session は起動しません。通常の実 HOME に対する設定変更はありません。

@@ -1187,25 +1187,25 @@ cleanup_worktree() {
 # when present (macOS default, and where every operator so far has run this),
 # otherwise bash; AGENTSTACK_CHILD_SHELL overrides both. The launch snippets
 # above are written in the syntax subset both shells share.
-# shellcheck disable=SC1090
-[[ -f "$HOOKS_DIR/codex-bin.sh" ]] && . "$HOOKS_DIR/codex-bin.sh"
-resolve_child_shell() {
-    if declare -F codex_launch_shell >/dev/null; then
-        codex_launch_shell "$@"
-        return
-    fi
-    local shell="${AGENTSTACK_CHILD_SHELL:-}"
-    if [[ -n "$shell" && -x "$shell" ]]; then
-        printf '%s\n' "$shell"
-        return 0
-    fi
-    shell="$(command -v zsh 2>/dev/null || true)"
-    [[ -z "$shell" ]] && shell="$(command -v bash 2>/dev/null || true)"
-    if [[ -z "$shell" ]]; then
-        echo "Error: neither zsh nor bash found for the child session; set AGENTSTACK_CHILD_SHELL" >&2
+load_codex_launch_context() {
+    if [[ ! -f "$HOOKS_DIR/codex-bin.sh" ]]; then
+        echo "Error: required launcher helper is missing: $HOOKS_DIR/codex-bin.sh; re-run the installer" >&2
         return 1
     fi
-    printf '%s\n' "$shell"
+    # shellcheck disable=SC1090
+    . "$HOOKS_DIR/codex-bin.sh"
+    local helper
+    for helper in codex_launch_shell codex_launch_path codex_launch_path_setup codex_launch_runner codex_launch_search_path codex_find_bin codex_bin_problem; do
+        if ! declare -F "$helper" >/dev/null; then
+            echo "Error: launcher helper is incompatible ($helper missing); re-run the installer" >&2
+            return 1
+        fi
+    done
+}
+load_codex_launch_context || exit 1
+
+resolve_child_shell() {
+    codex_launch_shell "$@"
 }
 CHILD_SHELL="$(resolve_child_shell)" || exit 1
 
@@ -1215,17 +1215,16 @@ CHILD_SHELL="$(resolve_child_shell)" || exit 1
 # probes (--version, --help) run through run_like_codex_child, so a candidate is
 # judged under the PATH it will run with. Probing with the launcher's own PATH
 # rejected a codex whose `#!/usr/bin/env node` finds node only there (2026-09-29).
-CODEX_CHILD_PATH_SETUP='export PATH="$HOME/.local/bin:$PATH"'
+CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"
+# tmux receives a shell command containing a single-quoted login script.
+# Escape the shared setup for that outer shell; probes use the raw script.
+CODEX_CHILD_PATH_SETUP_QUOTED="$(printf '%s' "$CODEX_CHILD_PATH_SETUP" | sed "s/'/'\\\\''/g")"
+
 # The probe's login shell also gets the guard variables the child's session
 # has (TMUX_ENV_ARGS below): a profile or exit hook that checks CLAUDECODE, or
 # the reserved-identity marker, must behave as it will for the child.
 run_like_codex_child() {
-    if declare -F codex_launch_runner >/dev/null; then
-        codex_launch_runner "$@"
-        return
-    fi
-    env CLAUDECODE=1 AGENTSTACK_RESERVED_IDENTITY=1 \
-        "$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"'; exec "$0" "$@"' "$@"
+    codex_launch_runner "$@"
 }
 CODEX_PROBE_RUNNER=run_like_codex_child
 # The latest point, in seconds of this launcher's run, at which the Codex start
@@ -1239,30 +1238,12 @@ CODEX_WATCH_END_BY=105
 # on a host where `codex` worked from every shell (2026-09-08, nodebrew). The
 # installer now persists AGENTSTACK_CODEX_BIN; this is the fallback for
 # installs that predate it and for hosts where the setting is empty.
-# Codex candidate rules, and the env.sh reader (both define functions only).
-# shellcheck disable=SC1090
-[[ -f "$HOOKS_DIR/codex-bin.sh" ]] && . "$HOOKS_DIR/codex-bin.sh"
+# The env.sh reader defines functions only; binary rules are loaded above.
 # shellcheck disable=SC1090
 [[ -f "$HOOKS_DIR/project-context.sh" ]] && . "$HOOKS_DIR/project-context.sh"
-# An older hooks dir without codex-bin.sh keeps the previous rules (executable,
-# first on the search path) instead of treating every candidate as usable.
-if ! declare -F codex_bin_problem >/dev/null; then
-    codex_bin_problem() { [[ -x "$1" ]] || echo "it is not executable"; }
-    find_usable_codex_bin_in() { PATH="$1" command -v codex 2>/dev/null || true; }
-fi
 
 codex_search_path() {
-    if declare -F codex_launch_search_path >/dev/null; then
-        codex_launch_search_path "$@"
-        return
-    fi
-    local extra="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.nodebrew/current/bin:/opt/homebrew/bin:/usr/local/bin"
-    local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
-    local candidate
-    for candidate in "$nvm_dir"/versions/node/*/bin; do
-        [[ -d "$candidate" ]] && extra="$extra:$candidate"
-    done
-    printf '%s\n' "$PATH:$extra"
+    codex_launch_search_path "$@"
 }
 
 # The codex a Codex child runs: AGENTSTACK_CODEX_BIN from the environment,
@@ -1278,35 +1259,7 @@ codex_search_path() {
 # path is probed at most once, and all probes share one time budget, so an
 # unresponsive saved codex cannot eat the dashboard's 120 seconds.
 find_codex_bin() {
-    if declare -F codex_find_bin >/dev/null; then
-        codex_find_bin "$@"
-        return
-    fi
-    if [[ -n "${CODEX_BIN_PRIMED:-}" ]]; then
-        printf '%s\n' "$CODEX_BIN_RESOLVED"
-        return 0
-    fi
-    local codex_bin source problem
-    declare -F codex_probe_budget_start >/dev/null && codex_probe_budget_start
-    for source in environment env.sh; do
-        if [[ "$source" == environment ]]; then
-            codex_bin="${AGENTSTACK_CODEX_BIN:-}"
-        elif declare -F agentstack_installed_env_value >/dev/null; then
-            codex_bin="$(agentstack_installed_env_value AGENTSTACK_CODEX_BIN)"
-        else
-            codex_bin=""
-        fi
-        [[ -n "$codex_bin" ]] || continue
-        [[ "${CODEX_JUDGED:-:}" != *":$codex_bin:"* ]] || continue
-        CODEX_JUDGED="${CODEX_JUDGED:-:}$codex_bin:"
-        problem="$(codex_bin_problem "$codex_bin")"
-        if [[ -z "$problem" ]]; then
-            printf '%s\n' "$codex_bin"
-            return 0
-        fi
-        echo "note: skipping AGENTSTACK_CODEX_BIN from $source ($codex_bin): $problem" >&2
-    done
-    find_usable_codex_bin_in "$(codex_search_path)"
+    codex_find_bin "$@"
 }
 
 prime_codex_bin() {
@@ -3282,7 +3235,7 @@ ${TASK}"
             -c "$WORK_DIR" \
             "${TMUX_ENV_ARGS[@]}" \
             "$CHILD_SHELL"' -lc '"'"'
-                '"$CODEX_CHILD_PATH_SETUP"';
+                '"$CODEX_CHILD_PATH_SETUP_QUOTED"';
                 # The child never sources a user-side bootstrap: identity comes
                 # from the reserved name and token file, and a failing script
                 # under set -e would take the whole session with it (2026-09-03).
@@ -4146,7 +4099,7 @@ if [[ "$USE_CODEX" == true ]]; then
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
         "$CHILD_SHELL"' -lc '"'"'
-                '"$CODEX_CHILD_PATH_SETUP"';
+                '"$CODEX_CHILD_PATH_SETUP_QUOTED"';
             # See the pre-registered path: no user-side bootstrap is sourced.
             # See the pre-registered path: the product owns the launch flags and
             # never hands off to a user-side launcher.
