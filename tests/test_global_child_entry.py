@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
@@ -199,7 +200,7 @@ def test_gemini_lifecycle_helper_passes_typed_paths_without_legacy_fields(server
     for action in ("reserve", "release"):
         output = subprocess.run(
             [
-                str(Path(api["ROOT"]) / ".venv/bin/python"),
+                sys.executable,
                 str(helper),
                 action,
                 "--paths-json",
@@ -233,7 +234,7 @@ def test_resume_global_partial_library_never_accepts_empty_success(server, old_l
     (root / "bin/lib/agentstack-register.sh").write_text(old_library)
     output = subprocess.run(
         [
-            str(Path(api["ROOT"]) / ".venv/bin/python"),
+            sys.executable,
             str(root / "bin/agentstack-resume"),
             "ChildAlpha",
         ],
@@ -253,7 +254,7 @@ def test_resume_cli_uses_existing_global_front_door(server):
     )
     output = subprocess.run(
         [
-            str(Path(api["ROOT"]) / ".venv/bin/python"),
+            sys.executable,
             str(Path(api["ROOT"]) / "bin/agentstack-resume"),
             "--client-name",
             "child_01",
