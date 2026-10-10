@@ -27,7 +27,6 @@ from .namespace_state_io import (
     SourceBundle,
     StateMigrationError,
     atomic_json,
-    connection,
     tree_manifest,
 )
 from .namespace_transform import resolve_mail, convert_bundle, validate_bundle
@@ -168,10 +167,13 @@ class NamespaceMigration:
             raise StateMigrationError("WRITER_ROSTER_CHANGED")
         return receipt
 
+    def _candidate_bundle(self, root):
+        return bundle_at(root)
+
     def _candidate_manifest(self, receipt: dict) -> dict:
         root = self.workspace / "candidate"
         return {
-            "bundle": bundle_at(root).manifest(),
+            "bundle": self._candidate_bundle(root).manifest(),
             "resources": tree_manifest(root),
             "mapping": fingerprint(json.loads((root / "mapping.json").read_text())),
             "resolutions_digest": fingerprint(

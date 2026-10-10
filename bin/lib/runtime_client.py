@@ -542,6 +542,14 @@ class RuntimeClient:
         listing = self.rpc('tools/list', {}).get('result', {}).get('tools')
         if not isinstance(listing, list):
             raise ClientError('CAPABILITY_INVALID')
+        # Admit the remote schema once at catalog load, including branches
+        # that the current response does not select. Value validation stays
+        # independent of schema-definition validation.
+        for tool in listing:
+            if isinstance(tool, dict):
+                for field in ('inputSchema', 'outputSchema'):
+                    if isinstance(tool.get(field), dict):
+                        wire_contract()['validate_schema_definition'](tool[field], error_type=ClientError)
         self.output_schemas = {t['name']: t.get('outputSchema') for t in listing
                                if isinstance(t, dict) and isinstance(t.get('name'), str)}
         return health, {t['name']: t['inputSchema'] for t in listing

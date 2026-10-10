@@ -8,7 +8,7 @@ import re
 import uuid
 
 from .global_server import GlobalError, GlobalRuntime, document
-from .global_s2a import S2aRuntime, revision, validate_runtime_candidate, schema_objects
+from .global_s2a import S2aRuntime, revision, schema_objects
 from .global_s2a_contract import canonical, digest
 from .global_prepare import safe_directory, write_role
 from .namespace_state_io import rows, tables
@@ -25,7 +25,7 @@ class IncidentRuntime(S2aRuntime):
         if write:
             raise GlobalError("RUNTIME_WRITER_MISMATCH")
         self.initial_preflight()
-        validate_runtime_candidate(db, allow_gap=True)
+        self.validate_candidate(db, allow_gap=True)
 
     def after_operation(self, db, *, write):
         if write:
@@ -63,6 +63,20 @@ class IncidentRuntime(S2aRuntime):
         )
 
 
+def incident_runtime(config):
+    if document(config).get("kind") == "orrery-global-server-s2b-v1":
+        from .global_s2b import S2bRuntime
+
+        class MessageIncidentRuntime(IncidentRuntime, S2bRuntime):
+            config_kind = S2bRuntime.config_kind
+            schema_version = S2bRuntime.schema_version
+            initial_preflight = S2bRuntime.initial_preflight
+            validate_candidate = S2bRuntime.validate_candidate
+
+        return MessageIncidentRuntime(config)
+    return IncidentRuntime(config)
+
+
 def manifest(db):
     contract = db.execute(
         "SELECT last_validated_revision FROM global_runtime_contract WHERE id=1"
@@ -88,9 +102,9 @@ def manifest(db):
 
 
 def inspect_incident(config):
-    runtime = IncidentRuntime(config)
+    runtime = incident_runtime(config)
     with runtime.transaction() as db:
-        validate_runtime_candidate(db, full=True, allow_gap=True)
+        runtime.validate_candidate(db, full=True, allow_gap=True)
         current = manifest(db)
         value = {
             "kind": "orrery-global-runtime-incident-inspection-v1",
@@ -127,7 +141,7 @@ def quarantine(
         is None
     ):
         raise GlobalError("REQUEST_ID_INVALID")
-    runtime = IncidentRuntime(config)
+    runtime = incident_runtime(config)
     directory = runtime.runtime_root / "global-runtime"
     safe_directory(directory, create=True)
     incident = directory / "incident.json"
@@ -140,7 +154,7 @@ def quarantine(
             if document(path).get("kind") != kind:
                 raise GlobalError("OUTPUT_SCHEMA_INVALID")
     with runtime.transaction(exclusive=True) as db:
-        validate_runtime_candidate(db, full=True, allow_gap=True)
+        runtime.validate_candidate(db, full=True, allow_gap=True)
         current = manifest(db)
         actual = runtime.authority()
         if incident.exists():

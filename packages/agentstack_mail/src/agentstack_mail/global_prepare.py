@@ -105,6 +105,8 @@ def contents(db):
 
 
 class FreshMigration(NamespaceMigration):
+    config_kind = "orrery-global-server-s2a-v1"
+
     def __init__(
         self, source, workspace, choices, final_root, isolation_root, epoch, fault
     ):
@@ -167,7 +169,7 @@ class FreshMigration(NamespaceMigration):
                 0
             ]
         cfg = {
-            "kind": "orrery-global-server-s2a-v1",
+            "kind": self.config_kind,
             "activation_enabled": False,
             "isolation_root": str(self.isolation_root),
             "runtime_root": str(self.final_root),
@@ -198,7 +200,7 @@ class FreshMigration(NamespaceMigration):
             0o600,
         )
         os.close(lock)
-        write_role(target / "server-config.json", cfg, "orrery-global-server-s2a-v1")
+        write_role(target / "server-config.json", cfg, self.config_kind)
         report["runtime_profile"] = "s2a-v1"
         report["base_preservation_digest"] = digest(
             json.loads(json.dumps(preserved, default=lambda v: {"bytes": v.hex()}))
@@ -218,6 +220,7 @@ def prepare(
     request_id: str,
     fence,
     fault=None,
+    migration_class=FreshMigration,
 ):
     """Explicit source/fence collector API. No ambient discovery or live reads."""
     fault = fault or (lambda point: None)
@@ -246,7 +249,8 @@ def prepare(
         raise GlobalError("ISOLATION_ROOT_INVALID")
     safe_directory(root)
     require_legacy_source(source.mail)
-    parent = root / "s2a-candidates"
+    profile = getattr(migration_class, "profile", "s2a")
+    parent = root / (profile + "-candidates")
     workspace = parent / candidate_name
     final = workspace / "candidate"
     for path in asdict(source).values():
@@ -260,7 +264,7 @@ def prepare(
         ):
             raise GlobalError("SOURCE_WORKSPACE_OVERLAP")
     plan = {
-        "kind": "orrery-s2a-preparation-owner-v1",
+        "kind": "orrery-" + profile + "-preparation-owner-v1",
         "request_id": request_id,
         "source_paths": {k: str(v.resolve()) for k, v in asdict(source).items()},
         "choices": choices,
@@ -283,7 +287,7 @@ def prepare(
     receipt_path = workspace / "preparation-receipt.json"
     if receipt_path.exists() or receipt_path.is_symlink():
         r = document(receipt_path)
-        if r.get("kind") != "orrery-s2a-preparation-receipt-v1" or r.get(
+        if r.get("kind") != "orrery-" + profile + "-preparation-receipt-v1" or r.get(
             "plan_digest"
         ) != digest(plan):
             raise GlobalError("PREPARATION_PLAN_CONFLICT")
@@ -303,7 +307,7 @@ def prepare(
             return r
         if not r:
             r = {
-                "kind": "orrery-s2a-preparation-receipt-v1",
+                "kind": "orrery-" + profile + "-preparation-receipt-v1",
                 "request_id": request_id,
                 "plan_digest": digest(plan),
                 "phase": "planned",
@@ -315,7 +319,7 @@ def prepare(
         staging = workspace / "staging"
         candidate = staging / "candidate"
         if r["phase"] != "ready":
-            migration = FreshMigration(
+            migration = migration_class(
                 source, staging, choices, final, root, r["authority_epoch"], fault
             )
             migration.resume(
@@ -346,7 +350,7 @@ def prepare(
             fault("after_ready")
         # A ready staging cannot become stale while waiting to rename.
         if candidate.exists():
-            migration = FreshMigration(
+            migration = migration_class(
                 source, staging, choices, final, root, r["authority_epoch"], fault
             )
             mr = migration._load()
