@@ -251,7 +251,7 @@ S1 からの不具合の修正として、main DB と sidecar の検査を `lsta
 | `evidence._sqlite_state` | 自身の SQLite open 前に family を raw hash。rehearsal の呼出し側も同 process の接続を保持しない。復旧後 server が別 process で動く場合も、観測側 fd の close はその lock を解除しない。physical hash は観測値であり、整合した SQL snapshot ではない |
 | `migration.copy_state` / `_copy_database` | source writer guard を保持するが DB は SQLite backup API。新しい destination の作成 fd はその SQLite open 前に close |
 | `migration.cold_backup_database` / `cold_restore_database` と `restore_acceptance` の raw family 検証 | services-stopped の cold 操作。raw copy/hash の後に別の disposable copy を SQLite で検証し close。稼働中 transaction の検査には使わない |
-| `storage.create_diagnostic_backup` / `restore_from_backup` | repo の実行コード・試験から呼出し元のない raw main/WAL/SHM copy の2関数と、専用の `BackupManifest` を削除 |
+| `storage.create_diagnostic_backup` / `restore_from_backup` / `list_backups` | repo の実行コード・試験から呼出し元のない診断 backup／restore／一覧の3関数と、専用の `BackupManifest` を削除（raw main/WAL/SHM copy を含む節全体を撤去） |
 | dashboard / Codex App delivery / hooks / CLI | DB 読取は SQLite API、または上記共通処理への委譲。同型の独立 DB fd 開閉は見つからず |
 
 回帰は `test_sqlite_family_validation_never_opens_independent_descriptors`（起動・read・write）、`test_source_admission_never_opens_raw_database_descriptor` と `test_sqlite_family_validation_preserves_cross_process_writer_lock` です。最後の試験は保持中の writer lock を別 process が取得できないことを直接確かめます。

@@ -3083,52 +3083,6 @@ async def get_historical_inbox_snapshot(
     return result
 
 
-# =============================================================================
-# Doctor Backup Infrastructure
-# =============================================================================
-
-
-async def list_backups(settings: Settings) -> list[dict[str, Any]]:
-    """List all available diagnostic backups.
-
-    Returns:
-        List of backup info dicts with path, created_at, reason, size
-    """
-    backup_dir = Path(settings.storage.root).expanduser().resolve() / "backups"
-    if not backup_dir.exists():
-        return []
-
-    backups: list[dict[str, Any]] = []
-
-    def _scan_backups() -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        for entry in sorted(backup_dir.iterdir(), reverse=True):
-            if entry.is_dir():
-                manifest_path = entry / "manifest.json"
-                if manifest_path.exists():
-                    try:
-                        with manifest_path.open(encoding="utf-8") as f:
-                            manifest_data = json.load(f)
-                        # Calculate total size
-                        total_size = sum(
-                            p.stat().st_size for p in entry.rglob("*") if p.is_file()
-                        )
-                        results.append({
-                            "path": str(entry),
-                            "created_at": manifest_data.get("created_at"),
-                            "reason": manifest_data.get("reason"),
-                            "size_bytes": total_size,
-                            "has_database": manifest_data.get("database_path") is not None,
-                            "bundle_count": len(manifest_data.get("project_bundles", [])),
-                        })
-                    except (json.JSONDecodeError, OSError):
-                        pass
-        return results
-
-    backups = await _to_thread(_scan_backups)
-    return backups
-
-
 # -------------------------------------------------------------------------------------------------
 # Push Notifications: Signal file approach for local deployments
 # -------------------------------------------------------------------------------------------------
