@@ -1,14 +1,16 @@
 # R3 local-model profile: red acceptance fixtures / 実装前の受入 fixture
 
-2026-10-15。承認済みの設計 v3 §§1–7 を対象とする **tests-only の draft**。
-製品の local profile 対応を追加・有効化する変更ではない。R2-Ta #263 と
-R2-Tb の後に接続する契約を先にレビューする。GLM は Responses/Messages の
+2026-10-15。承認済みの設計 v3 §§1–7 を対象とする #266 の契約 fixture の記録。
+#266 自体は tests-only で確定した。後続の [core その1](r3-local-profile-core.md) が
+入力検査・認証・設定導出を実装するが、local profile を通常の子で使う入口はまだ
+有効化していない。R2-Ta #263 と R2-Tb の後に接続する。GLM は Responses/Messages の
 互換性を条件とし、Chat Completions の変換 gateway は含めない。
 
-This draft specifies tests before implementation, not working local-model support.
-It must remain red until R3 is wired to the existing common launch/receipt/tool
-plan paths. No product code, default model selection, live services, trust, or
-user configuration changes are part of this patch.
+This records the tests-only contracts finalized in #266. Subsequent
+[core part 1](r3-local-profile-core.en.md) implements validation/auth/projection,
+not working child-launch integration. The remaining integration cases stay red
+until R3 is wired to existing common launch/receipt/tool-plan paths. Default
+selection, live services, trust and user configuration are unchanged.
 
 ## ケースと green の意味 / Case map
 
@@ -35,8 +37,8 @@ PYTHONPATH=. .venv/bin/python -m pytest -q -n 0 tests/r3_local_profiles/test_rev
 PYTHONPATH=. .venv/bin/python -m pytest -q -n 0 --tb=short tests/r3_local_profiles
 ```
 
-最初の2本は green の測定器試験。3本目は、測定器以外が **missing implementation
-で red (exit 1)** になるのが現在の期待である。skip/xfail/importorskip は使わず、
+最初の2本は測定器試験。3本目は、未実装の保存・caller/native 接続が **red (exit 1)**
+として残る。core ごとの対象と QA 結果は上記のその1の表を参照する。skip/xfail/importorskip は使わず、
 collection は完了させる。既存試験の代用や、merge 済みの機能の CI 成功とは数えない。
 既存の `test_child_tools.py` / `test_codex_models.py` /
 `test_settings_permissions.py` も同じ条件で変更前後に直列実行する。
@@ -49,15 +51,15 @@ socket addresses (including credential sources), never arbitrary loopback ports.
 
 ## 未実装の接続部 / Missing bindings, explicitly not evidence
 
-以下は設計から切り出した **private seam の提案**であり、既存 API の主張ではない。
-R3 実装時、既存共通経路の薄い test binding として名前を合わせてよい。契約の
+以下は設計から切り出した **private seam の契約**であり、public API ではない。
+その1の部分実装と未実装 binding を区別する。既存共通経路へ接続するときに名前を合わせてよい。契約の
 期待値を捨てたり、test 内に resolver/permission engine を実装して green にしない。
 
 | Module | Expected private seam |
 | --- | --- |
-| `local_model_profiles` | `LocalModelError`, `load_profile(root, ref, expected_uid=...) -> dict`, `profile_digest(dict) -> sha256` |
-| `runtime_launch_intent` | `resolve_launch_intent(caller, context, source=...)`, `save/load_launch_intent`, `materialize_launch_intent`, `intent_digest`, `make_launch_receipt`, explicit `revise_launch_intent`, `project_local_model` |
-| `local_model_auth` | `LocalModelError`, `run_auth(plan, executor=...) -> bytes`, `validate_runner(...)`; executor は credential command のみを代替する |
+| `local_model_profiles` | その1の core: `LocalModelError`, `load_profile(root, ref, expected_uid=...) -> dict`, `profile_digest(dict) -> sha256` |
+| `runtime_launch_intent` | その1は `resolve_launch_intent(caller, context, source=...)`, `materialize_launch_intent`, `intent_digest`, digest 参照の `make_launch_receipt`, `project_local_model`。`save/load_launch_intent`・explicit `revise_launch_intent` は未実装 |
+| `local_model_auth` | その1の core: `LocalModelError`, `run_auth(plan, executor=...) -> bytes`, `validate_runner(...)`; executor は credential command のみを代替する |
 | `tests/r3_local_profiles/native_acceptance.py` | **未実装の test adapter** `probe(scenario, workspace=..., provider=..., ...) -> observations`。実装時に real pinned CLI・既存 launch/receipt・native permissions/hooks と fake Mail を接続する。製品 API として追加しない |
 | `tests/r3_local_profiles/caller_acceptance.py` | **未実装の test adapter**。`spawn_child.sh --model local:fixture`、`RuntimeClient.prepare_child/resume_child`、`RuntimeOperator.spawn`、`dashboard.server.do_spawn` を本当に呼ぶ。entry/parser/resolver は置換せず、外部 binary/Mail/tmux だけを fixture にする。source ラベルを渡す resolver の直呼びでは代用しない |
 
