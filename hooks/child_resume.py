@@ -1680,6 +1680,60 @@ def _worktree_hook_trust(config_text: str, work_dir: Path | None) -> list[str]:
     return lines
 
 
+def _home_hook_trust(config_text: str, source: Path, home: Path) -> list[str]:
+    """Config lines carrying the user's CODEX_HOME hook trust to the child's home.
+
+    A child's CODEX_HOME links the user's hooks.json at a new path, and Codex
+    keys hook trust by that path, so the user's own hooks, unchanged, waited on
+    "N hooks need review" in every new child and did not run meanwhile
+    (2026-10-16: four user hooks, on each spawn). As for a worktree, the trust
+    is a hash of the hook's content that Codex checks again, so copying it
+    re-trusts only hooks identical to the ones the user trusted. Nothing the
+    user has not trusted is added, an entry already present for the child's
+    path is kept, and a key whose candidates disagree is left to Codex.
+    """
+    try:
+        state = _toml().loads(config_text).get("hooks", {}).get("state", {})
+    except _toml().TOMLDecodeError:
+        return []
+    if not isinstance(state, dict):
+        return []
+    sources = {os.fspath(source)}
+    try:
+        sources.add(os.fspath(source.resolve()))
+    except OSError:
+        pass
+    targets = {os.fspath(home)}
+    try:
+        targets.add(os.fspath(home.resolve()))
+    except OSError:
+        pass
+    carried: dict[str, set[str]] = {}
+    for key, entry in state.items():
+        trusted = entry.get("trusted_hash") if isinstance(entry, dict) else None
+        if not isinstance(trusted, str) or len(key.rsplit(":", 3)) != 4:
+            continue
+        for root in sources:
+            if not key.startswith(root + os.sep):
+                continue
+            relative = key[len(root):]
+            for target in sorted(targets):
+                new_key = target + relative
+                if new_key not in state:
+                    carried.setdefault(new_key, set()).add(trusted)
+    lines: list[str] = []
+    for new_key in sorted(carried):
+        hashes = carried[new_key]
+        if len(hashes) != 1:
+            continue
+        lines.extend(["", "[hooks.state." + _toml_string(new_key) + "]",
+                      "trusted_hash = " + _toml_string(next(iter(hashes)))])
+    if lines:
+        lines[0:0] = ["", "# Written by spawn_child.sh: hook trust the user gave to their",
+                      "# own CODEX_HOME hooks, for the same hooks in this child's home."]
+    return lines
+
+
 def _build_home_unlocked(
     *,
     home: Path,
@@ -1846,6 +1900,7 @@ def _build_home_unlocked(
                     ]
                 )
         lines.extend(_worktree_hook_trust("\n".join(lines) + "\n", work_dir))
+        lines.extend(_home_hook_trust("\n".join(lines) + "\n", source, home))
         config_text = "\n".join(lines) + "\n"
         if overlay_setting.strip():
             try:
