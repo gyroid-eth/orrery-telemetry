@@ -2,7 +2,7 @@
 
 同じ実装で DeepSeek / Strata を選ぶ、子1体・私有worktree・小さいread/write taskの縦切りです。正式なprovider導入、任意shell、resume、global、installer、dashboard変更は含みません。固定版は dsh 0.2.1-rc.2 / dsh-TUI 0.16.1、Nodeは絶対実体を固定して24.2以上を検査します。
 
-現状は独立した通信ガードと完了判定のoffline fixtureを確認した段階です。**fixture成功はTUI実起動・予約guardの接続・実Mail配送の成功ではありません。** TUI縦切りは別のspikeで受入します。実鍵、モデルAPI、identity登録、live Mail/dashboard/vaultの変更は、このoffline検証に不要です。
+offline spikeでは、固定TUIの実画面起動と、実際のagent.ctxのtoolによる許可write・root外/予約なし/期限切れの3拒否が成立しました。**現在のlauncher/managed entryはspike-onlyで、実Mailは未接続です。** 通信ガード・完了判定のfixture成功と合わせても、モデルAPIを使うtask成功やretireの受入にはなりません。実鍵、モデルAPI、identity登録、live Mail/dashboard/vaultの変更は行っていません。
 
 ## 呼出しと設定
 
@@ -15,10 +15,13 @@ managed launcherが、固定Nodeで `--import integrations/dsh/egress.mjs integr
 | ORRERY_DSH_STATE_ROOT | attemptごとの私有state root（0700） |
 | ORRERY_DSH_AUDIT_FILE | STATE_ROOT/audit.jsonl |
 | ORRERY_DSH_ATTEMPT_ID | attempt.jsonと一致するID |
+| ORRERY_DSH_TUI_PATCH_RECEIPT | 必須のmanaged TUI patch receiptの絶対path（launch.pyの--patch-receiptで指定） |
 | ORRERY_DSH_OFFLINE | 1は転送0。未指定もoffline。attempt.phase=spikeは常にoffline |
 | DEEPSEEK_API_KEY | 同じadapterが読む変数名。offlineはdummy、実鍵は将来の受入時だけruntime1PIDへ |
 
-repoのbackend.jsonは空のURL/accountを持つテンプレートです。コピー先の利用者設定（例：~/.config/orrery/dsh-backends.json）に二backendのURL・model・Keychainのservice/account参照・effort/output上限・モデル定義・idle要否をまとめ、ORRERY_DSH_BACKEND_FILEでそのrepo外fileを渡します。テンプレートの空URLでは起動しません。設定に鍵の値は置きません。managed.patch.ymlは共通機能制限だけを持ち、選択済みprovider/model行はlauncherが最後に投影します。Macの鍵取得はsecurity、WSLは外部credential helperの入口へ寄せます。WSLのhelper/Node/native/TUI実機動作は未確認であり、Macの実体path/SHAを共通定数へしません。
+launch.pyの`--patch-receipt <receipt.json>`は必須です。managed entryはTUI/profileのimport前にrecipeのSHAと変更対象全fileのafter hashをreceiptと照合し、未適用・部分適用・receipt欠落を拒否します。
+
+repoのbackend.jsonは空のURL/accountを持つテンプレートです。コピー先の利用者設定（例：~/.config/orrery/dsh-backends.json）に二backendのURL・model・Keychainのservice/account参照・effort/output上限・モデル定義・idle要否をまとめ、ORRERY_DSH_BACKEND_FILEでそのrepo外fileを渡します。テンプレートの空URLでは起動しません。設定に鍵の値は置きません。managed.patch.ymlは共通機能制限だけを持ち、選択済みprovider/model行はlauncherが最後に投影します。将来の稼働用の鍵取得はMacのsecurity、WSLの外部credential helperの入口へ寄せる設計で、現在のspike launcherはdummy鍵だけを使います。WSLのhelper/Node/native/TUI実機動作は未確認であり、Macの実体path/SHAを共通定数へしません。
 
 ## 通信と補助process
 
@@ -28,7 +31,7 @@ repoのbackend.jsonは空のURL/accountを持つテンプレートです。コ�
 - Strataのstatusだけは同じruntimeが送信前に確認します。`/v1/status`、404時だけ`/health`、無鍵→401/403時だけ認証、各5秒。in_flightが数値0、queue値があれば0を必須とし、busy/不明は止めます。pollや分散lockは作りません。
 - 単一in-flightをstatus待ちより前に取り、応答bodyのEOF/error/cancelまで保持します。header到着だけでは解除しません。要求8回、各120秒、backendのoutput上限を守り、retry/fallbackはしません。final usage不明なら次要求を止めます。金額上限の保証ではありません。
 - 製品の標準`~/.agentstack/integrations/codex_app/plugin/scripts/run-mcp.sh`だけを補助起動に許可し、明示envを作ってAPI keyを除きます。opener/editor/clipboard/別dsh等の起動は拒否します。既知startup診断は保存前に一致鍵を伏せます。
-- TUIの更新check/manual update/bootstrap、残高/OAuth、recap/btw/title、IDE/inject、共有profile/旧資格importはmanaged entry/action側でも無効にします。UI非表示だけで済ませません。ここはTUI spikeの受入対象です。
+- TUIの更新check/manual update/bootstrap、残高/OAuth、recap/btw/title、IDE/inject、共有profile/旧資格importはmanaged entry/action側でも無効にします。UI非表示だけで済ませません。managed TUIの停止処理とpatch receiptの拒否系はoffline対照試験で確認します。
 
 offlineでは要求のmodel/tool集合を組み立てた後、statusもproviderも呼ばず`offline-capture {forwarded:0}`、exit73で止まります。契約違反はexit78、runtime例外79、上限80です。spikeで必須のtoolはread/writeだけ、runではbackend.jsonのwire_tools全3件です。
 
@@ -58,7 +61,7 @@ NodeもPythonも検証用の明示実体を使い、負荷が1分平均15未満�
 
 egress fixtureはメモリ内の偽fetchだけを使い、endpoint選択・offline転送0・残高/更新先拒否・model/beta/output/tool制限・idle/busy/auth・redirect・stream重複/中断/timeout・proxy env scrub・診断伏字を対照確認します。completion fixtureのMail receiptは明示した合成入力であり、実Mailを送信した証拠ではありません。spikeのtask成功がtrueにならないことも確認します。
 
-検証出力は各自の作業dirへ保存します。TUI/guard spike、repository全体のpytest、WSL実機受入はこの2本のfixtureでは確認していません。TUIの保存依存が不足した場合、offlineを外してdownloadせず親へ報告します。
+managed TUI側の`tests/test_dsh_managed_spike.py`では、patch receiptの未適用/部分適用/欠落の拒否、補助処理停止、実ToolRuntimeのguardを別に確認しています。TUI画面とagent.ctxのprobeを含む実験記録・検証出力は各自のrepo外作業dirへ保存します。repository全体のpytest、実Mail/APIとWSL実機受入は、これらのspike/fixtureでは確認していません。TUIの保存依存が不足した場合、offlineを外してdownloadせず親へ報告します。
 
 ## 最初のStrata子で一度だけ接続先を観測する計画
 
