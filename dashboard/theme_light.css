@@ -1,5 +1,7 @@
 /* Warm-paper telemetry surface. No selector matches the physical dark default. */
 html[data-color-theme="light"]{color-scheme:light}
+html[data-color-theme="light"] .node .provider-local{--provider-local-lime:#667d18}
+html[data-color-theme="light"] .node .provider-seat.provider-local-ring{stroke:var(--provider-local-lime)}
 html[data-color-theme="light"] body{
   background:
     radial-gradient(ellipse 60% 50% at 78% 8%,rgb(var(--theme-accent-rgb)/.035),transparent 60%),

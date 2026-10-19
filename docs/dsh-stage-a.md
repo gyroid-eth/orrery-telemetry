@@ -43,6 +43,21 @@ server選択が変わらないこと、取得・鍵・登録用commandが呼ば�
 TUI・cockpit・Mail・権限境界が受入済みという試験ではない。共有部分への接続は
 共通基盤の統合順序が決まってから行う。
 
+## 表示の接続と確認範囲
+
+`tests/test_dsh_presentation.py` は同じHTTP catalog/asset経路で無効・有効・更新・再無効を
+対照する。既存の数値版DeepSeekの分類は無効時も保つ。`tests/test_dsh_logos.py` と
+`tests/test_network_node.py` は同じnetwork・deck・usage関数とdemo buildを使い、
+無効時の非表示と従来のnetwork形状を対照する。catalogの `runtime:false` はUIでも
+送信不可にする。DeepSeek残高の取得やTUI起動が接続されたという意味ではない。
+
+networkは明示 `provider=local` の入力だけを六角形＋ライムの縁にし、
+解決後のmodel名からQwen等の作り手を示す。未知はロゴなしの中立座金にする。
+この入力の正本化と実機確認はR3 local統合で行う。local DeepSeekのasset有効化も
+dsh導入と独立した共通profileの能力へ接続する必要があり、現段階の配信はdsh opt-inに従う。
+`dashboard/demo/build.sh [outdir] --enable-dsh` は明示の表示fixture用で、既定demoは無効。
+`demo/dist` は生成物であり、このrepositoryでは追跡していない。
+
 ## DeepSeek API残高をusage欄に表示する設計（未実装）
 
 通常起こる鍵なし・Keychainロック・通信失敗 × 残高を0と誤認する害、

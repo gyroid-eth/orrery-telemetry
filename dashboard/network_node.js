@@ -48,6 +48,8 @@ const _PROVIDER_ASPECT = {
   anthropic: 1,         // 24x24 正方形（Claude logo）
   openai:    256/260,   // ~0.98 (ほぼ正方形)
   google:    1,         // 24x24 正方形（Gemini logo）
+  deepseek:  71.69/52.76,
+  qwen:      1,
 };
 // asset の更新が SVG <image> 要素のキャッシュに引っかかるため、ページごとに
 // 一意な version 文字列を付けて確実に最新を取得する（page load ごとに 1 回）。
@@ -62,21 +64,39 @@ function assetURL(name){
 }
 function providerKeyFor(g){
   const raw=String((g&&g.provider)||'').toLowerCase();
-  if(_PROVIDER_ASPECT[raw])return raw;
+  // localは共通profileの投影だけを受ける。engine名やURLから推測しない。
+  if(raw==='local'){
+    const model=String(g.model_raw||g.model||'').toLowerCase();
+    if(/(?:^|[\/\s_-])qwen/.test(model))return 'local:qwen';
+    if(/(?:^|[\/\s_-])deepseek/.test(model)&&window.AGENTSTACK_DSH_ENABLED===true)
+      return 'local:deepseek';
+    return 'local';
+  }
+  if(_PROVIDER_ASPECT[raw]&&raw!=='qwen'&&
+     (raw!=='deepseek'||window.AGENTSTACK_DSH_ENABLED===true))return raw;
   const model=String((g&&g.model)||'').toLowerCase();
   if(/claude|opus|sonnet|haiku|fable|mythos/.test(model))return 'anthropic';
   if(/codex|gpt/.test(model))return 'openai';
   return '';
 }
 function providerBadge(provider,x,y,size=14){
-  const ar=_PROVIDER_ASPECT[provider];
-  if(!ar)return null;
-  const badge=svgEl('g',{class:'provider-badge',
+  const local=provider==='local'||provider.startsWith('local:');
+  const maker=local?provider.split(':')[1]:provider;
+  const ar=_PROVIDER_ASPECT[maker];
+  if(!ar&&!local)return null;
+  const badge=svgEl('g',{class:'provider-badge'+(local?' provider-local':''),
     transform:`translate(${x.toFixed(2)} ${y.toFixed(2)})`});
-  badge.appendChild(svgEl('circle',{class:'provider-seat',r:(size/2).toFixed(2)}));
+  if(local){
+    const r=size/2;
+    const points=Array.from({length:6},(_,i)=>{
+      const a=Math.PI*i/3;return `${(r*Math.cos(a)).toFixed(2)},${(r*Math.sin(a)).toFixed(2)}`;
+    }).join(' ');
+    badge.appendChild(svgEl('polygon',{class:'provider-seat provider-local-ring',points}));
+  }else badge.appendChild(svgEl('circle',{class:'provider-seat',r:(size/2).toFixed(2)}));
+  if(!ar)return badge;
   const h=size*.58,w=h*ar;
-  badge.appendChild(svgEl('image',{class:'provider-logo','data-provider':provider,
-    href:assetURL(provider),
+  badge.appendChild(svgEl('image',{class:'provider-logo','data-provider':maker,
+    href:assetURL(maker),
     x:(-w/2).toFixed(2), y:(-h/2).toFixed(2),
     width:w.toFixed(2), height:h.toFixed(2),
     preserveAspectRatio:'xMidYMid meet'}));
