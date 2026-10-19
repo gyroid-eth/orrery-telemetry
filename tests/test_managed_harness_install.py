@@ -180,7 +180,7 @@ class AcquisitionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.base = Path(self.tmp.name)
+        self.base = Path(self.tmp.name).resolve()
         self.repo = self.base / 'repo'
         self.root = self.base / 'generation'
         self.root.mkdir()
@@ -251,18 +251,27 @@ class AcquisitionTests(unittest.TestCase):
             return ''
         if argv[:2] == ['git', 'rev-parse']:
             return self.commit
-        self.assertEqual(argv[1:], ['-m', 'pm.cli', 'install', '--without', 'agent-browser',
-                                    '--without', 'cua-driver', '--extra', 'anthropic'])
+        # Fixed Hermes validates combinations after parsing: combining these
+        # flags exits 1 on stdout even though argparse accepts each separately.
+        if '--without' in argv and '--extra' in argv:
+            raise subprocess.CalledProcessError(1, argv,
+                output='--without shapes the default closure; it does not take names, --extra, or --target')
+        self.assertIn(argv[1:], (['-m', 'pm.cli', 'install', '--without', 'agent-browser', '--without', 'cua-driver'],
+                                ['-m', 'pm.cli', 'install', '--extra', 'anthropic']))
         self.assertEqual(env['HERMES_HOME'], str(self.root))
         key = hashlib.sha256(str(Path(cwd).resolve()).encode()).hexdigest()[:16]
         store = self.root / 'installs' / key
-        generation = store / 'environments/fixture'
+        previous = store / 'facts.json'
+        if '--extra' in argv:
+            self.assertEqual(installer.read(previous)['packages']['venv']['extras'], ['all'])
+        generation = store / ('environments/with-anthropic' if '--extra' in argv else 'environments/default')
         for name in ('python', 'hermes'):
             file = generation / 'bin' / name
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_text('synthetic executable')
             file.chmod(0o700)
-        installer.save(store / 'facts.json', {'packages': {'venv': {'environment': str(generation)}}})
+        installer.save(store / 'facts.json', {'packages': {'venv': {'environment': str(generation),
+            'extras': ['all', 'anthropic'] if '--extra' in argv else ['all']}}})
         (generation / 'pyvenv.cfg').write_text('synthetic venv')
         return ''
 
@@ -303,7 +312,7 @@ class AcquisitionTests(unittest.TestCase):
 
     def test_hermes_pin_pm_arguments_settings_and_runtime(self):
         with patch.object(installer, 'run', side_effect=self.fake_run):
-            details = installer.install_hermes(self.repo, self.root, '/fixed/python', self.cache)
+            details = installer.install_hermes(self.repo, self.root, sys.executable, self.cache)
             installer.validate(self.repo, 'hermes', {'harness': 'hermes', 'complete': True, 'details': details})
         config = installer.read(self.root / 'config.yaml')
         self.assertFalse(config['auth']['adopt_external_logins'])
@@ -311,6 +320,11 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual(config['telemetry']['shared_metrics'], {'enabled': False, 'send': False})
         self.assertFalse((self.root / '.env').exists())
         self.assertFalse((self.root / 'source/.env').exists())
+        commands = [argv for argv, _, _ in self.calls if argv[1:4] == ['-m', 'pm.cli', 'install']]
+        self.assertEqual(commands, [
+            [sys.executable, '-m', 'pm.cli', 'install', '--without', 'agent-browser', '--without', 'cua-driver'],
+            [sys.executable, '-m', 'pm.cli', 'install', '--extra', 'anthropic']])
+        self.assertIn('/environments/with-anthropic/', details['hermes_executable'])
 
     def test_hermes_wrong_commit_stops_before_pm(self):
         self.commit = 'wrong-pin'
@@ -318,6 +332,60 @@ class AcquisitionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'commit mismatch'):
                 installer.install_hermes(self.repo, self.root, '/fixed/python', self.cache)
         self.assertEqual(len(self.calls), 3)
+
+    def test_hermes_each_pm_failure_stays_disabled_and_preserves_both_log_tails(self):
+        for option, count in (('--without', 1), ('--extra', 2)):
+            with self.subTest(option=option):
+                install = self.base / ('install-' + option[2:])
+                self.root = install / 'harnesses/hermes' / installer.generation_id(self.repo, 'hermes')
+                self.calls.clear()
+                def failing_run(argv, *, cwd, env):
+                    if argv[1:4] == ['-m', 'pm.cli', 'install'] and option in argv:
+                        self.calls.append((argv, Path(cwd), dict(env)))
+                        self.assertNotIn('DEEPSEEK_API_KEY', env)
+                        if option == '--extra':
+                            key = hashlib.sha256(str(Path(cwd).resolve()).encode()).hexdigest()[:16]
+                            self.assertTrue((self.root / 'installs' / key / 'facts.json').is_file())
+                        raise subprocess.CalledProcessError(1, argv,
+                            output='x' * 4500 + 'PM_STDOUT_FAILURE', stderr='PM_STDERR_FAILURE')
+                    return self.fake_run(argv, cwd=cwd, env=env)
+                stderr = io.StringIO()
+                with patch.object(installer, 'run', side_effect=failing_run), \
+                     patch.dict(os.environ, {'DEEPSEEK_API_KEY': 'dummy-private-credential'}), \
+                     patch('sys.stderr', stderr), patch('sys.argv', ['managed_harness_install.py',
+                         '--repo', str(self.repo), '--install', str(install), '--harness', 'hermes',
+                         '--choice', 'enable', '--python', '/fixed/python', '--cache', str(self.cache)]):
+                    self.assertEqual(installer.main(), 1)
+                self.assertFalse(self.root.exists())
+                self.assertFalse((install / 'harnesses/hermes/current.json').exists())
+                self.assertFalse((install / 'dashboard/hermes-provider.json').exists())
+                self.assertEqual(sum(argv[1:4] == ['-m', 'pm.cli', 'install'] for argv, _, _ in self.calls), count)
+                self.assertIn('stdout (tail):', stderr.getvalue())
+                self.assertIn('PM_STDOUT_FAILURE', stderr.getvalue())
+                self.assertIn('stderr (tail):', stderr.getvalue())
+                self.assertIn('PM_STDERR_FAILURE', stderr.getvalue())
+                self.assertNotIn('x' * 4001, stderr.getvalue())
+                self.assertNotIn('dummy-private-credential', stderr.getvalue())
+
+
+class DiagnosticTests(unittest.TestCase):
+    def test_real_failed_command_retains_stdout_and_stderr_without_inherited_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = installer.environment(root)
+            code = ("import os,sys; assert 'DEEPSEEK_API_KEY' not in os.environ; "
+                    "print('resolver stdout reason'); print('runtime stderr reason',file=sys.stderr); sys.exit(1)")
+            stderr = io.StringIO()
+            def fail(**kwargs):
+                installer.run([sys.executable, '-c', code], cwd=root, env=env)
+            with patch.object(installer, 'provision', side_effect=fail), \
+                 patch.dict(os.environ, {'DEEPSEEK_API_KEY': 'dummy-private-credential'}), \
+                 patch('sys.stderr', stderr), patch('sys.argv', ['managed_harness_install.py',
+                     '--repo', str(ROOT), '--install', str(root), '--harness', 'hermes']):
+                self.assertEqual(installer.main(), 1)
+            self.assertIn('stdout (tail):\nresolver stdout reason', stderr.getvalue())
+            self.assertIn('stderr (tail):\nruntime stderr reason', stderr.getvalue())
+            self.assertNotIn('dummy-private-credential', stderr.getvalue())
 
 
 class CatalogGateTests(unittest.TestCase):

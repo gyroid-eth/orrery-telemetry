@@ -138,8 +138,11 @@ def install_hermes(repo, root, python, cache=None):
         raise ValueError('Hermes commit mismatch')
     # Existing PM owns its own fixed runtime/dependency graph; no general setup,
     # login import, browser, or computer-use installer is invoked.
+    # PM rejects --without combined with --extra. First prepare its default
+    # closure and persist the optional-tool opt-outs, then add the provider SDK.
     run([python, '-m', 'pm.cli', 'install', '--without', 'agent-browser',
-         '--without', 'cua-driver', '--extra', 'anthropic'], cwd=source, env=env)
+         '--without', 'cua-driver'], cwd=source, env=env)
+    run([python, '-m', 'pm.cli', 'install', '--extra', 'anthropic'], cwd=source, env=env)
     key = hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
     install = root / 'installs' / key
     generation = Path(read(install / 'facts.json')['packages']['venv']['environment']).resolve()
@@ -260,9 +263,16 @@ def main():
         provision(**args)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print('Managed harness install failed: ' + str(error), file=sys.stderr)
-        if isinstance(error, subprocess.CalledProcessError) and error.stderr:
+        if isinstance(error, subprocess.CalledProcessError):
             # Acquisition uses a clean environment/private HOME and no keys.
-            print(error.stderr[-4000:], file=sys.stderr)
+            # PM's command validation and package errors are on stdout, while
+            # its runtime bootstrap reports progress on stderr.
+            for name in ('stdout', 'stderr'):
+                output = getattr(error, name, None)
+                if output:
+                    if isinstance(output, bytes):
+                        output = output.decode('utf-8', errors='replace')
+                    print(name + ' (tail):\n' + output[-4000:], file=sys.stderr)
         return 1
     return 0
 
