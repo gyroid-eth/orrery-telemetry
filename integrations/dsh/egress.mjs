@@ -31,6 +31,9 @@ export function rejectionFields(method = null, url = null, targetPath = null) {
 
 export function createEgress({backend, limits, wireTools, offline = true, phase = 'run',
   fetchImpl, audit, key = '', fail = (reason, code) => { throw Object.assign(new Error(reason), {dshExitCode: code}); }}) {
+  for (const [value, name] of [[limits.session_requests, 'session_requests'], [backend.max_output_tokens, 'max_output_tokens']])
+    if (value !== undefined && (!Number.isInteger(value) || value <= 0))
+      throw new Error('DSH_POSITIVE_INTEGER_REQUIRED: ' + name);
   const endpoint = new URL(backend.base_url.replace(/\/+$/, '') + '/v1/messages');
   const allow = new Set(wireTools);
   const required = phase === 'spike' ? ['read', 'write'] : wireTools;
@@ -46,13 +49,14 @@ export function createEgress({backend, limits, wireTools, offline = true, phase 
     if (url.href !== endpoint.href)
       return reject('blocked-network', 'DSH_NETWORK', {origin: url.origin, path: url.pathname});
     if (active) return reject('limit-reached', 'DSH_REQUEST_IN_FLIGHT');
-    if (seq >= limits.session_requests || !usageKnown)
+    if ((limits.session_requests !== undefined && seq >= limits.session_requests) || !usageKnown)
       return reject('limit-reached', usageKnown ? 'DSH_REQUEST_CAP' : 'DSH_USAGE_UNKNOWN');
     let body;
     try { body = JSON.parse(init.body); } catch { return reject('runtime-fatal', 'DSH_JSON_BODY'); }
     const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
     if (body.model !== backend.model) return reject('blocked-model', 'DSH_MODEL');
-    if (!Number.isSafeInteger(body.max_tokens) || body.max_tokens < 1 || body.max_tokens > backend.max_output_tokens)
+    if (!Number.isSafeInteger(body.max_tokens) || body.max_tokens < 1 ||
+        (backend.max_output_tokens !== undefined && body.max_tokens > backend.max_output_tokens))
       return reject('blocked-output-limit', 'DSH_OUTPUT_LIMIT');
     if (backend.idle_check && ((headers.get('anthropic-beta') ?? '').includes('mid-conversation-tool-changes') ||
         (body.messages ?? []).some(m => Array.isArray(m.content) && m.content.some(b => b.type === 'tool_addition')))) return reject('blocked-beta', 'DSH_BETA');

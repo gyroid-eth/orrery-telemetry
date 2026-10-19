@@ -86,6 +86,10 @@
     <string>__CLAUDE_MODELS__</string>
     <key>AGENTSTACK_CODEX_MODELS</key>
     <string>__CODEX_MODELS__</string>
+    <key>AGENTSTACK_DSH_NODE</key>
+    <string>__DSH_NODE__</string>
+    <key>AGENTSTACK_MANAGED_SPAWN_CONFIG</key>
+    <string>__MANAGED_SPAWN_CONFIG__</string>
     <key>AGENTSTACK_HOOKS_DIR</key>
     <string>__HOOKS_DIR__</string>
     <key>AGENTSTACK_RUNTIME_DIR</key>

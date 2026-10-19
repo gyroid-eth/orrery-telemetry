@@ -44,6 +44,7 @@ TIER_OPTION=""
 DSH_OPT_IN=""
 HERMES_OPT_IN=""
 DSH_NODE="${AGENTSTACK_DSH_NODE:-}"
+MANAGED_SPAWN_CONFIG_SETTING="${AGENTSTACK_MANAGED_SPAWN_CONFIG:-}"
 HARNESS_CACHE="${AGENTSTACK_HARNESS_CACHE:-}"
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MAIL_DB_EXPLICIT="${AGENTSTACK_MAIL_DB+x}"
@@ -136,6 +137,7 @@ Options:
   --enable-hermes        固定 Hermes を専用 managed root に導入（鍵なし）
   --disable-hermes       Hermes opt-in を無効化（導入済みfileはuninstallまで保持）
   --dsh-node PATH        既存 Node >=24.2 の絶対path（Node自体は取得しない）
+  --managed-spawn-config PATH  私有manifestの絶対pathを保存しdashboardへ渡す
   --harness-cache PATH   dsh offline cacheとHermes固定sourceの取得元（PMは別途取得）
   --disable-dsh          DeepSeek のロゴ配信と残高表示を無効化（既存fileは保持）
   --install-dir PATH     Default: ~/.agentstack
@@ -266,9 +268,13 @@ while [[ $# -gt 0 ]]; do
       HERMES_OPT_IN="disable"
       shift
       ;;
-    --dsh-node|--harness-cache)
+    --dsh-node|--harness-cache|--managed-spawn-config)
       [[ $# -ge 2 ]] || { echo "error: $1 needs a path" >&2; exit 2; }
-      if [[ "$1" == --dsh-node ]]; then DSH_NODE="$2"; else HARNESS_CACHE="$2"; fi
+      case "$1" in
+        --dsh-node) DSH_NODE="$2"; OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_DSH_NODE" ;;
+        --managed-spawn-config) MANAGED_SPAWN_CONFIG_SETTING="$2"; OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_MANAGED_SPAWN_CONFIG" ;;
+        *) HARNESS_CACHE="$2" ;;
+      esac
       shift 2
       ;;
     --enable-dsh)
@@ -644,6 +650,8 @@ resolve_setting() {
 # --- end setting resolution ---
 
 resolve_setting PORT AGENTSTACK_PORT 8770
+resolve_setting DSH_NODE AGENTSTACK_DSH_NODE "" kept
+resolve_setting MANAGED_SPAWN_CONFIG_SETTING AGENTSTACK_MANAGED_SPAWN_CONFIG ""
 resolve_setting LABEL_PREFIX AGENTSTACK_LABEL_PREFIX org.agentstack kept
 LABEL_PREFIX_SOURCE="$SETTING_SOURCE"
 resolve_setting TERMINAL AGENTSTACK_TERMINAL auto
@@ -2425,6 +2433,17 @@ install_dsh_presentation() {
 
 install_managed_harnesses() {
   local harness choice
+  # Ordinary updates may predate the saved env setting. Recover the existing
+  # non-secret runtime reference; an explicit empty choice still wins.
+  if [[ -z "$DSH_NODE" && -z "${AGENTSTACK_DSH_NODE+x}" ]] &&
+     [[ " ${OPTION_GIVEN:-} " != *" AGENTSTACK_DSH_NODE "* ]] &&
+     [[ -f "$INSTALL_DIR/harnesses/dsh/current.json" ]]; then
+    DSH_NODE="$("$PYTHON_BIN" - "$INSTALL_DIR/harnesses/dsh/current.json" <<'PYNODE'
+import json,sys
+print(json.load(open(sys.argv[1])).get('node', ''))
+PYNODE
+)"
+  fi
   local args=(--repo "$REPO_ROOT" --install "$INSTALL_DIR" --node "$DSH_NODE" --python "$PYTHON_BIN")
   [[ "$DRY_RUN" != true ]] || args+=(--dry-run)
   [[ -z "$HARNESS_CACHE" ]] || args+=(--cache "$HARNESS_CACHE")
@@ -2824,6 +2843,8 @@ values = {
     "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
     "AGENTSTACK_CLAUDE_MODELS": os.environ.get("AGENTSTACK_CLAUDE_MODELS", ""),
     "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
+    "AGENTSTACK_DSH_NODE": "$DSH_NODE",
+    "AGENTSTACK_MANAGED_SPAWN_CONFIG": "$MANAGED_SPAWN_CONFIG_SETTING",
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
@@ -4492,6 +4513,8 @@ render_launchd_plist() {
       __DASHBOARD_LOG_BACKUPS__ "$DASHBOARD_LOG_BACKUPS"
       __DASHBOARD_RESTART_DELAY__ "$DASHBOARD_RESTART_DELAY"
       __MANAGED_AGENTS_FILE__ "$MANAGED_AGENTS_FILE"
+      __DSH_NODE__ "$DSH_NODE"
+      __MANAGED_SPAWN_CONFIG__ "$MANAGED_SPAWN_CONFIG_SETTING"
       __VAULT__ "$VAULT_SETTING"
       __PATH__ "$PATH_VALUE"
     )
@@ -4577,6 +4600,8 @@ env = {
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
     "AGENTSTACK_PERSISTENT_PROFILES_DIR": "$PERSISTENT_PROFILES_DIR",
     "AGENTSTACK_MANAGED_AGENTS_FILE": "$MANAGED_AGENTS_FILE",
+    "AGENTSTACK_DSH_NODE": "$DSH_NODE",
+    "AGENTSTACK_MANAGED_SPAWN_CONFIG": "$MANAGED_SPAWN_CONFIG_SETTING",
     "AGENTSTACK_DASHBOARD_LOG": "$DASHBOARD_LOG",
     "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "$DASHBOARD_LOG_MAX_BYTES",
     "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "$DASHBOARD_LOG_BACKUPS",
@@ -4993,6 +5018,8 @@ manifest = {
         "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
         "AGENTSTACK_CLAUDE_MODELS": os.environ.get("AGENTSTACK_CLAUDE_MODELS", ""),
         "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
+        "AGENTSTACK_DSH_NODE": "$DSH_NODE",
+        "AGENTSTACK_MANAGED_SPAWN_CONFIG": "$MANAGED_SPAWN_CONFIG_SETTING",
         "AGENTSTACK_MAIL_LAUNCHD_LABEL": "$MAIL_LAUNCHD_LABEL_SETTING",
         "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
         "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",

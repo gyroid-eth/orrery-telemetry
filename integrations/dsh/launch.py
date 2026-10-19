@@ -118,7 +118,8 @@ def prepare(args):
     (profile / 'cordis.patch.yml').write_text('[]\n')
     patch = [
         {'id': 'llm-deepseek', 'config': {'apiKeyEnv': 'DEEPSEEK_API_KEY', 'baseURL': backend['base_url'],
-          'reasoningEffort': backend['effort'], 'maxTokens': backend['max_output_tokens'],
+          'reasoningEffort': backend['effort'],
+          **({'maxTokens': backend['max_output_tokens']} if 'max_output_tokens' in backend else {}),
           'retryPolicy': {'mode': 'normal', 'maxRetries': 0},
           **({'models': [backend['model_definition']]} if backend.get('model_definition') else {})}},
         {'id': 'agent-default-model', 'config': {'provider': 'deepseek-official', 'model': backend['model'],

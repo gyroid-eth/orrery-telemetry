@@ -1,6 +1,5 @@
 {
   "limits": {
-    "session_requests": 8,
     "max_request_ms": 120000,
     "status_ms": 5000
   },
@@ -18,7 +17,6 @@
         "account": ""
       },
       "effort": "low",
-      "max_output_tokens": 2048,
       "idle_check": false,
       "model_definition": null,
       "auxiliary": null
@@ -31,13 +29,11 @@
         "account": ""
       },
       "effort": "high",
-      "max_output_tokens": 4096,
       "idle_check": true,
       "model_definition": {
         "id": "qwen3.8-flash-next-iq3_xxs",
         "name": "Strata Qwen",
-        "contextWindow": 131072,
-        "maxTokens": 4096
+        "contextWindow": 131072
       },
       "auxiliary": null
     }

@@ -21,7 +21,7 @@ managed launcherが、固定Nodeで `--import integrations/dsh/egress.mjs integr
 
 launch.pyの`--patch-receipt <receipt.json>`は必須です。managed entryはTUI/profileのimport前にrecipeのSHAと変更対象全fileのafter hashをreceiptと照合し、未適用・部分適用・receipt欠落を拒否します。
 
-repoのbackend.jsonは空のURL/accountを持つテンプレートです。コピー先の利用者設定（例：~/.config/orrery/dsh-backends.json）に二backendのURL・model・Keychainのservice/account参照・effort/output上限・モデル定義・idle要否をまとめ、ORRERY_DSH_BACKEND_FILEでそのrepo外fileを渡します。テンプレートの空URLでは起動しません。設定に鍵の値は置きません。managed.patch.ymlは共通機能制限だけを持ち、選択済みprovider/model行はlauncherが最後に投影します。runの鍵取得はMacのsecurityを使う小さい入口へ寄せ、15秒・一回だけ、失敗時は停止します。WSLの鍵取得は未対応として止めます。spikeと鍵なしpreflightはdummyだけを使います。WSLのNode/native/TUI実機動作は未確認であり、Macの実体path/SHAを共通定数へしません。
+repoのbackend.jsonは空のURL/accountを持つテンプレートです。コピー先の利用者設定（例：~/.config/orrery/dsh-backends.json）に二backendのURL・model・Keychainのservice/account参照・effort・任意のoutput上限・モデル定義・idle要否をまとめ、ORRERY_DSH_BACKEND_FILEでそのrepo外fileを渡します。テンプレートの空URLでは起動しません。設定に鍵の値は置きません。managed.patch.ymlは共通機能制限だけを持ち、選択済みprovider/model行はlauncherが最後に投影します。runの鍵取得はMacのsecurityを使う小さい入口へ寄せ、15秒・一回だけ、失敗時は停止します。WSLの鍵取得は未対応として止めます。spikeと鍵なしpreflightはdummyだけを使います。WSLのNode/native/TUI実機動作は未確認であり、Macの実体path/SHAを共通定数へしません。
 
 `backends.<id>.auxiliary`は将来の補助route用の任意欄です（省略/nullなら主routeを使う設計）；現版は送り分け未実装で、補助無効の既定を維持します。
 
@@ -31,7 +31,7 @@ repoのbackend.jsonは空のURL/accountを持つテンプレートです。コ�
 
 - global fetchは選択backendの正確な`baseURL + /v1/messages`だけ。DeepSeekの`/user/balance`、npm/GitHub、任意loopbackを両backendで拒否します。最初のURLだけで許可し続けず、redirectをmanualで受けて3xxを拒否し、自動追従しません。
 - Strataのstatusだけは同じruntimeが送信前に確認します。`/v1/status`、404時だけ`/health`、無鍵→401/403時だけ認証、各5秒。in_flightが数値0、queue値があれば0を必須とし、busy/不明は止めます。pollや分散lockは作りません。
-- 単一in-flightをstatus待ちより前に取り、応答bodyのEOF/error/cancelまで保持します。header到着だけでは解除しません。adapterはmessage_stopで正常に読み終えてHTTP EOF前にcancelするため、message_stopと最終usageを観測し、cancelがresolveしてsignalがabortされていない場合だけ正常完了にします。それより前のcancelやcancel拒否・timeout・abort、final usage不明では次要求を止めます。要求8回、各120秒、backendのoutput上限を守り、retry/fallbackはしません。金額上限の保証ではありません。
+- 単一in-flightをstatus待ちより前に取り、応答bodyのEOF/error/cancelまで保持します。header到着だけでは解除しません。adapterはmessage_stopで正常に読み終えてHTTP EOF前にcancelするため、message_stopと最終usageを観測し、cancelがresolveしてsignalがabortされていない場合だけ正常完了にします。それより前のcancelやcancel拒否・timeout・abort、final usage不明では次要求を止めます。要求回数・outputの製品既定上限は設けず、モデル/ハーネスの既定を使います。`limits.session_requests` / backendの`max_output_tokens`を明示した場合だけ、正の整数の上限として適用します（追加の範囲上限なし）。retry/fallbackはしません。回線/stream停止は通常起こりpaneが戻らなくなるため、10/19試行kit由来の120000msを要求timeoutとして継承します（性能保証値ではありません）。
 - 製品の標準`~/.agentstack/integrations/codex_app/plugin/scripts/run-mcp.sh`だけを補助起動に許可し、明示envを作ってAPI keyを除きます。opener/editor/clipboard/別dsh等の起動は拒否します。既知startup診断は保存前に一致鍵を伏せます。
 - TUIの更新check/manual update/bootstrap、残高/OAuth、recap/btw/title、IDE/inject、共有profile/旧資格importはmanaged entry/action側でも無効にします。UI非表示だけで済ませません。managed TUIの停止処理とpatch receiptの拒否系はoffline対照試験で確認します。
 
@@ -73,7 +73,7 @@ egress fixtureはメモリ内の偽fetchだけを使い、endpoint選択・offli
 
 managed TUI側の`tests/test_dsh_managed_spike.py`では、patch receiptの未適用/部分適用/欠落の拒否、補助処理停止、実ToolRuntimeのguardを別に確認しています。TUI画面とagent.ctxのprobeを含む実験記録・検証出力は各自のrepo外作業dirへ保存します。repository全体のpytest、実Mail/APIとWSL実機受入は、これらのspike/fixtureでは確認していません。TUIの保存依存が不足した場合、offlineを外してdownloadせず親へ報告します。
 
-run接続の`tests/test_dsh_run_connection.py`では、実SDK→無通信のsynthetic stdio server→固定TUIを使います。templateの`qwen3.8-flash-next-iq3_xxs`、contextWindow 131072/maxTokens 4096、effort highを保ち、URLだけ`.invalid`へ変更したfull preflightで、schema可視/backend不達・process不達の対照、実3 tools、retry0、offline-capture/転送0、group消滅を確認しました。dummy値の保存は0件でした。preflightのaudit/events/runtime終了証拠は本番用と分離し、変更した設定は鍵取得前に拒否します。実Strataのidle/認証・実Mail・登録/解放/retireを確認した証拠ではありません。
+run接続の`tests/test_dsh_run_connection.py`では、実SDK→無通信のsynthetic stdio server→固定TUIを使います。templateの`qwen3.8-flash-next-iq3_xxs`、contextWindow 131072（maxTokens未指定）、effort highを保ち、URLだけ`.invalid`へ変更したfull preflightで、schema可視/backend不達・process不達の対照、実3 tools、retry0、offline-capture/転送0、group消滅を確認しました。dummy値の保存は0件でした。preflightのaudit/events/runtime終了証拠は本番用と分離し、変更した設定は鍵取得前に拒否します。実Strataのidle/認証・実Mail・登録/解放/retireを確認した証拠ではありません。
 
 ## 初回の子で一度だけ接続先を観測する
 
@@ -81,7 +81,7 @@ run接続の`tests/test_dsh_run_connection.py`では、実SDK→無通信のsynt
 
 Macの初回は`python3 integrations/dsh/observe.py --state STATE`を使います。鍵なしで採取窓を開いてから既存launch.pyのstartを呼び、owned pane・supervisor・runtimeと子孫を約1秒間隔で採取し、停止・消滅後に一行で判定します。親は別端末でMail受領と既存stopを実行します。observerはsignalを送らず、許可外を即表示します。許可はrepo外backend設定のprovider URLを解決したIP:443とrun-configの正確な127.0.0.1:Mail portだけです。backend=deepseekでは公式api.deepseek.comだけを対象にします。CDNのIP変化は通常起こり得て固定リストによる誤停止を招くため、未知の443接続を見たときは同hostnameを再解決し、事前解決結果との和で判定します。他のhostnameや任意の443は許可しません。network-observation.jsonlに一窓、network-observation.jsonに判定を保存します。exit0は「この窓で許可外なし」、1は許可外あり、2は未確認。取得失敗・中断・15分以内に停止確認できない場合は未確認とし、親がruntime状態を確認します。WSL用の観測adapterは未実装です。`tests/test_dsh_observe.py`は無通信snapshot/起動のfixtureであり、実OSの権限や実接続を確認した試験ではありません。
 
-DeepSeekのrunも同じinit/register/preflight/observe/task/record-mail/stop/release/retire/confirm-retire/cleanを使います。利用者のrepo外設定でbackend_id=deepseek、base_url=https://api.deepseek.com/anthropic、model=deepseek-flash、明示のKeychain service/account参照を指定します。model_definition=nullではcustom modelsを投影せず、idle_check=falseなのでStrataのstatusは呼びません。残高・onboarding・補助通信の遮断、要求8回/retry0と完了判定は共通です。`ORRERY_DSH_TEST_BACKEND=deepseek`で実SDK/TUIの無通信full preflight fixtureを選べます（既定はstrata）。
+DeepSeekのrunも同じinit/register/preflight/observe/task/record-mail/stop/release/retire/confirm-retire/cleanを使います。利用者のrepo外設定でbackend_id=deepseek、base_url=https://api.deepseek.com/anthropic、model=deepseek-flash、明示のKeychain service/account参照を指定します。model_definition=nullではcustom modelsを投影せず、idle_check=falseなのでStrataのstatusは呼びません。残高・onboarding・補助通信の遮断、任意の要求上限/retry0と完了判定は共通です。`ORRERY_DSH_TEST_BACKEND=deepseek`で実SDK/TUIの無通信full preflight fixtureを選べます（既定はstrata）。
 
 snapshotは短い通信を見逃し得ます。global fetchの置換もnode:http/net/native/別processの全socketをOSで遮断する仕組みではありません。statusは別利用者を排除するサーバー予約ではなく、WSL対応は未受入です。未観測を「外部通信は完全にゼロ」とは報告しません。
 

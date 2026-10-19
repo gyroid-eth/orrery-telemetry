@@ -104,7 +104,7 @@ test('blocked requests use the common method/host/port/path/callers fields witho
 });
 
 test('unknown model, unsupported beta, structural tool_addition and extra tools do not forward', async () => {
-  for (const change of [{model: 'other'}, {max_tokens: 100000},
+  for (const change of [{model: 'other'}, {max_tokens: 0},
     {messages: [{content: [{type: 'tool_addition'}]}]}, {tools: [{name: 'bash'}]}]) {
     const h = harness();
     await assert.rejects(h.fetch(endpoint(h.backend), request(h.backend, change)));
@@ -163,6 +163,31 @@ test('one in-flight request is held through body EOF, then request cap stops the
   assert.equal(h.calls.filter(row => row.input.endsWith('/v1/messages')).length, 1);
   await response.text();
   await assert.rejects(h.fetch(endpoint(h.backend), request(h.backend)), /REQUEST_CAP/);
+});
+
+test('product defaults allow more than eight requests and large output budgets', async () => {
+  for (const id of ['deepseek', 'strata']) {
+    assert.equal(config.limits.session_requests, undefined);
+    assert.equal(config.backends[id].max_output_tokens, undefined);
+    assert.equal(config.backends[id].model_definition?.maxTokens, undefined);
+    const h = harness(id);
+    for (let index = 0; index < 10; index++)
+      await (await h.fetch(endpoint(h.backend), request(h.backend, {max_tokens: 262144}))).text();
+    assert.equal(h.events.filter(row => row.phase === 'provider-request-start').length, 10);
+  }
+});
+
+test('only explicit positive request/output limits apply, without a range ceiling', async () => {
+  for (const value of [0, -1, 1.5, true, null]) {
+    assert.throws(() => harness('strata', {limits: {...config.limits, session_requests: value}}), /POSITIVE_INTEGER/);
+    assert.throws(() => harness('strata', {backend: {...config.backends.strata, max_output_tokens: value}}), /POSITIVE_INTEGER/);
+  }
+  const h = harness('strata', {backend: {...config.backends.strata, max_output_tokens: 1000000000},
+    limits: {...config.limits, session_requests: 1000000000}});
+  await (await h.fetch(endpoint(h.backend), request(h.backend, {max_tokens: 1000000000}))).text();
+  const small = harness('strata', {backend: {...config.backends.strata, max_output_tokens: 16}});
+  await assert.rejects(small.fetch(endpoint(small.backend), request(small.backend)), /OUTPUT_LIMIT/);
+  assert.equal(small.calls.length, 0);
 });
 
 test('stream cancellation releases the local slot but unknown usage blocks a new request', async () => {
