@@ -52,5 +52,6 @@ readyであるときだけ続行可能とする。これは共通側のowner/pro
 python3 tests/test_dsh_input_receiver.py
 ```
 
-Node標準runnerで9件を実行する。既存Nodeがなければskipを明示し、取得しない。
+Node標準runnerで10件を実行する。一致対象の通常pasteと、intentのdurable完了前は
+submitしないdeferred writeの対照を含む。既存Nodeがなければskipを明示し、取得しない。
 runtimeのNode pin検査とは別のoffline module試験であり、provider/TUIを起動しない。
