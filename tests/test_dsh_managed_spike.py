@@ -21,7 +21,20 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-const [runtime,state]=process.argv.slice(2);
+import {createHash} from 'node:crypto';
+const [runtime,state,entry]=process.argv.slice(2);
+const {verifyTuiPatch}=await import(pathToFileURL(entry));
+const hash=f=>createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+const recipe=path.join(state,'recipe.json'), receipt=path.join(state,'receipt.json');
+const a=path.join(state,'a.js'), b=path.join(state,'b.js');
+fs.writeFileSync(a,'patched-a');fs.writeFileSync(b,'patched-b');
+fs.writeFileSync(recipe,JSON.stringify({replacements:[{file:'a.js'},{file:'b.js'}]}));
+fs.writeFileSync(receipt,JSON.stringify({recipe_sha256:hash(recipe),changes:[{file:'a.js',after:hash(a)},{file:'b.js',after:hash(b)}]}));
+const verify=()=>verifyTuiPatch({tuiRoot:state,recipeFile:recipe,receiptFile:receipt});
+assert.doesNotThrow(verify);
+fs.writeFileSync(a,'unpatched-a');assert.throws(verify,/PATCH_FILE_MISMATCH/);
+fs.writeFileSync(b,'unpatched-b');assert.throws(verify,/PATCH_FILE_MISMATCH/);
+assert.throws(()=>verifyTuiPatch({tuiRoot:state,recipeFile:recipe,receiptFile:receipt+'.missing'}));
 process.env.ORRERY_DSH_TUI_DATA_ROOT=state;
 let fetches=0,streams=0;
 globalThis.fetch=()=>{fetches++;throw new Error('OFFLINE_FIXTURE');};
@@ -52,7 +65,8 @@ console.log(JSON.stringify({patched_tui_controls:true,fetches,streams,credential
         with tempfile.TemporaryDirectory(prefix='dsh-controls-spike-') as root:
             entry = Path(root) / 'controls.mjs'
             entry.write_text(script)
-            result = subprocess.run([node, str(entry), runtime, root], text=True,
+            managed_entry = Path(__file__).resolve().parents[1] / 'integrations/dsh/managed_entry.mjs'
+            result = subprocess.run([node, str(entry), runtime, root, str(managed_entry)], text=True,
                                     capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         print(result.stdout.strip())
@@ -74,7 +88,8 @@ const req = createRequire(path.join(runtime, 'package.json'));
 const {Context} = await import(pathToFileURL(req.resolve('@deepseek-ai/cordis')));
 const {SystemPrompt} = await import(pathToFileURL(req.resolve('@deepseek-ai/dsh-system-prompt')));
 const {ToolRuntime, defineTool} = await import(pathToFileURL(req.resolve('@deepseek-ai/dsh-tools')));
-const {createReservationGuard, mailReceipt} = await import(pathToFileURL(plugin));
+const {createReservationGuard, mailReceipt, installSessionEvents} = await import(pathToFileURL(plugin));
+const {SessionStore} = await import(pathToFileURL(req.resolve('@deepseek-ai/dsh-session')));
 const root = path.join(fixture, 'work'); fs.mkdirSync(root);
 const outside = path.join(fixture, 'outside.txt'); fs.writeFileSync(outside, 'private');
 fs.symlinkSync(outside, path.join(root, 'escape.txt'));
@@ -87,6 +102,7 @@ const policy = createReservationGuard({attempt,task,emit:e=>events.push(e),now:(
 const ctx = new Context();
 await ctx.plugin(SystemPrompt, {}).await();
 await ctx.plugin(ToolRuntime, {mode:'native'}).await();
+await ctx.plugin(SessionStore).await();
 let writes=0;
 for (const name of ['read','write','bash']) ctx.tools.register(defineTool({
  name, description:'Offline fixture body', parameters:{
@@ -121,6 +137,15 @@ try {
  assert.equal(wrong.guard({name:'write',arguments:{file_path:path.join(root,'allowed/no.txt')}}),'not-reserved');
  assert.equal(policy.guard({name:'write',arguments:{file_path:'allowed/relative.txt'}}),'outside-worktree');
  assert.equal(mailReceipt({structuredContent:{verified_sender:false,deliveries:[{payload:{id:9,to:['Parent'],from:'FixtureAgent'}}]}}).ok,false);
+ assert.deepEqual(mailReceipt({structuredContent:{verified_sender:true,deliveries:[{payload:{id:9,to:['Parent'],from:'FixtureAgent'}}]}}),
+  {message_id:9,to:'Parent',from:'FixtureAgent',verified_sender:true,ok:true});
+ const current = ctx.sessions.create(), other = ctx.sessions.create();
+ const turns=[];
+ installSessionEvents(ctx,e=>turns.push(e),()=>current.id);
+ other.append('turn/start',{turn:1});
+ current.append('turn/start',{turn:1});
+ current.append('turn/end',{turn:1,reason:{kind:'completed'}});
+ assert.deepEqual(turns,[{phase:'task-start',turn:1},{phase:'turn-end',reason_kind:'completed',turn:1}]);
  console.log(JSON.stringify({registry:'actual pinned ToolRuntime',positive_writes:writes,
   denied_calls:events.filter(e=>e.phase==='tool-denied').length,outside_unchanged:true}));
 } finally {await ctx.fiber.dispose();}

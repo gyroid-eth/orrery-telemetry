@@ -3,11 +3,11 @@ from pathlib import PurePosixPath
 
 
 def build_launch(*, node, node_version, runtime, state, worktree, integration, backend_file, backend_id,
-                 attempt_id, home):
+                 attempt_id, home, patch_receipt):
     version = tuple(map(int, node_version.removeprefix('v').split('.')))
     if version < (24, 2, 0):
         raise ValueError('Node 24.2 or later is required before credentials')
-    for value in (node, runtime, state, worktree, integration, backend_file, home):
+    for value in (node, runtime, state, worktree, integration, backend_file, home, patch_receipt):
         if not PurePosixPath(value).is_absolute():
             raise ValueError('absolute paths are required')
     if backend_id not in ('deepseek', 'strata') or not attempt_id:
@@ -25,6 +25,7 @@ def build_launch(*, node, node_version, runtime, state, worktree, integration, b
         'ORRERY_DSH_AUDIT_FILE': str(PurePosixPath(state) / 'audit.jsonl'),
         'ORRERY_DSH_OFFLINE': '1',
         'ORRERY_DSH_TUI_DATA_ROOT': str(PurePosixPath(state) / 'tui'),
+        'ORRERY_DSH_TUI_PATCH_RECEIPT': patch_receipt,
         'DSH_TUI_LAUNCHER_VERSION': '0.16.1',
     }
     return {'argv': [node, '--import', str(base / 'egress.mjs'), str(base / 'managed_entry.mjs')],

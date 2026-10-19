@@ -37,7 +37,8 @@ def prepare(args):
     plan = build_launch(node=str(node), node_version=version, runtime=str(runtime), state=str(state),
                         worktree=str(Path(args.worktree).resolve()), integration=str(integration),
                         backend_file=str(Path(args.backend_file).resolve()), backend_id=args.backend,
-                        attempt_id=attempt_id, home=os.environ['HOME'])
+                        attempt_id=attempt_id, home=os.environ['HOME'],
+                        patch_receipt=str(Path(args.patch_receipt).resolve()))
     backend = json.loads(Path(args.backend_file).read_text())['backends'][args.backend]
     if not backend['base_url'] or not backend['model']:
         raise SystemExit('Explicit synthetic backend configuration required')
@@ -96,7 +97,7 @@ def prepare(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('node', 'runtime', 'state', 'worktree', 'backend-file'):
+    for name in ('node', 'runtime', 'state', 'worktree', 'backend-file', 'patch-receipt'):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--backend', choices=['deepseek', 'strata'], default='strata')
     parser.add_argument('--prepare-only', action='store_true')
