@@ -303,7 +303,8 @@ def execute_run(state, *, assemble=False):
                 'stopped_by': 'failure'})
             raise
     try:
-        supervisor_started = subprocess.check_output(['/bin/ps', '-p', str(os.getpid()), '-o', 'lstart='], text=True).strip()
+        supervisor_started = subprocess.check_output(['/bin/ps', '-p', str(os.getpid()), '-o', 'lstart='],
+                                                     env={'LC_ALL': 'C', 'LANG': 'C'}, text=True).strip()
     except (OSError, subprocess.SubprocessError):
         supervisor_started = None
     try:
@@ -364,7 +365,7 @@ def stop_run(state):
     # Signal the owned supervisor, which owns TERM/KILL/reaping of its runtime.
     # If its identity cannot be verified, preserve state for an external check.
     observed = subprocess.run(['/bin/ps', '-p', str(process['supervisor_pid']), '-o', 'lstart='],
-                              capture_output=True, text=True, timeout=5)
+                              env={'LC_ALL': 'C', 'LANG': 'C'}, capture_output=True, text=True, timeout=5)
     if observed.returncode or observed.stdout.strip() != process.get('supervisor_started'):
         raise ValueError('Supervisor ownership unavailable; inspect outside before cleanup')
     os.kill(process['supervisor_pid'], signal.SIGTERM)

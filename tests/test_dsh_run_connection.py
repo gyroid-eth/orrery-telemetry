@@ -17,6 +17,30 @@ spec.loader.exec_module(lifecycle)
 
 
 class ProductLifecycle(unittest.TestCase):
+    def test_stop_from_japanese_locale_matches_c_locale_supervisor_start(self):
+        sys.path.insert(0,str(INTEGRATION))
+        try:
+            import launch
+        finally:
+            sys.path.remove(str(INTEGRATION))
+        lifecycle.save(self.root/'attempt.json',{'attempt_id':'attempt'})
+        lifecycle.save(self.root/'runtime-process.json',{'attempt_id':'attempt',
+            'supervisor_pid':4242,'pgid':4243,'supervisor_started':'Mon Oct 19 15:15:26 2026'})
+        def ps(argv,**options):
+            self.assertEqual(argv,['/bin/ps','-p','4242','-o','lstart='])
+            locale=options.get('env',os.environ).get('LC_ALL')
+            return subprocess.CompletedProcess(argv,0,
+                'Mon Oct 19 15:15:26 2026\n' if locale=='C' else '月 10/19 15:15:26 2026\n','')
+        def stopped(pid,sig):
+            lifecycle.save(self.root/'runtime-exit.json',{'group_absent':True,'group_check':'observed'})
+        with mock.patch.dict(os.environ,{'LC_ALL':'ja_JP.UTF-8','LANG':'ja_JP.UTF-8'}), \
+             mock.patch.object(launch.subprocess,'run',side_effect=ps), \
+             mock.patch.object(launch.os,'kill',side_effect=stopped) as terminate, \
+             mock.patch.object(launch,'group_absent',return_value=True):
+            launch.stop_run(self.root)
+        import signal
+        terminate.assert_called_once_with(4242,signal.SIGTERM)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='dsh-run-connection-')
         self.addCleanup(self.temp.cleanup)
