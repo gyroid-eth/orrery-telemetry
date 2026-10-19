@@ -1,7 +1,7 @@
 # Hermes child adapter spike
 
-This is an offline feasibility probe, not a managed launcher. Existing launchers
-and defaults are unchanged. The tested Hermes revision is
+This directory contains an offline feasibility probe and an operator-owned Mail
+pilot adapter. Existing launchers and defaults are unchanged. The tested Hermes revision is
 `d923a5eb487a17c0a68801bba9ef0f56c81040a8`.
 
 `offline_probe.py` takes `--source`, `--site` and `--output` as explicit absolute
@@ -41,8 +41,48 @@ shared dependency startup without installation, and owned process cleanup.
 Provider credentials must not enter shell-hook children. Fail-open observer
 hooks cannot enforce the provider egress contract.
 
-Run the small dependency-free checks with:
+`runner.py` offers separate `init`, `preregister`, `configure`, `probe`, `start`,
+`status`, `stop` and `retire` commands, each taking `--state`. `init` also takes
+`--config` and `--profile strata|deepseek`. The private operator config contains
+absolute product/interpreter/worktree/managed-root paths, the canonical parent
+and connection references, and readonly profile template paths. Credentials are
+represented by the template's `key_cmd`; literal keys are never copied.
+Keep that machine-specific config outside the repository.
+
+The pilot calls the product preregistration helper with `program=hermes`, uses
+`child_tools.py claude-config` and its unchanged `run-mcp.sh` proxy definition,
+and compares remote `whois.program` with `hermes`. Local proxy `PROGRAM` remains
+the generated value. Its official-SDK preflight distinguishes schema listing
+from backend authentication. The owned tmux pane selects an explicit profile
+and receives one fixed initial Mail task; no task text is evaluated by a shell.
+Main and every auxiliary task use the selected named provider with empty
+fallback chains. Memories, skills, review and curator remain enabled.
+
+Only the exact parent message is exposed through MCP. An in-process plugin
+records its structured product receipt, rejects an automatic second send and
+cross-profile selectors, and confines explicit skill paths to the profile.
+Profile paths and configured shared skill directories are checked before start.
+The supervisor passes a fresh environment, sets offline package preparation and
+lazy-install suppression, bounds the process group and records its exit.
+Dependencies in the separate managed root must already be prepared by the
+operator. These flags do not certify every bootstrap recovery path as inert.
+
+`status` accepts only a matching verified Mail receipt. Exit zero and model prose
+do not count; `full_managed_task_accepted` stays unknown. `retire` first requires
+observed owned-group absence, invokes the product cleanup hook, and leaves its
+receipt unconfirmed until the parent's bound `whois` confirms `retired_at`.
+The Mail-only pilot takes no file reservations. Full managed reservation gates,
+provider egress enforcement and the five-condition completion flow remain
+separate acceptance work. This pilot has only fake-helper/stdio acceptance;
+real registration, provider use, Mail and cleanup require the operator's run.
+
+Run the focused dependency-free checks with:
 
 ```sh
-python3 -m unittest discover -s tests -p test_hermes_child_spike.py -v
+python3 -m unittest discover -s tests -p 'test_hermes*.py' -v
 ```
+
+Set `ORRERY_HERMES_TEST_PYTHON` to the installed dependency interpreter to include
+the offline SDK stdio fixture; also set `ORRERY_HERMES_TEST_SOURCE` to the tested
+checkout to exercise real Hermes discovery and tool dispatch through that fixture.
+Neither fixture makes a provider request or connects to a real Mail backend.
