@@ -75,4 +75,6 @@ run接続の`tests/test_dsh_run_connection.py`では、実SDK→無通信のsynt
 
 snapshotは短い通信を見逃し得ます。global fetchの置換もnode:http/net/native/別processの全socketをOSで遮断する仕組みではありません。statusは別利用者を排除するサーバー予約ではなく、WSL対応は未受入です。未観測を「外部通信は完全にゼロ」とは報告しません。
 
+既知の限界：予約の一部だけ取れて起動しなかったattemptは、解放とretireの後もruntime-completionがpendingと出ます。後始末の証拠はabort専用の記録で確認します。
+
 終了は所有groupの停止→予約解放→canonical retire確認の順です。失敗やMail/retire応答不明ではstateを保持し、自動再登録・再送・再開・実鍵の再読取をしません。commit/pushとliveへの採用は親が行います。
