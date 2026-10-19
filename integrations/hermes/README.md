@@ -1,7 +1,7 @@
-# Hermes child adapter spike
+# Hermes child adapter
 
-This directory contains an offline feasibility probe and an operator-owned Mail
-pilot adapter. Existing launchers and defaults are unchanged. The tested Hermes revision is
+This directory contains an offline feasibility probe, an operator-owned Mail
+pilot and a thin managed-spawn adapter. Existing launchers and defaults are unchanged. The tested Hermes revision is
 `d923a5eb487a17c0a68801bba9ef0f56c81040a8`.
 
 `offline_probe.py` takes `--source`, `--site` and `--output` as explicit absolute
@@ -35,9 +35,9 @@ profile. Temporary storage is used only for this spike. Initial managed policy
 must pin cross-profile reads to the current profile and constrain external skill
 directories, skill creation and trusted project directories to that profile.
 
-Outstanding acceptance work includes the real product proxy handshake and Mail
-receipt, installed CLI task-to-exit, provider/auxiliary egress and retry limits,
-shared dependency startup without installation, and owned process cleanup.
+The Mail pilot and reserved-file entry have separate operator acceptance records.
+Controller integration is tested offline; a real managed-spawn round trip remains
+operator acceptance work. Offline fixture success does not certify live operation.
 Provider credentials must not enter shell-hook children. Fail-open observer
 hooks cannot enforce the provider egress contract.
 
@@ -90,10 +90,15 @@ A saved product `mcp.json` may be reused only if every bound reference matches
 this attempt and profile writing has not begun. `profile-write-intent.json`
 marks that boundary; a later partial failure requires retirement and a fresh
 attempt. Do not delete an intent or generated file to force a retry.
-The Mail-only pilot takes no file reservations. Its operator acceptance has
-passed; the reserved-file task below still needs its real operator run.
+The Mail-only pilot takes no file reservations. Reserved-file runs use the
+receipt and completion flow below.
 
-`init-task` prepares one reserved `trial-ok.txt` task in a separate worktree.
+`init-task` without `--input` prepares the original reserved `trial-ok.txt` trial.
+With `--input TASK_JSON`, it accepts the managed contract's flat object containing
+`prompt`, `allowed_paths` and `expected`. Paths are unique relative literal file
+paths; each expected file has exactly one string `contains` or lowercase SHA-256
+`sha256` check. The child must create or update the file after this attempt begins.
+Requested artifacts are not seeded. Symlink artifacts cannot satisfy completion.
 Use `preregister`, `configure`, `probe`, `reserve`, `preflight`, then `start`.
 Reserve uses the bound product proxy and projects its real receipts into
 `task.json`. Preflight checks the installed plugin manager, and the inference
@@ -151,17 +156,78 @@ metadata suppression does not manufacture a price or a zero-cost result.
 The five-condition evaluator reads only saved state. After the parent's bound
 inbox result is saved, `record-mail --state STATE --input INBOX_JSON` requires
 the actual same-child message ID, `kind=to`, and the inbox shape without a `to`
-field. `complete` requires this parent receipt in addition to the verified child
-send event. Unknown evidence stays pending; exit zero is never task proof.
+field. `complete` accepts the server's verified send receipt, including a positive
+delivery count, bound to this attempt, task, child and parent. If a parent receipt
+exists it must also match; malformed or conflicting evidence fails. Unknown
+evidence stays pending; exit zero is never task proof.
 Stop the owned group, run `scan-diagnostics`, `release`, `retire`, save the parent's
 canonical whois, run `confirm-retire`, then `complete-runtime`. Release confirmation
 requires the exact task IDs and the full actual release count.
 
-`scan-diagnostics` is an explicit operator step. Its key-command output stays in
-the scan process; only prefix match/error/file counts are saved for the state
-and private profile, including raw logs. Owner-token files are excluded. It does
-not print keys, prefixes, matching lines or filenames. Real CLI, provider, Mail,
-cleanup and the post-run scan are always the operator's acceptance work.
+The default pilot's `scan-diagnostics` is an explicit operator step. Its
+key-command output stays in the scan process. Managed `owned-once` mode instead
+reuses the credential already held by the owned process, as described below.
+Only prefix match/error/file counts are saved for state and private profile logs.
+Owner-token files are excluded; keys, prefixes, matching lines and filenames are
+not printed. Real CLI, provider, Mail and cleanup remain operator acceptance work.
+
+## Managed controller entry
+
+`managed_lifecycle.py` exposes `prepare`, `start`, `status`, `finalize` and `clean`
+with the managed-spawn contract's injected `run` and existing `parent_call`.
+`prepare` performs init, preregistration, projection, authenticated proxy probe,
+reservation and guard preflight. `start` launches the existing owned tmux wrapper.
+Its exit status is not readiness: `status` requires the actual runtime PID's
+plugin-ready event, current preflight/proxy evidence and owned credential receipt.
+Terminal status waits for the supervisor's runtime-exit receipt: turn-end precedes
+the final diagnostic scan and must not trigger an early stop.
+HTTP attempt IDs remain controller-owned; `runtime_attempt_id` is the runner ID.
+
+Profiles stay fixed by child kind to preserve private memory, skills and curator.
+The controller must reject a concurrent request for the same Hermes profile
+before registration with `profile_busy`; it does not queue or create an attempt
+profile. Cross-profile reads and external skill directories remain confined by
+the current-profile guard. Optional `profiles.<name>.reasoning_effort` projects
+into Hermes's `agent.reasoning_effort` (`none` disables reasoning).
+
+Managed preparation selects `credential_mode: owned-once`. After synchronous
+gates pass, the owned process executes the validated Keychain reference once.
+It supplies an in-memory command-token provider to main and auxiliary clients;
+the key is not exported to tool, MCP or shell-hook environments. An exclusive
+read-intent receipt prevents automatic rereads after failure. The same in-memory
+key scans logs before Hermes's oneshot hard exit. A killed process without scan
+evidence remains incomplete; a later diagnostic command never rereads its key.
+
+`finalize` stops the owned group, checks diagnostics, releases actual grants
+(including partial reservation responses), retires the child and confirms with
+the existing parent's canonical `whois`. A saved canonical `parent-inbox.json`
+can supply stronger D2 Mail evidence; the adapter does not fetch or poll a parent's
+inbox. Stage 1 accepts the verified server-send receipt without a parent capture.
+Never-started attempts can
+be retired without fabricating a runtime exit. `clean` requires successful
+runtime cleanup and a current zero-match, zero-error credential scan, then removes
+attempt handoff files. It preserves state evidence, requested artifacts and the
+persistent profile's memory and skills. Unknown cleanup retains state.
+
+## One-command offline check
+
+Prepare dependencies separately, then run all Hermes tests serially with:
+
+```sh
+scripts/check-hermes.sh --config PRIVATE_RUN_CONFIG --out RESULT_JSON
+```
+
+The trusted private config supplies the installed source and managed root.
+The command resolves the committed dependency interpreter, creates an isolated
+temporary HOME and offline cache, and includes the real stdio/tool-dispatch SDK
+fixtures without real provider, Mail, registration or Keychain calls. It does
+not install or repair dependencies. Missing setup fails the command.
+
+The JSON result includes `success`, `tests_run`, `failures`, `errors`,
+`skips`, `allowed_skip_reasons` and `unapproved_skips`. Skip records contain
+`test` and `reason`; approved reasons are strings matched exactly.
+`check-skip-reasons.json` defaults to `[]`, so every skip fails. An explicitly
+reviewed list may be passed with `--allowed-skips FILE`.
 
 Run the focused dependency-free checks with:
 

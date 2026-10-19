@@ -118,11 +118,11 @@ class FileTask(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 task_plugin.assert_registered(SimpleNamespace(iter_hook_callbacks=lambda _: found), self.state)
 
-    def test_five_checks_require_parent_receipt_and_do_not_use_exit_zero(self):
+    def test_five_checks_accept_server_send_and_match_optional_parent_receipt(self):
         self.completed_fixture()
         result = runner.evaluate(self.state)
-        self.assertIsNone(result['success'])
-        self.assertEqual(result['missing'], ['mail_receipt'])
+        self.assertTrue(result['success'])
+        self.assertEqual(result['missing'], [])
         capture = self.root / 'parent-inbox.json'
         for row in ({'id': 82, 'from': 'FixtureChild', 'kind': 'cc'},
                     {'id': 82, 'from': 'FixtureChild', 'kind': 'to', 'to': ['FixtureParent']},
@@ -132,6 +132,12 @@ class FileTask(unittest.TestCase):
                 mail_lifecycle.record_mail(self.state, capture)
         runner.save(capture, {'structuredContent': [{'id': 82, 'from': 'FixtureChild', 'kind': 'to'}]})
         mail_lifecycle.record_mail(self.state, capture)
+        self.assertTrue(runner.evaluate(self.state)['success'])
+        parent_receipt = runner.read(self.state / 'parent-mail-receipt.json')
+        for change in ({'message_id': 83}, {'from': 'OtherChild'}, {'to': ['OtherParent']}):
+            runner.save(self.state / 'parent-mail-receipt.json', {**parent_receipt, **change})
+            self.assertFalse(runner.evaluate(self.state)['success'])
+        runner.save(self.state / 'parent-mail-receipt.json', parent_receipt)
         self.assertTrue(runner.evaluate(self.state)['success'])
         runner.save(self.state / 'runtime-completion.json', {'attempt_id': self.attempt['attempt_id'], 'success': True})
         scan = {'attempt_id': self.attempt['attempt_id'], 'source': 'operator-private-prefix-scan', 'matches': 0, 'errors': 0}
@@ -150,6 +156,20 @@ class FileTask(unittest.TestCase):
         self.assertIsNone(runner.evaluate(self.state)['success'])
         task_evidence.event(self.state, 'turn-end', reason_kind='interrupted')
         runner.save(self.state / 'runtime-exit.json', {'exit_code': 0})
+        self.assertFalse(runner.evaluate(self.state)['success'])
+
+    def test_server_send_failure_wrong_attempt_and_missing_delivery_are_not_success(self):
+        self.completed_fixture()
+        path = self.state / 'events.jsonl'
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        for change in ({'ok': False}, {'verified_sender': False}, {'attempt_id': 'other'},
+                       {'deliveries': 0}, {'deliveries': None}, {'from': 'OtherChild'},
+                       {'to': ['OtherParent']}, {'message_id': 0}):
+            changed = [{**row, **change} if row.get('phase') == 'mail-sent' else row for row in rows]
+            path.write_text(''.join(json.dumps(row) + '\n' for row in changed))
+            self.assertFalse(runner.evaluate(self.state)['success'], change)
+        path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+        (self.state / 'parent-mail-receipt.json').write_text('invalid-json')
         self.assertFalse(runner.evaluate(self.state)['success'])
 
     def test_product_reserve_projection_and_exact_release_count(self):

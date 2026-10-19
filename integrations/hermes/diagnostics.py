@@ -10,13 +10,25 @@ from runner import base_env
 def scan(state, run=subprocess.run):
     state = Path(state)
     config = read(state / 'run-config.json')
+    if config.get('credential_mode') == 'owned-once':
+        report = read(state / 'diagnostic-scan.json')
+        if (report.get('attempt_id') != read(state / 'attempt.json')['attempt_id']
+                or report.get('source') != 'owned-process-prefix-scan'):
+            raise ValueError('Owned credential scan evidence unavailable; never read the key again')
+        return report
     profile = Path(config['profile_home'])
     route = read(profile / 'config.yaml')['providers'][config['provider']]
     result = run(shlex.split(route['key_cmd']), env=base_env(config),
                  capture_output=True, timeout=15)
     secret = result.stdout.rstrip(b'\r\n') if result.returncode == 0 else b''
+    return scan_value(state, secret)
+
+
+def scan_value(state, secret, source='operator-private-prefix-scan'):
+    state = Path(state)
+    profile = Path(read(state / 'run-config.json')['profile_home'])
     report = {'attempt_id': read(state / 'attempt.json')['attempt_id'], 'matches': None,
-              'files_scanned': 0, 'errors': 0, 'checked_at': stamp(), 'source': 'operator-private-prefix-scan'}
+              'files_scanned': 0, 'errors': 0, 'checked_at': stamp(), 'source': source}
     if len(secret) >= 8:
         prefix = secret[:8]
         report['matches'] = 0

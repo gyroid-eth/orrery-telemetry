@@ -52,6 +52,20 @@ def normalize_reservations(result, paths, owner, now=None):
     return rows
 
 
+def granted_receipts(result, paths, owner):
+    """Keep every actual grant for release even when the overall reserve fails."""
+    rows = []
+    for row in result.get('granted', []):
+        if (type(row.get('id')) is not int or row['id'] <= 0
+                or row.get('owner', owner) != owner or row.get('path_pattern') not in paths):
+            raise ValueError('Unbound reservation grant')
+        datetime.fromisoformat(row['expires_ts'].replace('Z', '+00:00'))
+        rows.append({key: row[key] for key in ('id', 'path_pattern', 'expires_ts')} | {'owner': owner})
+    if len({r['id'] for r in rows}) != len(rows):
+        raise ValueError('Duplicate reservation grant')
+    return rows
+
+
 def mail_receipt(value):
     """Accept structured data or Hermes's rendered MCP result; never model prose."""
     if isinstance(value, str):
@@ -74,7 +88,7 @@ def mail_receipt(value):
         return None
     payload = deliveries[0].get('payload', {})
     message_id = payload.get('id')
-    return {'message_id': message_id, 'to': payload.get('to'), 'from': payload.get('from'),
+    return {'message_id': message_id, 'to': payload.get('to'), 'from': payload.get('from'), 'deliveries': len(deliveries),
             'verified_sender': receipt.get('verified_sender') is True,
             'ok': receipt.get('verified_sender') is True and type(message_id) is int and message_id > 0}
 
@@ -102,9 +116,13 @@ async def exercise(session, state, action, report):
         result = unwrap(await session.call_tool('reserve_files', {'paths': task['allowed_paths'], 'exclusive': True,
             'ttl_seconds': 1800, 'reason': 'Managed Hermes task'}))
         save(state / 'reservation-result.json', result)
+        granted = granted_receipts(result, task['allowed_paths'], identity['agent_name'])
+        save(state / 'reservations.json', {'agent_name': identity['agent_name'],
+             'attempt_id': attempt['attempt_id'], 'source': 'product-bound-proxy', 'receipts': granted,
+             'complete': False})
         rows = normalize_reservations(result, task['allowed_paths'], identity['agent_name'])
         save(state / 'reservations.json', {'agent_name': identity['agent_name'],
-             'attempt_id': attempt['attempt_id'], 'source': 'product-bound-proxy', 'receipts': rows})
+             'attempt_id': attempt['attempt_id'], 'source': 'product-bound-proxy', 'receipts': rows, 'complete': True})
     elif action == 'send':
         task = read(state / 'task.json')
         save(state / 'report-intent.json', {'attempt_id': attempt['attempt_id'], 'at': stamp()}, exclusive=True)
@@ -123,8 +141,11 @@ async def exercise(session, state, action, report):
             raise ValueError('Release identity mismatch')
         ids = [row['id'] for row in reservations['receipts']]
         task = read(state / 'task.json')
+        actual = task['reservation_receipts']
+        if reservations.get('complete') is False:
+            actual = granted_receipts(read(state / 'reservation-result.json'), task['allowed_paths'], identity['agent_name'])
         if (not ids or len(set(ids)) != len(ids) or any(type(n) is not int or n <= 0 for n in ids)
-                or set(ids) != {row['id'] for row in task['reservation_receipts']}):
+                or set(ids) != {row['id'] for row in actual}):
             raise ValueError('Release IDs do not match the task reservations')
         result = unwrap(await session.call_tool('release_reservations', {'file_reservation_ids': ids}))
         confirmed = type(result.get('released')) is int and result['released'] == len(ids)
