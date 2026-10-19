@@ -6,6 +6,10 @@
 
 ## 基本
 
+API generation 20では、installerで明示opt-inした場合だけprovider catalogへ
+`dsh`を追加する。`capabilities.runtime=false`の間は実行基盤未接続であり起動不可。
+`/assets/deepseek.svg`も同じ選択に従い、無効時は404、有効時はSVGを返す。
+
 base URL:
 
 ```text

@@ -1,5 +1,8 @@
 # API reference
 
+API generation 20では、明示opt-in時だけcatalogへdshを追加する。
+`capabilities.runtime=false`は未接続で起動不可、DeepSeek assetは無効時404・有効時200。
+
 > 日本語版: [api.md](api.md)
 
 [Previous: Dashboard](dashboard.en.md) · [Back to README](../README.en.md) · [Next: Configuration](configuration.en.md)

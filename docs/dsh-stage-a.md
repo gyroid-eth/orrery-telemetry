@@ -1,8 +1,14 @@
 # dsh 対話子：段Aの準備
 
-現在は専用の取得計画 module と offline の null case だけがある。
-provider は有効にならず、dsh / dsh-TUI / Node を取得せず、spawn候補や
-DeepSeekロゴの表示枠も追加しない。通常の installer と既存の子は変更しない。
+既定ではdsh / dsh-TUI / Nodeを取得せず、spawn候補やDeepSeekロゴを出さない。
+installerの `--enable-dsh` で候補とロゴ配信を明示的に有効化できる。
+現段階ではruntime未接続をcatalogへ示し、通常の子としてはまだ起動しない。
+このflagでruntime/Nodeの取得、鍵の読取、登録、API要求は行わない。
+
+`--disable-dsh` は候補・ロゴ配信を無効化し、配置済みassetを保持する。
+flagなしの更新では既存選択を保ち、fresh installでは無効のまま。
+選択とassetは通常installerのownership manifestへ入り、通常uninstallの対象になる。
+利用者のKeychain・worktree・会話はこの選択操作の対象にしない。
 
 ## 取得前確認の境界
 
