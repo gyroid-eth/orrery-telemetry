@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 20
+API_GENERATION = 21
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -78,7 +78,7 @@ except ModuleNotFoundError:  # direct `python dashboard/server.py`
 # Account quota telemetry is core: it reads what the local Claude and Codex
 # installs already report, so it belongs to the canonical server rather than
 # to an optional provider payload.  Acquisition lives in dashboard/quotas/.
-QUOTA_SERVICE = _build_quota_service()
+QUOTA_SERVICE = _build_quota_service(dsh_enabled=lambda: _dsh_enabled())
 
 try:
     from dashboard.claude_models import (

@@ -3,9 +3,10 @@
 既定ではdsh / dsh-TUI / Nodeを取得せず、spawn候補やDeepSeekロゴを出さない。
 installerの `--enable-dsh` で候補とロゴ配信を明示的に有効化できる。
 現段階ではruntime未接続をcatalogへ示し、通常の子としてはまだ起動しない。
-このflagでruntime/Nodeの取得、鍵の読取、登録、API要求は行わない。
+installer操作自体はruntime/Nodeの取得、鍵の読取、登録、API要求を行わない。
+有効化後の既存usage読取では、下記の残高workerがKeychainと残高APIを使う。
 
-`--disable-dsh` は候補・ロゴ配信を無効化し、配置済みassetを保持する。
+`--disable-dsh` は候補・ロゴ配信・残高の取得と行を無効化し、配置済みassetを保持する。
 flagなしの更新では既存選択を保ち、fresh installでは無効のまま。
 選択とassetは通常installerのownership manifestへ入り、通常uninstallの対象になる。
 利用者のKeychain・worktree・会話はこの選択操作の対象にしない。
@@ -58,40 +59,58 @@ dsh導入と独立した共通profileの能力へ接続する必要があり、�
 `dashboard/demo/build.sh [outdir] --enable-dsh` は明示の表示fixture用で、既定demoは無効。
 `demo/dist` は生成物であり、このrepositoryでは追跡していない。
 
-## DeepSeek API残高をusage欄に表示する設計（未実装）
+## DeepSeek API残高を既存usageへ表示する（実鍵確認前）
 
-通常起こる鍵なし・Keychainロック・通信失敗 × 残高を0と誤認する害、
-及び鍵の漏洩時の大きな害を対象にする。準備中はAPIへ要求しない。
+通常の鍵なし・Keychainロック・通信失敗 × 残高を0と誤認する害、
+及び鍵漏洩時の大きな害を対象にする。鍵を使った確認やliveの変更は準備に含めない。
 
 公式の [Get User Balance](https://api-docs.deepseek.com/api/get-user-balance/)
-は `GET /user/balance` に `is_available` と `balance_infos` を返す。
-通貨はCNY又はUSD、`total_balance`・`granted_balance`・`topped_up_balance` は
-文字列の金額である。通貨ごとに表示し、異なる通貨の合算やquota百分率への変換はしない。
-認証は固定TUIの `lib/types/deepseekBalance.js:19–21` と同じBearerを予定する。
-この読取APIが課金されないことは未検証であり、準備後の実物確認で記録する。
+は `GET /user/balance` で利用可否と通貨別の金額文字列を返す。
+取得workerは固定TUIの `lib/types/deepseekBalance.js:19–21` と同じBearerを使う。
+usageにはUSDの総額だけを投影し、CNY・付与額・入金額は表示しない。
+USDが無ければ「USD の残高なし」、取得失敗は「不明」。0へ置き換えない。
+利用可否は公式APIのアカウント全体の値であり、falseは警告色にする。
+金額と百分率quotaは別の型で、新しいpopupは作らない。
 
-dsh opt-in時だけClaude・Codex・Antigravityと並ぶusage欄に出す。
-`is_available=false` は既存の警告色で示す。3〜5分のcacheを使い、欄を開いた時
-又は既存refreshから期限切れ分だけ更新する。子・turnごとには問い合わせない。
-鍵なし・Keychainロック・認証失敗・通信不可・不正応答は「不明」にする。
-前回値を残すなら取得時刻と古い値であることを併記し、現在値として扱わない。
+`/api/quotas` → `QuotaService` のproviderの1つとして取得する。
+既存usageの毎分pollと開いた時のrefreshを使い、取得結果には同じserviceの4分cacheを使う。
+opt-inが無効なら行そのものを返さず、workerも起動しない。失敗後の前回金額は表示しない。
+時刻は既存の `observed_at` / `last_observed_at` / `checked_at` を使う。
 
-Keychainの `deepseek-api` は取得専用の短命processだけが読む。
-そのprocess内のHTTP headerだけへ渡し、dashboard常駐processのenv、argv、
-log、保存file、ブラウザへの応答に鍵を含めない。workerはtimeout付きとし、
-終了statusと検査済みの残高だけを返す。TUIの自動残高取得を開放する理由にはしない。
+Keychainの `deepseek-api` は短命workerだけが読む。そのworkerのenvとHTTP header以外に
+鍵を渡さず、dashboard・cockpit・確認runnerのenv、argv、log、保存file、API応答へ返さない。
+認証helperにも鍵を継承させない。標準CAでTLSを検証し、親のproxy設定は継承せず、
+redirect・自動retryも行わない。workerのstdoutは検査済みの金額か固定理由codeだけにする。
 
-共有fileへ接続する段で、次の既存経路を拡張する（行番号は設計時点）。
-
-| 接続点 | 変更する内容 |
+| 既存経路と接続点（実装時の行番号） | 役割 |
 | --- | --- |
-| `dashboard/quotas/__init__.py:13` | opt-in時だけ残高adapterをserviceへ登録する。無効時は取得も欄も増やさない |
-| `dashboard/quotas/antigravity.py:24–28,38–56` | timeout付きの別processという既存方式を参照し、残高専用workerを呼ぶ |
-| `dashboard/quotas/base.py:29,102,131` | 百分率bucketと分けたaccount balanceの応答形を加える。金額文字列と通貨を保持する |
-| `dashboard/quotas/service.py:78,92,144` | bucketの有無に依存する観測判定を残高にも対応させ、cache・前回値の期限を共通管理する |
-| `dashboard/server.py:8965,9043` | 既存 `/api/quotas` の経路・同一originの検査を使い、秘密を応答へ出さない |
-| `dashboard/index.html:36951,37027,37145,37173` | DeepSeekロゴ・金額・利用可能状態・不明/古い値をusageに描画する |
+| `dashboard/quotas/__init__.py:14` | Claude・Codex・Antigravityと同じserviceへ任意の残高providerを登録 |
+| `dashboard/quotas/claude_route.py:32` / `codex.py:22` | 既存providerは各TTL30秒/120秒。DeepSeekは `deepseek.py:18` の240秒 |
+| `dashboard/quotas/service.py:54,80,94` | provider選択・取得時刻・既存cache/lock/失敗の隔離。残高はwindowへ変換しない |
+| `dashboard/quotas/base.py` / `balance.py` | quotaと別の任意balance型、wireはUSD総額・利用可否だけ |
+| `dashboard/server.py` の `/api/quotas` | 既存の同一origin検査とglobal operator admissionを維持。新endpointなし |
+| `dashboard/index.html` の `usageTick` / `usageLogo` / `renderUsagePill` / `renderUsagePopover` | 既存の毎分取得・開いた時の更新・同じlogo・provider列へ表示 |
 
-実装時にはAPI世代とAPI文書を揃え、合成fixtureでopt-in無効、正常、
-利用不可、複数通貨、鍵なし、lock、timeout、不正応答、古い値を対照する。
-実Keychain・残高APIの確認は別の承認済み実行に分ける。
+`tests/test_deepseek_balance.py` はdummy専用のloopback `/user/balance`、実worker、
+同じHTTP usage経路の無効/有効/再無効、cache、失敗不明、秘密の非継承を対照する。
+`tests/test_deepseek_balance_ui.py` はmaster由来fixtureとの表示一致とUSD各状態を確かめる。
+実口座へ要求したという証拠にはしない。
+
+### 親が承認後に使う1回の確認runner
+
+repositoryのrootから使う。これらは準備者が実行するcommandではない。
+
+```sh
+# 既定は1GETだけ。金額だけのJSONを標準出力と指定fileへ記録する。
+python3 scripts/deepseek-balance-check.py --live --output /path/to/balance-once.json
+# 前後2GETだけ。間に3秒あけ、他のDeepSeek要求は挟まない。
+python3 scripts/deepseek-balance-check.py --live --pair --output /path/to/balance-pair.json
+```
+
+`--live` が無ければ実確認を始めない。鍵をshellでexportする手順は不要。
+runner自身はKeychainを読まず、取得workerだけが鍵を読む。
+前後比較は確認記録として通貨ごとに金額文字列を保ち、Decimalで差を計算する。
+usageへのUSD限定の投影とは別の記録であり、通貨を合算しない。
+最初の取得が失敗したら2回目を始めず、どちらか失敗なら差分は不明にする。
+表示桁より小さい課金や他clientの同時使用は区別できず、差0を非課金の証明にしない。
+読取APIが非課金かは実確認前には未検証である。

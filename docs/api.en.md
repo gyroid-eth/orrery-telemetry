@@ -64,7 +64,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":20}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":21}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -90,6 +90,23 @@ Instruction `data` follows the shared [status schema](../bin/lib/instruction_con
 ### Bundled Mail identity (API 12)
 
 In API 12 distributions, bundled ORRERY Mail's MCP `health_check` returns `server_instance_id`, the same persistent UUID as management-socket inspect. It is neither a secret nor authentication. Daemons compare both transports with the operator-pinned connection UUID, refusing older builds without the field or mismatches. Existing `status`, `environment`, `http_host`, and `http_port` fields remain. This adds no dashboard HTTP route. See [daemon bindings and notifications](daemon-agents.en.md).
+
+## GET `/api/quotas` — 任意のDeepSeek残高（API 21）
+
+dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える。
+無効時は取得せず、既存のquota応答の形も変えない。
+残高型は `measurement_kind: "balance"`、`buckets: []` とし、
+`balance` に `currency: "USD"`、`total_balance`（金額文字列又はUSDなしのnull）、
+`is_available` を持つ。CNYは返さない。金額の原精度を保持する。
+`is_available: false` は取得成功で利用不可という意味であり、通信失敗とは区別する。
+失敗・未取得では `status: "unavailable"`、`balance: null`、固定の理由codeを返す。
+0円や百分率bucketへ置き換えない。`observed_at` / `last_observed_at` / `checked_at`
+で取得時刻を示し、4分cacheを使う。鍵・Keychainの応答・HTTPの生エラーは返さない。
+
+取得workerだけがKeychainの `deepseek-api` を読み、dashboardのenvへ鍵を入れない。
+既存の同一origin検査とglobal operator admissionはそのまま使う。
+[公式の残高API](https://api-docs.deepseek.com/api/get-user-balance/) と
+[取得・実確認の手順](dsh-stage-a.md)も参照。
 
 ## GET `/api/spawn-names`
 
