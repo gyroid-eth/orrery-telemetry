@@ -9,6 +9,26 @@ import {fileURLToPath} from 'node:url';
 import {syncBuiltinESMExports} from 'node:module';
 import {assertIdle} from './strata_status.mjs';
 
+const adapterRoot = path.dirname(fileURLToPath(import.meta.url));
+export function sourceCallers() {
+  const roots = [[adapterRoot, 'adapter/']];
+  if (process.env.ORRERY_DSH_RUNTIME_ROOT) roots.push([path.resolve(process.env.ORRERY_DSH_RUNTIME_ROOT), 'runtime/']);
+  return (new Error().stack ?? '').split('\n').flatMap(line => {
+    const match = line.match(/at (?:(.*?) \()?((?:file:\/\/\/|\/).*?):(\d+):\d+\)?$/);
+    if (!match) return [];
+    const file = match[2].startsWith('file:') ? fileURLToPath(match[2]) : match[2];
+    for (const [root, prefix] of roots) if (file.startsWith(root + path.sep))
+      return [{file: prefix + path.relative(root, file), line: Number(match[3]), function: match[1] ?? '<anonymous>'}];
+    return [];
+  }).slice(-16);
+}
+
+export function rejectionFields(method = null, url = null, targetPath = null) {
+  return {method, host: url?.hostname ?? null,
+    port: url ? Number(url.port || (url.protocol === 'https:' ? 443 : 80)) : null,
+    path: url?.pathname ?? targetPath, callers: sourceCallers()};
+}
+
 export function createEgress({backend, limits, wireTools, offline = true, phase = 'run',
   fetchImpl, audit, key = '', fail = (reason, code) => { throw Object.assign(new Error(reason), {dshExitCode: code}); }}) {
   const endpoint = new URL(backend.base_url.replace(/\/+$/, '') + '/v1/messages');
@@ -16,12 +36,13 @@ export function createEgress({backend, limits, wireTools, offline = true, phase 
   const required = phase === 'spike' ? ['read', 'write'] : wireTools;
   if (phase === 'spike') offline = true;
   let seq = 0, active = false, usageKnown = true;
-  const reject = (phase, reason, extra = {}) => {
-    audit({phase, ...extra});
-    return fail(reason, phase === 'limit-reached' ? 80 : 78);
-  };
   return async function providerFetch(input, init = {}) {
     const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+    const method = init.method ?? (input instanceof Request ? input.method : 'GET');
+    const reject = (phase, reason, extra = {}) => {
+      audit({phase, reason, ...rejectionFields(method, url), ...extra});
+      return fail(reason, phase === 'limit-reached' ? 80 : 78);
+    };
     if (url.href !== endpoint.href)
       return reject('blocked-network', 'DSH_NETWORK', {origin: url.origin, path: url.pathname});
     if (active) return reject('limit-reached', 'DSH_REQUEST_IN_FLIGHT');
@@ -52,7 +73,7 @@ export function createEgress({backend, limits, wireTools, offline = true, phase 
       audit({phase: 'stream-end', seq: number, ok});
     };
     try {
-      if (backend.idle_check) await assertIdle(fetchImpl, backend.base_url, key, audit, limits.status_ms);
+      if (backend.idle_check) await assertIdle(fetchImpl, backend.base_url, key, audit, limits.status_ms, sourceCallers);
       audit({phase: 'provider-request-start', seq: number});
       const timeout = AbortSignal.timeout(limits.max_request_ms);
       const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
@@ -145,7 +166,11 @@ for (const [holder, name] of [[fs, 'writeFile'], [fs, 'writeFileSync'], [fsp, 'w
 const spawn = cp.spawn;
 const proxy = path.join(os.homedir(), '.agentstack/integrations/codex_app/plugin/scripts/run-mcp.sh');
 cp.spawn = function(command, args = [], options = {}) {
-  if (command !== proxy) { audit({phase: 'blocked-child-process'}); throw new Error('DSH_CHILD'); }
+  if (command !== proxy) {
+    audit({phase: 'blocked-child-process', reason: 'DSH_CHILD', ...rejectionFields('spawn', null,
+      typeof command === 'string' && path.isAbsolute(command) ? command : null)});
+    throw new Error('DSH_CHILD');
+  }
   const source = options.env ?? process.env;
   const names = ['PATH','HOME','LANG','LC_ALL','TERM','TMPDIR','USER','LOGNAME',
     'AGENTSTACK_PROXY_AGENT_NAME','AGENTSTACK_PROXY_TOKEN_FILE','AGENTSTACK_PROXY_PROGRAM',
@@ -156,7 +181,8 @@ cp.spawn = function(command, args = [], options = {}) {
   return spawn.call(this, command, args, {...options, env});
 };
 for (const name of ['exec','execFile','fork','spawnSync','execSync','execFileSync']) cp[name] = () => {
-  audit({phase: 'blocked-child-process'}); throw new Error('DSH_AUXILIARY');
+  audit({phase: 'blocked-child-process', reason: 'DSH_AUXILIARY', ...rejectionFields(name)});
+  throw new Error('DSH_AUXILIARY');
 };
 syncBuiltinESMExports();
 for (const event of ['uncaughtException','unhandledRejection']) process.prependListener(event, () => {

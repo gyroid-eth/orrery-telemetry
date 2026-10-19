@@ -280,7 +280,7 @@ def call_mail(state, action='probe'):
 
 def execute_run(state, *, assemble=False):
     state = Path(state).resolve()
-    if os.getloadavg()[0] >= 15:
+    if not assemble and os.getloadavg()[0] >= 15:
         raise ValueError('Load is at least 15; do not start a runtime')
     plan = plan_run(state, offline=assemble)
     if assemble:

@@ -1,5 +1,5 @@
 // Ordinary busy/timeouts can affect the shared live server. No polling or lease.
-export async function assertIdle(fetchImpl, baseURL, key, audit, timeoutMs = 5000) {
+export async function assertIdle(fetchImpl, baseURL, key, audit, timeoutMs = 5000, callers = () => []) {
   try {
     for (const endpoint of ['/v1/status', '/health']) {
       const url = new URL(endpoint, baseURL);
@@ -10,7 +10,9 @@ export async function assertIdle(fetchImpl, baseURL, key, audit, timeoutMs = 500
           headers: {Authorization: 'Bearer ' + key}, signal: AbortSignal.timeout(timeoutMs)});
       }
       if (response.status >= 300 && response.status < 400) {
-        audit({phase: 'blocked-redirect', from_origin: url.origin});
+        audit({phase: 'blocked-redirect', reason: 'DSH_REDIRECT', from_origin: url.origin,
+          method: 'GET', host: url.hostname, port: Number(url.port || (url.protocol === 'https:' ? 443 : 80)),
+          path: url.pathname, callers: callers()});
         throw new Error('STATUS_REDIRECT');
       }
       if (response.status === 404) continue;
