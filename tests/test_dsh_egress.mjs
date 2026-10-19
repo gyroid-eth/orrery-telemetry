@@ -7,6 +7,7 @@ import path from 'node:path';
 import cp from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const fixtureSpawn = cp.spawn.bind(cp);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-egress-fixture-'));
 const templateFile = path.join(project, 'integrations/dsh/backend.json');
 const config = JSON.parse(fs.readFileSync(templateFile));
@@ -168,6 +169,61 @@ test('proxy child receives only scrubbed env and auxiliary commands are blocked'
   assert.equal(spawned.options.env.AGENTSTACK_PROXY_AGENT_NAME, 'Fixture');
   assert.throws(() => cp.spawn('/usr/bin/curl', []), /DSH_CHILD/);
   assert.throws(() => cp.execFile('/usr/bin/false'), /DSH_AUXILIARY/);
+});
+
+test('product-generated proxy config reaches a real offline child with its identity and no provider key', async () => {
+  // No real proxy, identity, credential file or socket: only the generator is real.
+  const dir = fs.mkdtempSync(path.join(root, 'spawn-'));
+  const home = path.join(dir, 'home');
+  const proxy = path.join(home, '.agentstack/integrations/codex_app/plugin/scripts/run-mcp.sh');
+  fs.mkdirSync(path.dirname(proxy), {recursive: true});
+  fs.writeFileSync(proxy, '#!' + process.execPath + '\n' +
+    'console.log(JSON.stringify({names:Object.keys(process.env),agent:process.env.AGENTSTACK_PROXY_AGENT_NAME,' +
+    'program:process.env.AGENTSTACK_PROXY_PROGRAM,parent:process.env.AGENTSTACK_PROXY_PARENT_AGENT}));\n', {mode: 0o700});
+  const claudeFile = path.join(dir, 'empty.json'), configFile = path.join(dir, 'mcp.json');
+  fs.writeFileSync(claudeFile, '{"mcpServers":{},"projects":{}}');
+  const env = {PATH: '/usr/bin:/bin', HOME: home};
+  const run = (command, args, options) => new Promise((resolve, reject) => {
+    const child = fixtureSpawn(command, args, {...options, stdio: ['ignore', 'pipe', 'pipe']});
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('close', code => resolve({code, stdout, stderr}));
+  });
+  const generated = await run(process.env.ORRERY_DSH_TEST_PYTHON ?? '/usr/bin/python3', [
+    path.join(project, 'hooks/child_tools.py'), 'claude-config', '--spec', '{"base":"mail-only","tools":{}}',
+    '--cwd', dir, '--chrome', '0', '--claude-json', claudeFile, '--out', configFile,
+    '--runner', proxy, '--child', 'FixtureChild', '--project-key', dir,
+    '--token-file', path.join(dir, 'not-a-real-token'), '--mcp-url', 'http://127.0.0.1:1/mcp',
+    '--mail-env', path.join(dir, 'not-a-real-mail-env'), '--runtime-dir', dir,
+    '--bearer-mode', 'disabled', '--python-bin', '/usr/bin/python3', '--parent-agent', 'FixtureParent'
+  ], {env});
+  assert.equal(generated.code, 0, generated.stderr);
+  fs.writeFileSync(path.join(dir, 'attempt.json'), JSON.stringify({attempt_id: 'fixture-spawn', phase: 'run'}));
+  const entry = path.join(dir, 'fixture-entry.mjs');
+  fs.writeFileSync(entry, `import fs from 'node:fs'; import {spawn} from 'node:child_process';
+    const proxy=JSON.parse(fs.readFileSync(${JSON.stringify(configFile)},'utf8')).mcpServers['orrery-mail'];
+    const child=spawn(proxy.command,proxy.args,{env:{...process.env,...proxy.env},stdio:['ignore','pipe','inherit']});
+    child.stdout.pipe(process.stdout); child.on('exit',code=>process.exitCode=code);
+  `);
+  const executed = await run(process.execPath, ['--import', path.join(project, 'integrations/dsh/egress.mjs'), entry], {
+    env: {...env, ORRERY_DSH_STATE_ROOT: dir, ORRERY_DSH_AUDIT_FILE: path.join(dir, 'audit.jsonl'),
+      ORRERY_DSH_BACKEND_FILE: path.join(root, 'fixture-backends.json'),
+      ORRERY_DSH_BACKEND_ID: 'strata', ORRERY_DSH_ATTEMPT_ID: 'fixture-spawn', ORRERY_DSH_OFFLINE: '1',
+      DEEPSEEK_API_KEY: dummy, OTHER_SECRET: dummy}
+  });
+  assert.equal(executed.code, 0, executed.stderr);
+  const report = JSON.parse(executed.stdout);
+  assert.equal(report.agent, 'FixtureChild');
+  assert.equal(report.parent, 'FixtureParent');
+  assert.equal(report.program, 'claude-code'); // Preserve the product generator's value.
+  assert.ok(!report.names.includes('DEEPSEEK_API_KEY') && !report.names.includes('OTHER_SECRET'));
+  for (const key of Object.keys(JSON.parse(fs.readFileSync(configFile)).mcpServers['orrery-mail'].env))
+    assert.ok(report.names.includes(key), key);
+  const rows = fs.readFileSync(path.join(dir, 'audit.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(rows.filter(row => row.phase === 'mcp-child-env').length, 1);
+  assert.ok(!rows.some(row => ['provider-request-start','status-check'].includes(row.phase)));
 });
 
 test('native startup diagnostic is redacted before disk write', () => {

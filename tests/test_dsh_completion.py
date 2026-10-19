@@ -20,7 +20,8 @@ class CompletionTests(unittest.TestCase):
         (self.work / 'result.txt').write_text('fixture done\n')
         self.attempt = {'attempt_id': 'current', 'agent_name': 'FixtureChild', 'started_at_ns': 1, 'phase': 'run'}
         self.task = {'attempt_id': 'current', 'task_id': 'task-1', 'worktree': str(self.work),
-                     'expected': [{'path': 'result.txt', 'contains': 'done'}], 'report_to': 'FixtureParent'}
+                     'expected': [{'path': 'result.txt', 'contains': 'done'}], 'report_to': 'FixtureParent',
+                     'reservation_receipts': [{'id': 31}, {'id': 32}]}
         self.events = [self.event('turn-end', reason_kind='completed'),
                        self.event('mail-sent', ok=True, verified_sender=True,
                                   message_id=123, to=['FixtureParent'], **{'from': 'FixtureChild'})]
@@ -106,7 +107,58 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(result['retire'], 'unknown')
         receipt.update(reservations_released=True, retire='confirmed')
         (self.root / 'runtime-exit.json').write_text(json.dumps(receipt))
+        self.assertIsNone(completion.evaluate_runtime(self.root)['success'])
+        self.lifecycle_receipts()
         self.assertTrue(completion.evaluate_runtime(self.root)['success'])
+
+    def lifecycle_receipts(self, release_changes=None, retire_changes=None):
+        release = {'attempt_id': 'current', 'agent_name': 'FixtureChild', 'reservation_ids': [31, 32],
+                   'released_ids': [31, 32], 'confirmed': True, 'source': 'product-bound-proxy',
+                   'checked_at': '2026-01-01T00:00:00Z'}
+        retire = {'attempt_id': 'current', 'agent_name': 'FixtureChild', 'cleanup_exit_code': 0,
+                  'retired_at': '2026-01-01T00:00:00Z', 'confirmed': True,
+                  'source': 'parent-bound-whois', 'checked_at': '2026-01-01T00:00:01Z'}
+        release.update(release_changes or {})
+        retire.update(retire_changes or {})
+        for name, value in [('release-receipt.json', release), ('retire-receipt.json', retire)]:
+            (self.root / name).write_text(json.dumps(value))
+        (self.root / 'runtime-exit.json').write_text('{"group_absent":true}')
+
+    def test_runtime_ignores_other_attempt_agent_or_receipt_source(self):
+        for change in [{'attempt_id': 'old'}, {'agent_name': 'Other'}, {'source': 'offline-fixture'}]:
+            with self.subTest(change=change):
+                self.lifecycle_receipts(change, change)
+                result = completion.evaluate_runtime(self.root)
+                self.assertIsNone(result['success'])
+                self.assertIsNone(result['reservations_released'])
+                self.assertEqual(result['retire'], 'unknown')
+
+    def test_partial_release_cannot_report_runtime_success(self):
+        for change in [{'released_ids': [31]}, {'reservation_ids': [31], 'released_ids': [31]},
+                       {'confirmed': False, 'released_ids': []}]:
+            with self.subTest(change=change):
+                self.lifecycle_receipts(change)
+                self.assertFalse(completion.evaluate_runtime(self.root)['success'])
+
+    def test_unknown_release_response_stays_pending(self):
+        for change in [{'confirmed': None}, {'released_ids': None}, {'reservation_ids': []}]:
+            with self.subTest(change=change):
+                self.lifecycle_receipts(change)
+                self.assertIsNone(completion.evaluate_runtime(self.root)['success'])
+
+    def test_cleanup_exit_zero_without_whois_is_not_retirement(self):
+        for change in [{'retired_at': None}, {'confirmed': False}]:
+            with self.subTest(change=change):
+                self.lifecycle_receipts(retire_changes=change)
+                result = completion.evaluate_runtime(self.root)
+                self.assertIsNone(result['success'])
+                self.assertEqual(result['retire'], 'pending')
+
+    def test_spike_lifecycle_fixtures_cannot_be_live_runtime_success(self):
+        self.lifecycle_receipts()
+        self.attempt['phase'] = 'spike'
+        self.save()
+        self.assertIsNone(completion.evaluate_runtime(self.root)['success'])
 
 
 if __name__ == '__main__':

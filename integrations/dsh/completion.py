@@ -93,13 +93,37 @@ def evaluate_runtime(state_root):
     receipt = _read(root / 'runtime-exit.json')
     gone = receipt.get('group_absent') if receipt else None
     gone = gone if type(gone) is bool else None
-    released = receipt.get('reservations_released') if receipt else None
-    released = released if type(released) is bool else None
-    retire = receipt.get('retire') if receipt else None
-    retire = retire if retire in ('confirmed', 'pending', 'unknown') else 'unknown'
+    # Cleanup exit 0 is ordinary and does not prove remote release or retirement.
+    aid = attempt.get('attempt_id') if attempt else None
+    child = attempt.get('agent_name') if attempt else None
+
+    def scoped(name, source):
+        value = _read(root / name)
+        return value if (aid and child and attempt.get('phase') == 'run' and value
+                         and value.get('attempt_id') == aid and value.get('agent_name') == child
+                         and value.get('source') == source) else None
+
+    release = scoped('release-receipt.json', 'product-bound-proxy')
+    retired = scoped('retire-receipt.json', 'parent-bound-whois')
+    task = _read(root / 'task.json')
+    released = None
+    if release and type(release.get('confirmed')) is bool:
+        reservations = task.get('reservation_receipts') if task and task.get('attempt_id') == aid else None
+        expected = [row.get('id') for row in reservations if isinstance(row, dict)] if isinstance(reservations, list) else None
+        requested, actual = release.get('reservation_ids'), release.get('released_ids')
+        valid = lambda ids: isinstance(ids, list) and bool(ids) and all(type(n) is int and n > 0 for n in ids)
+        if not release['confirmed']:
+            released = False
+        elif all(valid(ids) for ids in (expected, requested, actual)):
+            released = set(expected) == set(requested) == set(actual)
+    retire = 'unknown'
+    if retired:
+        timestamp = retired.get('retired_at')
+        retire = 'confirmed' if (retired.get('confirmed') is True
+                                 and isinstance(timestamp, str) and timestamp.strip()) else 'pending'
     checks = {'owned_group_absent': gone, 'reservations_released': released,
               'retire_confirmed': True if retire == 'confirmed' else None}
-    return _result(checks, attempt_id=attempt.get('attempt_id') if attempt else None,
+    return _result(checks, attempt_id=aid,
                    group_absent=gone, reservations_released=released, retire=retire)
 
 
