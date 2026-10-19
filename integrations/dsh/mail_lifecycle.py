@@ -152,24 +152,25 @@ def capture_value(value):
 def record_mail(state, input_file):
     state = Path(state)
     attempt, task = read(state / 'attempt.json'), read(state / 'task.json')
-    if task['attempt_id'] != attempt['attempt_id']:
+    parent = read(state / 'run-config.json')['parent']
+    if task['attempt_id'] != attempt['attempt_id'] or task['report_to'] != parent:
         raise ValueError('Task attempt mismatch')
     value = capture_value(read(input_file))
     messages = value if isinstance(value, list) else [value]
     events = [json.loads(line) for line in (state / 'events.jsonl').read_text().splitlines()]
     receipts = [e for e in events if e.get('phase') == 'mail-sent' and
                 e.get('attempt_id') == attempt['attempt_id'] and e.get('task_id') == task['task_id'] and
-                e.get('from') == attempt['agent_name'] and e.get('to') == task['report_to'] and
+                e.get('from') == attempt['agent_name'] and e.get('to') == parent and
                 e.get('verified_sender') is True and e.get('ok') is True]
     matches = [m for m in messages if isinstance(m, dict) and type(m.get('id')) is int and m['id'] > 0 and
-               m.get('from') == attempt['agent_name'] and m.get('to') == [task['report_to']] and
+               m.get('from') == attempt['agent_name'] and m.get('kind') == 'to' and 'to' not in m and
                any(e.get('message_id') == m['id'] for e in receipts)]
     if len(matches) != 1:
         raise ValueError('Parent inbox result must match this attempt\'s actual child Mail receipt')
     message = matches[0]
     receipt = {'attempt_id': attempt['attempt_id'], 'task_id': task['task_id'],
                'agent_name': attempt['agent_name'], 'message_id': message['id'],
-               'from': message['from'], 'to': message['to'],
+               'from': message['from'], 'to': [parent],
                'source': 'parent-bound-fetch-inbox', 'checked_at': stamp()}
     save(state / 'parent-mail-receipt.json', receipt)
     return receipt

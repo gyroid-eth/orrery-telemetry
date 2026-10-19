@@ -124,13 +124,17 @@ class ProductLifecycle(unittest.TestCase):
                'from':'FixtureChild','to':'FixtureParent','verified_sender':True,'ok':True}
         (self.root/'events.jsonl').write_text(json.dumps(event)+'\n')
         capture=self.root/'inbox.json'
-        message={'id':42,'from':'FixtureChild','to':['FixtureParent'],'body_md':'Not copied into receipt'}
+        message={'id':42,'project_id':1,'sender_id':1,'thread_id':None,'topic':None,
+                 'subject':'fixture','importance':'high','ack_required':False,
+                 'created_ts':'2026-10-19T06:00:00Z','attachments':[],
+                 'body_md':'Not copied into receipt','from':'FixtureChild','kind':'to'}
         lifecycle.save(capture,{'result':[message]})
         with mock.patch.object(lifecycle.subprocess,'run',side_effect=AssertionError('No RPC')):
             receipt=lifecycle.record_mail(self.root,capture)
         self.assertEqual(receipt['message_id'],42)
         self.assertNotIn('body_md',receipt)
-        for wrong in ({**message,'id':43},{**message,'from':'Other'}, {**message,'to':['Other']}):
+        for wrong in ({**message,'id':43},{**message,'from':'Other'}, {**message,'kind':'cc'},
+                      {**message,'to':['FixtureParent']}):
             lifecycle.save(capture,{'result':[wrong]})
             with self.assertRaises(ValueError):
                 lifecycle.record_mail(self.root,capture)
