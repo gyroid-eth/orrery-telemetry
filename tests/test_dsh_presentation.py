@@ -20,6 +20,33 @@ from test_gemini_core_install_boundary import _function, _run_install_payload
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_existing_numeric_models_match_master_with_opt_in_off_and_on(tmp_path, monkeypatch):
+    # f698a61e の _provider_of を固定した対照。新規aliasのopt-inと既存分類を分ける。
+    def master_provider_of(raw):
+        canon = server._normalize_model(raw)
+        if not canon:
+            return ''
+        match = server._MN_FAMILY_RE.search(canon)
+        if not match:
+            low = canon.lower()
+            if 'claude' in low or 'anthropic' in low:
+                return 'anthropic'
+            if 'codex' in low or 'openai' in low:
+                return 'openai'
+            return ''
+        return server._MN_PROVIDER.get(match.group('family'), '')
+
+    monkeypatch.setattr(server, 'HERE', str(tmp_path))
+    models = ('deepseek-3.2', 'DeepSeek 3.2', 'deepseek_3_2',
+              'deepseek-v3', 'deepseek-v3.2', 'deepseek-r1',
+              'deepseek-ai/DeepSeek-V3', 'claude-sonnet-4-6', 'gpt-5.4', '', None)
+    assert master_provider_of('deepseek-3.2') == 'deepseek'
+    for enabled in (False, True):
+        (tmp_path / 'dsh-provider.json').write_text(json.dumps({'enabled': enabled}))
+        for model in models:
+            assert server._provider_of(model) == master_provider_of(model), (enabled, model)
+
+
 def _choice(installed, choice, dry_run=False):
     function = _function((ROOT / 'scripts/install.sh').read_text(), 'install_dsh_presentation')
     body = '\n'.join([

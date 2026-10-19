@@ -390,8 +390,7 @@ def _provider_of(raw: str | None) -> str:
         if "codex" in low or "openai" in low:
             return "openai"
         return ""
-    provider = _MN_PROVIDER.get(m.group("family"), "")
-    return "" if provider == "deepseek" and not _dsh_enabled() else provider
+    return _MN_PROVIDER.get(m.group("family"), "")
 
 
 # 1M ベータ枠の表記ゆれ: claude-opus-4-7[1m] / opus-4.7 1m / "(1M context)"
