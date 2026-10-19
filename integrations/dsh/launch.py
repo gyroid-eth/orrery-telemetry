@@ -148,8 +148,6 @@ def run_config(state):
 
 
 def init_run(config_file, state):
-    if os.getloadavg()[0] >= 15:
-        raise ValueError('Load is at least 15; postpone new runtime work')
     config = json.loads(Path(config_file).read_text())
     keys = {'node', 'runtime', 'worktree', 'backend_file', 'backend_id', 'patch_receipt',
             'home', 'product_root', 'project_key', 'proxy_python', 'parent', 'connection', 'task'}
@@ -282,8 +280,6 @@ def call_mail(state, action='probe'):
 
 def execute_run(state, *, assemble=False):
     state = Path(state).resolve()
-    if not assemble and os.getloadavg()[0] >= 15:
-        raise ValueError('Load is at least 15; do not start a runtime')
     plan = plan_run(state, offline=assemble)
     if assemble:
         plan['env']['DEEPSEEK_API_KEY'] = 'offline-dummy'

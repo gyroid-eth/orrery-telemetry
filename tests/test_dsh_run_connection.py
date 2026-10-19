@@ -294,7 +294,6 @@ for line in sys.stdin:
         import preflight
         # Synthetic/offline controls must reach their intended seam even when
         # the machine is busy. The production launch load gate stays intact.
-        self.enterContext(mock.patch.object(launch.os, 'getloadavg', return_value=(0.0, 0.0, 0.0)))
         state = self.root / 'attempt'
         with mock.patch.dict(os.environ,{'HOME':str(home)}):
             launch.init_run(config_file,state)
