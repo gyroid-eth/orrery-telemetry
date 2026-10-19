@@ -21,10 +21,35 @@ import mail_lifecycle as lifecycle
 
 HERE = Path(__file__).resolve().parent
 read, save = lifecycle.read, lifecycle.save
+MAIL_TOOLSETS = ('orrery_mail', 'memory', 'skills', 'session_search')
 
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def committed_python(config):
+    """Read the selected generation without importing Hermes or running repair."""
+    source = Path(config['hermes_source']).resolve()
+    key = hashlib.sha256(str(source).encode()).hexdigest()[:16]
+    install = Path(config['managed_root']).resolve() / 'installs' / key
+    environment = Path(read(install / 'facts.json')['packages']['venv']['environment']).resolve()
+    python = environment / 'bin' / 'python'
+    if (not environment.is_relative_to((install / 'environments').resolve())
+            or not (environment / 'pyvenv.cfg').is_file() or not os.access(python, os.X_OK)):
+        raise ValueError('No usable committed dependency interpreter in the managed root')
+    return str(python)
+
+
+def pilot_toolsets(profile_config, requested=MAIL_TOOLSETS):
+    """Oneshot accepts configured MCP server names before discovery, not mcp-* names."""
+    servers = profile_config.get('mcp_servers', {})
+    server = servers.get('orrery_mail', {})
+    allowed = {'memory', 'skills', 'session_search'} | set(servers)
+    if (not server or server.get('enabled') is False or 'orrery_mail' not in requested
+            or any(name not in allowed for name in requested)):
+        raise ValueError('Invalid or disabled Mail pilot toolset selection')
+    return list(requested)
 
 
 def base_env(config):
@@ -73,6 +98,7 @@ def initialize(config_path, state, profile_name, run=subprocess.run):
     home = Path(config['home']).resolve()
     if root == home or root.is_relative_to(home / '.hermes'):
         raise ValueError('Managed root must be separate from the live Hermes home')
+    config['hermes_python'] = committed_python(config)
     profile = root / 'profiles' / profile_name
     Path(config['worktree']).mkdir(parents=True, exist_ok=True)
     state.mkdir(mode=0o700, parents=True)
@@ -134,6 +160,7 @@ def configure(state, run=subprocess.run):
     plan = read(state / 'profile-plan.json')['profile_config']
     check_profile_paths(profile, plan)
     plan['mcp_servers'] = {'orrery_mail': {**proxy, 'tools': {'include': ['send_message']}}}
+    pilot_toolsets(plan)
     # No other profile's .env, auth.json, memories or skill content is copied.
     save(profile / 'config.yaml', plan)
     plugin = profile / 'plugins' / 'orrery-mail-receipt'
@@ -166,6 +193,8 @@ def check_configured(state):
     if profile.resolve() != Path(config['managed_root']).resolve() / 'profiles' / config['profile_name']:
         raise ValueError('Profile escaped the managed root')
     check_profile_paths(profile, read(profile / 'config.yaml'))
+    pilot_toolsets(read(profile / 'config.yaml'))
+    config['hermes_python'] = committed_python(config)
     return config, identity
 
 

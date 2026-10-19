@@ -55,6 +55,11 @@ and compares remote `whois.program` with `hermes`. Local proxy `PROGRAM` remains
 the generated value. Its official-SDK preflight distinguishes schema listing
 from backend authentication. The owned tmux pane selects an explicit profile
 and receives one fixed initial Mail task; no task text is evaluated by a shell.
+Oneshot tool selection uses the configured server name `orrery_mail`; the
+`mcp-orrery_mail` registry name is not valid before MCP discovery. The adapter
+checks the selection before start and resolves its dependency interpreter from
+the managed root's current `facts.json`, so an explicit package install can
+select a new generation without retaining the previous interpreter path.
 Main and every auxiliary task use the selected named provider with empty
 fallback chains. Memories, skills, review and curator remain enabled.
 

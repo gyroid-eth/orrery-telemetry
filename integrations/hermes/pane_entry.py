@@ -9,7 +9,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mail_lifecycle import read, save, stamp
-from runner import base_env, check_configured
+from runner import base_env, check_configured, pilot_toolsets
 
 
 def group_absent(pgid):
@@ -48,9 +48,10 @@ def execute(state):
     # The selected profile's key_cmd is resolved by Hermes in this owned pane.
     # No inherited API key, token value, shell config, or another profile's .env.
     command = [config['hermes_executable'], '-p', config['profile_name'], '-z', (state / 'task.md').read_text(),
-               '--provider', config['provider'], '-m', config['model'], '-t', 'mcp-orrery_mail,memory,skills,session_search']
+               '--provider', config['provider'], '-m', config['model'], '-t',
+               ','.join(pilot_toolsets(read(profile / 'config.yaml')))]
     save(state / 'pane-entry.json', {'supervisor_pid': os.getpid(), 'agent_name': identity['agent_name'],
-         'profile_home': str(profile), 'at': stamp()}, exclusive=True)
+         'profile_home': str(profile), 'hermes_python': config['hermes_python'], 'at': stamp()}, exclusive=True)
     child = None
     stopping = []
 

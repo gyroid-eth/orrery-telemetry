@@ -1,5 +1,6 @@
 """Mail pilot adapter tests; no real registration, Keychain, provider or Mail."""
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -85,11 +86,22 @@ class PilotFixture(unittest.TestCase):
                 'mcp_url': 'http://127.0.0.1:1/mcp', 'mail_env': str(self.root / 'mail.env'), 'bearer_mode': 'off'},
             'profiles': {'strata': profile, 'deepseek': profile}}
         self.config_path = self.root / 'input.json'
+        key = hashlib.sha256(str(Path(self.config['hermes_source']).resolve()).encode()).hexdigest()[:16]
+        self.install = Path(self.config['managed_root']) / 'installs' / key
+        self.add_generation('fixture-first')
         runner.save(self.config_path, self.config)
         runner.initialize(self.config_path, self.state, 'strata', self.product.run)
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def add_generation(self, name):
+        environment = self.install / 'environments' / name / 'venv'
+        (environment / 'bin').mkdir(parents=True)
+        (environment / 'pyvenv.cfg').write_text('# offline fixture\n')
+        (environment / 'bin' / 'python').symlink_to(sys.executable)
+        runner.save(self.install / 'facts.json', {'packages': {'venv': {'environment': str(environment)}}})
+        return str(environment / 'bin' / 'python')
 
     def bind(self):
         name = mail_lifecycle.register(self.state, self.product.run, generate_config=False)
@@ -157,6 +169,21 @@ class PilotFixture(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'current profile'):
             runner.check_profile_paths(profile, plan)
 
+    def test_configured_mcp_alias_and_current_committed_interpreter(self):
+        self.bind()
+        config = runner.read(self.state / 'run-config.json')
+        profile = runner.read(Path(config['profile_home']) / 'config.yaml')
+        self.assertEqual(runner.pilot_toolsets(profile), ['orrery_mail', 'memory', 'skills', 'session_search'])
+        with self.assertRaisesRegex(ValueError, 'toolset selection'):
+            runner.pilot_toolsets(profile, ['mcp-orrery_mail', 'memory'])
+        selected = self.add_generation('fixture-next')
+        self.assertEqual(runner.check_configured(self.state)[0]['hermes_python'], selected)
+        facts = runner.read(self.install / 'facts.json')
+        facts['packages']['venv']['environment'] = str(self.root / 'outside')
+        runner.save(self.install / 'facts.json', facts)
+        with self.assertRaisesRegex(ValueError, 'committed dependency'):
+            runner.check_configured(self.state)
+
     def test_owned_supervisor_with_fake_executable_and_clean_environment(self):
         self.bind()
         config = runner.read(self.state / 'run-config.json')
@@ -178,6 +205,8 @@ class PilotFixture(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         output = json.loads((self.state / 'stdout.log').read_text())
         self.assertEqual(output['args'][:2], ['-p', 'strata'])
+        self.assertEqual(output['args'][output['args'].index('-t') + 1],
+                         'orrery_mail,memory,skills,session_search')
         self.assertEqual(output['home'], config['managed_root'])
         self.assertIn((self.state / 'task.md').read_text(), output['args'])
         self.assertTrue(runner.stop(self.state, self.product.run)['group_absent'])
@@ -321,11 +350,23 @@ from hermes_cli import plugins
 plugins.discover_plugins()
 loaded=plugins.get_plugin_manager()._plugins['orrery-mail-receipt']
 assert loaded.enabled and loaded.error is None
+import contextlib,io
+from hermes_cli.oneshot import _validate_explicit_toolsets
+from runner import MAIL_TOOLSETS
+captured=io.StringIO()
+with contextlib.redirect_stderr(captured):
+    selected,error=_validate_explicit_toolsets(','.join(MAIL_TOOLSETS))
+assert error is None and set(selected)==set(MAIL_TOOLSETS),(selected,error,captured.getvalue())
+assert captured.getvalue()=='',captured.getvalue()
 from hermes_cli.mcp_startup import ensure_mcp_discovery_before_agent_build
 from tools.mcp_tool_lifecycle import shutdown_mcp_servers
 try:
     ensure_mcp_discovery_before_agent_build(logger=logging.getLogger('offline-mail-fixture'),single_query=True)
     import model_tools
+    definitions=model_tools.get_tool_definitions(enabled_toolsets=selected,quiet_mode=True,
+                                                 skip_tool_search_assembly=True)
+    names={item['function']['name'] for item in definitions}
+    assert 'mcp__orrery_mail__send_message' in names,names
     state=Path(sys.argv[3])
     message=json.loads((state/'message.json').read_text())
     result=model_tools.handle_function_call('mcp__orrery_mail__send_message',message,task_id='offline-mail')
