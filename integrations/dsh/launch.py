@@ -20,6 +20,50 @@ def write_json(file, value):
     file.write_text(json.dumps(value, indent=2) + '\n')
 
 
+def group_absent(pgid):
+    try:
+        os.killpg(pgid, 0)
+        return False
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return None
+
+
+def stop_owned_group(child, grace=5):
+    try:
+        os.killpg(child.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        child.poll()
+        return group_absent(child.pid)
+    except PermissionError:
+        return None
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        child.poll()
+        observed = group_absent(child.pid)
+        if observed is True or (observed is None and child.returncode is not None):
+            return observed
+        time.sleep(0.05)
+    # A still-live owned leader may be killed even when signal-0 observation
+    # is unavailable. That never turns an unknown group into a confirmed one.
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        return None
+    try:
+        child.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        return None
+    return group_absent(child.pid)
+
+
+class StopRequested(Exception):
+    pass
+
+
 def prepare(args):
     state = Path(args.state).resolve()
     if state.exists():
@@ -110,36 +154,26 @@ def main():
     child = subprocess.Popen(plan['argv'], cwd=plan['cwd'], env=plan['env'], start_new_session=True)
     write_json(state / 'runtime-process.json', {'pid': child.pid, 'pgid': child.pid,
                'attempt_id': plan['env']['ORRERY_DSH_ATTEMPT_ID']})
+    def stop(*_):
+        raise StopRequested()
+    originals = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGHUP)}
     stopped_by = 'failure'
     try:
         child.wait(timeout=args.seconds)
-    except (subprocess.TimeoutExpired, KeyboardInterrupt):
+    except subprocess.TimeoutExpired:
         stopped_by = 'limit'
+    except (KeyboardInterrupt, StopRequested):
+        stopped_by = 'parent'
     finally:
-        def group_absent():
-            try:
-                os.killpg(child.pid, 0)
-                return False
-            except ProcessLookupError:
-                return True
-            except PermissionError:
-                return None
-        try:
-            os.killpg(child.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        deadline = time.monotonic() + 5
-        while group_absent() is False and time.monotonic() < deadline:
-            child.poll()
-            time.sleep(0.1)
-        if group_absent() is False:
-            os.killpg(child.pid, signal.SIGKILL)
-        child.wait(timeout=5)
-        absent = group_absent()
+        for sig in (*originals, signal.SIGINT):
+            signal.signal(sig, signal.SIG_IGN)
+        absent = stop_owned_group(child)
         write_json(state / 'runtime-exit.json', {'exit_code': child.returncode,
-                   'signal': -child.returncode if child.returncode < 0 else None,
+                   'signal': -child.returncode if child.returncode is not None and child.returncode < 0 else None,
                    'group_absent': absent is True,
                    'group_check': 'unknown' if absent is None else 'observed', 'stopped_by': stopped_by})
+        for sig, handler in originals.items():
+            signal.signal(sig, handler)
     mounted = state / 'ui-mounted.json'
     events = [json.loads(line) for line in (state / 'events.jsonl').read_text().splitlines()] if (state / 'events.jsonl').is_file() else []
     audit = [json.loads(line) for line in (state / 'audit.jsonl').read_text().splitlines()]

@@ -89,6 +89,14 @@ export function mailReceipt(value) {
     ok: receipt.verified_sender === true && Number.isSafeInteger(delivery.id)};
 }
 
+export function installSessionEvents(ctx, emit, currentSession) {
+  return ctx.on('session/event', (session, event) => {
+    if (session.id !== currentSession()) return;
+    if (event.type === 'turn/start') emit({phase: 'task-start', turn: event.data.turn});
+    if (event.type === 'turn/end') emit({phase: 'turn-end', reason_kind: event.data.reason.kind, turn: event.data.turn});
+  });
+}
+
 export function apply(ctx) {
   const state = process.env.ORRERY_DSH_STATE_ROOT;
   if (!state || !path.isAbsolute(state)) throw new Error('DSH_STATE_ROOT_REQUIRED');
@@ -120,7 +128,9 @@ export function apply(ctx) {
     }
     emit({phase: 'plugin-ready', tools: names, retry_count: 0});
   };
+  let sessionId;
   ctx.on('agent/created', async ({agent}) => {
+    sessionId ??= agent.session.id;
     agent.ctx.tools.restrict({allow: [...policy.allowed]});
     verify(agent);
     if (attempt.phase === 'spike' && task.spike_probe === true) {
@@ -160,12 +170,6 @@ export function apply(ctx) {
       if (receipt) emit({phase: 'mail-sent', ...receipt});
     }
   });
-  let sessionId;
-  ctx.on('session/created', session => { sessionId ??= session.id; });
-  ctx.on('session/event', (session, event) => {
-    if (session.id !== sessionId) return;
-    if (event.type === 'turn/start') emit({phase: 'task-start', turn: event.turn});
-    if (event.type === 'turn/end') emit({phase: 'turn-end', reason_kind: event.reason.kind, turn: event.turn});
-  });
+  installSessionEvents(ctx, emit, () => sessionId);
   ctx.on('dispose', () => policy.stop());
 }

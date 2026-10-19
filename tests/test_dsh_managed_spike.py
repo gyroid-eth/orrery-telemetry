@@ -4,13 +4,46 @@ Set ORRERY_DSH_TEST_NODE and ORRERY_DSH_TEST_RUNTIME to the isolated pinned
 installation. This does not mount a TUI, register an identity, or call a provider.
 """
 import os
+import importlib.util
 from pathlib import Path
+import signal
 import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 class ManagedRegistrySpike(unittest.TestCase):
+    def test_ignored_term_is_killed_without_claiming_unknown_group_is_gone(self):
+        integration = Path(__file__).resolve().parents[1] / 'integrations/dsh'
+        sys.path.insert(0, str(integration))
+        try:
+            spec = importlib.util.spec_from_file_location('dsh_spike_launch', integration / 'launch.py')
+            launch = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(launch)
+        finally:
+            sys.path.pop(0)
+        child = subprocess.Popen([sys.executable, '-I', '-c',
+            'import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print("ready",flush=True); time.sleep(60)'],
+            env={'PATH': os.defpath}, stdout=subprocess.PIPE, text=True, start_new_session=True)
+        original = os.killpg
+        def no_observation(pgid, sig):
+            if sig == 0:
+                raise PermissionError('fixture: observation unavailable')
+            return original(pgid, sig)
+        try:
+            self.assertEqual(child.stdout.readline().strip(), 'ready')
+            with mock.patch.object(launch.os, 'killpg', side_effect=no_observation):
+                result = launch.stop_owned_group(child, grace=0.15)
+            self.assertIsNone(result)
+            self.assertEqual(child.returncode, -signal.SIGKILL)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=5)
+            child.stdout.close()
+
     def test_patched_tui_controls(self):
         node = os.environ.get('ORRERY_DSH_TEST_NODE')
         runtime = os.environ.get('ORRERY_DSH_TEST_RUNTIME')
