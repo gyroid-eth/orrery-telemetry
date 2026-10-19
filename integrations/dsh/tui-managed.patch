@@ -1,0 +1,90 @@
+{
+  "version": "0.16.1",
+  "replacements": [
+    {
+      "file": "lib/types/utils/paths.js",
+      "old": "export const DATA_DIR = join(homeDir(), '.dsh-tui');",
+      "new": "export const DATA_DIR = process.env.ORRERY_DSH_TUI_DATA_ROOT;\nif (!DATA_DIR) throw new Error('DSH_TUI_DATA_ROOT_REQUIRED');"
+    },
+    {
+      "file": "lib/types/dsh-adapter/tui-settings.js",
+      "old": "function loadTuiSettings(input) {",
+      "new": "function loadTuiSettings(input) {\n    return {version: 1, values: {}, imported: {from: 'none', at: Date.now()}}; // ORRERY managed mode: unsupported"
+    },
+    {
+      "file": "lib/types/utils/credentials.js",
+      "old": "export function credentialStoreFiles(home = dshHomeDir()) {",
+      "new": "export function credentialStoreFiles(home = dshHomeDir()) {\n    return []; // ORRERY managed mode: unsupported"
+    },
+    {
+      "file": "lib/types/update.js",
+      "old": "export async function checkForTuiUpdate() {",
+      "new": "export async function checkForTuiUpdate() {\n    return undefined; // ORRERY managed mode: unsupported"
+    },
+    {
+      "file": "lib/types/deepseekBalance.js",
+      "old": "export async function fetchBalance(apiKey, options = {}) {",
+      "new": "export async function fetchBalance(apiKey, options = {}) {\n    return {ok: false, reason: 'unsupported'}; // ORRERY managed mode: unsupported"
+    },
+    {
+      "file": "lib/types/dsh-adapter/ide-channel.js",
+      "old": "    async start(env = process.env, lockDir = ideLockDir(), cwd = process.cwd()) {",
+      "new": "    async start(env = process.env, lockDir = ideLockDir(), cwd = process.cwd()) {\n    return undefined; // ORRERY managed mode: unsupported"
+    },
+    {
+      "file": "lib/types/dsh-adapter/inject-channel.js",
+      "old": "export function openInjectChannel(sessionId, cwd, handlers, onError) {",
+      "new": "export function openInjectChannel(sessionId, cwd, handlers, onError) {\n    return {close() {}}; // ORRERY managed mode: unsupported"
+    },
+    {
+      "file": "lib/types/dsh-adapter/channel/reports.js",
+      "old": "    const initWorkspace = () => {",
+      "new": "    const initWorkspace = () => {\n    return 'unsupported'; // ORRERY managed mode: unsupported"
+    },
+    {
+      "file": "lib/types/dsh-adapter/channel/reports.js",
+      "old": "    const exportSession = () => {",
+      "new": "    const exportSession = () => {\n    return null; // ORRERY managed mode: unsupported"
+    },
+    {
+      "file": "lib/types/dsh-adapter/channel/core/reports.js",
+      "old": "    const exportSession = () => {",
+      "new": "    const exportSession = () => {\n    return null; // ORRERY managed mode: unsupported"
+    },
+    {
+      "file": "lib/types/dsh-adapter/sideQuestion.js",
+      "old": "export async function runSideQuestion(params) {",
+      "new": "export async function runSideQuestion(params) {\n    return {answer: null, error: 'unsupported'}; // ORRERY managed mode: unsupported"
+    },
+    {
+      "file": "lib/types/dsh-adapter/channel/session-metadata.js",
+      "old": "    const recapRecent = async (options) => {",
+      "new": "    const recapRecent = async (options) => {\n    return {summary: null, error: 'unsupported'}; // ORRERY managed mode: unsupported"
+    },
+    {
+      "file": "lib/types/screens/Chat.js",
+      "old": "    const runCommand = (name, rawInput = '', images = []) => {",
+      "new": "    const runCommand = (name, rawInput = '', images = []) => {\n        if (!['help', 'exit', 'quit'].includes(name)) { channel.notify('Unavailable in managed mode', {color: 'warning'}); return true; }"
+    },
+    {
+      "file": "lib/types/dsh-adapter/plugin.js",
+      "old": "    markBoot('render-done');",
+      "new": "    markBoot('render-done');\n    process.getBuiltinModule('node:fs').writeFileSync(process.env.ORRERY_DSH_STATE_ROOT + '/ui-mounted.json', JSON.stringify({mounted: true, tty: process.stdout.isTTY === true, attempt_id: process.env.ORRERY_DSH_ATTEMPT_ID}));"
+    },
+    {
+      "file": "lib/types/dsh-adapter/plugin.js",
+      "old": "    const onboardingOnBoot = dshBoot && noResume && shouldOfferOnboarding();",
+      "new": "    const onboardingOnBoot = false; // managed mode: no account/connectivity wizard"
+    },
+    {
+      "file": "lib/types/dsh-adapter/plugin.js",
+      "old": "    const openHomeOnBoot = dshBoot && !homeSeen && noResume && requestedWorkspace === undefined;",
+      "new": "    const openHomeOnBoot = false; // managed mode: explicit worktree"
+    },
+    {
+      "file": "lib/types/dsh-adapter/channel/core/host.js",
+      "old": "export function createGitBranchRefresher(ctx, deps) {",
+      "new": "export function createGitBranchRefresher(ctx, deps) {\n    return () => {}; // managed mode: no helper shell"
+    }
+  ]
+}
