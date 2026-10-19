@@ -76,3 +76,6 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [指示 block の移行](instruction-migration.md) — 利用者単位への移行と復旧。
 
 - [専用 tmux 起動・終了の受け入れ計画](r2-tb-lifecycle-plan-v3.md) — R2-Tb の確定 caller 表・schema・中断点と fixture。
+
+- [管理された子の要求・状態と lifecycle](managed-spawn-contract.md)
+- [dsh stage A-min](dsh-stage-a-min.md)

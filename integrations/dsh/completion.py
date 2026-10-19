@@ -79,11 +79,22 @@ def evaluate_task(state_root):
         receipts = [row for row in scoped if row.get('phase') == 'mail-sent']
         parent, child = task.get('report_to'), attempt.get('agent_name')
         if receipts and parent and child and attempt['phase'] == 'run':
-            checks['mail_receipt'] = any(
+            matching = [row for row in receipts if (
                 row.get('ok') is True and row.get('verified_sender') is True
                 and row.get('from') == child and row.get('to') in (parent, [parent])
                 and type(row.get('message_id')) is int and row['message_id'] > 0
-                for row in receipts)
+                )]
+            checks['mail_receipt'] = bool(matching)
+            # A supplied canonical parent capture is stronger evidence: never
+            # ignore a mismatch merely because the server accepted a send.
+            if (root / 'parent-mail-receipt.json').exists():
+                received = _read(root / 'parent-mail-receipt.json')
+                checks['mail_receipt'] = checks['mail_receipt'] and bool(received) and (
+                    received.get('source') == 'parent-bound-fetch-inbox'
+                    and received.get('attempt_id') == aid and received.get('task_id') == tid
+                    and received.get('agent_name') == child and received.get('from') == child
+                    and received.get('to') == [parent]
+                    and any(row.get('message_id') == received.get('message_id') for row in matching))
     return _result(checks, **metadata)
 
 

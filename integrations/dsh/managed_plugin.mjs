@@ -75,6 +75,7 @@ export function createReservationGuard({attempt, task, emit, now = Date.now}) {
 }
 
 export function mailReceipt(value) {
+  if (value?.isError === true) return null;
   let receipt = value?.structuredContent;
   if (!receipt) {
     for (const block of value?.content ?? []) {
@@ -108,7 +109,7 @@ export function apply(ctx) {
   if (attempt.phase === 'run' && task.reservation_source === 'offline-fixture')
     throw new Error('DSH_FIXTURE_RECEIPT_IN_RUN');
   const emit = event => fs.appendFileSync(path.join(state, 'events.jsonl'), JSON.stringify({
-    ...event, attempt_id: attempt.attempt_id, task_id: task.task_id, at: new Date().toISOString(),
+    ...event, process_id: process.pid, attempt_id: attempt.attempt_id, task_id: task.task_id, at: new Date().toISOString(),
   }) + '\n');
   const policy = createReservationGuard({attempt, task, emit});
   ctx.tools.guard(policy.guard);

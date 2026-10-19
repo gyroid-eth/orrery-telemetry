@@ -41,6 +41,19 @@ class CompletionTests(unittest.TestCase):
         self.save()
         return completion.evaluate_task(self.root)
 
+    def test_optional_parent_capture_must_match_the_verified_send(self):
+        receipt = {'source': 'parent-bound-fetch-inbox', 'attempt_id': 'current',
+                   'task_id': 'task-1', 'agent_name': 'FixtureChild', 'from': 'FixtureChild',
+                   'to': ['FixtureParent'], 'message_id': 123}
+        path = self.root / 'parent-mail-receipt.json'
+        path.write_text(json.dumps(receipt))
+        self.assertTrue(self.result()['success'])
+        receipt['message_id'] = 999
+        path.write_text(json.dumps(receipt))
+        self.events.append(self.event('mail-sent', ok=False, verified_sender=False,
+                                     message_id=999, to=['FixtureParent'], **{'from': 'FixtureChild'}))
+        self.assertFalse(self.result()['success'])
+
     def test_task_succeeds_while_runtime_has_not_exited(self):
         self.assertTrue(self.result()['success'])
         self.assertIsNone(completion.evaluate_runtime(self.root)['success'])

@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 19
+API_GENERATION = 20
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -6785,6 +6785,10 @@ def do_kill(session: str, mode: str = "both") -> dict:
       - hard_delete は使わない (ORRERY Mail timestamp 情報を保持し
         _transcript_path() の finished-branch 探索を温存)
     """
+    managed_stop = _managed_spawn_manager().stop(session)
+    if managed_stop is not None:
+        return managed_stop
+
     if mode not in ("both", "tmux", "retire"):
         return {"ok": False, "error": "invalid mode"}
     if not _valid(session):
@@ -7136,6 +7140,27 @@ def _spawn_scientist_statuses(
     return dict(statuses)
 
 
+def _managed_spawn_module():
+    # The managed path is dormant unless the operator configures its manifest.
+    try:
+        from dashboard import managed_spawn
+    except ModuleNotFoundError:
+        import managed_spawn
+    return managed_spawn
+
+
+def _managed_spawn_manager():
+    return _managed_spawn_module().Manager(
+        os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"),
+        selected_mode="global" if GLOBAL_MODE else "legacy")
+
+
+def _managed_catalog_providers():
+    return _managed_spawn_module().catalog(
+        os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"),
+        selected_mode="global" if GLOBAL_MODE else "legacy")
+
+
 def spawn_names_payload() -> dict:
     """Picker data; scientist vocabulary is emitted by the launcher source."""
     if sys.platform == "win32":
@@ -7181,7 +7206,7 @@ def spawn_names_payload() -> dict:
              "model_source": claude_catalog.source, "model_error": claude_catalog.error,
              "overflow_models": [m for m in claude_catalog.overflow if m != claude_default]},
             codex_models.provider_catalog(),
-        ],
+        ] + _managed_catalog_providers(),
     }
 
 
@@ -7690,8 +7715,12 @@ def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
         "parent", "standalone", "task", "role", "group", "worktree",
         "worktree_base", "name", "dir", "provider", "model", "effort",
         "claude_chrome", "claude_chrome_device", "async", "dry_run", "headless", "emoji",
-        "base", "tools",
+        "base", "tools", "harness", "helper_model",
     }
+    if "harness" in payload:
+        native_harness = {"claude": "claudecode", "codex": "codex", "gemini": "gemini"}.get(payload.get("provider", "claude"))
+        if payload["harness"] != native_harness or payload.get("helper_model", "same") != "same":
+            return None, {"ok": False, "error": "unsupported harness or helper"}
     if str(payload.get("provider") or "").strip().lower() == "gemini":
         allowed.add("resources")
     unknown = sorted(set(payload) - allowed)
@@ -7797,6 +7826,17 @@ def do_spawn(payload: dict) -> dict:
               provider?, model?, effort?, claude_chrome?, claude_chrome_device?,
               base?, tools?}.
     """
+    managed_module = _managed_spawn_module()
+    if managed_module.managed(payload):
+        return _managed_spawn_manager().submit(payload)
+    if isinstance(payload, dict) and "harness" in payload:
+        # Native UI metadata must not become arbitrary launcher flags.
+        native = {"claude": "claudecode", "codex": "codex", "gemini": "gemini"}
+        if payload["harness"] not in (native.get(payload.get("provider", "claude")),):
+            return {"ok": False, "error": "unsupported harness", "error_code": "unsupported_harness"}
+        if payload.get("helper_model", "same") != "same":
+            return {"ok": False, "error": "unsupported helper model"}
+        payload = {k: v for k, v in payload.items() if k not in ("harness", "helper_model")}
     unavailable = _spawn_unavailable_error()
     if unavailable:
         return unavailable
@@ -9062,7 +9102,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/spawn-status":
             q = parse_qs(urlparse(self.path).query)
             name = (q.get("name") or [""])[0]
-            status = spawn_launch_status(name) if name else spawn_launch_statuses()
+            attempt_id = (q.get("attempt_id") or [""])[0]
+            status = (_managed_spawn_manager().lookup(attempt_id) if attempt_id
+                      else spawn_launch_status(name) if name else spawn_launch_statuses())
             self._send(
                 200 if status.get("ok") else 404,
                 json.dumps(status, ensure_ascii=False).encode(),
@@ -9370,7 +9412,8 @@ class Handler(BaseHTTPRequestHandler):
             mode = body.get("mode", "both")
             result = do_kill(session, mode)
         self._send(
-            200 if result.get("ok") else 400,
+            (202 if path == "/api/spawn" and result.get("managed") and result.get("ok")
+             else 200 if result.get("ok") else 409 if result.get("error_code") in ("profile_busy", "attempt_conflict") else 400),
             json.dumps(result, ensure_ascii=False).encode(),
             "application/json; charset=utf-8",
         )

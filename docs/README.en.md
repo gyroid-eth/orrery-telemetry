@@ -76,3 +76,6 @@ Documents without a translation are labelled with their original language. Image
 - [Instruction block migration](instruction-migration.en.md) — User scope, recovery and backup retention.
 
 - [Dedicated tmux launch and termination acceptance plan (Japanese)](r2-tb-lifecycle-plan-v3.md) — Approved R2-Tb callers, schemas, interruption points and fixtures.
+
+- [Managed child requests, status, and lifecycle](managed-spawn-contract.md)
+- [dsh stage A-min](dsh-stage-a-min.md)
