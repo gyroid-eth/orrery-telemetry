@@ -184,6 +184,11 @@ the final diagnostic scan and must not trigger an early stop.
 HTTP attempt IDs remain controller-owned; `runtime_attempt_id` is the runner ID.
 
 Profiles stay fixed by child kind to preserve private memory, skills and curator.
+An installer-owned generation may use its `profiles` symlink only when its
+complete Hermes receipt binds the selected root/source/executable and the link
+targets that harness's persistent sibling `profiles` directory. Manual/live homes,
+other targets and a symlink for an individual profile are rejected before reading
+profile content. Normal private homes without a profiles symlink still work.
 The controller must reject a concurrent request for the same Hermes profile
 before registration with `profile_busy`; it does not queue or create an attempt
 profile. Cross-profile reads and external skill directories remain confined by
@@ -208,6 +213,21 @@ be retired without fabricating a runtime exit. `clean` requires successful
 runtime cleanup and a current zero-match, zero-error credential scan, then removes
 attempt handoff files. It preserves state evidence, requested artifacts and the
 persistent profile's memory and skills. Unknown cleanup retains state.
+
+A pre-launch failure with a same-attempt parent-confirmed `not-started` retirement,
+an empty reservation list and no launch, credential-read or reservation-intent
+records closes as `runtime_conclusion: not-started-retired`. Group absence and
+release fields remain null because neither resource existed. Clean can then
+remove its handoffs without a diagnostic/key read; task failure stays failure.
+An ambiguous launch or reservation attempt remains pending.
+
+After deploying this version, an operator can close an existing such failed job
+with `python3 -B dashboard/managed_spawn.py --job JOB --finish-unstarted`. It rechecks saved
+proof, invokes only complete-runtime/clean and marks successful cleanup
+`cleaned_after_failure`; it never registers, starts or sends Mail. Normal worker
+failures use the same proof automatically. Failed CLI steps provide fixed reason
+codes; `worker.log` and `worker-failure.json` retain stage/code without exception
+contents, paths, command arguments or request bodies.
 
 ## One-command offline check
 

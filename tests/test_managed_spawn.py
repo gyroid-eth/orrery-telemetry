@@ -279,6 +279,41 @@ class WorkerExitTests(unittest.TestCase):
     payload = ManagedTests.payload
     parent_call = ManagedTests.parent_call
 
+    def test_failed_step_log_contains_stage_and_code_without_exception_values(self):
+        request = self.payload(); self.manager.submit(request)
+        job = self.root / 'jobs' / request['attempt_id']
+        class FailedStep(Adapter):
+            def prepare(self, **kwargs):
+                error = RuntimeError('dummy-secret and private task body')
+                error.managed_step = 'configure'
+                error.managed_reason = 'profile_path_mismatch'
+                raise error
+        with self.assertLogs(m.LOG, level='ERROR') as captured:
+            m.run_job(job, adapter=FailedStep(job), parent_call=self.parent_call,
+                      run=object(), provider_loader=self.loader)
+        message = '\n'.join(captured.output)
+        self.assertIn('step=configure reason=profile_path_mismatch', message)
+        self.assertNotIn('dummy-secret', message)
+        self.assertEqual(m.read(job / 'worker-failure.json')['step'], 'configure')
+
+    def test_explicit_unstarted_cleanup_closes_failure_without_reregistering(self):
+        request = self.payload(harness='hermes'); self.manager.submit(request)
+        job = self.root / 'jobs' / request['attempt_id']
+        current = m.read(job / 'status.json')
+        current.update(state='failed', phase='failed', task_success=False)
+        m.save(job / 'status.json', current)
+        calls = []
+        adapter = SimpleNamespace(close_unstarted=lambda state, **kw:
+            (calls.append(state) or {'runtime_success': True, 'cleaned': True}))
+        with patch.object(m, '_product_module', return_value=adapter) as imported:
+            result = m.finish_unstarted_job(job, run=object())
+        imported.assert_called_once_with('integrations.hermes.managed_lifecycle')
+        self.assertEqual(calls, [job / 'state'])
+        self.assertFalse(result['task_success']); self.assertEqual(result['state'], 'failed')
+        self.assertTrue(result['runtime_success']); self.assertTrue(result['cleanup_success'])
+        self.assertTrue(result['finished'])
+        self.assertEqual(result['phase'], 'cleaned_after_failure')
+
     def test_saved_status_without_cleanup_field_does_not_infer_from_runtime(self):
         request = self.payload(); self.manager.submit(request)
         path = self.root / 'jobs' / request['attempt_id'] / 'status.json'

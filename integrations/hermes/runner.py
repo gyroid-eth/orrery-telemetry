@@ -78,6 +78,27 @@ def check_profile_paths(profile, config=None):
             raise ValueError('Skill directories must stay in the current profile')
 
 
+def managed_profile(config):
+    root = Path(config['managed_root']).resolve()
+    profiles = root / 'profiles'
+    if profiles.is_symlink():
+        # Only the installer's owned generation may link to its persistent
+        # sibling profiles directory. Manual homes/other links stay rejected.
+        base = Path(config['product_root']).resolve() / 'harnesses' / 'hermes'
+        receipt = read(root / '.orrery-managed-install.json')
+        details = receipt.get('details', {})
+        persistent = base / 'profiles'
+        if (root.parent != base or not root.is_relative_to(Path(config['product_root']).resolve())
+                or receipt.get('harness') != 'hermes' or receipt.get('complete') is not True
+                or details.get('managed_root') != str(root)
+                or details.get('hermes_source') != config['hermes_source']
+                or details.get('hermes_executable') != config['hermes_executable']
+                or persistent.is_symlink() or persistent.resolve() != persistent
+                or profiles.resolve() != persistent):
+            raise ValueError('Unapproved persistent profile link')
+    return profiles / config['profile_name']
+
+
 def initialize(config_path, state, profile_name, run=subprocess.run, *, file_task=False, task_spec=None):
     if task_spec is not None:
         from task_spec import validate
@@ -120,7 +141,8 @@ def initialize(config_path, state, profile_name, run=subprocess.run, *, file_tas
                       or work.is_relative_to(root / 'profiles')):
         raise ValueError('File trial requires a dedicated worktree outside live data and profiles')
     config['hermes_python'] = committed_python(config)
-    profile = root / 'profiles' / profile_name
+    config['profile_name'] = profile_name
+    profile = managed_profile(config)
     Path(config['worktree']).mkdir(parents=True, exist_ok=True)
     state.mkdir(mode=0o700, parents=True)
     spec = config['profiles'][profile_name]
@@ -181,8 +203,7 @@ def configure(state, run=subprocess.run):
                                                'retire-intent.json', 'retire-receipt.json')):
         raise ValueError('Profile writing, launch or retirement began; retire and use a new attempt')
     profile = Path(config['profile_home'])
-    root = Path(config['managed_root']).resolve()
-    if profile.resolve() != root / 'profiles' / config['profile_name']:
+    if profile.resolve() != managed_profile(config).resolve():
         raise ValueError('Profile escaped the managed root')
     check_profile_paths(profile)
     marker = profile / '.orrery-profile.json'
@@ -238,12 +259,13 @@ def check_configured(state):
     state = Path(state)
     config, identity, proof = [read(state / name) for name in
                                ('run-config.json', 'mail-identity.json', 'configured.json')]
+    profile = Path(config['profile_home'])
+    if profile.resolve() != managed_profile(config).resolve():
+        raise ValueError('Profile escaped the managed root')
+    check_profile_paths(profile)
     if (proof['agent_name'] != identity['agent_name'] or proof['mcp_sha256'] != digest(state / 'mcp.json')
             or proof['profile_sha256'] != digest(Path(config['profile_home']) / 'config.yaml')):
         raise ValueError('Configured identity or profile changed')
-    profile = Path(config['profile_home'])
-    if profile.resolve() != Path(config['managed_root']).resolve() / 'profiles' / config['profile_name']:
-        raise ValueError('Profile escaped the managed root')
     check_profile_paths(profile, read(profile / 'config.yaml'))
     pilot_toolsets(read(profile / 'config.yaml'), file_task=config['purpose'] == 'file-task')
     config['hermes_python'] = committed_python(config)
@@ -358,25 +380,28 @@ def clean(state, run=subprocess.run):
     state = Path(state)
     config, identity, attempt = [read(state / name) for name in ('run-config.json', 'mail-identity.json', 'attempt.json')]
     result = evaluate(state, runtime=True)
-    scan = read(state / 'diagnostic-scan.json')
-    if (result['success'] is not True or scan.get('attempt_id') != attempt['attempt_id']
+    if result['success'] is not True:
+        raise ValueError('Cleanup requires confirmed runtime retirement and reservation evidence')
+    if result.get('runtime_conclusion') != 'not-started-retired':
+        scan = read(state / 'diagnostic-scan.json')
+        if (scan.get('attempt_id') != attempt['attempt_id']
             or scan.get('source') != ('owned-process-prefix-scan' if config.get('credential_mode') == 'owned-once' else 'operator-private-prefix-scan')
             or type(scan.get('matches')) is not int or scan['matches'] != 0
             or type(scan.get('errors')) is not int or scan['errors'] != 0):
-        raise ValueError('Cleanup requires runtime receipts and a clean current diagnostic scan')
-    from pane_entry import group_absent
-    process = read(state / 'runtime-process.json')
-    if process.get('agent_name') != identity['agent_name'] or group_absent(process['pgid']) is not True:
-        raise ValueError('Owned group absence changed or is unknown')
-    pane = read(state / 'owned-pane.json')
-    if pane.get('agent_name') != identity['agent_name'] or pane.get('session') != identity['agent_name']:
-        raise ValueError('Owned session mismatch')
-    prefix = [config['tmux'], '-S', pane['socket_path']]
-    exists = run(prefix + ['has-session', '-t', '=' + identity['agent_name']], env=base_env(config), capture_output=True, timeout=10)
-    if exists.returncode == 0:
-        run(prefix + ['kill-session', '-t', '=' + identity['agent_name']], env=base_env(config), capture_output=True, check=True, timeout=10)
-    elif exists.returncode != 1:
-        raise ValueError('Owned session state unknown')
+            raise ValueError('Cleanup requires runtime receipts and a clean current diagnostic scan')
+        from pane_entry import group_absent
+        process = read(state / 'runtime-process.json')
+        if process.get('agent_name') != identity['agent_name'] or group_absent(process['pgid']) is not True:
+            raise ValueError('Owned group absence changed or is unknown')
+        pane = read(state / 'owned-pane.json')
+        if pane.get('agent_name') != identity['agent_name'] or pane.get('session') != identity['agent_name']:
+            raise ValueError('Owned session mismatch')
+        prefix = [config['tmux'], '-S', pane['socket_path']]
+        exists = run(prefix + ['has-session', '-t', '=' + identity['agent_name']], env=base_env(config), capture_output=True, timeout=10)
+        if exists.returncode == 0:
+            run(prefix + ['kill-session', '-t', '=' + identity['agent_name']], env=base_env(config), capture_output=True, check=True, timeout=10)
+        elif exists.returncode != 1:
+            raise ValueError('Owned session state unknown')
     token = Path(identity['token_file'])
     if token != state / ('token-' + identity['agent_name']):
         raise ValueError('Unexpected owner handoff path')
@@ -486,8 +511,19 @@ def main():
             reservations = read(args.state / 'reservations.json') if (args.state / 'reservations.json').exists() else {}
             result = lifecycle.retire(args.state, require_release=config['purpose'] == 'file-task'
                                       and bool(task.get('reservation_receipts') or reservations.get('receipts')))
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-        raise SystemExit('Step failed; preserve this state and identity, do not retry or switch transports')
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError) as error:
+        known = {'Unapproved persistent profile link': 'profile_link_unapproved',
+                 'Profile escaped the managed root': 'profile_path_mismatch',
+                 'Profile may not be a symbolic link': 'profile_symlink',
+                 'Profile symbolic link points outside the current profile': 'current_profile_escape'}
+        code = known.get(str(error)) if isinstance(error, ValueError) else None
+        if code is None:
+            code = ('process_failed' if isinstance(error, subprocess.SubprocessError) else
+                    'filesystem_failed' if isinstance(error, OSError) else
+                    'missing_state' if isinstance(error, KeyError) else
+                    'runtime_failed' if isinstance(error, RuntimeError) else 'validation_failed')
+        print(json.dumps({'action': args.action, 'error_code': code}), file=sys.stderr)
+        return 1
     print(json.dumps({'action': args.action, 'result': result}))
     return exit_code
 

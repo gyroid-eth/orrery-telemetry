@@ -132,6 +132,17 @@ def evaluate_runtime(state_root):
         timestamp = retired.get('retired_at')
         retire = 'confirmed' if (retired.get('confirmed') is True
                                  and isinstance(timestamp, str) and timestamp.strip()) else 'pending'
+    if (retire == 'confirmed' and retired.get('launch_state') == 'not-started'
+            and task and task.get('attempt_id') == aid and task.get('reservation_receipts') == []
+            and not any((root / name).exists() for name in (
+                'start-intent.json', 'owned-pane.json', 'pane-entry.json', 'runtime-process.json',
+                'runtime-exit.json', 'credential-read.json', 'reservation-intent.json',
+                'reservation-result.json', 'reservations.json', 'release-receipt.json'))):
+        # No group or lease ever existed. Preserve their unknown/null fields;
+        # close this separate pre-launch outcome using confirmed retirement.
+        return _result({'launch_not_started': True, 'reservations_not_acquired': True,
+                        'retire_confirmed': True}, attempt_id=aid, group_absent=None,
+                       reservations_released=None, retire=retire, runtime_conclusion='not-started-retired')
     checks = {'owned_group_absent': gone, 'reservations_released': released,
               'retire_confirmed': True if retire == 'confirmed' else None}
     return _result(checks, attempt_id=aid,

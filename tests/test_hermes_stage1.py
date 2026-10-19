@@ -1,5 +1,7 @@
 """Managed controller -> Hermes fixtures, with no live Mail, API or credentials."""
 import asyncio
+import contextlib
+import io
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
@@ -35,6 +37,112 @@ class ManagedFixtures(unittest.TestCase):
     def task(self):
         return {'prompt': 'Create the requested result file.', 'allowed_paths': ['result.txt'],
                 'expected': [{'path': 'result.txt', 'contains': 'requested-result'}]}
+
+    def test_installer_owned_profiles_link_only_and_current_profile_confinement(self):
+        config = self.fixture.config
+        root = Path(config['product_root']).resolve() / 'harnesses/hermes/fixture-generation'
+        root.mkdir(parents=True)
+        persistent = root.parent / 'profiles'; persistent.mkdir()
+        (root / 'profiles').symlink_to(persistent, target_is_directory=True)
+        config['managed_root'] = str(root)
+        key = __import__('hashlib').sha256(str(Path(config['hermes_source']).resolve()).encode()).hexdigest()[:16]
+        self.fixture.install = root / 'installs' / key
+        self.fixture.add_generation('installed')
+        receipt = {'harness': 'hermes', 'complete': True, 'details': {
+            k: config[k] for k in ('managed_root', 'hermes_source', 'hermes_executable')}}
+        runner.save(root / '.orrery-managed-install.json', receipt)
+        runner.save(self.fixture.config_path, config)
+        state = self.root / 'installed-state'
+        runner.initialize(self.fixture.config_path, state, 'strata', self.fixture.product.run, file_task=True)
+        mail_lifecycle.register(state, self.fixture.product.run, generate_config=False)
+        runner.configure(state, self.fixture.product.run)
+        configured, _ = runner.check_configured(state)
+        self.assertEqual(Path(configured['profile_home']).resolve(), persistent / 'strata')
+        for target in (self.root / 'home/.hermes', self.root / 'hermes-managed', self.root / 'other'):
+            (root / 'profiles').unlink()
+            (root / 'profiles').symlink_to(target, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'Unapproved'):
+                runner.check_configured(state)
+        (root / 'profiles').unlink(); (root / 'profiles').symlink_to(persistent, target_is_directory=True)
+        runner.save(root / '.orrery-managed-install.json', {**receipt, 'complete': False})
+        with self.assertRaisesRegex(ValueError, 'Unapproved'):
+            runner.check_configured(state)
+        runner.save(root / '.orrery-managed-install.json', receipt)
+        saved = persistent.with_name('saved-profiles')
+        persistent.rename(saved); persistent.symlink_to(saved, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'Unapproved'):
+            runner.check_configured(state)
+        persistent.unlink(); saved.rename(persistent)
+        (persistent / 'deepseek').symlink_to(self.root / 'other', target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'symbolic link'):
+            runner.check_profile_paths(root / 'profiles/deepseek')
+
+    def test_unstarted_reservation_free_retired_cleanup_has_no_fabricated_group(self):
+        state = self.root / 'never-started'
+        runner.initialize(self.fixture.config_path, state, 'strata', self.fixture.product.run, file_task=True)
+        mail_lifecycle.register(state, self.fixture.product.run, generate_config=False)
+        mail_lifecycle.retire(state, self.fixture.product.run, require_release=False)
+        capture = self.root / 'whois.json'
+        runner.save(capture, {'name': 'FixtureChild', 'retired_at': datetime.now(timezone.utc).isoformat()})
+        mail_lifecycle.confirm_retire(state, capture)
+        import completion
+        result = completion.evaluate_runtime(state)
+        self.assertTrue(result['success'])
+        self.assertEqual(result['runtime_conclusion'], 'not-started-retired')
+        self.assertIsNone(result['group_absent']); self.assertIsNone(result['reservations_released'])
+        retire = runner.read(state / 'retire-receipt.json')
+        for change in ({'confirmed': False}, {'attempt_id': 'other'}, {'source': 'unverified'}):
+            runner.save(state / 'retire-receipt.json', {**retire, **change})
+            self.assertIsNot(completion.evaluate_runtime(state)['success'], True)
+        runner.save(state / 'retire-receipt.json', retire)
+        for name in ('start-intent.json', 'runtime-process.json', 'credential-read.json',
+                     'reservation-intent.json', 'reservation-result.json', 'reservations.json'):
+            runner.save(state / name, {})
+            self.assertIsNot(completion.evaluate_runtime(state)['success'], True, name)
+            (state / name).unlink()
+        task = runner.read(state / 'task.json')
+        runner.save(state / 'task.json', {**task, 'reservation_receipts': [{'id': 1}]})
+        self.assertIsNot(completion.evaluate_runtime(state)['success'], True)
+        runner.save(state / 'task.json', task)
+        def cli(argv, **kwargs):
+            action = argv[3]
+            if action == 'complete-runtime':
+                value = runner.evaluate(state, runtime=True)
+            elif action == 'clean':
+                value = runner.clean(state, lambda *a, **k: self.fail('unstarted cleanup must not execute processes'))
+            else:
+                self.fail('unexpected lifecycle action ' + action)
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'result': value}), '')
+        outcome = managed_lifecycle.close_unstarted(state, run=cli)
+        self.assertTrue(outcome['runtime_success']); self.assertTrue(outcome['cleaned'])
+        self.assertFalse((state / 'token-FixtureChild').exists())
+        self.assertFalse((state / 'runtime-exit.json').exists())
+        self.assertFalse((state / 'diagnostic-scan.json').exists())
+
+    def test_step_failure_uses_only_known_codes_and_cli_never_echoes_values(self):
+        state = self.root / 'safe-failure'; state.mkdir()
+        stderr = io.StringIO()
+        with patch('sys.argv', ['runner.py', 'configure', '--state', str(state)]), \
+             patch.object(runner, 'configure', side_effect=ValueError('Profile escaped the managed root')), \
+             contextlib.redirect_stderr(stderr):
+            self.assertEqual(runner.main(), 1)
+        self.assertEqual(json.loads(stderr.getvalue())['error_code'], 'profile_path_mismatch')
+        for text in (stderr.getvalue(), 'raw private content must not be echoed'):
+            with self.assertRaises(managed_lifecycle.StepFailure) as raised:
+                managed_lifecycle.step(state, 'configure', run=lambda *a, **k: subprocess.CompletedProcess([], 1, '', text))
+            self.assertEqual(raised.exception.managed_step, 'configure')
+            self.assertNotIn('raw private', str(raised.exception))
+        with self.assertRaises(managed_lifecycle.StepFailure) as raised:
+            managed_lifecycle.step(state, 'configure', run=lambda *a, **k:
+                (_ for _ in ()).throw(subprocess.TimeoutExpired(['private-argv'], 1)))
+        self.assertEqual(raised.exception.managed_step, 'configure')
+        self.assertEqual(raised.exception.managed_reason, 'process_failed')
+        self.assertNotIn('private-argv', str(raised.exception))
+        with self.assertRaises(managed_lifecycle.StepFailure) as raised:
+            managed_lifecycle.step(state, 'configure', run=lambda *a, **k:
+                subprocess.CompletedProcess([], 0, 'private-invalid-output', ''))
+        self.assertEqual(raised.exception.managed_reason, 'validation_failed')
+        self.assertNotIn('private-invalid-output', str(raised.exception))
 
     def test_general_task_new_file_and_hash_mail_gate(self):
         task = self.task()

@@ -432,7 +432,20 @@ def run_job(job, *, adapter=None, parent_call=None, run=None, sleep=time.sleep, 
         update(state='ready' if result.get('task_success') is True else 'failed', phase='cleaned',
                finished=True, pending=False, error_code=None if result.get('task_success') is True else 'task_not_successful')
     except Exception as exc:
-        LOG.error("managed worker failed during %s (%s)", current.get('phase'), type(exc).__name__)
+        step = getattr(exc, 'managed_step', None)
+        if step not in ('init-task', 'preregister', 'configure', 'probe', 'reserve', 'preflight',
+                        'start', 'stop', 'scan-diagnostics', 'release', 'retire', 'confirm-retire',
+                        'record-mail', 'complete', 'complete-runtime', 'clean'):
+            step = 'unknown'
+        reason = getattr(exc, 'managed_reason', None)
+        if reason not in ('profile_link_unapproved', 'profile_path_mismatch', 'profile_symlink',
+                          'current_profile_escape', 'process_failed', 'filesystem_failed',
+                          'missing_state', 'runtime_failed', 'validation_failed'):
+            reason = 'step_failed'
+        failure = {'phase': current.get('phase'), 'step': step, 'reason': reason, 'type': type(exc).__name__}
+        save(job / 'worker-failure.json', failure)
+        LOG.error("managed worker failed during %s: step=%s reason=%s (%s)",
+                  failure['phase'], step, reason, failure['type'])
         # Failure itself never becomes success. Recover ordinary partial starts
         # using the same identity; a cleanup refusal keeps the private state.
         identity, attempt = read(state / 'mail-identity.json', {}), read(state / 'attempt.json', {})
@@ -455,10 +468,35 @@ def run_job(job, *, adapter=None, parent_call=None, run=None, sleep=time.sleep, 
     return current
 
 
+def finish_unstarted_job(job, *, adapter=None, run=None):
+    """Close saved, confirmed pre-launch cleanup without registration or Mail."""
+    job = Path(job)
+    current = read(job / 'status.json')
+    request = read(job / 'request.json')['request']
+    if request.get('harness') != 'hermes' or current.get('state') != 'failed':
+        raise ValueError('Only failed Hermes attempts support unstarted cleanup')
+    state = job / 'state'
+    adapter = adapter or _product_module('integrations.hermes.managed_lifecycle')
+    run = run or command_runner(read(state / 'run-config.json'), job / 'runner.log')
+    result = adapter.close_unstarted(state, run=run)
+    if result.get('runtime_success') is not True or result.get('cleaned') is not True:
+        raise RuntimeError('Unstarted cleanup not confirmed')
+    current.update(phase='cleaned_after_failure', finished=True, pending=False, running=False,
+                   runtime_success=True)
+    current['cleanup_success'] = cleanup_success(current)
+    save(job / 'status.json', current)
+    return current
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--job', type=Path, required=True)
+    parser.add_argument('--finish-unstarted', action='store_true',
+                        help='Close an already-retired, unstarted Hermes failure without launching or registering')
     args = parser.parse_args()
+    if args.finish_unstarted:
+        result = finish_unstarted_job(args.job)
+        return 0 if result.get('cleanup_success') is True else 1
     result = run_job(args.job)
     return 0 if (result.get('state') != 'failed' and result.get('finished') is True
                  and result.get('phase') == 'cleaned' and result.get('task_success') is True

@@ -13,6 +13,16 @@ CAPABILITIES = {'tools': ['read_file', 'write_file', 'mcp__orrery_mail__send_mes
                 'scope': 'relative-files', 'expected_checks': ['contains', 'sha256'],
                 'reservation_guard': 'synchronous-pre-tool', 'helper_models': ['same'],
                 'context_source': 'unreported'}
+FAILURE_CODES = {'profile_link_unapproved', 'profile_path_mismatch', 'profile_symlink',
+                 'current_profile_escape', 'process_failed', 'filesystem_failed',
+                 'missing_state', 'runtime_failed', 'validation_failed'}
+
+
+class StepFailure(RuntimeError):
+    def __init__(self, action, reason):
+        self.managed_step = action
+        self.managed_reason = reason if isinstance(reason, str) and reason in FAILURE_CODES else 'step_failed'
+        super().__init__('Hermes step failed: ' + action + ' (' + self.managed_reason + ')')
 
 
 def read(path, default=None):
@@ -35,13 +45,22 @@ def step(state, action, *, run, config_file=None, profile=None, input_file=None,
     for flag, value in (('--config', config_file), ('--profile', profile), ('--input', input_file)):
         if value is not None:
             argv += [flag, str(value)]
-    result = run(argv, timeout=120, check=False, background=background)
+    try:
+        result = run(argv, timeout=120, check=False, background=background)
+    except Exception:
+        raise StepFailure(action, 'process_failed') from None
     if background:
         return result
     if result.returncode not in ((0, 1, 2) if action in ('complete', 'complete-runtime') else (0,)):
-        raise RuntimeError('Hermes step failed: ' + action + '; preserve state ' + str(state))
-    value = json.loads(result.stdout)
-    return value['result']
+        try:
+            reason = json.loads(result.stderr).get('error_code')
+        except (TypeError, ValueError, AttributeError):
+            reason = None
+        raise StepFailure(action, reason)
+    try:
+        return json.loads(result.stdout)['result']
+    except (TypeError, KeyError, ValueError):
+        raise StepFailure(action, 'validation_failed') from None
 
 
 def prepare(*, state, config_file, backend_id, task, worktree, parent, run):
@@ -146,3 +165,11 @@ def finalize(state, *, parent_call, run):
 
 def clean(state, *, run):
     return step(state, 'clean', run=run)
+
+
+def close_unstarted(state, *, run):
+    proof = step(state, 'complete-runtime', run=run)
+    if proof.get('success') is not True or proof.get('runtime_conclusion') != 'not-started-retired':
+        raise ValueError('Only confirmed unstarted reservation-free attempts can be closed')
+    clean(state, run=run)
+    return status(state)
