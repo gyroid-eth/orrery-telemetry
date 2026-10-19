@@ -92,6 +92,14 @@ def test_do_spawn_passes_a_valid_effort_to_the_launcher(isolated):
     assert result["argv"][result["argv"].index("--effort") + 1] == "high"
 
 
+def test_do_spawn_omits_effort_that_is_the_model_default(isolated):
+    # opus 5.5 defaults to medium: no flag, so a warm session stays usable.
+    result = _dry(isolated, model="claude-opus-5-5", effort="medium")
+    assert result["ok"] is True and result["effort"] == "" and "--effort" not in result["argv"]
+    result = _dry(isolated, model="claude-opus-5-5", effort="high")
+    assert result["effort"] == "high" and "--effort" in result["argv"]
+
+
 def test_do_spawn_omits_effort_when_none_is_chosen(isolated):
     result = _dry(isolated, model="claude-opus-5-5")
     assert result["ok"] is True and "--effort" not in result["argv"]

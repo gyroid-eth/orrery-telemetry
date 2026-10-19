@@ -7864,6 +7864,10 @@ def do_spawn(payload: dict) -> dict:
             effort = claude_models_mod.resolve_effort(model, effort)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+        # The model's own default needs no flag; leaving it out keeps the
+        # pre-started (warm) session usable, which an explicit flag cannot.
+        if effort == claude_models_mod.effort_policy(model)[1]:
+            effort = ""
         chrome_args: tuple[str, ...] = ()
         if chrome_device:
             chrome_args = ("--claude-chrome-device", chrome_device)
