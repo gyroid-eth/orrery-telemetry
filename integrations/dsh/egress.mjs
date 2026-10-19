@@ -10,7 +10,7 @@ import {syncBuiltinESMExports} from 'node:module';
 import {assertIdle} from './strata_status.mjs';
 
 export function createEgress({backend, limits, wireTools, offline = true, phase = 'run',
-  fetchImpl, audit, key = '', fail = reason => { throw new Error(reason); }}) {
+  fetchImpl, audit, key = '', fail = (reason, code) => { throw Object.assign(new Error(reason), {dshExitCode: code}); }}) {
   const endpoint = new URL(backend.base_url.replace(/\/+$/, '') + '/v1/messages');
   const allow = new Set(wireTools);
   const required = phase === 'spike' ? ['read', 'write'] : wireTools;
@@ -98,9 +98,10 @@ export function createEgress({backend, limits, wireTools, offline = true, phase 
       const resultHeaders = new Headers(response.headers);
       resultHeaders.delete('content-length'); resultHeaders.delete('content-encoding');
       return new Response(stream, {status: response.status, statusText: response.statusText, headers: resultHeaders});
-    } catch {
-      audit({phase: 'runtime-fatal', reason: 'DSH_PROVIDER'}); finish(false);
-      return fail('DSH_PROVIDER', 79);
+    } catch (error) {
+      const gate = [78, 80].includes(error?.dshExitCode);
+      audit({phase: 'runtime-fatal', reason: gate ? 'DSH_GATE' : 'DSH_PROVIDER'}); finish(false);
+      return fail(gate ? 'DSH_GATE' : 'DSH_PROVIDER', gate ? error.dshExitCode : 79);
     }
   };
 }

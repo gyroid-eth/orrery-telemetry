@@ -117,11 +117,11 @@ test('Strata busy, unknown, auth and 404 health fallback are handled without pol
 
 test('redirect responses are not followed by provider or status', async () => {
   const h = harness('deepseek', {fetchImpl: async () => new Response('', {status: 307, headers: {location: 'https://not-allowed.invalid'}})});
-  await assert.rejects(h.fetch(endpoint(h.backend), request(h.backend)));
+  await assert.rejects(h.fetch(endpoint(h.backend), request(h.backend)), error => error.dshExitCode === 78);
   assert.ok(h.events.some(row => row.phase === 'blocked-redirect'));
   const events = [];
   await assert.rejects(assertIdle(async () => new Response('', {status: 302}),
-    'https://fixture.invalid', dummy, row => events.push(row)));
+    'https://fixture.invalid', dummy, row => events.push(row)), error => error.dshExitCode === 78);
   assert.ok(events.some(row => row.phase === 'blocked-redirect'));
 });
 

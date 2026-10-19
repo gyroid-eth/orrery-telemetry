@@ -27,6 +27,8 @@ export async function assertIdle(fetchImpl, baseURL, key, audit, timeoutMs = 500
     throw new Error('STATUS_MISSING');
   } catch (error) {
     if (error.message !== 'STATUS_NOT_IDLE') audit({phase: 'status-check', busy: null});
+    if (error.message === 'STATUS_REDIRECT')
+      throw Object.assign(new Error('DSH_REDIRECT'), {dshExitCode: 78});
     throw new Error('DSH_STATUS_UNAVAILABLE');
   }
 }
