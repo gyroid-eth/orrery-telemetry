@@ -77,6 +77,52 @@ DEFAULT_ALIAS = "opus"
 _VERSION_RE = re.compile(r"[0-9]{1,6}(?:\.[0-9]{1,6}){0,3}")
 
 
+# Effort levels per model, from the Claude Code docs ("Adjust effort level",
+# https://code.claude.com/docs/en/model-config). Models not listed there do not
+# support effort, so they get no levels: nothing is guessed for them.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+_EFFORT_ID_RE = re.compile(r"claude-(fable|opus|sonnet|haiku)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?")
+
+
+def effort_policy(model: str) -> tuple[tuple[str, ...], str]:
+    """(levels, model default) for a Claude model ID; ((), "") when unsupported."""
+    match = _EFFORT_ID_RE.fullmatch(str(model).removesuffix("[1m]"))
+    if match is None:
+        return (), ""
+    family, major, minor = match.group(1), int(match.group(2)), match.group(3)
+    minor = int(minor) if minor is not None else None
+    if family == "fable" and major >= 5 or major >= 5 and family != "fable":
+        levels = EFFORT_LEVELS
+    elif family == "opus" and major == 4 and minor in (7, 8):
+        levels = EFFORT_LEVELS
+    elif family in ("opus", "sonnet") and major == 4 and minor == 6:
+        levels = tuple(l for l in EFFORT_LEVELS if l != "xhigh")
+    else:
+        return (), ""
+    if family != "fable" and major == 5 and minor == 5:
+        default = "medium"
+    elif family == "opus" and major == 4 and minor == 7:
+        default = "xhigh"
+    else:
+        default = "high"
+    return levels, default
+
+
+def resolve_effort(model: str, raw: object = "") -> str:
+    """Validate an explicit effort for the model; "" leaves it to Claude Code."""
+    if not isinstance(raw, str):
+        raise ValueError("invalid Claude effort")
+    effort = raw.strip().lower()
+    if not effort:
+        return ""
+    levels, _ = effort_policy(model)
+    if not levels:
+        raise ValueError(f"effort not supported for model: {model}")
+    if effort not in levels:
+        raise ValueError(f"effort {effort} not supported for {model} (supported: {', '.join(levels)})")
+    return effort
+
+
 @dataclass(frozen=True)
 class _Snapshot:
     fetched: float
@@ -408,8 +454,14 @@ def main(argv: list[str]) -> int:
             print("\t".join((family, target.model, target.source, target.note)))
     elif argv == ["note"]:
         print(alias_note())
+    elif len(argv) == 3 and argv[0] == "effort":
+        try:
+            print(resolve_effort(argv[1], argv[2]))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
     else:
-        print("usage: claude_models.py aliases [--claude-bin PATH] | note", file=sys.stderr)
+        print("usage: claude_models.py aliases [--claude-bin PATH] | note | effort MODEL EFFORT", file=sys.stderr)
         return 2
     return 0
 

@@ -258,6 +258,7 @@ open_child_terminal() {
 USE_CODEX=false
 CLAUDE_MODEL=""
 CODEX_EFFORT=""
+CLAUDE_CHILD_EFFORT=""
 CODEX_MCP_PROFILE="inherit"
 RESOURCES=""
 RESOURCE_TTL=14400
@@ -1082,6 +1083,10 @@ normalize_claude_model() {
 
 normalize_codex_model() {
     "${AGENTSTACK_PYTHON:-python3}" "$CODEX_MODEL_HELPER" normalize "${1:-}"
+}
+
+validate_claude_effort() {
+    "${AGENTSTACK_PYTHON:-python3}" "$CLAUDE_MODEL_HELPER" effort "$1" "${2:-}"
 }
 
 validate_codex_effort() {
@@ -2752,6 +2757,9 @@ claude_child_launch_command() {
     if [[ -n "${CLAUDE_CHILD_TOOL_FLAGS:-}" ]]; then
         inner+=" $CLAUDE_CHILD_TOOL_FLAGS"
     fi
+    if [[ -n "${CLAUDE_CHILD_EFFORT:-}" ]]; then
+        inner+=' --effort "$CLAUDE_CHILD_EFFORT"'
+    fi
     if [[ "$CLAUDE_CHILD_CHROME" == true ]]; then
         inner+=' --chrome'
     fi
@@ -2951,6 +2959,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         load_claude_aliases || exit 1
         CHILD_MODEL="$(normalize_claude_model "$CLAUDE_MODEL")"
         report_claude_alias "$CLAUDE_MODEL" "$CHILD_MODEL"
+        CLAUDE_CHILD_EFFORT="$(validate_claude_effort "$CHILD_MODEL" "$CODEX_EFFORT")" || exit 1
     fi
     if [[ "$STANDALONE" == true ]]; then
         PARENT_NAME=""
@@ -3318,7 +3327,7 @@ ${TASK}"
             # start standalone children so PARENT_AGENT is guaranteed absent.
             WARM_TYPE="__skip_warm__"
         elif [[ "$CLAUDE_CHILD_CHROME" == true || "$CHILD_TOOLS_RESTRICTIVE" == true \
-                || -n "$CHILD_DEFAULT_TOOLS_NOTICE" ]]; then
+                || -n "$CHILD_DEFAULT_TOOLS_NOTICE" || -n "$CLAUDE_CHILD_EFFORT" ]]; then
             # A warm session was started without --chrome or the tool flags,
             # and a claim cannot add a CLI flag to a running process. Cold
             # start instead.
@@ -3407,6 +3416,7 @@ ${TASK}"
                 -c "$WORK_DIR" \
                 "${TMUX_ENV_ARGS[@]}" \
                 -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
+                ${CLAUDE_CHILD_EFFORT:+-e "CLAUDE_CHILD_EFFORT=$CLAUDE_CHILD_EFFORT"} \
                 -e "CLAUDE_CHILD_BIN=$CLAUDE_CHILD_BIN" \
                 -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
                 -e "CLAUDE_CHILD_PROMPT_FILE=$CLAUDE_CHILD_PROMPT_FILE" \
@@ -3767,6 +3777,7 @@ else
     load_claude_aliases || exit 1
     CHILD_MODEL="$(normalize_claude_model "$CLAUDE_MODEL")"
     report_claude_alias "$CLAUDE_MODEL" "$CHILD_MODEL"
+    CLAUDE_CHILD_EFFORT="$(validate_claude_effort "$CHILD_MODEL" "$CODEX_EFFORT")" || exit 1
 fi
 
 if ! CHILD_NAME_CANDIDATE="$(pick_available_child_agent_name)"; then
@@ -4202,6 +4213,7 @@ else
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
         -e "CLAUDE_CHILD_MODEL=$CHILD_MODEL" \
+                ${CLAUDE_CHILD_EFFORT:+-e "CLAUDE_CHILD_EFFORT=$CLAUDE_CHILD_EFFORT"} \
         -e "CLAUDE_CHILD_BIN=$CLAUDE_CHILD_BIN" \
         -e "CLAUDE_CHILD_MCP_CONFIG=$CHILD_MCP_CONFIG" \
         -e "CLAUDE_CHILD_PROMPT_FILE=$CLAUDE_CHILD_PROMPT_FILE" \

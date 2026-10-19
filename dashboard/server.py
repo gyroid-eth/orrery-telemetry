@@ -81,12 +81,14 @@ except ModuleNotFoundError:  # direct `python dashboard/server.py`
 QUOTA_SERVICE = _build_quota_service()
 
 try:
+    from dashboard import claude_models as claude_models_mod
     from dashboard.claude_models import (
         BUNDLED_ALIASES as _CLAUDE_BUNDLED_ALIASES, alias_models as _claude_alias_models,
         bind_child_cli_path as _bind_claude_child_cli_path, default_model as _claude_alias_default,
         is_model_id as _is_claude_model_id, resolve_catalog as _resolve_claude_catalog,
     )
 except ModuleNotFoundError:  # direct script execution
+    import claude_models as claude_models_mod
     from claude_models import (
         BUNDLED_ALIASES as _CLAUDE_BUNDLED_ALIASES, alias_models as _claude_alias_models,
         bind_child_cli_path as _bind_claude_child_cli_path, default_model as _claude_alias_default,
@@ -7177,7 +7179,10 @@ def spawn_names_payload() -> dict:
         "models": list(claude_models),
         "default_model": claude_default,
         "providers": [
-            {"id": "claude", "label": "Claude", "program": "claude-code", "models": list(claude_models), "default_model": claude_default, "efforts": None,
+            {"id": "claude", "label": "Claude", "program": "claude-code", "models": list(claude_models), "default_model": claude_default,
+             "efforts": list(claude_models_mod.EFFORT_LEVELS), "effort_default": "",
+             "model_efforts": {m: list(claude_models_mod.effort_policy(m)[0]) for m in claude_models},
+             "model_effort_defaults": {m: claude_models_mod.effort_policy(m)[1] for m in claude_models},
              "model_source": claude_catalog.source, "model_error": claude_catalog.error,
              "overflow_models": [m for m in claude_catalog.overflow if m != claude_default]},
             codex_models.provider_catalog(),
@@ -7855,8 +7860,10 @@ def do_spawn(payload: dict) -> dict:
         if (not _is_claude_model_id(model)
                 or (claude_catalog.source == "override" and model not in claude_catalog.models)):
             return {"ok": False, "error": f"model not allowed for provider claude: {model}"}
-        if effort:
-            return {"ok": False, "error": "effort not supported for provider: claude"}
+        try:
+            effort = claude_models_mod.resolve_effort(model, effort)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         chrome_args: tuple[str, ...] = ()
         if chrome_device:
             chrome_args = ("--claude-chrome-device", chrome_device)
@@ -7865,6 +7872,7 @@ def do_spawn(payload: dict) -> dict:
         spec = SpawnLaunchSpec(
             provider="claude", program="claude-code", model=model,
             script=SPAWN_SCRIPT, provider_args=chrome_args + tools_args,
+            effort=effort, effort_arg=bool(effort),
         )
     elif provider == "codex":
         try:

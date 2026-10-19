@@ -334,8 +334,8 @@ def test_gemini_spawn_rejects_standalone_and_invalid_engine_options(tmp_path):
 def test_native_providers_keep_canonical_validation():
     for module in (server, canonical_server):
         assert module.do_spawn({"parent": "P", "task": "w", "provider": "claude",
-                                "model": "claude-opus-5", "effort": "high"}) == {
-            "ok": False, "error": "effort not supported for provider: claude",
+                                "model": "claude-haiku-4-5-20251001", "effort": "high"}) == {
+            "ok": False, "error": "effort not supported for model: claude-haiku-4-5-20251001",
         }
         assert module.do_spawn({"parent": "P", "task": "w", "provider": "codex",
                                 "model": "gemini-3.8-flash-high"})["error"] == (
@@ -1208,7 +1208,7 @@ core = sys.modules["_orrery_provider_dashboard_core"]
 print(json.dumps({{
     "failures": core._PROVIDER_EXTENSION_FAILURES,
     "gemini": core.do_spawn({{"parent": "P", "task": "w", "provider": "gemini"}}),
-    "claude": core.do_spawn({{"parent": "P", "task": "w", "provider": "claude", "effort": "x"}}),
+    "claude": core.do_spawn({{"parent": "P", "task": "w", "provider": "claude", "model": "claude-haiku-4-5-20251001", "effort": "x"}}),
 }}))
 """
     result = _REAL_RUN([sys.executable, "-c", probe], capture_output=True, text=True,
@@ -1217,7 +1217,7 @@ print(json.dumps({{
     out = json.loads(result.stdout.strip().splitlines()[-1])
     assert out["failures"] == ["gemini_provider_runtime.py"]
     assert out["gemini"] == {"ok": False, "error": "provider not allowed: gemini"}
-    assert out["claude"] == {"ok": False, "error": "effort not supported for provider: claude"}
+    assert out["claude"] == {"ok": False, "error": "effort not supported for model: claude-haiku-4-5-20251001"}
     assert "optional dashboard provider extension disabled" in result.stderr
 
 
