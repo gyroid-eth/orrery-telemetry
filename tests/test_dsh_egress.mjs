@@ -145,10 +145,10 @@ test('stream cancellation releases the local slot but unknown usage blocks a new
 
 const run1Usage = 'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":1183,"cache_read_input_tokens":0,"output_tokens":62}}\n\n';
 const messageStop = 'data: {"type":"message_stop"}\n\n';
-function cancellingHarness(data) {
-  return harness('strata', {fetchImpl: async input => String(input).endsWith('/v1/status')
+function cancellingHarness(data, {cancel, limits = config.limits} = {}) {
+  return harness('strata', {limits, fetchImpl: async input => String(input).endsWith('/v1/status')
     ? new Response('{"in_flight":0}')
-    : new Response(new ReadableStream({start(controller) { controller.enqueue(encode(data)); }}), {status: 200})});
+    : new Response(new ReadableStream({start(controller) { controller.enqueue(encode(data)); }, cancel}), {status: 200})});
 }
 async function consumeThenCancel(h) {
   const response = await h.fetch(endpoint(h.backend), request(h.backend));
@@ -177,6 +177,34 @@ test('cancel before message_stop still blocks the next request even with final u
 test('message_stop without final usage still blocks the next request on cancel', async () => {
   const h = cancellingHarness(messageStop);
   await consumeThenCancel(h);
+  assert.equal(h.events.at(-1).ok, false);
+  await assert.rejects(h.fetch(endpoint(h.backend), request(h.backend)), /USAGE_UNKNOWN/);
+});
+
+test('rejected cancel after terminal usage never marks the stream clean', async () => {
+  const h = cancellingHarness(run1Usage + messageStop, {cancel() { throw new Error('fixture cancel rejected'); }});
+  await assert.rejects(consumeThenCancel(h), /fixture cancel rejected/);
+  assert.equal(h.events.at(-1).ok, false);
+  await assert.rejects(h.fetch(endpoint(h.backend), request(h.backend)), /USAGE_UNKNOWN/);
+});
+
+test('timeout during terminal cancel never marks the stream clean', async () => {
+  const h = cancellingHarness(run1Usage + messageStop, {
+    limits: {...config.limits, max_request_ms: 10},
+    cancel() { return new Promise(resolve => setTimeout(resolve, 30)); }
+  });
+  await consumeThenCancel(h);
+  assert.equal(h.events.at(-1).ok, false);
+  await assert.rejects(h.fetch(endpoint(h.backend), request(h.backend)), /USAGE_UNKNOWN/);
+});
+
+test('an already aborted request signal prevents clean terminal cancellation', async () => {
+  const h = cancellingHarness(run1Usage + messageStop), abort = new AbortController();
+  const response = await h.fetch(endpoint(h.backend), {...request(h.backend), signal: abort.signal});
+  const reader = response.body.getReader();
+  await reader.read();
+  abort.abort();
+  await reader.cancel();
   assert.equal(h.events.at(-1).ok, false);
   await assert.rejects(h.fetch(endpoint(h.backend), request(h.backend)), /USAGE_UNKNOWN/);
 });

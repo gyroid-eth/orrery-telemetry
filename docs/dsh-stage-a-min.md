@@ -31,7 +31,7 @@ repoのbackend.jsonは空のURL/accountを持つテンプレートです。コ�
 
 - global fetchは選択backendの正確な`baseURL + /v1/messages`だけ。DeepSeekの`/user/balance`、npm/GitHub、任意loopbackを両backendで拒否します。最初のURLだけで許可し続けず、redirectをmanualで受けて3xxを拒否し、自動追従しません。
 - Strataのstatusだけは同じruntimeが送信前に確認します。`/v1/status`、404時だけ`/health`、無鍵→401/403時だけ認証、各5秒。in_flightが数値0、queue値があれば0を必須とし、busy/不明は止めます。pollや分散lockは作りません。
-- 単一in-flightをstatus待ちより前に取り、応答bodyのEOF/error/cancelまで保持します。header到着だけでは解除しません。adapterはmessage_stopで正常に読み終えてHTTP EOF前にcancelするため、message_stopと最終usageを観測した後のcancelだけ正常完了にします。それより前のcancelやtimeout、final usage不明では次要求を止めます。要求8回、各120秒、backendのoutput上限を守り、retry/fallbackはしません。金額上限の保証ではありません。
+- 単一in-flightをstatus待ちより前に取り、応答bodyのEOF/error/cancelまで保持します。header到着だけでは解除しません。adapterはmessage_stopで正常に読み終えてHTTP EOF前にcancelするため、message_stopと最終usageを観測し、cancelがresolveしてsignalがabortされていない場合だけ正常完了にします。それより前のcancelやcancel拒否・timeout・abort、final usage不明では次要求を止めます。要求8回、各120秒、backendのoutput上限を守り、retry/fallbackはしません。金額上限の保証ではありません。
 - 製品の標準`~/.agentstack/integrations/codex_app/plugin/scripts/run-mcp.sh`だけを補助起動に許可し、明示envを作ってAPI keyを除きます。opener/editor/clipboard/別dsh等の起動は拒否します。既知startup診断は保存前に一致鍵を伏せます。
 - TUIの更新check/manual update/bootstrap、残高/OAuth、recap/btw/title、IDE/inject、共有profile/旧資格importはmanaged entry/action側でも無効にします。UI非表示だけで済ませません。managed TUIの停止処理とpatch receiptの拒否系はoffline対照試験で確認します。
 

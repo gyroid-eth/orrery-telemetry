@@ -97,7 +97,9 @@ export function createEgress({backend, limits, wireTools, offline = true, phase 
         // The adapter normally returns at message_stop, cancelling before HTTP EOF.
         async cancel(reason) {
           cancelled = true;
-          try { await reader.cancel(reason); } finally { finish(messageStopped && finalUsage); }
+          let resolved = false;
+          try { await reader.cancel(reason); resolved = true; }
+          finally { finish(resolved && messageStopped && finalUsage && !signal.aborted); }
         }
       });
       const resultHeaders = new Headers(response.headers);
