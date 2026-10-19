@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 19
+API_GENERATION = 21
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -78,7 +78,7 @@ except ModuleNotFoundError:  # direct `python dashboard/server.py`
 # Account quota telemetry is core: it reads what the local Claude and Codex
 # installs already report, so it belongs to the canonical server rather than
 # to an optional provider payload.  Acquisition lives in dashboard/quotas/.
-QUOTA_SERVICE = _build_quota_service()
+QUOTA_SERVICE = _build_quota_service(dsh_enabled=lambda: _dsh_enabled())
 
 try:
     from dashboard.claude_models import (
@@ -186,7 +186,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "index.html")
 THEME_ASSETS = {
     **{"/"+name:(os.path.join(HERE,name),"text/javascript; charset=utf-8" if name.endswith(".js") else "text/css; charset=utf-8") for name in ("global_ui.js","global_ui.css","mail_flow.js","mail_flow.css","network_node.js","runtime_node.js","operator_session.js","mail_controller.js","operation_controller.js")},
-    **{"/assets/"+name+".svg": (os.path.join(HERE,"assets",name+".svg"), "image/svg+xml") for name in ("anthropic","openai","google")},
+    **{"/assets/"+name+".svg": (os.path.join(HERE,"assets",name+".svg"), "image/svg+xml") for name in ("anthropic","openai","google","deepseek","qwen")},
     "/theme_core.js": (os.path.join(HERE, "theme_core.js"), "text/javascript; charset=utf-8"),
     "/theme_controller.js": (
         os.path.join(HERE, "theme_controller.js"),
@@ -254,6 +254,8 @@ def _render_dashboard_index(
         "language": language if language in {"ja", "en"} else None,
         "murmur": "off" if murmur == "off" else None,
     }
+    if _dsh_enabled():
+        config["dshEnabled"] = True
     replacement = (
         "const AGENTSTACK_SERVER_DEFAULTS="
         + json.dumps(config, ensure_ascii=True, separators=(",", ":"))
@@ -352,12 +354,25 @@ _MN_PROVIDER = {
 }
 
 
+def _dsh_enabled() -> bool:
+    """通常の更新では変えない、installerの明示opt-inだけを参照する。"""
+    try:
+        with open(os.path.join(HERE, "dsh-provider.json"), encoding="utf-8") as file:
+            state = json.load(file)
+        return isinstance(state, dict) and state.get("enabled") is True
+    except (OSError, ValueError):
+        return False
+
+
+
 def _provider_of(raw: str | None) -> str:
     """モデル文字列から提供元キーを返す（"anthropic" / "openai" / ...）。
     判定不能なら空文字。display 用ではなく分類用なので canon に揃えて family を抽出。"""
     canon = _normalize_model(raw)
     if not canon:
         return ""
+    if canon.lower() in {"deepseek-flash", "deepseek-official/deepseek-flash"}:
+        return "deepseek" if _dsh_enabled() else ""
     m = _MN_FAMILY_RE.search(canon)
     if not m:
         # A program name stored where a model should be ("claude-code",
@@ -8858,6 +8873,8 @@ def mail_watcher_health() -> dict:
 # HTTP
 # --------------------------------------------------------------------------- #
 def is_public_static(path):
+    if path == "/assets/deepseek.svg" and not _dsh_enabled():
+        return False
     return path == '/' or path in THEME_ASSETS
 
 
@@ -9006,6 +9023,8 @@ class Handler(BaseHTTPRequestHandler):
                     )
             except FileNotFoundError:
                 self._send(500, b"index.html missing", "text/plain")
+        elif path == "/assets/deepseek.svg" and not _dsh_enabled():
+            self._send(404, b"not found", "text/plain")
         elif path in THEME_ASSETS:
             asset_path, content_type = THEME_ASSETS[path]
             try:
