@@ -244,6 +244,7 @@ def start_pane(state):
     session = 'dsh-' + json.loads((state / 'attempt.json').read_text())['attempt_id'][:8]
     command = shlex.join([sys.executable, str(Path(__file__).resolve()), 'run', '--state', str(state)])
     clean = {'HOME': config['home'], 'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8', 'LC_ALL': 'en_US.UTF-8'}
+    write_json(state / 'pane-start-intent.json', {'session': session, 'phase': 'starting'})
     # Default socket, one new session; do not alter/kill the shared server.
     result = subprocess.run(['/usr/bin/env', 'tmux', 'new-session', '-d', '-P', '-F', '#{pane_id}',
                              '-s', session, '-c', config['worktree'], command],
@@ -418,6 +419,14 @@ def abandon_run(state):
     if (state / 'runtime-process.json').exists():
         stop_run(state)
         return
+    # Cancellation during wrapper/pane startup is ordinary. Missing runtime
+    # metadata does not prove that an in-progress launch cannot still run.
+    if any((state / name).exists() for name in
+           ('start-intent.json', 'pane-start-intent.json', 'owned-pane.json')):
+        write_json(state / 'runtime-exit.json', {'exit_code': None, 'signal': None,
+            'group_absent': None, 'group_check': 'unknown', 'runtime_not_started': None,
+            'stopped_by': 'startup-unconfirmed'})
+        raise ValueError('Owned startup absence unconfirmed; preserve pane and state')
     if (state / 'run-started.json').exists():
         receipt = json.loads((state / 'runtime-exit.json').read_text())
         if receipt.get('runtime_not_started') is not True:

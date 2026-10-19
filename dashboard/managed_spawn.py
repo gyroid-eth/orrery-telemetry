@@ -241,7 +241,13 @@ class Manager:
             return None
         for job in root.iterdir() if root.exists() else []:
             value = read(job / 'status.json', {})
-            if value.get('name') == name and value.get('finished') is not True:
+            identity = read(job / 'state/mail-identity.json', {})
+            if name and name in (value.get('name'), identity.get('agent_name')):
+                if value.get('finished') is True:
+                    if value.get('runtime_success') is True and value.get('phase') in ('cleaned', 'cleaned_after_failure'):
+                        return {**value, 'ok': True, 'managed': True}
+                    return {**error('managed_cleanup_unconfirmed'), 'attempt_id': job.name,
+                            'name': name, 'state_path': value.get('state_path')}
                 save(job / 'stop-request.json', {'requested_at': time.time()})
                 return {'ok': True, 'managed': True, 'pending': True, 'attempt_id': job.name, 'name': name}
         return None

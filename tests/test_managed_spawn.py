@@ -294,3 +294,24 @@ class WorkerExitTests(unittest.TestCase):
                 self.assertEqual(m.main(), 1)
             with patch.object(m, 'run_job', return_value={**result, 'state': 'ready', 'phase': 'cleaned'}):
                 self.assertEqual(m.main(), 0)
+
+class ManagedFinishedStopTests(unittest.TestCase):
+    setUp = ManagedTests.setUp
+    payload = ManagedTests.payload
+
+    def test_finished_or_cleanup_unknown_names_never_reach_native_kill(self):
+        from dashboard import server
+        request = self.payload(); self.manager.submit(request)
+        job = self.root / 'jobs' / request['attempt_id']
+        for clean in (False, True):
+            status = m.read(job / 'status.json')
+            status.update(name='TestChild', finished=True, phase='cleaned' if clean else 'cleanup_unconfirmed',
+                          runtime_success=True if clean else None)
+            m.save(job / 'status.json', status)
+            with patch.object(server, '_managed_spawn_manager', return_value=self.manager), \
+                 patch.object(server, '_valid', side_effect=AssertionError('native fallback')):
+                result = server.do_kill('TestChild')
+            self.assertTrue(result['managed'])
+            self.assertEqual(result['ok'], clean)
+            if not clean:
+                self.assertEqual(result['error_code'], 'managed_cleanup_unconfirmed')

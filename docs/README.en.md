@@ -80,3 +80,5 @@ Documents without a translation are labelled with their original language. Image
 
 - [Managed child requests, status, and lifecycle](managed-spawn-contract.md)
 - [dsh stage A-min](dsh-stage-a-min.md)
+
+- [Managed catalog](managed-catalog.md)

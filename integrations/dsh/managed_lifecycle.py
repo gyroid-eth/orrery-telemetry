@@ -49,6 +49,7 @@ def prepare(*, state, config_file, backend_id, task, worktree, parent, run):
 
 
 def start(state, *, run):
+    save(Path(state) / 'start-intent.json', {'phase': 'starting'})
     return step(state, 'launch.py', 'start', run=run, background=True)
 
 

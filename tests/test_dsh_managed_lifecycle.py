@@ -67,3 +67,34 @@ class DshAdapterTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class StartupAbsenceTests(unittest.TestCase):
+    def test_stop_before_runtime_marker_keeps_live_startup_unknown(self):
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            wrapper = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                env={'PATH': '/usr/bin:/bin'}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                d.save(state / 'start-intent.json', {'pid': wrapper.pid})
+                result = subprocess.run([sys.executable, str(d.HERE / 'launch.py'), 'abandon', '--state', str(state)],
+                    capture_output=True, text=True, timeout=10, env={'PATH': '/usr/bin:/bin'})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIsNone(wrapper.poll())
+                receipt = d.read(state / 'runtime-exit.json')
+                self.assertIsNone(receipt['group_absent'])
+                self.assertEqual(receipt['group_check'], 'unknown')
+                self.assertIsNot(receipt['runtime_not_started'], True)
+                for name in ('release-receipt.json', 'retire-receipt.json', 'cleaned.json'):
+                    self.assertFalse((state / name).exists())
+            finally:
+                wrapper.terminate(); wrapper.wait(timeout=5)
+
+    def test_start_marks_intent_before_the_background_wrapper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def run(argv, **kwargs):
+                self.assertTrue((Path(tmp) / 'start-intent.json').exists())
+                self.assertTrue(kwargs['background'])
+                return SimpleNamespace(pid=123)
+            d.start(Path(tmp), run=run)
