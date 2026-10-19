@@ -23,6 +23,8 @@ launch.pyの`--patch-receipt <receipt.json>`は必須です。managed entryはTU
 
 repoのbackend.jsonは空のURL/accountを持つテンプレートです。コピー先の利用者設定（例：~/.config/orrery/dsh-backends.json）に二backendのURL・model・Keychainのservice/account参照・effort/output上限・モデル定義・idle要否をまとめ、ORRERY_DSH_BACKEND_FILEでそのrepo外fileを渡します。テンプレートの空URLでは起動しません。設定に鍵の値は置きません。managed.patch.ymlは共通機能制限だけを持ち、選択済みprovider/model行はlauncherが最後に投影します。将来の稼働用の鍵取得はMacのsecurity、WSLの外部credential helperの入口へ寄せる設計で、現在のspike launcherはdummy鍵だけを使います。WSLのhelper/Node/native/TUI実機動作は未確認であり、Macの実体path/SHAを共通定数へしません。
 
+`backends.<id>.auxiliary`は将来の補助route用の任意欄です（省略/nullなら主routeを使う設計）；現版は送り分け未実装で、補助無効の既定を維持します。
+
 ## 通信と補助process
 
 通常の更新/onboarding/補助起動でも予定外通信や鍵継承が起こり得るため、以下だけを残します。

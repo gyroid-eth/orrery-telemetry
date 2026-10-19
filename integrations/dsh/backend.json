@@ -20,7 +20,8 @@
       "effort": "low",
       "max_output_tokens": 2048,
       "idle_check": false,
-      "model_definition": null
+      "model_definition": null,
+      "auxiliary": null
     },
     "strata": {
       "base_url": "",
@@ -37,7 +38,8 @@
         "name": "Strata Qwen",
         "contextWindow": 131072,
         "maxTokens": 4096
-      }
+      },
+      "auxiliary": null
     }
   }
 }
