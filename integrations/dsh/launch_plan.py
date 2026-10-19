@@ -95,7 +95,8 @@ def build_launch(value: LaunchInput) -> LaunchPlan:
         raise LaunchPlanError("attempt IDが必要です")
     if type(value.model) is not str or not value.model.strip():
         raise LaunchPlanError("明示したmodelが必要です")
-    if value.effort not in {"none", "low", "medium", "high", "max"}:
+    # 通常のthinking選択で不正patchを作らないよう、固定provider schemaと揃える。
+    if value.effort not in {"off", "low", "high", "max"}:
         raise LaunchPlanError("effortが対応する値ではありません")
     limits = _limits(value.limits)
     state = PurePosixPath(value.state_root)

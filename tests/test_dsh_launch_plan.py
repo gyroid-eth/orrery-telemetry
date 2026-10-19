@@ -91,6 +91,17 @@ class LaunchPlanTests(unittest.TestCase):
         self.assertFalse(limits["fallback"])
         self.assertEqual(limits["token_control"], "post_usage_stop")
 
+    def test_effort_matches_every_value_of_pinned_deepseek_schema(self):
+        for effort in ("off", "low", "high", "max"):
+            with self.subTest(effort=effort):
+                plan = policy.build_launch(replace(self.spec(), effort=effort))
+                rows = {row["id"]: row for row in plan.patch_rows}
+                self.assertEqual(rows["llm-deepseek"]["config"]["reasoningEffort"], effort)
+                self.assertEqual(rows["agent-default-model"]["config"]["reasoningEffort"], effort)
+        for effort in ("none", "medium", "unlimited", "", None):
+            with self.subTest(effort=effort), self.assertRaises(policy.LaunchPlanError):
+                policy.build_launch(replace(self.spec(), effort=effort))
+
     def test_unbounded_limits_and_missing_context_are_rejected(self):
         for limits in (policy.Limits(session_requests=0), policy.Limits(turn_requests=True),
                        policy.Limits(max_output_tokens=-1), policy.Limits(timeout_seconds=0)):
