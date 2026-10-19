@@ -33,6 +33,8 @@ HTTPのattempt_idは要求/jobのUUIDでありrunnerの内部IDと別。runner�
 
 stateはpending/ready/failed。readyはschema/backend/preflightと**実起動後のplugin/tool-ready**の証拠があるときだけ。登録完了やwrapperのexit0をreadyにしない。子名は登録後にのみ埋まる。task終了後はphase=stopping/releasing/retiring/cleaned等、finished/runningとtask_success/runtime_successを別々に出す。後始末の失敗/不明はfailed、error_code/state_pathを残す。readyをtask成功へ読み替えない。未知attemptはok=false,error_code=attempt_not_found。statusはHTTP呼出しを超えて同attemptを保持し、再起動後も保存済みstatus JSONを読めるようにする。
 
+`cleanup_success`はcleaned/cleaned_after_failureでtrue、cleaningの失敗でfalse、それ以外はnull。`runtime_success`は従来どおりgroup消滅・release・retireの証拠だけを表し、clean完了を意味しない。
+
 ## Catalogの最小契約（A2）
 
 SharpBoseの`dashboard/managed_catalog.py`は次のpure関数を公開する。

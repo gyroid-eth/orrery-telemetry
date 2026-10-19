@@ -44,6 +44,14 @@ def error(code):
     return {'ok': False, 'error': code, 'error_code': code, 'managed': True}
 
 
+def cleanup_success(status):
+    if status.get('phase') in ('cleaned', 'cleaned_after_failure'):
+        return True
+    if status.get('error_phase') == 'cleaning':
+        return False
+    return None
+
+
 def mode(core):
     return 'global' if core.GLOBAL_MODE else 'legacy'
 
@@ -179,7 +187,8 @@ class Manager:
             if str(uuid.UUID(attempt_id)) != attempt_id:
                 return error('invalid_attempt_id')
             root, _ = self.root(require_enabled=False)
-            return read(root / attempt_id / 'status.json') or error('attempt_not_found')
+            status = read(root / attempt_id / 'status.json')
+            return {**status, 'cleanup_success': cleanup_success(status)} if status else error('attempt_not_found')
         except (ValueError, TypeError, AttributeError):
             return error('attempt_not_found')
 
@@ -216,7 +225,7 @@ class Manager:
                      'config_file': str(self.config_file), 'selected_mode': self.selected_mode})
                 state = {'ok': True, 'managed': True, 'attempt_id': aid, 'name': None,
                          'state': 'pending', 'phase': 'queued', 'pending': True, 'running': False,
-                         'finished': False, 'task_success': None, 'runtime_success': None,
+                         'finished': False, 'task_success': None, 'runtime_success': None, 'cleanup_success': None,
                          'state_path': str(job / 'state'), 'runtime_attempt_id': None,
                          'error': None, 'error_code': None}
                 save(job / 'status.json', state)
@@ -311,6 +320,7 @@ def run_job(job, *, adapter=None, parent_call=None, run=None, sleep=time.sleep, 
     state = job / 'state'
     def update(**values):
         current.update(values)
+        current['cleanup_success'] = cleanup_success(current)
         save(job / 'status.json', current)
     finalize_started = False
     try:
@@ -410,10 +420,12 @@ def run_job(job, *, adapter=None, parent_call=None, run=None, sleep=time.sleep, 
                 result = adapter.finalize(state, parent_call=parent_call, run=run)
                 update(task_success=result.get('task_success'), runtime_success=result.get('runtime_success'), running=False)
                 if result.get('runtime_success') is True:
+                    update(phase='cleaning')
                     adapter.clean(state, run=run)
                     update(phase='cleaned_after_failure', finished=True)
             except Exception:
-                update(phase='cleanup_unconfirmed', finished=True)
+                update(error_phase='cleaning' if current.get('phase') == 'cleaning' else current.get('error_phase'),
+                       phase='cleanup_unconfirmed', finished=True)
         else:
             update(finished=True)
     return current

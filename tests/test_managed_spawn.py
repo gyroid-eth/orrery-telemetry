@@ -76,6 +76,7 @@ class ManagedTests(unittest.TestCase):
                     request = self.payload(provider, harness)
                     accepted = self.manager.submit(request)
                     self.assertEqual(accepted['state'], 'pending')
+                    self.assertIsNone(accepted['cleanup_success'])
                     job = self.root / 'jobs' / request['attempt_id']
                     adapter = Adapter(job)
                     final = m.run_job(job, adapter=adapter, parent_call=self.parent_call,
@@ -83,6 +84,8 @@ class ManagedTests(unittest.TestCase):
                     self.assertEqual(adapter.calls, ['prepare', 'start', 'finalize', 'clean'])
                     self.assertTrue(final['task_success']); self.assertTrue(final['runtime_success'])
                     self.assertTrue(final['finished']); self.assertEqual(final['phase'], 'cleaned')
+                    self.assertTrue(final['cleanup_success'])
+                    self.assertTrue(self.manager.lookup(request['attempt_id'])['cleanup_success'])
                     self.assertNotEqual(final['attempt_id'], final['runtime_attempt_id'])
                     self.assertEqual((job / 'work/result.txt').read_text(), 'original')
                     self.assertEqual((self.source / 'result.txt').read_text(), 'original')
@@ -130,6 +133,7 @@ class ManagedTests(unittest.TestCase):
         self.assertEqual(adapter.calls.count('finalize'), 1)
         self.assertNotIn('clean', adapter.calls)
         self.assertIsNone(final['runtime_success']); self.assertEqual(final['state'], 'failed')
+        self.assertIsNone(final['cleanup_success'])
     def test_terminal_without_readiness_cannot_be_success(self):
         request = self.payload(); self.manager.submit(request)
         job = self.root / 'jobs' / request['attempt_id']; adapter = Adapter(job, broken=True)
@@ -275,6 +279,39 @@ class WorkerExitTests(unittest.TestCase):
     payload = ManagedTests.payload
     parent_call = ManagedTests.parent_call
 
+    def test_saved_status_without_cleanup_field_does_not_infer_from_runtime(self):
+        request = self.payload(); self.manager.submit(request)
+        path = self.root / 'jobs' / request['attempt_id'] / 'status.json'
+        current = m.read(path)
+        current.pop('cleanup_success')
+        for fields, expected in (({'phase': 'running'}, None),
+                                 ({'phase': 'cleaning'}, None),
+                                 ({'phase': 'failed', 'error_phase': 'cleaning'}, False),
+                                 ({'phase': 'cleaned'}, True),
+                                 ({'phase': 'cleaned_after_failure', 'error_phase': 'cleaning'}, True)):
+            m.save(path, {**current, 'runtime_success': True, **fields})
+            self.assertIs(self.manager.lookup(request['attempt_id'])['cleanup_success'], expected)
+
+    def test_recovery_clean_failure_preserves_runtime_proof_but_fails_cleanup(self):
+        request = self.payload(); self.manager.submit(request)
+        job = self.root / 'jobs' / request['attempt_id']
+        class FailingRecovery(Adapter):
+            def prepare(self, **kwargs):
+                super().prepare(**kwargs)
+                raise OSError('ordinary partial preparation failure')
+            def clean(self, state, *, run):
+                self.calls.append('clean')
+                raise OSError('ordinary cleanup permission failure')
+        adapter = FailingRecovery(job)
+        result = m.run_job(job, adapter=adapter, parent_call=self.parent_call,
+                           run=object(), sleep=lambda _: None, provider_loader=self.loader)
+        self.assertTrue(result['runtime_success'])
+        self.assertFalse(result['cleanup_success'])
+        self.assertEqual(result['state'], 'failed')
+        self.assertEqual(result['phase'], 'cleanup_unconfirmed')
+        self.assertEqual(result['error_phase'], 'cleaning')
+        self.assertEqual(adapter.calls, ['prepare', 'finalize', 'clean'])
+
     def test_clean_failure_keeps_worker_exit_nonzero_even_with_task_runtime_proof(self):
         request = self.payload(); self.manager.submit(request)
         job = self.root / 'jobs' / request['attempt_id']
@@ -287,7 +324,11 @@ class WorkerExitTests(unittest.TestCase):
                            run=object(), sleep=lambda _: None, provider_loader=self.loader)
         self.assertTrue(result['task_success'])
         self.assertTrue(result['runtime_success'])
+        self.assertFalse(result['cleanup_success'])
+        self.assertFalse(self.manager.lookup(request['attempt_id'])['cleanup_success'])
         self.assertEqual(result['state'], 'failed')
+        self.assertEqual(result['error_phase'], 'cleaning')
+        self.assertEqual(result['error_code'], 'managed_attempt_failed')
         self.assertEqual(adapter.calls.count('finalize'), 1)
         with patch('sys.argv', ['managed_spawn.py', '--job', str(job)]):
             with patch.object(m, 'run_job', return_value=result):
