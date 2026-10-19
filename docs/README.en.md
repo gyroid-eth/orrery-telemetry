@@ -30,6 +30,10 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Reusable Codex plugin lifecycle (Japanese)](codex-plugin-lifecycle.md) — Shared operations, scoped hook trust, and isolated verification.
 - [Codex App integration](codex-app.en.md) — Add Desktop tasks/subagents as an optional provider.
 - [Antigravity / Gemini](antigravity.en.md) — Add an optional provider and understand authentication and feature boundaries.
+- [dsh 段Aの準備](dsh-stage-a.md) — opt-inと未接続部分の境界。
+- [dsh 起動計画](dsh-launch-plan.md) — 固定Node・argv/env・要求上限のpureな生成。
+- [dsh 入力の受領と回復](dsh-input-recovery.md) — Mailの重複・busy・pasteのpartial/unknown。
+- [dsh-TUI source監査](dsh-tui-source-audit.md) — 固定版のintegrity・直接action・補助processと通信。
 - [Persistent agents](persistent-agents.en.md) — Enrollment, interactive/headless startup, and credential recovery.
 - [Deterministic daemons](daemon-agents.en.md) — Dedicated identity, canonical binding, notification waits, and shutdown.
 - [Mail service updates](agentstack-mail-update.en.md) — Operational procedure to verify and replace a running Mail build.

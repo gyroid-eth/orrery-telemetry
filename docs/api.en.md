@@ -64,7 +64,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":19}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":20}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.

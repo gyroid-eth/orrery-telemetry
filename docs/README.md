@@ -30,6 +30,10 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [Codex plugin 導入処理の再利用](codex-plugin-lifecycle.md) — 本体 install 接続前の共通処理、対象 hook の信頼と隔離確認。
 - [Codex App 統合](codex-app.md) — optional provider として Desktop の task/subagent を載せる。
 - [Antigravity / Gemini](antigravity.md) — optional provider の追加と認証・機能の境界。
+- [dsh 段Aの準備](dsh-stage-a.md) — opt-inと未接続部分の境界。
+- [dsh 起動計画](dsh-launch-plan.md) — 固定Node・argv/env・要求上限のpureな生成。
+- [dsh 入力の受領と回復](dsh-input-recovery.md) — Mailの重複・busy・pasteのpartial/unknown。
+- [dsh-TUI source監査](dsh-tui-source-audit.md) — 固定版のintegrity・直接action・補助processと通信。
 - [常駐 agent](persistent-agents.md) — enrollment、interactive/headless 起動、credential の復旧。
 - [決定論的 daemon](daemon-agents.md) — 専用 identity、正規 binding、通知待機と停止の契約。
 - [Mail service の更新](agentstack-mail-update.md) — 稼働中 Mail の build を検証して差し替える運用手順。
