@@ -37,6 +37,8 @@ repoのbackend.jsonは空のURL/accountを持つテンプレートです。コ�
 
 offlineでは要求のmodel/tool集合を組み立てた後、statusもproviderも呼ばず`offline-capture {forwarded:0}`、exit73で止まります。契約違反はexit78、runtime例外79、上限80です。spikeで必須のtoolはread/writeだけ、runではbackend.jsonのwire_tools全3件です。
 
+拒否のblocked-*はHermesと同じmethod/host/port/path/callersを記録します。pathはURL pathnameだけ、callersはadapter/runtimeからの相対source位置（file/line/function、最大16）です。query/userinfo/fragment、本文、header、鍵、process argv/env値を保存しません。ネットワーク以外の拒否はhost/port=nullで操作名をmethodに残します。
+
 ## taskとruntimeの証拠を分ける
 
 launchはattempt.json/task.json/runtime-exit.json、pluginはevents.jsonl、egressはaudit.jsonlを書きます。相互の内部をimportせず、state rootのJSON/JSONLを境界にします。attempt.json.phaseはspike/run、agent_nameは実際の子名です。spikeに架空のMail成功を作りません。
@@ -58,7 +60,9 @@ python3 integrations/dsh/completion.py /absolute/state/root --runtime
 
 ## offline検証
 
-NodeもPythonも検証用の明示実体を使い、負荷が1分平均15未満のとき直列に実行します。
+NodeもPythonも検証用の明示実体を使い、直列に実行します。本番runのload制限はoffline回帰には適用しません。
+
+全dsh回帰は`bash scripts/check-dsh.sh --node /absolute/fixed/node --runtime /absolute/pinned/runtime --out /absolute/check-output`の1コマンドで実行できます。Python 3.11以上と既存の固定runtime/patch receiptを検査し、私有HOME・一時dir・明示envを準備してNode fixture、全Python dsh試験、catalog試験、両backendの実SDK/TUI無通信preflightを直列で流します。依存をdownload/repairせず、不足時は失敗にします。`result.json`はsuccess/tests_run/failures/errors/skips/allowed_skip_reasons/unapproved_skipsを持ち、allowed_skips.json（既定[]）の理由文字列に完全一致しないskipは失敗です。合格した試験のskipが隠れる形にはしません。
 
 ```text
 /absolute/fixed/node --test tests/test_dsh_egress.mjs

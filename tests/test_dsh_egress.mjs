@@ -88,6 +88,21 @@ test('DeepSeek balance/onboarding on its own origin remain blocked with no statu
   assert.deepEqual(h.calls.map(row => row.input), [endpoint(h.backend)]);
 });
 
+test('blocked requests use the common method/host/port/path/callers fields without payload or credentials', async () => {
+  const h = harness('deepseek');
+  await assert.rejects(h.fetch('https://user:password@other.invalid:8443/blocked?token=' + dummy + '#private',
+    {...request(h.backend), headers: {Authorization: dummy}}));
+  const row = h.events.at(-1);
+  assert.equal(row.method, 'POST');
+  assert.equal(row.host, 'other.invalid');
+  assert.equal(row.port, 8443);
+  assert.equal(row.path, '/blocked');
+  assert.ok(row.callers.length > 0);
+  assert.ok(row.callers.every(c => c.file.startsWith('adapter/') && Number.isInteger(c.line) && typeof c.function === 'string'));
+  const text = JSON.stringify(row);
+  for (const value of [dummy, 'password', 'Authorization', 'body', '#private']) assert.ok(!text.includes(value));
+});
+
 test('unknown model, unsupported beta, structural tool_addition and extra tools do not forward', async () => {
   for (const change of [{model: 'other'}, {max_tokens: 100000},
     {messages: [{content: [{type: 'tool_addition'}]}]}, {tools: [{name: 'bash'}]}]) {
@@ -133,6 +148,12 @@ test('redirect responses are not followed by provider or status', async () => {
   await assert.rejects(assertIdle(async () => new Response('', {status: 302}),
     'https://fixture.invalid', dummy, row => events.push(row)), error => error.dshExitCode === 78);
   assert.ok(events.some(row => row.phase === 'blocked-redirect'));
+  const blocked = events.find(row => row.phase === 'blocked-redirect');
+  assert.equal(blocked.method, 'GET');
+  assert.equal(blocked.host, 'fixture.invalid');
+  assert.equal(blocked.port, 443);
+  assert.equal(blocked.path, '/v1/status');
+  assert.deepEqual(blocked.callers, []);
 });
 
 test('one in-flight request is held through body EOF, then request cap stops the next', async () => {
