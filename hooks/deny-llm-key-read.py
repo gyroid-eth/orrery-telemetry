@@ -59,34 +59,33 @@ def substitutions(command):
         i += 1
 
 
-def commands(command, depth=0):
+def commands(command, depth=0, executables=()):
+    """Scan the whole command for extraction forms, independent of shell prefixes.
+
+    Quoted data remains one token. Grep/rg arguments are data, while their
+    command substitutions are scanned separately. This deliberately does not
+    attempt to execute or fully interpret shell control flow.
+    """
     if depth > 5:
         raise ValueError('nested shell')
     for inner in substitutions(command):
-        yield from commands(inner, depth + 1)
+        yield from commands(inner, depth + 1, executables)
     lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|()<>\n')
     lexer.whitespace = ' \t\r'
     words = []
     for token in [*lexer, ';']:
         if token and all(c in ';&|()<>\n' for c in token):
-            if words:
-                while words and re.match(r'^[A-Za-z_][A-Za-z_0-9]*=', words[0]):
-                    words.pop(0)
-                while words and Path(words[0]).name in {'env', 'command', 'sudo', 'timeout'}:
-                    wrapper = Path(words.pop(0)).name
-                    while words and (words[0].startswith('-') or '=' in words[0]):
-                        option = words.pop(0)
-                        if option in {'-u', '--unset', '-C', '--chdir', '-k', '--kill-after', '-s', '--signal'} and words:
-                            words.pop(0)
-                    if wrapper == 'timeout' and words:
-                        words.pop(0)  # duration
-                if words:
-                    yield words
-                    if Path(words[0]).name in {'bash', 'sh', 'zsh', 'dash'}:
-                        for n, arg in enumerate(words[1:], 1):
-                            if arg.startswith('-') and 'c' in arg and n + 1 < len(words):
-                                yield from commands(words[n + 1], depth + 1)
-                                break
+            for i, word in enumerate(words):
+                name = Path(word).name
+                if name in {'grep', 'rg'}:
+                    break
+                if name in {'security', 'secret-tool'} or word in executables:
+                    yield words[i:]
+                if name in {'bash', 'sh', 'zsh', 'dash'}:
+                    for n in range(i + 1, len(words) - 1):
+                        if words[n].startswith('-') and 'c' in words[n]:
+                            yield from commands(words[n + 1], depth + 1, executables)
+                            break
             words = []
         else:
             words.append(token)
@@ -218,7 +217,7 @@ def decide(payload):
         invocations = list(commands(text))
         forms = [form for words in invocations if (form := extraction(words))]
         refs, auth_commands = read_definitions(paths)
-        for words in invocations:
+        for words in commands(text, executables={auth[0] for auth in auth_commands}):
             if any(words[:len(auth)] == auth for auth in auth_commands):
                 return True
         return any(same_key(form, ref) for form in forms for ref in refs)

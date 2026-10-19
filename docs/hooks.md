@@ -241,3 +241,5 @@ modelのshell toolなら拒否しますが、launcher/key_cmd内部のsubprocess
 鍵の漏れを止めつつ、壊れた設定1つで全shell作業を止めないためです。commandや鍵参照を
 理由にechoせず、固定の理由だけを返します。専用ユーザーやOS sandboxの代わりではありません。
 既知の限界: base64等で組み立てるcommand、任意scriptの内部、別toolによる読取りは解析しません。
+
+取り出し形はcommand全文から照合し、if/then・brace等の前置にも適用します。既知の限界として、quoted heredocの例示やinterpreter欠落時の鍵読取りに似た文字列は、保守的に誤拒否することがあります。

@@ -235,3 +235,5 @@ work continues. This limits key exposure without making broken configuration
 stop every command. Diagnostics never echo commands or credential references.
 Known limits: encoded commands, arbitrary script internals and reads through
 other tools are not analyzed. This is a mistake guard, not OS isolation.
+
+The scan finds extraction forms throughout the command, including control-flow and brace prefixes. Known limits also include conservative refusals of quoted heredoc examples and credential-looking text when the interpreter is unavailable.

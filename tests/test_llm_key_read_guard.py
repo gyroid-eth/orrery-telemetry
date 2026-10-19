@@ -184,3 +184,50 @@ def test_ordinary_command_wrappers_do_not_hide_the_lookup(tmp_path, prefix):
     e = env(tmp_path)
     definitions(tmp_path, e)
     assert hook(prefix + 'security find-generic-password -w -s fixture-model-key', e).returncode == 2
+
+
+@pytest.mark.parametrize('structure', [
+    'if true; then {read}; fi',
+    '{{ {read}; }}',
+    'true && {read}',
+    '( {read} )',
+    'KEY="$( {read} )"',
+])
+@pytest.mark.parametrize('store', ['keychain', 'secret-tool'])
+@pytest.mark.parametrize('tool', ['Bash', 'exec_command'])
+def test_extraction_is_found_anywhere_in_shell_control_syntax(tmp_path, structure, store, tool):
+    e = env(tmp_path)
+    if store == 'keychain':
+        definitions(tmp_path, e)
+        read = 'security find-generic-password -w -s fixture-model-key -a fixture-user'
+    else:
+        path = tmp_path / 'profile.toml'
+        path.write_text('[codex]\nauth_command = ["/usr/bin/secret-tool", "lookup", "service", "fixture-model-key", "account", "fixture-user"]\n')
+        e['AGENTSTACK_LLM_KEY_DEFINITIONS'] = str(path)
+        read = 'secret-tool lookup service fixture-model-key account fixture-user'
+    assert hook(structure.format(read=read), e, tool=tool).returncode == 2
+
+
+@pytest.mark.parametrize('broken', [False, True])
+@pytest.mark.parametrize('command', [
+    'if true; then security find-generic-password -s fixture-model-key; fi',
+    'if true; then grep -e security -e find-generic-password -e -w backend.json; fi',
+    "{ grep '$(security find-generic-password -w -s fixture-model-key)' guide.md; }",
+])
+def test_full_command_scan_still_allows_attributes_and_grep(tmp_path, broken, command):
+    e = env(tmp_path)
+    path = definitions(tmp_path, e)
+    if broken:
+        path.write_text('{invalid')
+    assert hook(command, e).returncode == 0
+
+
+def test_control_prefix_also_protects_defined_auth_helper_and_broken_definitions(tmp_path):
+    e = env(tmp_path)
+    path = tmp_path / 'profile.toml'
+    path.write_text('[claude]\nauth_command = ["/fixture/auth-helper"]\n')
+    e['AGENTSTACK_LLM_KEY_DEFINITIONS'] = str(path)
+    assert hook('if true; then /fixture/auth-helper; fi', e).returncode == 2
+    path.write_text('{broken')
+    assert hook('if true; then security find-generic-password -w -s fixture-model-key; fi', e).returncode == 2
+    assert hook('if true; then git status; fi', e).returncode == 0
