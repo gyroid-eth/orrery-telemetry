@@ -75,9 +75,11 @@ def test_usd_total_and_availability_in_existing_usage_provider_row():
     balance = {'currency': 'USD', 'total_balance': '12.3400', 'is_available': True}
     current = render(FIXTURE['providers'] + [row(balance)])
     assert '$12' in current['pill']['html']
-    assert '利用可能' not in current['pill']['html']
+    assert 'Account available' not in current['pill']['html']
     assert '$12.34' in current['popover']['html']
-    assert '利用可能' in current['popover']['html']
+    assert 'Account available' in current['popover']['html']
+    assert 'Account available' in current['pill']['title']
+    assert current['popover']['kick'].endswith('numbers are % left; balances in dollars')
     assert 'CNY' not in json.dumps(current)
     assert 'deepseek.svg' in current['popover']['html']
     assert FIXTURE['popover']['html'] in current['popover']['html']
@@ -87,18 +89,18 @@ def test_usd_total_and_availability_in_existing_usage_provider_row():
 def test_unavailable_account_is_warning_not_acquisition_failure():
     current = render([row({'currency': 'USD', 'total_balance': '0.0000', 'is_available': False})])
     assert '$0.00' in current['popover']['html']
-    assert '利用不可' in current['popover']['html']
+    assert 'Account unavailable' in current['popover']['html']
     assert 'up-balance low' in current['popover']['html']
     assert 'up-p low' in current['pill']['html']
 
 
 def test_no_usd_and_fetch_failure_are_distinct_and_never_fake_zero():
     missing = render([row({'currency': 'USD', 'total_balance': None, 'is_available': True})])
-    assert 'USD の残高なし' in missing['popover']['html']
+    assert 'No USD balance' in missing['popover']['html']
     failed = render([row(None, 'unavailable')])
     assert '$?' in failed['popover']['html'] and '$?' in failed['pill']['html']
     assert '$0' not in json.dumps(failed)
-    assert '利用不可' not in failed['popover']['html']
+    assert 'Account unavailable' not in failed['popover']['html']
     assert failed['pill']['hidden'] is False
 
 
@@ -124,10 +126,10 @@ def test_usage_tick_failure_clears_only_balance_after_a_success(failure):
     providers = FIXTURE['providers'] + [row({'currency': 'USD', 'total_balance': '12.349', 'is_available': True})]
     result = render(providers, failure=failure)
     assert '$12.34' in result['before']['popover']
-    assert '利用可能' in result['before']['popover']
+    assert 'Account available' in result['before']['popover']
     assert '$?' in result['after']['popover'] and '$?' in result['after']['pill']
     assert '$12' not in result['after']['popover']
-    assert '利用可能' not in result['after']['popover']
+    assert 'Account available' not in result['after']['popover']
     assert result['after']['providers'][:-1] == providers[:-1]
     assert FIXTURE['popover']['html'] in result['after']['popover']
     assert result['after']['providers'][-1]['balance'] is None

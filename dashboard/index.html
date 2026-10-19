@@ -37282,8 +37282,8 @@ function usageBalanceState(pv,places=2){
     return {text:'$?',availability:'',cls:'stale'};
   const amount=b.total_balance===null?null:usageUSDAmount(b.total_balance,places);
   if(b.total_balance!==null&&amount===null)return {text:'$?',availability:'',cls:'stale'};
-  return {text:b.total_balance===null?'USD の残高なし':`$${amount}`,
-    availability:b.is_available?'利用可能':'利用不可',cls:b.is_available?'':'low'};
+  return {text:b.total_balance===null?'No USD balance':`$${amount}`,
+    availability:b.is_available?'Account available':'Account unavailable',cls:b.is_available?'':'low'};
 }
 function renderUsagePill(providers){
   const list=document.getElementById('usage-pill-list');
@@ -37326,7 +37326,7 @@ function renderUsagePopover(data){
   const providers=data.providers||[];
   const observed=providers.map(p=>p.last_observed_at||p.observed_at).filter(Boolean);
   kick.textContent=(observed.length?'last read '+usageClock(Math.max(...observed))+' · ':'')+
-    (providers.some(p=>p.measurement_kind==='balance')?'quotaは残り% · API残高はUSD':'numbers are % left');
+    (providers.some(p=>p.measurement_kind==='balance')?'numbers are % left; balances in dollars':'numbers are % left');
   body.innerHTML=providers.map(pv=>{
     const head=`<b>${usageLogo(pv.provider)}${esc(usageName(pv.provider))}</b>`;
     if(pv.measurement_kind==='balance'){
