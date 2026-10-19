@@ -117,6 +117,49 @@ class ProductLifecycle(unittest.TestCase):
                 launch.credential({})
             helper.assert_not_called()
 
+    def test_parent_inbox_record_requires_same_attempt_actual_message(self):
+        lifecycle.save(self.root/'attempt.json',{'attempt_id':'attempt','agent_name':'FixtureChild'})
+        lifecycle.save(self.root/'task.json',{'attempt_id':'attempt','task_id':'task','report_to':'FixtureParent'})
+        event={'phase':'mail-sent','attempt_id':'attempt','task_id':'task','message_id':42,
+               'from':'FixtureChild','to':'FixtureParent','verified_sender':True,'ok':True}
+        (self.root/'events.jsonl').write_text(json.dumps(event)+'\n')
+        capture=self.root/'inbox.json'
+        message={'id':42,'from':'FixtureChild','to':['FixtureParent'],'body_md':'Not copied into receipt'}
+        lifecycle.save(capture,{'result':[message]})
+        with mock.patch.object(lifecycle.subprocess,'run',side_effect=AssertionError('No RPC')):
+            receipt=lifecycle.record_mail(self.root,capture)
+        self.assertEqual(receipt['message_id'],42)
+        self.assertNotIn('body_md',receipt)
+        for wrong in ({**message,'id':43},{**message,'from':'Other'}, {**message,'to':['Other']}):
+            lifecycle.save(capture,{'result':[wrong]})
+            with self.assertRaises(ValueError):
+                lifecycle.record_mail(self.root,capture)
+        lifecycle.save(capture,{'result':[message]})
+        event['attempt_id']='old'
+        (self.root/'events.jsonl').write_text(json.dumps(event)+'\n')
+        with self.assertRaises(ValueError):
+            lifecycle.record_mail(self.root,capture)
+
+    def test_parent_whois_confirms_same_child_after_real_cleanup_receipt(self):
+        lifecycle.save(self.root/'attempt.json',{'attempt_id':'attempt','agent_name':'FixtureChild'})
+        lifecycle.save(self.root/'retire-receipt.json',{'attempt_id':'attempt','agent_name':'FixtureChild',
+            'cleanup_exit_code':0,'retired_at':None,'confirmed':False,'source':'parent-bound-whois','checked_at':None})
+        capture=self.root/'whois.json'
+        for profile in ({'name':'Other','retired_at':'2026-10-19T06:00:00Z'},
+                        {'name':'FixtureChild','retired_at':None}):
+            lifecycle.save(capture,profile)
+            with self.assertRaises(ValueError):
+                lifecycle.confirm_retire(self.root,capture)
+            self.assertIs(lifecycle.read(self.root/'retire-receipt.json')['confirmed'],False)
+        lifecycle.save(capture,{'structuredContent':{'name':'FixtureChild','retired_at':'2026-10-19T06:00:00Z'}})
+        with mock.patch.object(lifecycle.subprocess,'run',side_effect=AssertionError('No RPC')):
+            receipt=lifecycle.confirm_retire(self.root,capture)
+        self.assertIs(receipt['confirmed'],True)
+        self.assertEqual(receipt['cleanup_exit_code'],0)
+        self.assertEqual(receipt['retired_at'],'2026-10-19T06:00:00Z')
+        with self.assertRaises(ValueError):
+            lifecycle.capture_value({'isError':True,'structuredContent':{}})
+
     def test_mail_receipt_controls(self):
         node = os.environ.get('ORRERY_DSH_TEST_NODE')
         if not node:

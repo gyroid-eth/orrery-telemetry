@@ -135,14 +135,81 @@ def retire(state, run=subprocess.run):
     return receipt
 
 
+def capture_value(value):
+    """Read an operator-saved MCP result; never make an RPC here."""
+    if isinstance(value, dict) and value.get('isError'):
+        raise ValueError('Parent MCP call failed')
+    if isinstance(value, dict) and 'structuredContent' in value:
+        value = value['structuredContent']
+    elif isinstance(value, dict) and isinstance(value.get('content'), list):
+        blocks = [block for block in value['content'] if block.get('type') == 'text']
+        if len(blocks) != 1:
+            raise ValueError('Expected one JSON MCP text result')
+        value = json.loads(blocks[0]['text'])
+    return value.get('result', value) if isinstance(value, dict) else value
+
+
+def record_mail(state, input_file):
+    state = Path(state)
+    attempt, task = read(state / 'attempt.json'), read(state / 'task.json')
+    if task['attempt_id'] != attempt['attempt_id']:
+        raise ValueError('Task attempt mismatch')
+    value = capture_value(read(input_file))
+    messages = value if isinstance(value, list) else [value]
+    events = [json.loads(line) for line in (state / 'events.jsonl').read_text().splitlines()]
+    receipts = [e for e in events if e.get('phase') == 'mail-sent' and
+                e.get('attempt_id') == attempt['attempt_id'] and e.get('task_id') == task['task_id'] and
+                e.get('from') == attempt['agent_name'] and e.get('to') == task['report_to'] and
+                e.get('verified_sender') is True and e.get('ok') is True]
+    matches = [m for m in messages if isinstance(m, dict) and type(m.get('id')) is int and m['id'] > 0 and
+               m.get('from') == attempt['agent_name'] and m.get('to') == [task['report_to']] and
+               any(e.get('message_id') == m['id'] for e in receipts)]
+    if len(matches) != 1:
+        raise ValueError('Parent inbox result must match this attempt\'s actual child Mail receipt')
+    message = matches[0]
+    receipt = {'attempt_id': attempt['attempt_id'], 'task_id': task['task_id'],
+               'agent_name': attempt['agent_name'], 'message_id': message['id'],
+               'from': message['from'], 'to': message['to'],
+               'source': 'parent-bound-fetch-inbox', 'checked_at': stamp()}
+    save(state / 'parent-mail-receipt.json', receipt)
+    return receipt
+
+
+def confirm_retire(state, input_file):
+    state = Path(state)
+    attempt = read(state / 'attempt.json')
+    receipt = read(state / 'retire-receipt.json')
+    who = capture_value(read(input_file))
+    if not isinstance(who, dict) or who.get('name') != attempt['agent_name'] or not isinstance(who.get('retired_at'), str) or not who['retired_at'].strip():
+        raise ValueError('Canonical parent whois did not confirm retirement of this child')
+    # Preserve the real cleanup exit status, separately from remote retirement.
+    if receipt.get('attempt_id') != attempt['attempt_id'] or receipt.get('agent_name') != attempt['agent_name'] or type(receipt.get('cleanup_exit_code')) is not int:
+        raise ValueError('Cleanup receipt is missing or belongs to another attempt')
+    datetime.fromisoformat(who['retired_at'].replace('Z', '+00:00'))
+    receipt.update(retired_at=who['retired_at'], confirmed=True,
+                   source='parent-bound-whois', checked_at=stamp())
+    save(state / 'retire-receipt.json', receipt)
+    return receipt
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['register', 'retire'])
+    parser.add_argument('action', choices=['register', 'retire', 'record-mail', 'confirm-retire'])
     parser.add_argument('--state', type=Path, required=True)
+    parser.add_argument('--input', type=Path)
     args = parser.parse_args()
     try:
-        result = register(args.state) if args.action == 'register' else retire(args.state)
-    except (ValueError, OSError, subprocess.SubprocessError):
+        if args.action in ('record-mail', 'confirm-retire') and not args.input:
+            raise ValueError('Parent-saved canonical MCP result file required')
+        if args.action == 'register':
+            result = register(args.state)
+        elif args.action == 'retire':
+            result = retire(args.state)
+        elif args.action == 'record-mail':
+            result = record_mail(args.state, args.input)
+        else:
+            result = confirm_retire(args.state, args.input)
+    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError):
         raise SystemExit('Lifecycle step failed; preserve state, no automatic retry')
     print(json.dumps({'action': args.action, 'result': result}))
 
