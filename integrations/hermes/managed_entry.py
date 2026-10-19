@@ -1,5 +1,6 @@
 """Load and verify the reservation callback in the inference process itself."""
 import argparse
+import functools
 import os
 from pathlib import Path
 import sys
@@ -7,16 +8,38 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mail_lifecycle import read, save, stamp
 from runner import check_configured, digest, pilot_toolsets
-from task_evidence import audit, event
+from task_evidence import audit, callers, event
 
 
 def deny_dotenv(state):
     def guard(name, args):
         if name == 'open' and isinstance(args[0], (str, bytes, os.PathLike)):
             if Path(os.fsdecode(args[0])).name in ('.env', '.op.env'):
-                audit(state, 'blocked-dotenv', reason='managed-profile-uses-key-command-references')
+                audit(state, 'blocked-dotenv', reason='managed-profile-uses-key-command-references',
+                      method='open', host=None, port=None, path=os.fsdecode(args[0]), callers=callers(state))
                 raise PermissionError('Managed entry forbids dotenv file reads and writes')
     sys.addaudithook(guard)
+
+
+def skip_absent_dotenv(state):
+    """Keep Hermes's missing-file result without attempting a forbidden open.
+
+    Existing files and dangling symlinks still reach the denying audit hook.
+    No installed source or live configuration is changed.
+    """
+    from agent import secret_scope
+    original = secret_scope.load_env_file
+
+    @functools.wraps(original)
+    def load(path):
+        path = Path(path)
+        if path.name in ('.env', '.op.env') and not path.exists() and not path.is_symlink():
+            secret_scope.invalidate_env_file_cache(path)
+            audit(state, 'dotenv-absent', method='stat', host=None, port=None,
+                  path=str(path), callers=callers(state))
+            return {}
+        return original(path)
+    secret_scope.load_env_file = load
 
 
 def load_guard(state):
@@ -30,6 +53,7 @@ def load_guard(state):
             raise ValueError('Managed profile or source dotenv exists')
     deny_dotenv(state)
     sys.path.insert(0, config['hermes_source'])
+    skip_absent_dotenv(state)
     from hermes_cli import plugins
     from task_plugin import assert_registered
     plugins.discover_plugins()

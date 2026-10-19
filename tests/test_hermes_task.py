@@ -21,6 +21,7 @@ import mail_lifecycle
 import mail_probe
 import managed_entry
 import provider_audit
+import profile_projection
 import runner
 import task_evidence
 import task_plugin
@@ -32,6 +33,9 @@ class FileTask(unittest.TestCase):
         self.fixture.setUp()
         self.root, self.product = self.fixture.root, self.fixture.product
         self.state = self.root / 'reserved-state'
+        inputs = runner.read(self.fixture.config_path)
+        inputs['profiles']['strata'].update(context_length=131072)
+        runner.save(self.fixture.config_path, inputs)
         runner.initialize(self.fixture.config_path, self.state, 'strata', self.product.run, file_task=True)
         mail_lifecycle.register(self.state, self.product.run, generate_config=False)
         runner.configure(self.state, self.product.run)
@@ -204,14 +208,93 @@ class FileTask(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             policy.before(valid)
         with self.assertRaises(RuntimeError):
-            policy.before(SimpleNamespace(method='GET', url='https://other.invalid/private-key-in-url'))
+            policy.before(SimpleNamespace(method='GET', url='https://user:offline-password@other.invalid/models?key=private-key-in-query#hidden'))
         audit = (self.state / 'audit.jsonl').read_text()
-        self.assertNotIn('private-key-in-url', audit)
+        for secret in ('private-key-in-query', 'offline-password', 'hidden'):
+            self.assertNotIn(secret, audit)
+        denied = [json.loads(row) for row in audit.splitlines() if json.loads(row)['phase'] == 'blocked-network'][0]
+        self.assertEqual((denied['method'], denied['host'], denied['port'], denied['path']),
+                         ('GET', 'other.invalid', 443, '/models'))
+        self.assertTrue(denied['callers'])
         dummy = b'offline-canary-value-1234'
         (self.state / 'stdout.log').write_bytes(dummy)
         result = diagnostics.scan(self.state, lambda *a, **k: SimpleNamespace(returncode=0, stdout=dummy))
         self.assertEqual(result['matches'], 1)
         self.assertNotIn(dummy[:8].decode(), json.dumps(result))
+
+    def test_explicit_context_projection_does_not_invent_output_limit(self):
+        profile = runner.read(Path(self.config['profile_home']) / 'config.yaml')
+        self.assertEqual(profile['model']['context_length'], 131072)
+        self.assertEqual(profile['providers']['fixture']['context_length'], 131072)
+        self.assertNotIn('max_tokens', profile['model'])
+        self.assertEqual(profile['model_overrides']['fixture']['fixture-model']['context_window'], 131072)
+        spec = runner.read(self.fixture.config_path)['profiles']['strata']
+        for invalid in (False, 0, -1, '131072', 1.5):
+            with self.assertRaises(ValueError):
+                profile_projection.project({**spec, 'context_length': invalid}, self.root,
+                                           ['title_generation', 'background_review'])
+
+    def test_installed_context_and_absent_dotenv_need_no_transport(self):
+        python, source = os.environ.get('ORRERY_HERMES_TEST_PYTHON'), os.environ.get('ORRERY_HERMES_TEST_SOURCE')
+        if not python or not source:
+            self.skipTest('Explicit installed dependency interpreter/source required')
+        config = {**self.config, 'hermes_source': source}
+        runner.save(self.state / 'run-config.json', config)
+        script = self.root / 'startup_sources_fixture.py'
+        script.write_text('''
+import json,os,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]);sys.path.insert(0,sys.argv[3])
+state=Path(sys.argv[2])
+def no_network(event,args):
+    if event in ('socket.connect','socket.getaddrinfo'):
+        raise AssertionError('offline fixture forbids sockets')
+sys.addaudithook(no_network)
+from managed_entry import deny_dotenv,skip_absent_dotenv
+deny_dotenv(state)
+skip_absent_dotenv(state)
+import httpx,requests
+attempts=[]
+def reject(*args,**kwargs):
+    attempts.append(True)
+    raise AssertionError('context attempted a transport')
+httpx.Client._send_single_request=reject
+requests.Session.request=reject
+from agent.model_metadata import get_model_context_length
+for provider in ('fixture','custom','custom:fixture',''):
+    for key in ('offline-fixture',lambda:'offline-fixture'):
+        for explicit in ({},{'config_context_length':131072}):
+            assert get_model_context_length('fixture-model',base_url='https://provider.invalid',
+                provider=provider,api_key=key,**explicit)==131072
+from agent.auxiliary_client import _candidate_context_window
+assert _candidate_context_window('fixture','fixture-model','https://provider.invalid','offline-fixture')==131072
+assert _candidate_context_window('custom','fixture-model','https://provider.invalid','offline-fixture')==131072
+from hermes_cli.config import load_env
+from agent.credential_pool import get_env_prefer_dotenv
+assert load_env()=={}
+assert get_env_prefer_dotenv('ORRERY_OFFLINE_NONEXISTENT_KEY')==''
+assert not attempts,attempts
+rows=[json.loads(row) for row in (state/'audit.jsonl').read_text().splitlines()]
+assert not [row for row in rows if row['phase'].startswith('blocked-')],rows
+absent=[row for row in rows if row['phase']=='dotenv-absent']
+assert absent and all(row['path']==str(Path(os.environ['HERMES_HOME'])/'.env') for row in absent),absent
+assert any(any('router/' in frame['file'] for frame in row['callers']) for row in absent),absent
+assert any(any('credential_pool.py' in frame['file'] for frame in row['callers']) for row in absent),absent
+canary=Path(os.environ['HERMES_HOME'])/'.env'
+# The early missing-file path must not enable creation of a dotenv file.
+try:
+    canary.write_text('never-write-this-value')
+except PermissionError:
+    pass
+else:
+    raise AssertionError('dotenv write bypassed the guard')
+print(json.dumps({'context':131072,'transports':len(attempts),'absent_dotenv_calls':len(absent)}))
+''')
+        env = runner.managed_env(config, runner.read(self.state / 'mail-identity.json'), self.state)
+        result = subprocess.run([python, '-I', '-B', str(script), str(ADAPTER), str(self.state), source],
+                                 env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout.strip().splitlines()[-1])['transports'], 0)
 
     def test_actual_installed_guard_preflight_and_tools_without_provider(self):
         python, source = os.environ.get('ORRERY_HERMES_TEST_PYTHON'), os.environ.get('ORRERY_HERMES_TEST_SOURCE')
@@ -313,13 +396,14 @@ finally:
         (other / '.env').write_text('ORRERY_OFFLINE_CANARY=do-not-load-this-value\n')
         script = self.root / 'transport_fixture.py'
         script.write_text('''
-import asyncio,os,socket,sys
+import asyncio,json,os,socket,sys
 from pathlib import Path
 sys.path.insert(0,sys.argv[1]);sys.path.insert(0,sys.argv[3])
-from managed_entry import deny_dotenv
+from managed_entry import deny_dotenv,skip_absent_dotenv
 from provider_audit import install
 state=Path(sys.argv[2])
 deny_dotenv(state)
+skip_absent_dotenv(state)
 install(state)
 from hermes_cli.env_loader import load_hermes_dotenv
 try:
@@ -360,6 +444,12 @@ else:
 rows=(state/'audit.jsonl').read_text()
 assert 'blocked-dotenv' in rows and 'blocked-network' in rows and 'provider-request-start' in rows
 assert 'do-not-load-this-value' not in rows
+records=[json.loads(row) for row in rows.splitlines()]
+dotenv=next(row for row in records if row['phase']=='blocked-dotenv')
+assert dotenv['path']==str(Path(sys.argv[4])/'.env') and dotenv['method']=='open',dotenv
+assert dotenv['callers'] and all(set(frame)=={'file','line','function'} for frame in dotenv['callers'])
+dns=next(row for row in records if row.get('host')=='never-resolve.invalid')
+assert dns['port']==443 and dns['path'] is None and dns['method'] is None,dns
 print('offline-transport-fixture-ok')
 ''')
         env = runner.managed_env(self.config, runner.read(self.state / 'mail-identity.json'), self.state)

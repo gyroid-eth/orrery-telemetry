@@ -3,10 +3,26 @@ import json
 import os
 from pathlib import Path
 import threading
+import traceback
 
 from mail_lifecycle import read, stamp
 
 _lock = threading.Lock()
+
+
+def callers(state):
+    """Source locations only: never stack source text, locals or arguments."""
+    source = Path(read(Path(state) / 'run-config.json')['hermes_source']).resolve()
+    adapter = Path(__file__).resolve().parent
+    rows = []
+    for frame in traceback.extract_stack()[:-1]:
+        path = Path(frame.filename)
+        for root, prefix in ((source, 'hermes/'), (adapter, 'adapter/')):
+            if path.is_relative_to(root):
+                rows.append({'file': prefix + str(path.relative_to(root)),
+                             'line': frame.lineno, 'function': frame.name})
+                break
+    return rows[-16:]
 
 
 def append(state, name, row):

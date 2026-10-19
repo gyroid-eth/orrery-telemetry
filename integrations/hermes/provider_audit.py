@@ -11,7 +11,7 @@ import threading
 from urllib.parse import urlsplit
 
 from mail_lifecycle import read
-from task_evidence import audit
+from task_evidence import audit, callers
 
 _permitted = ContextVar('orrery_http_transport', default=False)
 
@@ -33,7 +33,9 @@ class Policy:
         url = urlsplit(str(request.url))
         if (request.method != 'POST' or (url.scheme, url.netloc, url.path) != self.endpoint
                 or url.query or url.fragment):
-            audit(self.state, 'blocked-network', reason='endpoint-not-allowed')
+            audit(self.state, 'blocked-network', reason='endpoint-not-allowed', method=request.method,
+                  host=url.hostname, port=url.port or (443 if url.scheme == 'https' else 80),
+                  path=url.path, callers=callers(self.state))
             raise RuntimeError('Managed provider endpoint denied')
         with self.lock:
             self.seq += 1
@@ -79,7 +81,11 @@ def install(state):
 
     def guard(event, args):
         if event in ('socket.connect', 'socket.getaddrinfo') and not _permitted.get():
-            audit(state, 'blocked-network', reason='outside-httpx-provider-transport')
+            address = args[1] if event == 'socket.connect' else args
+            host = address[0] if isinstance(address, tuple) and address else None
+            port = address[1] if isinstance(address, tuple) and len(address) > 1 else None
+            audit(state, 'blocked-network', reason='outside-httpx-provider-transport',
+                  method=None, host=host, port=port, path=None, callers=callers(state))
             raise RuntimeError('Unmanaged Python network operation denied')
     sys.addaudithook(guard)
     audit(state, 'preload-ready', backend_id=read(Path(state) / 'run-config.json')['provider'])

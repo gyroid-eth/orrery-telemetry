@@ -55,6 +55,19 @@ def project(spec, profile, auxiliary_tasks):
               'plugins': {'enabled': ['orrery-mail-receipt']},
               'hooks': {},
               'delegation': {'fallback_providers': []}}
+    context = spec.get('context_length', model_config.get('context_length'))
+    if context is not None:
+        if type(context) is not int or context <= 0:
+            raise ValueError('Context length must be an explicit positive integer')
+        config['model']['context_length'] = context
+        # Named endpoints resolve to provider="custom" at runtime. The route
+        # pin survives that normalization and callers without a provider name.
+        route['context_length'] = context
+        # Aux context checks omit config_context_length. The exact override is
+        # consulted before live probes in those checks as well as the main one.
+        config['model_overrides'] = {provider: {model: {'context_window': context}}}
+        if 'compression' in auxiliary:
+            auxiliary['compression']['context_length'] = context
     return {'provider': provider, 'model': model, 'profile_config': config}
 
 

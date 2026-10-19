@@ -107,14 +107,27 @@ The task entry installs a synchronous HTTPX transport policy before provider
 resolution. Only the configured Messages or Chat Completions endpoint is allowed;
 redirect targets and unmanaged Python socket/DNS operations are checked too.
 Every provider attempt is recorded without headers, bodies or credential values.
+Denied HTTP requests record method, host, port and path without query, fragment
+or URL credentials, plus source locations without source text or local variables.
 This is not an OS sandbox for arbitrary descendant processes. Provider behavior
 on the real selected endpoint still needs operator acceptance.
 
 Hermes can reload profile, source-project and managed dotenv files. This entry
 requires the profile/source candidates absent and denies subsequent `.env` and
-`.op.env` opens. The named provider keeps its key-command reference. Native
+`.op.env` opens. The managed adapter returns Hermes's empty mapping before
+opening a missing dotenv file; it records that absence and the caller. Existing
+files and dangling symlinks still reach the denying guard. The named provider
+keeps its key-command reference. Native
 oneshot completion flags are translated into common turn events without saving
 raw exception strings from the original usage writer.
+
+An optional positive integer `profiles.<name>.context_length` pins the main
+model, the named route and the exact `model_overrides` entry. Route pinning also
+covers auxiliary callers after Hermes resolves the provider name to `custom`.
+This prevents context detection through model-list or local-server probe paths;
+it does not allow those paths through the transport policy. No output limit is
+added. Profiles without an operator-supplied context value keep Hermes's normal
+detection behavior and may be denied by the managed policy until configured.
 
 The five-condition evaluator reads only saved state. After the parent's bound
 inbox result is saved, `record-mail --state STATE --input INBOX_JSON` requires
