@@ -60,7 +60,7 @@ python3 integrations/dsh/completion.py /absolute/state/root --runtime
 
 ## offline検証
 
-NodeもPythonも検証用の明示実体を使い、直列に実行します。本番runのload制限はoffline回帰には適用しません。
+NodeもPythonも検証用の明示実体を使い、直列に実行します。offline試験はloadを待たずに開始できます。高負荷でtimeoutした場合は製品の失敗と決めず、該当試験を単独で再実行して確かめます。本番runの開始条件はload1<15です。試験はliveのdashboard・Mail・runtime・公開作業treeへ触れず、専用の一時環境で行います。
 
 全dsh回帰は`bash scripts/check-dsh.sh --node /absolute/fixed/node --runtime /absolute/pinned/runtime --out /absolute/check-output`の1コマンドで実行できます。Python 3.11以上と既存の固定runtime/patch receiptを検査し、私有HOME・一時dir・明示envを準備してNode fixture、全Python dsh試験、catalog試験、両backendの実SDK/TUI無通信preflightを直列で流します。依存をdownload/repairせず、不足時は失敗にします。`result.json`はsuccess/tests_run/failures/errors/skips/allowed_skip_reasons/unapproved_skipsを持ち、allowed_skips.json（既定[]）の理由文字列に完全一致しないskipは失敗です。合格した試験のskipが隠れる形にはしません。
 
