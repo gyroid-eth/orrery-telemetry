@@ -375,3 +375,33 @@ test('busy, unknown, auth, timeout and redirect status never prevent inference',
     assert.ok(!h.events.some(row => row.phase.startsWith('blocked-')));
   }
 });
+
+
+test('completion accepts only final raw usage and terminal evidence from the actual egress', async () => {
+  const py = process.env.ORRERY_DSH_TEST_PYTHON ?? 'python3';
+  for (const [label, payload, expected] of [
+    ['complete', run1Usage + messageStop, true],
+    ['missing-final-usage', messageStop, false],
+    ['cancel-before-stop', run1Usage, false],
+  ]) {
+    const h = cancellingHarness(payload);
+    await consumeThenCancel(h);
+    const receipt = h.events.find(row => row.phase === 'stream-end');
+    assert.equal(receipt.usage_confirmed, label !== 'missing-final-usage');
+    assert.equal(receipt.terminal, label !== 'cancel-before-stop');
+    const state = path.join(root, 'completion-' + label); fs.mkdirSync(state);
+    fs.writeFileSync(path.join(state, 'attempt.json'), JSON.stringify({attempt_id:'fixture',agent_name:'FixtureChild',phase:'run'}));
+    fs.writeFileSync(path.join(state, 'task.json'), JSON.stringify({attempt_id:'fixture',task_id:'task',task_mode:'assignment',report_policy:'pane',expected:[]}));
+    fs.writeFileSync(path.join(state, 'events.jsonl'), JSON.stringify({attempt_id:'fixture',task_id:'task',phase:'turn-end',turn:1,reason_kind:'completed'}) + '\n');
+    fs.writeFileSync(path.join(state, 'audit.jsonl'), h.events.map(row => JSON.stringify({...row,attempt_id:'fixture',task_id:'task',turn:1})).join('\n') + '\n');
+    const result = await new Promise((resolve, reject) => {
+      const child = fixtureSpawn(py, ['-I','-B',path.join(project,'integrations/dsh/completion.py'),state],
+        {env:{PATH:'/usr/bin:/bin',HOME:state},stdio:['ignore','pipe','pipe']});
+      let out='',err='';child.stdout.on('data',v=>out+=v);child.stderr.on('data',v=>err+=v);
+      child.on('error',reject);child.on('close',code=>resolve({code,out,err}));
+    });
+    assert.equal(result.err,'');
+    assert.equal(JSON.parse(result.out).success,expected);
+    assert.equal(result.code,expected ? 0 : 1);
+  }
+});

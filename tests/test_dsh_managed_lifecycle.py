@@ -117,10 +117,26 @@ class InteractiveAdapterTests(unittest.TestCase):
         self.put('runtime-exit.json', {'attempt_id': 'attempt'})
         self.assertTrue(d.status(self.state)['terminal'])
 
+    def test_unconfirmed_usage_does_not_freeze_native_completed_assignment(self):
+        self.put('attempt.json', {'attempt_id':'attempt','agent_name':'Child','phase':'run'})
+        self.put('task.json', {'attempt_id':'attempt','task_id':'task','task_mode':'assignment','report_policy':'pane','expected':[]})
+        events=[{'phase':'turn-end','attempt_id':'attempt','task_id':'task','turn':1,'reason_kind':'completed'},
+                {'phase':'task-report-finalized','attempt_id':'attempt','task_id':'task'}]
+        (self.state/'events.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in events))
+        audit=[{'phase':'provider-request-start','attempt_id':'attempt','task_id':'task','turn':1,'seq':1}]
+        (self.state/'audit.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in audit))
+        self.assertIsNone(d.status(self.state)['task_success'])
+        self.assertFalse((self.state/'task-reports/task.json').exists())
+        audit += [{'phase':'provider-response','attempt_id':'attempt','task_id':'task','turn':1,'seq':1,'status':200,'usage':{'input':2,'output':0}},
+                  {'phase':'stream-end','attempt_id':'attempt','task_id':'task','turn':1,'seq':1,'ok':True,'terminal':True,'usage_confirmed':True}]
+        (self.state/'audit.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in audit))
+        self.assertTrue(d.status(self.state)['task_success'])
+        self.assertTrue(d.read(self.state/'task-reports/task.json')['provider_usage_verified'])
+
     def test_report_snapshot_survives_following_turn_and_artifact_edit(self):
         self.put('attempt.json', {'attempt_id': 'attempt', 'agent_name': 'Child', 'phase': 'run'})
         self.put('task.json', {'attempt_id': 'attempt', 'task_id': 'task'})
-        completed = {'success': True, 'attempt_id': 'attempt', 'task_id': 'task', 'checks': {}}
+        completed = {'success': True, 'provider_usage_verified': True, 'attempt_id': 'attempt', 'task_id': 'task', 'checks': {}}
         with patch.object(d, 'evaluate', side_effect=lambda state, runtime=False: {'success': None} if runtime else completed):
             self.assertTrue(d.status(self.state)['task_success'])
         saved = d.read(self.state / 'task-reports/task.json')

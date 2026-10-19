@@ -53,7 +53,8 @@ def evaluate_task(state_root):
         if (saved and saved.get('attempt_id') == aid and saved.get('task_id') == tid
                 and saved.get('agent_name') == attempt.get('agent_name')
                 and type(saved.get('success')) is bool and saved.get('source') == 'managed-task-evaluator'
-                and task.get('attempt_id') == aid):
+                and task.get('attempt_id') == aid
+                and (saved.get('success') is not True or saved.get('provider_usage_verified') is True)):
             if task.get('report_policy', 'mail') == 'mail' and (root / 'parent-mail-receipt.json').exists():
                 parent = _read(root / 'parent-mail-receipt.json')
                 valid_parent = parent and (parent.get('source') == 'parent-bound-fetch-inbox'
@@ -95,9 +96,30 @@ def evaluate_task(state_root):
         checks['expected_artifacts'] = False if False in artifacts else None if None in artifacts else True
     if audit is not None:
         same_attempt = all(row.get('attempt_id') == aid for row in audit)
-        bad = any(row.get('phase', '').startswith('blocked-') or row.get('phase') in ('runtime-fatal', 'limit-reached') for row in audit)
-        requests = any(row.get('phase') == 'provider-request-start' for row in audit)
-        checks['provider_audit'] = same_attempt and not bad and requests
+        turn = turns[-1].get('turn') if turns else None
+        relevant = [row for row in audit if row.get('task_id') == tid and row.get('turn') == turn]
+        bad = any(row.get('phase', '').startswith('blocked-') or row.get('phase') in ('runtime-fatal', 'limit-reached')
+                  for row in relevant + [row for row in audit if 'task_id' not in row])
+        requests = {row.get('seq') for row in relevant if row.get('phase') == 'provider-request-start'}
+        responses = {row.get('seq'): row for row in relevant if row.get('phase') == 'provider-response'}
+        ends = {row.get('seq'): row for row in relevant if row.get('phase') == 'stream-end'}
+        if not same_attempt or bad:
+            checks['provider_audit'] = False
+        elif requests:
+            confirmed = []
+            for seq in requests:
+                response, end = responses.get(seq), ends.get(seq)
+                if not response or not end:
+                    confirmed.append(None)
+                    continue
+                usage = response.get('usage')
+                counts = (isinstance(usage, dict) and all(type(usage.get(key)) is int and usage[key] >= 0
+                                                        for key in ('input', 'output')))
+                confirmed.append(end.get('ok') is True and end.get('terminal') is True
+                                 and end.get('usage_confirmed') is True and counts
+                                 and type(response.get('status')) is int and 200 <= response['status'] < 300)
+            checks['provider_audit'] = False if False in confirmed else None if None in confirmed else True
+        metadata['provider_usage_verified'] = checks['provider_audit'] is True
     if events is not None:
         receipts = [row for row in scoped if row.get('phase') == 'mail-sent']
         parent, child = task.get('report_to'), attempt.get('agent_name')
