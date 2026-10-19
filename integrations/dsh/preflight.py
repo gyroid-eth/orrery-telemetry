@@ -101,11 +101,15 @@ def verify(state):
 
 
 def full(state):
-    from launch import bind_run
     state = Path(state).resolve()
     if (state / 'run-started.json').exists():
         raise ValueError('Do not preflight over a started attempt')
-    config, attempt, task = bind_run(state, require_reservations=False)
+    config = read(state / 'run-config.json')
+    def bind(*flags):
+        subprocess.run([sys.executable, str(HERE / 'launch.py'), 'bind', '--state', str(state), *flags],
+                       env=environment(config), capture_output=True, check=True, timeout=30)
+    bind()
+    attempt = read(state / 'attempt.json')
     if 'DEEPSEEK_API_KEY' in os.environ:
         raise ValueError('Keyless preflight must not inherit a model key')
     # Discard only the previous proof. Never preserve a success after failure.
@@ -115,7 +119,7 @@ def full(state):
     run_probe(state, fixture='process-unreachable')
     if not (state / 'reservations.json').exists():
         run_probe(state, action='reserve')
-    bind_run(state)
+    bind('--require-reservations')
     verify_reservations(state)
     log = state / 'preflight.tty'
     result = subprocess.run(['/usr/bin/script', '-q', str(log), sys.executable,

@@ -258,7 +258,7 @@ for line in sys.stdin:
             task = lifecycle.read(state/'task.json')
             task['prompt'] += ' changed'
             lifecycle.save(state/'task.json',task)
-            with self.assertRaises(ValueError):
+            with self.assertRaises((ValueError,subprocess.CalledProcessError)):
                 launch.execute_run(state)
         task['prompt'] = config['task']['prompt']
         lifecycle.save(state/'task.json',task)
@@ -285,15 +285,15 @@ for line in sys.stdin:
              mock.patch.dict(os.environ,{'TMUX_PANE':'%fixture'}):
             # Popen is shared by subprocess helpers: isolate only the final
             # runtime handoff after keyless gate/probe have already passed.
-            import preflight as gate
-            with mock.patch.object(gate,'run_probe'), \
+            with mock.patch.object(launch,'call_mail'), \
+                 mock.patch.object(launch,'check_preflight'), \
                  mock.patch.object(launch.subprocess,'check_output',return_value='v24.3.0'):
                 self.assertEqual(launch.execute_run(state),0)
             self.assertEqual(key.call_count,1)
         self.assertEqual(captured[0]['DEEPSEEK_API_KEY'],'fixture-only-key')
         self.assertEqual(captured[0]['ORRERY_DSH_OFFLINE'],'0')
         with mock.patch.object(launch,'credential',side_effect=AssertionError('No second lookup')):
-            with self.assertRaises(ValueError):
+            with self.assertRaises((ValueError,subprocess.CalledProcessError)):
                 launch.execute_run(state)
         self.assertFalse((work/'trial-ok.txt').exists())
 

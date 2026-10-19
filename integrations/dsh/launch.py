@@ -236,9 +236,8 @@ def credential(config):
 
 
 def start_pane(state):
-    from preflight import verify
     state = Path(state).resolve()
-    verify(state)
+    check_preflight(state)
     config = run_config(state)
     if 'DEEPSEEK_API_KEY' in os.environ:
         raise ValueError('Do not inherit a model key into the launcher/tmux')
@@ -262,8 +261,24 @@ def verify_owned_pane(state):
         raise ValueError('Credential lookup requires this attempt\'s owned pane')
 
 
+def check_preflight(state):
+    config = run_config(state)
+    subprocess.run([sys.executable, str(Path(__file__).with_name('preflight.py')),
+                    '--verify-only', '--state', str(state)],
+        env={'HOME': config['home'], 'PATH': os.defpath}, capture_output=True, check=True, timeout=30)
+
+
+def call_mail(state, action='probe'):
+    config = run_config(state)
+    subprocess.run([config['node'], str(Path(__file__).with_name('mail_probe.mjs')),
+                    str(state), action], env={'HOME': config['home'], 'PATH': os.defpath},
+        capture_output=True, check=True, timeout=30)
+    report = json.loads((Path(state) / 'mail-probe.json').read_text())
+    if report.get('ok') is not True or report.get('schema') is not True or report.get('backend') is not True:
+        raise ValueError('Mail probe did not authenticate before credential lookup')
+
+
 def execute_run(state, *, assemble=False):
-    from preflight import verify, run_probe
     state = Path(state).resolve()
     if os.getloadavg()[0] >= 15:
         raise ValueError('Load is at least 15; do not start a runtime')
@@ -273,9 +288,9 @@ def execute_run(state, *, assemble=False):
     else:
         if 'DEEPSEEK_API_KEY' in os.environ:
             raise ValueError('Inherited model key is not the managed credential route')
-        verify(state)
-        run_probe(state)
-        verify(state)
+        check_preflight(state)
+        call_mail(state)
+        check_preflight(state)
         verify_owned_pane(state)
         # Exclusive marker is made before lookup: even a failed lookup is one attempt.
         with (state / 'run-started.json').open('x') as stream:
@@ -415,19 +430,19 @@ def run_cli():
     parser.add_argument('action', choices=['init', 'bind', 'assemble', 'start', 'run', 'release', 'stop', 'attach', 'state', 'clean', 'abandon'])
     parser.add_argument('--state', type=Path, required=True)
     parser.add_argument('--config', type=Path)
+    parser.add_argument('--require-reservations', action='store_true')
     args = parser.parse_args()
     if args.action == 'init':
         init_run(args.config, args.state)
     elif args.action == 'bind':
-        bind_run(args.state, require_reservations=False)
+        bind_run(args.state, require_reservations=args.require_reservations)
     elif args.action in ('assemble', 'run'):
         result = execute_run(args.state, assemble=args.action == 'assemble')
         raise SystemExit(result if result is not None and result >= 0 else 86)
     elif args.action == 'start':
         start_pane(args.state)
     elif args.action == 'release':
-        from preflight import run_probe
-        run_probe(args.state, action='release')
+        call_mail(args.state, action='release')
     elif args.action == 'stop':
         stop_run(args.state)
     elif args.action == 'attach':
