@@ -381,3 +381,46 @@ def test_a_retry_after_failures_stays_the_only_computation(roster):
     assert peak[0] == 1
     assert results.count("error") == 2 and results.count(b"ok") == 2, results
     assert flight._states == {}
+
+
+def test_network_shows_graph_error_instead_of_a_successful_empty_count():
+    """NETWORKはHTTP成功の空graphでも解決エラーを正常な0件に見せない。"""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is unavailable")
+    html = pathlib.Path(server.__file__).with_name("index.html").read_text()
+    body = html[html.index("async function netTick(){"):]
+    body = body[:body.index("\n}\n") + 2]
+    harness = r"""
+const info={innerHTML:'',textContent:''};
+const document={getElementById:()=>info};
+const gmap=new Map(),gEls={node:new Map()};
+let gWin='all',gWinLabel='',graphStateAt,gedges=[],gspawn=[];
+let netRenderKey=JSON.stringify([[],[],[]]);
+const netDims=()=>({w:800,h:600}),refreshPanelButtons=()=>{};
+const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+let payload={nodes:[],edges:[],spawn:[],degraded:true,error:'Project <missing> not found'};
+const fetch=async()=>({status:200,json:async()=>payload});
+"""
+    script = harness + body + r"""
+(async()=>{
+ await netTick();
+ const failed=info.innerHTML;
+ payload={nodes:[],edges:[],spawn:[],degraded:false,total:0};
+ await netTick();
+ console.log(JSON.stringify({failed,recovered:info.innerHTML,caught:info.textContent}));
+})().catch(e=>{console.error(e);process.exit(1)});
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True,
+                            check=True, timeout=10)
+    displayed = json.loads(result.stdout)
+    assert "DEGRADED" in displayed["failed"]
+    assert "Project &lt;missing&gt; not found" in displayed["failed"]
+    assert "nodes" not in displayed["failed"]
+    assert "<missing>" not in displayed["failed"]
+    assert "DEGRADED" not in displayed["recovered"]
+    assert "<b>0</b> nodes" in displayed["recovered"]
+    assert displayed["caught"] == ""

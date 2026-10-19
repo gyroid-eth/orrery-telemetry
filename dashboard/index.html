@@ -34028,6 +34028,7 @@ async function netTick(){
     for(const e of gedges){const a=gmap.get(e.source),b=gmap.get(e.target);
       if(a)a.deg++;if(b)b.deg++;}
     document.getElementById('netinfo').innerHTML=
+      j.error?`<b>DEGRADED</b> · ${esc(j.error)}`:
       `<b>${j.shown??gmap.size}</b> nodes · ${gedges.length} links · `+
       `${gspawn.length} spawn ${gWin==="all"?"":"· "+gWinLabel+" window"}`+
       ` / total ${j.total??'?'}`;
