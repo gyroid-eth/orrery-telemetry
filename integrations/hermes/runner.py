@@ -3,6 +3,8 @@
 This is a new harness adapter, not a fallback after another launcher fails.
 It invokes the existing product preregistration, config generator and proxy.
 The Mail-only pilot is separate from full managed task acceptance.
+Configure may resume a saved, matching product MCP projection only before any
+profile write. After profile-write-intent exists, retire and use a new attempt.
 """
 import argparse
 import hashlib
@@ -137,8 +139,9 @@ def configure(state, run=subprocess.run):
     config, identity = read(state / 'run-config.json'), read(state / 'mail-identity.json')
     if (state / 'configured.json').exists():
         raise ValueError('Profile already configured; do not replace a running attempt')
-    lifecycle.generate(state, run)
-    proxy = read(state / 'mcp.json')['mcpServers']['orrery-mail']
+    if any((state / name).exists() for name in ('profile-write-intent.json', 'start-intent.json',
+                                               'retire-intent.json', 'retire-receipt.json')):
+        raise ValueError('Profile writing, launch or retirement began; retire and use a new attempt')
     profile = Path(config['profile_home'])
     root = Path(config['managed_root']).resolve()
     if profile.resolve() != root / 'profiles' / config['profile_name']:
@@ -149,18 +152,29 @@ def configure(state, run=subprocess.run):
         if not marker.is_file():
             raise ValueError('Existing profile is not owned by this adapter')
         prior = read(marker)
-        prior_state = Path(prior['state'])
-        if prior_state != state:
-            proof = read(prior_state / 'retire-receipt.json')
-            if proof.get('confirmed') is not True or proof.get('agent_name') != prior['agent_name']:
-                raise ValueError('Previous profile attempt has no parent-confirmed retirement')
+        prior_state = Path(prior['state']).resolve()
+        if prior_state == state:
+            raise ValueError('Profile writing already began; retire and use a new attempt')
+        proof = read(prior_state / 'retire-receipt.json')
+        prior_attempt = read(prior_state / 'attempt.json')
+        if (proof.get('confirmed') is not True or proof.get('agent_name') != prior['agent_name']
+                or proof.get('attempt_id') != prior_attempt['attempt_id'] or not proof.get('retired_at')):
+            raise ValueError('Previous profile attempt has no parent-confirmed retirement')
+    plan = read(state / 'profile-plan.json')['profile_config']
+    check_profile_paths(profile, plan)
+    # Reuse only a product projection whose complete bound references match.
+    # Nothing in the profile has been touched by this attempt at this point.
+    if (state / 'mcp.json').exists():
+        proxy = lifecycle.generated_proxy(state)
+    else:
+        proxy = lifecycle.generate(state, run)
+    plan['mcp_servers'] = {'orrery_mail': {**proxy, 'tools': {'include': ['send_message']}}}
+    pilot_toolsets(plan)
+    save(state / 'profile-write-intent.json', {'agent_name': identity['agent_name'],
+         'mcp_sha256': digest(state / 'mcp.json'), 'at': lifecycle.stamp()}, exclusive=True)
     profile.mkdir(mode=0o700, parents=True, exist_ok=True)
     for name in ('memories', 'skills', 'sessions', 'logs'):
         (profile / name).mkdir(mode=0o700, exist_ok=True)
-    plan = read(state / 'profile-plan.json')['profile_config']
-    check_profile_paths(profile, plan)
-    plan['mcp_servers'] = {'orrery_mail': {**proxy, 'tools': {'include': ['send_message']}}}
-    pilot_toolsets(plan)
     # No other profile's .env, auth.json, memories or skill content is copied.
     save(profile / 'config.yaml', plan)
     plugin = profile / 'plugins' / 'orrery-mail-receipt'
@@ -201,11 +215,14 @@ def check_configured(state):
 def start(state, run=subprocess.run):
     state = Path(state).resolve()
     config, identity = check_configured(state)
+    if any((state / name).exists() for name in ('retire-intent.json', 'retire-receipt.json')):
+        raise ValueError('Retirement began; this attempt cannot start')
     probe = read(state / 'mail-probe.json')
     if (probe.get('schema') is not True or probe.get('backend') is not True or probe.get('ok') is not True
             or probe.get('agent_name') != identity['agent_name'] or probe.get('fixture')):
         raise ValueError('Authenticated product Mail preflight is required')
-    save(state / 'start-intent.json', {'at': lifecycle.stamp(), 'agent_name': identity['agent_name']}, exclusive=True)
+    if (state / 'start-intent.json').exists():
+        raise FileExistsError('A launch was already attempted; preserve it')
     env, tmux = base_env(config), config['tmux']
     socket_path = config.get('tmux_socket')
     if not socket_path:
@@ -214,6 +231,8 @@ def start(state, run=subprocess.run):
         socket_path = result.stdout.strip()
     if not Path(socket_path).is_absolute():
         raise ValueError('An existing canonical tmux socket is required')
+    save(state / 'start-intent.json', {'at': lifecycle.stamp(), 'agent_name': identity['agent_name'],
+         'socket_path': socket_path}, exclusive=True)
     prefix = [tmux, '-S', socket_path]
     name = identity['agent_name']
     exists = run(prefix + ['has-session', '-t', '=' + name], env=env, capture_output=True, timeout=10)
@@ -271,10 +290,11 @@ def stop(state, run=subprocess.run):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['init', 'preregister', 'configure', 'probe', 'start', 'status', 'stop', 'retire'])
+    parser.add_argument('action', choices=['init', 'preregister', 'configure', 'probe', 'start', 'status', 'stop', 'retire', 'confirm-retire'])
     parser.add_argument('--state', required=True, type=Path)
     parser.add_argument('--config', type=Path)
     parser.add_argument('--profile', choices=['strata', 'deepseek'])
+    parser.add_argument('--input', type=Path, help='Parent-saved canonical whois JSON for confirm-retire')
     args = parser.parse_args()
     try:
         if args.action == 'init':
@@ -296,6 +316,10 @@ def main():
             result = status(args.state)
         elif args.action == 'stop':
             result = stop(args.state)
+        elif args.action == 'confirm-retire':
+            if not args.input:
+                raise ValueError('Parent-saved canonical MCP result file required')
+            result = lifecycle.confirm_retire(args.state, args.input)
         else:
             result = lifecycle.retire(args.state, require_release=False)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):

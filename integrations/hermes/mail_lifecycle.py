@@ -107,13 +107,56 @@ def generate(state, run=subprocess.run):
          '--python-bin', config['proxy_python'], '--parent-agent', config['parent'],
          '--claude-json', str(empty), '--chrome', '0'], env=env, cwd=state,
         capture_output=True, text=True, check=True, timeout=30)
-    proxy = read(state / 'mcp.json')['mcpServers']['orrery-mail']
+    return generated_proxy(state)
+
+
+def generated_proxy(state):
+    """Validate a saved product projection, including every bound reference."""
+    state = Path(state)
+    config, identity, attempt = [read(state / name) for name in
+                                 ('run-config.json', 'mail-identity.json', 'attempt.json')]
+    if (identity['program'] != 'hermes' or identity['project_key'] != config['project_key']
+            or identity['parent'] != config['parent'] or attempt['agent_name'] != identity['agent_name']):
+        raise ValueError('Generated config identity mismatch')
+    runner = Path(config['product_root']) / 'integrations/codex_app/plugin/scripts/run-mcp.sh'
+    servers = read(state / 'mcp.json')['mcpServers']
+    if set(servers) != {'orrery-mail'}:
+        raise ValueError('Unexpected generated MCP servers')
+    proxy = servers['orrery-mail']
     if proxy['command'] != str(runner) or proxy.get('args') != []:
         raise ValueError('Unexpected generated product proxy command')
-    if any(key in proxy['env'] for key in ('DEEPSEEK_API_KEY', 'CHILD_REGISTRATION_TOKEN', 'MCP_AGENT_MAIL_TOKEN')):
-        raise ValueError('Generated proxy contains a credential value field')
+    connection = config['connection']
+    expected = {'AGENTSTACK_PROXY_AGENT_NAME': identity['agent_name'],
+                'AGENTSTACK_PROXY_TOKEN_FILE': identity['token_file'],
+                'AGENTSTACK_PROXY_PROGRAM': 'claude-code', 'AGENTSTACK_PROJECT_KEY': config['project_key'],
+                'AGENTSTACK_MCP_URL': connection['mcp_url'], 'AGENTSTACK_MAIL_ENV': connection['mail_env'],
+                'AGENTSTACK_MAIL_HTTP_BEARER_MODE': connection['bearer_mode'],
+                'AGENTSTACK_RUNTIME_DIR': connection['runtime_dir'], 'AGENTSTACK_PYTHON': config['proxy_python'],
+                'AGENTSTACK_PROXY_PARENT_AGENT': config['parent']}
+    if proxy['env'] != expected:
+        raise ValueError('Generated proxy binding or environment changed')
     # Preserve the product's PROGRAM too: remote whois checks program=hermes.
     return proxy
+
+
+def launch_state_for_retire(state, config, identity, run):
+    if (state / 'runtime-exit.json').is_file():
+        result = read(state / 'runtime-exit.json')
+        if result.get('group_absent') is not True or result.get('group_check') != 'observed':
+            raise ValueError('Owned group absence must be confirmed before retirement')
+        return 'stopped'
+    if any((state / name).exists() for name in ('pane-entry.json', 'runtime-process.json')):
+        raise ValueError('A supervisor or child started; observed group absence is required')
+    if not any((state / name).exists() for name in ('start-intent.json', 'owned-pane.json')):
+        return 'not-started'
+    record = read(state / ('owned-pane.json' if (state / 'owned-pane.json').exists() else 'start-intent.json'))
+    if record.get('agent_name') != identity['agent_name'] or not Path(record.get('socket_path', '')).is_absolute():
+        raise ValueError('Partial start has no canonical socket evidence; ask the operator to inspect')
+    result = run([config['tmux'], '-S', record['socket_path'], 'has-session', '-t', '=' + identity['agent_name']],
+                 env=product_env(config), capture_output=True, timeout=10)
+    if result.returncode != 1:
+        raise ValueError('Partial start session is present or its absence is unknown')
+    return 'not-started-session-absent'
 
 
 def retire(state, run=subprocess.run, *, require_release=True):
@@ -122,9 +165,12 @@ def retire(state, run=subprocess.run, *, require_release=True):
                                  ('run-config.json', 'attempt.json', 'mail-identity.json')]
     if attempt['agent_name'] != identity['agent_name']:
         raise ValueError('Retire identity mismatch')
-    exit_receipt = read(state / 'runtime-exit.json')
-    if exit_receipt.get('group_absent') is not True or exit_receipt.get('group_check') != 'observed':
-        raise ValueError('Owned group absence must be confirmed before retirement')
+    if (state / 'retire-receipt.json').exists():
+        receipt = read(state / 'retire-receipt.json')
+        if receipt.get('attempt_id') != attempt['attempt_id'] or receipt.get('agent_name') != identity['agent_name']:
+            raise ValueError('Retire receipt belongs to another attempt')
+        return receipt  # Parent whois resolves pending cleanup; never repeat it silently.
+    launch_state = launch_state_for_retire(state, config, identity, run)
     if require_release:
         release = read(state / 'release-receipt.json')
         if (release.get('attempt_id') != attempt['attempt_id'] or release.get('agent_name') != identity['agent_name']
@@ -135,22 +181,61 @@ def retire(state, run=subprocess.run, *, require_release=True):
     require_legacy(config, run)
     env = product_env(config)
     env['AGENT_NAME'] = identity['agent_name']
+    save(state / 'retire-intent.json', {'attempt_id': attempt['attempt_id'],
+         'agent_name': identity['agent_name'], 'launch_state': launch_state, 'at': stamp()}, exclusive=True)
     result = run(['/bin/bash', str(Path(config['product_root']) / 'hooks/cleanup-child-agent.sh'),
                   identity['agent_name']], env=env, cwd=state, capture_output=True, timeout=60)
     receipt = {'attempt_id': attempt['attempt_id'], 'agent_name': identity['agent_name'],
                'cleanup_exit_code': result.returncode, 'retired_at': None, 'confirmed': False,
-               'source': 'parent-bound-whois', 'checked_at': None}
+               'source': 'parent-bound-whois', 'checked_at': None, 'launch_state': launch_state}
     save(state / 'retire-receipt.json', receipt)
     return receipt  # Only the parent's canonical whois can confirm retirement.
 
 
+def capture_value(value):
+    """Read the parent's saved canonical MCP result; make no RPC."""
+    if isinstance(value, dict) and value.get('isError'):
+        raise ValueError('Parent MCP call failed')
+    if isinstance(value, dict) and 'structuredContent' in value:
+        value = value['structuredContent']
+    elif isinstance(value, dict) and isinstance(value.get('content'), list):
+        blocks = [block for block in value['content'] if block.get('type') == 'text']
+        if len(blocks) != 1:
+            raise ValueError('Expected one JSON MCP text result')
+        value = json.loads(blocks[0]['text'])
+    return value.get('result', value) if isinstance(value, dict) else value
+
+
+def confirm_retire(state, input_file):
+    state = Path(state)
+    attempt, identity, receipt = [read(state / name) for name in
+                                  ('attempt.json', 'mail-identity.json', 'retire-receipt.json')]
+    who = capture_value(read(input_file))
+    if (not isinstance(who, dict) or who.get('name') != attempt['agent_name']
+            or not isinstance(who.get('retired_at'), str) or not who['retired_at'].strip()):
+        raise ValueError('Canonical parent whois did not confirm retirement of this child')
+    if (identity['agent_name'] != attempt['agent_name'] or receipt.get('attempt_id') != attempt['attempt_id']
+            or receipt.get('agent_name') != attempt['agent_name'] or type(receipt.get('cleanup_exit_code')) is not int):
+        raise ValueError('Cleanup receipt is missing or belongs to another attempt')
+    datetime.fromisoformat(who['retired_at'].replace('Z', '+00:00'))
+    receipt.update(retired_at=who['retired_at'], confirmed=True, source='parent-bound-whois', checked_at=stamp())
+    save(state / 'retire-receipt.json', receipt)
+    return receipt
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['register', 'retire'])
+    parser.add_argument('action', choices=['register', 'retire', 'confirm-retire'])
     parser.add_argument('--state', required=True, type=Path)
+    parser.add_argument('--input', type=Path)
     args = parser.parse_args()
     try:
-        result = register(args.state) if args.action == 'register' else retire(args.state)
+        if args.action == 'confirm-retire':
+            if not args.input:
+                raise ValueError('Parent-saved canonical MCP result file required')
+            result = confirm_retire(args.state, args.input)
+        else:
+            result = register(args.state) if args.action == 'register' else retire(args.state)
     except (ValueError, OSError, KeyError, subprocess.SubprocessError):
         raise SystemExit('Lifecycle step failed; preserve state, no automatic retry')
     print(json.dumps({'action': args.action, 'result': result}))

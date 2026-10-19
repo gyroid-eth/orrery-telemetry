@@ -55,7 +55,9 @@ class FakeProduct:
             proxy = {'command': get('--runner'), 'args': [], 'env': {
                 'AGENTSTACK_PROXY_PROGRAM': 'claude-code', 'AGENTSTACK_PROXY_AGENT_NAME': get('--child'),
                 'AGENTSTACK_PROXY_TOKEN_FILE': get('--token-file'), 'AGENTSTACK_PROJECT_KEY': get('--project-key'),
-                'AGENTSTACK_PROXY_PARENT_AGENT': get('--parent-agent'), 'AGENTSTACK_MCP_URL': get('--mcp-url')}}
+                'AGENTSTACK_PROXY_PARENT_AGENT': get('--parent-agent'), 'AGENTSTACK_MCP_URL': get('--mcp-url'),
+                'AGENTSTACK_MAIL_ENV': get('--mail-env'), 'AGENTSTACK_MAIL_HTTP_BEARER_MODE': get('--bearer-mode'),
+                'AGENTSTACK_RUNTIME_DIR': get('--runtime-dir'), 'AGENTSTACK_PYTHON': get('--python-bin')}}
             runner.save(get('--out'), {'mcpServers': {'orrery-mail': proxy}})
             return subprocess.CompletedProcess(argv, 0, '', '')
         if 'has-session' in argv:
@@ -152,6 +154,93 @@ class PilotFixture(unittest.TestCase):
         receipt = mail_lifecycle.retire(self.state, self.product.run, require_release=False)
         self.assertFalse(receipt['confirmed'])
         self.assertIsNone(receipt['retired_at'])
+
+    def test_unstarted_retire_and_parent_confirmation_command(self):
+        mail_lifecycle.register(self.state, self.product.run, generate_config=False)
+        receipt = mail_lifecycle.retire(self.state, self.product.run, require_release=False)
+        self.assertEqual(receipt['launch_state'], 'not-started')
+        self.assertFalse((self.state / 'runtime-exit.json').exists())
+        self.assertFalse(receipt['confirmed'])
+        capture = self.root / 'parent-whois.json'
+        for who in ({'name': 'WrongChild', 'retired_at': '2026-01-01T00:00:00Z'},
+                    {'name': 'FixtureChild', 'retired_at': None},
+                    {'name': 'FixtureChild', 'retired_at': 'invalid'}):
+            runner.save(capture, who)
+            with self.assertRaises(ValueError):
+                mail_lifecycle.confirm_retire(self.state, capture)
+            self.assertFalse(runner.read(self.state / 'retire-receipt.json')['confirmed'])
+        runner.save(capture, {'structuredContent': {'name': 'FixtureChild',
+                                                  'retired_at': '2026-01-01T00:00:00Z'}})
+        result = subprocess.run([sys.executable, '-I', '-B', str(ADAPTER / 'runner.py'),
+            'confirm-retire', '--state', str(self.state), '--input', str(capture)],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = runner.read(self.state / 'retire-receipt.json')
+        self.assertTrue(receipt['confirmed'])
+        self.assertEqual(receipt['cleanup_exit_code'], 0)
+        self.assertEqual(receipt['source'], 'parent-bound-whois')
+        count = len(self.product.calls)
+        self.assertEqual(mail_lifecycle.retire(self.state, self.product.run, require_release=False), receipt)
+        self.assertEqual(len(self.product.calls), count)
+        self.assertFalse((self.state / 'runtime-exit.json').exists())
+
+    def test_partial_start_retire_requires_exact_session_absence(self):
+        self.bind()
+        runner.save(self.state / 'start-intent.json', {'agent_name': 'FixtureChild',
+                                                     'socket_path': self.config['tmux_socket']})
+        runner.save(self.state / 'pane-entry.json', {'agent_name': 'FixtureChild'})
+        with self.assertRaisesRegex(ValueError, 'supervisor or child started'):
+            mail_lifecycle.retire(self.state, self.product.run, require_release=False)
+        (self.state / 'pane-entry.json').unlink()
+        for code in (0, 2):
+            def session_unknown(argv, **kwargs):
+                if 'has-session' in argv:
+                    self.assertIn(self.config['tmux_socket'], argv)
+                    self.assertEqual(argv[-1], '=FixtureChild')
+                    return subprocess.CompletedProcess(argv, code, '', '')
+                return self.product.run(argv, **kwargs)
+            with self.assertRaisesRegex(ValueError, 'session is present or its absence is unknown'):
+                mail_lifecycle.retire(self.state, session_unknown, require_release=False)
+        receipt = mail_lifecycle.retire(self.state, self.product.run, require_release=False)
+        self.assertEqual(receipt['launch_state'], 'not-started-session-absent')
+        self.assertFalse((self.state / 'runtime-exit.json').exists())
+
+    def test_configure_resumes_only_matching_projection_before_profile_writes(self):
+        mail_lifecycle.register(self.state, self.product.run, generate_config=False)
+        mail_lifecycle.generate(self.state, self.product.run)  # Legacy partial configure.
+        original = (self.state / 'mcp.json').read_bytes()
+        config = runner.read(self.state / 'run-config.json')
+        profile = Path(config['profile_home'])
+        profile.mkdir(parents=True)
+        old = self.root / 'prior-attempt'
+        old.mkdir()
+        runner.save(old / 'attempt.json', {'attempt_id': 'prior-id', 'agent_name': 'FixturePrior'})
+        runner.save(old / 'mail-identity.json', {'agent_name': 'FixturePrior'})
+        runner.save(old / 'retire-receipt.json', {'attempt_id': 'prior-id', 'agent_name': 'FixturePrior',
+            'cleanup_exit_code': 0, 'confirmed': False, 'retired_at': None})
+        runner.save(profile / '.orrery-profile.json', {'state': str(old), 'agent_name': 'FixturePrior'})
+        runner.save(profile / 'config.yaml', {'prior': True})
+        with self.assertRaisesRegex(ValueError, 'parent-confirmed retirement'):
+            runner.configure(self.state, self.product.run)
+        self.assertEqual(runner.read(profile / 'config.yaml'), {'prior': True})
+        self.assertFalse((self.state / 'profile-write-intent.json').exists())
+        capture = self.root / 'prior-whois.json'
+        runner.save(capture, {'name': 'FixturePrior', 'retired_at': '2026-01-01T00:00:00Z'})
+        mail_lifecycle.confirm_retire(old, capture)
+        mcp = runner.read(self.state / 'mcp.json')
+        mcp['mcpServers']['orrery-mail']['env']['AGENTSTACK_PROXY_AGENT_NAME'] = 'WrongChild'
+        runner.save(self.state / 'mcp.json', mcp)
+        with self.assertRaisesRegex(ValueError, 'binding or environment changed'):
+            runner.configure(self.state, self.product.run)
+        self.assertFalse((self.state / 'profile-write-intent.json').exists())
+        (self.state / 'mcp.json').write_bytes(original)
+        runner.configure(self.state, self.product.run)
+        self.assertEqual((self.state / 'mcp.json').read_bytes(), original)
+        self.assertEqual(sum('claude-config' in argv for argv, _ in self.product.calls), 1)
+        self.assertTrue((self.state / 'profile-write-intent.json').exists())
+        (self.state / 'configured.json').unlink()  # Failure after profile writing began.
+        with self.assertRaisesRegex(ValueError, 'retire and use a new attempt'):
+            runner.configure(self.state, self.product.run)
 
     def test_profile_link_or_shared_directory_cannot_point_outside(self):
         self.bind()

@@ -42,7 +42,7 @@ Provider credentials must not enter shell-hook children. Fail-open observer
 hooks cannot enforce the provider egress contract.
 
 `runner.py` offers separate `init`, `preregister`, `configure`, `probe`, `start`,
-`status`, `stop` and `retire` commands, each taking `--state`. `init` also takes
+`status`, `stop`, `retire` and `confirm-retire` commands, each taking `--state`. `init` also takes
 `--config` and `--profile strata|deepseek`. The private operator config contains
 absolute product/interpreter/worktree/managed-root paths, the canonical parent
 and connection references, and readonly profile template paths. Credentials are
@@ -76,6 +76,20 @@ operator. These flags do not certify every bootstrap recovery path as inert.
 do not count; `full_managed_task_accepted` stays unknown. `retire` first requires
 observed owned-group absence, invokes the product cleanup hook, and leaves its
 receipt unconfirmed until the parent's bound `whois` confirms `retired_at`.
+Save that canonical result privately, then run `runner.py confirm-retire
+--state STATE --input WHOIS_JSON` (also available through `mail_lifecycle.py`).
+Only the same child name with a valid nonempty `retired_at` confirms the existing
+cleanup receipt; the original cleanup exit status is retained. Never-started
+attempts can run cleanup without inventing a runtime exit. A partial tmux start
+needs observed absence of the exact session on the saved socket, and a started
+supervisor still needs an observed owned-group exit. Pending cleanup is resolved
+by parent `whois`, without automatically running cleanup again.
+
+Configure checks the prior profile's confirmed retirement before changing it.
+A saved product `mcp.json` may be reused only if every bound reference matches
+this attempt and profile writing has not begun. `profile-write-intent.json`
+marks that boundary; a later partial failure requires retirement and a fresh
+attempt. Do not delete an intent or generated file to force a retry.
 The Mail-only pilot takes no file reservations. Full managed reservation gates,
 provider egress enforcement and the five-condition completion flow remain
 separate acceptance work. This pilot has only fake-helper/stdio acceptance;
