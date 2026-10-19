@@ -1,0 +1,16 @@
+[
+  {
+    "name": "@deepseek-ai/dsh",
+    "version": "0.2.1-rc.2",
+    "integrity": "sha512-tvY+yhfKRifthbqPe/OK0AYxM5ZkvqfYq/jMYgJcEUxiRRL1Vwra3Ti5TB6AXgSWQdiPHYh/Vp6SJa9yHwMNuw==",
+    "file": "package-0.tgz",
+    "url": "https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.2.1-rc.2.tgz"
+  },
+  {
+    "name": "@deepseek-harness-tui/dsh-tui",
+    "version": "0.16.1",
+    "integrity": "sha512-xk8Nviy55RvLnAdjYj04DekUu6D1Pc0kEa5R+2EXoL3H/h6ZEzv8L0bxtSTrWxtNdXd4ufOXMu4TQ7HjrpYhbg==",
+    "file": "package-1.tgz",
+    "url": "https://registry.npmjs.org/@deepseek-harness-tui/dsh-tui/-/dsh-tui-0.16.1.tgz"
+  }
+]

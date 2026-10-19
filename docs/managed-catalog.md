@@ -1,5 +1,7 @@
 # Managed catalog（段1）
 
+runtimeの任意導入は `install.sh --enable-dsh --dsh-node /absolute/node` / `--enable-hermes` でハーネスごとに選びます。未opt-inはruntime/adapterを取得せず、導入後も利用者のbackend/run-templateとavailability検査が揃うまで利用不可です。[導入と削除](install.md)を参照してください。
+
 `dashboard.managed_catalog.catalog_providers(backends, availability, *, mode, enabled)`はA1のpublic metadataとbackend×harness準備状態から、既存providersへ追加する配列を返します。serverへの差し込みと実体/版/patchの準備判定はmanaged spawn controller側です。この関数はfile/API/鍵/登録へ触れません。
 
 `load_catalog_inputs(config_file, *, mode)`はoperatorの私有manifestから(backends, availability, enabled)を返します。無指定/欠落/無効opt-inはoff、Mac以外はunsupported_platformです。runtime/template/model・製品helper/CLIを照合し、dshのNode版/固定package版/TUI patch hash、Hermesのcommitted interpreterを読み取ります。Nodeの版確認は鍵なしenvで`--version`を呼び、Hermesのtemplate継承は同じcommitted Pythonで既存の安全なprofile projectionを読取実行します（profile書込・key_cmd実行・provider importなし）。provider/Mail/Keychainへは接続しません。失敗理由は公開codeにし、私有参照やraw stderrをcatalogへ出しません。POST時のfull preflightを省略する証拠にはしません。

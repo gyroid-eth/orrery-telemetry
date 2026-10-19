@@ -119,6 +119,7 @@ def main():
                      else loader.loadTestsFromName('test_dsh_run_connection.ProductLifecycle.test_keyless_full_preflight_with_real_tui_and_synthetic_stdio_server'))
             if backend == 'strata':
                 suite.addTests(loader.loadTestsFromName('test_managed_catalog'))
+                suite.addTests(loader.loadTestsFromName('test_managed_harness_install'))
             with (args.out / (backend + '-tests.txt')).open('w') as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
                 checked = unittest.TextTestRunner(stream=log, verbosity=2).run(suite)
             totals += checked.testsRun; failures += len(checked.failures); errors += len(checked.errors)

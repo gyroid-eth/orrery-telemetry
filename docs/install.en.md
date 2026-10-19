@@ -2,6 +2,12 @@
 
 > 日本語版: [install.md](install.md)
 
+## Optional dsh / Hermes installation
+
+`install.sh --enable-dsh --dsh-node /absolute/node` installs dsh 0.2.1-rc.2 / TUI 0.16.1 and its managed adapter. `--enable-hermes` installs Hermes commit d923a5eb487a17c0a68801bba9ef0f56c81040a8. Each lives in `harnesses/{dsh,hermes}/<generation>`. Supply both enable flags for both harnesses. Neither is acquired by default; updates preserve each saved enabled choice. Supply an existing Node >=24.2 by absolute path; Node itself is not downloaded. Acquisition uses npm/GitHub and the distributions required by Hermes PM. `--harness-cache PATH` supplies dsh tarballs/npm offline cache and local Hermes source; Hermes PM may still acquire its dependencies. `--dry-run` downloads and writes nothing.
+
+`--disable-dsh` / `--disable-hermes` disable the selection and retain installed files. Normal uninstall removes receipt-owned runtime generations and adapters, retaining memories/skills in `harnesses/<harness>/profiles`. Manual `hermes-managed` and Hermes homes are neither read nor modified. External Node and supplied caches remain untouched. Credentials and logins are never installed or migrated. Each harness's `current.json` records its runtime references. Configure backend URL/model, Keychain service/account and a run template separately, then perform full preflight. Installation alone does not make the catalog available.
+
 [Back to README](../README.en.md) · [Next: Launchers and identity](launchers.en.md)
 
 This document is for people installing ORRERY Telemetry (this repository) for the first time. It takes three commands to install, two to verify, and one to start the first agent. Migration instructions for previous users of the third-party MCP Agent Mail are collected in the [appendix](#appendix-for-previous-mcp-agent-mail-users) at the end.

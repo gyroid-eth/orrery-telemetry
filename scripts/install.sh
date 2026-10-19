@@ -42,6 +42,9 @@ ASSUME_YES="${AGENTSTACK_ASSUME_YES:-0}"
 TIER="tier1"
 TIER_OPTION=""
 DSH_OPT_IN=""
+HERMES_OPT_IN=""
+DSH_NODE="${AGENTSTACK_DSH_NODE:-}"
+HARNESS_CACHE="${AGENTSTACK_HARNESS_CACHE:-}"
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MAIL_DB_EXPLICIT="${AGENTSTACK_MAIL_DB+x}"
 MAIL_ENV_EXPLICIT="${AGENTSTACK_MAIL_ENV+x}"
@@ -129,7 +132,11 @@ Options:
   -y, --assume-yes       Pre-approve MCP/settings/managed-block prompts only
   --dashboard-only       Tier0 footprint; install dashboard assets only
   --scoped               Tier2 placeholder; no user-settings merge
-  --enable-dsh           DeepSeek のロゴと残高表示を明示的に有効化（子の起動なし）
+  --enable-dsh           DeepSeek 表示と固定 dsh runtime を導入（子の起動なし）
+  --enable-hermes        固定 Hermes を専用 managed root に導入（鍵なし）
+  --disable-hermes       Hermes opt-in を無効化（導入済みfileはuninstallまで保持）
+  --dsh-node PATH        既存 Node >=24.2 の絶対path（Node自体は取得しない）
+  --harness-cache PATH   dsh offline cacheとHermes固定sourceの取得元（PMは別途取得）
   --disable-dsh          DeepSeek のロゴ配信と残高表示を無効化（既存fileは保持）
   --install-dir PATH     Default: ~/.agentstack
   --project-key PATH     Required on first install; existing env.sh is reused
@@ -250,6 +257,19 @@ while [[ $# -gt 0 ]]; do
     -y|--assume-yes)
       ASSUME_YES=1
       shift
+      ;;
+    --enable-hermes)
+      HERMES_OPT_IN="enable"
+      shift
+      ;;
+    --disable-hermes)
+      HERMES_OPT_IN="disable"
+      shift
+      ;;
+    --dsh-node|--harness-cache)
+      [[ $# -ge 2 ]] || { echo "error: $1 needs a path" >&2; exit 2; }
+      if [[ "$1" == --dsh-node ]]; then DSH_NODE="$2"; else HARNESS_CACHE="$2"; fi
+      shift 2
       ;;
     --enable-dsh)
       DSH_OPT_IN="enable"
@@ -2401,6 +2421,18 @@ install_dsh_presentation() {
   printf '{"enabled":%s}\n' "$enabled" > "$temporary"
   chmod 600 "$temporary"
   mv -f "$temporary" "$DASHBOARD_DIR/dsh-provider.json"
+}
+
+install_managed_harnesses() {
+  local harness choice
+  local args=(--repo "$REPO_ROOT" --install "$INSTALL_DIR" --node "$DSH_NODE" --python "$PYTHON_BIN")
+  [[ "$DRY_RUN" != true ]] || args+=(--dry-run)
+  [[ -z "$HARNESS_CACHE" ]] || args+=(--cache "$HARNESS_CACHE")
+  for harness in dsh hermes; do
+    if [[ "$harness" == dsh ]]; then choice="${DSH_OPT_IN:-keep}"; else choice="${HERMES_OPT_IN:-keep}"; fi
+    "$PYTHON_BIN" "$SCRIPT_DIR/lib/managed_harness_install.py" \
+      --harness "$harness" --choice "$choice" "${args[@]}"
+  done
 }
 
 install_payload() {
@@ -4981,6 +5013,9 @@ manifest = {
     },
     "owned_files": owned_files,
     "owned_dirs": owned_dirs,
+    "managed_harness_roots": [str(p.parent) for h in ("dsh", "hermes")
+                              for p in (install_dir / "harnesses" / h).glob("*/.orrery-managed-install.json")
+                              if json.loads(p.read_text()).get("complete") is True],
     "skill_links": skill_links,
     "services": services,
     "backups": [
@@ -5112,6 +5147,7 @@ main() {
   migrate_legacy_dashboard_log
   install_payload
   install_dsh_presentation
+  install_managed_harnesses
   install_claude_skill_links
   install_codex_skill_links
   render_installed_templates

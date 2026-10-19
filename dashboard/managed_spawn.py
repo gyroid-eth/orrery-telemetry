@@ -50,12 +50,16 @@ def mode(core):
 
 def catalog(config_file, *, selected_mode):
     # Catalog implementation is owned separately; a missing module/config is off.
-    presentation = read(ROOT / 'dashboard/dsh-provider.json')
-    if not config_file or (isinstance(presentation, dict) and presentation.get('enabled') is not True):
+    if not config_file:
         return []
     try:
         module = importlib.import_module('dashboard.managed_catalog')
         backends, availability, enabled = module.load_catalog_inputs(config_file, mode=selected_mode)
+        for harness in HARNESSES:
+            selection = read(ROOT / 'dashboard' / (harness + '-provider.json'))
+            if isinstance(selection, dict) and selection.get('enabled') is not True:
+                for status in availability.values():
+                    status[harness] = {'available': False, 'reason': 'disabled_by_opt_in'}
         return module.catalog_providers(backends, availability, mode=selected_mode, enabled=enabled)
     except (ImportError, OSError, ValueError, KeyError, TypeError):
         return []

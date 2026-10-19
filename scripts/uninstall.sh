@@ -263,6 +263,41 @@ for record in data.get("skill_links", []):
     if not dry_run:
         path.unlink()
 
+for raw in data.get("managed_harness_roots", []):
+    path = safe_path(raw)
+    install_root = pathlib.Path(data["install_dir"]).resolve()
+    bases = {install_root / "harnesses" / h for h in ("dsh", "hermes")}
+    if path.resolve().parent not in bases or path.name == "profiles":
+        raise RuntimeError("refusing unexpected managed harness root")
+    if not path.exists():
+        continue
+    receipt = path / ".orrery-managed-install.json"
+    if not receipt.is_file() or json.loads(receipt.read_text()).get("complete") is not True:
+        raise RuntimeError("managed harness ownership receipt missing; retained root")
+    say("remove installer-owned managed harness", path)
+    if not dry_run:
+        for child in path.iterdir():
+            if child.name == "profiles" and child.is_dir() and not child.is_symlink():
+                print(f"kept user profiles: {child}")
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+        current = path.parent / "current.json"
+        if current.is_file() and json.loads(current.read_text()).get("generation") == path.name:
+            current.unlink()
+        # Empty scaffolding can go; profiles with memories/skills remain.
+        for directory in (path.parent / "profiles", path.parent, path.parent.parent):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+
 for path in owned_files:
     if path in skill_link_paths:
         continue
