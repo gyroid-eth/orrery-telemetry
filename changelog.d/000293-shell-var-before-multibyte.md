@@ -1,3 +1,3 @@
-### 日本語の locale で install が途中で止まる不具合を修正
+### 日本語localeでもshellの表示行で変数名を正しく区切る
 
-日本語の locale の bash 3.2 で `install.sh --enable-dsh` が `unbound variable` で止まっていたのを直しました。
+macOSのbash 3.2で、日本語localeのときにDeepSeekのopt-in処理や登録失敗の案内が未定義変数エラーで止まる問題を修正しました。非ASCII文字が続く変数参照の終端を明示し、同じ形を検出する静的試験と日本語localeでの回帰試験を追加しました。
