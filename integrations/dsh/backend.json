@@ -1,0 +1,43 @@
+{
+  "limits": {
+    "session_requests": 8,
+    "max_request_ms": 120000,
+    "status_ms": 5000
+  },
+  "wire_tools": [
+    "read",
+    "write",
+    "mcp__orrery_mail__send_message"
+  ],
+  "backends": {
+    "deepseek": {
+      "base_url": "",
+      "model": "deepseek-flash",
+      "keychain": {
+        "service": "orrery-dsh-deepseek",
+        "account": ""
+      },
+      "effort": "low",
+      "max_output_tokens": 2048,
+      "idle_check": false,
+      "model_definition": null
+    },
+    "strata": {
+      "base_url": "",
+      "model": "qwen3.8-flash-next-iq3_xxs",
+      "keychain": {
+        "service": "orrery-dsh-strata",
+        "account": ""
+      },
+      "effort": "high",
+      "max_output_tokens": 4096,
+      "idle_check": true,
+      "model_definition": {
+        "id": "qwen3.8-flash-next-iq3_xxs",
+        "name": "Strata Qwen",
+        "contextWindow": 131072,
+        "maxTokens": 4096
+      }
+    }
+  }
+}

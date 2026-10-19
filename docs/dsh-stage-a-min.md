@@ -1,0 +1,69 @@
+# dsh-TUI 段A-min（開発中）
+
+同じ実装で DeepSeek / Strata を選ぶ、子1体・私有worktree・小さいread/write taskの縦切りです。正式なprovider導入、任意shell、resume、global、installer、dashboard変更は含みません。固定版は dsh 0.2.1-rc.2 / dsh-TUI 0.16.1、Nodeは絶対実体を固定して24.2以上を検査します。
+
+現状は独立した通信ガードと完了判定のoffline fixtureを確認した段階です。**fixture成功はTUI実起動・予約guardの接続・実Mail配送の成功ではありません。** TUI縦切りは別のspikeで受入します。実鍵、モデルAPI、identity登録、live Mail/dashboard/vaultの変更は、このoffline検証に不要です。
+
+## 呼出しと設定
+
+managed launcherが、固定Nodeで `--import integrations/dsh/egress.mjs integrations/dsh/managed_entry.mjs` を起動します。直接の起動方法を増やさず、launch.py/launch_plan.pyが決めた実体とmanaged profileを使います。
+
+| 入力 | 内容 |
+| --- | --- |
+| ORRERY_DSH_BACKEND_FILE | 利用者のrepo外backend設定の絶対path |
+| ORRERY_DSH_BACKEND_ID | deepseek / strata |
+| ORRERY_DSH_STATE_ROOT | attemptごとの私有state root（0700） |
+| ORRERY_DSH_AUDIT_FILE | STATE_ROOT/audit.jsonl |
+| ORRERY_DSH_ATTEMPT_ID | attempt.jsonと一致するID |
+| ORRERY_DSH_OFFLINE | 1は転送0。未指定もoffline。attempt.phase=spikeは常にoffline |
+| DEEPSEEK_API_KEY | 同じadapterが読む変数名。offlineはdummy、実鍵は将来の受入時だけruntime1PIDへ |
+
+repoのbackend.jsonは空のURL/accountを持つテンプレートです。コピー先の利用者設定（例：~/.config/orrery/dsh-backends.json）に二backendのURL・model・Keychainのservice/account参照・effort/output上限・モデル定義・idle要否をまとめ、ORRERY_DSH_BACKEND_FILEでそのrepo外fileを渡します。テンプレートの空URLでは起動しません。設定に鍵の値は置きません。managed.patch.ymlは共通機能制限だけを持ち、選択済みprovider/model行はlauncherが最後に投影します。Macの鍵取得はsecurity、WSLは外部credential helperの入口へ寄せます。WSLのhelper/Node/native/TUI実機動作は未確認であり、Macの実体path/SHAを共通定数へしません。
+
+## 通信と補助process
+
+通常の更新/onboarding/補助起動でも予定外通信や鍵継承が起こり得るため、以下だけを残します。
+
+- global fetchは選択backendの正確な`baseURL + /v1/messages`だけ。DeepSeekの`/user/balance`、npm/GitHub、任意loopbackを両backendで拒否します。最初のURLだけで許可し続けず、redirectをmanualで受けて3xxを拒否し、自動追従しません。
+- Strataのstatusだけは同じruntimeが送信前に確認します。`/v1/status`、404時だけ`/health`、無鍵→401/403時だけ認証、各5秒。in_flightが数値0、queue値があれば0を必須とし、busy/不明は止めます。pollや分散lockは作りません。
+- 単一in-flightをstatus待ちより前に取り、応答bodyのEOF/error/cancelまで保持します。header到着だけでは解除しません。要求8回、各120秒、backendのoutput上限を守り、retry/fallbackはしません。final usage不明なら次要求を止めます。金額上限の保証ではありません。
+- 製品の標準`~/.agentstack/integrations/codex_app/plugin/scripts/run-mcp.sh`だけを補助起動に許可し、明示envを作ってAPI keyを除きます。opener/editor/clipboard/別dsh等の起動は拒否します。既知startup診断は保存前に一致鍵を伏せます。
+- TUIの更新check/manual update/bootstrap、残高/OAuth、recap/btw/title、IDE/inject、共有profile/旧資格importはmanaged entry/action側でも無効にします。UI非表示だけで済ませません。ここはTUI spikeの受入対象です。
+
+offlineでは要求のmodel/tool集合を組み立てた後、statusもproviderも呼ばず`offline-capture {forwarded:0}`、exit73で止まります。契約違反はexit78、runtime例外79、上限80です。spikeで必須のtoolはread/writeだけ、runではbackend.jsonのwire_tools全3件です。
+
+## taskとruntimeの証拠を分ける
+
+launchはattempt.json/task.json/runtime-exit.json、pluginはevents.jsonl、egressはaudit.jsonlを書きます。相互の内部をimportせず、state rootのJSON/JSONLを境界にします。attempt.json.phaseはspike/run、agent_nameは実際の子名です。spikeに架空のMail成功を作りません。
+
+completion.pyのtask判定は、同じattempt/task、completed turn、親が指定したexpected成果物（worktree相対pathとcontains又はsha256、開始以降のmtime）、要求auditにfatal/blocked/limit無し、親宛ての実Mail receipt、の5条件です。receiptのfromはattempt.agent_name、verified_sender/okはbool true、正のmessage_idも照合します。欠けた証跡はpending(null)、既知の不一致はfailed(false)。空exit0や画面の「完了」は成功条件にしません。
+
+TUIのruntime終了は別評価です。group_absentに加え予約解放/retireの証跡が無ければ、reservations_released:null、retire:unknownと残します。task成功を停止・retire成功に読み替えません。
+
+```text
+python3 integrations/dsh/completion.py /absolute/state/root
+python3 integrations/dsh/completion.py /absolute/state/root --runtime
+```
+
+上のコマンドは保存済みfileだけを読み、それぞれtask-completion.json/runtime-completion.jsonを書きます。exitはsuccess=0、failed=1、pending=2。runtimeやMailへ接続しません。
+
+## offline検証
+
+NodeもPythonも検証用の明示実体を使い、負荷が1分平均15未満のとき直列に実行します。
+
+```text
+/absolute/fixed/node --test tests/test_dsh_egress.mjs
+/absolute/python3 tests/test_dsh_completion.py
+```
+
+egress fixtureはメモリ内の偽fetchだけを使い、endpoint選択・offline転送0・残高/更新先拒否・model/beta/output/tool制限・idle/busy/auth・redirect・stream重複/中断/timeout・proxy env scrub・診断伏字を対照確認します。completion fixtureのMail receiptは明示した合成入力であり、実Mailを送信した証拠ではありません。spikeのtask成功がtrueにならないことも確認します。
+
+検証出力は各自の作業dirへ保存します。TUI/guard spike、repository全体のpytest、WSL実機受入はこの2本のfixtureでは確認していません。TUIの保存依存が不足した場合、offlineを外してdownloadせず親へ報告します。
+
+## 最初のStrata子で一度だけ接続先を観測する計画
+
+実受入時に起動直前→終了の一窓だけ、owned runtime/supervisor/proxy/子孫PIDへMacの`lsof -nP -a -p <PIDのCSV> -i`又はWSLの`ss -H -ntup`を約1秒間隔で採ります。時刻/PID/実行名/接続IP:port/protocolだけを保存し、argv/env/payload/headerは採りません。許可は利用者が設定したStrataの接続先と既存bindingの正確な127.0.0.1:Mail portのみです。hostname/IP対応も記録し、許可外を見つけたら止めます。常設監視・firewall・新proxyは作りません。
+
+snapshotは短い通信を見逃し得ます。global fetchの置換もnode:http/net/native/別processの全socketをOSで遮断する仕組みではありません。statusは別利用者を排除するサーバー予約ではなく、WSL対応は未受入です。未観測を「外部通信は完全にゼロ」とは報告しません。
+
+終了は所有groupの停止→予約解放→canonical retire確認の順です。失敗やMail/retire応答不明ではstateを保持し、自動再登録・再送・再開・実鍵の再読取をしません。commit/pushとliveへの採用は親が行います。
