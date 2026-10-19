@@ -1,9 +1,9 @@
-"""Pure, spike-only launch projection. Ordinary env inheritance can leak keys."""
+"""Pure launch projection. Ordinary env inheritance can leak keys."""
 from pathlib import PurePosixPath
 
 
 def build_launch(*, node, node_version, runtime, state, worktree, integration, backend_file, backend_id,
-                 attempt_id, home, patch_receipt):
+                 attempt_id, home, patch_receipt, offline=True):
     version = tuple(map(int, node_version.removeprefix('v').split('.')))
     if version < (24, 2, 0):
         raise ValueError('Node 24.2 or later is required before credentials')
@@ -23,7 +23,7 @@ def build_launch(*, node, node_version, runtime, state, worktree, integration, b
         'ORRERY_DSH_BACKEND_FILE': backend_file, 'ORRERY_DSH_BACKEND_ID': backend_id,
         'ORRERY_DSH_ATTEMPT_ID': attempt_id,
         'ORRERY_DSH_AUDIT_FILE': str(PurePosixPath(state) / 'audit.jsonl'),
-        'ORRERY_DSH_OFFLINE': '1',
+        'ORRERY_DSH_OFFLINE': '1' if offline else '0',
         'ORRERY_DSH_TUI_DATA_ROOT': str(PurePosixPath(state) / 'tui'),
         'ORRERY_DSH_TUI_PATCH_RECEIPT': patch_receipt,
         'DSH_TUI_LAUNCHER_VERSION': '0.16.1',

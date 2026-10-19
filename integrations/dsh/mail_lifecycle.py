@@ -113,9 +113,13 @@ def retire(state, run=subprocess.run):
     exit_receipt = read(state / 'runtime-exit.json')
     if exit_receipt.get('group_absent') is not True or exit_receipt.get('group_check') != 'observed':
         raise ValueError('Owned group absence must be confirmed before retirement')
-    release = read(state / 'release-receipt.json')
-    if release.get('attempt_id') != attempt['attempt_id'] or release.get('agent_name') != identity['agent_name'] or release.get('confirmed') is not True:
-        raise ValueError('Real reservation release not confirmed')
+    release_file = state / 'release-receipt.json'
+    if release_file.exists():
+        release = read(release_file)
+        if release.get('attempt_id') != attempt['attempt_id'] or release.get('agent_name') != identity['agent_name'] or release.get('confirmed') is not True or release.get('source') != 'product-bound-proxy':
+            raise ValueError('Real reservation release not confirmed')
+    elif (state / 'reservation-intent.json').exists() or exit_receipt.get('runtime_not_started') is not True:
+        raise ValueError('Reservation attempt needs confirmed release before cleanup')
     require_legacy(config, run)
     env = product_env(config)
     env['AGENT_NAME'] = identity['agent_name']

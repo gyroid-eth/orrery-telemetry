@@ -29,8 +29,25 @@ if (!state || !runtime || !path.isAbsolute(state) || !path.isAbsolute(runtime))
   throw new Error('DSH_MANAGED_ROOTS_REQUIRED');
 if (process.env.DSH_HOME !== path.join(state, 'dsh')) throw new Error('DSH_HOME_MISMATCH');
 const manifest = JSON.parse(fs.readFileSync(path.join(state, 'attempt.json'), 'utf8'));
-if (manifest.phase !== 'spike' || process.env.ORRERY_DSH_OFFLINE !== '1')
-  throw new Error('DSH_SPIKE_ONLY_ENTRY');
+const offline = process.env.ORRERY_DSH_OFFLINE === '1';
+if (!['spike', 'run'].includes(manifest.phase) || (manifest.phase === 'spike' && !offline))
+  throw new Error('DSH_PHASE_REQUIRED');
+const task = JSON.parse(fs.readFileSync(path.join(state, 'task.json'), 'utf8'));
+if (manifest.phase === 'run') {
+  const identity = JSON.parse(fs.readFileSync(path.join(state, 'mail-identity.json'), 'utf8'));
+  if (identity.agent_name !== manifest.agent_name || task.attempt_id !== manifest.attempt_id ||
+      task.reservation_source !== 'product-bound-proxy' || !task.reservation_receipts?.length)
+    throw new Error('DSH_RUN_IDENTITY_RESERVATIONS_REQUIRED');
+  if (!offline) {
+    const proof = JSON.parse(fs.readFileSync(path.join(state, 'preflight-complete.json'), 'utf8'));
+    if (proof.ok !== true || proof.attempt_id !== manifest.attempt_id || !proof.inputs?.length)
+      throw new Error('DSH_FULL_PREFLIGHT_REQUIRED');
+    for (const row of proof.inputs) {
+      if (createHash('sha256').update(fs.readFileSync(row.file)).digest('hex') !== row.sha256)
+        throw new Error('DSH_PREFLIGHT_INPUT_CHANGED');
+    }
+  }
+}
 const here = path.dirname(fileURLToPath(import.meta.url));
 verifyTuiPatch({tuiRoot: path.join(runtime, 'node_modules/@deepseek-harness-tui/dsh-tui'),
   recipeFile: path.join(here, 'tui-managed.patch'), receiptFile: process.env.ORRERY_DSH_TUI_PATCH_RECEIPT});
@@ -40,8 +57,9 @@ const {runProfile} = await import(pathToFileURL(require.resolve('@deepseek-ai/ds
 await runProfile({
   environment: createLaunchEnvironmentSnapshot([{source: 'process', values: {...process.env}}]),
   profile: 'orrery-managed',
-  patchFiles: [path.join(here, 'managed.patch.yml'), path.join(state, 'selected.patch.json')],
-  args: [],
+  patchFiles: [path.join(here, 'managed.patch.yml'), path.join(state, 'selected.patch.json'),
+    ...(manifest.phase === 'run' ? [path.join(state, 'mail.patch.json')] : [])],
+  args: manifest.phase === 'run' ? ['--', offline ? 'Keyless preflight: await instructions.' : task.prompt] : [],
 });
 }
 

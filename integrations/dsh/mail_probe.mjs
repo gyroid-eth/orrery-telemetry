@@ -93,9 +93,16 @@ export async function main() {
         const response = unwrap(await client.callTool({name: 'reserve_files', arguments: {
           paths: task.allowed_paths, exclusive: true, ttl_seconds: 1800, reason: 'Managed dsh task'}}));
         write(path.join(state, 'reservation-result.json'), response);
+        // A conflict may still grant a subset. Keep those real IDs for release,
+        // while complete=false prevents using them to start the model.
+        const partial = (response.granted ?? []).filter(row => Number.isSafeInteger(row.id) && row.id > 0 &&
+          task.allowed_paths.includes(row.path_pattern)).map(row => ({id: row.id,
+            path_pattern: row.path_pattern, expires_ts: row.expires_ts, owner: identity.agent_name}));
+        write(path.join(state, 'reservations.json'), {agent_name: identity.agent_name,
+          attempt_id: task.attempt_id, receipts: partial, complete: false});
         const receipts = normalizeReservations(response, task.allowed_paths, identity.agent_name);
         write(path.join(state, 'reservations.json'), {agent_name: identity.agent_name,
-          attempt_id: task.attempt_id, receipts});
+          attempt_id: task.attempt_id, receipts, complete: true});
       } else if (action === 'release') {
         const attempt = read('attempt.json');
         const exit = read('runtime-exit.json');
