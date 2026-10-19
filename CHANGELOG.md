@@ -10,6 +10,278 @@
 
 ---
 
+## 2026.10.19
+
+### 予約の更新応答で編集前の衝突を確認
+
+予約 guard が非公開の Mail resource を呼び、自己予約があっても編集を拒否する不具合を修正しました。Mail は予約の更新と他者の有効な排他予約の照合を同じ transaction で行い、Claude と Codex の guard は同じ応答の検査範囲と結果を確認します。hook 側の pattern 判定の写しを削除しました。
+
+Mail の更新を先に行ってから hook を配備してください。新 hook は旧 Mail の検査結果のない応答を拒否します。旧 hook（#269 より前）は新 Mail でも従来どおり動きます。到達した Mail の照会拒否や不正な検査結果は編集前に拒否し、renew は redirect を追わず、HTTP 応答後の本文読取失敗も拒否します。応答前の通信不能は identity の有無によらず既存の outage policy に従います。実サービスの切替は別途行ってください。
+
+### 入力直後に容量エラーで止まり直した子も通知する
+
+作業再開を表示する前に、提出済みの新しい入力に続いて同じ容量エラーで止まった Codex CLI を再び親へ通知します。前の停止からの追記と、同じ入力・エラーの境界を別の capture で2回確認し、同じ行の再描画や未提出の入力では再通知しません。
+
+履歴の重なりが消えた場合や境界が曖昧な場合は、推測せず元の停止を維持するため、再試行を見逃すことがあります。対象は legacy の tmux 型 Codex CLI で、global mode は未対応です。詳細は [dashboard の自動通知](docs/dashboard.md) を参照してください。
+
+### 終了した agent を UI の RESUME で再開でき、PC の再起動で止まった子も再開できる状態に戻ります
+
+#263 以降、dashboard の tmux の呼び出しは対象を照合してから実行します。この照合は、存在しない session への `has-session` に「見つからない」と答えず、拒否（`TMUX_TARGET_UNAVAILABLE`）していました。その結果、2つのことが起きていました。
+
+- 終了した agent の RESUME が、例外で応答を返さず「the dashboard's answer was lost」で失敗していました。
+- 再起動や強制終了で止まった子は、起動時と1時間ごとの復旧で、tmux session が無いことを確かめられずに飛ばされていました。一度も再開できる状態に戻らず、RESUME は `config_unrestorable` で拒否されていました。
+
+session が無いかどうかは、session の一覧で判定するようにしました。一覧に名前が無ければ「無い」と読みます。一覧に名前があるときだけ従来どおり照合付きで確かめ、一覧を取れないときは「分からない」として子の state を変えません。API generation は変更しません。
+
+### 隔離 global client の起動と終了の再開を整理
+
+- 隔離 global client の新規起動を専用 tmux socket と正確な agent 名へ統一し、runner/provider の生存証明を分離しました。
+- 終了報告・退役・local cleanup を既存の intent で再開できるようにし、process 終了後と SessionStart 前の失敗にも同じ target/replay-end 入口を追加しました。既定の旧 mode は変更しません。
+
+### dashboard EXIT 試験の signal 捕捉を試験内に限定
+
+Antigravity の EXIT 試験が共有の `os.kill` を置き換えないようにし、別の cleanup の
+signal が混ざる不安定さを解消した。旧形での混入と、EXIT 自身の余分な signal を
+検出する負対照を追加した。製品の PID 選択・signal・起動経路と API generation は変更しない。
+
+### Codex の apply_patch に予約 guard を追加
+
+optional ORRERY plugin の承認済み PreToolUse hook が、予約の無い patch を編集前に拒否します。全対象 path と移動元・移動先を Claude と共通の guard で検査し、legacy mode の他者 exclusive 予約との重複は予約者を示して拒否します。doctor は guard の導入・有効化・承認状態を報告します。core と plugin を更新後、人が `/hooks` で review・承認し、新しい Codex process を起動してください。shell 経由の書き込みは対象外です。API generation の変更はありません。
+
+### Bash などで書いた予約ファイルの手動解放を案内する
+
+Claude の予約 hook が確認・自動解放するのは Edit / Write だけであることを、Claude Code の配布指示に明記しました。Bash・スクリプト・別ツールで書き込んだ場合は、書き終えた直後に接続経路に合った release を自分で実行します。
+
+### Compact 中の容量停止も親へ知らせる
+
+Codex の remote compact が容量エラーへ前置きを付けると、停止を見逃して親へ通知しない問題を修正しました。ソースで確認した固定の前置きだけを許可し、他の compact エラー・未知の前置き・過去の出力や引用を停止とみなさない条件は維持します。
+
+端末幅に合わせてエラー文が折り返されても検知します。単語間の改行だけを許可し、空行や無関係な出力を連結しません。
+
+### tmux の対象照合と旧配送経路の保護
+
+隔離 global client に、安定した ID から実際の socket・pane・PID を照合する target/capture、operator の attach、証明済みの親による固定 compact を追加しました。旧 UUID と同名・prefix・大文字小文字の別対象へ入力せず、旧 watcher・monitor・dashboard の操作でも共通の照合を使います。専用 socket の起動はまだ有効にしません。
+
+compact は入力欄が空で待機している場合だけ受け付け、Claude の suggestion と placeholder も文字があれば拒否します。提出後の結果不明は自動再送せず、重複の可能性を明示します。既定の旧 mode と、provider の自動 compact は維持します。[対象の読取と復旧](docs/global-delivery-client.md#explicit-tmux-target)を参照してください。
+
+端末・ttyd の実接続と detached resume も共通の対象照合に通し、観測中の PID 再使用や不明な cleanup で他の session に作用しないようにしました。対象の同一性と compact の入力欄の証明を分け、画面の更新だけで capture・attach が止まらないようにしています。人の確認待ちは観測期限に含めません。
+
+文書用の read-only demo も共有 consumer に接続し、合成 pane の観測を明示しました。利用者の tmux server には接続せず、従来の合成データと表示を維持します。
+
+共有 consumer は実際の server 不在を空と区別し、tmux の外の終了でも cleanup が退役を完了します。unsafe・timeout・読取不能は保持します。不在は直接の lstat の ENOENT に限定し、親 directory の権限喪失も不明として保持します。
+
+### Background terminal の表示がある capacity 停止も親へ知らせる
+
+Codex の容量エラーと入力欄の間に background terminal の件数表示があると、停止を見逃して親への通知が出ない問題を修正しました。単数・複数の固定表示1行だけを許し、通常の出力・作業中・引用を停止とみなさない条件は維持します。
+
+### 子の model 容量停止を親へ自動通知
+
+legacy dashboard が Codex CLI の capacity エラーによる入力待ちを継続観測し、停止した子の既存 identity から親へ ORRERY Mail を1回だけ送ります。DECK に `MODEL CAPACITY`、NETWORK に `CAPACITY` を表示します。ブラウザを閉じていても観測し、自動再開はしません。作業再開を観測するまで再通知せず、同じ停止の通知状態は dashboard 再起動後も保持します。
+
+API 世代を18から19へ上げ、legacy agents / graph に nullable な `provider_stall` を追加しました。送達不明時は重複を避けて再送せず `delivery_unknown` を表示します。global mode は未対応・後続です。[詳細](docs/dashboard.md#provider-停止の自動通知legacy)。
+
+無変化の巡回では状態ファイルを書き直さず、容量停止の候補が無ければファイルや lock を作りません。Mail の明確な拒否は `failed` として区別します。古い capture で新しい停止を解除・確認することを防ぎ、未観測の終了世代を期限付きで削除します。
+
+### dashboard の明示再起動で選択済み mode/config を反映
+
+macOS の `agentctl.sh restart` が既存の launchd job を kickstart するだけで旧 mode/config を残す問題を修正しました。`start` と同じ描画・再設置の処理を使い、設定が同じ場合も job を再設置します。supervised-background の再起動手順は維持します。 この HOME に plist がなく同じ label の job が load 済みの場合は、別の install を置き換えず明示エラーで停止します。
+
+### client の mutex file を作成途中に読むと壊れて見える race を修正
+
+client root の operation mutex と local mutex は、file を `O_EXCL` で作ってから JSON を書きます。その間に別の caller が同じ file を読むと、空の file を読んで `PRIVATE_JSON_INVALID` で失敗していました（同じ client root を並行して prepare したときなど）。
+
+作成の方法は今までと同じ（同じ path への `O_EXCL`）にしたまま、読む側が、内容が揃うまで最大10秒待つようにしました。一度作られた inode は置き換えないので、更新の途中で旧版の client と重なっても、同じ inode の lock で排他します。作成者が書込みの前に止まって空の file が残った場合は、`MUTEX_INCOMPLETE`（読取専用の観測は `OBSERVATION_BUSY`）で止まります。client はこの file を自動で消しません。その client root を使う process がすべて止まっていることを確かめてから、operator がその file を消してください。手順は[global runtime client](docs/global-runtime-client.md)にあります。
+
+### launchd の dashboard 設定を install・再起動のどちらでも正しく書き出す
+
+installer が runtime mode と global server config の placeholder を未置換で plist に残し、dashboard が `RUNTIME_MODE_INVALID` で再起動を繰り返す問題を修正しました。`agentctl.sh` による書き出しでも、spawn 先、Codex の子の設定・実行ファイル・model catalog、portrait、persistent profile の計 11 項目を正しく引き継ぎます。
+
+template の全 placeholder と両 plist writer の置換集合を照合し、隔離 HOME で実際に生成した launchd plist / systemd unit に未置換 token がないこと、設定値と XML の特殊文字が保たれることを回帰試験で確認します。API generation の変更はありません。
+
+### tmux の接続先と旧 consumer の対象保護を共有
+
+- 固定 client root の既存 launch/live を読取だけで照合する共有 helper を追加しました。旧 consumer が global pane に作用する操作や、所属を確認できない対象への操作を理由つきで拒否できます。
+- 対象の拒否と helper 自体の失敗を分け、配置の修復に使う読取診断を提供します。CLI の成功応答も共有 schema で検証します。
+- 既定 legacy・activation=false を維持し、専用 global 起動はこの段階では有効にしません。公開 Mail tool と dashboard API の変更はありません。
+- [共有境界の契約](docs/runtime-tmux.md) と [English contract](docs/runtime-tmux.en.md) を追加しました。
+- 長時間動く consumer は共有コードを一度だけ読み込み、literal 設定の読取結果を file 属性が同じ間だけ再利用します。配置 snapshot は呼出しごとに読み直します。
+- window 選択でも現在の全 pane を共通の前後照合で確認し、元 session の証明で別の窓を操作しない契約を追加しました。
+
+### 子が MCP tool の承認拒否を親に報告して停止
+
+Codex・Claude に配布する managed 指示に、MCP tool から承認拒否のメッセージが返った場合の報告手順を追加しました。子は利用者の設定を書き換えず、正確な tool 名と拒否メッセージ原文を ORRERY Mail で親へ1行報告して停止します。親が無い場合や Mail を使えない場合は利用者に伝えて停止します。修復手段は報告で断定せず、[子に渡す道具](docs/delegation.md)から既存の承認・overlay・再開の制限・人の許可の手順を参照します。
+
+### mode の選択を client・dashboard・service で共通化
+
+- mode の選択を owner の認証から分離し、context のない operator/service が global 選択後に旧 Mail へ戻らないようにしました。既定の legacy と activation=false は維持します。
+- 新規 process は既存の設定から mode を一度選び、稼働中の hook・worker は継承します。明示 mode と context/config の食い違いは理由付きで拒否します。
+- context のない watcher は既存の route ごとに共通配送処理を使い、不正な宛先を分離します。詳しくは [global delivery client](docs/global-delivery-client.md) を参照してください。
+- system controller の installed default と稼働中の hook の継承を分け、App/直接 bootstrap の partial 配置・設定競合を共通入口で拒否します。一時的な watcher の通信断は再試行します。
+- 新しい pane へ mode を渡し、直接 bootstrap の project 設定を保持します。旧 helper の部分配置と watcher の明示 server config も共通選択へ揃えます。
+- 起動と子登録の bootstrap に明示 context を引き継ぎ、既定の旧 mode との誤った衝突を防ぎます。
+- 未固定の継続で配置済みの既定を確認できない場合は停止し、古い helper から旧登録へ戻ることを防ぎます。説明文中の `--literal` は installer の指定と区別します。
+
+- global service の起動専用の環境は子 process へ直接渡し、起動に失敗しても呼出し元の環境へ設定を残しません。
+
+### 起動時に agent 名を clipboard へ入れる処理を削除
+
+`agent-start`・`agentstack-codex-bootstrap`・`agentstack-gemini-bootstrap` と SessionStart hook の `set-ghostty-title.sh` は、terminal のタブ名に手で貼るために agent 名を `pbcopy` で clipboard へ入れていました。この用途は無くなったので、4か所とも削除しました。opt-in の設定も残していません。起動しても clipboard の内容は変わりません。tmux session の rename、pane metadata、managed agent list の更新は従来どおりです。
+
+### global network の稼働状態を既存の session から読み取る
+
+隔離 global dashboard の network に、本人・binding・PID/start/pane を照合した working / waiting、context 使用率、親子の色を表示します。観測は既存 mutex の共有・非待機読取だけで、ファイルや活動の台帳を作りません。証明できない状態と Codex App は unknown、複数 session の activity は合成しません。
+
+capability・Lock・Mail 表示・登録回復の browser controller を共通化し、API 18 の対応能力と非秘密の operator probe を追加しました。既定の旧 mode と activation=false は維持します。
+
+Mail の視点を選ばない network と deck でも稼働状態を表示し、確認済みの不在と観測不能を区別します。古い launch の不在 slot と退役した祖先が現在の表示を隠さないようにし、operator probe の loopback 通信では環境 HTTP proxy を使用しません。
+
+観測だけが失敗しても Unlock・Mail・登録は維持し、その回の稼働状態を unknown に戻します。認証拒否は引き続き Lock し、観測内部の予期しない例外も unknown として隔離します。
+
+### 登録 pending が無い場合の明示解消
+
+利用者向けの登録解消で root または pending が無いときは、503 ではなく404 `TARGET_UNAVAILABLE` を返します。HTTP の認可、既存 file の検証、digest の一致確認は維持します。
+
+### global dashboard の返信と指示の案内（API 17）
+
+隔離 global mode の既存 Mail 欄に message ID による返信の流れ・一部省略・keyset 継続を表示します。古い指示 block は共通の検出結果を使い、起動時の候補観測と現在の disk 状態を分けて、日英 docs と片付け command のコピーへ案内します。operator 認可・数値の視点・固定 client slot を使い、folder と Mail の scope を分けます。成果物は明示 root のみです。既定の旧 mode と activation=false は維持します。
+
+登録 pending の同 intent 再送を status の操作ボタンから実行し、表示時の digest を照合します。Lock は通信・遅延応答・tab 引継ぎを失効させ、storage が使えない場合は memory のみで Unlock できます。指示の確認は一致した slot だけを照合し、cleanup command は検出時の HOME と install を明示します。global 用 HTML は明示した shell と共通の style/manifest だけを読み込みます。
+
+Lock 時に drawer の見出し・件数も消去します。画面で完結しない Codex trust と daemon の設定は CLI 手順へ案内し、不在の実行 profile は `PERSISTENT_EXECUTION_REQUIRED` で示します。
+
+### 隔離 dashboard の読取と登録の共通入口
+
+API 世代15に、私有 operator capability の HTTP 入場条件と管理 socket の ui_read を追加しました。公開 Mail tool は増やさず、可視集合・MAX・keyset・revision を同じ読取 transaction で確認し、dashboard は global の DB を開きません。登録と子登録は同じ pending・同じ token の再送と finalize を共用し、固定 root の状態・同名の既存 root を読取だけで確認できます。既定は旧 mode・activation=false のままで、画面と cockpit の接続は後続です。
+
+名前の重複は登録前に拒否し、異常な root は個別に診断します。provider の指示が未設定なら設定待ちの状態を返し、登録競合の明示解消は同じ pending と digest の照合を HTTP でも利用できます。operator capability の CLI は隔離 HOME の明示を必須にしました。
+
+### 未リリースの変更を PR ごとの断片に分けました
+
+未リリースの変更は `changelog.d/` に1 PR につき1ファイルを追加します。release 時に `scripts/changelog-release.py` が6桁の PR 番号の降順で版の節にまとめ、使った断片を削除します。`CHANGELOG.md` の同じ節を各 PR が編集して衝突することを避け、直接の Unreleased 追加は検査で拒否します。VERSION と API の互換世代の決め方は変えません。
+
+### 利用者単位の指示 block と移行の復旧
+
+旧 source の hardlink は計画時に拒否し、purge は history を含む全 receipt の未解消 marker を確認します。明示 cleanup は指定した1件だけに限定し、通常 uninstall は異常な file を保持・警告して残りを続けます。同意の説明を1契約へ集約し、移行 notice を参加 session に限り、setup の明示 project key を優先します。
+
+- Claude の既定を利用者の CLAUDE.md へ統一し、Codex と共通の parser・renderer・read-only plan・receipt に接続しました。既知の旧 block は新 target の検証後に marker 間だけ撤去し、複数 source の全文 backup を個別に保持します。
+- doctor／SessionStart の祖先検出、記録済み marker の uninstall、未解消時の purge 拒否を追加しました。symlink は固定解決先の CAS、hardlink は固定拒否で手動 copy を案内します。
+- identity の無い bare session の raw 自動登録を止め、既存 identity の復旧と非参加の案内を共通 catalog から表示します。編集 guard の block／warn-open は維持します。Mail の既定は旧 mode・activation=false のままです。
+
+
+履歴も含めた receipt の plan hash 検証を共通化し、破損時は purge 前に停止して backup を保持します。自動検出した marker の無い hardlink は変更せず飛ばし、無関係な利用者の指示で setup が止まる後退を修正しました。
+
+### daemon binding の相手を一覧にする（orrery-daemon-binding-v2）
+
+固定 daemon の profile の単数 `peer_name` / `peer_id` を、name と数値 ID の組の一覧 `peers`（1〜16件）に置き換えました。旧 v1 profile は一覧と並べて読まず `profile-legacy-v1` で止め、operator が1回書き換えます。whois と送信は一覧の相手ごとに数値 row を照合し、一覧外の送り主・別 project は ACK 前に拒否します。一覧の name で数値 ID が違う Mail は保留用にそのまま返し、1人の入替で他の相手を止めません。相手が Mail に無いときは `daemon-peer-missing`、別 ID は `daemon-peer-changed` とし、`PEER_STATUS` だけがこの2つを「その相手だけ使えない」と定めます。他の失敗は障害のままです。name は Mail の正規形（英字で始まる英数字）に揃えました。global client の profile と公開 Mail tool は変わりません。
+
+### 隔離 global client の起動・配送を接続
+
+起動終了の部分保存は同じ解消で完了するまで次起動を拒否します。古い配送 intent と個別の異常は他の通知を止めず、待機中の不要な取得を避けます。通知 event / 2秒 poll と既存 App 設定 reader を共有し、固定 provider 導出設定は gate 内で再生成します。
+
+空になった通知 slot は既存 lock の出口で削除し、以前に残った空 slot も1回の走査で片付けます。並行 prepare の intent を保持し、完了した通知の総数に比例する hook の遅延を取り除きました。数値互換は先頭0のない10進と5境界に限定し、先頭0を旧 watcher は8進、global は10進で扱う差を日英に明記しました。
+
+通知 intent の列挙は候補名だけにし、個別の不正 slot を診断へ出して他の通知を継続します。importance 未満・自己送信の intent は対応待ちと数えず、hint が消えたら片付けます。Claude の生成 hooks を既定 settings.json から分離し、Gemini の既存設定は Mail entry だけ更新します。旧 shell の数値検証との境界比較を追加し、signals directory が未作成なら作らず待機します。
+
+既定の旧 mode と activation=false を維持し、新規 window の owner 束縛、global proxy の bootstrap、provider の起動 receipt と通知 consumer を接続しました。consumer は client 側の固定 layout に置き、既存 server 設定との isolation・binding 照合で分岐を防ぎます。window は context、現在の process は既存 session 記録、配送完了は server の notification fact に統一しました。注入や bot の応答が不明なら同 intent を再試行し、確定後は completion だけを再送します。起動の不明状態は status の digest を使う明示解消へ戻せます。persistent の実行設定は固定 profile の typed execution を operator が指定します。dashboard の明示 global 実行入口に合わせ API 世代を14にしました。
+
+### global client の子登録・再開・hook を準備
+
+既定の旧 mode を維持し、固定 client root を使う明示 prepare-only の子登録・再開を追加しました。登録の中断は同じ name/token の再送と owner 照合で回収し、SessionEnd と cleanup を共通化しました。予約は期限の閾値以下だけ更新し、応答喪失時は次の hook が同じ UUID を再送します。schema・拒否表・message intent は server と共有します。既存 standalone の子への転用を拒否し、global 選択後・owner material の前に Mail 無効化を確認します。解放は旧 grace 設定（既定90秒）と lease ごとの slot を使い、更新された予約を保ちます。次の編集 hook は保存済みの全種類の mutation を再送し、通常の context 判定と partial install の admission は各1か所へ集約しました。context が無いときの mode 判定では Python を起動せず、旧 runtime が select 未対応でも旧経路を保ちます。実行と wake は後続のまま、activation=false・公開 Mail tool31個は不変です。dashboard の明示 global resume 入力に合わせ API 世代を13にしました。
+
+### 未使用の診断 backup と restore を削除
+
+呼出し元のない診断 backup／restore／一覧の3関数と専用 manifest、および空になる節を削除し、SQLite の raw copy を再び利用する入口を減らしました。global server の監査表は、内部 candidate manifest と rehearsal の raw hash も接続の寿命とともに明記しています。公開 tool・既定の旧 mode の動作は変わりません。
+
+### installer の Codex 探索・確認を launcher・doctor と共通化
+
+installer が独自に持っていた Codex の探索 PATH・`--version` 確認・probe の後始末を削除し、同梱の共通処理を読み込んで判定します。候補を実行する PATH も launcher・doctor と同じ文脈（子の login shell・resolve した候補の隣の node）に揃え、nvm・npm-global 配下などで3か所の判定が揃うようにしました。承認の流れ、保存する値と形式、明示 `--codex-bin` が使えないときの失敗は変えません。候補の確認全体（保存済み候補の再確認も含む）に共有の時間上限を設け、同じ候補を二度確認しません。時間切れで確認し切れなかった場合は「何も見つからなかった」とは別の表示にして、値を書かずに止まります。
+
+### global SQLite の POSIX lock を保つ
+
+S1 からの不具合を修正しました。main DB と sidecar の安全確認、および source の形式確認で独立した fd を開閉せず、`lstat` を使います。同じ process の SQLite lock が解除され、並行処理で DB が壊れる経路を取り除きました。別 process が保持中の writer lock を取得できない回帰と、DB/sidecar の raw open を禁止する回帰を追加しました。監査結果は日英の global server ガイドに記録しています。
+
+### 隔離 global server の予約・contact welcome を準備
+
+S2c の schema5 に7つの公開 tool と既存 handshake の welcome を追加しました。予約は SQLite の未解放・期限前の行だけを ACTIVE とし、期限切れ履歴を書き換えません。旧 candidate の別 engine と activity/collector を削除し、共通 normalizer、S2b の transaction/receipt、通知の経路を共有します。更新・解放の省略選択、退役解放、管理 inspect/force/purge、歓迎 message の承認と中断後の再送を固定しました。
+
+path による更新・解放を自己 ACTIVE だけに限定し、他 owner と自己の履歴が選択へ混ざらないようにしました。path・省略による解放は該当0件でも成功し、繰り返し実行できます。明示 ID の不存在・他 owner は全件拒否を維持します。session macro の inbox は共通の metadata 読取を使い、既知の coverage witness と dangling-anchor の回帰を保持します。
+
+完成した receipt を持つ新規 candidate だけを起動し、旧 root は不変で拒否します。時刻の instant・ID・旧長 reason を保存する fresh proof と各保存境界の回帰を追加しました。既定旧 mode・既存 profile・activation=false は維持し、client/hook の結線と切替は後続です。[S2c の契約と移設](docs/global-reservations.md)を参照してください。
+
+### nvm の Codex を dashboard の最小 PATH から起動できます
+
+選んだ Codex の解決先、または npm shim と同じ bin にある node を、確認と起動に共通の PATH 処理で使います。doctor も子の login shell と同じ処理で CLI を確認し、起動失敗の表示は launcher の原因を登録の後始末より先に出します。既存 CLI の版の確認だけを一時 HOME で行う WSL 用 runner を追加しました。API の field と世代は変えません。
+
+### project 廃止に向けた message と通知の server 契約を準備
+
+明示した隔離 schema4 に送信・返信・既読・ack・検索・topic・digest の8 toolを追加しました。本文・添付 blob・FTS・監査 receipt と通知の再照合印を同じ DB transaction で確定し、応答喪失は同 UUID で回収します。外部出力は固定 layout の signal だけに絞り、archive・Git・保存 summary の第二正本を作りません。通知の消費を1列にまとめ、旧 hint と配送 row がない過去の message は時刻を捏造せず消費済みとして import します。可視集合の keyset、巨大な旧添付の metadata 読取、準備・通知の各中断点と明示再照合を追加しました。
+
+未通知の判定と inbox/retire の tool 定義を共通化し、旧保管物を `provenance/` に集約して purge の対象から外しました。返信件名は既存 prefix を維持し、入力だけを制限して旧方式の長い件名も引き継ぎます。再照合の未選択件数、schema keyword の値の型、記録済み MIME 型も検証し、孤立配送の拒否は準備の共通処理に一本化しました。
+
+既定の旧 mode・S1/S2a・activation=false は維持します。新規 BCC も他の宛先と同じ signal を受けます。実 client・watcher の接続と切替は後続です。詳細は[隔離 global message](docs/global-messages.md)を参照してください。
+
+### 隔離 global server の登録更新・window・contact を準備
+
+S2a の明示した schema3 設定に9つの公開 tool と capability を追加しました。program/model を保つ登録更新、read-only の window 照合、単調な活動更新、相手 owner が承認する contact を扱います。request の canonical preimage と結果を同じ transaction に保存し、共通 client は固定 slot の UUID を引き継いで再送します。owner 別 quota、receipt を使わない touch、同じ read snapshot と write tracker を照合します。 mapped reconnect から policy の自動書込みを分け、quota/pending があっても活動更新を継続します。応答 schema は server/client の共通正本で確認し、不適合な応答では pending を消さず同 UUID の replay を待ちます。
+
+確定した拒否は自身の pending を解除し、結果不明だけを保持します。preimage・既定値・DDL・authority/fence の重複を共通の正本へ寄せました。全件検証は起動時と明示 inspect に限り、通常の書込みと replay は対象行だけを検証します。UUID が別の意図と衝突した場合も pending を保持し、明示した operator の解消へ回します。FTS の検証用コピーは candidate 内の私有 directory に限り、成功時も例外時も削除します。次の検査は固定 directory の lock 下で、自分の命名規則と所有条件に一致する強制終了後の残留コピーだけを回収します。installer は共通 schema と fixture の不足を配備前に知らせ、更新試験も同じ配布元を含めます。payload のコピー元の宣言も一か所にまとめ、切り出した配備処理と通常 installer で共有します。
+
+既存 schema2 は SQLite 接続前に不変で拒否し、別 workspace に source から schema3 を新規準備します。in-place upgrade・旧 authority 復帰・epoch repin は含みません。preparation と明示 quarantine は各保存境界の中断から再実行し、旧 root の書込みを自動移行・破棄しません。新 client root へ env/wrapper/hook/profile を向け直す手順と、旧 mode との contact 判定差を日英で記載しました。既定の旧 mode と S1 の契約・activation=false は維持します。送信と通知は S2b、予約は S2c、実切替は PR7 に残します。詳細は[global server の準備](docs/global-server.md#s2a-schema3-の新規準備)を参照してください。
+
+### project 廃止に向けた runtime client の登録・復旧・待機を準備
+
+明示した隔離 context で S1 server に接続する共通 client を追加しました。既定は旧 mode、activation は false のままです。stable ID と credential・instance・candidate・authority epoch を照合し、旧 project/name env を routing に使いません。原子的な名前競合、能力に応じた contact policy、専用 HOME の operator 復旧、window/session index と profile の再接続入口を準備しました。proxy/daemon の実行は4c、子の manifest/skill は4b、実切替と全 writer 停止は PR7 に残します。再接続時は program/model の明示値・保存値を維持し、保存値が無ければ observe のみとします。保存先の役割重複と broken context を拒否し、通信障害の待機を継続します。固定の親の直下にある client 名から layout を導出し、任意の root/role path を登録前に拒否します。provider の HOME や履歴を探索せず、通常のファイル増加で停止しません。明示 operator の復旧は pending・credential・server を照合し、各保存段階の中断から同じ ID を回収します。local credential の無い未 claim の row も、中断後の同じ pending で回収できます。Codex の再登録は環境指定を優先し、Claude の再登録は claude-code を明示します。client の保存先を Mail の状態領域から分け、既存ファイルの形式・owner を network 前と rename 前に検査します。program/model は別ファイルに保存し、observe のみの再登録は表示と終了コードを区別します。詳細は[global runtime client の準備](docs/global-runtime-client.md)を参照してください。
+
+### project 廃止に向けた隔離 global server の登録・復旧能力を準備
+
+明示した一時設定でだけ起動する S1 server を追加しました。実 HTTP の登録・既存 token の再接続・自己 inbox・window owner 照合と管理 socket の enrollment を、stable ID と世代で確認します。candidate 世代、書込みカウンタ、runtime authority epoch を分け、切替中や退役した root の操作を拒否します。既定は旧 mode の25 tool、activation は false のままです。送信・返信・contact・予約・archive/signal writer の結線は S2 に残します。詳細は[global server の準備](docs/global-server.md)を参照してください。
+
+SQLite の main DB と sidecar の symlink・複数 hardlink・owner/mode を初回と各操作の open 前・直後・commit 前に照合し、検査時に見つけた危険な状態を拒否します。起動後の main DB の hardlink も、別名が残っていて検査時に複数 link を検出できる間は拒否し、別名経由で commit した WAL を保持します。別名を削除した後に残った WAL は対象外です。協調 writer の共通 lock を対象とする検査で、同じ UID の非協調 process が検査と open/commit の間に path を変える競合は残ります。起動時の authority lock の inode を固定して差し替えを拒否し、非 ASCII の保存済み credential も同値で認証できます。日英の案内に passthrough の起動前提、実 HTTP・管理 socket の合成 fixture を自分で確かめる手順と、残余競合の境界を追加しました。
+
+### project 廃止に向けた Mail と配送の記録の移行候補を準備
+
+明示した隔離 snapshot から、複数 project の Mail と配送の DB、archive・添付・signal・履歴・window・binding を統合する候補を追加しました。ID・token・read / ack・監査・旧 thread の reply_to・配送の全 status と試行、policy と backoff を保存し、最終差分の反映後にも全内容を照合します。同名 agent・window UUID・曖昧な予約は利用者の決定を要求します。全 phase と pointer 更新直後の強制中断から再実行でき、新しい書込みの後の rollback は拒否します。
+
+metadata を省略した旧 per-message signal も file 名の ID と宛先を照合して移行し、同 ID の旧単一 signal との共存は別の出力で保持します。無効な signal は計画に表示します。予約の Mail 活動は日時を UTC の時点に変換してから最新を選び、offset の表記差で早期解放しません。
+
+永続 candidate で返信と purge、予約、配送の世代確認を試験します。既定の公開 tool・実 DB・installer・hook・daemon は旧方式のままで、activation は false です。切替は private workspace 内の練習のみです。実サービスの writer 制御・managed block・archive と signal の配送配線・非 ASCII path の制限解決は後続に残ります。詳細は[記録の移行と復旧](docs/namespace-state-migration.md)を参照してください。
+
+### Codex plugin の導入処理を共通化
+
+- Codex の専用 installer を再利用できる処理へ分け、共有 HOME・cache の所有情報と対象 hook の承認結果を記録します。
+- 承認済みの対象定義だけを公式 API で信頼し、未確認なら `/hooks` へ案内します。Mac/Linux/WSL の隔離確認 script を追加します。本体 install への接続は後続です。
+- 解除前に現在の registry と service の所有を照合します。別の root や再利用された PID、確認不能な状態では削除・停止を拒否し、途中の解除を再実行できる情報を保持します。
+- Linux/WSL の service は boot ID と kernel の起動 tick で照合し、表示時刻の揺れを比較から除きます。起動途中の command は記録せず、runner の一致を再取得してから所有情報を保存します。
+- macOS の終了途中に `ps` が `(bash)` を返す場合は、所有確認を済ませて signal を送った後の待機だけ、同じ UID・起動時刻と実行名の一致を確認して終了を待ちます。全 signal 直前の厳密な所有照合と、未確認時の記録保持は維持します。
+
+### project 廃止に向けた絶対 path 予約の候補を準備
+
+候補の Unicode 比較は対象 filesystem の規則を read-only で確かめ、Mac の未作成 NFC/NFD 別名と glob の活動を見落とさないようにしました。Linux の別 file は区別し、規則が不明なら取得と早期回収を止めます。候補 release hook も失敗・blocked の結果では予約を保ちます。case-insensitive な filesystem の非 ASCII path は case table を保証できないため取得を拒否し、glob の探査も unknown として早期回収を止めます。
+
+共通の path 正規化、認証と owner を確かめる候補 server、bound proxy・hook・CLI の adapter、予約ごとの filesystem/Git 活動と GC を追加しました。別 cwd の同じ相対名を分け、同一 file と glob 内の symlink の先の新規 file は競合させます。未知の探査結果では早期解放せず、TTL と owner release は維持します。候補は明示した隔離 store で試験し、既定の公開 tool・DB・installer・既存 hook は旧 mode のままです。永続化と切替は後続 PR で行います。詳細は[絶対 path の予約候補](docs/absolute-reservations.md)を参照してください。
+
+### project 廃止に向けた契約と移行計画を準備
+
+旧 scope 引数を受けて無視する candidate adapter、message ごとの reply_to と旧数字 thread の変換、名前付き旧値の読取、agent 名と window UUID の衝突・解決を追加しました。返信は元 message ごとの送信者・宛先で照合し、残る子が参照する親は purge から保留します。候補の会話・旧ラベル読取は、可視結果数と探索量の上限を分け、不透明な cursor で続きを取得できます。最終 snapshot の再検証と固定した予定 writer 集合に結び付く receipt/gate も fixture で確かめます。
+
+これは準備の PR で、公開中の tool・project ごとの配送・DB・installer・hook は従来どおりです。新 API は明示した candidate だけで使い、gate が ready でも切替は有効になりません。詳細は[契約と移行計画](docs/project-removal-plan.md)を参照してください。
+
+### 常駐 daemon が Mail の識別子を確認し、共通の通知待機を使えます
+
+同梱 Mail の `health_check` に、管理 socket と同じ永続的な `server_instance_id` を追加します。秘密ではない UUID で、別の Mail への誤接続を拒否できます。利用する側が必要な field を判定できるよう、互換世代を11から12に上げました。API 11の watcher health と古い signal の扱いは保ちます。
+
+`agentstack-await-reply` の認証済み fetch を渡せる待機処理を共通化し、取消しに対応しました。常駐 daemon 用の厳密な binding profile と operator 専用 CLI は、同じ owner・数値ID・project・固定送信先を照合します。待機は本文取得や ACK を行いません。CLI は固定 source から実行する対象で、一般の installer には追加しません。identity 作成と実際の配備は operator が別途確認します。
+
+### session の無い宛先の古い Mail signal で health が red になる誤警報を修正
+
+watcher は `session_not_found` の signal を再試行用に残していました。health は24時間以上古く、tmux session が無いと確認できた signal を残留数として別に報告します。生きている宛先・直近24時間・headless runtime の未配送は従来どおり数え、50件超なら red にします。測定に失敗した場合も除外しません。doctor は残留数と確認・削除のコマンドを warn で示しますが、この残留だけでは終了コードを1にしません。
+
+片付け用の `dashboard/mail_signals.py` は既定で候補を表示し、`--prune` で削除前にも session 不在を確認して、signals 配下の古い通常ファイルだけを削除します。Mail の DB と inbox は変更しません。全数・判定対象数・残留数・session 確認可否を API に追加したため互換世代を11に上げました。
+
+### global 起動の nonce を位置引数として保持
+
+global mode の起動・再開で、起動ごとの照合値が `-` で始まると内部 CLI が option と誤認して失敗する問題を修正しました。detached wrapper と provider 起動の両方で option を終端し、owner・起動世代・process の照合は維持します。
+
 ## 2026.10.06
 
 ### Codex の既定モデルを、そのアカウントで使えるものに下げます
