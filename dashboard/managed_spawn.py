@@ -414,7 +414,9 @@ def main():
     parser.add_argument('--job', type=Path, required=True)
     args = parser.parse_args()
     result = run_job(args.job)
-    return 0 if result['task_success'] is True and result['runtime_success'] is True else 1
+    return 0 if (result.get('state') != 'failed' and result.get('finished') is True
+                 and result.get('phase') == 'cleaned' and result.get('task_success') is True
+                 and result.get('runtime_success') is True) else 1
 
 
 if __name__ == '__main__':

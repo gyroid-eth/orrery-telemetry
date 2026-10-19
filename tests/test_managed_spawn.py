@@ -269,3 +269,28 @@ class ParentContextTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             connection('fetch_inbox', {})
         self.assertEqual(len(calls), 1)
+
+class WorkerExitTests(unittest.TestCase):
+    setUp = ManagedTests.setUp
+    payload = ManagedTests.payload
+    parent_call = ManagedTests.parent_call
+
+    def test_clean_failure_keeps_worker_exit_nonzero_even_with_task_runtime_proof(self):
+        request = self.payload(); self.manager.submit(request)
+        job = self.root / 'jobs' / request['attempt_id']
+        class FailingClean(Adapter):
+            def clean(self, state, *, run):
+                self.calls.append('clean')
+                raise OSError('ordinary cleanup permission failure')
+        adapter = FailingClean(job)
+        result = m.run_job(job, adapter=adapter, parent_call=self.parent_call,
+                           run=object(), sleep=lambda _: None, provider_loader=self.loader)
+        self.assertTrue(result['task_success'])
+        self.assertTrue(result['runtime_success'])
+        self.assertEqual(result['state'], 'failed')
+        self.assertEqual(adapter.calls.count('finalize'), 1)
+        with patch('sys.argv', ['managed_spawn.py', '--job', str(job)]):
+            with patch.object(m, 'run_job', return_value=result):
+                self.assertEqual(m.main(), 1)
+            with patch.object(m, 'run_job', return_value={**result, 'state': 'ready', 'phase': 'cleaned'}):
+                self.assertEqual(m.main(), 0)

@@ -6,6 +6,10 @@
 
 ## 基本
 
+段A の前半: 表示と残高。DeepSeek の子の起動は次の版。
+明示opt-inはDeepSeek assetとUSD残高だけを有効化し、spawn catalogへdshを追加しない。
+`/assets/deepseek.svg` は無効時404・有効時200。残高型はAPI 21の既存 `/api/quotas` に載せる。
+
 base URL:
 
 ```text
@@ -61,7 +65,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":20}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":21}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -87,6 +91,23 @@ API 17 は global dashboard の返信表示と次の認可済み読取 route を
 ### 同梱 Mail の識別子（API 12）
 
 API 12の配布物では、同梱 ORRERY Mail の MCP `health_check` が `server_instance_id` を返します。これは管理 socket の inspect と同じ永続 UUID で、秘密や認証の代わりにはなりません。常駐 daemon は両方の transport の UUID と確認済みの connection pin を照合し、field の無い旧 build や不一致では停止します。既存の `status` / `environment` / `http_host` / `http_port` は維持します。これは dashboard の新しい HTTP route ではありません。[専用 binding と通知](daemon-agents.md)を参照してください。
+
+## GET `/api/quotas` — 任意のDeepSeek残高（API 21）
+
+dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える。
+無効時は取得せず、既存のquota応答の形も変えない。
+残高型は `measurement_kind: "balance"`、`buckets: []` とし、
+`balance` に `currency: "USD"`、`total_balance`（金額文字列又はUSDなしのnull）、
+`is_available` を持つ。CNYは返さない。金額の原精度を保持する。
+`is_available: false` は取得成功で利用不可という意味であり、通信失敗とは区別する。
+失敗・未取得では `status: "unavailable"`、`balance: null`、固定の理由codeを返す。
+0円や百分率bucketへ置き換えない。`observed_at` / `last_observed_at` / `checked_at`
+で取得時刻を示し、4分cacheを使う。鍵・Keychainの応答・HTTPの生エラーは返さない。
+
+取得workerだけがKeychainの `deepseek-api` を読み、dashboardのenvへ鍵を入れない。
+既存の同一origin検査とglobal operator admissionはそのまま使う。
+[公式の残高API](https://api-docs.deepseek.com/api/get-user-balance/) と
+[取得・実確認の手順](dsh-stage-a.md)も参照。
 
 ## GET `/api/spawn-names`
 
@@ -673,4 +694,4 @@ curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'
 
 `global_runtime_observation=1` と `operator_session=1` を広告します。global の `/api/quotas` と `/portrait` も同じ admission を通り、既存の読取処理を使用します。画像は共有 session の `apiBlob` で取得して object URL とし、Lock で revoke します。
 
-Managed spawn (legacy, opt-in): see [request/status contract](managed-spawn-contract.md). `POST /api/spawn` returns 202 for accepted managed jobs; `GET /api/spawn-status?attempt_id=<UUID>` reads persistent status. API generation 20.
+Managed spawn (legacy, opt-in): see [request/status contract](managed-spawn-contract.md). `POST /api/spawn` returns 202 for accepted managed jobs; `GET /api/spawn-status?attempt_id=<UUID>` reads persistent status. API generation 21.
