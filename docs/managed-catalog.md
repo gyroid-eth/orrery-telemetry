@@ -8,6 +8,6 @@ runtimeの任意導入は `install.sh --enable-dsh --dsh-node /absolute/node` / 
 
 provider IDはdeepseek/strata、harness IDはdsh/hermes。既定無効は空配列、legacy以外は全harnessがunsupported_modeです。available=trueの最初のharnessをdefaultにし、準備できたものだけを選べます。起動時にもcontrollerが再検査します。
 
-段1はcontext=null/context_source=unreported/context_note="server 報告値は未取得"。runnerのconfigured_contextをserver報告へ昇格させません。補助はsameだけです。私有URL/account/実行pathなどはpublic応答にコピーしません。
+段1はcontext=null/context_source=unreported/context_note="Server-reported context not available yet"。runnerのconfigured_contextをserver報告へ昇格させません。補助はsameだけです。私有URL/account/実行pathなどはpublic応答にコピーしません。
 
 無通信の確認：`python3 tests/test_managed_catalog.py`。4組、準備欠落、global拒否、既定切替、context未報告、私有参照非公開を確認します。

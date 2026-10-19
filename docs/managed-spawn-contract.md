@@ -58,7 +58,7 @@ availabilityはbackend×harnessごとに、実体/版/patch/設定とlegacy対�
 enabled=falseなら空配列。mode!=legacyはavailable=false、reason=unsupported_modeでありlegacyへfallbackしない。返却は既存`providers`に追加できる形:
 
 ```json
-[{"id":"strata","label":"Strata","managed":true,"locality":"local","server":"Configured local server","context":null,"context_source":"unreported","context_note":"server 報告値は未取得","helper_models":[{"id":"same","label":"主と同じ"}],"efforts":["off","low","high","max"],"default_model":"configured-model-id","models":[{"id":"configured-model-id","label":"configured-model-id","harnesses":[{"id":"dsh","available":true,"default":true,"reason":null},{"id":"hermes","available":false,"default":false,"reason":"runtime_not_prepared"}]}]}]
+[{"id":"strata","label":"Strata","managed":true,"locality":"local","server":"Configured local server","context":null,"context_source":"unreported","context_note":"Server-reported context not available yet","helper_models":[{"id":"same","label":"Same as main"}],"efforts":["off","low","high","max"],"default_model":"configured-model-id","models":[{"id":"configured-model-id","label":"configured-model-id","harnesses":[{"id":"dsh","available":true,"default":true,"reason":null},{"id":"hermes","available":false,"default":false,"reason":"runtime_not_prepared"}]}]}]
 ```
 
 model/harnessのavailabilityはserverでもPOST直前に再確認する。backend×harnessに紐付いたtrusted run-config templateからだけrunner/runtime/接続参照を決定する。catalogのCLI発見だけでavailableにしない。

@@ -40,7 +40,16 @@ class CatalogTests(unittest.TestCase):
         for row in rows:
             self.assertTrue(row['managed'])
             self.assertEqual([h['id'] for h in row['models'][0]['harnesses'] if h['default']], ['dsh'])
-            self.assertEqual(row['helper_models'], [{'id': 'same', 'label': '主と同じ'}])
+            self.assertEqual(row['helper_models'], [{'id': 'same', 'label': 'Same as main'}])
+
+    def test_public_default_catalog_strings_are_ascii_and_english(self):
+        for mode in ('legacy', 'global'):
+            with self.subTest(mode=mode):
+                rows = self.build(mode=mode)
+                self.assertTrue(json.dumps(rows, ensure_ascii=False).isascii())
+                for row in rows:
+                    self.assertEqual(row['helper_models'][0]['label'], 'Same as main')
+                    self.assertEqual(row['context_note'], 'Server-reported context not available yet')
 
     def test_global_mode_is_never_advertised_as_legacy(self):
         for mode in ('global', 'unknown', None):
@@ -63,7 +72,7 @@ class CatalogTests(unittest.TestCase):
         result = self.build()
         self.assertIsNone(result[1]['context'])
         self.assertEqual(result[1]['context_source'], 'unreported')
-        self.assertEqual(result[1]['context_note'], 'server 報告値は未取得')
+        self.assertEqual(result[1]['context_note'], 'Server-reported context not available yet')
         text = json.dumps(result)
         for private in ['131072', 'private.invalid', 'private-account', '/private/runtime', 'dummy-private-token']:
             self.assertNotIn(private, text)

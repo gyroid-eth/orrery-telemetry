@@ -161,8 +161,8 @@ def catalog_providers(backends, availability, *, mode, enabled):
         provider = {
             'id': backend_id, 'label': spec.get('label') or label, 'managed': True,
             'locality': spec.get('locality') or locality, 'server': spec.get('server') or label,
-            'context': None, 'context_source': 'unreported', 'context_note': 'server 報告値は未取得',
-            'helper_models': [{'id': 'same', 'label': '主と同じ'}],
+            'context': None, 'context_source': 'unreported', 'context_note': 'Server-reported context not available yet',
+            'helper_models': [{'id': 'same', 'label': 'Same as main'}],
             'efforts': list(spec.get('efforts') or []),
             'default_model': spec['model'],
             'models': [{'id': spec['model'], 'label': spec['model'], 'harnesses': harnesses}],
