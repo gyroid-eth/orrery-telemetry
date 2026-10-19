@@ -52,6 +52,8 @@ tmux server/session、Mail proxy、launcher、補助processにはkeyを渡さな
 | clipboard | `T:lib/types/utils/clipboard.js:244–246` のspawnはenv省略 | 機能を止める。後に許可する場合は最小envを再生成 |
 | external editor | `T:lib/types/utils/externalEditor.js:155,170–180` のspawnもenv省略 | 段Aでは無効 |
 | updater/restart | `T:lib/types/update.js:955,2005` に起動経路 | 自動更新・restart・backend切替を無効 |
+| link opener / file reveal | `T:lib/types/screens/Chat.js:1745–1753`、`utils/openExternal.js:40–53,112–135` | 通常のURL操作からenv省略のdetached open/xdg-openを起動。段Aでは無効。既存browser本体への継承までは断定しない |
+| 共通exec / copy | `T:lib/types/utils/execFileNoThrow.js:18–28`、`ink/termio/osc.js:95–105` | env省略spawnがtmux buffer/clipboard copyにも使われる。read側だけでなくcopy側も停止対象。将来は同じ最小env境界へ |
 | profile bootstrap | `T:bin/dsh-tui.js:3–25,94` にprofile委譲・plugin追加・latest fallback | 固定entry/profileだけを使い、自動取得へ進まない |
 
 ## 読み書き・直接action・追加socket
@@ -68,6 +70,7 @@ tmux server/session、Mail proxy、launcher、補助processにはkeyを渡さな
 | compile-cache | `T:bin/dsh-tui.js:816–830` | DATA_DIRを通らず実HOMEへ書く。global CLIを迂回し、必要なら明示専用cacheを指定 |
 | debug | `T:lib/types/utils/debug.js:10–32` | stderr、専用mouse log。管理root以外へ出さず、値を記録しない検査が必要 |
 | npm/cache | `T:lib/types/update.js:265,694,1005` | HOMEの`.npmrc`・standalone cache・DSH_HOME fallback。更新経路を止める |
+| IDE / context添付 | `T:lib/types/dsh-adapter/channel/core/compose.js:177–187`、`ide-channel.js:335–352,447`、`channel/input-delivery.js:133–149` | env/lock由来のloopback WebSocketと@mention/IDE/context展開。inject socketとは別入口。段Aでは接続・添付展開とも無効 |
 | inject channel | `T:lib/types/dsh-adapter/inject-channel.js:30–44,155–225`、`plugin.js:2425–2444` | session socketとservers.json、append/submit。管理modeで機能自体を無効化 |
 
 inject channelの対象sourceに認証tokenによる検査は見つからず、bind失敗も
@@ -80,6 +83,7 @@ sessionを失敗させない（`plugin.js:2420–2424`）。この入口をMail�
 | --- | --- | --- |
 | provider API | 公式`packages/llm/llm-deepseek/src/config.ts:114–118` | defaultは`https://api.deepseek.com/anthropic`。利用者が選んだ固定route以外へfallbackしない |
 | retry | 公式`packages/llm/llm/src/retry-policy.ts:40–41,156–181` | 省略時は既定5回。明示maxRetries=0、要求数は別に送信前制限 |
+| recap / btw / auto recap | `T:lib/types/screens/Chat.js:3914–3956,1245–1283`、`dsh-adapter/channel/session-metadata.js:172–215`、`dsh-adapter/sideQuestion.js:119–127` | 通常command/自動recapが直接llm.streamを呼ぶ。command・backend・auto設定を停止し、provider admissionを補助streamにも適用。主turnのpre-stepだけに依存しない |
 | update check | `T:lib/types/update.js:25–27,303,391,431,455`、`dsh-adapter/plugin.js:2461–2464` | npm registryとGitHub API/releases。起動時checkも含め無効化 |
 | onboarding残高 | `T:lib/types/screens/Onboarding.js:58–74` → `dsh-adapter/channel/reports.js:19–31` → `deepseekBalance.js:1,19–21` | `https://api.deepseek.com/user/balance`へ鍵付きfetch。推論課金とは断定しないが予定外HTTPなので無効化 |
 | OAuth callback | `T:lib/types/dsh-adapter/oauth/deepseek.js:25` | loopback callbackを含む。既存OAuth画面を管理runtimeへ出さない |
@@ -89,8 +93,8 @@ request数・max output・timeoutと、事後usageのtoken値も別の制御と�
 
 ## hookと入力guardの限界
 
-公式`packages/core/tools/src/index.ts:133–143`にtools/pre-execute、
-`:144–154`にexecute、`:155–166`にpost-execute、`:181–188`にresultがある。
+公式raw `packages/core/tools/src/index.ts:144–154`にtools/pre-execute（宣言154）、
+`:155–165`にexecute（165）、`:166–177`にpost-execute（177）、`:192–199`にresult（199）がある。
 model toolとTUIの直接actionは別経路であり、Mail proxyだけでFSを守れない。
 
 `T:lib/types/dsh-adapter/decision-guard.js:169–211` はgrant不足で登録がno-opに
