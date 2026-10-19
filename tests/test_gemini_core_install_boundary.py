@@ -61,7 +61,7 @@ def _run_install_payload(install_dir: pathlib.Path, *, tier: str = "tier1",
     text = _installer_text()
     functions = "\n".join([_payload_declaration(text)] + [
         _function(text, name) for name in (
-            "copy_tree", "is_optional_provider_payload", "copy_core_tree",
+            "payload_command", "copy_tree", "is_optional_provider_payload", "copy_core_tree",
             "install_child_mcp_proxy", "install_payload")
     ])
     script = "\n".join([

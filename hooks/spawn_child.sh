@@ -905,20 +905,8 @@ prepare_codex_launch_binding() {
 # their own generation names. The unversioned aliases (omitted / opus / sonnet
 # / haiku / fable) and the warm-pool identities are not fixed here: they come
 # from dashboard/claude_models.py (local Claude Code catalog, else its bundled
-# table) via load_claude_aliases. The IDs below are versioned aliases, which
-# pin a generation on purpose.
-CLAUDE_OPUS_5_5_MODEL="claude-opus-5-5"
-CLAUDE_SONNET_5_5_MODEL="claude-sonnet-5-5"
-CLAUDE_SONNET_5_MODEL="claude-sonnet-5"
-CLAUDE_CURRENT_OPUS_1M_MODEL="claude-opus-5-5[1m]"
-CLAUDE_LEGACY_OPUS_5_MODEL="claude-opus-5"
-CLAUDE_LEGACY_OPUS_5_1M_MODEL="claude-opus-5[1m]"
-CLAUDE_LEGACY_OPUS_MODEL="claude-opus-4-8"
-CLAUDE_LEGACY_OPUS_1M_MODEL="claude-opus-4-8[1m]"
-CLAUDE_LEGACY_SONNET_MODEL="claude-sonnet-4-6"
-CLAUDE_LEGACY_SONNET_1M_MODEL="claude-sonnet-4-6[1m]"
-CLAUDE_HAIKU_4_5_MODEL="claude-haiku-4-5-20251001"
-CLAUDE_FABLE_5_1_MODEL="claude-fable-5-1"
+# table) via load_claude_aliases. Version-pinned aliases use that same Python
+# policy; the shell does not carry its own generation table.
 CLAUDE_ALIASES_LOADED=false
 CLAUDE_ALIAS_OPUS="" CLAUDE_ALIAS_SONNET="" CLAUDE_ALIAS_HAIKU="" CLAUDE_ALIAS_FABLE=""
 CLAUDE_WARM_OPUS_MODEL="" CLAUDE_WARM_SONNET_MODEL=""
@@ -1027,57 +1015,8 @@ report_claude_alias() {
 #     ただし claude-* 接頭の正式 ID は前方互換のため素通りさせる（新モデル ID 対応）。
 # 注意: Codex 経路では呼ばない。
 normalize_claude_model() {
-    local raw="${1:-}"
-    # 小文字化 + 空白除去で正規化キーを作る（出力は固定の正式文字列）
-    local m
-    m="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-    # 「Sonnet 5.5」の版区切り . は - と同じに扱う（sonnet5.5 → sonnet5-5。正式 ID には触れない）
-    case "$m" in claude-*) ;; *) m="${m//./-}" ;; esac
-
-    case "$m" in
-        ""|opus)
-            claude_alias_value "$CLAUDE_ALIAS_OPUS" || return 1 ;;
-        opus-5-5|opus55|opus5-5|"$CLAUDE_OPUS_5_5_MODEL")
-            printf '%s\n' "$CLAUDE_OPUS_5_5_MODEL" ;;
-        opus-5|opus5|"$CLAUDE_LEGACY_OPUS_5_MODEL")
-            printf '%s\n' "$CLAUDE_LEGACY_OPUS_5_MODEL" ;;
-        opus-1m|opus1m|"opus[1m]"|claude-opus-4-8-1m|"$CLAUDE_LEGACY_OPUS_1M_MODEL")
-            printf '%s\n' "$CLAUDE_LEGACY_OPUS_1M_MODEL" ;;
-        opus-200k|opus200k|"$CLAUDE_LEGACY_OPUS_MODEL")
-            printf '%s\n' "$CLAUDE_LEGACY_OPUS_MODEL" ;;
-        opus-5-1m|opus51m|"opus-5[1m]"|"opus5[1m]"|"$CLAUDE_LEGACY_OPUS_5_1M_MODEL")
-            printf '%s\n' "$CLAUDE_LEGACY_OPUS_5_1M_MODEL" ;;
-        opus-5-5-1m|opus551m|"opus-5-5[1m]"|"opus55[1m]"|"opus5-5[1m]"|"$CLAUDE_CURRENT_OPUS_1M_MODEL")
-            printf '%s\n' "$CLAUDE_CURRENT_OPUS_1M_MODEL" ;;
-        sonnet)
-            claude_alias_value "$CLAUDE_ALIAS_SONNET" || return 1 ;;
-        sonnet-5-5|sonnet55|sonnet5-5|"$CLAUDE_SONNET_5_5_MODEL")
-            printf '%s\n' "$CLAUDE_SONNET_5_5_MODEL" ;;
-        sonnet-5|sonnet5|"$CLAUDE_SONNET_5_MODEL")
-            printf '%s\n' "$CLAUDE_SONNET_5_MODEL" ;;
-        sonnet-4-6|sonnet46|"$CLAUDE_LEGACY_SONNET_MODEL")
-            printf '%s\n' "$CLAUDE_LEGACY_SONNET_MODEL" ;;
-        sonnet-1m|sonnet1m|"sonnet[1m]"|"$CLAUDE_LEGACY_SONNET_1M_MODEL")
-            printf '%s\n' "$CLAUDE_LEGACY_SONNET_1M_MODEL" ;;
-        haiku)
-            claude_alias_value "$CLAUDE_ALIAS_HAIKU" || return 1 ;;
-        haiku-4-5|haiku45|haiku4-5|claude-haiku-4-5|"$CLAUDE_HAIKU_4_5_MODEL")
-            printf '%s\n' "$CLAUDE_HAIKU_4_5_MODEL" ;;
-        fable)
-            claude_alias_value "$CLAUDE_ALIAS_FABLE" || return 1 ;;
-        fable-5-1|fable51|fable5-1|"$CLAUDE_FABLE_5_1_MODEL")
-            printf '%s\n' "$CLAUDE_FABLE_5_1_MODEL" ;;
-        *)
-            if [[ "$m" == claude-* ]]; then
-                # 正式 ID は前方互換で素通り（新モデル ID 対応）
-                printf '%s\n' "$m"
-            else
-                echo "Error: unknown model '$raw'. Valid forms: opus / opus-5-5 / opus[1m] / opus-5[1m] / opus-5-5[1m] / claude-opus-5 / claude-opus-4-8 / sonnet / sonnet-5-5 / sonnet-5 / sonnet-4-6 / haiku / fable / claude-<id>" >&2
-                return 1
-            fi
-            ;;
-    esac
-    return 0
+    "${AGENTSTACK_PYTHON:-python3}" "$CLAUDE_MODEL_HELPER" normalize "${1:-}" \
+        "$CLAUDE_ALIAS_OPUS" "$CLAUDE_ALIAS_SONNET" "$CLAUDE_ALIAS_HAIKU" "$CLAUDE_ALIAS_FABLE"
 }
 
 normalize_codex_model() {

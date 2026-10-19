@@ -111,13 +111,30 @@ TOKEN_KEY="$(printf '%s' "$AGENT_NAME" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
 TOKEN_FILE="$RUNTIME_DIR/agent_token_$TOKEN_KEY"
 MCP_CONFIG_FILE="$STATE_DIR/${AGENT_NAME}.mcp.json"
 CODEX_HOME_DIR="$STATE_DIR/${AGENT_NAME}.codex-home"
-if [[ -f "$STATE_FILE" ]]; then
+REGISTRATION_PENDING="$STATE_DIR/.${AGENT_NAME}.registration-pending.json"
+if [[ -e "$STATE_FILE" || -L "$STATE_FILE" || -e "$REGISTRATION_PENDING" || -L "$REGISTRATION_PENDING" ]]; then
     if ! STATE_PROJECT_KEY=$(
-        python3 - "$STATE_FILE" 2>/dev/null <<'PYEOF'
+        python3 - "$STATE_FILE" "$REGISTRATION_PENDING" 2>/dev/null <<'PYEOF'
 import json
+import os
+import stat
 import sys
 
-data = json.load(open(sys.argv[1], encoding="utf-8"))
+def read(path):
+    try:fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    except FileNotFoundError:return {}
+    try:
+        info=os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_size>1048576:
+            raise ValueError()
+        value=json.loads(os.read(fd,1048577).decode('utf-8'))
+        if type(value) is not dict:raise ValueError()
+        return value
+    finally:os.close(fd)
+data=read(sys.argv[1]);pending=read(sys.argv[2])
+if ('kind' in pending or any(key in data for key in
+        ('launch_intent','local_registration','local_execution','local_resolution'))):
+    raise SystemExit(2)
 print(data.get("project_key", ""))
 PYEOF
     ); then
@@ -290,29 +307,9 @@ if [[ "${AGENTSTACK_CLEANUP_RETIRE_ONLY:-0}" == "1" ]]; then
     exit 0
 fi
 
-python3 - "$MANAGED_FILE" "$AGENT_NAME" <<'PYEOF' 2>/dev/null || true
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-name = sys.argv[2]
-try:
-    lines = path.read_text(encoding="utf-8").splitlines()
-except OSError:
-    raise SystemExit(0)
-path.write_text("\n".join(line for line in lines if line != name) + "\n", encoding="utf-8")
-PYEOF
-
-# The generated home contains only rebuildable config/proxy runtime and is
-# never reused.  A valid Claude/Codex child keeps its private owner credential and
-# schema-tagged state for the configured resume window. Known legacy material
-# stays unchanged until explicit authenticated migration; unsupported children
-# and a retention setting of 0 keep the historical full-delete behavior.
-rm -f "$MCP_CONFIG_FILE"
-if [[ -d "$CODEX_HOME_DIR/sessions" && ! -L "$CODEX_HOME_DIR/sessions" ]]; then
-    echo "[cleanup-child-agent] WARNING: deleting unshared Codex sessions at $CODEX_HOME_DIR/sessions; conversation history may be lost (expected a symlink to the user's Codex home)." >&2
-fi
-rm -rf "$CODEX_HOME_DIR"
+# All local cleanup is one name-locked transaction, after remote effects.
+# In particular, do not remove managed/config/home files before rechecking a
+# namespace which could have changed while retire was in flight.
 case "$CHILD_RESUME_RETENTION_DAYS" in
     ''|*[!0-9]*)
         echo "[cleanup-child-agent] invalid AGENTSTACK_CHILD_RESUME_RETENTION_DAYS; using 30" >&2
@@ -320,22 +317,28 @@ case "$CHILD_RESUME_RETENTION_DAYS" in
         ;;
 esac
 RESUME_HELPER="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
-RETENTION_ACTION="delete"
-if [[ -f "$RESUME_HELPER" ]]; then
+LOCAL_FINALIZER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/child_resume.py"
+finalize_args=(cleanup-ordinary --runtime-dir "$RUNTIME_DIR" --agent-name "$AGENT_NAME"
+    --managed-file "$MANAGED_FILE" --retention-days "$CHILD_RESUME_RETENTION_DAYS")
+if [[ ! -f "$RESUME_HELPER" ]]; then
+    # Historical installations without resume retention fully delete ordinary
+    # material; the fixed transaction still protects any new local namespace.
+    finalize_args+=(--retention-action delete)
+elif [[ "$RESUME_HELPER" != "$LOCAL_FINALIZER" ]]; then
+    # Preserve explicit legacy custom helper selection OUTSIDE the name lock.
     if RETENTION_ACTION=$(
         "${AGENTSTACK_PYTHON:-python3}" "$RESUME_HELPER" mark-retired \
             --runtime-dir "$RUNTIME_DIR" \
             --agent-name "$AGENT_NAME" \
             --retention-days "$CHILD_RESUME_RETENTION_DAYS"
     ); then
-        :
+        if [[ "$RETENTION_ACTION" != retained ]]; then RETENTION_ACTION=delete; fi
+        finalize_args+=(--retention-action "$RETENTION_ACTION")
     else
         echo "[cleanup-child-agent] could not finalize retained resume state for '$AGENT_NAME'; leaving private state intact for explicit recovery or purge" >&2
         exit 1
     fi
 fi
-if [[ "$RETENTION_ACTION" != "retained" ]]; then
-    rm -f "$STATE_FILE" "$TOKEN_FILE"
-fi
+"${AGENTSTACK_PYTHON:-python3}" "$LOCAL_FINALIZER" "${finalize_args[@]}" || exit 1
 
 exit 0

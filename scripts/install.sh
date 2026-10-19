@@ -7,6 +7,9 @@ MERGE_SETTINGS_SCRIPT="$SCRIPT_DIR/lib/merge_settings.py"
 MERGE_CLAUDE_MCP_SCRIPT="$SCRIPT_DIR/lib/merge_claude_mcp.py"
 
 DRY_RUN=false
+PLACE_ONLY=false
+PRINT_INVENTORY=false
+INSTALL_DIR_GIVEN=false
 RETIRE_LEGACY_MAIL=false
 # What a re-run does to a running ORRERY Mail built from another commit:
 #   keep   (default, --keep-mail) never switch; report the difference.
@@ -42,6 +45,7 @@ ASSUME_YES="${AGENTSTACK_ASSUME_YES:-0}"
 TIER="tier1"
 TIER_OPTION=""
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
+INITIAL_INSTALL_DIR="$INSTALL_DIR"
 MAIL_DB_EXPLICIT="${AGENTSTACK_MAIL_DB+x}"
 MAIL_ENV_EXPLICIT="${AGENTSTACK_MAIL_ENV+x}"
 MAIL_HTTP_BEARER_MODE="disabled"
@@ -124,6 +128,9 @@ it registers the fixed orrery-mail entry in ~/.claude.json and may update
 only the managed marker block in project/global CLAUDE.md.
 
 Options:
+  --print-inventory      With --place-only, print payload inventory JSON without writes.
+  --place-only           Place payload/env/manifest in a fresh --install-dir only;
+                         no services, probes, skill links, or user-settings merge
   --dry-run              Print planned actions without writing files
   -y, --assume-yes       Pre-approve MCP/settings/managed-block prompts only
   --dashboard-only       Tier0 footprint; install dashboard assets only
@@ -207,6 +214,14 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --print-inventory)
+      PRINT_INVENTORY=true
+      shift
+      ;;
+    --place-only)
+      PLACE_ONLY=true
+      shift
+      ;;
     --dry-run)
       DRY_RUN=true
       shift
@@ -267,6 +282,8 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --install-dir)
+      [[ $# -ge 2 ]] || { echo "error: --install-dir needs a path" >&2; exit 2; }
+      INSTALL_DIR_GIVEN=true
       INSTALL_DIR="$2"
       shift 2
       ;;
@@ -363,6 +380,26 @@ case "$MAIL_UPDATE_MODE" in
   update) UPDATE_MAIL=true ;;
   *) echo "error: AGENTSTACK_MAIL_UPDATE must be auto, update or keep (got: $MAIL_UPDATE_MODE)" >&2; exit 2 ;;
 esac
+
+if [[ "$PRINT_INVENTORY" == true && ( "$PLACE_ONLY" != true || "$DRY_RUN" == true ) ]]; then
+  echo PLACE_ONLY_INVENTORY_REQUIRES_PLACE_ONLY >&2
+  exit 2
+fi
+
+# Placement admission is before project/env resolution, probes, or effects.
+if [[ "$PLACE_ONLY" == true ]]; then
+  if [[ "$INSTALL_DIR_GIVEN" != true ]]; then
+    echo 'PLACE_ONLY_REQUIRES_INSTALL_DIR' >&2
+    exit 2
+  fi
+  if [[ "$RETIRE_LEGACY_MAIL" == true || "$MAIL_UPDATE_MODE" != keep || "$PRINT_MAIL_PLAN" == true || "$PRINT_MAIL_ADVICE" == true ]]; then
+    echo 'PLACE_ONLY_CONFLICTING_OPTIONS' >&2
+    exit 2
+  fi
+  INSTALL_DIR="$("${PYTHON_BIN:-python3}" -I -S -B "$SCRIPT_DIR/lib/installer_place_only.py" --admit "$INSTALL_DIR" "$HOME" "$INITIAL_INSTALL_DIR")" || exit 2
+  umask 077
+  export PYTHONDONTWRITEBYTECODE=1
+fi
 
 # --print-mail-plan: one line for setup.sh's plan, before anything else runs.
 # It reads the pidfile, the render it names and git; it never probes Codex,
@@ -847,7 +884,11 @@ NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL=true
 # quietly start an empty one, so the previous install's roots are inherited even
 # under --reset-settings. env.sh records the service root as AGENTSTACK_MAIL_DIR.
 NATIVE_MAIL_STATE_ROOT="${AGENTSTACK_MAIL_STATE_ROOT:-}"
-resolve_setting NATIVE_MAIL_STATE_ROOT AGENTSTACK_MAIL_STATE_ROOT "$HOME/.agentstack/mail" kept
+if [[ "$PLACE_ONLY" == true ]]; then
+  resolve_setting NATIVE_MAIL_STATE_ROOT AGENTSTACK_MAIL_STATE_ROOT "$INSTALL_DIR/mail" kept
+else
+  resolve_setting NATIVE_MAIL_STATE_ROOT AGENTSTACK_MAIL_STATE_ROOT "$HOME/.agentstack/mail" kept
+fi
 MAIL_STATE_ROOT_SOURCE="$SETTING_SOURCE"
 NATIVE_MAIL_SERVICE_ROOT="${AGENTSTACK_MAIL_SERVICE_ROOT:-}"
 resolve_setting NATIVE_MAIL_SERVICE_ROOT AGENTSTACK_MAIL_DIR "$INSTALL_DIR/mail-service" kept \
@@ -892,7 +933,7 @@ AGENT_MAIL_RUNNER="$NATIVE_MAIL_RUNNER"
 AGENT_MAIL_PIDFILE="$NATIVE_MAIL_PIDFILE"
 AGENT_MAIL_LOG="$NATIVE_MAIL_LOG"
 
-say() { printf '%s\n' "$*"; }
+say() { if [[ "${PRINT_INVENTORY:-false}" == true ]]; then printf '%s\n' "$*" >&2; return; fi; printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
@@ -2012,6 +2053,7 @@ validate_repo_assets() {
   [[ -f "$MERGE_SETTINGS_SCRIPT" ]] || die "missing scripts/lib/merge_settings.py"
   [[ -f "$MERGE_CLAUDE_MCP_SCRIPT" ]] || die "missing scripts/lib/merge_claude_mcp.py"
   [[ -f "$SCRIPT_DIR/lib/mcp_endpoint.py" ]] || die "missing scripts/lib/mcp_endpoint.py"
+  [[ -f "$SCRIPT_DIR/lib/installer_payload.py" ]] || die "missing scripts/lib/installer_payload.py"
   [[ -f "$SCRIPT_DIR/lib/mail_required_features.json" ]] || die "missing scripts/lib/mail_required_features.json"
   [[ -f "$SCRIPT_DIR/lib/mail_update_notice.py" ]] || die "missing scripts/lib/mail_update_notice.py"
   [[ -f "$SCRIPT_DIR/lib/agentstack-persistent-launcher.sh" ]] || \
@@ -2239,13 +2281,21 @@ except OSError:
 PY
 }
 
+payload_command() {
+  if [[ "${PRINT_INVENTORY:-false}" == true ]]; then
+    printf '%s\0' "$#" "$@"
+  else
+    "$@"
+  fi
+}
+
 copy_tree() {
   local src="$1"
   local dst="$2"
   plan "copy $src -> $dst"
   if [[ "$DRY_RUN" != true ]]; then
-    mkdir -p "$dst"
-    cp -R "$src/." "$dst/"
+    payload_command mkdir -p "$dst"
+    payload_command cp -R "$src/." "$dst/"
   fi
 }
 
@@ -2321,14 +2371,14 @@ copy_core_tree() {
   if [[ "$DRY_RUN" == true ]]; then
     return 0
   fi
-  mkdir -p "$dst"
+  payload_command mkdir -p "$dst"
   for entry in "$src"/* "$src"/.[!.]* "$src"/..?*; do
     [[ -e "$entry" || -L "$entry" ]] || continue
     name="${entry##*/}"
     if is_optional_provider_payload "$relative_root/$name"; then
       continue
     fi
-    cp -R "$entry" "$dst/"
+    payload_command cp -R "$entry" "$dst/"
   done
 }
 
@@ -2352,24 +2402,12 @@ install_child_mcp_proxy() {
   if [[ "$DRY_RUN" == true ]]; then
     return 0
   fi
-  "${PYTHON_BIN:-python3}" - "$source_dir" "$dest_dir" <<'PY'
-import pathlib
-import shutil
-import sys
-
-source, dest = (pathlib.Path(p) for p in sys.argv[1:3])
-ignore = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo")
-for name in ("plugin", "src"):
-    src = source / name
-    if not src.is_dir():
-        continue
-    dst = dest / name
-    if dst.exists():
-        shutil.rmtree(dst)
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src, dst, ignore=ignore)
-PY
-  chmod +x "$dest_dir/plugin/scripts/run-mcp.sh" 2>/dev/null || true
+  if [[ "${PRINT_INVENTORY:-false}" == true ]]; then
+    payload_command child-proxy "$source_dir" "$dest_dir"
+  else
+    "${PYTHON_BIN:-python3}" -I -S -B "$SCRIPT_DIR/lib/installer_payload.py" copy-child-proxy "$source_dir" "$dest_dir"
+  fi
+  payload_command chmod +x "$dest_dir/plugin/scripts/run-mcp.sh" 2>/dev/null || true
 }
 
 install_payload() {
@@ -2386,56 +2424,79 @@ install_payload() {
   copy_core_tree "$REPO_ROOT/dashboard" "$DASHBOARD_DIR" "dashboard"
   plan "copy VERSION -> $INSTALL_DIR/VERSION"
   if [[ "$DRY_RUN" != true ]]; then
-    cp "$REPO_ROOT/VERSION" "$INSTALL_DIR/VERSION"
+    payload_command cp "$REPO_ROOT/VERSION" "$INSTALL_DIR/VERSION"
   fi
   plan "install helper scripts into $BIN_DIR"
   if [[ "$DRY_RUN" != true ]]; then
-    cp "$SCRIPT_DIR/uninstall.sh" "$BIN_DIR/agentstack-uninstall"
-    cp "$SCRIPT_DIR/doctor.sh" "$BIN_DIR/agentstack-doctor"
-    cp "$SCRIPT_DIR/selftest.py" "$BIN_DIR/agentstack-selftest"
-    cp "$MERGE_SETTINGS_SCRIPT" "$BIN_DIR/agentstack-merge-settings"
-    cp "$MERGE_CLAUDE_MCP_SCRIPT" "$BIN_DIR/agentstack-merge-claude-mcp"
-    mkdir -p "$BIN_DIR/lib"
-    cp "$SCRIPT_DIR/lib/mcp_endpoint.py" "$BIN_DIR/lib/mcp_endpoint.py"
-    cp "$SCRIPT_DIR/lib/mail_required_features.json" "$BIN_DIR/lib/mail_required_features.json"
-    cp "$SCRIPT_DIR/lib/mail_update_notice.py" "$BIN_DIR/lib/mail_update_notice.py"
-    cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
-    cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
-    cp "$REPO_ROOT/bin/lib/runtime_client.py" "$BIN_DIR/lib/runtime_client.py"
-    cp "$RUNTIME_SCHEMA_SOURCE" "$BIN_DIR/lib/schema_contract.py"
-    cp "$RUNTIME_FIXTURE_SOURCE" "$BIN_DIR/lib/global-server-s2a.json"
+    payload_command cp "$SCRIPT_DIR/uninstall.sh" "$BIN_DIR/agentstack-uninstall"
+    payload_command cp "$SCRIPT_DIR/doctor.sh" "$BIN_DIR/agentstack-doctor"
+    payload_command cp "$SCRIPT_DIR/selftest.py" "$BIN_DIR/agentstack-selftest"
+    payload_command cp "$MERGE_SETTINGS_SCRIPT" "$BIN_DIR/agentstack-merge-settings"
+    payload_command cp "$MERGE_CLAUDE_MCP_SCRIPT" "$BIN_DIR/agentstack-merge-claude-mcp"
+    payload_command mkdir -p "$BIN_DIR/lib"
+    payload_command cp "$SCRIPT_DIR/lib/mcp_endpoint.py" "$BIN_DIR/lib/mcp_endpoint.py"
+    payload_command cp "$SCRIPT_DIR/lib/mail_required_features.json" "$BIN_DIR/lib/mail_required_features.json"
+    payload_command cp "$SCRIPT_DIR/lib/mail_update_notice.py" "$BIN_DIR/lib/mail_update_notice.py"
+    payload_command cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
+    payload_command cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_client.py" "$BIN_DIR/lib/runtime_client.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_named_target.py" "$BIN_DIR/lib/runtime_named_target.py"
+    payload_command cp "$REPO_ROOT/bin/lib/local_model_auth.py" "$BIN_DIR/lib/local_model_auth.py"
+    payload_command cp "$REPO_ROOT/bin/lib/local_model_profiles.py" "$BIN_DIR/lib/local_model_profiles.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_intent_store.py" "$BIN_DIR/lib/runtime_intent_store.py"
+payload_command cp "$REPO_ROOT/bin/lib/runtime_preview_policy.py" "$BIN_DIR/lib/runtime_preview_policy.py"
+payload_command cp "$REPO_ROOT/bin/lib/runtime_legacy_context.py" "$BIN_DIR/lib/runtime_legacy_context.py"
+payload_command cp "$REPO_ROOT/bin/lib/runtime_legacy_configuration.py" "$BIN_DIR/lib/runtime_legacy_configuration.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_legacy_execution.py" "$BIN_DIR/lib/runtime_legacy_execution.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_legacy_preview.py" "$BIN_DIR/lib/runtime_legacy_preview.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_legacy_registration.py" "$BIN_DIR/lib/runtime_legacy_registration.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_legacy_preview_cli.py" "$BIN_DIR/lib/runtime_legacy_preview_cli.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_legacy_mail.py" "$BIN_DIR/lib/runtime_legacy_mail.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_legacy_proxy.py" "$BIN_DIR/lib/runtime_legacy_proxy.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_legacy_worker.py" "$BIN_DIR/lib/runtime_legacy_worker.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_launch_intent.py" "$BIN_DIR/lib/runtime_launch_intent.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_provider_projection.py" "$BIN_DIR/lib/runtime_provider_projection.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_caller_schema.py" "$BIN_DIR/lib/runtime_caller_schema.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_configure_ownership.py" "$BIN_DIR/lib/runtime_configure_ownership.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_model_resources.py" "$BIN_DIR/lib/runtime_model_resources.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_local_configure.py" "$BIN_DIR/lib/runtime_local_configure.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_local_launch.py" "$BIN_DIR/lib/runtime_local_launch.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_model_catalog.py" "$BIN_DIR/lib/runtime_model_catalog.py"
+    payload_command cp "$REPO_ROOT/bin/lib/runtime_native_scope.py" "$BIN_DIR/lib/runtime_native_scope.py"
+    payload_command cp "$RUNTIME_SCHEMA_SOURCE" "$BIN_DIR/lib/schema_contract.py"
+    payload_command cp "$RUNTIME_FIXTURE_SOURCE" "$BIN_DIR/lib/global-server-s2a.json"
     local runtime_source
     for runtime_source in "${RUNTIME_CLIENT_CONTRACT_SOURCES[@]}"; do
-      cp "$runtime_source" "$BIN_DIR/lib/$(basename "$runtime_source")"
+      payload_command cp "$runtime_source" "$BIN_DIR/lib/$(basename "$runtime_source")"
     done
     for runtime_source in "${RUNTIME_PUBLIC_ENTRY_SOURCES[@]}"; do
-      cp "$runtime_source" "$BIN_DIR/$(basename "$runtime_source")"
-      chmod +x "$BIN_DIR/$(basename "$runtime_source")"
+      payload_command cp "$runtime_source" "$BIN_DIR/$(basename "$runtime_source")"
+      payload_command chmod +x "$BIN_DIR/$(basename "$runtime_source")"
     done
-    cp "$REPO_ROOT/bin/agentstack-runtime-client" "$BIN_DIR/agentstack-runtime-client"
-    cp "$REPO_ROOT/bin/lib/agentstack-scientists.sh" "$BIN_DIR/lib/agentstack-scientists.sh"
-    rm -f "$BIN_DIR/lib/agentstack-managed-block.sh"
-    cp "$REPO_ROOT/bin/agent-start" "$BIN_DIR/agent-start"
-    cp "$REPO_ROOT/bin/agent-start-codex" "$BIN_DIR/agent-start-codex"
-    cp "$REPO_ROOT/bin/agentstack-reregister" "$BIN_DIR/agentstack-reregister"
-    cp "$REPO_ROOT/bin/agentstack-enroll" "$BIN_DIR/agentstack-enroll"
+    payload_command cp "$REPO_ROOT/bin/agentstack-runtime-client" "$BIN_DIR/agentstack-runtime-client"
+    payload_command cp "$REPO_ROOT/bin/lib/agentstack-scientists.sh" "$BIN_DIR/lib/agentstack-scientists.sh"
+    payload_command rm -f "$BIN_DIR/lib/agentstack-managed-block.sh"
+    payload_command cp "$REPO_ROOT/bin/agent-start" "$BIN_DIR/agent-start"
+    payload_command cp "$REPO_ROOT/bin/agent-start-codex" "$BIN_DIR/agent-start-codex"
+    payload_command cp "$REPO_ROOT/bin/agentstack-reregister" "$BIN_DIR/agentstack-reregister"
+    payload_command cp "$REPO_ROOT/bin/agentstack-enroll" "$BIN_DIR/agentstack-enroll"
     # Keep the Python implementation beside the public launcher so its
     # __file__-relative defaults (agentstack-enroll, install root and hooks)
     # retain the same layout. The bash entry point loads env.sh and execs the
     # interpreter selected and version-checked by this installer; ambient PATH
     # never selects an older python3.
-    cp "$REPO_ROOT/bin/agentstack-persistent" "$BIN_DIR/agentstack-persistent.py"
-    cp "$SCRIPT_DIR/lib/agentstack-persistent-launcher.sh" "$BIN_DIR/agentstack-persistent"
-    cp "$REPO_ROOT/bin/agentstack-persistent-deliver" "$BIN_DIR/agentstack-persistent-deliver"
-    cp "$REPO_ROOT/bin/agentstack-preregister-child" "$BIN_DIR/agentstack-preregister-child"
-    cp "$REPO_ROOT/bin/agentstack-await-reply" "$BIN_DIR/agentstack-await-reply"
-    cp "$REPO_ROOT/bin/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-bootstrap"
-    cp "$REPO_ROOT/bin/agentstack-resume" "$BIN_DIR/agentstack-resume"
-    cp "$REPO_ROOT/bin/agentstack-purge-child-resume" "$BIN_DIR/agentstack-purge-child-resume"
-    cp "$REPO_ROOT/bin/agentstack-codex-setup" "$BIN_DIR/agentstack-codex-setup"
-    cp "$REPO_ROOT/bin/agentstack-claude-setup" "$BIN_DIR/agentstack-claude-setup"
-    cp "$REPO_ROOT/bin/agentstack-mailctl" "$BIN_DIR/agentstack-mailctl"
-    chmod +x "$BIN_DIR/agentstack-uninstall" "$BIN_DIR/agentstack-doctor" \
+    payload_command cp "$REPO_ROOT/bin/agentstack-persistent" "$BIN_DIR/agentstack-persistent.py"
+    payload_command cp "$SCRIPT_DIR/lib/agentstack-persistent-launcher.sh" "$BIN_DIR/agentstack-persistent"
+    payload_command cp "$REPO_ROOT/bin/agentstack-persistent-deliver" "$BIN_DIR/agentstack-persistent-deliver"
+    payload_command cp "$REPO_ROOT/bin/agentstack-preregister-child" "$BIN_DIR/agentstack-preregister-child"
+    payload_command cp "$REPO_ROOT/bin/agentstack-await-reply" "$BIN_DIR/agentstack-await-reply"
+    payload_command cp "$REPO_ROOT/bin/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-bootstrap"
+    payload_command cp "$REPO_ROOT/bin/agentstack-resume" "$BIN_DIR/agentstack-resume"
+    payload_command cp "$REPO_ROOT/bin/agentstack-purge-child-resume" "$BIN_DIR/agentstack-purge-child-resume"
+    payload_command cp "$REPO_ROOT/bin/agentstack-codex-setup" "$BIN_DIR/agentstack-codex-setup"
+    payload_command cp "$REPO_ROOT/bin/agentstack-claude-setup" "$BIN_DIR/agentstack-claude-setup"
+    payload_command cp "$REPO_ROOT/bin/agentstack-mailctl" "$BIN_DIR/agentstack-mailctl"
+    payload_command chmod +x "$BIN_DIR/agentstack-uninstall" "$BIN_DIR/agentstack-doctor" \
       "$BIN_DIR/agentstack-selftest" "$BIN_DIR/agentstack-merge-settings" \
       "$BIN_DIR/agentstack-merge-claude-mcp" \
       "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-reregister" "$BIN_DIR/agentstack-enroll" \
@@ -2515,16 +2576,7 @@ render_installed_templates() {
   if [[ "$TIER" != "tier0" ]]; then
     plan "render hook settings template token -> $HOOKS_DIR"
     if [[ "$DRY_RUN" != true ]]; then
-      "$PYTHON_BIN" - "$HOOKS_DIR/settings.template.json" "$HOOKS_DIR" <<'PY'
-import pathlib
-import sys
-path = pathlib.Path(sys.argv[1])
-hooks_dir = sys.argv[2]
-text = path.read_text(encoding="utf-8").replace("__AGENTSTACK_HOOKS_DIR__", hooks_dir)
-tmp = path.with_suffix(path.suffix + ".tmp")
-tmp.write_text(text, encoding="utf-8")
-tmp.replace(path)
-PY
+      "$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/lib/installer_payload.py" render-template "$HOOKS_DIR/settings.template.json" "$HOOKS_DIR"
     fi
   fi
 }
@@ -4745,7 +4797,7 @@ write_manifest() {
   local service_path="$2"
   local mail_service_kind="${3:-}"
   local mail_service_path="${4:-}"
-  local tmp="$MANIFEST.tmp" mail_update=""
+  local mail_update=""
   if [[ -n "$MAIL_UPDATE_RESULT" ]]; then
     # Through the environment as JSON: the reason is free text and must not
     # be spliced into the Python source below.
@@ -4757,7 +4809,7 @@ write_manifest() {
       database_backup "$MAIL_UPDATE_BACKUP")"
   fi
   AGENTSTACK_INSTALL_MAIL_UPDATE="$mail_update" \
-  "$PYTHON_BIN" - "$tmp" "$service_kind" "$service_path" \
+  "$PYTHON_BIN" - "$MANIFEST" "$service_kind" "$service_path" \
     "$mail_service_kind" "$mail_service_path" "$AGENT_MAIL_NAME_CAPABILITY_JSON" \
     "${AGENT_MAIL_AUTOSTART_KIND:-}" "${AGENT_MAIL_AUTOSTART_PATH:-}" \
     "$MAIL_AUTOSTART_LABEL" "${AGENT_MAIL_AUTOSTART_SERVICE_PATH:-}" \
@@ -4771,7 +4823,6 @@ import pathlib
 import time
 import sys
 
-out = pathlib.Path(sys.argv[1])
 service_kind = sys.argv[2]
 service_path = sys.argv[3]
 mail_service_kind = sys.argv[4]
@@ -4983,6 +5034,8 @@ manifest = {
         "Claude MCP user config uses an explicit-confirm, fixed-name structural merge.",
     ],
 }
+if "${PLACE_ONLY:-false}" == "true":
+    manifest["installation_mode"] = "place-only"
 manifest["agent_mail"]["provider"] = "agentstack"
 manifest["agent_mail"]["state_root"] = "$NATIVE_MAIL_STATE_ROOT"
 manifest["agent_mail"]["candidate_venv"] = "$NATIVE_MAIL_VENV"
@@ -5005,10 +5058,79 @@ manifest["env"].update({
     "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "$MAIL_HTTP_BEARER_MODE",
     "AGENTSTACK_MAIL_ENROLL_BIN": "$NATIVE_MAIL_ENROLL_BIN",
 })
-out.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+# Publish through the same manifest mutex/CAS as explicit configure. Generated
+# runner/settings/skill ownership must survive reinstall with its exact proof.
+sys.path.insert(0, str(pathlib.Path("$REPO_ROOT") / "bin" / "lib"))
+from runtime_configure_ownership import publish_install_manifest
+publish_install_manifest(install_dir, manifest)
 PY
-  "$PYTHON_BIN" -m json.tool "$tmp" >/dev/null
-  mv "$tmp" "$MANIFEST"
+}
+
+# Closed placement path: never enter platform/port/service/Mail preflight.
+# The payload/render/env/manifest implementations are the normal install's own.
+place_only() {
+  PREFLIGHT_ERRORS=()
+  preflight_python
+  preflight_target_writable
+  preflight_finish || return 1
+  # The common writers still splice these scalar values into double-quoted
+  # Python literals. Placement supports the literal subset only; reject every
+  # resolved source-spliced value after final Python selection and before mkdir.
+  # The coverage test derives sink names from both writer bodies so adding a
+  # setting cannot silently bypass this admission. No writer copy is added.
+  local -a literal_names=(
+    AGENTSTACK_GLOBAL_SERVER_CONFIG AGENTSTACK_RUNTIME_MODE AUTO_OPEN_CHILD_SETTING CHILD_DEFAULT_TOOLS_SETTING
+    CHILD_RESUME_RETENTION_DAYS_SETTING CHOSEN_SETTINGS CLAUDE_JSON CODEX_ADD_DIRS_SETTING
+    CODEX_BIN_SETTING CODEX_CHILD_APPROVAL_SETTING CODEX_CHILD_CONFIG_OVERLAY_SETTING CODEX_MODELS_SETTING
+    CODEX_NETWORK_SETTING CONNECTIONS_DIR CUSTOM_PORTRAITS_SETTING DASHBOARD_LOG
+    DASHBOARD_LOG_BACKUPS DASHBOARD_LOG_MAX_BYTES DASHBOARD_RESTART_DELAY DELIVERABLE_ROOTS
+    ENV_FILE HOOKS_DIR INSTALL_DIR LABEL
+    LABEL_PREFIX LANG_SETTING MAIL_DB MAIL_DIR
+    MAIL_ENV MAIL_HOME MAIL_HTTP_BEARER_MODE MAIL_LAUNCHD_LABEL_SETTING
+    MANAGED_AGENTS_FILE MANIFEST MCP_MERGE_RESULT_FILE MCP_URL
+    MURMUR_SETTING NATIVE_MAIL_DEPLOYMENT NATIVE_MAIL_ENROLL_BIN NATIVE_MAIL_ENV
+    NATIVE_MAIL_MANAGEMENT_SOCKET NATIVE_MAIL_RUNNER NATIVE_MAIL_SERVICE_ROOT NATIVE_MAIL_STATE_ROOT
+    NATIVE_MAIL_VENV PATH_VALUE PERSISTENT_PROFILES_DIR PLACE_ONLY
+    PORT PORTRAITS_DIR_SETTING PROJECT_KEY PROTECTED_ROOTS
+    PYTHON_BIN REPO_ROOT RUNTIME_DIR SAFE_MERGE_RESULT_FILE
+    SIGNALS_DIR SKILLS_DIR SPAWN_DIRS_SETTING SPAWN_ROOTS_SETTING
+    TERMINAL TIER VAULT_SETTING WORKTREE_ROOT_SETTING
+  )
+  local -a literal_values=()
+  local literal_name
+  for literal_name in "${literal_names[@]}"; do
+    literal_values+=("${!literal_name-}")
+  done
+  "$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/lib/installer_place_only.py" --values "${literal_values[@]}" || return 2
+  validate_assume_yes
+  if [[ "${PRINT_INVENTORY:-false}" == true ]]; then
+    local inventory_tier
+    case "$TIER" in tier0) inventory_tier=dashboard-only;; tier1) inventory_tier=default;; tier2) inventory_tier=scoped;; esac
+    install_payload | "$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/lib/installer_payload.py" inventory "$INSTALL_DIR" "$inventory_tier" "$(umask)" "$HOOKS_DIR"
+    return
+  fi
+  # Atomically claim a fresh destination; mkdir -p would admit a competing
+  # install that appeared after the read-only path admission.
+  if [[ "$DRY_RUN" != true ]]; then
+    mkdir -m 700 "$INSTALL_DIR"
+  fi
+  NATIVE_MAIL_DEPLOYMENT_IDENTIFIED=false
+  NATIVE_MAIL_ENROLL_AVAILABLE=false
+  NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL=false
+  # No inspection of user HOME's skill links, even for manifest discovery.
+  CLAUDE_SKILLS_DIR="$INSTALL_DIR/claude/skills"
+  CODEX_SKILLS_DIR="$INSTALL_DIR/codex/skills"
+  create_layout
+  install_payload
+  render_installed_templates
+  write_env_file
+  write_manifest manual "" "" ""
+  if [[ "$DRY_RUN" == true ]]; then
+    say "Placement dry-run complete: no files were written."
+  else
+    say "Placement complete: $INSTALL_DIR (services not started; user settings unchanged)"
+    say "Manifest: $MANIFEST"
+  fi
 }
 
 main() {
@@ -5023,6 +5145,10 @@ main() {
     return 2
   fi
   [[ "$_ags_install_rc" == 125 ]] || return "$_ags_install_rc"
+  if [[ "$PLACE_ONLY" == true ]]; then
+    place_only
+    return
+  fi
   resolve_codex_install_setting
   say "ORRERY Telemetry core installer"
   say "tier: $TIER"
@@ -5054,6 +5180,19 @@ main() {
   if ! run_preflight; then
     exit 1
   fi
+  # Read-only, before payload/service/settings effects. Refuse unresolved or
+  # changed explicit-configure outputs instead of silently adopting them.
+  "$PYTHON_BIN" - "$REPO_ROOT/bin/lib" "$INSTALL_DIR" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from local_model_auth import LocalModelError
+from runtime_configure_ownership import installation_preflight
+try:
+    installation_preflight(sys.argv[2])
+except LocalModelError as exc:
+    sys.stderr.write(str(exc)+'\n')
+    raise SystemExit(2)
+PY
   validate_codex_child_overlay
   if [[ "$TIER" == "tier1" ]]; then
     say "Tier1 will show MCP and user-settings dry-run diffs before any merge."

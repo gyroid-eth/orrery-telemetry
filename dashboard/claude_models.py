@@ -66,7 +66,7 @@ BUNDLED_OVERFLOW = ("claude-opus-5", "claude-sonnet-5")
 # the current model of that family. This is the only fixed copy: the launcher,
 # its warm-pool match and the dashboard default all resolve through
 # resolve_alias(). Versioned aliases (sonnet-5, opus-5, [1m]) pin a generation
-# on purpose and stay in spawn_child.sh.
+# on purpose and use the single normalizer below, including shell callers.
 BUNDLED_ALIASES = {
     "opus": "claude-opus-5-5",
     "sonnet": "claude-sonnet-5-5",
@@ -75,6 +75,47 @@ BUNDLED_ALIASES = {
 }
 DEFAULT_ALIAS = "opus"
 _VERSION_RE = re.compile(r"[0-9]{1,6}(?:\.[0-9]{1,6}){0,3}")
+
+# Moved verbatim from spawn_child.sh's version-pinned aliases. The shell and
+# common intent resolver delegate here; there is no parallel generation table.
+VERSIONED_ALIASES = {
+    'claude-opus-5-5': ('opus-5-5','opus55','opus5-5'),
+    'claude-opus-5': ('opus-5','opus5'),
+    'claude-opus-4-8[1m]': ('opus-1m','opus1m','opus[1m]','claude-opus-4-8-1m'),
+    'claude-opus-4-8': ('opus-200k','opus200k'),
+    'claude-opus-5[1m]': ('opus-5-1m','opus51m','opus-5[1m]','opus5[1m]'),
+    'claude-opus-5-5[1m]': ('opus-5-5-1m','opus551m','opus-5-5[1m]','opus55[1m]','opus5-5[1m]'),
+    'claude-sonnet-5-5': ('sonnet-5-5','sonnet55','sonnet5-5'),
+    'claude-sonnet-5': ('sonnet-5','sonnet5'),
+    'claude-sonnet-4-6': ('sonnet-4-6','sonnet46'),
+    'claude-sonnet-4-6[1m]': ('sonnet-1m','sonnet1m','sonnet[1m]'),
+    'claude-haiku-4-5-20251001': ('haiku-4-5','haiku45','haiku4-5','claude-haiku-4-5'),
+    'claude-fable-5-1': ('fable-5-1','fable51','fable5-1'),
+}
+
+
+def normalize_model(raw: str = '', *, aliases: dict[str,str] | None = None) -> str:
+    """The launcher's existing spelling policy, with captured alias identities.
+
+    A shell passes its once-resolved family aliases so warm-pool matching and
+    launch cannot observe different catalogs. Python callers may resolve them
+    through the existing catalog directly. This never authorizes an account.
+    """
+    if not isinstance(raw,str):raise ValueError('invalid Claude model ID')
+    value = re.sub(r'[ \t\r\n\v\f]','',raw.lower())
+    if not value.startswith('claude-'):value = value.replace('.','-')
+    if not value or value in BUNDLED_ALIASES:
+        family = value or DEFAULT_ALIAS
+        if aliases is None:return resolve_alias(family).model
+        if aliases == dict.fromkeys(BUNDLED_ALIASES, ''):
+            raise ValueError('Error: Claude model aliases were not resolved (load_claude_aliases must run first)')
+        if set(aliases)!=set(BUNDLED_ALIASES) or not all(is_model_id(model) for model in aliases.values()):
+            raise ValueError('invalid captured Claude aliases')
+        return aliases[family]
+    for model,spellings in VERSIONED_ALIASES.items():
+        if value==model or value in spellings:return model
+    if not is_model_id(value):raise ValueError('invalid Claude model ID')
+    return value
 
 
 @dataclass(frozen=True)
@@ -408,8 +449,14 @@ def main(argv: list[str]) -> int:
             print("\t".join((family, target.model, target.source, target.note)))
     elif argv == ["note"]:
         print(alias_note())
+    elif argv[:1] == ['normalize'] and len(argv) in (2,6):
+        aliases = dict(zip(BUNDLED_ALIASES,argv[2:])) if len(argv)==6 else None
+        try:print(normalize_model(argv[1],aliases=aliases))
+        except ValueError as exc:
+            print(str(exc),file=sys.stderr)
+            return 2
     else:
-        print("usage: claude_models.py aliases [--claude-bin PATH] | note", file=sys.stderr)
+        print("usage: claude_models.py aliases [--claude-bin PATH] | note | normalize MODEL [OPUS SONNET HAIKU FABLE]", file=sys.stderr)
         return 2
     return 0
 

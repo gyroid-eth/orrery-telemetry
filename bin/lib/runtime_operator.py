@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 API = runpy.run_path(str(ROOT/'bin/lib/runtime_client.py'))
 # Initialize the shared pure contracts before accepting concurrent operations.
 API['operator_schemas']()
+_UNSET = object()
 
 
 class RuntimeOperator:
@@ -53,7 +54,7 @@ class RuntimeOperator:
         self.api['validate_client_name'](name)
         return self.clients_parent/name/self.api['CLIENT_LAYOUT']['context']
 
-    def client(self, name):
+    def client(self, name, *, read_only=False):
         path=self.path_for(name)
         pending=path.parent/self.api['CLIENT_LAYOUT']['registration']
         recovery=None
@@ -61,7 +62,7 @@ class RuntimeOperator:
             saved=self.api['read_json'](pending)
             if saved.get('row'):
                 recovery=('finalize-create',saved['row']['agent_id'])
-        client=self.api['RuntimeClient'](path,recovery=recovery)
+        client=self.api['RuntimeClient'](path,recovery=recovery,read_only=read_only)
         if client.binding!=self.binding or client.runtime!=self.runtime:
             raise self.api['ClientError']('CHILD_BINDING_MISMATCH')
         return client
@@ -193,6 +194,16 @@ class RuntimeOperator:
 
     def create(self, name, *, agent_name, program, model):
         self.api['validate_client_name'](name)
+        path=self.path_for(name)
+        admission=None
+        if isinstance(model,str) and model.startswith('local:'):
+            if not path.exists() and not path.is_symlink():
+                raise self.api['ClientError']('LOCAL_MODEL_INTENT_OWNER_REQUIRED')
+            admission=self.client(name,read_only=True).check_local_registration(agent_name,program,model)
+        elif path.exists() or path.is_symlink():
+            # A configured local owner cannot be reinterpreted as a cloud
+            # request merely because the registration caller changed a flag.
+            admission=self.client(name,read_only=True).check_local_registration(agent_name,program,model)
         lookup=self.lookup(agent_name)
         known=lookup['matches']
         terminal={row['client_name'] for row in lookup['diagnostics'] if row['reason']=='REGISTRATION_OWNER_CONFLICT'}
@@ -208,13 +219,27 @@ class RuntimeOperator:
             if client.identity and not client.outputs['registration'].exists():
                 if client.outputs['child'].exists():raise self.api['ClientError']('CLIENT_ROOT_IS_CHILD')
                 metadata=client.registration_metadata()
-                if client.identity.get('name')!=agent_name or metadata.get('program')!=program or metadata.get('model')!=model:
+                registered_model=admission['projection']['model'] if admission is not None else model
+                if client.identity.get('name')!=agent_name or metadata.get('program')!=program or metadata.get('model')!=registered_model:
                     raise self.api['ClientError']('EXISTING_IDENTITY_REQUIRED')
                 return self.status(name)
             client.create(agent_name,program,model)
         return self.status(name)
 
-    def spawn(self, name, *, agent_name, program, model, cwd, expected_digest=None):
+    def spawn(self, name, *, agent_name=_UNSET, program=_UNSET, model=_UNSET, cwd=_UNSET,
+              expected_digest=None, caller=_UNSET, parent_client_name=None,
+              prepare_only=False, task_delivery=_UNSET):
+        if type(prepare_only) is not bool:
+            raise self.api['ClientError']('LOCAL_MODEL_CALLER_INVALID')
+        minimal = (agent_name,program,model,cwd)
+        if caller is not _UNSET:
+            if any(value is not _UNSET for value in minimal):
+                raise self.api['ClientError']('LOCAL_MODEL_CALLER_INVALID')
+            return self._spawn_caller(name,caller,parent_client_name=parent_client_name,
+                prepare_only=prepare_only,task_delivery=task_delivery,expected_digest=expected_digest)
+        if (any(value is _UNSET for value in minimal) or parent_client_name is not None
+                or task_delivery is not _UNSET):
+            raise self.api['ClientError']('LOCAL_MODEL_CALLER_INVALID')
         if expected_digest is not None:
             client=self.client(name)
             with client.operation_mutex():
@@ -223,7 +248,8 @@ class RuntimeOperator:
                     if not pending.exists() and not pending.is_symlink():raise self.api['ClientError']('TARGET_UNAVAILABLE')
                     if hashlib.sha256(self.api['read_private'](pending)).hexdigest()!=expected_digest:
                         raise self.api['ClientError']('REGISTRATION_PENDING_CONFLICT')
-                return self.spawn(name,agent_name=agent_name,program=program,model=model,cwd=cwd)
+                return self.spawn(name,agent_name=agent_name,program=program,model=model,cwd=cwd,
+                                  prepare_only=prepare_only)
         result=self.create(name,agent_name=agent_name,program=program,model=model)
         if not result['ok'] or result['stage']=='launch_present':return result
         client=self.client(name)
@@ -234,11 +260,59 @@ class RuntimeOperator:
         if provider in ('claude','codex'):delivery.instruction_configure(provider)
         try:self.configured(client)
         except (OSError,ValueError,RuntimeError):return self.status(name)
-        delivery.start(provider,cwd,detached=True)
+        if not prepare_only:delivery.start(provider,cwd,detached=True)
+        return self.status(name)
+
+    def _spawn_caller(self, name, caller, *, parent_client_name, prepare_only,
+                      task_delivery, expected_digest):
+        from runtime_local_launch import validate_caller_request, admit_caller_request
+        caller=validate_caller_request(caller)
+        if not isinstance(parent_client_name,str):
+            raise self.api['ClientError']('CLIENT_NAME_INVALID')
+        self.api['validate_client_name'](parent_client_name)
+        if parent_client_name==name:raise self.api['ClientError']('CLIENT_ROOT_OVERLAP')
+        delivery_kind=caller.get('task_delivery','mail')
+        if task_delivery is not _UNSET and task_delivery!=delivery_kind:
+            raise self.api['ClientError']('LOCAL_MODEL_INTENT_CHANGED')
+        path=self.path_for(name)
+        if not path.exists() and not path.is_symlink():
+            raise self.api['ClientError']('LOCAL_MODEL_INTENT_OWNER_REQUIRED')
+        target=self.client(name,read_only=True)
+        # Initial admission is non-creating. Root preparation takes C itself,
+        # so never hold an outer C while entering prepare_child. Its existing
+        # child C repeats this exact admission before registration writes.
+        checked=admit_caller_request(target,caller)
+        digest=checked['intent']['intent_digest']
+        parent=self.client(parent_client_name,read_only=True)
+        if not parent.identity or parent.identity.get('name')!=caller['parent']:
+            raise self.api['ClientError']('CHILD_PARENT_MISMATCH')
+        program={'codex':'codex','claude':'claude-code'}[caller['provider']]
+        options={**caller,'child_client_name':name,'program':program,
+            'workdir':caller['cwd'],'task_file':caller['task'],
+            'parsed_tools':caller['tools'],'prepare_only':True,
+            'embed_task':delivery_kind=='embedded'}
+        prepared=parent.prepare_child(options,_caller=caller,_intent_digest=digest,
+                                       _registration_sha256=expected_digest)
+        if prepared['client_config']!=str(path):
+            raise self.api['ClientError']('CHILD_BINDING_MISMATCH')
+        # Registration activated this context; never reuse its old raw or
+        # identity snapshot, and recheck the same full intent before task IO.
+        target=self.client(name)
+        with target.operation_mutex():
+            admit_caller_request(target,caller,expected_digest=digest)
+            target._prepare_child_launch(caller['task'],embed_task=delivery_kind=='embedded')
+        if not prepare_only:
+            delivery=self.api['runtime_delivery'](target)
+            self.configured(target)
+            delivery.start(caller['provider'],caller['cwd'],detached=caller['detached'],
+                           expected_intent_digest=digest)
         return self.status(name)
 
     def resume(self, name, *, prepare_only=False):
         client=self.client(name)
+        if client.identity:
+            metadata=client.registration_metadata()
+            client.check_local_registration(client.identity['name'],metadata.get('program'),metadata.get('model'),metadata=True)
         current=self.status(name)
         if current['stage']!='launch_present':
             return current

@@ -53,7 +53,7 @@ ags_registration_diag_write_file() {
     *) stage="register_agent" ;;
   esac
   case "$reason" in
-    credential-unavailable|transport-failed|http-rejected|rpc-error|tool-error|invalid-response|identity-changed|input-missing|library-unavailable|unknown) ;;
+    credential-unavailable|transport-failed|http-rejected|rpc-error|tool-error|invalid-response|identity-changed|input-missing|library-unavailable|local-preview-protected|local-state-unavailable|unknown) ;;
     *) reason="unknown" ;;
   esac
   [[ "$curl_exit" =~ ^[0-9]+$ ]] || curl_exit=""
@@ -84,7 +84,7 @@ ags_registration_diag_load_file() {
         ;;
       reason)
         case "$value" in
-          credential-unavailable|transport-failed|http-rejected|rpc-error|tool-error|invalid-response|identity-changed|input-missing|library-unavailable|unknown) AGS_REGISTRATION_DIAG_REASON="$value" ;;
+          credential-unavailable|transport-failed|http-rejected|rpc-error|tool-error|invalid-response|identity-changed|input-missing|library-unavailable|local-preview-protected|local-state-unavailable|unknown) AGS_REGISTRATION_DIAG_REASON="$value" ;;
         esac
         ;;
       curl_exit)
@@ -551,8 +551,50 @@ ags_registration_token_file() {
   printf '%s/agent_token_%s\n' "$runtime_dir" "$key"
 }
 
+ags_ordinary_owner_guard() {
+  # Denial only: this does not parse/approve an intent or authenticate an owner.
+  # New local consumers validate their Store and canonical pair explicitly.
+  local agent_name="$1" runtime_dir state_file pending_file guard_status
+  [[ "$agent_name" =~ ^[A-Za-z0-9_.-]+$ ]] || return 0
+  runtime_dir="$(ags_registration_runtime_dir)"
+  state_file="$runtime_dir/child-agents/$agent_name.json"
+  pending_file="$runtime_dir/child-agents/.$agent_name.registration-pending.json"
+  if [[ ! -e "$state_file" && ! -L "$state_file" && ! -e "$pending_file" && ! -L "$pending_file" ]]; then
+    return 0
+  fi
+  guard_status=0
+  python3 - "$state_file" "$pending_file" <<'PY' || guard_status=$?
+import json,os,stat,sys
+def read(path):
+    try:fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    except FileNotFoundError:return {}
+    try:
+        info=os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_size>1048576:raise ValueError()
+        value=json.loads(os.read(fd,1048577).decode('utf-8'))
+        if type(value) is not dict:raise ValueError()
+        return value
+    finally:os.close(fd)
+try:
+    state,pending=read(sys.argv[1]),read(sys.argv[2])
+    protected='kind' in pending or any(k in state for k in ('launch_intent','local_registration','local_execution','local_resolution'))
+except Exception:raise SystemExit(2) from None
+raise SystemExit(10 if protected else 0)
+PY
+  if [[ "$guard_status" != 0 ]]; then
+    if [[ "$guard_status" == 10 ]]; then
+      ags_registration_diag_set local-token local-preview-protected
+    else
+      ags_registration_diag_set local-token local-state-unavailable
+    fi
+    return 1
+  fi
+  return 0
+}
+
 ags_load_registration_token() {
   local agent_name="$1" token_file token
+  ags_ordinary_owner_guard "$agent_name" || return 1
   token_file="$(ags_registration_token_file "$agent_name")" || return 1
   [[ -f "$token_file" ]] || return 1
   IFS= read -r token < "$token_file" || true
@@ -561,13 +603,19 @@ ags_load_registration_token() {
 }
 
 ags_store_registration_token() {
-  local agent_name="$1" registration_token="$2" runtime_dir token_file
+  local agent_name="$1" registration_token="$2" runtime_dir token_key
   [[ -n "$agent_name" && -n "$registration_token" ]] || return 0
+  ags_ordinary_owner_guard "$agent_name" || return 1
   runtime_dir="$(ags_registration_runtime_dir)"
-  token_file="$(ags_registration_token_file "$agent_name")" || return 1
-  mkdir -p "$runtime_dir" || return 1
-  ( umask 077 && printf '%s' "$registration_token" > "$token_file" ) || return 1
-  chmod 600 "$token_file" 2>/dev/null || true
+  token_key="$(ags_agent_token_key "$agent_name")" || return 1
+  if "${AGENTSTACK_PYTHON:-python3}" "$AGS_REGISTER_LIB_DIR/../../hooks/child_resume.py" \
+      store-ordinary-token --runtime-dir "$runtime_dir" --agent-name "$token_key" \
+      <<<"$registration_token" >/dev/null 2>&1; then
+    return 0
+  fi
+  ags_ordinary_owner_guard "$agent_name" || return 1
+  ags_registration_diag_set local-token local-state-unavailable
+  return 1
 }
 
 # Record that ORRERY Mail granted a different identity than the one requested.
@@ -856,6 +904,10 @@ ags_register_session() {
   fi
   AGS_REQUESTED_AGENT_NAME="$agent_name"
 
+  # Before ensure_project, credentials, or a normal upsert. The dedicated
+  # preview consumer alone can finalize its saved registration request.
+  ags_ordinary_owner_guard "$agent_name" || return 1
+
   if ! ags_mcp_call_diagnosed "ensure_project" "ensure_project" "human_key=$project_key"; then
     return 1
   fi
@@ -916,10 +968,10 @@ ags_register_session() {
   registered_token="$(printf '%s' "$result" | ags_extract_registration_token)"
   [[ -n "$registered_token" ]] || registered_token="$registration_token"
   if [[ -n "$registered_token" ]]; then
+    ags_store_registration_token "$registered" "$registered_token" || return 1
     CHILD_REGISTRATION_TOKEN="$registered_token"
     AGS_REGISTERED_REGISTRATION_TOKEN="$registered_token"
     export CHILD_REGISTRATION_TOKEN
-    ags_store_registration_token "$registered" "$registered_token" || true
     ags_apply_contact_policy "$project_key" "$registered" "$registered_token"
   fi
   AGS_REGISTERED_AGENT_NAME="$registered"

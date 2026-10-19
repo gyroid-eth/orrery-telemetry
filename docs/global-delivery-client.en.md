@@ -18,6 +18,13 @@ The consumer root is agentstack_home/global-consumer/SHA256(mail_instance_id)/ag
 
 Standalone and child launch/resume use the same helper. Output slots, command, cwd and server capabilities are checked before window binding and execution. Registration and launch are distinct operations; an uncertain launch is never retried by registering another identity.
 
+Internal `execute-launch` / `provider-exec` commands terminate options with
+`--` after the fixed context, preserving even a launch nonce starting with
+`-` as a positional value. `receipt_nonce` distinguishes launch generations;
+it is not a registration token or API credential. Owner authentication still
+uses the fixed credential, and execution retains its phase, runner parent
+PID/start and trusted session-receipt checks.
+
 | Phase | Exit |
 | --- | --- |
 | planned / gated | launch-retry or launch-cancel with the current status digest |
@@ -72,6 +79,62 @@ Read status again after the operation. Abandon returns phase=abandoned/runtime_r
 If confirmed-ended is interrupted while saving live sessions, status returns operator_required=true and next_operations=[launch-resolve]. Resubmit the same confirmed-ended with a fresh digest to finish the remaining writes before a new launch. Local status and abandon also work while Mail is unreachable.
 
 The bound proxy derives server schemas by removing owner and binding inputs. Local bootstrap verifies the trusted receipt; runtime_status reports the bound runtime. Caller tokens and display names never select another owner. New windows use the existing agent_id foreign key and NULL legacy_project_id.
+
+## R3 operator full form (isolated integration in progress)
+
+The Python `RuntimeOperator.spawn` API separates the existing minimal standalone
+`agent_name/program/model/cwd` form from a delegated full form with one shared
+caller dictionary:
+
+```python
+operator.spawn("child_01", caller=caller, parent_client_name="parent", prepare_only=True)
+```
+
+The shared canonical schema validates all required fields and preserves omitted
+optional keys. Unknown keys, wrong types, or mixing full and minimal fields
+(including explicit `None`) fail before effects. Existing tools grammar validates
+selection; every caller field must match the saved intent at the configured
+fixed owner. Caller input never selects owner/root/auth/scope or re-resolves a
+model. The full form requires an explicitly configured fixed intent owner.
+
+The explicit fixed `parent_client_name` selects the parent; its canonical name
+must match `caller.parent`. A display name never discovers another credential
+or root, and parent/child root overlap is refused. Omitted transport
+`task_delivery` uses the caller field, defaulting to mail only when that field
+is absent; an explicit transport selection must agree. This does not fill
+omitted intent fields or rewrite the saved intent.
+
+`prepare_only=True` uses existing prepare_child and task preparation without
+starting a provider or tmux. Ordinary execution uses R2 and saved detached,
+without automatically configuring/approving instructions, trust or native
+permissions. Unverified real CLIs still fail with
+`LOCAL_MODEL_ADAPTER_UNSUPPORTED`. A delivery-only TEST binding is not native
+acceptance. Existing minimal standalone spawn semantics remain unchanged.
+
+Full admission is repeated under the existing child C, which is released after
+task preparation. The admitted digest also reaches R2 launch preparation and
+is checked under its C before any launch row is written: an intervening explicit
+revision cannot select another intent for the old caller. `detached=False`
+hands the calling command to the existing R2 foreground runner.
+
+API 20 also accepts this full form at `POST /api/global/spawn`: required
+`client_name`, `parent_client_name`, `caller`, `prepare_only`, with optional
+`expected_digest` and `task_delivery`. Never mix it with the existing minimal
+HTTP fields. `caller.task` is the absolute path of an approved task **file**,
+not the legacy NEW AGENT task body. The fixed server context and existing HTTP
+operator admission lead through actual `do_spawn` to the same operator. Existing
+roots still guard cwd, but the full caller literal is not canonicalized into a
+matching approval or backfilled from its owner. Malformed inputs return HTTP 400,
+intent/identity/parent mismatch HTTP 409, and unverified native HTTP 503, with fixed reasons.
+HTTP rejects `prepare_only:false` plus `caller.detached:false` before effects with
+HTTP 400 `HTTP_FOREGROUND_UNSUPPORTED`, without changing detached. `prepare_only:true`
+can still prepare the task with detached false. The Python/CLI foreground runner
+contract above is unchanged. Minimal HTTP schema and successful behavior, and
+legacy semantics, stay unchanged. Shared refusal classification improves minimal
+`LOCAL_MODEL_IDENTITY_MISMATCH` and `LOCAL_MODEL_INTENT_CHANGED` from HTTP 503 to 409
+(an API 20 compatibility difference); see the [HTTP format](api.en.md).
+`global_spawn_full_caller:1` advertises only this delivery entry, never native
+approval. UI, catalog/status and full five-entry acceptance remain separate gates.
 
 ## Codex hook trust
 
@@ -200,7 +263,7 @@ One existing pending record stores name/program/model/token/binding; only that s
 
 For an existing foreign owner, compute the pending file's SHA-256 and explicitly invoke `registration-abandon --client-name SLUG --expected-digest DIGEST`. Only verified foreign ownership permits a terminal record; it neither registers another name nor adopts that owner. Resend an unsent/unknown intent; finalize a proven owned row. Terminal roots are not automatically reset: use a new root for a new identity.
 
-`POST /api/global/spawn` shares this core and validates cwd against existing spawn roots. It explicitly configures provider instructions, without approving Codex trust. Missing configuration returns registered_unconfigured. `POST /api/global/resume` reuses the root's existing launch/session and creates no next launch while operator resolution is pending. If disk saving fails after network success, return through status to the same pending/finalize entry.
+`POST /api/global/spawn` shares this core and validates cwd against existing spawn roots. Its existing minimal form explicitly configures provider instructions, without approving Codex trust. Missing configuration returns registered_unconfigured. The full form above adds no configuration/approval and compares the same caller against its configured owner. `POST /api/global/resume` reuses the root's existing launch/session and creates no next launch while operator resolution is pending. If disk saving fails after network success, return through status to the same pending/finalize entry.
 
 
 Name lookup rejects an existing Mail name with no matching client root as `NAME_CONFLICT` before creating a root or pending record. `clients.name_agent_id` exposes that read result; `diagnostics` reports each unavailable root independently. Such roots remain unusable, while unrelated names and roots can proceed. Terminal pending records retain their known name and owner-conflict evidence and prevent name reuse. Retired identities are checked through the same private owner inspection.

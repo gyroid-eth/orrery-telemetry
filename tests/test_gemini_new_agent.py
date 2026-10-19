@@ -1193,7 +1193,7 @@ def test_broken_extension_keeps_canonical_dashboard_available(tmp_path):
     from _installed_client_payload import copy_client_library
     copy_client_library(tmp_path)
     dashboard = tmp_path / "dashboard"
-    dashboard.mkdir()
+    dashboard.mkdir(exist_ok=True)
     for name in ("provider_server.py", "server.py", "index.html"):
         (dashboard / name).write_bytes((ROOT / "dashboard" / name).read_bytes())
     (dashboard / "gemini_provider_runtime.py").write_text(

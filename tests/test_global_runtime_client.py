@@ -53,6 +53,9 @@ def prepared(monkeypatch):
         with connection(Path(c['database'])) as db:
             row = dict(db.execute('SELECT * FROM agents WHERE id=1').fetchone())
         config['identity']['credential_generation'] = row['credential_generation']
+        # Named wrappers now require the admitted canonical global name, not
+        # the legacy migration label. Direct ID-based observe stays rename-safe.
+        config['identity']['name'] = row['name']
         private(client_root / 'runtime-client.json', config)
         private(local_root(config) / 'credential.json', {'kind': 'orrery-global-credential-v1', **state['binding'],
              **config['identity'], 'registration_token': row['registration_token']})
@@ -96,7 +99,7 @@ def run(state, tool, *args, bash=False, extra=None):
                           cwd=state['root'], timeout=30)
 
 
-def test_real_s1_reconnect_ignores_old_scope_and_name(prepared):
+def test_real_s1_reconnect_ignores_old_scope_but_wrapper_requires_its_target_name(prepared):
     c = client(prepared)
     before = c.call('health_check')['mutation_revision']
     row = c.reconnect(program='fixture', model='fixture')
@@ -105,6 +108,8 @@ def test_real_s1_reconnect_ignores_old_scope_and_name(prepared):
     assert c.call('health_check')['mutation_revision'] == before + 1
     assert c.local_owner() == prepared['token']
     r = run(prepared, 'bin/agentstack-reregister', 'UnrelatedName', bash=True)
+    assert r.returncode != 0 and 'REGISTRATION_IDENTITY_MISMATCH' in r.stderr
+    r = run(prepared, 'bin/agentstack-reregister', row['name'], bash=True)
     assert r.returncode == 0, r.stderr
     assert row['name'] in r.stdout
     assert prepared['token'] not in r.stdout + r.stderr
@@ -141,7 +146,7 @@ def test_old_wrapper_restart_fenced_before_any_registration(prepared, change, mo
                   'epoch': ('authority_epoch', 'stale'), 'root': ('runtime_root', '/old/root')}[change]
     authority[key] = value
     private(Path(c['authority']), authority)
-    r = run(prepared, 'bin/agentstack-reregister', 'Ignored', bash=True)
+    r = run(prepared, 'bin/agentstack-reregister', c['identity']['name'], bash=True)
     assert r.returncode != 0
     assert ('WRITER_FENCED' if mode == 'global' else 'LEGACY_CONTEXT_REQUIRES_PR7') in r.stderr
 
@@ -763,7 +768,7 @@ def test_installed_payload_reconnects_from_its_own_root(prepared):
 
     config = {**prepared['client_config'], 'wrapper_root': str(installed)}
     private(prepared['client_path'], config)
-    r = subprocess.run(['/bin/bash', str(installed / 'bin/agentstack-reregister'), 'ObsoleteName', 'codex', 'fixture'],
+    r = subprocess.run(['/bin/bash', str(installed / 'bin/agentstack-reregister'), config['identity']['name'], 'codex', 'fixture'],
                        env={**os.environ, 'PATH': str(ROOT / '.venv/bin') + ':' + os.environ['PATH']},
                        text=True, capture_output=True, timeout=30)
     assert r.returncode == 0, r.stderr
@@ -969,9 +974,9 @@ def metadata_row(state):
 @pytest.mark.parametrize('source', ['position', 'environment'])
 def test_reregister_respects_explicit_metadata(prepared, source):
     if source == 'position':
-        result = run(prepared, 'bin/agentstack-reregister', 'obsolete-name', 'claude-code', 'explicit-model', bash=True)
+        result = run(prepared, 'bin/agentstack-reregister', prepared['client_config']['identity']['name'], 'claude-code', 'explicit-model', bash=True)
     else:
-        result = run(prepared, 'bin/agentstack-reregister', 'obsolete-name', bash=True,
+        result = run(prepared, 'bin/agentstack-reregister', prepared['client_config']['identity']['name'], bash=True,
                      extra={'AGENTSTACK_REREGISTER_PROGRAM': 'claude-code',
                             'AGENTSTACK_REREGISTER_MODEL': 'explicit-model'})
     assert result.returncode == 0, result.stderr
@@ -1178,7 +1183,7 @@ def test_client_output_in_mail_root_or_alias_is_rejected(prepared):
 
 def test_reregister_observe_only_has_distinct_output_and_status(prepared):
     before = metadata_row(prepared)
-    result = run(prepared, 'bin/agentstack-reregister', 'obsolete-name', bash=True)
+    result = run(prepared, 'bin/agentstack-reregister', prepared['client_config']['identity']['name'], bash=True)
     assert result.returncode == 3
     assert 'observed' in result.stdout and 'registration not refreshed; pass program/model' in result.stdout
     assert 'registered' not in result.stdout
@@ -1231,7 +1236,7 @@ def test_waiting_client_survives_another_process_metadata_update(prepared, monke
             }, indent=2, sort_keys=True)
         fetch_checked('before-metadata-update')
         registration_started = time.monotonic()
-        result = run(prepared, 'bin/agentstack-reregister', 'obsolete-name', 'claude-code', 'changed-model', bash=True)
+        result = run(prepared, 'bin/agentstack-reregister', prepared['client_config']['identity']['name'], 'claude-code', 'changed-model', bash=True)
         diagnostics['registration_seconds'] = time.monotonic() - registration_started
         assert result.returncode == 0, result.stderr
         fetch_checked('after-metadata-update')
@@ -1447,7 +1452,7 @@ def test_documented_codex_recovery_refreshes_without_saved_metadata(prepared):
     command = next(line for line in template.splitlines()
                    if 'bin/agentstack-reregister "$AGENT_NAME"' in line)
     assert command.endswith('"$AGENT_NAME" "${AGENTSTACK_REREGISTER_PROGRAM:-codex}"')
-    result = run(prepared, 'bin/agentstack-reregister', 'OldAlpha', 'codex', bash=True,
+    result = run(prepared, 'bin/agentstack-reregister', prepared['client_config']['identity']['name'], 'codex', bash=True,
                  extra={'AGENTSTACK_CODEX_MODEL': 'documented-model'})
     assert result.returncode == 0 and 'registered' in result.stdout
     from agentstack_mail.namespace_state_io import connection

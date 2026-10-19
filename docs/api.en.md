@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":19}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":21}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -83,6 +83,56 @@ API 17 adds the global dashboard reply view and these admitted, read-only routes
 
 Instruction `data` follows the shared [status schema](../bin/lib/instruction_contract.json): provider, target_path, findings, checked_at, disk_state, session_state, evidence_kind and reason. Findings are the existing canonical finding definition. Session-start candidate hashes do not prove effective instruction loading; a cwd change is not a reload. All three routes use the same operator admission as Mail reads.
 
+
+### Legacy local-preview entry checks (API 21, work in progress)
+
+Legacy `POST /api/spawn` type-checks an optional boolean `preview`.
+This creates no approval and advertises no native capability. The execution
+consumer is not connected at this checkpoint, so even an explicitly configured
+preview stops before registration with `LOCAL_MODEL_ADAPTER_UNSUPPORTED`.
+A missing intent returns `LOCAL_MODEL_INTENT_OWNER_REQUIRED`; saved preview
+without an explicit flag returns `LOCAL_MODEL_PREVIEW_CONFIRMATION_REQUIRED`.
+Cloud registration cannot overwrite a configured local child owner.
+Ordinary cloud defaults/successful behavior and the global schema are unchanged.
+
+### R3 full-caller delivery entry (API 20, isolated global)
+
+`capabilities.global_spawn_full_caller:1` adds this `POST /api/global/spawn` form.
+The existing minimal `client_name/name/program/model/cwd/expected_digest?` schema
+and successful behavior are unchanged. The only optional transport fields are `expected_digest` and `task_delivery`.
+
+```json
+{
+  "client_name":"child_01", "parent_client_name":"parent", "prepare_only":true,
+  "caller":{
+    "provider":"codex", "model":"local:office", "cwd":"/approved/work",
+    "task":"/approved/task.md", "name":"ProfileChild", "parent":"ProfileParent",
+    "tools":{}, "base":"mail-only", "clear_tools":false, "detached":true,
+    "resources":[], "worktree":false, "chrome":false
+  }
+}
+```
+
+The shared canonical schema validates thirteen required caller fields and optional
+`effort`, `strict_output_cap`, `task_delivery`; optional absence must also match
+the approved intent. Task is an approved file path, not body text. The explicit
+fixed parent client is cross-checked against its display name; names cannot select
+credentials. Root/auth/scope/owner paths are not inputs. Existing cwd roots apply,
+without rewriting a full literal into a matching approval. Actual `do_spawn` calls
+the same operator after all HTTP admission, never legacy registration in global.
+Unknown/mixed/ill-typed transport fields return HTTP 400 `QUERY_INVALID`; malformed caller
+HTTP 400 `LOCAL_MODEL_CALLER_INVALID`; invalid tools HTTP 400 `CHILD_TOOLS_INVALID`; intent,
+identity or parent mismatch HTTP 409 with fixed reasons. Unverified CLIs return HTTP 503
+`LOCAL_MODEL_ADAPTER_UNSUPPORTED`. The shared refusal classification also changes
+minimal-input `LOCAL_MODEL_IDENTITY_MISMATCH` and `LOCAL_MODEL_INTENT_CHANGED`
+from HTTP 503 to 409, an intentional API 20 compatibility difference.
+A full form combining `prepare_only:false` with `caller.detached:false` is rejected
+before effects with HTTP 400 `HTTP_FOREGROUND_UNSUPPORTED`. HTTP cannot own the
+foreground runner and never silently changes detached. `prepare_only:true` is
+allowed even with detached false and publishes the task without execution.
+An explicitly configured owner is required; HTTP approves no settings
+or trust. This capability does not claim native support or complete NEW AGENT,
+catalog/status integration. See the [launch contract](global-delivery-client.en.md).
 
 ### Bundled Mail identity (API 12)
 
@@ -636,6 +686,14 @@ Identity registration itself is not deleted after mail, token, or launcher failu
 ```
 
 Do not retry the same request unconditionally; inspect the retained identity.
+
+Canonical credential/state cleanup and recovery recheck under the existing
+per-name resume lock. If a same-name preview owner/tagged pending appeared in
+the meantime, or observation is unavailable, those files remain and the result
+adds `owner_namespace_preserved: true` and `cleanup_child_agent_can_recover: false`.
+It does not recommend ordinary cleanup as recovery. The failed launcher's own
+one-shot handoff is separate; when killed cleanup leaves it as the only usable
+recovery credential, the response retains it and reports only its nonsecret path.
 
 Spawn uses `AGENTSTACK_MCP_URL` from generated `env.sh`, falling back to `http://127.0.0.1:18765/mcp` when unset. The default ORRERY Mail transport uses no bearer. Because it shares this value with launchers and hooks, update `env.sh` when changing the endpoint.
 

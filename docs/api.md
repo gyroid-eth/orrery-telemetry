@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":19}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":21}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -83,6 +83,53 @@ API 17 は global dashboard の返信表示と次の認可済み読取 route を
 
 指示の `data` は共通の [status schema](../bin/lib/instruction_contract.json) の provider・target_path・findings・checked_at・disk_state・session_state・evidence_kind・reason です。finding は既存の1定義を参照します。起動時の候補 hash は実際に読み込まれた指示の証明ではなく、cwd の変更も再読込ではありません。3 route とも Mail 読取と同じ operator admission を通ります。
 
+
+### Legacy local preview の入口検査（API 21・実装途中）
+
+legacy の `POST /api/spawn` は任意の boolean `preview` を型検査します。
+これは承認の作成や native 対応の capability ではありません。現段階では local の
+実行 consumer が未接続なので、保存済みの明示 preview でも
+`LOCAL_MODEL_ADAPTER_UNSUPPORTED` で登録前に停止します。
+intent が無ければ `LOCAL_MODEL_INTENT_OWNER_REQUIRED`、保存 preview に明示の
+旗が無ければ `LOCAL_MODEL_PREVIEW_CONFIRMATION_REQUIRED`。
+通常の cloud 登録が local の設定済み child-state を上書きする要求も拒否します。
+通常 cloud の省略値・成功経路と global の schema は変えません。
+
+### R3 full caller の配送入口（API 20・隔離 global）
+
+`capabilities.global_spawn_full_caller:1` は `POST /api/global/spawn` の追加形式です。
+既存の `client_name/name/program/model/cwd/expected_digest?` の最小入力の schema と正常挙動は維持します。
+full form は次の形で、任意の transport 欄は `expected_digest` と `task_delivery` だけです。
+
+```json
+{
+  "client_name":"child_01", "parent_client_name":"parent", "prepare_only":true,
+  "caller":{
+    "provider":"codex", "model":"local:office", "cwd":"/approved/work",
+    "task":"/approved/task.md", "name":"ProfileChild", "parent":"ProfileParent",
+    "tools":{}, "base":"mail-only", "clear_tools":false, "detached":true,
+    "resources":[], "worktree":false, "chrome":false
+  }
+}
+```
+
+caller の13必須欄と任意の `effort`・`strict_output_cap`・`task_delivery` は
+共有 canonical schema で検査し、任意欄の省略も承認済み intent と照合します。
+task は本文でなく承認済み file path。親は明示した固定 client から選び、表示名を
+lookup して資格を選びません。root/auth/scope/owner path は入力できません。
+cwd の roots 検査は既存のままですが、full literal を書き換えて承認に合わせません。
+全 HTTP admission を通った実 `do_spawn` が同じ operator を呼び、global から
+旧登録へは流れません。未知欄・混在・型違いは400 `QUERY_INVALID`、caller 構造は400
+`LOCAL_MODEL_CALLER_INVALID`、tools は400 `CHILD_TOOLS_INVALID`、intent/identity/親の
+不一致は409の固定 reason です。未検証 CLI は503 `LOCAL_MODEL_ADAPTER_UNSUPPORTED`。
+共通の拒否分類により、最小入力の `LOCAL_MODEL_IDENTITY_MISMATCH`・
+`LOCAL_MODEL_INTENT_CHANGED` も従来の503から409になります（API 20 の意図した互換差）。
+full form の `prepare_only:false` と `caller.detached:false` の組合せは、副作用前に400
+`HTTP_FOREGROUND_UNSUPPORTED` で拒否します。HTTP は foreground runner を所有せず、
+detached を勝手に変更しません。`prepare_only:true` は detached が false でも許可し、
+task 準備までで実行しません。構成済み owner が必須で、HTTP は
+設定や trust を承認しません。これは native 対応や NEW AGENT/catalog/status の完成を
+表す capability ではありません。[起動の契約](global-delivery-client.md)を参照してください。
 
 ### 同梱 Mail の識別子（API 12）
 
@@ -638,6 +685,12 @@ non-git directory では Codex が trust dialog を出すことがあります�
 ```
 
 を含めます。同じ request を無条件 retry せず、残った identity を確認してください。
+
+failure後のcanonical credential/stateの削除・回復は、既存の名前resume lockで再検査します。
+同名のpreview owner/new pendingが後から作られた場合や観測不能時はそのfilesを残し、
+`owner_namespace_preserved: true` と `cleanup_child_agent_can_recover: false` を返します。
+通常cleanupで回復できるとは案内しません。自分のone-shot handoffの回収とは区別し、
+killed cleanupでそれが唯一の回復用credentialなら、従来どおり非秘密の保存pathだけを返します。
 
 spawn は generated `env.sh` の `AGENTSTACK_MCP_URL`（未設定時は `http://127.0.0.1:18765/mcp` に fallback）を使います。既定の ORRERY Mail transport は bearer を使いません。launcher / hook と同じ値を共有するので、endpoint を変更する場合は `env.sh` 側を更新してください。
 

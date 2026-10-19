@@ -67,9 +67,14 @@ program="claude-code"
 model="${AGENTSTACK_CLAUDE_MODEL:-claude-code}"
 task_description="Delegated child agent"
 token_file_out=""
+preview_requested=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --preview)
+      preview_requested=true
+      shift
+      ;;
     --project-key)
       project_key="${2:-}"
       shift 2
@@ -110,6 +115,16 @@ done
 [[ -n "$model" ]] || die "--model is required"
 [[ -n "$token_file_out" ]] || die "--token-file-out is required"
 
+legacy_local_registration_gate() {
+  "${AGENTSTACK_PYTHON:-python3}" "$SCRIPT_DIR/lib/runtime_legacy_preview.py" \
+    "--runtime=${AGENTSTACK_RUNTIME_DIR:-${AGENTSTACK_HOME:-$HOME/.agentstack}/runtime}" \
+    "--name=$agent_name" "--program=$program" "--model=$model" "--preview=$preview_requested"
+}
+
+# Explicit local/preview must stop before even loading a parent credential.
+if [[ "$model" == local:* || "$preview_requested" == true || -n "$agent_name" ]]; then
+  legacy_local_registration_gate || exit $?
+fi
 ags_mail_load_token
 
 # --name is optional. Top-level registration has always drawn names from the
@@ -128,6 +143,9 @@ elif ! ags_has_scientist_suffix "$agent_name"; then
     die "refusing off-list name '$agent_name' (AGENTSTACK_STRICT_AGENT_NAMES=1)"
   fi
 fi
+
+# A picked or explicit cloud name must not overwrite a configured local owner.
+legacy_local_registration_gate || exit $?
 
 # Ignore any parent/session token inherited from the caller. This helper always
 # creates a child-owned token and uses that exact value for registration.
@@ -202,68 +220,32 @@ persist_codex_registration_state() {
   state_file="$runtime_dir/child-agents/$registered_name.json"
   "${AGENTSTACK_PYTHON:-python3}" - "$source_token" "$canonical_token" \
       "$state_file" "$registered_name" "$numeric_id" "$registered_project" \
-      "$registered_program" <<'PY'
-import json
-import os
+      "$registered_program" "$SCRIPT_DIR/../hooks/child_resume.py" <<'PY'
 import pathlib
-import stat
+import runpy
+import secrets
 import sys
 
-source, token_file, state_file, name, numeric_id, project, program = sys.argv[1:8]
+source, token_file, state_file, name, numeric_id, project, program, helper = sys.argv[1:9]
 source_path = pathlib.Path(source)
-token_path = pathlib.Path(token_file)
-state_path = pathlib.Path(state_file)
-
-flags = os.O_RDONLY
-if hasattr(os, "O_NOFOLLOW"):
-    flags |= os.O_NOFOLLOW
-descriptor = os.open(source_path, flags)
+# Reuse the normal launcher's publication/undo transaction and its SAME name
+# lock. A local namespace created while register was in flight must not be
+# overwritten by the ordinary five-field receipt. No HTTP runs under this lock.
+api = runpy.run_path(helper)
+runtime = pathlib.Path(token_file).parent
+generation = secrets.token_hex(16)
 try:
-    info = os.fstat(descriptor)
-    if not stat.S_ISREG(info.st_mode):
-        raise ValueError("token handoff is not a regular file")
-    if stat.S_IMODE(info.st_mode) & 0o077:
-        raise PermissionError("token handoff permissions must be 0600")
-    token = os.read(descriptor, 4097).decode("utf-8").strip()
-finally:
-    os.close(descriptor)
-if not token or len(token) > 4096:
-    raise ValueError("token handoff is empty or too large")
-
-token_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-os.chmod(token_path.parent, 0o700)
-os.chmod(state_path.parent, 0o700)
-token_tmp = token_path.with_name(token_path.name + f".tmp.{os.getpid()}")
-state_tmp = state_path.with_name(state_path.name + f".tmp.{os.getpid()}")
-try:
-    with open(token_tmp, "x", encoding="utf-8") as handle:
-        handle.write(token)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chmod(token_tmp, 0o600)
-    state = {
-        "agent_id": int(numeric_id),
-        "agent_name": name,
-        "program": program,
-        "project_key": project,
-        "registration_token": token,
-    }
-    with open(state_tmp, "x", encoding="utf-8") as handle:
-        json.dump(state, handle, separators=(",", ":"), sort_keys=True)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chmod(state_tmp, 0o600)
-    # Readers compare the two copies. A crash between replaces leaves a
-    # mismatch that is rejected rather than combining two registrations.
-    os.replace(token_tmp, token_path)
-    os.replace(state_tmp, state_path)
-    os.chmod(token_path, 0o600)
-    os.chmod(state_path, 0o600)
-finally:
-    token_tmp.unlink(missing_ok=True)
-    state_tmp.unlink(missing_ok=True)
+    binding = source_path.with_name(source_path.name + '.binding.json')
+    observed = api['_load_state'](binding)
+    if observed != {'agent_id':int(numeric_id),'agent_name':name,'project_key':project,'program':program}:
+        raise ValueError('registration binding changed')
+    api['stage_registration'](runtime, name, project_key=project, program=program,
+        generation=generation, source=source_path, binding=binding)
+    if not api['finish_registration'](runtime, name, generation=generation, rollback=False):
+        raise ValueError('registration publication changed')
+except (OSError, ValueError):
+    # Never print raw receipt/credential bytes, nor remove an unknown namespace.
+    raise SystemExit('child registration publication refused') from None
 PY
 }
 
@@ -307,7 +289,8 @@ PY
     "$registered" "$registered_id" "$project_key" "$program" "$token_file_out" \
     || die "could not persist canonical child registration token and metadata"
 else
-  ags_store_registration_token "$registered" "$effective_token" || true
+  ags_store_registration_token "$registered" "$effective_token" \
+    || die "could not persist canonical child registration token"
 fi
 
 ags_apply_contact_policy "$project_key" "$registered" "$effective_token"

@@ -125,6 +125,23 @@ def notification_eligible(message):
     return rank(message.get('importance')) >= rank(os.environ.get('AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE','low'))
 
 
+def claude_hook_settings(python, client_script, context):
+    """The existing lifecycle hooks as pure data, shared by explicit configure.
+
+    Callers supply the already-selected runtime interpreter, fixed script and
+    bound context. This does not execute hooks or choose a different lifecycle.
+    """
+    import shlex
+    def hook(operation):
+        return {'type':'command','command':shlex.join([str(python),str(client_script),
+            'entry',operation,'--context',str(context)])}
+    return {'hooks':{'SessionStart':[{'hooks':[hook('session-start')]}],
+        'PreToolUse':[{'matcher':'Edit|Write|MultiEdit|NotebookEdit','hooks':[hook('pre-edit')]}],
+        'PostToolUse':[{'matcher':'Edit|Write|MultiEdit|NotebookEdit','hooks':[hook('post-edit')]},
+                       {'hooks':[hook('notifications')]}],
+        'SessionEnd':[{'hooks':[hook('end-session')]}]}}
+
+
 class RuntimeFiles:
     def __init__(self, api):
         self.api, self.error = api, api['ClientError']
@@ -193,6 +210,36 @@ class RuntimeDelivery(RuntimeFiles):
 
     def launch(self):
         return self.local(self.launch_path, 'launch_intent')
+
+    def local_launch(self, provider, cwd, *, row=None, provider_session_id=None):
+        """Read the sole configured intent before any R2 external effect.
+
+        An existing receipt must carry its digest reference; retries never
+        resolve a new profile or silently attach current intent to an old row.
+        """
+        from local_model_auth import LocalModelError
+        from runtime_local_launch import admit_local_launch
+        try:
+            if row is not None and 'cli_acceptance' in row and not isinstance(row['cli_acceptance'],dict):
+                raise LocalModelError('LOCAL_MODEL_CLI_CHANGED')
+            return admit_local_launch(self.client,provider,str(cwd),
+                expected_digest=row.get('intent_digest') if row is not None else None,
+                expected_task_sha256=row.get('task_sha256') if row is not None else None,
+                require_receipt=row is not None,
+                _cli_acceptance=row.get('cli_acceptance') if row is not None else None,
+                operation='resume' if row is not None and row['launch_kind']=='resume' else 'spawn',
+                provider_session_id=provider_session_id)
+        except LocalModelError as exc:
+            self.fail(str(exc))
+
+    def runtime_environment(self, row):
+        """R2 owns these values in both runner and exec child, not ambient env."""
+        c=self.client
+        return {'AGENTSTACK_CLIENT_CONFIG':str(c.path),'AGENTSTACK_RUNTIME_MODE':'global',
+                'AGENTSTACK_LAUNCH_ID':row['launch_id'],'AGENTSTACK_LAUNCH_NONCE':row['receipt_nonce'],
+                'AGENTSTACK_RUNTIME_DIR':str(c.runtime_dir),'AGENTSTACK_MCP_URL':c.endpoint,
+                'AGENT_NAME':c.identity['name'],'AGENTSTACK_HOME':c.config['wrapper_root'],
+                'AGENTSTACK_AGENT_ID':str(c.identity['agent_id'])}
 
     def external_route(self, session_id, agent_id=None, *, create=False):
         helper=Path(self.client.config['wrapper_root'])/'integrations/codex_app/src/agentstack_codex_app/identity_store.py'
@@ -347,7 +394,7 @@ class RuntimeDelivery(RuntimeFiles):
                     'launch_id':launch_id, 'phase':phase, 'runtime_ready':ready, 'observation':observation,
                     'operator_resolution':saved['operator_resolution']}
 
-    def prepare_launch(self, provider, *, launch_kind='startup', cwd=None):
+    def prepare_launch(self, provider, *, launch_kind='startup', cwd=None, expected_intent_digest=None):
         c = self.client
         with c.operation_mutex():
             if self.launch_path.exists() or self.launch_path.is_symlink():
@@ -358,6 +405,15 @@ class RuntimeDelivery(RuntimeFiles):
             cwd = Path(cwd or os.getcwd()).resolve(strict=True)
             if not cwd.is_dir() or provider not in ('claude','codex','gemini','daemon'):
                 self.fail('ARGUMENTS_UNSUPPORTED')
+            local = self.local_launch(provider,cwd)
+            if expected_intent_digest is not None and (local is None
+                    or local['intent']['intent_digest']!=expected_intent_digest):
+                self.fail('LOCAL_MODEL_INTENT_CHANGED')
+            if local is not None:
+                task = self.api['read_private'](c.outputs['task']) if c.outputs['task'].exists() or c.outputs['task'].is_symlink() else None
+                observed=hashlib.sha256(task).hexdigest() if task is not None else None
+                if observed!=local['intent']['task_sha256']:
+                    self.fail('LOCAL_MODEL_TASK_CHANGED')
             _, schemas = c.capabilities()
             if 'bind_window_identity' not in schemas:
                 self.fail('CAPABILITY_UNAVAILABLE')
@@ -370,8 +426,11 @@ class RuntimeDelivery(RuntimeFiles):
             task = self.api['read_private'](c.outputs['task']) if c.outputs['task'].exists() else None
             row = {'kind':'orrery-global-launch-intent-v1', 'launch_id':str(uuid.uuid4()),
                 'receipt_nonce':secrets.token_urlsafe(32), 'phase':'planned', 'provider':provider,
-                'launch_kind':launch_kind, 'cwd':str(cwd), 'task_sha256':hashlib.sha256(task).hexdigest() if task else None,
+                'launch_kind':launch_kind, 'cwd':str(cwd), 'task_sha256':hashlib.sha256(task).hexdigest() if task is not None and (local is not None or task) else None,
                 'error':None, 'operator_resolution':None}
+            if local is not None:row['intent_digest'] = local['intent']['intent_digest']
+            if local is not None and 'cli_acceptance' in local['projection']:
+                row['cli_acceptance'] = local['projection']['cli_acceptance']
             self.save(self.launch_path,row,'launch_intent')
         self.publish_route()
         return row
@@ -572,8 +631,35 @@ class RuntimeDelivery(RuntimeFiles):
         if value is None:self.fail('PERSISTENT_EXECUTION_REQUIRED')
         return self.validate_execution(value)
 
-    def instruction_configure(self, provider):
+    def instruction_configure(self, provider, *, local_action=None, payload=None, approved_id=None):
         if provider not in ('claude','codex'):self.fail('ARGUMENTS_UNSUPPORTED')
+        if local_action is not None:
+            from local_model_auth import LocalModelError
+            try:
+                from runtime_local_configure import plan_local_configuration, apply_local_configuration
+                from runtime_caller_schema import canonical_caller
+                if local_action == 'local-plan':
+                    if not isinstance(payload,dict) or set(payload) != {'caller','context','resources'}:
+                        self.fail('CLIENT_INPUT_INVALID')
+                    caller = canonical_caller(payload['caller'])
+                    if caller['provider'] != provider:self.fail('ARGUMENTS_UNSUPPORTED')
+                    context,resources = payload['context'],payload['resources']
+                    context_fields = {'local_models_root','effective_scope','approved_settings_sha256',
+                                      'approved_settings_digests','auth_context'}
+                    required = {'python','cli','declared_cli_version','settings_paths','skill_sources','native_sources'}
+                    if (not isinstance(context,dict) or set(context)-context_fields
+                            or not isinstance(resources,dict) or not required <= set(resources)
+                            or set(resources)-required-{'auth_dependencies'}):self.fail('CLIENT_INPUT_INVALID')
+                    return plan_local_configuration(self.client,caller,{**context,'operator_uid':os.getuid()},**resources)
+                if local_action == 'local-apply':
+                    if (not isinstance(payload,dict) or not isinstance(payload.get('intent'),dict)
+                            or payload['intent'].get('provider') != provider):
+                        self.fail('CLIENT_INPUT_INVALID')
+                    return apply_local_configuration(self.client,payload,approved_id=approved_id)
+                self.fail('ARGUMENTS_UNSUPPORTED')
+            except LocalModelError as exc:self.fail(str(exc))
+            except ImportError:self.fail('LOCAL_MODEL_ADAPTER_UNSUPPORTED')
+            except (OSError,ValueError,TypeError,KeyError):self.fail('LOCAL_MODEL_CONFIGURE_PLAN_CHANGED')
         with self.client.operation_mutex():
             home=self.directory(self.client.runtime_dir/'provider-home'/provider)
             provider_instructions=instruction_api()['provider_instructions']
@@ -727,13 +813,13 @@ class RuntimeDelivery(RuntimeFiles):
                 return 'Your delegated task is in ORRERY Mail. Fetch your inbox and read the task before beginning work.'
         return content.decode()
 
-    def child_tool_plan(self, provider, home, cwd):
+    def child_tool_plan(self, provider, home, cwd, *, selection=None):
         """Use the existing tool policy against this provider's fixed HOME."""
         child = self.client.outputs['child']
-        if not child.exists():
-            return {}, [], ''
+        if selection is None:
+            if not child.exists():return {}, [], ''
+            selection = self.read(child)['tools_selection']
         policy_api = runpy.run_path(str(Path(self.client.config['wrapper_root'])/'hooks/child_tools.py'))
-        selection = self.read(child)['tools_selection']
         try:
             spec = policy_api['normalize'](selection['base'], selection['tools'])
             policy_api['check_provider'](spec, provider)
@@ -781,6 +867,7 @@ class RuntimeDelivery(RuntimeFiles):
     def provider_command(self, row, provider_session_id=None, *, headless=False):
         c=self.client
         provider=row['provider']
+        local = self.local_launch(provider,row['cwd'],row=row,provider_session_id=provider_session_id)
         if row['launch_kind']=='resume':
             prior=self.read(c.runtime_dir/'session_index/self.json')
             saved_id=prior.get('session_id')
@@ -790,6 +877,26 @@ class RuntimeDelivery(RuntimeFiles):
             if provider == 'codex' and self.provider_header(prior.get('transcript_path','')) != saved_id:
                 self.fail('PROVIDER_SESSION_REQUIRED')
             provider_session_id=saved_id
+        if local is not None and local['intent']['model']['kind']=='local-profile':
+            from local_model_auth import LocalModelError
+            from runtime_local_launch import local_provider_command
+            home=Path(local['home']);self.api['safe_private_directory'](home)
+            instructions=instruction_api()
+            try:instructions['provider_instructions'](home,provider,c.config['wrapper_root'],'')
+            except (OSError,instructions['Refused']):self.fail('INSTRUCTION_PROVIDER_CONFIG_REQUIRED')
+            if c.outputs['child'].exists():
+                selection=self.read(c.outputs['child'])['tools_selection']
+                if selection != {'base':local['intent']['base'],'tools':local['intent']['tools']}:
+                    self.fail('LOCAL_MODEL_INTENT_CHANGED')
+            extra,flags,tool_prompt=self.child_tool_plan(provider,home,row['cwd'],
+                selection={'base':local['intent']['base'],'tools':local['intent']['tools']})
+            proxy=[sys.executable,str(Path(__file__).with_name('runtime_client.py')),'--context',str(c.path),'proxy']
+            plugin=self.codex_trust()['plugin_id'] if provider=='codex' else None
+            try:
+                return local_provider_command(local,row,proxy=proxy,plugin_id=plugin,
+                    extra_servers=extra,tool_flags=flags,prompt=self.launch_task(row),tool_prompt=tool_prompt,
+                    provider_session_id=provider_session_id,headless=headless)
+            except LocalModelError as exc:self.fail(str(exc))
         binary=os.environ.get('AGENTSTACK_'+provider.upper()+'_BIN') or {'claude':'claude','codex':'codex','gemini':'agy','daemon':sys.executable}[provider]
         home=self.directory(c.runtime_dir/'provider-home'/provider)
         if provider in ('claude','codex'):
@@ -827,22 +934,14 @@ class RuntimeDelivery(RuntimeFiles):
         else:
             args=[sys.executable,str(Path(__file__).with_name('runtime_client.py')),'--context',str(c.path),'daemon-serve']
         if provider=='claude':
-            import shlex
-            entry = shlex.join([sys.executable,str(Path(__file__).with_name('runtime_client.py')),'entry','session-start','--context',str(c.path)])
-            hooks = {'SessionStart':[{'hooks':[{'type':'command','command':entry}]}]}
-            def hook(operation):
-                return {'type':'command','command':shlex.join([sys.executable,
-                    str(Path(__file__).with_name('runtime_client.py')),'entry',operation,'--context',str(c.path)])}
-            hooks.update(PreToolUse=[{'matcher':'Edit|Write|MultiEdit|NotebookEdit','hooks':[hook('pre-edit')]}],
-                PostToolUse=[{'matcher':'Edit|Write|MultiEdit|NotebookEdit','hooks':[hook('post-edit')]},
-                             {'hooks':[hook('notifications')]}],
-                SessionEnd=[{'hooks':[hook('end-session')]}])
             settings = home / 'orrery-hooks.json'
-            self.generated_config(settings,{'hooks':hooks})
+            self.generated_config(settings,claude_hook_settings(sys.executable,
+                Path(__file__).with_name('runtime_client.py'),c.path))
             args += ['--settings',str(settings)]
         elif provider=='codex':
             self.codex_trust()
         args += tool_flags
+        if local is not None:args += local['projection']['execution']['argv']
         prompt = self.launch_task(row)
         if prompt and row['launch_kind']=='startup' and provider!='gemini':
             args.append(prompt + ('\n\n'+tool_prompt if tool_prompt else ''))
@@ -890,7 +989,7 @@ class RuntimeDelivery(RuntimeFiles):
         return reply.stdout.splitlines()
 
     def create_wrapper(self,row,provider_session_id=None):
-        args=[sys.executable,str(Path(__file__).with_name('runtime_client.py')),'--context',str(self.client.path),
+        args=[sys.executable,str(Path(__file__).with_name('runtime_client.py')),'--context',str(self.client.path),'--',
               'execute-launch',row['launch_id'],row['receipt_nonce']]
         if provider_session_id:args.append(provider_session_id)
         try:
@@ -910,6 +1009,7 @@ class RuntimeDelivery(RuntimeFiles):
             if row['launch_id']!=request['launch_id'] or self.state_digest('launch',row['launch_id'],row)!=request['expected_state_sha256']:
                 self.fail('RESOLUTION_DIGEST_MISMATCH')
             if row['phase'] not in ('planned','gated','running'):self.fail('LAUNCH_OUTCOME_UNKNOWN')
+            self.local_launch(row['provider'],row['cwd'],row=row)
             names=self.occupied_names();name=c.identity['name']
             if any(x.casefold()==name.casefold() for x in names):
                 if name not in names:self.fail('TMUX_SESSION_NAME_CONFLICT')
@@ -943,13 +1043,17 @@ class RuntimeDelivery(RuntimeFiles):
             self.create_wrapper(row)
             return {'ok':True,'launch_id':row['launch_id'],'prepared':True,'runtime_ready':False,'phase':'gated','reason':None}
 
-    def start(self, provider, cwd, *, detached=False, launch_kind='startup', provider_session_id=None):
+    def start(self, provider, cwd, *, detached=False, launch_kind='startup', provider_session_id=None,
+              expected_intent_digest=None):
         c=self.client
+        self.local_launch(provider,str(Path(cwd).resolve(strict=True)))
         if provider=='gemini' and (not c.outputs['child'].exists() or not c.outputs['task'].exists()):self.fail('GEMINI_INTERACTIVE_RUNTIME_UNSUPPORTED')
         if provider=='codex':self.codex_trust()
         name=c.identity['name']
         if detached and (not name or any(x in name for x in ('.',':','\r','\n','\0'))):self.fail('TMUX_TARGET_INPUT_INVALID')
-        row=self.prepare_launch(provider,launch_kind=launch_kind,cwd=cwd)
+        options={'launch_kind':launch_kind,'cwd':cwd}
+        if expected_intent_digest is not None:options['expected_intent_digest']=expected_intent_digest
+        row=self.prepare_launch(provider,**options)
         self.provider_command(row,provider_session_id)
         if detached and any(x.casefold()==c.identity['name'].casefold() for x in self.occupied_names()):self.fail('TMUX_SESSION_NAME_CONFLICT')
         if not detached and os.environ.get('TMUX'):
@@ -970,6 +1074,7 @@ class RuntimeDelivery(RuntimeFiles):
         row=self.launch()
         if row['launch_id']!=launch_id or row['receipt_nonce']!=nonce or row['phase']!='gated':
             self.fail('LAUNCH_RECEIPT_MISMATCH')
+        self.local_launch(row['provider'],row['cwd'],row=row,provider_session_id=provider_session_id)
         if row.get('tmux_transport')=='global-instance':
             tmux=self.api['runtime_tmux_api']()
             path=tmux['global_socket'](Path(c.config['agentstack_home']),c.binding['expected_server_instance_id'])
@@ -997,11 +1102,15 @@ class RuntimeDelivery(RuntimeFiles):
             for key in ('AGENTSTACK_PROJECT_KEY','PROJECT_KEY','PARENT_AGENT','CHILD_REGISTRATION_TOKEN','MCP_AGENT_MAIL_TOKEN','AGENTSTACK_PROXY_TOKEN_FILE','AGENTSTACK_PROXY_AGENT_NAME'):
                 env.pop(key,None)
             home=str(c.runtime_dir/'provider-home'/row['provider'])
-            env.update(AGENTSTACK_CLIENT_CONFIG=str(c.path),AGENTSTACK_RUNTIME_MODE='global',
-                       AGENTSTACK_LAUNCH_ID=launch_id,AGENTSTACK_LAUNCH_NONCE=nonce,
-                       AGENTSTACK_RUNTIME_DIR=str(c.runtime_dir),
-                       AGENTSTACK_MCP_URL=c.endpoint,AGENT_NAME=c.identity['name'],
-                       AGENTSTACK_HOME=c.config['wrapper_root'],AGENTSTACK_AGENT_ID=str(c.identity['agent_id']))
+            runtime=self.runtime_environment(row)
+            env.update(runtime)
+            local=self.local_launch(row['provider'],row['cwd'],row=row,provider_session_id=provider_session_id)
+            if local is not None and local['intent']['model']['kind']=='local-profile':
+                from runtime_local_launch import local_environment
+                if 'cli_acceptance' in local['projection']:
+                    row['cli_acceptance'] = local['projection']['cli_acceptance']
+                    self.save(self.launch_path,row,'launch_intent')
+                env=local_environment(local,runtime)
             env['CODEX_HOME']=home
             env['CLAUDE_CONFIG_DIR']=home
             if row['provider']=='gemini':
@@ -1020,7 +1129,7 @@ class RuntimeDelivery(RuntimeFiles):
             # The exec-only child sets its own PID in the inherited hook env;
             # it becomes the native process, while THIS process remains runner.
             child=[sys.executable,str(Path(__file__).with_name('runtime_client.py')),
-                '--context',str(c.path),'provider-exec',launch_id,nonce]
+                '--context',str(c.path),'--','provider-exec',launch_id,nonce]
             if provider_session_id:child.append(provider_session_id)
             try:process=subprocess.Popen(child,cwd=row['cwd'],env=env)
             except OSError:
@@ -1081,7 +1190,14 @@ class RuntimeDelivery(RuntimeFiles):
                     or runner.get('pid')!=os.getppid() or self.api['process_start'](os.getppid())!=runner.get('process_start')):
                 self.fail('LAUNCH_RECEIPT_MISMATCH')
             args=self.provider_command(row,provider_session_id)
+            local=self.local_launch(row['provider'],row['cwd'],row=row,provider_session_id=provider_session_id)
+            if local is not None and 'cli_acceptance' in local['projection']:
+                row['cli_acceptance'] = local['projection']['cli_acceptance']
+                self.save(self.launch_path,row,'launch_intent')
         env=dict(os.environ);env['AGENTSTACK_PROVIDER_PID']=str(os.getpid())
+        if local is not None and local['intent']['model']['kind']=='local-profile':
+            from runtime_local_launch import local_environment
+            env=local_environment(local,self.runtime_environment(row),provider_pid=os.getpid())
         os.chdir(row['cwd']);os.execvpe(args[0],args,env)
 
     def run_gemini(self, args, env, row):

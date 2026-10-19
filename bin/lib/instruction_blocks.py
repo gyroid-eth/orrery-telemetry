@@ -287,6 +287,7 @@ def read_private(path):
 @contextmanager
 def mutexes(install, paths):
     handles = []
+    locked_paths = []
     try:
         folder = install / 'backups/instruction-migration/locks'; private_dir(folder)
         for path in sorted(set(map(str, paths))):
@@ -295,8 +296,10 @@ def mutexes(install, paths):
             st = os.fstat(fd)
             if st.st_uid != os.getuid() or st.st_nlink != 1 or stat.S_IMODE(st.st_mode) != 0o600:
                 os.close(fd); raise Refused('INSTRUCTION_PATH_UNSAFE', lock)
-            fcntl.flock(fd, fcntl.LOCK_EX); handles.append(fd)
-        yield
+            fcntl.flock(fd, fcntl.LOCK_EX); handles.append(fd); locked_paths.append(lock)
+        # Publishers can inventory the exact artifacts this namespace uses;
+        # callers which only need serialization continue to ignore the value.
+        yield tuple(locked_paths)
     finally:
         for fd in reversed(handles):
             os.close(fd)

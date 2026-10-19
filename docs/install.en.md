@@ -175,6 +175,27 @@ See the [consent contract](instruction-migration.en.md#consent) for confirmation
 
 An explicit `--project-key` always has highest priority, followed by environment variables `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY`, then an existing `env.sh` at the install destination. `--spawn-dirs` / `--spawn-roots` follow the same precedence and retain their previous values on reinstall; see “Spawn directory” in [configuration](configuration.en.md). `--bin-dir` is not a public option. The installer calls `agentstack-merge-settings --bin-dir "$INSTALL_DIR/bin"` internally to expand `__AGENTSTACK_BIN_DIR__` in the permissions template.
 
+### Stage payload placement without service operations
+
+`./scripts/install.sh --place-only --install-dir /absolute/stage/payload --project-key /absolute/stage/project`
+uses the normal layout, payload, template rendering, environment file, and install manifest generators.
+An explicit `--install-dir` naming a fresh, unused absolute stage path is required. Its parent must already exist, be owned by the caller without group/other write access, or be an OS sticky temporary directory. The destination is claimed with one mkdir; a competing creation is rejected. User HOME itself,
+the default `~/.agentstack`, user configuration directories, existing destinations, and symlinks are rejected before effects. Stage paths containing a newline, double quote, or backslash are unsupported; spaces are allowed.
+Inherited Mail state/service/log destinations outside the stage payload root are also rejected.
+
+This mode skips service-kind and port/Mail probes, launchd/systemd registration/start/stop,
+stopping the existing tmux watcher, user settings/MCP/instruction merges, and skill links in user HOME.
+It does not provision a Mail package/venv/database or claim readiness/health.
+Mail state defaults to `mail/` inside the destination. The manifest has `installation_mode: place-only` and an empty `services` list.
+Payload tiers (`--dashboard-only` / `--scoped`) and `--dry-run` remain available.
+Mail update/retirement/print-plan/advice options cannot be combined with placement. Normal runtime-mode admission remains in force.
+For a retry, inspect the previous stage and choose a new unused destination rather than reusing it automatically.
+Service provisioning and startup require a separate explicit procedure; placement success does not imply running services.
+
+Placement mode rejects resolved configuration values containing a double quote, backslash, or newline with `PLACE_ONLY_VALUE_INVALID` before creating the destination. Spaces remain supported. This restriction is not added to ordinary installation.
+
+`--place-only --print-inventory` prints `place-only-inventory-v1` JSON from the same payload operations as placement, including post-render SHA, mode, regular/link type and link target, sorted by path. It excludes env.sh, install-state.json and locks. It creates no destination, temporary file or manifest; path admission and Python selection still run. `--dashboard-only` and `--scoped` are supported; combining it with `--dry-run` is rejected. Compare it with placement using the same inputs.
+
 ## Merging settings, permissions, and Claude skills
 
 The Tier 1 merge uses the JSON parser in `scripts/lib/merge_settings.py`.

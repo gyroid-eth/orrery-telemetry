@@ -48,3 +48,13 @@ def copy_client_library(install_root: Path) -> None:
     for name in ('session-identity-policy.sh','project-context.sh'):
         target=hooks/name
         if not target.exists():shutil.copy2(ROOT/'hooks'/name,target)
+
+    # Catalog consumers use the fixed installed path, not a checkout module.
+    # Mirror the installer's dashboard-relative policy files and keep explicit
+    # fixture stubs under the caller's control, as with the library/hooks above.
+    assert 'copy_core_tree "$REPO_ROOT/dashboard" "$DASHBOARD_DIR" "dashboard"' in (ROOT/'scripts/install.sh').read_text()
+    dashboard = install_root/'dashboard'
+    dashboard.mkdir(parents=True,exist_ok=True)
+    for name in ('codex_models.py','claude_models.py'):
+        target = dashboard/name
+        if not target.exists():shutil.copy2(ROOT/'dashboard'/name,target)

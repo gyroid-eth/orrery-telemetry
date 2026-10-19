@@ -1015,6 +1015,30 @@ def direct_token_path(config: ProxyConfig) -> Path:
 
 def load_direct_owner_token(config: ProxyConfig) -> str:
     path = direct_token_path(config)
+    # Ordinary direct binding must not consume a tentative preview credential.
+    # The preview's dedicated Store-aware consumer is connected separately;
+    # presence/null is not permission to treat this as an old cloud child.
+    base=config.runtime_dir.parent if config.runtime_dir.name=='codex-app' else config.runtime_dir
+    name=config.agent_name or ''
+    if _AGENT_NAME.fullmatch(name):
+        import stat
+        paths=((base/'child-agents'/(name+'.json'),False),
+            (base/'child-agents'/('.'+name+'.registration-pending.json'),True))
+        try:
+            for candidate,pending in paths:
+                try:fd=os.open(candidate,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+                except FileNotFoundError:continue
+                try:
+                    info=os.fstat(fd)
+                    if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_size>1048576:raise ValueError()
+                    value=json.loads(os.read(fd,1048577).decode('utf-8'))
+                    if type(value) is not dict:raise ValueError()
+                finally:os.close(fd)
+                if (('kind' in value) if pending else any(key in value for key in
+                        ('launch_intent','local_registration','local_execution','local_resolution'))):
+                    raise ProxyError('local preview requires its dedicated credential consumer')
+        except ProxyError:raise
+        except Exception:raise ProxyError('direct owner state is unavailable') from None
     try:
         token = path.read_text(encoding="utf-8").strip()
     except OSError as exc:

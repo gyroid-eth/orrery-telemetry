@@ -76,3 +76,5 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [指示 block の移行](instruction-migration.md) — 利用者単位への移行と復旧。
 
 - [専用 tmux 起動・終了の受け入れ計画](r2-tb-lifecycle-plan-v3.md) — R2-Tb の確定 caller 表・schema・中断点と fixture。
+- [ローカルモデル profile の core](r3-local-profile-core.md) — 明示configure、単一intent、認証資源と未検証native gate。通常の子の起動への接続は作業中。
+- [ローカルモデルの契約 fixture（日英）](r3-local-profile-fixtures.md) — core・caller配送・native受け入れの独立した証拠と残るred。

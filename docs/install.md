@@ -179,6 +179,28 @@ Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux �
 
 `--project-key` は、明示した値がいつでも最優先です。次に環境変数 `AGENTSTACK_PROJECT_KEY` / `PROJECT_KEY`、最後に install 先の既存 `env.sh` を見ます。`--spawn-dirs` / `--spawn-roots` も同じ順序で解決し、再インストール時は前回の値を引き継ぎます（詳細は [configuration.md](configuration.md) の「Spawn directory」）。`--bin-dir` は公開 option ではありません。permissions template の `__AGENTSTACK_BIN_DIR__` を展開するため、installer が内部で `agentstack-merge-settings --bin-dir "$INSTALL_DIR/bin"` を呼びます。
 
+### stage へ配置するだけ（service を操作しない）
+
+`./scripts/install.sh --place-only --install-dir /absolute/stage/payload --project-key /absolute/stage/project`
+は、通常と同じ layout・payload・template の render・env・install manifest を生成します。
+`--install-dir` の明示と、新しい未使用の絶対pathが必要です。親directoryは先に用意し、自己所有で他者書込み不可（またはOSのsticky temp directory）にしてください。配置先はmkdirで一度だけ確保し、競合したら停止します。利用者HOME自身、既定の `~/.agentstack`、
+利用者の設定directory、既存の配置先やsymlinkは作用前に拒否します。stageの専用pathを選んでください。改行・double quote・backslashを含む配置pathは拒否します（spaceは使用可能）。
+引継いだ Mail state / service / log 等がstage外を指す場合も拒否します。
+
+このmodeはservice kindやport/Mailのprobe、launchd/systemdの登録・起動・停止、
+既存tmux watcherの停止、user settings/MCP/指示blockのmerge、HOMEのskill link作成を行いません。
+Mailのpackage/venv/DBは準備せず、起動可能・health確認済みとは表示しません。
+Mail state の既定は配置先内の `mail/`、manifest の `installation_mode` は `place-only`、`services` は空です。
+`--dashboard-only` / `--scoped` のpayload選択、`--dry-run` にも対応します。
+Mail update・retire・print-plan/adviceとの併用は拒否します。通常のruntime mode admissionは維持します。
+再試行する場合は既存のstageをそのまま再利用せず、内容を確認し、別の新しい配置先を明示してください。
+serviceの準備・起動は別の明示手順で行い、配置成功と混同しないでください。
+
+配置だけ mode では、共通 writer に渡す解決済み設定値に double quote・backslash・改行を含む場合、`PLACE_ONLY_VALUE_INVALID` で配置の作成前に拒否します。space は使用できます。この文字の制限は通常の install には追加しません。
+
+
+`--place-only --print-inventory` は、実配置と同じ payload 一覧から、render 後の SHA・mode・regular/link と target を `place-only-inventory-v1` JSON として stdout に出します。path 順に並べ、env.sh・install-state.json・lock は含めません。配置先・temp・manifest を作らず、事前の path admission と Python 選択だけを行います。`--dashboard-only` / `--scoped` を指定でき、`--dry-run` との併用は拒否します。通常の `--place-only` と同じ入力で比較してください。
+
 ## Settings、permissions、Claude skill の merge
 
 Tier 1 の merge は `scripts/lib/merge_settings.py` による JSON parser ベースです。

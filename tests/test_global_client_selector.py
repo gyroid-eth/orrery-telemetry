@@ -114,9 +114,15 @@ def test_old_register_front_door_cannot_return_legacy_after_global_selection(tmp
 @pytest.mark.parametrize("context_mode", ["absent", "explicit", "implicit", "broken"])
 def test_old_runtime_without_select_preserves_legacy_preregister(tmp_path, context_mode):
     from test_preregister_child_naming import _FAKE_LIB
+    from _installed_client_payload import copy_client_library
 
     lib = tmp_path / "bin/lib"
-    lib.mkdir(parents=True)
+    # Complete current wrapper dependencies, with ONLY the runtime selector
+    # deliberately old below. Missing preview admission is not this control.
+    copy_client_library(tmp_path)
+    assert 'copy_core_tree "$REPO_ROOT/hooks" "$HOOKS_DIR" "hooks"' in (ROOT / 'scripts/install.sh').read_text()
+    shutil.copytree(ROOT / 'hooks', tmp_path / 'hooks', dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '*.pyo'))
     (lib / "global-client-loader.sh").write_bytes(
         (ROOT / "bin/lib/global-client-loader.sh").read_bytes())
     # Older runtime helpers have argparse operations but no select operation.

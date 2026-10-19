@@ -87,6 +87,13 @@
             }
           ]
         },
+        "intent_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "cli_acceptance": {
+          "schema_ref": "cli_acceptance"
+        },
         "error": {
           "anyOf": [
             {
@@ -2060,6 +2067,45 @@
     }
   ],
   "schema_definitions": {
+    "cli_metadata": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string", "pattern": "^/.*", "minLength": 1},
+        "uid": {"type": "integer", "minimum": 0},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 511},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "version": {"type": "string", "minLength": 1},
+        "origin": {
+          "type": "object",
+          "properties": {
+            "path": {"type": "string", "pattern": "^/.*", "minLength": 1},
+            "uid": {"type": "integer", "minimum": 0}
+          },
+          "required": ["path", "uid"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["path", "uid", "mode", "sha256", "version", "origin"],
+      "additionalProperties": false
+    },
+    "cli_acceptance": {
+      "type": "object",
+      "properties": {
+        "schema_version": {"const": 1},
+        "provider": {"type": "string", "enum": ["codex", "claude"]},
+        "approved_cli": {"schema_ref": "cli_metadata"},
+        "observed_cli": {"schema_ref": "cli_metadata"},
+        "version_changed": {"type": "boolean"},
+        "bytes_changed": {"type": "boolean"},
+        "scope_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "resources_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "derivation_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "intent_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "proof_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      },
+      "required": ["schema_version", "provider", "approved_cli", "observed_cli", "version_changed", "bytes_changed", "scope_sha256", "resources_sha256", "derivation_sha256", "intent_digest", "proof_sha256"],
+      "additionalProperties": false
+    },
     "operator_resolution": {
       "type": "object",
       "properties": {

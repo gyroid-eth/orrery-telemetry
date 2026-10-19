@@ -19,18 +19,12 @@ def reservation_matcher():
     return module['patterns_overlap']
 
 
-def check() -> None:
-    project = os.environ['QUERY_PROJECT_KEY']
-    uri = 'resource://file_reservations/' + urllib.parse.quote(project, safe='') + '?active_only=true&format=json'
-    payload = {'jsonrpc': '2.0', 'id': 'reservation-conflicts', 'method': 'resources/read',
-               'params': {'uri': uri}}
-    headers = {'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream'}
-    token = os.environ.get('QUERY_TOKEN', '')
-    if token:
-        headers['Authorization'] = 'Bearer ' + token
-    request = urllib.request.Request(os.environ['QUERY_URL'], data=json.dumps(payload).encode(), headers=headers)
-    with urllib.request.urlopen(request, timeout=3) as response:
-        document = json.load(response)
+def conflicting_owners(document, *, agent, targets, now=None, matcher_factory=None) -> set[str]:
+    """Shared resource/row checks; callers choose their own fixed transport.
+
+    No renew/release or token lookup. Preserve the legacy skip/matching order
+    and lazy matcher; the preview supplies its source-pinned matcher factory.
+    """
     if document.get('error') is not None:
         raise ValueError('reservation resource rejected the check')
     result = document['result']
@@ -42,8 +36,8 @@ def check() -> None:
     rows = json.loads(contents[0]['text'])
     if not isinstance(rows, list):
         raise ValueError('invalid reservation resource rows')
-    targets = [unicodedata.normalize('NFC', os.environ[key]) for key in ('QUERY_REL_PATH', 'QUERY_ABS_PATH')]
-    now = datetime.now(timezone.utc)
+    targets = [unicodedata.normalize('NFC', value) for value in targets]
+    now = datetime.now(timezone.utc) if now is None else now
     owners = set()
     overlap = None
     for row in rows:
@@ -60,13 +54,30 @@ def check() -> None:
                 raise ValueError('invalid reservation release timestamp')
         if released is not None or expires <= now:
             continue
-        if row['agent'] == os.environ['QUERY_AGENT'] or not row['exclusive']:
+        if row['agent'] == agent or not row['exclusive']:
             continue
         if overlap is None:
-            overlap = reservation_matcher()
+            overlap = (reservation_matcher if matcher_factory is None else matcher_factory)()
         pattern = row['path_pattern']
         if any(overlap(pattern, target) for target in targets):
             owners.add(row['agent'])
+    return owners
+
+
+def check() -> None:
+    project = os.environ['QUERY_PROJECT_KEY']
+    uri = 'resource://file_reservations/' + urllib.parse.quote(project, safe='') + '?active_only=true&format=json'
+    payload = {'jsonrpc': '2.0', 'id': 'reservation-conflicts', 'method': 'resources/read',
+               'params': {'uri': uri}}
+    headers = {'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream'}
+    token = os.environ.get('QUERY_TOKEN', '')
+    if token:
+        headers['Authorization'] = 'Bearer ' + token
+    request = urllib.request.Request(os.environ['QUERY_URL'], data=json.dumps(payload).encode(), headers=headers)
+    with urllib.request.urlopen(request, timeout=3) as response:
+        document = json.load(response)
+    owners = conflicting_owners(document, agent=os.environ['QUERY_AGENT'],
+        targets=[os.environ[key] for key in ('QUERY_REL_PATH', 'QUERY_ABS_PATH')])
     if owners:
         print('Other exclusive reservation holder(s): ' + ', '.join(sorted(owners)))
         raise SystemExit(2)

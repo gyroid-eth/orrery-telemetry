@@ -124,8 +124,36 @@ class Backend:
                     q['after_id']=int(value)
         return self.read(q)
 
+    def spawn(self,payload,validate_cwd):
+        """One literal HTTP adapter to the existing minimal/full operator API."""
+        api=self.operator.api
+        schema=api['operator_schemas']()['FIXTURE']['http_spawn_schema']
+        try:api['wire_contract']()['validate_schema'](payload,schema)
+        except ValueError as exc:raise BackendError('QUERY_INVALID',400) from exc
+        if 'caller' in payload:
+            from runtime_local_launch import validate_caller_request
+            # Structural/tool validation is shared and effect-free. Never
+            # recover omitted fields from the configured owner or HTTP aliases.
+            try:caller=validate_caller_request(payload['caller'])
+            except ValueError as exc:raise BackendError('CHILD_TOOLS_INVALID',400) from exc
+            # R2 foreground transfers control to the calling CLI (SystemExit).
+            # An HTTP handler cannot own that runner or silently change intent.
+            if not payload['prepare_only'] and not caller['detached']:
+                raise BackendError('HTTP_FOREGROUND_UNSUPPORTED',400)
+            # The directory guard resolves for containment only. The admitted
+            # caller literal, not that canonicalization, must match the intent.
+            validate_cwd(caller['cwd'])
+            options={'caller':caller,'parent_client_name':payload['parent_client_name'],
+                'prepare_only':payload['prepare_only'],'expected_digest':payload.get('expected_digest')}
+            if 'task_delivery' in payload:options['task_delivery']=payload['task_delivery']
+            return self.operator.spawn(payload['client_name'],**options)
+        cwd=validate_cwd(payload['cwd'])
+        return self.operator.spawn(payload['client_name'],agent_name=payload['name'],
+            program=payload['program'],model=payload['model'],cwd=cwd,expected_digest=payload.get('expected_digest'))
+
     def post(self,path,payload,validate_cwd,open_terminal):
-        table={'/api/global/spawn':'http_spawn_schema','/api/global/resume':'http_resume_schema',
+        if path=='/api/global/spawn':return self.spawn(payload,validate_cwd)
+        table={'/api/global/resume':'http_resume_schema',
             '/api/global/registration-abandon':'http_registration_abandon_schema'}
         if path not in table:raise BackendError('GLOBAL_ROUTE_UNAVAILABLE',404)
         api=self.operator.api
@@ -134,10 +162,6 @@ class Backend:
         except ValueError as exc:raise BackendError('QUERY_INVALID',400) from exc
         if path.endswith('/registration-abandon'):
             return self.operator.abandon_registration(payload['client_name'],payload['expected_digest'])
-        if path.endswith('/spawn'):
-            cwd=validate_cwd(payload['cwd'])
-            return self.operator.spawn(payload['client_name'],agent_name=payload['name'],
-                program=payload['program'],model=payload['model'],cwd=cwd,expected_digest=payload.get('expected_digest'))
         result=self.operator.resume(payload['client_name'],prepare_only=payload.get('prepare_only',False))
         launch=result.get('launch_status')
         if (payload.get('open',True) and not payload.get('prepare_only',False)

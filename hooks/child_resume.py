@@ -353,6 +353,37 @@ def _paths(runtime_dir: Path, agent_name: str) -> tuple[Path, Path, Path, Path, 
     )
 
 
+def _refuse_local_preview(state_path: Path) -> None:
+    """A denial fence, not another intent/registration validator.
+
+    Ordinary resume/undo/retention must not reinterpret the new namespace,
+    including null fields or a tagged pending with no surviving owner file.
+    The dedicated consumer owns its exact Store/schema and finalization.
+    """
+    pending=state_path.with_name('.'+state_path.stem+'.registration-pending.json')
+    for path,is_pending in ((state_path,False),(pending,True)):
+        if not os.path.lexists(path):continue
+        # Denial metadata is NOT credential authentication. Historical ordinary
+        # cleanup accepts public metadata when resume retention is unavailable;
+        # keep that compatibility without following links or ignoring errors.
+        fd=None
+        try:
+            fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+            info=os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid():raise ValueError()
+            raw=os.read(fd,1024*1024+1)
+            if len(raw)>1024*1024:raise ValueError()
+            value=json.loads(raw.decode('utf-8'))
+            if type(value) is not dict:raise ValueError()
+        except (OSError,ValueError,UnicodeError):
+            raise ResumeStateError('config_unrestorable','child namespace is unavailable') from None
+        finally:
+            if fd is not None:os.close(fd)
+        if (('kind' in value) if is_pending else any(key in value for key in
+                ('launch_intent','local_registration','local_execution','local_resolution'))):
+            raise ResumeStateError('config_unrestorable','local preview requires its dedicated lifecycle consumer')
+
+
 class _AgentLock:
     def __init__(self, path: Path, *, exclusive: bool):
         self.path = path
@@ -404,6 +435,13 @@ class _AgentLock:
                     or current_directory.st_uid != os.getuid()
                     or stat.S_IMODE(current_directory.st_mode) & 0o022):
                 raise ResumeStateError("credential_permission", "child resume lock changed during acquisition")
+            # All ordinary writers using these locks stop BEFORE their body
+            # can shrink, undo, retire or purge a local intent/execution.
+            for suffix in ('.resume.lock','.tools-change.lock'):
+                if self.path.name.startswith('.') and self.path.name.endswith(suffix):
+                    name=self.path.name[1:-len(suffix)]
+                    if SAFE_NAME.fullmatch(name):_refuse_local_preview(self.path.with_name(name+'.json'))
+                    break
             return self
         except (OSError, ResumeStateError) as exc:
             if self.descriptor is not None:
@@ -763,66 +801,103 @@ def mark_retired(
     if retention_days < 0:
         raise ValueError("retention days must be a non-negative integer")
     if retention_days == 0:
+        state_path,*_= _paths(runtime_dir,agent_name)
+        _refuse_local_preview(state_path)
         return False
     state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, agent_name)
     with _AgentLock(lock_path, exclusive=True):
+        return _mark_retired_unlocked(runtime_dir,agent_name,retention_days=retention_days,now=now)
+
+
+def _mark_retired_unlocked(runtime_dir,agent_name,*,retention_days,now=None):
+    """Existing retirement body, called only with the same name lock held."""
+    if retention_days==0:return False
+    state_path,token_path,*_= _paths(runtime_dir,agent_name)
+    try:
+        state = _load_state(state_path)
+    except ResumeStateError:
+        if state_path.exists() or state_path.is_symlink():raise
+        return False
+    if set(state) == {"agent_name", "project_key", "registration_token"}:
+        if (state["agent_name"] != agent_name or not isinstance(state["project_key"], str)
+                or not state["project_key"].strip()):
+            raise ResumeStateError("identity_mismatch", "Legacy cleanup identity is invalid")
+        pending = state_path.with_name(f".{agent_name}.registration-pending.json")
+        if any(path.exists() or path.is_symlink() for path in (pending, _legacy_pending(state_path))):
+            raise ResumeStateError("config_unrestorable", "Legacy cleanup has a pending registration/migration")
         try:
-            state = _load_state(state_path)
-        except ResumeStateError:
-            # Existing unsafe/unreadable material is not permission to delete
-            # its credential. The cleanup caller already preserves on error.
-            if state_path.exists() or state_path.is_symlink():
-                raise
-            return False
-        if set(state) == {"agent_name", "project_key", "registration_token"}:
-            if (state["agent_name"] != agent_name or not isinstance(state["project_key"], str)
-                    or not state["project_key"].strip()):
-                raise ResumeStateError("identity_mismatch", "Legacy cleanup identity is invalid")
-            pending = state_path.with_name(f".{agent_name}.registration-pending.json")
-            if any(path.exists() or path.is_symlink() for path in (pending, _legacy_pending(state_path))):
-                raise ResumeStateError("config_unrestorable", "Legacy cleanup has a pending registration/migration")
-            try:
-                canonical = _read_private(token_path, "canonical child credential", MAX_TOKEN_BYTES).decode("utf-8").strip()
-            except UnicodeDecodeError as exc:
-                raise ResumeStateError("credential_missing", "canonical child credential is invalid") from exc
-            token = state["registration_token"]
-            if not isinstance(token, str) or not token or not canonical:
-                raise ResumeStateError("credential_missing", "Legacy cleanup credential is unavailable")
-            if not hmac.compare_digest(token.encode(), canonical.encode()):
-                raise ResumeStateError("identity_mismatch", "Legacy cleanup credential and state disagree")
-            # No ID/provider/timestamps are guessed here. Explicit resume
-            # authenticates the formal owner before migrating these same bytes.
-            return True
-        try:
-            _validate_identity(state, agent_name=agent_name)
-        except ResumeStateError:
-            return False
-        if not _retained_shape(state):
-            return False
-        state_token = state.get("registration_token")
-        try:
-            canonical = _read_private(
-                token_path, "canonical child credential", MAX_TOKEN_BYTES
-            ).decode("utf-8").strip()
-        except (ResumeStateError, UnicodeDecodeError):
-            return False
-        if (
-            not isinstance(state_token, str)
-            or not state_token
-            or not hmac.compare_digest(
-                canonical.encode("utf-8"), state_token.encode("utf-8")
-            )
-        ):
-            return False
-        retired = _utc_now(now)
-        state["retired_at"] = _timestamp(retired)
-        state["resume_expires_at"] = _timestamp(
-            retired + timedelta(days=retention_days)
-        )
-        state.pop("resume_in_progress_at", None)
-        _atomic_json(state_path, state)
-        os.chmod(token_path, 0o600)
+            canonical = _read_private(token_path, "canonical child credential", MAX_TOKEN_BYTES).decode("utf-8").strip()
+        except UnicodeDecodeError as exc:
+            raise ResumeStateError("credential_missing", "canonical child credential is invalid") from exc
+        token = state["registration_token"]
+        if not isinstance(token, str) or not token or not canonical:
+            raise ResumeStateError("credential_missing", "Legacy cleanup credential is unavailable")
+        if not hmac.compare_digest(token.encode(), canonical.encode()):
+            raise ResumeStateError("identity_mismatch", "Legacy cleanup credential and state disagree")
+        # No ID/provider/timestamps are guessed here. Explicit resume
+        # authenticates the formal owner before migrating these same bytes.
         return True
+    try:
+        _validate_identity(state, agent_name=agent_name)
+    except ResumeStateError:
+        return False
+    if not _retained_shape(state):return False
+    state_token = state.get("registration_token")
+    try:
+        canonical = _read_private(token_path, "canonical child credential", MAX_TOKEN_BYTES).decode("utf-8").strip()
+    except (ResumeStateError, UnicodeDecodeError):return False
+    if (not isinstance(state_token, str) or not state_token
+            or not hmac.compare_digest(canonical.encode("utf-8"), state_token.encode("utf-8"))):return False
+    retired = _utc_now(now)
+    state["retired_at"] = _timestamp(retired)
+    state["resume_expires_at"] = _timestamp(retired + timedelta(days=retention_days))
+    state.pop("resume_in_progress_at", None)
+    _atomic_json(state_path, state)
+    os.chmod(token_path, 0o600)
+    return True
+
+
+def cleanup_ordinary(runtime_dir,agent_name,*,managed_file,retention_days,retention_action=None):
+    """Final local cleanup transaction, AFTER remote effects and under C.
+
+    The legacy hook may retain its historical custom retention helper, but no
+    HTTP, helper process or wait runs inside this transaction. A new preview
+    owner/pending which appeared during retire is refused before ANY deletion.
+    """
+    if retention_days<0 or retention_action not in (None,'retained','delete'):
+        raise ValueError('Invalid cleanup retention action')
+    state,token,home,mcp,lock=_paths(runtime_dir,agent_name)
+    with _AgentLock(lock,exclusive=True):
+        managed=Path(managed_file)
+        try:lines=managed.read_text(encoding='utf-8').splitlines()
+        except OSError:pass
+        else:
+            try:managed.write_text('\n'.join(line for line in lines if line!=agent_name)+'\n',encoding='utf-8')
+            except OSError:pass  # Historical managed-list best effort, not owner authentication.
+        mcp.unlink(missing_ok=True)
+        sessions=home/'sessions'
+        if sessions.is_dir() and not sessions.is_symlink():
+            print(f'[cleanup-child-agent] WARNING: deleting unshared Codex sessions at {sessions}; '
+                "conversation history may be lost (expected a symlink to the user's Codex home).",file=sys.stderr)
+        if home.is_symlink() or home.is_file():home.unlink()
+        elif home.exists():shutil.rmtree(home)
+        retained=(retention_action=='retained' if retention_action is not None else
+            _mark_retired_unlocked(runtime_dir,agent_name,retention_days=retention_days))
+        if not retained:
+            state.unlink(missing_ok=True);token.unlink(missing_ok=True)
+        return retained
+
+
+def store_ordinary_registration_token(runtime_dir,agent_name,raw):
+    """Ordinary registration's existing token store, fenced against preview.
+
+    No remote call or new registration lives here. The denial check happens
+    after acquiring the SAME retained-state lock, not before a racy shell write.
+    """
+    if type(raw) is not bytes or not raw or len(raw)>MAX_TOKEN_BYTES:
+        raise ResumeStateError('credential_missing','registration credential is invalid')
+    _state,token,_home,_mcp,lock=_paths(runtime_dir,agent_name)
+    with _AgentLock(lock,exclusive=True):_atomic_bytes(token,raw)
 
 
 def begin_resume(
@@ -2022,6 +2097,15 @@ def main() -> int:
     retired.add_argument("--runtime-dir", required=True)
     retired.add_argument("--agent-name", required=True)
     retired.add_argument("--retention-days", type=int, required=True)
+    cleanup = sub.add_parser("cleanup-ordinary")
+    cleanup.add_argument("--runtime-dir", required=True)
+    cleanup.add_argument("--agent-name", required=True)
+    cleanup.add_argument("--managed-file", required=True)
+    cleanup.add_argument("--retention-days", type=int, required=True)
+    cleanup.add_argument("--retention-action", choices=('retained','delete'))
+    store_token = sub.add_parser("store-ordinary-token")
+    store_token.add_argument("--runtime-dir", required=True)
+    store_token.add_argument("--agent-name", required=True)
     begin = sub.add_parser("begin-resume")
     begin.add_argument("--runtime-dir", required=True)
     begin.add_argument("--agent-name", required=True)
@@ -2121,6 +2205,14 @@ def main() -> int:
                 )
                 else "delete"
             )
+        elif args.command == "cleanup-ordinary":
+            cleanup_ordinary(runtime,args.agent_name,managed_file=args.managed_file,
+                retention_days=args.retention_days,retention_action=args.retention_action)
+        elif args.command == "store-ordinary-token":
+            # The shell sends a here-string: remove only its one added LF,
+            # preserving the original opaque credential bytes exactly.
+            raw=sys.stdin.buffer.read(MAX_TOKEN_BYTES+2)
+            store_ordinary_registration_token(runtime,args.agent_name,raw.removesuffix(b'\n'))
         elif args.command == "begin-resume":
             begin_resume(
                 runtime,

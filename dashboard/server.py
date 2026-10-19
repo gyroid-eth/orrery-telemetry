@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 19
+API_GENERATION = 21
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -6825,6 +6825,18 @@ def _is_within_root(path: str, root: str) -> bool:
         return False
 
 
+def _global_spawn_cwd(value):
+    """Existing global HTTP directory guard; no caller literal rewriting."""
+    try:from dashboard.global_backend import BackendError
+    except ModuleNotFoundError:from global_backend import BackendError
+    if not os.path.isabs(value) or not os.path.isdir(value):
+        raise BackendError('SPAWN_DIRECTORY_INVALID',400)
+    resolved=os.path.realpath(value)
+    if not any(_is_within_root(resolved,root) for root in _spawn_roots()):
+        raise BackendError('SPAWN_DIRECTORY_OUTSIDE_ROOTS',400)
+    return resolved
+
+
 _SPAWN_DIR_SUGGESTION_CAP = 500
 
 
@@ -7408,7 +7420,40 @@ def _spawn_credential_state(path: str, expected: str) -> str:
     return "foreign"
 
 
+@contextlib.contextmanager
+def _ordinary_spawn_owner_fence(name: str):
+    """Canonical ordinary writes share the child's existing resume lock."""
+    import runpy
+    # This is the fixed ordinary writer guard, not a selectable resume helper.
+    # HERE is also used for log destinations; it must not select guard code.
+    helper=runpy.run_path(str(Path(__file__).resolve().parents[1]/'hooks/child_resume.py'))
+    lock=Path(RUNTIME_DIR)/'child-agents'/('.'+name+'.resume.lock')
+    with helper['_AgentLock'](lock,exclusive=True):yield
+
+
+def _spawn_owner_credential_state(path: str, token: str, name: str) -> str:
+    try:
+        with _ordinary_spawn_owner_fence(name):return _spawn_credential_state(path,token)
+    except Exception:
+        return 'owner-protected'
+
+
 def _promote_spawn_credential(path: str, token: str, current_state: str) -> bool:
+    target=Path(path)
+    if target.parent==Path(RUNTIME_DIR) and target.name.startswith('agent_token_'):
+        name=target.name[len('agent_token_'):]
+        if not name or _NAME_RE.fullmatch(name) is None:return False
+        try:
+            with _ordinary_spawn_owner_fence(name):
+                return _promote_spawn_credential_unlocked(path,token,current_state)
+        except Exception:
+            return False
+    # This internal helper's noncanonical temporary-file tests are not owner
+    # publication. Production always passes the canonical runtime token path.
+    return _promote_spawn_credential_unlocked(path,token,current_state)
+
+
+def _promote_spawn_credential_unlocked(path: str, token: str, current_state: str) -> bool:
     """Install ``token`` at ``path`` (mode 0600) in one atomic step.
 
     The token is written and synced to an exclusive temporary file first, so
@@ -7467,12 +7512,15 @@ def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
         "worktree_base", "name", "dir", "provider", "model", "effort",
         "claude_chrome", "claude_chrome_device", "async", "dry_run", "headless", "emoji",
         "base", "tools",
+        "preview",
     }
     if str(payload.get("provider") or "").strip().lower() == "gemini":
         allowed.add("resources")
     unknown = sorted(set(payload) - allowed)
     if unknown:
         return None, {"ok": False, "error": f"unknown spawn fields: {', '.join(unknown)}"}
+    if "preview" in payload and type(payload["preview"]) is not bool:
+        return None, {"ok": False, "error": "preview must be boolean"}
     if "dry_run" in payload and not isinstance(payload["dry_run"], bool):
         return None, {"ok": False, "error": "dry_run must be boolean"}
     if "standalone" in payload and not isinstance(payload["standalone"], bool):
@@ -7506,6 +7554,18 @@ def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
 
 
 _CLAUDE_CHROME_DEVICE_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+
+def _legacy_local_registration_gate(payload, name, program, model):
+    """Both legacy front doors share refusal before catalog/register effects."""
+    from local_model_auth import LocalModelError
+    from runtime_legacy_preview import admit_legacy_registration
+    try:
+        admit_legacy_registration(RUNTIME_DIR,name,program,model,
+                                  preview_requested=payload.get('preview',False))
+    except LocalModelError as exc:
+        return {'ok':False,'error':str(exc)}
+    return None
 
 
 def _child_tools_module():
@@ -7572,7 +7632,16 @@ def do_spawn(payload: dict) -> dict:
     payload: {parent?, standalone?, name?, dir?, role?, group?, task,
               provider?, model?, effort?, claude_chrome?, claude_chrome_device?,
               base?, tools?}.
+    Global mode instead uses the shared minimal/full HTTP schema and fixed
+    operator context; its exceptions reach Handler's structured error path.
     """
+    if GLOBAL_MODE:
+        # Fixed process context, same admitted HTTP and Python front door.
+        # Global failures keep the existing structured HTTP exception path;
+        # no global request may enter legacy registration/catalog discovery.
+        try:from dashboard.global_backend import Backend
+        except ModuleNotFoundError:from global_backend import Backend
+        return Backend(GLOBAL_SERVER_CONFIG).spawn(payload,_global_spawn_cwd)
     unavailable = _spawn_unavailable_error()
     if unavailable:
         return unavailable
@@ -7580,6 +7649,9 @@ def do_spawn(payload: dict) -> dict:
     if error:
         return error
     provider = (payload.get("provider") or "claude").strip().lower()
+    gate_error = _legacy_local_registration_gate(payload,_request['requested_name'],
+        'claude-code' if provider=='claude' else provider,(payload.get('model') or '').strip())
+    if gate_error:return gate_error
     claude_catalog = _claude_catalog() if provider == "claude" else None
     if claude_catalog and claude_catalog.error:
         return {"ok": False, "error": claude_catalog.error}
@@ -7759,6 +7831,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     model_str = spec.model
     effort = spec.effort
     model_notice = {"model_note": spec.model_note} if spec.model_note else {}
+    owner_cleanup_blocked = False
 
     if standalone and not spec.standalone_supported:
         return {"ok": False,
@@ -7776,6 +7849,9 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     project_key = _project_key()
     if not project_key:
         return {"ok": False, "error": "AGENTSTACK_PROJECT_KEY or AGENTSTACK_VAULT is not configured"}
+
+    gate_error = _legacy_local_registration_gate(payload,requested_name,program,model_str)
+    if gate_error:return gate_error
 
     if request["dry_run"]:
         return {
@@ -7795,6 +7871,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                     "error": "no available agent name could be verified"}
 
     task_short = task[:80]
+
+    # Name selection is read-only; recheck the selected owner before register.
+    gate_error = _legacy_local_registration_gate(payload,requested_name,program,model_str)
+    if gate_error:return gate_error
 
     # 1) Always send an explicit hyphenated request name.  The response name
     # is authoritative and may be separator-less on a local patched server.
@@ -7860,6 +7940,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             "registration_retained": True,
         }
         result.update(extra)
+        if owner_cleanup_blocked:
+            result['owner_namespace_preserved']=True
+            result['cleanup_child_agent_can_recover']=False
+            result['error']+='; canonical owner cleanup was refused; state/credential were left for explicit recovery'
         return result
 
     if provider in {"claude", "codex"} and (
@@ -7941,15 +8025,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         ``keep_owner_credential`` removes only the one-shot handoff; callers
         use it once ``retain_recovery_credential`` has decided what survives.
         """
-        nonlocal token_created
+        nonlocal token_created, owner_cleanup_blocked
         paths = []
         if token_created and token_file:
             paths.extend([token_file, f"{token_file}.binding.json"])
-        if not keep_owner_credential:
-            paths.extend([
-                owner_credential,
-                os.path.join(RUNTIME_DIR, "child-agents", f"{child_name}.json"),
-            ])
         for path in paths:
             try:
                 os.unlink(path)
@@ -7958,6 +8037,15 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             except OSError as e:
                 logging.warning(
                     "failed to remove failed-spawn credential %s: %s", path, e)
+        if not keep_owner_credential:
+            try:
+                with _ordinary_spawn_owner_fence(child_name):
+                    for path in (owner_credential,os.path.join(RUNTIME_DIR,'child-agents',child_name+'.json')):
+                        try:os.unlink(path)
+                        except FileNotFoundError:pass
+            except Exception:
+                owner_cleanup_blocked=True
+                logging.warning('refused canonical failed-spawn cleanup for %s',child_name)
         token_created = False
 
     def retain_recovery_credential() -> tuple[str, dict]:
@@ -7970,8 +8058,9 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         Otherwise keep the handoff itself and say where it is, or say that no
         usable copy is left.  Returns the error clause and result fields.
         """
-        nonlocal token_created
-        owner_state = _spawn_credential_state(owner_credential, effective_child_token)
+        nonlocal token_created, owner_cleanup_blocked
+        owner_state = _spawn_owner_credential_state(owner_credential, effective_child_token,child_name)
+        if owner_state=='owner-protected':owner_cleanup_blocked=True
         handoff_state = (
             _spawn_credential_state(token_file, effective_child_token)
             if token_created and token_file else "missing")
@@ -7979,7 +8068,8 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         if owner_state in _SPAWN_CREDENTIAL_REPLACEABLE and handoff_state == "complete":
             promoted = _promote_spawn_credential(
                 owner_credential, effective_child_token, owner_state)
-            owner_state = _spawn_credential_state(owner_credential, effective_child_token)
+            owner_state = _spawn_owner_credential_state(owner_credential, effective_child_token,child_name)
+            if owner_state=='owner-protected':owner_cleanup_blocked=True
         if owner_state == "complete":
             remove_spawn_credentials(keep_owner_credential=True)
             origin = ("installed from the unconsumed one-shot handoff at"
@@ -8665,8 +8755,11 @@ class Handler(BaseHTTPRequestHandler):
         if not re.fullmatch(r'[A-Z][A-Z0-9_]{0,95}',reason):reason='GLOBAL_BACKEND_UNAVAILABLE'
         status=getattr(exc,'status',None) or ({'QUERY_INVALID':400,'CURSOR_INVALID':400,
             'UI_VIEWPOINT_REQUIRED':400,'NAME_INVALID':400,'CLIENT_NAME_INVALID':400,
+            'LOCAL_MODEL_CALLER_INVALID':400,'CHILD_TOOLS_INVALID':400,
             'TARGET_UNAVAILABLE':404,'MESSAGE_UNAVAILABLE':404,
             **dict.fromkeys(('NAME_CONFLICT','OWNER_REQUIRED','REGISTRATION_PENDING_CONFLICT',
+                'LOCAL_MODEL_INTENT_CHANGED','LOCAL_MODEL_IDENTITY_MISMATCH',
+                'CHILD_PARENT_MISMATCH','CLIENT_ROOT_OVERLAP',
                 'REGISTRATION_OWNER_CONFLICT','EXISTING_IDENTITY_REQUIRED','EXISTING_CLIENT_REQUIRED',
                 'CLIENT_SELECTION_REQUIRED','CLIENT_ROOT_IS_CHILD','REGISTRATION_OWNERSHIP_VERIFIED_RETRY_REQUIRED'),409)}.get(reason,503))
         self._send(status,json.dumps({'ok':False,'reason':reason}).encode(),'application/json; charset=utf-8')
@@ -8703,6 +8796,7 @@ class Handler(BaseHTTPRequestHandler):
                 payload = {'name':'orrery-telemetry','version':_resolve_version(),'api':API_GENERATION,
                     'runtime_mode':'global','capabilities':{'operator_http_admission':1,'ui_read':1,
                     'global_spawn':1,'instruction_migration':1,'global_dashboard_ui':1,
+                    'global_spawn_full_caller':1,
                     'global_runtime_observation':1,'operator_session':1}}
             elif path == '/api/runtime-observations':
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
@@ -9051,12 +9145,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:payload=json.loads(self.rfile.read(length))
                 except (json.JSONDecodeError,UnicodeDecodeError) as exc:
                     raise BackendError('QUERY_INVALID',400) from exc
-                def cwd(value):
-                    if not os.path.isabs(value) or not os.path.isdir(value):raise BackendError('SPAWN_DIRECTORY_INVALID',400)
-                    resolved=os.path.realpath(value)
-                    if not any(_is_within_root(resolved,root) for root in _spawn_roots()):raise BackendError('SPAWN_DIRECTORY_OUTSIDE_ROOTS',400)
-                    return resolved
-                result=Backend(GLOBAL_SERVER_CONFIG).post(path,payload,cwd,_open_terminal_tmux)
+                result=(do_spawn(payload) if path=='/api/global/spawn' else
+                    Backend(GLOBAL_SERVER_CONFIG).post(path,payload,_global_spawn_cwd,_open_terminal_tmux))
                 self._send(200 if result.get('ok') else 409,json.dumps(result,ensure_ascii=False).encode(),'application/json; charset=utf-8')
             except Exception as exc:
                 self._global_failure(exc)

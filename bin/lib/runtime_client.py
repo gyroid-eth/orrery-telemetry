@@ -33,6 +33,11 @@ from functools import wraps
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
+# This client is also loaded with runpy by the installed operator/dashboard.
+# runpy does not add the script's directory to sys.path as direct execution
+# does. Resolve sibling private helpers from this same fixed payload, not cwd.
+_LIBRARY = str(Path(__file__).resolve().parent)
+if _LIBRARY not in sys.path:sys.path.insert(0,_LIBRARY)
 _PROCESS_API = runpy.run_path(str(Path(__file__).with_name('process_observation.py')))
 ClientError = _PROCESS_API['ClientError']
 integer = _PROCESS_API['integer']
@@ -52,6 +57,20 @@ CLIENT_LAYOUT = {'context': 'runtime-client.json', 'credential': 'credential.jso
     'mutation': 'runtime/mutation-pending.json', 'mutex': 'runtime/mutation.lock', 'child': 'runtime/child-state.json',
     'operation_lock': 'runtime/child.lock', 'task': 'runtime/task.md', 'launch': 'runtime/launch.json'}
 CLIENT_DIRECTORIES = ('runtime', 'runtime/session_index', 'runtime/live-sessions', 'runtime/provider', 'runtime/release-debounce', 'runtime/provider-home')
+
+
+def validate_child_tools(options):
+    """Validate an explicit API selection BEFORE admission/locks/effects.
+
+    Keep literal values untouched; normalization is the existing tools grammar,
+    not permission approval or a preview nonempty-tools exception. Old minimal
+    inputs without a parsed selection retain their existing preparation path.
+    """
+    if 'parsed_tools' not in options:return
+    policy=runpy.run_path(str(ROOT/'hooks/child_tools.py'))
+    try:policy['normalize'](options.get('base','default'),options['parsed_tools'])
+    except policy['ToolsError']:raise ClientError('CHILD_TOOLS_INVALID') from None
+
 S1_ERRORS = frozenset({'NAME_CONFLICT', 'NAME_INVALID', 'OWNER_REQUIRED', 'WRITER_FENCED',
     'STALE_RUNTIME_BINDING', 'WINDOW_INPUT_REQUIRED', 'WINDOW_OWNER_MISMATCH',
     'EXISTING_WINDOW_REQUIRED', 'CREDENTIAL_INVALID', 'CREDENTIAL_GENERATION_CONFLICT',
@@ -248,6 +267,16 @@ def read_private(path):
         raise ClientError('PRIVATE_FILE_UNAVAILABLE') from exc
 
 
+def _read_intent_task_source(path):
+    # Caller-owned input follows the configure/materialization contract, not
+    # private runtime-state permissions. The published copy stays private.
+    from local_model_auth import secure_read
+    try:
+        return secure_read(path, os.getuid())
+    except (OSError, TypeError, ValueError):
+        raise ClientError('LOCAL_MODEL_TASK_CHANGED') from None
+
+
 def read_json(path):
     try:
         value = json.loads(read_private(path))
@@ -409,13 +438,13 @@ def selected(argv=None, *, path=None, bootstrap=False):
             'source': source, 'reason': None}
 
 
-def configured(path=None, *, recovery=None, selection=None):
+def configured(path=None, *, recovery=None, selection=None, read_only=False):
     choice = selection or selected(sys.argv[1:] if path is None else [], path=path)
     if choice['mode'] == 'legacy':
         return None
     if choice['context'] is None:
         raise ClientError('CONTEXT_UNAVAILABLE')
-    return RuntimeClient(choice['context'], recovery=recovery)
+    return RuntimeClient(choice['context'], recovery=recovery,read_only=read_only)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -644,7 +673,7 @@ def prepare_client_root(config, name):
 
 
 class RuntimeClient:
-    def __init__(self, path, *, recovery=None):
+    def __init__(self, path, *, recovery=None, read_only=False):
         self.path = absolute(str(path))
         self.raw = read_private(self.path)
         self.config = read_json(self.path)
@@ -659,7 +688,17 @@ class RuntimeClient:
         self.isolation = absolute(c.get('isolation_root'))
         if not self.path.is_relative_to(self.isolation):
             raise ClientError('CONTEXT_OUTSIDE_ISOLATION')
-        roots = [Path(tempfile.gettempdir()).resolve(), Path('/private/tmp').resolve()]
+        if read_only:
+            # tempfile.gettempdir() tests candidates by creating/removing a
+            # file. Read-only admission must not mutate even TMPDIR's mtime.
+            candidates = ([tempfile.tempdir] if tempfile.tempdir is not None else
+                          [os.environ.get(key) for key in ('TMPDIR','TEMP','TMP')]+['/tmp','/var/tmp','/usr/tmp'])
+            temporary = next((Path(p).resolve() for p in candidates if isinstance(p,str)
+                              and Path(p).is_absolute() and Path(p).is_dir()
+                              and os.access(p,os.R_OK|os.W_OK|os.X_OK)),None)
+            roots = [Path('/private/tmp').resolve()]+([temporary] if temporary is not None else [])
+        else:
+            roots = [Path(tempfile.gettempdir()).resolve(), Path('/private/tmp').resolve()]
         if not any(self.isolation.resolve().is_relative_to(p) for p in roots):
             raise ClientError('ISOLATION_REQUIRED')
         if any(k in c for k in ('runtime_dir', 'credential_file', 'client_root')) or not all(k in c for k in ('agentstack_home', 'client_name')):
@@ -709,10 +748,15 @@ class RuntimeClient:
             raise ClientError('WINDOW_BINDING_INVALID')
 
         self.recovery = recovery
+        # Recovery preparation only validates the existing pending proof and
+        # sets in-memory ownership. Read-only admission must keep those checks,
+        # including interrupted credential/context activation, without a mutex
+        # or output write. The normal path still acquires C below.
         self.prepare_recovery_owner()
         self.validate_path_roles()
-        with self.operation_mutex():
-            pass
+        if not read_only:
+            with self.operation_mutex():
+                pass
 
     def directory_contains(self, directory, path):
         # Path.resolve does not canonicalize APFS case/Unicode aliases. Match
@@ -915,6 +959,37 @@ class RuntimeClient:
         kinds = {'context': KIND, 'credential': 'orrery-global-credential-v1',
                  'registration': REG_PENDING_KIND, 'enrollment': ENROLL_PENDING_KIND,
                  'metadata': METADATA_KIND, 'profile': PROFILE_KIND}
+        if role == 'profile' and row.get('configuration_stage') == 'prepared':
+            from runtime_intent_store import checked_intent
+            from runtime_caller_schema import CALLER_FIELDS, OPTIONAL_FIELDS, canonical_caller
+            from runtime_launch_intent import model_reference
+            from local_model_auth import LocalModelError
+            try:
+                intent = checked_intent(row['launch_intent'])
+                caller = {key:value for key,value in intent.items() if key in CALLER_FIELDS|OPTIONAL_FIELDS}
+                caller['model'] = model_reference(intent)
+                canonical_caller(caller)
+                if (set(row) != {'kind','client_config','configuration_stage','launch_intent',*self.binding}
+                        or row['kind'] != PROFILE_KIND or row['client_config'] != str(self.path)
+                        or any(row.get(key) != value for key,value in self.binding.items())
+                        or intent.get('operator_uid') != os.getuid()
+                        or (self.identity and self.identity.get('name') != intent.get('name'))):
+                    raise ValueError()
+                if intent['model']['kind']=='local-profile':
+                    if (not re.fullmatch(r'[0-9a-f]{64}',intent.get('task_sha256',''))
+                            or not isinstance(intent.get('configuration_evidence'),dict)
+                            or intent['configuration_evidence'].get('requires_native_validation') is not True):
+                        raise ValueError()
+                elif intent['model']['kind']=='catalog':
+                    from runtime_launch_intent import materialize_launch_intent
+                    if 'task_sha256' not in intent or (intent['task_sha256'] is not None and
+                            not re.fullmatch(r'[0-9a-f]{64}',intent['task_sha256'])):raise ValueError()
+                    materialize_launch_intent(intent,{'mode':'global','client_root':str(self.client_root),
+                        'operator_uid':os.getuid()},operation='spawn')
+                else:raise ValueError()
+            except (KeyError,TypeError,ValueError,LocalModelError):
+                raise ClientError('OUTPUT_SCHEMA_INVALID') from None
+            return
         valid = (row.get('schema_version') == 3 and row.get('binding_kind') == 'global-self') if role == 'session' else row.get('kind') == kinds[role]
         if not valid or any(row.get(k) != v for k, v in self.binding.items()):
             raise ClientError('OUTPUT_SCHEMA_INVALID')
@@ -1341,7 +1416,33 @@ class RuntimeClient:
                 result.update(window_verification=verified['verification'],window_ready=verified['ready'])
         return result
 
+    def check_explicit_target(self):
+        if not hasattr(self, '_explicit_target_name'):
+            return
+        name = self._explicit_target_name
+        identity = self.identity
+        if not identity or not isinstance(identity.get('name'),str) or not identity['name']:
+            raise ClientError('GLOBAL_TARGET_OWNERSHIP_UNKNOWN')
+        if identity['name'] != name:
+            raise ClientError('REGISTRATION_IDENTITY_MISMATCH')
+        credential = read_json(self.credential)
+        if (any(credential.get(key) != identity.get(key) for key in ('agent_id','credential_generation'))
+                or credential.get('name',name) != name):
+            raise ClientError('REGISTRATION_IDENTITY_MISMATCH')
+
     def reconnect(self, *, program=None, model=None):
+        # operation_mutex may have refreshed context since offline admission.
+        # Detect a now-known mismatch before even the fresh owner request.
+        self.check_explicit_target()
+        metadata = self.registration_metadata()
+        local = self.check_local_registration((self.identity or {}).get('name'),
+            program if program is not None else metadata.get('program'),
+            model if model is not None else metadata.get('model'),metadata=model is None)
+        if local is not None and model is not None:model = local['projection']['model']
+        if hasattr(self, '_explicit_target_name'):
+            current = self.inspect_owner()
+            if current.get('name') != self._explicit_target_name:
+                raise ClientError('REGISTRATION_IDENTITY_MISMATCH')
         if program is None and model is None:
             with self.fence():
                 _,schemas=self.capabilities()
@@ -1355,7 +1456,6 @@ class RuntimeClient:
                 # Liveness cannot depend on a receipt-bearing policy mutation.
                 # Apply policy only through its explicit operator/tool entrance.
                 return observation
-        metadata = self.registration_metadata()
         if program is None:
             program = metadata.get('program')
         if model is None:
@@ -1762,11 +1862,58 @@ class RuntimeClient:
         self.write_output(self.outputs['child'], {**state, 'phase': 'retained',
             'resume_expires_at': (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()}, 'child')
 
-    def prepare_child(self, options):
+    def _prepare_child_launch(self, task_file=None, *, embed_task=False):
+        """Existing task publication, shared by explicit entry and operator.
+
+        Caller has already selected/admitted the fixed child and parent.
+        This is preparation only: no registration, instruction configure or exec.
+        """
+        with self.operation_mutex(), self.fence():
+            state = read_json(self.outputs['child'])
+            if task_file:
+                approved = None
+                if self.profile_path.exists() or self.profile_path.is_symlink():
+                    self.validate_output(self.profile_path,'profile')
+                    saved = read_json(self.profile_path).get('launch_intent')
+                    if saved is not None:
+                        from runtime_intent_store import checked_intent
+                        from local_model_auth import LocalModelError
+                        try:approved = checked_intent(saved)
+                        except LocalModelError as exc:raise ClientError(str(exc)) from None
+                        if str(task_file) != approved['task']:
+                            raise ClientError('LOCAL_MODEL_INTENT_CHANGED')
+                content = _read_intent_task_source(task_file) if approved is not None else Path(task_file).read_bytes()
+                if len(content) > 65536:
+                    raise ClientError('PAYLOAD_TOO_LARGE')
+                if approved is not None and hashlib.sha256(content).hexdigest() != approved.get('task_sha256'):
+                    raise ClientError('LOCAL_MODEL_TASK_CHANGED')
+                task = self.outputs['task']
+                if task.exists() or task.is_symlink():
+                    if read_private(task) != content:
+                        raise ClientError('TASK_PENDING_CONFLICT')
+                else:
+                    atomic_bytes(task,content,lambda:self.validate_output(task,'task'))
+            if embed_task:
+                self.write_output(self.outputs['child'],{**state,'task_delivery':'embedded'},'child')
+            return ({**self.observe(),'prepared':True,'runtime_ready':False,
+                     'execution_reason':'GLOBAL_CHILD_EXPLICIT_LAUNCH_REQUIRED'}, state)
+
+    def prepare_child(self, options, *, _caller=None, _intent_digest=None,
+                      _registration_sha256=None):
+        validate_child_tools(options)
         name = options.get('child_client_name')
         validate_client_name(name)
         if name == self.config['client_name']:
             raise ClientError('CLIENT_ROOT_OVERLAP')
+        # Local preparation reads an explicitly configured fixed child root;
+        # it never manufactures a root/configuration before admission.
+        requested = options.get('model','')
+        if isinstance(requested,str) and requested.startswith('local:'):
+            fixed = self.clients_parent/name/CLIENT_LAYOUT['context']
+            if not fixed.exists() and not fixed.is_symlink():
+                raise ClientError('LOCAL_MODEL_INTENT_OWNER_REQUIRED')
+            local_child = RuntimeClient(fixed,read_only=True)
+            local_child.check_local_registration(options.get('name',name),options.get('program','claude-code'),requested)
         path = prepare_client_root(self.config,name)
         root = path.parent
         saved = read_json(path)
@@ -1778,8 +1925,22 @@ class RuntimeClient:
         if pending and pending.get('row'):
             recovery = ('finalize-create', pending['row']['agent_id'])
         child = RuntimeClient(path, recovery=recovery)
+        child.check_local_registration(options.get('name',name),options.get('program','claude-code'),
+                                       options.get('model',options.get('program','claude-code')))
         parent = self.observe()
         with child.operation_mutex():
+            if _caller is not None:
+                from runtime_local_launch import admit_caller_request
+                admit_caller_request(child,_caller,expected_digest=_intent_digest)
+                if _caller['parent']!=parent['name']:
+                    raise ClientError('CHILD_PARENT_MISMATCH')
+            if _registration_sha256 is not None:
+                with child.fence():
+                    pending=child.outputs['registration']
+                    if not pending.exists() and not pending.is_symlink():
+                        raise ClientError('TARGET_UNAVAILABLE')
+                    if hashlib.sha256(read_private(pending)).hexdigest()!=_registration_sha256:
+                        raise ClientError('REGISTRATION_PENDING_CONFLICT')
             program = options.get('program', 'claude-code')
             model = options.get('model', program)
             task = options.get('task_description', 'Delegated child agent')
@@ -1831,6 +1992,8 @@ class RuntimeClient:
 
     def register_intent(self, name, program, model, task=None):
         """One same-token registration journal for standalone and child roots."""
+        local = self.check_local_registration(name,program,model)
+        if local is not None:model = local['projection']['model']
         path = self.outputs['registration']
         with self.fence():
             if path.exists():
@@ -1896,6 +2059,7 @@ class RuntimeClient:
 
     def purge_child(self):
         with self.operation_mutex(),self.fence():
+            self.check_explicit_target()
             state=read_json(self.outputs['child'])
             if state['phase'] not in ('retained','purging','purged'):
                 raise ClientError('CHILD_NOT_RETAINED')
@@ -1908,6 +2072,9 @@ class RuntimeClient:
             if expires is None or datetime.fromisoformat(expires.replace('Z','+00:00'))>datetime.now(timezone.utc):
                 raise ClientError('CHILD_RETENTION_NOT_EXPIRED')
             current=self.management('inspect',agent_id=self.identity['agent_id'])
+            if (hasattr(self, '_explicit_target_name') and
+                    current.get('name') != self._explicit_target_name):
+                raise ClientError('REGISTRATION_IDENTITY_MISMATCH')
             if current.get('retired_at') is None:
                 raise ClientError('CHILD_NOT_RETIRED')
             if self.session_liveness() != 'absent':
@@ -1928,8 +2095,11 @@ class RuntimeClient:
         return {'ok': True, 'identity': row, 'state': state, 'runtime_ready': False}
 
     def resume_child(self, options):
+        validate_child_tools(options)
         with self.operation_mutex():
             state = read_json(self.outputs['child'])
+            metadata=self.registration_metadata()
+            self.check_local_registration(self.identity['name'],metadata.get('program'),metadata.get('model'),metadata=True)
             if state['phase'] in ('purging', 'purged'):
                 raise ClientError('CHILD_PURGED')
             expires = state['resume_expires_at']
@@ -1955,9 +2125,11 @@ class RuntimeClient:
     def save_profile(self, path=None):
         path = self.check_profile_destination(path)
         row = self.observe()
-        execution = read_json(path).get('execution') if path.exists() else None
+        previous = read_json(path) if path.exists() else {}
         value = {'kind': PROFILE_KIND, 'client_config': str(self.path), **{k:v for k,v in row.items() if k not in ('window_row_id','window_uuid')}}
-        if execution is not None:value['execution']=execution
+        for key in ('execution', 'launch_intent', 'local_model_configuration'):
+            if key in previous:
+                value[key] = previous[key]
         with self.fence():
             self.write_output(path, value, 'profile')
         return {'ok': True, 'kind': PROFILE_KIND, 'agent_id': row['agent_id'],
@@ -1977,6 +2149,7 @@ class RuntimeClient:
             raise ClientError('REGISTRATION_PENDING_INVALID')
         if saved.get('row', {}).get('agent_id', agent_id) != agent_id:
             raise ClientError('REGISTRATION_IDENTITY_MISMATCH')
+        self.check_local_registration(saved.get('name'),saved.get('program'),saved.get('model'),metadata=True)
         current = self.management('inspect', agent_id=agent_id)
         if saved.get('row') and saved['row'].get('credential_generation') != current.get('credential_generation'):
             raise ClientError('REGISTRATION_CREDENTIAL_MISMATCH')
@@ -2088,6 +2261,13 @@ class RuntimeClient:
         programs = {'claude': 'claude-code', 'codex': 'codex', 'gemini': 'antigravity'}
         defaults = {'claude': 'claude-code', 'codex': 'codex', 'gemini': 'gemini-3.8-flash-high'}
         model = os.environ.get('AGENTSTACK_' + provider.upper() + '_MODEL') or defaults[provider]
+        if self.profile_path.exists() or self.profile_path.is_symlink():
+            profile=read_json(self.profile_path)
+            if 'launch_intent' in profile:
+                from local_model_auth import LocalModelError
+                from runtime_launch_intent import model_reference
+                try:model=model_reference(profile['launch_intent'])
+                except LocalModelError as exc:raise ClientError(str(exc)) from None
         row = self.reconnect(program=programs[provider], model=model)
         values = {'AGENT_NAME': row['name'], 'AGENTSTACK_AGENT_ID': str(row['agent_id']),
                   'AGENTSTACK_CLIENT_CONFIG': str(self.path), 'AGENTSTACK_RUNTIME_DIR': str(self.runtime_dir),
@@ -2107,6 +2287,12 @@ class RuntimeClient:
 
     def launch(self, provider, directory):
         return runtime_delivery(self).start(provider, directory)
+
+    def check_local_registration(self, name, program, model, *, metadata=False):
+        from local_model_auth import LocalModelError
+        from runtime_local_launch import admit_local_registration
+        try:return admit_local_registration(self,name,program,model,metadata=metadata)
+        except LocalModelError as exc:raise ClientError(str(exc)) from None
 
 
 def safe_private_directory(path):
@@ -2289,6 +2475,121 @@ def profile_operation(path, operation):
             'runtime_execution': 'explicit-launch-required'}
 
 
+_CHILD_PROVIDERS = {'codex':'codex', 'codex-cli':'codex',
+                    'claude-code':'claude', 'antigravity':'gemini'}
+_SHELL_CALLER_FIELDS = ('provider', 'parent', 'resources', 'worktree', 'chrome',
+                        'clear_tools', 'effort', 'strict_output_cap', 'task_delivery')
+
+
+def _entry_child(parent, options, *, read_only=False):
+    name = options.child_client_name
+    validate_client_name(name)
+    path = parent.clients_parent / name / CLIENT_LAYOUT['context']
+    if not path.exists() and not path.is_symlink():
+        raise ClientError('CHILD_PREPARATION_REQUIRED')
+    target = RuntimeClient(path, read_only=read_only)
+    state = read_json(target.outputs['child'])
+    if not parent.identity:
+        raise ClientError('CHILD_PARENT_MISMATCH')
+    expected = {'agent_id':parent.identity['agent_id'],
+                'client_name':parent.config['client_name'],
+                'server_instance_id':parent.binding['expected_server_instance_id']}
+    if state['parent'] != expected:
+        raise ClientError('CHILD_PARENT_MISMATCH')
+    return target, state
+
+
+def _shell_caller_input(options, parent):
+    from runtime_local_launch import validate_caller_request
+    from runtime_caller_schema import PROVIDERS
+    from local_model_auth import LocalModelError
+    if (not options.name or not options.model or not options.task_file
+            or len(options.positionals) != 1):
+        raise ClientError('LOCAL_MODEL_CALLER_INVALID')
+    provider = PROVIDERS.get(options.provider) if options.provider else PROVIDERS.get(
+        options.program or ('codex' if options.codex else 'claude-code'))
+    if (provider is None or (options.codex and provider != 'codex')
+            or (options.program is not None and PROVIDERS.get(options.program) != provider)):
+        raise ClientError('LOCAL_MODEL_CALLER_INVALID')
+    if not parent.identity or not parent.identity.get('name'):
+        raise ClientError('CHILD_PARENT_MISMATCH')
+    if options.parent is not None and options.parent != parent.identity['name']:
+        raise ClientError('CHILD_PARENT_MISMATCH')
+    policy = runpy.run_path(str(ROOT/'hooks/child_tools.py'))
+    try:
+        tools = policy['parse_cli'](options.tools or [])
+        caller = {'provider':provider, 'model':options.model,
+            'cwd':options.positionals[0], 'task':options.task_file, 'name':options.name,
+            'parent':parent.identity['name'], 'base':options.base or 'default',
+            'tools':tools, 'clear_tools':bool(options.clear_tools),
+            'detached':True if options.detached is None else options.detached,
+            'resources':[item for value in (options.resources or [])
+                         for item in (value.split(',') if value else [])],
+            'worktree':bool(options.worktree), 'chrome':bool(options.chrome)}
+        for key in ('effort', 'strict_output_cap', 'task_delivery'):
+            value = getattr(options,key)
+            if value is not None:caller[key] = value
+        if options.embed_task:
+            if caller.get('task_delivery','embedded') != 'embedded':
+                raise ClientError('LOCAL_MODEL_CALLER_INVALID')
+            caller['task_delivery'] = 'embedded'
+        return validate_caller_request(caller)
+    except policy['ToolsError']:
+        raise ClientError('CHILD_TOOLS_INVALID') from None
+    except LocalModelError as exc:
+        raise ClientError(str(exc)) from None
+
+
+def _check_shell_spawn(parent, target, state, options, *, expected_digest=None):
+    from local_model_auth import LocalModelError
+    from runtime_local_launch import admit_caller_request, admit_local_launch
+    frame = read_json(target.profile_path) if target.profile_path.exists() or target.profile_path.is_symlink() else {}
+    present = frame.get('launch_intent') is not None
+    new_fields = any(getattr(options,key) is not None for key in _SHELL_CALLER_FIELDS) or options.detached is False
+    explicit = options.codex or any(getattr(options,key) is not None
+        for key in ('name','program','model','base','tools','detached'))
+    full = new_fields or (options.model or '').startswith('local:') or (present and explicit)
+    metadata = target.registration_metadata()
+    provider = _CHILD_PROVIDERS.get(metadata.get('program'))
+    caller = _shell_caller_input(options,parent) if full else None
+    try:
+        if caller is not None:
+            if provider != caller['provider']:
+                raise LocalModelError('LOCAL_MODEL_IDENTITY_MISMATCH')
+            checked = admit_caller_request(target,caller,expected_digest=expected_digest)
+        else:
+            checked = admit_local_launch(target,provider,state['working_directory'],
+                expected_digest=expected_digest)
+        digest = checked['intent']['intent_digest'] if checked is not None else None
+        if checked is not None:
+            intent = checked['intent']
+            if state['working_directory'] != intent['cwd']:
+                raise LocalModelError('LOCAL_MODEL_IDENTITY_MISMATCH')
+            if (state['tools_selection'] != {'base':intent['base'], 'tools':intent['tools']}
+                    or state['task_delivery'] != intent.get('task_delivery','mail')):
+                raise LocalModelError('LOCAL_MODEL_INTENT_CHANGED')
+            if options.task_file is not None:
+                if options.task_file != intent['task']:
+                    raise LocalModelError('LOCAL_MODEL_INTENT_CHANGED')
+                content = _read_intent_task_source(options.task_file)
+            else:
+                # A minimal reference reuses its approved private copy; the
+                # original may have been removed after task publication.
+                content = read_private(target.outputs['task'])
+            if len(content) > 65536:raise ClientError('PAYLOAD_TOO_LARGE')
+            if hashlib.sha256(content).hexdigest() != intent.get('task_sha256'):
+                raise LocalModelError('LOCAL_MODEL_TASK_CHANGED')
+            target.check_local_registration(target.identity['name'],metadata.get('program'),
+                                            metadata.get('model'),metadata=True)
+            if caller is not None or options.embed_task or options.task_delivery is not None:
+                delivery = 'embedded' if options.embed_task else (options.task_delivery or 'mail')
+                if delivery != intent.get('task_delivery','mail'):
+                    raise LocalModelError('LOCAL_MODEL_INTENT_CHANGED')
+        return {'caller':caller, 'intent_digest':digest}
+    except LocalModelError as exc:
+        raise ClientError(str(exc)) from None
+
+
 def entry_operation(entry, argv):
     if os.environ.get('AGENTSTACK_MAIL_DISABLED') == '1' and entry in ('pre-edit', 'post-edit', 'end-session', 'session-start', 'notifications', 'registered', 'record-self'):
         return 0
@@ -2303,9 +2604,18 @@ def entry_operation(entry, argv):
     parser.add_argument('--task-file')
     parser.add_argument('--embed-task', action='store_true')
     parser.add_argument('--codex', action='store_true')
-    parser.add_argument('--base', choices=['default','mail-only'], default='default')
+    parser.add_argument('--base', choices=['default','mail-only'])
     parser.add_argument('--tools', action='append')
-    parser.add_argument('--detached', action='store_true')
+    parser.add_argument('--detached', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--provider', choices=['codex','codex-cli','claude','claude-code'])
+    parser.add_argument('--parent')
+    parser.add_argument('--resources', action='append')
+    parser.add_argument('--worktree', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--chrome', '--claude-chrome', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--clear-tools', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--effort')
+    parser.add_argument('--strict-output-cap', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--task-delivery', choices=['mail','embedded'])
     parser.add_argument('--operator', action='store_true')
     parser.add_argument('--agent-id', type=int)
     parser.add_argument('--expected-digest')
@@ -2314,13 +2624,31 @@ def entry_operation(entry, argv):
     if choice['mode'] == 'legacy':
         return 125
     options = parser.parse_args(argv)
+    spawn_fields = any(getattr(options,key) is not None for key in _SHELL_CALLER_FIELDS) or options.detached is False
+    if entry != 'spawn-child' and spawn_fields:
+        raise ClientError('ARGUMENTS_UNSUPPORTED')
+    admitted = None
+    if entry == 'spawn-child':
+        parent = configured(options.context, selection=choice, read_only=True)
+        if parent is None:return 125
+        target, state = _entry_child(parent,options,read_only=True)
+        admitted = _check_shell_spawn(parent,target,state,options)
     recovery = ('finalize-create', options.agent_id) if entry == 'finalize-child' and options.operator else None
-    client = configured(options.context, recovery=recovery)
+    if entry in ('purge-child', 'reregister'):
+        admission = runpy.run_path(str(Path(__file__).with_name('runtime_named_target.py')))
+        requested = options.positionals[0] if len(options.positionals) == 1 else None
+        client = admission['require_named_target'](choice, requested, globals())
+    else:
+        client = configured(options.context, recovery=recovery)
     if client is None:
         return 125
     if client.mode != 'global':
         raise ClientError('LEGACY_CONTEXT_REQUIRES_PR7')
     values = {k:v for k,v in vars(options).items() if v is not None}
+    # Keep old downstream option values while the spawn adapter can distinguish
+    # omitted CLI fields in its Namespace from explicit defaults.
+    values.setdefault('base','default')
+    values.setdefault('detached',False)
     if entry == 'preregister-child':
         if options.tools:
             tools=runpy.run_path(str(ROOT/'hooks/child_tools.py'))
@@ -2329,44 +2657,32 @@ def entry_operation(entry, argv):
         values['model'] = options.model or values['program']
         result = client.prepare_child(values)
     elif entry in ('spawn-child','resume-child'):
-        if not options.child_client_name or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', options.child_client_name):
-            raise ClientError('CLIENT_NAME_INVALID')
-        path = client.clients_parent / options.child_client_name / CLIENT_LAYOUT['context']
-        if not path.exists() and not path.is_symlink():
-            raise ClientError('CHILD_PREPARATION_REQUIRED')
-        target = RuntimeClient(path)
-        state = read_json(target.outputs['child'])
-        parent = state['parent']
-        if (parent['agent_id'] != client.identity['agent_id'] or parent['client_name'] != client.config['client_name']
-                or parent['server_instance_id'] != client.binding['expected_server_instance_id']):
-            raise ClientError('CHILD_PARENT_MISMATCH')
+        target, state = _entry_child(client,options)
         if entry == 'resume-child':
             result = target.resume_child(values)
         else:
-            with target.operation_mutex(), target.fence():
-                state = read_json(target.outputs['child'])
-                if options.task_file:
-                    content = Path(options.task_file).read_bytes()
-                    if len(content) > 65536:
-                        raise ClientError('PAYLOAD_TOO_LARGE')
-                    task = target.outputs['task']
-                    if task.exists() or task.is_symlink():
-                        if read_private(task) != content:
-                            raise ClientError('TASK_PENDING_CONFLICT')
-                    else:
-                        atomic_bytes(task,content,lambda:target.validate_output(task,'task'))
-                if options.embed_task:
-                    target.write_output(target.outputs['child'],{**state,'task_delivery':'embedded'},'child')
-                result = {**target.observe(),'prepared':True,'runtime_ready':False,
-                          'execution_reason':'GLOBAL_CHILD_EXPLICIT_LAUNCH_REQUIRED'}
+            with target.operation_mutex():
+                _, state = _entry_child(client,options,read_only=True)
+                checked = _check_shell_spawn(client,target,state,options,
+                    expected_digest=admitted['intent_digest'])
+                if checked['intent_digest'] != admitted['intent_digest']:
+                    raise ClientError('LOCAL_MODEL_INTENT_CHANGED')
+                caller = checked['caller']
+                embedded = (caller.get('task_delivery','mail') == 'embedded') if caller is not None else options.embed_task
+                result, state = target._prepare_child_launch(options.task_file, embed_task=embedded)
         if not options.prepare_only:
             program = target.registration_metadata().get('program')
-            provider = {'codex':'codex','codex-cli':'codex','antigravity':'gemini','claude-code':'claude'}.get(program)
+            provider = _CHILD_PROVIDERS.get(program)
             if provider is None:
                 raise ClientError('PROVIDER_UNAVAILABLE')
-            result = runtime_delivery(target).start(provider, state['working_directory'], detached=True,
+            launch_options = {}
+            if admitted is not None and admitted['intent_digest'] is not None:
+                launch_options['expected_intent_digest'] = admitted['intent_digest']
+            detached = admitted['caller']['detached'] if admitted is not None and admitted['caller'] is not None else True
+            result = runtime_delivery(target).start(provider, state['working_directory'], detached=detached,
                 launch_kind='resume' if entry == 'resume-child' else 'startup',
-                provider_session_id=options.positionals[0] if entry == 'resume-child' and options.positionals else None)
+                provider_session_id=options.positionals[0] if entry == 'resume-child' and options.positionals else None,
+                **launch_options)
     elif entry in ('pre-edit','post-edit','end-session','session-start','notifications','registered','record-self'):
         raw = sys.stdin.read(1048577)
         if len(raw) > 1048576:
@@ -2401,6 +2717,8 @@ def entry_operation(entry, argv):
         result = client.abandon_registration(options.expected_digest)
     elif entry == 'purge-child':
         result = client.purge_child()
+    elif entry == 'reregister':
+        result = client.reconnect(program=options.program, model=options.model)
     elif entry == 'inspect-child':
         result = client.inspect_child()
     elif entry == 'cancel-child-resume':
@@ -2520,6 +2838,7 @@ def main(argv=None):
     parser.add_argument('--server-config')
     parser.add_argument('--parent-context')
     parser.add_argument('--operator',action='store_true')
+    parser.add_argument('--assume-yes',action='store_true')
     parser.add_argument('operation', choices=['mode', 'observe', 'reconnect', 'bootstrap', 'launch', 'call',
                                              'register', 'session', 'inspect', 'claim', 'recover', 'request-status', 'policy', 'save-profile', 'resolve-mutation', 'call-json', 'release-worker', 'replay-pending', 'proxy', 'operator-json', 'execute-launch', 'provider-exec', 'watch', 'doctor-local', 'daemon-serve', 'codex-plan', 'codex-apply', 'instruction-configure', 'watch-service', 'watch-auto'])
     parser.add_argument('args', nargs='*')
@@ -2527,6 +2846,22 @@ def main(argv=None):
     try:
         choice = selected(argv)
         if (a.parent_context or a.operator) and a.operation!='resolve-mutation':raise ClientError('ARGUMENTS_UNSUPPORTED')
+        local_action = None
+        if a.operation == 'instruction-configure':
+            if len(a.args) >= 3:
+                if (a.args[:1] != ['operator'] or a.args[1] not in ('codex','claude')
+                        or a.args[2] not in ('local-plan','local-apply')
+                        or len(a.args) != (3 if a.args[2]=='local-plan' else 4)):
+                    raise ClientError('ARGUMENTS_UNSUPPORTED')
+                local_action = a.args[2]
+                if local_action == 'local-apply':
+                    if not a.assume_yes:raise ClientError('OPERATOR_CONFIRMATION_REQUIRED')
+                    if not re.fullmatch(r'[0-9a-f]{64}',a.args[3]):raise ClientError('ARGUMENTS_UNSUPPORTED')
+        if a.assume_yes and local_action != 'local-apply':raise ClientError('ARGUMENTS_UNSUPPORTED')
+        if local_action:
+            # A read-only plan must not populate installed helper __pycache__
+            # directories before the operator has approved any outputs.
+            sys.dont_write_bytecode = True
         if a.operation == 'mode':
             print(choice['mode']); return 0
         if a.operation == 'watch-auto':
@@ -2545,10 +2880,28 @@ def main(argv=None):
                 raise ClientError('CONTEXT_REQUIRED')
             config = read_json(context_path)
             recovery = (a.operation, (config.get('identity') or {}).get('agent_id'))
-        client = configured(a.context, recovery=recovery, selection=choice)
+        if local_action and choice['mode']=='legacy':
+            from local_model_auth import LocalModelError
+            try:
+                from runtime_legacy_configuration import instruction_configure
+                raw=sys.stdin.read(1048577)
+                if len(raw.encode('utf-8'))>1048576:raise ClientError('CLIENT_INPUT_INVALID')
+                value=instruction_configure(a.args[1],local_action,json.loads(raw),
+                    approved_id=a.args[3] if local_action=='local-apply' else None)
+            except LocalModelError as exc:raise ClientError(str(exc)) from None
+            print(json.dumps(value));return 0
+        client = (configured(a.context,recovery=recovery,selection=choice,read_only=True) if local_action
+                  else configured(a.context,recovery=recovery,selection=choice))
         if client is None:
             raise ClientError('CONTEXT_REQUIRED')
         if a.operation == 'instruction-configure':
+            if local_action:
+                raw = sys.stdin.read(1048577)
+                if len(raw.encode('utf-8')) > 1048576:raise ClientError('CLIENT_INPUT_INVALID')
+                payload = json.loads(raw)
+                value = runtime_delivery(client).instruction_configure(a.args[1],local_action=local_action,
+                    payload=payload,approved_id=a.args[3] if local_action=='local-apply' else None)
+                print(json.dumps(value));return 0
             if len(a.args)!=2 or a.args[0]!='operator':raise ClientError('OPERATOR_CONFIRMATION_REQUIRED')
             print(json.dumps(runtime_delivery(client).instruction_configure(a.args[1])));return 0
         if a.operation in ('codex-plan','codex-apply'):

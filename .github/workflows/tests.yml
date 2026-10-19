@@ -86,6 +86,11 @@ jobs:
         run: brew install tmux uv
       - name: Install test and package-build tools
         run: python3 -m pip install pytest pytest-timeout pytest-xdist build -e ./packages/agentstack_mail
+      - name: Verify and log selected Python fixture runtime
+        run: |
+          # Keep the actual setup-python build branch visible even when the
+          # ordinary xdist suite captures successful-test stdout.
+          PYTHONPATH=.:packages/agentstack_mail/src python3 -m pytest -q -s -n 0 tests/r3_local_profiles/test_delivery_python_runtime.py::test_selected_base_starts_private_python_and_records_actual_branch
       # `tests/` だけを指定していた間、integrations/codex_app/tests/ の 111 件は
       # 一度も CI で実行されていなかった。テストの置き場所が増えるたびに黙って
       # 対象から外れるので、ディレクトリは明示して数を数えられるようにする。

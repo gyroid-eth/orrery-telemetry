@@ -758,13 +758,14 @@ def test_resume_stops_on_an_invalid_record(monkeypatch, tmp_path, damage):
 def _spawn_spec(monkeypatch, payload):
     captured = []
     monkeypatch.setattr(server, "_spawn_unavailable_error", lambda: None)
-    monkeypatch.setattr(server, "_spawn_request", lambda _p: ({}, None))
     monkeypatch.setattr(server, "_claude_catalog", lambda: type("C", (), {"error": None, "source": "local_cache", "models": ()})())
     monkeypatch.setattr(
         server, "spawn_with_launch_spec",
         lambda _payload, spec: captured.append(spec) or {"ok": True},
     )
-    result = server.do_spawn(payload)
+    # Exercise the actual canonical request, including the new pre-register
+    # gate's name, rather than returning a structurally impossible empty dict.
+    result = server.do_spawn({"standalone": True, **payload})
     return result, captured
 
 

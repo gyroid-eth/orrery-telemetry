@@ -1051,6 +1051,44 @@ def _assert_owner_installed(owner):
     assert owner.read_text() == _OWNER_TOKEN
 
 
+def _assert_resume_lock_artifact(runtime, name):
+    directory = runtime / "child-agents"
+    assert stat.S_ISDIR(directory.lstat().st_mode)
+    locks = list(directory.iterdir())
+    assert [path.name for path in locks] == [f".{name}.resume.lock"]
+    info = locks[0].lstat()
+    assert stat.S_ISREG(info.st_mode)
+    assert stat.S_IMODE(info.st_mode) == 0o600
+    assert info.st_nlink == 1
+
+
+@pytest.mark.parametrize("artifact", ["regular", "credential-symlink", "directory-symlink"])
+def test_resume_lock_artifact_assertion_rejects_symlinks(tmp_path, artifact):
+    runtime = tmp_path / "runtime"
+    (runtime / "child-agents").mkdir(parents=True)
+    owner = runtime / "agent_token_QuietCurie"
+    owner.write_text(_OWNER_TOKEN)
+    owner.chmod(0o600)
+    lock = runtime / "child-agents" / ".QuietCurie.resume.lock"
+    if artifact == "credential-symlink":
+        lock.symlink_to(owner)
+    else:
+        lock.touch(mode=0o600)
+    if artifact == "directory-symlink":
+        directory = runtime / "child-agents"
+        target = tmp_path / "external-child-agents"
+        directory.rename(target)
+        directory.symlink_to(target, target_is_directory=True)
+    if artifact != "regular":
+        with pytest.raises(AssertionError):
+            _assert_resume_lock_artifact(runtime, "QuietCurie")
+    else:
+        _assert_resume_lock_artifact(runtime, "QuietCurie")
+    # Both cases retain exactly the same allowed directory entries and target.
+    assert sorted(path.name for path in runtime.iterdir()) == ["agent_token_QuietCurie", "child-agents"]
+    _assert_owner_installed(owner)
+
+
 @pytest.mark.parametrize("mode", ["before-copy", "empty-owner", "partial-owner"])
 def test_killed_cleanup_installs_unconsumed_handoff_as_owner_credential(monkeypatch, tmp_path, mode):
     result, runtime = _run_killed_cleanup(monkeypatch, tmp_path, mode)
@@ -1065,7 +1103,10 @@ def test_killed_cleanup_installs_unconsumed_handoff_as_owner_credential(monkeypa
     # One usable copy is enough: the handoff it came from is gone, and no
     # staging file is left beside the owner credential.
     assert list((runtime / "spawn-tokens").iterdir()) == []
-    assert sorted(p.name for p in runtime.iterdir()) == ["agent_token_QuietCurie", "spawn-tokens"]
+    assert sorted(p.name for p in runtime.iterdir()) == ["agent_token_QuietCurie", "child-agents", "spawn-tokens"]
+    # Canonical publication now uses the SAME per-name resume lock, not a
+    # second identity store or any generated child-state authority.
+    _assert_resume_lock_artifact(runtime, "QuietCurie")
 
 
 @pytest.mark.parametrize("mode", ["foreign-owner", "symlink-owner"])

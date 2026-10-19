@@ -781,8 +781,10 @@ def test_installer_ships_the_child_mcp_proxy():
         install_dir = tmpdir / "agentstack"
         script = (
             'REPO_ROOT="$1"; INSTALL_DIR="$2"; DRY_RUN=false\n'
+            'SCRIPT_DIR="$REPO_ROOT/scripts"\n'
             'plan() { echo "$*"; }\n'
             'warn() { echo "warning: $*" >&2; }\n'
+            + _extract_install_fn("payload_command")
             + _extract_install_fn("install_child_mcp_proxy")
             + "\ninstall_child_mcp_proxy\n"
         )

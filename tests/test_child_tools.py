@@ -1048,13 +1048,12 @@ def test_record_v3_is_bound_and_announces_tools_at_session_start(tmp_path):
 def test_api_passes_base_and_tools_to_the_launcher(monkeypatch):
     captured = []
     monkeypatch.setattr(server, "_spawn_unavailable_error", lambda: None)
-    monkeypatch.setattr(server, "_spawn_request", lambda _p: ({}, None))
     monkeypatch.setattr(server, "_claude_catalog", lambda: type(
         "C", (), {"error": None, "source": "local_cache", "models": ()})())
     monkeypatch.setattr(server, "spawn_with_launch_spec",
                         lambda _payload, spec: captured.append(spec) or {"ok": True})
     result = server.do_spawn({
-        "task": "t", "model": "claude-opus-5-5", "base": "mail-only",
+        "standalone": True, "task": "t", "model": "claude-opus-5-5", "base": "mail-only",
         "tools": {"browser": {"device": "win-brave"}, "screen": "operate",
                   "mcp": ["notes"]}})
     assert result == {"ok": True}
@@ -1062,7 +1061,7 @@ def test_api_passes_base_and_tools_to_the_launcher(monkeypatch):
         "--base", "mail-only", "--tools", "browser:win-brave",
         "--tools", "screen:operate", "--tools", "mcp:notes")
     captured.clear()
-    assert server.do_spawn({"task": "t", "model": "claude-opus-5-5",
+    assert server.do_spawn({"standalone": True, "task": "t", "model": "claude-opus-5-5",
                             "tools": {"mcp": ["a", "b"], "approve_all": ["b"]}}) == {"ok": True}
     assert captured[0].provider_args == ("--tools", "mcp:a", "--tools", "mcp:b:all")
 
@@ -1091,12 +1090,11 @@ def test_api_rejects_invalid_selections(monkeypatch, payload, message):
     captured = []
     monkeypatch.setattr(server, "_child_tools_module", lambda: child_tools)
     monkeypatch.setattr(server, "_spawn_unavailable_error", lambda: None)
-    monkeypatch.setattr(server, "_spawn_request", lambda _p: ({}, None))
     monkeypatch.setattr(server, "_claude_catalog", lambda: type(
         "C", (), {"error": None, "source": "local_cache", "models": ()})())
     monkeypatch.setattr(server, "spawn_with_launch_spec",
                         lambda _payload, spec: captured.append(spec) or {"ok": True})
-    result = server.do_spawn({"task": "t", **payload})
+    result = server.do_spawn({"standalone": True, "task": "t", **payload})
     assert result["ok"] is False
     assert message in result["error"]
     assert captured == []

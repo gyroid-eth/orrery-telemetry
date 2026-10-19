@@ -76,3 +76,5 @@ Documents without a translation are labelled with their original language. Image
 - [Instruction block migration](instruction-migration.en.md) — User scope, recovery and backup retention.
 
 - [Dedicated tmux launch and termination acceptance plan (Japanese)](r2-tb-lifecycle-plan-v3.md) — Approved R2-Tb callers, schemas, interruption points and fixtures.
+- [Local-model profile core](r3-local-profile-core.en.md) — Explicit configure, sole intent, authentication resources and unverified native gates; ordinary child-launch integration is in progress.
+- [Local-model contract fixtures (Japanese/English)](r3-local-profile-fixtures.md) — Separate core, caller-delivery and native acceptance evidence, including remaining reds.

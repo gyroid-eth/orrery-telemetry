@@ -1196,49 +1196,71 @@
     }
   ],
   "http_spawn_schema": {
-    "type": "object",
-    "properties": {
-      "client_name": {
-        "type": "string",
-        "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
-        "maxLength": 64
+    "anyOf": [
+      {
+        "type": "object",
+        "properties": {
+          "client_name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "maxLength": 64
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "program": {
+            "enum": [
+              "claude-code",
+              "codex",
+              "antigravity",
+              "daemon"
+            ]
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "expected_digest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": ["client_name", "name", "program", "model", "cwd"],
+        "additionalProperties": false
       },
-      "name": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 128
-      },
-      "program": {
-        "enum": [
-          "claude-code",
-          "codex",
-          "antigravity",
-          "daemon"
-        ]
-      },
-      "model": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 128
-      },
-      "cwd": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 4096
-      },
-      "expected_digest": {
-        "type": "string",
-        "pattern": "^[a-f0-9]{64}$"
+      {
+        "type": "object",
+        "properties": {
+          "client_name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "maxLength": 64
+          },
+          "parent_client_name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "maxLength": 64
+          },
+          "caller": {"type": "object"},
+          "prepare_only": {"type": "boolean"},
+          "task_delivery": {"enum": ["mail", "embedded"]},
+          "expected_digest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": ["client_name", "parent_client_name", "caller", "prepare_only"],
+        "additionalProperties": false
       }
-    },
-    "required": [
-      "client_name",
-      "name",
-      "program",
-      "model",
-      "cwd"
-    ],
-    "additionalProperties": false
+    ]
   },
   "http_resume_schema": {
     "type": "object",

@@ -158,7 +158,7 @@ def test_installed_operator_uses_installer_payload_and_shared_schema(operator,mo
     from _installed_client_payload import copy_client_library
     installed=operator.isolation/'installed'
     copy_client_library(installed)
-    (installed/'dashboard').mkdir(mode=0o700)
+    (installed/'dashboard').mkdir(mode=0o700,exist_ok=True)
     shutil.copy2(ROOT/'dashboard/http_operator.py',installed/'dashboard/http_operator.py')
     declaration=re.search(r'^RUNTIME_PUBLIC_ENTRY_SOURCES=\(\n(.*?)^\)',(ROOT/'scripts/install.sh').read_text(),re.M|re.S)
     sources=re.findall(r'"\$REPO_ROOT/([^"\n]+)"',declaration.group(1))

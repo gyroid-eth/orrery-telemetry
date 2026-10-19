@@ -20,6 +20,12 @@ agent の route.json と App の external route は client_name だけを保存�
 
 `agent-start` / `agent-start-codex` / `agent-start-gemini` と子の spawn/resume は共通 runtime helper を使います。cwd・command・出力 slot・capability を先に確認し、window の bind と一意な launch の gate を経て起動します。登録 pending と launch は別の操作です。起動を再登録で回避しません。
 
+内部の `execute-launch` / `provider-exec` は固定 context の後で `--` により
+option を終端し、先頭が `-` の launch nonce も位置引数の値として保ちます。
+`receipt_nonce` は古い process を区別する起動ごとの照合値で、登録 token や
+API credential ではありません。owner の認証は固定 credential、実行の承認は
+既存の phase・runner の親 PID/start・正規 session receipt の照合を使います。
+
 | phase | 戻り方 |
 | --- | --- |
 | planned / gated | status の digest を指定して launch-retry または launch-cancel |
@@ -74,6 +80,55 @@ EOF_JSON
 
 confirmed-ended の途中で live の保存が失敗した場合、status は `operator_required=true / next_operations=[launch-resolve]` を返します。新 digest で同じ confirmed-ended を再提示して残りを完了するまで次の launch は拒否されます。Mail に届かない場合も local status と abandon は使えます。
 proxy は server fixture の schema から owner・binding の入力を除いて生成します。bootstrap と runtime_status は local tool です。bootstrap は trusted session receipt を確認します。名前や呼出し側が渡した owner token で宛先を選びません。新しい window は agent_id の既存 FK に束縛し、legacy_project_id は NULL にします。
+
+## R3 operator の full form（隔離・接続途中）
+
+Python API の `RuntimeOperator.spawn` は、従来の `agent_name/program/model/cwd`
+を渡す最小の standalone 形と、共有 caller dict を渡す子の full form を分けます。
+
+```python
+operator.spawn("child_01", caller=caller, parent_client_name="parent", prepare_only=True)
+```
+
+`caller` は共有 canonical schema の必須欄すべてを持ち、任意欄の省略も保持します。
+未知 key・型違い、full form と最小形の field の混在（明示 `None` も含む）は effect
+前に拒否します。tools は既存の文法で検査し、固定 profile の保存済み intent と全欄を
+照合します。owner/root/auth/scope を caller から選んだり、model を解決し直したり
+しません。full form は、明示 configure 済みの固定 owner を必要とします。
+
+親は明示の固定 `parent_client_name` で選び、その canonical な名前と `caller.parent`
+を照合します。表示名から別の credential/root を lookup しません。同じ子 root を親に
+することも拒否します。`task_delivery` の省略は caller の指定（欄が無ければ mail）を
+使い、別に明示する場合は一致を必要とします。任意欄を intent へ補完して保存しません。
+
+`prepare_only=True` は既存の prepare_child と task 準備までで、provider/tmux を
+起動しません。通常実行は既存 R2 と保存された detached を使い、通常の full form が
+instructions・trust・native 権限を自動設定/承認することはありません。未検証の実 CLI
+は引き続き `LOCAL_MODEL_ADAPTER_UNSUPPORTED` です。配送用 TEST binding の成功を
+native の受入とは数えません。既存の最小 standalone spawn の意味は変わりません。
+
+full form の照合は既存 child C の中でも繰り返し、task 準備後は C を解放します。
+照合済み digest を既存 R2 の launch 準備へ渡し、その C 内・row 作成前にも照合
+するため、間の明示 revision が別の intent を起動することはありません。
+`detached=False` は既存 R2 の foreground runner に呼出し command の実行を渡します。
+
+API 20 の `POST /api/global/spawn` は同じ full form を受けます。必須の
+`client_name`・`parent_client_name`・`caller`・`prepare_only` と、任意の
+`expected_digest`・`task_delivery` を渡します。既存の最小 HTTP 入力とは混在できません。
+`caller.task` は承認済み task **file の絶対 path**で、旧 NEW AGENT の本文とは別です。
+固定 server context と既存の HTTP operator admission を使い、実 `do_spawn` から
+同じ operator へ渡します。cwd は既存 roots で検査しますが、full form の literal は
+canonical path に書き換えて承認と一致させません。省略欄を owner から埋め戻しません。
+構造不正は400、intent/identity/親の不一致は409、未検証 native は503の固定 reason
+です。HTTP の `prepare_only:false`＋`caller.detached:false` は副作用前に400
+`HTTP_FOREGROUND_UNSUPPORTED` で拒否し、detached を変更しません。
+`prepare_only:true` は detached が false でも task 準備まで許可します。
+上記 Python/CLI の foreground runner の契約は変更しません。
+最小 HTTP 入力の schema・正常挙動と legacy は維持しますが、共通の拒否分類により
+最小入力の `LOCAL_MODEL_IDENTITY_MISMATCH`・`LOCAL_MODEL_INTENT_CHANGED` は503から409へ
+改善します（API 20 の互換差）。[HTTP 形式](api.md)も参照してください。
+`global_spawn_full_caller:1` はこの配送入口の capability だけを表し、native の承認を
+表しません。画面・catalog/status・全5入口の受入は別の未完 gate です。
 
 ## Codex hook trust
 
@@ -202,7 +257,7 @@ MAX・keyset・limit・返却 revision は1つの read transaction に置き、f
 
 別 owner の同名だった場合、pending の SHA-256 を固定して `registration-abandon --client-name SLUG --expected-digest DIGEST` を明示できます。これは所有できない行を確認した場合だけ terminal にし、別の名前の登録や自動採用はしません。未送信・結果不明は同 intent の再送、所有できた行は finalize を使います。通常入口から terminal を解除せず、新 identity には新 root を使います。
 
-`POST /api/global/spawn` はこの共通処理を使い、cwd を既存の spawn roots で確認します。provider の指示配置だけを明示 configure し、Codex trust は自動承認しません。必要な設定が無ければ registered_unconfigured を返します。`POST /api/global/resume` は同じ root の既存 launch/session を使い、operator resolution 待ちなら新しい launch を作りません。通信成功後に disk が失敗した場合も、status から同じ pending/finalize の入口へ戻ってください。
+`POST /api/global/spawn` はこの共通処理を使い、cwd を既存の spawn roots で確認します。既存の最小入力は provider の指示配置だけを明示 configure し、Codex trust は自動承認しません。必要な設定が無ければ registered_unconfigured を返します。上記の full form は設定/承認を追加せず、構成済み owner の同じ caller を照合します。`POST /api/global/resume` は同じ root の既存 launch/session を使い、operator resolution 待ちなら新しい launch を作りません。通信成功後に disk が失敗した場合も、status から同じ pending/finalize の入口へ戻ってください。
 
 
 名前の照合で Mail に既存の名前があり、一致する client root が無ければ、root/pending の作成前に `NAME_CONFLICT` を返します。`clients` の `name_agent_id` はその読取結果、`diagnostics` は root ごとの異常です。壊れた root は利用できませんが、他の root の一覧と別名の新規登録は続けられます。terminal pending は名前と owner conflict の証拠として保持し、同名の再利用を拒否します。退役済み identity の照合も管理側の owner 検証で行います。

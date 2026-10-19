@@ -22,6 +22,39 @@ agentstack-resume --client-name child_01 --prepare-only --detached
 
 `prepared=true` は保存と認証の準備が済んだことです。その時点では `runtime_ready=false` です。通常の spawn/resume は続いて固定 launch の handoff に入り、新 window を stable agent ID に原子的に束縛し、既存 window は照合します。正規の provider session の証拠が揃って初めて ready になります。
 
+### R3 shell の full caller（接続途中）
+
+既に preregister 済みの固定 child に、明示 configure 済みの intent がある場合は、
+`spawn_child.sh` の同じ global 入口で caller 全欄を照合します。例えば次の形です。
+
+```bash
+bash "$AGENTSTACK_HOME/hooks/spawn_child.sh" --child-client-name child_01 \
+  --name ChildAlpha --codex --model local:example --parent ParentAlpha \
+  --base mail-only --resources 'Scratch.md' --detached \
+  --task-file /absolute/task.md --prepare-only /absolute/workdir
+```
+
+name/model/task-file/cwd は full 入力では必須です。provider は `--codex` / `--program`
+または `--provider` の CLI 指定、親は固定 parent client から決まり、`--parent` は
+その名前への一致の主張です。名前から別の root/credential を検索しません。
+resources は繰り返し可能なカンマ区切り、tools は既存の `--tools` 文法を使います。
+clear-tools/worktree/chrome は既定 false、detached は従来の global 起動と同じ true
+（`--no-detached` で false）です。base の既定は default、tools/resources は空です。
+`--effort`、`--strict-output-cap` / `--no-strict-output-cap`、`--task-delivery` は省略を
+保ちます。owner の値で欠けた入力を埋めず、相違は task 書込みや R2 の起動前に拒否します。
+これらの新しい欄を、共有 parser の別操作へ渡すことも拒否します。
+
+従来の最小の task 参照は残ります。保存 intent があるときは task path/内容・親・
+child-state の互換投影も照合し、同じ child mutex 内で再確認してから、R2 へ digest を
+引き継ぎます。元 task は configure と同じ owner/regular/no-link/非他者書込の契約で
+読み、0644 も受理します。private な保存先の権限は緩めません。最小参照で task-file を
+省略したときは、元ファイルを再読せず承認済み保存コピーと delivery を使います。
+task-file を明示したときは保存コピーで代用せず、指定元の path/内容を照合します。
+preregister と spawn の分担は変えません。通常起動は native の承認を
+追加せず、未検証 CLI は `LOCAL_MODEL_ADAPTER_UNSUPPORTED` のままです。
+この段は入力と準備の接続であり、配送用 TEST binding の成功を native 権限、通常の
+detached/tmux、非 default field の実副作用の受入とは数えません。legacy 入口は従来どおりです。
+
 ## 登録が途中で止まった場合
 
 再開は同じ preregister コマンドです。既存 pending に保存した同じ name/token/program/model/task/binding だけを再送します。未送信なら作成、既着なら `NAME_CONFLICT` 後に親の resolver と子 token の whois で同じ row を確認します。遅れて届いた要求も名前の原子的な重複拒否で1行に保たれます。衝突だけで pending を消しません。

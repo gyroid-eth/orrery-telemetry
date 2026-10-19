@@ -22,6 +22,43 @@ agentstack-resume --client-name child_01 --prepare-only --detached
 
 `prepared=true` means local/authentication preparation, with `runtime_ready=false`. Normal spawn/resume then enters the fixed launch handoff. A new window binds atomically to the stable agent ID, while an existing window is verified. Only trusted provider session evidence makes runtime ready.
 
+### R3 full shell caller (integration checkpoint)
+
+For an already preregistered fixed child with an explicitly configured intent,
+the same global `spawn_child.sh` entry compares the complete caller input:
+
+```bash
+bash "$AGENTSTACK_HOME/hooks/spawn_child.sh" --child-client-name child_01 \
+  --name ChildAlpha --codex --model local:example --parent ParentAlpha \
+  --base mail-only --resources 'Scratch.md' --detached \
+  --task-file /absolute/task.md --prepare-only /absolute/workdir
+```
+
+Full input requires name/model/task-file/cwd. Provider follows the CLI's
+`--codex` / `--program` or `--provider` selection; parent comes from the fixed
+parent client, and `--parent` asserts its name rather than looking up another
+root/credential. Resources are repeatable comma-separated values; tools use
+the existing `--tools` grammar. Clear-tools/worktree/chrome default to false,
+detached retains the global default true (`--no-detached` selects false), base
+defaults to default, and tools/resources default to empty. Optional `--effort`,
+`--strict-output-cap` / `--no-strict-output-cap` and `--task-delivery` remain
+absent unless supplied. Missing input is not backfilled from the owner. The
+shared parser rejects these new fields for other operations.
+
+The existing minimal task reference remains. A saved intent also requires
+matching task path/content, parent and child-state compatibility projection.
+Checks repeat under the existing child mutex and pin the digest into R2.
+Source files follow configure's owner/regular/no-link/no-other-write contract
+(0644 is allowed); the runtime copy remains private. A minimal reference that
+omits task-file reuses the approved retained copy and delivery mode without
+reopening the original. An explicit task-file still requires matching source
+path/content rather than borrowing a saved copy.
+Preregister and spawn remain separate. Ordinary startup does not grant native
+approval; unverified CLIs remain `LOCAL_MODEL_ADAPTER_UNSUPPORTED`. This is an
+input/preparation checkpoint, not native permission, ordinary detached/tmux or
+nondefault-effect acceptance. Delivery-only TEST success does not prove those
+gates. Legacy entry behavior is unchanged.
+
 ## Interrupted registration
 
 Repeat the same preregister command. It reuses the saved name/token/program/model/task/binding. An unsent request creates a row. An already committed request returns `NAME_CONFLICT`; authenticated parent resolution followed by child-token whois proves ownership. Delayed requests are serialized by atomic name conflict. Conflict alone never deletes pending.
