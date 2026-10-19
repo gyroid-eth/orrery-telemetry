@@ -2,11 +2,14 @@ name: tests
 
 on:
   push:
+    branches: [master]
   pull_request:
 
 concurrency:
   group: tests-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # A PR's older run is cancelled by its newer one. A master run is not: a streak of
+  # merges would otherwise cancel every master run before it finishes.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   portable-startup:
