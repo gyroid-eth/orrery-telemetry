@@ -129,6 +129,15 @@ it does not allow those paths through the transport policy. No output limit is
 added. Profiles without an operator-supplied context value keep Hermes's normal
 detection behavior and may be denied by the managed policy until configured.
 
+The managed entry also enforces `model_catalog.enabled=false` for the pinned
+runtime metadata fetchers. Hermes's pricing path otherwise fetches endpoint
+model lists even with that setting. Endpoint and OpenRouter metadata fetchers
+return empty metadata before transport; existing pricing and prewarm aliases
+are updated too. Unpriced custom usage remains `unknown`, rather than zero.
+Static known pricing, token counts, memory, skills and auxiliary inference stay
+enabled. Suppression is recorded separately; any actual blocked request still
+fails the completion check.
+
 The five-condition evaluator reads only saved state. After the parent's bound
 inbox result is saved, `record-mail --state STATE --input INBOX_JSON` requires
 the actual same-child message ID, `kind=to`, and the inbox shape without a `to`

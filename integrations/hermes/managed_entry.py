@@ -42,6 +42,34 @@ def skip_absent_dotenv(state):
     secret_scope.load_env_file = load
 
 
+def disable_live_metadata(state):
+    """Enforce the managed catalog setting for runtime metadata consumers.
+
+    The pinned Hermes pricing path ignores model_catalog.enabled. Returning no
+    metadata preserves unknown pricing instead of inventing a zero cost. Patch
+    the shared fetchers before consumer imports, and repair already-bound aliases.
+    Inference requests and the denying transport policy are unchanged.
+    """
+    config = read(Path(state) / 'run-config.json')
+    profile = read(Path(config['profile_home']) / 'config.yaml')
+    if profile.get('model_catalog', {}).get('enabled') is not False:
+        raise ValueError('Managed entry requires live model catalogs disabled')
+    from agent import model_metadata
+    for name in ('fetch_endpoint_model_metadata', 'fetch_model_metadata'):
+        original = getattr(model_metadata, name)
+
+        def suppressed(*_args, _catalog=name, **_kwargs):
+            audit(state, 'metadata-suppressed', catalog=_catalog, callers=callers(state))
+            return {}
+
+        setattr(model_metadata, name, suppressed)
+        for module_name in ('agent.usage_pricing', 'agent.agent_init'):
+            module = sys.modules.get(module_name)
+            if module is not None and getattr(module, name, None) is original:
+                setattr(module, name, suppressed)
+    audit(state, 'metadata-policy-ready', source='managed-profile-model-catalog-disabled')
+
+
 def load_guard(state):
     state = Path(state).resolve()
     config, identity = check_configured(state)
@@ -54,6 +82,7 @@ def load_guard(state):
     deny_dotenv(state)
     sys.path.insert(0, config['hermes_source'])
     skip_absent_dotenv(state)
+    disable_live_metadata(state)
     from hermes_cli import plugins
     from task_plugin import assert_registered
     plugins.discover_plugins()

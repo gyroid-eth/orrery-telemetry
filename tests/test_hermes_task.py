@@ -387,6 +387,66 @@ finally:
                                  env=env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 1)
 
+    def test_installed_pricing_and_shared_metadata_stay_offline_and_unknown(self):
+        python, source = os.environ.get('ORRERY_HERMES_TEST_PYTHON'), os.environ.get('ORRERY_HERMES_TEST_SOURCE')
+        if not python or not source:
+            self.skipTest('Explicit installed dependency interpreter/source required')
+        config = {**self.config, 'hermes_source': source}
+        runner.save(self.state / 'run-config.json', config)
+        script = self.root / 'pricing_metadata_fixture.py'
+        script.write_text('''
+import json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]);sys.path.insert(0,sys.argv[3])
+state=Path(sys.argv[2])
+def no_network(event,args):
+    if event in ('socket.connect','socket.getaddrinfo'):
+        raise AssertionError('offline fixture forbids sockets')
+sys.addaudithook(no_network)
+from managed_entry import deny_dotenv,skip_absent_dotenv,disable_live_metadata
+deny_dotenv(state);skip_absent_dotenv(state)
+import httpx,requests
+attempts=[]
+def reject(*args,**kwargs):
+    attempts.append(True)
+    raise AssertionError('pricing attempted transport')
+httpx.Client._send_single_request=reject
+requests.Session.request=reject
+from agent import model_metadata as metadata
+# The real pricing consumer already bound both imports before policy install.
+from agent import usage_pricing as pricing
+before=pricing.fetch_endpoint_model_metadata
+disable_live_metadata(state)
+assert pricing.fetch_endpoint_model_metadata is metadata.fetch_endpoint_model_metadata
+assert pricing.fetch_endpoint_model_metadata is not before
+assert pricing.fetch_model_metadata is metadata.fetch_model_metadata
+def key_must_not_run():
+    raise AssertionError('metadata tried to resolve a key')
+for provider in ('fixture','custom','custom:fixture'):
+    kwargs={'provider':provider,'base_url':'https://provider.invalid','api_key':key_must_not_run}
+    assert pricing.get_pricing_entry('fixture-model',**kwargs) is None
+    assert pricing.has_known_pricing('fixture-model',**kwargs) is False
+    cost=pricing.estimate_usage_cost('fixture-model',pricing.CanonicalUsage(input_tokens=12,output_tokens=3),**kwargs)
+    assert cost.status=='unknown' and cost.amount_usd is None and cost.label=='n/a',cost
+    assert metadata.get_model_context_length('fixture-model',**kwargs)==131072
+assert metadata.fetch_endpoint_model_metadata('https://provider.invalid',api_key=key_must_not_run,force_refresh=True)=={}
+assert metadata.fetch_model_metadata(force_refresh=True)=={}
+assert metadata._resolve_endpoint_context_length('fixture-model','https://provider.invalid',api_key=key_must_not_run) is None
+assert metadata._resolve_nous_context_length('fixture-model','https://provider.invalid',api_key=key_must_not_run)==(None,'')
+assert pricing._openrouter_pricing_entry(pricing.BillingRoute('openrouter','fixture-model')) is None
+assert not attempts,attempts
+rows=[json.loads(row) for row in (state/'audit.jsonl').read_text().splitlines()]
+assert not [row for row in rows if row['phase'].startswith('blocked-')],rows
+assert {row['catalog'] for row in rows if row['phase']=='metadata-suppressed'}=={
+    'fetch_endpoint_model_metadata','fetch_model_metadata'}
+print(json.dumps({'transports':len(attempts),'pricing':'unknown','context':131072}))
+''')
+        env = runner.managed_env(config, runner.read(self.state / 'mail-identity.json'), self.state)
+        result = subprocess.run([python, '-I', '-B', str(script), str(ADAPTER), str(self.state), source],
+                                 env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout.strip().splitlines()[-1])['pricing'], 'unknown')
+
     def test_actual_httpx_async_redirect_and_other_dotenv_are_blocked(self):
         python, source = os.environ.get('ORRERY_HERMES_TEST_PYTHON'), os.environ.get('ORRERY_HERMES_TEST_SOURCE')
         if not python or not source:
