@@ -45,6 +45,8 @@ completion.pyのtask判定は、同じattempt/task、completed turn、親が指�
 
 TUIのruntime終了は別評価です。group_absentに加え予約解放/retireの証跡が無ければ、reservations_released:null、retire:unknownと残します。task成功を停止・retire成功に読み替えません。
 
+runの後始末は`runtime-exit.json`の自己申告だけで成功にしません。`release-receipt.json`は`attempt_id`・`agent_name`・`source:product-bound-proxy`を照合し、`confirmed:true`かつ`reservation_ids`/`released_ids`がtaskの予約ID集合と一致するときだけ解放済みです。`retire-receipt.json`は同attempt/子名・`source:parent-bound-whois`で、親の正規whois確認による`retired_at`と`confirmed:true`が必要です。cleanupのexit0だけならpending、別attempt/子名/sourceの証拠は採用しません。spikeの合成receiptをrunの成功にしません。
+
 ```text
 python3 integrations/dsh/completion.py /absolute/state/root
 python3 integrations/dsh/completion.py /absolute/state/root --runtime
@@ -61,7 +63,7 @@ NodeもPythonも検証用の明示実体を使い、負荷が1分平均15未満�
 /absolute/python3 tests/test_dsh_completion.py
 ```
 
-egress fixtureはメモリ内の偽fetchだけを使い、endpoint選択・offline転送0・残高/更新先拒否・model/beta/output/tool制限・idle/busy/auth・redirect・stream重複/中断/timeout・proxy env scrub・診断伏字を対照確認します。completion fixtureのMail receiptは明示した合成入力であり、実Mailを送信した証拠ではありません。spikeのtask成功がtrueにならないことも確認します。
+egress fixtureはメモリ内の偽fetchだけを使い、endpoint選択・offline転送0・残高/更新先拒否・model/beta/output/tool制限・idle/busy/auth・redirect・stream重複/中断/timeout・proxy env scrub・診断伏字を対照確認します。製品の`child_tools.py claude-config`が生成した設定から、fake HOMEの無通信stubを実際にspawnし、全proxy envキーの保持・provider keyの除去も確認します。実proxyやMailへ接続した試験ではありません。completion fixtureのMail/lifecycle receiptは明示した合成入力であり、実Mail送信・予約解放・retireの証拠ではありません。部分解放、別identity、whois欠落、spikeのtask/runtimeが成功へ繰り上がらないことも確認します。
 
 managed TUI側の`tests/test_dsh_managed_spike.py`では、patch receiptの未適用/部分適用/欠落の拒否、補助処理停止、実ToolRuntimeのguardを別に確認しています。TUI画面とagent.ctxのprobeを含む実験記録・検証出力は各自のrepo外作業dirへ保存します。repository全体のpytest、実Mail/APIとWSL実機受入は、これらのspike/fixtureでは確認していません。TUIの保存依存が不足した場合、offlineを外してdownloadせず親へ報告します。
 
