@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import importlib
 import json
+import logging
 import os
 from pathlib import Path, PurePosixPath
 import shutil
@@ -22,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCK = threading.Lock()
 PROVIDERS = ('deepseek', 'strata')
 HARNESSES = ('dsh', 'hermes')
+LOG = logging.getLogger(__name__)
 
 
 def read(path, default=None):
@@ -56,12 +58,32 @@ def mode(core):
     return 'global' if core.GLOBAL_MODE else 'legacy'
 
 
+def _catalog_module():
+    try:
+        return importlib.import_module('dashboard.managed_catalog')
+    except ModuleNotFoundError as exc:
+        # Direct launchd execution puts dashboard/, not its parent, on sys.path.
+        # A missing dependency inside the module must remain a real failure.
+        if exc.name not in ('dashboard', 'dashboard.managed_catalog'):
+            raise
+        return importlib.import_module('managed_catalog')
+
+
+def _product_module(name):
+    # The installed integrations/ and dashboard/ are siblings under this root.
+    # Resolve that product's code independently of launchd's cwd or PYTHONPATH.
+    root = str(ROOT)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    return importlib.import_module(name)
+
+
 def catalog(config_file, *, selected_mode):
     # Catalog implementation is owned separately; a missing module/config is off.
     if not config_file:
         return []
     try:
-        module = importlib.import_module('dashboard.managed_catalog')
+        module = _catalog_module()
         backends, availability, enabled = module.load_catalog_inputs(config_file, mode=selected_mode)
         for harness in HARNESSES:
             selection = read(ROOT / 'dashboard' / (harness + '-provider.json'))
@@ -69,7 +91,8 @@ def catalog(config_file, *, selected_mode):
                 for status in availability.values():
                     status[harness] = {'available': False, 'reason': 'disabled_by_opt_in'}
         return module.catalog_providers(backends, availability, mode=selected_mode, enabled=enabled)
-    except (ImportError, OSError, ValueError, KeyError, TypeError):
+    except (ImportError, OSError, ValueError, KeyError, TypeError) as exc:
+        LOG.warning("managed catalog unavailable (%s)", type(exc).__name__)
         return []
 
 
@@ -327,13 +350,13 @@ def run_job(job, *, adapter=None, parent_call=None, run=None, sleep=time.sleep, 
         providers = provider_loader(spec['config_file'], selected_mode=spec['selected_mode'])
         template, source = trusted_selection(request, config, providers)
         if adapter is None:
-            adapter = importlib.import_module('integrations.' + request['harness'] + '.managed_lifecycle')
+            adapter = _product_module('integrations.' + request['harness'] + '.managed_lifecycle')
         if spec['selected_mode'] != 'legacy':
             raise ValueError('unsupported_mode')
         if source['project_key'] != str(Path(source['project_key']).resolve()):
             raise ValueError('absolute_project_key_required')
         if parent_call is None:
-            from dashboard import server as core
+            core = _product_module('dashboard.server')
             if core.GLOBAL_MODE or core._project_key() != source['project_key']:
                 raise ValueError('parent_project_mismatch')
             if (core.MCP_HTTP_URL != source['connection']['mcp_url']
@@ -408,7 +431,8 @@ def run_job(job, *, adapter=None, parent_call=None, run=None, sleep=time.sleep, 
         adapter.clean(state, run=run)
         update(state='ready' if result.get('task_success') is True else 'failed', phase='cleaned',
                finished=True, pending=False, error_code=None if result.get('task_success') is True else 'task_not_successful')
-    except Exception:
+    except Exception as exc:
+        LOG.error("managed worker failed during %s (%s)", current.get('phase'), type(exc).__name__)
         # Failure itself never becomes success. Recover ordinary partial starts
         # using the same identity; a cleanup refusal keeps the private state.
         identity, attempt = read(state / 'mail-identity.json', {}), read(state / 'attempt.json', {})
