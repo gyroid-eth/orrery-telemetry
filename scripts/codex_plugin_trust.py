@@ -141,17 +141,17 @@ def scoped_hooks(server, cwd: Path, plugin_id: str, root: Path):
         raise TrustUnavailable('hook discovery is incomplete')
     hooks = [h for h in matches[0].get('hooks', []) if h.get('pluginId') == plugin_id]
     definition = json.loads((root/'hooks/hooks.json').read_text())['hooks']
-    expected = {''.join(c for c in event.lower() if c.isalnum()): groups
+    expected = {''.join(c for c in event.lower() if c.isalnum()):
+                    [handler for group in groups for handler in group['hooks']]
                 for event, groups in definition.items()}
-    if len(hooks) != sum(len(g['hooks']) for groups in expected.values() for g in groups):
+    if len(hooks) != sum(len(handlers) for handlers in expected.values()):
         raise TrustUnavailable('expected plugin hooks are missing or duplicated')
     seen = set()
     keys = set()
     for hook in hooks:
         event = ''.join(c for c in hook.get('eventName', '').lower() if c.isalnum())
-        if event not in expected or event in seen:
+        if event not in expected:
             raise TrustUnavailable('unexpected plugin hook event')
-        seen.add(event)
         key = hook.get('key')
         if key in keys or not isinstance(key, str):
             raise TrustUnavailable('hook key is duplicated or unavailable')
@@ -164,12 +164,19 @@ def scoped_hooks(server, cwd: Path, plugin_id: str, root: Path):
         handler = hook.get('handler') or {'type': hook.get('handlerType'),
                                           'command': hook.get('command'),
                                           'async': hook.get('async', False)}
-        configured = expected[event][0]['hooks'][0]
-        allowed_commands = {configured['command'], configured['command'].replace('$PLUGIN_ROOT', str(root))}
-        if (handler.get('command') not in allowed_commands or handler.get('type') != 'command'
-                or handler.get('async', False) != configured.get('async', False)
-                or not isinstance(hook.get('timeoutSec'), int) or hook['timeoutSec'] <= 0):
+        candidates = []
+        for index, configured in enumerate(expected[event]):
+            allowed_commands = {configured['command'], configured['command'].replace('$PLUGIN_ROOT', str(root))}
+            if (handler.get('command') in allowed_commands and handler.get('type') == 'command'
+                    and handler.get('async', False) == configured.get('async', False)):
+                candidates.append(index)
+        if (len(candidates) != 1 or not isinstance(hook.get('timeoutSec'), int)
+                or hook['timeoutSec'] <= 0):
             raise TrustUnavailable('hook definition mismatch')
+        declared_hook = (event, candidates[0])
+        if declared_hook in seen:
+            raise TrustUnavailable('expected plugin hooks are missing or duplicated')
+        seen.add(declared_hook)
     return sorted(hooks, key=lambda h: h['key'])
 
 

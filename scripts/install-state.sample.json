@@ -222,6 +222,11 @@
         "matcher": "mcp__orrery-mail__file_reservation_paths|mcp__mcp-agent-mail__file_reservation_paths|mcp__agent_mail__file_reservation_paths|mcp__orrery-mail__macro_file_reservation_cycle|mcp__mcp-agent-mail__macro_file_reservation_cycle|mcp__agent_mail__macro_file_reservation_cycle|mcp__orrery-mail__renew_file_reservations|mcp__mcp-agent-mail__renew_file_reservations|mcp__agent_mail__renew_file_reservations"
       },
       {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/deny-llm-key-read.sh",
+        "event": "PreToolUse",
+        "matcher": "Bash"
+      },
+      {
         "command": "/bin/bash /home/alice/.agentstack/hooks/release-file-reservation.sh",
         "event": "PostToolUse",
         "matcher": "Edit|Write"
@@ -270,6 +275,11 @@
         "command": "/bin/bash /home/alice/.agentstack/hooks/invalidate-release-debounce.sh",
         "event": "PreToolUse",
         "matcher": "mcp__orrery-mail__file_reservation_paths|mcp__mcp-agent-mail__file_reservation_paths|mcp__agent_mail__file_reservation_paths|mcp__orrery-mail__macro_file_reservation_cycle|mcp__mcp-agent-mail__macro_file_reservation_cycle|mcp__agent_mail__macro_file_reservation_cycle|mcp__orrery-mail__renew_file_reservations|mcp__mcp-agent-mail__renew_file_reservations|mcp__agent_mail__renew_file_reservations"
+      },
+      {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/deny-llm-key-read.sh",
+        "event": "PreToolUse",
+        "matcher": "Bash"
       },
       {
         "command": "/bin/bash /home/alice/.agentstack/hooks/release-file-reservation.sh",

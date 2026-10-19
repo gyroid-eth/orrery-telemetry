@@ -29,13 +29,17 @@ def runtime(tmp_path, monkeypatch):
     cwd = tmp_path/'project'; cwd.mkdir()
     definitions = json.loads((root/'hooks/hooks.json').read_text())['hooks']
     hooks = []
-    for n, (event, groups) in enumerate(definitions.items()):
-        handler = groups[0]['hooks'][0]
-        hooks.append({'key': f'owned:{n}', 'eventName': event,
-                      'handler': {'type': 'command', 'command': handler['command'], 'async': handler['async']},
-                      'isManaged': False, 'source': 'plugin', 'sourcePath': str(root/'hooks/hooks.json'),
-                      'pluginId': PLUGIN_ID, 'timeoutSec': handler['timeoutSec'],
-                      'currentHash': f'sha256:{n}', 'trustStatus': 'untrusted', 'enabled': False})
+    for event, groups in definitions.items():
+        for group in groups:
+            for handler in group['hooks']:
+                n = len(hooks)
+                hooks.append({'key': f'owned:{n}', 'eventName': event,
+                              'handler': {'type': 'command', 'command': handler['command'],
+                                          'async': handler['async']},
+                              'isManaged': False, 'source': 'plugin',
+                              'sourcePath': str(root/'hooks/hooks.json'),
+                              'pluginId': PLUGIN_ID, 'timeoutSec': handler['timeoutSec'],
+                              'currentHash': f'sha256:{n}', 'trustStatus': 'untrusted', 'enabled': False})
     state = {'hooks': hooks, 'config': {'other': {'trusted_hash': 'preserved', 'enabled': False}},
              'writes': [], 'requests': [], 'reject': False, 'verify': True}
 
@@ -603,3 +607,37 @@ def test_unstable_process_record_never_persists_unverified_identity(tmp_path, mo
     with pytest.raises(ownership.OwnershipUnknown, match='changed: start'):
         ownership.record_process(pidfile, runner)
     assert len(waits) == 19 and not Path(str(pidfile)+'.identity.json').exists()
+
+
+def test_both_pre_tool_use_hooks_are_in_the_reviewed_trust_write(runtime):
+    """同一イベントの予約guardと鍵読取guardを別々の所有hookとして確認する。"""
+    plan = plan_for(runtime)
+    guards = [h for h in plan['hooks'] if h['eventName'] == 'PreToolUse']
+    assert len(guards) == 2
+    assert {h['handler']['command'] for h in guards} == {
+        '"$PLUGIN_ROOT/scripts/run-reservation-guard.sh"',
+        '"$PLUGIN_ROOT/scripts/run-key-read-guard.sh"',
+    }
+    assert plan['approved'] is False
+    plan['approved'] = True
+    trust.apply_trust(plan)
+    written = runtime[3]['writes'][0]['edits'][0]['value']
+    assert all(written[h['key']] == {'trusted_hash': h['currentHash'], 'enabled': True}
+               for h in guards)
+
+
+@pytest.mark.parametrize('damage', ['missing', 'duplicate', 'unowned-command'])
+def test_new_pre_tool_use_guard_must_be_present_unique_and_owned(runtime, damage):
+    """fixtureだけを増やして所有確認や重複拒否を弱めない。"""
+    hooks = runtime[3]['hooks']
+    guard = next(h for h in hooks if 'run-key-read-guard.sh' in h['handler']['command'])
+    if damage == 'missing':
+        hooks.remove(guard)
+    elif damage == 'duplicate':
+        reservation = next(h for h in hooks if 'run-reservation-guard.sh' in h['handler']['command'])
+        guard['handler'] = copy.deepcopy(reservation['handler'])
+    else:
+        guard['handler']['command'] = '"$PLUGIN_ROOT/scripts/unreviewed.sh"'
+    with pytest.raises(trust.TrustUnavailable):
+        plan_for(runtime)
+    assert not runtime[3]['writes']
