@@ -138,6 +138,15 @@ Static known pricing, token counts, memory, skills and auxiliary inference stay
 enabled. Suppression is recorded separately; any actual blocked request still
 fails the completion check.
 
+`provider_request_limit` optionally lowers the shared main/auxiliary HTTPX
+request cap (integer 1–32, default 32). The next request is denied before
+transport and records `limit-reached`; retries count toward this cap too.
+An operator can select a native Anthropic-compatible endpoint through the route
+fields without pinning context. Verify context resolution offline for that
+provider/model first. The pinned billing resolver may call a named endpoint
+`custom` and leave its price unknown even when a native-provider snapshot exists;
+metadata suppression does not manufacture a price or a zero-cost result.
+
 The five-condition evaluator reads only saved state. After the parent's bound
 inbox result is saved, `record-mail --state STATE --input INBOX_JSON` requires
 the actual same-child message ID, `kind=to`, and the inbox shape without a `to`

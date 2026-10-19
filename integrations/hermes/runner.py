@@ -87,13 +87,16 @@ def initialize(config_path, state, profile_name, run=subprocess.run, *, file_tas
     config = read(config_path)
     known = {'product_root', 'home', 'project_key', 'worktree', 'managed_root', 'hermes_executable',
              'hermes_python', 'hermes_source', 'proxy_python', 'tmux', 'parent', 'connection',
-             'profiles', 'task_timeout_seconds', 'tmux_socket'}
+             'profiles', 'task_timeout_seconds', 'tmux_socket', 'provider_request_limit'}
     profile_keys = {'template', 'provider', 'model', 'base_url', 'api', 'api_mode', 'transport', 'key_cmd',
                     'context_length'}
     if set(config) - known or set(config['connection']) - {'runtime_dir', 'mcp_url', 'mail_env', 'bearer_mode'}:
         raise ValueError('Config may contain only the documented non-secret references')
     if any(set(spec) - profile_keys for spec in config['profiles'].values()):
         raise ValueError('Profile config may contain only route and key-command references')
+    limit = config.get('provider_request_limit', 32)
+    if type(limit) is not int or not 1 <= limit <= 32:
+        raise ValueError('Provider request limit must be an integer from 1 to 32')
     for key in ('product_root', 'home', 'project_key', 'worktree', 'managed_root',
                 'hermes_executable', 'hermes_python', 'hermes_source', 'proxy_python', 'tmux'):
         if not Path(config[key]).is_absolute():

@@ -234,6 +234,118 @@ class FileTask(unittest.TestCase):
                 profile_projection.project({**spec, 'context_length': invalid}, self.root,
                                            ['title_generation', 'background_review'])
 
+    def test_configured_request_cap_denies_ninth_and_rejects_invalid_limits(self):
+        runner.save(self.state / 'run-config.json', {**self.config, 'provider_request_limit': 8})
+        policy = provider_audit.Policy(self.state)
+        request = SimpleNamespace(method='POST', url='https://provider.invalid/v1/messages')
+        for seq in range(1, 9):
+            self.assertEqual(policy.before(request), seq)
+        with self.assertRaisesRegex(RuntimeError, 'request limit'):
+            policy.before(request)
+        rows = [json.loads(row) for row in (self.state / 'audit.jsonl').read_text().splitlines()]
+        self.assertEqual(sum(row['phase'] == 'provider-request-start' for row in rows), 8)
+        self.assertEqual(sum(row['phase'] == 'limit-reached' for row in rows), 1)
+        inputs = runner.read(self.fixture.config_path)
+        for value in (0, -1, 33, True, '8'):
+            bad = {**inputs, 'provider_request_limit': value}
+            path = self.root / 'invalid-limit.json'
+            runner.save(path, bad)
+            with self.assertRaisesRegex(ValueError, 'request limit'):
+                runner.initialize(path, self.root / 'invalid-limit-state', 'deepseek', self.product.run, file_task=True)
+            runner.save(self.state / 'run-config.json', {**self.config, 'provider_request_limit': value})
+            with self.assertRaises(ValueError):
+                provider_audit.Policy(self.state)
+
+    def test_installed_deepseek_catalog_pricing_and_messages_route_without_context_pin(self):
+        python, source = os.environ.get('ORRERY_HERMES_TEST_PYTHON'), os.environ.get('ORRERY_HERMES_TEST_SOURCE')
+        if not python or not source:
+            self.skipTest('Explicit installed dependency interpreter/source required')
+        profile_home = self.root / 'deepseek-profile'
+        spec = {'provider': 'deepseek-api', 'model': 'deepseek-flash',
+                'base_url': 'https://api.deepseek.com/anthropic', 'api_mode': 'anthropic_messages',
+                'key_cmd': 'fixture-keychain-reference'}
+        projected = profile_projection.project(spec, profile_home,
+                         ['title_generation', 'background_review', 'compression'])['profile_config']
+        self.assertNotIn('context_length', projected['model'])
+        self.assertNotIn('model_overrides', projected)
+        self.assertNotIn('max_tokens', projected['model'])
+        profile_home.mkdir()
+        runner.save(profile_home / 'config.yaml', projected)
+        config = {**self.config, 'provider': 'deepseek-api', 'model': 'deepseek-flash',
+                  'profile_name': 'deepseek', 'profile_home': str(profile_home),
+                  'hermes_source': source, 'provider_request_limit': 8}
+        runner.save(self.state / 'run-config.json', config)
+        script = self.root / 'deepseek_catalog_fixture.py'
+        script.write_text('''
+import json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]);sys.path.insert(0,sys.argv[3])
+state=Path(sys.argv[2])
+def no_network(event,args):
+    if event in ('socket.connect','socket.getaddrinfo'):
+        raise AssertionError('offline fixture forbids sockets')
+sys.addaudithook(no_network)
+from managed_entry import deny_dotenv,skip_absent_dotenv,disable_live_metadata
+deny_dotenv(state);skip_absent_dotenv(state)
+import httpx,requests
+original_send=httpx.Client._send_single_request
+attempts=[]
+def reject(*args,**kwargs):
+    attempts.append(True)
+    raise AssertionError('catalog or pricing attempted transport')
+httpx.Client._send_single_request=reject
+requests.Session.request=reject
+from agent import model_metadata as metadata
+from agent import usage_pricing as pricing
+from agent.auxiliary_client import _candidate_context_window
+route='https://api.deepseek.com/anthropic'
+model='deepseek-flash'
+def key_must_not_run():
+    raise AssertionError('offline metadata resolved a real key')
+usage=pricing.CanonicalUsage(input_tokens=12,output_tokens=3)
+before_context=metadata.get_model_context_length(model,provider='custom',base_url=route,api_key=key_must_not_run)
+# The bundled rate table is reachable with the native billing identity.
+native_cost=pricing.estimate_usage_cost(model,usage,provider='deepseek',base_url=route,api_key=key_must_not_run)
+assert native_cost.status=='estimated' and native_cost.source=='official_docs_snapshot',native_cost
+assert not attempts,attempts
+disable_live_metadata(state)
+for provider in ('deepseek-api','custom',''):
+    for key in ('offline-fixture',key_must_not_run):
+        kwargs={'provider':provider,'base_url':route,'api_key':key}
+        context=metadata.get_model_context_length(model,**kwargs)
+        assert context==before_context and context>0,context
+        assert _candidate_context_window(provider,model,route,key)==context
+        cost=pricing.estimate_usage_cost(model,usage,**kwargs)
+        # Named routes resolve to custom, which the pinned billing resolver
+        # does not map back to DeepSeek. Preserve that explicit unknown.
+        assert cost.status=='unknown' and cost.amount_usd is None,cost
+assert pricing.estimate_usage_cost(model,usage,provider='deepseek',base_url=route,api_key=key_must_not_run)==native_cost
+assert not attempts,attempts
+# Restore HTTPX, then exercise the real SDK with an in-memory transport only.
+httpx.Client._send_single_request=original_send
+from provider_audit import install
+policy=install(state)
+assert policy.endpoint==('https','api.deepseek.com','/anthropic/v1/messages') and policy.limit==8
+import anthropic
+def response(request):
+    assert request.method=='POST' and request.url.path=='/anthropic/v1/messages',request.url
+    return httpx.Response(200,json={'id':'msg_fixture','type':'message','role':'assistant','model':model,
+        'content':[{'type':'text','text':'fixture'}],'stop_reason':'end_turn','stop_sequence':None,
+        'usage':{'input_tokens':1,'output_tokens':1}})
+with httpx.Client(transport=httpx.MockTransport(response)) as client:
+    sdk=anthropic.Anthropic(api_key='offline-fixture',base_url=route,http_client=client,max_retries=0)
+    assert sdk.messages.create(model=model,max_tokens=8,messages=[{'role':'user','content':'fixture'}]).model==model
+rows=[json.loads(row) for row in (state/'audit.jsonl').read_text().splitlines()]
+assert not [row for row in rows if row['phase'].startswith('blocked-')],rows
+print(json.dumps({'context':context,'context_source':'installed-catalog','pricing_source':cost.source,
+                  'external_transports':len(attempts),'request_limit':policy.limit,'endpoint':policy.endpoint[2]}))
+''')
+        env = runner.managed_env(config, runner.read(self.state / 'mail-identity.json'), self.state)
+        result = subprocess.run([python, '-I', '-B', str(script), str(ADAPTER), str(self.state), source],
+                                 env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout.strip().splitlines()[-1])['external_transports'], 0)
+
     def test_installed_context_and_absent_dotenv_need_no_transport(self):
         python, source = os.environ.get('ORRERY_HERMES_TEST_PYTHON'), os.environ.get('ORRERY_HERMES_TEST_SOURCE')
         if not python or not source:

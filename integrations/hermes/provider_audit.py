@@ -17,9 +17,12 @@ _permitted = ContextVar('orrery_http_transport', default=False)
 
 
 class Policy:
-    def __init__(self, state, limit=32):
+    def __init__(self, state, limit=None):
         self.state = Path(state)
         config = read(self.state / 'run-config.json')
+        limit = config.get('provider_request_limit', 32) if limit is None else limit
+        if type(limit) is not int or not 1 <= limit <= 32:
+            raise ValueError('Provider request limit must be an integer from 1 to 32')
         profile = read(Path(config['profile_home']) / 'config.yaml')
         route = profile['providers'][config['provider']]
         base = urlsplit(route['base_url'])
