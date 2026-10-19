@@ -35,6 +35,16 @@ dashboard（と ORRERY cockpit の usage の表示）が Claude・Codex（OpenAI
 
 > Provider logos: `dashboard/assets/anthropic.svg` (Claude) is from Simple Icons (Iconify `simple-icons:claude`) and `dashboard/assets/openai.svg` (OpenAI) from SVG Logos by Gil Barbara (Iconify `logos:openai-icon`), both CC0 1.0; `dashboard/assets/google.svg` (Gemini) has no recorded source. Changes: fill colour set to `#ece2cc`. Each logo is a trademark of its company and is used only to identify the provider.
 
+DeepSeekとQwenの利用は運営者の判断（2026-10-19）。
+DeepSeekは [公式integration配布元](https://github.com/deepseek-ai/awesome-deepseek-integration/tree/main/docs/_logo%20svg)
+の [ICON.svg](https://raw.githubusercontent.com/deepseek-ai/awesome-deepseek-integration/main/docs/_logo%20svg/ICON.svg)
+を形状不変でboneにした。配置は `integrations/dsh/assets/deepseek.svg`、明示opt-in時だけ配信する。
+Qwenは [公式組織](https://github.com/QwenLM) の
+[avatar PNG](https://avatars.githubusercontent.com/u/141221163?v=4) を形状・alphaを保って
+`dashboard/assets/qwen.svg` に埋め込み、bone filterを適用した。再描画はしていない。
+専用許諾を確認できたとの主張ではなく、code licenseもlogoの許諾として扱わない。
+確認した利用条件と加工の記録は、各asset近傍のREADMEに残す。
+
 ## 肖像画像
 
 dashboard が agent 名の科学者に対応させて表示する肖像は、第三者の画像ではありません。

@@ -41,6 +41,7 @@ LEGACY_MAIL_RETIRE_PLANNED=false
 ASSUME_YES="${AGENTSTACK_ASSUME_YES:-0}"
 TIER="tier1"
 TIER_OPTION=""
+DSH_OPT_IN=""
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MAIL_DB_EXPLICIT="${AGENTSTACK_MAIL_DB+x}"
 MAIL_ENV_EXPLICIT="${AGENTSTACK_MAIL_ENV+x}"
@@ -128,6 +129,8 @@ Options:
   -y, --assume-yes       Pre-approve MCP/settings/managed-block prompts only
   --dashboard-only       Tier0 footprint; install dashboard assets only
   --scoped               Tier2 placeholder; no user-settings merge
+  --enable-dsh           DeepSeek の候補とロゴを明示的に有効化（runtime取得なし）
+  --disable-dsh          DeepSeek の候補とロゴ配信を無効化（既存fileは保持）
   --install-dir PATH     Default: ~/.agentstack
   --project-key PATH     Required on first install; existing env.sh is reused
   --port PORT            Default: existing env.sh, else 8770
@@ -246,6 +249,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     -y|--assume-yes)
       ASSUME_YES=1
+      shift
+      ;;
+    --enable-dsh)
+      DSH_OPT_IN="enable"
+      shift
+      ;;
+    --disable-dsh)
+      DSH_OPT_IN="disable"
       shift
       ;;
     --dashboard-only)
@@ -2370,6 +2381,26 @@ for name in ("plugin", "src"):
     shutil.copytree(src, dst, ignore=ignore)
 PY
   chmod +x "$dest_dir/plugin/scripts/run-mcp.sh" 2>/dev/null || true
+}
+
+install_dsh_presentation() {
+  # 通常の更新で意図せず有効化しない。未指定なら既存の選択を保持する。
+  [[ -n "${DSH_OPT_IN:-}" ]] || return 0
+  plan "DeepSeek opt-in: $DSH_OPT_IN（runtime・Node・鍵の取得なし）"
+  [[ "$DRY_RUN" != true ]] || return 0
+  local enabled=false
+  local temporary
+  mkdir -p "$DASHBOARD_DIR"
+  if [[ "$DSH_OPT_IN" == enable ]]; then
+    mkdir -p "$DASHBOARD_DIR/assets"
+    cp "$REPO_ROOT/integrations/dsh/assets/deepseek.svg" "$DASHBOARD_DIR/assets/deepseek.svg"
+    enabled=true
+  fi
+  # copy途中の通常の失敗では有効にならないよう、選択は最後に置換する。
+  temporary="$(mktemp "$DASHBOARD_DIR/.dsh-provider.XXXXXX")"
+  printf '{"enabled":%s}\n' "$enabled" > "$temporary"
+  chmod 600 "$temporary"
+  mv -f "$temporary" "$DASHBOARD_DIR/dsh-provider.json"
 }
 
 install_payload() {
@@ -5080,6 +5111,7 @@ main() {
   migrate_legacy_annotations
   migrate_legacy_dashboard_log
   install_payload
+  install_dsh_presentation
   install_claude_skill_links
   install_codex_skill_links
   render_installed_templates

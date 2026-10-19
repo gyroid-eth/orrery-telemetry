@@ -587,7 +587,13 @@
           models: codexModels, default_model: 'gpt-6.1-sol',
           efforts: ['low', 'medium', 'high', 'xhigh'],
           effort_default: 'xhigh' },
-      ],
+      ].concat(window.AGENTSTACK_DEMO_DSH === true ? [{
+        id: 'dsh', label: 'DeepSeek', program: 'dsh',
+        models: ['deepseek-flash'], default_model: 'deepseek-flash',
+        efforts: ['off', 'low', 'high', 'max'], effort_default: 'low',
+        model_note: '対話runtimeは未接続です。起動はまだできません。',
+        capabilities: { runtime: false, effort_required: true },
+      }] : []),
     };
   }
 
