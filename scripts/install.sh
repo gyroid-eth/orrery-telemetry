@@ -2406,7 +2406,7 @@ PY
 install_dsh_presentation() {
   # 通常の更新で意図せず有効化しない。未指定なら既存の選択を保持する。
   [[ -n "${DSH_OPT_IN:-}" ]] || return 0
-  plan "DeepSeek opt-in: $DSH_OPT_IN（runtime・Node・鍵の取得なし）"
+  plan "DeepSeek opt-in: ${DSH_OPT_IN}（runtime・Node・鍵の取得なし）"
   [[ "$DRY_RUN" != true ]] || return 0
   local enabled=false
   local temporary
