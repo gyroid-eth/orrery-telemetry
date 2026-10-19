@@ -76,7 +76,9 @@ export function createEgress({backend, limits, wireTools, offline = true, phase 
       released = true; active = false; usageKnown = ok && finalUsage;
       if (response) audit({phase: 'provider-response', seq: number, status: response.status,
         usage: lastUsage, duration_ms: performance.now() - started, ...errorDetails});
-      audit({phase: 'stream-end', seq: number, ok});
+      audit({phase: 'stream-end', seq: number, ok, terminal: messageStopped,
+        usage_confirmed: finalUsage && Number.isSafeInteger(lastUsage?.input) && lastUsage.input >= 0 &&
+          Number.isSafeInteger(lastUsage?.output) && lastUsage.output >= 0});
     };
     try {
       if (backend.idle_check) await observeStatus(fetchImpl, backend.base_url, key, audit, limits.status_ms, sourceCallers);
@@ -156,8 +158,20 @@ const auditFile = process.env.ORRERY_DSH_AUDIT_FILE;
 if (path.resolve(auditFile ?? '') !== path.join(stateRoot, 'audit.jsonl')) throw new Error('DSH_AUDIT_PATH');
 const key = process.env.DEEPSEEK_API_KEY ?? '';
 const redact = value => key ? value.split(key).join('[REDACTED]') : value;
-const audit = value => fs.appendFileSync(auditFile,
-  redact(JSON.stringify({...value, attempt_id: attemptId, at: new Date().toISOString()})) + '\n', {mode: 0o600});
+const bindings = new Map();
+function currentTurn() {
+  try {
+    const events = fs.readFileSync(path.join(stateRoot, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    const row = events.findLast(row => row.attempt_id === attemptId && row.phase === 'task-start');
+    return row ? {task_id: row.task_id, turn: row.turn} : {};
+  } catch { return {}; }
+}
+const audit = value => {
+  if (value.phase === 'provider-request-start') bindings.set(value.seq, currentTurn());
+  const binding = bindings.get(value.seq) ?? currentTurn();
+  fs.appendFileSync(auditFile,
+    redact(JSON.stringify({...value, ...binding, attempt_id: attemptId, at: new Date().toISOString()})) + '\n', {mode: 0o600});
+};
 const offline = attempt.phase === 'spike' || process.env.ORRERY_DSH_OFFLINE !== '0';
 audit({phase: 'preload-ready', node: process.version, exec_path: process.execPath, offline, backend_id: backendId});
 // Preserve the kit's key-before-file protection for native startup diagnostics.

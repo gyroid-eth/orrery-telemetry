@@ -22,10 +22,12 @@ class CompletionTests(unittest.TestCase):
         self.task = {'attempt_id': 'current', 'task_id': 'task-1', 'worktree': str(self.work),
                      'expected': [{'path': 'result.txt', 'contains': 'done'}], 'report_to': 'FixtureParent',
                      'reservation_receipts': [{'id': 31}, {'id': 32}]}
-        self.events = [self.event('turn-end', reason_kind='completed'),
+        self.events = [self.event('turn-end', reason_kind='completed', turn=1),
                        self.event('mail-sent', ok=True, verified_sender=True,
                                   message_id=123, to=['FixtureParent'], **{'from': 'FixtureChild'})]
-        self.audit = [{'attempt_id': 'current', 'phase': 'provider-request-start', 'seq': 1}]
+        self.audit = [self.event('provider-request-start', seq=1, turn=1),
+                      self.event('provider-response', seq=1, turn=1, status=200, usage={'input':11,'output':3}),
+                      self.event('stream-end', seq=1, turn=1, ok=True, terminal=True, usage_confirmed=True)]
         self.save()
 
     def event(self, phase, **values):
@@ -57,6 +59,43 @@ class CompletionTests(unittest.TestCase):
     def test_task_succeeds_while_runtime_has_not_exited(self):
         self.assertTrue(self.result()['success'])
         self.assertIsNone(completion.evaluate_runtime(self.root)['success'])
+
+    def test_pane_assignment_requires_final_usage_and_terminal_for_this_turn(self):
+        self.task.update(task_mode='assignment', report_policy='pane', expected=[], report_to=None)
+        self.events = self.events[:1]
+        for change in ({'usage_confirmed':False}, {'terminal':False}, {'ok':False}):
+            with self.subTest(change=change):
+                original=self.audit[-1].copy();self.audit[-1].update(change)
+                self.assertFalse(self.result()['success'])
+                self.audit[-1]=original
+        self.assertTrue(self.result()['success'])
+        self.audit[-2]['usage']['output']=None
+        self.assertFalse(self.result()['success'])
+
+    def test_missing_end_is_pending_and_another_turn_cannot_supply_usage(self):
+        self.task.update(task_mode='assignment', report_policy='pane', expected=[], report_to=None)
+        self.events = self.events[:1]
+        self.audit[-1]['turn']=2
+        self.assertIsNone(self.result()['success'])
+        self.audit[-1]['turn']=1
+        self.audit.append(self.event('stream-end',seq=1,turn=1,ok=False,terminal=False,usage_confirmed=False))
+        self.assertFalse(self.result()['success'])
+
+    def test_prior_request_success_does_not_confirm_the_latest_sequence(self):
+        self.task.update(task_mode='assignment', report_policy='pane', expected=[], report_to=None)
+        self.events = self.events[:1]
+        self.audit.append(self.event('provider-request-start',seq=2,turn=1))
+        self.assertIsNone(self.result()['success'])
+
+    def test_old_success_snapshot_without_usage_proof_is_not_adopted(self):
+        self.task.update(task_mode='assignment', report_policy='pane', expected=[], report_to=None)
+        self.events = self.events[:1]
+        self.save();saved=completion.evaluate_task(self.root)
+        saved.update(source='managed-task-evaluator',agent_name='FixtureChild')
+        saved.pop('provider_usage_verified')
+        reports=self.root/'task-reports';reports.mkdir();(reports/'task-1.json').write_text(json.dumps(saved))
+        self.audit=self.audit[:1]
+        self.assertIsNone(self.result()['success'])
 
     def test_empty_exit_zero_does_not_complete_task(self):
         self.events = []

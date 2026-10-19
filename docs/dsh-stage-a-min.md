@@ -106,3 +106,7 @@ request exceeds the context window: prompt (...) + max tokens (256000) exceeds t
 provider の4xx/5xxは成功扱いにせず、`provider-response` の `max_tokens` と `error.{type,code,message_prefix}` で原因を確認します。message は先頭240文字まで、鍵の実値と鍵らしい文字列をマスクします。JSON の `error` 以外の本文・モデルの出力・header は保存せず、構造化errorが読めない場合はその理由だけを記録します。
 
 根拠: [Strata source（固定commit）](https://github.com/Niko1221/Strata/blob/477ac13cbe8e582c20484871ce459d20d82df09d/serve/server.py#L4022)。配置版の対応は server 管理者が確認してください。
+
+
+assignment の成功は、その task/turn の全 provider sequence について、最後の response と stream-end に最終 usage（入力/出力の非負整数）と正常終端が確認できたときだけ保存します。未着の証拠は pending、終端前 cancel や最終 usage 欠落は成功にしません。turn 後の自由対話は、確認済みの task report を書き換えません。旧版の usage 確認印のない成功 report は、そのまま再利用しません。
+この変更は task の評価と記録です。通信先の許可・Strata の要求の可否・要求数・対話の寿命は変更しません。

@@ -1,1 +1,2 @@
-- dsh: managed の dsh の init と起動から、試しの run のために入れた負荷（load 15 以上）での拒否を外す。Mac が重くても子を立てられる。
+### Changed
+- Stop rejecting managed dsh init and launch under load (load 15 or above). The load limit was added for a trial run and no longer applies.

@@ -77,13 +77,15 @@ def status(state, *, persist=False):
                  and proof.get('schema') is True and proof.get('backend') is True)
     task_result, runtime_result = evaluate(state), evaluate(state, runtime=True)
     finalized = any(r.get('phase') == 'task-report-finalized' and r.get('task_id') == tid for r in same)
-    if ((task_result['success'] is True or finalized and type(task_result['success']) is bool)
+    if ((task_result['success'] is True and task_result.get('provider_usage_verified') is True
+            or finalized and task_result['success'] is False)
             and isinstance(tid, str) and Path(tid).name == tid
             and tid not in ('.', '..')):
         reports = state / 'task-reports'
         reports.mkdir(mode=0o700, exist_ok=True)
         report = reports / (tid + '.json')
-        if not report.exists():
+        previous = read(report, {})
+        if not report.exists() or (previous.get('success') is True and previous.get('provider_usage_verified') is not True):
             # Trusted saved evidence, not an LLM completion claim. Retain the
             # report when later interactive turns edit those same artifacts.
             artifact_rows = [r for r in same if r.get('task_id') == tid and r.get('phase') == 'artifact-written']
