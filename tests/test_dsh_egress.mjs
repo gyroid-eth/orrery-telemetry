@@ -143,6 +143,44 @@ test('stream cancellation releases the local slot but unknown usage blocks a new
   await assert.rejects(h.fetch(endpoint(h.backend), request(h.backend)), /USAGE_UNKNOWN/);
 });
 
+const run1Usage = 'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":1183,"cache_read_input_tokens":0,"output_tokens":62}}\n\n';
+const messageStop = 'data: {"type":"message_stop"}\n\n';
+function cancellingHarness(data) {
+  return harness('strata', {fetchImpl: async input => String(input).endsWith('/v1/status')
+    ? new Response('{"in_flight":0}')
+    : new Response(new ReadableStream({start(controller) { controller.enqueue(encode(data)); }}), {status: 200})});
+}
+async function consumeThenCancel(h) {
+  const response = await h.fetch(endpoint(h.backend), request(h.backend));
+  const reader = response.body.getReader();
+  await reader.read();
+  await reader.cancel(); // Real adapter returns at message_stop, before HTTP EOF.
+}
+
+test('run1 sequence: 200, final usage 62, message_stop, normal cancel permits the next request', async () => {
+  const h = cancellingHarness(run1Usage + messageStop);
+  await consumeThenCancel(h);
+  assert.deepEqual(h.events.find(row => row.phase === 'provider-response').usage, {input: 1183, cache_read: 0, output: 62});
+  assert.equal(h.events.at(-1).phase, 'stream-end');
+  assert.equal(h.events.at(-1).ok, true);
+  await consumeThenCancel(h);
+  assert.equal(h.events.filter(row => row.phase === 'provider-request-start').length, 2);
+});
+
+test('cancel before message_stop still blocks the next request even with final usage', async () => {
+  const h = cancellingHarness(run1Usage);
+  await consumeThenCancel(h);
+  assert.equal(h.events.at(-1).ok, false);
+  await assert.rejects(h.fetch(endpoint(h.backend), request(h.backend)), /USAGE_UNKNOWN/);
+});
+
+test('message_stop without final usage still blocks the next request on cancel', async () => {
+  const h = cancellingHarness(messageStop);
+  await consumeThenCancel(h);
+  assert.equal(h.events.at(-1).ok, false);
+  await assert.rejects(h.fetch(endpoint(h.backend), request(h.backend)), /USAGE_UNKNOWN/);
+});
+
 test('transport timeout and stream error cannot produce a clean stream receipt', async () => {
   const h = harness('deepseek', {fetchImpl: async (url, {signal}) => new Response(new ReadableStream({
     start(controller) { signal.addEventListener('abort', () => controller.error(new Error('fixture timeout'))); }

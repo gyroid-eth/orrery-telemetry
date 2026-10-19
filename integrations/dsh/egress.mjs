@@ -43,7 +43,7 @@ export function createEgress({backend, limits, wireTools, offline = true, phase 
     if (offline) return reject('offline-capture', 'DSH_OFFLINE', {forwarded: 0});
     active = true;
     const number = ++seq, started = performance.now();
-    let released = false, response, lastUsage = null, finalUsage = false;
+    let released = false, response, lastUsage = null, finalUsage = false, messageStopped = false;
     const finish = ok => {
       if (released) return;
       released = true; active = false; usageKnown = ok && finalUsage;
@@ -67,6 +67,7 @@ export function createEgress({backend, limits, wireTools, offline = true, phase 
       const observe = line => {
         if (!line.startsWith('data: ')) return;
         let event; try { event = JSON.parse(line.slice(6)); } catch { return; }
+        if (event.type === 'message_stop') messageStopped = true;
         if (event.content_block?.type === 'tool_use' && !allow.has(event.content_block.name))
           reject('blocked-model-tool', 'DSH_MODEL_TOOL');
         const usage = event.usage ?? event.message?.usage;
@@ -93,7 +94,11 @@ export function createEgress({backend, limits, wireTools, offline = true, phase 
             }
           } catch { if (cancelled) return; audit({phase: 'runtime-fatal', reason: 'DSH_STREAM'}); finish(false); controller.error(new Error('DSH_STREAM')); }
         },
-        async cancel(reason) { cancelled = true; try { await reader.cancel(reason); } finally { finish(false); } }
+        // The adapter normally returns at message_stop, cancelling before HTTP EOF.
+        async cancel(reason) {
+          cancelled = true;
+          try { await reader.cancel(reason); } finally { finish(messageStopped && finalUsage); }
+        }
       });
       const resultHeaders = new Headers(response.headers);
       resultHeaders.delete('content-length'); resultHeaders.delete('content-encoding');
