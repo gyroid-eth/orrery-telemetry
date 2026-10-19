@@ -20,9 +20,9 @@ class Policy:
     def __init__(self, state, limit=None):
         self.state = Path(state)
         config = read(self.state / 'run-config.json')
-        limit = config.get('provider_request_limit', 32) if limit is None else limit
-        if type(limit) is not int or not 1 <= limit <= 32:
-            raise ValueError('Provider request limit must be an integer from 1 to 32')
+        limit = config.get('provider_request_limit') if limit is None else limit
+        if (limit is not None or 'provider_request_limit' in config) and (type(limit) is not int or limit < 1):
+            raise ValueError('Provider request limit must be a positive integer when specified')
         profile = read(Path(config['profile_home']) / 'config.yaml')
         route = profile['providers'][config['provider']]
         base = urlsplit(route['base_url'])
@@ -43,7 +43,7 @@ class Policy:
         with self.lock:
             self.seq += 1
             seq = self.seq
-        if seq > self.limit:
+        if self.limit is not None and seq > self.limit:
             audit(self.state, 'limit-reached', limit=self.limit)
             raise RuntimeError('Managed provider request limit reached')
         audit(self.state, 'provider-request-start', seq=seq)

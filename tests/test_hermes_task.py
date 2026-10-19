@@ -246,7 +246,7 @@ class FileTask(unittest.TestCase):
         self.assertEqual(sum(row['phase'] == 'provider-request-start' for row in rows), 8)
         self.assertEqual(sum(row['phase'] == 'limit-reached' for row in rows), 1)
         inputs = runner.read(self.fixture.config_path)
-        for value in (0, -1, 33, True, '8'):
+        for value in (0, -1, True, '8', None, 1.5):
             bad = {**inputs, 'provider_request_limit': value}
             path = self.root / 'invalid-limit.json'
             runner.save(path, bad)
@@ -255,6 +255,23 @@ class FileTask(unittest.TestCase):
             runner.save(self.state / 'run-config.json', {**self.config, 'provider_request_limit': value})
             with self.assertRaises(ValueError):
                 provider_audit.Policy(self.state)
+
+    def test_request_limit_is_unbounded_by_default_and_accepts_larger_trial_cap(self):
+        request = SimpleNamespace(method='POST', url='https://provider.invalid/v1/messages')
+        policy = provider_audit.Policy(self.state)
+        self.assertIsNone(policy.limit)
+        for seq in range(1, 66):
+            self.assertEqual(policy.before(request), seq)
+        self.assertNotIn('limit-reached', (self.state / 'audit.jsonl').read_text())
+        inputs = {**runner.read(self.fixture.config_path), 'provider_request_limit': 100}
+        path = self.root / 'larger-trial-input.json'
+        runner.save(path, inputs)
+        state = self.root / 'larger-trial-state'
+        runner.initialize(path, state, 'deepseek', self.product.run, file_task=True)
+        self.assertEqual(runner.read(state / 'run-config.json')['provider_request_limit'], 100)
+        # Runtime policy reads the same value without requiring another profile.
+        runner.save(self.state / 'run-config.json', {**self.config, 'provider_request_limit': 100})
+        self.assertEqual(provider_audit.Policy(self.state).limit, 100)
 
     def test_installed_deepseek_catalog_pricing_and_messages_route_without_context_pin(self):
         python, source = os.environ.get('ORRERY_HERMES_TEST_PYTHON'), os.environ.get('ORRERY_HERMES_TEST_SOURCE')

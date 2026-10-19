@@ -138,9 +138,10 @@ Static known pricing, token counts, memory, skills and auxiliary inference stay
 enabled. Suppression is recorded separately; any actual blocked request still
 fails the completion check.
 
-`provider_request_limit` optionally lowers the shared main/auxiliary HTTPX
-request cap (integer 1–32, default 32). The next request is denied before
-transport and records `limit-reached`; retries count toward this cap too.
+There is no default request cap. A trial run-config may explicitly set
+`provider_request_limit` to a positive integer, with no fixed upper bound.
+When set, it caps shared main/auxiliary HTTPX requests; the next request is denied
+before transport and records `limit-reached`. Retries count toward this trial cap.
 An operator can select a native Anthropic-compatible endpoint through the route
 fields without pinning context. Verify context resolution offline for that
 provider/model first. The pinned billing resolver may call a named endpoint
