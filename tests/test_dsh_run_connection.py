@@ -1,4 +1,7 @@
-"""Offline product-bound lifecycle controls; no real registration or Mail."""
+"""Offline product-bound lifecycle controls; no real registration or Mail.
+
+ORRERY_DSH_TEST_BACKEND selects strata (default) or deepseek for the real TUI fixture.
+"""
 import importlib.util
 import json
 import os
@@ -265,20 +268,24 @@ for line in sys.stdin:
             target.write_text('# Explicit offline fixture\n')
         backend = self.root / 'backend.json'
         spec = json.loads((INTEGRATION / 'backend.json').read_text())
-        # Keep the actual template's custom model/definition/effort unchanged.
+        backend_id = os.environ.get('ORRERY_DSH_TEST_BACKEND','strata')
+        self.assertIn(backend_id,('strata','deepseek'))
+        selected_backend = spec['backends'][backend_id]
+        # Keep the actual template's model/definition/effort/idle policy unchanged.
         # Only the address is synthetic; egress must stop before any socket.
-        spec['backends']['strata']['base_url'] = 'https://strata.invalid'
+        selected_backend['base_url'] = ('https://deepseek.invalid/anthropic' if backend_id == 'deepseek'
+                                        else 'https://strata.invalid')
         backend.write_text(json.dumps(spec))
         work = self.root / 'work'
         work.mkdir()
         receipt = Path(runtime).parent / 'evidence/tui-patch-applied.json'
-        config = dict(node=node,runtime=runtime,worktree=str(work),backend_file=str(backend),backend_id='strata',
+        config = dict(node=node,runtime=runtime,worktree=str(work),backend_file=str(backend),backend_id=backend_id,
             patch_receipt=str(receipt),home=str(home),product_root=str(product),project_key='/fixture/project',
             proxy_python=sys.executable,parent='FixtureParent',connection={
                 'mcp_url':'http://127.0.0.1:9999/mcp','runtime_dir':str(self.root/'runtime-state'),
                 'mail_env':str(self.root/'never-open.env'),'bearer_mode':'auto'},
-            task={'prompt':'Write strata-first-ok into trial-ok.txt and report to the parent.',
-                  'allowed_paths':['trial-ok.txt'],'expected':[{'path':'trial-ok.txt','contains':'strata-first-ok'}]})
+            task={'prompt':f'Write {backend_id}-first-ok into trial-ok.txt and report to the parent.',
+                  'allowed_paths':['trial-ok.txt'],'expected':[{'path':'trial-ok.txt','contains':f'{backend_id}-first-ok'}]})
         config_file = self.root / 'init.json'
         config_file.write_text(json.dumps(config))
         sys.path.insert(0,str(INTEGRATION))
@@ -316,8 +323,9 @@ for line in sys.stdin:
                 'fixture':'synthetic stdio server, no backend sockets or registration',
                 'evidence_directory':str(destination),
                 'actual_sdk':True,'actual_tui':True,'actual_tools':proof['actual_tools'],
-                'model':spec['backends']['strata']['model'],
-                'model_definition':spec['backends']['strata']['model_definition'],
+                'backend_id':backend_id,'model':selected_backend['model'],
+                'model_definition':selected_backend['model_definition'],
+                'idle_check':selected_backend['idle_check'],
                 'forwarded_requests':0,'schema_and_backend_negative_controls':True,
                 'dummy_value_file_hits':sum(b'offline-dummy' in p.read_bytes()
                     for p in state.rglob('*') if p.is_file() and not p.is_symlink()

@@ -2,7 +2,7 @@
 
 同じ実装で DeepSeek / Strata を選ぶ、子1体・私有worktree・小さいread/write taskの縦切りです。正式なprovider導入、任意shell、resume、global、installer、dashboard変更は含みません。固定版は dsh 0.2.1-rc.2 / dsh-TUI 0.16.1、Nodeは絶対実体を固定して24.2以上を検査します。
 
-offline spikeでは、固定TUIの実画面起動と、実際のagent.ctxのtoolによる許可write・root外/予約なし/期限切れの3拒否が成立しました。現在はphase=runの登録・製品proxy・予約・鍵なしfull preflight・pane起動・後始末を接続中です。実SDK/固定TUIと明示の無通信stdio fixtureによるfull preflightは、Strataの実model定義を保って成立しました。**実Mail・登録・鍵・モデルAPIを使う一周の受入は未実施です。** fixture成功を、実task成功やretire成功には読み替えません。live Mail/dashboard/vaultの変更は行っていません。
+offline spikeでは、固定TUIの実画面起動と、実際のagent.ctxのtoolによる許可write・root外/予約なし/期限切れの3拒否が成立しました。phase=runの登録・製品proxy・予約・鍵なしfull preflight・pane起動・後始末を接続し、Strataでは小さい編集→親宛てMail→停止・解放・retireの実一周でtask/runtimeの完了を確認しました。DeepSeekも実SDK/固定TUIと明示の無通信stdio fixtureによるfull preflightが成立していますが、DeepSeek公式APIでの実一周は未受入です。fixture成功を実task成功やretire成功には読み替えません。
 
 ## 呼出しと設定
 
@@ -71,11 +71,13 @@ managed TUI側の`tests/test_dsh_managed_spike.py`では、patch receiptの未�
 
 run接続の`tests/test_dsh_run_connection.py`では、実SDK→無通信のsynthetic stdio server→固定TUIを使います。templateの`qwen3.8-flash-next-iq3_xxs`、contextWindow 131072/maxTokens 4096、effort highを保ち、URLだけ`.invalid`へ変更したfull preflightで、schema可視/backend不達・process不達の対照、実3 tools、retry0、offline-capture/転送0、group消滅を確認しました。dummy値の保存は0件でした。preflightのaudit/events/runtime終了証拠は本番用と分離し、変更した設定は鍵取得前に拒否します。実Strataのidle/認証・実Mail・登録/解放/retireを確認した証拠ではありません。
 
-## 最初のStrata子で一度だけ接続先を観測する計画
+## 初回の子で一度だけ接続先を観測する
 
 実受入時に起動直前→終了の一窓だけ、owned runtime/supervisor/proxy/子孫PIDへMacの`lsof -nP -a -p <PIDのCSV> -i`又はWSLの`ss -H -ntup`を約1秒間隔で採ります。時刻/PID/実行名/接続IP:port/protocolだけを保存し、argv/env/payload/headerは採りません。許可は利用者が設定したStrataの接続先と既存bindingの正確な127.0.0.1:Mail portのみです。hostname/IP対応も記録し、許可外を見つけたら止めます。常設監視・firewall・新proxyは作りません。
 
-Macの初回は`python3 integrations/dsh/observe.py --state STATE`を使います。鍵なしで採取窓を開いてから既存launch.pyのstartを呼び、owned pane・supervisor・runtimeと子孫を約1秒間隔で採取し、停止・消滅後に一行で判定します。親は別端末でMail受領と既存stopを実行します。observerはsignalを送らず、許可外を即表示します。許可はrepo外backend設定のStrata URLを解決したIP:443とrun-configの正確な127.0.0.1:Mail portだけです。network-observation.jsonlに一窓、network-observation.jsonに判定を保存します。exit0は「この窓で許可外なし」、1は許可外あり、2は未確認。取得失敗・中断・15分以内に停止確認できない場合は未確認とし、親がruntime状態を確認します。WSL用の観測adapterは未実装です。`tests/test_dsh_observe.py`は無通信snapshot/起動のfixtureであり、実OSの権限や実接続を確認した試験ではありません。
+Macの初回は`python3 integrations/dsh/observe.py --state STATE`を使います。鍵なしで採取窓を開いてから既存launch.pyのstartを呼び、owned pane・supervisor・runtimeと子孫を約1秒間隔で採取し、停止・消滅後に一行で判定します。親は別端末でMail受領と既存stopを実行します。observerはsignalを送らず、許可外を即表示します。許可はrepo外backend設定のprovider URLを解決したIP:443とrun-configの正確な127.0.0.1:Mail portだけです。backend=deepseekでは公式api.deepseek.comだけを対象にします。CDNのIP変化は通常起こり得て固定リストによる誤停止を招くため、未知の443接続を見たときは同hostnameを再解決し、事前解決結果との和で判定します。他のhostnameや任意の443は許可しません。network-observation.jsonlに一窓、network-observation.jsonに判定を保存します。exit0は「この窓で許可外なし」、1は許可外あり、2は未確認。取得失敗・中断・15分以内に停止確認できない場合は未確認とし、親がruntime状態を確認します。WSL用の観測adapterは未実装です。`tests/test_dsh_observe.py`は無通信snapshot/起動のfixtureであり、実OSの権限や実接続を確認した試験ではありません。
+
+DeepSeekのrunも同じinit/register/preflight/observe/task/record-mail/stop/release/retire/confirm-retire/cleanを使います。利用者のrepo外設定でbackend_id=deepseek、base_url=https://api.deepseek.com/anthropic、model=deepseek-flash、明示のKeychain service/account参照を指定します。model_definition=nullではcustom modelsを投影せず、idle_check=falseなのでStrataのstatusは呼びません。残高・onboarding・補助通信の遮断、要求8回/retry0と完了判定は共通です。`ORRERY_DSH_TEST_BACKEND=deepseek`で実SDK/TUIの無通信full preflight fixtureを選べます（既定はstrata）。
 
 snapshotは短い通信を見逃し得ます。global fetchの置換もnode:http/net/native/別processの全socketをOSで遮断する仕組みではありません。statusは別利用者を排除するサーバー予約ではなく、WSL対応は未受入です。未観測を「外部通信は完全にゼロ」とは報告しません。
 

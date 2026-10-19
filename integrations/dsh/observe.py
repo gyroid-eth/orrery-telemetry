@@ -32,20 +32,21 @@ def write(path, value):
 
 def destinations(config, resolve=socket.getaddrinfo):
     backend = read(config['backend_file'])['backends'][config['backend_id']]
-    strata = urlsplit(backend['base_url'])
+    provider = urlsplit(backend['base_url'])
     mail = urlsplit(config['connection']['mcp_url'])
-    if (config['backend_id'] != 'strata' or strata.scheme != 'https' or not strata.hostname
-            or strata.port not in (None, 443) or strata.username or strata.password
+    if (config['backend_id'] not in ('strata', 'deepseek') or provider.scheme != 'https' or not provider.hostname
+            or provider.port not in (None, 443) or provider.username or provider.password
+            or (config['backend_id'] == 'deepseek' and provider.hostname != 'api.deepseek.com')
             or mail.scheme not in ('http', 'https') or mail.hostname != '127.0.0.1'
             or mail.username or mail.password):
-        raise ValueError('Exact Strata HTTPS and existing loopback Mail endpoints required')
+        raise ValueError('Exact provider HTTPS and existing loopback Mail endpoints required')
     port = mail.port or (443 if mail.scheme == 'https' else 80)
     ips = sorted({str(ipaddress.ip_address(row[4][0]))
-                  for row in resolve(strata.hostname, 443, type=socket.SOCK_STREAM)})
+                  for row in resolve(provider.hostname, 443, type=socket.SOCK_STREAM)})
     if not ips:
-        raise ValueError('Strata address is unresolved')
+        raise ValueError('Provider address is unresolved')
     return {(ip, 443) for ip in ips} | {('127.0.0.1', port)}, {
-        'strata_host': strata.hostname, 'strata_ips': ips, 'strata_port': 443,
+        'backend_id': config['backend_id'], 'provider_host': provider.hostname, 'provider_ips': ips, 'provider_port': 443,
         'mail_ip': '127.0.0.1', 'mail_port': port}
 
 
@@ -185,6 +186,14 @@ def observe(state, *, system=None, resolve=socket.getaddrinfo, maximum=900, inte
                 owned = descendants(table, roots, pgid)
                 roots.update(owned)
                 rows = system.connections(owned)
+                # CDN address changes are normal; a stale list can falsely reject
+                # the official provider. Refresh only the same configured host.
+                if config['backend_id'] == 'deepseek' and any(
+                        row.get('protocol') == 'TCP' and '->' in row.get('connection', '')
+                        and row['connection'].endswith(':443') and not allowed(row, permitted) for row in rows):
+                    refreshed, current = destinations(config, resolve)
+                    permitted.update(refreshed)
+                    save({'phase': 'provider-dns-refresh', **current})
                 for row in rows:
                     if row['pid'] not in owned:
                         raise ValueError('Socket PID outside owned set')

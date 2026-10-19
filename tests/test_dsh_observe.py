@@ -57,11 +57,40 @@ class ObserveTests(unittest.TestCase):
         observe.write(self.state / 'run-config.json', {'backend_file': str(backend), 'backend_id': 'strata',
                       'connection': {'mcp_url': 'http://127.0.0.1:12345/mcp'}})
 
-    def run_fixture(self, text='', failure=False):
+    def run_fixture(self, text='', failure=False, resolve=None):
         system = FakeMac(self.state, text, failure)
-        code = observe.observe(self.state, system=system, resolve=lambda *a, **k: [(None, None, None, None, ('192.0.2.1', 443))],
+        code = observe.observe(self.state, system=system, resolve=resolve or (lambda *a, **k: [(None, None, None, None, ('192.0.2.1', 443))]),
                                sleep=lambda _: None, interval=0)
         return code, observe.read(self.state / 'network-observation.json'), system
+
+    def configure_deepseek(self):
+        config = observe.read(self.state / 'run-config.json')
+        config['backend_id'] = 'deepseek'
+        observe.write(self.state / 'run-config.json', config)
+        observe.write(config['backend_file'], {'backends': {'deepseek': {'base_url': 'https://api.deepseek.com/anthropic'}}})
+
+    def test_deepseek_official_endpoint_and_exact_mail_port_are_allowed(self):
+        self.configure_deepseek()
+        text = 'p21\ncnode\nf5\nPTCP\nnlocal:5000->192.0.2.1:443\nf6\nPTCP\nnlocal:5001->127.0.0.1:12345\n'
+        code, result, _ = self.run_fixture(text)
+        self.assertEqual(code, 0)
+        self.assertEqual(result['verdict'], 'none-observed')
+
+    def test_deepseek_cdn_refresh_accumulates_only_the_same_host_addresses(self):
+        self.configure_deepseek()
+        calls = []
+        def resolve(host, port, **kwargs):
+            calls.append((host, port))
+            return [(None, None, None, None, ('192.0.2.1' if len(calls) == 1 else '192.0.2.2', 443))]
+        code, result, _ = self.run_fixture('p21\ncnode\nf5\nPTCP\nnlocal:5000->192.0.2.2:443\n', resolve=resolve)
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [('api.deepseek.com', 443), ('api.deepseek.com', 443)])
+
+    def test_deepseek_does_not_whitelist_other_https_destinations(self):
+        self.configure_deepseek()
+        code, result, _ = self.run_fixture('p21\ncnode\nf5\nPTCP\nnlocal:5000->192.0.2.99:443\n')
+        self.assertEqual(code, 1)
+        self.assertEqual(result['verdict'], 'forbidden-observed')
 
     def test_owned_window_starts_before_launch_and_finishes_after_group_disappearance(self):
         text = 'p21\ncnode\nf5\nPTCP\nn10.0.0.1:5000->192.0.2.1:443\nTST=ESTABLISHED\n'

@@ -79,6 +79,15 @@ test('balance, npm, GitHub and arbitrary loopback are blocked for both backends'
   }
 });
 
+test('DeepSeek balance/onboarding on its own origin remain blocked with no status or provider forwards', async () => {
+  const h = harness('deepseek');
+  for (const suffix of ['/user/balance', '/anthropic/user/balance', '/auth/login', '/v1/models'])
+    await assert.rejects(h.fetch('https://deepseek.invalid' + suffix, request(h.backend)), /DSH_NETWORK/);
+  assert.equal(h.calls.length, 0);
+  await (await h.fetch(endpoint(h.backend), request(h.backend))).text();
+  assert.deepEqual(h.calls.map(row => row.input), [endpoint(h.backend)]);
+});
+
 test('unknown model, unsupported beta, structural tool_addition and extra tools do not forward', async () => {
   for (const change of [{model: 'other'}, {max_tokens: 100000},
     {messages: [{content: [{type: 'tool_addition'}]}]}, {tools: [{name: 'bash'}]}]) {
