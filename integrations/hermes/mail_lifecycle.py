@@ -72,14 +72,16 @@ def register(state, run=subprocess.run, *, generate_config=True):
     if not re.fullmatch(r'[A-Za-z][A-Za-z0-9-]+', name) or name == config['parent']:
         raise ValueError('Unexpected helper-returned identity; preserve intent')
     token = state / ('token-' + name)
-    pending.rename(token)  # Product handoff only; never open its contents.
-    if token.stat().st_mode & 0o777 != 0o600:
-        raise ValueError('Product handoff must be 0600')
+    # Preserve the helper-returned identity before the local handoff, so a
+    # handoff failure can retire this same registration without registering again.
     identity = {'agent_name': name, 'program': 'hermes', 'parent': config['parent'],
                 'project_key': config['project_key'], 'registered_at': stamp(), 'token_file': str(token)}
     save(state / 'mail-identity.json', identity, exclusive=True)
     attempt['agent_name'] = name
     save(state / 'attempt.json', attempt)
+    pending.rename(token)  # Product handoff only; never open its contents.
+    if token.stat().st_mode & 0o777 != 0o600:
+        raise ValueError('Product handoff must be 0600')
     if generate_config:
         generate(state, run)
     return name
@@ -176,7 +178,8 @@ def retire(state, run=subprocess.run, *, require_release=True):
         if (release.get('attempt_id') != attempt['attempt_id'] or release.get('agent_name') != identity['agent_name']
                 or release.get('confirmed') is not True):
             raise ValueError('Real reservation release not confirmed')
-    elif (config.get('purpose') not in ('mail-connectivity', 'file-task') or (state / 'reservations.json').exists()
+    elif (config.get('purpose') not in ('mail-connectivity', 'file-task')
+          or ((state / 'reservations.json').exists() and read(state / 'reservations.json').get('receipts') != [])
           or (config.get('purpose') == 'file-task' and not launch_state.startswith('not-started'))):
         raise ValueError('Only the reservation-free Mail pilot can skip release')
     require_legacy(config, run)

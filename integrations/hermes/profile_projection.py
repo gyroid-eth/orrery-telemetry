@@ -68,6 +68,11 @@ def project(spec, profile, auxiliary_tasks):
         config['model_overrides'] = {provider: {model: {'context_window': context}}}
         if 'compression' in auxiliary:
             auxiliary['compression']['context_length'] = context
+    effort = spec.get('reasoning_effort', template.get('agent', {}).get('reasoning_effort'))
+    if effort not in (None, ''):
+        if effort not in ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'):
+            raise ValueError('Unknown explicit reasoning effort')
+        config['agent'] = {'reasoning_effort': effort}
     return {'provider': provider, 'model': model, 'profile_config': config}
 
 

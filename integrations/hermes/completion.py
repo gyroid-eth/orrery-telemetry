@@ -78,21 +78,23 @@ def evaluate_task(state_root):
     if events is not None:
         receipts = [row for row in scoped if row.get('phase') == 'mail-sent']
         parent, child = task.get('report_to'), attempt.get('agent_name')
-        if receipts and parent and child and attempt['phase'] == 'run':
+        if parent and child and attempt['phase'] == 'run':
             matching = [row for row in receipts if (
                 row.get('ok') is True and row.get('verified_sender') is True
-                and row.get('from') == child and row.get('to') in (parent, [parent])
+                and row.get('from') == child and (row.get('to') == parent
+                    or isinstance(row.get('to'), list) and parent in row['to'])
+                and type(row.get('deliveries')) is int and row['deliveries'] >= 1
                 and type(row.get('message_id')) is int and row['message_id'] > 0)]
             received = _read(root / 'parent-mail-receipt.json')
-            checks['mail_receipt'] = None if received is None else bool(matching) and (
-                received.get('source') == 'parent-bound-fetch-inbox' and received.get('attempt_id') == aid
-                and received.get('task_id') == tid and received.get('agent_name') == child
-                and received.get('from') == child and received.get('to') == [parent]
-                and any(row['message_id'] == received.get('message_id') for row in matching))
-            if not matching:
-                checks['mail_receipt'] = False
-            # The parent receipt strengthens the common fifth check; it never
-            # substitutes for the child's verified product-send event.
+            checks['mail_receipt'] = bool(matching)
+            if (root / 'parent-mail-receipt.json').exists():
+                checks['mail_receipt'] = bool(matching) and bool(received) and (
+                    received.get('source') == 'parent-bound-fetch-inbox' and received.get('attempt_id') == aid
+                    and received.get('task_id') == tid and received.get('agent_name') == child
+                    and received.get('from') == child and received.get('to') == [parent]
+                    and any(row['message_id'] == received.get('message_id') for row in matching))
+            # A canonical parent receipt strengthens the server-send proof when
+            # available; a malformed or mismatching existing receipt fails.
     return _result(checks, **metadata)
 
 

@@ -78,7 +78,12 @@ def check_profile_paths(profile, config=None):
             raise ValueError('Skill directories must stay in the current profile')
 
 
-def initialize(config_path, state, profile_name, run=subprocess.run, *, file_task=False):
+def initialize(config_path, state, profile_name, run=subprocess.run, *, file_task=False, task_spec=None):
+    if task_spec is not None:
+        from task_spec import validate
+        validate(task_spec)
+        if not file_task:
+            raise ValueError('Explicit task requires init-task')
     state = Path(state).resolve()
     if state.exists():
         raise ValueError('State already exists; preserve the previous attempt')
@@ -87,9 +92,9 @@ def initialize(config_path, state, profile_name, run=subprocess.run, *, file_tas
     config = read(config_path)
     known = {'product_root', 'home', 'project_key', 'worktree', 'managed_root', 'hermes_executable',
              'hermes_python', 'hermes_source', 'proxy_python', 'tmux', 'parent', 'connection',
-             'profiles', 'task_timeout_seconds', 'tmux_socket', 'provider_request_limit'}
+             'profiles', 'task_timeout_seconds', 'tmux_socket', 'provider_request_limit', 'credential_mode'}
     profile_keys = {'template', 'provider', 'model', 'base_url', 'api', 'api_mode', 'transport', 'key_cmd',
-                    'context_length'}
+                    'context_length', 'reasoning_effort'}
     if set(config) - known or set(config['connection']) - {'runtime_dir', 'mcp_url', 'mail_env', 'bearer_mode'}:
         raise ValueError('Config may contain only the documented non-secret references')
     if any(set(spec) - profile_keys for spec in config['profiles'].values()):
@@ -97,6 +102,8 @@ def initialize(config_path, state, profile_name, run=subprocess.run, *, file_tas
     limit = config.get('provider_request_limit')
     if 'provider_request_limit' in config and (type(limit) is not int or limit < 1):
         raise ValueError('Provider request limit must be a positive integer when specified')
+    if config.get('credential_mode', 'hermes-key-cmd') not in ('hermes-key-cmd', 'owned-once'):
+        raise ValueError('Unknown credential acquisition mode')
     for key in ('product_root', 'home', 'project_key', 'worktree', 'managed_root',
                 'hermes_executable', 'hermes_python', 'hermes_source', 'proxy_python', 'tmux'):
         if not Path(config[key]).is_absolute():
@@ -143,7 +150,10 @@ def initialize(config_path, state, profile_name, run=subprocess.run, *, file_tas
             'If it fails or is unavailable, stop and report failure; do not retry or use another transport.\n')
     (state / 'task.md').write_text(task)
     (state / 'task.md').chmod(0o600)
-    if file_task:
+    if file_task and task_spec is not None:
+        from task_spec import materialize
+        materialize(state, task_spec, config, attempt, save)
+    elif file_task:
         manifest = read(state / 'task.json')
         manifest.update(allowed_paths=['trial-ok.txt'], reservation_receipts=[],
                         reservation_source='product-bound-proxy', expected=[{'path': 'trial-ok.txt', 'contains': 'hermes-first-ok'}])
@@ -308,7 +318,8 @@ def status(state):
             checks.append(value.get('success') if value.get('attempt_id') == attempt['attempt_id']
                           and type(value.get('success')) is bool else None)
         scan = read(state / 'diagnostic-scan.json') if (state / 'diagnostic-scan.json').is_file() else {}
-        current = scan.get('attempt_id') == attempt['attempt_id'] and scan.get('source') == 'operator-private-prefix-scan'
+        scan_source = 'owned-process-prefix-scan' if config.get('credential_mode') == 'owned-once' else 'operator-private-prefix-scan'
+        current = scan.get('attempt_id') == attempt['attempt_id'] and scan.get('source') == scan_source
         checks.append(scan['matches'] == 0 and scan.get('errors') == 0
                       if current and type(scan.get('matches')) is int and type(scan.get('errors')) is int else None)
         result['full_managed_task_accepted'] = False if False in checks else None if None in checks else True
@@ -319,19 +330,62 @@ def status(state):
 def stop(state, run=subprocess.run):
     state = Path(state)
     config, identity = read(state / 'run-config.json'), read(state / 'mail-identity.json')
-    pane = read(state / 'owned-pane.json')
-    if pane['session'] != identity['agent_name'] or pane['agent_name'] != identity['agent_name']:
+    pane = read(state / ('owned-pane.json' if (state / 'owned-pane.json').exists() else 'start-intent.json'))
+    if pane.get('session', identity['agent_name']) != identity['agent_name'] or pane['agent_name'] != identity['agent_name']:
         raise ValueError('Refuse to stop a different identity')
     if not (state / 'runtime-exit.json').is_file():
-        run([config['tmux'], '-S', pane['socket_path'], 'kill-session', '-t', '=' + pane['session']],
+        observed = run([config['tmux'], '-S', pane['socket_path'], 'has-session', '-t', '=' + identity['agent_name']],
+                       env=base_env(config), capture_output=True, timeout=10)
+        if observed.returncode == 1 and not any((state / name).exists() for name in ('pane-entry.json', 'runtime-process.json')):
+            return {'launch_state': 'not-started-session-absent'}
+        if observed.returncode not in (0, 1):
+            raise ValueError('Owned session state unknown')
+        run([config['tmux'], '-S', pane['socket_path'], 'kill-session', '-t', '=' + identity['agent_name']],
             env=base_env(config), capture_output=True, check=True, timeout=10)
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline and not (state / 'runtime-exit.json').is_file():
             time.sleep(0.1)
+    if not (state / 'runtime-exit.json').exists():
+        launch_state = lifecycle.launch_state_for_retire(state, config, identity, run)
+        return {'launch_state': launch_state}
     runtime = read(state / 'runtime-exit.json')
     if runtime.get('group_absent') is not True or runtime.get('group_check') != 'observed':
         raise ValueError('Owned group is not confirmed absent; ask the operator to inspect')
     return runtime
+
+
+def clean(state, run=subprocess.run):
+    state = Path(state)
+    config, identity, attempt = [read(state / name) for name in ('run-config.json', 'mail-identity.json', 'attempt.json')]
+    result = evaluate(state, runtime=True)
+    scan = read(state / 'diagnostic-scan.json')
+    if (result['success'] is not True or scan.get('attempt_id') != attempt['attempt_id']
+            or scan.get('source') != ('owned-process-prefix-scan' if config.get('credential_mode') == 'owned-once' else 'operator-private-prefix-scan')
+            or type(scan.get('matches')) is not int or scan['matches'] != 0
+            or type(scan.get('errors')) is not int or scan['errors'] != 0):
+        raise ValueError('Cleanup requires runtime receipts and a clean current diagnostic scan')
+    from pane_entry import group_absent
+    process = read(state / 'runtime-process.json')
+    if process.get('agent_name') != identity['agent_name'] or group_absent(process['pgid']) is not True:
+        raise ValueError('Owned group absence changed or is unknown')
+    pane = read(state / 'owned-pane.json')
+    if pane.get('agent_name') != identity['agent_name'] or pane.get('session') != identity['agent_name']:
+        raise ValueError('Owned session mismatch')
+    prefix = [config['tmux'], '-S', pane['socket_path']]
+    exists = run(prefix + ['has-session', '-t', '=' + identity['agent_name']], env=base_env(config), capture_output=True, timeout=10)
+    if exists.returncode == 0:
+        run(prefix + ['kill-session', '-t', '=' + identity['agent_name']], env=base_env(config), capture_output=True, check=True, timeout=10)
+    elif exists.returncode != 1:
+        raise ValueError('Owned session state unknown')
+    token = Path(identity['token_file'])
+    if token != state / ('token-' + identity['agent_name']):
+        raise ValueError('Unexpected owner handoff path')
+    for path in (token, state / 'mcp.json', state / 'empty-claude.json'):
+        path.unlink(missing_ok=True)
+    proof = {'attempt_id': attempt['attempt_id'], 'agent_name': identity['agent_name'],
+             'source': 'owned-attempt-cleanup', 'checked_at': lifecycle.stamp()}
+    save(state / 'cleaned.json', proof)
+    return proof
 
 
 def managed_env(config, identity, state):
@@ -379,16 +433,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['init', 'init-task', 'preregister', 'configure', 'probe', 'reserve', 'release',
         'preflight', 'start', 'status', 'stop', 'retire', 'confirm-retire', 'record-mail', 'complete',
-        'complete-runtime', 'scan-diagnostics'])
+        'complete-runtime', 'scan-diagnostics', 'clean'])
     parser.add_argument('--state', required=True, type=Path)
     parser.add_argument('--config', type=Path)
     parser.add_argument('--profile', choices=['strata', 'deepseek'])
-    parser.add_argument('--input', type=Path, help='Parent-saved canonical whois JSON for confirm-retire')
+    parser.add_argument('--input', type=Path, help='Task JSON for init-task; parent capture for record-mail/confirm-retire')
     args = parser.parse_args()
     exit_code = 0
     try:
         if args.action in ('init', 'init-task'):
-            result = initialize(args.config, args.state, args.profile, file_task=args.action == 'init-task')
+            result = initialize(args.config, args.state, args.profile, file_task=args.action == 'init-task',
+                                task_spec=read(args.input) if args.input else None)
         elif args.action == 'preregister':
             result = lifecycle.register(args.state, generate_config=False)
         elif args.action == 'configure':
@@ -412,6 +467,8 @@ def main():
             result = status(args.state)
         elif args.action == 'stop':
             result = stop(args.state)
+        elif args.action == 'clean':
+            result = clean(args.state)
         elif args.action in ('confirm-retire', 'record-mail'):
             if not args.input:
                 raise ValueError('Parent-saved canonical MCP result file required')
@@ -426,8 +483,9 @@ def main():
         else:
             config = read(args.state / 'run-config.json')
             task = read(args.state / 'task.json')
+            reservations = read(args.state / 'reservations.json') if (args.state / 'reservations.json').exists() else {}
             result = lifecycle.retire(args.state, require_release=config['purpose'] == 'file-task'
-                                      and bool(task.get('reservation_receipts')))
+                                      and bool(task.get('reservation_receipts') or reservations.get('receipts')))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         raise SystemExit('Step failed; preserve this state and identity, do not retry or switch transports')
     print(json.dumps({'action': args.action, 'result': result}))

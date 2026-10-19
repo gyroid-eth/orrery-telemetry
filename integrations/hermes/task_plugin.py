@@ -52,10 +52,16 @@ def install(ctx, state):
             if args != expected_mail:
                 return deny(tool_name, 'unexpected-mail-arguments')
             for spec in task['expected']:
-                target = (Path(task['worktree']) / spec['path']).resolve()
-                if (str(target) not in seen_read or not target.is_file()
-                        or target.stat().st_mtime_ns < attempt['started_at_ns']
-                        or spec['contains'].encode() not in target.read_bytes()):
+                requested = Path(task['worktree']) / spec['path']
+                target = requested.resolve()
+                if (requested.is_symlink() or not target.is_relative_to(Path(task['worktree']).resolve()) or not target.is_file()
+                        or (task.get('require_read_before_report', True) and str(target) not in seen_read)
+                        or target.stat().st_mtime_ns < attempt['started_at_ns']):
+                    return deny(tool_name, 'artifact-not-ready')
+                data = target.read_bytes()
+                valid = (hashlib.sha256(data).hexdigest() == spec['sha256'] if 'sha256' in spec
+                         else isinstance(spec.get('contains'), str) and spec['contains'].encode() in data)
+                if not valid:
                     return deny(tool_name, 'artifact-not-ready')
             save(state / 'report-intent.json', {'attempt_id': attempt['attempt_id'],
                  'agent_name': attempt['agent_name'], 'at': stamp()}, exclusive=True)
@@ -88,7 +94,7 @@ def install(ctx, state):
 
     ctx.register_hook('pre_tool_call', before)
     ctx.register_hook('post_tool_call', after)
-    event(state, 'plugin-ready', tools=['read_file', 'write_file', MAIL_TOOL], runtime_phase=attempt['phase'])
+    event(state, 'plugin-ready', tools=['read_file', 'write_file', MAIL_TOOL], runtime_phase=attempt['phase'], process_id=os.getpid())
     event(state, 'task-start')
 
 

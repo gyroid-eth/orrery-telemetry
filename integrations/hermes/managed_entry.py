@@ -131,13 +131,24 @@ def execute(state, check=False):
                 (Path(state) / 'task.md').read_text(), '--provider', config['provider'], '-m', config['model'],
                 '-t', ','.join(pilot_toolsets(profile, file_task=True)),
                 '--usage-file', str(Path(state) / 'hermes-turn.json')]
-    from hermes_cli.main import main
-    from hermes_cli import oneshot
-    from task_plugin import assert_registered
-    from hermes_cli import plugins
-    assert_registered(plugins.get_plugin_manager(), state)
-    oneshot._write_usage_file = turn_writer(state)
-    return main()
+    scan = None
+    if config.get('credential_mode') == 'owned-once':
+        from owned_credential import install as credential
+        scan = credential(state)
+    try:
+        from hermes_cli import main as main_module
+        from hermes_cli import oneshot
+        from task_plugin import assert_registered
+        from hermes_cli import plugins
+        assert_registered(plugins.get_plugin_manager(), state)
+        oneshot._write_usage_file = turn_writer(state)
+        if scan:
+            from owned_credential import wrap_exit
+            wrap_exit(main_module, scan)
+        return main_module.main()
+    finally:
+        if scan:
+            scan()
 
 
 def main():
