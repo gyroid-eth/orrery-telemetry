@@ -2,7 +2,7 @@
 
 同じ実装で DeepSeek / Strata を選ぶ、子1体・私有worktree・小さいread/write taskの縦切りです。正式なprovider導入、任意shell、resume、global、installer、dashboard変更は含みません。固定版は dsh 0.2.1-rc.2 / dsh-TUI 0.16.1、Nodeは絶対実体を固定して24.2以上を検査します。
 
-offline spikeでは、固定TUIの実画面起動と、実際のagent.ctxのtoolによる許可write・root外/予約なし/期限切れの3拒否が成立しました。**現在のlauncher/managed entryはspike-onlyで、実Mailは未接続です。** 通信ガード・完了判定のfixture成功と合わせても、モデルAPIを使うtask成功やretireの受入にはなりません。実鍵、モデルAPI、identity登録、live Mail/dashboard/vaultの変更は行っていません。
+offline spikeでは、固定TUIの実画面起動と、実際のagent.ctxのtoolによる許可write・root外/予約なし/期限切れの3拒否が成立しました。現在はphase=runの登録・製品proxy・予約・鍵なしfull preflight・pane起動・後始末を接続中です。実SDK/固定TUIと明示の無通信stdio fixtureによるfull preflightは、Strataの実model定義を保って成立しました。**実Mail・登録・鍵・モデルAPIを使う一周の受入は未実施です。** fixture成功を、実task成功やretire成功には読み替えません。live Mail/dashboard/vaultの変更は行っていません。
 
 ## 呼出しと設定
 
@@ -21,7 +21,7 @@ managed launcherが、固定Nodeで `--import integrations/dsh/egress.mjs integr
 
 launch.pyの`--patch-receipt <receipt.json>`は必須です。managed entryはTUI/profileのimport前にrecipeのSHAと変更対象全fileのafter hashをreceiptと照合し、未適用・部分適用・receipt欠落を拒否します。
 
-repoのbackend.jsonは空のURL/accountを持つテンプレートです。コピー先の利用者設定（例：~/.config/orrery/dsh-backends.json）に二backendのURL・model・Keychainのservice/account参照・effort/output上限・モデル定義・idle要否をまとめ、ORRERY_DSH_BACKEND_FILEでそのrepo外fileを渡します。テンプレートの空URLでは起動しません。設定に鍵の値は置きません。managed.patch.ymlは共通機能制限だけを持ち、選択済みprovider/model行はlauncherが最後に投影します。将来の稼働用の鍵取得はMacのsecurity、WSLの外部credential helperの入口へ寄せる設計で、現在のspike launcherはdummy鍵だけを使います。WSLのhelper/Node/native/TUI実機動作は未確認であり、Macの実体path/SHAを共通定数へしません。
+repoのbackend.jsonは空のURL/accountを持つテンプレートです。コピー先の利用者設定（例：~/.config/orrery/dsh-backends.json）に二backendのURL・model・Keychainのservice/account参照・effort/output上限・モデル定義・idle要否をまとめ、ORRERY_DSH_BACKEND_FILEでそのrepo外fileを渡します。テンプレートの空URLでは起動しません。設定に鍵の値は置きません。managed.patch.ymlは共通機能制限だけを持ち、選択済みprovider/model行はlauncherが最後に投影します。runの鍵取得はMacのsecurityを使う小さい入口へ寄せ、15秒・一回だけ、失敗時は停止します。WSLの鍵取得は未対応として止めます。spikeと鍵なしpreflightはdummyだけを使います。WSLのNode/native/TUI実機動作は未確認であり、Macの実体path/SHAを共通定数へしません。
 
 `backends.<id>.auxiliary`は将来の補助route用の任意欄です（省略/nullなら主routeを使う設計）；現版は送り分け未実装で、補助無効の既定を維持します。
 
@@ -66,6 +66,8 @@ NodeもPythonも検証用の明示実体を使い、負荷が1分平均15未満�
 egress fixtureはメモリ内の偽fetchだけを使い、endpoint選択・offline転送0・残高/更新先拒否・model/beta/output/tool制限・idle/busy/auth・redirect・stream重複/中断/timeout・proxy env scrub・診断伏字を対照確認します。製品の`child_tools.py claude-config`が生成した設定から、fake HOMEの無通信stubを実際にspawnし、全proxy envキーの保持・provider keyの除去も確認します。実proxyやMailへ接続した試験ではありません。completion fixtureのMail/lifecycle receiptは明示した合成入力であり、実Mail送信・予約解放・retireの証拠ではありません。部分解放、別identity、whois欠落、spikeのtask/runtimeが成功へ繰り上がらないことも確認します。
 
 managed TUI側の`tests/test_dsh_managed_spike.py`では、patch receiptの未適用/部分適用/欠落の拒否、補助処理停止、実ToolRuntimeのguardを別に確認しています。TUI画面とagent.ctxのprobeを含む実験記録・検証出力は各自のrepo外作業dirへ保存します。repository全体のpytest、実Mail/APIとWSL実機受入は、これらのspike/fixtureでは確認していません。TUIの保存依存が不足した場合、offlineを外してdownloadせず親へ報告します。
+
+run接続の`tests/test_dsh_run_connection.py`では、実SDK→無通信のsynthetic stdio server→固定TUIを使います。templateの`qwen3.8-flash-next-iq3_xxs`、contextWindow 131072/maxTokens 4096、effort highを保ち、URLだけ`.invalid`へ変更したfull preflightで、schema可視/backend不達・process不達の対照、実3 tools、retry0、offline-capture/転送0、group消滅を確認しました。dummy値の保存は0件でした。preflightのaudit/events/runtime終了証拠は本番用と分離し、変更した設定は鍵取得前に拒否します。実Strataのidle/認証・実Mail・登録/解放/retireを確認した証拠ではありません。
 
 ## 最初のStrata子で一度だけ接続先を観測する計画
 
