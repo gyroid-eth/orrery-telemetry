@@ -176,7 +176,8 @@ def retire(state, run=subprocess.run, *, require_release=True):
         if (release.get('attempt_id') != attempt['attempt_id'] or release.get('agent_name') != identity['agent_name']
                 or release.get('confirmed') is not True):
             raise ValueError('Real reservation release not confirmed')
-    elif config.get('purpose') != 'mail-connectivity' or (state / 'reservations.json').exists():
+    elif (config.get('purpose') not in ('mail-connectivity', 'file-task') or (state / 'reservations.json').exists()
+          or (config.get('purpose') == 'file-task' and not launch_state.startswith('not-started'))):
         raise ValueError('Only the reservation-free Mail pilot can skip release')
     require_legacy(config, run)
     env = product_env(config)
@@ -223,17 +224,42 @@ def confirm_retire(state, input_file):
     return receipt
 
 
+def record_mail(state, input_file):
+    state = Path(state)
+    attempt, task = read(state / 'attempt.json'), read(state / 'task.json')
+    parent = read(state / 'run-config.json')['parent']
+    if task['attempt_id'] != attempt['attempt_id'] or task['report_to'] != parent:
+        raise ValueError('Task attempt mismatch')
+    value = capture_value(read(input_file))
+    messages = value if isinstance(value, list) else [value]
+    events = [json.loads(line) for line in (state / 'events.jsonl').read_text().splitlines()]
+    receipts = [row for row in events if row.get('phase') == 'mail-sent'
+                and row.get('attempt_id') == attempt['attempt_id'] and row.get('task_id') == task['task_id']
+                and row.get('from') == attempt['agent_name'] and row.get('to') in (parent, [parent])
+                and row.get('ok') is True and row.get('verified_sender') is True]
+    matches = [row for row in messages if isinstance(row, dict) and type(row.get('id')) is int
+               and row['id'] > 0 and row.get('from') == attempt['agent_name'] and row.get('kind') == 'to'
+               and 'to' not in row and any(item.get('message_id') == row['id'] for item in receipts)]
+    if len(matches) != 1:
+        raise ValueError('Parent inbox must match the actual child Mail receipt')
+    receipt = {'attempt_id': attempt['attempt_id'], 'task_id': task['task_id'], 'agent_name': attempt['agent_name'],
+               'message_id': matches[0]['id'], 'from': matches[0]['from'], 'to': [parent],
+               'source': 'parent-bound-fetch-inbox', 'checked_at': stamp()}
+    save(state / 'parent-mail-receipt.json', receipt)
+    return receipt
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['register', 'retire', 'confirm-retire'])
+    parser.add_argument('action', choices=['register', 'retire', 'confirm-retire', 'record-mail'])
     parser.add_argument('--state', required=True, type=Path)
     parser.add_argument('--input', type=Path)
     args = parser.parse_args()
     try:
-        if args.action == 'confirm-retire':
+        if args.action in ('confirm-retire', 'record-mail'):
             if not args.input:
                 raise ValueError('Parent-saved canonical MCP result file required')
-            result = confirm_retire(args.state, args.input)
+            result = confirm_retire(args.state, args.input) if args.action == 'confirm-retire' else record_mail(args.state, args.input)
         else:
             result = register(args.state) if args.action == 'register' else retire(args.state)
     except (ValueError, OSError, KeyError, subprocess.SubprocessError):

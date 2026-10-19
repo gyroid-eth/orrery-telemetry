@@ -90,10 +90,46 @@ A saved product `mcp.json` may be reused only if every bound reference matches
 this attempt and profile writing has not begun. `profile-write-intent.json`
 marks that boundary; a later partial failure requires retirement and a fresh
 attempt. Do not delete an intent or generated file to force a retry.
-The Mail-only pilot takes no file reservations. Full managed reservation gates,
-provider egress enforcement and the five-condition completion flow remain
-separate acceptance work. This pilot has only fake-helper/stdio acceptance;
-real registration, provider use, Mail and cleanup require the operator's run.
+The Mail-only pilot takes no file reservations. Its operator acceptance has
+passed; the reserved-file task below still needs its real operator run.
+
+`init-task` prepares one reserved `trial-ok.txt` task in a separate worktree.
+Use `preregister`, `configure`, `probe`, `reserve`, `preflight`, then `start`.
+Reserve uses the bound product proxy and projects its real receipts into
+`task.json`. Preflight checks the installed plugin manager, and the inference
+entry checks that same callback again in its own process before importing the
+CLI. No shell-hook approval or a ready-file claim substitutes for registration.
+`orrery_file` is a small runtime toolset exposing the real builtin read/write
+tools. The synchronous guard rejects outside, missing and expired reservations,
+while private memory/skills/curator remain enabled.
+
+The task entry installs a synchronous HTTPX transport policy before provider
+resolution. Only the configured Messages or Chat Completions endpoint is allowed;
+redirect targets and unmanaged Python socket/DNS operations are checked too.
+Every provider attempt is recorded without headers, bodies or credential values.
+This is not an OS sandbox for arbitrary descendant processes. Provider behavior
+on the real selected endpoint still needs operator acceptance.
+
+Hermes can reload profile, source-project and managed dotenv files. This entry
+requires the profile/source candidates absent and denies subsequent `.env` and
+`.op.env` opens. The named provider keeps its key-command reference. Native
+oneshot completion flags are translated into common turn events without saving
+raw exception strings from the original usage writer.
+
+The five-condition evaluator reads only saved state. After the parent's bound
+inbox result is saved, `record-mail --state STATE --input INBOX_JSON` requires
+the actual same-child message ID, `kind=to`, and the inbox shape without a `to`
+field. `complete` requires this parent receipt in addition to the verified child
+send event. Unknown evidence stays pending; exit zero is never task proof.
+Stop the owned group, run `scan-diagnostics`, `release`, `retire`, save the parent's
+canonical whois, run `confirm-retire`, then `complete-runtime`. Release confirmation
+requires the exact task IDs and the full actual release count.
+
+`scan-diagnostics` is an explicit operator step. Its key-command output stays in
+the scan process; only prefix match/error/file counts are saved for the state
+and private profile, including raw logs. Owner-token files are excluded. It does
+not print keys, prefixes, matching lines or filenames. Real CLI, provider, Mail,
+cleanup and the post-run scan are always the operator's acceptance work.
 
 Run the focused dependency-free checks with:
 

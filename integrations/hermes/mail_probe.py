@@ -104,7 +104,7 @@ async def exercise(session, state, action, report):
         save(state / 'reservation-result.json', result)
         rows = normalize_reservations(result, task['allowed_paths'], identity['agent_name'])
         save(state / 'reservations.json', {'agent_name': identity['agent_name'],
-                                        'attempt_id': attempt['attempt_id'], 'receipts': rows})
+             'attempt_id': attempt['attempt_id'], 'source': 'product-bound-proxy', 'receipts': rows})
     elif action == 'send':
         task = read(state / 'task.json')
         save(state / 'report-intent.json', {'attempt_id': attempt['attempt_id'], 'at': stamp()}, exclusive=True)
@@ -115,14 +115,19 @@ async def exercise(session, state, action, report):
         if not receipt or not receipt['ok'] or receipt['from'] != identity['agent_name'] or receipt['to'] != [task['report_to']]:
             raise ValueError('Mail receipt not verified')
     elif action == 'release':
-        runtime, reservations = read(state / 'runtime-exit.json'), read(state / 'reservations.json')
-        if runtime.get('group_absent') is not True or runtime.get('group_check') != 'observed':
-            raise ValueError('Owned group absence is unknown')
+        reservations = read(state / 'reservations.json')
+        from mail_lifecycle import launch_state_for_retire
+        import subprocess
+        launch_state_for_retire(state, config, identity, subprocess.run)
         if reservations['attempt_id'] != attempt['attempt_id'] or reservations['agent_name'] != identity['agent_name']:
             raise ValueError('Release identity mismatch')
         ids = [row['id'] for row in reservations['receipts']]
+        task = read(state / 'task.json')
+        if (not ids or len(set(ids)) != len(ids) or any(type(n) is not int or n <= 0 for n in ids)
+                or set(ids) != {row['id'] for row in task['reservation_receipts']}):
+            raise ValueError('Release IDs do not match the task reservations')
         result = unwrap(await session.call_tool('release_reservations', {'file_reservation_ids': ids}))
-        confirmed = bool(ids) and result.get('released') == len(ids)
+        confirmed = type(result.get('released')) is int and result['released'] == len(ids)
         save(state / 'release-receipt.json', {'attempt_id': attempt['attempt_id'], 'agent_name': identity['agent_name'],
              'reservation_ids': ids, 'released_ids': ids if confirmed else [], 'confirmed': confirmed,
              'source': 'product-bound-proxy', 'checked_at': stamp()})

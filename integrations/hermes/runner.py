@@ -43,11 +43,14 @@ def committed_python(config):
     return str(python)
 
 
-def pilot_toolsets(profile_config, requested=MAIL_TOOLSETS):
+def pilot_toolsets(profile_config, requested=None, *, file_task=False):
     """Oneshot accepts configured MCP server names before discovery, not mcp-* names."""
+    requested = requested if requested is not None else (*MAIL_TOOLSETS, 'orrery_file') if file_task else MAIL_TOOLSETS
     servers = profile_config.get('mcp_servers', {})
     server = servers.get('orrery_mail', {})
     allowed = {'memory', 'skills', 'session_search'} | set(servers)
+    if file_task:
+        allowed.add('orrery_file')
     if (not server or server.get('enabled') is False or 'orrery_mail' not in requested
             or any(name not in allowed for name in requested)):
         raise ValueError('Invalid or disabled Mail pilot toolset selection')
@@ -75,7 +78,7 @@ def check_profile_paths(profile, config=None):
             raise ValueError('Skill directories must stay in the current profile')
 
 
-def initialize(config_path, state, profile_name, run=subprocess.run):
+def initialize(config_path, state, profile_name, run=subprocess.run, *, file_task=False):
     state = Path(state).resolve()
     if state.exists():
         raise ValueError('State already exists; preserve the previous attempt')
@@ -100,6 +103,11 @@ def initialize(config_path, state, profile_name, run=subprocess.run):
     home = Path(config['home']).resolve()
     if root == home or root.is_relative_to(home / '.hermes'):
         raise ValueError('Managed root must be separate from the live Hermes home')
+    work = Path(config['worktree']).resolve()
+    if file_task and (work in (home, Path(work.anchor)) or work.is_relative_to(home / '.hermes')
+                      or work.is_relative_to(Path(config['project_key']).resolve())
+                      or work.is_relative_to(root / 'profiles')):
+        raise ValueError('File trial requires a dedicated worktree outside live data and profiles')
     config['hermes_python'] = committed_python(config)
     profile = root / 'profiles' / profile_name
     Path(config['worktree']).mkdir(parents=True, exist_ok=True)
@@ -112,12 +120,12 @@ def initialize(config_path, state, profile_name, run=subprocess.run):
                  capture_output=True, text=True, check=True, timeout=30)
     projection = json.loads(result.stdout)
     config.update(profile_name=profile_name, profile_home=str(profile), managed_root=str(root),
-                  model=projection['model'], provider=projection['provider'], purpose='mail-connectivity',
+                  model=projection['model'], provider=projection['provider'], purpose='file-task' if file_task else 'mail-connectivity',
                   runner_python=sys.executable, task_timeout_seconds=int(config.get('task_timeout_seconds', 300)))
     save(state / 'run-config.json', config, exclusive=True)
     save(state / 'profile-plan.json', projection, exclusive=True)
     attempt = {'attempt_id': str(uuid.uuid4()), 'phase': 'run', 'agent_name': None,
-               'started_at_ns': time.time_ns(), 'purpose': 'mail-connectivity'}
+               'started_at_ns': time.time_ns(), 'purpose': config['purpose']}
     save(state / 'attempt.json', attempt, exclusive=True)
     save(state / 'task.json', {'attempt_id': attempt['attempt_id'], 'task_id': str(uuid.uuid4()),
          'worktree': config['worktree'], 'report_to': config['parent'], 'allowed_paths': [], 'expected': []}, exclusive=True)
@@ -131,6 +139,22 @@ def initialize(config_path, state, profile_name, run=subprocess.run):
             'If it fails or is unavailable, stop and report failure; do not retry or use another transport.\n')
     (state / 'task.md').write_text(task)
     (state / 'task.md').chmod(0o600)
+    if file_task:
+        manifest = read(state / 'task.json')
+        manifest.update(allowed_paths=['trial-ok.txt'], reservation_receipts=[],
+                        reservation_source='product-bound-proxy', expected=[{'path': 'trial-ok.txt', 'contains': 'hermes-first-ok'}])
+        target = Path(config['worktree']) / 'trial-ok.txt'
+        if not target.exists():
+            target.write_text('Initial task artifact. Read before writing.\n')
+        message = {'to': [config['parent']], 'subject': 'Hermes reserved file task',
+                   'body_md': 'path: ' + str(target) + ' — wrote hermes-first-ok after reading the file.'}
+        save(state / 'task.json', manifest)
+        save(state / 'message.json', message)
+        (state / 'task.md').write_text('Registration is already complete. Do not register, ensure a project, fetch an inbox, '
+            'read credentials, or use another transport. Read the absolute path ' + str(target) +
+            ' with read_file, then use write_file to write exactly hermes-first-ok followed by a newline. '
+            'Then call mcp__orrery_mail__send_message exactly once with this exact JSON:\n' + json.dumps(message) +
+            '\nFinish after the tool returns. If any tool fails, stop and report failure; do not retry Mail.\n')
     return {'state': str(state), 'profile': str(profile), 'model': config['model']}
 
 
@@ -169,7 +193,7 @@ def configure(state, run=subprocess.run):
     else:
         proxy = lifecycle.generate(state, run)
     plan['mcp_servers'] = {'orrery_mail': {**proxy, 'tools': {'include': ['send_message']}}}
-    pilot_toolsets(plan)
+    pilot_toolsets(plan, file_task=config['purpose'] == 'file-task')
     save(state / 'profile-write-intent.json', {'agent_name': identity['agent_name'],
          'mcp_sha256': digest(state / 'mcp.json'), 'at': lifecycle.stamp()}, exclusive=True)
     profile.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -184,8 +208,8 @@ def configure(state, run=subprocess.run):
          'provides_hooks': ['pre_tool_call', 'post_tool_call']})
     (plugin / '__init__.py').write_text(
         'import os, sys\n'
-        'sys.path.insert(0, os.environ["ORRERY_HERMES_ADAPTER_DIR"])\n'
-        'from mail_plugin import register\n')
+        'sys.path.insert(0, os.environ["ORRERY_HERMES_ADAPTER_DIR"])\n' +
+        ('from task_plugin import register\n' if config['purpose'] == 'file-task' else 'from mail_plugin import register\n'))
     (plugin / '__init__.py').chmod(0o600)
     save(marker, {'state': str(state), 'agent_name': identity['agent_name'],
                   'provider': config['provider'], 'model': config['model']})
@@ -207,7 +231,7 @@ def check_configured(state):
     if profile.resolve() != Path(config['managed_root']).resolve() / 'profiles' / config['profile_name']:
         raise ValueError('Profile escaped the managed root')
     check_profile_paths(profile, read(profile / 'config.yaml'))
-    pilot_toolsets(read(profile / 'config.yaml'))
+    pilot_toolsets(read(profile / 'config.yaml'), file_task=config['purpose'] == 'file-task')
     config['hermes_python'] = committed_python(config)
     return config, identity
 
@@ -221,6 +245,13 @@ def start(state, run=subprocess.run):
     if (probe.get('schema') is not True or probe.get('backend') is not True or probe.get('ok') is not True
             or probe.get('agent_name') != identity['agent_name'] or probe.get('fixture')):
         raise ValueError('Authenticated product Mail preflight is required')
+    if config['purpose'] == 'file-task':
+        proof = read(state / 'preflight-complete.json')
+        if (proof.get('guard_loaded') is not True or proof.get('agent_name') != identity['agent_name']
+                or proof.get('attempt_id') != read(state / 'attempt.json')['attempt_id']
+                or proof.get('task_sha256') != digest(state / 'task.json')
+                or proof.get('profile_sha256') != digest(Path(config['profile_home']) / 'config.yaml')):
+            raise ValueError('Current loaded-guard preflight is required')
     if (state / 'start-intent.json').exists():
         raise FileExistsError('A launch was already attempted; preserve it')
     env, tmux = base_env(config), config['tmux']
@@ -266,6 +297,17 @@ def status(state):
     result = {'agent_name': identity['agent_name'], 'mail_probe_accepted': accepted,
               'message_id': receipt.get('message_id') if accepted else None,
               'runtime_exit': runtime, 'full_managed_task_accepted': None}
+    if config['purpose'] == 'file-task':
+        checks = []
+        for name in ('task-completion.json', 'runtime-completion.json'):
+            value = read(state / name) if (state / name).is_file() else {}
+            checks.append(value.get('success') if value.get('attempt_id') == attempt['attempt_id']
+                          and type(value.get('success')) is bool else None)
+        scan = read(state / 'diagnostic-scan.json') if (state / 'diagnostic-scan.json').is_file() else {}
+        current = scan.get('attempt_id') == attempt['attempt_id'] and scan.get('source') == 'operator-private-prefix-scan'
+        checks.append(scan['matches'] == 0 and scan.get('errors') == 0
+                      if current and type(scan.get('matches')) is int and type(scan.get('errors')) is int else None)
+        result['full_managed_task_accepted'] = False if False in checks else None if None in checks else True
     save(state / 'mail-pilot-status.json', result)
     return result
 
@@ -288,44 +330,105 @@ def stop(state, run=subprocess.run):
     return runtime
 
 
+def managed_env(config, identity, state):
+    return base_env(config) | {'HERMES_HOME': config['profile_home'],
+        'ORRERY_HERMES_STATE_ROOT': str(Path(state).resolve()), 'ORRERY_HERMES_ADAPTER_DIR': str(HERE),
+        'AGENT_NAME': identity['agent_name'], 'PARENT_AGENT': config['parent']}
+
+
+def apply_reservations(state):
+    from mail_probe import normalize_reservations
+    state = Path(state)
+    attempt, identity, task, receipt, probe = [read(state / name) for name in
+        ('attempt.json', 'mail-identity.json', 'task.json', 'reservations.json', 'mail-probe.json')]
+    if (receipt.get('source') != 'product-bound-proxy' or receipt['attempt_id'] != attempt['attempt_id']
+            or receipt['agent_name'] != identity['agent_name'] or task['attempt_id'] != attempt['attempt_id']
+            or probe.get('backend') is not True or probe.get('ok') is not True
+            or probe.get('agent_name') != identity['agent_name'] or probe.get('fixture')):
+        raise ValueError('Reservations are not bound to this real task')
+    rows = normalize_reservations({'granted': receipt['receipts']}, task['allowed_paths'], identity['agent_name'])
+    task.update(reservation_source='product-bound-proxy', reservation_receipts=rows)
+    save(state / 'task.json', task)
+    return receipt
+
+
+def preflight(state, run=subprocess.run):
+    state = Path(state).resolve()
+    config, identity = check_configured(state)
+    if config['purpose'] != 'file-task':
+        raise ValueError('Loaded-guard preflight requires a reserved file task')
+    apply_reservations(state)
+    (state / 'preflight-complete.json').unlink(missing_ok=True)
+    run([config['hermes_python'], '-I', '-B', str(HERE / 'managed_entry.py'), '--state', str(state), '--check'],
+        env=managed_env(config, identity, state), cwd=config['worktree'], capture_output=True, check=True, timeout=30)
+    return read(state / 'preflight-complete.json')
+
+
+def evaluate(state, runtime=False):
+    import completion
+    result = completion.evaluate_runtime(state) if runtime else completion.evaluate_task(state)
+    save(Path(state) / ('runtime-completion.json' if runtime else 'task-completion.json'), result)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['init', 'preregister', 'configure', 'probe', 'start', 'status', 'stop', 'retire', 'confirm-retire'])
+    parser.add_argument('action', choices=['init', 'init-task', 'preregister', 'configure', 'probe', 'reserve', 'release',
+        'preflight', 'start', 'status', 'stop', 'retire', 'confirm-retire', 'record-mail', 'complete',
+        'complete-runtime', 'scan-diagnostics'])
     parser.add_argument('--state', required=True, type=Path)
     parser.add_argument('--config', type=Path)
     parser.add_argument('--profile', choices=['strata', 'deepseek'])
     parser.add_argument('--input', type=Path, help='Parent-saved canonical whois JSON for confirm-retire')
     args = parser.parse_args()
+    exit_code = 0
     try:
-        if args.action == 'init':
-            result = initialize(args.config, args.state, args.profile)
+        if args.action in ('init', 'init-task'):
+            result = initialize(args.config, args.state, args.profile, file_task=args.action == 'init-task')
         elif args.action == 'preregister':
             result = lifecycle.register(args.state, generate_config=False)
         elif args.action == 'configure':
             result = configure(args.state)
-        elif args.action == 'probe':
+        elif args.action in ('probe', 'reserve', 'release'):
             config, _ = check_configured(args.state)
             completed = subprocess.run([config['hermes_python'], '-I', '-B', str(HERE / 'mail_probe.py'),
-                 '--state', str(args.state)], env=base_env(config), capture_output=True, text=True, timeout=30)
+                 '--state', str(args.state), args.action], env=base_env(config), capture_output=True, text=True, timeout=30)
             result = read(args.state / 'mail-probe.json')
             if completed.returncode or result.get('ok') is not True:
                 raise ValueError('Product Mail probe failed; preserve state and stop')
+            if args.action == 'reserve':
+                result = apply_reservations(args.state)
+            elif args.action == 'release':
+                result = read(args.state / 'release-receipt.json')
+        elif args.action == 'preflight':
+            result = preflight(args.state)
         elif args.action == 'start':
             result = start(args.state)
         elif args.action == 'status':
             result = status(args.state)
         elif args.action == 'stop':
             result = stop(args.state)
-        elif args.action == 'confirm-retire':
+        elif args.action in ('confirm-retire', 'record-mail'):
             if not args.input:
                 raise ValueError('Parent-saved canonical MCP result file required')
-            result = lifecycle.confirm_retire(args.state, args.input)
+            result = lifecycle.confirm_retire(args.state, args.input) if args.action == 'confirm-retire' else lifecycle.record_mail(args.state, args.input)
+        elif args.action in ('complete', 'complete-runtime'):
+            result = evaluate(args.state, args.action == 'complete-runtime')
+            exit_code = 0 if result['success'] is True else 1 if result['success'] is False else 2
+        elif args.action == 'scan-diagnostics':
+            from diagnostics import scan
+            result = scan(args.state)
+            exit_code = 0 if result['matches'] == 0 else 1 if result['matches'] else 2
         else:
-            result = lifecycle.retire(args.state, require_release=False)
+            config = read(args.state / 'run-config.json')
+            task = read(args.state / 'task.json')
+            result = lifecycle.retire(args.state, require_release=config['purpose'] == 'file-task'
+                                      and bool(task.get('reservation_receipts')))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         raise SystemExit('Step failed; preserve this state and identity, do not retry or switch transports')
     print(json.dumps({'action': args.action, 'result': result}))
+    return exit_code
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

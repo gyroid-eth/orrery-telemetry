@@ -50,6 +50,10 @@ def execute(state):
     command = [config['hermes_executable'], '-p', config['profile_name'], '-z', (state / 'task.md').read_text(),
                '--provider', config['provider'], '-m', config['model'], '-t',
                ','.join(pilot_toolsets(read(profile / 'config.yaml')))]
+    if config['purpose'] == 'file-task':
+        env['HERMES_HOME'] = str(profile)
+        command = [config['hermes_python'], '-I', '-B', str(Path(__file__).with_name('managed_entry.py')),
+                   '--state', str(state)]
     save(state / 'pane-entry.json', {'supervisor_pid': os.getpid(), 'agent_name': identity['agent_name'],
          'profile_home': str(profile), 'hermes_python': config['hermes_python'], 'at': stamp()}, exclusive=True)
     child = None
@@ -67,7 +71,8 @@ def execute(state):
         signal.signal(signum, stop_handler)
     code, reason = None, 'failure'
     try:
-        with open(state / 'stdout.log', 'w') as out, open(state / 'stderr.log', 'w') as err:
+        with os.fdopen(os.open(state / 'stdout.log', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as out, \
+                os.fdopen(os.open(state / 'stderr.log', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as err:
             child = subprocess.Popen(command, cwd=config['worktree'], env=env,
                                      stdout=out, stderr=err, start_new_session=True)
             save(state / 'runtime-process.json', {'pid': child.pid, 'pgid': child.pid,
