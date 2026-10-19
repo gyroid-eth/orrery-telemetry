@@ -113,7 +113,7 @@ Screen examples: [DECK](img/deck.jpg), [NETWORK](img/network.jpg), and [NEW AGEN
 
 - **ORRERY Mail**: one place for agent names, inboxes, and file reservations. It remains the source of truth even if the dashboard goes down.
 - **Launchers**: `agent-start` registers the name, creates the tmux session, and starts the CLI in one step, so dashboard jumps and notification targets resolve to exactly one place.
-- **Hooks**: Eight Claude event hooks stop unregistered sessions and unreserved writes, and inject arriving messages into the agent's prompt.
+- **Hooks**: Nine Claude event hooks stop unregistered sessions and unreserved writes, and inject arriving messages into the agent's prompt.
 
 Details of these mechanisms and the API are in [Hooks](hooks.en.md), [Launchers](launchers.en.md), and the [API reference](api.en.md). Every dashboard view and control is available through the local HTTP API.
 

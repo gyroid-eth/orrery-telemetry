@@ -113,7 +113,7 @@ DECK、NETWORK、DIGEST REPLAY、NEW AGENT の詳しい操作と画像は [Dashb
 
 - **ORRERY Mail**: agent の名前、inbox、file の予約を一つに管理します。dashboard を落としてもここに正本が残ります
 - **launcher**: `agent-start` が名前の登録、tmux session の作成、CLI の起動を一続きで行い、dashboard からの jump や通知の宛先が一意に決まるようにします
-- **hook**: Claude event hook 8件が、登録なしの session や予約なしの書き込みを止め、届いたメッセージを agent の入力欄に差し込みます
+- **hook**: Claude event hook 9件が、登録なしの session や予約なしの書き込みを止め、届いたメッセージを agent の入力欄に差し込みます
 
 これらの仕組みと API の詳細は [Hooks](hooks.md)、[Launcher](launchers.md)、[API reference](api.md) にあります。dashboard の表示・操作はすべて local HTTP API から使えます。
 

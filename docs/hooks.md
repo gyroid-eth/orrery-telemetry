@@ -4,14 +4,14 @@
 
 [前: 委任と child agent](delegation.md) · [README に戻る](../README.md) · [次: Codex App 統合](codex-app.md)
 
-`hooks/` には、Claude Code の lifecycle event から自動実行される hook と、launcher・dashboard・skill が明示的に呼ぶ運用 helper、event hook が source / 起動する内部 library・worker が同居しています。Claude Code event hook は8件です。
+`hooks/` には、Claude Code の lifecycle event から自動実行される hook と、launcher・dashboard・skill が明示的に呼ぶ運用 helper、event hook が source / 起動する内部 library・worker が同居しています。Claude Code event hook は9件です。
 
 [`hooks/settings.template.json`](../hooks/settings.template.json) は event と command の対応を定義し、[`hooks/README.md`](../hooks/README.md) は settings merge の安全方針を定義します。この文書は、実際にいつ起動し、何を保証するかを説明する利用者向け reference です。
 
 
 停止した子の道具を変更する `agentstack-resume` は `/api/jump` を呼びます。`child_resume.py` が変更世代と生成設定の復元を管理します。[道具変更](delegation.md#停止した子の道具を変更して-resume-する)を参照してください。
 
-## Claude Code event hook（8件）
+## Claude Code event hook（9件）
 
 installer が `settings.template.json` を `~/.claude/settings.json` へ merge すると、次の event で自動実行されます。
 
@@ -21,6 +21,7 @@ installer が `settings.template.json` を `~/.claude/settings.json` へ merge �
 | `SessionStart` | [`session-start-reminder.sh`](../hooks/session-start-reminder.sh) | 同上。title helper の後 | ORRERY Mail health と既存 identity を確認し、embedded task・bound proxy・raw/direct の優先順位に沿う案内を session context へ出力 |
 | `PreToolUse` / `Edit|Write` | [`check-file-reservation.sh`](../hooks/check-file-reservation.sh) | Claude Code が file edit を実行する直前 | protected root 内の既存 exact path reservation を renew-only で確認。0件は1回だけ再確認し、なお0件なら exit 2 で block |
 | `PreToolUse` / `Edit|Write|Bash` | [`check-agent-registered.sh`](../hooks/check-agent-registered.sh) | edit、write、shell command の直前 | 現在の Claude session が `register_agent` 済みか session flag で検査。未登録なら exit 2 で block |
+| `PreToolUse` / `Bash` | [`deny-llm-key-read.sh`](../hooks/deny-llm-key-read.sh) | shell実行の直前 | model定義の鍵参照と一致する値の取出しを拒否 |
 | `PreToolUse` / reservation tools | [`invalidate-release-debounce.sh`](../hooks/invalidate-release-debounce.sh) | file reservation の取得・renew 直前 | 同じ agent/path に対する古い release worker の token を無効化し、新しい reservation が直後に消される競合を防止 |
 | `PostToolUse` / `Edit|Write` | [`release-file-reservation.sh`](../hooks/release-file-reservation.sh) | 成功した file edit の直後 | 既定90秒の grace 後に、guard と同じ project・identity・相対/絶対 path で reservation を release |
 | `PostToolUse` / `register_agent` | [`mark-agent-registered.sh`](../hooks/mark-agent-registered.sh) | `mcp__orrery-mail__register_agent` または互換 tool の応答直後 | 応答を検証し、明示した要求名との完全一致後だけ session flag、session index、pane / tmux metadata を更新 |
@@ -217,3 +218,26 @@ Codex plugin の対象 hook だけを承認する API と未確認時の `/hooks
 明示的な隔離起動・配送と operator の復旧は [global delivery client](global-delivery-client.md) を参照してください。既定は旧 mode のままです。
 
 SessionStart は旧 block の件数だけを案内します。bare session の Mail 登録は行わず、編集 guard の方針は保持します。 [Details](instruction-migration.md#legacy-blocks).
+
+## ローカルモデルの鍵をagentのshellから読まない
+
+ClaudeのBashと、Codex pluginのexec_command / shell_command / shellは、同じ
+`deny-llm-key-read.py`を呼びます。Codexでは更新したhookを人が`/hooks`で確認・承認し、
+新しいprocessから使ってください。installerは通常のhooks treeとpluginとして配布し、
+承認を自動化しません。
+
+鍵の値は読まず、既存の定義にある参照だけを読みます。既定は
+`$AGENTSTACK_HOME/integrations/dsh/backend.json`（`backends.*.keychain`）。別の既存定義を
+使う場合は、起動環境の`AGENTSTACK_LLM_KEY_DEFINITIONS`にbackend JSON、R3 profile TOML、
+またはそのTOML directoryのpathを指定します。R3の`claude/codex.auth_command`も参照できます。
+新しい鍵一覧を作る設定ではありません。定義なしでは何もしません。
+
+Macの`security find-generic-password -w/-g`と、Linux/WSLの`secret-tool lookup`の
+selectorを照合します。同じ鍵を返しうるselectorの省略や変数指定も拒否します。
+属性だけの照会、別の鍵、設定を読むgrepは通します。定義のauth helperの直接実行も
+modelのshell toolなら拒否しますが、launcher/key_cmd内部のsubprocessにはhookは発火しません。
+
+失敗時は鍵の取出し形を含むcommandだけを拒否し、通常のshellは通します。
+鍵の漏れを止めつつ、壊れた設定1つで全shell作業を止めないためです。commandや鍵参照を
+理由にechoせず、固定の理由だけを返します。専用ユーザーやOS sandboxの代わりではありません。
+既知の限界: base64等で組み立てるcommand、任意scriptの内部、別toolによる読取りは解析しません。

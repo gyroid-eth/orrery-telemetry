@@ -22,7 +22,7 @@ def test_plugin_hooks_wire_every_p1_telemetry_event():
         "SubagentStop",
     }
     for event, groups in hooks.items():
-        assert len(groups) == 1
+        assert len(groups) == (2 if event == "PreToolUse" else 1)
         handler = groups[0]["hooks"][0]
         assert handler["type"] == "command"
         assert handler["async"] is False
@@ -35,6 +35,14 @@ def test_plugin_hooks_wire_every_p1_telemetry_event():
             assert handler["timeout"] == 30
         else:
             assert handler["command"] == '"$PLUGIN_ROOT/scripts/run-hook.sh"'
+
+
+def test_plugin_shell_hook_is_synchronous_and_uses_the_core_key_guard():
+    group = json.loads(HOOKS.read_text())["hooks"]["PreToolUse"][1]
+    assert group["matcher"] == "^(exec_command|shell_command|shell)$"
+    assert group["hooks"] == [{"type": "command", "command": '\"$PLUGIN_ROOT/scripts/run-key-read-guard.sh\"',
+                               "async": False, "timeoutSec": 5, "timeout": 5}]
+    assert (PLUGIN / "scripts/run-key-read-guard.sh").stat().st_mode & 0o111
 
 
 def test_plugin_hooks_do_not_wire_cold_wake():

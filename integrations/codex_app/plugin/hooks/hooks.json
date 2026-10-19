@@ -85,6 +85,18 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "^(exec_command|shell_command|shell)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$PLUGIN_ROOT/scripts/run-key-read-guard.sh\"",
+            "async": false,
+            "timeoutSec": 5,
+            "timeout": 5
+          }
+        ]
       }
     ]
   }

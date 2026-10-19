@@ -297,6 +297,7 @@ PY
     "$INSTALL_DIR/bin/uninstall-codex-app-integration" \
     "$INSTALL_DIR/bin/doctor-codex-app-integration" \
     "$INSTALL_DIR/plugin/scripts/run-hook.sh" \
+    "$INSTALL_DIR/plugin/scripts/run-key-read-guard.sh" \
     "$INSTALL_DIR/plugin/scripts/record-codex-session-index.py" \
     "$INSTALL_DIR/plugin/scripts/run-mcp.sh"
 }
@@ -537,6 +538,7 @@ if result.get("version") != expected_manifest.get("version"):
 for relative in (
     "hooks/hooks.json",
     "scripts/run-hook.sh",
+    "scripts/run-key-read-guard.sh",
     "scripts/record-codex-session-index.py",
 ):
     expected_file = expected / relative
@@ -547,7 +549,7 @@ for relative in (
     except OSError as exc:
         fail(f"could not read selected {relative}: {exc}")
 
-for relative in ("scripts/run-hook.sh", "scripts/record-codex-session-index.py"):
+for relative in ("scripts/run-hook.sh", "scripts/run-key-read-guard.sh", "scripts/record-codex-session-index.py"):
     selected_file = installed / relative
     try:
         mode = selected_file.stat().st_mode

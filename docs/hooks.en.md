@@ -4,14 +4,14 @@
 
 [Previous: Delegation and child agents](delegation.en.md) · [Back to README](../README.en.md) · [Next: Codex App integration](codex-app.en.md)
 
-`hooks/` contains hooks that run automatically from Claude Code lifecycle events, operational helpers called explicitly by launchers, the dashboard, and skills, and the internal libraries and workers sourced or started by event hooks. There are eight Claude Code event hooks.
+`hooks/` contains hooks that run automatically from Claude Code lifecycle events, operational helpers called explicitly by launchers, the dashboard, and skills, and the internal libraries and workers sourced or started by event hooks. There are nine Claude Code event hooks.
 
 [`hooks/settings.template.json`](../hooks/settings.template.json) defines event-to-command mappings, and [`hooks/README.md`](../hooks/README.md) defines the safety policy for settings merges. This document is the user reference explaining when each component actually runs and what it guarantees.
 
 
 `agentstack-resume` changes a stopped child through `/api/jump`; `child_resume.py` owns the change generation and generated-setting rollback. See [tool changes](delegation.en.md#resume-a-stopped-child-with-different-tools).
 
-## Claude Code event hooks (8)
+## Claude Code event hooks (9)
 
 After the installer merges `settings.template.json` into `~/.claude/settings.json`, the following events run automatically.
 
@@ -21,6 +21,7 @@ After the installer merges `settings.template.json` into `~/.claude/settings.jso
 | `SessionStart` | [`session-start-reminder.sh`](../hooks/session-start-reminder.sh) | Same as above, after the title helper | Check ORRERY Mail health and the existing identity, then output route-aware guidance for embedded tasks, bound proxies, and raw/direct connections into session context |
 | `PreToolUse` / `Edit|Write` | [`check-file-reservation.sh`](../hooks/check-file-reservation.sh) | Immediately before Claude Code edits a file | Check an existing exact-path reservation inside a protected root with renew-only semantics. Retry zero results once, then block with exit 2 if the result remains zero |
 | `PreToolUse` / `Edit|Write|Bash` | [`check-agent-registered.sh`](../hooks/check-agent-registered.sh) | Immediately before an edit, write, or shell command | Check a session flag to confirm that the current Claude session has called `register_agent`. Block an unregistered session with exit 2 |
+| `PreToolUse` / `Bash` | [`deny-llm-key-read.sh`](../hooks/deny-llm-key-read.sh) | Before shell execution | Refuse value reads matching model credential references |
 | `PreToolUse` / reservation tools | [`invalidate-release-debounce.sh`](../hooks/invalidate-release-debounce.sh) | Immediately before acquiring or renewing a file reservation | Invalidate the token of an older release worker for the same agent/path, preventing a race that would remove the new reservation immediately |
 | `PostToolUse` / `Edit|Write` | [`release-file-reservation.sh`](../hooks/release-file-reservation.sh) | Immediately after a successful file edit | After the default 90-second grace period, release the reservation using the same project, identity, and relative/absolute path as the guard |
 | `PostToolUse` / `register_agent` | [`mark-agent-registered.sh`](../hooks/mark-agent-registered.sh) | Immediately after a response from `mcp__orrery-mail__register_agent` or a compatible tool | Validate the response and update the session flag, session index, and pane / tmux metadata only after an exact match with an explicitly requested name |
@@ -209,3 +210,28 @@ For explicit isolated launch, delivery and operator recovery, see [global delive
 SessionStart reports only legacy-block counts. Bare sessions do not register with Mail; editing guards keep their policy. [Details](instruction-migration.en.md#legacy-blocks).
 
 For new isolated-global launches, SessionEnd does not prove provider exit. The wait runner saves the actual outcome and completes the single report intent before cleanup. Existing standalone hooks retain their behavior. See [dedicated launch and termination recovery](global-delivery-client.en.md#dedicated-launch-and-termination-recovery).
+
+## Keep model credential reads out of the agent shell
+
+Claude Bash and the Codex plugin's exec_command / shell_command / shell use the
+same `deny-llm-key-read.py` decision. After updating the Codex plugin, a person
+must review/approve `/hooks` and start a new process; installation does not approve hooks.
+
+The guard reads references, never credential values. It defaults to
+`$AGENTSTACK_HOME/integrations/dsh/backend.json` (`backends.*.keychain`). For an
+existing definition elsewhere, set `AGENTSTACK_LLM_KEY_DEFINITIONS` in the launch
+environment to that backend JSON, an R3 TOML profile, or a directory of those profiles.
+R3 `claude/codex.auth_command` references are supported. This points to existing
+configuration rather than duplicating a credential list. No definitions means no-op.
+
+The shared matcher handles macOS `security find-generic-password -w/-g` and
+Linux/WSL `secret-tool lookup`. Omitted or variable selectors that could select
+the protected key are refused. Attribute-only queries, other keys and config
+grep are allowed. Direct auth-helper execution through a model shell tool is
+refused, while launcher/key_cmd subprocesses do not invoke this hook.
+
+Inspection failures deny credential-extraction shapes only; unrelated shell
+work continues. This limits key exposure without making broken configuration
+stop every command. Diagnostics never echo commands or credential references.
+Known limits: encoded commands, arbitrary script internals and reads through
+other tools are not analyzed. This is a mistake guard, not OS isolation.

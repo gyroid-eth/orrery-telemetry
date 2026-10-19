@@ -113,7 +113,7 @@ def test_hook_count_matches_the_settings_template() -> None:
     count = _event_hook_count()
     assert f"event hook は{count}件" in _read("docs/hooks.md")
     assert f"Claude event hook {count}件" in _read("docs/getting-started.md")
-    words = {8: "Eight"}
+    words = {8: "Eight", 9: "Nine"}
     assert f"{words[count]} Claude event hooks" in _read("docs/getting-started.en.md")
 
 

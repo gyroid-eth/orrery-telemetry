@@ -6,7 +6,7 @@ installed hooks directory, typically `${HOME}/.agentstack/hooks`, then merge the
 entries with a JSON parser.
 
 The template intentionally includes only safe global hooks: registration gating,
-file-reservation gating and release, registration marking, and no-op-safe
+file-reservation gating and release, model credential-read gating, registration marking, and no-op-safe
 SessionStart title/metadata hooks. Its SessionEnd hook only releases file
 reservations; it never retires an identity. It does not install
 `cleanup-child-agent.sh` as a SessionEnd hook because that script can retire an

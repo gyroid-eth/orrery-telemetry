@@ -76,6 +76,15 @@
             "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/invalidate-release-debounce.sh"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/deny-llm-key-read.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [
