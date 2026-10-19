@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location('observe', Path(__file__).resolve().parents[1] / 'integrations/dsh/observe.py')
 observe = importlib.util.module_from_spec(SPEC)
@@ -70,7 +71,8 @@ class ObserveTests(unittest.TestCase):
         self.assertTrue(result['completed'])
         self.assertEqual(system.calls[:2], ['table', 'start'])
         self.assertIn(('connections', [20, 21, 22]), system.calls)
-        self.assertNotIn(99, system.calls[2][1] if isinstance(system.calls[2], tuple) else [])
+        snapshots = [json.loads(line) for line in (self.state / 'network-observation.jsonl').read_text().splitlines()]
+        self.assertFalse(any(row['pid'] == 99 for snap in snapshots for row in snap.get('processes', [])))
 
     def test_forbidden_destination_is_reported_and_wrapper_never_signals(self):
         code, result, _ = self.run_fixture('p22\ncproxy\nf5\nPTCP\nn127.0.0.1:5000->127.0.0.1:54321\n')
@@ -100,6 +102,13 @@ class ObserveTests(unittest.TestCase):
         system = FakeMac(self.state)
         with self.assertRaises(ValueError):
             observe.observe(self.state, system=system)
+        self.assertEqual(system.calls, [])
+
+    def test_inherited_model_key_stops_before_start(self):
+        system = FakeMac(self.state)
+        with patch.dict(observe.os.environ, {'DEEPSEEK_API_KEY': 'offline-dummy'}):
+            with self.assertRaises(ValueError):
+                observe.observe(self.state, system=system)
         self.assertEqual(system.calls, [])
 
 

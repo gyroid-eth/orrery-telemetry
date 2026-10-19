@@ -54,6 +54,8 @@ python3 integrations/dsh/completion.py /absolute/state/root --runtime
 
 上のコマンドは保存済みfileだけを読み、それぞれtask-completion.json/runtime-completion.jsonを書きます。exitはsuccess=0、failed=1、pending=2。runtimeやMailへ接続しません。
 
+親の実受領とretireは、親が正規tool結果を保存してから`mail_lifecycle.py record-mail --state STATE --input FETCH_RESULT.json` / `mail_lifecycle.py confirm-retire --state STATE --input WHOIS_RESULT.json`で記録します。前者はpluginの実Mail ID・from/to・attempt/taskとの一致を確認してparent-mail-receipt.json、後者は同じ子名のwhois retired_atとcleanup記録からretire-receipt.jsonを書きます。この2コマンド自体はRPCをせず、モデルの自己申告を成功の根拠にしません。
+
 ## offline検証
 
 NodeもPythonも検証用の明示実体を使い、負荷が1分平均15未満のとき直列に実行します。
@@ -72,6 +74,8 @@ run接続の`tests/test_dsh_run_connection.py`では、実SDK→無通信のsynt
 ## 最初のStrata子で一度だけ接続先を観測する計画
 
 実受入時に起動直前→終了の一窓だけ、owned runtime/supervisor/proxy/子孫PIDへMacの`lsof -nP -a -p <PIDのCSV> -i`又はWSLの`ss -H -ntup`を約1秒間隔で採ります。時刻/PID/実行名/接続IP:port/protocolだけを保存し、argv/env/payload/headerは採りません。許可は利用者が設定したStrataの接続先と既存bindingの正確な127.0.0.1:Mail portのみです。hostname/IP対応も記録し、許可外を見つけたら止めます。常設監視・firewall・新proxyは作りません。
+
+Macの初回は`python3 integrations/dsh/observe.py --state STATE`を使います。鍵なしで採取窓を開いてから既存launch.pyのstartを呼び、owned pane・supervisor・runtimeと子孫を約1秒間隔で採取し、停止・消滅後に一行で判定します。親は別端末でMail受領と既存stopを実行します。observerはsignalを送らず、許可外を即表示します。許可はrepo外backend設定のStrata URLを解決したIP:443とrun-configの正確な127.0.0.1:Mail portだけです。network-observation.jsonlに一窓、network-observation.jsonに判定を保存します。exit0は「この窓で許可外なし」、1は許可外あり、2は未確認。取得失敗・中断・15分以内に停止確認できない場合は未確認とし、親がruntime状態を確認します。WSL用の観測adapterは未実装です。`tests/test_dsh_observe.py`は無通信snapshot/起動のfixtureであり、実OSの権限や実接続を確認した試験ではありません。
 
 snapshotは短い通信を見逃し得ます。global fetchの置換もnode:http/net/native/別processの全socketをOSで遮断する仕組みではありません。statusは別利用者を排除するサーバー予約ではなく、WSL対応は未受入です。未観測を「外部通信は完全にゼロ」とは報告しません。
 

@@ -197,7 +197,8 @@ def observe(state, *, system=None, resolve=socket.getaddrinfo, maximum=900, inte
                 exit_file = state / 'runtime-exit.json'
                 if exit_file.exists():
                     exit_receipt = read(exit_file)
-                    if exit_receipt.get('group_absent') is True and not owned and child.poll() is not None:
+                    if (exit_receipt.get('group_absent') is True and exit_receipt.get('group_check') == 'observed'
+                            and not owned and child.poll() is not None):
                         completed = seen_runtime
                         break
                 if child.poll() not in (None, 0) and not owned:
