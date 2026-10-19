@@ -42,3 +42,41 @@ server選択が変わらないこと、取得・鍵・登録用commandが呼ば�
 これは配置関数のnull caseであり、fresh install全体、catalog/HTTP consumer、
 TUI・cockpit・Mail・権限境界が受入済みという試験ではない。共有部分への接続は
 共通基盤の統合順序が決まってから行う。
+
+## DeepSeek API残高をusage欄に表示する設計（未実装）
+
+通常起こる鍵なし・Keychainロック・通信失敗 × 残高を0と誤認する害、
+及び鍵の漏洩時の大きな害を対象にする。準備中はAPIへ要求しない。
+
+公式の [Get User Balance](https://api-docs.deepseek.com/api/get-user-balance/)
+は `GET /user/balance` に `is_available` と `balance_infos` を返す。
+通貨はCNY又はUSD、`total_balance`・`granted_balance`・`topped_up_balance` は
+文字列の金額である。通貨ごとに表示し、異なる通貨の合算やquota百分率への変換はしない。
+認証は固定TUIの `lib/types/deepseekBalance.js:19–21` と同じBearerを予定する。
+この読取APIが課金されないことは未検証であり、準備後の実物確認で記録する。
+
+dsh opt-in時だけClaude・Codex・Antigravityと並ぶusage欄に出す。
+`is_available=false` は既存の警告色で示す。3〜5分のcacheを使い、欄を開いた時
+又は既存refreshから期限切れ分だけ更新する。子・turnごとには問い合わせない。
+鍵なし・Keychainロック・認証失敗・通信不可・不正応答は「不明」にする。
+前回値を残すなら取得時刻と古い値であることを併記し、現在値として扱わない。
+
+Keychainの `deepseek-api` は取得専用の短命processだけが読む。
+そのprocess内のHTTP headerだけへ渡し、dashboard常駐processのenv、argv、
+log、保存file、ブラウザへの応答に鍵を含めない。workerはtimeout付きとし、
+終了statusと検査済みの残高だけを返す。TUIの自動残高取得を開放する理由にはしない。
+
+共有fileへ接続する段で、次の既存経路を拡張する（行番号は設計時点）。
+
+| 接続点 | 変更する内容 |
+| --- | --- |
+| `dashboard/quotas/__init__.py:13` | opt-in時だけ残高adapterをserviceへ登録する。無効時は取得も欄も増やさない |
+| `dashboard/quotas/antigravity.py:24–28,38–56` | timeout付きの別processという既存方式を参照し、残高専用workerを呼ぶ |
+| `dashboard/quotas/base.py:29,102,131` | 百分率bucketと分けたaccount balanceの応答形を加える。金額文字列と通貨を保持する |
+| `dashboard/quotas/service.py:78,92,144` | bucketの有無に依存する観測判定を残高にも対応させ、cache・前回値の期限を共通管理する |
+| `dashboard/server.py:8965,9043` | 既存 `/api/quotas` の経路・同一originの検査を使い、秘密を応答へ出さない |
+| `dashboard/index.html:36951,37027,37145,37173` | DeepSeekロゴ・金額・利用可能状態・不明/古い値をusageに描画する |
+
+実装時にはAPI世代とAPI文書を揃え、合成fixtureでopt-in無効、正常、
+利用不可、複数通貨、鍵なし、lock、timeout、不正応答、古い値を対照する。
+実Keychain・残高APIの確認は別の承認済み実行に分ける。
