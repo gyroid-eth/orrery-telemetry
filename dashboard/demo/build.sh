@@ -6,14 +6,21 @@
 # the only thing it decides is which portraits ship: the nine the cast uses,
 # not all fifty. Anything the bundle does not contain, a visitor cannot load.
 #
-#   dashboard/demo/build.sh [outdir]     # default: dashboard/demo/dist
+#   dashboard/demo/build.sh [outdir] [--enable-dsh]
 #
 # Serve the result at any path; nothing in it is absolute.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DASH="$(dirname "$HERE")"
-OUT="${1:-$HERE/dist}"
+OUT="$HERE/dist"
+DSH_DEMO=false
+for arg in "$@"; do
+  case "$arg" in
+    --enable-dsh) DSH_DEMO=true ;;
+    *) OUT="$arg" ;;
+  esac
+done
 
 rm -rf "$OUT"
 mkdir -p "$OUT/demo" "$OUT/assets" "$OUT/portraits_64"
@@ -33,12 +40,15 @@ for f in "$HERE"/story_*.js; do
 "
 done
 cp "$DASH"/assets/*.svg "$OUT/assets/"
+if [ "$DSH_DEMO" = true ]; then
+  cp "$DASH/../integrations/dsh/assets/deepseek.svg" "$OUT/assets/deepseek.svg"
+fi
 cp "$HERE/PORTRAITS.txt" "$OUT/PORTRAITS.txt"
 
 # Turn the demo on in the bundle itself. Without this the bare URL loads a
 # dashboard with no server behind it and sits on ACQUIRING TELEMETRY —
 # and a demo whose front door has to be typed with ?demo=1 is not one.
-python3 - "$DASH/index.html" "$OUT/index.html" "$STORIES" <<'PY'
+python3 - "$DASH/index.html" "$OUT/index.html" "$STORIES" "$DSH_DEMO" <<'PY'
 import os, sys
 src, dst = sys.argv[1], sys.argv[2]
 stories = [l.strip() for l in (sys.argv[3] if len(sys.argv) > 3 else "").split("\n") if l.strip()]
@@ -57,7 +67,8 @@ def stamp(rel):
     return rel + "?v=" + hashlib.sha256(data).hexdigest()[:12]
 tags = "".join('<script src="%s"></script>\n' % stamp("demo/" + f) for f in stories)
 anchor_stamped = '<script src="%s"></script>' % stamp("demo/demo_api.js")
-s = s.replace(anchor, "<script>window.AGENTSTACK_DEMO_FORCE=1</script>\n"
+s = s.replace(anchor, "<script>window.AGENTSTACK_DEMO_FORCE=1;window.AGENTSTACK_DEMO_DSH="
+              + ("true" if sys.argv[4] == "true" else "false") + "</script>\n"
               + tags + anchor_stamped, 1)
 s = s.replace('<script src="demo/demo_tour.js" defer></script>',
               '<script src="%s" defer></script>' % stamp("demo/demo_tour.js"), 1)

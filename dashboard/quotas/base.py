@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from typing import Literal
+from .balance import AccountBalance
 
 
 QuotaQuality = Literal["exact", "derived", "estimated"]
@@ -112,6 +113,8 @@ class QuotaSnapshot:
     # partial false.
     degraded: bool = False
     partial: bool = False
+    measurement_kind: Literal["quota", "balance"] = "quota"
+    balance: AccountBalance | None = None
 
     def __post_init__(self) -> None:
         if not all(isinstance(value, str) and value.strip() for value in (self.provider, self.source)):
@@ -124,6 +127,14 @@ class QuotaSnapshot:
             raise ValueError("buckets must be a tuple of quota buckets")
         if type(self.degraded) is not bool or type(self.partial) is not bool:
             raise ValueError("degraded and partial must be booleans")
+        if self.measurement_kind not in {"quota", "balance"}:
+            raise ValueError("invalid measurement kind")
+        if self.balance is not None and not isinstance(self.balance, AccountBalance):
+            raise ValueError("invalid account balance")
+        if (self.measurement_kind == "balance" and self.buckets) or (
+            self.measurement_kind == "quota" and self.balance is not None
+        ):
+            raise ValueError("money and percentage buckets cannot be combined")
 
     def with_status(self, status: QuotaStatus, reason: str = "") -> "QuotaSnapshot":
         return replace(self, status=status, reason=reason)
@@ -132,4 +143,7 @@ class QuotaSnapshot:
         payload: dict[str, object] = {"provider": self.provider, "status": self.status, "degraded": self.degraded, "partial": self.partial, "source": self.source, "observed_at": self.observed_at, "buckets": [bucket.to_dict() for bucket in self.buckets]}
         if self.reason:
             payload["reason"] = self.reason
+        if self.measurement_kind == "balance":
+            payload["measurement_kind"] = "balance"
+            payload["balance"] = self.balance.to_usage_dict() if self.balance is not None else None
         return payload
