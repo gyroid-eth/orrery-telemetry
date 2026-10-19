@@ -266,3 +266,72 @@ def test_dashboard_startup_never_analyzes_the_foreign_mail_database():
     source = (ROOT / "dashboard" / "server.py").read_text(encoding="utf-8")
     assert "_analyze_mail_db" not in source
     assert 'con.execute("ANALYZE")' not in source
+
+
+@pytest.mark.parametrize("project_one_has_agents", (True, False))
+@pytest.mark.parametrize(
+    ("project_key", "expected_names"),
+    ((PROJECT, {"Parent", "Child"}), ("/other-project", {"Other"}),
+     ("", {"Parent", "Child"}), ("/missing-project", set())),
+)
+def test_explicit_project_never_falls_back_to_another_project(
+    monkeypatch, tmp_path, project_one_has_agents, project_key, expected_names
+):
+    """明示key不一致と未指定を、別projectにデータがあるDBで区別する。"""
+    database = _make_db(tmp_path / "projects.sqlite3", "integer", retired_at=False)
+    with sqlite3.connect(database) as connection:
+        connection.execute("INSERT INTO projects VALUES (2, '/other-project')")
+        connection.execute(
+            "INSERT INTO agents VALUES (5, 2, 'Other', 'model', 'codex', '', ?, ?)",
+            (BASE * 1_000_000, BASE * 1_000_000),
+        )
+        if not project_one_has_agents:
+            connection.execute("DELETE FROM message_recipients")
+            connection.execute("DELETE FROM messages")
+            connection.execute("DELETE FROM agents WHERE project_id = 1")
+    monkeypatch.setattr(graph_data, "DB_PATH", str(database))
+    monkeypatch.setattr(graph_data, "PROJECT_HUMAN_KEY", project_key)
+    monkeypatch.setattr(graph_data, "PROJECT_ID", 1)
+    monkeypatch.setattr(graph_data, "_live_parents", lambda: {})
+
+    data = graph_data.build_graph()
+
+    if project_key == "/missing-project":
+        assert data["nodes"] == data["edges"] == data["spawn"] == []
+        assert data["degraded"] is True
+        assert data["error"] == "Mail project not found"
+    else:
+        if not project_one_has_agents and project_key in (PROJECT, ""):
+            expected_names = set()
+        assert {node["name"] for node in data["nodes"]} == expected_names
+        assert data["degraded"] is False
+        assert "error" not in data
+
+
+@pytest.mark.parametrize("failure", ("missing-project", "sqlite-error"))
+@pytest.mark.parametrize("spawn_only", (False, True))
+def test_project_resolution_errors_survive_graph_http_wrapper(
+    monkeypatch, tmp_path, failure, spawn_only
+):
+    """DB解決の失敗理由を通常graphとspawn-onlyの両HTTP応答に残す。"""
+    database = _make_db(tmp_path / "project-error.sqlite3", "integer", retired_at=False)
+    if failure == "sqlite-error":
+        with sqlite3.connect(database) as connection:
+            connection.execute("DROP TABLE projects")
+    monkeypatch.setattr(graph_data, "DB_PATH", str(database))
+    monkeypatch.setattr(graph_data, "PROJECT_HUMAN_KEY", "/missing-project")
+    monkeypatch.setattr(graph_data, "PROJECT_ID", 1)
+    monkeypatch.setattr(graph_data, "_live_parents", lambda: {})
+    data = graph_data.build_graph()
+    assert data["nodes"] == data["edges"] == data["spawn"] == []
+    assert data["degraded"] is True
+    expected_error = (
+        "Mail project lookup failed (SQLite error)"
+        if failure == "sqlite-error" else "Mail project not found"
+    )
+    assert data["error"] == expected_error
+    monkeypatch.setattr(server, "_raw_graph", lambda: data)
+    payload = server._graph_response(4, True, spawn_only)
+    assert payload["nodes"] == payload["edges"] == payload["spawn"] == []
+    assert payload["degraded"] is True
+    assert payload["error"] == expected_error

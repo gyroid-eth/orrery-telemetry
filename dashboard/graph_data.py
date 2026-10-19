@@ -239,20 +239,16 @@ def _has_column(con: sqlite3.Connection, table: str, column: str) -> bool:
 
 
 def _resolve_project_id(con) -> int:
-    """project human_key から project id を解決。
-    見つからなければ PROJECT_ID(=1) にフォールバック。"""
+    """明示keyを解決し、未指定の場合だけ既定projectを使う。"""
     if not PROJECT_HUMAN_KEY:
         return PROJECT_ID
-    try:
-        row = con.execute(
-            "SELECT id FROM projects WHERE human_key = ?",
-            (PROJECT_HUMAN_KEY,),
-        ).fetchone()
-        if row and row[0] is not None:
-            return int(row[0])
-    except sqlite3.Error:
-        pass
-    return PROJECT_ID
+    row = con.execute(
+        "SELECT id FROM projects WHERE human_key = ?",
+        (PROJECT_HUMAN_KEY,),
+    ).fetchone()
+    if row and row[0] is not None:
+        return int(row[0])
+    raise LookupError("Mail project not found")
 
 
 def build_graph() -> dict:
@@ -267,7 +263,19 @@ def build_graph() -> dict:
     try:
         cur = con.cursor()
         # 設定された project human_key から project id を解決する。
-        PROJECT_ID = _resolve_project_id(con)
+        try:
+            PROJECT_ID = _resolve_project_id(con)
+        except (LookupError, sqlite3.Error) as exc:
+            return {
+                "nodes": [], "edges": [], "spawn": [],
+                "error": (
+                    "Mail project not found"
+                    if isinstance(exc, LookupError)
+                    else "Mail project lookup failed (SQLite error)"
+                ),
+                "timestamp_diagnostics": diagnostics.payload(),
+                "degraded": True,
+            }
 
         # activity: 直近 ACT_WINDOW_SEC のメッセージ参加数（送信+受信）。
         # INTEGER microseconds と legacy ISO TEXT を同じ epoch seconds にしてから

@@ -2268,6 +2268,7 @@ def _write_annotation(name: str, role: str, emoji: str,
 
 def _graph_health(g: dict) -> dict:
     return {
+        **({"error": g["error"]} if "error" in g else {}),
         "timestamp_diagnostics": g.get(
             "timestamp_diagnostics", {"invalid_count": 0, "fields": {}}
         ),
