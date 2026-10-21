@@ -339,7 +339,9 @@ def test_r1_inner_python_failure_cannot_become_noop(sandbox, tmp_path, selective
 
 
 def test_r1_changelog_uses_pr_number():
-    assert (ROOT / 'changelog.d/000269-codex-reservation-guard.md').is_file()
+    # リリースで断片は CHANGELOG.md へまとめられて消えるので、どちらかにあればよい
+    fragment = ROOT / 'changelog.d/000269-codex-reservation-guard.md'
+    assert fragment.is_file() or '#269' in (ROOT / 'CHANGELOG.md').read_text(encoding='utf-8')
     assert not (ROOT / 'changelog.d/000267-codex-reservation-guard.md').exists()
 
 
