@@ -73,7 +73,7 @@
     "AGENTSTACK_PORTRAITS_DIR": "",
     "AGENTSTACK_PERSISTENT_PROFILES_DIR": "/home/alice/.agentstack/profiles",
     "AGENTSTACK_PROJECT_KEY": "/home/alice/project",
-    "AGENTSTACK_PROTECTED_ROOTS": "/home/alice/project",
+    "AGENTSTACK_EXTRA_PROTECTED_ROOTS": "",
     "AGENTSTACK_RUNTIME_DIR": "/home/alice/.agentstack/runtime",
     "AGENTSTACK_SIGNALS_DIR": "/home/alice/.agentstack/mail/signals",
     "AGENTSTACK_SKILLS_DIR": "/home/alice/.agentstack/skills",

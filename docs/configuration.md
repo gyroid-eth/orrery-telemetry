@@ -106,7 +106,8 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_MAIL_ENROLL_BIN` | 採用した Mail deployment から導出 | installer が `env.sh` に保存する対応済み `agentstack-enroll`。通常は手動設定しない |
 | `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `disabled` | legacy HTTP bearer を使用しない |
 | `AGENTSTACK_PROJECT_KEY` | 再 install 時は既存 `env.sh`、初回は必須 | project human key。`--project-key` が最優先 |
-| `AGENTSTACK_PROTECTED_ROOTS` | live project key、次に既存 `env.sh`、最後に resolved project key | reservation hook の保護 root |
+| `AGENTSTACK_EXTRA_PROTECTED_ROOTS` | process の値（空も含む）→ installed extras（空も含む）→ installed legacy roots を一度だけ → 空 | 永続する順序付き追加 reservation root。下記の自動移行を参照 |
+| `AGENTSTACK_PROTECTED_ROOTS` | managed 起動ごとに計算 | runtime 出力: 追加 root、次に実 workspace。installed の旧値は direct/unmanaged hook 互換のためだけに保持 |
 | `AGENTSTACK_RELEASE_GRACE_SECONDS` | `90` | 成功した Edit / Write 後、reservation を解放するまでの debounce 秒数。旧 `FILE_RESERVATION_RELEASE_GRACE_SECONDS` も fallback として利用可 |
 | `AGENTSTACK_DELIVERABLE_ROOTS` | 未設定 | Output index の `:` 区切り走査 root。env / service / manifest へ保存 |
 | `AGENTSTACK_LANG` | 未設定 | murmur の `ja` / `en` override。未設定時は browser 判定 |
@@ -124,7 +125,7 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 
 DB が一致する健康な listener でも service env を特定できない場合、明示 pin が無い通常の再 install は listener をそのまま再利用します。この degraded 状態では deployment / enrollment の path を空にし、enrollment profile と Mail autostart を更新しません。既設 trigger は削除・停止せず残しますが、installer は次回 login での再起動を保証しません。明示した `AGENTSTACK_MAIL_SERVICE_VENV` / `AGENTSTACK_MAIL_SERVICE_ENV` を稼働 deployment と照合できない場合、既知 metadata が不正な場合、または metadata が約束した enrollment CLI が無い場合は、listener を切り替えず明示エラーで停止します。
 
-再 install では、上の表の設定のうち利用者が選ぶもの（project key、protected roots、
+再 install では、上の表の設定のうち利用者が選ぶもの（project key、明示した追加 protected roots、
 port、label prefix、terminal、MCP URL、`PATH`、Python、Mail の state / service root、
 `LANG` / `MURMUR` / `DELIVERABLE_ROOTS` など）を、明示した値 → 前回の `env.sh` → 既定値
 の順で決めます。一覧は `hooks/project-context.sh` の `AGENTSTACK_INHERITED_SETTINGS`、
@@ -138,14 +139,42 @@ exit 2 で停止します。永続設定には `AGENTSTACK_PROJECT_KEY` を推�
 
 hook と helper の実行時は `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` →
 `${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh` → 現在の cwd の順です。installed
-`env.sh` は source せず、`AGENTSTACK_PROJECT_KEY`（protected root の fallback では
-`AGENTSTACK_PROTECTED_ROOTS` も）だけを literal として読み取ります。このため install
+`env.sh` は source せず、共通 resolver は project と追加 root の設定を literal として
+読み取ります。direct/unmanaged hook は互換用に残した旧 `AGENTSTACK_PROTECTED_ROOTS`
+を参照できますが、managed 起動はこれを設定として使いません。このため install
 済みの editor を別 directory から起動しても reservation と registration は同じ project
 key を使い、同時に `env.sh` 内の任意 shell code は実行されません。
 
 installer は `AGENTSTACK_MAIL_DB`、`AGENTSTACK_MAIL_ENV`、`AGENTSTACK_SIGNALS_DIR`
 を state / render から導出し、`env.sh` へ state root と
 `AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` を一緒に保存します。
+
+## Reservation の保護範囲と移行
+
+`AGENTSTACK_EXTRA_PROTECTED_ROOTS` は追加 reservation root の永続設定です。絶対 path または `~/` path を colon 区切りで指定します（空白は可、path 内の colon は不可）。managed 起動は物理 path に解決し、symlink / 末尾 slash の別名と重複を、順序を変えずにまとめます。今回対象の top-level と delegated child の起動では、順序付き追加 root の後へ、起動先として選んだ物理作業 directory を保護対象に追加します。Git root は検出しても自動的には保護しません。必要なら `AGENTSTACK_EXTRA_PROTECTED_ROOTS` で明示します。前の起動の `AGENTSTACK_PROTECTED_ROOTS` は設定として再利用しません。path 形式の project key や `AGENTSTACK_VAULT` だけでは保護に追加しません。namespace の選択は変えず、installed project key も保持します。
+
+起動時の追加 root は、明示した process の値（空も含む）、installed extras、空、の順です。旧設定を移行するのは install/update だけです。
+
+install/update は空かどうかではなく設定の有無を使い、次の順で追加 root を自動選択・保存します。
+
+1. process の `AGENTSTACK_EXTRA_PROTECTED_ROOTS`（明示した空文字も含む）
+2. installed `env.sh` の `AGENTSTACK_EXTRA_PROTECTED_ROOTS`（空文字も含む）
+3. installed `env.sh` の旧 `AGENTSTACK_PROTECTED_ROOTS` を、literal の値と順序をそのまま一度だけコピー
+4. どれも存在しなければ空
+
+移行は installed file を literal として読み、shell 式を実行せず、root の意図を推測せず、ambient shell/tmux の `AGENTSTACK_PROTECTED_ROOTS` も取り込みません。旧設定が不正・曖昧なら installed file を上書きする前に更新を停止します。installer は選択した移行元・値・保存先を `--dry-run` でも表示します。通常の更新が自動移行するため、手動コピーは不要です。 installed file は installer が生成する形の literal な export 代入を使います。手書きの shell command、計算した変数名、展開を含む値は更新前に確認が必要です。model list など、保護設定以外の引用符で囲んだ複数行の値は引き続き使えます。
+
+成功した install は、空でも extras marker を `env.sh`、dashboard service 設定、install-state に保存します。この設定の存在が旧 list の再取り込みを防ぎます。installed の旧値は direct/unmanaged hook 互換のためだけに保持し、managed 起動は設定として無視します。shell/tmux の旧値が非空で installed 値と異なれば、extras が既に存在しても警告します。古い shell は開き直すか旧変数を解除し、警告を消すために runtime root の list をコピーしないでください。
+
+再 install と `--reset-settings` は extras を保持します。明示的な `AGENTSTACK_EXTRA_PROTECTED_ROOTS=` は追加分を解除し、空の marker と起動 workspace の必須保護を残します。意図的な置き換え・解除を次のように preview し、確認後に `--dry-run` を外して再実行します。
+
+```bash
+AGENTSTACK_EXTRA_PROTECTED_ROOTS="$HOME/shared-vault" ./scripts/install.sh --dry-run
+# 追加 root を明示的になしにする場合:
+AGENTSTACK_EXTRA_PROTECTED_ROOTS= ./scripts/install.sh --dry-run
+```
+
+cutover 前に作業を完了するか active reservation を解放してください。相対 reservation 名は最初に一致する保護 root から決まるため、root の順序変更や上位 root の削除で名前が変わることがあります。dry run を確認して更新し、影響する session をまとめて再起動してください。既存 session の環境は restart まで残り、file の更新だけでは変わりません。dashboard resume と persistent 起動の再計算は後続PRの対象です。既存の再開経路では旧 root が残る可能性があり、今回の範囲では新しい保護境界を保証しません。
 
 ## Launcher
 
@@ -170,8 +199,9 @@ installer は `AGENTSTACK_MAIL_DB`、`AGENTSTACK_MAIL_ENV`、`AGENTSTACK_SIGNALS
 launcher（`agent-start`・`agent-start-codex`・`agent-start-gemini`）は起動時に
 `env.sh` を読み込みますが、起動前に設定されていた `AGENTSTACK_INHERITED_SETTINGS` の
 値は上書きしません。たとえば `AGENTSTACK_PROJECT_KEY=/path/to/other ./agent-start` は
-install 時の project ではなく `/path/to/other` に登録し、protected roots も（明示しない限り）
-その project になります。明示しなければ `env.sh` の値を使います。
+install 時の project ではなく `/path/to/other` に登録しますが、保護範囲は実際の起動先
+workspace と明示した追加 root から決まります。project key を明示しなければ `env.sh` の
+namespace を使います。この分離は namespace の選択を変えず、installed project key も保持します。
 
 `AGENTSTACK_TCC_DIRS` は空白を含む path も保持できる `:` 区切りが正本です。colon を含まない旧 whitespace 区切りも legacy compatibility として解釈します。
 

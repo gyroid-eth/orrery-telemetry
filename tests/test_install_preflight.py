@@ -6,6 +6,7 @@ import http.server
 import os
 import pathlib
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -398,11 +399,14 @@ def test_an_env_sh_that_only_names_a_render_when_run_is_not_evidence(tmp_path, m
     renders = pathlib.Path(stale).parent.parent
     _installed_env_sh(env, f'export AGENTSTACK_MAIL_ENV="{renders}/{middle}/service.env"\n')
     env["AGENTSTACK_MAIL_ENV"] = stale
+    env_file = pathlib.Path(env["AGENTSTACK_HOME"]) / "env.sh"
+    before = env_file.read_bytes()
 
     result = _run(env, "--dry-run")
 
     assert result.returncode != 0
     assert "must equal the native service env" in result.stderr
+    assert env_file.read_bytes() == before
     assert "ignoring a managed AGENTSTACK_MAIL_ENV" not in result.stdout
 
 
@@ -464,15 +468,22 @@ def test_nothing_in_env_sh_is_executed_to_produce_the_evidence(tmp_path):
     env = _env_for_a_complete_dry_run(tmp_path)
     inherited = _managed_render_env(env, "previous-render-id")
     parent = str(pathlib.Path(inherited).parent)
+    sentinel = tmp_path / "env-sh-executed"
     _installed_env_sh(
-        env, f'export AGENTSTACK_MAIL_ENV="$(printf %s {parent})/service.env"\n'
+        env, f'export AGENTSTACK_MAIL_ENV="$(touch {shlex.quote(str(sentinel))}; printf %s {parent})/service.env"\n'
     )
+    env_file = pathlib.Path(env["AGENTSTACK_HOME"]) / "env.sh"
+    before = env_file.read_bytes()
     env["AGENTSTACK_MAIL_ENV"] = inherited
 
     result = _run(env, "--dry-run")
 
     assert result.returncode != 0
+    # With no protection declarations, the original Mail evidence check owns
+    # this rejection. The installed file remains data, never executed shell.
     assert "must equal the native service env" in result.stderr
+    assert env_file.read_bytes() == before
+    assert not sentinel.exists()
     assert "ignoring a managed AGENTSTACK_MAIL_ENV" not in result.stdout
 
 
@@ -495,3 +506,40 @@ def test_an_empty_mail_env_is_still_rejected(tmp_path):
 
     assert result.returncode != 0
     assert "AGENTSTACK_MAIL_ENV was set but empty" in result.stderr
+
+
+def test_existing_protection_settings_use_explicit_python_before_preflight(tmp_path):
+    env = _env_with_working_deps(tmp_path)
+    _installed_env_sh(env, "export AGENTSTACK_PROTECTED_ROOTS='/vault'\n")
+    result = _run(env, "--dry-run")
+    assert "python3: command not found" not in result.stderr
+    assert "preflight: passed" in result.stdout
+    assert "would migrate installed AGENTSTACK_PROTECTED_ROOTS" in result.stdout
+
+
+def test_invalid_installed_protection_still_stops_with_only_explicit_python(tmp_path):
+    env = _env_with_working_deps(tmp_path)
+    _installed_env_sh(env, 'export AGENTSTACK_PROTECTED_ROOTS="$HOME/vault"\n')
+    path = pathlib.Path(env["AGENTSTACK_HOME"]) / "env.sh"
+    before = path.read_bytes()
+    result = _run(env, "--dry-run")
+    assert result.returncode == 2
+    assert "expansion inside double quotes" in result.stderr
+    assert path.read_bytes() == before
+    assert "preflight: passed" not in result.stdout
+
+
+@pytest.mark.parametrize("kind", ["directory", "dangling-symlink"])
+def test_existing_nonregular_protection_file_is_not_absence(tmp_path, kind):
+    env = _env_with_working_deps(tmp_path)
+    path = pathlib.Path(env["AGENTSTACK_HOME"]) / "env.sh"
+    path.parent.mkdir()
+    if kind == "directory":
+        path.mkdir()
+    else:
+        path.symlink_to(tmp_path / "missing-target")
+    result = _run(env, "--dry-run")
+    assert result.returncode == 2
+    assert "env.sh must be a readable regular file" in result.stderr
+    assert "preflight: passed" not in result.stdout
+    assert path.is_dir() if kind == "directory" else path.is_symlink()

@@ -29,11 +29,8 @@ ags_load_env() {
   [[ -f "$ctx" ]] || ags_die "missing hooks/project-context.sh next to $AGS_LIB_DIR; re-run install.sh"
   # shellcheck source=../../hooks/project-context.sh
   . "$ctx"
-  if declare -F ags_client_bootstrap >/dev/null; then
-    ags_client_bootstrap "$envf" "$@" || ags_die "runtime mode bootstrap refused"
-  else
-    agentstack_load_installed_env "$envf"
-  fi
+  AGS_PROJECT_CONTEXT_HELPER="$ctx"
+  agentstack_load_top_level_env "$envf" "$@"
 }
 
 ags_resolve_tmux() {
@@ -91,4 +88,62 @@ ags_choose_dir() {
   echo "$AGS_PROG: fzf not installed; using current directory ($PWD)" >&2
   echo "          pass a path ($AGS_PROG DIR) or install fzf to browse a vault" >&2
   return 0
+}
+
+# Keep launch-root resolution shared with child and resume boundaries.
+ags_prepare_top_level_context() {
+  if ! command -v agentstack_apply_workspace_context >/dev/null 2>&1; then
+    # shellcheck source=../../hooks/project-context.sh
+    . "${AGS_PROJECT_CONTEXT_HELPER:-$AGS_LIB_DIR/../../hooks/project-context.sh}" || return 1
+  fi
+  agentstack_apply_workspace_context "$1" "${2:-}"
+}
+
+# Emit shell-quoted tmux options outside the pane command's nested quoting.
+# Session values override a pre-existing server's stale global environment.
+ags_tmux_project_options() {
+  local name
+  for name in AGENTSTACK_PROJECT_KEY PROJECT_KEY AGENTSTACK_PROJECT_REPOSITORY \
+    AGENTSTACK_PROJECT_WORK_DIR AGENTSTACK_PROJECT_WORKTREE_ROOT AGENTSTACK_PROTECTED_ROOTS AGENTSTACK_EXTRA_PROTECTED_ROOTS AGENTSTACK_PROTECTION_CONTEXT; do
+    printf -- '-e %q ' "$name=${!name:-}"
+  done
+  printf '%s' '-e AGENTSTACK_PROJECT_CONTEXT= -e AGENTSTACK_LOOKUP_PROJECT_KEY='
+}
+
+# Mark only the session this launcher just created as removing the three Git
+# selectors. Merely unsetting them in its first process would let later panes
+# inherit the old server-global values again. Do not use set-environment -g.
+ags_tmux_clear_git_command() {
+  local session="$1" name separator=""
+  for name in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; do
+    printf '%s%q set-environment -r -t %q %q' "$separator" "$TMUX_BIN" "=$session" "$name"
+    separator=" && "
+  done
+}
+
+# After capturing the session options, do not seed a new tmux server globally
+# with this invocation's project. This changes only the launching process.
+ags_clear_client_project_context() {
+  unset AGENTSTACK_PROJECT_KEY PROJECT_KEY AGENTSTACK_PROJECT_REPOSITORY
+  unset AGENTSTACK_PROJECT_WORK_DIR AGENTSTACK_PROJECT_WORKTREE_ROOT AGENTSTACK_PROTECTED_ROOTS AGENTSTACK_EXTRA_PROTECTED_ROOTS
+  unset AGENTSTACK_PROJECT_CONTEXT AGENTSTACK_LOOKUP_PROJECT_KEY AGENTSTACK_PROTECTION_CONTEXT
+}
+
+# Restore the selected tuple after the new pane's shell startup files run. The
+# returned text is escaped for the double-quoted pane command in a generated
+# launcher script; it must not be used as an unquoted shell command directly.
+ags_tmux_restore_workspace_command() {
+  local name statement="" result=""
+  for name in AGENTSTACK_PROJECT_KEY PROJECT_KEY AGENTSTACK_PROJECT_REPOSITORY \
+    AGENTSTACK_PROJECT_WORK_DIR AGENTSTACK_PROJECT_WORKTREE_ROOT \
+    AGENTSTACK_PROTECTED_ROOTS AGENTSTACK_EXTRA_PROTECTED_ROOTS AGENTSTACK_PROTECTION_CONTEXT; do
+    printf -v statement 'export %s=%q; ' "$name" "${!name:-}"
+    result="$result$statement"
+  done
+  result="$result"'cd -- "$AGENTSTACK_PROJECT_WORK_DIR" || exit 1; unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR AGENTSTACK_PROJECT_CONTEXT AGENTSTACK_LOOKUP_PROJECT_KEY; '
+  result="${result//\\/\\\\}"
+  result="${result//\$/\\\$}"
+  result="${result//\`/\\\`}"
+  result="${result//\"/\\\"}"
+  printf '%s' "$result"
 }

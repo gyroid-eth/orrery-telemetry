@@ -33,6 +33,8 @@ cd orrery-telemetry
 ./scripts/install.sh --project-key /absolute/path/to/your-project
 ```
 
+top-level / delegated child の起動は、選択した作業フォルダ（Git root へ自動拡張しない）と明示した共有フォルダ（`AGENTSTACK_EXTRA_PROTECTED_ROOTS`）を予約で保護します。更新時には保存済みの旧保護設定を一度だけ引き継ぎます。[保護設定の移行](docs/configuration.md#reservation-の保護範囲と移行)を dry-run で確認し、予約の解放後に更新して関係する session を再起動してください。
+
 `--project-key`は、agentに作業させるfolderの絶対パスです（このrepositoryではありません）。変更内容を確認・承認して導入し、`~/.agentstack/bin/agentstack-doctor`と`~/.agentstack/bin/agentstack-selftest`で共通部分を確かめます。その後、使う系統に合わせて準備します。
 
 - **Claude Code / Codex**: 同じOS環境に使うCLIを入れてログインし、`~/.agentstack/bin/agent-start <project folder>`または`~/.agentstack/bin/agent-start-codex <project folder>`で起動します。

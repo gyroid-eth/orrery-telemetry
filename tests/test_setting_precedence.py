@@ -23,6 +23,8 @@ import subprocess
 import sys
 import tempfile
 
+import pytest
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install.sh"
@@ -122,7 +124,7 @@ def _previous_install(
     project.mkdir()
     chosen = {
         "PROJECT_KEY": str(project),
-        "PROTECTED_ROOTS": str(project),
+        "EXTRA_PROTECTED_ROOTS": "",
         "PORT": "19876",
         "LABEL_PREFIX": "org.agentstack.test.inherit",
         "MAIL_LAUNCHD_LABEL_SETTING": "org.agentstack.test.inherit.mail-service",
@@ -158,7 +160,17 @@ def _previous_install(
 
 def _dry_run(home: pathlib.Path, *args: str, **extra: str) -> subprocess.CompletedProcess[str]:
     env = _scrubbed_env(home, **extra)
-    env["PATH"] = f"{_fake_bin(pathlib.Path(tempfile.mkdtemp(dir=home.parent)))}:{env['PATH']}"
+    fake = _fake_bin(pathlib.Path(tempfile.mkdtemp(dir=home.parent)))
+    env["PATH"] = f"{fake}:{env['PATH']}"
+    # Setting/plan tests must not contact a developer's live default-port Mail.
+    (fake / "sitecustomize.py").write_text(
+        "import errno, socket\n"
+        "def blocked(*args, **kwargs): raise ConnectionRefusedError(errno.ECONNREFUSED, 'isolated installer fixture')\n"
+        "socket.socket.connect = blocked\n"
+        "socket.socket.connect_ex = lambda *args: errno.ECONNREFUSED\n"
+        "socket.create_connection = blocked\n"
+    )
+    env["PYTHONPATH"] = f"{fake}:{env.get('PYTHONPATH', '')}"
     return subprocess.run(
         ["bash", str(INSTALLER), "--dashboard-only", "--dry-run", *args],
         cwd=ROOT,
@@ -711,10 +723,10 @@ def test_contributor_repro_explicit_project_key_survives_ags_load_env(tmp_path):
         'echo "before=$AGENTSTACK_PROJECT_KEY"\n'
         "ags_load_env\n"
         'echo "after=$AGENTSTACK_PROJECT_KEY"\n'
-        'echo "roots=$AGENTSTACK_PROTECTED_ROOTS"\n',
+        'echo "roots=${AGENTSTACK_PROTECTED_ROOTS-unset}"\n',
     )
     explicit = f"{home}/Developer/orrery-telemetry"
-    assert lines == [f"before={explicit}", f"after={explicit}", f"roots={explicit}"]
+    assert lines == [f"before={explicit}", f"after={explicit}", "roots=unset"]
 
 
 def test_without_an_explicit_project_key_env_sh_supplies_it(tmp_path):
@@ -724,10 +736,10 @@ def test_without_an_explicit_project_key_env_sh_supplies_it(tmp_path):
         LAUNCH_LIB,
         "ags_load_env\n"
         'echo "$AGENTSTACK_PROJECT_KEY"\n'
-        'echo "$AGENTSTACK_PROTECTED_ROOTS"\n'
+        'echo "${AGENTSTACK_PROTECTED_ROOTS-unset}"\n'
         'echo "$AGENTSTACK_CODEX_BIN"\n',
     )
-    assert lines == ["/installed/StudyPlanner", "/installed/StudyPlanner", "/installed/codex"]
+    assert lines == ["/installed/StudyPlanner", "unset", "/installed/codex"]
 
 
 def test_other_explicit_settings_survive_and_install_paths_still_load(tmp_path):
@@ -755,6 +767,7 @@ def test_the_installed_layout_finds_the_shared_order(tmp_path):
     (install_dir / "hooks").mkdir()
     shutil.copy2(LAUNCH_LIB, install_dir / "bin" / "lib" / "agentstack-launch.sh")
     shutil.copy2(CONTEXT, install_dir / "hooks" / "project-context.sh")
+    shutil.copy2(ROOT / "hooks/installed-env.py", install_dir / "hooks/installed-env.py")
     lines = _load_env(
         home,
         install_dir / "bin" / "lib" / "agentstack-launch.sh",
@@ -769,3 +782,279 @@ def test_every_launcher_loads_env_sh_only_through_ags_load_env():
         text = (ROOT / "bin" / name).read_text(encoding="utf-8")
         assert '\nags_load_env "$@"\n' in text, name
         assert "env.sh\"" not in text and "/env.sh" not in text, name
+
+
+# --- Installed-file-only protection migration -------------------------------
+
+EXTRAS = "AGENTSTACK_EXTRA_PROTECTED_ROOTS"
+LEGACY = "AGENTSTACK_PROTECTED_ROOTS"
+LITERAL_READER = ROOT / "hooks/installed-env.py"
+
+
+def _protection_file(home, assignments):
+    path = home / ".agentstack/env.sh"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"export AGENTSTACK_PROJECT_KEY={shlex.quote(str(home / 'project'))}\n"
+        + "".join(f"export {name}={shlex.quote(value)}\n" for name, value in assignments.items())
+    )
+    return path
+
+
+def _protection_probe(home, env=None, args=()):
+    """Run actual installer resolution, stopping before unrelated preflights."""
+    text = INSTALLER.read_text()
+    text = text[:text.index('case "$RESET_SETTINGS" in')]
+    locate = 'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+    text = text.replace(locate, f"SCRIPT_DIR={shlex.quote(str(ROOT / 'scripts'))}")
+    names = ("EXTRA_PROTECTED_ROOTS", "EXTRA_PROTECTED_ROOTS_SOURCE", "PROTECTION_MIGRATION",
+             "LEGACY_PROTECTED_ROOTS", "PRESERVE_LEGACY_PROTECTED_ROOTS")
+    text += "\n" + "".join(f'printf "%s\\0" "${name}"\n' for name in names)
+    return subprocess.run([BASH, "-c", text, "install.sh", *args],
+                          env=_scrubbed_env(home, **(env or {})), text=True, capture_output=True)
+
+
+@pytest.mark.parametrize("saved,live,expected,migrate", [
+    ({}, {}, "", False),
+    ({}, {LEGACY: "/ambient/cache"}, "", False),
+    ({LEGACY: "/vault:/project:/vault"}, {}, "/vault:/project:/vault", True),
+    ({LEGACY: ""}, {}, "", True),
+    ({LEGACY: "/saved"}, {LEGACY: "/ambient/cache"}, "/saved", True),
+    ({LEGACY: "/saved", EXTRAS: "/extra"}, {}, "/extra", False),
+    ({LEGACY: "/saved", EXTRAS: ""}, {}, "", False),
+    ({LEGACY: "/saved"}, {EXTRAS: "/override"}, "/override", False),
+    ({LEGACY: "/saved"}, {EXTRAS: ""}, "", False),
+    ({LEGACY: "/saved", EXTRAS: "/old"}, {EXTRAS: ""}, "", False),
+    ({LEGACY: "/saved", EXTRAS: ""}, {EXTRAS: "/override"}, "/override", False),
+])
+def test_protection_migration_precedence_is_presence_aware(tmp_path, saved, live, expected, migrate):
+    _protection_file(tmp_path, saved)
+    result = _protection_probe(tmp_path, live)
+    assert result.returncode == 0, result.stderr
+    values = result.stdout.split("\0")
+    assert values[0] == expected
+    assert values[2] == str(migrate).lower()
+    assert values[3] == saved.get(LEGACY, "")
+    assert values[4] == str(LEGACY in saved).lower()
+
+
+@pytest.mark.parametrize("extras", [None, "", "/extra"])
+def test_different_nonempty_ambient_roots_warn_even_when_extras_exists(tmp_path, extras):
+    values = {LEGACY: "/installed"}
+    if extras is not None:
+        values[EXTRAS] = extras
+    _protection_file(tmp_path, values)
+    result = _protection_probe(tmp_path, {LEGACY: "/ambient"})
+    assert result.returncode == 0, result.stderr
+    assert "ambient AGENTSTACK_PROTECTED_ROOTS=/ambient differs" in result.stderr
+    assert "never migrated" in result.stderr
+    equal = _protection_probe(tmp_path, {LEGACY: "/installed"})
+    assert "ambient AGENTSTACK_PROTECTED_ROOTS" not in equal.stderr
+
+
+@pytest.mark.parametrize("value", ["", "/vault:/project:/vault", "/a space/O'Brien\\back\\:/$literal/$(text)/&<>%"])
+def test_migration_writes_literal_order_once_and_keeps_legacy_compatibility(tmp_path, value):
+    path = _protection_file(tmp_path, {LEGACY: value})
+    for index in range(3):
+        result = _protection_probe(tmp_path, args=("--reset-settings",))
+        assert result.returncode == 0, result.stderr
+        extras, source, migrating, legacy, preserve, _ = result.stdout.split("\0")
+        assert extras == legacy == value
+        assert migrating == ("true" if index == 0 else "false")
+        _write_env_sh_like_the_installer(tmp_path, {
+            "PROJECT_KEY": str(tmp_path / "project"), "EXTRA_PROTECTED_ROOTS": extras,
+            "LEGACY_PROTECTED_ROOTS": legacy, "PRESERVE_LEGACY_PROTECTED_ROOTS": preserve,
+        })
+        assert path.stat().st_mode & 0o777 == 0o600
+        for name in (EXTRAS, LEGACY):
+            parsed = subprocess.run([sys.executable, str(LITERAL_READER), "value", name, str(path)],
+                                    capture_output=True, text=True)
+            assert parsed.returncode == 0, parsed.stderr
+            assert parsed.stdout == value
+        assert not list(path.parent.glob("env.sh.*"))
+
+
+def test_fresh_writer_persists_empty_marker_without_ambient_roots(tmp_path):
+    _write_env_sh_like_the_installer(tmp_path, {"PROJECT_KEY": str(tmp_path), "EXTRA_PROTECTED_ROOTS": ""})
+    text = (tmp_path / ".agentstack/env.sh").read_text()
+    assert f"export {EXTRAS}=''\n" in text
+    assert f"export {LEGACY}=" not in text
+
+
+def test_migration_dry_run_reports_source_value_destination_without_writes(tmp_path):
+    home = tmp_path / "home"
+    path = _protection_file(home, {LEGACY: "/vault:/repo"})
+    before = path.read_bytes()
+    result = _dry_run(home, AGENTSTACK_PYTHON=sys.executable)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"source={path}:{LEGACY} value=/vault:/repo destination={path}:{EXTRAS}" in result.stdout
+    assert "would migrate installed" in result.stdout
+    assert path.read_bytes() == before
+    assert not (home / ".agentstack/install-state.json").exists()
+    assert result.stdout.splitlines()[-1].startswith("mail-plan:")
+    assert result.stderr.count("restart affected coordinated sessions together") == 2
+
+
+@pytest.mark.parametrize("body", [
+    "export {name}=/one\nexport {name}=/two\n",
+    "export {name}=$HOME/vault\n",
+    'export {name}="${{HOME}}/vault"\n',
+    "export {name}=$(touch SENTINEL)\n",
+    "export {name}=`touch SENTINEL`\n",
+    "export {name}=/safe; touch SENTINEL\n",
+    "export {name}=/two words\n",
+    "export {name}='/multiline\n/value'\n",
+    "export {name}=/continued\\\n/value\n",
+    "if true; then export {name}='/vault'; fi\n",
+    "if true; then\nexport {name}='/vault'\nfi\n",
+    "readonly {name}='/vault'\n",
+    "export -n {name}='/vault'\n",
+    "export OTHER='one\nexport {name}=/fake\nthree'\n",
+    "export OTHER=x; export {name}=/vault\n",
+    "{name}=/vault\n",
+    "export {name}=/glob/*\n",
+    "export AGENTSTACK_'PROTECTED_ROOTS'='/vault'\n",
+    "export AGENTSTACK_PROTECTED\\_ROOTS='/vault'\n",
+])
+@pytest.mark.parametrize("name", [EXTRAS, LEGACY])
+def test_invalid_protection_is_not_absence_and_never_overwrites_or_executes(tmp_path, body, name):
+    path = _protection_file(tmp_path, {})
+    sentinel = tmp_path / "executed"
+    path.write_text(path.read_text() + body.format(name=name).replace("SENTINEL", str(sentinel)))
+    before = path.read_bytes()
+    result = _protection_probe(tmp_path, {EXTRAS: "/explicit"})
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "invalid " in result.stderr
+    assert path.read_bytes() == before
+    assert not sentinel.exists()
+    assert not (path.parent / "install-state.json").exists()
+
+
+@pytest.mark.parametrize("rhs,value", [
+    ("", ""), ("''", ""), ('""', ""), ("/unquoted", "/unquoted"),
+    ("'/space and back\\slash'", "/space and back\\slash"),
+    (shlex.quote("/O'Brien/\\back"), "/O'Brien/\\back"),
+    ('"/escaped/\\$HOME/\\`text\\`"', "/escaped/$HOME/`text`"),
+])
+def test_literal_reader_distinguishes_empty_value_and_absence(tmp_path, rhs, value):
+    path = tmp_path / "env.sh"
+    path.write_text(f"export {LEGACY}={rhs}\n")
+    state = subprocess.run([sys.executable, str(LITERAL_READER), "state", LEGACY, str(path)],
+                           capture_output=True, text=True, check=True)
+    assert state.stdout.strip() == ("present-value" if value else "present-empty")
+    result = subprocess.run([sys.executable, str(LITERAL_READER), "value", LEGACY, str(path)],
+                            capture_output=True, text=True, check=True)
+    assert result.stdout == value
+    absent = subprocess.run([sys.executable, str(LITERAL_READER), "state", EXTRAS, str(path)],
+                            capture_output=True, text=True, check=True)
+    assert absent.stdout == "absent\n"
+
+
+def _installer_functions(*names):
+    text = INSTALLER.read_text()
+    chunks = []
+    for name in names:
+        start = text.index(name + "() {")
+        following = re.search(r"\n[_a-zA-Z][_a-zA-Z0-9]*\(\) \{", text[start:])
+        end = start + 1 + following.start() if following else len(text)
+        chunks.append(text[start:end])
+    return "\n".join(chunks)
+
+
+@pytest.mark.parametrize("writer", ["launchd", "systemd", "manifest", "agentctl"])
+def test_protection_renderers_preserve_literal_extras_as_data(tmp_path, writer):
+    import json
+    import plistlib
+
+    value = '/vault/O\'Brien\\folder & <angles> "quotes" %h:$literal:$(not-run)'
+    values = {
+        "HOME": str(tmp_path), "DRY_RUN": "false", "PYTHON_BIN": sys.executable,
+        "PYTHON": sys.executable, "REPO_ROOT": str(ROOT), "LABEL": "test",
+        "LABEL_PREFIX": "test", "EXTRA_PROTECTED_ROOTS": value,
+        "LEGACY_PROTECTED_ROOTS": "/legacy", "PRESERVE_LEGACY_PROTECTED_ROOTS": "true",
+        "INSTALL_DIR": str(tmp_path / "install"), "MANIFEST": str(tmp_path / "manifest.json"),
+        "SAFE_MERGE_RESULT_FILE": str(tmp_path / "absent-merge"),
+        "MCP_MERGE_RESULT_FILE": str(tmp_path / "absent-mcp"),
+        "AGENT_MAIL_NAME_CAPABILITY_JSON": "{}", "CLAUDE_SKILLS_DIR": str(tmp_path / "skills"),
+    }
+    if writer == "agentctl":
+        text = (ROOT / "dashboard/agentctl.sh").read_text()
+        body = text[text.index("sed_escape() {"):text.index("background_pid() {")]
+        values.update(PLIST_DST=str(tmp_path / "result.plist"),
+                      PLIST_TEMPLATE=str(ROOT / "dashboard/agentdashboard.plist.template"))
+        invoke = "render_plist"
+    else:
+        function = {"launchd": "render_launchd_plist", "systemd": "render_systemd_unit", "manifest": "write_manifest"}[writer]
+        body = _installer_functions(function)
+        invoke = function + (" manual ''" if writer == "manifest" else "")
+    script = "plan() { :; }\n" + "".join(f"{key}={shlex.quote(val)}\n" for key, val in values.items()) + body + "\n" + invoke
+    result = subprocess.run([BASH, "-e", "-c", script], env=_scrubbed_env(tmp_path), capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    if writer == "systemd":
+        text = (tmp_path / ".config/systemd/user/test.service").read_text()
+        encoded = value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"')
+        assert f'Environment="{EXTRAS}={encoded}"' in text
+        assert LEGACY + "=" not in text
+    elif writer == "manifest":
+        env = json.loads((tmp_path / "manifest.json").read_text())["env"]
+        assert env[EXTRAS] == value
+        assert LEGACY not in env
+    else:
+        path = tmp_path / ("result.plist" if writer == "agentctl" else "Library/LaunchAgents/test.plist")
+        env = plistlib.loads(path.read_bytes())["EnvironmentVariables"]
+        assert env[EXTRAS] == value
+        assert LEGACY not in env
+
+
+@pytest.mark.parametrize("live", [None, "", "/explicit"])
+def test_agentctl_loading_does_not_synthesize_extras_before_update(tmp_path, live):
+    path = _protection_file(tmp_path, {LEGACY: "/installed"})
+    text = (ROOT / "dashboard/agentctl.sh").read_text()
+    text = text[:text.index('\ncase "${1:-status}" in')]
+    locate = 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+    text = text.replace(locate, f"HERE={shlex.quote(str(ROOT / 'dashboard'))}")
+    # Model a wrapper that loads the controller before exec'ing the installer.
+    text += '\nprintf "%s\\n%s\\n" "${AGENTSTACK_EXTRA_PROTECTED_ROOTS+x}" "${AGENTSTACK_EXTRA_PROTECTED_ROOTS-}"\n'
+    extra = {"AGENTSTACK_ENV_FILE": str(path)}
+    if live is not None:
+        extra[EXTRAS] = live
+    result = subprocess.run([BASH, "-c", text], env=_scrubbed_env(tmp_path, **extra), capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == (["", ""] if live is None else ["x", live])
+
+
+def test_protection_guidance_precedes_mail_trailer_in_normal_and_auto_paths():
+    text = INSTALLER.read_text()
+    main = text[text.index("main() {"):text.index("# A Mail older than this checkout")]
+    assert main.index("protection_restart_guidance") < main.index("install_payload")
+    assert main.rindex("protection_restart_guidance") < main.index('case "$MAIL_UPDATE_RESULT" in')
+    auto = main[main.index('if [[ "$MAIL_UPDATE_MODE" == auto ]]'):main.index("        return 0")]
+    assert auto.rstrip().endswith("print_mail_result")
+    assert main.rstrip().endswith("print_mail_result\n}")
+
+
+def test_generated_unrelated_multiline_setting_does_not_confuse_protection_parser(tmp_path):
+    path = _protection_file(tmp_path, {"AGENTSTACK_CLAUDE_MODELS": "model-one\nmodel-two", LEGACY: "/vault"})
+    result = _protection_probe(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split("\0")[0] == "/vault"
+
+
+@pytest.mark.parametrize("before,after,warn", [("/a:/b", "/b:/a", True), ("/a", "", True), ("/a", "/a", False)])
+def test_extras_only_changes_get_coordinated_restart_guidance(tmp_path, before, after, warn):
+    _protection_file(tmp_path, {EXTRAS: before})
+    result = _dry_run(tmp_path, **{EXTRAS: after, "AGENTSTACK_PYTHON": sys.executable})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ("restart affected coordinated sessions together" in result.stderr) is warn
+
+
+def test_background_services_drop_legacy_roots_and_export_only_extras(tmp_path):
+    text = (ROOT / "dashboard/agentctl.sh").read_text()
+    function = text[text.index("export_background_env() {"):text.index("start_background() {")]
+    script = function + "\nEXTRA_PROTECTED_ROOTS='/extra'\nexport AGENTSTACK_PROTECTED_ROOTS='/stale'\nexport_background_env\n"
+    script += 'printf "%s\\n%s\\n" "$AGENTSTACK_EXTRA_PROTECTED_ROOTS" "${AGENTSTACK_PROTECTED_ROOTS-unset}"\n'
+    result = subprocess.run([BASH, "-e", "-c", script], env=_scrubbed_env(tmp_path), capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["/extra", "unset"]
+    installer = _installer_functions("start_supervised_background")
+    assert installer.index('unset AGENTSTACK_PROTECTED_ROOTS') < installer.index('nohup "$PYTHON_BIN"')

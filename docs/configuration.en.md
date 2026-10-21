@@ -99,7 +99,8 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_MAIL_ENROLL_BIN` | derived from the adopted Mail deployment | Matching `agentstack-enroll` saved by the installer in `env.sh`; normally not set by hand |
 | `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `disabled` | Do not use the legacy HTTP bearer |
 | `AGENTSTACK_PROJECT_KEY` | existing `env.sh` on reinstall; required initially | Human project key. `--project-key` has highest priority |
-| `AGENTSTACK_PROTECTED_ROOTS` | live project key, then existing `env.sh`, then resolved project key | Roots protected by the reservation hook |
+| `AGENTSTACK_EXTRA_PROTECTED_ROOTS` | process value (including empty) → installed extras (including empty) → installed legacy roots once → empty | Persistent ordered additional reservation roots; see automatic migration below |
+| `AGENTSTACK_PROTECTED_ROOTS` | computed at every managed launch | Runtime output: extras, then the actual workspace. Installed legacy value is retained only for direct/unmanaged-hook compatibility |
 | `AGENTSTACK_RELEASE_GRACE_SECONDS` | `90` | Debounce seconds before releasing a reservation after successful Edit / Write. Legacy `FILE_RESERVATION_RELEASE_GRACE_SECONDS` is also accepted as a fallback |
 | `AGENTSTACK_DELIVERABLE_ROOTS` | unset | `:`-separated Output-index scan roots, saved to env / service / manifest |
 | `AGENTSTACK_LANG` | unset | `ja` / `en` murmur override; browser-selected when unset |
@@ -117,13 +118,40 @@ When a healthy ORRERY Mail listener already exists, the installer adopts the dep
 
 When a healthy listener uses the expected database but its service environment cannot be identified, an ordinary unpinned reinstall reuses the listener unchanged. In this degraded state deployment and enrollment paths are empty, and the installer updates neither the enrollment connection profile nor Mail autostart. Existing triggers are not deleted or stopped, but the installer cannot guarantee restart at the next login. Installation instead stops explicitly, without switching the listener, when an explicit `AGENTSTACK_MAIL_SERVICE_VENV` / `AGENTSTACK_MAIL_SERVICE_ENV` cannot be matched to the running deployment, known metadata is invalid, or metadata promises an enrollment CLI that is missing.
 
-On a re-install, the settings in the table above that a person chooses (project key, protected roots, port, label prefix, terminal, MCP URL, `PATH`, Python, the Mail state / service roots, `LANG` / `MURMUR` / `DELIVERABLE_ROOTS`, and so on) are decided as explicit value → previous `env.sh` → default. The list is `AGENTSTACK_INHERITED_SETTINGS` in `hooks/project-context.sh`; see "What a re-install inherits" under Upgrade in [install.en.md](install.en.md) for how to return to the defaults.
+On a re-install, the settings in the table above that a person chooses (project key, explicit extra protected roots, port, label prefix, terminal, MCP URL, `PATH`, Python, the Mail state / service roots, `LANG` / `MURMUR` / `DELIVERABLE_ROOTS`, and so on) are decided as explicit value → previous `env.sh` → default. The list is `AGENTSTACK_INHERITED_SETTINGS` in `hooks/project-context.sh`; see "What a re-install inherits" under Upgrade in [install.en.md](install.en.md) for how to return to the defaults.
 
 The installer's project-key precedence is `--project-key` / process `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → existing `env.sh` at the install destination. If none exist on first install, it does not guess that the repository checkout is the project; it stops with exit 2 before making changes. `AGENTSTACK_PROJECT_KEY` is recommended for persistent configuration.
 
-At hook and helper runtime the precedence is `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → `${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh` → current cwd. The installed `env.sh` is not sourced; only `AGENTSTACK_PROJECT_KEY`, and `AGENTSTACK_PROTECTED_ROOTS` when falling back for protected roots, are read literally. Thus an installed editor started from another directory uses the same project key for reservation and registration without executing arbitrary shell code from `env.sh`.
+At hook and helper runtime the precedence is `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → `${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh` → current cwd. The shared resolvers read project and extra-root settings from installed `env.sh` literally, without sourcing shell code. Direct/unmanaged hooks may still read the retained legacy `AGENTSTACK_PROTECTED_ROOTS`; managed launches ignore it as configuration. Thus an installed editor started from another directory uses the same project key for reservation and registration without executing arbitrary shell code from `env.sh`.
 
 The installer derives `AGENTSTACK_MAIL_DB`, `AGENTSTACK_MAIL_ENV`, and `AGENTSTACK_SIGNALS_DIR` from state / render and stores the state root together with `AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` in `env.sh`.
+
+## Reservation protection and migration
+
+`AGENTSTACK_EXTRA_PROTECTED_ROOTS` is the persistent setting for additional reservation roots. Use colon-separated absolute or `~/` paths (spaces are supported; colons inside a path are not). Managed launches resolve physical paths, collapse symlink/trailing-slash aliases, and deduplicate without reordering. Top-level and delegated-child launches covered by this change protect their selected physical working directory after the ordered extras. Git root discovery does not automatically extend protection; explicitly include it in `AGENTSTACK_EXTRA_PROTECTED_ROOTS` if wanted. These launches do not reuse a previous runtime `AGENTSTACK_PROTECTED_ROOTS` list. A path-shaped project key and `AGENTSTACK_VAULT` do not add protection by themselves. Namespace selection is unchanged; the installed project key remains in use.
+
+At launch, an explicitly set process extras value (including empty) wins over installed extras, then empty. Only install/update performs the legacy conversion.
+
+Install/update automatically selects and saves extras in this order, using presence rather than non-emptiness:
+
+1. Process `AGENTSTACK_EXTRA_PROTECTED_ROOTS`, including an explicit empty string
+2. Installed `env.sh` `AGENTSTACK_EXTRA_PROTECTED_ROOTS`, including an empty string
+3. Installed `env.sh` legacy `AGENTSTACK_PROTECTED_ROOTS`, copied exactly once with its literal value and order intact
+4. Empty, if none of those settings exists
+
+Migration reads the installed file literally; it does not execute shell expressions, infer which roots were intentional, or import ambient shell/tmux `AGENTSTACK_PROTECTED_ROOTS`. Invalid or ambiguous legacy configuration stops the update before the installed file is overwritten. The installer displays the selected source, value, and destination, including in `--dry-run`. Normal updates perform this migration automatically; no manual copy is needed. The installed file must contain literal export assignments, as generated by the installer; hand-written shell commands, computed variable names, or expanding values require review before update. Unrelated quoted multiline values, such as model lists, remain valid.
+
+Every successful install writes an extras marker, even when empty, to `env.sh`, dashboard service settings, and install-state. That presence prevents the legacy list from being imported again. The installed legacy value is retained only for direct/unmanaged-hook compatibility; managed launches ignore it as configuration. A different nonempty shell/tmux legacy value still triggers a warning even when extras already exist. Reopen stale shells or clear their old variable; do not copy a runtime-root list to silence the warning.
+
+Reinstall and `--reset-settings` keep extras. An explicit `AGENTSTACK_EXTRA_PROTECTED_ROOTS=` clears them while retaining the empty marker and mandatory launch-workspace protection. To preview a deliberate replacement or clearing of extras, use these commands, then rerun without `--dry-run` after reviewing the result:
+
+```bash
+AGENTSTACK_EXTRA_PROTECTED_ROOTS="$HOME/shared-vault" ./scripts/install.sh --dry-run
+# Or deliberately keep no additional roots:
+AGENTSTACK_EXTRA_PROTECTED_ROOTS= ./scripts/install.sh --dry-run
+```
+
+Before cutover, finish work or release active reservations. Relative reservation names use the first matching protected root, so changing root order or removing an enclosing root can change those names. Review the dry run, update, then restart affected sessions together. Existing sessions keep their environments until restart; updating files does not refresh them. Dashboard resume and persistent-agent re-resolution are follow-up work. Existing resume paths may retain older roots and are not guaranteed to implement the new protection boundary in this PR.
 
 ## Launcher
 
@@ -145,7 +173,7 @@ The installer derives `AGENTSTACK_MAIL_DB`, `AGENTSTACK_MAIL_ENV`, and `AGENTSTA
 | `AGENTSTACK_TCC_DIRS` | `$HOME/Desktop:$HOME/Downloads:$HOME/Documents` | `:`-separated TCC probe targets |
 | `AGENTSTACK_SCIENTISTS_JSON` | bundled JSON | Scientist vocabulary override |
 
-The launchers (`agent-start`, `agent-start-codex`, `agent-start-gemini`) load `env.sh` at startup but do not overwrite a value from `AGENTSTACK_INHERITED_SETTINGS` that was already set. For example `AGENTSTACK_PROJECT_KEY=/path/to/other ./agent-start` registers under `/path/to/other`, not the installed project, and its protected roots follow that project unless given explicitly. Without an explicit value, `env.sh` supplies it.
+The launchers (`agent-start`, `agent-start-codex`, `agent-start-gemini`) load `env.sh` at startup but do not overwrite a value from `AGENTSTACK_INHERITED_SETTINGS` that was already set. For example `AGENTSTACK_PROJECT_KEY=/path/to/other ./agent-start` registers under `/path/to/other`; reservation protection still comes from the actual launch workspace plus explicit extras. Without an explicit project key, `env.sh` supplies the namespace. This separation does not change namespace selection or remove the installed project key.
 
 The canonical `AGENTSTACK_TCC_DIRS` syntax is colon-separated so paths may contain spaces. Legacy whitespace-separated values without a colon are also interpreted for compatibility.
 
