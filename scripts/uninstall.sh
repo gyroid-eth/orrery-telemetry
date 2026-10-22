@@ -239,6 +239,9 @@ remove_settings_hooks()
 # Examples have separate content ownership. Run before the library itself is
 # removed with the ordinary bin payload; never recursively purge this subtree.
 if data.get("example_files") or data.get("example_dirs"):
+    # This module lives inside the installed payload. Bytecode caches must not
+    # create unowned files that prevent a clean uninstall.
+    sys.dont_write_bytecode = True
     example_spec = importlib.util.spec_from_file_location("install_examples", sys.argv[6])
     example_module = importlib.util.module_from_spec(example_spec)
     example_spec.loader.exec_module(example_module)
