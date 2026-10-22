@@ -82,6 +82,22 @@ def test_invalid_or_reused_version_keeps_all_files(tmp_path, version):
     assert (root / "CHANGELOG.md").read_text() == OLD
 
 
+@pytest.mark.parametrize("suffix", [".0", ".01"])
+def test_invalid_revision_heading_is_rejected_without_writes(tmp_path, suffix):
+    root = repository(tmp_path)
+    original = OLD.replace("## 2026.10.06", "## 2026.10.06" + suffix)
+    (root / "CHANGELOG.md").write_text(original)
+    fragment = root / "changelog.d/000350-new.md"
+    fragment.write_text("### New\n\nPending.\n")
+    module = runpy.run_path(str(SCRIPT))
+    with pytest.raises(ValueError):
+        module["validate_changelog"](original)
+    with pytest.raises(ValueError):
+        release(root, "2026.10.07")
+    assert (root / "CHANGELOG.md").read_text() == original
+    assert fragment.read_text() == "### New\n\nPending.\n"
+
+
 @pytest.mark.parametrize("previous,version,allowed", [
     ("2026.10.06", "2026.10.06.1", True),
     ("2026.10.06.9", "2026.10.06.10", True),

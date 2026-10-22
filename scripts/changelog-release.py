@@ -12,7 +12,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_TITLE = re.compile(r"\d{4}\.\d{2}\.\d{2}(?:\.\d+)?")
+RELEASE_TITLE = re.compile(r"\d{4}\.\d{2}\.\d{2}(?:\.[1-9]\d*)?")
 FRAGMENT_NAME = re.compile(r"\d{6}-[a-z0-9][a-z0-9-]*\.md")
 
 
@@ -105,7 +105,7 @@ def release_order(version: str) -> tuple[str, int]:
 
 
 def release(root: Path, version: str) -> int:
-    if not re.fullmatch(r"\d{4}\.\d{2}\.\d{2}(?:\.[1-9]\d*)?", version):
+    if not RELEASE_TITLE.fullmatch(version):
         raise ValueError("version must be YYYY.MM.DD or YYYY.MM.DD.N (N >= 1)")
     datetime.strptime(version[:10], "%Y.%m.%d")
     changelog = root / "CHANGELOG.md"

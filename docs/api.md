@@ -69,7 +69,7 @@ curl -s http://127.0.0.1:8770/api/version
 
 version の解決順は [インストール](install.md#version)を参照してください。
 
-- `version`: いつの配布物か（日付。[CHANGELOG](../CHANGELOG.md)）。互換性の約束ではありません
+- `version`: いつの配布物か（`YYYY.MM.DD`、同日の追加リリースは `YYYY.MM.DD.N`。[CHANGELOG](../CHANGELOG.md)）。互換性の約束ではありません
 - `api`: この API を使う側（[ORRERY cockpit](https://github.com/gyroid-eth/orrery) など）との**互換の世代**です。利用者が頼る endpoint や field を**足す・意味を変える**ときだけ 1 つ上げ、[changelog の断片](../changelog.d/)に書きます（release 時に CHANGELOG へ集約。[貢献・release 手順](../CONTRIBUTING.md#changelog-fragments-and-releases)）。release のたびには上げません。利用者は、必要な機能があるかを `version` の日付ではなく `api` で判定してください（cockpit は、`api` が必要な世代に足りないと起動時に警告します）。この運用は `api` 2 からで、それより前の版はどれも、中身にかかわらず 1 を返します
 
 ### 隔離 global backend（API 17）
