@@ -1,6 +1,6 @@
 # Changelog
 
-版は日付で付けます（`YYYY.MM.DD`）。互換性の約束ではなく、**いつの配布物か**を言えるようにするためのものです。
+版は日付で付けます（`YYYY.MM.DD`）。同日の追加リリースには `.1` から始まる枝番を付けます（`YYYY.MM.DD.N`）。互換性の約束ではなく、**いつの配布物か**を言えるようにするためのものです。
 
 インストール済みの版は `GET /api/version`、または install root の `VERSION` で確認できます。同じ応答の `api` は日付とは別の、利用者（ORRERY cockpit など）との互換の世代で、利用者が頼る API を足す・意味を変えるときだけ上げ、その版の節に書きます（[docs/api.md](docs/api.md#get-apiversion)）。更新手順は [docs/install.md](docs/install.md) の Upgrade を参照してください。
 
