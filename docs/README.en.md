@@ -2,7 +2,7 @@
 
 [日本語](README.md) · [README](../README.en.md)
 
-Start with **Your first flight → help map → Full tour** on screen, from cockpit’s `Settings → Getting started`. This index is for install/update, troubleshooting, and detailed references when you need them.
+You can start with Claude Code, Codex, DeepSeek or Local LLMs. Choose a [standalone install](getting-started.en.md#standalone-installation-and-verification) or [install with the cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start), then sign in to your chosen Claude/Codex CLI or follow [API setup for DeepSeek/Local](native-setup.en.md). Once configured, explore **Your first flight → help map → Full tour** from the cockpit’s `Settings → Getting started`. This index covers installation, updates, troubleshooting and detailed references.
 
 Explore Telemetry’s own controls with `HELP MAP` in its header (beside `SETTINGS` in NETWORK). It annotates DECK / NETWORK controls, whether Telemetry is standalone or embedded in cockpit. In an agent detail panel, choose the panel’s own `HELP MAP` to annotate that panel’s controls.
 
@@ -12,7 +12,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 
 ## Start here
 
-- [Add DeepSeek or Local models to an existing install](native-setup.en.md) — Install a harness, obtain and store an API key, prepare the settings, and try an agent from the screen.
+- [Set up DeepSeek or Local LLMs](native-setup.en.md) — After the shared install, prepare dsh/Hermes, key storage and connection settings, then launch from the screen. This works for new and returning users; Claude/Codex login is not required.
 
 - [Choose a goal, provider, model and harness](getting-started.en.md#provider-model-harness) — Observe agents, create one with an API model, or coordinate agents. Check the [combinations and limitations (Japanese)](managed-catalog.md). Configured DeepSeek/Local models offer dsh/Hermes selection in NEW AGENT; runtime and API settings must be prepared separately.
 - [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) — Install both with one line and start with the on-screen first-flight guide.

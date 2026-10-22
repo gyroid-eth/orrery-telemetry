@@ -1,8 +1,10 @@
-# すでにORRERYを使っている人が、DeepSeek・Localを追加する
+# DeepSeek・Local LLMの初期設定
+
+<a id="すでにorreryを使っている人がdeepseeklocalを追加する"></a>
 
 > English: [native-setup.en.md](native-setup.en.md)
 
-これまでClaude CodeやCodexだけを使っていた人向けの初期設定です。**ORRERYを更新しただけでは、dsh・Hermesの導入やAPIキーの登録は完了しません。** このガイドはORRERY cockpitとORRERY Telemetryのどちらから使う場合も共通です。
+ORRERYの共通部分を入れたあと、DeepSeekまたはLocal LLMを使うための初期設定です。Claude CodeやCodexの導入・ログインは前提ではありません。**通常の導入・更新だけでは、dsh・Hermesの追加やAPIキーの登録は完了しません。** ORRERYがまだ入っていなければ、先に[cockpitと共通導入](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md)か[Telemetry単独の導入](getting-started.md#telemetry-単独の導入と確認)を済ませてから戻ってください。ここからの準備は、どちらの画面を使う場合も共通です。
 
 cockpitはターミナルを並べて操作する画面、Telemetryはagentの状態を表示し、起動を受け付ける側です。API接続の準備はTelemetry側で行い、準備が終わればどちらのNEW AGENTからも選べます。現在、NEW AGENTにAPIキーを入力する欄や、接続設定を一括で済ませるウィザードはありません。
 
@@ -111,7 +113,7 @@ OSが鍵束の作成・unlock画面を出した場合、そこで求められる
 
 APIキーを保存しても、ORRERYには「どのアプリ・model・保存先を使うか」を渡す必要があります。ここは既存agentに、**秘密を含まない設定だけ**準備させられます。手作業で設定する人は[同梱設定例の手順](../examples/native-harnesses/README.md)を参照してください。
 
-設定ファイル（manifest）は、使うmodelとアプリ、各設定ファイルの場所をまとめたJSONです。この手順ではagentが設定の準備と検査を行い、最後のinstallコマンドは利用者がターミナルで1回実行します。
+設定ファイル（manifest）は、使うmodelとアプリ、各設定ファイルの場所をまとめたJSONです。以下はagentに準備と検査を手伝わせる例です。利用できるagentがなくても、同梱設定例の手順に従って自分でコピー・編集・有効化・検査を行えます。どちらの場合も、最後のinstallコマンドは利用者がターミナルで1回実行します。
 
 agentへ渡す依頼文の例です。角括弧の部分は自分の選択に置き換え、キー自体は書きません。
 

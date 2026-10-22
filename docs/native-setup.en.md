@@ -1,8 +1,10 @@
-# Add DeepSeek or Local models to an existing ORRERY installation
+# Set up DeepSeek or Local LLMs
+
+<a id="add-deepseek-or-local-models-to-an-existing-orrery-installation"></a>
 
 > 日本語: [native-setup.md](native-setup.md)
 
-This guide is for people who already use Claude Code or Codex. **Updating ORRERY does not install dsh/Hermes or save a new API key on this computer.** The preparation is shared by ORRERY cockpit and ORRERY Telemetry.
+Use this guide after installing ORRERY's shared components to prepare DeepSeek or Local LLMs. You do not need to install or sign in to Claude Code or Codex first. **An ordinary install or update does not install dsh/Hermes or save a new API key on this computer.** If ORRERY is not installed, first [install it with the cockpit](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install.md) or [install Telemetry on its own](getting-started.en.md#standalone-installation-and-verification), then return here. The preparation below is shared by both interfaces.
 
 The cockpit is the interface for working with terminals. Telemetry tracks agents and handles their launch requests. Prepare the API connection on the Telemetry side; then either NEW AGENT screen can use it. There is currently no API-key field or complete connection-setup wizard in NEW AGENT.
 
@@ -111,7 +113,7 @@ A clean return to the shell only means the save command finished. It does not pr
 
 ORRERY still needs to know which harness, model and stored-key entry to use. Your existing agent can prepare these **non-secret settings**. For manual setup, follow the [bundled example instructions](../examples/native-harnesses/README.en.md).
 
-The manifest is a JSON settings file listing the models, harnesses and paths to their configurations. In this workflow, the agent prepares and validates the settings; you run the final install command once in your terminal.
+The manifest is a JSON settings file listing the models, harnesses and paths to their configurations. The example below uses an agent to help prepare and validate them. If you have no agent available, follow the bundled example instructions to copy, edit, enable and validate the settings yourself. In either case, you run the final install command once in your terminal.
 
 You can give the agent this request, replacing brackets with your choices but never including the key itself:
 

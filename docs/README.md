@@ -2,7 +2,7 @@
 
 [English](README.en.md) · [README](../README.md)
 
-操作の入口は画面内の **Your first flight → help map → Full tour**。cockpit の `Settings → Getting started` から開けます。ここは install・update・困ったときと、必要に応じて読む詳しい参照の目次です。
+Claude Code・Codex・DeepSeek・Local LLMのどれからでも始められます。まず[単独導入](getting-started.md#telemetry-単独の導入と確認)か[cockpitと共通導入](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート)を選び、Claude/Codexは使うCLIへのログイン、DeepSeek/Localは[APIの初期設定](native-setup.md)へ進みます。準備後の画面操作は **Your first flight → help map → Full tour**。cockpitの`Settings → Getting started`から開けます。ここは導入・更新・困ったときに読む参照の目次です。
 
 Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS` の隣）から見回せます。単独の画面でも cockpit 内の埋め込みでも、DECK / NETWORK の操作に注記します。agent の詳細パネルでは、パネル内の `HELP MAP` からパネルの操作を説明できます。
 
@@ -12,7 +12,7 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 
 ## はじめる
 
-- [既存利用者がDeepSeek・Localを追加する](native-setup.md) — dsh/Hermesの追加、APIキーの発行・保存、設定例の準備、画面からの起動を順番に進める。
+- [DeepSeek・Local LLMの初期設定](native-setup.md) — 共通導入後、dsh/Hermes・APIキー・接続設定・画面からの起動へ。新規・既存利用者とも使え、Claude/Codexのログインは不要。
 
 - [目的と provider・model・harness を選ぶ](getting-started.md#provider-model-harness) — 観測、API の model で作成、agent 同士の連携の3導線。[対応組合せと現在の制限](managed-catalog.md)で準備・OS・画面の範囲を確認する。
 - [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート) — 1行で両方を入れ、画面の初回ガイドから始める。

@@ -1,0 +1,3 @@
+### DeepSeek・Local LLMもREADMEの冒頭から選べる導入案内
+
+README・ドキュメント索引・単独導入の入口を日英で整理しました。Claude Code・Codex・DeepSeek・Local LLMを最初から示し、共通installのあと、CLIへのログインかdsh/HermesとAPIの初期設定へ分岐します。DeepSeek/Localだけ使う場合にClaude/Codexの導入を前提とせず、APIの初期設定ガイドも新規利用者から開ける説明にしました。共通導入だけでAPI設定まで完了するという保証は加えていません。
