@@ -11,12 +11,12 @@ Multiple coding agents can talk directly, divide the work, and check each other'
 | Goal | Entry point |
 | --- | --- |
 | Observe agents on your machine | Install below, start a signed-in Claude Code / Codex CLI agent, and open DECK / NETWORK |
-| Create an agent with an API model | Read [provider, model and harness](docs/getting-started.en.md#provider-model-harness) and the [current combinations (Japanese)](docs/managed-catalog.md), then [optionally install dsh / Hermes](docs/install.en.md#optional-dsh--hermes-installation) |
+| Create an agent with DeepSeek or Local models | Follow the [setup guide for existing users](docs/native-setup.en.md): install dsh/Hermes, obtain and store a key, then launch from the screen |
 | Have agents divide work | Follow the [delegate and Mail end-to-end check](docs/getting-started.en.md#5-play-shiritori-as-an-end-to-end-check) |
 
 A provider supplies the connection, a model identifies what runs there, and a harness is the CLI that runs tools and the conversation. Standard API combinations currently cover DeepSeek / Local × dsh / Hermes, with availability checked per configured model. This does not promise arbitrary API and harness combinations.
 
-Configured DeepSeek / Local models can be selected through Model and Harness (dsh / Hermes) in the bundled NEW AGENT. Backend, runtime and credential references require manual preparation. API spawning uses legacy mode with macOS Keychain or explicitly configured Linux Secret Service references. New Hermes children use a separate HOME per project and canonical name. Common login and Telegram entry points are in design; real-server acceptance of manual Local effort remains incomplete. See the [current limitations (Japanese)](docs/managed-catalog.md#現在の制限) and the [Model / Harness screen examples](docs/dashboard.en.md#native-models-and-harnesses).
+Once configured, DeepSeek / Local models appear under Model and Harness (dsh / Hermes) in NEW AGENT. When adding one for the first time, install the application, store your API key and connect the settings using the [setup guide](docs/native-setup.en.md). Keys belong in Mac Keychain or Ubuntu Secret Service, not in NEW AGENT. API launching currently requires legacy mode. Hermes keeps each agent's conversations and memory separate by project and registered name. There is no universal provider login or shared Hermes Telegram entry point yet, and manual Local effort still needs real-server verification. See the [supported scope and limitations (Japanese)](docs/managed-catalog.md#現在の制限) and the [selection screen examples](docs/dashboard.en.md#native-models-and-harnesses).
 
 ![Select a configured Local model and dsh / Hermes in NEW AGENT](docs/img/native-harness-picker.png)
 

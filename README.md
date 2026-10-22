@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-複数の coding agent が直接話し、仕事を分担し、結果を確かめ合う。その働きと Mail の往復を一枚の画面で見渡せるのが ORRERY Telemetry です。Claude Code / Codex CLI に加え、設定済みの DeepSeek / Local の model を dsh / Hermes で動かす agent も扱います。端末も同じ画面で使う [ORRERY cockpit](https://github.com/gyroid-eth/orrery) と組み合わせて使えます。
+複数の coding agent が直接話し、仕事を分担し、結果を確かめ合う。その働きと Mail の往復を一枚の画面で見渡せるのが ORRERY Telemetry です。Claude Code / Codex CLI に加え、設定済みの DeepSeek / Local の model を dsh / Hermes で動かす agent も扱います。ターミナルも同じ画面で使う [ORRERY cockpit](https://github.com/gyroid-eth/orrery) と組み合わせて使えます。
 
 ![NETWORK を開いたまま子が加わり、ready の後にしりとりの Mail が3往復する](docs/img/network-mail.gif)
 
@@ -11,12 +11,12 @@
 | やりたいこと | 入口 |
 | --- | --- |
 | 手元の agent の働きを見る | 下の導入手順から、ログイン済みの Claude Code / Codex CLI を起動し、DECK / NETWORK を開く |
-| API の model を選んで agent を作る | [provider・model・harness の違い](docs/getting-started.md#provider-model-harness)と[現在の対応組合せ](docs/managed-catalog.md)を確認し、[dsh / Hermes を任意導入](docs/install.md#dsh--hermes-の任意導入)する |
+| DeepSeekやLocalのmodelでagentを作る | [既存利用者向けの初期設定ガイド](docs/native-setup.md)で、dsh/Hermesの追加・APIキー取得と保存・画面からの起動まで進める |
 | agent 同士で仕事を分担する | [delegate と Mail の通し確認](docs/getting-started.md#5-しりとりで通しの確認をする)へ進む |
 
 provider は接続先、model はそこで使うモデル、harness は道具や会話を動かす CLI です。現在、API を使う標準の組合せは DeepSeek / Local × dsh / Hermes に限り、設定済みの model ごとに利用可否を検査します。任意の API と任意の harness の組合せを保証するものではありません。
 
-設定済みの DeepSeek / Local は、同梱 NEW AGENT の Model と Harness（dsh / Hermes）から選べます。backend・runtime・資格の参照は手動準備が必要です。API 起動は legacy mode で、macOS の Keychain と Linux の明示した Secret Service 参照を扱います。Hermes の新しい子は project と正式名ごとの独立 HOME を使います。共通ログインと Telegram 入口は設計中、Local の手動 effort の実サーバー受け入れは未完です。設定条件と受け入れの範囲は[現在の制限](docs/managed-catalog.md#現在の制限)、画面は[Model / Harness の選択例](docs/dashboard.md#native-models-and-harnesses)を参照してください。
+準備済みのDeepSeek / Localは、NEW AGENTのModelとHarness（dsh / Hermes）から選べます。初めて追加するときは、アプリの導入、APIキーの保存、接続先の設定が必要です。[初期設定ガイド](docs/native-setup.md)で順番に進めてください。キーはMacのキーチェーン、またはUbuntuのSecret Serviceへ保存し、NEW AGENTには貼りません。API起動はlegacy modeが対象です。Hermesの会話・記憶はprojectとagentの正式名ごとに分かれます。すべての接続先に使えるログイン機能やHermes共通のTelegram入口はまだなく、Localのeffort設定にも未確認範囲があります。[対応範囲と制限](docs/managed-catalog.md#現在の制限)・[画面の選択例](docs/dashboard.md#native-models-and-harnesses)を参照してください。
 
 ![NEW AGENT で設定済み Local model と dsh / Hermes を選ぶ](docs/img/native-harness-picker.png)
 
@@ -40,16 +40,16 @@ cd orrery-telemetry
 
 作業の区切りで子を EXIT し、`~/.agentstack/bin/agentstack-resume <NAME> --tools <spec>` で同じ会話の道具を変更できます。[resume の道具変更](docs/delegation.md#停止した子の道具を変更して-resume-する)を参照してください。
 
-**単独で使えるもの**: dashboard の Telemetry 画面（DECK・NETWORK・REPLAY・退出した agent の RESUME・NEW AGENT）、`agent-start` / `agent-start-codex` での agent 起動、delegate skill（Claude Code: `/delegate`、Codex: `$delegate`）での子の作成、agent 同士の ORRERY Mail。agent の端末は OS の terminal（Windows は Windows Terminal のタブ）で開きます。
+**単独で使えるもの**: dashboard の Telemetry 画面（DECK・NETWORK・REPLAY・退出した agent の RESUME・NEW AGENT）、`agent-start` / `agent-start-codex` での agent 起動、delegate skill（Claude Code: `/delegate`、Codex: `$delegate`）での子の作成、agent 同士の ORRERY Mail。agent のターミナルは OS の terminal（Windows は Windows Terminal のタブ）で開きます。
 
-**入らないもの**: ブラウザの中で端末を並べて操作する cockpit の画面（composer・Split・Planetarium・`ORRERY.app`）。
+**入らないもの**: ブラウザの中でターミナルを並べて操作する cockpit の画面（composer・Split・Planetarium・`ORRERY.app`）。
 
 ## cockpit との関係
 
 ![cockpit は terminal を操作する画面、Telemetry は dashboard と agent graph の画面。cockpit は Telemetry の画面を埋め込める。agent は tmux の中で動き、両方の画面から見え、Mail で話す](https://raw.githubusercontent.com/gyroid-eth/orrery/master/docs/images/cockpit_telemetry_relation.svg)
 
 - **Telemetry** は、agent・Mail・dashboard を動かす裏方と、その状態を見る Telemetry 画面です。
-- **[cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.md)** は、端末を並べて操作する画面です。agent の起動・Mail・Telemetry 画面は Telemetry が担うので、cockpit は Telemetry と組み合わせて使います（端末だけなら Telemetry が止まっていても開けます）。
+- **[cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.md)** は、ターミナルを並べて操作する画面です。agent の起動・Mail・Telemetry 画面は Telemetry が担うので、cockpit は Telemetry と組み合わせて使います（ターミナルだけなら Telemetry が止まっていても開けます）。
 - cockpit 側から入れると、**両方まとめて入ります。**
 
 ## 両方入れるなら（orrery の 1 行）
@@ -68,9 +68,9 @@ cockpit の **Your first flight → help map → Full tour** を順に試しま�
 
 Telemetry の header の `HELP MAP`（NETWORK では `SETTINGS` の隣）を押すと、いま表示されている DECK / NETWORK の操作に注記が付きます。agent の詳細パネルでは、操作列の `HELP MAP` を押すと、そのパネルの操作に注記が付きます。cockpit 内に埋め込まれた Telemetry でも同じ操作で使えます。注記が収まらない場合は凡例で表示し、`Esc` または `Close` で閉じられます。
 
-Full tour は delegate skill（Claude Code: `/delegate`、Codex: `$delegate`）で子を1体作り、ORRERY Mail でしりとりを3往復し、端末の配置、Telemetry の EXIT / RESUME、NETWORK / REPLAY を試す案内です。画面の説明に従って操作すると進みます。DeepSeek・Local の子でも、dsh・Hermes それぞれで同じ3往復を手動で確認できます（[確認手順](docs/getting-started.md#5-しりとりで通しの確認をする)）。[現在のクイックスタート](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート)と [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/FULL_TOUR.md)を参照してください。
+Full tour は delegate skill（Claude Code: `/delegate`、Codex: `$delegate`）で子を1体作り、ORRERY Mail でしりとりを3往復し、ターミナルの配置、Telemetry の EXIT / RESUME、NETWORK / REPLAY を試す案内です。画面の説明に従って操作すると進みます。DeepSeek・Local の子でも、dsh・Hermes それぞれで同じ3往復を手動で確認できます（[確認手順](docs/getting-started.md#5-しりとりで通しの確認をする)）。[現在のクイックスタート](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート)と [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/FULL_TOUR.md)を参照してください。
 
-端末で仕事をするのは cockpit、チームの状態や履歴を見るのが Telemetry です。画面内のガイドを入口にし、詳しい参照は[目的別索引](docs/README.md)から開けます。
+ターミナルで仕事をするのは cockpit、チームの状態や履歴を見るのが Telemetry です。画面内のガイドを入口にし、詳しい参照は[目的別索引](docs/README.md)から開けます。
 
 ## 退出した agent を再開する
 

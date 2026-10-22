@@ -2,6 +2,8 @@
 
 > English: [README.en.md](README.en.md)
 
+**最初にDeepSeek・Localを追加する方へ：** [初期設定ガイド](https://github.com/gyroid-eth/orrery-telemetry/blob/master/docs/native-setup.md)で、APIキーの取得・OSへの保存・runtime追加の順序を確認してください。この文書は、設定例をコピーしてつなぐ工程の詳細です。
+
 例の版: 1。これは設定補助用の例です。installは接続先の有効設定や鍵を作りません。
 ここにあるmanifestをそのままサービスへ登録しないでください。
 

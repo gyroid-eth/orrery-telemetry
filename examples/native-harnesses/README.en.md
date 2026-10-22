@@ -2,6 +2,8 @@
 
 > 日本語: [README.md](README.md)
 
+**Adding DeepSeek or Local for the first time?** Follow the [setup guide](https://github.com/gyroid-eth/orrery-telemetry/blob/master/docs/native-setup.en.md) for harness installation and key creation/storage. This document explains how to copy and connect the example settings.
+
 Example version: 1. Installation creates examples, not active backend settings or credentials.
 Do not register an example manifest directly with the service.
 
