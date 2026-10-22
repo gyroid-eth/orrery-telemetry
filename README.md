@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-複数の coding agent が直接話し、仕事を分担し、結果を確かめ合う。その働きと Mail の往復を一枚の画面で見渡せるのが ORRERY Telemetry です。Claude Code / Codex CLI に加え、設定済みの DeepSeek / Local の model を dsh / Hermes で動かす agent も扱います。ターミナルも同じ画面で使う [ORRERY cockpit](https://github.com/gyroid-eth/orrery) と組み合わせて使えます。
+Claude Code・Codex・DeepSeek・Local LLMのagentが直接話し、仕事を分担し、結果を確かめ合う。その働きとMailの往復を一枚の画面で見渡せるのがORRERY Telemetryです。Claude CodeとCodexは各CLI、DeepSeekとLocal LLMはdshまたはHermesを使います。使いたい系統を選んで準備でき、DeepSeek・LocalのためにClaude CodeやCodexを先に入れる必要はありません。ターミナルも同じ画面で使う[ORRERY cockpit](https://github.com/gyroid-eth/orrery)と組み合わせて使えます。
 
 ![NETWORK を開いたまま子が加わり、ready の後にしりとりの Mail が3往復する](docs/img/network-mail.gif)
 
@@ -10,8 +10,9 @@
 
 | やりたいこと | 入口 |
 | --- | --- |
-| 手元の agent の働きを見る | 下の導入手順から、ログイン済みの Claude Code / Codex CLI を起動し、DECK / NETWORK を開く |
-| DeepSeekやLocalのmodelでagentを作る | [既存利用者向けの初期設定ガイド](docs/native-setup.md)で、dsh/Hermesの追加・APIキー取得と保存・画面からの起動まで進める |
+| 手元のagentの働きを見る | 準備済みのagentを起動し、DECK / NETWORKを開く |
+| Claude CodeやCodexで始める | 共通部分を導入し、使うCLIにログインして[最初のagentを起動する](docs/getting-started.md#3-最初の-agent-を起動しdashboard-で見る) |
+| DeepSeekやLocal LLMで始める | 共通部分を導入し、[APIの初期設定ガイド](docs/native-setup.md)でdsh/Hermesの追加・キーの保存・接続設定・画面からの起動へ進む。Claude/Codexのログインは不要 |
 | agent 同士で仕事を分担する | [delegate と Mail の通し確認](docs/getting-started.md#5-しりとりで通しの確認をする)へ進む |
 
 provider は接続先、model はそこで使うモデル、harness は道具や会話を動かす CLI です。現在、API を使う標準の組合せは DeepSeek / Local × dsh / Hermes に限り、設定済みの model ごとに利用可否を検査します。任意の API と任意の harness の組合せを保証するものではありません。
@@ -32,7 +33,12 @@ cd orrery-telemetry
 ./scripts/install.sh --project-key /absolute/path/to/your-project
 ```
 
-`--project-key` は、agent に作業させる folder の絶対パスです（この repository ではありません）。変更内容は表示され、承認してから入ります。終わったら `~/.agentstack/bin/agentstack-doctor` と `~/.agentstack/bin/agentstack-selftest` で確かめ、同じ環境でログイン済みの Claude Code か Codex CLI を用意して、Claude Code なら `~/.agentstack/bin/agent-start <project folder>`、Codex CLI なら `~/.agentstack/bin/agent-start-codex <project folder>` で agent を起動して `http://127.0.0.1:8770/` を開きます。手順は[単独の導入手順](docs/getting-started.md#telemetry-単独の導入と確認)にあります。
+`--project-key`は、agentに作業させるfolderの絶対パスです（このrepositoryではありません）。変更内容を確認・承認して導入し、`~/.agentstack/bin/agentstack-doctor`と`~/.agentstack/bin/agentstack-selftest`で共通部分を確かめます。その後、使う系統に合わせて準備します。
+
+- **Claude Code / Codex**: 同じOS環境に使うCLIを入れてログインし、`~/.agentstack/bin/agent-start <project folder>`または`~/.agentstack/bin/agent-start-codex <project folder>`で起動します。
+- **DeepSeek / Local LLM**: [APIの初期設定ガイド](docs/native-setup.md)でdshまたはHermes、キー、接続設定を準備し、`http://127.0.0.1:8770/`のNEW AGENTから選んで起動します。上のinstallだけでは、このAPI設定は済みません。
+
+どちらもDECKにagentが現れることを確認します。[単独の導入手順](docs/getting-started.md#telemetry-単独の導入と確認)に、準備・起動・Mail確認の流れがあります。
 
 子に渡す道具の既定は installer の `--child-default-tools`（既定は空）で選べます。明示の指定を優先し、使えない既定の項目は通知して外します。[道具の選び方](docs/delegation.md#installer-の既定の道具)を参照してください。
 

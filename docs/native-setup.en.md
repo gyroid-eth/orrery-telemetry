@@ -1,8 +1,10 @@
-# Add DeepSeek or Local models to an existing ORRERY installation
+# Set up DeepSeek or Local LLMs
+
+<a id="add-deepseek-or-local-models-to-an-existing-orrery-installation"></a>
 
 > 日本語: [native-setup.md](native-setup.md)
 
-This guide is for people who already use Claude Code or Codex. **Updating ORRERY does not install dsh/Hermes or save a new API key on this computer.** The preparation is shared by ORRERY cockpit and ORRERY Telemetry.
+Use this guide after installing ORRERY's shared components to prepare DeepSeek or Local LLMs. You do not need to install or sign in to Claude Code or Codex first. **An ordinary install or update does not install dsh/Hermes or save a new API key on this computer.** If ORRERY is not installed, first [install it with the cockpit](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install.md) or [install Telemetry on its own](getting-started.en.md#standalone-installation-and-verification), then return here. The preparation below is shared by both interfaces.
 
 The cockpit is the interface for working with terminals. Telemetry tracks agents and handles their launch requests. Prepare the API connection on the Telemetry side; then either NEW AGENT screen can use it. There is currently no API-key field or complete connection-setup wizard in NEW AGENT.
 
@@ -13,13 +15,19 @@ The cockpit is the interface for working with terminals. Telemetry tracks agents
 | Choice | What it does | What you need |
 | --- | --- | --- |
 | DeepSeek | Calls DeepSeek's hosted API | A DeepSeek API key and API balance |
-| Local, such as Strata | Connects to a server you or an administrator runs | Its URL, model ID and, when required, its own access key |
+| Local models, such as Strata | Connects to a compatible server you or an administrator runs | A compatible API URL, model ID and its own access key. The current path requires a credential reference |
 | dsh | Runs the conversation and tools; short for DeepSeek Harness | Install it through ORRERY; it needs Node.js 24.2 or newer |
 | Hermes | An alternative application for running the conversation and tools | Install it through ORRERY |
 
 Pick one provider and one harness, such as DeepSeek + dsh. You can install both harnesses without creating two API keys for the same provider. You do not need a DeepSeek account to use a Local server.
 
-This is separate from your Claude Code or Codex login. API launching currently supports the [documented combinations](managed-catalog.md) using ORRERY Mail's legacy connection mode. Global mode is a different Mail connection mode and is outside this guide's scope. Ask your agent if you are unsure which is active; do not switch modes merely to follow this guide.
+**Check the Local server's protocol before setting it up.** dsh uses the fixed DeepSeek adapter and accepts HTTP/HTTPS URLs for compatible APIs. Hermes requires HTTPS and either `chat_completions` or `anthropic_messages`; you cannot give it an HTTP-only endpoint directly. The internal backend ID is `strata`, but it is not a Strata hostname restriction. Nor does it guarantee that every server advertised as OpenAI-compatible will work.
+
+**A Local configuration that stores and references no key is not currently supported by ORRERY.** Both harness paths require a reference to a key saved in the OS. Do not invent a dummy key for a server without authentication. Obtain a compatible endpoint with authentication before continuing with this guide.
+
+**Verification status:** API launch paths are implemented for macOS and Linux/Ubuntu WSL in legacy mode. Native Windows API launching is outside this scope. Not every DeepSeek/Local × dsh/Hermes combination has been verified from a fresh installation using the standard examples. WSL in particular needs a working keyring, GUI prompts and services using the same user's bus. A visible catalog entry does not prove key storage, API access, Mail delivery, exit or resume.
+
+This is separate from your Claude Code or Codex login. API launching currently supports the [documented combinations](managed-catalog.en.md) using ORRERY Mail's legacy connection mode. Global mode is a different Mail connection mode and is outside this guide's scope. Ask your agent if you are unsure which is active; do not switch modes merely to follow this guide.
 
 ## 2. Install the harnesses
 
@@ -74,7 +82,7 @@ The bundled DeepSeek settings already contain `https://api.deepseek.com/anthropi
 
 ### Local / Strata
 
-Ask the server administrator for its URL, exact model ID, API format and access key, if required. Its key is separate from a DeepSeek API key. Do not guess that the keys match or that the URL needs a `/v1` suffix. Use the [Local configuration field table](../examples/native-harnesses/README.en.md#switching-to-local--strata).
+Ask the server administrator for its URL, exact model ID, API format and server-specific access key. Its key is separate from a DeepSeek API key. Do not guess that the keys match or that the URL needs a `/v1` suffix. Check the harness-specific requirements above, then use the [Local configuration field table](../examples/native-harnesses/README.en.md#switching-to-local--strata).
 
 ## 4. Save the key in this machine's secret store
 
@@ -91,7 +99,9 @@ If macOS later asks whether an application may access the keychain, read the app
 
 ### Windows / Ubuntu WSL: Secret Service
 
-Use Ubuntu's secret store, not a Windows credential entry. This requires Secret Service, a D-Bus session for the same user, an encrypted and unlocked keyring, and `/usr/bin/secret-tool`. Installing `libsecret-tools` or `gnome-keyring` alone does not create a usable keyring or establish working GUI prompts. If these are not ready, ask your existing agent to help prepare the OS environment before continuing. Do not start a second daemon to work around it.
+**Saving a key in Ubuntu for the first time? Follow the [WSL keyring and hidden-input guide](wsl-keyring.en.md).** It covers OS packages, the standard keyring GUI and choosing the correct storage location. After saving, return to [“5. Connect the configuration files” on this page](#5-connect-the-configuration-files); do not repeat the save below. A complete first-time WSL run through that GUI procedure has not yet been verified on a real machine.
+
+The shorter path below is for an existing, usable default keyring. Use Ubuntu's secret store, not a Windows credential entry. This requires Secret Service, a D-Bus session for the same user, an encrypted and unlocked keyring, and `/usr/bin/secret-tool`. Installing `libsecret-tools` or `gnome-keyring` alone does not create a usable keyring or establish working GUI prompts. If these are not ready, prepare the OS using the guide above. Do not start a second daemon to work around it.
 
 In an **interactive Ubuntu terminal**, run the following directly. Do not pipe a key into it or read one from a file:
 
@@ -109,9 +119,9 @@ A clean return to the shell only means the save command finished. It does not pr
 
 ## 5. Connect the configuration files
 
-ORRERY still needs to know which harness, model and stored-key entry to use. Your existing agent can prepare these **non-secret settings**. For manual setup, follow the [bundled example instructions](../examples/native-harnesses/README.en.md).
+ORRERY still needs to know which harness, model and stored-key entry to use. **Without an agent, follow the [copy-and-check instructions](../examples/native-harnesses/README.en.md#prepare-a-deepseek-snapshot-without-an-agent).** They cover the three copied-file references, activation, validation and the final install command. If you have an existing agent, the request below lets it prepare only the non-secret settings.
 
-The manifest is a JSON settings file listing the models, harnesses and paths to their configurations. In this workflow, the agent prepares and validates the settings; you run the final install command once in your terminal.
+The manifest is a JSON settings file listing the models, harnesses and paths to their configurations. The example below uses an agent to help prepare and validate them. If you have no agent available, follow the bundled example instructions to copy, edit, enable and validate the settings yourself. In either case, you run the final install command once in your terminal.
 
 You can give the agent this request, replacing brackets with your choices but never including the key itself:
 
@@ -151,9 +161,13 @@ After the runtime paths and credential references have been checked and validati
 2. Choose a scientist, DeepSeek or Local models, your configured model, and dsh or Hermes.
 3. Use a new work folder and send one short task. Once you have a model response, continue with the [Mail end-to-end check](getting-started.en.md#5-play-shiritori-as-an-end-to-end-check).
 
-![Choose a model and harness in Telemetry NEW AGENT](img/native-harness-picker.png)
+![Local models and Hermes selected in the real WSL Telemetry interface](img/wsl-native-harness-picker.png)
 
-Seeing a model in the picker, receiving a reply, and using tools, Mail, exit and resume are separate checks. See the [current limitations](managed-catalog.md#現在の制限).
+[Watch the selection sequence](img/wsl-native-harness-selection.gif) (10.8 seconds): Claude, Codex, DeepSeek and Local models, including dsh/Hermes choices. This is the real Ubuntu WSL backend viewed in Chrome on a Mac. The scientist portraits and choices come from the actual interface. The launch button was not pressed; this recording does not demonstrate key storage or a successful API response.
+
+The Local entry in the image is an example using a Qwen model on Strata. The internal ID `strata` is not a hostname restriction. Before using another server, check the API, HTTPS and key-reference requirements in step 1.
+
+Seeing a model in the picker, receiving a reply, and using tools, Mail, exit and resume are separate checks. See the [current limitations](managed-catalog.en.md#current-limitations).
 
 | Where it stops | What to check next |
 | --- | --- |

@@ -1,5 +1,7 @@
 # Native catalog and effort capabilities
 
+> English: [managed-catalog.en.md](managed-catalog.en.md)
+
 ## 現在の組合せ
 
 [provider・model・harness の説明](getting-started.md#provider-model-harness)から、次の表で使う経路を選びます。API の4組は設定が整えば選択できる候補であり、手元の資格・接続先・model での実機成功を意味しません。
@@ -51,5 +53,6 @@ Hermes の公開既定は `default_effort=null` です。未指定や「Use defa
 - **手動設定**: B（runtime 参照入りの非有効な例の配布）と A（既存 agent による非秘密設定の補助）は、[日本語 README](../examples/native-harnesses/README.md)・[English README](../examples/native-harnesses/README.en.md) に案内があります。コピー後の参照整合、本人の秘密入力と有効化承認が必要です。実資格・標準例を使う Mac / WSL の全 DeepSeek / Local × dsh / Hermes の組合せは通し受け入れ前で、共通 provider ログイン CLI はありません。
 - **OS と画面**: API 起動の catalog は legacy mode に限定されます。Mac に加え Linux の明示した Secret Service 経路を静的に検査しますが、実 WSL の受け入れは未完です。既存 Claude Code / Codex CLI の WSL2 手順や同梱 NEW AGENT の候補表示を、API 経路の対応証拠にはしません。
 - **Local effort**: Hermes の manual 4段は要求を組み立てる能力です。実 Local server の受理・効果は未受け入れです。固定版は temperature を1、出力上限を budget+4096 以上にするため、context 制約で拒否される場合があります。fallback して会話が続いたことを、選んだ effort が効いた証拠にしません。
+- **Localの接続条件**: キーを保存・参照しない構成は現在非対応です。dshは固定adapterと互換のHTTP/HTTPS API、HermesはHTTPSと対応するAPI形式が必要です。キー不要・HTTPのみのサーバーを、任意のharnessでそのまま使えるものではありません。[初期設定の条件](native-setup.md#1-最初に使う組合せを選ぶ)を確認してください。
 - **記憶と resume**: Hermes の新しい子は project と canonical 名ごとの安定した独立 HOME を使い、正規 resume は保存 pin と exact native session ID を照合して同じ HOME を使います。旧共有 HOME の pin は `native_resume_legacy_profile` で停止し、旧データや pin は自動移行しません。合成 provider を使う実 CLI で native store の保存・同 HOME / ID の復帰・別子との非共有を確認しています。resume 時に最新 memory を初回 system prompt へ再注入するものではなく、実 provider・full Mail の通し受け入れは未完です。会話履歴の resume と memory の分離・復帰は別の確認です。
 - **Telegram**: Hermes の共通 Telegram 入口は設計中です。稼働済みの ORRERY 入口として使えるとは案内しません。
