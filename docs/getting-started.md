@@ -9,7 +9,7 @@
 - **対象はcoding agentを使う人**: Claude Code・Codex・DeepSeek・Local LLMで、コードを書き、ファイルを変え、コマンドを実行するagentを使いたい人向けです。これから最初のagentを準備する人も使えます。DeepSeek/LocalはdshまたはHermesで動かし、Claude CodeやCodexへのログインは必要ありません
 - **向いている人**: agent を複数動かしていて、その連携を人間が仲介している人。Codex の出力を Claude Code に貼り直す、アプリやタブを行き来して各 agent の様子を確かめる、といった手作業をなくし、全体を一枚の画面で俯瞰したい人
 - **向いていない人**: agent は 1 体で足りている人。このツールの価値は複数 agent の協調と、その観測にあります
-- **対応する agent**: Claude Code / Codex CLI と、設定済みの DeepSeek / Local の model を dsh / Hermes で動かす agent を扱います。Codex Desktop の task と subagent、Google Antigravity / Gemini は、core install のあとに追加できる optional provider として同じ dashboard に載せられます。それぞれ接続方法と対応範囲が異なります
+- **対応する agent**: Claude Code / Codex / DeepSeek / Local modelsのagentを扱います。DeepSeekとLocal modelsはdsh / Hermesで動かします。Codex Desktopのtaskとsubagent、Google Antigravity / Geminiは、core installのあとに追加できるoptional providerとして同じdashboardに載せられます。それぞれ接続方法と対応範囲が異なります
 
 ## 目的から選ぶ
 
@@ -114,9 +114,9 @@ child の OS terminal は既定で背面に自動で開きます。dashboard か
 
 ### 5. しりとりで通しの確認をする
 
-dsh / Hermesの接続先が未設定なら、先に[同梱例とagent補助で非秘密設定を準備](install.md#同梱例から設定を準備する)します。秘密入力と有効化は本人が承認し、例の配布と通しの確認を分けます。
+dsh / Hermesの接続先が未設定なら、先に[APIの初期設定](native-setup.md)を済ませます。agentなしで設定する手順もあります。まずNEW AGENTから1体を起動し、短い依頼への応答を確認してください。以下のMail往復は2体の準備後に行う追加の確認で、Claude/Codexの導入やcockpitの追加が必須という意味ではありません。
 
-install が本当にできたかを一度に確かめるには、Claude Code と Codex の child にしりとりをさせるのが手軽です。名前の登録、ORRERY Mail の往復、通知の差し込み、dashboard の描画がすべて動いていないと、しりとりは一巡もしません。
+Claude CodeとCodexを両方使う環境では、次の例でしりとりをさせられます。名前の登録、ORRERY Mailの往復、通知の差し込み、dashboardの描画をまとめて確認します。
 
 ```text
 /delegate Codex の child を 1 体作り、その child としりとりをしてください。子の作成はインストール済み ORRERY の /delegate、やりとりは ORRERY Mail (send_message) を使い、同じ道具の指定を子にも渡してください。組み込みの Agent / SendMessage は使わないでください。1 ターンごとに単語を送り合い、10 往復したら結果を報告してください

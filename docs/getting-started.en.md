@@ -9,7 +9,7 @@ For the usual entry point, use the [ORRERY cockpit quick start](https://github.c
 - **People who want to use coding agents**: prepare Claude Code, Codex, DeepSeek or Local LLM agents that write code, change files and run commands. You can start here even if this is your first agent. DeepSeek/Local run through dsh or Hermes and do not require Claude Code or Codex login.
 - **A good fit**: you run several agents and find yourself acting as the go-between: pasting Codex output into Claude Code, or hopping between apps and tabs to check on each one. You want that manual relay gone and the whole picture on one screen.
 - **Not a fit**: one agent is enough for you. The value here is in coordinating several agents and watching them.
-- **Supported agents**: Claude Code / Codex CLI and agents running configured DeepSeek / Local models through dsh / Hermes. Codex Desktop tasks and subagents, and Google Antigravity / Gemini, are optional providers you can add after the core install. Their connection methods and supported features differ.
+- **Supported agents**: Claude Code, Codex, DeepSeek and Local models. DeepSeek and Local models run through dsh or Hermes. Codex Desktop tasks and subagents, and Google Antigravity / Gemini, are optional providers you can add after the core install. Their connection methods and supported features differ.
 
 ## Choose by goal
 
@@ -114,9 +114,9 @@ By default the child's OS terminal opens automatically in the background. If you
 
 ### 5. Play shiritori as an end-to-end check
 
-For an unconfigured dsh / Hermes backend, first [prepare non-secret settings from bundled examples with agent assistance](install.en.md#prepare-settings-from-bundled-examples). Secret input and activation require the person; example distribution and end-to-end acceptance are separate steps.
+For an unconfigured dsh / Hermes backend, first complete [API setup](native-setup.en.md), including the instructions for people without an existing agent. Start one agent from NEW AGENT and check its response to a short request. The Mail round trip below is an additional check once two agents are ready; it does not require you to install Claude/Codex or add the cockpit.
 
-The quickest way to confirm the whole install at once is a game of shiritori (Japanese word chain) between a Claude Code agent and a Codex child. Name registration, ORRERY Mail round trips, notification injection, and dashboard rendering all have to work for even one round to complete.
+If you use both Claude Code and Codex, the following shiritori (Japanese word-chain) example checks name registration, ORRERY Mail round trips, notification injection and dashboard rendering together.
 
 ```text
 /delegate spawn one Codex child and play shiritori with it. Use the installed ORRERY /delegate skill to create the child and ORRERY Mail (send_message) to communicate; pass these tool requirements to the child too. Do not use built-in Agent or SendMessage. Exchange one word per turn and report the result after ten round trips.

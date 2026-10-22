@@ -15,11 +15,15 @@ cockpitはターミナルを並べて操作する画面、Telemetryはagentの�
 | 選ぶもの | 意味 | 自分で用意するもの |
 | --- | --- | --- |
 | DeepSeek | DeepSeekが運営するAPIを使う | DeepSeekのAPIキーとAPI利用残高 |
-| Local（Strataなど） | 自分や管理者が動かしているLLMサーバーを使う | サーバーのURL・model ID・必要な場合はそのサーバー専用のキー |
+| Local models（Strataなど） | 自分や管理者が動かしている対応LLMサーバーを使う | 対応するAPIのURL・model ID・サーバー専用のキー。現在の経路は資格参照が必須 |
 | dsh | モデルとの会話や道具の実行を担当するアプリ。DeepSeek Harnessの略称 | ORRERYのinstallerから追加する。Node.js 24.2以上が必要 |
 | Hermes | dshとは別の、会話や道具を動かすアプリ | ORRERYのinstallerから追加する |
 
 「DeepSeek＋dsh」「DeepSeek＋Hermes」のように、接続先と動かすアプリを1つずつ選びます。dshとHermesを両方入れても、接続先が同じならAPIキーを2本発行する必要はありません。Localを使うためにDeepSeekのアカウントを作る必要もありません。
+
+**Localは接続先の仕様を先に確認します。** dshは固定DeepSeek adapterと互換のAPIを使い、HTTP/HTTPSのURLを受け付けます。HermesはHTTPSが必須で、API形式は`chat_completions`か`anthropic_messages`です。HTTPだけのサーバーをHermesへそのまま指定できません。設定の内部IDは`strata`ですが、Strataのホストに限定するものではありません。任意の「OpenAI互換」サーバーが動くという保証でもありません。現在は両harnessでキーの参照が必要なので、キー不要のサーバーに仮のキーを作って済ませず、管理者と対応条件を確認してください。
+
+**動作確認の範囲：** API起動はmacOSとLinux/Ubuntu WSLのlegacy modeに実装されています。WindowsネイティブのAPI起動は対象外です。全DeepSeek/Local×dsh/Hermesの組合せを、標準設定例から新規導入して通し確認したものではありません。とくにWSLでは鍵束・表示・サービスの同ユーザー接続をOS側で準備する必要があります。候補が表示されることと、キー保存・実接続・Mail・終了/再開が成功することは別です。
 
 Claude Code/Codexの既存ログインとは別の設定です。API起動は現在、ORRERY Mailの接続方式がlegacy modeの[対応組合せ](managed-catalog.md)に限られます。global modeは別のMail接続方式で、このガイドの対象外です。どちらか不明ならagentに確認し、設定を無断で切り替えないでください。
 
@@ -76,7 +80,7 @@ DeepSeekの同梱例には、dsh用の`https://api.deepseek.com/anthropic`とHer
 
 ### Local / Strataを使う場合
 
-サーバー管理者から、接続URL、正式なmodel ID、API形式、必要なら接続キーを受け取ります。DeepSeekのAPIキーとは別物です。キーが同じか、URLに`/v1`などを付けるかを推測しないでください。Localの設定項目は[設定例の変更表](../examples/native-harnesses/README.md#local--strataへ変更する場合)を使います。
+サーバー管理者から、接続URL、正式なmodel ID、API形式、サーバー専用の接続キーを受け取ります。DeepSeekのAPIキーとは別物です。キーが同じか、URLに`/v1`などを付けるかを推測しないでください。上のharnessごとの対応条件を確認し、[設定例の変更表](../examples/native-harnesses/README.md#local--strataへ変更する場合)を使います。
 
 ## 4. APIキーをOSの安全な保存先へ登録する
 
@@ -93,7 +97,9 @@ DeepSeekの同梱例には、dsh用の`https://api.deepseek.com/anthropic`とHer
 
 ### Windows / Ubuntu WSL：Secret Service
 
-Windowsの資格情報マネージャーではなく、Ubuntu側の保存先を使います。Secret Service、同じユーザーのD-Bus session、暗号化された鍵束とそのロック解除、`/usr/bin/secret-tool`が必要です。`libsecret-tools`や`gnome-keyring`のインストールだけで、鍵束作成やGUI表示まで済むわけではありません。未準備なら、この段階で既存agentへOS側の準備を相談してください。別のdaemonを重ねて起動する手順ではありません。
+**初めてUbuntuへキーを保存する場合は、[WSLの鍵束準備・非表示登録ガイド](wsl-keyring.md)へ進みます。** OSアプリの導入、標準GUIでの鍵束作成、保存先の確認まで掲載しています。登録後はそのガイドから手順5へ戻り、以下の保存を重ねて実行しません。新規WSLでこのGUI手順を最後まで通した実機確認はまだ完了していません。
+
+以下は、すでに使える既定の鍵束がある人向けです。Windowsの資格情報マネージャーではなく、Ubuntu側の保存先を使います。Secret Service、同じユーザーのD-Bus session、暗号化された鍵束とそのロック解除、`/usr/bin/secret-tool`が必要です。`libsecret-tools`や`gnome-keyring`のインストールだけでは鍵束作成やGUI表示は完了しません。未準備なら上のガイドでOS側を準備し、別のdaemonを重ねて起動しないでください。
 
 鍵束が使えるUbuntuの**対話画面**で、次を実行します。パイプやファイルからキーを渡さず、標準の非表示入力を使います。
 
@@ -111,7 +117,7 @@ OSが鍵束の作成・unlock画面を出した場合、そこで求められる
 
 ## 5. 設定例をコピーして、接続先をつなぐ
 
-APIキーを保存しても、ORRERYには「どのアプリ・model・保存先を使うか」を渡す必要があります。ここは既存agentに、**秘密を含まない設定だけ**準備させられます。手作業で設定する人は[同梱設定例の手順](../examples/native-harnesses/README.md)を参照してください。
+APIキーを保存しても、ORRERYには「どのアプリ・model・保存先を使うか」を渡す必要があります。**agentを使わない人は、[設定例をコピーして検査する手順](../examples/native-harnesses/README.md#agentを使わずにdeepseekの設定例を準備する)へ進みます。** コピー先の3参照を合わせるコマンド、有効化、検査、最後のinstallまで掲載しています。既存agentを使う場合は、以下の依頼文で秘密を含まない設定だけを準備させられます。
 
 設定ファイル（manifest）は、使うmodelとアプリ、各設定ファイルの場所をまとめたJSONです。以下はagentに準備と検査を手伝わせる例です。利用できるagentがなくても、同梱設定例の手順に従って自分でコピー・編集・有効化・検査を行えます。どちらの場合も、最後のinstallコマンドは利用者がターミナルで1回実行します。
 
@@ -153,7 +159,9 @@ agentが合わせるのは、manifestからdsh/Hermesの設定を指す2箇所�
 2. 科学者、DeepSeekまたはLocal models、設定済みmodel、dshまたはHermesを選びます。
 3. 新しい作業フォルダーを指定し、まず短い依頼を1つ送ります。modelの応答を確認してから、[Mailの通し確認](getting-started.md#5-しりとりで通しの確認をする)へ進みます。
 
-![TelemetryのNEW AGENTでmodelとharnessを選ぶ](img/native-harness-picker.png)
+![WSLの実TelemetryでLocal modelsとHermesを選択した画面](img/wsl-native-harness-picker.png)
+
+[選択の流れをGIFで見る](img/wsl-native-harness-selection.gif)（10.8秒）：Claude、Codex、DeepSeek、Local modelsと、dsh/Hermesの選択を示します。Ubuntu WSLの実backendをMacのChromeから表示した画面です。科学者の肖像や候補は実画面のもので、起動ボタンは押していません。キー保存やAPI応答の成功を示す録画ではありません。
 
 候補が見えること、応答が返ること、道具・Mail・終了・会話再開が使えることは、それぞれ別の確認です。[対応範囲](managed-catalog.md#現在の制限)も参照してください。
 

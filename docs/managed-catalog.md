@@ -1,5 +1,7 @@
 # Native catalog and effort capabilities
 
+> English: [managed-catalog.en.md](managed-catalog.en.md)
+
 ## 現在の組合せ
 
 [provider・model・harness の説明](getting-started.md#provider-model-harness)から、次の表で使う経路を選びます。API の4組は設定が整えば選択できる候補であり、手元の資格・接続先・model での実機成功を意味しません。

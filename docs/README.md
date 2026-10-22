@@ -13,6 +13,7 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 ## はじめる
 
 - [DeepSeek・Local LLMの初期設定](native-setup.md) — 共通導入後、dsh/Hermes・APIキー・接続設定・画面からの起動へ。新規・既存利用者とも使え、Claude/Codexのログインは不要。
+- [Ubuntu WSLにAPIキーを保存する](wsl-keyring.md) — 標準GUIで鍵束を準備し、APIキーを非表示入力で保存する初回手順。
 
 - [目的と provider・model・harness を選ぶ](getting-started.md#provider-model-harness) — 観測、API の model で作成、agent 同士の連携の3導線。[対応組合せと現在の制限](managed-catalog.md)で準備・OS・画面の範囲を確認する。
 - [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート) — 1行で両方を入れ、画面の初回ガイドから始める。

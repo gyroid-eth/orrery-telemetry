@@ -13,8 +13,9 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 ## Start here
 
 - [Set up DeepSeek or Local LLMs](native-setup.en.md) — After the shared install, prepare dsh/Hermes, key storage and connection settings, then launch from the screen. This works for new and returning users; Claude/Codex login is not required.
+- [Save an API key in Ubuntu WSL](wsl-keyring.en.md) — Prepare a keyring with the standard GUI and save the key through hidden input.
 
-- [Choose a goal, provider, model and harness](getting-started.en.md#provider-model-harness) — Observe agents, create one with an API model, or coordinate agents. Check the [combinations and limitations (Japanese)](managed-catalog.md). Configured DeepSeek/Local models offer dsh/Hermes selection in NEW AGENT; runtime and API settings must be prepared separately.
+- [Choose a goal, provider, model and harness](getting-started.en.md#provider-model-harness) — Observe agents, create one with an API model, or coordinate agents. Check the [combinations and limitations](managed-catalog.en.md). Configured DeepSeek/Local models offer dsh/Hermes selection in NEW AGENT; runtime and API settings must be prepared separately.
 - [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) — Install both with one line and start with the on-screen first-flight guide.
 - [Standalone getting started](getting-started.en.md) — Audience, terms, standalone install, agent startup, and an end-to-end Mail check.
 
@@ -84,4 +85,4 @@ Documents without a translation are labelled with their original language. Image
 - [dsh thin launch (Japanese)](dsh-thin.md)
 
 - [Native context and helper models](native-capabilities.md) — dsh / Hermes context observations and per-model capabilities.
-- [Native catalog and effort capabilities (Japanese)](managed-catalog.md)
+- [Native catalog and effort capabilities](managed-catalog.en.md)

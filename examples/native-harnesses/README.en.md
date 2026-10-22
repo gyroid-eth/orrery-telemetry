@@ -39,6 +39,96 @@ Both harnesses use four files and thirteen reference slots: ten runtime referenc
 peer-file paths. These are installer/agent tasks, not thirteen manual entries by the person.
 B saves runtime transcription; destination selection, secret input, activation and real acceptance remain.
 
+
+### Prepare a DeepSeek snapshot without an agent
+
+You can start with the installer's B snapshot without Claude Code or Codex.
+First complete [steps 2–4 of the setup guide](../../docs/native-setup.en.md#2-install-the-harnesses):
+install a harness and store your key in the OS. The copy below does not retrieve a key.
+
+Run this from the Telemetry source folder. Replace `SNAPSHOT` with the absolute path after
+`inactive snapshot (copy and finish setup):`, and `PYTHON` with the absolute Python executable
+path after `python:` in the same installer's output. Choose a new `CONFIG_DIR`.
+The copy stops if that destination already exists. Choose another location rather than
+deleting or overwriting existing settings.
+
+```bash
+# Replace these two paths with the values printed by your installer.
+SNAPSHOT='/absolute/path/to/examples/native-harnesses/resolved/snapshot-id'
+PYTHON='/absolute/path/printed-after-python'
+CONFIG_DIR="$HOME/.config/orrery/native-deepseek"
+
+"$PYTHON" - "$SNAPSHOT" "$CONFIG_DIR" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]).expanduser().resolve(strict=True)
+target = Path(sys.argv[2]).expanduser().resolve()
+names = (
+    "manifest.example.json", "dsh-config.example.json",
+    "dsh-backends.example.json", "hermes-config.example.json",
+)
+documents = {name: json.loads((source / name).read_text()) for name in names}
+manifest = documents["manifest.example.json"]
+if manifest.get("enabled") is not False or not manifest.get("harnesses"):
+    raise SystemExit("STOP: choose an inactive installer-generated runtime snapshot")
+for harness, entry in manifest["harnesses"].items():
+    if harness not in ("dsh", "hermes"):
+        raise SystemExit("STOP: unknown harness")
+    entry["config_file"] = str(target / (harness + "-config.example.json"))
+documents["dsh-config.example.json"]["backend_file"] = str(
+    target / "dsh-backends.example.json"
+)
+os.umask(0o077)
+target.mkdir(mode=0o700, parents=True, exist_ok=False)
+for name, document in documents.items():
+    with (target / name).open("x") as stream:
+        json.dump(document, stream, indent=2)
+        stream.write("\n")
+print("COPIED_INACTIVE:", target / "manifest.example.json")
+print("HARNESS:", ", ".join(manifest["harnesses"]))
+PY
+```
+
+`COPIED_INACTIVE:` and `HARNESS:` confirm the copy; it is still disabled.
+`FileExistsError` means the destination already exists. If the installer produced only static
+examples, return to harness installation instead of copying them here.
+With only one harness installed, use only the harness shown after `HARNESS:`; ignore the unused JSON.
+
+Open the copied `manifest.example.json` in a text editor. For the standard DeepSeek model and
+credential selector (`orrery-dsh-deepseek` / `api-key`), keep the supplied URLs and references.
+After confirming OS key storage and your harness choice, change only the first
+`"enabled": false` to `"enabled": true` and save. Never put the key itself in JSON.
+For a different credential selector or a Local model, apply the changes below first.
+
+In the same terminal, validate the harness you will use. For Hermes, replace
+`--harness dsh` with `--harness hermes`. If you use both, validate each once.
+
+```bash
+"$PYTHON" hooks/harness_child.py validate \
+  --manifest "$CONFIG_DIR/manifest.example.json" \
+  --harness dsh --backend deepseek --model deepseek-flash \
+  && printf 'CONFIG_CHECK_OK\n'
+```
+
+`CONFIG_CHECK_OK` means the configuration check passed; it does not check API access or key validity.
+`harness_not_enabled` means the copy is still disabled; `model_mismatch` means the model is not
+in the manifest's list. For `KeyError`, check that your harness appears after `HARNESS:` above.
+For `runtime_not_prepared`, check harness installation and the snapshot's generation.
+For another error, inspect its message without sharing a key and resolve it
+before continuing.
+
+After validation, run this once yourself from the same source folder. Review any proposed
+changes and answer the yes/no prompts yourself. After `Install complete`, reload the browser
+and [try one agent](../../docs/native-setup.en.md#6-try-one-agent-from-new-agent).
+
+```bash
+./scripts/install.sh --keep-mail --managed-spawn-config "$CONFIG_DIR/manifest.example.json"
+```
+
+
 ## A: missing runtimes, model changes and adjustments
 
 The static [manifest](manifest.example.json), [dsh config](dsh-config.example.json),
@@ -61,8 +151,8 @@ absolute paths consistent.
 | File | Fields to change |
 | --- | --- |
 | Manifest | Set `backends.strata.model` / `models` to formal model IDs confirmed by the person |
-| dsh backends | Rename the entry to `backends.strata`; set `model` and `base_url` to the formal ID and the person's HTTPS URL |
-| Hermes config | Rename the entry to `profiles.strata`; set `model`, `base_url` and `api_mode`. Use the server's supported `chat_completions` or `anthropic_messages` mode. Choose a `provider` name that does not collide with a builtin, such as `orrery-strata-manual` |
+| dsh backends | Rename the entry to `backends.strata`; set `model` and `base_url` to the formal ID and a compatible HTTP/HTTPS API URL |
+| Hermes config | Rename the entry to `profiles.strata`; set `model`, `base_url` and `api_mode`. HTTPS is required. Use the server's supported `chat_completions` or `anthropic_messages` mode. Choose a `provider` name that does not collide with a builtin, such as `orrery-strata-manual` |
 | OS credential reference | On Mac, point dsh's `backends.strata.keychain` and Hermes's `profiles.strata.key_cmd` to the same person-selected credential. On WSL, use only the manifest's `backends.strata.credential_ref` and remove the corresponding keychain/key_cmd fields |
 
 Do not retain the DeepSeek URL, model or credential selector while treating the copy as Local.

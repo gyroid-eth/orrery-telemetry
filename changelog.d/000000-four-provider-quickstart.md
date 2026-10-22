@@ -1,3 +1,7 @@
 ### DeepSeek・Local LLMもREADMEの冒頭から選べる導入案内
 
 README・ドキュメント索引・単独導入の入口を日英で整理しました。Claude Code・Codex・DeepSeek・Local LLMを最初から示し、共通installのあと、CLIへのログインかdsh/HermesとAPIの初期設定へ分岐します。DeepSeek/Localだけ使う場合にClaude/Codexの導入を前提とせず、APIの初期設定ガイドも新規利用者から開ける説明にしました。共通導入だけでAPI設定まで完了するという保証は加えていません。
+
+agentを使わない人向けに、導入時の設定例を私有フォルダーへコピーし、参照先を合わせて有効化・検査・反映する手順を追加しました。Ubuntu WSLでは標準GUIでの鍵束作成と非表示入力によるキー保存を日英で案内します。新規WSLでの鍵束準備を含む全経路の実機確認は未完了と明記し、保存成功と実接続・Mailの成功を区別しています。
+
+Localのキー参照、dshの対応API、HermesのHTTPSとAPI形式の条件を明示し、詳しい対応範囲にも英語版を追加しました。WSLの実Telemetryを表示したNEW AGENTのPNG・選択GIFを掲載し、科学者の肖像と4系統、dsh/Hermesの選択を示します。録画は起動前の選択で、実API応答の保証ではありません。API generationは変更しません。
