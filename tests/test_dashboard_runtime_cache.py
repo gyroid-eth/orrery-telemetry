@@ -299,3 +299,44 @@ def test_question_footer_before_numbered_options_remains_question():
     parsed = server._parse_runtime("Enter to select · Esc to cancel\n❯ 1. Option")
     assert parsed["act_state"] == "question"
     assert parsed["work_disp"] is None
+
+
+_CLAUDE_EDIT_APPROVAL = (
+    "Edit file\nfixture.json\n"
+    "────────────────────────────────────────\n"
+    "Do you want to make this edit to fixture.json?\n"
+    "❯ 1. Yes\n"
+    "  2. Yes, and allow Claude to edit files in its folder for this session\n"
+    "  3. No\n\n"
+    "Esc to cancel · Tab to amend\n"
+)
+
+
+@pytest.mark.parametrize("history", ["", _OLD_WORK + "\n"])
+@pytest.mark.parametrize("footer", ["Esc to cancel", "Esc to cancel · Tab to amend"])
+def test_current_claude_edit_approval_with_cancel_footer_is_ask(history, footer):
+    text = history + _CLAUDE_EDIT_APPROVAL.replace("Esc to cancel · Tab to amend", footer)
+    parsed = server._parse_runtime(text)
+    assert parsed["act_state"] == "ask"
+    assert parsed["work_secs"] is None
+    assert parsed["work_disp"] is None
+
+
+@pytest.mark.parametrize("text", [
+    "Esc to cancel · Tab to amend\n",
+    "❯ 1. Yes\n2. No\nEsc to cancel · Tab to amend\n",
+    _CLAUDE_EDIT_APPROVAL + "The tool finished.\n",
+    _CLAUDE_EDIT_APPROVAL.replace("Esc to cancel · Tab to amend", "Please use Esc to cancel · Tab to amend"),
+    "```text\n" + _CLAUDE_EDIT_APPROVAL + "```\n" + _CLAUDE_INPUT,
+    _CLAUDE_EDIT_APPROVAL + _CLAUDE_INPUT,
+])
+def test_claude_edit_approval_footer_does_not_promote_old_or_incomplete_ui(text):
+    assert server._parse_runtime(text)["act_state"] == "wait"
+
+
+def test_current_work_after_claude_edit_approval_remains_work():
+    parsed = server._parse_runtime(
+        _CLAUDE_EDIT_APPROVAL + "\n✳ Stewing… (7s · ↓ 1.1k tokens)\n" + _CLAUDE_INPUT
+    )
+    assert parsed["act_state"] == "work"
+    assert parsed["work_disp"] == "7s"
