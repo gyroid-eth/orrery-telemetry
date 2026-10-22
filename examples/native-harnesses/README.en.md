@@ -120,6 +120,13 @@ For `runtime_not_prepared`, check harness installation and the snapshot's genera
 For another error, inspect its message without sharing a key and resolve it
 before continuing.
 
+![A real WSL terminal after copying the examples and passing dsh and Hermes configuration checks](../../docs/img/wsl-copy-static-validation.png)
+
+[Copy and configuration-check GIF (10 seconds)](../../docs/img/wsl-copy-static-validation.gif).
+This non-interactive example ran on real WSL ttyd, viewed in Chrome on a Mac. It holds three captured screens long enough to read; it is not a recording of manual typing or real-time progress.
+The recording's temporary copy is returned to `enabled: false` at the end. No API connection, key retrieval or installation occurs.
+For your own setup, keep the validated copy set to `enabled: true` when continuing below.
+
 After validation, run this once yourself from the same source folder. Review any proposed
 changes and answer the yes/no prompts yourself. After `Install complete`, reload the browser
 and [try one agent](../../docs/native-setup.en.md#6-try-one-agent-from-new-agent).

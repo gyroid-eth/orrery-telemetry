@@ -119,6 +119,13 @@ Hermesを使う人は `--harness dsh` を `--harness hermes` に変更します�
 `runtime_not_prepared` なら、harnessの導入結果とsnapshotの世代を確認します。
 ほかのエラーはキーを含めず文面を確認し、検査が通るまでinstallへ進みません。
 
+![実WSLで設定例をコピーし、dshとHermesの設定検査に成功したターミナル](../../docs/img/wsl-copy-static-validation.png)
+
+[コピーから設定検査までのGIF（10秒）](../../docs/img/wsl-copy-static-validation.gif)。
+実WSLのttydをMacのChromeから表示した非対話の実行例です。3つの実画面を読みやすい長さで表示しており、手入力や実時間の録画ではありません。
+収録用コピーは最後に `enabled: false` へ戻しています。API接続・キーの取得・installは行っていません。
+自分の設定で次へ進む場合は、検査に通ったコピーを `enabled: true` のまま使います。
+
 検査に成功したら、利用者が同じフォルダーで次を1回実行します。変更案が出た場合は
 内容を確認して本人がyes/noを選びます。`Install complete` の後にブラウザを再読み込みし、
 [最初の1体を試す](../../docs/native-setup.md#6-new-agentから1体だけ試す)へ進みます。
