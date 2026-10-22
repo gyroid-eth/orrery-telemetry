@@ -123,9 +123,9 @@ before continuing.
 ![A real WSL terminal after copying the examples and passing dsh and Hermes configuration checks](../../docs/img/wsl-copy-static-validation.png)
 
 [Copy and configuration-check GIF (10 seconds)](../../docs/img/wsl-copy-static-validation.gif).
-This non-interactive example ran on real WSL ttyd, viewed in Chrome on a Mac. It holds three captured screens long enough to read; it is not a recording of manual typing or real-time progress.
-The recording's temporary copy is returned to `enabled: false` at the end. No API connection, key retrieval or installation occurs.
-For your own setup, keep the validated copy set to `enabled: true` when continuing below.
+This non-interactive example ran in a real WSL terminal, viewed in Chrome on a Mac. It holds three captured screens long enough to read; it is not a recording of manual typing or real-time progress.
+The capture's `copy.py` file contains the copy code shown above. Extra lines such as `STAGE_*` are capture checks, not output from your commands. Run the code blocks above and look for `COPIED_INACTIVE`, `HARNESS` and `CONFIG_CHECK_OK`. The `/tmp/...` path is also specific to the capture.
+**For your own setup, keep the validated copy set to `enabled: true` when continuing below.** The screen's final `FINAL_COPY_ENABLED=false` only cleans up the capture's temporary copy. No API connection, key retrieval or installation occurs.
 
 After validation, run this once yourself from the same source folder. Review any proposed
 changes and answer the yes/no prompts yourself. After `Install complete`, reload the browser

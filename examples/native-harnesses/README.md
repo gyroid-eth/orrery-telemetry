@@ -122,9 +122,9 @@ Hermesを使う人は `--harness dsh` を `--harness hermes` に変更します�
 ![実WSLで設定例をコピーし、dshとHermesの設定検査に成功したターミナル](../../docs/img/wsl-copy-static-validation.png)
 
 [コピーから設定検査までのGIF（10秒）](../../docs/img/wsl-copy-static-validation.gif)。
-実WSLのttydをMacのChromeから表示した非対話の実行例です。3つの実画面を読みやすい長さで表示しており、手入力や実時間の録画ではありません。
-収録用コピーは最後に `enabled: false` へ戻しています。API接続・キーの取得・installは行っていません。
-自分の設定で次へ進む場合は、検査に通ったコピーを `enabled: true` のまま使います。
+実WSLのターミナルをMacのChromeから表示した非対話の実行例です。3つの実画面を読みやすい長さで表示しており、手入力や実時間の録画ではありません。
+画面の `copy.py` は上記のコピー処理をファイルにした収録用スクリプトです。`STAGE_*` などは収録用の追加検査で、利用者のコマンドには表示されません。実行するのは上のコードブロックで、成功の目印は `COPIED_INACTIVE`・`HARNESS`・`CONFIG_CHECK_OK` です。画面の `/tmp/...` も収録用の保存先です。
+**自分の設定では、検査に通ったコピーを `enabled: true` のまま使ってください。** 画面末尾の `FINAL_COPY_ENABLED=false` は収録用コピーの後片付けです。API接続・キーの取得・installは行っていません。
 
 検査に成功したら、利用者が同じフォルダーで次を1回実行します。変更案が出た場合は
 内容を確認して本人がyes/noを選びます。`Install complete` の後にブラウザを再読み込みし、
