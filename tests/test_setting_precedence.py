@@ -969,7 +969,7 @@ def test_protection_renderers_preserve_literal_extras_as_data(tmp_path, writer):
     value = '/vault/O\'Brien\\folder & <angles> "quotes" %h:$literal:$(not-run)'
     values = {
         "HOME": str(tmp_path), "DRY_RUN": "false", "PYTHON_BIN": sys.executable,
-        "PYTHON": sys.executable, "REPO_ROOT": str(ROOT), "LABEL": "test",
+        "PYTHON": sys.executable, "REPO_ROOT": str(ROOT), "SCRIPT_DIR": str(ROOT / "scripts"), "LABEL": "test",
         "LABEL_PREFIX": "test", "EXTRA_PROTECTED_ROOTS": value,
         "LEGACY_PROTECTED_ROOTS": "/legacy", "PRESERVE_LEGACY_PROTECTED_ROOTS": "true",
         "INSTALL_DIR": str(tmp_path / "install"), "MANIFEST": str(tmp_path / "manifest.json"),
