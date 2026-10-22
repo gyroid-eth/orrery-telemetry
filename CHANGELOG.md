@@ -10,6 +10,28 @@
 
 ---
 
+## 2026.10.23
+
+### 同日中の追加リリースに枝番を使えるようにする
+
+変更履歴の正規リリーススクリプトが、日付形式に加えて`YYYY.MM.DD.N`を受け付けます。同日の`.1`から正の整数で増やし、`.9`より`.10`を新しい版として扱います。公開済みの節・VERSION・タグを上書きする処理は追加せず、同じ版の再利用や古い版への巻き戻しは引き続き拒否します。API generationは変更しません。
+
+### DeepSeek・Local LLMもREADMEの冒頭から選べる導入案内
+
+README・ドキュメント索引・単独導入の入口を日英で整理しました。Claude Code・Codex・DeepSeek・Local LLMを最初から示し、共通installのあと、CLIへのログインかdsh/HermesとAPIの初期設定へ分岐します。DeepSeek/Localだけ使う場合にClaude/Codexの導入を前提とせず、APIの初期設定ガイドも新規利用者から開ける説明にしました。共通導入だけでAPI設定まで完了するという保証は加えていません。
+
+agentを使わない人向けに、導入時の設定例を私有フォルダーへコピーし、参照先を合わせて有効化・検査・反映する手順を追加しました。Ubuntu WSLでは標準GUIでの鍵束作成と非表示入力によるキー保存を日英で案内します。新規WSLでの鍵束準備を含む全経路の実機確認は未完了と明記し、保存成功と実接続・Mailの成功を区別しています。
+
+Localのキー参照、dshの対応API、HermesのHTTPSとAPI形式の条件を明示し、詳しい対応範囲にも英語版を追加しました。WSLの実Telemetryを表示したNEW AGENTのPNG・選択GIFを掲載し、科学者の肖像と4系統、dsh/Hermesの選択を示します。録画は起動前の選択で、実API応答の保証ではありません。API generationは変更しません。
+
+### 既存利用者向けにDeepSeek・Localの初期設定を案内
+
+通常更新と初回API追加を区別し、dsh/Hermesの導入、DeepSeek APIキーの取得、Mac/Ubuntuでの非表示保存、設定例の準備、NEW AGENTからの確認までを日英のガイドにまとめました。README・install・設定例から同じ案内へ進めます。APIキーの登録画面や自動ログイン機能を追加する変更ではありません。
+
+### Claudeのファイル編集承認待ちを表示
+
+編集確認の選択肢に「Esc to cancel · Tab to amend」が続く画面もAPPROVALとして表示します。過去の承認画面が残っていても、現在の入力待ちや作業中の状態を優先します。承認操作そのものは利用者が行います。
+
 ## 2026.10.22
 
 DeepSeek と Strata（Local/Qwen）を dsh / Hermes から選ぶ標準 NEW AGENT、子ごとの安定した HOME と会話の再開、macOS Keychain / Linux Secret Service の資格参照、設定例と画面付き手順をまとめたリリースです。公開 API は世代26です。
