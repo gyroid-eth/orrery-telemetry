@@ -110,7 +110,7 @@ busctl --user call org.freedesktop.secrets /org/freedesktop/secrets \
   service orrery-dsh-deepseek account api-key
 ```
 
-初回で何もなければ`ao 0 ao 0`（Unlock済み0件・Locked0件）です。項目があれば、上書きせず登録工程を飛ばすか、本人が既存項目の扱いを決めます。削除や再保存で対処しないでください。
+初回で一致する項目がなければ、Unlock済み・Lockedの件数はどちらも0です（`busctl`の表示例：`aoao 0 0`）。項目があれば、上書きせず登録工程を飛ばすか、本人が既存項目の扱いを決めます。削除や再保存で対処しないでください。
 
 ## 5. APIキーを非表示入力で保存する
 
