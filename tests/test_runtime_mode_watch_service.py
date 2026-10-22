@@ -175,6 +175,8 @@ def test_legacy_gemini_child_keeps_inherited_mode_when_default_changes(tmp_path)
     root=tmp_path/'installed';(root/'hooks').mkdir(parents=True)
     (root/'bin/lib').mkdir(parents=True)
     shutil.copy2(ROOT/'hooks/spawn_gemini_child.sh',root/'hooks/spawn_gemini_child.sh')
+    for helper in ('project-context.sh', 'installed-env.py'):
+        shutil.copy2(ROOT / 'hooks' / helper, root / 'hooks' / helper)
     shutil.copy2(ROOT/'bin/lib/global-client-loader.sh',root/'bin/lib/global-client-loader.sh')
     (root/'env.sh').write_text('export AGENTSTACK_RUNTIME_MODE=global\n'
         'trap \'printf "%s" "$AGENTSTACK_RUNTIME_MODE" > "$AGENTSTACK_HOME/mode.txt"\' EXIT\n')

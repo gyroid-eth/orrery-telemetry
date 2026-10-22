@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -315,6 +316,27 @@ class ReleaseHookTests(unittest.TestCase):
 
             self.assertEqual(server.requests, [])
             self.assertEqual(list((runtime / "file_release_debounce").iterdir()), [])
+
+    def test_managed_alias_and_dotdot_rereservation_invalidates_canonical_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, _Server() as server:
+            root = Path(directory).resolve()
+            env, project, runtime = self.make_environment(root, server.url)
+            env["AGENTSTACK_PROTECTION_CONTEXT"] = "workspace-v1"
+            alias = root / "alias"
+            alias.symlink_to(project, target_is_directory=True)
+            state_dir = runtime / "file_release_debounce"
+            state_dir.mkdir()
+            key = hashlib.sha1(b"PluckyEinstein\0note.md").hexdigest()
+            pending = state_dir / key
+            for path in (alias / "note.md", project / "nested/../note.md"):
+                with self.subTest(path=path):
+                    pending.write_text("older-release-worker")
+                    result = self.run_hook(INVALIDATE_HOOK, json.dumps({
+                        "session_id": "session-1", "tool_input": {"paths": [str(path)]}
+                    }), env, project)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(pending.exists())
+            self.assertEqual(server.requests, [])
 
     def test_missing_worker_falls_back_to_immediate_release(self) -> None:
         with tempfile.TemporaryDirectory() as directory, _Server() as server:

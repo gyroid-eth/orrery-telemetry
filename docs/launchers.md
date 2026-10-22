@@ -28,6 +28,16 @@ agent-start
 
 優先順位は明示引数、`fzf` picker、現在 directory の順です。
 
+## 起動 workspace と reservation の保護範囲
+
+namespace の選択は変えません。既存の環境設定で上書きしなければ、installed `AGENTSTACK_PROJECT_KEY` を協調 namespace として使います。path 形式の key でも異なる repository の agent をまとめられ、その path 自体は保護に追加しません。作業 directory の選択で namespace は変わりません。
+
+top-level と delegated child 起動では、設定順の `AGENTSTACK_EXTRA_PROTECTED_ROOTS` の後へ、実際に起動する物理作業 directory を足して `AGENTSTACK_PROTECTED_ROOTS` を計算します。Git root は検出しますが保護を自動的には拡張しません。上位 root が必要なら extras に明示します。別名と重複は順序を変えずにまとめます。resume・persistent の再解決は後続PRで扱います。
+
+継承した `GIT_DIR`、`GIT_WORK_TREE`、`GIT_COMMON_DIR` は workspace の判定に使わず、起動 process から取り除きます。Git metadata が壊れていれば別 directory へ切り替えず起動を停止します。新しい tmux session には server に残った旧 root ではなく現在の workspace context を渡し、server の global environment は変えません。`AGENTSTACK_VAULT`、Codex の sandbox/approval、OAuth の扱いは変えません。
+
+install/update は installed の旧保護 list を一度だけ自動移行します。ambient shell/tmux の `AGENTSTACK_PROTECTED_ROOTS` は取り込まず、非空で installed と異なる旧値は extras があっても警告します。相対 reservation 名は最初に一致する root から決まるため、cutover 前に作業を完了するか予約を解放し、更新後に影響する session をまとめて再起動してください。[保護設定の自動移行](configuration.md#reservation-の保護範囲と移行)を参照してください。
+
 ## Codex と Node.js の PATH
 
 Codex の子は `hooks/codex-bin.sh` の共通処理で CLI を選び、login shell 内で `codex --version` を確認してから起動します。doctor も同じ選択・確認処理を使います。nvm の bin は探索対象です。選んだ Codex の symlink を解決した先の directory に実行可能な `node` があれば、その directory を実行時の PATH に追加します。nvm の version directory は先頭に置き、共有 prefix は既存の順序を保って後ろに追加します。既にその node が見えている場合は変更しません。npm の symlink の先に node がない場合は、選んだ shim と同じ bin の node を使います。どちらにも node がなければ、login shell の PATH と `~/.local/bin` を使います。
@@ -35,6 +45,8 @@ Codex の子は `hooks/codex-bin.sh` の共通処理で CLI を選び、login sh
 launcher は同梱の `codex-bin.sh` を必須とし、欠落・互換性不足なら再 install の案内付きで停止します。doctor は自身と同じ配置の helper を優先し、利用できなければ未確認と表示します。
 
 dashboard の `SPAWN FAILED` は、今回の起動区間の launcher の原因を登録の後始末のエラーより先に表示します。明示 reason、通常の Error の順で確認し、全候補失敗の場合だけ候補の拒否理由を添えます。node が見つからない場合は、CLI の置き場所に対応する Node.js が使えるかを確認してください。実際の WSL 環境の確認手順は [トラブルシューティング](troubleshooting.md#nvm-の-codex-で-node-が見つからない) を参照してください。
+
+warm pool の再利用判定は今回変更しません。既存 `claim-model` は事前起動済み process の cwd・保護 root を保証しないため、pool を使う環境での保護範囲保証と速度影響は後続の確認事項です。
 
 ## tmux session
 

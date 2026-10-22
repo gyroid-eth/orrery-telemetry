@@ -28,6 +28,16 @@ agent-start
 
 The precedence order is an explicit argument, the `fzf` picker, then the current directory.
 
+## Launch workspace and reservation protection
+
+Namespace selection is unchanged: installed `AGENTSTACK_PROJECT_KEY` still supplies the coordination namespace unless overridden by the existing environment settings. A path-shaped key can coordinate agents in different repositories and does not add that path to protection. Selecting a working directory does not change the namespace.
+
+Top-level and delegated-child launches compute `AGENTSTACK_PROTECTED_ROOTS` from the ordered `AGENTSTACK_EXTRA_PROTECTED_ROOTS`, then the selected physical working directory. Git root discovery does not automatically expand protection: include an ancestor explicitly in extras if needed. Aliases and duplicates are collapsed in order. Resume and persistent-agent re-resolution are follow-up work.
+
+Inherited `GIT_DIR`, `GIT_WORK_TREE`, and `GIT_COMMON_DIR` do not choose the workspace and are removed from the launched process. Broken Git metadata stops the launch rather than selecting another directory. New tmux sessions receive the current workspace context instead of the server's stale roots; the server's global environment is not changed. `AGENTSTACK_VAULT`, Codex sandbox/approval, and OAuth behavior are unchanged.
+
+Install/update automatically migrates the installed legacy protection list once. Ambient shell/tmux `AGENTSTACK_PROTECTED_ROOTS` is never imported; a different nonempty legacy value warns even when extras exist. Before cutover, finish work or release reservations, then restart affected sessions together after updating because relative reservation names use the first matching root. See [automatic protection migration](configuration.en.md#reservation-protection-and-migration).
+
 ## Codex and the Node.js PATH
 
 Codex children select and validate the CLI with the shared `hooks/codex-bin.sh` functions, running `codex --version` in the login-shell launch context. Doctor uses the same selection and validation. The search includes nvm bin directories. If executable `node` exists beside the resolved Codex symlink target, that directory is included in the execution PATH. nvm version directories take precedence; shared prefixes retain existing command order and are appended when absent. If the selected node already resolves there, PATH is unchanged. For npm symlinks without adjacent node at the target, the selected shim's bin directory is used when it contains node. Otherwise the login-shell PATH and `~/.local/bin` apply.
@@ -35,6 +45,8 @@ Codex children select and validate the CLI with the shared `hooks/codex-bin.sh` 
 The launcher requires its bundled `codex-bin.sh` and stops with reinstall guidance when it is missing or incompatible. Doctor prefers its adjacent helper and reports unavailable checks when it cannot use it.
 
 Dashboard `SPAWN FAILED` reads the current launch interval, showing explicit reasons or the first ordinary error before registration cleanup errors. Candidate rejection details are added only when all candidates fail. If node cannot be found, check Node.js for the selected CLI installation.
+
+Warm-pool selection is unchanged in this PR. The existing `claim-model` contract cannot prove a prestarted provider's cwd or protected roots; ensuring that boundary for warm-pool users and measuring the performance impact remain separate work.
 
 ## tmux session
 

@@ -269,6 +269,7 @@ def test_direct_bootstrap_preserves_pinned_legacy_before_existing_flow(tmp_path,
     # An early return from the existing legacy registration library avoids any
     # provider/network work and samples the real bootstrap's selected values.
     (stack/'bin/lib/agentstack-register.sh').write_text('return 0\n')
+    shutil.copytree(ROOT/'hooks', stack/'hooks')
     source=ROOT/f'bin/agentstack-{provider}-bootstrap'
     shutil.copy2(source,stack/'bin'/source.name)
     (stack/'env.sh').write_text('touch "'+str(tmp_path/'env-read')+'"\nexport AGENTSTACK_RUNTIME_MODE=global\nexport AGENTSTACK_GLOBAL_SERVER_CONFIG=/unused/new-config.json\n')
@@ -489,6 +490,9 @@ def test_actual_continuation_never_admits_an_unverified_default(
         'printf "legacy_register_reached mode=%s url=%s\\n" '
         '"$AGENTSTACK_RUNTIME_MODE" "$AGENTSTACK_MCP_URL"; exit 0\n'
     )
+    (stack/'hooks').mkdir(exist_ok=True)
+    for name in ('project-context.sh', 'installed-env.py'):
+        shutil.copy2(ROOT/'hooks'/name, stack/'hooks'/name)
     env_file = stack / 'env.sh'
     if default == 'dangling':
         env_file.symlink_to(stack / 'missing-env.sh')
@@ -504,7 +508,8 @@ def test_actual_continuation_never_admits_an_unverified_default(
             env_file.chmod(0)
     env = {**os.environ, 'HOME': str(tmp_path), 'AGENTSTACK_HOME': str(stack),
            'AGENTSTACK_LABEL_PREFIX': 'org.agentstack.test.continuation-default',
-           'AGENTSTACK_MCP_URL': 'http://127.0.0.1:1/live'}
+           'AGENTSTACK_MCP_URL': 'http://127.0.0.1:1/live',
+           'AGENTSTACK_EXTRA_PROTECTED_ROOTS': ''}
     for key in ('AGENTSTACK_RUNTIME_MODE', 'AGENTSTACK_CLIENT_CONFIG',
                 'AGENTSTACK_GLOBAL_SERVER_CONFIG', 'AGENTSTACK_ENV_FILE',
                 'AGENTSTACK_PROJECT_KEY', 'PROJECT_KEY', 'AGENT_NAME',

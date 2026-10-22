@@ -22,7 +22,7 @@ AGENT="${AGENT_RESULT#*|}"
 
 QUERY_DOCUMENT="$TOOL_INPUT" QUERY_STATE_DIR="$STATE_DIR" \
     QUERY_AGENT="$AGENT" QUERY_ROOTS="$PROTECTED_ROOTS" QUERY_CWD="$(pwd)" \
-    QUERY_HOME="$HOME" python3 - <<'PY' >/dev/null 2>&1 || true
+    QUERY_HOME="$HOME" QUERY_PROTECTION_CONTEXT="${AGENTSTACK_PROTECTION_CONTEXT:-}" python3 - <<'PY' >/dev/null 2>&1 || true
 import hashlib
 import json
 import os
@@ -45,13 +45,14 @@ if not isinstance(raw_paths, list):
 
 home = os.environ["QUERY_HOME"]
 cwd = os.environ["QUERY_CWD"]
+canonical = os.environ.get("QUERY_PROTECTION_CONTEXT") == "workspace-v1"
 roots = []
 for raw_root in os.environ.get("QUERY_ROOTS", "").split(":"):
     if raw_root.startswith("~/"):
         raw_root = os.path.join(home, raw_root[2:])
     raw_root = raw_root.rstrip("/") if raw_root != "/" else raw_root
     if raw_root:
-        roots.append(raw_root)
+        roots.append(os.path.realpath(raw_root) if canonical else raw_root)
 
 agent = os.environ["QUERY_AGENT"]
 state_dir = Path(os.environ["QUERY_STATE_DIR"])
@@ -69,11 +70,13 @@ for raw_path in raw_paths:
         candidates = [os.path.join(root, raw_path) for root in roots]
         candidates.append(os.path.join(cwd, raw_path))
     for absolute in candidates:
+        if canonical:
+            absolute = os.path.realpath(absolute)
         for root in roots:
             if absolute == root:
                 relative = os.path.basename(absolute)
-            elif absolute.startswith(root + "/"):
-                relative = absolute[len(root) + 1 :]
+            elif absolute.startswith(root.rstrip("/") + "/"):
+                relative = absolute[len(root.rstrip("/")) + 1 :]
             else:
                 continue
             # New workers use NFC. NFD is included so an upgraded install also

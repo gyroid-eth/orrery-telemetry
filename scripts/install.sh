@@ -60,7 +60,7 @@ LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-}"
 TERMINAL="${AGENTSTACK_TERMINAL:-}"
 AUTO_OPEN_CHILD_SETTING="${AGENTSTACK_AUTO_OPEN_CHILD:-}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
-PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
+EXTRA_PROTECTED_ROOTS="${AGENTSTACK_EXTRA_PROTECTED_ROOTS-}"
 DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
 LANG_SETTING="${AGENTSTACK_LANG:-}"
 MURMUR_SETTING="${AGENTSTACK_MURMUR:-}"
@@ -177,7 +177,7 @@ Options:
                          existing env.sh, else auto)
   --reset-settings       Do not inherit settings from the existing env.sh:
                          anything not given explicitly goes back to its
-                         default. Kept even then: the project key, protected
+                         default. Kept even then: the project key, extra protected
                          roots, the ORRERY Mail state/service roots and
                          socket, the label prefix, the Mail launchd label and
                          the MCP URL. An empty explicit value (for example
@@ -309,7 +309,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --project-key)
       PROJECT_KEY="$2"
-      PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-$PROJECT_KEY}"
       shift 2
       ;;
     --port)
@@ -511,13 +510,63 @@ fi
 . "$PROJECT_CONTEXT_LIB"
 AGENTSTACK_LEGACY_PROJECT_KEY="$(agentstack_installed_env_value AGENTSTACK_PROJECT_KEY "$INSTALL_DIR/env.sh")"
 export AGENTSTACK_LEGACY_PROJECT_KEY
-PROJECT_KEY_INPUT="$PROJECT_KEY"
 PROJECT_KEY="$(agentstack_resolve_project_key "" "$INSTALL_DIR/env.sh" 0)"
 if [[ -z "$PROJECT_KEY" ]]; then
   echo "error: project key is required on first install; pass --project-key /absolute/path/to/project or set AGENTSTACK_PROJECT_KEY" >&2
   exit 2
 fi
-PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$PROJECT_KEY_INPUT" "$INSTALL_DIR/env.sh")"
+# Protection migration is installed-file-only. Presence (including empty) is
+# significant, and both installed fields are validated before any writes.
+# Ambient ROOTS is a computed session value and is never migration input.
+PROTECTION_ENV_READER="$REPO_ROOT/hooks/installed-env.py"
+INSTALLED_EXTRA_STATE=absent
+INSTALLED_EXTRA_PROTECTED_ROOTS=""
+INSTALLED_LEGACY_STATE=absent
+LEGACY_PROTECTED_ROOTS=""
+# A fresh install has no protection data to read. Do not require Python on PATH
+# before preflight can aggregate missing commands / an incompatible interpreter.
+# Existing settings still fail closed: no unreadable/invalid file is absence.
+if [[ -e "$INSTALL_DIR/env.sh" || -L "$INSTALL_DIR/env.sh" ]]; then
+  if [[ ! -f "$INSTALL_DIR/env.sh" ]]; then
+    echo "error: installed env.sh must be a readable regular file; installed settings were not changed" >&2
+    exit 2
+  fi
+  PROTECTION_READER_PYTHON="${AGENTSTACK_PYTHON:-python3}"
+  command -v "$PROTECTION_READER_PYTHON" >/dev/null 2>&1 || PROTECTION_READER_PYTHON=python3
+  if ! command -v "$PROTECTION_READER_PYTHON" >/dev/null 2>&1; then
+    echo "error: Python is required to validate installed protection settings; installed settings were not changed" >&2
+    exit 2
+  fi
+  INSTALLED_EXTRA_STATE="$("$PROTECTION_READER_PYTHON" "$PROTECTION_ENV_READER" state AGENTSTACK_EXTRA_PROTECTED_ROOTS "$INSTALL_DIR/env.sh")"
+  INSTALLED_EXTRA_PROTECTED_ROOTS="$("$PROTECTION_READER_PYTHON" "$PROTECTION_ENV_READER" value AGENTSTACK_EXTRA_PROTECTED_ROOTS "$INSTALL_DIR/env.sh")"
+  INSTALLED_LEGACY_STATE="$("$PROTECTION_READER_PYTHON" "$PROTECTION_ENV_READER" state AGENTSTACK_PROTECTED_ROOTS "$INSTALL_DIR/env.sh")"
+  LEGACY_PROTECTED_ROOTS="$("$PROTECTION_READER_PYTHON" "$PROTECTION_ENV_READER" value AGENTSTACK_PROTECTED_ROOTS "$INSTALL_DIR/env.sh")"
+fi
+PRESERVE_LEGACY_PROTECTED_ROOTS=false
+[[ "$INSTALLED_LEGACY_STATE" == absent ]] || PRESERVE_LEGACY_PROTECTED_ROOTS=true
+PROTECTION_MIGRATION=false
+if [[ "${AGENTSTACK_EXTRA_PROTECTED_ROOTS+x}" == x ]]; then
+  EXTRA_PROTECTED_ROOTS="$AGENTSTACK_EXTRA_PROTECTED_ROOTS"
+  EXTRA_PROTECTED_ROOTS_SOURCE="process AGENTSTACK_EXTRA_PROTECTED_ROOTS"
+elif [[ "$INSTALLED_EXTRA_STATE" != absent ]]; then
+  EXTRA_PROTECTED_ROOTS="$INSTALLED_EXTRA_PROTECTED_ROOTS"
+  EXTRA_PROTECTED_ROOTS_SOURCE="$INSTALL_DIR/env.sh:AGENTSTACK_EXTRA_PROTECTED_ROOTS"
+elif [[ "$INSTALLED_LEGACY_STATE" != absent ]]; then
+  EXTRA_PROTECTED_ROOTS="$LEGACY_PROTECTED_ROOTS"
+  EXTRA_PROTECTED_ROOTS_SOURCE="$INSTALL_DIR/env.sh:AGENTSTACK_PROTECTED_ROOTS"
+  PROTECTION_MIGRATION=true
+else
+  EXTRA_PROTECTED_ROOTS=""
+  EXTRA_PROTECTED_ROOTS_SOURCE="default (empty)"
+fi
+case "$EXTRA_PROTECTED_ROOTS" in
+  *$'\n'*|*$'\r'*) echo "error: AGENTSTACK_EXTRA_PROTECTED_ROOTS must be a single-line literal value; installed settings were not changed" >&2; exit 2 ;;
+esac
+if [[ -n "${AGENTSTACK_PROTECTED_ROOTS:-}" &&
+      "$AGENTSTACK_PROTECTED_ROOTS" != "$LEGACY_PROTECTED_ROOTS" ]]; then
+  printf 'warning: ambient AGENTSTACK_PROTECTED_ROOTS=%q differs from installed legacy value %q; ignoring ambient roots (never migrated)\n' \
+    "$AGENTSTACK_PROTECTED_ROOTS" "$LEGACY_PROTECTED_ROOTS" >&2
+fi
 
 # --dashboard-only copies no hooks/ and never launches a Codex child
 # (spawn_child.sh): nothing on that path needs hooks/codex-bin.sh, so it must
@@ -570,7 +619,7 @@ esac
 #   choice: it keeps the status it had. An option is always a request. Only
 #   an env.sh with the record can be echoed; before it, the value is explicit.
 # - --reset-settings drops the previous choices. What names the data and the
-#   services running on it (project key, protected roots, the Mail state and
+#   services running on it (project key, extra protected roots, the Mail state and
 #   service roots and socket, the label prefix, the Mail launchd label, the MCP
 #   URL) is kept: resetting those left the old Mail job running on the same
 #   database next to a new one (review of #146).
@@ -2474,6 +2523,13 @@ install_payload() {
     fi
   fi
   copy_core_tree "$REPO_ROOT/dashboard" "$DASHBOARD_DIR" "dashboard"
+  # agentctl validates protection settings even in dashboard-only installs,
+  # which intentionally do not install the hooks tree.
+  plan "copy literal protection reader -> $DASHBOARD_DIR/installed-env.py"
+  if [[ "$DRY_RUN" != true ]]; then
+    mkdir -p "$DASHBOARD_DIR"
+    cp "$REPO_ROOT/hooks/installed-env.py" "$DASHBOARD_DIR/installed-env.py"
+  fi
   plan "copy VERSION -> $INSTALL_DIR/VERSION"
   if [[ "$DRY_RUN" != true ]]; then
     cp "$REPO_ROOT/VERSION" "$INSTALL_DIR/VERSION"
@@ -2811,11 +2867,15 @@ write_env_file() {
     return
   fi
   umask 077
+  AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS="${EXTRA_PROTECTED_ROOTS-}" \
+  AGENTSTACK_INSTALL_LEGACY_PROTECTED_ROOTS="${LEGACY_PROTECTED_ROOTS-}" \
+  AGENTSTACK_INSTALL_PRESERVE_LEGACY_PROTECTED_ROOTS="${PRESERVE_LEGACY_PROTECTED_ROOTS:-false}" \
   "$PYTHON_BIN" - "$ENV_FILE" <<PY
 import os
 import pathlib
 import shlex
 import sys
+import tempfile
 
 path = pathlib.Path(sys.argv[1])
 values = {
@@ -2834,7 +2894,7 @@ values = {
     "AGENTSTACK_TERMINAL": "$TERMINAL",
     "AGENTSTACK_AUTO_OPEN_CHILD": "$AUTO_OPEN_CHILD_SETTING",
     "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
-    "AGENTSTACK_PROTECTED_ROOTS": "$PROTECTED_ROOTS",
+    "AGENTSTACK_EXTRA_PROTECTED_ROOTS": os.environ["AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS"],
     "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
     "AGENTSTACK_LANG": "$LANG_SETTING",
     "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
@@ -2879,11 +2939,22 @@ values.update({
     "AGENTSTACK_MAIL_STATE_ROOT": "$NATIVE_MAIL_STATE_ROOT",
     "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "$MAIL_HTTP_BEARER_MODE",
 })
+if os.environ["AGENTSTACK_INSTALL_PRESERVE_LEGACY_PROTECTED_ROOTS"] == "true":
+    values.update({"AGENTSTACK_PROTECTED_ROOTS": os.environ["AGENTSTACK_INSTALL_LEGACY_PROTECTED_ROOTS"]})
 lines = ["# Generated by ORRERY Telemetry install.sh", "# Do not put secrets in this file.", ""]
 for key, value in values.items():
     lines.append(f"export {key}={shlex.quote(value)}")
-path.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
-path.chmod(0o600)
+fd, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write("\\n".join(lines) + "\\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
 PY
 }
 
@@ -4498,7 +4569,7 @@ render_launchd_plist() {
       __TERMINAL__ "$TERMINAL"
       __AUTO_OPEN_CHILD__ "$AUTO_OPEN_CHILD_SETTING"
       __PROJECT_KEY__ "$PROJECT_KEY"
-      __PROTECTED_ROOTS__ "$PROTECTED_ROOTS"
+      __EXTRA_PROTECTED_ROOTS__ "$EXTRA_PROTECTED_ROOTS"
       __DELIVERABLE_ROOTS__ "$DELIVERABLE_ROOTS"
       __LANG__ "$LANG_SETTING"
       __MURMUR__ "$MURMUR_SETTING"
@@ -4565,6 +4636,7 @@ render_systemd_unit() {
   plan "render systemd user unit $unit"
   if [[ "$DRY_RUN" != true ]]; then
     mkdir -p "$dir"
+    AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS="${EXTRA_PROTECTED_ROOTS-}" \
     "$PYTHON_BIN" - "$unit" <<PY
 import os
 import pathlib
@@ -4586,7 +4658,7 @@ env = {
     "AGENTSTACK_TERMINAL": "$TERMINAL",
     "AGENTSTACK_AUTO_OPEN_CHILD": "$AUTO_OPEN_CHILD_SETTING",
     "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
-    "AGENTSTACK_PROTECTED_ROOTS": "$PROTECTED_ROOTS",
+    "AGENTSTACK_EXTRA_PROTECTED_ROOTS": os.environ["AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS"],
     "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
     "AGENTSTACK_LANG": "$LANG_SETTING",
     "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
@@ -4619,7 +4691,12 @@ env = {
     "PATH": "$PATH_VALUE",
 }
 def esc(v):
-    return str(v).replace("\\\\", "\\\\\\\\").replace('"', '\\"')
+    # Numeric characters avoid double interpretation by this shell heredoc.
+    # Environment= performs systemd percent specifier expansion, not $ expansion.
+    return (str(v).replace("%", "%%").replace(chr(92), chr(92) * 2)
+            .replace(chr(34), chr(92) + chr(34))
+            .replace(chr(10), chr(92) + "n").replace(chr(13), chr(92) + "r")
+            .replace(chr(9), chr(92) + "t"))
 lines = [
     "[Unit]",
     "Description=ORRERY Telemetry dashboard",
@@ -4729,6 +4806,8 @@ start_supervised_background() {
   (
     # shellcheck disable=SC1090
     . "$ENV_FILE"
+    # Legacy ROOTS is retained for direct hooks, never service configuration.
+    unset AGENTSTACK_PROTECTED_ROOTS
     AGENTSTACK_DASHBOARD_SELF_RESTART=1 \
       nohup "$PYTHON_BIN" "$DASHBOARD_DIR/service_runner.py" >> "$DASHBOARD_LOG" 2>&1 &
     echo $! > "$SERVICE_PATH"
@@ -4854,6 +4933,7 @@ write_manifest() {
       requested_service_env "${NEW_NATIVE_MAIL_ENV:-}" requested_candidate_venv "${NEW_NATIVE_MAIL_VENV:-}" \
       database_backup "$MAIL_UPDATE_BACKUP")"
   fi
+  AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS="${EXTRA_PROTECTED_ROOTS-}" \
   AGENTSTACK_INSTALL_MAIL_UPDATE="$mail_update" \
   "$PYTHON_BIN" - "$tmp" "$service_kind" "$service_path" \
     "$mail_service_kind" "$mail_service_path" "$AGENT_MAIL_NAME_CAPABILITY_JSON" \
@@ -5012,7 +5092,7 @@ manifest = {
         "AGENTSTACK_PORT": "$PORT",
         "AGENTSTACK_LABEL_PREFIX": "$LABEL_PREFIX",
         "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
-        "AGENTSTACK_PROTECTED_ROOTS": "$PROTECTED_ROOTS",
+        "AGENTSTACK_EXTRA_PROTECTED_ROOTS": os.environ["AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS"],
         "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
         "AGENTSTACK_LANG": "$LANG_SETTING",
         "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
@@ -5120,6 +5200,26 @@ example_module.write_manifest(manifest, sys.argv[21], repo=sys.argv[20], python=
 PY
 }
 
+report_protection_settings() {
+  printf 'extra protected roots: source=%s value=%q destination=%s:AGENTSTACK_EXTRA_PROTECTED_ROOTS\n' \
+    "$EXTRA_PROTECTED_ROOTS_SOURCE" "$EXTRA_PROTECTED_ROOTS" "$ENV_FILE"
+  if [[ "$PROTECTION_MIGRATION" == true ]]; then
+    if [[ "$DRY_RUN" == true ]]; then
+      say "would migrate installed AGENTSTACK_PROTECTED_ROOTS to AGENTSTACK_EXTRA_PROTECTED_ROOTS once; no files written"
+    else
+      say "migrating installed AGENTSTACK_PROTECTED_ROOTS to AGENTSTACK_EXTRA_PROTECTED_ROOTS once"
+    fi
+  fi
+}
+
+protection_restart_guidance() {
+  if [[ "$PRESERVE_LEGACY_PROTECTED_ROOTS" != true &&
+        ( "$INSTALLED_EXTRA_STATE" == absent || "$EXTRA_PROTECTED_ROOTS" == "$INSTALLED_EXTRA_PROTECTED_ROOTS" ) ]]; then
+    return 0
+  fi
+  warn "Protection cutover: finish work or release active reservations before changing roots; restart affected coordinated sessions together because relative reservation names can change."
+}
+
 main() {
   validate_repo_assets
   # Select once before installer probes or lifecycle actions. Live/global
@@ -5137,6 +5237,8 @@ main() {
   say "tier: $TIER"
   say "install dir: $INSTALL_DIR"
   say "project key: $PROJECT_KEY"
+  report_protection_settings
+  protection_restart_guidance
   if [[ "$RESET_SETTINGS" == 1 ]]; then
     say "settings: reset (not inherited from the existing env.sh)"
   fi
@@ -5235,15 +5337,16 @@ main() {
       report_managed_instructions
     fi
   fi
+  protection_restart_guidance
   case "$MAIL_UPDATE_RESULT" in
     not-switched|rolled-back)
       if [[ "$MAIL_UPDATE_MODE" == auto ]]; then
         print_mail_stale_notice
-        print_mail_result
         # auto chose not to, or could not, switch: the install itself is done
         # and Mail is serving its previous build.
         warn "ORRERY Mail was not updated ($MAIL_UPDATE_RESULT): $MAIL_UPDATE_REASON"
         warn "ORRERY Mail still runs $NATIVE_MAIL_ENV; to retry at a time you choose: install.sh --update-mail"
+        print_mail_result
         return 0
       fi
       # The rest of the install finished against the build that is serving, but
