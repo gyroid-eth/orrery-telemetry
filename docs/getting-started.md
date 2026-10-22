@@ -130,7 +130,7 @@ Telemetry 単独で入れた場合も、同梱 dashboard の NEW AGENT で catal
 
 `/log` は決定・変更・検証・次の作業を Markdown の `logs/` に残します。[Launcher の log 節](launchers.md#log)と[Obsidian の設定](obsidian.md)に、保存場所と Daily Note のつなぎ方があります。画面の Output に並ぶのがこの log です。
 
-DECK、NETWORK、DIGEST REPLAY、NEW AGENT の詳しい操作と画像は [Dashboard](dashboard.md)にあります。端末と同じ画面に置く [ORRERY cockpit](https://github.com/gyroid-eth/orrery) の操作は、cockpit の画面内ガイドから始めてください。[Obsidian と一緒に使う](obsidian.md)には動く画面と公開 demo vault への案内があります。
+DECK、NETWORK、DIGEST REPLAY、NEW AGENT の詳しい操作と画像は [Dashboard](dashboard.md)にあります。ターミナルと同じ画面に置く [ORRERY cockpit](https://github.com/gyroid-eth/orrery) の操作は、cockpit の画面内ガイドから始めてください。[Obsidian と一緒に使う](obsidian.md)には動く画面と公開 demo vault への案内があります。
 
 画面の例: [DECK](img/deck.jpg)・[NETWORK](img/network.jpg)・[NEW AGENT](img/new-agent.jpg)。
 

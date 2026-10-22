@@ -4,6 +4,8 @@
 
 ## Optional dsh / Hermes installation
 
+**Already using Claude Code or Codex?** Start with [Add DeepSeek or Local models](native-setup.en.md). An ordinary update does not install a new harness or register an API key for you. The sections below are the detailed configuration reference.
+
 ### Prepare settings from bundled examples
 
 Installation distributes [instructions and four inactive examples](../examples/native-harnesses/README.en.md) under `examples/native-harnesses/`. For installed runtimes it validates owned receipts/current references and reports an inactive `resolved/<snapshot-id>/` snapshot (B). For missing runtimes, model changes or adjustments, an existing agent can help with non-secret settings (A). Adjust the three peer-file absolute references after copying, then confirm the destination and backend. Secret input and activation require the person. Examples always have `enabled: false`; existing examples/private settings are not overwritten or automatically enabled.

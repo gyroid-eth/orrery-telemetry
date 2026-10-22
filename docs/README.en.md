@@ -12,7 +12,9 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 
 ## Start here
 
-- [Choose a goal, provider, model and harness](getting-started.en.md#provider-model-harness) — Observe agents, create one with an API model, or coordinate agents. Check the [combinations and limitations (Japanese)](managed-catalog.md): native API spawning needs macOS legacy mode and manual configuration; the bundled NEW AGENT lacks harness selection. Common login/Telegram are in design, independent Hermes memory is in implementation, and manual Local effort awaits real-server acceptance.
+- [Add DeepSeek or Local models to an existing install](native-setup.en.md) — Install a harness, obtain and store an API key, prepare the settings, and try an agent from the screen.
+
+- [Choose a goal, provider, model and harness](getting-started.en.md#provider-model-harness) — Observe agents, create one with an API model, or coordinate agents. Check the [combinations and limitations (Japanese)](managed-catalog.md). Configured DeepSeek/Local models offer dsh/Hermes selection in NEW AGENT; runtime and API settings must be prepared separately.
 - [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) — Install both with one line and start with the on-screen first-flight guide.
 - [Standalone getting started](getting-started.en.md) — Audience, terms, standalone install, agent startup, and an end-to-end Mail check.
 
