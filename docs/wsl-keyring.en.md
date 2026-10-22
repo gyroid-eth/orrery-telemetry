@@ -110,7 +110,7 @@ busctl --user call org.freedesktop.secrets /org/freedesktop/secrets \
   service orrery-dsh-deepseek account api-key
 ```
 
-For a first registration with no matches, the result is `ao 0 ao 0`: zero unlocked and zero locked items. If an item exists, skip saving or decide yourself how to handle the existing item. Do not overwrite, delete, or save it again to resolve this check.
+If there are no matching items, both the unlocked and locked counts are zero (for example, `aoao 0 0` in `busctl`). If an item exists, skip saving or decide yourself how to handle the existing item. Do not overwrite, delete, or save it again to resolve this check.
 
 ## 5. Save the API key with hidden input
 
