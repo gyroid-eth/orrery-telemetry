@@ -6604,6 +6604,11 @@ def _runtime_activity(text: str) -> tuple[str, str]:
     for index, row in enumerate(rows):
         if _ASK_Q_RE.match(row) and rows[index + 1:]:
             options = rows[index + 1:]
+            # Claude's edit approval places this control hint after the menu.
+            # Keep the question and numbered choices mandatory; arbitrary later
+            # output must still invalidate an old approval screen.
+            if options[-1] in {"Esc to cancel", "Esc to cancel · Tab to amend"}:
+                options = options[:-1]
             if (any(_ASK_OPT_RE.match(option) for option in options)
                     and all(re.fullmatch(r"[❯>›]?\s*\d+\.\s+.+", option) for option in options)):
                 return "ask", ""
