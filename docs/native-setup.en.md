@@ -21,7 +21,9 @@ The cockpit is the interface for working with terminals. Telemetry tracks agents
 
 Pick one provider and one harness, such as DeepSeek + dsh. You can install both harnesses without creating two API keys for the same provider. You do not need a DeepSeek account to use a Local server.
 
-**Check the Local server's protocol before setting it up.** dsh uses the fixed DeepSeek adapter and accepts HTTP/HTTPS URLs for compatible APIs. Hermes requires HTTPS and either `chat_completions` or `anthropic_messages`; you cannot give it an HTTP-only endpoint directly. The internal backend ID is `strata`, but it is not a Strata hostname restriction. Nor does it guarantee that every server advertised as OpenAI-compatible will work. Both harness paths currently require a key reference. Do not invent a dummy key for a server without authentication; check compatibility with its administrator first.
+**Check the Local server's protocol before setting it up.** dsh uses the fixed DeepSeek adapter and accepts HTTP/HTTPS URLs for compatible APIs. Hermes requires HTTPS and either `chat_completions` or `anthropic_messages`; you cannot give it an HTTP-only endpoint directly. The internal backend ID is `strata`, but it is not a Strata hostname restriction. Nor does it guarantee that every server advertised as OpenAI-compatible will work.
+
+**A Local configuration that stores and references no key is not currently supported by ORRERY.** Both harness paths require a reference to a key saved in the OS. Do not invent a dummy key for a server without authentication. Obtain a compatible endpoint with authentication before continuing with this guide.
 
 **Verification status:** API launch paths are implemented for macOS and Linux/Ubuntu WSL in legacy mode. Native Windows API launching is outside this scope. Not every DeepSeek/Local × dsh/Hermes combination has been verified from a fresh installation using the standard examples. WSL in particular needs a working keyring, GUI prompts and services using the same user's bus. A visible catalog entry does not prove key storage, API access, Mail delivery, exit or resume.
 
@@ -97,7 +99,7 @@ If macOS later asks whether an application may access the keychain, read the app
 
 ### Windows / Ubuntu WSL: Secret Service
 
-**Saving a key in Ubuntu for the first time? Follow the [WSL keyring and hidden-input guide](wsl-keyring.en.md).** It covers OS packages, the standard keyring GUI and choosing the correct storage location. After saving, return from that guide to step 5; do not repeat the save below. A complete first-time WSL run through that GUI procedure has not yet been verified on a real machine.
+**Saving a key in Ubuntu for the first time? Follow the [WSL keyring and hidden-input guide](wsl-keyring.en.md).** It covers OS packages, the standard keyring GUI and choosing the correct storage location. After saving, return to [“5. Connect the configuration files” on this page](#5-connect-the-configuration-files); do not repeat the save below. A complete first-time WSL run through that GUI procedure has not yet been verified on a real machine.
 
 The shorter path below is for an existing, usable default keyring. Use Ubuntu's secret store, not a Windows credential entry. This requires Secret Service, a D-Bus session for the same user, an encrypted and unlocked keyring, and `/usr/bin/secret-tool`. Installing `libsecret-tools` or `gnome-keyring` alone does not create a usable keyring or establish working GUI prompts. If these are not ready, prepare the OS using the guide above. Do not start a second daemon to work around it.
 
@@ -162,6 +164,8 @@ After the runtime paths and credential references have been checked and validati
 ![Local models and Hermes selected in the real WSL Telemetry interface](img/wsl-native-harness-picker.png)
 
 [Watch the selection sequence](img/wsl-native-harness-selection.gif) (10.8 seconds): Claude, Codex, DeepSeek and Local models, including dsh/Hermes choices. This is the real Ubuntu WSL backend viewed in Chrome on a Mac. The scientist portraits and choices come from the actual interface. The launch button was not pressed; this recording does not demonstrate key storage or a successful API response.
+
+The Local entry in the image is an example using a Qwen model on Strata. The internal ID `strata` is not a hostname restriction. Before using another server, check the API, HTTPS and key-reference requirements in step 1.
 
 Seeing a model in the picker, receiving a reply, and using tools, Mail, exit and resume are separate checks. See the [current limitations](managed-catalog.en.md#current-limitations).
 

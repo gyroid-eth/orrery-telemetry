@@ -21,7 +21,9 @@ cockpitはターミナルを並べて操作する画面、Telemetryはagentの�
 
 「DeepSeek＋dsh」「DeepSeek＋Hermes」のように、接続先と動かすアプリを1つずつ選びます。dshとHermesを両方入れても、接続先が同じならAPIキーを2本発行する必要はありません。Localを使うためにDeepSeekのアカウントを作る必要もありません。
 
-**Localは接続先の仕様を先に確認します。** dshは固定DeepSeek adapterと互換のAPIを使い、HTTP/HTTPSのURLを受け付けます。HermesはHTTPSが必須で、API形式は`chat_completions`か`anthropic_messages`です。HTTPだけのサーバーをHermesへそのまま指定できません。設定の内部IDは`strata`ですが、Strataのホストに限定するものではありません。任意の「OpenAI互換」サーバーが動くという保証でもありません。現在は両harnessでキーの参照が必要なので、キー不要のサーバーに仮のキーを作って済ませず、管理者と対応条件を確認してください。
+**Localは接続先の仕様を先に確認します。** dshは固定DeepSeek adapterと互換のAPIを使い、HTTP/HTTPSのURLを受け付けます。HermesはHTTPSが必須で、API形式は`chat_completions`か`anthropic_messages`です。HTTPだけのサーバーをHermesへそのまま指定できません。設定の内部IDは`strata`ですが、Strataのホストに限定するものではありません。任意の「OpenAI互換」サーバーが動くという保証でもありません。
+
+**キーを保存・参照せずに使うLocal構成は、現在のORRERYでは非対応です。** 両harnessともOSに保存したキーへの参照が必要です。キー不要のサーバーへ仮のキーを設定して済ませず、対応する認証付きの接続先を用意してから、このガイドへ進んでください。
 
 **動作確認の範囲：** API起動はmacOSとLinux/Ubuntu WSLのlegacy modeに実装されています。WindowsネイティブのAPI起動は対象外です。全DeepSeek/Local×dsh/Hermesの組合せを、標準設定例から新規導入して通し確認したものではありません。とくにWSLでは鍵束・表示・サービスの同ユーザー接続をOS側で準備する必要があります。候補が表示されることと、キー保存・実接続・Mail・終了/再開が成功することは別です。
 
@@ -97,7 +99,7 @@ DeepSeekの同梱例には、dsh用の`https://api.deepseek.com/anthropic`とHer
 
 ### Windows / Ubuntu WSL：Secret Service
 
-**初めてUbuntuへキーを保存する場合は、[WSLの鍵束準備・非表示登録ガイド](wsl-keyring.md)へ進みます。** OSアプリの導入、標準GUIでの鍵束作成、保存先の確認まで掲載しています。登録後はそのガイドから手順5へ戻り、以下の保存を重ねて実行しません。新規WSLでこのGUI手順を最後まで通した実機確認はまだ完了していません。
+**初めてUbuntuへキーを保存する場合は、[WSLの鍵束準備・非表示登録ガイド](wsl-keyring.md)へ進みます。** OSアプリの導入、標準GUIでの鍵束作成、保存先の確認まで掲載しています。登録後は、このページの[「5. 設定例をコピーして、接続先をつなぐ」](#5-設定例をコピーして接続先をつなぐ)へ戻り、以下の保存を重ねて実行しません。新規WSLでこのGUI手順を最後まで通した実機確認はまだ完了していません。
 
 以下は、すでに使える既定の鍵束がある人向けです。Windowsの資格情報マネージャーではなく、Ubuntu側の保存先を使います。Secret Service、同じユーザーのD-Bus session、暗号化された鍵束とそのロック解除、`/usr/bin/secret-tool`が必要です。`libsecret-tools`や`gnome-keyring`のインストールだけでは鍵束作成やGUI表示は完了しません。未準備なら上のガイドでOS側を準備し、別のdaemonを重ねて起動しないでください。
 
@@ -162,6 +164,8 @@ agentが合わせるのは、manifestからdsh/Hermesの設定を指す2箇所�
 ![WSLの実TelemetryでLocal modelsとHermesを選択した画面](img/wsl-native-harness-picker.png)
 
 [選択の流れをGIFで見る](img/wsl-native-harness-selection.gif)（10.8秒）：Claude、Codex、DeepSeek、Local modelsと、dsh/Hermesの選択を示します。Ubuntu WSLの実backendをMacのChromeから表示した画面です。科学者の肖像や候補は実画面のもので、起動ボタンは押していません。キー保存やAPI応答の成功を示す録画ではありません。
+
+画像のLocalはStrata上のQwenモデルを設定した例です。内部IDの`strata`は接続先ホストの制限ではありません。別のサーバーには、手順1のAPI・HTTPS・キー参照の条件を確認してから接続します。
 
 候補が見えること、応答が返ること、道具・Mail・終了・会話再開が使えることは、それぞれ別の確認です。[対応範囲](managed-catalog.md#現在の制限)も参照してください。
 
