@@ -5,6 +5,7 @@ validation and the runtime reader are real; no source install is modified.
 """
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -13,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from test_managed_harness_install import CAFixture
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('stamp_installer', ROOT / 'scripts/lib/managed_harness_install.py')
@@ -34,13 +36,16 @@ class InstallStamp(unittest.TestCase):
         if not source or not python:
             self.skipTest('Explicit installed dependency interpreter/source required')
         with tempfile.TemporaryDirectory() as temporary:
+            ca = self.enterContext(CAFixture(installer, Path(temporary)))
             root = Path(temporary) / installer.generation_id(ROOT, 'hermes')
             root.mkdir()
             files = ['hermes_constants.py', 'hermes_cli/__init__.py', 'hermes_cli/version_info.py',
                      'hermes_cli/steward.py', 'hermes_cli/update_channel.py', 'hermes_cli/release_channels.py',
                      'pm/__init__.py', 'pm/paths.py', 'pm/environments.py', 'scripts/write_install_stamp.py']
             pm = []
+            paths = {}
             def acquire(argv, *, cwd, env):
+                nonlocal paths
                 cwd = Path(cwd)
                 if argv[:2] == ['git', 'clone']:
                     target = Path(argv[-1])
@@ -49,6 +54,7 @@ class InstallStamp(unittest.TestCase):
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(Path(source) / relative, dest)
                     (target / '.git').mkdir()  # Any fallback would try forbidden git.
+                    ca.source(target)
                 elif argv[:2] == ['git', 'checkout']:
                     self.assertEqual(argv[-1], installer.HERMES_COMMIT)
                 elif argv[:2] == ['git', 'rev-parse']:
@@ -58,10 +64,14 @@ class InstallStamp(unittest.TestCase):
                     # and the installer's exact stamp program execute unchanged.
                     code = 'import sys,os\nsys.path.insert(0,os.getcwd())\n' + DENY + '''
 from hermes_cli import version_info as version
-version.get_version_info=lambda:version.VersionInfo('0.1.0','0.1.0',0,sys.argv[1],'fixture','git',False,1)
+version.get_version_info=lambda:version.VersionInfo('0.1.0','0.1.0',0,sys.argv[1],'fixture','git',True,1)
 ''' + installer.HERMES_STAMP_SCRIPT
                     subprocess.run([python, '-I', '-B', '-c', code, installer.HERMES_COMMIT], cwd=cwd,
                                    env=env, capture_output=True, text=True, check=True, timeout=10)
+                elif argv[-1] == installer.HERMES_TARGET_SCRIPT:
+                    return ca.target
+                elif argv[-1] == installer.HERMES_CA_PROBE_SCRIPT:
+                    return json.dumps(paths)
                 else:
                     self.assertEqual(argv[1:4], ['-m', 'pm.cli', 'install'])
                     pm.append(argv)
@@ -74,6 +84,7 @@ version.get_version_info=lambda:version.VersionInfo('0.1.0','0.1.0',0,sys.argv[1
                     executable.chmod(0o700)
                     (generation / 'pyvenv.cfg').write_text('# fixture\n')
                     installer.save(store / 'facts.json', {'packages': {'venv': {'environment': str(generation)}}})
+                    paths = ca.material(root, cwd, generation)
                 return ''
             with patch.object(installer, 'run', side_effect=acquire):
                 details = installer.install_hermes(ROOT, root, python)
@@ -83,7 +94,7 @@ version.get_version_info=lambda:version.VersionInfo('0.1.0','0.1.0',0,sys.argv[1
             code = 'import sys\nsys.path.insert(0,sys.argv[1])\n' + DENY + '''
 from hermes_cli.version_info import get_version_info
 info=get_version_info()
-assert info.commit==sys.argv[2] and info.base_version=='0.1.0' and info.source=='local'
+assert info.commit==sys.argv[2] and info.base_version=='0.1.0' and info.source=='local' and info.dirty
 print('stamp-reader-no-git-ok')
 '''
             args = [python, '-I', '-B', '-c', code, str(installed), installer.HERMES_COMMIT]
