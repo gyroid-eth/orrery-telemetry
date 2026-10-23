@@ -142,6 +142,71 @@ async def test_peek_reads_real_all_origin_rows_without_effect(state):
 
 
 @pytest.mark.asyncio
+async def test_actual_whois_returns_self_peer_and_retired_without_effect(state):
+    core, sessions, _, root = state
+    await core.retire(33)
+    (root / 'signal').write_text('pending')
+    (root / 'archive').write_text('old archive')
+    before = await snapshot(sessions)
+    async with Client(build_candidate_server(core)) as client:
+        for selector, proof, expected in [
+            ({'target_agent_id': 11}, None,
+             {'target_agent_id': 11, 'name': 'Alpha', 'state': 'active', 'source_label': 'origin-1'}),
+            ({'target_name': 'Beta'}, auth(),
+             {'target_agent_id': 22, 'name': 'Beta', 'state': 'active', 'source_label': 'origin-2'}),
+            ({'target_agent_id': 33, 'expected_target_name': 'Gamma'}, auth(22),
+             {'target_agent_id': 33, 'name': 'Gamma', 'state': 'retired', 'source_label': 'origin-3'}),
+        ]:
+            args = dict(expected_server_instance_id=I, **selector)
+            if proof is not None:
+                args['auth'] = proof
+            result = await client.call_tool('whois', args)
+            assert result.data == dict(expected, mail_instance_id=I)
+    assert await snapshot(sessions) == before
+    assert (root / 'signal').read_text() == 'pending'
+    assert (root / 'archive').read_text() == 'old archive'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change,code', [
+    ({'auth': dict(auth(), registration_token='wrong-whois-secret')}, 'OWNER_CREDENTIAL_MISMATCH'),
+    ({'expected_server_instance_id': 'other-instance'}, 'INSTANCE_MISMATCH'),
+    ({'expected_target_name': 'old-name'}, 'TARGET_NAME_STALE'),
+    ({'target_agent_id': 999}, 'TARGET_NOT_FOUND'),
+])
+async def test_actual_whois_rejects_wrong_proof_instance_and_target(state, change, code):
+    core, sessions, _, _ = state
+    before = await snapshot(sessions)
+    async with Client(build_candidate_server(core)) as client:
+        args = {'expected_server_instance_id': I, 'target_agent_id': 22, 'auth': auth(), **change}
+        result = await client.call_tool('whois', args, raise_on_error=False)
+        assert result.is_error and code in str(result)
+    assert await snapshot(sessions) == before
+
+
+@pytest.mark.asyncio
+async def test_actual_whois_ambiguity_keeps_retired_candidate_and_explicit_id(state):
+    core, sessions, _, _ = state
+    duplicate = await core.register_new(request_id='whois-duplicate', name='Alpha',
+        token='whois-duplicate-fresh-secret', program='fixture', model='fixture')
+    await core.retire(duplicate['agent_id'])
+    before = await snapshot(sessions)
+    async with Client(build_candidate_server(core)) as client:
+        result = await client.call_tool('whois', {'expected_server_instance_id': I,
+            'target_name': 'Alpha'}, raise_on_error=False)
+        assert result.is_error
+        error = json.loads(result.content[0].text)
+        assert error['code'] == 'TARGET_NAME_AMBIGUOUS' and error['candidate_count'] == 2
+        assert {(x['target_agent_id'], x['state']) for x in error['candidates']} == {
+            (11, 'active'), (duplicate['agent_id'], 'retired')}
+        explicit = await client.call_tool('whois', {'expected_server_instance_id': I,
+            'target_agent_id': 11})
+        assert explicit.data == {'target_agent_id': 11, 'name': 'Alpha', 'state': 'active',
+                                 'source_label': 'origin-1', 'mail_instance_id': I}
+    assert await snapshot(sessions) == before
+
+
+@pytest.mark.asyncio
 async def test_send_reply_decisions_keep_actor_origins_kinds(state):
     core, sessions, _, _ = state
     before = await snapshot(sessions)
@@ -149,7 +214,8 @@ async def test_send_reply_decisions_keep_actor_origins_kinds(state):
                {'target_agent_id': 33, 'kind': 'cc'},
                {'target_agent_id': 44, 'kind': 'bcc'}]
     result = await owner(core, 'send', recipients=targets)
-    assert result == {'actor_agent_id': 11, 'actor_storage_project_id': 1,
+    assert result == {'mail_instance_id': I, 'directory_revision': 1,
+                      'actor_agent_id': 11, 'actor_storage_project_id': 1,
                       'storage_project_id': 1, 'parent_message_id': None, 'thread_id': None,
                       'recipients': [{'agent_id': 22, 'storage_project_id': 2, 'kind': 'to'},
                                      {'agent_id': 33, 'storage_project_id': 3, 'kind': 'cc'},
@@ -163,6 +229,11 @@ async def test_send_reply_decisions_keep_actor_origins_kinds(state):
     assert explicit == dict(result, storage_project_id=3, parent_message_id=900,
                             thread_id='parent-thread')
     assert await snapshot(sessions) == before  # a decision is not a committed send
+    await core.retire(44)
+    after_management = await snapshot(sessions)
+    current = await owner(core, 'send', recipients=[targets[0]])
+    assert current == dict(result, directory_revision=2, recipients=[result['recipients'][0]])
+    assert await snapshot(sessions) == after_management
 
 
 @pytest.mark.asyncio
@@ -347,6 +418,44 @@ async def test_upgrade_receiptless_v1_resolves_same_mail_id(state):
     assert await snapshot(sessions) == before
     with pytest.raises(B1Error, match='NEEDS_RESOLUTION'):
         await core.resolve_v1(v1, None)
+
+
+@pytest.mark.asyncio
+async def test_v1_resolve_requires_prepared_history_without_classifying_owner(state):
+    from agentstack_mail.storage_origin_directory import metadata
+    core, sessions, engine, _ = state
+    v1 = {'external_id': 'codex:fixture-session', 'agent_id': None, 'agent_name': 'Alpha',
+          'project_key': '/fixture/origin-1', 'program': 'codex-app'}
+    async with engine.begin() as c:
+        await c.run_sync(metadata.drop_all)
+    before = await snapshot(sessions)
+    with pytest.raises(B1Error, match='^NOT_PREPARED$'):
+        await core.resolve_v1(v1, TOKENS[11])
+    assert await snapshot(sessions) == before  # no implicit DDL/backfill/recovery
+    await core.prepare(default_project_id=2)
+    prepared = await snapshot(sessions)
+    receipt = await core.resolve_v1(v1, TOKENS[11])
+    assert receipt == {'external_id': 'codex:fixture-session', 'mail_instance_id': I,
+        'mail_agent_id': 11, 'credential_generation': 0,
+        'owner_storage_project_id': 1, 'agent_name': 'Alpha'}
+    assert await snapshot(sessions) == prepared
+    assert {k: v for k, v in prepared.items() if not k.startswith('b1_')} == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('column,code', [('registry_digest', 'DIRECTORY_STALE'),
+                                       ('intent_digest', 'INTENT_STORE_STALE')])
+async def test_v1_index_integrity_error_stops_phase_without_classifying_owner(state, column, code):
+    core, sessions, _, _ = state
+    async with sessions() as s:
+        await s.execute(text(f"UPDATE b1_directory_meta SET {column} = 'damaged'"))
+        await s.commit()
+    before = await snapshot(sessions)
+    v1 = {'external_id': 'codex:fixture-session', 'agent_name': 'Alpha',
+          'project_key': '/fixture/origin-1', 'program': 'codex-app'}
+    with pytest.raises(B1Error, match=f'^{code}$'):
+        await core.resolve_v1(v1, TOKENS[11])
+    assert await snapshot(sessions) == before
 
 
 @pytest.mark.asyncio

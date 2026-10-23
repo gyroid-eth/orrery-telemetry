@@ -14,6 +14,10 @@ Accepted results and authenticated terminal refusals retain request/intent mappi
 
 Candidate metadata is separate from SQLModel.metadata. Only explicit preparation creates it. Integrity validation scans all agents, credential history and request mappings; cost grows with history. Large-scale performance remains a pre-cutover check.
 
+The private updater order, with all writers stopped, is source/credential-history census → old binding capture → private index backfill/full validation → `resolve_v1` → v2 candidate validation/publication. Index construction does not depend on binding resolution, so one validator protects shared/revoked credential history. `NOT_PREPARED`, `DIRECTORY_STALE` and `INTENT_STORE_STALE` stop the migration phase; they do not classify each owner as NEEDS_RESOLUTION. Resolution never prepares implicitly. After preparation, unresolvable credentials/bindings remain NEEDS_RESOLUTION. B1's synthetic index does not implement B2's live backfill of known legacy history.
+
+Send/reply decisions include I and directory revision to describe the resolution snapshot. These fields do not authorize a later transaction; the B4 writer must use the live OwnerContext.
+
 ## Tests and deferred integration
 
 `storage_origin_candidate.build_candidate_server(core)` is an explicit in-process backend factory using a supplied session factory. It has no CLI/HTTP entry or activation flag. Its backend auth envelope is not a model-facing proxy schema. Raw arguments are checked before coercion/defaults; omitted auth differs from NULL and failed proof never falls back to anonymous reads. The contract fixture is `packages/agentstack_mail/fixtures/storage-origin-b1.json`.

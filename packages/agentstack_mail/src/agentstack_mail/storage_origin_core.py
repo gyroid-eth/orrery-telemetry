@@ -244,7 +244,8 @@ class StorageOriginCore:
             resolved.append({'agent_id': target.id, 'storage_project_id': target.project_id, 'kind': kind})
         if len({x['agent_id'] for x in resolved}) != len(resolved):
             raise B1Error('DUPLICATE_RECIPIENT')
-        return {'actor_agent_id': actor.id, 'actor_storage_project_id': actor.project_id,
+        return {'mail_instance_id': state['instance_id'], 'directory_revision': state['revision'],
+                'actor_agent_id': actor.id, 'actor_storage_project_id': actor.project_id,
                 'storage_project_id': parent.project_id if parent else actor.project_id,
                 'parent_message_id': parent.id if parent else None,
                 'thread_id': parent.thread_id if parent else None,
@@ -391,7 +392,12 @@ class StorageOriginCore:
             await directory.refresh(s, identity_change=True)
 
     async def resolve_v1(self, binding, owner_token):
-        """Updater-only exact O/name/K lookup, not a raw MCP reconnect fallback."""
+        """Updater-only lookup after private index preparation/validation.
+
+        Preparation/integrity errors stop the migration phase; they do not
+        classify otherwise valid owners as needing credential recovery.
+        This is never a raw MCP reconnect fallback.
+        """
         try:
             async with self._transaction() as s:
                 state, records, keys = await directory.validate(s)
@@ -408,7 +414,11 @@ class StorageOriginCore:
                 return {'external_id': string(binding['external_id'], 256), 'mail_instance_id': state['instance_id'],
                         'mail_agent_id': a.id, 'credential_generation': a.credential_generation,
                         'owner_storage_project_id': a.project_id, 'agent_name': a.name}
-        except (B1Error, KeyError, TypeError):
+        except B1Error as error:
+            if error.code in {'NOT_PREPARED', 'DIRECTORY_STALE', 'INTENT_STORE_STALE'}:
+                raise
+            raise B1Error('NEEDS_RESOLUTION') from None
+        except (KeyError, TypeError):
             raise B1Error('NEEDS_RESOLUTION') from None
 
     async def check_binding(self, binding, proof):

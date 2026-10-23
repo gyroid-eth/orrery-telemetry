@@ -15,6 +15,8 @@ B1 は #213 の S′ を隔離して検証する内部の核です。本番は�
 
 `storage_origin_directory.metadata` は `SQLModel.metadata` と別です。明示的な candidate preparation 以外では DDL/修復を行いません。要求ごとの整合性検証は全 Agent・資格履歴・request mapping を走査するため、履歴件数に比例する費用があります。大規模性能は本番切替前に別途確認します。
 
+private updater の順序は、全 writer 停止下の原本/資格履歴 census → 旧 binding capture → 私有 index backfill/全検証 → `resolve_v1` → v2 候補検証/publication です。index は binding 解決に依存せず構築でき、共有・失効履歴の validator を一つに保ちます。未準備は `NOT_PREPARED`、整合性破損は `DIRECTORY_STALE` / `INTENT_STORE_STALE` で移行 phase を止め、各 owner の `NEEDS_RESOLUTION` に分類しません。prepare を暗黙に呼ばず、準備済みでも照合不能な資格等だけを要解決にします。B1 の合成 index と、B2 が既知の旧履歴を反映して作る本番 index は区別します。
+
 ## 実 handler と試験
 
 `storage_origin_candidate.build_candidate_server(core)` は、明示した session factory の core を使う in-process backend factory です。CLI/HTTP 起動経路や activation flag はありません。model-facing bound proxy の公開は B4 です。backend の auth を model へ公開する指示ではありません。
@@ -33,7 +35,7 @@ PYTHONPATH=. .venv/bin/python -m pytest -q packages/agentstack_mail/tests/test_s
 
 |範囲|B1 の境界／後続|
 |---|---|
-|send/reply|I/A/K/g と宛先 ID/kind・保存元・親/thread の **decision のみ**。`decision_only=true` は送信成功ではなく、message/配送/成功 receipt を作りません。実 writer と contact の全 policy は B4|
+|send/reply|I/revision・A と宛先 ID/kind・保存元・親/thread の **decision のみ**。I/revision は解決 snapshot の記述で、後の transaction を認証する ticket ではありません。`decision_only=true` は送信成功ではなく、message/配送/成功 receipt を作りません。実 writer と contact の全 policy は B4|
 |予約|絶対 path、lease、Mac/WSL Windows側 folder・日本語 path は B3|
 |旧 binding|updater 専用 O/name/K 照合の同 ID projection まで。通常の raw actor 探索にはしません。実 v2 store、publication、crash/resume は B4/B5|
 |更新不能資格|旧 ID を保存した要解決が既定。利用者が明示回復。移行 census・古い audit の診断用短 fingerprint からの要解決判定と本番 backfill は B2|
