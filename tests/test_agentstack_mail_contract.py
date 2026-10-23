@@ -3,7 +3,11 @@ import json
 import re
 import runpy
 import sys
+import tomllib
 from pathlib import Path
+
+from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "packages" / "agentstack_mail"
@@ -18,6 +22,21 @@ from agentstack_mail.contract import (
 )
 
 LIVE_TOOLS_SHA256 = "6ea7dabf41f71091161fa1fcb8a4073a383a65c7bba4785306217fd35f9e8332"
+
+
+def test_base_distribution_requires_the_recommended_ca_bundle() -> None:
+    document = tomllib.loads((PACKAGE / "pyproject.toml").read_text())
+    requirements = [Requirement(value) for value in document["project"]["dependencies"]]
+    certifi = [requirement for requirement in requirements if requirement.name == "certifi"]
+    # An absent requirement has an unconstrained specifier and accepts the old
+    # bundle. Evaluate the real metadata with the packaging resolver grammar.
+    allowed = SpecifierSet(",".join(str(requirement.specifier) for requirement in certifi))
+    assert not allowed.contains("2026.5.20"), "base dependencies still allow the old CA bundle"
+    # .18 removed the affected roots; .19 is the recommended compatibility floor.
+    assert not allowed.contains("2026.10.18")
+    assert allowed.contains("2026.10.19")
+    assert allowed.contains("2027.1.1")
+    assert certifi and all(requirement.marker is None for requirement in certifi)
 
 
 def test_provenance_and_live_contract_fixture_are_present() -> None:
