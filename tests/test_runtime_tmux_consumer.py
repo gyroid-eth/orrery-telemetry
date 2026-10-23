@@ -79,6 +79,171 @@ def test_fresh_legacy_creation_uses_its_explicit_endpoint_only():
         finally:subprocess.run([binary,'-S',str(path),'kill-server'],capture_output=True,check=False)
 
 
+def test_naturally_stale_owned_socket_can_start_a_legacy_session():
+    import hashlib
+    import json
+    import shutil
+    import time
+    binary = shutil.which('tmux')
+    if binary is None:
+        pytest.skip('tmux unavailable')
+    evidence, path = {'calls': []}, None
+
+    def run(argv, **kwargs):
+        reply = subprocess.run(argv, **kwargs)
+        evidence['calls'].append(dict(argv=argv, returncode=reply.returncode,
+            stdout=reply.stdout, stderr=reply.stderr))
+        return reply
+
+    def tmux(*args):
+        return run([binary, '-S', str(path), *args], capture_output=True, text=True, timeout=5)
+
+    try:
+        with tempfile.TemporaryDirectory(prefix='r2stale-', dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as value:
+            home = Path(value).resolve()
+            parent = home / ('tmux-' + str(os.getuid()))
+            parent.mkdir(mode=0o700)
+            path = parent / 'default'
+            evidence['socket'] = str(path)
+            try:
+                seed = tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'Seed', '/bin/sleep 60')
+                assert seed.returncode == 0, seed.stderr
+                pid = tmux('display-message', '-p', '#{pid}')
+                assert pid.returncode == 0 and pid.stdout.strip().isdigit()
+                evidence['seed_server_pid'] = int(pid.stdout.strip())
+                stopped = tmux('kill-server')
+                assert stopped.returncode == 0, stopped.stderr
+                if not path.exists():
+                    pytest.skip('normal server exit removed its socket; no natural stale fixture')
+                for _ in range(100):
+                    observed = tmux('list-sessions', '-F', '#{session_name}')
+                    if API['module_api']('legacy_consumer')['server_absent'](observed):
+                        break
+                    time.sleep(.01)
+                if not path.exists():
+                    pytest.skip('the socket disappeared; no natural stale fixture')
+                assert observed.returncode == 1 and observed.stdout == ''
+                assert API['module_api']('legacy_consumer')['server_absent'](observed)
+                info = path.lstat()
+                evidence['stale_lstat'] = dict(uid=info.st_uid, mode=oct(info.st_mode & 0o777),
+                    device=info.st_dev, inode=info.st_ino)
+                transport = API['legacy_transport'](binary=binary, run=run,
+                    environ={'TMUX_TMPDIR': str(home)})
+                identity = transport.identity
+                assert identity == API['validate_socket'](path)
+                assert getattr(transport, 'server_pid', None) is None
+                c = API['LegacyConsumer'](home, transport=transport, api={}, proof_reader=lambda *a, **kw: [])
+                imported = Path(c.admitted_argv.__code__.co_filename).resolve()
+                assert imported == ROOT / 'bin/lib/legacy_consumer.py'
+                evidence['consumer_source'] = str(imported)
+                evidence['consumer_sha256'] = hashlib.sha256(imported.read_bytes()).hexdigest()
+                refusal = None
+                try:
+                    reply = c.command(['new-session', '-d', '-s', 'Fresh', '/bin/sleep 60'])
+                except API['TargetError'] as error:
+                    refusal = str(error)
+                    evidence['consumer_refusal'] = refusal
+                    assert refusal == 'TMUX_TARGET_UNAVAILABLE'
+                    control = tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'Control', '/bin/sleep 60')
+                    evidence['normal_recreation_returncode'] = control.returncode
+                    assert control.returncode == 0, control.stderr
+                    assert tmux('has-session', '-t', '=Control').returncode == 0
+                else:
+                    evidence['consumer_returncode'] = reply.returncode
+                    assert reply.returncode == 0, reply.stderr
+                    assert transport.identity == API['validate_socket'](path)
+                    assert transport.command('has-session', '-t', '=Fresh').returncode == 0
+                assert refusal is None, 'actual consumer refused a naturally stale owned socket: ' + str(refusal)
+            finally:
+                cleanup = tmux('kill-server')
+                evidence['cleanup_returncode'] = cleanup.returncode
+                evidence['pid_exit_verified'] = False
+    finally:
+        evidence['endpoint_removed_after_context'] = path is not None and not path.exists()
+        print('STALE_TMUX_EVIDENCE=' + json.dumps(evidence))
+
+
+@pytest.mark.parametrize('returncode,stdout,stderr', [
+    (1, '', 'permission denied'),
+    (1, '', 'unexpected tmux diagnostic'),
+    (2, '', 'no sessions'),
+    (1, 'Alpha\n', 'no sessions'),
+    (1, '', 'no sessions\npermission denied'),
+    (1, '', ''),
+])
+def test_new_session_unknown_inventory_never_reaches_creation(consumer, returncode, stdout, stderr):
+    c, calls, _ = consumer
+    original, identity = c.transport.run, c.transport.identity
+    def run(argv, **kwargs):
+        if argv[3] == 'list-sessions':
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, returncode, stdout, stderr)
+        return original(argv, **kwargs)
+    c.transport.run = run
+    with pytest.raises(API['TargetError'], match='^TMUX_TARGET_UNAVAILABLE$'):
+        c.command(['new-session', '-A', '-s', 'Alpha'])
+    assert not any(argv[3] == 'new-session' for argv in calls)
+    assert c.transport.identity == identity
+
+
+@pytest.mark.parametrize('replacement', ['socket', 'file', 'mode'])
+def test_empty_inventory_cannot_adopt_a_changed_or_unsafe_socket(consumer, replacement):
+    c, calls, _ = consumer
+    identity, path = c.transport.identity, c.transport.path
+    with socket.socket(socket.AF_UNIX) as other:
+        def run(argv, **kwargs):
+            calls.append(argv)
+            assert argv[3] == 'list-sessions', 'no creation may follow a changed socket'
+            if replacement == 'socket':
+                other_path = path.with_name('replacement.sock')
+                other.bind(str(other_path))
+                other_path.chmod(0o600)
+                os.replace(other_path, path)
+            elif replacement == 'file':
+                path.unlink()
+                path.write_text('not a socket')
+            else:
+                path.chmod(0o606)
+            return subprocess.CompletedProcess(argv, 1, '', 'no sessions')
+        c.transport.run = run
+        reason = 'TMUX_SOCKET_CHANGED' if replacement == 'socket' else 'TMUX_SOCKET_UNSAFE'
+        with pytest.raises(API['TargetError'], match='^' + reason + '$'):
+            c.command(['new-session', '-A', '-s', 'Alpha'])
+        assert c.transport.identity == identity
+        assert not any(argv[3] == 'new-session' for argv in calls)
+
+
+@pytest.mark.parametrize('success', [False, True])
+def test_creation_failure_or_unsafe_success_does_not_repin(consumer, success):
+    c, calls, _ = consumer
+    identity, path = c.transport.identity, c.transport.path
+    with socket.socket(socket.AF_UNIX) as other:
+        def run(argv, **kwargs):
+            calls.append(argv)
+            if argv[3] == 'list-sessions':
+                return subprocess.CompletedProcess(argv, 1, '', 'no sessions')
+            assert argv[3] == 'new-session'
+            if success:
+                path.unlink()
+                path.write_text('unsafe replacement after ACK')
+            else:
+                other_path = path.with_name('replacement.sock')
+                other.bind(str(other_path))
+                other_path.chmod(0o600)
+                os.replace(other_path, path)
+            return subprocess.CompletedProcess(argv, 0 if success else 1, '', '')
+        c.transport.run = run
+        if success:
+            with pytest.raises(API['TargetError'], match='^TMUX_SOCKET_UNSAFE$'):
+                c.command(['new-session', '-d', '-s', 'Fresh'])
+        else:
+            assert c.command(['new-session', '-d', '-s', 'Fresh']).returncode == 1
+            assert API['validate_socket'](path) != identity
+        assert c.transport.identity == identity
+        assert c.transport.server_pid == 123
+        assert sum(argv[3] == 'new-session' for argv in calls) == 1
+
+
 def test_legacy_dashboard_session_id_is_resolved_as_id_not_literal_name(consumer):
     c,calls,state=consumer
     c.command(['capture-pane','-t','$1','-p'])
