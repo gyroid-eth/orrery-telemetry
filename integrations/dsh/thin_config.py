@@ -17,10 +17,11 @@ from urllib.parse import urlsplit
 
 THIN_CONFIG_CONTRACT = 1
 HELPER_MODEL_CONTRACT = 1
+CONNECTIONS = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'hooks/native_connections.py'))
 
 
 def read(file):
-    return json.loads(Path(file).read_text())
+    return CONNECTIONS['read_manifest'](file)
 
 
 def save(file, value):
@@ -80,11 +81,11 @@ def validate_input(document):
     """Read-only admission; callable with the shared selection subset."""
     try:
         root = absolute(document['product_root'], directory=True)
-        manifest = read(absolute(document['manifest_file']))
+        manifest = CONNECTIONS['read_manifest'](absolute(document['manifest_file']))
         backend_id = document['backend_id']
-        if backend_id not in ('deepseek', 'strata'):
-            raise ValueError('unknown_backend')
-        metadata = manifest['backends'][backend_id]
+        kind, metadata = CONNECTIONS['resolve_connection'](manifest, backend_id)
+        if 'backend_kind' in document and document['backend_kind'] != kind:
+            raise ValueError('connection_kind_changed')
         if document['model'] not in model_ids(metadata):
             raise ValueError('model_mismatch')
         helper = document.get('helper_model', 'same')

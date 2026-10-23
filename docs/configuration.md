@@ -75,6 +75,36 @@ Murmur switch でも on / off を切り替えられ、その選択は browser �
 
 mail 系だけを `NOT CONFIGURED` にし、local telemetry を診断に残す設計です。
 
+<a id="native-connections"></a>
+
+## DeepSeekやLocalの接続先を複数残す
+
+API 27以降では、1つの私有manifestにDeepSeek、workstationのLocal、EPYCのLocalなどを同時に登録できます。既存の`deepseek`/`strata`は変更不要です。追加接続には別のIDと`kind`が必要です。以下はmanifestの`backends`部分の例です。`<FORMAL_MODEL_ID>`は、そのサーバーが受け付ける実際のmodel IDへ置き換えます。
+
+```json
+{
+  "backends": {
+    "deepseek": {"model": "deepseek-flash", "models": ["deepseek-flash"]},
+    "strata": {"label": "workstation", "server": "workstation", "model": "<FORMAL_MODEL_ID>", "models": ["<FORMAL_MODEL_ID>"]},
+    "strata-epyc": {"kind": "strata", "label": "EPYC", "server": "EPYC", "model": "<FORMAL_MODEL_ID>", "models": ["<FORMAL_MODEL_ID>"]}
+  }
+}
+```
+
+既存のDeepSeekと`strata`の設定を残し、コピーした私有設定で次を揃えます。
+
+| ファイル内の場所 | 追加接続に設定するもの |
+| --- | --- |
+| manifestの`backends.strata-epyc` | `kind: "strata"`、実際のmodel ID、見分けられる`label`と`server` |
+| dsh backendファイルの`backends.strata-epyc` | この接続専用の`base_url`、`model`、キー参照。必要なら`model_definition.id`、`contextWindow`、`maxTokens`もここへ |
+| Hermes設定の`profiles.strata-epyc` | この接続専用の`provider`名、`base_url`、`api_mode`、`model`、`context_length`、キー参照 |
+
+dshとHermesのURL形式は同じとは限りません。[初期設定のAPI条件](native-setup.md#1-最初に使う組合せを選ぶ)に従います。Macのキー参照は既存のkeychain/service/accountと`key_cmd`の形式、WSLはmanifestの接続ごとの`credential_ref`を使います。キーの値はJSONへ書きません。contextは各サーバーの実際の値、maxTokensは必要な出力上限に合わせます。同じmodel IDだからといって別サーバーの値やキー参照を流用しないでください。
+
+接続IDは`[a-z][a-z0-9_-]{0,63}`の形式です。CLI名や`same`/`auto`/`main`/`custom`などの予約名は使えません。新IDの`kind`は`deepseek`か`strata`を明示し、旧IDの種別は変更できません。同じIDの重複、未知ID、未知kind、別接続のhelper modelは拒否します。helperは同じ接続のmodel一覧から選びます。
+
+manifestを有効化して使うharnessごとに正規の静的validateを行い、[初期設定の手順5](native-setup.md#5-設定例をコピーして接続先をつなぐ)どおりinstallerへ渡します。cockpitではLocal modelsの各行のserver名（workstation / EPYC）で選び分けます。Telemetry単体では接続labelが別タブに出ます。APIとCLIでは接続IDを保持し、例えば`--harness dsh --backend strata-epyc --model <FORMAL_MODEL_ID>`を指定します。resumeも保存した接続IDとnative sessionを使い、別の接続へ自動で移しません。global modeと実接続の受入範囲は従来どおりです。
+
 ## Output / deliverables
 
 Output index は `LOG_*.md` の先頭付近にある `agent: <name>` と dashboard の agent 名が一致する file を最大25件表示します。

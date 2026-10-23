@@ -3,11 +3,13 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shlex
 import stat
 import sys
 
 HARNESSES = ('dsh', 'hermes')
+CONNECTIONS = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'hooks/native_connections.py'))
 
 
 def matches_command(program, command):
@@ -50,11 +52,12 @@ def metadata(runtime_dir, name, program):
             return result
         record = json.loads(source.read_text())
         if (record.get('agent_name') != name or record.get('program') != program
-                or record.get('harness') != program
-                or record.get('harness_backend') not in ('deepseek', 'strata')):
+                or record.get('harness') != program):
             return result
-        backend = record['harness_backend']
-        result.update(provider=backend, locality='local' if backend == 'strata' else 'cloud')
+        backend = record.get('harness_backend')
+        kind_args = {'kind': record['harness_backend_kind']} if 'harness_backend_kind' in record else {}
+        kind = CONNECTIONS['connection_kind'](backend, **kind_args)
+        result.update(provider=backend, locality='local' if kind == 'strata' else 'cloud')
     except (OSError, ValueError, AttributeError):
         pass
     return result

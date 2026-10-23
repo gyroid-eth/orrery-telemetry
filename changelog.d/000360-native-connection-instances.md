@@ -1,0 +1,3 @@
+### Keep multiple native connections (API 27)
+
+Keep existing `deepseek`/`strata` settings and add explicitly declared connection IDs such as `strata-epyc`. API 27 separates each connection's ID from its DeepSeek/Local kind. Equal wire model IDs on two servers retain their own route, credential reference, limits and helper choices. Catalog, standard API/CLI launch, static admission, Linux credential references and native resume share the selector rules. The existing NEW AGENT tabs show connection labels; bilingual setup/configuration guides explain meaningful server names for cockpit. This does not add global-mode native support or claim live multi-server acceptance.

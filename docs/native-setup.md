@@ -21,7 +21,7 @@ cockpitはターミナルを並べて操作する画面、Telemetryはagentの�
 
 「DeepSeek＋dsh」「DeepSeek＋Hermes」のように、接続先と動かすアプリを1つずつ選びます。dshとHermesを両方入れても、接続先が同じならAPIキーを2本発行する必要はありません。Localを使うためにDeepSeekのアカウントを作る必要もありません。
 
-**Localは接続先の仕様を先に確認します。** dshは固定DeepSeek adapterと互換のAPIを使い、HTTP/HTTPSのURLを受け付けます。HermesはHTTPSが必須で、API形式は`chat_completions`か`anthropic_messages`です。HTTPだけのサーバーをHermesへそのまま指定できません。設定の内部IDは`strata`ですが、Strataのホストに限定するものではありません。任意の「OpenAI互換」サーバーが動くという保証でもありません。
+**Localは接続先の仕様を先に確認します。** dshは固定DeepSeek adapterと互換のAPIを使い、HTTP/HTTPSのURLを受け付けます。HermesはHTTPSが必須で、API形式は`chat_completions`か`anthropic_messages`です。HTTPだけのサーバーをHermesへそのまま指定できません。従来のLocal設定例の接続IDは`strata`ですが、Strataのホストに限定するものではありません。任意の「OpenAI互換」サーバーが動くという保証でもありません。
 
 **キーを保存・参照せずに使うLocal構成は、現在のORRERYでは非対応です。** 両harnessともOSに保存したキーへの参照が必要です。キー不要のサーバーへ仮のキーを設定して済ませず、対応する認証付きの接続先を用意してから、このガイドへ進んでください。
 
@@ -159,6 +159,7 @@ agentが合わせるのは、manifestからdsh/Hermesの設定を指す2箇所�
 
 1. cockpitなら[画面内の＋NEW AGENT](https://github.com/gyroid-eth/orrery/blob/master/docs/usage.md#new-agent)、Telemetry単体なら[NEW AGENT](dashboard.md#native-models-and-harnesses)を開きます。
 2. 科学者、DeepSeekまたはLocal models、設定済みmodel、dshまたはHermesを選びます。
+   Localを複数残す場合は、[複数接続の設定](configuration.md#native-connections)で別IDとserver名を付け、workstation / EPYCなどの表示を見て選びます。同じmodel IDでも接続先は別です。
 3. 新しい作業フォルダーを指定し、まず短い依頼を1つ送ります。modelの応答を確認してから、[Mailの通し確認](getting-started.md#5-しりとりで通しの確認をする)へ進みます。
 
 ![WSLの実TelemetryでLocal modelsとHermesを選択した画面](img/wsl-native-harness-picker.png)

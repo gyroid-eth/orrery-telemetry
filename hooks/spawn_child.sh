@@ -441,8 +441,8 @@ done
 
 if [[ -n "$HARNESS" || -n "$HARNESS_BACKEND" ]]; then
     case "$HARNESS:$HARNESS_BACKEND" in
-        dsh:deepseek|dsh:strata|hermes:deepseek|hermes:strata) ;;
-        *) echo "Error: --harness dsh|hermes requires --backend deepseek|strata" >&2; exit 1 ;;
+        dsh:?*|hermes:?*) ;; # The shared helper validates the declared connection below.
+        *) echo "Error: --harness dsh|hermes requires --backend CONNECTION_ID" >&2; exit 1 ;;
     esac
     if [[ "$USE_CODEX" == true || "$CODEX_MCP_PROFILE_CLI" == true \
         || "$CLAUDE_CHILD_CHROME_CLI" == true ]]; then

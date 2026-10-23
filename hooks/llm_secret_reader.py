@@ -6,11 +6,13 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 
 SECRET_TOOL = '/usr/bin/secret-tool'
 CONTEXT_KEYS = ('DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR')
+CONNECTIONS = runpy.run_path(str(Path(__file__).with_name('native_connections.py')))
 REASONS = {'invalid_credential_ref', 'credential_reference_conflict',
            'unsupported_credential_store', 'credential_reader_unavailable',
            'credential_unavailable', 'credential_timeout'}
@@ -81,16 +83,17 @@ def read_ref(ref, *, runner=None):
 
 def manifest_ref(manifest_file, backend):
     try:
-        data = json.loads(Path(manifest_file).read_text())
-        return validate_ref(data['backends'][backend]['credential_ref'])
-    except (OSError, UnicodeError, KeyError, TypeError, json.JSONDecodeError):
+        data = CONNECTIONS['read_manifest'](manifest_file)
+        _, spec = CONNECTIONS['resolve_connection'](data, backend)
+        return validate_ref(spec['credential_ref'])
+    except (OSError, UnicodeError, KeyError, TypeError, ValueError):
         raise ValueError('invalid_credential_ref') from None
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', required=True)
-    parser.add_argument('--backend', choices=('deepseek', 'strata'), required=True)
+    parser.add_argument('--backend', required=True)
     args = parser.parse_args()
     try:
         key = read_ref(manifest_ref(args.manifest, args.backend))

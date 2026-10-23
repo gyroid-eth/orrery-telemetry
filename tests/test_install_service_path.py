@@ -46,9 +46,11 @@ def test_dashboard_only_payload_copies_and_updates_internal_reader(tmp_path):
             text=True, capture_output=True, timeout=10)
         assert done.returncode == 0, done.stderr
         assert (target / 'hooks/llm_secret_reader.py').read_bytes() == (ROOT / 'hooks/llm_secret_reader.py').read_bytes()
+        assert (target / 'hooks/native_connections.py').read_bytes() == (ROOT / 'hooks/native_connections.py').read_bytes()
         assert private.read_bytes() == b'keep configuration bytes'
         if _ == 0:
             (target / 'hooks/llm_secret_reader.py').write_bytes(b'old installed reader')
+            (target / 'hooks/native_connections.py').write_bytes(b'old installed connection rules')
 
 
 def _codex_path_block() -> str:

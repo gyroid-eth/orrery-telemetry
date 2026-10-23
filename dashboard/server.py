@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 26
+API_GENERATION = 27
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -8137,12 +8137,32 @@ def do_spawn(payload: dict) -> dict:
     harness = payload.get("harness")
     native = {"claude": ("claude-code", "claudecode"),
               "codex": ("codex-cli", "codex"), "gemini": ("gemini",)}
-    if ((provider in ("deepseek", "strata") and harness not in ("dsh", "hermes"))
-            or (provider not in ("deepseek", "strata") and "harness" in payload
+    connection_rows = []
+    is_native = provider in ("deepseek", "strata")
+    if provider not in native:
+        try:
+            # New connection IDs are exact selectors, never aliases for a host.
+            connections = _standard_catalog_module().CONNECTIONS
+            connections['validate_id'](provider)
+            if not is_native and raw_provider != provider:
+                raise ValueError('invalid_connection_id')
+            connection_rows = _spawn_catalog_providers()
+            matches = [row for row in connection_rows if row.get('id') == provider]
+            if len(matches) == 1:
+                row = matches[0]
+                kind_args = {'kind': row['kind']} if 'kind' in row else {}
+                connections['connection_kind'](provider, **kind_args)
+                is_native = True
+            elif len(matches) > 1:
+                raise ValueError('ambiguous_connection_configuration')
+        except ValueError as exc:
+            return {'ok': False, 'error': str(exc)}
+    if ((is_native and harness not in ("dsh", "hermes"))
+            or (not is_native and "harness" in payload
                 and harness not in native.get(provider, ()))):
         return {"ok": False, "error": "unsupported harness", "error_code": "unsupported_harness"}
     helper_model = payload.get("helper_model")
-    if provider not in ("deepseek", "strata") and helper_model not in (None, "same"):
+    if not is_native and helper_model not in (None, "same"):
         return {"ok": False, "error": "unsupported helper model"}
     for field in ("model", "effort"):
         if payload.get(field) is not None and not isinstance(payload[field], str):
@@ -8198,7 +8218,7 @@ def do_spawn(payload: dict) -> dict:
     # base / tools (hooks/child_tools.py). Everything that depends on the
     # child's final directory is checked again by the launcher, which fails
     # closed before tmux starts.
-    tools_args, tools_error = _spawn_tools_args(payload, harness if provider in ("deepseek", "strata") else provider, chrome, chrome_device)
+    tools_args, tools_error = _spawn_tools_args(payload, harness if is_native else provider, chrome, chrome_device)
     if tools_error:
         return {"ok": False, "error": tools_error}
     if provider == "claude":
@@ -8236,15 +8256,16 @@ def do_spawn(payload: dict) -> dict:
             launcher_env=(("AGENTSTACK_CODEX_BIN", launcher.binary),) if launcher.binary else (),
             effort_arg=bool(effort),
         )
-    elif provider in ("deepseek", "strata"):
-        selected = None
-        for row in _spawn_catalog_providers():
+    elif is_native:
+        selections = []
+        for row in connection_rows:
             if row.get("id") != provider:
                 continue
             for candidate in row.get("models", []):
                 if isinstance(candidate, dict) and candidate.get("id") == model:
-                    selected = next((h for h in candidate.get("harnesses", [])
-                                     if h.get("id") == harness), None)
+                    selections.extend(h for h in candidate.get("harnesses", [])
+                                      if h.get("id") == harness)
+        selected = selections[0] if len(selections) == 1 else None
         if not selected or selected.get("available") is not True:
             return {"ok": False, "error": "model and harness are unavailable",
                     "error_code": "spawn_pair_unavailable"}
@@ -8701,7 +8722,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             f.flush()
             os.fsync(f.fileno())
         os.chmod(token_file, 0o600)
-        if provider in {"claude", "codex", "deepseek", "strata"}:
+        if provider in {"claude", "codex"} or program in harness_runtime.HARNESSES:
             binding_file = f"{token_file}.binding.json"
             binding_fd = os.open(binding_file, open_flags, 0o600)
             with os.fdopen(binding_fd, "w") as f:

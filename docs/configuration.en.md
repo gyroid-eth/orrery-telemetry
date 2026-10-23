@@ -68,6 +68,36 @@ The following do not work.
 
 Only mail features become `NOT CONFIGURED`; local telemetry remains available for diagnosis.
 
+<a id="native-connections"></a>
+
+## Keep multiple DeepSeek or Local connections
+
+With API 27 or later, one private manifest can keep DeepSeek, a Local server on workstation, and a Local server on EPYC. Existing `deepseek`/`strata` entries need no changes. Give each additional connection its own ID and an explicit `kind`. This example shows only the manifest's `backends` section. Replace `<FORMAL_MODEL_ID>` with the actual model ID accepted by that server.
+
+```json
+{
+  "backends": {
+    "deepseek": {"model": "deepseek-flash", "models": ["deepseek-flash"]},
+    "strata": {"label": "workstation", "server": "workstation", "model": "<FORMAL_MODEL_ID>", "models": ["<FORMAL_MODEL_ID>"]},
+    "strata-epyc": {"kind": "strata", "label": "EPYC", "server": "EPYC", "model": "<FORMAL_MODEL_ID>", "models": ["<FORMAL_MODEL_ID>"]}
+  }
+}
+```
+
+Keep the existing DeepSeek and `strata` settings. In your private copies, add matching entries in these locations:
+
+| Location | Settings for the added connection |
+| --- | --- |
+| Manifest `backends.strata-epyc` | `kind: "strata"`, actual model IDs, and distinct `label` and `server` names |
+| dsh backend file `backends.strata-epyc` | This connection's `base_url`, `model`, and credential reference. Put any `model_definition.id`, `contextWindow`, and `maxTokens` here too |
+| Hermes configuration `profiles.strata-epyc` | This connection's `provider` name, `base_url`, `api_mode`, `model`, `context_length`, and credential reference |
+
+dsh and Hermes may require different URL forms; follow the [API requirements in initial setup](native-setup.en.md#1-choose-a-provider-and-a-harness). On Mac, use the existing keychain service/account and `key_cmd` formats. On WSL, use a separate manifest `credential_ref` for each connection. Keep key values out of JSON. Match context to each server's actual limit and maxTokens to the output limit you need. Equal model IDs do not imply equal server limits or credential references.
+
+Connection IDs match `[a-z][a-z0-9_-]{0,63}`. CLI names and reserved selectors such as `same`, `auto`, `main`, and `custom` cannot be used. New IDs require `kind: "deepseek"` or `kind: "strata"`; legacy IDs cannot change kind. Duplicate IDs, unknown IDs, unknown kinds, and helpers from another connection are rejected. Choose helpers from the same connection's model list.
+
+Enable the manifest, run the standard static validation for each harness you will use, and pass it to the installer as described in [step 5 of initial setup](native-setup.en.md#5-connect-the-configuration-files). In cockpit, select the Local models row with the intended server name (workstation / EPYC). Standalone Telemetry shows separate tabs with each connection's label. API and CLI calls retain the connection ID, for example `--harness dsh --backend strata-epyc --model <FORMAL_MODEL_ID>`. Resume retains the saved connection ID and native session; it does not move to another connection automatically. Existing global-mode restrictions and limits on real connection acceptance still apply.
+
 ## Output / deliverables
 
 The Output index displays up to 25 files where `agent: <name>` near the beginning of a `LOG_*.md` file matches the dashboard agent name.

@@ -11,13 +11,14 @@ from dashboard import managed_catalog, server
 @pytest.fixture
 def catalog(monkeypatch):
     rows = [
-        {'id': provider, 'models': [{'id': provider + '-fixture', 'harnesses': [
+        {'id': provider, 'kind': 'deepseek' if provider == 'deepseek' else 'strata',
+         'models': [{'id': provider + '-fixture', 'harnesses': [
             {'id': 'dsh', 'available': True, 'efforts': ['low', 'high'],
              'default_effort': 'high', 'effort_source': 'harness'},
             {'id': 'hermes', 'available': True, 'efforts': None,
              'default_effort': None, 'effort_source': 'unknown'},
         ]}]}
-        for provider in ('deepseek', 'strata')
+        for provider in ('deepseek', 'strata', 'strata-epyc')
     ]
     monkeypatch.setattr(server, '_spawn_catalog_providers', lambda: rows)
     monkeypatch.setattr(server, '_mcp_call', lambda *a, **k: pytest.fail('unexpected registration'))
@@ -95,7 +96,8 @@ def test_native_aliases_keep_existing_dispatch(monkeypatch, provider, aliases):
         assert server.do_spawn({**payload, 'harness': alias, 'helper_model': 'same'}) == expected
 
 
-@pytest.mark.parametrize('provider,harness', [('deepseek', 'dsh'), ('strata', 'hermes')])
+@pytest.mark.parametrize('provider,harness', [('deepseek', 'dsh'), ('strata', 'hermes'),
+                                            ('strata-epyc', 'dsh'), ('strata-epyc', 'hermes')])
 @pytest.mark.parametrize('asynchronous', [False, True])
 def test_registration_binding_and_response_use_standard_name_contract(
         preview, monkeypatch, tmp_path, provider, harness, asynchronous):

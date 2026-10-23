@@ -232,6 +232,7 @@ def test_secret_service_ref_generates_one_reader_and_guard_definition(monkeypatc
         import shutil
         (fixture.product / 'hooks').mkdir()
         shutil.copyfile(ROOT / 'hooks/llm_secret_reader.py', fixture.product / 'hooks/llm_secret_reader.py')
+        shutil.copyfile(ROOT / 'hooks/native_connections.py', fixture.product / 'hooks/native_connections.py')
         reference = {'store': 'secret-service', 'attributes': {'service': 'fixture', 'account': 'child'}}
         manifest = thin.read(fixture.manifest)
         manifest['backends']['strata']['credential_ref'] = reference
