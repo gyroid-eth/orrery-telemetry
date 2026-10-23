@@ -51,6 +51,23 @@ console.log(JSON.stringify(buildSpawnPayload()));
     assert 'helper_model' not in result and 'headless' not in result
 
 
+def test_same_model_on_two_local_connections_keeps_exact_payload_selector():
+    result=run('''
+spmProviders=normalizeSpawnProviders({providers:['strata','strata-epyc'].map(id=>({
+ id,kind:'strata',label:id==='strata'?'workstation':'EPYC',locality:'local',models:[
+ {id:'same-wire-model',harnesses:[{id:'dsh',available:true},{id:'hermes',available:true}]}]}))});
+const payloads=[];
+for(const p of spmProviders)for(const h of ['dsh','hermes']){
+ spmSelectedProvider=p.id;spmSelectedModel=p.models[0].id;spmSelectedHarness=h;
+ payloads.push(buildSpawnPayload());
+}
+console.log(JSON.stringify(payloads));
+''')
+    assert [(p['provider'],p['model'],p['harness']) for p in result] == [
+        (connection,'same-wire-model',harness)
+        for connection in ('strata','strata-epyc') for harness in ('dsh','hermes')]
+
+
 def test_required_effort_needs_explicit_selection_even_with_default():
     assert run('''
 spmProviders[0].capabilities={effort_required:true};

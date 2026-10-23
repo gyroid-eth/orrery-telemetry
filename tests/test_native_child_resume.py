@@ -238,7 +238,7 @@ def test_prepared_resume_cli_in_isolated_minimal_environment(tmp_path, monkeypat
     assert current['harness_state_dir'] == str(directory)
 
 
-@pytest.mark.parametrize('changed_profile', [False, True])
+@pytest.mark.parametrize('changed_profile', [False, True, 'new_connection'])
 def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, monkeypatch, request, changed_profile):
     from test_dsh_thin_config import ThinTests
     from test_harness_child import staged
@@ -246,10 +246,18 @@ def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, 
     fixture.setUp()
     request.addfinalizer(fixture.doCleanups)
     manifest = native.read(fixture.manifest)
+    backend = 'strata-epyc' if changed_profile == 'new_connection' else 'strata'
+    if backend != 'strata':
+        manifest['backends'][backend] = {**manifest['backends']['strata'], 'kind': 'strata'}
+        template = native.read(fixture.template)
+        routes = native.read(template['backend_file'])
+        routes['backends'][backend] = dict(routes['backends']['strata'])
+        native.save(Path(template['backend_file']), routes)
     manifest['harnesses']['dsh']['python'] = sys.executable
     native.save(fixture.manifest, manifest)
     args = staged(tmp_path, 'dsh')
     args.manifest, args.model = str(fixture.manifest), 'a'
+    args.backend = backend
     args.helper_model = 'b'
     mcp = native.read(args.mcp_config)
     mcp['mcpServers']['orrery-mail'].update(command='/fixture/proxy', args=[])
@@ -266,7 +274,7 @@ def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, 
     assert resume.mark_retired(runtime, args.agent_name, retention_days=30)
     resume.begin_resume(runtime, args.agent_name, agent_id=7,
                         project_key=args.project_key, program='dsh')
-    if changed_profile:
+    if changed_profile and changed_profile != 'new_connection':
         source = native.read(directory / 'input.json')
         source['native_profile_env'] = {'DSH_HOME': str(tmp_path / 'foreign-profile')}
         native.save(directory / 'input.json', source)
@@ -282,6 +290,7 @@ def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, 
     assert resumed['env']['DSH_HOME'] == first['env']['DSH_HOME']
     assert resumed['argv'][-2:] == ['--resume', 'exact-owned-id']
     source = native.read(directory / 'input.json')
+    assert source['backend_id'] == backend
     assert Path(source['prompt_file']).read_text() == ''
     blocks = native.read(directory / 'dsh-config/native.patch.json')
     proxy = next(row for block in blocks for row in block.get('insert', [])
@@ -295,7 +304,7 @@ def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, 
     # never executes a runtime, provider plugin, credential helper or Mail RPC.
 
 
-@pytest.mark.parametrize('changed_profile', [False, True, 'legacy', 'missing_home', 'missing_pin', 'missing_history', 'unknown_reason'])
+@pytest.mark.parametrize('changed_profile', [False, True, 'legacy', 'missing_home', 'missing_pin', 'missing_history', 'unknown_reason', 'new_connection'])
 def test_real_hermes_generator_round_trip_preserves_owned_native_session(tmp_path, monkeypatch, request, changed_profile):
     from shutil import copy2
     from unittest.mock import patch
@@ -329,10 +338,16 @@ def test_real_hermes_generator_round_trip_preserves_owned_native_session(tmp_pat
         'harness': 'hermes', 'complete': True, 'details': fixture.template_data})
     fixture.save(fixture.template, {**fixture.template_data, 'generation_receipt': str(receipt)})
     manifest = {**fixture.manifest_data, 'enabled': True}
+    backend = 'strata-epyc' if changed_profile == 'new_connection' else 'deepseek'
+    if backend != 'deepseek':
+        manifest['backends'][backend] = {**manifest['backends']['deepseek'], 'kind': 'strata'}
+        template = native.read(fixture.template)
+        template['profiles'][backend] = dict(template['profiles']['strata'])
+        fixture.save(fixture.template, template)
     manifest['harnesses']['hermes']['python'] = sys.executable
     fixture.save(fixture.manifest, manifest)
     args = staged(tmp_path, 'hermes')
-    args.manifest, args.model, args.backend = str(fixture.manifest), 'fixture-main', 'deepseek'
+    args.manifest, args.model, args.backend = str(fixture.manifest), 'fixture-main', backend
     args.helper_model = 'fixture-helper'
     mcp = native.read(args.mcp_config)
     mcp['mcpServers']['orrery-mail'].update(command='/fixture/proxy', args=[])
@@ -356,7 +371,7 @@ def test_real_hermes_generator_round_trip_preserves_owned_native_session(tmp_pat
         assert resume.mark_retired(runtime, args.agent_name, retention_days=30)
         resume.begin_resume(runtime, args.agent_name, agent_id=7,
                             project_key=args.project_key, program='hermes')
-        if changed_profile:
+        if changed_profile and changed_profile != 'new_connection':
             source = native.read(directory / 'input.json')
             reason = 'native_resume_profile_changed'
             if changed_profile == 'legacy':
@@ -402,6 +417,7 @@ def test_real_hermes_generator_round_trip_preserves_owned_native_session(tmp_pat
         assert memory.read_text() == 'synthetic-memory-marker-distinct-from-conversation'
         assert resumed['argv'][-2:] == ['--resume', 'exact-hermes-id']
         source = native.read(directory / 'input.json')
+        assert source['backend_id'] == backend
         assert Path(source['prompt_file']).read_text() == ''
         overlay = config.read(directory / 'overlay/config.yaml')
         assert overlay['delegation']['model'] == 'fixture-helper'

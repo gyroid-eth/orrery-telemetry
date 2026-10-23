@@ -38776,7 +38776,7 @@ function renderSpawnProviders(providers){
   root.innerHTML=providers.map(provider=>
     `<button type="button" class="spm-provider-tab" role="tab" `+
     `data-provider="${esc(provider.id)}" aria-selected="false">`+
-    `${esc(provider.locality==='local'?'Local models':provider.label||provider.id)}</button>`
+    `${esc(provider.id==='strata'&&provider.label==='Strata'?'Local models':provider.label||provider.id)}</button>`
   ).join('');
   root.querySelectorAll('.spm-provider-tab').forEach(btn=>{
     btn.onclick=()=>selectSpawnProvider(btn.dataset.provider);
@@ -39103,7 +39103,8 @@ function buildSpawnPayload(){
      spmNameStatus.get(spmSelectedName)==='available')
     payload.name=spmSuggestedName;
   const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
-  if(['deepseek','strata'].includes(payload.provider))payload.harness=spmSelectedHarness;
+  if(provider&&(['deepseek','strata'].includes(provider.kind)||
+     ['deepseek','strata'].includes(provider.id)))payload.harness=spmSelectedHarness;
   const helper=SPM('spm-helper');
   if(helper&&!helper.disabled&&helper.value!=='same')payload.helper_model=helper.value;
   const effort=spawnEffectiveEffort(provider);

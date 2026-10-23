@@ -150,6 +150,8 @@ model変更時も主/helperは同じbackendの正式IDだけを許可し、effor
 
 ### Local / Strataへ変更する場合
 
+既存Localを残して別のLocalも追加する場合は、置換せず[複数接続の設定](../../docs/configuration.md#native-connections)に従い、manifest・dsh backend・Hermes profileへ同じ新接続IDを追加します。
+
 Bの標準例はDeepSeek用です。Localはbackend IDを `strata` とし、利用者コピーの
 次のfieldを同じ接続先へ揃えます。runtime参照とコピー先の絶対pathはそのまま整合させます。
 

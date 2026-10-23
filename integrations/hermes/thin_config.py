@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 THIN_CONFIG_CONTRACT = 1
 HELPER_MODEL_CONTRACT = 1
+CONNECTIONS = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'hooks/native_connections.py'))
 PLUGIN = 'orrery-thin-guard'
 EFFORTS = {'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'}
 
@@ -29,7 +30,7 @@ EFFORTS = {'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'}
 def read(path):
     text = Path(path).read_text(encoding='utf-8')
     try:
-        return json.loads(text)
+        return json.loads(text, object_pairs_hook=CONNECTIONS['_unique_pairs'])
     except json.JSONDecodeError:
         # Data parser only: never import Hermes (which can bootstrap at import).
         try:
@@ -63,7 +64,9 @@ def validate_input(document):
                           'builtin_provider_collision', 'invalid_runtime', 'invalid_route',
                           'invalid_helper_model', 'invalid_resume_session_id',
                           'invalid_credential_ref', 'credential_reference_conflict',
-                          'unsupported_credential_store', 'credential_reader_unavailable'}:
+                          'unsupported_credential_store', 'credential_reader_unavailable',
+                          'invalid_connection_kind', 'connection_kind_changed',
+                          'ambiguous_connection_configuration'}:
             raise
         raise ValueError('invalid_runtime') from None
     except (OSError, KeyError, TypeError, StopIteration, SyntaxError, AttributeError):
@@ -104,15 +107,16 @@ def profile_route(spec, backend):
 
 def _validate(document):
     backend = document['backend_id']
-    if backend not in ('deepseek', 'strata'):
-        raise ValueError('unknown_backend')
-    manifest = read(document['manifest_file'])
+    manifest = CONNECTIONS['read_manifest'](document['manifest_file'])
+    kind, _ = CONNECTIONS['resolve_connection'](manifest, backend)
+    if 'backend_kind' in document and document['backend_kind'] != kind:
+        raise ValueError('connection_kind_changed')
     template_file = Path(manifest['harnesses']['hermes']['config_file'])
     config = read(template_file)
     spec = config['profiles'].get(backend)
     if not isinstance(spec, dict):
         raise ValueError('unknown_backend')
-    selected = profile_route(spec, backend)
+    selected = profile_route(spec, kind)
     inherited, provider, route = selected['inherited'], selected['provider'], selected['route']
     source = Path(config['hermes_source']).resolve()
     if not isinstance(provider, str) or not provider.strip() or provider.strip().lower() in (_provider_ids(source) | {'auto', 'main', 'custom'}):
@@ -428,6 +432,7 @@ def main():
         _save(args.out, generate(read(args.input)))
     except Exception as error:
         allowed = {'unknown_backend', 'model_mismatch', 'invalid_effort', 'builtin_provider_collision',
+                   'invalid_connection_kind', 'connection_kind_changed', 'ambiguous_connection_configuration',
                    'invalid_runtime', 'invalid_route', 'invalid_input', 'invalid_telemetry_config', 'invalid_mcp_config', 'unsupported_mcp_selection',
                    'inherited_mcp_conflict', 'owned_link_conflict', 'invalid_helper_model',
                    'invalid_resume_session_id', 'native_resume_profile_changed', 'native_provider_conflict',

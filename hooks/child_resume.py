@@ -15,6 +15,7 @@ import secrets
 import fcntl
 import hmac
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -925,9 +926,16 @@ def native_resume_input(runtime_dir: Path, state: dict[str, Any]) -> dict[str, A
     Callback metadata is separate from the shared credential-bearing child file.
     """
     name, harness = state.get('agent_name'), state.get('program')
+    try:
+        spec = importlib.util.spec_from_file_location('_resume_connection_rules', Path(__file__).with_name('native_connections.py'))
+        connections = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(connections)
+        kind_args = {'kind': state['harness_backend_kind']} if 'harness_backend_kind' in state else {}
+        kind = connections.connection_kind(state.get('harness_backend'), **kind_args)
+    except ValueError:
+        raise ResumeStateError('identity_mismatch', 'Native connection identity is invalid') from None
     if (not isinstance(name, str) or not SAFE_NAME.fullmatch(name)
-            or harness not in HARNESS_PROGRAMS or state.get('harness') != harness
-            or state.get('harness_backend') not in {'deepseek', 'strata'}):
+            or harness not in HARNESS_PROGRAMS or state.get('harness') != harness):
         raise ResumeStateError('identity_mismatch', 'Native child identity is invalid')
     runtime_dir = runtime_dir.resolve()
     owned = runtime_dir / 'child-agents' / (name + '.harness')
@@ -958,6 +966,7 @@ def native_resume_input(runtime_dir: Path, state: dict[str, Any]) -> dict[str, A
     _parse_timestamp(event.get('created_at'), 'native session creation')
     if (document.get('agent_name') != name or document.get('program') != harness
             or document.get('backend_id') != state['harness_backend']
+            or document.get('backend_kind', kind) != kind
             or document.get('project_key') != state.get('project_key')
             or document.get('state_dir') != str(directory)
             or document.get('runtime_dir') != str(runtime_dir)):
@@ -965,7 +974,7 @@ def native_resume_input(runtime_dir: Path, state: dict[str, Any]) -> dict[str, A
     cwd = document.get('cwd')
     if not isinstance(cwd, str) or not Path(cwd).is_absolute() or not Path(cwd).is_dir():
         raise ResumeStateError('cwd_missing', 'Native working directory is unavailable')
-    return {**document, 'resume_session_id': session_id}
+    return {**document, 'backend_kind': kind, 'resume_session_id': session_id}
 
 
 def inspect_retained(

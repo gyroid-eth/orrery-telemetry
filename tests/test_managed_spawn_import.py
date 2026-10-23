@@ -23,7 +23,7 @@ class LaunchdImportTests(unittest.TestCase):
             shutil.copyfile(ROOT / 'dashboard' / file, self.dashboard / file)
         hooks = self.product / 'hooks'
         hooks.mkdir()
-        for file in ('harness_child.py', 'child_resume.py', 'child_tools.py'):
+        for file in ('harness_child.py', 'child_resume.py', 'child_tools.py', 'native_connections.py'):
             shutil.copyfile(ROOT / 'hooks' / file, hooks / file)
         self.manifest = self.home / 'manifest.json'
         self.manifest.write_text(json.dumps({'enabled': True,

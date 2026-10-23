@@ -17,7 +17,7 @@ import time
 import types
 
 if __package__:
-    from . import child_resume, child_tools
+    from . import child_resume, child_tools, native_connections
 else:
     # Isolated Python excludes the script directory from sys.path. Load only
     # product siblings through a private package, independent of cwd/PYTHONPATH.
@@ -26,10 +26,10 @@ else:
     sys.modules[package.__name__] = package
     child_resume = importlib.import_module(package.__name__ + '.child_resume')
     child_tools = importlib.import_module(package.__name__ + '.child_tools')
+    native_connections = importlib.import_module(package.__name__ + '.native_connections')
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESSES = {'dsh', 'hermes'}
-BACKENDS = {'deepseek', 'strata'}
 _VALIDATION_CACHE = {}
 VALIDATION_CACHE_SECONDS = 15
 
@@ -93,15 +93,15 @@ def static_check(receipt, config, *, harness):
 
 
 def selection(manifest, harness, backend, model, effort=None):
-    if harness not in HARNESSES or backend not in BACKENDS or not model:
+    if harness not in HARNESSES or not model:
         raise ValueError('invalid_harness_selection')
     config_generator(ROOT, harness)
     if not manifest:
         raise ValueError('harness_not_enabled')
-    data = read(manifest)
+    data = native_connections.read_manifest(manifest)
     if data.get('enabled') is not True:
         raise ValueError('harness_not_enabled')
-    backend_spec = data.get('backends', {}).get(backend, {})
+    kind, backend_spec = native_connections.resolve_connection(data, backend)
     models = backend_spec.get('models', [backend_spec.get('model')])
     if not isinstance(models,list) or not models or not all(isinstance(v,str) and v for v in models):
         raise ValueError('invalid_model_catalog')
@@ -154,7 +154,7 @@ def selection(manifest, harness, backend, model, effort=None):
         _VALIDATION_CACHE[key] = (signature,time.monotonic(),reason)
     if reason:
         raise ValueError(reason)
-    return runner
+    return {**runner, 'connection_kind': kind}
 
 
 def write_instructions(state_dir, project_key):
@@ -208,6 +208,8 @@ def prepare_resume(runtime_dir, name, project_key=None):
     document = child_resume.native_resume_input(runtime, state)
     runner = selection(document['manifest_file'], document['program'], document['backend_id'],
                        document['model'], document.get('effort'))
+    if runner.get('connection_kind', document['backend_kind']) != document['backend_kind']:
+        raise ValueError('connection_kind_changed')
     state_dir = Path(document['state_dir'])
     previous = read(state_dir / 'launch.json')
     document.setdefault('native_profile_env', {key: previous.get('env', {}).get(key)
@@ -291,7 +293,9 @@ def prepare(args):
     prompt = state_dir / 'initial-prompt.txt'
     child_resume._atomic_bytes(prompt, Path(args.prompt_file).read_bytes())
     instructions = write_instructions(state_dir, args.project_key)
+    kind = runner.get('connection_kind') or native_connections.connection_kind(args.backend)
     document = dict(agent_name=args.agent_name, program=args.harness, backend_id=args.backend,
+        backend_kind=kind,
         model=args.model, project_key=args.project_key, cwd=str(Path(args.cwd).resolve()),
         parent_agent=args.parent_agent or None, product_root=str(ROOT), runtime_dir=str(runtime),
         state_dir=str(state_dir), mcp_config=str(Path(args.mcp_config).resolve()),
@@ -304,7 +308,8 @@ def prepare(args):
     if args.effort is not None:
         document['effort'] = args.effort
     generate_plan(document, runner)
-    state.update(harness=args.harness, harness_backend=args.backend, harness_state_dir=str(state_dir))
+    state.update(harness=args.harness, harness_backend=args.backend,
+                 harness_backend_kind=kind, harness_state_dir=str(state_dir))
     save(child_file, state)
     return state_dir
 

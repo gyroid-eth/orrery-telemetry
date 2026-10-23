@@ -37,11 +37,15 @@ def fixture(tmp_path, *, gone=False):
 
 
 @pytest.mark.parametrize('standalone',[False,True])
-def test_standard_preregistered_harness_reuses_binding_proxy_and_real_workdir(tmp_path,standalone):
+@pytest.mark.parametrize('backend',['strata','strata-epyc'])
+def test_standard_preregistered_harness_reuses_binding_proxy_and_real_workdir(tmp_path,standalone,backend):
     env,work,token=fixture(tmp_path)
+    helper=tmp_path/'harness-fixture.py'
+    helper.write_text(helper.read_text().replace('{"python":sys.executable}',
+        '{"python":sys.executable,"connection_kind":"strata"}'))
     env['AGENTSTACK_CHILD_RESUME_RETENTION_DAYS']='0'
     args=['/bin/bash',str(SPAWN),'--pre-registered','HarnessChild','--child-token-file',str(token),
-          '--harness','dsh','--backend','strata','--model','formal-model']
+          '--harness','dsh','--backend',backend,'--model','formal-model']
     if standalone:args+=['--standalone','',str(work)]
     else:args+=['--embed-task','Literal $(must-not-run) `task`',str(work)]
     result=subprocess.run(args,env=env,cwd=ROOT,text=True,capture_output=True,timeout=25)
@@ -50,6 +54,8 @@ def test_standard_preregistered_harness_reuses_binding_proxy_and_real_workdir(tm
     state=json.loads((Path(env['AGENTSTACK_RUNTIME_DIR'])/'child-agents/HarnessChild.json').read_text())
     assert state['program']=='dsh' and state['provider']=='dsh'
     h=json.loads((Path(state['harness_state_dir'])/'input.json').read_text())
+    assert h['backend_id']==state['harness_backend']==backend
+    assert h['backend_kind']==state['harness_backend_kind']=='strata'
     assert h['cwd']==str(work.resolve())
     assert h['parent_agent']==(None if standalone else 'ParentAgent')
     prompt=Path(h['prompt_file']).read_text()

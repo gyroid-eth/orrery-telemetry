@@ -8,11 +8,13 @@ export const name = 'orrery-keychain-credentials';
 
 export function secretServiceLookup(config) {
   const argv = config.reader_command;
+  // Check command/ID shape here; the Python reader owns declaration/kind/ref checks.
   if (process.platform !== 'linux' || !Array.isArray(argv) || argv.length !== 8 ||
+      !argv.every(value => typeof value === 'string') ||
       !path.isAbsolute(argv[0]) || argv[1] !== '-I' || argv[2] !== '-B' ||
       !path.isAbsolute(argv[3]) || path.basename(argv[3]) !== 'llm_secret_reader.py' ||
       argv[4] !== '--manifest' || !path.isAbsolute(argv[5]) || argv[6] !== '--backend' ||
-      !['deepseek', 'strata'].includes(argv[7]))
+      !/^[a-z][a-z0-9_-]{0,63}$/.test(argv[7]))
     return Promise.reject(new Error('DSH_CREDENTIAL_REFERENCE_INVALID'));
   return new Promise((resolve, reject) => {
     const env = Object.fromEntries(['HOME', 'PATH', 'LANG', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR']

@@ -8,9 +8,12 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 import types
+
+CONNECTIONS = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'hooks/native_connections.py'))
 
 
 if __package__:
@@ -30,8 +33,9 @@ def catalog_providers(backends, availability, *, mode, enabled):
     if enabled is not True:
         return []
     providers = []
-    for backend_id, label, locality in [('deepseek', 'DeepSeek', 'cloud'), ('strata', 'Strata', 'local')]:
-        spec = backends.get(backend_id)
+    for backend_id, kind, spec in CONNECTIONS['declared_connections']({'backends': backends}):
+        label = {'deepseek': 'DeepSeek', 'strata': 'Strata'}.get(backend_id, backend_id)
+        locality = 'local' if kind == 'strata' else 'cloud'
         if not isinstance(spec, dict) or not isinstance(spec.get('model'), str) or not spec['model'].strip():
             continue
         readiness = availability.get(backend_id, {})
@@ -46,7 +50,7 @@ def catalog_providers(backends, availability, *, mode, enabled):
         if first:
             first['default'] = True
         provider = {
-            'id': backend_id, 'label': spec.get('label') or label,
+            'id': backend_id, 'kind': kind, 'label': spec.get('label') or label,
             'locality': spec.get('locality') or locality, 'server': spec.get('server') or label,
             'context': None, 'context_source': 'unreported', 'context_note': 'Server-reported context not available yet',
             'efforts': list((first or {}).get('efforts') or []),
@@ -86,16 +90,14 @@ def load_standard_inputs(config_file, *, mode):
     if not config_file:
         return {}, {}, False
     try:
-        manifest = _read(config_file)
+        manifest = CONNECTIONS['read_manifest'](config_file)
         backends = manifest['backends']
         if manifest.get('enabled') is not True or not isinstance(backends, dict):
             return {}, {}, False
     except (OSError, ValueError, KeyError, TypeError):
         return {}, {}, False
     availability = {}
-    for backend, spec in backends.items():
-        if backend not in ('deepseek', 'strata') or not isinstance(spec, dict):
-            continue
+    for backend, kind, spec in CONNECTIONS['declared_connections'](manifest):
         availability[backend] = {}
         for model in harness_helpers.configured_models(manifest, backend):
             for harness in ('dsh', 'hermes'):
@@ -113,7 +115,7 @@ def load_standard_inputs(config_file, *, mode):
                     runner = _thin_selection(config_file, harness, backend, model)
                     template = _read(runner['config_file'])
                     capability = load_effort_capability(template, harness=harness,
-                                                        backend_id=backend, model=model)
+                                                        backend_id=backend, model=model, backend_kind=kind)
                 except ValueError as error:
                     # Only fixed product codes reach the public catalog.
                     code = str(error)

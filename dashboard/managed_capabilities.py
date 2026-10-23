@@ -4,12 +4,14 @@ import hashlib
 import importlib.util
 import json
 import os
+import runpy
 from pathlib import Path
 import subprocess
 import tempfile
 from datetime import datetime, timezone
 
 UNKNOWN = {'efforts': None, 'default_effort': None, 'effort_source': 'unknown'}
+CONNECTIONS = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'hooks/native_connections.py'))
 
 
 def read(path):
@@ -185,7 +187,7 @@ def hermes_manual_effort_capability(template, model):
     return {'efforts': sorted(budgets, key=budgets.get), 'default_effort': None, 'effort_source': 'harness'}
 
 
-def load_effort_capability(template, *, harness, backend_id, model):
+def load_effort_capability(template, *, harness, backend_id, model, backend_kind=None):
     """Read checked metadata only. No process, provider or credential calls."""
     if harness == 'hermes':
         try:
@@ -195,7 +197,9 @@ def load_effort_capability(template, *, harness, backend_id, model):
             spec = importlib.util.spec_from_file_location('_orrery_hermes_route_projection', path)
             projection = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(projection)
-            mode = projection.profile_route(template['profiles'][backend_id], backend_id)['route']['api_mode']
+            kind_args = {'kind': backend_kind} if backend_kind is not None else {}
+            kind = CONNECTIONS['connection_kind'](backend_id, **kind_args)
+            mode = projection.profile_route(template['profiles'][backend_id], kind)['route']['api_mode']
             if mode == 'chat_completions':
                 return hermes_effort_capability(template)
             if mode == 'anthropic_messages':
@@ -235,12 +239,12 @@ def refresh_dsh_capabilities(repo, current, config_file=None):
         cached.update(runtime_facts(current))
         entries = []
         if config_file:
-            manifest = read(config_file)
+            manifest = CONNECTIONS['read_manifest'](config_file)
             if manifest.get('enabled') is True and 'dsh' in manifest.get('harnesses', {}):
                 template = read(manifest['harnesses']['dsh']['config_file'])
                 configured = read(template['backend_file'])['backends']
-                for backend_id, public in manifest.get('backends', {}).items():
-                    if backend_id not in ('deepseek', 'strata') or backend_id not in configured:
+                for backend_id, kind, public in CONNECTIONS['declared_connections'](manifest):
+                    if backend_id not in configured:
                         continue
                     row = model_input(backend_id, configured[backend_id])
                     if row['model'] == public.get('model'):

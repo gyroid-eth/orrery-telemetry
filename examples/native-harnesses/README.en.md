@@ -151,6 +151,8 @@ lifetime or large context/output caps.
 
 ### Switching to Local / Strata
 
+To keep an existing Local server and add another, follow [multiple connections](../../docs/configuration.en.md#native-connections). Add the same new connection ID to the manifest, dsh backend map, and Hermes profile map instead of replacing the existing connection.
+
 B's standard examples target DeepSeek. For Local, use backend ID `strata` and align these
 fields in the private copy with the same destination. Keep runtime references and copied-file
 absolute paths consistent.

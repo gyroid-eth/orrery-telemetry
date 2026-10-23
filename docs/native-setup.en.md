@@ -21,7 +21,7 @@ The cockpit is the interface for working with terminals. Telemetry tracks agents
 
 Pick one provider and one harness, such as DeepSeek + dsh. You can install both harnesses without creating two API keys for the same provider. You do not need a DeepSeek account to use a Local server.
 
-**Check the Local server's protocol before setting it up.** dsh uses the fixed DeepSeek adapter and accepts HTTP/HTTPS URLs for compatible APIs. Hermes requires HTTPS and either `chat_completions` or `anthropic_messages`; you cannot give it an HTTP-only endpoint directly. The internal backend ID is `strata`, but it is not a Strata hostname restriction. Nor does it guarantee that every server advertised as OpenAI-compatible will work.
+**Check the Local server's protocol before setting it up.** dsh uses the fixed DeepSeek adapter and accepts HTTP/HTTPS URLs for compatible APIs. Hermes requires HTTPS and either `chat_completions` or `anthropic_messages`; you cannot give it an HTTP-only endpoint directly. The legacy Local example uses the connection ID `strata`, but this is not a Strata hostname restriction. Nor does it guarantee that every server advertised as OpenAI-compatible will work.
 
 **A Local configuration that stores and references no key is not currently supported by ORRERY.** Both harness paths require a reference to a key saved in the OS. Do not invent a dummy key for a server without authentication. Obtain a compatible endpoint with authentication before continuing with this guide.
 
@@ -159,6 +159,7 @@ After the runtime paths and credential references have been checked and validati
 
 1. Open [NEW AGENT in cockpit](https://github.com/gyroid-eth/orrery/blob/master/docs/en/usage.md#new-agent), or [NEW AGENT in standalone Telemetry](dashboard.en.md#native-models-and-harnesses).
 2. Choose a scientist, DeepSeek or Local models, your configured model, and dsh or Hermes.
+   To keep several Local servers, [configure separate connection IDs and server names](configuration.en.md#native-connections), then choose the row for workstation, EPYC, or your intended server. Equal model IDs still select different connections.
 3. Use a new work folder and send one short task. Once you have a model response, continue with the [Mail end-to-end check](getting-started.en.md#5-play-shiritori-as-an-end-to-end-check).
 
 ![Local models and Hermes selected in the real WSL Telemetry interface](img/wsl-native-harness-picker.png)

@@ -2491,6 +2491,7 @@ install_payload() {
     if [[ "$DRY_RUN" != true ]]; then
       mkdir -p "$HOOKS_DIR"
       cp "$REPO_ROOT/hooks/llm_secret_reader.py" "$HOOKS_DIR/llm_secret_reader.py"
+      cp "$REPO_ROOT/hooks/native_connections.py" "$HOOKS_DIR/native_connections.py"
     fi
   fi
   copy_core_tree "$REPO_ROOT/dashboard" "$DASHBOARD_DIR" "dashboard"
