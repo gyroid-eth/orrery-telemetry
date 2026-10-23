@@ -560,14 +560,13 @@ esac
 #
 # - Explicit includes an empty value: `AGENTSTACK_VAULT=` or `--codex-add-dirs ""`
 #   puts that one setting back to its default.
-# - env.sh writes every value out, defaults included, so it also records which
-#   were chosen (AGENTSTACK_CHOSEN_SETTINGS). Only those are inherited; a default
-#   written out follows the current default next time. An env.sh from before
-#   that record counts a value as chosen when it differs from today's default,
-#   except PATH and Python, which the installer always worked out itself.
+# - Keep saved nondefault values even when the choice record is absent or
+#   incomplete (#354). Record them for subsequent installs. A recorded choice
+#   equal to today's default remains a choice; removing a value or explicitly
+#   clearing it still returns that setting to its default.
 # - A value in the environment equal to what env.sh recorded is an echo of
 #   env.sh (cockpit's update.sh and some shell profiles source it), not a new
-#   choice: it keeps the status it had. An option is always a request. Only
+#   choice: normal inheritance or reset applies. An option is always a request. Only
 #   an env.sh with the record can be echoed; before it, the value is explicit.
 # - --reset-settings drops the previous choices. What names the data and the
 #   services running on it (project key, protected roots, the Mail state and
@@ -633,7 +632,8 @@ resolve_setting() {
   elif [[ -n "$saved" ]] && {
     [[ "$mode" == kept ]] ||
       { [[ "$RESET_SETTINGS" != 1 ]] &&
-        { [[ "$mode" == found ]] || setting_previously_chosen "$name" "$saved" "$default"; }; }
+        { [[ "$mode" == found ]] || [[ "$saved" != "$default" ]] ||
+          setting_previously_chosen "$name" "$saved" "$default"; }; }
   }; then
     value="$saved"
     SETTING_SOURCE=saved
@@ -934,6 +934,26 @@ AGENT_MAIL_LOG="$NATIVE_MAIL_LOG"
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# Show actual changes only for these documented, non-secret settings. Never
+# dump arbitrary saved settings: other values may contain credentials.
+report_setting_changes() {
+  [[ -f "$SETTINGS_ENV_FILE" ]] || return 0
+  local name before after
+  for name in AGENTSTACK_AUTO_OPEN_CHILD AGENTSTACK_PORTRAITS_DIR; do
+    before="$(agentstack_installed_env_value "$name" "$SETTINGS_ENV_FILE")"
+    case "$name" in
+      AGENTSTACK_AUTO_OPEN_CHILD)
+        before="${before:-1}"
+        after="$AUTO_OPEN_CHILD_SETTING"
+        ;;
+      AGENTSTACK_PORTRAITS_DIR) after="$PORTRAITS_DIR_SETTING" ;;
+    esac
+    if [[ "$before" != "$after" ]]; then
+      say "setting change: $name: ${before:-(empty)} -> ${after:-(empty)}"
+    fi
+  done
+}
 
 # Each `:`-separated entry must be absolute or start with `~` (the dashboard
 # expands `~` itself). A missing directory is only a warning: presets often
@@ -2870,8 +2890,8 @@ values = {
     "AGENTSTACK_RUNTIME_MODE": "${AGENTSTACK_RUNTIME_MODE:-legacy}",
     "AGENTSTACK_GLOBAL_SERVER_CONFIG": "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}",
     "AGENTSTACK_PATH": "$PATH_VALUE",
-    # Which of the values above were chosen, not written-out defaults: only
-    # these are inherited by the next install.
+    # Record chosen values; the next install also preserves saved nondefaults
+    # even when their names are absent from this list.
     "AGENTSTACK_CHOSEN_SETTINGS": "$CHOSEN_SETTINGS",
 }
 values.update({
@@ -5148,6 +5168,7 @@ main() {
   say "spawn roots: ${SPAWN_ROOTS_SETTING:-(default: \$HOME)}"
   say "worktree root: $WORKTREE_ROOT_SETTING"
   say "automatically open child terminals: $AUTO_OPEN_CHILD_SETTING (set AGENTSTACK_AUTO_OPEN_CHILD=0 on reinstall to disable auto-open while keeping Deck Open tmux)"
+  report_setting_changes
   say "codex child approval: $CODEX_CHILD_APPROVAL_SETTING"
   say "codex child config overlay: ${CODEX_CHILD_CONFIG_OVERLAY_SETTING:-(disabled)}"
   say "codex network: $CODEX_NETWORK_SETTING"
