@@ -1104,6 +1104,10 @@ EXPECTED_CUTOVER_APPROVAL = {
 }
 
 REQUIRED_RUNTIME_MODULES = {
+    "storage_origin_contract.py",
+    "storage_origin_directory.py",
+    "storage_origin_core.py",
+    "storage_origin_candidate.py",
     "namespace_state_io.py",
     "namespace_transform.py",
     "namespace_migration.py",
@@ -1160,6 +1164,7 @@ REQUIRED_RUNTIME_MODULES = {
 }
 
 WHEEL_REQUIRED_SUFFIXES = {
+    "agentstack_mail/fixtures/storage-origin-b1.json",
     ".dist-info/entry_points.txt",
     ".dist-info/licenses/AGENTSTACK_LICENSE",
     ".dist-info/licenses/UPSTREAM_LICENSE",
@@ -1181,6 +1186,8 @@ WHEEL_REQUIRED_SUFFIXES = {
 } | {f"agentstack_mail/{module}" for module in REQUIRED_RUNTIME_MODULES}
 
 SDIST_REQUIRED_SUFFIXES = {
+    "/fixtures/storage-origin-b1.json",
+    "/tests/test_storage_origin_b1.py",
     "/tests/test_global_server.py",
     "/tests/test_global_server_s2a.py",
     "/fixtures/global-server-s2a.json",
