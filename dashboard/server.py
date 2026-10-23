@@ -6374,6 +6374,12 @@ def _pane_model_for(pane_model: str | None, program: str | None) -> str | None:
 #   wait 中: 直前ターン要約 "✻ Crunched for 1m 36s" / "Churned for 47s"。
 _ACTIVE_T_RE = re.compile(
     r"\(\s*(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(\d+)\s*s\s*[·•]")
+# Codex's timed interrupt hint, optionally followed by its exact
+# background-terminal summary (same wording as provider_stalls).
+_CODEX_INTERRUPT_END_RE = re.compile(
+    r"esc to interrupt\)"
+    r"(?: · (?:1 background terminal|(?:[2-9]|[1-9][0-9]+) background terminals)"
+    r" running · /ps to view · /stop to close)?$")
 _LAST_T_RE = re.compile(
     r"\b(?:for|in)\s+(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(\d+)\s*s\b",
     re.IGNORECASE)
@@ -6561,9 +6567,11 @@ def _runtime_activity(text: str) -> tuple[str, str]:
             if not (_is_activity_glyph(candidate[0]) or candidate[0] in "▌●"):
                 continue
             # Codex uses the same timed interrupt UI for MCP initialization.
+            # It may append the exact background-terminal summary after the
+            # hint; nothing else may follow it.
             if (width == 1 and candidate[0] in "•▌●"
                     and _ACTIVE_T_RE.search(candidate) and _WORK_RE.search(candidate)
-                    and candidate.endswith("esc to interrupt)")):
+                    and _CODEX_INTERRUPT_END_RE.search(candidate)):
                 return "work", candidate
             if width > 1 and len(label[0].strip()) == 1:
                 candidate = label[0].strip() + " " + " ".join(row.strip() for row in label[1:])
