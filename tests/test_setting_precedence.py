@@ -14,6 +14,7 @@ depends on (or can touch) an install on the machine running them.
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import re
@@ -23,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 
+import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install.sh"
@@ -211,10 +213,12 @@ def _resolve_like_the_installer(
         locate, f"SCRIPT_DIR={shlex.quote(str(ROOT / 'scripts'))}"
     )
     probe = head + "".join(f'printf "%s\\n" "${name}"\n' for name in outputs)
-    # No codex on PATH: the codex probe in the same block has nothing to run.
+    # Keep the literal parser on the same Python as pytest, with no Codex CLI.
     result = subprocess.run(
         ["bash", "-c", probe, "install.sh", *args],
-        env=_scrubbed_env(home, PATH="/usr/bin:/bin", **(env or {})),
+        env=_scrubbed_env(
+            home, PATH=str(pathlib.Path(sys.executable).parent) + ":/usr/bin:/bin", **(env or {})
+        ),
         text=True,
         capture_output=True,
     )
@@ -389,8 +393,8 @@ def test_p2_1_clearing_the_codex_add_dirs_reaches_the_summary(tmp_path):
     assert chosen["CODEX_ADD_DIRS_SETTING"] not in result.stdout
 
 
-def test_p2_2_a_default_env_sh_wrote_out_is_not_pinned(tmp_path):
-    """A written-out default follows the current default on the next install."""
+def test_p2_2_unlisted_nondefault_values_are_preserved(tmp_path):
+    """#354: missing choice names no longer discard saved nondefault values."""
     home, _ = _previous_install(
         tmp_path,
         not_chosen=("PATH_VALUE", "PYTHON_BIN", "DASHBOARD_LOG_MAX_BYTES"),
@@ -400,9 +404,9 @@ def test_p2_2_a_default_env_sh_wrote_out_is_not_pinned(tmp_path):
     assert _resolve_like_the_installer(
         home, "PATH_VALUE", "PYTHON_INHERITED", "DASHBOARD_LOG_MAX_BYTES", "PORT"
     ) == [
-        "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        "",
-        "5242880",
+        "/an/older/default/bin:/usr/bin:/bin",
+        sys.executable,
+        "1048576",
         "19876",
     ]
 
@@ -436,11 +440,10 @@ def test_p2_2_an_env_sh_from_before_the_record_keeps_what_differs_from_defaults(
         home, "PORT", "PATH_VALUE", "PYTHON_INHERITED", "CHOSEN_SETTINGS"
     ) == [
         "19876",
-        # PATH and Python were always resolved by the installer: never a choice
-        # it can recognise, so they are resolved again.
-        "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        "",
-        "AGENTSTACK_PORT",
+        # The preservation rule also covers nondefault PATH and Python.
+        "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/codex/bin",
+        sys.executable,
+        "AGENTSTACK_PORT AGENTSTACK_PATH AGENTSTACK_PYTHON",
     ]
 
 
@@ -456,8 +459,8 @@ def test_p2_2_values_echoed_from_a_sourced_env_sh_are_not_new_choices(tmp_path):
             echoed[name] = value
     assert _resolve_like_the_installer(
         home, "PATH_VALUE", "PORT", env=echoed
-    ) == ["/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "19876"]
-    assert _chosen(home, env=echoed) == set(chosen["CHOSEN_SETTINGS"].split())
+    ) == [chosen["PATH_VALUE"], "19876"]
+    assert _chosen(home, env=echoed) == set(chosen["CHOSEN_SETTINGS"].split()) | {"AGENTSTACK_PATH"}
     # Under --reset-settings an echo is not a request to keep the value.
     assert _resolve_like_the_installer(
         home, "PORT", "LANG_SETTING", "LABEL_PREFIX", args=("--reset-settings",), env=echoed
@@ -769,3 +772,156 @@ def test_every_launcher_loads_env_sh_only_through_ags_load_env():
         text = (ROOT / "bin" / name).read_text(encoding="utf-8")
         assert '\nags_load_env "$@"\n' in text, name
         assert "env.sh\"" not in text and "/env.sh" not in text, name
+
+
+# Issue354: preserve existing nondefault values even with an incomplete record.
+def _issue354_old_env(tmp_path, monkeypatch, record):
+    home, project = tmp_path / 'home', tmp_path / 'project'
+    home.mkdir()
+    project.mkdir()
+    values = {
+        'PROJECT_KEY': str(project), 'PROTECTED_ROOTS': str(project),
+        'PORT': '19000', 'LABEL_PREFIX': 'org.agentstack.test.issue354',
+        'AUTO_OPEN_CHILD_SETTING': '0', 'PORTRAITS_DIR_SETTING': '~/custom portraits',
+        'NATIVE_MAIL_STATE_ROOT': str(tmp_path / 'mail-state'),
+        'NATIVE_MAIL_SERVICE_ROOT': str(tmp_path / 'mail-service'),
+        'NATIVE_MAIL_MANAGEMENT_SOCKET': str(tmp_path / 'mail.sock'),
+        'CHOSEN_SETTINGS': ('AGENTSTACK_AUTO_OPEN_CHILD AGENTSTACK_PORTRAITS_DIR'
+                            if record == 'selected' else 'AGENTSTACK_PORT' if record == 'partial' else ''),
+    }
+    with monkeypatch.context() as patch:
+        patch.setitem(globals(), 'INSTALLER', pathlib.Path(os.environ.get('ISSUE354_OLD_INSTALLER', str(INSTALLER))))
+        _write_env_sh_like_the_installer(home, values)
+    if record == 'absent':
+        # This is a pre-record/record-removed fixture, not a claim that the
+        # reporter's 5918caa writer omitted its already present record.
+        env_file = home / '.agentstack/env.sh'
+        env_file.write_text(''.join(line for line in env_file.read_text().splitlines(keepends=True)
+                                   if not line.startswith('export AGENTSTACK_CHOSEN_SETTINGS=')))
+    return home, values
+
+
+def _issue354_resolve_and_render(home, *, args=(), env=None):
+    outputs = ('AUTO_OPEN_CHILD_SETTING', 'PORTRAITS_DIR_SETTING', 'CHOSEN_SETTINGS',
+               'PROJECT_KEY', 'PROTECTED_ROOTS', 'PORT', 'LABEL_PREFIX',
+               'NATIVE_MAIL_STATE_ROOT', 'NATIVE_MAIL_SERVICE_ROOT', 'NATIVE_MAIL_MANAGEMENT_SOCKET')
+    resolved = _resolve_like_the_installer(home, *outputs, args=args, env=env)
+    _write_env_sh_like_the_installer(home, dict(zip(outputs, resolved)))
+    return dict(zip(outputs, resolved))
+
+
+@pytest.mark.parametrize('record', ['absent', 'selected', 'empty', 'partial'])
+@pytest.mark.parametrize('echo', [False, True])
+def test_issue354_actual_old_writer_resolution_and_second_update(tmp_path, monkeypatch, record, echo):
+    home, original = _issue354_old_env(tmp_path, monkeypatch, record)
+    expected = ['0', '~/custom portraits']
+    observations = []
+    for number in range(2):
+        echoed = {}
+        if echo:
+            for line in (home / '.agentstack/env.sh').read_text().splitlines():
+                if line.startswith('export '):
+                    name, _, raw = line[len('export '):].partition('=')
+                    if name in ('AGENTSTACK_AUTO_OPEN_CHILD', 'AGENTSTACK_PORTRAITS_DIR'):
+                        echoed[name] = (shlex.split(raw) or [''])[0]
+        resolved = _issue354_resolve_and_render(home, env=echoed)
+        values = [resolved['AUTO_OPEN_CHILD_SETTING'], resolved['PORTRAITS_DIR_SETTING']]
+        observations.append({'update': number + 1, 'values': values,
+                             'two_names_chosen': [name in resolved['CHOSEN_SETTINGS'].split() for name in
+                                ('AGENTSTACK_AUTO_OPEN_CHILD', 'AGENTSTACK_PORTRAITS_DIR')]})
+        print('ISSUE354_POLICY_STEP=' + json.dumps(dict(record=record, echo=echo, **observations[-1])))
+        assert values == expected
+        assert observations[-1]['two_names_chosen'] == [True, True]
+        for name in ('PROJECT_KEY', 'PROTECTED_ROOTS', 'LABEL_PREFIX', 'NATIVE_MAIL_STATE_ROOT',
+                     'NATIVE_MAIL_SERVICE_ROOT', 'NATIVE_MAIL_MANAGEMENT_SOCKET'):
+            assert resolved[name] == original[name]
+        written = (home / '.agentstack/env.sh').read_text()
+        for name, expected_value in zip(('AGENTSTACK_AUTO_OPEN_CHILD', 'AGENTSTACK_PORTRAITS_DIR'), values):
+            line = next(line for line in written.splitlines() if line.startswith('export ' + name + '='))
+            assert (shlex.split(line.partition('=')[2]) or [''])[0] == expected_value
+    print('ISSUE354_MATRIX=' + json.dumps(dict(record=record, echo=echo, observations=observations)))
+
+
+@pytest.mark.parametrize('choice', ['empty-reset', 'reset-settings', 'explicit-custom'])
+def test_issue354_explicit_request_and_rendered_followup(tmp_path, monkeypatch, choice):
+    home, original = _issue354_old_env(tmp_path, monkeypatch, 'selected')
+    args, env = (), {}
+    if choice == 'empty-reset':
+        env = {'AGENTSTACK_AUTO_OPEN_CHILD': '', 'AGENTSTACK_PORTRAITS_DIR': ''}
+    elif choice == 'reset-settings':
+        args = ('--reset-settings',)
+    else:
+        # First render defaults with no choice, then explicitly choose 0 and
+        # a custom folder, matching the reported environment-override recovery.
+        _issue354_resolve_and_render(home, args=('--reset-settings',))
+        env = {'AGENTSTACK_AUTO_OPEN_CHILD': '0', 'AGENTSTACK_PORTRAITS_DIR': '~/explicit portraits'}
+    first = _issue354_resolve_and_render(home, args=args, env=env)
+    second = _issue354_resolve_and_render(home)
+    expected = ['0', '~/explicit portraits'] if choice == 'explicit-custom' else ['1', '']
+    for resolved in (first, second):
+        assert [resolved['AUTO_OPEN_CHILD_SETTING'], resolved['PORTRAITS_DIR_SETTING']] == expected
+        for name in ('PROJECT_KEY', 'PROTECTED_ROOTS', 'LABEL_PREFIX', 'NATIVE_MAIL_STATE_ROOT',
+                     'NATIVE_MAIL_SERVICE_ROOT', 'NATIVE_MAIL_MANAGEMENT_SOCKET'):
+            assert resolved[name] == original[name]
+    print('ISSUE354_REQUEST=' + json.dumps(dict(choice=choice, first=expected, second=expected)))
+
+
+@pytest.mark.parametrize('removed', ['AGENTSTACK_AUTO_OPEN_CHILD', 'AGENTSTACK_PORTRAITS_DIR'])
+def test_issue354_removing_the_actual_value_resets_only_that_setting(tmp_path, monkeypatch, removed):
+    home, _ = _issue354_old_env(tmp_path, monkeypatch, 'selected')
+    env_file = home / '.agentstack/env.sh'
+    env_file.write_text(''.join(
+        line for line in env_file.read_text().splitlines(keepends=True)
+        if not line.startswith('export ' + removed + '=')
+    ))
+    expected = ['1', '~/custom portraits'] if removed == 'AGENTSTACK_AUTO_OPEN_CHILD' else ['0', '']
+    for _ in range(2):
+        resolved = _issue354_resolve_and_render(home)
+        assert [resolved['AUTO_OPEN_CHILD_SETTING'], resolved['PORTRAITS_DIR_SETTING']] == expected
+        assert removed not in resolved['CHOSEN_SETTINGS'].split()
+
+
+def _issue354_plan(home, *, args=(), env=None):
+    """Run real resolution and its real plan formatter, before any OS probes."""
+    text = INSTALLER.read_text(encoding='utf-8')
+    locate = 'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+    head = text[:text.index('PREFLIGHT_OS=""')].replace(
+        locate, f'SCRIPT_DIR={shlex.quote(str(ROOT / "scripts"))}'
+    )
+    function = re.search(r'^report_setting_changes\(\) \{\n.*?^\}', text, re.M | re.S)
+    assert function is not None
+    script = head + '\nsay() { printf "%s\\n" "$*"; }\n' + function[0] + '\nreport_setting_changes\n'
+    result = subprocess.run(
+        [BASH, '-c', script, 'install.sh', *args],
+        env=_scrubbed_env(home, PATH=str(pathlib.Path(sys.executable).parent) + ':/usr/bin:/bin', **(env or {})),
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.splitlines()
+
+
+@pytest.mark.parametrize('scenario', ['preserve', 'reset', 'override'])
+def test_issue354_plan_matches_the_values_actually_written(tmp_path, monkeypatch, scenario):
+    home, _ = _issue354_old_env(tmp_path, monkeypatch, 'partial')
+    args = ('--reset-settings',) if scenario == 'reset' else ()
+    env = {'AGENTSTACK_AUTO_OPEN_CHILD': '1', 'AGENTSTACK_PORTRAITS_DIR': '~/new portraits'} if scenario == 'override' else {}
+    # An unrelated setting must never be dumped by the new change report.
+    env_file = home / '.agentstack/env.sh'
+    with env_file.open('a') as stream:
+        stream.write("export AGENTSTACK_UNRELATED_PRIVATE_VALUE='do-not-print-this'\n")
+    plan = _issue354_plan(home, args=args, env=env)
+    resolved = _issue354_resolve_and_render(home, args=args, env=env)
+    values = [resolved['AUTO_OPEN_CHILD_SETTING'], resolved['PORTRAITS_DIR_SETTING']]
+    if scenario == 'preserve':
+        assert values == ['0', '~/custom portraits']
+        assert plan == []
+    else:
+        assert values == (['1', ''] if scenario == 'reset' else ['1', '~/new portraits'])
+        assert plan == [
+            'setting change: AGENTSTACK_AUTO_OPEN_CHILD: 0 -> ' + values[0],
+            'setting change: AGENTSTACK_PORTRAITS_DIR: ~/custom portraits -> ' + (values[1] or '(empty)'),
+        ]
+    assert all('do-not-print-this' not in line for line in plan)
+    main = INSTALLER.read_text().split('\nmain() {\n', 1)[1]
+    assert main.index('\n  report_setting_changes\n') < main.index('\n  if ! run_preflight;') < main.index('\n  write_env_file\n')
+    print('ISSUE354_PLAN=' + json.dumps(dict(scenario=scenario, plan=plan, applied=values)))
