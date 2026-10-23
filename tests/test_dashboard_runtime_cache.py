@@ -221,6 +221,8 @@ def test_current_terminal_activity_ignores_history(history, current, state):
     ("▌ Thinking (2s • esc to interrupt)\n", _CODEX_INPUT, 2),
     ("● Working (2s • esc to interrupt)\n", _CODEX_INPUT, 2),
     ("• Starting MCP servers (2/3): fixture (0s • esc to interrupt)\n", _CODEX_INPUT, 0),
+    ("• Working (5s • esc to interrupt) · 2 background terminals running · /ps to view · /stop to close\n",
+     _CODEX_INPUT, 5),
 ])
 def test_current_terminal_activity_keeps_work_with_an_input_prompt(current, footer, seconds):
     # Old completed controls and an old elapsed time must not win either way.
@@ -229,6 +231,28 @@ def test_current_terminal_activity_keeps_work_with_an_input_prompt(current, foot
     assert parsed["work_secs"] == seconds
     assert parsed["work_disp"] == (None if seconds is None else f"{seconds}s")
 
+
+
+def test_long_codex_work_with_background_terminals_and_tip_is_work():
+    # Codex appends the exact background-terminal summary after the interrupt
+    # hint and may show a tip line under it while work continues for minutes.
+    current = (
+        "• Working (48m 48s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close\n"
+        "  └ Tip: Use /side to start a side conversation in a temporary fork without polluting the main thread.\n")
+    parsed = server._parse_runtime(_OLD_WORK + current + _CODEX_INPUT)
+    assert parsed["act_state"] == "work"
+    assert parsed["work_secs"] == 2928
+    assert parsed["work_disp"] == "48m48s"
+
+
+@pytest.mark.parametrize("suffix", [
+    " · 0 background terminals running · /ps to view · /stop to close",
+    " · 1 background terminal running · /ps to view · /stop to close; arbitrary output",
+    " · arbitrary output",
+])
+def test_long_codex_work_rejects_unknown_trailing_text(suffix):
+    current = "• Working (48m 48s • esc to interrupt)" + suffix + "\n"
+    assert server._parse_runtime(current + _CODEX_INPUT)["act_state"] == "wait"
 
 # Transcribed from the operator-supplied hook review screenshot. This is not
 # the repository's older folder-access trust fixture.
