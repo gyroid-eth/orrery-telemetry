@@ -27,11 +27,34 @@ from scripts.write_install_stamp import write_stamp
 info = get_version_info()
 if info.commit != sys.argv[1]:
     raise ValueError('Hermes version provenance does not match the pinned commit')
+if info.dirty is not True:
+    raise ValueError('Hermes CA inputs must be recorded as a dirty source build')
 write_stamp('install-stamp.json', update_mechanism='external', commit=info.commit,
     branch=info.branch, dirty=info.dirty, commit_date=info.commit_date,
     base_version=None if info.base_version == 'unknown' else info.base_version,
     display_version=info.derived_version, distance=info.distance, source='local')
 '''
+HERMES_TARGET_SCRIPT = '''import platform,sys
+arch = {'arm64':'arm64','aarch64':'arm64','x86_64':'x64','amd64':'x64'}.get(platform.machine().lower())
+os_name = 'darwin' if sys.platform == 'darwin' else 'linux' if sys.platform.startswith('linux') and not hasattr(sys,'getandroidapilevel') and platform.libc_ver()[0] == 'glibc' else None
+if not arch or not os_name:
+    raise SystemExit('Hermes CA recipe supports macOS and GNU/Linux only; Bionic is unsupported')
+print(os_name + '-' + arch)
+'''
+HERMES_CA_PROBE_SCRIPT = '''import certifi,importlib.metadata,json
+from pathlib import Path
+d=importlib.metadata.distribution('certifi')
+metadata=next(f for f in d.files if str(f).endswith('.dist-info/METADATA'))
+print(json.dumps({'bundle':str(Path(certifi.where()).resolve()),'metadata':str(Path(d.locate_file(metadata)).resolve())}))
+'''
+
+
+def hermes_ca():
+    path = Path(__file__).resolve().parents[2] / 'integrations/hermes/ca_recipe.py'
+    spec = importlib.util.spec_from_file_location('_managed_hermes_ca', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def hermes_stamp_details(source):
@@ -165,6 +188,11 @@ def install_hermes(repo, root, python, cache=None):
     run(['git', 'checkout', '--detach', HERMES_COMMIT], cwd=source, env=env)
     if run(['git', 'rev-parse', 'HEAD'], cwd=source, env=env) != HERMES_COMMIT:
         raise ValueError('Hermes commit mismatch')
+    ca = hermes_ca()
+    recipe = ca.apply(repo, source)
+    policy, _, _ = ca.load(repo)
+    target = run([python, '-I', '-B', '-c', HERMES_TARGET_SCRIPT], cwd=source, env=env)
+    ca.target_artifact(policy, target, source)
     # Resolve provenance only at install time using the pinned upstream writer.
     # source=local avoids its git-stamp live-HEAD probe during runtime import;
     # external keeps updates owned by this installer, without changing PM paths.
@@ -174,23 +202,26 @@ def install_hermes(repo, root, python, cache=None):
     # login import, browser, or computer-use installer is invoked.
     # PM rejects --without combined with --extra. First prepare its default
     # closure and persist the optional-tool opt-outs, then add the provider SDK.
-    run([python, '-m', 'pm.cli', 'install', '--without', 'agent-browser',
-         '--without', 'cua-driver'], cwd=source, env=env)
-    run([python, '-m', 'pm.cli', 'install', '--extra', 'anthropic'], cwd=source, env=env)
+    for arguments in (['--without', 'agent-browser', '--without', 'cua-driver'], ['--extra', 'anthropic']):
+        ca.verify_inputs(source, policy, 'after')
+        run([python, '-m', 'pm.cli', 'install', *arguments], cwd=source, env=env)
+        ca.verify_inputs(source, policy, 'after')
     key = hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
     install = root / 'installs' / key
     generation = Path(read(install / 'facts.json')['packages']['venv']['environment']).resolve()
     executable = generation / 'bin/hermes'
     if not generation.is_relative_to((install / 'environments').resolve()) or not executable.is_file():
         raise ValueError('Hermes PM did not publish a committed runtime')
+    paths = json.loads(run([str(generation / 'bin/python'), '-I', '-B', '-c', HERMES_CA_PROBE_SCRIPT], cwd=source, env=env))
+    proof = ca.runtime_evidence(repo, root, source, generation, target, paths)
     print('Hermes: existing manual homes/logins are untouched; no credentials were installed.')
     return {'hermes_source': str(source), 'managed_root': str(root), 'hermes_executable': str(executable),
-            'variant': 'plain', 'thin_config_contract': 1, **stamp}
+            'variant': 'plain', 'thin_config_contract': 1, 'ca_recipe': recipe, 'ca_evidence': proof, **stamp}
 
 
 def generation_id(repo, harness, *, datadir=True):
     if harness == 'hermes':
-        return HERMES_COMMIT[:16] + '-v2'
+        return HERMES_COMMIT[:16] + '-ca1-' + hermes_ca().load(repo)[2][:16]
     inputs = ['runtime-pins.json', 'runtime-package-lock.json', 'ui-package.json', 'ui-package-lock.json']
     if datadir:
         inputs.append('tui-datadir.patch.json')
@@ -245,6 +276,7 @@ def validate(repo, harness, receipt):
                 or not os.access(generation / 'bin/hermes', os.X_OK)
                 or not os.access(generation / 'bin/python', os.X_OK)):
             raise ValueError('Hermes committed runtime is missing or changed')
+        hermes_ca().validate_static(repo, details)
 
 
 def provision(repo, install, harness, choice='keep', node='', python=sys.executable,
@@ -266,19 +298,6 @@ def provision(repo, install, harness, choice='keep', node='', python=sys.executa
             raise ValueError('Runtime generation exists without installer ownership')
         receipt = read(root / OWNER)
         validate(repo, harness, receipt)
-        if harness == 'hermes' and root.name == HERMES_COMMIT[:16] + '-v2' and 'variant' not in receipt:
-            # v2's source is upstream-native already. Adopt only a validated,
-            # pristine owned tree; a failed stamp/runtime/source check leaves
-            # its receipt byte-for-byte unchanged. Never migrate v1.
-            details = receipt['details']
-            try:
-                run(['git', 'diff', '--quiet', HERMES_COMMIT, '--', '.'],
-                    cwd=Path(details['hermes_source']), env=environment(root))
-            except subprocess.CalledProcessError:
-                raise ValueError('Hermes v2 source changed; plain metadata was not updated') from None
-            receipt = {**receipt, 'variant': 'plain', 'thin_config_contract': 1,
-                       'details': {**details, 'variant': 'plain', 'thin_config_contract': 1}}
-            save(root / OWNER, receipt)
     else:
         root.mkdir(parents=True, mode=0o700)
         try:

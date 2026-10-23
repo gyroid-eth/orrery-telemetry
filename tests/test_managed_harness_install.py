@@ -1,5 +1,8 @@
 """Offline installer ownership/opt-in tests: synthetic acquisition, no services."""
 import importlib.util
+from contextlib import ExitStack
+import copy
+import difflib
 import base64
 import hashlib
 import io
@@ -7,6 +10,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -24,8 +28,90 @@ spec.loader.exec_module(installer)
 
 def fixture_stamp(source):
     installer.save(Path(source) / 'install-stamp.json', {'commit': installer.HERMES_COMMIT, 'source': 'local',
-        'updateMechanism': 'external', 'payload': 'bootstrap', 'baseVersion': '0.1.0', 'displayVersion': '0.1.0'})
+        'updateMechanism': 'external', 'payload': 'bootstrap', 'dirty': True,
+        'baseVersion': '0.1.0', 'displayVersion': '0.1.0'})
     return installer.hermes_stamp_details(source)
+
+
+class CAFixture:
+    """Synthetic trust inputs; real recipe/patch/evidence code, no package calls."""
+    def __init__(self, module, directory):
+        self.stack = ExitStack()
+        self.repo = Path(directory) / 'ca-fixture-repo'
+        for name in ('hermes', 'dsh'):
+            shutil.copytree(ROOT / 'integrations' / name, self.repo / 'integrations' / name)
+        shutil.copytree(ROOT / 'examples/native-harnesses', self.repo / 'examples/native-harnesses')
+        target = self.repo / 'scripts/lib/managed_harness_install.py'
+        target.parent.mkdir(parents=True)
+        shutil.copy2(ROOT / 'scripts/lib/managed_harness_install.py', target)
+        original_module = module or installer
+        self.ca = original_module.hermes_ca()
+        policy, _, _ = self.ca.load(ROOT)
+        policy = copy.deepcopy(policy)
+        self.bundle, self.uv = b'synthetic fixed CA bundle', b'synthetic fixed uv'
+        policy['certifi']['cacert_sha256'] = hashlib.sha256(self.bundle).hexdigest()
+        for item in policy['uv_artifacts'].values():
+            item['executable_sha256'] = hashlib.sha256(self.uv).hexdigest()
+        self.target = 'darwin-arm64'
+        def inline(value):
+            if isinstance(value, dict):
+                return '{' + ','.join(json.dumps(k) + '=' + inline(v) for k, v in value.items()) + '}'
+            if isinstance(value, list):
+                return '[' + ','.join(inline(v) for v in value) + ']'
+            return json.dumps(value)
+        current = '[[package]]\n' + '\n'.join(k + '=' + inline(v) for k, v in policy['certifi']['lock_record'].items()) + '\n'
+        new_uv = {'packages': {'uv': {'version': '0.13.5', 'artifacts': {
+            name: {k: item[k] for k in ('url', 'sha256')} for name, item in policy['uv_artifacts'].items()}}}}
+        after = {'pyproject.toml': '[project]\nname="fixture"\ndependencies=["certifi==2026.10.19"]\n',
+                 'uv.lock': current, 'pm/lock.json': json.dumps(new_uv, indent=2) + '\n'}
+        self.before = {name: value.replace('2026.10.19', '2026.5.20').replace('0.13.5', '0.12.3') for name, value in after.items()}
+        patch_text = ''.join(''.join(difflib.unified_diff(self.before[name].splitlines(keepends=True), value.splitlines(keepends=True),
+                            fromfile='a/' + name, tofile='b/' + name)) for name, value in after.items())
+        policy['inputs'] = {name: {'before': hashlib.sha256(self.before[name].encode()).hexdigest(),
+                                 'after': hashlib.sha256(value.encode()).hexdigest()} for name, value in after.items()}
+        policy['patch_sha256'] = hashlib.sha256(patch_text.encode()).hexdigest()
+        installer.save(self.repo / 'integrations/hermes/ca-inputs.json', policy)
+        (self.repo / 'integrations/hermes/ca-inputs.patch').write_text(patch_text)
+        self.policy = policy
+        actual_load = self.ca.load
+        self.stack.enter_context(patch.object(self.ca, 'load', side_effect=lambda repo: actual_load(self.repo)))
+        if module:
+            self.stack.enter_context(patch.object(module, 'hermes_ca', return_value=self.ca))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.stack.close()
+
+    def source(self, source):
+        for name, text in self.before.items():
+            target = Path(source) / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+
+    def material(self, root, source, generation):
+        root, source, generation = Path(root), Path(source), Path(generation)
+        bundle = generation / 'lib/site-packages/certifi/cacert.pem'
+        metadata = generation / 'lib/site-packages/certifi-2026.10.19.dist-info/METADATA'
+        bundle.parent.mkdir(parents=True, exist_ok=True)
+        metadata.parent.mkdir(parents=True, exist_ok=True)
+        bundle.write_bytes(self.bundle)
+        metadata.write_text('Name: certifi\nVersion: 2026.10.19\n')
+        resolved = generation.parent / 'workspace/uv.lock'
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / 'uv.lock', resolved)
+        store = root / 'installs' / hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
+        facts = installer.read(store / 'facts.json') if (store / 'facts.json').exists() else {'packages': {}}
+        facts['packages'].setdefault('venv', {}).update(environment=str(generation), resolved_lock=str(resolved))
+        installer.save(store / 'facts.json', facts)
+        item = self.policy['uv_artifacts'][self.target]
+        binary = root / 'tools/uv-fixture/uv'
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_bytes(self.uv)
+        installer.save(root / 'tools/facts.json', {'packages': {'uv': {'entry': 'uv-fixture', 'target': self.target,
+            'version': '0.13.5', 'artifacts': [item['sha256']]}}})
+        return {'bundle': str(bundle), 'metadata': str(metadata)}
 
 
 class InstallTests(unittest.TestCase):
@@ -34,17 +120,35 @@ class InstallTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name).resolve()
         self.install = self.home / '.agentstack'
+        self.ca = self.enterContext(CAFixture(installer, self.home))
         self.enterContext(patch.object(installer, 'run', return_value=installer.HERMES_COMMIT))
 
     def generation(self, harness):
         return self.install / 'harnesses' / harness / installer.generation_id(ROOT, harness)
+
+    def test_hermes_ca_upgrade_acquires_new_generation_and_keeps_v2(self):
+        old = self.install / 'harnesses/hermes' / (installer.HERMES_COMMIT[:16] + '-v2')
+        old.mkdir(parents=True)
+        details = self.fake_acquire(ROOT, old)
+        installer.save(old / installer.OWNER, {'harness': 'hermes', 'complete': True,
+            'variant': 'plain', 'thin_config_contract': 1, 'details': details})
+        original = (old / installer.OWNER).read_bytes()
+        profile = old.parent / 'profiles/keep/memory.txt'
+        profile.parent.mkdir(parents=True)
+        profile.write_text('existing memory')
+        with patch.object(installer, 'install_hermes', side_effect=self.fake_acquire) as acquire:
+            installer.provision(ROOT, self.install, 'hermes', choice='enable')
+        acquire.assert_called_once()
+        self.assertNotEqual(self.generation('hermes'), old)
+        self.assertEqual((old / installer.OWNER).read_bytes(), original)
+        self.assertEqual(profile.read_text(), 'existing memory')
 
     def write_product_manifest(self):
         text = (ROOT / 'scripts/install.sh').read_text()
         function = re.search(r'^write_manifest\(\) \{\n.*?(?=^main\(\) \{)', text, re.M | re.S).group(0)
         values = {name: '' for name in re.findall(r'\$\{?([A-Z][A-Z_]+)', function)}
         values.update(INSTALL_DIR=str(self.install), MANIFEST=str(self.install / 'install-state.json'),
-            REPO_ROOT=str(ROOT), SCRIPT_DIR=str(ROOT / 'scripts'), PYTHON_BIN=sys.executable, DRY_RUN='false',
+            REPO_ROOT=str(self.ca.repo), SCRIPT_DIR=str(ROOT / 'scripts'), PYTHON_BIN=sys.executable, DRY_RUN='false',
             AGENT_MAIL_NAME_CAPABILITY_JSON='{}', ENV_FILE=str(self.install / 'env.sh'),
             SAFE_MERGE_RESULT_FILE=str(self.home / 'absent-settings.json'),
             MCP_MERGE_RESULT_FILE=str(self.home / 'absent-mcp.json'))
@@ -93,6 +197,8 @@ class InstallTests(unittest.TestCase):
                     'variant': variant, 'thin_config_contract': 1}
         source = root / 'source'
         source.mkdir()
+        self.ca.source(source)
+        self.ca.ca.apply(ROOT, source)
         key = hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
         store = root / 'installs' / key
         generation = store / 'environments/fixture'
@@ -103,9 +209,12 @@ class InstallTests(unittest.TestCase):
             file.chmod(0o700)
         installer.save(store / 'facts.json', {'packages': {'venv': {'environment': str(generation)}}})
         (generation / 'pyvenv.cfg').write_text('synthetic venv')
+        paths = self.ca.material(root, source, generation)
+        stamp = fixture_stamp(source)
+        proof = self.ca.ca.runtime_evidence(ROOT, root, source, generation, self.ca.target, paths)
         return {'hermes_source': str(source), 'managed_root': str(root), 'hermes_executable': str(generation / 'bin/hermes'),
                 'variant': 'plain', 'thin_config_contract': 1,
-                **fixture_stamp(source)}
+                'ca_recipe': self.ca.ca.load(ROOT)[2], 'ca_evidence': proof, **stamp}
 
     def test_default_and_dry_run_do_not_acquire_or_copy(self):
         with patch.object(installer, 'install_dsh') as dsh, patch.object(installer, 'install_hermes') as hermes:
@@ -115,6 +224,18 @@ class InstallTests(unittest.TestCase):
             self.assertFalse(self.install.exists())
             dsh.assert_not_called()
             hermes.assert_not_called()
+
+    def test_ca_reuse_refuses_changed_bundle_without_republishing(self):
+        with patch.object(installer, 'install_hermes', side_effect=self.fake_acquire):
+            installer.provision(ROOT, self.install, 'hermes', choice='enable')
+        pointer = self.install / 'harnesses/hermes/current.json'
+        original = pointer.read_bytes()
+        current = installer.read(pointer)
+        Path(current['ca_evidence']['bundle']).write_text('old or modified bundle')
+        with patch.object(installer, 'install_hermes', side_effect=AssertionError('reuse reacquired')):
+            with self.assertRaisesRegex(ValueError, 'bundle/version mismatch'):
+                installer.provision(ROOT, self.install, 'hermes', choice='keep')
+        self.assertEqual(pointer.read_bytes(), original)
 
     def test_plain_dsh_generation_keeps_existing_managed_generation(self):
         old = self.install / 'harnesses/dsh' / 'legacy-managed-generation'
@@ -266,6 +387,8 @@ class AcquisitionTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name).resolve()
         self.repo = self.base / 'repo'
+        self.ca = self.enterContext(CAFixture(installer, self.base))
+        shutil.copytree(self.ca.repo / 'integrations/hermes', self.repo / 'integrations/hermes')
         self.root = self.base / 'generation'
         self.root.mkdir()
         self.cache = self.base / 'cache'
@@ -275,6 +398,7 @@ class AcquisitionTests(unittest.TestCase):
         self.node.write_text('synthetic node executable')
         self.node.chmod(0o700)
         self.calls = []
+        self.pm_inputs = []
         self.version = 'v24.3.0'
         self.exec_path = str(self.node)
         self.commit = installer.HERMES_COMMIT
@@ -329,6 +453,7 @@ class AcquisitionTests(unittest.TestCase):
             return ''
         if argv[:2] == ['git', 'clone']:
             Path(argv[-1]).mkdir()
+            self.ca.source(Path(argv[-1]))
             return ''
         if argv[:2] == ['git', 'checkout']:
             self.assertEqual(argv[-1], installer.HERMES_COMMIT)
@@ -339,6 +464,10 @@ class AcquisitionTests(unittest.TestCase):
             self.assertEqual(argv[3], installer.HERMES_COMMIT)
             fixture_stamp(cwd)
             return ''
+        if argv[-1] == installer.HERMES_TARGET_SCRIPT:
+            return self.ca.target
+        if argv[-1] == installer.HERMES_CA_PROBE_SCRIPT:
+            return json.dumps(self.paths)
         # Fixed Hermes validates combinations after parsing: combining these
         # flags exits 1 on stdout even though argparse accepts each separately.
         if '--without' in argv and '--extra' in argv:
@@ -346,6 +475,7 @@ class AcquisitionTests(unittest.TestCase):
                 output='--without shapes the default closure; it does not take names, --extra, or --target')
         self.assertIn(argv[1:], (['-m', 'pm.cli', 'install', '--without', 'agent-browser', '--without', 'cua-driver'],
                                 ['-m', 'pm.cli', 'install', '--extra', 'anthropic']))
+        self.pm_inputs.append(self.ca.ca.verify_inputs(cwd, self.ca.policy, 'after'))
         self.assertEqual(env['HERMES_HOME'], str(self.root))
         key = hashlib.sha256(str(Path(cwd).resolve()).encode()).hexdigest()[:16]
         store = self.root / 'installs' / key
@@ -361,6 +491,7 @@ class AcquisitionTests(unittest.TestCase):
         installer.save(store / 'facts.json', {'packages': {'venv': {'environment': str(generation),
             'extras': ['all', 'anthropic'] if '--extra' in argv else ['all']}}})
         (generation / 'pyvenv.cfg').write_text('synthetic venv')
+        self.paths = self.ca.material(self.root, Path(cwd), generation)
         return ''
 
     def dsh(self):
@@ -449,7 +580,10 @@ class AcquisitionTests(unittest.TestCase):
             [sys.executable, '-m', 'pm.cli', 'install', '--extra', 'anthropic']])
         self.assertIn('/environments/with-anthropic/', details['hermes_executable'])
         self.assertEqual(details['install_stamp'], str(self.root / 'source/install-stamp.json'))
-        self.assertTrue(installer.generation_id(self.repo, 'hermes').endswith('-v2'))
+        self.assertIn('-ca1-', installer.generation_id(self.repo, 'hermes'))
+        self.assertTrue(installer.read(Path(details['install_stamp']))['dirty'])
+        self.assertEqual(details['ca_recipe'], self.ca.ca.load(self.repo)[2])
+        self.assertEqual(self.pm_inputs, [details['ca_evidence']['inputs']] * 2)
         stamp = Path(details['install_stamp'])
         stamp.write_text(stamp.read_text() + ' ')
         with patch.object(installer, 'run', return_value=installer.HERMES_COMMIT):
@@ -462,6 +596,80 @@ class AcquisitionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'commit mismatch'):
                 installer.install_hermes(self.repo, self.root, '/fixed/python', self.cache)
         self.assertEqual(len(self.calls), 3)
+
+    def test_ca_preimage_postimage_and_patch_digest_fail_before_writes(self):
+        source = self.base / 'exact-source'
+        self.ca.source(source)
+        original = {name: (source / name).read_bytes() for name in self.ca.ca.FILES}
+        (source / 'pyproject.toml').write_text('wrong original')
+        with self.assertRaisesRegex(ValueError, 'input hash mismatch'):
+            self.ca.ca.apply(self.repo, source)
+        (source / 'pyproject.toml').write_bytes(original['pyproject.toml'])
+        policy_file = self.ca.repo / 'integrations/hermes/ca-inputs.json'
+        saved_policy = policy_file.read_bytes()
+        policy = installer.read(policy_file)
+        policy['inputs']['uv.lock']['after'] = '0' * 64
+        installer.save(policy_file, policy)
+        with self.assertRaisesRegex(ValueError, 'postimage mismatch'):
+            self.ca.ca.apply(self.repo, source)
+        self.assertEqual({name: (source / name).read_bytes() for name in original}, original)
+        policy_file.write_bytes(saved_policy)
+        recipe_patch = self.ca.repo / 'integrations/hermes/ca-inputs.patch'
+        recipe_patch.write_text(recipe_patch.read_text() + '# changed\n')
+        with self.assertRaisesRegex(ValueError, 'recipe identity mismatch'):
+            self.ca.ca.apply(self.repo, source)
+        self.assertEqual({name: (source / name).read_bytes() for name in original}, original)
+
+    def test_ca_unsupported_target_stops_before_stamp_or_pm(self):
+        self.ca.target = 'linux-arm64-bionic'
+        with patch.object(installer, 'run', side_effect=self.fake_run):
+            with self.assertRaisesRegex(ValueError, 'does not support this target'):
+                installer.install_hermes(self.repo, self.root, '/fixed/python', self.cache)
+        self.assertFalse(any(argv[1:3] == ['-m', 'pm.cli'] or argv[1:3] == ['-c', installer.HERMES_STAMP_SCRIPT]
+                             for argv, _, _ in self.calls))
+
+    def test_ca_failed_evidence_preserves_old_pointers_profiles_and_v2(self):
+        for damage in ('bundle', 'metadata', 'uv', 'lock', 'inputs', 'stamp'):
+            with self.subTest(damage=damage):
+                install = self.base / ('damaged-' + damage)
+                base = install / 'harnesses/hermes'
+                self.root = base / installer.generation_id(self.repo, 'hermes')
+                pointer = base / 'current.json'
+                installer.save(pointer, {'generation': 'old-v2'})
+                setting = install / 'dashboard/hermes-provider.json'
+                installer.save(setting, {'enabled': True})
+                profile = base / 'profiles/keep/memory.txt'
+                profile.parent.mkdir(parents=True)
+                profile.write_text('existing memory')
+                old = base / (installer.HERMES_COMMIT[:16] + '-v2/keep.txt')
+                old.parent.mkdir(parents=True)
+                old.write_text('old generation')
+                originals = {path: path.read_bytes() for path in (pointer, setting, profile, old)}
+                def acquire(argv, **kwargs):
+                    result = self.fake_run(argv, **kwargs)
+                    if argv[-1] == installer.HERMES_CA_PROBE_SCRIPT:
+                        source = Path(kwargs['cwd'])
+                        if damage in ('bundle', 'metadata'):
+                            Path(self.paths[damage]).write_text('stale')
+                        elif damage == 'uv':
+                            (self.root / 'tools/uv-fixture/uv').write_text('old uv')
+                        elif damage == 'lock':
+                            key = hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
+                            fact = installer.read(self.root / 'installs' / key / 'facts.json')
+                            Path(fact['packages']['venv']['resolved_lock']).write_text('package=[]\n')
+                        elif damage == 'inputs':
+                            (source / 'pyproject.toml').write_text('changed after PM')
+                        else:
+                            value = installer.read(source / 'install-stamp.json')
+                            value['dirty'] = False
+                            installer.save(source / 'install-stamp.json', value)
+                    return result
+                with patch.object(installer, 'run', side_effect=acquire):
+                    with self.assertRaises(ValueError):
+                        installer.provision(self.repo, install, 'hermes', choice='enable', cache=self.cache)
+                self.assertFalse(self.root.exists())
+                for path, content in originals.items():
+                    self.assertEqual(path.read_bytes(), content)
 
     def test_hermes_each_pm_failure_stays_disabled_and_preserves_both_log_tails(self):
         for option, count in (('--without', 1), ('--extra', 2)):

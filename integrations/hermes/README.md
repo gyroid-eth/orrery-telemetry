@@ -111,11 +111,30 @@ Mail delivery and process observation own the lifecycle.
 
 ## Installation and offline checks
 
-Installer generation v2 writes the pinned upstream install stamp with external
-update ownership and validates its receipt/hash. Runtime version import then
-needs no git process. Existing generations and profile data are retained; after
+The installer keeps native code at `d923a5eb` and applies the three CA dependency
+inputs recorded in `ca-inputs.json` and `ca-inputs.patch`, sourced from upstream
+`75a8d6fc`. These select certifi 2026.10.19 and PM's uv 0.13.5 without importing
+the donor's SDK, PM, or TLS code changes. The existing release-age policy stays
+in place. Exact preimage, patch and postimage hashes must match before PM runs.
+The native stamp records the base commit and an honest dirty source build;
+the receipt separately records the donor and recipe digest.
+
+The generation name includes that digest, so old v2 installations are retained
+instead of being reused or rewritten. Both PM install steps use the same modified
+inputs. Before publishing or reusing the new generation, validation binds the
+source inputs, resolved lock, actual certifi metadata/CA bundle and PM's selected
+uv archive identity and executable hash. The plain launch contract is unchanged;
+its additional CA evidence is required by the catalog and launcher, whose static
+checks execute no Hermes code or credential helper. The recipe supports macOS
+arm64/x64 and GNU/Linux arm64/x64 (including WSL); other targets, including Bionic,
+stop rather than claiming the older uv artifact is fixed.
+
+The stamp uses external update ownership. Runtime version import needs no git
+process. Existing generations and profile data are retained; after
 installation the operator points the private template at the selected generation.
-The installer does not rewrite that template automatically.
+The installer does not rewrite that template automatically. Existing running
+processes and separate manual Hermes homes are not updated in place. This recipe
+does not update the system's trust store or the caller's pip/uv installation.
 
 With separately prepared dependencies, run all current Hermes fixtures serially:
 

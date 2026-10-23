@@ -81,8 +81,14 @@ def static_check(receipt, config, *, harness):
                 metadata = Path(config['runtime']) / 'node_modules' / pin['name'] / 'package.json'
                 if read(metadata).get('version') != pin['version']:
                     return dict(available=False, reason='runtime_version_mismatch')
+        else:
+            helper = ROOT / 'integrations/hermes/ca_recipe.py'
+            spec = importlib.util.spec_from_file_location('_static_hermes_ca', helper)
+            ca = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(ca)
+            ca.validate_static(ROOT, details)
         return dict(available=True, reason=None)
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return dict(available=False, reason='runtime_not_prepared')
 
 

@@ -87,6 +87,21 @@ def test_old_generator_not_admitted_by_file_presence(tmp_path):
     assert child.config_generator(tmp_path,'dsh')==entry
 
 
+def test_hermes_ca_evidence_is_required_without_running_native_code(tmp_path, monkeypatch):
+    monkeypatch.setattr(child, 'config_generator', lambda *args: tmp_path / 'generator.py')
+    executable = tmp_path / 'hermes'
+    executable.write_text('#!/bin/sh\n')
+    executable.chmod(0o700)
+    source = tmp_path / 'source'
+    source.mkdir()
+    managed = tmp_path / 'managed'
+    managed.mkdir()
+    details = dict(hermes_executable=str(executable), hermes_source=str(source), managed_root=str(managed))
+    receipt = dict(harness='hermes', complete=True, variant='plain', thin_config_contract=1, details=details)
+    monkeypatch.setattr(child.subprocess, 'run', lambda *args, **kwargs: pytest.fail('static check ran a subprocess'))
+    assert child.static_check(receipt, details, harness='hermes')['available'] is False
+
+
 @pytest.mark.parametrize('patch', [
     {'argv':['relative-node','entry']}, {'argv':['/node','bad\0arg']},
     {'cwd':'/different'}, {'env':{'DEEPSEEK_API_KEY':'dummy'}},
@@ -107,24 +122,49 @@ def test_plain_generation_check_does_not_admit_old_receipts(tmp_path,monkeypatch
     receipt={'harness':'hermes','complete':True,'details':config.copy()}
     assert child.static_check(receipt,config,harness='hermes')['reason']=='plain_generation_required'
     receipt.update(variant='plain',thin_config_contract=1)
-    assert child.static_check(receipt,config,harness='hermes')=={'available':True,'reason':None}
+    # Plain alone is no longer sufficient: it must bind the owned CA inputs.
+    assert child.static_check(receipt,config,harness='hermes')['available'] is False
     config['hermes_source']=str(tmp_path/'missing')
     assert child.static_check(receipt,config,harness='hermes')['available'] is False
 
 
 def selection_fixture(tmp_path, monkeypatch):
-    monkeypatch.setattr(child,'ROOT',tmp_path)
+    from test_managed_harness_install import CAFixture, fixture_stamp
+    with CAFixture(None, tmp_path) as ca:
+        managed = tmp_path / 'managed'
+        source = managed / 'source'
+        ca.source(source)
+        ca.ca.apply(ca.repo, source)
+        stamp = fixture_stamp(source)
+        key = __import__('hashlib').sha256(str(source.resolve()).encode()).hexdigest()[:16]
+        generation = managed / 'installs' / key / 'environments/fixture'
+        executable = generation / 'bin/hermes'
+        executable.parent.mkdir(parents=True)
+        executable.write_text('#!/bin/sh\n')
+        executable.chmod(0o700)
+        (generation / 'pyvenv.cfg').write_text('fixture')
+        paths = ca.material(managed, source, generation)
+        details = dict(hermes_executable=str(executable), hermes_source=str(source), managed_root=str(managed),
+                       ca_recipe=ca.ca.load(ca.repo)[2], ca_evidence=ca.ca.runtime_evidence(ca.repo, managed, source, generation, ca.target, paths), **stamp)
+        product = ca.repo
+    monkeypatch.setattr(child,'ROOT',product)
     child._VALIDATION_CACHE.clear()
-    executable=tmp_path/'hermes';executable.write_text('#!/bin/sh\n');executable.chmod(0o755)
-    source=tmp_path/'source';source.mkdir()
-    managed=tmp_path/'managed';managed.mkdir()
-    generator=tmp_path/'integrations/hermes/thin_config.py';generator.parent.mkdir(parents=True)
+    generator=product/'integrations/hermes/thin_config.py'
     generator.write_text("THIN_CONFIG_CONTRACT = 1\ndef validate_input(document):\n if document.get('effort') == 'bad': raise ValueError('invalid_effort')\n")
-    details={'hermes_executable':str(executable),'hermes_source':str(source),'managed_root':str(managed)}
     receipt=tmp_path/'receipt.json';private(receipt,{'harness':'hermes','variant':'plain','thin_config_contract':1,'complete':True,'details':details})
     config=tmp_path/'template.json';private(config,{**details,'generation_receipt':str(receipt)})
     manifest=tmp_path/'manifest.json';private(manifest,{'enabled':True,'backends':{'strata':{'model':'main','models':['main','alternate']}},'harnesses':{'hermes':{'python':sys.executable,'config_file':str(config)}}})
     return manifest,generator
+
+
+def test_static_hermes_ca_checks_bundle_without_native_code(tmp_path, monkeypatch):
+    manifest, _ = selection_fixture(tmp_path, monkeypatch)
+    template = child.read(child.read(manifest)['harnesses']['hermes']['config_file'])
+    receipt = child.read(template['generation_receipt'])
+    monkeypatch.setattr(child.subprocess, 'run', lambda *a, **k: pytest.fail('native code executed'))
+    assert child.static_check(receipt, template, harness='hermes')['available'] is True
+    Path(receipt['details']['ca_evidence']['bundle']).write_text('stale bundle')
+    assert child.static_check(receipt, template, harness='hermes')['available'] is False
 
 
 def test_selection_checks_alternate_model_and_fixed_integration_reason(tmp_path,monkeypatch):

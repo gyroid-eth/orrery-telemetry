@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "base_commit": "d923a5eb487a17c0a68801bba9ef0f56c81040a8",
+  "donor_commit": "75a8d6fcf474d2e87229d22a9c114cda97d8bb71",
+  "patch_sha256": "828c82a950ef2b00a57bb028c3b3ebc219abe96c18317da3b27504a440cf1621",
+  "inputs": {
+    "pyproject.toml": {
+      "before": "ff41b097147124ff2eb51a437d5f44eddea35104900c1c79c7edfb8b7352d901",
+      "after": "b2d2ee144fc8678ca81df56fbd851505861f4e09035a16dd268a24698ba276da"
+    },
+    "uv.lock": {
+      "before": "16300cf807347b7fcfa3c19963f5fe950913fdb3e41e3c649ea724bc7dc997da",
+      "after": "254266d85156de51d82b1d62e6849fd2545f219eb3fabc3d02bfb54c8aa605a9"
+    },
+    "pm/lock.json": {
+      "before": "49b79259220160f147255078a19af541a5f328d3871c8041cc1eb909d19eb549",
+      "after": "99b93f7d34de8ae05df7876c529d6d1940a03e0a28df72bfa5dc9eb260168b47"
+    }
+  },
+  "certifi": {
+    "version": "2026.10.19",
+    "wheel": {
+      "url": "https://files.pythonhosted.org/packages/c4/51/29046e48f693c54e5b7412216d447a1d8362c9653148d98c02cdf65fa733/certifi-2026.10.19-py3-none-any.whl",
+      "hash": "sha256:42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b",
+      "size": 136464,
+      "upload-time": "2026-10-20T02:24:15.072Z"
+    },
+    "cacert_sha256": "50f79f98dac192b20dbf73f35c56f0b0c557ab267ff5199d1117cc1180b70785",
+    "lock_record": {
+      "name": "certifi",
+      "version": "2026.10.19",
+      "source": {
+        "registry": "https://pypi.org/simple"
+      },
+      "sdist": {
+        "url": "https://files.pythonhosted.org/packages/a6/bd/1436c50cc46699de0230fbaacc1d1de7bfec413176099949e9d5112e88f2/certifi-2026.10.19.tar.gz",
+        "hash": "sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae",
+        "size": 137598,
+        "upload-time": "2026-10-20T02:24:16.604Z"
+      },
+      "wheels": [
+        {
+          "url": "https://files.pythonhosted.org/packages/c4/51/29046e48f693c54e5b7412216d447a1d8362c9653148d98c02cdf65fa733/certifi-2026.10.19-py3-none-any.whl",
+          "hash": "sha256:42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b",
+          "size": 136464,
+          "upload-time": "2026-10-20T02:24:15.072Z"
+        }
+      ]
+    }
+  },
+  "uv_version": "0.13.5",
+  "uv_artifacts": {
+    "darwin-arm64": {
+      "sha256": "743f85035a1996ecb350659e01cd9faea9709829be09b1b4b03c73eaf3c9cd73",
+      "url": "https://github.com/astral-sh/uv/releases/download/0.13.5/uv-aarch64-apple-darwin.tar.gz",
+      "executable_sha256": "7dad6047467a9d6b081c033cb3efed9ba39a4799c698d09e6cd598f3a6a32338"
+    },
+    "darwin-x64": {
+      "sha256": "b0f52b0e3945b4107d89024ea38e625683011fbfc05a0d98f9fa2d6dcee28c66",
+      "url": "https://github.com/astral-sh/uv/releases/download/0.13.5/uv-x86_64-apple-darwin.tar.gz",
+      "executable_sha256": "7ed737e90584ec4f77edb50f64a9c420f8f878c4e3328ca9a2ba4585ca3b80f8"
+    },
+    "linux-arm64": {
+      "sha256": "4bb69cf95ed13f23713bb7bc09f241896ea0c75b7c557e615a20604b82f9c403",
+      "url": "https://github.com/astral-sh/uv/releases/download/0.13.5/uv-aarch64-unknown-linux-gnu.tar.gz",
+      "executable_sha256": "2914576f11ea3e2f66145703b8e15acc4a9bf0c2409f6b699cd3914966f26460"
+    },
+    "linux-x64": {
+      "sha256": "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f",
+      "url": "https://github.com/astral-sh/uv/releases/download/0.13.5/uv-x86_64-unknown-linux-gnu.tar.gz",
+      "executable_sha256": "8a70db72685b7138121bfcda71fa1a00cb709ed9f1fdc4ecf1dd871e8e167e52"
+    }
+  }
+}
