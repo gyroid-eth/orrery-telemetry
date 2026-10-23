@@ -297,13 +297,33 @@ def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, 
 
 @pytest.mark.parametrize('changed_profile', [False, True, 'legacy', 'missing_home', 'missing_pin', 'missing_history', 'unknown_reason'])
 def test_real_hermes_generator_round_trip_preserves_owned_native_session(tmp_path, monkeypatch, request, changed_profile):
+    from shutil import copy2
     from unittest.mock import patch
     from test_hermes_thin_config import ThinConfig, config
     from test_harness_child import staged
+    from test_managed_harness_install import CAFixture, fixture_stamp
     original_popen = subprocess.Popen
     fixture = ThinConfig()
     fixture.setUp()
     request.addfinalizer(fixture.doCleanups)
+    # Synthetic CA inputs and runtime bytes must bind to the same private
+    # product policy that the real static admission and generator will read.
+    ca = CAFixture(None, fixture.base)
+    request.addfinalizer(ca.stack.close)
+    ca.source(fixture.source)
+    ca.ca.apply(ca.repo, fixture.source)
+    generation = Path(fixture.template_data['hermes_python']).parent.parent
+    paths = ca.material(fixture.runtime, fixture.source, generation)
+    stamp = fixture_stamp(fixture.source)
+    fixture.template_data.update(ca_recipe=ca.ca.load(ca.repo)[2],
+        ca_evidence=ca.ca.runtime_evidence(ca.repo, fixture.runtime, fixture.source,
+            generation, ca.target, paths), **stamp)
+    product = Path(native.__file__).resolve().parents[1]
+    for relative in ('bin/lib/instruction_blocks.py', 'bin/lib/harness_instructions.md', 'codex/AGENTS.md'):
+        destination = ca.repo / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        copy2(product / relative, destination)
+    monkeypatch.setattr(native, 'ROOT', ca.repo)
     receipt = fixture.base / 'plain-receipt.json'
     fixture.save(receipt, {'variant': 'plain', 'thin_config_contract': 1,
         'harness': 'hermes', 'complete': True, 'details': fixture.template_data})
