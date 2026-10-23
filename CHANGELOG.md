@@ -10,6 +10,40 @@
 
 ---
 
+## 2026.10.23.2
+
+### 管理HermesのCA依存を検証する新世代を構築
+
+Hermesの実行コードは固定したまま、公式更新からcertifi 2026.10.19とPM用uv 0.13.5の依存入力3件だけを取り込みます。旧入力・patch・適用後のhashを照合し、両PM導入と再同期で同じ入力を使います。baseと更新元のcommitを分け、native stampには変更済みsourceであることを記録します。
+
+新世代はrecipeのdigestで識別し、旧v2やprofileを上書きしません。公開前と再利用時には、実際のCA bundle・version・解決済みlock・PM用uvの実行fileとartifactの整合を確認します。静的catalog検査はHermesや資格helperを実行しません。対象はMacとGNU/Linux（WSLを含む）のarm64/x64で、旧artifactが残るBionicなどは停止します。既存の稼働process・手動Hermes・システムCA・呼出し元のpip/uvは変更しません。[導入と検証](integrations/hermes/README.md#installation-and-offline-checks)を参照してください。
+
+### 新しいMail環境で修正版のCA bundleを要求
+
+新しく構築するORRERY Mail環境の依存に`certifi>=2026.10.19`を追加しました。再導入時もこの下限を適用します。2026.10.18でも影響するemSign rootは除去済みですが、影響しないrootとの互換性のため2026.10.19以上を採用します（[Pythonの公式案内](https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576)）。
+
+稼働中のMailをそのまま使う通常のkeepでは、既存venvを変更しません。既存Mailへの適用は[通常のbuild切替手順](docs/agentstack-mail-update.md#--update-mail-による差し替え)で行います。この変更はmanaged Hermesの固定依存や、pip/uv自身が内蔵するCA bundleの更新を含みません。
+
+### 更新時に保存済みの設定を保持
+
+`env.sh` に保存された非既定値を、`AGENTSTACK_CHOSEN_SETTINGS` の有無や列挙内容にかかわらず引き継ぐようにしました。子のターミナルを自動で開かない設定（`AGENTSTACK_AUTO_OPEN_CHILD=0`）や独自の肖像フォルダーが、更新時に既定値へ戻るのを防ぎます。今回明示した値・空値による個別reset・`--reset-settings` は引き続き優先し、設定の値自体を削除した場合は既定値に戻ります。ORRERY Mail の識別情報と配置を保持する規則も変わりません。
+
+子のターミナル自動表示と肖像フォルダーに実際の変更がある場合は、installer の計画に旧値 → 新値を表示します。[設定の引き継ぎ](docs/install.md#前回の設定の引き継ぎ)を日英で更新しました（[#354](https://github.com/gyroid-eth/orrery-telemetry/issues/354)）。
+
+### Codex の長い作業中に、背景のターミナルが動いていても作業中と表示する
+
+Codex が1分以上作業していて、背景のターミナルが動いている（「· 1 background terminal running · /ps to view · /stop to close」が続く）とき、作業中ではなく待機中と表示されることがありました。このときも作業中（WORKING）と表示します。この表示の後ろに、ほかの文字が続く場合は、これまでどおり作業中とは判定しません。
+
+### 内部ファイルの安全な置換中にも読取りを継続
+
+設定や実行状態の内部ファイルが安全な別ファイルへ置き換わった場合、読取りを最大2回までやり直すようにしました。所有者・アクセス権・ファイル種類・リンク数の検査とサイズ上限は維持し、安全でないファイルや権限・入出力エラーは再試行で無視しません。
+
+### 保存元を維持する Mail の未公開 B1 核を追加
+
+#213 の S′向けに、全保存元の名前解決、本人資格と対象の分離、純粋な閲覧、本人 read/ack、再試行の固定を隔離して検証する核を追加しました。既定 server・installer・hook・休眠 global mode には接続せず、本番挙動と dashboard API generation は変わりません。send/reply は宛先 decision までで、実配送・予約の絶対 path 化・切替は後続です。[実装範囲](docs/storage-origin-b1.md)を参照してください。
+
+private updater の旧 binding 解決は、資格履歴を反映した私有 index の全検証後に行います。準備不足・整合性破損は owner の要解決と分けて停止します。decision には接続先と解決 revision を含め、実 whois の返値と副作用のない境界も検証します。
+
 ## 2026.10.23.1
 
 ### tmux終了後に残ったsocketでも新しいセッションを起動
