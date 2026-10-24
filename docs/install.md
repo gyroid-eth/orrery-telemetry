@@ -44,6 +44,8 @@ MacのKeychain形式とLinuxのSecret Service `credential_ref` は同梱手順�
 
 `install.sh --enable-dsh --dsh-node /absolute/node` はdsh 0.2.1-rc.2 / TUI 0.16.1と標準起動用のnative hook adapter、`--enable-hermes` は固定commit d923a5eb487a17c0a68801bba9ef0f56c81040a8のHermesを `harnesses/{dsh,hermes}/<世代>` へ導入します。両方なら2つのenableを指定します。既定ではどちらも取得せず、更新時は各々の保存済みenabledを継承します。Nodeは既存の24.2以上を絶対pathで指定し、本体は取得しません。取得はnpm/GitHubとHermesの固定PMに必要な配布元から行います。`--harness-cache PATH` はdshのtarball/npm offline cacheとHermesのlocal sourceを参照します（Hermes PMの依存取得は別です）。`--dry-run` は取得・書込なしです。
 
+Hermesのsource取得では、明示した `--harness-cache` を最優先します。指定がなければ、所有記録とpathを検証でき、固定commitを持つ既存の管理世代からGit repositoryを独立コピーして再利用します。元repositoryの履歴とtagを残し、未commitの変更は引き継ぎません。利用できる管理sourceがない場合は、従来どおり公式GitHubからcloneします。cacheや選択済みsourceの取得失敗を、別の取得経路への切替で隠しません。固定commitの照合、CA修正とPM依存関係の検証は従来どおりです。対象は既存管理sourceを使える更新であり、新規導入の取得量や所要時間の短縮を保証するものではありません。PMの依存取得には別途通信が必要な場合があります。
+
 Nodeの絶対pathは `AGENTSTACK_DSH_NODE` としてenv.shに保存され、通常の更新で引き継ぎます。旧導入で未保存の場合はdshの `current.json` から補完します。`--managed-spawn-config /absolute/manifest.json` は標準のDeepSeek・Local catalogと起動に使う私有manifestの参照だけを `AGENTSTACK_MANAGED_SPAWN_CONFIG` に保存し、dashboardのlaunchd/systemd/背景起動へ渡します。再起動・次のログイン・通常更新でも保持され、manifest本体や鍵はコピーしません。明示のオプション・環境変数が保存値より優先します。
 
 標準catalogのmanifestを設定済みなら、dshのinstall/updateで固定runtimeからeffortの段と既定を鍵なし・通信なしで取得し、世代内の能力cacheへ保存します。modelやruntime変更後の古いcacheは使わず、未取得時はpickerがunknownになります。手書きのlow/highへ戻しません。未指定の起動はハーネス既定を使います。

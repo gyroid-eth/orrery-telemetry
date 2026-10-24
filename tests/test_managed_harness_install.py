@@ -566,6 +566,40 @@ class AcquisitionTests(unittest.TestCase):
             self.dsh()
         self.assertFalse((self.root / 'evidence/upstream-runtime.json').exists())
 
+    def test_hermes_without_donor_keeps_original_official_clone(self):
+        with patch.object(installer, 'run', side_effect=self.fake_run):
+            details = installer.install_hermes(self.repo, self.root, sys.executable)
+        git = [argv for argv, _, _ in self.calls if argv[0] == 'git']
+        self.assertEqual(git, [
+            ['git', 'clone', '--no-checkout', installer.HERMES_URL, str(self.root / 'source')],
+            ['git', 'checkout', '--detach', installer.HERMES_COMMIT],
+            ['git', 'rev-parse', 'HEAD']])
+        self.assertEqual(len(self.pm_inputs), 2)
+        self.assertEqual(details['ca_recipe'], self.ca.ca.load(self.repo)[2])
+
+    def test_hermes_acquisition_failure_never_falls_back_or_runs_pm(self):
+        for cache in (self.cache, None):
+            with self.subTest(cache=bool(cache)):
+                self.calls.clear()
+                def failed_acquisition(argv, *, cwd, env):
+                    if argv[:2] == ['git', 'clone']:
+                        self.calls.append((argv, Path(cwd), dict(env)))
+                        raise subprocess.CalledProcessError(128, argv)
+                    return self.fake_run(argv, cwd=cwd, env=env)
+                with patch.object(installer, 'run', side_effect=failed_acquisition):
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        installer.install_hermes(self.repo, self.root, sys.executable, cache)
+                self.assertEqual([argv[1] for argv, _, _ in self.calls], ['clone'])
+                self.assertFalse(self.pm_inputs)
+
+    def test_hermes_cloned_head_mismatch_stops_before_ca_and_pm(self):
+        self.commit = 'wrong-pin'
+        with patch.object(installer, 'run', side_effect=self.fake_run), patch.object(installer, 'hermes_ca') as ca:
+            with self.assertRaisesRegex(ValueError, 'Hermes commit mismatch'):
+                installer.install_hermes(self.repo, self.root, sys.executable)
+            ca.assert_not_called()
+        self.assertFalse(self.pm_inputs)
+
     def test_hermes_pin_pm_arguments_settings_and_runtime(self):
         with patch.object(installer, 'run', side_effect=self.fake_run):
             details = installer.install_hermes(self.repo, self.root, sys.executable, self.cache)
@@ -756,6 +790,237 @@ class CatalogGateTests(unittest.TestCase):
                         self.assertEqual(statuses[harness]['available'], expected, (selected, harness))
                         if not expected:
                             self.assertEqual(statuses[harness]['reason'], 'disabled_by_opt_in')
+
+
+class HermesSourceGitTests(unittest.TestCase):
+    """Real tiny Git objects; no network, CA execution, PM or native runtime."""
+    class ReachedCA(Exception):
+        pass
+
+    def setUp(self):
+        temporary = self.enterContext(tempfile.TemporaryDirectory())
+        self.base = Path(temporary).resolve()
+        self.managed = self.base / 'product/harnesses/hermes'
+        self.managed.mkdir(parents=True, mode=0o700)
+        self.original_run = installer.run
+        self.env = installer.environment(self.base / 'fixture-home')
+        source = self.base / 'fixture-source'
+        self.git('init', str(source), cwd=self.base)
+        (source / 'payload.txt').write_text('ancestor contents\n')
+        self.git('add', '.', cwd=source)
+        self.commit(source, 'ancestor')
+        self.git('tag', 'v0.1.0', cwd=source)
+        (source / 'payload.txt').write_text('pinned contents\n')
+        self.git('add', '.', cwd=source)
+        self.commit(source, 'pinned')
+        self.pin = self.git('rev-parse', 'HEAD', cwd=source)
+        (source / 'payload.txt').write_text('later committed contents\n')
+        self.git('add', '.', cwd=source)
+        self.commit(source, 'later')
+        self.enterContext(patch.object(installer, 'HERMES_COMMIT', self.pin))
+        self.donor = self.managed / (self.pin[:16] + '-v2')
+        self.donor.mkdir(mode=0o700)
+        self.source = self.donor / 'source'
+        source.rename(self.source)
+        self.owner = {'harness': 'hermes', 'complete': True, 'hermes_commit': self.pin,
+                      'details': {'managed_root': str(self.donor), 'hermes_source': str(self.source)}}
+        installer.save(self.donor / installer.OWNER, self.owner)
+        self.destination = self.managed / (self.pin[:16] + '-ca1-' + 'f' * 16)
+        self.destination.mkdir(mode=0o700)
+        self.calls = []
+
+    def git(self, *args, cwd):
+        return self.original_run(['git', *args], cwd=cwd, env=self.env)
+
+    def commit(self, source, message):
+        self.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                 '-c', 'core.hooksPath=/dev/null', 'commit', '-m', message, cwd=source)
+
+    def local_only(self, argv, *, cwd, env):
+        self.calls.append(argv)
+        self.assertEqual(argv[0], 'git')
+        self.assertFalse(argv[:2] == ['git', 'clone'] and argv[-2] == installer.HERMES_URL,
+                         'full network clone attempted instead of owned fixed object')
+        self.assertFalse(argv[:2] == ['git', 'fetch'] and 'origin' in argv,
+                         'network fetch attempted despite owned fixed object')
+        return self.original_run(argv, cwd=cwd, env=env)
+
+    def install_until_ca(self, run=None, cache=None):
+        with patch.object(installer, 'run', side_effect=run or self.local_only), \
+             patch.object(installer, 'hermes_ca', side_effect=self.ReachedCA):
+            with self.assertRaises(self.ReachedCA):
+                installer.install_hermes(ROOT, self.destination, sys.executable, cache)
+
+    @staticmethod
+    def snapshot(directory):
+        return {str(path.relative_to(directory)): (path.stat().st_mode, path.read_bytes())
+                for path in directory.rglob('*') if path.is_file()}
+
+    def test_owned_dirty_source_uses_fixed_object_without_mutating_donor(self):
+        (self.source / 'payload.txt').write_text('uncommitted CA-like contents\n')
+        (self.source / 'untracked.txt').write_text('must not be copied\n')
+        before = self.snapshot(self.donor)
+        self.install_until_ca()
+        acquired = self.destination / 'source'
+        self.assertEqual((acquired / 'payload.txt').read_text(), 'pinned contents\n')
+        self.assertFalse((acquired / 'untracked.txt').exists())
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=acquired), self.pin)
+        self.assertEqual(self.git('rev-list', '--count', 'HEAD', cwd=acquired), '2')
+        self.assertEqual(self.git('remote', 'get-url', 'origin', cwd=acquired), installer.HERMES_URL)
+        self.assertFalse((acquired / '.git/objects/info/alternates').exists())
+        self.assertEqual(self.snapshot(self.donor), before)
+
+    def test_owned_source_keeps_release_tag_history_and_independent_objects(self):
+        before = self.snapshot(self.donor)
+        self.install_until_ca()
+        acquired = self.destination / 'source'
+        self.assertEqual(self.git('tag', '--merged', 'HEAD', cwd=acquired), 'v0.1.0')
+        self.assertEqual(self.git('rev-list', '--count', 'HEAD', cwd=acquired), '2')
+        self.assertEqual(self.git('rev-list', '--count', 'v0.1.0..HEAD', cwd=acquired), '1')
+        self.assertTrue(self.git('describe', '--tags', '--long', 'HEAD', cwd=acquired).startswith('v0.1.0-1-g'))
+        self.assertFalse((acquired / '.git/shallow').exists())
+        self.assertFalse((acquired / '.git/objects/info/alternates').exists())
+        relative = '.git/objects/' + self.pin[:2] + '/' + self.pin[2:]
+        self.assertNotEqual((acquired / relative).stat().st_ino, (self.source / relative).stat().st_ino)
+        self.assertEqual(self.snapshot(self.donor), before)
+        shutil.rmtree(self.donor)  # Only this test's private fixture, after invariance check.
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=acquired), self.pin)
+        self.assertEqual(self.git('rev-list', '--count', 'v0.1.0..HEAD', cwd=acquired), '1')
+
+    def test_old_v1_and_ca_receipts_can_supply_the_fixed_object(self):
+        for index, suffix in enumerate(('v1', 'ca1-' + 'a' * 16)):
+            with self.subTest(generation=suffix):
+                donor = self.managed / (self.pin[:16] + '-' + suffix)
+                self.donor.rename(donor)
+                self.donor, self.source = donor, donor / 'source'
+                self.owner['details'].update(managed_root=str(donor), hermes_source=str(self.source))
+                if suffix.startswith('ca1-'):
+                    self.owner.update(variant='plain', thin_config_contract=1)
+                    self.owner['details'].update(generation_receipt=str(donor / installer.OWNER),
+                                                 ca_recipe='old-recipe-evidence-not-needed-for-object')
+                installer.save(donor / installer.OWNER, self.owner)
+                self.destination = self.managed / (self.pin[:16] + '-ca1-' + str(index) * 16)
+                self.destination.mkdir(mode=0o700)
+                before = self.snapshot(donor)
+                self.install_until_ca()
+                self.assertEqual(self.git('rev-parse', 'HEAD', cwd=self.destination / 'source'), self.pin)
+                self.assertEqual(self.snapshot(donor), before)
+
+    def test_explicit_cache_takes_priority_over_owned_source(self):
+        cache = self.base / 'cache'
+        cache.mkdir()
+        (cache / 'hermes-agent').symlink_to(self.source, target_is_directory=True)
+        with patch.object(installer, '_hermes_local_source', side_effect=AssertionError('must not search')):
+            self.install_until_ca(cache=cache)
+        self.assertEqual(self.calls[0], ['git', 'clone', '--no-checkout', str(cache / 'hermes-agent'),
+                                        str(self.destination / 'source')])
+
+    def test_missing_object_and_unowned_generation_use_original_official_clone(self):
+        class OfficialClone(Exception):
+            pass
+        def stop_at_official(argv, *, cwd, env):
+            if argv[:2] == ['git', 'clone']:
+                self.calls.append(argv)
+                self.assertEqual(argv, ['git', 'clone', '--no-checkout', installer.HERMES_URL,
+                                        str(self.destination / 'source')])
+                raise OfficialClone
+            return self.local_only(argv, cwd=cwd, env=env)
+        # A real empty owned repository cannot resolve the recorded fixed SHA.
+        self.source.rename(self.base / 'outside-managed-source')
+        self.git('init', str(self.source), cwd=self.donor)
+        with self.assertRaises(OfficialClone):
+            self.install_until_ca(run=stop_at_official)
+        self.assertEqual(self.calls[0], ['git', 'rev-parse', '--verify', '--quiet', self.pin + '^{commit}'])
+        # Without the owner marker it must not even query this repository.
+        (self.donor / installer.OWNER).unlink()
+        self.calls.clear()
+        with self.assertRaises(OfficialClone):
+            self.install_until_ca(run=stop_at_official)
+        self.assertEqual(self.calls[0][:2], ['git', 'clone'])
+
+    def test_selected_local_clone_failure_never_retries_official_source(self):
+        before = self.snapshot(self.donor)
+        def fail_local_clone(argv, *, cwd, env):
+            if argv[:2] == ['git', 'clone']:
+                self.calls.append(argv)
+                self.assertEqual(argv, ['git', 'clone', '--no-checkout', '--no-hardlinks',
+                                        str(self.source), str(self.destination / 'source')])
+                raise subprocess.CalledProcessError(128, argv)
+            return self.local_only(argv, cwd=cwd, env=env)
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.install_until_ca(run=fail_local_clone)
+        self.assertEqual([argv[1] for argv in self.calls], ['rev-parse', 'clone'])
+        self.assertEqual(self.snapshot(self.donor), before)
+
+    def test_bad_receipt_does_not_fall_back(self):
+        for key, value in (('harness', 'dsh'), ('complete', False), ('hermes_commit', '0' * 40),
+                           ('details', {'managed_root': str(self.donor), 'hermes_source': str(self.base)})):
+            with self.subTest(field=key):
+                installer.save(self.donor / installer.OWNER, {**self.owner, key: value})
+                with self.assertRaisesRegex(ValueError, 'receipt mismatch'):
+                    self.install_until_ca()
+                self.assertFalse(self.calls)
+
+    def test_symlink_and_external_git_storage_are_rejected_before_git(self):
+        for path in (self.donor, self.donor / installer.OWNER, self.source,
+                     self.source / '.git', self.source / '.git/objects', self.source / '.git/config'):
+            with self.subTest(path=path.name):
+                moved = self.base / 'external-path'
+                path.rename(moved)
+                path.symlink_to(moved, target_is_directory=moved.is_dir())
+                try:
+                    with self.assertRaisesRegex(ValueError, 'Unsafe owned Hermes'):
+                        self.install_until_ca()
+                    self.assertFalse(self.calls)
+                finally:
+                    path.unlink()
+                    moved.rename(path)
+        for relative in ('commondir', 'objects/info/alternates'):
+            path = self.source / '.git' / relative
+            path.write_text(str(self.base / 'external-store'))
+            try:
+                with self.assertRaisesRegex(ValueError, 'External owned Hermes'):
+                    self.install_until_ca()
+                self.assertFalse(self.calls)
+            finally:
+                path.unlink()
+
+    def test_unsafe_permissions_and_owner_are_rejected(self):
+        for path in (self.donor, self.donor / installer.OWNER):
+            original = path.stat().st_mode
+            path.chmod(0o777 if path.is_dir() else 0o666)
+            try:
+                with self.assertRaisesRegex(ValueError, 'Unsafe owned Hermes'):
+                    self.install_until_ca()
+                self.assertFalse(self.calls)
+            finally:
+                path.chmod(original)
+        real_lstat = Path.lstat
+        def wrong_owner(path, *args, **kwargs):
+            result = real_lstat(path, *args, **kwargs)
+            if path == self.donor / installer.OWNER:
+                values = list(result)
+                values[4] = os.getuid() + 1
+                return os.stat_result(values)
+            return result
+        with patch.object(Path, 'lstat', wrong_owner):
+            with self.assertRaisesRegex(ValueError, 'Unsafe owned Hermes'):
+                self.install_until_ca()
+        self.assertFalse(self.calls)
+
+    def test_git_errors_or_resolved_mismatch_stop_without_network_fallback(self):
+        for result in ('0' * 40, subprocess.CalledProcessError(128, ['git', 'rev-parse'])):
+            self.calls.clear()
+            def failed_probe(argv, *, cwd, env):
+                self.calls.append(argv)
+                self.assertEqual(argv[:3], ['git', 'rev-parse', '--verify'])
+                if isinstance(result, Exception):
+                    raise result
+                return result
+            with self.subTest(result=type(result).__name__):
+                with self.assertRaises((ValueError, subprocess.CalledProcessError)):
+                    self.install_until_ca(run=failed_probe)
+                self.assertEqual(len(self.calls), 1)
 
 
 if __name__ == '__main__':
