@@ -5,6 +5,9 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -240,11 +243,11 @@ def test_history_carries_no_git_archive_or_identifier() -> None:
     for line in listing:
         sha, _, path = line.partition(" ")
         kind, payload = objects[sha]
+        if path and any(
+            pattern in path.lower().encode("utf-8") for pattern in IDENTIFIERS
+        ):
+            identifiers.append(f"{sha} path {path}")
         if kind != "blob":
-            if path and any(
-                pattern in path.lower().encode("utf-8") for pattern in IDENTIFIERS
-            ):
-                identifiers.append(f"{sha} path {path}")
             continue
         if payload[:16].startswith(ARCHIVE_MAGIC):
             archives.append(f"{sha} {path}")
@@ -283,3 +286,36 @@ def test_refs_and_tags_carry_no_personal_identifiers() -> None:
         pattern.decode("ascii") for pattern in IDENTIFIERS if pattern in refs
     )
     assert not found, "refs or tags carry personal identifiers: " + ", ".join(found)
+
+
+@pytest.mark.parametrize("kind", ("blob", "tree"))
+@pytest.mark.parametrize("case", ("lower", "upper", "mixed"))
+def test_history_guard_rejects_identifiers_in_paths(kind: str, case: str) -> None:
+    """Exercise the real history guard/batch parser, without real Git history."""
+    for pattern in IDENTIFIERS:
+        value = pattern.upper() if case == "upper" else pattern
+        if case == "mixed":
+            value = b"".join(
+                bytes([byte]).upper() if index % 2 else bytes([byte]).lower()
+                for index, byte in enumerate(pattern)
+            )
+        path = "fixture/" + value.decode("ascii") + "/entry.txt"
+        sha = "1" * 40
+        payload = b"clean synthetic content"
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            assert kwargs["cwd"] == ROOT and kwargs["check"] is True
+            if argv == ["git", "rev-list", "--all", "--objects"]:
+                assert kwargs["text"] is True
+                return subprocess.CompletedProcess(argv, 0, stdout=f"{sha} {path}\n")
+            assert argv == ["git", "cat-file", "--batch"]
+            assert kwargs["input"] == f"{sha}\n".encode("ascii")
+            output = f"{sha} {kind} {len(payload)}\n".encode("ascii") + payload + b"\n"
+            return subprocess.CompletedProcess(argv, 0, stdout=output)
+
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            with pytest.raises(AssertionError, match="reachable history carries identifiers"):
+                test_history_carries_no_git_archive_or_identifier()
+        assert len(calls) == 2
