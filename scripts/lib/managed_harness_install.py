@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -179,12 +180,79 @@ def install_dsh(repo, root, node, cache=None, *, datadir=True):
             'variant': variant, 'thin_config_contract': 1}
 
 
+def _hermes_owned_path(path, *, directory=False, private=False):
+    metadata = path.lstat()
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if (not expected_type(metadata.st_mode) or metadata.st_uid != os.getuid()
+            or private and metadata.st_mode & 0o022):
+        raise ValueError('Unsafe owned Hermes source path: ' + str(path))
+
+
+def _hermes_local_source(root, env):
+    base = root.parent
+    if base.name != 'hermes' or base.parent.name != 'harnesses':
+        return None
+    _hermes_owned_path(base.parent, directory=True)
+    _hermes_owned_path(base, directory=True)
+    pattern = re.escape(HERMES_COMMIT[:16]) + r'-(?:v[12]|ca1-[0-9a-f]{16})'
+    for generation in sorted(base.iterdir()):
+        if generation == root or not re.fullmatch(pattern, generation.name):
+            continue
+        _hermes_owned_path(generation, directory=True)
+        owner = generation / OWNER
+        if not owner.exists() and not owner.is_symlink():
+            continue
+        _hermes_owned_path(generation, directory=True, private=True)
+        _hermes_owned_path(owner, private=True)
+        receipt = read(owner)
+        source = generation / 'source'
+        details = receipt.get('details') if isinstance(receipt, dict) else None
+        if (not isinstance(details, dict) or receipt.get('harness') != 'hermes'
+                or receipt.get('complete') is not True or receipt.get('hermes_commit') != HERMES_COMMIT
+                or details.get('managed_root') != str(generation)
+                or details.get('hermes_source') != str(source)):
+            raise ValueError('Owned Hermes source receipt mismatch')
+        # Old v1/v2 receipts need no CA evidence: only their immutable pinned
+        # Git object is reused. Never copy their worktree or validate their PM.
+        for directory in (source, source / '.git', source / '.git/objects'):
+            _hermes_owned_path(directory, directory=True)
+        for relative in ('HEAD', 'config', 'objects/info', 'objects/pack'):
+            path = source / '.git' / relative
+            if path.exists() or path.is_symlink():
+                _hermes_owned_path(path, directory=relative.startswith('objects/'))
+        for relative in ('commondir', 'objects/info/alternates'):
+            path = source / '.git' / relative
+            if path.exists() or path.is_symlink():
+                raise ValueError('External owned Hermes Git object storage is unsupported')
+        try:
+            commit = run(['git', 'rev-parse', '--verify', '--quiet', HERMES_COMMIT + '^{commit}'], cwd=source, env=env)
+        except subprocess.CalledProcessError as error:
+            if error.returncode == 1:  # Absent fixed object, not a Git failure.
+                continue
+            raise
+        if commit != HERMES_COMMIT:
+            raise ValueError('Owned Hermes source commit mismatch')
+        return source
+    return None
+
+
 def install_hermes(repo, root, python, cache=None):
     env = environment(root)
     save(root / 'config.yaml', {'auth': {'adopt_external_logins': False}, 'updates': {'check': False},
          'telemetry': {'shared_metrics': {'enabled': False, 'send': False}}})
     source = root / 'source'
-    run(['git', 'clone', '--no-checkout', str(Path(cache) / 'hermes-agent') if cache else HERMES_URL, str(source)], cwd=root, env=env)
+    if cache:
+        # Explicit cache failures remain failures; do not search or fetch.
+        run(['git', 'clone', '--no-checkout', str(Path(cache) / 'hermes-agent'), str(source)], cwd=root, env=env)
+    else:
+        local = _hermes_local_source(root, env)
+        if local:
+            # Preserve release tags/history for upstream version gates, without
+            # copying dirty worktree files or sharing the donor's object files.
+            run(['git', 'clone', '--no-checkout', '--no-hardlinks', str(local), str(source)], cwd=root, env=env)
+            run(['git', 'remote', 'set-url', 'origin', HERMES_URL], cwd=source, env=env)
+        else:
+            run(['git', 'clone', '--no-checkout', HERMES_URL, str(source)], cwd=root, env=env)
     run(['git', 'checkout', '--detach', HERMES_COMMIT], cwd=source, env=env)
     if run(['git', 'rev-parse', 'HEAD'], cwd=source, env=env) != HERMES_COMMIT:
         raise ValueError('Hermes commit mismatch')
