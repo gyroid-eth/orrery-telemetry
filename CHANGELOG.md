@@ -10,6 +10,16 @@
 
 ---
 
+## 2026.10.24
+
+### Hermesの更新で既存の管理sourceを再利用
+
+Hermesの新世代を作るとき、明示したcacheを優先し、指定がなければ所有記録を確認できる既存管理世代のGit repositoryを独立コピーして再利用します。履歴とtagを保ち、未commitの変更はコピーせず、元の世代にも依存しません。利用できる管理sourceがない場合の公式GitHubからのcloneと、固定commit照合・CA修正・PM依存関係の検証は従来どおりです。新規導入の取得量削減、PMの通信不要、実環境での導入時間を保証する変更ではありません（[導入手順](docs/install.md)）。
+
+### Keep multiple native connections (API 27)
+
+Keep existing `deepseek`/`strata` settings and add explicitly declared connection IDs such as `strata-epyc`. API 27 separates each connection's ID from its DeepSeek/Local kind. Equal wire model IDs on two servers retain their own route, credential reference, limits and helper choices. Catalog, standard API/CLI launch, static admission, Linux credential references and native resume share the selector rules. The existing NEW AGENT tabs show connection labels; bilingual setup/configuration guides explain meaningful server names for cockpit. This does not add global-mode native support or claim live multi-server acceptance.
+
 ## 2026.10.23.2
 
 ### 管理HermesのCA依存を検証する新世代を構築
