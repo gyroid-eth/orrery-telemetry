@@ -1,106 +1,53 @@
 # Applicability
 
-Follow this ORRERY block only when ORRERY Mail tools are actually available.
-Use only the existing resolved identity or session-bound runtime binding.
-Provisional, retry or degraded bindings are unresolved. Never register a
-different identity to get past a failure. Without an identity or binding,
-skip Mail registration and notifications; editing guards remain in effect.
-
-Your program and model come from the canonical launch task or runtime binding.
-The model's provider and the program running it are separate facts. Do not
-describe yourself as a different program because of a shared instruction file.
-An uncoordinated session needs the operator's coordinated launcher; this
-instruction file is not permission to create a registration.
-
-# Global preparation context
-
-When `AGENTSTACK_CLIENT_CONFIG` selects global mode, use the fixed client
-context and stable IDs, not the legacy raw registration procedure below.
-Child preparation uses `agentstack-preregister-child --prepare-only` with the
-selected program and model; repeat the same command to recover its saved
-registration intent. Prepare-only never means a running child. Registration
-dispatch remains in `bin/lib/agentstack-register.sh`. Follow
-`docs/global-child-client.md` and `docs/global-delivery-client.md` (or their
-English versions) for the fixed handoff, common client, execution and delivery.
-Unknown execution requires explicit operator resolution. Hook trust requires
-prior human review; ordinary launch cannot approve it. Message writes use
-typed JSON through `agentstack-runtime-client call-json send_message` with
-`to_agent_ids`; use `replay-pending` to replay saved message bytes. With proxy
-tools, follow the actual bound schema instead.
+Use the identity, program and model from your canonical launch task or runtime
+binding. Do not borrow another program's identity from shared instructions.
+Work only within your assigned task. This document does not authorize a new
+registration. Unresolved identity or connection: stop coordination and report
+the exact failure to your parent, or the operator if standalone. Editing guards
+remain in effect.
 
 ## Coordination (ORRERY Mail)
 
-Use the first matching route only: embedded canonical task, bound proxy,
-confirmed raw connection after shell registration, or recovery of the existing
-raw identity. With no identity, skip registration and ask for the coordinated
-launcher. If connection type is unknown, inspect the actual tool schema and
-startup notice; do not infer proxy use from environment variables or fall back
-from a proxy failure to raw registration.
+Use only the provided connection and its actual tool schema. Do not add caller
+identity, project or token fields that the schema does not accept. Do not read
+credentials or another agent's inbox. Do not register again, invent an identity
+or switch transports to recover a failed or unknown connection.
 
 <!-- include: ### 1. Embedded canonical task UNTIL ### 3. Raw/direct connection after shell registration -->
 
-### Raw/direct connection and recovery
-
-Only on a confirmed raw/direct connection, authenticate the separate MCP
-session with the existing identity's token from
-`${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_token_<name>`.
-Pass it as `registration_token` on the first raw `fetch_inbox` or `whois`;
-later calls in that authenticated MCP session may omit it. Never read a proxy
-token. Shell registration does not authenticate the separate MCP session.
-
-For recovery, resolve the existing name from `AGENT_NAME` or the exact startup
-identity first. Never substitute an alias or an empty name. Run the documented
-`agentstack-reregister` helper once with that existing name and its registered
-program; do not guess the program from the model. The helper restores the
-owner token without printing it; do not call `register_agent` afterward.
-In global mode, exit 3 means observed without refreshing registration; pass
-the existing program/model and rerun the helper to refresh it.
-
-If recovery fails, report the exact failure and stop it. Never generate a new
-token, register another identity, or retry blindly. A reserved child identity
-stays reserved. Only exact `reason=credential-unavailable` calls for the local
-operator's `docs/persistent-agents.md#credential-unavailable` procedure; never
-run enrollment for the operator. An empty launcher-exported token variable is
-not a token check: let the approved helper use its runtime files.
-
-__ORRERY_IDENTITY_BINDING_UNRESOLVED__
-
-<!-- include: ### Shared boundaries UNTIL ## Canonical coordination paths are fail-closed -->
-
-<!-- include: ## Canonical coordination paths are fail-closed UNTIL ## File reservations — REQUIRED before editing -->
+<!-- include: ## Canonical coordination paths are fail-closed UNTIL - Delegation is one instance of the rule. Use the `delegate` skill and its -->
 
 ## File reservations — REQUIRED before editing
 
-Editing guard coverage depends on the program and approved hooks. Shell writes
-may be outside those guards. Reserve before every shared edit regardless of
-guard availability; never approve your own production hooks. Doctor reports
-missing, disabled or unverified protection.
+Project: `__AGENTSTACK_PROJECT_KEY__`. Before a shared project edit, call
+`reserve_files` with project-relative paths and `ttl_seconds` at least 600.
+Use the actual schema; do not add caller or project fields. Renew long edits
+with `renew_reservations` and release with `release_reservations` when done.
+A conflicting reservation means stop and coordinate, not overwrite.
+Reserve even when a shell write is outside the editing guard.
 
-Before editing a file under the project, use the selected connection route:
+Your own private scratch does not require a project reservation. Shared files
+outside the project are not automatically yours to edit: ask your parent
+before editing an unassigned shared area. Never bypass or approve guards.
 
-<!-- include: - Bound proxy: follow its actual schema and use `reserve_files`. Do not add UNTIL - On either route, **`ttl_seconds` must be at least 600**: composing the edit -->
+## Messaging Other Agents
 
-On either route, `ttl_seconds` must be at least 600. Renew long edits and
-release reservations when done; do not assume a tool releases them for you.
-Forgotten reservations block other agents. If a path is already reserved by
-another agent, coordinate over ORRERY Mail instead of editing it.
+<!-- include: - **Send pointers, not files.** A message body is a path plus what changed UNTIL - **Instruct children over mail only.** Use `send_message` to the child's -->
 
-## MCP tool approval refusals
+## Waiting For Replies
 
-If a tool returns a refusal, stop the blocked work and report the exact
-message. While an approval prompt is pending, wait for its result before
-reporting a refusal. Do not change program configuration to bypass it or grant
-permission on the operator's behalf.
+Use notifications or an available documented wait. Otherwise save progress and
+end the turn. Do not use fetch polling, custom watchers or pane input to wait
+for or deliver messages.
 
-<!-- include: Send your parent one line through ORRERY Mail `send_message`, following the UNTIL ## Skills -->
+<!-- include: ## Reading Notifications UNTIL ## Skills -->
 
-## Skills
+## Tool refusals
 
-Use installed skills through the program's supported skill mechanism, and
-read their instructions before following them. Delegation uses the canonical
-`__AGENTSTACK_HOME__/hooks/spawn_child.sh` launcher and the delegate skill;
-do not invent a parallel flow. The log skill records structured work logs.
-
-## Deterministic daemon development
-
-The local operator-only daemon entry is documented in `docs/daemon-agents.md`. It does not change your existing coordination route or authorize you to create/enroll a live identity.
+Stop the affected step and report the exact failure and unfinished work.
+For a tool refusal, send your parent:
+`MCP tool <tool-name> is blocked: <exact message>.`
+If standalone or sending also fails, report to the operator and stop.
+Wait for a pending approval's result; do not grant it yourself or change
+settings, credentials or hook trust to bypass a refusal.

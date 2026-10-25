@@ -113,7 +113,9 @@ ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json
 
 `spawn_child.sh --harness dsh|hermes --backend deepseek|strata --model <正式ID>` は、名前・登録応答の binding・実際の作業場所・tmux session・Mail proxy を標準の子と同じ経路で用意します。明示 opt-in と、patch を当てない別の導入世代が必要です。launcher は native config を生成し、上流 CLI を pane でそのまま動かします。専用 supervisor・通信先の制限・usage 必須・task の寿命は加えません。報告後も pane は生存し、`--harness` を指定しない Claude / Codex は従来どおりです。
 
-private な `harness_state_dir` に初期 prompt・native launch plan・共通 renderer が既存 Codex template から作る指示を保存します。鍵や親 token の値は含めません。追加の stdio/HTTP MCP は共通の tool 選択からコピーし、native config に写せない承認や filter は明示して拒否します。native tool の adapter は、既存の鍵読取・登録・予約 hook の判定を呼びます。 明示していない installer の default-tools は追加 harness へ暗黙に落とさず、未対応として停止します。利用者が `--base default` または対応する `--tools` を明示して選択できます。
+private な `harness_state_dir` に初期 prompt・native launch plan・native 専用の短い指示を保存します。指示の正本は `bin/lib/harness_instructions.md` で、既存の共通 renderer が起動・Mail 等の共通規則を取り込みます。初回起動と同じ ID の再開で、dsh の `AGENTS.md` / Hermes の system prompt へ渡します。ORRERY の子作成・raw 認証回復・他 runtime 専用の手順は載せません。共有編集の予約と自己専用 scratch の区別、停止条件は保持します。dsh の tool-subagent や Hermes の auxiliary/delegation 設定、skills の配布は変えません。Claude / Codex の指示本文も不変です。
+
+鍵や親 token の値は指示に含めません。追加の stdio/HTTP MCP は共通の tool 選択からコピーし、native config に写せない承認や filter は明示して拒否します。native tool の adapter は、既存の鍵読取・登録・予約 hook の判定を呼びます。 明示していない installer の default-tools は追加 harness へ暗黙に落とさず、未対応として停止します。利用者が `--base default` または対応する `--tools` を明示して選択できます。
 
 Hermes の新しい子は、世代の外にある profiles 実体の
 `children/<project key の SHA256>/<canonical name>` を永続的な `HERMES_HOME` として使います。
