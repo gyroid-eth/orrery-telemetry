@@ -6,13 +6,16 @@ no additional provider endpoint or credential lookup in these readers.
 
 ## Coordination instructions
 
-Native dsh/Hermes children receive harness-neutral coordination instructions.
-Shared Mail, reservation and waiting rules are included from the existing
-instruction template; program-specific identity, configuration and tool
-examples are kept separate. Missing or ambiguous shared-section boundaries
-stop rendering instead of silently omitting rules. Existing program instruction
-blocks and user instruction files are unchanged. The child's actual program
-and model come from its canonical launch task or runtime binding.
+Native dsh/Hermes children receive concise, harness-neutral instructions from
+`bin/lib/harness_instructions.md`. Startup, Mail notifications and common
+failure rules use bounded includes from the existing shared template. Missing
+or ambiguous boundaries stop rendering instead of silently omitting rules.
+The native document covers shared-edit reservations, private scratch, waiting
+and stop conditions without ORRERY child-creation or raw recovery procedures.
+This changes the document, not dsh tool-subagent, Hermes auxiliary/delegation
+settings or skill distribution. Existing Claude/Codex blocks and user
+instruction files are unchanged. The child's actual program and model come
+from its canonical launch task or runtime binding.
 
 ## Activity classification boundary
 

@@ -266,6 +266,8 @@ def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, 
     monkeypatch.setenv('AGENTSTACK_MCP_URL', 'http://127.0.0.1:9/mcp')
     directory = native.prepare(args)
     first = native.read(directory / 'launch.json')
+    instructions = (directory / 'instructions.md').read_bytes()
+    assert (Path(first['env']['DSH_HOME']) / 'AGENTS.md').read_bytes() == instructions
     runtime = Path(args.runtime_dir)
     resume.finish_registration(runtime, args.agent_name, generation=args.generation, rollback=False)
     resume._atomic_json(directory / 'native-session.json', {
@@ -288,6 +290,8 @@ def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, 
     assert native.prepare_resume(runtime, args.agent_name) == directory
     resumed = native.read(directory / 'launch.json')
     assert resumed['env']['DSH_HOME'] == first['env']['DSH_HOME']
+    assert (directory / 'instructions.md').read_bytes() == instructions
+    assert (Path(resumed['env']['DSH_HOME']) / 'AGENTS.md').read_bytes() == instructions
     assert resumed['argv'][-2:] == ['--resume', 'exact-owned-id']
     source = native.read(directory / 'input.json')
     assert source['backend_id'] == backend
@@ -359,6 +363,8 @@ def test_real_hermes_generator_round_trip_preserves_owned_native_session(tmp_pat
     with patch.object(subprocess, 'Popen', original_popen):
         directory = native.prepare(args)
         first = native.read(directory / 'launch.json')
+        instructions = (directory / 'instructions.md').read_text()
+        assert config.read(directory / 'overlay/config.yaml')['agent']['system_prompt'] == instructions
         memory = Path(first['env']['HERMES_HOME']) / 'memories/MEMORY.md'
         memory.parent.mkdir()
         memory.write_text('synthetic-memory-marker-distinct-from-conversation')
@@ -414,6 +420,8 @@ def test_real_hermes_generator_round_trip_preserves_owned_native_session(tmp_pat
         assert native.prepare_resume(runtime, args.agent_name) == directory
         resumed = native.read(directory / 'launch.json')
         assert resumed['env']['HERMES_HOME'] == first['env']['HERMES_HOME']
+        assert (directory / 'instructions.md').read_text() == instructions
+        assert config.read(directory / 'overlay/config.yaml')['agent']['system_prompt'] == instructions
         assert memory.read_text() == 'synthetic-memory-marker-distinct-from-conversation'
         assert resumed['argv'][-2:] == ['--resume', 'exact-hermes-id']
         source = native.read(directory / 'input.json')
