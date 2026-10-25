@@ -33,6 +33,12 @@ The ORRERY surface layer aliases the old names (`--void` `--bone` `--cyan` `--li
 
 ## 3. Typography
 
+The header places a 32px Orbit logo to the left of the name.
+`assets/orbit.svg` and `assets/orbit-light.svg` share the same geometry.
+The header follows the existing page theme; the favicon follows the browser's
+light/dark preference. The logo is not a control. The wordmark and existing
+controls keep their roles and typefaces.
+
 | Role | Face | Examples |
 | --- | --- | --- |
 | Proper names and headings | `--serif` (Fraunces) | wordmark, agent names, the header statistics, modal titles |
