@@ -263,6 +263,69 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     assert "AGENTSTACK_DASHBOARD_SELF_RESTART=1" in installer
 
 
+def test_core_copy_distributes_the_standalone_authority_parser(tmp_path):
+    source = (ROOT / "scripts/install.sh").read_text()
+    block = source[source.index("OPTIONAL_PROVIDER_PAYLOAD=("):source.index("\n# The child MCP proxy")]
+    staged = tmp_path / "source"
+    staged.mkdir()
+    module = ROOT / "dashboard/legacy_http_admission.py"
+    shutil.copy2(module, staged)
+    (staged / "provider_server.py").write_text("# optional fixture")
+    installed = tmp_path / "installed"
+    result = subprocess.run(["/bin/bash", "-euc", 'DRY_RUN=false\nplan() { :; }\n' + block +
+                             '\ncopy_core_tree "$1" "$2" dashboard\n', "fixture", str(staged), str(installed)],
+                            env={"HOME": str(tmp_path), "PATH": os.environ["PATH"]},
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert (installed / module.name).read_bytes() == module.read_bytes()
+    assert not (installed / "provider_server.py").exists()
+    result = subprocess.run([sys.executable, "-c", 'import runpy,sys; print(runpy.run_path(sys.argv[1])["configured_origins"](sys.argv[2]))',
+                             str(installed / module.name), "https://dashboard.example"],
+                            capture_output=True, text=True, check=True)
+    assert "dashboard.example" in result.stdout
+
+
+@pytest.mark.parametrize("writer", ["installer", "controller", "systemd"])
+def test_dashboard_origins_survive_each_service_writer(tmp_path, writer):
+    from test_install_launchd_placeholders import _render
+    value = "http://dashboard.example:19878 https://dashboard.example"
+    output = _render(tmp_path, writer, "legacy", "", {"DASHBOARD_ALLOWED_ORIGINS_SETTING": value})
+    if writer == "systemd":
+        values = dict(re.findall(r'^Environment="([^=]+)=(.*)"$', output.read_text(), re.MULTILINE))
+    else:
+        values = plistlib.loads(output.read_bytes())["EnvironmentVariables"]
+    assert values["AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS"] == value
+
+
+def test_dashboard_origins_reach_foreground_and_background_environment(tmp_path):
+    stack = tmp_path / "stack"
+    dashboard = stack / "dashboard"
+    dashboard.mkdir(parents=True)
+    shutil.copytree(ROOT / "bin/lib", stack / "bin/lib")
+    shutil.copy2(ROOT / "dashboard/agentctl.sh", dashboard)
+    value = "https://dashboard.example http://dashboard.example:19878"
+    env_file = stack / "env.sh"
+    env_file.write_text("export AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS=" + shlex.quote(value) + "\n")
+    (dashboard / "server.py").write_text('import os; print(os.environ["AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS"])')
+    env = {"HOME": str(tmp_path / "home"), "PATH": os.environ["PATH"],
+           "AGENTSTACK_ENV_FILE": str(env_file), "AGENTSTACK_PYTHON": sys.executable}
+    result = subprocess.run(["/bin/bash", str(dashboard / "agentctl.sh"), "fg"],
+                            env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == value
+    source = (ROOT / "dashboard/agentctl.sh").read_text()
+    start = source.index("export_background_env() {")
+    function = source[start:source.index("\nstart_background() {", start)]
+    variables = set(re.findall(r'\$([A-Z][A-Z_0-9]*)', function))
+    env.update({name: "" for name in variables})
+    env["DASHBOARD_ALLOWED_ORIGINS_SETTING"] = value
+    result = subprocess.run(["/bin/bash", "-euc", function +
+                             '\nexport_background_env\nexec "$1" -c \'import os; print(os.environ["AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS"])\'',
+                             "fixture", sys.executable], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == value
+
+
 def test_launchd_install_explicitly_kickstarts_before_checking_health(
     tmp_path,
 ):
@@ -340,9 +403,10 @@ def test_agentctl_restart_reinstalls_selected_launchd_environment(
         path.chmod(0o600)
     env_file = stack / "env.sh"
 
-    def select(mode, config):
+    def select(mode, config, origins):
         env_file.write_text(
             "export AGENTSTACK_RUNTIME_MODE=" + mode + "\n" +
+            "export AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS=" + shlex.quote(origins) + "\n" +
             ("export AGENTSTACK_GLOBAL_SERVER_CONFIG=" +
              shlex.quote(str(configs[config])) + "\n" if config else "")
         )
@@ -401,15 +465,17 @@ with calls.open('a') as stream:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "launchd mode" in result.stdout
 
-    select(old_mode, old_config)
+    select(old_mode, old_config, "http://old.example:19878")
     run("start")
     assert json.loads(state.read_text())["AGENTSTACK_RUNTIME_MODE"] == old_mode
+    assert json.loads(state.read_text())["AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS"] == "http://old.example:19878"
     calls.write_text("")
-    select(new_mode, new_config)
+    select(new_mode, new_config, "https://dashboard.example http://dashboard.example:19878")
     run("restart")
     events = [json.loads(row) for row in calls.read_text().splitlines()]
     environment = events[-1]["environment"]
     assert environment["AGENTSTACK_RUNTIME_MODE"] == new_mode
+    assert environment["AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS"] == "https://dashboard.example http://dashboard.example:19878"
     assert environment["AGENTSTACK_GLOBAL_SERVER_CONFIG"] == (
         str(configs[new_config]) if new_config else ""
     )

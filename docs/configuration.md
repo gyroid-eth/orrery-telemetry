@@ -22,6 +22,7 @@ macOS の dashboard は `~/.agentstack/dashboard/agentctl.sh restart` でも、�
 | --- | --- | --- |
 | `AGENTSTACK_PORT` | `8770` | HTTP port |
 | `AGENTSTACK_BIND_HOST` | `127.0.0.1` | bind address |
+| `AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS` | 空文字 | legacy dashboard で追加許可する固定の HTTP(S) origin。半角スペース区切り。下記参照 |
 | `AGENTSTACK_MAIL_DB` | `~/.agentstack/mail/storage.sqlite3` | ORRERY Mail SQLite |
 | `AGENTSTACK_MAIL_ENV` | `~/.agentstack/mail/.env` | standalone dashboard の互換 bearer 参照先。installer は service render を明示 |
 | `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `disabled` | legacy Authorization header を付けない |
@@ -54,6 +55,25 @@ murmur の言語は `?lang=ja` / `?lang=en`、`AGENTSTACK_LANG`、browser の
 Murmur switch でも on / off を切り替えられ、その選択は browser に保存されます
 （優先順は URL、browser の保存値、service 既定）。環境変数を
 常駐 service に反映するには、設定後に installer を再実行してください。
+
+## LAN / VPN から使う場合の Host 設定
+
+legacy dashboard は、全 HTTP メソッド・全パスで `Host` を検査します。既定では、実際の待受ポートの `127.0.0.1`、`localhost`、`[::1]` だけを許可します。通常のローカル利用や、loopback URL へ接続する cockpit bridge の設定追加は不要です。
+
+既に LAN / VPN 向けに待ち受けている場合は、更新前に利用する URL の origin（scheme、host、port）を明示してください。例えば、既存 checkout で次を dry-run し、結果を確認してから同じ環境変数付きで `--dry-run` を外して実行します。
+
+```bash
+AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS='http://dashboard.example:8770 https://dashboard.example' \
+  ./scripts/install.sh --keep-mail --dry-run
+```
+
+この値は `env.sh` と dashboard の service 定義へ保存され、再インストール時も引き継がれます。空文字を明示するか `--reset-settings` で追加許可を消せます。`server.py` を直接起動する場合は、そのプロセスへ同じ環境変数を渡してください。この設定は bind address を変更しません。既存の待受設定は別途維持してください。
+
+origin にパス・認証情報・query・fragment・wildcard は書けません。引用符や改行などを含む不正な値は、installer が設定や service を書く前に拒否し、server も起動を拒否します。区切りは改行やタブではなく半角スペースです。大文字小文字と IPv6 表記を正規化し、port 省略は HTTP の `80` / HTTPS の `443` として照合します。`8770` など他の port は必ず明示してください。
+
+`AGENTSTACK_BIND_HOST=0.0.0.0`、実 interface、`Forwarded` / `X-Forwarded-*` から許可先を推測しません。HTTPS を proxy で終端する場合も、利用する HTTPS origin を明示し、upstream の `Host` と browser の `Origin` がその同じ origin に対応するようにしてください。別途許可した origin でも、異なる `Host` の POST は通りません。
+
+これは認証機能ではありません。dashboard にはログインがなく、許可した Host を送れる相手は操作できます。公開範囲は信頼できる LAN / VPN に限定してください。isolated global mode の capability 認証と公開 static resource の扱いは変わりません。
 
 ## Project key がない場合
 

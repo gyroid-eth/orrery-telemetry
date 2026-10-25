@@ -100,11 +100,18 @@ except ModuleNotFoundError:  # direct script execution
     )
 
 
+try:
+    from dashboard import legacy_http_admission
+except ModuleNotFoundError:  # direct script execution
+    import legacy_http_admission
+
+
 def _same_origin_request(handler) -> bool:
     origin = (handler.headers.get("Origin") or "").strip()
     fetch_site = (handler.headers.get("Sec-Fetch-Site") or "").strip().lower()
-    expected_origin = f"http://{handler.headers.get('Host', '')}"
-    return (not origin or origin == expected_origin) and fetch_site in {
+    matches = (origin == f"http://{handler.headers.get('Host', '')}" if GLOBAL_MODE else
+               legacy_http_admission.origin_matches(origin, getattr(handler, "_legacy_origins", frozenset())))
+    return (not origin or matches) and fetch_site in {
         "",
         "none",
         "same-origin",
@@ -9320,10 +9327,21 @@ def is_public_static(path):
 
 class Handler(BaseHTTPRequestHandler):
     def parse_request(self):
+        self._legacy_origins = frozenset()
         if not super().parse_request():
             return False
         if not GLOBAL_MODE:
-            return True
+            try:
+                self._legacy_origins = legacy_http_admission.admit(
+                    self.headers, self.path, self.server.server_port,
+                    os.environ.get(legacy_http_admission.SETTING, ""))
+                return True
+            except ValueError:
+                # Close before reading a body: its bytes must never become a
+                # subsequent keep-alive request after an admission failure.
+                self.close_connection = True
+                self.send_error(403, "Untrusted dashboard authority")
+                return False
         # One rule for every verb and route, including future local operations.
         # Only exact installed static GET/HEAD resources are public.
         path = urlparse(self.path).path
@@ -9764,9 +9782,9 @@ class Handler(BaseHTTPRequestHandler):
         origin = (self.headers.get("Origin") or "").strip()
         fetch_site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
         if origin or fetch_site:
-            expected_origin = f"http://{self.headers.get('Host', '')}"
-            if ((origin and origin != expected_origin)
+            if ((origin and not legacy_http_admission.origin_matches(origin, self._legacy_origins))
                     or (fetch_site and fetch_site != "same-origin")):
+                self.close_connection = True
                 self._send(
                     403,
                     json.dumps({"ok": False,
@@ -10079,6 +10097,7 @@ def main():
         except KeyboardInterrupt:pass
         finally:srv.server_close()
         return
+    legacy_http_admission.configured_origins(os.environ.get(legacy_http_admission.SETTING, ""))
     _start_supervisor_watchdog()
     _start_child_resume_maintenance()
     _start_provider_stall_monitor()

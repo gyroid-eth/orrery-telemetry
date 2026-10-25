@@ -17,7 +17,11 @@ http://127.0.0.1:8770
 
 response body は、画像と HTML を除き JSON です。dashboard 自体に login layer はありません。`AGENTSTACK_BIND_HOST=0.0.0.0` を使うときは trusted LAN / VPN に限定してください。
 
+legacy mode は全メソッド・全パスで固定の `Host` を検査し、不信・欠落・重複・不正な Host や重複 Origin、絶対形式 request-target の authority 不一致を dispatch 前に HTTP 403 で拒否します。既定の許可先は実待受ポートの `127.0.0.1` / `localhost` / `[::1]` です。LAN / VPN 向けの固定 origin は [`AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS`](configuration.md#lan--vpn-から使う場合の-host-設定) に明示します。Host は認証の代わりにはなりません。
+
 すべての POST endpoint は `Content-Type: application/json` と JSON object body が必須です。browser request は `Origin` / `Sec-Fetch-Site` が same-origin でなければ HTTP 403、CLI は両 header を送らない場合に利用できます。simple-form CSRF を受け付けないための共通 guard です。
+
+POST の Origin は、検証済み Host に対応する固定 origin とだけ照合します。scheme・host・port を照合し、HTTP `80` / HTTPS `443` の省略と大文字小文字を正規化します。別の許可済み Host の origin を送っても拒否します。Host 検査の拒否応答は、通常の API JSON ではなく HTTP error body の場合があります。
 
 失敗は原則:
 
@@ -74,7 +78,7 @@ version の解決順は [インストール](install.md#version)を参照して�
 
 ### 隔離 global backend（API 17）
 
-明示 global mode では static 以外の全 route に operator capability の admission を適用します。`/api/version` も認証が必要です。`capabilities` の `operator_http_admission`・`ui_read`・`global_spawn`・`instruction_migration`・`global_dashboard_ui` は1です。画面を API 番号だけで有効にせず、対応する capability を確認してください。[設定・権限・中断復旧](global-delivery-client.md#operator-ui-access)を参照してください。旧 mode の payload と入場条件は維持します。
+明示 global mode では static 以外の全 route に operator capability の admission を適用します。`/api/version` も認証が必要です。`capabilities` の `operator_http_admission`・`ui_read`・`global_spawn`・`instruction_migration`・`global_dashboard_ui` は1です。画面を API 番号だけで有効にせず、対応する capability を確認してください。[設定・権限・中断復旧](global-delivery-client.md#operator-ui-access)を参照してください。旧 mode の payload は維持し、Host の検査は上記のとおりです。
 
 API 17 は global dashboard の返信表示と次の認可済み読取 route を追加します。既定は旧 mode、activation は false のままです。
 

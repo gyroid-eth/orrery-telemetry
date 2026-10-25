@@ -18,7 +18,11 @@ http://127.0.0.1:8770
 
 Response bodies are JSON except for images and HTML. The dashboard itself has no login layer. When using `AGENTSTACK_BIND_HOST=0.0.0.0`, limit access to a trusted LAN / VPN.
 
+Legacy mode checks a fixed Host allowlist on every method and path. Before dispatch, it returns HTTP 403 for an untrusted, missing, duplicate or malformed Host, duplicate Origin headers, or an absolute-form request target with a mismatched authority. The defaults allow only `127.0.0.1` / `localhost` / `[::1]` at the actual listening port. Explicitly configure fixed LAN / VPN origins with [`AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS`](configuration.en.md#host-configuration-for-lan--vpn-access). Host checks do not authenticate callers.
+
 Every POST endpoint requires `Content-Type: application/json` and a JSON object body. Browser requests receive HTTP 403 unless `Origin` / `Sec-Fetch-Site` are same-origin; CLI requests may omit both headers. This is the common guard that rejects simple-form CSRF.
+
+A POST Origin must match a fixed origin corresponding to its validated Host. Scheme, host and port are compared, normalizing host case and omitted HTTP `80` / HTTPS `443` ports. An origin belonging to another allowed Host is still rejected. Host admission failures may return an HTTP error body rather than the usual API JSON.
 
 Failures generally return:
 
@@ -75,7 +79,7 @@ See [Installation](install.en.md#version) for version resolution order.
 
 ### Isolated global backend (API 17)
 
-Explicit global mode applies operator capability admission to every non-static route, including `/api/version`. `capabilities.operator_http_admission`, `ui_read`, `global_spawn`, `instruction_migration` and `global_dashboard_ui` are 1. Gate the screen on its capability, never the API number alone. See [configuration, authority and interrupted recovery](global-delivery-client.en.md#operator-ui-access). Legacy payloads and admission remain unchanged.
+Explicit global mode applies operator capability admission to every non-static route, including `/api/version`. `capabilities.operator_http_admission`, `ui_read`, `global_spawn`, `instruction_migration` and `global_dashboard_ui` are 1. Gate the screen on its capability, never the API number alone. See [configuration, authority and interrupted recovery](global-delivery-client.en.md#operator-ui-access). Legacy payloads are unchanged; legacy Host admission is described above.
 
 API 17 adds the global dashboard reply view and these admitted, read-only routes. Legacy mode remains the default; activation is false.
 

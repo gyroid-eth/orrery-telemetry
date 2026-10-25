@@ -18,6 +18,7 @@ LABEL="$LABEL_PREFIX.agentdashboard"
 PLIST_TEMPLATE="$HERE/agentdashboard.plist.template"
 PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
 PORT="${AGENTSTACK_PORT:-8770}"
+DASHBOARD_ALLOWED_ORIGINS_SETTING="${AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS:-}"
 PYTHON="${AGENTSTACK_PYTHON:-/usr/bin/python3}"
 TERMINAL="${AGENTSTACK_TERMINAL:-auto}"
 AUTO_OPEN_CHILD_SETTING="${AGENTSTACK_AUTO_OPEN_CHILD:-1}"
@@ -80,6 +81,7 @@ render_plist() {
     -e "s|__RUNTIME_MODE__|$(xml_sed_escape "${AGENTSTACK_RUNTIME_MODE:-legacy}")|g" \
     -e "s|__GLOBAL_SERVER_CONFIG__|$(xml_sed_escape "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}")|g" \
     -e "s|__PORT__|$(sed_escape "$PORT")|g" \
+    -e "s|__DASHBOARD_ALLOWED_ORIGINS__|$(xml_sed_escape "${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}")|g" \
     -e "s|__MAIL_DB__|$(sed_escape "$MAIL_DB")|g" \
     -e "s|__MAIL_ENV__|$(sed_escape "$MAIL_ENV")|g" \
     -e "s|__MAIL_HOME__|$(sed_escape "$MAIL_HOME")|g" \
@@ -150,6 +152,7 @@ wait_for_launchd_unload() {
 
 export_background_env() {
   export AGENTSTACK_PORT="$PORT"
+  export AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS="$DASHBOARD_ALLOWED_ORIGINS_SETTING"
   export AGENTSTACK_LABEL_PREFIX="$LABEL_PREFIX"
   export AGENTSTACK_MAIL_DB="$MAIL_DB"
   export AGENTSTACK_MAIL_ENV="$MAIL_ENV"
