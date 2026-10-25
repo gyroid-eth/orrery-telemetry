@@ -10,6 +10,26 @@
 
 ---
 
+## 2026.10.25
+
+### Orbit ロゴを header と favicon に追加
+
+ORRERY Telemetry の名前の左に Orbit ロゴを配置し、favicon にも同じ形を使います。header は既存の dark / light 切替、favicon はブラウザの明暗設定に合わせます。既存の操作と API 世代は変えません。
+
+### dsh / Hermes の起動指示を短く整理
+
+dsh / Hermes の指示を専用の短い文書へ整理し、ORRERY の子作成や raw 認証回復などの手順を省きました。共通の Mail 規則、共有編集の予約と自己専用 scratch の区別、失敗時の停止条件は保持します。初回と同じ ID の再開で同じ生成経路を使い、Claude / Codex の指示本文、native helper 設定、skills の配布は変えません。API 世代の変更はありません。[起動方法](docs/launchers.md) / [English](docs/launchers.en.md)。
+
+### legacy dashboard で不信な Host を操作前に拒否
+
+全 HTTP メソッド・全パスの Host を固定の許可先と照合し、不信・欠落・重複・不正な Host を dispatch 前に拒否します。POST の Origin は、その Host に対応する固定 origin とだけ照合します。既定の loopback 利用は維持し、LAN / VPN 利用者は更新前に追加の固定 origin を [設定](docs/configuration.md#lan--vpn-から使う場合の-host-設定) してください。installer が保存し、dashboard の各 service 起動経路へ引き継ぎます。
+
+認証は追加しません。既存の global capability 認証と公開 static resource の扱いは維持します。API の endpoint・field・応答の意味は変わらないため、API generation は据え置きます。
+
+### 公開履歴中のファイル名に含まれる禁止識別子を検出
+
+履歴guardで、本文が無害でもblobのファイル名に禁止識別子があれば拒否するようにしました。従来のpath照合はblob以外に限られており、文字の大小ではなく対象の分岐による漏れでした。既存の禁止pattern・許可list・本文やmetadata・archiveの検査は維持し、合成入力で小文字・大文字・混在の回帰を確認します。
+
 ## 2026.10.24
 
 ### Hermesの更新で既存の管理sourceを再利用
