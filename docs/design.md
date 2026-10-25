@@ -33,6 +33,11 @@ ORRERY surface 層は `--void` `--bone` `--cyan` `--line` などの古い名前�
 
 ## 3. 書体
 
+header は Orbit ロゴを32pxで名前の左に配置します。`assets/orbit.svg` と
+`assets/orbit-light.svg` は同じ形の dark / light 版です。header は既存のページ
+theme、favicon はブラウザの明暗設定に合わせます。ロゴは操作ボタンではなく、
+wordmark と既存の操作の役割・書体は変えません。
+
 | 役割 | 書体 | 例 |
 | --- | --- | --- |
 | 固有名と見出し | `--serif`（Fraunces） | wordmark、agent 名、統計の数字、modal のタイトル |

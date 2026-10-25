@@ -168,6 +168,28 @@ def test_dashboard_server_exposes_only_named_theme_assets():
     assert "elif path in THEME_ASSETS:" in source
 
 
+def test_orbit_assets_are_public_static_bytes_in_an_isolated_server():
+    import threading
+    import urllib.request
+    from dashboard import server
+    from _dashboard_http_fixture import dashboard_http_fixture
+
+    httpd = dashboard_http_fixture(server)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for name in ('orbit.svg', 'orbit-light.svg'):
+            path = '/assets/' + name
+            assert server.is_public_static(path)
+            with urllib.request.urlopen(f'http://127.0.0.1:{httpd.server_port}' + path, timeout=3) as response:
+                assert response.headers.get_content_type() == 'image/svg+xml'
+                assert response.read() == (ROOT / 'dashboard/assets' / name).read_bytes()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=3)
+
+
 def test_static_demo_bundle_carries_theme_assets():
     source = (ROOT / "dashboard" / "demo" / "build.sh").read_text(encoding="utf-8")
     assert '"$DASH/theme_core.js"' in source
