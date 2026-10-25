@@ -3,11 +3,11 @@
 'use strict';
 const core=window.OrreryNetworkCore;
 class NetworkView{
- constructor(onSelect){
+ constructor(onSelect,onMailPair){
   this.svg=document.getElementById('gsvg');this.net=document.getElementById('net');
   this.map=new Map();this.elements={node:new Map(),edge:[],badge:[]};this.edges=[];this.spawn=[];
   this.params={...core.defaults};this.mode='focus';this.selected='';this.agents=[];
-  this.view={vx:0,vy:0,k:1};this.raf=0;this.hot=0;this.userView=false;this.onSelect=onSelect;
+  this.view={vx:0,vy:0,k:1};this.raf=0;this.hot=0;this.userView=false;this.onSelect=onSelect;this.onMailPair=onMailPair;this.pointerEnded=-Infinity;
   this.reduced=matchMedia('(prefers-reduced-motion:reduce)').matches;
   try{
    const saved=JSON.parse(localStorage.getItem('orrery.mobile.network')||'{}');
@@ -81,12 +81,12 @@ class NetworkView{
     node.dataset.name=name;return node;
    },
    onEdgeClick:e=>{
+    // Pointer capture retargets touch clicks to the SVG. Pointerup below owns
+    // those gestures; retain this listener only for non-pointer activation.
+    if(performance.now()-this.pointerEnded<700)return;
     const a=e.currentTarget.dataset.s,b=e.currentTarget.dataset.t;
     if(e.currentTarget.dataset.kind==='spawn')return;
-    const count=this.edges.filter(x=>(x.source===a&&x.target===b)||(x.source===b&&x.target===a)).reduce((sum,x)=>sum+x.count,0);
-    document.getElementById('selection-label').textContent='Mail pair';
-    document.getElementById('selected-name').textContent=a+' ↔ '+b;
-    document.getElementById('context-detail').textContent=count+' recipient rows · '+window.OrreryMobileWindow.duration(this.snapshot.period.seconds);
+    this.onMailPair?.(a,b);
    },events:{}
   });
   core.paint(this.map,this.elements,this.params.NSIZE);
@@ -168,7 +168,7 @@ class NetworkView{
   this.svg.addEventListener('pointerdown',e=>{
    points.set(e.pointerId,{x:e.clientX,y:e.clientY});this.svg.setPointerCapture(e.pointerId);
    if(points.size===2){const g=geometry(),r=this.svg.getBoundingClientRect();pinch={d:g.d,k:this.view.k,wx:this.view.vx+(g.x-r.x)/this.view.k,wy:this.view.vy+(g.y-r.y)/this.view.k};pan=null;return;}
-   if(points.size===1)pan={id:e.pointerId,x:e.clientX,y:e.clientY,vx:this.view.vx,vy:this.view.vy,node:e.target.closest('.node')?.dataset.name,moved:false};
+   if(points.size===1){const hit=e.target.closest('.edge-hit');pan={id:e.pointerId,x:e.clientX,y:e.clientY,vx:this.view.vx,vy:this.view.vy,node:e.target.closest('.node')?.dataset.name,edge:hit?.dataset.kind==='comm'?[hit.dataset.s,hit.dataset.t]:null,moved:false};}
   });
   this.svg.addEventListener('pointermove',e=>{
    if(!points.has(e.pointerId))return;points.set(e.pointerId,{x:e.clientX,y:e.clientY});
@@ -178,8 +178,12 @@ class NetworkView{
    if(pan.moved){this.view.vx=pan.vx-(e.clientX-pan.x)/this.view.k;this.view.vy=pan.vy-(e.clientY-pan.y)/this.view.k;this.userView=true;this.applyView();}
   });
   const end=e=>{
-   points.delete(e.pointerId);if(pinch){if(points.size<2){pinch=null;pan=null;}return;}
-   const old=pan;pan=null;if(old&&!old.moved&&old.node&&e.type==='pointerup')this.select(old.node);
+   this.pointerEnded=performance.now();points.delete(e.pointerId);if(pinch){if(points.size<2){pinch=null;pan=null;}return;}
+   const old=pan;pan=null;
+   if(old&&!old.moved&&e.type==='pointerup'){
+    if(old.node)this.select(old.node);
+    else if(old.edge)this.onMailPair?.(...old.edge);
+   }
   };
   this.svg.addEventListener('pointerup',end);this.svg.addEventListener('pointercancel',end);
   this.svg.addEventListener('wheel',e=>{e.preventDefault();this.zoom(e.deltaY<0?1.15:1/1.15);},{passive:false});

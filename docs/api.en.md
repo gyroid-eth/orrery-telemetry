@@ -69,7 +69,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":29}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":30}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -721,7 +721,9 @@ API 25: legacy managed `attempt_id` spawn/status requests are retired and return
 
 <a id="mobile-reader-api-28"></a>
 
-## Mobile reader (API 29)
+<a id="mobile-reader-api-29"></a>
+
+## Mobile reader (API 30)
 
 `GET /api/mobile-mail?window=<period>` is a legacy, loopback-only metadata endpoint. The default is `day` (24h). Allowed values are `all`, `day`, `15m`, and `m<N>` for integer minutes from 15 to 43200 divisible by 15; leading zeros and fractions are rejected. It keeps the existing dashboard Host admission. Missing DB or project/schema/read failure returns 503; unsupported global mode is explicitly refused (501 after admission, or the existing global admission refusal). It never falls back to a legacy DB from global mode. Unknown or repeated query fields return 400.
 
@@ -733,4 +735,10 @@ The snapshot has `schema:1`, observation time, window, `period` (width in second
 
 `GET /view/portrait?name=<NAME>&window=<period>` accepts a canonical name only from that period's published roster. The fixed loopback `GET /api/mobile-portrait?name=<NAME>` first uses the existing case-insensitive custom map/overlay resolver, then falls back to the longest matching bundled scientific suffix if missing or invalid. Private maps and paths are not returned. PNG images are limited to 512 KiB and dimensions 1–1024, checked for signature/IHDR, with a 2-second upstream deadline. Arbitrary SVG/HTML is rejected; fetch/decode failure falls back to initials. Images are no-store. The loopback portrait API is legacy-only; invalid name/query returns 400, missing/invalid image 404, and global mode is explicitly refused.
 
-Subjects, bodies, message detail, paging and body caches are not provided. The relay does not read terminals, deliverables or quota refresh endpoints. Browser polling pauses in the background. Authentication and phone restriction are separate; deployment requires the real-device checks in the guide.
+API 30 adds opaque `scope` and `next_cursor` to metadata. `GET /view/mail?window=<period>&cursor=<token>` returns the next 200 recipient rows, without content. Graph pair lists add `a=<NAME>&b=<NAME>&direction=both|forward|reverse` to the same route; only their first page may omit the cursor. Both names must belong to that period's published roster. SQL filters pair/direction before LIMIT. Keysets sort by time/message id/recipient id descending. Cursors bind scope/period/pair/direction/boundary for 10 minutes, capped at 256; the relay retains at most 2000 issued events. Invalid/duplicate queries return 400, unknown/expired events or cursors 410, and unavailable reads 503. The browser holds 200 current rows and at most 20 positions; polling does not overwrite older pages.
+
+Only `GET /view/message?window=<period>&event=<key>` returns the tapped single subject/body after authentication. It matches issued metadata against the current project, to/cc delivery, period and canonical event. The new loopback-only `/api/mobile-message` accepts the same query plus `mode=content|revision`, performing canonical admission before either read. Internal results use a 512-character subject,64 KiB UTF-8 body, truncation flags and opaque fingerprint/revision. The phone receives only event/subject/body/truncation flags. Revision hashes cover the visible bounded content and original byte length; they do not guarantee detection of same-length edits beyond the truncated view. Content is literal text, with no read/ACK writes, attachments, replies or operations. All responses are no-store and content is neither logged nor persisted. Close/new tap/period/view/background/pagehide clear DOM and abort requests; request generations discard late results.
+
+The loopback metadata page route is `/api/mobile-mail-page`. The internal fixed 24 h cache route is `/api/mobile-cache-page?cursor=<token>` (no cursor initially); it has no external relay route. Only an authenticated snapshot starts the single worker. It reads up to 32 distinct messages per batch, with actual serialized responses below 4 MiB, a 120-second sweep budget,25 ms yields and at least 60 seconds after completion before retry. Bounds are 63 nonempty pages,2000 distinct messages and 32 MiB of logical JSON bytes. Incomplete 24 h coverage is partial/unavailable. JSON-escaped batches shrink to fit. Snapshot `mail_cache` returns only status/messages/logical_bytes/bounds/reason, never the cache dictionary or content.
+
+Bodies and their metadata expire together under 24 h/LRU/byte limits. Scope changes invalidate everything. Every cache hit rechecks the current canonical revision; failure never returns stale content. 24 h limits caching, not detail viewing: published 30 d/all-history events remain readable one at a time, outside the cache. Reader shutdown stops/joins the worker and clears all content. All new loopback APIs return 501 in global mode, without legacy DB fallback. The relay does not read terminals, deliverables or quota refresh endpoints. Browser polling pauses in the background. Authentication and phone restriction remain separate; deployment requires the real-device checks in the guide.

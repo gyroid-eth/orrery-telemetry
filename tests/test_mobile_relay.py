@@ -121,7 +121,8 @@ def test_duplicate_headers_fail_closed(reader,field):
     ('/fonts/../index.html',404),('/%2e%2e/index.html',403),
     ('http://elsewhere.test/view/snapshot',403),('//elsewhere.test/',403),
     ('/network_node.js?any=value',404),
-    ('/view/message?event='+'a'*32,404),('/view/mail',404),('/api/mobile-cache-page',404),
+    # API30 admits the fixed detail route, but never an unissued event.
+    ('/view/message?event='+'a'*32,410),('/view/mail',400),('/api/mobile-cache-page',404),
 ])
 def test_fixed_routes_and_query(reader,path,status):
     port,store=reader
@@ -141,6 +142,84 @@ def test_default_off_and_missing_enabled_config_never_listen(monkeypatch):
     assert relay.main(['--check','--owner-login','owner@example.test','--public-origin','https://viewer.example.ts.net:9443'])==0
     with pytest.raises(ValueError):relay.Config('owner@example.test','http://viewer.example.ts.net')
     with pytest.raises(ValueError):relay.Config('owner@example.test','https://untrusted.test')
+
+
+def test_single_message_and_page_dispatch_only_after_owner_admission():
+    calls=[]
+    class Content:
+        def message(self,window,event):
+            calls.append((window,event))
+            return {'status':'available','subject':'SYNTHETIC-SUBJECT','body':'<img src="https://example.invalid/no">'}
+        def page(self,window,cursor):
+            calls.append(('page',window,cursor));return {'status':'available','events':[],'next_cursor':None}
+        def close(self):pass
+    server=relay.make_server(relay.Config('owner@example.test','https://viewer.example.ts.net:9443'),store=Store(),test_port=0)
+    server.mobile_mail=Content()
+    with serving(server) as port:
+        target='/view/message?window=day&event='+'a'*32
+        assert request(port,target,headers={'Host':'viewer.example.ts.net:9443'})[0]==403
+        assert calls==[]
+        status,headers,body=request(port,target)
+        assert status==200 and json.loads(body)['subject']=='SYNTHETIC-SUBJECT'
+        assert headers['Cache-Control']=='no-store' and calls==[('day','a'*32)]
+        assert request(port,target,method='HEAD')[0]==200 and len(calls)==1
+        assert request(port,target+'&url=elsewhere')[0]==400 and len(calls)==1
+        assert request(port,'/view/mail?window=day&cursor='+'b'*32)[0]==200
+        assert request(port,'/api/mobile-cache-page')[0]==404
+
+
+def test_content_worker_cannot_start_before_valid_owner_snapshot():
+    class Content:
+        def __init__(self):self.calls=[]
+        def observe(self,p):self.calls.append('observe')
+        def start_warm(self):self.calls.append('warm')
+        def progress(self):return {'status':'idle','messages':0}
+        def close(self):self.calls.append('close')
+        def page(self,*args,**kwargs):pytest.fail('no page before admission')
+        def message(self,*args):pytest.fail('no detail before admission')
+    class Snapshot(Store):
+        def snapshot(self,window):return {'sources':{'mail':{'status':'available'}},'timeline':{}}
+    content=Content();server=relay.make_server(relay.Config('owner@example.test','https://viewer.example.ts.net:9443'),store=Snapshot(),mail_store=content,test_port=0)
+    with serving(server) as port:
+        for path,method,headers in [('/view/snapshot','GET',{'Host':'viewer.example.ts.net:9443'}),
+                                    ('/view/snapshot','HEAD',None),('/mobile.js','GET',None),
+                                    ('/view/snapshot?bad=1','GET',None),('/api/mobile-cache-page','GET',None)]:
+            request(port,path,method,headers);assert content.calls==[]
+        assert request(port)[0]==200 and content.calls==['observe','warm']
+    assert content.calls[-1]=='close'
+
+
+def test_pair_name_direction_query_validation_precedes_metadata_reader():
+    class Known(Store):
+        def known_agent(self,window,n):return n in {'Alpha','Beta'}
+    class Content:
+        def __init__(self):self.calls=[]
+        def page(self,window,cursor,**kwargs):
+            self.calls.append((window,cursor,kwargs));return {'events':[]}
+        def close(self):pass
+    content=Content();server=relay.make_server(relay.Config('owner@example.test','https://viewer.example.ts.net:9443'),store=Known(),mail_store=content,test_port=0)
+    with serving(server) as port:
+        for query,status in [('a=Alpha&b=Beta&direction=both',200),
+                             ('a=Alpha&b=Other&direction=both',404),
+                             ('a=Alpha&b=Beta',400),('a=Alpha&b=Beta&direction=bcc',400),
+                             ('a=Alpha&b=Beta&direction=both&cursor=bad',400),
+                             ('a=Alpha&b=Beta&direction=both&a=Beta',400)]:
+            assert request(port,'/view/mail?window=day&'+query)[0]==status
+        assert content.calls==[('day',None,{'pair':('Alpha','Beta'),'direction':'both'})]
+
+
+def test_upstream_expiry_remains_explicit_without_reading_error_body():
+    class Expired(BaseHTTPRequestHandler):
+        def log_message(self,*args):pass
+        def do_GET(self):
+            self.send_response(410);self.send_header('Content-Length','0');self.end_headers()
+    backend=ThreadingHTTPServer(('127.0.0.1',0),Expired)
+    with serving(backend) as port:
+        source=relay.Upstream(port)
+        with pytest.raises(LookupError):source.mail_page('day','a'*32)
+        with pytest.raises(LookupError):source.message('day','a'*32,'content')
+        # Portrait failures keep their existing unavailable-image behavior.
+        with pytest.raises(ValueError):source.portrait('Alpha')
 
 
 def test_upstream_redirect_wrong_type_size_and_headers(monkeypatch):

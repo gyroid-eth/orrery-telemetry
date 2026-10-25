@@ -12,14 +12,14 @@ import re
 import socket
 import threading
 import time
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, urlencode
 
 try:
     from dashboard import legacy_http_admission as admission
-    from dashboard.mobile_projection import SnapshotStore, WINDOWS, NAME, png_image
+    from dashboard.mobile_projection import SnapshotStore, MobileMailStore, WINDOWS, NAME, EVENT_KEY, png_image
 except ModuleNotFoundError:
     import legacy_http_admission as admission
-    from mobile_projection import SnapshotStore, WINDOWS, NAME, png_image
+    from mobile_projection import SnapshotStore, MobileMailStore, WINDOWS, NAME, EVENT_KEY, png_image
 
 HERE = Path(__file__).resolve().parent
 MAX_UPSTREAM_BYTES = 4 * 1024 * 1024
@@ -71,7 +71,21 @@ class Upstream:
         if not png_image(data):raise ValueError('portrait_format')
         return data
 
-    def _read(self,path,mime,limit):
+    def message(self,window,key,mode):
+        if window not in WINDOWS or not EVENT_KEY.fullmatch(key) or mode not in {'content','revision'}:raise ValueError('message_query')
+        return json.loads(self._read('/api/mobile-message?'+urlencode({'window':window,'event':key,'mode':mode}),'application/json',MAX_UPSTREAM_BYTES,expired=True))
+
+    def mail_page(self,window,cursor,*,pair=None,direction='both'):
+        query={'window':window}
+        if cursor is not None:query['cursor']=cursor
+        if pair is not None:query.update(a=pair[0],b=pair[1],direction=direction)
+        return json.loads(self._read('/api/mobile-mail-page?'+urlencode(query),'application/json',MAX_UPSTREAM_BYTES,expired=True))
+
+    def cache_page(self,cursor):
+        query='' if cursor is None else '?'+urlencode({'cursor':cursor})
+        return json.loads(self._read('/api/mobile-cache-page'+query,'application/json',MAX_UPSTREAM_BYTES))
+
+    def _read(self,path,mime,limit,*,expired=False):
         con = http.client.HTTPConnection('127.0.0.1', self.port, timeout=UPSTREAM_TIMEOUT)
         timer = None
         deadline = time.monotonic() + UPSTREAM_TIMEOUT
@@ -87,6 +101,7 @@ class Upstream:
             con.request('GET', path, headers={'Host':f'127.0.0.1:{self.port}',
                                             'Accept':mime,'Connection':'close'})
             response = con.getresponse()
+            if expired and response.status==410:raise LookupError('upstream_event_or_cursor_expired')
             if response.status != 200 or response.getheader('Content-Type','').split(';')[0].strip().lower() != mime:
                 raise ValueError('upstream_unavailable')
             if response.getheader('Content-Encoding', 'identity').lower() != 'identity':
@@ -190,8 +205,41 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400,{'ok':False,'error':'invalid_window'});return
             if self.command=='HEAD':self._send(200,b'');return
             payload=self.server.mobile_store.snapshot(query.get('window',['day'])[0])
+            self.server.mobile_mail.observe(payload)
+            if payload.get('sources',{}).get('mail',{}).get('status')=='available':self.server.mobile_mail.start_warm()
+            payload['mail_cache']=self.server.mobile_mail.progress()
             unavailable=all(x['status']=='unavailable' for x in payload['sources'].values())
             self._send(503 if unavailable else 200,payload);return
+        if parts.path in {'/view/message','/view/mail'}:
+            query=parse_qs(parts.query,keep_blank_values=True)
+            window=query.get('window',['day'])[0]
+            allowed={'window','event'} if parts.path=='/view/message' else {'window','cursor','a','b','direction'}
+            if set(query)-allowed or any(len(v)!=1 for v in query.values()) or window not in WINDOWS:
+                self._send(400,{'error':'invalid_mail_query'});return
+            key=query.get('event',[''])[0];cursor=query.get('cursor',[None])[0]
+            pair=None;direction=query.get('direction',['both'])[0]
+            if parts.path=='/view/message':
+                valid=bool(EVENT_KEY.fullmatch(key))
+            else:
+                pair_fields=set(query)&{'a','b','direction'}
+                if pair_fields:
+                    pair=(query.get('a',[''])[0],query.get('b',[''])[0])
+                valid=(cursor is None or bool(EVENT_KEY.fullmatch(cursor))) and (
+                    pair is not None and pair_fields=={'a','b','direction'} and all(NAME.fullmatch(n) for n in pair) and
+                    direction in {'both','forward','reverse'} and (pair[0]!=pair[1] or direction=='both') or
+                    pair is None and cursor is not None)
+            if not valid:self._send(400,{'error':'invalid_mail_query'});return
+            if pair and not all(self.server.mobile_store.known_agent(window,n) for n in pair):
+                self._send(404,{'error':'pair_unavailable'});return
+            if self.command=='HEAD':self._send(200,b'');return
+            try:
+                if parts.path=='/view/message':payload=self.server.mobile_mail.message(window,key)
+                elif pair is None:payload=self.server.mobile_mail.page(window,cursor)
+                else:payload=self.server.mobile_mail.page(window,cursor,pair=pair,direction=direction)
+                self._send(200,payload)
+            except LookupError:self._send(410,{'error':'mail_event_or_cursor_expired'})
+            except (OSError,ValueError,TypeError):self._send(503,{'error':'mail_unavailable'})
+            return
         if parts.path=='/view/portrait':
             query=parse_qs(parts.query,keep_blank_values=True)
             window=query.get('window',['day'])[0];nm=query.get('name',[''])[0]
@@ -234,12 +282,19 @@ class Handler(BaseHTTPRequestHandler):
     do_POST=do_PUT=do_PATCH=do_DELETE=do_OPTIONS=do_TRACE=do_CONNECT=_no_method
 
 
-def make_server(config:Config, *, store=None, root=HERE, test_port=None):
+class ReaderServer(ThreadingHTTPServer):
+    def server_close(self):
+        if hasattr(self,'mobile_mail'):self.mobile_mail.close()
+        super().server_close()
+
+
+def make_server(config:Config, *, store=None, mail_store=None, root=HERE, test_port=None):
     # Tests can request an ephemeral loopback port; CLI has no bind-host option.
-    server=ThreadingHTTPServer(('127.0.0.1',config.listen_port if test_port is None else test_port),Handler)
+    server=ReaderServer(('127.0.0.1',config.listen_port if test_port is None else test_port),Handler)
     server.daemon_threads=True
     server.mobile_config=config
     server.mobile_store=store if store is not None else SnapshotStore(Upstream(config.upstream_port))
+    server.mobile_mail=mail_store if mail_store is not None else MobileMailStore(Upstream(config.upstream_port))
     server.mobile_root=Path(root)
     server.mobile_assets=static_assets(Path(root))
     return server

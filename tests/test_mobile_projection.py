@@ -3,6 +3,17 @@ import pytest
 from dashboard.mobile_projection import SnapshotStore, project_agents, project_mail
 
 
+def test_content_store_cannot_resolve_a_never_issued_event():
+    from dashboard import mobile_projection as projection
+    class Source:
+        def message(self,*args):pytest.fail('unissued event must not read content or revision')
+    store=projection.MobileMailStore(Source(),clock=lambda:100)
+    try:
+        with pytest.raises(LookupError):store.message('day','a'*32)
+        assert store.progress()['status']=='idle'
+    finally:store.close()
+
+
 def inputs():
     agent = {'name': 'Alpha', 'provider': 'openai', 'model': 'gpt-fixture',
              'last_active':90,
@@ -11,9 +22,9 @@ def inputs():
              'annot': {'role': 'PRIVATE-ROLE'}, 'provider_stall': {'error': 'PRIVATE-ERROR'}}
     return {'agents': {'agents': [agent]},
             'graph': {'nodes': [agent], 'spawn': [], 'edges': [{'kind':'bcc','source':'Alpha','target':'Secret','count':10}]},
-            'mail:day': {'status':'available','window':'day','edges':[], 'events':[],
+            'mail:day': {'status':'available','window':'day','scope':'b'*32,'next_cursor':None,'edges':[], 'events':[],
                          'events_truncated':False,'edges_truncated':False,'degraded':False},
-            'mail:all': {'status':'available','window':'all','edges':[], 'events':[],
+            'mail:all': {'status':'available','window':'all','scope':'b'*32,'next_cursor':None,'edges':[], 'events':[],
                          'events_truncated':False,'edges_truncated':False,'degraded':False}}
 
 
@@ -134,7 +145,7 @@ def test_default_wall_clock_period_filters_union_before_phone_payload():
     def fetch(key):
         if key=='graph':return {'nodes':roster,'spawn':[{'source':'OldRunning','target':'Boundary'}]}
         if key=='agents':return {'agents':[agent('Rescued',None),agent('UnionOld',now-100000)]}
-        return {'status':'available','window':key[5:],
+        return {'status':'available','window':key[5:],'scope':'b'*32,'next_cursor':None,
                 'edges':[{'source':'ByMail','target':'Boundary','kind':'to','count':3,'last_ts':now-2}],
                 'events':[],'events_truncated':False,'edges_truncated':False,'degraded':False}
     store=SnapshotStore(fetch,clock=lambda:now)
@@ -153,7 +164,7 @@ def test_many_slider_periods_have_a_bounded_coherent_snapshot_cache():
     def fetch(key):
         if key=='agents':return {'agents':[]}
         if key=='graph':return {'nodes':[],'spawn':[]}
-        return {'status':'available','window':key[5:],'edges':[],'events':[],
+        return {'status':'available','window':key[5:],'scope':'b'*32,'next_cursor':None,'edges':[],'events':[],
                 'events_truncated':False,'edges_truncated':False,'degraded':False}
     store=SnapshotStore(fetch,clock=lambda:1792915200)
     for minutes in range(15,1501,15):
@@ -161,3 +172,130 @@ def test_many_slider_periods_have_a_bounded_coherent_snapshot_cache():
         assert result['period']['seconds']==minutes*60
         assert len(store._published)<=4 and len(store._parts)<=6
     assert store.snapshot('m15')['sources']['mail']['status']=='available'
+
+
+def content_fixture(index=1,*,now=100000,scope='b'*32,body='LITERAL <img src=https://invalid.test/>',revision='c'*32):
+    return {'scope':scope,'fingerprint':f'{index:032x}','revision':revision,
+            'event':{'key':f'{index:032x}','source':'Alpha','target':'Beta','kind':'to','count':1,'event_at':now-1},
+            'subject':'SUBJECT','body':body,'subject_truncated':False,'body_truncated':False}
+
+
+def issued_snapshot(items,window='day'):
+    return {'window':window,'sources':{'mail':{'status':'available'}},
+            'timeline':{'scope':'b'*32,'mail':[x['event'] for x in items],'next_cursor':None}}
+
+
+def test_body_cache_revalidates_each_tap_deduplicates_recipients_and_ages_out():
+    from dashboard.mobile_projection import MobileMailStore
+    clock=[100000];first=content_fixture();second=copy.deepcopy(first);second['event']['key']='d'*32;second['event']['target']='Gamma';second['event']['kind']='cc'
+    class Source:
+        failed=False
+        def __init__(self):self.calls=[];self.items={x['event']['key']:x for x in (first,second)}
+        def message(self,window,key,mode):
+            self.calls.append((key,mode))
+            if self.failed:raise LookupError('deleted')
+            row=copy.deepcopy(self.items[key])
+            if mode=='revision':
+                for k in ('subject','body','subject_truncated','body_truncated'):row.pop(k)
+            return row
+    source=Source();store=MobileMailStore(source,clock=lambda:clock[0]);store.observe(issued_snapshot([first,second]))
+    try:
+        assert store.message('day',first['event']['key'])['body']==first['body']
+        assert store.message('day',second['event']['key'])['event']==second['event']
+        assert len(store._cache)==1 and [mode for _,mode in source.calls]==['revision','content','revision']
+        source.items[first['event']['key']]['body']='UPDATED';source.items[first['event']['key']]['revision']='e'*32
+        assert store.message('day',first['event']['key'])['body']=='UPDATED'
+        source.failed=True
+        with pytest.raises(LookupError):store.message('day',first['event']['key'])
+        assert store.progress()['messages']==0
+        source.failed=False;clock[0]+=600
+        before=list(source.calls)
+        with pytest.raises(LookupError):store.message('day',first['event']['key'])
+        assert source.calls==before
+    finally:store.close()
+
+
+def test_older_than_cache_detail_and_scope_change_invalidate_all():
+    from dashboard.mobile_projection import MobileMailStore
+    row=content_fixture(now=100000-86400)
+    class Source:
+        def message(self,*args):return copy.deepcopy(row)
+    store=MobileMailStore(Source(),clock=lambda:100000)
+    try:
+        store.observe(issued_snapshot([row],'all'))
+        assert store.message('all',row['event']['key'])['body']==row['body'] and not store._cache
+        changed=issued_snapshot([]);changed['timeline']['scope']='f'*32;store.observe(changed)
+        with pytest.raises(LookupError):store.message('all',row['event']['key'])
+        assert not store._issued and not store._cache
+    finally:store.close()
+
+
+@pytest.mark.parametrize('count,budget,expected',[(2000,32*1024*1024,'ready'),(2001,32*1024*1024,'partial'),(40,1000,'partial')])
+def test_single_worker_2000_ready_vs_count_and_logical_byte_partial(count,budget,expected):
+    from dashboard.mobile_projection import MobileMailStore
+    class Source:
+        def __init__(self):self.calls=[]
+        def cache_page(self,cursor):
+            start=int(cursor,16) if cursor else 0;self.calls.append(start)
+            end=min(start+32,count,2000)
+            return {'scope':'b'*32,'items':[content_fixture(i+1) for i in range(start,end)],
+                    'complete':end==count,'next_cursor':f'{end:032x}' if end<min(count,2000) else None,
+                    'reason':'count_limit' if end==2000 and count>2000 else None}
+    source=Source();store=MobileMailStore(source,clock=lambda:100000,budget=budget)
+    assert source.calls==[] and store.progress()['status']=='idle'
+    store.observe(issued_snapshot([]));assert source.calls==[]
+    try:
+        store.start_warm();thread=store._thread;store.start_warm();assert store._thread is thread
+        # The product sweep budget is120s, not an8s performance contract.
+        thread.join(30);assert not thread.is_alive(),(source.calls[-3:],store.progress())
+        progress=store.progress()
+        assert progress['status']==expected and progress['messages']<=2000 and progress['logical_bytes']<=budget
+        actual=sum(len(__import__('json').dumps(x[2],ensure_ascii=False,separators=(',',':')).encode()) for x in store._cache.values())
+        assert progress['logical_bytes']==actual
+        if count==2000:assert progress['messages']==2000 and len(source.calls)==63
+        calls=list(source.calls);store.start_warm();assert source.calls==calls
+    finally:store.close()
+    assert not store._cache and not store._issued and store._bytes==0
+
+
+def test_warm_stop_and_scope_generation_cannot_repopulate_late():
+    import threading
+    from dashboard.mobile_projection import MobileMailStore
+    started,release=threading.Event(),threading.Event()
+    class Source:
+        def cache_page(self,cursor):
+            started.set();assert release.wait(2)
+            return {'scope':'b'*32,'items':[content_fixture()],'complete':True,'next_cursor':None}
+    store=MobileMailStore(Source(),clock=lambda:100000);store.observe(issued_snapshot([]));store.start_warm()
+    assert started.wait(1)
+    changed=issued_snapshot([]);changed['timeline']['scope']='f'*32;store.observe(changed)
+    release.set();store._thread.join(3)
+    assert not store._cache and store._scope=='f'*32
+    store.close();assert not store._thread.is_alive() and store._closed
+
+
+def test_sweep_timeout_and_unavailable_are_not_ready(monkeypatch):
+    import types,time
+    from dashboard import mobile_projection as p
+    ticks=iter([0,121]);monkeypatch.setattr(p,'time',types.SimpleNamespace(monotonic=lambda:next(ticks)))
+    class Source:
+        def cache_page(self,*args):pytest.fail('expired budget must not fetch')
+    store=p.MobileMailStore(Source(),clock=lambda:100000);store.observe(issued_snapshot([]));store.start_warm();store._thread.join(3)
+    assert store.progress()['status']=='partial' and store.progress()['reason']=='time_limit';store.close()
+    monkeypatch.setattr(p,'time',time)
+    class Failed:
+        def cache_page(self,*args):raise TimeoutError('PRIVATE-ERROR')
+    store=p.MobileMailStore(Failed(),clock=lambda:100000);store.observe(issued_snapshot([]));store.start_warm();store._thread.join(3)
+    assert store.progress()['status']=='unavailable' and 'PRIVATE' not in str(store.progress());store.close()
+
+
+def test_current_scope_change_on_tap_expires_issued_keys_and_cached_content():
+    from dashboard.mobile_projection import MobileMailStore
+    row=content_fixture()
+    class Source:
+        def message(self,*args):return {**row,'scope':'f'*32}
+    store=MobileMailStore(Source(),clock=lambda:100000);store.observe(issued_snapshot([row]))
+    try:
+        with pytest.raises(LookupError):store.message('day',row['event']['key'])
+        assert not store._issued and not store._cache and store._scope is None
+    finally:store.close()

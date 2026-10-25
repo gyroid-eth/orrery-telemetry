@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 29
+API_GENERATION = 30
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -2067,10 +2067,39 @@ def mobile_mail_payload(window: str) -> tuple[int, dict]:
         import graph_data
         with _db() as con:
             project_id = graph_data._resolve_project_id(con)
-            payload = graph_data.mobile_mail_metadata(con, project_id, window)
+            with graph_data.mobile_mail_read(con):
+                payload = graph_data.mobile_mail_metadata(con, project_id, window)
         return 200, payload
     except (OSError, sqlite3.Error, LookupError):
         return 503, {'status': 'unavailable', 'error': 'mail_unavailable'}
+
+
+def mobile_mail_content_payload(route,query):
+    """Finite loopback reader API. No generic SQL, body export or ACK actions."""
+    if GLOBAL_MODE:return 501,{'error':'mobile_global_unsupported'}
+    from mobile_projection import WINDOWS,EVENT_KEY,NAME
+    window=query.get('window',['day'])[0]
+    allowed={'window','event','mode'} if route=='message' else {'cursor'} if route=='cache' else {'window','cursor','a','b','direction'}
+    if set(query)-allowed or any(len(v)!=1 for v in query.values()) or window not in WINDOWS:return 400,{'error':'invalid_mail_query'}
+    cursor=query.get('cursor',[None])[0];pair=None;direction=query.get('direction',['both'])[0]
+    if cursor is not None and not EVENT_KEY.fullmatch(cursor):return 400,{'error':'invalid_cursor'}
+    if route=='message':
+        if not EVENT_KEY.fullmatch(query.get('event',[''])[0]) or query.get('mode',['content'])[0] not in {'content','revision'}:return 400,{'error':'invalid_event'}
+    if route=='page' and set(query)&{'a','b','direction'}:
+        pair=(query.get('a',[''])[0],query.get('b',[''])[0])
+        if not {'a','b','direction'}<=set(query) or not all(NAME.fullmatch(n) for n in pair) or direction not in {'both','forward','reverse'}:return 400,{'error':'invalid_pair'}
+    if not DB_PATH or not os.path.isfile(DB_PATH):return 503,{'error':'mail_unavailable'}
+    try:
+        import graph_data
+        with _db() as con:
+            pid=graph_data._resolve_project_id(con)
+            if route=='message':value=graph_data.mobile_mail_detail(con,pid,window,query['event'][0],mode=query.get('mode',['content'])[0])
+            elif route=='cache':value=graph_data.mobile_mail_cache_page(con,pid,cursor)
+            else:value=graph_data.mobile_mail_page(con,pid,window,cursor,pair=pair,direction=direction)
+        return 200,value
+    except LookupError:return 410,{'error':'mail_event_or_cursor_expired'}
+    except ValueError:return 400,{'error':'invalid_mail_query'}
+    except (OSError,sqlite3.Error):return 503,{'error':'mail_unavailable'}
 
 
 # エージェント名 -> 成果物 LOG の索引（60秒キャッシュ）。
@@ -9516,7 +9545,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
-        if path in {"/api/mobile-mail","/api/mobile-portrait"} and GLOBAL_MODE:
+        if path in {"/api/mobile-mail","/api/mobile-portrait","/api/mobile-message","/api/mobile-mail-page","/api/mobile-cache-page"} and GLOBAL_MODE:
             self._send(501, b'{"status":"unavailable","error":"mobile_global_unsupported"}', "application/json; charset=utf-8")
             return
         if GLOBAL_MODE and not is_public_static(path):
@@ -9567,6 +9596,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400,b'portrait unavailable','text/plain');return
             status,body,mime=mobile_portrait_payload(query['name'][0])
             self._send(status,body,mime)
+        elif path in {'/api/mobile-message','/api/mobile-mail-page','/api/mobile-cache-page'}:
+            import ipaddress
+            if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                self._send(403,b'{"error":"loopback_only"}','application/json; charset=utf-8');return
+            route={'/api/mobile-message':'message','/api/mobile-mail-page':'page','/api/mobile-cache-page':'cache'}[path]
+            query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+            status,payload=mobile_mail_content_payload(route,query)
+            self._send(status,json.dumps(payload).encode(),'application/json; charset=utf-8')
         elif path == "/api/mobile-mail":
             import ipaddress
             if not ipaddress.ip_address(self.client_address[0]).is_loopback:

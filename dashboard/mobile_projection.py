@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import json
 import re
 import threading
 import time
@@ -118,7 +119,10 @@ def project_mail(raw, window):
         if key in events and events[key] != event:
             raise ValueError('conflicting_mail_event')
         events[key] = event
-    return {'edges': edges, 'events': list(events.values()),
+    scope=raw.get('scope');cursor=raw.get('next_cursor')
+    if not isinstance(scope,str) or not EVENT_KEY.fullmatch(scope) or (cursor is not None and (not isinstance(cursor,str) or not EVENT_KEY.fullmatch(cursor))):
+        raise ValueError('mail_scope')
+    return {'edges': edges, 'events': list(events.values()), 'scope':scope,'next_cursor':cursor,
             'events_truncated': raw.get('events_truncated') is True,
             'edges_truncated': raw.get('edges_truncated') is True,
             'degraded': raw.get('degraded') is True}
@@ -254,6 +258,8 @@ class SnapshotStore:
                              'unrepresented_edges': 0 if mail is None else len(mail['edges']) - len(edges),
                              'degraded': graph['degraded'] or (bool(mail['degraded']) if mail else False)},
                    'timeline': {'mail': [] if mail is None else mail['events'],
+                                'scope':None if mail is None else mail['scope'],
+                                'next_cursor':None if mail is None else mail['next_cursor'],
                                 'states': [s for s in self._states if s['name'] in names and
                                            (lower is None or s['observed_at']>=lower)],
                                 'states_truncated': self._state_seq > self._states.maxlen,
@@ -261,3 +267,187 @@ class SnapshotStore:
                                 'edges_truncated': None if mail is None else mail['edges_truncated']},
                    'quota': {'status': 'unavailable'}}
         return deepcopy(payload)
+
+
+def mail_events(raw):
+    """Project the same fixed metadata event fields for a page and a snapshot."""
+    window=raw.get('window')
+    if window not in WINDOWS:raise ValueError('invalid_window')
+    return project_mail({**raw,'edges':[],'events_truncated':False,
+                         'edges_truncated':False,'degraded':False},window)
+
+
+def checked_content(raw, *, content=True):
+    if not isinstance(raw,dict):raise ValueError('content_schema')
+    for field in ('scope','fingerprint','revision'):
+        if not isinstance(raw.get(field),str) or not EVENT_KEY.fullmatch(raw[field]):raise ValueError('content_identity')
+    event=mail_events({'status':'available','window':'all','scope':raw['scope'],'events':[raw.get('event')]})['events'][0]
+    result={k:raw[k] for k in ('scope','fingerprint','revision')};result['event']=event
+    if content:
+        if (not isinstance(raw.get('subject'),str) or len(raw['subject'])>512 or
+                not isinstance(raw.get('body'),str) or len(raw['body'].encode())>65536 or
+                any(type(raw.get(k)) is not bool for k in ('subject_truncated','body_truncated'))):raise ValueError('content_bounds')
+        result.update({k:raw[k] for k in ('subject','body','subject_truncated','body_truncated')})
+    return result
+
+
+class MobileMailStore:
+    """Reader-memory-only bodies and issued metadata; neither authorizes a read.
+
+    Every tap revalidates the current canonical delivery and content revision.
+    Cache entries contain their own metadata and expire together. The issued
+    key registry is only an additional disclosure bound, never an auth token.
+    """
+    def __init__(self,upstream,*,clock=time.time,capacity=2000,budget=32*1024*1024):
+        self.upstream,self.clock,self.capacity,self.budget=upstream,clock,capacity,budget
+        self._lock=threading.RLock();self._issued=OrderedDict();self._cache=OrderedDict()
+        self._scope=None;self._generation=0;self._bytes=0;self._status='idle';self._reason=None
+        self._stop=threading.Event();self._thread=None;self._next_sweep=0;self._closed=False
+
+    def _clear(self):
+        self._issued.clear();self._cache.clear();self._bytes=0;self._generation+=1
+
+    def _expire(self):
+        now=self.clock()
+        for key,value in list(self._issued.items()):
+            if value[0]<=now:self._issued.pop(key,None)
+        for key,(expiry,size,_) in list(self._cache.items()):
+            if expiry<=now:self._cache.pop(key,None);self._bytes-=size
+
+    def _register(self,scope,window,events):
+        with self._lock:
+            if self._closed:raise LookupError('reader_stopped')
+            if self._scope!=scope:
+                self._clear();self._scope=scope;self._status='idle';self._next_sweep=0
+            self._expire()
+            for event in events:
+                self._issued[(window,event['key'])]=(self.clock()+600,dict(event))
+                self._issued.move_to_end((window,event['key']))
+            while len(self._issued)>2000:self._issued.popitem(last=False)
+
+    def observe(self,snapshot):
+        if snapshot.get('sources',{}).get('mail',{}).get('status')!='available':return
+        timeline=snapshot.get('timeline',{})
+        try:
+            raw={'status':'available','window':snapshot['window'],'scope':timeline.get('scope'),
+                 'next_cursor':timeline.get('next_cursor'),'events':timeline.get('mail')}
+            value=mail_events(raw)
+        except (ValueError,TypeError,KeyError):return
+        self._register(value['scope'],snapshot['window'],value['events'])
+
+    def page(self,window,cursor=None,*,pair=None,direction='both'):
+        raw=self.upstream.mail_page(window,cursor,pair=pair,direction=direction)
+        value=mail_events(raw)
+        if raw.get('pair')!=(list(pair) if pair else None) or raw.get('direction')!=direction:raise ValueError('page_context')
+        self._register(value['scope'],window,value['events'])
+        return {'window':window,'events':value['events'],'scope':value['scope'],
+                'next_cursor':value['next_cursor'],'pair':raw['pair'],'direction':direction}
+
+    def _put(self,item,generation):
+        # Count serialized content+metadata bytes, not Python RSS.
+        encoded=len(json.dumps(item,ensure_ascii=False,separators=(',',':'),allow_nan=False).encode())
+        with self._lock:
+            if self._closed or generation!=self._generation or item['scope']!=self._scope:return False
+            self._expire();key=item['fingerprint']
+            if key in self._cache:self._bytes-=self._cache.pop(key)[1]
+            now=self.clock();expiry=min(now+86400,item['event']['event_at']+86400)
+            if expiry<=now or encoded>self.budget:return False
+            evicted=False
+            while self._cache and (len(self._cache)>=self.capacity or self._bytes+encoded>self.budget):
+                self._bytes-=self._cache.popitem(last=False)[1][1];evicted=True
+            self._cache[key]=(expiry,encoded,deepcopy(item));self._bytes+=encoded
+            return not evicted
+
+    def message(self,window,key):
+        with self._lock:
+            self._expire();issued=self._issued.get((window,key))
+            if self._closed or issued is None:raise LookupError('event_not_issued_or_expired')
+            expected=dict(issued[1]);scope=self._scope;generation=self._generation
+        try:
+            revision=checked_content(self.upstream.message(window,key,'revision'),content=False)
+            if revision['scope']!=scope:
+                with self._lock:
+                    if generation==self._generation:self._clear();self._scope=None
+                raise LookupError('event_scope_changed')
+            if revision['event']!=expected:raise LookupError('event_changed')
+            with self._lock:
+                cached=self._cache.get(revision['fingerprint'])
+                item=deepcopy(cached[2]) if cached and cached[2]['revision']==revision['revision'] else None
+                if item is not None:self._cache.move_to_end(revision['fingerprint'])
+            if item is None:
+                item=checked_content(self.upstream.message(window,key,'content'))
+                if any(item[k]!=revision[k] for k in ('scope','event','fingerprint','revision')):raise LookupError('message_changed_during_read')
+                # Older metadata events are valid on demand, outside the cache.
+                if item['event']['event_at']>=self.clock()-86400:self._put(item,generation)
+            else:item['event']=expected  # one cached message can have several to/cc rows
+            with self._lock:
+                if self._closed or generation!=self._generation:raise LookupError('reader_generation_changed')
+            return {k:item[k] for k in ('event','subject','body','subject_truncated','body_truncated')}
+        except (OSError,ValueError,LookupError,TypeError,KeyError):
+            with self._lock:
+                # A failed canonical check must never leave stale bodies usable.
+                if generation==self._generation:
+                    self._cache.clear();self._bytes=0;self._status='unavailable';self._reason='revalidation_failed'
+            raise
+
+    def progress(self):
+        with self._lock:
+            self._expire()
+            return {'status':self._status,'messages':len(self._cache),'logical_bytes':self._bytes,
+                    'max_messages':self.capacity,'max_logical_bytes':self.budget,'reason':self._reason}
+
+    def start_warm(self):
+        with self._lock:
+            if (self._closed or self._scope is None or self.clock()<self._next_sweep or
+                    self._thread is not None and self._thread.is_alive()):return
+            self._status='warming';self._reason=None
+            self._thread=threading.Thread(target=self._warm,args=(self._generation,self._scope),daemon=True)
+            self._thread.start()
+
+    def _warm(self,generation,scope):
+        start=time.monotonic();cursor=None;seen=set();complete=False;reason=None
+        try:
+            for _ in range(63):
+                if self._stop.is_set() or time.monotonic()-start>=120:reason='time_limit';break
+                with self._lock:
+                    if generation!=self._generation:return
+                raw=self.upstream.cache_page(cursor)
+                if not isinstance(raw,dict):raise ValueError('cache_scope')
+                if raw.get('scope')!=scope:
+                    with self._lock:
+                        if generation==self._generation:
+                            self._clear();self._scope=None;self._status='unavailable';self._reason='scope_changed'
+                    return
+                batch=rows(raw,'items',32)
+                if type(raw.get('complete')) is not bool:raise ValueError('cache_schema')
+                for row in batch:
+                    item=checked_content(row)
+                    if item['scope']!=scope or item['event']['event_at']>self.clock():raise ValueError('cache_identity')
+                    if not self._put(item,generation):reason='capacity_or_expiry'
+                    seen.add(item['fingerprint'])
+                if len(seen)>2000:raise ValueError('cache_count')
+                cursor=raw.get('next_cursor')
+                if cursor is not None and (not isinstance(cursor,str) or not EVENT_KEY.fullmatch(cursor)):raise ValueError('cache_cursor')
+                if raw.get('reason'):reason='upstream_partial'
+                if raw['complete']:
+                    if cursor is not None:raise ValueError('cache_cursor')
+                    complete=True;break
+                if cursor is None:reason=reason or 'upstream_partial';break
+                if self._stop.wait(.025):return
+            if not complete:reason=reason or 'page_or_time_limit'
+            with self._lock:
+                if generation!=self._generation or self._closed:return
+                if complete:
+                    for key in list(self._cache):
+                        if key not in seen:self._bytes-=self._cache.pop(key)[1]
+                self._status='ready' if complete and reason is None else 'partial';self._reason=reason
+        except (OSError,ValueError,LookupError,TypeError,KeyError):
+            with self._lock:
+                if generation==self._generation:
+                    self._cache.clear();self._bytes=0;self._status='unavailable';self._reason='upstream_unavailable'
+        finally:
+            with self._lock:self._next_sweep=self.clock()+60
+
+    def close(self):
+        with self._lock:self._closed=True;self._clear();self._scope=None;self._stop.set();thread=self._thread
+        if thread is not None:thread.join(3)
