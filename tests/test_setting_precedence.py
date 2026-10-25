@@ -92,6 +92,7 @@ def _write_env_sh_like_the_installer(home: pathlib.Path, values: dict[str, str])
 # The installer variable behind each env.sh name the fixture sets as a choice.
 _CHOSEN_NAMES = {
     "PORT": "AGENTSTACK_PORT",
+    "DASHBOARD_ALLOWED_ORIGINS_SETTING": "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS",
     "LABEL_PREFIX": "AGENTSTACK_LABEL_PREFIX",
     "MAIL_LAUNCHD_LABEL_SETTING": "AGENTSTACK_MAIL_LAUNCHD_LABEL",
     "TERMINAL": "AGENTSTACK_TERMINAL",
@@ -126,6 +127,7 @@ def _previous_install(
         "PROJECT_KEY": str(project),
         "PROTECTED_ROOTS": str(project),
         "PORT": "19876",
+        "DASHBOARD_ALLOWED_ORIGINS_SETTING": "http://dashboard.example:19876 https://dashboard.example",
         "LABEL_PREFIX": "org.agentstack.test.inherit",
         "MAIL_LAUNCHD_LABEL_SETTING": "org.agentstack.test.inherit.mail-service",
         "TERMINAL": "none",
@@ -224,6 +226,42 @@ def _resolve_like_the_installer(
     )
     assert result.returncode == 0, result.stderr
     return result.stdout.splitlines()
+
+
+def test_dashboard_origins_follow_setting_precedence_and_safe_env_writer(tmp_path):
+    home, chosen = _previous_install(tmp_path)
+    variable = "DASHBOARD_ALLOWED_ORIGINS_SETTING"
+    key = "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS"
+    assert _resolve_like_the_installer(home, variable) == [chosen[variable]]
+    assert _resolve_like_the_installer(home, variable, args=("--reset-settings",)) == [""]
+    explicit = "https://other.example:8443"
+    assert _resolve_like_the_installer(home, variable, env={key: explicit}) == [explicit]
+    assert _resolve_like_the_installer(home, variable, env={key: ""}) == [""]
+    output = _dry_run(home)
+    assert output.returncode == 0, output.stderr
+    assert "additional dashboard origins: " + chosen[variable] in output.stdout
+    loaded = subprocess.run([BASH, "-c", '. "$1"; printf "%s" "$AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS"',
+                             "fixture", str(home / ".agentstack/env.sh")],
+                            env=_scrubbed_env(home), capture_output=True, text=True, check=True)
+    assert loaded.stdout == chosen[variable]
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+@pytest.mark.parametrize("value", ["https://*.example", "https://example/path", "https://example\nhttp://other.example",
+                                    'https://example";raise SystemExit(0);#', "http://$(touch marker)"])
+def test_invalid_dashboard_origins_stop_before_settings_or_service_writes(tmp_path, value, dry_run):
+    home, _ = _previous_install(tmp_path)
+    env_file = home / ".agentstack/env.sh"
+    before = env_file.read_bytes()
+    env = _scrubbed_env(home, AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS=value)
+    env["PATH"] = str(_fake_bin(tmp_path / "probe")) + os.pathsep + env["PATH"]
+    result = subprocess.run([BASH, str(INSTALLER), "--dashboard-only", *(["--dry-run"] if dry_run else [])],
+                            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0
+    assert "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS must contain" in result.stderr
+    assert env_file.read_bytes() == before
+    assert "[plan] write " not in result.stdout
+    assert not (tmp_path / "marker").exists()
 
 
 def _chosen(home: pathlib.Path, **kwargs) -> set[str]:

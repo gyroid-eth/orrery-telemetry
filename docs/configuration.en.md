@@ -22,6 +22,7 @@ On macOS, `~/.agentstack/dashboard/agentctl.sh restart` also renders the selecte
 | --- | --- | --- |
 | `AGENTSTACK_PORT` | `8770` | HTTP port |
 | `AGENTSTACK_BIND_HOST` | `127.0.0.1` | Bind address |
+| `AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS` | empty | Additional fixed HTTP(S) origins allowed by the legacy dashboard, separated by ASCII spaces; see below |
 | `AGENTSTACK_MAIL_DB` | `~/.agentstack/mail/storage.sqlite3` | ORRERY Mail SQLite database |
 | `AGENTSTACK_MAIL_ENV` | `~/.agentstack/mail/.env` | Compatibility bearer reference for a standalone dashboard. The installer renders it explicitly for services |
 | `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `disabled` | Do not add a legacy Authorization header |
@@ -47,6 +48,25 @@ On macOS, `~/.agentstack/dashboard/agentctl.sh restart` also renders the selecte
 Path values expand `~`. An empty string is treated as unset. An invalid integer `AGENTSTACK_PORT` falls back to `8770`.
 
 The murmur language is selected in the order `?lang=ja` / `?lang=en`, `AGENTSTACK_LANG`, then browser `navigator.language` / `navigator.languages`. A Japanese `ja` locale selects Japanese; all others select English. `?murmur=on` / `?murmur=off` overrides the service default for that URL only, while `AGENTSTACK_MURMUR=off` disables bubbles as the service default. A viewer can also switch murmurs on or off from the dashboard's `SETTINGS` › DISPLAY; that choice is stored in the browser (precedence: URL, then the browser's stored choice, then the service default). To apply an environment variable to a resident service, rerun the installer after setting it.
+
+## Host configuration for LAN / VPN access
+
+The legacy dashboard checks `Host` on every HTTP method and path. By default, it accepts only `127.0.0.1`, `localhost` and `[::1]` at the actual listening port. Normal local use and a cockpit bridge connecting to a loopback URL need no additional setting.
+
+If the dashboard already listens for LAN / VPN connections, explicitly configure the origins (scheme, host and port) you use before updating. For example, run this from the existing checkout, review the dry run, then repeat it with the same environment variable and without `--dry-run`:
+
+```bash
+AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS='http://dashboard.example:8770 https://dashboard.example' \
+  ./scripts/install.sh --keep-mail --dry-run
+```
+
+The installer saves this value in `env.sh` and the dashboard service definition, and preserves it on reinstall. Set it explicitly to an empty string or use `--reset-settings` to remove additional origins. For a direct `server.py` launch, pass the same environment variable to that process. This setting does not change the bind address; keep your existing listener configuration separately.
+
+Origins cannot contain a path, credentials, query, fragment or wildcard. The installer rejects invalid values, including quotes and newlines, before writing settings or services; the server also refuses to start. Separate entries with ASCII spaces, not tabs or newlines. Host case and IPv6 notation are normalized. An omitted port means `80` for HTTP or `443` for HTTPS; always include other ports such as `8770`.
+
+The dashboard never infers trusted authorities from `AGENTSTACK_BIND_HOST=0.0.0.0`, network interfaces, `Forwarded` or `X-Forwarded-*`. If a proxy terminates HTTPS, explicitly configure the HTTPS origin and make its upstream `Host` and the browser's `Origin` correspond to that same origin. A POST cannot use a different Host's origin even when that origin is separately allowed.
+
+This is not authentication. The dashboard has no login, and anyone able to send an allowed Host can use its controls. Keep access within a trusted LAN / VPN. Isolated global mode retains its capability authentication and public static resource rules.
 
 ## Without a project key
 

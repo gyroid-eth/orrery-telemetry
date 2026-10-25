@@ -45,6 +45,7 @@ DSH_OPT_IN=""
 HERMES_OPT_IN=""
 DSH_NODE="${AGENTSTACK_DSH_NODE:-}"
 MANAGED_SPAWN_CONFIG_SETTING="${AGENTSTACK_MANAGED_SPAWN_CONFIG:-}"
+DASHBOARD_ALLOWED_ORIGINS_SETTING="${AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS:-}"
 HARNESS_CACHE="${AGENTSTACK_HARNESS_CACHE:-}"
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MAIL_DB_EXPLICIT="${AGENTSTACK_MAIL_DB+x}"
@@ -652,6 +653,7 @@ resolve_setting() {
 resolve_setting PORT AGENTSTACK_PORT 8770
 resolve_setting DSH_NODE AGENTSTACK_DSH_NODE "" kept
 resolve_setting MANAGED_SPAWN_CONFIG_SETTING AGENTSTACK_MANAGED_SPAWN_CONFIG ""
+resolve_setting DASHBOARD_ALLOWED_ORIGINS_SETTING AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS ""
 resolve_setting LABEL_PREFIX AGENTSTACK_LABEL_PREFIX org.agentstack kept
 LABEL_PREFIX_SOURCE="$SETTING_SOURCE"
 resolve_setting TERMINAL AGENTSTACK_TERMINAL auto
@@ -2832,6 +2834,7 @@ write_env_file() {
     return
   fi
   umask 077
+  AGENTSTACK_INSTALL_DASHBOARD_ORIGINS="${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}" \
   "$PYTHON_BIN" - "$ENV_FILE" <<PY
 import os
 import pathlib
@@ -2841,6 +2844,7 @@ import sys
 path = pathlib.Path(sys.argv[1])
 values = {
     "AGENTSTACK_PORT": "$PORT",
+    "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS": os.environ.get("AGENTSTACK_INSTALL_DASHBOARD_ORIGINS", ""),
     "AGENTSTACK_LABEL_PREFIX": "$LABEL_PREFIX",
     # An install that chose its own label prefix gets its own mail service
     # label too. Otherwise agentstack-mailctl falls back to the built-in
@@ -4510,6 +4514,7 @@ render_launchd_plist() {
       __RUNTIME_MODE__ "${AGENTSTACK_RUNTIME_MODE:-legacy}"
       __GLOBAL_SERVER_CONFIG__ "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}"
       __PORT__ "$PORT"
+      __DASHBOARD_ALLOWED_ORIGINS__ "${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}"
       __MAIL_DB__ "$MAIL_DB"
       __MAIL_ENV__ "$MAIL_ENV"
       __MAIL_HOME__ "$MAIL_HOME"
@@ -4586,6 +4591,7 @@ render_systemd_unit() {
   plan "render systemd user unit $unit"
   if [[ "$DRY_RUN" != true ]]; then
     mkdir -p "$dir"
+    AGENTSTACK_INSTALL_DASHBOARD_ORIGINS="${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}" \
     "$PYTHON_BIN" - "$unit" <<PY
 import os
 import pathlib
@@ -4594,6 +4600,7 @@ import sys
 path = pathlib.Path(sys.argv[1])
 env = {
     "AGENTSTACK_PYTHON": "$PYTHON_BIN",
+    "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS": os.environ.get("AGENTSTACK_INSTALL_DASHBOARD_ORIGINS", ""),
     "AGENTSTACK_RUNTIME_MODE": "${AGENTSTACK_RUNTIME_MODE:-legacy}",
     "AGENTSTACK_GLOBAL_SERVER_CONFIG": "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}",
     "AGENTSTACK_PORT": "$PORT",
@@ -4876,6 +4883,7 @@ write_manifest() {
       database_backup "$MAIL_UPDATE_BACKUP")"
   fi
   AGENTSTACK_INSTALL_MAIL_UPDATE="$mail_update" \
+  AGENTSTACK_INSTALL_DASHBOARD_ORIGINS="${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}" \
   "$PYTHON_BIN" - "$tmp" "$service_kind" "$service_path" \
     "$mail_service_kind" "$mail_service_path" "$AGENT_MAIL_NAME_CAPABILITY_JSON" \
     "${AGENT_MAIL_AUTOSTART_KIND:-}" "${AGENT_MAIL_AUTOSTART_PATH:-}" \
@@ -5031,6 +5039,7 @@ manifest = {
     },
     "env": {
         "AGENTSTACK_PORT": "$PORT",
+        "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS": os.environ.get("AGENTSTACK_INSTALL_DASHBOARD_ORIGINS", ""),
         "AGENTSTACK_LABEL_PREFIX": "$LABEL_PREFIX",
         "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
         "AGENTSTACK_PROTECTED_ROOTS": "$PROTECTED_ROOTS",
@@ -5185,6 +5194,13 @@ main() {
   if ! run_preflight; then
     exit 1
   fi
+  # Validate before copying assets, writing settings or changing services.
+  # Pass the new setting as data, never interpolate it into Python source.
+  "$PYTHON_BIN" - "$REPO_ROOT/dashboard/legacy_http_admission.py" "$DASHBOARD_ALLOWED_ORIGINS_SETTING" <<'PY'
+import runpy, sys
+runpy.run_path(sys.argv[1])["configured_origins"](sys.argv[2])
+PY
+  say "additional dashboard origins: ${DASHBOARD_ALLOWED_ORIGINS_SETTING:-(none; loopback only)}"
   validate_codex_child_overlay
   if [[ "$TIER" == "tier1" ]]; then
     say "Tier1 will show MCP and user-settings dry-run diffs before any merge."

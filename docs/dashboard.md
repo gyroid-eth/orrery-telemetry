@@ -495,6 +495,8 @@ embed の初期化完了時と reload 後には、dashboard が `agentstack-them
 
 `AGENTSTACK_BIND_HOST=0.0.0.0` は terminal bridge と control endpoint も外部へ公開します。dashboard に認証 layer はないため、trusted LAN / VPN 以外では使わないでください。
 
+legacy dashboard の Host 検査は既定で実待受ポートの loopback だけを許可します。LAN / VPN の URL を使う既存利用者は、更新前に [`AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS`](configuration.md#lan--vpn-から使う場合の-host-設定) で固定 origin を指定し、installer で保存・service へ反映してください。wildcard bind 自体では外部 Host を許可しません。通常の loopback 接続の cockpit bridge は設定追加不要です。この検査は認証を追加するものではありません。
+
 ## デモ（サーバー不要）
 
 公開デモ [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) は、この `index.html` そのものを Python も SQLite も tmux も無しで動かしたものです。コピーは作っていません。画面を動かしている通信は `fetch` による GET だけなので、`dashboard/demo/demo_api.js` が `fetch` を横取りし、台本（`story_*.js`・配役・生死・mail 本文・作業ログ）から時刻に応じた応答を組み立てます。書き込み系 API は無効です。

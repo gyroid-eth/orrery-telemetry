@@ -32,6 +32,8 @@
     <string>__GLOBAL_SERVER_CONFIG__</string>
     <key>AGENTSTACK_PORT</key>
     <string>__PORT__</string>
+    <key>AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS</key>
+    <string>__DASHBOARD_ALLOWED_ORIGINS__</string>
     <key>AGENTSTACK_LABEL_PREFIX</key>
     <string>__LABEL_PREFIX__</string>
     <key>AGENTSTACK_MAIL_DB</key>

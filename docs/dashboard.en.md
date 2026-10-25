@@ -471,6 +471,8 @@ Opening a terminal from a card or node makes the server allocate a Ghostty / iTe
 
 `AGENTSTACK_BIND_HOST=0.0.0.0` also exposes the terminal bridge and control endpoints externally. Because the dashboard has no authentication layer, do not use it outside a trusted LAN / VPN.
 
+Legacy Host admission allows only loopback authorities at the actual listening port by default. Existing LAN / VPN users must configure fixed origins with [`AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS`](configuration.en.md#host-configuration-for-lan--vpn-access) before updating, then use the installer to save them and update the service environment. A wildcard bind alone does not allow external Hosts. A cockpit bridge using its normal loopback connection needs no additional setting. This check does not add authentication.
+
 ## Demo (no server required)
 
 The public [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) runs this exact `index.html` without Python, SQLite, or tmux; it is not a copy. The screen's communications are GET requests through `fetch` only, so `dashboard/demo/demo_api.js` intercepts `fetch` and constructs time-dependent responses from scripts (`story_*.js`, roles, life/death, mail bodies, and work logs). Write APIs are disabled.
