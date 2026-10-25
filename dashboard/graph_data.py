@@ -1,4 +1,5 @@
 import json
+import hashlib
 import math
 import os
 import shutil
@@ -249,6 +250,65 @@ def _resolve_project_id(con) -> int:
     if row and row[0] is not None:
         return int(row[0])
     raise LookupError("Mail project not found")
+
+
+def mobile_mail_metadata(
+    con: sqlite3.Connection, project_id: int, window: str,
+    *, now: float | None = None, event_limit: int = 200,
+) -> dict:
+    """Read delivery metadata only; never select message content or change ACK.
+
+    Counts are recipient rows by direction/kind in the requested event-time
+    window. The bounded timeline is separate from those complete aggregates.
+    Same-second rows sort by message id then recipient id, both descending.
+    """
+    windows = {'all': None, 'day': 86400, '15m': 900}
+    if window not in windows or not 1 <= event_limit <= 200:
+        raise ValueError('invalid mobile Mail window or limit')
+    checked = int(time.time() if now is None else now)
+    lower = checked - windows[window] if windows[window] is not None else None
+    epoch = _sql_epoch('m.created_ts')
+    cte = f'''WITH delivery AS (
+        SELECT m.id AS message_id, mr.agent_id AS recipient_id,
+               sa.name AS source, ra.name AS target, mr.kind AS kind,
+               {epoch} AS event_at
+        FROM messages m
+        JOIN message_recipients mr ON mr.message_id=m.id
+        JOIN agents sa ON sa.id=m.sender_id AND sa.project_id=m.project_id
+        JOIN agents ra ON ra.id=mr.agent_id AND ra.project_id=m.project_id
+        WHERE m.project_id=? AND mr.kind IN ('to','cc')
+    ) '''
+    bounds = 'event_at IS NOT NULL AND event_at<=?'
+    args = [project_id, checked]
+    if lower is not None:
+        bounds += ' AND event_at>=?'
+        args.append(lower)
+    # An extra row detects truncation without presenting a partial aggregate
+    # as a complete graph. This limit also bounds the metadata HTTP response.
+    edge_rows = con.execute(cte + f'''
+        SELECT source,target,kind,COUNT(*) AS count,MAX(event_at) AS last_ts
+        FROM delivery WHERE {bounds} GROUP BY source,target,kind
+        ORDER BY count DESC,source,target,kind LIMIT 10001
+    ''', args).fetchall()
+    timeline = con.execute(cte + f'''
+        SELECT message_id,recipient_id,source,target,kind,event_at
+        FROM delivery WHERE {bounds}
+        ORDER BY event_at DESC,message_id DESC,recipient_id DESC LIMIT ?
+    ''', [*args, event_limit + 1]).fetchall()
+    invalid = int(con.execute(cte + 'SELECT COUNT(*) FROM delivery WHERE event_at IS NULL',
+                              [project_id]).fetchone()[0])
+    edges = [dict(zip(('source','target','kind','count','last_ts'), row)) for row in edge_rows[:10000]]
+    events = []
+    for message_id, recipient_id, source, target, kind, event_at in timeline[:event_limit]:
+        # Stable per-recipient-row key: does not expose Mail's internal ids.
+        key = hashlib.sha256(f'{project_id}:{message_id}:{recipient_id}'.encode()).hexdigest()[:32]
+        events.append({'key': key, 'source': source, 'target': target,
+                       'kind': kind, 'event_at': event_at, 'count': 1})
+    return {'status': 'available', 'window': window, 'events': events,
+            'edges': edges, 'events_truncated': len(timeline) > event_limit,
+            'edges_truncated': len(edge_rows) > 10000,
+            'invalid_timestamps': invalid, 'degraded': bool(invalid or len(edge_rows) > 10000),
+            'observed_at': checked}
 
 
 def build_graph() -> dict:

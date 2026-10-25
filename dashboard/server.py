@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 27
+API_GENERATION = 28
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -198,7 +198,7 @@ BIND_HOST = _env_text("AGENTSTACK_BIND_HOST", "127.0.0.1")
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "index.html")
 THEME_ASSETS = {
-    **{"/"+name:(os.path.join(HERE,name),"text/javascript; charset=utf-8" if name.endswith(".js") else "text/css; charset=utf-8") for name in ("global_ui.js","global_ui.css","mail_flow.js","mail_flow.css","network_node.js","runtime_node.js","operator_session.js","mail_controller.js","operation_controller.js")},
+    **{"/"+name:(os.path.join(HERE,name),"text/javascript; charset=utf-8" if name.endswith(".js") else "text/css; charset=utf-8") for name in ("global_ui.js","global_ui.css","mail_flow.js","mail_flow.css","network_node.js","network_core.js","runtime_node.js","operator_session.js","mail_controller.js","operation_controller.js")},
     **{"/assets/"+name+".svg": (os.path.join(HERE,"assets",name+".svg"), "image/svg+xml") for name in ("anthropic","openai","google","deepseek","qwen","orbit","orbit-light")},
     "/theme_core.js": (os.path.join(HERE, "theme_core.js"), "text/javascript; charset=utf-8"),
     "/theme_controller.js": (
@@ -2023,6 +2023,26 @@ def _raw_graph() -> dict:
     data = graph_data.build_graph()
     _GRAPH_CACHE.update(ts=now, data=data)
     return data
+
+
+def mobile_mail_payload(window: str) -> tuple[int, dict]:
+    """Metadata for the opt-in reader; never fallback from global to legacy DB."""
+    if GLOBAL_MODE:
+        return 501, {'status': 'unavailable', 'error': 'mobile_global_unsupported'}
+    if window not in {'all', 'day', '15m'}:
+        return 400, {'status': 'unavailable', 'error': 'invalid_window'}
+    if not DB_PATH or not os.path.isfile(DB_PATH):
+        return 503, {'status': 'unavailable', 'error': 'mail_unavailable'}
+    try:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import graph_data
+        with _db() as con:
+            project_id = graph_data._resolve_project_id(con)
+            payload = graph_data.mobile_mail_metadata(con, project_id, window)
+        return 200, payload
+    except (OSError, sqlite3.Error, LookupError):
+        return 503, {'status': 'unavailable', 'error': 'mail_unavailable'}
 
 
 # エージェント名 -> 成果物 LOG の索引（60秒キャッシュ）。
@@ -9468,6 +9488,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/api/mobile-mail" and GLOBAL_MODE:
+            self._send(501, b'{"status":"unavailable","error":"mobile_global_unsupported"}', "application/json; charset=utf-8")
+            return
         if GLOBAL_MODE and not is_public_static(path):
             self._global_get(path)
             return
@@ -9507,6 +9530,17 @@ class Handler(BaseHTTPRequestHandler):
             # is added or changes meaning; record it in a changelog.d fragment.
             # Managed this way from 2 on; every earlier release reported 1.
             self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": API_GENERATION}).encode(), "application/json; charset=utf-8")
+        elif path == "/api/mobile-mail":
+            import ipaddress
+            if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                self._send(403, b'{"status":"unavailable","error":"loopback_only"}', "application/json; charset=utf-8")
+                return
+            q = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            if set(q) - {"window"} or len(q.get("window", [])) > 1:
+                status, payload = 400, {"status": "unavailable", "error": "invalid_window"}
+            else:
+                status, payload = mobile_mail_payload(q.get("window", ["all"])[0])
+            self._send(status, json.dumps(payload).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")

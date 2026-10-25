@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en" data-color-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>ORRERY · View only</title>
+<link rel="icon" type="image/svg+xml" href="/assets/orbit.svg">
+<link rel="stylesheet" href="/network.css">
+<link rel="stylesheet" href="/mobile.css">
+<script defer src="/network_core.js"></script>
+<script defer src="/network_node.js"></script>
+<script defer src="/network_view.js"></script>
+<script defer src="/mobile.js"></script>
+</head>
+<body class="mobile">
+<header><div class="mobile-brand"><img src="/assets/orbit.svg" width="40" height="40" alt=""><strong>ORRERY</strong></div><span>View only</span></header>
+<main id="mobile-main">
+  <div class="reading-summary"><span id="summary">No observations yet</span><time id="observed"></time></div>
+  <p id="health" role="status" hidden></p>
+  <section id="attention" aria-label="Needs attention"></section>
+  <nav class="view-tabs" aria-label="Reading view"><button type="button" data-view="activity">Activity</button><button type="button" data-view="graph" class="active">Graph</button></nav>
+  <section id="activity" hidden>
+    <div class="activity-head"><h2>Activity</h2><nav aria-label="Activity filter"><button type="button" data-kind="all" class="active">All</button><button type="button" data-kind="mail">Mail</button><button type="button" data-kind="state">Status</button></nav></div>
+    <button id="agent-filter" type="button" hidden></button>
+    <div id="events"><p class="empty">Waiting for observations</p></div>
+    <p id="timeline-note" class="quiet"></p>
+  </section>
+  <section id="graph-panel">
+    <div class="graph-toolbar"><nav class="graph-mode" aria-label="Graph scope"><button type="button" data-mode="focus" class="active">Focus</button><button type="button" data-mode="all">All</button></nav><button id="settings-btn" type="button" aria-controls="settings" aria-expanded="false">Tune graph</button></div>
+    <label class="graph-picker"><span>Find</span><select id="agent-picker" aria-label="Find an agent"><option value="">No agents yet</option></select></label>
+    <div class="graph-meta"><span id="netinfo">Graph unavailable</span><span id="zoom-label"></span></div>
+    <div id="net"><svg id="gsvg" role="img" aria-label="Agent relationships. Pinch to zoom, drag to move."></svg></div>
+    <div class="graph-tools"><span>Pinch to zoom · drag to move</span><div><button type="button" id="zoom-out" aria-label="Zoom out">−</button><button type="button" id="zoom-in" aria-label="Zoom in">+</button><button type="button" id="fit">Fit</button></div></div>
+    <div class="selected-agent"><span id="selection-label">Selected</span><strong id="selected-name">None</strong><span id="context-detail">Context unknown</span></div>
+    <details class="legend"><summary>How to read the graph</summary><p>Arrows show Mail direction. Width and arrow size follow message count, counted as to/cc recipient rows.</p><p><i class="sample context"></i> Context remaining · <i class="sample motion"></i> Working</p><p><i class="dot parent"></i> Parent <i class="dot child"></i> Child <i class="dot both"></i> Both</p><p>Parent–child lines are separate from Mail. In All, zoom in and select a node to read its name.</p></details>
+  </section>
+  <footer id="snapshot-note">Account usage unavailable. Context arcs are separate.</footer>
+</main>
+<aside id="settings" role="dialog" aria-labelledby="settings-title" aria-hidden="true" hidden>
+  <div class="st-bar"><h2 id="settings-title">Network settings</h2><button id="settings-close" type="button" aria-label="Close settings">×</button></div>
+  <p class="st-note">Display on this browser only</p>
+  <div id="nctl-rows"></div>
+  <div class="st-foot"><button type="button" id="nc-reset">Reset</button></div>
+  <label class="time-window">Mail time window<select id="time-window"><option value="all">All time</option><option value="day">Last day</option><option value="15m">Last 15 min</option></select></label>
+</aside>
+</body></html>

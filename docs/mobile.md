@@ -1,0 +1,87 @@
+# スマホで状況を見る
+
+> English: [mobile.en.md](mobile.en.md)
+
+[README](../README.md) · [インストール](install.md)
+
+スマホ用の閲覧画面です。英語・dark表示で、要確認のagent、Mailの時間軸、NETWORKを見られます。**既定はオフ**です。通常のinstallや更新では待受もTailscale Serveも開始しません。初版の接続先は同じコンピューターのlegacy Telemetry（API 28以上）です。global modeには未対応です。
+
+## 画面で分かること
+
+- **Activity**: 差出人、宛先、時刻、To/Cc。件名・本文・task・private pathは送りません。Statusは、このreaderを起動した後に観測した変化です。実際に変化した時刻とは区別します。
+- **Graph**: Focusは選択したagentと関連の強い最大5体、Allは取得できた全体。Findで名前を選び、ピンチで拡大、ドラッグで移動、Fitで収めます。大きなgraphで全名前を同時に読めることは保証しません。
+- 線の太さと矢印の大きさは選択期間のMail件数に対応します。件数は方向・To/Ccごとの**宛先行数**で、未読数や一意の送信数ではありません。親子の破線はMailとは別です。
+- 文脈残量弧とWorkingの動きはPCと共通です。文脈の取得時刻は不明なまま扱い、未知値には弧を描きません。アカウント利用枠はUnavailableで、更新要求もしません。
+- **Tune graph**の6設定はこのブラウザ内の表示調整だけです。agentの起動・停止・返信・ターミナル操作はありません。Activityの絞込も閲覧だけです。
+
+前面では約10秒ごとに取得し、背景ではpollを止めます。取得に失敗した値は「Last known」として残し、失敗を正常な0件や待機状態には変えません。SnapshotはHTTPで観測した時刻です。Mailは選択期間の最新200宛先行まで、graphは最大10,000集約リンクまでで、切詰めは画面に明示します。ブラウザに保存するのは6つの表示設定だけで、観測データのoffline保存やservice workerはありません。
+
+Mail time windowはMailのイベントと件数だけを絞り、rosterや観測Status履歴は絞りません。Statusはreader開始後の最新200変化まで保持し、切詰めを明示します。
+
+## 公開前に、本人とスマホを別々に制限する
+
+この機能は**tailnet内のTailscale Serve専用**です。Funnelやfull dashboard/cockpitの公開には使いません。relayは`127.0.0.1`だけで待ち受け、外側のHTTPS Hostと本人の`Tailscale-User-Login`を照合します。[Serveは受信したidentity headerを除去して本人情報を付与します](https://tailscale.com/docs/features/tailscale-serve)。同じコンピューター内の別processはこのheaderを偽装できるため、信頼できないlocal processから守る仕組みではありません。
+
+**本人アカウントの一致だけではスマホ限定になりません。** tailnet管理者が、指定スマホのTailscale IPから専用HTTPSポートへの接続だけを許す実効policyを先に用意します。既存policyへ追加する形の例です。placeholderは実際の値に置き換え、policy全体をこの例で上書きしないでください。
+
+```json
+{
+  "grants": [{
+    "src": ["<PHONE_TAILSCALE_IP>"],
+    "dst": ["<SERVER_TAILSCALE_IP>"],
+    "ip": ["tcp:9443"]
+  }]
+}
+```
+
+[grantsは複数ルール・同じ配列の条件を合算します](https://tailscale.com/docs/reference/syntax/grants)。既存の全端末向け許可がこのポートを含むなら、上の狭いルールを追加しても制限できません。広い許可の方も整理する必要があります。`src`へ本人とスマホIPを並べる方法もAND条件にはなりません。[IPの指定方法](https://tailscale.com/docs/reference/targets-and-selectors)を確認してください。端末名やUser-Agentでの判定は行いません。本人のスマホにtagを付けて代用するとuser identityが変わるため、この手順では使いません。
+
+## 手動で有効にする
+
+1. TelemetryをAPI 28以上に更新し、同じコンピューターの通常画面で観測できることを確認します。既存のサービス・provider設定はそのまま使います。
+2. 指定スマホの実効policyを確認します。`tailscale serve status --json`で現在の設定を保存し、例のHTTPS `9443`が未使用でFunnelにもなっていないことを確認します。既存設定があるポートには重ねません。
+3. 下の設定確認を行います。`owner@example.com`は本人の正確なServe login、`computer.example.ts.net`はこのコンピューターの実際のServe名です。URLは末尾の`/`なしで指定します。custom install先ではscriptのpathも置き換えてください。Pythonは3.11以上が必要です。
+
+```sh
+python3 "$HOME/.agentstack/dashboard/mobile_relay.py" --check \
+  --owner-login 'owner@example.com' \
+  --public-origin 'https://computer.example.ts.net:9443' \
+  --listen-port 8781 --upstream-port 8770
+```
+
+`--check`は入力の形式だけを検査します。通信、待受、policy変更は行わず、本人スマホの制限を検証した結果でもありません。設定不足なら修正してから先へ進みます。
+
+4. 一つのターミナルでreaderを前面起動します。
+
+```sh
+python3 "$HOME/.agentstack/dashboard/mobile_relay.py" --enable \
+  --owner-login 'owner@example.com' \
+  --public-origin 'https://computer.example.ts.net:9443' \
+  --listen-port 8781 --upstream-port 8770
+```
+
+5. 別のターミナルで専用ポートをreaderへ接続します。8770やcockpitへ直接接続しないでください。
+
+```sh
+tailscale serve --https=9443 http://127.0.0.1:8781
+```
+
+[Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve)の前面実行例です。既存Serveをresetしません。relayへ直接アクセスして403になるのは、本人headerがない場合の期待動作です。Host/Originで拒否された場合もガードを緩めず、実際のServe名・ポート・対応するTailscale版を確認してください。
+
+## 実スマホで確認してから使う
+
+指定スマホで`https://computer.example.ts.net:9443/`を開き、本人情報で画面とsnapshotが取得できることを確認します。同じ本人アカウントの**別端末**と、別アカウントからは使えないことも確認します。本人header照合と端末のpolicyをそれぞれ検証してください。どれかが未確認なら「本人スマホ限定で有効化済み」とは扱いません。
+
+リポジトリの隔離HTTP試験・合成画面確認は、この実Serve/端末受入の代わりにはなりません。実際のTailscale版、policy、本人スマホでの配備確認は運用者が行います。
+
+## 止める・戻す
+
+専用Serveだけを外し、readerを実行したターミナルでCtrl-Cを押します。
+
+```sh
+tailscale serve --https=9443 off
+```
+
+上の例以外のflagを付けた場合は、[元と同じflagでoff](https://tailscale.com/docs/reference/tailscale-cli/serve)を実行してください。`serve reset`は他の設定も消すため使いません。現在のServe設定を保存しておいた内容と比較し、この手順で追加した専用設定だけが消えたことを確認します。policyを戻す必要がある場合も今回の変更部分だけを管理者が戻し、無関係な許可を上書きしません。reader停止でメモリ内のsnapshotと観測Status履歴は消えます。通常のTelemetryとMailは停止しません。
+
+認証・経路・取得fieldの詳細は[API](api.md#スマホ閲覧用api-28)を参照してください。

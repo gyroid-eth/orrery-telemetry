@@ -69,7 +69,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":27}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":28}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -718,3 +718,13 @@ Capabilities include `global_runtime_observation=1` and `operator_session=1`. Gl
 
 
 API 25: legacy managed `attempt_id` spawn/status requests are retired and return `unsupported_attempt`. Use standard `POST /api/spawn` and `GET /api/spawn-status?name=<name>`.
+
+## Mobile reader (API 28)
+
+`GET /api/mobile-mail?window=all|day|15m` is a legacy, loopback-only metadata endpoint. It keeps the existing dashboard Host admission. Missing DB or project/schema/read failure returns 503; unsupported global mode is explicitly refused (501 after admission, or the existing global admission refusal). It never falls back to a legacy DB from global mode. Unknown or repeated query fields return400.
+
+A 200 response has `status: available`, `window`, `observed_at`, `edges`, `events`, `events_truncated`, `edges_truncated`, `invalid_timestamps`, and `degraded`. `edges` contains source/target/kind/count/last_ts aggregated over the actual period, at most 10,000 rows. Counts are direction-specific to/cc recipient rows, excluding bcc and cross-project endpoints. `events` contains the latest 200 recipient rows with stable opaque `key`, source/target/kind/`count:1`/event_at, ordered by event time, message id and recipient id descending. The SQL reads only metadata; subjects, bodies and read/ack writes are excluded. Invalid timestamps are excluded and reported as degraded. An empty successful query differs from an unavailable query.
+
+The optional [mobile relay](mobile.en.md) exposes authenticated GET/HEAD only: `/`, its fixed bundled assets and `GET /view/snapshot?window=all|day|15m`. It starts only with `--enable`, requires an exact owner login and HTTPS .ts.net origin, and binds only on 127.0.0.1. It checks the outer Host, owner header and any supplied Origin for every asset and snapshot; normal GET may omit Origin. Other methods, unknown routes/query fields, duplicate authentication headers, cross-origin requests, upgrades and overrides are rejected. No arbitrary upstream URL, header forwarding, proxy environment or redirects are accepted. Upstream JSON is bounded to 4 MiB and 2 seconds per fixed request.
+
+The snapshot has `schema:1`, observation time, window, component `sources` (available/stale/unavailable with last observation and age), explicitly projected `agents`, graph Mail/spawn edges, timeline Mail and observed status changes, truncation flags, and unavailable quota. Agent projection includes only canonical name, provider/model/locality, nullable running/context, retired/state/act_state and last activity. Context sampling time remains null. Status changes have `observed_at` and null `event_at`; only the latest 200 after relay start are retained, with `states_truncated` on overflow. The Mail window does not filter the roster or observed status history. Failed polls retain stale values without inventing events or healthy zeros. The relay never reads a terminal, message body, custom portrait, deliverable or quota refresh endpoint. Browser polling pauses in the background. Authentication and phone restriction are separate; deployment requires the real-device checks in the guide.

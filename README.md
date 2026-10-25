@@ -105,6 +105,7 @@ global network の稼働状態・本人照合と unknown の境界は [観測の
 | 目的から資料を探す | [全 docs の索引](docs/README.md) |
 | Telemetry 単独で始める・言葉を調べる | [Getting started](docs/getting-started.md) |
 | install・update・要件を確認する | [インストール](docs/install.md) |
+| 指定したスマホで状況だけを見る | [スマホ閲覧用画面](docs/mobile.md)（既定オフ） |
 | 困ったところを調べる | [トラブルシューティング](docs/troubleshooting.md) |
 | 決定的daemonのlocal helperを開発する | [専用bindingと通知](docs/daemon-agents.md)（配備は別承認） |
 | 絶対 path の予約候補を検証する | [候補の契約と試験](docs/absolute-reservations.md)（既定は旧 mode） |

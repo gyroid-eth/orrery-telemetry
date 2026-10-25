@@ -1,0 +1,181 @@
+"""Real HTTP on ephemeral loopback fixtures; no Tailscale or production service."""
+from contextlib import contextmanager
+import http.client
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import socket
+import threading
+
+import pytest
+
+from dashboard import mobile_relay as relay
+
+
+@contextmanager
+def serving(server):
+    worker=threading.Thread(target=server.serve_forever,daemon=True)
+    worker.start()
+    try:yield server.server_address[1]
+    finally:
+        server.shutdown();server.server_close();worker.join(3)
+        assert not worker.is_alive()
+
+
+class Store:
+    def __init__(self):self.calls=[]
+    def snapshot(self,window):
+        self.calls.append(window)
+        return {'schema':1,'sources':{'agents':{'status':'available'}},'agents':[]}
+
+
+@pytest.fixture
+def reader():
+    config=relay.Config('owner@example.test','https://viewer.example.ts.net:9443')
+    store=Store();server=relay.make_server(config,store=store,test_port=0)
+    with serving(server) as port:yield port,store
+
+
+def request(port,path='/view/snapshot',method='GET',headers=None):
+    con=http.client.HTTPConnection('127.0.0.1',port,timeout=3)
+    try:
+        con.request(method,path,headers=headers if headers is not None else {
+            'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test'})
+        response=con.getresponse();return response.status,dict(response.getheaders()),response.read()
+    finally:con.close()
+
+
+def test_owner_and_outer_authority_accept_originless_get_and_assets(reader):
+    port,store=reader
+    status,headers,_=request(port)
+    assert status==200 and store.calls==['all']
+    assert headers['Cache-Control']=='no-store'
+    assert "connect-src 'self'" in headers['Content-Security-Policy']
+    status,_,body=request(port,'/network_node.js')
+    assert status==200 and b'OrreryNetworkNode' in body
+    status,_,css=request(port,'/network.css')
+    assert status==200 and b'--serif:' in css and b'--ln-local:' in css
+    for font in ('fraunces-normal','fraunces-italic','ibm-plex-mono-400','ibm-plex-mono-500','ibm-plex-mono-600'):
+        status,headers,body=request(port,'/fonts/'+font+'.woff2')
+        assert status==200 and headers['Content-Type']=='font/woff2' and body[:4]==b'wOF2'
+        assert request(port,'/fonts/'+font+'.woff2',headers={'Host':'viewer.example.ts.net:9443'})[0]==403
+    assert request(port,'/network_node.js',method='HEAD')[0]==200
+
+
+def test_every_fixed_logo_is_authenticated_svg_and_matches_canonical_bytes(reader):
+    from pathlib import Path
+    port,store=reader;root=Path(__file__).resolve().parents[1]
+    for logo in ('orbit','anthropic','openai','google','deepseek','qwen'):
+        path='/assets/'+logo+'.svg'
+        source=(root/'integrations/dsh/assets/deepseek.svg' if logo=='deepseek'
+                else root/'dashboard/assets'/(logo+'.svg'))
+        status,headers,body=request(port,path)
+        assert status==200,logo
+        assert headers['Content-Type']=='image/svg+xml' and body and body==source.read_bytes(),logo
+        assert request(port,path,headers={'Host':'viewer.example.ts.net:9443'})[0]==403
+    assert store.calls==[]
+
+
+@pytest.mark.parametrize('headers',[
+    {'Host':'viewer.example.ts.net:9443'},
+    {'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'other@example.test'},
+    {'Host':'127.0.0.1:8781','Tailscale-User-Login':'owner@example.test'},
+    {'Host':'attacker.test','Tailscale-User-Login':'owner@example.test'},
+    {'Host':'viewer.example.ts.net','Tailscale-User-Login':'owner@example.test'},
+    {'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test','Origin':'https://other.example.ts.net:9443'},
+    {'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test','Origin':'null'},
+    {'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test','Sec-Fetch-Site':'cross-site'},
+    {'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test','X-HTTP-Method-Override':'POST'},
+    {'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test','Upgrade':'websocket'},
+])
+def test_auth_and_cross_origin_refusals_do_not_observe_upstream(reader,headers):
+    port,store=reader
+    assert request(port,headers=headers)[0]==403
+    assert store.calls==[]
+
+
+@pytest.mark.parametrize('field',['Host','Origin','Tailscale-User-Login'])
+def test_duplicate_headers_fail_closed(reader,field):
+    port,store=reader
+    lines=['GET /view/snapshot HTTP/1.1','Host: viewer.example.ts.net:9443',
+           'Tailscale-User-Login: owner@example.test','Origin: https://viewer.example.ts.net:9443',
+           field+': '+{'Host':'viewer.example.ts.net:9443','Origin':'https://viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test'}[field],
+           'Connection: close','','']
+    with socket.create_connection(('127.0.0.1',port),timeout=3) as sock:
+        sock.sendall('\r\n'.join(lines).encode());answer=sock.recv(1024)
+    assert b' 403 ' in answer and store.calls==[]
+
+
+@pytest.mark.parametrize('path,status',[
+    ('/api/agents',404),('/api/quotas',404),('/api/ptty?session=Any',404),
+    ('/view/snapshot?window=unknown',400),('/view/snapshot?window=all&window=day',400),
+    ('/view/snapshot?url=http://elsewhere/',400),('/../index.html',404),
+    ('/fonts/../index.html',404),('/%2e%2e/index.html',403),
+    ('http://elsewhere.test/view/snapshot',403),('//elsewhere.test/',403),
+    ('/network_node.js?any=value',404),
+])
+def test_fixed_routes_and_query(reader,path,status):
+    port,store=reader
+    assert request(port,path)[0]==status and store.calls==[]
+
+
+@pytest.mark.parametrize('method',['POST','PUT','PATCH','DELETE','OPTIONS','TRACE','CONNECT'])
+def test_no_operation_method(reader,method):
+    port,store=reader
+    assert request(port,method=method)[0]==405 and store.calls==[]
+
+
+def test_default_off_and_missing_enabled_config_never_listen(monkeypatch):
+    monkeypatch.setattr(relay,'make_server',lambda *a,**k:pytest.fail('must not listen'))
+    assert relay.main([])==0
+    with pytest.raises(SystemExit):relay.main(['--enable'])
+    assert relay.main(['--check','--owner-login','owner@example.test','--public-origin','https://viewer.example.ts.net:9443'])==0
+    with pytest.raises(ValueError):relay.Config('owner@example.test','http://viewer.example.ts.net')
+    with pytest.raises(ValueError):relay.Config('owner@example.test','https://untrusted.test')
+
+
+def test_upstream_redirect_wrong_type_size_and_headers(monkeypatch):
+    seen=[];mode=['ok']
+    class Fixture(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.path,dict(self.headers)))
+            if mode[0]=='redirect':
+                self.send_response(302);self.send_header('Location','http://127.0.0.1:1/private');self.end_headers();return
+            self.send_response(200)
+            self.send_header('Content-Type','text/html' if mode[0]=='mime' else 'application/json')
+            if mode[0]=='large':self.send_header('Content-Length',str(relay.MAX_UPSTREAM_BYTES+1))
+            self.end_headers()
+            if mode[0]!='large':self.wfile.write(b'{"agents":[]}')
+        def log_message(self,*a):pass
+    with serving(ThreadingHTTPServer(('127.0.0.1',0),Fixture)) as port:
+        upstream=relay.Upstream(port)
+        assert upstream('agents')=={'agents':[]}
+        assert seen[0][0]=='/api/agents'
+        assert seen[0][1]['Host']==f'127.0.0.1:{port}'
+        assert 'Origin' not in seen[0][1] and 'Tailscale-User-Login' not in seen[0][1]
+        for case in ['redirect','mime','large']:
+            mode[0]=case
+            with pytest.raises(ValueError):upstream('agents')
+        assert len(seen)==4
+        with pytest.raises(ValueError):upstream('http://untrusted.test/')
+
+
+def test_trickling_upstream_cannot_extend_total_deadline(monkeypatch):
+    import time
+    stop=threading.Event()
+    class Trickle(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200);self.send_header('Content-Type','application/json')
+            self.send_header('Content-Length','1000');self.end_headers()
+            try:
+                while not stop.wait(.025):self.wfile.write(b' ');self.wfile.flush()
+            except (OSError,ValueError):pass
+        def log_message(self,*args):pass
+    monkeypatch.setattr(relay,'UPSTREAM_TIMEOUT',.2)
+    server=ThreadingHTTPServer(('127.0.0.1',0),Trickle);server.daemon_threads=True
+    try:
+        with serving(server) as port:
+            start=time.monotonic()
+            with pytest.raises((OSError,ValueError)):
+                relay.Upstream(port)('agents')
+            assert time.monotonic()-start<1
+    finally:stop.set()

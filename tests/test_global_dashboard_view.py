@@ -25,7 +25,7 @@ def test_global_shell_never_starts_legacy_driver_and_serves_legacy_template_verb
     code,legacy=request(ui,'/',auth=False)
     assert code==200 and legacy==dashboard._render_dashboard_index(raw)
     assert b'global_ui.js' not in legacy
-    for name in ('global_ui.js','global_ui.css','mail_flow.js','network_node.js'):
+    for name in ('global_ui.js','global_ui.css','mail_flow.js','network_node.js','network_core.js'):
         code,body=request(ui,'/'+name,auth=False)
         assert code==200 and body==(ROOT/'dashboard'/name).read_bytes()
     for name in ('anthropic','openai','google'):

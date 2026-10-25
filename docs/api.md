@@ -68,7 +68,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":27}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":28}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -719,3 +719,13 @@ curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'
 
 
 API 25: 旧 managed の `attempt_id` による起動・状態照会は廃止しました。`POST /api/spawn` と `GET /api/spawn-status?name=<name>` の標準の経路を使います。旧要求には `unsupported_attempt` を返します。
+
+## スマホ閲覧用（API 28）
+
+`GET /api/mobile-mail?window=all|day|15m`はlegacy modeのloopback専用metadata endpointです。既存のHost admissionを維持します。DB不在・project/schema/読取失敗は503、global modeは明示拒否（admission通過後501、または既存global admissionの拒否）です。globalから旧DBへfallbackしません。不明・重複queryは400です。
+
+200応答は`status: available`、`window`、`observed_at`、`edges`、`events`、`events_truncated`、`edges_truncated`、`invalid_timestamps`、`degraded`を返します。`edges`は実際の期間で集計したsource/target/kind/count/last_tsで最大10,000行。件数は方向別のto/cc宛先行数で、bcc・別projectの端点を除きます。`events`は最新200宛先行までで、安定した不透明`key`とsource/target/kind/count1/event_atを持ち、時刻・message id・recipient idの降順です。SQLはmetadataだけを読み、件名・本文・read/ack更新を含みません。不正時刻は除外してdegradedとして報告します。正常な空結果と取得不能は別です。
+
+任意の[mobile relay](mobile.md)は認証付きGET/HEADだけを公開します。経路は`/`、固定の同梱asset、`GET /view/snapshot?window=all|day|15m`です。起動には`--enable`・正確な本人login・HTTPS .ts.net originが必要で、待受は127.0.0.1だけです。全asset/snapshotで外側Host・本人header・指定されたOriginを照合します。通常GETのOrigin欠損は許容します。他method、不明route/query、認証header重複、別Origin、upgrade、overrideは拒否。任意upstream URL・header転送・proxy環境・redirectは使わず、固定GETごとにJSON4MiB/2秒を上限とします。
+
+snapshotは`schema:1`・観測時刻・window、componentごとの`sources`（available/stale/unavailableと最終観測/age）、明示投影した`agents`、graphのMail/親子線、Mail/観測Statusのtimeline、切詰めflag、Unavailableのquotaを返します。agentは正規名・provider/model/locality・nullable running/context・retired/state/act_state・最終活動だけです。文脈のsampling時刻はnullを維持します。Statusは`observed_at`とnullの`event_at`を持ち、relay開始後の最新200変化まで（超過は`states_truncated`）。Mailの時間幅はrosterや観測Status履歴を絞りません。失敗時は古い値をstaleとして保持し、偽のイベントや正常0を作りません。ターミナル、本文、custom portrait、成果物、quota refreshは読みません。browserは背景でpollを止めます。本人認証と指定端末の制限は別で、配備時にはguideの実端末確認が必要です。
