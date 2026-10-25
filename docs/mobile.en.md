@@ -6,6 +6,27 @@
 
 The mobile reader shows agents needing attention, a Mail timeline and NETWORK in English with a dark theme. **It is off by default.** Normal installation and updates start neither a listener nor Tailscale Serve. It reads legacy Telemetry on the same computer, using API 30 or later. Global mode is not supported.
 
+## Ask your agent to set it up
+
+You can hand this page to the Claude Code or Codex agent on the computer that runs Telemetry. For example:
+
+> Read docs/mobile.en.md and set up the mobile reader for my phone. Do the commands yourself, stop at the steps marked "you", and tell me exactly what to do there.
+
+The agent can do everything except the steps marked **you**, which need the Tailscale admin console or the phone itself.
+
+| Step | Who | What |
+|---|---|---|
+| 1 | agent | Confirm `curl -s http://127.0.0.1:8770/api/version` reports API 30 or later |
+| 2 | **you** | Install Tailscale on the phone and sign in with the same account as the computer |
+| 3 | agent | Find the values: computer Serve name and IP from `tailscale status --json` (`Self.DNSName` without the trailing dot, `Self.TailscaleIPs[0]`), owner login from `User[Self.UserID].LoginName`, phone IP from `tailscale status`. `tailscale whois <phone IP>` confirms the phone belongs to that login |
+| 4 | **you** | In the admin console, DNS page: enable MagicDNS and HTTPS Certificates if they are off. `CertDomains` in `tailscale status --json` is empty until then |
+| 5 | **you** | In the admin console, Access controls: add the phone-only grant from the next section and narrow broader rules that cover the port. Without this, every device on your account can open the page |
+| 6 | agent | Run steps 2–5 of [Enable manually](#enable-manually) |
+| 7 | **you** | Open `https://<Serve name>:9443/` on the phone. The first HTTPS request can take a few seconds while the certificate is issued |
+| 8 | agent + **you** | Check that another device on your account cannot open it (see [Verify on real devices](#verify-on-real-devices)) |
+
+On macOS the CLI is usually `/Applications/Tailscale.app/Contents/MacOS/Tailscale` when `tailscale` is not on `PATH`. The reader runs in the foreground; to keep it after closing the terminal, run it under your own service manager or `nohup`. Telemetry does not install a resident service for it.
+
 ## Reading the screen
 
 - **Activity** lists sender, recipient, time and To/Cc only. Tap one Mail event to open its subject and body. Tasks and private paths are not separately fetched, but anything written in a Mail body is visible. Status records changes observed after this reader starts, rather than claiming to know when each change actually happened.
@@ -78,7 +99,7 @@ python3 "$HOME/.agentstack/dashboard/mobile_relay.py" --enable \
 tailscale serve --https=9443 http://127.0.0.1:8781
 ```
 
-This uses the [Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve) in the foreground and does not reset existing entries. A direct relay request without the owner header should return 403. If Host or Origin is rejected, check the actual Serve name, port and Tailscale version rather than relaxing the guard.
+This uses the [Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve) in the foreground and does not reset existing entries. Add `--bg` to keep the Serve entry after the terminal closes; remove it with the command in [Disable and restore](#disable-and-restore). A direct relay request without the owner header should return 403. If Host or Origin is rejected, check the actual Serve name, port and Tailscale version rather than relaxing the guard.
 
 ## Verify on real devices
 

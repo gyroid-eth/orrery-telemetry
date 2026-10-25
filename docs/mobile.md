@@ -6,6 +6,27 @@
 
 スマホ用の閲覧画面です。英語・dark表示で、要確認のagent、Mailの時間軸、NETWORKを見られます。**既定はオフ**です。通常のinstallや更新では待受もTailscale Serveも開始しません。同じコンピューターのlegacy Telemetry（API 30以上）へ接続します。global modeには未対応です。
 
+## エージェントに設定を頼む
+
+Telemetryを動かしているコンピューターのClaude CodeやCodexのagentに、このページを渡して設定させられます。たとえば次のように頼みます。
+
+> docs/mobile.md を読んで、私のスマホ用にmobile readerを設定して。コマンドは自分で実行し、「本人」の段では止まって、私がやることを具体的に教えて。
+
+**本人**と書いた段はTailscaleの管理画面かスマホ自体の操作が要るため、agentにはできません。それ以外はagentが進められます。
+
+| 段 | 誰が | 何をする |
+|---|---|---|
+| 1 | agent | `curl -s http://127.0.0.1:8770/api/version` がAPI 30以上かを確かめる |
+| 2 | **本人** | スマホにTailscaleを入れ、コンピューターと同じアカウントでログインする |
+| 3 | agent | 値を調べる。コンピューターのServe名とIPは`tailscale status --json`の`Self.DNSName`（末尾の`.`は除く）と`Self.TailscaleIPs[0]`、本人のloginは`User[Self.UserID].LoginName`、スマホのIPは`tailscale status`。`tailscale whois <スマホのIP>`でスマホがそのloginのものか確かめる |
+| 4 | **本人** | 管理画面のDNSで、MagicDNSとHTTPS Certificatesが無効なら有効にする。それまでは`tailscale status --json`の`CertDomains`が空になる |
+| 5 | **本人** | 管理画面のAccess controlsで、次節のスマホ専用のgrantを足し、このポートを含む広い許可を狭める。これをしないと、同じアカウントの全端末から開ける |
+| 6 | agent | [手動で有効にする](#手動で有効にする)の2〜5を実行する |
+| 7 | **本人** | スマホで`https://<Serve名>:9443/`を開く。最初のHTTPSは証明書の発行で数秒かかることがある |
+| 8 | agent＋**本人** | 同じアカウントの別端末から開けないことを確かめる（[実スマホで確認してから使う](#実スマホで確認してから使う)） |
+
+macOSで`tailscale`がPATHに無いときは、CLIは通常`/Applications/Tailscale.app/Contents/MacOS/Tailscale`です。readerは前面で動きます。ターミナルを閉じても残したい場合は、OSのサービス管理か`nohup`で動かしてください。Telemetryはreaderの常駐サービスを入れません。
+
 ## 画面で分かること
 
 - **Activity**: 一覧は差出人、宛先、時刻、To/Ccだけです。Mailを1件タップすると、その件名と本文を開きます。taskや私有パスを別途取得しませんが、Mail本文に書かれた内容は表示されます。Statusは、このreaderを起動した後に観測した変化です。実際に変化した時刻とは区別します。
@@ -78,7 +99,7 @@ python3 "$HOME/.agentstack/dashboard/mobile_relay.py" --enable \
 tailscale serve --https=9443 http://127.0.0.1:8781
 ```
 
-[Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve)の前面実行例です。既存Serveをresetしません。relayへ直接アクセスして403になるのは、本人headerがない場合の期待動作です。Host/Originで拒否された場合もガードを緩めず、実際のServe名・ポート・対応するTailscale版を確認してください。
+[Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve)の前面実行例です。既存Serveをresetしません。ターミナルを閉じてもServeを残すには`--bg`を付けます。外すときは下の「止める・戻す」のコマンドを使います。relayへ直接アクセスして403になるのは、本人headerがない場合の期待動作です。Host/Originで拒否された場合もガードを緩めず、実際のServe名・ポート・対応するTailscale版を確認してください。
 
 ## 実スマホで確認してから使う
 
