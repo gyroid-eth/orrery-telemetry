@@ -68,7 +68,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":27}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":30}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -719,3 +719,27 @@ curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'
 
 
 API 25: 旧 managed の `attempt_id` による起動・状態照会は廃止しました。`POST /api/spawn` と `GET /api/spawn-status?name=<name>` の標準の経路を使います。旧要求には `unsupported_attempt` を返します。
+
+<a id="スマホ閲覧用api-28"></a>
+
+<a id="スマホ閲覧用api-29"></a>
+
+## スマホ閲覧用（API 30）
+
+`GET /api/mobile-mail?window=<period>`はlegacy modeのloopback専用metadata endpointです。期間の既定は`day`（24h）。`all`、`day`、`15m`と、15〜43200の15の倍数を表す`m<N>`（分）だけを受け付け、先頭ゼロや小数は拒否します。既存のHost admissionを維持します。DB不在・project/schema/読取失敗は503、global modeは明示拒否（admission通過後501、または既存global admissionの拒否）です。globalから旧DBへfallbackしません。不明・重複queryは400です。
+
+200応答は`status: available`、`window`、`observed_at`、`edges`、`events`、`events_truncated`、`edges_truncated`、`invalid_timestamps`、`degraded`を返します。`edges`は実際の期間で集計したsource/target/kind/count/last_tsで最大10,000行。件数は方向別のto/cc宛先行数で、bcc・別projectの端点を除きます。`events`は最新200宛先行までで、安定した不透明`key`とsource/target/kind/count1/event_atを持ち、時刻・message id・recipient idの降順です。SQLはmetadataだけを読み、件名・本文・read/ack更新を含みません。不正時刻は除外してdegradedとして報告します。正常な空結果と取得不能は別です。
+
+任意の[mobile relay](mobile.md)は認証付きGET/HEADだけを公開します。経路は`/`、固定の同梱asset、`GET /view/snapshot?window=<period>`と後述の肖像です。起動には`--enable`・正確な本人login・HTTPS .ts.net originが必要で、待受は127.0.0.1だけです。全asset/snapshot/肖像で外側Host・本人header・指定されたOriginを照合します。通常GETのOrigin欠損は許容します。他method、不明route/query、認証header重複、別Origin、upgrade、overrideは拒否。任意upstream URL・header転送・proxy環境・redirectは使わず、固定GETごとにJSON4MiB/2秒を上限とします。
+
+snapshotは`schema:1`・観測時刻・window・`period`（秒幅、活動時刻不明件数）、componentごとの`sources`（available/stale/unavailableと最終観測/age）、明示投影した`agents`、graphのMail/親子線、Mail/観測Statusのtimeline、切詰めflag、Unavailableのquotaを返します。agentは正規名・provider/model/locality・nullable running/context・retired/state/act_state・最終活動だけです。graph/agentsのunionを、両sourceの有効な最終活動とMail時刻の最大値で現在からの期間へ絞ります。未来/不明時刻を現在に置き換えず、有限期間では不明を除外し件数を示します。最近活動した退役済みは含み、runningだけで期間外を含めません。親子/Mail線は期間内端点だけです。Statusは`observed_at`とnullの`event_at`を持ち、relay開始後の最新200変化のうち期間・agent集合に該当するものを返します（超過は`states_truncated`）。文脈sampling時刻はnull。失敗時は古い値をstaleとして保持し、未取得を正常0に変えません。metadataのperiod cacheは最大4期間でpart/publishedを同時に破棄します。ブラウザは15m〜30dの対数sliderを15分単位に丸め、200ms debounceし、全履歴は明示操作だけです。PCの期間契約は変更しません。
+
+`GET /view/portrait?name=<NAME>&window=<period>`は、同期間の公開済rosterに含まれる正規名だけを受け付けます。固定loopbackの`GET /api/mobile-portrait?name=<NAME>`で既存のcase-insensitive custom map/overlay解決を試し、無効/欠落なら最長一致する同梱科学者suffixへfallbackします。私有pathやmapは返しません。PNGは512KiB・幅高1〜1024・signature/IHDRを検査し、2秒を上限にします。任意SVG/HTMLは返さず、取得/decode失敗はイニシャルへ。画像もno-store。loopback肖像APIもlegacy限定で、不正名/queryは400、画像なし/無効は404、globalは明示拒否です。
+
+API30ではmetadataに不透明な`scope`と`next_cursor`を追加します。`GET /view/mail?window=<period>&cursor=<token>`は200宛先行の次ページで、内容を含みません。Graphのpair一覧は`a=<NAME>&b=<NAME>&direction=both|forward|reverse`を同経路へ追加し、最初だけcursorを省略できます。2名は同期間の公開済みrosterに必要です。方向/pairはSQLのLIMIT前に絞ります。keysetは時刻/message id/recipient idの降順。cursorはscope/period/pair/direction/boundaryと10分期限へ結び、最大256、relayの発行済eventは最大2000です。不正・重複queryは400、未知/失効event・cursorは410、取得不能は503です。ブラウザは現在200行・最大20位置を保持し、定期pollで古いページを上書きしません。
+
+`GET /view/message?window=<period>&event=<key>`だけが、認証後の1件タップに対応する件名/本文を返します。relayの発行済metadataと、現在project・to/cc宛先・期間・eventを照合します。新しいloopback限定`/api/mobile-message`は同queryに`mode=content|revision`を受け、改訂確認でもcanonical照合を先に行います。512文字のsubject、64KiB UTF-8のbodyと切詰めflag、opaque fingerprint/revisionを内部で使い、スマホへはevent/subject/body/切詰めflagだけを返します。revisionは公開する範囲の文字列と元byte長に対するdigestで、切詰め範囲外の同じ長さの変更を識別する保証はありません。本文はliteral textのみ。read/ACK・添付・返信・操作はありません。no-store、本文のログ/永続保存なし。close/別tap/期間/画面/背景/pagehideでDOMとrequestを消し、世代番号で遅延応答を捨てます。
+
+metadata pageのloopback経路は`/api/mobile-mail-page`、固定24hの内部cache batchは`/api/mobile-cache-page?cursor=<token>`（初回cursorなし）です。後者は外部relayのroute mapには存在しません。認証済みsnapshot取得後にだけ単一workerを開始し、最大32通ずつ、実JSON応答4MiB未満、120秒のsweep予算、25ms yield、完了後60秒以上の再試行間隔で読みます。最大63非空page・2000 distinct message・32MiBのJSON論理byte量に制限し、全24hの収録が終わらない場合はpartial/unavailableです。JSON escapeで大きくなるbatchは縮小します。`mail_cache`には進捗status/messages/logical_bytes/上限/reasonだけを返し、cache辞書や本文は含めません。
+
+本文と対応metadataは一緒に24h期限/LRU/byte予算で破棄します。scope変更で全失効、tapのcache hitも現在のcanonical revisionを再照合し、失敗時は古い本文を返しません。24hはcache範囲だけで、30d/全履歴の公開済eventも単件取得でき、古い本文はcache外です。reader停止でworkerをstop/joinして全内容を消します。新loopback APIもglobalでは501で、旧DBにfallbackしません。ターミナル、成果物、quota refreshは読みません。本人認証と指定端末の制限は別で、配備時にはguideの実端末確認が必要です。

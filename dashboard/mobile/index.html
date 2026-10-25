@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en" data-color-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>ORRERY · View only</title>
+<link rel="icon" type="image/svg+xml" href="/assets/orbit.svg">
+<link rel="stylesheet" href="/network.css">
+<link rel="stylesheet" href="/mobile.css">
+<script defer src="/network_core.js"></script>
+<script defer src="/network_node.js"></script>
+<script defer src="/network_view.js"></script>
+<script defer src="/mobile.js"></script>
+</head>
+<body class="mobile">
+<header><div class="mobile-brand"><img src="/assets/orbit.svg" width="40" height="40" alt=""><strong>ORRERY</strong></div><span>View only</span></header>
+<main id="mobile-main">
+  <div class="reading-summary">
+    <span id="summary">No observations yet</span>
+    <details id="observation-notice" class="observation-note" hidden>
+      <summary><span id="health-label" role="status">Observations</span><span aria-hidden="true"> ⓘ</span></summary>
+      <div class="observation-content"><p id="health"></p><p id="snapshot-period-note"></p></div>
+    </details>
+    <time id="observed"></time>
+  </div>
+  <section id="attention" aria-label="Needs attention"></section>
+  <nav class="view-tabs" aria-label="Reading view"><button type="button" data-view="activity">Activity</button><button type="button" data-view="graph" class="active">Graph</button></nav>
+  <section id="activity" hidden>
+    <div class="activity-head"><nav aria-label="Activity filter"><button type="button" data-kind="all" class="active">All</button><button type="button" data-kind="mail">Mail</button><button type="button" data-kind="state">Status</button></nav><button type="button" class="period-trigger" data-period aria-controls="period-sheet" aria-expanded="false" aria-label="Change time range: Last 24h"><svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.7"/><path d="M8 4.5V8l2.5 1.5"/></svg><span>24h</span><i aria-hidden="true">⌄</i></button></div>
+    <button id="agent-filter" type="button" hidden></button>
+    <div id="events"><p class="empty">Waiting for observations</p></div>
+    <nav class="mail-paging" aria-label="Mail pages"><button id="mail-newer" type="button" disabled>Newer</button><span id="mail-page-label">Latest Mail</span><button id="mail-older" type="button" disabled>Older</button></nav>
+    <p id="mail-page-error" class="quiet" role="status"></p>
+    <p id="timeline-note" class="quiet"></p>
+    <p id="mail-cache-note" class="quiet"></p>
+  </section>
+  <section id="graph-panel">
+    <div class="graph-toolbar"><nav class="graph-mode" aria-label="Graph scope"><button type="button" data-mode="focus" class="active">Focus</button><button type="button" data-mode="all">All</button></nav><button id="settings-btn" type="button" aria-controls="settings" aria-expanded="false">Tune graph</button></div>
+    <label class="graph-picker"><span>Find</span><select id="agent-picker" aria-label="Find an agent"><option value="">No agents yet</option></select></label>
+    <div class="graph-meta"><span id="netinfo">Graph unavailable</span><span id="zoom-label"></span></div>
+    <div id="net"><svg id="gsvg" role="img" aria-label="Agent relationships. Pinch to zoom, drag to move."></svg><button type="button" class="period-trigger graph-period" data-period aria-controls="period-sheet" aria-expanded="false" aria-label="Change time range: Last 24h"><svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.7"/><path d="M8 4.5V8l2.5 1.5"/></svg><span>24h</span><i aria-hidden="true">⌄</i></button></div>
+    <div class="graph-tools"><span>Pinch to zoom · drag to move</span><div><button type="button" id="zoom-out" aria-label="Zoom out">−</button><button type="button" id="zoom-in" aria-label="Zoom in">+</button><button type="button" id="fit">Fit</button></div></div>
+    <div class="selected-agent"><span id="selection-label">Selected</span><strong id="selected-name">None</strong><span id="context-detail">Context unknown</span></div>
+    <details class="legend"><summary>How to read the graph</summary><p>Arrows show Mail direction. Width and arrow size follow message count, counted as to/cc recipient rows.</p><p><i class="sample context"></i> Context remaining · <i class="sample motion"></i> Working</p><p><i class="dot parent"></i> Parent <i class="dot child"></i> Child <i class="dot both"></i> Both</p><p>Parent–child lines are separate from Mail. In All, zoom in and select a node to read its name.</p></details>
+  </section>
+  <footer id="snapshot-note">Account usage unavailable. Context arcs are separate.</footer>
+</main>
+<aside id="settings" role="dialog" aria-labelledby="settings-title" aria-hidden="true" hidden>
+  <div class="st-bar"><h2 id="settings-title">Network settings</h2><button id="settings-close" type="button" aria-label="Close settings">×</button></div>
+  <p class="st-note">Display on this browser only</p>
+  <div id="nctl-rows"></div>
+  <div class="st-foot"><button type="button" id="nc-reset">Reset</button></div>
+</aside>
+<dialog id="period-sheet" aria-labelledby="period-title">
+  <div class="period-head"><h2 id="period-title">Time range</h2><button id="period-close" type="button">Done</button></div>
+  <label for="time-window" class="period-current"><output id="period-label">Last 24h</output></label>
+  <input id="time-window" type="range" min="0" max="1000" step="1" value="573" aria-label="Observation period">
+  <div class="range-stops" aria-hidden="true"><span>15 min</span><span>24h</span><span>30 days</span></div>
+  <div class="period-foot"><span>Graph and Activity</span><button id="all-history" type="button" aria-pressed="false">All history</button></div>
+</dialog>
+<dialog id="pair-sheet" class="mail-sheet" aria-labelledby="pair-title">
+  <div class="period-head"><h2 id="pair-title">Mail between agents</h2><button id="pair-close" type="button">Done</button></div>
+  <p id="pair-period" class="quiet"></p>
+  <nav id="pair-directions" aria-label="Mail direction"><button type="button" data-direction="both" aria-pressed="true">Both</button><button type="button" data-direction="forward">Forward</button><button type="button" data-direction="reverse">Reverse</button></nav>
+  <p id="pair-status" class="quiet" role="status"></p><div id="pair-events"></div>
+  <nav class="mail-paging" aria-label="Pair Mail pages"><button id="pair-newer" type="button" disabled>Newer</button><span id="pair-page-label"></span><button id="pair-older" type="button" disabled>Older</button></nav>
+</dialog>
+<dialog id="message-sheet" class="mail-sheet" aria-labelledby="message-title">
+  <div class="period-head"><h2 id="message-title">Message</h2><button id="message-close" type="button">Back</button></div>
+  <p id="message-route" class="quiet"></p><p id="message-status" class="quiet" role="status"></p>
+  <h3 id="message-subject"></h3><pre id="message-body"></pre>
+</dialog>
+</body></html>

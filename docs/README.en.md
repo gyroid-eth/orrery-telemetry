@@ -22,6 +22,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 ## Use the screen
 
 - [Dashboard](dashboard.en.md) — Reference for DECK/NETWORK, history, RESUME/EXIT, REPLAY, and details.
+- [Read from a designated phone](mobile.en.md) — The reader is off by default; owner admission, device restrictions, manual enable and disable steps.
 - [Delegation and child agents](delegation.en.md) — ORRERY /delegate, differences from native children, and tool selection.
 - [Launchers and identity](launchers.en.md) — agent-start, names, resume, /delegate and /log, and notification flow.
 - [Using Obsidian](obsidian.en.md) — Store logs, paper notes, and tasks in a vault and Daily Note.
