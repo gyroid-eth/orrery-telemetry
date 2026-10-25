@@ -16,12 +16,18 @@
 <body class="mobile">
 <header><div class="mobile-brand"><img src="/assets/orbit.svg" width="40" height="40" alt=""><strong>ORRERY</strong></div><span>View only</span></header>
 <main id="mobile-main">
-  <div class="reading-summary"><span id="summary">No observations yet</span><time id="observed"></time></div>
-  <p id="health" role="status" hidden></p>
+  <div class="reading-summary">
+    <span id="summary">No observations yet</span>
+    <details id="observation-notice" class="observation-note" hidden>
+      <summary><span id="health-label" role="status">Observations</span><span aria-hidden="true"> ⓘ</span></summary>
+      <div class="observation-content"><p id="health"></p><p id="snapshot-period-note"></p></div>
+    </details>
+    <time id="observed"></time>
+  </div>
   <section id="attention" aria-label="Needs attention"></section>
   <nav class="view-tabs" aria-label="Reading view"><button type="button" data-view="activity">Activity</button><button type="button" data-view="graph" class="active">Graph</button></nav>
   <section id="activity" hidden>
-    <div class="activity-head"><h2>Activity</h2><nav aria-label="Activity filter"><button type="button" data-kind="all" class="active">All</button><button type="button" data-kind="mail">Mail</button><button type="button" data-kind="state">Status</button></nav></div>
+    <div class="activity-head"><nav aria-label="Activity filter"><button type="button" data-kind="all" class="active">All</button><button type="button" data-kind="mail">Mail</button><button type="button" data-kind="state">Status</button></nav><button type="button" class="period-trigger" data-period aria-controls="period-sheet" aria-expanded="false" aria-label="Change time range: Last 24h"><svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.7"/><path d="M8 4.5V8l2.5 1.5"/></svg><span>24h</span><i aria-hidden="true">⌄</i></button></div>
     <button id="agent-filter" type="button" hidden></button>
     <div id="events"><p class="empty">Waiting for observations</p></div>
     <p id="timeline-note" class="quiet"></p>
@@ -30,7 +36,7 @@
     <div class="graph-toolbar"><nav class="graph-mode" aria-label="Graph scope"><button type="button" data-mode="focus" class="active">Focus</button><button type="button" data-mode="all">All</button></nav><button id="settings-btn" type="button" aria-controls="settings" aria-expanded="false">Tune graph</button></div>
     <label class="graph-picker"><span>Find</span><select id="agent-picker" aria-label="Find an agent"><option value="">No agents yet</option></select></label>
     <div class="graph-meta"><span id="netinfo">Graph unavailable</span><span id="zoom-label"></span></div>
-    <div id="net"><svg id="gsvg" role="img" aria-label="Agent relationships. Pinch to zoom, drag to move."></svg></div>
+    <div id="net"><svg id="gsvg" role="img" aria-label="Agent relationships. Pinch to zoom, drag to move."></svg><button type="button" class="period-trigger graph-period" data-period aria-controls="period-sheet" aria-expanded="false" aria-label="Change time range: Last 24h"><svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.7"/><path d="M8 4.5V8l2.5 1.5"/></svg><span>24h</span><i aria-hidden="true">⌄</i></button></div>
     <div class="graph-tools"><span>Pinch to zoom · drag to move</span><div><button type="button" id="zoom-out" aria-label="Zoom out">−</button><button type="button" id="zoom-in" aria-label="Zoom in">+</button><button type="button" id="fit">Fit</button></div></div>
     <div class="selected-agent"><span id="selection-label">Selected</span><strong id="selected-name">None</strong><span id="context-detail">Context unknown</span></div>
     <details class="legend"><summary>How to read the graph</summary><p>Arrows show Mail direction. Width and arrow size follow message count, counted as to/cc recipient rows.</p><p><i class="sample context"></i> Context remaining · <i class="sample motion"></i> Working</p><p><i class="dot parent"></i> Parent <i class="dot child"></i> Child <i class="dot both"></i> Both</p><p>Parent–child lines are separate from Mail. In All, zoom in and select a node to read its name.</p></details>
@@ -42,6 +48,12 @@
   <p class="st-note">Display on this browser only</p>
   <div id="nctl-rows"></div>
   <div class="st-foot"><button type="button" id="nc-reset">Reset</button></div>
-  <label class="time-window">Mail time window<select id="time-window"><option value="all">All time</option><option value="day">Last day</option><option value="15m">Last 15 min</option></select></label>
 </aside>
+<dialog id="period-sheet" aria-labelledby="period-title">
+  <div class="period-head"><h2 id="period-title">Time range</h2><button id="period-close" type="button">Done</button></div>
+  <label for="time-window" class="period-current"><output id="period-label">Last 24h</output></label>
+  <input id="time-window" type="range" min="0" max="1000" step="1" value="573" aria-label="Observation period">
+  <div class="range-stops" aria-hidden="true"><span>15 min</span><span>24h</span><span>30 days</span></div>
+  <div class="period-foot"><span>Graph and Activity</span><button id="all-history" type="button" aria-pressed="false">All history</button></div>
+</dialog>
 </body></html>

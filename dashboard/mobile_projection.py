@@ -5,16 +5,26 @@ import math
 import re
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from copy import deepcopy
 from typing import Callable
 
-WINDOWS = ('all', 'day', '15m')
+WINDOWS = {'all': None, 'day': 86400, '15m': 900,
+           **{'m'+str(n): n*60 for n in range(15, 43201, 15)}}
 NAME = re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,95}\Z')
 MODEL = re.compile(r'[A-Za-z0-9_.:+-]+(?:/[A-Za-z0-9_.:+-]+)?\Z')
 EVENT_KEY = re.compile(r'[a-f0-9]{32}\Z')
 STATES = {'run', 'idle', 'finished', 'gone', 'retired', 'unknown'}
 ACTS = {'work', 'wait', 'ask', 'question'}
+
+
+def png_image(data):
+    """Static PNG envelope check; actual decode may still fail to initials."""
+    return (isinstance(data,bytes) and 33<=len(data)<=512*1024 and
+            data[:8]==b'\x89PNG\r\n\x1a\n' and data[8:12]==b'\0\0\0\r' and
+            data[12:16]==b'IHDR' and
+            1<=int.from_bytes(data[16:20],'big')<=1024 and
+            1<=int.from_bytes(data[20:24],'big')<=1024)
 
 
 def number(value, *, minimum=0, maximum=10**12):
@@ -127,7 +137,7 @@ class SnapshotStore:
         self._previous = {}
         self._states = deque(maxlen=200)
         self._state_seq = 0
-        self._published = {}
+        self._published = OrderedDict()
 
     def _refresh(self, key, projector, now):
         part = self._parts.setdefault(key, {'attempted': None, 'observed': None, 'value': None, 'error': None})
@@ -164,7 +174,11 @@ class SnapshotStore:
                 'age_seconds': None if stamp is None else max(0, int(now - stamp)),
                 'error': part.get('error')}
 
-    def snapshot(self, window='all'):
+    def known_agent(self,window,nm):
+        published=self._published.get(window)
+        return bool(published and any(a['name']==nm for a in published['agents']))
+
+    def snapshot(self, window='day'):
         if window not in WINDOWS:
             raise ValueError('invalid_window')
         # Concurrent browser polls share the prior snapshot rather than create
@@ -177,6 +191,7 @@ class SnapshotStore:
             cached = self._published.get(window)
             if cached is None:
                 return {'schema':1, 'observed_at':now, 'window':window, 'refreshing':True,
+                        'period':{'seconds':WINDOWS[window],'activity_unknown':None},
                         'sources':{k:{'status':'unavailable','observed_at':None,'age_seconds':None,'error':None} for k in ('agents','graph','mail')},
                         'agents':[], 'graph':{'edges':[],'spawn':[],'degraded':False,'unrepresented_edges':0},
                         'timeline':{'mail':[],'states':[],'events_truncated':None,'edges_truncated':None,'states_truncated':False},
@@ -194,6 +209,10 @@ class SnapshotStore:
             self._refresh('mail:' + window, lambda raw: project_mail(raw, window), now)
             result = self._compose(window, now)
             self._published[window] = result
+            self._published.move_to_end(window)
+            while len(self._published)>4:
+                evicted,_=self._published.popitem(last=False)
+                self._parts.pop('mail:'+evicted,None)
             return deepcopy(result)
         finally:
             if acquired:
@@ -202,21 +221,41 @@ class SnapshotStore:
     def _compose(self, window, now):
         value = lambda key: self._parts.get(key, {}).get('value')
         graph = value('graph') or {'nodes': [], 'spawn': [], 'degraded': False}
-        roster = {a['name']: a for a in graph['nodes']}
-        roster.update({a['name']: a for a in (value('agents') or [])})
-        names = set(roster)
         mail = value('mail:' + window)
+        roster,activity={},{}
+        # Both sources obey one wall-clock cutoff. State fields prefer agents,
+        # but an absent/older timestamp cannot erase the graph observation.
+        # Running alone is not recent activity; HTTP time is not activity time.
+        for a in [*graph['nodes'],*(value('agents') or [])]:
+            roster[a['name']]=dict(a)
+            stamp=a['last_active']
+            if stamp is not None and stamp<=now:
+                activity[a['name']]=max(activity.get(a['name'],stamp),stamp)
+        if mail is not None:
+            for edge in mail['edges']:
+                stamp=edge['last_ts']
+                if stamp<=now:
+                    for endpoint in ('source','target'):
+                        nm=edge[endpoint]
+                        activity[nm]=max(activity.get(nm,stamp),stamp)
+        unknown=sum(nm not in activity for nm in roster)
+        lower=None if WINDOWS[window] is None else now-WINDOWS[window]
+        roster={nm:{**a,'last_active':activity.get(nm)} for nm,a in roster.items()
+                if lower is None or nm in activity and activity[nm]>=lower}
+        names = set(roster)
         edges = [] if mail is None else [e for e in mail['edges'] if e['source'] in names and e['target'] in names]
         spawn = [e for e in graph['spawn'] if e['source'] in names and e['target'] in names]
         sources = {key: self._source(key if key != 'mail' else 'mail:' + window, now)
                    for key in ('agents','graph','mail')}
         payload = {'schema': 1, 'observed_at': now, 'window': window, 'sources': sources,
+                   'period':{'seconds':WINDOWS[window],'activity_unknown':unknown},
                    'agents': list(roster.values()),
                    'graph': {'edges': edges, 'spawn': spawn,
                              'unrepresented_edges': 0 if mail is None else len(mail['edges']) - len(edges),
                              'degraded': graph['degraded'] or (bool(mail['degraded']) if mail else False)},
                    'timeline': {'mail': [] if mail is None else mail['events'],
-                                'states': list(self._states),
+                                'states': [s for s in self._states if s['name'] in names and
+                                           (lower is None or s['observed_at']>=lower)],
                                 'states_truncated': self._state_seq > self._states.maxlen,
                                 'events_truncated': None if mail is None else mail['events_truncated'],
                                 'edges_truncated': None if mail is None else mail['edges_truncated']},

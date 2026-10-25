@@ -16,10 +16,10 @@ from urllib.parse import parse_qs, urlsplit
 
 try:
     from dashboard import legacy_http_admission as admission
-    from dashboard.mobile_projection import SnapshotStore, WINDOWS
+    from dashboard.mobile_projection import SnapshotStore, WINDOWS, NAME, png_image
 except ModuleNotFoundError:
     import legacy_http_admission as admission
-    from mobile_projection import SnapshotStore, WINDOWS
+    from mobile_projection import SnapshotStore, WINDOWS, NAME, png_image
 
 HERE = Path(__file__).resolve().parent
 MAX_UPSTREAM_BYTES = 4 * 1024 * 1024
@@ -63,6 +63,15 @@ class Upstream:
             path = '/api/mobile-mail?window=' + key[5:]
         else:
             raise ValueError('internal_route')
+        return json.loads(self._read(path,'application/json',MAX_UPSTREAM_BYTES))
+
+    def portrait(self,name):
+        if not isinstance(name,str) or not NAME.fullmatch(name):raise ValueError('invalid_name')
+        data=self._read('/api/mobile-portrait?name='+name,'image/png',512*1024)
+        if not png_image(data):raise ValueError('portrait_format')
+        return data
+
+    def _read(self,path,mime,limit):
         con = http.client.HTTPConnection('127.0.0.1', self.port, timeout=UPSTREAM_TIMEOUT)
         timer = None
         deadline = time.monotonic() + UPSTREAM_TIMEOUT
@@ -76,18 +85,18 @@ class Upstream:
             timer.daemon = True
             timer.start()
             con.request('GET', path, headers={'Host':f'127.0.0.1:{self.port}',
-                                            'Accept':'application/json','Connection':'close'})
+                                            'Accept':mime,'Connection':'close'})
             response = con.getresponse()
-            if response.status != 200 or response.getheader('Content-Type','').split(';')[0].strip().lower() != 'application/json':
+            if response.status != 200 or response.getheader('Content-Type','').split(';')[0].strip().lower() != mime:
                 raise ValueError('upstream_unavailable')
             if response.getheader('Content-Encoding', 'identity').lower() != 'identity':
                 raise ValueError('upstream_encoding')
             length = response.getheader('Content-Length')
-            if length is not None and (not length.isdigit() or int(length)>MAX_UPSTREAM_BYTES):
+            if length is not None and (not length.isdigit() or int(length)>limit):
                 raise ValueError('upstream_size')
-            data=response.read(MAX_UPSTREAM_BYTES+1)
-            if len(data)>MAX_UPSTREAM_BYTES:raise ValueError('upstream_size')
-            return json.loads(data)
+            data=response.read(limit+1)
+            if len(data)>limit:raise ValueError('upstream_size')
+            return data
         except (http.client.HTTPException, UnicodeError) as exc:
             raise ValueError('upstream_protocol') from exc
         finally:
@@ -177,12 +186,23 @@ class Handler(BaseHTTPRequestHandler):
         parts=urlsplit(self.path)
         if parts.path=='/view/snapshot':
             query=parse_qs(parts.query,keep_blank_values=True)
-            if set(query)-{'window'} or len(query.get('window',[]))>1 or query.get('window',['all'])[0] not in WINDOWS:
+            if set(query)-{'window'} or len(query.get('window',[]))>1 or query.get('window',['day'])[0] not in WINDOWS:
                 self._send(400,{'ok':False,'error':'invalid_window'});return
             if self.command=='HEAD':self._send(200,b'');return
-            payload=self.server.mobile_store.snapshot(query.get('window',['all'])[0])
+            payload=self.server.mobile_store.snapshot(query.get('window',['day'])[0])
             unavailable=all(x['status']=='unavailable' for x in payload['sources'].values())
             self._send(503 if unavailable else 200,payload);return
+        if parts.path=='/view/portrait':
+            query=parse_qs(parts.query,keep_blank_values=True)
+            window=query.get('window',['day'])[0];nm=query.get('name',[''])[0]
+            if set(query)-{'name','window'} or any(len(v)!=1 for v in query.values()) or window not in WINDOWS or not NAME.fullmatch(nm):
+                self._send(400,{'ok':False,'error':'invalid_portrait'});return
+            if not self.server.mobile_store.known_agent(window,nm):
+                self._send(404,{'ok':False,'error':'portrait_unavailable'});return
+            if self.command=='HEAD':self._send(200,b'','image/png');return
+            try:self._send(200,Upstream(self.server.mobile_config.upstream_port).portrait(nm),'image/png')
+            except (OSError,ValueError):self._send(503,{'ok':False,'error':'portrait_unavailable'})
+            return
         if parts.query:
             self._send(404,{'ok':False,'error':'not_found'});return
         if parts.path=='/network.css':

@@ -528,7 +528,7 @@ installer は third-party 版への自動切替を行いません。必要なら
 
 ## スマホ閲覧用画面（任意）
 
-通常のinstall・更新では既定オフのままで、待受もServeも開始しません。本人の指定スマホ向けに閲覧専用の経路を用意する場合は[スマホ用の設定手順](mobile.md)へ進んでください。legacy Telemetry API 28以上を使い、global modeは未対応です。実効端末policy・実Serve・本人スマホの受入は別の運用手順です。
+通常のinstall・更新では既定オフのままで、待受もServeも開始しません。本人の指定スマホ向けに閲覧専用の経路を用意する場合は[スマホ用の設定手順](mobile.md)へ進んでください。legacy Telemetry API 29以上を使い、global modeは未対応です。実効端末policy・実Serve・本人スマホの受入は別の運用手順です。
 
 ## 関連文書
 

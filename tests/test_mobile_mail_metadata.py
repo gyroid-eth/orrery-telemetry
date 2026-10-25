@@ -131,3 +131,19 @@ def test_approved_synthetic_roster_period_counts_and_projection():
         assert unknown['running'] is None and unknown['ctx_used'] is None
         assert all_time['timeline']['states']==[] and all_time['quota']['status']=='unavailable'
     finally:con.close()
+
+
+def test_fine_period_sql_counts_and_inclusive_mixed_timestamp_boundary(mail):
+    con,now=mail
+    assert sum(e['count'] for e in graph_data.mobile_mail_metadata(con,1,'m60',now=now)['edges'])==3
+    assert sum(e['count'] for e in graph_data.mobile_mail_metadata(con,1,'m180',now=now)['edges'])==4
+    con.executemany('INSERT INTO messages VALUES(?,1,1,?,?,?)',[
+        (10,(now-3600)*1000000,'SUBJECT','BODY'),
+        (11,(now-3600)*1000000-1,'SUBJECT','BODY'),
+        (12,datetime.fromtimestamp(now-3600,timezone.utc).isoformat(),'SUBJECT','BODY')])
+    con.executemany('INSERT INTO message_recipients VALUES(?,2,\'to\',NULL,NULL)',[(10,),(11,),(12,)])
+    result=graph_data.mobile_mail_metadata(con,1,'m60',now=now)
+    assert sum(e['count'] for e in result['edges'])==5
+    assert sum(e['event_at']==now-3600 for e in result['events'])==2
+    for period in ('m0','m1','m31','m43215','m1.5','m-15','m00015'):
+        with pytest.raises(ValueError):graph_data.mobile_mail_metadata(con,1,period,now=now)

@@ -2,15 +2,17 @@
 (function(){
 'use strict';
 window.AGENTSTACK_DSH_ENABLED=true;
-window.AGENTSTACK_DEMO={assetURL:n=>'/assets/'+n+'.svg',portraitURL:s=>'/portraits/'+s+'.png'};
+window.AGENTSTACK_DEMO={assetURL:n=>'/assets/'+n+'.svg',portraitURL:n=>'/view/portrait?window='+desiredWindow+'&name='+n};
 const $=s=>document.querySelector(s),node=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e;};
-let snapshot=null,kind='all',agentFilter='',desiredWindow='all',timer=0,active=null,pending=false,receivedAt=0;
+let snapshot=null,kind='all',agentFilter='',desiredWindow='day',timer=0,active=null,pending=false,receivedAt=0,lastNotices=[];
+const minutesAt=position=>Math.max(15,Math.min(43200,Math.round(Math.exp(Math.log(15)+position/1000*Math.log(43200/15))/15)*15));
+const duration=seconds=>seconds===null?'All history':seconds<3600?'Last '+Math.round(seconds/60)+' min':seconds<=86400?'Last '+(seconds/3600).toLocaleString('en-GB',{maximumFractionDigits:2})+'h':'Last '+(seconds/86400).toLocaleString('en-GB',{maximumFractionDigits:2})+'d';
+window.OrreryMobileWindow={duration};
 const network=new window.OrreryMobileNetwork();
 const time=ts=>typeof ts==='number'?new Date(ts*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'Unknown';
 function face(a){
- const wrap=node('span','face'),sci=window.OrreryNetworkNode.scientistOf(a.name);
- if(sci){const img=node('img');img.src='/portraits/'+sci+'.png';img.alt='';img.onerror=()=>{img.remove();wrap.prepend(node('span','initials',a.name.slice(0,2)));};wrap.appendChild(img);}
- else wrap.appendChild(node('span','initials',a.name.slice(0,2)));
+ const wrap=node('span','face'),img=node('img');img.src=window.AGENTSTACK_DEMO.portraitURL(a.name);img.alt='';
+ img.onerror=()=>{img.remove();wrap.prepend(node('span','initials',a.name.slice(0,2)));};wrap.appendChild(img);
  const provider=window.OrreryNetworkNode.providerKeyFor({provider:a.provider,model:a.model,locality:a.locality});
  if(provider){const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('class','badge node');svg.setAttribute('viewBox','-10 -10 20 20');svg.setAttribute('aria-hidden','true');const badge=window.OrreryNetworkNode.providerBadge(provider,0,0,18);if(badge){svg.appendChild(badge);wrap.appendChild(svg);}}
  return wrap;
@@ -48,6 +50,22 @@ function renderActivity(){
  $('#timeline-note').textContent=notes.join(' ');
  $('#agent-filter').hidden=!agentFilter;$('#agent-filter').textContent=agentFilter+' ×';
 }
+function showNotices(notices,data,label){
+ lastNotices=notices;
+ const notice=$('#observation-notice');notice.hidden=notices.length===0;
+ if(notice.hidden)notice.open=false;
+ const sources=data?.sources,unknown=data?.period?.activity_unknown;
+ if(!label){
+  if(sources&&[sources.agents,sources.graph].some(s=>s.status==='unavailable'))label='Unavailable';
+  else if(sources?.mail.status==='unavailable')label='Mail unavailable';
+  else if(sources&&Object.values(sources).some(s=>s.status==='stale'))label='Stale';
+  else if(unknown)label=unknown+(data.period.seconds===null?' unknown':' excluded');
+  else label='Observation notes';
+ }
+ $('#health-label').textContent=label;
+ $('#health').textContent=notices.join(' ');
+ $('#snapshot-period-note').textContent=data?.period?'Snapshot period: '+duration(data.period.seconds)+'.':'No snapshot has been observed yet.';
+}
 function render(data){
  snapshot=data;receivedAt=performance.now();
  // The displayed roster is the projection's graph.nodes + agents union.
@@ -72,7 +90,8 @@ function render(data){
  if(data.timeline.edges_truncated)notices.push('Graph is limited to 10,000 Mail links. Period counts are incomplete.');
  else if(data.graph.degraded)notices.push('Some graph metadata could not be read.');
  if(rosterObserved&&data.graph.unrepresented_edges)notices.push('Some Mail endpoints are outside the current roster.');
- const health=$('#health');health.hidden=notices.length===0;health.textContent=notices.join(' ');
+ if(data.period?.activity_unknown){const n=data.period.activity_unknown;notices.push(n+(n===1?' agent has an unknown activity time':' agents have unknown activity times')+(data.period.seconds===null?'.':n===1?' and is excluded from this period.':' and are excluded from this period.'));}
+ showNotices(notices,data);
  const attention=$('#attention');attention.replaceChildren();
  const needs=data.agents.filter(a=>['ask','question'].includes(a.act_state)||a.state==='unknown');
  for(const a of needs.slice(0,3)){
@@ -95,7 +114,7 @@ function markStale(message){
   }
   render(retained);
  }
- $('#health').hidden=false;$('#health').textContent=message;
+ showNotices([message,...(snapshot?lastNotices:[])],snapshot,message.includes('unavailable')?'Unavailable':'Stale');
 }
 async function poll(){
  if(document.hidden)return;
@@ -109,7 +128,7 @@ async function poll(){
   if(data.schema!==1)throw Error('unavailable');
   render(data);
  }catch(_){
-  markStale('Observations unavailable. The last snapshot is retained.');
+  if(windowAtStart===desiredWindow)markStale('Observations unavailable. The last snapshot is retained.');
  }finally{
   clearTimeout(timeout);active=null;clearTimeout(timer);
   if(!document.hidden){const soon=pending;pending=false;timer=setTimeout(poll,soon?0:10000);}
@@ -124,8 +143,52 @@ function settings(open){
  if(open){previousFocus=document.activeElement;$('#settings-close').focus();}else previousFocus?.focus();
 }
 $('#settings-btn').onclick=()=>settings($('#settings').hidden);$('#settings-close').onclick=()=>settings(false);
-document.addEventListener('keydown',e=>{if(e.key==='Escape')settings(false);});
-$('#time-window').onchange=e=>{desiredWindow=e.target.value;clearTimeout(timer);poll();};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#settings').hidden)settings(false);});
+let periodTimer=0;
+const range=$('#time-window');
+const periodSheet=$('#period-sheet'),periodButtons=[...document.querySelectorAll('[data-period]')];
+let periodFocus=null;
+function openPeriod(){
+ if(!$('#settings').hidden)settings(false);
+ periodFocus=document.activeElement;
+ periodSheet.showModal();document.documentElement.classList.add('period-open');
+ periodButtons.forEach(b=>b.setAttribute('aria-expanded','true'));
+ (range.disabled?$('#period-close'):range).focus({preventScroll:true});
+}
+periodButtons.forEach(b=>b.onclick=openPeriod);
+$('#period-close').onclick=()=>periodSheet.close();
+periodSheet.addEventListener('keydown',e=>{
+ if(e.key!=='Tab')return;
+ const stops=[...periodSheet.querySelectorAll('button,input')].filter(x=>!x.disabled),first=stops[0],last=stops[stops.length-1];
+ if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+ else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+});
+periodSheet.addEventListener('click',e=>{
+ const r=periodSheet.getBoundingClientRect();
+ if(e.target===periodSheet&&(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom))periodSheet.close();
+});
+periodSheet.addEventListener('close',()=>{
+ document.documentElement.classList.remove('period-open');
+ periodButtons.forEach(b=>b.setAttribute('aria-expanded','false'));
+ if(periodFocus?.isConnected)periodFocus.focus({preventScroll:true});
+});
+function periodLabel(text){
+ $('#period-label').textContent=text;
+ periodButtons.forEach(b=>{b.querySelector('span').textContent=text.replace('Last ','').replace(' min','m');b.setAttribute('aria-label','Change time range: '+text);});
+}
+range.value=Math.round(Math.log(1440/15)/Math.log(43200/15)*1000);
+range.setAttribute('aria-valuetext',duration(86400));
+function choosePeriod(all){
+ const minutes=minutesAt(Number(range.value));
+ desiredWindow=all?'all':minutes===1440?'day':'m'+minutes;
+ range.disabled=all;$('#all-history').setAttribute('aria-pressed',String(all));
+ periodLabel(duration(all?null:minutes*60));
+ range.setAttribute('aria-valuetext',duration(minutes*60));
+ clearTimeout(periodTimer);clearTimeout(timer);
+ periodTimer=setTimeout(poll,200);
+}
+range.oninput=()=>choosePeriod(false);
+$('#all-history').onclick=()=>choosePeriod(desiredWindow!=='all');
 document.addEventListener('visibilitychange',()=>{
  clearTimeout(timer);if(document.hidden){active?.abort();network.pause();}else{poll();network.run();}
 });

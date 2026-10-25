@@ -522,7 +522,7 @@ The installer does not automatically switch back to the third-party version. If 
 
 ## Optional mobile reader
 
-Normal installation and updates leave the mobile reader off and do not start a listener or Serve. To configure a dedicated, view-only route for the owner’s designated phone, follow [mobile setup](mobile.en.md). It uses legacy Telemetry API 28 or later; global mode is unsupported. Device policy, real Serve and phone acceptance are separate operator steps.
+Normal installation and updates leave the mobile reader off and do not start a listener or Serve. To configure a dedicated, view-only route for the owner’s designated phone, follow [mobile setup](mobile.en.md). It uses legacy Telemetry API 29 or later; global mode is unsupported. Device policy, real Serve and phone acceptance are separate operator steps.
 
 ## Related documentation
 

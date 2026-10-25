@@ -262,7 +262,10 @@ def mobile_mail_metadata(
     window. The bounded timeline is separate from those complete aggregates.
     Same-second rows sort by message id then recipient id, both descending.
     """
-    windows = {'all': None, 'day': 86400, '15m': 900}
+    try:
+        from dashboard.mobile_projection import WINDOWS as windows
+    except ModuleNotFoundError:
+        from mobile_projection import WINDOWS as windows
     if window not in windows or not 1 <= event_limit <= 200:
         raise ValueError('invalid mobile Mail window or limit')
     checked = int(time.time() if now is None else now)

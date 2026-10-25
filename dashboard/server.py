@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 28
+API_GENERATION = 29
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -512,6 +512,31 @@ def _custom_portrait_map() -> dict:
 
 
 PORTRAITS = _portrait_set()
+
+
+def mobile_portrait_payload(name: str) -> tuple[int,bytes,str]:
+    """Named PC resolver, then science suffix; no map/path is returned."""
+    try:
+        from dashboard.mobile_projection import NAME,png_image
+    except ModuleNotFoundError:
+        from mobile_projection import NAME,png_image
+    if not isinstance(name,str) or not NAME.fullmatch(name):
+        return 400,b'portrait unavailable','text/plain'
+    if GLOBAL_MODE:
+        return 501,b'portrait unavailable','text/plain'
+    candidates=[_portrait_file(name,False)]
+    # The bundled scientific names give the same longest suffix ordering as
+    # PC scientistOf. Custom resolution is always attempted before this path.
+    for scientist in sorted(_png_names(PORT_64),key=lambda s:(-len(s),s)):
+        if name.lower().endswith(scientist.lower()):
+            candidates.append(_portrait_file(scientist,False));break
+    for file in dict.fromkeys(candidates):
+        if not file or os.path.islink(file):continue
+        try:
+            with open(file,'rb') as source:data=source.read(512*1024+1)
+        except OSError:continue
+        if png_image(data):return 200,data,'image/png'
+    return 404,b'portrait unavailable','text/plain'
 
 # tmux フォーマットのフィールド区切り。制御文字 US(0x1f) はペインタイトルに出ない。
 SEP = "\x1f"
@@ -2029,7 +2054,10 @@ def mobile_mail_payload(window: str) -> tuple[int, dict]:
     """Metadata for the opt-in reader; never fallback from global to legacy DB."""
     if GLOBAL_MODE:
         return 501, {'status': 'unavailable', 'error': 'mobile_global_unsupported'}
-    if window not in {'all', 'day', '15m'}:
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    from mobile_projection import WINDOWS
+    if window not in WINDOWS:
         return 400, {'status': 'unavailable', 'error': 'invalid_window'}
     if not DB_PATH or not os.path.isfile(DB_PATH):
         return 503, {'status': 'unavailable', 'error': 'mail_unavailable'}
@@ -9488,7 +9516,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
-        if path == "/api/mobile-mail" and GLOBAL_MODE:
+        if path in {"/api/mobile-mail","/api/mobile-portrait"} and GLOBAL_MODE:
             self._send(501, b'{"status":"unavailable","error":"mobile_global_unsupported"}', "application/json; charset=utf-8")
             return
         if GLOBAL_MODE and not is_public_static(path):
@@ -9530,6 +9558,15 @@ class Handler(BaseHTTPRequestHandler):
             # is added or changes meaning; record it in a changelog.d fragment.
             # Managed this way from 2 on; every earlier release reported 1.
             self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": API_GENERATION}).encode(), "application/json; charset=utf-8")
+        elif path == "/api/mobile-portrait":
+            import ipaddress
+            if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                self._send(403,b'portrait unavailable','text/plain');return
+            query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+            if set(query)!={'name'} or len(query['name'])!=1:
+                self._send(400,b'portrait unavailable','text/plain');return
+            status,body,mime=mobile_portrait_payload(query['name'][0])
+            self._send(status,body,mime)
         elif path == "/api/mobile-mail":
             import ipaddress
             if not ipaddress.ip_address(self.client_address[0]).is_loopback:
@@ -9539,7 +9576,7 @@ class Handler(BaseHTTPRequestHandler):
             if set(q) - {"window"} or len(q.get("window", [])) > 1:
                 status, payload = 400, {"status": "unavailable", "error": "invalid_window"}
             else:
-                status, payload = mobile_mail_payload(q.get("window", ["all"])[0])
+                status, payload = mobile_mail_payload(q.get("window", ["day"])[0])
             self._send(status, json.dumps(payload).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:

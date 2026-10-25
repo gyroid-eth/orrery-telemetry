@@ -71,7 +71,13 @@ class NetworkView{
   this.elements=core.buildElements(this.svg,this.map,this.edges,this.spawn,{
    widthMultiplier:this.params.LWMUL,
    render:(name,g)=>{
-    const node=window.OrreryNetworkNode.render(name,g,{selected:name===this.selected});
+    const node=window.OrreryNetworkNode.render(name,g,{selected:name===this.selected,avatar:n=>n});
+    // The mobile PNG endpoint already resolves custom/science fallback. Use
+    // initials on decode failure instead of retrying the PC hi-resolution URL.
+    const original=node.querySelector('.pimg');
+    if(original){const img=original.cloneNode(true);original.replaceWith(img);img.addEventListener('error',()=>{
+     img.remove();const text=document.createElementNS('http://www.w3.org/2000/svg','text');text.setAttribute('text-anchor','middle');text.setAttribute('dominant-baseline','central');text.setAttribute('class','portrait-initials');text.textContent=name.slice(0,2);node.appendChild(text);
+    });}
     node.dataset.name=name;return node;
    },
    onEdgeClick:e=>{
@@ -80,7 +86,7 @@ class NetworkView{
     const count=this.edges.filter(x=>(x.source===a&&x.target===b)||(x.source===b&&x.target===a)).reduce((sum,x)=>sum+x.count,0);
     document.getElementById('selection-label').textContent='Mail pair';
     document.getElementById('selected-name').textContent=a+' ↔ '+b;
-    document.getElementById('context-detail').textContent=count+' recipient rows · '+this.snapshot.window;
+    document.getElementById('context-detail').textContent=count+' recipient rows · '+window.OrreryMobileWindow.duration(this.snapshot.period.seconds);
    },events:{}
   });
   core.paint(this.map,this.elements,this.params.NSIZE);

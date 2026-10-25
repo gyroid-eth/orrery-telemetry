@@ -5,11 +5,14 @@ from dashboard.mobile_projection import SnapshotStore, project_agents, project_m
 
 def inputs():
     agent = {'name': 'Alpha', 'provider': 'openai', 'model': 'gpt-fixture',
+             'last_active':90,
              'running': True, 'state': 'run', 'act_state': 'work', 'ctx_used': 20,
              'task': 'PRIVATE-TASK', 'live': 'PRIVATE-PANE', 'transcript_path': '/private/file',
              'annot': {'role': 'PRIVATE-ROLE'}, 'provider_stall': {'error': 'PRIVATE-ERROR'}}
     return {'agents': {'agents': [agent]},
             'graph': {'nodes': [agent], 'spawn': [], 'edges': [{'kind':'bcc','source':'Alpha','target':'Secret','count':10}]},
+            'mail:day': {'status':'available','window':'day','edges':[], 'events':[],
+                         'events_truncated':False,'edges_truncated':False,'degraded':False},
             'mail:all': {'status':'available','window':'all','edges':[], 'events':[],
                          'events_truncated':False,'edges_truncated':False,'degraded':False}}
 
@@ -117,3 +120,44 @@ def test_observed_state_history_has_explicit_rolling_limit():
     assert len(result['timeline']['states'])==200
     assert result['timeline']['states_truncated'] is True
     assert result['timeline']['states'][0]['key']=='state-201'
+
+
+def test_default_wall_clock_period_filters_union_before_phone_payload():
+    now=1792915200
+    def agent(name,stamp,**extra):
+        return {'name':name,'last_active':stamp,'running':False,**extra}
+    roster=[agent('RecentRetired',now-5,retired=True),
+            agent('Boundary',now-86400),agent('OldRunning',now-86401,running=True),
+            agent('Unknown',None),agent('Future',now+1),agent('ByMail',None),
+            agent('Rescued',now-3)]
+    roster += [agent('Old'+str(i),now-100000) for i in range(3000)]
+    def fetch(key):
+        if key=='graph':return {'nodes':roster,'spawn':[{'source':'OldRunning','target':'Boundary'}]}
+        if key=='agents':return {'agents':[agent('Rescued',None),agent('UnionOld',now-100000)]}
+        return {'status':'available','window':key[5:],
+                'edges':[{'source':'ByMail','target':'Boundary','kind':'to','count':3,'last_ts':now-2}],
+                'events':[],'events_truncated':False,'edges_truncated':False,'degraded':False}
+    store=SnapshotStore(fetch,clock=lambda:now)
+    result=store.snapshot()
+    assert result['window']=='day'
+    assert {a['name'] for a in result['agents']}=={'RecentRetired','Boundary','ByMail','Rescued'}
+    assert result['graph']['spawn']==[] and len(result['graph']['edges'])==1
+    assert result['period']['seconds']==86400 and result['period']['activity_unknown']==2
+    assert next(a for a in result['agents'] if a['name']=='RecentRetired')['retired'] is True
+    assert next(a for a in result['agents'] if a['name']=='Rescued')['last_active']==now-3
+    assert len(store.snapshot('all')['agents'])==3008
+    assert 'OldRunning' not in {a['name'] for a in store.snapshot('m60')['agents']}
+
+
+def test_many_slider_periods_have_a_bounded_coherent_snapshot_cache():
+    def fetch(key):
+        if key=='agents':return {'agents':[]}
+        if key=='graph':return {'nodes':[],'spawn':[]}
+        return {'status':'available','window':key[5:],'edges':[],'events':[],
+                'events_truncated':False,'edges_truncated':False,'degraded':False}
+    store=SnapshotStore(fetch,clock=lambda:1792915200)
+    for minutes in range(15,1501,15):
+        result=store.snapshot('m'+str(minutes))
+        assert result['period']['seconds']==minutes*60
+        assert len(store._published)<=4 and len(store._parts)<=6
+    assert store.snapshot('m15')['sources']['mail']['status']=='available'

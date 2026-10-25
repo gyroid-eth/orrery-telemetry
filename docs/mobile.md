@@ -4,19 +4,23 @@
 
 [README](../README.md) · [インストール](install.md)
 
-スマホ用の閲覧画面です。英語・dark表示で、要確認のagent、Mailの時間軸、NETWORKを見られます。**既定はオフ**です。通常のinstallや更新では待受もTailscale Serveも開始しません。初版の接続先は同じコンピューターのlegacy Telemetry（API 28以上）です。global modeには未対応です。
+スマホ用の閲覧画面です。英語・dark表示で、要確認のagent、Mailの時間軸、NETWORKを見られます。**既定はオフ**です。通常のinstallや更新では待受もTailscale Serveも開始しません。同じコンピューターのlegacy Telemetry（API 29以上）へ接続します。global modeには未対応です。
 
 ## 画面で分かること
 
 - **Activity**: 差出人、宛先、時刻、To/Cc。件名・本文・task・private pathは送りません。Statusは、このreaderを起動した後に観測した変化です。実際に変化した時刻とは区別します。
-- **Graph**: Focusは選択したagentと関連の強い最大5体、Allは取得できた全体。Findで名前を選び、ピンチで拡大、ドラッグで移動、Fitで収めます。大きなgraphで全名前を同時に読めることは保証しません。
+- **Graph**: 既定は直近24時間に活動が確認されたagentです。Focusはその中の選択agentと関連の強い最大5体、Allは選択期間内の全体です。Findで名前を選び、ピンチで拡大、ドラッグで移動、Fitで収めます。大きなgraphで全名前を同時に読めることは保証しません。
 - 線の太さと矢印の大きさは選択期間のMail件数に対応します。件数は方向・To/Ccごとの**宛先行数**で、未読数や一意の送信数ではありません。親子の破線はMailとは別です。
 - 文脈残量弧とWorkingの動きはPCと共通です。文脈の取得時刻は不明なまま扱い、未知値には弧を描きません。アカウント利用枠はUnavailableで、更新要求もしません。
 - **Tune graph**の6設定はこのブラウザ内の表示調整だけです。agentの起動・停止・返信・ターミナル操作はありません。Activityの絞込も閲覧だけです。
 
 前面では約10秒ごとに取得し、背景ではpollを止めます。取得に失敗した値は「Last known」として残し、失敗を正常な0件や待機状態には変えません。SnapshotはHTTPで観測した時刻です。Mailは選択期間の最新200宛先行まで、graphは最大10,000集約リンクまでで、切詰めは画面に明示します。ブラウザに保存するのは6つの表示設定だけで、観測データのoffline保存やservice workerはありません。
 
-Mail time windowはMailのイベントと件数だけを絞り、rosterや観測Status履歴は絞りません。Statusはreader開始後の最新200変化まで保持し、切詰めを明示します。
+Graph下端、またはActivityの絞込ボタン横の小さな期間表示から**Time range**を開きます。スライダーは15分〜30日を15分刻みで調整できます。初期値は24時間で、全履歴は別の**All history**を押した場合だけ表示します。GraphのAllとは別です。最後の入力から約200ms後に適用します。期間はagentの活動、Mailのイベントと件数、Statusの観測時刻に適用します。Statusはreader開始後の最新200変化まで保持し、その中から選択期間・表示agentに該当するものを表示します。
+
+活動時刻は名簿の最終活動とMailの時刻を使います。直近に活動した退役済みagentも含み、起動中という理由だけで古い活動を現在扱いにはしません。時刻不明のagentは有限期間から除外して件数を表示し、All historyでは含めます。取得・投影には上限があり、ホスト側の大きな全履歴取得が必ず時間内に終わることは保証しません。
+
+専用アイコンは表示対象のagent名からPCの既存設定を使って解決し、科学者の肖像、イニシャルの順に補います。画像の対応表や私有パスはスマホへ送りません。PNG画像にも本人認証を適用し、取得・読込に失敗した場合はイニシャルを表示します。
 
 ## 公開前に、本人とスマホを別々に制限する
 
@@ -38,7 +42,7 @@ Mail time windowはMailのイベントと件数だけを絞り、rosterや観測
 
 ## 手動で有効にする
 
-1. TelemetryをAPI 28以上に更新し、同じコンピューターの通常画面で観測できることを確認します。既存のサービス・provider設定はそのまま使います。
+1. TelemetryをAPI 29以上に更新し、同じコンピューターの通常画面で観測できることを確認します。既存のサービス・provider設定はそのまま使います。
 2. 指定スマホの実効policyを確認します。`tailscale serve status --json`で現在の設定を保存し、例のHTTPS `9443`が未使用でFunnelにもなっていないことを確認します。既存設定があるポートには重ねません。
 3. 下の設定確認を行います。`owner@example.com`は本人の正確なServe login、`computer.example.ts.net`はこのコンピューターの実際のServe名です。URLは末尾の`/`なしで指定します。custom install先ではscriptのpathも置き換えてください。Pythonは3.11以上が必要です。
 
@@ -84,4 +88,4 @@ tailscale serve --https=9443 off
 
 上の例以外のflagを付けた場合は、[元と同じflagでoff](https://tailscale.com/docs/reference/tailscale-cli/serve)を実行してください。`serve reset`は他の設定も消すため使いません。現在のServe設定を保存しておいた内容と比較し、この手順で追加した専用設定だけが消えたことを確認します。policyを戻す必要がある場合も今回の変更部分だけを管理者が戻し、無関係な許可を上書きしません。reader停止でメモリ内のsnapshotと観測Status履歴は消えます。通常のTelemetryとMailは停止しません。
 
-認証・経路・取得fieldの詳細は[API](api.md#スマホ閲覧用api-28)を参照してください。
+認証・経路・取得fieldの詳細は[API](api.md#スマホ閲覧用api-29)を参照してください。

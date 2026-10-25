@@ -4,19 +4,23 @@
 
 [README](../README.en.md) · [Installation](install.en.md)
 
-The mobile reader shows agents needing attention, a Mail timeline and NETWORK in English with a dark theme. **It is off by default.** Normal installation and updates start neither a listener nor Tailscale Serve. The first version reads legacy Telemetry on the same computer, using API 28 or later. Global mode is not supported.
+The mobile reader shows agents needing attention, a Mail timeline and NETWORK in English with a dark theme. **It is off by default.** Normal installation and updates start neither a listener nor Tailscale Serve. It reads legacy Telemetry on the same computer, using API 29 or later. Global mode is not supported.
 
 ## Reading the screen
 
 - **Activity** shows sender, recipient, time and To/Cc. Subjects, bodies, tasks and private paths are excluded. Status records changes observed after this reader starts, rather than claiming to know when each change actually happened.
-- **Graph** offers Focus (the selected agent and up to five strongest peers) and All (the available roster). Use Find, pinch to zoom, drag to pan, and Fit. Large graphs do not guarantee that every name is readable at once.
+- **Graph** defaults to agents with observed activity in the last 24 hours. Focus shows the selected agent and up to five strongest peers within that period; All shows every agent in that period. Use Find, pinch to zoom, drag to pan, and Fit. Large graphs do not guarantee that every name is readable at once.
 - Line width and arrow size follow Mail counts in the selected period. Counts are **recipient rows** by direction and To/Cc, rather than unread counts or unique sent messages. Dashed parent–child lines are separate from Mail.
 - Context arcs and working motion use the PC renderer. Unknown context has no arc, and its sampling time remains unknown. Account usage is Unavailable; this reader never refreshes it.
 - The six **Tune graph** controls adjust this browser's display only. Filtering Activity also changes only the view. There are no launch, stop, reply or terminal controls.
 
 The reader polls about every ten seconds in the foreground and stops polling in the background. Failed observations retain the last known values, visibly marked as such; failure is never a healthy zero or a waiting agent. Snapshot time is the HTTP observation time. Mail shows at most the latest 200 recipient events; graph aggregation has a separate 10,000-link limit. Truncation is shown explicitly. Only six display settings are saved in the browser: no offline snapshot storage or service worker is used.
 
-The Mail time window filters Mail events and counts only, not the roster or observed status history. Status retains the latest 200 changes after reader start, with an explicit truncation notice.
+The small time control at the bottom of Graph, or beside Activity's filters, opens **Time range**. Its slider covers 15 minutes to 30 days in 15-minute increments. It starts at 24 hours; **All history** is a separate explicit choice, distinct from Graph's All mode. Changes apply about 200ms after the last input. The period filters agent activity, Mail events and counts, and the observation time of Status changes. Status retains the latest 200 changes after reader start, then shows those matching the period and displayed agents.
+
+Activity uses canonical last-active and Mail timestamps. Recently active retired agents remain included; merely running does not turn old activity into current activity. Agents with unknown activity times are excluded from finite periods with an explicit count, and included in All history. Observation and projection have limits; the host's large all-history reads are not guaranteed to finish within the deadline.
+
+Special agent icons use the PC's existing portrait configuration, with a scientific portrait and then initials as fallbacks. The private map and file paths are never sent to the phone. Portraits require the same owner authentication, accept bounded PNG images, and fall back to initials on fetch or decode failure.
 
 ## Restrict the account and the phone separately
 
@@ -38,7 +42,7 @@ Use **Tailscale Serve inside your tailnet**, with neither Funnel nor direct shar
 
 ## Enable manually
 
-1. Update Telemetry to API 28 or later and confirm that its normal local dashboard has observations. Keep the existing services and provider configuration.
+1. Update Telemetry to API 29 or later and confirm that its normal local dashboard has observations. Keep the existing services and provider configuration.
 2. Check the phone's effective policy. Save the current `tailscale serve status --json` output and confirm that the example HTTPS port `9443` is unused and is not a Funnel listener. Do not reuse a port with existing configuration.
 3. Check the options below. Replace `owner@example.com` with the exact Serve login and `computer.example.ts.net` with this computer's actual Serve name. Omit a trailing slash from the origin. Replace the script path for a custom installation. Python 3.11 or later is required.
 
@@ -84,4 +88,4 @@ tailscale serve --https=9443 off
 
 If you used additional flags, [repeat the original flags with off](https://tailscale.com/docs/reference/tailscale-cli/serve). Do not use `serve reset`, which removes unrelated entries. Compare the remaining Serve configuration with the saved output and confirm that only the dedicated entry was removed. If a policy rollback is needed, have the administrator revert only this change. Stopping the reader clears its in-memory snapshot and observed status history; it does not stop Telemetry or Mail.
 
-See the [API contract](api.en.md#mobile-reader-api-28) for authentication, routes and projected fields.
+See the [API contract](api.en.md#mobile-reader-api-29) for authentication, routes and projected fields.

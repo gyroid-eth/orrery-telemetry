@@ -47,7 +47,7 @@ def request(port,path='/view/snapshot',method='GET',headers=None):
 def test_owner_and_outer_authority_accept_originless_get_and_assets(reader):
     port,store=reader
     status,headers,_=request(port)
-    assert status==200 and store.calls==['all']
+    assert status==200 and store.calls==['day']
     assert headers['Cache-Control']=='no-store'
     assert "connect-src 'self'" in headers['Content-Security-Policy']
     status,_,body=request(port,'/network_node.js')
@@ -59,6 +59,15 @@ def test_owner_and_outer_authority_accept_originless_get_and_assets(reader):
         assert status==200 and headers['Content-Type']=='font/woff2' and body[:4]==b'wOF2'
         assert request(port,'/fonts/'+font+'.woff2',headers={'Host':'viewer.example.ts.net:9443'})[0]==403
     assert request(port,'/network_node.js',method='HEAD')[0]==200
+
+
+def test_mobile_default_is_one_day_and_fine_window_is_allowlisted(reader):
+    port,store=reader
+    assert request(port)[0]==200 and store.calls==['day']
+    assert request(port,'/view/snapshot?window=m120')[0]==200
+    assert store.calls[-1]=='m120'
+    for window in ('m31','m00015','m43215'):
+        assert request(port,'/view/snapshot?window='+window)[0]==400
 
 
 def test_every_fixed_logo_is_authenticated_svg_and_matches_canonical_bytes(reader):
@@ -112,6 +121,7 @@ def test_duplicate_headers_fail_closed(reader,field):
     ('/fonts/../index.html',404),('/%2e%2e/index.html',403),
     ('http://elsewhere.test/view/snapshot',403),('//elsewhere.test/',403),
     ('/network_node.js?any=value',404),
+    ('/view/message?event='+'a'*32,404),('/view/mail',404),('/api/mobile-cache-page',404),
 ])
 def test_fixed_routes_and_query(reader,path,status):
     port,store=reader
@@ -179,3 +189,47 @@ def test_trickling_upstream_cannot_extend_total_deadline(monkeypatch):
                 relay.Upstream(port)('agents')
             assert time.monotonic()-start<1
     finally:stop.set()
+
+
+def test_named_portrait_requires_owner_and_published_period_roster(reader,monkeypatch):
+    from test_portraits import _fixture_png
+    port,store=reader;calls=[];png=_fixture_png()
+    store.known_agent=lambda window,name:window=='day' and name=='FixtureBot'
+    def portrait(self,name):calls.append(name);return png
+    monkeypatch.setattr(relay.Upstream,'portrait',portrait,raising=False)
+    status,headers,body=request(port,'/view/portrait?name=FixtureBot')
+    assert status==200 and body==png and headers['Content-Type']=='image/png'
+    assert headers['Cache-Control']=='no-store' and calls==['FixtureBot']
+    for path,status in [('/view/portrait?name=UnknownFixture',404),('/view/portrait?name=../bad',400),
+                        ('/view/portrait?name=FixtureBot&window=m31',400),
+                        ('/view/portrait?name=FixtureBot&name=Other',400)]:
+        assert request(port,path)[0]==status
+    assert request(port,'/view/portrait?name=FixtureBot',headers={'Host':'viewer.example.ts.net:9443'})[0]==403
+    assert calls==['FixtureBot']
+
+
+def test_portrait_upstream_is_fixed_png_bounded_without_redirect_or_identity_headers():
+    from test_portraits import _fixture_png
+    png=_fixture_png();seen=[];mode=['png']
+    class Backend(BaseHTTPRequestHandler):
+        def log_message(self,*args):pass
+        def do_GET(self):
+            seen.append((self.path,dict(self.headers)))
+            self.send_response(302 if mode[0]=='redirect' else 200)
+            self.send_header('Content-Type','image/svg+xml' if mode[0]=='svg' else 'image/png')
+            if mode[0]=='redirect':self.send_header('Location','http://elsewhere.test/')
+            if mode[0]=='huge':self.send_header('Content-Length','524289')
+            self.end_headers()
+            if mode[0]!='huge':self.wfile.write(png if mode[0]!='invalid' else b'not a PNG')
+    with serving(ThreadingHTTPServer(('127.0.0.1',0),Backend)) as port:
+        upstream=relay.Upstream(port)
+        assert upstream.portrait('FixtureBot')==png
+        assert seen[0][0]=='/api/mobile-portrait?name=FixtureBot'
+        assert seen[0][1]['Host']==f'127.0.0.1:{port}'
+        assert 'Tailscale-User-Login' not in seen[0][1] and 'Origin' not in seen[0][1]
+        for case in ('redirect','svg','huge','invalid'):
+            mode[0]=case
+            with pytest.raises(ValueError):upstream.portrait('FixtureBot')
+        for name in ('../bad','http://elsewhere/','a%2fb'):
+            with pytest.raises(ValueError):upstream.portrait(name)
+        assert len(seen)==5
