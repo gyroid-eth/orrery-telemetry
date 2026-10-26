@@ -12,7 +12,7 @@ Telemetryを動かしているコンピューターのClaude CodeやCodexのagen
 
 > docs/mobile.md を読んで、私のスマホ用にmobile readerを設定して。コマンドは自分で実行し、「本人」の段では止まって、私がやることを具体的に教えて。
 
-**本人**と書いた段はTailscaleの管理画面かスマホ自体の操作が要るため、agentにはできません。それ以外はagentが進められます。
+**本人**と書いた段では、Tailscaleの管理画面やスマホ自体を操作します。それ以外はagentが進められます。Terminalも使いたい場合は、閲覧設定の後に[別の有効化手順](#スマホからpaneを確認して送る)を続けます。
 
 | 段 | 誰が | 何をする |
 |---|---|---|
@@ -20,10 +20,10 @@ Telemetryを動かしているコンピューターのClaude CodeやCodexのagen
 | 2 | **本人** | スマホにTailscaleを入れ、コンピューターと同じアカウントでログインする |
 | 3 | agent | 値を調べる。コンピューターのServe名とIPは`tailscale status --json`の`Self.DNSName`（末尾の`.`は除く）と`Self.TailscaleIPs[0]`、本人のloginは`User[Self.UserID].LoginName`、スマホのIPは`tailscale status`。`tailscale whois <スマホのIP>`でスマホがそのloginのものか確かめる |
 | 4 | **本人** | 管理画面のDNSで、MagicDNSとHTTPS Certificatesが無効なら有効にする。それまでは`tailscale status --json`の`CertDomains`が空になる |
-| 5 | **本人** | 管理画面のAccess controlsで、次節のスマホ専用のgrantを足し、このポートを含む広い許可を狭める。これをしないと、同じアカウントの全端末から開ける |
+| 5 | **本人** | アクセスを許す範囲を確認する。操作に使う自分の端末だけへの制限を推奨（スマホ・タブレット複数可）。採用する場合は、次節のgrantと既存の広い許可を管理画面で整理する |
 | 6 | agent | [手動で有効にする](#手動で有効にする)の2〜5を実行する |
 | 7 | **本人** | スマホで`https://<Serve名>:9443/`を開く。最初のHTTPSは証明書の発行で数秒かかることがある |
-| 8 | agent＋**本人** | 同じアカウントの別端末から開けないことを確かめる（[実スマホで確認してから使う](#実スマホで確認してから使う)） |
+| 8 | agent＋**本人** | 使いたい各端末で表示を確認し、端末制限を採用した場合は除外した端末が拒否されることも確かめる（[実スマホで確認してから使う](#実スマホで確認してから使う)） |
 
 macOSで`tailscale`がPATHに無いときは、CLIは通常`/Applications/Tailscale.app/Contents/MacOS/Tailscale`です。readerは前面で動きます。ターミナルを閉じても残したい場合は、OSのサービス管理か`nohup`で動かしてください。Telemetryはreaderの常駐サービスを入れません。
 
@@ -57,12 +57,14 @@ Graph下端、またはActivityの絞込ボタン横の小さな期間表示か�
 
 この機能は**tailnet内のTailscale Serve専用**です。Funnelやfull dashboard/cockpitの公開には使いません。relayは`127.0.0.1`だけで待ち受け、外側のHTTPS Hostと本人の`Tailscale-User-Login`を照合します。[Serveは受信したidentity headerを除去して本人情報を付与します](https://tailscale.com/docs/features/tailscale-serve)。同じコンピューター内の別processはこのheaderを偽装できるため、信頼できないlocal processから守る仕組みではありません。
 
-**本人アカウントの一致だけではスマホ限定になりません。** tailnet管理者が、指定スマホのTailscale IPから専用HTTPSポートへの接続だけを許す実効policyを先に用意します。既存policyへ追加する形の例です。placeholderは実際の値に置き換え、policy全体をこの例で上書きしないでください。
+**本人アカウントの一致だけでは端末を限定できません。** 操作に使う自分の端末だけを許可することを推奨します。スマホ・タブレットを複数使って構いません。同じアカウントの常時稼働・外部公開サーバーまで許可すると、そのサーバーからもターミナルに到達でき、侵害時の影響が広がるため、アクセス対象から除くことを強く推奨します。これは推奨設定で、製品に単一端末の強制やpolicy自動検証はありません。
+
+この推奨を採用する場合は、管理者が操作用端末のTailscale IPから専用HTTPSポートだけを許可します。以下は既存policyへ組み込む例です。使わない端末は`src`から除き、placeholderを実際の値に置き換えます。policy全体をこの例で上書きしないでください。
 
 ```json
 {
   "grants": [{
-    "src": ["<PHONE_TAILSCALE_IP>"],
+    "src": ["<PHONE_TAILSCALE_IP>", "<TABLET_TAILSCALE_IP>"],
     "dst": ["<SERVER_TAILSCALE_IP>"],
     "ip": ["tcp:9443"]
   }]
@@ -71,10 +73,18 @@ Graph下端、またはActivityの絞込ボタン横の小さな期間表示か�
 
 [grantsは複数ルール・同じ配列の条件を合算します](https://tailscale.com/docs/reference/syntax/grants)。既存の全端末向け許可がこのポートを含むなら、上の狭いルールを追加しても制限できません。広い許可の方も整理する必要があります。`src`へ本人とスマホIPを並べる方法もAND条件にはなりません。[IPの指定方法](https://tailscale.com/docs/reference/targets-and-selectors)を確認してください。端末名やUser-Agentでの判定は行いません。本人のスマホにtagを付けて代用するとuser identityが変わるため、この手順では使いません。
 
+除外したい端末からこのホストへ適用される**すべてのgrantとACL**を確認し、別の広い許可にも`tcp:9443`が残らないようにします。たとえば、ある広いgrantの`ip`からTCP 9443だけを除き、ほかのTCP・UDP・ICMPを許す形は次のとおりです。
+
+```json
+["tcp:1-9442", "tcp:9444-65535", "udp:*", "icmp:*"]
+```
+
+これは[protocol/port指定](https://tailscale.com/docs/reference/syntax/grants#network-layer-capabilities)の説明用で、policy全体や任意の`["*"]`をそのまま置き換えるものではありません。ほかのprotocolや宛先への必要な許可は残し、管理者が変更部分を確認します。agentはpolicyを自動で書き換えません。
+
 ## 手動で有効にする
 
 1. TelemetryをAPI 30以上に更新し、同じコンピューターの通常画面で観測できることを確認します。既存のサービス・provider設定はそのまま使います。
-2. 指定スマホの実効policyを確認します。`tailscale serve status --json`で現在の設定を保存し、例のHTTPS `9443`が未使用でFunnelにもなっていないことを確認します。既存設定があるポートには重ねません。
+2. 現在のアクセス範囲を確認し、推奨の端末制限を採用する場合は上のpolicy変更を終えます。`tailscale serve status --json`で現在の設定を保存し、例のHTTPS `9443`が未使用でFunnelにもなっていないことを確認します。既存設定があるポートには重ねません。
 3. 下の設定確認を行います。`owner@example.com`は本人の正確なServe login、`computer.example.ts.net`はこのコンピューターの実際のServe名です。URLは末尾の`/`なしで指定します。custom install先ではscriptのpathも置き換えてください。Pythonは3.11以上が必要です。
 
 ```sh
@@ -105,17 +115,48 @@ tailscale serve --https=9443 http://127.0.0.1:8781
 
 ## 実スマホで確認してから使う
 
-指定スマホで`https://computer.example.ts.net:9443/`を開き、本人情報で画面とsnapshotが取得できることを確認します。同じ本人アカウントの**別端末**と、別アカウントからは使えないことも確認します。本人header照合と端末のpolicyをそれぞれ検証してください。どれかが未確認なら「本人スマホ限定で有効化済み」とは扱いません。
+操作に使う各スマホ・タブレットで`https://computer.example.ts.net:9443/`を開き、本人情報で画面とsnapshotが取得できることを確認します。別アカウントが拒否されることも確認します。端末制限を採用した場合は、同じ本人アカウントの**除外した端末**から接続できないことを別に確かめます。本人header照合と端末policyは別の確認です。除外側が未確認なら「操作用端末だけに制限済み」とは扱いません。
 
 リポジトリの隔離HTTP試験・合成画面確認は、この実Serve/端末受入の代わりにはなりません。実際のTailscale版、policy、本人スマホでの配備確認は運用者が行います。
 
 ## スマホからpaneを確認して送る
 
-**Terminalは別途有効にする機能です。既定では画面取得も送信も行いません。** 指定スマホの実効policyを確認する前に有効にしないでください。閲覧用readerを動かしただけでは使えません。
+**Terminalは別途有効にする機能です。既定では画面取得も送信も行いません。** 閲覧用readerを動かしただけでは使えません。端末制限は上の任意の推奨で、複数の操作用端末を許可できます。既存の`--phone-policy-reviewed`は、現在のアクセスpolicyを運用者が確認したという申告として引き続き必要です。製品がpolicyを検証したり、端末を1台に限定したりするflagではありません。
 
-1. 上の実端末確認で、指定スマホだけが接続でき、同じ本人の別端末も拒否されることを確かめます。
-2. TelemetryをAPI 31以上、cockpitを対応するpane adapter版に更新します。cockpit backendの**既存の起動引数**へ`--enable-mobile-terminal`を追加し、通常の手順で再起動します。8791へ二重起動せず、起動引数を管理できない場合はここで止めます。
-3. readerの起動例へ`--enable-terminal --phone-policy-reviewed --cockpit-port 8791`を追加します。`--check`でも同じflagで形式を確認できます。`--phone-policy-reviewed`は運用者が実効policyを確認したという申告であり、コマンドによる検証ではありません。どちらかのopt-inが無い、版が合わない、既存target guardやOSの確認が失敗した場合はUnavailableになります。
+この節もagentへ渡せます。本人の段では止まり、既存の設定を残して進めます。
+
+| 段 | 誰が | 何をする |
+|---|---|---|
+| 1 | agent | TelemetryがAPI31以上、ORRERYが対応するpane adapter版であることと、現在のbackendの起動方法・管理元を確認する |
+| 2 | **本人** | アクセス範囲を確認する。推奨の端末制限を採用した場合は、使う端末の許可と除外端末の拒否を確認する。再起動で一時的に接続が切れることを了承する |
+| 3 | agent | 下のJSON項目だけを既存`~/.orrery/config.json`へ追加・更新し、ほかの項目を残す。file modeは`0600`を推奨 |
+| 4 | agent | 同定した通常の手順でbackendを停止・再起動する。稼働中の再利用だけでは反映されない。二重起動・一括killをせず、管理元が不明なら止まって報告する |
+| 5 | agent | 下のcapability確認で`api:31`・`enabled:true`を確かめる。この操作はpane取得や入力送信をしない |
+| 6 | agent | readerの既存起動例へ`--enable-terminal --phone-policy-reviewed --cockpit-port 8791`を足す。先に同じflagで`--check`し、既存readerをその管理手順で再起動する |
+| 7 | **本人** | スマホ・タブレットでTerminalを開き、対象paneと表示を確認する。試す入力は毎回Reviewで全文を確認してから送る |
+
+共有設定の追加項目は次のとおりです。設定file全体を置き換える例ではありません。
+
+```json
+{"enable_mobile_terminal": true}
+```
+
+`scripts/start-cockpit.sh`、`get.sh`からのsetup、ORRERY.appの新規backend起動が同じ設定を読みます。独自の起動commandでは既存の`--enable-mobile-terminal`も使えます。**ORRERY.appを閉じてもbackendは残ります。** appを開き直すだけで反映されない場合は、元の管理手順でbackendを再起動します。
+
+次は入力を送らない確認です。`owner@example.com`はreaderと同じ本人loginに置き換えます。custom install先では最初のpathも変更してください。
+
+```sh
+python3 - "$HOME/.agentstack/dashboard" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from mobile_input import InputClient
+capability = InputClient(8791, 'owner@example.com').call('capability')
+print({key: capability[key] for key in ('api', 'enabled')})
+raise SystemExit(0 if capability['enabled'] else 1)
+PY
+```
+
+`enabled:false`やエラーの場合は有効化済みとせず、版・設定・管理元を確認します。readerの`--check`は形式検査だけで、policyや実端末の受入ではありません。どちらかの有効化が無い、版が合わない、既存target guardやOS確認が失敗した場合はUnavailableになります。
 
 有効時はheaderが**Terminal enabled**になります。Graphでagentを選んだパネル、ActivityのStatus行、要確認行、Mail詳細のFrom/Toにある**Terminal**から同じsheetを開きます。Graphの選択やMail本文を開く操作はそのままです。複数paneなら自分で選び、不明な対応を名前から補いません。対象はPCの既存managerが扱う同じlegacy transport内で、既存保護が許すpaneです。agentの種類や現在の表示期間は起動許可には使わず、別socket/global対象へ迂回しません。paneのsessionは現在のmetadata project外にある場合もあります。
 
@@ -127,7 +168,7 @@ tailscale serve --https=9443 http://127.0.0.1:8781
 
 Close、別paneへの切替、背景移行、離脱でpollを止め、表示・下書き・未送信の確認を消します。遅れた応答で復活させず、内容をURL・log・browser storage・serverのpreview cacheへ残しません。既存PC recorderやOSの記録・撮影まで消す保証はありません。実Android keyboard、実Serve/phone policyと実paneの受入は、隔離HTTP/CDP試験とは別に確認してください。
 
-Terminalだけを戻す場合はreaderの上記3flagとbackendの`--enable-mobile-terminal`を外し、各既存手順で再起動します。通常の閲覧設定や無関係なServe設定を変更する必要はありません。
+Terminalだけを戻す場合は共有設定を`false`にするか項目を除き、独自のbackend起動に`--enable-mobile-terminal`があればそれも外します。readerの上記3flagも外し、両方を各既存手順で再起動します。稼働中のprocessを残しただけでは無効化されません。通常の閲覧設定や無関係なServe設定を変更する必要はありません。
 
 ## 止める・戻す
 

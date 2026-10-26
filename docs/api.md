@@ -746,7 +746,7 @@ metadata pageのloopback経路は`/api/mobile-mail-page`、固定24hの内部cac
 
 ## スマホのTerminal（API 31）
 
-通常の閲覧契約は維持し、別opt-inのpane adapterを追加します。実効phone policyを受入するまではpreviewもwriteも無効です。`GET /view/terminal`はcapability、POSTは固定`/view/terminal/{targets,preview,prepare,commit,cancel,status}`だけです。targets/previewを含む全POSTに本人・固定外側Host・単一の一致Origin・有限JSONを要求し、queryや任意proxyは受けません。本文へowner/reader identityを渡せません。readerが固定loopback `/_mobile/terminal/<operation>`へcontract `orrery-mobile-pane-v1`、owner、reader epochを付与し、両側capability/API31を照合します。起動epochが変われば旧handle/intentは失効します。
+通常の閲覧契約は維持し、別opt-inのpane adapterを追加します。previewとwriteは既定オフで、readerの有効化と`--phone-policy-reviewed`による運用者の申告が必要です（端末限定は複数可の推奨で、製品によるpolicy検証ではありません）。`GET /view/terminal`はcapability、POSTは固定`/view/terminal/{targets,preview,prepare,commit,cancel,status}`だけです。targets/previewを含む全POSTに本人・固定外側Host・単一の一致Origin・有限JSONを要求し、queryや任意proxyは受けません。本文へowner/reader identityを渡せません。readerが固定loopback `/_mobile/terminal/<operation>`へcontract `orrery-mobile-pane-v1`、owner、reader epochを付与し、両側capability/API31を照合します。起動epochが変われば旧handle/intentは失効します。
 
 外側JSONは`targets:{epoch,name}`、`preview:{epoch,choice}`、`prepare:{epoch,choice,revision,text}`、`commit:{epoch,intent,confirmation}`、`cancel/status:{epoch,intent}`です。targetsは既存manager上でsession名が厳密一致するpane候補を最大128件、serialized16KiB以内に収まる件数まで返し、切詰めを明示します。複数は利用者が選び、別名/active paneへ推測しません。候補handleはowner/reader/bridge/paneへ束縛してメモリに30秒、選択後proofは最大16件です。前面previewは同じ選択leaseを更新できますが、preparedの本文・proof・30秒期限を延長しません。
 
