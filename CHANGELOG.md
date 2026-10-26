@@ -10,6 +10,28 @@
 
 ---
 
+## 2026.10.26
+
+### Androidホーム画面のショートカットからスマホ閲覧画面を開けるよう修正
+
+本人・Hostと指定されたOriginの照合を保ったまま、queryなしの厳密な`/`へのGET/HEADで、単一の`Sec-Fetch-Site: cross-site`・`Sec-Fetch-Mode: navigate`・`Sec-Fetch-Dest: document`が揃う画面遷移だけを受け付けます。画面の殻を返す例外で、`/view/*`、画像・JS・CSS・font、POSTなどの操作、不一致Originや曖昧なpathの許可には広げません。CSP・no-store・既定オフと既存の認証・framing検査を維持し、API世代は変更しません。実Android・Serveの確認は配備後の別受入です。
+
+### スマホ閲覧の設定をエージェントに頼めるようにする
+
+[スマホ閲覧の手順](docs/mobile.md)に、agent に渡して設定させるための表を加えました。agent が実行できる段と、Tailscale の管理画面やスマホでの操作が要る本人の段を分けています。Serve 名・本人の login・スマホの IP の調べ方、HTTPS 証明書の前提、Serve を `--bg` で残す方法、macOS での CLI の場所も書きました。
+
+### 指定したスマホからTelemetryの状況を見る閲覧用画面
+
+既定オフのmobile readerを追加しました。英語・darkの要確認一覧とMail metadataの時間軸、PCと共通のNETWORK描画・力学・6設定を使えます。task・private path・操作API・quota更新は含めず（Mail本文は後述の1件ずつの表示だけ）、取得不能/古い観測を正常0へ変えません。
+
+Graphは直近24時間に活動が確認されたagentを既定にし、15分〜30日の細かい期間sliderと明示した全履歴を選べます。Allは選択期間内の全体です。最近活動した退役済みを含め、不明な活動時刻を現在で補いません。専用アイコンは認証後にPCの既存設定から解決し、科学者の肖像・イニシャルへfallbackします。
+
+本人を照合するloopback relayと、指定スマホを絞る実効tailnet policyを分け、Tailscale Serveでの手動有効化/停止手順を[日英guide](docs/mobile.md)へ記載しました。通常installでは待受/Serveを開始しません。legacy loopback専用のMail metadata/肖像取得と期間契約を追加します。実Serve・本人スマホの受入は別途必要です。
+
+### スマホのMailを1件ずつ開き、Graphの2体間の履歴を確認
+
+ActivityのMail、またはGraphのMail線から2体間の一覧を開き、選んだ1件の件名と本文を文字として読めます。一覧はmetadataのみで、本文をまとめてスマホへ送りません。方向別の絞込、200宛先行ごとのOlder/Newer、Mac内だけの直近24h・最大2000通/32MiBのメモリcacheを追加しました。上限や失効・取得不能を明示し、read/ACK・返信・添付・操作は追加しません。既定オフと本人認証を維持し、指定スマホの実効policyは別途必要です。単件内容とmetadata pageの契約追加によりAPI世代を30へ更新します（前回のリリース 2026.10.25 は27。間の世代は単独では配布していません）。[手順と制限](docs/mobile.md)を参照してください。
+
 ## 2026.10.25
 
 ### Orbit ロゴを header と favicon に追加
