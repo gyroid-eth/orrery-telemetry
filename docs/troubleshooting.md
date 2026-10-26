@@ -520,8 +520,6 @@ dashboard は起動したとき（と、その後 1 時間ごと）に、**こ�
 - `AGENTSTACK_TERMINAL` の値を確認
 - Ghostty / iTerm2 / Terminal.app の install path を確認
 - `tmux has-session -t '<name>'`
-- browser terminal なら `ttyd` が PATH にあるか
-- `/api/ptty?session=<name>` の error
 
 `AGENTSTACK_TERMINAL=none` では OS terminal open を行いません。
 

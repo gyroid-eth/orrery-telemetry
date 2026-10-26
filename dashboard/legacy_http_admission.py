@@ -73,6 +73,16 @@ def admit(headers, target: str, port: int, extra: str = "") -> frozenset[Origin]
         if target_origin not in expected:
             raise ValueError("request target authority mismatch")
         expected = frozenset((target_origin,))
+    origins = headers.get_all("Origin", [])
+    if origins and not origin_matches(origins[0], expected):
+        raise ValueError("untrusted origin")
+    sites = headers.get_all("Sec-Fetch-Site", [])
+    modes = headers.get_all("Sec-Fetch-Mode", [])
+    if len(sites) > 1 or len(modes) > 1:
+        raise ValueError("ambiguous browser provenance")
+    if (sites and sites[0].lower() == "cross-site"
+            and (not modes or modes[0].lower() != "navigate")):
+        raise ValueError("cross-site subresource")
     return expected
 
 

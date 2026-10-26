@@ -467,7 +467,7 @@ After embed initialization and reload, the dashboard sends `agentstack-theme-axi
 
 ## Terminal bridge
 
-Opening a terminal from a card or node makes the server allocate a Ghostty / iTerm2 / Terminal.app jump or `ttyd` browser terminal.
+Opening a terminal from a card or node makes the server open a Ghostty / iTerm2 / Terminal.app jump.
 
 `AGENTSTACK_BIND_HOST=0.0.0.0` also exposes the terminal bridge and control endpoints externally. Because the dashboard has no authentication layer, do not use it outside a trusted LAN / VPN.
 

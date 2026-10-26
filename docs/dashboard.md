@@ -491,7 +491,7 @@ embed の初期化完了時と reload 後には、dashboard が `agentstack-them
 
 ## Terminal bridge
 
-カードまたは node から terminal を開くと、server は Ghostty / iTerm2 / Terminal.app への jump、または browser terminal 用 `ttyd` を確保します。
+カードまたは node から terminal を開くと、server は Ghostty / iTerm2 / Terminal.app への jumpを行います。
 
 `AGENTSTACK_BIND_HOST=0.0.0.0` は terminal bridge と control endpoint も外部へ公開します。dashboard に認証 layer はないため、trusted LAN / VPN 以外では使わないでください。
 
