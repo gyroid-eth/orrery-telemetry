@@ -19,6 +19,8 @@ response body は、画像と HTML を除き JSON です。dashboard 自体に l
 
 legacy mode は全メソッド・全パスで固定の `Host` を検査し、不信・欠落・重複・不正な Host や重複 Origin、絶対形式 request-target の authority 不一致を dispatch 前に HTTP 403 で拒否します。既定の許可先は実待受ポートの `127.0.0.1` / `localhost` / `[::1]` です。LAN / VPN 向けの固定 origin は [`AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS`](configuration.md#lan--vpn-から使う場合の-host-設定) に明示します。Host は認証の代わりにはなりません。
 
+全メソッド・全パスで、存在する Origin は検証済み Host に対応する origin と照合します。`Sec-Fetch-Site: cross-site` は navigation 以外を拒否します。CLI・hook・proxy は Origin を送らず利用できます。global mode の公開 static GET/HEAD にも同じ要求元検査を適用し、その他の global route は既存の operator capability 検査を継続します。[ローカル HTTP の信頼境界](local-http-security.md)も参照してください。
+
 すべての POST endpoint は `Content-Type: application/json` と JSON object body が必須です。browser request は `Origin` / `Sec-Fetch-Site` が same-origin でなければ HTTP 403、CLI は両 header を送らない場合に利用できます。simple-form CSRF を受け付けないための共通 guard です。
 
 POST の Origin は、検証済み Host に対応する固定 origin とだけ照合します。scheme・host・port を照合し、HTTP `80` / HTTPS `443` の省略と大文字小文字を正規化します。別の許可済み Host の origin を送っても拒否します。Host 検査の拒否応答は、通常の API JSON ではなく HTTP error body の場合があります。
@@ -51,7 +53,6 @@ POST の Origin は、検証済み Host に対応する固定 origin とだけ�
 | GET | `/api/deliverables` | `agent` | vault deliverables |
 | GET | `/api/custom-portraits` | なし | custom portrait map |
 | GET | `/api/term` | `session`, `lines` | tmux capture |
-| GET | `/api/ptty` | `session` | browser terminal URL |
 | GET | `/api/mail-watcher-health` | なし | watcher / signal health |
 | GET | `/portrait` | `name`, `hi` | PNG または fallback SVG |
 | GET | `/assets/<file>` | `.svg` / `.png` の basename | static asset |
@@ -68,7 +69,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":31}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":32}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -430,20 +431,6 @@ curl -s 'http://127.0.0.1:8770/api/term?session=WindyFermi&lines=500'
 - `lines`: capture 行数、既定 `500`
 
 response は `{ok, session, text, ...}` です。session 名を検証してから `tmux capture-pane` を実行します。
-
-## GET `/api/ptty`
-
-```bash
-curl -s 'http://127.0.0.1:8770/api/ptty?session=WindyFermi'
-```
-
-response:
-
-```json
-{"ok":true,"session":"WindyFermi","url":"http://127.0.0.1:PORT/"}
-```
-
-既存 `ttyd` があれば再利用し、なければ空き port で起動します。無効 session や missing dependency は HTTP 400 です。
 
 ## GET `/api/mail-watcher-health`
 

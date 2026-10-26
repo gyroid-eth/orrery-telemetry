@@ -50,6 +50,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 ## Troubleshoot
 
 - [Troubleshooting](troubleshooting.en.md) — Isolate service, notification, spawn, authentication, and WSL problems.
+- [Local HTTP trust boundary (Japanese)](local-http-security.md) — Which request origins Dashboard and Mail accept, and what they trust.
 
 ## Design and development
 

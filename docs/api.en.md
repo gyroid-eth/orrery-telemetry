@@ -20,6 +20,8 @@ Response bodies are JSON except for images and HTML. The dashboard itself has no
 
 Legacy mode checks a fixed Host allowlist on every method and path. Before dispatch, it returns HTTP 403 for an untrusted, missing, duplicate or malformed Host, duplicate Origin headers, or an absolute-form request target with a mismatched authority. The defaults allow only `127.0.0.1` / `localhost` / `[::1]` at the actual listening port. Explicitly configure fixed LAN / VPN origins with [`AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS`](configuration.en.md#host-configuration-for-lan--vpn-access). Host checks do not authenticate callers.
 
+Every method and path validates a supplied Origin against the origin corresponding to the admitted Host. `Sec-Fetch-Site: cross-site` is accepted only for navigation. Local CLI, hook and proxy clients may omit Origin. Global mode applies the same provenance check to public static GET/HEAD resources and retains operator capability admission for other routes.
+
 Every POST endpoint requires `Content-Type: application/json` and a JSON object body. Browser requests receive HTTP 403 unless `Origin` / `Sec-Fetch-Site` are same-origin; CLI requests may omit both headers. This is the common guard that rejects simple-form CSRF.
 
 A POST Origin must match a fixed origin corresponding to its validated Host. Scheme, host and port are compared, normalizing host case and omitted HTTP `80` / HTTPS `443` ports. An origin belonging to another allowed Host is still rejected. Host admission failures may return an HTTP error body rather than the usual API JSON.
@@ -52,7 +54,6 @@ with HTTP 400. A media-type mismatch is HTTP 415, a cross-origin POST is HTTP 40
 | GET | `/api/deliverables` | `agent` | vault deliverables |
 | GET | `/api/custom-portraits` | none | custom portrait map |
 | GET | `/api/term` | `session`, `lines` | tmux capture |
-| GET | `/api/ptty` | `session` | browser terminal URL |
 | GET | `/api/mail-watcher-health` | none | watcher / signal health |
 | GET | `/portrait` | `name`, `hi` | PNG or fallback SVG |
 | GET | `/assets/<file>` | `.svg` / `.png` basename | static asset |
@@ -69,7 +70,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":31}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":32}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -429,20 +430,6 @@ curl -s 'http://127.0.0.1:8770/api/term?session=WindyFermi&lines=500'
 - `lines`: capture line count; default `500`
 
 The response is `{ok, session, text, ...}`. The session name is validated before running `tmux capture-pane`.
-
-## GET `/api/ptty`
-
-```bash
-curl -s 'http://127.0.0.1:8770/api/ptty?session=WindyFermi'
-```
-
-Response:
-
-```json
-{"ok":true,"session":"WindyFermi","url":"http://127.0.0.1:PORT/"}
-```
-
-An existing `ttyd` is reused; otherwise one is started on a free port. An invalid session or missing dependency is HTTP 400.
 
 ## GET `/api/mail-watcher-health`
 

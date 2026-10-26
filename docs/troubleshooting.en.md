@@ -501,8 +501,6 @@ A live-session lease (`runtime/live-sessions/<name>/<pid>`) written before the b
 - check `AGENTSTACK_TERMINAL`
 - check Ghostty / iTerm2 / Terminal.app installation paths
 - `tmux has-session -t '<name>'`
-- for a browser terminal, check `ttyd` is on PATH
-- inspect the error from `/api/ptty?session=<name>`
 
 `AGENTSTACK_TERMINAL=none` performs no OS-terminal open.
 

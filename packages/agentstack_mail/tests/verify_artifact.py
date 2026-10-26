@@ -1104,6 +1104,7 @@ EXPECTED_CUTOVER_APPROVAL = {
 }
 
 REQUIRED_RUNTIME_MODULES = {
+    "local_http.py",
     "storage_origin_contract.py",
     "storage_origin_directory.py",
     "storage_origin_core.py",

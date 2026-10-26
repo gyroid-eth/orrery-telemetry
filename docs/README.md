@@ -50,6 +50,7 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 ## 困ったとき
 
 - [トラブルシューティング](troubleshooting.md) — service、通知、spawn、認証、WSL の止まり方を切り分ける。
+- [ローカル HTTP の信頼境界](local-http-security.md) — Dashboard と Mail が受け付ける要求元と、信頼する前提。
 
 ## 設計・開発者向け
 

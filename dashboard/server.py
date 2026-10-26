@@ -29,7 +29,6 @@ import secrets
 import signal
 import shlex
 import shutil
-import socket
 import sqlite3
 import stat
 import subprocess
@@ -44,7 +43,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 31
+API_GENERATION = 32
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -2815,7 +2814,7 @@ def _write_wt_launcher(tmux_args: list[str], title: str) -> str:
 
 
 def _legacy_terminal_argv(tmux_args: list[str]) -> list[str]:
-    """Admit now and re-admit inside the actual terminal/ttyd child."""
+    """Admit now and re-admit inside the actual terminal child."""
     if not tmux_args or tmux_args[0] != 'tmux':
         return tmux_args
     consumer = _legacy_tmux_consumer()
@@ -6862,95 +6861,6 @@ def term_capture(session: str, lines: int) -> dict:
     return {"ok": True, "session": session, "content": out.stdout}
 
 
-# --------------------------------------------------------------------------- #
-# ttyd: ブラウザ埋め込みのフル対話端末 (Phase 3)
-#   セッションごとに on-demand で ttyd を 127.0.0.1 の空きポートに起動。
-#   既存があれば再利用。一定時間アクセスが無いものは reaper が掃除。
-# --------------------------------------------------------------------------- #
-TTYD_BIN = shutil.which("ttyd") or "/opt/homebrew/bin/ttyd"
-_TTYD: dict[str, dict] = {}
-_TTYD_LOCK = threading.Lock()
-_TTYD_IDLE = 900  # 15分アクセスが無ければ停止
-
-
-def _free_port() -> int:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
-
-
-def _ttyd_alive(rec: dict) -> bool:
-    return rec.get("proc") and rec["proc"].poll() is None
-
-
-def ttyd_ensure(session: str) -> dict:
-    if not _valid(session):
-        return {"ok": False, "error": "invalid session name"}
-    if not _has_session(session):
-        return {"ok": False, "error": f"session '{session}' は存在しません"}
-    if not os.path.exists(TTYD_BIN):
-        return {"ok": False, "error": "ttyd が見つかりません"}
-    with _TTYD_LOCK:
-        try:
-            attach_args = _legacy_terminal_argv(['tmux', 'attach', '-t', f'={session}'])
-        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
-            return {'ok': False, 'error': str(exc)}
-        rec = _TTYD.get(session)
-        if rec and _ttyd_alive(rec) and rec.get('attach_args') != attach_args:
-            _ttyd_kill(rec)
-            _TTYD.pop(session, None)
-            rec = None
-        if rec and _ttyd_alive(rec):
-            rec["last"] = time.time()
-            return {"ok": True, "url": f"http://127.0.0.1:{rec['port']}/",
-                    "port": rec["port"], "reused": True}
-        port = _free_port()
-        # -W 書込可(対話) / -i 127.0.0.1 ローカル限定 / -m 同時3 /
-        # -t 端末オプション / once しない(再利用) / tmux にミラー attach
-        proc = subprocess.Popen(
-            [TTYD_BIN, "-p", str(port), "-i", "127.0.0.1", "-W",
-             "-m", "3", "-t", "fontSize=13",
-             "-t", "titleFixed=" + session,
-             "-t", "disableLeaveAlert=true",
-             *attach_args],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        _TTYD[session] = {"proc": proc, "port": port, "last": time.time(), "attach_args": attach_args}
-    time.sleep(0.5)  # ttyd の listen 開始を待つ
-    if proc.poll() is not None:
-        return {"ok": False, "error": "ttyd 起動失敗"}
-    return {"ok": True, "url": f"http://127.0.0.1:{port}/",
-            "port": port, "reused": False}
-
-
-def _ttyd_kill(rec: dict) -> None:
-    try:
-        rec["proc"].terminate()
-    except Exception:
-        pass
-
-
-def _ttyd_reaper() -> None:
-    while True:
-        time.sleep(120)
-        now = time.time()
-        with _TTYD_LOCK:
-            for s in list(_TTYD):
-                rec = _TTYD[s]
-                if not _ttyd_alive(rec) or now - rec["last"] > _TTYD_IDLE:
-                    _ttyd_kill(rec)
-                    _TTYD.pop(s, None)
-
-
-@atexit.register
-def _ttyd_cleanup() -> None:
-    for rec in list(_TTYD.values()):
-        _ttyd_kill(rec)
-
-
 _TOOLS_UNSET = object()
 
 
@@ -9426,7 +9336,13 @@ class Handler(BaseHTTPRequestHandler):
         # Only exact installed static GET/HEAD resources are public.
         path = urlparse(self.path).path
         if self.command in {'GET','HEAD'} and is_public_static(path):
-            return True
+            try:
+                legacy_http_admission.admit(self.headers, self.path, self.server.server_port)
+                return True
+            except ValueError:
+                self.close_connection = True
+                self.send_error(403, "Untrusted dashboard request")
+                return False
         try:
             try:
                 from dashboard.http_operator import Admission
@@ -9814,15 +9730,6 @@ class Handler(BaseHTTPRequestHandler):
             nm = (q.get("name") or [""])[0]
             hi = (q.get("hi") or ["0"])[0] in ("1", "true")
             self._serve_portrait(nm, hi)
-        elif path == "/api/ptty":
-            q = parse_qs(urlparse(self.path).query)
-            sess = (q.get("session") or [""])[0]
-            payload = ttyd_ensure(sess)
-            self._send(
-                200 if payload.get("ok") else 400,
-                json.dumps(payload, ensure_ascii=False).encode(),
-                "application/json; charset=utf-8",
-            )
         elif path == "/api/term":
             q = parse_qs(urlparse(self.path).query)
             sess = (q.get("session") or [""])[0]
@@ -10200,8 +10107,8 @@ def _log_js_error(body: dict) -> dict:
 
 def main():
     if GLOBAL_MODE:
-        # Isolation-only global backend starts no legacy maintenance, providers,
-        # ttyd cleanup or child processes. Request failures never fall back.
+        # Isolation-only global backend starts no legacy maintenance, providers
+        # or child processes. Request failures never fall back.
         srv = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
         print(f'agent-dashboard global backend on http://{BIND_HOST}:{PORT}/',flush=True)
         try:srv.serve_forever()
@@ -10213,16 +10120,6 @@ def main():
     _start_child_resume_maintenance()
     _start_provider_stall_monitor()
 
-    # 前回(SIGKILL 等で atexit 未実行)の野良 ttyd を掃除してから開始
-    try:
-        subprocess.run(
-            ["pkill", "-f", "ttyd -p .* tmux attach -t ="],
-            capture_output=True,
-        )
-    except FileNotFoundError:
-        # Optional cleanup must not prevent startup on hosts without pkill.
-        pass
-    threading.Thread(target=_ttyd_reaper, daemon=True).start()
     # The picker's Claude default checks the claude a child runs; find it once
     # here, where starting a login shell is allowed (requests may not).
     threading.Thread(target=_bind_claude_child_cli_path, args=(HOOKS_DIR,), daemon=True).start()

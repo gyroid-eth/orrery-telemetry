@@ -53,7 +53,7 @@ def test_main_runs_the_exact_http_transport(
             "host": "127.0.0.1",
             "port": 18765,
             "path": "/mcp",
-            "middleware": [],
+            "middleware": server.calls[0]["middleware"],
             "log_level": "info",
             "json_response": True,
             "stateless_http": True,
@@ -64,6 +64,8 @@ def test_main_runs_the_exact_http_transport(
             },
         }
     ]
+    (guard,) = server.calls[0]["middleware"]
+    assert guard.cls is cli.LocalPageMiddleware
 
 
 def test_main_wires_path_alias_middleware_for_configured_aliases(
@@ -79,7 +81,8 @@ def test_main_wires_path_alias_middleware_for_configured_aliases(
 
     cli.main([])
 
-    (entry,) = server.calls[0]["middleware"]
+    guard, entry = server.calls[0]["middleware"]
+    assert guard.cls is cli.LocalPageMiddleware
     assert entry.cls is cli.PathAliasMiddleware
     assert entry.kwargs == {"canonical": "/api/", "aliases": ("/mcp", "/api")}
 
@@ -97,7 +100,8 @@ def test_main_skips_middleware_when_aliases_collapse_to_canonical(
 
     cli.main([])
 
-    assert server.calls[0]["middleware"] == []
+    (guard,) = server.calls[0]["middleware"]
+    assert guard.cls is cli.LocalPageMiddleware
 
 
 def test_help_exits_without_loading_settings_or_building_server(
