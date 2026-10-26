@@ -32036,40 +32036,26 @@ function themeAxisMessageError(data){
   }
   return null;
 }
-function themeProfileMessageError(data){
-  if(!data||data.type!=='agentstack-theme-profile')return 'invalid-message';
-  if(data.version!==1)return 'unsupported-version';
-  if(typeof data.requestId!=='string'||!data.requestId)return 'invalid-request-id';
-  if(!data.values||typeof data.values!=='object'||Array.isArray(data.values)){
+function themeProfileValuesError(values){
+  if(!values||typeof values!=='object'||Array.isArray(values)){
     return 'invalid-values';
   }
-  const keys=Object.keys(data.values);
+  const keys=Object.keys(values);
   if(keys.length!==THEME_AXIS_IDS.length||
       keys.some(axis=>!THEME_AXIS_NAMES.has(axis))||
-      THEME_AXIS_IDS.some(axis=>!Object.hasOwn(data.values,axis))){
+      THEME_AXIS_IDS.some(axis=>!Object.hasOwn(values,axis))){
     return 'invalid-values';
   }
   for(const axis of THEME_AXIS_IDS){
-    const value=data.values[axis];
+    const value=values[axis];
     if(value!==null&&(typeof value!=='number'||!Number.isFinite(value)||
         value<0||value>1))return 'invalid-value';
   }
-  const active=THEME_AXIS_IDS.filter(axis=>data.values[axis]!==null);
+  const active=THEME_AXIS_IDS.filter(axis=>values[axis]!==null);
   if(active.length>1&&active.some(axis=>!THEME_PROFILE_TEXT_AXES.has(axis))){
     return 'invalid-profile-combination';
   }
   return null;
-}
-function normalizeThemeProfileMessage(data){
-  if(themeProfileMessageError(data))return null;
-  return {requestId:data.requestId,values:Object.fromEntries(
-    THEME_AXIS_IDS.map(axis=>[axis,data.values[axis]]))};
-}
-function themeProfileRequestedValues(data){
-  const values=data&&data.values;
-  return Object.fromEntries(THEME_AXIS_IDS.map(axis=>[axis,
-    values&&typeof values==='object'&&Object.hasOwn(values,axis)
-      ?values[axis]:null]));
 }
 function themeAxisMessageAllowed(event,embedMode,parentWindow,expectedOrigin){
   return Boolean(embedMode&&event&&event.source===parentWindow&&
@@ -33449,18 +33435,17 @@ async function applyThemeAxisMessage(data){
   }
   return applyThemeAxis(message.axis,message.value);
 }
-async function applyThemeProfileMessage(data){
-  const validationError=themeProfileMessageError(data);
+async function applyThemeProfileValues(values){
+  const validationError=themeProfileValuesError(values);
   if(validationError)return {ok:false,reason:validationError,axes:{},
-    requested:themeProfileRequestedValues(data),
+    requested:Object.fromEntries(THEME_AXIS_IDS.map(axis=>[axis,(values&&values[axis])??null])),
     applied:{...activeThemeProfileValues}};
-  const message=normalizeThemeProfileMessage(data);
-  if(themeProfileActiveAxes(message.values).length){
+  if(themeProfileActiveAxes(values).length){
     const digestError=await themeAxisInventoryDigestError();
     if(digestError)return {ok:false,reason:digestError.reason,axes:{},
-      requested:message.values,applied:{...activeThemeProfileValues}};
+      requested:values,applied:{...activeThemeProfileValues}};
   }
-  return applyThemeProfile(message.values);
+  return applyThemeProfile(values);
 }
 function replyThemeAxisResult(data,result){
   window.parent.postMessage({
@@ -33475,24 +33460,6 @@ function replyThemeAxisResult(data,result){
     effect:result.effect||activeThemeAxisEffect,
     reason:result.reason
   },location.origin);
-}
-function themeProfileResultMessage(data,result){
-  const message={
-    type:'agentstack-theme-profile-result',version:1,
-    requestId:data&&data.requestId,
-    surface:'telemetry',
-    requested:themeProfileRequestedValues({values:result.requested||
-      data&&data.values}),
-    applied:themeProfileRequestedValues({values:result.applied||
-      activeThemeProfileValues}),
-    status:result.ok?'applied':'rejected',
-    axes:result.axes||{}
-  };
-  if(result.reason)message.reason=result.reason;
-  return message;
-}
-function replyThemeProfileResult(data,result){
-  window.parent.postMessage(themeProfileResultMessage(data,result),location.origin);
 }
 window.AGENTSTACK_THEME_AXIS_STATE=()=>({
   axis:activeThemeAxis,value:activeThemeAxisValue,
@@ -33519,15 +33486,6 @@ window.addEventListener('message',e=>{
     }
     return;
   }
-  if(d.type==='agentstack-theme-profile'){
-    if(themeAxisMessageAllowed(e,EMBED_MODE,window.parent,location.origin)){
-      applyThemeProfileMessage(d).then(result=>replyThemeProfileResult(d,result))
-        .catch(error=>replyThemeProfileResult(d,{ok:false,
-          requested:d.values,applied:{...activeThemeProfileValues},axes:{},
-          reason:error&&error.message||'apply-failed'}));
-    }
-    return;
-  }
   if(d.type==='net-pause')netSuspended=true;
   if(d.type==='net-resume'){
     netSuspended=false;
@@ -33538,8 +33496,6 @@ window.addEventListener('message',e=>{
 function notifyThemeBridgeReady(){
   if(!EMBED_MODE)return false;
   window.parent.postMessage({type:'agentstack-theme-axis-ready',version:1,
-    surface:'telemetry'},location.origin);
-  window.parent.postMessage({type:'agentstack-theme-profile-ready',version:1,
     surface:'telemetry'},location.origin);
   return true;
 }
