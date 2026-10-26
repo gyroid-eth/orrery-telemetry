@@ -250,7 +250,8 @@ def test_conversation_mode_watcher_skips_delivery_without_consuming_signal(tmp_p
     function = source[start:source.index('\n}\n', start)+3]
     signal = tmp_path / '777.signal'; signal.write_text('{"message":{"id":777}}')
     released = tmp_path / 'released'
-    script = ('set -euo pipefail\nTMUX_TIMEOUT=5\nPERSISTENT_DELIVER=/nonexistent/fixture-helper\n' + function +
+    script = ('set -euo pipefail\nTMUX_TIMEOUT=5\nPERSISTENT_DELIVER=/nonexistent/fixture-helper\n'
+        f'STATE_DIR={shlex.quote(str(tmp_path))}\n' + function +
         '\nrun_to() { shift; "$@"; }\n'
         'tmux() { [[ "$1" == show-environment ]] || exit 98; echo AGENTSTACK_MAIL_DISABLED=1; }\n'
         f'release_delivery_lease() {{ echo "$*" > {shlex.quote(str(released))}; }}\n'
