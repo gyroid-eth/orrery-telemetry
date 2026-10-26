@@ -17,9 +17,11 @@ from urllib.parse import parse_qs, urlsplit, urlencode
 try:
     from dashboard import legacy_http_admission as admission
     from dashboard.mobile_projection import SnapshotStore, MobileMailStore, WINDOWS, NAME, EVENT_KEY, png_image
+    from dashboard import mobile_input
 except ModuleNotFoundError:
     import legacy_http_admission as admission
     from mobile_projection import SnapshotStore, MobileMailStore, WINDOWS, NAME, EVENT_KEY, png_image
+    import mobile_input
 
 HERE = Path(__file__).resolve().parent
 MAX_UPSTREAM_BYTES = 4 * 1024 * 1024
@@ -35,6 +37,9 @@ class Config:
     public_origin: str
     listen_port: int = 8781
     upstream_port: int = 8770
+    input_enabled: bool = False
+    phone_policy_reviewed: bool = False
+    cockpit_port: int = 8791
 
     def __post_init__(self):
         if (not self.owner_login or len(self.owner_login)>254 or
@@ -47,6 +52,12 @@ class Config:
                 not 1 <= self.listen_port <= 65535 or not 1 <= self.upstream_port <= 65535 or
                 self.listen_port == self.upstream_port):
             raise ValueError('valid separate relay/upstream ports are required')
+        if (type(self.input_enabled) is not bool or type(self.phone_policy_reviewed) is not bool
+                or self.input_enabled and not self.phone_policy_reviewed):
+            raise ValueError('input requires explicit opt-in after the designated-phone policy is reviewed')
+        if (type(self.cockpit_port) is not int or not 1<=self.cockpit_port<=65535
+                or self.input_enabled and self.cockpit_port in {self.listen_port,self.upstream_port}):
+            raise ValueError('valid separate cockpit adapter port is required')
 
 
 class Upstream:
@@ -172,7 +183,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != 'HEAD':self.wfile.write(data)
 
-    def _admitted(self):
+    def _admitted(self,*,write=False):
         cfg=self.server.mobile_config
         hosts=self.headers.get_all('Host',[])
         users=self.headers.get_all('Tailscale-User-Login',[])
@@ -181,6 +192,7 @@ class Handler(BaseHTTPRequestHandler):
             expected=admission.origin(cfg.public_origin)
             if len(hosts)!=1 or len(users)!=1 or users[0]!=cfg.owner_login or len(origins)>1:
                 return False
+            if write and len(origins)!=1:return False
             host,port=admission.authority(hosts[0])
             if (host,port if port is not None else 443)!=expected[1:]:return False
             if origins and admission.origin(origins[0])!=expected:return False
@@ -202,13 +214,24 @@ class Handler(BaseHTTPRequestHandler):
                 return False
         if any(self.headers.get_all(h,[]) for h in ('Upgrade','Transfer-Encoding','X-HTTP-Method-Override','X-Method-Override','X-HTTP-Method')):return False
         lengths=self.headers.get_all('Content-Length',[])
-        if len(lengths)>1 or (lengths and lengths[0]!='0'):return False
+        if write:
+            if (len(lengths)!=1 or re.fullmatch(r'[0-9]{1,5}',lengths[0]) is None or not 0<int(lengths[0])<=mobile_input.MAX_JSON_BYTES
+                    or self.headers.get_all('Content-Type',[])!=['application/json']
+                    or any(self.headers.get_all(h,[]) for h in ('Content-Encoding','Expect'))):return False
+        elif len(lengths)>1 or (lengths and lengths[0]!='0'):return False
         return target == self.path and target.startswith('/') and not target.startswith('//') and '#' not in target and '%' not in target and '\\' not in target
 
     def do_GET(self):
         if not self._admitted():
             self._send(403,{'ok':False,'error':'request_denied'});return
         parts=urlsplit(self.path)
+        if self.path=='/view/terminal':
+            if self.command=='HEAD':self._send(200,b'');return
+            if not self.server.mobile_config.input_enabled:
+                self._send(200,{'contract':mobile_input.CONTRACT,'enabled':False});return
+            try:self._send(200,self.server.mobile_input.call('capability'))
+            except Exception:self._send(503,{'error':'input_unavailable','enabled':False})
+            return
         if parts.path=='/view/snapshot':
             query=parse_qs(parts.query,keep_blank_values=True)
             if set(query)-{'window'} or len(query.get('window',[]))>1 or query.get('window',['day'])[0] not in WINDOWS:
@@ -285,11 +308,40 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):self.do_GET()
 
+    def do_POST(self):
+        operation=self.path.removeprefix('/view/terminal/')
+        if (not self.server.mobile_config.input_enabled or not self.path.startswith('/view/terminal/')
+                or operation not in mobile_input.OPERATIONS):
+            self._no_method();return
+        self.close_connection=True
+        if not self._admitted(write=True):
+            self._send(403,{'error':'input_request_denied'});return
+        timer=None
+        try:
+            def expire():
+                try:self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:pass
+            timer=threading.Timer(5,expire);timer.daemon=True;timer.start()
+            size=int(self.headers['Content-Length']);data=self.rfile.read(size)
+            if len(data)!=size:raise ValueError('input_json_invalid')
+            payload=mobile_input.decode_json(data)
+            if set(payload)!=mobile_input.OPERATIONS[operation]:raise ValueError('input_json_invalid')
+        except (ValueError,OSError):
+            self._send(400,{'error':'input_request_invalid'});return
+        finally:
+            if timer is not None:timer.cancel()
+        try:self._send(200,self.server.mobile_input.call(operation,payload))
+        except Exception:
+            # A lost response cannot establish whether a commit reached tmux.
+            # The UI retains only the operation ID, offers status, and never
+            # repeats the send automatically.
+            self._send(503,{'error':'input_unavailable','state':'unknown' if operation=='commit' else 'unavailable'})
+
     def _no_method(self):
         self.close_connection=True
         self._send(405,{'ok':False,'error':'method_not_allowed'})
 
-    do_POST=do_PUT=do_PATCH=do_DELETE=do_OPTIONS=do_TRACE=do_CONNECT=_no_method
+    do_PUT=do_PATCH=do_DELETE=do_OPTIONS=do_TRACE=do_CONNECT=_no_method
 
 
 class ReaderServer(ThreadingHTTPServer):
@@ -298,7 +350,7 @@ class ReaderServer(ThreadingHTTPServer):
         super().server_close()
 
 
-def make_server(config:Config, *, store=None, mail_store=None, root=HERE, test_port=None):
+def make_server(config:Config, *, store=None, mail_store=None, input_client=None, root=HERE, test_port=None):
     # Tests can request an ephemeral loopback port; CLI has no bind-host option.
     server=ReaderServer(('127.0.0.1',config.listen_port if test_port is None else test_port),Handler)
     server.daemon_threads=True
@@ -307,6 +359,8 @@ def make_server(config:Config, *, store=None, mail_store=None, root=HERE, test_p
     server.mobile_mail=mail_store if mail_store is not None else MobileMailStore(Upstream(config.upstream_port))
     server.mobile_root=Path(root)
     server.mobile_assets=static_assets(Path(root))
+    server.mobile_input=(input_client if input_client is not None else
+                         mobile_input.InputClient(config.cockpit_port,config.owner_login) if config.input_enabled else None)
     return server
 
 
@@ -318,10 +372,16 @@ def main(argv=None):
     parser.add_argument('--public-origin',default='')
     parser.add_argument('--listen-port',type=int,default=8781)
     parser.add_argument('--upstream-port',type=int,default=8770)
+    parser.add_argument('--enable-terminal',action='store_true',help='opt in to confirmed input; viewing alone does not enable it')
+    parser.add_argument('--phone-policy-reviewed',action='store_true',
+                        help='operator acknowledgement after verifying effective designated-phone policy; does not verify the policy itself')
+    parser.add_argument('--cockpit-port',type=int,default=8791)
     args=parser.parse_args(argv)
+    if args.enable_terminal and not (args.enable or args.check):parser.error('--enable-terminal also requires --enable or --check')
     if not args.enable and not args.check:
         print('Mobile reader is off. No listener started.');return 0
-    try:config=Config(args.owner_login,args.public_origin,args.listen_port,args.upstream_port)
+    try:config=Config(args.owner_login,args.public_origin,args.listen_port,args.upstream_port,
+                      args.enable_terminal,args.phone_policy_reviewed,args.cockpit_port)
     except ValueError as exc:
         parser.error(str(exc))
     if args.check:

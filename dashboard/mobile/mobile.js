@@ -11,6 +11,7 @@ const minutesAt=position=>Math.max(15,Math.min(43200,Math.round(Math.exp(Math.lo
 const duration=seconds=>seconds===null?'All history':seconds<3600?'Last '+Math.round(seconds/60)+' min':seconds<=86400?'Last '+(seconds/3600).toLocaleString('en-GB',{maximumFractionDigits:2})+'h':'Last '+(seconds/86400).toLocaleString('en-GB',{maximumFractionDigits:2})+'d';
 window.OrreryMobileWindow={duration};
 const network=new window.OrreryMobileNetwork(null,(a,b)=>openPair(a,b));
+let graphFullscreen=null;
 const time=ts=>typeof ts==='number'?new Date(ts*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'Unknown';
 function face(a){
  const wrap=node('span','face'),img=node('img');img.src=window.AGENTSTACK_DEMO.portraitURL(a.name);img.alt='';
@@ -23,6 +24,7 @@ function person(name){const a=snapshot.agents.find(x=>x.name===name)||{name,prov
 function showView(view){
  clearDetail();clearPair();
  const graph=view==='graph';$('#activity').hidden=graph;$('#graph-panel').hidden=!graph;
+ if(!graph)graphFullscreen?.exit();
  document.querySelectorAll('[data-view]').forEach(x=>x.classList.toggle('active',x.dataset.view===view));
  if(graph){network.applyView();network.hot=Math.max(network.hot,120);network.run();}else network.pause();
 }
@@ -212,6 +214,7 @@ function mailButton(event,window){
  route.onclick=()=>openMessage(event,window);return route;
 }
 function clearDetail(close=true){
+ document.querySelector('.terminal-mail-people')?.remove();
  detailGeneration++;detailController?.abort();detailController=null;
  for(const id of ['message-route','message-status','message-subject','message-body'])$('#'+id).textContent='';
  $('#message-title').textContent='Message';
@@ -221,6 +224,7 @@ async function openMessage(event,window){
  clearDetail(false);const generation=detailGeneration,controller=new AbortController();detailController=controller;
  const sheet=$('#message-sheet');if(!sheet.open)sheet.showModal();
  $('#message-route').textContent=event.source+' → '+event.target+' · '+time(event.event_at)+' · '+event.kind;
+ globalThis.OrreryMobileTerminal?.mail(event);
  $('#message-status').textContent='Loading one message…';
  const timeout=setTimeout(()=>controller.abort(),8000);
  try{
@@ -308,5 +312,266 @@ setInterval(()=>{
   markStale('Observations are stale. Showing the last snapshot.');
  }
 },5000);
+// Fullscreen the body, not the SVG/panel: modal sheets must remain descendants
+// of the native fullscreen element. Unsupported/rejected API uses CSS only.
+function initGraphFullscreen(){
+ const root=document.documentElement,button=$('#graph-fullscreen');
+ const notice=$('#observation-notice'),noticeAnchor=document.createComment('observation position');notice.before(noticeAnchor);
+ let active=false,nativeOwned=false,generation=0,sequence=0,entry=0,scroll=null;
+ let oldRestoration=null,size=network.dimensions();
+ const ownHistory=()=>entry&&history.state?.orreryGraphFullscreen===entry;
+ const closeTop=()=>{
+  const dialogs=[...document.querySelectorAll('dialog[open]')],top=dialogs.at(-1);
+  if(top){if(top.id==='terminal-sheet')window.OrreryMobileTerminal.close();else top.close();return true;}
+  if(!$('#settings').hidden){settings(false);return true;}
+  if(notice.open){notice.open=false;return true;}
+  return false;
+ };
+ const resize=()=>{
+  const next=network.dimensions();
+  if(next.w===size.w&&next.h===size.h)return;
+  if(network.userView){
+   const v=network.view,cx=v.vx+size.w/v.k/2,cy=v.vy+size.h/v.k/2;
+   network.view={k:v.k,vx:cx-next.w/v.k/2,vy:cy-next.h/v.k/2};network.applyView();
+  }else network.fit();
+  size=next;
+ };
+ new ResizeObserver(resize).observe(network.net);
+ function exit(pop=true){
+  if(!active)return;
+  const remove=pop&&ownHistory(),restore=scroll,restoration=oldRestoration,g=++generation;active=false;nativeOwned=false;
+  root.classList.remove('graph-fullscreen');delete root.dataset.graphDisplay;
+  notice.open=false;noticeAnchor.after(notice);
+  button.textContent='Expand';button.setAttribute('aria-label','Expand graph');button.setAttribute('aria-expanded','false');
+  const finished=document.fullscreenElement===document.body?document.exitFullscreen().catch(()=>{}):Promise.resolve();
+  if(restoration!==null)history.scrollRestoration=restoration;
+  if(remove)history.back();
+  // Native exit can reset scrolling after the first frame. Restore only once
+  // it has settled, and never let an older exit move a newly expanded graph.
+  finished.then(()=>requestAnimationFrame(()=>requestAnimationFrame(()=>{
+   if(active||g!==generation)return;
+   resize();if(restore)window.scrollTo({left:restore.x,top:restore.y,behavior:'instant'});
+   button.focus({preventScroll:true});
+  })));
+ }
+ function enter(){
+  if(active)return;active=true;nativeOwned=false;const g=++generation;
+  size=network.dimensions();scroll={x:scrollX,y:scrollY};
+  oldRestoration=history.scrollRestoration;entry=++sequence;
+  // Mode only: no agent, target proof, draft, preview or intent in history/URL.
+  history.pushState({orreryGraphFullscreen:entry},'');
+  history.scrollRestoration='manual';
+  root.classList.add('graph-fullscreen');root.dataset.graphDisplay='css';
+  $('#netinfo').after(notice);
+  button.textContent='Close';button.setAttribute('aria-label','Close expanded graph');button.setAttribute('aria-expanded','true');
+  requestAnimationFrame(resize);
+  if(document.fullscreenEnabled&&typeof document.body.requestFullscreen==='function'){
+   try{
+    Promise.resolve(document.body.requestFullscreen()).then(()=>{
+     if(!active){if(document.fullscreenElement===document.body)document.exitFullscreen().catch(()=>{});return;}
+     if(g!==generation)return;
+     nativeOwned=document.fullscreenElement===document.body;
+     if(nativeOwned)root.dataset.graphDisplay='native';
+    }).catch(()=>{});
+   }catch(_){} // CSS expansion already works; never change permissions.
+  }
+ }
+ button.onclick=()=>active?exit():enter();
+ window.addEventListener('popstate',()=>{
+  if(!active)return;
+  // Back closes the foreground sheet first, retaining the graph mode entry.
+  if(closeTop()){history.pushState({orreryGraphFullscreen:entry},'');return;}
+  exit(false);
+ });
+ document.addEventListener('keydown',e=>{
+  if(!active||e.key!=='Escape')return;e.preventDefault();e.stopImmediatePropagation();
+  if(!closeTop())exit();
+ },true);
+ document.addEventListener('fullscreenchange',()=>{
+  if(document.fullscreenElement===document.body){if(active){nativeOwned=true;root.dataset.graphDisplay='native';}return;}
+  if(active&&nativeOwned){while(closeTop()){}exit();}
+ });
+ window.addEventListener('pagehide',()=>{if(active){while(closeTop()){}exit(false);}});
+ return {exit};
+}
+graphFullscreen=initGraphFullscreen();
 poll();
+})();
+
+/* Common, opt-in pane terminal. No preview/draft/intent enters storage or URLs. */
+(()=>{'use strict';
+const q=s=>document.querySelector(s),make=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!==undefined)e.textContent=txt;return e;};
+const sheet=q('#terminal-sheet'),contract='orrery-mobile-pane-v1';
+let capability=null,enabled=false,phase='loading',name='',choices=[],choice=null,target=null,text='',output='',preview=null,previewOK=false,message='';
+let generation=0,previewController=null,operationController=null,pollTimer=0,expiryTimer=0,failures=0,prepared=null,receipt=null,previousFocus=null;
+const action=(label,cls,fn)=>{const b=make('button','terminal-button '+cls,label);b.type='button';b.onclick=fn;return b;};
+async function request(operation,payload,controller,timeout=3000){
+ const timer=setTimeout(()=>controller.abort(),timeout);
+ try{
+  const response=await fetch('/view/terminal'+(operation?'/'+operation:''),{method:operation?'POST':'GET',
+   headers:operation?{'Content-Type':'application/json'}:{},body:operation?JSON.stringify(payload):undefined,
+   credentials:'same-origin',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});
+  const raw=await response.text();if(new TextEncoder().encode(raw).length>16384)throw Error('unavailable');
+  const value=JSON.parse(raw);
+  if(!response.ok||value.contract!==contract||operation&&value.epoch!==capability.epoch)throw Error('unavailable');
+  return value;
+ }finally{clearTimeout(timer);}
+}
+function cancelIntent(){
+ const old=prepared||receipt;prepared=null;receipt=null;clearTimeout(expiryTimer);
+ if(!old||!enabled)return;
+ const controller=new AbortController();
+ // Best effort cancellation never retries commit, and keeps no text or preview.
+ request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
+}
+function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;generation++;}
+function clear(){stop();cancelIntent();name='';choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
+function close(){const restore=previousFocus;previousFocus=null;clear();if(sheet.open)sheet.close();if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});}
+function entry(n,cls=''){
+ const b=make('button','terminal-entry '+cls,'Terminal');b.type='button';b.dataset.terminalName=n;
+ b.setAttribute('aria-label','Open Terminal for '+n);b.disabled=!enabled;b.title=enabled?'View this agent’s selectable cockpit panes':'Terminal is off. Designated-phone policy acceptance and explicit opt-in are required.';
+ b.onclick=()=>open(n);return b;
+}
+const graphEntry=entry('','terminal-graph-entry');graphEntry.id='terminal-graph-entry';q('.selected-agent').after(graphEntry);
+function entries(){
+ const selected=q('#selected-name').textContent;graphEntry.replaceChildren(make('span','',selected==='None'?'Select an agent':selected),make('strong','','Terminal ⌁'));graphEntry.disabled=!enabled||selected==='None';graphEntry.onclick=()=>open(selected);
+ q('#attention').querySelectorAll(':scope > .attention-row').forEach(row=>{const n=row.querySelector('.name')?.textContent;if(!n)return;const wrap=make('div','terminal-attention');row.replaceWith(wrap);wrap.append(row,entry(n));});
+ q('#events').querySelectorAll('.status-line').forEach(row=>{const n=row.querySelector('.name')?.textContent;if(n&&!row.querySelector('.terminal-entry'))row.append(entry(n));});
+ document.querySelectorAll('.terminal-entry:not(#terminal-graph-entry)').forEach(b=>b.disabled=!enabled);
+}
+new MutationObserver(entries).observe(q('#selected-name'),{childList:true,subtree:true});
+new MutationObserver(entries).observe(q('#attention'),{childList:true});new MutationObserver(entries).observe(q('#events'),{childList:true});
+function mail(event){
+ q('.terminal-mail-people')?.remove();const people=make('div','terminal-mail-people');
+ for(const [label,n]of[['From',event.source],['To',event.target]]){const row=make('div','terminal-mail-person');row.append(make('span','',label+' '+n),entry(n));people.append(row);}
+ q('#message-route').after(people);
+}
+async function open(n){
+ if(!enabled||document.hidden)return;previousFocus=sheet.open?previousFocus:document.activeElement;clear();name=n;window.scrollTo({top:0,behavior:'instant'});
+ if(!sheet.open)sheet.showModal();render();await list();
+}
+async function list(){
+ stop();cancelIntent();choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;phase='loading';message='';render();
+ const g=generation,controller=new AbortController();operationController=controller;
+ try{
+  const data=await request('targets',{epoch:capability.epoch,name},controller);
+  if(g!==generation||document.hidden||!sheet.open)return;
+  if(!Array.isArray(data.targets)||data.targets.length>128||data.targets.some(t=>t.name!==name||typeof t.choice!=='string'||typeof t.pane_label!=='string'))throw Error('unavailable');
+  choices=data.targets;message=data.truncated?'Some panes are omitted. Refresh to see available choices.':'';
+  if(choices.length===1){choose(choices[0]);return;}
+  phase=choices.length?'choose':'unavailable';render();
+ }catch(_){if(g===generation&&sheet.open){phase='unavailable';message='No selectable cockpit pane could be verified. Refresh panes to try again.';render();}}
+ finally{if(g===generation)operationController=null;}
+}
+function choose(value){
+ stop();cancelIntent();choice=value;target=null;text='';output='';preview=null;previewOK=false;phase='editing';message='';failures=0;render();poll();
+}
+function refreshOutput(){
+ const pre=q('#terminal-output');if(pre){pre.textContent=output;pre.scrollTop=pre.scrollHeight;}
+ const stream=q('.terminal-stream');if(stream)stream.textContent=previewOK?'Updating every 3s':'Preview unavailable';
+ const age=q('.terminal-age');if(age)age.textContent=preview?'Observed '+new Date(preview.observed_at*1000).toLocaleTimeString('en-GB'):'';
+ const note=q('.terminal-preview-note');if(note)note.textContent=preview?[preview.truncated?'Tail shortened to 6 KiB.':'',preview.controls_removed?'Control sequences removed.':''].filter(Boolean).join(' '):'';
+ const review=q('#terminal-review');if(review)review.disabled=phase!=='editing'||!previewOK||!validText(text);
+ const status=q('.terminal-message');if(status)status.textContent=message;
+}
+async function poll(){
+ if(!sheet.open||document.hidden||!choice||previewController)return;
+ const g=generation,c=choice,controller=new AbortController();previewController=controller;
+ try{
+  const data=await request('preview',{epoch:capability.epoch,choice:c.choice},controller);
+  if(g!==generation||previewController!==controller||document.hidden||!sheet.open||choice!==c)return;
+  if(data.target?.choice!==c.choice||data.target?.name!==name||typeof data.target?.revision!=='string'||typeof data.text!=='string'||new TextEncoder().encode(data.text).length>6144)throw Error('unavailable');
+  if(target&&data.target.revision!==target.revision){invalidate('Pane changed. Refresh panes and review again.');return;}
+  target=Object.freeze({...data.target});preview=data;output=data.text;previewOK=true;failures=0;
+  if(!['preparing','review','sending','accepted','unknown'].includes(phase))message='';
+  refreshOutput();
+ }catch(_){
+  if(g!==generation||previewController!==controller||!sheet.open||document.hidden)return;
+  failures++;previewOK=false;output='';preview=null;
+  if(phase==='review'){cancelIntent();phase='editing';message='Preview unavailable. Review again after a fresh update.';render();}
+  else{message='Preview unavailable. Refresh panes if the target changed.';refreshOutput();}
+ }finally{
+  if(g===generation&&previewController===controller){previewController=null;if(sheet.open&&!document.hidden&&choice)pollTimer=setTimeout(poll,failures?Math.min(24000,3000*2**failures):3000);}
+ }
+}
+function invalidate(reason){stop();cancelIntent();text='';output='';preview=null;previewOK=false;target=null;phase='changed';message=reason;render();}
+function validText(value){return typeof value==='string'&&value.trim()&&new TextEncoder().encode(value).length<=4096&&!/[\p{Cc}\p{Cs}\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value);}
+async function reviewInput(){
+ if(!target||!choice||!previewOK||!validText(text))return;
+ clearTimeout(pollTimer);previewController?.abort();previewController=null;
+ const g=generation,t=target,draft=text,controller=new AbortController();operationController=controller;phase='preparing';render();
+ try{
+  const data=await request('prepare',{epoch:capability.epoch,choice:t.choice,revision:t.revision,text:draft},controller);
+  if(g!==generation||!sheet.open||document.hidden)return;
+  if(data.state!=='prepared'||data.text!==draft||data.expires_in!==30||data.target?.revision!==t.revision||data.target?.choice!==t.choice||data.target?.name!==name)throw Error('unavailable');
+  prepared=Object.freeze({...data,target:Object.freeze({...data.target})});receipt=null;phase='review';message='';render();
+  const identity=prepared;expiryTimer=setTimeout(()=>{if(prepared!==identity)return;cancelIntent();phase='editing';message='Confirmation expired. Review again.';render();},data.expires_in*1000);
+ }catch(_){if(g===generation&&sheet.open){prepared=null;phase='editing';message='Could not prepare this input. Refresh the pane and review again.';render();}}
+ finally{if(g===generation){operationController=null;if(!document.hidden&&sheet.open)pollTimer=setTimeout(poll,3000);}}
+}
+async function send(){
+ if(phase!=='review'||!prepared||!previewOK)return;
+ const p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target};
+ prepared=null;receipt=p;text='';clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
+ const g=generation,controller=new AbortController();operationController=controller;phase='sending';message='';render();
+ try{
+  const result=await request('commit',{epoch:p.epoch,intent:p.intent,confirmation:p.confirmation},controller,7000);
+  if(g!==generation||!sheet.open||document.hidden)return;
+  if(result.intent!==p.intent||result.target?.revision!==p.target.revision)throw Error('unavailable');
+  phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';render();
+ }catch(_){if(g===generation&&sheet.open){phase='unknown';render();}}
+ finally{if(g===generation){operationController=null;if(!document.hidden&&sheet.open)poll();}}
+}
+async function status(){
+ if(!receipt||operationController)return;const g=generation,p=receipt,controller=new AbortController();operationController=controller;
+ try{const result=await request('status',{epoch:p.epoch,intent:p.intent},controller);
+  if(g!==generation||!sheet.open)return;
+  if(result.intent!==p.intent||result.target?.revision!==p.target.revision)throw Error('unavailable');
+  phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';render();
+ }catch(_){if(g===generation&&sheet.open){message='Receipt unavailable. Input was not sent again.';render();}}
+ finally{if(g===generation)operationController=null;}
+}
+function resizeSheet(){
+ if(!sheet.open)return;const v=window.visualViewport,h=v?.height||innerHeight,offset=v?.offsetTop||0;
+ sheet.style.height=Math.min(746,h-(h<610?8:86))+'px';sheet.style.maxHeight=Math.max(120,h-8)+'px';
+ sheet.style.bottom=Math.max(0,innerHeight-h-offset)+'px';sheet.classList.toggle('terminal-keyboard',h<610);
+}
+window.visualViewport?.addEventListener('resize',resizeSheet);window.visualViewport?.addEventListener('scroll',resizeSheet);window.addEventListener('resize',resizeSheet);
+function render(){
+ resizeSheet();sheet.replaceChildren();
+ const header=make('div','terminal-header'),title=make('h2','',phase==='review'?'Review input':'Terminal');title.id='terminal-title';header.append(title,action('Close','terminal-close',close));sheet.append(header);
+ const who=make('div','terminal-identity'),copy=make('div'),portrait=make('img');portrait.src=window.AGENTSTACK_DEMO.portraitURL(name);portrait.alt='';portrait.onerror=()=>portrait.remove();copy.append(make('strong','',name),make('small','','Cockpit session'));who.append(portrait,copy);
+ if(choice){const b=make('button','terminal-pane-button',choice.pane_label+' ⌄');b.type='button';b.disabled=['sending','preparing'].includes(phase);b.onclick=list;who.append(b);}
+ sheet.append(who);const scroll=make('div','terminal-scroll');sheet.append(scroll);
+ if(phase==='loading'){scroll.append(make('p','terminal-help','Finding selectable panes…'));return;}
+ if(phase==='choose'){
+  scroll.append(make('p','terminal-help','Choose the pane you want to view and send input to.'));
+  const paneList=make('div','terminal-choices');for(const c of choices){const b=action('','',()=>choose(c));b.append(make('strong','',c.pane_label),make('small','',c.name));paneList.append(b);}scroll.append(paneList);
+  if(message)scroll.append(make('p','terminal-help',message));scroll.append(action('Refresh panes','',list));return;
+ }
+ if(['unavailable','changed'].includes(phase)){
+  scroll.append(make('p','terminal-result',phase==='changed'?'Pane changed':'Terminal unavailable'),make('p','terminal-help',message));sheet.append(action('Refresh panes','terminal-button',list));return;
+ }
+ const terminal=make('div','terminal-preview'),bar=make('div','terminal-preview-head');bar.append(make('span','terminal-stream',''),make('span','','Terminal tail'));const pre=make('pre','terminal-output');pre.id='terminal-output';terminal.append(bar,pre);scroll.append(terminal);
+ const observed=make('div','terminal-observed');observed.append(make('span','','Latest 40 lines · up to 6 KiB'),make('span','terminal-age',''));scroll.append(observed,make('p','terminal-preview-note',''));
+ if(['editing','preparing'].includes(phase)){
+  const label=make('label','terminal-compose-label','Your input');label.htmlFor='terminal-text';const field=make('textarea','terminal-text');field.id='terminal-text';field.rows=2;field.value=text;field.placeholder='Write one line…';field.autocomplete='off';field.spellcheck=false;field.disabled=phase==='preparing';
+  const count=make('span','',new TextEncoder().encode(text).length+' / 4096 bytes'),meta=make('div','terminal-input-meta');meta.append(make('span','','One line + Enter'),count);
+  scroll.append(label,field,meta,make('p','terminal-help','Check the terminal above before sending.'));
+  const actions=make('div','terminal-actions'),review=action(phase==='preparing'?'Preparing…':'Review input','terminal-primary',reviewInput);review.id='terminal-review';review.disabled=phase==='preparing'||!previewOK||!validText(text);
+  field.oninput=()=>{text=field.value;count.textContent=new TextEncoder().encode(text).length+' / 4096 bytes';review.disabled=!previewOK||!validText(text);};field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};actions.append(action('Cancel','',close),review);sheet.append(actions);
+ }else if(phase==='review'){
+  scroll.append(make('p','terminal-compose-label','Exact text to '+prepared.target.name),make('pre','terminal-exact',prepared.text));const enter=make('div','terminal-enter');enter.append(make('span','','After this text'),make('kbd','','Enter ↵'));scroll.append(enter,make('p','terminal-help','Sends once to this pane. It may be a shell. Existing terminal input may be combined with it.'));
+  const actions=make('div','terminal-actions');actions.append(action('Edit','',()=>{cancelIntent();phase='editing';render();}),action('Send once','terminal-primary',send));sheet.append(actions);
+ }else{
+  const accepted=phase==='accepted',unknown=phase==='unknown';scroll.append(make('p','terminal-result',accepted?'Received by terminal':unknown?'Outcome unknown':phase==='sending'?'Sending once…':'Input not sent'),make('p','terminal-receipt',accepted?'Input and Enter received. This does not confirm the task is complete.':unknown?'Some input may have arrived. No automatic retry. Check the pane before writing again.':phase==='sending'?'Waiting for the terminal receipt.':'The input was refused or its confirmation expired.'));
+  if(accepted)scroll.append(make('p','terminal-result-note','The pane keeps updating while this sheet is open.'));
+  const actions=make('div','terminal-actions');actions.append(action('Close','',close));if(unknown)actions.append(action('Check receipt','terminal-primary',status));else if(phase!=='sending')actions.append(action('Write again','terminal-primary',()=>{cancelIntent();phase='editing';text='';render();}));sheet.append(actions);
+ }
+ scroll.append(make('p','terminal-message',message));refreshOutput();
+}
+sheet.addEventListener('cancel',e=>{e.preventDefault();close();});sheet.addEventListener('close',()=>{if(name)close();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)close();});window.addEventListener('pagehide',close);
+window.OrreryMobileTerminal={open,close,mail};entries();
+const controller=new AbortController();request('',null,controller).then(value=>{if(value.api===31&&value.enabled===true&&value.supported==='legacy-managed-pane'&&value.ack==='tmux-command-accepted'){capability=Object.freeze({...value});enabled=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent='Terminal enabled';entries();}}).catch(()=>{});
 })();
