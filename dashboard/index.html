@@ -34896,7 +34896,7 @@ function renderDrawerThread(j){
   }
   const html=j.messages.map(m=>{
     const ts=fmtEdgeTs(m);
-    const imp=(m.importance||'normal').toLowerCase();
+    const imp=mailImportance(m.importance);
     const ackBadge=m.ack_required && !m.ack_ts ? '<span class="ed-ack">◬ ACK</span>' : '';
     const prev=(m.body||'').trim();
     return `<div class="ed-msg" onclick="toggleMsg(event)">
@@ -35599,12 +35599,19 @@ function cometEnvelope(t,reduced=false){
   return {opacity,scale,tailOpacity};
 }
 
+// importance は送信者が自由に書ける値なので、既知の4値以外は normal にしてから
+// class 名や表示に使う。
+function mailImportance(value){
+  const v=String(value||'normal').toLowerCase();
+  return ['low','normal','high','urgent'].includes(v)?v:'normal';
+}
+
 function runMessageAnim(m){
   const a=gmap.get(m.sender), b=gmap.get(m.recipient);
   if(!a||!b)return false; // graph poll より先着: mailDrain が有界再試行
   if(m.sender===m.recipient)return true;  // self-loop は描かない
   mailActive++;
-  const imp=(m.importance||'normal').toLowerCase();
+  const imp=mailImportance(m.importance);
   // 1) sender 側に小さく弧波（出発）
   spawnNodePulse(m.sender,'snd');
   // 2) comet 本体（SVG, world 座標）
