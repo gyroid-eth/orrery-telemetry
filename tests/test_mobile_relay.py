@@ -312,3 +312,109 @@ def test_portrait_upstream_is_fixed_png_bounded_without_redirect_or_identity_hea
         for name in ('../bad','http://elsewhere/','a%2fb'):
             with pytest.raises(ValueError):upstream.portrait(name)
         assert len(seen)==5
+
+
+def shortcut_request(port,path='/',method='GET',*,replace=None,omit=(),extra=()):
+    """Send the exact request-target and duplicate headers without normalization."""
+    fields=[('Host','viewer.example.ts.net:9443'),('Tailscale-User-Login','owner@example.test'),
+            ('Sec-Fetch-Site','cross-site'),('Sec-Fetch-Mode','navigate'),('Sec-Fetch-Dest','document')]
+    fields=[(key,(replace or {}).get(key,value)) for key,value in fields if key not in omit]
+    fields.extend(extra)
+    wire='\r\n'.join([f'{method} {path} HTTP/1.1',*[f'{key}: {value}' for key,value in fields],
+                       'Connection: close','','']).encode('ascii')
+    with socket.create_connection(('127.0.0.1',port),timeout=3) as sock:
+        sock.sendall(wire);chunks=[]
+        while data:=sock.recv(65536):chunks.append(data)
+    headers,body=b''.join(chunks).split(b'\r\n\r\n',1)
+    lines=headers.decode('ascii').split('\r\n')
+    return int(lines[0].split()[1]),dict(line.split(': ',1) for line in lines[1:]),body
+
+
+@pytest.fixture
+def shortcut_reader(monkeypatch):
+    calls=[];store=Store()
+    def upstream(*args,**kwargs):
+        calls.append('upstream');raise AssertionError('root navigation must not read upstream')
+    monkeypatch.setattr(relay.Upstream,'_read',upstream)
+    server=relay.make_server(relay.Config('owner@example.test','https://viewer.example.ts.net:9443'),
+                             store=store,test_port=0)
+    server.mobile_mail.observe=lambda *args:calls.append('observe')
+    server.mobile_mail.start_warm=lambda:calls.append('warm')
+    with serving(server) as port:yield port,store,calls
+    assert store.calls==calls==[]
+
+
+@pytest.mark.parametrize('method',['GET','HEAD'])
+@pytest.mark.parametrize('origin',[None,'https://viewer.example.ts.net:9443'])
+def test_shortcut_root_document_navigation_accepts_only_the_authenticated_shell(shortcut_reader,method,origin):
+    from pathlib import Path
+    port,store,calls=shortcut_reader
+    extra=[] if origin is None else [('Origin',origin)]
+    status,headers,body=shortcut_request(port,method=method,extra=extra)
+    assert status==200
+    expected=(Path(relay.__file__).parent/'mobile/index.html').read_bytes()
+    assert headers['Content-Type']=='text/html; charset=utf-8'
+    assert int(headers['Content-Length'])==len(expected)
+    assert body==(expected if method=='GET' else b'')
+    assert headers['Cache-Control']=='no-store' and headers['Content-Security-Policy']==relay.CSP
+    assert headers['X-Frame-Options']=='DENY' and store.calls==calls==[]
+
+
+@pytest.mark.parametrize('path',[
+    '/?','/?window=day','/index.html','/./','//','//viewer.example.ts.net/',
+    'http://viewer.example.ts.net:9443/','/%2f','/\\','/#fragment',
+    '/view/snapshot','/view/message?window=day&event='+'a'*32,
+    '/view/mail?window=day','/view/portrait?name=FixtureCurie',
+    '/assets/orbit.svg','/network_node.js','/network.css','/mobile.js','/fonts/fraunces-normal.woff2'])
+def test_shortcut_navigation_cannot_open_data_assets_or_ambiguous_root(shortcut_reader,path):
+    port,store,calls=shortcut_reader
+    assert shortcut_request(port,path)[0]==403,path
+    assert store.calls==calls==[]
+
+
+@pytest.mark.parametrize('case',[
+    'missing_mode','missing_dest','cors','no_cors','iframe','embed','mode_case','dest_case',
+    'unknown_site','site_list','duplicate_site','duplicate_mode','duplicate_dest',
+    'missing_owner','owner_other','missing_host','host_other','origin_other','origin_null',
+    'duplicate_owner','duplicate_host','duplicate_origin','authority','override','upgrade',
+    'body_length','duplicate_length','transfer_encoding'])
+def test_shortcut_root_keeps_fetch_metadata_auth_origin_and_framing_guards(shortcut_reader,case):
+    port,store,calls=shortcut_reader;replace={};omit=[];extra=[]
+    changes={
+        'missing_mode':('omit','Sec-Fetch-Mode',None),'missing_dest':('omit','Sec-Fetch-Dest',None),
+        'cors':('replace','Sec-Fetch-Mode','cors'),'no_cors':('replace','Sec-Fetch-Mode','no-cors'),
+        'iframe':('replace','Sec-Fetch-Dest','iframe'),'embed':('replace','Sec-Fetch-Dest','embed'),
+        'mode_case':('replace','Sec-Fetch-Mode','NAVIGATE'),'dest_case':('replace','Sec-Fetch-Dest','DOCUMENT'),
+        'unknown_site':('replace','Sec-Fetch-Site','unknown'),'site_list':('replace','Sec-Fetch-Site','cross-site, none'),
+        'duplicate_site':('extra','Sec-Fetch-Site','none'),'duplicate_mode':('extra','Sec-Fetch-Mode','navigate'),
+        'duplicate_dest':('extra','Sec-Fetch-Dest','document'),'missing_owner':('omit','Tailscale-User-Login',None),
+        'owner_other':('replace','Tailscale-User-Login','other@example.test'),'missing_host':('omit','Host',None),
+        'host_other':('replace','Host','other.example.ts.net:9443'),
+        'origin_other':('extra','Origin','https://other.example.ts.net:9443'),'origin_null':('extra','Origin','null'),
+        'duplicate_owner':('extra','Tailscale-User-Login','owner@example.test'),
+        'duplicate_host':('extra','Host','viewer.example.ts.net:9443'),
+        'duplicate_origin':('extra','Origin','https://viewer.example.ts.net:9443'),
+        'authority':('extra','Authority','viewer.example.ts.net:9443'),
+        'override':('extra','X-HTTP-Method-Override','POST'),'upgrade':('extra','Upgrade','websocket'),
+        'body_length':('extra','Content-Length','1'),'duplicate_length':('extra','Content-Length','0'),
+        'transfer_encoding':('extra','Transfer-Encoding','chunked')}
+    kind,key,value=changes[case]
+    if kind=='omit':omit.append(key)
+    elif kind=='replace':replace[key]=value
+    else:extra.append((key,value))
+    if case in {'duplicate_origin','duplicate_length'}:extra.append((key,value))
+    assert shortcut_request(port,replace=replace,omit=omit,extra=extra)[0]==403,case
+    assert store.calls==calls==[]
+
+
+@pytest.mark.parametrize('method',['POST','PUT','PATCH','DELETE','OPTIONS','TRACE','CONNECT'])
+def test_shortcut_document_headers_never_enable_an_operation(shortcut_reader,method):
+    assert shortcut_request(shortcut_reader[0],method=method)[0]==405
+
+
+@pytest.mark.parametrize('site',[None,'none','same-origin'])
+def test_existing_root_navigation_without_the_shortcut_exception_stays_available(shortcut_reader,site):
+    omit=['Sec-Fetch-Mode','Sec-Fetch-Dest'];replace={}
+    if site is None:omit.append('Sec-Fetch-Site')
+    else:replace['Sec-Fetch-Site']=site
+    assert shortcut_request(shortcut_reader[0],omit=omit,replace=replace)[0]==200

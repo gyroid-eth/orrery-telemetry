@@ -187,12 +187,22 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError,TypeError):
             return False
         if self.headers.get_all('Authority',[]):return False
-        if self.headers.get('Sec-Fetch-Site','').lower() not in {'','none','same-origin'}:return False
+        words = self.requestline.split()
+        target = words[1] if len(words) == 3 else ''
+        site=self.headers.get_all('Sec-Fetch-Site',[])
+        mode=self.headers.get_all('Sec-Fetch-Mode',[])
+        dest=self.headers.get_all('Sec-Fetch-Dest',[])
+        if any(len(values)>1 for values in (site,mode,dest)):return False
+        if (site[0] if site else '').lower() not in {'','none','same-origin'}:
+            # Android home shortcuts can start an authenticated top-level
+            # document navigation cross-site. This admits only the root shell,
+            # never its data/assets, and still passes every other guard below.
+            if not (self.command in {'GET','HEAD'} and target==self.path=='/'
+                    and site==['cross-site'] and mode==['navigate'] and dest==['document']):
+                return False
         if any(self.headers.get_all(h,[]) for h in ('Upgrade','Transfer-Encoding','X-HTTP-Method-Override','X-Method-Override','X-HTTP-Method')):return False
         lengths=self.headers.get_all('Content-Length',[])
         if len(lengths)>1 or (lengths and lengths[0]!='0'):return False
-        words = self.requestline.split()
-        target = words[1] if len(words) == 3 else ''
         return target == self.path and target.startswith('/') and not target.startswith('//') and '#' not in target and '%' not in target and '\\' not in target
 
     def do_GET(self):
