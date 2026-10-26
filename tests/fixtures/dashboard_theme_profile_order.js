@@ -10,8 +10,8 @@
   const profile=async requested=>{
     const data={type:'agentstack-theme-profile',version:1,
       requestId:`dashboard-profile-${++profileRequestSequence}`,values:requested};
-    const applied=await applyThemeProfileMessage(data);
-    return {data,applied,envelope:themeProfileResultMessage(data,applied)};
+    const applied=await applyThemeProfileValues(data.values);
+    return {data,applied,envelope:({requested:data.values,applied:applied.applied,axes:applied.axes||{},status:applied.ok?'applied':'rejected',reason:applied.reason})};
   };
   const reset=()=>profile(values());
   const result={normal:[],zero:[],minimum:[],adversarial:{},profile:{}};
@@ -22,10 +22,10 @@
       reject(new Error('theme bridge ready timeout'));
     },1000);
     const onMessage=event=>{
-      if(!['agentstack-theme-axis-ready','agentstack-theme-profile-ready']
+      if(!['agentstack-theme-axis-ready']
           .includes(event.data&&event.data.type))return;
       messages.push(event.data);
-      if(messages.length===2){
+      if(messages.length===1){
         clearTimeout(timeout);window.removeEventListener('message',onMessage);
         resolve(messages);
       }
@@ -153,8 +153,6 @@
       orderResults.push({small,tracking,memberCount:members.length,mismatch,
         transactions:[smallFirst.applied.ok,smallThenTracking.applied.ok,
           trackingFirst.applied.ok,trackingThenSmall.applied.ok],
-        requestIdEcho:trackingThenSmall.envelope.requestId===
-          trackingThenSmall.data.requestId,
         finalEnvelope:trackingThenSmall.envelope});
     }
   }
@@ -197,8 +195,8 @@
   const lastValid=await profile(values(.25,.5));
   const invalidData={type:'agentstack-theme-profile',version:1,
     requestId:'dashboard-profile-invalid',values:values(1.001,.5)};
-  const invalidApplied=await applyThemeProfileMessage(invalidData);
-  const invalidEnvelope=themeProfileResultMessage(invalidData,invalidApplied);
+  const invalidApplied=await applyThemeProfileValues(invalidData.values);
+  const invalidEnvelope=({requested:invalidData.values,applied:invalidApplied.applied,axes:invalidApplied.axes||{},status:invalidApplied.ok?'applied':'rejected',reason:invalidApplied.reason});
   const profileHidden=document.createElement('style');
   profileHidden.textContent='html,body,body *{visibility:hidden!important}';
   document.head.appendChild(profileHidden);

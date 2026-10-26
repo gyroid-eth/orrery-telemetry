@@ -420,50 +420,7 @@ python3 scripts/dashboard_theme_manifest.py --check
 
 `source` is token / declaration coverage; `mutation` is the compiled count of token-write / element / effect-component applications derived from an immutable snapshot immediately before application. Source units are axis-specific: `dim-contrast` / `background` use `token-write`, while `small-text` / `tracking` / `glow` use `declaration`. Effect membership is fixed only by generated eligibility's pre-apply live match; neither pre/post/endpoint values add or remove targets. Of these, rendered members with nonzero boxes inside the viewport are `visibleExpected`; members whose post-cascade computed value reaches the requested derivation are `visibleReached`. A member already at the requested value also counts as reached. `visibleChanged` counts visible members whose canonical post differs from pre; `changed` is an independent no-op gate counting that difference for all evaluated members. Hidden / zero-box / offscreen members count as `deferred`. A non-null apply succeeds only with `visibleExpected > 0`, `visibleReached === visibleExpected`, `visibleChanged > 0`, and `changed > 0`. Zero or sub-quantization changes are rejected as `no-effective-change`, zero visible targets as `no-visible-targets`, and any member failing to reach the requested derivation as `effect-count-mismatch`, restoring the previous valid axis. Surfaces and units are not summed. The `glow` effect unit is a live `effect-component`: two target radial layers on one surface count as two, and one CSS rule matching ten visible elements counts as ten. Selector and keyframe source components are divided into `emissive | elevation | focus | state`, allowing color halos to weaken while preserving elevation and focus.
 
-### Atomic theme profile bridge
-
-`small-text` and `tracking` can be applied together as one atomic profile using a complete five-axis vector. Every key is required; non-null combinations may be empty, any subset of `small-text` / `tracking`, or a single legacy axis.
-
-```js
-frame.contentWindow.postMessage({
-  type: "agentstack-theme-profile",
-  version: 1,
-  requestId: "theme-42",
-  values: {
-    "dim-contrast": null,
-    "small-text": 0.5,
-    tracking: 0.25,
-    glow: null,
-    background: null,
-  },
-}, location.origin);
-```
-
-The receiver derives both axes from the same A snapshot with every experimental override removed. With baseline font size `s0` and baseline letter-spacing ratio `r0`, final small size is `s(vs)`, tracking ratio is `lerp(r0, min(r0, 0.08), vt)`, and final spacing is that ratio times `s(vs)`. Because the previous profile render is not used as the next baseline, UI operations small→tracking and tracking→small produce identical computed size / weight / spacing for the same complete final vector. DOM nodes added later also derive both axes together from an A baseline with overrides temporarily disabled and add them to each axis's independent envelope.
-
-On success, it returns the response below. `requested` / `applied` are always exact five-key maps; `axes` is the exact set of non-null axes.
-
-```js
-{
-  type: "agentstack-theme-profile-result",
-  version: 1,
-  requestId: "theme-42",
-  surface: "telemetry",
-  requested: {"dim-contrast": null, "small-text": 0.5,
-    tracking: 0.25, glow: null, background: null},
-  applied: {"dim-contrast": null, "small-text": 0.5,
-    tracking: 0.25, glow: null, background: null},
-  status: "applied",
-  axes: {
-    "small-text": {status: "applied", source: {}, mutation: {}, effect: {}},
-    tracking: {status: "applied", source: {}, mutation: {}, effect: {}},
-  },
-}
-```
-
-If any axis fails a source / mutation / effect guard, the complete profile is rejected and `applied` contains the restored last-valid complete map. Schema violations also leave state unchanged. Legacy `agentstack-theme-axis` v1 is equivalent to a complete profile with every axis except the target set to null, and legacy `value: null` resets all axes. If the result reply is lost, the parent coordinator can send the last-valid complete profile with a fresh `requestId` as a compensating request.
-
-After embed initialization and reload, the dashboard sends `agentstack-theme-axis-ready` and `agentstack-theme-profile-ready`, both version 1 with `surface: "telemetry"`, to the same-origin parent. Recovery sends a compensating profile after this explicit signal and does not count as complete until its result is acknowledged. The parent coordinator owns timeout and UI failure display when ready never arrives.
+After embed initialization or reload, `agentstack-theme-axis-ready` (version 1, surface `telemetry`) is sent to the same-origin parent. The former Vision profile message protocol has been removed; the single-axis contract above remains available.
 
 ## Terminal bridge
 
