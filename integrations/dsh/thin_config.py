@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 THIN_CONFIG_CONTRACT = 1
 HELPER_MODEL_CONTRACT = 1
 CONNECTIONS = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'hooks/native_connections.py'))
+SERVER_MODELS = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'hooks/native_server_models.py'))
 
 
 def read(file):
@@ -86,12 +87,15 @@ def validate_input(document):
         kind, metadata = CONNECTIONS['resolve_connection'](manifest, backend_id)
         if 'backend_kind' in document and document['backend_kind'] != kind:
             raise ValueError('connection_kind_changed')
-        if document['model'] not in model_ids(metadata):
+        dynamic = SERVER_MODELS['dynamic'](metadata)
+        if dynamic:
+            selected_url = SERVER_MODELS['selection'](metadata, document)['server_url']
+        elif document['model'] not in model_ids(metadata):
             raise ValueError('model_mismatch')
         helper = document.get('helper_model', 'same')
         if helper is None:
             helper = 'same'
-        if helper != 'same' and helper not in model_ids(metadata):
+        if helper != 'same' and (dynamic or helper not in model_ids(metadata)):
             raise ValueError('invalid_helper_model')
         template = read(absolute(manifest['harnesses']['dsh']['config_file']))
         owner = read(absolute(template['generation_receipt']))
@@ -126,6 +130,12 @@ def validate_input(document):
                 raise ValueError('invalid_runtime')
         backend_file = absolute(template['backend_file'])
         backend = read(backend_file)['backends'][backend_id]
+        if dynamic:
+            context, _ = SERVER_MODELS['context'](metadata, {'meta': document.get('server_context')})
+            base = SERVER_MODELS['api_base'](selected_url)
+            backend = {**backend, 'base_url': base.removesuffix('/v1'), 'model': document['model'],
+                'model_definition': {'id': document['model'], 'contextWindow': context,
+                                     'maxTokens': min(SERVER_MODELS['DEFAULT_OUTPUT'], context)}}
         url = urlsplit(backend['base_url'])
         if url.scheme not in ('https', 'http') or not url.hostname or url.username or url.password:
             raise ValueError('invalid_backend_url')

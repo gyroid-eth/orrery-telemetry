@@ -23,7 +23,7 @@ class LaunchdImportTests(unittest.TestCase):
             shutil.copyfile(ROOT / 'dashboard' / file, self.dashboard / file)
         hooks = self.product / 'hooks'
         hooks.mkdir()
-        for file in ('harness_child.py', 'child_resume.py', 'child_tools.py', 'native_connections.py'):
+        for file in ('harness_child.py', 'child_resume.py', 'child_tools.py', 'native_connections.py', 'native_server_models.py'):
             shutil.copyfile(ROOT / 'hooks' / file, hooks / file)
         self.manifest = self.home / 'manifest.json'
         self.manifest.write_text(json.dumps({'enabled': True,
@@ -53,6 +53,7 @@ m.sys.platform='darwin'
 launcher=m.thin_launcher()
 assert Path(launcher.__file__).resolve().is_relative_to(Path(sys.argv[2]))
 assert launcher.child_resume and launcher.child_tools
+assert Path(launcher.native_server_models.__file__).resolve().is_relative_to(Path(sys.argv[2]))
 rows=m.standard_catalog(sys.argv[3],mode='legacy')
 assert [p['id'] for p in rows] == ['deepseek','strata']
 assert all(not h['available'] and h['reason'] for p in rows for r in p['models'] for h in r['harnesses'])

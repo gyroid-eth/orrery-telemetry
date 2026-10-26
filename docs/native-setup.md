@@ -8,6 +8,21 @@ ORRERYの共通部分を入れたあと、DeepSeekまたはLocal LLMを使うた
 
 cockpitはターミナルを並べて操作する画面、Telemetryはagentの状態を表示し、起動を受け付ける側です。API接続の準備はTelemetry側で行い、準備が終わればどちらのNEW AGENTからも選べます。現在、NEW AGENTにAPIキーを入力する欄や、接続設定を一括で済ませるウィザードはありません。
 
+### Local serverはURLを一度設定する
+
+動的Local接続は、既存agentへ[一度の移行手順](../examples/native-harnesses/README.md#dynamic-local-connections)を読ませて設定します。接続ごとに任意の表示名、1本以上のAPI URL、任意のcontext fallbackを持ちます。両NEW AGENTはserverが返すmodel IDを接続見出しの下へ列挙します。同じURLに新しいmodelが現れたとき、modelごとのORRERY設定・再installは不要です。従来の固定model接続は、移行するまで引き続き使えます。
+
+この節はTelemetry API33以降と対応するcockpit picker更新が必要です。接続の移行前に両方を更新します。以下の従来の固定model手順は互換を維持します。
+
+| 担当 | 手順 |
+| --- | --- |
+| 利用者のagent | 手順を読み、別の私有copyを準備。既存OS資格参照・runtime pathを保持し、対象Localをそれぞれ `model_source: server` へ変更して非秘密diffを提示。鍵取得・server通信なしの静的検査を実行する |
+| 本人 | URLとdiffを確認。必要な鍵登録・unlockはOSの画面だけで行い、新manifestの利用を承認する |
+| agent／本人 | 既存のplan/dry-run・install手順へ新manifestを渡す。両画面をreloadし、接続名・URL番号・modelを選択。実機の短い1課題は別途調整する |
+| agent／本人 | 復旧時は保存した旧manifestを同じ通常install手順へ渡す。保持sessionのURLやmodelを別のものへ書き換えない |
+
+製品は既存の保護された資格参照でmodel一覧を取得し、起動・再開のcommand生成直前に選択URLだけをもう1回照合します。serverのmodel起動・停止は行いません。`Available` は、返却IDに明示的unloadedがないという意味で、ロード済みの証明ではありません。最終照合後の変更、同名IDのrun交換、指定IDを無視するserverはこの観測の保証外です。以下のdsh protocolとHermes HTTPSの条件は維持します。
+
 **古い版を使っている場合は、先に通常の更新を済ませます。** このガイドはTelemetry 2026.10.22以降が対象です。インストール先の版は、ターミナルで `cat "${AGENTSTACK_HOME:-$HOME/.agentstack}/VERSION"` を実行して確認できます。それより古い場合や版を確認できない場合は、[Telemetryの更新手順](install.md#upgrade)を確認してください。cockpitも使う場合は、[cockpitの更新手順](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md#1-行で入れる更新する)で両方を更新できます。古いinstallerでは、この後の追加オプションを受け付けない場合があります。通常の更新が終わってから、以下のdsh・Hermesの追加とキーの保存へ進みます。更新は準備の前提で、初回のAPI設定とは別の工程です。
 
 ## 1. 最初に使う組合せを選ぶ

@@ -274,6 +274,8 @@ open_child_terminal() {
 USE_CODEX=false
 HARNESS=""
 HARNESS_BACKEND=""
+HARNESS_URL_INDEX=""
+HARNESS_URL_KEY=""
 HARNESS_HELPER_MODEL=""
 HARNESS_STATE=""
 HARNESS_HELPER="${AGENTSTACK_HARNESS_CHILD_HELPER:-$HOOKS_DIR/harness_child.py}"
@@ -337,6 +339,22 @@ while [[ "${1:-}" == --* ]]; do
                 exit 1
             fi
             HARNESS_HELPER_MODEL="$2"
+            shift 2
+            ;;
+        --url-index)
+            if [[ $# -lt 2 || ! "${2:-}" =~ ^[0-9]+$ ]]; then
+                echo "Error: --url-index requires a nonnegative integer" >&2
+                exit 1
+            fi
+            HARNESS_URL_INDEX="$2"
+            shift 2
+            ;;
+        --url-key)
+            if [[ $# -lt 2 || ! "${2:-}" =~ ^[0-9a-f]{64}$ ]]; then
+                echo "Error: --url-key requires a configured URL fingerprint" >&2
+                exit 1
+            fi
+            HARNESS_URL_KEY="$2"
             shift 2
             ;;
         --model)
@@ -451,7 +469,14 @@ if [[ -n "$HARNESS" || -n "$HARNESS_BACKEND" ]]; then
     fi
     "${AGENTSTACK_PYTHON:-python3}" "$HARNESS_HELPER" validate --harness "$HARNESS" \
         --backend "$HARNESS_BACKEND" --model "$CLAUDE_MODEL" \
-        --manifest "${AGENTSTACK_MANAGED_SPAWN_CONFIG:-}" ${CODEX_EFFORT:+--effort "$CODEX_EFFORT"} || exit 1
+        --manifest "${AGENTSTACK_MANAGED_SPAWN_CONFIG:-}" ${HARNESS_URL_INDEX:+--url-index "$HARNESS_URL_INDEX"} \
+        ${HARNESS_URL_KEY:+--url-key "$HARNESS_URL_KEY"} \
+        ${CODEX_EFFORT:+--effort "$CODEX_EFFORT"} || exit 1
+fi
+
+if [[ ( -n "$HARNESS_URL_INDEX" || -n "$HARNESS_URL_KEY" ) && -z "$HARNESS" ]]; then
+    echo "Error: --url-index requires --harness" >&2
+    exit 1
 fi
 
 if [[ -n "$HARNESS_HELPER_MODEL" && -z "$HARNESS" ]]; then
@@ -3033,6 +3058,8 @@ start_harness_child() {
     [[ -n "$tools_spec" ]] || tools_spec='{"base":"default","tools":{}}'
     [[ -z "$CODEX_EFFORT" ]] || native_args=(--effort "$CODEX_EFFORT")
     [[ -z "$HARNESS_HELPER_MODEL" ]] || native_args+=(--helper-model "$HARNESS_HELPER_MODEL")
+    [[ -z "$HARNESS_URL_INDEX" ]] || native_args+=(--url-index "$HARNESS_URL_INDEX")
+    [[ -z "$HARNESS_URL_KEY" ]] || native_args+=(--url-key "$HARNESS_URL_KEY")
     HARNESS_STATE="$("${AGENTSTACK_PYTHON:-python3}" "$HARNESS_HELPER" prepare \
         --runtime-dir "$RUNTIME_DIR" --agent-name "$CHILD_NAME" --project-key "$PROJECT_KEY" \
         --harness "$HARNESS" --backend "$HARNESS_BACKEND" --model "$CHILD_MODEL" \

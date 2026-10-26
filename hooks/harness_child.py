@@ -17,7 +17,7 @@ import time
 import types
 
 if __package__:
-    from . import child_resume, child_tools, native_connections
+    from . import child_resume, child_tools, native_connections, native_server_models
 else:
     # Isolated Python excludes the script directory from sys.path. Load only
     # product siblings through a private package, independent of cwd/PYTHONPATH.
@@ -27,11 +27,13 @@ else:
     child_resume = importlib.import_module(package.__name__ + '.child_resume')
     child_tools = importlib.import_module(package.__name__ + '.child_tools')
     native_connections = importlib.import_module(package.__name__ + '.native_connections')
+    native_server_models = importlib.import_module(package.__name__ + '.native_server_models')
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESSES = {'dsh', 'hermes'}
 _VALIDATION_CACHE = {}
 VALIDATION_CACHE_SECONDS = 15
+VALIDATION_CACHE_ENTRIES = 128
 
 
 def read(path):
@@ -92,7 +94,7 @@ def static_check(receipt, config, *, harness):
         return dict(available=False, reason='runtime_not_prepared')
 
 
-def selection(manifest, harness, backend, model, effort=None):
+def selection(manifest, harness, backend, model, effort=None, url_index=None, server_url=None, url_key=None):
     if harness not in HARNESSES or not model:
         raise ValueError('invalid_harness_selection')
     config_generator(ROOT, harness)
@@ -102,11 +104,19 @@ def selection(manifest, harness, backend, model, effort=None):
     if data.get('enabled') is not True:
         raise ValueError('harness_not_enabled')
     kind, backend_spec = native_connections.resolve_connection(data, backend)
-    models = backend_spec.get('models', [backend_spec.get('model')])
-    if not isinstance(models,list) or not models or not all(isinstance(v,str) and v for v in models):
-        raise ValueError('invalid_model_catalog')
-    if model not in models:
-        raise ValueError('model_mismatch')
+    route = {}
+    if native_server_models.dynamic(backend_spec):
+        route = native_server_models.selection(backend_spec, dict(model=model, url_index=url_index,
+            **({'server_url': server_url} if server_url is not None else {}),
+            **({'url_key': url_key} if url_key is not None else {})))
+    else:
+        if url_index is not None or server_url is not None or url_key is not None:
+            raise ValueError('unexpected_url_selection')
+        models = backend_spec.get('models', [backend_spec.get('model')])
+        if not isinstance(models,list) or not models or not all(isinstance(v,str) and v for v in models):
+            raise ValueError('invalid_model_catalog')
+        if model not in models:
+            raise ValueError('model_mismatch')
     runner = data['harnesses'][harness]
     if not Path(runner['python']).is_absolute() or not Path(runner['config_file']).is_absolute():
         raise ValueError('runtime_not_prepared')
@@ -115,7 +125,7 @@ def selection(manifest, harness, backend, model, effort=None):
     if not check['available']:
         raise ValueError(check['reason'])
     document = dict(manifest_file=str(Path(manifest).resolve()), product_root=str(ROOT),
-                    backend_id=backend, model=model)
+                    backend_id=backend, model=model, **route)
     if effort is not None:
         document['effort'] = effort
     code = ('import importlib.util,json,sys,re; '
@@ -137,7 +147,7 @@ def selection(manifest, harness, backend, model, effort=None):
         except OSError:
             fingerprints.append((str(file),None,None))
     signature = tuple(fingerprints)
-    key = (str(manifest),harness,backend,model,effort)
+    key = (str(manifest),harness,backend,model,effort,url_index,server_url)
     cached = _VALIDATION_CACHE.get(key)
     if cached and cached[0] == signature and time.monotonic()-cached[1] < VALIDATION_CACHE_SECONDS:
         reason = cached[2]
@@ -152,9 +162,11 @@ def selection(manifest, harness, backend, model, effort=None):
         except subprocess.TimeoutExpired:
             reason = 'validate_timeout'
         _VALIDATION_CACHE[key] = (signature,time.monotonic(),reason)
+        while len(_VALIDATION_CACHE) > VALIDATION_CACHE_ENTRIES:
+            _VALIDATION_CACHE.pop(next(iter(_VALIDATION_CACHE)))
     if reason:
         raise ValueError(reason)
-    return {**runner, 'connection_kind': kind}
+    return {**runner, 'connection_kind': kind, **route}
 
 
 def write_instructions(state_dir, project_key):
@@ -207,7 +219,8 @@ def prepare_resume(runtime_dir, name, project_key=None):
         raise ValueError('native_resume_not_prepared')
     document = child_resume.native_resume_input(runtime, state)
     runner = selection(document['manifest_file'], document['program'], document['backend_id'],
-                       document['model'], document.get('effort'))
+                       document['model'], document.get('effort'),
+                       document.get('url_index'), document.get('server_url'), document.get('url_key'))
     if runner.get('connection_kind', document['backend_kind']) != document['backend_kind']:
         raise ValueError('connection_kind_changed')
     state_dir = Path(document['state_dir'])
@@ -286,7 +299,12 @@ def prepare(args):
     if not child_resume._registration_matches(
             child_file.with_name('.' + args.agent_name + '.registration-pending.json'), args.generation):
         raise ValueError('registration_attempt_changed')
-    runner = selection(args.manifest, args.harness, args.backend, args.model, args.effort)
+    selection_args = (args.manifest, args.harness, args.backend, args.model, args.effort)
+    if getattr(args, 'url_index', None) is not None:
+        if not getattr(args, 'url_key', None):
+            raise ValueError('url_selection_required')
+        selection_args += (args.url_index, None, args.url_key)
+    runner = selection(*selection_args)
     state_dir = child_file.parent / (args.agent_name + '.harness') / args.generation
     state_dir.mkdir(parents=True, mode=0o700)
     os.chmod(state_dir, 0o700)
@@ -303,6 +321,7 @@ def prepare(args):
         manifest_file=str(Path(args.manifest).resolve()), tools=json.loads(args.tools),
         env=dict(AGENT_NAME=args.agent_name, AGENTSTACK_HOME=str(ROOT),
                  AGENTSTACK_RUNTIME_DIR=str(runtime), AGENTSTACK_PROJECT_KEY=args.project_key))
+    document.update({key: runner[key] for key in ('url_index', 'server_url', 'url_key') if key in runner})
     if getattr(args,'helper_model',None) not in (None,'','same'):
         document['helper_model'] = args.helper_model
     if args.effort is not None:
@@ -333,6 +352,22 @@ def command(state_dir, name):
     source = read(Path(state_dir) / 'input.json')
     if source['agent_name'] != name:
         raise ValueError('native_identity_mismatch')
+    # Fixed selections retain their existing path. Dynamic selections get one
+    # selected-URL lookup immediately before generating the actual command.
+    if 'url_index' in source:
+        manifest = native_connections.read_manifest(source['manifest_file'])
+        _, spec = native_connections.resolve_connection(manifest, source['backend_id'])
+        if not native_server_models.dynamic(spec):
+            raise ValueError('server_url_changed')
+        route = native_server_models.selection(spec, source)
+        runner = selection(source['manifest_file'], source['program'], source['backend_id'],
+            source['model'], source.get('effort'), route['url_index'], route['server_url'], route['url_key'])
+        generator = runpy.run_path(str(config_generator(ROOT, source['program'])))
+        facts = generator['validate_input'](source)
+        key = native_server_models.read_key(facts, source['program'])
+        row = native_server_models.require_model(route['server_url'], source['model'], key)
+        source['server_context'] = row.get('meta', {})
+        generate_plan(source, runner)
     plan = read(Path(state_dir) / 'launch.json')
     validate_plan(plan, source['cwd'])
     invocation = shlex.join(['env', *[k+'='+v for k,v in plan.get('env', {}).items()], *plan['argv']])
@@ -350,13 +385,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('validate', 'prepare', 'command', 'resume-prepare', 'resume'))
     for key in ('harness', 'backend', 'model', 'effort', 'manifest', 'runtime-dir', 'agent-name',
-                'project-key', 'generation', 'cwd', 'parent-agent', 'mcp-config', 'prompt-file', 'state', 'helper-model'):
+                'project-key', 'generation', 'cwd', 'parent-agent', 'mcp-config', 'prompt-file', 'state', 'helper-model', 'url-key'):
         parser.add_argument('--' + key)
     parser.add_argument('--tools', default='{"base":"default","tools":{}}')
+    parser.add_argument('--url-index', type=int)
     args = parser.parse_args()
     try:
         if args.action == 'validate':
-            selection(args.manifest, args.harness, args.backend, args.model, args.effort)
+            selection(args.manifest, args.harness, args.backend, args.model, args.effort, args.url_index, None, args.url_key)
         elif args.action == 'prepare':
             print(prepare(args))
         elif args.action == 'resume-prepare':

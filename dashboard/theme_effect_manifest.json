@@ -17236,9 +17236,116 @@
             "color"
           ],
           "consumer": true,
-          "id": "e6adfd64cce3a279",
+          "id": "62a5742eace79f79",
           "important": false,
-          "line": 2631,
+          "line": 2625,
+          "property": "color",
+          "references": [
+            "--ink"
+          ],
+          "selector": ".spm-connection-heading",
+          "tokens": [
+            "--ink"
+          ],
+          "value": "var(--ink)"
+        },
+        {
+          "channels": [
+            "borderTopColor",
+            "borderRightColor",
+            "borderBottomColor",
+            "borderLeftColor"
+          ],
+          "consumer": false,
+          "id": "6bf9cf6d2f1ee486",
+          "important": false,
+          "line": 2626,
+          "property": "border",
+          "references": [],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip",
+          "tokens": [],
+          "value": "0"
+        },
+        {
+          "channels": [
+            "borderBottomColor"
+          ],
+          "consumer": true,
+          "id": "8f6cb4271f4f1e58",
+          "important": false,
+          "line": 2626,
+          "property": "border-bottom",
+          "references": [
+            "--hair"
+          ],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip",
+          "tokens": [
+            "--hair"
+          ],
+          "value": "1px solid var(--hair)"
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "4e24b1f29ab06a99",
+          "important": false,
+          "line": 2628,
+          "property": "color",
+          "references": [
+            "--ink-dim"
+          ],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip small",
+          "tokens": [
+            "--ink-dim"
+          ],
+          "value": "var(--ink-dim)"
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "aee0d32c22fd44fe",
+          "important": false,
+          "line": 2629,
+          "property": "color",
+          "references": [
+            "--ink-dim"
+          ],
+          "selector": ".spm-local-state",
+          "tokens": [
+            "--ink-dim"
+          ],
+          "value": "var(--ink-dim)"
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "04b31c43a22bca82",
+          "important": false,
+          "line": 2630,
+          "property": "color",
+          "references": [
+            "--ink-faint"
+          ],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip:disabled",
+          "tokens": [
+            "--ink-faint"
+          ],
+          "value": "var(--ink-faint)"
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "b9195bf122a55128",
+          "important": false,
+          "line": 2638,
           "property": "color",
           "references": [
             "--ink"
@@ -17254,9 +17361,9 @@
             "stroke"
           ],
           "consumer": true,
-          "id": "c6a872893df989c8",
+          "id": "63cb299eca213e08",
           "important": false,
-          "line": 2633,
+          "line": 2640,
           "property": "stroke",
           "references": [
             "--hair"
@@ -17272,9 +17379,9 @@
             "stroke"
           ],
           "consumer": true,
-          "id": "0b919e8cd3662ef6",
+          "id": "e3572ba81b92bf6f",
           "important": false,
-          "line": 2634,
+          "line": 2641,
           "property": "stroke",
           "references": [
             "--hair"
@@ -17290,9 +17397,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "d0605b6fd5736435",
+          "id": "83d96e56946e1d8d",
           "important": false,
-          "line": 2635,
+          "line": 2642,
           "property": "stroke",
           "references": [
             "--amber"
@@ -17306,9 +17413,9 @@
             "fill"
           ],
           "consumer": true,
-          "id": "9fc142fbbcbf7c40",
+          "id": "e76b60592cf9ec52",
           "important": false,
-          "line": 2636,
+          "line": 2643,
           "property": "fill",
           "references": [
             "--ink-faint"
@@ -17324,9 +17431,9 @@
             "fill"
           ],
           "consumer": false,
-          "id": "fa2c3ec5b2ea3fff",
+          "id": "09a53cceeacf439a",
           "important": false,
-          "line": 2637,
+          "line": 2644,
           "property": "fill",
           "references": [],
           "selector": ".effort-halo",
@@ -17338,9 +17445,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "1254869c9272fb3f",
+          "id": "92b82be02c2e69a4",
           "important": false,
-          "line": 2637,
+          "line": 2644,
           "property": "stroke",
           "references": [
             "--amber"
@@ -17354,9 +17461,9 @@
             "fill"
           ],
           "consumer": true,
-          "id": "7ae9e3cb7d4b4f42",
+          "id": "fd831d306449f88f",
           "important": false,
-          "line": 2638,
+          "line": 2645,
           "property": "fill",
           "references": [
             "--panel-2"
@@ -17372,9 +17479,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "85c499c8e426cf80",
+          "id": "8958d6f7af2d7e7b",
           "important": false,
-          "line": 2638,
+          "line": 2645,
           "property": "stroke",
           "references": [
             "--amber"
@@ -17388,9 +17495,9 @@
             "fill"
           ],
           "consumer": false,
-          "id": "18fb1d62a0c4bc3c",
+          "id": "1abb625e394fbe31",
           "important": false,
-          "line": 2639,
+          "line": 2646,
           "property": "fill",
           "references": [
             "--amber"
@@ -17404,9 +17511,9 @@
             "stroke"
           ],
           "consumer": true,
-          "id": "51e42153b069ad02",
+          "id": "d487a62075817027",
           "important": false,
-          "line": 2640,
+          "line": 2647,
           "property": "stroke",
           "references": [
             "--ink-faint"
@@ -17422,9 +17529,9 @@
             "fill"
           ],
           "consumer": true,
-          "id": "e38b1eb809e3c8e2",
+          "id": "00835a24aef3b478",
           "important": false,
-          "line": 2641,
+          "line": 2648,
           "property": "fill",
           "references": [
             "--ink-faint"
@@ -17440,9 +17547,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "e60f96fb28a0de98",
+          "id": "43c736e0e6230dfa",
           "important": false,
-          "line": 2642,
+          "line": 2649,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -17461,9 +17568,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "58fccbef5cfabba7",
+          "id": "3e136f368326b3b9",
           "important": false,
-          "line": 2643,
+          "line": 2650,
           "property": "border",
           "references": [],
           "selector": "#spm-effort-row .effort-range",
@@ -17475,9 +17582,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "a1674ec9cef03db7",
+          "id": "a02f25617e3fe382",
           "important": false,
-          "line": 2645,
+          "line": 2652,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -17496,9 +17603,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "cb6dd6a33b3c87f9",
+          "id": "2df42dc81d379c78",
           "important": false,
-          "line": 2646,
+          "line": 2653,
           "property": "border",
           "references": [],
           "selector": "#spm-effort-row .effort-reset",
@@ -17510,9 +17617,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "c8a3150b2f970804",
+          "id": "2c176d7e9699f36d",
           "important": false,
-          "line": 2646,
+          "line": 2653,
           "property": "background",
           "references": [],
           "selector": "#spm-effort-row .effort-reset",
@@ -17524,9 +17631,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "eb1e3180f892a52e",
+          "id": "fb30e31ae849dfab",
           "important": false,
-          "line": 2646,
+          "line": 2653,
           "property": "color",
           "references": [
             "--amber"
@@ -17540,9 +17647,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "42ffff5daeab60a8",
+          "id": "5c28d96e34d57abd",
           "important": false,
-          "line": 2647,
+          "line": 2654,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -34347,9 +34454,112 @@
             "color"
           ],
           "consumer": false,
-          "id": "f6f11c039f78388d",
+          "id": "878bac16aa109982",
           "important": false,
-          "line": 2631,
+          "line": 2625,
+          "property": "color",
+          "references": [
+            "--ink"
+          ],
+          "selector": ".spm-connection-heading",
+          "tokens": [],
+          "value": "var(--ink)"
+        },
+        {
+          "channels": [
+            "borderTopColor",
+            "borderRightColor",
+            "borderBottomColor",
+            "borderLeftColor"
+          ],
+          "consumer": false,
+          "id": "a80a4ea6efa11509",
+          "important": false,
+          "line": 2626,
+          "property": "border",
+          "references": [],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip",
+          "tokens": [],
+          "value": "0"
+        },
+        {
+          "channels": [
+            "borderBottomColor"
+          ],
+          "consumer": false,
+          "id": "438cc1ba27e25b5c",
+          "important": false,
+          "line": 2626,
+          "property": "border-bottom",
+          "references": [
+            "--hair"
+          ],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip",
+          "tokens": [],
+          "value": "1px solid var(--hair)"
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "c075aed473a00133",
+          "important": false,
+          "line": 2628,
+          "property": "color",
+          "references": [
+            "--ink-dim"
+          ],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip small",
+          "tokens": [
+            "--ink-dim"
+          ],
+          "value": "var(--ink-dim)"
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "f41c937e0ba3f684",
+          "important": false,
+          "line": 2629,
+          "property": "color",
+          "references": [
+            "--ink-dim"
+          ],
+          "selector": ".spm-local-state",
+          "tokens": [
+            "--ink-dim"
+          ],
+          "value": "var(--ink-dim)"
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "982e46d857948491",
+          "important": false,
+          "line": 2630,
+          "property": "color",
+          "references": [
+            "--ink-faint"
+          ],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip:disabled",
+          "tokens": [
+            "--ink-faint"
+          ],
+          "value": "var(--ink-faint)"
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": false,
+          "id": "9166abf2f47b6daa",
+          "important": false,
+          "line": 2638,
           "property": "color",
           "references": [
             "--ink"
@@ -34363,9 +34573,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "0c47f00398db3d67",
+          "id": "5e633d348dfd5d0f",
           "important": false,
-          "line": 2633,
+          "line": 2640,
           "property": "stroke",
           "references": [
             "--hair"
@@ -34379,9 +34589,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "9eab65d7b36bd329",
+          "id": "19528b4e00c162f9",
           "important": false,
-          "line": 2634,
+          "line": 2641,
           "property": "stroke",
           "references": [
             "--hair"
@@ -34395,9 +34605,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "004cd270e24c15e9",
+          "id": "72f96f08614103a9",
           "important": false,
-          "line": 2635,
+          "line": 2642,
           "property": "stroke",
           "references": [
             "--amber"
@@ -34411,9 +34621,9 @@
             "fill"
           ],
           "consumer": true,
-          "id": "d2c5487388f2434b",
+          "id": "032ec8919de04d99",
           "important": false,
-          "line": 2636,
+          "line": 2643,
           "property": "fill",
           "references": [
             "--ink-faint"
@@ -34429,9 +34639,9 @@
             "fill"
           ],
           "consumer": false,
-          "id": "ac3ac7de96c8dd9f",
+          "id": "c7162167739eeb05",
           "important": false,
-          "line": 2637,
+          "line": 2644,
           "property": "fill",
           "references": [],
           "selector": ".effort-halo",
@@ -34443,9 +34653,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "0ec6cbbe79785a87",
+          "id": "aa1a0ac2cee5e09c",
           "important": false,
-          "line": 2637,
+          "line": 2644,
           "property": "stroke",
           "references": [
             "--amber"
@@ -34459,9 +34669,9 @@
             "fill"
           ],
           "consumer": false,
-          "id": "3622ad095e3df3aa",
+          "id": "16ac4c0b1c4e9951",
           "important": false,
-          "line": 2638,
+          "line": 2645,
           "property": "fill",
           "references": [
             "--panel-2"
@@ -34475,9 +34685,9 @@
             "stroke"
           ],
           "consumer": false,
-          "id": "60c8f587362cf1c3",
+          "id": "c8e9fb3c6628a0d8",
           "important": false,
-          "line": 2638,
+          "line": 2645,
           "property": "stroke",
           "references": [
             "--amber"
@@ -34491,9 +34701,9 @@
             "fill"
           ],
           "consumer": false,
-          "id": "05a74bd204c20e7a",
+          "id": "b711c19bff6d31c8",
           "important": false,
-          "line": 2639,
+          "line": 2646,
           "property": "fill",
           "references": [
             "--amber"
@@ -34507,9 +34717,9 @@
             "stroke"
           ],
           "consumer": true,
-          "id": "cd3080a86cda594b",
+          "id": "0912679c40f94dc6",
           "important": false,
-          "line": 2640,
+          "line": 2647,
           "property": "stroke",
           "references": [
             "--ink-faint"
@@ -34525,9 +34735,9 @@
             "fill"
           ],
           "consumer": true,
-          "id": "d46a54802979369d",
+          "id": "4e5994555b7c27b7",
           "important": false,
-          "line": 2641,
+          "line": 2648,
           "property": "fill",
           "references": [
             "--ink-faint"
@@ -34543,9 +34753,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "2487ae83b130fe7f",
+          "id": "ddcfd4e530467e8c",
           "important": false,
-          "line": 2642,
+          "line": 2649,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -34564,9 +34774,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "5734c0bf7804412e",
+          "id": "cf2d88fca54f11e3",
           "important": false,
-          "line": 2643,
+          "line": 2650,
           "property": "border",
           "references": [],
           "selector": "#spm-effort-row .effort-range",
@@ -34578,9 +34788,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "7ced56f105e8ae07",
+          "id": "c27a0ab04691793f",
           "important": false,
-          "line": 2645,
+          "line": 2652,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -34599,9 +34809,9 @@
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "d0dfffbc301233f2",
+          "id": "8239e87a5b212943",
           "important": false,
-          "line": 2646,
+          "line": 2653,
           "property": "border",
           "references": [],
           "selector": "#spm-effort-row .effort-reset",
@@ -34613,9 +34823,9 @@
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "3c67578a1288ad3f",
+          "id": "fcb199dccf13513e",
           "important": false,
-          "line": 2646,
+          "line": 2653,
           "property": "background",
           "references": [],
           "selector": "#spm-effort-row .effort-reset",
@@ -34627,9 +34837,9 @@
             "color"
           ],
           "consumer": false,
-          "id": "25344b23f2371b97",
+          "id": "ccf0f27aa4b8bd71",
           "important": false,
-          "line": 2646,
+          "line": 2653,
           "property": "color",
           "references": [
             "--amber"
@@ -34643,9 +34853,9 @@
             "color"
           ],
           "consumer": true,
-          "id": "84a692bed14ef951",
+          "id": "53b20d24db1ec008",
           "important": false,
-          "line": 2647,
+          "line": 2654,
           "property": "color",
           "references": [
             "--ink-dim"
@@ -38499,8 +38709,8 @@
     }
   },
   "observed": {
-    "background_consumer_records": 403,
-    "dim_contrast_consumer_records": 173,
+    "background_consumer_records": 408,
+    "dim_contrast_consumer_records": 176,
     "glow_color_literals": 98,
     "glow_mutable_components": 41,
     "glow_source_declarations": 79,
@@ -52823,7 +53033,96 @@
               "color"
             ],
             "consumer": true,
-            "id": "e6adfd64cce3a279",
+            "id": "62a5742eace79f79",
+            "important": false,
+            "references": [
+              "--ink"
+            ],
+            "selector": ".spm-connection-heading",
+            "tokens": [
+              "--ink"
+            ]
+          },
+          {
+            "channels": [
+              "borderTopColor",
+              "borderRightColor",
+              "borderBottomColor",
+              "borderLeftColor"
+            ],
+            "consumer": false,
+            "id": "6bf9cf6d2f1ee486",
+            "important": false,
+            "references": [],
+            "selector": "#spawnmd .spm-local-models .spm-model-chip",
+            "tokens": []
+          },
+          {
+            "channels": [
+              "borderBottomColor"
+            ],
+            "consumer": true,
+            "id": "8f6cb4271f4f1e58",
+            "important": false,
+            "references": [
+              "--hair"
+            ],
+            "selector": "#spawnmd .spm-local-models .spm-model-chip",
+            "tokens": [
+              "--hair"
+            ]
+          },
+          {
+            "channels": [
+              "color"
+            ],
+            "consumer": true,
+            "id": "4e24b1f29ab06a99",
+            "important": false,
+            "references": [
+              "--ink-dim"
+            ],
+            "selector": "#spawnmd .spm-local-models .spm-model-chip small",
+            "tokens": [
+              "--ink-dim"
+            ]
+          },
+          {
+            "channels": [
+              "color"
+            ],
+            "consumer": true,
+            "id": "aee0d32c22fd44fe",
+            "important": false,
+            "references": [
+              "--ink-dim"
+            ],
+            "selector": ".spm-local-state",
+            "tokens": [
+              "--ink-dim"
+            ]
+          },
+          {
+            "channels": [
+              "color"
+            ],
+            "consumer": true,
+            "id": "04b31c43a22bca82",
+            "important": false,
+            "references": [
+              "--ink-faint"
+            ],
+            "selector": "#spawnmd .spm-local-models .spm-model-chip:disabled",
+            "tokens": [
+              "--ink-faint"
+            ]
+          },
+          {
+            "channels": [
+              "color"
+            ],
+            "consumer": true,
+            "id": "b9195bf122a55128",
             "important": false,
             "references": [
               "--ink"
@@ -52838,7 +53137,7 @@
               "stroke"
             ],
             "consumer": true,
-            "id": "c6a872893df989c8",
+            "id": "63cb299eca213e08",
             "important": false,
             "references": [
               "--hair"
@@ -52853,7 +53152,7 @@
               "stroke"
             ],
             "consumer": true,
-            "id": "0b919e8cd3662ef6",
+            "id": "e3572ba81b92bf6f",
             "important": false,
             "references": [
               "--hair"
@@ -52868,7 +53167,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "d0605b6fd5736435",
+            "id": "83d96e56946e1d8d",
             "important": false,
             "references": [
               "--amber"
@@ -52881,7 +53180,7 @@
               "fill"
             ],
             "consumer": true,
-            "id": "9fc142fbbcbf7c40",
+            "id": "e76b60592cf9ec52",
             "important": false,
             "references": [
               "--ink-faint"
@@ -52896,7 +53195,7 @@
               "fill"
             ],
             "consumer": false,
-            "id": "fa2c3ec5b2ea3fff",
+            "id": "09a53cceeacf439a",
             "important": false,
             "references": [],
             "selector": ".effort-halo",
@@ -52907,7 +53206,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "1254869c9272fb3f",
+            "id": "92b82be02c2e69a4",
             "important": false,
             "references": [
               "--amber"
@@ -52920,7 +53219,7 @@
               "fill"
             ],
             "consumer": true,
-            "id": "7ae9e3cb7d4b4f42",
+            "id": "fd831d306449f88f",
             "important": false,
             "references": [
               "--panel-2"
@@ -52935,7 +53234,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "85c499c8e426cf80",
+            "id": "8958d6f7af2d7e7b",
             "important": false,
             "references": [
               "--amber"
@@ -52948,7 +53247,7 @@
               "fill"
             ],
             "consumer": false,
-            "id": "18fb1d62a0c4bc3c",
+            "id": "1abb625e394fbe31",
             "important": false,
             "references": [
               "--amber"
@@ -52961,7 +53260,7 @@
               "stroke"
             ],
             "consumer": true,
-            "id": "51e42153b069ad02",
+            "id": "d487a62075817027",
             "important": false,
             "references": [
               "--ink-faint"
@@ -52976,7 +53275,7 @@
               "fill"
             ],
             "consumer": true,
-            "id": "e38b1eb809e3c8e2",
+            "id": "00835a24aef3b478",
             "important": false,
             "references": [
               "--ink-faint"
@@ -52991,7 +53290,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "e60f96fb28a0de98",
+            "id": "43c736e0e6230dfa",
             "important": false,
             "references": [
               "--ink-dim"
@@ -53009,7 +53308,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "58fccbef5cfabba7",
+            "id": "3e136f368326b3b9",
             "important": false,
             "references": [],
             "selector": "#spm-effort-row .effort-range",
@@ -53020,7 +53319,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "a1674ec9cef03db7",
+            "id": "a02f25617e3fe382",
             "important": false,
             "references": [
               "--ink-dim"
@@ -53038,7 +53337,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "cb6dd6a33b3c87f9",
+            "id": "2df42dc81d379c78",
             "important": false,
             "references": [],
             "selector": "#spm-effort-row .effort-reset",
@@ -53049,7 +53348,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "c8a3150b2f970804",
+            "id": "2c176d7e9699f36d",
             "important": false,
             "references": [],
             "selector": "#spm-effort-row .effort-reset",
@@ -53060,7 +53359,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "eb1e3180f892a52e",
+            "id": "fb30e31ae849dfab",
             "important": false,
             "references": [
               "--amber"
@@ -53073,7 +53372,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "42ffff5daeab60a8",
+            "id": "5c28d96e34d57abd",
             "important": false,
             "references": [
               "--ink-dim"
@@ -66793,7 +67092,92 @@
               "color"
             ],
             "consumer": false,
-            "id": "f6f11c039f78388d",
+            "id": "878bac16aa109982",
+            "important": false,
+            "references": [
+              "--ink"
+            ],
+            "selector": ".spm-connection-heading",
+            "tokens": []
+          },
+          {
+            "channels": [
+              "borderTopColor",
+              "borderRightColor",
+              "borderBottomColor",
+              "borderLeftColor"
+            ],
+            "consumer": false,
+            "id": "a80a4ea6efa11509",
+            "important": false,
+            "references": [],
+            "selector": "#spawnmd .spm-local-models .spm-model-chip",
+            "tokens": []
+          },
+          {
+            "channels": [
+              "borderBottomColor"
+            ],
+            "consumer": false,
+            "id": "438cc1ba27e25b5c",
+            "important": false,
+            "references": [
+              "--hair"
+            ],
+            "selector": "#spawnmd .spm-local-models .spm-model-chip",
+            "tokens": []
+          },
+          {
+            "channels": [
+              "color"
+            ],
+            "consumer": true,
+            "id": "c075aed473a00133",
+            "important": false,
+            "references": [
+              "--ink-dim"
+            ],
+            "selector": "#spawnmd .spm-local-models .spm-model-chip small",
+            "tokens": [
+              "--ink-dim"
+            ]
+          },
+          {
+            "channels": [
+              "color"
+            ],
+            "consumer": true,
+            "id": "f41c937e0ba3f684",
+            "important": false,
+            "references": [
+              "--ink-dim"
+            ],
+            "selector": ".spm-local-state",
+            "tokens": [
+              "--ink-dim"
+            ]
+          },
+          {
+            "channels": [
+              "color"
+            ],
+            "consumer": true,
+            "id": "982e46d857948491",
+            "important": false,
+            "references": [
+              "--ink-faint"
+            ],
+            "selector": "#spawnmd .spm-local-models .spm-model-chip:disabled",
+            "tokens": [
+              "--ink-faint"
+            ]
+          },
+          {
+            "channels": [
+              "color"
+            ],
+            "consumer": false,
+            "id": "9166abf2f47b6daa",
             "important": false,
             "references": [
               "--ink"
@@ -66806,7 +67190,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "0c47f00398db3d67",
+            "id": "5e633d348dfd5d0f",
             "important": false,
             "references": [
               "--hair"
@@ -66819,7 +67203,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "9eab65d7b36bd329",
+            "id": "19528b4e00c162f9",
             "important": false,
             "references": [
               "--hair"
@@ -66832,7 +67216,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "004cd270e24c15e9",
+            "id": "72f96f08614103a9",
             "important": false,
             "references": [
               "--amber"
@@ -66845,7 +67229,7 @@
               "fill"
             ],
             "consumer": true,
-            "id": "d2c5487388f2434b",
+            "id": "032ec8919de04d99",
             "important": false,
             "references": [
               "--ink-faint"
@@ -66860,7 +67244,7 @@
               "fill"
             ],
             "consumer": false,
-            "id": "ac3ac7de96c8dd9f",
+            "id": "c7162167739eeb05",
             "important": false,
             "references": [],
             "selector": ".effort-halo",
@@ -66871,7 +67255,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "0ec6cbbe79785a87",
+            "id": "aa1a0ac2cee5e09c",
             "important": false,
             "references": [
               "--amber"
@@ -66884,7 +67268,7 @@
               "fill"
             ],
             "consumer": false,
-            "id": "3622ad095e3df3aa",
+            "id": "16ac4c0b1c4e9951",
             "important": false,
             "references": [
               "--panel-2"
@@ -66897,7 +67281,7 @@
               "stroke"
             ],
             "consumer": false,
-            "id": "60c8f587362cf1c3",
+            "id": "c8e9fb3c6628a0d8",
             "important": false,
             "references": [
               "--amber"
@@ -66910,7 +67294,7 @@
               "fill"
             ],
             "consumer": false,
-            "id": "05a74bd204c20e7a",
+            "id": "b711c19bff6d31c8",
             "important": false,
             "references": [
               "--amber"
@@ -66923,7 +67307,7 @@
               "stroke"
             ],
             "consumer": true,
-            "id": "cd3080a86cda594b",
+            "id": "0912679c40f94dc6",
             "important": false,
             "references": [
               "--ink-faint"
@@ -66938,7 +67322,7 @@
               "fill"
             ],
             "consumer": true,
-            "id": "d46a54802979369d",
+            "id": "4e5994555b7c27b7",
             "important": false,
             "references": [
               "--ink-faint"
@@ -66953,7 +67337,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "2487ae83b130fe7f",
+            "id": "ddcfd4e530467e8c",
             "important": false,
             "references": [
               "--ink-dim"
@@ -66971,7 +67355,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "5734c0bf7804412e",
+            "id": "cf2d88fca54f11e3",
             "important": false,
             "references": [],
             "selector": "#spm-effort-row .effort-range",
@@ -66982,7 +67366,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "7ced56f105e8ae07",
+            "id": "c27a0ab04691793f",
             "important": false,
             "references": [
               "--ink-dim"
@@ -67000,7 +67384,7 @@
               "borderLeftColor"
             ],
             "consumer": false,
-            "id": "d0dfffbc301233f2",
+            "id": "8239e87a5b212943",
             "important": false,
             "references": [],
             "selector": "#spm-effort-row .effort-reset",
@@ -67011,7 +67395,7 @@
               "backgroundColor"
             ],
             "consumer": false,
-            "id": "3c67578a1288ad3f",
+            "id": "fcb199dccf13513e",
             "important": false,
             "references": [],
             "selector": "#spm-effort-row .effort-reset",
@@ -67022,7 +67406,7 @@
               "color"
             ],
             "consumer": false,
-            "id": "25344b23f2371b97",
+            "id": "ccf0f27aa4b8bd71",
             "important": false,
             "references": [
               "--amber"
@@ -67035,7 +67419,7 @@
               "color"
             ],
             "consumer": true,
-            "id": "84a692bed14ef951",
+            "id": "53b20d24db1ec008",
             "important": false,
             "references": [
               "--ink-dim"
@@ -67534,9 +67918,9 @@
     },
     "rules_digest": "df26f9d872ccd641021665fa8c09a5b071e42251b9bc7a4e272cccc6ebecebfb",
     "schema_version": 1,
-    "source_digest": "ea62fd2a876ca67531c0edc0d670247bbbeda2ade8c0d7fd7685977690fbf2fe"
+    "source_digest": "9b1e0125ebf14a9785693264210995ef456495d3cdc92c7a1cc319c5fcf8c5c0"
   },
   "schema_version": 1,
   "source": "dashboard/index.html",
-  "source_digest": "ea62fd2a876ca67531c0edc0d670247bbbeda2ade8c0d7fd7685977690fbf2fe"
+  "source_digest": "9b1e0125ebf14a9785693264210995ef456495d3cdc92c7a1cc319c5fcf8c5c0"
 }

@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 THIN_CONFIG_CONTRACT = 1
 HELPER_MODEL_CONTRACT = 1
 CONNECTIONS = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'hooks/native_connections.py'))
+SERVER_MODELS = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'hooks/native_server_models.py'))
 PLUGIN = 'orrery-thin-guard'
 EFFORTS = {'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'}
 
@@ -73,7 +74,7 @@ def validate_input(document):
         raise ValueError('invalid_runtime') from None
 
 
-def profile_route(spec, backend):
+def profile_route(spec, backend, *, server_url=None):
     """Project route metadata; launch admission validates credentials separately.
 
     Secret Service key_cmd comes from the manifest and is synthesized only by
@@ -88,6 +89,8 @@ def profile_route(spec, backend):
         entry = next((row for row in inherited.get('custom_providers', []) if row.get('name') == provider), {})
     route = {key: entry[key] for key in ('base_url', 'api', 'api_mode', 'transport', 'model', 'key_cmd') if key in entry}
     route.update({key: spec[key] for key in ('base_url', 'api', 'api_mode', 'transport', 'model', 'key_cmd') if key in spec})
+    if server_url is not None:
+        route.update(base_url=SERVER_MODELS['api_base'](server_url), api_mode='chat_completions')
     default_model = spec.get('model') or inherited.get('model', {}).get('default') or route.get('model')
     base = route.get('base_url') or route.get('api') or ''
     url = urlsplit(base)
@@ -108,7 +111,9 @@ def profile_route(spec, backend):
 def _validate(document):
     backend = document['backend_id']
     manifest = CONNECTIONS['read_manifest'](document['manifest_file'])
-    kind, _ = CONNECTIONS['resolve_connection'](manifest, backend)
+    kind, backend_definition = CONNECTIONS['resolve_connection'](manifest, backend)
+    dynamic = SERVER_MODELS['dynamic'](backend_definition)
+    selected_url = SERVER_MODELS['selection'](backend_definition, document)['server_url'] if dynamic else None
     if 'backend_kind' in document and document['backend_kind'] != kind:
         raise ValueError('connection_kind_changed')
     template_file = Path(manifest['harnesses']['hermes']['config_file'])
@@ -116,22 +121,21 @@ def _validate(document):
     spec = config['profiles'].get(backend)
     if not isinstance(spec, dict):
         raise ValueError('unknown_backend')
-    selected = profile_route(spec, kind)
+    selected = profile_route(spec, kind, server_url=selected_url)
     inherited, provider, route = selected['inherited'], selected['provider'], selected['route']
     source = Path(config['hermes_source']).resolve()
     if not isinstance(provider, str) or not provider.strip() or provider.strip().lower() in (_provider_ids(source) | {'auto', 'main', 'custom'}):
         raise ValueError('builtin_provider_collision')
     provider = provider.strip()
     default_model = selected['model']
-    backend_definition = manifest.get('backends', {}).get(backend, {})
     allowed_models = backend_definition.get('models', [backend_definition.get('model', default_model)])
-    if not isinstance(allowed_models, list) or not allowed_models or not all(isinstance(row, str) and row for row in allowed_models):
+    if not dynamic and (not isinstance(allowed_models, list) or not allowed_models or not all(isinstance(row, str) and row for row in allowed_models)):
         raise ValueError('model_mismatch')
     model = document.get('model')
-    if not model or model not in allowed_models:
+    if not model or not dynamic and model not in allowed_models:
         raise ValueError('model_mismatch')
     helper = document.get('helper_model', 'same')
-    if helper != 'same' and helper not in allowed_models:
+    if helper != 'same' and (dynamic or helper not in allowed_models):
         raise ValueError('invalid_helper_model')
     resume = document.get('resume_session_id')
     if resume is not None and (not isinstance(resume, str) or not resume.strip()
@@ -171,6 +175,8 @@ def _validate(document):
         raise ValueError('invalid_runtime')
     # Explicit operator context is preserved; no guessed trial defaults/caps.
     context = spec.get('context_length', inherited.get('model', {}).get('context_length'))
+    if dynamic:
+        context, _ = SERVER_MODELS['context'](backend_definition, {'meta': document.get('server_context')})
     if context is not None:
         if type(context) is not int or context <= 0:
             raise ValueError('invalid_route')

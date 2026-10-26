@@ -43,7 +43,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 32
+API_GENERATION = 33
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -7487,6 +7487,8 @@ def spawn_names_payload() -> dict:
     claude_catalog = _claude_catalog()
     claude_models = list(claude_catalog.models)
     claude_default = _claude_default_model(claude_models)
+    local_catalog = _standard_catalog_module().discover_catalog(_spawn_catalog_providers(),
+        os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"), mode="global" if GLOBAL_MODE else "legacy")
     return {
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": statuses.get(name, "unknown")} for name in scientists],
@@ -7503,7 +7505,7 @@ def spawn_names_payload() -> dict:
              "model_source": claude_catalog.source, "model_error": claude_catalog.error,
              "overflow_models": [m for m in claude_catalog.overflow if m != claude_default]},
             codex_models.provider_catalog(),
-        ] + _spawn_catalog_providers(),
+        ] + local_catalog,
     }
 
 
@@ -8015,7 +8017,7 @@ def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
         "parent", "standalone", "task", "role", "group", "worktree",
         "worktree_base", "name", "dir", "provider", "model", "effort",
         "claude_chrome", "claude_chrome_device", "async", "dry_run", "headless", "emoji",
-        "base", "tools", "harness", "helper_model",
+        "base", "tools", "harness", "helper_model", "url_index", "url_key",
     }
     if str(payload.get("provider") or "").strip().lower() == "gemini":
         allowed.add("resources")
@@ -8159,6 +8161,8 @@ def do_spawn(payload: dict) -> dict:
                 and harness not in native.get(provider, ()))):
         return {"ok": False, "error": "unsupported harness", "error_code": "unsupported_harness"}
     helper_model = payload.get("helper_model")
+    if not is_native and ('url_index' in payload or 'url_key' in payload):
+        return {'ok': False, 'error': 'url_index requires a dynamic Local connection'}
     if not is_native and helper_model not in (None, "same"):
         return {"ok": False, "error": "unsupported helper model"}
     for field in ("model", "effort"):
@@ -8255,6 +8259,23 @@ def do_spawn(payload: dict) -> dict:
         )
     elif is_native:
         selections = []
+        dynamic = next((row for row in connection_rows if row.get('id') == provider
+                        and row.get('dynamic_models') is True), None)
+        if dynamic:
+            if effort or helper_model not in (None, 'same'):
+                return {'ok': False, 'error': 'dynamic model effort is unreported; helper must be same'}
+            try:
+                if not isinstance(payload.get('url_key'), str) or not re.fullmatch(r'[0-9a-f]{64}', payload['url_key']):
+                    raise ValueError('url_selection_required')
+                _standard_catalog_module().dynamic_selection(os.environ.get('AGENTSTACK_MANAGED_SPAWN_CONFIG'),
+                    mode='global' if GLOBAL_MODE else 'legacy', backend=provider, harness=harness,
+                    model=model, url_index=payload.get('url_index'), url_key=payload['url_key'])
+                selections.append({'id': harness, 'available': True})
+            except (ValueError, OSError, TypeError, KeyError):
+                return {'ok': False, 'error': 'configured URL/model selection is unavailable',
+                        'error_code': 'spawn_pair_unavailable'}
+        elif 'url_index' in payload or 'url_key' in payload:
+            return {'ok': False, 'error': 'url_index requires a dynamic Local connection'}
         for row in connection_rows:
             if row.get("id") != provider:
                 continue
@@ -8277,7 +8298,8 @@ def do_spawn(payload: dict) -> dict:
         helper_args = ('--helper-model', helper) if helper != 'same' else ()
         spec = SpawnLaunchSpec(
             provider=provider, program=harness, model=model, script=SPAWN_SCRIPT,
-            provider_args=("--harness", harness, "--backend", provider) + helper_args + tools_args,
+            provider_args=("--harness", harness, "--backend", provider)
+                + (("--url-index", str(payload['url_index']), "--url-key", payload['url_key']) if dynamic else ()) + helper_args + tools_args,
             effort=effort, effort_arg=bool(effort),
         )
     else:

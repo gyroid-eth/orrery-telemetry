@@ -109,6 +109,25 @@ class ThinTests(unittest.TestCase):
         self.assertNotIn('HOME', plan['env'])
         self.assertEqual(plan, thin.generate(self.doc))
 
+    def test_dynamic_url_model_context_and_resume_pin_without_communication(self):
+        manifest = thin.read(self.manifest)
+        manifest['backends']['strata'] = {'model_source': 'server', 'urls': [
+            'https://first.invalid/v1', 'https://second.invalid/v1', 'https://third.invalid/v1']}
+        thin.save(self.manifest, manifest)
+        document = {**self.doc, 'model': 'new-wire-id', 'url_index': 2,
+                    'server_url': 'https://third.invalid/v1', 'server_context': {'n_ctx': 131072}}
+        with patch('subprocess.run', side_effect=AssertionError('static subprocess forbidden')):
+            plan = thin.generate(document)
+        provider = next(row['config'] for row in self.rows(plan) if row.get('id') == 'llm-deepseek')
+        self.assertEqual(provider['baseURL'], 'https://third.invalid')
+        self.assertEqual(provider['models'], [{'id': 'new-wire-id', 'contextWindow': 131072, 'maxTokens': 8192}])
+        resumed = thin.generate({**document, 'resume_session_id': 'original-session'})
+        self.assertEqual(resumed['argv'][-2:], ['--resume', 'original-session'])
+        manifest['backends']['strata']['urls'][2] = 'https://replacement.invalid/v1'
+        thin.save(self.manifest, manifest)
+        with self.assertRaisesRegex(ValueError, 'server_url_changed'):
+            thin.generate(document)
+
     def test_only_child_tui_preferences_are_seeded_and_resume_keeps_same_dir(self):
         user = self.root / '.dsh-tui'
         user.mkdir()
