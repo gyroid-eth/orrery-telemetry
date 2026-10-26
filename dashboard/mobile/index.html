@@ -36,7 +36,7 @@
     <p id="mail-cache-note" class="quiet"></p>
   </section>
   <section id="graph-panel">
-    <div class="graph-toolbar"><nav class="graph-mode" aria-label="Graph scope"><button type="button" data-mode="focus" class="active">Focus</button><button type="button" data-mode="all">All</button></nav><button id="settings-btn" type="button" aria-controls="settings" aria-expanded="false">Tune graph</button></div>
+    <div class="graph-toolbar"><nav class="graph-mode" aria-label="Graph scope"><button type="button" data-mode="focus" class="active">Focus</button><button type="button" data-mode="all">All</button></nav><div class="graph-toolbar-actions"><button id="settings-btn" type="button" aria-controls="settings" aria-expanded="false">Tune graph</button><button id="graph-fullscreen" type="button" aria-label="Expand graph" aria-expanded="false" aria-controls="graph-panel">Expand</button></div></div>
     <label class="graph-picker"><span>Find</span><select id="agent-picker" aria-label="Find an agent"><option value="">No agents yet</option></select></label>
     <div class="graph-meta"><span id="netinfo">Graph unavailable</span><span id="zoom-label"></span></div>
     <div id="net"><svg id="gsvg" role="img" aria-label="Agent relationships. Pinch to zoom, drag to move."></svg><button type="button" class="period-trigger graph-period" data-period aria-controls="period-sheet" aria-expanded="false" aria-label="Change time range: Last 24h"><svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.7"/><path d="M8 4.5V8l2.5 1.5"/></svg><span>24h</span><i aria-hidden="true">⌄</i></button></div>
@@ -71,4 +71,5 @@
   <p id="message-route" class="quiet"></p><p id="message-status" class="quiet" role="status"></p>
   <h3 id="message-subject"></h3><pre id="message-body"></pre>
 </dialog>
+<dialog id="terminal-sheet" class="terminal-sheet" aria-labelledby="terminal-title"></dialog>
 </body></html>

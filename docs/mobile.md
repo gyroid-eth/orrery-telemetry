@@ -33,11 +33,13 @@ macOSで`tailscale`がPATHに無いときは、CLIは通常`/Applications/Tailsc
 - **Graph**: 既定は直近24時間に活動が確認されたagentです。Focusはその中の選択agentと関連の強い最大5体、Allは選択期間内の全体です。Findで名前を選び、ピンチで拡大、ドラッグで移動、Fitで収めます。大きなgraphで全名前を同時に読めることは保証しません。
 - 線の太さと矢印の大きさは選択期間のMail件数に対応します。件数は方向・To/Ccごとの**宛先行数**で、未読数や一意の送信数ではありません。親子の破線はMailとは別です。
 - 文脈残量弧とWorkingの動きはPCと共通です。文脈の取得時刻は不明なまま扱い、未知値には弧を描きません。アカウント利用枠はUnavailableで、更新要求もしません。
-- **Tune graph**の6設定はこのブラウザ内の表示調整だけです。agentの起動・停止・返信・ターミナル操作はありません。Activityの絞込も閲覧だけです。
+- **Tune graph**の6設定はこのブラウザ内の表示調整だけです。agentの起動・停止・Mail返信はありません。Activityの絞込も閲覧だけです。ターミナルの表示と送信は、下の別設定を有効にした場合だけ使えます。
 
 前面では約10秒ごとに取得し、背景ではpollを止めます。取得に失敗した値は「Last known」として残し、失敗を正常な0件や待機状態には変えません。SnapshotはHTTPで観測した時刻です。Mailは1ページ200宛先行までで、**Older / Newer**で差し替えます。古いページを見ている間もGraphは更新されますが、一覧が勝手に先頭へ戻ることはありません。Statusは最新ページだけに表示します。graphは最大10,000集約リンクまでで、切詰めは画面に明示します。ブラウザに保存するのは6つの表示設定だけで、観測データのoffline保存やservice workerはありません。
 
 GraphのMail線をタップすると、その2体間の選択期間の一覧が開きます。初期表示は**Both**（両方向）で、差出人→宛先のボタンで方向を絞れます。親子線はMail一覧を開きません。一覧の1件をタップして本文を開き、**Back**で一覧、**Done**でGraphへ戻ります。選択と拡大率は保持します。
+
+Graph右上の**Expand**でGraphを画面いっぱいに広げます。ブラウザの全画面機能が使えない場合も、同じページ内で全面表示します。Find・Focus/All・Fit・ピンチ・ドラッグ、Mail線の一覧やTerminal sheetはそのまま使えます。**Close**で通常表示へ戻ります。戻る／Escapeは手前のsheetを先に閉じ、次にGraphの全画面表示を終了します。OSやブラウザが全画面を終了した場合は通常表示へ戻り、開いていたsheetも閉じます。縦横の切替に追従し、選択と手動の拡大率を保ちます。実スマホでの全画面・戻るジェスチャー・キーボード動作は別途確認してください。
 
 件名は512文字、本文はUTF-8で64KiBまでで、超過は明示します。HTMLやMarkdownは文字として表示し、リンク・画像・添付を実行しません。read/ACKや返信も送りません。閉じる、別のMail、期間・画面の切替、背景移行で表示中の本文を消し、遅れた応答で復活させません。取得不能・削除・変更・期限切れはエラー表示し、前の本文で埋めません。
 
@@ -106,6 +108,26 @@ tailscale serve --https=9443 http://127.0.0.1:8781
 指定スマホで`https://computer.example.ts.net:9443/`を開き、本人情報で画面とsnapshotが取得できることを確認します。同じ本人アカウントの**別端末**と、別アカウントからは使えないことも確認します。本人header照合と端末のpolicyをそれぞれ検証してください。どれかが未確認なら「本人スマホ限定で有効化済み」とは扱いません。
 
 リポジトリの隔離HTTP試験・合成画面確認は、この実Serve/端末受入の代わりにはなりません。実際のTailscale版、policy、本人スマホでの配備確認は運用者が行います。
+
+## スマホからpaneを確認して送る
+
+**Terminalは別途有効にする機能です。既定では画面取得も送信も行いません。** 指定スマホの実効policyを確認する前に有効にしないでください。閲覧用readerを動かしただけでは使えません。
+
+1. 上の実端末確認で、指定スマホだけが接続でき、同じ本人の別端末も拒否されることを確かめます。
+2. TelemetryをAPI 31以上、cockpitを対応するpane adapter版に更新します。cockpit backendの**既存の起動引数**へ`--enable-mobile-terminal`を追加し、通常の手順で再起動します。8791へ二重起動せず、起動引数を管理できない場合はここで止めます。
+3. readerの起動例へ`--enable-terminal --phone-policy-reviewed --cockpit-port 8791`を追加します。`--check`でも同じflagで形式を確認できます。`--phone-policy-reviewed`は運用者が実効policyを確認したという申告であり、コマンドによる検証ではありません。どちらかのopt-inが無い、版が合わない、既存target guardやOSの確認が失敗した場合はUnavailableになります。
+
+有効時はheaderが**Terminal enabled**になります。Graphでagentを選んだパネル、ActivityのStatus行、要確認行、Mail詳細のFrom/Toにある**Terminal**から同じsheetを開きます。Graphの選択やMail本文を開く操作はそのままです。複数paneなら自分で選び、不明な対応を名前から補いません。対象はPCの既存managerが扱う同じlegacy transport内で、既存保護が許すpaneです。agentの種類や現在の表示期間は起動許可には使わず、別socket/global対象へ迂回しません。paneのsessionは現在のmetadata project外にある場合もあります。
+
+上側は選択paneの末尾40行、UTF-8で6KiBまでの文字表示です。前面で開いている1paneだけ約3秒ごとに更新し、失敗時は6、12、最大24秒へ間隔を延ばします。制御文字の除去・表示の切詰めを明示し、画像、HTML、リンクを実行しません。既存recorderや復元history全体は送りません。**画面にはキーや私的文章が含まれ得ます。** 誰かへ見せる前に内容を確かめてください。
+
+下側へUTF-8で4KiB以内の1行を書き、**Review input**で宛先pane・全文・Enterを確認してから**Send once**を押します。確認は30秒で失効し、出力更新で本文や宛先・期限を差し替えません。paneの交換や取得失敗後は再確認が必要です。送信後も前面で開いていれば同じpaneの応答を見られます。**Received by terminal**はtmuxの受理までで、agentの実行やタスク完了を意味しません。**Outcome unknown**では一部だけ届いた可能性があり、自動再送しません。**Check receipt**は受理状態の照会だけです。
+
+これは人が画面を見て送るターミナル操作です。同じpane内でprogramが変わったりshellへ戻ったりすることは検出保証しません。文章がshellコマンドとして解釈されること、既存の入力bufferや別writerと混ざること、確認後に画面が変わることは残ります。送信のためにbufferを消去・interruptしません。
+
+Close、別paneへの切替、背景移行、離脱でpollを止め、表示・下書き・未送信の確認を消します。遅れた応答で復活させず、内容をURL・log・browser storage・serverのpreview cacheへ残しません。既存PC recorderやOSの記録・撮影まで消す保証はありません。実Android keyboard、実Serve/phone policyと実paneの受入は、隔離HTTP/CDP試験とは別に確認してください。
+
+Terminalだけを戻す場合はreaderの上記3flagとbackendの`--enable-mobile-terminal`を外し、各既存手順で再起動します。通常の閲覧設定や無関係なServe設定を変更する必要はありません。
 
 ## 止める・戻す
 

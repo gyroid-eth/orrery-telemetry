@@ -68,7 +68,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":30}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":31}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -742,4 +742,14 @@ API30ではmetadataに不透明な`scope`と`next_cursor`を追加します。`G
 
 metadata pageのloopback経路は`/api/mobile-mail-page`、固定24hの内部cache batchは`/api/mobile-cache-page?cursor=<token>`（初回cursorなし）です。後者は外部relayのroute mapには存在しません。認証済みsnapshot取得後にだけ単一workerを開始し、最大32通ずつ、実JSON応答4MiB未満、120秒のsweep予算、25ms yield、完了後60秒以上の再試行間隔で読みます。最大63非空page・2000 distinct message・32MiBのJSON論理byte量に制限し、全24hの収録が終わらない場合はpartial/unavailableです。JSON escapeで大きくなるbatchは縮小します。`mail_cache`には進捗status/messages/logical_bytes/上限/reasonだけを返し、cache辞書や本文は含めません。
 
-本文と対応metadataは一緒に24h期限/LRU/byte予算で破棄します。scope変更で全失効、tapのcache hitも現在のcanonical revisionを再照合し、失敗時は古い本文を返しません。24hはcache範囲だけで、30d/全履歴の公開済eventも単件取得でき、古い本文はcache外です。reader停止でworkerをstop/joinして全内容を消します。新loopback APIもglobalでは501で、旧DBにfallbackしません。ターミナル、成果物、quota refreshは読みません。本人認証と指定端末の制限は別で、配備時にはguideの実端末確認が必要です。
+本文と対応metadataは一緒に24h期限/LRU/byte予算で破棄します。scope変更で全失効、tapのcache hitも現在のcanonical revisionを再照合し、失敗時は古い本文を返しません。24hはcache範囲だけで、30d/全履歴の公開済eventも単件取得でき、古い本文はcache外です。reader停止でworkerをstop/joinして全内容を消します。新loopback APIもglobalでは501で、旧DBにfallbackしません。通常の閲覧ではターミナル、成果物、quota refreshは読みません。Terminalは下記の別opt-inです。本人認証と指定端末の制限は別で、配備時にはguideの実端末確認が必要です。
+
+## スマホのTerminal（API 31）
+
+通常の閲覧契約は維持し、別opt-inのpane adapterを追加します。実効phone policyを受入するまではpreviewもwriteも無効です。`GET /view/terminal`はcapability、POSTは固定`/view/terminal/{targets,preview,prepare,commit,cancel,status}`だけです。targets/previewを含む全POSTに本人・固定外側Host・単一の一致Origin・有限JSONを要求し、queryや任意proxyは受けません。本文へowner/reader identityを渡せません。readerが固定loopback `/_mobile/terminal/<operation>`へcontract `orrery-mobile-pane-v1`、owner、reader epochを付与し、両側capability/API31を照合します。起動epochが変われば旧handle/intentは失効します。
+
+外側JSONは`targets:{epoch,name}`、`preview:{epoch,choice}`、`prepare:{epoch,choice,revision,text}`、`commit:{epoch,intent,confirmation}`、`cancel/status:{epoch,intent}`です。targetsは既存manager上でsession名が厳密一致するpane候補を最大128件、serialized16KiB以内に収まる件数まで返し、切詰めを明示します。複数は利用者が選び、別名/active paneへ推測しません。候補handleはowner/reader/bridge/paneへ束縛してメモリに30秒、選択後proofは最大16件です。前面previewは同じ選択leaseを更新できますが、preparedの本文・proof・30秒期限を延長しません。
+
+previewは既存shared helperのfresh legacy admissionとkernel birthを使い、socket/server/session/pane/UID/bridge incarnationを取得前後に照合します。未知helper/OS/対象は拒否し、Codex launch bindingや登録DBを使いません。固定captureは末尾40行・表示6KiB、収集64KiB・全体3秒、返却JSON全体は実serialized byteで16KiB以内です。ANSI/OSC/C0/C1/方向制御を除去し、literal textと観測時刻・除去/切詰めを返します。本文はcacheしません。収集上限超過では本文を破棄してACK位置を維持し、3秒で終端未着ならそのcontrol streamを隔離して再利用しません。
+
+prepareは1行4KiB UTF-8を改変せず束縛します。pending最大16件、結果metadataは最大256件/10分、同pane同時送信1件・6件/分です。commitは一回claimし、同write lock内でfresh同一pane検査から全chunk/Enterのwriteまでを行い、lock解放後に全tmux ACKを待ちます。5秒以内の全ACKでaccepted、部分失敗/timeout/errorはunknownで再送・残chunk補送0です。statusは照会のみ。プログラムの同一性や実行完了は保証せず、shell化/既存buffer/外部writer/最終検査後raceは残ります。UIと有効化・停止手順は[mobile guide](mobile.md#スマホからpaneを確認して送る)を参照してください。

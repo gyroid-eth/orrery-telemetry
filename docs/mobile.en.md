@@ -33,11 +33,13 @@ On macOS the CLI is usually `/Applications/Tailscale.app/Contents/MacOS/Tailscal
 - **Graph** defaults to agents with observed activity in the last 24 hours. Focus shows the selected agent and up to five strongest peers within that period; All shows every agent in that period. Use Find, pinch to zoom, drag to pan, and Fit. Large graphs do not guarantee that every name is readable at once.
 - Line width and arrow size follow Mail counts in the selected period. Counts are **recipient rows** by direction and To/Cc, rather than unread counts or unique sent messages. Dashed parent–child lines are separate from Mail.
 - Context arcs and working motion use the PC renderer. Unknown context has no arc, and its sampling time remains unknown. Account usage is Unavailable; this reader never refreshes it.
-- The six **Tune graph** controls adjust this browser's display only. Filtering Activity also changes only the view. There are no launch, stop, reply or terminal controls.
+- The six **Tune graph** controls adjust this browser's display only. Filtering Activity also changes only the view. There are no launch, stop or Mail reply controls. Terminal viewing and input require the separate opt-in below.
 
 The reader polls about every ten seconds in the foreground and stops polling in the background. Failed observations retain the last known values, visibly marked as such; failure is never a healthy zero or a waiting agent. Snapshot time is the HTTP observation time. Mail shows up to 200 recipient events per page; **Older / Newer** replaces the page. Graph polling continues while you read an older page, without moving it back to the latest page. Status appears on the latest page only. Graph aggregation has a separate 10,000-link limit. Truncation is shown explicitly. Only six display settings are saved in the browser: no offline snapshot storage or service worker is used.
 
 Tap a Graph Mail edge to open metadata between those two agents in the selected period. **Both** directions is the default; the sender→recipient buttons filter the direction. Parent–child lines do not open Mail. Tap one event for its content, **Back** for the list, and **Done** for Graph. Selection and zoom are retained.
+
+Use **Expand** at the top right of Graph to fill the screen. If the browser's fullscreen API is unavailable or refused, Graph fills the page instead. Find, Focus/All, Fit, pinch, drag, Mail-pair lists and the Terminal sheet remain available. **Close** restores the normal view. Back or Escape closes the foreground sheet first, then exits the expanded Graph. If the OS or browser exits fullscreen, the normal view returns and open sheets close. The layout follows orientation changes and retains your selection and manual zoom. Fullscreen, back gestures and keyboard behavior on an actual phone require separate acceptance.
 
 Subjects are limited to 512 characters and bodies to 64 KiB of UTF-8, with explicit truncation notices. HTML and Markdown remain literal text; links, images and attachments do not execute. No read receipt, ACK or reply is sent. Closing, choosing another message, changing the period or view, and moving to the background clear the displayed content. Late responses cannot restore it. Unavailable, deleted, changed or expired events show an error, never the previous message's body.
 
@@ -106,6 +108,26 @@ This uses the [Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/ser
 Open `https://computer.example.ts.net:9443/` on the designated phone and confirm that both the page and snapshot load for the owner. Confirm rejection from **another device on the same account** and from another account. Verify both owner-header admission and effective device policy. Until all of these checks pass, do not describe the deployment as restricted to the owner's phone.
 
 Repository tests use isolated HTTP and synthetic screens. They do not establish acceptance of the installed Tailscale version, real policy or actual phone. The operator performs that deployment verification separately.
+
+## Inspect a pane and send input from your phone
+
+**Terminal is a separate opt-in. Both capture and input are off by default.** Do not enable either before verifying the designated phone's effective policy. Starting the viewing reader alone does not enable Terminal.
+
+1. Complete the real-device checks above: the designated phone works, while another device on the same account is refused.
+2. Update Telemetry to API 31 or later and cockpit to the matching pane-adapter version. Add `--enable-mobile-terminal` to the cockpit backend's **existing launch arguments**, then restart it through its normal procedure. Do not start a second backend on 8791. Stop here if you cannot manage its launch arguments.
+3. Add `--enable-terminal --phone-policy-reviewed --cockpit-port 8791` to the reader example. Use the same flags with `--check` to validate their syntax. `--phone-policy-reviewed` records the operator's acknowledgement; it does not test the policy. Missing opt-ins, incompatible versions, existing target protection or unavailable OS identity checks leave Terminal unavailable.
+
+The header says **Terminal enabled** when available. The selected Graph agent panel, Activity Status rows, attention rows and Mail-detail From/To entries have explicit **Terminal** buttons leading to the same sheet. Existing Graph selection and Mail-detail actions remain. Choose a pane when several exist; an unknown mapping is never guessed from the label. Only panes already handled by the PC manager on the same legacy transport and admitted by its protection are eligible. Agent type and the displayed time period are not authorization. No other socket or global target is used as a fallback. A pane's session may be outside the current metadata project.
+
+The upper area shows the selected pane's last 40 lines, limited to 6 KiB of UTF-8. Only that open, foreground pane updates about every three seconds; failures back off to 6, 12 and at most 24 seconds. Removed control sequences and shortened text are marked. Images, HTML and links never execute. Full recorder/restored history is not forwarded. **Terminal text can contain keys or private writing.** Check it before sharing the screen.
+
+Write one line of at most 4 KiB UTF-8 below it. Use **Review input** to check the pane, exact text and Enter, then **Send once**. Confirmation expires after 30 seconds. Output refreshes do not replace its text, target or expiry. A changed pane or failed preview requires a new review. Keep the sheet open in the foreground to see the pane's response after sending. **Received by terminal** means tmux accepted the batch, not that an agent ran or completed the task. **Outcome unknown** can mean that only part arrived; there is no automatic retry. **Check receipt** only queries its receipt.
+
+This is a terminal operation you confirm by inspecting the pane. Changes of program or a return to a shell within the same pane are not guaranteed to be detected. Text may be interpreted by that shell, combined with existing input or another writer, or sent after the screen changes. The feature does not clear input buffers or interrupt the pane before sending.
+
+Close, pane changes, backgrounding and leaving stop polling and clear the display, draft and unsent confirmation. Late responses cannot restore them. Content is not placed in URLs, logs, browser storage or a server preview cache. This does not erase existing PC recorder output or OS recording/screenshots. Actual Android keyboard behavior, Serve/phone policy and real panes need separate acceptance; isolated HTTP/CDP checks do not establish them.
+
+To disable only Terminal, remove those three reader flags and the backend's `--enable-mobile-terminal`, then restart each through its existing procedure. Viewing settings and unrelated Serve entries can remain.
 
 ## Disable and restore
 

@@ -28,6 +28,48 @@ class Store:
         return {'schema':1,'sources':{'agents':{'status':'available'}},'agents':[]}
 
 
+@pytest.mark.parametrize('case',['valid','origin_missing','origin_other','owner_other','host_other',
+    'duplicate_json','owner_payload','method_override','content_encoding','length_non_ascii','oversize','unknown_route'])
+def test_input_post_requires_owner_fixed_origin_policy_and_finite_json(case):
+    calls=[]
+    class Input:
+        def call(self,operation,payload=None):
+            calls.append((operation,payload));return {'state':'available'}
+    config=relay.Config('owner@example.test','https://viewer.example.ts.net:9443',
+                        input_enabled=True,phone_policy_reviewed=True)
+    server=relay.make_server(config,store=Store(),input_client=Input(),test_port=0)
+    with serving(server) as port:
+        headers={'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test',
+                 'Origin':'https://viewer.example.ts.net:9443','Content-Type':'application/json'}
+        value={'name':'FixtureCurie','epoch':'a'*32}
+        if case=='origin_missing': del headers['Origin']
+        elif case=='origin_other': headers['Origin']='https://other.example.ts.net:9443'
+        elif case=='owner_other': headers['Tailscale-User-Login']='other@example.test'
+        elif case=='host_other': headers['Host']='other.example.ts.net:9443'
+        elif case=='owner_payload': value['owner']='other@example.test'
+        elif case=='method_override': headers['X-HTTP-Method-Override']='GET'
+        elif case=='content_encoding': headers['Content-Encoding']='gzip'
+        elif case=='length_non_ascii': headers['Content-Length']='²'
+        body=json.dumps(value).encode()
+        if case=='duplicate_json': body=b'{"name":"a","name":"b","epoch":"' + b'a'*32+b'"}'
+        elif case=='oversize': body=b'x'*16385
+        path='/view/terminal/targets' if case!='unknown_route' else '/view/terminal/proxy'
+        con=http.client.HTTPConnection('127.0.0.1',port,timeout=3)
+        try:
+            con.request('POST',path,body=body,headers=headers)
+            response=con.getresponse(); response.read()
+            assert response.status==(200 if case=='valid' else 405 if case=='unknown_route' else 400 if case in {'duplicate_json','owner_payload'} else 403)
+            assert response.getheader('Cache-Control')=='no-store'
+        finally: con.close()
+        assert len(calls)==(1 if case=='valid' else 0)
+
+
+def test_input_policy_is_an_explicit_gate_and_normal_reader_stays_read_only():
+    with pytest.raises(ValueError):
+        relay.Config('owner@example.test','https://viewer.example.ts.net',input_enabled=True)
+    assert relay.Config('owner@example.test','https://viewer.example.ts.net').input_enabled is False
+
+
 @pytest.fixture
 def reader():
     config=relay.Config('owner@example.test','https://viewer.example.ts.net:9443')
@@ -418,3 +460,61 @@ def test_existing_root_navigation_without_the_shortcut_exception_stays_available
     if site is None:omit.append('Sec-Fetch-Site')
     else:replace['Sec-Fetch-Site']=site
     assert shortcut_request(shortcut_reader[0],omit=omit,replace=replace)[0]==200
+
+
+@pytest.mark.parametrize('case',['valid','old_api','wrong_contract','duplicate_json','redirect',
+                                 'wrong_mime','encoded','duplicate_length','oversize','lost_commit'])
+def test_input_client_checks_adapter_contract_and_never_retries_lost_commit(case):
+    from dashboard.mobile_input import CONTRACT,InputClient,InputUnavailable
+    calls=[]
+    class Adapter(BaseHTTPRequestHandler):
+        def log_message(self,*args):pass
+        def do_POST(self):
+            payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            calls.append((self.path,dict(self.headers),payload))
+            value=dict(contract='other' if case=='wrong_contract' else CONTRACT,
+                       api=30 if case=='old_api' else 31,epoch='a'*32,enabled=True,
+                       supported='legacy-managed-pane',ack='tmux-command-accepted')
+            data=json.dumps(value).encode()
+            if case=='duplicate_json':data=data[:-1]+b',"api":31}'
+            if case=='oversize':data=b'x'*16385
+            self.send_response(302 if case=='redirect' else 200)
+            self.send_header('Content-Type','text/html' if case=='wrong_mime' else 'application/json')
+            self.send_header('Cache-Control','no-store')
+            self.send_header('Content-Length',str(len(data)))
+            if case=='duplicate_length':self.send_header('Content-Length',str(len(data)))
+            if case=='encoded':self.send_header('Content-Encoding','gzip')
+            if case=='redirect':self.send_header('Location','http://elsewhere.invalid/input')
+            self.end_headers()
+            if case=='lost_commit':self.close_connection=True;return
+            self.wfile.write(data)
+    with serving(ThreadingHTTPServer(('127.0.0.1',0),Adapter)) as port:
+        client=InputClient(port,'owner@example.test')
+        operation='commit' if case=='lost_commit' else 'capability'
+        payload=dict(epoch='a'*32,intent='b'*64,confirmation='c'*64) if operation=='commit' else {}
+        if case=='valid':assert client.call(operation,payload)['enabled'] is True
+        else:
+            with pytest.raises(InputUnavailable):client.call(operation,payload)
+        assert len(calls)==1 and calls[0][0]=='/_mobile/terminal/'+operation
+        assert calls[0][1]['Host']==f'127.0.0.1:{port}'
+        assert calls[0][1]['Origin']==f'http://127.0.0.1:{port}'
+        assert 'Tailscale-User-Login' not in calls[0][1]
+        assert calls[0][2]['owner']=='owner@example.test' and calls[0][2]['reader_epoch']==client.reader_epoch
+
+
+def test_disabled_terminal_capability_does_not_contact_cockpit():
+    class NoInput:
+        def call(self,*a,**kw):raise AssertionError('disabled terminal must not contact cockpit')
+    server=relay.make_server(relay.Config('owner@example.test','https://viewer.example.ts.net:9443'),store=Store(),input_client=NoInput(),test_port=0)
+    with serving(server) as port:
+        status,headers,body=request(port,'/view/terminal')
+        assert status==200 and json.loads(body)['enabled'] is False
+        assert request(port,'/view/terminal',headers={'Host':'viewer.example.ts.net:9443'})[0]==403
+        assert request(port,'/view/terminal/preview',method='POST')[0]==405
+
+
+def test_terminal_flags_require_policy_acknowledgement_without_starting_listener(monkeypatch):
+    monkeypatch.setattr(relay,'make_server',lambda *a,**kw:pytest.fail('option check must not listen'))
+    base=['--owner-login','owner@example.test','--public-origin','https://viewer.example.ts.net:9443']
+    with pytest.raises(SystemExit):relay.main(['--enable','--enable-terminal',*base])
+    assert relay.main(['--check','--enable-terminal','--phone-policy-reviewed',*base])==0
