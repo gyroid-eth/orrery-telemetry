@@ -42,6 +42,7 @@ class CAFixture:
             shutil.copytree(ROOT / 'integrations' / name, self.repo / 'integrations' / name)
         (self.repo / 'hooks').mkdir()
         shutil.copy2(ROOT / 'hooks/native_connections.py', self.repo / 'hooks/native_connections.py')
+        shutil.copy2(ROOT / 'hooks/native_server_models.py', self.repo / 'hooks/native_server_models.py')
         shutil.copytree(ROOT / 'examples/native-harnesses', self.repo / 'examples/native-harnesses')
         target = self.repo / 'scripts/lib/managed_harness_install.py'
         target.parent.mkdir(parents=True)

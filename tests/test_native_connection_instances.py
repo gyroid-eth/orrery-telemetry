@@ -246,6 +246,7 @@ def test_real_static_admission_checks_each_connection_without_runtime_execution(
                 copy2(Path(module.__file__), target)
                 (product / 'hooks').mkdir()
                 copy2(Path(native_connections.__file__), product / 'hooks/native_connections.py')
+                copy2(Path(native_connections.__file__).with_name('native_server_models.py'), product / 'hooks/native_server_models.py')
             manifest = module.read(case.manifest)
             manifest['enabled'] = True
             manifest['harnesses'][harness]['python'] = sys.executable

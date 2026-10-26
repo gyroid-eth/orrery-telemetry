@@ -69,7 +69,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":32}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":33}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -114,6 +114,8 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 [取得・実確認の手順](dsh-stage-a.md)も参照。
 
 ## GET `/api/spawn-names`
+
+API33では `dynamic_models: true` / `model_source: server` の動的Localを追加します。pickerは設定した各endpointの `/v1/models` を明示取得し、静的検証・spawn POSTではmodel探索しません。各modelは生の `id`、任意の `display_name`、0始まり `url_index`、opaqueな `url_key`、`model_state`（`loaded` / `available` / `unloaded`）、`context` と由来 `context_source`（`server` / `override` / `default`）を持ちます。status欠損・未知の有効IDは許可し、明示unloadedだけ無効です。`Available` はロード済みの証明ではありません。URL別失敗は `endpoints[].reason` へ出し、取得失敗時に旧model行を現在値として返しません。URL・資格参照は公開catalogへ含めません。動的effortは未報告、helperはSame as mainです。実command生成・exact resumeでは選択URLだけを1回照合し、ID消失・明示unloaded・取得失敗を拒否します。server modelの継続lockではありません。
 
 API 27ではnative接続の`id`と`kind`を分けます。`id`は設定した接続先そのもの（例：`strata`と`strata-epyc`）、`kind`は`deepseek`または`strata`です。catalogが返した`id`を`POST /api/spawn`の`provider`へそのまま送り、選んだ`model`と`harness`も送ります。同じmodel IDでも接続IDが異なれば別の接続先です。`label`と`server`は表示用で、経路の判定には使いません。旧`deepseek`/`strata`はそのまま使えます。[複数接続の設定](configuration.md#native-connections)を参照してください。
 
@@ -592,6 +594,7 @@ request:
 | `harness` | DeepSeek / Local 必須 | `dsh` または `hermes`。Claude は `claude-code`（従来 alias `claudecode`）、Codex は `codex-cli`（従来 alias `codex`）を省略可 |
 | `helper_model` | no | 省略または `same` は主モデルを継承。DeepSeek / Local は選択した model × harness の `helper_models` にある同 backend の正式 ID も指定可。未提供・別 backend の ID は拒否 |
 | `model` | DeepSeek / Local 必須 | 正式 ID。DeepSeek / Local は選択した provider と harness の有効な catalog entry と一致必須。Claude / Codex は既存の省略時の既定を維持 |
+| `url_index`, `url_key` | 動的Local必須 | 選択model行の両値をそのまま送る。indexは0以上の整数、keyは設定URLと束縛。URL変更・並べ替えは拒否し、再取得・再選択が必要。固定model・他providerには指定不可 |
 | `effort` | no | 明示時だけ送る。Claude / Codex は `model_efforts` / `model_effort_defaults`、DeepSeek / Local は選択した model × harness の能力で検証。未指定は CLI 設定を使用し、能力不明の値は推測しない |
 | `role` | no | 最大40文字 |
 | `group` | no | 最大24文字 |

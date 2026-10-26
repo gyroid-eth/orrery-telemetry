@@ -44,6 +44,8 @@ def resolve_connection(manifest, connection_id):
     if not isinstance(spec, dict):
         raise ValueError('unknown_backend')
     kind = connection_kind(connection_id, spec.get('kind', _MISSING))
+    if spec.get('model_source') == 'server' and kind != 'strata':
+        raise ValueError('invalid_connection_kind')
     return kind, spec
 
 

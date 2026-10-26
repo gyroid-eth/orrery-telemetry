@@ -68,6 +68,24 @@ console.log(JSON.stringify(payloads));
         for connection in ('strata','strata-epyc') for harness in ('dsh','hermes')]
 
 
+def test_dynamic_same_model_three_urls_keeps_url_index_and_display_name():
+    result=run('''
+let spmSelectedUrlIndex=2,spmSelectedUrlKey='2'.repeat(64);
+spmSelectedProvider='local-workstation';spmSelectedModel='same-wire-model';spmSelectedHarness='hermes';
+spmProviders=normalizeSpawnProviders({providers:[{id:'local-workstation',kind:'strata',dynamic_models:true,label:'Workstation',
+ models:[0,1,2].map(url_index=>({id:'same-wire-model',display_name:'Readable model',url_index,url_key:String(url_index).repeat(64),
+  harnesses:[{id:'hermes',available:true,efforts:null,effort_source:'unknown'}]}))}]});
+const p=spmProviders[0];
+console.log(JSON.stringify({payload:buildSpawnPayload(),keys:SpawnPicker.entries({providers:spmProviders}).map(e=>e.key),
+ selected:spawnSelectedModel(p)}));
+''')
+    assert result['payload']['provider']=='local-workstation'
+    assert result['payload']['model']=='same-wire-model' and result['payload']['url_index']==2
+    assert result['payload']['url_key']=='2'*64
+    assert 'effort' not in result['payload']
+    assert len(set(result['keys']))==3 and result['selected']['display_name']=='Readable model'
+
+
 def test_required_effort_needs_explicit_selection_even_with_default():
     assert run('''
 spmProviders[0].capabilities={effort_required:true};

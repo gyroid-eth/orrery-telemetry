@@ -2621,6 +2621,13 @@
 .spm-picker-columns{display:grid;grid-template-columns:minmax(100px,.8fr) minmax(180px,1.3fr) minmax(200px,1fr);gap:16px;width:100%}
 .spm-picker-columns section{min-width:0}.spm-picker-columns h3{margin:0 0 6px;font-size:14px}.spm-picker-columns p{font-size:11px;opacity:.65;margin:0 0 12px}
 .spm-picker-columns .spm-provider-tabs{display:flex;flex-direction:column}.spm-picker-columns .spm-models{max-height:320px;overflow:auto}
+#spm-models.spm-local-models{display:block}
+.spm-connection-heading{font:12px var(--serif);color:var(--ink);margin:14px 0 7px}
+#spawnmd .spm-local-models .spm-model-chip{display:flex;align-items:center;gap:12px;width:100%;border-radius:0;border:0;border-bottom:1px solid var(--hair);padding:11px 9px}
+#spawnmd .spm-local-models .spm-model-chip b{font:11px var(--mono);overflow-wrap:anywhere}
+#spawnmd .spm-local-models .spm-model-chip small{font:9px/1.5 var(--mono);letter-spacing:0;text-transform:none;color:var(--ink-dim)}
+.spm-local-copy{min-width:0;flex:1}.spm-local-state{font:9px var(--mono);color:var(--ink-dim);white-space:nowrap}
+#spawnmd .spm-local-models .spm-model-chip:disabled{color:var(--ink-faint);cursor:default}
 #spawnmd .spm-efforts{display:block;width:100%}.spm-picker-columns .spm-effort-row{display:block;margin-top:20px}
 #spm-harnesses{display:flex;flex-wrap:wrap;gap:6px}#spm-helper{width:100%;margin:8px 0}#spawnmd .spm-frame{width:min(1000px,calc(100vw - 48px));display:flex;flex-direction:column;overflow:hidden}
 #spawnmd .spm-grid{min-height:0;overflow-y:auto}#spawnmd .spm-hd,#spawnmd .spm-foot{flex-shrink:0}
@@ -17292,7 +17299,96 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "e6adfd64cce3a279",
+          "id": "62a5742eace79f79",
+          "important": false,
+          "references": [
+            "--ink"
+          ],
+          "selector": ".spm-connection-heading",
+          "tokens": [
+            "--ink"
+          ]
+        },
+        {
+          "channels": [
+            "borderTopColor",
+            "borderRightColor",
+            "borderBottomColor",
+            "borderLeftColor"
+          ],
+          "consumer": false,
+          "id": "6bf9cf6d2f1ee486",
+          "important": false,
+          "references": [],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip",
+          "tokens": []
+        },
+        {
+          "channels": [
+            "borderBottomColor"
+          ],
+          "consumer": true,
+          "id": "8f6cb4271f4f1e58",
+          "important": false,
+          "references": [
+            "--hair"
+          ],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip",
+          "tokens": [
+            "--hair"
+          ]
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "4e24b1f29ab06a99",
+          "important": false,
+          "references": [
+            "--ink-dim"
+          ],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip small",
+          "tokens": [
+            "--ink-dim"
+          ]
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "aee0d32c22fd44fe",
+          "important": false,
+          "references": [
+            "--ink-dim"
+          ],
+          "selector": ".spm-local-state",
+          "tokens": [
+            "--ink-dim"
+          ]
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "04b31c43a22bca82",
+          "important": false,
+          "references": [
+            "--ink-faint"
+          ],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip:disabled",
+          "tokens": [
+            "--ink-faint"
+          ]
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "b9195bf122a55128",
           "important": false,
           "references": [
             "--ink"
@@ -17307,7 +17403,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": true,
-          "id": "c6a872893df989c8",
+          "id": "63cb299eca213e08",
           "important": false,
           "references": [
             "--hair"
@@ -17322,7 +17418,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": true,
-          "id": "0b919e8cd3662ef6",
+          "id": "e3572ba81b92bf6f",
           "important": false,
           "references": [
             "--hair"
@@ -17337,7 +17433,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "d0605b6fd5736435",
+          "id": "83d96e56946e1d8d",
           "important": false,
           "references": [
             "--amber"
@@ -17350,7 +17446,7 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": true,
-          "id": "9fc142fbbcbf7c40",
+          "id": "e76b60592cf9ec52",
           "important": false,
           "references": [
             "--ink-faint"
@@ -17365,7 +17461,7 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": false,
-          "id": "fa2c3ec5b2ea3fff",
+          "id": "09a53cceeacf439a",
           "important": false,
           "references": [],
           "selector": ".effort-halo",
@@ -17376,7 +17472,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "1254869c9272fb3f",
+          "id": "92b82be02c2e69a4",
           "important": false,
           "references": [
             "--amber"
@@ -17389,7 +17485,7 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": true,
-          "id": "7ae9e3cb7d4b4f42",
+          "id": "fd831d306449f88f",
           "important": false,
           "references": [
             "--panel-2"
@@ -17404,7 +17500,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "85c499c8e426cf80",
+          "id": "8958d6f7af2d7e7b",
           "important": false,
           "references": [
             "--amber"
@@ -17417,7 +17513,7 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": false,
-          "id": "18fb1d62a0c4bc3c",
+          "id": "1abb625e394fbe31",
           "important": false,
           "references": [
             "--amber"
@@ -17430,7 +17526,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": true,
-          "id": "51e42153b069ad02",
+          "id": "d487a62075817027",
           "important": false,
           "references": [
             "--ink-faint"
@@ -17445,7 +17541,7 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": true,
-          "id": "e38b1eb809e3c8e2",
+          "id": "00835a24aef3b478",
           "important": false,
           "references": [
             "--ink-faint"
@@ -17460,7 +17556,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "e60f96fb28a0de98",
+          "id": "43c736e0e6230dfa",
           "important": false,
           "references": [
             "--ink-dim"
@@ -17478,7 +17574,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "58fccbef5cfabba7",
+          "id": "3e136f368326b3b9",
           "important": false,
           "references": [],
           "selector": "#spm-effort-row .effort-range",
@@ -17489,7 +17585,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "a1674ec9cef03db7",
+          "id": "a02f25617e3fe382",
           "important": false,
           "references": [
             "--ink-dim"
@@ -17507,7 +17603,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "cb6dd6a33b3c87f9",
+          "id": "2df42dc81d379c78",
           "important": false,
           "references": [],
           "selector": "#spm-effort-row .effort-reset",
@@ -17518,7 +17614,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "c8a3150b2f970804",
+          "id": "2c176d7e9699f36d",
           "important": false,
           "references": [],
           "selector": "#spm-effort-row .effort-reset",
@@ -17529,7 +17625,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "eb1e3180f892a52e",
+          "id": "fb30e31ae849dfab",
           "important": false,
           "references": [
             "--amber"
@@ -17542,7 +17638,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "42ffff5daeab60a8",
+          "id": "5c28d96e34d57abd",
           "important": false,
           "references": [
             "--ink-dim"
@@ -31262,7 +31358,92 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "f6f11c039f78388d",
+          "id": "878bac16aa109982",
+          "important": false,
+          "references": [
+            "--ink"
+          ],
+          "selector": ".spm-connection-heading",
+          "tokens": []
+        },
+        {
+          "channels": [
+            "borderTopColor",
+            "borderRightColor",
+            "borderBottomColor",
+            "borderLeftColor"
+          ],
+          "consumer": false,
+          "id": "a80a4ea6efa11509",
+          "important": false,
+          "references": [],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip",
+          "tokens": []
+        },
+        {
+          "channels": [
+            "borderBottomColor"
+          ],
+          "consumer": false,
+          "id": "438cc1ba27e25b5c",
+          "important": false,
+          "references": [
+            "--hair"
+          ],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip",
+          "tokens": []
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "c075aed473a00133",
+          "important": false,
+          "references": [
+            "--ink-dim"
+          ],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip small",
+          "tokens": [
+            "--ink-dim"
+          ]
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "f41c937e0ba3f684",
+          "important": false,
+          "references": [
+            "--ink-dim"
+          ],
+          "selector": ".spm-local-state",
+          "tokens": [
+            "--ink-dim"
+          ]
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": true,
+          "id": "982e46d857948491",
+          "important": false,
+          "references": [
+            "--ink-faint"
+          ],
+          "selector": "#spawnmd .spm-local-models .spm-model-chip:disabled",
+          "tokens": [
+            "--ink-faint"
+          ]
+        },
+        {
+          "channels": [
+            "color"
+          ],
+          "consumer": false,
+          "id": "9166abf2f47b6daa",
           "important": false,
           "references": [
             "--ink"
@@ -31275,7 +31456,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "0c47f00398db3d67",
+          "id": "5e633d348dfd5d0f",
           "important": false,
           "references": [
             "--hair"
@@ -31288,7 +31469,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "9eab65d7b36bd329",
+          "id": "19528b4e00c162f9",
           "important": false,
           "references": [
             "--hair"
@@ -31301,7 +31482,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "004cd270e24c15e9",
+          "id": "72f96f08614103a9",
           "important": false,
           "references": [
             "--amber"
@@ -31314,7 +31495,7 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": true,
-          "id": "d2c5487388f2434b",
+          "id": "032ec8919de04d99",
           "important": false,
           "references": [
             "--ink-faint"
@@ -31329,7 +31510,7 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": false,
-          "id": "ac3ac7de96c8dd9f",
+          "id": "c7162167739eeb05",
           "important": false,
           "references": [],
           "selector": ".effort-halo",
@@ -31340,7 +31521,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "0ec6cbbe79785a87",
+          "id": "aa1a0ac2cee5e09c",
           "important": false,
           "references": [
             "--amber"
@@ -31353,7 +31534,7 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": false,
-          "id": "3622ad095e3df3aa",
+          "id": "16ac4c0b1c4e9951",
           "important": false,
           "references": [
             "--panel-2"
@@ -31366,7 +31547,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": false,
-          "id": "60c8f587362cf1c3",
+          "id": "c8e9fb3c6628a0d8",
           "important": false,
           "references": [
             "--amber"
@@ -31379,7 +31560,7 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": false,
-          "id": "05a74bd204c20e7a",
+          "id": "b711c19bff6d31c8",
           "important": false,
           "references": [
             "--amber"
@@ -31392,7 +31573,7 @@ OFF = legacy snapshot+comet mode">
             "stroke"
           ],
           "consumer": true,
-          "id": "cd3080a86cda594b",
+          "id": "0912679c40f94dc6",
           "important": false,
           "references": [
             "--ink-faint"
@@ -31407,7 +31588,7 @@ OFF = legacy snapshot+comet mode">
             "fill"
           ],
           "consumer": true,
-          "id": "d46a54802979369d",
+          "id": "4e5994555b7c27b7",
           "important": false,
           "references": [
             "--ink-faint"
@@ -31422,7 +31603,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "2487ae83b130fe7f",
+          "id": "ddcfd4e530467e8c",
           "important": false,
           "references": [
             "--ink-dim"
@@ -31440,7 +31621,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "5734c0bf7804412e",
+          "id": "cf2d88fca54f11e3",
           "important": false,
           "references": [],
           "selector": "#spm-effort-row .effort-range",
@@ -31451,7 +31632,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "7ced56f105e8ae07",
+          "id": "c27a0ab04691793f",
           "important": false,
           "references": [
             "--ink-dim"
@@ -31469,7 +31650,7 @@ OFF = legacy snapshot+comet mode">
             "borderLeftColor"
           ],
           "consumer": false,
-          "id": "d0dfffbc301233f2",
+          "id": "8239e87a5b212943",
           "important": false,
           "references": [],
           "selector": "#spm-effort-row .effort-reset",
@@ -31480,7 +31661,7 @@ OFF = legacy snapshot+comet mode">
             "backgroundColor"
           ],
           "consumer": false,
-          "id": "3c67578a1288ad3f",
+          "id": "fcb199dccf13513e",
           "important": false,
           "references": [],
           "selector": "#spm-effort-row .effort-reset",
@@ -31491,7 +31672,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": false,
-          "id": "25344b23f2371b97",
+          "id": "ccf0f27aa4b8bd71",
           "important": false,
           "references": [
             "--amber"
@@ -31504,7 +31685,7 @@ OFF = legacy snapshot+comet mode">
             "color"
           ],
           "consumer": true,
-          "id": "84a692bed14ef951",
+          "id": "53b20d24db1ec008",
           "important": false,
           "references": [
             "--ink-dim"
@@ -32003,7 +32184,7 @@ OFF = legacy snapshot+comet mode">
   },
   "rules_digest": "df26f9d872ccd641021665fa8c09a5b071e42251b9bc7a4e272cccc6ebecebfb",
   "schema_version": 1,
-  "source_digest": "ea62fd2a876ca67531c0edc0d670247bbbeda2ade8c0d7fd7685977690fbf2fe"
+  "source_digest": "9b1e0125ebf14a9785693264210995ef456495d3cdc92c7a1cc319c5fcf8c5c0"
 }
 </script>
 <script>
@@ -37822,7 +38003,8 @@ const SPM_ADVANCED_KEY='agentdash.spawn.advanced';
     return key;
   }
   function entries(catalog){return (catalog.providers||[]).flatMap(provider=>(provider.models||[])
-    .filter(model=>model&&model.id).map(model=>({provider,model,key:JSON.stringify([provider.id,model.id]),family:family(provider,model)})));}
+    .filter(model=>model&&model.id).map(model=>({provider,model,key:JSON.stringify([provider.id,model.id,
+      ...(Number.isInteger(model.url_index)?[model.url_index]:[]),...(model.url_key?[model.url_key]:[])]),family:family(provider,model)})));}
   function value(provider,model,key){return model&&Object.hasOwn(model,key)?model[key]:provider[key];}
   function harnesses(provider,model){
     const supplied=value(provider,model,'harnesses');
@@ -37837,6 +38019,11 @@ const SPM_ADVANCED_KEY='agentdash.spawn.advanced';
     return Array.isArray(list)?list.filter(m=>typeof m==='string'||m&&m.id).map(m=>typeof m==='string'?{id:m,label:m}:m):[];
   }
   function metadata(provider,model){
+    if(provider.dynamic_models){
+      const source=model.context_source||'unreported';
+      return [provider.label||provider.id,Number.isInteger(model.url_index)?'URL '+(model.url_index+1):'',
+        model.context?Math.round(model.context/1000)+'K context ('+source+')':'Context unreported'].filter(Boolean).join(' · ');
+    }
     return ['server','quantization','context'].map(key=>value(provider,model,key)).filter(v=>v!==undefined&&v!==null&&v!=='').join(' / ');
   }
   function recent(storage,key){
@@ -37909,6 +38096,7 @@ let spmSelectedHarness='';
 let spmTerminalExplicit=false;
 let spmBusy=false,spmReady=false,spmLoadSeq=0;
 let spmSelectedName='',spmSelectedProvider='',spmSelectedModel='';
+let spmSelectedUrlIndex=null,spmSelectedUrlKey=null;
 let spmSelectedEffort='',spmProviders=[];
 let spmNameStatus=new Map();
 let spmAdjectives=[],spmSuggestedName='',spmSuggestedPrefix='';
@@ -38580,9 +38768,12 @@ function spawnModelTone(providerId,modelId){
 }
 
 function renderSpawnProviders(providers){
+  const previous=spmProviders.find(p=>p.id===spmSelectedProvider);
   spmProviders=providers;
   const root=SPM('spm-providers');
-  root.innerHTML=providers.map(provider=>
+  const tabs=providers.filter(p=>SpawnPicker.family(p,{})!=='local');
+  if(providers.some(p=>SpawnPicker.family(p,{})==='local'))tabs.push({id:'__local__',label:'Local models'});
+  root.innerHTML=tabs.map(provider=>
     `<button type="button" class="spm-provider-tab" role="tab" `+
     `data-provider="${esc(provider.id)}" aria-selected="false">`+
     `${esc(provider.id==='strata'&&provider.label==='Strata'?'Local models':provider.label||provider.id)}</button>`
@@ -38590,20 +38781,28 @@ function renderSpawnProviders(providers){
   root.querySelectorAll('.spm-provider-tab').forEach(btn=>{
     btn.onclick=()=>selectSpawnProvider(btn.dataset.provider);
   });
+  if(previous&&SpawnPicker.family(previous,{})==='local'){
+    root.querySelectorAll('.spm-provider-tab').forEach(btn=>{
+      const on=btn.dataset.provider==='__local__';btn.classList.toggle('on',on);btn.setAttribute('aria-selected',String(on));
+    });
+    renderSpawnLocalModels();return;
+  }
   const initial=providers.find(provider=>provider.id==='claude')||
     providers[0]||null;
   selectSpawnProvider(initial&&initial.id||'');
 }
 
 function selectSpawnProvider(providerId){
-  const provider=spmProviders.find(item=>item.id===providerId);
+  const provider=providerId==='__local__'?spmProviders.find(p=>SpawnPicker.family(p,{})==='local'):spmProviders.find(item=>item.id===providerId);
   spmSelectedProvider=provider?provider.id:'';
   spmSelectedModel='';
+  spmSelectedUrlIndex=null;
+  spmSelectedUrlKey=null;
   spmSelectedEffort='';
   spmEffortExplicit=false;
   applySpawnProviderCapabilities(provider);
   SPM('spm-providers').querySelectorAll('.spm-provider-tab').forEach(btn=>{
-    const on=btn.dataset.provider===spmSelectedProvider;
+    const on=btn.dataset.provider===(provider&&SpawnPicker.family(provider,{})==='local'?'__local__':spmSelectedProvider);
     btn.classList.toggle('on',on);
     btn.setAttribute('aria-selected',on?'true':'false');
     btn.tabIndex=on?0:-1;
@@ -38612,7 +38811,9 @@ function selectSpawnProvider(providerId){
 }
 
 function renderSpawnModels(provider){
+  if(provider&&SpawnPicker.family(provider,{})==='local'){renderSpawnLocalModels();return;}
   const root=SPM('spm-models');
+  root.classList.remove('spm-local-models');
   const models=provider&&provider.modelError?[]:spawnProviderDisplayModels(provider);
   const fallback=models.some(model=>model.id===(provider&&provider.defaultModel))
     ? provider.defaultModel:(provider&&['claude','codex'].includes(provider.id)?'':((models[0]||{}).id||''));
@@ -38646,12 +38847,44 @@ function renderSpawnModels(provider){
   selectSpawnModel(fallback);
 }
 
-function selectSpawnModel(model){
+function renderSpawnLocalModels(){
+  const root=SPM('spm-models');root.classList.add('spm-local-models');
+  const providers=spmProviders.filter(p=>SpawnPicker.family(p,{})==='local');
+  root.innerHTML=providers.map(provider=>{
+    const rows=(provider.models||[]).map(model=>{
+      const available=SpawnPicker.harnesses(provider,model).some(h=>h.available);
+      const state=model.model_state==='unloaded'?'Not loaded':!available?'Unavailable':model.model_state==='loaded'?'Loaded':'Available';
+      return `<button type="button" class="spm-chip spm-model-chip" data-provider="${esc(provider.id)}" data-model="${esc(model.id)}" data-url-index="${Number.isInteger(model.url_index)?model.url_index:''}" data-url-key="${esc(model.url_key||'')}" role="radio" aria-checked="false" ${available?'':'disabled'}>`+
+        `<span class="spm-local-copy"><b>${esc(model.display_name||model.id)}</b><small>${esc(SpawnPicker.metadata(provider,model))}</small></span>`+
+        `<span class="spm-local-state">${esc(state)}</span></button>`;
+    }).join('');
+    const failures=(provider.endpoints||[]).filter(e=>e.reason);
+    const error=provider.modelError?'Unavailable · '+provider.modelError.replaceAll('_',' '):failures.map(e=>'URL '+(e.url_index+1)+' unavailable').join(' · ');
+    return `<div class="spm-connection-heading">${esc(provider.label||provider.id)}</div>`+rows+
+      (error?`<div class="spm-load" role="status">${esc(error)}</div>`:'');
+  }).join('');
+  const buttons=[...root.querySelectorAll('.spm-model-chip')];
+  buttons.forEach(btn=>{btn.onclick=()=>selectSpawnModel(btn.dataset.model,
+    btn.dataset.urlIndex===''?null:Number(btn.dataset.urlIndex),btn.dataset.provider,btn.dataset.urlKey||null);});
+  const selected=buttons.find(btn=>btn.dataset.provider===spmSelectedProvider&&btn.dataset.model===spmSelectedModel&&
+    (btn.dataset.urlIndex===''||Number(btn.dataset.urlIndex)===spmSelectedUrlIndex)&&(!btn.dataset.urlKey||btn.dataset.urlKey===spmSelectedUrlKey));
+  const first=!spmSelectedModel&&!Number.isInteger(spmSelectedUrlIndex)?buttons.find(btn=>!btn.disabled):null;
+  const initial=selected||first;
+  if(initial)selectSpawnModel(initial.dataset.model,initial.dataset.urlIndex===''?null:Number(initial.dataset.urlIndex),initial.dataset.provider,initial.dataset.urlKey||null);
+  else{spmSelectedModel='';renderSpawnHarnesses(spmProviders.find(p=>p.id===spmSelectedProvider));}
+}
+
+function selectSpawnModel(model,urlIndex=null,connectionId=spmSelectedProvider,urlKey=null){
   const valid=[...SPM('spm-models').querySelectorAll('.spm-model-chip')]
-    .some(btn=>btn.dataset.model===model);
+    .some(btn=>btn.dataset.model===model&&!btn.disabled&&(!btn.dataset.provider||btn.dataset.provider===connectionId)&&
+      (btn.dataset.urlIndex===undefined||btn.dataset.urlIndex===''||Number(btn.dataset.urlIndex)===urlIndex)&&(!btn.dataset.urlKey||btn.dataset.urlKey===urlKey));
+  spmSelectedProvider=connectionId;
   spmSelectedModel=valid?model:'';
+  spmSelectedUrlIndex=urlIndex;
+  spmSelectedUrlKey=urlKey;
   SPM('spm-models').querySelectorAll('.spm-model-chip').forEach(btn=>{
-    const on=btn.dataset.model===spmSelectedModel;
+    const on=btn.dataset.model===spmSelectedModel&&(!btn.dataset.provider||btn.dataset.provider===spmSelectedProvider)&&
+      (btn.dataset.urlIndex===undefined||btn.dataset.urlIndex===''||Number(btn.dataset.urlIndex)===spmSelectedUrlIndex)&&(!btn.dataset.urlKey||btn.dataset.urlKey===spmSelectedUrlKey);
     btn.classList.toggle('on',on);
     btn.setAttribute('aria-checked',on?'true':'false');
     const fold=on&&btn.closest&&btn.closest('.spm-models-overflow');
@@ -38662,7 +38895,8 @@ function selectSpawnModel(model){
 }
 
 function spawnSelectedModel(provider){
-  return provider&&(provider.models||[]).find(model=>model.id===spmSelectedModel)||null;
+  return provider&&(provider.models||[]).find(model=>model.id===spmSelectedModel&&
+    (!Number.isInteger(model.url_index)||model.url_index===spmSelectedUrlIndex)&&(!model.url_key||model.url_key===spmSelectedUrlKey))||null;
 }
 function spawnSelectedHarness(provider){
   const model=spawnSelectedModel(provider);
@@ -38730,8 +38964,10 @@ function paintSpawnEffortDefault(provider){
 function renderSpawnEngineNote(){
   const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
   const displayModel=spawnProviderDisplayModelLabel(provider,spmSelectedModel);
+  const selected=spawnSelectedModel(provider);
   const parts=[provider&&provider.label||spmSelectedProvider,
-    displayModel,spmSelectedEffort].filter(Boolean);
+    selected&&(selected.display_name||displayModel)||displayModel,
+    selected&&Number.isInteger(selected.url_index)?'URL '+(selected.url_index+1):'',spmSelectedEffort].filter(Boolean);
   SPM('spm-engine-note').textContent=parts.length
     ? parts.join(' · '):'provider · model';
   const note=SPM('spm-model-note');
@@ -38824,6 +39060,8 @@ function openSpawnModal(){
   SPM('spm-worktree-base').value='';
   spmBusy=false;spmReady=false;spmSelectedName='';
   spmSelectedProvider='';spmSelectedModel='';spmSelectedEffort='';
+  spmSelectedUrlIndex=null;
+  spmSelectedUrlKey=null;
   spmSelectedHarness='';spmTerminalExplicit=false;
   SPM('spm-terminal').checked=false;SPM('spm-terminal').onchange=()=>{spmTerminalExplicit=true;};
   SPM('spm-harnesses').innerHTML='';SPM('spm-helper-field').hidden=true;
@@ -38912,6 +39150,9 @@ function buildSpawnPayload(){
      spmNameStatus.get(spmSelectedName)==='available')
     payload.name=spmSuggestedName;
   const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
+  const selectedModel=spawnSelectedModel(provider);
+  if(selectedModel&&Number.isInteger(selectedModel.url_index))payload.url_index=selectedModel.url_index;
+  if(selectedModel&&selectedModel.url_key)payload.url_key=selectedModel.url_key;
   if(provider&&(['deepseek','strata'].includes(provider.kind)||
      ['deepseek','strata'].includes(provider.id)))payload.harness=spmSelectedHarness;
   const helper=SPM('spm-helper');
