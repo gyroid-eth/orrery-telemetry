@@ -54,7 +54,7 @@ class Config:
             raise ValueError('valid separate relay/upstream ports are required')
         if (type(self.input_enabled) is not bool or type(self.phone_policy_reviewed) is not bool
                 or self.input_enabled and not self.phone_policy_reviewed):
-            raise ValueError('input requires explicit opt-in after the designated-phone policy is reviewed')
+            raise ValueError('input requires explicit opt-in and --phone-policy-reviewed acknowledgement')
         if (type(self.cockpit_port) is not int or not 1<=self.cockpit_port<=65535
                 or self.input_enabled and self.cockpit_port in {self.listen_port,self.upstream_port}):
             raise ValueError('valid separate cockpit adapter port is required')
@@ -374,7 +374,7 @@ def main(argv=None):
     parser.add_argument('--upstream-port',type=int,default=8770)
     parser.add_argument('--enable-terminal',action='store_true',help='opt in to confirmed input; viewing alone does not enable it')
     parser.add_argument('--phone-policy-reviewed',action='store_true',
-                        help='operator acknowledgement after verifying effective designated-phone policy; does not verify the policy itself')
+                        help='operator acknowledgement of the access policy; does not verify it or enforce a single phone')
     parser.add_argument('--cockpit-port',type=int,default=8791)
     args=parser.parse_args(argv)
     if args.enable_terminal and not (args.enable or args.check):parser.error('--enable-terminal also requires --enable or --check')

@@ -12,7 +12,7 @@ You can hand this page to the Claude Code or Codex agent on the computer that ru
 
 > Read docs/mobile.en.md and set up the mobile reader for my phone. Do the commands yourself, stop at the steps marked "you", and tell me exactly what to do there.
 
-The agent can do everything except the steps marked **you**, which need the Tailscale admin console or the phone itself.
+At steps marked **you**, use the Tailscale admin console or the phone itself. The agent can handle the other steps. To use Terminal too, continue with the [separate opt-in steps](#inspect-a-pane-and-send-input-from-your-phone) after setting up viewing.
 
 | Step | Who | What |
 |---|---|---|
@@ -20,10 +20,10 @@ The agent can do everything except the steps marked **you**, which need the Tail
 | 2 | **you** | Install Tailscale on the phone and sign in with the same account as the computer |
 | 3 | agent | Find the values: computer Serve name and IP from `tailscale status --json` (`Self.DNSName` without the trailing dot, `Self.TailscaleIPs[0]`), owner login from `User[Self.UserID].LoginName`, phone IP from `tailscale status`. `tailscale whois <phone IP>` confirms the phone belongs to that login |
 | 4 | **you** | In the admin console, DNS page: enable MagicDNS and HTTPS Certificates if they are off. `CertDomains` in `tailscale status --json` is empty until then |
-| 5 | **you** | In the admin console, Access controls: add the phone-only grant from the next section and narrow broader rules that cover the port. Without this, every device on your account can open the page |
+| 5 | **you** | Review who can connect. Restricting access to your operating devices is recommended; multiple personal phones and tablets are fine. If you choose this restriction, adjust the grant and broader existing permissions as described below |
 | 6 | agent | Run steps 2–5 of [Enable manually](#enable-manually) |
 | 7 | **you** | Open `https://<Serve name>:9443/` on the phone. The first HTTPS request can take a few seconds while the certificate is issued |
-| 8 | agent + **you** | Check that another device on your account cannot open it (see [Verify on real devices](#verify-on-real-devices)) |
+| 8 | agent + **you** | Check each intended device. If you chose device restrictions, also check that excluded devices are refused (see [Verify on real devices](#verify-on-real-devices)) |
 
 On macOS the CLI is usually `/Applications/Tailscale.app/Contents/MacOS/Tailscale` when `tailscale` is not on `PATH`. The reader runs in the foreground; to keep it after closing the terminal, run it under your own service manager or `nohup`. Telemetry does not install a resident service for it.
 
@@ -57,12 +57,14 @@ Special agent icons use the PC's existing portrait configuration, with a scienti
 
 Use **Tailscale Serve inside your tailnet**, with neither Funnel nor direct sharing of the full dashboard or cockpit. The relay listens only on `127.0.0.1` and checks the outer HTTPS Host and exact owner login. [Serve replaces incoming identity headers with its own user information](https://tailscale.com/docs/features/tailscale-serve). Another process on the same computer can forge these headers; this is not protection from untrusted local processes.
 
-**Matching the account does not restrict access to one phone.** Have the tailnet administrator allow only the designated phone's Tailscale IP to a dedicated HTTPS port. This example belongs in the existing policy; replace placeholders and do not overwrite the whole policy with it.
+**Matching the account does not restrict which devices can connect.** We recommend allowing only devices you use to operate the terminal; multiple personal phones and tablets are fine. Strongly consider excluding always-on, public-facing servers on the same account: they could also reach the terminal, increasing the impact if compromised. This is a recommendation, not a product requirement to use one device, and the product does not automatically verify the policy.
+
+If you choose this restriction, have the administrator allow your operating devices' Tailscale IPs to the dedicated HTTPS port. Merge the following example into the existing policy, remove unused devices from `src`, and replace the placeholders. Do not overwrite the whole policy with it.
 
 ```json
 {
   "grants": [{
-    "src": ["<PHONE_TAILSCALE_IP>"],
+    "src": ["<PHONE_TAILSCALE_IP>", "<TABLET_TAILSCALE_IP>"],
     "dst": ["<SERVER_TAILSCALE_IP>"],
     "ip": ["tcp:9443"]
   }]
@@ -71,10 +73,18 @@ Use **Tailscale Serve inside your tailnet**, with neither Funnel nor direct shar
 
 [Grants and selectors are additive](https://tailscale.com/docs/reference/syntax/grants). A broader existing allow rule covering this port must also be narrowed; adding a phone-specific grant cannot subtract access. Listing the user and phone IP together in `src` is OR, not AND. See [IP selectors](https://tailscale.com/docs/reference/targets-and-selectors). Device names and browser User-Agent strings are not authentication. Do not substitute a tag on the user's phone: tagging changes its user identity.
 
+Review **every grant and ACL** applying from excluded devices to this host, so no other broad permission still allows `tcp:9443`. For example, the following `ip` values remove only TCP 9443 from a broad grant while allowing the other TCP ports, UDP and ICMP:
+
+```json
+["tcp:1-9442", "tcp:9444-65535", "udp:*", "icmp:*"]
+```
+
+This illustrates [protocol and port syntax](https://tailscale.com/docs/reference/syntax/grants#network-layer-capabilities). It is not a replacement policy or a universal substitute for `["*"]`. Preserve any needed permissions for other protocols and destinations, and have the administrator review the changes. The agent does not rewrite policy automatically.
+
 ## Enable manually
 
 1. Update Telemetry to API 30 or later and confirm that its normal local dashboard has observations. Keep the existing services and provider configuration.
-2. Check the phone's effective policy. Save the current `tailscale serve status --json` output and confirm that the example HTTPS port `9443` is unused and is not a Funnel listener. Do not reuse a port with existing configuration.
+2. Review current access. If you choose the recommended device restriction, complete that policy change above. Save the current `tailscale serve status --json` output and confirm that the example HTTPS port `9443` is unused and is not a Funnel listener. Do not reuse a port with existing configuration.
 3. Check the options below. Replace `owner@example.com` with the exact Serve login and `computer.example.ts.net` with this computer's actual Serve name. Omit a trailing slash from the origin. Replace the script path for a custom installation. Python 3.11 or later is required.
 
 ```sh
@@ -105,17 +115,48 @@ This uses the [Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/ser
 
 ## Verify on real devices
 
-Open `https://computer.example.ts.net:9443/` on the designated phone and confirm that both the page and snapshot load for the owner. Confirm rejection from **another device on the same account** and from another account. Verify both owner-header admission and effective device policy. Until all of these checks pass, do not describe the deployment as restricted to the owner's phone.
+Open `https://computer.example.ts.net:9443/` on each intended phone or tablet and confirm that the owner can load the page and snapshot. Also check that another account is refused. If you chose device restrictions, separately verify refusal from **excluded devices on the same account**. Owner-header authentication and device policy are separate checks. Do not report access as restricted to operating devices if the excluded-device checks are incomplete.
 
 Repository tests use isolated HTTP and synthetic screens. They do not establish acceptance of the installed Tailscale version, real policy or actual phone. The operator performs that deployment verification separately.
 
 ## Inspect a pane and send input from your phone
 
-**Terminal is a separate opt-in. Both capture and input are off by default.** Do not enable either before verifying the designated phone's effective policy. Starting the viewing reader alone does not enable Terminal.
+**Terminal is a separate opt-in. Both capture and input are off by default.** Starting the viewing reader alone does not enable it. Device restrictions are the optional recommendation above; you can allow several operating devices. The existing `--phone-policy-reviewed` declaration is still required to acknowledge that the operator reviewed current access. It does not verify policy or enforce a single phone.
 
-1. Complete the real-device checks above: the designated phone works, while another device on the same account is refused.
-2. Update Telemetry to API 31 or later and cockpit to the matching pane-adapter version. Add `--enable-mobile-terminal` to the cockpit backend's **existing launch arguments**, then restart it through its normal procedure. Do not start a second backend on 8791. Stop here if you cannot manage its launch arguments.
-3. Add `--enable-terminal --phone-policy-reviewed --cockpit-port 8791` to the reader example. Use the same flags with `--check` to validate their syntax. `--phone-policy-reviewed` records the operator's acknowledgement; it does not test the policy. Missing opt-ins, incompatible versions, existing target protection or unavailable OS identity checks leave Terminal unavailable.
+You can also give this section to your agent. It should stop at your steps and preserve existing settings.
+
+| Step | Who | What |
+|---|---|---|
+| 1 | agent | Confirm Telemetry API 31 or later, a matching ORRERY pane-adapter version, and the current backend's launch method and manager |
+| 2 | **you** | Review access. If you chose device restrictions, check allowed operating devices and refusal from excluded ones. Agree to the temporary disconnection during restart |
+| 3 | agent | Add or update only the JSON field below in the existing `~/.orrery/config.json`, preserving other fields. File mode `0600` is recommended |
+| 4 | agent | Explicitly stop and restart the backend through the identified launch procedure. Reusing a running process does not apply the setting. Do not start a duplicate or use blanket kills; stop and report an unknown manager |
+| 5 | agent | Use the capability check below to confirm `api:31` and `enabled:true`. It captures no pane and sends no input |
+| 6 | agent | Add `--enable-terminal --phone-policy-reviewed --cockpit-port 8791` to the reader's existing launch example. Run `--check` with the same flags first, then restart the existing reader through its current manager |
+| 7 | **you** | Open Terminal on your phone or tablet, check the selected pane and display, and review the exact text before every test send |
+
+Add this field to the shared settings; the example does not replace the whole file.
+
+```json
+{"enable_mobile_terminal": true}
+```
+
+New backends started by `scripts/start-cockpit.sh`, setup reached through `get.sh`, or ORRERY.app read the same setting. Custom backend commands can still use `--enable-mobile-terminal`. **Closing ORRERY.app leaves the backend running.** If reopening the app does not apply the setting, restart the backend through its original manager.
+
+The following check sends no input. Replace `owner@example.com` with the reader's owner login, and change the first path for a custom installation.
+
+```sh
+python3 - "$HOME/.agentstack/dashboard" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from mobile_input import InputClient
+capability = InputClient(8791, 'owner@example.com').call('capability')
+print({key: capability[key] for key in ('api', 'enabled')})
+raise SystemExit(0 if capability['enabled'] else 1)
+PY
+```
+
+Do not treat `enabled:false` or an error as successful activation; check the version, settings and process manager. Reader `--check` validates syntax, not policy or device acceptance. Missing opt-ins, incompatible versions, existing target protection or unavailable OS identity checks leave Terminal unavailable.
 
 The header says **Terminal enabled** when available. The selected Graph agent panel, Activity Status rows, attention rows and Mail-detail From/To entries have explicit **Terminal** buttons leading to the same sheet. Existing Graph selection and Mail-detail actions remain. Choose a pane when several exist; an unknown mapping is never guessed from the label. Only panes already handled by the PC manager on the same legacy transport and admitted by its protection are eligible. Agent type and the displayed time period are not authorization. No other socket or global target is used as a fallback. A pane's session may be outside the current metadata project.
 
@@ -127,7 +168,7 @@ This is a terminal operation you confirm by inspecting the pane. Changes of prog
 
 Close, pane changes, backgrounding and leaving stop polling and clear the display, draft and unsent confirmation. Late responses cannot restore them. Content is not placed in URLs, logs, browser storage or a server preview cache. This does not erase existing PC recorder output or OS recording/screenshots. Actual Android keyboard behavior, Serve/phone policy and real panes need separate acceptance; isolated HTTP/CDP checks do not establish them.
 
-To disable only Terminal, remove those three reader flags and the backend's `--enable-mobile-terminal`, then restart each through its existing procedure. Viewing settings and unrelated Serve entries can remain.
+To disable only Terminal, set the shared field to `false` or remove it, also remove any explicit `--enable-mobile-terminal` from custom backend arguments, and remove those three reader flags. Restart both processes through their existing procedures; leaving them running does not disable the feature. Viewing settings and unrelated Serve entries can remain.
 
 ## Disable and restore
 
