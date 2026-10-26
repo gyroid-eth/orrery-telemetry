@@ -2303,4 +2303,4 @@ def test_watcher_routes_headless_without_tmux_fallback():
     source = (ROOT / "hooks" / "watch_agent_mail_signals.sh").read_text(encoding="utf-8")
     assert '"$PERSISTENT_DELIVER"' in source
     assert '"headless_reply_failed"' in source
-    assert source.index('"$PERSISTENT_DELIVER"') < source.index("tmux has-session")
+    assert source.index('"$PERSISTENT_DELIVER"') < source.index("tmux list-sessions")

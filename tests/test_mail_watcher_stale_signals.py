@@ -44,6 +44,7 @@ os.execv({tmux!r},[{tmux!r},*sys.argv[1:]])
     with tempfile.TemporaryDirectory(prefix='orws-',dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as socket_root:
         env={**os.environ,'HOME':str(home),'PATH':str(commands)+':'+os.environ['PATH'],
              'TMUX_TMPDIR':str(Path(socket_root).resolve()),'AGENTSTACK_HOME':str(install),
+             'AGENTSTACK_LABEL_PREFIX':'org.agentstack.test.watcher-stale',
              'AGENTSTACK_MAIL_HOME':str(install/'mail'),'AGENTSTACK_SIGNALS_DIR':str(agents.parents[2]),
              'AGENTSTACK_RUNTIME_DIR':str(runtime),'AGENTSTACK_RUNTIME_MODE':'legacy',
              'AGENTSTACK_PERSISTENT_DELIVER':str(tmp_path/'no-headless-helper'),'TMUX_TIMEOUT':'5'}
