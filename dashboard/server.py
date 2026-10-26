@@ -6456,8 +6456,9 @@ def _pane_model_for(pane_model: str | None, program: str | None) -> str | None:
 #   Claude: "(2m 24s · ↓ … tokens …)"（区切り · = U+00B7）
 #   Codex : "(1s • esc to interrupt)"（区切り • = U+2022）→ 両方許容。
 #   wait 中: 直前ターン要約 "✻ Crunched for 1m 36s" / "Churned for 47s"。
+# Claude may put a phase label first: "(running Stop hook · 7s · ↓ 303 tokens)".
 _ACTIVE_T_RE = re.compile(
-    r"\(\s*(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(\d+)\s*s\s*[·•]")
+    r"\((?:[^()\n·•]*[·•])?\s*(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(\d+)\s*s\s*[·•]")
 # Codex's timed interrupt hint, optionally followed by its exact
 # background-terminal summary (same wording as provider_stalls).
 _CODEX_INTERRUPT_END_RE = re.compile(
@@ -6599,7 +6600,9 @@ def _runtime_activity(text: str) -> tuple[str, str]:
     lines = text.splitlines()
 
     def rule(line):
-        return re.fullmatch(r"[─━]{8,}", line.strip()) is not None
+        # Newer Claude Code may label the input border with the session name
+        # ("──── Name ─"); that label is still border, not reply content.
+        return re.fullmatch(r"[─━]{8,}(?: +[^─━\s][^\n]*? +[─━]+)?", line.strip()) is not None
 
     def chrome(line):
         row = line.strip()

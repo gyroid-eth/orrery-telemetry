@@ -232,6 +232,32 @@ def test_current_terminal_activity_keeps_work_with_an_input_prompt(current, foot
     assert parsed["work_disp"] == (None if seconds is None else f"{seconds}s")
 
 
+_CLAUDE_NAMED_INPUT = (
+    "──────────────────────────────── FixtureAgent ─\n"
+    "❯\xa0\n"
+    "────────────────────────────────────────\n"
+    "fixture | Opus 5.5 | ctx: 80% used\n"
+    "  ⏵⏵ auto mode on (shift+tab to cycle)\n"
+)
+
+
+@pytest.mark.parametrize("current", [
+    "✢ Orbiting… (running Stop hook · 7s · ↓ 303 tokens)\n",
+    "✢ Orbiting… (running Stop hook · 7s · ↓ 303 tokens)\n"
+    "                                  ✔ Update installed · Restart to update\n",
+])
+def test_claude_work_above_a_named_input_border_is_work(current):
+    # Claude Code 2.1.307 puts the session name in the input box's top border.
+    parsed = server._parse_runtime("⏺ Earlier reply.\n\n" + current + _CLAUDE_NAMED_INPUT)
+    assert parsed["act_state"] == "work"
+    assert parsed["work_disp"] == "7s"
+
+
+def test_reply_above_a_named_input_border_is_not_work():
+    parsed = server._parse_runtime(_OLD_WORK + "\n⏺ Finished the requested work.\n\n" + _CLAUDE_NAMED_INPUT)
+    assert parsed["act_state"] == "wait"
+
+
 
 def test_long_codex_work_with_background_terminals_and_tip_is_work():
     # Codex appends the exact background-terminal summary after the interrupt
