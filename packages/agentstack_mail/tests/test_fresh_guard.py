@@ -218,7 +218,7 @@ def test_real_shared_hook_protects_outside_old_project_and_rechecks_live_lease(t
 
 @pytest.mark.skipif(sys.platform != 'darwin', reason='native Mac APFS acceptance; other filesystems have separate evidence')
 def test_native_apfs_japanese_missing_aliases_and_glob_through_http_and_shared_guard(tmp_path):
-    folder = tmp_path / 'Obsidian_for_Xiaomi' / '21_Coding Projects' / 'orrery' / '日本語'
+    folder = tmp_path / 'Notes_Vault' / '21_Coding Projects' / 'orrery' / '日本語'
     folder.mkdir(parents=True)
     assert reservation_paths.unicode_rule_at(folder) == 'apfs'
     assert reservation_paths.case_insensitive_at(folder) is True
