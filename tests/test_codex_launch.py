@@ -1549,11 +1549,18 @@ def test_delegate_launcher_default_falls_back_and_prints_notice(tmp_path, age):
     env = {"AGENTSTACK_CODEX_BIN": str(binary), "CODEX_HOME": str(tmp_path)}
     for requested in ("", "sol"):
         result = _model_call("normalize_codex_model", requested, extra_env=env)
+        if requested == "sol" and age == 0:
+            assert result.returncode != 0 and "no eligible sol" in result.stderr
+            continue
         assert result.returncode == 0, result.stderr
-        assert result.stdout.strip() == "gpt-6-luna"
-        assert "from gpt-6.1-sol to gpt-6-luna" in result.stderr
-        if age:
-            assert fetched in result.stderr and "Start codex once" in result.stderr
+        if requested == "sol":
+            assert result.stdout.strip() == "gpt-6.1-sol"
+            assert result.stderr == ""
+        else:
+            assert result.stdout.strip() == "gpt-6-luna"
+            assert "from gpt-6.1-sol to gpt-6-luna" in result.stderr
+            if age:
+                assert fetched in result.stderr and "Start codex once" in result.stderr
     explicit = _model_call("normalize_codex_model", "gpt-6.1-sol", extra_env=env)
     assert explicit.stdout.strip() == "gpt-6.1-sol"
     assert explicit.stderr == ""
@@ -1564,11 +1571,32 @@ def test_delegate_launcher_default_falls_back_and_prints_notice(tmp_path, age):
         result = subprocess.run([sys.executable, str(_ROOT / "dashboard/codex_models.py"),
                                  "resolve", requested], env=resolve_env,
                                 capture_output=True, text=True, timeout=20)
+        if requested == "sol" and age == 0:
+            assert result.returncode != 0 and "no eligible sol" in result.stderr
+            continue
         assert result.returncode == 0, result.stderr
         policy = json.loads(result.stdout)
-        if requested.startswith("gpt-"):
-            assert policy["model"] == requested
+        if requested:
+            assert policy["model"] == ("gpt-6.1-sol" if requested == "sol" else requested)
             assert "model_note" not in policy and result.stderr == ""
         else:
             assert policy["model"] == "gpt-6-luna"
             assert policy["model_note"] in result.stderr
+
+
+def test_delegate_example_omits_effort_and_launcher_resolves_configured_default(tmp_path):
+    skill = (_ROOT / 'skills/delegate/SKILL.md').read_text()
+    example = skill.split('AGENTSTACK_CODEX_BIN="$CODEX_BIN" PARENT_AGENT=', 1)[1].split('```', 1)[0]
+    assert '--model "$CODEX_MODEL"' in example
+    assert '--effort' not in example
+    stack = tmp_path / 'stack'
+    stack.mkdir()
+    (stack / 'env.sh').write_text('export AGENTSTACK_CODEX_DEFAULT_EFFORT=high\n')
+    result = _model_call('validate_codex_effort', 'gpt-6-sol', '',
+                         extra_env={'AGENTSTACK_HOME': str(stack), 'AGENTSTACK_LABEL_PREFIX': 'org.agentstack.test.codex-default-effort'})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'high'
+    explicit = _model_call('validate_codex_effort', 'gpt-6-sol', 'medium',
+                           extra_env={'AGENTSTACK_HOME': str(stack), 'AGENTSTACK_LABEL_PREFIX': 'org.agentstack.test.codex-default-effort'})
+    assert explicit.returncode == 0, explicit.stderr
+    assert explicit.stdout.strip() == 'medium'

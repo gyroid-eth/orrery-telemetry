@@ -104,11 +104,14 @@ def test_codex_preview_cache_fallback_and_notice(monkeypatch, preview_env, modul
                         module.codex_models.LauncherPolicy(binary="/selected/codex", version=(0, 160, 1)))
     result = module.do_spawn({"standalone": True, "task": "review", "dir": str(directory),
                               "provider": "codex", "model": requested, "dry_run": True})
+    if requested == "sol" and age == 0:
+        assert result["ok"] is False and "no eligible sol" in result["error"]
+        return
     assert result["ok"] is True
-    expected = "gpt-6.1-sol" if requested.startswith("gpt-") else "gpt-6-luna"
+    expected = "gpt-6-luna" if not requested else "gpt-6.1-sol"
     assert result["model"] == expected
     assert result["argv"][result["argv"].index("--model") + 1] == expected
-    if requested.startswith("gpt-"):
+    if requested:
         assert "model_note" not in result
     else:
         assert "from gpt-6.1-sol to gpt-6-luna" in result["model_note"]

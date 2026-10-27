@@ -820,6 +820,8 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_CUSTOM_PORTRAITS": f"{project_dir}/faces.json",
         "AGENTSTACK_CLAUDE_MODELS": "claude-sonnet-5,claude-opus-5-5",
         "AGENTSTACK_CODEX_MODELS": "gpt-5.6-sol,gpt-5.6-luna",
+        "AGENTSTACK_CODEX_DEFAULT_MODEL": "gpt-5.6-sol",
+        "AGENTSTACK_CODEX_DEFAULT_EFFORT": "high",
         "AGENTSTACK_CODEX_BIN": str(codex_bin),
         "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": str(codex_child_overlay),
         "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "45",
@@ -968,6 +970,8 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert 'Environment="AGENTSTACK_PORTRAITS_DIR=~/faces"' in systemd_unit
     assert 'Environment="AGENTSTACK_CLAUDE_MODELS=claude-sonnet-5,claude-opus-5-5"' in systemd_unit
     assert 'Environment="AGENTSTACK_CODEX_MODELS=gpt-5.6-sol,gpt-5.6-luna"' in systemd_unit
+    assert 'Environment="AGENTSTACK_CODEX_DEFAULT_MODEL=gpt-5.6-sol"' in systemd_unit
+    assert 'Environment="AGENTSTACK_CODEX_DEFAULT_EFFORT=high"' in systemd_unit
     assert (
         f'Environment="AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY={codex_child_overlay}"'
         in systemd_unit
@@ -994,6 +998,10 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert manifest["env"]["AGENTSTACK_CUSTOM_PORTRAITS"] == f"{project_dir}/faces.json"
     assert manifest["env"]["AGENTSTACK_CLAUDE_MODELS"] == "claude-sonnet-5,claude-opus-5-5"
     assert manifest["env"]["AGENTSTACK_CODEX_MODELS"] == "gpt-5.6-sol,gpt-5.6-luna"
+    assert manifest["env"]["AGENTSTACK_CODEX_DEFAULT_MODEL"] == "gpt-5.6-sol"
+    assert manifest["env"]["AGENTSTACK_CODEX_DEFAULT_EFFORT"] == "high"
+    assert "export AGENTSTACK_CODEX_DEFAULT_MODEL=gpt-5.6-sol" in generated_env
+    assert "export AGENTSTACK_CODEX_DEFAULT_EFFORT=high" in generated_env
     assert manifest["env"]["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] == str(
         codex_child_overlay
     )
@@ -1043,6 +1051,8 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     normalized_env["AGENTSTACK_CUSTOM_PORTRAITS"] = ""
     normalized_env["AGENTSTACK_CLAUDE_MODELS"] = ""
     normalized_env["AGENTSTACK_CODEX_MODELS"] = ""
+    normalized_env["AGENTSTACK_CODEX_DEFAULT_MODEL"] = ""
+    normalized_env["AGENTSTACK_CODEX_DEFAULT_EFFORT"] = ""
     normalized_env["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] = ""
     normalized_env["AGENTSTACK_AUTO_OPEN_CHILD"] = sample["env"]["AGENTSTACK_AUTO_OPEN_CHILD"]
     normalized_env["AGENTSTACK_CHILD_RESUME_RETENTION_DAYS"] = sample["env"][

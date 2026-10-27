@@ -341,7 +341,7 @@ def test_doctor_model_default_reports_fallback_from_selected_cli(tmp_path, versi
     script += '\nreport_codex_model_default "$1" "$2"\n'
     result = subprocess.run(["/bin/bash", "-c", script, "doctor-models", str(ROOT / "dashboard/codex_models.py"), str(tmp_path / "codex-home")], capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
-    assert ("use gpt-6-sol" in result.stdout) is noted
+    assert ("starts from gpt-6-sol" in result.stdout) is noted
     if noted:
         assert "0.159.0 or later" in result.stdout
 
