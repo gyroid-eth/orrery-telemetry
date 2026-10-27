@@ -20,43 +20,10 @@ from agentstack_mail.fresh_runtime import _read_private, _write_private
 from agentstack_mail.models import MessageRecipient
 from agentstack_mail.storage_origin_contract import canonical
 from agentstack_mail.storage_origin_contract import B1Error
-from test_fresh_app import APP, ROOT, DIAGNOSTIC_NODE, desktop, diagnostic_selected, diagnostic_summary, event, invoke, wait_route
+from test_fresh_app import APP, ROOT, desktop, event, invoke, wait_route
 from agentstack_codex_app.fresh_app_delivery import AppDelivery
 from agentstack_codex_app.fresh_bridge import FreshBridge
 from agentstack_codex_app.hook_entry import forward_event_response
-
-
-@pytest.mark.parametrize('flag,node,current,expected',[
-    ('1',DIAGNOSTIC_NODE,DIAGNOSTIC_NODE+' (call)',True),
-    ('0',DIAGNOSTIC_NODE,DIAGNOSTIC_NODE+' (call)',False),
-    ('1',DIAGNOSTIC_NODE,DIAGNOSTIC_NODE+' (setup)',False),
-    ('1',DIAGNOSTIC_NODE,DIAGNOSTIC_NODE+' (teardown)',False),
-    ('1',DIAGNOSTIC_NODE,DIAGNOSTIC_NODE+'-other (call)',False),
-    ('1',DIAGNOSTIC_NODE+'-other',DIAGNOSTIC_NODE+' (call)',False),
-    ('1',DIAGNOSTIC_NODE,None,False),
-])
-def test_diagnostic_gate_requires_exact_node_and_call(flag,node,current,expected):
-    env={'ORRERY_FRESH_APP_DIAGNOSTIC':flag,'ORRERY_FRESH_APP_DIAGNOSTIC_NODE':node}
-    if current is not None:env['PYTEST_CURRENT_TEST']=current
-    assert diagnostic_selected(env) is expected
-
-
-def test_diagnostic_summary_preserves_missing_and_duplicate(tmp_path,capsys):
-    log=tmp_path/'bridge.log';diagnostic=tmp_path/'events.jsonl'
-    log.write_text('fixture\n')
-    diagnostic_summary(tmp_path,log,diagnostic)
-    assert not (tmp_path/'bridge-summary.json').exists()
-    assert (tmp_path/'diagnostic-incomplete').read_text()=='INCOMPLETE\n'
-    assert 'FRESH_APP_DIAGNOSTIC_INCOMPLETE' in capsys.readouterr().err
-    (tmp_path/'diagnostic-incomplete').unlink()
-    diagnostic.write_text('{"stage":"bootstrap_start"}\n{"stage":"bootstrap_end"}\n')
-    diagnostic_summary(tmp_path,log,diagnostic)
-    saved=(tmp_path/'bridge-summary.json').read_bytes()
-    assert json.loads(saved)['incomplete_count']==0
-    diagnostic_summary(tmp_path,log,diagnostic)
-    assert (tmp_path/'bridge-summary.json').read_bytes()==saved
-    assert (tmp_path/'diagnostic-incomplete').read_text()=='INCOMPLETE\n'
-    assert 'FRESH_APP_DIAGNOSTIC_INCOMPLETE' in capsys.readouterr().err
 
 
 async def send(sender,recipient,subject,importance='high'):

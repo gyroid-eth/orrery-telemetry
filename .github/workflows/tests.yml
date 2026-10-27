@@ -118,32 +118,7 @@ jobs:
       # `tests/` だけを指定していた間、integrations/codex_app/tests/ の 111 件は
       # 一度も CI で実行されていなかった。テストの置き場所が増えるたびに黙って
       # 対象から外れるので、ディレクトリは明示して数を数えられるようにする。
-      # 一時の診断（＃382 の App 配送の 15 秒超過の原因を CI で観測する）。原因が確定したら
-      # この step と下の2 step、Run tests の分岐を消す。3.11/3.12 は元の条件のまま比較対象にする。
-      # 記録の置き場所は run・attempt・job を名前に含む mktemp -d で新しく確保し、確保と runner の記録が
-      # できた時だけ enabled=true と dir を step output に出す。できなければ診断は無効で元の suite を走らせる。
-      - name: Record runner for the App delivery diagnostic
-        id: appdiag
-        if: matrix.python-version == '3.14'
-        run: |
-          set -uo pipefail
-          off() { echo "app diagnostic UNKNOWN: $1; the suite runs without the diagnostic"; echo "enabled=false" >> "$GITHUB_OUTPUT"; exit 0; }
-          dir=$(mktemp -d "$RUNNER_TEMP/app-diagnostic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}.XXXXXX") || off "could not create a new directory"
-          # set -e は if や || の条件の中では効かないので、各行を && でつなぎ、どれかが失敗したら診断を無効にする。
-          head=$(git rev-parse HEAD) && os=$(sw_vers) && ncpu=$(sysctl -n hw.ncpu) && mem=$(sysctl -n hw.memsize) && py=$(python3 --version) \
-            || off "could not read runner metadata"
-          ( set -o noclobber; printf '%s\n' \
-              "run ${GITHUB_RUN_ID} attempt ${GITHUB_RUN_ATTEMPT} job ${GITHUB_JOB} event ${GITHUB_EVENT_NAME} started $(date -u +%FT%TZ)" \
-              "head $head" "$os" "ncpu $ncpu memsize $mem" "$py" \
-              "known limit: if neither the marker nor the stderr mark can be written, QUALITY_VALID cannot prove nothing is missing" \
-              "diff from the original run: --junitxml added, pytest output also written to pytest-output.txt, only the target node starts the bridge through the diagnostic bootstrap" \
-              > "$dir/runner.txt" ) || off "could not write runner metadata"
-          { echo "enabled=true"; echo "dir=$dir"; } >> "$GITHUB_OUTPUT"
       - name: Run tests (pytest — `python3 file.py` 直実行は pytest 形式のテストを 0 件実行で緑にしてしまう)
-        env:
-          ORRERY_FRESH_APP_DIAGNOSTIC: ${{ matrix.python-version == '3.14' && steps.appdiag.outputs.enabled == 'true' && '1' || '' }}
-          ORRERY_FRESH_APP_DIAGNOSTIC_NODE: ${{ matrix.python-version == '3.14' && steps.appdiag.outputs.enabled == 'true' && 'packages/agentstack_mail/tests/test_fresh_app_delivery.py::test_real_hook_root_sub_recipient_flush_completion_and_uncertain_ipc' || '' }}
-          ORRERY_FRESH_APP_DIAGNOSTIC_DIR: ${{ matrix.python-version == '3.14' && steps.appdiag.outputs.enabled == 'true' && steps.appdiag.outputs.dir || '' }}
         run: |
           set -euo pipefail
           # tests/windows/ is the community Windows lane; its conftest already skips collection off win32,
@@ -151,87 +126,7 @@ jobs:
           # -n auto: the suite is a long tail of process-spawning rehearsals (12 min serial on
           # this runner); --dist loadfile keeps one file's tests on one worker, since files
           # share fixtures and fake homes.
-          if [ -n "$ORRERY_FRESH_APP_DIAGNOSTIC_DIR" ]; then
-            PYTHONPATH=.:packages/agentstack_mail/src python3 -m pytest -q -n auto --dist loadfile tests/ --ignore=tests/windows integrations/ packages/agentstack_mail/tests/ \
-              --junitxml="$ORRERY_FRESH_APP_DIAGNOSTIC_DIR/junit.xml" 2>&1 | tee "$ORRERY_FRESH_APP_DIAGNOSTIC_DIR/pytest-output.txt"
-          else
-            PYTHONPATH=.:packages/agentstack_mail/src python3 -m pytest -q -n auto --dist loadfile tests/ --ignore=tests/windows integrations/ packages/agentstack_mail/tests/
-          fi
-      # raw の bridge log は公開しない。test 側が書く固定形式の bridge-summary.json、JSONL の実データ、
-      # pytest の出力に残る固定印、marker だけを見る。QUALITY_VALID は「この記録を診断に採用してよい」だけを言い、
-      # pytest の成否（job の rc が正本）や全段に欠測が無いことは言わない。
-      - name: Summarize the App delivery diagnostic
-        if: always() && matrix.python-version == '3.14'
-        env:
-          APP_DIAGNOSTIC_DIR: ${{ steps.appdiag.outputs.enabled == 'true' && steps.appdiag.outputs.dir || '' }}
-        run: |
-          if [ -z "$APP_DIAGNOSTIC_DIR" ]; then
-            echo "verdict INCOMPLETE_OR_UNKNOWN (diagnostic not enabled)"; exit 0
-          fi
-          python3 - "$APP_DIAGNOSTIC_DIR" <<'EOF'
-          import json, os, pathlib, sys
-          d = pathlib.Path(sys.argv[1]); out = []; valid = True
-          def unknown(what, error):
-              global valid
-              out.append(f'{what} UNKNOWN {type(error).__name__}'); valid = False
-          try:
-              summary = json.loads((d / 'bridge-summary.json').read_text())
-              ints = ('incomplete_count', 'diagnostic_rows', 'diagnostic_bytes')
-              if (set(summary) != {'bridge_log_present', 'diagnostic_present', *ints}
-                      or summary['bridge_log_present'] is not True or summary['diagnostic_present'] is not True
-                      or any(type(summary[k]) is not int or summary[k] < 0 for k in ints)
-                      or summary['diagnostic_rows'] < 1 or summary['diagnostic_bytes'] < 1):
-                  raise ValueError('summary shape')
-              out += [f'{key} {summary[key]}' for key in sorted(summary)]
-              valid = valid and summary['incomplete_count'] == 0
-          except Exception as error:
-              summary = None; unknown('bridge_summary', error)
-          try:
-              data = (d / 'app-delivery-diagnostic.jsonl').read_bytes()
-              rows = [json.loads(line) for line in data.splitlines()]
-              if (not rows or rows[0].get('stage') != 'bootstrap_start' or rows[-1].get('stage') != 'bootstrap_end'
-                      or len(rows) >= 2000 or len(data) >= 262144):
-                  raise ValueError('jsonl shape')
-              if summary is None or (summary['diagnostic_rows'], summary['diagnostic_bytes']) != (len(rows), len(data)):
-                  raise ValueError('jsonl does not match summary')
-              out.append(f'diagnostic_jsonl rows {len(rows)} bytes {len(data)}')
-          except Exception as error:
-              unknown('diagnostic_jsonl', error)
-          try:
-              count = (d / 'pytest-output.txt').read_text(errors='replace').count('FRESH_APP_DIAGNOSTIC_INCOMPLETE')
-              out.append(f'pytest_output_incomplete_markers {count}'); valid = valid and count == 0
-          except Exception as error:
-              unknown('pytest_output', error)
-          try:
-              os.lstat(d / 'diagnostic-incomplete')
-              out.append('diagnostic_incomplete_marker PRESENT'); valid = False
-          except FileNotFoundError:
-              out.append('diagnostic_incomplete_marker absent')
-          except Exception as error:
-              unknown('diagnostic_incomplete_marker', error)
-          out.append('verdict ' + ('QUALITY_VALID' if valid else 'INCOMPLETE_OR_UNKNOWN'))
-          print('\n'.join(out))
-          try:
-              with (d / 'diagnostic-status.txt').open('x') as stream:
-                  stream.write('\n'.join(out) + '\n')
-          except Exception as error:
-              print(f'diagnostic_status_file UNKNOWN {type(error).__name__}')
-          EOF
-      - name: Upload the App delivery diagnostic
-        if: always() && matrix.python-version == '3.14' && steps.appdiag.outputs.enabled == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-diagnostic-py314-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ steps.appdiag.outputs.dir }}/app-delivery-diagnostic.jsonl
-            ${{ steps.appdiag.outputs.dir }}/junit.xml
-            ${{ steps.appdiag.outputs.dir }}/runner.txt
-            ${{ steps.appdiag.outputs.dir }}/pytest-output.txt
-            ${{ steps.appdiag.outputs.dir }}/bridge-summary.json
-            ${{ steps.appdiag.outputs.dir }}/diagnostic-status.txt
-            ${{ steps.appdiag.outputs.dir }}/diagnostic-incomplete
-          if-no-files-found: warn
-          retention-days: 7
+          PYTHONPATH=.:packages/agentstack_mail/src python3 -m pytest -q -n auto --dist loadfile tests/ --ignore=tests/windows integrations/ packages/agentstack_mail/tests/
       - name: Build and inspect agentstack-mail distribution
         run: |
           set -euo pipefail

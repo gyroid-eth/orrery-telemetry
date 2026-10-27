@@ -24,44 +24,6 @@ sys.path.insert(0,str(APP/'src'))
 from agentstack_codex_app.fresh_bridge import AppContext, reference
 
 
-DIAGNOSTIC_NODE='packages/agentstack_mail/tests/test_fresh_app_delivery.py::test_real_hook_root_sub_recipient_flush_completion_and_uncertain_ipc'
-
-
-def diagnostic_selected(environment):
-    return (environment.get('ORRERY_FRESH_APP_DIAGNOSTIC')=='1'
-        and environment.get('ORRERY_FRESH_APP_DIAGNOSTIC_NODE')==DIAGNOSTIC_NODE
-        and environment.get('PYTEST_CURRENT_TEST')==DIAGNOSTIC_NODE+' (call)')
-
-
-def diagnostic_incomplete(target=None):
-    if target is not None:
-        try:
-            with (target/'diagnostic-incomplete').open('x') as marker:marker.write('INCOMPLETE\n')
-        except FileExistsError:pass
-        except Exception:pass
-    try:sys.stderr.write('FRESH_APP_DIAGNOSTIC_INCOMPLETE\n');sys.stderr.flush()
-    except Exception:pass
-
-
-def diagnostic_summary(target, log_path, diagnostic_path):
-    """Publish fixed facts only; missing, duplicates and errors remain unknown."""
-    try:
-        if not log_path.is_file() or not diagnostic_path.is_file():
-            diagnostic_incomplete(target);return
-        raw=log_path.read_bytes()
-        count=raw.count(b'FRESH_APP_DIAGNOSTIC_INCOMPLETE')
-        data=diagnostic_path.read_bytes()
-        rows=[json.loads(line) for line in data.splitlines()]
-        if (not rows or len(rows)>=2000 or len(data)>=262144
-                or rows[0].get('stage')!='bootstrap_start' or rows[-1].get('stage')!='bootstrap_end'):
-            diagnostic_incomplete(target);return
-        result=dict(bridge_log_present=True, diagnostic_present=True, incomplete_count=count,
-                    diagnostic_rows=len(rows),diagnostic_bytes=len(data))
-        with (target/'bridge-summary.json').open('x') as stream:json.dump(result,stream)
-        if count:diagnostic_incomplete(target)
-    except Exception:diagnostic_incomplete(target)
-
-
 def event(home,sid,*,sub=None,name='SessionStart',originator='Codex Desktop'):
     transcript=home/'sessions'/('rollout-'+sid+'.jsonl')
     if not transcript.exists():
@@ -87,25 +49,9 @@ async def desktop(tmp_path,monkeypatch,*,overrides=None):
         for key,value in (overrides or {}).items():monkeypatch.setenv(key,value)
         log=(tmp_path/'app-bridge.log').open('w')
         process=None
-        selected=diagnostic_selected(os.environ)
-        diagnostic_target=None
-        diagnostic_path=tmp_path/'app-delivery-diagnostic.jsonl'
         try:
-            if selected:
-                try:
-                    diagnostic_target=Path(os.environ['ORRERY_FRESH_APP_DIAGNOSTIC_DIR'])
-                    diagnostic_target.mkdir(parents=True,exist_ok=True)
-                    diagnostic_path=diagnostic_target/'app-delivery-diagnostic.jsonl'
-                    with diagnostic_path.open('xb'):pass
-                except Exception:
-                    diagnostic_incomplete(diagnostic_target);diagnostic_target=None
-                    diagnostic_path=tmp_path/'app-delivery-diagnostic.jsonl'
-                env['ORRERY_FRESH_APP_DIAGNOSTIC_FILE']=str(diagnostic_path)
-                env['PYTHONPATH']=str(APP/'src')+os.pathsep+env.get('PYTHONPATH','')
-                command=[env['AGENTSTACK_PYTHON'],str(Path(__file__).with_name('fresh_app_diagnostic_bootstrap.py'))]
-            else:
-                command=['/bin/bash',str(ROOT/'scripts/run-codex-app-bridge.sh')]
-            process=await asyncio.create_subprocess_exec(*command,env=env,stdout=log,stderr=log)
+            process=await asyncio.create_subprocess_exec('/bin/bash',str(ROOT/'scripts/run-codex-app-bridge.sh'),
+                env=env,stdout=log,stderr=log)
             deadline=time.monotonic()+15
             while not (state/'bridge.sock').exists():
                 assert process.returncode is None,(tmp_path/'app-bridge.log').read_text()
@@ -119,8 +65,6 @@ async def desktop(tmp_path,monkeypatch,*,overrides=None):
                 try:await asyncio.wait_for(process.wait(),10)
                 except asyncio.TimeoutError:process.kill();await process.wait()
             log.close()
-            if selected and diagnostic_target is not None:
-                diagnostic_summary(diagnostic_target,tmp_path/'app-bridge.log',diagnostic_path)
             (tmp_path/'app-cleanup.json').write_text(canonical(dict(own_bridge_stopped=process is None or process.returncode is not None,
                 private_runtime=str(state),real_app=False)))
             shutil.rmtree(private)
