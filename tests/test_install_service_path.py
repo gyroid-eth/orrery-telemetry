@@ -165,6 +165,74 @@ def test_prepared_fresh_normal_service_render_preserves_references_and_real_entr
     assert '. "$ENV_FILE"' in _installer_function('start_supervised_background')
 
 
+def test_fresh_and_codex_default_settings_coexist_through_render_and_reload(tmp_path):
+    import json,os,plistlib
+    codex=dict(CODEX_DEFAULT_MODEL_SETTING='gpt-fixture-terra',CODEX_DEFAULT_EFFORT_SETTING='high',
+        # As after `--codex-default-model ... --codex-default-effort ...`.
+        CHOSEN_SETTINGS='AGENTSTACK_CODEX_DEFAULT_MODEL AGENTSTACK_CODEX_DEFAULT_EFFORT',
+        # The same manifest inputs as the normal-startup layout below.
+        MAIL_DB=str(tmp_path/'root/storage.sqlite3'),MAIL_HOME=str(tmp_path/'unused-mail-home'),
+        SIGNALS_DIR=str(tmp_path/'unused-signals'),MAIL_WATCHER_LABEL='org.orrery.test.normal.watcher',
+        MAIL_LAUNCHD_LABEL_SETTING='org.orrery.test.normal.mail',
+        SAFE_MERGE_RESULT_FILE=str(tmp_path/'no-settings'),MCP_MERGE_RESULT_FILE=str(tmp_path/'no-mcp'))
+    functions=('fresh_environment_json','write_env_file','render_launchd_plist','render_systemd_unit',
+        'render_native_mail_runner','mail_watcher_environment','write_manifest')
+    commands='write_env_file\nrender_launchd_plist\nrender_systemd_unit\nrender_native_mail_runner\nwrite_manifest manual "" "" ""\n'
+    target,values=_fresh_render(tmp_path,*functions,commands=commands,overrides=codex)
+    plist_path=tmp_path/'Library/LaunchAgents/org.orrery.test.normal.dashboard.plist'
+    unit_path=tmp_path/'.config/systemd/user/org.orrery.test.normal.dashboard.service'
+    outputs=(target/'env.sh',plist_path,unit_path)
+    first={path:path.read_bytes() for path in outputs}
+    saved=_normal_saved_env(target/'env.sh')
+    fresh={'AGENTSTACK_RUNTIME_MODE':'fresh','AGENTSTACK_FRESH_CLIENT_CONTEXT':values['FRESH_CONTEXT_SETTING'],
+        'AGENTSTACK_FRESH_SERVER_CONFIG':values['AGENTSTACK_FRESH_SERVER_CONFIG'],
+        'AGENTSTACK_FRESH_DASHBOARD_SOCKET':values['FRESH_SOCKET_SETTING'],
+        'ORRERY_FRESH_MAIL_INSTANCE_ID':values['ORRERY_FRESH_MAIL_INSTANCE_ID'],
+        'AGENTSTACK_MAIL_RUNNER':values['NATIVE_MAIL_RUNNER']}
+    chosen={'AGENTSTACK_CODEX_DEFAULT_MODEL':'gpt-fixture-terra','AGENTSTACK_CODEX_DEFAULT_EFFORT':'high'}
+    for key,value in (fresh|chosen).items():
+        assert saved[key]==value,key
+    plist=plistlib.loads(plist_path.read_bytes())['EnvironmentVariables']
+    unit=unit_path.read_text()
+    manifest=json.loads((target/'manifest.json').read_text())
+    for key in ('AGENTSTACK_FRESH_CLIENT_CONTEXT','AGENTSTACK_FRESH_SERVER_CONFIG','ORRERY_FRESH_MAIL_INSTANCE_ID',*chosen):
+        assert plist[key]==saved[key],key
+        assert key+'='+saved[key] in unit or key+'="'+saved[key]+'"' in unit,key
+        assert manifest['env'][key]==saved[key],key
+    # The normal update path reloads both groups from the saved env.sh alone.
+    reload='\n'.join(_installer_function(n) for n in ('setting_listed','setting_previously_chosen','resolve_setting'))
+    code='set -eu\n. '+shlex.quote(str(ROOT/'hooks/project-context.sh'))+'\n'+reload+'\n'+r'''
+    SETTINGS_ENV_FILE="$1"; RESET_SETTINGS="$2"; OPTION_GIVEN=''; CHOSEN_SETTINGS=''
+    # The installer's own reading of the saved record of choices.
+    PREVIOUS_CHOSEN=''; PREVIOUS_CHOSEN_RECORDED=false
+    if grep -q '^export AGENTSTACK_CHOSEN_SETTINGS=' "$SETTINGS_ENV_FILE"; then
+      PREVIOUS_CHOSEN_RECORDED=true
+      PREVIOUS_CHOSEN="$(agentstack_installed_env_value AGENTSTACK_CHOSEN_SETTINGS "$SETTINGS_ENV_FILE")"
+    fi
+    RUNTIME_MODE_SETTING=''; FRESH_CONTEXT_SETTING=''; FRESH_SOCKET_SETTING=''; CODEX_DEFAULT_MODEL_SETTING=''; CODEX_DEFAULT_EFFORT_SETTING=''
+    resolve_setting RUNTIME_MODE_SETTING AGENTSTACK_RUNTIME_MODE legacy kept
+    resolve_setting FRESH_CONTEXT_SETTING AGENTSTACK_FRESH_CLIENT_CONTEXT '' kept
+    resolve_setting FRESH_SOCKET_SETTING AGENTSTACK_FRESH_DASHBOARD_SOCKET '' kept
+    resolve_setting CODEX_DEFAULT_MODEL_SETTING AGENTSTACK_CODEX_DEFAULT_MODEL
+    resolve_setting CODEX_DEFAULT_EFFORT_SETTING AGENTSTACK_CODEX_DEFAULT_EFFORT
+    printf '%s\n' "$RUNTIME_MODE_SETTING" "$FRESH_CONTEXT_SETTING" "$FRESH_SOCKET_SETTING" "$CODEX_DEFAULT_MODEL_SETTING" "$CODEX_DEFAULT_EFFORT_SETTING" "$CHOSEN_SETTINGS"
+    '''
+    def reload(reset):
+        done=subprocess.run(['/bin/bash','-c',code,'test',str(target/'env.sh'),reset],
+            env={'HOME':str(tmp_path),'PATH':os.environ['PATH']},capture_output=True,text=True,timeout=10)
+        assert done.returncode==0,done.stderr
+        return done.stdout.splitlines()
+    fresh_reloaded=['fresh',values['FRESH_CONTEXT_SETTING'],values['FRESH_SOCKET_SETTING']]
+    assert reload('0')==fresh_reloaded+['gpt-fixture-terra','high',codex['CHOSEN_SETTINGS']]
+    # --reset-settings drops the chosen Codex defaults but never the fresh selection.
+    assert reload('1')==fresh_reloaded+['','','']
+    # Rendering again from the reloaded values reproduces every output byte for byte.
+    reloaded=dict(codex,FRESH_CONTEXT_SETTING=values['FRESH_CONTEXT_SETTING'],FRESH_SOCKET_SETTING=values['FRESH_SOCKET_SETTING'])
+    _fresh_render(tmp_path,*functions,commands=commands,overrides=reloaded)
+    for path in outputs:
+        assert path.read_bytes()==first[path],path.name
+
+
 def test_normal_update_keeps_fresh_selection_without_old_bootstrap_or_enrollment(tmp_path):
     import os
     target=tmp_path/'installed';target.mkdir()
@@ -362,13 +430,9 @@ def _normal_dashboard_environment(layout,context,port,label):
     return env
 
 
-def test_normal_startup_external_setup_uses_actual_payload_render_and_saved_loader(tmp_path,monkeypatch):
-    import asyncio,importlib.util,json,os,socket
-    from pathlib import Path
-    import pytest
-    c=Path(os.environ.get('ORRERY_TEST_COCKPIT_ROOT',''))
-    if not os.environ.get('ORRERY_TEST_COCKPIT_ROOT') or not (c/'bridge/runtime_target.py').is_file():
-        pytest.skip('ORRERY_TEST_COCKPIT_ROOT must name a cockpit checkout')
+def test_normal_startup_setup_uses_actual_payload_render_and_separates_contexts(tmp_path):
+    """Telemetry alone: always runs, without a cockpit checkout."""
+    import asyncio,socket
     async def scenario():
         # This is a stat-only socket witness for the mock. It is not a tmux
         # server and is never reported as actual transport acceptance.
@@ -383,6 +447,29 @@ def test_normal_startup_external_setup_uses_actual_payload_render_and_saved_load
                 assert a[key]!=b[key] and a[key].startswith(str(layout['target']/'runtime')+'/')
             assert a['AGENTSTACK_FRESH_CLIENT_CONTEXT']==layout['contexts'][0]['context_path']
             assert b['AGENTSTACK_FRESH_CLIENT_CONTEXT']==layout['contexts'][1]['context_path']
+            # The actual shared assertion rejects missing references rather than
+            # accepting a hand-made proof of an unrelated setup.
+            altered=dict(layout,saved=layout['saved']|{'ORRERY_FRESH_MAIL_INSTANCE_ID':'b'*32})
+            import pytest
+            with pytest.raises(AssertionError):_normal_assert_layout(altered)
+        finally:witness.close();path.unlink(missing_ok=True)
+    asyncio.run(scenario())
+
+
+def test_normal_startup_external_setup_uses_actual_payload_render_and_saved_loader(tmp_path,monkeypatch):
+    """The cockpit startup loader against the same setup; needs a cockpit checkout."""
+    import asyncio,importlib.util,os,socket
+    from pathlib import Path
+    import pytest
+    c=Path(os.environ.get('ORRERY_TEST_COCKPIT_ROOT',''))
+    if not os.environ.get('ORRERY_TEST_COCKPIT_ROOT') or not (c/'bridge/runtime_target.py').is_file():
+        pytest.skip('ORRERY_TEST_COCKPIT_ROOT must name a cockpit checkout')
+    async def scenario():
+        witness=socket.socket(socket.AF_UNIX)
+        path=tmp_path/'mock-socket';witness.bind(str(path));path.chmod(0o600)
+        try:
+            layout=await _normal_startup_layout(tmp_path,path,[19876,19877,19879])
+            _normal_assert_layout(layout)
             spec=importlib.util.spec_from_file_location('normal_startup_mock_boundary',c/'bridge/runtime_target.py')
             module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
             class Host:
@@ -399,11 +486,6 @@ def test_normal_startup_external_setup_uses_actual_payload_render_and_saved_load
             assert original['identity']['context_digest']==layout['contexts'][0]['context_digest']
             changed=module.startup_projection(environ=env|{'AGENTSTACK_FRESH_CLIENT_CONTEXT':layout['contexts'][1]['context_path']},config=config)
             assert changed['identity']!=original['identity'] and changed['identity']['host_epoch']==original['identity']['host_epoch']
-            # The actual shared assertion rejects missing references rather than
-            # accepting a hand-made proof of an unrelated setup.
-            altered=dict(layout,saved=layout['saved']|{'ORRERY_FRESH_MAIL_INSTANCE_ID':'b'*32})
-            import pytest
-            with pytest.raises(AssertionError):_normal_assert_layout(altered)
         finally:witness.close();path.unlink(missing_ok=True)
     asyncio.run(scenario())
 
