@@ -104,6 +104,7 @@ def main():
         with tap.open('w') as log:
             run = subprocess.run([env['ORRERY_DSH_TEST_NODE'], '--test', '--test-concurrency=1', '--test-reporter=tap',
                                   str(ROOT / 'tests/test_dsh_capabilities.mjs'),
+                                  str(ROOT / 'tests/test_dsh_compaction_preset.mjs'),
                                   str(ROOT / 'tests/test_dsh_thin_tools.mjs'),
                                   str(ROOT / 'tests/test_dsh_thin_credentials.mjs'),
                                   str(ROOT / 'tests/test_dsh_tui_datadir.mjs')], env=env,

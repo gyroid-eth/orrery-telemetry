@@ -118,15 +118,90 @@ class ThinTests(unittest.TestCase):
                     'server_url': 'https://third.invalid/v1', 'server_context': {'n_ctx': 131072}}
         with patch('subprocess.run', side_effect=AssertionError('static subprocess forbidden')):
             plan = thin.generate(document)
+        self.assertEqual(plan['compaction'], {'policy': 'selected_route', 'reason': 'selected_model_budget'})
         provider = next(row['config'] for row in self.rows(plan) if row.get('id') == 'llm-deepseek')
         self.assertEqual(provider['baseURL'], 'https://third.invalid')
         self.assertEqual(provider['models'], [{'id': 'new-wire-id', 'contextWindow': 131072, 'maxTokens': 8192}])
+        patches = [row for group in self.rows(plan) for row in group.get('insert', [])
+                   if row.get('name') == '@deepseek-harness-tui/dsh-tui/preset-patch']
+        self.assertEqual([row['config']['preset'] for row in patches], ['standard', 'ptc', 'cordis'])
+        policy = patches[0]['config']['config']['compaction-basic']['modelPolicies'][0]
+        self.assertEqual(policy, {'provider': 'deepseek-official', 'model': 'new-wire-id',
+            'thresholdRatio': 0.8, 'headroomTokens': 13107, 'retainRatio': 0.16, 'maxTokens': 8192})
+        self.assertTrue(all(row['config']['config']['compaction-basic']['modelPolicies'] == [policy]
+                            for row in patches))
         resumed = thin.generate({**document, 'resume_session_id': 'original-session'})
         self.assertEqual(resumed['argv'][-2:], ['--resume', 'original-session'])
+        self.assertEqual(self.rows(resumed), self.rows(plan))
         manifest['backends']['strata']['urls'][2] = 'https://replacement.invalid/v1'
         thin.save(self.manifest, manifest)
         with self.assertRaisesRegex(ValueError, 'server_url_changed'):
             thin.generate(document)
+
+    def test_compaction_budgets_scale_with_context(self):
+        manifest = thin.read(self.manifest)
+        manifest['backends']['strata'] = {'model_source': 'server', 'urls': ['https://fixture.invalid/v1']}
+        thin.save(self.manifest, manifest)
+        for context in (8192, 16384, 32768, 64000, 131072, 262144, 1000000):
+            with self.subTest(context=context):
+                output = min(8192, context // 4)
+                policy = thin.compaction_policy('model', context, output)
+                threshold = min(context * 8 // 10, context - output - policy['headroomTokens'])
+                retained = (context - output) * 16 // 100
+                self.assertGreater(threshold, retained)
+                self.assertGreater(threshold, 0)
+                self.assertLessEqual(policy['maxTokens'], policy['headroomTokens'])
+                self.assertLessEqual(policy['maxTokens'], output)
+                self.assertLess(output + policy['headroomTokens'], context)
+                plan = thin.generate({**self.doc, 'model': 'model', 'url_index': 0,
+                    'server_url': 'https://fixture.invalid/v1', 'server_context': {'n_ctx': context}})
+                rows = self.rows(plan)
+                provider = next(row['config'] for row in rows if row.get('id') == 'llm-deepseek')
+                self.assertEqual(provider['models'][0]['maxTokens'], output)
+                patch = next(row for group in rows for row in group.get('insert', [])
+                             if row.get('id') == 'orrery-compaction-standard')
+                self.assertEqual(patch['config']['config']['compaction-basic']['modelPolicies'], [policy])
+        self.assertIsNone(thin.compaction_policy('model', 8, 2))
+        self.assertIsNone(thin.compaction_policy('model', 8192, 8192))
+        with self.assertRaisesRegex(ValueError, 'invalid_compaction_context'):
+            thin.generate({**self.doc, 'model': 'model', 'url_index': 0,
+                'server_url': 'https://fixture.invalid/v1', 'server_context': {'n_ctx': 8}})
+
+    def test_dynamic_context_source_precedence_is_preserved(self):
+        manifest = thin.read(self.manifest)
+        manifest['backends']['strata'] = {'model_source': 'server', 'urls': ['https://fixture.invalid/v1'],
+                                          'context_override': 32000}
+        thin.save(self.manifest, manifest)
+        doc = {**self.doc, 'model': 'model', 'url_index': 0, 'server_url': 'https://fixture.invalid/v1'}
+        for metadata, expected in (({'n_ctx': 16384}, 16384), ({}, 32000)):
+            plan = thin.generate({**doc, 'server_context': metadata})
+            provider = next(row['config'] for row in self.rows(plan) if row.get('id') == 'llm-deepseek')
+            self.assertEqual(provider['models'][0]['contextWindow'], expected)
+        del manifest['backends']['strata']['context_override']
+        thin.save(self.manifest, manifest)
+        plan = thin.generate({**doc, 'server_context': {}})
+        provider = next(row['config'] for row in self.rows(plan) if row.get('id') == 'llm-deepseek')
+        self.assertEqual(provider['models'][0]['contextWindow'], 64000)
+
+    def test_compaction_does_not_guess_fixed_model_budget(self):
+        plan = thin.generate(self.doc)
+        self.assertEqual(plan['compaction'], {'policy': 'native_default', 'reason': 'missing_or_invalid_budget'})
+        self.assertFalse(any(row.get('name') == '@deepseek-harness-tui/dsh-tui/preset-patch'
+                             for group in self.rows(plan) for row in group.get('insert', [])))
+
+    def test_fixed_budget_only_applies_to_matching_valid_model(self):
+        backends = self.root / 'backends.json'
+        value = thin.read(backends)
+        value['backends']['strata']['model_definition']['maxTokens'] = 8192
+        thin.save(backends, value)
+        plan = thin.generate(self.doc)
+        self.assertEqual(plan['compaction'], {'policy': 'selected_route', 'reason': 'selected_model_budget'})
+        other = thin.generate({**self.doc, 'model': 'b'})
+        self.assertEqual(other['compaction'], {'policy': 'native_default', 'reason': 'model_definition_mismatch'})
+        value['backends']['strata']['model_definition']['maxTokens'] = 131072
+        thin.save(backends, value)
+        invalid = thin.generate(self.doc)
+        self.assertEqual(invalid['compaction'], {'policy': 'native_default', 'reason': 'missing_or_invalid_budget'})
 
     def test_only_child_tui_preferences_are_seeded_and_resume_keeps_same_dir(self):
         user = self.root / '.dsh-tui'
