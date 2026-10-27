@@ -1593,10 +1593,10 @@ def test_delegate_example_omits_effort_and_launcher_resolves_configured_default(
     stack.mkdir()
     (stack / 'env.sh').write_text('export AGENTSTACK_CODEX_DEFAULT_EFFORT=high\n')
     result = _model_call('validate_codex_effort', 'gpt-6-sol', '',
-                         extra_env={'AGENTSTACK_HOME': str(stack)})
+                         extra_env={'AGENTSTACK_HOME': str(stack), 'AGENTSTACK_LABEL_PREFIX': 'org.agentstack.test.codex-default-effort'})
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'high'
     explicit = _model_call('validate_codex_effort', 'gpt-6-sol', 'medium',
-                           extra_env={'AGENTSTACK_HOME': str(stack)})
+                           extra_env={'AGENTSTACK_HOME': str(stack), 'AGENTSTACK_LABEL_PREFIX': 'org.agentstack.test.codex-default-effort'})
     assert explicit.returncode == 0, explicit.stderr
     assert explicit.stdout.strip() == 'medium'
