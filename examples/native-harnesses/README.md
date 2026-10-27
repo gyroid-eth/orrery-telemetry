@@ -170,7 +170,9 @@ model変更時も主/helperは同じbackendの正式IDだけを許可し、effor
 
 dsh backend mapとHermes profile mapには同じ接続IDを保持します。動的modeのdshは既存 `keychain` selector、またはmanifestのLinux `credential_ref` を使います。旧 `model` / `model_definition` / `base_url` は正本でなくなり、削除できます。Hermesは組込みと衝突しない `provider` 名と既存資格参照を保持し、profileの旧 `model` / `context_length` / `base_url` / `api_mode` を削除します。manifest URLからHermesの `chat_completions` routeを作るため、別のmodel一覧・URL更新は不要です。runtime証跡・path・鍵の保護は維持します。Macの一覧取得は正規の `/usr/bin/security find-generic-password -s SERVICE -a ACCOUNT -w` 参照に対応し、任意の `key_cmd` helperは実行しません。
 
-任意の `context_override` は、選択した同じmodel行の `meta.n_ctx` が有効でない場合のfallbackです。有効な報告値があればそれを優先し、どちらもなければ共通既定64,000 tokenを使います。画面の `server` / `override` / `default` は由来を示し、後2者は実測値ではありません。dshの生成出力上限は既定8,192 token（context以内）、effort未報告は省略、helperはSame as mainです。有効な `data[].id` はstatus欠損・未知でも選択可、明示 `status.value: unloaded` だけを無効にします。nativeへ送るのはlabelでなくIDです。同名IDでも接続・URL番号が違えば区別します。
+任意の `context_override` は、選択した同じmodel行の `meta.n_ctx` が有効でない場合のfallbackです。有効な報告値があればそれを優先し、どちらもなければ共通既定64,000 tokenを使います。画面の `server` / `override` / `default` は由来を示し、後2者は実測値ではありません。dshの動的モデルの生成出力上限は `min(8192, floor(context/4))` token、effort未報告は省略、helperはSame as mainです。有効な `data[].id` はstatus欠損・未知でも選択可、明示 `status.value: unloaded` だけを無効にします。nativeへ送るのはlabelでなくIDです。同名IDでも接続・URL番号が違えば区別します。
+
+dsh の選択モデル別 compaction 予算と固定 backend の扱いは [dsh compaction policy](../../docs/dsh-thin.md#compaction-の予算) を参照してください。
 
 静的検査は確認済みPythonで `hooks/harness_child.py validate --manifest <私有manifest> --harness <dsh|hermes> --backend <接続ID> --url-index <0始まり番号> --model <ID>`。通信・鍵取得はありません。通常の承認済み `--keep-mail --managed-spawn-config <manifest絶対path>` installを一度行い、両NEW AGENTをreloadします。一覧は既存資格参照で取得し、実起動・exact resumeのcommand直前には選択URLの `/v1/models` だけを1回照合します。ID消失・明示unloaded・取得失敗は別modelへ移らず拒否します。catalogの `url_key` をPOST／launcherへ保持し、設定URLの変更・並べ替え時は再選択が必要です。exact resumeは元の接続・URL・modelを保持し、接続を移行した旧固定sessionは手動判断が必要です。通常手順で旧copyへ戻せるよう保存します。
 

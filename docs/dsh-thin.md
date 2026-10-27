@@ -27,3 +27,11 @@ TUI の状態は本人の `harness_state_dir/tui` に保存し、起動時に選
 標準launcherからの子は英語の画面で起動します。生成時に`DSH_TUI_LANG=en`と子の`lang.json`を設定し、同じdirの`onboarding.json`を完了済みにして初回設定・移行pickerが初期入力を塞ぐことを防ぎます。利用者のTUI設定は読み書きしません。
 
 この最小 patch は固定版の preimage と適用後 hash を別世代の receipt に記録します。旧い `plain` と旧 managed の世代は書き換えずに残し、現在の generator は明示の `plain-datadir` を要求します。upstream に同等の設定が入ったら patch を外します。
+
+## Compaction の予算
+
+動的 model の選択 context `C` は従来どおり server の `meta.n_ctx`、`context_override`、64,000 の順に決めます。生成する通常出力予算 `O` は `min(8192, floor(C/4))` です。`C` が16未満なら別の値へ置き換えず `invalid_compaction_context` で拒否します。server/override/default は由来であり、fallback の値は実測ではありません。
+
+選択した provider/model の exact route だけに、TUI の公開 `preset-patch` で `standard` / `ptc` / `cordis` の compaction を設定します。`H=floor(C/10)`、summary 出力上限は `min(O,H)`、threshold ratio は 0.8、retain ratio は 0.16 です。native の閾値は `floor(min(C*0.8, C-O-H))`、保持量は `floor((C-O)*0.16)` です。例えば `C=131072`、`O=8192` では閾値104857、headroom 13107、summary上限8192、保持量19660です。これらは生成時の設定値であり、モデルの認可、serverの実 context や compaction の成功を保証しません。native は最新 request の出力上限を使って閾値を再計算するため、明示的な変更後は値が異なります。別 model に切り替えた場合に、元 model の予算を適用しません。`minimal` preset の compaction 設定は変更しません。
+
+固定 backend は `model_definition.id` が選択モデルと一致し、正の `contextWindow` / `maxTokens` が有効な予算を作れる場合だけ同じ policy を付けます。それ以外は既存 native default のままです。生成された `launch.json` の `compaction.policy` / `reason` は、適用または見送りの理由を示します。既定を引き継ぐ場合も native の大きな固定 headroom は小さい context と整合しないことがあります。値が不明な場合は推測せず、backend の定義を確認してください。
