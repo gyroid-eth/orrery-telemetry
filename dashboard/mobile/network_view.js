@@ -14,6 +14,7 @@ class NetworkView{
    for(const[k,p]of Object.entries(core.parameters))if(typeof saved[k]==='number'&&Number.isFinite(saved[k]))this.params[k]=Math.max(p.min,Math.min(p.max,saved[k]));
   }catch(_){}
   core.createDefs(this.svg);this.initControls();this.initPointers();
+  this.comets=new window.OrreryMobileComets.MailComets(this);
  }
  dimensions(){const r=this.svg.getBoundingClientRect();return {w:r.width||354,h:r.height||350};}
  world(){return this.mode==='all'?{w:1050,h:850}:{w:600,h:480};}
@@ -35,6 +36,7 @@ class NetworkView{
    snapshot.agents.map(a=>[a.name,a.provider,a.model,a.locality,a.running,a.retired,a.state,a.act_state,typeof a.ctx_used==='number'?Math.round(a.ctx_used):null]),
    snapshot.graph.edges.map(e=>[e.source,e.target,e.kind,e.count]),snapshot.graph.spawn]);
   if(key!==this.renderKey){this.renderKey=key;this.rebuild();}
+  this.comets.update(snapshot);
   this.selection();
   const mailStatus=this.snapshot.sources.mail.status;
   const rosterSources=[this.snapshot.sources.agents,this.snapshot.sources.graph];
@@ -105,7 +107,7 @@ class NetworkView{
   };
   this.raf=requestAnimationFrame(frame);
  }
- pause(){if(this.raf)cancelAnimationFrame(this.raf);this.raf=0;}
+ pause(){if(this.raf)cancelAnimationFrame(this.raf);this.raf=0;this.comets.pause();}
  fit(){const v=core.fit(this.map,this.dimensions());if(v)this.view=v;this.applyView();}
  applyView(){
   const {w,h}=this.dimensions(),v=this.view;

@@ -64,6 +64,15 @@ body.mobile{position:static;display:block;max-width:520px;margin:0 auto;padding:
 html.period-open,html.period-open body{overflow:hidden;overscroll-behavior:contain}
 .mobile footer{border-top:1px solid var(--hair);margin-top:10px;padding-top:16px;color:var(--ink-dim);font-size:12px;letter-spacing:0;text-align:left}
 .graph-mode button.active{font-weight:600}
+.mail-comets{position:absolute;inset:0;pointer-events:none;overflow:hidden;border-radius:8px;z-index:2}
+.mobile button.mail-comet{position:absolute;width:44px;height:44px;transform:translate(-50%,-50%);pointer-events:auto;cursor:pointer;border:0;background:none;padding:0;color:var(--amber)}
+.mail-comet i{position:absolute;pointer-events:none}
+.mail-comet .halo{inset:9px;border-radius:50%;background:radial-gradient(circle,var(--amber),transparent 70%);opacity:.32}
+.mail-comet .core{left:19px;top:19px;width:6px;height:6px;background:var(--ink);border-radius:50%;box-shadow:0 0 9px var(--amber)}
+.mail-comet .tail{right:22px;top:20px;width:34px;height:4px;border-radius:100%;background:linear-gradient(to right,transparent,var(--amber),var(--ink));transform-origin:right center;rotate:var(--angle)}
+.comet-count{position:absolute;left:28px;top:1px;font:500 11px var(--mono);color:var(--amber);pointer-events:none}
+.mail-comet.still .tail{display:none}
+.mail-comet:focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:50%}
 .graph-toolbar-actions{display:flex;align-items:center;gap:7px}
 .mobile #graph-fullscreen{border:1px solid var(--hair);border-radius:6px;background:var(--panel);padding:7px 10px;min-height:36px;font:11px var(--mono);white-space:nowrap}
 html.graph-fullscreen,html.graph-fullscreen body{overflow:hidden;overscroll-behavior:none}

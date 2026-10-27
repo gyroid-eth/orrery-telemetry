@@ -19,7 +19,10 @@ NOW = 1_800_000_000.0
 @pytest.fixture(autouse=True)
 def isolated_catalog(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("AGENTSTACK_HOME", str(tmp_path / "stack"))
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
+    monkeypatch.delenv("AGENTSTACK_CODEX_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("AGENTSTACK_CODEX_DEFAULT_EFFORT", raising=False)
     monkeypatch.delenv("AGENTSTACK_RUNTIME_DIR", raising=False)
     monkeypatch.setattr(models.time, "time", lambda: NOW)
     monkeypatch.delenv("AGENTSTACK_CODEX_BIN", raising=False)
@@ -454,7 +457,12 @@ def test_cli_version_caps_default_and_cache_can_lower_it(monkeypatch, version):
         expected = models.DEFAULT_MODEL if preferred and client.startswith("0.159") else models.FALLBACK_MODEL
         catalog = models.resolve_catalog()
         assert catalog.default_model == expected
-        assert models.normalize_model() == models.normalize_model(" SoL ") == expected
+        assert models.normalize_model() == expected
+        if not catalog.aliases["sol"]:
+            with pytest.raises(ValueError, match="no eligible sol"):
+                models.normalize_model(" SoL ")
+        else:
+            assert models.normalize_model(" SoL ") == expected
         assert models.provider_catalog()["default_model"] == expected
         assert (models.DEFAULT_MODEL in catalog.models) is preferred
         assert models.FALLBACK_MODEL in catalog.models
@@ -472,7 +480,12 @@ def test_free_account_cache_lowers_implicit_default_and_notifies(age):
                   row("gpt-reserve"), row("gpt-5.5"), {"slug": "codex-auto-review"}],
                  age=age, identity="opaque-free-account")
     catalog = models.resolve_catalog()
-    assert models.normalize_model() == models.normalize_model(" SoL ") == "gpt-6-luna"
+    assert models.normalize_model() == "gpt-6-luna"
+    if age <= models.CACHE_TTL_SECONDS:
+        with pytest.raises(ValueError, match="no eligible sol"):
+            models.normalize_model(" SoL ")
+    else:
+        assert models.normalize_model(" SoL ") == models.DEFAULT_MODEL
     assert catalog.default_model == models.provider_catalog()["default_model"] == "gpt-6-luna"
     assert catalog.default_model not in catalog.overflow
     assert "from gpt-6.1-sol to gpt-6-luna" in catalog.note
@@ -520,7 +533,11 @@ def test_free_cache_fallback_respects_cli_compatibility_ceiling(monkeypatch, ver
 @pytest.mark.parametrize("requested", ["gpt-6.1-sol", "gpt-6-sol", "astra", "terra", "luna"])
 def test_free_cache_preserves_explicit_requests(requested):
     cache([row("gpt-6-luna")])
-    assert models.normalize_model(requested) == models.ALIASES.get(requested, requested)
+    if requested in ("astra", "terra"):
+        with pytest.raises(ValueError, match="no eligible"):
+            models.normalize_model(requested)
+    else:
+        assert models.normalize_model(requested) == models.ALIASES.get(requested, requested)
 
 
 def test_stale_snapshot_cannot_add_models_hide_models_or_override_efforts():
@@ -559,7 +576,11 @@ def test_unknown_version_and_unusable_catalog_use_legacy_default(monkeypatch, fa
     catalog = models.resolve_catalog()
     assert catalog.default_model == models.FALLBACK_MODEL
     assert models.DEFAULT_MODEL not in catalog.models
-    assert models.normalize_model("sol") == models.FALLBACK_MODEL
+    if failure == "hidden":
+        with pytest.raises(ValueError, match="no eligible sol"):
+            models.normalize_model("sol")
+    else:
+        assert models.normalize_model("sol") == models.FALLBACK_MODEL
 
 
 def test_fallback_still_respects_explicit_allowlist(monkeypatch):
@@ -567,9 +588,10 @@ def test_fallback_still_respects_explicit_allowlist(monkeypatch):
     monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", models.DEFAULT_MODEL)
     cache()
     assert models.resolve_catalog().models == (models.DEFAULT_MODEL,)
-    for value in ("", "sol"):
-        with pytest.raises(ValueError, match=models.FALLBACK_MODEL):
-            models.normalize_model(value)
+    with pytest.raises(ValueError, match=models.FALLBACK_MODEL):
+        models.normalize_model("")
+    with pytest.raises(ValueError, match="no eligible sol"):
+        models.normalize_model("sol")
 
 
 # Preserve the real probe before the autouse fixture replaces it.
@@ -637,3 +659,68 @@ def test_discovery_does_not_probe_cli(monkeypatch):
     cache()
     monkeypatch.setattr(models.subprocess, "Popen", lambda *a, **kw: pytest.fail("catalog reading must not execute CLI"))
     assert models.DEFAULT_MODEL in models.discover_models()
+
+
+def test_aliases_follow_fresh_catalog_numeric_versions_and_ignore_order(monkeypatch):
+    cache([row("gpt-9-sol"), row("gpt-10.1-sol"), row("gpt-10-sol"),
+           row("gpt-12-terra"), row("gpt-11-luna"), row("gpt-8-astra"),
+           row("gpt-99-sol", visibility="hide")])
+    assert models.normalize_model("sol") == "gpt-10.1-sol"
+    assert models.normalize_model("terra") == "gpt-12-terra"
+    assert models.normalize_model("luna") == "gpt-11-luna"
+    assert models.normalize_model("astra") == "gpt-8-astra"
+    assert models.normalize_model("gpt-9-sol") == "gpt-9-sol"
+    monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-9-sol,gpt-10-sol")
+    assert models.normalize_model("sol") == "gpt-10-sol"
+
+def test_configured_defaults_and_explicit_precedence(monkeypatch):
+    cache([row("gpt-10-terra")])
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_MODEL", "terra")
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_EFFORT", "high")
+    catalog = models.resolve_catalog()
+    assert catalog.default_model == models.normalize_model("", catalog=catalog) == "gpt-10-terra"
+    assert models.normalize_model("gpt-5.6-sol", catalog=catalog) == "gpt-5.6-sol"
+    assert models.resolve_effort("gpt-5.6-sol", "", catalog) == "high"
+    assert models.resolve_effort("gpt-5.6-sol", "medium", catalog) == "medium"
+    assert models.provider_catalog()["model_effort_defaults"]["gpt-10-terra"] == "high"
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_MODEL", "bad!")
+    with pytest.raises(ValueError, match="AGENTSTACK_CODEX_DEFAULT_MODEL"):
+        models.normalize_model()
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_MODEL", "gpt-9-sol")
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_EFFORT", "bad")
+    with pytest.raises(ValueError, match="reasoning effort"):
+        models.resolve_effort("gpt-9-sol")
+    assert models.resolve_effort("gpt-9-sol", "low") == "low"
+
+def test_alias_stale_invalid_and_old_cli_fallback(monkeypatch):
+    cache([row("gpt-20-sol"), row("gpt-20-terra")], age=301)
+    assert models.normalize_model("terra") == models.ALIASES["terra"]
+    cache([row("gpt-6.1-sol"), row("gpt-6-sol")])
+    monkeypatch.setattr(models, "cli_version", lambda: (0, 158, 0))
+    assert models.normalize_model("sol") == "gpt-6-sol"
+    cache().write_text("{broken")
+    assert models.normalize_model("terra") == models.ALIASES["terra"]
+
+
+def test_saved_defaults_are_literal_and_environment_wins(monkeypatch, tmp_path):
+    home = tmp_path / "stack"
+    home.mkdir()
+    (home / "env.sh").write_text("export AGENTSTACK_CODEX_DEFAULT_MODEL=terra\nexport AGENTSTACK_CODEX_DEFAULT_EFFORT=high\n")
+    assert models.normalize_model() == models.ALIASES["terra"]
+    assert models.resolve_effort("gpt-5.6-sol") == "high"
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_MODEL", "gpt-9-sol")
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_EFFORT", "low")
+    assert models.normalize_model() == "gpt-9-sol"
+    assert models.resolve_effort("gpt-9-sol") == "low"
+    monkeypatch.delenv("AGENTSTACK_CODEX_DEFAULT_MODEL")
+    marker = tmp_path / "executed"
+    (home / "env.sh").write_text(f"export AGENTSTACK_CODEX_DEFAULT_MODEL=$(touch {marker})\n")
+    assert models.normalize_model() == models.DEFAULT_MODEL
+    assert not marker.exists()
+
+
+def test_fresh_catalog_missing_family_rejects_alias_but_formal_id_remains_explicit():
+    cache([row("gpt-6-luna")])
+    with pytest.raises(ValueError, match="no eligible terra"):
+        models.normalize_model("terra")
+    assert models.normalize_model("gpt-5.6-terra") == "gpt-5.6-terra"

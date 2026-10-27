@@ -175,7 +175,9 @@ dangerous command pattern の検査は `AGENTSTACK_MONITOR_DANGER_CHECK=1` の�
 
 ### `watch_agent_mail_signals.sh`
 
-`fswatch` があれば event watch、なければ2秒 polling を使います。runtime の delivery state と短期 lease で同じ `(agent, message)` の重複注入を抑えます。配送成功時は per-message signal を削除し、legacy signal は `fetch_inbox` が消します。`session_not_found` などの失敗時は signal を残して再試行します。periodic scan（macOS は30秒、Linux は2秒）が取りこぼしを救済します。古くて session が無い signal の health 判定と任意の片付け方は [トラブルシューティング](troubleshooting.md#mail-watcher-が-yellow--red) を参照してください。
+`fswatch` があれば event watch、なければ2秒 polling を使います。runtime の delivery state と短期 lease で同じ `(agent, message)` の重複注入を抑えます。配送成功時は per-message signal を削除し、legacy signal は `fetch_inbox` が消します。session一覧で宛先不在を確認した場合は、その通知signalだけを削除して再試行を止めます。Mail本体やinboxは変更しません。timeout・権限エラーなど不在を確定できない失敗とheadless配送の失敗は再試行します。読み取り後に更新されたlegacy signalは削除しません。leaseのguardは固定256個を共有し、標準の`mail-watcher.log`はscan時に5MiBを超えていれば末尾5MiBを`.1`へ残して同じfileを切り詰めます。periodic scan（macOS は30秒、Linux は2秒）が取りこぼしを救済します。古くて session が無い signal の health 判定と任意の片付け方は [トラブルシューティング](troubleshooting.md#mail-watcher-が-yellow--red) を参照してください。
+
+guard方式の変更を反映する更新では、旧watcherと配送workerを通常の管理元で停止してから新しいwatcherを起動します。古いguardは自動削除しません。片付ける場合も、旧workerが動いたままlockを削除しないでください。
 
 配送先は agent 名と完全一致する tmux session だけです。bare shell や無関係 session を避け、通知 text を literal send した後、submit を別 call の `C-m` で送ります。tmux call は timeout 付き worker に分離し、server stall が watcher 全体を止めないようにします。
 

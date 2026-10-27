@@ -8274,7 +8274,7 @@ def do_spawn(payload: dict) -> dict:
         try:
             launcher = codex_models.resolve_launcher()
             catalog = codex_models.resolve_catalog(launcher=launcher)
-            model_note = catalog.note if not model or model.lower() == "sol" else ""
+            model_note = catalog.note if not model else ""
             model = codex_models.normalize_model(model, catalog=catalog)
             effort = codex_models.resolve_effort(model, effort, catalog)
         except ValueError as exc:

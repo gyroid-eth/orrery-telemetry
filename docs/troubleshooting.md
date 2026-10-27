@@ -207,7 +207,7 @@ Codex REPL では `Enter` keysym が submit にならない場合があるため
 
 ## Mail watcher が yellow / red
 
-24時間以上古く、宛先の tmux session が無い signal は `orphan_signal_count` に分け、health の滞留判定から除外します。watcher は `session_not_found` の signal を再試行用に残すため、退役した宛先の古い通知が残るのは配送障害とは限りません。生きている宛先・新しい signal・headless runtime は除外せず、tmux の確認に失敗した場合も全数を判定に残します。doctor は古い残留数と片付け方を warn に出しますが、health が green ならこの warn だけで exit 1 にはしません。
+24時間以上古く、宛先の tmux session が無い signal は `orphan_signal_count` に分け、health の滞留判定から除外します。新しいwatcherは、session一覧で宛先不在を確認すると通知signalだけを取り下げ、再試行を止めます。Mail本体・inboxはそのままです。古いwatcherが残した通知や、tmuxの確認に失敗して残した通知は存在し得るため、残留だけでは配送障害と断定しません。生きている宛先・新しい signal・headless runtime は除外せず、tmux の確認に失敗した場合も全数を判定に残します。doctor は古い残留数と片付け方を warn に出しますが、health が green ならこの warn だけで exit 1 にはしません。
 
 必要なら、インストールの環境を読み込んで候補を確認します。`--prune` を付けると、削除直前にも session が無いことを確認し、signals 配下の24時間以上古い通常ファイルだけを削除します。Mail の DB・inbox・notify-state は触りません。symlink は辿らず、tmux の測定に失敗した場合は削除しません。session を再開する予定の宛先は、先に再開してください。
 

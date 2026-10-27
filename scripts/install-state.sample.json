@@ -50,6 +50,8 @@
     "AGENTSTACK_CLAUDE_JSON": "/home/alice/.claude.json",
     "AGENTSTACK_CLAUDE_MODELS": "",
     "AGENTSTACK_CODEX_MODELS": "",
+    "AGENTSTACK_CODEX_DEFAULT_MODEL": "",
+    "AGENTSTACK_CODEX_DEFAULT_EFFORT": "",
     "AGENTSTACK_CUSTOM_PORTRAITS": "",
     "AGENTSTACK_DASHBOARD_LOG": "/home/alice/.agentstack/runtime/dashboard.log",
     "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "3",
