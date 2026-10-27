@@ -140,7 +140,13 @@ def session_started(session_id, **_):
             temporary.replace(path)
         finally:
             temporary.unlink(missing_ok=True)
+        if os.environ.get('AGENTSTACK_RUNTIME_MODE') == 'fresh' or 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in os.environ:
+            decision = call_hook('check-agent-registered.sh', dict(hook_event_name='SessionStart',
+                session_id=session_id, cwd=os.getcwd()))
+            if not decision:raise RuntimeError('FRESH_NATIVE_SESSION_UNAVAILABLE')
     except Exception:
+        if os.environ.get('AGENTSTACK_RUNTIME_MODE') == 'fresh' or 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in os.environ:
+            raise RuntimeError('FRESH_NATIVE_SESSION_UNAVAILABLE') from None
         # Resume metadata is optional; failure must not prevent native startup.
         print('ORRERY could not save the native session reference', file=sys.stderr)
 

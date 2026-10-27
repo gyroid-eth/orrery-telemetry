@@ -17,6 +17,8 @@ http://127.0.0.1:8770
 
 response body は、画像と HTML を除き JSON です。dashboard 自体に login layer はありません。`AGENTSTACK_BIND_HOST=0.0.0.0` を使うときは trusted LAN / VPN に限定してください。
 
+fresh terminalのhost検査は、同じ保護client contextを指定したdashboardとCockpitの同一host・同一UID間のprivate Unix socketで行います。要求ごとに本人と現在targetを再確認します。資格や内部socket pathをbrowserへ返しません。dashboard再起動後はCockpitも再起動し、DBの差替え・復旧はdashboard停止後に行ってから再起動してください。
+
 legacy mode は全メソッド・全パスで固定の `Host` を検査し、不信・欠落・重複・不正な Host や重複 Origin、絶対形式 request-target の authority 不一致を dispatch 前に HTTP 403 で拒否します。既定の許可先は実待受ポートの `127.0.0.1` / `localhost` / `[::1]` です。LAN / VPN 向けの固定 origin は [`AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS`](configuration.md#lan--vpn-から使う場合の-host-設定) に明示します。Host は認証の代わりにはなりません。
 
 全メソッド・全パスで、存在する Origin は検証済み Host に対応する origin と照合します。`Sec-Fetch-Site: cross-site` は navigation 以外を拒否します。CLI・hook・proxy は Origin を送らず利用できます。global mode の公開 static GET/HEAD にも同じ要求元検査を適用し、その他の global route は既存の operator capability 検査を継続します。[ローカル HTTP の信頼境界](local-http-security.md)も参照してください。
@@ -69,13 +71,77 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":33}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":34}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
 
 - `version`: いつの配布物か（`YYYY.MM.DD`、同日の追加リリースは `YYYY.MM.DD.N`。[CHANGELOG](../CHANGELOG.md)）。互換性の約束ではありません
 - `api`: この API を使う側（[ORRERY cockpit](https://github.com/gyroid-eth/orrery) など）との**互換の世代**です。利用者が頼る endpoint や field を**足す・意味を変える**ときだけ 1 つ上げ、[changelog の断片](../changelog.d/)に書きます（release 時に CHANGELOG へ集約。[貢献・release 手順](../CONTRIBUTING.md#changelog-fragments-and-releases)）。release のたびには上げません。利用者は、必要な機能があるかを `version` の日付ではなく `api` で判定してください（cockpit は、`api` が必要な世代に足りないと起動時に警告します）。この運用は `api` 2 からで、それより前の版はどれも、中身にかかわらず 1 を返します
+
+### 明示 fresh dashboard（API 34、API1 / API2a / API2b-1）
+
+`AGENTSTACK_RUNTIME_MODE=fresh` と保護された `AGENTSTACK_FRESH_CLIENT_CONTEXT` を指定した起動だけが対象です。旧 global activation は変更せず、旧 DB／project／資格への fallback はしません。送り元・Host・Origin・Fetch metadata と JSON write の検査は既存の HTTP admission を先に通します。context、資格、任意 endpoint を browser JSON から指定することはできません。
+
+| URL | fresh の契約 |
+|---|---|
+| `GET /api/version` | 既存 `name/version/api` に `runtime_mode:fresh`、`mail_instance_id`、`capabilities` を追加。API 番号だけで利用可と判断しない |
+| `GET /api/agents?days=&scope=live` | `{mail_instance_id,agents:[…]}`。有限の現役台帳（retired も含む、最大5000）。各行に `mail_instance_id/mail_agent_id/name/program/provider/model/retired/state/running/last_active`。days/scope は旧caller互換で受けるが、旧履歴DBの探索はしない |
+| `GET /api/spawn-names` | 既存 names/adjectives/dirs/providers/models と Local の URL index/key、harness、model を維持。folder 既定は設定済み SPAWN_DIRS または home。project key を使わない。未接続の機能は capabilities=false |
+| `GET /api/name-status?name=`・`GET /api/suggest-name?scientist=` | 旧形 `{name,status}`／`{name}`。retired を含む新台帳で占有を判定。portrait は装飾だけ |
+| `POST /api/spawn` | 既存 task/dir/name/provider/model/harness/effort/helper_model/url_index/url_key/async、optional resources を受ける。親なしは `standalone:true`、親付きは `parent` または `parent_ref:{mail_instance_id,mail_agent_id}` |
+| `GET /api/spawn-status?name=` | `{ok,name,state,age,error,detail,result,job_id,mail_instance_id,mail_agent_id}`。optional I/A query selector。照会では再起動しない |
+
+親の名前は全台帳・retired 込みで一意の場合だけ解決し、曖昧なら候補 ID を添えて拒否します。最新行・最大 ID・folder で選びません。明示 I/A は active な対象だけを選べます。対象に対応する保護 client が欠落・曖昧・失効なら停止します。standalone の技術的な準備元 client は、task の論理上の親／報告先にはなりません。登録・prepare・handoff は共通 fresh child 経路で、Claude/Codex/dsh/Hermes/Local の選択を引き継ぎます。Hermes の HTTPS 要件は維持します。
+
+成功応答の `ok:true,pending:true,child_name,job_id,I/A` は handoff の受付であり、native 起動完了ではありません。status の `state:launching,result:null` は未確認、`detail:unknown` は自動再試行しない結果不明、`detail:not_started` は保存済み準備後の未開始です。native receipt が成立した起動verdictは既存callerと同じ `state:ready`。実行中／終了は `detail:started/ended` と `result.native_ready` で別に示します。native未成立の終了は `state:failed` であり、終了だけを成功へ寄せません。roster の native_ready も receipt の観測であり、OS process の現在の生存を証明しないため、未確認時の running は null のままです。準備後に失敗した場合は同じ job/I/A をエラーへ返し、status と手順で解決します。同名で自動的に別の agent を起こしません。fresh Iは生成された32桁の小文字hexをそのまま投影し、hyphen形式へ変換しません。
+
+API2a は下記の Mail/graph 読取、API2b-1 は PC の現在対象に対する term/history/jump/exit を接続します。終了済み kill/retire は下記の管理契約、R4 は別の本人opt-inの契約です。reactivate／退役済みresume／App GUI activationは未接続です。worktree、browser、独自 base/tools、spawn 時の terminal 指定、annotation(role/group/emoji)、dry_run も明示拒否です。通常の standalone／親付き自動起動の代わりに手動子作成を要求する意味ではありません。必要な作業folderやprovider設定は利用者のagentが手順で準備します。設定・切替・復旧は [日英の移行手順](fresh-global-update.md) を参照してください。
+
+#### PC の現在対象（API2b-1）
+
+下記は既存 URL／主要 JSON を維持し、`session` の S′ 解決、または同じ `mail_instance_id` と正の数値 `mail_agent_id` で対象を固定します。名前併記時は同じ本人であることも検査します。保護された dashboard client の現在 I/Auth と対象の資格世代を同じ owner transaction で検査し、一意の保護 target context、current launch、native receipt、固定 socket inode／session ID／pane ID／PID birth を使います。操作の直前／後にも照合し、古い project/name/token 探索や最後の pane へ戻りません。ブラウザは任意 path/socket/context/資格を指定できず、公開 JSON は I/A と表示名だけを本人の識別子として返します。host 専用 `agentstack-runtime-client target-json` は保護 context を使い、model tool には公開しません。
+
+| URL | fresh の範囲と応答 |
+|---|---|
+| `GET /api/term?session=&lines=` | `{ok,session,content,mail_instance_id,mail_agent_id,truncated}`。lines は既定500／40〜4000へ制限し、固定 pane の capture を最大256 KiB UTF-8で投影。active は既存配送 target の生存検査、ended husk は保存済み ended/receipt と現在 pane の別検査を通す |
+| `GET /api/history?session=&limit=` | 確認済み Claude/Codex native receipt の明示 transcript のみ。limit は既定100／1〜200。末尾最大2 MiBを既存 parser で読み、user/assistant の `kind:text` だけを返す。1イベント64 KiB／合計256 KiB UTF-8、`has_more/truncated` を明示。tool/thinking イベントを表示せず、旧全履歴との完全同等ではない。dsh/Hermes は `FRESH_HISTORY_PROVIDER_UNAVAILABLE` |
+| `POST /api/jump` | selector と任意 boolean `open`。active は現在 pane の focus（open:false は確認のみ）。ended だけ同 context/provider/cwd/native session を既存 resume 入口へ一度 handoff。`ok:true,execution:unknown,native_ready:false,actions:[resume-command-accepted]` は command 受付であり新 native 成立ではない |
+| `POST /api/exit` | selector のみ。現在 active/ready pane へ既存 `/exit` を一度送信。`execution:accepted` は command ACK であり provider 終了／理解／仕事完了ではない。終了済みhuskは下記の同pane整理（Mail退役なし）。再送や結果不明は `ok:false,execution:unknown` で停止 |
+
+#### 終了済み整理と表示観測（API 34）
+
+`POST /api/kill`は上記selectorと`mode:tmux|retire|both`（既定both）を受けます。保護hostのoperatorと同I/Aの保存資格世代を同transactionで確認します。退役対象の保持資格は管理内部だけで照合し、通常Mailの`ACTOR_RETIRED`拒否は維持します。本人管理をmodel toolやCockpit IPCへ公開せず、operator自身のretireは拒否します。
+
+正確な`ended/current/native`と固定socket/session/pane/PID birth/UID、provider/runner不在を確認し、未知・稼働中・別実体は拒否します。生shellは他の子processがない場合だけ整理できます。全`list-clients`を再観測し、対象sessionにclientが残る場合は`FRESH_CLEANUP_ATTACHED`と既存PC toastへの理由を返します。Terminal/Cockpit表示を閉じ、所有observerの停止後に再確認してください。終了済み・peerなしのCockpit consumerだけが既存stopでguard終了・history flushまで閉じ、明示attachでは履歴を再表示できます。人のterminalや他Cockpit instanceを除外・強制停止しません。
+
+launch operation lock内で再検査→退役commit→同paneの`kill-pane` ACKを順序付けます。session全体をkillしません。goneは正確なpane/process不在を確認した場合だけです。応答は既存`ok/session/mode/actions`にI/A、`effects:{retire,tmux}`、`execution`を追加し、両effect完了時だけ`ok:true,execution:completed`です。退役後kill失敗は部分成功を保持して`ok:false`と固定error、ACK不明はunknownで再送しません。同attemptの再読は保存結果だけを返します。退役を自動取消したり、別名/資格でやり直したりしません。
+
+`GET /api/agents`の`category/running/attached/observation`は表示専用です。各GETはowner認証を行い、OS表示は共有snapshot最大2回、最大2socketのpane/client列挙各1回、250ms観測予算と最大5秒cache/single-flightで制限します。未取得・予算切れ・期限切れ・変更時はunknown（`running:null`、保守的な`attached:true`）。表示値はwriteの認可に使わず、操作時は全再検査します。250msにはOS終了待ちやscheduleの超過余地があり、実OS時間は個別の受入結果です。PC期限付きproofで未観測の退役は最大5秒＋effect競合まで遅れ得るため、retireを全接続の即時遮断とは説明しません。
+
+history は raw transcript、内部 transcript/context/binding path、現在の operator/target 資格を返しません。本文は既知の現在資格／内部 path を伏せた有限 text 投影であり、任意のログ全体に対する秘密検出ではありません。read/ACK／signal／Mail 状態も変更しません。resume/exit の不明 handoff を自動再試行せず、保存 marker と手順で解決します。resume 後の terminal child は同じ旧 receipt から新 current/native への遷移を最大5秒だけ待って再検査し、provider 自体を起動し直しません。App の pane を捏造せず、pane/receipt/準備の欠落や失効は明示 unavailable／拒否です。`capabilities.terminal=true` はこの PC 経路だけであり、R4 入力・App・実 provider・導入／切替の受入完了を意味しません。
+
+#### Fresh の有限読取（API2a）
+
+一台一人・その人の agent 同士は信頼する前提で、保護 dashboard client の現在の I/Auth を検査した同じ owner transaction から ORM を読みます。read/ACK・last_active・signal・pending は変更しません。送り元／宛先の表示名に加え `mail_instance_id` と数値の `sender_agent_id/recipient_agent_id`（graph/mobile は `source_agent_id/target_agent_id`）を返します。名前の selector は retired を含む S′、明示 selector は同じ `mail_instance_id` と `mail_agent_id`、pair は `a_id/b_id` です。曖昧な名前を最新行へ解決しません。
+
+| URL | 外形と上限 |
+|---|---|
+| `/api/graph?all=&days=&spawn_only=` | 既存 nodes/edges/spawn、最大5000 agent・10000辺。PC graph は既存どおり全 kind。上限超過は degraded。spawn は保存済みの保護 family の論理親だけで、standalone の準備元を親へ推測しない。lineage は native 起動／生存の証明ではない |
+| `/api/edge-messages?a=&b=&limit=` | `{ok,a,b,count,messages}`、最大200件、既存の全 kind、body/read_ts/ack_ts は表示だけ |
+| `/api/messages-since?since=&limit=` | `{ok,now,since,messages}`、最大200件、遡り最大300秒。各配送を展開し時系列順に返す |
+| `/api/agent-history?name=&names=&hours=` | 最大200件・最大168hの Mail／登録／retire のイベントと range/initial_state。旧 provider log や pane state は参照しない |
+| `/api/mail/recent?limit=&agent=` | `{ok,now,messages}`、既定40件、1〜100件。excerpt と recipients、全 kind |
+| `/api/mail/message?id=` | `{ok,message}`、同じ I の数値 message ID。本文は最大64 KiB UTF-8、subject最大512文字、切詰め flag。未発見は404 |
+| `/api/mail/thread?thread_id=&limit=` | `{ok,now,messages}`、既定50件、1〜100件、昇順。同じ I 内の thread label であり、返信関係や旧保管庫への連結を推測しない |
+| `/api/mobile-mail?window=` | to/cc の metadata、最大10000辺・200配送、truncation/degraded、scope/next_cursor。本文なし |
+| `/api/mobile-mail-page?window=&cursor=&a=&b=&direction=` | 同じ時刻の配送も数値 mid/rid で区別、最大200配送。pair/direction/window/reader epoch/I に cursor を束縛 |
+| `/api/mobile-message?window=&event=&mode=` | 現在の to/cc 配送と期間を再確認。mode=content/revision、本文最大64 KiB・subject512文字、fingerprint/revision/切詰め flag |
+| `/api/mobile-cache-page?cursor=` | 24h内、1 batch最大32通／JSON4 MiB、全体2000通、partial reason。cache cursor は一度だけ使用 |
+
+全 mobile 読取は既存と同じ loopback 限定です。event/revision は I、scope/fingerprint/cursor は I と reader epoch に結びます。cursor は最大256個・600秒、期限切れ／query不一致／別 epoch は410。本文は有限出力で全文移送保証ではありません。mobile projector は roster と同じ I の graph/Mail だけを採用し、同名の別 A や旧 cache を合流しません。API の `capabilities.mail/graph=true` はこの読取範囲であり、Terminal/切替全体の完了を意味しません。
+
+cockpit の fresh 起動には `AGENTSTACK_RUNTIME_MODE=fresh`、固定 loopback の `ORRERY_DASHBOARD_URL=http://127.0.0.1:<port>`、非秘密の `ORRERY_FRESH_MAIL_INSTANCE_ID=<I>` を手順で指定します。既存 `/telemetry/mail/recent|message|thread` はこの reader だけを使い、旧 `MAIL_PROJECT_KEY`／SQLite へ fallback しません。未準備／I不一致／upstream拒否はエラーです。資格・任意 endpoint を browser query で指定できません。legacy/global の無関係な経路は変更しません。
 
 ### 隔離 global backend（API 17）
 

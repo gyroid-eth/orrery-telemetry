@@ -45,8 +45,8 @@ def catalog_providers(backends, availability, *, mode, enabled):
         harnesses = []
         for harness in ('dsh', 'hermes'):
             status = readiness.get(harness, {})
-            ready = mode == 'legacy' and status.get('available') is True
-            reason = None if ready else 'unsupported_mode' if mode != 'legacy' else status.get('reason') or 'runtime_not_prepared'
+            ready = mode in {'legacy','fresh'} and status.get('available') is True
+            reason = None if ready else 'unsupported_mode' if mode not in {'legacy','fresh'} else status.get('reason') or 'runtime_not_prepared'
             harnesses.append({'id': harness, 'available': ready, 'default': False, 'reason': reason,
                               **{key: status.get(key, value) for key, value in UNKNOWN.items()}})
         first = next((h for h in harnesses if h['available']), None)
@@ -108,7 +108,7 @@ def load_standard_inputs(config_file, *, mode):
             for harness in ('dsh', 'hermes'):
                 reason, capability, runner = None, dict(UNKNOWN), None
                 try:
-                    if mode != 'legacy':
+                    if mode not in {'legacy','fresh'}:
                         raise ValueError('unsupported_mode')
                     if sys.platform not in ('darwin', 'linux'):
                         raise ValueError('unsupported_platform')
@@ -168,7 +168,7 @@ def dynamic_selection(config_file, *, mode, backend, harness, model, url_index, 
     _, spec = CONNECTIONS['resolve_connection'](manifest, backend)
     if manifest.get('enabled') is not True or spec.get('model_source') != 'server':
         raise ValueError('harness_not_enabled')
-    if mode != 'legacy':
+    if mode not in {'legacy','fresh'}:
         raise ValueError('unsupported_mode')
     if sys.platform not in ('darwin', 'linux'):
         raise ValueError('unsupported_platform')

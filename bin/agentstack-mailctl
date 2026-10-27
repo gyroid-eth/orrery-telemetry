@@ -17,7 +17,45 @@ _ags_mode_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/global-clien
 if [[ -f "$_ags_mode_loader" ]]; then
   . "$_ags_mode_loader"
   if [[ "${AGENTSTACK_MAILCTL_SKIP_ENV:-0}" != 1 ]]; then
-    ags_client_bootstrap "$AGENTSTACK_HOME/env.sh" --system "$@" || exit $?
+    _ags_saved_mode=""
+    if [[ -f "$AGENTSTACK_HOME/hooks/project-context.sh" ]]; then
+      "${AGENTSTACK_PYTHON:-python3}" - "$AGENTSTACK_HOME/env.sh" "$AGENTSTACK_HOME/hooks/project-context.sh" <<'PY' || die FRESH_STARTUP_SETTINGS_UNAVAILABLE
+import os,stat,sys
+from pathlib import Path
+for raw in sys.argv[1:]:
+    p=Path(raw)
+    if not p.exists():continue
+    s=p.lstat()
+    if p.resolve()!=p or not stat.S_ISREG(s.st_mode) or s.st_uid!=os.getuid() or s.st_mode&0o022:
+        raise SystemExit(1)
+PY
+      . "$AGENTSTACK_HOME/hooks/project-context.sh"
+      _ags_saved_mode="$(agentstack_installed_env_value AGENTSTACK_RUNTIME_MODE "$AGENTSTACK_HOME/env.sh")"
+    fi
+    if [[ "${AGENTSTACK_RUNTIME_MODE:-$_ags_saved_mode}" == fresh ]]; then
+      [[ -f "$AGENTSTACK_HOME/hooks/project-context.sh" ]] || die FRESH_STARTUP_SETTINGS_UNAVAILABLE
+      [[ -z "$_ags_saved_mode" || "$_ags_saved_mode" == fresh ]] || die FRESH_CONTEXT_CONFLICT
+      [[ -z "${AGENTSTACK_CLIENT_CONFIG:-}" && -z "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}" ]] || die FRESH_CONTEXT_CONFLICT
+      "${AGENTSTACK_PYTHON:-python3}" - "$AGENTSTACK_HOME/env.sh" "$AGENTSTACK_HOME/hooks/project-context.sh" <<'PY' || die FRESH_STARTUP_SETTINGS_UNAVAILABLE
+import os,stat,sys
+from pathlib import Path
+for raw in sys.argv[1:]:
+    p=Path(raw);s=p.lstat()
+    if p.resolve()!=p or not stat.S_ISREG(s.st_mode) or s.st_uid!=os.getuid() or s.st_mode&0o022:
+        raise SystemExit(1)
+PY
+      # The reader quotes literal data; it never executes env.sh or a token.
+      for _ags_setting in AGENTSTACK_RUNTIME_MODE AGENTSTACK_FRESH_CLIENT_CONTEXT AGENTSTACK_FRESH_SERVER_CONFIG \
+          ORRERY_FRESH_MAIL_INSTANCE_ID AGENTSTACK_MCP_URL AGENTSTACK_MAIL_DIR AGENTSTACK_MAIL_ENV \
+          AGENTSTACK_MAIL_RUNNER AGENTSTACK_MAIL_RUNTIME_DIR AGENTSTACK_MAIL_DB AGENTSTACK_MAIL_PIDFILE \
+          AGENTSTACK_MAIL_LOG AGENTSTACK_MAIL_LAUNCHD_LABEL AGENTSTACK_PYTHON \
+          AGENTSTACK_MAIL_START_GRACE AGENTSTACK_MAIL_HEALTH_GRACE; do
+        _ags_assignment="$(agentstack_installed_env_value "$_ags_setting" "$AGENTSTACK_HOME/env.sh" --shell)" || die FRESH_STARTUP_SETTINGS_UNAVAILABLE
+        [[ -z "$_ags_assignment" ]] || eval "$_ags_assignment" || die FRESH_STARTUP_SETTINGS_UNAVAILABLE
+      done
+    else
+      ags_client_bootstrap "$AGENTSTACK_HOME/env.sh" --system "$@" || exit $?
+    fi
   fi
 else
   printf '%s\n' GLOBAL_ENTRY_UNAVAILABLE >&2
@@ -81,6 +119,18 @@ validate_config() {
     die "AGENTSTACK_MAIL_START_GRACE must be a whole number of seconds"
   [[ "$HEALTH_GRACE" =~ ^[0-9]+$ ]] || \
     die "AGENTSTACK_MAIL_HEALTH_GRACE must be a whole number of seconds"
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+    "$PYTHON_BIN" - "${AGENTSTACK_FRESH_CLIENT_CONTEXT:-}" "${AGENTSTACK_FRESH_SERVER_CONFIG:-}" \
+      "${ORRERY_FRESH_MAIL_INSTANCE_ID:-}" "$MCP_URL" <<'PY' || die FRESH_SERVICE_CONFIG_MISMATCH
+import sys
+from agentstack_mail.fresh_client import startup_projection
+try:
+    value=startup_projection(sys.argv[1])
+    assert (value['server_config'],value['mail_instance_id'],value['endpoint'])==tuple(sys.argv[2:])
+except Exception:
+    raise SystemExit(1) from None
+PY
+  fi
 }
 
 # --- launchd-supervised installs -------------------------------------------
@@ -291,6 +341,10 @@ PY
 }
 
 health_ok() {
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+    "$PYTHON_BIN" -m agentstack_mail.fresh_client startup-health --context "$AGENTSTACK_FRESH_CLIENT_CONTEXT" >/dev/null
+    return $?
+  fi
   if [[ -f "${_ags_mode_loader:-}" ]]; then
     ags_client_select && _ags_health_rc=0 || _ags_health_rc=$?
     if [[ "$_ags_health_rc" == 0 ]]; then

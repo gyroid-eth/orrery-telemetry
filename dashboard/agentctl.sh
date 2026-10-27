@@ -7,7 +7,47 @@ ENV_FILE="${AGENTSTACK_ENV_FILE:-$HERE/../env.sh}"
 _ags_mode_loader="$HERE/../bin/lib/global-client-loader.sh"
 if [[ -f "$_ags_mode_loader" ]]; then
   . "$_ags_mode_loader"
-  ags_client_bootstrap "$ENV_FILE" --system "$@" || exit $?
+  _ags_reader="$HERE/../hooks/project-context.sh"
+  _ags_saved_mode=""
+  if [[ -f "$_ags_reader" && -f "$ENV_FILE" ]]; then
+    "${AGENTSTACK_PYTHON:-python3}" - "$ENV_FILE" "$_ags_reader" <<'PY_SAFE' || exit 2
+import os,stat,sys
+from pathlib import Path
+for raw in sys.argv[1:]:
+    p=Path(os.path.abspath(raw));info=p.lstat()
+    if p.resolve()!=p or not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_mode&0o022:
+        raise SystemExit('FRESH_STARTUP_SETTINGS_UNAVAILABLE')
+PY_SAFE
+    . "$_ags_reader"
+    _ags_saved_mode="$(agentstack_installed_env_value AGENTSTACK_RUNTIME_MODE "$ENV_FILE")"
+  fi
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-$_ags_saved_mode}" == fresh ]]; then
+    [[ -z "$_ags_saved_mode" || "$_ags_saved_mode" == fresh ]] || { printf '%s\n' FRESH_CONTEXT_CONFLICT >&2; exit 2; }
+    [[ -f "$_ags_reader" && -f "$ENV_FILE" ]] || { printf '%s\n' FRESH_STARTUP_SETTINGS_UNAVAILABLE >&2; exit 2; }
+    [[ -z "${AGENTSTACK_CLIENT_CONFIG:-}" && -z "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}" ]] || { printf '%s\n' FRESH_CONTEXT_CONFLICT >&2; exit 2; }
+    for _ags_setting in $AGENTSTACK_INHERITED_SETTINGS; do
+      if [[ -z "${!_ags_setting:-}" ]]; then
+        _ags_assignment="$(agentstack_installed_env_value "$_ags_setting" "$ENV_FILE" --shell)" || exit 2
+        [[ -z "$_ags_assignment" ]] || eval "$_ags_assignment"
+      fi
+    done
+    for _ags_setting in AGENTSTACK_HOME AGENTSTACK_RUNTIME_MODE AGENTSTACK_FRESH_CLIENT_CONTEXT \
+        AGENTSTACK_FRESH_DASHBOARD_SOCKET AGENTSTACK_FRESH_SERVER_CONFIG ORRERY_FRESH_MAIL_INSTANCE_ID; do
+      _ags_assignment="$(agentstack_installed_env_value "$_ags_setting" "$ENV_FILE" --shell)" || exit 2
+      [[ -z "$_ags_assignment" ]] || eval "$_ags_assignment"
+    done
+    "${AGENTSTACK_PYTHON:-python3}" - "${AGENTSTACK_FRESH_CLIENT_CONTEXT:-}" \
+        "${ORRERY_FRESH_MAIL_INSTANCE_ID:-}" "${AGENTSTACK_FRESH_SERVER_CONFIG:-}" <<'PY_PLAN' || exit 2
+import sys
+from agentstack_mail.fresh_client import startup_projection
+try:
+    value=startup_projection(sys.argv[1])
+    if (value['mail_instance_id'],value['server_config'])!=tuple(sys.argv[2:]):raise ValueError
+except Exception:raise SystemExit('FRESH_STARTUP_SETTINGS_UNAVAILABLE') from None
+PY_PLAN
+  else
+    ags_client_bootstrap "$ENV_FILE" --system "$@" || exit $?
+  fi
 else
   printf '%s\n' GLOBAL_ENTRY_UNAVAILABLE >&2
   exit 2
@@ -121,6 +161,17 @@ render_plist() {
     -e "s|__VAULT__|$(sed_escape "$VAULT")|g" \
     -e "s|__PATH__|$(sed_escape "$PATH_VALUE")|g" \
     "$PLIST_TEMPLATE" > "$PLIST_DST"
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+    "$PYTHON" - "$PLIST_DST" <<'PY_FRESH'
+import os,plistlib,sys
+from pathlib import Path
+p=Path(sys.argv[1]);value=plistlib.loads(p.read_bytes())
+for key in ('AGENTSTACK_HOME','AGENTSTACK_RUNTIME_MODE','AGENTSTACK_FRESH_CLIENT_CONTEXT',
+            'AGENTSTACK_FRESH_DASHBOARD_SOCKET','AGENTSTACK_FRESH_SERVER_CONFIG','ORRERY_FRESH_MAIL_INSTANCE_ID'):
+    value['EnvironmentVariables'][key]=os.environ[key]
+p.write_bytes(plistlib.dumps(value))
+PY_FRESH
+  fi
 }
 
 background_pid() {

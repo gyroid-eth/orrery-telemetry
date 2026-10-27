@@ -518,3 +518,104 @@ def test_terminal_flags_require_policy_acknowledgement_without_starting_listener
     base=['--owner-login','owner@example.test','--public-origin','https://viewer.example.ts.net:9443']
     with pytest.raises(SystemExit):relay.main(['--enable','--enable-terminal',*base])
     assert relay.main(['--check','--enable-terminal','--phone-policy-reviewed',*base])==0
+
+
+@pytest.mark.parametrize('api,supported,valid',[(31,'legacy-managed-pane',True),(34,'fresh-managed-pane',True),
+    (31,'fresh-managed-pane',False),(34,'legacy-managed-pane',False),(33,'fresh-managed-pane',False)])
+def test_input_profiles_keep_identity_selectors_separate_and_targets_exact(api,supported,valid):
+    from dashboard.mobile_input import InputClient,InputUnavailable,CONTRACT
+    client=InputClient(1,'fixture@example.invalid');calls=[]
+    ref=dict(mail_instance_id='a'*32,mail_agent_id=7)
+    def post(operation,data):
+        calls.append((operation,json.loads(data)))
+        if operation=='capability':return dict(contract=CONTRACT,api=api,supported=supported,ack='tmux-command-accepted',epoch='b'*32,enabled=True)
+        return dict(contract=CONTRACT,epoch='b'*32,truncated=False,targets=[dict(name='Alpha',pane_label='Window 0 · pane 0',choice='c'*64,**(ref if api==34 else {}))])
+    client._post=post
+    if not valid:
+        with pytest.raises(InputUnavailable):client.call('capability')
+        return
+    client.call('capability')
+    selector=dict(epoch='b'*32,name='Alpha',**ref)
+    if api==31:
+        with pytest.raises(InputUnavailable):client.call('targets',selector)
+        assert len(calls)==1
+        assert client.call('targets',dict(epoch='b'*32,name='Alpha'))['targets'][0]['name']=='Alpha'
+    else:
+        assert all(client.call('targets',selector)['targets'][0][k]==v for k,v in ref.items())
+        with pytest.raises(InputUnavailable):client.call('targets',dict(selector,mail_agent_id=8))
+        before=len(calls)
+        for bad in [dict(selector,mail_agent_id=True),dict(selector,owner='other'),dict(epoch='b'*32,name='Alpha',mail_instance_id='a'*32)]:
+            with pytest.raises(InputUnavailable):client.call('targets',bad)
+        assert len(calls)==before
+
+
+@pytest.mark.parametrize('case',['fresh','legacy','unknown','changed-id'])
+def test_real_terminal_javascript_pins_mail_ref_through_review_and_once_send(case):
+    from pathlib import Path
+    import subprocess
+    import shutil
+    node=shutil.which('node')
+    if not node:pytest.skip('node is unavailable')
+    source=(Path(__file__).parents[1]/'dashboard/mobile/mobile.js').read_text().split('/* Common, opt-in pane terminal.')[1]
+    source='/* Common, opt-in pane terminal.'+source
+    script=r'''
+const vm=require('node:vm'),assert=require('node:assert/strict');
+const source=SOURCE,kind=CASE,ids={mail_instance_id:'a'.repeat(32),mail_agent_id:7},calls=[];
+const elements=new Map();
+class Element{
+ constructor(tag='div'){this.tag=tag;this.children=[];this.dataset={};this.style={};this.classList={toggle(){}};this.isConnected=true;this.open=false;this.textContent='';}
+ set id(value){this._id=value;elements.set('#'+value,this);}get id(){return this._id;}
+ append(...values){this.children.push(...values);}replaceChildren(...values){this.children=[...values];}
+ setAttribute(){}addEventListener(){}focus(){}querySelectorAll(){return [];}querySelector(){return null;}after(value){this.afterValue=value;}remove(){}
+ showModal(){this.open=true;}close(){this.open=false;}
+}
+const q=s=>{if(!elements.has(s))elements.set(s,new Element());return elements.get(s);};
+q('#selected-name').textContent='Alpha';
+const doc={querySelector:q,querySelectorAll:()=>[],createElement:t=>new Element(t),addEventListener(){},hidden:false,activeElement:new Element()};
+const timers=new Map();let timer=0;
+function target(){return {name:'Alpha',pane_label:'Window 0 · pane 0',choice:'c'.repeat(64),revision:'d'.repeat(64),...(kind==='legacy'?{}:ids)};}
+const context={document:doc,console,TextEncoder,AbortController,MutationObserver:class{observe(){}},innerHeight:900,
+ setTimeout(fn){timers.set(++timer,fn);return timer;},clearTimeout(id){timers.delete(id);},
+ fetch:async(url,options)=>{const operation=url.split('/').pop(),payload=options.body?JSON.parse(options.body):null;calls.push({operation,payload});
+ let value={contract:'orrery-mobile-pane-v1',epoch:'b'.repeat(32)};
+ if(!payload)value={...value,api:kind==='legacy'?31:34,supported:kind==='legacy'?'legacy-managed-pane':'fresh-managed-pane',enabled:true,ack:'tmux-command-accepted'};
+ else if(operation==='targets')value={...value,targets:[target()],truncated:false};
+ else if(operation==='preview')value={...value,target:{...target(),...(kind==='changed-id'?{mail_agent_id:8}:{})},text:'selected terminal',observed_at:1};
+ else value={...value,target:target(),intent:'e'.repeat(64),state:operation==='prepare'?'prepared':kind==='unknown'?'unknown':'accepted',
+   ...(operation==='prepare'?{text:payload.text,expires_in:30,confirmation:'f'.repeat(64)}:{})};
+ return {ok:true,text:async()=>JSON.stringify(value)};}};
+context.window=context;context.addEventListener=()=>{};context.scrollTo=()=>{};
+context.AGENTSTACK_DEMO={portraitURL:()=>'/fixture.svg'};context.OrreryMobileIdentity={forName:()=>ids};
+vm.runInNewContext(source,context);
+const settle=async()=>{for(let i=0;i<15;i++)await new Promise(resolve=>setImmediate(resolve));};
+function button(label){const visit=n=>{if(n.tag==='button'&&n.textContent===label)return n;for(const child of n.children||[]){const found=visit(child);if(found)return found;}};return visit(q('#terminal-sheet'));}
+(async()=>{await settle();
+ // The existing graph button calls the real entry/open/list code.
+ await q('#terminal-graph-entry').onclick();await settle();
+ const selected=calls.find(c=>c.operation==='targets').payload;
+ assert.equal(selected.name,'Alpha');assert.equal('owner' in selected,false);
+ if(kind!=='legacy'){assert.equal(selected.mail_instance_id,ids.mail_instance_id);assert.equal(selected.mail_agent_id,ids.mail_agent_id);}
+ else assert.equal('mail_instance_id' in selected,false);
+ if(kind==='changed-id'){assert.equal(calls.some(c=>c.operation==='prepare'),false);assert.ok(q('#terminal-review').disabled);}
+ else{
+  const field=q('#terminal-text');field.value='literal selected input';field.oninput();assert.equal(q('#terminal-review').disabled,false);
+  await q('#terminal-review').onclick();await settle();assert.ok(button('Send once'));
+  await button('Send once').onclick();await settle();
+  assert.equal(calls.filter(c=>c.operation==='commit').length,1);
+  if(kind==='unknown'){assert.ok(button('Check receipt'));await button('Check receipt').onclick();await settle();assert.equal(calls.filter(c=>c.operation==='commit').length,1);assert.equal(calls.filter(c=>c.operation==='status').length,1);}
+ }
+ context.OrreryMobileTerminal.close();
+ // Mail participant entry carries the actual event identity, not name lookup.
+ context.OrreryMobileTerminal.mail({source:'Alpha',target:'Beta',mail_instance_id:ids.mail_instance_id,source_agent_id:7,target_agent_id:8});
+ const mailTo=q('#message-route').afterValue.children[1].children[1];
+ await mailTo.onclick();await settle();
+ const mailSelector=calls.filter(c=>c.operation==='targets').at(-1).payload;
+ assert.equal(mailSelector.name,'Beta');
+ if(kind!=='legacy'){assert.equal(mailSelector.mail_instance_id,ids.mail_instance_id);assert.equal(mailSelector.mail_agent_id,8);}
+ else assert.equal('mail_agent_id' in mailSelector,false);
+ console.log(JSON.stringify({case:kind,targets:selected,commits:calls.filter(c=>c.operation==='commit').length,ok:true}));
+})().catch(e=>{console.error(e);process.exitCode=1;});
+'''.replace('SOURCE',json.dumps(source)).replace('CASE',json.dumps(case))
+    result=subprocess.run([node,'-'],input=script,text=True,capture_output=True,timeout=10)
+    assert result.returncode==0,result.stderr
+    assert json.loads(result.stdout)['ok'] is True

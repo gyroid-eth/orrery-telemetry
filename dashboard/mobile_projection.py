@@ -72,27 +72,55 @@ def project_agent(row):
     model = row.get('model_raw') or row.get('model') or ''
     if not isinstance(model, str) or len(model) > 120 or not MODEL.fullmatch(model):
         model = ''
-    return {'name': name(row.get('name')), 'provider': provider, 'model': model,
+    result = {'name': name(row.get('name')), 'provider': provider, 'model': model,
             'locality': locality, 'running': running, 'retired': retired,
             'state': state, 'act_state': act,
             'ctx_used': number(row.get('ctx_used'), maximum=100) if running is True else None,
             # HTTP observation time does not prove a context sampling time.
             'context_sampled_at': None, 'last_active': number(row.get('last_active'))}
+    if 'mail_instance_id' in row or 'mail_agent_id' in row:
+        instance=row.get('mail_instance_id');agent=row.get('mail_agent_id')
+        # FreshRuntime publishes uuid4().hex. Keep those opaque bytes unchanged;
+        # canonical hyphenated UUIDs were only a development fixture, not a contract.
+        if not isinstance(instance,str) or not re.fullmatch(r'[0-9a-f]{32}',instance) or type(agent) is not int or agent<=0:
+            raise ValueError('invalid_mail_identity')
+        result.update(mail_instance_id=instance,mail_agent_id=agent)
+    return result
 
 
 def project_agents(raw):
     result = [project_agent(x) for x in rows(raw, 'agents', 5000)]
-    if len({x['name'] for x in result}) != len(result):
+    identities=[(x['mail_instance_id'],x['mail_agent_id']) if 'mail_instance_id' in x else x['name'] for x in result]
+    if len(set(identities)) != len(result):
         raise ValueError('duplicate_public_name')
+    if raw.get('mail_instance_id') is not None and any(a.get('mail_instance_id')!=raw['mail_instance_id'] for a in result):
+        raise ValueError('invalid_mail_identity')
     return result
+
+
+def delivery_identity(row, instance=None):
+    """Optional fresh endpoints are a complete I/A tuple, never names."""
+    if instance is None and not any(k in row for k in ('mail_instance_id','source_agent_id','target_agent_id')):return {}
+    value=row.get('mail_instance_id')
+    if (not isinstance(value,str) or not EVENT_KEY.fullmatch(value) or
+            instance is not None and value!=instance or
+            any(type(row.get(k)) is not int or row[k]<=0 for k in ('source_agent_id','target_agent_id'))):
+        raise ValueError('invalid_mail_identity')
+    return {k:row[k] for k in ('mail_instance_id','source_agent_id','target_agent_id')}
 
 
 def project_graph(raw):
     nodes = [project_agent(x) for x in rows(raw, 'nodes', 5000)]
     spawn = []
     for row in rows(raw, 'spawn', 10000):
-        spawn.append({'source': name(row.get('source')), 'target': name(row.get('target'))})
-    return {'nodes': nodes, 'spawn': spawn, 'degraded': raw.get('degraded') is True}
+        spawn.append({'source': name(row.get('source')), 'target': name(row.get('target')),
+                      **delivery_identity(row,raw.get('mail_instance_id'))})
+    instance=raw.get('mail_instance_id')
+    if instance is not None and (not isinstance(instance,str) or not EVENT_KEY.fullmatch(instance) or
+                                any(n.get('mail_instance_id')!=instance for n in nodes)):
+        raise ValueError('invalid_mail_identity')
+    return {'nodes': nodes, 'spawn': spawn, 'degraded': raw.get('degraded') is True,
+            **({'mail_instance_id':instance} if instance is not None else {})}
 
 
 def project_mail(raw, window):
@@ -107,7 +135,8 @@ def project_mail(raw, window):
         if row.get('kind') not in {'to', 'cc'} or count is None or ts is None or int(count) != count:
             raise ValueError('mail_schema')
         edges.append({'source': name(row.get('source')), 'target': name(row.get('target')),
-                      'count': int(count), 'last_ts': ts, 'kind': row['kind']})
+                      'count': int(count), 'last_ts': ts, 'kind': row['kind'],
+                      **delivery_identity(row,raw.get('mail_instance_id'))})
     events = {}
     for row in rows(raw, 'events', 200):
         key = row.get('key')
@@ -115,7 +144,8 @@ def project_mail(raw, window):
         if not isinstance(key, str) or not EVENT_KEY.fullmatch(key) or ts is None or row.get('kind') not in {'to','cc'} or row.get('count') != 1:
             raise ValueError('mail_event_schema')
         event = {'key': key, 'source': name(row.get('source')), 'target': name(row.get('target')),
-                 'kind': row['kind'], 'count': 1, 'event_at': ts}
+                 'kind': row['kind'], 'count': 1, 'event_at': ts,
+                 **delivery_identity(row,raw.get('mail_instance_id'))}
         if key in events and events[key] != event:
             raise ValueError('conflicting_mail_event')
         events[key] = event
@@ -123,6 +153,7 @@ def project_mail(raw, window):
     if not isinstance(scope,str) or not EVENT_KEY.fullmatch(scope) or (cursor is not None and (not isinstance(cursor,str) or not EVENT_KEY.fullmatch(cursor))):
         raise ValueError('mail_scope')
     return {'edges': edges, 'events': list(events.values()), 'scope':scope,'next_cursor':cursor,
+            **({'mail_instance_id':raw['mail_instance_id']} if 'mail_instance_id' in raw else {}),
             'events_truncated': raw.get('events_truncated') is True,
             'edges_truncated': raw.get('edges_truncated') is True,
             'degraded': raw.get('degraded') is True}
@@ -149,24 +180,32 @@ class SnapshotStore:
             return
         part['attempted'] = now
         try:
-            value = projector(self.fetch(key))
+            raw = self.fetch(key)
+            value = projector(raw)
         except (OSError, TimeoutError, ValueError, TypeError):
             part['error'] = 'upstream_unavailable'
             return
-        part.update(value=value, observed=now, error=None)
+        part.update(value=value, observed=now, error=None, instance=raw.get('mail_instance_id'))
         if key == 'agents':
+            previous_ids=set(self._previous)
+            fresh_ids={(a.get('mail_instance_id'),a.get('mail_agent_id')) for a in value if 'mail_instance_id' in a}
+            if fresh_ids and fresh_ids!=previous_ids:
+                self._states.clear();self._state_seq=0
             next_states = {}
             for agent in value:
                 state = agent['act_state'] or agent['state']
                 if state == 'unknown':
                     continue
-                next_states[agent['name']] = state
-                old = self._previous.get(agent['name'])
+                key=(agent['mail_instance_id'],agent['mail_agent_id']) if 'mail_instance_id' in agent else agent['name']
+                next_states[key] = state
+                old = self._previous.get(key)
                 if old is not None and old != state:
                     self._state_seq += 1
-                    self._states.appendleft({'key': 'state-' + str(self._state_seq),
+                    event={'key': 'state-' + str(self._state_seq),
                                              'name': agent['name'], 'from': old, 'to': state,
-                                             'observed_at': now, 'event_at': None})
+                                             'observed_at': now, 'event_at': None}
+                    if 'mail_instance_id' in agent:event.update(mail_instance_id=agent['mail_instance_id'],mail_agent_id=agent['mail_agent_id'])
+                    self._states.appendleft(event)
             self._previous = next_states
 
     def _source(self, key, now):
@@ -230,27 +269,41 @@ class SnapshotStore:
         # Both sources obey one wall-clock cutoff. State fields prefer agents,
         # but an absent/older timestamp cannot erase the graph observation.
         # Running alone is not recent activity; HTTP time is not activity time.
-        for a in [*graph['nodes'],*(value('agents') or [])]:
-            roster[a['name']]=dict(a)
+        agents=value('agents') or []
+        instance=self._parts.get('agents',{}).get('instance')
+        fresh=instance is not None or any('mail_instance_id' in a for a in agents)
+        if fresh:
+            instance=instance or agents[0]['mail_instance_id']
+            if graph.get('mail_instance_id')!=instance:graph={'nodes':[],'spawn':[],'degraded':True}
+            if mail is not None and mail.get('mail_instance_id')!=instance:mail=None
+        for a in [*([] if fresh else graph['nodes']),*agents]:
+            key=(a['mail_instance_id'],a['mail_agent_id']) if 'mail_instance_id' in a else a['name']
+            roster[key]=dict(a)
             stamp=a['last_active']
             if stamp is not None and stamp<=now:
-                activity[a['name']]=max(activity.get(a['name'],stamp),stamp)
+                activity[key]=max(activity.get(key,stamp),stamp)
         if mail is not None:
             for edge in mail['edges']:
                 stamp=edge['last_ts']
                 if stamp<=now:
                     for endpoint in ('source','target'):
-                        nm=edge[endpoint]
+                        nm=(instance,edge[endpoint+'_agent_id']) if fresh else edge[endpoint]
                         activity[nm]=max(activity.get(nm,stamp),stamp)
         unknown=sum(nm not in activity for nm in roster)
         lower=None if WINDOWS[window] is None else now-WINDOWS[window]
         roster={nm:{**a,'last_active':activity.get(nm)} for nm,a in roster.items()
                 if lower is None or nm in activity and activity[nm]>=lower}
-        names = set(roster)
-        edges = [] if mail is None else [e for e in mail['edges'] if e['source'] in names and e['target'] in names]
-        spawn = [e for e in graph['spawn'] if e['source'] in names and e['target'] in names]
+        names = {a['name'] for a in roster.values()}
+        represented=lambda e: all((instance,e[k+'_agent_id']) in roster for k in ('source','target')) if fresh else e['source'] in names and e['target'] in names
+        edges = [] if mail is None else [e for e in mail['edges'] if represented(e)]
+        spawn = [e for e in graph['spawn'] if represented(e)]
         sources = {key: self._source(key if key != 'mail' else 'mail:' + window, now)
                    for key in ('agents','graph','mail')}
+        if fresh:
+            for key,available in (('graph',graph.get('mail_instance_id')==instance),('mail',mail is not None)):
+                if available:continue
+                sources[key]={'status':'unavailable','observed_at':None,'age_seconds':None,
+                              'error':'fresh_instance_mismatch'}
         payload = {'schema': 1, 'observed_at': now, 'window': window, 'sources': sources,
                    'period':{'seconds':WINDOWS[window],'activity_unknown':unknown},
                    'agents': list(roster.values()),

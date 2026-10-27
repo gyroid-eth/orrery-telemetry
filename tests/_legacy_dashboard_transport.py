@@ -23,8 +23,8 @@ def install_legacy_transport(monkeypatch, tmp_path, server, invoke, *, sessions=
 
     def evidence(argv, **kwargs):
         args = argv[3:]
-        if '#{socket_path}\t#{pid}' in args:
-            return subprocess.CompletedProcess(argv, 0, str(path) + '\t300\n', '')
+        if '#{socket_path}|#{pid}' in args:
+            return subprocess.CompletedProcess(argv, 0, str(path) + '|300\n', '')
         if args[0] == 'list-sessions' and args[-1] == '#{session_name}' and sessions is not None:
             rows = sessions() if callable(sessions) else sessions
             return subprocess.CompletedProcess(argv, 0, '\n'.join(rows.values()), '')

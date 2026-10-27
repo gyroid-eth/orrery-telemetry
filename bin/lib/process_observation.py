@@ -55,6 +55,39 @@ def process_start(pid, *, deadline=None):
         return None
 
 
+def process_snapshot(*, deadline=None):
+    """One ephemeral PID/parent/UID/birth observation; never cache it."""
+    try:
+        result = subprocess.run(['ps', '-axo', 'pid=,ppid=,uid=,lstart='],
+                                capture_output=True, text=True, timeout=remaining(deadline))
+        if result.returncode:
+            return None
+        rows = {}
+        for line in result.stdout.splitlines():
+            parts = line.split(maxsplit=3)
+            if len(parts) != 4 or not all(value.isdigit() for value in parts[:3]) or not parts[3].strip():
+                return None
+            pid, parent, owner = map(int, parts[:3])
+            if pid in rows:
+                return None
+            rows[pid] = (parent, owner, parts[3].strip())
+        return rows or None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+def snapshot_belongs_to(rows, child, parent, uid):
+    if not isinstance(rows, dict):
+        return False
+    seen = set()
+    while child != parent:
+        if child in seen or child not in rows or rows[child][1] != uid:
+            return False
+        seen.add(child)
+        child = rows[child][0]
+    return parent in rows and rows[parent][1] == uid
+
+
 def belongs_to(provider, runner, uid, *, deadline=None):
     """An ephemeral same-UID parent chain, never a persisted second PID table."""
     try:

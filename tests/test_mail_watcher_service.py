@@ -678,3 +678,22 @@ def test_lock_owner_uid_ignores_gnu_dash_f_filesystem_noise():
         )
         owner = subprocess.run(["/bin/bash", str(wrapper)], capture_output=True, text=True, timeout=60)
         assert owner.stdout.strip() == "4242", (owner.stdout, owner.stderr)
+
+
+def test_fresh_watcher_render_removes_context_key_and_uses_same_config_for_both_managers(tmp_path):
+    import json
+    from test_install_service_path import _fresh_render
+    target,values=_fresh_render(tmp_path,'fresh_environment_json','mail_watcher_environment','render_mail_watcher_unit',
+        commands='MAIL_WATCHER_LABEL=org.orrery.test.normal.watcher\nrender_mail_watcher_unit launchd\nrender_mail_watcher_unit systemd-user\n')
+    plist=plistlib.loads((tmp_path/'Library/LaunchAgents/org.orrery.test.normal.watcher.plist').read_bytes())
+    args=plist['ProgramArguments'];env=plist['EnvironmentVariables']
+    assert args[:3]==['/usr/bin/env','-u','AGENTSTACK_FRESH_CLIENT_CONTEXT']
+    assert args[-2:]==['--fresh-config',values['AGENTSTACK_FRESH_SERVER_CONFIG']]
+    assert 'AGENTSTACK_FRESH_CLIENT_CONTEXT' not in env
+    assert env['AGENTSTACK_FRESH_SERVER_CONFIG']==values['AGENTSTACK_FRESH_SERVER_CONFIG']
+    done=subprocess.run([*args[:3],sys.executable,'-c','import os,json;print(json.dumps(dict(os.environ)))'],
+        env={'AGENTSTACK_FRESH_CLIENT_CONTEXT':'must-not-inherit','PATH':'/usr/bin:/bin'},capture_output=True,text=True,timeout=5)
+    assert done.returncode==0 and 'AGENTSTACK_FRESH_CLIENT_CONTEXT' not in json.loads(done.stdout)
+    unit=(tmp_path/'.config/systemd/user/org.orrery.test.normal.watcher.service').read_text()
+    assert 'ExecStart=/usr/bin/env -u AGENTSTACK_FRESH_CLIENT_CONTEXT /bin/bash' in unit
+    assert ' --fresh-config ' in unit and values['AGENTSTACK_FRESH_SERVER_CONFIG'] in unit

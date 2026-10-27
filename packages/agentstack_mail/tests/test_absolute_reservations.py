@@ -334,7 +334,7 @@ def test_missing_nonascii_case_alias_never_grants_twice(server, tmp_path):
         assert not paths[0].samefile(paths[1])
 
 
-@pytest.mark.parametrize("name", ["É-case.py", "é-case.py", "Σ*.py", "日本語.py"])
+@pytest.mark.parametrize("name", ["É-case.py", "é-case.py", "Σ*.py", "😀.py", "\u9fa6.py"])
 def test_nonascii_case_table_unknown_rejects_initial_acquire(
     server, tmp_path, monkeypatch, name
 ):
@@ -344,6 +344,51 @@ def test_nonascii_case_table_unknown_rejects_initial_acquire(
     with pytest.raises(ReservationError, match="CASE_RULES_UNKNOWN"):
         client(service, tmp_path).call("reserve_files", paths=[name])
     assert not service._leases
+
+
+@pytest.mark.parametrize("rule", [None, "hfs", "exact"])
+def test_japanese_case_profile_requires_native_apfs_rule(tmp_path, monkeypatch, rule):
+    monkeypatch.setattr(reservation_paths, "unicode_rule_at", lambda _: rule)
+    monkeypatch.setattr(reservation_paths, "case_insensitive_at", lambda _: True)
+    with pytest.raises(ReservationError, match="UNICODE_RULES_UNKNOWN|CASE_RULES_UNKNOWN"):
+        normalize_path(str(tmp_path / "日本語.py"))
+
+
+@pytest.mark.parametrize("name", ["日本語.py", "ひらがな.py", "カタカナ.py", "ㇰ.py", "＃１２＋ｶﾀｶﾅ.py"])
+def test_apfs_japanese_profile_preserves_spelling_and_glob_matching(tmp_path, monkeypatch, name):
+    monkeypatch.setattr(reservation_paths, "unicode_rule_at", lambda _: "apfs")
+    monkeypatch.setattr(reservation_paths, "case_insensitive_at", lambda _: True)
+    path = normalize_path(str(tmp_path / name))
+    assert path.value == str(tmp_path / name)
+    assert reservation_paths.component_matches(name, "*.py", fold=True, unicode_rule="apfs")
+    assert not reservation_paths.component_matches(name, "*.md", fold=True, unicode_rule="apfs")
+
+
+@pytest.mark.parametrize("left,right", [("がＡ.py", "か\u3099ａ.py"), ("日本A.py", "日本a.py")])
+def test_apfs_profile_aliases_cannot_acquire_missing_leaf_twice(server, tmp_path, monkeypatch, left, right):
+    monkeypatch.setattr(reservation_paths, "unicode_rule_at", lambda _: "apfs")
+    monkeypatch.setattr(reservation_paths, "case_insensitive_at", lambda _: True)
+    service, _ = server
+    path = client(service, tmp_path).call("reserve_files", paths=[left])[0]
+    assert not (tmp_path / left).exists()
+    assert paths_overlap(path.path, normalize_path(str(tmp_path / right)))
+    with pytest.raises(ReservationError, match="CONFLICT"):
+        client(service, tmp_path, "beta").call("reserve_files", paths=[right])
+    assert len(service._leases) == 1
+
+
+@pytest.mark.parametrize("left,right", [("日本A.py", "日本Ａ.py"), ("カ.py", "ｶ.py"), ("課題.py", "仕事.py")])
+def test_apfs_profile_does_not_apply_compatibility_or_width_folding(left, right):
+    assert not reservation_paths.component_matches(left, right, fold=True, unicode_rule="apfs")
+
+
+def test_profile_glob_still_rejects_unsupported_entries(tmp_path, monkeypatch):
+    monkeypatch.setattr(reservation_paths, "unicode_rule_at", lambda _: "apfs")
+    monkeypatch.setattr(reservation_paths, "case_insensitive_at", lambda _: True)
+    (tmp_path / "É.py").touch()
+    pattern = normalize_path(str(tmp_path / "*.py"))
+    with pytest.raises(ReservationError, match="CASE_RULES_UNKNOWN"):
+        reservation_paths.reservation_scopes(pattern)
 
 
 def test_case_sensitive_unicode_case_names_stay_distinct(server, tmp_path, monkeypatch):

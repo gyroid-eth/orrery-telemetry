@@ -1,4 +1,46 @@
 #!/bin/bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "${1:-}" == watch-fresh ]]; then
+  if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -n "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}" ]]; then
+    printf '%s\n' FRESH_CONTEXT_CONFLICT >&2; exit 2
+  fi
+  case "${AGENTSTACK_RUNTIME_MODE:-legacy}" in
+    legacy|fresh) ;;
+    *) printf '%s\n' FRESH_CONTEXT_CONFLICT >&2; exit 2 ;;
+  esac
+  shift
+  exec "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_client watch-fresh --wrapper-root "$SCRIPT_DIR/.." "$@"
+fi
+# Explicit fresh selection is separate from the dormant global client. A
+# missing/invalid fresh context must never select the legacy proxy instead.
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  if [[ -z "${AGENTSTACK_FRESH_CLIENT_CONTEXT:-}" || -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -n "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}" ]]; then
+    printf '%s\n' FRESH_CONTEXT_REQUIRED >&2
+    exit 2
+  fi
+  case "${AGENTSTACK_RUNTIME_MODE:-legacy}" in
+    legacy|fresh) ;;
+    *) printf '%s\n' FRESH_CONTEXT_CONFLICT >&2; exit 2 ;;
+  esac
+  case "${1:-}" in
+    target-json)
+      shift
+      exec "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_targets \
+        --context "$AGENTSTACK_FRESH_CLIENT_CONTEXT" --wrapper-root "$SCRIPT_DIR/.." "$@" ;;
+    proxy|session-hook)
+      [[ "$#" == 1 ]] || { printf '%s\n' FRESH_OPERATION_UNSUPPORTED >&2; exit 2; }
+      exec "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_client "$1" --context "$AGENTSTACK_FRESH_CLIENT_CONTEXT" ;;
+    notifications)
+      [[ "$#" == 1 ]] || { printf '%s\n' FRESH_OPERATION_UNSUPPORTED >&2; exit 2; }
+      exec "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_client notifications \
+        --context "$AGENTSTACK_FRESH_CLIENT_CONTEXT" --wrapper-root "$SCRIPT_DIR/.." ;;
+    launch|resume)
+      _ags_fresh_operation="$1"
+      shift
+      exec "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_client "$_ags_fresh_operation" \
+        --context "$AGENTSTACK_FRESH_CLIENT_CONTEXT" --wrapper-root "$SCRIPT_DIR/.." "$@" ;;
+    *) printf '%s\n' FRESH_OPERATION_UNSUPPORTED >&2; exit 2 ;;
+  esac
+fi
 exec python3 "$SCRIPT_DIR/lib/runtime_client.py" "$@"

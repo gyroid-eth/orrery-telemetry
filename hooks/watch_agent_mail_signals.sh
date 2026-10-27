@@ -13,6 +13,23 @@
 
 set -euo pipefail
 
+# Explicit fresh service admission precedes both old mode selectors. The
+# coordinator reads protected client contexts, never Mail storage or names.
+if [[ "${1:-}" == --fresh-config ]]; then
+    shift
+    if [[ "$#" != 1 && !( "$#" == 2 && "${2:-}" == --once ) ]]; then
+        printf '%s\n' FRESH_WATCH_ARGUMENTS_INVALID >&2; exit 2
+    fi
+    _ags_fresh_wrapper="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/agentstack-runtime-client"
+    if [[ "$#" == 2 ]]; then
+        exec /bin/bash "$_ags_fresh_wrapper" watch-fresh --config "$1" --once
+    fi
+    exec /bin/bash "$_ags_fresh_wrapper" watch-fresh --config "$1"
+fi
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+    printf '%s\n' FRESH_WATCH_CONFIG_REQUIRED >&2; exit 2
+fi
+
 # Global delivery has one coordinator and never enters legacy notify-state.
 _ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
 . "$_ags_global_loader"

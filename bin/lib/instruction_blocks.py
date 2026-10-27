@@ -758,10 +758,10 @@ def instruction_observation(provider, home, wrapper, cwd):
                           for f in result['findings'] if f['block_sha256']]}
 
 
-def provider_instructions(home, provider, wrapper, project, *, configure=False):
+def provider_instructions(home, provider, wrapper, project, *, configure=False, template_home=None):
     if provider not in ('claude','codex'):return
     name='CLAUDE.md' if provider=='claude' else 'AGENTS.md'
-    template=(Path(wrapper)/provider/name).read_bytes()
+    template=(Path(template_home if template_home is not None else wrapper)/provider/name).read_bytes()
     block=render(provider,template,str(wrapper),project)
     path=Path(home)/name
     if path.is_symlink():

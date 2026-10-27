@@ -352,6 +352,60 @@ def _drain_stdin() -> None:
         pass
 
 
+def fresh_hook(payload: Mapping[str, Any]) -> int:
+    """Bounded Desktop IPC path: no Mail client/ORM import or credential read."""
+    if (not os.environ.get('AGENTSTACK_FRESH_CLIENT_CONTEXT')
+            or os.environ.get('AGENTSTACK_RUNTIME_MODE','legacy') not in ('legacy','fresh')
+            or os.environ.get('AGENTSTACK_CLIENT_CONFIG') or os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG')):
+        raise ValueError('fresh context conflict')
+    runtime=Path(os.environ.get('AGENTSTACK_CODEX_APP_RUNTIME_DIR',''))
+    home=Path(os.environ.get('CODEX_HOME',''))
+    if not runtime.is_absolute() or runtime.resolve()!=runtime or not home.is_absolute():
+        raise ValueError('fresh App preparation required')
+    info=runtime.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.getuid() or info.st_mode & 0o077:
+        raise ValueError('unsafe App runtime')
+    fd=os.open(runtime/'settings.json',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    with os.fdopen(fd,'rb') as handle:
+        info=os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_mode & 0o077 or info.st_nlink!=1:
+            raise ValueError('unsafe App settings')
+        raw=handle.read(65537)
+    if len(raw)>65536:raise ValueError('invalid App settings')
+    settings=json.loads(raw)
+    if (settings.get('kind')!='orrery-fresh-app-v1'
+            or settings.get('template_context')!=os.environ['AGENTSTACK_FRESH_CLIENT_CONTEXT']
+            or settings.get('codex_home')!=str(home) or settings.get('runtime_dir')!=str(runtime)):
+        raise ValueError('fresh App settings changed')
+    if not is_codex_desktop_payload(payload,codex_home=home):
+        raise ValueError('Desktop transcript required')
+    event=normalize_event(payload)
+    response=handle_payload(event,socket_path=runtime/'bridge.sock',spool_path=runtime/'hook-events.jsonl')
+    state='queued' if response and response.get('ok') else 'spooled'
+    if event['hook_event_name'] in {'SessionStart','SubagentStart'}:
+        reference=json.dumps(dict(session_id=event['session_id'],agent_id=event['agent_id']))
+        text='Desktop lifecycle '+state+'. Call bootstrap with '+reference+'. Unprepared coordination is refused.'
+        print(json.dumps({'hookSpecificOutput':{'hookEventName':event['hook_event_name'],'additionalContext':text}}),flush=True)
+    notice=response.get('fresh_notification') if response else None
+    if notice is not None:
+        if (notice.get('session_id')!=event['session_id'] or notice.get('agent_id')!=event['agent_id']
+                or not isinstance(notice.get('receipt'),str) or not isinstance(notice.get('notifications'),list)
+                or not all(isinstance(v,str) for v in notice['notifications'])):
+            raise ValueError('invalid notification receipt')
+        sys.stdout.write(json.dumps({'hookSpecificOutput':{'hookEventName':event['hook_event_name'],
+            'additionalContext':'\n'.join(notice['notifications'])}},ensure_ascii=False)+'\n')
+        sys.stdout.flush()
+        # The worker does Mail I/O. Losing this bounded IPC leaves facts pending.
+        receipt=dict(fresh_receipt=notice['receipt'],session_id=event['session_id'],agent_id=event['agent_id'])
+        try:
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
+                connection.settimeout(.15);connection.connect(str(runtime/'bridge.sock'))
+                connection.sendall(json.dumps(receipt).encode()+b'\n')
+                _recv_line(connection,MAX_EVENT_BYTES)
+        except (OSError,TimeoutError):pass
+    return 0
+
+
 def main() -> int:
     """Read one hook payload from stdin and fail open for the Codex task."""
 
@@ -363,6 +417,14 @@ def main() -> int:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             return 0
+        if 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in os.environ or os.environ.get('AGENTSTACK_RUNTIME_MODE')=='fresh':
+            # Desktop has no CLI launch nonce. The existing transcript proves
+            # surface; the worker prepares its own protected child context.
+            try:
+                return fresh_hook(payload)
+            except (ValueError,OSError):
+                print('FRESH_APP_UNAVAILABLE',file=sys.stderr)
+                return 2
         if __package__ in {None, ''}:
             sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
             from agentstack_codex_app.global_runtime import selected_client

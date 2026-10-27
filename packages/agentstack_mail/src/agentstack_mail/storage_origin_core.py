@@ -86,6 +86,13 @@ class StorageOriginCore:
                 ctx._active = False
 
     def _verify(self, proof, records, keys):
+        agent = self._verify_identity(proof, records, keys)
+        if agent.retired_at is not None:
+            raise B1Error('ACTOR_RETIRED')
+        return agent
+
+    def _verify_identity(self, proof, records, keys):
+        """Retained credential check; private host management is its only bypass."""
         proof = Auth.parse(proof)
         agent = records.get(proof.actor_agent_id)
         if agent is None or agent.registration_token is None:
@@ -99,9 +106,25 @@ class StorageOriginCore:
             raise B1Error('OWNER_CREDENTIAL_MISMATCH')
         if agent.credential_generation != proof.expected_credential_generation:
             raise B1Error('CREDENTIAL_GENERATION_MISMATCH')
-        if agent.retired_at is not None:
-            raise B1Error('ACTOR_RETIRED')
         return agent
+
+    def host_target(self, owner, target_proof, target_agent_id):
+        """Same-transaction target capability. Never accepts a wire admin flag."""
+        owner.assert_live(owner.session)
+        target = self._verify_identity(target_proof, owner.records, owner.keys)
+        if target.id != integer(target_agent_id):
+            raise B1Error('OWNER_CREDENTIAL_MISMATCH')
+        return target
+
+    async def host_retire(self, owner, target_proof, target_agent_id):
+        target = self.host_target(owner, target_proof, target_agent_id)
+        if target.id == owner.actor.id:
+            raise B1Error('FRESH_OPERATOR_RETIRE_FORBIDDEN')
+        changed = target.retired_at is None
+        if changed:
+            target.retired_at = datetime.now(timezone.utc)
+            await directory.refresh(owner.session, identity_change=True)
+        return {'changed': changed, 'retired_at': target.retired_at.isoformat()}
 
     async def health(self, expected_server_instance_id=ABSENT):
         async with self._transaction() as s:

@@ -325,7 +325,7 @@ class Handler(BaseHTTPRequestHandler):
             size=int(self.headers['Content-Length']);data=self.rfile.read(size)
             if len(data)!=size:raise ValueError('input_json_invalid')
             payload=mobile_input.decode_json(data)
-            if set(payload)!=mobile_input.OPERATIONS[operation]:raise ValueError('input_json_invalid')
+            if not mobile_input.request_fields(operation,payload):raise ValueError('input_json_invalid')
         except (ValueError,OSError):
             self._send(400,{'error':'input_request_invalid'});return
         finally:
