@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -150,7 +151,8 @@ def test_real_handler_cleanup_and_existing_pc_predicates(tmp_path,monkeypatch):
                 page=(ROOT/'dashboard/index.html').read_text()
                 start=page.index('function canKill(');end=page.index('\n',start)
                 script=page[start:end]+'\nconst a='+json.dumps(a)+';if(!canKill(a)||a.running)process.exit(1);'
-                checked=await asyncio.to_thread(subprocess.run,['/usr/local/bin/node','-e',script],capture_output=True,text=True,timeout=15)
+                node=shutil.which('node');assert node, 'node is required to check the dashboard predicate'
+                checked=await asyncio.to_thread(subprocess.run,[node,'-e',script],capture_output=True,text=True,timeout=15)
                 assert checked.returncode==0,checked.stderr
                 state['attached']=True
                 code,rejected=await asyncio.to_thread(request,'/api/kill',dict(session='Alpha'))
@@ -317,6 +319,8 @@ def test_ended_husk_capture_and_single_resume_are_distinct_from_delivery(tmp_pat
             # Ended husk stays owned; dead native runner/provider are not a
             # reason to weaken the active notification target admission.
             start=processes['process_start'];processes['process_start']=lambda pid,**kw:start(pid) if pid==100 else 'absent'
+            original_snapshot=processes['process_snapshot']
+            processes['process_snapshot']=lambda **kw:{pid:row for pid,row in original_snapshot(**kw).items() if pid==100}
             from agentstack_mail import fresh_delivery
             with pytest.raises(B1Error,match='ENDED'):fresh_delivery.target(parent,ROOT)
             targets=Targets(parent,ROOT)
@@ -330,7 +334,11 @@ def test_ended_husk_capture_and_single_resume_are_distinct_from_delivery(tmp_pat
             assert '--session-id' in resumed[0][0][-1] and row['launch_id'] not in resumed[0][0][-1]
             again=await targets.jump(dict(session='Alpha'),open_terminal=False)
             assert not again['ok'] and len([c for c in commands if c[0][0]=='respawn-pane'])==1
-            with pytest.raises(B1Error,match='ENDED'):await targets.exit(dict(session='Alpha'))
+            # The dispatched resume has an unknown outcome: a present PID must
+            # still prevent cleanup even if the recorded run was ended.
+            processes['process_snapshot']=original_snapshot
+            with pytest.raises(B1Error,match='FRESH_CLEANUP_PROCESS_PRESENT'):await targets.exit(dict(session='Alpha'))
+            assert not any(c[0][0]=='kill-pane' for c in commands)
     asyncio.run(run_test())
 
 

@@ -158,7 +158,7 @@ def test_external_private_tmux_child_two_entries_and_parent_mail(tmp_path,provid
                 'LC_ALL=os.environ.get("LC_ALL"), LC_CTYPE=os.environ.get("LC_CTYPE"))))'+marker,1))
             private=Path(tempfile.mkdtemp(prefix='o213-child-tmux-',dir='/private/tmp'));private.chmod(0o700)
             socket=private/'tmux.sock';tmux=shutil.which('tmux');assert tmux
-            env=environment(parent,AGENTSTACK_RUNTIME_MODE='fresh',AGENTSTACK_PYTHON=sys.executable,
+            env=environment(parent,AGENTSTACK_RUNTIME_MODE='fresh',AGENTSTACK_PYTHON=sys.executable,LC_ALL='C',
                 **{'AGENTSTACK_'+provider.upper()+'_BIN':str(binary)})
             env.pop('TMUX',None);env.pop('TMUX_PANE',None)
             argv=['/bin/bash',str(ROOT/'hooks/spawn_child.sh'),*[a for a in args if a!='--prepare-only']]

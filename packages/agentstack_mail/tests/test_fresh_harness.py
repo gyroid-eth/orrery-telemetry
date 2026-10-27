@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 from uuid import uuid4
+from unittest.mock import patch
 
 import pytest
 
@@ -119,7 +120,11 @@ def fixture(program,tmp,parent_id):
     if program=='dsh':assert node,'existing node required for the actual dsh plugin'
     native='#!'+sys.executable+'\n'+NATIVE.replace('provider=PROVIDER','provider='+repr(program)).replace('NODE',repr(node)).replace('PARENT',str(parent_id)).replace('TRACE',repr(str(tmp/'native-result.json')))
     if program=='dsh':
-        case=dsh_fixture.ThinTests();case.setUp()
+        # macOS TMPDIR may use /var, a symlink to /private/var. Fresh
+        # selection requires a canonical manifest and all receipts must agree.
+        case=dsh_fixture.ThinTests()
+        with patch.object(dsh_fixture.tempfile,'tempdir',str(tmp.resolve())):
+            case.setUp()
         product_copy(case.product)
         case.node.write_text(native);case.node.chmod(0o700)
         save(case.runtime.parent/'evidence/node-runtime.json',dict(version='v24.3.0',execPath=str(case.node),sha256=hashlib.sha256(case.node.read_bytes()).hexdigest()))

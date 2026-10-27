@@ -84,9 +84,17 @@ def test_real_hook_root_sub_recipient_flush_completion_and_uncertain_ipc(tmp_pat
             async def consumed():
                 return [await pair(runtime,m['message_id'],root.context['mail_agent_id']) for m in large]
             deadline=time.monotonic()+15
-            while not all(v[0] is not None for v in await consumed()):
-                assert time.monotonic()<deadline
-                await root_hook();await asyncio.sleep(.1)
+            hook_results=[]
+            while True:
+                states=await consumed()
+                if all(v[0] is not None for v in states):break
+                assert time.monotonic()<deadline, dict(
+                    pending=[m['message_id'] for m,v in zip(large,states) if v[0] is None],
+                    states=states,hook_results=hook_results)
+                result=await root_hook()
+                hook_results.append(dict(returncode=result['returncode'],elapsed=result['elapsed'],
+                    stdout_bytes=len(result['stdout'].encode()),stderr_bytes=len(result['stderr'].encode())))
+                await asyncio.sleep(.1)
             assert all(v[1:]==(None,None) for v in await consumed())
             ambiguous=await send(template,root,'no-flush-receipt')
             raw={k:v for k,v in {**root_event,'hook_event_name':'PostToolUse','schema_version':1}.items() if k!='transcript_path'}
