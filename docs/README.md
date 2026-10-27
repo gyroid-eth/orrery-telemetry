@@ -22,6 +22,7 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 ## 使い方
 
 - [Dashboard](dashboard.md) — DECK/NETWORK、履歴、RESUME/EXIT、REPLAY と詳細の参照。
+- [指定スマホで状況を見る](mobile.md) — 既定オフの閲覧画面、本人認証と端末制限、手動有効化と停止。
 - [委任と child agent](delegation.md) — ORRERY /delegate、組み込み子との違いと渡す道具の選択。
 - [Launcher と identity](launchers.md) — agent-start、名前、resume、/delegate と /log、通知の流れ。
 - [Obsidian と一緒に使う](obsidian.md) — ログ・論文ノート・タスクを vault と Daily Note に置く。
@@ -49,6 +50,7 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 ## 困ったとき
 
 - [トラブルシューティング](troubleshooting.md) — service、通知、spawn、認証、WSL の止まり方を切り分ける。
+- [ローカル HTTP の信頼境界](local-http-security.md) — Dashboard と Mail が受け付ける要求元と、信頼する前提。
 
 ## 設計・開発者向け
 
@@ -60,6 +62,7 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [project 廃止の契約と移行計画](project-removal-plan.md) — PR1 の candidate API と gate。既定の動作は変えず、切替は後続 PR。
 - [絶対 path の予約候補](absolute-reservations.md) — PR2 の normalizer、認証付き隔離 store、client adapter と予約ごとの activity/GC。既定は旧 mode。
 - [Mail と配送の記録の移行候補](namespace-state-migration.md) — PR3 の隔離 snapshot、永続 store と phase ごとの復旧。activation false。
+- [保存元を保つ B1 の内部 kernel](storage-origin-b1.md) — S′ の候補解決・本人操作・pure peek。未公開で、既定の起動経路は変更しない。
 - [global server の S1 準備](global-server.md) — 隔離 HTTP の登録・再接続・inbox・enrollment と authority epoch。既定は旧 mode。
 - [隔離 global 予約・welcome](global-reservations.md) — S2c の唯一 SQL engine、TTL、管理復旧、試験移設。既定は旧 mode。
 - [隔離 global message と通知（S2b）](global-messages.md) — 8 tool・DB 添付・純粋 inbox・signal の再照合。既定は旧 mode。

@@ -124,10 +124,55 @@ def test_fresh_core_install_omits_provider_payload_and_runs_core_server(tmp_path
         assert not (install_dir / relative).exists(), relative
     for relative in ("dashboard/server.py", "dashboard/service_runner.py",
                      "dashboard/global_page.py", "dashboard/global_shell.html", "dashboard/global_ui.js",
-                     "dashboard/global_ui.css", "dashboard/mail_flow.js", "dashboard/network_node.js",
+                     "dashboard/global_ui.css", "dashboard/mail_flow.js", "dashboard/network_node.js", "dashboard/network_core.js",
                      "hooks/spawn_child.sh", "hooks/cleanup-child-agent.sh",
                      "hooks/project-context.sh"):
         assert (install_dir / relative).read_bytes() == (ROOT / relative).read_bytes(), relative
+    for relative in ("dashboard/mobile_relay.py", "dashboard/mobile_projection.py", "dashboard/mobile_input.py",
+                     *(str(p.relative_to(ROOT)) for p in (ROOT / "dashboard/mobile").rglob("*") if p.is_file())):
+        assert (install_dir / relative).read_bytes() == (ROOT / relative).read_bytes(), relative
+    checked = subprocess.run([sys.executable, str(install_dir / "dashboard/mobile_relay.py"),
+                              "--check", "--owner-login", "owner@example.test",
+                              "--public-origin", "https://viewer.example.ts.net:9443"],
+                             env={"HOME":str(tmp_path / "reader-home"),"PATH":"/usr/bin:/bin"},
+                             capture_output=True, text=True, check=False)
+    assert checked.returncode == 0 and "No listener started" in checked.stdout, checked.stderr
+    # Run the installed relay and its installed imports, rather than accidentally
+    # borrowing source-tree helpers/assets through this pytest process.
+    logo_probe = r'''
+import hashlib,http.client,json,pathlib,sys,threading
+import mobile_relay as relay
+here=pathlib.Path.cwd().resolve()
+assert pathlib.Path(relay.__file__).resolve().parent==here
+assert pathlib.Path(sys.modules[relay.SnapshotStore.__module__].__file__).resolve().parent==here
+assert pathlib.Path(relay.admission.__file__).resolve().parent==here
+assert pathlib.Path(relay.mobile_input.__file__).resolve().parent==here
+class NoObservation:
+    def snapshot(self,*args):raise AssertionError('asset GET must not observe upstream')
+server=relay.make_server(relay.Config('owner@example.test','https://viewer.example.ts.net:9443'),store=NoObservation(),test_port=0)
+worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start();result={}
+try:
+    for logo in ('orbit','anthropic','openai','google','deepseek','qwen'):
+        c=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=3)
+        try:
+            c.request('GET','/assets/'+logo+'.svg',headers={'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test'})
+            response=c.getresponse();body=response.read()
+            result[logo]={'status':response.status,'mime':response.getheader('Content-Type'),'bytes':len(body),'sha256':hashlib.sha256(body).hexdigest()}
+        finally:c.close()
+finally:
+    server.shutdown();server.server_close();worker.join(3);assert not worker.is_alive()
+print(json.dumps(result))
+'''
+    logos = subprocess.run([sys.executable, "-c", logo_probe], cwd=install_dir / "dashboard",
+                           env={"HOME":str(tmp_path / "reader-home"),"PATH":"/usr/bin:/bin"},
+                           capture_output=True, text=True, check=False)
+    assert logos.returncode == 0, logos.stderr
+    import hashlib
+    for logo, row in json.loads(logos.stdout).items():
+        source=(ROOT / "integrations/dsh/assets/deepseek.svg" if logo=="deepseek"
+                else ROOT / "dashboard/assets" / (logo+".svg"))
+        assert row["status"]==200 and row["mime"]=="image/svg+xml", (logo,row)
+        assert row["bytes"]>0 and row["sha256"]==hashlib.sha256(source.read_bytes()).hexdigest(), (logo,row)
     assert (install_dir / "dashboard" / "providers" / "codex_app.py").is_file()
     for source, installed in (
         ("bin/lib/global-client-loader.sh", "global-client-loader.sh"),

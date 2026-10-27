@@ -19,13 +19,28 @@ def render(template=SHARED):
     return renderer.render('harness', template, '/fixture/install', '/fixture/project')
 
 
+def test_native_task_rules_are_short_and_omit_orrery_child_creation_procedures():
+    output = render()
+    # A compact launch document, without changing native helper capabilities.
+    assert len(output.split()) < 1000
+    assert not any(command in output for command in (
+        b'agentstack-preregister-child', b'spawn_child.sh', b'### Raw/direct connection and recovery',
+        b'## Deterministic daemon development'))
+    for rule in (b'private scratch', b'outside the project', b'ttl_seconds', b'600',
+                 b'reserve_files', b'renew_reservations', b'release_reservations',
+                 b'caller identity', b'fetch_inbox', b'polling', b'exact failure'):
+        assert rule in output
+
+
 def test_neutral_identity_and_all_shared_sections_are_kept_byte_for_byte():
     output = render()
     assert not any(word in output.lower() for word in (b'codex', b'claude-code', b'claude code'))
     assert b'__ORRERY_' not in output and b'<!-- include:' not in output
     template = (ROOT / 'bin/lib/harness_instructions.md').read_bytes()
     includes = re.findall(rb'^<!-- include: (.+) UNTIL (.+) -->$', template, re.M)
-    assert len(includes) == 5
+    # Keep the common startup, fail-closed, pointer and notification rules.
+    # Recovery and ORRERY child-creation procedures are outside this document.
+    assert len(includes) == 4
     expanded = renderer.render('codex', SHARED, '/fixture/install', '/fixture/project')
     for start, end in includes:
         section = expanded[expanded.index(start + b'\n'):expanded.index(end + b'\n')]
@@ -36,10 +51,11 @@ def test_neutral_identity_and_all_shared_sections_are_kept_byte_for_byte():
     assert renderer.parse(output)[2] == 'harness'
 
 
+@pytest.mark.parametrize('start,end', re.findall(
+    rb'^<!-- include: (.+) UNTIL (.+) -->$',
+    (ROOT / 'bin/lib/harness_instructions.md').read_bytes(), re.M))
 @pytest.mark.parametrize('mutation', ['missing', 'duplicate', 'reversed'])
-def test_shared_boundary_changes_fail_instead_of_silently_dropping_rules(mutation):
-    start = b'### 1. Embedded canonical task'
-    end = b'### 3. Raw/direct connection after shell registration'
+def test_shared_boundary_changes_fail_instead_of_silently_dropping_rules(mutation, start, end):
     if mutation == 'missing':
         broken = SHARED.replace(start, b'### Renamed embedded task')
     elif mutation == 'duplicate':

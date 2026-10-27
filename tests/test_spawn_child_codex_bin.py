@@ -381,11 +381,11 @@ def test_model_policy_and_api_use_the_child_runner_and_selected_binary(tmp_path,
         }))
         assert models.cli_version() == tuple(map(int, version.split(".")))
         resolved = "gpt-6-sol" if slug == "gpt-6-sol" else expected
-        for requested in ("", "sol"):
-            assert models.normalize_model(requested) == resolved
-            assert server.do_spawn({"standalone": True, "task": "regression", "provider": "codex", "model": requested}) == {"ok": True}
-            assert specs[-1].model == resolved
-            assert dict(specs[-1].launcher_env)["AGENTSTACK_CODEX_BIN"] == str(binary)
+        with pytest.raises(ValueError, match="no eligible sol"):
+            models.normalize_model("sol")
+        assert server.do_spawn({"standalone": True, "task": "regression", "provider": "codex", "model": ""}) == {"ok": True}
+        assert specs[-1].model == resolved
+        assert dict(specs[-1].launcher_env)["AGENTSTACK_CODEX_BIN"] == str(binary)
         result = subprocess.run([sys.executable, str(ROOT / "dashboard" / "codex_models.py"), "resolve", ""], capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, result.stderr
         payload = json.loads(result.stdout)
@@ -443,10 +443,10 @@ def test_slow_usable_cli_keeps_launcher_api_and_delegate_defaults_stable(tmp_pat
         for slug in ("gpt-6.1-sol", "gpt-6-sol", "gpt-6.1-sol"):
             (catalog / "models_cache.json").write_text(json.dumps({"fetched_at": datetime.now(timezone.utc).isoformat(), "models": [{"slug": slug, "visibility": "list"}]}))
             resolved = "gpt-6-sol" if slug == "gpt-6-sol" else expected
-            for requested in ("", "sol"):
-                assert server.do_spawn({"standalone": True, "task": "work", "provider": "codex", "model": requested}) == {"ok": True}
-                assert specs[-1].model == resolved
-                assert dict(specs[-1].launcher_env)["AGENTSTACK_CODEX_BIN"] == str(binary)
+            assert "no eligible sol" in server.do_spawn({"standalone": True, "task": "work", "provider": "codex", "model": "sol"})["error"]
+            assert server.do_spawn({"standalone": True, "task": "work", "provider": "codex", "model": ""}) == {"ok": True}
+            assert specs[-1].model == resolved
+            assert dict(specs[-1].launcher_env)["AGENTSTACK_CODEX_BIN"] == str(binary)
             # The actual launcher's normalize_codex_model calls this command
             # after prime with the selected binary; exercise that boundary.
             result = subprocess.run([sys.executable, str(ROOT / "dashboard" / "codex_models.py"), "normalize", ""], env={**os.environ, "AGENTSTACK_CODEX_BIN": selected}, capture_output=True, text=True, timeout=20)

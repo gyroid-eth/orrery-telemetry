@@ -138,6 +138,8 @@ and [try one agent](../../docs/native-setup.en.md#6-try-one-agent-from-new-agent
 
 ## A: missing runtimes, model changes and adjustments
 
+For dsh, the generated `standard`, `ptc`, and `cordis` presets apply compaction budgets only to the selected provider/model route. For context `C` and output `O`, headroom is `floor(C/10)`, summary output is `min(O, headroom)`, threshold ratio is 0.8, and retention ratio is 0.16. The native threshold is `floor(min(C*0.8, C-O-headroom))`; retention is `floor((C-O)*0.16)`. For `C=131072` and `O=8192`, these yield threshold 104857, headroom 13107, summary cap 8192, and retention 19660. Actual request output settings and server capacity can differ. A model switch does not reuse the previous model's policy; `minimal` retains its native configuration. Fixed backends receive this policy only when their model ID matches and both context and output budgets are valid. Otherwise native defaults remain and `launch.json` records the reason in `compaction`. Dynamic contexts below 16 are rejected rather than silently replaced. See [dsh compaction policy](../../docs/dsh-thin.md#compaction-の予算).
+
 The static [manifest](manifest.example.json), [dsh config](dsh-config.example.json),
 [dsh backends](dsh-backends.example.json) and [Hermes config](hermes-config.example.json)
 are incomplete. `<ABS_...>` placeholders cannot be launched. An existing agent may help resolve
@@ -150,6 +152,43 @@ Main/helper models must use formal IDs in the same backend. Do not add trial eff
 lifetime or large context/output caps.
 
 ### Switching to Local / Strata
+
+<a id="dynamic-local-connections"></a>
+
+#### Dynamic connections (recommended)
+
+Use this once for each Local connection, including existing workstation/remote connections. Keep distinct IDs and user-chosen labels. In the private manifest, replace that connection's `model` / `models` fields with:
+
+```json
+"local-workstation": {
+  "kind": "strata",
+  "label": "Workstation",
+  "model_source": "server",
+  "urls": ["https://llm.example.com/v1", "https://second.example.com/v1", "https://third.example.com/v1"],
+  "context_override": 64000
+}
+```
+
+`urls` accepts one or more distinct configured API bases, with no two-URL/GPU limit. A base ending in `/v1` is used directly; otherwise `/v1` is appended. No credentials, query or fragment belong in a URL. Keep only URLs that use the same connection's credential. Use another connection ID for a different credential. Request concurrency is two and each HTTP request has a three-second timeout; more configured URLs can take longer to list.
+
+Keep the same connection ID in the dsh backend map and Hermes profile map. For dynamic mode, dsh needs its existing `keychain` selector, or the manifest's Linux `credential_ref`; its old `model`, `model_definition` and `base_url` are no longer authoritative and can be removed. Hermes keeps its non-builtin `provider` name and existing credential reference; remove the old per-model `model`, `context_length`, `base_url` and `api_mode` from that profile. The manifest URL supplies Hermes's `chat_completions` route. No second model list or URL update is needed in these files. Runtime receipts, paths and key protections are unchanged. Mac model discovery accepts the canonical `/usr/bin/security find-generic-password -s SERVICE -a ACCOUNT -w` reference; it does not run arbitrary `key_cmd` helpers.
+
+The optional `context_override` is a fallback when the same selected model row has no valid `meta.n_ctx`; otherwise that row's reported context wins. Without either, the common default is64,000 tokens. The picker labels `server`, `override` or `default`; these last two are settings, not measurements. For a dynamic dsh model, the generated output limit is `min(8192, floor(context/4))` tokens. Effort is unreported and omitted, and helper stays Same as main. A valid `data[].id` is selectable with absent or unknown status; only `status.value: unloaded` disables it. IDs, not labels, are sent to the native harness. Equal IDs on different connections or URL numbers remain distinct.
+
+For static checks, use the verified Python with `hooks/harness_child.py validate --manifest <private-manifest> --harness <dsh|hermes> --backend <connection-id> --url-index <zero-based-index> --model <id>`. This makes no request and reads no key. Use the normal reviewed `--keep-mail --managed-spawn-config <absolute-manifest>` install procedure once, then reload both NEW AGENT screens. They fetch models using the existing key reference. Each actual launch/exact resume performs one selected-URL `/v1/models` lookup; a missing ID, explicit unloaded status or failure refuses rather than choosing another model. The catalog's `url_key` binds the selected configured URL through POST/launcher; a changed/reordered URL requires a fresh selection. Exact resume retains the original connection/URL/model; old fixed sessions need a manual decision if that connection was migrated. Keep the old copy for ordinary manual rollback.
+
+Model-list examples from primary documentation (URLs illustrate server setup, not universal harness compatibility):
+
+- [llama.cpp](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md): with an explicit `--port 8080`, the API base is `http://localhost:8080/v1`.
+- [LM Studio](https://lmstudio.ai/docs/developer/openai-compat/models): `http://localhost:1234/v1`; JIT loading can list downloaded models, so absence of status is not a loaded claim.
+- [vLLM](https://docs.vllm.ai/en/latest/getting_started/quickstart/): `http://localhost:8000/v1`; configure authentication on the server as required by your deployment.
+- [Ollama](https://docs.ollama.com/api/openai-compatibility): `http://localhost:11434/v1`; its local API ignores the client's key, while ORRERY's existing key-reference requirement remains.
+
+Discovery accepts HTTP/HTTPS. dsh still uses its existing DeepSeek Messages adapter and needs a compatible Messages endpoint; a model-list response alone does not prove that compatibility. Hermes still requires HTTPS and uses OpenAI chat completions in dynamic mode. An HTTP-only example therefore is not directly usable with Hermes. This change adds no transport adapter, TLS exception or model-control operation. The final observation does not prevent a subsequent model change or detect a server that ignores the selected ID.
+
+#### Existing fixed-model connections (compatibility)
+
+To keep an existing Local server and add another, follow [multiple connections](../../docs/configuration.en.md#native-connections). Add the same new connection ID to the manifest, dsh backend map, and Hermes profile map instead of replacing the existing connection.
 
 B's standard examples target DeepSeek. For Local, use backend ID `strata` and align these
 fields in the private copy with the same destination. Keep runtime references and copied-file

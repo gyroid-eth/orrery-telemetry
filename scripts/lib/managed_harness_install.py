@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -27,11 +28,34 @@ from scripts.write_install_stamp import write_stamp
 info = get_version_info()
 if info.commit != sys.argv[1]:
     raise ValueError('Hermes version provenance does not match the pinned commit')
+if info.dirty is not True:
+    raise ValueError('Hermes CA inputs must be recorded as a dirty source build')
 write_stamp('install-stamp.json', update_mechanism='external', commit=info.commit,
     branch=info.branch, dirty=info.dirty, commit_date=info.commit_date,
     base_version=None if info.base_version == 'unknown' else info.base_version,
     display_version=info.derived_version, distance=info.distance, source='local')
 '''
+HERMES_TARGET_SCRIPT = '''import platform,sys
+arch = {'arm64':'arm64','aarch64':'arm64','x86_64':'x64','amd64':'x64'}.get(platform.machine().lower())
+os_name = 'darwin' if sys.platform == 'darwin' else 'linux' if sys.platform.startswith('linux') and not hasattr(sys,'getandroidapilevel') and platform.libc_ver()[0] == 'glibc' else None
+if not arch or not os_name:
+    raise SystemExit('Hermes CA recipe supports macOS and GNU/Linux only; Bionic is unsupported')
+print(os_name + '-' + arch)
+'''
+HERMES_CA_PROBE_SCRIPT = '''import certifi,importlib.metadata,json
+from pathlib import Path
+d=importlib.metadata.distribution('certifi')
+metadata=next(f for f in d.files if str(f).endswith('.dist-info/METADATA'))
+print(json.dumps({'bundle':str(Path(certifi.where()).resolve()),'metadata':str(Path(d.locate_file(metadata)).resolve())}))
+'''
+
+
+def hermes_ca():
+    path = Path(__file__).resolve().parents[2] / 'integrations/hermes/ca_recipe.py'
+    spec = importlib.util.spec_from_file_location('_managed_hermes_ca', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def hermes_stamp_details(source):
@@ -156,15 +180,87 @@ def install_dsh(repo, root, node, cache=None, *, datadir=True):
             'variant': variant, 'thin_config_contract': 1}
 
 
+def _hermes_owned_path(path, *, directory=False, private=False):
+    metadata = path.lstat()
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if (not expected_type(metadata.st_mode) or metadata.st_uid != os.getuid()
+            or private and metadata.st_mode & 0o022):
+        raise ValueError('Unsafe owned Hermes source path: ' + str(path))
+
+
+def _hermes_local_source(root, env):
+    base = root.parent
+    if base.name != 'hermes' or base.parent.name != 'harnesses':
+        return None
+    _hermes_owned_path(base.parent, directory=True)
+    _hermes_owned_path(base, directory=True)
+    pattern = re.escape(HERMES_COMMIT[:16]) + r'-(?:v[12]|ca1-[0-9a-f]{16})'
+    for generation in sorted(base.iterdir()):
+        if generation == root or not re.fullmatch(pattern, generation.name):
+            continue
+        _hermes_owned_path(generation, directory=True)
+        owner = generation / OWNER
+        if not owner.exists() and not owner.is_symlink():
+            continue
+        _hermes_owned_path(generation, directory=True, private=True)
+        _hermes_owned_path(owner, private=True)
+        receipt = read(owner)
+        source = generation / 'source'
+        details = receipt.get('details') if isinstance(receipt, dict) else None
+        if (not isinstance(details, dict) or receipt.get('harness') != 'hermes'
+                or receipt.get('complete') is not True or receipt.get('hermes_commit') != HERMES_COMMIT
+                or details.get('managed_root') != str(generation)
+                or details.get('hermes_source') != str(source)):
+            raise ValueError('Owned Hermes source receipt mismatch')
+        # Old v1/v2 receipts need no CA evidence: only their immutable pinned
+        # Git object is reused. Never copy their worktree or validate their PM.
+        for directory in (source, source / '.git', source / '.git/objects'):
+            _hermes_owned_path(directory, directory=True)
+        for relative in ('HEAD', 'config', 'objects/info', 'objects/pack'):
+            path = source / '.git' / relative
+            if path.exists() or path.is_symlink():
+                _hermes_owned_path(path, directory=relative.startswith('objects/'))
+        for relative in ('commondir', 'objects/info/alternates'):
+            path = source / '.git' / relative
+            if path.exists() or path.is_symlink():
+                raise ValueError('External owned Hermes Git object storage is unsupported')
+        try:
+            commit = run(['git', 'rev-parse', '--verify', '--quiet', HERMES_COMMIT + '^{commit}'], cwd=source, env=env)
+        except subprocess.CalledProcessError as error:
+            if error.returncode == 1:  # Absent fixed object, not a Git failure.
+                continue
+            raise
+        if commit != HERMES_COMMIT:
+            raise ValueError('Owned Hermes source commit mismatch')
+        return source
+    return None
+
+
 def install_hermes(repo, root, python, cache=None):
     env = environment(root)
     save(root / 'config.yaml', {'auth': {'adopt_external_logins': False}, 'updates': {'check': False},
          'telemetry': {'shared_metrics': {'enabled': False, 'send': False}}})
     source = root / 'source'
-    run(['git', 'clone', '--no-checkout', str(Path(cache) / 'hermes-agent') if cache else HERMES_URL, str(source)], cwd=root, env=env)
+    if cache:
+        # Explicit cache failures remain failures; do not search or fetch.
+        run(['git', 'clone', '--no-checkout', str(Path(cache) / 'hermes-agent'), str(source)], cwd=root, env=env)
+    else:
+        local = _hermes_local_source(root, env)
+        if local:
+            # Preserve release tags/history for upstream version gates, without
+            # copying dirty worktree files or sharing the donor's object files.
+            run(['git', 'clone', '--no-checkout', '--no-hardlinks', str(local), str(source)], cwd=root, env=env)
+            run(['git', 'remote', 'set-url', 'origin', HERMES_URL], cwd=source, env=env)
+        else:
+            run(['git', 'clone', '--no-checkout', HERMES_URL, str(source)], cwd=root, env=env)
     run(['git', 'checkout', '--detach', HERMES_COMMIT], cwd=source, env=env)
     if run(['git', 'rev-parse', 'HEAD'], cwd=source, env=env) != HERMES_COMMIT:
         raise ValueError('Hermes commit mismatch')
+    ca = hermes_ca()
+    recipe = ca.apply(repo, source)
+    policy, _, _ = ca.load(repo)
+    target = run([python, '-I', '-B', '-c', HERMES_TARGET_SCRIPT], cwd=source, env=env)
+    ca.target_artifact(policy, target, source)
     # Resolve provenance only at install time using the pinned upstream writer.
     # source=local avoids its git-stamp live-HEAD probe during runtime import;
     # external keeps updates owned by this installer, without changing PM paths.
@@ -174,23 +270,26 @@ def install_hermes(repo, root, python, cache=None):
     # login import, browser, or computer-use installer is invoked.
     # PM rejects --without combined with --extra. First prepare its default
     # closure and persist the optional-tool opt-outs, then add the provider SDK.
-    run([python, '-m', 'pm.cli', 'install', '--without', 'agent-browser',
-         '--without', 'cua-driver'], cwd=source, env=env)
-    run([python, '-m', 'pm.cli', 'install', '--extra', 'anthropic'], cwd=source, env=env)
+    for arguments in (['--without', 'agent-browser', '--without', 'cua-driver'], ['--extra', 'anthropic']):
+        ca.verify_inputs(source, policy, 'after')
+        run([python, '-m', 'pm.cli', 'install', *arguments], cwd=source, env=env)
+        ca.verify_inputs(source, policy, 'after')
     key = hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
     install = root / 'installs' / key
     generation = Path(read(install / 'facts.json')['packages']['venv']['environment']).resolve()
     executable = generation / 'bin/hermes'
     if not generation.is_relative_to((install / 'environments').resolve()) or not executable.is_file():
         raise ValueError('Hermes PM did not publish a committed runtime')
+    paths = json.loads(run([str(generation / 'bin/python'), '-I', '-B', '-c', HERMES_CA_PROBE_SCRIPT], cwd=source, env=env))
+    proof = ca.runtime_evidence(repo, root, source, generation, target, paths)
     print('Hermes: existing manual homes/logins are untouched; no credentials were installed.')
     return {'hermes_source': str(source), 'managed_root': str(root), 'hermes_executable': str(executable),
-            'variant': 'plain', 'thin_config_contract': 1, **stamp}
+            'variant': 'plain', 'thin_config_contract': 1, 'ca_recipe': recipe, 'ca_evidence': proof, **stamp}
 
 
 def generation_id(repo, harness, *, datadir=True):
     if harness == 'hermes':
-        return HERMES_COMMIT[:16] + '-v2'
+        return HERMES_COMMIT[:16] + '-ca1-' + hermes_ca().load(repo)[2][:16]
     inputs = ['runtime-pins.json', 'runtime-package-lock.json', 'ui-package.json', 'ui-package-lock.json']
     if datadir:
         inputs.append('tui-datadir.patch.json')
@@ -245,6 +344,7 @@ def validate(repo, harness, receipt):
                 or not os.access(generation / 'bin/hermes', os.X_OK)
                 or not os.access(generation / 'bin/python', os.X_OK)):
             raise ValueError('Hermes committed runtime is missing or changed')
+        hermes_ca().validate_static(repo, details)
 
 
 def provision(repo, install, harness, choice='keep', node='', python=sys.executable,
@@ -266,19 +366,6 @@ def provision(repo, install, harness, choice='keep', node='', python=sys.executa
             raise ValueError('Runtime generation exists without installer ownership')
         receipt = read(root / OWNER)
         validate(repo, harness, receipt)
-        if harness == 'hermes' and root.name == HERMES_COMMIT[:16] + '-v2' and 'variant' not in receipt:
-            # v2's source is upstream-native already. Adopt only a validated,
-            # pristine owned tree; a failed stamp/runtime/source check leaves
-            # its receipt byte-for-byte unchanged. Never migrate v1.
-            details = receipt['details']
-            try:
-                run(['git', 'diff', '--quiet', HERMES_COMMIT, '--', '.'],
-                    cwd=Path(details['hermes_source']), env=environment(root))
-            except subprocess.CalledProcessError:
-                raise ValueError('Hermes v2 source changed; plain metadata was not updated') from None
-            receipt = {**receipt, 'variant': 'plain', 'thin_config_contract': 1,
-                       'details': {**details, 'variant': 'plain', 'thin_config_contract': 1}}
-            save(root / OWNER, receipt)
     else:
         root.mkdir(parents=True, mode=0o700)
         try:

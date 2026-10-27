@@ -58,7 +58,7 @@ fi
 #   --model sonnet-5-5 / sonnet55 → claude-sonnet-5-5、sonnet-5 / sonnet5 → claude-sonnet-5（版つき）
 #   --model haiku/fable  → 現行の Haiku / Fable（同じ解決）。haiku-4-5 / fable-5-1 は版つき
 #   版の区切りは . でもよい（sonnet-5.5 / sonnet5.5 / opus-5.5 → それぞれ 5-5 と同じ）
-#   --codex --model 省略 → gpt-6.1-sol（CLI が古ければ gpt-6-sol、版不明なら catalog 判定）。sol も同じ。luna / astra → GPT-6、terra → GPT-5.6。
+#   --codex --model 省略 → 設定された既定、なければ従来の CLI/catalog 判定。sol / luna / astra / terra は新鮮な catalog の各系統の最新版。
 #   未知の形             → 明確なエラーで停止（claude-* 接頭の正式 ID は前方互換で素通り）
 #   ※ 正規化は normalize_claude_model() / normalize_codex_model() が担当。warm pool は要求モデルが
 #     事前起動モデル（opus / sonnet の別名の解決結果）と
@@ -274,6 +274,8 @@ open_child_terminal() {
 USE_CODEX=false
 HARNESS=""
 HARNESS_BACKEND=""
+HARNESS_URL_INDEX=""
+HARNESS_URL_KEY=""
 HARNESS_HELPER_MODEL=""
 HARNESS_STATE=""
 HARNESS_HELPER="${AGENTSTACK_HARNESS_CHILD_HELPER:-$HOOKS_DIR/harness_child.py}"
@@ -337,6 +339,22 @@ while [[ "${1:-}" == --* ]]; do
                 exit 1
             fi
             HARNESS_HELPER_MODEL="$2"
+            shift 2
+            ;;
+        --url-index)
+            if [[ $# -lt 2 || ! "${2:-}" =~ ^[0-9]+$ ]]; then
+                echo "Error: --url-index requires a nonnegative integer" >&2
+                exit 1
+            fi
+            HARNESS_URL_INDEX="$2"
+            shift 2
+            ;;
+        --url-key)
+            if [[ $# -lt 2 || ! "${2:-}" =~ ^[0-9a-f]{64}$ ]]; then
+                echo "Error: --url-key requires a configured URL fingerprint" >&2
+                exit 1
+            fi
+            HARNESS_URL_KEY="$2"
             shift 2
             ;;
         --model)
@@ -441,8 +459,8 @@ done
 
 if [[ -n "$HARNESS" || -n "$HARNESS_BACKEND" ]]; then
     case "$HARNESS:$HARNESS_BACKEND" in
-        dsh:deepseek|dsh:strata|hermes:deepseek|hermes:strata) ;;
-        *) echo "Error: --harness dsh|hermes requires --backend deepseek|strata" >&2; exit 1 ;;
+        dsh:?*|hermes:?*) ;; # The shared helper validates the declared connection below.
+        *) echo "Error: --harness dsh|hermes requires --backend CONNECTION_ID" >&2; exit 1 ;;
     esac
     if [[ "$USE_CODEX" == true || "$CODEX_MCP_PROFILE_CLI" == true \
         || "$CLAUDE_CHILD_CHROME_CLI" == true ]]; then
@@ -451,7 +469,14 @@ if [[ -n "$HARNESS" || -n "$HARNESS_BACKEND" ]]; then
     fi
     "${AGENTSTACK_PYTHON:-python3}" "$HARNESS_HELPER" validate --harness "$HARNESS" \
         --backend "$HARNESS_BACKEND" --model "$CLAUDE_MODEL" \
-        --manifest "${AGENTSTACK_MANAGED_SPAWN_CONFIG:-}" ${CODEX_EFFORT:+--effort "$CODEX_EFFORT"} || exit 1
+        --manifest "${AGENTSTACK_MANAGED_SPAWN_CONFIG:-}" ${HARNESS_URL_INDEX:+--url-index "$HARNESS_URL_INDEX"} \
+        ${HARNESS_URL_KEY:+--url-key "$HARNESS_URL_KEY"} \
+        ${CODEX_EFFORT:+--effort "$CODEX_EFFORT"} || exit 1
+fi
+
+if [[ ( -n "$HARNESS_URL_INDEX" || -n "$HARNESS_URL_KEY" ) && -z "$HARNESS" ]]; then
+    echo "Error: --url-index requires --harness" >&2
+    exit 1
 fi
 
 if [[ -n "$HARNESS_HELPER_MODEL" && -z "$HARNESS" ]]; then
@@ -3061,6 +3086,8 @@ start_harness_child() {
     [[ -n "$tools_spec" ]] || tools_spec='{"base":"default","tools":{}}'
     [[ -z "$CODEX_EFFORT" ]] || native_args=(--effort "$CODEX_EFFORT")
     [[ -z "$HARNESS_HELPER_MODEL" ]] || native_args+=(--helper-model "$HARNESS_HELPER_MODEL")
+    [[ -z "$HARNESS_URL_INDEX" ]] || native_args+=(--url-index "$HARNESS_URL_INDEX")
+    [[ -z "$HARNESS_URL_KEY" ]] || native_args+=(--url-key "$HARNESS_URL_KEY")
     HARNESS_STATE="$("${AGENTSTACK_PYTHON:-python3}" "$HARNESS_HELPER" prepare \
         --runtime-dir "$RUNTIME_DIR" --agent-name "$CHILD_NAME" --project-key "$PROJECT_KEY" \
         --harness "$HARNESS" --backend "$HARNESS_BACKEND" --model "$CHILD_MODEL" \

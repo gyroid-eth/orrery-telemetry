@@ -148,3 +148,58 @@ def test_directory_suggestions_return_the_whole_listing_for_prefix_filtering(tmp
     names = [row["name"] for row in payload["dirs"]]
     assert names[-1] == "29_folder", "a 20-row cap hid the tail of the listing from the prefix filter"
     assert payload["truncated"] is False
+
+
+def _fixture_png():
+    import struct,zlib
+    def chunk(kind,data):
+        return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data)&0xffffffff)
+    return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',1,1,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(b'\0\xff\xc0\x40'))+chunk(b'IEND',b'')
+
+
+def test_mobile_portrait_uses_custom_then_science_and_bounded_png(tmp_path):
+    overlay=tmp_path/'fictional-faces';overlay.mkdir();png=_fixture_png()
+    (overlay/'mascot.png').write_bytes(png)
+    (overlay/'corrupt.png').write_bytes(b'not a PNG')
+    mapping=tmp_path/'fictional-map.json'
+    mapping.write_text(json.dumps({'FixtureBot':'mascot','BlueCurie':'missing','BadCurie':'../invalid','CorruptCurie':'corrupt'}))
+    srv=_load_server(tmp_path,AGENTSTACK_PORTRAITS_DIR=str(overlay),AGENTSTACK_CUSTOM_PORTRAITS=str(mapping))
+    for name in ('FixtureBot','FIXTUREBOT'):
+        status,body,mime=srv.mobile_portrait_payload(name)
+        assert status==200 and mime=='image/png' and body==png
+    for name in ('SunnyCurie','BlueCurie','BadCurie','CorruptCurie'):
+        status,body,mime=srv.mobile_portrait_payload(name)
+        assert status==200 and body==(ROOT/'dashboard/portraits_64/Curie.png').read_bytes()
+    assert srv.mobile_portrait_payload('UnknownFixture')[0]==404
+    for name in ('../Curie','a/b','a%2fb','http://other',''):
+        assert srv.mobile_portrait_payload(name)[0]==400
+    (overlay/'mascot.png').write_bytes(b'<svg onload="bad()"/>')
+    assert srv.mobile_portrait_payload('FixtureBot')[0]==404
+    (overlay/'mascot.png').write_bytes(png+b'x'*524288)
+    assert srv.mobile_portrait_payload('FixtureBot')[0]==404
+
+
+def test_mobile_portrait_real_dashboard_route_keeps_global_and_query_guards(tmp_path,monkeypatch):
+    import http.client,threading
+    from _dashboard_http_fixture import dashboard_http_fixture,OfflineQuotaService
+    overlay=tmp_path/'fictional-faces';overlay.mkdir();png=_fixture_png()
+    (overlay/'fixturebot.png').write_bytes(png)
+    srv=_load_server(tmp_path,AGENTSTACK_PORTRAITS_DIR=str(overlay))
+    monkeypatch.setattr(srv,'QUOTA_SERVICE',OfflineQuotaService())
+    httpd=dashboard_http_fixture(srv);worker=threading.Thread(target=httpd.serve_forever,daemon=True);worker.start()
+    def get(query):
+        c=http.client.HTTPConnection('127.0.0.1',httpd.server_port,timeout=3)
+        try:
+            c.request('GET','/api/mobile-portrait'+query);r=c.getresponse();return r.status,dict(r.getheaders()),r.read()
+        finally:c.close()
+    try:
+        status,headers,body=get('?name=FixtureBot')
+        assert status==200 and headers['Content-Type']=='image/png' and body==png
+        assert headers['Cache-Control']=='no-store'
+        assert get('?name=FixtureBot&name=Other')[0]==400
+        monkeypatch.setattr(srv,'GLOBAL_MODE',True)
+        monkeypatch.setattr(srv,'_portrait_file',lambda *args: (_ for _ in ()).throw(AssertionError('no legacy portrait read')))
+        assert srv.mobile_portrait_payload('FixtureBot')[0]==501
+        assert get('?name=FixtureBot')[0] in (501,503)
+    finally:
+        httpd.shutdown();httpd.server_close();worker.join(3);assert not worker.is_alive()

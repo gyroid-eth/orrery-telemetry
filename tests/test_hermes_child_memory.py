@@ -179,6 +179,10 @@ class ChildMemory(unittest.TestCase):
             target = product / 'integrations/hermes' / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / 'integrations/hermes' / name, target)
+        helper = product / 'hooks/native_connections.py'
+        helper.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / 'hooks/native_connections.py', helper)
+        shutil.copyfile(ROOT / 'hooks/native_server_models.py', helper.with_name('native_server_models.py'))
         source = self.fixture.base / 'installed-input.json'
         output = self.fixture.base / 'installed-plan.json'
         self.fixture.save(source, {**self.document, 'product_root': str(product)})

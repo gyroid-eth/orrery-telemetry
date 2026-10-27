@@ -150,6 +150,45 @@ model変更時も主/helperは同じbackendの正式IDだけを許可し、effor
 
 ### Local / Strataへ変更する場合
 
+<a id="dynamic-local-connections"></a>
+
+#### 動的接続（推奨）
+
+既存のworkstation／remoteを含め、対象Localをそれぞれ一度だけ移行します。接続IDと本人が付けた表示名を区別し、私有manifestのその接続の `model` / `models` を次に置き換えます。
+
+```json
+"local-workstation": {
+  "kind": "strata",
+  "label": "Workstation",
+  "model_source": "server",
+  "urls": ["https://llm.example.com/v1", "https://second.example.com/v1", "https://third.example.com/v1"],
+  "context_override": 64000
+}
+```
+
+`urls` は異なるAPI baseを1本以上設定でき、URL数やGPU数を2に固定しません。末尾が `/v1` ならそのまま、それ以外は `/v1` を追加します。URLへ資格・query・fragmentを入れません。同じ接続の資格を使うURLだけをまとめ、資格が違えば別接続IDにします。HTTP並列数は2、各requestのtimeoutは3秒です。設定URLが増えれば一覧取得時間も増えます。
+
+dsh backend mapとHermes profile mapには同じ接続IDを保持します。動的modeのdshは既存 `keychain` selector、またはmanifestのLinux `credential_ref` を使います。旧 `model` / `model_definition` / `base_url` は正本でなくなり、削除できます。Hermesは組込みと衝突しない `provider` 名と既存資格参照を保持し、profileの旧 `model` / `context_length` / `base_url` / `api_mode` を削除します。manifest URLからHermesの `chat_completions` routeを作るため、別のmodel一覧・URL更新は不要です。runtime証跡・path・鍵の保護は維持します。Macの一覧取得は正規の `/usr/bin/security find-generic-password -s SERVICE -a ACCOUNT -w` 参照に対応し、任意の `key_cmd` helperは実行しません。
+
+任意の `context_override` は、選択した同じmodel行の `meta.n_ctx` が有効でない場合のfallbackです。有効な報告値があればそれを優先し、どちらもなければ共通既定64,000 tokenを使います。画面の `server` / `override` / `default` は由来を示し、後2者は実測値ではありません。dshの動的モデルの生成出力上限は `min(8192, floor(context/4))` token、effort未報告は省略、helperはSame as mainです。有効な `data[].id` はstatus欠損・未知でも選択可、明示 `status.value: unloaded` だけを無効にします。nativeへ送るのはlabelでなくIDです。同名IDでも接続・URL番号が違えば区別します。
+
+dsh の選択モデル別 compaction 予算と固定 backend の扱いは [dsh compaction policy](../../docs/dsh-thin.md#compaction-の予算) を参照してください。
+
+静的検査は確認済みPythonで `hooks/harness_child.py validate --manifest <私有manifest> --harness <dsh|hermes> --backend <接続ID> --url-index <0始まり番号> --model <ID>`。通信・鍵取得はありません。通常の承認済み `--keep-mail --managed-spawn-config <manifest絶対path>` installを一度行い、両NEW AGENTをreloadします。一覧は既存資格参照で取得し、実起動・exact resumeのcommand直前には選択URLの `/v1/models` だけを1回照合します。ID消失・明示unloaded・取得失敗は別modelへ移らず拒否します。catalogの `url_key` をPOST／launcherへ保持し、設定URLの変更・並べ替え時は再選択が必要です。exact resumeは元の接続・URL・modelを保持し、接続を移行した旧固定sessionは手動判断が必要です。通常手順で旧copyへ戻せるよう保存します。
+
+公式一次資料にあるmodel一覧の例です。URLの例であり、全harnessへの互換保証ではありません。
+
+- [llama.cpp](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)：`--port 8080` を明示した場合、API baseは `http://localhost:8080/v1`。
+- [LM Studio](https://lmstudio.ai/docs/developer/openai-compat/models)：`http://localhost:1234/v1`。JITではdownload済みmodelも一覧に含み得るため、status欠損をロード済みとしません。
+- [vLLM](https://docs.vllm.ai/en/latest/getting_started/quickstart/)：`http://localhost:8000/v1`。運用に合わせserver側の認証を設定します。
+- [Ollama](https://docs.ollama.com/api/openai-compatibility)：`http://localhost:11434/v1`。local APIはclientのkeyを無視しますが、ORRERYの既存資格参照要件は維持します。
+
+一覧取得はHTTP/HTTPSに対応します。dshは既存のDeepSeek Messages adapterのままで対応Messages endpointが必要です。一覧取得成功だけではprotocol互換を証明しません。HermesはHTTPS必須のまま、動的modeではOpenAI chat completionsを使います。HTTPのみの例をHermesへ直接は渡せません。新adapter・TLS例外・model操作は追加せず、最後の観測後の変更や指定IDを無視するserverも保証外です。
+
+#### 従来の固定model接続（互換）
+
+既存Localを残して別のLocalも追加する場合は、置換せず[複数接続の設定](../../docs/configuration.md#native-connections)に従い、manifest・dsh backend・Hermes profileへ同じ新接続IDを追加します。
+
 Bの標準例はDeepSeek用です。Localはbackend IDを `strata` とし、利用者コピーの
 次のfieldを同じ接続先へ揃えます。runtime参照とコピー先の絶対pathはそのまま整合させます。
 

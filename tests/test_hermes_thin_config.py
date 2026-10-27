@@ -94,6 +94,27 @@ class ThinConfig(unittest.TestCase):
         self.assertFalse(any('API_KEY' in name or name == 'HERMES_MANAGED' for name in plan['env']))
         self.assertFalse((self.base / 'forbidden').exists())
 
+    def test_dynamic_selected_url_and_model_ignore_old_per_model_settings(self):
+        self.template_data['profiles']['strata'] = {'provider': 'fixture-api', 'key_cmd': self.profile_spec['key_cmd']}
+        self.save(self.template, self.template_data)
+        self.manifest_data['backends']['strata'] = {'model_source': 'server',
+            'urls': ['https://first.invalid/v1', 'https://second.invalid/v1', 'https://third.invalid/v1']}
+        self.save(self.manifest, self.manifest_data)
+        document = {**self.document, 'backend_id': 'strata', 'model': 'new-wire-id',
+            'url_index': 2, 'server_url': 'https://third.invalid/v1', 'server_context': {'n_ctx': 131072}}
+        plan = config.generate(document)
+        overlay = config.read(Path(plan['config_dir']) / 'config.yaml')
+        route = overlay['providers'][plan['argv'][3]]
+        self.assertEqual(route['base_url'], 'https://third.invalid/v1')
+        self.assertEqual(route['context_length'], 131072)
+        self.assertEqual(overlay['model']['default'], 'new-wire-id')
+        self.assertTrue(all(row['model'] == 'new-wire-id' for row in overlay['auxiliary'].values()))
+        self.manifest_data['backends']['strata']['context_override'] = 96000
+        self.save(self.manifest, self.manifest_data)
+        self.assertEqual(config.validate_input({**document, 'server_context': {}})['route']['context_length'], 96000)
+        with self.assertRaisesRegex(ValueError, 'invalid_runtime'):
+            config.generate({**document, 'server_url': 'https://first.invalid/v1'})
+
     def test_two_children_keep_separate_memory_profiles_and_overlays(self):
         first = self.generate()
         profile = Path(first['profile_home'])

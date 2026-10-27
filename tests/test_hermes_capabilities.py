@@ -138,6 +138,9 @@ class CustomProfile:
         repo = Path(__file__).resolve().parents[1]
         for name in ('managed_capabilities.py', 'managed_catalog.py', 'harness_helpers.py'):
             shutil.copyfile(repo / 'dashboard' / name, installed / name)
+        (installed.parent / 'hooks').mkdir()
+        shutil.copyfile(repo / 'hooks/native_connections.py', installed.parent / 'hooks/native_connections.py')
+        shutil.copyfile(repo / 'hooks/native_server_models.py', installed.parent / 'hooks/native_server_models.py')
         generator = installed.parent / 'integrations/hermes/thin_config.py'
         generator.parent.mkdir(parents=True)
         shutil.copyfile(repo / 'integrations/hermes/thin_config.py', generator)

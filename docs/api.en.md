@@ -18,7 +18,13 @@ http://127.0.0.1:8770
 
 Response bodies are JSON except for images and HTML. The dashboard itself has no login layer. When using `AGENTSTACK_BIND_HOST=0.0.0.0`, limit access to a trusted LAN / VPN.
 
+Legacy mode checks a fixed Host allowlist on every method and path. Before dispatch, it returns HTTP 403 for an untrusted, missing, duplicate or malformed Host, duplicate Origin headers, or an absolute-form request target with a mismatched authority. The defaults allow only `127.0.0.1` / `localhost` / `[::1]` at the actual listening port. Explicitly configure fixed LAN / VPN origins with [`AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS`](configuration.en.md#host-configuration-for-lan--vpn-access). Host checks do not authenticate callers.
+
+Every method and path validates a supplied Origin against the origin corresponding to the admitted Host. `Sec-Fetch-Site: cross-site` is accepted only for navigation. Local CLI, hook and proxy clients may omit Origin. Global mode applies the same provenance check to public static GET/HEAD resources and retains operator capability admission for other routes.
+
 Every POST endpoint requires `Content-Type: application/json` and a JSON object body. Browser requests receive HTTP 403 unless `Origin` / `Sec-Fetch-Site` are same-origin; CLI requests may omit both headers. This is the common guard that rejects simple-form CSRF.
+
+A POST Origin must match a fixed origin corresponding to its validated Host. Scheme, host and port are compared, normalizing host case and omitted HTTP `80` / HTTPS `443` ports. An origin belonging to another allowed Host is still rejected. Host admission failures may return an HTTP error body rather than the usual API JSON.
 
 Failures generally return:
 
@@ -48,7 +54,6 @@ with HTTP 400. A media-type mismatch is HTTP 415, a cross-origin POST is HTTP 40
 | GET | `/api/deliverables` | `agent` | vault deliverables |
 | GET | `/api/custom-portraits` | none | custom portrait map |
 | GET | `/api/term` | `session`, `lines` | tmux capture |
-| GET | `/api/ptty` | `session` | browser terminal URL |
 | GET | `/api/mail-watcher-health` | none | watcher / signal health |
 | GET | `/portrait` | `name`, `hi` | PNG or fallback SVG |
 | GET | `/assets/<file>` | `.svg` / `.png` basename | static asset |
@@ -65,17 +70,17 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":26}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":33}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
 
-- `version`: when the release was made (a date; see the [CHANGELOG](../CHANGELOG.md)). It is not a compatibility promise
+- `version`: when the release was made (`YYYY.MM.DD`, or `YYYY.MM.DD.N` for another release on the same date; see the [CHANGELOG](../CHANGELOG.md)). It is not a compatibility promise
 - `api`: the **compatibility generation** for the programs that use this API ([ORRERY cockpit](https://github.com/gyroid-eth/orrery) and others). It goes up by one only when an endpoint or field those programs rely on is **added or changes meaning**, and a [changelog fragment](../changelog.d/) records it (collected into the CHANGELOG at release; see [Contributing](../CONTRIBUTING.md#changelog-fragments-and-releases)); it does not go up with every release. A program should decide whether a feature it needs is there from `api`, not from the date in `version` (the cockpit warns at startup when `api` is lower than it needs). This scheme starts at `api` 2; every earlier release reports 1, whatever it can do
 
 ### Isolated global backend (API 17)
 
-Explicit global mode applies operator capability admission to every non-static route, including `/api/version`. `capabilities.operator_http_admission`, `ui_read`, `global_spawn`, `instruction_migration` and `global_dashboard_ui` are 1. Gate the screen on its capability, never the API number alone. See [configuration, authority and interrupted recovery](global-delivery-client.en.md#operator-ui-access). Legacy payloads and admission remain unchanged.
+Explicit global mode applies operator capability admission to every non-static route, including `/api/version`. `capabilities.operator_http_admission`, `ui_read`, `global_spawn`, `instruction_migration` and `global_dashboard_ui` are 1. Gate the screen on its capability, never the API number alone. See [configuration, authority and interrupted recovery](global-delivery-client.en.md#operator-ui-access). Legacy payloads are unchanged; legacy Host admission is described above.
 
 API 17 adds the global dashboard reply view and these admitted, read-only routes. Legacy mode remains the default; activation is false.
 
@@ -110,6 +115,10 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 [取得・実確認の手順](dsh-stage-a.md)も参照。
 
 ## GET `/api/spawn-names`
+
+API33 adds dynamic Local providers with `dynamic_models: true` / `model_source: server`. The picker explicitly reads each configured endpoint's `/v1/models`; static validation and spawn POST do not discover models. Each model retains its raw `id`, optional `display_name`, zero-based `url_index`, opaque `url_key`, `model_state` (`loaded`, `available`, `unloaded`), `context` and `context_source` (`server`, `override`, `default`). Missing/unknown status permits a valid ID; only explicit unloaded disables it. `Available` is not a loaded claim. Per-URL failure appears in `endpoints[].reason`; a failed discovery publishes no stale model rows. URLs and credential references are not in the public catalog. Dynamic effort is unreported and helper is Same as main. Actual command generation/exact resume makes one selected-URL lookup and refuses ID absence, explicit unloaded or lookup failure. It does not continuously lock the server model.
+
+API 27 separates a native connection's `id` from its `kind`. The `id` identifies the configured connection (for example, `strata` and `strata-epyc`); `kind` is `deepseek` or `strata`. Send the catalog's exact `id` as `provider` in `POST /api/spawn`, together with the selected `model` and `harness`. Equal model IDs on different connections still select different servers. `label` and `server` are display metadata, never routing selectors. Existing `deepseek`/`strata` IDs remain valid. See [multiple connections](configuration.en.md#native-connections).
 
 The bundled NEW AGENT selects Model → Harness → Helper model → Effort. Untouched Effort and Use default send a supported concrete default reported by the catalog; a null, unknown, or unsupported default omits effort. The first candidate is not guessed as a default, and providers requiring explicit effort still require a selection. Same as main omits helper_model. Untouched Terminal omits headless to inherit the existing launch policy; only an explicit change sends it.
 
@@ -169,7 +178,7 @@ The scientist rail's `status` indicates whether at least one pairing of that sci
 
 The adjectives are synchronized word-for-word with ORRERY Mail's canonical `SIMPLE_ADJECTIVES` Round 3 list, and the launcher, catalog, and suggestion API use the same source. Custom additions are prohibited because they diverge from name validation in strict deployments.
 
-Codex augments bundled candidates with local CLI cache entries fetched within 300 seconds. Explicit `AGENTSTACK_CODEX_MODELS` restricts candidates to that allowlist; invalid configuration appears in `model_error`. `model_source` is `bundled`, `local_cache`, or `override`. For omission and `sol`, the initial default is `gpt-6.1-sol` with selected CLI 0.159.0+, otherwise `gpt-6-sol`; unknown versions use fresh catalog evidence. If that ID is absent from the selected `CODEX_HOME` cache, choose the next cached candidate in order: `gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna`. Expired snapshots can lower the default too, but an older CLI never moves up to GPT-6.1 Sol. Without a usable cache or next candidate, the existing default remains. Explicit formal IDs are never substituted. Provider `model_note` is empty when the preferred default is unchanged, otherwise it reports both IDs and the reason; a stale snapshot also supplies its timestamp and guidance to start `codex` to refresh it. Cache `identity` is not checked against the current login, and fallback does not prove account authorization. Provider dictionaries `model_efforts` and `model_effort_defaults`, keyed by model ID, take precedence in the UI. An empty effort list means omit effort and use the CLI default. See [configuration](configuration.en.md#codex-model-catalog).
+Codex augments bundled candidates with local CLI cache entries fetched within 300 seconds. Explicit `AGENTSTACK_CODEX_MODELS` restricts candidates to that allowlist; invalid configuration appears in `model_error`. `model_source` is `bundled`, `local_cache`, or `override`. With no configured default, the initial default for omission is `gpt-6.1-sol` with selected CLI 0.159.0+, otherwise `gpt-6-sol`; unknown versions use fresh catalog evidence. If that ID is absent from the selected `CODEX_HOME` cache, choose the next cached candidate in order: `gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna`. Expired snapshots can lower the default too, but an older CLI never moves up to GPT-6.1 Sol. Without a usable cache or next candidate, the existing default remains. Explicit formal IDs are never substituted. Provider `model_note` is empty when the preferred default is unchanged, otherwise it reports both IDs and the reason; a stale snapshot also supplies its timestamp and guidance to start `codex` to refresh it. Cache `identity` is not checked against the current login, and fallback does not prove account authorization. Provider dictionaries `model_efforts` and `model_effort_defaults`, keyed by model ID, take precedence in the UI. An empty effort list means omit effort and use the CLI default. See [configuration](configuration.en.md#codex-model-catalog).
 
 ## GET `/api/name-status`
 
@@ -424,20 +433,6 @@ curl -s 'http://127.0.0.1:8770/api/term?session=WindyFermi&lines=500'
 
 The response is `{ok, session, text, ...}`. The session name is validated before running `tmux capture-pane`.
 
-## GET `/api/ptty`
-
-```bash
-curl -s 'http://127.0.0.1:8770/api/ptty?session=WindyFermi'
-```
-
-Response:
-
-```json
-{"ok":true,"session":"WindyFermi","url":"http://127.0.0.1:PORT/"}
-```
-
-An existing `ttyd` is reused; otherwise one is started on a free port. An invalid session or missing dependency is HTTP 400.
-
 ## GET `/api/mail-watcher-health`
 
 There is no query.
@@ -594,10 +589,11 @@ Request:
 | `task` | yes | Task body. The UI accepts up to 4,000 characters |
 | `name` | no | Remove hyphens when specified; must be `available` |
 | `dir` | no | Existing working directory. Defaults to the source repository |
-| `provider` | no | `claude` (default), `codex`, `deepseek`, or `strata`. The Local display group sends `strata` |
+| `provider` | no | `claude` (default), `codex`, or an exact native connection ID from the catalog (legacy `deepseek`/`strata`, or an added ID such as `strata-epyc`). Do not replace it with its label or `kind` |
 | `harness` | DeepSeek / Local required | `dsh` or `hermes`. Claude optionally accepts `claude-code` (legacy alias `claudecode`), Codex `codex-cli` (legacy alias `codex`) |
 | `helper_model` | no | Omitted or `same` inherits the main model. DeepSeek / Local also accepts same-backend formal IDs in the selected model/harness `helper_models`; undeclared or foreign IDs are rejected |
 | `model` | DeepSeek / Local required | Formal ID matching an available provider/model/harness catalog entry. Existing Claude/Codex omitted-model defaults are unchanged |
+| `url_index`, `url_key` | dynamic Local required | Copy both from the selected model row. Index is a nonnegative integer; key binds the configured URL. A changed/reordered URL is refused and requires refreshed selection. These fields are not accepted for fixed-model or other providers |
 | `effort` | no | Send only explicit choices. Claude/Codex use model-specific metadata; DeepSeek/Local validate the selected model and harness capability. Omit to use CLI settings; unknown values are never guessed |
 | `role` | no | At most 40 characters |
 | `group` | no | At most 24 characters |
@@ -659,7 +655,7 @@ Success:
 
 With `standalone: true`, `parent` is fixed as empty and `PARENT_AGENT` is removed from subprocess environment. No synthetic self-mail is created; the first 4,000 task characters are passed directly to the launcher. A normal child creates an inbox message with the parent as sender plus a CC audit trail; the registration summary / launcher prompt uses the first 80 characters.
 
-Claude rejects `effort`. Codex accepts formal `gpt-*` IDs even when absent from cache; only an explicit `AGENTSTACK_CODEX_MODELS` restricts membership. The UI uses per-model effort metadata for choices and omitted defaults; explicit effort is passed through to Codex CLI for final validation. Omitted model and `sol` both resolve to `gpt-6.1-sol` when the selected CLI is 0.159.0 or later (fresh catalog evidence is used if its version is unknown), otherwise `gpt-6-sol`; `luna` maps to GPT-6 Luna. Claude accepts well-formed formal IDs independently of local catalog membership or expiry; an explicit `AGENTSTACK_CLAUDE_MODELS` remains a strict allow-list, and invalid configuration blocks Claude launch. The fixed Claude default is `claude-opus-5-5`; it is rejected if an override excludes it and the request omits a model. Orrery never substitutes another model. See [Claude model catalog](configuration.en.md#claude-model-catalog).
+Claude rejects `effort`. Codex accepts formal `gpt-*` IDs even when absent from cache; only an explicit `AGENTSTACK_CODEX_MODELS` restricts membership. The UI uses per-model effort metadata for choices and omitted defaults; explicit effort is passed through to Codex CLI for final validation. Omitted model and effort use the configured defaults, or the built-in policy when unset. Family aliases follow the newest eligible version in the fresh catalog, rejecting an absent family in a fresh catalog and using bundled fallback for unavailable or stale catalogs. Claude accepts well-formed formal IDs independently of local catalog membership or expiry; an explicit `AGENTSTACK_CLAUDE_MODELS` remains a strict allow-list, and invalid configuration blocks Claude launch. The fixed Claude default is `claude-opus-5-5`; it is rejected if an override excludes it and the request omits a model. Orrery never substitutes another model. See [Claude model catalog](configuration.en.md#claude-model-catalog).
 
 Codex may show a trust dialog in a non-Git directory. The spawner accepts it with `C-m`; if the dialog remains after checks every three seconds, up to ten times, it fails fast. The server waits up to 120 seconds for launcher readiness and cleans up the tmux session and token / child credential files on failure.
 
@@ -712,3 +708,37 @@ Capabilities include `global_runtime_observation=1` and `operator_session=1`. Gl
 
 
 API 25: legacy managed `attempt_id` spawn/status requests are retired and return `unsupported_attempt`. Use standard `POST /api/spawn` and `GET /api/spawn-status?name=<name>`.
+
+<a id="mobile-reader-api-28"></a>
+
+<a id="mobile-reader-api-29"></a>
+
+## Mobile reader (API 30)
+
+`GET /api/mobile-mail?window=<period>` is a legacy, loopback-only metadata endpoint. The default is `day` (24h). Allowed values are `all`, `day`, `15m`, and `m<N>` for integer minutes from 15 to 43200 divisible by 15; leading zeros and fractions are rejected. It keeps the existing dashboard Host admission. Missing DB or project/schema/read failure returns 503; unsupported global mode is explicitly refused (501 after admission, or the existing global admission refusal). It never falls back to a legacy DB from global mode. Unknown or repeated query fields return 400.
+
+A 200 response has `status: available`, `window`, `observed_at`, `edges`, `events`, `events_truncated`, `edges_truncated`, `invalid_timestamps`, and `degraded`. `edges` contains source/target/kind/count/last_ts aggregated over the actual period, at most 10,000 rows. Counts are direction-specific to/cc recipient rows, excluding bcc and cross-project endpoints. `events` contains the latest 200 recipient rows with stable opaque `key`, source/target/kind/`count:1`/event_at, ordered by event time, message id and recipient id descending. The SQL reads only metadata; subjects, bodies and read/ack writes are excluded. Invalid timestamps are excluded and reported as degraded. An empty successful query differs from an unavailable query.
+
+The optional [mobile relay](mobile.en.md) exposes authenticated GET/HEAD only: `/`, its fixed bundled assets, `GET /view/snapshot?window=<period>` and the portrait route below. It starts only with `--enable`, requires an exact owner login and HTTPS .ts.net origin, and binds only on 127.0.0.1. It checks the outer Host, owner header and any supplied Origin for every asset, snapshot and portrait; normal GET may omit Origin. Other methods, unknown routes/query fields, duplicate authentication headers, cross-origin requests, upgrades and overrides are rejected. No arbitrary upstream URL, header forwarding, proxy environment or redirects are accepted. Upstream JSON is bounded to 4 MiB and 2 seconds per fixed request. For Android home shortcuts, GET/HEAD navigation to the exact raw `/` without a query may load only the document shell when single `Sec-Fetch-Site: cross-site`, `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document` headers are present; owner, Host and any supplied Origin must still match, and this exception never covers `/view/*`, assets, POST or a mismatched Origin.
+
+The snapshot has `schema:1`, observation time, window, `period` (width in seconds and unknown-activity count), component `sources` (available/stale/unavailable with last observation and age), explicitly projected `agents`, graph Mail/spawn edges, timeline Mail and observed status changes, truncation flags, and unavailable quota. Agent projection includes only canonical name, provider/model/locality, nullable running/context, retired/state/act_state and last activity. The graph/agents union is filtered against current time using the greatest valid last-active timestamp from either source or canonical Mail time. Future/unknown activity is never replaced by now; unknowns are excluded from finite periods with a count. Recently active retired agents remain; running alone does not bypass the period. Graph edges retain only endpoints in that set. Status changes have `observed_at` and null `event_at`; the latest200 retained changes are filtered by period and agent set, with `states_truncated` on overflow. Context sampling time remains null. Failed polls retain stale observations without turning unavailable into healthy zero. At most4 metadata periods are cached, evicting parts and published snapshots together. The logarithmic15min–30d slider rounds to15minutes and debounces200ms; all-history is explicit. The PC period contract is unchanged.
+
+`GET /view/portrait?name=<NAME>&window=<period>` accepts a canonical name only from that period's published roster. The fixed loopback `GET /api/mobile-portrait?name=<NAME>` first uses the existing case-insensitive custom map/overlay resolver, then falls back to the longest matching bundled scientific suffix if missing or invalid. Private maps and paths are not returned. PNG images are limited to 512 KiB and dimensions 1–1024, checked for signature/IHDR, with a 2-second upstream deadline. Arbitrary SVG/HTML is rejected; fetch/decode failure falls back to initials. Images are no-store. The loopback portrait API is legacy-only; invalid name/query returns 400, missing/invalid image 404, and global mode is explicitly refused.
+
+API 30 adds opaque `scope` and `next_cursor` to metadata. `GET /view/mail?window=<period>&cursor=<token>` returns the next 200 recipient rows, without content. Graph pair lists add `a=<NAME>&b=<NAME>&direction=both|forward|reverse` to the same route; only their first page may omit the cursor. Both names must belong to that period's published roster. SQL filters pair/direction before LIMIT. Keysets sort by time/message id/recipient id descending. Cursors bind scope/period/pair/direction/boundary for 10 minutes, capped at 256; the relay retains at most 2000 issued events. Invalid/duplicate queries return 400, unknown/expired events or cursors 410, and unavailable reads 503. The browser holds 200 current rows and at most 20 positions; polling does not overwrite older pages.
+
+Only `GET /view/message?window=<period>&event=<key>` returns the tapped single subject/body after authentication. It matches issued metadata against the current project, to/cc delivery, period and canonical event. The new loopback-only `/api/mobile-message` accepts the same query plus `mode=content|revision`, performing canonical admission before either read. Internal results use a 512-character subject,64 KiB UTF-8 body, truncation flags and opaque fingerprint/revision. The phone receives only event/subject/body/truncation flags. Revision hashes cover the visible bounded content and original byte length; they do not guarantee detection of same-length edits beyond the truncated view. Content is literal text, with no read/ACK writes, attachments, replies or operations. All responses are no-store and content is neither logged nor persisted. Close/new tap/period/view/background/pagehide clear DOM and abort requests; request generations discard late results.
+
+The loopback metadata page route is `/api/mobile-mail-page`. The internal fixed 24 h cache route is `/api/mobile-cache-page?cursor=<token>` (no cursor initially); it has no external relay route. Only an authenticated snapshot starts the single worker. It reads up to 32 distinct messages per batch, with actual serialized responses below 4 MiB, a 120-second sweep budget,25 ms yields and at least 60 seconds after completion before retry. Bounds are 63 nonempty pages,2000 distinct messages and 32 MiB of logical JSON bytes. Incomplete 24 h coverage is partial/unavailable. JSON-escaped batches shrink to fit. Snapshot `mail_cache` returns only status/messages/logical_bytes/bounds/reason, never the cache dictionary or content.
+
+Bodies and their metadata expire together under 24 h/LRU/byte limits. Scope changes invalidate everything. Every cache hit rechecks the current canonical revision; failure never returns stale content. 24 h limits caching, not detail viewing: published 30 d/all-history events remain readable one at a time, outside the cache. Reader shutdown stops/joins the worker and clears all content. All new loopback APIs return 501 in global mode, without legacy DB fallback. The ordinary viewing relay does not read terminals, deliverables or quota refresh endpoints. Terminal access is the separate opt-in below. Browser polling pauses in the background. Authentication and phone restriction remain separate; deployment requires the real-device checks in the guide.
+
+## Mobile Terminal (API 31)
+
+The viewing contract remains; a separate pane adapter is opt-in. Preview and input are off by default and require reader opt-in plus the operator's `--phone-policy-reviewed` declaration (device restriction is recommended, allows multiple devices, and is not verified by the product). `GET /view/terminal` returns capability. POST is limited to `/view/terminal/{targets,preview,prepare,commit,cancel,status}`. Every POST, including targets/preview, requires the owner, fixed outer Host, exactly one matching Origin and finite JSON; queries and arbitrary proxying are refused. Phone JSON cannot supply owner/reader identity. The reader adds contract `orrery-mobile-pane-v1`, owner and reader epoch to fixed loopback `/_mobile/terminal/<operation>` calls and checks the API 31 capability. An adapter restart invalidates old handles/intents.
+
+External JSON is `targets:{epoch,name}`, `preview:{epoch,choice}`, `prepare:{epoch,choice,revision,text}`, `commit:{epoch,intent,confirmation}` and `cancel/status:{epoch,intent}`. Targets use an exact existing manager session-name match. At most 128 candidates fit within the actual 16 KiB serialized response; omissions are explicit. The user chooses among panes. Aliases and the active pane are not guessed. Owner/reader/bridge/pane-bound handles live in memory for 30 seconds, with at most 16 selected proofs. Foreground previews can renew that selection lease, never a prepared confirmation's text, proof or 30 second expiry.
+
+Preview uses fresh shared-helper legacy admission and kernel birth, comparing socket/server/session/pane/UID/bridge incarnation before and after capture. Unknown helpers, OS facts or targets are refused; no Codex launch binding or registration DB is used. Fixed capture is limited to the last 40 lines/6 KiB displayed UTF-8, 64 KiB collected and 3 seconds overall. The actual serialized JSON response is capped at 16 KiB. ANSI/OSC/C0/C1/directional controls are removed; literal text, observation time and removal/truncation flags are returned. No preview body is cached. Collection overflow discards the body while preserving the ACK queue position. Missing termination after 3 seconds quarantines that control stream rather than reusing uncertain synchronization.
+
+Prepare binds an unchanged UTF-8 line of at most 4 KiB. Limits are 16 pending confirmations, 256 result metadata entries/10 minutes, one simultaneous send per pane and 6 sends/minute per pane. Commit claims once and holds the same write lock from fresh pane validation through every chunk/Enter write, then releases it before awaiting all tmux ACKs. All ACKs within 5 seconds mean accepted; partial failure/timeout/error means unknown with no retries or remaining-chunk compensation. Status only queries. Program identity or task completion is not guaranteed: return to a shell, existing input, external writers and races after the final check remain possible. See the [mobile guide](mobile.en.md#inspect-a-pane-and-send-input-from-your-phone) for UI, enabling and disabling.

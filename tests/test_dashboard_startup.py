@@ -1,8 +1,7 @@
-"""Dashboard startup must not require the optional stale-ttyd cleanup tool."""
+"""Dashboard startup serves without an external cleanup process."""
 
 from __future__ import annotations
 
-import subprocess
 import threading
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -16,17 +15,11 @@ import dashboard.server as server
 pytestmark = pytest.mark.usefixtures("isolated_provider_stall_runtime")
 
 
-@pytest.mark.parametrize("cleanup_status", ["missing", 0, 1])
-def test_main_serves_dashboard_with_optional_pkill(monkeypatch, cleanup_status):
+def test_main_serves_dashboard_without_cleanup_process(monkeypatch):
     """Exercise main's real HTTP bind and handler without a persistent server."""
     cleanup = Mock()
-    if cleanup_status == "missing":
-        cleanup.side_effect = FileNotFoundError("pkill is not installed")
-    else:
-        cleanup.return_value = subprocess.CompletedProcess([], cleanup_status)
     monkeypatch.setattr(server, "subprocess", SimpleNamespace(run=cleanup))
     monkeypatch.setattr(server, "_start_supervisor_watchdog", lambda: None)
-    monkeypatch.setattr(server, "_ttyd_reaper", lambda: None)
     # Its first pass reads the real runtime and runs tmux per child; a thread
     # left running from here called later tests' subprocess stubs.
     monkeypatch.setattr(server, "_start_child_resume_maintenance", lambda: None)
@@ -54,7 +47,4 @@ def test_main_serves_dashboard_with_optional_pkill(monkeypatch, cleanup_status):
 
     server.main()
 
-    cleanup.assert_called_once_with(
-        ["pkill", "-f", "ttyd -p .* tmux attach -t ="],
-        capture_output=True,
-    )
+    cleanup.assert_not_called()

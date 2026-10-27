@@ -1,6 +1,6 @@
 # Changelog
 
-版は日付で付けます（`YYYY.MM.DD`）。互換性の約束ではなく、**いつの配布物か**を言えるようにするためのものです。
+版は日付で付けます（`YYYY.MM.DD`）。同日の追加リリースには `.1` から始まる枝番を付けます（`YYYY.MM.DD.N`）。互換性の約束ではなく、**いつの配布物か**を言えるようにするためのものです。
 
 インストール済みの版は `GET /api/version`、または install root の `VERSION` で確認できます。同じ応答の `api` は日付とは別の、利用者（ORRERY cockpit など）との互換の世代で、利用者が頼る API を足す・意味を変えるときだけ上げ、その版の節に書きます（[docs/api.md](docs/api.md#get-apiversion)）。更新手順は [docs/install.md](docs/install.md) の Upgrade を参照してください。
 
@@ -9,6 +9,124 @@
 未リリースの変更は [changelog.d/](changelog.d/) の断片を参照してください。追加・リリースの手順は [CONTRIBUTING.md](CONTRIBUTING.md#changelog-fragments-and-releases) にまとめています。
 
 ---
+
+## 2026.10.26
+
+### Androidホーム画面のショートカットからスマホ閲覧画面を開けるよう修正
+
+本人・Hostと指定されたOriginの照合を保ったまま、queryなしの厳密な`/`へのGET/HEADで、単一の`Sec-Fetch-Site: cross-site`・`Sec-Fetch-Mode: navigate`・`Sec-Fetch-Dest: document`が揃う画面遷移だけを受け付けます。画面の殻を返す例外で、`/view/*`、画像・JS・CSS・font、POSTなどの操作、不一致Originや曖昧なpathの許可には広げません。CSP・no-store・既定オフと既存の認証・framing検査を維持し、API世代は変更しません。実Android・Serveの確認は配備後の別受入です。
+
+### スマホ閲覧の設定をエージェントに頼めるようにする
+
+[スマホ閲覧の手順](docs/mobile.md)に、agent に渡して設定させるための表を加えました。agent が実行できる段と、Tailscale の管理画面やスマホでの操作が要る本人の段を分けています。Serve 名・本人の login・スマホの IP の調べ方、HTTPS 証明書の前提、Serve を `--bg` で残す方法、macOS での CLI の場所も書きました。
+
+### 指定したスマホからTelemetryの状況を見る閲覧用画面
+
+既定オフのmobile readerを追加しました。英語・darkの要確認一覧とMail metadataの時間軸、PCと共通のNETWORK描画・力学・6設定を使えます。task・private path・操作API・quota更新は含めず（Mail本文は後述の1件ずつの表示だけ）、取得不能/古い観測を正常0へ変えません。
+
+Graphは直近24時間に活動が確認されたagentを既定にし、15分〜30日の細かい期間sliderと明示した全履歴を選べます。Allは選択期間内の全体です。最近活動した退役済みを含め、不明な活動時刻を現在で補いません。専用アイコンは認証後にPCの既存設定から解決し、科学者の肖像・イニシャルへfallbackします。
+
+本人を照合するloopback relayと、指定スマホを絞る実効tailnet policyを分け、Tailscale Serveでの手動有効化/停止手順を[日英guide](docs/mobile.md)へ記載しました。通常installでは待受/Serveを開始しません。legacy loopback専用のMail metadata/肖像取得と期間契約を追加します。実Serve・本人スマホの受入は別途必要です。
+
+### スマホのMailを1件ずつ開き、Graphの2体間の履歴を確認
+
+ActivityのMail、またはGraphのMail線から2体間の一覧を開き、選んだ1件の件名と本文を文字として読めます。一覧はmetadataのみで、本文をまとめてスマホへ送りません。方向別の絞込、200宛先行ごとのOlder/Newer、Mac内だけの直近24h・最大2000通/32MiBのメモリcacheを追加しました。上限や失効・取得不能を明示し、read/ACK・返信・添付・操作は追加しません。既定オフと本人認証を維持し、指定スマホの実効policyは別途必要です。単件内容とmetadata pageの契約追加によりAPI世代を30へ更新します（前回のリリース 2026.10.25 は27。間の世代は単独では配布していません）。[手順と制限](docs/mobile.md)を参照してください。
+
+## 2026.10.25
+
+### Orbit ロゴを header と favicon に追加
+
+ORRERY Telemetry の名前の左に Orbit ロゴを配置し、favicon にも同じ形を使います。header は既存の dark / light 切替、favicon はブラウザの明暗設定に合わせます。既存の操作と API 世代は変えません。
+
+### dsh / Hermes の起動指示を短く整理
+
+dsh / Hermes の指示を専用の短い文書へ整理し、ORRERY の子作成や raw 認証回復などの手順を省きました。共通の Mail 規則、共有編集の予約と自己専用 scratch の区別、失敗時の停止条件は保持します。初回と同じ ID の再開で同じ生成経路を使い、Claude / Codex の指示本文、native helper 設定、skills の配布は変えません。API 世代の変更はありません。[起動方法](docs/launchers.md) / [English](docs/launchers.en.md)。
+
+### legacy dashboard で不信な Host を操作前に拒否
+
+全 HTTP メソッド・全パスの Host を固定の許可先と照合し、不信・欠落・重複・不正な Host を dispatch 前に拒否します。POST の Origin は、その Host に対応する固定 origin とだけ照合します。既定の loopback 利用は維持し、LAN / VPN 利用者は更新前に追加の固定 origin を [設定](docs/configuration.md#lan--vpn-から使う場合の-host-設定) してください。installer が保存し、dashboard の各 service 起動経路へ引き継ぎます。
+
+認証は追加しません。既存の global capability 認証と公開 static resource の扱いは維持します。API の endpoint・field・応答の意味は変わらないため、API generation は据え置きます。
+
+### 公開履歴中のファイル名に含まれる禁止識別子を検出
+
+履歴guardで、本文が無害でもblobのファイル名に禁止識別子があれば拒否するようにしました。従来のpath照合はblob以外に限られており、文字の大小ではなく対象の分岐による漏れでした。既存の禁止pattern・許可list・本文やmetadata・archiveの検査は維持し、合成入力で小文字・大文字・混在の回帰を確認します。
+
+## 2026.10.24
+
+### Hermesの更新で既存の管理sourceを再利用
+
+Hermesの新世代を作るとき、明示したcacheを優先し、指定がなければ所有記録を確認できる既存管理世代のGit repositoryを独立コピーして再利用します。履歴とtagを保ち、未commitの変更はコピーせず、元の世代にも依存しません。利用できる管理sourceがない場合の公式GitHubからのcloneと、固定commit照合・CA修正・PM依存関係の検証は従来どおりです。新規導入の取得量削減、PMの通信不要、実環境での導入時間を保証する変更ではありません（[導入手順](docs/install.md)）。
+
+### Keep multiple native connections (API 27)
+
+Keep existing `deepseek`/`strata` settings and add explicitly declared connection IDs such as `strata-epyc`. API 27 separates each connection's ID from its DeepSeek/Local kind. Equal wire model IDs on two servers retain their own route, credential reference, limits and helper choices. Catalog, standard API/CLI launch, static admission, Linux credential references and native resume share the selector rules. The existing NEW AGENT tabs show connection labels; bilingual setup/configuration guides explain meaningful server names for cockpit. This does not add global-mode native support or claim live multi-server acceptance.
+
+## 2026.10.23.2
+
+### 管理HermesのCA依存を検証する新世代を構築
+
+Hermesの実行コードは固定したまま、公式更新からcertifi 2026.10.19とPM用uv 0.13.5の依存入力3件だけを取り込みます。旧入力・patch・適用後のhashを照合し、両PM導入と再同期で同じ入力を使います。baseと更新元のcommitを分け、native stampには変更済みsourceであることを記録します。
+
+新世代はrecipeのdigestで識別し、旧v2やprofileを上書きしません。公開前と再利用時には、実際のCA bundle・version・解決済みlock・PM用uvの実行fileとartifactの整合を確認します。静的catalog検査はHermesや資格helperを実行しません。対象はMacとGNU/Linux（WSLを含む）のarm64/x64で、旧artifactが残るBionicなどは停止します。既存の稼働process・手動Hermes・システムCA・呼出し元のpip/uvは変更しません。[導入と検証](integrations/hermes/README.md#installation-and-offline-checks)を参照してください。
+
+### 新しいMail環境で修正版のCA bundleを要求
+
+新しく構築するORRERY Mail環境の依存に`certifi>=2026.10.19`を追加しました。再導入時もこの下限を適用します。2026.10.18でも影響するemSign rootは除去済みですが、影響しないrootとの互換性のため2026.10.19以上を採用します（[Pythonの公式案内](https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576)）。
+
+稼働中のMailをそのまま使う通常のkeepでは、既存venvを変更しません。既存Mailへの適用は[通常のbuild切替手順](docs/agentstack-mail-update.md#--update-mail-による差し替え)で行います。この変更はmanaged Hermesの固定依存や、pip/uv自身が内蔵するCA bundleの更新を含みません。
+
+### 更新時に保存済みの設定を保持
+
+`env.sh` に保存された非既定値を、`AGENTSTACK_CHOSEN_SETTINGS` の有無や列挙内容にかかわらず引き継ぐようにしました。子のターミナルを自動で開かない設定（`AGENTSTACK_AUTO_OPEN_CHILD=0`）や独自の肖像フォルダーが、更新時に既定値へ戻るのを防ぎます。今回明示した値・空値による個別reset・`--reset-settings` は引き続き優先し、設定の値自体を削除した場合は既定値に戻ります。ORRERY Mail の識別情報と配置を保持する規則も変わりません。
+
+子のターミナル自動表示と肖像フォルダーに実際の変更がある場合は、installer の計画に旧値 → 新値を表示します。[設定の引き継ぎ](docs/install.md#前回の設定の引き継ぎ)を日英で更新しました（[#354](https://github.com/gyroid-eth/orrery-telemetry/issues/354)）。
+
+### Codex の長い作業中に、背景のターミナルが動いていても作業中と表示する
+
+Codex が1分以上作業していて、背景のターミナルが動いている（「· 1 background terminal running · /ps to view · /stop to close」が続く）とき、作業中ではなく待機中と表示されることがありました。このときも作業中（WORKING）と表示します。この表示の後ろに、ほかの文字が続く場合は、これまでどおり作業中とは判定しません。
+
+### 内部ファイルの安全な置換中にも読取りを継続
+
+設定や実行状態の内部ファイルが安全な別ファイルへ置き換わった場合、読取りを最大2回までやり直すようにしました。所有者・アクセス権・ファイル種類・リンク数の検査とサイズ上限は維持し、安全でないファイルや権限・入出力エラーは再試行で無視しません。
+
+### 保存元を維持する Mail の未公開 B1 核を追加
+
+#213 の S′向けに、全保存元の名前解決、本人資格と対象の分離、純粋な閲覧、本人 read/ack、再試行の固定を隔離して検証する核を追加しました。既定 server・installer・hook・休眠 global mode には接続せず、本番挙動と dashboard API generation は変わりません。send/reply は宛先 decision までで、実配送・予約の絶対 path 化・切替は後続です。[実装範囲](docs/storage-origin-b1.md)を参照してください。
+
+private updater の旧 binding 解決は、資格履歴を反映した私有 index の全検証後に行います。準備不足・整合性破損は owner の要解決と分けて停止します。decision には接続先と解決 revision を含め、実 whois の返値と副作用のない境界も検証します。
+
+## 2026.10.23.1
+
+### tmux終了後に残ったsocketでも新しいセッションを起動
+
+標準のtmux接続先に安全な所有socketだけが残っている場合、tmuxがserver不在を明示すれば、新しいセッションを作成できるようにしました。作成成功後はsocketの識別情報を更新します。権限エラーや不明な応答、socketの差替え、既存の同名セッションやglobalセッションに対する検査は維持します。
+
+### WSL の鍵束の確認で、busctl の実際の表示例に合わせる
+
+WSL の鍵束で既存の項目を確かめる手順の表示例を、`busctl` が実際に出す形（`aoao 0 0`）に直しました（日英）。Unlock 済み・Locked の件数がどちらも0という意味は変わりません。手順と動作は変更していません。
+
+## 2026.10.23
+
+### 同日中の追加リリースに枝番を使えるようにする
+
+変更履歴の正規リリーススクリプトが、日付形式に加えて`YYYY.MM.DD.N`を受け付けます。同日の`.1`から正の整数で増やし、`.9`より`.10`を新しい版として扱います。公開済みの節・VERSION・タグを上書きする処理は追加せず、同じ版の再利用や古い版への巻き戻しは引き続き拒否します。API generationは変更しません。
+
+### DeepSeek・Local LLMもREADMEの冒頭から選べる導入案内
+
+README・ドキュメント索引・単独導入の入口を日英で整理しました。Claude Code・Codex・DeepSeek・Local LLMを最初から示し、共通installのあと、CLIへのログインかdsh/HermesとAPIの初期設定へ分岐します。DeepSeek/Localだけ使う場合にClaude/Codexの導入を前提とせず、APIの初期設定ガイドも新規利用者から開ける説明にしました。共通導入だけでAPI設定まで完了するという保証は加えていません。
+
+agentを使わない人向けに、導入時の設定例を私有フォルダーへコピーし、参照先を合わせて有効化・検査・反映する手順を追加しました。Ubuntu WSLでは標準GUIでの鍵束作成と非表示入力によるキー保存を日英で案内します。新規WSLでの鍵束準備を含む全経路の実機確認は未完了と明記し、保存成功と実接続・Mailの成功を区別しています。
+
+Localのキー参照、dshの対応API、HermesのHTTPSとAPI形式の条件を明示し、詳しい対応範囲にも英語版を追加しました。WSLの実Telemetryを表示したNEW AGENTのPNG・選択GIFを掲載し、科学者の肖像と4系統、dsh/Hermesの選択を示します。録画は起動前の選択で、実API応答の保証ではありません。API generationは変更しません。
+
+### 既存利用者向けにDeepSeek・Localの初期設定を案内
+
+通常更新と初回API追加を区別し、dsh/Hermesの導入、DeepSeek APIキーの取得、Mac/Ubuntuでの非表示保存、設定例の準備、NEW AGENTからの確認までを日英のガイドにまとめました。README・install・設定例から同じ案内へ進めます。APIキーの登録画面や自動ログイン機能を追加する変更ではありません。
+
+### Claudeのファイル編集承認待ちを表示
+
+編集確認の選択肢に「Esc to cancel · Tab to amend」が続く画面もAPPROVALとして表示します。過去の承認画面が残っていても、現在の入力待ちや作業中の状態を優先します。承認操作そのものは利用者が行います。
 
 ## 2026.10.22
 

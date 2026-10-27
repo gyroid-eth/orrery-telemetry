@@ -238,7 +238,7 @@ def test_prepared_resume_cli_in_isolated_minimal_environment(tmp_path, monkeypat
     assert current['harness_state_dir'] == str(directory)
 
 
-@pytest.mark.parametrize('changed_profile', [False, True])
+@pytest.mark.parametrize('changed_profile', [False, True, 'new_connection'])
 def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, monkeypatch, request, changed_profile):
     from test_dsh_thin_config import ThinTests
     from test_harness_child import staged
@@ -246,10 +246,18 @@ def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, 
     fixture.setUp()
     request.addfinalizer(fixture.doCleanups)
     manifest = native.read(fixture.manifest)
+    backend = 'strata-epyc' if changed_profile == 'new_connection' else 'strata'
+    if backend != 'strata':
+        manifest['backends'][backend] = {**manifest['backends']['strata'], 'kind': 'strata'}
+        template = native.read(fixture.template)
+        routes = native.read(template['backend_file'])
+        routes['backends'][backend] = dict(routes['backends']['strata'])
+        native.save(Path(template['backend_file']), routes)
     manifest['harnesses']['dsh']['python'] = sys.executable
     native.save(fixture.manifest, manifest)
     args = staged(tmp_path, 'dsh')
     args.manifest, args.model = str(fixture.manifest), 'a'
+    args.backend = backend
     args.helper_model = 'b'
     mcp = native.read(args.mcp_config)
     mcp['mcpServers']['orrery-mail'].update(command='/fixture/proxy', args=[])
@@ -258,6 +266,8 @@ def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, 
     monkeypatch.setenv('AGENTSTACK_MCP_URL', 'http://127.0.0.1:9/mcp')
     directory = native.prepare(args)
     first = native.read(directory / 'launch.json')
+    instructions = (directory / 'instructions.md').read_bytes()
+    assert (Path(first['env']['DSH_HOME']) / 'AGENTS.md').read_bytes() == instructions
     runtime = Path(args.runtime_dir)
     resume.finish_registration(runtime, args.agent_name, generation=args.generation, rollback=False)
     resume._atomic_json(directory / 'native-session.json', {
@@ -266,7 +276,7 @@ def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, 
     assert resume.mark_retired(runtime, args.agent_name, retention_days=30)
     resume.begin_resume(runtime, args.agent_name, agent_id=7,
                         project_key=args.project_key, program='dsh')
-    if changed_profile:
+    if changed_profile and changed_profile != 'new_connection':
         source = native.read(directory / 'input.json')
         source['native_profile_env'] = {'DSH_HOME': str(tmp_path / 'foreign-profile')}
         native.save(directory / 'input.json', source)
@@ -280,8 +290,11 @@ def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, 
     assert native.prepare_resume(runtime, args.agent_name) == directory
     resumed = native.read(directory / 'launch.json')
     assert resumed['env']['DSH_HOME'] == first['env']['DSH_HOME']
+    assert (directory / 'instructions.md').read_bytes() == instructions
+    assert (Path(resumed['env']['DSH_HOME']) / 'AGENTS.md').read_bytes() == instructions
     assert resumed['argv'][-2:] == ['--resume', 'exact-owned-id']
     source = native.read(directory / 'input.json')
+    assert source['backend_id'] == backend
     assert Path(source['prompt_file']).read_text() == ''
     blocks = native.read(directory / 'dsh-config/native.patch.json')
     proxy = next(row for block in blocks for row in block.get('insert', [])
@@ -295,25 +308,65 @@ def test_real_dsh_generator_round_trip_preserves_owned_native_session(tmp_path, 
     # never executes a runtime, provider plugin, credential helper or Mail RPC.
 
 
-@pytest.mark.parametrize('changed_profile', [False, True, 'legacy', 'missing_home', 'missing_pin', 'missing_history', 'unknown_reason'])
+@pytest.mark.parametrize('changed_profile', [False, True, 'legacy', 'missing_home', 'missing_pin', 'missing_history', 'unknown_reason', 'new_connection', 'dynamic'])
 def test_real_hermes_generator_round_trip_preserves_owned_native_session(tmp_path, monkeypatch, request, changed_profile):
+    from shutil import copy2
     from unittest.mock import patch
     from test_hermes_thin_config import ThinConfig, config
     from test_harness_child import staged
+    from test_managed_harness_install import CAFixture, fixture_stamp
     original_popen = subprocess.Popen
     fixture = ThinConfig()
     fixture.setUp()
     request.addfinalizer(fixture.doCleanups)
+    # Synthetic CA inputs and runtime bytes must bind to the same private
+    # product policy that the real static admission and generator will read.
+    ca = CAFixture(None, fixture.base)
+    request.addfinalizer(ca.stack.close)
+    ca.source(fixture.source)
+    ca.ca.apply(ca.repo, fixture.source)
+    generation = Path(fixture.template_data['hermes_python']).parent.parent
+    paths = ca.material(fixture.runtime, fixture.source, generation)
+    stamp = fixture_stamp(fixture.source)
+    fixture.template_data.update(ca_recipe=ca.ca.load(ca.repo)[2],
+        ca_evidence=ca.ca.runtime_evidence(ca.repo, fixture.runtime, fixture.source,
+            generation, ca.target, paths), **stamp)
+    product = Path(native.__file__).resolve().parents[1]
+    for relative in ('bin/lib/instruction_blocks.py', 'bin/lib/harness_instructions.md', 'codex/AGENTS.md'):
+        destination = ca.repo / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        copy2(product / relative, destination)
+    monkeypatch.setattr(native, 'ROOT', ca.repo)
     receipt = fixture.base / 'plain-receipt.json'
     fixture.save(receipt, {'variant': 'plain', 'thin_config_contract': 1,
         'harness': 'hermes', 'complete': True, 'details': fixture.template_data})
     fixture.save(fixture.template, {**fixture.template_data, 'generation_receipt': str(receipt)})
     manifest = {**fixture.manifest_data, 'enabled': True}
+    backend = 'strata-epyc' if changed_profile == 'new_connection' else 'deepseek'
+    if changed_profile == 'dynamic':
+        backend = 'local-workstation'
+    if backend != 'deepseek':
+        manifest['backends'][backend] = {**manifest['backends']['deepseek'], 'kind': 'strata'}
+        template = native.read(fixture.template)
+        template['profiles'][backend] = dict(template['profiles']['strata'])
+        fixture.save(fixture.template, template)
     manifest['harnesses']['hermes']['python'] = sys.executable
     fixture.save(fixture.manifest, manifest)
     args = staged(tmp_path, 'hermes')
-    args.manifest, args.model, args.backend = str(fixture.manifest), 'fixture-main', 'deepseek'
+    args.manifest, args.model, args.backend = str(fixture.manifest), 'fixture-main', backend
     args.helper_model = 'fixture-helper'
+    model_checks = []
+    if changed_profile == 'dynamic':
+        manifest['backends'][backend] = {'kind': 'strata', 'model_source': 'server',
+            'urls': ['https://one.invalid/v1', 'https://two.invalid/v1', 'https://three.invalid/v1']}
+        fixture.save(fixture.manifest, manifest)
+        args.model, args.helper_model, args.url_index = 'new-wire-id', 'same', 2
+        args.url_key = native.native_server_models.url_key(manifest['backends'][backend]['urls'][2])
+        monkeypatch.setattr(native.native_server_models, 'read_key', lambda *a: 'synthetic-key')
+        def models(base, key):
+            model_checks.append(base)
+            return [{'id': 'new-wire-id', 'available': True, 'meta': {'n_ctx': 131072}}]
+        monkeypatch.setattr(native.native_server_models, 'fetch_models', models)
     mcp = native.read(args.mcp_config)
     mcp['mcpServers']['orrery-mail'].update(command='/fixture/proxy', args=[])
     native.save(args.mcp_config, mcp)
@@ -324,6 +377,8 @@ def test_real_hermes_generator_round_trip_preserves_owned_native_session(tmp_pat
     with patch.object(subprocess, 'Popen', original_popen):
         directory = native.prepare(args)
         first = native.read(directory / 'launch.json')
+        instructions = (directory / 'instructions.md').read_text()
+        assert config.read(directory / 'overlay/config.yaml')['agent']['system_prompt'] == instructions
         memory = Path(first['env']['HERMES_HOME']) / 'memories/MEMORY.md'
         memory.parent.mkdir()
         memory.write_text('synthetic-memory-marker-distinct-from-conversation')
@@ -336,7 +391,7 @@ def test_real_hermes_generator_round_trip_preserves_owned_native_session(tmp_pat
         assert resume.mark_retired(runtime, args.agent_name, retention_days=30)
         resume.begin_resume(runtime, args.agent_name, agent_id=7,
                             project_key=args.project_key, program='hermes')
-        if changed_profile:
+        if changed_profile and changed_profile not in ('new_connection', 'dynamic'):
             source = native.read(directory / 'input.json')
             reason = 'native_resume_profile_changed'
             if changed_profile == 'legacy':
@@ -379,16 +434,23 @@ def test_real_hermes_generator_round_trip_preserves_owned_native_session(tmp_pat
         assert native.prepare_resume(runtime, args.agent_name) == directory
         resumed = native.read(directory / 'launch.json')
         assert resumed['env']['HERMES_HOME'] == first['env']['HERMES_HOME']
+        assert (directory / 'instructions.md').read_text() == instructions
+        assert config.read(directory / 'overlay/config.yaml')['agent']['system_prompt'] == instructions
         assert memory.read_text() == 'synthetic-memory-marker-distinct-from-conversation'
         assert resumed['argv'][-2:] == ['--resume', 'exact-hermes-id']
         source = native.read(directory / 'input.json')
+        assert source['backend_id'] == backend
         assert Path(source['prompt_file']).read_text() == ''
         overlay = config.read(directory / 'overlay/config.yaml')
-        assert overlay['delegation']['model'] == 'fixture-helper'
+        assert overlay['delegation']['model'] == ('new-wire-id' if changed_profile == 'dynamic' else 'fixture-helper')
         proxy = overlay['mcp_servers']['orrery-mail']['env']
         assert proxy['AGENTSTACK_PROXY_PROGRAM'] == 'hermes'
         assert proxy['AGENTSTACK_PROXY_TOKEN_FILE'] == str(runtime / ('agent_token_' + args.agent_name))
         invocation = native.resume_command(runtime, args.agent_name).split('; native_rc=$?', 1)[0]
+        if changed_profile == 'dynamic':
+            assert model_checks == ['https://three.invalid/v1']
+            final = native.read(directory / 'input.json')
+            assert (final['backend_id'], final['url_index'], final['model']) == (backend, 2, 'new-wire-id')
         assert shlex.split(invocation)[-2:] == ['--resume', 'exact-hermes-id']
 
 

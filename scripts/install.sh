@@ -45,6 +45,7 @@ DSH_OPT_IN=""
 HERMES_OPT_IN=""
 DSH_NODE="${AGENTSTACK_DSH_NODE:-}"
 MANAGED_SPAWN_CONFIG_SETTING="${AGENTSTACK_MANAGED_SPAWN_CONFIG:-}"
+DASHBOARD_ALLOWED_ORIGINS_SETTING="${AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS:-}"
 HARNESS_CACHE="${AGENTSTACK_HARNESS_CACHE:-}"
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MAIL_DB_EXPLICIT="${AGENTSTACK_MAIL_DB+x}"
@@ -95,6 +96,8 @@ PORTRAITS_DIR_SETTING="${AGENTSTACK_PORTRAITS_DIR:-}"
 CUSTOM_PORTRAITS_SETTING="${AGENTSTACK_CUSTOM_PORTRAITS:-}"
 CLAUDE_MODELS_SETTING="${AGENTSTACK_CLAUDE_MODELS:-}"
 CODEX_MODELS_SETTING="${AGENTSTACK_CODEX_MODELS:-}"
+CODEX_DEFAULT_MODEL_SETTING="${AGENTSTACK_CODEX_DEFAULT_MODEL:-}"
+CODEX_DEFAULT_EFFORT_SETTING="${AGENTSTACK_CODEX_DEFAULT_EFFORT:-}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-}"
 PYTHON_CHOICE="${AGENTSTACK_PYTHON:-}"
 PYTHON_REQUESTED=""
@@ -609,14 +612,13 @@ esac
 #
 # - Explicit includes an empty value: `AGENTSTACK_VAULT=` or `--codex-add-dirs ""`
 #   puts that one setting back to its default.
-# - env.sh writes every value out, defaults included, so it also records which
-#   were chosen (AGENTSTACK_CHOSEN_SETTINGS). Only those are inherited; a default
-#   written out follows the current default next time. An env.sh from before
-#   that record counts a value as chosen when it differs from today's default,
-#   except PATH and Python, which the installer always worked out itself.
+# - Keep saved nondefault values even when the choice record is absent or
+#   incomplete (#354). Record them for subsequent installs. A recorded choice
+#   equal to today's default remains a choice; removing a value or explicitly
+#   clearing it still returns that setting to its default.
 # - A value in the environment equal to what env.sh recorded is an echo of
 #   env.sh (cockpit's update.sh and some shell profiles source it), not a new
-#   choice: it keeps the status it had. An option is always a request. Only
+#   choice: normal inheritance or reset applies. An option is always a request. Only
 #   an env.sh with the record can be echoed; before it, the value is explicit.
 # - --reset-settings drops the previous choices. What names the data and the
 #   services running on it (project key, extra protected roots, the Mail state and
@@ -682,7 +684,8 @@ resolve_setting() {
   elif [[ -n "$saved" ]] && {
     [[ "$mode" == kept ]] ||
       { [[ "$RESET_SETTINGS" != 1 ]] &&
-        { [[ "$mode" == found ]] || setting_previously_chosen "$name" "$saved" "$default"; }; }
+        { [[ "$mode" == found ]] || [[ "$saved" != "$default" ]] ||
+          setting_previously_chosen "$name" "$saved" "$default"; }; }
   }; then
     value="$saved"
     SETTING_SOURCE=saved
@@ -701,6 +704,7 @@ resolve_setting() {
 resolve_setting PORT AGENTSTACK_PORT 8770
 resolve_setting DSH_NODE AGENTSTACK_DSH_NODE "" kept
 resolve_setting MANAGED_SPAWN_CONFIG_SETTING AGENTSTACK_MANAGED_SPAWN_CONFIG ""
+resolve_setting DASHBOARD_ALLOWED_ORIGINS_SETTING AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS ""
 resolve_setting LABEL_PREFIX AGENTSTACK_LABEL_PREFIX org.agentstack kept
 LABEL_PREFIX_SOURCE="$SETTING_SOURCE"
 resolve_setting TERMINAL AGENTSTACK_TERMINAL auto
@@ -845,6 +849,8 @@ resolve_setting CUSTOM_PORTRAITS_SETTING AGENTSTACK_CUSTOM_PORTRAITS
 # An empty AGENTSTACK_CLAUDE_MODELS is itself a choice: the built-in list.
 resolve_setting CLAUDE_MODELS_SETTING AGENTSTACK_CLAUDE_MODELS
 resolve_setting CODEX_MODELS_SETTING AGENTSTACK_CODEX_MODELS
+resolve_setting CODEX_DEFAULT_MODEL_SETTING AGENTSTACK_CODEX_DEFAULT_MODEL
+resolve_setting CODEX_DEFAULT_EFFORT_SETTING AGENTSTACK_CODEX_DEFAULT_EFFORT
 
 # Pass the new settings as data, never interpolate them into Python source.
 export AGENTSTACK_CLAUDE_MODELS="$CLAUDE_MODELS_SETTING"
@@ -983,6 +989,26 @@ AGENT_MAIL_LOG="$NATIVE_MAIL_LOG"
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# Show actual changes only for these documented, non-secret settings. Never
+# dump arbitrary saved settings: other values may contain credentials.
+report_setting_changes() {
+  [[ -f "$SETTINGS_ENV_FILE" ]] || return 0
+  local name before after
+  for name in AGENTSTACK_AUTO_OPEN_CHILD AGENTSTACK_PORTRAITS_DIR; do
+    before="$(agentstack_installed_env_value "$name" "$SETTINGS_ENV_FILE")"
+    case "$name" in
+      AGENTSTACK_AUTO_OPEN_CHILD)
+        before="${before:-1}"
+        after="$AUTO_OPEN_CHILD_SETTING"
+        ;;
+      AGENTSTACK_PORTRAITS_DIR) after="$PORTRAITS_DIR_SETTING" ;;
+    esac
+    if [[ "$before" != "$after" ]]; then
+      say "setting change: $name: ${before:-(empty)} -> ${after:-(empty)}"
+    fi
+  done
+}
 
 # Each `:`-separated entry must be absolute or start with `~` (the dashboard
 # expands `~` itself). A missing directory is only a warning: presets often
@@ -1298,6 +1324,23 @@ preflight_python() {
   fi
 }
 
+preflight_codex_defaults() {
+  local model="${CODEX_DEFAULT_MODEL_SETTING:-}" effort="${CODEX_DEFAULT_EFFORT_SETTING:-}"
+  local family
+  family="$(printf '%s_' "$model" | tr '[:upper:]' '[:lower:]')"
+  family="${family%_}"
+  case "$family" in
+    ""|sol|terra|luna|astra) ;;
+    *) [[ ${#model} -le 128 && "$model" =~ ^gpt-[a-z0-9]+([._-][a-z0-9]+)*$ ]] || preflight_error "invalid AGENTSTACK_CODEX_DEFAULT_MODEL" ;;
+  esac
+  effort="$(printf '%s_' "$effort" | tr '[:upper:]' '[:lower:]')"
+  effort="${effort%_}"
+  case "$effort" in
+    ""|none|minimal|low|medium|high|xhigh|max|ultra) ;;
+    *) preflight_error "invalid AGENTSTACK_CODEX_DEFAULT_EFFORT" ;;
+  esac
+}
+
 normalize_path() {
   "$PYTHON_BIN" - "$1" <<'PY'
 import pathlib
@@ -1601,6 +1644,7 @@ run_preflight() {
   preflight_required_commands
   preflight_platform
   preflight_python
+  preflight_codex_defaults
   preflight_target_writable
   preflight_agent_mail_port
   preflight_finish
@@ -2520,6 +2564,7 @@ install_payload() {
     if [[ "$DRY_RUN" != true ]]; then
       mkdir -p "$HOOKS_DIR"
       cp "$REPO_ROOT/hooks/llm_secret_reader.py" "$HOOKS_DIR/llm_secret_reader.py"
+      cp "$REPO_ROOT/hooks/native_connections.py" "$HOOKS_DIR/native_connections.py"
     fi
   fi
   copy_core_tree "$REPO_ROOT/dashboard" "$DASHBOARD_DIR" "dashboard"
@@ -2870,6 +2915,9 @@ write_env_file() {
   AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS="${EXTRA_PROTECTED_ROOTS-}" \
   AGENTSTACK_INSTALL_LEGACY_PROTECTED_ROOTS="${LEGACY_PROTECTED_ROOTS-}" \
   AGENTSTACK_INSTALL_PRESERVE_LEGACY_PROTECTED_ROOTS="${PRESERVE_LEGACY_PROTECTED_ROOTS:-false}" \
+  AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL="${CODEX_DEFAULT_MODEL_SETTING:-}" \
+  AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT="${CODEX_DEFAULT_EFFORT_SETTING:-}" \
+  AGENTSTACK_INSTALL_DASHBOARD_ORIGINS="${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}" \
   "$PYTHON_BIN" - "$ENV_FILE" <<PY
 import os
 import pathlib
@@ -2880,6 +2928,7 @@ import tempfile
 path = pathlib.Path(sys.argv[1])
 values = {
     "AGENTSTACK_PORT": "$PORT",
+    "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS": os.environ.get("AGENTSTACK_INSTALL_DASHBOARD_ORIGINS", ""),
     "AGENTSTACK_LABEL_PREFIX": "$LABEL_PREFIX",
     # An install that chose its own label prefix gets its own mail service
     # label too. Otherwise agentstack-mailctl falls back to the built-in
@@ -2912,6 +2961,8 @@ values = {
     "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
     "AGENTSTACK_CLAUDE_MODELS": os.environ.get("AGENTSTACK_CLAUDE_MODELS", ""),
     "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
+    "AGENTSTACK_CODEX_DEFAULT_MODEL": os.environ["AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL"],
+    "AGENTSTACK_CODEX_DEFAULT_EFFORT": os.environ["AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT"],
     "AGENTSTACK_DSH_NODE": "$DSH_NODE",
     "AGENTSTACK_MANAGED_SPAWN_CONFIG": "$MANAGED_SPAWN_CONFIG_SETTING",
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
@@ -2930,8 +2981,8 @@ values = {
     "AGENTSTACK_RUNTIME_MODE": "${AGENTSTACK_RUNTIME_MODE:-legacy}",
     "AGENTSTACK_GLOBAL_SERVER_CONFIG": "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}",
     "AGENTSTACK_PATH": "$PATH_VALUE",
-    # Which of the values above were chosen, not written-out defaults: only
-    # these are inherited by the next install.
+    # Record chosen values; the next install also preserves saved nondefaults
+    # even when their names are absent from this list.
     "AGENTSTACK_CHOSEN_SETTINGS": "$CHOSEN_SETTINGS",
 }
 values.update({
@@ -4560,6 +4611,7 @@ render_launchd_plist() {
       __RUNTIME_MODE__ "${AGENTSTACK_RUNTIME_MODE:-legacy}"
       __GLOBAL_SERVER_CONFIG__ "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}"
       __PORT__ "$PORT"
+      __DASHBOARD_ALLOWED_ORIGINS__ "${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}"
       __MAIL_DB__ "$MAIL_DB"
       __MAIL_ENV__ "$MAIL_ENV"
       __MAIL_HOME__ "$MAIL_HOME"
@@ -4585,6 +4637,8 @@ render_launchd_plist() {
       __PORTRAITS_DIR__ "$PORTRAITS_DIR_SETTING"
       __CUSTOM_PORTRAITS__ "$CUSTOM_PORTRAITS_SETTING"
       __CODEX_MODELS__ "$CODEX_MODELS_SETTING"
+      __CODEX_DEFAULT_MODEL__ "$CODEX_DEFAULT_MODEL_SETTING"
+      __CODEX_DEFAULT_EFFORT__ "$CODEX_DEFAULT_EFFORT_SETTING"
       __HOOKS_DIR__ "$HOOKS_DIR"
       __RUNTIME_DIR__ "$RUNTIME_DIR"
       __PERSISTENT_PROFILES_DIR__ "$PERSISTENT_PROFILES_DIR"
@@ -4637,6 +4691,9 @@ render_systemd_unit() {
   if [[ "$DRY_RUN" != true ]]; then
     mkdir -p "$dir"
     AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS="${EXTRA_PROTECTED_ROOTS-}" \
+    AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL="${CODEX_DEFAULT_MODEL_SETTING:-}" \
+    AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT="${CODEX_DEFAULT_EFFORT_SETTING:-}" \
+    AGENTSTACK_INSTALL_DASHBOARD_ORIGINS="${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}" \
     "$PYTHON_BIN" - "$unit" <<PY
 import os
 import pathlib
@@ -4645,6 +4702,7 @@ import sys
 path = pathlib.Path(sys.argv[1])
 env = {
     "AGENTSTACK_PYTHON": "$PYTHON_BIN",
+    "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS": os.environ.get("AGENTSTACK_INSTALL_DASHBOARD_ORIGINS", ""),
     "AGENTSTACK_RUNTIME_MODE": "${AGENTSTACK_RUNTIME_MODE:-legacy}",
     "AGENTSTACK_GLOBAL_SERVER_CONFIG": "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}",
     "AGENTSTACK_PORT": "$PORT",
@@ -4676,6 +4734,8 @@ env = {
     "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
     "AGENTSTACK_CLAUDE_MODELS": os.environ.get("AGENTSTACK_CLAUDE_MODELS", ""),
     "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
+    "AGENTSTACK_CODEX_DEFAULT_MODEL": os.environ["AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL"],
+    "AGENTSTACK_CODEX_DEFAULT_EFFORT": os.environ["AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT"],
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
@@ -4935,6 +4995,9 @@ write_manifest() {
   fi
   AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS="${EXTRA_PROTECTED_ROOTS-}" \
   AGENTSTACK_INSTALL_MAIL_UPDATE="$mail_update" \
+  AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL="${CODEX_DEFAULT_MODEL_SETTING:-}" \
+  AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT="${CODEX_DEFAULT_EFFORT_SETTING:-}" \
+  AGENTSTACK_INSTALL_DASHBOARD_ORIGINS="${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}" \
   "$PYTHON_BIN" - "$tmp" "$service_kind" "$service_path" \
     "$mail_service_kind" "$mail_service_path" "$AGENT_MAIL_NAME_CAPABILITY_JSON" \
     "${AGENT_MAIL_AUTOSTART_KIND:-}" "${AGENT_MAIL_AUTOSTART_PATH:-}" \
@@ -5090,6 +5153,7 @@ manifest = {
     },
     "env": {
         "AGENTSTACK_PORT": "$PORT",
+        "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS": os.environ.get("AGENTSTACK_INSTALL_DASHBOARD_ORIGINS", ""),
         "AGENTSTACK_LABEL_PREFIX": "$LABEL_PREFIX",
         "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
         "AGENTSTACK_EXTRA_PROTECTED_ROOTS": os.environ["AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS"],
@@ -5110,6 +5174,8 @@ manifest = {
         "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
         "AGENTSTACK_CLAUDE_MODELS": os.environ.get("AGENTSTACK_CLAUDE_MODELS", ""),
         "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
+    "AGENTSTACK_CODEX_DEFAULT_MODEL": os.environ["AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL"],
+    "AGENTSTACK_CODEX_DEFAULT_EFFORT": os.environ["AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT"],
         "AGENTSTACK_DSH_NODE": "$DSH_NODE",
         "AGENTSTACK_MANAGED_SPAWN_CONFIG": "$MANAGED_SPAWN_CONFIG_SETTING",
         "AGENTSTACK_MAIL_LAUNCHD_LABEL": "$MAIL_LAUNCHD_LABEL_SETTING",
@@ -5250,6 +5316,7 @@ main() {
   say "spawn roots: ${SPAWN_ROOTS_SETTING:-(default: \$HOME)}"
   say "worktree root: $WORKTREE_ROOT_SETTING"
   say "automatically open child terminals: $AUTO_OPEN_CHILD_SETTING (set AGENTSTACK_AUTO_OPEN_CHILD=0 on reinstall to disable auto-open while keeping Deck Open tmux)"
+  report_setting_changes
   say "codex child approval: $CODEX_CHILD_APPROVAL_SETTING"
   say "codex child config overlay: ${CODEX_CHILD_CONFIG_OVERLAY_SETTING:-(disabled)}"
   say "codex network: $CODEX_NETWORK_SETTING"
@@ -5265,6 +5332,13 @@ main() {
   if ! run_preflight; then
     exit 1
   fi
+  # Validate before copying assets, writing settings or changing services.
+  # Pass the new setting as data, never interpolate it into Python source.
+  "$PYTHON_BIN" - "$REPO_ROOT/dashboard/legacy_http_admission.py" "$DASHBOARD_ALLOWED_ORIGINS_SETTING" <<'PY'
+import runpy, sys
+runpy.run_path(sys.argv[1])["configured_origins"](sys.argv[2])
+PY
+  say "additional dashboard origins: ${DASHBOARD_ALLOWED_ORIGINS_SETTING:-(none; loopback only)}"
   validate_codex_child_overlay
   if [[ "$TIER" == "tier1" ]]; then
     say "Tier1 will show MCP and user-settings dry-run diffs before any merge."

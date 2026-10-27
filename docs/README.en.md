@@ -22,6 +22,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 ## Use the screen
 
 - [Dashboard](dashboard.en.md) — Reference for DECK/NETWORK, history, RESUME/EXIT, REPLAY, and details.
+- [Read from a designated phone](mobile.en.md) — The reader is off by default; owner admission, device restrictions, manual enable and disable steps.
 - [Delegation and child agents](delegation.en.md) — ORRERY /delegate, differences from native children, and tool selection.
 - [Launchers and identity](launchers.en.md) — agent-start, names, resume, /delegate and /log, and notification flow.
 - [Using Obsidian](obsidian.en.md) — Store logs, paper notes, and tasks in a vault and Daily Note.
@@ -49,6 +50,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 ## Troubleshoot
 
 - [Troubleshooting](troubleshooting.en.md) — Isolate service, notification, spawn, authentication, and WSL problems.
+- [Local HTTP trust boundary (Japanese)](local-http-security.md) — Which request origins Dashboard and Mail accept, and what they trust.
 
 ## Design and development
 
@@ -60,6 +62,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Namespace contract and migration planning](project-removal-plan.en.md) — PR1 candidate APIs and gates; defaults stay unchanged and cutover belongs to later PRs.
 - [Absolute reservation candidate](absolute-reservations.en.md) — PR2 shared normalizer, authenticated isolated store, client adapters and per-lease activity/GC; legacy mode remains the default.
 - [Candidate Mail and delivery state migration](namespace-state-migration.en.md) — PR3 isolated snapshots, persistent stores and phase recovery; activation stays false.
+- [Internal storage-origin B1 kernel](storage-origin-b1.en.md) — S′ candidate resolution, owner operations and pure peek; unpublished, with the default startup path unchanged.
 - [Global server S1 preparation](global-server.en.md) — Isolated HTTP registration/reconnection, inbox, enrollment and authority epoch; legacy mode stays default.
 - [Isolated global reservations/welcome](global-reservations.en.md) — S2c SQL authority, TTL, operator recovery and test migration; legacy remains default.
 - [Isolated global messages and signals (S2b)](global-messages.en.md) — Eight tools, DB attachments, pure inbox, and signal reconciliation; legacy remains default.

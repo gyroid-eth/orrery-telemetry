@@ -21,11 +21,11 @@ def native_section():
 
 
 def test_claude_codex_procedure_remains_byte_identical():
-    # Entire original skill at master 9edd9573, not just selected sentences.
+    # Protect the reviewed Claude/Codex procedure after the Codex defaults change.
     before, remainder = SKILL.read_bytes().split(START.encode(), 1)
     _, after = remainder.split(END.encode(), 1)
     assert hashlib.sha256(before + after).hexdigest() == (
-        'a7bd8874ebdfdde3b2c92d5c832bbd231e7a8db8397a8d88d61447413683a388')
+        '86e9731023ed25d4e5c8d1398ba16b52be1a19be47ea9468bfbe10af862a1ab3')
 
 
 def test_documented_request_uses_current_public_api_contract():

@@ -8,6 +8,21 @@ Use this guide after installing ORRERY's shared components to prepare DeepSeek o
 
 The cockpit is the interface for working with terminals. Telemetry tracks agents and handles their launch requests. Prepare the API connection on the Telemetry side; then either NEW AGENT screen can use it. There is currently no API-key field or complete connection-setup wizard in NEW AGENT.
 
+### Local servers: configure URLs once
+
+For dynamic Local connections, give your agent the [one-time migration procedure](../examples/native-harnesses/README.en.md#dynamic-local-connections). Each connection has your chosen label, one or more API URLs and an optional context fallback. Both NEW AGENT screens list model IDs returned by those servers, grouped by connection. A new model on an existing URL needs no per-model ORRERY configuration or reinstall. Existing fixed-model connections continue to work until you choose to migrate them.
+
+This section requires Telemetry API33 or newer and the matching cockpit picker update. Update both before migrating a connection; the older fixed-model instructions below remain compatible.
+
+| Who | Step |
+| --- | --- |
+| Your agent | Read the procedure; prepare a separate private copy, retain the existing OS credential references and runtime paths, move each Local connection to `model_source: server`, and show the non-secret diff. Run static validation without fetching a key or contacting a server. |
+| You | Review the URLs and diff; enroll or unlock credentials through the OS only if needed. Approve using the new manifest. |
+| Your agent / you | Follow the ordinary plan/dry-run and install procedure with that manifest; reload both interfaces and choose the intended connection, URL number and model. Coordinate one short real acceptance task separately. |
+| Your agent / you | To recover, use the saved old manifest with the same ordinary install procedure. Do not rewrite retained sessions to a different URL or model. |
+
+The product reads the existing protected credential reference for model listing and checks the selected URL once again just before generating a launch/resume command. It does not start or stop server models. `Available` means a returned ID without an explicit unloaded flag; it is not proof that the server has loaded it. A server change after the final lookup, a replacement run with the same ID, or a server that ignores the requested ID is outside that observation. Existing dsh protocol and Hermes HTTPS requirements below still apply.
+
 **If you use an older version, complete the ordinary update first.** This guide requires Telemetry 2026.10.22 or newer. Check the installed version by running `cat "${AGENTSTACK_HOME:-$HOME/.agentstack}/VERSION"` in your terminal. If it is older or you cannot determine the version, consult the [Telemetry update instructions](install.en.md#upgrade). If you also use the cockpit, its [update instructions](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install.md#install-or-update-with-one-line) cover updating both applications. Older installers may not recognize the options used below. After updating, continue with installing dsh/Hermes and saving the key. Updating is a prerequisite; the initial API setup is a separate step.
 
 ## 1. Choose a provider and a harness
@@ -21,7 +36,7 @@ The cockpit is the interface for working with terminals. Telemetry tracks agents
 
 Pick one provider and one harness, such as DeepSeek + dsh. You can install both harnesses without creating two API keys for the same provider. You do not need a DeepSeek account to use a Local server.
 
-**Check the Local server's protocol before setting it up.** dsh uses the fixed DeepSeek adapter and accepts HTTP/HTTPS URLs for compatible APIs. Hermes requires HTTPS and either `chat_completions` or `anthropic_messages`; you cannot give it an HTTP-only endpoint directly. The internal backend ID is `strata`, but it is not a Strata hostname restriction. Nor does it guarantee that every server advertised as OpenAI-compatible will work.
+**Check the Local server's protocol before setting it up.** dsh uses the fixed DeepSeek adapter and accepts HTTP/HTTPS URLs for compatible APIs. Hermes requires HTTPS and either `chat_completions` or `anthropic_messages`; you cannot give it an HTTP-only endpoint directly. The legacy Local example uses the connection ID `strata`, but this is not a Strata hostname restriction. Nor does it guarantee that every server advertised as OpenAI-compatible will work.
 
 **A Local configuration that stores and references no key is not currently supported by ORRERY.** Both harness paths require a reference to a key saved in the OS. Do not invent a dummy key for a server without authentication. Obtain a compatible endpoint with authentication before continuing with this guide.
 
@@ -159,6 +174,7 @@ After the runtime paths and credential references have been checked and validati
 
 1. Open [NEW AGENT in cockpit](https://github.com/gyroid-eth/orrery/blob/master/docs/en/usage.md#new-agent), or [NEW AGENT in standalone Telemetry](dashboard.en.md#native-models-and-harnesses).
 2. Choose a scientist, DeepSeek or Local models, your configured model, and dsh or Hermes.
+   To keep several Local servers, [configure separate connection IDs and server names](configuration.en.md#native-connections), then choose the row for workstation, EPYC, or your intended server. Equal model IDs still select different connections.
 3. Use a new work folder and send one short task. Once you have a model response, continue with the [Mail end-to-end check](getting-started.en.md#5-play-shiritori-as-an-end-to-end-check).
 
 ![Local models and Hermes selected in the real WSL Telemetry interface](img/wsl-native-harness-picker.png)

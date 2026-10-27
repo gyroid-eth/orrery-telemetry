@@ -107,6 +107,7 @@ def test_installed_reader_minimal_environment_with_synthetic_store(tmp_path):
     target = tmp_path / 'installed/hooks/llm_secret_reader.py'
     target.parent.mkdir(parents=True)
     shutil.copyfile(ROOT / 'hooks/llm_secret_reader.py', target)
+    shutil.copyfile(ROOT / 'hooks/native_connections.py', target.with_name('native_connections.py'))
     store = tmp_path / 'fake-secret-tool'
     store.write_text('#!/bin/sh\nprintf "synthetic-e1-value\\n"\n')
     store.chmod(0o700)

@@ -22,6 +22,7 @@ macOS の dashboard は `~/.agentstack/dashboard/agentctl.sh restart` でも、�
 | --- | --- | --- |
 | `AGENTSTACK_PORT` | `8770` | HTTP port |
 | `AGENTSTACK_BIND_HOST` | `127.0.0.1` | bind address |
+| `AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS` | 空文字 | legacy dashboard で追加許可する固定の HTTP(S) origin。半角スペース区切り。下記参照 |
 | `AGENTSTACK_MAIL_DB` | `~/.agentstack/mail/storage.sqlite3` | ORRERY Mail SQLite |
 | `AGENTSTACK_MAIL_ENV` | `~/.agentstack/mail/.env` | standalone dashboard の互換 bearer 参照先。installer は service render を明示 |
 | `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `disabled` | legacy Authorization header を付けない |
@@ -43,6 +44,8 @@ macOS の dashboard は `~/.agentstack/dashboard/agentctl.sh restart` でも、�
 | `AGENTSTACK_SPAWN_ROOTS` | `$HOME` | `:` 区切りの directory typeahead 許可 root |
 | `AGENTSTACK_CLAUDE_MODELS` | 未設定 | `,` 区切りの dashboard Claude model 明示 override |
 | `AGENTSTACK_CODEX_MODELS` | `unset` | `,` 区切りの dashboard Codex model allow-list |
+| `AGENTSTACK_CODEX_DEFAULT_MODEL` | `unset` | Codex child の既定 model ID または短縮名 |
+| `AGENTSTACK_CODEX_DEFAULT_EFFORT` | `unset` | Codex child の既定 effort |
 
 path 系は `~` を展開します。空文字は未設定として扱います。integer の `AGENTSTACK_PORT` が不正なら `8770` に戻ります。
 
@@ -54,6 +57,25 @@ murmur の言語は `?lang=ja` / `?lang=en`、`AGENTSTACK_LANG`、browser の
 Murmur switch でも on / off を切り替えられ、その選択は browser に保存されます
 （優先順は URL、browser の保存値、service 既定）。環境変数を
 常駐 service に反映するには、設定後に installer を再実行してください。
+
+## LAN / VPN から使う場合の Host 設定
+
+legacy dashboard は、全 HTTP メソッド・全パスで `Host` を検査します。既定では、実際の待受ポートの `127.0.0.1`、`localhost`、`[::1]` だけを許可します。通常のローカル利用や、loopback URL へ接続する cockpit bridge の設定追加は不要です。
+
+既に LAN / VPN 向けに待ち受けている場合は、更新前に利用する URL の origin（scheme、host、port）を明示してください。例えば、既存 checkout で次を dry-run し、結果を確認してから同じ環境変数付きで `--dry-run` を外して実行します。
+
+```bash
+AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS='http://dashboard.example:8770 https://dashboard.example' \
+  ./scripts/install.sh --keep-mail --dry-run
+```
+
+この値は `env.sh` と dashboard の service 定義へ保存され、再インストール時も引き継がれます。空文字を明示するか `--reset-settings` で追加許可を消せます。`server.py` を直接起動する場合は、そのプロセスへ同じ環境変数を渡してください。この設定は bind address を変更しません。既存の待受設定は別途維持してください。
+
+origin にパス・認証情報・query・fragment・wildcard は書けません。引用符や改行などを含む不正な値は、installer が設定や service を書く前に拒否し、server も起動を拒否します。区切りは改行やタブではなく半角スペースです。大文字小文字と IPv6 表記を正規化し、port 省略は HTTP の `80` / HTTPS の `443` として照合します。`8770` など他の port は必ず明示してください。
+
+`AGENTSTACK_BIND_HOST=0.0.0.0`、実 interface、`Forwarded` / `X-Forwarded-*` から許可先を推測しません。HTTPS を proxy で終端する場合も、利用する HTTPS origin を明示し、upstream の `Host` と browser の `Origin` がその同じ origin に対応するようにしてください。別途許可した origin でも、異なる `Host` の POST は通りません。
+
+これは認証機能ではありません。dashboard にはログインがなく、許可した Host を送れる相手は操作できます。公開範囲は信頼できる LAN / VPN に限定してください。isolated global mode の capability 認証と公開 static resource の扱いは変わりません。
 
 ## Project key がない場合
 
@@ -74,6 +96,36 @@ Murmur switch でも on / off を切り替えられ、その選択は browser �
 - project-scoped retire
 
 mail 系だけを `NOT CONFIGURED` にし、local telemetry を診断に残す設計です。
+
+<a id="native-connections"></a>
+
+## DeepSeekやLocalの接続先を複数残す
+
+API 27以降では、1つの私有manifestにDeepSeek、workstationのLocal、EPYCのLocalなどを同時に登録できます。既存の`deepseek`/`strata`は変更不要です。追加接続には別のIDと`kind`が必要です。以下はmanifestの`backends`部分の例です。`<FORMAL_MODEL_ID>`は、そのサーバーが受け付ける実際のmodel IDへ置き換えます。
+
+```json
+{
+  "backends": {
+    "deepseek": {"model": "deepseek-flash", "models": ["deepseek-flash"]},
+    "strata": {"label": "workstation", "server": "workstation", "model": "<FORMAL_MODEL_ID>", "models": ["<FORMAL_MODEL_ID>"]},
+    "strata-epyc": {"kind": "strata", "label": "EPYC", "server": "EPYC", "model": "<FORMAL_MODEL_ID>", "models": ["<FORMAL_MODEL_ID>"]}
+  }
+}
+```
+
+既存のDeepSeekと`strata`の設定を残し、コピーした私有設定で次を揃えます。
+
+| ファイル内の場所 | 追加接続に設定するもの |
+| --- | --- |
+| manifestの`backends.strata-epyc` | `kind: "strata"`、実際のmodel ID、見分けられる`label`と`server` |
+| dsh backendファイルの`backends.strata-epyc` | この接続専用の`base_url`、`model`、キー参照。必要なら`model_definition.id`、`contextWindow`、`maxTokens`もここへ |
+| Hermes設定の`profiles.strata-epyc` | この接続専用の`provider`名、`base_url`、`api_mode`、`model`、`context_length`、キー参照 |
+
+dshとHermesのURL形式は同じとは限りません。[初期設定のAPI条件](native-setup.md#1-最初に使う組合せを選ぶ)に従います。Macのキー参照は既存のkeychain/service/accountと`key_cmd`の形式、WSLはmanifestの接続ごとの`credential_ref`を使います。キーの値はJSONへ書きません。contextは各サーバーの実際の値、maxTokensは必要な出力上限に合わせます。同じmodel IDだからといって別サーバーの値やキー参照を流用しないでください。
+
+接続IDは`[a-z][a-z0-9_-]{0,63}`の形式です。CLI名や`same`/`auto`/`main`/`custom`などの予約名は使えません。新IDの`kind`は`deepseek`か`strata`を明示し、旧IDの種別は変更できません。同じIDの重複、未知ID、未知kind、別接続のhelper modelは拒否します。helperは同じ接続のmodel一覧から選びます。
+
+manifestを有効化して使うharnessごとに正規の静的validateを行い、[初期設定の手順5](native-setup.md#5-設定例をコピーして接続先をつなぐ)どおりinstallerへ渡します。cockpitではLocal modelsの各行のserver名（workstation / EPYC）で選び分けます。Telemetry単体では接続labelが別タブに出ます。APIとCLIでは接続IDを保持し、例えば`--harness dsh --backend strata-epyc --model <FORMAL_MODEL_ID>`を指定します。resumeも保存した接続IDとnative sessionを使い、別の接続へ自動で移しません。global modeと実接続の受入範囲は従来どおりです。
 
 ## Output / deliverables
 
@@ -239,9 +291,9 @@ worktree root を変える場合は、たとえば `AGENTSTACK_WORKTREE_ROOT=/sr
 
 自動表示を止めるには、`AGENTSTACK_AUTO_OPEN_CHILD=0 ./scripts/install.sh ...` として installer に渡してください。設定は `env.sh`、Dashboard service、install-state に保存され、再インストールでも保持されます。未設定の旧 install は `1` となり、これまでと挙動は変わりません。明示した `0` / `1` は保存値より優先されます。`AGENTSTACK_FOCUS_CHILD=1` は自動表示が有効なときだけ効きます。直接 shell から起動する場合は、その shell に同じ変数を export します。child から孫への新規起動と、Claude / Codex session の再開先へも設定を渡します。Gemini の別 launcher に OS terminal 自動表示を追加する設定ではありません。
 
-child の model は spawner の単一 model catalog と正規化関数から決まります。Claude の無指定 / `opus` / `sonnet` / `haiku` / `fable` は、Claude Code のローカル model catalog がその系統の現行として示すモデル（系統ごとに 1 つの `main` 行）に解決します（catalog が無い・読めない・系統の行が 1 つに決まらない・子が使う Claude Code より新しい版を要する・古い catalog が同梱の表より古い世代を示すときは `dashboard/claude_models.py` の同梱の表。今は `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-haiku-4-5-20251001` / `claude-fable-5-1`）。`sonnet-5-5`・`sonnet-5`・`opus-5-5` のような版つきの別名は世代を固定します。Codex の無指定と明示 `sol` はどちらも起動対象 CLI が 0.159.0 以上なら `gpt-6.1-sol`、古い版なら `gpt-6-sol` です。版不明なら新鮮な catalog で判定します（[Codex model catalog](#codex-model-catalog) 参照）。旧世代を固定する場合は `gpt-6-sol` のように正式 ID を指定します。旧 `claude-opus-5`、`claude-opus-4-8`、`claude-sonnet-4-6`、`gpt-5.5` の明示指定は引き続き有効です。generic な `opus[1m]` / `sonnet[1m]` は既知の legacy 1M model に正規化されます。
+child の model は spawner の単一 model catalog と正規化関数から決まります。Claude の無指定 / `opus` / `sonnet` / `haiku` / `fable` は、Claude Code のローカル model catalog がその系統の現行として示すモデル（系統ごとに 1 つの `main` 行）に解決します（catalog が無い・読めない・系統の行が 1 つに決まらない・子が使う Claude Code より新しい版を要する・古い catalog が同梱の表より古い世代を示すときは `dashboard/claude_models.py` の同梱の表。今は `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-haiku-4-5-20251001` / `claude-fable-5-1`）。`sonnet-5-5`・`sonnet-5`・`opus-5-5` のような版つきの別名は世代を固定します。Codex の無指定は設定された既定を使い、未設定なら CLI と catalog による従来の判定です。短縮名は新鮮な catalog の同系統の最新版に追従します（[Codex model catalog](#codex-model-catalog) 参照）。旧世代を固定する場合は `gpt-6-sol` のように正式 ID を指定します。旧 `claude-opus-5`、`claude-opus-4-8`、`claude-sonnet-4-6`、`gpt-5.5` の明示指定は引き続き有効です。generic な `opus[1m]` / `sonnet[1m]` は既知の legacy 1M model に正規化されます。
 
-Codex の reasoning effort は `--effort` から決まり、`AGENTSTACK_CODEX_MODEL` と `AGENTSTACK_CODEX_EFFORT` として child session へ渡します。対応情報があれば既定は `xhigh` またはそのモデルの既定、情報がなければCLI既定です。`gpt-5.6-luna` / `gpt-6-luna` は `ultra` を、旧 `gpt-5.5` は `max` / `ultra` をサポートしないため spawner が拒否します。これらは spawner が設定する値なので、手動で export しても top-level launcher の挙動は変わりません。
+Codex の reasoning effort は `--effort` から決まり、`AGENTSTACK_CODEX_MODEL` と `AGENTSTACK_CODEX_EFFORT` として child session へ渡します。対応情報があれば既定は `xhigh` またはそのモデルの既定、情報がなければCLI既定です。明示 effort の互換性は Codex CLI が判定します。これらは spawner が設定する値なので、手動で export しても top-level launcher の挙動は変わりません。
 
 正常終了した Claude / Codex child は、remote identity を retire したまま、private state と canonical owner credential を期限まで保持します。専用 home、proxy runtime、旧 MCP config は cleanup ごとに削除され、Codex resume 時には現在の source Codex home と保存済みの `codex_mcp_profile` から home を作り直し、Claude resume 時には子専用 Mail proxy config を作り直します。期限切れ material は dashboard 稼働中の maintenance が削除します。`agentstack-doctor` は期限切れ・purge 待ちを報告するだけで削除しません。期限前でも `agentstack-purge-child-resume <agent>`、期限切れをまとめて片付ける場合は `agentstack-purge-child-resume --expired` を使えます。どちらも履歴 transcript と bound receipt は削除しません。
 
@@ -369,11 +421,17 @@ AGENTSTACK_CODEX_MODELS="gpt-6.1-sol,gpt-6-luna" ./scripts/install.sh
 
 明示設定は cache より優先される許可リストです。空要素・前後空白・重複は除去します。不正な ID を含む場合は Codex タブに設定エラーを表示して起動を止め、別 provider や同梱候補へ黙って切り替えません。設定の永続化は既存の installer 経路を使います。shell の `export` は稼働中 service に届きません。
 
-**モデル省略と `sol` は、起動対象 CLI が 0.159.0 以上なら `gpt-6.1-sol` を優先し、それ未満なら `gpt-6-sol` から選びます。版不明なら新鮮な catalog を初期判定に使います。** その既定候補が選択された `CODEX_HOME` の cache に無ければ、`gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna` の順で、cache にある次の候補へ下げます。CLI 0.159.0 未満では GPT-6.1 Sol へ上げません。この順は製品の選好で、cache や許可リストの並び順には依存しません。既定を下げる判断には期限切れの cache も使います。古い一覧によって低いモデルを選んでも起動を続けられることを、利用できない上位モデルで最初の要求から停止することより優先するためです。候補の追加と effort 情報は引き続き取得から300秒以内に限ります。cache が無い・壊れている・読めない・未来日時の場合や、次の候補が無い場合は、CLI の版で決める従来の既定を維持します。
+**既定設定がない場合のモデル省略は、起動対象 CLI が 0.159.0 以上なら `gpt-6.1-sol` を優先し、それ未満なら `gpt-6-sol` から選びます。版不明なら新鮮な catalog を初期判定に使います。** その既定候補が選択された `CODEX_HOME` の cache に無ければ、`gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna` の順で、cache にある次の候補へ下げます。CLI 0.159.0 未満では GPT-6.1 Sol へ上げません。この順は製品の選好で、cache や許可リストの並び順には依存しません。既定を下げる判断には期限切れの cache も使います。古い一覧によって低いモデルを選んでも起動を続けられることを、利用できない上位モデルで最初の要求から停止することより優先するためです。候補の追加と effort 情報は引き続き取得から300秒以内に限ります。cache が無い・壊れている・読めない・未来日時の場合や、次の候補が無い場合は、CLI の版で決める従来の既定を維持します。
 
-既定を変更した場合は、spawn の出力とログ、API の `model_note`、NEW AGENT のモデル欄に、変更前後の ID と理由を表示します。期限切れの cache を使った場合は `fetched_at` と、`codex` を一度起動して一覧を更新する案内も出します。doctor の note にも同じ判定を使います。正式 ID（例: `gpt-6.1-sol`、`gpt-6-sol`）を明示した要求は cache に無くても置き換えません。許可リストから解決された既定を除いた場合、UI はモデルの明示選択を要求し、API のモデル省略は拒否されます。明示的な短縮名は `sol` → 同じ判定で決まる既定、`luna` → `gpt-6-luna`、`astra` → `gpt-6-astra`、`terra` → `gpt-5.6-terra` です。世代を固定したいときは正式 ID を指定してください。`gpt-6` / `gpt-5.6` を含む `gpt-*` の正式形式は別名として読み替えません。
+既定を変更した場合は、spawn の出力とログ、API の `model_note`、NEW AGENT のモデル欄に、変更前後の ID と理由を表示します。期限切れの cache を使った場合は `fetched_at` と、`codex` を一度起動して一覧を更新する案内も出します。doctor の note にも同じ判定を使います。正式 ID（例: `gpt-6.1-sol`、`gpt-6-sol`）を明示した要求は cache に無くても置き換えません。許可リストから解決された既定を除いた場合、UI はモデルの明示選択を要求し、API のモデル省略は拒否されます。短縮名と設定の扱いは下記の通りです。世代を固定したいときは正式 ID を指定してください。`gpt-6` / `gpt-5.6` を含む `gpt-*` の正式形式は別名として読み替えません。
+
+例えば `AGENTSTACK_CODEX_DEFAULT_MODEL=terra AGENTSTACK_CODEX_DEFAULT_EFFORT=high ./scripts/install.sh` で既定を指定でき、`env.sh` と service に保存されます。installer の優先順位は今回の環境変数、既存 `env.sh`、従来の組み込み規則です。明示 `--model` と `--effort` はそれぞれの既定より優先します。空設定では従来規則を使い、effort 情報がないモデルでは無指定のままです。不正値は installer の事前確認で拒否し、後から env.sh に書いた不正値は使用時にエラーになります。
+
+`sol` / `terra` / `luna` / `astra` は取得から300秒以内の catalog で表示対象かつ有効な effort 情報を持つ同系統の数値版が最大のものを、行順に依らず選びます。許可リストがあればその範囲に限ります。例えば `gpt-9-sol` と `gpt-10.1-sol` があれば後者を選びます（実在を示す例ではありません）。新鮮な catalog に該当行がなければその alias を拒否します。未取得・不正・期限切れでは同梱の系統別対応を使い、`sol` は既知の CLI 0.159.0 互換制限も守ります。将来のモデルと CLI の互換性は推測しません。期限切れ・不正・未取得の catalog は alias を進めず、更新されれば製品のリリースを待たず変わります。正式 ID は指定された版のままです。掲載は利用権限の証明ではありません。
 
 cache は `fetched_at` の日時と `models[].slug`、`visibility`、`supported_reasoning_levels[].effort`、`default_reasoning_level` の観測済み形式だけを使います。Codex CLI 0.154.0 の実装に合わせ、候補追加・effort 情報には取得から300秒以内の一覧を利用します。既定候補の存在確認は `slug` を使い、picker の visibility や effort metadata の有無には依存しません。通常ファイル、または launcher が child の `CODEX_HOME` に作る正規の `models_cache.json` symlink だけを対象にし、2 MiB・256モデル・ID長128文字まで読み、hidden モデルは追加しません。欠損・破損・非対応形式・空・期限切れでは同梱候補へ戻ります。CLI の版が 0.159.0 以上なら GPT-6.1 Sol も残し、版不明なら除きます。異なるeffortを持つ同一IDの重複もfallback対象です。
+
+Codex 側で `model_catalog_json` を指定すると起動時にそのファイルが使われ、remote catalog の取得より優先されます。ORRERY の alias 解決は `CODEX_HOME/models_cache.json` を読むため、Codex の有効 catalog と一致するとは限りません。更新しても候補が出ない場合は、有効な override や profile とその内容を確認してください。詳細は [Codex の catalog ガイド](https://learn.chatgpt.com/docs/model-catalogs)を参照してください。
 
 同梱候補は `gpt-6.1-sol`（CLI 0.159.0 以上、または版不明で新鮮な catalog にある場合）、`gpt-6-sol`、`gpt-5.6-sol`、`gpt-6-astra`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-6-luna` です。一覧の消失だけでは正式 ID の直接起動を拒否しません。許可リストを明示した場合だけ membership を制限します。catalog の読み取りは CLI の起動や通信をせず、credential、API key、token、Keychain を探索しません。既定選択は spawner と共通の resolver で、環境の `AGENTSTACK_CODEX_BIN` → 保存済み `env.sh` → usable PATH candidate の順に起動対象を選びます。版の確認も子と同じ login shell・`~/.local/bin` を追加した PATH・guard 変数で `--version` を実行します。各候補の timeout は実 spawner と同じ10秒、候補全体の予算は15秒、cleanup を含む読み取り helper 全体は18秒で打ち切ります。負荷の高い login shell でも同じ usable 判定になるよう、既存 spawner の予算に揃えています。成功・失敗を60秒間メモリに保持し、環境・保存設定・選択された実行ファイルの参照先や stat が変われば再取得します。API と delegate は選んだ CLI と正式 model ID の組を起動へ渡します。古い稼働中 session が共有 cache を上書きするため、取得できた CLI の版を互換性の上限とし、cache の `client_version` が異なるだけでは除外しません。起動対象を解決できない、または版が読めない場合は新鮮な catalog による判定へ戻ります。cache の `identity` は現在のログインと照合していません。アカウントを切り替えた後に前の cache が残っていると、新しいアカウントの利用可否と異なる判断になる可能性があります。候補の表示や既定の fallback は、そのアカウントでの利用権限の証明ではありません。CLI 自身による取得・更新・認可は変更しません。
 
@@ -386,7 +444,7 @@ python3 "$AGENTSTACK_HOME/dashboard/codex_models.py" resolve ""
 
 UI はモデルごとの effort 情報を候補表示と無指定時の既定選択に使います。新鮮な cache に制約があればそちらを優先し、情報が無い ID では effort を勝手に補いません。明示した既知の effort 値は cache の期限切れや候補情報だけを理由に拒否せず、そのまま Codex CLI へ渡して最終判定を任せます。
 
-resume は元のsession IDをCLIへ渡し、NEW AGENTの既定・cache・短縮名でモデルを上書きしません。persistent restart は保存されたcommand/configをそのまま再利用します。別profileへのインストール対応や `CODEX_HOME` のservice設定への追加はこの機能の対象外です。
+`AGENTSTACK_CODEX_DEFAULT_MODEL` / `AGENTSTACK_CODEX_DEFAULT_EFFORT` は新規 Codex child の無指定時に使います。dashboard の resume はこれらを再適用せず、元の session ID を Codex に渡します。再開時の実際のモデルと effort は Codex 側の版・設定・明示 override に依存します。[Codex CLI の resume](https://learn.chatgpt.com/docs/developer-commands?surface=cli) はモデルの override を受け付けます。persistent restart は保存されたcommand/configをそのまま再利用します。別profileへのインストール対応や `CODEX_HOME` のservice設定への追加はこの機能の対象外です。
 
 実装確認元: [Codex CLI 0.154.0 models manager](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/models-manager/src/manager.rs)、[file cache](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/models-manager/src/cache.rs)。CLIがモデルendpointから取得して保存し、ETag確認時に鮮度を更新します。Orreryはその結果を読み取るだけです。
 

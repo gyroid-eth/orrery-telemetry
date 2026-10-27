@@ -4,11 +4,111 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 import {pathToFileURL} from 'node:url';
 import {spawn, spawnSync} from 'node:child_process';
 import http from 'node:http';
 import {once} from 'node:events';
 import {providerClass, secretServiceLookup} from '../integrations/dsh/keychain_credentials.mjs';
+
+// Exercise the production function verbatim on any CI host, without a store.
+function linuxReaderProbe(execFile) {
+  const raw = fs.readFileSync(new URL('../integrations/dsh/keychain_credentials.mjs', import.meta.url), 'utf8');
+  const start = raw.indexOf('export function secretServiceLookup(');
+  const end = raw.indexOf('export function keychainLookup(', start);
+  assert.ok(start >= 0 && end > start);
+  const sandbox = {path, execFile, process: {platform: 'linux', env: {
+    HOME: '/synthetic/home', PATH: '/synthetic/bin', LANG: 'C.UTF-8',
+    DBUS_SESSION_BUS_ADDRESS: 'unix:path=/synthetic/bus', XDG_RUNTIME_DIR: '/synthetic/runtime',
+    DEEPSEEK_API_KEY: 'synthetic-env-canary', NODE_OPTIONS: '--import forbidden',
+  }}};
+  vm.createContext(sandbox);
+  vm.runInContext(raw.slice(start, end).replace(/^export /, '') + '\nthis.lookup = secretServiceLookup;', sandbox);
+  return sandbox.lookup;
+}
+
+function readerCommand(connection) {
+  return ['/synthetic/python', '-I', '-B', '/synthetic/hooks/llm_secret_reader.py',
+    '--manifest', '/synthetic/manifest.json', '--backend', connection];
+}
+
+test('secret service reader preserves legacy and additional connection IDs through execFile', async t => {
+  const calls = [];
+  const lookup = linuxReaderProbe((file, args, options, callback) => {
+    calls.push({file, args, options}); callback(null, 'synthetic-memory-value\r\n');
+  });
+  for (const connection of ['deepseek', 'strata', 'strata-epyc']) {
+    const command = readerCommand(connection);
+    const before = calls.length;
+    let value;
+    try {value = await lookup({reader_command: command});}
+    finally {t.diagnostic(JSON.stringify({connection, exec_calls: calls.length - before,
+      ...(calls.length > before ? {call: calls.at(-1)} : {})}));}
+    assert.equal(value, 'synthetic-memory-value');
+    const call = calls.at(-1);
+    assert.equal(call.file, command[0]);
+    assert.deepEqual(call.args, command.slice(1));
+    assert.equal(call.options.timeout, 8000);
+    assert.equal(call.options.maxBuffer, 65536);
+    assert.equal(call.options.encoding, 'utf8');
+    assert.deepEqual({...call.options.env}, {HOME: '/synthetic/home', PATH: '/synthetic/bin', LANG: 'C.UTF-8',
+      DBUS_SESSION_BUS_ADDRESS: 'unix:path=/synthetic/bus', XDG_RUNTIME_DIR: '/synthetic/runtime'});
+  }
+  assert.equal(calls.length, 3);
+});
+
+test('secret service reader rejects malformed commands and IDs without execFile', async () => {
+  let calls = 0;
+  const lookup = linuxReaderProbe(() => {calls++; throw Error('helper must not execute');});
+  const valid = readerCommand('strata-epyc');
+  const changed = (index, value) => valid.map((item, position) => position === index ? value : item);
+  const commands = [null, {}, valid.slice(1), [...valid, 'extra'],
+    changed(0, 'relative-python'), changed(0, 42), changed(1, '-c'), changed(2, '-E'),
+    changed(3, 'relative/llm_secret_reader.py'), changed(3, '/synthetic/wrong.py'),
+    changed(4, '--other'), changed(5, 'relative.json'), changed(6, '--other')];
+  for (const id of ['', 'Strata-epyc', ' strata-epyc', 'strata-epyc\n', '../strata', 'strata/epyc',
+                    '-strata', 'strata.epyc', 's'.repeat(65), null, 7, {toString: () => 'strata-epyc'}]) {
+    commands.push(changed(7, id));
+  }
+  for (const reader_command of commands) {
+    await assert.rejects(async () => lookup({reader_command}), /^Error: DSH_CREDENTIAL_REFERENCE_INVALID$/);
+  }
+  assert.equal(calls, 0);
+  for (const [error, output] of [[Error('synthetic-private-stderr'), 'synthetic-private-value'], [null, ' \n']]) {
+    const failed = linuxReaderProbe((_file, _args, _options, callback) => callback(error, output));
+    await assert.rejects(failed({reader_command: valid}), /^Error: DSH_CREDENTIAL_UNAVAILABLE$/);
+  }
+});
+
+test('secret service reader leaves undeclared connection rejection to the real Python reader', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-declaration-'));
+  try {
+    const manifest = path.join(root, 'manifest.json');
+    fs.writeFileSync(manifest, JSON.stringify({backends: {strata: {credential_ref: null}}}), {mode: 0o600});
+    const located = spawnSync(process.env.ORRERY_DSH_TEST_PYTHON ?? 'python3',
+      ['-I', '-B', '-c', 'import sys;print(sys.executable)'], {encoding: 'utf8'});
+    assert.equal(located.status, 0, located.stderr);
+    const python = located.stdout.trim(); assert.ok(path.isAbsolute(python));
+    const command = [python, '-I', '-B', path.resolve('hooks/llm_secret_reader.py'),
+      '--manifest', manifest, '--backend', 'strata-absent'];
+    let calls = 0, result;
+    const lookup = linuxReaderProbe((file, args, options, callback) => {
+      calls++; assert.equal(file, python); assert.deepEqual(args, command.slice(1));
+      // Import the actual reader/main; fail the test if it reaches key lookup.
+      const probe = 'import runpy,sys\nreader=runpy.run_path(sys.argv[1])\n' +
+        'def forbidden(_):raise AssertionError("REAL_KEY_LOOKUP_FORBIDDEN")\n' +
+        'reader["main"].__globals__["read_ref"]=forbidden\nsys.argv=sys.argv[1:]\nraise SystemExit(reader["main"]())\n';
+      result = spawnSync(file, ['-I', '-B', '-c', probe, ...args.slice(2)],
+        {encoding: 'utf8', timeout: options.timeout, env: {HOME: root, PATH: options.env.PATH, LANG: options.env.LANG}});
+      callback(result.status === 0 ? null : Error('reader failed'), result.stdout ?? '');
+    });
+    await assert.rejects(lookup({reader_command: command}), /^Error: DSH_CREDENTIAL_UNAVAILABLE$/);
+    assert.equal(calls, 1); assert.equal(result.status, 1);
+    assert.equal(result.stdout, ''); assert.equal(result.stderr, 'invalid_credential_ref\n');
+    t.diagnostic(JSON.stringify({connection: command.at(-1), exec_calls: calls,
+      reader_rc: result.status, stdout: result.stdout, stderr: result.stderr}));
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
 
 test('secret service reader keeps selected value in memory and failure cannot fall back', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-reader-'));

@@ -248,7 +248,8 @@ def test_spawn_names_advertises_codex_provider(monkeypatch):
     assert next(provider for provider in providers if provider["id"] == "codex") == {
         "id": "codex", "label": "Codex", "program": "codex-cli",
         "models": ["gpt-test-a", "gpt-test-b"], "default_model": "gpt-6.1-sol",
-        "model_source": "override", "model_error": "", "overflow_models": [],
+        "model_source": "override", "model_error": "", "default_error": "",
+        "default_effort_error": "", "overflow_models": [],
         "model_note": "",
         "model_efforts": {"gpt-test-a": [], "gpt-test-b": []},
         "model_effort_defaults": {"gpt-test-a": "", "gpt-test-b": ""},
@@ -435,8 +436,11 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
     calls, launched, environments = [], [], []
     records = []
     settled = threading.Event()
-    resolved = model if model and model != "sol" else "gpt-6-luna"
-    if resolved != model:
+    resolved = "gpt-6.1-sol" if model == "sol" else (model or "gpt-6-luna")
+    if model == "sol":
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-catalog"))
+        monkeypatch.setattr(server.codex_models, "resolve_launcher", lambda: server.codex_models.LauncherPolicy(version=(0, 160, 1)))
+    if not model:
         cache_home = tmp_path / "codex"
         cache_home.mkdir()
         monkeypatch.setenv("CODEX_HOME", str(cache_home))
@@ -481,7 +485,7 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
     if asynchronous:
         assert settled.wait(2), "mock launcher did not settle"
         assert records[-1]["model"] == resolved
-    if resolved != model:
+    if not model:
         assert "from gpt-6.1-sol to gpt-6-luna" in result["model_note"]
         assert result["model_note"] in (tmp_path / "logs/spawn.log").read_text()
         if asynchronous:

@@ -22,6 +22,7 @@ On macOS, `~/.agentstack/dashboard/agentctl.sh restart` also renders the selecte
 | --- | --- | --- |
 | `AGENTSTACK_PORT` | `8770` | HTTP port |
 | `AGENTSTACK_BIND_HOST` | `127.0.0.1` | Bind address |
+| `AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS` | empty | Additional fixed HTTP(S) origins allowed by the legacy dashboard, separated by ASCII spaces; see below |
 | `AGENTSTACK_MAIL_DB` | `~/.agentstack/mail/storage.sqlite3` | ORRERY Mail SQLite database |
 | `AGENTSTACK_MAIL_ENV` | `~/.agentstack/mail/.env` | Compatibility bearer reference for a standalone dashboard. The installer renders it explicitly for services |
 | `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `disabled` | Do not add a legacy Authorization header |
@@ -43,10 +44,31 @@ On macOS, `~/.agentstack/dashboard/agentctl.sh restart` also renders the selecte
 | `AGENTSTACK_SPAWN_ROOTS` | `$HOME` | `:`-separated roots allowed for directory typeahead |
 | `AGENTSTACK_CLAUDE_MODELS` | unset | `,`-separated explicit dashboard Claude model override |
 | `AGENTSTACK_CODEX_MODELS` | `unset` | `,`-separated dashboard Codex model allowlist |
+| `AGENTSTACK_CODEX_DEFAULT_MODEL` | `unset` | Default Codex child model ID or family alias |
+| `AGENTSTACK_CODEX_DEFAULT_EFFORT` | `unset` | Default Codex reasoning effort |
 
 Path values expand `~`. An empty string is treated as unset. An invalid integer `AGENTSTACK_PORT` falls back to `8770`.
 
 The murmur language is selected in the order `?lang=ja` / `?lang=en`, `AGENTSTACK_LANG`, then browser `navigator.language` / `navigator.languages`. A Japanese `ja` locale selects Japanese; all others select English. `?murmur=on` / `?murmur=off` overrides the service default for that URL only, while `AGENTSTACK_MURMUR=off` disables bubbles as the service default. A viewer can also switch murmurs on or off from the dashboard's `SETTINGS` › DISPLAY; that choice is stored in the browser (precedence: URL, then the browser's stored choice, then the service default). To apply an environment variable to a resident service, rerun the installer after setting it.
+
+## Host configuration for LAN / VPN access
+
+The legacy dashboard checks `Host` on every HTTP method and path. By default, it accepts only `127.0.0.1`, `localhost` and `[::1]` at the actual listening port. Normal local use and a cockpit bridge connecting to a loopback URL need no additional setting.
+
+If the dashboard already listens for LAN / VPN connections, explicitly configure the origins (scheme, host and port) you use before updating. For example, run this from the existing checkout, review the dry run, then repeat it with the same environment variable and without `--dry-run`:
+
+```bash
+AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS='http://dashboard.example:8770 https://dashboard.example' \
+  ./scripts/install.sh --keep-mail --dry-run
+```
+
+The installer saves this value in `env.sh` and the dashboard service definition, and preserves it on reinstall. Set it explicitly to an empty string or use `--reset-settings` to remove additional origins. For a direct `server.py` launch, pass the same environment variable to that process. This setting does not change the bind address; keep your existing listener configuration separately.
+
+Origins cannot contain a path, credentials, query, fragment or wildcard. The installer rejects invalid values, including quotes and newlines, before writing settings or services; the server also refuses to start. Separate entries with ASCII spaces, not tabs or newlines. Host case and IPv6 notation are normalized. An omitted port means `80` for HTTP or `443` for HTTPS; always include other ports such as `8770`.
+
+The dashboard never infers trusted authorities from `AGENTSTACK_BIND_HOST=0.0.0.0`, network interfaces, `Forwarded` or `X-Forwarded-*`. If a proxy terminates HTTPS, explicitly configure the HTTPS origin and make its upstream `Host` and the browser's `Origin` correspond to that same origin. A POST cannot use a different Host's origin even when that origin is separately allowed.
+
+This is not authentication. The dashboard has no login, and anyone able to send an allowed Host can use its controls. Keep access within a trusted LAN / VPN. Isolated global mode retains its capability authentication and public static resource rules.
 
 ## Without a project key
 
@@ -67,6 +89,36 @@ The following do not work.
 - project-scoped retirement
 
 Only mail features become `NOT CONFIGURED`; local telemetry remains available for diagnosis.
+
+<a id="native-connections"></a>
+
+## Keep multiple DeepSeek or Local connections
+
+With API 27 or later, one private manifest can keep DeepSeek, a Local server on workstation, and a Local server on EPYC. Existing `deepseek`/`strata` entries need no changes. Give each additional connection its own ID and an explicit `kind`. This example shows only the manifest's `backends` section. Replace `<FORMAL_MODEL_ID>` with the actual model ID accepted by that server.
+
+```json
+{
+  "backends": {
+    "deepseek": {"model": "deepseek-flash", "models": ["deepseek-flash"]},
+    "strata": {"label": "workstation", "server": "workstation", "model": "<FORMAL_MODEL_ID>", "models": ["<FORMAL_MODEL_ID>"]},
+    "strata-epyc": {"kind": "strata", "label": "EPYC", "server": "EPYC", "model": "<FORMAL_MODEL_ID>", "models": ["<FORMAL_MODEL_ID>"]}
+  }
+}
+```
+
+Keep the existing DeepSeek and `strata` settings. In your private copies, add matching entries in these locations:
+
+| Location | Settings for the added connection |
+| --- | --- |
+| Manifest `backends.strata-epyc` | `kind: "strata"`, actual model IDs, and distinct `label` and `server` names |
+| dsh backend file `backends.strata-epyc` | This connection's `base_url`, `model`, and credential reference. Put any `model_definition.id`, `contextWindow`, and `maxTokens` here too |
+| Hermes configuration `profiles.strata-epyc` | This connection's `provider` name, `base_url`, `api_mode`, `model`, `context_length`, and credential reference |
+
+dsh and Hermes may require different URL forms; follow the [API requirements in initial setup](native-setup.en.md#1-choose-a-provider-and-a-harness). On Mac, use the existing keychain service/account and `key_cmd` formats. On WSL, use a separate manifest `credential_ref` for each connection. Keep key values out of JSON. Match context to each server's actual limit and maxTokens to the output limit you need. Equal model IDs do not imply equal server limits or credential references.
+
+Connection IDs match `[a-z][a-z0-9_-]{0,63}`. CLI names and reserved selectors such as `same`, `auto`, `main`, and `custom` cannot be used. New IDs require `kind: "deepseek"` or `kind: "strata"`; legacy IDs cannot change kind. Duplicate IDs, unknown IDs, unknown kinds, and helpers from another connection are rejected. Choose helpers from the same connection's model list.
+
+Enable the manifest, run the standard static validation for each harness you will use, and pass it to the installer as described in [step 5 of initial setup](native-setup.en.md#5-connect-the-configuration-files). In cockpit, select the Local models row with the intended server name (workstation / EPYC). Standalone Telemetry shows separate tabs with each connection's label. API and CLI calls retain the connection ID, for example `--harness dsh --backend strata-epyc --model <FORMAL_MODEL_ID>`. Resume retains the saved connection ID and native session; it does not move to another connection automatically. Existing global-mode restrictions and limits on real connection acceptance still apply.
 
 ## Output / deliverables
 
@@ -211,9 +263,9 @@ If you routinely watch children from the dashboard, set `AGENTSTACK_AUTO_OPEN_CH
 
 To stop automatic opening, pass `AGENTSTACK_AUTO_OPEN_CHILD=0 ./scripts/install.sh ...` to the installer. It persists the setting in `env.sh`, the Dashboard service and install-state, and preserves it on reinstall. Older installs without the setting get `1`, so their behavior does not change; an explicit `0` / `1` overrides the saved value. `AGENTSTACK_FOCUS_CHILD=1` applies only while automatic opening is enabled. For direct shell launches, export the same variable in the launching shell. The setting is handed to newly spawned child sessions and resumed Claude / Codex sessions, so their children use the same policy. This does not add OS-terminal automatic opening to the separate Gemini launcher.
 
-The child model comes from the spawner's single model catalog and normalization function. For Claude, omitted / `opus` / `sonnet` / `haiku` / `fable` resolve to the model the local Claude Code model catalog names as current for that family (its single `main` row; the bundled table in `dashboard/claude_models.py` when the catalog is missing or unreadable, has no single row for the family, needs a newer Claude Code than the one the child runs, or is stale and names an older generation than the table; currently `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-haiku-4-5-20251001` / `claude-fable-5-1`). Versioned aliases such as `sonnet-5-5`, `sonnet-5` and `opus-5-5` pin a generation. for Codex, omission and explicit `sol` both prefer `gpt-6.1-sol` with Codex CLI 0.159.0+ (fresh catalog evidence is used if its version is unknown), otherwise `gpt-6-sol` (see [Codex model catalog](#codex-model-catalog)). Use a formal ID such as `gpt-6-sol` to pin the prior generation. Explicit legacy `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, and `gpt-5.5` remain valid. Generic `opus[1m]` / `sonnet[1m]` are normalized to known legacy 1M models.
+The child model comes from the spawner's single model catalog and normalization function. For Claude, omitted / `opus` / `sonnet` / `haiku` / `fable` resolve to the model the local Claude Code model catalog names as current for that family (its single `main` row; the bundled table in `dashboard/claude_models.py` when the catalog is missing or unreadable, has no single row for the family, needs a newer Claude Code than the one the child runs, or is stale and names an older generation than the table; currently `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-haiku-4-5-20251001` / `claude-fable-5-1`). Versioned aliases such as `sonnet-5-5`, `sonnet-5` and `opus-5-5` pin a generation. For Codex, omission uses the configured default, or the built-in CLI and catalog policy when unset; family aliases follow eligible fresh catalog entries (see [Codex model catalog](#codex-model-catalog)). Use a formal ID such as `gpt-6-sol` to pin the prior generation. Explicit legacy `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, and `gpt-5.5` remain valid. Generic `opus[1m]` / `sonnet[1m]` are normalized to known legacy 1M models.
 
-Codex reasoning effort comes from `--effort` and is passed into the child session as `AGENTSTACK_CODEX_MODEL` and `AGENTSTACK_CODEX_EFFORT`. The default is `xhigh` when supported, the model default otherwise, or the CLI default when metadata is unavailable. The spawner rejects `ultra` for `gpt-5.6-luna` / `gpt-6-luna`, and `max` / `ultra` for legacy `gpt-5.5`, because those combinations are unsupported. These values are set by the spawner, so exporting them manually does not change top-level launcher behavior.
+Codex reasoning effort comes from `--effort` and is passed into the child session as `AGENTSTACK_CODEX_MODEL` and `AGENTSTACK_CODEX_EFFORT`. The default is `xhigh` when supported, the model default otherwise, or the CLI default when metadata is unavailable. Codex CLI validates compatibility of explicitly requested efforts. These values are set by the spawner, so exporting them manually does not change top-level launcher behavior.
 
 After a Claude / Codex child completes normally, its remote identity remains retired while private state and the canonical owner credential are retained until expiry. Cleanup always removes the isolated home, proxy runtime, and old MCP configuration; Codex resume rebuilds the home from the current source Codex home plus the saved `codex_mcp_profile`, while Claude resume regenerates the child-owned Mail proxy configuration. Maintenance removes expired material while the dashboard is running. `agentstack-doctor` only reports expired material awaiting purge and never deletes it. Use `agentstack-purge-child-resume <agent>` for an early explicit purge, or `agentstack-purge-child-resume --expired` for all expired entries. Neither command deletes transcript history or bound receipts.
 
@@ -334,11 +386,17 @@ AGENTSTACK_CODEX_MODELS="gpt-6.1-sol,gpt-6-luna" ./scripts/install.sh
 
 An explicit override is a strict allowlist with precedence over cache discovery. Empty entries, surrounding whitespace and duplicates are removed. Invalid IDs keep the Codex tab visible with a configuration error and block launch; they never silently select another provider or fall back to bundled candidates. Persistence uses the existing installer path; shell exports do not reach a running service.
 
-**Omission and `sol` prefer `gpt-6.1-sol` when the selected CLI is 0.159.0 or later; older versions start from `gpt-6-sol`, and unknown versions use fresh catalog evidence for that initial decision.** If that default is absent from the selected `CODEX_HOME` cache, choose the next cached candidate in this fixed order: `gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna`. A CLI older than 0.159.0 never moves up to GPT-6.1 Sol. This is product preference, independent of cache or allowlist order. Expired caches can also lower the default: choosing a lower model from an older list is preferable to stopping the child on its first request to an unavailable higher model. Adding candidates and using effort metadata still require a cache fetched within 300 seconds. Missing, corrupt, unreadable or future-dated caches, and snapshots without a next candidate, preserve the existing CLI-based default.
+**With no configured default, omission prefers `gpt-6.1-sol` when the selected CLI is 0.159.0 or later; older versions start from `gpt-6-sol`, and unknown versions use fresh catalog evidence for that initial decision.** If that default is absent from the selected `CODEX_HOME` cache, choose the next cached candidate in this fixed order: `gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna`. A CLI older than 0.159.0 never moves up to GPT-6.1 Sol. This is product preference, independent of cache or allowlist order. Expired caches can also lower the default: choosing a lower model from an older list is preferable to stopping the child on its first request to an unavailable higher model. Adding candidates and using effort metadata still require a cache fetched within 300 seconds. Missing, corrupt, unreadable or future-dated caches, and snapshots without a next candidate, preserve the existing CLI-based default.
 
-A changed default is reported with both model IDs and the reason in spawn output and logs, API `model_note`, and NEW AGENT's model section. A stale-cache fallback also reports `fetched_at` and asks the user to start `codex` once to refresh the list. Doctor uses the same decision for its note. Explicit formal IDs such as `gpt-6.1-sol` or `gpt-6-sol` are passed through even when absent from the cache. If the allowlist excludes the resolved default, the UI requires an explicit model selection and the API rejects an omitted model. Explicit friendly names are mapped: `sol` → the same resolved default, `luna` → `gpt-6-luna`, `astra` → `gpt-6-astra`, `terra` → `gpt-5.6-terra`. Use a formal ID to pin a generation. Formal `gpt-*` IDs, including `gpt-6` and `gpt-5.6`, are never rewritten as aliases.
+A changed default is reported with both model IDs and the reason in spawn output and logs, API `model_note`, and NEW AGENT's model section. A stale-cache fallback also reports `fetched_at` and asks the user to start `codex` once to refresh the list. Doctor uses the same decision for its note. Explicit formal IDs such as `gpt-6.1-sol` or `gpt-6-sol` are passed through even when absent from the cache. If the allowlist excludes the resolved default, the UI requires an explicit model selection and the API rejects an omitted model. For family aliases and configuration, see below. Use a formal ID to pin a generation. Formal `gpt-*` IDs, including `gpt-6` and `gpt-5.6`, are never rewritten as aliases.
+
+Set defaults during installation, for example `AGENTSTACK_CODEX_DEFAULT_MODEL=terra AGENTSTACK_CODEX_DEFAULT_EFFORT=high ./scripts/install.sh`. They persist in `env.sh` and the service. Installer precedence is the current environment, then the previous `env.sh`, then the existing built-in policy. Explicit `--model` and `--effort` override these defaults independently. An empty setting leaves the existing default policy in effect; unknown-model effort remains omitted when no policy exists. The installer rejects invalid values during preflight; invalid values later written into env.sh fail when used.
+
+`sol`, `terra`, `luna`, and `astra` select the highest numeric version of that family in the fresh (at most 300 seconds old), listed catalog entries with valid effort metadata, independent of row order; an allowlist restricts these candidates. For example a catalog containing `gpt-9-sol` and `gpt-10.1-sol` selects the latter. This is an illustration, not a claim that those models exist. A fresh catalog without an eligible family entry rejects that alias; a missing, invalid or expired catalog uses the bundled family mapping; `sol` retains the known 0.159.0 CLI compatibility guard. The guard does not predict compatibility of future model versions. Expired, invalid or missing catalogs cannot advance an alias. A refreshed catalog can change an alias without an Orrery release. Full model IDs pin the requested version and remain unchanged. Neither catalog presence nor this selection proves account authorization.
 
 The reader uses the observed `fetched_at` timestamp and `models[].slug`, `visibility`, `supported_reasoning_levels[].effort`, and `default_reasoning_level` schema. Its 300-second lifetime for candidate additions and effort metadata matches Codex CLI 0.154.0. Default candidate presence uses `slug`, independently of picker visibility or effort metadata availability. Reads accept regular files or the canonical `models_cache.json` symlink that the launcher creates in a child `CODEX_HOME`, and remain bounded to 2 MiB, 256 models and 128-character IDs; hidden models are not added. Missing, corrupt, unsupported, empty or expired caches fall back to bundled candidates; GPT-6.1 Sol remains included with a known CLI 0.159.0+, otherwise it is omitted. Conflicting duplicate effort metadata also invalidates the snapshot.
+
+Codex can load a local catalog via `model_catalog_json`, which takes precedence over remote catalog fetching. ORRERY resolves aliases from `CODEX_HOME/models_cache.json`, so its view can differ from Codex's effective catalog. If a model remains missing after an update, inspect the effective override or profile and its contents. See the [Codex catalog guide](https://learn.chatgpt.com/docs/model-catalogs).
 
 Bundled candidates are `gpt-6.1-sol` (with CLI 0.159.0+ or, if its version is unknown, fresh catalog evidence), `gpt-6-sol`, `gpt-5.6-sol`, `gpt-6-astra`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-6-luna`. Cache disappearance alone never prohibits a formal ID's direct launch. Membership is restricted only by an explicit allowlist. Catalog reading uses no CLI or network requests and reads no credentials, API keys, tokens or Keychain entries. Default selection shares the spawner's resolver: environment `AGENTSTACK_CODEX_BIN` → saved `env.sh` → usable PATH candidate. Version probes run `--version` under the same child login shell, PATH with `~/.local/bin` prepended, and guard variables. Each candidate has the same 10-second timeout as the actual spawner, all candidates share its 15-second budget, and the entire read-only helper including cleanup is capped at 18 seconds. Keeping the existing spawner budget accommodates busy login shells without changing which CLI is usable. Successes and failures are cached in memory for 60 seconds; changes to environment, saved configuration, or the selected executable's target/stat invalidate it. The API and delegate pass the selected CLI and formal model ID together to the launch. A readable version sets the compatibility ceiling: old running sessions can overwrite the shared cache with an older model list, so a different cache `client_version` alone does not disqualify the snapshot. Failed CLI resolution or an unreadable version uses fresh catalog evidence instead. Cache `identity` is not checked against the current login. After switching accounts, a retained snapshot may therefore differ from the new account's access. Neither a displayed candidate nor a default fallback proves account authorization. Codex's own refresh and authorization behavior is unchanged.
 
@@ -351,7 +409,7 @@ python3 "$AGENTSTACK_HOME/dashboard/codex_models.py" resolve ""
 
 The UI uses per-model effort metadata for candidate display and omitted-effort defaults. Fresh cache metadata takes precedence, and IDs without metadata receive no invented override. An explicitly requested known effort is not rejected merely because cache metadata is stale or narrower; it is passed through to Codex CLI for the final compatibility decision.
 
-Resume passes the original session ID to Codex without overriding the model using NEW AGENT defaults, cache order or aliases. Persistent restart replays the saved command/config. Installing into alternate profiles or persisting `CODEX_HOME` in service configuration is outside this feature's scope.
+`AGENTSTACK_CODEX_DEFAULT_MODEL` and `AGENTSTACK_CODEX_DEFAULT_EFFORT` apply when a new Codex child omits those values. Dashboard resume does not reapply them; it passes the original session ID to Codex. The resulting model and effort depend on Codex version, configuration and explicit overrides. [Codex CLI resume](https://learn.chatgpt.com/docs/developer-commands?surface=cli) accepts model overrides. Persistent restart replays the saved command/config. Installing into alternate profiles or persisting `CODEX_HOME` in service configuration is outside this feature's scope.
 
 Verified implementation: [Codex CLI 0.154.0 models manager](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/models-manager/src/manager.rs) and [file cache](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/models-manager/src/cache.rs). The CLI fetches and stores the model endpoint response and renews freshness on ETag checks. Orrery only reads the result.
 

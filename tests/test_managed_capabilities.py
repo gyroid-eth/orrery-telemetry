@@ -68,6 +68,22 @@ class CapabilitiesTests(unittest.TestCase):
         self.save(Path(self.template['backend_file']),{'backends':self.backends})
         self.assertEqual(self.load()['default_effort'],'high')
 
+    def test_same_model_capabilities_are_keyed_by_connection(self):
+        self.backends['strata-epyc'] = {**self.backends['strata'], 'model_definition': {'contextWindow': 262144}}
+        self.save(Path(self.template['backend_file']), {'backends': self.backends})
+        manifest=c.read(self.manifest)
+        manifest['backends']['strata-epyc']={'kind':'strata','model':'strata-model'}
+        self.save(self.manifest,manifest)
+        result,_=self.refresh()
+        assert {r['backend_id'] for r in result['entries']} == {'deepseek','strata','strata-epyc'}
+        rows=[c.load_effort_capability(self.template,harness='dsh',backend_id=key,model='strata-model')
+              for key in ('strata','strata-epyc')]
+        assert all(row['effort_source']=='harness' for row in rows)
+        self.backends['strata']['model_definition']={'contextWindow':32768}
+        self.save(Path(self.template['backend_file']), {'backends': self.backends})
+        assert c.load_effort_capability(self.template,harness='dsh',backend_id='strata',model='strata-model') == c.UNKNOWN
+        assert c.load_effort_capability(self.template,harness='dsh',backend_id='strata-epyc',model='strata-model')['effort_source']=='harness'
+
     def test_missing_changed_runtime_and_model_are_unknown(self):
         self.assertEqual(self.load(),c.UNKNOWN)
         self.refresh()
@@ -141,7 +157,10 @@ class CapabilitiesTests(unittest.TestCase):
     def test_installed_dashboard_only_import_from_root_directory(self):
         # The same fallback import used by direct launchd execution (cwd=/).
         with tempfile.TemporaryDirectory() as directory:
-            p=Path(directory)
+            p=Path(directory)/'dashboard'
+            p.mkdir()
+            (p.parent/'hooks').mkdir()
+            (p.parent/'hooks/native_connections.py').write_bytes((ROOT/'hooks/native_connections.py').read_bytes())
             for name in ('managed_capabilities.py','managed_catalog.py','harness_helpers.py'):
                 (p/name).write_bytes((ROOT/'dashboard'/name).read_bytes())
             script='import sys;sys.path.insert(0,'+repr(str(p))+');import managed_catalog;print(managed_catalog.standard_catalog(None, mode="legacy"))'

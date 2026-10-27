@@ -1,5 +1,10 @@
 import json
+import hashlib
 import math
+import secrets
+import threading
+from collections import OrderedDict
+from contextlib import contextmanager
 import os
 import shutil
 import sqlite3
@@ -249,6 +254,248 @@ def _resolve_project_id(con) -> int:
     if row and row[0] is not None:
         return int(row[0])
     raise LookupError("Mail project not found")
+
+
+def mobile_mail_metadata(
+    con: sqlite3.Connection, project_id: int, window: str,
+    *, now: float | None = None, event_limit: int = 200, cursors=None,
+) -> dict:
+    """Read delivery metadata only; never select message content or change ACK.
+
+    Counts are recipient rows by direction/kind in the requested event-time
+    window. The bounded timeline is separate from those complete aggregates.
+    Same-second rows sort by message id then recipient id, both descending.
+    """
+    try:
+        from dashboard.mobile_projection import WINDOWS as windows
+    except ModuleNotFoundError:
+        from mobile_projection import WINDOWS as windows
+    if window not in windows or not 1 <= event_limit <= 200:
+        raise ValueError('invalid mobile Mail window or limit')
+    checked = int(time.time() if now is None else now)
+    lower = checked - windows[window] if windows[window] is not None else None
+    epoch = _sql_epoch('m.created_ts')
+    cte = f'''WITH delivery AS (
+        SELECT m.id AS message_id, mr.agent_id AS recipient_id,
+               sa.name AS source, ra.name AS target, mr.kind AS kind,
+               {epoch} AS event_at
+        FROM messages m
+        JOIN message_recipients mr ON mr.message_id=m.id
+        JOIN agents sa ON sa.id=m.sender_id AND sa.project_id=m.project_id
+        JOIN agents ra ON ra.id=mr.agent_id AND ra.project_id=m.project_id
+        WHERE m.project_id=? AND mr.kind IN ('to','cc')
+    ) '''
+    bounds = 'event_at IS NOT NULL AND event_at<=?'
+    args = [project_id, checked]
+    if lower is not None:
+        bounds += ' AND event_at>=?'
+        args.append(lower)
+    # An extra row detects truncation without presenting a partial aggregate
+    # as a complete graph. This limit also bounds the metadata HTTP response.
+    edge_rows = con.execute(cte + f'''
+        SELECT source,target,kind,COUNT(*) AS count,MAX(event_at) AS last_ts
+        FROM delivery WHERE {bounds} GROUP BY source,target,kind
+        ORDER BY count DESC,source,target,kind LIMIT 10001
+    ''', args).fetchall()
+    timeline = con.execute(cte + f'''
+        SELECT message_id,recipient_id,source,target,kind,event_at
+        FROM delivery WHERE {bounds}
+        ORDER BY event_at DESC,message_id DESC,recipient_id DESC LIMIT ?
+    ''', [*args, event_limit + 1]).fetchall()
+    invalid = int(con.execute(cte + 'SELECT COUNT(*) FROM delivery WHERE event_at IS NULL',
+                              [project_id]).fetchone()[0])
+    edges = [dict(zip(('source','target','kind','count','last_ts'), row)) for row in edge_rows[:10000]]
+    events = []
+    for message_id, recipient_id, source, target, kind, event_at in timeline[:event_limit]:
+        # Stable per-recipient-row key: does not expose Mail's internal ids.
+        key = hashlib.sha256(f'{project_id}:{message_id}:{recipient_id}'.encode()).hexdigest()[:32]
+        events.append({'key': key, 'source': source, 'target': target,
+                       'kind': kind, 'event_at': event_at, 'count': 1})
+    registry = MOBILE_MAIL_CURSORS if cursors is None else cursors
+    scope = _mobile_scope(con, project_id)
+    next_cursor = registry.issue(scope, window, tuple(timeline[event_limit-1][:2])+ (timeline[event_limit-1][5],),
+                                 event_limit) if len(timeline)>event_limit else None
+    return {'status': 'available', 'window': window, 'events': events, 'scope':scope,
+            'next_cursor':next_cursor,
+            'edges': edges, 'events_truncated': len(timeline) > event_limit,
+            'edges_truncated': len(edge_rows) > 10000,
+            'invalid_timestamps': invalid, 'degraded': bool(invalid or len(edge_rows) > 10000),
+            'observed_at': checked}
+
+
+class MobileMailCursors:
+    """Opaque bounded process-local metadata positions, never body handles."""
+    def __init__(self, *, clock=time.monotonic, limit=256, ttl=600):
+        self.clock, self.limit, self.ttl = clock, limit, ttl
+        self._items, self._lock = OrderedDict(), threading.Lock()
+
+    def issue(self, scope, window, boundary, size=200, *, pair=None, direction='both', kind='mail', seen=0):
+        with self._lock:
+            self._expire()
+            key=secrets.token_hex(16)
+            self._items[key]=(self.clock()+self.ttl,scope,window,boundary,size,pair,direction,kind,seen)
+            while len(self._items)>self.limit:self._items.popitem(last=False)
+            return key
+
+    def _expire(self):
+        for key,value in list(self._items.items()):
+            if value[0]<=self.clock():self._items.pop(key,None)
+
+    def resolve(self,key,scope,window,*,pair=None,direction='both',kind='mail'):
+        with self._lock:
+            self._expire()
+            value=self._items.get(key)
+            if value is None or (value[1],value[2],value[5],value[6],value[7])!=(scope,window,pair,direction,kind):
+                raise LookupError('mobile_cursor_expired')
+            if kind=='cache':self._items.pop(key,None)
+            return value[3],value[4],value[8]
+
+
+MOBILE_MAIL_CURSORS=MobileMailCursors()
+_MOBILE_NONCE=secrets.token_hex(16)
+
+
+@contextmanager
+def mobile_mail_read(con):
+    """A read transaction and a two-second SQLite work budget, no Mail writes."""
+    deadline=time.monotonic()+2
+    own=not con.in_transaction
+    if own:con.execute('BEGIN')
+    con.set_progress_handler(lambda: int(time.monotonic()>deadline),1000)
+    try:yield
+    finally:
+        con.set_progress_handler(None,0)
+        if own:con.rollback()
+
+
+def _mobile_scope(con,pid):
+    db=next((row[2] for row in con.execute('PRAGMA database_list') if row[1]=='main'),'')
+    if db:
+        st=os.stat(db);identity=(os.path.realpath(db),st.st_dev,st.st_ino)
+    else:identity=('memory',id(con))
+    return hashlib.sha256(repr((_MOBILE_NONCE,pid,identity)).encode()).hexdigest()[:32]
+
+
+def _mobile_delivery(con,pid,window,now,pair=None,direction='both'):
+    try:from dashboard.mobile_projection import WINDOWS, name
+    except ModuleNotFoundError:from mobile_projection import WINDOWS, name
+    if window not in WINDOWS:raise ValueError('invalid_window')
+    if direction not in {'both','forward','reverse'}:raise ValueError('invalid_direction')
+    args=[pid,int(now)]
+    bounds='event_at IS NOT NULL AND event_at<=?'
+    if WINDOWS[window] is not None:
+        bounds+=' AND event_at>=?';args.append(int(now)-WINDOWS[window])
+    if pair is not None:
+        if len(pair)!=2:raise ValueError('invalid_pair')
+        a,b=map(name,pair)
+        if a==b and direction!='both':raise ValueError('invalid_direction')
+        if direction=='both':bounds+=' AND ((source=? AND target=?) OR (source=? AND target=?))';args.extend((a,b,b,a))
+        else:
+            bounds+=' AND source=? AND target=?';args.extend((a,b) if direction=='forward' else (b,a))
+    elif direction!='both':raise ValueError('invalid_pair')
+    cte=f'''WITH delivery AS (
+        SELECT m.id AS message_id,mr.agent_id AS recipient_id,sa.name AS source,ra.name AS target,
+               mr.kind AS kind,{_sql_epoch('m.created_ts')} AS event_at
+        FROM messages m JOIN message_recipients mr ON mr.message_id=m.id
+        JOIN agents sa ON sa.id=m.sender_id AND sa.project_id=m.project_id
+        JOIN agents ra ON ra.id=mr.agent_id AND ra.project_id=m.project_id
+        WHERE m.project_id=? AND mr.kind IN ('to','cc')) '''
+    return cte,bounds,args
+
+
+def _mobile_event(pid,row):
+    mid,rid,source,target,kind,stamp=row
+    return {'key':hashlib.sha256(f'{pid}:{mid}:{rid}'.encode()).hexdigest()[:32],
+            'source':source,'target':target,'kind':kind,'event_at':stamp,'count':1}
+
+
+def mobile_mail_page(con,pid,window,cursor=None,*,now=None,cursors=None,pair=None,direction='both'):
+    now=time.time() if now is None else now
+    registry=MOBILE_MAIL_CURSORS if cursors is None else cursors
+    scope=_mobile_scope(con,pid)
+    cte,bounds,args=_mobile_delivery(con,pid,window,now,pair,direction)
+    size=200
+    if cursor is not None:
+        (mid,rid,stamp),size,_=registry.resolve(cursor,scope,window,pair=pair,direction=direction)
+        bounds+=' AND (event_at,message_id,recipient_id)<(?,?,?)';args.extend((stamp,mid,rid))
+    with mobile_mail_read(con):
+        rows=con.execute(cte+f'''SELECT message_id,recipient_id,source,target,kind,event_at
+            FROM delivery WHERE {bounds} ORDER BY event_at DESC,message_id DESC,recipient_id DESC LIMIT ?''',
+            [*args,size+1]).fetchall()
+    more=len(rows)>size
+    last=rows[size-1] if more else None
+    token=registry.issue(scope,window,(last[0],last[1],last[5]),size,pair=pair,direction=direction) if more else None
+    return {'status':'available','scope':scope,'window':window,'events':[_mobile_event(pid,r) for r in rows[:size]],
+            'next_cursor':token,'observed_at':int(now),'pair':list(pair) if pair else None,'direction':direction}
+
+
+def _mobile_content(con,pid,mid):
+    # Read bounded values only AFTER canonical project/delivery/period admission.
+    row=con.execute('''SELECT typeof(subject),substr(subject,1,513),typeof(body_md),
+        substr(CAST(body_md AS BLOB),1,65537),length(CAST(body_md AS BLOB))
+        FROM messages WHERE id=? AND project_id=?''',(mid,pid)).fetchone()
+    if row is None or row[0]!='text' or row[2]!='text':raise LookupError('mobile_content_unavailable')
+    subject,raw=row[1],row[3]
+    cut=raw[:65536]
+    try:body=cut.decode('utf-8')
+    except UnicodeDecodeError as exc:
+        if len(raw)<=65536 or exc.end!=len(cut) or exc.reason!='unexpected end of data':raise ValueError('mobile_content_encoding') from None
+        body=cut[:exc.start].decode('utf-8')
+    value={'subject':subject[:512],'body':body,'subject_truncated':len(subject)>512,'body_truncated':row[4]>len(body.encode())}
+    revision=hashlib.sha256(json.dumps([value,row[4]],ensure_ascii=False,separators=(',',':')).encode()).hexdigest()[:32]
+    return value,revision
+
+
+def mobile_mail_detail(con,pid,window,key,*,mode='content',now=None):
+    try:from dashboard.mobile_projection import EVENT_KEY
+    except ModuleNotFoundError:from mobile_projection import EVENT_KEY
+    if not isinstance(key,str) or not EVENT_KEY.fullmatch(key) or mode not in {'content','revision'}:raise ValueError('invalid_event')
+    now=time.time() if now is None else now
+    cte,bounds,args=_mobile_delivery(con,pid,window,now)
+    scope=_mobile_scope(con,pid)
+    con.create_function('mobile_event_key',2,lambda mid,rid:hashlib.sha256(f'{pid}:{mid}:{rid}'.encode()).hexdigest()[:32],deterministic=True)
+    with mobile_mail_read(con):
+        found=con.execute(cte+f'''SELECT message_id,recipient_id,source,target,kind,event_at
+            FROM delivery WHERE {bounds} AND mobile_event_key(message_id,recipient_id)=? LIMIT 2''',[*args,key]).fetchall()
+        if len(found)!=1:raise LookupError('mobile_event_unavailable')
+        event=_mobile_event(pid,found[0]);value,revision=_mobile_content(con,pid,found[0][0])
+    fingerprint=hashlib.sha256(f'{scope}:{found[0][0]}'.encode()).hexdigest()[:32]
+    result={'scope':scope,'event':event,'fingerprint':fingerprint,'revision':revision}
+    if mode=='content':result.update(value)
+    return result
+
+
+def mobile_mail_cache_page(con,pid,cursor=None,*,now=None,cursors=None,max_bytes=4*1024*1024):
+    """Loopback-only bounded 24h distinct-message batch; never a relay route."""
+    now=time.time() if now is None else now
+    scope=_mobile_scope(con,pid);registry=MOBILE_MAIL_CURSORS if cursors is None else cursors
+    cte,bounds,args=_mobile_delivery(con,pid,'day',now)
+    seen=0
+    if cursor:
+        (mid,stamp),_,seen=registry.resolve(cursor,scope,'day',kind='cache')
+        bounds+=' AND (event_at,message_id)<(?,?)';args.extend((stamp,mid))
+    room=min(32,2000-seen)
+    with mobile_mail_read(con):
+        found=con.execute(cte+f'''SELECT message_id,MAX(recipient_id),source,target,kind,event_at
+            FROM delivery WHERE {bounds} GROUP BY message_id
+            ORDER BY event_at DESC,message_id DESC LIMIT ?''',[*args,room+1]).fetchall()
+        items=[];last=None;reason=None
+        for row in found[:room]:
+            # MAX(recipient_id) with SQLite's single MAX selects the same row's
+            # other columns, retaining one canonical to/cc delivery per message.
+            value,revision=_mobile_content(con,pid,row[0])
+            item={'scope':scope,'event':_mobile_event(pid,row),'revision':revision,
+                  'fingerprint':hashlib.sha256(f'{scope}:{row[0]}'.encode()).hexdigest()[:32],**value}
+            trial={'scope':scope,'items':[*items,item],'next_cursor':'f'*32,'complete':False,'reason':'count_limit'}
+            if len(json.dumps(trial,separators=(',',':'),allow_nan=False).encode())>max_bytes-512:
+                reason='serialized_batch_limit';break
+            items.append(item);last=(row[0],row[5])
+    more=len(found)>len(items)
+    seen+=len(items)
+    if more and seen>=2000:reason='count_limit'
+    next_cursor=registry.issue(scope,'day',last,kind='cache',seen=seen) if more and last and seen<2000 else None
+    return {'scope':scope,'items':items,'next_cursor':next_cursor,
+            'complete':not more,'reason':reason,'observed_at':int(now)}
 
 
 def build_graph() -> dict:

@@ -29,7 +29,6 @@ import secrets
 import signal
 import shlex
 import shutil
-import socket
 import sqlite3
 import stat
 import subprocess
@@ -44,7 +43,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 26
+API_GENERATION = 33
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -100,11 +99,18 @@ except ModuleNotFoundError:  # direct script execution
     )
 
 
+try:
+    from dashboard import legacy_http_admission
+except ModuleNotFoundError:  # direct script execution
+    import legacy_http_admission
+
+
 def _same_origin_request(handler) -> bool:
     origin = (handler.headers.get("Origin") or "").strip()
     fetch_site = (handler.headers.get("Sec-Fetch-Site") or "").strip().lower()
-    expected_origin = f"http://{handler.headers.get('Host', '')}"
-    return (not origin or origin == expected_origin) and fetch_site in {
+    matches = (origin == f"http://{handler.headers.get('Host', '')}" if GLOBAL_MODE else
+               legacy_http_admission.origin_matches(origin, getattr(handler, "_legacy_origins", frozenset())))
+    return (not origin or matches) and fetch_site in {
         "",
         "none",
         "same-origin",
@@ -191,8 +197,8 @@ BIND_HOST = _env_text("AGENTSTACK_BIND_HOST", "127.0.0.1")
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "index.html")
 THEME_ASSETS = {
-    **{"/"+name:(os.path.join(HERE,name),"text/javascript; charset=utf-8" if name.endswith(".js") else "text/css; charset=utf-8") for name in ("global_ui.js","global_ui.css","mail_flow.js","mail_flow.css","network_node.js","runtime_node.js","operator_session.js","mail_controller.js","operation_controller.js")},
-    **{"/assets/"+name+".svg": (os.path.join(HERE,"assets",name+".svg"), "image/svg+xml") for name in ("anthropic","openai","google","deepseek","qwen")},
+    **{"/"+name:(os.path.join(HERE,name),"text/javascript; charset=utf-8" if name.endswith(".js") else "text/css; charset=utf-8") for name in ("global_ui.js","global_ui.css","mail_flow.js","mail_flow.css","network_node.js","network_core.js","runtime_node.js","operator_session.js","mail_controller.js","operation_controller.js")},
+    **{"/assets/"+name+".svg": (os.path.join(HERE,"assets",name+".svg"), "image/svg+xml") for name in ("anthropic","openai","google","deepseek","qwen","orbit","orbit-light")},
     "/theme_core.js": (os.path.join(HERE, "theme_core.js"), "text/javascript; charset=utf-8"),
     "/theme_controller.js": (
         os.path.join(HERE, "theme_controller.js"),
@@ -505,6 +511,31 @@ def _custom_portrait_map() -> dict:
 
 
 PORTRAITS = _portrait_set()
+
+
+def mobile_portrait_payload(name: str) -> tuple[int,bytes,str]:
+    """Named PC resolver, then science suffix; no map/path is returned."""
+    try:
+        from dashboard.mobile_projection import NAME,png_image
+    except ModuleNotFoundError:
+        from mobile_projection import NAME,png_image
+    if not isinstance(name,str) or not NAME.fullmatch(name):
+        return 400,b'portrait unavailable','text/plain'
+    if GLOBAL_MODE:
+        return 501,b'portrait unavailable','text/plain'
+    candidates=[_portrait_file(name,False)]
+    # The bundled scientific names give the same longest suffix ordering as
+    # PC scientistOf. Custom resolution is always attempted before this path.
+    for scientist in sorted(_png_names(PORT_64),key=lambda s:(-len(s),s)):
+        if name.lower().endswith(scientist.lower()):
+            candidates.append(_portrait_file(scientist,False));break
+    for file in dict.fromkeys(candidates):
+        if not file or os.path.islink(file):continue
+        try:
+            with open(file,'rb') as source:data=source.read(512*1024+1)
+        except OSError:continue
+        if png_image(data):return 200,data,'image/png'
+    return 404,b'portrait unavailable','text/plain'
 
 # tmux フォーマットのフィールド区切り。制御文字 US(0x1f) はペインタイトルに出ない。
 SEP = "\x1f"
@@ -2018,6 +2049,58 @@ def _raw_graph() -> dict:
     return data
 
 
+def mobile_mail_payload(window: str) -> tuple[int, dict]:
+    """Metadata for the opt-in reader; never fallback from global to legacy DB."""
+    if GLOBAL_MODE:
+        return 501, {'status': 'unavailable', 'error': 'mobile_global_unsupported'}
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    from mobile_projection import WINDOWS
+    if window not in WINDOWS:
+        return 400, {'status': 'unavailable', 'error': 'invalid_window'}
+    if not DB_PATH or not os.path.isfile(DB_PATH):
+        return 503, {'status': 'unavailable', 'error': 'mail_unavailable'}
+    try:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import graph_data
+        with _db() as con:
+            project_id = graph_data._resolve_project_id(con)
+            with graph_data.mobile_mail_read(con):
+                payload = graph_data.mobile_mail_metadata(con, project_id, window)
+        return 200, payload
+    except (OSError, sqlite3.Error, LookupError):
+        return 503, {'status': 'unavailable', 'error': 'mail_unavailable'}
+
+
+def mobile_mail_content_payload(route,query):
+    """Finite loopback reader API. No generic SQL, body export or ACK actions."""
+    if GLOBAL_MODE:return 501,{'error':'mobile_global_unsupported'}
+    from mobile_projection import WINDOWS,EVENT_KEY,NAME
+    window=query.get('window',['day'])[0]
+    allowed={'window','event','mode'} if route=='message' else {'cursor'} if route=='cache' else {'window','cursor','a','b','direction'}
+    if set(query)-allowed or any(len(v)!=1 for v in query.values()) or window not in WINDOWS:return 400,{'error':'invalid_mail_query'}
+    cursor=query.get('cursor',[None])[0];pair=None;direction=query.get('direction',['both'])[0]
+    if cursor is not None and not EVENT_KEY.fullmatch(cursor):return 400,{'error':'invalid_cursor'}
+    if route=='message':
+        if not EVENT_KEY.fullmatch(query.get('event',[''])[0]) or query.get('mode',['content'])[0] not in {'content','revision'}:return 400,{'error':'invalid_event'}
+    if route=='page' and set(query)&{'a','b','direction'}:
+        pair=(query.get('a',[''])[0],query.get('b',[''])[0])
+        if not {'a','b','direction'}<=set(query) or not all(NAME.fullmatch(n) for n in pair) or direction not in {'both','forward','reverse'}:return 400,{'error':'invalid_pair'}
+    if not DB_PATH or not os.path.isfile(DB_PATH):return 503,{'error':'mail_unavailable'}
+    try:
+        import graph_data
+        with _db() as con:
+            pid=graph_data._resolve_project_id(con)
+            if route=='message':value=graph_data.mobile_mail_detail(con,pid,window,query['event'][0],mode=query.get('mode',['content'])[0])
+            elif route=='cache':value=graph_data.mobile_mail_cache_page(con,pid,cursor)
+            else:value=graph_data.mobile_mail_page(con,pid,window,cursor,pair=pair,direction=direction)
+        return 200,value
+    except LookupError:return 410,{'error':'mail_event_or_cursor_expired'}
+    except ValueError:return 400,{'error':'invalid_mail_query'}
+    except (OSError,sqlite3.Error):return 503,{'error':'mail_unavailable'}
+
+
 # エージェント名 -> 成果物 LOG の索引（60秒キャッシュ）。
 # LOG_*.md の frontmatter `agent:` がノード名と一致するものを成果物とみなす。
 _DELIV_CACHE: dict = {"ts": 0.0, "key": None, "map": None}
@@ -2731,7 +2814,7 @@ def _write_wt_launcher(tmux_args: list[str], title: str) -> str:
 
 
 def _legacy_terminal_argv(tmux_args: list[str]) -> list[str]:
-    """Admit now and re-admit inside the actual terminal/ttyd child."""
+    """Admit now and re-admit inside the actual terminal child."""
     if not tmux_args or tmux_args[0] != 'tmux':
         return tmux_args
     consumer = _legacy_tmux_consumer()
@@ -6372,8 +6455,15 @@ def _pane_model_for(pane_model: str | None, program: str | None) -> str | None:
 #   Claude: "(2m 24s · ↓ … tokens …)"（区切り · = U+00B7）
 #   Codex : "(1s • esc to interrupt)"（区切り • = U+2022）→ 両方許容。
 #   wait 中: 直前ターン要約 "✻ Crunched for 1m 36s" / "Churned for 47s"。
+# Claude may put a phase label first: "(running Stop hook · 7s · ↓ 303 tokens)".
 _ACTIVE_T_RE = re.compile(
-    r"\(\s*(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(\d+)\s*s\s*[·•]")
+    r"\((?:[^()\n·•]*[·•])?\s*(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(\d+)\s*s\s*[·•]")
+# Codex's timed interrupt hint, optionally followed by its exact
+# background-terminal summary (same wording as provider_stalls).
+_CODEX_INTERRUPT_END_RE = re.compile(
+    r"esc to interrupt\)"
+    r"(?: · (?:1 background terminal|(?:[2-9]|[1-9][0-9]+) background terminals)"
+    r" running · /ps to view · /stop to close)?$")
 _LAST_T_RE = re.compile(
     r"\b(?:for|in)\s+(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(\d+)\s*s\b",
     re.IGNORECASE)
@@ -6509,7 +6599,9 @@ def _runtime_activity(text: str) -> tuple[str, str]:
     lines = text.splitlines()
 
     def rule(line):
-        return re.fullmatch(r"[─━]{8,}", line.strip()) is not None
+        # Newer Claude Code may label the input border with the session name
+        # ("──── Name ─"); that label is still border, not reply content.
+        return re.fullmatch(r"[─━]{8,}(?: +[^─━\s][^\n]*? +[─━]+)?", line.strip()) is not None
 
     def chrome(line):
         row = line.strip()
@@ -6561,9 +6653,11 @@ def _runtime_activity(text: str) -> tuple[str, str]:
             if not (_is_activity_glyph(candidate[0]) or candidate[0] in "▌●"):
                 continue
             # Codex uses the same timed interrupt UI for MCP initialization.
+            # It may append the exact background-terminal summary after the
+            # hint; nothing else may follow it.
             if (width == 1 and candidate[0] in "•▌●"
                     and _ACTIVE_T_RE.search(candidate) and _WORK_RE.search(candidate)
-                    and candidate.endswith("esc to interrupt)")):
+                    and _CODEX_INTERRUPT_END_RE.search(candidate)):
                 return "work", candidate
             if width > 1 and len(label[0].strip()) == 1:
                 candidate = label[0].strip() + " " + " ".join(row.strip() for row in label[1:])
@@ -6765,95 +6859,6 @@ def term_capture(session: str, lines: int) -> dict:
     if out.returncode != 0:
         return {"ok": False, "error": "capture-pane 失敗"}
     return {"ok": True, "session": session, "content": out.stdout}
-
-
-# --------------------------------------------------------------------------- #
-# ttyd: ブラウザ埋め込みのフル対話端末 (Phase 3)
-#   セッションごとに on-demand で ttyd を 127.0.0.1 の空きポートに起動。
-#   既存があれば再利用。一定時間アクセスが無いものは reaper が掃除。
-# --------------------------------------------------------------------------- #
-TTYD_BIN = shutil.which("ttyd") or "/opt/homebrew/bin/ttyd"
-_TTYD: dict[str, dict] = {}
-_TTYD_LOCK = threading.Lock()
-_TTYD_IDLE = 900  # 15分アクセスが無ければ停止
-
-
-def _free_port() -> int:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
-
-
-def _ttyd_alive(rec: dict) -> bool:
-    return rec.get("proc") and rec["proc"].poll() is None
-
-
-def ttyd_ensure(session: str) -> dict:
-    if not _valid(session):
-        return {"ok": False, "error": "invalid session name"}
-    if not _has_session(session):
-        return {"ok": False, "error": f"session '{session}' は存在しません"}
-    if not os.path.exists(TTYD_BIN):
-        return {"ok": False, "error": "ttyd が見つかりません"}
-    with _TTYD_LOCK:
-        try:
-            attach_args = _legacy_terminal_argv(['tmux', 'attach', '-t', f'={session}'])
-        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
-            return {'ok': False, 'error': str(exc)}
-        rec = _TTYD.get(session)
-        if rec and _ttyd_alive(rec) and rec.get('attach_args') != attach_args:
-            _ttyd_kill(rec)
-            _TTYD.pop(session, None)
-            rec = None
-        if rec and _ttyd_alive(rec):
-            rec["last"] = time.time()
-            return {"ok": True, "url": f"http://127.0.0.1:{rec['port']}/",
-                    "port": rec["port"], "reused": True}
-        port = _free_port()
-        # -W 書込可(対話) / -i 127.0.0.1 ローカル限定 / -m 同時3 /
-        # -t 端末オプション / once しない(再利用) / tmux にミラー attach
-        proc = subprocess.Popen(
-            [TTYD_BIN, "-p", str(port), "-i", "127.0.0.1", "-W",
-             "-m", "3", "-t", "fontSize=13",
-             "-t", "titleFixed=" + session,
-             "-t", "disableLeaveAlert=true",
-             *attach_args],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        _TTYD[session] = {"proc": proc, "port": port, "last": time.time(), "attach_args": attach_args}
-    time.sleep(0.5)  # ttyd の listen 開始を待つ
-    if proc.poll() is not None:
-        return {"ok": False, "error": "ttyd 起動失敗"}
-    return {"ok": True, "url": f"http://127.0.0.1:{port}/",
-            "port": port, "reused": False}
-
-
-def _ttyd_kill(rec: dict) -> None:
-    try:
-        rec["proc"].terminate()
-    except Exception:
-        pass
-
-
-def _ttyd_reaper() -> None:
-    while True:
-        time.sleep(120)
-        now = time.time()
-        with _TTYD_LOCK:
-            for s in list(_TTYD):
-                rec = _TTYD[s]
-                if not _ttyd_alive(rec) or now - rec["last"] > _TTYD_IDLE:
-                    _ttyd_kill(rec)
-                    _TTYD.pop(s, None)
-
-
-@atexit.register
-def _ttyd_cleanup() -> None:
-    for rec in list(_TTYD.values()):
-        _ttyd_kill(rec)
 
 
 _TOOLS_UNSET = object()
@@ -7482,6 +7487,8 @@ def spawn_names_payload() -> dict:
     claude_catalog = _claude_catalog()
     claude_models = list(claude_catalog.models)
     claude_default = _claude_default_model(claude_models)
+    local_catalog = _standard_catalog_module().discover_catalog(_spawn_catalog_providers(),
+        os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"), mode="global" if GLOBAL_MODE else "legacy")
     return {
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": statuses.get(name, "unknown")} for name in scientists],
@@ -7498,7 +7505,7 @@ def spawn_names_payload() -> dict:
              "model_source": claude_catalog.source, "model_error": claude_catalog.error,
              "overflow_models": [m for m in claude_catalog.overflow if m != claude_default]},
             codex_models.provider_catalog(),
-        ] + _spawn_catalog_providers(),
+        ] + local_catalog,
     }
 
 
@@ -8010,7 +8017,7 @@ def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
         "parent", "standalone", "task", "role", "group", "worktree",
         "worktree_base", "name", "dir", "provider", "model", "effort",
         "claude_chrome", "claude_chrome_device", "async", "dry_run", "headless", "emoji",
-        "base", "tools", "harness", "helper_model",
+        "base", "tools", "harness", "helper_model", "url_index", "url_key",
     }
     if str(payload.get("provider") or "").strip().lower() == "gemini":
         allowed.add("resources")
@@ -8129,12 +8136,34 @@ def do_spawn(payload: dict) -> dict:
     harness = payload.get("harness")
     native = {"claude": ("claude-code", "claudecode"),
               "codex": ("codex-cli", "codex"), "gemini": ("gemini",)}
-    if ((provider in ("deepseek", "strata") and harness not in ("dsh", "hermes"))
-            or (provider not in ("deepseek", "strata") and "harness" in payload
+    connection_rows = []
+    is_native = provider in ("deepseek", "strata")
+    if provider not in native:
+        try:
+            # New connection IDs are exact selectors, never aliases for a host.
+            connections = _standard_catalog_module().CONNECTIONS
+            connections['validate_id'](provider)
+            if not is_native and raw_provider != provider:
+                raise ValueError('invalid_connection_id')
+            connection_rows = _spawn_catalog_providers()
+            matches = [row for row in connection_rows if row.get('id') == provider]
+            if len(matches) == 1:
+                row = matches[0]
+                kind_args = {'kind': row['kind']} if 'kind' in row else {}
+                connections['connection_kind'](provider, **kind_args)
+                is_native = True
+            elif len(matches) > 1:
+                raise ValueError('ambiguous_connection_configuration')
+        except ValueError as exc:
+            return {'ok': False, 'error': str(exc)}
+    if ((is_native and harness not in ("dsh", "hermes"))
+            or (not is_native and "harness" in payload
                 and harness not in native.get(provider, ()))):
         return {"ok": False, "error": "unsupported harness", "error_code": "unsupported_harness"}
     helper_model = payload.get("helper_model")
-    if provider not in ("deepseek", "strata") and helper_model not in (None, "same"):
+    if not is_native and ('url_index' in payload or 'url_key' in payload):
+        return {'ok': False, 'error': 'url_index requires a dynamic Local connection'}
+    if not is_native and helper_model not in (None, "same"):
         return {"ok": False, "error": "unsupported helper model"}
     for field in ("model", "effort"):
         if payload.get(field) is not None and not isinstance(payload[field], str):
@@ -8190,7 +8219,7 @@ def do_spawn(payload: dict) -> dict:
     # base / tools (hooks/child_tools.py). Everything that depends on the
     # child's final directory is checked again by the launcher, which fails
     # closed before tmux starts.
-    tools_args, tools_error = _spawn_tools_args(payload, harness if provider in ("deepseek", "strata") else provider, chrome, chrome_device)
+    tools_args, tools_error = _spawn_tools_args(payload, harness if is_native else provider, chrome, chrome_device)
     if tools_error:
         return {"ok": False, "error": tools_error}
     if provider == "claude":
@@ -8216,7 +8245,7 @@ def do_spawn(payload: dict) -> dict:
         try:
             launcher = codex_models.resolve_launcher()
             catalog = codex_models.resolve_catalog(launcher=launcher)
-            model_note = catalog.note if not model or model.lower() == "sol" else ""
+            model_note = catalog.note if not model else ""
             model = codex_models.normalize_model(model, catalog=catalog)
             effort = codex_models.resolve_effort(model, effort, catalog)
         except ValueError as exc:
@@ -8228,15 +8257,33 @@ def do_spawn(payload: dict) -> dict:
             launcher_env=(("AGENTSTACK_CODEX_BIN", launcher.binary),) if launcher.binary else (),
             effort_arg=bool(effort),
         )
-    elif provider in ("deepseek", "strata"):
-        selected = None
-        for row in _spawn_catalog_providers():
+    elif is_native:
+        selections = []
+        dynamic = next((row for row in connection_rows if row.get('id') == provider
+                        and row.get('dynamic_models') is True), None)
+        if dynamic:
+            if effort or helper_model not in (None, 'same'):
+                return {'ok': False, 'error': 'dynamic model effort is unreported; helper must be same'}
+            try:
+                if not isinstance(payload.get('url_key'), str) or not re.fullmatch(r'[0-9a-f]{64}', payload['url_key']):
+                    raise ValueError('url_selection_required')
+                _standard_catalog_module().dynamic_selection(os.environ.get('AGENTSTACK_MANAGED_SPAWN_CONFIG'),
+                    mode='global' if GLOBAL_MODE else 'legacy', backend=provider, harness=harness,
+                    model=model, url_index=payload.get('url_index'), url_key=payload['url_key'])
+                selections.append({'id': harness, 'available': True})
+            except (ValueError, OSError, TypeError, KeyError):
+                return {'ok': False, 'error': 'configured URL/model selection is unavailable',
+                        'error_code': 'spawn_pair_unavailable'}
+        elif 'url_index' in payload or 'url_key' in payload:
+            return {'ok': False, 'error': 'url_index requires a dynamic Local connection'}
+        for row in connection_rows:
             if row.get("id") != provider:
                 continue
             for candidate in row.get("models", []):
                 if isinstance(candidate, dict) and candidate.get("id") == model:
-                    selected = next((h for h in candidate.get("harnesses", [])
-                                     if h.get("id") == harness), None)
+                    selections.extend(h for h in candidate.get("harnesses", [])
+                                      if h.get("id") == harness)
+        selected = selections[0] if len(selections) == 1 else None
         if not selected or selected.get("available") is not True:
             return {"ok": False, "error": "model and harness are unavailable",
                     "error_code": "spawn_pair_unavailable"}
@@ -8251,7 +8298,8 @@ def do_spawn(payload: dict) -> dict:
         helper_args = ('--helper-model', helper) if helper != 'same' else ()
         spec = SpawnLaunchSpec(
             provider=provider, program=harness, model=model, script=SPAWN_SCRIPT,
-            provider_args=("--harness", harness, "--backend", provider) + helper_args + tools_args,
+            provider_args=("--harness", harness, "--backend", provider)
+                + (("--url-index", str(payload['url_index']), "--url-key", payload['url_key']) if dynamic else ()) + helper_args + tools_args,
             effort=effort, effort_arg=bool(effort),
         )
     else:
@@ -8693,7 +8741,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             f.flush()
             os.fsync(f.fileno())
         os.chmod(token_file, 0o600)
-        if provider in {"claude", "codex", "deepseek", "strata"}:
+        if provider in {"claude", "codex"} or program in harness_runtime.HARNESSES:
             binding_file = f"{token_file}.binding.json"
             binding_fd = os.open(binding_file, open_flags, 0o600)
             with os.fdopen(binding_fd, "w") as f:
@@ -9291,15 +9339,32 @@ def is_public_static(path):
 
 class Handler(BaseHTTPRequestHandler):
     def parse_request(self):
+        self._legacy_origins = frozenset()
         if not super().parse_request():
             return False
         if not GLOBAL_MODE:
-            return True
+            try:
+                self._legacy_origins = legacy_http_admission.admit(
+                    self.headers, self.path, self.server.server_port,
+                    os.environ.get(legacy_http_admission.SETTING, ""))
+                return True
+            except ValueError:
+                # Close before reading a body: its bytes must never become a
+                # subsequent keep-alive request after an admission failure.
+                self.close_connection = True
+                self.send_error(403, "Untrusted dashboard authority")
+                return False
         # One rule for every verb and route, including future local operations.
         # Only exact installed static GET/HEAD resources are public.
         path = urlparse(self.path).path
         if self.command in {'GET','HEAD'} and is_public_static(path):
-            return True
+            try:
+                legacy_http_admission.admit(self.headers, self.path, self.server.server_port)
+                return True
+            except ValueError:
+                self.close_connection = True
+                self.send_error(403, "Untrusted dashboard request")
+                return False
         try:
             try:
                 from dashboard.http_operator import Admission
@@ -9421,6 +9486,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path in {"/api/mobile-mail","/api/mobile-portrait","/api/mobile-message","/api/mobile-mail-page","/api/mobile-cache-page"} and GLOBAL_MODE:
+            self._send(501, b'{"status":"unavailable","error":"mobile_global_unsupported"}', "application/json; charset=utf-8")
+            return
         if GLOBAL_MODE and not is_public_static(path):
             self._global_get(path)
             return
@@ -9460,6 +9528,34 @@ class Handler(BaseHTTPRequestHandler):
             # is added or changes meaning; record it in a changelog.d fragment.
             # Managed this way from 2 on; every earlier release reported 1.
             self._send(200, json.dumps({"name": "orrery-telemetry", "version": version, "api": API_GENERATION}).encode(), "application/json; charset=utf-8")
+        elif path == "/api/mobile-portrait":
+            import ipaddress
+            if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                self._send(403,b'portrait unavailable','text/plain');return
+            query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+            if set(query)!={'name'} or len(query['name'])!=1:
+                self._send(400,b'portrait unavailable','text/plain');return
+            status,body,mime=mobile_portrait_payload(query['name'][0])
+            self._send(status,body,mime)
+        elif path in {'/api/mobile-message','/api/mobile-mail-page','/api/mobile-cache-page'}:
+            import ipaddress
+            if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                self._send(403,b'{"error":"loopback_only"}','application/json; charset=utf-8');return
+            route={'/api/mobile-message':'message','/api/mobile-mail-page':'page','/api/mobile-cache-page':'cache'}[path]
+            query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+            status,payload=mobile_mail_content_payload(route,query)
+            self._send(status,json.dumps(payload).encode(),'application/json; charset=utf-8')
+        elif path == "/api/mobile-mail":
+            import ipaddress
+            if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                self._send(403, b'{"status":"unavailable","error":"loopback_only"}', "application/json; charset=utf-8")
+                return
+            q = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            if set(q) - {"window"} or len(q.get("window", [])) > 1:
+                status, payload = 400, {"status": "unavailable", "error": "invalid_window"}
+            else:
+                status, payload = mobile_mail_payload(q.get("window", ["day"])[0])
+            self._send(status, json.dumps(payload).encode(), "application/json; charset=utf-8")
         elif path == "/api/spawn-names":
             try:
                 self._send(200, json.dumps(spawn_names_payload()).encode(), "application/json; charset=utf-8")
@@ -9656,15 +9752,6 @@ class Handler(BaseHTTPRequestHandler):
             nm = (q.get("name") or [""])[0]
             hi = (q.get("hi") or ["0"])[0] in ("1", "true")
             self._serve_portrait(nm, hi)
-        elif path == "/api/ptty":
-            q = parse_qs(urlparse(self.path).query)
-            sess = (q.get("session") or [""])[0]
-            payload = ttyd_ensure(sess)
-            self._send(
-                200 if payload.get("ok") else 400,
-                json.dumps(payload, ensure_ascii=False).encode(),
-                "application/json; charset=utf-8",
-            )
         elif path == "/api/term":
             q = parse_qs(urlparse(self.path).query)
             sess = (q.get("session") or [""])[0]
@@ -9735,9 +9822,9 @@ class Handler(BaseHTTPRequestHandler):
         origin = (self.headers.get("Origin") or "").strip()
         fetch_site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
         if origin or fetch_site:
-            expected_origin = f"http://{self.headers.get('Host', '')}"
-            if ((origin and origin != expected_origin)
+            if ((origin and not legacy_http_admission.origin_matches(origin, self._legacy_origins))
                     or (fetch_site and fetch_site != "same-origin")):
+                self.close_connection = True
                 self._send(
                     403,
                     json.dumps({"ok": False,
@@ -10042,28 +10129,19 @@ def _log_js_error(body: dict) -> dict:
 
 def main():
     if GLOBAL_MODE:
-        # Isolation-only global backend starts no legacy maintenance, providers,
-        # ttyd cleanup or child processes. Request failures never fall back.
+        # Isolation-only global backend starts no legacy maintenance, providers
+        # or child processes. Request failures never fall back.
         srv = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
         print(f'agent-dashboard global backend on http://{BIND_HOST}:{PORT}/',flush=True)
         try:srv.serve_forever()
         except KeyboardInterrupt:pass
         finally:srv.server_close()
         return
+    legacy_http_admission.configured_origins(os.environ.get(legacy_http_admission.SETTING, ""))
     _start_supervisor_watchdog()
     _start_child_resume_maintenance()
     _start_provider_stall_monitor()
 
-    # 前回(SIGKILL 等で atexit 未実行)の野良 ttyd を掃除してから開始
-    try:
-        subprocess.run(
-            ["pkill", "-f", "ttyd -p .* tmux attach -t ="],
-            capture_output=True,
-        )
-    except FileNotFoundError:
-        # Optional cleanup must not prevent startup on hosts without pkill.
-        pass
-    threading.Thread(target=_ttyd_reaper, daemon=True).start()
     # The picker's Claude default checks the claude a child runs; find it once
     # here, where starting a login shell is allowed (requests may not).
     threading.Thread(target=_bind_claude_child_cli_path, args=(HOOKS_DIR,), daemon=True).start()

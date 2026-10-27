@@ -1,4 +1,4 @@
-"""Preparation only: actual dashboard callers, with no terminal or ttyd child."""
+"""Preparation only: actual dashboard callers, with no terminal child."""
 import ast
 from pathlib import Path
 import sys
@@ -45,45 +45,6 @@ def test_terminal_caller_defers_to_common_effect_time_admission(command):
         *command[1:]]
 
 
-def test_ttyd_rejects_target_replaced_after_has_session_before_popen():
-    calls, admissions = [], []
-    def refuse(args):
-        admissions.append(args)
-        raise RuntimeError('LEGACY_TARGET_IS_GLOBAL')
-    namespace = dict(Path=Path, sys=sys, HOOKS_DIR=str(ROOT / 'hooks'),
-        _valid=lambda _: True, _has_session=lambda _: True,
-        _legacy_tmux_consumer=lambda: fixture_consumer(refuse),
-        os=SimpleNamespace(path=SimpleNamespace(exists=lambda _: True)),
-        TTYD_BIN='/fixture/ttyd', _TTYD_LOCK=threading.Lock(), _TTYD={},
-        _ttyd_alive=lambda _: False, _free_port=lambda: 12345,
-        time=SimpleNamespace(time=lambda: 0, sleep=lambda _: None),
-        subprocess=SimpleNamespace(DEVNULL=-3,
-            Popen=lambda args, **kw: calls.append(args) or
-                SimpleNamespace(poll=lambda: None)))
-    result = caller('ttyd_ensure', namespace)('Beta')
-    assert result['ok'] is False
-    assert admissions == [['attach', '-t', '=Beta']]
-    assert calls == []
-
-
-def test_ttyd_child_uses_deferred_common_admission_on_each_browser_attach():
-    calls, admissions = [], []
-    namespace = dict(Path=Path, sys=sys, HOOKS_DIR=str(ROOT / 'hooks'),
-        _valid=lambda _: True, _has_session=lambda _: True,
-        _legacy_tmux_consumer=lambda: fixture_consumer(lambda args: admissions.append(args)),
-        os=SimpleNamespace(path=SimpleNamespace(exists=lambda _: True)),
-        TTYD_BIN='/fixture/ttyd', _TTYD_LOCK=threading.Lock(), _TTYD={},
-        _ttyd_alive=lambda _: False, _free_port=lambda: 12345,
-        time=SimpleNamespace(time=lambda: 0, sleep=lambda _: None),
-        subprocess=SimpleNamespace(DEVNULL=-3,
-            Popen=lambda args, **kw: calls.append(args) or
-                SimpleNamespace(poll=lambda: None)))
-    assert caller('ttyd_ensure', namespace)('Beta')['ok'] is True
-    assert admissions == [['attach', '-t', '=Beta']]
-    assert calls[0][-5:] == [sys.executable,
-        str(ROOT / 'bin/lib/runtime_tmux_consumer.py'), 'attach', '-t', '=Beta']
-
-
 @pytest.mark.parametrize('tmux_set',[False,True])
 @pytest.mark.parametrize('observation,retire',[('unknown',False),('other',False),('dead',True)])
 def test_actual_retire_only_cleanup_keeps_unknown_identity(tmp_path,tmux_set,observation,retire):
@@ -124,29 +85,3 @@ def test_actual_signal_measurement_failure_does_not_borrow_ambient_server(tmp_pa
     monkeypatch.delenv('TMUX',raising=False)
     monkeypatch.delenv('TMUX_PANE',raising=False)
     test_session_measurement_failures_are_not_absence(monkeypatch,failure)
-
-
-@pytest.mark.parametrize('changed,denied',[(False,False),(True,False),(False,True)])
-def test_actual_ttyd_reuse_readmits_current_endpoint_before_url(changed,denied):
-    consumer=fixture_consumer(lambda _:None)
-    helper=str(ROOT/'bin/lib/runtime_tmux_consumer.py')
-    existing=['env','AGENTSTACK_HOME='+str(ROOT),'TMUX=/fixture/socket,77,0',sys.executable,helper,'attach','-t','=Beta']
-    record={'proc':SimpleNamespace(poll=lambda:None),'port':11111,'last':0,'attach_args':existing}
-    killed=[];created=[]
-    if changed:consumer.transport.server_pid=88
-    if denied:
-        def refuse(_):raise RuntimeError('LEGACY_TARGET_IS_GLOBAL')
-        consumer.admitted_argv=refuse
-    ns=dict(Path=Path,sys=sys,HOOKS_DIR=str(ROOT/'hooks'),_valid=lambda _:True,_has_session=lambda _:True,
-        _legacy_tmux_consumer=lambda:consumer,os=SimpleNamespace(path=SimpleNamespace(exists=lambda _:True)),
-        TTYD_BIN='/fixture/ttyd',_TTYD_LOCK=threading.Lock(),_TTYD={'Beta':record},
-        _ttyd_alive=lambda _:True,_ttyd_kill=lambda rec:killed.append(rec),_free_port=lambda:22222,
-        time=SimpleNamespace(time=lambda:0,sleep=lambda _:None),
-        subprocess=SimpleNamespace(DEVNULL=-3,Popen=lambda args,**kw:created.append(args) or SimpleNamespace(poll=lambda:None)))
-    result=caller('ttyd_ensure',ns)('Beta')
-    if denied:
-        assert result['ok'] is False and created==[]
-    elif changed:
-        assert result['port']==22222 and len(killed)==len(created)==1
-    else:
-        assert result['reused'] is True and result['port']==11111 and killed==created==[]

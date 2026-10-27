@@ -1,5 +1,10 @@
 # provider assetの出典
 
+アプリのロゴ `orbit.svg` / `orbit-light.svg` は ORRERY 用のオリジナル
+vectorです。第三者providerのロゴではありません。両者は同じ形のdark/light版で、
+headerはページのtheme、faviconはブラウザのlight設定に合わせます。
+dashboard coreの配布と公開demoには、既存のassetsコピー経路で含まれます。
+
 Qwenの利用は運営者の判断（2026-10-19）。
 公式 [Qwen組織](https://github.com/QwenLM) の
 [avatar PNG](https://avatars.githubusercontent.com/u/141221163?v=4) をSVGへ埋め込み、

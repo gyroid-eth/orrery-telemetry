@@ -17,10 +17,27 @@ from urllib.parse import urlsplit
 
 THIN_CONFIG_CONTRACT = 1
 HELPER_MODEL_CONTRACT = 1
+CONNECTIONS = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'hooks/native_connections.py'))
+SERVER_MODELS = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'hooks/native_server_models.py'))
+
+
+def compaction_policy(model, context, output):
+    """Budget the exact selected route, without assuming another model's capacity."""
+    if (type(context) is not int or type(output) is not int or context < 16
+            or output <= 0 or output >= context):
+        return None
+    headroom = context // 10
+    threshold = min(context * 8 // 10, context - output - headroom)
+    retained = (context - output) * 16 // 100
+    if threshold <= retained or headroom < 1:
+        return None
+    return {'provider': 'deepseek-official', 'model': model,
+            'thresholdRatio': 0.8, 'headroomTokens': headroom,
+            'retainRatio': 0.16, 'maxTokens': min(output, headroom)}
 
 
 def read(file):
-    return json.loads(Path(file).read_text())
+    return CONNECTIONS['read_manifest'](file)
 
 
 def save(file, value):
@@ -80,17 +97,20 @@ def validate_input(document):
     """Read-only admission; callable with the shared selection subset."""
     try:
         root = absolute(document['product_root'], directory=True)
-        manifest = read(absolute(document['manifest_file']))
+        manifest = CONNECTIONS['read_manifest'](absolute(document['manifest_file']))
         backend_id = document['backend_id']
-        if backend_id not in ('deepseek', 'strata'):
-            raise ValueError('unknown_backend')
-        metadata = manifest['backends'][backend_id]
-        if document['model'] not in model_ids(metadata):
+        kind, metadata = CONNECTIONS['resolve_connection'](manifest, backend_id)
+        if 'backend_kind' in document and document['backend_kind'] != kind:
+            raise ValueError('connection_kind_changed')
+        dynamic = SERVER_MODELS['dynamic'](metadata)
+        if dynamic:
+            selected_url = SERVER_MODELS['selection'](metadata, document)['server_url']
+        elif document['model'] not in model_ids(metadata):
             raise ValueError('model_mismatch')
         helper = document.get('helper_model', 'same')
         if helper is None:
             helper = 'same'
-        if helper != 'same' and helper not in model_ids(metadata):
+        if helper != 'same' and (dynamic or helper not in model_ids(metadata)):
             raise ValueError('invalid_helper_model')
         template = read(absolute(manifest['harnesses']['dsh']['config_file']))
         owner = read(absolute(template['generation_receipt']))
@@ -125,6 +145,14 @@ def validate_input(document):
                 raise ValueError('invalid_runtime')
         backend_file = absolute(template['backend_file'])
         backend = read(backend_file)['backends'][backend_id]
+        if dynamic:
+            context, _ = SERVER_MODELS['context'](metadata, {'meta': document.get('server_context')})
+            base = SERVER_MODELS['api_base'](selected_url)
+            if context < 16:
+                raise ValueError('invalid_compaction_context')
+            backend = {**backend, 'base_url': base.removesuffix('/v1'), 'model': document['model'],
+                'model_definition': {'id': document['model'], 'contextWindow': context,
+                                     'maxTokens': min(SERVER_MODELS['DEFAULT_OUTPUT'], context // 4)}}
         url = urlsplit(backend['base_url'])
         if url.scheme not in ('https', 'http') or not url.hostname or url.username or url.password:
             raise ValueError('invalid_backend_url')
@@ -249,6 +277,23 @@ def generate(document):
     if facts['helper'] != 'same':
         rows.append({'id': 'tool-subagent', 'config': {'agentOptions': {
             'provider': 'deepseek-official', 'model': facts['helper']}}})
+    definition = backend.get('model_definition') or {}
+    policy = None
+    policy_reason = 'missing_model_definition'
+    if isinstance(definition, dict) and definition.get('id') == document['model']:
+        policy = compaction_policy(document['model'], definition.get('contextWindow'), definition.get('maxTokens'))
+        if policy:
+            policy_reason = 'selected_model_budget'
+            rows.append({'insert': [
+                {'id': 'orrery-compaction-' + preset,
+                 'name': '@deepseek-harness-tui/dsh-tui/preset-patch',
+                 'config': {'preset': preset, 'config': {'compaction-basic': {'modelPolicies': [policy]}}}}
+                for preset in ('standard', 'ptc', 'cordis')
+            ]})
+        else:
+            policy_reason = 'missing_or_invalid_budget'
+    elif definition:
+        policy_reason = 'model_definition_mismatch'
     tui_data = state / 'tui'
     save(tui_data / 'model.json', {'provider': 'deepseek-official', 'model': document['model']})
     language = 'en'
@@ -277,7 +322,9 @@ def generate(document):
                     **facts['credential_context'],
                     'AGENTSTACK_LLM_KEY_FILES': json.dumps(protected),
                     'AGENTSTACK_LLM_KEY_DEFINITIONS': str(definitions)},
-            'guard': {'plugin': str(facts['plugin']), 'contract': 1}}
+            'guard': {'plugin': str(facts['plugin']), 'contract': 1},
+            'compaction': {'policy': 'selected_route' if policy else 'native_default',
+                           'reason': policy_reason}}
 
 
 def main():

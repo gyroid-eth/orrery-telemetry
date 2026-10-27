@@ -32,6 +32,8 @@
     <string>__GLOBAL_SERVER_CONFIG__</string>
     <key>AGENTSTACK_PORT</key>
     <string>__PORT__</string>
+    <key>AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS</key>
+    <string>__DASHBOARD_ALLOWED_ORIGINS__</string>
     <key>AGENTSTACK_LABEL_PREFIX</key>
     <string>__LABEL_PREFIX__</string>
     <key>AGENTSTACK_MAIL_DB</key>
@@ -84,6 +86,10 @@
     <string>__CUSTOM_PORTRAITS__</string>
     <key>AGENTSTACK_CLAUDE_MODELS</key>
     <string>__CLAUDE_MODELS__</string>
+    <key>AGENTSTACK_CODEX_DEFAULT_MODEL</key>
+    <string>__CODEX_DEFAULT_MODEL__</string>
+    <key>AGENTSTACK_CODEX_DEFAULT_EFFORT</key>
+    <string>__CODEX_DEFAULT_EFFORT__</string>
     <key>AGENTSTACK_CODEX_MODELS</key>
     <string>__CODEX_MODELS__</string>
     <key>AGENTSTACK_DSH_NODE</key>
