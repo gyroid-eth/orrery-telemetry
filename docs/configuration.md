@@ -401,6 +401,8 @@ AGENTSTACK_CODEX_MODELS="gpt-6.1-sol,gpt-6-luna" ./scripts/install.sh
 
 cache は `fetched_at` の日時と `models[].slug`、`visibility`、`supported_reasoning_levels[].effort`、`default_reasoning_level` の観測済み形式だけを使います。Codex CLI 0.154.0 の実装に合わせ、候補追加・effort 情報には取得から300秒以内の一覧を利用します。既定候補の存在確認は `slug` を使い、picker の visibility や effort metadata の有無には依存しません。通常ファイル、または launcher が child の `CODEX_HOME` に作る正規の `models_cache.json` symlink だけを対象にし、2 MiB・256モデル・ID長128文字まで読み、hidden モデルは追加しません。欠損・破損・非対応形式・空・期限切れでは同梱候補へ戻ります。CLI の版が 0.159.0 以上なら GPT-6.1 Sol も残し、版不明なら除きます。異なるeffortを持つ同一IDの重複もfallback対象です。
 
+Codex 側で `model_catalog_json` を指定すると起動時にそのファイルが使われ、remote catalog の取得より優先されます。ORRERY の alias 解決は `CODEX_HOME/models_cache.json` を読むため、Codex の有効 catalog と一致するとは限りません。更新しても候補が出ない場合は、有効な override や profile とその内容を確認してください。詳細は [Codex の catalog ガイド](https://learn.chatgpt.com/docs/model-catalogs)を参照してください。
+
 同梱候補は `gpt-6.1-sol`（CLI 0.159.0 以上、または版不明で新鮮な catalog にある場合）、`gpt-6-sol`、`gpt-5.6-sol`、`gpt-6-astra`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-6-luna` です。一覧の消失だけでは正式 ID の直接起動を拒否しません。許可リストを明示した場合だけ membership を制限します。catalog の読み取りは CLI の起動や通信をせず、credential、API key、token、Keychain を探索しません。既定選択は spawner と共通の resolver で、環境の `AGENTSTACK_CODEX_BIN` → 保存済み `env.sh` → usable PATH candidate の順に起動対象を選びます。版の確認も子と同じ login shell・`~/.local/bin` を追加した PATH・guard 変数で `--version` を実行します。各候補の timeout は実 spawner と同じ10秒、候補全体の予算は15秒、cleanup を含む読み取り helper 全体は18秒で打ち切ります。負荷の高い login shell でも同じ usable 判定になるよう、既存 spawner の予算に揃えています。成功・失敗を60秒間メモリに保持し、環境・保存設定・選択された実行ファイルの参照先や stat が変われば再取得します。API と delegate は選んだ CLI と正式 model ID の組を起動へ渡します。古い稼働中 session が共有 cache を上書きするため、取得できた CLI の版を互換性の上限とし、cache の `client_version` が異なるだけでは除外しません。起動対象を解決できない、または版が読めない場合は新鮮な catalog による判定へ戻ります。cache の `identity` は現在のログインと照合していません。アカウントを切り替えた後に前の cache が残っていると、新しいアカウントの利用可否と異なる判断になる可能性があります。候補の表示や既定の fallback は、そのアカウントでの利用権限の証明ではありません。CLI 自身による取得・更新・認可は変更しません。
 
 NEW AGENT と同じ判断を確認するには、dashboard の service と同じ環境変数・PATH を持つ shell で次を実行します（delegate では launcher を実行する shell で実行）。`model`、`codex_bin`、`cli_version`、`default_source`（`cli_version` / `local_catalog`）を JSON で返します。既定を変更した要求には `model_note` も含まれます。`default_source` は CLI の互換性判定に使った情報源を示し、最終的な既定は cache によって下がることがあります。`""` を `sol` や正式 ID に置き換えて確認できます。
@@ -412,7 +414,7 @@ python3 "$AGENTSTACK_HOME/dashboard/codex_models.py" resolve ""
 
 UI はモデルごとの effort 情報を候補表示と無指定時の既定選択に使います。新鮮な cache に制約があればそちらを優先し、情報が無い ID では effort を勝手に補いません。明示した既知の effort 値は cache の期限切れや候補情報だけを理由に拒否せず、そのまま Codex CLI へ渡して最終判定を任せます。
 
-resume は元のsession IDをCLIへ渡し、NEW AGENTの既定・cache・短縮名でモデルを上書きしません。persistent restart は保存されたcommand/configをそのまま再利用します。別profileへのインストール対応や `CODEX_HOME` のservice設定への追加はこの機能の対象外です。
+`AGENTSTACK_CODEX_DEFAULT_MODEL` / `AGENTSTACK_CODEX_DEFAULT_EFFORT` は新規 Codex child の無指定時に使います。dashboard の resume はこれらを再適用せず、元の session ID を Codex に渡します。再開時の実際のモデルと effort は Codex 側の版・設定・明示 override に依存します。[Codex CLI の resume](https://learn.chatgpt.com/docs/developer-commands?surface=cli) はモデルの override を受け付けます。persistent restart は保存されたcommand/configをそのまま再利用します。別profileへのインストール対応や `CODEX_HOME` のservice設定への追加はこの機能の対象外です。
 
 実装確認元: [Codex CLI 0.154.0 models manager](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/models-manager/src/manager.rs)、[file cache](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/models-manager/src/cache.rs)。CLIがモデルendpointから取得して保存し、ETag確認時に鮮度を更新します。Orreryはその結果を読み取るだけです。
 
