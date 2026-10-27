@@ -52,6 +52,14 @@ class AppDelivery:
             if self.applied.get(key,0)!=version:raise B1Error('FRESH_APP_TURN_CHANGED')
             return version
 
+    def wake_version(self, client):
+        # Publication may lag while hooks keep arriving. That forbids resume,
+        # but not preparing Mail for this same verified route's next hook.
+        try:return self.version(client)
+        except B1Error as error:
+            if error.code != 'FRESH_APP_TURN_CHANGED':raise
+            return None
+
     def take(self, event):
         if event['hook_event_name'] != 'PostToolUse':return None
         key = str(self.app.path(event['session_id'], event['agent_id']))
@@ -190,7 +198,9 @@ class AppDelivery:
             try:
                 waiting=(row['client'].agent_id is None and self.state(row['client'])['state'] in {'waiting','dormant'})
                 expired=now-row['started'] >= self.policy.lease_seconds
-                if expired or (waiting and self.config.cold_wake_enabled and not row.get('claimed')):self.release(key)
+                wake_ready=(waiting and self.config.cold_wake_enabled and not row.get('claimed')
+                    and self.wake_version(row['client']) is not None)
+                if expired or wake_ready:self.release(key)
             except (B1Error,OSError,ValueError,KeyError):self.release(key)
         if os.environ.get('AGENTSTACK_MAIL_DISABLED') == '1':return
         for path in sorted(self.app.routes.glob('*.json')):
@@ -202,7 +212,7 @@ class AppDelivery:
             try:
                 route = _read_private(path)
                 client = self.app.resolve(route['session_id'],route['agent_id'])
-                version = self.version(client)
+                version = self.wake_version(client)
                 state = self.state(client)
                 lock = consumer_lock(client)
                 if not lock.__enter__():lock.__exit__(None,None,None);lock=None;continue
@@ -210,7 +220,7 @@ class AppDelivery:
                 if not messages:continue
                 row = dict(client=client,messages=messages,lock=lock,started=now,receipt=str(uuid4()))
                 waiting = client.agent_id is None and state['state'] in {'waiting','dormant'}
-                if waiting and self.config.cold_wake_enabled:
+                if waiting and self.config.cold_wake_enabled and version is not None:
                     # Existing self/system exclusion and policy bounds.
                     messages = [m for m in messages if m['sender_id'] != client.context['mail_agent_id']
                         and not m['subject'].lower().startswith('[agentstack:system]')]
@@ -236,7 +246,12 @@ class AppDelivery:
                     try:process = self.start_wake(client,messages,state,version=version,
                         before_dispatch=lambda:self.wake_record(marker,saved))
                     except (B1Error,OSError,ValueError) as error:
-                        if isinstance(error,B1Error) and error.code=='FRESH_APP_TURN_CHANGED':raise
+                        if isinstance(error,B1Error) and error.code=='FRESH_APP_TURN_CHANGED':
+                            # A start accepted during pending/trust checks blocks
+                            # Popen. Keep the lock for a hook's post-flush receipt.
+                            with self.mutex:self.ready[key] = row
+                            lock = None
+                            continue
                         self.wake_record(marker,dict(saved,phase='failed',terminal=True,finished=time.time(),
                             error=error.code if isinstance(error,B1Error) else 'FRESH_WAKE_START_FAILED'))
                         raise

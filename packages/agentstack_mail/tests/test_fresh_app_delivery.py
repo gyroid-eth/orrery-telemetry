@@ -1,6 +1,7 @@
 """Private App hook/worker and resume subprocess; no Desktop or real trust."""
 import asyncio
 from dataclasses import replace
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -303,6 +304,11 @@ def test_accepted_start_during_pending_invalidates_wake_dispatch(tmp_path,monkey
         delivery.tick()
         assert bridge._events.qsize()==1 and not popens and not delivery.inflight and not completed
         assert not path.with_suffix('.wake.json').exists()  # Cancelled before accounting/dispatch.
+        # Repeated ticks must keep the hook handoff while start is queued,
+        # rather than releasing/recreating it on the stale waiting projection.
+        ready=delivery.ready[str(path)]
+        delivery.tick()
+        assert delivery.ready[str(path)] is ready and not popens and not completed
         process_next();assert delivery.state(client)['state']=='working'
         # A queued old Stop cannot publish waiting over its accepted successor.
         accept(stop);accept(start);process_next()
@@ -323,54 +329,188 @@ def test_accepted_start_during_pending_invalidates_wake_dispatch(tmp_path,monkey
     finally:delivery.close()
 
 
-def test_post_tool_acceptance_overtakes_worker_until_quiet(tmp_path,monkeypatch):
-    """Actual admission and tick ordering, with private delivery boundaries mocked."""
-    from contextlib import contextmanager
+@contextmanager
+def _app_ordering_fixture(tmp_path,monkeypatch):
+    """Real delivery/consumer locks and FIFO; only App routes and Mail wire fake."""
     from types import SimpleNamespace
+    from agentstack_codex_app.fresh_bridge import reference
     home=tmp_path/'desktop';home.mkdir(mode=0o700);(home/'sessions').mkdir()
     runtime=tmp_path/'app';runtime.mkdir(mode=0o700);routes=runtime/'routes';routes.mkdir(mode=0o700)
     mail=tmp_path/'mail';mail.mkdir(mode=0o700)
-    sid=str(uuid4());path=routes/(sid+'.json')
-    client=SimpleNamespace(session_id=sid,agent_id=None,
-        context=dict(root=str(mail),mail_agent_id=7),path=mail/'context.json',_load=lambda:None)
+    sid=str(uuid4());faults={};calls=[];rows={};clients={};callback=[None]
+    def path(session,sub=None):return routes/(reference(session,sub)+'.json')
+    class Client:
+        def __init__(self,aid,sub):
+            self.session_id,self.agent_id=sid,sub
+            self.path=mail/(str(aid)+'.json')
+            self.context=dict(root=str(mail),mail_instance_id='a'*32,mail_agent_id=aid,credential_generation=1)
+        def _load(self):
+            fault=faults.get(self.context['mail_agent_id'])
+            if fault in {'route','stopped'}:
+                raise B1Error('FRESH_APP_SUBAGENT_STOPPED' if fault=='stopped' else 'FRESH_APP_ROUTE_MISMATCH')
+        async def call(self,tool,args):
+            self._load();aid=self.context['mail_agent_id'];calls.append((aid,tool,dict(args)))
+            if callback[0] is not None:callback[0](self,tool)
+            if faults.get(aid)=='transport':raise OSError('synthetic transport unavailable')
+            identity={k:self.context[k] for k in ('mail_instance_id','mail_agent_id','credential_generation')}
+            if tool=='reconnect':
+                if faults.get(aid)=='owner':identity['mail_agent_id']+=100
+                return dict(identity,agent_name='Fixture'+str(aid))
+            if tool=='notification_pending':
+                # A legal bounded wire response; do not mock AppDelivery.pending.
+                values=[value['message'] for (owner,mid),value in sorted(rows.items())
+                    if owner==aid and not value['completed'] and args.get('message_id',mid)==mid]
+                return dict(identity,messages=values[:1])
+            assert tool=='notification_complete','unexpected Mail side effect'
+            rows[aid,args['message_id']]['completed']=True
+            return dict(identity,message_id=args['message_id'])
+    def check(client,session,sub):
+        assert clients[sub] is client and session==sid
+        client._load();return dict(session_id=sid,agent_id=sub)
+    for aid,sub in ((7,None),(8,'worker')):
+        client=Client(aid,sub);clients[sub]=client
+        _write_private(path(sid,sub),dict(session_id=sid,agent_id=sub))
+        _write_private(path(sid,sub).with_suffix('.state.json'),dict(session_id=sid,agent_id=sub,
+            state='working',event='PostToolUse',cwd=str(home)))
+        for mid in range(1,4):
+            rows[aid,mid]=dict(message=dict(id=mid,sender_id=99,sender_name='Sender',
+                subject='recipient-'+str(aid)+'-'+str(mid),body_md='fixture',importance='high'),
+                completed=False,read_ts=None,ack_ts=None)
     app=SimpleNamespace(root=ROOT,home=home,directory=runtime,routes=routes,sessions=home/'sessions',
         template=SimpleNamespace(path=mail/'template.json',context={'endpoint':'http://127.0.0.1:19001/mcp'}),
-        path=lambda session,sub=None:path,resolve=lambda session,sub=None:client,
-        check=lambda selected,session,sub:dict(session_id=sid,agent_id=None),transcript=lambda session:home/'transcript.jsonl')
-    _write_private(path,dict(session_id=sid,agent_id=None))
+        path=path,resolve=lambda session,sub=None:clients[sub],check=check,
+        transcript=lambda session:home/'transcript.jsonl')
     monkeypatch.setenv('AGENTSTACK_CODEX_APP_COLD_WAKE','0')
     monkeypatch.delenv('AGENTSTACK_MAIL_DISABLED',raising=False)
     bridge=FreshBridge(app);delivery=bridge.delivery
     post=dict(schema_version=1,session_id=sid,agent_id=None,cwd=str(home),model=None,
         hook_event_name='PostToolUse',turn_id=None)
     class Connection:
-        def __init__(self):self.raw=canonical(post).encode()+b'\n';self.answer=None
+        def __init__(self,payload):self.raw=canonical(payload).encode()+b'\n';self.answer=None
         def recv(self,size):value=self.raw;self.raw=b'';return value
         def sendall(self,data):self.answer=json.loads(data)
-    def accept():
-        connection=Connection();bridge._handle_connection(connection)
+    def accept(payload=None):
+        connection=Connection(post if payload is None else payload);bridge._handle_connection(connection)
         assert connection.answer['ok'];return connection.answer
-    def process_next():
-        payload,sequence=bridge._events.get_nowait()
-        if bridge.process_event(payload,sequence=sequence) is not None:delivery.processed(payload,sequence)
-    @contextmanager
-    def lock(_client):yield True
-    calls=[]
-    async def pending(selected):
-        calls.append(selected)
-        return [dict(id=1,sender_id=8,subject='fixture',body_md='fixture',importance='high')]
-    monkeypatch.setattr('agentstack_codex_app.fresh_app_delivery.consumer_lock',lock)
-    monkeypatch.setattr(delivery,'pending',pending)
+    def batch():return bridge._process_event_batch(bridge._events.get_nowait())
+    def receipt(notice):return accept(dict(fresh_receipt=notice['receipt'],
+        session_id=notice['session_id'],agent_id=notice['agent_id']))
     try:
-        accept()
-        for _ in range(3):
-            accept();process_next()
-            assert delivery.accepted[str(path)]!=delivery.applied.get(str(path),0)
-            delivery.tick()
-            assert not calls and not delivery.ready
-        process_next()
-        assert delivery.accepted[str(path)]==delivery.applied[str(path)]
-        delivery.tick()
-        assert calls==[client] and str(path) in delivery.ready
-        assert accept()['fresh_notification']['notifications']
+        yield SimpleNamespace(app=app,bridge=bridge,delivery=delivery,clients=clients,rows=rows,
+            calls=calls,faults=faults,callback=callback,post=post,accept=accept,batch=batch,receipt=receipt)
     finally:delivery.close()
+
+
+def test_post_tool_acceptance_keeps_hot_batches_moving_without_quiet(tmp_path,monkeypatch):
+    with _app_ordering_fixture(tmp_path,monkeypatch) as case:
+        delivery=case.delivery;key=str(case.app.path(case.post['session_id']))
+        case.accept();case.batch()
+        def incoming(client,tool):
+            if client.agent_id is None and tool=='reconnect':case.accept()
+        case.callback[0]=incoming
+        for _ in range(3):
+            # Never wait for a quiet queue before preparing the next batch.
+            case.accept();case.accept()
+            delivery.tick()
+            assert delivery.accepted[key]!=delivery.applied.get(key,0)
+            notice=case.accept()['fresh_notification']
+            assert all('recipient-7-' in text and 'recipient-8-' not in text for text in notice['notifications'])
+            assert not case.rows[8,1]['completed']
+            completed=sum(v['completed'] for (aid,_),v in case.rows.items() if aid==7)
+            case.receipt(notice)
+            assert sum(v['completed'] for (aid,_),v in case.rows.items() if aid==7)==completed
+            case.batch()  # Completion happens through the real FIFO receipt handler.
+            assert sum(v['completed'] for (aid,_),v in case.rows.items() if aid==7)==completed+1
+        assert all(v['completed'] for (aid,_),v in case.rows.items() if aid==7)
+        other=case.accept(dict(case.post,agent_id='worker'))['fresh_notification']
+        assert all('recipient-8-' in text and 'recipient-7-' not in text for text in other['notifications'])
+        case.receipt(other);case.batch()
+        assert case.rows[8,1]['completed'] and not case.rows[8,2]['completed']
+        assert all((v['read_ts'],v['ack_ts'])==(None,None) for v in case.rows.values())
+        assert {tool for _,tool,_ in case.calls}=={'reconnect','notification_pending','notification_complete'}
+
+
+def test_claim_without_receipt_stays_pending_during_new_hooks(tmp_path,monkeypatch):
+    with _app_ordering_fixture(tmp_path,monkeypatch) as case:
+        case.delivery.tick();notice=case.accept()['fresh_notification']
+        key=str(case.app.path(case.post['session_id']))
+        held=case.delivery.ready[key]
+        for _ in range(3):
+            assert 'fresh_notification' not in case.accept()
+            case.batch();case.delivery.tick()
+            assert case.delivery.ready[key] is held and held['claimed']
+        assert not any(v['completed'] for v in case.rows.values())
+        with pytest.raises(B1Error,match='FRESH_APP_RECEIPT_INVALID'):
+            case.delivery.receipt(dict(fresh_receipt='wrong',session_id=notice['session_id'],agent_id=None))
+        assert case.delivery.ready[key] is held
+
+
+@pytest.mark.parametrize('fault',['owner','route','transport','stopped'])
+def test_hot_batches_do_not_convert_owner_route_or_transport_refusals(tmp_path,monkeypatch,fault):
+    with _app_ordering_fixture(tmp_path,monkeypatch) as case:
+        case.faults[7]=fault
+        case.accept();case.accept()
+        key=str(case.app.path(case.post['session_id']))
+        case.delivery.tick()
+        assert key not in case.delivery.ready and not any(v['completed'] for v in case.rows.values())
+        assert 'fresh_notification' not in case.accept()
+
+
+@pytest.mark.parametrize('fault',['route','stopped'])
+def test_ready_take_rechecks_route_and_stopped_owner(tmp_path,monkeypatch,fault):
+    with _app_ordering_fixture(tmp_path,monkeypatch) as case:
+        case.delivery.tick();case.faults[7]=fault
+        with pytest.raises(B1Error):case.delivery.take(case.post)
+        key=str(case.app.path(case.post['session_id']))
+        assert not case.delivery.ready[key].get('claimed')
+        assert not any(v['completed'] for v in case.rows.values())
+
+
+def test_fifo_batch_limit_leaves_receipt_for_next_batch(tmp_path,monkeypatch):
+    with _app_ordering_fixture(tmp_path,monkeypatch) as case:
+        case.delivery.tick();notice=case.accept()['fresh_notification'];case.batch()
+        for _ in range(64):case.accept()
+        case.receipt(notice)
+        assert case.batch()==64 and case.bridge._events.qsize()==1
+        assert not any(v['completed'] for v in case.rows.values())
+        assert case.batch()==1 and case.rows[7,1]['completed']
+
+
+def test_worker_ticks_once_per_bounded_fifo_batch(tmp_path,monkeypatch):
+    with _app_ordering_fixture(tmp_path,monkeypatch) as case:
+        for _ in range(65):case.accept()
+        remaining=[]
+        def tick():
+            remaining.append(case.bridge._events.qsize())
+            if len(remaining)==2:case.bridge._stop.set()
+        monkeypatch.setattr(case.delivery,'tick',tick)
+        case.bridge._worker_loop()
+        assert remaining==[1,0]
+        key=str(case.app.path(case.post['session_id']))
+        assert case.delivery.accepted[key]==case.delivery.applied[key]==65
+
+
+@pytest.mark.parametrize('interruption',['stop','unexpected','spooled'])
+def test_fifo_batch_preserves_unprocessed_receipt_and_event_failures(tmp_path,monkeypatch,interruption):
+    with _app_ordering_fixture(tmp_path,monkeypatch) as case:
+        case.delivery.tick();notice=case.accept()['fresh_notification'];case.batch()
+        case.accept();case.receipt(notice)
+        if interruption!='spooled':case.accept()  # A receipt and lifecycle tail must both remain.
+        original=case.bridge.process_event
+        def process(payload,**kw):
+            if interruption=='unexpected':raise RuntimeError('synthetic processing interruption')
+            if interruption=='spooled':raise B1Error('FRESH_APP_ROUTE_MISMATCH')
+            result=original(payload,**kw);case.bridge._stop.set();return result
+        monkeypatch.setattr(case.bridge,'process_event',process)
+        if interruption=='unexpected':
+            with pytest.raises(RuntimeError):case.batch()
+        else:assert case.batch()==(2 if interruption=='spooled' else 1)
+        if interruption=='spooled':
+            assert case.rows[7,1]['completed']
+            spooled=[json.loads(line) for line in case.bridge.config.spool_path.read_text().splitlines()]
+            assert spooled==[case.post]
+        else:
+            assert case.bridge._events.qsize()==2 and not case.rows[7,1]['completed']
+            payload=case.bridge._events.queue[0]
+            assert payload['fresh_receipt']==notice['receipt']
+            assert case.bridge._events.queue[1][0]==case.post

@@ -211,6 +211,26 @@ class FreshBridge(BridgeDaemon):
                 except FileExistsError:pass
         return external_id_for(sid,sub)
 
+    def _process_event_batch(self, event):
+        """Process FIFO entries individually; leave the unclaimed tail queued."""
+        processed = 0
+        while event is not None:
+            sequence = None
+            if isinstance(event, tuple):event, sequence = event
+            try:
+                if 'fresh_receipt' in event:self.delivery.receipt(event)
+                elif self.process_event(event,sequence=sequence) is not None:
+                    self.delivery.processed(event,sequence)
+            except (B1Error,OSError,ValueError,KeyError,TypeError):
+                if 'fresh_receipt' not in event:append_spool(event,self.config.spool_path)
+            processed += 1
+            # An acquired entry is processed even if stop arrived after get().
+            # Never prefetch a batch: receipts in the remaining tail stay FIFO.
+            if processed >= 64 or self._stop.is_set():break
+            try:event = self._events.get_nowait()
+            except queue.Empty:break
+        return processed
+
     def _worker_loop(self):
         # Reuse the existing sanitized event spool/queue. No delivery DB or watcher.
         for path in sorted(self.config.spool_path.parent.glob('.hook-events.jsonl.drain-*')):
@@ -220,16 +240,7 @@ class FreshBridge(BridgeDaemon):
                 try:event=self._events.get(timeout=self.config.wake_poll_seconds)
                 except queue.Empty:
                     self.queue_spool(self.config.spool_path);event=None
-                if event is not None:
-                    sequence=None
-                    if isinstance(event,tuple):event,sequence=event
-                    try:
-                        if 'fresh_receipt' in event:self.delivery.receipt(event)
-                        else:
-                            if self.process_event(event,sequence=sequence) is not None:
-                                self.delivery.processed(event,sequence)
-                    except (B1Error,OSError,ValueError,KeyError,TypeError):
-                        if 'fresh_receipt' not in event:append_spool(event,self.config.spool_path)
+                self._process_event_batch(event)
                 if self._stop.is_set():break
                 try:self.delivery.tick()
                 except (B1Error,OSError,ValueError,KeyError,TypeError):pass
