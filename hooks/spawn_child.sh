@@ -58,7 +58,7 @@ fi
 #   --model sonnet-5-5 / sonnet55 → claude-sonnet-5-5、sonnet-5 / sonnet5 → claude-sonnet-5（版つき）
 #   --model haiku/fable  → 現行の Haiku / Fable（同じ解決）。haiku-4-5 / fable-5-1 は版つき
 #   版の区切りは . でもよい（sonnet-5.5 / sonnet5.5 / opus-5.5 → それぞれ 5-5 と同じ）
-#   --codex --model 省略 → gpt-6.1-sol（CLI が古ければ gpt-6-sol、版不明なら catalog 判定）。sol も同じ。luna / astra → GPT-6、terra → GPT-5.6。
+#   --codex --model 省略 → 設定された既定、なければ従来の CLI/catalog 判定。sol / luna / astra / terra は新鮮な catalog の各系統の最新版。
 #   未知の形             → 明確なエラーで停止（claude-* 接頭の正式 ID は前方互換で素通り）
 #   ※ 正規化は normalize_claude_model() / normalize_codex_model() が担当。warm pool は要求モデルが
 #     事前起動モデル（opus / sonnet の別名の解決結果）と

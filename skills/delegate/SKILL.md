@@ -117,7 +117,7 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 | --- | --- |
 | `codex` | `--codex` (a Codex child) |
 | `claude` | a Claude child (the default) |
-| `sol`, `terra`, `luna`, `astra` | Codex model shorthand: `--codex --model <word>`. `sol` follows the cache-aware default below; `terra`, `luna`, and `astra` pin `gpt-5.6-terra`, `gpt-6-luna`, and `gpt-6-astra` |
+| `sol`, `terra`, `luna`, `astra` | Codex model shorthand: `--codex --model <word>`. each follows the newest eligible version of its family in the fresh local catalog; see the Codex model catalog guide |
 | `opus`, `sonnet`, `haiku`, `fable` | Claude model shorthand for the current model of that family: `--model <word>` |
 | `Sonnet 5.5`, `sonnet-5-5`, `Opus 5.5`, `sonnet-5`, `haiku-4-5`, `fable-5-1` | A specific Claude version: `--model sonnet-5-5` and so on (the version with `-` between its numbers). It pins that version; the bare family name follows the newest |
 | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` | `--effort <word>` (Codex reasoning effort) |
@@ -131,11 +131,11 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 
 The child's name is never taken from the arguments. Only an explicit `--name <Adjective-Scientist>` names a child; otherwise the registration helper picks one. A word such as `terra` is a model, not a name.
 
-Model defaults: Claude children use the current Opus, the same model `--model opus` resolves to. Codex omission uses the same shared model and effort policy as `sol`.
+Model defaults: Claude children use the current Opus, the same model `--model opus` resolves to. Codex omission uses the configured model and effort defaults, or the existing built-in policy when unset.
 
-For Codex, the initial default is `gpt-6.1-sol` with selected CLI 0.159.0+, or `gpt-6-sol` on an older CLI; unknown versions use fresh catalog evidence for the initial decision. If that ID is absent from the selected `CODEX_HOME/models_cache.json`, choose the next cached candidate in order: `gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna`. Expired caches can lower the default, while candidate additions and effort metadata still require a cache fetched within 300 seconds. An older CLI never moves up to GPT-6.1 Sol. Missing, corrupt, unreadable or future-dated caches, and snapshots without a next candidate, preserve the existing default. Explicit formal IDs are never substituted. Report both IDs and the reason to the operator when the default changes; stale-cache notices also include `fetched_at` and guidance to start `codex` once to refresh the list. Cache `identity` is not checked against the current login, so retained snapshots after an account switch may differ from current access; fallback does not prove authorization.
+For Codex, when no default is configured, the initial default is `gpt-6.1-sol` with selected CLI 0.159.0+, or `gpt-6-sol` on an older CLI; unknown versions use fresh catalog evidence for the initial decision. If that ID is absent from the selected `CODEX_HOME/models_cache.json`, choose the next cached candidate in order: `gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna`. Expired caches can lower the default, while candidate additions and effort metadata still require a cache fetched within 300 seconds. An older CLI never moves up to GPT-6.1 Sol. Missing, corrupt, unreadable or future-dated caches, and snapshots without a next candidate, preserve the existing default. Explicit formal IDs are never substituted. Report both IDs and the reason to the operator when the default changes; stale-cache notices also include `fetched_at` and guidance to start `codex` once to refresh the list. Cache `identity` is not checked against the current login, so retained snapshots after an account switch may differ from current access; fallback does not prove authorization.
 
-Resolve the CLI and model together before registration with the public `resolve` command below (use `""` for omission). It uses the same environment → saved `env.sh` → usable PATH selection and child login shell as the spawner. Pass the returned formal ID (and the same resolved `--effort`) to both the registration helper and `spawn_child.sh`, so the roster and running process agree, and pin the returned `AGENTSTACK_CODEX_BIN` for the spawn. Do not derive the omitted default from candidate order.
+Resolve the CLI and model together before registration with the public `resolve` command below (use `""` for omission). It uses the same environment → saved `env.sh` → usable PATH selection and child login shell as the spawner. Pass the returned formal ID to both the registration helper and `spawn_child.sh`, so the roster and running process agree, and pin the returned `AGENTSTACK_CODEX_BIN` for the spawn. Pass `--effort` only when explicitly requested. Do not derive the omitted default from candidate order.
 
 Claude models: the launcher resolves `opus` / `sonnet` / `haiku` / `fable` (and omission) to the model the local Claude Code catalog names as current for that family, or its bundled table when the catalog cannot be used, and prints which one it chose. When the user names a version ("Sonnet 5.5"), pass that version (`sonnet-5-5` or the formal `claude-sonnet-5-5`), not the bare family name: a family name follows whatever is newest, which is not always the version the user asked for. To get the formal IDs for the registration helper, run:
 
@@ -298,11 +298,11 @@ PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/h
 
 For a Claude child with a chosen model, add `--model "<formal Claude ID>"` (the same ID you registered) before the working directory.
 
-For a Codex child, pass the same resolved formal model ID and effort used for registration. Without `--model`, the launcher resolves the shared `sol` default from CLI compatibility and cache evidence regardless of what was registered. Resolve omission before registration with `resolve ""`, relay any fallback notice to the operator, pass `$CODEX_MODEL` to both steps, and pass `$CODEX_BIN` to this launch:
+For a Codex child, pass the same resolved formal model ID used for registration. Pass `--effort` only when explicitly requested; otherwise the launcher resolves the configured default. Without `--model`, the launcher resolves the configured default or the built-in CLI compatibility and cache policy regardless of what was registered. Resolve omission before registration with `resolve ""`, relay any fallback notice to the operator, pass `$CODEX_MODEL` to both steps, and pass `$CODEX_BIN` to this launch:
 
 ```bash
 AGENTSTACK_CODEX_BIN="$CODEX_BIN" PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/hooks/spawn_child.sh}" \
-  --pre-registered "<child-name>" --codex --model "$CODEX_MODEL" --effort medium \
+  --pre-registered "<child-name>" --codex --model "$CODEX_MODEL" \
   --child-token-file "$CHILD_TOKEN_FILE" \
   --embed-task --task-file "$TASK_FILE" \
   "<working-directory>"

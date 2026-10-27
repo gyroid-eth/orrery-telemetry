@@ -38614,6 +38614,8 @@ function normalizeSpawnProviders(catalog){
       modelEfforts:provider&&provider.model_efforts||null,
       modelEffortDefaults:provider&&provider.model_effort_defaults||{},
       modelError:String(provider&&provider.model_error||'').trim(),
+      defaultError:String(provider&&provider.default_error||'').trim(),
+      defaultEffortError:String(provider&&provider.default_effort_error||'').trim(),
       modelNote:String(provider&&provider.model_note||'').trim(),
       overflowModels:(Array.isArray(provider&&provider.overflow_models)
         ? provider.overflow_models:[]).map(value=>String(value||'').trim())
@@ -38665,6 +38667,7 @@ function spawnProviderRequirementsMissing(){
   const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
   if(provider&&provider.modelError)return provider.modelError;
   if(!spmSelectedModel)return 'select a model for this provider';
+  if(provider&&provider.defaultEffortError&&!spmEffortExplicit)return 'select an effort for this provider';
   const selected=spawnSelectedHarness(provider);
   if(!selected||!selected.available)return 'Choose an available model and Harness';
   const caps=spawnSelectedProviderCapabilities();
@@ -38971,8 +38974,9 @@ function renderSpawnEngineNote(){
   SPM('spm-engine-note').textContent=parts.length
     ? parts.join(' · '):'provider · model';
   const note=SPM('spm-model-note');
-  note.textContent=provider&&spmSelectedModel===provider.defaultModel
-    ?provider.modelNote||'':'';
+  note.textContent=provider&&(provider.defaultError||provider.defaultEffortError)
+    ?[provider.defaultError,provider.defaultEffortError].filter(Boolean).join(' · ')
+    :(provider&&spmSelectedModel===provider.defaultModel ?provider.modelNote||'':'');
   note.hidden=!note.textContent;
 }
 
