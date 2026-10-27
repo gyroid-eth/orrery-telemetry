@@ -19,10 +19,43 @@ from agentstack_mail.fresh_runtime import _read_private, _write_private
 from agentstack_mail.models import MessageRecipient
 from agentstack_mail.storage_origin_contract import canonical
 from agentstack_mail.storage_origin_contract import B1Error
-from test_fresh_app import APP, ROOT, desktop, event, invoke, wait_route
+from test_fresh_app import APP, ROOT, DIAGNOSTIC_NODE, desktop, diagnostic_selected, diagnostic_summary, event, invoke, wait_route
 from agentstack_codex_app.fresh_app_delivery import AppDelivery
 from agentstack_codex_app.fresh_bridge import FreshBridge
 from agentstack_codex_app.hook_entry import forward_event_response
+
+
+@pytest.mark.parametrize('flag,node,current,expected',[
+    ('1',DIAGNOSTIC_NODE,DIAGNOSTIC_NODE+' (call)',True),
+    ('0',DIAGNOSTIC_NODE,DIAGNOSTIC_NODE+' (call)',False),
+    ('1',DIAGNOSTIC_NODE,DIAGNOSTIC_NODE+' (setup)',False),
+    ('1',DIAGNOSTIC_NODE,DIAGNOSTIC_NODE+' (teardown)',False),
+    ('1',DIAGNOSTIC_NODE,DIAGNOSTIC_NODE+'-other (call)',False),
+    ('1',DIAGNOSTIC_NODE+'-other',DIAGNOSTIC_NODE+' (call)',False),
+    ('1',DIAGNOSTIC_NODE,None,False),
+])
+def test_diagnostic_gate_requires_exact_node_and_call(flag,node,current,expected):
+    env={'ORRERY_FRESH_APP_DIAGNOSTIC':flag,'ORRERY_FRESH_APP_DIAGNOSTIC_NODE':node}
+    if current is not None:env['PYTEST_CURRENT_TEST']=current
+    assert diagnostic_selected(env) is expected
+
+
+def test_diagnostic_summary_preserves_missing_and_duplicate(tmp_path,capsys):
+    log=tmp_path/'bridge.log';diagnostic=tmp_path/'events.jsonl'
+    log.write_text('fixture\n')
+    diagnostic_summary(tmp_path,log,diagnostic)
+    assert not (tmp_path/'bridge-summary.json').exists()
+    assert (tmp_path/'diagnostic-incomplete').read_text()=='INCOMPLETE\n'
+    assert 'FRESH_APP_DIAGNOSTIC_INCOMPLETE' in capsys.readouterr().err
+    (tmp_path/'diagnostic-incomplete').unlink()
+    diagnostic.write_text('{"stage":"bootstrap_start"}\n{"stage":"bootstrap_end"}\n')
+    diagnostic_summary(tmp_path,log,diagnostic)
+    saved=(tmp_path/'bridge-summary.json').read_bytes()
+    assert json.loads(saved)['incomplete_count']==0
+    diagnostic_summary(tmp_path,log,diagnostic)
+    assert (tmp_path/'bridge-summary.json').read_bytes()==saved
+    assert (tmp_path/'diagnostic-incomplete').read_text()=='INCOMPLETE\n'
+    assert 'FRESH_APP_DIAGNOSTIC_INCOMPLETE' in capsys.readouterr().err
 
 
 async def send(sender,recipient,subject,importance='high'):
@@ -287,4 +320,57 @@ def test_accepted_start_during_pending_invalidates_wake_dispatch(tmp_path,monkey
             real_start_wake=True,accepted_start_blocks_dispatch=True,pending_retained=True,
             old_stop_cannot_override_new_start=True,spool_same_queue=True,quiet_root_dispatches=True,
             synthetic_owner_pending_process=True,native_processes=0,http_requests=0)))
+    finally:delivery.close()
+
+
+def test_post_tool_acceptance_overtakes_worker_until_quiet(tmp_path,monkeypatch):
+    """Actual admission and tick ordering, with private delivery boundaries mocked."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    home=tmp_path/'desktop';home.mkdir(mode=0o700);(home/'sessions').mkdir()
+    runtime=tmp_path/'app';runtime.mkdir(mode=0o700);routes=runtime/'routes';routes.mkdir(mode=0o700)
+    mail=tmp_path/'mail';mail.mkdir(mode=0o700)
+    sid=str(uuid4());path=routes/(sid+'.json')
+    client=SimpleNamespace(session_id=sid,agent_id=None,
+        context=dict(root=str(mail),mail_agent_id=7),path=mail/'context.json',_load=lambda:None)
+    app=SimpleNamespace(root=ROOT,home=home,directory=runtime,routes=routes,sessions=home/'sessions',
+        template=SimpleNamespace(path=mail/'template.json',context={'endpoint':'http://127.0.0.1:19001/mcp'}),
+        path=lambda session,sub=None:path,resolve=lambda session,sub=None:client,
+        check=lambda selected,session,sub:dict(session_id=sid,agent_id=None),transcript=lambda session:home/'transcript.jsonl')
+    _write_private(path,dict(session_id=sid,agent_id=None))
+    monkeypatch.setenv('AGENTSTACK_CODEX_APP_COLD_WAKE','0')
+    monkeypatch.delenv('AGENTSTACK_MAIL_DISABLED',raising=False)
+    bridge=FreshBridge(app);delivery=bridge.delivery
+    post=dict(schema_version=1,session_id=sid,agent_id=None,cwd=str(home),model=None,
+        hook_event_name='PostToolUse',turn_id=None)
+    class Connection:
+        def __init__(self):self.raw=canonical(post).encode()+b'\n';self.answer=None
+        def recv(self,size):value=self.raw;self.raw=b'';return value
+        def sendall(self,data):self.answer=json.loads(data)
+    def accept():
+        connection=Connection();bridge._handle_connection(connection)
+        assert connection.answer['ok'];return connection.answer
+    def process_next():
+        payload,sequence=bridge._events.get_nowait()
+        if bridge.process_event(payload,sequence=sequence) is not None:delivery.processed(payload,sequence)
+    @contextmanager
+    def lock(_client):yield True
+    calls=[]
+    async def pending(selected):
+        calls.append(selected)
+        return [dict(id=1,sender_id=8,subject='fixture',body_md='fixture',importance='high')]
+    monkeypatch.setattr('agentstack_codex_app.fresh_app_delivery.consumer_lock',lock)
+    monkeypatch.setattr(delivery,'pending',pending)
+    try:
+        accept()
+        for _ in range(3):
+            accept();process_next()
+            assert delivery.accepted[str(path)]!=delivery.applied.get(str(path),0)
+            delivery.tick()
+            assert not calls and not delivery.ready
+        process_next()
+        assert delivery.accepted[str(path)]==delivery.applied[str(path)]
+        delivery.tick()
+        assert calls==[client] and str(path) in delivery.ready
+        assert accept()['fresh_notification']['notifications']
     finally:delivery.close()
