@@ -6603,9 +6603,18 @@ def _runtime_activity(text: str) -> tuple[str, str]:
         # ("──── Name ─"); that label is still border, not reply content.
         return re.fullmatch(r"[─━]{8,}(?: +[^─━\s][^\n]*? +[─━]+)?", line.strip()) is not None
 
+    def usage_footer(line):
+        # Usage windows describe account limits, not context usage or model
+        # telemetry. Recognize the whole footer only as composer chrome.
+        percent = r"(?:100|[1-9]?\d)"
+        return re.fullmatch(
+            rf"\s*\[(?:Opus|Sonnet|Haiku)\s+\d+(?:\.\d+)?\]\s*\|\s*"
+            rf"5h\s+{percent}%\s+left\s*\|\s*7d\s+{percent}%\s+left\s*",
+            line, re.IGNORECASE) is not None
+
     def chrome(line):
         row = line.strip()
-        return (not row or rule(row) or bool(_STATUSLINE_HINT_RE.search(row))
+        return (not row or rule(row) or bool(_STATUSLINE_HINT_RE.search(row)) or usage_footer(row)
                 or row.startswith(("? for shortcuts", "⏵", "←", "→")))
 
     # Only a complete composer suffix can supersede old modal text. Numbered
@@ -6616,7 +6625,7 @@ def _runtime_activity(text: str) -> tuple[str, str]:
         if prompt is None or re.match(r"\d+\.\s", prompt.group(1) or ""):
             continue
         suffix = lines[index + 1:]
-        if (any(_STATUSLINE_HINT_RE.search(row) or row.strip().startswith("? for shortcuts")
+        if (any(_STATUSLINE_HINT_RE.search(row) or usage_footer(row) or row.strip().startswith("? for shortcuts")
                 for row in suffix) and all(chrome(row) for row in suffix)):
             composer = index
             break

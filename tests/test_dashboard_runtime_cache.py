@@ -185,9 +185,42 @@ _CLAUDE_INPUT = (
 )
 _CODEX_INPUT = "› Ask Codex to do anything\ngpt-5.6-terra medium · Context 70% left\n"
 _OLD_WORK = "✽ Stewing… (18s · ↓ 1.2k tokens)\n"
+_CLAUDE_USAGE_INPUT = "❯\n[Opus 5.5] | 5h 85% left | 7d 88% left\n"
 _CLAUDE_ASK = "Do you want to run this command?\n❯ 1. Yes\n  2. No\n"
 _CODEX_ASK = "Would you like to run this command?\n› Yes\n  No\nPress enter to confirm or esc to cancel\n"
 _QUESTION = "Choose a result\n❯ 1. Option\nEnter to select · Esc to cancel\n"
+
+
+def test_current_claude_usage_footer_keeps_spinner_without_context():
+    text = ("⏺ Running a synthetic task · 1m 1s\n"
+            "  ⎿  $ synthetic command\n"
+            "✻ Herding… (54m 18s · ↓ 134.2k tokens)\n" + _CLAUDE_USAGE_INPUT)
+    parsed = server._parse_runtime(text)
+    assert parsed['act_state'] == 'work'
+    assert parsed['work_secs'] == 3258
+    assert parsed['ctx_used'] is None and parsed['pane_model'] is None
+
+
+@pytest.mark.parametrize('history', [
+    _OLD_WORK + '\n⏺ Finished the requested work.\n',
+    _OLD_WORK + '\n✻ Worked for 6s · done 6:39 PM\n',
+    '```text\n' + _OLD_WORK + '```\n',
+])
+def test_claude_usage_footer_does_not_revive_history(history):
+    parsed = server._parse_runtime(history + _CLAUDE_USAGE_INPUT)
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_secs'] is None and parsed['ctx_used'] is None
+
+
+@pytest.mark.parametrize('footer', [
+    '[Opus 5.5] | 5h 101% left | 7d 88% left',
+    '[Opus 5.5] | 5h 85% left',
+    'Example: [Opus 5.5] | 5h 85% left | 7d 88% left',
+])
+def test_claude_usage_footer_near_matches_do_not_imply_work(footer):
+    parsed = server._parse_runtime(_OLD_WORK + '\n⏺ Finished.\n❯\n' + footer + '\n')
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_secs'] is None
 
 
 @pytest.mark.parametrize("history,current,state", [
