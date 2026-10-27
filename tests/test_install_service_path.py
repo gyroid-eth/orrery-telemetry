@@ -12,6 +12,7 @@ import pathlib
 import re
 import shlex
 import subprocess
+from contextlib import contextmanager
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -120,7 +121,14 @@ def _fresh_render(tmp_path,*functions,commands='',overrides=None):
         NATIVE_MAIL_ENV=str(target/'mail/renders/run/service.env'),NATIVE_MAIL_DEPLOYMENT=str(target/'mail/renders/run/deployment.json'),
         NATIVE_MAIL_VENV=str(target/'candidate'),NATIVE_MAIL_STATE_ROOT=str(tmp_path/'root'),
         NATIVE_MAIL_SERVICE_ROOT=str(target/'mail'),NATIVE_MAIL_SOURCE_ID='fixture',MCP_URL='http://127.0.0.1:19876/mcp',
-        PATH_VALUE='/usr/bin:/bin',AGENT_MAIL_NAME_CAPABILITY_JSON='{}',MAIL_ENV=str(target/'mail/renders/run/service.env'))
+        PATH_VALUE='/usr/bin:/bin',AGENT_MAIL_NAME_CAPABILITY_JSON='{}',MAIL_ENV=str(target/'mail/renders/run/service.env'),
+        MAIL_DIR=str(target/'mail'),SKILLS_DIR=str(target/'skills'),CONNECTIONS_DIR=str(target/'connections'),
+        PERSISTENT_PROFILES_DIR=str(target/'profiles'),CLAUDE_JSON=str(tmp_path/'.claude.json'),
+        CLAUDE_SKILLS_DIR=str(tmp_path/'.claude/skills'),CODEX_SKILLS_DIR=str(tmp_path/'.codex/skills'),
+        SAFE_MERGE_RESULT_FILE=str(target/'runtime/settings-merge-result.json'),
+        MCP_MERGE_RESULT_FILE=str(target/'runtime/claude-mcp-merge-result.json'),
+        NATIVE_MAIL_DEPLOYMENT_IDENTIFIED='true',NATIVE_MAIL_ENROLL_AVAILABLE='false',
+        NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL='false')
     values.update(overrides or {})
     script='set -eu\n'+'\n'.join(k+'='+shlex.quote(v) for k,v in values.items())+'\n'
     script+='plan() { :; }\n'+body+'\nexport AGENTSTACK_INSTALL_FRESH_ENV="$(fresh_environment_json)"\n'+commands
@@ -128,6 +136,56 @@ def _fresh_render(tmp_path,*functions,commands='',overrides=None):
         'PYTHONPATH':os.environ.get('PYTHONPATH','')},capture_output=True,text=True,timeout=20)
     assert done.returncode==0,done.stderr
     return target,values
+
+
+@contextmanager
+def _normal_socket_witness():
+    """Stat-only witness; keep sockaddr_un independent of pytest node paths."""
+    import socket,tempfile
+    with tempfile.TemporaryDirectory(prefix='o213-w-',dir='/tmp') as directory:
+        folder=pathlib.Path(directory).resolve();folder.chmod(0o700)
+        path=folder/'s';witness=socket.socket(socket.AF_UNIX)
+        try:
+            assert len(bytes(path))<100,'private socket path exceeds fixture budget'
+            witness.bind(str(path));path.chmod(0o600)
+            yield path
+        finally:witness.close();path.unlink(missing_ok=True)
+
+
+def _normal_manifest_input_check():
+    """Check prepared inputs, without fabricating optional merge results."""
+    names=('INSTALL_DIR','RUNTIME_DIR','REPO_ROOT','SCRIPT_DIR','ENV_FILE','MANIFEST',
+        'CLAUDE_SKILLS_DIR','CODEX_SKILLS_DIR','SAFE_MERGE_RESULT_FILE','MCP_MERGE_RESULT_FILE',
+        'NATIVE_MAIL_ENV','NATIVE_MAIL_RUNNER','NATIVE_MAIL_DEPLOYMENT','PYTHON_BIN',
+        'AGENTSTACK_FRESH_SERVER_CONFIG','AGENT_MAIL_WATCHER_PATH','AGENT_MAIL_NAME_CAPABILITY_JSON')
+    arguments=' '.join('"$'+name+'"' for name in names)
+    return '"$PYTHON_BIN" - '+arguments+" <<'PY_MANIFEST_INPUTS'\n"+'''
+import json,os,sys
+from pathlib import Path
+names=NAMES
+values=dict(zip(names,sys.argv[1:],strict=True))
+for name,raw in values.items():
+    if name=='AGENT_MAIL_NAME_CAPABILITY_JSON':
+        assert isinstance(json.loads(raw),dict),name
+        continue
+    assert raw and Path(raw).is_absolute(),name
+for name in ('INSTALL_DIR','RUNTIME_DIR','REPO_ROOT','SCRIPT_DIR'):
+    assert Path(values[name]).is_dir(),name
+for name in ('ENV_FILE','NATIVE_MAIL_ENV','NATIVE_MAIL_RUNNER','NATIVE_MAIL_DEPLOYMENT',
+             'PYTHON_BIN','AGENTSTACK_FRESH_SERVER_CONFIG','AGENT_MAIL_WATCHER_PATH'):
+    assert Path(values[name]).is_file(),name
+assert os.access(values['PYTHON_BIN'],os.X_OK),'PYTHON_BIN'
+assert Path(values['MANIFEST']).parent==Path(values['INSTALL_DIR']),'MANIFEST'
+for name,leaf in (('SAFE_MERGE_RESULT_FILE','settings-merge-result.json'),
+                  ('MCP_MERGE_RESULT_FILE','claude-mcp-merge-result.json')):
+    path=Path(values[name])
+    assert path==Path(values['RUNTIME_DIR'])/leaf,name
+    if path.exists():
+        assert path.is_file() and isinstance(json.loads(path.read_text()),dict),name
+for name in ('NATIVE_MAIL_DEPLOYMENT','AGENTSTACK_FRESH_SERVER_CONFIG'):
+    assert isinstance(json.loads(Path(values[name]).read_text()),dict),name
+PY_MANIFEST_INPUTS
+'''.replace('names=NAMES','names='+repr(names))
 
 
 def test_prepared_fresh_normal_service_render_preserves_references_and_real_entrypoints(tmp_path):
@@ -144,7 +202,8 @@ def test_prepared_fresh_normal_service_render_preserves_references_and_real_entr
         return result
     saved=read_env(target/'env.sh')
     assert saved['AGENTSTACK_RUNTIME_MODE']=='fresh'
-    for key,value in {'AGENTSTACK_HOME':str(target),'AGENTSTACK_FRESH_CLIENT_CONTEXT':values['FRESH_CONTEXT_SETTING'],
+    assert saved['AGENTSTACK_HOME']==str(target)
+    for key,value in {'AGENTSTACK_FRESH_CLIENT_CONTEXT':values['FRESH_CONTEXT_SETTING'],
             'AGENTSTACK_FRESH_SERVER_CONFIG':values['AGENTSTACK_FRESH_SERVER_CONFIG'],
             'AGENTSTACK_FRESH_DASHBOARD_SOCKET':values['FRESH_SOCKET_SETTING'],
             'ORRERY_FRESH_MAIL_INSTANCE_ID':'a'*32,'AGENTSTACK_MAIL_RUNNER':values['NATIVE_MAIL_RUNNER']}.items():
@@ -166,71 +225,156 @@ def test_prepared_fresh_normal_service_render_preserves_references_and_real_entr
 
 
 def test_fresh_and_codex_default_settings_coexist_through_render_and_reload(tmp_path):
-    import json,os,plistlib
+    import asyncio,json,os,plistlib,socket,sys
+    chosen_names=['AGENTSTACK_PORT','AGENTSTACK_RUNTIME_MODE','AGENTSTACK_FRESH_CLIENT_CONTEXT',
+        'AGENTSTACK_FRESH_DASHBOARD_SOCKET','AGENTSTACK_PYTHON',
+        'AGENTSTACK_CODEX_DEFAULT_MODEL','AGENTSTACK_CODEX_DEFAULT_EFFORT',
+        'AGENTSTACK_DASHBOARD_LOG_MAX_BYTES','AGENTSTACK_DASHBOARD_LOG_BACKUPS','AGENTSTACK_DASHBOARD_RESTART_DELAY']
     codex=dict(CODEX_DEFAULT_MODEL_SETTING='gpt-fixture-terra',CODEX_DEFAULT_EFFORT_SETTING='high',
-        # As after `--codex-default-model ... --codex-default-effort ...`.
-        CHOSEN_SETTINGS='AGENTSTACK_CODEX_DEFAULT_MODEL AGENTSTACK_CODEX_DEFAULT_EFFORT',
-        # The same manifest inputs as the normal-startup layout below.
-        MAIL_DB=str(tmp_path/'root/storage.sqlite3'),MAIL_HOME=str(tmp_path/'unused-mail-home'),
-        SIGNALS_DIR=str(tmp_path/'unused-signals'),MAIL_WATCHER_LABEL='org.orrery.test.normal.watcher',
-        MAIL_LAUNCHD_LABEL_SETTING='org.orrery.test.normal.mail',
-        SAFE_MERGE_RESULT_FILE=str(tmp_path/'no-settings'),MCP_MERGE_RESULT_FILE=str(tmp_path/'no-mcp'))
-    functions=('fresh_environment_json','write_env_file','render_launchd_plist','render_systemd_unit',
-        'render_native_mail_runner','mail_watcher_environment','write_manifest')
-    commands='write_env_file\nrender_launchd_plist\nrender_systemd_unit\nrender_native_mail_runner\nwrite_manifest manual "" "" ""\n'
-    target,values=_fresh_render(tmp_path,*functions,commands=commands,overrides=codex)
-    plist_path=tmp_path/'Library/LaunchAgents/org.orrery.test.normal.dashboard.plist'
-    unit_path=tmp_path/'.config/systemd/user/org.orrery.test.normal.dashboard.service'
-    outputs=(target/'env.sh',plist_path,unit_path)
-    first={path:path.read_bytes() for path in outputs}
-    saved=_normal_saved_env(target/'env.sh')
-    fresh={'AGENTSTACK_RUNTIME_MODE':'fresh','AGENTSTACK_FRESH_CLIENT_CONTEXT':values['FRESH_CONTEXT_SETTING'],
-        'AGENTSTACK_FRESH_SERVER_CONFIG':values['AGENTSTACK_FRESH_SERVER_CONFIG'],
-        'AGENTSTACK_FRESH_DASHBOARD_SOCKET':values['FRESH_SOCKET_SETTING'],
-        'ORRERY_FRESH_MAIL_INSTANCE_ID':values['ORRERY_FRESH_MAIL_INSTANCE_ID'],
-        'AGENTSTACK_MAIL_RUNNER':values['NATIVE_MAIL_RUNNER']}
-    chosen={'AGENTSTACK_CODEX_DEFAULT_MODEL':'gpt-fixture-terra','AGENTSTACK_CODEX_DEFAULT_EFFORT':'high'}
-    for key,value in (fresh|chosen).items():
-        assert saved[key]==value,key
-    plist=plistlib.loads(plist_path.read_bytes())['EnvironmentVariables']
-    unit=unit_path.read_text()
-    manifest=json.loads((target/'manifest.json').read_text())
-    for key in ('AGENTSTACK_FRESH_CLIENT_CONTEXT','AGENTSTACK_FRESH_SERVER_CONFIG','ORRERY_FRESH_MAIL_INSTANCE_ID',*chosen):
-        assert plist[key]==saved[key],key
-        assert key+'='+saved[key] in unit or key+'="'+saved[key]+'"' in unit,key
-        assert manifest['env'][key]==saved[key],key
-    # The normal update path reloads both groups from the saved env.sh alone.
-    reload='\n'.join(_installer_function(n) for n in ('setting_listed','setting_previously_chosen','resolve_setting'))
-    code='set -eu\n. '+shlex.quote(str(ROOT/'hooks/project-context.sh'))+'\n'+reload+'\n'+r'''
-    SETTINGS_ENV_FILE="$1"; RESET_SETTINGS="$2"; OPTION_GIVEN=''; CHOSEN_SETTINGS=''
-    # The installer's own reading of the saved record of choices.
-    PREVIOUS_CHOSEN=''; PREVIOUS_CHOSEN_RECORDED=false
-    if grep -q '^export AGENTSTACK_CHOSEN_SETTINGS=' "$SETTINGS_ENV_FILE"; then
-      PREVIOUS_CHOSEN_RECORDED=true
-      PREVIOUS_CHOSEN="$(agentstack_installed_env_value AGENTSTACK_CHOSEN_SETTINGS "$SETTINGS_ENV_FILE")"
-    fi
-    RUNTIME_MODE_SETTING=''; FRESH_CONTEXT_SETTING=''; FRESH_SOCKET_SETTING=''; CODEX_DEFAULT_MODEL_SETTING=''; CODEX_DEFAULT_EFFORT_SETTING=''
-    resolve_setting RUNTIME_MODE_SETTING AGENTSTACK_RUNTIME_MODE legacy kept
-    resolve_setting FRESH_CONTEXT_SETTING AGENTSTACK_FRESH_CLIENT_CONTEXT '' kept
-    resolve_setting FRESH_SOCKET_SETTING AGENTSTACK_FRESH_DASHBOARD_SOCKET '' kept
-    resolve_setting CODEX_DEFAULT_MODEL_SETTING AGENTSTACK_CODEX_DEFAULT_MODEL
-    resolve_setting CODEX_DEFAULT_EFFORT_SETTING AGENTSTACK_CODEX_DEFAULT_EFFORT
-    printf '%s\n' "$RUNTIME_MODE_SETTING" "$FRESH_CONTEXT_SETTING" "$FRESH_SOCKET_SETTING" "$CODEX_DEFAULT_MODEL_SETTING" "$CODEX_DEFAULT_EFFORT_SETTING" "$CHOSEN_SETTINGS"
-    '''
-    def reload(reset):
-        done=subprocess.run(['/bin/bash','-c',code,'test',str(target/'env.sh'),reset],
-            env={'HOME':str(tmp_path),'PATH':os.environ['PATH']},capture_output=True,text=True,timeout=10)
-        assert done.returncode==0,done.stderr
-        return done.stdout.splitlines()
-    fresh_reloaded=['fresh',values['FRESH_CONTEXT_SETTING'],values['FRESH_SOCKET_SETTING']]
-    assert reload('0')==fresh_reloaded+['gpt-fixture-terra','high',codex['CHOSEN_SETTINGS']]
-    # --reset-settings drops the chosen Codex defaults but never the fresh selection.
-    assert reload('1')==fresh_reloaded+['','','']
-    # Rendering again from the reloaded values reproduces every output byte for byte.
-    reloaded=dict(codex,FRESH_CONTEXT_SETTING=values['FRESH_CONTEXT_SETTING'],FRESH_SOCKET_SETTING=values['FRESH_SOCKET_SETTING'])
-    _fresh_render(tmp_path,*functions,commands=commands,overrides=reloaded)
-    for path in outputs:
-        assert path.read_bytes()==first[path],path.name
+        CHOSEN_SETTINGS=' '.join(chosen_names),PATH_VALUE=DEFAULT_PATH)
+    async def scenario():
+        # A real private prepared context, with a stat-only socket witness.
+        # Neither this witness nor the two explicit service-status doubles
+        # below are evidence of a live service or real tmux acceptance.
+        with _normal_socket_witness() as path:
+            layout=await _normal_startup_layout(tmp_path,path,[19876,19877,19879],render_overrides=codex)
+            _normal_assert_layout(layout)
+            target=layout['target'];saved=layout['saved']
+            fresh_keys=('AGENTSTACK_HOME','AGENTSTACK_RUNTIME_MODE','AGENTSTACK_FRESH_CLIENT_CONTEXT',
+                'AGENTSTACK_FRESH_DASHBOARD_SOCKET','AGENTSTACK_FRESH_SERVER_CONFIG','ORRERY_FRESH_MAIL_INSTANCE_ID')
+            codex_keys=('AGENTSTACK_CODEX_DEFAULT_MODEL','AGENTSTACK_CODEX_DEFAULT_EFFORT')
+            service_keys=(*fresh_keys,*codex_keys,'AGENTSTACK_MCP_URL','AGENTSTACK_PYTHON')
+            env_keys=(*service_keys,'AGENTSTACK_MAIL_ENV','AGENTSTACK_MAIL_RUNNER','AGENTSTACK_MAIL_DIR','AGENTSTACK_MAIL_STATE_ROOT')
+            # Manifest has endpoint/MAIL_ENV but no Python/runner field in this
+            # contract. Plist/unit include Python; fresh's six-key projection
+            # is explicit in all four outputs. Never silently skip a key.
+            manifest_keys=(*fresh_keys,*codex_keys,'AGENTSTACK_MCP_URL','AGENTSTACK_MAIL_ENV','AGENTSTACK_MAIL_DIR','AGENTSTACK_MAIL_STATE_ROOT')
+            plist_path=tmp_path/'Library/LaunchAgents/org.orrery.test.normal.dashboard.plist'
+            unit_path=tmp_path/'.config/systemd/user/org.orrery.test.normal.dashboard.service'
+            outputs=(target/'env.sh',plist_path,unit_path,
+                target/'mail/renders/run/run-agentstack-mail.sh',target/'mail/renders/run/service.env',
+                target/'mail/renders/run/deployment.json')
+            first={p:p.read_bytes() for p in outputs}
+            def manifest():
+                value=json.loads((target/'manifest.json').read_text());value.pop('created_at')
+                return value
+            first_manifest=manifest()
+            expected={key:saved[key] for key in env_keys}
+            assert all(expected[k]==v for k,v in zip(codex_keys,['gpt-fixture-terra','high']))
+            assert expected['AGENTSTACK_PYTHON']==sys.executable
+            assert expected['AGENTSTACK_MCP_URL']==layout['contexts'][0]['endpoint']
+            def check_outputs():
+                current=_normal_saved_env(target/'env.sh')
+                assert all(current[k]==expected[k] for k in env_keys),'saved-settings-contract'
+                plist=plistlib.loads(plist_path.read_bytes())['EnvironmentVariables']
+                unit=dict(shlex.split(line[len('Environment='):])[0].split('=',1)
+                    for line in unit_path.read_text().splitlines() if line.startswith('Environment='))
+                assert all(plist[k]==expected[k] for k in service_keys),'launchd-settings-contract'
+                assert all(unit[k]==expected[k] for k in service_keys),'systemd-settings-contract'
+                value=manifest()
+                assert all(value['env'][k]==expected[k] for k in manifest_keys),'manifest-settings-contract'
+                assert value['agent_mail']['service_env']==expected['AGENTSTACK_MAIL_ENV']
+                assert value['agent_mail']['candidate_venv']==str(target/'candidate')
+                # The actual background export function is isolated from its
+                # start/stop/ownership actions. Its normal saved env supplies
+                # fresh references/Python, and its aliases are the real source.
+                ctl=(ROOT/'dashboard/agentctl.sh').read_text()
+                settings=ctl[ctl.index('LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:'):ctl.index('\nPATH_VALUE=',ctl.index('LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:'))]
+                export=re.search(r'^export_background_env\(\) \{\n.*?^\}',ctl,re.M|re.S).group(0)
+                bg=tmp_path/'background-settings.json'
+                code='set -eu\n. '+shlex.quote(str(target/'env.sh'))+'\nHERE='+shlex.quote(str(target/'dashboard'))+'\n'+settings+'\n'+export+'\nexport_background_env\n'
+                code+=shlex.quote(sys.executable)+' - '+shlex.quote(str(bg))+' '+shlex.quote(json.dumps(service_keys))+" <<'PY_BG'\nimport json,os,sys\nfrom pathlib import Path\nPath(sys.argv[1]).write_text(json.dumps({k:os.environ.get(k) for k in json.loads(sys.argv[2])},sort_keys=True))\nPY_BG\n"
+                done=subprocess.run(['/bin/bash','-c',code],cwd=tmp_path,env={'HOME':str(tmp_path),'PATH':os.environ['PATH']},capture_output=True,text=True,timeout=10)
+                assert done.returncode==0,'background-export-returncode'
+                assert json.loads(bg.read_text())=={k:expected[k] for k in service_keys},'background-settings-contract'
+                return bg.read_bytes()
+            first_background=check_outputs()
+            # Every resolved value flows into prepare/keep/render within this
+            # one shell. No Python dict of first-input values is replayed.
+            functions=('setting_listed','setting_previously_chosen','resolve_setting',
+                'fresh_environment_json','prepare_fresh_install','native_mail_render_id','resolve_fresh_mail_connection',
+                'write_env_file','render_launchd_plist','render_systemd_unit','render_native_mail_runner',
+                'mail_watcher_environment','render_mail_watcher_unit','write_manifest')
+            commands=r'''
+            die() { printf '%s\n' "$1" >&2; exit 1; }
+            . "$REPO_ROOT/hooks/project-context.sh"
+            reload_saved() {
+              SETTINGS_ENV_FILE="$ENV_FILE"; RESET_SETTINGS="$1"; OPTION_GIVEN=''; CHOSEN_SETTINGS=''
+              PREVIOUS_CHOSEN_RECORDED=false; PREVIOUS_CHOSEN=''
+              if grep -q '^export AGENTSTACK_CHOSEN_SETTINGS=' "$SETTINGS_ENV_FILE"; then
+                PREVIOUS_CHOSEN_RECORDED=true
+                PREVIOUS_CHOSEN="$(agentstack_installed_env_value AGENTSTACK_CHOSEN_SETTINGS "$SETTINGS_ENV_FILE")"
+              fi
+              unset AGENTSTACK_PORT AGENTSTACK_RUNTIME_MODE AGENTSTACK_FRESH_CLIENT_CONTEXT AGENTSTACK_FRESH_DASHBOARD_SOCKET
+              unset AGENTSTACK_MCP_URL AGENTSTACK_PATH AGENTSTACK_PYTHON AGENTSTACK_CODEX_DEFAULT_MODEL AGENTSTACK_CODEX_DEFAULT_EFFORT AGENTSTACK_MAIL_DIR
+              unset AGENTSTACK_DASHBOARD_LOG AGENTSTACK_DASHBOARD_LOG_MAX_BYTES AGENTSTACK_DASHBOARD_LOG_BACKUPS AGENTSTACK_DASHBOARD_RESTART_DELAY AGENTSTACK_MAIL_LAUNCHD_LABEL
+              PORT=''; RUNTIME_MODE_SETTING=''; FRESH_CONTEXT_SETTING=''; FRESH_SOCKET_SETTING=''
+              MCP_URL=''; PATH_VALUE=''; PYTHON_CHOICE=''; CODEX_DEFAULT_MODEL_SETTING=''; CODEX_DEFAULT_EFFORT_SETTING=''; NATIVE_MAIL_SERVICE_ROOT=''
+              resolve_setting PORT AGENTSTACK_PORT 8770
+              resolve_setting RUNTIME_MODE_SETTING AGENTSTACK_RUNTIME_MODE legacy kept
+              resolve_setting FRESH_CONTEXT_SETTING AGENTSTACK_FRESH_CLIENT_CONTEXT '' kept
+              resolve_setting FRESH_SOCKET_SETTING AGENTSTACK_FRESH_DASHBOARD_SOCKET '' kept
+              resolve_setting MCP_URL AGENTSTACK_MCP_URL http://127.0.0.1:18765/mcp kept
+              resolve_setting PATH_VALUE AGENTSTACK_PATH /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+              resolve_setting PYTHON_CHOICE AGENTSTACK_PYTHON ''
+              resolve_setting CODEX_DEFAULT_MODEL_SETTING AGENTSTACK_CODEX_DEFAULT_MODEL
+              resolve_setting CODEX_DEFAULT_EFFORT_SETTING AGENTSTACK_CODEX_DEFAULT_EFFORT
+              resolve_setting NATIVE_MAIL_SERVICE_ROOT AGENTSTACK_MAIL_DIR "$INSTALL_DIR/mail-service" kept
+              DASHBOARD_LOG=''; DASHBOARD_LOG_MAX_BYTES=''; DASHBOARD_LOG_BACKUPS=''; DASHBOARD_RESTART_DELAY=''
+              MAIL_LAUNCHD_LABEL_SETTING=''
+              resolve_setting DASHBOARD_LOG AGENTSTACK_DASHBOARD_LOG "$RUNTIME_DIR/dashboard.log"
+              resolve_setting DASHBOARD_LOG_MAX_BYTES AGENTSTACK_DASHBOARD_LOG_MAX_BYTES 5242880
+              resolve_setting DASHBOARD_LOG_BACKUPS AGENTSTACK_DASHBOARD_LOG_BACKUPS 3
+              resolve_setting DASHBOARD_RESTART_DELAY AGENTSTACK_DASHBOARD_RESTART_DELAY 5
+              resolve_setting MAIL_LAUNCHD_LABEL_SETTING AGENTSTACK_MAIL_LAUNCHD_LABEL '' kept
+            }
+            (
+              reload_saved 1
+              [[ "$RUNTIME_MODE_SETTING" == fresh && -n "$FRESH_CONTEXT_SETTING" && -n "$FRESH_SOCKET_SETTING" ]]
+              [[ "$FRESH_CONTEXT_SETTING" == "$(agentstack_installed_env_value AGENTSTACK_FRESH_CLIENT_CONTEXT "$ENV_FILE")" ]]
+              [[ "$FRESH_SOCKET_SETTING" == "$(agentstack_installed_env_value AGENTSTACK_FRESH_DASHBOARD_SOCKET "$ENV_FILE")" ]]
+              [[ -z "$CODEX_DEFAULT_MODEL_SETTING" && -z "$CODEX_DEFAULT_EFFORT_SETTING" ]]
+            )
+            reload_saved 0
+            PYTHON_BIN="$PYTHON_CHOICE"
+            [[ -x "$PYTHON_BIN" && "$RUNTIME_MODE_SETTING" == fresh ]]
+            AGENTSTACK_RUNTIME_MODE="$RUNTIME_MODE_SETTING"
+            AGENTSTACK_FRESH_SERVER_CONFIG=''; ORRERY_FRESH_MAIL_INSTANCE_ID=''; NATIVE_MAIL_STATE_ROOT=''
+            prepare_fresh_install
+            MAIL_HOME="$NATIVE_MAIL_STATE_ROOT"; SIGNALS_DIR="$NATIVE_MAIL_STATE_ROOT/signals"
+            MAIL_WATCHER_LABEL="$LABEL_PREFIX.watcher"
+            # Only listener/ownership status is synthetic. Real keep parses
+            # and checks the stored private deployment metadata itself.
+            mcp_endpoint_listening() { return 0; }
+            native_mailctl() {
+              [[ "$#" == 3 && "$3" == status ]] || return 1
+              [[ "$1" == "$(agentstack_installed_env_value AGENTSTACK_MAIL_ENV "$ENV_FILE")" ]] || return 1
+              [[ "$2" == "$(dirname "$1")/run-agentstack-mail.sh" ]] || return 1
+              printf 'called\n' > "$INSTALL_DIR/keep-status-called"
+            }
+            MAIL_UPDATE_MODE=keep
+            NATIVE_MAIL_VENV="$INSTALL_DIR/must-not-select-new-candidate"
+            NATIVE_MAIL_SOURCE_ID=must-not-select-new-source
+            NATIVE_MAIL_ENV=''; NATIVE_MAIL_RUNNER=''; NATIVE_MAIL_DEPLOYMENT=''; MAIL_ENV=''
+            resolve_fresh_mail_connection
+            [[ "$NATIVE_MAIL_EXISTING" == true && "$PROVISION_NATIVE_MAIL" == false ]]
+            [[ "$NATIVE_MAIL_VENV" == "$INSTALL_DIR/candidate" && "$NATIVE_MAIL_SOURCE_ID" == fixture ]]
+            [[ "$MAIL_ENV" == "$(agentstack_installed_env_value AGENTSTACK_MAIL_ENV "$ENV_FILE")" ]]
+            [[ "$NATIVE_MAIL_RUNNER" == "$(agentstack_installed_env_value AGENTSTACK_MAIL_RUNNER "$ENV_FILE")" ]]
+            [[ -s "$INSTALL_DIR/keep-status-called" ]]
+            write_env_file
+            render_launchd_plist
+            render_systemd_unit
+            render_native_mail_runner
+            render_mail_watcher_unit launchd
+            render_mail_watcher_unit systemd-user
+            '''
+            commands+=_normal_manifest_input_check()+'\nwrite_manifest manual "" "" ""\n'
+            _fresh_render(tmp_path,*functions,commands=commands)
+            assert check_outputs()==first_background,'background-rerender-bytes'
+            assert all(p.read_bytes()==first[p] for p in outputs),'rerender-bytes'
+            assert manifest()==first_manifest,'manifest-rerender-contract'
+    asyncio.run(scenario())
 
 
 def test_normal_update_keeps_fresh_selection_without_old_bootstrap_or_enrollment(tmp_path):
@@ -284,7 +428,7 @@ def test_fresh_keep_reuses_owned_render_and_records_its_actual_candidate(tmp_pat
     _fresh_render(tmp_path,'fresh_environment_json','resolve_fresh_mail_connection',commands=commands)
 
 
-async def _normal_startup_layout(tmp_path,private_socket,ports):
+async def _normal_startup_layout(tmp_path,private_socket,ports,*,render_overrides=None):
     """Shared setup: actual prepare/payload/render, no service or OS manager."""
     import json,os,sys
     from uuid import uuid4
@@ -314,16 +458,17 @@ async def _normal_startup_layout(tmp_path,private_socket,ports):
         FRESH_SOCKET_SETTING=str(private_socket),AGENTSTACK_FRESH_SERVER_CONFIG=str(config),
         ORRERY_FRESH_MAIL_INSTANCE_ID=instance,AGENTSTACK_MCP_URL=contexts[0]['endpoint'],MCP_URL=contexts[0]['endpoint'],
         NATIVE_MAIL_STATE_ROOT=str(config.parent),MAIL_DB=str(config.parent/'storage.sqlite3'),
-        MAIL_HOME=str(tmp_path/'unused-mail-home'),SIGNALS_DIR=str(tmp_path/'unused-signals'),
+        MAIL_HOME=str(config.parent),SIGNALS_DIR=str(config.parent/'signals'),
         DASHBOARD_LOG=str(target/'runtime/dashboard.log'),DASHBOARD_LOG_MAX_BYTES='1048576',
         DASHBOARD_LOG_BACKUPS='1',DASHBOARD_RESTART_DELAY='1',
         MAIL_WATCHER_LABEL='org.orrery.test.normal.watcher',MAIL_LAUNCHD_LABEL_SETTING='org.orrery.test.normal.mail',
-        AGENT_MAIL_NAME_CAPABILITY_JSON='{}',SAFE_MERGE_RESULT_FILE=str(tmp_path/'no-settings'),
-        MCP_MERGE_RESULT_FILE=str(tmp_path/'no-mcp'))
+        AGENT_MAIL_NAME_CAPABILITY_JSON='{}')
+    overrides.update(render_overrides or {})
     functions=('fresh_environment_json','prepare_fresh_install','write_env_file','write_fresh_mail_runner',
         'render_native_mail_runner','render_launchd_plist','render_systemd_unit',
         'mail_watcher_environment','render_mail_watcher_unit','write_manifest')
-    commands='prepare_fresh_install\nwrite_fresh_mail_runner\nwrite_env_file\nrender_launchd_plist\nrender_systemd_unit\nrender_mail_watcher_unit launchd\nrender_mail_watcher_unit systemd-user\nwrite_manifest manual "" "" ""\n'
+    commands='prepare_fresh_install\nwrite_fresh_mail_runner\nwrite_env_file\nrender_launchd_plist\nrender_systemd_unit\nrender_mail_watcher_unit launchd\nrender_mail_watcher_unit systemd-user\n'
+    commands+=_normal_manifest_input_check()+'\nwrite_manifest manual "" "" ""\n'
     made,values=_fresh_render(tmp_path,*functions,commands=commands,overrides=overrides)
     assert made==target
     candidate=target/'candidate/bin'
@@ -436,9 +581,7 @@ def test_normal_startup_setup_uses_actual_payload_render_and_separates_contexts(
     async def scenario():
         # This is a stat-only socket witness for the mock. It is not a tmux
         # server and is never reported as actual transport acceptance.
-        witness=socket.socket(socket.AF_UNIX)
-        path=tmp_path/'mock-socket';witness.bind(str(path));path.chmod(0o600)
-        try:
+        with _normal_socket_witness() as path:
             layout=await _normal_startup_layout(tmp_path,path,[19876,19877,19879])
             _normal_assert_layout(layout)
             a,b=(_normal_dashboard_environment(layout,row,19877+i,'dashboard-'+str(i))
@@ -452,7 +595,6 @@ def test_normal_startup_setup_uses_actual_payload_render_and_separates_contexts(
             altered=dict(layout,saved=layout['saved']|{'ORRERY_FRESH_MAIL_INSTANCE_ID':'b'*32})
             import pytest
             with pytest.raises(AssertionError):_normal_assert_layout(altered)
-        finally:witness.close();path.unlink(missing_ok=True)
     asyncio.run(scenario())
 
 
@@ -465,9 +607,7 @@ def test_normal_startup_external_setup_uses_actual_payload_render_and_saved_load
     if not os.environ.get('ORRERY_TEST_COCKPIT_ROOT') or not (c/'bridge/runtime_target.py').is_file():
         pytest.skip('ORRERY_TEST_COCKPIT_ROOT must name a cockpit checkout')
     async def scenario():
-        witness=socket.socket(socket.AF_UNIX)
-        path=tmp_path/'mock-socket';witness.bind(str(path));path.chmod(0o600)
-        try:
+        with _normal_socket_witness() as path:
             layout=await _normal_startup_layout(tmp_path,path,[19876,19877,19879])
             _normal_assert_layout(layout)
             spec=importlib.util.spec_from_file_location('normal_startup_mock_boundary',c/'bridge/runtime_target.py')
@@ -486,7 +626,6 @@ def test_normal_startup_external_setup_uses_actual_payload_render_and_saved_load
             assert original['identity']['context_digest']==layout['contexts'][0]['context_digest']
             changed=module.startup_projection(environ=env|{'AGENTSTACK_FRESH_CLIENT_CONTEXT':layout['contexts'][1]['context_path']},config=config)
             assert changed['identity']!=original['identity'] and changed['identity']['host_epoch']==original['identity']['host_epoch']
-        finally:witness.close();path.unlink(missing_ok=True)
     asyncio.run(scenario())
 
 
