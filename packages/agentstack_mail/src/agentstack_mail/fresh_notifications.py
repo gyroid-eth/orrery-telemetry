@@ -151,14 +151,22 @@ def current_hook(client, payload):
 
 
 async def hook(client, payload, wrapper_root, *, output=None):
-    from .fresh_launch import record_session, root_path
+    from .fresh_launch import complete_pending_session, record_session, root_path
     from .fresh_proxy import verified_owner
     output = sys.stdout if output is None else output
     if not isinstance(payload, dict) or payload.get('hook_event_name') not in {'SessionStart', 'PostToolUse'}:
         raise B1Error('FRESH_SESSION_EVENT_INVALID')
-    if payload['hook_event_name'] == 'SessionStart':await record_session(client, payload)
+    if payload['hook_event_name'] == 'SessionStart':
+        if not await record_session(client, payload, defer_transcript=True):return
+    elif not await complete_pending_session(client, payload):return
     expected = current_hook(client, payload)
     await verified_owner(client)
+    # A resumed native session can accept hook context without starting a turn.
+    # Keep its notification pending for the normal watcher wake; source is not
+    # owner proof, so even unknown/missing sources pass the receipt gates first.
+    if payload['hook_event_name'] == 'SessionStart':
+        source = payload.get('source')
+        if not isinstance(source, str) or source != 'startup':return
     root = root_path(wrapper_root)
     helpers = runpy.run_path(str(root / 'bin/lib/runtime_delivery.py'))
     with consumer_lock(client) as acquired:

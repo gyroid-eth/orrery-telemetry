@@ -23,7 +23,7 @@ from uuid import UUID, uuid4
 
 from .fresh_runtime import _directory, _read_private, _write_private
 from .fresh_proxy import verified_owner
-from .storage_origin_contract import B1Error
+from .storage_origin_contract import B1Error, digest
 
 
 def native_id(value):
@@ -257,10 +257,8 @@ def launch(client, wrapper_root, provider, cwd, *, session_id=None):
         return code
 
 
-async def record_session(client, payload):
-    if not isinstance(payload, dict):raise B1Error('FRESH_SESSION_EVENT_INVALID')
-    if payload.get('hook_event_name') != 'SessionStart':return
-    await verified_owner(client)
+def session_state(client, payload):
+    """Re-read the launch gates for each native callback/publication."""
     base = layout(client)
     launch_id = native_id(os.environ.get('AGENTSTACK_FRESH_LAUNCH_ID'))
     run = base / 'runs' / launch_id
@@ -273,28 +271,105 @@ async def record_session(client, payload):
     if current != {'launch_id': launch_id}:raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
     managed = intent['provider'] in {'dsh','hermes'}
     if managed:
-        from .fresh_harness import native_session_id, session_reference
+        from .fresh_harness import native_session_id
         session_id = native_session_id(payload.get('session_id'))
     else:session_id = native_id(payload.get('session_id'))
     if intent['resume_session_id'] is not None and intent['resume_session_id'] != session_id:
         raise B1Error('FRESH_NATIVE_SESSION_MISMATCH')
+    return base, run, intent, session_id
+
+
+def same_session_file(path, value):
+    try:_write_private(path, value)
+    except FileExistsError:
+        if _read_private(path) != value:raise B1Error('FRESH_NATIVE_SESSION_MISMATCH') from None
+
+
+def session_candidate(client, run, intent, session_id, transcript, home):
+    # Non-strict resolution admits a candidate only; it never proves readiness.
+    resolved = transcript.resolve()
+    if not transcript.is_absolute() or not resolved.is_relative_to(home):
+        raise B1Error('FRESH_NATIVE_SESSION_MISMATCH')
+    return dict(kind='orrery-fresh-session-start-v1', launch_id=run.name,
+        provider='claude', context_digest=client.context_digest, **identity(client),
+        native_session_id=session_id, transcript_path=str(transcript),
+        resolved_transcript_path=str(resolved), provider_home=str(home), intent_digest=digest(intent))
+
+
+def publish_session(client, payload, state, transcript):
+    base, run, intent, session_id = state
+    checked = session_state(client, payload)
+    if checked != state:raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
+    receipt = dict(kind='orrery-fresh-native-session-v1', context_digest=client.context_digest,
+                   provider=intent['provider'], native_session_id=session_id,
+                   transcript_path=str(transcript), **identity(client))
+    for path, value in ((base / 'sessions' / (session_id + '.json'), receipt),
+                        (run / 'session.json', dict(receipt, launch_id=run.name))):
+        same_session_file(path, value)
+
+
+async def record_session(client, payload, *, defer_transcript=False):
+    if not isinstance(payload, dict):raise B1Error('FRESH_SESSION_EVENT_INVALID')
+    if payload.get('hook_event_name') != 'SessionStart':return
+    await verified_owner(client)
+    state = session_state(client, payload)
+    base, run, intent, session_id = state
+    managed = intent['provider'] in {'dsh','hermes'}
     from .fresh_child import provider_home
-    if managed:transcript = session_reference(client, intent, session_id)
+    if managed:
+        from .fresh_harness import session_reference
+        transcript = session_reference(client, intent, session_id)
     else:
         home = provider_home(client, intent['provider'])
         transcript = Path(payload.get('transcript_path', ''))
-        if not transcript.is_absolute() or not transcript.resolve(strict=True).is_relative_to(home):
+        if not transcript.is_absolute():raise B1Error('FRESH_NATIVE_SESSION_MISMATCH')
+        candidate = None
+        path = run / 'session-start.json'
+        if intent['provider'] == 'claude' and (defer_transcript or path.exists() or path.is_symlink()):
+            candidate = session_candidate(client, run, intent, session_id, transcript, home)
+            if (path.exists() or path.is_symlink()) and _read_private(path) != candidate:
+                raise B1Error('FRESH_NATIVE_SESSION_MISMATCH')
+        try:resolved = transcript.resolve(strict=True)
+        except FileNotFoundError:
+            if (not defer_transcript or candidate is None or (run / 'session.json').exists()
+                    or (run / 'session.json').is_symlink()):raise
+            if session_state(client, payload) != state:raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
+            same_session_file(path, candidate)
+            return False
+        if (not resolved.is_relative_to(home)
+                or (candidate is not None and str(resolved) != candidate['resolved_transcript_path'])):
             raise B1Error('FRESH_NATIVE_SESSION_MISMATCH')
     if intent['provider'] == 'codex':
         root = root_path(intent['wrapper_root'])
         reader = runpy.run_path(str(root / 'hooks/prepare-codex-session-binding.py'))
         if reader['_transcript_header_session_id'](transcript) != session_id:
             raise B1Error('FRESH_NATIVE_SESSION_MISMATCH')
-    receipt = dict(kind='orrery-fresh-native-session-v1', context_digest=client.context_digest,
-                   provider=intent['provider'], native_session_id=session_id,
-                   transcript_path=str(transcript.resolve()), **identity(client))
-    for path, value in ((base / 'sessions' / (session_id + '.json'), receipt),
-                        (run / 'session.json', dict(receipt, launch_id=launch_id))):
-        try:_write_private(path, value)
-        except FileExistsError:
-            if _read_private(path) != value:raise B1Error('FRESH_NATIVE_SESSION_MISMATCH') from None
+    publish_session(client, payload, state, transcript.resolve() if managed else resolved)
+    return True
+
+
+async def complete_pending_session(client, payload):
+    """A PostToolUse can complete only an admitted Claude SessionStart."""
+    base = layout(client)
+    run = base / 'runs' / native_id(os.environ.get('AGENTSTACK_FRESH_LAUNCH_ID'))
+    _directory(run)
+    if (run / 'session.json').exists() or (run / 'session.json').is_symlink():return True
+    await verified_owner(client)
+    state = session_state(client, payload)
+    base, run, intent, session_id = state
+    if intent['provider'] != 'claude':raise B1Error('FRESH_NATIVE_SESSION_MISMATCH')
+    saved = _read_private(run / 'session-start.json')
+    if not isinstance(saved.get('transcript_path'), str):raise B1Error('FRESH_NATIVE_SESSION_MISMATCH')
+    from .fresh_child import provider_home
+    home = provider_home(client, 'claude')
+    transcript = Path(saved['transcript_path'])
+    if ('transcript_path' in payload and payload['transcript_path'] != str(transcript)):
+        raise B1Error('FRESH_NATIVE_SESSION_MISMATCH')
+    if saved != session_candidate(client, run, intent, session_id, transcript, home):
+        raise B1Error('FRESH_NATIVE_SESSION_MISMATCH')
+    try:resolved = transcript.resolve(strict=True)
+    except FileNotFoundError:return False
+    if not resolved.is_relative_to(home) or str(resolved) != saved['resolved_transcript_path']:
+        raise B1Error('FRESH_NATIVE_SESSION_MISMATCH')
+    publish_session(client, payload, state, resolved)
+    return True

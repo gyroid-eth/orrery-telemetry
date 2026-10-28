@@ -386,6 +386,8 @@ APFSの日本語profileは [絶対予約の支持範囲](absolute-reservations.m
 
 Claudeは既存hookで、tmuxは既存watcherと起動時に固定したpaneで通知します。watcherを手で準備する場合も、別の保守端末で上記の変数を同じ確認済みの値へ再設定します。`AGENTSTACK_FRESH_CLIENT_CONTEXT`／`AGENTSTACK_CLIENT_CONFIG`／`AGENTSTACK_GLOBAL_SERVER_CONFIG` を選択していないことを確認し、実装済み入口 `AGENTSTACK_PYTHON="$orrery_python" "$orrery_install/bin/agentstack-runtime-client" watch-fresh --config "$orrery_config"` を使います。1回だけの確認では末尾へ `--once` を付けます。PATHや既定python3へ任せません。通常のforeground terminalにtmux配送先が自動生成されるわけではなく、通常installerは同configだけを渡すwatcherサービスを描画し、本人contextのkeyを除去します。Appやdashboardとの接続確認も限定fixtureであり、実App/providerの受入とは分けます。
 
+freshのClaudeのSessionStart hookが通知を渡すのは、`source` が文字列 `startup` のときだけです。resume／clear／compact、未知・欠落・文字列以外の `source` では、本人・現在の起動・所有者の確認はこれまでどおり行いますが、通知の取得・出力・completionはせず、read／ACKも変えず、pendingのまま通常のwatcherへ残します。SessionStartの文脈への引渡しだけでは、nativeのターンが始まることを保証しないためです。PostToolUseでの受渡しは従来どおりです。watcherへ残しても起床の成功は保証しません。watcherは、固定したpane・プロセスの出生と祖先・画面の状態（待機中または作業中）・入力欄が空であることを含む既存の確認を満たしたときだけ配送し、承認画面・未知の状態・入力欄に文字がある場合などは見送ります。
+
 通知completionはstdout／paneへの受渡し処理の記録で、read／ACKやagentの理解・仕事完了ではありません。外部入力とDB更新を一度だけにする保証はなく、不明な結果では再通知の可能性があります。Codexの複数file patchは後のfileで拒否されても先行fileのleaseだけ延長される場合があります。編集は許可されませんが、patch全体で時刻が不変とは保証しません。ClaudeのMultiEdit／NotebookEditは現在拒否されます。
 
 ## 8. 失敗したら手順で戻す
