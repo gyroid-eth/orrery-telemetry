@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import select
 
 from agentstack_mail import fresh_notifications as notifications
+from agentstack_mail import fresh_launch
 from agentstack_mail.fresh_client import FreshBoundClient, _http
 from agentstack_mail.fresh_launch import identity, layout
 from agentstack_mail.fresh_runtime import _write_private
@@ -221,14 +222,17 @@ def test_completion_response_loss_is_separate_from_stdout_handoff(tmp_path, monk
     asyncio.run(run())
 
 
-def test_real_regular_claude_entry_receives_hook_context_once_and_internal_tools_are_hidden(tmp_path):
+@pytest.mark.parametrize('transcript_first', [True, False])
+def test_real_regular_claude_entry_receives_hook_context_once_and_internal_tools_are_hidden(tmp_path, transcript_first):
     async def run():
         async with live(tmp_path) as (runtime, people, client, _):
             home, binary = prepare(client, 'claude', tmp_path)
             # The fake native CLI uses exactly the generated real hook commands.
             native = '''import json,os,pathlib,subprocess,sys,uuid
 args=sys.argv[1:];home=pathlib.Path(os.environ['CLAUDE_CONFIG_DIR'])
-session=str(uuid.uuid4());transcript=home/(session+'.jsonl');transcript.write_text('fixture')
+session=str(uuid.uuid4());transcript=home/(session+'.jsonl')
+early=os.environ['TEST_TRANSCRIPT_FIRST']=='1'
+if early:transcript.write_text('fixture')
 settings=json.loads(pathlib.Path(args[args.index('--settings')+1]).read_text())
 event=dict(hook_event_name='SessionStart',session_id=session,transcript_path=str(transcript))
 results=[]
@@ -236,7 +240,12 @@ for kind in ('SessionStart','PostToolUse','PostToolUse'):
     event['hook_event_name']=kind
     command=settings['hooks'][kind][0]['hooks'][0]['command']
     r=subprocess.run(['/bin/bash','-c',command],input=json.dumps(event),text=True,capture_output=True,timeout=30)
-    results.append(dict(rc=r.returncode,stdout=r.stdout,stderr=r.stderr))
+    base=pathlib.Path(os.environ['AGENTSTACK_FRESH_CLIENT_CONTEXT']).parent/'launch'
+    run=base/'runs'/os.environ['AGENTSTACK_FRESH_LAUNCH_ID']
+    results.append(dict(rc=r.returncode,stdout=r.stdout,stderr=r.stderr,
+        receipt=(run/'session.json').exists(),candidate=(run/'session-start.json').exists()))
+    # The file cannot exist until the SessionStart subprocess has returned.
+    if kind=='SessionStart' and not early:transcript.write_text('fixture')
 pathlib.Path(os.environ['TEST_TRACE']).write_text(json.dumps(results))
 sys.exit(0 if all(r['rc']==0 for r in results) else 17)
 '''
@@ -246,11 +255,16 @@ sys.exit(0 if all(r['rc']==0 for r in results) else 17)
             # A forged filename/envelope never becomes authority or a body.
             folder = runtime.root/'signals/agents'/str(people[0]['agent_id'])
             _write_private(folder/'999999.signal', {'mail_instance_id':'foreign','message_id':999999})
-            result = await invoke(client, 'claude', binary, tmp_path)
+            result = await invoke(client, 'claude', binary, tmp_path,
+                                  extra={'TEST_TRANSCRIPT_FIRST':'1' if transcript_first else '0'})
             assert result.returncode == 0, result.stderr
             observed = json.loads((tmp_path/'native-trace.json').read_text())
-            assert 'Body preview:' in observed[0]['stdout'] and 'Fetch inbox' in observed[0]['stdout']
-            assert observed[1]['stdout'] == observed[2]['stdout'] == ''
+            delivered = 0 if transcript_first else 1
+            assert 'Body preview:' in observed[delivered]['stdout'] and 'Fetch inbox' in observed[delivered]['stdout']
+            assert all(row['stdout'] == '' for i,row in enumerate(observed) if i != delivered)
+            assert observed[0]['receipt'] is transcript_first
+            assert observed[0]['candidate'] is (not transcript_first)
+            assert observed[1]['receipt'] and observed[2]['receipt']
             assert '999999' not in canonical(observed)
             assert all(p['auth']['registration_token'] not in canonical(observed) for p in people)
             facts, pairs = await rows(runtime)
@@ -260,6 +274,223 @@ sys.exit(0 if all(r['rc']==0 for r in results) else 17)
                 names = {row['name'] for row in listing['result']['tools']}
                 for name in ('notification_pending','notification_complete'):
                     assert name not in names and refused(await peer.call(name,{})) == 'TOOL_UNPUBLISHED'
+    asyncio.run(run())
+
+
+async def deferred_start(client, tmp_path, monkeypatch):
+    event = running(client, tmp_path, monkeypatch)
+    transcript = Path(event['transcript_path']);transcript.unlink()
+    output = StringIO();await notifications.hook(client, event, ROOT, output=output)
+    run = layout(client) / 'runs' / os.environ['AGENTSTACK_FRESH_LAUNCH_ID']
+    assert output.getvalue() == '' and (run / 'session-start.json').is_file()
+    assert (run / 'session-start.json').stat().st_mode & 0o777 == 0o600
+    assert not (run / 'session.json').exists() and not list((layout(client) / 'sessions').iterdir())
+    return event, transcript, run
+
+
+@pytest.mark.parametrize('post_path', [True, False])
+def test_deferred_start_stays_unready_until_real_transcript_then_concurrent_post_handoff(tmp_path, monkeypatch, post_path):
+    async def run():
+        async with live(tmp_path) as (runtime, people, client, _):
+            sent = await runtime.core.write_message('send', **send_args(runtime, people,
+                auth=people[1]['auth'], recipients=[{'target_name':'Alpha'}]))
+            before = await rows(runtime)
+            event, transcript, directory = await deferred_start(client, tmp_path, monkeypatch)
+            candidate = (directory / 'session-start.json').read_bytes()
+            # Identical simultaneous starts are idempotent, never notifications.
+            await asyncio.gather(*(notifications.hook(client, event, ROOT, output=StringIO()) for _ in range(2)))
+            post = dict(event, hook_event_name='PostToolUse')
+            if not post_path:post.pop('transcript_path')
+            quiet = StringIO();await notifications.hook(client, post, ROOT, output=quiet)
+            assert quiet.getvalue() == '' and await rows(runtime) == before
+            assert not (directory / 'session.json').exists()
+            assert (directory / 'session-start.json').read_bytes() == candidate
+            transcript.write_text('native creates this only after the start returns')
+            outputs = [StringIO(), StringIO()]
+            await asyncio.gather(*(notifications.hook(client, post, ROOT, output=out) for out in outputs))
+            assert sum(bool(out.getvalue()) for out in outputs) == 1
+            assert 'ORRERY Mail notification:' in ''.join(out.getvalue() for out in outputs)
+            receipt = json.loads((directory / 'session.json').read_text())
+            assert receipt['native_session_id'] == event['session_id']
+            assert receipt['transcript_path'] == str(transcript.resolve(strict=True))
+            assert {k:receipt[k] for k in identity(client)} == identity(client)
+            facts, pairs = await rows(runtime)
+            assert facts[0]['completed_ts'] and pairs == [(sent['message_id'],people[0]['agent_id'],None,None)]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('damage', ['absent-start','other-session','other-start','nonce','intent','current',
+    'ended','generation','revoked','lineage','outside','relative','path-type','symlink','same-home-symlink',
+    'resume','candidate-mode','candidate-conflict','candidate-schema'])
+def test_deferred_session_gates_reject_without_receipts_or_notification_consumption(tmp_path, monkeypatch, damage):
+    async def run():
+        async with live(tmp_path) as (runtime, people, client, _):
+            await runtime.core.write_message('send', **send_args(runtime, people,
+                auth=people[1]['auth'], recipients=[{'target_name':'Alpha'}]))
+            event, transcript, directory = await deferred_start(client, tmp_path, monkeypatch)
+            saved = (directory / 'session-start.json').read_bytes()
+            transcript.write_text('present after start')
+            post = dict(event, hook_event_name='PostToolUse')
+            intent_path = directory / 'intent.json';intent = json.loads(intent_path.read_text())
+            if damage == 'absent-start':(directory / 'session-start.json').unlink()
+            elif damage in {'other-session','other-start'}:
+                post['session_id'] = str(uuid4())
+                if damage == 'other-start':post['hook_event_name'] = 'SessionStart'
+            elif damage == 'nonce':monkeypatch.setenv('AGENTSTACK_FRESH_LAUNCH_NONCE','foreign')
+            elif damage in {'intent','generation','resume'}:
+                if damage == 'intent':intent['wrapper_root'] = '/changed-intent'
+                elif damage == 'resume':intent['resume_session_id'] = str(uuid4())
+                else:intent['credential_generation'] += 1
+                intent_path.write_text(canonical(intent))
+            elif damage == 'current':
+                (layout(client) / 'current.json').write_text(canonical({'launch_id':str(uuid4())}))
+            elif damage == 'ended':_write_private(directory / 'ended.json', {'launch_id':directory.name,'exit_code':0})
+            elif damage == 'revoked':
+                await runtime.core.recover(people[0]['agent_id'], expected_generation=people[0]['credential_generation'],
+                                           new_token='deferred-synthetic-recovery-key')
+            elif damage == 'lineage':
+                _write_private(client.path.parent / 'child.json', {'parent_context':str(client.path),'slot':'missing'})
+            elif damage == 'outside':post['transcript_path'] = str(tmp_path / 'outside.jsonl')
+            elif damage == 'relative':post['transcript_path'] = 'relative.jsonl'
+            elif damage == 'path-type':post['transcript_path'] = None
+            elif damage in {'symlink','same-home-symlink'}:
+                other = (tmp_path if damage == 'symlink' else transcript.parent) / 'other.jsonl'
+                other.write_text('changed target')
+                transcript.unlink();transcript.symlink_to(other)
+            elif damage == 'candidate-mode':(directory / 'session-start.json').chmod(0o644)
+            else:
+                path = directory / 'session-start.json';value = json.loads(path.read_text())
+                if damage == 'candidate-schema':value.pop('transcript_path')
+                else:value['intent_digest'] = 'changed'
+                path.write_text(canonical(value))
+            before = await rows(runtime)
+            output = StringIO()
+            with pytest.raises(B1Error):await notifications.hook(client, post, ROOT, output=output)
+            assert output.getvalue() == '' and await rows(runtime) == before
+            assert not (directory / 'session.json').exists()
+            assert not list((directory.parent.parent / 'sessions').iterdir())
+            if damage not in {'absent-start','candidate-conflict','candidate-schema'}:
+                assert (directory / 'session-start.json').read_bytes() == saved
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('phase', ['start','post'])
+def test_transcript_permission_error_is_never_deferred_as_missing(tmp_path, monkeypatch, phase):
+    async def run():
+        async with live(tmp_path) as (runtime, people, client, _):
+            await runtime.core.write_message('send', **send_args(runtime, people,
+                auth=people[1]['auth'], recipients=[{'target_name':'Alpha'}]))
+            if phase == 'post':
+                event, transcript, directory = await deferred_start(client, tmp_path, monkeypatch)
+                event['hook_event_name'] = 'PostToolUse'
+            else:
+                event = running(client, tmp_path, monkeypatch);transcript = Path(event['transcript_path'])
+                directory = layout(client) / 'runs' / os.environ['AGENTSTACK_FRESH_LAUNCH_ID']
+            resolve = Path.resolve
+            def denied(path, *args, **kwargs):
+                if path == transcript and kwargs.get('strict'):raise PermissionError('synthetic denied')
+                return resolve(path, *args, **kwargs)
+            monkeypatch.setattr(Path, 'resolve', denied)
+            before = await rows(runtime)
+            with pytest.raises(PermissionError):await notifications.hook(client, event, ROOT, output=StringIO())
+            assert await rows(runtime) == before and not (directory / 'session.json').exists()
+            if phase == 'start':assert not (directory / 'session-start.json').exists()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('boundary', ['same-home','outside-home'])
+def test_repeated_start_rejects_transcript_switch_between_candidate_and_strict_resolve(tmp_path, monkeypatch, boundary):
+    async def run():
+        async with live(tmp_path) as (runtime, people, client, _):
+            await runtime.core.write_message('send', **send_args(runtime, people,
+                auth=people[1]['auth'], recipients=[{'target_name':'Alpha'}]))
+            event, transcript, directory = await deferred_start(client, tmp_path, monkeypatch)
+            candidate_path = directory / 'session-start.json';saved = candidate_path.read_bytes()
+            candidate = json.loads(saved)
+            transcript.write_text('original reference from admitted start')
+            replacement = (transcript.parent if boundary == 'same-home' else tmp_path) / 'replacement.jsonl'
+            replacement.write_text('different transcript at the same native path')
+            resolve = Path.resolve;observed = []
+            def switched(path, *args, **kwargs):
+                if path == transcript and kwargs.get('strict'):
+                    # Reproduce an actual filesystem replacement after the
+                    # non-strict candidate comparison, before the strict check.
+                    transcript.unlink();transcript.symlink_to(replacement)
+                result = resolve(path, *args, **kwargs)
+                if path == transcript:observed.append((bool(kwargs.get('strict')),str(result)))
+                return result
+            monkeypatch.setattr(Path, 'resolve', switched)
+            before = await rows(runtime);output = StringIO()
+            with pytest.raises(B1Error, match='FRESH_NATIVE_SESSION_MISMATCH'):
+                await notifications.hook(client, event, ROOT, output=output)
+            assert observed == [(False,candidate['resolved_transcript_path']),
+                                (True,str(resolve(replacement,strict=True)))]
+            assert observed[0][1] != observed[1][1] and transcript.is_symlink()
+            assert candidate_path.read_bytes() == saved
+            assert not (directory / 'session.json').exists()
+            assert not list((directory.parent.parent / 'sessions').iterdir())
+            assert output.getvalue() == '' and await rows(runtime) == before
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('damage', ['outside','relative','path-type','nonce','ended','codex-missing'])
+def test_invalid_or_nonclaude_start_never_creates_deferred_candidate(tmp_path, monkeypatch, damage):
+    async def run():
+        async with live(tmp_path) as (runtime, people, client, _):
+            event = running(client, tmp_path, monkeypatch)
+            directory = layout(client) / 'runs' / os.environ['AGENTSTACK_FRESH_LAUNCH_ID']
+            Path(event['transcript_path']).unlink()
+            if damage == 'outside':event['transcript_path'] = str(tmp_path / 'missing.jsonl')
+            elif damage == 'relative':event['transcript_path'] = 'missing.jsonl'
+            elif damage == 'path-type':event['transcript_path'] = None
+            elif damage == 'nonce':monkeypatch.setenv('AGENTSTACK_FRESH_LAUNCH_NONCE','foreign')
+            elif damage == 'ended':_write_private(directory / 'ended.json', {'launch_id':directory.name,'exit_code':0})
+            else:
+                path = directory / 'intent.json';intent = json.loads(path.read_text());intent['provider'] = 'codex'
+                path.write_text(canonical(intent))
+                event['transcript_path'] = str(client.path.parent / 'providers/codex/missing.jsonl')
+            before = await rows(runtime)
+            with pytest.raises((B1Error, TypeError, FileNotFoundError)):
+                await notifications.hook(client, event, ROOT, output=StringIO())
+            assert not (directory / 'session-start.json').exists() and not (directory / 'session.json').exists()
+            assert not list((directory.parent.parent / 'sessions').iterdir()) and await rows(runtime) == before
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('conflict', [False, True])
+def test_partial_receipt_publication_preserves_pending_and_only_exact_retry_can_finish(tmp_path, monkeypatch, conflict):
+    async def run():
+        async with live(tmp_path) as (runtime, people, client, _):
+            await runtime.core.write_message('send', **send_args(runtime, people,
+                auth=people[1]['auth'], recipients=[{'target_name':'Alpha'}]))
+            event, transcript, directory = await deferred_start(client, tmp_path, monkeypatch)
+            transcript.write_text('now available');post = dict(event, hook_event_name='PostToolUse')
+            real_write = fresh_launch._write_private
+            def broken(path, value):
+                if path == directory / 'session.json':raise OSError('synthetic second publication failure')
+                return real_write(path, value)
+            monkeypatch.setattr(fresh_launch, '_write_private', broken)
+            before = await rows(runtime)
+            output = StringIO()
+            with pytest.raises(OSError, match='synthetic second publication failure'):
+                await notifications.hook(client, post, ROOT, output=output)
+            first = layout(client) / 'sessions' / (event['session_id'] + '.json')
+            saved = first.read_bytes()
+            assert output.getvalue() == '' and await rows(runtime) == before
+            assert not (directory / 'session.json').exists()
+            monkeypatch.setattr(fresh_launch, '_write_private', real_write)
+            if conflict:
+                value = json.loads(saved);value['native_session_id'] = str(uuid4());first.write_text(canonical(value))
+                with pytest.raises(B1Error, match='FRESH_NATIVE_SESSION_MISMATCH'):
+                    await notifications.hook(client, post, ROOT, output=output)
+                assert output.getvalue() == '' and await rows(runtime) == before
+                assert not (directory / 'session.json').exists()
+            else:
+                await notifications.hook(client, post, ROOT, output=output)
+                assert 'ORRERY Mail notification:' in output.getvalue() and first.read_bytes() == saved
+                assert (directory / 'session.json').is_file()
+                facts, pairs = await rows(runtime)
+                assert facts[0]['completed_ts'] and pairs[0][2:] == (None,None)
     asyncio.run(run())
 
 
