@@ -64,7 +64,7 @@ def running(client, tmp_path, monkeypatch):
     _write_private(base / 'current.json', {'launch_id':launch_id})
     monkeypatch.setenv('AGENTSTACK_FRESH_LAUNCH_ID', launch_id)
     monkeypatch.setenv('AGENTSTACK_FRESH_LAUNCH_NONCE', nonce)
-    return dict(hook_event_name='SessionStart', session_id=session_id, transcript_path=str(native))
+    return dict(hook_event_name='SessionStart', source='startup', session_id=session_id, transcript_path=str(native))
 
 
 def test_message_and_pending_fact_commit_together_replay_and_signal_are_not_delivery(tmp_path, monkeypatch):
@@ -234,7 +234,7 @@ session=str(uuid.uuid4());transcript=home/(session+'.jsonl')
 early=os.environ['TEST_TRANSCRIPT_FIRST']=='1'
 if early:transcript.write_text('fixture')
 settings=json.loads(pathlib.Path(args[args.index('--settings')+1]).read_text())
-event=dict(hook_event_name='SessionStart',session_id=session,transcript_path=str(transcript))
+event=dict(hook_event_name='SessionStart',source='startup',session_id=session,transcript_path=str(transcript))
 results=[]
 for kind in ('SessionStart','PostToolUse','PostToolUse'):
     event['hook_event_name']=kind
@@ -274,6 +274,110 @@ sys.exit(0 if all(r['rc']==0 for r in results) else 17)
                 names = {row['name'] for row in listing['result']['tools']}
                 for name in ('notification_pending','notification_complete'):
                     assert name not in names and refused(await peer.call(name,{})) == 'TOOL_UNPUBLISHED'
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('source', ['resume','clear','compact','future','',None,False,0,[],{},'STARTUP','missing'])
+def test_nonstartup_start_rechecks_receipt_without_notification_handoff(tmp_path, monkeypatch, source):
+    async def run():
+        async with live(tmp_path) as (runtime, people, client, _):
+            event = running(client, tmp_path, monkeypatch)
+            await fresh_launch.record_session(client, event)
+            if source == 'missing':event.pop('source')
+            else:event['source'] = source
+            await runtime.core.write_message('send', **send_args(runtime, people,
+                auth=people[1]['auth'], recipients=[{'target_name':'Alpha'}]))
+            before = await rows(runtime)
+            receipts = {p:p.read_bytes() for p in layout(client).rglob('*.json')}
+            signals = {p:p.read_bytes() for p in runtime.root.rglob('*.signal')}
+            calls, dispatch = [], client.dispatch
+            async def observed(endpoint, tool, args):
+                if tool in {'notification_pending','notification_complete'}:calls.append(tool)
+                return await dispatch(endpoint, tool, args)
+            client.dispatch = observed
+            output = StringIO();await notifications.hook(client, event, ROOT, output=output)
+            assert output.getvalue() == '' and calls == []
+            assert await rows(runtime) == before
+            assert {p:p.read_bytes() for p in layout(client).rglob('*.json')} == receipts
+            assert {p:p.read_bytes() for p in runtime.root.rglob('*.signal')} == signals
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('source', ['missing',None,False])
+@pytest.mark.parametrize('damage', ['nonce','current','ended','session','owner','outside'])
+def test_nonstartup_source_never_bypasses_receipt_or_owner_gates(tmp_path, monkeypatch, source, damage):
+    async def run():
+        async with live(tmp_path) as (runtime, people, client, _):
+            event = running(client, tmp_path, monkeypatch)
+            await fresh_launch.record_session(client, event)
+            directory = layout(client) / 'runs' / os.environ['AGENTSTACK_FRESH_LAUNCH_ID']
+            receipts = {p:p.read_bytes() for p in (directory/'session.json',
+                layout(client)/'sessions'/(event['session_id']+'.json'))}
+            if source == 'missing':event.pop('source')
+            else:event['source'] = source
+            await runtime.core.write_message('send', **send_args(runtime, people,
+                auth=people[1]['auth'], recipients=[{'target_name':'Alpha'}]))
+            if damage == 'nonce':monkeypatch.setenv('AGENTSTACK_FRESH_LAUNCH_NONCE','foreign')
+            elif damage == 'current':
+                (layout(client)/'current.json').write_text(canonical({'launch_id':str(uuid4())}))
+            elif damage == 'ended':
+                _write_private(directory/'ended.json', {'launch_id':directory.name,'exit_code':0})
+            elif damage == 'session':event['session_id'] = str(uuid4())
+            elif damage == 'owner':
+                await runtime.core.recover(people[0]['agent_id'], expected_generation=people[0]['credential_generation'],
+                    new_token='nonstartup-synthetic-recovery-key')
+            else:
+                outside = tmp_path/'outside.jsonl';outside.write_text('outside family HOME')
+                event['transcript_path'] = str(outside)
+            before = await rows(runtime)
+            signals = {p:p.read_bytes() for p in runtime.root.rglob('*.signal')}
+            calls, dispatch = [], client.dispatch
+            async def observed(endpoint, tool, args):
+                if tool in {'notification_pending','notification_complete'}:calls.append(tool)
+                return await dispatch(endpoint, tool, args)
+            client.dispatch = observed
+            output = StringIO()
+            with pytest.raises(B1Error):await notifications.hook(client, event, ROOT, output=output)
+            assert output.getvalue() == '' and calls == [] and await rows(runtime) == before
+            assert all(p.read_bytes() == value for p,value in receipts.items())
+            assert {p:p.read_bytes() for p in runtime.root.rglob('*.signal')} == signals
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('source', ['resume','missing',None])
+def test_nonstartup_candidate_and_same_receipt_leave_pending_until_regular_post(tmp_path, monkeypatch, source):
+    async def run():
+        async with live(tmp_path) as (runtime, people, client, _):
+            event = running(client, tmp_path, monkeypatch)
+            if source == 'missing':event.pop('source')
+            else:event['source'] = source
+            transcript = Path(event['transcript_path']);transcript.unlink()
+            sent = await runtime.core.write_message('send', **send_args(runtime, people,
+                auth=people[1]['auth'], recipients=[{'target_name':'Alpha'}]))
+            before = await rows(runtime)
+            directory = layout(client)/'runs'/os.environ['AGENTSTACK_FRESH_LAUNCH_ID']
+            output = StringIO();await notifications.hook(client, event, ROOT, output=output)
+            assert output.getvalue() == '' and await rows(runtime) == before
+            candidate = (directory/'session-start.json').read_bytes()
+            assert not (directory/'session.json').exists()
+            transcript.write_text('created only after SessionStart returns')
+            # A regular Post publishes the admitted candidate and may hand off.
+            post = StringIO()
+            await notifications.hook(client, dict(event,hook_event_name='PostToolUse'), ROOT, output=post)
+            assert 'ORRERY Mail notification:' in post.getvalue()
+            receipt = (directory/'session.json').read_bytes()
+            assert (directory/'session-start.json').read_bytes() == candidate
+            second = await runtime.core.write_message('send', **send_args(runtime, people,
+                request_id='after-post', auth=people[1]['auth'], recipients=[{'target_name':'Alpha'}]))
+            before = await rows(runtime)
+            quiet = StringIO();await notifications.hook(client, event, ROOT, output=quiet)
+            assert quiet.getvalue() == '' and await rows(runtime) == before
+            assert (directory/'session.json').read_bytes() == receipt
+            assert (directory/'session-start.json').read_bytes() == candidate
+            facts,pairs = before
+            assert facts[0]['message_id'] == sent['message_id'] and facts[0]['completed_ts']
+            assert facts[1]['message_id'] == second['message_id'] and facts[1]['completed_ts'] is None
+            assert all(read is None and ack is None for _,_,read,ack in pairs)
     asyncio.run(run())
 
 

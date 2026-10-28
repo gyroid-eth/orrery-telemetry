@@ -161,6 +161,12 @@ async def hook(client, payload, wrapper_root, *, output=None):
     elif not await complete_pending_session(client, payload):return
     expected = current_hook(client, payload)
     await verified_owner(client)
+    # A resumed native session can accept hook context without starting a turn.
+    # Keep its notification pending for the normal watcher wake; source is not
+    # owner proof, so even unknown/missing sources pass the receipt gates first.
+    if payload['hook_event_name'] == 'SessionStart':
+        source = payload.get('source')
+        if not isinstance(source, str) or source != 'startup':return
     root = root_path(wrapper_root)
     helpers = runpy.run_path(str(root / 'bin/lib/runtime_delivery.py'))
     with consumer_lock(client) as acquired:

@@ -22,6 +22,7 @@ from uuid import uuid4
 import pytest
 
 from agentstack_mail import fresh_delivery as delivery
+from agentstack_mail import fresh_notifications as notifications
 from agentstack_mail.fresh_client import FreshBoundClient
 from agentstack_mail.fresh_launch import identity, layout
 from agentstack_mail.fresh_runtime import _write_private
@@ -128,6 +129,82 @@ def test_mocked_os_delivery_completes_only_after_submit_and_does_not_set_read_ac
     asyncio.run(run())
 
 
+@pytest.mark.parametrize('admission', ['idle','work','not-ready','busy','disabled'])
+def test_resume_keeps_pending_for_normal_watch_once_admission_and_wake(tmp_path, monkeypatch, admission):
+    async def run():
+        async with live(tmp_path) as (runtime,people,client,_):
+            monkeypatch.delenv('AGENTSTACK_MAIL_DISABLED', raising=False)
+            run_path,_ = await prepared_route(client,tmp_path,monkeypatch)
+            receipt = json.loads((run_path/'session.json').read_text())
+            event = dict(hook_event_name='SessionStart',source='resume',
+                session_id=receipt['native_session_id'],transcript_path=receipt['transcript_path'])
+            screen = '$ ' if admission == 'not-ready' else ('✳ Working…\n❯ ' if admission == 'work' else '❯ ')
+            commands,_,_ = mocked_os(monkeypatch,screen=screen)
+            sent = await runtime.core.write_message('send',**send_args(runtime,people,
+                auth=people[1]['auth'],recipients=[{'target_name':'Alpha'}],subject='resume-to-watcher'))
+            from io import StringIO
+            output = StringIO();before = await rows(runtime)
+            saved = (run_path/'session.json').read_bytes()
+            await notifications.hook(client,event,ROOT,output=output)
+            assert output.getvalue() == '' and commands == [] and await rows(runtime) == before
+            assert (run_path/'session.json').read_bytes() == saved
+            if admission == 'busy':
+                with notifications.consumer_lock(client) as acquired:
+                    assert acquired
+                    result = await delivery.watch_once(runtime.root/'config.json',ROOT)
+            else:
+                if admission == 'disabled':monkeypatch.setenv('AGENTSTACK_MAIL_DISABLED','1')
+                result = await delivery.watch_once(runtime.root/'config.json',ROOT)
+            aid = people[0]['agent_id']
+            if admission in {'idle','work'}:
+                assert result == dict(ok=True,routes=[dict(status='ok',completed=1,mail_agent_id=aid)])
+                names = [args[0] for args,_ in commands]
+                assert names.index('load-buffer') < names.index('paste-buffer') < names.index('send-keys')
+                assert sum(name == 'send-keys' for name in names) == 1
+                again = await delivery.watch_once(runtime.root/'config.json',ROOT)
+                assert again == dict(ok=True,routes=[dict(status='ok',completed=0,mail_agent_id=aid)])
+                assert sum(args[0] == 'send-keys' for args,_ in commands) == 1
+                facts,pairs = await rows(runtime)
+                assert facts[0]['completed_ts'] and pairs == [(sent['message_id'],aid,None,None)]
+            else:
+                if admission == 'not-ready':
+                    assert result == dict(ok=False,routes=[dict(mail_agent_id=aid,reason='FRESH_TMUX_TARGET_NOT_READY')])
+                else:
+                    assert result == dict(ok=True,routes=[dict(status=admission,completed=0,mail_agent_id=aid)])
+                assert await rows(runtime) == before
+                assert not any(args[0] in {'load-buffer','paste-buffer','send-keys'} for args,_ in commands)
+                assert (runtime.root/'signals/agents'/str(aid)/(str(sent['message_id'])+'.signal')).is_file()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('order', ['post-first','watcher-first'])
+def test_resume_post_and_normal_watcher_share_one_notification_handoff(tmp_path, monkeypatch, order):
+    async def run():
+        async with live(tmp_path) as (runtime,people,client,_):
+            monkeypatch.delenv('AGENTSTACK_MAIL_DISABLED', raising=False)
+            run_path,_ = await prepared_route(client,tmp_path,monkeypatch)
+            receipt = json.loads((run_path/'session.json').read_text())
+            event = dict(hook_event_name='SessionStart',source='resume',
+                session_id=receipt['native_session_id'],transcript_path=receipt['transcript_path'])
+            commands,_,_ = mocked_os(monkeypatch)
+            await runtime.core.write_message('send',**send_args(runtime,people,
+                auth=people[1]['auth'],recipients=[{'target_name':'Alpha'}]))
+            from io import StringIO
+            resumed,post = StringIO(),StringIO()
+            callbacks = [notifications.hook(client,dict(event,hook_event_name='PostToolUse'),ROOT,output=post),
+                delivery.watch_once(runtime.root/'config.json',ROOT)]
+            if order == 'watcher-first':callbacks.reverse()
+            await asyncio.gather(notifications.hook(client,event,ROOT,output=resumed),*callbacks)
+            assert resumed.getvalue() == ''
+            assert int(bool(post.getvalue())) + sum(args[0] == 'send-keys' for args,_ in commands) == 1
+            facts,pairs = await rows(runtime)
+            assert facts[0]['completed_ts'] and pairs[0][2:] == (None,None)
+            again = await delivery.watch_once(runtime.root/'config.json',ROOT)
+            assert again['routes'] == [dict(status='ok',completed=0,mail_agent_id=people[0]['agent_id'])]
+            assert int(bool(post.getvalue())) + sum(args[0] == 'send-keys' for args,_ in commands) == 1
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize('phase',['load-buffer','paste-buffer','send-keys'])
 def test_mocked_os_external_failure_keeps_pending_and_retries_wait_for_existing_policy(tmp_path,monkeypatch,phase):
     async def run():
@@ -219,7 +296,7 @@ provider=os.environ['TEST_PROVIDER'];args=sys.argv[1:]
 home=pathlib.Path(os.environ['CODEX_HOME' if provider=='codex' else 'CLAUDE_CONFIG_DIR'])
 session=str(uuid.uuid4());transcript=home/(session+'.jsonl')
 transcript.write_text(json.dumps(dict(type='session_meta',payload=dict(id=session)))+'\n')
-event=dict(hook_event_name='SessionStart',session_id=session,transcript_path=str(transcript))
+event=dict(hook_event_name='SessionStart',source='startup',session_id=session,transcript_path=str(transcript))
 if provider=='codex':
  plan=json.loads((home/'hook-plan.json').read_text());command=['/bin/bash',str(pathlib.Path(plan['plugin_root'])/'scripts/run-hook.sh')]
 else:
