@@ -30,6 +30,7 @@ import signal
 import shlex
 import shutil
 import sqlite3
+import asyncio
 import stat
 import subprocess
 import sys
@@ -43,11 +44,18 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 33
+API_GENERATION = 34
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
-_MODE_SELECTION = _MODE_API['selected'](bootstrap=__name__ == '__main__')
+FRESH_MODE = os.environ.get('AGENTSTACK_RUNTIME_MODE') == 'fresh'
+if os.environ.get('AGENTSTACK_FRESH_CLIENT_CONTEXT') is not None and not FRESH_MODE:
+    raise ValueError('FRESH_CONTEXT_REQUIRES_EXPLICIT_MODE')
+if FRESH_MODE and (not os.environ.get('AGENTSTACK_FRESH_CLIENT_CONTEXT') or
+                  os.environ.get('AGENTSTACK_CLIENT_CONFIG') or os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG')):
+    raise ValueError('FRESH_CONTEXT_REQUIRED')
+_MODE_SELECTION = ({'mode':'fresh','server_config':None} if FRESH_MODE else
+                   _MODE_API['selected'](bootstrap=__name__ == '__main__'))
 GLOBAL_MODE = _MODE_SELECTION['mode'] == 'global'
 GLOBAL_SERVER_CONFIG = str(_MODE_SELECTION['server_config'] or '')
 if __name__ == '__main__':
@@ -212,7 +220,7 @@ THEME_ASSETS = {
     "/tour_cue.js": (os.path.join(HERE, "tour_cue.js"), "text/javascript; charset=utf-8"),
     "/tour_cue.css": (os.path.join(HERE, "tour_cue.css"), "text/css; charset=utf-8"),
 }
-DB_PATH = "" if GLOBAL_MODE else _resolve_mail_db()
+DB_PATH = "" if GLOBAL_MODE or FRESH_MODE else _resolve_mail_db()
 MAIL_ENV_PATH = _env_path("AGENTSTACK_MAIL_ENV", "~/.agentstack/mail/.env")
 MAIL_HTTP_BEARER_MODE = _env_text(
     "AGENTSTACK_MAIL_HTTP_BEARER_MODE", "auto"
@@ -7259,6 +7267,10 @@ def _agent_name_comparison_key(name: str) -> str:
 
 def _spawn_name_status(name: str) -> str:
     """Return available/occupied/unknown; database failures fail closed."""
+    if FRESH_MODE:
+        from agentstack_mail.storage_origin_contract import name_keys
+        roster = asyncio.run(_fresh_backend().roster())
+        return 'occupied' if any(set(name_keys(name)).intersection(name_keys(a['name'])) for a in roster['agents']) else 'available'
     if not name or not os.path.exists(DB_PATH):
         return "unknown"
     comparison_key = _agent_name_comparison_key(name)
@@ -7405,6 +7417,11 @@ def _spawn_scientist_statuses(
     adjective/scientist combination in Python.  This remains one SQL query even
     when the vocabulary grows beyond SQLite's traditional parameter limit.
     """
+    if FRESH_MODE:
+        from agentstack_mail.storage_origin_contract import name_keys
+        roster = asyncio.run(_fresh_backend().roster())
+        occupied = set().union(*(set(name_keys(a['name'])) for a in roster['agents']))
+        return {s:'available' if any(not occupied.intersection(name_keys(a+'-'+s)) for a in adjectives) else 'occupied' for s in scientists}
     if not adjectives or not scientists or not os.path.exists(DB_PATH):
         return {scientist: "unknown" for scientist in scientists}
     try:
@@ -7460,7 +7477,7 @@ def _spawn_catalog_providers():
     # Share launcher configuration checks and the I5 capability evidence.
     return _standard_catalog_module().standard_catalog(
         os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"),
-        mode="global" if GLOBAL_MODE else "legacy")
+        mode="fresh" if FRESH_MODE else "global" if GLOBAL_MODE else "legacy")
 
 
 
@@ -7492,12 +7509,12 @@ def spawn_names_payload() -> dict:
     # Keep `~` symbolic in the API; do_spawn expands it only at launch time.
     # Unset: the project folder first (the first chip is the default, and only
     # there does the agent get the project's CLAUDE.md), then home.
-    dirs = [value for value in raw_dirs if value] or [d for d in (PROJECT_KEY, "~") if d]
+    dirs = [value for value in raw_dirs if value] or (["~"] if FRESH_MODE else [d for d in (PROJECT_KEY, "~") if d])
     claude_catalog = _claude_catalog()
     claude_models = list(claude_catalog.models)
     claude_default = _claude_default_model(claude_models)
     local_catalog = _standard_catalog_module().discover_catalog(_spawn_catalog_providers(),
-        os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"), mode="global" if GLOBAL_MODE else "legacy")
+        os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"), mode="fresh" if FRESH_MODE else "global" if GLOBAL_MODE else "legacy")
     return {
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": statuses.get(name, "unknown")} for name in scientists],
@@ -8022,6 +8039,12 @@ def _spawn_unavailable_error() -> dict | None:
 
 def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
     """Validate the provider-independent NEW AGENT fields of a payload."""
+    if FRESH_MODE:
+        try:
+            _fresh_backend().validate(payload, _spawn_roots())
+            return dict(payload), None
+        except Exception as exc:
+            return None, _fresh_failure(exc)
     allowed = {
         "parent", "standalone", "task", "role", "group", "worktree",
         "worktree_base", "name", "dir", "provider", "model", "effort",
@@ -8135,6 +8158,12 @@ def do_spawn(payload: dict) -> dict:
     """
     if not isinstance(payload, dict):
         return {"ok": False, "error": "spawn payload must be an object"}
+    if FRESH_MODE:
+        try:
+            _fresh_backend().validate(payload, _spawn_roots())
+            if not payload.get('name'):
+                payload = dict(payload, name=_suggest_any_spawn_name())
+        except Exception as exc:return _fresh_failure(exc)
     if "attempt_id" in payload:
         return {"ok": False, "error": "attempt requests are no longer supported; use standard spawn",
                 "error_code": "unsupported_attempt"}
@@ -8178,7 +8207,7 @@ def do_spawn(payload: dict) -> dict:
         if payload.get(field) is not None and not isinstance(payload[field], str):
             return {"ok": False, "error": f"{field} must be a string"}
     # Metadata is resolved here; launcher arguments only come from our spec.
-    payload = {k: v for k, v in payload.items() if k not in ("harness", "helper_model")}
+    payload = dict(payload) if FRESH_MODE else {k: v for k, v in payload.items() if k not in ("harness", "helper_model")}
     unavailable = _spawn_unavailable_error()
     if unavailable:
         return unavailable
@@ -8277,7 +8306,7 @@ def do_spawn(payload: dict) -> dict:
                 if not isinstance(payload.get('url_key'), str) or not re.fullmatch(r'[0-9a-f]{64}', payload['url_key']):
                     raise ValueError('url_selection_required')
                 _standard_catalog_module().dynamic_selection(os.environ.get('AGENTSTACK_MANAGED_SPAWN_CONFIG'),
-                    mode='global' if GLOBAL_MODE else 'legacy', backend=provider, harness=harness,
+                    mode='fresh' if FRESH_MODE else 'global' if GLOBAL_MODE else 'legacy', backend=provider, harness=harness,
                     model=model, url_index=payload.get('url_index'), url_key=payload['url_key'])
                 selections.append({'id': harness, 'available': True})
             except (ValueError, OSError, TypeError, KeyError):
@@ -8326,6 +8355,9 @@ def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
     """
     if not isinstance(spec, SpawnLaunchSpec):
         raise TypeError("spawn_with_launch_spec requires a SpawnLaunchSpec")
+    if FRESH_MODE:
+        try:return asyncio.run(_fresh_backend().spawn(payload, spec, _spawn_roots()))
+        except Exception as exc:return _fresh_failure(exc)
     handoff = {"transferred": False}
 
     def discard_handoff() -> None:
@@ -9346,7 +9378,98 @@ def is_public_static(path):
     return path == '/' or path in THEME_ASSETS
 
 
+_FRESH_BACKEND = None
+_FRESH_BACKEND_LOCK = threading.Lock()
+
+
+def _fresh_backend():
+    global _FRESH_BACKEND
+    with _FRESH_BACKEND_LOCK:
+        if _FRESH_BACKEND is None:
+            try:from dashboard.fresh_backend import Backend
+            except ModuleNotFoundError:from fresh_backend import Backend
+            _FRESH_BACKEND = Backend(os.environ['AGENTSTACK_FRESH_CLIENT_CONTEXT'], Path(HERE).parent)
+        return _FRESH_BACKEND
+
+
+def _fresh_failure(exc):
+    try:from dashboard.fresh_backend import failure
+    except ModuleNotFoundError:from fresh_backend import failure
+    return failure(exc)
+
+
 class Handler(BaseHTTPRequestHandler):
+    def _fresh_get(self, path):
+        from agentstack_mail.storage_origin_contract import B1Error
+        # Explicit allow-list: no unknown fresh read enters a legacy Mail,
+        # process, credential or project lookup. API2 fills the remaining routes.
+        if path in {'/api/quotas','/api/fs/dirs','/api/mobile-portrait','/api/custom-portraits'} or path.startswith('/api/portrait'):
+            return False
+        if not path.startswith('/api/'):return False
+        query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+        try:
+            if any(len(v)!=1 for v in query.values()):raise ValueError('duplicate_query')
+            try:from dashboard.fresh_readers import ROUTES
+            except ModuleNotFoundError:from fresh_readers import ROUTES
+            if path in {'/api/term','/api/history'}:
+                def read_events(file,provider,limit):
+                    parser=_codex_line_events if provider=='codex' else _claude_line_events
+                    # Reuse the provider parser with an explicit byte window;
+                    # old name-based transcript discovery is never consulted.
+                    with open(file,'rb') as stream:
+                        stream.seek(0,os.SEEK_END);size=stream.tell();start=max(0,size-2*1024*1024)
+                        stream.seek(start);raw=stream.read(2*1024*1024)
+                    lines=raw.splitlines()[1:] if start else raw.splitlines()
+                    events=[event for line in lines for event in parser(line.decode('utf-8',errors='replace'))
+                            if event.get('role') in {'user','assistant'} and event.get('kind')=='text']
+                    return events[-limit:],bool(start or len(events)>limit)
+                payload=asyncio.run(_fresh_backend().target_read(path,{k:v[0] for k,v in query.items()},read_events=read_events))
+            elif path in ROUTES:
+                if path.startswith('/api/mobile-'):
+                    import ipaddress
+                    if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                        self._send(403,b'{"error":"loopback_only"}','application/json; charset=utf-8');return True
+                if set(query)-ROUTES[path]-{'mail_instance_id'}:raise ValueError('invalid_query')
+                payload=asyncio.run(_fresh_backend().read(path,{k:v[0] for k,v in query.items()}))
+            elif path=='/api/version':
+                from agentstack_mail.fresh_runtime import read_config
+                _, config=read_config(Path(_fresh_backend().client.context['root'])/'config.json')
+                try:from dashboard.fresh_backend import CAPABILITIES
+                except ModuleNotFoundError:from fresh_backend import CAPABILITIES
+                payload=dict(name='orrery-telemetry',version=_resolve_version(),api=API_GENERATION,
+                             runtime_mode='fresh',mail_instance_id=config['instance_id'],capabilities=CAPABILITIES)
+            elif path=='/api/agents':
+                if set(query)-{'days','scope'}:raise ValueError('invalid_query')
+                _parse_history_days(query.get('days',[''])[0])
+                payload=asyncio.run(_fresh_backend().roster())
+            elif path=='/api/spawn-names':
+                payload=spawn_names_payload()
+                payload['capabilities']={'worktree':False,'browser':False,'tools':False,'terminal_open':False,'annotations':False}
+            elif path=='/api/name-status':
+                payload=dict(name=query.get('name',[''])[0],status=_spawn_name_status(query.get('name',[''])[0]))
+            elif path=='/api/suggest-name':
+                payload=dict(name=suggest_spawn_name(query.get('scientist',[''])[0]))
+                if not payload['name']:raise ValueError('name_unavailable')
+            elif path=='/api/spawn-status':
+                if set(query)-{'name','mail_instance_id','mail_agent_id'}:raise ValueError('invalid_query')
+                ref=None
+                if 'mail_instance_id' in query or 'mail_agent_id' in query:
+                    ref=dict(mail_instance_id=query['mail_instance_id'][0],mail_agent_id=int(query['mail_agent_id'][0]))
+                payload=asyncio.run(_fresh_backend().spawn_status(query.get('name',[None])[0],ref))
+            else:
+                self._send(501,b'{"status":"unavailable","error":"fresh_route_not_connected"}', 'application/json; charset=utf-8')
+                return True
+            self._send(200,json.dumps(payload,ensure_ascii=False).encode(),'application/json; charset=utf-8')
+        except B1Error as exc:
+            self._send(409,json.dumps(_fresh_failure(exc)).encode(),'application/json; charset=utf-8')
+        except LookupError:
+            self._send(404 if path=='/api/mail/message' else 410,b'{"error":"mail_event_or_cursor_expired"}','application/json; charset=utf-8')
+        except ValueError:
+            self._send(400,b'{"error":"invalid_mail_query"}','application/json; charset=utf-8')
+        except Exception as exc:
+            self._send(409,json.dumps(_fresh_failure(exc)).encode(),'application/json; charset=utf-8')
+        return True
+
     def parse_request(self):
         self._legacy_origins = frozenset()
         if not super().parse_request():
@@ -9495,6 +9618,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if FRESH_MODE and self._fresh_get(path):return
         if path in {"/api/mobile-mail","/api/mobile-portrait","/api/mobile-message","/api/mobile-mail-page","/api/mobile-cache-page"} and GLOBAL_MODE:
             self._send(501, b'{"status":"unavailable","error":"mobile_global_unsupported"}', "application/json; charset=utf-8")
             return
@@ -9842,6 +9966,13 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
         try:
+            if FRESH_MODE:
+                lengths=self.headers.get_all('Content-Length',[])
+                if (len(lengths)!=1 or not lengths[0].isascii() or not lengths[0].isdigit()
+                        or not 0<int(lengths[0])<=131072 or self.headers.get('Transfer-Encoding')):
+                    self.close_connection=True
+                    self._send(400,b'{"ok":false,"error":"invalid_body_length"}','application/json; charset=utf-8')
+                    return
             n = int(self.headers.get("Content-Length", 0) or 0)
         except ValueError:
             self._send(
@@ -9868,6 +9999,16 @@ class Handler(BaseHTTPRequestHandler):
                             "error": "JSON body must be an object"}).encode(),
                 "application/json; charset=utf-8",
             )
+            return
+        if FRESH_MODE:
+            if path=='/api/spawn':result=do_spawn(body)
+            elif path in {'/api/jump','/api/exit','/api/kill'}:
+                try:
+                    result=asyncio.run(_fresh_backend().target_action(path,body,opener=_open_terminal_tmux,
+                        open_default=_resume_opens_terminal()))
+                except Exception as exc:result=_fresh_failure(exc)
+            else:result={'ok':False,'error':'fresh_route_not_connected'}
+            self._send(200 if result.get('ok') else 409,json.dumps(result).encode(),'application/json; charset=utf-8')
             return
         session = body.get("session", "")
         if path == "/api/jump":
@@ -10137,14 +10278,34 @@ def _log_js_error(body: dict) -> dict:
 
 
 def main():
-    if GLOBAL_MODE:
+    if GLOBAL_MODE or FRESH_MODE:
         # Isolation-only global backend starts no legacy maintenance, providers
         # or child processes. Request failures never fall back.
+        if FRESH_MODE:
+            legacy_http_admission.configured_origins(os.environ.get(legacy_http_admission.SETTING, ""))
+            asyncio.run(_fresh_backend().roster())
         srv = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
-        print(f'agent-dashboard global backend on http://{BIND_HOST}:{PORT}/',flush=True)
-        try:srv.serve_forever()
+        host = None
+        previous_term = None
+        try:
+            if FRESH_MODE:
+                try:from dashboard.fresh_host import Host
+                except ModuleNotFoundError as exc:
+                    if exc.name != 'dashboard':raise
+                    from fresh_host import Host
+                host = Host(_fresh_backend())
+                host.start()
+                previous_term = signal.getsignal(signal.SIGTERM)
+                def stop_fresh(_signum, _frame):
+                    raise KeyboardInterrupt
+                signal.signal(signal.SIGTERM, stop_fresh)
+            print(f'agent-dashboard {_MODE_SELECTION["mode"]} backend on http://{BIND_HOST}:{PORT}/',flush=True)
+            srv.serve_forever()
         except KeyboardInterrupt:pass
-        finally:srv.server_close()
+        finally:
+            if previous_term is not None:signal.signal(signal.SIGTERM, previous_term)
+            srv.server_close()
+            if host is not None:host.close()
         return
     legacy_http_admission.configured_origins(os.environ.get(legacy_http_admission.SETTING, ""))
     _start_supervisor_watchdog()

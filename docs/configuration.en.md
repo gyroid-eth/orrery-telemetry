@@ -14,6 +14,37 @@ Its file mode is `0600`. Service environment is written into the launchd plist /
 
 On macOS, `~/.agentstack/dashboard/agentctl.sh restart` also renders the selected mode/config into the dashboard plist and reinstalls the job through the same path as `start`, even when settings are unchanged. The supervised-background restart procedure is unchanged.
 
+## Explicit fresh settings (cutover preparation)
+
+This is separate from legacy DB/project settings. Follow the [fresh guide](fresh-global-update.en.md) for ordering and human steps. Keep the default mode and never invent values to enable it.
+
+| Setting | Explicit fresh use |
+|---|---|
+| `AGENTSTACK_RUNTIME_MODE=fresh` | Pin only the launched process to fresh |
+| `AGENTSTACK_FRESH_CLIENT_CONTEXT` | Exact protected context returned by prepare; do not combine with old `AGENTSTACK_CLIENT_CONFIG`/`AGENTSTACK_GLOBAL_SERVER_CONFIG` |
+| `AGENTSTACK_HOME` / `AGENTSTACK_PYTHON` | Matching installation and approved interpreter able to use its Mail module |
+| `AGENTSTACK_FRESH_DASHBOARD_SOCKET` | Prepared and verified private tmux socket for dashboard automatic children |
+| `AGENTSTACK_SPAWN_ROOTS` / `AGENTSTACK_SPAWN_DIRS` | Allowed work folders; use existing explicit managed-manifest/provider-binary settings |
+
+Cockpit uses the same host/UID/context, a health-derived `ORRERY_FRESH_MAIL_INSTANCE_ID` and fixed `ORRERY_DASHBOARD_URL`. The dashboard's private host IPC must be ready first; no new daemon is created. With prepared context/socket references explicitly selected, the installer saves the same config/I and paths to env.sh, the manifest and dashboard services, preserving that selection on ordinary updates. The watcher removes the client-context key and uses the same config. Mail runs the fresh CLI through the existing owned runner/lock. This does not create a root, register owners, migrate credentials or approve hook trust. The selected Python must already provide the matching Mail module. Default keep requires both ownership and health; explicitly updating fresh Mail requires a normal owned stop before rerunning --update-mail. Real-environment normal-startup acceptance is separate. Use the [shutdown/recovery steps](fresh-global-update.en.md#8-recover-by-procedure-after-a-failure) for restarts and DB recovery.
+
+### Save prepared fresh references for normal startup
+
+Use the same Python/installation/context/socket already verified in the [fresh guide](fresh-global-update.en.md). Read the dry run from the source checkout; after the attended installation decision, remove only `--dry-run` from the same arguments. This does not register owners, migrate credentials or approve trust. Ordinary updates retain the saved selection. Stop/restart Mail and dashboard through `agentstack-mailctl`/`dashboard/agentctl.sh` in the same installation. Explicitly updating running fresh Mail requires its normal owned stop first.
+
+```sh
+orrery_source='/absolute/path/to/orrery-telemetry-source'
+orrery_python='/absolute/path/to/approved/python-with-matching-mail'
+orrery_install='/absolute/path/to/matching/orrery-install'
+orrery_context='/absolute/path/to/prepared/context.json'
+orrery_socket='/absolute/path/to/verified-private-tmux.sock'
+env AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_CLIENT_CONFIG= AGENTSTACK_GLOBAL_SERVER_CONFIG= \
+  AGENTSTACK_HOME="$orrery_install" AGENTSTACK_PYTHON="$orrery_python" \
+  AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_FRESH_DASHBOARD_SOCKET="$orrery_socket" \
+  "$orrery_source/scripts/install.sh" --dry-run
+```
+
 ## Dashboard / `server.py`
 
 `server.py` directly reads the following `AGENTSTACK_*` values.

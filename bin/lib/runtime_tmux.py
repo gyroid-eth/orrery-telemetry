@@ -12,6 +12,7 @@ import re
 import runpy
 import shutil
 import shlex
+import socket
 import stat
 import subprocess
 import time
@@ -52,6 +53,62 @@ REASONS = SPEC['reasons']
 
 class TargetError(RuntimeError):
     pass
+
+
+def fresh_host_path(context):
+    """Derive a short same-user endpoint; the context remains on the host."""
+    path = Path(context)
+    if not path.is_absolute() or path.name != 'context.json' or path.resolve() != path:
+        raise TargetError('FRESH_CONTEXT_REQUIRED')
+    base = Path('/tmp').resolve(strict=True)
+    name = hashlib.sha256(os.fsencode(path)).hexdigest()[:24]
+    return base / ('orrery-target-%s-%s' % (os.getuid(), name)) / 'host.sock'
+
+
+def fresh_host_identity(path):
+    path = Path(path)
+    parent = path.parent.lstat()
+    info = path.lstat()
+    if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.getuid() or parent.st_mode & 0o077
+            or not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077):
+        raise TargetError('FRESH_HOST_UNSAFE')
+    return (parent.st_dev, parent.st_ino, info.st_dev, info.st_ino)
+
+
+def fresh_host_call(path, payload, *, expected_socket=None):
+    raw = json.dumps(payload, separators=(',', ':'), allow_nan=False).encode() + b'\n'
+    if len(raw) > 16384:
+        raise TargetError('FRESH_TARGET_QUERY_INVALID')
+    try:
+        identity = fresh_host_identity(path)
+        if expected_socket is not None and identity != expected_socket:
+            raise TargetError('FRESH_HOST_CHANGED')
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(7)
+            conn.connect(os.fspath(path))
+            if fresh_host_identity(path) != identity:
+                raise TargetError('FRESH_HOST_CHANGED')
+            conn.sendall(raw)
+            chunks = bytearray()
+            while len(chunks) <= 262144 and b'\n' not in chunks:
+                chunk = conn.recv(min(8192, 262145-len(chunks)))
+                if not chunk:
+                    break
+                chunks.extend(chunk)
+            if len(chunks) > 262144 or not chunks.endswith(b'\n'):
+                raise TargetError('FRESH_HOST_RESPONSE_INVALID')
+            def unique(pairs):
+                value = {}
+                for key, item in pairs:
+                    if key in value:raise ValueError('duplicate key')
+                    value[key] = item
+                return value
+            value = json.loads(chunks, object_pairs_hook=unique)
+            if not isinstance(value, dict) or fresh_host_identity(path) != identity:
+                raise TargetError('FRESH_HOST_RESPONSE_INVALID')
+            return identity, value
+    except (OSError, ValueError, TypeError) as exc:
+        raise TargetError('FRESH_HOST_UNAVAILABLE') from exc
 
 
 def result_schema(name):
@@ -178,6 +235,9 @@ class Transport:
         if timeout <= 0:
             raise TargetError('TMUX_TARGET_UNAVAILABLE')
         env = {k: v for k, v in os.environ.items() if k not in ('TMUX', 'TMUX_PANE')}
+        # Only the tmux client needs UTF-8; C clients sanitize TAB in formats.
+        env.pop('LC_ALL', None)
+        env['LC_CTYPE'] = 'C.UTF-8'
         try:
             result = self.run([*self.argv, *args], capture_output=True, text=True,
                               timeout=timeout, env=env, **({'input':input} if input is not None else {}))
@@ -233,12 +293,13 @@ def legacy_transport(*, run=None, binary=None, environ=None):
     if transport.identity is None:
         # Read-only bootstrap of an actually absent default endpoint.
         return transport
-    result = transport.command('display-message', '-p', '#{socket_path}\t#{pid}')
+    # tmux replaces control characters (including TAB) under a C-locale client.
+    result = transport.command('display-message', '-p', '#{socket_path}|#{pid}')
     if module_api('legacy_consumer')['server_absent'](result):
         # A safe stale socket is an empty server, not an unknown transport.
         # Only inventory reads consume this result; targets still need proof.
         return transport
-    fields = result.stdout.strip().split('\t')
+    fields = result.stdout.strip().rsplit('|', 1)
     if (result.returncode or len(fields) != 2 or not fields[1].isdigit()
             or Path(fields[0]) != path or (server_pid and fields[1] != server_pid)):
         raise TargetError('LEGACY_TMUX_TRANSPORT_UNAVAILABLE')

@@ -27,6 +27,10 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Launchers and identity](launchers.en.md) — agent-start, names, resume, /delegate and /log, and notification flow.
 - [Using Obsidian](obsidian.en.md) — Store logs, paper notes, and tasks in a vault and Daily Note.
 
+## Candidate switch to empty Mail
+
+- [Fresh migration, shutdown and recovery](fresh-global-update.en.md) — Explicit steps for a new empty instance. Private startup/shutdown from saved settings is covered. Ordinary updates do not switch it; real OS managers/Finder GUI, real providers/trust/installation, final CI and an attended cutover remain unaccepted. Reactivation and App foregrounding are outside this cutover scope.
+
 ## Install and update
 
 - [Update](install.en.md#upgrade) — Update while keeping existing settings.

@@ -5,6 +5,9 @@ window.AGENTSTACK_DSH_ENABLED=true;
 window.AGENTSTACK_DEMO={assetURL:n=>'/assets/'+n+'.svg',portraitURL:n=>'/view/portrait?window='+desiredWindow+'&name='+n};
 const $=s=>document.querySelector(s),node=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e;};
 let snapshot=null,kind='all',agentFilter='',desiredWindow='day',timer=0,active=null,pending=false,receivedAt=0,lastNotices=[];
+const mailRef=a=>a&&/^[a-f0-9]{32}$/.test(a.mail_instance_id)&&Number.isSafeInteger(a.mail_agent_id)&&a.mail_agent_id>0?{mail_instance_id:a.mail_instance_id,mail_agent_id:a.mail_agent_id}:null;
+function markRef(element,value){const ref=mailRef(value);if(ref){element.dataset.mailInstanceId=ref.mail_instance_id;element.dataset.mailAgentId=String(ref.mail_agent_id);}}
+window.OrreryMobileIdentity={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?mailRef(rows[0]):null;}};
 let mailPage=null,mailPositions=[null],mailPosition=0,mailController=null,mailGeneration=0;
 let pair=null,pairController=null,pairGeneration=0,detailController=null,detailGeneration=0;
 const minutesAt=position=>Math.max(15,Math.min(43200,Math.round(Math.exp(Math.log(15)+position/1000*Math.log(43200/15))/15)*15));
@@ -42,7 +45,7 @@ function renderActivity(){
   if(e.type==='mail'){
    article.appendChild(mailButton(e,mailPage?.window||snapshot.window));
   }else{
-   const row=node('div','status-line'+(e.to==='ask'||e.to==='question'?' review':''));const who=snapshot.agents.find(a=>a.name===e.name)||{name:e.name};row.appendChild(face(who));const copy=node('div');copy.append(node('div','name',e.name),node('p','',messages[e.to]||'Status changed'));row.appendChild(copy);article.appendChild(row);
+   const row=node('div','status-line'+(e.to==='ask'||e.to==='question'?' review':''));markRef(row,e);const who=snapshot.agents.find(a=>a.name===e.name)||{name:e.name};row.appendChild(face(who));const copy=node('div');copy.append(node('div','name',e.name),node('p','',messages[e.to]||'Status changed'));row.appendChild(copy);article.appendChild(row);
   }
   container.appendChild(article);
  }
@@ -108,6 +111,7 @@ function render(data){
  const needs=data.agents.filter(a=>['ask','question'].includes(a.act_state)||a.state==='unknown');
  for(const a of needs.slice(0,3)){
   const row=node('button','attention-row '+(['ask','question'].includes(a.act_state)?'review':'unknown'));row.type='button';
+  markRef(row,a);
   row.appendChild(face(a));const copy=node('span','copy');copy.append(node('span','name',a.name),node('span','reason',a.act_state==='ask'?'Awaiting review':a.act_state==='question'?'Needs an answer':a.last_active?'Unknown · last active '+time(a.last_active):'Observation unavailable'));row.append(copy,node('span','alert-dot'),node('span','chevron','›'));
   row.onclick=()=>{agentFilter=a.name;kind='all';syncFilters();showView('activity');renderActivity();$('#activity').scrollIntoView({block:'start'});};attention.appendChild(row);
  }
@@ -403,6 +407,11 @@ poll();
 const q=s=>document.querySelector(s),make=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!==undefined)e.textContent=txt;return e;};
 const sheet=q('#terminal-sheet'),contract='orrery-mobile-pane-v1';
 let capability=null,enabled=false,phase='loading',name='',choices=[],choice=null,target=null,text='',output='',preview=null,previewOK=false,message='';
+let selector=null;
+const fresh=()=>capability?.api===34;
+const ref=value=>value&&/^[a-f0-9]{32}$/.test(value.mail_instance_id)&&Number.isSafeInteger(value.mail_agent_id)&&value.mail_agent_id>0?{mail_instance_id:value.mail_instance_id,mail_agent_id:value.mail_agent_id}:null;
+const rowRef=row=>ref({mail_instance_id:row.dataset.mailInstanceId,mail_agent_id:Number(row.dataset.mailAgentId)});
+const sameTarget=value=>!fresh()||!!ref(value)&&!!selector&&value.mail_instance_id===selector.mail_instance_id&&value.mail_agent_id===selector.mail_agent_id;
 let generation=0,previewController=null,operationController=null,pollTimer=0,expiryTimer=0,failures=0,prepared=null,receipt=null,previousFocus=null;
 const action=(label,cls,fn)=>{const b=make('button','terminal-button '+cls,label);b.type='button';b.onclick=fn;return b;};
 async function request(operation,payload,controller,timeout=3000){
@@ -425,38 +434,41 @@ function cancelIntent(){
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
 function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;generation++;}
-function clear(){stop();cancelIntent();name='';choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
+function clear(){stop();cancelIntent();name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
 function close(){const restore=previousFocus;previousFocus=null;clear();if(sheet.open)sheet.close();if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});}
-function entry(n,cls=''){
+function entry(n,cls='',identity=null){
  const b=make('button','terminal-entry '+cls,'Terminal');b.type='button';b.dataset.terminalName=n;
  b.setAttribute('aria-label','Open Terminal for '+n);b.disabled=!enabled;b.title=enabled?'View this agent’s selectable cockpit panes':'Terminal is off. Designated-phone policy acceptance and explicit opt-in are required.';
- b.onclick=()=>open(n);return b;
+ b.onclick=()=>open(n,identity);return b;
 }
 const graphEntry=entry('','terminal-graph-entry');graphEntry.id='terminal-graph-entry';q('.selected-agent').after(graphEntry);
 function entries(){
- const selected=q('#selected-name').textContent;graphEntry.replaceChildren(make('span','',selected==='None'?'Select an agent':selected),make('strong','','Terminal ⌁'));graphEntry.disabled=!enabled||selected==='None';graphEntry.onclick=()=>open(selected);
- q('#attention').querySelectorAll(':scope > .attention-row').forEach(row=>{const n=row.querySelector('.name')?.textContent;if(!n)return;const wrap=make('div','terminal-attention');row.replaceWith(wrap);wrap.append(row,entry(n));});
- q('#events').querySelectorAll('.status-line').forEach(row=>{const n=row.querySelector('.name')?.textContent;if(n&&!row.querySelector('.terminal-entry'))row.append(entry(n));});
+ const selected=q('#selected-name').textContent;graphEntry.replaceChildren(make('span','',selected==='None'?'Select an agent':selected),make('strong','','Terminal ⌁'));graphEntry.disabled=!enabled||selected==='None';graphEntry.onclick=()=>open(selected,window.OrreryMobileIdentity?.forName(selected));
+ q('#attention').querySelectorAll(':scope > .attention-row').forEach(row=>{const n=row.querySelector('.name')?.textContent;if(!n)return;const wrap=make('div','terminal-attention');row.replaceWith(wrap);wrap.append(row,entry(n,'',rowRef(row)));});
+ q('#events').querySelectorAll('.status-line').forEach(row=>{const n=row.querySelector('.name')?.textContent;if(n&&!row.querySelector('.terminal-entry'))row.append(entry(n,'',rowRef(row)));});
  document.querySelectorAll('.terminal-entry:not(#terminal-graph-entry)').forEach(b=>b.disabled=!enabled);
 }
 new MutationObserver(entries).observe(q('#selected-name'),{childList:true,subtree:true});
 new MutationObserver(entries).observe(q('#attention'),{childList:true});new MutationObserver(entries).observe(q('#events'),{childList:true});
 function mail(event){
  q('.terminal-mail-people')?.remove();const people=make('div','terminal-mail-people');
- for(const [label,n]of[['From',event.source],['To',event.target]]){const row=make('div','terminal-mail-person');row.append(make('span','',label+' '+n),entry(n));people.append(row);}
+ for(const [label,n,id]of[['From',event.source,event.source_agent_id],['To',event.target,event.target_agent_id]]){const row=make('div','terminal-mail-person');row.append(make('span','',label+' '+n),entry(n,'',ref({mail_instance_id:event.mail_instance_id,mail_agent_id:id})));people.append(row);}
  q('#message-route').after(people);
 }
-async function open(n){
- if(!enabled||document.hidden)return;previousFocus=sheet.open?previousFocus:document.activeElement;clear();name=n;window.scrollTo({top:0,behavior:'instant'});
- if(!sheet.open)sheet.showModal();render();await list();
+async function open(n,identity=null){
+ if(!enabled||document.hidden)return;previousFocus=sheet.open?previousFocus:document.activeElement;clear();name=n;selector=ref(identity);window.scrollTo({top:0,behavior:'instant'});
+ if(!sheet.open)sheet.showModal();
+ if(fresh()&&!selector){phase='unavailable';message='A unique Mail identity is required. Refresh the agent list or open a Mail participant.';render();return;}
+ render();await list();
 }
 async function list(){
  stop();cancelIntent();choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;phase='loading';message='';render();
  const g=generation,controller=new AbortController();operationController=controller;
  try{
-  const data=await request('targets',{epoch:capability.epoch,name},controller);
+  if(fresh()&&!selector)throw Error('unavailable');
+  const data=await request('targets',{epoch:capability.epoch,name,...(fresh()?selector:{})},controller);
   if(g!==generation||document.hidden||!sheet.open)return;
-  if(!Array.isArray(data.targets)||data.targets.length>128||data.targets.some(t=>t.name!==name||typeof t.choice!=='string'||typeof t.pane_label!=='string'))throw Error('unavailable');
+  if(!Array.isArray(data.targets)||data.targets.length>128||data.targets.some(t=>t.name!==name||!sameTarget(t)||typeof t.choice!=='string'||typeof t.pane_label!=='string'))throw Error('unavailable');
   choices=data.targets;message=data.truncated?'Some panes are omitted. Refresh to see available choices.':'';
   if(choices.length===1){choose(choices[0]);return;}
   phase=choices.length?'choose':'unavailable';render();
@@ -480,7 +492,7 @@ async function poll(){
  try{
   const data=await request('preview',{epoch:capability.epoch,choice:c.choice},controller);
   if(g!==generation||previewController!==controller||document.hidden||!sheet.open||choice!==c)return;
-  if(data.target?.choice!==c.choice||data.target?.name!==name||typeof data.target?.revision!=='string'||typeof data.text!=='string'||new TextEncoder().encode(data.text).length>6144)throw Error('unavailable');
+  if(data.target?.choice!==c.choice||data.target?.name!==name||!sameTarget(data.target)||typeof data.target?.revision!=='string'||typeof data.text!=='string'||new TextEncoder().encode(data.text).length>6144)throw Error('unavailable');
   if(target&&data.target.revision!==target.revision){invalidate('Pane changed. Refresh panes and review again.');return;}
   target=Object.freeze({...data.target});preview=data;output=data.text;previewOK=true;failures=0;
   if(!['preparing','review','sending','accepted','unknown'].includes(phase))message='';
@@ -503,7 +515,7 @@ async function reviewInput(){
  try{
   const data=await request('prepare',{epoch:capability.epoch,choice:t.choice,revision:t.revision,text:draft},controller);
   if(g!==generation||!sheet.open||document.hidden)return;
-  if(data.state!=='prepared'||data.text!==draft||data.expires_in!==30||data.target?.revision!==t.revision||data.target?.choice!==t.choice||data.target?.name!==name)throw Error('unavailable');
+  if(data.state!=='prepared'||data.text!==draft||data.expires_in!==30||data.target?.revision!==t.revision||data.target?.choice!==t.choice||data.target?.name!==name||!sameTarget(data.target))throw Error('unavailable');
   prepared=Object.freeze({...data,target:Object.freeze({...data.target})});receipt=null;phase='review';message='';render();
   const identity=prepared;expiryTimer=setTimeout(()=>{if(prepared!==identity)return;cancelIntent();phase='editing';message='Confirmation expired. Review again.';render();},data.expires_in*1000);
  }catch(_){if(g===generation&&sheet.open){prepared=null;phase='editing';message='Could not prepare this input. Refresh the pane and review again.';render();}}
@@ -517,7 +529,7 @@ async function send(){
  try{
   const result=await request('commit',{epoch:p.epoch,intent:p.intent,confirmation:p.confirmation},controller,7000);
   if(g!==generation||!sheet.open||document.hidden)return;
-  if(result.intent!==p.intent||result.target?.revision!==p.target.revision)throw Error('unavailable');
+  if(result.intent!==p.intent||result.target?.revision!==p.target.revision||!sameTarget(result.target))throw Error('unavailable');
   phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';render();
  }catch(_){if(g===generation&&sheet.open){phase='unknown';render();}}
  finally{if(g===generation){operationController=null;if(!document.hidden&&sheet.open)poll();}}
@@ -526,7 +538,7 @@ async function status(){
  if(!receipt||operationController)return;const g=generation,p=receipt,controller=new AbortController();operationController=controller;
  try{const result=await request('status',{epoch:p.epoch,intent:p.intent},controller);
   if(g!==generation||!sheet.open)return;
-  if(result.intent!==p.intent||result.target?.revision!==p.target.revision)throw Error('unavailable');
+  if(result.intent!==p.intent||result.target?.revision!==p.target.revision||!sameTarget(result.target))throw Error('unavailable');
   phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';render();
  }catch(_){if(g===generation&&sheet.open){message='Receipt unavailable. Input was not sent again.';render();}}
  finally{if(g===generation)operationController=null;}
@@ -573,5 +585,5 @@ function render(){
 sheet.addEventListener('cancel',e=>{e.preventDefault();close();});sheet.addEventListener('close',()=>{if(name)close();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)close();});window.addEventListener('pagehide',close);
 window.OrreryMobileTerminal={open,close,mail};entries();
-const controller=new AbortController();request('',null,controller).then(value=>{if(value.api===31&&value.enabled===true&&value.supported==='legacy-managed-pane'&&value.ack==='tmux-command-accepted'){capability=Object.freeze({...value});enabled=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent='Terminal enabled';entries();}}).catch(()=>{});
+const controller=new AbortController();request('',null,controller).then(value=>{if(((value.api===31&&value.supported==='legacy-managed-pane')||(value.api===34&&value.supported==='fresh-managed-pane'))&&value.enabled===true&&value.ack==='tmux-command-accepted'){capability=Object.freeze({...value});enabled=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent='Terminal enabled';entries();}}).catch(()=>{});
 })();

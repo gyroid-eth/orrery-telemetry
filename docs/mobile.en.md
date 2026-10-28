@@ -129,11 +129,11 @@ You can also give this section to your agent. It should stop at your steps and p
 
 | Step | Who | What |
 |---|---|---|
-| 1 | agent | Confirm Telemetry API 31 or later, a matching ORRERY pane-adapter version, and the current backend's launch method and manager |
+| 1 | agent | Confirm Telemetry API 31 or later for legacy, a matching API34 version for fresh, the ORRERY pane adapter, and the current backend's launch method and manager |
 | 2 | **you** | Review access. If you chose device restrictions, check allowed operating devices and refusal from excluded ones. Agree to the temporary disconnection during restart |
 | 3 | agent | Add or update only the JSON field below in the existing `~/.orrery/config.json`, preserving other fields. File mode `0600` is recommended |
 | 4 | agent | Explicitly stop and restart the backend through the identified launch procedure. Reusing a running process does not apply the setting. Do not start a duplicate or use blanket kills; stop and report an unknown manager |
-| 5 | agent | Use the capability check below to confirm `api:31` and `enabled:true`. It captures no pane and sends no input |
+| 5 | agent | Use the capability check below to confirm `api:31` for legacy or `api:34` for fresh, and `enabled:true` after human opt-in. It captures no pane and sends no input |
 | 6 | agent | Add `--enable-terminal --phone-policy-reviewed --cockpit-port 8791` to the reader's existing launch example. Run `--check` with the same flags first, then restart the existing reader through its current manager |
 | 7 | **you** | Open Terminal on your phone or tablet, check the selected pane and display, and review the exact text before every test send |
 
@@ -160,7 +160,7 @@ PY
 
 Do not treat `enabled:false` or an error as successful activation; check the version, settings and process manager. Reader `--check` validates syntax, not policy or device acceptance. Missing opt-ins, incompatible versions, existing target protection or unavailable OS identity checks leave Terminal unavailable.
 
-The header says **Terminal enabled** when available. The selected Graph agent panel, Activity Status rows, attention rows and Mail-detail From/To entries have explicit **Terminal** buttons leading to the same sheet. Existing Graph selection and Mail-detail actions remain. Choose a pane when several exist; an unknown mapping is never guessed from the label. Only panes already handled by the PC manager on the same legacy transport and admitted by its protection are eligible. Agent type and the displayed time period are not authorization. No other socket or global target is used as a fallback. A pane's session may be outside the current metadata project.
+The header says **Terminal enabled** when available. The selected Graph agent panel, Activity Status rows, attention rows and Mail-detail From/To entries have explicit **Terminal** buttons leading to the same sheet. Existing Graph selection and Mail-detail actions remain. Choose a pane when several exist; an unknown mapping is never guessed from the label. In legacy, only panes already handled by the PC manager on the same transport and admitted by its protection are eligible. Agent type and the displayed time period are not authorization. No other socket or global target is used as a fallback. A pane's session may be outside the current metadata project. For fresh, use the explicit I/A procedure below.
 
 The upper area shows the selected pane's last 40 lines, limited to 6 KiB of UTF-8. Only that open, foreground pane updates about every three seconds; failures back off to 6, 12 and at most 24 seconds. Removed control sequences and shortened text are marked. Images, HTML and links never execute. Full recorder/restored history is not forwarded. **Terminal text can contain keys or private writing.** Check it before sharing the screen.
 
@@ -183,3 +183,9 @@ tailscale serve --https=9443 off
 If you used additional flags, [repeat the original flags with off](https://tailscale.com/docs/reference/tailscale-cli/serve). Do not use `serve reset`, which removes unrelated entries. Compare the remaining Serve configuration with the saved output and confirm that only the dedicated entry was removed. If a policy rollback is needed, have the administrator revert only this change. Stopping the reader clears its in-memory snapshot and observed status history; it does not stop Telemetry or Mail.
 
 See the [API contract](api.en.md#mobile-reader-api-30) for authentication, routes and projected fields.
+
+### Explicit fresh use
+
+Follow the [fresh guide](fresh-global-update.en.md) to verify the same host/UID/context and new I. Start the dashboard before the matching Cockpit backend. Ordinary service/Finder startup uses the shared loader for saved fresh references, while real-environment startup/display acceptance remains separate; API34 alone does not authorize production cutover. Human opt-in stays off by default.
+
+Fresh resolves the selected I/A to its current native/socket/pane and uses only the same bridge already managed by the PC manager. It never falls back through a display name, last pane or old project/DB. Choice, preview, confirmation, one send and status retain the same I/A and target. Preview waits at most three seconds and ACK five seconds; timeout/unknown is not automatically resent. The normal 30-second confirmation, 4 KiB body limit and read/ACK separation remain. Real phone/provider/trust and installation acceptance are separate.

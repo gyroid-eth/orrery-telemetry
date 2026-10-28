@@ -14,6 +14,37 @@
 
 macOS の dashboard は `~/.agentstack/dashboard/agentctl.sh restart` でも、起動時に選ばれた mode/config を `start` と同じ処理で plist に描画して job を再設置します。設定に変化が無くても再設置します。supervised-background の再起動手順は従来どおりです。
 
+## 明示freshの設定（切替準備）
+
+以下はlegacyのDB/project設定とは別の入口です。正確な順序と本人の段は[fresh手順](fresh-global-update.md)を使います。既定modeは維持し、値を推測して有効化しません。
+
+| 設定 | 明示freshでの用途 |
+|---|---|
+| `AGENTSTACK_RUNTIME_MODE=fresh` | 起動するprocessだけをfreshへ固定 |
+| `AGENTSTACK_FRESH_CLIENT_CONTEXT` | prepareで返された正確な保護context。旧`AGENTSTACK_CLIENT_CONFIG`/`AGENTSTACK_GLOBAL_SERVER_CONFIG`と併用しない |
+| `AGENTSTACK_HOME` / `AGENTSTACK_PYTHON` | 対応する配布先とMail moduleを使える承認済みinterpreter |
+| `AGENTSTACK_FRESH_DASHBOARD_SOCKET` | dashboardの自動子起動用に準備・確認した私有tmux socket |
+| `AGENTSTACK_SPAWN_ROOTS` / `AGENTSTACK_SPAWN_DIRS` | 許可する作業folder。managed manifest/provider binaryは既存の明示設定を使う |
+
+Cockpitは同host/UID・同contextに加え、health由来の`ORRERY_FRESH_MAIL_INSTANCE_ID`と固定`ORRERY_DASHBOARD_URL`を使います。dashboardのprivate host IPCが先に必要です。新daemonは作りません。準備済みのcontext/socketを明示したinstallerは、同じconfig/Iと参照pathだけをenv.sh・manifest・dashboardサービスへ保存し、通常updateでも選択を保持します。watcherは本人contextのkeyを除去して同configを使います。Mailは既存の所有runner/lockを使うfresh CLIへ接続します。未準備のroot作成・登録・資格移行やhook trustは行いません。指定Pythonには対応Mail moduleが必要です。稼働Mailの既定keepは所有とhealthの両確認が必要で、freshの明示--update-mailは所有Mailを正常停止してから再実行します。通常起動の実環境受入は別段です。再起動・DB復旧は[fresh手順の停止復旧](fresh-global-update.md#8-失敗したら手順で戻す)へ。
+
+### 準備済みfreshを通常起動へ保存する
+
+[fresh手順](fresh-global-update.md)で既に確認した同じPython/配布先/context/socketを使います。source checkoutでdry-runを読み、本人在席の導入判断後に同じ引数から`--dry-run`だけを外します。新規登録・資格移行・trust承認は行いません。保存後の通常再更新は選択を保持し、Mail/dashboardの停止・再開は同じ配布先の`agentstack-mailctl`/`dashboard/agentctl.sh`を使います。稼働fresh Mailの明示更新は、所有Mailを正常停止してから行います。
+
+```sh
+orrery_source='/absolute/path/to/orrery-telemetry-source'
+orrery_python='/absolute/path/to/approved/python-with-matching-mail'
+orrery_install='/absolute/path/to/matching/orrery-install'
+orrery_context='/absolute/path/to/prepared/context.json'
+orrery_socket='/absolute/path/to/verified-private-tmux.sock'
+env AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_CLIENT_CONFIG= AGENTSTACK_GLOBAL_SERVER_CONFIG= \
+  AGENTSTACK_HOME="$orrery_install" AGENTSTACK_PYTHON="$orrery_python" \
+  AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_FRESH_DASHBOARD_SOCKET="$orrery_socket" \
+  "$orrery_source/scripts/install.sh" --dry-run
+```
+
 ## Dashboard / `server.py`
 
 `server.py` が直接参照する `AGENTSTACK_*` は次のとおりです。

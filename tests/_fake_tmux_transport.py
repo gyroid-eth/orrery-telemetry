@@ -44,7 +44,7 @@ if [[ "${1:-}" == new-session ]]; then
   done
 fi
 if [[ "${1:-}" == display-message && "$*" == *'#{socket_path}'* ]]; then
-  printf '%s\\t300\\n' "$FAKE_TMUX_SOCKET"; exit 0
+  printf '%s|300\\n' "$FAKE_TMUX_SOCKET"; exit 0
 fi
 if [[ "$*" == *'#{session_id}'* && "$*" == *'#{pane_pid}'* ]]; then
   name="$(cat "$FAKE_TMUX_SESSION_FILE" 2>/dev/null)"

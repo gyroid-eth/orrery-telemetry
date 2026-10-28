@@ -211,6 +211,8 @@ def generate(document):
     cwd = absolute(document['cwd'], directory=True)
     state = absolute(document['state_dir'], directory=True)
     home = absolute(document['runtime_dir'], directory=True) / 'native/dsh' / name
+    if 'fresh_client_dir' in document:
+        home = absolute(document['fresh_client_dir'], directory=True) / 'providers/dsh'
     # Resume after a changed runtime root is ordinary configuration drift;
     # reject before writing into a different persistent native profile.
     if 'native_profile_env' in document and document['native_profile_env'] != {'DSH_HOME': str(home)}:

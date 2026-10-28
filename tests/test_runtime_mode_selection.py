@@ -314,7 +314,7 @@ def test_rendered_legacy_service_runner_executes_original_argv_without_selector(
     runner=tmp_path/'runner.sh'
     args=[str(runner),'/fixture/service','/fixture/server','/fixture/env','/fixture/state','source',
           '/fixture/venv','http://127.0.0.1:18765/mcp','/fixture/enroll',str(tmp_path/'deployment'),
-          '/must-not-run/runtime_client.py',sys.executable,'legacy']
+          '/must-not-run/runtime_client.py',sys.executable,'legacy','','']
     result=subprocess.run([sys.executable,'-c',program,*args],capture_output=True,text=True)
     assert result.returncode==0,result.stderr
     text=runner.read_text()

@@ -22,6 +22,17 @@ NAME=re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,95}\Z')
 OPERATIONS={'targets':{'epoch','name'},'preview':{'epoch','choice'},'prepare':{'epoch','choice','revision','text'},
             'commit':{'epoch','intent','confirmation'},'cancel':{'epoch','intent'},'status':{'epoch','intent'}}
 
+def request_fields(operation,payload,*,fresh=None):
+    fields=set() if operation=='capability' else OPERATIONS.get(operation)
+    if fields is None or not isinstance(payload,dict):return False
+    fields=set(fields)
+    if operation=='targets' and ('mail_instance_id' in payload or 'mail_agent_id' in payload):
+        if fresh is False:return False
+        fields|={'mail_instance_id','mail_agent_id'}
+        if (not _matches(EPOCH,payload.get('mail_instance_id')) or type(payload.get('mail_agent_id')) is not int
+                or payload['mail_agent_id']<=0):return False
+    return set(payload)==fields
+
 
 class InputUnavailable(ValueError):
     pass
@@ -46,12 +57,14 @@ def _matches(pattern,value):
     return isinstance(value,str) and pattern.fullmatch(value) is not None
 
 
-def _public_target(value,*,proof=True):
-    expected={'name','pane_label','choice'}|({'revision'} if proof else set())
+def _public_target(value,*,proof=True,fresh=False):
+    expected={'name','pane_label','choice'}|({'revision'} if proof else set())|({'mail_instance_id','mail_agent_id'} if fresh else set())
     if (not isinstance(value,dict) or set(value)!=expected or not _matches(NAME,value['name'])
             or not isinstance(value['pane_label'],str) or not 1<=len(value['pane_label'])<=96
             or any(ord(c)<32 or ord(c)==127 for c in value['pane_label'])
             or not _matches(HEX,value['choice']) or proof and not _matches(HEX,value['revision'])):
+        raise InputUnavailable('input_response_invalid')
+    if fresh and (not _matches(EPOCH,value['mail_instance_id']) or type(value['mail_agent_id']) is not int or value['mail_agent_id']<=0):
         raise InputUnavailable('input_response_invalid')
     return dict(value)
 
@@ -60,11 +73,12 @@ class InputClient:
     def __init__(self,port,owner):
         if type(port) is not int or not 1<=port<=65535: raise ValueError('input_port')
         self.port=port; self.owner=owner; self.reader_epoch=secrets.token_hex(16)
+        self.fresh=False
 
     def call(self,operation,payload=None):
         payload={} if payload is None else payload
-        fields=set() if operation=='capability' else OPERATIONS.get(operation)
-        if fields is None or not isinstance(payload,dict) or set(payload)!=fields:
+        fresh=self.fresh
+        if not request_fields(operation,payload,fresh=fresh):
             raise InputUnavailable('input_request_invalid')
         request=dict(payload,contract=CONTRACT,owner=self.owner,reader_epoch=self.reader_epoch)
         try: data=json.dumps(request,separators=(',',':'),ensure_ascii=False,allow_nan=False).encode('utf-8')
@@ -75,21 +89,24 @@ class InputClient:
             raise InputUnavailable('input_capability_incompatible')
         if operation=='capability':
             if (set(value)!={'contract','api','epoch','enabled','supported','ack'} or type(value['api']) is not int
-                    or value['api']!=31 or type(value['enabled']) is not bool
-                    or value['supported']!='legacy-managed-pane' or value['ack']!='tmux-command-accepted'):
+                    or (value['api'],value['supported']) not in {(31,'legacy-managed-pane'),(34,'fresh-managed-pane')}
+                    or type(value['enabled']) is not bool or value['ack']!='tmux-command-accepted'):
                 raise InputUnavailable('input_capability_incompatible')
+            self.fresh=value['api']==34
             return value
         if value['epoch']!=payload['epoch']: raise InputUnavailable('input_epoch_changed')
         if operation=='targets':
             if (set(value)!={'contract','epoch','targets','truncated'} or not isinstance(value['targets'],list)
                     or len(value['targets'])>128 or type(value['truncated']) is not bool):raise InputUnavailable('input_response_invalid')
-            targets=[_public_target(v,proof=False) for v in value['targets']]
+            targets=[_public_target(v,proof=False,fresh=fresh) for v in value['targets']]
             if len({t['choice'] for t in targets})!=len(targets) or any(t['name']!=payload['name'] for t in targets):raise InputUnavailable('input_response_invalid')
+            if 'mail_instance_id' in payload and any(any(t[k]!=payload[k] for k in ('mail_instance_id','mail_agent_id')) for t in targets):
+                raise InputUnavailable('input_response_invalid')
             value['targets']=targets;return value
         if operation=='preview':
             expected={'contract','epoch','target','text','truncated','controls_removed','observed_at','max_lines','max_bytes'}
             if set(value)!=expected:raise InputUnavailable('input_response_invalid')
-            value['target']=_public_target(value['target'])
+            value['target']=_public_target(value['target'],fresh=fresh)
             if (value['target']['choice']!=payload['choice'] or not isinstance(value['text'],str)
                     or len(value['text'].encode('utf-8'))>6144 or len(value['text'].splitlines())>40
                     or type(value['truncated']) is not bool or type(value['controls_removed']) is not bool
@@ -99,7 +116,7 @@ class InputClient:
         expected={'contract','epoch','target','state','intent'}
         if operation=='prepare':expected|={'confirmation','expires_in','text'}
         if set(value)!=expected:raise InputUnavailable('input_response_invalid')
-        value['target']=_public_target(value['target'])
+        value['target']=_public_target(value['target'],fresh=fresh)
         if (not _matches(HEX,value['intent']) or value['state'] not in {'prepared','pending','accepted','refused','unknown','cancelled','expired'}
                 or operation!='prepare' and value['intent']!=payload['intent']):raise InputUnavailable('input_response_invalid')
         if operation=='prepare':

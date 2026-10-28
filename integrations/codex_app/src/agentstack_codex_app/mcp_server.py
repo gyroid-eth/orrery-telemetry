@@ -967,6 +967,14 @@ TOOL_DEFINITIONS = [
 def serve() -> None:
     """Start the allowlisted MCP proxy over stdio."""
 
+    if 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in os.environ or os.environ.get('AGENTSTACK_RUNTIME_MODE')=='fresh':
+        if __package__ in {None, ''}:
+            from agentstack_codex_app.fresh_bridge import selected, proxy
+        else:
+            from .fresh_bridge import selected, proxy
+        selected()
+        proxy()
+        return
     if __package__ in {None, ''}:
         from agentstack_codex_app.global_runtime import selected_client
     else:
