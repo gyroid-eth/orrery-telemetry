@@ -75,6 +75,7 @@ _CLI_CATALOG_CACHE: tuple[tuple[str, int, int], float, tuple[str, ...]] | None =
 def _cli_models(binary: str) -> tuple[str, ...]:
     """Read a bounded, non-secret Gemini model list from the installed CLI."""
     process = None
+    reaped = False
     output = bytearray()
     deadline = time.monotonic() + _CLI_CATALOG_TIMEOUT
     try:
@@ -95,22 +96,31 @@ def _cli_models(binary: str) -> tuple[str, ...]:
                 output.extend(chunk)
                 if len(output) > _CLI_CATALOG_MAX_BYTES:
                     return ()
-        if process.wait(timeout=max(0.01, deadline - time.monotonic())) != 0:
+        code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+        reaped = True
+        if code != 0:
             return ()
         decoded = output.decode("utf-8")
     except (OSError, UnicodeError, ValueError, subprocess.TimeoutExpired):
         return ()
     finally:
         if process is not None:
-            if process.poll() is None:
+            if os.name == "posix" and not reaped:
+                # The wrapper may have exited while a child still holds stdout.
+                # Signal our isolated group before wait/poll can reap its leader.
                 try:
-                    if os.name == "posix":
-                        os.killpg(process.pid, signal.SIGKILL)
-                    else:
-                        process.kill()
+                    os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-            process.wait()
+            elif os.name != "posix" and process.poll() is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                _log.warning("Antigravity model catalog CLI did not exit after cleanup")
             if process.stdout:
                 process.stdout.close()
 

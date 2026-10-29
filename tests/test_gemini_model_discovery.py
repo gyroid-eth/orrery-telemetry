@@ -6,8 +6,11 @@ from http.server import ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import threading
+import time
 from types import SimpleNamespace
 import urllib.error
 import urllib.request
@@ -176,3 +179,55 @@ def test_same_origin_catalog_request_still_works(monkeypatch):
         worker.join(timeout=6)
         http.server_close()
     assert not worker.is_alive()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires a separate POSIX process group")
+@pytest.mark.parametrize("failure", ["timeout", "overflow"])
+def test_aborted_cli_kills_inherited_stdout_child_after_parent_exit(monkeypatch, tmp_path, failure):
+    marker = tmp_path / "owned-processes.txt"
+    child_code = ("import time; time.sleep(3)" if failure == "timeout" else
+                  "import os,time; time.sleep(0.15); os.write(1,b'x'*70000); time.sleep(3)")
+    _fake_cli(monkeypatch, tmp_path, "import os,subprocess,sys\n"
+              f"child = subprocess.Popen([sys.executable,'-c',{child_code!r}], "
+              "stdin=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+              "with open(os.environ['AGY_TEST_OWNED'], 'w') as f:\n"
+              "    f.write(f'{os.getpid()} {os.getpgrp()} {child.pid}')")
+    monkeypatch.setenv("AGY_TEST_OWNED", str(marker))
+    monkeypatch.setattr(gemini, "_CLI_CATALOG_TIMEOUT", 0.35 if failure == "timeout" else 1.5)
+
+    def active(pid):
+        result = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],
+                                capture_output=True, text=True, timeout=2)
+        state = result.stdout.strip()
+        return result.returncode == 0 and bool(state) and not state.startswith("Z")
+
+    try:
+        started = time.monotonic()
+        assert gemini._gemini_models(BASE) == (FALLBACK, "")
+        assert time.monotonic() - started < 2.5
+        parent_pid, group_id, child_pid = map(int, marker.read_text().split())
+        assert parent_pid == group_id != os.getpgrp()
+        assert not active(parent_pid)
+        for _ in range(15):
+            if not active(child_pid):
+                break
+            time.sleep(0.03)
+        assert not active(child_pid), "aborted CLI left an inherited-stdout child running"
+    finally:
+        # A failed regression must not leave a live fixture process behind.
+        if marker.exists():
+            _, group_id, child_pid = map(int, marker.read_text().split())
+            try:
+                if group_id != os.getpgrp() and os.getpgid(child_pid) == group_id:
+                    os.killpg(group_id, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires POSIX process-group handling")
+def test_successful_catalog_read_does_not_signal_process_group(monkeypatch, tmp_path):
+    _fake_cli(monkeypatch, tmp_path, "print('gemini-4-argon-high\\tArgon')")
+    def unexpected_group_signal(*_):
+        pytest.fail("a completed catalog read must not signal a recycled process group")
+    monkeypatch.setattr(gemini.os, "killpg", unexpected_group_signal)
+    assert gemini._gemini_models(BASE) == (FALLBACK + ["gemini-4-argon-high"], "")
