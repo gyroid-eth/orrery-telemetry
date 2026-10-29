@@ -478,11 +478,48 @@ async function list(){
 function choose(value){
  stop();cancelIntent();choice=value;target=null;text='';output='';preview=null;previewOK=false;phase='editing';message='';failures=0;render();poll();
 }
+function terminalFollowing(pre){
+ const width=pre.clientWidth,height=pre.clientHeight,old=pre._scrollView;
+ // Keyboard/rotation reflow is not a reader scrolling away from the tail.
+ const resized=old&&(old.width!==width||old.height!==height);
+ const atBottom=pre.scrollHeight-height-pre.scrollTop<=2;
+ // A resize can clamp a reader onto the new DOM bottom. Keep that pause
+ // through later scroll events/polls until a downward gesture or away/back.
+ const clamped=atBottom&&Boolean(resized?!old.following:old?.clamped);
+ const following=clamped?false:resized?old.following:atBottom;
+ pre._scrollView={width,height,following,clamped};
+ return following;
+}
+function terminalScrollGesture(pre,down){
+ pre._towardBottom=Boolean(down);
+ if(pre._inputFramePending)return;
+ pre._inputFramePending=true;
+ requestAnimationFrame(()=>{
+  pre._inputFramePending=false;
+  const latest=pre._towardBottom;pre._towardBottom=false;
+  // Several inputs can precede one frame. Only their last direction and
+  // the position after native scrolling may release a resize-clamped reader.
+  if(q('#terminal-output')!==pre||!sheet.open||!latest||pre.scrollHeight-pre.clientHeight-pre.scrollTop>2)return;
+  pre._scrollView=null;refreshOutput();
+ });
+}
 function refreshOutput(){
- const pre=q('#terminal-output');if(pre){pre.textContent=output;pre.scrollTop=pre.scrollHeight;}
- const stream=q('.terminal-stream');if(stream)stream.textContent=previewOK?'Updating every 3s':'Preview unavailable';
- const age=q('.terminal-age');if(age)age.textContent=preview?'Observed '+new Date(preview.observed_at*1000).toLocaleTimeString('en-GB'):'';
- const note=q('.terminal-preview-note');if(note)note.textContent=preview?[preview.truncated?'Tail shortened to 6 KiB.':'',preview.controls_removed?'Control sequences removed.':''].filter(Boolean).join(' '):'';
+ const pre=q('#terminal-output');if(pre){
+  // A preview is a moving tail, so keeping scrollTop alone still moves the
+  // words being read. Hold the displayed tail until the reader reaches bottom.
+  const top=pre.scrollTop,atBottom=terminalFollowing(pre);
+  if(atBottom||!previewOK){
+   if(pre.textContent!==output)pre.textContent=output;
+   pre._preview=preview;
+   pre.scrollTop=atBottom?pre.scrollHeight:top;
+   if(!previewOK)pre._scrollView=null;
+  }
+ }
+ const shown=pre?pre._preview:null,reading=pre&&pre._scrollView&&!pre._scrollView.following;
+ const pending=previewOK&&shown&&shown.text!==output;
+ const stream=q('.terminal-stream');if(stream)stream.textContent=previewOK?(pending?'New output · paused':reading?'Reading earlier output':'Updating every 3s'):'Preview unavailable';
+ const age=q('.terminal-age');if(age)age.textContent=shown?'Shown '+new Date(shown.observed_at*1000).toLocaleTimeString('en-GB'):'';
+ const note=q('.terminal-preview-note');if(note)note.textContent=[shown?.truncated?'Tail shortened to 6 KiB.':'',shown?.controls_removed?'Control sequences removed.':'',pending?'Scroll to bottom to show the latest tail. Output between snapshots (40 lines / 6 KiB) may be missing.':''].filter(Boolean).join(' ');
  const review=q('#terminal-review');if(review)review.disabled=phase!=='editing'||!previewOK||!validText(text);
  const status=q('.terminal-message');if(status)status.textContent=message;
 }
@@ -547,9 +584,15 @@ function resizeSheet(){
  if(!sheet.open)return;const v=window.visualViewport,h=v?.height||innerHeight,offset=v?.offsetTop||0;
  sheet.style.height=Math.min(746,h-(h<610?8:86))+'px';sheet.style.maxHeight=Math.max(120,h-8)+'px';
  sheet.style.bottom=Math.max(0,innerHeight-h-offset)+'px';sheet.classList.toggle('terminal-keyboard',h<610);
+ refreshOutput();
 }
 window.visualViewport?.addEventListener('resize',resizeSheet);window.visualViewport?.addEventListener('scroll',resizeSheet);window.addEventListener('resize',resizeSheet);
 function render(){
+ const previous=q('#terminal-output');
+ // Review/edit rebuild the sheet for the same pane. Choosing a pane and
+ // reopening clear output first, so their new preview still opens at its tail.
+ const readTop=previewOK&&previous&&!terminalFollowing(previous)?previous.scrollTop:null;
+ const readOutput=readTop!==null?previous.textContent:'',readPreview=readTop!==null?previous._preview:null,readView=readTop!==null?previous._scrollView:null;
  resizeSheet();sheet.replaceChildren();
  const header=make('div','terminal-header'),title=make('h2','',phase==='review'?'Review input':'Terminal');title.id='terminal-title';header.append(title,action('Close','terminal-close',close));sheet.append(header);
  const who=make('div','terminal-identity'),copy=make('div'),portrait=make('img');portrait.src=window.AGENTSTACK_DEMO.portraitURL(name);portrait.alt='';portrait.onerror=()=>portrait.remove();copy.append(make('strong','',name),make('small','','Cockpit session'));who.append(portrait,copy);
@@ -565,6 +608,30 @@ function render(){
   scroll.append(make('p','terminal-result',phase==='changed'?'Pane changed':'Terminal unavailable'),make('p','terminal-help',message));sheet.append(action('Refresh panes','terminal-button',list));return;
  }
  const terminal=make('div','terminal-preview'),bar=make('div','terminal-preview-head');bar.append(make('span','terminal-stream',''),make('span','','Terminal tail'));const pre=make('pre','terminal-output');pre.id='terminal-output';terminal.append(bar,pre);scroll.append(terminal);
+ pre.addEventListener('scroll',refreshOutput,{passive:true});
+ pre.addEventListener('wheel',event=>{
+  terminalScrollGesture(pre,event.deltaY>0&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey);
+ },{passive:true});
+ let touchPoint=null;
+ pre.addEventListener('touchstart',event=>{
+  const t=event.touches.length===1?event.touches[0]:null;
+  touchPoint=t?{id:t.identifier,x:t.clientX,y:t.clientY}:null;
+  terminalScrollGesture(pre,false);
+ },{passive:true});
+ pre.addEventListener('touchmove',event=>{
+  const t=event.touches.length===1?event.touches[0]:null;
+  if(!t||!touchPoint||t.identifier!==touchPoint.id){touchPoint=null;terminalScrollGesture(pre,false);return;}
+  // Finger moving up scrolls toward the tail; horizontal/pinch/upward
+  // scrolling must not release a view that only reached bottom by clamping.
+  const down=touchPoint.y-t.clientY,across=Math.abs(t.clientX-touchPoint.x);
+  touchPoint={id:t.identifier,x:t.clientX,y:t.clientY};
+  terminalScrollGesture(pre,down>across);
+ },{passive:true});
+ pre.addEventListener('touchend',()=>{touchPoint=null;},{passive:true});
+ pre.addEventListener('touchcancel',()=>{touchPoint=null;terminalScrollGesture(pre,false);},{passive:true});
+ pre.addEventListener('keydown',event=>{
+  terminalScrollGesture(pre,!event.defaultPrevented&&(['ArrowDown','PageDown','End'].includes(event.key)||event.key===' '&&!event.shiftKey));
+ });
  const observed=make('div','terminal-observed');observed.append(make('span','','Latest 40 lines · up to 6 KiB'),make('span','terminal-age',''));scroll.append(observed,make('p','terminal-preview-note',''));
  if(['editing','preparing'].includes(phase)){
   const label=make('label','terminal-compose-label','Your input');label.htmlFor='terminal-text';const field=make('textarea','terminal-text');field.id='terminal-text';field.rows=2;field.value=text;field.placeholder='Write one line…';field.autocomplete='off';field.spellcheck=false;field.disabled=phase==='preparing';
@@ -580,7 +647,9 @@ function render(){
   if(accepted)scroll.append(make('p','terminal-result-note','The pane keeps updating while this sheet is open.'));
   const actions=make('div','terminal-actions');actions.append(action('Close','',close));if(unknown)actions.append(action('Check receipt','terminal-primary',status));else if(phase!=='sending')actions.append(action('Write again','terminal-primary',()=>{cancelIntent();phase='editing';text='';render();}));sheet.append(actions);
  }
- scroll.append(make('p','terminal-message',message));refreshOutput();
+ scroll.append(make('p','terminal-message',message));
+ if(readTop!==null){pre.textContent=readOutput;pre._preview=readPreview;pre._scrollView=readView;pre.scrollTop=readTop;}
+ refreshOutput();
 }
 sheet.addEventListener('cancel',e=>{e.preventDefault();close();});sheet.addEventListener('close',()=>{if(name)close();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)close();});window.addEventListener('pagehide',close);
