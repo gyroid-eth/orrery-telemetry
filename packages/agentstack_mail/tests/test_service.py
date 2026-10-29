@@ -2143,6 +2143,45 @@ def test_render_rejects_symlink_artifact_instead_of_reporting_noop(
         )
 
 
+def test_fresh_foreground_reuses_owned_lock_fd_and_shutdown_without_legacy_archive(tmp_path,monkeypatch):
+    import asyncio
+    from agentstack_mail.fresh_runtime import FreshRuntime
+    async def scenario():
+        runtime=await FreshRuntime.initialize(tmp_path/'prepared',mode='fresh')
+        try:
+            root=runtime.root;config=root/'config.json';env_file=tmp_path/'fresh.env'
+            env_file.write_text('AGENTSTACK_RUNTIME_MODE=fresh\nAGENTSTACK_FRESH_SERVER_CONFIG='+str(config)+
+                '\nORRERY_FRESH_MAIL_INSTANCE_ID='+runtime.config['instance_id']+'\n')
+            calls=[];captured={}
+            class Child:
+                pid=424242;returncode=-15
+                def wait(self,timeout):
+                    signal.getsignal(signal.SIGTERM)(signal.SIGTERM,None)
+                    raise subprocess.TimeoutExpired('owned',timeout)
+            def spawn(argv,**kw):
+                captured.update(argv=argv,kwargs=kw)
+                assert kw['start_new_session'] and len(kw['pass_fds'])==1
+                assert stat.S_ISREG(os.fstat(kw['pass_fds'][0]).st_mode)
+                with (root/'runtime/authority.lock').open('r+') as other:
+                    with pytest.raises(BlockingIOError):fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                return Child()
+            monkeypatch.setattr(service.subprocess,'Popen',spawn)
+            monkeypatch.setattr(service,'_signal_process_group',lambda *a:calls.append(a))
+            monkeypatch.setattr(service,'_terminate_process_group',lambda *a,**kw:calls.append(kw))
+            assert service.foreground(server_executable=Path(sys.executable),env_file=env_file,state_root=root,
+                fresh_config=config,fresh_port=19876)==-15
+            assert captured['argv']==[sys.executable,'-m','agentstack_mail.fresh_cli','serve','--config',str(config),'--port','19876']
+            assert (424242,signal.SIGTERM) in calls and {'term_already_sent':True} in calls
+            assert 'AGENTSTACK_FRESH_CLIENT_CONTEXT' not in captured['kwargs']['env']
+            assert not (root/'archive').exists()
+            with (root/'runtime/authority.lock').open('r+') as other:fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            env_file.write_text(env_file.read_text().replace(runtime.config['instance_id'],'0'*32))
+            with pytest.raises(service.ServiceError,match='FRESH_SERVICE_CONFIG_MISMATCH'):
+                service.foreground(server_executable=Path(sys.executable),env_file=env_file,state_root=root,fresh_config=config,fresh_port=19876)
+        finally:await runtime.close()
+    asyncio.run(scenario())
+
+
 def test_foreground_lock_rejects_second_writer_before_spawn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

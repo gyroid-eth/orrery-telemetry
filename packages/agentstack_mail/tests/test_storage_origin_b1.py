@@ -29,6 +29,30 @@ def auth(n=11):
             'expected_credential_generation': 0}
 
 
+def test_host_retained_target_is_transaction_scoped_without_retired_mail_bypass(state_factory):
+    async def run():
+        async with state_factory() as (core, sessions, engine, root):
+            async with core.owner_transaction(I,auth()) as owner_context:
+                first=await core.host_retire(owner_context,auth(22),22)
+                assert first['changed']
+                assert not (await core.host_retire(owner_context,auth(22),22))['changed']
+                with pytest.raises(B1Error,match='ACTOR_RETIRED'):
+                    core._verify(auth(22),owner_context.records,owner_context.keys)
+                assert core.host_target(owner_context,auth(22),22).id==22
+                for proof,aid in [(auth(22),33),(dict(auth(22),expected_credential_generation=9),22),
+                                  (dict(auth(22),registration_token='wrong-proof'),22)]:
+                    with pytest.raises(B1Error):core.host_target(owner_context,proof,aid)
+                with pytest.raises(B1Error,match='FRESH_OPERATOR_RETIRE_FORBIDDEN'):
+                    await core.host_retire(owner_context,auth(),11)
+            with pytest.raises(B1Error,match='OWNER_CONTEXT_EXPIRED'):
+                core.host_target(owner_context,auth(22),22)
+            async with core.owner_transaction(I,auth()) as current:
+                assert core.host_target(current,auth(22),22).retired_at is not None
+            with pytest.raises(B1Error,match='ACTOR_RETIRED'):
+                async with core.owner_transaction(I,auth(22)):pass
+    asyncio.run(run())
+
+
 @asynccontextmanager
 async def _state(tmp_path):
     engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "candidate.sqlite"}',

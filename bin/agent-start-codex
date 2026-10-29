@@ -23,6 +23,10 @@ AGS_PROG="agent-start-codex"
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/agentstack-launch.sh
 . "$BIN_DIR/lib/agentstack-launch.sh"
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  DIR="$(ags_choose_dir "$@")" || exit 0
+  exec /bin/bash "$BIN_DIR/agentstack-runtime-client" launch codex "$DIR"
+fi
 AGS_RUNTIME_CLIENT="$BIN_DIR/lib/runtime_client.py"
 . "$BIN_DIR/lib/global-client-loader.sh" || exit 2
 ags_load_env "$@"

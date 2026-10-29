@@ -1,5 +1,11 @@
 #!/bin/bash
 
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  _ags_fresh_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  exec "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_client child-spawn \
+    --wrapper-root "$_ags_fresh_root" "$@"
+fi
+
 # Decide explicit global context before loading any legacy environment/state.
 _ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
 . "$_ags_global_loader"
@@ -265,6 +271,8 @@ _open_child_terminal() {
 # after the tmux child was already alive. Detach it from the launcher's critical
 # path; failures remain best-effort diagnostics from the worker above.
 open_child_terminal() {
+    # A target observation refusal must not be followed by an attach attempt.
+    [[ "${CODEX_TARGET_OBSERVATION_UNAVAILABLE:-false}" != true ]] || return 0
     [[ "$AUTO_OPEN_CHILD" == "1" ]] || return 0
     (_open_child_terminal "$1") </dev/null >/dev/null 2>&1 &
     return 0
@@ -1509,11 +1517,30 @@ codex_network_flags() {
     esac
 }
 
-# True while the child's tmux session still exists. A child that died (bad
-# flag, crash, sign-in failure) must fail fast instead of burning the whole
-# readiness timeout.
+# 0 = present, 1 = explicit absence, 2 = observation unavailable. An admitted
+# target read can fail because process evidence is unavailable in the parent's
+# sandbox; that does not mean the child died. Never fall back to raw tmux.
 codex_session_alive() {
-    tmux has-session -t "=$1" 2>/dev/null
+    local reply rc
+    CODEX_SESSION_OBSERVATION_REASON=unknown
+    CODEX_SESSION_OBSERVATION_RC=0
+    if reply="$(tmux has-session -t "=$1" 2>&1)"; then
+        return 0
+    else
+        rc=$?
+    fi
+    CODEX_SESSION_OBSERVATION_RC="$rc"
+    if [[ "$rc" == 1 ]]; then
+        case "$reply" in
+            "can't find session: "*|"no sessions"|"no server running on "*|"error connecting to "*" (No such file or directory)") return 1 ;;
+        esac
+    fi
+    # Persist only a fixed diagnostic code, never arbitrary stderr, screen
+    # contents, task text, socket paths or credentials in the incident log.
+    if [[ "$reply" =~ ^[A-Z][A-Z_]{1,63}$ ]]; then
+        CODEX_SESSION_OBSERVATION_REASON="$reply"
+    fi
+    return 2
 }
 
 # Last N non-blank lines of a pane capture. `capture-pane` pads the output to
@@ -2321,12 +2348,14 @@ codex_task_pinned_on_screen() {
 # 90 s where the binding is not installed (WSL, 2026-09-29). Nothing is typed
 # into the composer and nothing is resent.
 # Returns 0 when the task has started, 1 when the trust screen could not be
-# accepted, 2 when the session died, 3 when the start could not be confirmed
+# accepted, 2 for explicit session absence, 3 when observation or the start
+# could not be confirmed
 # in time (the child is left running; the caller only records a diagnostic).
 codex_watch_initial_task() {
     local session_name="$1" prompt_text="$2" log_prefix="$3" launch_path="$4" launch_id="$5"
     local waited=0 wait_max=90 trust_attempts=0 trust_max=10 pane_text
     local status=unknown bound=false turn_seen=false
+    CODEX_TARGET_OBSERVATION_UNAVAILABLE=false
     # Counted polls and wall-clock time both end the watch: the dialog handlers
     # sleep too, and the dashboard signals a launcher after 120s, whose exit
     # trap would then remove the child this watch means to leave running. So
@@ -2338,18 +2367,9 @@ codex_watch_initial_task() {
     while (( waited < wait_max && SECONDS < deadline )); do
         sleep 3
         waited=$((waited + 3))
-        # A successful admitted capture already proves this exact session is
-        # present. Reuse that read within this poll; a second has-session
-        # would repeat the same socket/PID/root proof without adding an effect.
-        local captured_alive=false
-        if pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null)"; then
-            captured_alive=true
-        fi
-        if [[ "$captured_alive" != true ]] && ! codex_session_alive "$session_name"; then
-            echo "[$log_prefix] Codex session '$session_name' died after ${waited}s; last pane output:" >&2
-            printf '%s\n' "$pane_text" | tail -15 >&2
-            return 2
-        fi
+        # This launch's verified receipt/rollout does not need process or pane
+        # access. Check it before any target observation, including in a parent
+        # sandbox that cannot run ps. A screen is never a substitute receipt.
         status="$(codex_initial_task_status "$session_name" "$prompt_text" "$launch_path" "$launch_id")"
         case "$status" in
             started)
@@ -2361,6 +2381,30 @@ codex_watch_initial_task() {
                 bound=true
                 ;;
         esac
+        # Once target observation is unavailable, never retry it or answer a
+        # trust screen. Only this launch's receipt is checked until deadline.
+        [[ "$CODEX_TARGET_OBSERVATION_UNAVAILABLE" == true ]] && continue
+        # A successful admitted capture proves presence for this poll; do not
+        # repeat the same socket/PID/root proof through has-session.
+        local captured_alive=false capture_rc=0 session_rc=0
+        if pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null)"; then
+            captured_alive=true
+        else
+            capture_rc=$?
+        fi
+        if [[ "$captured_alive" != true ]]; then
+            codex_session_alive "$session_name" || session_rc=$?
+            if [[ "$session_rc" == 1 ]]; then
+                echo "[$log_prefix] Codex session '$session_name' died after ${waited}s (explicit session absence)." >&2
+                return 2
+            fi
+            # A valid has-session observation can outlive a transient capture
+            # failure. Skip pane parsing for this poll, then observe normally.
+            [[ "$session_rc" == 0 ]] && continue
+            CODEX_TARGET_OBSERVATION_UNAVAILABLE=true
+            spawn_note "WARNING: first-task confirmation unknown ($session_name): target observation unavailable; capture_rc=$capture_rc has_session_rc=${CODEX_SESSION_OBSERVATION_RC:-$session_rc} reason=${CODEX_SESSION_OBSERVATION_REASON:-unknown}. The child identity and recovery state are retained; no cleanup, task resend, replacement spawn or alternate transport. Only this launch's history receipt will be checked until the deadline; trust-screen handling and automatic attach are unavailable. Check the existing child's ORRERY Mail report."
+            continue
+        fi
         [[ "$bound" == true ]] && continue
         # A trust screen on the current screen comes first, whatever was seen
         # before: it is answered and the early end starts over.
@@ -2388,6 +2432,10 @@ codex_watch_initial_task() {
             return 3
         fi
     done
+    if [[ "$CODEX_TARGET_OBSERVATION_UNAVAILABLE" == true ]]; then
+        spawn_note "WARNING: first-task confirmation unknown ($session_name) at the startup deadline: target observation was unavailable and no verified task-start receipt arrived; child identity and recovery state retained."
+        return 3
+    fi
     local last_screen
     last_screen="$(printf '%s' "$pane_text" | pane_nonblank_tail 6 | tr '\n' '|')"
     if [[ "$bound" == true ]]; then
@@ -3244,6 +3292,10 @@ if [[ -n "$PRE_REGISTERED" ]]; then
         if [[ "$PRE_REGISTERED_SUCCESS" == true ]]; then
             return
         fi
+        if [[ "${CODEX_TARGET_OBSERVATION_UNAVAILABLE:-false}" == true ]]; then
+            spawn_note "Codex target observation unavailable; cleanup withheld, child identity and recovery state retained"
+            return 1
+        fi
         if [[ -n "${HARNESS:-}" && ( -n "${HARNESS_STATE:-}" || "${PRE_REGISTERED_ADOPTION_PENDING:-false}" == true ) ]]; then
             cleanup_harness_failure || echo "Harness cleanup unconfirmed; recovery state retained" >&2
             return
@@ -3734,6 +3786,9 @@ ${TASK}"
     if [[ "${CLAUDE_START_CHECK:-false}" == true ]]; then
         claude_watch_initial_task "$CHILD_NAME" "$PARENT_NAME" "$CHILD_TOKEN_FILE" "$CHILD_PROMPT"
     fi
+    if [[ "$USE_CODEX" == true && "$INJECTION_VERIFIED" != true ]]; then
+        spawn_note "start_unconfirmed: $CHILD_NAME; registration retained, first-task start and readiness are not confirmed. Await its normal Mail report or verified launch receipt; do not spawn a replacement."
+    fi
     echo "$CHILD_NAME"
     exit 0
 fi
@@ -4112,6 +4167,10 @@ CHILD_SESSION_START_PENDING=false
 cleanup_on_failure() {
     if [[ "$SPAWN_COMPLETED" == true ]]; then
         return
+    fi
+    if [[ "${CODEX_TARGET_OBSERVATION_UNAVAILABLE:-false}" == true ]]; then
+        spawn_note "Codex target observation unavailable; cleanup withheld, child identity and recovery state retained"
+        return 1
     fi
     if [[ -n "${HARNESS:-}" ]]; then
         cleanup_harness_failure || echo "Harness cleanup unconfirmed; recovery state retained" >&2
@@ -4525,6 +4584,9 @@ if [[ "${CLAUDE_START_CHECK:-false}" == true ]]; then
 fi
 
 # --- Complete: stdout contains only child agent name ---
+if [[ "$USE_CODEX" == true && "$INJECTION_VERIFIED" != true ]]; then
+    spawn_note "start_unconfirmed: $CHILD_NAME; registration retained, first-task start and readiness are not confirmed. Await its normal Mail report or verified launch receipt; do not spawn a replacement."
+fi
 echo "$CHILD_NAME"
 echo "[spawn_child] Started '$CHILD_NAME' in tmux session '$CHILD_NAME'" >&2
 echo "[spawn_child] Task: $TASK" >&2

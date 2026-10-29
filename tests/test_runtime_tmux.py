@@ -91,11 +91,51 @@ def test_pane_or_session_replaced_during_proof_scan_is_refused(endpoint, changed
 
 def test_server_pid_must_match_inherited_custom_transport(endpoint):
     def run(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, 0, str(endpoint) + '\t123\n', '')
+        return subprocess.CompletedProcess(argv, 0, str(endpoint) + '|123\n', '')
     with pytest.raises(ERROR, match='^LEGACY_TMUX_TRANSPORT_UNAVAILABLE$'):
         API['legacy_transport'](run=run, binary='/fixture/tmux', environ={'TMUX': str(endpoint) + ',124,0'})
     result = API['legacy_transport'](run=run, binary='/fixture/tmux', environ={'TMUX': str(endpoint) + ',123,0'})
     assert result.public()['server_pid'] == 123
+
+
+@pytest.mark.parametrize('mismatch', [None, 'pid', 'path', 'returncode', 'malformed'])
+def test_c_locale_transport_keeps_exact_socket_and_pid_proof(endpoint, monkeypatch, mismatch):
+    monkeypatch.setenv('LC_ALL', 'C')
+    path = endpoint.with_name('fixture|nested.sock')
+    with socket.socket(socket.AF_UNIX) as stream:
+        stream.bind(str(path));path.chmod(0o600)
+        def run(argv, **kwargs):
+            assert 'LC_ALL' not in kwargs['env'] and kwargs['env']['LC_CTYPE'] == 'C.UTF-8'
+            assert os.environ['LC_ALL'] == 'C'
+            assert argv[1:3] == ['-S', str(path)]
+            value = argv[-1].replace('#{socket_path}', str(path) + ('other' if mismatch == 'path' else ''))
+            value = value.replace('#{pid}', '124' if mismatch == 'pid' else '123')
+            # Native tmux C clients replace a TAB delimiter with an underscore.
+            value = value.replace('\t', '_')
+            if mismatch == 'malformed':value = 'no-server-proof'
+            return subprocess.CompletedProcess(argv, 1 if mismatch == 'returncode' else 0, value + '\n', '')
+        if mismatch:
+            with pytest.raises(ERROR, match='^LEGACY_TMUX_TRANSPORT_UNAVAILABLE$'):
+                API['legacy_transport'](run=run, binary='/fixture/tmux', environ={'TMUX': str(path) + ',123,0'})
+        else:
+            result = API['legacy_transport'](run=run, binary='/fixture/tmux', environ={'TMUX': str(path) + ',123,0'})
+            assert result.path == path and result.public()['server_pid'] == 123
+
+
+def test_tmux_child_utf8_env_keeps_tab_panes_and_parent_locale(endpoint, monkeypatch):
+    monkeypatch.setenv('LC_ALL', 'C');monkeypatch.setenv('LC_CTYPE', 'C')
+    original = dict(os.environ)
+    def run(argv, **kwargs):
+        child = kwargs['env']
+        assert 'LC_ALL' not in child and child['LC_CTYPE'] == 'C.UTF-8'
+        output = argv[-1].replace('#{socket_path}', str(endpoint)).replace('#{pid}', '123')
+        output = output.replace('#{session_id}', '$1').replace('#{session_name}', 'name|with separators')
+        output = output.replace('#{pane_id}', '%4').replace('#{pane_pid}', '400')
+        if child.get('LC_ALL', child.get('LC_CTYPE')) == 'C':output = output.replace('\t', '_')
+        return subprocess.CompletedProcess(argv, 0, output + '\n', '')
+    transport = API['legacy_transport'](run=run, binary='/fixture/tmux', environ={'TMUX': str(endpoint) + ',123,0'})
+    assert API['panes'](transport, pane='%4') == [dict(session_id='$1', session='name|with separators', pane_id='%4', pid=400)]
+    assert dict(os.environ) == original
 
 
 def test_global_endpoint_is_stable_across_epoch_and_deep_home(tmp_path):

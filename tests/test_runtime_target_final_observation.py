@@ -35,8 +35,8 @@ def test_actual_attach_or_create_refreshes_an_initially_absent_endpoint(monkeypa
             command = argv[3]
             if command == 'list-sessions':
                 text = 'Alpha\n'
-            elif '#{socket_path}\t#{pid}' in argv:
-                text = str(path) + '\t123\n'
+            elif '#{socket_path}|#{pid}' in argv:
+                text = str(path) + '|123\n'
             elif '#{pid}' in argv:
                 text = '123\n'
             else:

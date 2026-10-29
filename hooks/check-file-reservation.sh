@@ -1,5 +1,22 @@
 #!/bin/bash
 
+# Explicit isolated fresh caller only. Never discover a context from old name,
+# project or token state, and never fall through after a fresh refusal.
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  if [[ -z "${AGENTSTACK_FRESH_CLIENT_CONTEXT:-}" || -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -n "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}" ]]; then
+    printf '%s\n' FRESH_CONTEXT_CONFLICT >&2
+    exit 2
+  fi
+  case "${AGENTSTACK_RUNTIME_MODE:-legacy}" in
+    legacy|fresh) ;;
+    *) printf '%s\n' FRESH_CONTEXT_CONFLICT >&2; exit 2 ;;
+  esac
+  if "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_guard --context "$AGENTSTACK_FRESH_CLIENT_CONTEXT"; then
+    exit 0
+  fi
+  exit 2
+fi
+
 # Decide explicit global context before loading any legacy environment/state.
 _ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
 . "$_ags_global_loader" || exit 2

@@ -275,6 +275,19 @@ def child_home(document, facts=None):
     """
     facts = validate_input(document) if facts is None else facts
     name, project = document.get('agent_name'), document.get('project_key')
+    fresh = document.get('fresh_client_dir')
+    if fresh is not None:
+        client = Path(fresh)
+        if (not client.is_absolute() or client.resolve(strict=True) != client or not client.is_dir()
+                or not (client / 'context.json').is_file()):raise ValueError('invalid_input')
+        profile = client / 'providers/hermes'
+        if profile.resolve() != profile:raise ValueError('native_resume_profile_changed')
+        pin = document.get('native_profile_env')
+        if document.get('resume_session_id') is not None and pin != {'HERMES_HOME':str(profile)}:
+            raise ValueError('native_resume_profile_changed')
+        if document.get('resume_session_id') is not None and not (profile / 'state.db').is_file():
+            raise ValueError('native_resume_history_missing')
+        return profile
     if (not isinstance(name, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*', name)
             or not isinstance(project, str) or not project.strip()):
         raise ValueError('invalid_input')

@@ -249,6 +249,8 @@ resume bootstrap は retained credential で同じ identity を再登録し、fr
 
 SessionStart recorder は lock 待ち、rollout header 検査、launch transition、receipt write、最終 outcome の所要時間を `$AGENTSTACK_RUNTIME_DIR/codex-session-binding.log` に JSONL で残します。session ID、launch nonce、transcript path、credential は記録しません。`started` の後に `outcome` が無ければ hook が途中で打ち切られたことを区別できます。SessionStart の hook deadline は、cold start や短い lock 待ちで receipt 作成が途切れないよう5秒です。
 
+Codex child の起動確認は、まずその launch の検証済み receipt と rollout を確認します。そこに最初の task の開始が記録されていれば、pane や `ps` の再観測は不要です。sandbox 内の親では Python からの `ps` が拒否され、tmux の所有確認が `TMUX_TARGET_UNAVAILABLE` になる場合があります。capture / has-session の取得失敗、timeout、権限拒否は死亡の証拠にせず、理由 code と rc を残して「起動未確認」とし、同じ子の identity と復旧情報を保持します。観測不能になった後は pane 系の処理を止め、期限までその launch の receipt だけで task 開始を確認します。明示的な session 不在だけを死亡として扱います。起動未確認は task 完了や ready の証明ではありません。期限後も子の生死は不明な場合があり、親は正規 Mail の報告または検証済み receipt を待って判断します。CLI の `start_unconfirmed` はこの区分を示し、終了値 0 は登録処理の完了だけを意味します。既存の子の正規 ORRERY Mail の報告と検証済み receipt を確認し、自動再送・重複 spawn・別 transport・強制 cleanup は行いません。runtime の実モデルは native 表示または対応する正規実行記録で確認し、登録時の model 名だけを実行証拠にしません。
+
 API key が環境にあると OAuth を上書きすることがあるため、Codex subprocess だけから除去します。
 
 ## Mail watcher と REPL 注入

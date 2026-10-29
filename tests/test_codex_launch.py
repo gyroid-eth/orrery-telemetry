@@ -678,19 +678,21 @@ def test_dead_child_fails_fast_instead_of_waiting_out_the_timeout():
     assert text.count("exited before starting its task") == 2
 
 
-def test_required_mcp_initialization_failure_is_a_failed_start():
-    # No native Codex or live tmux: replay a required-server startup failure.
+def test_unproven_mcp_error_is_not_explicit_session_absence():
+    # An error string alone proves neither process death nor task startup.
     script = (
         'sleep() { :; }\n'
         'tmux() { echo "Error: required MCP server chosen failed to initialize"; return 1; }\n'
-        'codex_session_alive() { return 1; }\n'
+        'codex_initial_task_status() { echo unknown; }\n'
+        'spawn_note() { printf "%s\\n" "$*"; }\n'
+        + _extract("codex_session_alive") + "\n"
         + _extract("codex_watch_initial_task")
         + '\nSECONDS=0; codex_watch_initial_task Child task test /l id\n'
     )
     result = _run_bash(script)
-    assert result.returncode == 2
-    assert "died after 3s" in result.stderr
-    assert "required MCP server chosen failed to initialize" in result.stderr
+    assert result.returncode == 3
+    assert "died" not in result.stderr
+    assert "confirmation unknown" in result.stdout
 
 
 def test_trust_dialog_uses_carriage_return_and_has_a_hard_attempt_limit():

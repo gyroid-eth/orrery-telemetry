@@ -271,6 +271,7 @@ def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
     # history-binding receipt exists here, so its start is reported as unknown.
     assert "ARGV_TASK" in injected
     assert "first-task confirmation unknown" in result.stderr.lower()
+    assert "start_unconfirmed:" in result.stderr
     assert "\034load-buffer" not in injected and "\034paste-buffer" not in injected
     assert "shell/files and authenticated ORRERY Mail remain available" in injected
     assert "Other inherited MCP servers and plugins are disabled" in injected
@@ -628,7 +629,7 @@ def test_late_launcher_exit_skips_the_new_attempt_session_registry_and_worktree(
 
 @pytest.mark.parametrize('capture_ok,alive,expected,captures,has_calls',[
     (True,False,3,2,0),
-    (False,False,2,1,1),
+    (False,False,3,1,1),
 ])
 def test_initial_watch_reuses_successful_capture_but_rechecks_failure(
     tmp_path,capture_ok,alive,expected,captures,has_calls,

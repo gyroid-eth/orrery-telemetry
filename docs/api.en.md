@@ -18,6 +18,8 @@ http://127.0.0.1:8770
 
 Response bodies are JSON except for images and HTML. The dashboard itself has no login layer. When using `AGENTSTACK_BIND_HOST=0.0.0.0`, limit access to a trusted LAN / VPN.
 
+Fresh terminal host checks use a private Unix socket between the dashboard and Cockpit on the same host and UID, with the same protected client context. Each request rechecks the owner and current target. Credentials and the internal socket path are not sent to the browser. Restart Cockpit after restarting the dashboard; stop the dashboard before replacing or restoring the DB, then restart it.
+
 Legacy mode checks a fixed Host allowlist on every method and path. Before dispatch, it returns HTTP 403 for an untrusted, missing, duplicate or malformed Host, duplicate Origin headers, or an absolute-form request target with a mismatched authority. The defaults allow only `127.0.0.1` / `localhost` / `[::1]` at the actual listening port. Explicitly configure fixed LAN / VPN origins with [`AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS`](configuration.en.md#host-configuration-for-lan--vpn-access). Host checks do not authenticate callers.
 
 Every method and path validates a supplied Origin against the origin corresponding to the admitted Host. `Sec-Fetch-Site: cross-site` is accepted only for navigation. Local CLI, hook and proxy clients may omit Origin. Global mode applies the same provenance check to public static GET/HEAD resources and retains operator capability admission for other routes.
@@ -70,13 +72,77 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":33}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":34}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
 
 - `version`: when the release was made (`YYYY.MM.DD`, or `YYYY.MM.DD.N` for another release on the same date; see the [CHANGELOG](../CHANGELOG.md)). It is not a compatibility promise
 - `api`: the **compatibility generation** for the programs that use this API ([ORRERY cockpit](https://github.com/gyroid-eth/orrery) and others). It goes up by one only when an endpoint or field those programs rely on is **added or changes meaning**, and a [changelog fragment](../changelog.d/) records it (collected into the CHANGELOG at release; see [Contributing](../CONTRIBUTING.md#changelog-fragments-and-releases)); it does not go up with every release. A program should decide whether a feature it needs is there from `api`, not from the date in `version` (the cockpit warns at startup when `api` is lower than it needs). This scheme starts at `api` 2; every earlier release reports 1, whatever it can do
+
+### Explicit fresh dashboard (API 34, API1 / API2a / API2b-1)
+
+This path requires `AGENTSTACK_RUNTIME_MODE=fresh` and the protected `AGENTSTACK_FRESH_CLIENT_CONTEXT`. It leaves old global activation unchanged and never falls back to a legacy DB, project or credential. Existing HTTP admission checks provenance, Host, Origin, Fetch metadata and JSON writes first. Browser JSON cannot select a context, credentials or an arbitrary endpoint.
+
+| URL | Fresh contract |
+|---|---|
+| `GET /api/version` | Existing name/version/api plus runtime_mode:fresh, mail_instance_id and capabilities. Gate features on capabilities, not the generation alone |
+| `GET /api/agents?days=&scope=live` | `{mail_instance_id,agents:[…]}`: bounded current directory, including retired rows, maximum5000. Rows carry mail_instance_id/mail_agent_id/name/program/provider/model/retired/state/running/last_active. days/scope are accepted for caller compatibility; no legacy history DB is consulted |
+| `GET /api/spawn-names` | Preserve names/adjectives/dirs/providers/models and Local URL index/key, harness and model. Default folders use configured SPAWN_DIRS or home, never a project key. Unconnected features have capabilities=false |
+| `GET /api/name-status?name=` / `GET /api/suggest-name?scientist=` | Existing `{name,status}` / `{name}` shapes, occupancy from the fresh directory including retired rows. Portraits are decorative |
+| `POST /api/spawn` | Existing task/dir/name/provider/model/harness/effort/helper_model/url_index/url_key/async and optional resources. Use standalone:true for no logical parent, or parent / parent_ref:{mail_instance_id,mail_agent_id} |
+| `GET /api/spawn-status?name=` | `{ok,name,state,age,error,detail,result,job_id,mail_instance_id,mail_agent_id}`; optional I/A query selector. A status read never restarts a job |
+
+A parent name must be unique across the whole directory, including retired rows. Ambiguity returns candidate IDs; newest row, largest ID and folder never select an owner. An explicit I/A can select an active target. Missing, ambiguous or revoked protected parent contexts stop launch. A standalone task's technical preparation client is not its logical parent or report recipient. Registration, preparation and handoff reuse the common fresh child path for Claude/Codex/dsh/Hermes/Local. Hermes retains its HTTPS requirement.
+
+The successful response `ok:true,pending:true,child_name,job_id,I/A` means handoff acceptance, not completed native startup. Status `state:launching,result:null` is unconfirmed; detail:unknown means an uncertain outcome that must not be automatically retried, and detail:not_started means saved preparation without handoff. A confirmed native receipt yields the existing caller's launch verdict state:ready. Execution state stays separate in detail:started/ended and result.native_ready. Ending without native confirmation yields state:failed; termination alone never means success. Roster native_ready also describes a receipt, not current OS process liveness; unconfirmed running remains null. A failure after preparation returns the same job/I/A for status and manual resolution; it does not automatically create another same-name agent. Fresh I is projected byte-for-byte as its generated 32 lowercase hex digits, without converting it to a hyphenated UUID.
+
+API2a connects the Mail/graph readers below; API2b-1 connects PC term/history/jump/exit for the current target. Ended kill/retire uses the management contract below; R4 has a separate human opt-in contract. Reactivate, retired resume and App GUI activation remain unconnected. Worktree, browser, custom base/tools, spawn's terminal option, annotations(role/group/emoji), and dry_run are also explicitly unavailable. This does not replace ordinary standalone/parented automatic spawning with manual child creation. The user's agent can prepare work folders and provider settings using the [migration procedure](fresh-global-update.en.md), which also covers configuration, cutover and recovery.
+
+#### Current PC targets (API2b-1)
+
+The following retain existing URLs and primary JSON shapes. Select a target by S′ `session` resolution, or by the same `mail_instance_id` and positive numeric `mail_agent_id`; an accompanying name must identify the same owner. One owner transaction verifies the protected dashboard client's current I/Auth and the target's credential generation. Selection pins a unique protected target context, current launch, native receipt, socket inode/session ID/pane ID/PID birth. Checks before and after operations never fall back to old project/name/token lookup or the last pane. Browser input cannot provide arbitrary paths/sockets/contexts/credentials. Public JSON identifies owners only by I/A and display name. The host-only `agentstack-runtime-client target-json` uses the protected context and is not a model tool.
+
+| URL | Fresh scope and response |
+|---|---|
+| `GET /api/term?session=&lines=` | `{ok,session,content,mail_instance_id,mail_agent_id,truncated}`. lines defaults to500, clamped to40–4000; fixed-pane capture projects at most256 KiB UTF-8. Active targets retain existing delivery liveness checks; ended husks use a separate saved ended/receipt and current-pane check |
+| `GET /api/history?session=&limit=` | Only the explicit transcript in a verified Claude/Codex native receipt. limit defaults to100, clamped to1–200. Existing parsers read at most the last2 MiB and project only user/assistant `kind:text`, at most64 KiB per event and256 KiB total UTF-8, with has_more/truncated. Tool/thinking events are omitted; this does not provide full parity with the old history. dsh/Hermes return FRESH_HISTORY_PROVIDER_UNAVAILABLE |
+| `POST /api/jump` | Selector plus optional boolean open. Active targets focus the current pane (open:false only verifies). Only ended targets hand off once to the existing resume entry with the same context/provider/cwd/native session. `ok:true,execution:unknown,native_ready:false,actions:[resume-command-accepted]` means command acceptance, not a new confirmed native session |
+| `POST /api/exit` | Selector only. Send the existing `/exit` once to the current active/ready pane. execution:accepted means command ACK, not provider termination, understanding or task completion. An ended husk uses the same-pane cleanup below without retiring Mail. Repeat/uncertain handoffs stop with ok:false,execution:unknown |
+
+#### Ended cleanup and display observations (API 34)
+
+`POST /api/kill` accepts the selectors above and `mode:tmux|retire|both` (default both). The protected host verifies the operator and the same I/A's retained credential generation in one transaction. Retained retired credentials are checked only inside private management; ordinary Mail still refuses `ACTOR_RETIRED`. Neither model tools nor Cockpit IPC gains a management operation, and retiring the operator itself is refused.
+
+Cleanup requires exact ended/current/native records, the pinned socket/session/pane/PID birth/UID and absent provider/runner processes. Unknown, active or changed targets are refused. A remaining shell must have no descendant processes. All attached clients are re-observed: any client in the target session yields `FRESH_CLEANUP_ATTACHED` and a reason in the existing PC toast. Close the Terminal/Cockpit views and check again after their owned observers stop. Only ended, unviewed Cockpit consumers use the existing stop path to end their guard and flush history; explicit attach can reopen history. Human terminals and other Cockpit instances are never excluded or forcibly stopped.
+
+The launch operation lock orders revalidation, retirement commit and the same pane's `kill-pane` ACK. No whole session is killed. Gone requires confirmed pane/process absence. The response preserves `ok/session/mode/actions`, adding I/A, `effects:{retire,tmux}` and `execution`. Only completed requested effects yield `ok:true,execution:completed`. A kill failure after retirement retains partial success with `ok:false` and a fixed error; uncertain ACK remains unknown and is not resent. Reading the same attempt returns its saved result. Retirement is not automatically undone, and another name/credential never substitutes for recovery.
+
+`GET /api/agents` fields `category/running/attached/observation` are display only. Every GET authenticates its owner. OS display work shares at most two process snapshots and one pane/client query each for at most two sockets, with a 250ms observation budget and a maximum five-second cache/single-flight. Missing, expired, changed or over-budget observations remain unknown (`running:null`, conservative `attached:true`). Writes never authorize from this cache and perform full checks. OS termination/scheduling can exceed the observation budget; actual OS timing needs its own acceptance. Unobserved retirement in PC proofs may take up to five seconds plus the effect race to be detected, so retirement does not promise immediate disconnection of every client.
+
+History exposes neither raw transcripts, internal transcript/context/binding paths nor current operator/target credentials. This bounded text projection masks known current credentials/internal paths; it is not arbitrary-log secret detection. It changes no read/ACK, signal or Mail state. Uncertain resume/exit handoffs are not automatically retried; use the saved marker and manual procedure. After resume, the terminal child waits at most5 seconds to verify the transition from the same old receipt to the new current/native session; it never restarts the provider. App panes are never fabricated; missing/revoked pane/receipt/preparation is explicitly unavailable or refused. capabilities.terminal=true covers this PC path only, not R4 input, App, real-provider, installation or cutover acceptance.
+
+#### Bounded fresh readers (API2a)
+
+The product assumes one person per machine whose agents trust each other. ORM reads share an owner transaction with current I/Auth validation of the protected dashboard client. They change no read/ACK, last_active, signal or pending state. Display names accompany mail_instance_id and numeric sender_agent_id/recipient_agent_id (source_agent_id/target_agent_id in graph/mobile). Name selectors use S′ including retired candidates; explicit selectors require the same mail_instance_id with mail_agent_id, or a_id/b_id for a pair. Ambiguity never selects the latest row.
+
+| URL | Shape and bounds |
+|---|---|
+| `/api/graph?all=&days=&spawn_only=` | Existing nodes/edges/spawn; maximum5000 agents/10000 edges. PC graph retains all kinds. Overflow is degraded. Spawn follows saved protected logical families, never a standalone preparation root. Lineage does not prove native startup or liveness |
+| `/api/edge-messages?a=&b=&limit=` | `{ok,a,b,count,messages}`, maximum200, existing all-kind scope; body/read_ts/ack_ts are display only |
+| `/api/messages-since?since=&limit=` | `{ok,now,since,messages}`, maximum200/300 seconds back. Expand deliveries in chronological order |
+| `/api/agent-history?name=&names=&hours=` | Maximum200 Mail/registration/retirement events over168h with range/initial_state. No old provider logs or pane states |
+| `/api/mail/recent?limit=&agent=` | `{ok,now,messages}`, default40/range1–100, excerpt and recipients, all kinds |
+| `/api/mail/message?id=` | `{ok,message}`, numeric message ID in the same I. Maximum64 KiB UTF-8 body/512-character subject with truncation flags; absent objects return404 |
+| `/api/mail/thread?thread_id=&limit=` | `{ok,now,messages}`, default50/range1–100, ascending. A thread label within I; no inferred reply graph or connection to an old archive |
+| `/api/mobile-mail?window=` | to/cc metadata, maximum10000 edges/200 deliveries, truncation/degraded and scope/next_cursor; no bodies |
+| `/api/mobile-mail-page?window=&cursor=&a=&b=&direction=` | Maximum200 deliveries, numeric mid/rid distinguish timestamp ties. Cursors bind pair/direction/window/reader epoch/I |
+| `/api/mobile-message?window=&event=&mode=` | Revalidate current to/cc delivery and period. mode=content/revision, maximum64 KiB body/512-character subject, fingerprint/revision/truncation flags |
+| `/api/mobile-cache-page?cursor=` | Last24h, maximum32 messages/4 MiB JSON per batch,2000 total, partial reason. Cache cursors are single use |
+
+All mobile readers retain the loopback restriction. Events/revisions bind I; scope/fingerprint/cursors bind I and reader epoch. Cursors are bounded to256/600 seconds; expiry, query mismatch or a different epoch returns410. Bounded bodies do not guarantee full-content transfer. The mobile projector accepts graph/Mail only for its roster's I and never merges a different same-name A or old cache. capabilities.mail/graph=true covers these readers, not Terminal or completed cutover.
+
+Fresh cockpit deployment manually sets AGENTSTACK_RUNTIME_MODE=fresh, a fixed loopback ORRERY_DASHBOARD_URL=http://127.0.0.1:<port>, and non-secret ORRERY_FRESH_MAIL_INSTANCE_ID=<I>. Existing /telemetry/mail/recent|message|thread use only this reader, never MAIL_PROJECT_KEY or SQLite fallback. Missing preparation, instance mismatch or upstream refusal is an error. Browser queries cannot provide credentials or an arbitrary endpoint. Unrelated legacy/global paths stay unchanged.
 
 ### Isolated global backend (API 17)
 
@@ -131,6 +197,11 @@ There is no query.
 ```bash
 curl -s http://127.0.0.1:8770/api/spawn-names
 ```
+For browser requests, this endpoint requires a same-origin context (like
+`/api/quotas`), because discovery of Antigravity models may start an authenticated
+`agy models` CLI. Cross-origin browser requests are rejected before CLI access;
+non-browser local clients can still use the example above.
+
 
 ```json
 {

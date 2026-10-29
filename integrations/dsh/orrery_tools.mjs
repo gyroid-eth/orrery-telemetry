@@ -52,20 +52,30 @@ export function callHook(file, payload, env = process.env) {
   });
 }
 
-export function saveSession(agent, config) {
+export async function saveSession(agent, config, runHook = callHook) {
   const id = agent?.session?.id;
   if (typeof id !== 'string' || !id || agent.session.header?.parentSession) return;
   try {
     fs.writeFileSync(path.join(config.state_dir, 'native-session.json'), JSON.stringify({
       harness: 'dsh', native_session_id: id, created_at: new Date().toISOString(),
     }) + '\n', {mode: 0o600});
-  } catch { /* Missing resume binding does not stop a native session. */ }
+  } catch (error) {
+    if (process.env.AGENTSTACK_RUNTIME_MODE === 'fresh' || 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in process.env)
+      throw new Error('ORRERY fresh native session could not be saved');
+    return; // Legacy native resume metadata remains optional.
+  }
+  const env = {...process.env, ...config.env};
+  if (env.AGENTSTACK_RUNTIME_MODE === 'fresh' || 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in env) {
+    const decision = await runHook(path.join(config.hooks_dir, 'check-agent-registered.sh'),
+      {hook_event_name: 'SessionStart', session_id: id, cwd: config.cwd}, env);
+    if (!decision.ok) throw new Error(decision.reason);
+  }
 }
 
 export function apply(ctx, config, runHook = callHook) {
   const env = {...process.env, ...config.env};
   const hook = name => path.join(config.hooks_dir, name);
-  ctx.on('agent/created', ({agent}) => saveSession(agent, config));
+  ctx.on('agent/created', ({agent}) => saveSession(agent, config, runHook));
   ctx.on('tools/pre-execute', async (exec, next) => {
     const payload = payloadFor(exec, config);
     if (exec.agent) payload.cwd = await ctx.workingDirectory.ensure(exec.agent, exec.signal);

@@ -179,6 +179,23 @@ def write_instructions(state_dir, project_key):
     return instructions
 
 
+def fresh_instructions(state_dir, root):
+    """Copy bounded common fresh sections into this generated, owned file.
+
+    The legacy neutral renderer requires legacy include headings, so it cannot
+    compose this different contract. No user instruction block is replaced.
+    """
+    shared = (Path(root) / 'templates/fresh/codex/AGENTS.md').read_bytes()
+    boundaries = (b'For an automatic Claude/Codex child,', b'Never read `storage.sqlite3`', b'Codex hooks require prior human review;')
+    if any(shared.count(value) != 1 for value in boundaries):raise ValueError('fresh_instructions_changed')
+    body = shared[:shared.index(boundaries[0])] + shared[shared.index(boundaries[1]):shared.index(boundaries[2])]
+    body += b'Native managed launch uses this prepared owner and private HOME. Registration and file guards remain mandatory.\n'
+    body += b'Completion of a native process is not completion of its task; report the result to the specified parent through Mail.\n'
+    target = Path(state_dir) / 'instructions.md'
+    child_resume._atomic_bytes(target, body.replace(b'__AGENTSTACK_HOME__', str(root).encode()))
+    return target
+
+
 def generate_plan(document, runner):
     """One generator path for initial launch and exact-ID resume."""
     state_dir = Path(document['state_dir'])
@@ -347,13 +364,8 @@ def validate_plan(plan, cwd):
         raise ValueError('credential_value_in_launch_plan')
 
 
-def command(state_dir, name):
-    import shlex
-    source = read(Path(state_dir) / 'input.json')
-    if source['agent_name'] != name:
-        raise ValueError('native_identity_mismatch')
-    # Fixed selections retain their existing path. Dynamic selections get one
-    # selected-URL lookup immediately before generating the actual command.
+def dynamic_prelaunch(source):
+    """One selected-URL lookup, shared by legacy and protected fresh launch."""
     if 'url_index' in source:
         manifest = native_connections.read_manifest(source['manifest_file'])
         _, spec = native_connections.resolve_connection(manifest, source['backend_id'])
@@ -367,7 +379,17 @@ def command(state_dir, name):
         key = native_server_models.read_key(facts, source['program'])
         row = native_server_models.require_model(route['server_url'], source['model'], key)
         source['server_context'] = row.get('meta', {})
-        generate_plan(source, runner)
+        return runner
+    return None
+
+
+def command(state_dir, name):
+    import shlex
+    source = read(Path(state_dir) / 'input.json')
+    if source['agent_name'] != name:
+        raise ValueError('native_identity_mismatch')
+    runner = dynamic_prelaunch(source)
+    if runner is not None:generate_plan(source, runner)
     plan = read(Path(state_dir) / 'launch.json')
     validate_plan(plan, source['cwd'])
     invocation = shlex.join(['env', *[k+'='+v for k,v in plan.get('env', {}).items()], *plan['argv']])

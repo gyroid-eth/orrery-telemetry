@@ -3,6 +3,53 @@ import pytest
 from dashboard.mobile_projection import SnapshotStore, project_agents, project_mail
 
 
+def test_fresh_identity_projection_and_same_name_instance_change_do_not_merge():
+    from uuid import uuid4
+    data=inputs();clock=[100.0]
+    first=uuid4().hex;second=uuid4().hex
+    data['agents']['agents'][0].update(mail_instance_id=first,mail_agent_id=7)
+    projected=project_agents(data['agents'])[0]
+    assert projected['mail_instance_id']==first and projected['mail_agent_id']==7
+    assert 'registration_token' not in projected
+    store=SnapshotStore(lambda key:data[key],clock=lambda:clock[0])
+    assert store.snapshot()['agents'][0]['mail_instance_id']==first
+    clock[0]+=11;data['agents']['agents'][0]['act_state']='wait';store.snapshot()
+    assert len(store._states)==1
+    clock[0]+=11;data['agents']['agents'][0].update(mail_instance_id=second,act_state='work')
+    changed=store.snapshot()
+    assert changed['agents'][0]['mail_instance_id']==second and not changed['timeline']['states']
+    assert changed['graph']['edges']==[] and changed['graph']['spawn']==[] and changed['timeline']['mail']==[]
+    assert changed['sources']['mail']['status']=='unavailable'
+    duplicate=copy.deepcopy(data['agents']['agents'][0]);duplicate['mail_agent_id']=8
+    data['agents']['agents'].append(duplicate)
+    assert len(project_agents(data['agents']))==2
+    clock[0]+=11
+    assert len(store.snapshot()['agents'])==2
+    duplicate['mail_agent_id']=True
+    with pytest.raises(ValueError):project_agents({'agents':[duplicate]})
+
+
+def test_actual_fresh_instance_roster_projection_preserves_identity_bytes(tmp_path):
+    import asyncio
+    from uuid import UUID,uuid4
+    from agentstack_mail.fresh_runtime import FreshRuntime
+    async def run():
+        runtime=await FreshRuntime.initialize(tmp_path/'fresh-instance')
+        try:
+            registered=await runtime.register_local(request_id=str(uuid4()),name='ProjectionAgent',
+                program='claude-code',model='fixture-model')
+            instance=runtime.config['instance_id']
+            assert UUID(instance).hex==instance and len(instance)==32
+            row=dict(name=registered['name'],program='claude-code',model='fixture-model',
+                mail_instance_id=instance,mail_agent_id=registered['agent_id'],state='unknown',running=None,retired=False)
+            result=project_agents({'mail_instance_id':instance,'agents':[row]})[0]
+            assert result['mail_instance_id']==instance and result['mail_agent_id']==registered['agent_id']
+            for invalid in (str(UUID(instance)),'A'+instance[1:],'g'*32,'x',instance+'0'):
+                with pytest.raises(ValueError):project_agents({'agents':[{**row,'mail_instance_id':invalid}]})
+        finally:await runtime.close()
+    asyncio.run(run())
+
+
 def test_content_store_cannot_resolve_a_never_issued_event():
     from dashboard import mobile_projection as projection
     class Source:
@@ -26,6 +73,38 @@ def inputs():
                          'events_truncated':False,'edges_truncated':False,'degraded':False},
             'mail:all': {'status':'available','window':'all','scope':'b'*32,'next_cursor':None,'edges':[], 'events':[],
                          'events_truncated':False,'edges_truncated':False,'degraded':False}}
+
+
+def test_fresh_graph_mail_ids_and_old_epoch_cannot_attach_to_same_name():
+    from uuid import uuid4
+    from dashboard.mobile_projection import project_graph, checked_content
+    instance=uuid4().hex;other=uuid4().hex;clock=[100.0]
+    data=inputs();agent=data['agents']['agents'][0]
+    agent.update(mail_instance_id=instance,mail_agent_id=7)
+    second={**agent,'mail_agent_id':8}
+    data['agents'].update(mail_instance_id=instance,agents=[agent,second])
+    identity=dict(mail_instance_id=instance,source_agent_id=7,target_agent_id=8)
+    edge=dict(source='Alpha',target='Alpha',kind='to',count=1,last_ts=90,**identity)
+    event=dict(source='Alpha',target='Alpha',kind='to',count=1,event_at=90,key='a'*32,**identity)
+    data['graph'].update(mail_instance_id=instance,nodes=[agent,second],spawn=[edge])
+    data['mail:day'].update(mail_instance_id=instance,edges=[edge],events=[event])
+    assert project_graph(data['graph'])['spawn'][0]['target_agent_id']==8
+    store=SnapshotStore(lambda k:data[k],clock=lambda:clock[0])
+    first=store.snapshot()
+    assert len(first['agents'])==2 and first['graph']['edges'][0]['target_agent_id']==8
+    assert first['timeline']['mail'][0]['source_agent_id']==7
+    # A same-name target with another A does not cover an old delivery.
+    second['mail_agent_id']=9;clock[0]+=11
+    assert not store.snapshot()['graph']['edges']
+    # A new I invalidates the previously fetched graph/Mail, even empty roster.
+    data['agents'].update(mail_instance_id=other,agents=[]);clock[0]+=11
+    changed=store.snapshot()
+    assert not changed['agents'] and not changed['timeline']['mail'] and not changed['graph']['spawn']
+    assert changed['sources']['mail']['status']=='unavailable'
+    with pytest.raises(ValueError):project_mail({**data['mail:day'],'mail_instance_id':other},'day')
+    content=dict(scope='b'*32,event=event,fingerprint='c'*32,revision='d'*32,
+                 subject='subject',body='body',subject_truncated=False,body_truncated=False)
+    assert checked_content(content)['event']['mail_instance_id']==instance
 
 
 def test_projection_omits_private_fields_and_unknown_is_not_zero():

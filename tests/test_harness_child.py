@@ -87,6 +87,14 @@ def test_old_generator_not_admitted_by_file_presence(tmp_path):
     assert child.config_generator(tmp_path,'dsh')==entry
 
 
+def test_shared_dynamic_prelaunch_leaves_fixed_models_without_io(monkeypatch):
+    document={'model':'fixed-model'}
+    monkeypatch.setattr(child.native_connections,'read_manifest',lambda *a:pytest.fail('fixed model looked up a manifest'))
+    monkeypatch.setattr(child.native_server_models,'require_model',lambda *a:pytest.fail('fixed model performed HTTP'))
+    assert child.dynamic_prelaunch(document) is None
+    assert document=={'model':'fixed-model'}
+
+
 def test_real_dynamic_prepare_and_command_selected_endpoint_once(tmp_path, monkeypatch):
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

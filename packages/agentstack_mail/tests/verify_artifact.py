@@ -1104,6 +1104,20 @@ EXPECTED_CUTOVER_APPROVAL = {
 }
 
 REQUIRED_RUNTIME_MODULES = {
+    "archive_cli.py",
+    "fresh_cli.py",
+    "fresh_child.py",
+    "fresh_client.py",
+    "fresh_delivery.py",
+    "fresh_guard.py",
+    "fresh_harness.py",
+    "fresh_launch.py",
+    "fresh_notifications.py",
+    "fresh_proxy.py",
+    "fresh_reservations.py",
+    "fresh_runtime.py",
+    "fresh_server.py",
+    "fresh_targets.py",
     "local_http.py",
     "storage_origin_contract.py",
     "storage_origin_directory.py",

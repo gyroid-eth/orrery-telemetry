@@ -27,6 +27,10 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [Launcher と identity](launchers.md) — agent-start、名前、resume、/delegate と /log、通知の流れ。
 - [Obsidian と一緒に使う](obsidian.md) — ログ・論文ノート・タスクを vault と Daily Note に置く。
 
+## 空のMailへの切替候補
+
+- [fresh移行・停止復旧](fresh-global-update.md) — 新しい空instanceを使う明示手順。通常設定からの私有起動・停止は確認済み。通常updateでは切り替わらず、実OS manager/Finder GUI・実provider/trust/導入・最終CIと本人在席の切替は未受入。復帰・App前面化は今回の対象外。
+
 ## install・update
 
 - [Update](install.md#upgrade) — 既存設定を引き継いで更新する手順。
