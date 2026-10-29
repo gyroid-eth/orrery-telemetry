@@ -84,6 +84,30 @@ class LegacyConsumer:
         return [*self.transport.argv,*args]
 
     def command(self,args,**kwargs):
+        # Absence needs no target/process admission, but must be proved on the
+        # same pinned endpoint. Existing targets still pass every normal gate.
+        # Do not turn arbitrary pane/socket/permission failures into absence.
+        if len(args) == 3 and args[:2] == ['has-session', '-t']:
+            target = args[2].removeprefix('=')
+            if (args[2].startswith(('=', '$'))
+                    and re.fullmatch(r'[A-Za-z0-9_.-]+|\$[0-9]+', target)):
+                def names():
+                    reply = self.command(['list-sessions', '-F', '#{session_id}\t#{session_name}'])
+                    if reply.returncode:
+                        raise self.tmux['TargetError']('TMUX_TARGET_UNAVAILABLE')
+                    rows = []
+                    for line in reply.stdout.splitlines():
+                        fields = line.split('\t')
+                        if len(fields) != 2 or re.fullmatch(r'\$[0-9]+', fields[0]) is None or not fields[1]:
+                            raise self.tmux['TargetError']('TMUX_TARGET_UNAVAILABLE')
+                        rows.append(tuple(fields))
+                    return rows
+                before = names()
+                if not any(target in row for row in before):
+                    if names() != before:
+                        raise self.tmux['TargetError']('TMUX_TARGET_CHANGED')
+                    return subprocess.CompletedProcess(self.transport.argv + list(args), 1, '',
+                                                       "can't find session: " + target + '\n')
         inventory = bool(args) and args[0] in ('list-sessions', 'list-panes') and '-t' not in args
         if inventory:
             # Read the pinned destination afresh. ENOENT is a known empty

@@ -676,3 +676,125 @@ def test_a_child_that_survived_the_kill_keeps_its_worktree(tmp_path):
     assert any(c.startswith("kill-session") for c in calls)
     assert not any(c.startswith("git ") for c in calls)
     assert "could not be closed" in notes
+
+
+@pytest.mark.parametrize("probe_rc,diagnostic", [
+    (2, "TMUX_TARGET_UNAVAILABLE"),
+    (2, "GLOBAL_TARGET_OWNERSHIP_UNKNOWN"),
+    (1, "ps: Operation not permitted"),
+    (124, "timeout"),
+    (1, ""),
+])
+def test_target_observation_failure_keeps_child_and_never_retries_or_sends_keys(tmp_path, probe_rc, diagnostic):
+    calls = tmp_path / "calls"
+    script = (
+        "sleep() { :; }\n"
+        + 'tmux() { printf "%s\\n" "$1" >> "$CALLS"; printf "%s" "$DIAG" >&2; return "$PROBE_RC"; }\n'
+        + "codex_initial_task_status() { echo unknown; }\n"
+        + 'spawn_note() { printf "%s\\n" "$*"; }\n'
+        + _extract("codex_session_alive") + "\n" + _launcher_functions()
+        + '\nINJECTION_VERIFIED=false; status=0; codex_watch_initial_task Child task test /l id || status=$?; printf "STATUS=%s VERIFIED=%s\\n" "$status" "$INJECTION_VERIFIED"\n'
+    )
+    result = subprocess.run(["/bin/bash", "-c", script], env={**os.environ, "CALLS":str(calls), "DIAG":diagnostic, "PROBE_RC":str(probe_rc)},capture_output=True,text=True,timeout=10)
+    assert "STATUS=3 VERIFIED=false" in result.stdout, result.stderr
+    assert "confirmation unknown" in result.stdout
+    assert "retained" in result.stdout
+    assert "died" not in result.stdout + result.stderr
+    assert calls.read_text().splitlines() == ["capture-pane", "has-session"]
+    assert "ps: Operation not permitted" not in result.stdout + result.stderr
+    if diagnostic.isupper() and "_" in diagnostic:
+        assert "reason=" + diagnostic in result.stdout
+
+
+def test_verified_rollout_start_does_not_need_pane_or_process_observation(tmp_path):
+    script = (
+        "sleep() { :; }\n"
+        + 'tmux() { echo forbidden-pane-or-process-probe >&2; return 99; }\n'
+        + "codex_initial_task_status() { echo started; }\n"
+        + 'spawn_note() { printf "%s\\n" "$*"; }\n'
+        + _launcher_functions()
+        + '\nINJECTION_VERIFIED=false; codex_watch_initial_task Child task test /l id; printf "VERIFIED=%s\\n" "$INJECTION_VERIFIED"\n'
+    )
+    result = subprocess.run(["/bin/bash", "-c", script],capture_output=True,text=True,timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert "VERIFIED=true" in result.stdout
+    assert "forbidden" not in result.stderr
+
+
+@pytest.mark.parametrize("diagnostic", ["can't find session: Child", "no sessions", "no server running on /private/tmp/test/default", "error connecting to /private/tmp/test/default (No such file or directory)"])
+def test_explicit_absence_is_still_a_failed_start(tmp_path, diagnostic):
+    script = (
+        "sleep() { :; }\n"
+        + 'tmux() { printf "%s" "$DIAG" >&2; return 1; }\n'
+        + "codex_initial_task_status() { echo unknown; }\n"
+        + _extract("codex_session_alive") + "\n" + _launcher_functions()
+        + '\ncodex_watch_initial_task Child task test /l id\n'
+    )
+    result = subprocess.run(["/bin/bash", "-c", script],env={**os.environ,"DIAG":diagnostic},capture_output=True,text=True,timeout=10)
+    assert result.returncode == 2, result.stderr
+    assert "explicit session absence" in result.stderr
+
+
+def test_observation_diagnostic_does_not_publish_arbitrary_stderr(tmp_path):
+    script = (
+        'tmux() { printf "%s" "$DIAG" >&2; return 2; }\n'
+        + _extract("codex_session_alive")
+        + '\ncodex_session_alive Child; printf "reason=%s\\n" "$CODEX_SESSION_OBSERVATION_REASON"\n'
+    )
+    result = subprocess.run(["/bin/bash", "-c", script],env={**os.environ,"DIAG":"TMUX_TARGET_UNAVAILABLE\nprivate-task-sentinel"},capture_output=True,text=True,timeout=10)
+    assert result.stdout == "reason=unknown\n"
+    assert "private-task-sentinel" not in result.stdout + result.stderr
+
+
+def test_unknown_target_does_not_open_an_automatic_terminal(tmp_path):
+    marker=tmp_path/'terminal-was-opened'
+    script=(
+        'AUTO_OPEN_CHILD=1; CODEX_TARGET_OBSERVATION_UNAVAILABLE=true\n'
+        + '_open_child_terminal() { touch "$MARKER"; }\n'
+        + _extract('open_child_terminal')
+        + '\nopen_child_terminal Child\n'
+    )
+    result=subprocess.run(['/bin/bash','-c',script],env={**os.environ,'MARKER':str(marker)},capture_output=True,text=True,timeout=10)
+    assert result.returncode==0
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize('present',[False,True])
+def test_capture_failure_can_recover_through_the_same_launch_receipt(tmp_path,present):
+    calls=tmp_path/'calls';counter=tmp_path/'counter';counter.write_text('0')
+    script=(
+        'sleep() { :; }\n'
+        + 'tmux() { printf "%s\\n" "$1" >> "$CALLS"; if [[ "$1" == has-session && "$PRESENT" == true ]]; then return 0; fi; echo TMUX_TARGET_UNAVAILABLE >&2; return 2; }\n'
+        + 'codex_initial_task_status() { local n; n=$(cat "$COUNTER"); n=$((n+1)); echo "$n" > "$COUNTER"; if [[ "$n" == 3 ]]; then echo started; else echo unknown; fi; }\n'
+        + 'spawn_note() { printf "%s\\n" "$*"; }\n'
+        + _extract('codex_session_alive')+'\n'+_launcher_functions()
+        + '\nINJECTION_VERIFIED=false; codex_watch_initial_task Child task test /l id; printf "VERIFIED=%s\\n" "$INJECTION_VERIFIED"\n'
+    )
+    result=subprocess.run(['/bin/bash','-c',script],env={**os.environ,'CALLS':str(calls),'COUNTER':str(counter),'PRESENT':str(present).lower()},capture_output=True,text=True,timeout=10)
+    assert result.returncode==0,result.stderr
+    assert 'VERIFIED=true' in result.stdout
+    assert 'died' not in result.stderr
+    expected=['capture-pane','has-session']*(2 if present else 1)
+    assert calls.read_text().splitlines()==expected
+
+
+@pytest.mark.parametrize('preregistered',[True,False])
+def test_unknown_target_blocks_even_a_later_failure_cleanup(tmp_path,preregistered):
+    text=SPAWN.read_text()
+    if preregistered:
+        body=re.search(r'(?ms)^    cleanup_preregister_failure\(\) \{.*?^    \}',text).group()
+        setup='PRE_REGISTERED_SUCCESS=false; cleanup_preregister_failure'
+    else:
+        body=_extract('cleanup_on_failure');setup='SPAWN_COMPLETED=false; cleanup_on_failure'
+    marker=tmp_path/'unwanted-effect'
+    script=(
+        'CODEX_TARGET_OBSERVATION_UNAVAILABLE=true\n'
+        + 'spawn_note() { printf "%s\\n" "$*"; }\n'
+        + 'tmux() { touch "$MARKER"; }\n'
+        + 'finish_child_registration() { touch "$MARKER"; }\n'
+        + body+'\n'+setup+'\n'
+    )
+    result=subprocess.run(['/bin/bash','-c',script],env={**os.environ,'MARKER':str(marker)},capture_output=True,text=True,timeout=10)
+    assert result.returncode==1
+    assert 'cleanup withheld' in result.stdout
+    assert not marker.exists()
