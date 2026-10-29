@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import io
 import importlib.util
 import json
 import os
@@ -17,7 +18,75 @@ SPEC.loader.exec_module(trust)
 OWN_SPEC = importlib.util.spec_from_file_location('codex_plugin_ownership', ROOT/'scripts/codex_plugin_ownership.py')
 ownership = importlib.util.module_from_spec(OWN_SPEC)
 OWN_SPEC.loader.exec_module(ownership)
+
+
+def test_read_transport_optional_context_keeps_trust_defaults(tmp_path, monkeypatch):
+    calls = []
+    class Process:
+        stdin = io.BytesIO();stdout = io.BytesIO()
+        def poll(self):return 0
+    class Selector:
+        def register(self, *args):pass
+        def close(self):pass
+    def start(argv, **kwargs):
+        calls.append((argv, kwargs));return Process()
+    monkeypatch.setattr(trust.subprocess, 'Popen', start)
+    monkeypatch.setattr(trust.selectors, 'DefaultSelector', Selector)
+    monkeypatch.setenv('TRUST_DEFAULT_SENTINEL', 'kept')
+    server = trust.AppServer('/native', tmp_path, tmp_path);server.close()
+    assert calls[0][0] == ['/native', 'app-server']
+    assert calls[0][1]['env']['TRUST_DEFAULT_SENTINEL'] == 'kept'
+    explicit = {'AGENTSTACK_RUNTIME_MODE': 'fresh'}
+    server = trust.AppServer('/native', tmp_path, tmp_path,
+                            argv=['/native', '-c', 'owned=true', 'app-server'], environment=explicit)
+    server.close()
+    assert calls[1][0] == ['/native', '-c', 'owned=true', 'app-server']
+    assert calls[1][1]['env'] == {**explicit, 'CODEX_HOME': str(tmp_path)}
+    assert explicit == {'AGENTSTACK_RUNTIME_MODE': 'fresh'}
 PLUGIN_ID = 'agentstack-codex-app@agentstack-local'
+
+
+@pytest.mark.parametrize('failure', ['selector', 'spawn', 'register'])
+@pytest.mark.parametrize('cleanup_failure', [None, 'selector-close', 'stdin-close'])
+def test_constructor_failure_preserves_error_and_closes_available_resources(
+        tmp_path, monkeypatch, failure, cleanup_failure):
+    calls = []
+    original = OSError('original-constructor-failure')
+    class Pipe:
+        def __init__(self, name):self.name = name;self.closed = False
+        def close(self):
+            self.closed = True;calls.append(self.name + '-close')
+            if cleanup_failure == self.name + '-close':raise OSError('cleanup-failure')
+    class Process:
+        pid = 123456
+        stdin = Pipe('stdin');stdout = Pipe('stdout')
+        def poll(self):return None
+        def wait(self, **kwargs):calls.append(('wait', kwargs));return 0
+    process = Process()
+    class Selector:
+        def __init__(self):
+            calls.append('selector')
+            if failure == 'selector':raise original
+        def register(self, *args):calls.append('register');raise original
+        def close(self):
+            calls.append('selector-close')
+            if cleanup_failure == 'selector-close':raise OSError('cleanup-failure')
+    def spawn(*args, **kwargs):
+        calls.append('spawn')
+        if failure == 'spawn':raise original
+        return process
+    monkeypatch.setattr(trust.selectors, 'DefaultSelector', Selector)
+    monkeypatch.setattr(trust.subprocess, 'Popen', spawn)
+    monkeypatch.setattr(trust.os, 'killpg', lambda pid, sig: calls.append(('killpg', pid, sig)))
+    with pytest.raises(OSError) as error:trust.AppServer('/native', tmp_path, tmp_path)
+    assert error.value is original
+    if failure == 'selector':assert calls == ['selector']
+    elif failure == 'spawn':assert calls == ['selector', 'spawn', 'selector-close']
+    else:
+        assert calls == ['selector', 'spawn', 'register', 'selector-close',
+            ('killpg', process.pid, trust.signal.SIGTERM), ('wait', {'timeout': 2}),
+            'stdin-close', 'stdout-close']
+        assert process.stdin.closed and process.stdout.closed
 
 
 @pytest.fixture

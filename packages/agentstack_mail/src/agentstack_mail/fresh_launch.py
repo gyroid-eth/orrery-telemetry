@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import secrets
 import shlex
@@ -133,19 +134,123 @@ def command(root, home, binary, provider, plan, run, cwd, session_id):
     config = home / 'config.toml'  # verify_approved_plan already required private native config.
     import tomllib
     values = tomllib.loads(config.read_text())
+    # CLI overrides merge into the existing table: env_vars does not erase env.
+    # Accept only fields replaced below, plus explicitly safe empty/defaults.
+    mail = values.get('mcp_servers', {}).get('orrery-mail', {})
+    if (not isinstance(mail, dict)
+            or set(mail) - {'command', 'args', 'env_vars', 'env', 'enabled'}
+            or not isinstance(mail.get('env', {}), dict) or mail.get('env', {})
+            or mail.get('enabled', True) is not True):
+        raise B1Error('FRESH_CODEX_MCP_CONFIG_UNSUPPORTED')
+    # -c splits a literal dotted key path; TOML quoting is only for values.
+    # provider_setup verified this plugin ID before command construction.
+    plugin_id = plan['plugin_id']
+    if not isinstance(plugin_id, str) or not re.fullmatch(r'agentstack-codex-app@[a-z0-9-]+', plugin_id):
+        raise B1Error('CODEX_HOOK_CONFIGURE_REQUIRED')
     args = [binary, '-C', str(cwd), '-c', 'check_for_update_on_startup=false',
             '--sandbox', os.environ.get('AGENTSTACK_CODEX_SANDBOX', 'workspace-write'),
             '--ask-for-approval', os.environ.get('AGENTSTACK_CODEX_APPROVAL', 'on-request'),
             '-c', 'mcp_servers.orrery-mail.command=' + json.dumps(proxy[0]),
             '-c', 'mcp_servers.orrery-mail.args=' + json.dumps(proxy[1:]),
-            '-c', 'plugins.' + json.dumps(plan['plugin_id']) + '.mcp_servers.agentstack.enabled=false']
+            # Native stdio MCP does not inherit the provider's entire environment.
+            # Forward only the fresh selection and its already selected Python;
+            # owner credentials remain in the protected client context.
+            '-c', 'mcp_servers.orrery-mail.env_vars=' + json.dumps([
+                'AGENTSTACK_RUNTIME_MODE', 'AGENTSTACK_FRESH_CLIENT_CONTEXT',
+                'AGENTSTACK_PYTHON']),
+            '-c', 'plugins.' + plugin_id + '.mcp_servers.agentstack.enabled=false']
     for name in values.get('mcp_servers', {}):
         if name != 'orrery-mail' and policy['looks_like_agent_mail'](name):
-            args += ['-c', 'mcp_servers.' + json.dumps(name) + '.enabled=false']
+            if not re.fullmatch(r'[A-Za-z0-9_-]+', name):
+                raise B1Error('FRESH_CODEX_MCP_CONFIG_UNSUPPORTED')
+            args += ['-c', 'mcp_servers.' + name + '.enabled=false']
     vault = os.environ.get('AGENTSTACK_VAULT')
     if vault and Path(vault).is_dir():args += ['--add-dir', vault]
     if session_id is not None:args += ['resume', session_id]
     return args
+
+
+def codex_effective_overrides(root, home, binary, plan, cwd, args, environment):
+    """Read native layering once; never log config or fall back to HOME alone."""
+    trust = runpy.run_path(str(root / 'scripts/codex_plugin_trust.py'))
+    try:
+        with trust['AppServer'](binary, home, cwd, timeout=20,
+                argv=[*args, 'app-server'], environment=environment) as server:
+            result = server.request('config/read', {'includeLayers': False, 'cwd': str(cwd)})
+            overrides = codex_config_overrides(root, plan, result['config'])
+            try:
+                hooks = trust['scoped_hooks'](server, cwd, plan['plugin_id'], Path(plan['plugin_root']))
+                if (not plan.get('hooks') or [trust['identity'](h) for h in hooks] != plan['hooks']
+                        or any(h.get('trustStatus') != 'trusted' or h.get('enabled') is not True for h in hooks)):
+                    raise B1Error('CODEX_HOOK_CONFIGURE_REQUIRED')
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+                raise B1Error('CODEX_HOOK_CONFIGURE_REQUIRED') from None
+        return overrides
+    except B1Error:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError, subprocess.SubprocessError):
+        raise B1Error('FRESH_CODEX_MCP_CONFIG_UNSUPPORTED') from None
+
+
+def codex_config_overrides(root, plan, config):
+    """Supported effective local stdio shape, distinct from raw HOME TOML."""
+    def refuse():raise B1Error('FRESH_CODEX_MCP_CONFIG_UNSUPPORTED')
+    plugins = config.get('plugins') if isinstance(config, dict) else None
+    plugin = plugins.get(plan['plugin_id']) if isinstance(plugins, dict) else None
+    bundled = plugin.get('mcp_servers') if isinstance(plugin, dict) else None
+    agentstack = bundled.get('agentstack') if isinstance(bundled, dict) else None
+    if (not isinstance(plugin, dict) or plugin.get('enabled') is not True
+            or not isinstance(agentstack, dict) or agentstack.get('enabled') is not False):
+        raise B1Error('CODEX_HOOK_CONFIGURE_REQUIRED')
+    if not isinstance(config, dict) or not isinstance(config.get('mcp_servers'), dict):refuse()
+    servers = config['mcp_servers']
+    mail = servers.get('orrery-mail')
+    allowed = {'command', 'args', 'env_vars', 'env', 'enabled', 'environment_id',
+               'tool_timeout_sec', 'startup_timeout_sec', 'cwd'}
+    if (not isinstance(mail, dict) or set(mail) - allowed
+            or mail.get('command') != '/bin/bash'
+            or mail.get('args') != [str(root / 'bin/agentstack-runtime-client'), 'proxy']
+            or mail.get('env_vars') != ['AGENTSTACK_RUNTIME_MODE', 'AGENTSTACK_FRESH_CLIENT_CONTEXT', 'AGENTSTACK_PYTHON']
+            or mail.get('environment_id') != 'local' or mail.get('enabled') is not True
+            or mail.get('env') is not None and (not isinstance(mail['env'], dict) or mail['env'])
+            or any(mail.get(k) is not None for k in ('cwd', 'tool_timeout_sec', 'startup_timeout_sec'))):refuse()
+    policy = runpy.run_path(str(root / 'hooks/child_tools.py'))
+    overrides = []
+    for name in servers:
+        if name != 'orrery-mail' and policy['looks_like_agent_mail'](name):
+            if not re.fullmatch(r'[A-Za-z0-9_-]+', name):refuse()
+            overrides += ['-c', 'mcp_servers.' + name + '.enabled=false']
+    # Native 0.160 reports skills:null when there are no overrides.
+    if 'skills' not in config:refuse()
+    skills = config['skills']
+    if skills is None:entries = []
+    elif isinstance(skills, dict) and isinstance(skills.get('config'), list):entries = skills['config']
+    else:refuse()
+    target = Path(plan['plugin_root']) / 'skills/coordinate/SKILL.md'
+    if (not target.is_absolute() or not target.is_file()
+            or any(p.is_symlink() for p in (target, *target.parents))):refuse()
+    target = target.resolve(strict=True)
+    copied, matched = [], False
+    for entry in entries:
+        if (not isinstance(entry, dict) or set(entry) != {'path', 'enabled'}
+                or not isinstance(entry['path'], str) or type(entry['enabled']) is not bool
+                or '\0' in entry['path']):refuse()
+        path = Path(entry['path'])
+        if not path.is_absolute():refuse()  # Bounded compatibility, not a native safety claim.
+        resolved = path.resolve()
+        row = dict(entry)
+        if resolved == target:
+            if matched or any(p.is_symlink() for p in (path, *path.parents)):refuse()
+            row['enabled'] = False
+            matched = True
+        copied.append(row)
+    if not matched:copied.append({'path': str(target), 'enabled': False})
+    value = '[' + ','.join('{path=' + json.dumps(e['path'], ensure_ascii=False)
+                          + ',enabled=' + str(e['enabled']).lower() + '}' for e in copied) + ']'
+    import tomllib
+    # This restricted TOML encoder must preserve exact path strings.
+    if tomllib.loads('skills.config=' + value)['skills']['config'] != copied:refuse()
+    return [*overrides, '-c', 'skills.config=' + value]
 
 
 def launch(client, wrapper_root, provider, cwd, *, session_id=None):
@@ -203,24 +308,19 @@ def launch(client, wrapper_root, provider, cwd, *, session_id=None):
                                        prompt if session_id is None else '', session_id)
             args = managed_plan['argv']
         else:args = command(root, home, binary, provider, plan, run, cwd, session_id)
+        config_args = args[:-2] if provider == 'codex' and session_id is not None else list(args)
         if task is not None:
             _, _, child_record = family(client)
             if binary != task['binary']:raise B1Error('FRESH_CHILD_INTENT_CONFLICT')
             if not managed:
-                args += ['--model', child_record['model']]
+                model_args = ['--model', child_record['model']]
                 effort = child_record.get('effort')
                 if effort:
-                    args += (['--effort', effort] if provider == 'claude' else
+                    model_args += (['--effort', effort] if provider == 'claude' else
                              ['-c', 'model_reasoning_effort=' + json.dumps(effort)])
-                args += ['--', prompt]
+                args += model_args
+                config_args += model_args
             intent['child_spawn_id'] = task['spawn_id']
-        from .fresh_delivery import capture, publish
-        captured = capture(client, root, launch_id)
-        _write_private(run / 'intent.json', intent)
-        # A pointer is only an index: previous immutable runs/receipts stay put.
-        temporary = base / ('.current-' + launch_id)
-        _write_private(temporary, {'launch_id': launch_id})
-        os.replace(temporary, current)
         environment = dict(os.environ)
         for key in list(environment):
             if (key in {'AGENTSTACK_PROJECT_KEY', 'PROJECT_KEY', 'PARENT_AGENT', 'CHILD_REGISTRATION_TOKEN',
@@ -238,6 +338,16 @@ def launch(client, wrapper_root, provider, cwd, *, session_id=None):
         environment.update(AGENTSTACK_RUNTIME_DIR=str(runtime), AGENTSTACK_HOOKS_DIR=str(root / 'hooks'))
         if managed:environment.update(managed_plan['env'])
         else:environment['CODEX_HOME' if provider == 'codex' else 'CLAUDE_CONFIG_DIR'] = str(home)
+        if provider == 'codex':
+            args += codex_effective_overrides(root, home, binary, plan, cwd, config_args, environment)
+        if task is not None and not managed:args += ['--', prompt]
+        from .fresh_delivery import capture, publish
+        captured = capture(client, root, launch_id)
+        _write_private(run / 'intent.json', intent)
+        # A pointer is only an index: previous immutable runs/receipts stay put.
+        temporary = base / ('.current-' + launch_id)
+        _write_private(temporary, {'launch_id': launch_id})
+        os.replace(temporary, current)
         process = None
         try:
             process = subprocess.Popen(args, cwd=cwd, env=environment)

@@ -267,6 +267,16 @@ AGENTSTACK_PYTHON="$orrery_python" AGENTSTACK_RUNTIME_MODE=fresh \
 
 Codexは上の `agent-start` を `agent-start-codex` に置き換えます。起動したmodelはbound proxyの `runtime_status` で本人を確認し、schemaにないproject／資格／本人IDを追加しません。予約pathは実際の作業folderから絶対化されます。fresh contextの欠落・破損・資格失効を旧登録へのfallbackで回避しません。
 
+Codexのstdio MCPへは、launcherが固定したfresh context・mode・Pythonを明示的に転送します。資格本文や旧global contextは転送しません。hook承認済みpluginは有効のまま、その付属MCPと旧Mail MCPを無効化し、`orrery-mail`のfresh proxyを使います。本人を確認できない、またはDesktop向けの`bootstrap`を求められた場合は停止し、別serverや本人への登録で埋めません。旧Mail MCPの名前をCodexのCLI設定で安全に指定できない場合も`FRESH_CODEX_MCP_CONFIG_UNSUPPORTED`で停止します。これらは通常のtool承認やhookの本人承認を自動で許可する変更ではありません。
+
+既存の`mcp_servers.orrery-mail`は、上書きする`command`・`args`・`env_vars`と、空の`env`・`enabled=true`だけを許可します。空の定義も使えます。非空の`env`、無効化、URL・cwdなどその他の項目は、設定のmergeで旧環境が残るのを防ぐため、起動前に`FRESH_CODEX_MCP_CONFIG_UNSUPPORTED`で拒否します。
+
+さらに、同じbinary・provider HOME・作業folder・sanitized環境・native既定のprofile選択で、起動前に有限の`config/read`を1回行い、projectなどを含むeffective設定を確認します。canonical MCPは厳密に`environment_id="local"`・有効・固定wrapper/引数/3環境変数であることを要求し、非空env・別cwd・無効化・未知の設定を拒否します。native既定のnull timeoutだけは区別して許容します。読取失敗や未対応schemaはHOMEだけへfallbackせず停止し、設定全文やenv値は記録しません。effective設定にある旧Mail aliasも無効化します。
+
+承認済みpluginのpayloadは変えず、既存の`skills.config`の順序と無関係な有効/無効設定を保持して、installed `coordinate/SKILL.md`だけを今回のCLI引数で除外します。`skills:null`は対応済みの空設定ですが、key欠落・不正型を空とみなしません。無関係な重複・directory・symlinkの設定は保持します。対象の曖昧なalias/重複やnative未解決の相対pathは未対応として停止します。これは起動時snapshotの確認であり、読取と起動の間の同時設定変更や任意の明示profileの一致までは保証しません。実nativeのMail・hook・通常tool承認の再受入は引き続き必要です。
+
+同じeffective設定で承認済みpluginの有効状態と付属MCPの無効状態も検査します。続けて同じ有限AppServer・同じ作業folder・共有20秒deadline内で既存の`scoped_hooks`によるread-only `hooks/list`を行い、承認済みplanの定義・key・currentHashの一致、`trusted`かつ有効を要求します。不明・無効・未承認・不一致は`CODEX_HOOK_CONFIGURE_REQUIRED`で停止し、enableやtrustを書き換えません。reader初期化失敗でも作成済みprocess・pipeのcleanupを試みます。実hook動作の受入をこの読取だけで完了とは扱いません。
+
 resumeは **この新clientで記録済みのnative sessionだけ** が対象です。旧Mailのresume、別clientのsession、終了が確認できないrunへ自動でつなぎません。記録が揃っている場合の引数は `agentstack-resume claude "$orrery_workdir" --session-id <recorded-native-UUID>`（Codexは `codex`）で、上と同じfresh環境変数を渡します。終了不明なら起動を止め、本人が実行状況を確認するまでreceiptを手で書き換えません。
 
 ### 自動の子: 既存preregister／spawn入口のfresh接続

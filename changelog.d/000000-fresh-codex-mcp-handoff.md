@@ -1,0 +1,11 @@
+### fresh Codex の Mail 接続へ必要な環境を渡す
+
+Codex の stdio MCP は provider の環境をそのまま継承しないため、fresh launcher が context・mode・選択済み Python の3変数を明示して転送します。資格本文と旧global contextは転送しません。また、Codex CLI の設定keyをTOMLのheaderと同じように引用すると別のkeyになるため、検証済みplugin IDと旧Mail server名をCLIのkeyとして正しく指定します。hook pluginを有効に保ちながら付属MCPだけを無効化し、同じfresh本人のproxyを使います。安全に指定できない旧Mail名は明示拒否します。
+
+既存の`orrery-mail`定義に非空の環境変数・無効化・URLやcwdなどの未対応項目がある場合は、旧設定をmergeで引き継がず起動前に拒否します。空の定義と上書き対象だけの通常設定は維持します。
+
+起動時に同じnative環境で有限のeffective設定読取を1回行い、project側の旧環境や無効化・旧Mail aliasも検査します。localの固定proxyだけを許容し、読取失敗・未対応schemaは旧設定へfallbackしません。承認済みpayloadを変えずにcoordinate skillだけをCLI設定で除外し、無関係な既存skill設定の順序と有効/無効の意図を保持します。
+
+同じeffective設定でpluginの有効状態を確認し、同一readerのread-only hook一覧を承認済みplanと照合します。無効・不明・未承認は強制有効化せず停止します。reader初期化途中の失敗でもprocess/pipe回収を試みます。
+
+本人のhook承認・通常toolの承認・APIとreadyの意味は変更しません。新しい実providerでの再受入は別途必要です。
