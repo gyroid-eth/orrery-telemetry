@@ -179,7 +179,7 @@ def test_protection_setting_is_documented_across_launch_and_agent_guides() -> No
     ):
         assert "AGENTSTACK_EXTRA_PROTECTED_ROOTS" in _read(rel), rel
     for rel in ("claude/CLAUDE.md", "codex/AGENTS.md"):
-        assert "first matching root" in _read(rel), rel
+        assert "physical absolute file paths" in _read(rel), rel
         assert "Do not carry a previous" in _read(rel), rel
 
 
@@ -197,12 +197,12 @@ def test_automatic_protection_migration_and_cutover_are_documented() -> None:
     for needle in ("using presence rather than non-emptiness", "copied exactly once",
                    "literal value and order intact", "no manual copy is needed",
                    "source, value, and destination", "before the installed file is overwritten",
-                   "even when extras already exist", "first matching protected root",
+                   "even when extras already exist", "physical absolute path",
                    "restart affected sessions together", "Namespace selection is unchanged"):
         assert needle in english, needle
     japanese = _read("docs/configuration.md")
     for needle in ("設定の有無", "そのまま一度だけ", "手動コピーは不要", "移行元・値・保存先",
-                   "上書きする前", "extras が既に存在しても警告", "最初に一致する保護 root",
+                   "上書きする前", "extras が既に存在しても警告", "物理絶対 path",
                    "session をまとめて再起動", "namespace の選択は変えず"):
         assert needle in japanese, needle
     assert '"AGENTSTACK_EXTRA_PROTECTED_ROOTS": os.environ["AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS"]' in INSTALLER

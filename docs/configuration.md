@@ -257,7 +257,7 @@ AGENTSTACK_EXTRA_PROTECTED_ROOTS="$HOME/shared-vault" ./scripts/install.sh --dry
 AGENTSTACK_EXTRA_PROTECTED_ROOTS= ./scripts/install.sh --dry-run
 ```
 
-cutover 前に作業を完了するか active reservation を解放してください。相対 reservation 名は最初に一致する保護 root から決まるため、root の順序変更や上位 root の削除で名前が変わることがあります。dry run を確認して更新し、影響する session をまとめて再起動してください。既存 session の環境は restart まで残り、file の更新だけでは変わりません。dashboard resume と persistent 起動の再計算は後続PRの対象です。既存の再開経路では旧 root が残る可能性があり、今回の範囲では新しい保護境界を保証しません。
+cutover 前に作業を完了するか active reservation を解放してください。従来の相対予約名は root によって変わりましたが、更新後の managed 起動では root に依存しない物理絶対 path を予約名として使います。旧予約をそのまま引き継ぐことはできません。dry run を確認して更新し、影響する session をまとめて再起動してください。既存 session の環境は restart まで残り、file の更新だけでは変わりません。dashboard resume と persistent 起動の再計算は後続PRの対象です。既存の再開経路では旧 root が残る可能性があり、今回の範囲では新しい保護境界を保証しません。
 
 ## Launcher
 

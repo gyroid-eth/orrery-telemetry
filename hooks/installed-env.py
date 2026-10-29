@@ -83,12 +83,12 @@ def read_assignment(path: pathlib.Path, name: str) -> tuple[str, str]:
     # Legacy files can contain unrelated shell logic. Quoted/escaped setting
     # names still count as protection declarations and must fail strict parsing.
     try:
-        words = shlex.split(raw, comments=True, posix=True)
+        shlex.split(raw, comments=True, posix=True)
     except ValueError as error:
         raise InvalidAssignment("invalid shell quoting") from error
-    protection_name = re.compile(r"\bAGENTSTACK_(?:EXTRA_)?PROTECTED_ROOTS\b")
-    if not any(protection_name.search(word) for word in words):
-        return "absent", ""
+    # Even without a literal protection name, a computed export could assign
+    # one. Require literal export names throughout, but leave values for
+    # unrelated settings to their own validators (e.g. Mail env evidence).
     # env.sh is generated data, not a shell program. Track logical records so
     # an apparent export inside another setting's multiline quote is never
     # mistaken for a protection assignment. Other generated multiline values
@@ -114,12 +114,21 @@ def read_assignment(path: pathlib.Path, name: str) -> tuple[str, str]:
         if not match:
             raise InvalidAssignment("ambiguous shell syntax; expected literal export assignments")
         record_name, rhs = match.groups()
-        if record_name == name:
-            found.append(literal_value(rhs))
+        if record_name in ("AGENTSTACK_PROTECTED_ROOTS", "AGENTSTACK_EXTRA_PROTECTED_ROOTS"):
+            value = literal_value(rhs)
+            if record_name == name:
+                found.append(value)
         else:
+            # A separate export after a shell operator can set protection even
+            # if the first assignment is to an unrelated key. Quoted operators
+            # in unrelated values still belong to their own setting validator.
+            lexer = shlex.shlex(record, posix=True, punctuation_chars=";&|")
+            lexer.whitespace_split = True
+            lexer.commenters = "#"
+            if any(token and set(token) <= set(";&|") for token in lexer):
+                raise InvalidAssignment("multiple shell commands in installed settings")
             if name in record and "\n" in record:
                 raise InvalidAssignment("protection name in an ambiguous assignment or multiline literal")
-            literal_value(rhs, allow_multiline=True)
     if len(found) > 1:
         raise InvalidAssignment("duplicate assignments")
     if not found:

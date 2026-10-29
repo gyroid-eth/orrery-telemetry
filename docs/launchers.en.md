@@ -36,7 +36,7 @@ Top-level and delegated-child launches compute `AGENTSTACK_PROTECTED_ROOTS` from
 
 Inherited `GIT_DIR`, `GIT_WORK_TREE`, and `GIT_COMMON_DIR` do not choose the workspace and are removed from the launched process. Broken Git metadata stops the launch rather than selecting another directory. New tmux sessions receive the current workspace context instead of the server's stale roots; the server's global environment is not changed. `AGENTSTACK_VAULT`, Codex sandbox/approval, and OAuth behavior are unchanged.
 
-Install/update automatically migrates the installed legacy protection list once. Ambient shell/tmux `AGENTSTACK_PROTECTED_ROOTS` is never imported; a different nonempty legacy value warns even when extras exist. Before cutover, finish work or release reservations, then restart affected sessions together after updating because relative reservation names use the first matching root. See [automatic protection migration](configuration.en.md#reservation-protection-and-migration).
+Install/update automatically migrates the installed legacy protection list once. Ambient shell/tmux `AGENTSTACK_PROTECTED_ROOTS` is never imported; a different nonempty legacy value warns even when extras exist. Before cutover, finish work or release reservations, then restart affected sessions together: managed launches now use physical absolute file paths for reservation identity instead of first-matching-root-relative names. See [automatic protection migration](configuration.en.md#reservation-protection-and-migration).
 
 ## Codex and the Node.js PATH
 

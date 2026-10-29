@@ -374,7 +374,7 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.read("provider")["env"]["AGENTSTACK_PROTECTED_ROOTS"], extra_roots)
 
-    def test_ancestor_vault_root_keeps_existing_reservation_relative_paths(self) -> None:
+    def test_ancestor_vault_root_uses_canonical_managed_reservation_path(self) -> None:
         target = self.plain / "project"
         target.mkdir()
         note = target / "note.md"
@@ -391,7 +391,7 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
             capture_output=True, text=True, timeout=20,
         )
         self.assertEqual(hook.returncode, 0, hook.stderr)
-        self.assertEqual(hook.stdout.strip(), f"{self.plain}|project/note.md")
+        self.assertEqual(hook.stdout.strip(), f"{self.plain}|{note}")
 
     def test_legacy_physical_namespace_is_not_implicitly_protected(self) -> None:
         (self.install / "env.sh").write_text(
@@ -560,7 +560,7 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
                     json.dumps({"tool_input": {"file_path": str(path)}})],
                     cwd=target, env=env, capture_output=True, text=True, timeout=20)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.strip(), f"{self.plain}|project/note.md")
+                self.assertEqual(result.stdout.strip(), f"{self.plain}|{target / 'note.md'}")
         # Current upstream canonicalizes alias roots for legacy sessions too.
         env.pop("AGENTSTACK_PROTECTION_CONTEXT")
         env["AGENTSTACK_PROTECTED_ROOTS"] = str(alias)
@@ -584,10 +584,10 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
                         # matcher, with sibling names that would match a glob.
                         script = ('. "$1"; '
                                   'agentstack_apply_workspace_context "$2" shared; '
-                                  'if [ "$5" = legacy ]; then unset AGENTSTACK_PROTECTION_CONTEXT; fi; '
+                                  'expected="$2/note.md"; if [ "$5" = legacy ]; then unset AGENTSTACK_PROTECTION_CONTEXT; expected=note.md; fi; '
                                   '. "$3"; before="$-"; before_ifs="$IFS"; '
                                   'reservation_resolve_tool_context "$4" || exit 10; '
-                                  '[ "$MATCHED_ROOT" = "$2" ] && [ "$REL_PATH" = note.md ] || exit 11; '
+                                  '[ "$MATCHED_ROOT" = "$2" ] && [ "$REL_PATH" = "$expected" ] || exit 11; '
                                   'if reservation_resolve_tool_context "$6"; then exit 12; fi; '
                                   '[ "$-" = "$before" ] && [ "$IFS" = "$before_ifs" ]')
                         if disable_globbing:
@@ -602,7 +602,7 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
                             capture_output=True, text=True, timeout=20)
                         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_filesystem_root_extra_keeps_full_relative_reservation_path(self) -> None:
+    def test_filesystem_root_extra_uses_canonical_managed_reservation_path(self) -> None:
         result = self.run_launcher("codex", self.repo, inside=True,
             extra={"AGENTSTACK_EXTRA_PROTECTED_ROOTS": "/"})
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -615,7 +615,7 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
             json.dumps({"tool_input": {"file_path": str(note)}})],
             env=env, cwd=self.repo, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, str(note).lstrip("/"))
+        self.assertEqual(result.stdout, str(note))
 
     def test_cli_context_exports_quote_extra_paths_as_data(self) -> None:
         extra = self.root / "shared '$HOME;$(touch UNEXPECTED)"

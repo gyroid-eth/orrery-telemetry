@@ -36,7 +36,7 @@ top-level と delegated child 起動では、設定順の `AGENTSTACK_EXTRA_PROT
 
 継承した `GIT_DIR`、`GIT_WORK_TREE`、`GIT_COMMON_DIR` は workspace の判定に使わず、起動 process から取り除きます。Git metadata が壊れていれば別 directory へ切り替えず起動を停止します。新しい tmux session には server に残った旧 root ではなく現在の workspace context を渡し、server の global environment は変えません。`AGENTSTACK_VAULT`、Codex の sandbox/approval、OAuth の扱いは変えません。
 
-install/update は installed の旧保護 list を一度だけ自動移行します。ambient shell/tmux の `AGENTSTACK_PROTECTED_ROOTS` は取り込まず、非空で installed と異なる旧値は extras があっても警告します。相対 reservation 名は最初に一致する root から決まるため、cutover 前に作業を完了するか予約を解放し、更新後に影響する session をまとめて再起動してください。[保護設定の自動移行](configuration.md#reservation-の保護範囲と移行)を参照してください。
+install/update は installed の旧保護 list を一度だけ自動移行します。ambient shell/tmux の `AGENTSTACK_PROTECTED_ROOTS` は取り込まず、非空で installed と異なる旧値は extras があっても警告します。従来の相対予約名から、managed 起動では root に依存しない物理絶対 path の予約名へ変わるため、cutover 前に作業を完了するか予約を解放し、更新後に影響する session をまとめて再起動してください。[保護設定の自動移行](configuration.md#reservation-の保護範囲と移行)を参照してください。
 
 ## Codex と Node.js の PATH
 

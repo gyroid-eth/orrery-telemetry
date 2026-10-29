@@ -234,7 +234,7 @@ AGENTSTACK_EXTRA_PROTECTED_ROOTS="$HOME/shared-vault" ./scripts/install.sh --dry
 AGENTSTACK_EXTRA_PROTECTED_ROOTS= ./scripts/install.sh --dry-run
 ```
 
-Before cutover, finish work or release active reservations. Relative reservation names use the first matching protected root, so changing root order or removing an enclosing root can change those names. Review the dry run, update, then restart affected sessions together. Existing sessions keep their environments until restart; updating files does not refresh them. Dashboard resume and persistent-agent re-resolution are follow-up work. Existing resume paths may retain older roots and are not guaranteed to implement the new protection boundary in this PR.
+Before cutover, finish work or release active reservations. Older relative reservation names depended on the first matching root, but updated managed launches use the physical absolute path as their reservation identity, independent of root order. Existing relative leases cannot be reused as-is. Review the dry run, update, then restart affected sessions together. Existing sessions keep their environments until restart; updating files does not refresh them. Dashboard resume and persistent-agent re-resolution are follow-up work. Existing resume paths may retain older roots and are not guaranteed to implement the new protection boundary in this PR.
 
 ## Launcher
 

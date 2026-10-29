@@ -186,6 +186,12 @@ except (ValueError, TypeError, AttributeError, OSError, RuntimeError) as exc:
     if [[ "$REL_PATH" == "$FILE_PATH" ]]; then
         REL_PATH="$(basename "$FILE_PATH")"
     fi
+    # Managed agents may protect nested folders within the same Mail namespace.
+    # Scope matching stays root-based; reservation identity must not depend on
+    # the first matching root or two agents can edit one file concurrently.
+    if [[ "${AGENTSTACK_PROTECTION_CONTEXT:-}" == "workspace-v1" ]]; then
+        REL_PATH="$FILE_PATH"
+    fi
     RESERVATION_PROJECT_KEY="${PROJECT_KEY:-$MATCHED_ROOT}"
     export AGENTSTACK_LOOKUP_PROJECT_KEY="$RESERVATION_PROJECT_KEY"
     return 0

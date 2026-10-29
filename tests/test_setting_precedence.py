@@ -935,6 +935,21 @@ def test_migration_dry_run_reports_source_value_destination_without_writes(tmp_p
     assert result.stderr.count("restart affected coordinated sessions together") == 2
 
 
+def test_computed_protection_name_aborts_real_installer_dry_run(tmp_path):
+    home = tmp_path / "home"
+    path = _protection_file(home, {})
+    path.write_text(path.read_text() +
+                    'prefix=AGENTSTACK_\nexport "${prefix}PROTECTED_ROOTS"=/previous/scope\n')
+    before = path.read_bytes()
+    result = _dry_run(home, AGENTSTACK_PYTHON=sys.executable)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "ambiguous shell syntax" in result.stderr
+    assert path.read_bytes() == before
+    assert not (path.parent / "install-state.json").exists()
+    assert not list(path.parent.glob("env.sh.*"))
+
+
+
 @pytest.mark.parametrize("body", [
     "export {name}=/one\nexport {name}=/two\n",
     "export {name}=$HOME/vault\n",
@@ -955,6 +970,7 @@ def test_migration_dry_run_reports_source_value_destination_without_writes(tmp_p
     "export {name}=/glob/*\n",
     "export AGENTSTACK_'PROTECTED_ROOTS'='/vault'\n",
     "export AGENTSTACK_PROTECTED\\_ROOTS='/vault'\n",
+    "prefix=AGENTSTACK_\nexport \"${{prefix}}PROTECTED_ROOTS\"=/previous/scope\n",
 ])
 @pytest.mark.parametrize("name", [EXTRAS, LEGACY])
 def test_invalid_protection_is_not_absence_and_never_overwrites_or_executes(tmp_path, body, name):

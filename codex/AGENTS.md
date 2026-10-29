@@ -180,7 +180,9 @@ workspace or a path-shaped project key into that root list.
 - Raw/direct MCP: acquire with `macro_file_reservation_cycle` (or
   `file_reservation_paths`), passing
   `project_key="__AGENTSTACK_PROJECT_KEY__"`, your agent name, and the paths
-  (relative to the first matching root in `AGENTSTACK_PROTECTED_ROOTS`).
+  (physical absolute file paths in managed `workspace-v1` sessions, regardless
+  of the matching protected root; older unmanaged sessions retain their
+  relative-path convention).
   The namespace may name a different path; do not derive reservation paths from it.
   Renew with `renew_file_reservations` and release with
   `release_file_reservations`.

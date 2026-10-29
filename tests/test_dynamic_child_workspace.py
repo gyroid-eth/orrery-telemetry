@@ -1,5 +1,6 @@
-"""Child/resume launch boundaries derive protection from their actual target.
+"""Covered child launcher and rendered runner paths derive protection from their target.
 
+Dashboard resume, persistent launch, and warm-pool reclaims are out of scope.
 Only temporary repositories, homes and mocked Mail/tmux are used here.
 """
 from __future__ import annotations
