@@ -196,6 +196,11 @@ query はありません。
 ```bash
 curl -s http://127.0.0.1:8770/api/spawn-names
 ```
+この GET は Antigravity のモデル候補を読む際に認証済みの `agy models` CLI を
+起動する場合があります。そのため `/api/quotas` と同様、ブラウザー経由の
+cross-origin 呼び出しは CLI を起動する前に拒否します。上記のローカル `curl`
+は従来どおり利用できます。
+
 
 ```json
 {
