@@ -26,6 +26,12 @@ _REAL_RUN = subprocess.run
 _REAL_POPEN = subprocess.Popen
 
 
+@pytest.fixture(autouse=True)
+def _no_live_gemini_catalog(monkeypatch):
+    # Existing launch tests use static fixtures, never the developer's live agy CLI.
+    monkeypatch.setattr(gemini_runtime, "_discover_models", lambda: ())
+
+
 def _git(*args: str, cwd: pathlib.Path) -> str:
     result = _REAL_RUN(
         ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", *args],
@@ -229,6 +235,8 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch):
         "models": ["gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"],
         "default_model": "gemini-3.8-flash-high",
         "efforts": ["low", "medium", "high"],
+        "model_efforts": {model: ["low", "medium", "high"] for model in (
+            "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low")},
         "effort_default": "",
         "provider_key": "google",
         "capabilities": {
@@ -243,6 +251,29 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch):
             "resources_required": True,
         },
     }
+
+
+def test_argon_from_cli_uses_selected_effort_in_launch(gemini_env, monkeypatch):
+    monkeypatch.setattr(gemini_runtime, "_discover_models", lambda: (
+        "gemini-4-argon-medium", "gemini-4-argon-high", "gemini-4-argon-low"))
+    model_list, error = gemini_runtime._gemini_models(server)
+    assert error == "" and "gemini-4-argon-medium" in model_list
+    result = server.do_spawn(_gemini_payload(
+        gemini_env, model="gemini-4-argon-medium", effort="high", dry_run=True))
+    assert result["ok"] is True
+    assert result["model"] == "gemini-4-argon-high"
+    assert result["argv"][result["argv"].index("--model") + 1] == "gemini-4-argon-high"
+
+
+def test_formal_gemini_model_does_not_depend_on_discovery(gemini_env, monkeypatch):
+    def unavailable():
+        pytest.fail("spawn should not probe agy models")
+
+    monkeypatch.setattr(gemini_runtime, "_discover_models", unavailable)
+    result = server.do_spawn(_gemini_payload(
+        gemini_env, model="gemini-future-99-high", effort="high", dry_run=True))
+    assert result["ok"] is True
+    assert result["model"] == "gemini-future-99-high"
 
 
 def test_spawn_catalog_honors_gemini_model_override(monkeypatch):
@@ -322,8 +353,8 @@ def test_gemini_spawn_rejects_standalone_and_invalid_engine_options(tmp_path):
     assert server.do_spawn({**common, "standalone": "yes"}) == {
         "ok": False, "error": "standalone must be boolean",
     }
-    bad_model = server.do_spawn({**common, "model": "gemini-not-allowed", "effort": "high"})
-    assert bad_model["error"] == "model not allowed for provider gemini: gemini-not-allowed"
+    bad_model = server.do_spawn({**common, "model": "foreign-not-allowed", "effort": "high"})
+    assert bad_model["error"] == "model not allowed for provider gemini: foreign-not-allowed"
     bad_effort = server.do_spawn({**common, "effort": "xhigh"})
     assert bad_effort["error"] == "effort not allowed for provider gemini: xhigh"
     assert server.do_spawn({**common, "effort": "high", "parent": ""}) == {
@@ -1148,7 +1179,7 @@ def test_provider_switching_does_not_leak_capability_state(monkeypatch):
         {"id": "codex", "label": "Codex", "program": "codex-cli",
          "models": ["gpt-5.6-sol"], "default_model": "gpt-5.6-sol",
          "efforts": ["low", "medium", "high", "xhigh"], "effort_default": "xhigh"},
-        gemini_runtime._catalog_item(["gemini-3.8-flash-high"]),
+        gemini_runtime._catalog_item(list(gemini_runtime._DEFAULT_MODELS)),
     ]}
     script = (f"const CATALOG={json.dumps(catalog)};\n"
               + _extract_ui_script(_rendered_index()) + "\n" + _UI_HARNESS)

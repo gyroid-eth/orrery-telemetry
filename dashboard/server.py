@@ -9618,6 +9618,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        # Catalog discovery may invoke an authenticated local CLI in every
+        # runtime mode, including fresh; reject foreign pages before routing.
+        if path == "/api/spawn-names" and not _same_origin_request(self):
+            self._send(403, b'{"error":"cross_origin_spawn_names_request"}',
+                       "application/json; charset=utf-8")
+            return
         if FRESH_MODE and self._fresh_get(path):return
         if path in {"/api/mobile-mail","/api/mobile-portrait","/api/mobile-message","/api/mobile-mail-page","/api/mobile-cache-page"} and GLOBAL_MODE:
             self._send(501, b'{"status":"unavailable","error":"mobile_global_unsupported"}', "application/json; charset=utf-8")

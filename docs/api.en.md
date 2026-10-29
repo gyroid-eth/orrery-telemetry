@@ -197,6 +197,11 @@ There is no query.
 ```bash
 curl -s http://127.0.0.1:8770/api/spawn-names
 ```
+For browser requests, this endpoint requires a same-origin context (like
+`/api/quotas`), because discovery of Antigravity models may start an authenticated
+`agy models` CLI. Cross-origin browser requests are rejected before CLI access;
+non-browser local clients can still use the example above.
+
 
 ```json
 {
