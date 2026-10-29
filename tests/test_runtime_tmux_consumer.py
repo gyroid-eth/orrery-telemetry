@@ -19,6 +19,8 @@ def consumer(tmp_path):
         def run(argv,**kw):
             calls.append(argv)
             command=argv[3]
+            if command == 'list-sessions':
+                return subprocess.CompletedProcess(argv,0,'$1\t'+state['actual']+'\n','')
             if command in ('list-panes','display-message'):
                 return subprocess.CompletedProcess(argv,0,'$1\t'+state['actual']+'\t%1\t'+str(state['pid'])+'\n','')
             return subprocess.CompletedProcess(argv,0,'','')
@@ -462,3 +464,80 @@ def test_missing_endpoint_parent_is_absent_without_creating_directories(tmp_path
     transport = API['Transport'](path, binary='fixture-tmux', allow_absent=True)
     assert transport.identity is None
     assert not path.parent.exists()
+
+
+@pytest.mark.parametrize('failure',[PermissionError(1,'Operation not permitted'),subprocess.TimeoutExpired('ps',3)])
+def test_sandbox_process_probe_refusal_remains_unknown_and_has_no_target_effect(consumer,monkeypatch,failure):
+    c,calls,_=consumer
+    observations=runpy.run_path(str(ROOT/'bin/lib/process_observation.py'))
+    def denied(*a,**kw):raise failure
+    c.api['process_start']=observations['process_start']
+    with monkeypatch.context() as m:
+        m.setattr(observations['subprocess'],'run',denied)
+        with pytest.raises(API['TargetError'],match='^TMUX_TARGET_UNAVAILABLE$'):
+            c.command(['has-session','-t','=Alpha'])
+    assert not any(argv[3]=='has-session' for argv in calls)
+    assert not any(argv[3] in ('send-keys','kill-session','kill-pane') for argv in calls)
+
+
+def test_real_adapter_proves_a_missing_session_without_process_access(tmp_path):
+    import shutil, sys
+    binary=shutil.which('tmux')
+    if binary is None:pytest.skip('tmux unavailable')
+    with tempfile.TemporaryDirectory(prefix='r2absence-',dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as value:
+        home=Path(value).resolve();path=home/('tmux-'+str(os.getuid()))/'default'
+        transport=API['Transport'](path,binary=binary,allow_absent=True)
+        c=API['LegacyConsumer'](home,transport=transport,api={},proof_reader=lambda *a,**kw:[])
+        try:
+            assert c.command(['new-session','-d','-s','Hold','/bin/sleep 60']).returncode==0
+            assert transport.command('new-session','-d','-s','Victim','/bin/sleep 60').returncode==0
+            assert transport.command('kill-session','-t','=Victim').returncode==0
+            env={k:v for k,v in os.environ.items() if k not in ('TMUX','TMUX_PANE')}
+            env.update(TMUX_TMPDIR=str(home),AGENTSTACK_HOME=str(home))
+            result=subprocess.run([sys.executable,str(ROOT/'bin/lib/runtime_tmux_consumer.py'),'has-session','-t','=Victim'],env=env,capture_output=True,text=True,timeout=10)
+            assert result.returncode==1,result.stderr
+            assert result.stderr=="can't find session: Victim\n"
+            # Compose the real adapter with the actual launcher classifier,
+            # rather than relying only on a stubbed tmux diagnostic.
+            text=(ROOT/'hooks/spawn_child.sh').read_text()
+            start=text.index('codex_session_alive() {')
+            function=text[start:text.index('\n}',start)+2]
+            script='tmux() { "$PYTHON" "$ADAPTER" "$@"; }\n'+function+'\ncodex_session_alive Victim\n'
+            checked=subprocess.run(['/bin/bash','-c',script],env={**env,'PYTHON':sys.executable,'ADAPTER':str(ROOT/'bin/lib/runtime_tmux_consumer.py')},capture_output=True,text=True,timeout=10)
+            assert checked.returncode==1,checked.stderr
+            # Existing session remains: absence did not kill or replace a server.
+            assert transport.command('has-session','-t','=Hold').returncode==0
+        finally:
+            subprocess.run([binary,'-S',str(path),'kill-server'],capture_output=True,check=False)
+
+
+def test_has_session_inventory_failure_is_unknown_not_absent(consumer):
+    c,calls,_=consumer
+    original=c.transport.run
+    def unavailable(argv,**kw):
+        if argv[3]=='list-sessions':return subprocess.CompletedProcess(argv,1,'','Permission denied')
+        return original(argv,**kw)
+    c.transport.run=unavailable
+    with pytest.raises(API['TargetError'],match='^TMUX_TARGET_UNAVAILABLE$'):
+        c.command(['has-session','-t','=Missing'])
+
+
+def test_has_session_present_still_rejects_a_global_replacement(consumer):
+    c,calls,state=consumer;state['global']=True
+    with pytest.raises(API['TargetError'],match='^LEGACY_TARGET_IS_GLOBAL$'):
+        c.command(['has-session','-t','=Alpha'])
+    assert not any(argv[3]=='has-session' for argv in calls)
+
+
+def test_has_session_changing_inventory_cannot_prove_absence(consumer):
+    c,calls,_=consumer
+    original=c.transport.run;count=0
+    def changing(argv,**kw):
+        nonlocal count
+        if argv[3]=='list-sessions':
+            count+=1
+            return subprocess.CompletedProcess(argv,0,'$1\tAlpha\n'+('$2\tMissing\n' if count>1 else ''),'')
+        return original(argv,**kw)
+    c.transport.run=changing
+    with pytest.raises(API['TargetError'],match='^TMUX_TARGET_CHANGED$'):
+        c.command(['has-session','-t','=Missing'])

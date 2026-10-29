@@ -43,6 +43,11 @@ if [[ "${1:-}" == new-session ]]; then
     previous="$argument"
   done
 fi
+if [[ "${1:-}" == list-sessions && "$*" == *'#{session_id}'* ]]; then
+  name="$(cat "$FAKE_TMUX_SESSION_FILE" 2>/dev/null)"
+  [[ -z "$name" ]] || printf '$1\\t%s\\n' "$name"
+  exit 0
+fi
 if [[ "${1:-}" == display-message && "$*" == *'#{socket_path}'* ]]; then
   printf '%s|300\\n' "$FAKE_TMUX_SOCKET"; exit 0
 fi
