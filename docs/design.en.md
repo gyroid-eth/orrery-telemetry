@@ -112,16 +112,16 @@ The information hierarchy is fixed, top to bottom. A new element declares which 
 ORD  summary of the parent's request
 RX   one line of the most recent mail received
 ──────────────────────────────────────── foot
-● ONLINE  LAST 1D AGO  ZSH                    [ ↵ EXIT ]
+● ONLINE  LAST EVENT 1D AGO  ZSH                    [ ↵ EXIT ]
 ```
 
 - Surface: `--panel` with a 2.5% white grade at the top edge only, `--hair` border, 9px radius, shadow `0 10px 32px rgba(0,0,0,.12)`, padding 14px 17px 13px, 9px between rows. The old layer's notched corners (clip-path) and amber corner marks do not appear
 - The top row is horizontal with a 13px gap. The portrait is 56px with a 9px notch, grayscale at contrast 1.06, or the first two letters of the name when missing. The identity column on the right runs name → requested-name note (only when the registered name differs) → chips, 8px apart. The provider logo sits 13px left of the name, at opacity .55 when the agent is not running
 - Chips are 9.5px, 1.5px tracking, padding 2px 7px, wrapping with 6px gaps. The principle is neutral colour, with category in amber and importance in alert. Current state: `LINKED`, `ATTACHED`, and the context-window chip use amber text with a cyan-derived border and glow, and the delivery chip is amber; these are leftovers of the old layer, and new chips do not copy them
-- The "current line" carries a 2px amber rule on its left, padding 7px 11px, one line with ellipsis. It is the agent's "now". With no live information it reads `— STANDBY · no live activity —` in italic on a hairline. The amber rule is this line's mark and is not used elsewhere (current state: the sparkline tooltip and the detail's tool bubble also carry it)
+- The "current line" carries a 2px amber rule on its left, padding 7px 11px, one line with ellipsis. It is the agent's "now". With no display summary, independently of work/wait state, it reads `— NO LIVE SUMMARY —` in italic on a hairline. The amber rule is this line's mark and is not used elsewhere (current state: the sparkline tooltip and the detail's tool bubble also carry it)
 - Key-value rows (ORD / RX): keys in amber 9.5px uppercase, 34px wide, 10px from the value. Values are `#c8c2b1` in dark and `--ink-dim` in light. A row appears only when it has data
 - ctxline appears only while running with a known remaining value: 2px high, width equal to the remaining percentage. 50% and above runs ink-dim → ink, 20–50% ink-dim → amber, below 20% amber
-- The foot has a `--hair-2` rule above, padding-top 9px, 10px / 1.5px tracking. Left: `● ONLINE` (`○ SHELL` when stopped), elapsed time, shell name. Right: a 17px-high EXIT (while running) or KILL (finished / gone and not attached). Both are two-step (arm → confirm, released after 5 s)
+- The foot has a `--hair-2` rule above, padding-top 9px, 10px / 1.5px tracking. Left: `● ONLINE` (`○ SHELL` when stopped), `LAST EVENT` (age of the last recorded event, which can remain old while working), shell name. Right: a 17px-high EXIT (while running) or KILL (finished / gone and not attached). Both are two-step (arm → confirm, released after 5 s)
 - Sinking by state: idle / infra / warmup sink the whole card to opacity .5, hover restores .85. finished / gone / retired leave the card and sink the provider logo to .4 / .4 / .28. Nothing is removed
 - Hover lifts the card 2px onto `--panel-2` with a 28% amber inner border. Click opens the detail. DECK has no "selected" state (the selection ring is NETWORK only)
 
@@ -139,7 +139,7 @@ Usage (#31) was implemented not as a band but as the header's LEFT pill and popo
 
 | State / event | DECK (bay) | NETWORK (node) |
 | --- | --- | --- |
-| running | provider logo lit amber, breathing over 2.8s (opacity .7 ↔ .57). While WORKING, a 135° amber tint on the card (5.5% → 1.8%); only when a turn duration or the context value is known, a 9px square LED top-right blinking at 1s with the duration, or `WORKING` when no time is known | portrait, edge, and dot at 1.2×. While WORKING a motion ring (dash 30 / 70) orbits outside the context arc every 1.5s |
+| running | provider logo lit amber, breathing over 2.8s (opacity .7 ↔ .57). While WORKING, a 135° amber tint on the card (5.5% → 1.8%); for the existing provider-reported or observed work state, regardless of duration/context availability, a 9px square LED top-right blinking at 1s with the duration, or `WORKING` when no time is known | portrait, edge, and dot at 1.2×. While WORKING a motion ring (dash 30 / 70) orbits outside the context arc every 1.5s |
 | waiting (for input) | only when the previous turn's duration is known, `LAST` and the time top-right, still, `--ink-dim` at opacity .55; nothing otherwise | no scan; the arc shows only the remaining value; still 1.2× |
 | ask (needs a human) | top-right `APPROVAL` in red at 1s, LED at .6s; red frame, shadow pulsing at 1.6s | a solid red ring with an italic `!`; the glyph bounces at 1.25s |
 | question | top-right `?` in amber blinking at .9s | a solid cyan ring with an italic `?`; the glyph bounces at 1.6s |
