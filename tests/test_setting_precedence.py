@@ -1006,6 +1006,48 @@ def test_literal_reader_distinguishes_empty_value_and_absence(tmp_path, rhs, val
     assert absent.stdout == "absent\n"
 
 
+@pytest.mark.parametrize("name", [EXTRAS, LEGACY])
+@pytest.mark.parametrize("first", ["OTHER=value", "OTHER=value MORE=value"])
+def test_literal_reader_rejects_protection_in_later_export_operands(tmp_path, name, first):
+    path = tmp_path / "env.sh"
+    path.write_text(f"export {first} {name}=/previous/scope\n")
+    for queried_name in (EXTRAS, LEGACY):
+        result = subprocess.run([sys.executable, str(LITERAL_READER), "state", queried_name, str(path)],
+                                capture_output=True, text=True)
+        assert result.returncode == 2, result.stdout + result.stderr
+        assert result.stdout == "invalid\n"
+        assert "multiple export operands" in result.stderr
+
+
+@pytest.mark.parametrize("body", [
+    "export OTHER=value\n",
+    f"export OTHER='{LEGACY}=/literal data'\n",
+    'export AGENTSTACK_MAIL_ENV="$(printf old)"\n',
+    'export AGENTSTACK_MAIL_ENV="$(printf old; printf render)"\n',
+])
+def test_literal_reader_leaves_single_unrelated_exports_to_their_validators(tmp_path, body):
+    path = tmp_path / "env.sh"
+    path.write_text(body)
+    for name in (EXTRAS, LEGACY):
+        result = subprocess.run([sys.executable, str(LITERAL_READER), "state", name, str(path)],
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == "absent\n"
+
+
+def test_literal_reader_accepts_installer_generated_settings(tmp_path):
+    _write_env_sh_like_the_installer(tmp_path, {
+        "PROJECT_KEY": str(tmp_path / "project"), "EXTRA_PROTECTED_ROOTS": "/extra path",
+        "LEGACY_PROTECTED_ROOTS": "/previous/scope", "PRESERVE_LEGACY_PROTECTED_ROOTS": "true",
+    })
+    path = tmp_path / ".agentstack/env.sh"
+    for name, expected in ((EXTRAS, "/extra path"), (LEGACY, "/previous/scope")):
+        result = subprocess.run([sys.executable, str(LITERAL_READER), "value", name, str(path)],
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == expected
+
+
 def _installer_functions(*names):
     text = INSTALLER.read_text()
     chunks = []

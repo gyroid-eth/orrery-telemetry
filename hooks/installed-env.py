@@ -125,8 +125,14 @@ def read_assignment(path: pathlib.Path, name: str) -> tuple[str, str]:
             lexer = shlex.shlex(record, posix=True, punctuation_chars=";&|")
             lexer.whitespace_split = True
             lexer.commenters = "#"
-            if any(token and set(token) <= set(";&|") for token in lexer):
+            tokens = list(lexer)
+            if any(token and set(token) <= set(";&|") for token in tokens):
                 raise InvalidAssignment("multiple shell commands in installed settings")
+            # A later export operand can assign protection even when the first
+            # is unrelated. Support only the single operand the writer emits;
+            # quoted unrelated values still belong to their own validators.
+            if len(tokens) != 2:
+                raise InvalidAssignment("multiple export operands; expected one assignment")
             if name in record and "\n" in record:
                 raise InvalidAssignment("protection name in an ambiguous assignment or multiline literal")
     if len(found) > 1:

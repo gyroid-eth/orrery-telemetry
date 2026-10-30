@@ -529,6 +529,24 @@ def test_invalid_installed_protection_still_stops_with_only_explicit_python(tmp_
     assert "preflight: passed" not in result.stdout
 
 
+@pytest.mark.parametrize("name", ["AGENTSTACK_PROTECTED_ROOTS", "AGENTSTACK_EXTRA_PROTECTED_ROOTS"])
+@pytest.mark.parametrize("first", ["OTHER=value", "OTHER=value MORE=value"])
+def test_multiple_export_operands_stop_real_dry_run_without_writing(tmp_path, name, first):
+    env = _env_with_working_deps(tmp_path)
+    _installed_env_sh(env, f"export {first} {name}=/previous/scope\n")
+    path = pathlib.Path(env["AGENTSTACK_HOME"]) / "env.sh"
+    before = path.read_bytes()
+
+    result = _run(env, "--dry-run")
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "multiple export operands" in result.stderr
+    assert path.read_bytes() == before
+    assert not (path.parent / "install-state.json").exists()
+    assert not list(path.parent.glob("env.sh.*"))
+    assert "preflight: passed" not in result.stdout
+
+
 @pytest.mark.parametrize("kind", ["directory", "dangling-symlink"])
 def test_existing_nonregular_protection_file_is_not_absence(tmp_path, kind):
     env = _env_with_working_deps(tmp_path)

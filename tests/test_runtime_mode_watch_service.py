@@ -178,9 +178,11 @@ def test_legacy_gemini_child_keeps_inherited_mode_when_default_changes(tmp_path)
     for helper in ('project-context.sh', 'installed-env.py'):
         shutil.copy2(ROOT / 'hooks' / helper, root / 'hooks' / helper)
     shutil.copy2(ROOT/'bin/lib/global-client-loader.sh',root/'bin/lib/global-client-loader.sh')
-    (root/'env.sh').write_text('export AGENTSTACK_RUNTIME_MODE=global\n'
-        'trap \'printf "%s" "$AGENTSTACK_RUNTIME_MODE" > "$AGENTSTACK_HOME/mode.txt"\' EXIT\n')
-    result=subprocess.run(['/bin/bash',str(root/'hooks/spawn_gemini_child.sh'),'--help'],
+    # Installed env.sh contains export data only. Observe the final mode in
+    # the calling shell rather than adding executable logic to that file.
+    (root/'env.sh').write_text('export AGENTSTACK_RUNTIME_MODE=global\n')
+    observe='trap \'printf "%s" "$AGENTSTACK_RUNTIME_MODE" > "$AGENTSTACK_HOME/mode.txt"\' EXIT\n. "$1" --help'
+    result=subprocess.run(['/bin/bash','-c',observe,'fixture',str(root/'hooks/spawn_gemini_child.sh')],
         env={**os.environ,'AGENTSTACK_HOME':str(root),'AGENTSTACK_RUNTIME_MODE':'legacy',
              'AGENTSTACK_LABEL_PREFIX':'org.agentstack.test.r1-gemini'},capture_output=True,text=True)
     assert result.returncode==0,result.stderr
