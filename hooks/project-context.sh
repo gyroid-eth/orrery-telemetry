@@ -455,6 +455,13 @@ try:
     for root in workspace_roots:
         if root not in roots:
             roots.append(root)
+    # Keep aligned with agentstack_mail.reservation_paths.GLOB_MARKERS.
+    # Mail receives absolute reservation names and treats these as patterns.
+    glob_markers = "*?["
+    for root in roots:
+        markers = "".join(char for char in glob_markers if char in root)
+        if markers:
+            raise ValueError(f"protected root contains ORRERY Mail glob markers {markers!r}: {root}")
     print("\n".join(fields + [":".join(roots), ":".join(extras), "end"]))
 except (KeyError, TypeError, ValueError) as exc:
     print(f"agentstack: invalid launch context: {exc}", file=sys.stderr)

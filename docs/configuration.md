@@ -234,6 +234,8 @@ installer は `AGENTSTACK_MAIL_DB`、`AGENTSTACK_MAIL_ENV`、`AGENTSTACK_SIGNALS
 
 ## Reservation の保護範囲と移行
 
+managed `workspace-v1` 起動は、起動先と `AGENTSTACK_EXTRA_PROTECTED_ROOTS` の物理 path 内に `*`・`?`・`[` があると拒否します。これらは ORRERY Mail が予約名を glob と解釈する文字で、自己一致や別フォルダとの競合照合を崩すためです。エラーには該当文字と path を表示します。単独の `]` は使用できます。
+
 `AGENTSTACK_EXTRA_PROTECTED_ROOTS` は追加 reservation root の永続設定です。絶対 path または `~/` path を colon 区切りで指定します（空白は可、path 内の colon は不可）。managed 起動は物理 path に解決し、symlink / 末尾 slash の別名と重複を、順序を変えずにまとめます。今回対象の top-level と delegated child の起動では、順序付き追加 root の後へ、起動先として選んだ物理作業 directory を保護対象に追加します。Git root は検出しても自動的には保護しません。必要なら `AGENTSTACK_EXTRA_PROTECTED_ROOTS` で明示します。前の起動の `AGENTSTACK_PROTECTED_ROOTS` は設定として再利用しません。path 形式の project key や `AGENTSTACK_VAULT` だけでは保護に追加しません。namespace の選択は変えず、installed project key も保持します。
 
 起動時の追加 root は、明示した process の値（空も含む）、installed extras、空、の順です。旧設定を移行するのは install/update だけです。

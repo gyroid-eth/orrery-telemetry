@@ -67,8 +67,8 @@ def test_shared_boundary_changes_fail_instead_of_silently_dropping_rules(mutatio
 
 
 @pytest.mark.parametrize('provider,name,digest', [
-    ('claude', 'CLAUDE.md', '11631ed22c0999b0f527fcd95171cb1334fc356645b7cb66a68a27f5badca740'),
-    ('codex', 'AGENTS.md', '26ef5d3cf1f404f8bc10d9d7a9eb7060d65e0bd610efc85d333eab80691fef14'),
+    ('claude', 'CLAUDE.md', '84eaaca21bf661cab608d11d778186573fb59399095d87dfc0d44c45b62a2a75'),
+    ('codex', 'AGENTS.md', '487580671d31b995ac6e1c34c72ec42615aeec6130672cb91e5065746a300440'),
 ])
 def test_program_output_matches_scope_adjusted_baseline(provider, name, digest):
     # Issue #33 intentionally changes reservation guidance, not the provider

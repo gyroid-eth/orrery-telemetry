@@ -367,6 +367,41 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
                 self.assertIn("legacy environment", result.stderr)
                 self.assertFalse(list(self.output.glob("*.json")))
 
+    def test_glob_markers_in_workspace_or_extra_roots_stop_before_launch(self) -> None:
+        for marker, name in (("[", "folder[ab]"), ("*", "folder*"), ("?", "folder?")):
+            path = self.root / name
+            path.mkdir()
+            for provider in PROVIDERS:
+                for source in ("workspace", "extra"):
+                    with self.subTest(marker=marker, provider=provider, source=source):
+                        target = path if source == "workspace" else self.repo
+                        extras = {"AGENTSTACK_EXTRA_PROTECTED_ROOTS": str(path)} if source == "extra" else {}
+                        result = self.run_launcher(provider, target, extra=extras)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("ORRERY Mail glob markers " + repr(marker), result.stderr)
+                        self.assertIn(str(path), result.stderr)
+                        self.assertFalse(list(self.output.glob("*.json")))
+                        self.assertFalse(list(self.root.glob("agent-start*")))
+
+    def test_glob_check_uses_physical_roots_and_allows_standalone_closing_bracket(self) -> None:
+        target = self.root / "folder[ab]"
+        target.mkdir()
+        alias = self.root / "ordinary-alias"
+        alias.symlink_to(target, target_is_directory=True)
+        for source in ("workspace", "extra"):
+            with self.subTest(source=source):
+                extras = {"AGENTSTACK_EXTRA_PROTECTED_ROOTS": str(alias)} if source == "extra" else {}
+                result = self.run_launcher("codex", alias if source == "workspace" else self.repo, extra=extras)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(str(target), result.stderr)
+                self.assertFalse(list(self.output.glob("*.json")))
+        allowed = self.root / "folder]"
+        allowed.mkdir()
+        result = self.run_launcher("codex", allowed, inside=True,
+                                   extra={"AGENTSTACK_EXTRA_PROTECTED_ROOTS": str(allowed)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.read("provider")["env"]["AGENTSTACK_PROTECTED_ROOTS"], str(allowed))
+
     def test_explicit_additional_protected_roots_override_installed_roots_and_deduplicate(self) -> None:
         extra_roots = f"{self.plain}:{self.repo}"
         result = self.run_launcher("codex", self.repo, inside=True,
@@ -571,36 +606,32 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), f"{self.plain}|project/note.md")
 
-    def test_literal_glob_characters_in_workspace_roots_reach_reservation_guard(self) -> None:
+    def test_legacy_literal_glob_roots_still_reach_reservation_guard(self) -> None:
         sibling = self.root / "workspacea"
         sibling.mkdir()
         for name in ("workspace[ab]", "workspace*", "workspace?"):
             workspace = self.root / name
             workspace.mkdir()
             for disable_globbing in (False, True):
-                for legacy in (False, True):
-                    with self.subTest(name=name, noglob=disable_globbing, legacy=legacy):
-                        # Exercise the real helper output, then the actual hook
-                        # matcher, with sibling names that would match a glob.
-                        script = ('. "$1"; '
-                                  'agentstack_apply_workspace_context "$2" shared; '
-                                  'expected="$2/note.md"; if [ "$5" = legacy ]; then unset AGENTSTACK_PROTECTION_CONTEXT; expected=note.md; fi; '
-                                  '. "$3"; before="$-"; before_ifs="$IFS"; '
-                                  'reservation_resolve_tool_context "$4" || exit 10; '
-                                  '[ "$MATCHED_ROOT" = "$2" ] && [ "$REL_PATH" = "$expected" ] || exit 11; '
-                                  'if reservation_resolve_tool_context "$6"; then exit 12; fi; '
-                                  '[ "$-" = "$before" ] && [ "$IFS" = "$before_ifs" ]')
-                        if disable_globbing:
-                            script = "set -f; " + script
-                        result = subprocess.run(["/bin/bash", "-eu", "-c", script, "test",
-                            str(ROOT / "hooks/project-context.sh"), str(workspace),
-                            str(ROOT / "hooks/reservation-common.sh"),
-                            json.dumps({"tool_input": {"file_path": str(workspace / "note.md")}}),
-                            "legacy" if legacy else "managed",
-                            json.dumps({"tool_input": {"file_path": str(sibling / "note.md")}})],
-                            cwd=self.root, env={**self.env, "AGENTSTACK_EXTRA_PROTECTED_ROOTS": ""},
-                            capture_output=True, text=True, timeout=20)
-                        self.assertEqual(result.returncode, 0, result.stderr)
+                with self.subTest(name=name, noglob=disable_globbing):
+                    # Managed launches reject these roots; direct legacy hooks
+                    # retain their literal scope matcher and relative identity.
+                    script = ('export AGENTSTACK_PROTECTED_ROOTS="$1" AGENTSTACK_PROJECT_KEY=shared; '
+                              'unset AGENTSTACK_PROTECTION_CONTEXT; '
+                              '. "$2"; before="$-"; before_ifs="$IFS"; '
+                              'reservation_resolve_tool_context "$3" || exit 10; '
+                              '[ "$MATCHED_ROOT" = "$1" ] && [ "$REL_PATH" = note.md ] || exit 11; '
+                              'if reservation_resolve_tool_context "$4"; then exit 12; fi; '
+                              '[ "$-" = "$before" ] && [ "$IFS" = "$before_ifs" ]')
+                    if disable_globbing:
+                        script = "set -f; " + script
+                    result = subprocess.run(["/bin/bash", "-eu", "-c", script, "test", str(workspace),
+                        str(ROOT / "hooks/reservation-common.sh"),
+                        json.dumps({"tool_input": {"file_path": str(workspace / "note.md")}}),
+                        json.dumps({"tool_input": {"file_path": str(sibling / "note.md")}})],
+                        cwd=self.root, env=self.env,
+                        capture_output=True, text=True, timeout=20)
+                    self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_filesystem_root_extra_uses_canonical_managed_reservation_path(self) -> None:
         result = self.run_launcher("codex", self.repo, inside=True,

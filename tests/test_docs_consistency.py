@@ -211,6 +211,20 @@ def test_automatic_protection_migration_and_cutover_are_documented() -> None:
     assert "ignoring ambient roots (never migrated)" in INSTALLER
 
 
+def test_managed_root_restriction_matches_mail_glob_markers_and_docs() -> None:
+    mail = _read("packages/agentstack_mail/src/agentstack_mail/reservation_paths.py")
+    markers = json.loads(re.search(r'^GLOB_MARKERS = (".+")$', mail, re.M).group(1))
+    launcher = _read("hooks/project-context.sh")
+    rejected = json.loads(re.search(r'^    glob_markers = (".+")$', launcher, re.M).group(1))
+    assert rejected == markers
+    for rel in ("docs/configuration.md", "docs/configuration.en.md"):
+        doc = _read(rel)
+        for needle in ("workspace-v1", "AGENTSTACK_EXTRA_PROTECTED_ROOTS", "ORRERY Mail", "glob", "`]`"):
+            assert needle in doc, (rel, needle)
+        for marker in markers:
+            assert f"`{marker}`" in doc, (rel, marker)
+
+
 def test_workspace_protection_does_not_change_warm_pool_selection() -> None:
     child = _read("hooks/spawn_child.sh")
     assert "claim-workspace-v1" not in child

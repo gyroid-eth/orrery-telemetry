@@ -211,6 +211,8 @@ The installer derives `AGENTSTACK_MAIL_DB`, `AGENTSTACK_MAIL_ENV`, and `AGENTSTA
 
 ## Reservation protection and migration
 
+Managed `workspace-v1` launches reject `*`, `?`, or `[` in the physical paths of the launch directory and `AGENTSTACK_EXTRA_PROTECTED_ROOTS`. ORRERY Mail interprets these characters in reservation names as glob markers, which can break self-matching or cause false conflicts with another folder. The error identifies the characters and path. A standalone `]` is allowed.
+
 `AGENTSTACK_EXTRA_PROTECTED_ROOTS` is the persistent setting for additional reservation roots. Use colon-separated absolute or `~/` paths (spaces are supported; colons inside a path are not). Managed launches resolve physical paths, collapse symlink/trailing-slash aliases, and deduplicate without reordering. Top-level and delegated-child launches covered by this change protect their selected physical working directory after the ordered extras. Git root discovery does not automatically extend protection; explicitly include it in `AGENTSTACK_EXTRA_PROTECTED_ROOTS` if wanted. These launches do not reuse a previous runtime `AGENTSTACK_PROTECTED_ROOTS` list. A path-shaped project key and `AGENTSTACK_VAULT` do not add protection by themselves. Namespace selection is unchanged; the installed project key remains in use.
 
 At launch, an explicitly set process extras value (including empty) wins over installed extras, then empty. Only install/update performs the legacy conversion.
