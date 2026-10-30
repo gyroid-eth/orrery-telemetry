@@ -79,10 +79,13 @@ for raw_path in raw_paths:
                 relative = absolute[len(root.rstrip("/")) + 1 :]
             else:
                 continue
+            # Match REL_PATH in reservation-common.sh: managed workers key on
+            # the physical absolute path; legacy workers keep the relative name.
+            reservation_path = absolute if canonical else relative
             # New workers use NFC. NFD is included so an upgraded install also
             # invalidates state armed by the older handwritten hook.
             for form in ("NFC", "NFD"):
-                normalized = unicodedata.normalize(form, relative)
+                normalized = unicodedata.normalize(form, reservation_path)
                 key = hashlib.sha1((agent + "\0" + normalized).encode("utf-8")).hexdigest()
                 try:
                     (state_dir / key).unlink()
