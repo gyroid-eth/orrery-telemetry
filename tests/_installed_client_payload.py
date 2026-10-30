@@ -45,6 +45,6 @@ def copy_client_library(install_root: Path) -> None:
     # Complete custom layouts include it; deliberately partial tests stay partial.
     assert 'copy_core_tree "$REPO_ROOT/hooks" "$HOOKS_DIR" "hooks"' in (ROOT / 'scripts/install.sh').read_text()
     hooks=install_root/'hooks';hooks.mkdir(parents=True,exist_ok=True)
-    for name in ('session-identity-policy.sh','project-context.sh'):
+    for name in ('session-identity-policy.sh','project-context.sh','installed-env.py'):
         target=hooks/name
         if not target.exists():shutil.copy2(ROOT/'hooks'/name,target)

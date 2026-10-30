@@ -92,11 +92,8 @@ def _runner_env(tmp_path: pathlib.Path) -> dict[str, str]:
 def _isolated_installer_repo(tmp_path: pathlib.Path) -> pathlib.Path:
     repo = tmp_path / "installer-repo"
     repo.mkdir()
-    for directory in ("bin", "dashboard", "scripts"):
+    for directory in ("bin", "dashboard", "scripts", "hooks", "examples"):
         shutil.copytree(ROOT / directory, repo / directory)
-    (repo / "hooks").mkdir()
-    shutil.copy2(ROOT / "hooks" / "project-context.sh", repo / "hooks")
-    shutil.copy2(ROOT / "hooks" / "child_tools.py", repo / "hooks")
     shutil.copy2(ROOT / "VERSION", repo / "VERSION")
     for name in RUNTIME_CONTRACT_SOURCES:
         destination = repo / name

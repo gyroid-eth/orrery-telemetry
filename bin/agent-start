@@ -51,6 +51,8 @@ command -v "$CLAUDE_BIN" >/dev/null 2>&1 || ags_die "claude not found on PATH (s
 
 DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 [[ -n "$DIR" ]] || exit 0
+ags_prepare_top_level_context "$DIR" "${AGENTSTACK_PROJECT_KEY:-}" || exit $?
+DIR="$AGENTSTACK_PROJECT_WORK_DIR"
 
 # Prevent identity hijack: stale/inherited values must not select another agent
 # or become part of a newly created tmux server's global environment.
@@ -135,16 +137,21 @@ if [[ -n "$SESSION_AGENT_NAME" ]]; then
 fi
 unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
 
+TMUX_PROJECT_OPTIONS="$(ags_tmux_project_options)"
+TMUX_CLEAR_GIT_COMMAND="$(ags_tmux_clear_git_command "$SESSION")"
+TMUX_RESTORE_WORKSPACE_COMMAND="$(ags_tmux_restore_workspace_command)"
+ags_clear_client_project_context
 INNER="$(mktemp -t agent-start.XXXXXX)"
 cat > "$INNER" <<EOF
 #!/usr/bin/env bash
 cd $(printf '%q' "$DIR") || exit 1
 unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENTITY 2>/dev/null || true
 $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
+  $TMUX_PROJECT_OPTIONS \
   -e $(printf '%q' "AGENT_NAME=$SESSION_AGENT_NAME") \
   -e CLAUDECODE=1 \
   -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
-  "if [ -n $(printf '%q' "$SESSION_TOKEN_FILE") ] && [ -r $(printf '%q' "$SESSION_TOKEN_FILE") ]; then IFS= read -r CHILD_REGISTRATION_TOKEN < $(printf '%q' "$SESSION_TOKEN_FILE") || true; export CHILD_REGISTRATION_TOKEN; fi; $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
+  "$TMUX_RESTORE_WORKSPACE_COMMAND unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; $TMUX_CLEAR_GIT_COMMAND || exit 1; if [ -n $(printf '%q' "$SESSION_TOKEN_FILE") ] && [ -r $(printf '%q' "$SESSION_TOKEN_FILE") ]; then IFS= read -r CHILD_REGISTRATION_TOKEN < $(printf '%q' "$SESSION_TOKEN_FILE") || true; export CHILD_REGISTRATION_TOKEN; fi; $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
 rm -f -- "\$0"
 exec "\$SHELL" -l
 EOF

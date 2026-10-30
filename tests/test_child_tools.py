@@ -668,6 +668,8 @@ def test_codex_selection_keeps_global_optional_startup_grace(grace):
 # --------------------------------------------------------------------------- #
 def _env(tmp_path, *, codex=False, proxy=True, claude_json=None):
     env, workdir = _fake_launch_env(tmp_path, codex=codex)
+    env["AGENTSTACK_PYTHON"] = sys.executable
+    env["PATH"] = str(pathlib.Path(sys.executable).parent) + os.pathsep + env["PATH"]
     for key in ("AGENTSTACK_CLAUDE_CHILD_CHROME", "AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE"):
         env.pop(key, None)
     if proxy:

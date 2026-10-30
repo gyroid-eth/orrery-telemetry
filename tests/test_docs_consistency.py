@@ -165,6 +165,78 @@ def test_api_docs_state_the_served_api_generation_and_when_it_changes() -> None:
         assert rule in doc and "CHANGELOG" in doc, f"{rel} does not say when api goes up"
 
 
+def test_protection_setting_is_documented_across_launch_and_agent_guides() -> None:
+    example = _read(".env.example")
+    assert "AGENTSTACK_EXTRA_PROTECTED_ROOTS=/path/to/shared-vault" in example
+    assert "AGENTSTACK_PROTECTED_ROOTS=" not in example
+    for rel in (
+        "AGENTS.md", "README.md", "README.en.md",
+        "docs/configuration.md", "docs/configuration.en.md",
+        "docs/install.md", "docs/install.en.md", "docs/hooks.md", "docs/hooks.en.md",
+        "docs/launchers.md", "docs/launchers.en.md",
+        "docs/delegation.md", "docs/delegation.en.md",
+        "claude/CLAUDE.md", "codex/AGENTS.md",
+    ):
+        assert "AGENTSTACK_EXTRA_PROTECTED_ROOTS" in _read(rel), rel
+    for rel in ("claude/CLAUDE.md", "codex/AGENTS.md"):
+        assert "physical absolute file paths" in _read(rel), rel
+        assert "Do not carry a previous" in _read(rel), rel
+
+
+def test_automatic_protection_migration_and_cutover_are_documented() -> None:
+    # The empty marker and installed-file source are safety boundaries, not
+    # optional cleanup advice; both install guides and references must say so.
+    for rel in ("docs/configuration.md", "docs/configuration.en.md",
+                "docs/install.md", "docs/install.en.md"):
+        doc = _read(rel)
+        for needle in ("AGENTSTACK_EXTRA_PROTECTED_ROOTS=", "AGENTSTACK_PROTECTED_ROOTS",
+                       "--dry-run", "--reset-settings", "shell/tmux", "marker",
+                       "direct/unmanaged", "cutover"):
+            assert needle in doc, (rel, needle)
+    english = _read("docs/configuration.en.md")
+    for needle in ("using presence rather than non-emptiness", "copied exactly once",
+                   "literal value and order intact", "no manual copy is needed",
+                   "source, value, and destination", "before the installed file is overwritten",
+                   "even when extras already exist", "physical absolute path",
+                   "restart affected sessions together", "Namespace selection is unchanged"):
+        assert needle in english, needle
+    japanese = _read("docs/configuration.md")
+    for needle in ("設定の有無", "そのまま一度だけ", "手動コピーは不要", "移行元・値・保存先",
+                   "上書きする前", "extras が既に存在しても警告", "物理絶対 path",
+                   "session をまとめて再起動", "namespace の選択は変えず"):
+        assert needle in japanese, needle
+    assert '"AGENTSTACK_EXTRA_PROTECTED_ROOTS": os.environ["AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS"]' in INSTALLER
+    assert "would migrate installed AGENTSTACK_PROTECTED_ROOTS to AGENTSTACK_EXTRA_PROTECTED_ROOTS once" in INSTALLER
+    assert "source=%s value=%q destination=%s:AGENTSTACK_EXTRA_PROTECTED_ROOTS" in INSTALLER
+    assert "ignoring ambient roots (never migrated)" in INSTALLER
+
+
+def test_managed_root_restriction_matches_mail_glob_markers_and_docs() -> None:
+    mail = _read("packages/agentstack_mail/src/agentstack_mail/reservation_paths.py")
+    markers = json.loads(re.search(r'^GLOB_MARKERS = (".+")$', mail, re.M).group(1))
+    launcher = _read("hooks/project-context.sh")
+    rejected = json.loads(re.search(r'^    unsupported_characters = (".+")$', launcher, re.M).group(1))
+    assert rejected == markers + "\\"
+    assert r'.replace("\\", "/")' in _read("packages/agentstack_mail/src/agentstack_mail/app.py")
+    for rel in ("docs/configuration.md", "docs/configuration.en.md"):
+        doc = _read(rel)
+        for needle in ("workspace-v1", "AGENTSTACK_EXTRA_PROTECTED_ROOTS", "ORRERY Mail", "glob", "`]`"):
+            assert needle in doc, (rel, needle)
+        for marker in rejected:
+            assert f"`{marker}`" in doc, (rel, marker)
+
+
+def test_workspace_protection_does_not_change_warm_pool_selection() -> None:
+    child = _read("hooks/spawn_child.sh")
+    assert "claim-workspace-v1" not in child
+    assert 'WARM_STATUS=$(bash "$WARM_POOL" status' in child
+    assert 'claim_warm_session "$WARM_TYPE" "$CHILD_NAME" "$CHILD_MODEL"' in child
+    assert '"${AGENTSTACK_PROTECTION_CONTEXT:-}" == workspace-v1' not in child
+    for rel in ("docs/launchers.md", "docs/launchers.en.md",
+                "docs/delegation.md", "docs/delegation.en.md"):
+        assert "warm pool" in _read(rel).replace("warm-pool", "warm pool"), rel
+
+
 def test_child_tool_docs_explain_approval_refusal_reports_and_repair():
     report = "`MCP tool <tool-name> is blocked: <exact message>.`"
     for path in ("docs/delegation.md", "docs/delegation.en.md"):

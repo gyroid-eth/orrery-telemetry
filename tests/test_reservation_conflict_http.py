@@ -118,6 +118,114 @@ def test_real_mail_guards_require_owned_and_no_active_foreign_conflict(reserved,
     if foreign=='active':assert 'EditorBeta' in result.stderr
 
 
+
+@pytest.mark.parametrize("kind", ["claude", "codex"])
+def test_managed_nested_launches_share_file_identity_without_false_conflicts(mail, tmp_path, kind):
+    repo = tmp_path / "foldera"
+    nested = repo / "sub"
+    other = tmp_path / "folderb" / "sub"
+    nested.mkdir(parents=True)
+    other.mkdir(parents=True)
+    same_file = nested / "deep" / "note.md"
+    different_file = other / "deep" / "note.md"
+    same_file.parent.mkdir()
+    different_file.parent.mkdir()
+
+    def managed_environment(cwd):
+        env = clean_env()
+        env.update(
+            HOME=str(tmp_path), PROJECT_KEY=str(repo),
+            AGENTSTACK_PROJECT_KEY=str(repo),
+            AGENTSTACK_EXTRA_PROTECTED_ROOTS="",
+            AGENTSTACK_PYTHON=sys.executable,
+        )
+        context = subprocess.run(
+            ["/bin/bash", str(ROOT / "hooks/project-context.sh"),
+             "workspace-context-json", str(cwd), str(repo)],
+            cwd=cwd, env=env, text=True, capture_output=True, timeout=12,
+        )
+        assert context.returncode == 0, context.stderr
+        env.update(json.loads(context.stdout)["environment"])
+        return env
+
+    def managed_key(cwd, target):
+        env = managed_environment(cwd)
+        script = '. "$1"; reservation_resolve_tool_context "$2" || exit $?; printf "%s" "$REL_PATH"'
+        result = subprocess.run(
+            ["/bin/bash", "-eu", "-c", script, "test",
+             str(ROOT / "hooks/reservation-common.sh"),
+             json.dumps({"tool_input": {"file_path": str(target)}})],
+            cwd=cwd, env=env, text=True, capture_output=True, timeout=12,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    outer_key = managed_key(repo, same_file)
+    inner_key = managed_key(nested, same_file)
+    different_key = managed_key(other, different_file)
+    assert outer_key == inner_key == str(same_file.resolve())
+    assert different_key == str(different_file.resolve())
+    assert different_key != inner_key
+
+    call(mail, "ensure_project", human_key=str(repo))
+    for agent in ("EditorAlpha", "EditorBeta"):
+        call(mail, "register_agent", project_key=str(repo),
+             name=agent, program="codex", model="fixture")
+    first = call(mail, "file_reservation_paths", project_key=str(repo),
+                 agent_name="EditorAlpha", paths=[outer_key], ttl_seconds=900)
+    assert len(first["granted"]) == 1, first
+    conflict = call(mail, "file_reservation_paths", project_key=str(repo),
+                    agent_name="EditorBeta", paths=[inner_key], ttl_seconds=900)
+    assert not conflict["granted"] and "EditorAlpha" in str(conflict["conflicts"]), conflict
+    separate = call(mail, "file_reservation_paths", project_key=str(repo),
+                    agent_name="EditorBeta", paths=[different_key], ttl_seconds=900)
+    assert len(separate["granted"]) == 1 and not separate["conflicts"], separate
+
+    def check_edit(cwd, agent, target=same_file):
+        env = managed_environment(cwd)
+        env.update(
+            AGENTSTACK_RUNTIME_DIR=str(tmp_path / ("runtime-" + agent)),
+            AGENTSTACK_MCP_URL=mail["url"],
+            AGENTSTACK_MAIL_HTTP_BEARER_MODE="disabled",
+            FILE_RESERVATION_RETRY_DELAY_SECONDS="0", AGENT_NAME=agent,
+        )
+        payload = {"session_id": "fixture", "cwd": str(cwd)}
+        if kind == "claude":
+            command = ["/bin/bash", str(ROOT / "hooks/check-file-reservation.sh")]
+            payload.update(tool_name="Edit", tool_input={"file_path": str(target)})
+        else:
+            command = [sys.executable, str(ROOT / "hooks/check-codex-file-reservation.py")]
+            payload.update(tool_name="apply_patch", tool_input={"command":
+                "*** Begin Patch\n*** Add File: " + str(target) + "\n+text\n*** End Patch"})
+        return subprocess.run(
+            command, input=json.dumps(payload),
+            text=True, capture_output=True, env=env, cwd=cwd, timeout=15,
+        )
+
+    assert check_edit(repo, "EditorAlpha").returncode == 0
+    denied = check_edit(nested, "EditorBeta")
+    assert denied.returncode == 2, denied.stdout + denied.stderr
+    assert "EditorAlpha" in denied.stderr
+    assert check_edit(other, "EditorBeta", different_file).returncode == 0
+
+    # Ordinary sibling folders survive launch validation and use literal Mail
+    # identities through acquire, edit checks, renewal and path-based release.
+    wrong = call(mail, "renew_file_reservations", project_key=str(repo),
+                 agent_name="EditorAlpha", paths=[different_key])
+    assert wrong["renewed"] == 0, wrong
+    untouched = call(mail, "release_file_reservations", project_key=str(repo),
+                     agent_name="EditorAlpha", paths=[different_key])
+    assert untouched["released"] == 0, untouched
+    renewed = call(mail, "renew_file_reservations", project_key=str(repo),
+                   agent_name="EditorAlpha", paths=[inner_key])
+    assert renewed["renewed"] == 1 and not renewed["conflict_check"]["conflicts"], renewed
+    released = call(mail, "release_file_reservations", project_key=str(repo),
+                    agent_name="EditorAlpha", paths=[inner_key])
+    assert released["released"] == 1, released
+    assert check_edit(repo, "EditorAlpha").returncode == 2
+    assert check_edit(other, "EditorBeta", different_file).returncode == 0
+
+
 def test_real_renew_carries_checked_scope_and_keeps_resources_unpublished(reserved):
     service,project=reserved;paths=['docs/note.md',str(project/'docs/note.md')]
     result=call(service,'renew_file_reservations',project_key=str(project),agent_name='EditorAlpha',paths=paths)

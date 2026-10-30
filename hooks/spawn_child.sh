@@ -1352,8 +1352,39 @@ CODEX_WATCH_END_BY=105
 # installer now persists AGENTSTACK_CODEX_BIN; this is the fallback for
 # installs that predate it and for hosts where the setting is empty.
 # The env.sh reader defines functions only; binary rules are loaded above.
+# Workspace policy belongs to this launcher version, not an unrelated hooks
+# override (which may only customize cleanup or reminders).
+PROJECT_CONTEXT_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/project-context.sh"
+[[ -f "$PROJECT_CONTEXT_HELPER" ]] || PROJECT_CONTEXT_HELPER="$HOOKS_DIR/project-context.sh"
 # shellcheck disable=SC1090
-[[ -f "$HOOKS_DIR/project-context.sh" ]] && . "$HOOKS_DIR/project-context.sh"
+[[ -f "$PROJECT_CONTEXT_HELPER" ]] && . "$PROJECT_CONTEXT_HELPER"
+
+# A delegated child keeps its parent's Mail namespace, but its workspace is
+# always the directory it will actually launch in. Runtime roots from a parent
+# or a previous tmux server are outputs, never extra-root configuration.
+prepare_child_workspace_context() {
+    if ! declare -F agentstack_apply_workspace_context >/dev/null; then
+        echo "Error: workspace context helper is unavailable; refusing child launch" >&2
+        return 1
+    fi
+    agentstack_apply_workspace_context "$WORK_DIR" "$PROJECT_KEY" || return 1
+    WORK_DIR="$AGENTSTACK_PROJECT_WORK_DIR"
+}
+
+append_child_workspace_environment() {
+    local name
+    for name in AGENTSTACK_PROJECT_REPOSITORY AGENTSTACK_PROJECT_WORK_DIR \
+        AGENTSTACK_PROJECT_WORKTREE_ROOT AGENTSTACK_PROTECTED_ROOTS AGENTSTACK_EXTRA_PROTECTED_ROOTS \
+        AGENTSTACK_PROTECTION_CONTEXT; do
+        TMUX_ENV_ARGS+=(-e "$name=${!name:-}")
+    done
+    TMUX_ENV_ARGS+=(-e "AGENTSTACK_PROJECT_CONTEXT=" -e "AGENTSTACK_LOOKUP_PROJECT_KEY=")
+    # Separate launch snapshots survive env.sh loaded by a login profile.
+    TMUX_ENV_ARGS+=(-e "AGENTSTACK_LAUNCH_WORK_DIR=$WORK_DIR"
+        -e "AGENTSTACK_LAUNCH_PROJECT_KEY=$PROJECT_KEY"
+        -e "AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS=$AGENTSTACK_EXTRA_PROTECTED_ROOTS"
+        -e "AGENTSTACK_LAUNCH_CONTEXT_HELPER=$PROJECT_CONTEXT_HELPER")
+}
 
 codex_search_path() {
     codex_launch_search_path "$@"
@@ -2894,11 +2925,8 @@ build_embedded_task_prompt() {
         "$parent_name" "$task_text"
 }
 
-# The Claude child's tmux command. With chrome off, no tools selected and no
-# first prompt this must stay byte-for-byte the command used before
-# --claude-chrome existed; the tool flags (checked to hold only
-# [A-Za-z0-9_,.:-] words), --chrome and the first prompt are the only
-# additions.
+# The Claude child's tmux command. Resolve the pinned launch target after the
+# login profile, then preserve the same provider flags and cleanup policy.
 #
 # The first prompt goes in as the `claude [prompt]` argument, so it is the
 # user's first message. Pasted into the input box it arrived wrapped in
@@ -2908,7 +2936,7 @@ build_embedded_task_prompt() {
 # text travels in a private file (a tmux environment value has a size limit)
 # that the child's shell reads once and removes.
 claude_child_launch_command() {
-    local inner='export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); "${CLAUDE_CHILD_BIN:-claude}" --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"'
+    local inner='cd "$AGENTSTACK_LAUNCH_WORK_DIR" || exit $?; _ags_workspace_context="$(AGENTSTACK_EXTRA_PROTECTED_ROOTS="$AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS" /bin/bash "$AGENTSTACK_LAUNCH_CONTEXT_HELPER" workspace-context-exports "$PWD" "$AGENTSTACK_LAUNCH_PROJECT_KEY")" || exit $?; eval "$_ags_workspace_context"; unset _ags_workspace_context AGENTSTACK_LAUNCH_WORK_DIR AGENTSTACK_LAUNCH_PROJECT_KEY AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS AGENTSTACK_LAUNCH_CONTEXT_HELPER; export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); "${CLAUDE_CHILD_BIN:-claude}" --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"'
     if [[ -n "${CLAUDE_CHILD_TOOL_FLAGS:-}" ]]; then
         inner+=" $CLAUDE_CHILD_TOOL_FLAGS"
     fi
@@ -3197,6 +3225,8 @@ if [[ -z "$PROJECT_KEY" ]]; then
     exit 1
 fi
 
+prepare_child_workspace_context || exit 1
+
 # --- Pre-registered mode ---
 # 親エージェントが MCP 経由で事前に register_agent / file_reservation_paths を
 # 済ませてから呼ぶモード。通常は task mail を正本にし、--embed-task 使用時は
@@ -3425,6 +3455,7 @@ PY
         exit 1
     fi
         WORK_DIR="$WORKTREE_DIR"
+        prepare_child_workspace_context || exit 1
         echo "[spawn_child/pre-reg] WORK_DIR overridden to worktree: $WORK_DIR" >&2
     fi
 
@@ -3451,6 +3482,7 @@ PY
     else
     TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=$CHILD_RESUME_RETENTION_DAYS" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_AUTO_OPEN_CHILD=$AUTO_OPEN_CHILD" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
     fi
+    append_child_workspace_environment
     if [[ "$STANDALONE" != true ]]; then
         TMUX_ENV_ARGS+=(-e "PARENT_AGENT=$PARENT_NAME")
     fi
@@ -3530,6 +3562,7 @@ ${TASK}"
             "${TMUX_ENV_ARGS[@]}" \
             "$CHILD_SHELL"' -lc '"'"'
                 '"$CODEX_CHILD_PATH_SETUP_QUOTED"';
+                cd "$AGENTSTACK_LAUNCH_WORK_DIR" || exit $?; _ags_workspace_context="$(AGENTSTACK_EXTRA_PROTECTED_ROOTS="$AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS" /bin/bash "$AGENTSTACK_LAUNCH_CONTEXT_HELPER" workspace-context-exports "$PWD" "$AGENTSTACK_LAUNCH_PROJECT_KEY")" || exit $?; eval "$_ags_workspace_context"; unset _ags_workspace_context AGENTSTACK_LAUNCH_WORK_DIR AGENTSTACK_LAUNCH_PROJECT_KEY AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS AGENTSTACK_LAUNCH_CONTEXT_HELPER;
                 # The child never sources a user-side bootstrap: identity comes
                 # from the reserved name and token file, and a failing script
                 # under set -e would take the whole session with it (2026-09-03).
@@ -4267,6 +4300,7 @@ if [[ "$USE_WORKTREE" == true ]]; then
         exit 1
     fi
     WORK_DIR="$WORKTREE_DIR"
+    prepare_child_workspace_context || exit 1
     echo "[spawn_child] WORK_DIR overridden to worktree: $WORK_DIR" >&2
 fi
 
@@ -4348,6 +4382,7 @@ if [[ -n "$HARNESS" ]]; then
 else
 TMUX_ENV_ARGS=(-e "CLAUDECODE=1" -e "AGENTSTACK_RESERVED_IDENTITY=1" -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_NAME" -e "PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_PROJECT_KEY=$PROJECT_KEY" -e "AGENTSTACK_HOOKS_DIR=$HOOKS_DIR" -e "AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR" -e "AGENTSTACK_MCP_URL=$MCP_URL" -e "AGENTSTACK_MAIL_ENV=$MAIL_ENV" -e "AGENTSTACK_MAIL_HTTP_BEARER_MODE=$HTTP_BEARER_MODE" -e "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=$CHILD_RESUME_RETENTION_DAYS" -e "AGENTSTACK_TERMINAL=$TERMINAL_SETTING" -e "AGENTSTACK_AUTO_OPEN_CHILD=$AUTO_OPEN_CHILD" -e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)" -e "AGENTSTACK_CODEX_NETWORK_FLAGS=$(codex_network_flags)")
 fi
+append_child_workspace_environment
 if [[ -n "$AGENTSTACK_HOME_DIR" ]]; then
     TMUX_ENV_ARGS+=(-e "AGENTSTACK_HOME=$AGENTSTACK_HOME_DIR")
 fi
@@ -4426,6 +4461,7 @@ elif [[ "$USE_CODEX" == true ]]; then
         "${TMUX_ENV_ARGS[@]}" \
         "$CHILD_SHELL"' -lc '"'"'
                 '"$CODEX_CHILD_PATH_SETUP_QUOTED"';
+                cd "$AGENTSTACK_LAUNCH_WORK_DIR" || exit $?; _ags_workspace_context="$(AGENTSTACK_EXTRA_PROTECTED_ROOTS="$AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS" /bin/bash "$AGENTSTACK_LAUNCH_CONTEXT_HELPER" workspace-context-exports "$PWD" "$AGENTSTACK_LAUNCH_PROJECT_KEY")" || exit $?; eval "$_ags_workspace_context"; unset _ags_workspace_context AGENTSTACK_LAUNCH_WORK_DIR AGENTSTACK_LAUNCH_PROJECT_KEY AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS AGENTSTACK_LAUNCH_CONTEXT_HELPER;
             # See the pre-registered path: no user-side bootstrap is sourced.
             # See the pre-registered path: the product owns the launch flags and
             # never hands off to a user-side launcher.

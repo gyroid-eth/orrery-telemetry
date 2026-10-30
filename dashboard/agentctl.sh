@@ -4,6 +4,10 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${AGENTSTACK_ENV_FILE:-$HERE/../env.sh}"
+# Keep presence separate from value: sourcing an old env.sh must not turn an
+# absent EXTRAS into an empty process override before an installer update.
+EXTRA_PROTECTED_ROOTS_GIVEN="${AGENTSTACK_EXTRA_PROTECTED_ROOTS+x}"
+EXTRA_PROTECTED_ROOTS_LIVE="${AGENTSTACK_EXTRA_PROTECTED_ROOTS-}"
 _ags_mode_loader="$HERE/../bin/lib/global-client-loader.sh"
 if [[ -f "$_ags_mode_loader" ]]; then
   . "$_ags_mode_loader"
@@ -53,6 +57,10 @@ else
   exit 2
 fi
 
+if [[ "$EXTRA_PROTECTED_ROOTS_GIVEN" == x ]]; then
+  export AGENTSTACK_EXTRA_PROTECTED_ROOTS="$EXTRA_PROTECTED_ROOTS_LIVE"
+fi
+
 LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}"
 LABEL="$LABEL_PREFIX.agentdashboard"
 PLIST_TEMPLATE="$HERE/agentdashboard.plist.template"
@@ -69,7 +77,7 @@ MAIL_HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$MAIL_HOME/signals}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
-PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-$PROJECT_KEY}"
+EXTRA_PROTECTED_ROOTS="${AGENTSTACK_EXTRA_PROTECTED_ROOTS-}"
 DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
 LANG_SETTING="${AGENTSTACK_LANG:-}"
 MURMUR_SETTING="${AGENTSTACK_MURMUR:-}"
@@ -133,7 +141,7 @@ render_plist() {
     -e "s|__TERMINAL__|$(sed_escape "$TERMINAL")|g" \
     -e "s|__AUTO_OPEN_CHILD__|$(sed_escape "$AUTO_OPEN_CHILD_SETTING")|g" \
     -e "s|__PROJECT_KEY__|$(sed_escape "$PROJECT_KEY")|g" \
-    -e "s|__PROTECTED_ROOTS__|$(sed_escape "$PROTECTED_ROOTS")|g" \
+    -e "s|__EXTRA_PROTECTED_ROOTS__|$(xml_sed_escape "$EXTRA_PROTECTED_ROOTS")|g" \
     -e "s|__DELIVERABLE_ROOTS__|$(sed_escape "$DELIVERABLE_ROOTS")|g" \
     -e "s|__LANG__|$(sed_escape "$LANG_SETTING")|g" \
     -e "s|__MURMUR__|$(sed_escape "$MURMUR_SETTING")|g" \
@@ -218,7 +226,10 @@ export_background_env() {
   export AGENTSTACK_TERMINAL="$TERMINAL"
   export AGENTSTACK_AUTO_OPEN_CHILD="$AUTO_OPEN_CHILD_SETTING"
   export AGENTSTACK_PROJECT_KEY="$PROJECT_KEY"
-  export AGENTSTACK_PROTECTED_ROOTS="$PROTECTED_ROOTS"
+  # Managed children compute their own roots. Only explicit extras are service
+  # configuration; do not export a cached session ROOTS value from env.sh.
+  unset AGENTSTACK_PROTECTED_ROOTS
+  export AGENTSTACK_EXTRA_PROTECTED_ROOTS="$EXTRA_PROTECTED_ROOTS"
   export AGENTSTACK_DELIVERABLE_ROOTS="$DELIVERABLE_ROOTS"
   export AGENTSTACK_LANG="$LANG_SETTING"
   export AGENTSTACK_MURMUR="$MURMUR_SETTING"
@@ -376,6 +387,7 @@ case "${1:-status}" in
     open "$URL"
     ;;
   fg)
+    export_background_env
     SERVER="$HERE/provider_server.py"
     [[ -f "$SERVER" ]] || SERVER="$HERE/server.py"
     exec "$PYTHON" "$SERVER"

@@ -67,11 +67,12 @@ def test_shared_boundary_changes_fail_instead_of_silently_dropping_rules(mutatio
 
 
 @pytest.mark.parametrize('provider,name,digest', [
-    ('claude', 'CLAUDE.md', 'd1236b62aff231706d14c4306ffab1adb2e5518e51fd08d73af558ea868f6d3f'),
-    ('codex', 'AGENTS.md', 'ca48e6b207c6384c91fcf8634b7bbd6793641dbc684b90e25e44f2d1ca719a66'),
+    ('claude', 'CLAUDE.md', '84eaaca21bf661cab608d11d778186573fb59399095d87dfc0d44c45b62a2a75'),
+    ('codex', 'AGENTS.md', '487580671d31b995ac6e1c34c72ec42615aeec6130672cb91e5065746a300440'),
 ])
-def test_existing_program_output_matches_released_baseline(provider, name, digest):
-    # Captured from the unchanged renderer/templates before the neutral path.
+def test_program_output_matches_scope_adjusted_baseline(provider, name, digest):
+    # Issue #33 intentionally changes reservation guidance, not the provider
+    # renderer. Pin the new complete output to catch unrelated template drift.
     output = renderer.render(provider, (ROOT / provider / name).read_bytes(), '/fixture/install', '/fixture/project')
     assert hashlib.sha256(output).hexdigest() == digest
 
