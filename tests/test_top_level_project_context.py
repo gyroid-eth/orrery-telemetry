@@ -367,8 +367,8 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
                 self.assertIn("legacy environment", result.stderr)
                 self.assertFalse(list(self.output.glob("*.json")))
 
-    def test_glob_markers_in_workspace_or_extra_roots_stop_before_launch(self) -> None:
-        for marker, name in (("[", "folder[ab]"), ("*", "folder*"), ("?", "folder?")):
+    def test_unsupported_characters_in_workspace_or_extra_roots_stop_before_launch(self) -> None:
+        for marker, name in (("[", "folder[ab]"), ("*", "folder*"), ("?", "folder?"), ("\\", "folder\\child")):
             path = self.root / name
             path.mkdir()
             for provider in PROVIDERS:
@@ -378,23 +378,24 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
                         extras = {"AGENTSTACK_EXTRA_PROTECTED_ROOTS": str(path)} if source == "extra" else {}
                         result = self.run_launcher(provider, target, extra=extras)
                         self.assertNotEqual(result.returncode, 0)
-                        self.assertIn("ORRERY Mail glob markers " + repr(marker), result.stderr)
+                        self.assertIn("characters unsupported by ORRERY Mail " + repr(marker), result.stderr)
                         self.assertIn(str(path), result.stderr)
                         self.assertFalse(list(self.output.glob("*.json")))
                         self.assertFalse(list(self.root.glob("agent-start*")))
 
-    def test_glob_check_uses_physical_roots_and_allows_standalone_closing_bracket(self) -> None:
-        target = self.root / "folder[ab]"
-        target.mkdir()
-        alias = self.root / "ordinary-alias"
-        alias.symlink_to(target, target_is_directory=True)
-        for source in ("workspace", "extra"):
-            with self.subTest(source=source):
-                extras = {"AGENTSTACK_EXTRA_PROTECTED_ROOTS": str(alias)} if source == "extra" else {}
-                result = self.run_launcher("codex", alias if source == "workspace" else self.repo, extra=extras)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(str(target), result.stderr)
-                self.assertFalse(list(self.output.glob("*.json")))
+    def test_character_check_uses_physical_roots_and_allows_standalone_closing_bracket(self) -> None:
+        for index, name in enumerate(("folder[ab]", "folder\\child")):
+            target = self.root / name
+            target.mkdir()
+            alias = self.root / f"ordinary-alias-{index}"
+            alias.symlink_to(target, target_is_directory=True)
+            for source in ("workspace", "extra"):
+                with self.subTest(name=name, source=source):
+                    extras = {"AGENTSTACK_EXTRA_PROTECTED_ROOTS": str(alias)} if source == "extra" else {}
+                    result = self.run_launcher("codex", alias if source == "workspace" else self.repo, extra=extras)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(str(target), result.stderr)
+                    self.assertFalse(list(self.output.glob("*.json")))
         allowed = self.root / "folder]"
         allowed.mkdir()
         result = self.run_launcher("codex", allowed, inside=True,

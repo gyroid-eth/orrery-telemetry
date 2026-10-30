@@ -86,8 +86,8 @@ def test_child_target_replaces_parent_and_recomputes_worktree_before_forwarding(
 
 @pytest.mark.parametrize("codex", [False, True], ids=["claude", "codex"])
 @pytest.mark.parametrize("source", ["workspace", "extra"])
-@pytest.mark.parametrize("marker,name", [("[", "folder[ab]"), ("*", "folder*"), ("?", "folder?")])
-def test_child_glob_roots_stop_before_runtime_writes_or_tmux(tmp_path, codex, source, marker, name):
+@pytest.mark.parametrize("marker,name", [("[", "folder[ab]"), ("*", "folder*"), ("?", "folder?"), ("\\", "folder\\child")])
+def test_child_unsupported_roots_stop_before_runtime_writes_or_tmux(tmp_path, codex, source, marker, name):
     from test_claude_child_chrome import _launch_env, _spawn
 
     env, target = _launch_env(tmp_path, codex=codex)
@@ -99,7 +99,7 @@ def test_child_glob_roots_stop_before_runtime_writes_or_tmux(tmp_path, codex, so
         env["AGENTSTACK_EXTRA_PROTECTED_ROOTS"] = str(root)
     result = _spawn(tmp_path, env, target, "WorkspaceChild", codex=codex)
     assert result.returncode != 0
-    assert "ORRERY Mail glob markers " + repr(marker) in result.stderr
+    assert "characters unsupported by ORRERY Mail " + repr(marker) in result.stderr
     assert str(root) in result.stderr
     assert not Path(env["AGENTSTACK_RUNTIME_DIR"]).exists()
     assert not Path(env["FAKE_TMUX_LOG"]).exists()

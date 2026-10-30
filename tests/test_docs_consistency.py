@@ -215,13 +215,14 @@ def test_managed_root_restriction_matches_mail_glob_markers_and_docs() -> None:
     mail = _read("packages/agentstack_mail/src/agentstack_mail/reservation_paths.py")
     markers = json.loads(re.search(r'^GLOB_MARKERS = (".+")$', mail, re.M).group(1))
     launcher = _read("hooks/project-context.sh")
-    rejected = json.loads(re.search(r'^    glob_markers = (".+")$', launcher, re.M).group(1))
-    assert rejected == markers
+    rejected = json.loads(re.search(r'^    unsupported_characters = (".+")$', launcher, re.M).group(1))
+    assert rejected == markers + "\\"
+    assert r'.replace("\\", "/")' in _read("packages/agentstack_mail/src/agentstack_mail/app.py")
     for rel in ("docs/configuration.md", "docs/configuration.en.md"):
         doc = _read(rel)
         for needle in ("workspace-v1", "AGENTSTACK_EXTRA_PROTECTED_ROOTS", "ORRERY Mail", "glob", "`]`"):
             assert needle in doc, (rel, needle)
-        for marker in markers:
+        for marker in rejected:
             assert f"`{marker}`" in doc, (rel, marker)
 
 
