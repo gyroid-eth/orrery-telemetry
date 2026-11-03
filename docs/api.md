@@ -312,6 +312,8 @@ curl -s 'http://127.0.0.1:8770/api/fs/dirs?path=/Users/me/code'
 
 ## GET `/api/agents`
 
+`last_active` と `last_active_rel` は履歴の時刻・相対表示で、現在の作業状態や進捗の heartbeat ではありません。legacy tmux の `/api/agents` は tmux session activity と Mail 最終活動の最大値を使います。長い tool 実行中も古いままで正常です。現在の状態は独立した `running` / nullable な `act_state` を読みます。DECK は既存の `act_state=work` を所要時間・context の有無によらず表示します。これは provider が報告・観測した状態であり、subprocess の進捗保証ではありません。Codex App は既存の provider snapshot（registering も work、最終観測から600秒の境界）を使い、fresh roster は Mail 時刻と独立した observation を返します。fresh の running から work を補いません。graph の時刻は Mail 由来で、相対表示の基準も roster と異なります。未取得・不明を現在時刻や work に置き換えません。API 世代34、時刻・並び順・履歴期間の意味は不変です。
+
 API 世代24では dsh/Hermes の稼働中 row と `/api/graph` node の `act_state` が、確認できた現在の操作表示から `work`・`question`・`ask` を返します。完全な入力欄の形があり、作業・質問・承認の印が無い場合は `wait` です。非表示・不完全・未対応の形は `null`（不明）とし、単なる表示の欠如を入力待ちにしません。生存・終了・停止可能性の判定には使いません。既存 Claude/Codex の分類は不変です。[対応する native 表示と制限](native-capabilities.md#activity-classification-boundary)を参照してください。
 
 API 世代19では legacy の稼働中 Codex CLI row と `/api/graph` node に nullable な `provider_stall` を追加します。停止中は `{kind: "model_capacity", since: <UTC epoch秒>, error: <エラー1行>, notification_status: <状態>}`。通知状態は `sent`、`no_parent`、`parent_unverified`、`delivery_unknown`、`failed` です。停止しても `act_state` の既存の意味は変えません。provider での停止は独立した field です。

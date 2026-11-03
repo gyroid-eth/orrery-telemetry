@@ -38,6 +38,7 @@ html[data-color-theme="light"] .bay{
   box-shadow:0 10px 28px var(--theme-shadow-high);
 }
 html[data-color-theme="light"] .bay:hover{background:var(--panel-2)}
+html[data-color-theme="light"] .bay .stind.work .t{color:var(--amber)}
 html[data-color-theme="light"] .bay .ctxline,
 html[data-color-theme="light"] .gauge .bar{background:var(--hair-2)}
 html[data-color-theme="light"] .port,

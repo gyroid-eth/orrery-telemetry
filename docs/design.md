@@ -111,16 +111,16 @@ serif は「名前を持つもの」に使います。agent の名前は人の�
 ORD  親からの依頼の要約
 RX   直近に受け取った mail の 1 行
 ──────────────────────────────────────── foot
-● ONLINE  LAST 1D 前  ZSH                      [ ↵ EXIT ]
+● ONLINE  LAST EVENT 1D 前  ZSH                      [ ↵ EXIT ]
 ```
 
 - 面は `--panel` に上端だけ白 2.5% の grade、罫線は `--hair`、角丸 9px、影は `0 10px 32px rgba(0,0,0,.12)`。padding 14px 17px 13px、行間 9px。古い層の切り欠き（clip-path）と角の amber は出しません
 - 上段は横並びで間隔 13px。portrait は 56px、9px の切り欠き、grayscale に contrast 1.06、無いときは名前の頭 2 文字。右の identity 列は 名前 → 要求名の注記（登録名が違うときだけ）→ chip の順で間隔 8px。provider の logo は名前の左 13px、止まっているときは opacity .55
 - chip は 9.5px、字間 1.5px、padding 2px 7px、間隔 6px で折り返す。原則は中立色で、分類（category）が amber、重要度（importance）が alert。現状: `LINKED` `ATTACHED` と context window の chip は amber の文字に cyan 由来の枠と glow、delivery の chip も amber で、古い層の名残です。新しい chip はこれを真似ません
-- 「現在の行」は左に 2px の amber 縦罫を持ちます。padding 7px 11px、1 行で省略。ここが agent の「いま」です。live の情報が無いときは `— STANDBY · no live activity —` を italic の hairline で出します。amber の縦罫はこの行の印で、他の要素に使いません（現状: sparkline の tooltip と detail の tool 吹き出しにも同じ縦罫があります）
+- 「現在の行」は左に 2px の amber 縦罫を持ちます。padding 7px 11px、1 行で省略。ここが agent の「いま」です。表示用の要約が無いときは（作業・待機の判定とは独立に） `— NO LIVE SUMMARY —` を italic の hairline で出します。amber の縦罫はこの行の印で、他の要素に使いません（現状: sparkline の tooltip と detail の tool 吹き出しにも同じ縦罫があります）
 - key-value（ORD / RX）のキーは amber の 9.5px 大文字、幅 34px 固定、値との間隔 10px。値は dark で `#c8c2b1`、light では `--ink-dim`。データがあるときだけ行を出します
 - ctxline は稼働中で残量が取れているときだけ、高さ 2px、幅が残量%。50% 以上は ink-dim → ink、20〜50% は ink-dim → amber、20% 未満は amber
-- foot は上に `--hair-2`、padding-top 9px、10px / 字間 1.5px。左に `● ONLINE`（止まっていれば `○ SHELL`）と経過時間と shell 名。右に高さ 17px の EXIT（稼働中）か KILL（finished / gone で attach されていないとき）。どちらも 2 段階（arm → confirm、5 秒で解除）
+- foot は上に `--hair-2`、padding-top 9px、10px / 字間 1.5px。左に `● ONLINE`（止まっていれば `○ SHELL`）と `LAST EVENT`（最後に記録されたイベントの古さ。作業中も古いままの場合がある）と shell 名。右に高さ 17px の EXIT（稼働中）か KILL（finished / gone で attach されていないとき）。どちらも 2 段階（arm → confirm、5 秒で解除）
 - 状態による沈め方: idle / infra / warmup は card 全体を opacity .5、hover で .85。finished / gone / retired は card は沈めず、provider の logo を .4 / .4 / .28 にします。消しません
 - hover で 2px 浮き、`--panel-2` に amber 28% の内枠。クリックで detail を開きます。DECK に「選択」の状態はありません（選択 ring は NETWORK だけ）
 
@@ -138,7 +138,7 @@ agent card の上や間に入る帯（履歴、通知）は、agent card より�
 
 | 状態 / 出来事 | DECK（bay） | NETWORK（node） |
 | --- | --- | --- |
-| running | provider logo が amber に灯り 2.8s で呼吸（opacity .7 ↔ .57）。WORK 中は card に 135° の amber tint（5.5% → 1.8%）。所要時間か残量が取れているときだけ右上に 9px 角の LED（1s の点滅）と所要時間、時間が無ければ `WORKING` | portrait、縁、dot が 1.2 倍。WORK 中は残量の弧の外を motion ring（dash 30 / 70）が 1.5s で周回 |
+| running | provider logo が amber に灯り 2.8s で呼吸（opacity .7 ↔ .57）。WORK 中は card に 135° の amber tint（5.5% → 1.8%）。既存の provider 報告・観測状態が work なら、所要時間・残量の有無によらず右上に 9px 角の LED（1s の点滅）と所要時間、時間が無ければ `WORKING` | portrait、縁、dot が 1.2 倍。WORK 中は残量の弧の外を motion ring（dash 30 / 70）が 1.5s で周回 |
 | waiting（入力待ち） | 前の turn の所要時間が取れているときだけ右上に `LAST` と時間。`--ink-dim`、opacity .55 で静止。取れなければ何も出さない | 走査なし。弧は残量の値だけ。1.2 倍のまま |
 | ask（要対応） | 右上 `APPROVAL` が赤で 1s、LED は .6s。枠が赤、影が 1.6s で脈動 | 赤い実線の環に italic の `!`。文字が 1.25s で bounce |
 | question | 右上 `?` が amber で .9s の点滅 | cyan の実線の環に italic の `?`。文字が 1.6s で bounce |

@@ -34497,8 +34497,8 @@ function bay(a,i){
     chips.push(`<span class="chip imp" title="${esc(stop.error||'')} · ${esc(stop.notification_status||'')}">MODEL CAPACITY${stop.notification_status==='delivery_unknown'?' · MAIL UNCONFIRMED':''}</span>`);
   }
   if(a.running&&a.act_state){
-    if(a.act_state==='work'&&(a.work_disp||typeof a.ctx_used==='number')){
-      stind=`<div class="stind work" title="working ${esc(a.work_disp||'')}">`+
+    if(a.act_state==='work'){
+      stind=`<div class="stind work" title="Reported or observed work state${a.work_disp?' · '+esc(a.work_disp):''}">`+
         `<span class="led-sq"></span>`+
         `<span class="t">${esc(a.work_disp||'WORKING')}</span></div>`;
     }else if(a.act_state==='question'){
@@ -34526,7 +34526,7 @@ function bay(a,i){
   if(a.live){
     live=`<div class="live" title="${esc(a.live)}"><span>${esc(a.live)}</span></div>`;
   }else{
-    live=`<div class="live standby">— STANDBY · no live activity —</div>`;
+    live=`<div class="live standby">— NO LIVE SUMMARY —</div>`;
   }
 
   const task=a.task
@@ -34577,7 +34577,7 @@ function bay(a,i){
     <div class="foot">
       <div class="foot-left">
         <s>${a.running?'● ONLINE':'○ SHELL'}</s>
-        <span class="dim">LAST ${esc(a.last_active_rel)}</span>
+        <span class="dim" title="Last recorded event; can stay old while working">LAST EVENT ${esc(a.last_active_rel)}</span>
         <span class="dim" title="${esc(a.cmd||'—')}">${esc((a.cmd||'—').slice(0,10))}</span>
         ${a.interaction==='headless'
           ? '<span class="interaction-headless" title="persistent profile interaction">BRIDGE · HEADLESS</span>'
@@ -37119,7 +37119,7 @@ function openPanelInner(name){
   T.classList.toggle('s-run',run);
   TM('tm-meta').textContent=
     stat+(a.model?' · '+a.model:'')+(a.ctx_window?' · '+a.ctx_window:'')
-    +(rel?' · last '+rel:'');
+    +(rel?' · last event '+rel:'');
   // The buttons read the newest source from the start, as refreshes do. Before
   // either has arrived (a link opened at start) nothing is known to be gone.
   const now=panelAgentState(name);

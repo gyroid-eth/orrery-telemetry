@@ -64,8 +64,11 @@ The six screenshots on this page are real screens from an isolated demo environm
 | `ORD` | Most recent instruction assigned to the agent. |
 | `RX` | Most recent instruction received through ORRERY Mail, with sender, subject, and importance. The row is absent before any mail arrives. |
 | `● ONLINE` | The agent process is running. **This does not necessarily mean it is currently making progress.** |
-| Top-right state | Yellow seconds indicate work; faint `LAST …` indicates waiting for input; `?` and `APPROVAL` mean human intervention is required. |
+| Top-right state | Yellow duration (or `WORKING` when unavailable) indicates the provider's reported or observed work state; faint `LAST …` indicates waiting for input; `?` and `APPROVAL` mean human intervention is required. |
+| Footer `LAST EVENT` | Age of the last recorded event. It can stay old during a long tool run and does not mean the agent stopped. An unknown time remains `—`. |
 | `↩ EXIT` | Send graceful `/exit` to a running agent. Press twice to confirm. |
+
+`NO LIVE SUMMARY` means no display summary is available; it does not classify the agent as waiting or stopped. Read the separate top-right state. Codex App registering also retains its existing work classification; this does not guarantee progress.
 
 The next image has grown to 12 cards, and cards such as Warm-Lovelace show `RX`. Comparing `ORD` and `RX` separates “assignment” from “the last thing received and its sender.”
 
@@ -78,7 +81,7 @@ The header numbers are a **tally** of the states each card shows in its top-righ
 | Item | What it counts | On the card |
 | --- | --- | --- |
 | `NEED YOU` | Agents waiting on a human: pending approval (`APPROVAL`) or asking a question (`?`) | red border, or `?` |
-| `WORKING` | Agents with a turn in progress | amber LED and elapsed time |
+| `WORKING` | Agents with a turn in progress | amber LED and duration (or `WORKING` when unavailable) |
 | `WAITING` | Agents at the prompt, free to take work | `LAST 1M41S` |
 
 `NEED YOU` appears only while such agents exist; clicking it narrows the DECK to them (click again to restore). An agent whose process has stopped and returned to the shell is in none of these counts; its card says `○ SHELL`. The total of active agents is in the sector heading, `ACTIVE AGENTS [ 29 ]`.
