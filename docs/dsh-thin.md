@@ -20,6 +20,8 @@ install の opt-in は従来どおり `--enable-dsh`。同じ固定版でも新�
 
 native session 作成イベントから本人の `harness_state_dir/native-session.json` に ID を保存します。subagent の ID で上書きせず、保存失敗で起動は止めません。再開は `resume_session_id` を native `--resume` へ渡し、その子の profile/履歴を再利用します。MRU で本人の ID を推測しません。指示は共有 renderer の出力を読み、skill は共通の元へ link します。
 
+legacy の会話記録用 receipt は native の保存先と inode を照合して発行します。TUI は最初の作業まで保存を遅らせるため、作成時に記録がまだ無ければ session の flush と turn 終了でも再試行します。同じ session の再試行は直列に処理し、発行済み receipt の inode と時刻は固定します。別の root、古い launch、lock・conflict の検査は再試行にも適用します。
+
 再開時の任意入力 `native_profile_env: {DSH_HOME: 元の dir}` が生成予定と違う場合は、file/link を書く前に `native_resume_profile_changed` で拒否します。入力がない新規起動は従来どおりです。
 
 TUI の状態は本人の `harness_state_dir/tui` に保存し、起動時に選択した provider/model をその中の `model.json` へ設定します。native `/model` が変更するのもこの子の file だけです。他の子と利用者の `~/.dsh-tui` は共有せず、HOME は変更しません。resume は同じ state dir を再利用します。env 未指定の通常の upstream TUI は従来どおり `~/.dsh-tui` を使います。

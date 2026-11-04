@@ -259,6 +259,8 @@ def generate(document):
         tui['effort'] = document['effort']
     guard_config = {'cwd': str(cwd), 'state_dir': str(state), 'hooks_dir': str(facts['root'] / 'hooks'),
                     'env': document.get('env', {})}
+    if 'history_binding' in document and 'fresh_client_dir' not in document:
+        guard_config['history_binding'] = document['history_binding']
     # In native patches, `name` is a match predicate, not a replacement.
     # Disable the bundled file/env source and insert our credentials service.
     rows = [
