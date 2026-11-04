@@ -21,9 +21,13 @@ or switch transports to recover a failed or unknown connection.
 ## File reservations — REQUIRED before editing
 
 Project: `__AGENTSTACK_PROJECT_KEY__`. Before a shared project edit, call
-`reserve_files` with project-relative paths and `ttl_seconds` at least 600.
+`reserve_files` with `ttl_seconds` at least 600. In managed `workspace-v1`
+sessions, use physical absolute paths (resolve symlinks first).
+Use the same paths for `renew_reservations` and `release_reservations`.
+Legacy relative paths and globs are accepted unchanged; the proxy does not
+infer a cwd from the namespace or protected roots.
 Use the actual schema; do not add caller or project fields. Renew long edits
-with `renew_reservations` and release with `release_reservations` when done.
+and release reservations when done.
 A conflicting reservation means stop and coordinate, not overwrite.
 Reserve even when a shell write is outside the editing guard.
 

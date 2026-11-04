@@ -254,7 +254,6 @@ if (result?.kind === 'deny') { console.error(result.reason); process.exit(2); }
     missing = check_edit(repo, "EditorAlpha")
     assert missing.returncode == 2, missing.stdout + missing.stderr
     assert "has no reservation" in missing.stderr
-    assert "Managed workspace-v1: reserve the physical absolute path: " + outer_key in missing.stderr
     first = proxy_call("EditorAlpha", "reserve_files", paths=[outer_key], ttl_seconds=900)
     assert len(first["granted"]) == 1 and not first["conflicts"], first
     lease = first["granted"][0]
@@ -287,6 +286,9 @@ if (result?.kind === 'deny') { console.error(result.reason); process.exit(2); }
                       file_reservation_ids=[lease["id"]])["renewed"] == 0
     assert check_edit(repo, "EditorAlpha").returncode == 2
     assert check_edit(other, "EditorBeta", different_file).returncode == 0
+    # Check the new diagnostic after the lifecycle so an old proxy fails on
+    # absolute acquisition rather than the absence of this guidance text.
+    assert "Managed workspace-v1: reserve the physical absolute path: " + outer_key in missing.stderr
 
 
 def test_real_renew_carries_checked_scope_and_keeps_resources_unpublished(reserved):
