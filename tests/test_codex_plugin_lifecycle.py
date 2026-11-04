@@ -12,6 +12,8 @@ import sys
 
 import pytest
 
+from service_teardown import TEST_LABEL_PREFIX
+
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('codex_plugin_trust', ROOT/'scripts/codex_plugin_trust.py')
 trust = importlib.util.module_from_spec(SPEC)
@@ -46,7 +48,7 @@ def fresh_python_entry(tmp_path):
                AGENTSTACK_FRESH_PYTHON=sys.executable,
                AGENTSTACK_FRESH_WRAPPER_ROOT=str(core), AGENTSTACK_FRESH_RUNTIME_DIR=str(runtime),
                AGENTSTACK_FRESH_CODEX_HOME=str(home), AGENTSTACK_FRESH_CODEX_BIN=sys.executable,
-               AGENTSTACK_HOME=str(core))
+               AGENTSTACK_HOME=str(core), AGENTSTACK_LABEL_PREFIX=TEST_LABEL_PREFIX)
     for key in ('AGENTSTACK_CLIENT_CONFIG','AGENTSTACK_GLOBAL_SERVER_CONFIG'):
         env.pop(key,None)
     return login, env
@@ -63,6 +65,7 @@ def test_fresh_codex_restores_owned_environment_after_login_override(fresh_pytho
     login, env = fresh_python_entry
     fields = {'AGENTSTACK_PYTHON':env['AGENTSTACK_FRESH_PYTHON'],
               'AGENTSTACK_HOME':env['AGENTSTACK_FRESH_WRAPPER_ROOT'],
+              'AGENTSTACK_LABEL_PREFIX':TEST_LABEL_PREFIX,
               'AGENTSTACK_RUNTIME_DIR':env['AGENTSTACK_FRESH_RUNTIME_DIR'],
               'AGENTSTACK_HOOKS_DIR':str(Path(env['AGENTSTACK_FRESH_WRAPPER_ROOT'])/'hooks'),
               'AGENTSTACK_CODEX_BIN':env['AGENTSTACK_FRESH_CODEX_BIN'],
@@ -72,7 +75,10 @@ def test_fresh_codex_restores_owned_environment_after_login_override(fresh_pytho
     else:
         name = 'check-codex-file-reservation.py' if entry == 'reservation' else 'deny-llm-key-read.py'
         (Path(env['AGENTSTACK_HOME'])/'hooks'/name).write_text(probe)
-    login.write_text('#!/bin/bash\nexport '+shlex.join([k+'='+('/wrong' if k!='AGENTSTACK_RUNTIME_MODE' else 'legacy') for k in fields])+'\nexec /bin/bash -c "$2"\n')
+    # Keep the test service label while overwriting only launch-owned values.
+    overwritten = [k+'='+('/wrong' if k!='AGENTSTACK_RUNTIME_MODE' else 'legacy')
+                   for k in fields if k!='AGENTSTACK_LABEL_PREFIX']
+    login.write_text('#!/bin/bash\nexport '+shlex.join(overwritten)+'\nexec /bin/bash -c "$2"\n')
     result = subprocess.run(['/bin/bash',str(login),'-lc',shlex.join(fresh_python_argv(entry))],env=env,
         input='{"hook_event_name":"SessionStart"}',capture_output=True,text=True,timeout=10)
     assert result.returncode == 0, result.stderr
@@ -194,7 +200,7 @@ def test_fresh_desktop_hook_without_cli_launch_keeps_existing_python(tmp_path, e
     core = tmp_path/'core';(core/'hooks').mkdir(parents=True)
     (core/'hooks/deny-llm-key-read.sh').write_text('#!/bin/bash\nprintf "%s\\n" '+shlex.quote(sys.executable)+'\n')
     env = dict(os.environ,AGENTSTACK_RUNTIME_MODE='fresh',AGENTSTACK_PYTHON=sys.executable,
-               AGENTSTACK_HOME=str(core),
+               AGENTSTACK_HOME=str(core), AGENTSTACK_LABEL_PREFIX=TEST_LABEL_PREFIX,
                AGENTSTACK_FRESH_CLIENT_CONTEXT=str(tmp_path/'unused-context'),
                AGENTSTACK_CODEX_APP_RUNTIME_DIR=str(tmp_path/'desktop-runtime'))
     for key in ('AGENTSTACK_FRESH_LAUNCH_ID','AGENTSTACK_FRESH_PYTHON',
