@@ -25,6 +25,7 @@ from test_fresh_notifications import rows
 from test_fresh_proxy import environment
 
 ROOT=Path(__file__).resolve().parents[3]
+pytestmark = pytest.mark.usefixtures('isolated_managed_harness_home')
 DSH='╭────────────╮\n⌸ ❯  ⛶\n╰────────────╯\nctx 19.5% (12.5k/64k)\n? for shortcuts'
 HERMES='────────────\n❯\n────────────'
 

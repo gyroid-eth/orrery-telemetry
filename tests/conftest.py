@@ -48,6 +48,14 @@ PRODUCTION_LABELS = tuple(
 SAMPLE_SECONDS = 10.0
 
 
+@pytest.fixture
+def isolated_native_mcp_sources(tmp_path, monkeypatch):
+    """Native generation/resume tests use only their own synthetic MCP inputs."""
+    monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'codex'))
+    monkeypatch.setenv('AGENTSTACK_CLAUDE_JSON', str(tmp_path / 'claude.json'))
+    monkeypatch.delenv('AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY', raising=False)
+
+
 @pytest.fixture(autouse=True)
 def _close_synthetic_tmux_endpoints():
     """Fixture sockets do not accumulate across a full serial worker."""

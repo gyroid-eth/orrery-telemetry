@@ -1,6 +1,7 @@
 """Standard launcher handoff and cleanup evidence; synthetic identities only."""
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -11,6 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'hooks'))
 import child_resume
 import harness_child as child
+
+
+pytestmark = pytest.mark.usefixtures('isolated_native_mcp_sources')
 
 
 def private(path, value):
@@ -41,11 +45,66 @@ def staged(tmp_path, program='dsh'):
         prompt_file=str(prompt),effort=None,tools='{"base":"default","tools":{}}')
 
 
+def test_isolated_harness_loads_codex_browser_source(tmp_path):
+    config = tmp_path / 'config.toml'
+    config.write_text('[mcp_servers.chrome-devtools]\ncommand="npx"\n'
+                      'args=["chrome-devtools-mcp@latest", "--autoConnect"]\n')
+    code = ('import runpy,sys; ns=runpy.run_path(sys.argv[1]); '
+            'config=ns["child_tools"]._defaults_codex_config(sys.argv[2], ""); '
+            'print(sorted(config["mcp_servers"]))')
+    result = subprocess.run([sys.executable, '-I', '-B', '-c', code,
+        str(ROOT / 'hooks/harness_child.py'), str(config)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "['chrome-devtools']"
+
+
+@pytest.mark.parametrize('program', ['dsh', 'hermes'])
+@pytest.mark.parametrize('change', ['disable', 'remove', 'rename', 'mail-only'])
+def test_regeneration_replaces_previous_browser_selection(tmp_path, monkeypatch, program, change):
+    codex = tmp_path / 'codex'
+    codex.mkdir()
+    config = codex / 'config.toml'
+    definition = '[mcp_servers.chrome-devtools]\ncommand="npx"\nargs=["chrome-devtools-mcp@latest"]\n'
+    config.write_text(definition)
+    mail = tmp_path / 'mail.json'
+    original_mail = {'mcpServers': {'orrery-mail': {'command': '/fixture/proxy'}}}
+    private(mail, original_mail)
+    generator = tmp_path / 'generator.py'
+    generator.write_text('import argparse,json\n'
+        'p=argparse.ArgumentParser();p.add_argument("--input");p.add_argument("--out");'
+        'a=p.parse_args();d=json.load(open(a.input));'
+        'json.dump({"argv":["/bin/true"],"env":{},"cwd":d["cwd"]},open(a.out,"w"))\n')
+    monkeypatch.setattr(child, 'config_generator', lambda *args: generator)
+    document = dict(state_dir=str(tmp_path), cwd=str(tmp_path), program=program,
+                    mcp_config=str(mail), tools={'base': 'default', 'tools': {}})
+    child.generate_plan(document, {'python': sys.executable})
+    assert set(child.read(document['mcp_config'])['mcpServers']) == {'orrery-mail', 'chrome-devtools'}
+    # Exercise the saved input used for dynamic prelaunch, not only one in-memory selection.
+    document = child.read(tmp_path / 'input.json')
+    if change == 'disable':
+        config.write_text(definition + 'enabled=false\n')
+    elif change == 'remove':
+        config.write_text('')
+    elif change == 'rename':
+        config.write_text(definition.replace('chrome-devtools]', 'renamed-browser]'))
+    else:
+        document['tools']['base'] = 'mail-only'
+    child.generate_plan(document, {'python': sys.executable})
+    expected = {'orrery-mail', 'renamed-browser'} if change == 'rename' else {'orrery-mail'}
+    assert set(child.read(document['mcp_config'])['mcpServers']) == expected
+    assert child.read(mail) == original_mail
+
+
 @pytest.mark.parametrize('program', ['dsh','hermes'])
 @pytest.mark.parametrize('helper', [None,'same','alternate'])
 def test_native_generation_keeps_identity_prompt_and_shared_instructions(tmp_path, program, helper, monkeypatch):
     args = staged(tmp_path, program)
     args.helper_model = helper
+    codex = tmp_path / 'codex'
+    codex.mkdir()
+    (codex / 'config.toml').write_text('[mcp_servers.chrome-devtools]\ncommand = "npx"\n'
+        'args = ["-y", "chrome-devtools-mcp@latest", "--autoConnect", "--no-usage-statistics"]\n'
+        '[mcp_servers.chrome-devtools.env]\nnpm_config_cache = "/fixture/cache"\n')
     generator = tmp_path / 'generator.py'
     generator.write_text("""import argparse,json,sys,os
 p=argparse.ArgumentParser();p.add_argument('--input');p.add_argument('--out');a=p.parse_args()
@@ -57,6 +116,11 @@ os.chmod(a.out,0o600)
     monkeypatch.setattr(child, 'config_generator', lambda *a: generator)
     state = child.prepare(args)
     source = child.read(state / 'input.json')
+    selected = child.read(source['mcp_config'])['mcpServers']
+    assert set(selected) == {'orrery-mail', 'chrome-devtools'}
+    assert selected['chrome-devtools']['command'] == 'npx'
+    assert selected['chrome-devtools']['args'][-2:] == ['--autoConnect', '--no-usage-statistics']
+    assert selected['chrome-devtools']['env'] == {'npm_config_cache': '/fixture/cache'}
     assert source['program'] == program and source['backend_id'] == 'strata'
     assert source['parent_agent'] is None
     assert not ({'effort','task_timeout_seconds','task','allowed_paths','expected'} & source.keys())

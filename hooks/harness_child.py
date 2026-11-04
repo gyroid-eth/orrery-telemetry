@@ -199,9 +199,15 @@ def fresh_instructions(state_dir, root):
 def generate_plan(document, runner):
     """One generator path for initial launch and exact-ID resume."""
     state_dir = Path(document['state_dir'])
+    # Re-evaluate against authenticated Mail, never the previous merged output.
+    # Keep the source in saved input for dynamic prelaunch regeneration as well.
+    document.setdefault('mcp_base_config', document['mcp_config'])
     document['mcp_selection'] = child_tools.native_plan(document['tools'], cwd=document['cwd'],
-        claude_json=os.environ.get('AGENTSTACK_CLAUDE_JSON',str(Path.home()/'.claude.json')))
-    merged_mcp = read(document['mcp_config'])
+        claude_json=os.environ.get('AGENTSTACK_CLAUDE_JSON',str(Path.home()/'.claude.json')),
+        codex_config=child_tools._defaults_codex_config(
+            str(Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex'))) / 'config.toml'),
+            os.environ.get('AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY', '')))
+    merged_mcp = read(document['mcp_base_config'])
     merged_mcp['mcpServers'].update(document['mcp_selection']['servers'])
     selected_mcp = state_dir / 'selected-mcp.json'
     save(selected_mcp, merged_mcp)
@@ -280,6 +286,7 @@ def prepare_resume(runtime_dir, name, project_key=None):
     document['env'].update(AGENT_NAME=name, AGENTSTACK_HOME=str(ROOT),
         AGENTSTACK_RUNTIME_DIR=str(runtime), AGENTSTACK_PROJECT_KEY=state['project_key'])
     document.update(product_root=str(ROOT), parent_agent=parent, mcp_config=str(mcp),
+                    mcp_base_config=str(mcp),
                     prompt_file=str(prompt), instructions_file=str(write_instructions(state_dir,state['project_key'])),
                     resume_attempt_at=state['resume_in_progress_at'])
     generate_plan(document, runner)
