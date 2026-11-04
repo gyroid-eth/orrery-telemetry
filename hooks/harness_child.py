@@ -200,7 +200,10 @@ def generate_plan(document, runner):
     """One generator path for initial launch and exact-ID resume."""
     state_dir = Path(document['state_dir'])
     document['mcp_selection'] = child_tools.native_plan(document['tools'], cwd=document['cwd'],
-        claude_json=os.environ.get('AGENTSTACK_CLAUDE_JSON',str(Path.home()/'.claude.json')))
+        claude_json=os.environ.get('AGENTSTACK_CLAUDE_JSON',str(Path.home()/'.claude.json')),
+        codex_config=child_tools._defaults_codex_config(
+            str(Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex'))) / 'config.toml'),
+            os.environ.get('AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY', '')))
     merged_mcp = read(document['mcp_config'])
     merged_mcp['mcpServers'].update(document['mcp_selection']['servers'])
     selected_mcp = state_dir / 'selected-mcp.json'

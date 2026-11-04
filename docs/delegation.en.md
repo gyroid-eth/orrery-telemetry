@@ -168,7 +168,7 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 
 You can choose a child's tools when you start it, for example `/delegate "<task>" --base mail-only --tools screen:read:windows-mcp`. In `/api/spawn` the fields are `base` and `tools` ([API](api.en.md#post-apispawn)). `hooks/child_tools.py` is the single interpreter of both.
 
-- **`--base` omitted or `default`**: the launch is the same as before (same command and arguments). A Claude child's only MCP server is ORRERY Mail, while the browser (Claude in Chrome) and the macOS computer use still depend on the user's Claude settings and the child's working directory. A Codex child inherits the user's MCP servers. Whatever `--tools` selects is added on top
+- **`--base` omitted or `default`**: a Claude child's only MCP server is ORRERY Mail, while the browser (Claude in Chrome) and the macOS computer use still depend on the user's Claude settings and the child's working directory. A Codex child inherits the user's MCP servers. dsh and Hermes children inherit only the enabled Chrome MCP definition from Codex, alongside authenticated Mail (see below). Whatever `--tools` selects is added on top
 - **`--base mail-only`**: the child gets ORRERY Mail and only what `--tools` selects. A Claude child also gets `--no-chrome` unless a browser was selected. A Codex child gets the same disabling as `--codex-mcp orrery-only`, and then only the selected servers are enabled (combining it with `--codex-mcp inherit` is rejected)
 
 | `--tools` | Claude child | Codex child |
@@ -178,6 +178,14 @@ You can choose a child's tools when you start it, for example `/delegate "<task>
 | `screen:<read\|operate>:<server>` | Copies the user's screen server (such as Windows-MCP on WSL) into the strict config | Enables that server in the child's `config.toml` |
 | `mcp:<server>` | Copies the user's server definition into the strict config (no tool approved) | Enables that server in the child's `config.toml` (no tool approved) |
 | `mcp:<server>:all` | The same, and approves every tool the table knows | The same, and approves every tool the table knows, tool by tool |
+
+### The default browser for dsh and Hermes
+
+With `base=default`, native children inherit the enabled `chrome-devtools` server, or the one server running `chrome-devtools-mcp`, from `CODEX_HOME/config.toml` (otherwise `~/.codex/config.toml`) and the Codex child overlay. Other Codex MCP servers are not added. The `command`, `args`, `env` and `cwd` are the same definition, so `--autoConnect` connects to the user's usual signed-in Chrome. Without a configured, enabled browser the child still gets only Mail. `base=mail-only` does not add the browser automatically. Environment values are not displayed.
+
+This follows Codex's default MCP inheritance, which differs from explicit `--tools browser` and its classified tool exposure and individual approvals. Explicit native browser selection also discovers the Codex definition, but stops while dsh and Hermes cannot express those approval requirements. Default inheritance also refuses Codex-specific tool filters/approvals or other unrepresentable settings with `native_mcp_selection_unsupported`, rather than dropping them and broadening permissions. Supported definitions contain only the stdio `command`, `args`, `env`, `cwd` and `enabled` fields.
+
+Inheritance does not add native CLI execution approvals. A person answers Chrome's connection permission. Downloads follow the usual Chrome settings; this selection grants no additional sandbox filesystem access. Check whether the child's native shell can read the destination.
 
 ### When an MCP tool is refused by the approval policy
 

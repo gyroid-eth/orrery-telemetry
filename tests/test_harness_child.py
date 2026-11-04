@@ -1,6 +1,7 @@
 """Standard launcher handoff and cleanup evidence; synthetic identities only."""
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -11,6 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'hooks'))
 import child_resume
 import harness_child as child
+
+
+@pytest.fixture(autouse=True)
+def isolated_browser_sources(tmp_path, monkeypatch):
+    monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'codex'))
+    monkeypatch.setenv('AGENTSTACK_CLAUDE_JSON', str(tmp_path / 'claude.json'))
 
 
 def private(path, value):
@@ -41,11 +48,29 @@ def staged(tmp_path, program='dsh'):
         prompt_file=str(prompt),effort=None,tools='{"base":"default","tools":{}}')
 
 
+def test_isolated_harness_loads_codex_browser_source(tmp_path):
+    config = tmp_path / 'config.toml'
+    config.write_text('[mcp_servers.chrome-devtools]\ncommand="npx"\n'
+                      'args=["chrome-devtools-mcp@latest", "--autoConnect"]\n')
+    code = ('import runpy,sys; ns=runpy.run_path(sys.argv[1]); '
+            'config=ns["child_tools"]._defaults_codex_config(sys.argv[2], ""); '
+            'print(sorted(config["mcp_servers"]))')
+    result = subprocess.run([sys.executable, '-I', '-B', '-c', code,
+        str(ROOT / 'hooks/harness_child.py'), str(config)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "['chrome-devtools']"
+
+
 @pytest.mark.parametrize('program', ['dsh','hermes'])
 @pytest.mark.parametrize('helper', [None,'same','alternate'])
 def test_native_generation_keeps_identity_prompt_and_shared_instructions(tmp_path, program, helper, monkeypatch):
     args = staged(tmp_path, program)
     args.helper_model = helper
+    codex = tmp_path / 'codex'
+    codex.mkdir()
+    (codex / 'config.toml').write_text('[mcp_servers.chrome-devtools]\ncommand = "npx"\n'
+        'args = ["-y", "chrome-devtools-mcp@latest", "--autoConnect", "--no-usage-statistics"]\n'
+        '[mcp_servers.chrome-devtools.env]\nnpm_config_cache = "/fixture/cache"\n')
     generator = tmp_path / 'generator.py'
     generator.write_text("""import argparse,json,sys,os
 p=argparse.ArgumentParser();p.add_argument('--input');p.add_argument('--out');a=p.parse_args()
@@ -57,6 +82,11 @@ os.chmod(a.out,0o600)
     monkeypatch.setattr(child, 'config_generator', lambda *a: generator)
     state = child.prepare(args)
     source = child.read(state / 'input.json')
+    selected = child.read(source['mcp_config'])['mcpServers']
+    assert set(selected) == {'orrery-mail', 'chrome-devtools'}
+    assert selected['chrome-devtools']['command'] == 'npx'
+    assert selected['chrome-devtools']['args'][-2:] == ['--autoConnect', '--no-usage-statistics']
+    assert selected['chrome-devtools']['env'] == {'npm_config_cache': '/fixture/cache'}
     assert source['program'] == program and source['backend_id'] == 'strata'
     assert source['parent_agent'] is None
     assert not ({'effort','task_timeout_seconds','task','allowed_paths','expected'} & source.keys())

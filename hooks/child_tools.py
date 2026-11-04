@@ -584,7 +584,42 @@ def claude_plan(spec: dict, *, cwd: str, chrome: bool, claude_json: str,
     return {"servers": servers, "flags": flags}
 
 
+def _native_codex_browser(config: dict, *, explicit: bool = False) -> tuple[str, dict] | None:
+    """Copy the Codex browser transport without discarding tool restrictions.
+
+    Default inheritance carries the user's stdio definition, including env and
+    PATH-based commands, just as a Codex child does. Claude's copy rules remain
+    separate. Native clients cannot represent Codex tool filters or approvals.
+    """
+    servers = config.get('mcp_servers') or {}
+    if not isinstance(servers, dict):
+        raise ToolsError('native_mcp_selection_unsupported: invalid Codex servers')
+    candidates = {name: value for name, value in servers.items()
+                  if isinstance(value, dict) and (explicit or value.get('enabled') is not False)
+                  and (name == 'chrome-devtools'
+                       or (table_entry(value) or ('',))[0] in NAME_CLASSIFIED)}
+    if not candidates:
+        return None
+    name = codex_browser_server(candidates)
+    definition = candidates[name]
+    # Do not drop enabled_tools/disabled_tools/tools or server-wide approval
+    # settings: that would silently change the inherited permission scope.
+    if set(definition) - {'command', 'args', 'env', 'cwd', 'enabled'}:
+        raise ToolsError('native_mcp_selection_unsupported: Codex browser settings')
+    if (not isinstance(definition.get('command'), str) or not definition['command']
+            or not isinstance(definition.get('args', []), list)
+            or any(not isinstance(arg, str) for arg in definition.get('args', []))
+            or not isinstance(definition.get('env', {}), dict)
+            or any(not isinstance(key, str) or not isinstance(value, str)
+                   for key, value in definition.get('env', {}).items())
+            or ('cwd' in definition and not isinstance(definition['cwd'], str))
+            or ('enabled' in definition and not isinstance(definition['enabled'], bool))):
+        raise ToolsError('native_mcp_selection_unsupported: invalid Codex browser transport')
+    return name, copy.deepcopy({key: value for key, value in definition.items() if key != 'enabled'})
+
+
 def native_plan(spec: dict, *, cwd: str, claude_json: str,
+                codex_config: dict | None = None,
                 transports=("stdio", "http"),
                 tool_filtering=False, tool_approval=False) -> dict:
     """Project the same selection; refuse any promise the CLI cannot express."""
@@ -594,8 +629,14 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
     if screen and screen['server'] is None:
         raise ToolsError('native_mcp_selection_unsupported: built-in computer use')
     names = list(tools.get('mcp', ()))
+    servers, approved, enabled = {}, {}, {}
+    codex_browser = None
+    if spec['base'] == 'default' or 'browser' in tools:
+        codex_browser = _native_codex_browser(codex_config or {})
+    if spec['base'] == 'default' and codex_browser:
+        servers[codex_browser[0]] = codex_browser[1]
     if not tools:
-        return dict(servers={}, inherit=spec['base']!='mail-only', approved={}, enabled_tools={})
+        return dict(servers=servers, inherit=spec['base']!='mail-only', approved={}, enabled_tools={})
     settings = _load_claude_settings(claude_json)
     if screen:
         names.append(screen['server'])
@@ -603,13 +644,21 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
     if 'browser' in tools:
         if tools['browser'].get('device'):
             raise ToolsError('native_mcp_selection_unsupported: Chrome device')
-        combined = dict(settings.get('mcpServers') or {})
-        combined.update(_project_entry(settings,cwd).get('mcpServers') or {})
-        browser_server = codex_browser_server(combined)
+        codex_browser = _native_codex_browser(codex_config or {}, explicit=True) \
+            if (codex_config or {}).get('mcp_servers') else None
+        if codex_browser:
+            browser_server = codex_browser[0]
+            entry = table_entry(codex_browser[1])
+            if entry is None or entry[0] not in NAME_CLASSIFIED:
+                raise ToolsError('native_mcp_selection_unsupported: unclassified Codex browser')
+        else:
+            combined = dict(settings.get('mcpServers') or {})
+            combined.update(_project_entry(settings,cwd).get('mcpServers') or {})
+            browser_server = codex_browser_server(combined)
         names.append(browser_server)
-    servers, approved, enabled = {}, {}, {}
     for name in dict.fromkeys(names):
-        definition = _copyable_definition(name, settings, cwd)
+        definition = codex_browser[1] if codex_browser and name == browser_server \
+            else _copyable_definition(name, settings, cwd)
         if definition.get('type','stdio') not in transports:
             raise ToolsError('native_mcp_transport_unsupported')
         allow, hide = _approval(spec, name, definition, browser_server)
@@ -924,7 +973,10 @@ def _defaults_codex_config(path: str, overlay: str) -> dict:
     An unreadable base leaves no applicable MCP defaults; an invalid overlay is
     ignored, matching the build-home overlay contract.
     """
-    import child_resume
+    if __package__:
+        from . import child_resume
+    else:
+        import child_resume
     from pathlib import Path
     try:
         config_path = Path(path)

@@ -168,7 +168,7 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 
 `/delegate "<task>" --base mail-only --tools screen:read:windows-mcp` のように、child に渡す道具を起動時に選べます。`/api/spawn` では `base` と `tools` です（[API](api.md#post-apispawn)）。解釈は `hooks/child_tools.py` が一手に行います。
 
-- **`--base` を省く・`default`**: 従来と同じ起動です（コマンドも引数も変わりません）。Claude child の MCP は ORRERY Mail だけで、ブラウザ（Claude in Chrome）と Mac の computer use は利用者の Claude 設定と起動ディレクトリしだいで届きます。Codex child は利用者の MCP を継承します。`--tools` で選んだものはこれに足します
+- **`--base` を省く・`default`**: Claude child の MCP は ORRERY Mail だけで、ブラウザ（Claude in Chrome）と Mac の computer use は利用者の Claude 設定と起動ディレクトリしだいで届きます。Codex child は利用者の MCP を継承します。dsh・Hermes child は認証済み Mail に加え、Codex の有効な Chrome MCP 定義だけを継承します（下記）。`--tools` で選んだものはこれに足します
 - **`--base mail-only`**: ORRERY Mail と `--tools` で選んだものだけを渡します。Claude child はブラウザを選ばなければ `--no-chrome` も付けます。Codex child は `--codex-mcp orrery-only` と同じ無効化をしてから、選んだ server だけを有効にします（`--codex-mcp inherit` との併用は拒否します）
 
 | `--tools` | Claude child | Codex child |
@@ -178,6 +178,14 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 | `screen:<read\|operate>:<server>` | 利用者の画面系 server（WSL の Windows-MCP など）を strict の設定に写します | 子の `config.toml` でその server を有効にします |
 | `mcp:<server>` | 利用者の server の定義を strict の設定に写します（tool は承認しない） | 子の `config.toml` でその server を有効にします（tool は承認しない） |
 | `mcp:<server>:all` | 上に加えて、表で分かる全 tool を承認します | 上に加えて、表で分かる全 tool を tool ごとに承認します |
+
+### dsh・Hermes の既定ブラウザ
+
+`base=default` の native child は、`CODEX_HOME/config.toml`（未指定なら `~/.codex/config.toml`）と Codex child overlay から、有効な `chrome-devtools`、または `chrome-devtools-mcp` を起動する1つの server を継承します。他の Codex MCP は追加しません。`command`・`args`・`env`・`cwd` は同じ定義なので、`--autoConnect` ならログイン済みの普段の Chrome につながります。Chrome が未設定・無効なら従来どおり Mail のみで、`base=mail-only` は自動追加しません。env の値は表示しません。
+
+これは Codex の既定の MCP 継承に合わせたもので、明示 `--tools browser` の分類済み tool の公開・個別承認とは別です。native の明示 browser も Codex 定義を探しますが、dsh・Hermes がその承認条件を表現できない間は起動を止めます。既定の継承でも、Codex 固有の tool filter/approval など native に写せない項目を捨てて権限を広げず、`native_mcp_selection_unsupported` で停止します。通常の stdio `command`・`args`・`env`・`cwd` と `enabled` だけの定義が対象です。
+
+既定の継承は native CLI の実行確認を追加承認しません。Chrome 側の接続許可は人が応答します。ダウンロード先は普段の Chrome の設定に従い、この設定で sandbox の読取権限を追加することはありません。native の shell から保存先を読めるかは、その子で確認してください。
 
 ### MCP tool が承認の方針で拒否されたとき
 
