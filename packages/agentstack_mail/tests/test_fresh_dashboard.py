@@ -124,7 +124,7 @@ def test_handler_new_agent_native_common_handoff_and_roster(tmp_path,monkeypatch
                 effort='high',resources=['note.py'],role='',group='',**({'standalone':True} if standalone else {'parent':'Alpha'}))
             with dashboard(parent,backend,monkeypatch,tmp_path) as (module,request):
                 code,version=await asyncio.to_thread(request,'/api/version')
-                assert code==200 and version['api']==34 and version['runtime_mode']=='fresh'
+                assert code==200 and version['api']==35 and version['runtime_mode']=='fresh'
                 assert version['capabilities']['terminal'] is True
                 code,result=await asyncio.to_thread(request,'/api/spawn',payload)
                 assert code==200 and result['ok'] and result['pending'],result

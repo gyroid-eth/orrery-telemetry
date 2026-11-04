@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 34
+API_GENERATION = 35
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -66,7 +66,7 @@ if __name__ == '__main__':
 # `server.py` is both an executable script and an importable dashboard module
 # in the tests.  Support both import roots without coupling callers to cwd.
 try:
-    from dashboard import codex_models, mail_signals, provider_stalls, harness_runtime, harness_helpers, harness_context, harness_activity
+    from dashboard import codex_models, mail_signals, provider_stalls, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history
 except ModuleNotFoundError:  # direct `python dashboard/server.py`
     import codex_models
     import mail_signals
@@ -75,6 +75,8 @@ except ModuleNotFoundError:  # direct `python dashboard/server.py`
     import harness_helpers
     import harness_context
     import harness_activity
+    import dsh_history
+    import hermes_history
 
 try:
     from dashboard.providers.codex_app import CodexAppRuntimeProvider
@@ -108,9 +110,10 @@ except ModuleNotFoundError:  # direct script execution
 
 
 try:
-    from dashboard import legacy_http_admission
+    from dashboard import legacy_http_admission, claude_history
 except ModuleNotFoundError:  # direct script execution
     import legacy_http_admission
+    import claude_history
 
 
 def _same_origin_request(handler) -> bool:
@@ -1919,6 +1922,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 con.close()
 
     observed_now = time.time()
+    claude_history_index = None
     for row in rows:
         row.update(harness_runtime.metadata(RUNTIME_DIR, row["name"], row.get("program")))
         profile = persistent_profiles.get(row["name"])
@@ -1930,6 +1934,16 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
         )
         if row.get("program") in {"codex", "codex-cli"}:
             row.update(_codex_history_binding(row["name"], now=observed_now))
+        elif row.get("program") in {"claude", "claude-code"}:
+            if claude_history_index is None:
+                claude_history_index = claude_history.ReceiptIndex(SESSION_INDEX_DIR)
+            row.update(_claude_history_binding(
+                row["name"], index=claude_history_index, session_created=row.get("created"),
+            ))
+        elif row.get("program") == "dsh":
+            row.update(_dsh_history_binding(row["name"], session_created=row.get("created")))
+        elif row.get("program") == "hermes":
+            row.update(_hermes_history_binding(row["name"], session_created=row.get("created")))
         row["resume_capability"] = _resume_capability_for_row(
             row["name"],
             row.get("program") or "",
@@ -4656,6 +4670,15 @@ def _native_resume_launcher_ready():
         return False
 
 
+def _hermes_history_binding(session, *, session_created=None):
+    # Fresh history remains receipt-mediated; never expose legacy provider paths.
+    if FRESH_MODE:
+        return hermes_history.unbound('fresh_history_provider_unavailable')
+    return hermes_history.history_binding(RUNTIME_DIR, Path(HOOKS_DIR).parent, session,
+                                         _resume_registration(session, {'hermes'}),
+                                         session_created=session_created)
+
+
 def _native_resume_material(session, program):
     registration = _resume_registration(session, {program})
     if registration is None:
@@ -5244,12 +5267,27 @@ def _resume_registration(session: str, programs: set[str]) -> dict | None:
     }
 
 
+def _dsh_history_binding(session: str, *, session_created=None) -> dict:
+    if FRESH_MODE or GLOBAL_MODE:
+        return dsh_history.unbound('protected_history_required')
+    return dsh_history.binding(RUNTIME_DIR, session, _resume_registration(session, {'dsh'}),
+                               session_created=session_created)
+
+
 def _codex_registration(session: str) -> dict | None:
     return _resume_registration(session, {"codex", "codex-cli"})
 
 
 def _claude_registration(session: str) -> dict | None:
     return _resume_registration(session, {"claude", "claude-code"})
+
+
+def _claude_history_binding(session: str, *, index=None, session_created=None) -> dict:
+    return claude_history.history_binding(
+        session, _claude_registration(session), projects=CLAUDE_PROJECTS,
+        index=index if index is not None else claude_history.ReceiptIndex(SESSION_INDEX_DIR),
+        session_created=session_created,
+    )
 
 
 def _verified_codex_index(

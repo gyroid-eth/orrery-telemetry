@@ -72,7 +72,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":34}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":35}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -312,6 +312,41 @@ When `path` is omitted, the first `AGENTSTACK_SPAWN_ROOTS` entry is used. For a 
 Hidden directories and symlinks that leave the root are excluded. Up to 500 entries are returned in name order because the page filters the complete list by the typed prefix. With 501 or more entries, `truncated` is `true`.
 
 ## GET `/api/agents`
+
+### Conversation history binding (legacy, API 35)
+
+Claude / Claude Code, dsh and Hermes return only verified own conversations through these common fields. Determine the storage format from the existing `program` and provider conditions; no separate format field is added.
+
+| Field | Type and meaning |
+| --- | --- |
+| `history_binding` | `bound` (own record verified), `unbound` (unverified), or `stale` (own record predates the current launch) |
+| `transcript_path` | Absolute physical file path only when bound; otherwise null |
+| `history_binding_reason` | Short human-readable reason; empty when bound |
+| `history_binding_reason_code` | Stable machine-readable code, including provider-specific conditions |
+| `history_session_id` | Provider-native session ID (required for Hermes database reads), or null if unverified |
+| `history_receipt_ts` | Original receipt timestamp (ISO 8601 string), or null if unavailable; preserve offset-free values as written |
+
+Cwd, timestamps and latest-session scans never establish ownership. Binding does not prove process liveness. Existing Codex fields and states and the protected fresh `/api/history` path remain unchanged.
+
+#### Claude / Claude Code
+
+Existing Claude receipts use host local time without an offset; the original value is preserved for display. Authority comes from the current project's Mail agent ID and its `session_index/<id>.json` receipt (schema 2, `binding_kind:self`), written by SessionStart or the self-registration hook. Agent ID, name, project and registering caller must agree. A regular transcript directly inside a Claude projects project directory must have the receipt's session ID as its filename and as the first native user/assistant record's `sessionId`. Names in message text, cwd and modification times never establish binding.
+
+Reason codes are `binding_missing` (no receipt), `invalid_binding` (invalid self-registration, project or format, or a receipt changed during verification), `ambiguous_binding` (another agent's self receipt claims this conversation), `no_transcript` (file type/location requirements failed), and `id_mismatch` (session ID mismatch or unverified metadata). Prefix inspection is limited to 64 lines / 256 KiB. Empty or partial files, a native ID absent within that limit, symlinks, subagent files and storage outside standard Claude projects remain unbound.
+
+A receipt timestamp older than the current tmux `session_created` returns `stale` / `receipt_predates_session`, retaining native ID and receipt time with a null path. Offset-free timestamps are compared in dashboard host local time, assuming its timezone has not changed. Hook receipt replacements are reflected by the next roster computation, without restoring a cached old path. This comparison cannot distinguish CLI replacement inside the same tmux session, same-second restarts or a missing receipt time: until a new hook completes, the last self-registered conversation may remain visible. Retirement alone preserves exact archival binding. Binding identifies the last self-registered conversation; it does not prove process liveness. Existing Codex states and the protected fresh `/api/history` path are unchanged.
+
+#### dsh (DeepSeek Harness)
+
+`history_receipt_ts` is the callback's UTC ISO 8601 timestamp. A launch expectation prepared after this update and the child's own `agent/created` callback bind the current project's Mail ID to the native persistence backend's `locate(header)` address and its device/inode after flush. Current default storage is Zstd-framed JSONL at the child's private `DSH_HOME/sessions/<workspace>/<session>/session.v4.jsonl.zstd`; `DSH_TUI_DATA_DIR` holds TUI settings. Root IDs are recorded before locator, flush or receipt publication. Observing another root in the same launch permanently conflicts that launch even if later persistence fails; a repeated callback from the original root cannot restore binding before a new formal launch. A failed root-observation write retains the acquired lock; a failed contender marker also prevents the owner from publishing or releasing its lock. I/O recovery alone cannot restore binding: a new formal launch nonce is required. A receipt older than the current terminal returns `stale` / `receipt_predates_session`, keeping native ID and original timestamp with a null path. Terminal-free retired archives keep the same exact verification. Resume rotates the launch nonce and withholds the old receipt until a new callback arrives. Retirement preserves exact archival binding while the same registration and receipts remain. Changed registration, removed proof, multiple root sessions in one launch, file replacement or symlinks remain unbound. Old launches without these receipts and custom storage locations never fall back to cwd, timestamps or latest-session scans. This raw-path contract is legacy-only; protected fresh history and the provider support of `/api/history` are unchanged. Cockpit needs a separate dsh Zstd/native-event parser.
+
+#### Hermes
+
+Only `history_binding: bound` publishes `transcript_path` (the absolute child-owned `HERMES_HOME/state.db` path). Bound/stale rows include the evidence's `history_session_id` (native ID) and `history_receipt_ts` (the callback's original ISO timestamp, with UTC offset). Existing `program: hermes` identifies the format. Readers must verify **both the database path and session ID** and filter `messages.session_id`: multiple sessions share one HOME/database. This path is not a JSONL transcript.
+
+Binding verifies the project/agent registration, child-specific launch/input, pinned private HOME, self `on_session_start` callback, and exact CLI session in SQLite. It never selects by cwd, newest session, or modification time. Missing/mismatched proof or a launch/resume in preparation yields `unbound`; a receipt older than a new terminal launch without explicit exact resume yields `stale`. Neither publishes a path; `history_binding_reason` / `history_binding_reason_code` explain why. Success uses an empty explanation and code `bound`. Retired children remain readable while proof is retained; removal/purge unbinds them. Provider-internal switching/compression without a new callback can leave this binding on the earlier recorded segment; it never guesses descendant sessions or emergency diverted JSONL. The protected fresh history path and `/api/history` provider scope are unchanged.
+
+### Other agent display fields
 
 API generation 24 lets running dsh/Hermes agent rows and `/api/graph` nodes return `work`, `question` or `ask` in `act_state` from supported current operation controls. A complete current input frame with no work/question/approval evidence returns `wait`. Hidden, incomplete or unsupported shapes return `null` (unknown); absence alone never implies waiting. Activity does not determine liveness, completion or stop eligibility. Existing Claude/Codex classification is unchanged. See [supported native displays and limits](native-capabilities.md#activity-classification-boundary).
 
