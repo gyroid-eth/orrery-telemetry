@@ -47,7 +47,7 @@ Coverage accepts a known witness even when another ACTIVE row has unknown rules.
 | Expiry/activity/collection | Existing app activity/grace/stale sweep and expiry cleanup | Derived fixed-width UTC expiry; no activity probe or collector |
 | Selectors/batches | Legacy tool shapes; PR2 candidate also allowed the union of IDs and paths | IDs XOR paths; omitted/path select own ACTIVE only; reject over 100 selected rows without counting expired history |
 | Repeated release / missing IDs | Already released or non-existent reservations are a no-op | Omitted/path release with no own ACTIVE rows succeeds with zero releases; missing/foreign explicit IDs reject the entire batch. Unmatched renew paths remain LEASE_NOT_FOUND |
-| Owner/scope/paths | Project/name and relative paths | Stable ID/token/binding, ignored project scope, absolute/virtual paths |
+| Owner/scope/paths | Project/name, physical absolute paths for managed sessions; legacy relative/glob patterns remain supported | Stable ID/token/binding, ignored project scope, absolute/virtual paths |
 | Start-session macro | Project/registration/reservations/inbox composition | Existing owner only; touch/reserve/inbox in one transaction |
 | Thread macro | Raw catalog macro_prepare_thread, outside namespace compatibility | Not added |
 | Force/purge | Raw agent-catalog management tools | Same-UID management socket only |
@@ -213,7 +213,7 @@ The approved inventory contains 72 named tests. Pure normalization, legacy app a
 | packages/agentstack_mail/tests/test_namespace_state_runtime.py / test_delivery_legacy_expiry_compares_instants_at_boundary | Retain independent existing assertions |
 | packages/agentstack_mail/tests/test_namespace_state_runtime.py / test_delivery_terminal_transition_is_enforced_by_database | Retain independent existing assertions |
 | packages/agentstack_mail/tests/test_namespace_state_runtime.py / test_reservation_latest_mail_is_selected_by_utc_instant | Move lease assertions to S2c SQL/HTTP; retain independent Mail/delivery/proxy assertions |
-| integrations/codex_app/tests/test_mcp_server.py / test_absolute_candidate_keeps_default_proxy_contract | Move lease assertions to S2c SQL/HTTP; retain independent Mail/delivery/proxy assertions |
+| integrations/codex_app/tests/test_mcp_server.py / test_absolute_candidate_keeps_separate_backend_from_default_proxy | Move lease assertions to S2c SQL/HTTP; retain independent Mail/delivery/proxy assertions |
 | integrations/codex_app/tests/test_mcp_server.py / test_bootstrap_binds_process_and_runtime_status_never_exposes_token | Retain independent existing assertions |
 | integrations/codex_app/tests/test_mcp_server.py / test_bridge_binding_wins_over_misleading_shell_identity | Retain independent existing assertions |
 | integrations/codex_app/tests/test_mcp_server.py / test_missing_bridge_binding_stops_without_guessing_a_name | Retain independent existing assertions |

@@ -176,6 +176,10 @@ workspace or a path-shaped project key into that root list.
 
 - Bound proxy: follow its actual schema and use `reserve_files`. Do not add
   caller identity, project, or token fields that the schema does not accept.
+  In managed `workspace-v1` sessions, supply physical absolute paths (resolve
+  symlinks first) and use those same paths for renew/release. Relative paths
+  and globs remain accepted unchanged for legacy compatibility; the proxy
+  does not infer a cwd from the namespace or protected roots.
   Renew with `renew_reservations` and release with `release_reservations`.
 - Raw/direct MCP: acquire with `macro_file_reservation_cycle` (or
   `file_reservation_paths`), passing

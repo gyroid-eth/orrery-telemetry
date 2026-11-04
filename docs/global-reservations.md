@@ -46,7 +46,7 @@ coverage は既知の witness があれば別行の規則が不明でも成功�
 | 期限・活動・回収 | 既存appのactivity/grace/stale sweep、expiry cleanup | 固定幅UTCの期限導出のみ。collectorも活動probeも無し |
 | selector / batch | 旧toolのselector/返却形。PR2候補はIDとpathの和集合も許す | ID XOR path、省略/pathはown ACTIVEだけ。100件超は拒否（expired履歴を数えない） |
 | 解放の再実行 / 不存在ID | 解放済み・不存在の予約はno-op | 省略/pathの自己ACTIVE 0件は成功0件。明示IDの不存在/他ownerは全件拒否。renew path不一致はLEASE_NOT_FOUNDを維持 |
-| owner / scope / paths | project/nameと相対path | stable ID/token/binding、projectは無視、abs/virtual scope |
+| owner / scope / paths | project/name、managedは物理絶対path、従来の相対path/globも維持 | stable ID/token/binding、projectは無視、abs/virtual scope |
 | macro_start_session | project/登録と予約/inboxのmacro | 既存ownerだけ、touch/reserve/inboxの同TX |
 | thread macro | raw catalogにmacro_prepare_thread（namespace互換対象外） | 追加しない |
 | force / purge | raw agent catalogの強制解放/期限削除 | same-UID管理socketのみ |
@@ -224,7 +224,7 @@ HOME="$fixture" TMUX_TMPDIR="$fixture" .venv/bin/python -m pytest -q -o addopts=
 | packages/agentstack_mail/tests/test_namespace_state_runtime.py / test_delivery_legacy_expiry_compares_instants_at_boundary | 維持: 削除engineに依存しない既存試験 |
 | packages/agentstack_mail/tests/test_namespace_state_runtime.py / test_delivery_terminal_transition_is_enforced_by_database | 維持: 削除engineに依存しない既存試験 |
 | packages/agentstack_mail/tests/test_namespace_state_runtime.py / test_reservation_latest_mail_is_selected_by_utc_instant | SQL移設/分割: engine_test_migrationの対応でlease assert保持、同じ試験の返信/配送/default proxy assertは維持 |
-| integrations/codex_app/tests/test_mcp_server.py / test_absolute_candidate_keeps_default_proxy_contract | SQL移設/分割: engine_test_migrationの対応でlease assert保持、同じ試験の返信/配送/default proxy assertは維持 |
+| integrations/codex_app/tests/test_mcp_server.py / test_absolute_candidate_keeps_separate_backend_from_default_proxy | SQL移設/分割: engine_test_migrationの対応でlease assert保持、同じ試験の返信/配送/default proxy assertは維持 |
 | integrations/codex_app/tests/test_mcp_server.py / test_bootstrap_binds_process_and_runtime_status_never_exposes_token | 維持: 削除engineに依存しない既存試験 |
 | integrations/codex_app/tests/test_mcp_server.py / test_bridge_binding_wins_over_misleading_shell_identity | 維持: 削除engineに依存しない既存試験 |
 | integrations/codex_app/tests/test_mcp_server.py / test_missing_bridge_binding_stops_without_guessing_a_name | 維持: 削除engineに依存しない既存試験 |

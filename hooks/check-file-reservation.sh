@@ -315,6 +315,10 @@ block_reservation_write() {
     echo "FILE RESERVATION REQUIRED: $FILE_PATH" >&2
     echo "$reason" >&2
     echo "Acquire one through the reservation tool provided by your connection schema before editing." >&2
+    if [ "${AGENTSTACK_PROTECTION_CONTEXT:-}" = "workspace-v1" ]; then
+        echo "Managed workspace-v1: reserve the physical absolute path: $FILE_PATH" >&2
+        echo "Use the same path for renew/release; relative paths are not converted automatically." >&2
+    fi
     exit 2
 }
 

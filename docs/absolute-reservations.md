@@ -6,6 +6,8 @@
 
 共通 normalizer と明示した proxy/hook/CLI adapter を提供します。候補予約の唯一の server は [S2c の SQLite runtime](global-reservations.md)です。PR2 の in-memory ReservationServer・PersistentReservations の copy/flush・reservation_activity の probe/collector は削除しました。既定の Mail・proxy・hook は旧 mode のままで、activation=false。明示した fixture transport でだけ候補 adapter を接続します。
 
+既定の bound proxy も、managed `workspace-v1` guard と一致する物理絶対 path で取得・更新・解放できます。これは下記の候補 normalizer の有効化とは別です。既定 proxy は相対 path / glob を絶対化せずそのまま渡します。[共通 proxy の契約](codex-app.md#agent-の利用手順)を参照してください。
+
 ## 同じ正規化
 
 `reservation_paths.normalize_path()` を server/client/CLI/hook が共用します。server は絶対 path を要求します。client は観測済み cwd を明示し、その cwd で相対 path を絶対化します。旧 `project_key` は受け取って無視し、anchor にしません。旧 raw lease の anchor が不明なら、絶対 path での取り直しまたは移行証拠を求めます。現在の旧 lease はこの PR で変換しません。
@@ -34,7 +36,7 @@ profileはASCIIと、Unicode3.2で割当済みの次の範囲です: CJK記号 `
 
 根拠はUnicode公式の [CaseFolding-9.0.0](https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data/ucd/9.0.0-Update/CaseFolding.txt) のC+F mapping（取得data SHA256 `37d40cf8c2c35637f4a04e746814e1fc4eb764c272bed9238a87ee96a4866857`）です。profileの割当済み27,978文字では上記全角Latin26件以外にcase写像がなく、NFDの結果もprofile内に留まることを静的確認しています。APFS FAQは退役資料なので、この根拠と現在の実Mac一時領域での受入を区別します。全Unicode tableの配布依存を追加したものではなく、任意Unicode名／全FS／WSL Windows側の受入を意味しません。既定の旧modeは変更しません。
 
-`ReservationClient` は authenticated binding resolver と candidate dispatch を必須とし、acquire/check/renew/release で同じ正規化を使います。既存 proxy の `candidate_reservations()` は、既存 `_resolve()` で各呼出の binding/token を確認し、観測した cwd と明示した backend でこの client を作ります。既定の `tools/call` には接続しません。旧 proxy の相対 path 制約も維持します。
+`ReservationClient` は authenticated binding resolver と candidate dispatch を必須とし、acquire/check/renew/release で同じ正規化を使います。既存 proxy の `candidate_reservations()` は、既存 `_resolve()` で各呼出の binding/token を確認し、観測した cwd と明示した backend でこの client を作ります。既定の `tools/call` には接続しません。既定 proxy は物理絶対 path と従来の相対 path / glob を候補の正規化なしで受け付けます。
 
 `hook_guard()` と `hook_release()` は同じ client を使います。resolver が未参加と確認した session は noop、認証済みの参加 session はどのフォルダでも予約を要求します。binding 不明、認証失敗、通信断は block です。勝手な登録や token 探索は行いません。共通 shell の `reservation_absolute_paths()` は同じ CLI に明示した cwd を渡す候補 helper で、既存 hook からの呼出はありません。sandbox、OS の権限、Codex add-dir、閲覧許可は変更しません。
 

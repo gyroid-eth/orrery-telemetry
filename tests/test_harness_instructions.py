@@ -32,6 +32,18 @@ def test_native_task_rules_are_short_and_omit_orrery_child_creation_procedures()
         assert rule in output
 
 
+def test_native_rendered_reservation_guidance_matches_managed_guard():
+    output = render()
+    reservations = output.split(b'## File reservations', 1)[1].split(b'## Messaging Other Agents', 1)[0]
+    for guidance in (b'workspace-v1', b'physical absolute paths',
+                     b'resolve symlinks first', b'same paths',
+                     b'renew_reservations', b'release_reservations',
+                     b'relative paths and globs', b'unchanged',
+                     b'namespace', b'protected roots'):
+        assert guidance in reservations
+    assert b'project-relative paths' not in reservations
+
+
 def test_neutral_identity_and_all_shared_sections_are_kept_byte_for_byte():
     output = render()
     assert not any(word in output.lower() for word in (b'codex', b'claude-code', b'claude code'))
@@ -67,12 +79,14 @@ def test_shared_boundary_changes_fail_instead_of_silently_dropping_rules(mutatio
 
 
 @pytest.mark.parametrize('provider,name,digest', [
-    ('claude', 'CLAUDE.md', '84eaaca21bf661cab608d11d778186573fb59399095d87dfc0d44c45b62a2a75'),
-    ('codex', 'AGENTS.md', '487580671d31b995ac6e1c34c72ec42615aeec6130672cb91e5065746a300440'),
+    ('claude', 'CLAUDE.md', '39a95b17bd3957cc355795b556737dbc0ff5589f5d7f33c8613b6a33b6b993e9'),
+    ('codex', 'AGENTS.md', '59728f94e5cf4ebee3d05d5e01d2ffed6034335c640129bc018b5cb16c751081'),
 ])
 def test_program_output_matches_scope_adjusted_baseline(provider, name, digest):
-    # Issue #33 intentionally changes reservation guidance, not the provider
-    # renderer. Pin the new complete output to catch unrelated template drift.
+    # Reviewed against af1e33d0: each provider template adds exactly four lines
+    # requiring physical absolute paths in managed workspace-v1 sessions,
+    # the same paths for renew/release, unchanged legacy paths/globs, and no
+    # inferred cwd. The renderer is unchanged; pin the intended full output.
     output = renderer.render(provider, (ROOT / provider / name).read_bytes(), '/fixture/install', '/fixture/project')
     assert hashlib.sha256(output).hexdigest() == digest
 
