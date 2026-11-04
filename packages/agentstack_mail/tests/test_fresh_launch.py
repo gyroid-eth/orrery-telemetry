@@ -21,11 +21,7 @@ from test_fresh_proxy import environment
 
 ROOT = Path(__file__).resolve().parents[3]
 
-NATIVE = r'''
-import json, os, pathlib, subprocess, sys, time, uuid
-provider = os.environ['TEST_PROVIDER']
-args = sys.argv[1:]
-home = pathlib.Path(os.environ['CODEX_HOME' if provider == 'codex' else 'CLAUDE_CONFIG_DIR'])
+CODEX_APP_SERVER = r'''
 if args and args[-1] == 'app-server':
     import tomllib
     values = tomllib.loads((home/'config.toml').read_text())
@@ -50,6 +46,14 @@ if args and args[-1] == 'app-server':
             result={'data':[{'cwd':os.getcwd(),'hooks':hooks,'errors':[]}]}
         print(json.dumps({'id':row['id'],'result':result}),flush=True)
     sys.exit(0)
+'''
+
+NATIVE = r'''
+import json, os, pathlib, subprocess, sys, time, uuid
+provider = os.environ['TEST_PROVIDER']
+args = sys.argv[1:]
+home = pathlib.Path(os.environ['CODEX_HOME' if provider == 'codex' else 'CLAUDE_CONFIG_DIR'])
+''' + CODEX_APP_SERVER + r'''
 if '--resume' in args:session = args[args.index('--resume')+1]
 elif 'resume' in args:session = args[args.index('resume')+1]
 else:session = str(uuid.uuid4())

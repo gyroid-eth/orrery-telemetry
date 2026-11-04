@@ -28,7 +28,7 @@ from agentstack_mail.fresh_launch import identity, layout
 from agentstack_mail.fresh_runtime import _write_private
 from agentstack_mail.storage_origin_contract import B1Error, canonical
 from test_fresh_guard import live
-from test_fresh_launch import prepare
+from test_fresh_launch import CODEX_APP_SERVER, prepare
 from test_fresh_mail import send_args, snapshot
 from test_fresh_notifications import rows, running
 from test_fresh_proxy import environment
@@ -294,6 +294,7 @@ NATIVE=r'''
 import json,os,pathlib,select,subprocess,sys,termios,time,tty,uuid
 provider=os.environ['TEST_PROVIDER'];args=sys.argv[1:]
 home=pathlib.Path(os.environ['CODEX_HOME' if provider=='codex' else 'CLAUDE_CONFIG_DIR'])
+''' + CODEX_APP_SERVER + r'''
 session=str(uuid.uuid4());transcript=home/(session+'.jsonl')
 transcript.write_text(json.dumps(dict(type='session_meta',payload=dict(id=session)))+'\n')
 event=dict(hook_event_name='SessionStart',source='startup',session_id=session,transcript_path=str(transcript))
@@ -323,6 +324,31 @@ while True:
 '''
 
 
+def test_delivery_codex_preflight_does_not_run_session_start(tmp_path):
+    """The delivery fake must serve preflight before a launch receipt exists."""
+    from types import SimpleNamespace
+    client_dir = tmp_path / 'client'
+    client_dir.mkdir(mode=0o700)
+    client = SimpleNamespace(path=client_dir / 'context.json',
+                             context={'root': str(tmp_path)})
+    home, binary = prepare(client, 'codex', tmp_path)
+    binary.write_text('#!' + sys.executable + '\n' + NATIVE)
+    trace = tmp_path / 'unexpected-session.json'
+    env = environment(client, AGENTSTACK_RUNTIME_MODE='fresh', TEST_PROVIDER='codex',
+                      CODEX_HOME=str(home), TEST_TRACE=str(trace))
+    trust = runpy.run_path(str(ROOT / 'scripts/codex_plugin_trust.py'))
+    with trust['AppServer'](str(binary), home, tmp_path, environment=env) as server:
+        config = server.request('config/read', {'includeLayers': False, 'cwd': str(tmp_path)})
+        assert config['config']['skills'] is None
+        hooks = server.request('hooks/list', {'cwds': [str(tmp_path)]})
+        assert hooks['data'][0]['cwd'] == str(tmp_path)
+        assert hooks['data'][0]['hooks']
+        assert all(h['enabled'] is True and h['trustStatus'] == 'trusted'
+                   for h in hooks['data'][0]['hooks'])
+    assert not trace.exists(), 'preflight incorrectly invoked the SessionStart callback'
+    assert not list(home.glob('*.jsonl')), 'preflight incorrectly created a native transcript'
+
+
 @pytest.mark.parametrize('provider',['claude','codex'])
 def test_real_tmux_watcher_uses_only_bound_native_and_rejects_respawn(tmp_path,provider):
     """External-only: actual private socket, native entry, ps and real watcher."""
@@ -334,6 +360,7 @@ def test_real_tmux_watcher_uses_only_bound_native_and_rejects_respawn(tmp_path,p
             socket=private/'notify.sock'
             control=tmp_path/'control';control.write_text('busy')
             received,ready=tmp_path/'received.jsonl',tmp_path/'native.ready'
+            launch_stderr=tmp_path/'launcher.stderr'
             env=environment(client,AGENTSTACK_RUNTIME_MODE='fresh',**{'AGENTSTACK_'+provider.upper()+'_BIN':str(binary)},
                 TEST_PROVIDER=provider,TEST_TRACE=str(tmp_path/'native-trace.json'),TEST_CONTROL=str(control),
                 TEST_RECEIVED=str(received),TEST_READY=str(ready),LC_ALL='en_US.UTF-8')
@@ -351,12 +378,17 @@ def test_real_tmux_watcher_uses_only_bound_native_and_rejects_respawn(tmp_path,p
             try:
                 entry=ROOT/('bin/agent-start-codex' if provider=='codex' else 'bin/agent-start')
                 started=await command('new-session','-d','-s','fixture','-P','-F','#{pane_id}',
-                    'exec '+shlex.join(['/bin/bash',str(entry),str(tmp_path)]));created=True
+                    # A user's default tmux shell may source env.sh at startup.
+                    # Keep the fixture interpreter after that shell has started.
+                    'exec '+shlex.join(['/usr/bin/env','AGENTSTACK_PYTHON='+sys.executable,
+                                       '/bin/bash',str(entry),str(tmp_path)])
+                    +' 2>'+shlex.quote(str(launch_stderr)));created=True
                 pane=started.stdout.strip()
                 other=(await command('new-window','-d','-t','fixture','-P','-F','#{pane_id}','exec /bin/cat')).stdout.strip()
                 deadline=time.monotonic()+40
                 while not ready.exists():
-                    assert time.monotonic()<deadline, (tmp_path/'native-trace.json').read_text() if (tmp_path/'native-trace.json').exists() else canonical(log)
+                    assert time.monotonic()<deadline, (tmp_path/'native-trace.json').read_text() if (tmp_path/'native-trace.json').exists() else canonical(dict(
+                        tmux=log, launcher_stderr=launch_stderr.read_text() if launch_stderr.exists() else 'not created'))
                     await asyncio.sleep(.1)
                 # Launch observation publication can follow native SessionStart.
                 base=client.path.parent/'launch'
