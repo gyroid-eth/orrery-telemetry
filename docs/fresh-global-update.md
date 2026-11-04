@@ -267,6 +267,16 @@ AGENTSTACK_PYTHON="$orrery_python" AGENTSTACK_RUNTIME_MODE=fresh \
 
 Codexは上の `agent-start` を `agent-start-codex` に置き換えます。起動したmodelはbound proxyの `runtime_status` で本人を確認し、schemaにないproject／資格／本人IDを追加しません。予約pathは実際の作業folderから絶対化されます。fresh contextの欠落・破損・資格失効を旧登録へのfallbackで回避しません。
 
+Codexのstdio MCPへは、launcherが固定したfresh context・mode・Pythonを明示的に転送します。資格本文や旧global contextは転送しません。hook承認済みpluginは有効のまま、その付属MCPと旧Mail MCPを無効化し、`orrery-mail`のfresh proxyを使います。本人を確認できない、またはDesktop向けの`bootstrap`を求められた場合は停止し、別serverや本人への登録で埋めません。旧Mail MCPの名前をCodexのCLI設定で安全に指定できない場合も`FRESH_CODEX_MCP_CONFIG_UNSUPPORTED`で停止します。これらは通常のtool承認やhookの本人承認を自動で許可する変更ではありません。
+
+既存の`mcp_servers.orrery-mail`は、上書きする`command`・`args`・`env_vars`と、空の`env`・`enabled=true`だけを許可します。空の定義も使えます。非空の`env`、無効化、URL・cwdなどその他の項目は、設定のmergeで旧環境が残るのを防ぐため、起動前に`FRESH_CODEX_MCP_CONFIG_UNSUPPORTED`で拒否します。
+
+さらに、同じbinary・provider HOME・作業folder・sanitized環境・native既定のprofile選択で、起動前に有限の`config/read`を1回行い、projectなどを含むeffective設定を確認します。canonical MCPは厳密に`environment_id="local"`・有効・固定wrapper/引数/3環境変数であることを要求し、非空env・別cwd・無効化・未知の設定を拒否します。native既定のnull timeoutだけは区別して許容します。読取失敗や未対応schemaはHOMEだけへfallbackせず停止し、設定全文やenv値は記録しません。effective設定にある旧Mail aliasも無効化します。
+
+承認済みpluginのpayloadは変えず、既存の`skills.config`の順序と無関係な有効/無効設定を保持して、installed `coordinate/SKILL.md`だけを今回のCLI引数で除外します。`skills:null`は対応済みの空設定ですが、key欠落・不正型を空とみなしません。無関係な重複・directory・symlinkの設定は保持します。対象の曖昧なalias/重複やnative未解決の相対pathは未対応として停止します。これは起動時snapshotの確認であり、読取と起動の間の同時設定変更や任意の明示profileの一致までは保証しません。実nativeのMail・hook・通常tool承認の再受入は引き続き必要です。
+
+同じeffective設定で承認済みpluginの有効状態と付属MCPの無効状態も検査します。続けて同じ有限AppServer・同じ作業folder・共有20秒deadline内で既存の`scoped_hooks`によるread-only `hooks/list`を行い、承認済みplanの定義・key・currentHashの一致、`trusted`かつ有効を要求します。不明・無効・未承認・不一致は`CODEX_HOOK_CONFIGURE_REQUIRED`で停止し、enableやtrustを書き換えません。reader初期化失敗でも作成済みprocess・pipeのcleanupを試みます。実hook動作の受入をこの読取だけで完了とは扱いません。
+
 resumeは **この新clientで記録済みのnative sessionだけ** が対象です。旧Mailのresume、別clientのsession、終了が確認できないrunへ自動でつなぎません。記録が揃っている場合の引数は `agentstack-resume claude "$orrery_workdir" --session-id <recorded-native-UUID>`（Codexは `codex`）で、上と同じfresh環境変数を渡します。終了不明なら起動を止め、本人が実行状況を確認するまでreceiptを手で書き換えません。
 
 ### 自動の子: 既存preregister／spawn入口のfresh接続
@@ -399,5 +409,25 @@ freshのClaudeのSessionStart hookが通知を渡すのは、`source` が文字�
 新側へ書く前なら旧運用への接続を戻せます。書いたあとなら、新Mail・返信待ち・編集中の仕事を控えてから戻します。新側のMailを旧側へ自動で逆移行する仕組みはなく、無損失rollbackではありません。旧運用を再開するときも期限切れleaseに頼らず予約を取り直し、二重起動していないことを確かめます。
 
 通信後に応答だけ失った書込みは、保存した同requestを再送できます。local callerの `fresh_client replay --context <same-context> --request-id <saved-UUID>` は元の本文・宛先・絶対pathを使い、現在の資格を再確認します。新UUIDでの再送や手でrequestを書き換える操作は、元の操作の再開ではありません。mode pinの無い旧実験contextは推測修復せず、同じowner bindingから新client UUIDでprepareし直します。この操作で旧native sessionのresumeが引き継がれるとは扱いません。
+
+fresh Codex CLI の lifecycle hook、予約 guard、鍵読取 guard と `session-hook` は、launcher が `AGENTSTACK_FRESH_PYTHON` に固定した絶対 interpreter を使います。login shell が旧 `AGENTSTACK_PYTHON` を上書きしても、その値や PATH の python3 へ切り替えません。固定値が欠落・空・相対 path・実行不能なら `FRESH_CODEX_PYTHON_UNAVAILABLE` で拒否します。CLI fresh の guard は interpreter/import 失敗でも拒否し、`FRESH_CODEX_GUARD_UNAVAILABLE` を出します。鍵読取 guard はその経路で旧 shell guard の通常コマンド許可 fallback に進みません。Desktop と Claude の既存経路は別です。この変更を含む plugin payload は更新後に人がもう一度 review・承認し、正規の plan／trust apply を済ませてから新しい native process で受け入れます。古い承認や診断用 payload の承認を流用しません。
+
+launcher は `AGENTSTACK_FRESH_WRAPPER_ROOT`／`AGENTSTACK_FRESH_RUNTIME_DIR`／`AGENTSTACK_FRESH_CODEX_HOME`／`AGENTSTACK_FRESH_CODEX_BIN` も固定します。CLI fresh の共通 payload `fresh-cli-env.sh` が login shell 初期化後に core／hooks／runtime／Codex home・binary／mode を復元します。pinの欠落・不正、contextとruntimeの不一致、共通payload欠落は `FRESH_CODEX_ENV_UNAVAILABLE` で拒否し、旧/global contextの混在も既存の拒否を保ちます。provider homeはlauncherが検証して選んだ共有先を使い、子contextから推測し直しません。OSのHOMEやlegacy設定ファイルは変更しません。通常のfresh child tmux入口も、shell初期化後に固定したprovider binary・Python・mode・contextを渡します。
+
+実hookの自己確認は、承認済みpayloadと上で選んだPythonのまま、次の1回で行います。新しいCodexで本人確認の入力を1回送り、画面に `Hook failed` が出ないことを確認して通常の `/quit` で終了します。起動が成功した場合だけ、起動前の時刻マーカーより新しいsession記録の有無を表示します。context・receipt本文やenv・資格は表示せず、payloadや実行環境に診断コードを差し込みません。
+
+```sh
+orrery_hook_marker="$(mktemp "${TMPDIR:-/tmp}/orrery-hook-check.XXXXXX")" || exit 1
+if AGENTSTACK_PYTHON="$orrery_python" AGENTSTACK_RUNTIME_MODE=fresh \
+  AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  "$orrery_install/bin/agent-start-codex" "$orrery_workdir"; then
+  find "$(dirname "$orrery_context")/launch/runs" -type f -name session.json \
+    -newer "$orrery_hook_marker" -exec ls -l {} \;
+else
+  printf '%s\n' 'STOP: fresh launch failed; inspect the fixed code above.' >&2
+fi
+```
+
+期待値は、`Hook failed` がなく、**今回のrunの `session.json` が1件**表示されることです。表示無し・複数件・別runの記録なら未確認として停止し、前回の成功記録を代用しません。この2点で、選択Pythonを使う承認済みhook経路が実行されsessionを記録したことを確認します。Pythonのimport確認や起動前のread-only `hooks/list` だけは、この実動作確認の代わりになりません。MCPの `runtime_status` による本人確認と通常tool承認も別に確認します。失敗時は `FRESH_CODEX_PYTHON_UNAVAILABLE`（Python pin欠落・不正）、`FRESH_CODEX_ENV_UNAVAILABLE`（他pin・nonce・runtime不整合等）、`FRESH_CODEX_GUARD_UNAVAILABLE`（guard実行・import失敗）、`CODEX_HOOK_CONFIGURE_REQUIRED`（payload・plan・trust不一致等）を停止理由として扱い、PATHのpython3や旧経路へfallbackしません。終了時の `FRESH_PRIVATE_FILE_UNAVAILABLE` も、記録不足のまま受入を進めず原因を確認します。
 
 復帰・App前面化は今回の対象外です。実OS manager/Finder GUI、実provider／App／login／trust／live install、実際の作業pathの支持範囲、最終CIと本人在席の切替を確認するまで、全体完了とはしません。WSLなど未受入の環境を、この私有Macでの確認から受入済みとは扱いません。

@@ -21,11 +21,39 @@ from test_fresh_proxy import environment
 
 ROOT = Path(__file__).resolve().parents[3]
 
+CODEX_APP_SERVER = r'''
+if args and args[-1] == 'app-server':
+    import tomllib
+    values = tomllib.loads((home/'config.toml').read_text())
+    for i, value in enumerate(args[:-1]):
+        if not i or args[i-1] != '-c':continue
+        key, raw = value.split('=',1);target = values;parts = key.split('.')
+        for part in parts[:-1]:target = target.setdefault(part,{})
+        target[parts[-1]] = tomllib.loads('v='+raw)['v']
+    for server in values.get('mcp_servers',{}).values():
+        server.setdefault('environment_id','local');server.setdefault('enabled',True)
+        server.setdefault('tool_timeout_sec',None)
+    values.setdefault('skills',None)
+    for line in sys.stdin:
+        row=json.loads(line)
+        if 'id' not in row:continue
+        assert row['method'] in ('initialize','config/read','hooks/list')
+        if row['method']=='initialize':result={}
+        elif row['method']=='config/read':result={'config':values}
+        else:
+            plan=json.loads((home/'hook-plan.json').read_text())
+            hooks=[dict(h,enabled=True,trustStatus='trusted') for h in plan['hooks']]
+            result={'data':[{'cwd':os.getcwd(),'hooks':hooks,'errors':[]}]}
+        print(json.dumps({'id':row['id'],'result':result}),flush=True)
+    sys.exit(0)
+'''
+
 NATIVE = r'''
 import json, os, pathlib, subprocess, sys, time, uuid
 provider = os.environ['TEST_PROVIDER']
 args = sys.argv[1:]
 home = pathlib.Path(os.environ['CODEX_HOME' if provider == 'codex' else 'CLAUDE_CONFIG_DIR'])
+''' + CODEX_APP_SERVER + r'''
 if '--resume' in args:session = args[args.index('--resume')+1]
 elif 'resume' in args:session = args[args.index('resume')+1]
 else:session = str(uuid.uuid4())
@@ -66,6 +94,7 @@ result = dict(provider=provider, args=args, session_id=session, session_hook_rc=
     session_stderr=recorded.stderr, guard_rc=guarded.returncode, guard_stderr=guarded.stderr,
     proxy_rc=proxied.returncode, status=status, mode=os.environ.get('AGENTSTACK_RUNTIME_MODE'),
     context=os.environ.get('AGENTSTACK_FRESH_CLIENT_CONTEXT'), home=str(home),
+    pinned_python=os.environ.get('AGENTSTACK_FRESH_PYTHON'),
     runtime=os.environ.get('AGENTSTACK_RUNTIME_DIR'),
     old_identity_present=any(key in os.environ for key in ('PROJECT_KEY','AGENTSTACK_PROJECT_KEY','CHILD_REGISTRATION_TOKEN','MCP_AGENT_MAIL_TOKEN')))
 pathlib.Path(os.environ['TEST_TRACE']).write_text(json.dumps(result))
@@ -91,19 +120,28 @@ def prepare(client, provider, tmp_path):
         shutil.copytree(ROOT / 'integrations/codex_app/plugin', plugin)
         trust = runpy.run_path(str(ROOT / 'scripts/codex_plugin_trust.py'))
         plugin_id = 'agentstack-codex-app@fresh-fixture'
-        key = 'synthetic-scoped-session-start'
+        hooks = []
+        for event, groups in json.loads((plugin/'hooks/hooks.json').read_text())['hooks'].items():
+            for group in groups:
+                for handler in group['hooks']:
+                    hooks.append(dict(key='synthetic-hook:'+str(len(hooks)), eventName=event,
+                        handler={k: handler[k] for k in ('type', 'command', 'async')},
+                        isManaged=False, source='plugin', sourcePath=str(plugin/'hooks/hooks.json'),
+                        pluginId=plugin_id, timeoutSec=handler['timeoutSec'], currentHash='sha256:synthetic'))
+        hooks.sort(key=lambda h: h['key'])
         # Synthetic native trust evidence only: no Codex process or real /hooks
         # approval is run. The production read-only verifier checks this shape.
         plan = dict(schema_version=1, approved=True, enable_hooks=True, codex_binary=str(binary),
             shared_codex_home=str(home), cwd=client.context['root'], plugin_id=plugin_id,
             plugin_root=str(plugin), payload_digest=trust['payload_digest'](plugin),
             declared_hooks=json.loads((plugin / 'hooks/hooks.json').read_text()),
-            hooks=[{'key': key, 'currentHash': 'sha256:synthetic'}])
+            hooks=hooks)
         _write_private(home / 'hook-plan.json', plan)
         config = home / 'config.toml'
-        config.write_text('[plugins.' + json.dumps(plugin_id) + ']\nenabled=true\n'
-            '[hooks.state.' + json.dumps(key) + ']\ntrusted_hash="sha256:synthetic"\nenabled=true\n'
-            '[mcp_servers.agent_mail]\ncommand="FORBIDDEN-OLD-MAIL"\n')
+        states = ''.join('[hooks.state.' + json.dumps(h['key'])
+            + ']\ntrusted_hash="sha256:synthetic"\nenabled=true\n' for h in hooks)
+        config.write_text('[plugins.' + json.dumps(plugin_id) + ']\nenabled=true\n' + states
+            + '[mcp_servers.agent_mail]\ncommand="FORBIDDEN-OLD-MAIL"\n')
         config.chmod(0o600)
     return home, binary
 
@@ -221,14 +259,15 @@ def test_regular_entries_new_and_explicit_resume_use_same_context_proxy_and_real
             record = json.loads((tmp_path / 'native-trace.json').read_text())
             assert record['session_hook_rc'] == record['guard_rc'] == record['proxy_rc'] == 0
             assert record['mode'] == 'fresh' and record['context'] == str(client.path)
+            if provider == 'codex':assert record['pinned_python'] == sys.executable
             assert record['status']['mail_agent_id'] == people[0]['agent_id']
             assert record['status']['mail_instance_id'] == runtime.config['instance_id']
             assert not record['old_identity_present']
             assert record['runtime'] == str(client.path.parent / 'launch/runtime')
             assert '--strict-mcp-config' in record['args'] if provider == 'claude' else 'check_for_update_on_startup=false' in record['args']
             if provider == 'codex':
-                assert 'mcp_servers."agent_mail".enabled=false' in record['args']
-                assert 'plugins."agentstack-codex-app@fresh-fixture".mcp_servers.agentstack.enabled=false' in record['args']
+                assert 'mcp_servers.agent_mail.enabled=false' in record['args']
+                assert 'plugins.agentstack-codex-app@fresh-fixture.mcp_servers.agentstack.enabled=false' in record['args']
             second = await invoke(client, provider, binary, tmp_path, session=record['session_id'])
             assert second.returncode == 0, second.stderr
             resumed = json.loads((tmp_path / 'native-trace.json').read_text())
@@ -308,6 +347,10 @@ def test_foreign_native_session_and_stale_session_hook_are_rejected(tmp_path, ba
             current = json.loads((client.path.parent / 'launch/current.json').read_text())
             intent = json.loads((client.path.parent / 'launch/runs' / current['launch_id'] / 'intent.json').read_text())
             env = environment(client, AGENTSTACK_RUNTIME_MODE='fresh', AGENTSTACK_FRESH_LAUNCH_ID=current['launch_id'],
+                              AGENTSTACK_FRESH_PYTHON=sys.executable,
+                              AGENTSTACK_FRESH_WRAPPER_ROOT=str(ROOT),
+                              AGENTSTACK_FRESH_RUNTIME_DIR=str(client.path.parent/'launch/runtime'),
+                              AGENTSTACK_FRESH_CODEX_HOME=str(home), AGENTSTACK_FRESH_CODEX_BIN=str(binary),
                               AGENTSTACK_FRESH_LAUNCH_NONCE=intent['nonce'])
             trace = json.loads((tmp_path / 'native-trace.json').read_text())
             event = dict(hook_event_name='SessionStart', session_id=trace['session_id'],
@@ -355,8 +398,33 @@ def test_one_context_cannot_start_two_native_processes(tmp_path):
 def test_fresh_non_session_start_plugin_event_does_not_open_owner_material(tmp_path):
     # A missing path proves the fast non-SessionStart route does not construct
     # FreshBoundClient or start an HTTP call. No real HOME/Bridge is consulted.
+    runtime=tmp_path/'launch/runtime';runtime.mkdir(parents=True)
+    home=tmp_path/'providers/codex';home.mkdir(parents=True)
     env = dict(os.environ, AGENTSTACK_RUNTIME_MODE='fresh', AGENTSTACK_PYTHON=sys.executable,
+               AGENTSTACK_FRESH_PYTHON=sys.executable,
+               AGENTSTACK_FRESH_LAUNCH_ID='synthetic-launch', AGENTSTACK_FRESH_LAUNCH_NONCE='synthetic-nonce',
+               AGENTSTACK_FRESH_WRAPPER_ROOT=str(ROOT), AGENTSTACK_FRESH_RUNTIME_DIR=str(runtime),
+               AGENTSTACK_FRESH_CODEX_HOME=str(home), AGENTSTACK_FRESH_CODEX_BIN=sys.executable,
                AGENTSTACK_FRESH_CLIENT_CONTEXT=str(tmp_path / 'not-opened.json'))
     result = subprocess.run(['/bin/bash', str(ROOT / 'integrations/codex_app/plugin/scripts/run-hook.sh')],
         env=env, input='{"hook_event_name":"PostToolUse"}', capture_output=True, text=True, timeout=5)
     assert result.returncode == 0 and not result.stdout and not result.stderr
+
+
+def test_synthetic_native_hook_fixture_matches_existing_scoped_verifier(tmp_path):
+    from types import SimpleNamespace
+    (tmp_path / 'client').mkdir(mode=0o700)
+    client = SimpleNamespace(path=tmp_path / 'client/context.json', context={'root': str(tmp_path)})
+    home, _ = prepare(client, 'codex', tmp_path)
+    plan = json.loads((home / 'hook-plan.json').read_text())
+    trust = runpy.run_path(str(ROOT / 'scripts/codex_plugin_trust.py'))
+    trust['verify_approved_plan'](plan)
+    calls = []
+    class Reader:
+        def request(self, method, params):
+            calls.append((method, params))
+            return {'data': [{'cwd': str(tmp_path), 'errors': [],
+                'hooks': [dict(h, enabled=True, trustStatus='trusted') for h in plan['hooks']]}]}
+    hooks = trust['scoped_hooks'](Reader(), tmp_path, plan['plugin_id'], Path(plan['plugin_root']))
+    assert [trust['identity'](h) for h in hooks] == plan['hooks']
+    assert calls == [('hooks/list', {'cwds': [str(tmp_path)]})]

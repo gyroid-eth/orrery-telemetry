@@ -53,17 +53,26 @@ def atomic_json(path: Path, value: dict) -> None:
 
 
 class AppServer:
-    def __init__(self, binary: str, home: Path, cwd: Path, timeout: float = 30):
+    def __init__(self, binary: str, home: Path, cwd: Path, timeout: float = 30,
+                 *, argv=None, environment=None):
         self.deadline = time.monotonic() + timeout
-        environment = os.environ.copy()
+        environment = dict(os.environ if environment is None else environment)
         environment['CODEX_HOME'] = str(home)
-        self.process = subprocess.Popen(
-            [binary, 'app-server'], cwd=cwd, env=environment,
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
         self.selector = selectors.DefaultSelector()
-        self.selector.register(self.process.stdout, selectors.EVENT_READ)
+        self.process = None
+        try:
+            self.process = subprocess.Popen(
+                [binary, 'app-server'] if argv is None else argv, cwd=cwd, env=environment,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            self.selector.register(self.process.stdout, selectors.EVENT_READ)
+        except BaseException:
+            try:
+                self.close()
+            except BaseException:
+                pass  # Preserve the constructor failure after attempting cleanup.
+            raise
         self.buffer = b''
         self.request_id = 0
 
@@ -114,16 +123,24 @@ class AppServer:
         raise TrustUnavailable('app-server timeout')
 
     def close(self):
-        self.selector.close()
-        if self.process.poll() is None:
-            os.killpg(self.process.pid, signal.SIGTERM)
-            try:
-                self.process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                os.killpg(self.process.pid, signal.SIGKILL)
-                self.process.wait(timeout=2)
-        for stream in (self.process.stdin, self.process.stdout):
-            stream.close()
+        try:
+            self.selector.close()
+        finally:
+            # Selector failure must not skip child/pipe cleanup.
+            if self.process is not None:
+                try:
+                    if self.process.poll() is None:
+                        os.killpg(self.process.pid, signal.SIGTERM)
+                        try:
+                            self.process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(self.process.pid, signal.SIGKILL)
+                            self.process.wait(timeout=2)
+                finally:
+                    try:
+                        self.process.stdin.close()
+                    finally:
+                        self.process.stdout.close()
 
     def __exit__(self, *args):
         self.close()
