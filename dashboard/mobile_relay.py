@@ -18,10 +18,12 @@ try:
     from dashboard import legacy_http_admission as admission
     from dashboard.mobile_projection import SnapshotStore, MobileMailStore, WINDOWS, NAME, EVENT_KEY, png_image
     from dashboard import mobile_input
+    from dashboard import mobile_history
 except ModuleNotFoundError:
     import legacy_http_admission as admission
     from mobile_projection import SnapshotStore, MobileMailStore, WINDOWS, NAME, EVENT_KEY, png_image
     import mobile_input
+    import mobile_history
 
 HERE = Path(__file__).resolve().parent
 MAX_UPSTREAM_BYTES = 4 * 1024 * 1024
@@ -40,6 +42,7 @@ class Config:
     input_enabled: bool = False
     phone_policy_reviewed: bool = False
     cockpit_port: int = 8791
+    history_enabled: bool = False
 
     def __post_init__(self):
         if (not self.owner_login or len(self.owner_login)>254 or
@@ -55,8 +58,11 @@ class Config:
         if (type(self.input_enabled) is not bool or type(self.phone_policy_reviewed) is not bool
                 or self.input_enabled and not self.phone_policy_reviewed):
             raise ValueError('input requires explicit opt-in and --phone-policy-reviewed acknowledgement')
+        if (type(self.history_enabled) is not bool
+                or self.history_enabled and not self.phone_policy_reviewed):
+            raise ValueError('history requires explicit opt-in and --phone-policy-reviewed acknowledgement')
         if (type(self.cockpit_port) is not int or not 1<=self.cockpit_port<=65535
-                or self.input_enabled and self.cockpit_port in {self.listen_port,self.upstream_port}):
+                or (self.input_enabled or self.history_enabled) and self.cockpit_port in {self.listen_port,self.upstream_port}):
             raise ValueError('valid separate cockpit adapter port is required')
 
 
@@ -138,6 +144,7 @@ def static_assets(root=HERE):
         '/mobile.js': (root/'mobile/mobile.js', 'text/javascript; charset=utf-8'),
         '/network_view.js': (root/'mobile/network_view.js', 'text/javascript; charset=utf-8'),
         '/mail_comets.js': (root/'mobile/mail_comets.js', 'text/javascript; charset=utf-8'),
+        '/conversation.js': (root/'mobile/conversation.js', 'text/javascript; charset=utf-8'),
         '/network_core.js': (root/'network_core.js', 'text/javascript; charset=utf-8'),
         '/network_node.js': (root/'network_node.js', 'text/javascript; charset=utf-8'),
     }
@@ -232,6 +239,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200,{'contract':mobile_input.CONTRACT,'enabled':False});return
             try:self._send(200,self.server.mobile_input.call('capability'))
             except Exception:self._send(503,{'error':'input_unavailable','enabled':False})
+            return
+        if self.path=='/view/history':
+            if self.command=='HEAD':self._send(200,b'');return
+            self._send(200,{'enabled':self.server.mobile_config.history_enabled,
+                            'page_events':mobile_history.PAGE_EVENTS});return
+        if parts.path=='/view/conversation' and self.server.mobile_config.history_enabled:
+            # The phone selects an agent from the published roster and may
+            # return an issued page token. It never supplies a path or cursor.
+            query=parse_qs(parts.query,keep_blank_values=True)
+            nm=query.get('name',[''])[0];token=query.get('page',[None])[0]
+            if (set(query)-{'name','page'} or any(len(v)!=1 for v in query.values()) or not NAME.fullmatch(nm)
+                    or token is not None and not mobile_history.TOKEN.fullmatch(token)):
+                self._send(400,{'ok':False,'error':'invalid_history_query'});return
+            if not self.server.mobile_store.known_name(nm):
+                self._send(404,{'ok':False,'error':'agent_unavailable'});return
+            if self.command=='HEAD':self._send(200,b'');return
+            # UTF-8 on the wire: \u escapes would double a Japanese page.
+            try:self._send(200,mobile_history.encode(self.server.mobile_history.page(nm,token)))
+            except LookupError:self._send(410,{'ok':False,'error':'page_expired'})
+            except mobile_history.HistoryUnavailable as exc:
+                self._send(409 if exc.code=='history_changed' else 503 if exc.code in {'history_unavailable','dashboard_unavailable'} else 200,
+                           {'ok':False,'error':exc.code,'reason_code':exc.reason_code})
+            except Exception:self._send(503,{'ok':False,'error':'history_unavailable','reason_code':''})
             return
         if parts.path=='/view/snapshot':
             query=parse_qs(parts.query,keep_blank_values=True)
@@ -351,7 +381,7 @@ class ReaderServer(ThreadingHTTPServer):
         super().server_close()
 
 
-def make_server(config:Config, *, store=None, mail_store=None, input_client=None, root=HERE, test_port=None):
+def make_server(config:Config, *, store=None, mail_store=None, input_client=None, history_client=None, root=HERE, test_port=None):
     # Tests can request an ephemeral loopback port; CLI has no bind-host option.
     server=ReaderServer(('127.0.0.1',config.listen_port if test_port is None else test_port),Handler)
     server.daemon_threads=True
@@ -362,6 +392,8 @@ def make_server(config:Config, *, store=None, mail_store=None, input_client=None
     server.mobile_assets=static_assets(Path(root))
     server.mobile_input=(input_client if input_client is not None else
                          mobile_input.InputClient(config.cockpit_port,config.owner_login) if config.input_enabled else None)
+    server.mobile_history=(history_client if history_client is not None else
+                           mobile_history.HistoryClient(config.cockpit_port) if config.history_enabled else None)
     return server
 
 
@@ -376,13 +408,16 @@ def main(argv=None):
     parser.add_argument('--enable-terminal',action='store_true',help='opt in to confirmed input; viewing alone does not enable it')
     parser.add_argument('--phone-policy-reviewed',action='store_true',
                         help='operator acknowledgement of the access policy; does not verify it or enforce a single phone')
+    parser.add_argument('--enable-history',action='store_true',
+                        help='opt in to read-only bound conversation history; viewing alone does not enable it')
     parser.add_argument('--cockpit-port',type=int,default=8791)
     args=parser.parse_args(argv)
     if args.enable_terminal and not (args.enable or args.check):parser.error('--enable-terminal also requires --enable or --check')
+    if args.enable_history and not (args.enable or args.check):parser.error('--enable-history also requires --enable or --check')
     if not args.enable and not args.check:
         print('Mobile reader is off. No listener started.');return 0
     try:config=Config(args.owner_login,args.public_origin,args.listen_port,args.upstream_port,
-                      args.enable_terminal,args.phone_policy_reviewed,args.cockpit_port)
+                      args.enable_terminal,args.phone_policy_reviewed,args.cockpit_port,args.enable_history)
     except ValueError as exc:
         parser.error(str(exc))
     if args.check:

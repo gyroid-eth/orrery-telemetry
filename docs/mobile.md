@@ -33,7 +33,7 @@ macOSで`tailscale`がPATHに無いときは、CLIは通常`/Applications/Tailsc
 - **Graph**: 既定は直近24時間に活動が確認されたagentです。Focusはその中の選択agentと関連の強い最大5体、Allは選択期間内の全体です。Findで名前を選び、ピンチで拡大、ドラッグで移動、Fitで収めます。大きなgraphで全名前を同時に読めることは保証しません。
 - 線の太さと矢印の大きさは選択期間のMail件数に対応します。件数は方向・To/Ccごとの**宛先行数**で、未読数や一意の送信数ではありません。親子の破線はMailとは別です。
 - 文脈残量弧とWorkingの動きはPCと共通です。文脈の取得時刻は不明なまま扱い、未知値には弧を描きません。アカウント利用枠はUnavailableで、更新要求もしません。
-- **Tune graph**の6設定はこのブラウザ内の表示調整だけです。agentの起動・停止・Mail返信はありません。Activityの絞込も閲覧だけです。ターミナルの表示と送信は、下の別設定を有効にした場合だけ使えます。
+- **Tune graph**の6設定はこのブラウザ内の表示調整だけです。agentの起動・停止・Mail返信はありません。Activityの絞込も閲覧だけです。ターミナルの表示と送信、会話の記録は、それぞれ下の別設定を有効にした場合だけ使えます。
 
 前面では約10秒ごとに取得し、背景ではpollを止めます。取得に失敗した値は「Last known」として残し、失敗を正常な0件や待機状態には変えません。SnapshotはHTTPで観測した時刻です。Mailは1ページ200宛先行までで、**Older / Newer**で差し替えます。古いページを見ている間もGraphは更新されますが、一覧が勝手に先頭へ戻ることはありません。Statusは最新ページだけに表示します。graphは最大10,000集約リンクまでで、切詰めは画面に明示します。ブラウザに保存するのは6つの表示設定だけで、観測データのoffline保存やservice workerはありません。
 
@@ -162,7 +162,7 @@ PY
 
 有効時はheaderが**Terminal enabled**になります。Graphでagentを選んだパネル、ActivityのStatus行、要確認行、Mail詳細のFrom/Toにある**Terminal**から同じsheetを開きます。Graphの選択やMail本文を開く操作はそのままです。複数paneなら自分で選び、不明な対応を名前から補いません。legacyの対象はPCの既存managerが扱う同じtransport内で、既存保護が許すpaneです。agentの種類や現在の表示期間は起動許可には使わず、別socket/global対象へ迂回しません。paneのsessionは現在のmetadata project外にある場合もあります。freshは下の明示I/Aの手順を使います。
 
-上側は選択paneの末尾40行、UTF-8で6KiBまでの文字表示です。前面で開いている1paneだけ約3秒ごとに更新し、失敗時は6、12、最大24秒へ間隔を延ばします。制御文字の除去・表示の切詰めを明示し、画像、HTML、リンクを実行しません。既存recorderや復元history全体は送りません。**画面にはキーや私的文章が含まれ得ます。** 誰かへ見せる前に内容を確かめてください。
+上側は選択paneの末尾40行、UTF-8で6KiBまでの文字表示です。前面で開いている1paneだけ約3秒ごとに更新し、失敗時は6、12、最大24秒へ間隔を延ばします。制御文字の除去・表示の切詰めを明示し、画像、HTML、リンクを実行しません。既存recorderや復元history全体は送りません。検証済みの会話の記録だけを見る[Historyの別opt-in](#スマホでagentの会話の記録を読む)は別です。**画面にはキーや私的文章が含まれ得ます。** 誰かへ見せる前に内容を確かめてください。
 
 上へスクロールして読み返している間は、本文・**Shown**の時刻・切詰めと制御文字除去の注記を同じsnapshotに固定し、取得は続けます。新しい出力が届くと**New output · paused**と表示します。下端へ戻すと最新の末尾へ切り替わり、追従を再開します。全出力を蓄積する機能ではなく、保留中に40行・6KiBを超える出力があった場合、旧表示と最新の末尾の間は表示できないことがあります。実機では、流れる出力のpaneで上へ戻し、3秒以上待っても読んでいる行・Shownの時刻が変わらないことと、下端へ戻すと最新へ切り替わることを確認してください。keyboardの開閉や画面の回転後も、追従中は下端を保ち、読み返し中は本文を保持することを確かめます。
 
@@ -179,6 +179,31 @@ PY
 Close、別paneへの切替、背景移行、離脱でpollを止め、表示・下書き・未送信の確認を消します。遅れた応答で復活させず、内容をURL・log・browser storage・serverのpreview cacheへ残しません。既存PC recorderやOSの記録・撮影まで消す保証はありません。実Android keyboard、実Serve/phone policyと実paneの受入は、隔離HTTP/CDP試験とは別に確認してください。
 
 Terminalだけを戻す場合は共有設定を`false`にするか項目を除き、独自のbackend起動に`--enable-mobile-terminal`があればそれも外します。readerの上記3flagも外し、両方を各既存手順で再起動します。稼働中のprocessを残しただけでは無効化されません。通常の閲覧設定や無関係なServe設定を変更する必要はありません。
+
+## スマホでagentの会話の記録を読む
+
+**Historyは別のopt-inで、既定ではオフです。** 閲覧用のreaderやTerminalを有効にしても有効になりません。cockpitがそのagent自身の記録だと確認できた会話（Codex・Claude Code・dsh・Hermes）を、読み取り専用で表示します。「全履歴はスマホに送らない」の例外になるのは、このflagを付けている間だけです。Terminalと同じく`--phone-policy-reviewed`の申告が必要です。下の手順はagentに頼めます。先にアクセスできる人と端末を確認してください。
+
+| 段 | 誰が | 何をする |
+|---|---|---|
+| 1 | agent | Telemetry API 35以上であること、同じコンピューターでORRERYのcockpit backendが動いていること（既定port 8791）を確認する。記録を読むのはcockpitで、readerは読まない |
+| 2 | **本人** | Terminalと同じく、readerを開ける人と端末を確認する。Historyを有効にすると、readerを開ける端末はどれも、端末の末尾40行だけでなく過去の会話を遡って読める。会話の本文にはキーや私的な文章が含まれ得る |
+| 3 | agent | readerの起動コマンドに`--enable-history --phone-policy-reviewed`（8791以外なら`--cockpit-port`も）を足す。先に同じflagで`--check`し、今の管理方法でreaderを再起動する |
+| 4 | **本人** | スマホでagentを開き、**Conversation** tabを確認する |
+
+有効にすると上部に**History enabled**（Terminalも有効なら**History · Terminal**）と出て、Terminalの入口が**History**に変わります。agentのsheetは**Conversation**で開きます。Terminalも有効なら、上部に**Conversation | Terminal**の切替が出ます。
+
+- スマホが送るのは、表示中の名簿にあるagentの名前と、**Show older**のときにreaderが発行したpageの印（10分有効。最新のpageを更新している間は延びる）だけです。fileのpath、記録のcursor、cockpitの参照は送りも受け取りもしません。readerは固定のloopbackのcockpitのroute `GET /telemetry/conversation`だけを呼びます。dashboardのboundの記録はcockpitが自分で引き、読んだ後にも確かめ直し、cockpitのredactを通します。redactには限界があります（下記）。
+- 表示するのは**bound**の記録だけです。unbound・stale・未確認のagentは、短い説明と`binding_missing`などの理由のcodeだけを出し、記録の本文は出しません。
+- 1 pageは最大40件・512 KiBです。発言1件とMailの本文1通はそれぞれ16 KiBで切り、切ったことを示します。pageに収まらなかった発言は飛ばさず、次の**Show older**で出します。1件だけでpageに収まらない発言は、さらに短く切って切ったことを示します。それでも出せないものがあれば、その位置に**Some messages are omitted here**と出します。toolの呼び出しは名前の1行だけで、toolの出力とdiffは送りません。fileと画像は名前のchipだけで、previewやdownloadはありません。発言から端末の行へ移る機能はスマホにはありません。
+- 発言・Markdownの表・code blockは文字としてDOMに組みます。HTML・link・画像は実行しません。記録の中のORRERY Mailの通知と送ったMailはcardになり、押すと記録にある本文を出します。cardを開いても、Mailの既読・ACK・返信はしません。
+- tabを前面で開いている間、最新のpageを約5秒ごとに更新します。上へscrollして読んでいる間は新しい発言で表示が動かず、**New messages below · paused**と出ます。sheetを開いている間に保持するのは最大200件で、そこに達すると**Show older**は止まります。pageの印が切れていたら、最新のpageを読み直し、**Show older**も戻ります。
+- 送信は既存のTerminalの経路のままです。Terminalが有効でpaneを選んであれば、Conversationの下の入力欄は同じ**Review input → Send once**の確認・上限・受領を使います。Reviewの画面には、Terminal tabと同じ端末の末尾（最新40行・最大6 KiB）を必ず出すので、paneを見ずに送ることはありません。**Received by terminal**の後、送った文が記録に現れるまで（最長3分）点線の仮の行を出します。この行はこの画面の中だけのもので、agentが受け取ったことの証明にはなりません。
+- Close・別agentへの切替・背景移行・離脱で更新を止め、スマホから記録・pageの印・仮の行を消します。遅れた応答で復活させず、URL・log・browser storageへ残しません。reader側で発行済みの印は期限まで残りますが、本文を含まず、同じagentにしか使えません。
+
+**redactで隠せないもの。** cockpitのredactが置き換えるのは、`sk-`・`ghp_`・`AKIA`の鍵、`Authorization` header、`password=`・`secret=`のような代入、PEMのblockなど、既知の形だけです。それ以外のtoken（JWT、Slackの`xox`のtoken、環境変数の行に書かれたbotのtokenなど）、promptに貼った秘密、agentが返答の中で引用した鍵、私的な文章は、書かれたままスマホに届きます。toolの出力は送りませんが、agentがそこから書き写したものは届きます。それでよいagentと端末に限ってHistoryを有効にしてください。
+
+Historyだけを止めるには、`--enable-history`を外し、今の手順でreaderを再起動します。Terminalと閲覧の設定はそのまま残ります。
 
 ## 止める・戻す
 

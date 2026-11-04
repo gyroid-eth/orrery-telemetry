@@ -129,6 +129,7 @@ def test_fresh_core_install_omits_provider_payload_and_runs_core_server(tmp_path
                      "hooks/project-context.sh"):
         assert (install_dir / relative).read_bytes() == (ROOT / relative).read_bytes(), relative
     for relative in ("dashboard/mobile_relay.py", "dashboard/mobile_projection.py", "dashboard/mobile_input.py",
+                     "dashboard/mobile_history.py",
                      *(str(p.relative_to(ROOT)) for p in (ROOT / "dashboard/mobile").rglob("*") if p.is_file())):
         assert (install_dir / relative).read_bytes() == (ROOT / relative).read_bytes(), relative
     checked = subprocess.run([sys.executable, str(install_dir / "dashboard/mobile_relay.py"),
@@ -147,6 +148,7 @@ assert pathlib.Path(relay.__file__).resolve().parent==here
 assert pathlib.Path(sys.modules[relay.SnapshotStore.__module__].__file__).resolve().parent==here
 assert pathlib.Path(relay.admission.__file__).resolve().parent==here
 assert pathlib.Path(relay.mobile_input.__file__).resolve().parent==here
+assert pathlib.Path(relay.mobile_history.__file__).resolve().parent==here
 class NoObservation:
     def snapshot(self,*args):raise AssertionError('asset GET must not observe upstream')
 server=relay.make_server(relay.Config('owner@example.test','https://viewer.example.ts.net:9443'),store=NoObservation(),test_port=0)
