@@ -183,9 +183,35 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 
 `base=default` の native child は、`CODEX_HOME/config.toml`（未指定なら `~/.codex/config.toml`）と Codex child overlay から、有効な `chrome-devtools`、または `chrome-devtools-mcp` を起動する1つの server を継承します。他の Codex MCP は追加しません。`command`・`args`・`env`・`cwd` は同じ定義なので、`--autoConnect` ならログイン済みの普段の Chrome につながります。Chrome が未設定・無効なら従来どおり Mail のみで、`base=mail-only` は自動追加しません。env の値は表示しません。
 
-これは Codex の既定の MCP 継承に合わせたもので、明示 `--tools browser` の分類済み tool の公開・個別承認とは別です。native の明示 browser も Codex 定義を探しますが、dsh・Hermes がその承認条件を表現できない間は起動を止めます。既定の継承でも、Codex 固有の tool filter/approval など native に写せない項目を捨てて権限を広げず、`native_mcp_selection_unsupported` で停止します。通常の stdio `command`・`args`・`env`・`cwd` と `enabled` だけの定義が対象です。
+これは Codex の既定の MCP 継承に合わせたもので、明示 `--tools browser` の分類済み tool の公開・個別承認とは別です。native の明示 browser も Codex 定義を探しますが、dsh・Hermes がその承認条件を表現できない間は起動を止めます。既定の継承でも、Codex 固有の tool filter/approval など native に写せない項目を捨てて権限を広げず停止します。通常の stdio `command`・`args`・`env`・`cwd` と `enabled` だけの定義が対象です。CLI の表示は `Harness prepare failed: unsupported_mcp_selection`（resume の準備は `Harness resume-prepare failed: unsupported_mcp_selection`）。`native_mcp_selection_unsupported` や `native_mcp_approval_unsupported` は内部の例外理由であり、表示名ではありません。
 
 既定の継承は native CLI の実行確認を追加承認しません。Chrome 側の接続許可は人が応答します。ダウンロード先は普段の Chrome の設定に従い、この設定で sandbox の読取権限を追加することはありません。native の shell から保存先を読めるかは、その子で確認してください。
+
+設定生成を確かめるには、正規の launcher で新しい native 子を作り、その子の state dir の `input.json` を次のスクリプトに渡します。起動時と同じ `CODEX_HOME` と overlay の環境で実行してください。config 全文や env 値は出さず、server 名と transport field の一致判定だけを表示します。
+
+```bash
+python3 - /path/to/child-state/input.json <<'PY'
+import json, os, sys
+from pathlib import Path
+document = json.loads(Path(sys.argv[1]).read_text())
+sys.path.insert(0, str(Path(document['product_root']) / 'hooks'))
+import child_tools
+config = child_tools._defaults_codex_config(
+    str(Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))) / 'config.toml'),
+    os.environ.get('AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY', ''))
+emitted = json.loads(Path(document['mcp_config']).read_text())['mcpServers']
+print('servers:', sorted(emitted))
+for name in document['mcp_selection']['servers']:
+    if name in config.get('mcp_servers', {}):
+        source = config['mcp_servers'][name]
+        print(name, {field: emitted.get(name, {}).get(field) == source.get(field)
+                     for field in ('command', 'args', 'env', 'cwd')})
+PY
+```
+
+- `base=default`（`--tools browser` なし）: 有効な Chrome 定義があれば Mail と Chrome の server 名が出て、4 field はすべて `True`。未設定・無効なら Mail の名前だけです（Mail の alias が複数出る場合があります）。
+- `base=mail-only`（追加 tool なし）: Mail の名前だけ。明示 `--tools browser` は上記の公開エラーで native CLI の開始前に拒否されることを確認します。
+- 設定の一致だけでは browser の動作確認になりません。子の native tool 一覧で Chrome の tool を確認し、`list_pages` を実際に1回呼び、tool-call 記録の正確な tool 名と成功・拒否を確認します。ページ名や内容は報告へ転載しません。ファイル取得は無害なテストファイルで実保存先と同じ子からの native read を確かめます。これらの実機操作は今回の自動試験では未実測です。
 
 ### MCP tool が承認の方針で拒否されたとき
 

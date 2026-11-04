@@ -14,10 +14,7 @@ import child_resume
 import harness_child as child
 
 
-@pytest.fixture(autouse=True)
-def isolated_browser_sources(tmp_path, monkeypatch):
-    monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'codex'))
-    monkeypatch.setenv('AGENTSTACK_CLAUDE_JSON', str(tmp_path / 'claude.json'))
+pytestmark = pytest.mark.usefixtures('isolated_native_mcp_sources')
 
 
 def private(path, value):
@@ -59,6 +56,43 @@ def test_isolated_harness_loads_codex_browser_source(tmp_path):
         str(ROOT / 'hooks/harness_child.py'), str(config)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "['chrome-devtools']"
+
+
+@pytest.mark.parametrize('program', ['dsh', 'hermes'])
+@pytest.mark.parametrize('change', ['disable', 'remove', 'rename', 'mail-only'])
+def test_regeneration_replaces_previous_browser_selection(tmp_path, monkeypatch, program, change):
+    codex = tmp_path / 'codex'
+    codex.mkdir()
+    config = codex / 'config.toml'
+    definition = '[mcp_servers.chrome-devtools]\ncommand="npx"\nargs=["chrome-devtools-mcp@latest"]\n'
+    config.write_text(definition)
+    mail = tmp_path / 'mail.json'
+    original_mail = {'mcpServers': {'orrery-mail': {'command': '/fixture/proxy'}}}
+    private(mail, original_mail)
+    generator = tmp_path / 'generator.py'
+    generator.write_text('import argparse,json\n'
+        'p=argparse.ArgumentParser();p.add_argument("--input");p.add_argument("--out");'
+        'a=p.parse_args();d=json.load(open(a.input));'
+        'json.dump({"argv":["/bin/true"],"env":{},"cwd":d["cwd"]},open(a.out,"w"))\n')
+    monkeypatch.setattr(child, 'config_generator', lambda *args: generator)
+    document = dict(state_dir=str(tmp_path), cwd=str(tmp_path), program=program,
+                    mcp_config=str(mail), tools={'base': 'default', 'tools': {}})
+    child.generate_plan(document, {'python': sys.executable})
+    assert set(child.read(document['mcp_config'])['mcpServers']) == {'orrery-mail', 'chrome-devtools'}
+    # Exercise the saved input used for dynamic prelaunch, not only one in-memory selection.
+    document = child.read(tmp_path / 'input.json')
+    if change == 'disable':
+        config.write_text(definition + 'enabled=false\n')
+    elif change == 'remove':
+        config.write_text('')
+    elif change == 'rename':
+        config.write_text(definition.replace('chrome-devtools]', 'renamed-browser]'))
+    else:
+        document['tools']['base'] = 'mail-only'
+    child.generate_plan(document, {'python': sys.executable})
+    expected = {'orrery-mail', 'renamed-browser'} if change == 'rename' else {'orrery-mail'}
+    assert set(child.read(document['mcp_config'])['mcpServers']) == expected
+    assert child.read(mail) == original_mail
 
 
 @pytest.mark.parametrize('program', ['dsh','hermes'])

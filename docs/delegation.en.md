@@ -183,9 +183,35 @@ You can choose a child's tools when you start it, for example `/delegate "<task>
 
 With `base=default`, native children inherit the enabled `chrome-devtools` server, or the one server running `chrome-devtools-mcp`, from `CODEX_HOME/config.toml` (otherwise `~/.codex/config.toml`) and the Codex child overlay. Other Codex MCP servers are not added. The `command`, `args`, `env` and `cwd` are the same definition, so `--autoConnect` connects to the user's usual signed-in Chrome. Without a configured, enabled browser the child still gets only Mail. `base=mail-only` does not add the browser automatically. Environment values are not displayed.
 
-This follows Codex's default MCP inheritance, which differs from explicit `--tools browser` and its classified tool exposure and individual approvals. Explicit native browser selection also discovers the Codex definition, but stops while dsh and Hermes cannot express those approval requirements. Default inheritance also refuses Codex-specific tool filters/approvals or other unrepresentable settings with `native_mcp_selection_unsupported`, rather than dropping them and broadening permissions. Supported definitions contain only the stdio `command`, `args`, `env`, `cwd` and `enabled` fields.
+This follows Codex's default MCP inheritance, which differs from explicit `--tools browser` and its classified tool exposure and individual approvals. Explicit native browser selection also discovers the Codex definition, but stops while dsh and Hermes cannot express those approval requirements. Default inheritance also refuses Codex-specific tool filters/approvals or other unrepresentable settings, rather than dropping them and broadening permissions. Supported definitions contain only the stdio `command`, `args`, `env`, `cwd` and `enabled` fields. The CLI displays `Harness prepare failed: unsupported_mcp_selection` (or `Harness resume-prepare failed: unsupported_mcp_selection` during resume preparation). `native_mcp_selection_unsupported` and `native_mcp_approval_unsupported` are internal exception reasons, not the displayed diagnostic.
 
 Inheritance does not add native CLI execution approvals. A person answers Chrome's connection permission. Downloads follow the usual Chrome settings; this selection grants no additional sandbox filesystem access. Check whether the child's native shell can read the destination.
+
+To check configuration generation, create a new native child through the regular launcher and pass its state directory's `input.json` to this script. Run it with the same `CODEX_HOME` and overlay environment used at launch. It prints only server names and whether transport fields match, without displaying whole configurations or environment values.
+
+```bash
+python3 - /path/to/child-state/input.json <<'PY'
+import json, os, sys
+from pathlib import Path
+document = json.loads(Path(sys.argv[1]).read_text())
+sys.path.insert(0, str(Path(document['product_root']) / 'hooks'))
+import child_tools
+config = child_tools._defaults_codex_config(
+    str(Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))) / 'config.toml'),
+    os.environ.get('AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY', ''))
+emitted = json.loads(Path(document['mcp_config']).read_text())['mcpServers']
+print('servers:', sorted(emitted))
+for name in document['mcp_selection']['servers']:
+    if name in config.get('mcp_servers', {}):
+        source = config['mcp_servers'][name]
+        print(name, {field: emitted.get(name, {}).get(field) == source.get(field)
+                     for field in ('command', 'args', 'env', 'cwd')})
+PY
+```
+
+- With `base=default` and no `--tools browser`, an enabled Chrome definition produces Mail and Chrome server names, with all four fields `True`. An absent or disabled browser leaves only Mail names (there may be multiple Mail aliases).
+- With `base=mail-only` and no additional tools, only Mail names remain. Explicit `--tools browser` must fail with the public diagnostic above before the native CLI starts.
+- Matching configuration is not a browser operation test. Check the child's native tool list for Chrome tools, actually call `list_pages` once, and verify the exact tool name and success/refusal in the tool-call record. Do not copy page names or contents into the report. For file retrieval, use a harmless test file and check the actual destination and a native read from the same child. These live operations have not been measured by this change's automated tests.
 
 ### When an MCP tool is refused by the approval policy
 
