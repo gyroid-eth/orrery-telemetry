@@ -31,6 +31,7 @@ from test_fresh_mail import snapshot
 from test_fresh_harness import fixture as managed_fixture
 
 ROOT=Path(__file__).resolve().parents[3]
+pytestmark = pytest.mark.usefixtures('isolated_managed_harness_home')
 
 
 def test_roster_display_cache_parallel_get_expiry_and_owner_changes_are_not_authority(tmp_path,monkeypatch):

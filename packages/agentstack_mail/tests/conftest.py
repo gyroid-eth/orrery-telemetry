@@ -2,6 +2,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 PACKAGE_SRC = Path(__file__).resolve().parents[1] / "src"
 if str(PACKAGE_SRC) not in sys.path:
     sys.path.insert(0, str(PACKAGE_SRC))
@@ -14,6 +16,17 @@ if str(PACKAGE_SRC) not in sys.path:
 # suite's conftest strips these for tests/ only; this directory needs its own.
 # Strip before collection: get_settings() caches the first read.
 _INHERITED: dict[str, str] = {}
+
+
+@pytest.fixture
+def isolated_managed_harness_home(tmp_path, monkeypatch):
+    """Keep native plans and their fixture subprocesses off the user's MCP settings."""
+    home = tmp_path / 'synthetic-user-home'
+    home.mkdir()
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setenv('CODEX_HOME', str(home / '.codex'))
+    monkeypatch.setenv('AGENTSTACK_CLAUDE_JSON', str(home / '.claude.json'))
+    monkeypatch.delenv('AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY', raising=False)
 
 
 def _is_inherited_stack_variable(name: str) -> bool:

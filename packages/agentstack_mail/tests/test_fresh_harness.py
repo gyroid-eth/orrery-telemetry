@@ -23,6 +23,7 @@ import test_fresh_child as common_child
 from test_managed_harness_install import CAFixture, fixture_stamp
 
 ROOT=Path(__file__).resolve().parents[3]
+pytestmark = pytest.mark.usefixtures('isolated_managed_harness_home')
 
 
 def save(path,value):
