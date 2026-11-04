@@ -29,6 +29,8 @@ On macOS the CLI is usually `/Applications/Tailscale.app/Contents/MacOS/Tailscal
 
 ## Reading the screen
 
+<img src="images/mobile-home.png" width="300" alt="The phone-width screen: agents needing attention at the top, Graph in Focus below">
+
 - **Activity** lists sender, recipient, time and To/Cc only. Tap one Mail event to open its subject and body. Tasks and private paths are not separately fetched, but anything written in a Mail body is visible. Status records changes observed after this reader starts, rather than claiming to know when each change actually happened.
 - **Graph** defaults to agents with observed activity in the last 24 hours. Focus shows the selected agent and up to five strongest peers within that period; All shows every agent in that period. Use Find, pinch to zoom, drag to pan, and Fit. Large graphs do not guarantee that every name is readable at once.
 - Line width and arrow size follow Mail counts in the selected period. Counts are **recipient rows** by direction and To/Cc, rather than unread counts or unique sent messages. Dashed parent–child lines are separate from Mail.
@@ -43,7 +45,11 @@ While Graph is in the foreground, a rise in Mail link counts between snapshots (
 
 Use **Expand** at the top right of Graph to fill the screen. If the browser's fullscreen API is unavailable or refused, Graph fills the page instead. Find, Focus/All, Fit, pinch, drag, Mail-pair lists and the Terminal sheet remain available. **Close** restores the normal view. Back or Escape closes the foreground sheet first, then exits the expanded Graph. If the OS or browser exits fullscreen, the normal view returns and open sheets close. The layout follows orientation changes and retains your selection and manual zoom. Fullscreen, back gestures and keyboard behavior on an actual phone require separate acceptance.
 
+<img src="images/mobile-graph-fullscreen.png" width="300" alt="Graph expanded with Expand, showing every agent and Mail line in All">
+
 Subjects are limited to 512 characters and bodies to 64 KiB of UTF-8, with explicit truncation notices. HTML and Markdown remain literal text; links, images and attachments do not execute. No read receipt, ACK or reply is sent. Closing, choosing another message, changing the period or view, and moving to the background clear the displayed content. Late responses cannot restore it. Unavailable, deleted, changed or expired events show an error, never the previous message's body.
+
+<img src="images/mobile-mail.png" width="300" alt="One opened Mail: sender, recipient, subject and body as literal text; no read receipt or ACK is sent">
 
 After an owner-authenticated snapshot request, the Mac reader prepares a fixed last 24 h in memory: up to 2000 distinct messages and 32 MiB of serialized content plus metadata. This is a logical JSON byte budget, not an RSS guarantee. Multiple To/Cc recipients share one body. Capacity, time or read failures are shown as **partial / unavailable**, rather than complete coverage. Every tap rechecks the current delivery and revision, including cache hits. Older displayed events remain readable one at a time and are not cached. Stopping the reader clears all caches. Subjects and bodies are never bulk-sent to the phone.
 
@@ -174,6 +180,8 @@ Use a dedicated pane that is safe to test. Check that changing panes and reopeni
 
 Write one line of at most 4 KiB UTF-8 below it. Use **Review input** to check the pane, exact text and Enter, then **Send once**. Confirmation expires after 30 seconds. Output refreshes do not replace its text, target or expiry. A changed pane or failed preview requires a new review. Keep the sheet open in the foreground to see the pane's response after sending. **Received by terminal** means tmux accepted the batch, not that an agent ran or completed the task. **Outcome unknown** can mean that only part arrived; there is no automatic retry. **Check receipt** only queries its receipt.
 
+<img src="images/mobile-terminal.png" width="300" alt="The Terminal sheet: the selected pane tail, with a one-line input below"> <img src="images/mobile-terminal-review.png" width="300" alt="Review input: the exact text and Enter, checked together with the same pane tail">
+
 This is a terminal operation you confirm by inspecting the pane. Changes of program or a return to a shell within the same pane are not guaranteed to be detected. Text may be interpreted by that shell, combined with existing input or another writer, or sent after the screen changes. The feature does not clear input buffers or interrupt the pane before sending.
 
 Close, pane changes, backgrounding and leaving stop polling and clear the display, draft and unsent confirmation. Late responses cannot restore them. Content is not placed in URLs, logs, browser storage or a server preview cache. This does not erase existing PC recorder output or OS recording/screenshots. Actual Android keyboard behavior, Serve/phone policy and real panes need separate acceptance; isolated HTTP/CDP checks do not establish them.
@@ -192,6 +200,8 @@ To disable only Terminal, set the shared field to `false` or remove it, also rem
 | 4 | **you** | Open an agent on the phone and check the **Conversation** tab |
 
 When enabled, the header says **History enabled** (or **History · Terminal**), and the Terminal buttons become **History**. The agent sheet opens on **Conversation**. If Terminal is also enabled, a **Conversation | Terminal** switch appears at the top.
+
+<img src="images/mobile-conversation.png" width="300" alt="The Conversation tab: Show older at the top, then messages and Mail cards"> <img src="images/mobile-conversation-table.png" width="300" alt="The newer end of the same record: a Markdown table and a code block, built as literal text">
 
 - The phone sends only an agent name from the displayed roster and, for **Show older**, a page token the reader issued (valid for 10 minutes and renewed while the latest page is polled). It never sends or receives a file path, transcript cursor or cockpit reference. The reader calls one fixed loopback cockpit route, `GET /telemetry/conversation`. Cockpit resolves the dashboard's bound record itself, rechecks it after reading and applies its own redaction, which has limits (see below).
 - Only a **bound** record is shown. Unbound, stale or unconfirmed agents show only a short explanation and a reason code such as `binding_missing`, with no record text.

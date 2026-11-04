@@ -29,6 +29,8 @@ macOSで`tailscale`がPATHに無いときは、CLIは通常`/Applications/Tailsc
 
 ## 画面で分かること
 
+<img src="images/mobile-home.png" width="300" alt="スマホ幅の画面。上に要確認のagent、下にGraphのFocus表示">
+
 - **Activity**: 一覧は差出人、宛先、時刻、To/Ccだけです。Mailを1件タップすると、その件名と本文を開きます。taskや私有パスを別途取得しませんが、Mail本文に書かれた内容は表示されます。Statusは、このreaderを起動した後に観測した変化です。実際に変化した時刻とは区別します。
 - **Graph**: 既定は直近24時間に活動が確認されたagentです。Focusはその中の選択agentと関連の強い最大5体、Allは選択期間内の全体です。Findで名前を選び、ピンチで拡大、ドラッグで移動、Fitで収めます。大きなgraphで全名前を同時に読めることは保証しません。
 - 線の太さと矢印の大きさは選択期間のMail件数に対応します。件数は方向・To/Ccごとの**宛先行数**で、未読数や一意の送信数ではありません。親子の破線はMailとは別です。
@@ -43,7 +45,11 @@ Graphを前面で見ている間は、約10秒ごとのsnapshotでMailの線の�
 
 Graph右上の**Expand**でGraphを画面いっぱいに広げます。ブラウザの全画面機能が使えない場合も、同じページ内で全面表示します。Find・Focus/All・Fit・ピンチ・ドラッグ、Mail線の一覧やTerminal sheetはそのまま使えます。**Close**で通常表示へ戻ります。戻る／Escapeは手前のsheetを先に閉じ、次にGraphの全画面表示を終了します。OSやブラウザが全画面を終了した場合は通常表示へ戻り、開いていたsheetも閉じます。縦横の切替に追従し、選択と手動の拡大率を保ちます。実スマホでの全画面・戻るジェスチャー・キーボード動作は別途確認してください。
 
+<img src="images/mobile-graph-fullscreen.png" width="300" alt="Expandで全面表示にしたGraph。Allで全agentとMailの線を表示している">
+
 件名は512文字、本文はUTF-8で64KiBまでで、超過は明示します。HTMLやMarkdownは文字として表示し、リンク・画像・添付を実行しません。read/ACKや返信も送りません。閉じる、別のMail、期間・画面の切替、背景移行で表示中の本文を消し、遅れた応答で復活させません。取得不能・削除・変更・期限切れはエラー表示し、前の本文で埋めません。
+
+<img src="images/mobile-mail.png" width="300" alt="Mailを1件開いたところ。差出人・宛先と件名・本文を文字のまま表示し、既読やACKは送らない">
 
 Mac readerは本人認証後のsnapshot取得をきっかけに、固定の直近24時間をメモリに準備します。最大2000通の一意なmessage、本文と対応metadataの合計32MiB（JSONの論理byte量で、RSSの保証ではありません）です。To/Ccが複数でも本文は1通分です。上限・時間・読取失敗時は**partial / unavailable**で、全件準備済みにはしません。タップ時はcache内でも現在の宛先と改訂を再照合します。24時間より古い表示済みMailは1件ずつ取得でき、cacheには残しません。reader停止で全cacheが消えます。件名・本文をスマホへまとめて送ることはありません。
 
@@ -174,6 +180,8 @@ PY
 
 下側へUTF-8で4KiB以内の1行を書き、**Review input**で宛先pane・全文・Enterを確認してから**Send once**を押します。確認は30秒で失効し、出力更新で本文や宛先・期限を差し替えません。paneの交換や取得失敗後は再確認が必要です。送信後も前面で開いていれば同じpaneの応答を見られます。**Received by terminal**はtmuxの受理までで、agentの実行やタスク完了を意味しません。**Outcome unknown**では一部だけ届いた可能性があり、自動再送しません。**Check receipt**は受理状態の照会だけです。
 
+<img src="images/mobile-terminal.png" width="300" alt="Terminal sheet。選んだpaneの末尾と、下に1行の入力欄"> <img src="images/mobile-terminal-review.png" width="300" alt="Review input。送る全文とEnterを、同じpaneの末尾と一緒に確認する">
+
 これは人が画面を見て送るターミナル操作です。同じpane内でprogramが変わったりshellへ戻ったりすることは検出保証しません。文章がshellコマンドとして解釈されること、既存の入力bufferや別writerと混ざること、確認後に画面が変わることは残ります。送信のためにbufferを消去・interruptしません。
 
 Close、別paneへの切替、背景移行、離脱でpollを止め、表示・下書き・未送信の確認を消します。遅れた応答で復活させず、内容をURL・log・browser storage・serverのpreview cacheへ残しません。既存PC recorderやOSの記録・撮影まで消す保証はありません。実Android keyboard、実Serve/phone policyと実paneの受入は、隔離HTTP/CDP試験とは別に確認してください。
@@ -192,6 +200,8 @@ Terminalだけを戻す場合は共有設定を`false`にするか項目を除�
 | 4 | **本人** | スマホでagentを開き、**Conversation** tabを確認する |
 
 有効にすると上部に**History enabled**（Terminalも有効なら**History · Terminal**）と出て、Terminalの入口が**History**に変わります。agentのsheetは**Conversation**で開きます。Terminalも有効なら、上部に**Conversation | Terminal**の切替が出ます。
+
+<img src="images/mobile-conversation.png" width="300" alt="Conversation tab。上にShow older、発言とMailのcardが並ぶ"> <img src="images/mobile-conversation-table.png" width="300" alt="同じ記録の新しい側。Markdownの表とcode blockが文字のまま組まれている">
 
 - スマホが送るのは、表示中の名簿にあるagentの名前と、**Show older**のときにreaderが発行したpageの印（10分有効。最新のpageを更新している間は延びる）だけです。fileのpath、記録のcursor、cockpitの参照は送りも受け取りもしません。readerは固定のloopbackのcockpitのroute `GET /telemetry/conversation`だけを呼びます。dashboardのboundの記録はcockpitが自分で引き、読んだ後にも確かめ直し、cockpitのredactを通します。redactには限界があります（下記）。
 - 表示するのは**bound**の記録だけです。unbound・stale・未確認のagentは、短い説明と`binding_missing`などの理由のcodeだけを出し、記録の本文は出しません。
