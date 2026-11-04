@@ -730,3 +730,91 @@ def test_omitted_marker_survives_later_polls():
       assert.deepEqual(kids(root),['gap','5','6','10','11'],'Show older marker kept after a poll');
       C.unmount();
     """)
+
+
+# --- slow cockpit under load ------------------------------------------------------
+
+def slow_cockpit(seconds):
+    stop = threading.Event()
+    class Slow(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+        def do_GET(self):
+            if stop.wait(seconds):
+                return
+            data = json.dumps({'ok': True, 'events': [event(1)], 'has_older': False}).encode()
+            try:
+                self.send_response(200); self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(data))); self.end_headers(); self.wfile.write(data)
+            except OSError:
+                pass
+    return stop, ThreadingHTTPServer(('127.0.0.1', 0), Slow)
+
+
+def test_a_cockpit_that_takes_six_seconds_under_load_still_answers():
+    stop, server = slow_cockpit(6)
+    with serving(server) as port:
+        try:
+            page = history.HistoryClient(port).page('Vega')
+        finally:
+            stop.set()
+    assert [e['id'] for e in page['events']] == ['1']
+
+
+def test_running_out_of_time_is_its_own_code_on_the_wire(monkeypatch):
+    monkeypatch.setattr(history, 'UPSTREAM_TIMEOUT', .5)
+    stop, server = slow_cockpit(3)
+    with serving(server) as port:
+        try:
+            with pytest.raises(history.HistoryUnavailable) as caught:
+                history.HistoryClient(port).page('Vega')
+            assert caught.value.code == 'history_slow'
+            with serving(reader(client=history.HistoryClient(port))) as relay_port:
+                status, body = get(relay_port, '/view/conversation?name=Vega')
+        finally:
+            stop.set()
+    assert status == 503 and json.loads(body) == {'ok': False, 'error': 'history_slow', 'reason_code': ''}
+
+
+def test_the_phone_waits_longer_than_the_relay():
+    import re
+    source = (ROOT / 'dashboard/mobile/conversation.js').read_text()
+    # Either a literal per request or one named wait shared by both requests.
+    named = re.search(r'\bWAIT=(\d+)', source)
+    waits = [int(x) for x in re.findall(r'c\.abort\(\);\},(\d+)\)', source)]
+    if named:
+        assert 'c.abort();},WAIT)' in source
+        waits.append(int(named.group(1)))
+    assert waits and min(waits) > history.UPSTREAM_TIMEOUT * 1000 + 2000, (waits, history.UPSTREAM_TIMEOUT)
+
+
+def test_phone_says_a_slow_record_is_worth_waiting_for_and_offers_retry():
+    run(r'''
+      let slow=true;
+      reply=async()=>slow?{status:503,body:{ok:false,error:'history_slow',reason_code:''}}:page(range(1,3));
+      const root=C.mount('Vega');body.append(root);await settle();
+      assert.ok(root.textContent.includes('Taking longer than usual'),root.textContent);
+      assert.ok(!root.textContent.includes('unavailable'),root.textContent);
+      const retry=root.all().find(e=>e.tagName==='BUTTON'&&e.textContent==='Retry');assert.ok(retry&&!retry.hidden,'retry button');
+      slow=false;const before=fetches.length;await retry.onclick();await settle();
+      assert.equal(fetches.length,before+1,'retry asks at once');
+      assert.deepEqual(ids(root),['1','2']);assert.ok(retry.hidden,'retry hides once it works');
+      // Already shown messages stay while a later poll is slow.
+      slow=true;await tick();
+      assert.deepEqual(ids(root),['1','2']);assert.ok(root.textContent.includes('Taking longer than usual'));
+      C.unmount();
+    ''')
+
+
+def test_phone_treats_its_own_wait_running_out_as_slow():
+    run(r'''
+      context.honorAbort=true;
+      reply=()=>new Promise(()=>{});
+      const root=C.mount('Vega');body.append(root);await settle();
+      assert.ok(root.textContent.includes('Loading the record'),'loading stays while waiting');
+      const wait=[...timers.entries()].find(([,t])=>t.ms>5000);assert.ok(wait,'request deadline');
+      timers.delete(wait[0]);wait[1].f();await settle();
+      assert.ok(root.textContent.includes('Taking longer than usual'),root.textContent);
+      assert.ok(root.all().some(e=>e.tagName==='BUTTON'&&e.textContent==='Retry'&&!e.hidden));
+      C.unmount();
+    ''')

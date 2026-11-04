@@ -196,3 +196,4 @@ html.graph-fullscreen #settings{z-index:40}
 .mobile .conversation-mode .terminal-help{margin:4px 0 0}
 
 .mobile .conversation-omitted{margin:6px 0;padding:6px 10px;border:1px dashed var(--hair);border-radius:8px;font:11px var(--mono);color:var(--ink-dim);text-align:center}
+.mobile .conversation-retry{flex:none;align-self:flex-start;margin:0 0 8px;min-height:34px;padding:0 14px;border:1px solid var(--amber);border-radius:6px;background:none;color:var(--ink);font:11px var(--mono)}

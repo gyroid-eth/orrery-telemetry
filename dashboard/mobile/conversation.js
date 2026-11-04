@@ -4,7 +4,9 @@
 (()=>{'use strict';
 const make=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!==undefined)e.textContent=txt;return e;};
 const MAX_BYTES=768*1024,MAX_KEPT=200,POLL=5000;
-let capability=null,gen=0,timer=0,name='',root=null,list=null,status=null,olderButton=null;
+let capability=null,gen=0,timer=0,name='',root=null,list=null,status=null,olderButton=null,retryButton=null;
+/* Longer than the relay's 15-second wait for cockpit, so its own answer arrives first. */
+const WAIT=20000;
 /* Poll and Show older each own a controller, so neither aborts the other. */
 const controllers={poll:null,older:null};
 let events=[],seen=new Set(),older=null,pending=[],failures=0,loadingOlder=false,following=true,savedTop=0;
@@ -19,6 +21,8 @@ const messages={
  history_unreadable:'The record could not be read.',
  record_too_large:'The latest record is too large to show.',
  page_expired:'Older page expired. Showing the latest page.',
+ history_slow:'Taking longer than usual: the computer is busy. Retrying, or tap Retry.',
+ older_slow:'Older messages are taking longer than usual. Tap Show older again.',
  omitted:'Some messages are omitted here: too long to show or not loadable.',
  kept_limit:'Showing the latest 200 messages. Older messages are not loaded.',
 };
@@ -31,7 +35,7 @@ async function enabled(){
  return capability;
 }
 async function request(token,slot){
- controllers[slot]?.abort();const c=new AbortController();controllers[slot]=c;let late=false;const t=setTimeout(()=>{late=true;c.abort();},8000);
+ controllers[slot]?.abort();const c=new AbortController();controllers[slot]=c;let late=false;const t=setTimeout(()=>{late=true;c.abort();},WAIT);
  try{
   const r=await fetch('/view/conversation?name='+encodeURIComponent(name)+(token?'&page='+token:''),
    {credentials:'same-origin',cache:'no-store',referrerPolicy:'no-referrer',signal:c.signal});
@@ -43,7 +47,7 @@ async function request(token,slot){
  }catch(e){
   // A request replaced by a newer one of the same kind is not a failure;
   // the newer one owns the retry timer.
-  if(c.signal.aborted&&!late)e.superseded=true;throw e;
+  if(c.signal.aborted&&!late)e.superseded=true;if(late)e.slow=true;throw e;
  }finally{clearTimeout(t);if(controllers[slot]===c)controllers[slot]=null;}
 }
 function clock(ts){const d=new Date(ts);return Number.isFinite(d.getTime())?d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'';}
@@ -128,8 +132,10 @@ function prepend(page,omitted){
  list.scrollTop+=list.scrollHeight-before;following=false;savedTop=list.scrollTop;
 }
 function reset(){events=[];seen.clear();older=null;list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());}
+function slow(on){if(retryButton)retryButton.hidden=!on;if(on)setStatus(messages.history_slow);}
 function showError(v){
  const code=typeof v?.error==='string'?v.error:'history_unavailable';
+ if(code==='history_slow'){slow(true);return;}
  const reason=typeof v?.reason_code==='string'&&/^[a-z0-9_]{1,64}$/.test(v.reason_code)?' ('+v.reason_code+')':'';
  setStatus((messages[code]||'History is unavailable right now.')+reason);
 }
@@ -140,7 +146,7 @@ async function poll(){
   const v=await request(null,'poll');if(g!==gen)return;
   if(v.ok!==true){showError(v);if(v.error==='history_changed')reset();}
   else{
-   failures=0;if(!events.length&&v.omitted===true)list.insertBefore(gap(),list.querySelector(':scope > .conversation-pending'));append(v.events);
+   failures=0;slow(false);if(!events.length&&v.omitted===true)list.insertBefore(gap(),list.querySelector(':scope > .conversation-pending'));append(v.events);
    // The latest page's older token stays valid only while the oldest shown
    // message is still in that page; it is renewed on every such poll.
    if(events.length&&v.events.some(e=>e.id===events[0].id))older=v.older;
@@ -148,7 +154,7 @@ async function poll(){
    if(v.limited&&!events.length)setStatus('The latest record was shortened.');
    olderButton.hidden=!older||loadingOlder;
   }
- }catch(e){if(g!==gen||e?.superseded)return;failures++;setStatus('History unavailable. Retrying.');}
+ }catch(e){if(g!==gen||e?.superseded)return;failures++;if(e?.slow)slow(true);else setStatus('History unavailable. Retrying.');}
  if(g===gen&&root&&!document.hidden)timer=setTimeout(poll,failures?Math.min(30000,POLL*2**failures):POLL);
 }
 async function loadOlder(){
@@ -159,8 +165,11 @@ async function loadOlder(){
    // Start again from the latest page, which brings a fresh token.
    reset();loadingOlder=false;await poll();if(g===gen)setStatus(messages.page_expired);return;
   }
-  if(v.ok!==true){showError(v);older=null;}else{older=v.older;prepend(v.events,v.omitted===true);}
- }catch(_){if(g===gen)setStatus('Older messages unavailable.');}
+  // A slow answer keeps the token, so Show older can simply be tapped again.
+  if(v.ok===true){older=v.older;prepend(v.events,v.omitted===true);}
+  else if(v.error==='history_slow')setStatus(messages.older_slow);
+  else{showError(v);older=null;}
+ }catch(e){if(g===gen&&!e?.superseded)setStatus(e?.slow?messages.older_slow:'Older messages unavailable.');}
  finally{if(g===gen){loadingOlder=false;olderButton.hidden=!older;}}
 }
 function mount(n){
@@ -169,13 +178,15 @@ function mount(n){
  olderButton=make('button','conversation-older','Show older');olderButton.type='button';olderButton.hidden=true;olderButton.onclick=loadOlder;
  list=make('div','conversation-list');list.setAttribute('aria-label','Conversation record for '+n);
  list.addEventListener('scroll',()=>{if(!list.isConnected)return;following=list.scrollHeight-list.clientHeight-list.scrollTop<=24;savedTop=list.scrollTop;if(following&&/paused/.test(status.textContent))setStatus('Read-only record · updating');},{passive:true});
- list.append(olderButton);root.append(status,list);poll();return root;
+ retryButton=make('button','conversation-retry','Retry');retryButton.type='button';retryButton.hidden=true;
+ retryButton.onclick=()=>{retryButton.hidden=true;setStatus('Loading the record…');return poll();};
+ list.append(olderButton);root.append(status,retryButton,list);poll();return root;
 }
 function element(){return root;}
 function addPending(text){if(!root||typeof text!=='string'||!text.trim())return;pending.push({text,at:Date.now()});renderPending();following=true;restore();}
 function unmount(){
  gen++;clearTimeout(timer);timer=0;for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
- root?.replaceChildren();root?.remove();root=list=status=olderButton=null;
+ root?.replaceChildren();root?.remove();root=list=status=olderButton=retryButton=null;
  events=[];seen=new Set();older=null;pending=[];failures=0;loadingOlder=false;following=true;savedTop=0;name='';
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)unmount();});window.addEventListener('pagehide',unmount);

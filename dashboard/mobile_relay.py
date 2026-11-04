@@ -259,7 +259,7 @@ class Handler(BaseHTTPRequestHandler):
             try:self._send(200,mobile_history.encode(self.server.mobile_history.page(nm,token)))
             except LookupError:self._send(410,{'ok':False,'error':'page_expired'})
             except mobile_history.HistoryUnavailable as exc:
-                self._send(409 if exc.code=='history_changed' else 503 if exc.code in {'history_unavailable','dashboard_unavailable'} else 200,
+                self._send(409 if exc.code=='history_changed' else 503 if exc.code in {'history_unavailable','dashboard_unavailable','history_slow'} else 200,
                            {'ok':False,'error':exc.code,'reason_code':exc.reason_code})
             except Exception:self._send(503,{'ok':False,'error':'history_unavailable','reason_code':''})
             return

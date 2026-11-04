@@ -34,12 +34,14 @@ MAX_PAGE_BYTES = 512 * 1024
 MAX_WIRE_BYTES = 640 * 1024
 MAX_TOKENS = 256
 TOKEN_SECONDS = 600
-UPSTREAM_TIMEOUT = 5
+# Cockpit's conversation route rechecks the roster and the binding, which
+# takes several seconds when the computer is busy (2-8 s at load 12-14).
+UPSTREAM_TIMEOUT = 15
 ERRORS = frozenset({
     'agent_unavailable', 'provider_unavailable', 'dashboard_upgrade_required',
     'history_unconfirmed', 'history_stale', 'invalid_binding', 'history_unreadable',
     'history_changed', 'history_unavailable', 'dashboard_unavailable', 'claude_next_phase',
-    'record_too_large', 'invalid_cursor', 'invalid_agent',
+    'record_too_large', 'invalid_cursor', 'invalid_agent', 'history_slow',
 })
 
 
@@ -226,10 +228,13 @@ class HistoryClient:
         con = http.client.HTTPConnection('127.0.0.1', self.port, timeout=UPSTREAM_TIMEOUT)
         timer = None
         deadline = time.monotonic() + UPSTREAM_TIMEOUT
+        # Running out of time is its own code: waiting and retrying fixes it.
+        late = threading.Event()
         try:
             con.connect()
             sock = con.sock
             def expire():
+                late.set()
                 try:
                     sock.shutdown(socket.SHUT_RDWR)
                 except OSError:
@@ -250,13 +255,15 @@ class HistoryClient:
             if length is not None and (not length.isdigit() or int(length) > MAX_UPSTREAM_BYTES):
                 raise HistoryUnavailable('history_unavailable')
             data = response.read(MAX_UPSTREAM_BYTES + 1)
-            if len(data) > MAX_UPSTREAM_BYTES or time.monotonic() >= deadline:
+            if len(data) > MAX_UPSTREAM_BYTES:
                 raise HistoryUnavailable('history_unavailable')
+            if late.is_set() or time.monotonic() >= deadline:
+                raise HistoryUnavailable('history_slow')
             return response.status, json.loads(data)
         except HistoryUnavailable:
             raise
         except (OSError, http.client.HTTPException, ValueError, UnicodeError):
-            raise HistoryUnavailable('history_unavailable') from None
+            raise HistoryUnavailable('history_slow' if late.is_set() or time.monotonic() >= deadline else 'history_unavailable') from None
         finally:
             if timer is not None:
                 timer.cancel()
