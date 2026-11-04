@@ -414,4 +414,20 @@ Fresh Codex CLI lifecycle hooks, reservation and key-read guards, and `session-h
 
 The launcher also pins `AGENTSTACK_FRESH_WRAPPER_ROOT`, `AGENTSTACK_FRESH_RUNTIME_DIR`, `AGENTSTACK_FRESH_CODEX_HOME` and `AGENTSTACK_FRESH_CODEX_BIN`. The CLI fresh payload prelude `fresh-cli-env.sh` restores core/hooks/runtime locations, Codex home/binary and mode after login-shell initialization. Missing or invalid pins, runtime disagreement with the context, or a missing prelude are refused with `FRESH_CODEX_ENV_UNAVAILABLE`; mixed legacy/global contexts retain their existing refusal. Provider home uses the shared location verified and selected by the launcher; it is not inferred again from the child's context. OS HOME and legacy settings files are unchanged. The normal fresh child tmux entry also passes the selected provider binary, Python, mode and context after shell initialization.
 
+To check the real hook, use the approved payload and the Python selected above for this single run. Send the first identity-check input in the new Codex process, verify that the screen shows no `Hook failed`, then exit normally with `/quit`. Only after a successful launch does the command list session records newer than the pre-launch time marker. It displays file metadata, not context/receipt contents, environment values or credentials, and inserts no diagnostic code into the payload or execution environment.
+
+```sh
+orrery_hook_marker="$(mktemp "${TMPDIR:-/tmp}/orrery-hook-check.XXXXXX")" || exit 1
+if AGENTSTACK_PYTHON="$orrery_python" AGENTSTACK_RUNTIME_MODE=fresh \
+  AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  "$orrery_install/bin/agent-start-codex" "$orrery_workdir"; then
+  find "$(dirname "$orrery_context")/launch/runs" -type f -name session.json \
+    -newer "$orrery_hook_marker" -exec ls -l {} \;
+else
+  printf '%s\n' 'STOP: fresh launch failed; inspect the fixed code above.' >&2
+fi
+```
+
+Expect no `Hook failed` and **exactly one `session.json` for this run**. No result, multiple results or a different run's record is unconfirmed: stop rather than substituting an earlier success. Together these observations confirm that the approved hook path using the selected Python executed and recorded the session. Python import checks and pre-launch read-only `hooks/list` do not replace this real execution check. Verify MCP identity through `runtime_status` and ordinary tool approval separately. Stop on `FRESH_CODEX_PYTHON_UNAVAILABLE` (missing/invalid Python pin), `FRESH_CODEX_ENV_UNAVAILABLE` (other pins, nonce or runtime inconsistency), `FRESH_CODEX_GUARD_UNAVAILABLE` (guard execution/import failure), or `CODEX_HOOK_CONFIGURE_REQUIRED` (payload/plan/trust mismatch). Do not fall back to PATH's python3 or a legacy route. An exit-time `FRESH_PRIVATE_FILE_UNAVAILABLE` also requires investigating the missing record before proceeding with acceptance.
+
 Reactivation and App foregrounding are outside this cutover scope. Do not report overall completion until real OS managers/Finder GUI, real provider/App/login/trust/live-install acceptance, support for the actual working paths, final CI and an attended cutover are confirmed. Private Mac checks do not establish acceptance for untested environments such as WSL.

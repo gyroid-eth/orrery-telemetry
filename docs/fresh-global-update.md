@@ -414,4 +414,20 @@ fresh Codex CLI の lifecycle hook、予約 guard、鍵読取 guard と `session
 
 launcher は `AGENTSTACK_FRESH_WRAPPER_ROOT`／`AGENTSTACK_FRESH_RUNTIME_DIR`／`AGENTSTACK_FRESH_CODEX_HOME`／`AGENTSTACK_FRESH_CODEX_BIN` も固定します。CLI fresh の共通 payload `fresh-cli-env.sh` が login shell 初期化後に core／hooks／runtime／Codex home・binary／mode を復元します。pinの欠落・不正、contextとruntimeの不一致、共通payload欠落は `FRESH_CODEX_ENV_UNAVAILABLE` で拒否し、旧/global contextの混在も既存の拒否を保ちます。provider homeはlauncherが検証して選んだ共有先を使い、子contextから推測し直しません。OSのHOMEやlegacy設定ファイルは変更しません。通常のfresh child tmux入口も、shell初期化後に固定したprovider binary・Python・mode・contextを渡します。
 
+実hookの自己確認は、承認済みpayloadと上で選んだPythonのまま、次の1回で行います。新しいCodexで本人確認の入力を1回送り、画面に `Hook failed` が出ないことを確認して通常の `/quit` で終了します。起動が成功した場合だけ、起動前の時刻マーカーより新しいsession記録の有無を表示します。context・receipt本文やenv・資格は表示せず、payloadや実行環境に診断コードを差し込みません。
+
+```sh
+orrery_hook_marker="$(mktemp "${TMPDIR:-/tmp}/orrery-hook-check.XXXXXX")" || exit 1
+if AGENTSTACK_PYTHON="$orrery_python" AGENTSTACK_RUNTIME_MODE=fresh \
+  AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  "$orrery_install/bin/agent-start-codex" "$orrery_workdir"; then
+  find "$(dirname "$orrery_context")/launch/runs" -type f -name session.json \
+    -newer "$orrery_hook_marker" -exec ls -l {} \;
+else
+  printf '%s\n' 'STOP: fresh launch failed; inspect the fixed code above.' >&2
+fi
+```
+
+期待値は、`Hook failed` がなく、**今回のrunの `session.json` が1件**表示されることです。表示無し・複数件・別runの記録なら未確認として停止し、前回の成功記録を代用しません。この2点で、選択Pythonを使う承認済みhook経路が実行されsessionを記録したことを確認します。Pythonのimport確認や起動前のread-only `hooks/list` だけは、この実動作確認の代わりになりません。MCPの `runtime_status` による本人確認と通常tool承認も別に確認します。失敗時は `FRESH_CODEX_PYTHON_UNAVAILABLE`（Python pin欠落・不正）、`FRESH_CODEX_ENV_UNAVAILABLE`（他pin・nonce・runtime不整合等）、`FRESH_CODEX_GUARD_UNAVAILABLE`（guard実行・import失敗）、`CODEX_HOOK_CONFIGURE_REQUIRED`（payload・plan・trust不一致等）を停止理由として扱い、PATHのpython3や旧経路へfallbackしません。終了時の `FRESH_PRIVATE_FILE_UNAVAILABLE` も、記録不足のまま受入を進めず原因を確認します。
+
 復帰・App前面化は今回の対象外です。実OS manager/Finder GUI、実provider／App／login／trust／live install、実際の作業pathの支持範囲、最終CIと本人在席の切替を確認するまで、全体完了とはしません。WSLなど未受入の環境を、この私有Macでの確認から受入済みとは扱いません。
