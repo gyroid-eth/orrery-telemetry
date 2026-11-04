@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -18,6 +19,190 @@ SPEC.loader.exec_module(trust)
 OWN_SPEC = importlib.util.spec_from_file_location('codex_plugin_ownership', ROOT/'scripts/codex_plugin_ownership.py')
 ownership = importlib.util.module_from_spec(OWN_SPEC)
 OWN_SPEC.loader.exec_module(ownership)
+
+
+@pytest.fixture
+def fresh_python_entry(tmp_path):
+    """Synthetic module and login shell: no Mail, native process or credentials."""
+    package = tmp_path/'agentstack_mail';package.mkdir()
+    (package/'__init__.py').write_text('')
+    (package/'fresh_client.py').write_text(
+        'import json,sys\njson.load(sys.stdin)\nprint(sys.executable)\n')
+    core = tmp_path/'core';(core/'hooks').mkdir(parents=True)
+    runtime = tmp_path/'launch/runtime';runtime.mkdir(parents=True)
+    home = tmp_path/'providers/codex';home.mkdir(parents=True)
+    for name in ('check-codex-file-reservation.py','deny-llm-key-read.py'):
+        (core/'hooks'/name).write_text(
+            'import json,sys\nv=json.load(sys.stdin)\nprint(sys.executable)\nsys.exit(2 if v.get("deny") else 0)\n')
+    (core/'hooks/deny-llm-key-read.sh').write_bytes((ROOT/'hooks/deny-llm-key-read.sh').read_bytes())
+    old = tmp_path/'old-python'
+    old.write_text('#!/bin/bash\nprintf old-python-used >&2\nexit 73\n');old.chmod(0o700)
+    login = tmp_path/'synthetic-login-shell'
+    login.write_text('#!/bin/bash\nexport AGENTSTACK_PYTHON='+shlex.quote(str(old))
+                     +'\nexec /bin/bash -c "$2"\n');login.chmod(0o700)
+    env = dict(os.environ, PYTHONPATH=str(tmp_path), AGENTSTACK_RUNTIME_MODE='fresh',
+               AGENTSTACK_FRESH_CLIENT_CONTEXT=str(tmp_path/'unused-context'),
+               AGENTSTACK_FRESH_LAUNCH_ID='synthetic-launch', AGENTSTACK_FRESH_LAUNCH_NONCE='synthetic-nonce',
+               AGENTSTACK_FRESH_PYTHON=sys.executable,
+               AGENTSTACK_FRESH_WRAPPER_ROOT=str(core), AGENTSTACK_FRESH_RUNTIME_DIR=str(runtime),
+               AGENTSTACK_FRESH_CODEX_HOME=str(home), AGENTSTACK_FRESH_CODEX_BIN=sys.executable,
+               AGENTSTACK_HOME=str(core))
+    for key in ('AGENTSTACK_CLIENT_CONFIG','AGENTSTACK_GLOBAL_SERVER_CONFIG'):
+        env.pop(key,None)
+    return login, env
+
+
+def fresh_python_argv(entry):
+    if entry == 'session-hook':return ['/bin/bash',str(ROOT/'bin/agentstack-runtime-client'),entry]
+    name = {'hook':'run-hook.sh','reservation':'run-reservation-guard.sh','key-read':'run-key-read-guard.sh'}[entry]
+    return ['/bin/bash',str(ROOT/'integrations/codex_app/plugin/scripts'/name)]
+
+
+@pytest.mark.parametrize('entry', ['hook','session-hook','reservation','key-read'])
+def test_fresh_codex_restores_owned_environment_after_login_override(fresh_python_entry, tmp_path, entry):
+    login, env = fresh_python_entry
+    fields = {'AGENTSTACK_PYTHON':env['AGENTSTACK_FRESH_PYTHON'],
+              'AGENTSTACK_HOME':env['AGENTSTACK_FRESH_WRAPPER_ROOT'],
+              'AGENTSTACK_RUNTIME_DIR':env['AGENTSTACK_FRESH_RUNTIME_DIR'],
+              'AGENTSTACK_HOOKS_DIR':str(Path(env['AGENTSTACK_FRESH_WRAPPER_ROOT'])/'hooks'),
+              'AGENTSTACK_CODEX_BIN':env['AGENTSTACK_FRESH_CODEX_BIN'],
+              'CODEX_HOME':env['AGENTSTACK_FRESH_CODEX_HOME'], 'AGENTSTACK_RUNTIME_MODE':'fresh'}
+    probe = 'import os,json,sys\njson.load(sys.stdin)\nprint(json.dumps({k:os.environ.get(k) for k in '+repr(list(fields))+'}))\n'
+    if entry in ('hook','session-hook'):(tmp_path/'agentstack_mail/fresh_client.py').write_text(probe)
+    else:
+        name = 'check-codex-file-reservation.py' if entry == 'reservation' else 'deny-llm-key-read.py'
+        (Path(env['AGENTSTACK_HOME'])/'hooks'/name).write_text(probe)
+    login.write_text('#!/bin/bash\nexport '+shlex.join([k+'='+('/wrong' if k!='AGENTSTACK_RUNTIME_MODE' else 'legacy') for k in fields])+'\nexec /bin/bash -c "$2"\n')
+    result = subprocess.run(['/bin/bash',str(login),'-lc',shlex.join(fresh_python_argv(entry))],env=env,
+        input='{"hook_event_name":"SessionStart"}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == fields
+
+
+@pytest.mark.parametrize('entry', ['hook','session-hook','reservation','key-read'])
+def test_fresh_codex_hook_uses_pinned_python_after_login_override(fresh_python_entry, entry):
+    login, env = fresh_python_entry
+    argv = fresh_python_argv(entry)
+    result = subprocess.run([str(login),'-lc',shlex.join(argv)],env=env,
+        input=json.dumps({'hook_event_name':'SessionStart'}),capture_output=True,text=True,timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == sys.executable
+    assert 'old-python-used' not in result.stderr
+
+
+@pytest.mark.parametrize('entry', ['hook','session-hook','reservation','key-read'])
+@pytest.mark.parametrize('invalid', ['missing','empty','relative','absent','nonexecutable','directory'])
+def test_fresh_codex_hook_rejects_missing_or_invalid_python(fresh_python_entry, tmp_path, entry, invalid):
+    login, env = fresh_python_entry
+    blocked = tmp_path/'not-executable';blocked.write_text('not an interpreter');blocked.chmod(0o600)
+    if invalid == 'missing':env.pop('AGENTSTACK_FRESH_PYTHON')
+    else:env['AGENTSTACK_FRESH_PYTHON'] = {
+        'empty':'','relative':'relative/python','absent':str(tmp_path/'absent'),
+        'nonexecutable':str(blocked),'directory':str(tmp_path)}[invalid]
+    argv = fresh_python_argv(entry)
+    result = subprocess.run([str(login),'-lc',shlex.join(argv)],env=env,
+        input=json.dumps({'hook_event_name':'SessionStart'}),capture_output=True,text=True,timeout=10)
+    assert result.returncode == 2
+    assert result.stderr == 'FRESH_CODEX_PYTHON_UNAVAILABLE\n'
+    assert result.stdout == ''
+
+
+@pytest.mark.parametrize('entry', ['hook','session-hook','reservation','key-read'])
+@pytest.mark.parametrize('damage', ['root-missing','home-missing','runtime-mismatch','binary-missing','nonce-missing'])
+def test_fresh_codex_refuses_incomplete_or_inconsistent_environment(fresh_python_entry, tmp_path, entry, damage):
+    _, env = fresh_python_entry
+    if damage == 'root-missing':env.pop('AGENTSTACK_FRESH_WRAPPER_ROOT')
+    elif damage == 'home-missing':env['AGENTSTACK_FRESH_CODEX_HOME']=str(tmp_path/'absent-home')
+    elif damage == 'runtime-mismatch':env['AGENTSTACK_FRESH_RUNTIME_DIR']=str(tmp_path)
+    elif damage == 'binary-missing':env['AGENTSTACK_FRESH_CODEX_BIN']=str(tmp_path/'absent')
+    else:env.pop('AGENTSTACK_FRESH_LAUNCH_NONCE')
+    result=subprocess.run(fresh_python_argv(entry),env=env,input='{}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == 2 and result.stderr == 'FRESH_CODEX_ENV_UNAVAILABLE\n'
+    assert result.stdout == ''
+
+
+@pytest.mark.parametrize('entry', ['hook','session-hook','reservation','key-read'])
+def test_fresh_codex_refuses_legacy_context_conflict(fresh_python_entry, entry):
+    _, env = fresh_python_entry
+    env['AGENTSTACK_GLOBAL_SERVER_CONFIG']='/unrelated-legacy-context'
+    result=subprocess.run(fresh_python_argv(entry),env=env,input='{}',capture_output=True,text=True,timeout=10)
+    expected = 'FRESH_CONTEXT_REQUIRED' if entry == 'session-hook' else 'FRESH_CONTEXT_CONFLICT'
+    assert result.returncode == 2 and result.stderr == expected+'\n'
+    assert result.stdout == ''
+
+
+@pytest.mark.parametrize('entry', ['hook','reservation','key-read'])
+def test_fresh_codex_missing_payload_prelude_is_closed(fresh_python_entry, tmp_path, entry):
+    _, env = fresh_python_entry
+    runner=tmp_path/'orphan-runner.sh';runner.write_bytes(Path(fresh_python_argv(entry)[1]).read_bytes())
+    result=subprocess.run(['/bin/bash',str(runner)],env=env,input='{}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == 2 and result.stderr == 'FRESH_CODEX_ENV_UNAVAILABLE\n'
+
+
+@pytest.mark.parametrize('entry', ['hook','session-hook','reservation','key-read'])
+def test_fresh_codex_accepts_launch_pinned_shared_provider_home(fresh_python_entry, tmp_path, entry):
+    _, env = fresh_python_entry
+    shared=tmp_path/'parent-client/providers/codex';shared.mkdir(parents=True)
+    env['AGENTSTACK_FRESH_CODEX_HOME']=str(shared)
+    result=subprocess.run(fresh_python_argv(entry),env=env,
+        input='{"hook_event_name":"SessionStart"}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == sys.executable
+
+
+@pytest.mark.parametrize('entry', ['reservation','key-read'])
+def test_fresh_codex_guard_import_failure_is_closed(fresh_python_entry, entry):
+    login, env = fresh_python_entry
+    name = 'check-codex-file-reservation.py' if entry == 'reservation' else 'deny-llm-key-read.py'
+    (Path(env['AGENTSTACK_HOME'])/'hooks'/name).write_text('raise ImportError("synthetic broken interpreter environment")\n')
+    # Preserve the chosen Python while still exercising each guard's import failure.
+    result = subprocess.run(fresh_python_argv(entry),env=dict(env,AGENTSTACK_PYTHON=sys.executable),
+        input='{}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == 2
+    assert 'FRESH_CODEX_GUARD_UNAVAILABLE' in result.stderr
+
+
+@pytest.mark.parametrize('entry', ['reservation','key-read'])
+def test_fresh_codex_guard_policy_denial_stays_closed(fresh_python_entry, entry):
+    login, env = fresh_python_entry
+    result = subprocess.run([str(login),'-lc',shlex.join(fresh_python_argv(entry))],env=env,
+        input='{"deny":true}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == 2
+    assert result.stdout.strip() == sys.executable
+
+
+@pytest.mark.parametrize('entry', ['reservation','key-read'])
+def test_legacy_guard_interpreter_failure_keeps_existing_behavior(fresh_python_entry, entry):
+    _, env = fresh_python_entry
+    env = dict(env, AGENTSTACK_RUNTIME_MODE='legacy', AGENTSTACK_PYTHON=str(Path(env['PYTHONPATH'])/'old-python'))
+    for key in ('AGENTSTACK_FRESH_CLIENT_CONTEXT','AGENTSTACK_FRESH_LAUNCH_ID','AGENTSTACK_FRESH_PYTHON'):
+        env.pop(key,None)
+    result = subprocess.run(fresh_python_argv(entry),env=env,input='{}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == (2 if entry == 'reservation' else 0)
+    assert 'old-python-used' in result.stderr
+
+
+@pytest.mark.parametrize('entry', ['hook','reservation','key-read'])
+def test_fresh_desktop_hook_without_cli_launch_keeps_existing_python(tmp_path, entry):
+    plugin = tmp_path/'plugin';(plugin/'scripts').mkdir(parents=True)
+    runner = plugin/'scripts/run-hook.sh'
+    runner.write_bytes(Path(fresh_python_argv(entry)[1]).read_bytes())
+    source = plugin/'src/agentstack_codex_app';source.mkdir(parents=True)
+    (source/'hook_entry.py').write_text('import sys\nprint(sys.executable)\n')
+    (source/'__init__.py').write_text('')
+    (source/'fresh_bridge.py').write_text('import sys\nprint(sys.executable)\n')
+    core = tmp_path/'core';(core/'hooks').mkdir(parents=True)
+    (core/'hooks/deny-llm-key-read.sh').write_text('#!/bin/bash\nprintf "%s\\n" '+shlex.quote(sys.executable)+'\n')
+    env = dict(os.environ,AGENTSTACK_RUNTIME_MODE='fresh',AGENTSTACK_PYTHON=sys.executable,
+               AGENTSTACK_HOME=str(core),
+               AGENTSTACK_FRESH_CLIENT_CONTEXT=str(tmp_path/'unused-context'),
+               AGENTSTACK_CODEX_APP_RUNTIME_DIR=str(tmp_path/'desktop-runtime'))
+    for key in ('AGENTSTACK_FRESH_LAUNCH_ID','AGENTSTACK_FRESH_PYTHON',
+                'AGENTSTACK_CLIENT_CONFIG','AGENTSTACK_GLOBAL_SERVER_CONFIG'):
+        env.pop(key,None)
+    result = subprocess.run(['/bin/bash',str(runner)],env=env,capture_output=True,text=True,timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == sys.executable
 
 
 def test_read_transport_optional_context_keeps_trust_defaults(tmp_path, monkeypatch):

@@ -324,6 +324,27 @@ while True:
 '''
 
 
+def delivery_launch_command(entry, cwd, provider, binary, context):
+    return 'exec '+shlex.join(['/usr/bin/env','AGENTSTACK_PYTHON='+sys.executable,
+                              'AGENTSTACK_'+provider.upper()+'_BIN='+str(binary),
+                              'AGENTSTACK_RUNTIME_MODE=fresh','AGENTSTACK_FRESH_CLIENT_CONTEXT='+str(context),
+                              '/bin/bash',str(entry),str(cwd)])
+
+
+@pytest.mark.parametrize('provider', ['claude','codex'])
+def test_delivery_entry_restores_fixture_selection_after_login_shell(tmp_path, provider):
+    entry = tmp_path/'entry.sh'
+    key = 'AGENTSTACK_'+provider.upper()+'_BIN'
+    entry.write_text('#!/bin/bash\nprintf "%s\\n" "$AGENTSTACK_PYTHON" "${'+key+'}" "$AGENTSTACK_RUNTIME_MODE" "$AGENTSTACK_FRESH_CLIENT_CONTEXT"\n')
+    binary, context = tmp_path/'selected-provider', tmp_path/'selected-context'
+    login = tmp_path/'login-shell'
+    login.write_text('#!/bin/bash\nexport AGENTSTACK_PYTHON=/wrong-python '+key+'=/wrong-provider AGENTSTACK_RUNTIME_MODE=legacy AGENTSTACK_FRESH_CLIENT_CONTEXT=/wrong-context\nexec /bin/bash -c "$2"\n')
+    result = subprocess.run(['/bin/bash',str(login),'-lc',delivery_launch_command(entry,tmp_path,provider,binary,context)],
+        capture_output=True,text=True,timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [sys.executable,str(binary),'fresh',str(context)]
+
+
 def test_delivery_codex_preflight_does_not_run_session_start(tmp_path):
     """The delivery fake must serve preflight before a launch receipt exists."""
     from types import SimpleNamespace
@@ -380,8 +401,7 @@ def test_real_tmux_watcher_uses_only_bound_native_and_rejects_respawn(tmp_path,p
                 started=await command('new-session','-d','-s','fixture','-P','-F','#{pane_id}',
                     # A user's default tmux shell may source env.sh at startup.
                     # Keep the fixture interpreter after that shell has started.
-                    'exec '+shlex.join(['/usr/bin/env','AGENTSTACK_PYTHON='+sys.executable,
-                                       '/bin/bash',str(entry),str(tmp_path)])
+                    delivery_launch_command(entry,tmp_path,provider,binary,client.path)
                     +' 2>'+shlex.quote(str(launch_stderr)));created=True
                 pane=started.stdout.strip()
                 other=(await command('new-window','-d','-t','fixture','-P','-F','#{pane_id}','exec /bin/cat')).stdout.strip()

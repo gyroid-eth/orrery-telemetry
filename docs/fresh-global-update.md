@@ -410,4 +410,8 @@ freshのClaudeのSessionStart hookが通知を渡すのは、`source` が文字�
 
 通信後に応答だけ失った書込みは、保存した同requestを再送できます。local callerの `fresh_client replay --context <same-context> --request-id <saved-UUID>` は元の本文・宛先・絶対pathを使い、現在の資格を再確認します。新UUIDでの再送や手でrequestを書き換える操作は、元の操作の再開ではありません。mode pinの無い旧実験contextは推測修復せず、同じowner bindingから新client UUIDでprepareし直します。この操作で旧native sessionのresumeが引き継がれるとは扱いません。
 
+fresh Codex CLI の lifecycle hook、予約 guard、鍵読取 guard と `session-hook` は、launcher が `AGENTSTACK_FRESH_PYTHON` に固定した絶対 interpreter を使います。login shell が旧 `AGENTSTACK_PYTHON` を上書きしても、その値や PATH の python3 へ切り替えません。固定値が欠落・空・相対 path・実行不能なら `FRESH_CODEX_PYTHON_UNAVAILABLE` で拒否します。CLI fresh の guard は interpreter/import 失敗でも拒否し、`FRESH_CODEX_GUARD_UNAVAILABLE` を出します。鍵読取 guard はその経路で旧 shell guard の通常コマンド許可 fallback に進みません。Desktop と Claude の既存経路は別です。この変更を含む plugin payload は更新後に人がもう一度 review・承認し、正規の plan／trust apply を済ませてから新しい native process で受け入れます。古い承認や診断用 payload の承認を流用しません。
+
+launcher は `AGENTSTACK_FRESH_WRAPPER_ROOT`／`AGENTSTACK_FRESH_RUNTIME_DIR`／`AGENTSTACK_FRESH_CODEX_HOME`／`AGENTSTACK_FRESH_CODEX_BIN` も固定します。CLI fresh の共通 payload `fresh-cli-env.sh` が login shell 初期化後に core／hooks／runtime／Codex home・binary／mode を復元します。pinの欠落・不正、contextとruntimeの不一致、共通payload欠落は `FRESH_CODEX_ENV_UNAVAILABLE` で拒否し、旧/global contextの混在も既存の拒否を保ちます。provider homeはlauncherが検証して選んだ共有先を使い、子contextから推測し直しません。OSのHOMEやlegacy設定ファイルは変更しません。通常のfresh child tmux入口も、shell初期化後に固定したprovider binary・Python・mode・contextを渡します。
+
 復帰・App前面化は今回の対象外です。実OS manager/Finder GUI、実provider／App／login／trust／live install、実際の作業pathの支持範囲、最終CIと本人在席の切替を確認するまで、全体完了とはしません。WSLなど未受入の環境を、この私有Macでの確認から受入済みとは扱いません。

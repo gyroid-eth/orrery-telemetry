@@ -100,6 +100,8 @@ def provider_setup(client, root, provider):
                     != (root / 'integrations/codex_app/plugin/scripts/run-hook.sh').read_bytes()
                     or (Path(plan['plugin_root']) / 'scripts/run-reservation-guard.sh').read_bytes()
                     != (root / 'integrations/codex_app/plugin/scripts/run-reservation-guard.sh').read_bytes()
+                    or (Path(plan['plugin_root']) / 'scripts/fresh-cli-env.sh').read_bytes()
+                    != (root / 'integrations/codex_app/plugin/scripts/fresh-cli-env.sh').read_bytes()
                     or (Path(plan['plugin_root']) / 'hooks/hooks.json').read_bytes()
                     != (root / 'integrations/codex_app/plugin/hooks/hooks.json').read_bytes()):
                 raise ValueError
@@ -339,6 +341,14 @@ def launch(client, wrapper_root, provider, cwd, *, session_id=None):
         if managed:environment.update(managed_plan['env'])
         else:environment['CODEX_HOME' if provider == 'codex' else 'CLAUDE_CONFIG_DIR'] = str(home)
         if provider == 'codex':
+            if (not os.path.isabs(sys.executable) or not os.path.isfile(sys.executable)
+                    or not os.access(sys.executable, os.X_OK)):
+                raise B1Error('FRESH_CODEX_PYTHON_UNAVAILABLE')
+            # Login shells can reload legacy env.sh and replace AGENTSTACK_PYTHON.
+            environment['AGENTSTACK_FRESH_PYTHON'] = sys.executable
+            environment.update(AGENTSTACK_FRESH_WRAPPER_ROOT=str(root),
+                AGENTSTACK_FRESH_RUNTIME_DIR=str(runtime), AGENTSTACK_FRESH_CODEX_HOME=str(home),
+                AGENTSTACK_FRESH_CODEX_BIN=binary)
             args += codex_effective_overrides(root, home, binary, plan, cwd, config_args, environment)
         if task is not None and not managed:args += ['--', prompt]
         from .fresh_delivery import capture, publish
