@@ -1,0 +1,3 @@
+### スマホの閲覧画面で、agentの会話の記録を読めるようにする（別のopt-in・既定オフ）
+
+readerに`--enable-history`（`--phone-policy-reviewed`も必要）を付けたときだけ、agentのsheetに**Conversation**のtabが出て、cockpitがそのagent自身のものと確認した会話の記録を読み取り専用で表示します。スマホが送るのはagentの名前とreaderが発行したpageの印だけで、fileのpathや記録のcursorは送りも受け取りもしません。readerは固定のloopbackのcockpitのroute `GET /telemetry/conversation`だけを呼び、boundでない記録は理由のcodeだけを示します。1 pageは40件・512 KiBまで、本文は文字としてだけ表示し、Mailはcard、fileと画像は名前だけです。送信は既存のTerminalの**Review input → Send once**のままで、Reviewの画面には必ず端末の末尾（40行・6 KiB）を出します。cockpitのredactは既知の形の鍵だけを隠すので、会話に書かれた他の秘密はそのまま届きます。負荷が高くcockpitの応答が遅いときは15秒まで待ち、それでも返らなければ**Taking longer than usual**と**Retry**を出します。Close・背景移行で表示を消します。詳しくは[スマホで状況を見る](../docs/mobile.md#スマホでagentの会話の記録を読む)を参照してください。

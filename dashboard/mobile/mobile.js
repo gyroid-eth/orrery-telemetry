@@ -407,7 +407,8 @@ poll();
 const q=s=>document.querySelector(s),make=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!==undefined)e.textContent=txt;return e;};
 const sheet=q('#terminal-sheet'),contract='orrery-mobile-pane-v1';
 let capability=null,enabled=false,phase='loading',name='',choices=[],choice=null,target=null,text='',output='',preview=null,previewOK=false,message='';
-let selector=null;
+let selector=null,history=false,tab='terminal';
+const conversation=()=>window.OrreryMobileConversation;
 const fresh=()=>capability?.api===34;
 const ref=value=>value&&/^[a-f0-9]{32}$/.test(value.mail_instance_id)&&Number.isSafeInteger(value.mail_agent_id)&&value.mail_agent_id>0?{mail_instance_id:value.mail_instance_id,mail_agent_id:value.mail_agent_id}:null;
 const rowRef=row=>ref({mail_instance_id:row.dataset.mailInstanceId,mail_agent_id:Number(row.dataset.mailAgentId)});
@@ -434,19 +435,20 @@ function cancelIntent(){
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
 function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;generation++;}
-function clear(){stop();cancelIntent();name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
+function clear(){stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
 function close(){const restore=previousFocus;previousFocus=null;clear();if(sheet.open)sheet.close();if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});}
+const entryLabel=()=>history?'History':'Terminal';
 function entry(n,cls='',identity=null){
- const b=make('button','terminal-entry '+cls,'Terminal');b.type='button';b.dataset.terminalName=n;
- b.setAttribute('aria-label','Open Terminal for '+n);b.disabled=!enabled;b.title=enabled?'View this agent’s selectable cockpit panes':'Terminal is off. Designated-phone policy acceptance and explicit opt-in are required.';
+ const b=make('button','terminal-entry '+cls,entryLabel());b.type='button';b.dataset.terminalName=n;
+ b.setAttribute('aria-label','Open '+entryLabel()+' for '+n);b.disabled=!(enabled||history);b.title=history?'Read this agent’s verified conversation record':enabled?'View this agent’s selectable cockpit panes':'Terminal is off. Designated-phone policy acceptance and explicit opt-in are required.';
  b.onclick=()=>open(n,identity);return b;
 }
 const graphEntry=entry('','terminal-graph-entry');graphEntry.id='terminal-graph-entry';q('.selected-agent').after(graphEntry);
 function entries(){
- const selected=q('#selected-name').textContent;graphEntry.replaceChildren(make('span','',selected==='None'?'Select an agent':selected),make('strong','','Terminal ⌁'));graphEntry.disabled=!enabled||selected==='None';graphEntry.onclick=()=>open(selected,window.OrreryMobileIdentity?.forName(selected));
+ const selected=q('#selected-name').textContent;graphEntry.replaceChildren(make('span','',selected==='None'?'Select an agent':selected),make('strong','',entryLabel()+' ⌁'));graphEntry.disabled=!(enabled||history)||selected==='None';graphEntry.onclick=()=>open(selected,window.OrreryMobileIdentity?.forName(selected));
  q('#attention').querySelectorAll(':scope > .attention-row').forEach(row=>{const n=row.querySelector('.name')?.textContent;if(!n)return;const wrap=make('div','terminal-attention');row.replaceWith(wrap);wrap.append(row,entry(n,'',rowRef(row)));});
  q('#events').querySelectorAll('.status-line').forEach(row=>{const n=row.querySelector('.name')?.textContent;if(n&&!row.querySelector('.terminal-entry'))row.append(entry(n,'',rowRef(row)));});
- document.querySelectorAll('.terminal-entry:not(#terminal-graph-entry)').forEach(b=>b.disabled=!enabled);
+ document.querySelectorAll('.terminal-entry:not(#terminal-graph-entry)').forEach(b=>{b.disabled=!(enabled||history);b.textContent=entryLabel();b.setAttribute('aria-label','Open '+entryLabel()+' for '+b.dataset.terminalName);});
 }
 new MutationObserver(entries).observe(q('#selected-name'),{childList:true,subtree:true});
 new MutationObserver(entries).observe(q('#attention'),{childList:true});new MutationObserver(entries).observe(q('#events'),{childList:true});
@@ -456,8 +458,10 @@ function mail(event){
  q('#message-route').after(people);
 }
 async function open(n,identity=null){
- if(!enabled||document.hidden)return;previousFocus=sheet.open?previousFocus:document.activeElement;clear();name=n;selector=ref(identity);window.scrollTo({top:0,behavior:'instant'});
+ if(!(enabled||history)||document.hidden)return;previousFocus=sheet.open?previousFocus:document.activeElement;clear();name=n;selector=ref(identity);window.scrollTo({top:0,behavior:'instant'});
  if(!sheet.open)sheet.showModal();
+ if(history){tab='conversation';conversation().mount(n);}
+ if(!enabled){phase='history-only';render();return;}
  if(fresh()&&!selector){phase='unavailable';message='A unique Mail identity is required. Refresh the agent list or open a Mail participant.';render();return;}
  render();await list();
 }
@@ -475,6 +479,7 @@ async function list(){
  }catch(_){if(g===generation&&sheet.open){phase='unavailable';message='No selectable cockpit pane could be verified. Refresh panes to try again.';render();}}
  finally{if(g===generation)operationController=null;}
 }
+function switchTab(value){if(value===tab||!history||!enabled&&value==='terminal')return;tab=value;render();}
 function choose(value){
  stop();cancelIntent();choice=value;target=null;text='';output='';preview=null;previewOK=false;phase='editing';message='';failures=0;render();poll();
 }
@@ -560,14 +565,17 @@ async function reviewInput(){
 }
 async function send(){
  if(phase!=='review'||!prepared||!previewOK)return;
- const p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target};
+ const sentText=prepared.text,p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target};
  prepared=null;receipt=p;text='';clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,controller=new AbortController();operationController=controller;phase='sending';message='';render();
  try{
   const result=await request('commit',{epoch:p.epoch,intent:p.intent,confirmation:p.confirmation},controller,7000);
   if(g!==generation||!sheet.open||document.hidden)return;
   if(result.intent!==p.intent||result.target?.revision!==p.target.revision||!sameTarget(result.target))throw Error('unavailable');
-  phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';render();
+  phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';
+  // Local display only, until the same words appear in the verified record.
+  if(phase==='accepted'&&history)conversation()?.addPending(sentText);
+  render();
  }catch(_){if(g===generation&&sheet.open){phase='unknown';render();}}
  finally{if(g===generation){operationController=null;if(!document.hidden&&sheet.open)poll();}}
 }
@@ -594,10 +602,27 @@ function render(){
  const readTop=previewOK&&previous&&!terminalFollowing(previous)?previous.scrollTop:null;
  const readOutput=readTop!==null?previous.textContent:'',readPreview=readTop!==null?previous._preview:null,readView=readTop!==null?previous._scrollView:null;
  resizeSheet();sheet.replaceChildren();
- const header=make('div','terminal-header'),title=make('h2','',phase==='review'?'Review input':'Terminal');title.id='terminal-title';header.append(title,action('Close','terminal-close',close));sheet.append(header);
- const who=make('div','terminal-identity'),copy=make('div'),portrait=make('img');portrait.src=window.AGENTSTACK_DEMO.portraitURL(name);portrait.alt='';portrait.onerror=()=>portrait.remove();copy.append(make('strong','',name),make('small','','Cockpit session'));who.append(portrait,copy);
+ // Review always shows the terminal tail, even when it was started from the
+ // Conversation tab: nothing is sent without seeing the pane first.
+ const reading=tab==='conversation'&&phase!=='review';
+ const header=make('div','terminal-header'),title=make('h2','',phase==='review'?'Review input':reading?'Conversation':'Terminal');title.id='terminal-title';header.append(title,action('Close','terminal-close',close));sheet.append(header);
+ const who=make('div','terminal-identity'),copy=make('div'),portrait=make('img');portrait.src=window.AGENTSTACK_DEMO.portraitURL(name);portrait.alt='';portrait.onerror=()=>portrait.remove();copy.append(make('strong','',name),make('small','',reading?'Conversation record · read-only':'Cockpit session'));who.append(portrait,copy);
  if(choice){const b=make('button','terminal-pane-button',choice.pane_label+' ⌄');b.type='button';b.disabled=['sending','preparing'].includes(phase);b.onclick=list;who.append(b);}
- sheet.append(who);const scroll=make('div','terminal-scroll');sheet.append(scroll);
+ sheet.append(who);
+ if(history&&enabled){
+  const tabs=make('div','conversation-tabs');tabs.setAttribute('role','tablist');
+  for(const [value,label]of[['conversation','Conversation'],['terminal','Terminal']]){const b=make('button','',label);b.type='button';b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===value));b.disabled=['sending','preparing'].includes(phase);b.onclick=()=>switchTab(value);tabs.append(b);}
+  sheet.append(tabs);
+ }
+ const scroll=make('div','terminal-scroll'+(reading?' conversation-mode':''));sheet.append(scroll);
+ if(reading){
+  const view=conversation()?.element()||conversation()?.mount(name);if(view){scroll.append(view);queueMicrotask(()=>conversation()?.restore());}
+  if(phase==='history-only')return;
+  if(['loading','choose','unavailable','changed'].includes(phase)){
+   const hint=make('div','conversation-compose-hint');hint.append(make('span','',phase==='loading'?'Finding a pane to write to…':'To write, choose a pane in Terminal.'));
+   if(phase!=='loading')hint.append(action('Terminal','',()=>switchTab('terminal')));scroll.append(hint);return;
+  }
+ }
  if(phase==='loading'){scroll.append(make('p','terminal-help','Finding selectable panes…'));return;}
  if(phase==='choose'){
   scroll.append(make('p','terminal-help','Choose the pane you want to view and send input to.'));
@@ -607,7 +632,9 @@ function render(){
  if(['unavailable','changed'].includes(phase)){
   scroll.append(make('p','terminal-result',phase==='changed'?'Pane changed':'Terminal unavailable'),make('p','terminal-help',message));sheet.append(action('Refresh panes','terminal-button',list));return;
  }
- const terminal=make('div','terminal-preview'),bar=make('div','terminal-preview-head');bar.append(make('span','terminal-stream',''),make('span','','Terminal tail'));const pre=make('pre','terminal-output');pre.id='terminal-output';terminal.append(bar,pre);scroll.append(terminal);
+ let pre=null;
+ if(!reading){
+ const terminal=make('div','terminal-preview'),bar=make('div','terminal-preview-head');bar.append(make('span','terminal-stream',''),make('span','','Terminal tail'));pre=make('pre','terminal-output');pre.id='terminal-output';terminal.append(bar,pre);scroll.append(terminal);
  pre.addEventListener('scroll',refreshOutput,{passive:true});
  pre.addEventListener('wheel',event=>{
   terminalScrollGesture(pre,event.deltaY>0&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey);
@@ -633,10 +660,11 @@ function render(){
   terminalScrollGesture(pre,!event.defaultPrevented&&(['ArrowDown','PageDown','End'].includes(event.key)||event.key===' '&&!event.shiftKey));
  });
  const observed=make('div','terminal-observed');observed.append(make('span','','Latest 40 lines · up to 6 KiB'),make('span','terminal-age',''));scroll.append(observed,make('p','terminal-preview-note',''));
+ }
  if(['editing','preparing'].includes(phase)){
   const label=make('label','terminal-compose-label','Your input');label.htmlFor='terminal-text';const field=make('textarea','terminal-text');field.id='terminal-text';field.rows=2;field.value=text;field.placeholder='Write one line…';field.autocomplete='off';field.spellcheck=false;field.disabled=phase==='preparing';
   const count=make('span','',new TextEncoder().encode(text).length+' / 4096 bytes'),meta=make('div','terminal-input-meta');meta.append(make('span','','One line + Enter'),count);
-  scroll.append(label,field,meta,make('p','terminal-help','Check the terminal above before sending.'));
+  scroll.append(label,field,meta,make('p','terminal-help',reading?'Sends to '+choice.pane_label+'. Review shows its terminal tail before you send.':'Check the terminal above before sending.'));
   const actions=make('div','terminal-actions'),review=action(phase==='preparing'?'Preparing…':'Review input','terminal-primary',reviewInput);review.id='terminal-review';review.disabled=phase==='preparing'||!previewOK||!validText(text);
   field.oninput=()=>{text=field.value;count.textContent=new TextEncoder().encode(text).length+' / 4096 bytes';review.disabled=!previewOK||!validText(text);};field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};actions.append(action('Cancel','',close),review);sheet.append(actions);
  }else if(phase==='review'){
@@ -648,11 +676,13 @@ function render(){
   const actions=make('div','terminal-actions');actions.append(action('Close','',close));if(unknown)actions.append(action('Check receipt','terminal-primary',status));else if(phase!=='sending')actions.append(action('Write again','terminal-primary',()=>{cancelIntent();phase='editing';text='';render();}));sheet.append(actions);
  }
  scroll.append(make('p','terminal-message',message));
- if(readTop!==null){pre.textContent=readOutput;pre._preview=readPreview;pre._scrollView=readView;pre.scrollTop=readTop;}
+ if(readTop!==null&&pre){pre.textContent=readOutput;pre._preview=readPreview;pre._scrollView=readView;pre.scrollTop=readTop;}
  refreshOutput();
 }
 sheet.addEventListener('cancel',e=>{e.preventDefault();close();});sheet.addEventListener('close',()=>{if(name)close();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)close();});window.addEventListener('pagehide',close);
 window.OrreryMobileTerminal={open,close,mail};entries();
-const controller=new AbortController();request('',null,controller).then(value=>{if(((value.api===31&&value.supported==='legacy-managed-pane')||(value.api===34&&value.supported==='fresh-managed-pane'))&&value.enabled===true&&value.ack==='tmux-command-accepted'){capability=Object.freeze({...value});enabled=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent='Terminal enabled';entries();}}).catch(()=>{});
+const historyChecked=window.OrreryMobileConversation?window.OrreryMobileConversation.enabled():Promise.resolve(false);
+historyChecked.then(value=>{if(value!==true)return;history=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent=enabled?'History · Terminal':'History enabled';entries();});
+const controller=new AbortController();request('',null,controller).then(value=>{if(((value.api===31&&value.supported==='legacy-managed-pane')||(value.api===34&&value.supported==='fresh-managed-pane'))&&value.enabled===true&&value.ack==='tmux-command-accepted'){capability=Object.freeze({...value});enabled=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent=history?'History · Terminal':'Terminal enabled';entries();}}).catch(()=>{});
 })();
