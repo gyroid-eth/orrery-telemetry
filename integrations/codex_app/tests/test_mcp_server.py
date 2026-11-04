@@ -87,7 +87,7 @@ def _proxy(tmp_path):
     return AgentStackProxy(identities, snapshots, mail), mail
 
 
-def test_absolute_candidate_keeps_default_proxy_contract(tmp_path, monkeypatch):
+def test_absolute_candidate_keeps_separate_backend_from_default_proxy(tmp_path, monkeypatch):
     from contextlib import contextmanager
     import time
 
@@ -110,8 +110,8 @@ def test_absolute_candidate_keeps_default_proxy_contract(tmp_path, monkeypatch):
         assert granted[0].path.value == str(tmp_path / "new.py")
         assert candidate.call("check_reservations", paths=[str(tmp_path / "new.py")])
         assert not mail.calls
-        with pytest.raises(ProxyError, match="project-relative"):
-            proxy.reserve_files("session-example", [str(tmp_path / "new.py")])
+        proxy.reserve_files("session-example", [str(tmp_path / "new.py")])
+        assert mail.calls[-1][1]["paths"] == [str(tmp_path / "new.py")]
         proxy.reserve_files("session-example", ["new.py"])
         assert mail.calls[-1][1]["paths"] == ["new.py"]
         other = proxy.candidate_reservations(
@@ -284,10 +284,43 @@ def test_proxy_rejects_cross_binding_and_unsafe_reservation_paths(tmp_path):
     proxy.bootstrap("session-example")
     with pytest.raises(ProxyError, match="does not match"):
         proxy.fetch_inbox("session-example", agent_id="invented-child")
-    with pytest.raises(ProxyError, match="project-relative"):
-        proxy.reserve_files("session-example", ["/private/file"])
-    with pytest.raises(ProxyError, match="project-relative"):
+    with pytest.raises(ProxyError, match="must not contain"):
         proxy.reserve_files("session-example", ["src/../private"])
+
+
+@pytest.mark.parametrize("paths", [
+    ["/workspace/project/src/new file.py"],
+    ["/workspace/project/src/**/*.py"],
+    ["src/new.py", "docs/**"],
+    ["/other/worktree/file.py", "legacy/**"],
+])
+def test_reservation_lifecycle_preserves_paths_and_bound_namespace(tmp_path, paths):
+    proxy, mail = _proxy(tmp_path)
+    proxy.bootstrap("session-example")
+    proxy.reserve_files("session-example", paths, ttl_seconds=900)
+    proxy.renew_reservations("session-example", paths=paths)
+    proxy.release_reservations("session-example", paths=paths)
+    assert [name for name, _ in mail.calls] == [
+        "reserve_files", "renew_reservations", "release_reservations",
+    ]
+    for _, arguments in mail.calls:
+        assert arguments["paths"] == paths
+        assert arguments["project_key"] == "/workspace/example"
+        assert arguments["agent_name"] == "Calm-Noether"
+        assert arguments["registration_token"] == "owner-secret"
+
+
+@pytest.mark.parametrize("tool", ["reserve_files", "renew_reservations", "release_reservations"])
+@pytest.mark.parametrize("paths", [
+    ["src/../private"], ["/workspace/../private"], ["/workspace/**/../private"],
+    ["/workspace/bad\x00path"], [""], [7], "file.py", ["x" * 1025], ["x"] * 101,
+])
+def test_reservation_lifecycle_rejects_invalid_paths_before_sending(tmp_path, tool, paths):
+    proxy, mail = _proxy(tmp_path)
+    proxy.bootstrap("session-example")
+    with pytest.raises(ProxyError):
+        getattr(proxy, tool)("session-example", paths=paths)
+    assert not mail.calls
 
 
 def test_stdio_server_lists_only_allowlisted_tools_and_rejects_passthrough(tmp_path):

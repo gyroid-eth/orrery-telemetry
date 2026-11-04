@@ -166,6 +166,10 @@ The proxy exposes these nine tools:
 - `runtime_status`
 - `whois` (to confirm a recipient name; names are case-sensitive)
 
+`reserve_files`, `renew_reservations`, and `release_reservations` accept physical absolute paths and forward them unchanged under the same bound identity and Mail namespace. In managed `workspace-v1` sessions, acquire using the physical absolute path with symlinks resolved (for example, `str(Path(target).resolve())`), then use that same path to renew/release. Guard denials also display the required path. Existing relative paths and glob patterns remain accepted unchanged for legacy sessions; the proxy does not derive a cwd from the project key or protected roots. Absolute globs also pass through unchanged, so use a physical path for their fixed prefix. Parent `..` components, invalid characters, empty strings, and batch/length limit violations remain rejected.
+
+Managed sessions that acquired only relative reservations must load the updated proxy through the normal resume/restart procedure, release obsolete leases by ID as their owner, and reacquire physical absolute paths. Existing leases are not migrated automatically. This does not activate the candidate/global/fresh server or change the binding, sandbox, or editing permissions.
+
 When a tool call fails, the proxy returns the first line of the Mail server's own error (anything that looks like a token is replaced with `[redacted]`, and the line is cut at 600 characters). It used to return only the fixed text "ORRERY Mail tool call failed", so a child hit by a plain validation error such as a misspelled recipient never learned why and gave up instead of correcting the name.
 
 A root task passes only `session_id`. A subagent passes the same `session_id` and its own `agent_id`; bindings that do not match the parent lineage recorded by the Bridge are rejected.

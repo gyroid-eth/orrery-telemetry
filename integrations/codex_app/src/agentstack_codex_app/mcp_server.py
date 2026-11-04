@@ -764,6 +764,11 @@ def _agent_names(
 def _reservation_paths(
     values: Any, *, required: bool = False
 ) -> list[str]:
+    """Keep Mail patterns unchanged; managed callers supply physical absolute paths.
+
+    Relative patterns remain available for legacy sessions. Neither the Mail
+    namespace nor a protected root is a reliable cwd for converting them.
+    """
     if values is None:
         if required:
             raise ProxyError("paths is required")
@@ -777,8 +782,8 @@ def _reservation_paths(
     normalized: list[str] = []
     for value in values:
         _required_text(value, "path", 1024)
-        if Path(value).is_absolute() or ".." in Path(value).parts:
-            raise ProxyError("reservation paths must stay project-relative")
+        if ".." in Path(value).parts:
+            raise ProxyError("reservation paths must not contain '..' components")
         normalized.append(value)
     return normalized
 
@@ -895,7 +900,12 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "reserve_files",
-        "description": "Reserve project-relative files for this bound agent.",
+        "description": (
+            "Reserve files for this bound agent. Managed workspace-v1 sessions "
+            "must supply physical absolute paths (resolve symlinks first). "
+            "Legacy relative paths and glob patterns are accepted unchanged; "
+            "no cwd or project-key conversion is performed."
+        ),
         "inputSchema": _schema(
             {
                 "paths": {"type": "array", "items": {"type": "string"}, "minItems": 1},
@@ -908,7 +918,11 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "renew_reservations",
-        "description": "Renew selected reservations owned by this bound agent.",
+        "description": (
+            "Renew selected reservations owned by this bound agent. Use the same "
+            "physical absolute paths as acquisition in managed workspace-v1 "
+            "sessions; legacy relative paths and globs are accepted unchanged."
+        ),
         "inputSchema": _schema(
             {
                 "extend_seconds": {
@@ -927,7 +941,11 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "release_reservations",
-        "description": "Release selected or all reservations owned by this bound agent.",
+        "description": (
+            "Release selected or all reservations owned by this bound agent. "
+            "Use the same physical absolute paths as acquisition in managed "
+            "workspace-v1 sessions; legacy relative paths and globs are accepted unchanged."
+        ),
         "inputSchema": _schema(
             {
                 "paths": {"type": ["array", "null"], "items": {"type": "string"}},

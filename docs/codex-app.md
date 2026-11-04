@@ -171,6 +171,10 @@ proxy の公開 tool は次の9個です。
 - `runtime_status`
 - `whois`（宛先名の確認用。名前は大文字小文字を区別します）
 
+`reserve_files`・`renew_reservations`・`release_reservations` は物理絶対 path を受け取り、同じ bound identity / Mail namespace へそのまま送ります。managed `workspace-v1` では、symlink を解決した物理絶対 path（例: `str(Path(target).resolve())`）で取得し、同じ path で更新・解放してください。guard の拒否理由にも必要な path を表示します。既存の相対 path / glob は旧 session 互換として無変換で受け付けますが、cwd・project key・保護 root から絶対化しません。絶対 glob も無変換なので、固定部分には物理 path を使ってください。`..` component、不正文字、空文字、件数・長さの上限違反は引き続き拒否します。
+
+相対予約だけを取得していた managed session は、更新した proxy を正規の resume/restart 手順で読み直し、本人が不要な旧予約を ID で解放して物理絶対 path で取り直してください。既存予約の自動移行はしません。この対応で candidate/global/fresh server への切替や、binding・sandbox・編集権限の変更はありません。
+
 tool call が失敗したとき、proxy は Mail server のエラー 1 行目をそのまま返します（token に見える文字列は `[redacted]` に置き換え、600 文字で切ります）。以前は固定文 "ORRERY Mail tool call failed" だけを返していたため、宛先名の綴り違いのような検証エラーでも child は理由を知れず、直さずに諦めていました。
 
 root task は `session_id` だけを渡します。subagent は同じ `session_id` と自分の `agent_id` を渡し、Bridge が記録した parent lineage と一致しない binding は拒否されます。
