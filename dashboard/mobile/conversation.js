@@ -1,14 +1,19 @@
 /* Opt-in, read-only conversation history. Text enters the DOM through
-   textContent only: no innerHTML, links, images or previews. Nothing is kept in
-   storage or URLs; unmount clears the DOM, requests, timers and pending rows. */
+   textContent only: no innerHTML or links. A file preview is text through
+   textContent or a PNG the relay checked, shown from a data:image/png URL that
+   this file builds from validated base64; nothing else sets a source. Nothing
+   is kept in storage or URLs; unmount clears the DOM, the preview, requests,
+   timers and pending rows. */
 (()=>{'use strict';
 const make=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!==undefined)e.textContent=txt;return e;};
 const MAX_BYTES=768*1024,MAX_KEPT=200,POLL=5000;
+const MAX_PREVIEW_BYTES=6*1024*1024,MAX_SIDE=8192,MAX_PIXELS=8000000,REF=/^[a-f0-9]{32}$/,BASE64=/^(?:[A-Za-z0-9+/]{4})+(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 let capability=null,gen=0,timer=0,name='',root=null,list=null,status=null,olderButton=null,retryButton=null;
 /* Longer than the relay's 15-second wait for cockpit, so its own answer arrives first. */
 const WAIT=20000;
 /* Poll and Show older each own a controller, so neither aborts the other. */
-const controllers={poll:null,older:null};
+const controllers={poll:null,older:null,preview:null};
+let panel=null;
 let events=[],seen=new Set(),older=null,pending=[],failures=0,loadingOlder=false,following=true,savedTop=0;
 const messages={
  history_unconfirmed:'This agent’s record is not verified as its own, so history stays hidden.',
@@ -25,6 +30,14 @@ const messages={
  older_slow:'Older messages are taking longer than usual. Tap Show older again.',
  omitted:'Some messages are omitted here: too long to show or not loadable.',
  kept_limit:'Showing the latest 200 messages. Older messages are not loaded.',
+};
+const previewMessages={
+ preview_expired:'This preview link expired. Reopen the conversation and tap the file again.',
+ preview_too_large:'Too large to preview on the phone.',
+ preview_type_denied:'This kind of file cannot be previewed.',
+ preview_path_denied:'Not previewable: outside the agent’s folders or looks private.',
+ preview_changed:'The file changed while it was read. Tap again.',
+ history_slow:'Taking longer than usual: the computer is busy. Tap the file again.',
 };
 async function enabled(){
  if(capability!==null)return capability;
@@ -89,9 +102,55 @@ function row(e){
  const r=make('div','conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
  r.append(body(e.text));
  if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m)));
- if(Array.isArray(e.files)&&e.files.length){const f=make('div','conversation-files');e.files.forEach(x=>f.append(make('span','conversation-chip '+x.kind,(x.kind==='image'?'Image · ':'File · ')+x.label)));r.append(f);}
+ if(Array.isArray(e.files)&&e.files.length){const f=make('div','conversation-files');e.files.forEach(x=>f.append(chip(x)));r.append(f);}
  const meta=[clock(e.ts),e.truncated?'shortened':''].filter(Boolean).join(' · ');if(meta)r.append(make('small','conversation-time',meta));
  return r;
+}
+function chip(x){
+ const label=(x.kind==='image'?'Image · ':'File · ')+x.label;
+ if(typeof x.ref!=='string'||!REF.test(x.ref))return make('span','conversation-chip '+x.kind,label);
+ const b=make('button','conversation-chip '+x.kind+' previewable',label);b.type='button';
+ b.setAttribute('aria-label','Preview '+x.label);b.onclick=()=>openPreview(x);return b;
+}
+/* Checked again here: a PNG data URL from strict base64 within the relay's
+   side and pixel limits. */
+function pngSource(v){
+ return v&&v.kind==='image'&&(v.mime===undefined||v.mime==='image/png')&&typeof v.data==='string'&&v.data.length<=MAX_PREVIEW_BYTES&&BASE64.test(v.data)&&v.data.startsWith('iVBORw0KGgo')
+  &&Number.isInteger(v.width)&&Number.isInteger(v.height)&&v.width>0&&v.height>0&&v.width<=MAX_SIDE&&v.height<=MAX_SIDE&&v.width*v.height<=MAX_PIXELS
+  ?'data:image/png;base64,'+v.data:null;
+}
+function closePreview(){
+ controllers.preview?.abort();controllers.preview=null;
+ if(panel){for(const img of panel.querySelectorAll('img'))img.src='';panel.replaceChildren();panel.remove();}
+ panel=null;
+}
+async function openPreview(x){
+ closePreview();if(!root)return;
+ const g=gen,box=make('div','conversation-preview');panel=box;box.setAttribute('role','dialog');box.setAttribute('aria-label','Preview of '+x.label);
+ const head=make('div','conversation-preview-head'),close=make('button','conversation-preview-close','Close');close.type='button';close.onclick=closePreview;
+ head.append(make('strong','',x.label),close);
+ const state=make('p','conversation-preview-status','Loading preview…');state.setAttribute('role','status');
+ const view=make('div','conversation-preview-body');box.append(head,state,view);root.append(box);
+ const c=new AbortController();controllers.preview=c;let late=false;const t=setTimeout(()=>{late=true;c.abort();},WAIT);
+ let v=null,status=0;
+ try{
+  const r=await fetch('/view/conversation/preview?name='+encodeURIComponent(name)+'&ref='+x.ref,
+   {credentials:'same-origin',cache:'no-store',referrerPolicy:'no-referrer',signal:c.signal});
+  status=r.status;const raw=await r.text();if(raw.length>MAX_PREVIEW_BYTES)throw Error('unavailable');v=JSON.parse(raw);
+ }catch(_){v=late?{ok:false,error:'history_slow'}:null;}
+ finally{clearTimeout(t);if(controllers.preview===c)controllers.preview=null;}
+ if(g!==gen||panel!==box)return;
+ if(status===410)v={ok:false,error:'preview_expired'};
+ if(v?.ok===true&&v.kind==='text'&&typeof v.text==='string'){
+  state.textContent=v.truncated===true?'Showing the start of the file.':'';
+  view.append(make('pre','conversation-preview-text',v.text));
+ }else if(v?.ok===true&&pngSource(v)){
+  const img=make('img','conversation-preview-image');img.alt=x.label;img.width=v.width;img.height=v.height;
+  img.src=pngSource(v);state.textContent='';view.append(img);
+ }else{
+  state.textContent=previewMessages[v?.error]||messages[v?.error]||'Preview unavailable right now.';return;
+ }
+ if(typeof v.notice==='string'&&v.notice)box.append(make('small','conversation-preview-notice',v.notice));
 }
 function atBottom(){return !list||(list.isConnected?list.scrollHeight-list.clientHeight-list.scrollTop<=24:following);}
 /* The sheet rebuilds its children; detaching resets scrollTop. Restore the
@@ -131,7 +190,7 @@ function prepend(page,omitted){
  events=fresh.concat(events);
  list.scrollTop+=list.scrollHeight-before;following=false;savedTop=list.scrollTop;
 }
-function reset(){events=[];seen.clear();older=null;list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());}
+function reset(){closePreview();events=[];seen.clear();older=null;list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());}
 function slow(on){if(retryButton)retryButton.hidden=!on;if(on)setStatus(messages.history_slow);}
 function showError(v){
  const code=typeof v?.error==='string'?v.error:'history_unavailable';
@@ -144,7 +203,10 @@ async function poll(){
  if(!root||document.hidden)return;
  try{
   const v=await request(null,'poll');if(g!==gen)return;
-  if(v.ok!==true){showError(v);if(v.error==='history_changed')reset();}
+  if(v.ok!==true){
+   // A hidden, stale or changed record also hides any file opened from it;
+   // a slow answer is only a delay and leaves it open.
+   if(v.error!=='history_slow')closePreview();showError(v);if(v.error==='history_changed')reset();}
   else{
    failures=0;slow(false);if(!events.length&&v.omitted===true)list.insertBefore(gap(),list.querySelector(':scope > .conversation-pending'));append(v.events);
    // The latest page's older token stays valid only while the oldest shown
@@ -185,7 +247,7 @@ function mount(n){
 function element(){return root;}
 function addPending(text){if(!root||typeof text!=='string'||!text.trim())return;pending.push({text,at:Date.now()});renderPending();following=true;restore();}
 function unmount(){
- gen++;clearTimeout(timer);timer=0;for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
+ gen++;clearTimeout(timer);timer=0;closePreview();for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
  root?.replaceChildren();root?.remove();root=list=status=olderButton=retryButton=null;
  events=[];seen=new Set();older=null;pending=[];failures=0;loadingOlder=false;following=true;savedTop=0;name='';
 }
