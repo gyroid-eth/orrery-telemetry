@@ -15,16 +15,72 @@ The cockpit's **Settings** has a **Phone** section with two switches:
 - **Phone access**: everything the phone can read (the agent list, Graph, Mail and conversation records, plus file and image previews in versions that have them). There is no separate switch for conversations.
 - **Send from phone**: send one confirmed line to a pane ([Terminal](#inspect-a-pane-and-send-input-from-your-phone)). It is on by default but does nothing until step 4 below.
 
-The first time you turn **Phone access** on, the section shows only the steps still missing:
+**It cannot be set up in demo mode.** Demo mode does not put the login and the address on the page, so step 2 shows no fields. Turn off **Demo mode** in Settings once and go through step 4 below (`?demo=0` in the URL affects only that page; reloading brings demo mode back). After that you can go back to demo mode ([In demo mode](#in-demo-mode)).
 
-| Step | Who | What |
-|---|---|---|
-| 1 | automatic | Read whether Tailscale is signed in |
-| 2 | **you**, once | Check the login the reader admits and the address the phone opens, filled in from `tailscale status`, then press **Confirm and turn on** |
-| 3 | **you**, terminal | Run the shown `tailscale serve --https=9443 http://127.0.0.1:8781` once, then press **Check again** |
-| 4 | **you**, admin console | Check who and which devices can reach tcp:9443 (for example with the [device restriction below](#restrict-the-account-and-the-phone-separately)), then press **I reviewed the policy**. Only the date you pressed it is kept; ORRERY cannot check the policy |
+The names and addresses in these screens are made-up examples; yours come from your own Tailscale.
 
-Until step 4 the phone can read the agent list, Graph and Mail only; conversations and Send stay off (the reader answers `policy_not_reviewed`).
+### Before you start (you, once)
+
+Two things cannot be changed from the cockpit. They are the same as steps 2 and 4 in the table under [Ask your agent to set it up](#ask-your-agent-to-set-it-up).
+
+- **Install Tailscale on the phone and sign in with the same account as the computer.** Check: the computer is listed in the phone's Tailscale app (and the phone shows up in `tailscale status` on the computer).
+- **Enable MagicDNS and HTTPS Certificates on the DNS page of the Tailscale admin console.** Serve (HTTPS) in step 3 needs them. Check: both are on in the admin console's DNS page, or `CertDomains` in `tailscale status --json` on the computer is not empty.
+
+### The first screen
+
+The badge next to **Phone** says **OFF**. Press the **Phone access** switch.
+
+<img src="images/phone-settings-1-off.png" width="360" alt="The Phone section of Settings. The badge says OFF; the Phone access and Send from phone switches are listed">
+
+### Steps 1 and 2: Tailscale, owner and address (you, once)
+
+The first press **leaves the switch off**. Right under the switch it says "Not on yet: check the owner and address in step 2 below, then press Confirm and turn on.", the **Setup** steps open below, and the cursor moves to step 2.
+
+- Step 1 reads whether Tailscale is signed in. With a ✓ there is nothing to do. Without one, the line under the switch says "sign in to Tailscale" (or "Tailscale was not found" when it is not installed): install Tailscale on this computer and sign in, then press **Phone access** again.
+- In step 2, **Owner (Tailscale login)** is the only login the reader lets in, and **Address on the phone** is the address the phone opens (`https://<this computer's Tailscale name>:9443`). Both are filled in from `tailscale status`; check them and press **Confirm and turn on**. This is what turns Phone access on.
+- **Check:** the badge says **SETUP** and step 2 has a ✓.
+
+<img src="images/phone-settings-2-owner.png" width="360" alt="After the first press of Phone access. Under the switch, a line points to step 2; step 2 has the owner and address fields and the Confirm and turn on button">
+
+### Step 3: Serve 9443 → reader (you, terminal)
+
+**Copy** the `tailscale serve --https=9443 http://127.0.0.1:8781` shown in step 3, run it once in a terminal, then press **Check again**. ORRERY only reads Serve and never changes it.
+
+**Check:** **Check again** puts a ✓ on step 3. If it does not, read the output of `tailscale serve`. With HTTPS Certificates off, it asks you to enable them here ([Before you start](#before-you-start-you-once)).
+
+<img src="images/phone-settings-3-serve.png" width="360" alt="Badge SETUP. Step 3 shows the tailscale serve command with Copy and Check again">
+
+### Step 4: Who can reach it (you, admin console)
+
+When step 3 has a ✓, check in the Tailscale admin console who and which devices can reach tcp:9443 (for example with the [device restriction below](#restrict-the-account-and-the-phone-separately)). Then press **I reviewed the policy**. Only the date you pressed it is kept; ORRERY cannot check the policy.
+
+**Until step 4, conversations and Send stay off.** The phone can read the agent list, Graph and Mail only (the reader answers `policy_not_reviewed`). Meanwhile the line right under the switch says "On, but Conversation and Send from phone stay off until step 4 below".
+
+**Check:** ORRERY cannot check the policy, so check it yourself. In every case, see in the admin console that only the people and devices you mean to allow can reach tcp:9443. If you restricted devices, also check that an excluded device cannot open it, as in [Verify on real devices](#verify-on-real-devices).
+
+<img src="images/phone-settings-4-policy.png" width="360" alt="Steps 1 to 3 have a check mark. Under the switch, one line says Conversation and Send stay off until step 4. Step 4 has the I reviewed the policy button">
+
+### When it is on
+
+The badge says **ON** and the setup steps are gone. **Check it yourself:** all four Status lines are green (reader, Serve, Funnel off, policy). To change the login or the address, use **Change owner or address**.
+
+<img src="images/phone-settings-5-on.png" width="360" alt="Badge ON. Status lists reader running, Serve, Funnel off and Policy reviewed, all green">
+
+### Conversations on the phone
+
+On the phone, open the **Address on the phone** from step 2 (`https://…:9443/`) and open an agent. The first HTTPS request can take a few seconds while the certificate is issued. When the **Conversation** tab appears, conversation records reach the phone ([Read an agent's conversation history](#read-an-agents-conversation-history-on-your-phone)).
+
+<img src="images/mobile-conversation.png" width="300" alt="The Conversation tab on the phone, with messages and Mail cards">
+
+### In demo mode
+
+If you press **Phone access** in demo mode before the login and address are set, the line right under the switch says "Turn off demo mode to set up phone access (once). After that you can switch it on and off in demo mode." **Turn off demo mode** turns demo mode off and reloads the page. Settings closes, so open **Settings** again, press **Phone access**, and go through the steps above.
+
+Once it is set up, you can go back to demo mode and the switch keeps working. The login and the address read "hidden in demo mode" and are not put on the page. Turn demo mode off only to change them.
+
+<img src="images/phone-settings-demo.png" width="360" alt="First press in demo mode. Under the switch, a line says to turn off demo mode once for the setup, with a Turn off demo mode button"> <img src="images/phone-settings-demo-on.png" width="360" alt="Demo mode after the setup. Badge ON; the owner and address read hidden in demo mode">
+
+### What runs behind it
 
 Behind it runs Telemetry's `~/.agentstack/bin/agentstack-mobile`. The cockpit only calls that command and never writes Telemetry's files itself.
 
@@ -35,12 +91,10 @@ Behind it runs Telemetry's `~/.agentstack/bin/agentstack-mobile`. The cockpit on
 - Changing the login or the address withdraws the step 4 review; conversations and Send stop until you review again. To withdraw it yourself, run `echo '{"policy_reviewed": false}' | agentstack-mobile apply`.
 - If launchd cannot start the reader, Phone access goes back off and neither the job nor its plist is left behind (so nothing starts by itself at the next login).
 - The job runs the reader with the Python that was in use when you turned it on. If that Python goes away (a venv, or an older Homebrew version), Status says **The Python this reader was set up with is gone**. Turn Phone access off and on to rebuild the job with the current one.
-- In cockpit demo mode the Phone section does not put the login, the address or the Serve URL on the page (demo mode itself hides only user and host names). Turn demo mode off to change them.
+- In cockpit demo mode the Phone section does not put the login, the address or the Serve URL on the page (demo mode itself hides only user and host names). Turn demo mode off to set them up or change them ([In demo mode](#in-demo-mode)).
 - Tailscale Serve and Funnel are only read. It warns when Funnel is on. It never changes the policy or Serve.
 
 Without the cockpit, use `agentstack-mobile status` to see the state, `echo '{"access": true, "owner_login": "owner@example.com", "public_origin": "https://computer.example.ts.net:9443", "policy_reviewed": true}' | agentstack-mobile apply` to turn it on, and `agentstack-mobile off` to turn it off.
-
-**Check it yourself:** after step 4, see that all four Status lines are green (reader, Serve, Funnel off, policy). Then open an agent on the phone and check that the **Conversation** tab appears.
 
 ## Ask your agent to set it up
 
