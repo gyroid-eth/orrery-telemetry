@@ -10,6 +10,20 @@
 
 ---
 
+## 2026.11.05.1
+
+### スマホの閲覧画面をcockpitのSettingsからオンにし、会話の記録を既定で読めるようにする
+
+新しい`agentstack-mobile`（`status`・`apply`・`off`）が、スマホのreaderの設定`~/.agentstack/mobile.json`（mode 0600）とlaunchdのjob `org.agentstack.mobile-relay`を管理します。cockpitの**Settings → Phone**はこのcommandを呼びます。Tailscaleのsign in・Serve・Funnelは読むだけで、Serve・Funnel・policyは変えません。policyは本人が**I reviewed the policy**を押した日時を残すだけで、確かめはしません。手で起動したreaderがportを使っていれば、止めずに断ります。installはcommandを置くだけでjobを作らず、uninstallはjobを止めます。readerは`--config`でこのfileを読みます。会話の記録（History）は、policyの確認（`--phone-policy-reviewed`）があれば既定でオンになり、`--disable-history`で切れます。確認がなければオフのまま起動し、`/view/history`が`policy_not_reviewed`を返します。以前の`--enable-history`もそのまま使えます。boundの記録だけを出すこと、pathを出さないことなどの約束は変えていません。詳しくは[スマホで状況を見る](docs/mobile.md#cockpitのsettingsからオンにする)を参照してください。
+
+**手で起動しているreaderを更新する人へ:** `--phone-policy-reviewed`を付け、`--enable-history`を付けずに起動していたreaderは、更新後の再起動から会話の記録とfile・画像のpreviewもスマホに出します。出したくなければ、再起動の前に`--disable-history`を足してください。起動時にもこの変更を1行で知らせます。
+
+手で起動したreaderが動いている間、Settingsは**MANUAL**と表示し、オン・オフのどちらも何も変えません（`port_in_use`）。loginかaddressを変えるとpolicyの確認は取り消されます。launchdが起動に失敗したときはPhone accessをオフに戻します。cockpitのdemo modeでは、Phoneの節はlogin・address・ServeのURLを出しません。
+
+### 会話の履歴の確認を軽くする 1 人分の binding
+
+legacy の dashboard に `GET /api/agents/<name>/history-binding` を足します。cockpit の会話の履歴は、中身を見せる前に binding を確かめるたびに roster 全体（稼働中の pane の読み取りを含み、live で約 1.3 秒）を待っていましたが、この route で 1 人分の binding を、`/api/agents?scope=live` のその行と同じ判断で、pane を読まずに得られます（私有の 595 人の bench で約 40ms）。API の互換世代は 35 から 36 へ上げます。fresh と global ではこの route に 404 `agent_unavailable` を返し、fresh の保護された履歴経路は変わりません。[1 人分の route](docs/api.md#get-apiagentsnamehistory-binding)を参照してください。
+
 ## 2026.11.05
 
 ### スマホの閲覧画面で、agentの会話の記録を読めるようにする（別のopt-in・既定オフ）
