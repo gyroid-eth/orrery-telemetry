@@ -345,23 +345,28 @@ def _real_home() -> str:
 
 REAL_LAUNCH_AGENTS = os.path.join(_real_home(), "Library", "LaunchAgents")
 MOBILE_RELAY_LABEL = "org.agentstack.mobile-relay"
+# Only this project's jobs. Other apps, and a person switching Settings -> Phone
+# on during a long run, change launchd too; only a disappearance is a test's doing.
+ORRERY_LABEL = re.compile(r"org\.(agentstack|orrery)\.[A-Za-z0-9._-]+")
 
 
-def _real_launch_agents() -> frozenset[str] | str:
+def _orrery_plists() -> frozenset[str] | str:
     try:
-        return frozenset(os.listdir(REAL_LAUNCH_AGENTS))
+        names = os.listdir(REAL_LAUNCH_AGENTS)
     except FileNotFoundError:
         return frozenset()
     except OSError:
         return UNKNOWN
+    return frozenset(name[:-len(".plist")] for name in names
+                     if name.endswith(".plist") and ORRERY_LABEL.fullmatch(name[:-len(".plist")]))
 
 
-def _mobile_relay_loaded() -> bool | str:
-    """Whether launchd knows the phone reader job. Only `launchctl print`: reads."""
+def _loaded(label: str) -> bool | str:
+    """Whether launchd knows the job. Only `launchctl print`: reads."""
     if not LAUNCHCTL:
         return UNKNOWN
     try:
-        result = _RUN([LAUNCHCTL, "print", f"gui/{os.getuid()}/{MOBILE_RELAY_LABEL}"],
+        result = _RUN([LAUNCHCTL, "print", f"gui/{os.getuid()}/{label}"],
                       capture_output=True, text=True, timeout=10)
     except (OSError, _SUBPROCESS.SubprocessError):
         return UNKNOWN
@@ -370,29 +375,31 @@ def _mobile_relay_loaded() -> bool | str:
 
 @pytest.fixture(autouse=True, scope="session")
 def _the_suite_leaves_real_launch_agents_alone():
-    """Fail the run if the real ~/Library/LaunchAgents or the phone reader job changed.
+    """Fail the run if one of this project's real launchd jobs disappeared.
 
     A test once ran scripts/uninstall.sh with the real HOME, and the uninstaller
     stopped the real phone reader and removed its plist. The service watcher
     above follows the install's own labels and missed it: the reader is created
-    later by `agentstack-mobile`, not by the installer. This only reads (a
-    directory listing and `launchctl print`); it never changes launchd.
+    later by `agentstack-mobile`, not by the installer. This looks only at
+    org.agentstack.* / org.orrery.* plists in the real ~/Library/LaunchAgents
+    and whether those jobs are loaded, and only at what was there before the
+    run and is gone after it. It only reads (a listing and `launchctl print`).
     """
-    before = (_real_launch_agents(), _mobile_relay_loaded())
+    plists = _orrery_plists()
+    labels = set() if plists == UNKNOWN else set(plists)
+    labels.add(MOBILE_RELAY_LABEL)
+    loaded = {label: _loaded(label) for label in sorted(labels)}
     yield
-    after = (_real_launch_agents(), _mobile_relay_loaded())
-    problems = []
-    if UNKNOWN not in (before[0], after[0]) and before[0] != after[0]:
-        gone, new = sorted(before[0] - after[0]), sorted(after[0] - before[0])
-        problems.append(f"{REAL_LAUNCH_AGENTS} changed (removed {gone}, added {new})")
-    if UNKNOWN not in (before[1], after[1]) and before[1] != after[1]:
-        problems.append(f"launchd job {MOBILE_RELAY_LABEL} went from "
-                        f"{'loaded' if before[1] else 'absent'} to {'loaded' if after[1] else 'absent'}")
-    if problems:
-        pytest.fail("the test run changed the real user's launchd state (last test: "
-                    f"{_CURRENT_TEST}): " + "; ".join(problems)
-                    + ". Run uninstall/launchd code with a temporary HOME and a fake launchctl.",
-                    pytrace=False)
+    gone = []
+    after = _orrery_plists()
+    if UNKNOWN not in (plists, after):
+        gone += [f"{os.path.join(REAL_LAUNCH_AGENTS, name)}.plist" for name in sorted(plists - after)]
+    for label, was in loaded.items():
+        if was is True and _loaded(label) is False:
+            gone.append(f"launchd job gui/{os.getuid()}/{label}")
+    if gone:
+        pytest.fail("disappeared during this test run: " + ", ".join(gone)
+                    + f" (last test in this process: {_CURRENT_TEST})", pytrace=False)
 
 class _Watcher(threading.Thread):
     def __init__(self, labels: tuple[str, ...]) -> None:

@@ -24,12 +24,12 @@ ROOT = Path(__file__).resolve().parents[1]
 LABEL = 'org.agentstack.mobile-relay'
 
 
-def _world(tmp_path: Path, install: Path, config: Path, **manifest) -> dict:
+def _world(tmp_path: Path, install: Path, config: Path, script: str = '/somewhere/mobile_relay.py', **manifest) -> dict:
     home = tmp_path / 'home'
     plist = home / 'Library/LaunchAgents' / f'{LABEL}.plist'
     plist.parent.mkdir(parents=True)
     plist.write_bytes(plistlib.dumps({'Label': LABEL, 'ProgramArguments': [
-        sys.executable, '/somewhere/mobile_relay.py', '--config', str(config)]}))
+        sys.executable, script, '--config', str(config)]}))
     install.mkdir(parents=True)
     state = {'install_dir': str(install), 'services': [], 'owned_files': [], 'owned_dirs': [], 'purge_paths': []}
     state.update(manifest)
@@ -65,6 +65,15 @@ def test_default_install_stops_and_removes_the_reader_job_as_before(tmp_path):
     assert _calls(world) == [f'bootout gui/{os.getuid()}/{LABEL}']
 
 
+def test_default_install_removes_the_reader_job_even_when_it_points_elsewhere(tmp_path):
+    # made with AGENTSTACK_HOME pointing elsewhere: only the default-location rule matches
+    home = tmp_path / 'home'
+    world = _world(tmp_path, home / '.agentstack', tmp_path / 'custom/mobile.json')
+    _uninstall(world)
+    assert not world['plist'].exists()
+    assert _calls(world) == [f'bootout gui/{os.getuid()}/{LABEL}']
+
+
 def test_install_elsewhere_leaves_this_homes_reader_job_alone(tmp_path):
     home = tmp_path / 'home'
     world = _world(tmp_path, tmp_path / 'other-install', home / '.agentstack/mobile.json')
@@ -74,14 +83,15 @@ def test_install_elsewhere_leaves_this_homes_reader_job_alone(tmp_path):
     assert _calls(world) == []
 
 
-@pytest.mark.parametrize('owned', ['config', 'owned_files', 'services'])
+@pytest.mark.parametrize('owned', ['config', 'script', 'owned_files', 'services'])
 def test_install_elsewhere_removes_a_reader_job_that_is_its_own(tmp_path, owned):
     install = tmp_path / 'other-install'
     home = tmp_path / 'home'
     plist = home / 'Library/LaunchAgents' / f'{LABEL}.plist'
     config = install / 'mobile.json' if owned == 'config' else home / '.agentstack/mobile.json'
     manifest = {'owned_files': [str(plist)]} if owned == 'owned_files' else {}
-    world = _world(tmp_path, install, config, **manifest)
+    script = str(install / 'dashboard/mobile_relay.py') if owned == 'script' else '/somewhere/mobile_relay.py'
+    world = _world(tmp_path, install, config, script=script, **manifest)
     if owned == 'services':
         state = json.loads((install / 'install-state.json').read_text())
         state['services'] = [{'kind': 'launchd', 'label': LABEL}]

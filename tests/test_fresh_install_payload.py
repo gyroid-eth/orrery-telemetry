@@ -77,7 +77,8 @@ def test_fresh_manifest_owns_exact_four_files_and_private_uninstall_keeps_neighb
     # The uninstaller acts on things under HOME (the phone reader's launchd plist,
     # among others). With the real HOME this test once removed the real job.
     home = tmp_path / 'home';home.mkdir()
-    env = {**os.environ, 'HOME': str(home)}
+    env = {key: value for key, value in os.environ.items() if not key.startswith(('AGENTSTACK_', 'ORRERY_'))}
+    env['HOME'] = str(home)
     made = subprocess.run(['/bin/bash', '-c', script], cwd=tmp_path, env=env,
         stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=15)
     assert made.returncode == 0, made.stdout + made.stderr
