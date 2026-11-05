@@ -12,7 +12,7 @@ ORRERYのcockpitがあれば、**Settings → Phone**からオン・オフでき
 
 cockpitの**Settings**に**Phone**の節があり、スイッチは2つです。
 
-- **Phone access**: スマホで読めるものすべて（agentの一覧・Graph・Mail・会話の記録。file・画像のpreviewが入っている版ではそれも）。会話だけを別に切るスイッチはありません。
+- **Phone access**: スマホで読めるものすべて（agentの一覧・Graph・Mail・会話の記録・file・画像のpreview）。会話だけを別に切るスイッチはありません。
 - **Send from phone**: paneへ確認付きの1行を送る（[Terminal](#スマホからpaneを確認して送る)）。既定はオンですが、下の4の確認までは働きません。
 
 **demo modeのままでは設定できません。** demo modeではloginとaddressを画面に出さないため、手順2の入力欄が出ません。最初の1回だけ、Settingsの**Demo mode**を切って、下の手順を4まで済ませます（URLの`?demo=0`はそのpageだけに効き、開き直すとdemo modeに戻ります）。設定した後は、demo modeに戻してかまいません（[demo modeのとき](#demo-modeのとき)）。
@@ -282,29 +282,30 @@ Terminalだけを戻す場合は共有設定を`false`にするか項目を除�
 
 ## スマホでagentの会話の記録を読む
 
-**HistoryはPhone accessに含まれ、policyの確認（`--phone-policy-reviewed`、SettingsではI reviewed the policy）があれば既定でオンです。** **更新する前に:** これまで`--phone-policy-reviewed`を付け、`--enable-history`を付けずに手で起動していたreaderは、更新後に再起動すると会話の記録とfile・画像のpreviewもスマホに出すようになります。出したくなければ、再起動の前に`--disable-history`を足してください。起動時にも、この変更を1行で知らせます。 確認がなければオフのままreaderが起動し、`/view/history`は`policy_not_reviewed`を返します。cockpitがそのagent自身の記録だと確認できた会話（Codex・Claude Code・dsh・Hermes）を、読み取り専用で表示します。「全履歴はスマホに送らない」の例外になるのは、Historyがオンの間だけです。出したくない場合は、手で起動するreaderに`--disable-history`を付けます。Settingsには会話だけを切るスイッチはなく、Phone accessごと切ります。下の手順はagentに頼めます。先にアクセスできる人と端末を確認してください。
+**HistoryはPhone accessに含まれ、policyの確認（`--phone-policy-reviewed`、SettingsではI reviewed the policy）があれば既定でオンです。** **更新する前に:** これまで`--phone-policy-reviewed`を付け、`--enable-history`を付けずに手で起動していたreaderは、更新後に再起動すると会話の記録とfile・画像のpreviewもスマホに出すようになります。出したくなければ、再起動の前に`--disable-history`を足してください。起動時にも、この変更を1行で知らせます。 確認がなければオフのままreaderが起動し、`/view/history`は`policy_not_reviewed`を返します。cockpitがそのagent自身の記録だと確認できた会話（Codex・Claude Code・dsh・Hermes）を、読み取り専用で表示します。「全履歴はスマホに送らない」の例外になるのは、Historyがオンの間だけです。出したくない場合は、手で起動するreaderに`--disable-history`を付けます。Settingsには会話だけを切るスイッチはなく、Phone accessごと切ります。Historyがオンなら、会話のtoolの呼び出しに出てきた、agentの作業folderの中のfileと画像の今の中身もスマホで開けます（下記のpreview）。これだけを別に切り替える設定はありません。**名前で隠したり中身を伏せたりはしません。** 何を出してよいかは本人が決めます（下記）。下の手順はagentに頼めます。先にアクセスできる人と端末を確認してください。
 
 | 段 | 誰が | 何をする |
 |---|---|---|
 | 1 | agent | Telemetry API 35以上であること、同じコンピューターでORRERYのcockpit backendが動いていること（既定port 8791）を確認する。記録を読むのはcockpitで、readerは読まない |
-| 2 | **本人** | Terminalと同じく、readerを開ける人と端末を確認する。Historyを有効にすると、readerを開ける端末はどれも、端末の末尾40行だけでなく過去の会話を遡って読める。会話の本文にはキーや私的な文章が含まれ得る |
+| 2 | **本人** | Terminalと同じく、readerを開ける人と端末を確認する。Historyを有効にすると、readerを開ける端末はどれも、端末の末尾40行だけでなく過去の会話を遡って読め、会話に出てきた、agentの作業folderの中のfileと画像の今の中身も開ける。会話・fileの文字・画像は伏せずにそのまま届くので、キーや私的な文章も含まれ得る |
 | 3 | agent | readerの起動コマンドに`--phone-policy-reviewed`（8791以外なら`--cockpit-port`も）があることを確かめる。先に同じflagで`--check`し（`conversation history and previews are on`と出る）、今の管理方法でreaderを再起動する。以前の`--enable-history`もそのまま使える |
-| 4 | **本人** | スマホでagentを開き、**Conversation** tabを確認する |
+| 4 | **本人** | スマホでagentを開き、**Conversation** tabを確認する。末尾に**›**の付いたfileのchipを押してpreviewが開き、**Close**で消えることを確かめる |
 
 有効にすると上部に**History enabled**（Terminalも有効なら**History · Terminal**）と出て、Terminalの入口が**History**に変わります。agentのsheetは**Conversation**で開きます。Terminalも有効なら、上部に**Conversation | Terminal**の切替が出ます。
 
 <img src="images/mobile-conversation.png" width="300" alt="Conversation tab。上にShow older、発言とMailのcardが並ぶ"> <img src="images/mobile-conversation-table.png" width="300" alt="同じ記録の新しい側。Markdownの表とcode blockが文字のまま組まれている">
 
-- スマホが送るのは、表示中の名簿にあるagentの名前と、**Show older**のときにreaderが発行したpageの印（10分有効。最新のpageを更新している間は延びる）だけです。fileのpath、記録のcursor、cockpitの参照は送りも受け取りもしません。readerは固定のloopbackのcockpitのroute `GET /telemetry/conversation`だけを呼びます。dashboardのboundの記録はcockpitが自分で引き、読んだ後にも確かめ直し、cockpitのredactを通します。redactには限界があります（下記）。
+- スマホが送るのは、表示中の名簿にあるagentの名前と、**Show older**のときにreaderが発行したpageの印（10分有効。最新のpageを更新している間は延びる）と、fileを開くときにreaderが発行した参照のID（同じ条件）だけです。fileのpath、記録のcursor、cockpitの参照のIDは送りも受け取りもしません。readerは固定のloopbackのcockpitのroute `GET /telemetry/conversation`だけを呼びます。dashboardのboundの記録はcockpitが自分で引き、読んだ後にも確かめ直します。中身は伏せません（下記）。
 - 表示するのは**bound**の記録だけです。unbound・stale・未確認のagentは、短い説明と`binding_missing`などの理由のcodeだけを出し、記録の本文は出しません。
-- 1 pageは最大40件・512 KiBです。発言1件とMailの本文1通はそれぞれ16 KiBで切り、切ったことを示します。pageに収まらなかった発言は飛ばさず、次の**Show older**で出します。1件だけでpageに収まらない発言は、さらに短く切って切ったことを示します。それでも出せないものがあれば、その位置に**Some messages are omitted here**と出します。toolの呼び出しは名前の1行だけで、toolの出力とdiffは送りません。fileと画像は名前のchipだけで、previewやdownloadはありません。発言から端末の行へ移る機能はスマホにはありません。
-- 発言・Markdownの表・code blockは文字としてDOMに組みます。HTML・link・画像は実行しません。記録の中のORRERY Mailの通知と送ったMailはcardになり、押すと記録にある本文を出します。cardを開いても、Mailの既読・ACK・返信はしません。
+- 1 pageは最大40件・512 KiBです。発言1件とMailの本文1通はそれぞれ16 KiBで切り、切ったことを示します。pageに収まらなかった発言は飛ばさず、次の**Show older**で出します。1件だけでpageに収まらない発言は、さらに短く切って切ったことを示します。それでも出せないものがあれば、その位置に**Some messages are omitted here**と出します。toolの呼び出しは名前の1行だけで、toolの出力とdiffは送りません。fileと画像は名前のchipで出ます（下記のpreview）。downloadはありません。発言から端末の行へ移る機能はスマホにはありません。
+- 開けるfileのchipは押せる形（末尾に**›**）で、押すとConversationの上にpreviewを出します。readerはcockpitの固定のroute `GET /telemetry/conversation/preview`をloopbackで呼び、cockpitがそのたびに、記録とbindingが変わっていないこと、agentの作業folder（またはPCで指定したroot）の中であること、symlinkでない本来のpathであること、種類と大きさ・画素数を確かめます。fileの名前では断りません。textは先頭32 KiBまでで、伏せずに文字として表示し、切ったときは**Showing the start of the file**と出します。HTML・SVGも文字として出し、実行しません。画像はcockpitが画素だけをPNGに描き直したものを、readerがさらに確かめます（IHDR・IDAT・IENDだけのPNG、1辺8192 px・合計8 Mpx・4 MiBまで）。これを超えるもの、開けない種類、範囲外のfileは理由だけを出します。表示するのは**今のfile**で、記録した時点の中身と違うことがあり、previewの下にそう出します。toolの呼び出しから取り出した参照だけが対象です。範囲外・previewしない種類のfileには、cockpitが参照を付けないので、名前だけの押せないchipになります。
+- 発言・Markdownの表・code blockは文字としてDOMに組みます。HTML・link・記録の中の画像は実行しません。記録の中のORRERY Mailの通知と送ったMailはcardになり、押すと記録にある本文を出します。cardを開いても、Mailの既読・ACK・返信はしません。
 - コンピューターの負荷が高いと、cockpitが記録とbindingを確かめるのに数秒かかり、最初の表示まで**Loading the record…**が数秒続くことがあります。readerは15秒まで待ち、それでも返らなければ**Taking longer than usual**と**Retry**を出します。待つか押せば読み直し、表示中の発言は消しません。
 - tabを前面で開いている間、最新のpageを約5秒ごとに更新します。上へscrollして読んでいる間は新しい発言で表示が動かず、**New messages below · paused**と出ます。sheetを開いている間に保持するのは最大200件で、そこに達すると**Show older**は止まります。pageの印が切れていたら、最新のpageを読み直し、**Show older**も戻ります。
 - 送信は既存のTerminalの経路のままです。Terminalが有効でpaneを選んであれば、Conversationの下の入力欄は同じ**Review input → Send once**の確認・上限・受領を使います。Reviewの画面には、Terminal tabと同じ端末の末尾（最新40行・最大6 KiB）を必ず出すので、paneを見ずに送ることはありません。**Received by terminal**の後、送った文が記録に現れるまで（最長3分）点線の仮の行を出します。この行はこの画面の中だけのもので、agentが受け取ったことの証明にはなりません。
-- Close・別agentへの切替・背景移行・離脱で更新を止め、スマホから記録・pageの印・仮の行を消します。遅れた応答で復活させず、URL・log・browser storageへ残しません。reader側で発行済みの印は期限まで残りますが、本文を含まず、同じagentにしか使えません。
+- Close・別agentへの切替・背景移行・離脱で更新を止め、スマホから記録・pageの印・参照のID・開いていたpreview（画像のdataを含む）・仮の行を消します。遅れた応答で復活させず、URL・log・browser storageへ残しません。reader側で発行済みの印は期限まで残りますが、本文を含まず、同じagentにしか使えません。
 
-**redactで隠せないもの。** cockpitのredactが置き換えるのは、`sk-`・`ghp_`・`AKIA`の鍵、`Authorization` header、`password=`・`secret=`のような代入、PEMのblockなど、既知の形だけです。それ以外のtoken（JWT、Slackの`xox`のtoken、環境変数の行に書かれたbotのtokenなど）、promptに貼った秘密、agentが返答の中で引用した鍵、私的な文章は、書かれたままスマホに届きます。toolの出力は送りませんが、agentがそこから書き写したものは届きます。それでよいagentと端末に限ってHistoryを有効にしてください。
+**伏せる処理はありません。** 名前で隠したり、中身を伏せたりはしません。表示は記録とfileのままで、何を出してよいかは持ち主が判断します。会話の本文・Mailの本文・fileのtext・画像の中の鍵、promptに貼った秘密、私的な文章は、書かれたままスマホに届きます。名前が秘密らしいfile（`credentials.yaml`・`api_key.md`など）も、作業folderの中で種類と大きさが合えば開けます（拡張子の無い`.env`や鍵のfileなど、previewする種類に無いものは開けません）。toolの出力は送りませんが、agentがそこから書き写したものは届きます。それでよいagentと端末に限ってHistoryを有効にしてください。
 
 Historyだけを止めるには、手で起動するreaderに`--disable-history`を付け（`--enable-history`があれば外し）、今の手順でreaderを再起動します。Terminalと閲覧の設定はそのまま残ります。
 

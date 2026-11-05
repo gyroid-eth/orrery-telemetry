@@ -269,6 +269,24 @@ class Handler(BaseHTTPRequestHandler):
                            {'ok':False,'error':exc.code,'reason_code':exc.reason_code})
             except Exception:self._send(503,{'ok':False,'error':'history_unavailable','reason_code':''})
             return
+        if parts.path=='/view/conversation/preview' and self.server.mobile_config.history_enabled:
+            # Only a roster name and an ID this relay issued on a history page.
+            # The cockpit reference, path and file stay on this machine.
+            query=parse_qs(parts.query,keep_blank_values=True)
+            nm=query.get('name',[''])[0];ref=query.get('ref',[''])[0]
+            if (set(query)!={'name','ref'} or any(len(v)!=1 for v in query.values()) or not NAME.fullmatch(nm)
+                    or not mobile_history.TOKEN.fullmatch(ref)):
+                self._send(400,{'ok':False,'error':'invalid_preview_query'});return
+            if not self.server.mobile_store.known_name(nm):
+                self._send(404,{'ok':False,'error':'agent_unavailable'});return
+            if self.command=='HEAD':self._send(200,b'');return
+            try:self._send(200,mobile_history.encode(self.server.mobile_history.preview(nm,ref)))
+            except LookupError:self._send(410,{'ok':False,'error':'preview_expired'})
+            except mobile_history.HistoryUnavailable as exc:
+                self._send(503 if exc.code in {'preview_unavailable','dashboard_unavailable','history_slow'} else 200,
+                           {'ok':False,'error':exc.code})
+            except Exception:self._send(503,{'ok':False,'error':'preview_unavailable'})
+            return
         if parts.path=='/view/snapshot':
             query=parse_qs(parts.query,keep_blank_values=True)
             if set(query)-{'window'} or len(query.get('window',[]))>1 or query.get('window',['day'])[0] not in WINDOWS:
