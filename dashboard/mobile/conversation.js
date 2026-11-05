@@ -1,9 +1,10 @@
 /* Opt-in, read-only conversation history. Text enters the DOM through
    textContent only: no innerHTML or links. A file preview is text through
    textContent or a PNG the relay checked, shown from a data:image/png URL that
-   this file builds from validated base64; nothing else sets a source. Nothing
-   is kept in storage or URLs; unmount clears the DOM, the preview, requests,
-   timers and pending rows. */
+   this file builds from validated base64; nothing else sets a source. Save
+   writes exactly what the preview shows to the device through one object URL,
+   revoked on close. Nothing is kept in storage or URLs; unmount clears the
+   DOM, the preview, requests, timers and pending rows. */
 (()=>{'use strict';
 const make=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!==undefined)e.textContent=txt;return e;};
 const MAX_BYTES=768*1024,MAX_KEPT=200,POLL=5000;
@@ -13,7 +14,7 @@ let capability=null,gen=0,timer=0,name='',root=null,list=null,status=null,olderB
 const WAIT=20000;
 /* Poll and Show older each own a controller, so neither aborts the other. */
 const controllers={poll:null,older:null,preview:null};
-let panel=null;
+let panel=null,saveUrl='';
 let events=[],seen=new Set(),older=null,pending=[],failures=0,loadingOlder=false,following=true,savedTop=0;
 const messages={
  history_unconfirmed:'This agent’s record is not verified as its own, so history stays hidden.',
@@ -120,10 +121,29 @@ function pngSource(v){
   ?'data:image/png;base64,'+v.data:null;
 }
 function closePreview(){
- controllers.preview?.abort();controllers.preview=null;
+ controllers.preview?.abort();controllers.preview=null;dropSave();
  if(panel){for(const img of panel.querySelectorAll('img'))img.src='';panel.replaceChildren();panel.remove();}
  panel=null;
 }
+/* A plain file name: the last path part, no control characters, at most 120
+   characters. Images are saved as the PNG cockpit re-drew, so they end in .png. */
+function fileName(label,image){
+ let n=String(label||'').split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,120);
+ if(!n||n==='.'||n==='..')n=image?'image':'file.txt';
+ return image&&!/\.png$/i.test(n)?n+'.png':n;
+}
+function dropSave(){if(saveUrl){URL.revokeObjectURL(saveUrl);saveUrl='';}}
+/* Saves the bytes this preview already holds; no further request is made. */
+function saveButton(head,close,label,blob){
+ const b=make('button','conversation-preview-save','Save');b.type='button';
+ b.onclick=()=>{
+  if(!panel)return;dropSave();saveUrl=URL.createObjectURL(blob());
+  const a=make('a');a.download=fileName(label,blob.image);a.href=saveUrl;a.hidden=true;
+  panel.append(a);a.click();a.remove();
+ };
+ head.insertBefore(b,close);
+}
+function pngBytes(data){const raw=atob(data),out=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);return out;}
 async function openPreview(x){
  closePreview();if(!root)return;
  const g=gen,box=make('div','conversation-preview');panel=box;box.setAttribute('role','dialog');box.setAttribute('aria-label','Preview of '+x.label);
@@ -144,9 +164,11 @@ async function openPreview(x){
  if(v?.ok===true&&v.kind==='text'&&typeof v.text==='string'){
   state.textContent=v.truncated===true?'Showing the start of the file.':'';
   view.append(make('pre','conversation-preview-text',v.text));
+  const text=v.text;saveButton(head,close,x.label,()=>new Blob([text],{type:'text/plain;charset=utf-8'}));
  }else if(v?.ok===true&&pngSource(v)){
   const img=make('img','conversation-preview-image');img.alt=x.label;img.width=v.width;img.height=v.height;
   img.src=pngSource(v);state.textContent='';view.append(img);
+  const data=v.data,blob=()=>new Blob([pngBytes(data)],{type:'image/png'});blob.image=true;saveButton(head,close,x.label,blob);
  }else{
   state.textContent=previewMessages[v?.error]||messages[v?.error]||'Preview unavailable right now.';return;
  }
