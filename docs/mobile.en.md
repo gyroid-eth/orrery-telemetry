@@ -36,7 +36,7 @@ The badge next to **Phone** says **OFF**. Press the **Phone access** switch.
 
 The first press **leaves the switch off**. Right under the switch it says "Not on yet: check the owner and address in step 2 below, then press Confirm and turn on.", the **Setup** steps open below, and the cursor moves to step 2.
 
-- Step 1 reads whether Tailscale is signed in. With a ✓ there is nothing to do. Without one, the line under the switch says "sign in to Tailscale": sign in to Tailscale on this computer, then press **Phone access** again.
+- Step 1 reads whether Tailscale is signed in. With a ✓ there is nothing to do. Without one, the line under the switch says "sign in to Tailscale" (or "Tailscale was not found" when it is not installed): install Tailscale on this computer and sign in, then press **Phone access** again.
 - In step 2, **Owner (Tailscale login)** is the only login the reader lets in, and **Address on the phone** is the address the phone opens (`https://<this computer's Tailscale name>:9443`). Both are filled in from `tailscale status`; check them and press **Confirm and turn on**. This is what turns Phone access on.
 - **Check:** the badge says **SETUP** and step 2 has a ✓.
 
@@ -56,7 +56,7 @@ When step 3 has a ✓, check in the Tailscale admin console who and which device
 
 **Until step 4, conversations and Send stay off.** The phone can read the agent list, Graph and Mail only (the reader answers `policy_not_reviewed`). Meanwhile the line right under the switch says "On, but Conversation and Send from phone stay off until step 4 below".
 
-**Check:** ORRERY cannot check the policy. Check yourself that an excluded device cannot open it, as in [Verify on real devices](#verify-on-real-devices).
+**Check:** ORRERY cannot check the policy, so check it yourself. In every case, see in the admin console that only the people and devices you mean to allow can reach tcp:9443. If you restricted devices, also check that an excluded device cannot open it, as in [Verify on real devices](#verify-on-real-devices).
 
 <img src="images/phone-settings-4-policy.png" width="360" alt="Steps 1 to 3 have a check mark. Under the switch, one line says Conversation and Send stay off until step 4. Step 4 has the I reviewed the policy button">
 

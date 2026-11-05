@@ -36,7 +36,7 @@ cockpitの画面からは変えられない前提が2つあります。どちら
 
 初めて押したときは、**スイッチはまだオフのまま**です。スイッチのすぐ下に「Not on yet: check the owner and address in step 2 below, then press Confirm and turn on.」と出て、その下に**Setup**の手順が開き、手順2の入力欄へ移ります。
 
-- 手順1はTailscaleにsign inしているかを自動で読みます。✓が付いていれば何もしません。付いていないときは、スイッチの下に「sign in to Tailscale」と出ます。このコンピューターでTailscaleにsign inしてから、もう一度**Phone access**を押します。
+- 手順1はTailscaleにsign inしているかを自動で読みます。✓が付いていれば何もしません。付いていないときは、スイッチの下に「sign in to Tailscale」（Tailscaleが入っていなければ「Tailscale was not found」）と出ます。このコンピューターでTailscaleを入れてsign inしてから、もう一度**Phone access**を押します。
 - 手順2の**Owner (Tailscale login)**は、readerが通す唯一のloginです。**Address on the phone**は、スマホで開くaddress（`https://<このコンピューターのTailscale名>:9443`）です。どちらも`tailscale status`から埋めてあるので、確かめて**Confirm and turn on**を押します。ここで初めてPhone accessがオンになります。
 - **確かめる:** badgeが**SETUP**になり、手順2に✓が付く。
 
@@ -56,7 +56,7 @@ cockpitの画面からは変えられない前提が2つあります。どちら
 
 **4を押すまでは、会話とSendは止まっています。** スマホで読めるのは一覧・Graph・Mailだけです（readerは`policy_not_reviewed`と答える）。この間は、スイッチのすぐ下に「On, but Conversation and Send from phone stay off until step 4 below」と出ます。
 
-**確かめる:** ORRERYはpolicyを確かめられません。除外した端末から開けないことを、[実スマホで確認してから使う](#実スマホで確認してから使う)の手順で自分で確かめます。
+**確かめる:** ORRERYはpolicyを確かめられないので、自分で確かめます。どの場合も、管理画面で、許してよい人と端末だけがtcp:9443に届くことを見ます。端末を制限した場合は、除外した端末から開けないことも[実スマホで確認してから使う](#実スマホで確認してから使う)の手順で確かめます。
 
 <img src="images/phone-settings-4-policy.png" width="360" alt="手順1〜3に✓。スイッチの下に、会話とSendは手順4まで止まっているという1行。手順4にI reviewed the policyのボタン">
 
