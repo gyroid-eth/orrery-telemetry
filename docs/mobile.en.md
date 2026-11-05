@@ -6,6 +6,42 @@
 
 The mobile reader shows agents needing attention, a Mail timeline and NETWORK in English with a dark theme. **It is off by default.** Normal installation and updates start neither a listener nor Tailscale Serve. It reads legacy Telemetry on the same computer, using API 30 or later. Global mode is not supported.
 
+With the ORRERY cockpit you can turn it on and off from **Settings → Phone** ([next section](#turn-it-on-from-cockpit-settings)). The table after it and [Enable manually](#enable-manually) are for setting it up by hand without the cockpit.
+
+## Turn it on from cockpit Settings
+
+The cockpit's **Settings** has a **Phone** section with two switches:
+
+- **Phone access**: everything the phone can read (the agent list, Graph, Mail and conversation records, plus file and image previews in versions that have them). There is no separate switch for conversations.
+- **Send from phone**: send one confirmed line to a pane ([Terminal](#inspect-a-pane-and-send-input-from-your-phone)). It is on by default but does nothing until step 4 below.
+
+The first time you turn **Phone access** on, the section shows only the steps still missing:
+
+| Step | Who | What |
+|---|---|---|
+| 1 | automatic | Read whether Tailscale is signed in |
+| 2 | **you**, once | Check the login the reader admits and the address the phone opens, filled in from `tailscale status`, then press **Confirm and turn on** |
+| 3 | **you**, terminal | Run the shown `tailscale serve --https=9443 http://127.0.0.1:8781` once, then press **Check again** |
+| 4 | **you**, admin console | Check who and which devices can reach tcp:9443 (for example with the [device restriction below](#restrict-the-account-and-the-phone-separately)), then press **I reviewed the policy**. Only the date you pressed it is kept; ORRERY cannot check the policy |
+
+Until step 4 the phone can read the agent list, Graph and Mail only; conversations and Send stay off (the reader answers `policy_not_reviewed`).
+
+Behind it runs Telemetry's `~/.agentstack/bin/agentstack-mobile`. The cockpit only calls that command and never writes Telemetry's files itself.
+
+- Settings live in `~/.agentstack/mobile.json` (mode 0600): `access`, `send`, `owner_login`, `public_origin`, `policy_reviewed_at` and three ports. It holds no keys or tokens.
+- The reader runs as the launchd job `org.agentstack.mobile-relay`, as `mobile_relay.py --config ~/.agentstack/mobile.json`, logging to `~/.agentstack/logs/mobile-relay.log`. A change reloads the job; turning Phone access off removes the job and its plist. Installation only places the command and creates no job. Uninstall stops the job and removes the plist.
+- While a reader you started by hand holds 8781, the badge says **MANUAL** and Status says **A reader not started from Settings is running on 127.0.0.1:8781**. The phone can still read that reader. Settings cannot control it, so its switches are disabled, and `agentstack-mobile apply` answers `port_in_use` and changes nothing. To move to Settings, stop that reader in the terminal that started it (Ctrl-C), then turn **Phone access** on. The hand flags map like this: `--enable-terminal` is **Send from phone**, `--phone-policy-reviewed` is **I reviewed the policy** in step 4, and History is part of **Phone access**.
+- **Send from phone** also switches the cockpit side at once and saves it as `enable_mobile_terminal` in `~/.orrery/config.json`; no backend restart is needed. A change made in a terminal (`agentstack-mobile off`) is picked up the next time Settings is opened. While a reader started by hand is running, and until Settings has been used once, `enable_mobile_terminal` is left as it is.
+- Changing the login or the address withdraws the step 4 review; conversations and Send stop until you review again. To withdraw it yourself, run `echo '{"policy_reviewed": false}' | agentstack-mobile apply`.
+- If launchd cannot start the reader, Phone access goes back off and neither the job nor its plist is left behind (so nothing starts by itself at the next login).
+- The job runs the reader with the Python that was in use when you turned it on. If that Python goes away (a venv, or an older Homebrew version), Status says **The Python this reader was set up with is gone**. Turn Phone access off and on to rebuild the job with the current one.
+- In cockpit demo mode the Phone section does not put the login, the address or the Serve URL on the page (demo mode itself hides only user and host names). Turn demo mode off to change them.
+- Tailscale Serve and Funnel are only read. It warns when Funnel is on. It never changes the policy or Serve.
+
+Without the cockpit, use `agentstack-mobile status` to see the state, `echo '{"access": true, "owner_login": "owner@example.com", "public_origin": "https://computer.example.ts.net:9443", "policy_reviewed": true}' | agentstack-mobile apply` to turn it on, and `agentstack-mobile off` to turn it off.
+
+**Check it yourself:** after step 4, see that all four Status lines are green (reader, Serve, Funnel off, policy). Then open an agent on the phone and check that the **Conversation** tab appears.
+
 ## Ask your agent to set it up
 
 You can hand this page to the Claude Code or Codex agent on the computer that runs Telemetry. For example:
@@ -25,7 +61,7 @@ At steps marked **you**, use the Tailscale admin console or the phone itself. Th
 | 7 | **you** | Open `https://<Serve name>:9443/` on the phone. The first HTTPS request can take a few seconds while the certificate is issued |
 | 8 | agent + **you** | Check each intended device. If you chose device restrictions, also check that excluded devices are refused (see [Verify on real devices](#verify-on-real-devices)) |
 
-On macOS the CLI is usually `/Applications/Tailscale.app/Contents/MacOS/Tailscale` when `tailscale` is not on `PATH`. The reader runs in the foreground; to keep it after closing the terminal, run it under your own service manager or `nohup`. Telemetry does not install a resident service for it.
+On macOS the CLI is usually `/Applications/Tailscale.app/Contents/MacOS/Tailscale` when `tailscale` is not on `PATH`. A reader started by hand runs in the foreground. To keep it running, use cockpit Settings (or `agentstack-mobile apply`), which runs it as a launchd job.
 
 ## Reading the screen
 
@@ -35,7 +71,7 @@ On macOS the CLI is usually `/Applications/Tailscale.app/Contents/MacOS/Tailscal
 - **Graph** defaults to agents with observed activity in the last 24 hours. Focus shows the selected agent and up to five strongest peers within that period; All shows every agent in that period. Use Find, pinch to zoom, drag to pan, and Fit. Large graphs do not guarantee that every name is readable at once.
 - Line width and arrow size follow Mail counts in the selected period. Counts are **recipient rows** by direction and To/Cc, rather than unread counts or unique sent messages. Dashed parent–child lines are separate from Mail.
 - Context arcs and working motion use the PC renderer. Unknown context has no arc, and its sampling time remains unknown. Account usage is Unavailable; this reader never refreshes it.
-- The six **Tune graph** controls adjust this browser's display only. Filtering Activity also changes only the view. There are no launch, stop or Mail reply controls. Terminal viewing and input, and conversation history, each require the separate opt-ins below.
+- The six **Tune graph** controls adjust this browser's display only. Filtering Activity also changes only the view. There are no launch, stop or Mail reply controls. Conversation history needs the policy review below; Terminal viewing and input also need their own switch.
 
 The reader polls about every ten seconds in the foreground and stops polling in the background. Failed observations retain the last known values, visibly marked as such; failure is never a healthy zero or a waiting agent. Snapshot time is the HTTP observation time. Mail shows up to 200 recipient events per page; **Older / Newer** replaces the page. Graph polling continues while you read an older page, without moving it back to the latest page. Status appears on the latest page only. Graph aggregation has a separate 10,000-link limit. Truncation is shown explicitly. Only six display settings are saved in the browser: no offline snapshot storage or service worker is used.
 
@@ -91,6 +127,8 @@ This illustrates [protocol and port syntax](https://tailscale.com/docs/reference
 
 ## Enable manually
 
+**Before you update:** a reader you start by hand with `--phone-policy-reviewed` and without `--enable-history` shows conversation history and file and image previews on the phone after the first restart. To keep them off, add `--disable-history` before restarting. The reader also says so in one line when it starts.
+
 1. Update Telemetry to API 30 or later and confirm that its normal local dashboard has observations. Keep the existing services and provider configuration.
 2. Review current access. If you choose the recommended device restriction, complete that policy change above. Save the current `tailscale serve status --json` output and confirm that the example HTTPS port `9443` is unused and is not a Funnel listener. Do not reuse a port with existing configuration.
 3. Check the options below. Replace `owner@example.com` with the exact Serve login and `computer.example.ts.net` with this computer's actual Serve name. Omit a trailing slash from the origin. Replace the script path for a custom installation. Python 3.11 or later is required.
@@ -129,7 +167,7 @@ Repository tests use isolated HTTP and synthetic screens. They do not establish 
 
 ## Inspect a pane and send input from your phone
 
-**Terminal is a separate opt-in. Both capture and input are off by default.** Starting the viewing reader alone does not enable it. Device restrictions are the optional recommendation above; you can allow several operating devices. The existing `--phone-policy-reviewed` declaration is still required to acknowledge that the operator reviewed current access. It does not verify policy or enforce a single phone.
+**Terminal is a separate opt-in. For a reader started by hand, capture and input are off by default.** Starting the viewing reader alone does not enable it. In cockpit Settings this is **Send from phone**, on by default but inactive until the policy is reviewed. Device restrictions are the optional recommendation above; you can allow several operating devices. The existing `--phone-policy-reviewed` declaration is still required to acknowledge that the operator reviewed current access. It does not verify policy or enforce a single phone.
 
 You can also give this section to your agent. It should stop at your steps and preserve existing settings.
 
@@ -190,13 +228,13 @@ To disable only Terminal, set the shared field to `false` or remove it, also rem
 
 ## Read an agent's conversation history on your phone
 
-**History is a separate opt-in and is off by default.** Starting the viewing reader or Terminal does not enable it. It shows the read-only conversation record (Codex, Claude Code, dsh, Hermes) that cockpit has verified as the agent's own, and is an exception to "full history is not forwarded" only while this flag is on. Like Terminal, it requires the `--phone-policy-reviewed` declaration. The agent can do the steps below; review access first.
+**History is part of Phone access and is on by default once the policy is reviewed (`--phone-policy-reviewed`, or I reviewed the policy in Settings).** **Before you update:** a reader you start by hand with `--phone-policy-reviewed` and without `--enable-history` shows conversation history and file and image previews on the phone after the first restart. To keep them off, add `--disable-history` before restarting. The reader also says so in one line when it starts. Without the review the reader still starts with History off, and `/view/history` answers `policy_not_reviewed`. It shows the read-only conversation record (Codex, Claude Code, dsh, Hermes) that cockpit has verified as the agent's own, and is an exception to "full history is not forwarded" only while History is on. To keep it off, add `--disable-history` to a reader started by hand. Settings has no conversation-only switch; turn Phone access off instead. The agent can do the steps below; review access first.
 
 | Step | Who | What |
 |---|---|---|
 | 1 | agent | Confirm Telemetry API 35 or later and that the ORRERY cockpit backend is running on the same computer (default port 8791). Cockpit reads the record; the reader does not |
 | 2 | **you** | Review who can open the reader, as for Terminal. With History on, every device that can open the reader can read back through past conversations, not only a 40-line terminal tail. Conversation text can contain keys or private writing |
-| 3 | agent | Add `--enable-history --phone-policy-reviewed` (and `--cockpit-port` if it is not 8791) to the reader's launch command. Run `--check` with the same flags first, then restart the reader through its current manager |
+| 3 | agent | Check that the reader's launch command has `--phone-policy-reviewed` (and `--cockpit-port` if it is not 8791). Run `--check` with the same flags first (it prints `conversation history and previews are on`), then restart the reader through its current manager. An existing `--enable-history` still works |
 | 4 | **you** | Open an agent on the phone and check the **Conversation** tab |
 
 When enabled, the header says **History enabled** (or **History · Terminal**), and the Terminal buttons become **History**. The agent sheet opens on **Conversation**. If Terminal is also enabled, a **Conversation | Terminal** switch appears at the top.
@@ -214,11 +252,11 @@ When enabled, the header says **History enabled** (or **History · Terminal**), 
 
 **What redaction cannot hide.** Cockpit's redaction replaces only known key shapes, such as `sk-`, `ghp_` and `AKIA` keys, `Authorization` headers, `password=`/`secret=`-style assignments and PEM blocks. Other tokens (for example JWTs, Slack `xox` tokens or a bot token in an environment line), a secret pasted into a prompt, a key the agent quoted in its reply, and private writing reach the phone as written. Tool output is not sent, but anything an agent repeated from it is. Turn History on only for agents and devices where that is acceptable.
 
-To disable History, remove `--enable-history` and restart the reader through its existing procedure. Terminal and viewing settings remain.
+To disable History only, add `--disable-history` to a reader started by hand (removing `--enable-history` if present) and restart it through its existing procedure. Terminal and viewing settings remain.
 
 ## Disable and restore
 
-Remove only this Serve listener, then press Ctrl-C in the reader's terminal.
+If you turned it on in cockpit Settings, turn **Phone access** off (or run `agentstack-mobile off`); the launchd job and its plist are removed. If you started the reader by hand, press Ctrl-C in its terminal. Either way, remove the Serve listener yourself.
 
 ```sh
 tailscale serve --https=9443 off
