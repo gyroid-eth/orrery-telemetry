@@ -46,6 +46,7 @@ POST の Origin は、検証済み Host に対応する固定 origin とだけ�
 | GET | `/api/suggest-name` | `scientist` | verified `Adjective-Scientist`（要求形。実登録名は register 応答の read-back が正） |
 | GET | `/api/fs/dirs` | optional `path` | root-scoped child directories |
 | GET | `/api/agents` | なし | `{ts, agents}` |
+| GET | `/api/agents/<name>/history-binding` | なし | `{ok, agent}`（1人分の会話の記録の binding、API 36） |
 | GET | `/api/graph` | `days`, `all` | `{nodes, edges, spawn, timestamp_diagnostics, degraded, ts}` |
 | GET | `/api/history` | `session`, `limit` | transcript events |
 | GET | `/api/agent-history` | `name` または `names`, `hours`, `include_pane_states` | agent event timeline |
@@ -71,7 +72,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":35}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":36}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -387,6 +388,27 @@ API 世代4からの追加 field です。GET `/api/agents` / `/api/graph` の C
 API 世代5からの追加 field です。resume できる（`ready` または `verification_required`）終了済み Claude row には、resume の前に `resume_mode` を出します。`mail` は、resume が owner を認証して Mail の row を unretire すること（できなければ起動せずに拒否し、会話だけの再開に切り替えないこと）を、`conversation_only` は Mail に触れずに会話だけを再開することを示し、このときは `mail_status: unavailable` と `mail_reason` / `mail_message` も付きます。`/api/jump` の応答の `resume_mode` はこの見込みと同じ値で、Mail まで戻した Claude の resume も `resume_mode: mail` を返します。`resume_capability` の code と意味は変えていないので、`ready` で resume を許す利用側はそのまま動きます。Codex row と、resume できない row・稼働中の row には `resume_mode` を出しません。
 
 `mail_reason: mail_schema_unsupported` の row と応答には `mail_remedy` も付きます。この installer が入れた ORRERY Mail を `./scripts/install.sh --update-mail` で更新し、会話だけのセッションを終えてから再開し直す手順で、dry-run が拒否したら [Mail の更新手順](agentstack-mail-update.md) に従うよう案内します。同じ文は `mail_message` の末尾にも入るので、`mail_message` を表示する利用側には新しい field を読まなくても届きます（API 世代は変えていません）。`credential_absent` と `retention_expired` は dashboard から直せないので付きません。稼働中の会話だけのセッションは、Mail の row が retired で `program` が空でも `mail_status` / `mail_reason` / `mail_message` を出します。
+
+## GET `/api/agents/<name>/history-binding`
+
+cockpit の会話の履歴の表示が、中身を見せる前に確かめる 1 人分の binding です（API 36）。`/api/agents?scope=live` のその人の行と同じ判断（稼働の判定は `lookup_agent`、30 日の窓、binding は roster と同じ関数）で、pane の読み取りも、他の agent の行も作りません。
+
+```bash
+curl -s http://127.0.0.1:8770/api/agents/AgentName/history-binding
+```
+
+response:
+
+```json
+{"ok":true,"agent":{"name":"AgentName","program":"claude-code","category":"agent","running":true,"created":1793775600,
+ "history_binding":"bound","transcript_path":"/abs/path.jsonl","history_binding_reason":"","history_binding_reason_code":"bound",
+ "history_session_id":"…","history_receipt_ts":"…"}}
+```
+
+- 返す field は上の 11 個だけです。意味は [会話の記録の binding](#会話の記録の-bindinglegacyapi-35) と同じです
+- live roster の行でない名前（retired・gone・warm-up・未登録）と、形式の不正な名前は 404 `{"ok":false,"error":"agent_unavailable"}` です
+- 読むだけの GET で、Host・Origin の扱いは `/api/agents` と同じです（loopback）。fresh と global では 404 `agent_unavailable` を返し、legacy の判断はしません（global では、それより前の operator admission に失敗すると、どの route も 503 です）。fresh の保護された history 経路は変わりません
+- 利用者は `api` が 36 以上のときだけ使い、`agent_unavailable` 以外の失敗（他の 404・5xx・通信の失敗）や古い dashboard では、従来の `/api/agents?scope=live` で確かめてください
 
 ## GET `/api/graph`
 
@@ -850,6 +872,6 @@ previewは既存shared helperのfresh legacy admissionとkernel birthを使い�
 
 prepareは1行4KiB UTF-8を改変せず束縛します。pending最大16件、結果metadataは最大256件/10分、同pane同時送信1件・6件/分です。commitは一回claimし、同write lock内でfresh同一pane検査から全chunk/Enterのwriteまでを行い、lock解放後に全tmux ACKを待ちます。5秒以内の全ACKでaccepted、部分失敗/timeout/errorはunknownで再送・残chunk補送0です。statusは照会のみ。プログラムの同一性や実行完了は保証せず、shell化/既存buffer/外部writer/最終検査後raceは残ります。UIと有効化・停止手順は[mobile guide](mobile.md#スマホからpaneを確認して送る)を参照してください。
 
-会話の記録は、読み取り専用の別opt-in（`--enable-history`、`--phone-policy-reviewed`も必須、既定オフ）です。`GET /view/history`は常に`{enabled, page_events}`を返します。有効時だけ`GET /view/conversation?name=<NAME>[&page=<token>]`があり、無効なら404です。nameは公開済み名簿にある名前に限り、`page`は同じ名前にこのreaderが発行した32桁hexの印に限ります（256件/600秒。名前とcursorごとに1つで、同じpageを返すたびに延びる。期限切れは410）。path・cursor・その他のqueryは上流を呼ぶ前に400です。readerはOriginなしの固定loopback `GET /telemetry/conversation?agent=<NAME>&limit=40[&before=<cursor>]`をcockpitのportへ送り、API 35のboundの行の解決・再確認とredactはcockpitが行います。上流JSONは8 MiB・15秒までで、時間切れは503の固定code `history_slow`（待てば直る）です。スマホへは`{ok, agent, provider, events, older, limited, omitted, tail_only}`を返し、eventは`id/kind(text|tool|mail)/role(user|assistant)/text/ts/truncated`と、任意の`mail`（`direction/sender/recipients/subject/importance/coverage/body/truncated`）と`files`（`label/kind`と、previewできるときだけ`ref`）だけです。本文とMail本文は16 KiB、tool名は160文字、1 pageは40件・512 KiBで切ります。応答は`\u`のescapeを使わないUTF-8のJSONで、送る大きさは最大640 KiBです。pageに収めるために外した発言は飛ばさず、`older`は残した中で一番古い発言の`cursor_before`から続けます。1件で収まらない発言はさらに短く切ります。`omitted`は、出せない・たどれない発言があったときだけ真で、スマホはその位置に印を出します。toolの出力・diff・cockpitの参照ID・cursor・pathは落とします。unbound/stale/未確認は固定codeの`{ok:false, error, reason_code}`で、人向けの理由文は渡しません。
+会話の記録とfile・画像のpreviewは読み取り専用で、`--phone-policy-reviewed`（SettingsではPhone accessとI reviewed the policy）があれば既定でオンです。`--disable-history`で切れ、`--enable-history`は以前の起動コマンドのために残した旧flagです。`GET /view/history`は常に`{enabled, page_events}`を返し、オフのときは`reason`（`policy_not_reviewed`か`disabled`）も返します。有効時だけ`GET /view/conversation?name=<NAME>[&page=<token>]`があり、無効なら404です。nameは公開済み名簿にある名前に限り、`page`は同じ名前にこのreaderが発行した32桁hexの印に限ります（256件/600秒。名前とcursorごとに1つで、同じpageを返すたびに延びる。期限切れは410）。path・cursor・その他のqueryは上流を呼ぶ前に400です。readerはOriginなしの固定loopback `GET /telemetry/conversation?agent=<NAME>&limit=40[&before=<cursor>]`をcockpitのportへ送り、API 35のboundの行の解決・再確認とredactはcockpitが行います。上流JSONは8 MiB・15秒までで、時間切れは503の固定code `history_slow`（待てば直る）です。スマホへは`{ok, agent, provider, events, older, limited, omitted, tail_only}`を返し、eventは`id/kind(text|tool|mail)/role(user|assistant)/text/ts/truncated`と、任意の`mail`（`direction/sender/recipients/subject/importance/coverage/body/truncated`）と`files`（`label/kind`と、previewできるときだけ`ref`）だけです。本文とMail本文は16 KiB、tool名は160文字、1 pageは40件・512 KiBで切ります。応答は`\u`のescapeを使わないUTF-8のJSONで、送る大きさは最大640 KiBです。pageに収めるために外した発言は飛ばさず、`older`は残した中で一番古い発言の`cursor_before`から続けます。1件で収まらない発言はさらに短く切ります。`omitted`は、出せない・たどれない発言があったときだけ真で、スマホはその位置に印を出します。toolの出力・diff・cockpitの参照ID・cursor・pathは落とします。unbound/stale/未確認は固定codeの`{ok:false, error, reason_code}`で、人向けの理由文は渡しません。
 
-同じopt-inの間だけ`GET /view/conversation/preview?name=<NAME>&ref=<id>`があります。`files`の要素のうち、cockpitが付けた形の正しい参照を持つものだけに`ref`（このreaderが発行した32桁hex。名前とcockpitの参照ごとに1つで、そのpageを返すたびに延びる。1024件/600秒）が付きます。queryは`name`と`ref`だけで、別の名前に発行した`ref`・期限切れは上流を呼ばずに410 `preview_expired`、その他は400です。readerはOriginなしの固定loopback `GET /telemetry/conversation/preview?ref=<cockpitの参照>`を送り、記録・binding・root・canonical path・大きさ・画素数・秘密らしい名前の確認とtextのredactはcockpitが毎回行います。上流JSONは約5.4 MiB・5秒までで、Content-Lengthがこれを超えると読まずに`preview_too_large`です。スマホへは`{ok, kind:"text", label, text, truncated, notice}`（textはUTF-8で先頭32 KiB）か`{ok, kind:"image", label, width, height, data, notice}`を返します。画像はIHDR・IDAT・IENDのchunkだけでCRCが正しく、IHDRの幅と高さがcockpitの値と一致し、1辺8192 px・8 Mpx・4 MiB以内のPNGだけで、dataはその標準base64です。失敗は固定codeの`{ok:false, error}`（`preview_too_large`・`preview_type_denied`・`preview_path_denied`・`preview_changed`・`history_*`、それ以外は`preview_unavailable`）で、cockpitのcode以外の文字列は渡しません。cockpitの`reference_expired`は410、`record_too_large`（参照を持つ記録が1 MiBを超える）は`preview_too_large`です。Content-Lengthと長さが違う上流の本文は拒みます。
+Historyがオンの間だけ`GET /view/conversation/preview?name=<NAME>&ref=<id>`があります。`files`の要素のうち、cockpitが付けた形の正しい参照を持つものだけに`ref`（このreaderが発行した32桁hex。名前とcockpitの参照ごとに1つで、そのpageを返すたびに延びる。1024件/600秒）が付きます。queryは`name`と`ref`だけで、別の名前に発行した`ref`・期限切れは上流を呼ばずに410 `preview_expired`、その他は400です。readerはOriginなしの固定loopback `GET /telemetry/conversation/preview?ref=<cockpitの参照>`を送り、記録・binding・root・canonical path・大きさ・画素数・秘密らしい名前の確認とtextのredactはcockpitが毎回行います。上流JSONは約5.4 MiB・5秒までで、Content-Lengthがこれを超えると読まずに`preview_too_large`です。スマホへは`{ok, kind:"text", label, text, truncated, notice}`（textはUTF-8で先頭32 KiB）か`{ok, kind:"image", label, width, height, data, notice}`を返します。画像はIHDR・IDAT・IENDのchunkだけでCRCが正しく、IHDRの幅と高さがcockpitの値と一致し、1辺8192 px・8 Mpx・4 MiB以内のPNGだけで、dataはその標準base64です。失敗は固定codeの`{ok:false, error}`（`preview_too_large`・`preview_type_denied`・`preview_path_denied`・`preview_changed`・`history_*`、それ以外は`preview_unavailable`）で、cockpitのcode以外の文字列は渡しません。cockpitの`reference_expired`は410、`record_too_large`（参照を持つ記録が1 MiBを超える）は`preview_too_large`です。Content-Lengthと長さが違う上流の本文は拒みます。

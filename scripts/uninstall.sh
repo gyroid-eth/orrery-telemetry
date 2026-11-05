@@ -233,6 +233,51 @@ for svc in data.get("services", []):
                         except ProcessLookupError:
                             pass
 
+# The phone reader job is created later by `agentstack-mobile`, not by the
+# installer, so it is not in the services list. There is one such plist per
+# HOME, whichever install wrote it, so stop it and remove it only when it
+# belongs to the install being removed: the default install under this HOME,
+# a manifest that records it, or a job whose --config is this install's
+# mobile.json or whose relay script is inside this install (launchd would keep
+# restarting a script that is about to be removed). Uninstalling an install
+# elsewhere (--install-dir) leaves it.
+MOBILE_LABEL = "org.agentstack.mobile-relay"
+mobile_plist = pathlib.Path.home() / f"Library/LaunchAgents/{MOBILE_LABEL}.plist"
+
+def same_path(a, b):
+    try:
+        return pathlib.Path(a).expanduser().resolve() == pathlib.Path(b).expanduser().resolve()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+def mobile_job_belongs_here():
+    install_dir = manifest_path.parent
+    if same_path(install_dir, pathlib.Path.home() / ".agentstack"):
+        return True
+    if any(same_path(f, mobile_plist) for f in data.get("owned_files", []) if isinstance(f, str)):
+        return True
+    if any(isinstance(svc, dict) and svc.get("label") == MOBILE_LABEL for svc in data.get("services", [])):
+        return True
+    try:
+        import plistlib
+        args = [a for a in plistlib.loads(mobile_plist.read_bytes()).get("ProgramArguments") or [] if isinstance(a, str)]
+    except Exception:
+        return False
+    if "--config" in args[:-1] and same_path(args[args.index("--config") + 1], install_dir / "mobile.json"):
+        return True
+    try:
+        script = pathlib.Path(args[1]).expanduser().resolve()
+        return len(args) > 1 and script.is_relative_to(install_dir.resolve())
+    except (IndexError, OSError, RuntimeError, ValueError):
+        return False
+
+if mobile_plist.is_file() and not mobile_plist.is_symlink() and mobile_job_belongs_here():
+    run(["launchctl", "bootout", f"gui/{os.getuid()}/org.agentstack.mobile-relay"])
+    if dry_run:
+        print(f"DRY-RUN would remove: {mobile_plist}")
+    else:
+        mobile_plist.unlink(missing_ok=True)
+
 remove_claude_mcp()
 remove_settings_hooks()
 

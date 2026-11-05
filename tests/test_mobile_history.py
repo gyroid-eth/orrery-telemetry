@@ -68,7 +68,9 @@ def reader(enabled=True, client=None, store=None):
 
 # --- opt-in gate -----------------------------------------------------------
 
-def test_history_is_off_by_default_and_needs_the_policy_acknowledgement(monkeypatch):
+def test_history_needs_the_policy_acknowledgement(monkeypatch):
+    # Phone access turns history on by default once the policy is reviewed
+    # (tests/test_mobile_settings.py); without the review it stays off.
     assert relay.Config('owner@example.test', 'https://viewer.example.ts.net').history_enabled is False
     with pytest.raises(ValueError):
         relay.Config('owner@example.test', 'https://viewer.example.ts.net', history_enabled=True)
