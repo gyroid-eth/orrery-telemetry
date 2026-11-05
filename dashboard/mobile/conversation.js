@@ -125,12 +125,15 @@ function closePreview(){
  if(panel){for(const img of panel.querySelectorAll('img'))img.src='';panel.replaceChildren();panel.remove();}
  panel=null;
 }
-/* A plain file name: the last path part, no control characters, at most 120
-   characters. Images are saved as the PNG cockpit re-drew, so they end in .png. */
+/* A plain file name: the last path part, without control or bidi-override
+   characters, at most 120 characters. Images are saved as the PNG cockpit
+   re-drew, so they end in .png; text that a viewer could render as markup
+   (.html, .htm, .xhtml, .svg, .xml) gets .txt, matching the plain-text bytes. */
 function fileName(label,image){
- let n=String(label||'').split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,120);
+ let n=String(label||'').split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,'').trim().slice(0,120);
  if(!n||n==='.'||n==='..')n=image?'image':'file.txt';
- return image&&!/\.png$/i.test(n)?n+'.png':n;
+ if(image)return /\.png$/i.test(n)?n:n+'.png';
+ return /\.(?:html?|xhtml|svg|xml)$/i.test(n)?n+'.txt':n;
 }
 function dropSave(){if(saveUrl){URL.revokeObjectURL(saveUrl);saveUrl='';}}
 /* Saves the bytes this preview already holds; no further request is made. */

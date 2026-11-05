@@ -457,6 +457,21 @@ def test_save_writes_the_previewed_text_and_makes_no_request():
     ''')
 
 
+def test_saved_text_that_a_viewer_could_render_gets_a_txt_name():
+    save_phone(r'''
+      let label;
+      reply=async url=>url.startsWith('/view/conversation/preview?')
+        ?{body:{ok:true,kind:'text',label,text:'<svg onload=x>',truncated:false,notice:'n'}}
+        :withFile([{label,kind:'file',ref:REF}]);
+      for(const [given,want] of [['page.html','page.html.txt'],['x.SVG','x.SVG.txt'],['a.xhtml','a.xhtml.txt'],['feed.xml','feed.xml.txt'],
+                                 ['notes.md','notes.md'],['report\u202etxt.html','reporttxt.html.txt']]){
+        label=given;clicks.length=0;const root=C.mount('Vega');body.append(root);await settle();
+        await chip(root).onclick();await settle();save(root).onclick();
+        assert.equal(clicks[0].download,want,given);C.unmount();
+      }
+    ''')
+
+
 def test_save_writes_the_checked_png_bytes_with_a_png_name():
     save_phone(r'''
       let label='shots/photo.jpg';
@@ -472,7 +487,8 @@ def test_save_writes_the_checked_png_bytes_with_a_png_name():
       // Background clears the preview and revokes the URL.
       doc.hidden=true;docListeners.visibilitychange();doc.hidden=false;
       assert.deepEqual(revoked,['blob:saved-1']);
-      for(const [given,want] of [['..','image.png'],['a\\b\u0007c.PNG','bc.PNG'],['x'.repeat(300),'x'.repeat(120)+'.png']]){
+      for(const [given,want] of [['..','image.png'],['a\\b\u0007c.PNG','bc.PNG'],['x'.repeat(300),'x'.repeat(120)+'.png'],
+                                 ['shot\u202egnp.html','shotgnp.html.png'],['a\u0085\u200e\u2066b.png','ab.png']]){
         label=given;clicks.length=0;root=C.mount('Vega');body.append(root);await settle();
         await chip(root).onclick();await settle();save(root).onclick();
         assert.equal(clicks[0].download,want,given);C.unmount();
