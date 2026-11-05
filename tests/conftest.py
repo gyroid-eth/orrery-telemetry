@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 
@@ -336,14 +337,18 @@ def _listener_pids(port: int = 8765) -> tuple[int, ...] | str:
 
 
 # The real user's home, from the password database: tests set HOME to a temporary
-# directory, and the guard below must keep looking at the real one.
-def _real_home() -> str:
+# directory, and the guard below must keep looking at the real one. launchd and
+# ~/Library/LaunchAgents exist only on macOS; elsewhere (Windows has no `pwd`)
+# the guard does nothing.
+def _real_launch_agents() -> str | None:
+    if sys.platform != "darwin":
+        return None
     import pwd
 
-    return pwd.getpwuid(os.getuid()).pw_dir
+    return os.path.join(pwd.getpwuid(os.getuid()).pw_dir, "Library", "LaunchAgents")
 
 
-REAL_LAUNCH_AGENTS = os.path.join(_real_home(), "Library", "LaunchAgents")
+REAL_LAUNCH_AGENTS = _real_launch_agents()
 MOBILE_RELAY_LABEL = "org.agentstack.mobile-relay"
 # Only this project's jobs. Other apps, and a person switching Settings -> Phone
 # on during a long run, change launchd too; only a disappearance is a test's doing.
@@ -385,6 +390,9 @@ def _the_suite_leaves_real_launch_agents_alone():
     and whether those jobs are loaded, and only at what was there before the
     run and is gone after it. It only reads (a listing and `launchctl print`).
     """
+    if REAL_LAUNCH_AGENTS is None:
+        yield
+        return
     plists = _orrery_plists()
     labels = set() if plists == UNKNOWN else set(plists)
     labels.add(MOBILE_RELAY_LABEL)
