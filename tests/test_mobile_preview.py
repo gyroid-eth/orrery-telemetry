@@ -268,7 +268,7 @@ def test_phone_explains_expired_and_refused_previews():
       answer={body:{ok:false,error:'preview_path_denied'}};
       await chip(root).onclick();await settle();
       assert.equal(root.all().filter(e=>e.className==='conversation-preview').length,1,'one preview at a time');
-      assert.ok(panel(root).textContent.includes('private'));
+      assert.ok(panel(root).textContent.includes('outside the agent’s folders'));assert.ok(!panel(root).textContent.includes('private'));
       C.unmount();
     ''')
 

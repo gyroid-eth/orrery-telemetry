@@ -4,14 +4,14 @@ No connection or process starts on import. The phone supplies only a canonical
 agent name and, for older pages, an opaque token this reader issued. It never
 supplies or receives a file path, transcript cursor or cockpit reference. The
 reader calls one fixed loopback cockpit route, which resolves the dashboard's
-bound record itself, rechecks it after reading and applies its redaction. This
+bound record itself and rechecks it after reading; it does not mask text. This
 module keeps an explicit allow-list of event fields and bounds every page.
 
 File and image previews follow the same rule. Cockpit attaches its own
 reference IDs to tool events; this reader keeps them and gives the phone a
 different opaque ID per reference. A preview asks the fixed cockpit preview
-route, which rechecks the record, the root, the canonical path, the size, the
-pixel count and secret-looking names on every read. This module then bounds
+route, which rechecks the record, the root, the canonical path, the type, the
+size and the pixel count on every read, and refuses nothing by name. This module then bounds
 the answer again: text keeps its start, images pass only as a plain PNG
 (IHDR, IDAT and IEND chunks) within side, pixel and byte limits.
 """
