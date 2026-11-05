@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 
@@ -333,6 +334,80 @@ def _listener_pids(port: int = 8765) -> tuple[int, ...] | str:
         return UNKNOWN
     return tuple(sorted(int(token) for token in tokens))
 
+
+
+# The real user's home, from the password database: tests set HOME to a temporary
+# directory, and the guard below must keep looking at the real one. launchd and
+# ~/Library/LaunchAgents exist only on macOS; elsewhere (Windows has no `pwd`)
+# the guard does nothing.
+def _real_launch_agents() -> str | None:
+    if sys.platform != "darwin":
+        return None
+    import pwd
+
+    return os.path.join(pwd.getpwuid(os.getuid()).pw_dir, "Library", "LaunchAgents")
+
+
+REAL_LAUNCH_AGENTS = _real_launch_agents()
+MOBILE_RELAY_LABEL = "org.agentstack.mobile-relay"
+# Only this project's jobs. Other apps, and a person switching Settings -> Phone
+# on during a long run, change launchd too; only a disappearance is a test's doing.
+ORRERY_LABEL = re.compile(r"org\.(agentstack|orrery)\.[A-Za-z0-9._-]+")
+
+
+def _orrery_plists() -> frozenset[str] | str:
+    try:
+        names = os.listdir(REAL_LAUNCH_AGENTS)
+    except FileNotFoundError:
+        return frozenset()
+    except OSError:
+        return UNKNOWN
+    return frozenset(name[:-len(".plist")] for name in names
+                     if name.endswith(".plist") and ORRERY_LABEL.fullmatch(name[:-len(".plist")]))
+
+
+def _loaded(label: str) -> bool | str:
+    """Whether launchd knows the job. Only `launchctl print`: reads."""
+    if not LAUNCHCTL:
+        return UNKNOWN
+    try:
+        result = _RUN([LAUNCHCTL, "print", f"gui/{os.getuid()}/{label}"],
+                      capture_output=True, text=True, timeout=10)
+    except (OSError, _SUBPROCESS.SubprocessError):
+        return UNKNOWN
+    return result.returncode == 0
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _the_suite_leaves_real_launch_agents_alone():
+    """Fail the run if one of this project's real launchd jobs disappeared.
+
+    A test once ran scripts/uninstall.sh with the real HOME, and the uninstaller
+    stopped the real phone reader and removed its plist. The service watcher
+    above follows the install's own labels and missed it: the reader is created
+    later by `agentstack-mobile`, not by the installer. This looks only at
+    org.agentstack.* / org.orrery.* plists in the real ~/Library/LaunchAgents
+    and whether those jobs are loaded, and only at what was there before the
+    run and is gone after it. It only reads (a listing and `launchctl print`).
+    """
+    if REAL_LAUNCH_AGENTS is None:
+        yield
+        return
+    plists = _orrery_plists()
+    labels = set() if plists == UNKNOWN else set(plists)
+    labels.add(MOBILE_RELAY_LABEL)
+    loaded = {label: _loaded(label) for label in sorted(labels)}
+    yield
+    gone = []
+    after = _orrery_plists()
+    if UNKNOWN not in (plists, after):
+        gone += [f"{os.path.join(REAL_LAUNCH_AGENTS, name)}.plist" for name in sorted(plists - after)]
+    for label, was in loaded.items():
+        if was is True and _loaded(label) is False:
+            gone.append(f"launchd job gui/{os.getuid()}/{label}")
+    if gone:
+        pytest.fail("disappeared during this test run: " + ", ".join(gone)
+                    + f" (last test in this process: {_CURRENT_TEST})", pytrace=False)
 
 class _Watcher(threading.Thread):
     def __init__(self, labels: tuple[str, ...]) -> None:
