@@ -47,6 +47,7 @@ with HTTP 400. A media-type mismatch is HTTP 415, a cross-origin POST is HTTP 40
 | GET | `/api/suggest-name` | `scientist` | verified `Adjective-Scientist` (requested form; read-back from the registration response is authoritative for the actual registered name) |
 | GET | `/api/fs/dirs` | optional `path` | root-scoped child directories |
 | GET | `/api/agents` | none | `{ts, agents}` |
+| GET | `/api/agents/<name>/history-binding` | none | `{ok, agent}` (one agent's conversation-record binding, API 36) |
 | GET | `/api/graph` | `days`, `all` | `{nodes, edges, spawn, timestamp_diagnostics, degraded, ts}` |
 | GET | `/api/history` | `session`, `limit` | transcript events |
 | GET | `/api/agent-history` | `name` or `names`, `hours`, `include_pane_states` | agent event timeline |
@@ -72,7 +73,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":35}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":36}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -386,6 +387,27 @@ API generation 4 adds these fields. GET `/api/agents` and `/api/graph` Claude ro
 API generation 5 adds `resume_mode` to finished Claude rows that can be resumed (`ready` or `verification_required`), before any resume. `mail` means the resume authenticates the owner and unretires its Mail row, or refuses without launching; it never falls back to a conversation-only resume. `conversation_only` means the conversation resumes without touching Mail, and the row also carries `mail_status: unavailable` with `mail_reason` / `mail_message`. The `/api/jump` response reports the same `resume_mode`; a Claude resume that restores Mail now returns `resume_mode: mail`. `resume_capability` keeps its codes and meaning, so a caller that resumes on `ready` is unaffected. Codex rows, rows that cannot be resumed and running rows carry no `resume_mode`.
 
 Rows and responses with `mail_reason: mail_schema_unsupported` also carry `mail_remedy`: update the ORRERY Mail this installer deployed with `./scripts/install.sh --update-mail`, let the conversation-only session exit, then resume again; if the dry run refuses, follow [the Mail update guide](agentstack-mail-update.en.md) instead. The same text ends `mail_message`, so a caller that shows `mail_message` gets it without reading the new field (the API generation is unchanged). `credential_absent` and `retention_expired` cannot be fixed from the dashboard and carry no remedy. A running conversation-only session reports `mail_status` / `mail_reason` / `mail_message` even when its retired Mail row leaves `program` empty.
+
+## GET `/api/agents/<name>/history-binding`
+
+The binding of one agent, which the cockpit's conversation-history reader confirms before it shows content (API 36). It is the same verdict as that agent's row of `/api/agents?scope=live` (running judgement by `lookup_agent`, the 30-day window, binding by the same functions as the roster), without reading any pane or building any other agent's row.
+
+```bash
+curl -s http://127.0.0.1:8770/api/agents/AgentName/history-binding
+```
+
+Response:
+
+```json
+{"ok":true,"agent":{"name":"AgentName","program":"claude-code","category":"agent","running":true,"created":1793775600,
+ "history_binding":"bound","transcript_path":"/abs/path.jsonl","history_binding_reason":"","history_binding_reason_code":"bound",
+ "history_session_id":"…","history_receipt_ts":"…"}}
+```
+
+- Only these 11 fields are returned; their meaning is as in [conversation history binding](#conversation-history-binding-legacy-api-35)
+- A name that is not a live-roster row (retired, gone, warm-up, unregistered) or is malformed returns 404 `{"ok":false,"error":"agent_unavailable"}`
+- A read-only GET with the same Host/Origin handling as `/api/agents` (loopback). Fresh and global answer 404 `agent_unavailable` without a legacy judgement (in global, a failed operator admission before any route answers 503). The protected fresh history path is unchanged
+- Use it only when `api` is 36 or later; on any other failure (another 404, a 5xx, a transport failure) or with an older dashboard, confirm with `/api/agents?scope=live` as before
 
 ## GET `/api/graph`
 
