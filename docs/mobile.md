@@ -6,6 +6,42 @@
 
 スマホ用の閲覧画面です。英語・dark表示で、要確認のagent、Mailの時間軸、NETWORKを見られます。**既定はオフ**です。通常のinstallや更新では待受もTailscale Serveも開始しません。同じコンピューターのlegacy Telemetry（API 30以上）へ接続します。global modeには未対応です。
 
+ORRERYのcockpitがあれば、**Settings → Phone**からオン・オフできます（[次節](#cockpitのsettingsからオンにする)）。その下の表と[手動で有効にする](#手動で有効にする)は、cockpitを使わずに手で設定する場合の手順です。
+
+## cockpitのSettingsからオンにする
+
+cockpitの**Settings**に**Phone**の節があり、スイッチは2つです。
+
+- **Phone access**: スマホで読めるものすべて（agentの一覧・Graph・Mail・会話の記録。file・画像のpreviewが入っている版ではそれも）。会話だけを別に切るスイッチはありません。
+- **Send from phone**: paneへ確認付きの1行を送る（[Terminal](#スマホからpaneを確認して送る)）。既定はオンですが、下の4の確認までは働きません。
+
+初めて**Phone access**を入れると、足りない段だけが節の中に出ます。
+
+| 段 | 誰が | 何をする |
+|---|---|---|
+| 1 | 自動 | Tailscaleにsign inしているかを読む |
+| 2 | **本人**・1回 | readerが通すloginとスマホで開くaddressを確かめて**Confirm and turn on**を押す。`tailscale status`から埋めてある |
+| 3 | **本人**・terminal | 出ている`tailscale serve --https=9443 http://127.0.0.1:8781`を1回実行し、**Check again**を押す |
+| 4 | **本人**・管理画面 | [次節の端末制限](#公開前に本人とスマホを別々に制限する)などで、tcp:9443に届く人と端末を確かめてから**I reviewed the policy**を押す。押した日時が残るだけで、ORRERYはpolicyを確かめられない |
+
+4を押すまでは、一覧・Graph・Mailだけが読め、会話とSendは止まっています（readerは`policy_not_reviewed`と答える）。
+
+裏ではTelemetryの`~/.agentstack/bin/agentstack-mobile`が動きます。cockpitはこのcommandを呼ぶだけで、Telemetryのfileを直接は書きません。
+
+- 設定は`~/.agentstack/mobile.json`（mode 0600）に置きます。keyは`access`・`send`・`owner_login`・`public_origin`・`policy_reviewed_at`と3つのportで、鍵やtokenは入りません。
+- readerはlaunchdのjob `org.agentstack.mobile-relay`として、`mobile_relay.py --config ~/.agentstack/mobile.json`で動きます。logは`~/.agentstack/logs/mobile-relay.log`です。設定を変えるとjobを入れ直し、Phone accessを切るとjobとplistを消します。installはcommandを置くだけで、jobは作りません。uninstallはjobを止めてplistを消します。
+- 手で起動したreaderが8781を使っている間は、badgeが**MANUAL**になり、Statusに**A reader not started from Settings is running on 127.0.0.1:8781**と出ます。スマホからはそのreaderを今も読めます。Settingsのスイッチはそのreaderを動かせないので、押せなくなり、`agentstack-mobile apply`も`port_in_use`で何も変えません。Settingsへ移るには、そのreaderを起動したterminalで止め（Ctrl-C）、**Phone access**を入れます。手のflagは次のように置き換わります: `--enable-terminal`は**Send from phone**、`--phone-policy-reviewed`は4の**I reviewed the policy**、Historyは**Phone access**に含まれます。
+- **Send from phone**は、cockpit側の受け口もその場で切り替わり、`~/.orrery/config.json`の`enable_mobile_terminal`に保存されます。backendの再起動はいりません。terminalで`agentstack-mobile off`などを実行した場合は、次にSettingsを開いたときに揃います。手で起動したreaderが動いている間と、Settingsを一度も使っていない間は、`enable_mobile_terminal`を今の値のまま変えません。
+- loginかaddressを変えると、4の確認は取り消され、会話とSendは確認し直すまで止まります。確認を自分で取り消すには`echo '{"policy_reviewed": false}' | agentstack-mobile apply`を実行します。
+- launchdがreaderを起動できなかったときは、Phone accessをオフに戻し、jobもplistも残しません（次のloginで勝手に起動しないように）。
+- jobは、オンにしたときのPythonでreaderを動かします。そのPython（venvやHomebrewの古い版）を消すと、Statusに**The Python this reader was set up with is gone**と出ます。Phone accessを一度切って入れ直すと、今のPythonで作り直します。
+- cockpitのdemo modeでは、Phoneの節はlogin・address・ServeのURLを画面に出しません（demo modeが隠すのはユーザー名と機械名だけなので）。変更はdemo modeを切って行います。
+- Tailscale ServeとFunnelは読むだけです。Funnelが有効なら警告を出します。policyとServeは変更しません。
+
+cockpitなしで同じことをするには、`agentstack-mobile status`で状態を見て、`echo '{"access": true, "owner_login": "owner@example.com", "public_origin": "https://computer.example.ts.net:9443", "policy_reviewed": true}' | agentstack-mobile apply`で入れ、`agentstack-mobile off`で切ります。
+
+**自分で確かめる:** 4まで終えたら、Statusが4行とも緑であることを見ます（reader・Serve・Funnel off・policy）。そのあと、スマホでagentを開き、**Conversation** tabが出ることを確かめます。
+
 ## エージェントに設定を頼む
 
 Telemetryを動かしているコンピューターのClaude CodeやCodexのagentに、このページを渡して設定させられます。たとえば次のように頼みます。
@@ -25,7 +61,7 @@ Telemetryを動かしているコンピューターのClaude CodeやCodexのagen
 | 7 | **本人** | スマホで`https://<Serve名>:9443/`を開く。最初のHTTPSは証明書の発行で数秒かかることがある |
 | 8 | agent＋**本人** | 使いたい各端末で表示を確認し、端末制限を採用した場合は除外した端末が拒否されることも確かめる（[実スマホで確認してから使う](#実スマホで確認してから使う)） |
 
-macOSで`tailscale`がPATHに無いときは、CLIは通常`/Applications/Tailscale.app/Contents/MacOS/Tailscale`です。readerは前面で動きます。ターミナルを閉じても残したい場合は、OSのサービス管理か`nohup`で動かしてください。Telemetryはreaderの常駐サービスを入れません。
+macOSで`tailscale`がPATHに無いときは、CLIは通常`/Applications/Tailscale.app/Contents/MacOS/Tailscale`です。手で起動したreaderは前面で動きます。常駐させるならcockpitのSettings（または`agentstack-mobile apply`）を使ってください。launchdのjobで動きます。
 
 ## 画面で分かること
 
@@ -33,7 +69,7 @@ macOSで`tailscale`がPATHに無いときは、CLIは通常`/Applications/Tailsc
 - **Graph**: 既定は直近24時間に活動が確認されたagentです。Focusはその中の選択agentと関連の強い最大5体、Allは選択期間内の全体です。Findで名前を選び、ピンチで拡大、ドラッグで移動、Fitで収めます。大きなgraphで全名前を同時に読めることは保証しません。
 - 線の太さと矢印の大きさは選択期間のMail件数に対応します。件数は方向・To/Ccごとの**宛先行数**で、未読数や一意の送信数ではありません。親子の破線はMailとは別です。
 - 文脈残量弧とWorkingの動きはPCと共通です。文脈の取得時刻は不明なまま扱い、未知値には弧を描きません。アカウント利用枠はUnavailableで、更新要求もしません。
-- **Tune graph**の6設定はこのブラウザ内の表示調整だけです。agentの起動・停止・Mail返信はありません。Activityの絞込も閲覧だけです。ターミナルの表示と送信、会話の記録は、それぞれ下の別設定を有効にした場合だけ使えます。
+- **Tune graph**の6設定はこのブラウザ内の表示調整だけです。agentの起動・停止・Mail返信はありません。Activityの絞込も閲覧だけです。会話の記録は下のpolicyの確認の後に、ターミナルの表示と送信はさらにその設定を有効にした場合だけ使えます。
 
 前面では約10秒ごとに取得し、背景ではpollを止めます。取得に失敗した値は「Last known」として残し、失敗を正常な0件や待機状態には変えません。SnapshotはHTTPで観測した時刻です。Mailは1ページ200宛先行までで、**Older / Newer**で差し替えます。古いページを見ている間もGraphは更新されますが、一覧が勝手に先頭へ戻ることはありません。Statusは最新ページだけに表示します。graphは最大10,000集約リンクまでで、切詰めは画面に明示します。ブラウザに保存するのは6つの表示設定だけで、観測データのoffline保存やservice workerはありません。
 
@@ -85,6 +121,8 @@ Graph下端、またはActivityの絞込ボタン横の小さな期間表示か�
 
 ## 手動で有効にする
 
+**更新する前に:** これまで`--phone-policy-reviewed`を付け、`--enable-history`を付けずに手で起動していたreaderは、更新後に再起動すると会話の記録とfile・画像のpreviewもスマホに出すようになります。出したくなければ、再起動の前に`--disable-history`を足してください。起動時にも、この変更を1行で知らせます。
+
 1. TelemetryをAPI 30以上に更新し、同じコンピューターの通常画面で観測できることを確認します。既存のサービス・provider設定はそのまま使います。
 2. 現在のアクセス範囲を確認し、推奨の端末制限を採用する場合は上のpolicy変更を終えます。`tailscale serve status --json`で現在の設定を保存し、例のHTTPS `9443`が未使用でFunnelにもなっていないことを確認します。既存設定があるポートには重ねません。
 3. 下の設定確認を行います。`owner@example.com`は本人の正確なServe login、`computer.example.ts.net`はこのコンピューターの実際のServe名です。URLは末尾の`/`なしで指定します。custom install先ではscriptのpathも置き換えてください。Pythonは3.11以上が必要です。
@@ -123,7 +161,7 @@ tailscale serve --https=9443 http://127.0.0.1:8781
 
 ## スマホからpaneを確認して送る
 
-**Terminalは別途有効にする機能です。既定では画面取得も送信も行いません。** 閲覧用readerを動かしただけでは使えません。端末制限は上の任意の推奨で、複数の操作用端末を許可できます。既存の`--phone-policy-reviewed`は、現在のアクセスpolicyを運用者が確認したという申告として引き続き必要です。製品がpolicyを検証したり、端末を1台に限定したりするflagではありません。
+**Terminalは別途有効にする機能です。手で起動するreaderでは既定で画面取得も送信も行いません。** 閲覧用readerを動かしただけでは使えません。cockpitのSettingsでは**Send from phone**がこれにあたり、既定はオンですが、policyの確認までは働きません。端末制限は上の任意の推奨で、複数の操作用端末を許可できます。既存の`--phone-policy-reviewed`は、現在のアクセスpolicyを運用者が確認したという申告として引き続き必要です。製品がpolicyを検証したり、端末を1台に限定したりするflagではありません。
 
 この節もagentへ渡せます。本人の段では止まり、既存の設定を残して進めます。
 
@@ -162,7 +200,7 @@ PY
 
 有効時はheaderが**Terminal enabled**になります。Graphでagentを選んだパネル、ActivityのStatus行、要確認行、Mail詳細のFrom/Toにある**Terminal**から同じsheetを開きます。Graphの選択やMail本文を開く操作はそのままです。複数paneなら自分で選び、不明な対応を名前から補いません。legacyの対象はPCの既存managerが扱う同じtransport内で、既存保護が許すpaneです。agentの種類や現在の表示期間は起動許可には使わず、別socket/global対象へ迂回しません。paneのsessionは現在のmetadata project外にある場合もあります。freshは下の明示I/Aの手順を使います。
 
-上側は選択paneの末尾40行、UTF-8で6KiBまでの文字表示です。前面で開いている1paneだけ約3秒ごとに更新し、失敗時は6、12、最大24秒へ間隔を延ばします。制御文字の除去・表示の切詰めを明示し、画像、HTML、リンクを実行しません。既存recorderや復元history全体は送りません。検証済みの会話の記録だけを見る[Historyの別opt-in](#スマホでagentの会話の記録を読む)は別です。**画面にはキーや私的文章が含まれ得ます。** 誰かへ見せる前に内容を確かめてください。
+上側は選択paneの末尾40行、UTF-8で6KiBまでの文字表示です。前面で開いている1paneだけ約3秒ごとに更新し、失敗時は6、12、最大24秒へ間隔を延ばします。制御文字の除去・表示の切詰めを明示し、画像、HTML、リンクを実行しません。既存recorderや復元history全体は送りません。検証済みの会話の記録だけを見る[History](#スマホでagentの会話の記録を読む)は別です。**画面にはキーや私的文章が含まれ得ます。** 誰かへ見せる前に内容を確かめてください。
 
 上へスクロールして読み返している間は、本文・**Shown**の時刻・切詰めと制御文字除去の注記を同じsnapshotに固定し、取得は続けます。新しい出力が届くと**New output · paused**と表示します。下端へ戻すと最新の末尾へ切り替わり、追従を再開します。全出力を蓄積する機能ではなく、保留中に40行・6KiBを超える出力があった場合、旧表示と最新の末尾の間は表示できないことがあります。実機では、流れる出力のpaneで上へ戻し、3秒以上待っても読んでいる行・Shownの時刻が変わらないことと、下端へ戻すと最新へ切り替わることを確認してください。keyboardの開閉や画面の回転後も、追従中は下端を保ち、読み返し中は本文を保持することを確かめます。
 
@@ -182,13 +220,13 @@ Terminalだけを戻す場合は共有設定を`false`にするか項目を除�
 
 ## スマホでagentの会話の記録を読む
 
-**Historyは別のopt-inで、既定ではオフです。** 閲覧用のreaderやTerminalを有効にしても有効になりません。cockpitがそのagent自身の記録だと確認できた会話（Codex・Claude Code・dsh・Hermes）を、読み取り専用で表示します。「全履歴はスマホに送らない」の例外になるのは、このflagを付けている間だけです。Terminalと同じく`--phone-policy-reviewed`の申告が必要です。下の手順はagentに頼めます。先にアクセスできる人と端末を確認してください。
+**HistoryはPhone accessに含まれ、policyの確認（`--phone-policy-reviewed`、SettingsではI reviewed the policy）があれば既定でオンです。** **更新する前に:** これまで`--phone-policy-reviewed`を付け、`--enable-history`を付けずに手で起動していたreaderは、更新後に再起動すると会話の記録とfile・画像のpreviewもスマホに出すようになります。出したくなければ、再起動の前に`--disable-history`を足してください。起動時にも、この変更を1行で知らせます。 確認がなければオフのままreaderが起動し、`/view/history`は`policy_not_reviewed`を返します。cockpitがそのagent自身の記録だと確認できた会話（Codex・Claude Code・dsh・Hermes）を、読み取り専用で表示します。「全履歴はスマホに送らない」の例外になるのは、Historyがオンの間だけです。出したくない場合は、手で起動するreaderに`--disable-history`を付けます。Settingsには会話だけを切るスイッチはなく、Phone accessごと切ります。下の手順はagentに頼めます。先にアクセスできる人と端末を確認してください。
 
 | 段 | 誰が | 何をする |
 |---|---|---|
 | 1 | agent | Telemetry API 35以上であること、同じコンピューターでORRERYのcockpit backendが動いていること（既定port 8791）を確認する。記録を読むのはcockpitで、readerは読まない |
 | 2 | **本人** | Terminalと同じく、readerを開ける人と端末を確認する。Historyを有効にすると、readerを開ける端末はどれも、端末の末尾40行だけでなく過去の会話を遡って読める。会話の本文にはキーや私的な文章が含まれ得る |
-| 3 | agent | readerの起動コマンドに`--enable-history --phone-policy-reviewed`（8791以外なら`--cockpit-port`も）を足す。先に同じflagで`--check`し、今の管理方法でreaderを再起動する |
+| 3 | agent | readerの起動コマンドに`--phone-policy-reviewed`（8791以外なら`--cockpit-port`も）があることを確かめる。先に同じflagで`--check`し（`conversation history and previews are on`と出る）、今の管理方法でreaderを再起動する。以前の`--enable-history`もそのまま使える |
 | 4 | **本人** | スマホでagentを開き、**Conversation** tabを確認する |
 
 有効にすると上部に**History enabled**（Terminalも有効なら**History · Terminal**）と出て、Terminalの入口が**History**に変わります。agentのsheetは**Conversation**で開きます。Terminalも有効なら、上部に**Conversation | Terminal**の切替が出ます。
@@ -204,11 +242,11 @@ Terminalだけを戻す場合は共有設定を`false`にするか項目を除�
 
 **redactで隠せないもの。** cockpitのredactが置き換えるのは、`sk-`・`ghp_`・`AKIA`の鍵、`Authorization` header、`password=`・`secret=`のような代入、PEMのblockなど、既知の形だけです。それ以外のtoken（JWT、Slackの`xox`のtoken、環境変数の行に書かれたbotのtokenなど）、promptに貼った秘密、agentが返答の中で引用した鍵、私的な文章は、書かれたままスマホに届きます。toolの出力は送りませんが、agentがそこから書き写したものは届きます。それでよいagentと端末に限ってHistoryを有効にしてください。
 
-Historyだけを止めるには、`--enable-history`を外し、今の手順でreaderを再起動します。Terminalと閲覧の設定はそのまま残ります。
+Historyだけを止めるには、手で起動するreaderに`--disable-history`を付け（`--enable-history`があれば外し）、今の手順でreaderを再起動します。Terminalと閲覧の設定はそのまま残ります。
 
 ## 止める・戻す
 
-専用Serveだけを外し、readerを実行したターミナルでCtrl-Cを押します。
+cockpitのSettingsで入れた場合は、**Phone access**を切ります（または`agentstack-mobile off`）。launchdのjobとplistが消えます。手で起動した場合は、readerを実行したターミナルでCtrl-Cを押します。どちらの場合も、専用Serveは自分で外します。
 
 ```sh
 tailscale serve --https=9443 off

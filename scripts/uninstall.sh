@@ -233,6 +233,17 @@ for svc in data.get("services", []):
                         except ProcessLookupError:
                             pass
 
+# The phone reader job is created later by `agentstack-mobile`, not by the
+# installer, so it is not in the services list. Stop it and remove only the
+# plist it wrote under this HOME.
+mobile_plist = pathlib.Path.home() / "Library/LaunchAgents/org.agentstack.mobile-relay.plist"
+if mobile_plist.is_file() and not mobile_plist.is_symlink():
+    run(["launchctl", "bootout", f"gui/{os.getuid()}/org.agentstack.mobile-relay"])
+    if dry_run:
+        print(f"DRY-RUN would remove: {mobile_plist}")
+    else:
+        mobile_plist.unlink(missing_ok=True)
+
 remove_claude_mcp()
 remove_settings_hooks()
 

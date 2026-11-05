@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Opt-in mobile reader behind Tailscale Serve; never starts from normal install."""
+"""Opt-in mobile reader behind Tailscale Serve; never starts from normal install.
+
+Started by hand with flags, or by the launchd job that ``agentstack-mobile``
+(the cockpit's Settings panel) writes, with ``--config ~/.agentstack/mobile.json``.
+"""
 from __future__ import annotations
 
 import argparse
@@ -242,8 +246,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path=='/view/history':
             if self.command=='HEAD':self._send(200,b'');return
-            self._send(200,{'enabled':self.server.mobile_config.history_enabled,
-                            'page_events':mobile_history.PAGE_EVENTS});return
+            cfg=self.server.mobile_config
+            body={'enabled':cfg.history_enabled,'page_events':mobile_history.PAGE_EVENTS}
+            if not cfg.history_enabled:body['reason']='disabled' if cfg.phone_policy_reviewed else 'policy_not_reviewed'
+            self._send(200,body);return
         if parts.path=='/view/conversation' and self.server.mobile_config.history_enabled:
             # The phone selects an agent from the published roster and may
             # return an issued page token. It never supplies a path or cursor.
@@ -409,21 +415,63 @@ def main(argv=None):
     parser.add_argument('--phone-policy-reviewed',action='store_true',
                         help='operator acknowledgement of the access policy; does not verify it or enforce a single phone')
     parser.add_argument('--enable-history',action='store_true',
-                        help='opt in to read-only bound conversation history; viewing alone does not enable it')
+                        help='kept for older launch commands; history is now on whenever --phone-policy-reviewed is given')
+    parser.add_argument('--disable-history',action='store_true',
+                        help='keep bound conversation history and file previews off')
+    parser.add_argument('--config',default='',
+                        help='read every option from a settings file written by agentstack-mobile; no other option is allowed')
     parser.add_argument('--cockpit-port',type=int,default=8791)
     args=parser.parse_args(argv)
+    if args.config:
+        if any(value!=parser.get_default(key) for key,value in vars(args).items() if key!='config'):
+            parser.error('--config takes no other option')
+        return run_from_settings(Path(args.config),parser)
+    if args.enable_history and args.disable_history:parser.error('--enable-history and --disable-history conflict')
     if args.enable_terminal and not (args.enable or args.check):parser.error('--enable-terminal also requires --enable or --check')
     if args.enable_history and not (args.enable or args.check):parser.error('--enable-history also requires --enable or --check')
     if not args.enable and not args.check:
         print('Mobile reader is off. No listener started.');return 0
+    # Phone access reads everything, history and previews included, once the
+    # operator has acknowledged the access policy; --disable-history opts out.
+    history=args.enable_history or (args.phone_policy_reviewed and not args.disable_history)
     try:config=Config(args.owner_login,args.public_origin,args.listen_port,args.upstream_port,
-                      args.enable_terminal,args.phone_policy_reviewed,args.cockpit_port,args.enable_history)
+                      args.enable_terminal,args.phone_policy_reviewed,args.cockpit_port,history)
     except ValueError as exc:
         parser.error(str(exc))
     if args.check:
-        print('Options valid; device policy, Serve and phone access remain unverified. No listener started.');return 0
+        print('Options valid; '+history_note(config)+' Device policy, Serve and phone access remain unverified. No listener started.');return 0
+    if history and not args.enable_history:
+        # Until this release, --phone-policy-reviewed alone left history off.
+        # A reader restarted with the same command now shows it: say so.
+        print('Conversation history and file/image previews are on: --phone-policy-reviewed now turns them on. '
+              'Restart with --disable-history to keep them off.',flush=True)
+    return serve(config)
+
+
+def history_note(config):
+    if config.history_enabled:return 'conversation history and previews are on.'
+    if config.phone_policy_reviewed:return 'conversation history is off (--disable-history).'
+    return 'conversation history is off until --phone-policy-reviewed is given.'
+
+
+def run_from_settings(path,parser):
+    try:
+        from dashboard import mobile_settings
+    except ModuleNotFoundError:
+        import mobile_settings
+    try:
+        settings=mobile_settings.load(path)
+        if not settings['access']:
+            print('Phone access is off in the settings file. No listener started.');return 0
+        config=mobile_settings.relay_config(settings)
+    except ValueError as exc:
+        parser.error('settings file: '+str(exc))
+    return serve(config)
+
+
+def serve(config):
     server=make_server(config)
-    print(f'Mobile reader listening on 127.0.0.1:{config.listen_port}; Serve and device policy are operator-managed.',flush=True)
+    print(f'Mobile reader listening on 127.0.0.1:{config.listen_port}; {history_note(config)} Serve and device policy are operator-managed.',flush=True)
     try:server.serve_forever()
     except KeyboardInterrupt:pass
     finally:server.server_close()
