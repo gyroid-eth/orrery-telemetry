@@ -15,9 +15,16 @@ The cockpit's **Settings** has a **Phone** section with two switches:
 - **Phone access**: everything the phone can read (the agent list, Graph, Mail and conversation records, plus file and image previews in versions that have them). There is no separate switch for conversations.
 - **Send from phone**: send one confirmed line to a pane ([Terminal](#inspect-a-pane-and-send-input-from-your-phone)). It is on by default but does nothing until step 4 below.
 
-**It cannot be set up in demo mode.** Demo mode does not put the login and the address on the page, so step 2 shows no fields. Turn demo mode off once (**Demo mode** in Settings, or `?demo=0` in the URL) and go through step 4 below. After that you can go back to demo mode ([In demo mode](#in-demo-mode)).
+**It cannot be set up in demo mode.** Demo mode does not put the login and the address on the page, so step 2 shows no fields. Turn off **Demo mode** in Settings once and go through step 4 below (`?demo=0` in the URL affects only that page; reloading brings demo mode back). After that you can go back to demo mode ([In demo mode](#in-demo-mode)).
 
 The names and addresses in these screens are made-up examples; yours come from your own Tailscale.
+
+### Before you start (you, once)
+
+Two things cannot be changed from the cockpit. They are the same as steps 2 and 4 in the table under [Ask your agent to set it up](#ask-your-agent-to-set-it-up).
+
+- **Install Tailscale on the phone and sign in with the same account as the computer.** Check: the computer is listed in the phone's Tailscale app (and the phone shows up in `tailscale status` on the computer).
+- **Enable MagicDNS and HTTPS Certificates on the DNS page of the Tailscale admin console.** Serve (HTTPS) in step 3 needs them. Check: both are on in the admin console's DNS page, or `CertDomains` in `tailscale status --json` on the computer is not empty.
 
 ### The first screen
 
@@ -29,14 +36,17 @@ The badge next to **Phone** says **OFF**. Press the **Phone access** switch.
 
 The first press **leaves the switch off**. Right under the switch it says "Not on yet: check the owner and address in step 2 below, then press Confirm and turn on.", the **Setup** steps open below, and the cursor moves to step 2.
 
-- Step 1 reads whether Tailscale is signed in. With a ✓ there is nothing to do.
-- In step 2, **Owner (Tailscale login)** is the only login the reader lets in, and **Address on the phone** is the address the phone opens (`https://<Serve name>:9443`). Both are filled in from `tailscale status`; check them and press **Confirm and turn on**. This is what turns Phone access on.
+- Step 1 reads whether Tailscale is signed in. With a ✓ there is nothing to do. Without one, the line under the switch says "sign in to Tailscale": sign in to Tailscale on this computer, then press **Phone access** again.
+- In step 2, **Owner (Tailscale login)** is the only login the reader lets in, and **Address on the phone** is the address the phone opens (`https://<this computer's Tailscale name>:9443`). Both are filled in from `tailscale status`; check them and press **Confirm and turn on**. This is what turns Phone access on.
+- **Check:** the badge says **SETUP** and step 2 has a ✓.
 
 <img src="images/phone-settings-2-owner.png" width="360" alt="After the first press of Phone access. Under the switch, a line points to step 2; step 2 has the owner and address fields and the Confirm and turn on button">
 
 ### Step 3: Serve 9443 → reader (you, terminal)
 
-Once on, the badge says **SETUP** and step 2 has a ✓. **Copy** the `tailscale serve --https=9443 http://127.0.0.1:8781` shown in step 3, run it once in a terminal, then press **Check again**. ORRERY only reads Serve and never changes it.
+**Copy** the `tailscale serve --https=9443 http://127.0.0.1:8781` shown in step 3, run it once in a terminal, then press **Check again**. ORRERY only reads Serve and never changes it.
+
+**Check:** **Check again** puts a ✓ on step 3. If it does not, read the output of `tailscale serve`. With HTTPS Certificates off, it asks you to enable them here ([Before you start](#before-you-start-you-once)).
 
 <img src="images/phone-settings-3-serve.png" width="360" alt="Badge SETUP. Step 3 shows the tailscale serve command with Copy and Check again">
 
@@ -45,6 +55,8 @@ Once on, the badge says **SETUP** and step 2 has a ✓. **Copy** the `tailscale 
 When step 3 has a ✓, check in the Tailscale admin console who and which devices can reach tcp:9443 (for example with the [device restriction below](#restrict-the-account-and-the-phone-separately)). Then press **I reviewed the policy**. Only the date you pressed it is kept; ORRERY cannot check the policy.
 
 **Until step 4, conversations and Send stay off.** The phone can read the agent list, Graph and Mail only (the reader answers `policy_not_reviewed`). Meanwhile the line right under the switch says "On, but Conversation and Send from phone stay off until step 4 below".
+
+**Check:** ORRERY cannot check the policy. Check yourself that an excluded device cannot open it, as in [Verify on real devices](#verify-on-real-devices).
 
 <img src="images/phone-settings-4-policy.png" width="360" alt="Steps 1 to 3 have a check mark. Under the switch, one line says Conversation and Send stay off until step 4. Step 4 has the I reviewed the policy button">
 
@@ -56,13 +68,13 @@ The badge says **ON** and the setup steps are gone. **Check it yourself:** all f
 
 ### Conversations on the phone
 
-Open `https://<Serve name>:9443/` on the phone and open an agent. When the **Conversation** tab appears, conversation records reach the phone ([Read an agent's conversation history](#read-an-agents-conversation-history-on-your-phone)).
+On the phone, open the **Address on the phone** from step 2 (`https://…:9443/`) and open an agent. The first HTTPS request can take a few seconds while the certificate is issued. When the **Conversation** tab appears, conversation records reach the phone ([Read an agent's conversation history](#read-an-agents-conversation-history-on-your-phone)).
 
 <img src="images/mobile-conversation.png" width="300" alt="The Conversation tab on the phone, with messages and Mail cards">
 
 ### In demo mode
 
-If you press **Phone access** in demo mode before the login and address are set, the line right under the switch says "Turn off demo mode to set up phone access (once). After that you can switch it on and off in demo mode." **Turn off demo mode** reloads the page without demo mode, so you can go through the steps above.
+If you press **Phone access** in demo mode before the login and address are set, the line right under the switch says "Turn off demo mode to set up phone access (once). After that you can switch it on and off in demo mode." **Turn off demo mode** turns demo mode off and reloads the page. Settings closes, so open **Settings** again, press **Phone access**, and go through the steps above.
 
 Once it is set up, you can go back to demo mode and the switch keeps working. The login and the address read "hidden in demo mode" and are not put on the page. Turn demo mode off only to change them.
 

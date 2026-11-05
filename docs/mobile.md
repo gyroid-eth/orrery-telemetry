@@ -15,9 +15,16 @@ cockpitの**Settings**に**Phone**の節があり、スイッチは2つです。
 - **Phone access**: スマホで読めるものすべて（agentの一覧・Graph・Mail・会話の記録。file・画像のpreviewが入っている版ではそれも）。会話だけを別に切るスイッチはありません。
 - **Send from phone**: paneへ確認付きの1行を送る（[Terminal](#スマホからpaneを確認して送る)）。既定はオンですが、下の4の確認までは働きません。
 
-**demo modeのままでは設定できません。** demo modeではloginとaddressを画面に出さないため、手順2の入力欄が出ません。最初の1回だけdemo modeを切って（Settingsの**Demo mode**、またはURLの`?demo=0`）、下の手順を4まで済ませます。設定した後は、demo modeに戻してかまいません（[demo modeのとき](#demo-modeのとき)）。
+**demo modeのままでは設定できません。** demo modeではloginとaddressを画面に出さないため、手順2の入力欄が出ません。最初の1回だけ、Settingsの**Demo mode**を切って、下の手順を4まで済ませます（URLの`?demo=0`はそのpageだけに効き、開き直すとdemo modeに戻ります）。設定した後は、demo modeに戻してかまいません（[demo modeのとき](#demo-modeのとき)）。
 
 以下の画面の名前とaddressは架空の例です。実際には、自分のTailscaleの値が入ります。
+
+### 始める前に（本人・1回）
+
+cockpitの画面からは変えられない前提が2つあります。どちらも[エージェントに設定を頼む](#エージェントに設定を頼む)の表の段2・4と同じです。
+
+- **スマホにTailscaleを入れ、コンピューターと同じアカウントでsign inする。** 確かめる: スマホのTailscaleの一覧にこのコンピューターが出る（コンピューターの`tailscale status`にもスマホが出る）。
+- **Tailscaleの管理画面のDNSで、MagicDNSとHTTPS Certificatesを有効にする。** 手順3のServe（HTTPS）に要ります。確かめる: 管理画面のDNSのpageで両方が有効になっている。またはコンピューターで`tailscale status --json`の`CertDomains`が空でない。
 
 ### 最初の画面
 
@@ -29,22 +36,27 @@ cockpitの**Settings**に**Phone**の節があり、スイッチは2つです。
 
 初めて押したときは、**スイッチはまだオフのまま**です。スイッチのすぐ下に「Not on yet: check the owner and address in step 2 below, then press Confirm and turn on.」と出て、その下に**Setup**の手順が開き、手順2の入力欄へ移ります。
 
-- 手順1はTailscaleにsign inしているかを自動で読みます。✓が付いていれば何もしません。
-- 手順2の**Owner (Tailscale login)**は、readerが通す唯一のloginです。**Address on the phone**は、スマホで開くaddress（`https://<Serve名>:9443`）です。どちらも`tailscale status`から埋めてあるので、確かめて**Confirm and turn on**を押します。ここで初めてPhone accessがオンになります。
+- 手順1はTailscaleにsign inしているかを自動で読みます。✓が付いていれば何もしません。付いていないときは、スイッチの下に「sign in to Tailscale」と出ます。このコンピューターでTailscaleにsign inしてから、もう一度**Phone access**を押します。
+- 手順2の**Owner (Tailscale login)**は、readerが通す唯一のloginです。**Address on the phone**は、スマホで開くaddress（`https://<このコンピューターのTailscale名>:9443`）です。どちらも`tailscale status`から埋めてあるので、確かめて**Confirm and turn on**を押します。ここで初めてPhone accessがオンになります。
+- **確かめる:** badgeが**SETUP**になり、手順2に✓が付く。
 
 <img src="images/phone-settings-2-owner.png" width="360" alt="Phone accessを初めて押した後。スイッチの下に手順2へ進む案内が出て、手順2にownerとaddressの入力欄とConfirm and turn onのボタンがある">
 
 ### 手順3: Serve 9443 → reader（本人・terminal）
 
-オンになると、badgeは**SETUP**になり、手順2に✓が付きます。手順3に出ている`tailscale serve --https=9443 http://127.0.0.1:8781`を**Copy**し、terminalで1回実行してから**Check again**を押します。ORRERYはServeを読むだけで、変更しません。
+手順3に出ている`tailscale serve --https=9443 http://127.0.0.1:8781`を**Copy**し、terminalで1回実行してから**Check again**を押します。ORRERYはServeを読むだけで、変更しません。
+
+**確かめる:** **Check again**で手順3に✓が付く。付かないときは、`tailscale serve`の出力を読みます。HTTPS Certificatesが無効なら、ここで有効にするよう求められます（[始める前に](#始める前に本人1回)）。
 
 <img src="images/phone-settings-3-serve.png" width="360" alt="badgeはSETUP。手順3にtailscale serveのcommandとCopy・Check againのボタンがある">
 
 ### 手順4: Who can reach it（本人・管理画面）
 
-手順3に✓が付いたら、Tailscaleの管理画面で、tcp:9443に届く人と端末を確かめます（[次節の端末制限](#公開前に本人とスマホを別々に制限する)など）。済んだら**I reviewed the policy**を押します。押した日時が残るだけで、ORRERYはpolicyを確かめられません。
+手順3に✓が付いたら、Tailscaleの管理画面で、tcp:9443に届く人と端末を確かめます（[下の端末制限](#公開前に本人とスマホを別々に制限する)など）。済んだら**I reviewed the policy**を押します。押した日時が残るだけで、ORRERYはpolicyを確かめられません。
 
 **4を押すまでは、会話とSendは止まっています。** スマホで読めるのは一覧・Graph・Mailだけです（readerは`policy_not_reviewed`と答える）。この間は、スイッチのすぐ下に「On, but Conversation and Send from phone stay off until step 4 below」と出ます。
+
+**確かめる:** ORRERYはpolicyを確かめられません。除外した端末から開けないことを、[実スマホで確認してから使う](#実スマホで確認してから使う)の手順で自分で確かめます。
 
 <img src="images/phone-settings-4-policy.png" width="360" alt="手順1〜3に✓。スイッチの下に、会話とSendは手順4まで止まっているという1行。手順4にI reviewed the policyのボタン">
 
@@ -56,13 +68,13 @@ badgeが**ON**になり、Setupの手順は消えます。**自分で確かめ�
 
 ### スマホで会話を見る
 
-スマホで`https://<Serve名>:9443/`を開き、agentを開きます。**Conversation** tabが出れば、会話の記録まで届いています（[会話の記録を読む](#スマホでagentの会話の記録を読む)）。
+スマホで、手順2の**Address on the phone**（`https://…:9443/`）を開き、agentを開きます。最初のHTTPSは、証明書の発行で数秒かかることがあります。**Conversation** tabが出れば、会話の記録まで届いています（[会話の記録を読む](#スマホでagentの会話の記録を読む)）。
 
 <img src="images/mobile-conversation.png" width="300" alt="スマホのConversation tab。発言とMailのcardが並ぶ">
 
 ### demo modeのとき
 
-loginとaddressをまだ設定していない状態でdemo modeのまま**Phone access**を押すと、スイッチのすぐ下に「Turn off demo mode to set up phone access (once). After that you can switch it on and off in demo mode.」と出ます。**Turn off demo mode**を押すとdemo modeを切って開き直すので、上の手順を進めます。
+loginとaddressをまだ設定していない状態でdemo modeのまま**Phone access**を押すと、スイッチのすぐ下に「Turn off demo mode to set up phone access (once). After that you can switch it on and off in demo mode.」と出ます。**Turn off demo mode**を押すと、demo modeを切ってpageを開き直します。Settingsは閉じるので、もう一度**Settings**を開いて**Phone access**を押し、上の手順を進めます。
 
 設定した後は、demo modeに戻しても、スイッチはそのまま使えます。loginとaddressは「hidden in demo mode」と表示され、画面には出ません。変更するときだけdemo modeを切ります。
 
