@@ -334,6 +334,66 @@ def _listener_pids(port: int = 8765) -> tuple[int, ...] | str:
     return tuple(sorted(int(token) for token in tokens))
 
 
+
+# The real user's home, from the password database: tests set HOME to a temporary
+# directory, and the guard below must keep looking at the real one.
+def _real_home() -> str:
+    import pwd
+
+    return pwd.getpwuid(os.getuid()).pw_dir
+
+
+REAL_LAUNCH_AGENTS = os.path.join(_real_home(), "Library", "LaunchAgents")
+MOBILE_RELAY_LABEL = "org.agentstack.mobile-relay"
+
+
+def _real_launch_agents() -> frozenset[str] | str:
+    try:
+        return frozenset(os.listdir(REAL_LAUNCH_AGENTS))
+    except FileNotFoundError:
+        return frozenset()
+    except OSError:
+        return UNKNOWN
+
+
+def _mobile_relay_loaded() -> bool | str:
+    """Whether launchd knows the phone reader job. Only `launchctl print`: reads."""
+    if not LAUNCHCTL:
+        return UNKNOWN
+    try:
+        result = _RUN([LAUNCHCTL, "print", f"gui/{os.getuid()}/{MOBILE_RELAY_LABEL}"],
+                      capture_output=True, text=True, timeout=10)
+    except (OSError, _SUBPROCESS.SubprocessError):
+        return UNKNOWN
+    return result.returncode == 0
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _the_suite_leaves_real_launch_agents_alone():
+    """Fail the run if the real ~/Library/LaunchAgents or the phone reader job changed.
+
+    A test once ran scripts/uninstall.sh with the real HOME, and the uninstaller
+    stopped the real phone reader and removed its plist. The service watcher
+    above follows the install's own labels and missed it: the reader is created
+    later by `agentstack-mobile`, not by the installer. This only reads (a
+    directory listing and `launchctl print`); it never changes launchd.
+    """
+    before = (_real_launch_agents(), _mobile_relay_loaded())
+    yield
+    after = (_real_launch_agents(), _mobile_relay_loaded())
+    problems = []
+    if UNKNOWN not in (before[0], after[0]) and before[0] != after[0]:
+        gone, new = sorted(before[0] - after[0]), sorted(after[0] - before[0])
+        problems.append(f"{REAL_LAUNCH_AGENTS} changed (removed {gone}, added {new})")
+    if UNKNOWN not in (before[1], after[1]) and before[1] != after[1]:
+        problems.append(f"launchd job {MOBILE_RELAY_LABEL} went from "
+                        f"{'loaded' if before[1] else 'absent'} to {'loaded' if after[1] else 'absent'}")
+    if problems:
+        pytest.fail("the test run changed the real user's launchd state (last test: "
+                    f"{_CURRENT_TEST}): " + "; ".join(problems)
+                    + ". Run uninstall/launchd code with a temporary HOME and a fake launchctl.",
+                    pytrace=False)
+
 class _Watcher(threading.Thread):
     def __init__(self, labels: tuple[str, ...]) -> None:
         super().__init__(daemon=True)

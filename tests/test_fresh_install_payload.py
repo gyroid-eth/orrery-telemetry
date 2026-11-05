@@ -74,7 +74,11 @@ def test_fresh_manifest_owns_exact_four_files_and_private_uninstall_keeps_neighb
     script = '\n'.join(['set -eu', 'plan() { :; }',
         *[name + '=' + shlex.quote(value) for name, value in variables.items()], function,
         'write_manifest manual "" "" ""'])
-    made = subprocess.run(['/bin/bash', '-c', script], cwd=tmp_path, env=os.environ.copy(),
+    # The uninstaller acts on things under HOME (the phone reader's launchd plist,
+    # among others). With the real HOME this test once removed the real job.
+    home = tmp_path / 'home';home.mkdir()
+    env = {**os.environ, 'HOME': str(home)}
+    made = subprocess.run(['/bin/bash', '-c', script], cwd=tmp_path, env=env,
         stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=15)
     assert made.returncode == 0, made.stdout + made.stderr
     state = json.loads((install / 'install-state.json').read_text())
@@ -85,7 +89,7 @@ def test_fresh_manifest_owns_exact_four_files_and_private_uninstall_keeps_neighb
         assert str((install / name).parent) in directories
     for name in neighbors:assert str(install / name) not in owned
     removed = subprocess.run(['/bin/bash', str(ROOT / 'scripts/uninstall.sh'), '--install-dir', str(install)],
-        cwd=tmp_path, env=os.environ.copy(), stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=20)
+        cwd=tmp_path, env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=20)
     assert removed.returncode == 0, removed.stdout + removed.stderr
     for name in FRESH_FILES[:4]:assert not (install / name).exists()
     for name, raw in neighbors.items():assert (install / name).read_bytes() == raw

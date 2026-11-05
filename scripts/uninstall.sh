@@ -234,10 +234,37 @@ for svc in data.get("services", []):
                             pass
 
 # The phone reader job is created later by `agentstack-mobile`, not by the
-# installer, so it is not in the services list. Stop it and remove only the
-# plist it wrote under this HOME.
-mobile_plist = pathlib.Path.home() / "Library/LaunchAgents/org.agentstack.mobile-relay.plist"
-if mobile_plist.is_file() and not mobile_plist.is_symlink():
+# installer, so it is not in the services list. There is one such plist per
+# HOME, whichever install wrote it, so stop it and remove it only when it
+# belongs to the install being removed: the default install under this HOME,
+# a manifest that records it, or a job whose --config is this install's
+# mobile.json. Uninstalling an install elsewhere (--install-dir) leaves it.
+MOBILE_LABEL = "org.agentstack.mobile-relay"
+mobile_plist = pathlib.Path.home() / f"Library/LaunchAgents/{MOBILE_LABEL}.plist"
+
+def same_path(a, b):
+    try:
+        return pathlib.Path(a).expanduser().resolve() == pathlib.Path(b).expanduser().resolve()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+def mobile_job_belongs_here():
+    install_dir = manifest_path.parent
+    if same_path(install_dir, pathlib.Path.home() / ".agentstack"):
+        return True
+    if any(same_path(f, mobile_plist) for f in data.get("owned_files", []) if isinstance(f, str)):
+        return True
+    if any(isinstance(svc, dict) and svc.get("label") == MOBILE_LABEL for svc in data.get("services", [])):
+        return True
+    try:
+        import plistlib
+        args = plistlib.loads(mobile_plist.read_bytes()).get("ProgramArguments") or []
+        config = args[args.index("--config") + 1]
+    except Exception:
+        return False
+    return isinstance(config, str) and same_path(config, install_dir / "mobile.json")
+
+if mobile_plist.is_file() and not mobile_plist.is_symlink() and mobile_job_belongs_here():
     run(["launchctl", "bootout", f"gui/{os.getuid()}/org.agentstack.mobile-relay"])
     if dry_run:
         print(f"DRY-RUN would remove: {mobile_plist}")
