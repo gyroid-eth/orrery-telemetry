@@ -1235,13 +1235,14 @@ def _is_live_roster_row(row: dict) -> bool:
 
 
 class _AgentsAnswer:
-    """One /api/agents computation, written at most once per scope.
+    """One legacy /api/agents computation, serialized at most once per scope.
 
-    `scope=live` is for a client that shows only the live roster: about 3 %
-    of the rows of the 30-day window. It carries the
-    live rows unchanged plus `retired`, the names the full answer marks retired
-    (a client unpins those). Any other scope, or none, is the full answer,
-    byte for byte as before.
+    `scope=live` carries the live rows unchanged plus `retired`, the names
+    the full answer marks retired (a client unpins those). Any other scope,
+    or none, returns the full payload. Both views include `ts`, `history_days`
+    and the Dashboard's `project_key`; each row retains the nullable
+    `project_key` supplied by build_agents(). Scope selection filters live
+    rows, not projects.
     """
 
     def __init__(self, history_days: float | None) -> None:

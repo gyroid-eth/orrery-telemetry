@@ -38,7 +38,9 @@ python3 -m orrery_chatgpt_mcp serve
 
 freshを実際に使う環境ではORRERY_MCP_MODE=freshにし、`unset ORRERY_MCP_PROJECT_KEY` を実行します。checkが表示するAPI・scope・件数を確認します。serveは互換性を検証してから127.0.0.1だけで待ち受けます。停止はそのターミナルのCtrl+Cです。既存エージェントの停止やMail再起動は行いません。
 
-「読み取り専用」はMCP要求がORRERY設定・登録・Mail送信を変更しない意味です。運用者用のpairとpair --rotateは、アダプター自身の秘密保管先を作成・更新します。既定は `~/.config/orrery-mcp-readonly/pairing.json`、directory/fileは0700/0600です。秘密URLをIssue・共有資料に貼らず、再発行後はTunnel転送先も新URLへ変更します。稼働中アダプターは次の要求から旧URLを拒否します。
+「読み取り専用」は、MCPにORRERY設定変更・エージェント登録・spawn・Mail送信の操作を公開しない、というAPI上の意味です。freshの `GET /api/agents` は、既存のDashboard実装からMailの `owner_transaction`（`write=True` / `BEGIN IMMEDIATE`）を通り、DBの読み取り専用transactionではありません。この経路は本アダプター導入前からの挙動で変更しておらず、DBへの書き込みが一切ないことや、書き込み用ロックを取らないことを保証する意味ではありません。
+
+運用者用のpairとpair --rotateは、アダプター自身の秘密保管先を作成・更新します。既定は `~/.config/orrery-mcp-readonly/pairing.json`、directory/fileは0700/0600です。秘密URLをIssue・共有資料に貼らず、再発行後はTunnel転送先も新URLへ変更します。稼働中アダプターは次の要求から旧URLを拒否します。
 
 ## Secure MCP Tunnelの設定
 
