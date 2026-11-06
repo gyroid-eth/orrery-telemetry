@@ -13,11 +13,13 @@ def read(path):
 
 
 def test_every_managed_block_has_the_section():
-    for path in ('claude/CLAUDE.md', 'codex/AGENTS.md'):
+    for path in ('claude/CLAUDE.md', 'codex/AGENTS.md',
+                 'templates/fresh/claude/CLAUDE.md', 'templates/fresh/codex/AGENTS.md'):
         text = read(path)
         assert text.count('## Showing Files') == 1, path
-        section = text.split('## Showing Files', 1)[1].split('\n## ', 1)[0]
-        assert '`show_files`' in section and 'before\nyour final message' in section, path
+        section = ' '.join(text.split('## Showing Files', 1)[1].split('\n## ', 1)[0].split())
+        assert '`show_files`' in section and 'before your final message' in section, path
+        assert 'relative to your working folder, or absolute' in section, path
         assert 'sends nothing' in section, path
 
 

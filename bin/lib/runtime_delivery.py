@@ -1425,14 +1425,18 @@ class RuntimeDelivery(RuntimeFiles):
                     elif name=='runtime_status':
                         if args:self.fail('ARGUMENTS_UNSUPPORTED')
                         value=self.process_binding()
-                    elif name=='show_files':
-                        # Local only: names files for the cockpit's History; nothing is sent.
-                        if set(args)-{'paths'}:self.fail('ARGUMENTS_UNSUPPORTED')
-                        value=show_files()['result'](args.get('paths'))
                     else:
                         if not bound:self.fail('BOOTSTRAP_REQUIRED')
                         self.process_binding()
-                        value=self.client.call(name,args)
+                        if name=='show_files':
+                            # Local only, like the other proxies: needs the binding
+                            # (no chips from an unbound process) and sends nothing.
+                            # The working folder is unknown here, so relative paths
+                            # are left to the cockpit (checked:false).
+                            if set(args)-{'paths'}:self.fail('ARGUMENTS_UNSUPPORTED')
+                            value=show_files()['result'](args.get('paths'))
+                        else:
+                            value=self.client.call(name,args)
                     result={'content':[{'type':'text','text':canonical(value)}]}
                 elif method=='ping':result={}
                 else:self.fail('METHOD_UNSUPPORTED')

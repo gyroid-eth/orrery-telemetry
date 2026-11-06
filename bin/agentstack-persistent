@@ -1225,6 +1225,7 @@ def _write_codex_home(
             "reserve_files",
             "renew_reservations",
             "release_reservations",
+            "show_files",
         )
     }
     codex_proxy_env = dict(proxy_env)

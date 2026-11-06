@@ -154,6 +154,7 @@ def test_codex_app_session_start_reaches_agentstack_without_raw_agent_mail(
         "renew_reservations",
         "release_reservations",
         "runtime_status",
+        "show_files",
         "whois",
     }
 

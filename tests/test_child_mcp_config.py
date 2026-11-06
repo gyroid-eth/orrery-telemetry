@@ -37,6 +37,7 @@ _CODEX_PROXY_TOOLS = (
     "renew_reservations",
     "release_reservations",
     "runtime_status",
+    "show_files",
     "whois",
 )
 

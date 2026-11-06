@@ -1989,6 +1989,7 @@ def _build_home_unlocked(
             "renew_reservations",
             "release_reservations",
             "runtime_status",
+            "show_files",
             "whois",
         )
         for name in claimed:

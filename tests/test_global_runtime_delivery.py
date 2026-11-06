@@ -124,6 +124,26 @@ def test_proxy_schema_injects_owner_and_has_no_bootstrap_side_effects(launch):
     assert len(names)==28 and 'bind_window_identity' not in names and 'runtime_status' in names and 'show_files' in names
     assert all('registration_token' not in x['inputSchema']['properties'] for x in result)
 
+def test_proxy_show_files_needs_bootstrap_and_never_calls_upstream(launch, monkeypatch, tmp_path):
+    import io
+    client,delivery,row=launch
+    calls=[]
+    monkeypatch.setattr(delivery.client,'call',lambda name,args:calls.append(name) or {})
+    monkeypatch.setattr(delivery,'process_binding',lambda session_id=None:{'launch_id':'fixture'})
+    monkeypatch.setenv('AGENTSTACK_LAUNCH_ID','fixture')
+    (tmp_path/'report.md').write_text('# private body\n')
+    show=lambda n,paths:{'id':n,'method':'tools/call','params':{'name':'show_files','arguments':{'paths':paths}}}
+    lines=[show(1,['report.md']),{'id':2,'method':'tools/call','params':{'name':'bootstrap','arguments':{'session_id':'s'}}},
+           show(3,[str(tmp_path/'report.md'),'report.md'])]
+    output=io.StringIO();delivery.proxy(io.StringIO(''.join(json.dumps(x)+'\n' for x in lines)),output)
+    replies=[json.loads(x) for x in output.getvalue().splitlines()]
+    assert replies[0]['error']['message']=='BOOTSTRAP_REQUIRED'
+    value=json.loads(replies[2]['result']['content'][0]['text'])
+    assert value['present']==[str(tmp_path/'report.md')]
+    assert value['files'][1]=={'path':'report.md','checked':False}
+    assert 'private body' not in output.getvalue()
+    assert calls==[]
+
 @pytest.mark.parametrize('relation', ['ancestor', 'descendant'])
 def test_consumer_rejects_different_server_isolation_before_output(server, relation):
     client=context(server,window=False)
