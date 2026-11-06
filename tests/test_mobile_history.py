@@ -329,6 +329,11 @@ def test_conversation_source_has_no_html_sinks():
     assert source.count('.src=') == 2 and "img.src=pngSource(v);" in source and "img.src='';" in source
     assert source.count("'data:image/png;base64,'+v.data") == 1
     source = source.replace('img.src=pngSource(v);', '').replace("img.src='';", '')
+    # The one link is Save's hidden download anchor to the object URL it made
+    # from the bytes the preview already shows.
+    assert source.count('.href') == 1 and source.count('createObjectURL') == 1
+    assert 'a.href=saveUrl;' in source and 'saveUrl=URL.createObjectURL(blob());' in source
+    source = source.replace('a.href=saveUrl;', '').replace('saveUrl=URL.createObjectURL(blob());', '')
     for sink in ('innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', '.href', '.src',
                  'srcset', 'blob:', 'createObjectURL', 'setAttribute(\'src', 'iframe',
                  'localStorage', 'sessionStorage', 'indexedDB', 'eval(', 'Function('):

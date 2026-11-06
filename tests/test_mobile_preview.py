@@ -420,3 +420,90 @@ def test_a_slow_poll_leaves_an_open_preview_and_a_slow_preview_says_tap_again():
       assert.ok(panel(root).textContent.includes('Tap the file again'),panel(root).textContent);
       C.unmount();
     ''')
+
+
+# --- Save ------------------------------------------------------------------------
+
+def save_phone(body):
+    phone(r'''
+      const made=[],revoked=[],clicks=[];
+      context.Blob=Blob;context.atob=atob;
+      context.URL={createObjectURL(b){made.push(b);return 'blob:saved-'+made.length;},revokeObjectURL(u){revoked.push(u);}};
+      El.prototype.click=function(){clicks.push({download:this.download,href:this.href,attached:this.isConnected,tag:this.tagName});};
+      const save=root=>panel(root)?.all().find(e=>e.tagName==='BUTTON'&&e.textContent==='Save');
+      const close=root=>panel(root).all().find(e=>e.tagName==='BUTTON'&&e.textContent==='Close');
+      ''' + body)
+
+
+def test_save_writes_the_previewed_text_and_makes_no_request():
+    save_phone(r'''
+      const shown='line 1\n<script>alert(1)</script>\n';
+      reply=async url=>url.startsWith('/view/conversation/preview?')
+        ?{body:{ok:true,kind:'text',label:'notes.md',text:shown,truncated:false,notice:'n'}}
+        :withFile([{label:'notes.md',kind:'file',ref:REF}]);
+      const root=C.mount('Vega');body.append(root);await settle();
+      await chip(root).onclick();await settle();
+      const before=fetches.length;
+      save(root).onclick();
+      assert.equal(fetches.length,before,'Save sends nothing');
+      assert.equal(clicks.length,1);assert.equal(clicks[0].tag,'A');assert.equal(clicks[0].download,'notes.md');
+      assert.equal(clicks[0].href,'blob:saved-1');assert.ok(clicks[0].attached);
+      assert.equal(made[0].type,'text/plain;charset=utf-8');assert.equal(await made[0].text(),shown);
+      assert.ok(!panel(root).all().some(e=>e.tagName==='A'),'the anchor does not stay');
+      // A second Save replaces the first URL; Close revokes the last one.
+      save(root).onclick();assert.deepEqual(revoked,['blob:saved-1']);
+      close(root).onclick();assert.deepEqual(revoked,['blob:saved-1','blob:saved-2']);
+      C.unmount();
+    ''')
+
+
+def test_saved_text_that_a_viewer_could_render_gets_a_txt_name():
+    save_phone(r'''
+      let label;
+      reply=async url=>url.startsWith('/view/conversation/preview?')
+        ?{body:{ok:true,kind:'text',label,text:'<svg onload=x>',truncated:false,notice:'n'}}
+        :withFile([{label,kind:'file',ref:REF}]);
+      for(const [given,want] of [['page.html','page.html.txt'],['x.SVG','x.SVG.txt'],['a.xhtml','a.xhtml.txt'],['feed.xml','feed.xml.txt'],
+                                 ['notes.md','notes.md'],['report\u202etxt.html','reporttxt.html.txt']]){
+        label=given;clicks.length=0;const root=C.mount('Vega');body.append(root);await settle();
+        await chip(root).onclick();await settle();save(root).onclick();
+        assert.equal(clicks[0].download,want,given);C.unmount();
+      }
+    ''')
+
+
+def test_save_writes_the_checked_png_bytes_with_a_png_name():
+    save_phone(r'''
+      let label='shots/photo.jpg';
+      reply=async url=>url.startsWith('/view/conversation/preview?')
+        ?{body:{ok:true,kind:'image',label,data:PNG64,width:3,height:2,notice:'n'}}
+        :withFile([{label,kind:'image',ref:REF}]);
+      let root=C.mount('Vega');body.append(root);await settle();
+      await chip(root).onclick();await settle();
+      save(root).onclick();
+      assert.equal(clicks[0].download,'photo.jpg.png');
+      assert.equal(made[0].type,'image/png');
+      assert.deepEqual(Buffer.from(await made[0].arrayBuffer()),Buffer.from(PNG64,'base64'));
+      // Background clears the preview and revokes the URL.
+      doc.hidden=true;docListeners.visibilitychange();doc.hidden=false;
+      assert.deepEqual(revoked,['blob:saved-1']);
+      for(const [given,want] of [['..','image.png'],['a\\b\u0007c.PNG','bc.PNG'],['x'.repeat(300),'x'.repeat(120)+'.png'],
+                                 ['shot\u202egnp.html','shotgnp.html.png'],['a\u0085\u200e\u2066b.png','ab.png']]){
+        label=given;clicks.length=0;root=C.mount('Vega');body.append(root);await settle();
+        await chip(root).onclick();await settle();save(root).onclick();
+        assert.equal(clicks[0].download,want,given);C.unmount();
+      }
+    ''')
+
+
+def test_no_save_without_a_shown_preview():
+    save_phone(r'''
+      let answer={ok:false,error:'preview_type_denied'};
+      reply=async url=>url.startsWith('/view/conversation/preview?')?{body:answer}:withFile([{label:'chart.png',kind:'image',ref:REF}]);
+      for(const bad of [answer,{ok:true,kind:'image',label:'chart.png',data:'<svg onload=x>',width:3,height:2},{ok:true,kind:'html',label:'a.html',text:'<b>'}]){
+        answer=bad;const root=C.mount('Vega');body.append(root);await settle();
+        await chip(root).onclick();await settle();
+        assert.equal(save(root),undefined,JSON.stringify(bad));C.unmount();
+      }
+      assert.equal(made.length,0);
+    ''')
