@@ -1334,10 +1334,10 @@ esac
         assert health["status"] == "green"
 
         agents = get_json("/api/agents")["agents"]
-        watcher_card = next(row for row in agents if row["name"] == "mail-watcher")
-        assert watcher_card["category"] == "infra"
-        assert watcher_card["running"] is True
-        assert watcher_card["live"] == "watcher: pidfile"
+        # The health endpoint authenticates the PID-file watcher. The synthetic
+        # tmux executable has no valid target proof, so the roster must not
+        # promote it into an authenticated live pane.
+        assert not any(row["name"] == "mail-watcher" for row in agents)
 
         watcher.terminate()
         watcher.wait(timeout=5)

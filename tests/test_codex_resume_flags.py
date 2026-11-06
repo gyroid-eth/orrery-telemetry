@@ -44,6 +44,7 @@ def policy_env(monkeypatch, tmp_path):
     project = tmp_path / "proj with space"
     project.mkdir()
     monkeypatch.setattr(server, "PROJECT_KEY", str(project))
+    monkeypatch.setattr(server, "SESSION_INDEX_DIR", str(tmp_path / "runtime" / "session_index"))
     monkeypatch.setattr(server, "VAULT", "")
     monkeypatch.setenv("HOME", str(tmp_path))
     source_home = tmp_path / ".codex"
