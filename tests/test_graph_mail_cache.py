@@ -166,3 +166,35 @@ process.stdout.write(String(refreshes));})();
     out = subprocess.run(["node", "-e", _function(html, "mailPulseTick") + pulse],
                          capture_output=True, text=True, timeout=10, check=True)
     assert out.stdout == "1"
+
+
+def test_an_older_graph_reply_arriving_late_does_not_lower_the_count():
+    html = INDEX.read_text(encoding="utf-8")
+    tick = re.search(r"async function netTick\(\)\{\n  try\{\n(.*?)\n    const \{w,h\}=netDims\(\);", html, re.DOTALL)
+    assert tick
+    # netTick の頭（番号・fetch・json・古い応答を捨てる）だけを使い、残りは数を描く代わりに記録する。
+    harness = r"""
+let shown=null;const replies=[];
+const gWin=1;
+async function fetch(){let done;const p=new Promise(r=>done=r);replies.push(done);const j=await p;
+  return {status:200,json:async()=>j};}
+async function netTick(){
+  try{
+""" + tick.group(1) + r"""
+    shown=j.count;
+  }catch(e){throw e;}
+}
+(async()=>{
+  const older=netTick(),newer=netTick();
+  await new Promise(r=>setTimeout(r,0));
+  replies[1]({count:5});await newer;
+  replies[0]({count:4});await older;
+  const afterLate=shown;
+  const third=netTick();await new Promise(r=>setTimeout(r,0));
+  replies[2]({count:6});await third;
+  process.stdout.write(afterLate+","+shown);
+})();
+"""
+    out = subprocess.run(["node", "-e", harness],
+                         capture_output=True, text=True, timeout=10, check=True)
+    assert out.stdout == "5,6"  # 遅れた古い応答（4）で戻らず、次の新しい応答（6）は描く

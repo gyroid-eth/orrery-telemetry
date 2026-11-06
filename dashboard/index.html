@@ -34775,10 +34775,15 @@ let NSIZE=NETP_DEF.NSIZE, L=NETP_DEF.L, LWMUL=NETP_DEF.LWMUL,
 
 async function netTick(){
   try{
+    // 定時の netTick と新着の netTick は重なりうる。先に出した要求の応答が後から
+    // 着いたら捨てる（線の上の数が一瞬1つ戻って見えないように）。番号は関数に持つ。
+    const seq=netTick.seq=(netTick.seq||0)+1;
     const qs=gWin==="all"?"all=1":"days="+gWin;
     const r=await fetch('/api/graph?'+qs);
     if(r.status===503)return;   // busy: keep the current graph, poll again
     const j=await r.json();
+    if(seq<(netTick.shown||0))return;
+    netTick.shown=seq;
     const {w,h}=netDims();
     const previousNodeCount=gmap.size;
     const mapWasCleared=gmap.size===0&&gEls.node&&gEls.node.size>0;
