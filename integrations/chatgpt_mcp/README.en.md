@@ -38,7 +38,9 @@ python3 -m orrery_chatgpt_mcp serve
 
 For an actual fresh Dashboard, set ORRERY_MCP_MODE=fresh and unset ORRERY_MCP_PROJECT_KEY. Review check's API, scope and counts. Serve validates compatibility before binding only 127.0.0.1. Stop that foreground process with Ctrl+C. There is no agent shutdown or Mail restart.
 
-Read-only means MCP requests do not change ORRERY settings, registrations or Mail messages. Operator commands pair and pair --rotate do write this adapter's own private state. Its default is ~/.config/orrery-mcp-readonly/pairing.json, with directory/file modes 0700/0600. Keep secret URLs out of issues and shared documents. After rotation, change the tunnel's target to the new URL; the running adapter rejects the old one on the next request.
+Here, read-only describes the MCP API: it exposes no ORRERY configuration changes, agent registration, spawning or Mail sending operations. In fresh mode, the existing Dashboard GET /api/agents path uses Mail's owner_transaction (write=True / BEGIN IMMEDIATE), not a database read-only transaction. This pre-existing path is unchanged; read-only does not promise zero database writes or the absence of a write lock.
+
+Operator commands pair and pair --rotate do write this adapter's own private state. Its default is ~/.config/orrery-mcp-readonly/pairing.json, with directory/file modes 0700/0600. Keep secret URLs out of issues and shared documents. After rotation, change the tunnel's target to the new URL; the running adapter rejects the old one on the next request.
 
 ## Secure MCP Tunnel configuration
 
