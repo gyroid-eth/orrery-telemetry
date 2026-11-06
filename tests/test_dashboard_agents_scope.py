@@ -4,7 +4,7 @@ A live-roster client polls /api/agents every 3 s and shows only the live rows
 (running, or category "agent", never warm-up) -- about 3 % of a 30-day answer
 of half a megabyte. `scope=live` returns those rows unchanged plus `retired`,
 the names the full answer marks retired, which such a client uses to unpin.
-Without `scope` the answer is the full one, byte for byte as before, for the
+Without `scope` the answer is the full one, with additive project metadata, for the
 DECK, the installer, the self-test and every other client.
 
 Both scopes share the one roster computation of a history window
@@ -68,11 +68,11 @@ def http():
         httpd.server_close()
 
 
-def test_without_scope_the_answer_is_byte_for_byte_the_old_one(roster, http):
+def test_without_scope_preserves_full_rows_and_declares_project_metadata(roster, http):
     body = http("/api/agents")
     payload = json.loads(body)
     old = json.dumps({"ts": payload["ts"], "history_days": server.HISTORY_DAYS_DEFAULT,
-                      "agents": ROWS}, ensure_ascii=False).encode()
+                      "project_key": server._project_key() or None, "agents": ROWS}, ensure_ascii=False).encode()
     assert body == old
     assert "scope" not in payload and "retired" not in payload
 
@@ -174,7 +174,8 @@ def test_different_windows_do_not_share(roster, http):
 
 def test_the_shared_payload_is_not_changed_by_a_projection():
     answer = server._AgentsAnswer.__new__(server._AgentsAnswer)
-    answer.payload = {"ts": 1, "history_days": 30.0, "agents": json.loads(json.dumps(ROWS))}
+    answer.payload = {"ts": 1, "history_days": 30.0, "project_key": "/fixture/project",
+                      "agents": json.loads(json.dumps(ROWS))}
     answer._lock = threading.Lock()
     answer._bodies = {}
     answer.body("live")

@@ -73,7 +73,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":36}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":37}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -313,6 +313,12 @@ When `path` is omitted, the first `AGENTSTACK_SPAWN_ROOTS` entry is used. For a 
 Hidden directories and symlinks that leave the root are excluded. Up to 500 entries are returned in name order because the page filters the complete list by the typed prefix. With 501 or more entries, `truncated` is `true`.
 
 ## GET `/api/agents`
+
+### Project-scope read metadata (legacy, API 37)
+
+Legacy responses add top-level project_key, identifying the Dashboard project used to select historical registrations without tmux. It does not mean every roster row belongs to that project. Each agent row adds nullable project_key. Live tmux rows use the existing single registration-index read; names shared by projects, missing registrations and unavailable registration indexes yield null. Historical rows identify the project already selected by the exact-project SQL query. A Mail project is a coordination namespace, not a working-directory claim.
+
+Read-only clients restricting exposure must verify the top-level project separately from every row and never treat null as an allowed project. Existing row selection/order, liveness, UI and write authorization are unchanged. Scope=live also carries the same top-level project key. Fresh retains its instance/agent-ID contract without adding legacy projects.
 
 ### Conversation history binding (legacy, API 35)
 

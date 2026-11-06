@@ -72,7 +72,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":36}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":37}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -312,6 +312,12 @@ curl -s 'http://127.0.0.1:8770/api/fs/dirs?path=/Users/me/code'
 を返します。hidden directory と root 外へ出る symlink は除外し、名前順に最大 500 件を返します（page 側が入力中の prefix で絞るので、一覧全体が要ります）。501 件以上なら `truncated: true` です。
 
 ## GET `/api/agents`
+
+### 所属projectの読み取りメタデータ（legacy、API 37）
+
+legacyの応答全体に `project_key` を追加します。これはtmuxのない履歴登録を抽出するDashboardのprojectであり、一覧全体がそのprojectに限定されるという意味ではありません。各agent行にもnullableな `project_key` を追加します。tmux行は既存の1回の登録index読取りで所属を確認し、同名が別projectにも存在する場合、未登録、登録indexが読めない場合はnullです。履歴行は既存のproject完全一致SQLから得た所属を示します。projectはMailの名前空間で、作業フォルダではありません。
+
+対象projectを絞る読み取り利用側は、応答全体と各行を別々に照合し、nullを許可対象として扱わないでください。既存の行の採否・並び・生存判定・UI・書込み認可は変えません。scope=liveでも同じ応答全体のproject keyを返します。freshはinstance/agent IDの既存契約のままで、legacy projectを加えません。
 
 ### 会話の記録の binding（legacy、API 35）
 
