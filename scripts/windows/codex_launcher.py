@@ -322,11 +322,11 @@ def configure_proxy(home: Path, spec: dict) -> None:
         'AGENTSTACK_CODEX_APP_RUNTIME_DIR': str(home / 'proxy-runtime'),
     }
     lines.extend(f'{key} = {quote(value)}' for key, value in values.items())
-    # Keep in step with TOOL_DEFINITIONS in integrations/codex_app (nine tools
-    # since `whois`, 58525ed); tests/test_child_mcp_config.py pins the same list.
+    # Keep in step with TOOL_DEFINITIONS in integrations/codex_app (ten tools
+    # since `show_files`); tests/test_child_mcp_config.py pins the same list.
     for tool in ('bootstrap', 'fetch_inbox', 'send_message', 'acknowledge_message',
                  'reserve_files', 'renew_reservations', 'release_reservations', 'runtime_status',
-                 'whois'):
+                 'show_files', 'whois'):
         lines.extend([f'[mcp_servers.orrery-mail.tools.{tool}]', 'approval_mode = "approve"'])
     write_private_text(target, '\n'.join(lines) + '\n', exclusive=True)
 

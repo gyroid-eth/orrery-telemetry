@@ -51,6 +51,7 @@ AGENTSTACK_PROXY_TOOLS = (
     "renew_reservations",
     "release_reservations",
     "runtime_status",
+    "show_files",
     "whois",
 )
 _PLUGIN_ID = re.compile(r"[A-Za-z0-9_-]+@[A-Za-z0-9_-]+")

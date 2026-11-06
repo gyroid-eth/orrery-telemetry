@@ -46,6 +46,21 @@ def contract():
     return _CONTRACT
 
 
+_SHOW_FILES = None
+
+
+def show_files():
+    """The local show_files tool, shared with the other proxies (stdlib only)."""
+    global _SHOW_FILES
+    if _SHOW_FILES is None:
+        here = Path(__file__).parent
+        module = here / 'show_files.py'
+        if not module.exists():
+            module = here.parents[1] / 'packages/agentstack_mail/src/agentstack_mail/show_files.py'
+        _SHOW_FILES = runpy.run_path(str(module))
+    return _SHOW_FILES
+
+
 def validate(value, name, error):
     fixture, validator = contract()
     validator(value, fixture['local_schemas'][name], 'OUTPUT_SCHEMA_INVALID', error_type=error)
@@ -1390,6 +1405,8 @@ class RuntimeDelivery(RuntimeFiles):
                         tools.append({'name':name,'description':name,'inputSchema':schema})
                     tools.append({'name':'bootstrap','description':'Verify this process against its trusted launch receipt.','inputSchema':{'type':'object','properties':{'session_id':{'type':'string'},'agent_id':{'type':['string','null']}},'additionalProperties':False}})
                     tools.append({'name':'runtime_status','description':'Read this bound runtime identity.','inputSchema':{'type':'object','properties':{},'additionalProperties':False}})
+                    shown=show_files()
+                    tools.append({'name':'show_files','description':shown['DESCRIPTION'],'inputSchema':json.loads(json.dumps(shown['INPUT_SCHEMA']))})
                     result={'tools':tools}
                 elif method=='tools/call':
                     name=params['name']; args=params.get('arguments',{})
@@ -1411,7 +1428,15 @@ class RuntimeDelivery(RuntimeFiles):
                     else:
                         if not bound:self.fail('BOOTSTRAP_REQUIRED')
                         self.process_binding()
-                        value=self.client.call(name,args)
+                        if name=='show_files':
+                            # Local only, like the other proxies: needs the binding
+                            # (no chips from an unbound process) and sends nothing.
+                            # The working folder is unknown here, so relative paths
+                            # are left to the cockpit (checked:false).
+                            if set(args)-{'paths'}:self.fail('ARGUMENTS_UNSUPPORTED')
+                            value=show_files()['result'](args.get('paths'))
+                        else:
+                            value=self.client.call(name,args)
                     result={'content':[{'type':'text','text':canonical(value)}]}
                 elif method=='ping':result={}
                 else:self.fail('METHOD_UNSUPPORTED')
