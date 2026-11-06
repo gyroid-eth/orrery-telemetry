@@ -498,6 +498,26 @@ def mobile_mail_cache_page(con,pid,cursor=None,*,now=None,cursors=None,max_bytes
             'complete':not more,'reason':reason,'observed_at':int(now)}
 
 
+def mail_mark():
+    """Mail に新しい message か宛先が入ったかの印。build_graph と同じ DB・同じ ro の
+    経路で読む。読めない（無い・busy）ときは待たずに None。
+
+    宛先の行も見るのは、message の行だけが先に見える瞬間に作った graph を、
+    同じ印のまま残さないため。どちらも主キーの索引で引くので安い。"""
+    if not os.path.exists(DB_PATH):
+        return None
+    try:
+        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=0)
+        try:
+            return tuple(con.execute(
+                "SELECT (SELECT MAX(id) FROM messages),"
+                " (SELECT MAX(message_id) FROM message_recipients)").fetchone())
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+
+
 def build_graph() -> dict:
     diagnostics = _TimestampDiagnostics()
     if not os.path.exists(DB_PATH):

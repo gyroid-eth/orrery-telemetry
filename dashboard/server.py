@@ -2094,23 +2094,41 @@ def _open_codex_app(name: str) -> dict:
     return {"ok": False, "error": "unknown Codex App runtime"}
 
 
-_GRAPH_CACHE: dict = {"ts": 0, "data": None}
+_GRAPH_CACHE: dict = {"ts": 0, "data": None, "mail": None}
+_GRAPH_BUILD_LOCK = threading.Lock()
 
 
 def _raw_graph() -> dict:
     """graph_data.build_graph() を遅延 import + 8 秒キャッシュ。
 
-    build_graph の集計をポーリングのたびに繰り返さないようにする。"""
-    now = time.time()
-    if _GRAPH_CACHE["data"] is not None and now - _GRAPH_CACHE["ts"] < 8:
-        return _GRAPH_CACHE["data"]
+    build_graph の集計をポーリングのたびに繰り返さないようにする。ただし
+    新しい message が入ったら 8 秒を待たずに作り直す。comet は Mail の 4 秒の
+    poll ですぐ飛ぶので、線の上の数がそれより最大約 13 秒遅れて増えていた。
+    message が無い間は今までどおり 8 秒に1回だけ作る。
+
+    Mail の印（graph_data.mail_mark）は build の前に読み、その build の結果に
+    結びつける。build の途中に着いた message は、次の要求で作り直す。作り直しは
+    lock の中で1本だけ走らせ、待っていた要求はその結果を使う。"""
     if HERE not in sys.path:
         sys.path.insert(0, HERE)
     import graph_data  # noqa: PLC0415  (lazy: 壊れても全体は落とさない)
 
-    data = graph_data.build_graph()
-    _GRAPH_CACHE.update(ts=now, data=data)
-    return data
+    def fresh(mark):
+        return (_GRAPH_CACHE["data"] is not None
+                and time.time() - _GRAPH_CACHE["ts"] < 8
+                and (mark is None or mark == _GRAPH_CACHE["mail"]))
+
+    mark = graph_data.mail_mark()
+    if fresh(mark):
+        return _GRAPH_CACHE["data"]
+    with _GRAPH_BUILD_LOCK:
+        mark = graph_data.mail_mark()
+        if fresh(mark):
+            return _GRAPH_CACHE["data"]
+        now = time.time()
+        data = graph_data.build_graph()
+        _GRAPH_CACHE.update(ts=now, data=data, mail=mark)
+        return data
 
 
 def mobile_mail_payload(window: str) -> tuple[int, dict]:
