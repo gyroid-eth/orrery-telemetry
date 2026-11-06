@@ -1492,7 +1492,7 @@ def test_observer_failure_never_publishes_terminal_receipt(
             backup_main_state="PRESENT",
             backup_main_sha256=hashlib.sha256(b"backup").hexdigest(),
             backup_main_size=6,
-            backup_main_mode="0644",
+            backup_main_mode=f"{backup_main.stat().st_mode & 0o777:04o}",
             backup_wal=backup_wal,
             backup_wal_state="ABSENT",
             backup_wal_sha256="ABSENT",

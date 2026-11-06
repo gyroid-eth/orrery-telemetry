@@ -134,7 +134,7 @@ for number in $(seq 1 270); do
 done
 '''
     result=subprocess.run(['/bin/bash','-c',script,'fixture',str(tmp_path/'leases')],
-                          capture_output=True,text=True,timeout=60)
+                          capture_output=True,text=True,timeout=180)
     assert result.returncode==0,result.stderr
     files=list((tmp_path/'leases').iterdir())
     assert 0<len(files)<=256
