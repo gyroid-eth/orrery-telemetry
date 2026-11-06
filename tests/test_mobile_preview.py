@@ -507,3 +507,49 @@ def test_no_save_without_a_shown_preview():
       }
       assert.equal(made.length,0);
     ''')
+
+
+def test_phone_shows_chips_on_a_tool_row_and_opens_the_preview():
+    # The cockpit attaches references to file tool calls, not to text bubbles.
+    phone(r'''
+      reply=async url=>url.startsWith('/view/conversation/preview?')
+        ?{body:{ok:true,kind:'text',label:'notes.md',text:'# Notes',truncated:false,notice:'n'}}
+        :{body:{ok:true,agent:'Vega',older:null,limited:false,events:[
+           {id:'1',kind:'tool',role:'assistant',text:'Write',ts:'',truncated:false,files:[{label:'notes.md',kind:'file',ref:REF}]}]}};
+      const root=C.mount('Vega');body.append(root);await settle();
+      const row=root.all().find(e=>e.className==='conversation-tool');
+      const c=row.all().find(e=>e.className.startsWith('conversation-chip'));
+      assert.ok(c,'the chip is inside the tool row');assert.equal(c.tagName,'BUTTON');
+      await c.onclick();await settle();
+      assert.equal(fetches.at(-1).url,'/view/conversation/preview?name=Vega&ref='+REF);
+      assert.ok(panel(root));
+      C.unmount();
+    ''')
+
+
+def test_a_recorded_claude_write_call_reaches_the_phone_as_a_previewable_chip():
+    # The shape the cockpit returns for a Claude record (measured with the real
+    # backend over a Claude transcript): the reference rides on the tool event.
+    cockpit_page = {'ok': True, 'agent': 'Vega', 'provider': 'claude', 'mode': 'cursor', 'events': [
+        {'kind': 'text', 'role': 'user', 'text': 'Write the notes and show them.', 'ts': '2026-11-06T03:20:00Z',
+         'id': '0:0:0', 'cursor_before': 'e3a9b3c20f3ba97fb963d683:0:0:0', 'cursor_after': 'e3a9b3c20f3ba97fb963d683:394:0:0'},
+        {'kind': 'tool', 'role': 'assistant', 'text': 'Write', 'ts': '2026-11-06T03:21:00Z',
+         'id': '394:0:1', 'cursor_before': 'e3a9b3c20f3ba97fb963d683:394:0:1', 'cursor_after': 'e3a9b3c20f3ba97fb963d683:890:0:0',
+         'references': [{'id': COCKPIT_REF, 'label': 'notes.md', 'kind': 'file'}]},
+        {'kind': 'tool', 'role': 'user', 'text': 'Tool result', 'ts': '2026-11-06T03:21:01Z', 'id': '890:0:0',
+         'cursor_before': 'e3a9b3c20f3ba97fb963d683:890:0:0', 'cursor_after': 'e3a9b3c20f3ba97fb963d683:1294:0:0'},
+    ], 'before': 'e3a9b3c20f3ba97fb963d683:0:0:0', 'after': 'e3a9b3c20f3ba97fb963d683:1294:0:0', 'has_older': False}
+    events = history.project_page(cockpit_page, lambda ref: REF)[0]
+    tool = next(e for e in events if e['kind'] == 'tool' and e['text'] == 'Write')
+    assert tool['files'] == [{'label': 'notes.md', 'kind': 'file', 'ref': REF}]
+    phone(r'''
+      const events=%s;
+      reply=async url=>url.startsWith('/view/conversation/preview?')
+        ?{body:{ok:true,kind:'text',label:'notes.md',text:'# Notes',truncated:false,notice:'n'}}
+        :{body:{ok:true,agent:'Vega',older:null,limited:false,events}};
+      const root=C.mount('Vega');body.append(root);await settle();
+      const c=chip(root);assert.ok(c);assert.equal(c.tagName,'BUTTON');
+      assert.ok(c.textContent.includes('notes.md'));
+      await c.onclick();await settle();assert.ok(panel(root));
+      C.unmount();
+    ''' % json.dumps(events))

@@ -97,13 +97,16 @@ function mailCard(m){
  const closedNote=note.textContent;card.onclick=()=>{detail.hidden=!detail.hidden;card.setAttribute('aria-expanded',String(!detail.hidden));note.textContent=detail.hidden?closedNote:'Recorded body · tap to hide';};
  return card;
 }
+// The cockpit puts file references on the file tool calls (Read, Write,
+// Edit, apply_patch, SendUserFile...), so a tool row carries chips too.
+function files(e,r){if(Array.isArray(e.files)&&e.files.length){const f=make('div','conversation-files');e.files.forEach(x=>f.append(chip(x)));r.append(f);}}
 function row(e){
- if(e.kind==='tool'){const r=make('div','conversation-tool',e.text);r.dataset.id=e.id;return r;}
+ if(e.kind==='tool'){const r=make('div','conversation-tool',e.text);r.dataset.id=e.id;files(e,r);return r;}
  if(e.kind==='mail'){const r=make('div','conversation-mails');r.dataset.id=e.id;e.mail.forEach(m=>r.append(mailCard(m)));return r;}
  const r=make('div','conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
  r.append(body(e.text));
  if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m)));
- if(Array.isArray(e.files)&&e.files.length){const f=make('div','conversation-files');e.files.forEach(x=>f.append(chip(x)));r.append(f);}
+ files(e,r);
  const meta=[clock(e.ts),e.truncated?'shortened':''].filter(Boolean).join(' · ');if(meta)r.append(make('small','conversation-time',meta));
  return r;
 }
