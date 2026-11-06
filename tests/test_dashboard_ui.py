@@ -151,6 +151,7 @@ async function fetch(url){
   ]})};
 }
 function mailDrain(){}
+function netRefreshForMail(){}
 (async()=>{
   await mailPulseTick();await mailPulseTick();await mailPulseTick();
   process.stdout.write(JSON.stringify({requests,keys:mailQueue.map(mailMessageKey)}));

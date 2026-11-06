@@ -154,7 +154,7 @@ Both launchd and supervised-background logs are in the following locations by de
 
 The `SessionStart` / `SubagentStart` hooks add context instructing the agent to first call `agentstack.bootstrap` with the current `session_id` and, when needed, `agent_id`. The first bootstrap pins an MCP process to one Bridge binding. Subsequent tool calls do not accept the project key, agent name, or owner token from the agent.
 
-The proxy exposes these nine tools:
+The proxy exposes these ten tools:
 
 - `bootstrap`
 - `fetch_inbox`
@@ -164,7 +164,10 @@ The proxy exposes these nine tools:
 - `renew_reservations`
 - `release_reservations`
 - `runtime_status`
+- `show_files` (turns files or images you created or changed into chips in the cockpit's History; see below)
 - `whois` (to confirm a recipient name; names are case-sensitive)
+
+`show_files` stays inside the proxy. It sends nothing to the Mail server, writes nothing and does not read the files. Like the other local tools, it works only after the binding (bootstrap). It checks 1 to 8 paths with `lstat` only and returns whether each exists, whether it is a regular file or an image, and its size (`present` lists the regular files). Relative paths are checked only against the agent's working folder when the binding knows it (a Codex App snapshot); the proxy's own cwd is never used. Otherwise a relative path is not checked (`checked: false`), while an absolute path is. When the working folder is known, a path outside it is not even lstat'ed and is reported as `outside_working_folder: true`. The cockpit turns this recorded call into History chips; the preview keeps doing its own checks (inside the working folder, kind and size). The managed instructions for Claude, Codex, dsh and Hermes and the bundled `/log` and `/delegate` ask agents to call it before their final report when there is a file to show. Claude's settings template allows it without a prompt.
 
 `reserve_files`, `renew_reservations`, and `release_reservations` accept physical absolute paths and forward them unchanged under the same bound identity and Mail namespace. In managed `workspace-v1` sessions, acquire using the physical absolute path with symlinks resolved (for example, `str(Path(target).resolve())`), then use that same path to renew/release. Guard denials also display the required path. Existing relative paths and glob patterns remain accepted unchanged for legacy sessions; the proxy does not derive a cwd from the project key or protected roots. Absolute globs also pass through unchanged, so use a physical path for their fixed prefix. Parent `..` components, invalid characters, empty strings, and batch/length limit violations remain rejected.
 

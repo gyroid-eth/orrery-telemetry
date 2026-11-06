@@ -345,6 +345,8 @@ Otherwise, it writes to:
 
 The log is not a transcript. It focuses on Goal, Decisions, Work Performed, Verification, Related Notes, and Next Actions.
 
+After writing the log, the agent passes its path to ORRERY Mail's `show_files`. In an ORRERY-launched session the cockpit's History then shows the log as a file chip that opens a preview drawn as Markdown. The first time on a machine, and only when the log is inside the session's working folder, the agent adds one line about this in the language you are using. Delete `${AGENTSTACK_RUNTIME_DIR:-~/.agentstack/runtime}/hints/log-history-preview` to see it again.
+
 ### Hooks and reservation enforcement
 
 Claude Code hard-blocks `Edit` / `Write` through the `check-file-reservation.sh` PreToolUse hook. Codex has no equivalent hook, so the managed `~/.codex/AGENTS.md` instructs reserve / renew / release discipline. The registry is shared, so Claude and Codex reservations are mutually visible.

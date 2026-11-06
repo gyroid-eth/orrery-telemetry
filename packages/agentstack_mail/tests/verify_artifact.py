@@ -1119,6 +1119,7 @@ REQUIRED_RUNTIME_MODULES = {
     "fresh_server.py",
     "fresh_targets.py",
     "local_http.py",
+    "show_files.py",
     "storage_origin_contract.py",
     "storage_origin_directory.py",
     "storage_origin_core.py",

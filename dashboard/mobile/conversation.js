@@ -1,0 +1,284 @@
+/* Opt-in, read-only conversation history. Text enters the DOM through
+   textContent only: no innerHTML or links. A file preview is text through
+   textContent or a PNG the relay checked, shown from a data:image/png URL that
+   this file builds from validated base64; nothing else sets a source. Save
+   writes exactly what the preview shows to the device through one object URL,
+   revoked on close. Nothing is kept in storage or URLs; unmount clears the
+   DOM, the preview, requests, timers and pending rows. */
+(()=>{'use strict';
+const make=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!==undefined)e.textContent=txt;return e;};
+const MAX_BYTES=768*1024,MAX_KEPT=200,POLL=5000;
+const MAX_PREVIEW_BYTES=6*1024*1024,MAX_SIDE=8192,MAX_PIXELS=8000000,REF=/^[a-f0-9]{32}$/,BASE64=/^(?:[A-Za-z0-9+/]{4})+(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+let capability=null,gen=0,timer=0,name='',root=null,list=null,status=null,olderButton=null,retryButton=null;
+/* Longer than the relay's 15-second wait for cockpit, so its own answer arrives first. */
+const WAIT=20000;
+/* Poll and Show older each own a controller, so neither aborts the other. */
+const controllers={poll:null,older:null,preview:null};
+let panel=null,saveUrl='';
+let events=[],seen=new Set(),older=null,pending=[],failures=0,loadingOlder=false,following=true,savedTop=0;
+const messages={
+ history_unconfirmed:'This agent’s record is not verified as its own, so history stays hidden.',
+ history_stale:'The verified record predates this launch, so history stays hidden.',
+ agent_unavailable:'This agent is not in the current record list.',
+ provider_unavailable:'History is not available for this kind of agent.',
+ dashboard_upgrade_required:'Update Telemetry to read this agent’s history.',
+ claude_next_phase:'History is not available for this agent yet.',
+ invalid_binding:'The record could not be verified.',
+ history_unreadable:'The record could not be read.',
+ record_too_large:'The latest record is too large to show.',
+ page_expired:'Older page expired. Showing the latest page.',
+ history_slow:'Taking longer than usual: the computer is busy. Retrying, or tap Retry.',
+ older_slow:'Older messages are taking longer than usual. Tap Show older again.',
+ omitted:'Some messages are omitted here: too long to show or not loadable.',
+ kept_limit:'Showing the latest 200 messages. Older messages are not loaded.',
+};
+const previewMessages={
+ preview_expired:'This preview link expired. Reopen the conversation and tap the file again.',
+ preview_too_large:'Too large to preview on the phone.',
+ preview_type_denied:'This kind of file cannot be previewed.',
+ preview_path_denied:'Not previewable: outside the agent’s folders.',
+ preview_changed:'The file changed while it was read. Tap again.',
+ history_slow:'Taking longer than usual: the computer is busy. Tap the file again.',
+};
+async function enabled(){
+ if(capability!==null)return capability;
+ try{
+  const r=await fetch('/view/history',{credentials:'same-origin',cache:'no-store',referrerPolicy:'no-referrer'});
+  const v=r.ok?await r.json():null;capability=!!(v&&v.enabled===true);
+ }catch(_){capability=false;}
+ return capability;
+}
+async function request(token,slot){
+ controllers[slot]?.abort();const c=new AbortController();controllers[slot]=c;let late=false;const t=setTimeout(()=>{late=true;c.abort();},WAIT);
+ try{
+  const r=await fetch('/view/conversation?name='+encodeURIComponent(name)+(token?'&page='+token:''),
+   {credentials:'same-origin',cache:'no-store',referrerPolicy:'no-referrer',signal:c.signal});
+  const raw=await r.text();if(new TextEncoder().encode(raw).length>MAX_BYTES)throw Error('unavailable');
+  const v=JSON.parse(raw);if(r.status===410)return {ok:false,error:'page_expired'};
+  if(!v||typeof v!=='object')throw Error('unavailable');
+  if(v.ok===true&&(v.agent!==name||!Array.isArray(v.events)||v.events.length>40))throw Error('unavailable');
+  return v;
+ }catch(e){
+  // A request replaced by a newer one of the same kind is not a failure;
+  // the newer one owns the retry timer.
+  if(c.signal.aborted&&!late)e.superseded=true;if(late)e.slow=true;throw e;
+ }finally{clearTimeout(t);if(controllers[slot]===c)controllers[slot]=null;}
+}
+function clock(ts){const d=new Date(ts);return Number.isFinite(d.getTime())?d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'';}
+function table(lines){
+ const cells=l=>l.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(x=>x.trim());
+ const t=make('table','conversation-table'),head=cells(lines[0]),tr=make('tr');
+ head.forEach(h=>tr.append(make('th','',h)));t.append(tr);
+ for(const l of lines.slice(2)){const row=make('tr');cells(l).forEach(c=>row.append(make('td','',c)));t.append(row);}
+ const wrap=make('div','conversation-table-wrap');wrap.append(t);return wrap;
+}
+const isRule=l=>/^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
+/* Literal Markdown subset: fenced code and pipe tables become DOM; everything
+   else stays the exact recorded text. */
+function body(text){
+ const box=make('div','conversation-text'),lines=text.split('\n');let para=[];
+ const flush=()=>{if(para.length){box.append(make('p','',para.join('\n')));para=[];}};
+ for(let i=0;i<lines.length;i++){
+  const l=lines[i];
+  if(/^\s*```/.test(l)){flush();const code=[];i++;while(i<lines.length&&!/^\s*```/.test(lines[i]))code.push(lines[i++]);box.append(make('pre','conversation-code',code.join('\n')));continue;}
+  if(/^\s*\|.*\|\s*$/.test(l)&&i+1<lines.length&&isRule(lines[i+1])){
+   flush();const rows=[l,lines[i+1]];i+=2;while(i<lines.length&&/^\s*\|.*\|\s*$/.test(lines[i]))rows.push(lines[i++]);i--;box.append(table(rows));continue;}
+  para.push(l);
+ }
+ flush();return box;
+}
+function mailCard(m){
+ const card=make('button','conversation-mail '+m.direction);card.type='button';
+ const who=m.direction==='received'?'Mail received · from '+(m.sender||'unknown'):'Mail sent · to '+(m.recipients.join(', ')||'unknown');
+ card.append(make('small','',who),make('strong','',m.subject||'(no subject)'));
+ const detail=make('pre','conversation-mail-body',m.body);detail.hidden=true;
+ const note=make('small','conversation-mail-note',m.coverage==='preview'?'Recorded preview only':m.coverage==='unavailable'?'Body not in the record':m.truncated?'Shortened':'Tap to show the recorded body');
+ card.append(note,detail);card.setAttribute('aria-expanded','false');
+ const closedNote=note.textContent;card.onclick=()=>{detail.hidden=!detail.hidden;card.setAttribute('aria-expanded',String(!detail.hidden));note.textContent=detail.hidden?closedNote:'Recorded body · tap to hide';};
+ return card;
+}
+// The cockpit puts file references on the file tool calls (Read, Write,
+// Edit, apply_patch, SendUserFile...), so a tool row carries chips too.
+function files(e,r){if(Array.isArray(e.files)&&e.files.length){const f=make('div','conversation-files');e.files.forEach(x=>f.append(chip(x)));r.append(f);}}
+function row(e){
+ if(e.kind==='tool'){const r=make('div','conversation-tool',e.text);r.dataset.id=e.id;files(e,r);return r;}
+ if(e.kind==='mail'){const r=make('div','conversation-mails');r.dataset.id=e.id;e.mail.forEach(m=>r.append(mailCard(m)));return r;}
+ const r=make('div','conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
+ r.append(body(e.text));
+ if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m)));
+ files(e,r);
+ const meta=[clock(e.ts),e.truncated?'shortened':''].filter(Boolean).join(' · ');if(meta)r.append(make('small','conversation-time',meta));
+ return r;
+}
+function chip(x){
+ const label=(x.kind==='image'?'Image · ':'File · ')+x.label;
+ if(typeof x.ref!=='string'||!REF.test(x.ref))return make('span','conversation-chip '+x.kind,label);
+ const b=make('button','conversation-chip '+x.kind+' previewable',label);b.type='button';
+ b.setAttribute('aria-label','Preview '+x.label);b.onclick=()=>openPreview(x);return b;
+}
+/* Checked again here: a PNG data URL from strict base64 within the relay's
+   side and pixel limits. */
+function pngSource(v){
+ return v&&v.kind==='image'&&(v.mime===undefined||v.mime==='image/png')&&typeof v.data==='string'&&v.data.length<=MAX_PREVIEW_BYTES&&BASE64.test(v.data)&&v.data.startsWith('iVBORw0KGgo')
+  &&Number.isInteger(v.width)&&Number.isInteger(v.height)&&v.width>0&&v.height>0&&v.width<=MAX_SIDE&&v.height<=MAX_SIDE&&v.width*v.height<=MAX_PIXELS
+  ?'data:image/png;base64,'+v.data:null;
+}
+function closePreview(){
+ controllers.preview?.abort();controllers.preview=null;dropSave();
+ if(panel){for(const img of panel.querySelectorAll('img'))img.src='';panel.replaceChildren();panel.remove();}
+ panel=null;
+}
+/* A plain file name: the last path part, without control or bidi-override
+   characters, at most 120 characters. Images are saved as the PNG cockpit
+   re-drew, so they end in .png; text that a viewer could render as markup
+   (.html, .htm, .xhtml, .svg, .xml) gets .txt, matching the plain-text bytes. */
+function fileName(label,image){
+ let n=String(label||'').split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,'').trim().slice(0,120);
+ if(!n||n==='.'||n==='..')n=image?'image':'file.txt';
+ if(image)return /\.png$/i.test(n)?n:n+'.png';
+ return /\.(?:html?|xhtml|svg|xml)$/i.test(n)?n+'.txt':n;
+}
+function dropSave(){if(saveUrl){URL.revokeObjectURL(saveUrl);saveUrl='';}}
+/* Saves the bytes this preview already holds; no further request is made. */
+function saveButton(head,close,label,blob){
+ const b=make('button','conversation-preview-save','Save');b.type='button';
+ b.onclick=()=>{
+  if(!panel)return;dropSave();saveUrl=URL.createObjectURL(blob());
+  const a=make('a');a.download=fileName(label,blob.image);a.href=saveUrl;a.hidden=true;
+  panel.append(a);a.click();a.remove();
+ };
+ head.insertBefore(b,close);
+}
+function pngBytes(data){const raw=atob(data),out=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);return out;}
+async function openPreview(x){
+ closePreview();if(!root)return;
+ const g=gen,box=make('div','conversation-preview');panel=box;box.setAttribute('role','dialog');box.setAttribute('aria-label','Preview of '+x.label);
+ const head=make('div','conversation-preview-head'),close=make('button','conversation-preview-close','Close');close.type='button';close.onclick=closePreview;
+ head.append(make('strong','',x.label),close);
+ const state=make('p','conversation-preview-status','Loading preview…');state.setAttribute('role','status');
+ const view=make('div','conversation-preview-body');box.append(head,state,view);root.append(box);
+ const c=new AbortController();controllers.preview=c;let late=false;const t=setTimeout(()=>{late=true;c.abort();},WAIT);
+ let v=null,status=0;
+ try{
+  const r=await fetch('/view/conversation/preview?name='+encodeURIComponent(name)+'&ref='+x.ref,
+   {credentials:'same-origin',cache:'no-store',referrerPolicy:'no-referrer',signal:c.signal});
+  status=r.status;const raw=await r.text();if(raw.length>MAX_PREVIEW_BYTES)throw Error('unavailable');v=JSON.parse(raw);
+ }catch(_){v=late?{ok:false,error:'history_slow'}:null;}
+ finally{clearTimeout(t);if(controllers.preview===c)controllers.preview=null;}
+ if(g!==gen||panel!==box)return;
+ if(status===410)v={ok:false,error:'preview_expired'};
+ if(v?.ok===true&&v.kind==='text'&&typeof v.text==='string'){
+  state.textContent=v.truncated===true?'Showing the start of the file.':'';
+  view.append(make('pre','conversation-preview-text',v.text));
+  const text=v.text;saveButton(head,close,x.label,()=>new Blob([text],{type:'text/plain;charset=utf-8'}));
+ }else if(v?.ok===true&&pngSource(v)){
+  const img=make('img','conversation-preview-image');img.alt=x.label;img.width=v.width;img.height=v.height;
+  img.src=pngSource(v);state.textContent='';view.append(img);
+  const data=v.data,blob=()=>new Blob([pngBytes(data)],{type:'image/png'});blob.image=true;saveButton(head,close,x.label,blob);
+ }else{
+  state.textContent=previewMessages[v?.error]||messages[v?.error]||'Preview unavailable right now.';return;
+ }
+ if(typeof v.notice==='string'&&v.notice)box.append(make('small','conversation-preview-notice',v.notice));
+}
+function atBottom(){return !list||(list.isConnected?list.scrollHeight-list.clientHeight-list.scrollTop<=24:following);}
+/* The sheet rebuilds its children; detaching resets scrollTop. Restore the
+   reader's place (or the tail) after each reattachment. */
+function restore(){if(!list||!list.isConnected)return;list.scrollTop=following?list.scrollHeight:savedTop;}
+function setStatus(text){if(status)status.textContent=text;}
+function renderPending(){
+ list?.querySelectorAll(':scope > .conversation-pending').forEach(x=>x.remove());
+ for(const p of pending){const r=make('div','conversation-bubble user conversation-pending');r.append(body(p.text),make('small','conversation-time','Sent to terminal · not yet in the record'));list.append(r);}
+}
+function settlePending(){
+ const now=Date.now();
+ pending=pending.filter(p=>now-p.at<180000&&!events.some(e=>e.role==='user'&&e.kind==='text'&&e.text.includes(p.text.trim())));
+}
+function append(page){
+ const follow=atBottom(),fresh=page.filter(e=>!seen.has(e.id));
+ for(const e of fresh){seen.add(e.id);events.push(e);list.insertBefore(row(e),list.querySelector(':scope > .conversation-pending'));}
+ let dropped=false;
+ while(events.length>MAX_KEPT){const gone=events.shift();seen.delete(gone.id);list.querySelector(':scope > [data-id="'+CSS.escape(gone.id)+'"]')?.remove();older=null;dropped=true;}
+ // An omitted marker belongs to its page's old edge. Only when that edge's
+ // messages are dropped at the kept limit does a marker above them go too.
+ if(dropped)for(const n of [...list.children]){if(n.dataset?.id!==undefined)break;if(n.className==='conversation-omitted')n.remove();}
+ settlePending();renderPending();
+ if(follow){following=true;list.scrollTop=list.scrollHeight;}
+ else if(fresh.length)setStatus('New messages below · paused while you read');
+}
+/* An older page is oldest-first. At the kept limit keep its newest part, the
+   part next to what is shown, and stop offering older pages so no gap opens. */
+/* Marks a gap at the old edge of the rows just added. */
+function gap(){const n=make('div','conversation-omitted',messages.omitted);n.setAttribute('role','note');return n;}
+function prepend(page,omitted){
+ const before=list.scrollHeight,first=[...list.children].find(x=>x!==olderButton)||null;
+ let fresh=page.filter(e=>!seen.has(e.id));const room=Math.max(0,MAX_KEPT-events.length);
+ if(fresh.length>room){fresh=room?fresh.slice(-room):[];older=null;setStatus(messages.kept_limit);}
+ if(omitted)list.insertBefore(gap(),first);
+ for(const e of fresh){seen.add(e.id);list.insertBefore(row(e),first);}
+ events=fresh.concat(events);
+ list.scrollTop+=list.scrollHeight-before;following=false;savedTop=list.scrollTop;
+}
+function reset(){closePreview();events=[];seen.clear();older=null;list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());}
+function slow(on){if(retryButton)retryButton.hidden=!on;if(on)setStatus(messages.history_slow);}
+function showError(v){
+ const code=typeof v?.error==='string'?v.error:'history_unavailable';
+ if(code==='history_slow'){slow(true);return;}
+ const reason=typeof v?.reason_code==='string'&&/^[a-z0-9_]{1,64}$/.test(v.reason_code)?' ('+v.reason_code+')':'';
+ setStatus((messages[code]||'History is unavailable right now.')+reason);
+}
+async function poll(){
+ const g=gen;clearTimeout(timer);timer=0;
+ if(!root||document.hidden)return;
+ try{
+  const v=await request(null,'poll');if(g!==gen)return;
+  if(v.ok!==true){
+   // A hidden, stale or changed record also hides any file opened from it;
+   // a slow answer is only a delay and leaves it open.
+   if(v.error!=='history_slow')closePreview();showError(v);if(v.error==='history_changed')reset();}
+  else{
+   failures=0;slow(false);if(!events.length&&v.omitted===true)list.insertBefore(gap(),list.querySelector(':scope > .conversation-pending'));append(v.events);
+   // The latest page's older token stays valid only while the oldest shown
+   // message is still in that page; it is renewed on every such poll.
+   if(events.length&&v.events.some(e=>e.id===events[0].id))older=v.older;
+   if(atBottom())setStatus(v.events.length?(v.tail_only?'Latest record · updating':'Read-only record · updating'):'No messages in the record yet.');
+   if(v.limited&&!events.length)setStatus('The latest record was shortened.');
+   olderButton.hidden=!older||loadingOlder;
+  }
+ }catch(e){if(g!==gen||e?.superseded)return;failures++;if(e?.slow)slow(true);else setStatus('History unavailable. Retrying.');}
+ if(g===gen&&root&&!document.hidden)timer=setTimeout(poll,failures?Math.min(30000,POLL*2**failures):POLL);
+}
+async function loadOlder(){
+ if(!older||loadingOlder)return;const g=gen,token=older;loadingOlder=true;olderButton.hidden=true;
+ try{
+  const v=await request(token,'older');if(g!==gen)return;
+  if(v.ok!==true&&v.error==='page_expired'){
+   // Start again from the latest page, which brings a fresh token.
+   reset();loadingOlder=false;await poll();if(g===gen)setStatus(messages.page_expired);return;
+  }
+  // A slow answer keeps the token, so Show older can simply be tapped again.
+  if(v.ok===true){older=v.older;prepend(v.events,v.omitted===true);}
+  else if(v.error==='history_slow')setStatus(messages.older_slow);
+  else{showError(v);older=null;}
+ }catch(e){if(g===gen&&!e?.superseded)setStatus(e?.slow?messages.older_slow:'Older messages unavailable.');}
+ finally{if(g===gen){loadingOlder=false;olderButton.hidden=!older;}}
+}
+function mount(n){
+ unmount();name=n;root=make('div','conversation');root.id='conversation';
+ status=make('p','conversation-status','Loading the record…');status.setAttribute('role','status');
+ olderButton=make('button','conversation-older','Show older');olderButton.type='button';olderButton.hidden=true;olderButton.onclick=loadOlder;
+ list=make('div','conversation-list');list.setAttribute('aria-label','Conversation record for '+n);
+ list.addEventListener('scroll',()=>{if(!list.isConnected)return;following=list.scrollHeight-list.clientHeight-list.scrollTop<=24;savedTop=list.scrollTop;if(following&&/paused/.test(status.textContent))setStatus('Read-only record · updating');},{passive:true});
+ retryButton=make('button','conversation-retry','Retry');retryButton.type='button';retryButton.hidden=true;
+ retryButton.onclick=()=>{retryButton.hidden=true;setStatus('Loading the record…');return poll();};
+ list.append(olderButton);root.append(status,retryButton,list);poll();return root;
+}
+function element(){return root;}
+function addPending(text){if(!root||typeof text!=='string'||!text.trim())return;pending.push({text,at:Date.now()});renderPending();following=true;restore();}
+function unmount(){
+ gen++;clearTimeout(timer);timer=0;closePreview();for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
+ root?.replaceChildren();root?.remove();root=list=status=olderButton=retryButton=null;
+ events=[];seen=new Set();older=null;pending=[];failures=0;loadingOlder=false;following=true;savedTop=0;name='';
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)unmount();});window.addEventListener('pagehide',unmount);
+window.OrreryMobileConversation={enabled,mount,element,unmount,addPending,restore};
+})();

@@ -187,3 +187,18 @@ When updating an existing log:
 - State uncertainty and skipped verification explicitly.
 - Do not put random child-agent names in prose unless the identity itself matters; prefer roles such as "review child" or "test child".
 - Keep the log useful to someone returning weeks later.
+
+## Finish: Show The Log
+
+After writing the log, call ORRERY Mail's `show_files` with the log's path, whichever way the log was written (a file tool, a shell command or the Obsidian CLI). The cockpit's History then shows it as a chip that opens the log drawn as Markdown. The call sends nothing and does not read the log into your context. Skip it when `show_files` is not among your tools.
+
+After telling the user where the log is, add one line about the chip only when all of these hold; otherwise say nothing about it:
+
+1. `AGENT_NAME` is set (an ORRERY-launched session; other sessions never appear in History).
+2. The log is inside the session's working folder (under `git rev-parse --show-toplevel`, or `pwd` outside git). A vault outside it is not previewable, so stay silent.
+3. The marker `${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/hints/log-history-preview` does not exist. After adding the line, create it (`mkdir -p` its directory, then `touch`), so the line appears once per machine.
+
+Write the line in the language the user has been writing in this session, not the locale. For example:
+
+- `cockpit の History で、このログの file chip を押すと Markdown として読めます（この案内は初回だけです）。`
+- `In the cockpit's History, select this log's file chip to read it as Markdown (shown once).`

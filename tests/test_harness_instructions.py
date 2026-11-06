@@ -79,14 +79,16 @@ def test_shared_boundary_changes_fail_instead_of_silently_dropping_rules(mutatio
 
 
 @pytest.mark.parametrize('provider,name,digest', [
-    ('claude', 'CLAUDE.md', '39a95b17bd3957cc355795b556737dbc0ff5589f5d7f33c8613b6a33b6b993e9'),
-    ('codex', 'AGENTS.md', '59728f94e5cf4ebee3d05d5e01d2ffed6034335c640129bc018b5cb16c751081'),
+    ('claude', 'CLAUDE.md', '9dee4418499f8705b5418d0721dc9d9a4c8d2d05745b3dbaf7d049e6a61a165b'),
+    ('codex', 'AGENTS.md', '65457aee465c25cec6b50e7e1dec12dc3dcb2b9dd32a80fe5982a6dc74973275'),
 ])
 def test_program_output_matches_scope_adjusted_baseline(provider, name, digest):
     # Reviewed against af1e33d0: each provider template adds exactly four lines
     # requiring physical absolute paths in managed workspace-v1 sessions,
     # the same paths for renew/release, unchanged legacy paths/globs, and no
-    # inferred cwd. The renderer is unchanged; pin the intended full output.
+    # inferred cwd. Then each adds the eight-line "## Showing Files" section
+    # (show_files before the final message). The renderer is unchanged; pin
+    # the intended full output.
     output = renderer.render(provider, (ROOT / provider / name).read_bytes(), '/fixture/install', '/fixture/project')
     assert hashlib.sha256(output).hexdigest() == digest
 

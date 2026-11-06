@@ -12,6 +12,7 @@ import json
 import sys
 
 from .fresh_client import Client, FIELDS, MAX_REQUEST_BYTES, WRITES
+from . import show_files
 from .schema_contract import validate_schema
 from .storage_origin_contract import B1Error, canonical
 
@@ -75,6 +76,9 @@ async def catalogue(client):
     result['runtime_status'] = dict(name='runtime_status', description='Verify this bound Mail identity.',
                                    inputSchema=STATUS_SCHEMA,
                                    outputSchema={'type': 'object', 'additionalProperties': True})
+    # Local only: names files for the cockpit's History; nothing is sent.
+    result['show_files'] = dict(name='show_files', description=show_files.DESCRIPTION,
+                                inputSchema=copy.deepcopy(show_files.INPUT_SCHEMA))
     return result
 
 
@@ -147,8 +151,12 @@ async def serve(client, source=None, output=None, *, resolve_external=None):
                         client=selected;external_reference=reference
                     else:
                         if resolve_external is not None and external_reference is None:raise B1Error('BOOTSTRAP_REQUIRED')
-                        value = (await verified_owner(client) if name == 'runtime_status'
-                                 else await client.call(name, args))
+                        if name == 'show_files':
+                            try:value = show_files.result(args['paths'])
+                            except ValueError:raise B1Error('INVALID_ARGUMENTS') from None
+                        else:
+                            value = (await verified_owner(client) if name == 'runtime_status'
+                                     else await client.call(name, args))
                     result = tool_result(value)
                 except B1Error as error:
                     result = tool_result({'code': error.code, **error.details}, error=True)

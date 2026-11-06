@@ -2507,6 +2507,7 @@ RUNTIME_CLIENT_CONTRACT_SOURCES=(
   "$REPO_ROOT/scripts/codex-reservation-status.py"
   "$REPO_ROOT/scripts/build-codex-app-marketplace.py"
   "$REPO_ROOT/bin/lib/runtime_delivery.py"
+  "$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/show_files.py"
   "$REPO_ROOT/bin/lib/runtime_operator.py"
   "$REPO_ROOT/bin/lib/runtime_observation.py"
   "$REPO_ROOT/bin/lib/runtime_tmux.py"
@@ -2734,6 +2735,9 @@ install_payload() {
     cp "$REPO_ROOT/bin/agentstack-persistent-deliver" "$BIN_DIR/agentstack-persistent-deliver"
     cp "$REPO_ROOT/bin/agentstack-preregister-child" "$BIN_DIR/agentstack-preregister-child"
     cp "$REPO_ROOT/bin/agentstack-await-reply" "$BIN_DIR/agentstack-await-reply"
+    # Phone access helper; it creates no launchd job until the person turns
+    # Phone access on (cockpit Settings or `agentstack-mobile apply`).
+    cp "$REPO_ROOT/bin/agentstack-mobile" "$BIN_DIR/agentstack-mobile"
     cp "$REPO_ROOT/bin/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-bootstrap"
     cp "$REPO_ROOT/bin/agentstack-resume" "$BIN_DIR/agentstack-resume"
     cp "$REPO_ROOT/bin/agentstack-purge-child-resume" "$BIN_DIR/agentstack-purge-child-resume"
@@ -2745,7 +2749,7 @@ install_payload() {
       "$BIN_DIR/agentstack-merge-claude-mcp" \
       "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-reregister" "$BIN_DIR/agentstack-enroll" \
       "$BIN_DIR/agentstack-persistent" "$BIN_DIR/agentstack-persistent-deliver" \
-      "$BIN_DIR/agentstack-preregister-child" "$BIN_DIR/agentstack-await-reply" \
+      "$BIN_DIR/agentstack-preregister-child" "$BIN_DIR/agentstack-await-reply" "$BIN_DIR/agentstack-mobile" \
       "$BIN_DIR/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-resume" "$BIN_DIR/agentstack-purge-child-resume" "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup" \
       "$BIN_DIR/agentstack-mailctl"
   fi

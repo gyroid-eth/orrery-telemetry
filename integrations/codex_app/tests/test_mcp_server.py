@@ -337,6 +337,7 @@ def test_stdio_server_lists_only_allowlisted_tools_and_rejects_passthrough(tmp_p
         "renew_reservations",
         "release_reservations",
         "runtime_status",
+        "show_files",
         "whois",
     }
     assert names == {tool["name"] for tool in TOOL_DEFINITIONS}
@@ -429,7 +430,7 @@ def test_mcp_server_script_runs_directly_without_plugin_root_env(tmp_path):
     assert result.returncode == 0
     responses = [json.loads(line) for line in result.stdout.splitlines()]
     assert responses[0]["result"]["serverInfo"]["name"] == "agentstack"
-    assert len(responses[1]["result"]["tools"]) == 9
+    assert len(responses[1]["result"]["tools"]) == 10
     status = responses[2]["result"]["structuredContent"]
     assert status["external_id"] == "codex:session-example"
     assert "owner-secret" not in result.stdout
@@ -490,3 +491,71 @@ def test_server_error_text_reaches_the_model_with_secrets_redacted():
     empty = {"result": {"isError": True, "content": []}}
     with pytest.raises(AgentMailError, match="^ORRERY Mail tool call failed$"):
         _decode_tool_response(empty)
+
+
+def test_show_files_checks_paths_locally_and_contacts_nothing(tmp_path, monkeypatch):
+    proxy, mail = _proxy(tmp_path)
+    work = tmp_path / "work"
+    (work / "docs").mkdir(parents=True)
+    (work / "docs/report.md").write_text("# secret body\n")
+    (work / "figure.PNG").write_bytes(b"\x89PNG")
+    (work / "link.md").symlink_to(work / "docs/report.md")
+    # The Bridge snapshot knows the agent's working folder; the proxy's cwd does not count.
+    proxy.snapshots.upsert(runtime_record(
+        build_binding(session_id="session-example", agent_id=None, agent_name="Calm-Noether",
+                      project_key="/workspace/example"),
+        {"model": "gpt-example", "cwd": str(work)}, state="working"))
+    monkeypatch.chdir(tmp_path)
+    proxy.bootstrap("session-example")
+
+    result = _dispatch(proxy, "show_files", {"paths": [
+        "docs/report.md", str(work / "figure.PNG"), "missing.md", "docs", "link.md", "../elsewhere.md"]})
+
+    assert result["present"] == ["docs/report.md", str(work / "figure.PNG")]
+    by_path = {item["path"]: item for item in result["files"]}
+    assert by_path["docs/report.md"] == {"path": "docs/report.md", "exists": True, "kind": "file", "bytes": 14}
+    assert by_path[str(work / "figure.PNG")]["kind"] == "image"
+    assert by_path["missing.md"] == {"path": "missing.md", "exists": False}
+    assert by_path["docs"]["kind"] == "other"
+    assert by_path["link.md"]["kind"] == "other"          # never followed
+    assert by_path["../elsewhere.md"] == {"path": "../elsewhere.md", "outside_working_folder": True}
+    assert "secret body" not in json.dumps(result)          # the content is not read
+    assert mail.calls == []                                 # nothing reaches ORRERY Mail
+
+
+def test_show_files_without_a_known_folder_leaves_relative_paths_to_the_cockpit(tmp_path, monkeypatch):
+    identities = IdentityStore(tmp_path / "identity")
+    _save_identity(identities)
+    proxy = AgentStackProxy(identities, SnapshotStore(tmp_path / "snapshot.json"), FakeAgentMail())
+    (tmp_path / "here.md").write_text("x")
+    monkeypatch.chdir(tmp_path)                             # even where the file is
+    proxy.bootstrap("session-example")
+    result = _dispatch(proxy, "show_files", {"paths": ["here.md"]})
+    assert result["files"] == [{"path": "here.md", "checked": False}]
+
+
+def test_show_files_needs_bootstrap(tmp_path):
+    proxy, mail = _proxy(tmp_path)
+    with pytest.raises(ProxyError, match="bootstrap"):
+        _dispatch(proxy, "show_files", {"paths": ["a.md"]})
+    assert mail.calls == []
+
+
+@pytest.mark.parametrize("paths", ([], ["a"] * 9, ["~/a.md"], ["https://example.com/a.png"], ["a\nb"], [7], "a.md"))
+def test_show_files_refuses_unbounded_or_non_path_arguments(tmp_path, paths):
+    proxy, mail = _proxy(tmp_path)
+    proxy.bootstrap("session-example")
+    with pytest.raises(ProxyError):
+        _dispatch(proxy, "show_files", {"paths": paths})
+    assert mail.calls == []
+
+
+def test_show_files_description_says_when_to_use_it():
+    tool = next(tool for tool in TOOL_DEFINITIONS if tool["name"] == "show_files")
+    text = tool["description"]
+    for phrase in ("cockpit", "History", "preview", "created or changed", "image",
+                   "right before your final message", "working folder", "relative or absolute",
+                   "Nothing is sent or written"):
+        assert phrase in text, phrase
+    assert tool["inputSchema"]["required"] == ["paths"]
+    assert tool["inputSchema"]["properties"]["paths"]["maxItems"] == 8

@@ -34775,10 +34775,15 @@ let NSIZE=NETP_DEF.NSIZE, L=NETP_DEF.L, LWMUL=NETP_DEF.LWMUL,
 
 async function netTick(){
   try{
+    // 定時の netTick と新着の netTick は重なりうる。先に出した要求の応答が後から
+    // 着いたら捨てる（線の上の数が一瞬1つ戻って見えないように）。番号は関数に持つ。
+    const seq=netTick.seq=(netTick.seq||0)+1;
     const qs=gWin==="all"?"all=1":"days="+gWin;
     const r=await fetch('/api/graph?'+qs);
     if(r.status===503)return;   // busy: keep the current graph, poll again
     const j=await r.json();
+    if(seq<(netTick.shown||0))return;
+    netTick.shown=seq;
     const {w,h}=netDims();
     const previousNodeCount=gmap.size;
     const mapWasCleared=gmap.size===0&&gEls.node&&gEls.node.size>0;
@@ -35668,6 +35673,7 @@ async function mailPulseTick(){
     const j=await r.json();
     if(j.ok){
       mailLastTs=Math.max(mailLastTs,Number(j.now)||0);
+      let fresh=0;
       for(const m of annotateBroadcastMessages(j.messages||[])){
         const key=mailMessageKey(m);
         if(mailSeenKeys.has(key))continue;
@@ -35675,13 +35681,29 @@ async function mailPulseTick(){
         while(mailSeenOrder.length>MAIL_SEEN_MAX)
           mailSeenKeys.delete(mailSeenOrder.shift());
         m._queuedAt=Date.now();
-        mailQueue.push(m);
+        mailQueue.push(m);fresh++;
       }
       // 上限超え分は古い方から捨てる
       while(mailQueue.length>MAIL_QUEUE_MAX) mailQueue.shift();
+      // 新着があれば線の上の数もすぐ取り直す（server は新しい message で
+      // graph の cache を作り直す）。数の正本は /api/graph のまま。
+      if(fresh)netRefreshForMail();
       mailDrain();
     }
   }catch(e){ /* silent */ }
+}
+
+// 新着の知らせで netTick を呼ぶ。走っている間に来た知らせは、終わった後に
+// 1回へまとめる。Mail が多くても 4 秒の poll 1回につき高々1回で詰まらない。
+let netMailRefresh=null,netMailRefreshAgain=false;
+function netRefreshForMail(){
+  if(netMailRefresh){netMailRefreshAgain=true;return netMailRefresh;}
+  netMailRefresh=(async()=>{
+    try{
+      do{netMailRefreshAgain=false;await netTick();}while(netMailRefreshAgain);
+    }finally{netMailRefresh=null;}
+  })();
+  return netMailRefresh;
 }
 
 function mailMessageKey(m){

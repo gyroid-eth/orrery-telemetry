@@ -1,0 +1,3 @@
+### agent が作った file や画像を、cockpit の History の chip にする `show_files`
+
+ORRERY Mail の proxy に local の tool `show_files` を足しました（`paths` に 1〜8個）。proxy の中だけで完結し、Mail server へは送らず、何も書かず、file の中身も読みません。`lstat` で在るか・種類・大きさだけを返します。cockpit は記録に残ったこの呼び出しから History に chip を出し、作業 folder の中・種類・大きさの確認は preview の側で従来どおり行います（cockpit 側の対応が要ります）。Claude・Codex・dsh・Hermes の managed な指示に「Showing Files」の節を足し、同梱の `/log` は書いたログを、`/delegate` は報告の前に成果の file を `show_files` で見せます。`/log` は、ログが作業 folder の中にあるとき、その機械で初回に一度だけ chip のことを一行添えます。Claude の設定の雛形はこの tool を確認なしで許可します。詳しくは [Codex App 統合](../docs/codex-app.md) と [Launchers の `/log`](../docs/launchers.md#log) を参照してください。

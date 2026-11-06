@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import types
+import uuid
 
 if __package__:
     from . import child_resume, child_tools, native_connections, native_server_models
@@ -42,6 +43,23 @@ def read(path):
 
 def save(path, value):
     child_resume._atomic_json(Path(path), value)
+
+
+def prepare_dsh_history(document, state):
+    """Issue a non-secret launch expectation; old callbacks cannot claim a resume."""
+    if (document.get('program') != 'dsh' or 'fresh_client_dir' in document
+            or os.environ.get('AGENTSTACK_RUNTIME_MODE') in ('fresh', 'global')
+            or 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in os.environ):
+        document.pop('history_binding', None)
+        return
+    runtime = Path(document['runtime_dir'])
+    name = document['agent_name']
+    expectation = dict(schema_version=1, provider='dsh', program='dsh',
+        agent_name=name, agent_id=state['agent_id'], project_key=document['project_key'],
+        launch_id=uuid.uuid4().hex, state_dir=document['state_dir'],
+        native_home=str(runtime / 'native/dsh' / name))
+    document['history_binding'] = expectation
+    save(runtime / 'dsh-history' / (name + '.json'), expectation)
 
 
 def config_generator(root, harness):
@@ -289,6 +307,7 @@ def prepare_resume(runtime_dir, name, project_key=None):
                     mcp_base_config=str(mcp),
                     prompt_file=str(prompt), instructions_file=str(write_instructions(state_dir,state['project_key'])),
                     resume_attempt_at=state['resume_in_progress_at'])
+    prepare_dsh_history(document, state)
     generate_plan(document, runner)
     (state_dir / 'native-exit.status').unlink(missing_ok=True)
     return state_dir
@@ -350,6 +369,7 @@ def prepare(args):
         document['helper_model'] = args.helper_model
     if args.effort is not None:
         document['effort'] = args.effort
+    prepare_dsh_history(document, state)
     generate_plan(document, runner)
     state.update(harness=args.harness, harness_backend=args.backend,
                  harness_backend_kind=kind, harness_state_dir=str(state_dir))

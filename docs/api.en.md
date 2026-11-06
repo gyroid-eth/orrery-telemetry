@@ -47,6 +47,7 @@ with HTTP 400. A media-type mismatch is HTTP 415, a cross-origin POST is HTTP 40
 | GET | `/api/suggest-name` | `scientist` | verified `Adjective-Scientist` (requested form; read-back from the registration response is authoritative for the actual registered name) |
 | GET | `/api/fs/dirs` | optional `path` | root-scoped child directories |
 | GET | `/api/agents` | none | `{ts, agents}` |
+| GET | `/api/agents/<name>/history-binding` | none | `{ok, agent}` (one agent's conversation-record binding, API 36) |
 | GET | `/api/graph` | `days`, `all` | `{nodes, edges, spawn, timestamp_diagnostics, degraded, ts}` |
 | GET | `/api/history` | `session`, `limit` | transcript events |
 | GET | `/api/agent-history` | `name` or `names`, `hours`, `include_pane_states` | agent event timeline |
@@ -72,7 +73,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":34}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":36}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -313,6 +314,41 @@ Hidden directories and symlinks that leave the root are excluded. Up to 500 entr
 
 ## GET `/api/agents`
 
+### Conversation history binding (legacy, API 35)
+
+Claude / Claude Code, dsh and Hermes return only verified own conversations through these common fields. Determine the storage format from the existing `program` and provider conditions; no separate format field is added.
+
+| Field | Type and meaning |
+| --- | --- |
+| `history_binding` | `bound` (own record verified), `unbound` (unverified), or `stale` (own record predates the current launch) |
+| `transcript_path` | Absolute physical file path only when bound; otherwise null |
+| `history_binding_reason` | Short human-readable reason; empty when bound |
+| `history_binding_reason_code` | Stable machine-readable code, including provider-specific conditions |
+| `history_session_id` | Provider-native session ID (required for Hermes database reads), or null if unverified |
+| `history_receipt_ts` | Original receipt timestamp (ISO 8601 string), or null if unavailable; preserve offset-free values as written |
+
+Cwd, timestamps and latest-session scans never establish ownership. Binding does not prove process liveness. Existing Codex fields and states and the protected fresh `/api/history` path remain unchanged.
+
+#### Claude / Claude Code
+
+Existing Claude receipts use host local time without an offset; the original value is preserved for display. Authority comes from the current project's Mail agent ID and its `session_index/<id>.json` receipt (schema 2, `binding_kind:self`), written by SessionStart or the self-registration hook. Agent ID, name, project and registering caller must agree. A regular transcript directly inside a Claude projects project directory must have the receipt's session ID as its filename and as the first native user/assistant record's `sessionId`. Names in message text, cwd and modification times never establish binding.
+
+Reason codes are `binding_missing` (no receipt), `invalid_binding` (invalid self-registration, project or format, or a receipt changed during verification), `ambiguous_binding` (another agent's self receipt claims this conversation), `no_transcript` (file type/location requirements failed), and `id_mismatch` (session ID mismatch or unverified metadata). Prefix inspection is limited to 64 lines / 256 KiB. Empty or partial files, a native ID absent within that limit, symlinks, subagent files and storage outside standard Claude projects remain unbound.
+
+A receipt timestamp older than the current tmux `session_created` returns `stale` / `receipt_predates_session`, retaining native ID and receipt time with a null path. Offset-free timestamps are compared in dashboard host local time, assuming its timezone has not changed. Hook receipt replacements are reflected by the next roster computation, without restoring a cached old path. This comparison cannot distinguish CLI replacement inside the same tmux session, same-second restarts or a missing receipt time: until a new hook completes, the last self-registered conversation may remain visible. Retirement alone preserves exact archival binding. Binding identifies the last self-registered conversation; it does not prove process liveness. Existing Codex states and the protected fresh `/api/history` path are unchanged.
+
+#### dsh (DeepSeek Harness)
+
+`history_receipt_ts` is the callback's UTC ISO 8601 timestamp. A launch expectation prepared after this update and the child's own `agent/created` callback bind the current project's Mail ID to the native persistence backend's `locate(header)` address and its device/inode after flush. Current default storage is Zstd-framed JSONL at the child's private `DSH_HOME/sessions/<workspace>/<session>/session.v4.jsonl.zstd`; `DSH_TUI_DATA_DIR` holds TUI settings. Root IDs are recorded before locator, flush or receipt publication. Observing another root in the same launch permanently conflicts that launch even if later persistence fails; a repeated callback from the original root cannot restore binding before a new formal launch. A failed root-observation write retains the acquired lock; a failed contender marker also prevents the owner from publishing or releasing its lock. I/O recovery alone cannot restore binding: a new formal launch nonce is required. A receipt older than the current terminal returns `stale` / `receipt_predates_session`, keeping native ID and original timestamp with a null path. Terminal-free retired archives keep the same exact verification. Resume rotates the launch nonce and withholds the old receipt until a new callback arrives. Retirement preserves exact archival binding while the same registration and receipts remain. Changed registration, removed proof, multiple root sessions in one launch, file replacement or symlinks remain unbound. Old launches without these receipts and custom storage locations never fall back to cwd, timestamps or latest-session scans. This raw-path contract is legacy-only; protected fresh history and the provider support of `/api/history` are unchanged. Cockpit needs a separate dsh Zstd/native-event parser.
+
+#### Hermes
+
+Only `history_binding: bound` publishes `transcript_path` (the absolute child-owned `HERMES_HOME/state.db` path). Bound/stale rows include the evidence's `history_session_id` (native ID) and `history_receipt_ts` (the callback's original ISO timestamp, with UTC offset). Existing `program: hermes` identifies the format. Readers must verify **both the database path and session ID** and filter `messages.session_id`: multiple sessions share one HOME/database. This path is not a JSONL transcript.
+
+Binding verifies the project/agent registration, child-specific launch/input, pinned private HOME, self `on_session_start` callback, and exact CLI session in SQLite. It never selects by cwd, newest session, or modification time. Missing/mismatched proof or a launch/resume in preparation yields `unbound`; a receipt older than a new terminal launch without explicit exact resume yields `stale`. Neither publishes a path; `history_binding_reason` / `history_binding_reason_code` explain why. Success uses an empty explanation and code `bound`. Retired children remain readable while proof is retained; removal/purge unbinds them. Provider-internal switching/compression without a new callback can leave this binding on the earlier recorded segment; it never guesses descendant sessions or emergency diverted JSONL. The protected fresh history path and `/api/history` provider scope are unchanged.
+
+### Other agent display fields
+
 API generation 24 lets running dsh/Hermes agent rows and `/api/graph` nodes return `work`, `question` or `ask` in `act_state` from supported current operation controls. A complete current input frame with no work/question/approval evidence returns `wait`. Hidden, incomplete or unsupported shapes return `null` (unknown); absence alone never implies waiting. Activity does not determine liveness, completion or stop eligibility. Existing Claude/Codex classification is unchanged. See [supported native displays and limits](native-capabilities.md#activity-classification-boundary).
 
 API generation 19 adds nullable `provider_stall` to live legacy Codex CLI agent rows and graph nodes: `{kind: "model_capacity", since: <UTC epoch seconds>, error: <one error line>, notification_status: <status>}`. Status is `sent`, `no_parent`, `parent_unverified`, `delivery_unknown`, or `failed`. It does not change `act_state`. The dashboard observes two distinct current capacity-error captures and sends one notice from the existing child identity to its verified parent. Observed work rearms it; a proven append of "previous stop → newly submitted input → new capacity error" in the same pane also produces a new notice after two captures confirm that boundary. Ambiguous history retains the current episode. GET requests never send messages. An uncertain delivery is not retried. Global mode is not supported yet; see [provider stops](dashboard.en.md#provider-stop-notifications-legacy).
@@ -351,6 +387,27 @@ API generation 4 adds these fields. GET `/api/agents` and `/api/graph` Claude ro
 API generation 5 adds `resume_mode` to finished Claude rows that can be resumed (`ready` or `verification_required`), before any resume. `mail` means the resume authenticates the owner and unretires its Mail row, or refuses without launching; it never falls back to a conversation-only resume. `conversation_only` means the conversation resumes without touching Mail, and the row also carries `mail_status: unavailable` with `mail_reason` / `mail_message`. The `/api/jump` response reports the same `resume_mode`; a Claude resume that restores Mail now returns `resume_mode: mail`. `resume_capability` keeps its codes and meaning, so a caller that resumes on `ready` is unaffected. Codex rows, rows that cannot be resumed and running rows carry no `resume_mode`.
 
 Rows and responses with `mail_reason: mail_schema_unsupported` also carry `mail_remedy`: update the ORRERY Mail this installer deployed with `./scripts/install.sh --update-mail`, let the conversation-only session exit, then resume again; if the dry run refuses, follow [the Mail update guide](agentstack-mail-update.en.md) instead. The same text ends `mail_message`, so a caller that shows `mail_message` gets it without reading the new field (the API generation is unchanged). `credential_absent` and `retention_expired` cannot be fixed from the dashboard and carry no remedy. A running conversation-only session reports `mail_status` / `mail_reason` / `mail_message` even when its retired Mail row leaves `program` empty.
+
+## GET `/api/agents/<name>/history-binding`
+
+The binding of one agent, which the cockpit's conversation-history reader confirms before it shows content (API 36). It is the same verdict as that agent's row of `/api/agents?scope=live` (running judgement by `lookup_agent`, the 30-day window, binding by the same functions as the roster), without reading any pane or building any other agent's row.
+
+```bash
+curl -s http://127.0.0.1:8770/api/agents/AgentName/history-binding
+```
+
+Response:
+
+```json
+{"ok":true,"agent":{"name":"AgentName","program":"claude-code","category":"agent","running":true,"created":1793775600,
+ "history_binding":"bound","transcript_path":"/abs/path.jsonl","history_binding_reason":"","history_binding_reason_code":"bound",
+ "history_session_id":"…","history_receipt_ts":"…"}}
+```
+
+- Only these 11 fields are returned; their meaning is as in [conversation history binding](#conversation-history-binding-legacy-api-35)
+- A name that is not a live-roster row (retired, gone, warm-up, unregistered) or is malformed returns 404 `{"ok":false,"error":"agent_unavailable"}`
+- A read-only GET with the same Host/Origin handling as `/api/agents` (loopback). Fresh and global answer 404 `agent_unavailable` without a legacy judgement (in global, a failed operator admission before any route answers 503). The protected fresh history path is unchanged
+- Use it only when `api` is 36 or later; on any other failure (another 404, a 5xx, a transport failure) or with an older dashboard, confirm with `/api/agents?scope=live` as before
 
 ## GET `/api/graph`
 
@@ -813,3 +870,7 @@ External JSON is `targets:{epoch,name}`, `preview:{epoch,choice}`, `prepare:{epo
 Preview uses fresh shared-helper legacy admission and kernel birth, comparing socket/server/session/pane/UID/bridge incarnation before and after capture. Unknown helpers, OS facts or targets are refused; no Codex launch binding or registration DB is used. Fixed capture is limited to the last 40 lines/6 KiB displayed UTF-8, 64 KiB collected and 3 seconds overall. The actual serialized JSON response is capped at 16 KiB. ANSI/OSC/C0/C1/directional controls are removed; literal text, observation time and removal/truncation flags are returned. No preview body is cached. Collection overflow discards the body while preserving the ACK queue position. Missing termination after 3 seconds quarantines that control stream rather than reusing uncertain synchronization.
 
 Prepare binds an unchanged UTF-8 line of at most 4 KiB. Limits are 16 pending confirmations, 256 result metadata entries/10 minutes, one simultaneous send per pane and 6 sends/minute per pane. Commit claims once and holds the same write lock from fresh pane validation through every chunk/Enter write, then releases it before awaiting all tmux ACKs. All ACKs within 5 seconds mean accepted; partial failure/timeout/error means unknown with no retries or remaining-chunk compensation. Status only queries. Program identity or task completion is not guaranteed: return to a shell, existing input, external writers and races after the final check remain possible. See the [mobile guide](mobile.en.md#inspect-a-pane-and-send-input-from-your-phone) for UI, enabling and disabling.
+
+Conversation history and file and image previews are read-only and on by default once `--phone-policy-reviewed` is given (in Settings, Phone access with I reviewed the policy). `--disable-history` turns them off; `--enable-history` is an older flag kept for existing launch commands. `GET /view/history` always returns `{enabled, page_events}`, plus `reason` (`policy_not_reviewed` or `disabled`) when off. Only when enabled, `GET /view/conversation?name=<NAME>[&page=<token>]` exists; otherwise it is 404. The name must be in a published roster, and `page` must be a 32-hex token issued by this reader for the same name (256 entries/600 seconds, one token per name and cursor, renewed when the same page is served again; expiry returns 410). Paths, cursors and other query fields return 400 before any upstream call. The reader makes an originless fixed loopback `GET /telemetry/conversation?agent=<NAME>&limit=40[&before=<cursor>]` to the cockpit port, where cockpit resolves and rechecks the API 35 bound row; text is not masked. Upstream JSON is limited to 8 MiB and 15 seconds; running out of time returns 503 with the fixed code `history_slow` (retrying later helps). The phone receives `{ok, agent, provider, events, older, limited, omitted, tail_only}`; each event has only `id/kind(text|tool|mail)/role(user|assistant)/text/ts/truncated` plus optional `mail` (`direction/sender/recipients/subject/importance/coverage/body/truncated`) and `files` (`label/kind`, plus `ref` only when previewable). Text and Mail bodies are cut at 16 KiB, tool names at 160 characters, and a page at 40 events/512 KiB. Responses are UTF-8 JSON without `\u` escapes, at most 640 KiB on the wire. Events trimmed to fit a page are not skipped: `older` then continues from the oldest kept event's own `cursor_before`. A single event that cannot fit is shortened further; `omitted` is true only when events could not be shown or reached, and the phone marks that place. Tool output, diffs, cockpit reference IDs, cursors and paths are dropped. Unbound/stale/unconfirmed returns `{ok:false, error, reason_code}` with fixed codes; the human-readable reason is not forwarded.
+
+Only while History is on, `GET /view/conversation/preview?name=<NAME>&ref=<id>` exists. A `files` entry gets a `ref` only when cockpit attached a well-formed reference to it: a 32-hex ID issued by this reader, one per name and cockpit reference, renewed each time that page is served (1024 entries/600 seconds). The query must be exactly `name` and `ref`; a `ref` issued for another name, or an expired one, returns 410 `preview_expired` without an upstream call, and anything else returns 400. The reader makes an originless fixed loopback `GET /telemetry/conversation/preview?ref=<cockpit reference>`; cockpit rechecks the record, binding, root, canonical path, type, size and pixel count on every read; it refuses nothing by name and does not mask text. Upstream JSON is limited to about 5.4 MiB and 5 seconds; a larger Content-Length is refused as `preview_too_large` without reading. The phone receives `{ok, kind:"text", label, text, truncated, notice}` (the first 32 KiB of UTF-8) or `{ok, kind:"image", label, width, height, data, notice}`. Images pass only as PNG with IHDR, IDAT and IEND chunks and valid CRCs, IHDR dimensions equal to cockpit's, at most 8192 px a side, 8 Mpx and 4 MiB; `data` is its standard base64. Failures are `{ok:false, error}` with fixed codes (`preview_too_large`, `preview_type_denied`, `preview_path_denied`, `preview_changed`, `history_*`, otherwise `preview_unavailable`); no other cockpit text is forwarded. Cockpit's `reference_expired` becomes 410, and its `record_too_large` (the record holding the reference exceeds 1 MiB) becomes `preview_too_large`. An upstream body whose length differs from its Content-Length is refused.

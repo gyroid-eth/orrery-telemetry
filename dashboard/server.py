@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 34
+API_GENERATION = 36
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -66,7 +66,7 @@ if __name__ == '__main__':
 # `server.py` is both an executable script and an importable dashboard module
 # in the tests.  Support both import roots without coupling callers to cwd.
 try:
-    from dashboard import codex_models, mail_signals, provider_stalls, harness_runtime, harness_helpers, harness_context, harness_activity
+    from dashboard import codex_models, mail_signals, provider_stalls, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history
 except ModuleNotFoundError:  # direct `python dashboard/server.py`
     import codex_models
     import mail_signals
@@ -75,6 +75,8 @@ except ModuleNotFoundError:  # direct `python dashboard/server.py`
     import harness_helpers
     import harness_context
     import harness_activity
+    import dsh_history
+    import hermes_history
 
 try:
     from dashboard.providers.codex_app import CodexAppRuntimeProvider
@@ -108,9 +110,10 @@ except ModuleNotFoundError:  # direct script execution
 
 
 try:
-    from dashboard import legacy_http_admission
+    from dashboard import legacy_http_admission, claude_history
 except ModuleNotFoundError:  # direct script execution
     import legacy_http_admission
+    import claude_history
 
 
 def _same_origin_request(handler) -> bool:
@@ -1714,7 +1717,7 @@ def _mail_agent_for(name: str) -> dict | None:
             con.close()
 
 
-def lookup_agent(name: str) -> dict | None:
+def lookup_agent(name: str, history_days: float | None = None) -> dict | None:
     """One agent's name, category, running, attached and program, by name and
     however old it is: the same verdict build_agents(None) gives that row,
     without building every row of the whole history (each with its resume
@@ -1722,14 +1725,17 @@ def lookup_agent(name: str) -> dict | None:
     session, as the roster does) and one Mail registration; what it no longer
     does is the per-row work for every agent ever registered. exit/kill/jump need only this; under load the
     whole history took over ten seconds (2026-10-02, a bulk exit reported
-    failed while the cockpit's relay gave up after six)."""
+    failed while the cockpit's relay gave up after six).
+
+    `history_days` limits an agent without a tmux session to the same window
+    as build_agents(history_days); the default, None, is the whole history."""
     s = tmux_state().get(name)
     if s is not None:
         m = _mail_agent_for(name)
         process_tree = _process_tree_snapshot() if m is not None else None
         program, cat, running, _ = _tmux_row_state(name, s, m, process_tree)
         return {"name": name, "category": cat, "running": running,
-                "attached": s["attached"], "program": program,
+                "attached": s["attached"], "program": program, "created": s["created"],
                 **harness_runtime.metadata(RUNTIME_DIR, name, program)}
     project_key = _project_key()
     if not project_key:
@@ -1739,14 +1745,16 @@ def lookup_agent(name: str) -> dict | None:
         con = _db()
         con.row_factory = sqlite3.Row
         retired_flag = "a.retired_at IS NOT NULL" if _has_retired_at() else "0"
+        cutoff_sql, cutoff_params = _history_cutoff(history_days)
         r = con.execute(
             f"""
             SELECT a.name, a.model, a.program, {retired_flag} AS retired
             FROM agents a JOIN projects p ON a.project_id = p.id
             WHERE p.human_key = ? AND a.name = ?
+              {cutoff_sql}
             ORDER BY a.last_active_ts DESC LIMIT 1
             """,
-            (project_key, name),
+            (project_key, name, *cutoff_params),
         ).fetchone()
     finally:
         if con is not None:
@@ -1761,6 +1769,52 @@ def lookup_agent(name: str) -> dict | None:
         _apply_codex_app_runtime(row, runtime)
     row.update(harness_runtime.metadata(RUNTIME_DIR, name, row["program"]))
     return row
+
+
+def _history_binding_fields(row: dict, *, now: float, claude_index=None) -> dict:
+    """The conversation-record binding fields of one roster row.
+
+    The single place build_agents() and history_binding_row() take them from,
+    so the light route can never judge a binding differently from the roster.
+    """
+    program = row.get("program")
+    if program in {"codex", "codex-cli"}:
+        return _codex_history_binding(row["name"], now=now)
+    if program in {"claude", "claude-code"}:
+        if claude_index is None:
+            claude_index = claude_history.ReceiptIndex(SESSION_INDEX_DIR)
+        return _claude_history_binding(row["name"], index=claude_index, session_created=row.get("created"))
+    if program == "dsh":
+        return _dsh_history_binding(row["name"], session_created=row.get("created"))
+    if program == "hermes":
+        return _hermes_history_binding(row["name"], session_created=row.get("created"))
+    return {}
+
+
+_HISTORY_BINDING_PATH = re.compile(r"/api/agents/[^/]*/history-binding")
+HISTORY_BINDING_FIELDS = (
+    "name", "program", "category", "running", "created",
+    "history_binding", "transcript_path", "history_binding_reason",
+    "history_binding_reason_code", "history_session_id", "history_receipt_ts",
+)
+
+
+@_with_registration_batch
+def history_binding_row(name: str) -> dict | None:
+    """One live-roster row's conversation binding, without the roster.
+
+    The same verdict as that row of /api/agents?scope=live: lookup_agent()
+    (the shared running/category judgement, the same history window) and
+    _history_binding_fields(). No pane capture, no other agent's row. None
+    when the name is not a live roster row (the cockpit treats that as
+    agent_unavailable).
+    """
+    found = lookup_agent(name, HISTORY_DAYS_DEFAULT)
+    if found is None or not _is_live_roster_row(found):
+        return None
+    found.setdefault("created", 0)
+    found.update(_history_binding_fields(found, now=time.time()))
+    return {key: found.get(key) for key in HISTORY_BINDING_FIELDS}
 
 
 @_with_registration_batch
@@ -1919,6 +1973,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 con.close()
 
     observed_now = time.time()
+    claude_history_index = None
     for row in rows:
         row.update(harness_runtime.metadata(RUNTIME_DIR, row["name"], row.get("program")))
         profile = persistent_profiles.get(row["name"])
@@ -1928,8 +1983,9 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
             lifecycle=(profile or {}).get("lifecycle", "unknown"),
             interaction=(profile or {}).get("interaction", "unknown"),
         )
-        if row.get("program") in {"codex", "codex-cli"}:
-            row.update(_codex_history_binding(row["name"], now=observed_now))
+        if row.get("program") in {"claude", "claude-code"} and claude_history_index is None:
+            claude_history_index = claude_history.ReceiptIndex(SESSION_INDEX_DIR)
+        row.update(_history_binding_fields(row, now=observed_now, claude_index=claude_history_index))
         row["resume_capability"] = _resume_capability_for_row(
             row["name"],
             row.get("program") or "",
@@ -2038,23 +2094,41 @@ def _open_codex_app(name: str) -> dict:
     return {"ok": False, "error": "unknown Codex App runtime"}
 
 
-_GRAPH_CACHE: dict = {"ts": 0, "data": None}
+_GRAPH_CACHE: dict = {"ts": 0, "data": None, "mail": None}
+_GRAPH_BUILD_LOCK = threading.Lock()
 
 
 def _raw_graph() -> dict:
     """graph_data.build_graph() を遅延 import + 8 秒キャッシュ。
 
-    build_graph の集計をポーリングのたびに繰り返さないようにする。"""
-    now = time.time()
-    if _GRAPH_CACHE["data"] is not None and now - _GRAPH_CACHE["ts"] < 8:
-        return _GRAPH_CACHE["data"]
+    build_graph の集計をポーリングのたびに繰り返さないようにする。ただし
+    新しい message が入ったら 8 秒を待たずに作り直す。comet は Mail の 4 秒の
+    poll ですぐ飛ぶので、線の上の数がそれより最大約 13 秒遅れて増えていた。
+    message が無い間は今までどおり 8 秒に1回だけ作る。
+
+    Mail の印（graph_data.mail_mark）は build の前に読み、その build の結果に
+    結びつける。build の途中に着いた message は、次の要求で作り直す。作り直しは
+    lock の中で1本だけ走らせ、待っていた要求はその結果を使う。"""
     if HERE not in sys.path:
         sys.path.insert(0, HERE)
     import graph_data  # noqa: PLC0415  (lazy: 壊れても全体は落とさない)
 
-    data = graph_data.build_graph()
-    _GRAPH_CACHE.update(ts=now, data=data)
-    return data
+    def fresh(mark):
+        return (_GRAPH_CACHE["data"] is not None
+                and time.time() - _GRAPH_CACHE["ts"] < 8
+                and (mark is None or mark == _GRAPH_CACHE["mail"]))
+
+    mark = graph_data.mail_mark()
+    if fresh(mark):
+        return _GRAPH_CACHE["data"]
+    with _GRAPH_BUILD_LOCK:
+        mark = graph_data.mail_mark()
+        if fresh(mark):
+            return _GRAPH_CACHE["data"]
+        now = time.time()
+        data = graph_data.build_graph()
+        _GRAPH_CACHE.update(ts=now, data=data, mail=mark)
+        return data
 
 
 def mobile_mail_payload(window: str) -> tuple[int, dict]:
@@ -4656,6 +4730,15 @@ def _native_resume_launcher_ready():
         return False
 
 
+def _hermes_history_binding(session, *, session_created=None):
+    # Fresh history remains receipt-mediated; never expose legacy provider paths.
+    if FRESH_MODE:
+        return hermes_history.unbound('fresh_history_provider_unavailable')
+    return hermes_history.history_binding(RUNTIME_DIR, Path(HOOKS_DIR).parent, session,
+                                         _resume_registration(session, {'hermes'}),
+                                         session_created=session_created)
+
+
 def _native_resume_material(session, program):
     registration = _resume_registration(session, {program})
     if registration is None:
@@ -5244,12 +5327,27 @@ def _resume_registration(session: str, programs: set[str]) -> dict | None:
     }
 
 
+def _dsh_history_binding(session: str, *, session_created=None) -> dict:
+    if FRESH_MODE or GLOBAL_MODE:
+        return dsh_history.unbound('protected_history_required')
+    return dsh_history.binding(RUNTIME_DIR, session, _resume_registration(session, {'dsh'}),
+                               session_created=session_created)
+
+
 def _codex_registration(session: str) -> dict | None:
     return _resume_registration(session, {"codex", "codex-cli"})
 
 
 def _claude_registration(session: str) -> dict | None:
     return _resume_registration(session, {"claude", "claude-code"})
+
+
+def _claude_history_binding(session: str, *, index=None, session_created=None) -> dict:
+    return claude_history.history_binding(
+        session, _claude_registration(session), projects=CLAUDE_PROJECTS,
+        index=index if index is not None else claude_history.ReceiptIndex(SESSION_INDEX_DIR),
+        session_created=session_created,
+    )
 
 
 def _verified_codex_index(
@@ -9624,6 +9722,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, b'{"error":"cross_origin_spawn_names_request"}',
                        "application/json; charset=utf-8")
             return
+        if (FRESH_MODE or GLOBAL_MODE) and _HISTORY_BINDING_PATH.fullmatch(path):
+            # A legacy-only route (API 36): fresh and global answer it as
+            # missing before their own handlers (which would say 501 or 503).
+            self._send(404, b'{"ok":false,"error":"agent_unavailable"}', "application/json; charset=utf-8")
+            return
         if FRESH_MODE and self._fresh_get(path):return
         if path in {"/api/mobile-mail","/api/mobile-portrait","/api/mobile-message","/api/mobile-mail-page","/api/mobile-cache-page"} and GLOBAL_MODE:
             self._send(501, b'{"status":"unavailable","error":"mobile_global_unsupported"}', "application/json; charset=utf-8")
@@ -9724,6 +9827,19 @@ class Handler(BaseHTTPRequestHandler):
                                          lambda: _AgentsAnswer(history_days))
             if answer is not None:
                 self._send(200, answer.body(scope), "application/json; charset=utf-8")
+        elif _HISTORY_BINDING_PATH.fullmatch(path):
+            # One agent's conversation binding for the cockpit's History
+            # reader: the live roster's verdict without the roster (API 36).
+            name = path[len("/api/agents/"):-len("/history-binding")]
+            if not _valid(name):
+                self._send(404, b'{"ok":false,"error":"agent_unavailable"}', "application/json; charset=utf-8")
+                return
+            row = history_binding_row(name)
+            if row is None:
+                self._send(404, b'{"ok":false,"error":"agent_unavailable"}', "application/json; charset=utf-8")
+            else:
+                self._send(200, json.dumps({"ok": True, "agent": row}, ensure_ascii=False).encode(),
+                           "application/json; charset=utf-8")
         elif path == "/api/spawn-status":
             q = parse_qs(urlparse(self.path).query, keep_blank_values=True)
             name = (q.get("name") or [""])[0]

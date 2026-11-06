@@ -217,6 +217,10 @@ class SnapshotStore:
                 'age_seconds': None if stamp is None else max(0, int(now - stamp)),
                 'error': part.get('error')}
 
+    def known_name(self,nm):
+        """A name in any published roster; never a path or provider lookup."""
+        return any(any(a['name']==nm for a in p['agents']) for p in list(self._published.values()))
+
     def known_agent(self,window,nm):
         published=self._published.get(window)
         return bool(published and any(a['name']==nm for a in published['agents']))

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import sys
 import time
 from dataclasses import dataclass
@@ -379,6 +380,21 @@ class AgentStackProxy:
             registration_token=owner_token,
         )
 
+    def show_files(
+        self, session_id: str, paths: list[str], *, agent_id: str | None = None
+    ) -> dict[str, Any]:
+        """Name files for the cockpit's History; nothing is sent, written or read.
+
+        The recorded call itself is what the cockpit turns into preview chips,
+        under its own checks (working folder, kind, size). This only tells the
+        agent whether each path is there, so it can fix a typo at once.
+        """
+        binding = self._resolve(session_id, agent_id)[0]  # identity only; no token use
+        # Only a Bridge-observed snapshot knows the agent's working folder.
+        snapshot = self.snapshots.get(binding["external_id"])
+        base = snapshot.get("cwd") if isinstance(snapshot, dict) else None
+        return show_files_result(paths, base if isinstance(base, str) else None)
+
     def runtime_status(
         self, session_id: str, agent_id: str | None = None
     ) -> dict[str, Any]:
@@ -589,6 +605,7 @@ def _dispatch(
         "renew_reservations": proxy.renew_reservations,
         "release_reservations": proxy.release_reservations,
         "runtime_status": proxy.runtime_status,
+        "show_files": proxy.show_files,
         "whois": proxy.whois,
     }
     handler = handlers.get(name)
@@ -788,6 +805,70 @@ def _reservation_paths(
     return normalized
 
 
+# show_files: the cockpit's History turns the paths of this recorded call into
+# preview chips. Keep the wording and the result identical to
+# agentstack_mail/show_files.py (tests compare them). `base` is the agent's
+# working folder only when the binding knows it (a Codex App snapshot); the
+# proxy's own cwd is never used, so without a base relative paths are not
+# checked here, and with one a path outside it is not even lstat'ed.
+SHOW_FILES_DESCRIPTION = (
+    "Show files or images to the person in the ORRERY cockpit: each path becomes "
+    "a chip in the conversation's History that opens a preview (Markdown is "
+    "drawn, images are shown). Call it when you created or changed a file or "
+    "image the person should look at (a report, a figure, a screenshot, a log), "
+    "usually right before your final message. Use paths inside your working "
+    "folder, relative or absolute. Nothing is sent or written, and the file is "
+    "not read into your context."
+)
+_SHOW_FILES_NOTE = (
+    "Each path is shown as a chip in the cockpit's History; the cockpit checks it against your "
+    "working folder, kind and size when it is opened. checked:false means this connection does "
+    "not know your working folder, so a relative path was not checked here; an absolute path is."
+)
+_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+
+def _inside(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def show_files_result(values: Any, base: str | None = None) -> dict[str, Any]:
+    """Check paths with lstat only; never open, read or follow them."""
+    if not isinstance(values, list) or not 1 <= len(values) <= 8:
+        raise ProxyError("paths must be a list of 1 to 8 paths")
+    for value in values:
+        _required_text(value, "path", 4096)
+        if re.search(r"[\x00-\x1f\x7f]", value) or "://" in value or value.startswith("~"):
+            raise ProxyError("paths must be plain file paths (no URL, ~ or control character)")
+    root = os.path.normpath(base) if isinstance(base, str) and os.path.isabs(base) else None
+    roots = {root, os.path.realpath(root)} if root else set()
+    files: list[dict[str, Any]] = []
+    for value in values:
+        if os.path.isabs(value):
+            target = os.path.normpath(value)
+        elif root:
+            target = os.path.normpath(os.path.join(root, value))
+        else:
+            files.append({"path": value, "checked": False})
+            continue
+        if roots and not any(_inside(target, item) for item in roots):
+            files.append({"path": value, "outside_working_folder": True})
+            continue
+        try:
+            info = os.lstat(target)
+        except OSError:
+            files.append({"path": value, "exists": False})
+            continue
+        regular = stat.S_ISREG(info.st_mode)
+        kind = ("image" if os.path.splitext(target)[1].lower() in _IMAGE_SUFFIXES else "file") if regular else "other"
+        files.append({"path": value, "exists": True, "kind": kind, "bytes": info.st_size if regular else None})
+    return {
+        "present": [item["path"] for item in files if item.get("kind") in {"file", "image"}],
+        "files": files,
+        "note": _SHOW_FILES_NOTE,
+    }
+
+
 def _positive_ids(values: Any, field: str) -> list[int]:
     if values is None:
         return []
@@ -967,6 +1048,21 @@ TOOL_DEFINITIONS = [
             "no caller-supplied identity."
         ),
         "inputSchema": _schema({}, []),
+    },
+    {
+        "name": "show_files",
+        "description": SHOW_FILES_DESCRIPTION,
+        "inputSchema": _schema(
+            {
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "minItems": 1,
+                    "maxItems": 8,
+                },
+            },
+            ["paths"],
+        ),
     },
     {
         "name": "whois",

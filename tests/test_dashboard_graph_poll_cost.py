@@ -65,6 +65,7 @@ def roster(monkeypatch, tmp_path):
     claude = tmp_path / "claude"
     claude.write_text("", encoding="utf-8")
     monkeypatch.setattr(server, "DB_PATH", str(db))
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setattr(server, "CLAUDE_PROJECTS", str(tmp_path / "claude-projects"))
     monkeypatch.setattr(server, "SESSION_INDEX_DIR", str(tmp_path / "session-index"))
     monkeypatch.setattr(server, "ABS_CLAUDE", str(claude))
@@ -86,7 +87,35 @@ def roster(monkeypatch, tmp_path):
         return original()
 
     monkeypatch.setattr(server, "_db", counting_db)
-    return {"names": names, "spawn": spawn, "opened": opened}
+    return {"names": names, "spawn": spawn, "opened": opened, "db": db}
+
+
+@pytest.mark.parametrize('check', ['count', 'closed'])
+def test_dsh_roster_uses_bounded_closed_database_connections(roster, monkeypatch, check):
+    con=sqlite3.connect(roster['db'])
+    try:
+        con.execute("UPDATE agents SET program='dsh' WHERE project_id=1")
+        con.commit()
+    finally:
+        con.close()
+    connections=[]
+    original=sqlite3.connect
+    def tracked(*args, **kwargs):
+        connection=original(*args, **kwargs)
+        connections.append(connection)  # Retain references so GC cannot hide an unclosed connection.
+        return connection
+    monkeypatch.setattr(sqlite3, 'connect', tracked)
+    try:
+        assert len(server.build_agents(None)) == ROWS
+        if check == 'count':
+            assert len(connections) <= 10, len(connections)
+        else:
+            for connection in connections:
+                with pytest.raises(sqlite3.ProgrammingError, match='closed'):
+                    connection.execute('SELECT 1')
+    finally:
+        for connection in connections:
+            connection.close()
 
 
 @pytest.fixture

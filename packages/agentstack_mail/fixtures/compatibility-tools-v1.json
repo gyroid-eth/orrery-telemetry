@@ -84,7 +84,8 @@
     "release_reservations",
     "renew_reservations",
     "reserve_files",
-    "runtime_status"
+    "runtime_status",
+    "show_files"
   ],
   "non_compatibility_upstream": [
     "archive_project",
