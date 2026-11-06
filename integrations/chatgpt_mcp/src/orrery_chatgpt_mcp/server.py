@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from . import __version__
-from .model import Dashboard, DashboardError, TOOL_DEFINITIONS, ToolError, invoke, snapshot
+from .model import Dashboard, DashboardError, TOOL_DEFINITIONS, ToolError, invoke, snapshot, validate_scope
 
 SECRET_CHARS = 43
 MAX_BODY = 128 * 1024
@@ -31,6 +31,7 @@ class Config:
     dashboard_url: str
     port: int
     state_dir: Path
+    project_key: str | None = None
 
     @classmethod
     def from_env(cls, values: Mapping[str, str] | None = None) -> "Config":
@@ -38,6 +39,11 @@ class Config:
         mode = env.get("ORRERY_MCP_MODE")
         if mode not in ("fresh", "legacy"):
             raise ConfigurationError("set ORRERY_MCP_MODE explicitly to fresh or legacy")
+        project_key = env.get("ORRERY_MCP_PROJECT_KEY")
+        try:
+            validate_scope(mode, project_key)
+        except DashboardError as exc:
+            raise ConfigurationError(str(exc)) from None
         for opt in ("ORRERY_MCP_ENABLE_SPAWN", "ORRERY_MCP_ENABLE_MESSAGE"):
             if env.get(opt, "0").lower() not in ("0", "false"):
                 raise ConfigurationError(opt + " is unsupported in the read-only adapter")
@@ -57,7 +63,7 @@ class Config:
         state = Path(env.get("ORRERY_MCP_STATE_DIR", str(Path.home() / ".config" / "orrery-mcp-readonly")))
         if not state.is_absolute():
             raise ConfigurationError("state directory must be absolute")
-        return cls(mode, url, port, state)
+        return cls(mode, url, port, state, project_key)
 
 
 def _file(config: Config) -> Path:
@@ -172,7 +178,8 @@ class Gateway:
         if not isinstance(name, str):
             return 200, _error(identity, -32602, "tool name required")
         try:
-            body = invoke(name, params.get("arguments", {}), self.dashboard, self.config.mode)
+            body = invoke(name, params.get("arguments", {}), self.dashboard, self.config.mode,
+                          project_key=self.config.project_key)
             output = {"content": [{"type": "text", "text": json.dumps(body, ensure_ascii=False)}],
                       "structuredContent": body, "isError": False}
         except ToolError as exc:
@@ -315,14 +322,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         read_secret(config)
         if args.cmd == "check":
-            view = snapshot(Dashboard(config.dashboard_url), config.mode)
+            view = snapshot(Dashboard(config.dashboard_url), config.mode, project_key=config.project_key)
             print(json.dumps({"mode": view.mode, "version": view.version,
                               "mail_instance_id": view.instance, "agents": len(view.agents),
                               "unknown_running": sum(a["running"] is None for a in view.agents),
-                              "read_only": True}, ensure_ascii=False))
+                              "read_only": True, "api": view.api, "scope": view.scope}, ensure_ascii=False))
             return 0
         # An incompatible dashboard must fail before any MCP listener is opened.
-        snapshot(Dashboard(config.dashboard_url), config.mode)
+        snapshot(Dashboard(config.dashboard_url), config.mode, project_key=config.project_key)
         with Server(("127.0.0.1", config.port), handler(Gateway(config))) as service:
             print(f"read-only MCP listening on 127.0.0.1:{config.port}", flush=True)
             try:

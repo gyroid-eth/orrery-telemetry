@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 36
+API_GENERATION = 37
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -1077,6 +1077,7 @@ class _RegistrationIndex:
         self.usable = False
         self.by_name: dict[str, int] = {}
         self.by_project: dict[tuple[str, str], sqlite3.Row] = {}
+        self.project_by_name: dict[str, str | None] = {}
 
     def load(self) -> bool:
         if self.loaded:
@@ -1097,6 +1098,12 @@ class _RegistrationIndex:
         for row in rows:
             # First in last_active_ts DESC order wins, as with LIMIT 1.
             self.by_name.setdefault(row["name"], int(row["id"]))
+            # A name shared by projects is not evidence of one project's live row.
+            name, project = row["name"], row["human_key"]
+            if name not in self.project_by_name:
+                self.project_by_name[name] = project
+            elif self.project_by_name[name] != project:
+                self.project_by_name[name] = None
             if row["human_key"] is not None:
                 self.by_project.setdefault((row["human_key"], row["name"]), row)
         self.usable = True
@@ -1241,6 +1248,7 @@ class _AgentsAnswer:
         self.payload = {
             "ts": int(time.time()),
             "history_days": history_days,
+            "project_key": _project_key() or None,
             "agents": build_agents(history_days),
         }
         self._lock = threading.Lock()
@@ -1262,6 +1270,7 @@ class _AgentsAnswer:
         return {
             "ts": self.payload["ts"],
             "history_days": self.payload["history_days"],
+            "project_key": self.payload["project_key"],
             "scope": "live",
             "agents": [row for row in rows if _is_live_roster_row(row)],
             "retired": [row["name"] for row in rows if row.get("category") == "retired"],
@@ -1824,6 +1833,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
     within `history_days` (None = every agent ever registered)."""
     sessions = tmux_state()
     mail_agents, mail_instr = agentmail_state()
+    registrations = _batched_registrations()
     # One `ps` snapshot per refresh (4.5s TTL) shared by every registered
     # agent, Codex and Claude alike.
     process_tree = _process_tree_snapshot() if mail_agents else None
@@ -1860,6 +1870,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
         rows.append(
             {
                 "name": name,
+                "project_key": registrations.project_by_name.get(name) if registrations else None,
                 "category": cat,
                 "running": running,
                 "attached": s["attached"],
@@ -1942,6 +1953,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 la = _iso_to_epoch(r["last_active_ts"])
                 row = {
                     "name": r["name"],
+                    "project_key": project_key,
                     "category": "retired" if r["retired"] else "gone",
                     "running": False, "attached": False, "mail_linked": False,
                     "cmd": "", "live": "",

@@ -17,14 +17,15 @@ from orrery_chatgpt_mcp.model import Dashboard, DashboardError, ToolError, invok
 from orrery_chatgpt_mcp.server import Config, ConfigurationError, Gateway, Server, handler, pair, read_secret
 
 
-INSTANCE = "01234567-89ab-cdef-0123-456789abcdef"
+INSTANCE = "0123456789abcdef0123456789abcdef"
+PROJECT = "/fixture/selected"
 FRESH = {
     "name": "orrery-telemetry", "version": "test", "api": 34, "runtime_mode": "fresh",
     "mail_instance_id": INSTANCE, "capabilities": {
         "roster": True, "mail": True, "spawn": True, "terminal": True
     },
 }
-LEGACY = {"name": "orrery-telemetry", "version": "test", "api": 34}
+LEGACY = {"name": "orrery-telemetry", "version": "test", "api": 37}
 AGENTS_FRESH = {
     "mail_instance_id": INSTANCE, "observation_truncated": False, "agents": [
         {"mail_instance_id": INSTANCE, "mail_agent_id": 7, "name": "QuietBohr",
@@ -40,10 +41,10 @@ AGENTS_FRESH = {
          "observation": {"state": "observed", "age_ms": 43, "reason": None}},
     ],
 }
-AGENTS_LEGACY = {"agents": [
+AGENTS_LEGACY = {"history_days": 30.0, "project_key": PROJECT, "agents": [
     {"name": "QuietBohr", "running": True, "category": "agent",
-     "task": "private task", "cmd": "private command"},
-    {"name": "OtherUI", "running": False, "category": "not_agent"},
+     "task": "private task", "cmd": "private command", "project_key": PROJECT},
+    {"name": "OtherUI", "running": False, "category": "not_agent", "project_key": None},
 ]}
 
 
@@ -57,7 +58,7 @@ class FakeDashboard:
         self.calls.append(route)
         if route == "/api/version":
             return self.version
-        if route == "/api/agents":
+        if route in ("/api/agents", "/api/agents?days=30"):
             return self.agents
         raise AssertionError("unexpected call " + route)
 
@@ -119,7 +120,7 @@ def test_status_reports_mode_and_unknown_coverage():
 ])
 def test_unrecognized_or_mismatched_mode_fails_closed(version, mode, roster):
     with pytest.raises(DashboardError):
-        snapshot(FakeDashboard(version, roster), mode)
+        snapshot(FakeDashboard(version, roster), mode, project_key=PROJECT if mode == "legacy" else None)
 
 
 @pytest.mark.parametrize("changes", [
@@ -136,7 +137,7 @@ def test_invalid_fresh_agent_identity_or_observation_fails_closed(changes):
 
 
 def test_legacy_requires_explicit_mode_and_does_not_invent_mail_ids():
-    data = snapshot(FakeDashboard(LEGACY, AGENTS_LEGACY), "legacy")
+    data = snapshot(FakeDashboard(LEGACY, AGENTS_LEGACY), "legacy", project_key=PROJECT)
     assert len(data.agents) == 1
     assert data.instance is None
     assert data.agents[0]["mail_agent_id"] is None
@@ -239,7 +240,7 @@ def mcp_http_server(config):
     with Server(("127.0.0.1", 0), handler(gateway)) as service:
         # Test config uses a port before startup; make it the server's actual port.
         address = service.server_address[1]
-        gateway.config = Config(config.mode, config.dashboard_url, address, config.state_dir)
+        gateway.config = Config(config.mode, config.dashboard_url, address, config.state_dir, config.project_key)
         gateway.hosts = {f"127.0.0.1:{address}", f"localhost:{address}"}
         thread = threading.Thread(target=service.serve_forever, daemon=True)
         thread.start()
@@ -303,8 +304,8 @@ def test_http_protocol_read_only_and_unknown_commit(tmp_path):
 
 
 def test_http_legacy_mode_and_mode_mismatch(tmp_path):
-    with fake_http_server({"/api/version": LEGACY, "/api/agents": AGENTS_LEGACY}) as backend:
-        config = Config("legacy", f"http://127.0.0.1:{backend}", 8791, tmp_path / "state")
+    with fake_http_server({"/api/version": LEGACY, "/api/agents?days=30": AGENTS_LEGACY}) as backend:
+        config = Config("legacy", f"http://127.0.0.1:{backend}", 8791, tmp_path / "state", PROJECT)
         pair(config)
         with mcp_http_server(config) as (port, secret):
             code, value = request(port, secret, {"jsonrpc": "2.0", "id": "status",
@@ -315,3 +316,27 @@ def test_http_legacy_mode_and_mode_mismatch(tmp_path):
             response = gateway.rpc({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
                                     "params": {"name": "orrery_status"}})
             assert response[1]["result"]["structuredContent"]["error"]["code"] == "dashboard_unavailable"
+
+
+@pytest.mark.parametrize("api", [34, 35, 36, 37])
+def test_supported_fresh_generations_still_require_fresh_contract(api):
+    version = {**FRESH, "api": api}
+    data = snapshot(FakeDashboard(version, AGENTS_FRESH), "fresh")
+    assert data.scope["kind"] == "mail_instance"
+    assert data.scope["includes_retired"] is True
+    assert data.scope["includes_unobserved"] is True
+
+
+@pytest.mark.parametrize("api", [999, 38, 33, True, "34", None])
+def test_unknown_fresh_generations_are_rejected_before_roster_read(api):
+    backend = FakeDashboard({**FRESH, "api": api}, AGENTS_FRESH)
+    with pytest.raises(DashboardError):
+        snapshot(backend, "fresh")
+    assert backend.calls == ["/api/version"]
+
+
+@pytest.mark.parametrize("name", ["A" * 65, "A" * 64 + "/escape", "A" * 64 + "\n"])
+def test_long_fresh_names_are_rejected_not_shortened(name):
+    rows = [{**AGENTS_FRESH["agents"][0], "name": name}]
+    with pytest.raises(DashboardError):
+        snapshot(FakeDashboard(agents={**AGENTS_FRESH, "agents": rows}), "fresh")

@@ -1,25 +1,34 @@
 # ORRERY ChatGPT MCP（読み取り専用・任意導入）
 
-これは upstream Issue #395 の第1段階です。外部クライアントからローカルORRERYの状態だけを取得する、独立した小さなアダプターです。通常の installer・daemon・Dashboard・ORRERY Mail・UIには変更を加えません。自動起動も常駐化も行いません。
+upstream Issue #395 の第1段階です。公開ツールは `orrery_status`、`orrery_list_agents`、`orrery_get_agent` の3個だけです。spawn・追加指示・Mail送信・OAuth・常駐化は実装しません。通常のinstaller・サービスの起動設定・UI・hook・Mail操作は変えません。Dashboardの呼び出しは `GET /api/version`、freshの `GET /api/agents`、legacyの `GET /api/agents?days=30` だけです。
 
-公開するツールは `orrery_status`、`orrery_list_agents`、`orrery_get_agent` の3個だけです。spawn・追加指示・メッセージ送信・OAuth・service installは実装していません。リクエストの経路はDashboardの `GET /api/version` と `GET /api/agents` のみに限定します。
+## 互換性と公開範囲
 
-## 前提と方式の選択
+Python 3.11以上と、明示した `ORRERY_MCP_MODE=legacy` または `fresh` が必要です。受け付けるDashboard API世代はlegacyが37だけ、freshが34・35・36・37です。世代番号と応答の形を両方検証します。方式は番号から推測せず、legacyはruntime_modeのない契約、freshはruntime_mode=freshとinstance/capabilityの契約を必要とします。未知の世代、global、方式不一致は一覧を読む前、または待受を開く前に拒否します。
 
-Python 3.11以上が必要です。ORRERY DashboardはMac上のloopbackで既に起動しているものを読みます。DashboardやMailの導入・切り替えは本アダプターの責務ではありません。
+legacyでは `ORRERY_MCP_PROJECT_KEY` に、Dashboardが使用しているproject keyを1つ、完全一致で指定します。外部MCP引数からは変更できません。応答全体のproject_keyと設定を照合し、各行のproject_keyも一致するものだけを返します。従来APIには行の所属情報がないため、API 37で読み取り用の所属fieldを追加しています。旧APIを推測で通すことはせず、アダプターと同じ版のDashboardが必要です。Dashboardの導入・更新は通常の手順で別途行い、アダプターから実サービスを切り替えません。
 
-`ORRERY_MCP_MODE` に `legacy` または `fresh` を必ず明示してください。legacyは従来の `/api/version` に `runtime_mode` がない形式、freshは `runtime_mode=fresh` とMail instance/capabilitiesがある形式です。名前・API世代番号だけでは互換性を判定しません。選択した方式と応答が不一致、または実験用globalなど未対応の方式であれば起動前の検査で停止します。
+legacyの一覧・個別取得・status件数は同じ範囲です。categoryはagent・finished・gone・retired、tmux行は経過日数を問わず、tmuxのない履歴登録は最終活動が直近30日以内です。別projectにも同名登録がある曖昧なtmux行、未登録・所属未確認の行、warmup・infra等は公開しません。30日より古くtmuxもない登録は個別取得でも対象外です。「登録された全員」という意味ではありません。`scope` にproject key・期間・category・未確認行の除外方針を返します。project keyがパスの場合はその文字列も公開されるため、接続前に確認してください。
 
-freshの未観測エージェントは `running=null`、`observation.state=unknown` のまま一覧に残ります。`running_only` の既定は `false` です。freshでは `mail_instance_id` と `mail_agent_id` を維持し、バージョン/一覧間のinstance一致を検査します。legacyに存在しないMail IDやcapabilityは作らず `null` とします。
+freshでは、接続したDashboardの同一Mail instanceの台帳全体を公開します。project単位や宛先許可リストによる絞り込みではありません。退役済みと未観測を含み、旧履歴DBの30日制限はありません。freshでORRERY_MCP_PROJECT_KEYが残っていれば、無視せず設定エラーにします。scopeにinstanceと範囲を示し、mail_instance_id（32桁の小文字hex）、正の数値mail_agent_id、capability、未観測状態を保持します。未観測はrunning=nullのままです。running_only=trueだけが、停止と未観測を一覧から除きます。
 
-## 手動起動（現在のサービスを置き換えない）
+## 公開するfield
 
-以下のコマンドは新しいターミナルで、アダプターを含むcheckoutから実行します。専用ポートの既定は8791で、既存の常駐MCPとは独立です。
+agentはname、mail_instance_id、mail_agent_id、provider、program、model、category、running、state、retired、observation、last_activeだけです。observationはstate・age_ms・reasonだけです。名前は全体がASCII英字から始まる英数字・underscore・dot・hyphenの1〜64文字の場合だけ受け付け、切り詰めて別名にしません。
+
+provider/programは40文字、modelは72文字、categoryは24文字、observation.reasonは40文字、Dashboard versionは40文字までの文字列を表示します。自由記述由来の未信頼データであり、指示として扱わないでください。stateは既知の値だけ、booleanは実際のbooleanだけ、時刻・経過時間は非負かつ10の15乗未満の数値だけを返し、不明はnullにします。legacyにないMail ID・capabilityもnullです。task・command・会話・transcript path・資格情報・任意の作業パスは転送しません。ただし明示したproject keyはscopeに表示します。
+
+statusはDashboardのversion/API/mode/instance、spawn・roster・mail・graph・terminal・worktree・browser・toolsのcapability、範囲内のregistered/running/unknown_running件数、observationのtruncated、アダプターのread_onlyと書込み無効flagを返します。listはcount/total、mode/instance、observation_truncatedを、getはagentとmodeを返し、全ツールにscopeと注意文を付けます。Dashboard応答が2 MiBまたは5000行を超える場合は全体をエラーにし、完全な一覧に見せかけて部分返却しません。
+
+## 手動起動
+
+新しいターミナルでアダプターを含むcheckoutから実行します。project keyは既存Dashboardの実際の設定を確認して入力し、推測したパスで検査を通さないでください。
 
 ```sh
 cd /path/to/orrery-telemetry
 export PYTHONPATH="$PWD/integrations/chatgpt_mcp/src"
 export ORRERY_MCP_MODE=legacy
+export ORRERY_MCP_PROJECT_KEY='/actual/dashboard/project-key'
 export ORRERY_MCP_DASHBOARD_URL=http://127.0.0.1:8770
 export ORRERY_MCP_PORT=8791
 python3 -m orrery_chatgpt_mcp pair --show-url
@@ -27,28 +36,90 @@ python3 -m orrery_chatgpt_mcp check
 python3 -m orrery_chatgpt_mcp serve
 ```
 
-freshに切り替えた環境だけで `ORRERY_MCP_MODE=fresh` を指定します。`pair` が表示する秘密付きURLはローカル本人向けです。Issue、ログ、共有資料に貼らないでください。再発行するときは `pair --rotate` を使います。稼働中のアダプターも次のリクエストから古いURLを拒否します。既定の秘密保管場所は `~/.config/orrery-mcp-readonly/pairing.json`（0600）です。
+freshを実際に使う環境ではORRERY_MCP_MODE=freshにし、`unset ORRERY_MCP_PROJECT_KEY` を実行します。checkが表示するAPI・scope・件数を確認します。serveは互換性を検証してから127.0.0.1だけで待ち受けます。停止はそのターミナルのCtrl+Cです。既存エージェントの停止やMail再起動は行いません。
 
-## Tunnelの利用者と公開範囲
+「読み取り専用」はMCP要求がORRERY設定・登録・Mail送信を変更しない意味です。運用者用のpairとpair --rotateは、アダプター自身の秘密保管先を作成・更新します。既定は `~/.config/orrery-mcp-readonly/pairing.json`、directory/fileは0700/0600です。秘密URLをIssue・共有資料に貼らず、再発行後はTunnel転送先も新URLへ変更します。稼働中アダプターは次の要求から旧URLを拒否します。
 
-アダプター自身は127.0.0.1だけで待ち受けます。別の端末・ChatGPTから使うには、利用者が明示的に設定したSecure MCP Tunnelなどの保護された転送経路が別途必要です。Tunnelは本体機能ではなく、このPRでは設定・インストールしません。
+## Secure MCP Tunnelの設定
 
-接続する前に、Tunnel側の利用アカウント、接続先のローカルポート、URLを知るクライアント・ユーザーの範囲、共有や公開の設定を運用者が確認してください。秘密付きパスは知っている人に読み取り権を与えます。Tunnelに到達可能な相手とURLを知る相手が一致しない場合には接続しないでください。URLの秘密だけで「自分にしか見えない」とは保証できません。
+別端末・ChatGPTへの転送は運用者が用意した専用の [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) を使います。アダプターはTunnelや認証設定を作成しません。既存の別サービス用Tunnelを上書きしたり、同じTunnelへ二重接続したりしないでください。
 
-ChatGPT上の表示や確認はサーバー側の本人承認ではありません。この段階に書き込み機能は一切存在しないため、確認によって書き込みを許す動作はありません。
+`tunnel-client` のHTTP転送先 `MCP_SERVER_URL`（またはprofileのmcp.server_urls[].url）には、`http://127.0.0.1:8791/mcp/<pairで発行した秘密>` を末尾まで指定します。/mcpで止めたり秘密部分を落としたりしません。Tunnelクライアントが固定のローカルURLへ新しいHTTP要求を作るため、アダプターが受け取るHostは127.0.0.1:8791です。外向きHostの許可やHost検査の解除は不要です。対応する非ブラウザクライアントはOriginを送りません。Originを送るブラウザからの直接接続は403です。
 
-## 安全確認と停止
+通常のreverse proxyを間に置く場合も、入口で認証・アクセス制御を行ったうえで、Hostを固定のローカルauthorityに設定し、秘密pathをそのまま保持してください。利用者が送ったForwarded-Hostを信用したり、不特定ブラウザのOriginを単に削除して通したりしないでください。外向きHostをそのまま転送する設定では403になるのが正しい動作です。
 
-起動後、秘密付きMCP URLに対して `initialize` を呼び、`tools/list` に3個の読み取りツールしかないことを確認します。`orrery_status` の `adapter.spawn_enabled_on_server=false` と `adapter.message_enabled_on_server=false` を確認し、`orrery_message_commit` を直接 `tools/call` して `isError=true`・`error.code=unknown_tool` が返ることも確認します。秘密なしの404応答だけで書き込み禁止を証明したことにはなりません。
-
-`python3 -m orrery_chatgpt_mcp check` はDashboardの方式と一覧の互換性検査です。実プロセスの状態、Tunnelのアクセス権限、送信権限までは証明しません。常駐サービスや `service status` はこの段階ではありません。
-
-停止するときは `serve` を実行中のターミナルでCtrl+Cを押します。変更したい場合もサービス置換・エージェント停止・ORRERY Mailの再起動は不要です。
-
-## テスト
+専用Tunnel IDとruntime keyを運用者が準備した後の手動起動例です。runtime keyはCONTROL_PLANE_API_KEYに設定します。管理用API keyはdaemonへ渡しません。秘密URLはshell履歴へ直接書かず、private fileから環境変数へ読みます。
 
 ```sh
-PYTHONPATH=integrations/chatgpt_mcp/src:. python3 -m pytest -q integrations/chatgpt_mcp/tests/test_readonly.py
+export MCP_SERVER_URL="$(python3 -c 'from orrery_chatgpt_mcp.server import Config, read_secret; c=Config.from_env(); print(f"http://127.0.0.1:{c.port}/mcp/{read_secret(c)}")')"
+tunnel-client run --control-plane.tunnel-id '<your-dedicated-tunnel-id>' \
+  --health.listen-addr 127.0.0.1:0 --log.level warn
+unset MCP_SERVER_URL
 ```
 
-テストは架空のlegacy/fresh応答と隔離されたlocalhost HTTPサーバーを用います。運用中のDashboard、Mail、tmux、Tunnelには接続しません。送信の受領とエージェントの処理開始は、この第1段階の検証範囲外です。
+利用前に、所有するorganization/workspace、接続する利用者・グループ、runtime keyの主体のRead/Use権限、ChatGPT接続の共有範囲を確認します。秘密pathを知り、かつTunnelへ到達できる相手は上記の全scopeを読めます。URLだけで「自分だけ」とは保証しません。ChatGPT上の確認はサーバー側の本人承認ではありません。Tunnelクライアント自身がlogに転送先URLを書く場合があるため、ログもowner-privateにして共有しないでください。warnは出力量を減らすだけで秘密の除去保証ではありません。
+
+## 接続先での実証
+
+実クライアントでinitialize、notifications/initialized、tools/list、orrery_statusを順に通し、読み取り3ツールだけであること、scopeが意図どおりであること、spawn/messageのflagが両方falseであることを確認します。orrery_message_commitを直接呼ぶとisError=true、error.code=unknown_toolで拒否されます。秘密なしの404だけでは書込み禁止の証明になりません。
+
+ローカル秘密URL、または隔離Tunnel ingressでは、次の同等HTTP要求も使えます。URLは非表示入力でredirectには追従しません。最後のscopeには設定したproject keyが含まれ得るため、出力を共有しないでください。ホストされたTunnelの認証を迂回する方法ではなく、その入口での接続者確認は実クライアントで別途行います。
+
+```sh
+python3 - <<'CHECK'
+import getpass, http.client, json
+from urllib.parse import urlsplit
+u = urlsplit(getpass.getpass("Private MCP endpoint: "))
+assert not (u.username or u.password or u.query or u.fragment)
+assert u.scheme == "https" or (u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost"))
+def call(method, params=None, number=1):
+    message = {"jsonrpc": "2.0", "method": method}
+    if number is not None:
+        message["id"] = number
+    if params is not None:
+        message["params"] = params
+    cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+    connection = cls(u.hostname, u.port, timeout=15)
+    try:
+        connection.request("POST", u.path or "/", json.dumps(message), {
+            "Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": "2025-11-25"})
+        response = connection.getresponse()
+        raw = response.read()
+        assert response.status in (200, 202)
+        return json.loads(raw) if raw else None
+    finally:
+        connection.close()
+try:
+    init = call("initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
+                              "clientInfo": {"name": "readonly-check", "version": "1"}})
+    assert init["result"]["protocolVersion"] == "2025-11-25"
+    call("notifications/initialized", number=None)
+    tools = call("tools/list", number=2)["result"]["tools"]
+    assert {t["name"] for t in tools} == {"orrery_status", "orrery_list_agents", "orrery_get_agent"}
+    result = call("tools/call", {"name": "orrery_status", "arguments": {}}, 3)["result"]
+    assert result["isError"] is False
+    value = result["structuredContent"]
+    assert value["adapter"] == {"read_only": True, "spawn_enabled_on_server": False,
+                               "message_enabled_on_server": False}
+    denied = call("tools/call", {"name": "orrery_message_commit", "arguments": {}}, 4)["result"]
+    assert denied["isError"] is True and denied["structuredContent"]["error"]["code"] == "unknown_tool"
+    print("Read-only checks passed. Exposed scope:", json.dumps(value["scope"], ensure_ascii=False))
+except Exception as error:
+    raise SystemExit("Connection check failed: " + type(error).__name__) from None
+CHECK
+```
+
+## テストと検証範囲
+
+```sh
+PYTHONPATH=integrations/chatgpt_mcp/src:. .venv/bin/python -m pytest -q \
+  integrations/chatgpt_mcp/tests tests/test_mcp_readonly_contract.py
+ORRERY_MCP_TEST_TUNNEL_CLIENT="$(command -v tunnel-client)" \
+  PYTHONPATH=integrations/chatgpt_mcp/src:. .venv/bin/python -m pytest -q \
+  integrations/chatgpt_mcp/tests/test_tunnel.py
+```
+
+実DashboardのbuilderとHTTP handlerを、一時SQLite登録と架空tmux観測へ接続して検査します。別project・同名の曖昧な登録・終了/退役・30日境界を含みます。実物のtunnel-client dev proxyでも、ローカルだけのcontrol planeと一時秘密URLで初期化・一覧・status・未知tool拒否・Host/Origin/path保護を検証します。外部Tunnelや実アカウントのkeyは使わず、実サービスも変更しません。実バイナリを指定しない場合、この1件だけは明示的にskipします。
+
+転送は `tunnel-client 0.0.17+a248b7f725fc989c1eb26680cf4351ee33421f61` で検証しています。ホストされたTunnelのACL・ChatGPT接続・実送信・エージェントの処理開始を検証したという意味ではありません。checkもDashboard互換性の検査であり、アクセス権限全体やプロセスの実在を保証しません。
