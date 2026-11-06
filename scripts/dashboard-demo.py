@@ -502,7 +502,7 @@ def _reset(root: Path) -> None:
 
 def _copy_tracked_payload(root: Path) -> None:
     result = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", "dashboard", "bin/lib"],
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", "dashboard", "bin/lib", "hooks/native_connections.py"],
         capture_output=True,
         check=True,
     )
