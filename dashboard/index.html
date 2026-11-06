@@ -35668,6 +35668,7 @@ async function mailPulseTick(){
     const j=await r.json();
     if(j.ok){
       mailLastTs=Math.max(mailLastTs,Number(j.now)||0);
+      let fresh=0;
       for(const m of annotateBroadcastMessages(j.messages||[])){
         const key=mailMessageKey(m);
         if(mailSeenKeys.has(key))continue;
@@ -35675,13 +35676,29 @@ async function mailPulseTick(){
         while(mailSeenOrder.length>MAIL_SEEN_MAX)
           mailSeenKeys.delete(mailSeenOrder.shift());
         m._queuedAt=Date.now();
-        mailQueue.push(m);
+        mailQueue.push(m);fresh++;
       }
       // 上限超え分は古い方から捨てる
       while(mailQueue.length>MAIL_QUEUE_MAX) mailQueue.shift();
+      // 新着があれば線の上の数もすぐ取り直す（server は新しい message で
+      // graph の cache を作り直す）。数の正本は /api/graph のまま。
+      if(fresh)netRefreshForMail();
       mailDrain();
     }
   }catch(e){ /* silent */ }
+}
+
+// 新着の知らせで netTick を呼ぶ。走っている間に来た知らせは、終わった後に
+// 1回へまとめる。Mail が多くても 4 秒の poll 1回につき高々1回で詰まらない。
+let netMailRefresh=null,netMailRefreshAgain=false;
+function netRefreshForMail(){
+  if(netMailRefresh){netMailRefreshAgain=true;return netMailRefresh;}
+  netMailRefresh=(async()=>{
+    try{
+      do{netMailRefreshAgain=false;await netTick();}while(netMailRefreshAgain);
+    }finally{netMailRefresh=null;}
+  })();
+  return netMailRefresh;
 }
 
 function mailMessageKey(m){
