@@ -121,7 +121,7 @@ def test_proxy_schema_injects_owner_and_has_no_bootstrap_side_effects(launch):
     output=io.StringIO();delivery.proxy(source,output)
     result=json.loads(output.getvalue())['result']['tools']
     names={x['name'] for x in result}
-    assert len(names)==27 and 'bind_window_identity' not in names and 'runtime_status' in names
+    assert len(names)==28 and 'bind_window_identity' not in names and 'runtime_status' in names and 'show_files' in names
     assert all('registration_token' not in x['inputSchema']['properties'] for x in result)
 
 @pytest.mark.parametrize('relation', ['ancestor', 'descendant'])

@@ -204,6 +204,7 @@ Embedded task template:
 - Registration is already complete; do not call ensure_project, register_agent, or fetch_inbox.
 - Treat the launch prompt and its embedded task as canonical. There is no task mail.
 - Do not modify files outside the declared scope.
+- Before reporting, call `show_files` with the reports, figures or screenshots the parent or the person should look at.
 - Report completion to <parent-agent-name> with `send_message` at importance `high`, including changed paths, summary, and verification.
 ```
 
@@ -470,7 +471,7 @@ When completion is detected:
 5. For implementation changes, run a doc-sync pass and update README or
    managed docs (`claude/CLAUDE.md`, `codex/AGENTS.md`) when behavior changed.
 6. Release file reservations.
-7. Report the verified outcome to the user.
+7. Report the verified outcome to the user. Call `show_files` with the files or images the user should look at (the child's report, figures, screenshots), so they open from the cockpit's History.
 
 If the child reports uncertainty, partial completion, or skipped tests, preserve that information in your report.
 

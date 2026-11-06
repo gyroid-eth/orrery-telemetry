@@ -159,7 +159,7 @@ launchd / supervised background の log はどちらも既定で次にありま�
 
 `SessionStart` / `SubagentStart` hook は、現在の `session_id` と必要なら `agent_id` を使って最初に `agentstack.bootstrap` を呼ぶよう additional context を渡します。最初の bootstrap が MCP process を一つの Bridge binding に固定し、その後の tool call では project key、agent 名、owner token を agent から受け取りません。
 
-proxy の公開 tool は次の9個です。
+proxy の公開 tool は次の10個です。
 
 - `bootstrap`
 - `fetch_inbox`
@@ -169,7 +169,10 @@ proxy の公開 tool は次の9個です。
 - `renew_reservations`
 - `release_reservations`
 - `runtime_status`
+- `show_files`（作った・直した file や画像を、cockpit の History の chip にする。下を参照）
 - `whois`（宛先名の確認用。名前は大文字小文字を区別します）
+
+`show_files` は proxy の中だけで完結します。Mail server へは何も送らず、何も書かず、file の中身も読みません。1〜8個の path を `lstat` だけで確かめ、在るか・通常の file か画像か・大きさを返します。cockpit は記録に残ったこの呼び出しから History に chip を出し、作業 folder の中・種類・大きさの確認は preview の側で従来どおり行います。Claude・Codex・dsh・Hermes の managed な指示と、同梱の `/log`・`/delegate` が、見せたい file があるとき最後の報告の前に呼ぶよう案内します。Claude の設定の雛形は、この tool を確認なしで許可します。
 
 `reserve_files`・`renew_reservations`・`release_reservations` は物理絶対 path を受け取り、同じ bound identity / Mail namespace へそのまま送ります。managed `workspace-v1` では、symlink を解決した物理絶対 path（例: `str(Path(target).resolve())`）で取得し、同じ path で更新・解放してください。guard の拒否理由にも必要な path を表示します。既存の相対 path / glob は旧 session 互換として無変換で受け付けますが、cwd・project key・保護 root から絶対化しません。絶対 glob も無変換なので、固定部分には物理 path を使ってください。`..` component、不正文字、空文字、件数・長さの上限違反は引き続き拒否します。
 

@@ -2507,6 +2507,7 @@ RUNTIME_CLIENT_CONTRACT_SOURCES=(
   "$REPO_ROOT/scripts/codex-reservation-status.py"
   "$REPO_ROOT/scripts/build-codex-app-marketplace.py"
   "$REPO_ROOT/bin/lib/runtime_delivery.py"
+  "$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/show_files.py"
   "$REPO_ROOT/bin/lib/runtime_operator.py"
   "$REPO_ROOT/bin/lib/runtime_observation.py"
   "$REPO_ROOT/bin/lib/runtime_tmux.py"

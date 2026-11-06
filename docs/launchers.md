@@ -345,6 +345,8 @@ monitor の danger command 検知は既定では passive です。`AGENTSTACK_MO
 
 へ書きます。log は transcript ではなく、Goal、Decisions、Work Performed、Verification、Related Notes、Next Actions を中心にします。
 
+ログを書いた後、agent は ORRERY Mail の `show_files` にログの path を渡します。ORRERY で起動した session なら、cockpit の History にログの file chip が出て、Markdown として描いた preview で開けます。ログが session の作業 folder の中にあるときだけ、その機械で初回に一度、利用者が使っている言葉でそのことを一行添えます。もう一度出したいときは `${AGENTSTACK_RUNTIME_DIR:-~/.agentstack/runtime}/hints/log-history-preview` を消します。
+
 ### Hook と reservation enforcement
 
 Claude Code は `check-file-reservation.sh` の PreToolUse hook で `Edit` / `Write` を hard block します。Codex には同等 hook がないため、managed `~/.codex/AGENTS.md` が reserve / renew / release discipline を指示します。registry は共通なので、Claude と Codex の reservation は相互に見えます。

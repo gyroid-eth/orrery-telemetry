@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import sys
 import time
 from dataclasses import dataclass
@@ -379,6 +380,18 @@ class AgentStackProxy:
             registration_token=owner_token,
         )
 
+    def show_files(
+        self, session_id: str, paths: list[str], *, agent_id: str | None = None
+    ) -> dict[str, Any]:
+        """Name files for the cockpit's History; nothing is sent, written or read.
+
+        The recorded call itself is what the cockpit turns into preview chips,
+        under its own checks (working folder, kind, size). This only tells the
+        agent whether each path is there, so it can fix a typo at once.
+        """
+        self._resolve(session_id, agent_id)
+        return show_files_result(paths)
+
     def runtime_status(
         self, session_id: str, agent_id: str | None = None
     ) -> dict[str, Any]:
@@ -589,6 +602,7 @@ def _dispatch(
         "renew_reservations": proxy.renew_reservations,
         "release_reservations": proxy.release_reservations,
         "runtime_status": proxy.runtime_status,
+        "show_files": proxy.show_files,
         "whois": proxy.whois,
     }
     handler = handlers.get(name)
@@ -788,6 +802,50 @@ def _reservation_paths(
     return normalized
 
 
+# show_files: the cockpit's History turns the paths of this recorded call into
+# preview chips. Keep the wording identical to agentstack_mail.fresh_proxy.
+SHOW_FILES_DESCRIPTION = (
+    "Show files or images to the person in the ORRERY cockpit: each path becomes "
+    "a chip in the conversation's History that opens a preview (Markdown is "
+    "drawn, images are shown). Call it when you created or changed a file or "
+    "image the person should look at (a report, a figure, a screenshot, a log), "
+    "usually right before your final message. Use paths inside your working "
+    "folder. Nothing is sent or written, and the file is not read into your "
+    "context."
+)
+_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+
+def show_files_result(values: Any, cwd: str | None = None) -> dict[str, Any]:
+    """Check each path with lstat only; never open, read or follow it."""
+    if not isinstance(values, list) or not 1 <= len(values) <= 8:
+        raise ProxyError("paths must be a list of 1 to 8 paths")
+    base = Path(cwd or os.getcwd())
+    files: list[dict[str, Any]] = []
+    for value in values:
+        _required_text(value, "path", 4096)
+        if re.search(r"[\x00-\x1f\x7f]", value) or "://" in value or value.startswith("~"):
+            raise ProxyError("paths must be plain file paths (no URL, ~ or control character)")
+        path = Path(value) if os.path.isabs(value) else base / value
+        try:
+            info = path.lstat()
+        except OSError:
+            files.append({"path": value, "exists": False})
+            continue
+        regular = stat.S_ISREG(info.st_mode)
+        files.append({
+            "path": value,
+            "exists": True,
+            "kind": ("image" if path.suffix.lower() in _IMAGE_SUFFIXES else "file") if regular else "other",
+            "bytes": info.st_size if regular else None,
+        })
+    return {
+        "shown": [item["path"] for item in files if item.get("kind") in {"file", "image"}],
+        "files": files,
+        "note": "Shown as chips in the cockpit's History when inside your working folder.",
+    }
+
+
 def _positive_ids(values: Any, field: str) -> list[int]:
     if values is None:
         return []
@@ -955,6 +1013,21 @@ TOOL_DEFINITIONS = [
                 },
             },
             [],
+        ),
+    },
+    {
+        "name": "show_files",
+        "description": SHOW_FILES_DESCRIPTION,
+        "inputSchema": _schema(
+            {
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "minItems": 1,
+                    "maxItems": 8,
+                },
+            },
+            ["paths"],
         ),
     },
     {
