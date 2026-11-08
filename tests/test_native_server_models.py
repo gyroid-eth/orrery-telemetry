@@ -100,3 +100,10 @@ def test_real_http_selected_id_one_lookup_redirect_and_response_cap():
         assert len(calls) == 5
     finally:
         server.shutdown(); server.server_close(); thread.join()
+
+
+def test_local_maker_ids_remain_server_ids():
+    ids = ['glm-5.3-flash', 'deepseek-v4.1-flash', 'qwen3.8-flash-next-iq3_xxs']
+    rows = models.parse_models({'data': [{'id': model} for model in ids]})
+    assert [row['id'] for row in rows] == ids
+    assert all(row['available'] for row in rows)

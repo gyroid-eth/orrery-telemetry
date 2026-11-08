@@ -154,7 +154,7 @@ def static_assets(root=HERE):
     }
     for font in ('fraunces-normal','fraunces-italic','ibm-plex-mono-400','ibm-plex-mono-500','ibm-plex-mono-600'):
         fixed['/fonts/'+font+'.woff2']=(root/'mobile/fonts'/(font+'.woff2'),'font/woff2')
-    for logo in ('orbit','anthropic','openai','google','qwen'):
+    for logo in ('orbit','anthropic','openai','google','qwen','glm'):
         fixed['/assets/'+logo+'.svg']=(root/'assets'/(logo+'.svg'),'image/svg+xml')
     # Byte-identical canonical icon, bundled for the manual mobile reader even
     # when ordinary dashboard DeepSeek presentation is not opted in.
