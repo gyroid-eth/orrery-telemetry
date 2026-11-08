@@ -115,7 +115,7 @@ def test_mobile_default_is_one_day_and_fine_window_is_allowlisted(reader):
 def test_every_fixed_logo_is_authenticated_svg_and_matches_canonical_bytes(reader):
     from pathlib import Path
     port,store=reader;root=Path(__file__).resolve().parents[1]
-    for logo in ('orbit','anthropic','openai','google','deepseek','qwen'):
+    for logo in ('orbit','anthropic','openai','google','deepseek','qwen','glm'):
         path='/assets/'+logo+'.svg'
         source=(root/'integrations/dsh/assets/deepseek.svg' if logo=='deepseek'
                 else root/'dashboard/assets'/(logo+'.svg'))

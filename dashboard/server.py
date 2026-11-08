@@ -209,7 +209,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "index.html")
 THEME_ASSETS = {
     **{"/"+name:(os.path.join(HERE,name),"text/javascript; charset=utf-8" if name.endswith(".js") else "text/css; charset=utf-8") for name in ("global_ui.js","global_ui.css","mail_flow.js","mail_flow.css","network_node.js","network_core.js","runtime_node.js","operator_session.js","mail_controller.js","operation_controller.js")},
-    **{"/assets/"+name+".svg": (os.path.join(HERE,"assets",name+".svg"), "image/svg+xml") for name in ("anthropic","openai","google","deepseek","qwen","orbit","orbit-light")},
+    **{"/assets/"+name+".svg": (os.path.join(HERE,"assets",name+".svg"), "image/svg+xml") for name in ("anthropic","openai","google","deepseek","qwen","glm","orbit","orbit-light")},
     "/theme_core.js": (os.path.join(HERE, "theme_core.js"), "text/javascript; charset=utf-8"),
     "/theme_controller.js": (
         os.path.join(HERE, "theme_controller.js"),
@@ -322,10 +322,13 @@ def _project_key() -> str:
 # future versions (opus-4.8 ...) work with no code change. Source of truth:
 # ORRERY Mail and the dashboard share these accepted provider spellings.
 _MN_FAMILIES = ("fable", "mythos", "opus", "sonnet", "haiku", "gpt", "gemini", "grok",
-                "llama", "qwen", "mistral", "deepseek")
+                "llama", "qwen", "mistral", "deepseek", "glm")
 _MN_FAMILY_RE = re.compile(
-    r"(?P<family>" + "|".join(_MN_FAMILIES) + r")[-_. ]*"
-    r"(?P<version>\d+(?:[.\-]\d+)?)"
+    r"(?P<family>" + "|".join(
+        r"(?<![a-z0-9])glm" if family == "glm" else family
+        for family in _MN_FAMILIES
+    ) + r")[-_. ]*"
+    r"v?(?P<version>\d+(?:[.\-]\d+)?)"
     r"(?P<variant>[-_]?(?:codex|thinking|mini|nano|turbo|flash|pro|preview|exp))?"
 )
 _MN_VENDOR_RE = re.compile(r"^(?:claude|anthropic|openai|google)[-_. ]*")
@@ -333,7 +336,7 @@ _MN_CTX_RE = re.compile(r"[\[\(\-_ ]*\d+\s*m(?:[-_ ]?context)?[\]\)]*\s*$")
 _MN_DISPLAY = {"fable": "Fable", "mythos": "Mythos", "opus": "Opus", "sonnet": "Sonnet", "haiku": "Haiku",
                "gpt": "GPT", "gemini": "Gemini", "grok": "Grok",
                "llama": "Llama", "qwen": "Qwen", "mistral": "Mistral",
-               "deepseek": "DeepSeek"}
+               "deepseek": "DeepSeek", "glm": "GLM"}
 _MN_ALIASES: dict[str, str] = {}  # add codename->canonical when one appears
 
 
@@ -373,7 +376,7 @@ _MN_PROVIDER = {
     "gpt": "openai",
     "gemini": "google", "grok": "xai",
     "llama": "meta", "qwen": "alibaba",
-    "mistral": "mistral", "deepseek": "deepseek",
+    "mistral": "mistral", "deepseek": "deepseek", "glm": "zai",
 }
 
 

@@ -48,15 +48,19 @@ _KNOWN_FAMILIES = (
     "grok",
     "llama",
     "qwen",
+    "glm",
     "mistral",
     "deepseek",
 )
 
-# <family>  optional sep  <major[.minor]>  optional recognized variant
+# <family>  optional sep/v  <major[.minor]>  optional recognized variant
 _FAMILY_RE = re.compile(
-    r"(?P<family>" + "|".join(_KNOWN_FAMILIES) + r")"
+    r"(?P<family>" + "|".join(
+        r"(?<![a-z0-9])glm" if family == "glm" else family
+        for family in _KNOWN_FAMILIES
+    ) + r")"
     r"[-_. ]*"
-    r"(?P<version>\d+(?:[.\-]\d+)?)"
+    r"v?(?P<version>\d+(?:[.\-]\d+)?)"
     r"(?P<variant>[-_]?(?:codex|thinking|mini|nano|turbo|flash|pro|preview|exp))?"
 )
 _VENDOR_PREFIX_RE = re.compile(r"^(?:claude|anthropic|openai|google)[-_. ]*")
@@ -72,6 +76,7 @@ _DISPLAY_FAMILY = {
     "grok": "Grok",
     "llama": "Llama",
     "qwen": "Qwen",
+    "glm": "GLM",
     "mistral": "Mistral",
     "deepseek": "DeepSeek",
 }

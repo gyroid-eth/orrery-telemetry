@@ -184,10 +184,9 @@ def test_live_parents_does_not_cache_a_missing_tmux_server(tmp_path, monkeypatch
     assert graph_data._live_parents() == {"child": "Parent"}
 
 
-def test_graph_nodes_preserve_raw_model_and_local_backend_metadata(monkeypatch):
+@pytest.mark.parametrize('raw', ['qwen3.8-flash-next-iq3_xxs', 'glm-5.3-flash', 'deepseek-v4.1-flash'])
+def test_graph_nodes_preserve_raw_model_and_local_backend_metadata(monkeypatch, raw):
     from dashboard import server
-
-    raw = 'qwen3.8-flash-next-iq3_xxs'
     node = {'name': 'FixtureLocal', 'program': 'dsh', 'model': raw, 'last_active': BASE}
     monkeypatch.setattr(server, '_raw_graph', lambda: {'nodes': [node], 'edges': [], 'spawn': []})
     monkeypatch.setattr(server, '_graph_keep', lambda *args: ({node['name']}, BASE, {}, {}, None))

@@ -154,7 +154,7 @@ class NoObservation:
 server=relay.make_server(relay.Config('owner@example.test','https://viewer.example.ts.net:9443'),store=NoObservation(),test_port=0)
 worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start();result={}
 try:
-    for logo in ('orbit','anthropic','openai','google','deepseek','qwen'):
+    for logo in ('orbit','anthropic','openai','google','deepseek','qwen','glm'):
         c=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=3)
         try:
             c.request('GET','/assets/'+logo+'.svg',headers={'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test'})

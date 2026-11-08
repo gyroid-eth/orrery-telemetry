@@ -45,6 +45,13 @@ Qwenは [公式組織](https://github.com/QwenLM) の
 専用許諾を確認できたとの主張ではなく、code licenseもlogoの許諾として扱わない。
 確認した利用条件と加工の記録は、各asset近傍のREADMEに残す。
 
+GLMの利用は運営者の判断（2026-11-08）。
+公式 [Z.aiサイト](https://chat.z.ai/) の [logo SVG](https://z-cdn.chatglm.cn/z-ai/static/logo.svg) を
+`dashboard/assets/glm.svg` に埋め込み、独立した背景path（`st194`、枠を含む）だけを透明にした。前景の形状とviewBoxは保ち、Qwenと同じalpha filterでboneにした。トレース・再描画はしていない。lightは既存の黒logo filterを使う。
+[公式organizationのavatar](https://avatars.githubusercontent.com/u/223098841?v=4) は背景が不透明なため、このSVGを選んだ。
+確認した [Z.ai Terms of Use](https://chat.z.ai/legal-agreement/terms-of-service)（更新日2026-04-14）のV.2は、事前の書面の同意なしのlogo・商標等の利用を制限している。
+専用の再配布・再着色の許可は確認した公式資料では見つからなかった。この制限を承知の上で、運営者が2026-11-08にbone色の公式ロゴを使うと決めた記録であり、権利者からの許諾を主張しない。
+
 ## 肖像画像
 
 dashboard が agent 名の科学者に対応させて表示する肖像は、第三者の画像ではありません。

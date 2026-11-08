@@ -49,6 +49,10 @@ for(const enabled of [false,true]){
  window.AGENTSTACK_DSH_ENABLED=enabled;
  result.push({enabled,cloud:draw({provider:'deepseek',model:'deepseek-3.2'}),
    localQwen:draw({provider:'local',model_raw:'Qwen/Qwen3-Coder',program:'codex'}),
+   localGLM:draw({provider:'local',model_raw:'zai-org/GLM-5.3-Flash',program:'hermes'}),
+   localGLM46:draw({provider:'local',model_raw:'zai-org/GLM-4.6'}),
+   localXGLM:draw({provider:'local',model_raw:'facebook/xglm-7.5B'}),
+   localChatGLM:draw({provider:'local',model_raw:'chatglm3-6b'}),
    localDeepSeek:draw({provider:'local',model_raw:'deepseek-ai/DeepSeek-V3',program:'codex'}),
    unknown:draw({provider:'local',model_raw:'unknown',program:'codex'}),
    noLocal:draw({model:'Qwen3-Coder',program:'codex'})});
@@ -64,6 +68,13 @@ process.stdout.write(JSON.stringify(result));
     assert logo['data-provider'] == 'deepseek'
     assert float(logo['width']) <= 14 and float(logo['height']) <= 14
     for state in (off, on):
+        glm = state['localGLM']
+        assert len(nodes(glm, 'polygon')) == 1
+        assert nodes(glm, 'image')[0]['attrs']['data-provider'] == 'glm'
+        assert nodes(state['localGLM46'], 'image')[0]['attrs']['data-provider'] == 'glm'
+        for name in ('localXGLM', 'localChatGLM'):
+            assert len(nodes(state[name], 'polygon')) == 1
+            assert not nodes(state[name], 'image')
         local = state['localQwen']
         assert len(nodes(local, 'polygon')) == 1
         assert 'provider-local-ring' in nodes(local, 'polygon')[0]['attrs']['class']
@@ -107,6 +118,7 @@ def test_demo_build_explicit_opt_in_keeps_default_empty(tmp_path):
         subprocess.run(args, capture_output=True, text=True, check=True, timeout=30)
         assert (out / 'assets/deepseek.svg').exists() is enabled
         assert (out / 'assets/qwen.svg').read_bytes() == (ROOT / 'dashboard/assets/qwen.svg').read_bytes()
+        assert (out / 'assets/glm.svg').read_bytes() == (ROOT / 'dashboard/assets/glm.svg').read_bytes()
         marker = 'window.AGENTSTACK_DEMO_DSH=' + str(enabled).lower()
         assert marker in (out / 'index.html').read_text()
         # catalogも同じ配布fixtureを実行し、markerだけの対照にしない。
@@ -131,6 +143,8 @@ const rows=[
  {provider:'strata',locality:'local',program:'dsh',harness:'dsh',model:'Qwen 3.8 flash',model_raw:'qwen3.8-flash-next-iq3_xxs'},
  {provider:'strata',program:'hermes',model:'fixture',model_raw:'Qwen/Qwen3-Coder'},
  {provider:'fixture',locality:'local',model:'fixture',model_raw:'qwen3'},
+ {provider:'strata',locality:'local',program:'hermes',model:'GLM 5.3 flash',model_raw:'glm-5.3-flash'},
+ {provider:'local',model:'zai-org/GLM-5.3-Flash'},
  {provider:'local',model:'Qwen3',model_raw:'unknown'},
  {provider:'strata',model:'unknown'},
 ];
@@ -147,12 +161,18 @@ process.stdout.write(JSON.stringify(out));
 """
     for state in _node(script):
         for i, row in enumerate(state):
-            maker = i < 3
-            assert row['key'] == row['globalKey'] == ('local:qwen' if maker else 'local')
+            maker = ['qwen', 'qwen', 'qwen', 'glm', 'glm', None, None][i]
+            assert row['key'] == row['globalKey'] == ('local:' + maker if maker else 'local')
             assert 'provider-local-ring' in json.dumps(row['network'])
-            assert ('qwen.svg' in json.dumps(row['network'])) is maker
+            if maker:
+                assert maker + '.svg' in json.dumps(row['network'])
+            else:
+                assert '.svg' not in json.dumps(row['network'])
             assert 'provider-local-ring' in row['deck']
-            assert ('qwen.svg' in row['deck']) is maker
+            if maker:
+                assert maker + '.svg' in row['deck']
+            else:
+                assert '.svg' not in row['deck']
             assert 'prov-logo' in row['deck'] and 'on' in row['deck']
 
 
