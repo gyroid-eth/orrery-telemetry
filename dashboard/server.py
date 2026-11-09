@@ -6626,6 +6626,10 @@ _CODEX_INTERRUPT_END_RE = re.compile(
     r"esc to interrupt\)"
     r"(?: · (?:1 background terminal|(?:[2-9]|[1-9][0-9]+) background terminals)"
     r" running · /ps to view · /stop to close)?$")
+_CODEX_TRUNCATED_WORK_RE = re.compile(
+    r"^[•▌●]\s+(?:Working|Thinking)(?: \(([^\n]*))?…$")
+_CODEX_ELAPSED_PREFIX_RE = re.compile(
+    r"\s*(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(?:(\d+)\s*s\s*)?(\d*)\s*")
 _LAST_T_RE = re.compile(
     r"\b(?:for|in)\s+(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(\d+)\s*s\b",
     re.IGNORECASE)
@@ -6641,6 +6645,50 @@ def _dur(h: int, m: int, s: int) -> tuple[int, str]:
     else:
         disp = f"{s}s"
     return secs, disp
+
+
+def _codex_truncated_work(candidate: str) -> tuple[int | None, str | None] | None:
+    """Read an ellipsized status prefix, only after current-block admission."""
+    label = _CODEX_TRUNCATED_WORK_RE.fullmatch(candidate)
+    if label is None:
+        return None
+    if label.group(1) is None:
+        return None, None
+    elapsed, separator, hint = label.group(1).partition('•')
+    # Real elapsed labels are short. Bound regex work before optional units
+    # can redistribute whitespace, and before converting any captured digits.
+    if len(elapsed) > 64:
+        return None
+    timer = _CODEX_ELAPSED_PREFIX_RE.fullmatch(elapsed.strip())
+    if timer is None:
+        return None
+    h, m, s, incomplete = timer.groups()
+    if separator:
+        if incomplete or not any(value is not None for value in (h, m, s)):
+            return None
+        hint = hint.lstrip()
+        interrupt = 'esc to interrupt)'
+        if not interrupt.startswith(hint):
+            if not hint.startswith(interrupt):
+                return None
+            suffix = hint[len(interrupt):]
+            if not ' · '.startswith(suffix):
+                background = re.fullmatch(r' · ([1-9]\d*)(?: (.*))?', suffix)
+                if background is None:
+                    return None
+                plural = '' if background.group(1) == '1' else 's'
+                expected = f'background terminal{plural} running · /ps to view · /stop to close'
+                if not expected.startswith(background.group(2) or ''):
+                    return None
+    if not any(value is not None for value in (h, m, s)):
+        return None, None
+    seconds, display = _dur(int(h or 0), int(m or 0), int(s or 0))
+    if s is None:
+        # A clipped digit has no known unit. Never invent the missing seconds.
+        display = (f'{int(h)}h' if h is not None else '')
+        if m is not None:
+            display += f'{int(m):02d}m' if h is not None else f'{int(m)}m'
+    return seconds, display
 
 
 _RT_TTL = 4.5
@@ -6791,6 +6839,11 @@ def _runtime_activity(text: str) -> tuple[str, str]:
                 for row in suffix) and all(chrome(row) for row in suffix)):
             composer = index
             break
+    codex_composer = (composer is not None and lines[composer].lstrip().startswith('›')
+        and any(_CTX_CODEX_LEFT_RE.search(row) or _CTX_CODEX_USED_RE.search(row)
+            or re.match(r'^\s*gpt-\S+\s+(?:low|medium|high|xhigh|max|ultra)\s+[·•]',
+                        row, re.IGNORECASE)
+            for row in lines[composer + 1:]))
     current = lines[:composer] if composer is not None else lines[:]
     while current and (not current[-1].strip() or rule(current[-1])):
         current.pop()
@@ -6829,6 +6882,9 @@ def _runtime_activity(text: str) -> tuple[str, str]:
             if (width == 1 and candidate[0] in "•▌●"
                     and _ACTIVE_T_RE.search(candidate) and _WORK_RE.search(candidate)
                     and _CODEX_INTERRUPT_END_RE.search(candidate)):
+                return "work", candidate
+            if (width == 1 and codex_composer and label[0].startswith(('•', '▌', '●'))
+                    and _codex_truncated_work(candidate) is not None):
                 return "work", candidate
             if width > 1 and len(label[0].strip()) == 1:
                 candidate = label[0].strip() + " " + " ".join(row.strip() for row in label[1:])
@@ -6913,6 +6969,10 @@ def _parse_runtime(text: str) -> dict:
         if t:
             work_secs, work_disp = _dur(
                 int(t.group(1) or 0), int(t.group(2) or 0), int(t.group(3)))
+        else:
+            truncated = _codex_truncated_work(work_block)
+            if truncated is not None:
+                work_secs, work_disp = truncated
     else:
         # 直前ターンの所要（最後にマッチしたもの＝最新）
         ms = _LAST_T_RE.findall(text)

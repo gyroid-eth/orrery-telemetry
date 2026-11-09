@@ -81,6 +81,8 @@ The header numbers are a **tally** of the states each card shows in its top-righ
 | `WORKING` | Agents with a turn in progress | amber LED and elapsed time |
 | `WAITING` | Agents at the prompt, free to take work | `LAST 1M41S` |
 
+In a narrow Codex pane, a current `Working` / `Thinking` line ending in `…` still indicates work. Elapsed time includes only readable units and is absent when unreadable. Historical status lines superseded by a later reply or completion marker, and quoted examples, do not establish current work.
+
 `NEED YOU` appears only while such agents exist; clicking it narrows the DECK to them (click again to restore). An agent whose process has stopped and returned to the shell is in none of these counts; its card says `○ SHELL`. The total of active agents is in the sector heading, `ACTIVE AGENTS [ 29 ]`.
 
 **Decide where the next task goes from the header (WAITING and LEFT); read what each agent is doing from its card.**

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from time import perf_counter
 
 import pytest
 
@@ -326,6 +327,124 @@ def test_long_codex_work_with_background_terminals_and_tip_is_work():
 def test_long_codex_work_rejects_unknown_trailing_text(suffix):
     current = "• Working (48m 48s • esc to interrupt)" + suffix + "\n"
     assert server._parse_runtime(current + _CODEX_INPUT)["act_state"] == "wait"
+
+
+# Literal Codex status shapes at 20/28/40/80 columns. The 28-column row is
+# transcribed from the reported narrow pane; wider panes retain the full hint.
+_NARROW_CODEX_WORK = [
+    (20, '• Working (11m 57s …', 717, '11m57s'),
+    (28, '• Working (11m 57s • esc to…', 717, '11m57s'),
+    (40, '• Working (11m 57s • esc to interrupt)', 717, '11m57s'),
+    (80, '• Working (11m 57s • esc to interrupt)', 717, '11m57s'),
+]
+
+
+def _codex_input_at_width(columns):
+    rows = ['› Ask Codex to do anything', 'GPT-6.1-Sol high · Context 70% left']
+    return '\n'.join(row if len(row) <= columns else row[:columns - 1] + '…' for row in rows) + '\n'
+
+
+@pytest.mark.parametrize('columns,status,seconds,display', _NARROW_CODEX_WORK)
+def test_codex_work_status_at_narrow_widths(columns, status, seconds, display):
+    assert len(status) <= columns
+    parsed = server._parse_runtime('• Earlier reply.\n\n' + status + '\n\n' + _codex_input_at_width(columns))
+    assert parsed['act_state'] == 'work'
+    assert parsed['work_secs'] == seconds
+    assert parsed['work_disp'] == display
+
+
+@pytest.mark.parametrize('status,seconds,display', [
+    ('• Working…', None, None), ('• Working (…', None, None),
+    ('• Working (11…', None, None), ('• Working (11m…', 660, '11m'),
+    ('• Working (11m 5…', 660, '11m'),
+    ('▌ Thinking (1h 2m…', 3720, '1h02m'),
+    ('● Working (1h 2m 3s • esc to inter…', 3723, '1h02m'),
+    ('• Working (11m 57s • esc to interrupt) · 1 background termin…', 717, '11m57s'),
+    ('• Working (11m 57s • esc to interrupt) · 2 background terminals running · /ps…', 717, '11m57s'),
+    ('✻ Working… (12s · esc to…', 12, '12s'),
+])
+def test_truncated_work_reports_only_readable_elapsed_units(status, seconds, display):
+    parsed = server._parse_runtime(status + '\n' + _CODEX_INPUT)
+    assert parsed['act_state'] == 'work'
+    assert parsed['work_secs'] == seconds
+    assert parsed['work_disp'] == display
+
+
+@pytest.mark.parametrize('columns,status,seconds,display', _NARROW_CODEX_WORK)
+@pytest.mark.parametrize('later', ['• Finished the task.\n', '  ⏺ Finished the task.\n',
+    'Press enter to confirm or esc to cancel\n• Finished.\n'])
+def test_narrow_codex_work_in_scrollback_does_not_revive(columns, status, seconds, display, later):
+    parsed = server._parse_runtime(status + '\n\n' + later + _codex_input_at_width(columns))
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_secs'] is None
+    assert parsed['work_disp'] is None
+
+
+@pytest.mark.parametrize('text', [
+    '', '• Finished the task.\n', '> • Working…\n', 'The pane says • Working…\n',
+    '```text\n• Working (11m 57s • esc to…\n```\n',
+    '• Working on the documentation…\n', '• Working (finished the task…\n',
+    '• Working (11m 57s • arbitrary output…\n',
+    '• Working (11m 57s • esc to interrupt) · arbitrary output…\n',
+    '• Working (11m 57s • esc to interrupt) · 0 background terminals…\n',
+    '• Working (11m 57s • esc to interrupt) · 2 background terminal running…\n',
+])
+def test_missing_or_quoted_narrow_work_is_wait(text):
+    parsed = server._parse_runtime(text + _CODEX_INPUT)
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_disp'] is None
+
+
+def test_runtime_clears_narrow_work_time_after_current_status_disappears(monkeypatch):
+    captures = iter([
+        SimpleNamespace(returncode=0, stdout='• Working (11m 57s • esc to…\n' + _codex_input_at_width(28)),
+        SimpleNamespace(returncode=0, stdout='• Working (11m 57s • esc to…\n• Finished.\n' + _codex_input_at_width(28)),
+    ])
+    ticks = iter((0.0, 10.0))
+    monkeypatch.setattr(server.time, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(server, '_tmux_run', lambda *args, **kwargs: next(captures))
+    monkeypatch.setattr(server, '_rt_cache', {})
+    monkeypatch.setattr(server, '_provider_captures', {})
+    first = server._agent_runtime('FixtureAgent', session_created=101, session_id='$1')
+    assert first['act_state'] == 'work' and first['work_disp'] == '11m57s'
+    second = server._agent_runtime('FixtureAgent', session_created=101, session_id='$1')
+    assert second['act_state'] == 'wait'
+    assert second['work_secs'] is None and second['work_disp'] is None
+
+
+def test_pathological_codex_elapsed_line_does_not_block_runtime_parser():
+    text = '• Working (' + ' ' * 16000 + 'x…\n' + _CODEX_INPUT
+    start = perf_counter()
+    parsed = server._parse_runtime(text)
+    duration = perf_counter() - start
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_secs'] is None and parsed['work_disp'] is None
+    # The normal parser takes milliseconds here; leave room for slow CI hosts.
+    assert duration < 0.25, f'pathological status took {duration:.3f}s'
+
+
+@pytest.mark.parametrize('status', ['• Working (11m 57s • esc to…', '• Working…'])
+@pytest.mark.parametrize('indent', ['', '    '])
+@pytest.mark.parametrize('footer', ['❯\n Opus 5 | ctx: 42% used\n', '›\n Opus 5 | ctx: 42% used\n'])
+def test_codex_truncated_quote_above_other_provider_footer_is_wait(status, indent, footer):
+    parsed = server._parse_runtime('⏺ Captured child status:\n\n' + indent + status + '\n\n' + footer)
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_secs'] is None and parsed['work_disp'] is None
+
+
+@pytest.mark.parametrize('status', ['• Working (11m 57s • esc to…', '• Working…'])
+@pytest.mark.parametrize('indent', [' ', '    '])
+def test_indented_codex_truncated_quote_above_codex_composer_is_wait(status, indent):
+    parsed = server._parse_runtime('• Captured example:\n\n' + indent + status + '\n' + _CODEX_INPUT)
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_secs'] is None and parsed['work_disp'] is None
+
+
+@pytest.mark.parametrize('footer', ['', '›\n', '›\n? for shortcuts\n'])
+def test_codex_truncated_status_requires_codex_composer_and_footer(footer):
+    parsed = server._parse_runtime('• Working (11m 57s • esc to…\n' + footer)
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_disp'] is None
 
 # Transcribed from the operator-supplied hook review screenshot. This is not
 # the repository's older folder-access trust fixture.
