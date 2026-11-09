@@ -84,6 +84,8 @@ Codex 自身が固定エラー文を折り返す場合も検知します。固�
 | `WORKING` | turn が進行中の agent | amber の LED と経過時間 |
 | `WAITING` | prompt で入力を待っていて、仕事を渡せる agent | `LAST 1M41S` |
 
+Codex の狭い pane で現在の `Working` / `Thinking` 行が `…` に省略されても、作業中として読み取ります。経過時間は見えている単位までを表示し、読めなければ出しません。後の返答や完了表示に置き換わった状態行・本文中の引用は、現在の作業の証拠にしません。
+
 `NEED YOU` は該当する agent がいるときだけ現れ、クリックすると DECK がその agent だけに絞られます（もう一度クリックで戻ります）。process が止まって shell に戻った agent はどの数にも入りません。カードの `○ SHELL` で分かります。active agent の総数は sector 見出しの `ACTIVE AGENTS [ 29 ]` にあります。
 
 **次にどこへ仕事を振るかはヘッダ（WAITING と LEFT）、誰がいま何をしているかは各カード**で確認します。
