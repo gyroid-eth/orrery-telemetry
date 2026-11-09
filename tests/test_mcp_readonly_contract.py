@@ -117,6 +117,24 @@ def test_unavailable_registration_index_never_assigns_live_project(isolated_rost
     assert rows["Retired"]["project_key"] == PROJECT
 
 
+def test_annotations_stay_private_through_real_dashboard(isolated_roster, monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "ANNOT_PATH", str(tmp_path / "annotations.json"))
+    monkeypatch.setattr(server, "LEGACY_ANNOT_PATH", str(tmp_path / "legacy-annotations.json"))
+    monkeypatch.setattr(server, "_ANNOT_CACHE", {"path": "", "mtime": -1, "data": {}})
+    server._write_annotation("ScopedLive", role="private-marker-role", task="private-marker-task")
+    with real_dashboard() as dashboard:
+        assert dashboard.read("/api/version")["api"] == server.API_GENERATION
+        raw = dashboard.read("/api/agents?days=30")
+        row = next(row for row in raw["agents"] if row["name"] == "ScopedLive")
+        assert row["annot"]["task"] == "private-marker-task"
+        for tool, args in (("orrery_status", {}), ("orrery_list_agents", {}),
+                           ("orrery_get_agent", {"name": "ScopedLive"})):
+            result = invoke(tool, args, dashboard, "legacy", project_key=PROJECT)
+            assert "private-marker" not in json.dumps(result)
+            assert '"annot"' not in json.dumps(result)
+            assert '"task"' not in json.dumps(result)
+
+
 def test_registration_scope_is_not_a_per_agent_query(isolated_roster, monkeypatch):
     calls = []
     original = server._db
