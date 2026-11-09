@@ -271,12 +271,13 @@ def test_cockpit_offline_or_wrong_type_is_unavailable():
 HARNESS = r'''
 const vm=require('node:vm'),assert=require('node:assert/strict');
 class El{
- constructor(tag){this.tagName=tag.toUpperCase();this.children=[];this.parent=null;this._text='';this.className='';this.dataset={};this.hidden=false;this.attrs={};this.listeners={};this.scrollTop=0;}
+ constructor(tag){this.tagName=tag.toUpperCase();this.children=[];this.parent=null;this._text='';this.className='';this.dataset={};this.hidden=false;this.attrs={};this.listeners={};this.scrollTop=0;this.style={};this.classList={add:(...xs)=>{this.className=[this.className,...xs].filter(Boolean).join(' ');}};}
  get isConnected(){let n=this;while(n.parent)n=n.parent;return n===body;}
  get textContent(){return this._text+this.children.map(c=>c.textContent).join('');}
  set textContent(v){this._text=String(v);this.children.forEach(c=>c.parent=null);this.children=[];}
  set innerHTML(v){throw Error('innerHTML must not be used');}
  get scrollHeight(){return 1000;} get clientHeight(){return 200;}
+ appendChild(x){this.append(x);return x;}
  append(...xs){for(const x of xs){x.parent?.children.splice(x.parent.children.indexOf(x),1);x.parent=this;this.children.push(x);}}
  insertBefore(x,ref){if(!ref)return this.append(x);x.parent=this;this.children.splice(this.children.indexOf(ref),0,x);}
  remove(){if(this.parent){this.parent.children.splice(this.parent.children.indexOf(this),1);this.parent=null;}}
@@ -288,15 +289,16 @@ class El{
  all(){return [this,...this.children.flatMap(c=>c.all())];}
 }
 const body=new El('body');const timers=new Map();let seq=0;const fetches=[];let docListeners={};
-const doc={hidden:false,createElement:t=>new El(t),addEventListener(k,f){docListeners[k]=f;}};
+const doc={hidden:false,createTextNode:t=>{const n=new El('#text');n.textContent=t;return n;},createElement:t=>new El(t),addEventListener(k,f){docListeners[k]=f;}};
 let reply=null;
-const context={document:doc,console,TextEncoder,AbortController,CSS:{escape:s=>s},Date,JSON,
+const context={document:doc,console,TextEncoder,AbortController,URL,CSS:{escape:s=>s},Date,JSON,
  setTimeout(f,ms){timers.set(++seq,{f,ms});return seq;},clearTimeout(id){timers.delete(id);},
  addEventListener(){},
  fetch:async(url,opts)=>{fetches.push({url,opts});
   const aborted=new Promise((_,no)=>{if(context.honorAbort&&opts.signal)opts.signal.addEventListener('abort',()=>{const e=Error('aborted');e.name='AbortError';no(e);});});
   const v=await Promise.race([reply(url),aborted]);return {ok:true,status:v.status||200,text:async()=>JSON.stringify(v.body),json:async()=>v.body};}};
 context.window=context;
+vm.runInNewContext(MARKDOWN,context);
 vm.runInNewContext(SOURCE,context);
 const C=context.OrreryMobileConversation;
 const settle=async()=>{for(let i=0;i<20;i++)await new Promise(r=>setImmediate(r));};
@@ -316,7 +318,7 @@ def run(body):
     if not node:
         pytest.skip('node is unavailable')
     source = (ROOT / 'dashboard/mobile/conversation.js').read_text()
-    script = HARNESS.replace('SOURCE', json.dumps(source)).replace('BODY', body)
+    script = HARNESS.replace('MARKDOWN', json.dumps((ROOT / 'dashboard/mobile/conversation_markdown.js').read_text())).replace('SOURCE', json.dumps(source)).replace('BODY', body)
     result = subprocess.run([node, '-'], input=script, text=True, capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr + result.stdout
     assert result.stdout.strip().endswith('ok')
@@ -355,7 +357,7 @@ def test_recorded_html_stays_text_and_tables_are_built_as_dom():
       assert.ok(root.textContent.includes('<svg onload=x>.png'));
       const table=root.all().find(e=>e.tagName==='TABLE');assert.ok(table);
       assert.deepEqual(table.all().filter(e=>e.tagName==='TD').map(e=>e.textContent),['<b>1</b>','2']);
-      assert.equal(root.all().find(e=>e.tagName==='PRE'&&e.className==='conversation-code').textContent,'<i>code</i>');
+      assert.equal(root.all().find(e=>e.tagName==='PRE'&&e.className==='markdown-code').textContent,'<i>code</i>\n');
       assert.ok(fetches.every(f=>f.url.startsWith('/view/conversation?name=Vega')&&!/path|cursor|before/.test(f.url)));
     ''')
 
@@ -427,6 +429,9 @@ vm.runInNewContext(SOURCE,context);"""),
     ]:
         assert harness.count(old) == 1, old
         harness = harness.replace(old, new)
+    harness = harness.replace("setAttribute(){}", "setAttribute(k,v){this[k]=v;}")
+    harness = harness.replace("createElement:t=>new Element(t)", "createElement:t=>new Element(t),createElementNS:(_ns,t)=>new Element(t)")
+    harness = harness.replace("document:doc,console", "history:{state:null,pushState(v){this.state=v;},back(){}},document:doc,console")
     source = (ROOT / 'dashboard/mobile/mobile.js').read_text()
     source = '/* Common, opt-in pane terminal.' + source.split('/* Common, opt-in pane terminal.', 1)[1]
     script = (harness.replace('TERMINAL', 'true' if terminal else 'false')
@@ -442,11 +447,12 @@ def test_sheet_opens_on_conversation_and_sends_only_through_the_reviewed_termina
       assert.deepEqual(mounted,['ScrollFixture']);assert.ok(q('#conversation'));
       assert.equal(q('#terminal-output'),null,'conversation tab hides the terminal tail');
       assert.equal(q('#terminal-text'),null,'no compose before a pane is chosen');
-      button('Terminal').onclick();await settle();
+      q('.reader-bar').children.find(b=>b['aria-label']==='Terminal').onclick();await settle();
       button('Pane 1ScrollFixture').onclick();await settle();
       assert.ok(q('#terminal-output'));
-      button('Conversation').onclick();await settle();
+      q('.reader-bar').children.find(b=>b['aria-label']==='Conversation').onclick();await settle();
       assert.ok(q('#conversation'));assert.equal(q('#terminal-output'),null);
+      q('.reader-compose-toggle').onclick();
       const field=q('#terminal-text');field.value='synthetic line';field.oninput();
       await button('Review input').onclick();await settle();
       assert.ok(calls.some(c=>c.op==='prepare'),'review uses the existing prepare step');
@@ -635,16 +641,17 @@ def test_reopening_the_same_agent_ignores_the_previous_sheets_response():
 def test_review_from_the_conversation_tab_shows_the_terminal_tail_before_send():
     run_sheet(r'''
       await context.OrreryMobileTerminal.open('ScrollFixture');await settle();
-      button('Terminal').onclick();await settle();
+      q('.reader-bar').children.find(b=>b['aria-label']==='Terminal').onclick();await settle();
       button('Pane 1ScrollFixture').onclick();await settle();
       const tail=q('#terminal-output').textContent;assert.ok(tail.includes('line'));
-      button('Conversation').onclick();await settle();
+      q('.reader-bar').children.find(b=>b['aria-label']==='Conversation').onclick();await settle();
+      q('.reader-compose-toggle').onclick();
       const field=q('#terminal-text');field.value='synthetic line';field.oninput();
       await button('Review input').onclick();await settle();
       const shown=q('#terminal-output');
       assert.ok(shown,'review shows the terminal tail');
       assert.ok(shown.textContent.includes('line'),'tail text is visible: '+shown.textContent);
-      assert.match(q('.terminal-observed').textContent,/40 lines.*6 KiB/);
+      assert.match(q('.terminal-observed').textContent,/120 lines.*12 KiB/);
       assert.ok(button('Send once'));
       context.OrreryMobileTerminal.close();
     ''')
@@ -830,3 +837,12 @@ def test_phone_treats_its_own_wait_running_out_as_slow():
       assert.ok(root.all().some(e=>e.tagName==='BUTTON'&&e.textContent==='Retry'&&!e.hidden));
       C.unmount();
     ''')
+
+
+def test_generated_notification_is_a_short_activity_not_a_user_message():
+    raw = dict(id='notification', kind='system', role='system', text='Background task completed · check',
+               system_detail='Status: completed\nOutput: /fixture/private-output.txt', ts='')
+    event = history.project_event(raw)
+    assert event['kind'] == 'tool' and event['role'] == 'assistant'
+    assert event['text'] == 'Background task completed · check'
+    assert 'system_detail' not in event and '/fixture/' not in json.dumps(event)

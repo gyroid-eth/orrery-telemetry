@@ -1,5 +1,5 @@
 /* Opt-in, read-only conversation history. Text enters the DOM through
-   textContent only: no innerHTML or links. A file preview is text through
+   textContent only; inert Markdown uses the bundled renderer. A file preview is text through
    textContent or a PNG the relay checked, shown from a data:image/png URL that
    this file builds from validated base64; nothing else sets a source. Save
    writes exactly what the preview shows to the device through one object URL,
@@ -14,7 +14,7 @@ let capability=null,gen=0,timer=0,name='',root=null,list=null,status=null,olderB
 const WAIT=20000;
 /* Poll and Show older each own a controller, so neither aborts the other. */
 const controllers={poll:null,older:null,preview:null};
-let panel=null,saveUrl='';
+let panel=null,saveUrl='',previewFocus=null;
 let events=[],seen=new Set(),older=null,pending=[],failures=0,loadingOlder=false,following=true,savedTop=0;
 const messages={
  history_unconfirmed:'This agent’s record is not verified as its own, so history stays hidden.',
@@ -65,27 +65,12 @@ async function request(token,slot){
  }finally{clearTimeout(t);if(controllers[slot]===c)controllers[slot]=null;}
 }
 function clock(ts){const d=new Date(ts);return Number.isFinite(d.getTime())?d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'';}
-function table(lines){
- const cells=l=>l.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(x=>x.trim());
- const t=make('table','conversation-table'),head=cells(lines[0]),tr=make('tr');
- head.forEach(h=>tr.append(make('th','',h)));t.append(tr);
- for(const l of lines.slice(2)){const row=make('tr');cells(l).forEach(c=>row.append(make('td','',c)));t.append(row);}
- const wrap=make('div','conversation-table-wrap');wrap.append(t);return wrap;
-}
-const isRule=l=>/^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
-/* Literal Markdown subset: fenced code and pipe tables become DOM; everything
-   else stays the exact recorded text. */
-function body(text){
- const box=make('div','conversation-text'),lines=text.split('\n');let para=[];
- const flush=()=>{if(para.length){box.append(make('p','',para.join('\n')));para=[];}};
- for(let i=0;i<lines.length;i++){
-  const l=lines[i];
-  if(/^\s*```/.test(l)){flush();const code=[];i++;while(i<lines.length&&!/^\s*```/.test(lines[i]))code.push(lines[i++]);box.append(make('pre','conversation-code',code.join('\n')));continue;}
-  if(/^\s*\|.*\|\s*$/.test(l)&&i+1<lines.length&&isRule(lines[i+1])){
-   flush();const rows=[l,lines[i+1]];i+=2;while(i<lines.length&&/^\s*\|.*\|\s*$/.test(lines[i]))rows.push(lines[i++]);i--;box.append(table(rows));continue;}
-  para.push(l);
- }
- flush();return box;
+const markdown=()=>window.OrreryConversationMarkdown;
+function body(text,assistant=false){
+ const box=make('div','conversation-text'),m=markdown();
+ if(m&&assistant)m.renderDocument(text,box,{codeControls:true});
+ else if(m)m.renderText(text,box);else box.textContent=text;
+ return box;
 }
 function mailCard(m){
  const card=make('button','conversation-mail '+m.direction);card.type='button';
@@ -103,8 +88,10 @@ function files(e,r){if(Array.isArray(e.files)&&e.files.length){const f=make('div
 function row(e){
  if(e.kind==='tool'){const r=make('div','conversation-tool',e.text);r.dataset.id=e.id;files(e,r);return r;}
  if(e.kind==='mail'){const r=make('div','conversation-mails');r.dataset.id=e.id;e.mail.forEach(m=>r.append(mailCard(m)));return r;}
- const r=make('div','conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
- r.append(body(e.text));
+ const command=e.role==='user'&&markdown()?.commandRecord(e.text);
+ const r=make('div',command?.shell?'conversation-shell':'conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
+ if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(e.text,r);}else r.append(body(e.text,e.role==='assistant'));
+
  if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m)));
  files(e,r);
  const meta=[clock(e.ts),e.truncated?'shortened':''].filter(Boolean).join(' · ');if(meta)r.append(make('small','conversation-time',meta));
@@ -123,11 +110,13 @@ function pngSource(v){
   &&Number.isInteger(v.width)&&Number.isInteger(v.height)&&v.width>0&&v.height>0&&v.width<=MAX_SIDE&&v.height<=MAX_SIDE&&v.width*v.height<=MAX_PIXELS
   ?'data:image/png;base64,'+v.data:null;
 }
-function closePreview(){
+function closePreview(restoreFocus=false){
  controllers.preview?.abort();controllers.preview=null;dropSave();
  if(panel){for(const img of panel.querySelectorAll('img'))img.src='';panel.replaceChildren();panel.remove();}
  panel=null;
+ if(restoreFocus&&previewFocus?.isConnected)previewFocus.focus?.({preventScroll:true});previewFocus=null;
 }
+function dismissPreview(){if(!panel)return false;closePreview(true);return true;}
 /* A plain file name: the last path part, without control or bidi-override
    characters, at most 120 characters. Images are saved as the PNG cockpit
    re-drew, so they end in .png; text that a viewer could render as markup
@@ -152,11 +141,13 @@ function saveButton(head,close,label,blob){
 function pngBytes(data){const raw=atob(data),out=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);return out;}
 async function openPreview(x){
  closePreview();if(!root)return;
+ previewFocus=document.activeElement;
  const g=gen,box=make('div','conversation-preview');panel=box;box.setAttribute('role','dialog');box.setAttribute('aria-label','Preview of '+x.label);
- const head=make('div','conversation-preview-head'),close=make('button','conversation-preview-close','Close');close.type='button';close.onclick=closePreview;
+ const head=make('div','conversation-preview-head'),close=make('button','conversation-preview-close','Close');close.type='button';close.onclick=()=>closePreview(true);
  head.append(make('strong','',x.label),close);
  const state=make('p','conversation-preview-status','Loading preview…');state.setAttribute('role','status');
  const view=make('div','conversation-preview-body');box.append(head,state,view);root.append(box);
+ close.focus?.({preventScroll:true});
  const c=new AbortController();controllers.preview=c;let late=false;const t=setTimeout(()=>{late=true;c.abort();},WAIT);
  let v=null,status=0;
  try{
@@ -184,24 +175,60 @@ function atBottom(){return !list||(list.isConnected?list.scrollHeight-list.clien
 /* The sheet rebuilds its children; detaching resets scrollTop. Restore the
    reader's place (or the tail) after each reattachment. */
 function restore(){if(!list||!list.isConnected)return;list.scrollTop=following?list.scrollHeight:savedTop;}
-function setStatus(text){if(status)status.textContent=text;}
+function setStatus(text){if(!status)return;status.textContent=text;
+ // Routine explanations live in Information; failures remain on the surface.
+ status.hidden=/^(?:Read-only record · updating|Latest record · updating|New messages below · paused while you read)$/.test(text);
+}
+function activity(){
+ if(!list)return;list.querySelector('.conversation-activity')?.remove();
+ const a=window.OrreryMobileAgent?.forName(name),box=make('div','conversation-activity');
+ if(a?.running&&a.state==='work'&&!a.stale)box.textContent='Working'+(a.workDisplay?' · '+a.workDisplay:'');
+ else{if(a?.running&&['ask','question'].includes(a.state)&&!a.stale){box.className+=' reply-needed';box.textContent=a.state==='ask'?'Reply needed · approval':'Reply needed · question';}else if(a?.stale)box.textContent='Activity observation unavailable';}
+ if(box.textContent)list.append(box);
+ const dot=document.querySelector?.('.reader-state');if(dot&&root?.isConnected){dot.dataset.state=a?.stale?'unknown':a?.state||'unknown';dot.title=a?.stale?'Activity observation unavailable':a?.state==='work'?'Working':a?.state==='ask'?'Approval needed':a?.state==='question'?'Reply needed':'Waiting';dot.setAttribute('aria-label',dot.title);}
+}
+
 function renderPending(){
- list?.querySelectorAll(':scope > .conversation-pending').forEach(x=>x.remove());
- for(const p of pending){const r=make('div','conversation-bubble user conversation-pending');r.append(body(p.text),make('small','conversation-time','Sent to terminal · not yet in the record'));list.append(r);}
+ list?.querySelectorAll(':scope > .conversation-pending').forEach(x=>{if(x.contains?.(document.activeElement))list.focus?.({preventScroll:true});x.remove();});
+ for(const p of pending){const r=make('div','conversation-bubble user conversation-pending');r.append(body(p.text),make('small','conversation-time','Sent to terminal · not yet in the record'));const dismiss=make('button','conversation-dismiss','Dismiss');dismiss.type='button';dismiss.onclick=()=>{list.tabIndex=-1;list.focus?.({preventScroll:true});pending=pending.filter(x=>x!==p);renderPending();activity();};r.append(dismiss);list.append(r);}
 }
 function settlePending(){
  const now=Date.now();
- pending=pending.filter(p=>now-p.at<180000&&!events.some(e=>e.role==='user'&&e.kind==='text'&&e.text.includes(p.text.trim())));
+ pending=pending.filter(p=>now-p.at<180000&&!events.some(e=>!p.before.has(e.id)&&e.role==='user'&&e.kind==='text'&&(markdown()?.submissionText(e.text)||e.text).trim()===p.text.trim()));
+}
+function groupShellRows(){
+ let owner=null;
+ for(const e of events){
+  const command=e.role==='user'&&markdown()?.commandRecord(e.text);
+  if(!command?.shell){owner=null;continue;}
+  const node=list.querySelector('[data-id="'+CSS.escape(e.id)+'"]');if(!node)continue;
+  if(command.command!==null||!owner){owner=node;continue;}
+  if(node.parentElement===owner)continue;
+  const focus=document.activeElement,held=node.contains?.(focus);
+  if(held)list.focus?.({preventScroll:true});
+  node.className='conversation-shell-part';node.querySelector('.conversation-speaker')?.remove();owner.append(node);
+  if(held&&focus.isConnected)focus.focus({preventScroll:true});
+ }
+}
+function dropEvent(id){
+ const node=list.querySelector('[data-id="'+CSS.escape(id)+'"]');if(!node)return;
+ // A group can outlive its oldest member at the 200-event limit. Promote
+ // retained output before removing that member, so its text is not lost.
+ for(const part of [...node.children].filter(x=>x.dataset.id!==undefined)){
+  part.className='conversation-shell';part.insertBefore(make('small','conversation-speaker','SHELL'),part.firstChild);node.parentNode.insertBefore(part,node);
+ }
+ if(node.contains?.(document.activeElement))list.focus?.({preventScroll:true});node.remove();
 }
 function append(page){
  const follow=atBottom(),fresh=page.filter(e=>!seen.has(e.id));
  for(const e of fresh){seen.add(e.id);events.push(e);list.insertBefore(row(e),list.querySelector(':scope > .conversation-pending'));}
  let dropped=false;
- while(events.length>MAX_KEPT){const gone=events.shift();seen.delete(gone.id);list.querySelector(':scope > [data-id="'+CSS.escape(gone.id)+'"]')?.remove();older=null;dropped=true;}
+ while(events.length>MAX_KEPT){const gone=events.shift();seen.delete(gone.id);dropEvent(gone.id);older=null;dropped=true;}
+ groupShellRows();
  // An omitted marker belongs to its page's old edge. Only when that edge's
  // messages are dropped at the kept limit does a marker above them go too.
  if(dropped)for(const n of [...list.children]){if(n.dataset?.id!==undefined)break;if(n.className==='conversation-omitted')n.remove();}
- settlePending();renderPending();
+ settlePending();renderPending();activity();
  if(follow){following=true;list.scrollTop=list.scrollHeight;}
  else if(fresh.length)setStatus('New messages below · paused while you read');
 }
@@ -216,6 +243,7 @@ function prepend(page,omitted){
  if(omitted)list.insertBefore(gap(),first);
  for(const e of fresh){seen.add(e.id);list.insertBefore(row(e),first);}
  events=fresh.concat(events);
+ groupShellRows();
  list.scrollTop+=list.scrollHeight-before;following=false;savedTop=list.scrollTop;
 }
 function reset(){closePreview();events=[];seen.clear();older=null;list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());}
@@ -266,19 +294,19 @@ function mount(n){
  unmount();name=n;root=make('div','conversation');root.id='conversation';
  status=make('p','conversation-status','Loading the record…');status.setAttribute('role','status');
  olderButton=make('button','conversation-older','Show older');olderButton.type='button';olderButton.hidden=true;olderButton.onclick=loadOlder;
- list=make('div','conversation-list');list.setAttribute('aria-label','Conversation record for '+n);
+ list=make('div','conversation-list');list.tabIndex=-1;list.setAttribute('aria-label','Conversation record for '+n);
  list.addEventListener('scroll',()=>{if(!list.isConnected)return;following=list.scrollHeight-list.clientHeight-list.scrollTop<=24;savedTop=list.scrollTop;if(following&&/paused/.test(status.textContent))setStatus('Read-only record · updating');},{passive:true});
  retryButton=make('button','conversation-retry','Retry');retryButton.type='button';retryButton.hidden=true;
  retryButton.onclick=()=>{retryButton.hidden=true;setStatus('Loading the record…');return poll();};
  list.append(olderButton);root.append(status,retryButton,list);poll();return root;
 }
 function element(){return root;}
-function addPending(text){if(!root||typeof text!=='string'||!text.trim())return;pending.push({text,at:Date.now()});renderPending();following=true;restore();}
+function addPending(text){if(!root||typeof text!=='string'||!text.trim())return;pending.push({text,at:Date.now(),before:new Set(seen)});renderPending();following=true;restore();}
 function unmount(){
  gen++;clearTimeout(timer);timer=0;closePreview();for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
  root?.replaceChildren();root?.remove();root=list=status=olderButton=retryButton=null;
  events=[];seen=new Set();older=null;pending=[];failures=0;loadingOlder=false;following=true;savedTop=0;name='';
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)unmount();});window.addEventListener('pagehide',unmount);
-window.OrreryMobileConversation={enabled,mount,element,unmount,addPending,restore};
+window.OrreryMobileConversation={enabled,mount,element,unmount,addPending,restore,dismissPreview,refreshActivity:activity};
 })();

@@ -16,6 +16,8 @@ import time
 
 CONTRACT='orrery-mobile-pane-v1'
 MAX_JSON_BYTES=16384
+MAX_PREVIEW_LINES=120
+MAX_PREVIEW_BYTES=12288
 HEX=re.compile(r'[a-f0-9]{64}\Z')
 EPOCH=re.compile(r'[a-f0-9]{32}\Z')
 NAME=re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,95}\Z')
@@ -107,11 +109,14 @@ class InputClient:
             expected={'contract','epoch','target','text','truncated','controls_removed','observed_at','max_lines','max_bytes'}
             if set(value)!=expected:raise InputUnavailable('input_response_invalid')
             value['target']=_public_target(value['target'],fresh=fresh)
+            lines,size=value['max_lines'],value['max_bytes']
+            if (type(lines) is not int or not 1<=lines<=MAX_PREVIEW_LINES
+                    or type(size) is not int or not 1<=size<=MAX_PREVIEW_BYTES):raise InputUnavailable('input_response_invalid')
             if (value['target']['choice']!=payload['choice'] or not isinstance(value['text'],str)
-                    or len(value['text'].encode('utf-8'))>6144 or len(value['text'].splitlines())>40
+                    or len(value['text'].encode('utf-8'))>size or len(value['text'].splitlines())>lines
                     or type(value['truncated']) is not bool or type(value['controls_removed']) is not bool
                     or type(value['observed_at']) is not int or value['observed_at']<=0
-                    or value['max_lines']!=40 or value['max_bytes']!=6144):raise InputUnavailable('input_response_invalid')
+                    ):raise InputUnavailable('input_response_invalid')
             return value
         expected={'contract','epoch','target','state','intent'}
         if operation=='prepare':expected|={'confirmation','expires_in','text'}
@@ -137,9 +142,10 @@ class InputClient:
                 try: sock.shutdown(socket.SHUT_RDWR)
                 except OSError: pass
             timer=threading.Timer(max(.001,deadline-time.monotonic()),expire); timer.daemon=True; timer.start()
+            headers={'X-ORRERY-Mobile-Preview':f'{MAX_PREVIEW_LINES}/{MAX_PREVIEW_BYTES}'} if operation=='preview' else {}
             connection.request('POST','/_mobile/terminal/'+operation,body=data,headers={
                 'Host':f'127.0.0.1:{self.port}','Origin':f'http://127.0.0.1:{self.port}',
-                'X-ORRERY-Mobile-Contract':CONTRACT,'Content-Type':'application/json','Connection':'close'})
+                'X-ORRERY-Mobile-Contract':CONTRACT,'Content-Type':'application/json','Connection':'close',**headers})
             response=connection.getresponse(); lengths=response.headers.get_all('Content-Length',[])
             if (response.status!=200 or response.getheader('Content-Type','').split(';')[0]!='application/json'
                     or response.headers.get_all('Transfer-Encoding',[]) or response.headers.get_all('Content-Encoding',[])

@@ -3,6 +3,17 @@ import pytest
 from dashboard.mobile_projection import SnapshotStore, project_agents, project_mail
 
 
+def test_working_duration_is_only_the_current_upstream_display():
+    from dashboard.mobile_projection import project_agent
+    raw = dict(name='SampleAgent', running=True, state='run', act_state='work', work_disp='2m05s')
+    assert project_agent(raw)['work_disp'] == '2m05s'
+    for invalid in (None, '', 'made up', '2m05s\nprivate', '9'*100, 123):
+        assert 'work_disp' not in project_agent({**raw, 'work_disp': invalid})
+    for state in ('wait', 'ask', 'question'):
+        assert 'work_disp' not in project_agent({**raw, 'act_state': state})
+    assert 'work_disp' not in project_agent({**raw, 'running': False})
+
+
 def test_fresh_identity_projection_and_same_name_instance_change_do_not_merge():
     from uuid import uuid4
     data=inputs();clock=[100.0]

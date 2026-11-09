@@ -116,6 +116,10 @@ def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None
     if not isinstance(raw, dict):
         return None
     kind, role = raw.get('kind'), raw.get('role')
+    # Generated notifications use the existing concise activity projection;
+    # private task IDs, output paths and full system details are not forwarded.
+    if kind == 'system' and role == 'system':
+        kind, role = 'tool', 'assistant'
     if kind not in {'text', 'tool', 'mail'} or role not in {'user', 'assistant'}:
         return None
     event_id = raw.get('id')
