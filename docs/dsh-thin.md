@@ -30,6 +30,10 @@ TUI の状態は本人の `harness_state_dir/tui` に保存し、起動時に選
 
 この最小 patch は固定版の preimage と適用後 hash を別世代の receipt に記録します。旧い `plain` と旧 managed の世代は書き換えずに残し、現在の generator は明示の `plain-datadir` を要求します。upstream に同等の設定が入ったら patch を外します。
 
+## モデルの画像入力
+
+動的 backend は起動直前の `/v1/models` の選択行から `architecture.input_modalities` を読み、native Messages adapter の `model_definition.inputModalities` に渡します。32要素以内の文字列配列に `text` があれば、対応する `text` / `image` だけを重複なく残します。`video` など未知の種類は除き、`["text","image","video"]` でも画像入力を使えます。欠落・型が不正・32要素超・`text` がない場合は従来どおり text のみです。モデル名や提供元から画像対応を推測しません。context と同じ1回の取得を使い、再開時にも取得し直すため、以前の画像対応を引き継ぎません。固定 backend の `model_definition.inputModalities` はそのまま尊重します。
+
 ## Compaction の予算
 
 動的 model の選択 context `C` は従来どおり server の `meta.n_ctx`、`context_override`、64,000 の順に決めます。生成する通常出力予算 `O` は `min(8192, floor(C/4))` です。`C` が16未満なら別の値へ置き換えず `invalid_compaction_context` で拒否します。server/override/default は由来であり、fallback の値は実測ではありません。

@@ -159,12 +159,16 @@ def test_shared_dynamic_prelaunch_leaves_fixed_models_without_io(monkeypatch):
     assert document=={'model':'fixed-model'}
 
 
-def test_real_dynamic_prepare_and_command_selected_endpoint_once(tmp_path, monkeypatch):
+@pytest.mark.parametrize('identity,context', [('deepseek-v4.1-flash', 131072), ('glm-5.3-flash', 262144)])
+@pytest.mark.parametrize('modalities,expected', [(['text', 'image'], ['text', 'image']),
+    (['text'], ['text']), (['text', 'image', 'video'], ['text', 'image'])])
+def test_real_dynamic_prepare_and_command_selected_endpoint_once(tmp_path, monkeypatch, identity, context, modalities, expected):
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from test_dsh_thin_config import ThinTests
     fixture = ThinTests(); fixture.setUp()
-    calls, payload = [], {'data': [{'id': 'new-wire-id', 'meta': {'n_ctx': 131072}}]}
+    calls, payload = [], {'data': [{'id': identity, 'meta': {'n_ctx': context},
+                                   'architecture': {'input_modalities': modalities}}]}
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             calls.append(self.path)
@@ -180,7 +184,7 @@ def test_real_dynamic_prepare_and_command_selected_endpoint_once(tmp_path, monke
         manifest['harnesses']['dsh']['python'] = sys.executable
         private(fixture.manifest, manifest)
         args = staged(tmp_path)
-        args.manifest, args.model, args.url_index = str(fixture.manifest), 'new-wire-id', 1
+        args.manifest, args.model, args.url_index = str(fixture.manifest), identity, 1
         args.url_key = child.native_server_models.url_key(base)
         mcp = child.read(args.mcp_config)
         mcp['mcpServers']['orrery-mail']['command'] = '/synthetic/mail-proxy'
@@ -189,13 +193,15 @@ def test_real_dynamic_prepare_and_command_selected_endpoint_once(tmp_path, monke
         state = child.prepare(args)
         assert calls == []
         source = child.read(state / 'input.json')
-        assert (source['backend_id'], source['url_index'], source['server_url'], source['model']) == ('strata', 1, base, 'new-wire-id')
+        assert (source['backend_id'], source['url_index'], source['server_url'], source['model']) == ('strata', 1, base, identity)
         invocation = child.command(state, args.agent_name)
         assert calls == ['/v1/models'] and 'synthetic-key' not in invocation
         overlay = child.read(state / 'dsh-config/native.patch.json')
         route = next(r['config'] for r in overlay if r.get('id') == 'llm-deepseek')
-        assert route['baseURL'] == base and route['models'][0]['id'] == 'new-wire-id'
-        assert route['models'][0]['contextWindow'] == 131072
+        assert route['baseURL'] == base and route['models'][0]['id'] == identity
+        assert route['models'][0]['contextWindow'] == context
+        assert route['models'][0]['maxTokens'] == 8192
+        assert route['models'][0].get('inputModalities', ['text']) == expected
         runtime = Path(args.runtime_dir)
         child_resume.finish_registration(runtime, args.agent_name, generation=args.generation, rollback=False)
         private(state / 'native-session.json', {'harness': 'dsh', 'agent_name': args.agent_name,
@@ -204,15 +210,19 @@ def test_real_dynamic_prepare_and_command_selected_endpoint_once(tmp_path, monke
         child_resume.begin_resume(runtime, args.agent_name, agent_id=7, project_key=args.project_key, program='dsh')
         assert child.prepare_resume(runtime, args.agent_name) == state
         assert len(calls) == 1
+        del payload['data'][0]['architecture']
         invocation = child.resume_command(runtime, args.agent_name)
         assert '--resume exact-native-id' in invocation and len(calls) == 2
+        overlay = child.read(state / 'dsh-config/native.patch.json')
+        route = next(r['config'] for r in overlay if r.get('id') == 'llm-deepseek')
+        assert route['models'][0].get('inputModalities', ['text']) == ['text']
         retained = child.read(state / 'input.json')
-        assert (retained['backend_id'], retained['url_index'], retained['server_url'], retained['model']) == ('strata', 1, base, 'new-wire-id')
+        assert (retained['backend_id'], retained['url_index'], retained['server_url'], retained['model']) == ('strata', 1, base, identity)
         payload['data'][0]['id'] = 'replacement-model'
         with pytest.raises(ValueError, match='model_not_served'):
             child.command(state, args.agent_name)
         assert len(calls) == 3
-        payload['data'][0] = {'id': 'new-wire-id', 'status': {'value': 'unloaded'}}
+        payload['data'][0] = {'id': identity, 'status': {'value': 'unloaded'}}
         with pytest.raises(ValueError, match='model_not_loaded'):
             child.command(state, args.agent_name)
         assert len(calls) == 4
@@ -223,7 +233,7 @@ def test_real_dynamic_prepare_and_command_selected_endpoint_once(tmp_path, monke
         monkeypatch.setattr(server, '_project_key', lambda: '/fixture/project')
         monkeypatch.setattr(server, 'spawn_with_launch_spec', lambda payload, spec: captured.append(spec) or {'ok': True})
         request = dict(standalone=True, task='Synthetic task', dir=str(tmp_path),
-            provider='strata', harness='dsh', model='new-wire-id', url_index=1, url_key=args.url_key)
+            provider='strata', harness='dsh', model=identity, url_index=1, url_key=args.url_key)
         assert server.do_spawn(request)['ok']
         assert captured[0].provider_args[:8] == ('--harness', 'dsh', '--backend', 'strata',
             '--url-index', '1', '--url-key', args.url_key)

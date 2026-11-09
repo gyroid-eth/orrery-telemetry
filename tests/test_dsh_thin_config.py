@@ -185,6 +185,42 @@ class ThinTests(unittest.TestCase):
             thin.generate({**self.doc, 'model': 'model', 'url_index': 0,
                 'server_url': 'https://fixture.invalid/v1', 'server_context': {'n_ctx': 8}})
 
+    def test_dynamic_model_input_modalities_and_budget(self):
+        manifest = thin.read(self.manifest)
+        manifest['backends']['strata'] = {'model_source': 'server', 'urls': ['https://fixture.invalid/v1']}
+        thin.save(self.manifest, manifest)
+        for identity, context in [('deepseek-v4.1-flash', 131072), ('glm-5.3-flash', 262144)]:
+            for modalities, expected in [
+                (['text', 'image'], ['text', 'image']), (['text'], ['text']),
+                (['text', 'image', 'video'], ['text', 'image']),
+                (['text', 'video'], ['text']), (['text', 'image', 'image'], ['text', 'image']),
+                (None, ['text']), ([], ['text']), ('image', ['text']),
+                (['image'], ['text']), (['image', 'image'], ['text']),
+                ([True, 'image'], ['text']), (['text', 'image', None], ['text']),
+                (['text', 'image'] + ['video'] * 31, ['text']),
+            ]:
+                with self.subTest(identity=identity, modalities=modalities):
+                    plan = thin.generate({**self.doc, 'model': identity, 'url_index': 0,
+                        'server_url': 'https://fixture.invalid/v1', 'server_context': {'n_ctx': context},
+                        'server_input_modalities': modalities})
+                    provider = next(row['config'] for row in self.rows(plan) if row.get('id') == 'llm-deepseek')
+                    definition = provider['models'][0]
+                    self.assertEqual(definition['id'], identity)
+                    self.assertEqual(definition['contextWindow'], context)
+                    self.assertEqual(definition['maxTokens'], 8192)
+                    self.assertEqual(definition.get('inputModalities', ['text']), expected)
+
+    def test_fixed_backend_preserves_explicit_input_modalities(self):
+        backends = self.root / 'backends.json'
+        value = thin.read(backends)
+        definition = value['backends']['strata']['model_definition']
+        definition.update(inputModalities=['text', 'image'], maxTokens=8192)
+        thin.save(backends, value)
+        # Discovery metadata must never replace a fixed backend's declaration.
+        plan = thin.generate({**self.doc, 'server_input_modalities': ['text']})
+        provider = next(row['config'] for row in self.rows(plan) if row.get('id') == 'llm-deepseek')
+        self.assertEqual(provider['models'], [definition])
+
     def test_dynamic_context_source_precedence_is_preserved(self):
         manifest = thin.read(self.manifest)
         manifest['backends']['strata'] = {'model_source': 'server', 'urls': ['https://fixture.invalid/v1'],
