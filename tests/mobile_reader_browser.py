@@ -29,7 +29,7 @@ def phone(request):
     source = dict(status='available', observed_at=time.time(), age_seconds=0)
     snapshot = dict(schema=1, window='day', observed_at=time.time(), sources={k: source for k in ['agents', 'graph', 'mail']}, agents=[agent], period=dict(seconds=86400, activity_unknown=0), graph=dict(nodes=[agent], edges=[], spawn=[], degraded=False, unrepresented_edges=0), timeline=dict(scope='0'*32, mail=[], states=[], events_truncated=False, edges_truncated=False, states_truncated=False))
     events = [dict(id='result', kind='text', role='assistant', text=RESULT, ts='2026-01-01T08:45:00Z'), dict(id='request', kind='text', role='user', text='Please check the large cache once more.', ts='2026-01-01T08:45:30Z'), dict(id='question', kind='text', role='assistant', text='Use the same inputs for the next run?', ts='2026-01-01T08:46:00Z')]
-    state = dict(events=events, error=None, preview_error=False, calls=[], draft='', snapshot=snapshot)
+    state = dict(events=events, error=None, preview_error=False, calls=[], get_calls=[], mail=None, draft='', snapshot=snapshot)
     contract = dict(contract='orrery-mobile-pane-v1', epoch='fixture-epoch')
     choice = dict(choice='fixture-choice', name='SampleAgent', pane_label='Window 0 · pane 0', revision='fixture-revision')
 
@@ -48,6 +48,11 @@ def phone(request):
 
         def do_GET(self):
             path = self.path.split('?')[0]
+            state['get_calls'].append(self.path)
+            if path == '/view/message' and state['mail']:
+                return self.send(dict(event=state['mail'], subject='Fixture subject', body='Fixture message body', subject_truncated=False, body_truncated=False))
+            if path == '/view/mail' and state['mail']:
+                return self.send(dict(window='day', direction='both', events=[state['mail']], next_cursor=None))
             if path == '/view/history':
                 return self.send(dict(enabled=True))
             if path == '/view/snapshot':

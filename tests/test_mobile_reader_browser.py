@@ -1,4 +1,6 @@
 """Selected full-screen mobile Conversation, using synthetic local APIs."""
+import time
+
 import pytest
 
 from mobile_reader_browser import AREA, phone  # noqa: F401
@@ -116,3 +118,32 @@ def test_working_shows_only_an_upstream_duration(phone):
     assert js("document.querySelector('.conversation-activity').textContent==='Working'")
     state['snapshot']['agents'][0]['work_disp'] = '2m05s'
     wait("document.querySelector('.conversation-activity').textContent==='Working · 2m05s'", 12)
+
+
+@pytest.mark.parametrize('view', ['activity', 'graph'])
+def test_mail_detail_fetches_and_displays_body_from_both_views(phone, view):
+    _, js, wait, state = phone
+    js("OrreryMobileTerminal.close()")
+    wait("!document.querySelector('#terminal-sheet').open&&history.state?.orreryConversation!==true")
+    peer = dict(state['snapshot']['agents'][0], name='OtherAgent')
+    state['snapshot']['agents'].append(peer)
+    state['snapshot']['graph']['nodes'].append(peer)
+    event = dict(key='a'*32, source='SampleAgent', target='OtherAgent', kind='to', event_at=time.time())
+    state['mail'] = event
+    state['snapshot']['timeline']['mail'] = [event]
+    state['snapshot']['graph']['edges'] = [dict(source='SampleAgent', target='OtherAgent', kind='to', count=1, last_ts=event['event_at'])]
+    js("window.__mailErrors=[];addEventListener('unhandledrejection',e=>{__mailErrors.push(String(e.reason));e.preventDefault()});document.dispatchEvent(new Event('visibilitychange'))")
+    wait("document.querySelector('#events .mail-route')!==null")
+    if view == 'graph':
+        js("document.querySelector('[data-view=graph]').click()")
+        wait("document.querySelector('#gsvg .edge-hit[data-kind=comm]')!==null")
+        js("document.querySelector('#gsvg .edge-hit[data-kind=comm]').dispatchEvent(new MouseEvent('click',{bubbles:true}))")
+        wait("document.querySelector('#pair-sheet').open&&document.querySelector('#pair-events .mail-route')!==null")
+        js("document.querySelector('#pair-events .mail-route').click()")
+    else:
+        js("document.querySelector('[data-view=activity]').click();document.querySelector('#events .mail-route').click()")
+    wait("__mailErrors.length>0||document.querySelector('#message-body').textContent!==''")
+    assert js('window.__mailErrors') == []
+    assert [p for p in state['get_calls'] if p.startswith('/view/message?')] == ['/view/message?window=day&event=' + event['key']]
+    assert js("document.querySelector('#message-sheet').open&&document.querySelector('#message-subject').textContent==='Fixture subject'&&document.querySelector('#message-body').textContent==='Fixture message body'")
+    assert js("history.state?.orreryConversation!==true")

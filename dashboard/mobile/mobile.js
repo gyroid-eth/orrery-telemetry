@@ -212,11 +212,11 @@ document.addEventListener('visibilitychange',()=>{
 });
 window.addEventListener('pagehide',()=>{clearDetail();clearPair();cancelMail();active?.abort();});
 
-function mailButton(event,window){
+function mailButton(event,period){
  const route=node('button','mail-route');route.type='button';route.dataset.event=event.key;
  route.appendChild(person(event.source));const to=person(event.target);to.classList.add('route-to');route.appendChild(to);
  route.append(node('span','route-kind',event.kind==='cc'?'Cc recipient':'To recipient'),node('span','open-message','Read message ›'));
- route.onclick=()=>openMessage(event,window);return route;
+ route.onclick=()=>openMessage(event,period);return route;
 }
 function clearDetail(close=true){
  document.querySelector('.terminal-mail-people')?.remove();
@@ -225,15 +225,15 @@ function clearDetail(close=true){
  $('#message-title').textContent='Message';
  if(close&&$('#message-sheet').open)$('#message-sheet').close();
 }
-async function openMessage(event,window){
+async function openMessage(event,period){
  clearDetail(false);const generation=detailGeneration,controller=new AbortController();detailController=controller;
- const sheet=$('#message-sheet');if(!sheet.open){sheet.showModal();if(history){window.history.pushState({orreryConversation:true},'');backEntry=true;}}
+ const sheet=$('#message-sheet');if(!sheet.open)sheet.showModal();
  $('#message-route').textContent=event.source+' → '+event.target+' · '+time(event.event_at)+' · '+event.kind;
  globalThis.OrreryMobileTerminal?.mail(event);
  $('#message-status').textContent='Loading one message…';
  const timeout=setTimeout(()=>controller.abort(),8000);
  try{
-  const response=await fetch('/view/message?'+new URLSearchParams({window,event:event.key}),{signal:controller.signal,cache:'no-store',credentials:'same-origin',referrerPolicy:'no-referrer'});
+  const response=await fetch('/view/message?'+new URLSearchParams({window:period,event:event.key}),{signal:controller.signal,cache:'no-store',credentials:'same-origin',referrerPolicy:'no-referrer'});
   const data=await response.json();
   if(generation!==detailGeneration||document.hidden||!sheet.open)return;
   if(!response.ok||!data.event||['key','source','target','kind','event_at'].some(k=>data.event[k]!==event[k])||typeof data.subject!=='string'||typeof data.body!=='string')throw Error('unavailable');
