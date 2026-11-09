@@ -785,7 +785,12 @@ function render(){
   refreshOutput();return;
  }
  if(history&&['editing','preparing'].includes(phase)){
-  if(!composer){composeToggle();if(!reading)scroll.append(make('p','terminal-message',message));refreshOutput();return;}
+  if(!composer){
+   composeToggle();if(!reading)scroll.append(make('p','terminal-message',message));
+   // Restore the held snapshot before an empty pre can be treated as following.
+   if(readTop!==null&&pre){terminalText(pre,readOutput);pre._preview=readPreview;pre._scrollView=readView;pre.scrollTop=readTop;}
+   refreshOutput();return;
+  }
   const panel=make('div','reader-composer');panel.setAttribute('role','region');panel.setAttribute('aria-label','Write input');const hide=action('×','reader-compose-close',()=>toggleComposer(false));hide.setAttribute('aria-label','Close input');panel.append(hide);sheet.append(panel);scroll=panel;actionsHost=panel;
   if(choice)panel.append(paneButton(choice.pane_label+' ⌄'));
  }

@@ -410,3 +410,32 @@ def test_open_info_updates_when_the_first_legacy_preview_arrives(phone):
     wait("document.querySelector('#terminal-output').textContent==='First legacy preview'")
     assert js("document.querySelector('.reader-info')===window.__infoBefore")
     assert js("document.querySelector('.reader-info').innerText.includes('40 lines · up to 6 KiB')")
+
+
+@pytest.mark.parametrize('phone',[(390,844),(390,640)],indirect=True)
+def test_terminal_info_keeps_held_snapshot_position_and_pending_update(phone):
+    _,js,wait,state=phone
+    raw='\n'.join(['    日本語と long/path/to/'+('artifacts/'*10)+str(i) for i in range(35)]+['','\t\ttab indent','─'*120,'<b>literal</b>',''])
+    state['preview_text']=raw
+    js("document.querySelector('.reader-bar [aria-label=Terminal]').click()")
+    wait('document.querySelector("#terminal-output")?.textContent==='+json.dumps(raw),8)
+    js("(()=>{const p=document.querySelector('#terminal-output');p.scrollTop=160;p.dispatchEvent(new Event('scroll'));const lines=[...p.querySelectorAll('.terminal-output-line')];window.__heldAnchor=lines.findIndex(n=>n.getBoundingClientRect().top>p.getBoundingClientRect().top+20)})()")
+    position="""(()=>{const p=document.querySelector('#terminal-output'),node=p.querySelectorAll('.terminal-output-line')[window.__heldAnchor].firstChild,r=document.createRange();r.setStart(node,20);r.setEnd(node,21);return {text:p.textContent,top:p.scrollTop,character:r.getBoundingClientRect().top,observed:p._preview.observed_at,following:p._scrollView.following,pending:document.querySelector('.reader-terminal-state').textContent}})()"""
+    before=js(position)
+    assert before['top']==160 and before['following'] is False
+    state['preview_text']=raw+'New snapshot text'
+    wait("document.querySelector('.reader-terminal-state').textContent==='New output · paused'",8)
+    for opened in [True,False,True,False]:
+        js("document.querySelector('.reader-info-toggle').click()")
+        wait("(document.querySelector('.reader-info')!==null)==="+str(opened).lower())
+        after=js(position)
+        assert after['text']==raw
+        assert abs(after['top']-before['top'])<=1
+        assert abs(after['character']-before['character'])<=1
+        assert after['observed']==before['observed']
+        assert after['following'] is False
+        assert after['pending']=='New output · paused'
+    # Resuming remains explicit and must display the pending snapshot at its tail.
+    js("(()=>{const p=document.querySelector('#terminal-output');p.scrollTop=p.scrollHeight;p.dispatchEvent(new Event('scroll'))})()")
+    wait('document.querySelector("#terminal-output").textContent==='+json.dumps(raw+'New snapshot text'))
+    assert js("(()=>{const p=document.querySelector('#terminal-output');return p.scrollHeight-p.clientHeight-p.scrollTop<=2&&document.querySelector('.reader-terminal-state').textContent==='';})()")
