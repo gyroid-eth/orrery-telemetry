@@ -37,7 +37,7 @@ function readerProfile(name,recordedModel=''){
  }
  return profile;
 }
-window.OrreryMobileProfile={forName:readerProfile,face(name,model){return face(readerProfile(name,model)||{name},1);},logo(name){const a=readerProfile(name);return a?providerMark(a,28):null;}};
+window.OrreryMobileProfile={forName:readerProfile,face(name,model){const e=face(readerProfile(name,model)||{name},1);e.setAttribute('aria-hidden','true');return e;}};
 function person(name){const a=snapshot.agents.find(x=>x.name===name)||{name,provider:'',model:'',locality:null};const e=node('div','person');e.append(face(a),node('span','name',name));return e;}
 function showView(view){
  clearDetail();clearPair();

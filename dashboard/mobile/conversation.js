@@ -16,6 +16,7 @@ const WAIT=20000;
 const controllers={poll:null,older:null,preview:null};
 let panel=null,saveUrl='',previewFocus=null;
 let events=[],seen=new Set(),older=null,pending=[],failures=0,loadingOlder=false,following=true,savedTop=0;
+let mailResize=null,mailWidth=0;
 const messages={
  history_unconfirmed:'This agent’s record is not verified as its own, so history stays hidden.',
  history_stale:'The verified record predates this launch, so history stays hidden.',
@@ -93,7 +94,34 @@ function refreshProfiles(){
  list.querySelectorAll('.conversation-byline').forEach(paintSpeaker);
  for(const mark of list.querySelectorAll('.conversation-mail-mark')){
   const p=window.OrreryMobileProfile?.forName(mark.dataset.peerName),key=JSON.stringify(p);if(mark.dataset.profile===key)continue;mark.dataset.profile=key;
-  const logo=window.OrreryMobileProfile?.logo(mark.dataset.peerName);mark.replaceChildren();mark.hidden=!logo;if(logo){logo.classList.add('conversation-provider-logo');mark.append(logo);}
+  const face=p&&window.OrreryMobileProfile?.face(mark.dataset.peerName);mark.replaceChildren();mark.hidden=!face;if(face){face.classList.add('conversation-avatar');mark.append(face);}
+ }
+ layoutMailRoutes();
+}
+function peerWidth(peer){
+ const mark=peer.querySelector('.conversation-mail-mark'),label=peer.querySelector('.conversation-mail-peer-name');
+ return label.scrollWidth+(mark.hidden?0:mark.getBoundingClientRect().width+5);
+}
+function layoutMailRoutes(){
+ if(!list?.isConnected)return;
+ for(const route of list.querySelectorAll('.conversation-mail-route')){
+  const recipients=route.querySelector('.conversation-mail-recipients'),peers=[...recipients.querySelectorAll('.conversation-mail-peer')],more=recipients.querySelector('.conversation-mail-more');
+  recipients.dataset.mode=peers.length===1?'single':'names';peers.forEach(p=>p.hidden=false);more.hidden=true;more.style.marginLeft='0';
+  if(peers.length<=1)continue;
+  const sender=route.querySelector('.conversation-mail-sender'),fixed=peerWidth(sender)+route.querySelector('.conversation-mail-chevron').getBoundingClientRect().width+route.querySelector('.conversation-mail-arrow').getBoundingClientRect().width+18;
+  const available=route.clientWidth-fixed,needed=peers.reduce((sum,p)=>sum+peerWidth(p),0)+(peers.length-1)*6;
+  if(needed<=available)continue;
+  recipients.dataset.mode='icons';
+  const known=peers.filter(p=>!p.querySelector('.conversation-mail-mark').hidden),budget=Math.max(0,available);
+  let visible=known.length;
+  // Keep the sender's full name before spending width on more recipient icons.
+  for(;;){
+   const omitted=peers.length-visible;more.textContent=omitted?'+'+omitted:'';more.hidden=!omitted;
+   const width=(visible?18+(visible-1)*14:0)+(omitted?(visible?6:0)+more.scrollWidth:0);
+   if(width<=budget||visible===0)break;visible--;
+  }
+  const shown=new Set(known.slice(0,visible));peers.forEach(p=>p.hidden=!shown.has(p));
+  more.style.marginLeft=visible?'6px':'0';
  }
 }
 function body(text,assistant=false){
@@ -106,8 +134,11 @@ function mailCard(m,ts){
  const card=make('button','conversation-mail '+m.direction);card.type='button';
  const head=make('div','conversation-mail-head'),route=make('div','conversation-mail-route');
  const peer=(value,strong)=>{const p=make('span','conversation-mail-peer'+(strong?' is-counterpart':'')),mark=make('span','conversation-mail-mark');mark.dataset.peerName=value||'';mark.hidden=true;p.title=value||'unknown';p.append(mark,make('span','conversation-mail-peer-name',value||'unknown'));return p;};
- route.append(make('span','conversation-mail-chevron','▸'),peer(m.sender,m.direction==='received'),make('span','conversation-mail-arrow','→'),peer(m.recipients[0],m.direction==='sent'));
- if(m.recipients.length>1){const more=make('span','conversation-mail-more','+'+(m.recipients.length-1));more.title=m.recipients.slice(1).join(', ');route.append(more);}
+ const sender=peer(m.sender,m.direction==='received');sender.classList.add('conversation-mail-sender');
+ const recipients=make('span','conversation-mail-recipients');recipients.title=m.recipients.join(', ');recipients.setAttribute('role','group');recipients.setAttribute('aria-label','Recipients: '+(m.recipients.join(', ')||'unknown'));
+ for(const recipient of m.recipients.length?m.recipients:['unknown'])recipients.append(peer(recipient,m.direction==='sent'));
+ const more=make('span','conversation-mail-more');more.hidden=true;recipients.append(more);
+ route.append(make('span','conversation-mail-chevron','▸'),sender,make('span','conversation-mail-arrow','→'),recipients);
  head.append(route);const at=clock(ts);if(at){const time=make('time','conversation-mail-time',at);time.dateTime=ts;head.append(time);}
  const subject=make('div','conversation-mail-subject-row');
  if(['high','urgent'].includes(m.importance)){const dot=make('span','conversation-mail-importance');dot.dataset.importance=m.importance;dot.title=dot.ariaLabel=m.importance==='high'?'High importance':'Urgent importance';dot.setAttribute('role','img');subject.append(dot);}
@@ -337,12 +368,15 @@ function mount(n){
  list.addEventListener('scroll',()=>{if(!list.isConnected)return;following=list.scrollHeight-list.clientHeight-list.scrollTop<=24;savedTop=list.scrollTop;if(following&&/paused/.test(status.textContent))setStatus('Read-only record · updating');},{passive:true});
  retryButton=make('button','conversation-retry','Retry');retryButton.type='button';retryButton.hidden=true;
  retryButton.onclick=()=>{retryButton.hidden=true;setStatus('Loading the record…');return poll();};
- list.append(olderButton);root.append(status,retryButton,list);poll();return root;
+ list.append(olderButton);root.append(status,retryButton,list);
+ mailResize=new ResizeObserver(()=>{if(list&&list.clientWidth!==mailWidth){mailWidth=list.clientWidth;layoutMailRoutes();}});mailResize.observe(list);
+ const g=gen;document.fonts.ready.then(()=>{if(g===gen)layoutMailRoutes();});poll();return root;
 }
 function element(){return root;}
 function addPending(text){if(!root||typeof text!=='string'||!text.trim())return;pending.push({text,at:Date.now(),before:new Set(seen)});renderPending();following=true;restore();}
 function unmount(){
  gen++;clearTimeout(timer);timer=0;closePreview();for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
+ mailResize?.disconnect();mailResize=null;mailWidth=0;
  root?.replaceChildren();root?.remove();root=list=status=olderButton=retryButton=null;
  events=[];seen=new Set();older=null;pending=[];failures=0;loadingOlder=false;following=true;savedTop=0;name='';
 }

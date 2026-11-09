@@ -256,6 +256,7 @@ html.graph-fullscreen #settings{z-index:40}
 /* Speaker identity shares the roster portrait and provider marks. */
 .conversation-byline{display:flex;align-items:center;gap:7px;min-width:0;margin:0 0 9px;color:var(--ink)}
 .conversation-byline .conversation-avatar{width:20px;height:20px;flex:none}
+.conversation-avatar,.conversation-avatar *{-webkit-user-select:none;user-select:none}
 .conversation-avatar .initials{font:500 10px var(--mono)}
 .conversation-avatar .badge{right:-3px;bottom:-2px;width:12px;height:12px}
 html[data-color-theme=light] .conversation-byline .provider-logo,html[data-color-theme=light] .conversation-mail-mark .provider-logo{filter:brightness(0)}
@@ -272,9 +273,15 @@ html[data-color-theme=light] .conversation-byline .provider-logo,html[data-color
 .conversation-mail-peer{display:inline-flex;align-items:center;gap:5px;min-width:0;flex:0 1 auto}
 .conversation-mail-peer-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .conversation-mail-peer.is-counterpart{font-size:13px;font-weight:600;color:var(--ink)}
-.conversation-mail-mark{display:inline-flex;flex:none;width:14px;height:14px}
-.conversation-mail-mark .conversation-provider-logo{position:static;width:14px;height:14px;overflow:visible}
-.conversation-mail-mark .provider-seat{display:none}
+.conversation-mail-mark{display:inline-flex;flex:none;width:18px;height:18px}
+.conversation-mail-mark .conversation-avatar{width:18px;height:18px}
+.conversation-mail-mark .badge{right:-2px;bottom:-1px;width:11px;height:11px}
+.conversation-mail-recipients{display:inline-flex;align-items:center;gap:6px;flex:0 1000 auto;min-width:0}
+.conversation-mail-recipients[data-mode=names]>.conversation-mail-peer{flex:none}
+.conversation-mail-recipients[data-mode=icons]{flex:none;gap:0}
+.conversation-mail-recipients[data-mode=icons]>.conversation-mail-peer{overflow:visible}
+.conversation-mail-recipients[data-mode=icons]>.conversation-mail-peer:not([hidden])~.conversation-mail-peer:not([hidden]){margin-left:-4px}
+.conversation-mail-recipients[data-mode=icons] .conversation-mail-peer-name{display:none}
 .conversation-mail-more,.conversation-mail-arrow,.conversation-mail-chevron{flex:none;font:10px var(--mono);white-space:nowrap}
 .mobile .conversation-mail-time{flex:none;margin-left:auto;font:9px var(--mono);white-space:nowrap;color:var(--ink-dim)}
 .conversation-mail-subject-row{display:flex;align-items:baseline;gap:7px;margin-top:5px}

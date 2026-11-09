@@ -35,13 +35,91 @@ def test_reader_mail_route_keeps_recipient_count_and_unknown_peer_has_no_logo(ph
         direction='sent',sender='SampleAgent',recipients=recipients,importance='high',subject='Long subject '+('確認 '*25),
         body='Recorded body',coverage='request',truncated=False)]))
     wait("document.querySelector('[data-id=route]')!==null",8)
-    assert js("document.querySelector('[data-id=route] .conversation-mail-more')?.textContent==='+11'")
-    assert js("document.querySelectorAll('[data-id=route] .conversation-mail-peer')[1].querySelector('.conversation-provider-logo')===null")
-    assert js("document.querySelectorAll('[data-id=route] .conversation-mail-peer')[0].querySelector('.conversation-provider-logo')!==null")
+    assert js("document.querySelector('[data-id=route] .conversation-mail-more')?.textContent==='+12'")
+    assert js("document.querySelectorAll('[data-id=route] .conversation-mail-peer')[1].querySelector('.conversation-avatar')===null")
+    assert js("document.querySelectorAll('[data-id=route] .conversation-mail-peer')[0].querySelector('.conversation-avatar')!==null")
     assert js("document.querySelector('[data-id=route] [data-importance=high]')?.getAttribute('aria-label')==='High importance'")
     assert js("(()=>{const c=document.querySelector('[data-id=route]'),n=c.querySelector('.conversation-mail-more'),r=n.getBoundingClientRect(),p=c.getBoundingClientRect();return n.clientWidth>=n.scrollWidth&&r.left>=p.left&&r.right<=p.right&&c.scrollWidth<=c.clientWidth+1})()")
     js("document.querySelector('[data-id=route] .conversation-mail').click()")
     assert js("document.querySelector('[data-id=route] .conversation-mail').getAttribute('aria-expanded')==='true'&&document.querySelector('[data-id=route] .conversation-mail-body').hidden===false")
+
+
+def test_selection_across_replies_excludes_decorative_avatar_initials(phone):
+    _, js, wait, state = phone
+    texts = ['COPY_BEGIN', 'COPY_MIDDLE', 'COPY_END']
+    state['events'].extend(dict(id='copy-'+str(i), kind='text', role='assistant', text=text, ts='')
+                           for i, text in enumerate(texts))
+    wait("document.querySelector('[data-id=copy-2] .conversation-avatar .initials')!==null", 8)
+    selected = js("""(()=>{
+      const first=document.querySelector('[data-id=copy-0] .conversation-text'),
+        last=document.querySelector('[data-id=copy-2] .conversation-text');
+      const start=document.createTreeWalker(first,NodeFilter.SHOW_TEXT).nextNode(),
+        walker=document.createTreeWalker(last,NodeFilter.SHOW_TEXT);
+      let end,node;while(node=walker.nextNode())end=node;
+      const range=document.createRange();range.setStart(start,0);range.setEnd(end,end.length);
+      const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
+      return selection.toString();
+    })()""")
+    assert all(text in selected for text in texts)
+    assert 'SampleAgent' in selected
+    assert 'S' not in selected.splitlines(), selected
+
+
+def test_mail_uses_registered_peer_portraits_without_copying_initials(phone):
+    _, js, wait, state = phone
+    state['snapshot']['agents'].append(dict(name='Recipient', provider='anthropic', model='claude-opus-5-5'))
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("OrreryMobileProfile.forName('Recipient')!==null")
+    state['events'].extend([
+        dict(id='mail-copy-before',kind='text',role='assistant',text='MAIL_BEGIN',ts=''),
+        dict(id='portrait-route',kind='mail',role='assistant',text='',ts='',mail=[dict(
+            direction='sent',sender='SampleAgent',recipients=['Recipient','Unknown'],importance='urgent',
+            subject='Mail subject',body='Mail body',coverage='request',truncated=False)]),
+        dict(id='mail-copy-after',kind='text',role='assistant',text='MAIL_END',ts='')])
+    wait("document.querySelector('[data-id=mail-copy-after]')!==null",8)
+    wait("document.querySelectorAll('[data-id=portrait-route] .conversation-avatar .initials').length===2")
+    assert js("[...document.querySelectorAll('[data-id=portrait-route] .conversation-avatar')].every(e=>{const s=e.getBoundingClientRect();return s.width>=16&&s.width<=18&&s.height===s.width})")
+    assert js("document.querySelector('[data-id=portrait-route] [data-provider=openai]')!==null&&document.querySelector('[data-id=portrait-route] [data-provider=anthropic]')!==null")
+    selected = js("""(()=>{
+      const range=document.createRange();
+      range.setStartBefore(document.querySelector('[data-id=mail-copy-before] .conversation-text'));
+      range.setEndAfter(document.querySelector('[data-id=mail-copy-after] .conversation-text'));
+      const s=getSelection();s.removeAllRanges();s.addRange(range);return s.toString();
+    })()""")
+    assert all(text in selected for text in ['MAIL_BEGIN','Mail subject','MAIL_END'])
+    assert not {'S','R'}.intersection(selected.splitlines()), selected
+
+
+def test_mail_recipients_adapt_to_width_and_preserve_sender(phone):
+    client, js, wait, state = phone
+    names = ['RecipientAlpha','RecipientBeta','RecipientGamma','RecipientDelta',
+             'RecipientEpsilon','RecipientZeta','RecipientEta','UnregisteredPeer']
+    state['snapshot']['agents'].extend(dict(name=n,provider='anthropic',model='claude-opus-5-5') for n in names[:-1])
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("OrreryMobileProfile.forName('RecipientEta')!==null")
+    for count in [1,3,8]:
+        state['events'].append(dict(id='adaptive-'+str(count),kind='mail',role='assistant',text='',ts='2026-01-01T08:45:00Z',mail=[dict(
+            direction='sent',sender='SampleAgent',recipients=names[:count],importance='normal',
+            subject='Recipients '+str(count),body='Recorded body',coverage='request',truncated=False)]))
+    wait("document.querySelector('[data-id=adaptive-8]')!==null",8)
+    assert js("document.querySelector('[data-id=adaptive-3] .conversation-mail-recipients')!==null")
+    for width in [1200,600,360,1200]:
+        client.call('Emulation.setDeviceMetricsOverride',width=width,height=844,deviceScaleFactor=2,mobile=True)
+        mode = 'icons' if width==360 else 'names'
+        wait("document.querySelector('[data-id=adaptive-3] .conversation-mail-recipients').dataset.mode==='"+mode+"'")
+        assert js("document.querySelector('[data-id=adaptive-1] .conversation-mail-recipients').dataset.mode==='single'")
+        assert js("""[...document.querySelectorAll('[data-id^=adaptive-] .conversation-mail')].every(card=>{
+          const label=card.querySelector('.conversation-mail-sender .conversation-mail-peer-name');
+          return card.scrollWidth<=card.clientWidth+1&&label.scrollWidth<=label.clientWidth+1;
+        })""")
+        assert js("document.querySelector('[data-id=adaptive-8] .conversation-mail-recipients').getAttribute('aria-label').includes('UnregisteredPeer')")
+        assert js("document.querySelector('[data-id=adaptive-8] .conversation-mail-recipients').title.includes('RecipientAlpha')")
+        if width==360:
+            assert js("""(()=>{const r=document.querySelector('[data-id=adaptive-8] .conversation-mail-recipients'),
+              peers=[...r.querySelectorAll('.conversation-mail-peer')].filter(p=>!p.hidden),
+              extra=Number(r.querySelector('.conversation-mail-more').textContent.slice(1));
+              return peers.length>0&&peers.length+extra===8&&peers.every(p=>p.querySelector('.conversation-avatar'))&&
+                !peers.some(p=>p.title==='UnregisteredPeer')&&peers.every(p=>getComputedStyle(p.querySelector('.conversation-mail-peer-name')).display==='none');})()""")
 
 
 def test_compact_record_stays_a_short_activity_line(phone):
