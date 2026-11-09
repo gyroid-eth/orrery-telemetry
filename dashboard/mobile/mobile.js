@@ -530,6 +530,10 @@ function refreshOutput(){
  const stream=q('.terminal-stream');if(stream)stream.textContent=previewOK?(pending?'New output · paused':reading?'Reading earlier output':'Updating every 3s'):'Preview unavailable';
  const age=q('.terminal-age');if(age)age.textContent=shown?'Shown '+new Date(shown.observed_at*1000).toLocaleTimeString('en-GB'):'';
  const note=q('.terminal-preview-note');if(note)note.textContent=[shown?.truncated?'Tail shortened to 6 KiB.':'',shown?.controls_removed?'Control sequences removed.':'',pending?'Scroll to bottom to show the latest tail. Output between snapshots (40 lines / 6 KiB) may be missing.':''].filter(Boolean).join(' ');
+ const terminalState=q('.reader-terminal-state');if(terminalState)terminalState.textContent=previewOK?(pending?'New output · paused':reading?'Reading earlier output':''):'';
+ const terminalInfo=q('.reader-terminal-info');if(terminalInfo)terminalInfo.textContent=[stream?.textContent,age?.textContent].filter(Boolean).join(' · ');
+ const terminalNote=q('.reader-terminal-note');if(terminalNote)terminalNote.textContent=note?.textContent||'';
+ const dot=q('.reader-state');if(tab==='terminal'&&dot){dot.dataset.state=previewOK?'work':'unknown';dot.title=previewOK?'Terminal updating every 3s':'Terminal preview unavailable';dot.setAttribute('aria-label',dot.title);}
  const review=q('#terminal-review');if(review)review.disabled=phase!=='editing'||!previewOK||!validText(text);
  const status=q('.terminal-message');if(status)status.textContent=message;
 }
@@ -557,6 +561,7 @@ function invalidate(reason){stop();cancelIntent();text='';output='';preview=null
 function validText(value){return typeof value==='string'&&value.trim()&&new TextEncoder().encode(value).length<=4096&&!/[\p{Cc}\p{Cs}\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value);}
 async function reviewInput(){
  if(!target||!choice||!previewOK||!validText(text))return;
+ if(history)tab='conversation';
  clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,t=target,draft=text,controller=new AbortController();operationController=controller;phase='preparing';render();
  try{
@@ -579,7 +584,7 @@ async function send(){
   if(result.intent!==p.intent||result.target?.revision!==p.target.revision||!sameTarget(result.target))throw Error('unavailable');
   phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';
   // Local display only, until the same words appear in the verified record.
-  if(phase==='accepted'&&history)conversation()?.addPending(sentText);
+  if(phase==='accepted'&&history){tab='conversation';composer=false;conversation()?.addPending(sentText);}
   render();
  }catch(_){if(g===generation&&sheet.open){phase='unknown';render();}}
  finally{if(g===generation){operationController=null;if(!document.hidden&&sheet.open)poll();}}
@@ -603,6 +608,7 @@ window.visualViewport?.addEventListener('resize',resizeSheet);window.visualViewp
 function dismissLayer(){if(conversation()?.dismissPreview?.())return true;if(info){info=false;render();queueMicrotask(()=>q('.reader-info-toggle')?.focus({preventScroll:true}));return true;}if(composer&&phase==='editing'){toggleComposer(false);return true;}return false;}
 function toggleComposer(on){
  if(on&&busy())return;
+ if(on&&history){tab='conversation';if(['accepted','refused'].includes(phase)){cancelIntent();phase='editing';}}
  if(!on&&phase==='preparing'){stop();cancelIntent();phase='editing';poll();}
  composer=on;info=false;render();queueMicrotask(()=>q(on?'#terminal-text':'.reader-compose-toggle')?.focus({preventScroll:true}));
 }
@@ -619,22 +625,33 @@ function readerBar(){
   if(['conversation','terminal'].includes(value)){b.setAttribute('aria-pressed',String(tab===value));b.disabled=busy();}
   if(value==='info'){b.setAttribute('aria-expanded',String(info));b.setAttribute('aria-controls','reader-info');}bar.append(b);
  }
- sheet.append(bar);queueMicrotask(()=>conversation()?.refreshActivity?.());
- if(info){const box=make('div','reader-info');box.id='reader-info';box.append(make('p','','Conversation record · read-only. New messages below stay paused while you read.'),make('p','','One line + Enter · up to 4096 bytes. Review shows the terminal tail before Send once.'),make('p','',choice?'Sends to '+choice.pane_label+'. Existing terminal input may be combined with it.':'Choose a verified pane in Terminal to write.'),make('p','','Working shows the recorded turn duration when available. Links open in a new tab; local paths stay text.'));
+ sheet.append(bar);queueMicrotask(()=>{conversation()?.refreshActivity?.();refreshOutput();});
+ if(info){const box=make('div','reader-info');box.id='reader-info';
+ if(tab==='terminal')box.append(make('p','','Terminal tail · latest 40 lines · up to 6 KiB. Snapshots update every 3s; output between snapshots may be missing.'),make('p','reader-terminal-info',''),make('p','reader-terminal-note',''),make('p','','Long lines scroll horizontally. Reading earlier output pauses the displayed snapshot; scroll to the bottom to resume.'));
+ else box.append(make('p','','Conversation record · read-only. New messages below stay paused while you read.'),make('p','','Working shows the recorded turn duration when available. Links open in a new tab; local paths stay text.'));
+ box.append(make('p','','One line + Enter · up to 4096 bytes. Review shows the terminal tail before Send once.'),make('p','',choice?'Sends to '+choice.pane_label+'. Existing terminal input may be combined with it.':'Choose a verified pane in Terminal to write.'));
  if(choice)box.append(paneButton(choice.pane_label+' · Change pane'));sheet.append(box);}
 }
 function composeToggle(){const b=action('','reader-compose-toggle',()=>toggleComposer(true));b.disabled=busy();b.setAttribute('aria-label','Write input');b.title='Write input';b.setAttribute('aria-expanded','false');const mark=make('span','','✎');mark.setAttribute('aria-hidden','true');b.append(mark);sheet.append(b);}
+function readerReceipt(){
+ const accepted=phase==='accepted',unknown=phase==='unknown',sending=phase==='sending',box=make('div','reader-receipt '+phase);box.setAttribute('role','status');
+ box.append(make('strong','',accepted?'Received by terminal':unknown?'Outcome unknown':sending?'Sending once…':'Input not sent'));
+ box.append(make('small','',accepted?'Input and Enter received. Completion is not confirmed.':unknown?'Some input may have arrived. No automatic retry.':sending?'Waiting for the terminal receipt.':'Input refused or confirmation expired.'));
+ if(unknown)box.append(action('Check receipt','',status));
+ sheet.append(box);if(accepted||phase==='refused')composeToggle();
+}
 function render(){
  const focus=document.activeElement,hadFocus=focus&&sheet.contains?.(focus);if(hadFocus){sheet.tabIndex=-1;sheet.focus({preventScroll:true});}
+ const previousReview=q('.reader-review');
  const previous=q('#terminal-output');
  // Review/edit rebuild the sheet for the same pane. Choosing a pane and
  // reopening clear output first, so their new preview still opens at its tail.
  const readTop=previewOK&&previous&&!terminalFollowing(previous)?previous.scrollTop:null;
  const readOutput=readTop!==null?previous.textContent:'',readPreview=readTop!==null?previous._preview:null,readView=readTop!==null?previous._scrollView:null;
  resizeSheet();sheet.replaceChildren();if(hadFocus)queueMicrotask(()=>{if(focus.isConnected)focus.focus({preventScroll:true});else if(focus.id)q('#'+focus.id)?.focus({preventScroll:true});else if(focus.classList?.contains('reader-info-toggle'))q('.reader-info-toggle')?.focus({preventScroll:true});});
- // Review always shows the terminal tail, even when it was started from the
- // Conversation tab: nothing is sent without seeing the pane first.
- const reading=tab==='conversation'&&phase!=='review';
+ // Review keeps the conversation mounted and shows the verified pane tail
+ // inside the input panel. Sending still requires explicit confirmation.
+ const reading=tab==='conversation';
  sheet.classList.toggle('reader-fullscreen',history);
  if(history)readerBar();else{
  const header=make('div','terminal-header'),title=make('h2','',phase==='review'?'Review input':reading?'Conversation':'Terminal');title.id='terminal-title';header.append(title,action('Close','terminal-close',close));sheet.append(header);
@@ -647,7 +664,7 @@ function render(){
   sheet.append(tabs);
  }
  }
- let scroll=make('div','terminal-scroll'+(reading?' conversation-mode':''));sheet.append(scroll);
+ let scroll=make('div','terminal-scroll'+(reading?' conversation-mode':history?' reader-terminal':''));sheet.append(scroll);
  if(reading){
   const view=conversation()?.element()||conversation()?.mount(name);if(view){scroll.append(view);queueMicrotask(()=>{conversation()?.restore();if(focus?.isConnected&&hadFocus)focus.focus({preventScroll:true});});}
   const warning=make('p','terminal-message',message);warning.setAttribute('role','status');sheet.append(warning);
@@ -656,6 +673,7 @@ function render(){
    const hint=make('div','conversation-compose-hint');hint.append(make('span','',phase==='loading'?'Finding a pane to write to…':'To write, choose a pane in Terminal.'));
    if(phase!=='loading')hint.append(action('Terminal','',()=>switchTab('terminal')));hint.append(make('p','terminal-result',message));scroll.append(hint);return;
   }
+  if(['sending','accepted','unknown','refused'].includes(phase)){readerReceipt();refreshOutput();return;}
  }
  if(phase==='loading'){scroll.append(make('p','terminal-help','Finding selectable panes…'));return;}
  if(phase==='choose'){
@@ -666,8 +684,14 @@ function render(){
  if(['unavailable','changed'].includes(phase)){
   scroll.append(make('p','terminal-result',phase==='changed'?'Pane changed':'Terminal unavailable'),make('p','terminal-help',message));sheet.append(action('Refresh panes','terminal-button',list));return;
  }
- let pre=null;
- if(!reading){
+ let pre=null,actionsHost=sheet;
+ const inlineReview=reading&&phase==='review';
+ if(inlineReview){
+  const panel=make('div','reader-composer reader-review');panel.setAttribute('role','region');panel.setAttribute('aria-label','Review input');panel.tabIndex=-1;
+  panel.append(make('h3','','Review input'),make('p','reader-review-target',prepared.target.name+' · '+prepared.target.pane_label));sheet.append(panel);scroll=panel;actionsHost=panel;
+  if(!previousReview)queueMicrotask(()=>{if(panel.isConnected)panel.focus({preventScroll:true});});
+ }
+ if(!reading||inlineReview){
  const terminal=make('div','terminal-preview'),bar=make('div','terminal-preview-head');bar.append(make('span','terminal-stream',''),make('span','','Terminal tail'));pre=make('pre','terminal-output');pre.id='terminal-output';terminal.append(bar,pre);scroll.append(terminal);
  pre.addEventListener('scroll',refreshOutput,{passive:true});
  pre.addEventListener('wheel',event=>{
@@ -694,8 +718,13 @@ function render(){
   terminalScrollGesture(pre,!event.defaultPrevented&&(['ArrowDown','PageDown','End'].includes(event.key)||event.key===' '&&!event.shiftKey));
  });
  const observed=make('div','terminal-observed');observed.append(make('span','','Latest 40 lines · up to 6 KiB'),make('span','terminal-age',''));scroll.append(observed,make('p','terminal-preview-note',''));
+ if(history&&!inlineReview){const state=make('p','reader-terminal-state');state.setAttribute('role','status');scroll.append(state);}
  }
- let actionsHost=sheet;
+ if(history&&!reading&&['sending','accepted','unknown','refused'].includes(phase)){
+  readerReceipt();scroll.append(make('p','terminal-message',message));
+  if(readTop!==null&&pre){pre.textContent=readOutput;pre._preview=readPreview;pre._scrollView=readView;pre.scrollTop=readTop;}
+  refreshOutput();return;
+ }
  if(history&&['editing','preparing'].includes(phase)){
   if(!composer){composeToggle();if(!reading)scroll.append(make('p','terminal-message',message));refreshOutput();return;}
   const panel=make('div','reader-composer');panel.setAttribute('role','region');panel.setAttribute('aria-label','Write input');const hide=action('×','reader-compose-close',()=>toggleComposer(false));hide.setAttribute('aria-label','Close input');panel.append(hide);sheet.append(panel);scroll=panel;actionsHost=panel;
@@ -709,7 +738,7 @@ function render(){
   field.oninput=()=>{text=field.value;count.textContent=new TextEncoder().encode(text).length+' / 4096 bytes';review.disabled=!previewOK||!validText(text);};field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};actions.append(action('Cancel','',history?()=>toggleComposer(false):close),review);actionsHost.append(actions);
  }else if(phase==='review'){
   scroll.append(make('p','terminal-compose-label','Exact text to '+prepared.target.name),make('pre','terminal-exact',prepared.text));const enter=make('div','terminal-enter');enter.append(make('span','','After this text'),make('kbd','','Enter ↵'));scroll.append(enter,make('p','terminal-help','Sends once to this pane. It may be a shell. Existing terminal input may be combined with it.'));
-  const actions=make('div','terminal-actions');actions.append(action('Edit','',()=>{cancelIntent();phase='editing';render();}),action('Send once','terminal-primary',send));sheet.append(actions);
+  const actions=make('div','terminal-actions');actions.append(action('Edit','',()=>{cancelIntent();phase='editing';render();}),action('Send once','terminal-primary',send));actionsHost.append(actions);
  }else{
   const accepted=phase==='accepted',unknown=phase==='unknown';scroll.append(make('p','terminal-result',accepted?'Received by terminal':unknown?'Outcome unknown':phase==='sending'?'Sending once…':'Input not sent'),make('p','terminal-receipt',accepted?'Input and Enter received. This does not confirm the task is complete.':unknown?'Some input may have arrived. No automatic retry. Check the pane before writing again.':phase==='sending'?'Waiting for the terminal receipt.':'The input was refused or its confirmation expired.'));
   if(accepted)scroll.append(make('p','terminal-result-note','The pane keeps updating while this sheet is open.'));

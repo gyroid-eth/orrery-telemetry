@@ -77,7 +77,7 @@ def phone(request):
             if operation == 'targets':
                 return self.send(dict(contract, targets=[choice]))
             if operation == 'preview':
-                return self.send(dict(contract, target=choice, text='Generated terminal tail\nReady.', observed_at=time.time()), status=503 if state['preview_error'] else 200)
+                return self.send(dict(contract, target=choice, text=state.get('preview_text', 'Generated terminal tail\nReady.'), observed_at=time.time()), status=503 if state['preview_error'] else 200)
             if operation == 'prepare':
                 state['draft'] = payload['text']
                 return self.send(dict(contract, state='prepared', target=choice, text=payload['text'], expires_in=30, intent='fixture-intent', confirmation='fixture-confirmation'))

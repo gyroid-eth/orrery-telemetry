@@ -221,7 +221,7 @@ html.graph-fullscreen #settings{z-index:40}
 .reader-person img,.reader-initials{flex:none;width:25px;height:25px;border:1px solid var(--hair);border-radius:50%;filter:grayscale(1);object-fit:cover}
 .reader-person img{position:absolute;left:0}.reader-initials{display:grid;place-items:center;font:12px var(--serif);color:var(--ink-dim)}
 .reader-state{flex:none;width:5px;height:5px;border-radius:50%;background:var(--ink-dim)}.reader-state[data-state=work]{background:var(--amber)}.reader-state[data-state=ask],.reader-state[data-state=question]{background:var(--alert)}
-.mobile .reader-icon{display:grid;place-items:center;width:32px;min-height:36px;flex:none;padding:0;border:0;border-radius:5px;color:var(--ink-dim)}
+.mobile .reader-icon{display:grid;place-items:center;width:44px;min-width:44px;min-height:44px;flex:none;padding:0;border:0;border-radius:5px;color:var(--ink-dim);touch-action:manipulation}
 .reader-icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .mobile .reader-icon[aria-pressed=true]{color:var(--amber);background:color-mix(in srgb,var(--amber) 8%,transparent)}
 .reader-fullscreen>.terminal-scroll{padding-top:calc(60px + env(safe-area-inset-top));padding-bottom:calc(82px + env(safe-area-inset-bottom))}
@@ -255,3 +255,31 @@ html.graph-fullscreen #settings{z-index:40}
 
 .reader-fullscreen:has(>.terminal-message:not(:empty)) .conversation-status:not([hidden]){padding-top:7px}
 .reader-fullscreen:has(>.terminal-message:not(:empty)) .conversation-list,.reader-fullscreen .conversation:has(>.conversation-status:not([hidden])) .conversation-list{padding-top:14px}
+
+/* Keep confirmation within Conversation; the ordinary Terminal tab is separate. */
+.reader-icon svg,.reader-icon svg *{pointer-events:none}
+.mobile .reader-review{max-height:min(70dvh,calc(100% - 48px - env(safe-area-inset-top)));outline:none}
+.mobile .reader-review h3{font:500 17px var(--serif);margin:0 0 5px}
+.mobile .reader-review-target{font:11px/1.5 var(--mono);color:var(--ink-dim);margin:0 0 10px;overflow-wrap:anywhere}
+.mobile .reader-review .terminal-preview{height:112px;min-height:72px;flex:none}
+.mobile .reader-review .terminal-output{font:10.5px/1.6 var(--mono);padding:8px 10px}
+.mobile .reader-review .terminal-preview-head{padding:6px 10px;font-size:9px}
+.mobile .reader-review .terminal-observed{margin:5px 0 9px;font-size:9px}
+.mobile .reader-review .terminal-help{display:block;margin:8px 0;font-size:10px}
+.mobile .reader-review .terminal-exact{font:12px/1.6 var(--mono);margin-bottom:8px;max-height:90px;overflow:auto}
+.mobile .reader-review .terminal-enter{padding:6px 0}
+.reader-review .terminal-actions{position:sticky;bottom:0;background:var(--panel)}
+.reader-receipt{position:absolute;z-index:4;left:16px;right:82px;bottom:calc(18px + env(safe-area-inset-bottom));padding:8px 10px;border:1px solid var(--hair);border-radius:7px;background:var(--panel);color:var(--ink-dim);font:10px/1.6 var(--mono);max-height:25%;overflow:auto}
+.reader-receipt strong,.reader-receipt small{display:block;font:inherit}.reader-receipt strong{color:var(--ink);font-weight:500}
+.reader-receipt.sending,.reader-receipt.unknown{right:16px}.reader-receipt.unknown,.reader-receipt.refused{border-color:var(--alert)}
+.mobile .reader-receipt .terminal-button{min-height:34px;padding:4px 10px;font-size:11px;margin-top:6px}
+.reader-fullscreen:has(.reader-receipt.unknown) .conversation-list{padding-bottom:calc(150px + env(safe-area-inset-bottom))}
+
+/* Terminal uses the same full-screen reading surface, with an aligned tail. */
+.reader-fullscreen>.reader-terminal{display:flex;flex-direction:column;overflow:hidden}
+.reader-terminal .terminal-preview{flex:1;height:auto;min-height:0;border:0;border-radius:0;background:none}
+.reader-terminal .terminal-preview-head,.reader-terminal .terminal-observed,.reader-terminal .terminal-preview-note{display:none}
+.mobile .reader-terminal .terminal-output{display:flex;flex-direction:column;justify-content:safe flex-end;white-space:pre;overflow-wrap:normal;overflow:auto;font:11px/1.75 var(--mono);padding:0 0 6px;scrollbar-width:thin}
+.mobile .reader-terminal-state{flex:none;font:10px/1.6 var(--mono);color:var(--ink-dim);padding:5px 0}
+.reader-terminal-state:empty,.reader-terminal .terminal-message:empty{display:none}
+.mobile .reader-terminal .terminal-message:not(:empty){flex:none;max-height:25%;overflow:auto;border:1px solid var(--alert);padding:7px 10px;font:11px/1.7 var(--mono);color:var(--ink)}

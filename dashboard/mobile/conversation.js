@@ -185,7 +185,7 @@ function activity(){
  if(a?.running&&a.state==='work'&&!a.stale)box.textContent='Working'+(a.workDisplay?' · '+a.workDisplay:'');
  else{if(a?.running&&['ask','question'].includes(a.state)&&!a.stale){box.className+=' reply-needed';box.textContent=a.state==='ask'?'Reply needed · approval':'Reply needed · question';}else if(a?.stale)box.textContent='Activity observation unavailable';}
  if(box.textContent)list.append(box);
- const dot=document.querySelector?.('.reader-state');if(dot){dot.dataset.state=a?.stale?'unknown':a?.state||'unknown';dot.title=a?.stale?'Activity observation unavailable':a?.state==='work'?'Working':a?.state==='ask'?'Approval needed':a?.state==='question'?'Reply needed':'Waiting';}
+ const dot=document.querySelector?.('.reader-state');if(dot&&root?.isConnected){dot.dataset.state=a?.stale?'unknown':a?.state||'unknown';dot.title=a?.stale?'Activity observation unavailable':a?.state==='work'?'Working':a?.state==='ask'?'Approval needed':a?.state==='question'?'Reply needed':'Waiting';dot.setAttribute('aria-label',dot.title);}
 }
 
 function renderPending(){

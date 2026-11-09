@@ -186,3 +186,76 @@ def test_pending_send_cannot_change_pane_or_discard_its_receipt(phone, operation
             wait("document.querySelector('#terminal-sheet').innerText.includes('Receipt unavailable')")
             assert next(p for op, p in state['calls'] if op == 'status')['intent'] == 'fixture-intent'
             assert sum(op == 'commit' for op, _ in state['calls']) == 1
+
+
+@pytest.mark.parametrize('initial_tab', ['Conversation', 'Terminal'])
+def test_review_stays_over_conversation_and_send_returns_to_its_tail(phone, initial_tab):
+    _, js, wait, state = phone
+    wait("document.querySelector('.reader-compose-toggle')!==null")
+    if initial_tab == 'Terminal':
+        js("document.querySelector('.reader-bar [aria-label=Terminal]').click()")
+    js("document.querySelector('.reader-compose-toggle').click();const field=document.querySelector('#terminal-text');field.value='A fixture reply';field.dispatchEvent(new Event('input',{bubbles:true}))")
+    wait("document.querySelector('#terminal-review').disabled===false")
+    js("document.querySelector('#terminal-review').click()")
+    wait("[...document.querySelectorAll('button')].some(b=>b.textContent==='Send once')")
+    assert js("document.querySelector('.conversation-list')?.isConnected===true")
+    assert js("document.querySelector('.reader-composer #terminal-output')?.textContent.includes('Generated terminal tail')===true")
+    assert js("document.querySelector('.reader-bar [aria-label=Conversation]').getAttribute('aria-pressed')==='true'")
+    assert js("document.querySelector('.reader-composer').innerText.includes('Window 0 · pane 0')")
+    assert not any(op == 'commit' for op, _ in state['calls'])
+    js("[...document.querySelectorAll('button')].find(b=>b.textContent==='Send once').click()")
+    wait("document.querySelector('#terminal-sheet').innerText.includes('Received by terminal')")
+    assert js("document.querySelector('.reader-bar [aria-label=Conversation]').getAttribute('aria-pressed')==='true'")
+    assert js("document.querySelector('.conversation-list')?.isConnected===true&&document.querySelector('#terminal-output')===null&&document.querySelector('.reader-composer')===null")
+    assert js("document.querySelector('.conversation-pending').innerText.includes('A fixture reply')")
+    assert js("document.querySelector('.reader-compose-toggle')!==null")
+    assert sum(op == 'commit' for op, _ in state['calls']) == 1
+    # A deliberate switch after receipt keeps the new Terminal reading layout.
+    js("document.querySelector('.reader-bar [aria-label=Terminal]').click()")
+    assert js("document.querySelector('.reader-receipt')!==null&&document.querySelector('#terminal-sheet>.terminal-actions')===null")
+
+
+@pytest.mark.parametrize('phone', [(390, 844), (360, 800)], indirect=True)
+def test_bar_has_large_touch_targets_and_info_opens_by_touch(phone):
+    client, js, wait, _ = phone
+    client.call('Emulation.setTouchEmulationEnabled', enabled=True, maxTouchPoints=1)
+    sizes = js("[...document.querySelectorAll('.reader-bar button')].map(b=>{const r=b.getBoundingClientRect();return {width:r.width,height:r.height}})")
+    assert all(r['width'] >= 44 and r['height'] >= 44 for r in sizes), sizes
+    for opened in (True, False):
+        point = js("(()=>{const r=document.querySelector('.reader-info-toggle').getBoundingClientRect();return {x:r.x+4,y:r.y+4}})()")
+        client.call('Input.dispatchTouchEvent', type='touchStart', touchPoints=[dict(**point, radiusX=10, radiusY=10, force=1)])
+        client.call('Input.dispatchTouchEvent', type='touchEnd', touchPoints=[])
+        wait("(document.querySelector('.reader-info')!==null)===" + str(opened).lower())
+
+
+@pytest.mark.parametrize('phone', [(390, 844), (360, 800)], indirect=True)
+def test_terminal_fills_the_screen_with_tail_at_the_bottom_and_notes_in_info(phone):
+    _, js, wait, _ = phone
+    wait("document.querySelector('.reader-compose-toggle')!==null")
+    js("document.querySelector('.reader-bar [aria-label=Terminal]').click()")
+    wait("document.querySelector('#terminal-output')?.textContent.includes('Generated terminal tail')===true")
+    assert js("(()=>{const r=document.querySelector('#terminal-output').getBoundingClientRect();return r.height>=innerHeight*.75;})()")
+    assert js("getComputedStyle(document.querySelector('.terminal-preview-head')).display==='none'&&getComputedStyle(document.querySelector('.terminal-observed')).display==='none'")
+    assert js("(()=>{const pre=document.querySelector('#terminal-output'),range=document.createRange();range.selectNodeContents(pre);const text=range.getBoundingClientRect(),box=pre.getBoundingClientRect();return text.bottom<=box.bottom+1&&box.bottom-text.bottom<12;})()")
+    js("document.querySelector('.reader-info-toggle').click()")
+    assert js("document.querySelector('.reader-info').innerText.includes('40 lines')&&document.querySelector('.reader-info').innerText.includes('Shown')")
+
+
+def test_terminal_long_output_pauses_while_reading_and_failures_stay_visible(phone):
+    _, js, wait, state = phone
+    wait("document.querySelector('.reader-compose-toggle')!==null")
+    js("document.querySelector('.reader-bar [aria-label=Terminal]').click()")
+    old = 'X'*180 + '\n' + '\n'.join('fixture line '+str(i) for i in range(40))
+    new = '\n'.join('fixture line '+str(i) for i in range(100, 140))
+    state['preview_text'] = old
+    wait("document.querySelector('#terminal-output').textContent.includes('fixture line 39')", 8)
+    assert js("document.querySelector('#terminal-output').scrollWidth>document.querySelector('#terminal-output').clientWidth")
+    js("{const pre=document.querySelector('#terminal-output');pre.scrollTop=0;pre.dispatchEvent(new Event('scroll'))}")
+    state['preview_text'] = new
+    wait("document.querySelector('.reader-terminal-state').textContent==='New output · paused'", 8)
+    assert js("document.querySelector('#terminal-output').textContent") == old
+    js("{const pre=document.querySelector('#terminal-output');pre.scrollTop=pre.scrollHeight;pre.dispatchEvent(new Event('scroll'))}")
+    wait("document.querySelector('#terminal-output').textContent.includes('fixture line 139')")
+    state['preview_error'] = True
+    wait("document.querySelector('.terminal-message').textContent.includes('Preview unavailable')", 8)
+    assert js("document.querySelector('.terminal-message').getBoundingClientRect().height>0")
