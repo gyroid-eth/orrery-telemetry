@@ -406,6 +406,7 @@ def dynamic_prelaunch(source):
         key = native_server_models.read_key(facts, source['program'])
         row = native_server_models.require_model(route['server_url'], source['model'], key)
         source['server_context'] = row.get('meta', {})
+        source['server_input_modalities'] = row.get('architecture', {}).get('input_modalities')
         return runner
     return None
 

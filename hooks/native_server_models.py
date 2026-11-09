@@ -20,6 +20,7 @@ DEFAULT_OUTPUT = 8192
 MAX_RESPONSE_BYTES = 1024 * 1024
 HTTP_TIMEOUT = 3
 MAX_PARALLEL = 2
+MAX_INPUT_MODALITIES = 32
 
 
 def dynamic(spec):
@@ -97,6 +98,14 @@ def context(spec, row=None):
     return DEFAULT_CONTEXT, 'default'
 
 
+def input_modalities(value):
+    """Validate a bounded text-capable catalog, then select native modalities."""
+    if (not isinstance(value, list) or not 1 <= len(value) <= MAX_INPUT_MODALITIES
+            or any(not isinstance(item, str) for item in value) or 'text' not in value):
+        return None
+    return [item for item in ('text', 'image') if item in value]
+
+
 def parse_models(payload):
     values = payload.get('data') if isinstance(payload, dict) else None
     if not isinstance(values, list) or not values:
@@ -114,11 +123,14 @@ def parse_models(payload):
         display = value.get('display_name')
         if not isinstance(display, str) or not 0 < len(display) <= 256 or any(ord(c) < 32 or ord(c) == 127 for c in display):
             display = identity
+        architecture = value.get('architecture')
+        inputs = input_modalities(architecture.get('input_modalities')) if isinstance(architecture, dict) else None
         result.append({'id': identity, 'display_name': display,
             'available': state != 'unloaded',
             'model_state': 'unloaded' if state == 'unloaded' else 'loaded' if state == 'loaded' else 'available',
             **({'meta': {'n_ctx': value['meta']['n_ctx']}} if isinstance(value.get('meta'), dict)
-                and type(value['meta'].get('n_ctx')) is int else {})})
+                and type(value['meta'].get('n_ctx')) is int else {}),
+            **({'architecture': {'input_modalities': inputs}} if inputs is not None else {})})
     return result
 
 

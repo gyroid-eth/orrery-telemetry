@@ -153,6 +153,9 @@ def validate_input(document):
             backend = {**backend, 'base_url': base.removesuffix('/v1'), 'model': document['model'],
                 'model_definition': {'id': document['model'], 'contextWindow': context,
                                      'maxTokens': min(SERVER_MODELS['DEFAULT_OUTPUT'], context // 4)}}
+            inputs = SERVER_MODELS['input_modalities'](document.get('server_input_modalities'))
+            if inputs is not None:
+                backend['model_definition']['inputModalities'] = inputs
         url = urlsplit(backend['base_url'])
         if url.scheme not in ('https', 'http') or not url.hostname or url.username or url.password:
             raise ValueError('invalid_backend_url')
