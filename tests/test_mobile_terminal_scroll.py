@@ -17,7 +17,7 @@ const vm=require('node:vm'),assert=require('node:assert/strict');
 const staticElements=new Map(),timers=new Map(),calls=[],frames=[];let seq=0,lines=40,shift=0,updates=0,failPreview=false,truncated=false,controls=false;
 let viewHeight=200,viewWidth=350,rowHeight=20,holdPreview=false,releasePreview=null,emptyPreview=false;
 class Element{
- constructor(tag='div',cls=''){this.tag=tag;this.className=cls;this.children=[];this.dataset={};this.style={};this.events={};this.classList={toggle(){}};this.isConnected=true;this.open=false;this._text='';this._top=0;}
+ constructor(tag='div',cls=''){this.tag=tag;this.className=cls;this.children=[];this.dataset={};this.style={setProperty(key,value){this[key]=value;}};this.events={};this.classList={toggle(){}};this.isConnected=true;this.open=false;this._text='';this._top=0;}
  get textContent(){return this._text+this.children.map(c=>c.textContent).join('');}
  set textContent(value){this._text=String(value);this.children=[];this.scrollTop=this._top;}
  get clientHeight(){return this.tag==='pre'?viewHeight:0;}get clientWidth(){return viewWidth;}

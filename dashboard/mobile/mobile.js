@@ -437,7 +437,7 @@ function cancelIntent(){
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
 function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;generation++;}
-function clear(){composer=false;info=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
+function clear(){readerSwipe=null;composer=false;info=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
 function close(fromBack=false){const remove=backEntry&&window.history.state?.orreryConversation===true;backEntry=false;const restore=previousFocus;previousFocus=null;clear();if(sheet.open)sheet.close();if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});if(remove&&fromBack!==true){backClosing=true;window.history.back();}}
 window.addEventListener('popstate',event=>{if(backClosing){backClosing=false;event.stopImmediatePropagation();return;}if(sheet.open&&backEntry){event.stopImmediatePropagation();if(dismissLayer()){window.history.pushState({orreryConversation:true},'');return;}backEntry=false;close(true);}},true);
 const entryLabel=()=>history?'History':'Terminal';
@@ -484,6 +484,63 @@ async function list(){
  finally{if(g===generation)operationController=null;}
 }
 function switchTab(value){if(busy()||value===tab||!history||!enabled&&value==='terminal')return;tab=value;render();}
+// Tab swipes belong only to reading surfaces; native scroll and selection win.
+let readerSwipe=null;
+function swipeAvailable(){
+ return sheet.open&&history&&enabled&&!composer&&!busy()&&phase!=='review'&&!info
+  &&!q('.reader-composer')&&!q('.conversation-preview')&&!window.getSelection?.()?.toString();
+}
+function swipeSurface(target){
+ if(target.closest?.('button,a,input,textarea,select,summary,[role="button"],.reader-receipt'))return null;
+ const surface=target.closest?.('.conversation-list,#terminal-output');
+ if(!surface)return null;
+ for(let node=target;node;node=node.parentElement){
+  const overflow=window.getComputedStyle(node).overflowX;
+  if(node.scrollWidth>node.clientWidth+1&&['auto','scroll'].includes(overflow))return null;
+  if(node===surface)break;
+ }
+ return surface;
+}
+sheet.addEventListener('touchstart',event=>{
+ readerSwipe=null;
+ const touch=event.touches.length===1?event.touches[0]:null;
+ if(!touch||!swipeAvailable()||touch.clientX<=24||touch.clientX>=innerWidth-24)return;
+ const surface=swipeSurface(event.target);if(!surface)return;
+ readerSwipe={id:touch.identifier,x:touch.clientX,y:touch.clientY,dx:0,dy:0,surface,generation,ready:false};
+},{passive:true});
+sheet.addEventListener('touchmove',event=>{
+ const gesture=readerSwipe,touch=event.touches.length===1?event.touches[0]:null;
+ if(!gesture)return;
+ if(!touch||touch.identifier!==gesture.id||!swipeAvailable()||gesture.generation!==generation){readerSwipe=null;return;}
+ gesture.dx=touch.clientX-gesture.x;gesture.dy=touch.clientY-gesture.y;
+ const across=Math.abs(gesture.dx),down=Math.abs(gesture.dy);
+ if(down>12&&down>=across){readerSwipe=null;return;}
+ gesture.ready=across>=64&&across>=down*2;
+ if(gesture.ready)event.preventDefault();
+},{passive:false});
+sheet.addEventListener('touchend',event=>{
+ const gesture=readerSwipe;readerSwipe=null;
+ if(!gesture?.ready||!swipeAvailable()||gesture.generation!==generation||!gesture.surface.isConnected)return;
+ const touch=[...event.changedTouches].find(value=>value.identifier===gesture.id);
+ if(!touch)return;
+ const dx=touch.clientX-gesture.x,dy=touch.clientY-gesture.y;
+ if(Math.abs(dx)<64||Math.abs(dx)<Math.abs(dy)*2)return;
+ event.preventDefault();switchTab(dx<0?'terminal':'conversation');
+},{passive:false});
+sheet.addEventListener('touchcancel',()=>{readerSwipe=null;},{passive:true});
+function terminalText(pre,value){
+ if(!pre._wrapLines){pre.textContent=value;return;}
+ const lines=value.split('\n');
+ pre.replaceChildren(...lines.map((line,index)=>{
+  const node=make('span','terminal-output-line');
+  if(/^[\s─━═┄┅┈┉\-_=+|┌┐└┘├┤┬┴┼╔╗╚╝╠╣╦╩╬]{8,}$/.test(line))node.className+=' terminal-output-rule';
+  else{
+   let indent=0;for(const char of line.match(/^[ \t]*/)[0])indent+=char==='\t'?8-indent%8:1;
+   node.style.setProperty('--terminal-indent',indent+'ch');
+  }
+  node.textContent=line+(index<lines.length-1?'\n':'');return node;
+ }));
+}
 function choose(value){
  if(busy())return;
  stop();cancelIntent();choice=value;target=null;text='';output='';preview=null;previewOK=false;phase='editing';message='';failures=0;render();poll();
@@ -519,7 +576,7 @@ function refreshOutput(){
   // words being read. Hold the displayed tail until the reader reaches bottom.
   const top=pre.scrollTop,atBottom=terminalFollowing(pre);
   if(atBottom||!previewOK){
-   if(pre.textContent!==output)pre.textContent=output;
+   if(pre.textContent!==output)terminalText(pre,output);
    pre._preview=preview;
    pre.scrollTop=atBottom?pre.scrollHeight:top;
    if(!previewOK)pre._scrollView=null;
@@ -532,6 +589,7 @@ function refreshOutput(){
  const limits=shown||preview;
  const note=q('.terminal-preview-note');if(note)note.textContent=[shown?.truncated?'Tail shortened to fit the snapshot limits.':'',shown?.controls_removed?'Control sequences removed.':'',pending?'Scroll to bottom to show the latest tail. Output between snapshots ('+(limits?.max_lines||120)+' lines / '+((limits?.max_bytes||12288)/1024)+' KiB) may be missing.':''].filter(Boolean).join(' ');
  const terminalState=q('.reader-terminal-state');if(terminalState)terminalState.textContent=previewOK?(pending?'New output · paused':reading?'Reading earlier output':''):'';
+ const terminalLimits=q('.reader-terminal-limits');if(terminalLimits)terminalLimits.textContent=limits?'Terminal tail · latest '+(limits.max_lines||120)+' lines · up to '+((limits.max_bytes||12288)/1024)+' KiB. Snapshots update every 3s; output between snapshots may be missing.':'Waiting for a verified terminal snapshot.';
  const terminalInfo=q('.reader-terminal-info');if(terminalInfo)terminalInfo.textContent=[stream?.textContent,age?.textContent].filter(Boolean).join(' · ');
  const terminalNote=q('.reader-terminal-note');if(terminalNote)terminalNote.textContent=note?.textContent||'';
  const dot=q('.reader-state');if(tab==='terminal'&&dot){dot.dataset.state=previewOK?'work':'unknown';dot.title=previewOK?'Terminal updating every 3s':'Terminal preview unavailable';dot.setAttribute('aria-label',dot.title);}
@@ -628,7 +686,7 @@ function readerBar(){
  }
  sheet.append(bar);queueMicrotask(()=>{conversation()?.refreshActivity?.();refreshOutput();});
  if(info){const box=make('div','reader-info');box.id='reader-info';
- if(tab==='terminal')box.append(make('p','','Terminal tail · latest '+(preview?.max_lines||120)+' lines · up to '+((preview?.max_bytes||12288)/1024)+' KiB. Snapshots update every 3s; output between snapshots may be missing.'),make('p','reader-terminal-info',''),make('p','reader-terminal-note',''),make('p','','Long lines scroll horizontally. Reading earlier output pauses the displayed snapshot; scroll to the bottom to resume.'));
+ if(tab==='terminal')box.append(make('p','reader-terminal-limits',''),make('p','reader-terminal-info',''),make('p','reader-terminal-note',''),make('p','','Long lines wrap and keep their indentation; divider lines are clipped to the width. Swipe left for Terminal or right for Conversation. Reading earlier output pauses the displayed snapshot; scroll to the bottom to resume.'));
  else box.append(make('p','','Conversation record · read-only. New messages below stay paused while you read.'),make('p','','Working shows the recorded turn duration when available. Links open in a new tab; local paths stay text.'));
  box.append(make('p','','One line + Enter · up to 4096 bytes. Review shows the terminal tail before Send once.'),make('p','',choice?'Sends to '+choice.pane_label+'. Existing terminal input may be combined with it.':'Choose a verified pane in Terminal to write.'));
  if(choice)box.append(paneButton(choice.pane_label+' · Change pane'));sheet.append(box);}
@@ -693,7 +751,7 @@ function render(){
   if(!previousReview)queueMicrotask(()=>{if(panel.isConnected)panel.focus({preventScroll:true});});
  }
  if(!reading||inlineReview){
- const terminal=make('div','terminal-preview'),bar=make('div','terminal-preview-head');bar.append(make('span','terminal-stream',''),make('span','','Terminal tail'));pre=make('pre','terminal-output');pre.id='terminal-output';terminal.append(bar,pre);scroll.append(terminal);
+ const terminal=make('div','terminal-preview'),bar=make('div','terminal-preview-head');bar.append(make('span','terminal-stream',''),make('span','','Terminal tail'));pre=make('pre','terminal-output');pre.id='terminal-output';pre._wrapLines=history&&!inlineReview;terminal.append(bar,pre);scroll.append(terminal);
  pre.addEventListener('scroll',refreshOutput,{passive:true});
  pre.addEventListener('wheel',event=>{
   terminalScrollGesture(pre,event.deltaY>0&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey);
@@ -723,7 +781,7 @@ function render(){
  }
  if(history&&!reading&&['sending','accepted','unknown','refused'].includes(phase)){
   readerReceipt();scroll.append(make('p','terminal-message',message));
-  if(readTop!==null&&pre){pre.textContent=readOutput;pre._preview=readPreview;pre._scrollView=readView;pre.scrollTop=readTop;}
+  if(readTop!==null&&pre){terminalText(pre,readOutput);pre._preview=readPreview;pre._scrollView=readView;pre.scrollTop=readTop;}
   refreshOutput();return;
  }
  if(history&&['editing','preparing'].includes(phase)){
@@ -746,7 +804,7 @@ function render(){
   const actions=make('div','terminal-actions');actions.append(action('Close','',close));if(unknown)actions.append(action('Check receipt','terminal-primary',status));else if(phase!=='sending')actions.append(action('Write again','terminal-primary',()=>{cancelIntent();phase='editing';text='';render();}));sheet.append(actions);
  }
  if(!reading)scroll.append(make('p','terminal-message',message));
- if(readTop!==null&&pre){pre.textContent=readOutput;pre._preview=readPreview;pre._scrollView=readView;pre.scrollTop=readTop;}
+ if(readTop!==null&&pre){terminalText(pre,readOutput);pre._preview=readPreview;pre._scrollView=readView;pre.scrollTop=readTop;}
  refreshOutput();
 }
 sheet.addEventListener('cancel',e=>{e.preventDefault();if(!dismissLayer())close();});sheet.addEventListener('close',()=>{if(name&&!sheet.open)close();});

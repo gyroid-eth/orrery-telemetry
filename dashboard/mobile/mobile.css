@@ -279,7 +279,11 @@ html.graph-fullscreen #settings{z-index:40}
 .reader-fullscreen>.reader-terminal{display:flex;flex-direction:column;overflow:hidden}
 .reader-terminal .terminal-preview{flex:1;height:auto;min-height:0;border:0;border-radius:0;background:none}
 .reader-terminal .terminal-preview-head,.reader-terminal .terminal-observed,.reader-terminal .terminal-preview-note{display:none}
-.mobile .reader-terminal .terminal-output{display:flex;flex-direction:column;justify-content:safe flex-end;white-space:pre;overflow-wrap:normal;overflow:auto;font:11px/1.75 var(--mono);padding:0 0 6px;scrollbar-width:thin}
+.mobile .reader-terminal .terminal-output{display:flex;flex-direction:column;justify-content:safe flex-end;white-space:normal;overflow-wrap:anywhere;overflow-x:hidden;overflow-y:auto;font:11px/1.75 var(--mono);padding:0 0 6px;scrollbar-width:thin}
 .mobile .reader-terminal-state{flex:none;font:10px/1.6 var(--mono);color:var(--ink-dim);padding:5px 0}
 .reader-terminal-state:empty,.reader-terminal .terminal-message:empty{display:none}
 .mobile .reader-terminal .terminal-message:not(:empty){flex:none;max-height:25%;overflow:auto;border:1px solid var(--alert);padding:7px 10px;font:11px/1.7 var(--mono);color:var(--ink)}
+
+/* Each original terminal line keeps its literal text and hanging indentation. */
+.terminal-output-line{flex:none;min-height:1.75em;max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;padding-inline-start:min(var(--terminal-indent,0ch),40%);text-indent:calc(-1 * min(var(--terminal-indent,0ch),40%))}
+.terminal-output-line.terminal-output-rule{white-space:pre;overflow:hidden;text-overflow:clip;padding-inline-start:0;text-indent:0}

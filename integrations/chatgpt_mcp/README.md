@@ -4,7 +4,7 @@ upstream Issue #395 の第1段階です。公開ツールは `orrery_status`、`
 
 ## 互換性と公開範囲
 
-Python 3.11以上と、明示した `ORRERY_MCP_MODE=legacy` または `fresh` が必要です。受け付けるDashboard API世代はlegacyが37・38、freshが34・35・36・37・38です。世代番号と応答の形を両方検証します。方式は番号から推測せず、legacyはruntime_modeのない契約、freshはruntime_mode=freshとinstance/capabilityの契約を必要とします。未知の世代、global、方式不一致は一覧を読む前、または待受を開く前に拒否します。
+Python 3.11以上と、明示した `ORRERY_MCP_MODE=legacy` または `fresh` が必要です。受け付けるDashboard API世代はlegacyが37・38・39、freshが34・35・36・37・38・39です。世代番号と応答の形を両方検証します。方式は番号から推測せず、legacyはruntime_modeのない契約、freshはruntime_mode=freshとinstance/capabilityの契約を必要とします。未知の世代、global、方式不一致は一覧を読む前、または待受を開く前に拒否します。
 
 legacyでは `ORRERY_MCP_PROJECT_KEY` に、Dashboardが使用しているproject keyを1つ、完全一致で指定します。外部MCP引数からは変更できません。応答全体のproject_keyと設定を照合し、各行のproject_keyも一致するものだけを返します。従来APIには行の所属情報がないため、API 37で読み取り用の所属fieldを追加しています。旧APIを推測で通すことはせず、アダプターと同じ版のDashboardが必要です。Dashboardの導入・更新は通常の手順で別途行い、アダプターから実サービスを切り替えません。
 

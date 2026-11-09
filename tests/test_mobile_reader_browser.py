@@ -249,7 +249,7 @@ def test_terminal_long_output_pauses_while_reading_and_failures_stay_visible(pho
     new = '\n'.join('fixture line '+str(i) for i in range(100, 140))
     state['preview_text'] = old
     wait("document.querySelector('#terminal-output').textContent.includes('fixture line 39')", 8)
-    assert js("document.querySelector('#terminal-output').scrollWidth>document.querySelector('#terminal-output').clientWidth")
+    assert js("document.querySelector('#terminal-output').scrollWidth<=document.querySelector('#terminal-output').clientWidth+1")
     js("{const pre=document.querySelector('#terminal-output');pre.scrollTop=0;pre.dispatchEvent(new Event('scroll'))}")
     state['preview_text'] = new
     wait("document.querySelector('.reader-terminal-state').textContent==='New output · paused'", 8)
@@ -285,4 +285,128 @@ def test_older_preview_limits_are_reported_accurately_in_info(phone):
     js("document.querySelector('.reader-bar [aria-label=Terminal]').click()")
     wait("document.querySelector('#terminal-output')?.textContent==='Legacy preview fixture'")
     js("document.querySelector('.reader-info-toggle').click()")
+    assert js("document.querySelector('.reader-info').innerText.includes('40 lines · up to 6 KiB')")
+
+
+def touch_swipe(client, start, end):
+    client.call('Emulation.setTouchEmulationEnabled', enabled=True, maxTouchPoints=1)
+    point=lambda x,y:dict(x=x,y=y,radiusX=6,radiusY=6,force=1,id=0)
+    client.call('Input.dispatchTouchEvent',type='touchStart',touchPoints=[point(*start)])
+    for step in range(1,7):
+        time.sleep(.025)
+        x=start[0]+(end[0]-start[0])*step/6
+        y=start[1]+(end[1]-start[1])*step/6
+        client.call('Input.dispatchTouchEvent',type='touchMove',touchPoints=[point(x,y)])
+    client.call('Input.dispatchTouchEvent',type='touchEnd',touchPoints=[])
+
+
+def synthetic_swipe(js, selector, start=(280,400), end=(90,404)):
+    return js("""(()=>{const node=document.querySelector(SELECTOR),start=START,end=END,cancelled=[];
+      const touch=p=>new Touch({identifier:7,target:node,clientX:p[0],clientY:p[1]});
+      for(const [type,p]of [['touchstart',start],['touchmove',end],['touchend',end]]){
+       const t=touch(p);cancelled.push(!node.dispatchEvent(new TouchEvent(type,{bubbles:true,cancelable:true,touches:type==='touchend'?[]:[t],changedTouches:[t]}))); 
+      }return cancelled;})()""".replace('SELECTOR',json.dumps(selector)).replace('START',json.dumps(start)).replace('END',json.dumps(end)))
+
+
+def test_terminal_wrap_keeps_indentation_and_clips_only_rules(phone):
+    _,js,wait,state=phone
+    line='    artifacts/mobile-reader/'+ 'android-preview-results/'*8 + 'report.json'
+    content='\n'.join(['Earlier output '+str(i) for i in range(40)]+['日本語の長い説明を最後まで読めるように折り返します。'*8,line,'─'*100,'━'*100,'═'*100,'<b>literal text</b>'])
+    state['preview_text']=content
+    js("document.querySelector('.reader-bar [aria-label=Terminal]').click()")
+    wait('document.querySelector("#terminal-output").textContent==='+json.dumps(content),8)
+    got=js("""(()=>{const p=document.querySelector('#terminal-output'),lines=[...p.querySelectorAll('.terminal-output-line')],path=lines.find(n=>n.textContent.startsWith('    artifacts/'));if(!path)return {lines:0};const text=path.firstChild,r=document.createRange();r.setStart(text,4);r.setEnd(text,5);const first=r.getBoundingClientRect();let next=null;for(let i=5;i<text.length;i++){r.setStart(text,i);r.setEnd(text,i+1);const b=r.getBoundingClientRect();if(b.top>first.top+1){next={left:b.left,top:b.top};break;}}return {lines:lines.length,width:p.clientWidth,scroll:p.scrollWidth,first:{left:first.left,top:first.top},next,rules:[...p.querySelectorAll('.terminal-output-rule')].map(n=>({height:n.getBoundingClientRect().height,width:n.clientWidth,scroll:n.scrollWidth})),html:p.querySelector('b')!==null}})()""")
+    assert got['lines']==46,got
+    assert got['scroll']<=got['width']+1,got
+    assert got['next'] and abs(got['next']['left']-got['first']['left'])<=1,got
+    assert all(r['height']<21 and r['scroll']>r['width'] for r in got['rules']),got
+    assert got['html'] is False
+    # A held snapshot keeps its exact text and character geometry after a poll.
+    js("(()=>{const p=document.querySelector('#terminal-output');p.scrollTop=40;p.dispatchEvent(new Event('scroll'))})()")
+    before=js("document.querySelector('#terminal-output').scrollTop")
+    state['preview_text']=content+'\nNew terminal output'
+    wait("document.querySelector('.terminal-stream').textContent==='New output · paused'",8)
+    assert js("document.querySelector('#terminal-output').textContent")==content
+    assert abs(js("document.querySelector('#terminal-output').scrollTop")-before)<=1
+    js("(()=>{const p=document.querySelector('#terminal-output');p.scrollTop=p.scrollHeight;p.dispatchEvent(new Event('scroll'))})()")
+    wait("document.querySelector('#terminal-output').textContent.endsWith('New terminal output')")
+    assert js("(()=>{const p=document.querySelector('#terminal-output');return p.scrollHeight-p.clientHeight-p.scrollTop<=2})()")
+
+
+def test_real_touch_swipes_switch_between_conversation_and_terminal(phone):
+    client,js,wait,_=phone
+    y=js("(()=>{const r=document.querySelector('[data-id=question] .conversation-text').getBoundingClientRect();return (r.top+r.bottom)/2})()")
+    touch_swipe(client,(285,y),(95,y+4))
+    wait("document.querySelector('.reader-bar [aria-label=Terminal]').getAttribute('aria-pressed')==='true'")
+    touch_swipe(client,(95,410),(285,414))
+    wait("document.querySelector('.reader-bar [aria-label=Conversation]').getAttribute('aria-pressed')==='true'")
+
+
+@pytest.mark.parametrize('kind',['vertical','short','diagonal','left-edge','right-edge','selection','horizontal-code'])
+def test_reader_swipe_ignores_other_gestures_and_scrollable_content(phone,kind):
+    _,js,_,_=phone
+    selector='.conversation-list';start,end=(280,400),(90,404)
+    if kind=='vertical':end=(275,550)
+    if kind=='short':end=(250,402)
+    if kind=='diagonal':end=(160,480)
+    if kind=='left-edge':start,end=(8,400),(200,404)
+    if kind=='right-edge':start,end=(382,400),(190,404)
+    if kind=='selection':js("getSelection().selectAllChildren(document.querySelector('[data-id=question] .conversation-text'))")
+    if kind=='horizontal-code':
+        selector='.conversation-code pre'
+        js("document.querySelector('.conversation-code pre').textContent='very_long_command_'+ 'x'.repeat(300)")
+        assert js("document.querySelector('.conversation-code pre').scrollWidth>document.querySelector('.conversation-code pre').clientWidth")
+    assert not any(synthetic_swipe(js,selector,start,end))
+    assert js("document.querySelector('.reader-bar [aria-label=Conversation]').getAttribute('aria-pressed')==='true'")
+
+
+@pytest.mark.parametrize('panel',['composer','review','sending'])
+def test_reader_swipe_is_blocked_while_editing_reviewing_or_sending(phone,panel):
+    _,js,wait,state=phone
+    wait("document.querySelector('.reader-compose-toggle')!==null")
+    js("document.querySelector('.reader-compose-toggle').click()")
+    if panel!='composer':
+        js("window.__realFetch=fetch;window.__release=null;window.fetch=async(...args)=>{const response=await __realFetch(...args);if(String(args[0]).endsWith('/commit'))return new Promise(resolve=>__release=()=>resolve(response));return response};const f=document.querySelector('#terminal-text');f.value='Single fixture input';f.dispatchEvent(new Event('input',{bubbles:true}))")
+        wait("document.querySelector('#terminal-review').disabled===false")
+        js("document.querySelector('#terminal-review').click()")
+        wait("document.querySelector('.reader-review')!==null")
+        if panel=='sending':
+            js("[...document.querySelectorAll('button')].find(b=>b.textContent==='Send once').click()")
+            wait('window.__release!==null')
+    calls=list(state['calls'])
+    assert not any(synthetic_swipe(js,'.conversation-list'))
+    assert js("document.querySelector('.reader-bar [aria-label=Conversation]').getAttribute('aria-pressed')==='true'")
+    assert state['calls']==calls
+    if panel=='sending':
+        js('window.__release();void 0')
+        wait("document.querySelector('.reader-receipt.accepted')!==null")
+        assert sum(op=='commit' for op,_ in state['calls'])==1
+
+
+def test_native_vertical_scroll_and_horizontal_code_scroll_keep_their_gestures(phone):
+    client,js,wait,_=phone
+    js("(()=>{const p=document.querySelector('.conversation-code pre');p.textContent='command_'+ 'x'.repeat(300);p.scrollIntoView({block:'center'})})()")
+    y=js("(()=>{const r=document.querySelector('.conversation-code pre').getBoundingClientRect();return (r.top+r.bottom)/2})()")
+    touch_swipe(client,(285,y),(95,y+2))
+    wait("document.querySelector('.conversation-code pre').scrollLeft>10")
+    assert js("document.querySelector('.reader-bar [aria-label=Conversation]').getAttribute('aria-pressed')==='true'")
+    js("(()=>{const list=document.querySelector('.conversation-list');for(let i=0;i<60;i++){const p=document.createElement('p');p.textContent='Synthetic scroll fixture '+i;list.append(p)}list.scrollTop=500})()")
+    before=js("document.querySelector('.conversation-list').scrollTop")
+    touch_swipe(client,(180,350),(183,520))
+    wait('document.querySelector(".conversation-list").scrollTop<'+str(before-20))
+    assert js("document.querySelector('.reader-bar [aria-label=Conversation]').getAttribute('aria-pressed')==='true'")
+
+
+def test_open_info_updates_when_the_first_legacy_preview_arrives(phone):
+    _,js,wait,state=phone
+    js("OrreryMobileTerminal.close()")
+    wait("!document.querySelector('#terminal-sheet').open&&history.state?.orreryConversation!==true")
+    state.update(preview_text='First legacy preview',preview_lines=40,preview_bytes=6144)
+    js("window.__realFetch=fetch;window.__release=null;window.fetch=async(...args)=>{const response=await __realFetch(...args);if(String(args[0]).endsWith('/preview'))return new Promise(resolve=>__release=()=>resolve(response));return response};OrreryMobileTerminal.open('SampleAgent')")
+    wait('window.__release!==null')
+    js("document.querySelector('.reader-bar [aria-label=Terminal]').click();document.querySelector('.reader-info-toggle').click();window.__infoBefore=document.querySelector('.reader-info')")
+    assert js("!document.querySelector('.reader-info').innerText.includes('40 lines')")
+    js('window.__release();void 0')
+    wait("document.querySelector('#terminal-output').textContent==='First legacy preview'")
+    assert js("document.querySelector('.reader-info')===window.__infoBefore")
     assert js("document.querySelector('.reader-info').innerText.includes('40 lines · up to 6 KiB')")
