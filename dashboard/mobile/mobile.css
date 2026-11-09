@@ -183,6 +183,11 @@ html.graph-fullscreen #settings{z-index:40}
 .conversation-table-wrap{overflow-x:auto;margin:4px 0 6px}.conversation-table{border-collapse:collapse;font:10.5px/1.5 var(--mono)}
 .conversation-table th,.conversation-table td{border:1px solid var(--hair);padding:3px 7px;text-align:left;vertical-align:top}.conversation-table th{color:var(--ink-dim);font-weight:500}
 .conversation-tool{align-self:flex-start;font:10px var(--mono);color:var(--ink-dim);padding:0 4px}.conversation-tool:before{content:'⚙ '}
+.mobile .conversation-tool-group{display:flex;align-items:center;gap:6px;min-width:0;width:100%;min-height:44px;padding:4px 0;border:0;background:none;text-align:left;color:var(--ink-dim);font:10px/1.6 var(--mono)}
+.conversation-tool-arrow,.conversation-tool-count,.conversation-tool-times{flex:none;white-space:nowrap}
+.conversation-tool-names{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conversation-tool-times{margin-left:auto;font-size:9px;color:var(--ink-faint)}
+.conversation-tool-group:focus-visible{outline:1px solid var(--amber);outline-offset:2px}
 .conversation-mails{display:flex;flex-direction:column;gap:6px}
 .mobile .conversation-mail{display:block;width:100%;text-align:left;border:1px solid var(--hair);border-left:3px solid var(--ln-local,#7aa7ff);border-radius:8px;padding:8px 10px;background:var(--bg);color:var(--ink);font:12px/1.5 var(--mono);margin-top:6px}
 .mobile .conversation-mail.sent{border-left-color:var(--amber)}

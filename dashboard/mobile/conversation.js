@@ -17,6 +17,7 @@ const controllers={poll:null,older:null,preview:null};
 let panel=null,saveUrl='',previewFocus=null;
 let events=[],seen=new Set(),older=null,pending=[],failures=0,loadingOlder=false,following=true,savedTop=0;
 let mailResize=null,mailWidth=0;
+let toolGroups=[],toolGroupFor=new Map(),toolSerial=0;
 const messages={
  history_unconfirmed:'This agent’s record is not verified as its own, so history stays hidden.',
  history_stale:'The verified record predates this launch, so history stays hidden.',
@@ -135,8 +136,9 @@ function mailCard(m,ts){
  const head=make('div','conversation-mail-head'),route=make('div','conversation-mail-route');
  const peer=(value,strong)=>{const p=make('span','conversation-mail-peer'+(strong?' is-counterpart':'')),mark=make('span','conversation-mail-mark');mark.dataset.peerName=value||'';mark.hidden=true;p.title=value||'unknown';p.append(mark,make('span','conversation-mail-peer-name',value||'unknown'));return p;};
  const sender=peer(m.sender,m.direction==='received');sender.classList.add('conversation-mail-sender');
- const recipients=make('span','conversation-mail-recipients');recipients.title=m.recipients.join(', ');recipients.setAttribute('role','group');recipients.setAttribute('aria-label','Recipients: '+(m.recipients.join(', ')||'unknown'));
- for(const recipient of m.recipients.length?m.recipients:['unknown'])recipients.append(peer(recipient,m.direction==='sent'));
+ const targets=m.recipients.length?m.recipients:[m.direction==='received'?name:'recorded recipient unavailable'];
+ const recipients=make('span','conversation-mail-recipients');recipients.title=targets.join(', ');recipients.setAttribute('role','group');recipients.setAttribute('aria-label','Recipients: '+targets.join(', '));
+ for(const recipient of targets)recipients.append(peer(recipient,m.direction==='sent'));
  const more=make('span','conversation-mail-more');more.hidden=true;recipients.append(more);
  route.append(make('span','conversation-mail-chevron','▸'),sender,make('span','conversation-mail-arrow','→'),recipients);
  head.append(route);const at=clock(ts);if(at){const time=make('time','conversation-mail-time',at);time.dateTime=ts;head.append(time);}
@@ -154,7 +156,7 @@ function mailCard(m,ts){
 // Edit, apply_patch, SendUserFile...), so a tool row carries chips too.
 function files(e,r){if(Array.isArray(e.files)&&e.files.length){const f=make('div','conversation-files');e.files.forEach(x=>f.append(chip(x)));r.append(f);}}
 function row(e){
- if(e.kind==='tool'){const r=make('div','conversation-tool',e.text);r.dataset.id=e.id;files(e,r);return r;}
+ if(e.kind==='tool'){const r=make('div','conversation-tool',e.text);r.dataset.id=e.id;files(e,r);if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts)));return r;}
  if(e.kind==='mail'){const r=make('div','conversation-mails');r.dataset.id=e.id;e.mail.forEach(m=>r.append(mailCard(m,e.ts)));return r;}
  const command=e.role==='user'&&markdown()?.commandRecord(e.text);
  const r=make('div',command?.shell?'conversation-shell':'conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
@@ -278,6 +280,56 @@ function groupShellRows(){
   if(held&&focus.isConnected)focus.focus({preventScroll:true});
  }
 }
+function setToolGroupOpen(group,open){
+ const top=group.button.getBoundingClientRect().top;
+ group.open=open;group.button.setAttribute('aria-expanded',String(open));
+ group.button.querySelector('.conversation-tool-arrow').textContent=open?'▾':'▸';
+ for(const row of group.rows){if(!open&&row.contains?.(document.activeElement))group.button.focus?.({preventScroll:true});row.hidden=!open;}
+ list.scrollTop+=group.button.getBoundingClientRect().top-top;
+ following=atBottom();savedTop=list.scrollTop;
+}
+function regroupTools(focused=toolGroups.find(g=>g.button===document.activeElement)){
+ const previous=toolGroups,used=new Set(),groups=[],byId=new Map(events.map(e=>[e.id,e]));let run=[];
+ const finish=()=>{
+  if(!run.length)return;
+  const matches=[...new Set(run.map(r=>toolGroupFor.get(r.dataset.id)).filter(Boolean))];
+  let group=matches.find(g=>g===focused&&!used.has(g))||matches.find(g=>!used.has(g));
+  const open=matches.some(g=>g.open);
+  if(!group){
+   const button=make('button','conversation-tool-group');button.type='button';button.dataset.toolGroup=String(++toolSerial);
+   const arrow=make('span','conversation-tool-arrow','▸');arrow.setAttribute('aria-hidden','true');
+   button.append(arrow,make('span','conversation-tool-count'),make('span','conversation-tool-names'),make('span','conversation-tool-times'));
+   group={button,open:false,rows:[]};button.onclick=()=>setToolGroupOpen(group,!group.open);
+  }
+  used.add(group);group.rows=run;group.open=open;
+  const calls=run.map(r=>byId.get(r.dataset.id)),counts=new Map();
+  for(const event of calls)counts.set(event.text,(counts.get(event.text)||0)+1);
+  const names=[...counts].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).map(([n,count])=>(n||'Tool')+' ×'+count).join(', ');
+  const label=calls.length+' tool call'+(calls.length===1?'':'s'),dates=calls.map(e=>new Date(e.ts)).filter(d=>Number.isFinite(d.getTime())).sort((a,b)=>a-b);
+  const times=dates.length?clock(dates[0])+(dates.length>1?'–'+clock(dates[dates.length-1]):''):'';
+  const full=label+(names?' · '+names:'')+(dates.length?' · '+dates[0].toLocaleString()+(dates.length>1?' – '+dates[dates.length-1].toLocaleString():''):'');
+  const button=group.button;button.title=full;button.setAttribute('aria-label',full);button.setAttribute('aria-expanded',String(open));
+  button.querySelector('.conversation-tool-arrow').textContent=open?'▾':'▸';
+  button.querySelector('.conversation-tool-count').textContent=label;
+  button.querySelector('.conversation-tool-names').textContent=names?'· '+names:'';
+  button.querySelector('.conversation-tool-times').textContent=times;
+  if(button.nextElementSibling!==run[0])list.insertBefore(button,run[0]);
+  for(const row of run)row.hidden=!open;
+  groups.push(group);run=[];
+ };
+ for(const row of [...list.children].filter(r=>r.dataset.id!==undefined)){
+  const e=byId.get(row.dataset.id);
+  if(e?.kind==='tool'&&!e.mail?.length)run.push(row);else{finish();row.hidden=false;}
+ }
+ finish();
+ for(const g of previous)if(!used.has(g)){if(g.button===document.activeElement)list.focus?.({preventScroll:true});g.button.remove();}
+ toolGroups=groups;toolGroupFor.clear();for(const g of groups)for(const r of g.rows)toolGroupFor.set(r.dataset.id,g);
+ if(focused&&(document.activeElement===document.body||document.activeElement===list))(groups.includes(focused)?focused.button:list).focus?.({preventScroll:true});
+}
+function clearToolGroups(){
+ for(const g of toolGroups){if(g.button===document.activeElement)list?.focus?.({preventScroll:true});g.button.remove();}
+ toolGroups=[];toolGroupFor.clear();toolSerial=0;
+}
 function dropEvent(id){
  const node=list.querySelector('[data-id="'+CSS.escape(id)+'"]');if(!node)return;
  // A group can outlive its oldest member at the 200-event limit. Promote
@@ -293,6 +345,7 @@ function append(page){
  let dropped=false;
  while(events.length>MAX_KEPT){const gone=events.shift();seen.delete(gone.id);dropEvent(gone.id);older=null;dropped=true;}
  groupShellRows();
+ regroupTools();
  refreshProfiles();
  // An omitted marker belongs to its page's old edge. Only when that edge's
  // messages are dropped at the kept limit does a marker above them go too.
@@ -313,10 +366,11 @@ function prepend(page,omitted){
  for(const e of fresh){seen.add(e.id);list.insertBefore(row(e),first);}
  events=fresh.concat(events);
  groupShellRows();
+ regroupTools();
  refreshProfiles();
  list.scrollTop+=list.scrollHeight-before;following=false;savedTop=list.scrollTop;
 }
-function reset(){closePreview();events=[];seen.clear();older=null;list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());}
+function reset(){closePreview();clearToolGroups();events=[];seen.clear();older=null;list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());}
 function slow(on){if(retryButton)retryButton.hidden=!on;if(on)setStatus(messages.history_slow);}
 function showError(v){
  const code=typeof v?.error==='string'?v.error:'history_unavailable';
@@ -377,6 +431,7 @@ function addPending(text){if(!root||typeof text!=='string'||!text.trim())return;
 function unmount(){
  gen++;clearTimeout(timer);timer=0;closePreview();for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
  mailResize?.disconnect();mailResize=null;mailWidth=0;
+ clearToolGroups();
  root?.replaceChildren();root?.remove();root=list=status=olderButton=retryButton=null;
  events=[];seen=new Set();older=null;pending=[];failures=0;loadingOlder=false;following=true;savedTop=0;name='';
 }

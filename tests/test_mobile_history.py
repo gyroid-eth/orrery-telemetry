@@ -279,7 +279,11 @@ class El{
  get scrollHeight(){return 1000;} get clientHeight(){return 200;}
  appendChild(x){this.append(x);return x;}
  append(...xs){for(const x of xs){x.parent?.children.splice(x.parent.children.indexOf(x),1);x.parent=this;this.children.push(x);}}
- insertBefore(x,ref){if(!ref)return this.append(x);x.parent=this;this.children.splice(this.children.indexOf(ref),0,x);}
+ insertBefore(x,ref){if(x===ref)return;if(!ref)return this.append(x);x.parent?.children.splice(x.parent.children.indexOf(x),1);x.parent=this;this.children.splice(this.children.indexOf(ref),0,x);}
+ get nextElementSibling(){return this.parent?.children[this.parent.children.indexOf(this)+1]||null;}
+ contains(x){return this===x||this.children.some(c=>c.contains(x));}
+ focus(){doc.activeElement=this;}
+ getBoundingClientRect(){return {top:0,width:0};}
  remove(){if(this.parent){this.parent.children.splice(this.parent.children.indexOf(this),1);this.parent=null;}}
  replaceChildren(...xs){this.children.forEach(c=>c.parent=null);this.children=[];this._text='';this.append(...xs);}
  setAttribute(k,v){this.attrs[k]=String(v);} addEventListener(k,f){this.listeners[k]=f;}
@@ -322,6 +326,101 @@ def run(body):
     result = subprocess.run([node, '-'], input=script, text=True, capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr + result.stdout
     assert result.stdout.strip().endswith('ok')
+
+
+def test_phone_groups_tool_runs_and_keeps_open_group_and_focus_on_poll():
+    run(r'''
+      const tool=(id,text,ts='2026-11-10T07:10:00Z')=>({id,kind:'tool',role:'assistant',text,ts});
+      let rows=[tool('t1','Read'),tool('t2','Bash'),tool('t3','Read','2026-11-10T07:12:00Z')];
+      reply=async()=>page(rows);
+      const root=C.mount('Vega');body.append(root);await settle();
+      const button=root.querySelector('.conversation-tool-group');assert.ok(button,'tool summary exists');
+      assert.equal(button.querySelector('.conversation-tool-count').textContent,'3 tool calls');
+      assert.equal(button.querySelector('.conversation-tool-names').textContent,'· Read ×2, Bash ×1');
+      assert.ok(button.querySelector('.conversation-tool-times').textContent.includes('–'));
+      assert.ok(button.title.includes('2026'));assert.equal(button.attrs['aria-label'],button.title);
+      assert.equal(button.attrs['aria-expanded'],'false');
+      assert.ok(root.querySelectorAll('.conversation-tool').every(row=>row.hidden));
+      button.focus();button.onclick();
+      assert.equal(button.attrs['aria-expanded'],'true');
+      const original=root.querySelector('[data-id="t1"]');
+      rows=[...rows,tool('t4','Read')];await tick();
+      assert.equal(root.querySelector('.conversation-tool-group'),button,'keep the button node');
+      assert.equal(root.querySelector('[data-id="t1"]'),original,'keep the row node');
+      assert.equal(doc.activeElement,button,'keep keyboard focus');
+      assert.equal(button.attrs['aria-expanded'],'true');
+      assert.ok(root.querySelectorAll('.conversation-tool').every(row=>!row.hidden));
+      assert.equal(button.querySelector('.conversation-tool-count').textContent,'4 tool calls');
+      rows=[...rows,ev('break'),tool('t5','Edit')];await tick();
+      const groups=root.querySelectorAll('.conversation-tool-group');assert.equal(groups.length,2);
+      assert.equal(groups[1].querySelector('.conversation-tool-count').textContent,'1 tool call');
+      assert.equal(groups[1].attrs['aria-expanded'],'false');
+      C.unmount();assert.equal(root.children.length,0);
+    ''')
+
+
+def test_phone_keeps_mail_tool_rows_outside_groups_and_resolves_missing_recipient():
+    run(r'''
+      const mail=direction=>({direction,sender:'Lead',recipients:[],subject:'Recorded subject',importance:'normal',coverage:'complete',body:'Mail body'});
+      reply=async()=>page([
+        {id:'tool',kind:'tool',role:'assistant',text:'Read',ts:''},
+        {id:'mail-tool',kind:'tool',role:'assistant',text:'send_message',ts:'',mail:[mail('received')]},
+        {id:'received',kind:'mail',role:'assistant',text:'',ts:'',mail:[mail('received')]},
+        {id:'sent',kind:'mail',role:'assistant',text:'',ts:'',mail:[mail('sent')]}]);
+      const root=C.mount('Vega');body.append(root);await settle();
+      const direct=root.querySelector('[data-id="received"]');
+      assert.ok(direct.textContent.includes('Vega'),'received Mail uses the conversation owner');
+      assert.ok(!direct.textContent.includes('unknown'));
+      assert.equal(root.querySelectorAll('.conversation-tool-group').length,1);
+      const received=root.querySelector('[data-id="mail-tool"]');assert.equal(received.hidden,false);
+      assert.ok(received.textContent.includes('Vega'),'received Mail uses the conversation owner');
+      assert.ok(!received.textContent.includes('unknown'));
+      assert.ok(root.querySelector('[data-id="sent"]').textContent.includes('recorded recipient unavailable'));
+      C.unmount();
+    ''')
+
+
+def test_phone_tool_group_survives_older_page_trim_and_reset():
+    run(r'''
+      const tool=i=>({id:'t'+i,kind:'tool',role:'assistant',text:'Read',ts:''});
+      const token='a'.repeat(32);let rows=[tool(2),tool(3)];
+      reply=async url=>url.includes('page=')?page([tool(1)]):page(rows,token);
+      const root=C.mount('Vega');body.append(root);await settle();
+      const button=root.querySelector('.conversation-tool-group');button.focus();button.onclick();
+      const original=root.querySelector('[data-id="t2"]');
+      await olderButton(root).onclick();await settle();
+      assert.equal(root.querySelector('.conversation-tool-group'),button);
+      assert.equal(button.attrs['aria-expanded'],'true');assert.equal(doc.activeElement,button);
+      assert.equal(root.querySelector('[data-id="t2"]'),original);
+      assert.equal(button.querySelector('.conversation-tool-count').textContent,'3 tool calls');
+      reply=async()=>page(rows);
+      for(let start=4;start<204;start+=40){rows=Array.from({length:40},(_,i)=>tool(start+i));await tick();}
+      assert.equal(ids(root).length,200);assert.ok(!root.querySelector('[data-id="t1"]'));
+      assert.equal(root.querySelector('.conversation-tool-group'),button);
+      assert.equal(button.querySelector('.conversation-tool-count').textContent,'200 tool calls');
+      assert.equal(button.attrs['aria-expanded'],'true');assert.equal(doc.activeElement,button);
+      reply=async()=>({body:{ok:false,error:'history_changed'}});await tick();
+      assert.equal(root.querySelectorAll('.conversation-tool-group').length,0);
+      assert.equal(ids(root).length,0);C.unmount();
+    ''')
+
+
+def test_phone_tool_group_range_uses_earliest_and_latest_when_middle_arrives_late():
+    run(r'''
+      const tool=(id,minute)=>({id,kind:'tool',role:'assistant',text:'Read',ts:'2026-11-09T22:'+minute+':00Z'});
+      const first=tool('t1','10'),middle=tool('t2','11'),last=tool('t3','12');let rows=[first,last];
+      reply=async()=>page(rows);
+      const root=C.mount('Vega');body.append(root);await settle();
+      const button=root.querySelector('.conversation-tool-group');button.focus();button.onclick();
+      rows=[first,middle,last];await tick();
+      const time=ts=>new Date(ts).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      assert.equal(button.querySelector('.conversation-tool-times').textContent,time(first.ts)+'–'+time(last.ts));
+      assert.ok(button.title.includes(new Date(first.ts).toLocaleString()));
+      assert.ok(button.title.includes(new Date(last.ts).toLocaleString()));
+      assert.equal(button.attrs['aria-label'],button.title);
+      assert.equal(button.attrs['aria-expanded'],'true');assert.equal(doc.activeElement,button);
+      assert.deepEqual(ids(root),['t1','t3','t2'],'late arrival ordering remains unchanged');C.unmount();
+    ''')
 
 
 def test_conversation_source_has_no_html_sinks():
