@@ -119,7 +119,7 @@ def test_pane_model_comes_only_from_a_statusline():
         "› Ask Codex to do anything\n"
         "  gpt-5.6-terra medium · ~/work/wsl-test-project\n"
     )
-    assert fresh["pane_model"] == "gpt-5.6"
+    assert fresh["pane_model"] == "gpt-5.6-terra"
 
     # Claude's Model: line does too
     assert server._parse_runtime("Model: Default (Sonnet 5)")["pane_model"] == "Sonnet 5"
@@ -130,6 +130,20 @@ def test_pane_model_comes_only_from_a_statusline():
     assert server._pane_model_for("Sonnet 5", "codex") is None
     assert server._pane_model_for("Sonnet 5", "claude-code") == "Sonnet 5"
     assert server._pane_model_for("gpt-5.6", None) == "gpt-5.6"
+
+
+@pytest.mark.parametrize("variant", ["Sol", "Terra", "Luna", "Astra", None])
+@pytest.mark.parametrize("footer_style", ["workdir", "context"])
+def test_codex_statusline_preserves_model_variant_without_effort(variant, footer_style):
+    raw = "GPT-6.1" + ("-" + variant if variant else "")
+    footer = (raw + " high · /workspace" if footer_style == "workdir"
+              else raw + " xhigh · Context 70% left")
+    parsed = server._parse_runtime("Compare with gpt-5.6-sol later.\n› \n" + footer + "\n")
+
+    assert parsed["pane_model"] == raw
+    assert server._pane_model_for(parsed["pane_model"], "codex") == raw
+    assert server._display_model(parsed["pane_model"]) == raw
+    assert server._provider_of(parsed["pane_model"]) == "openai"
 
 
 def test_stale_claude_approval_outside_current_tail_is_not_ask():
@@ -423,3 +437,53 @@ def test_current_work_after_claude_edit_approval_remains_work():
     )
     assert parsed["act_state"] == "work"
     assert parsed["work_disp"] == "7s"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("GPT-7-Nova", "GPT-7-Nova"),
+    ("gpt-7-nova", "GPT-7-Nova"),
+    ("gpt-7-nova-preview2", "GPT-7-Nova-Preview2"),
+    ("GPT-7-NovaXL", "GPT-7-NovaXL"),
+    ("gpt-6.1-sol", "GPT-6.1-Sol"),
+    ("gpt-5-codex", "GPT-5-Codex"),
+    ("gpt-5-mini", "GPT-5-Mini"),
+])
+def test_gpt_model_keeps_future_suffixes_and_full_display(raw, expected):
+    footer=raw+" xhigh · Context 72% left"
+    parsed=server._parse_runtime(footer)
+    assert parsed["pane_model"] == raw
+    assert server._normalize_model(raw) == raw.lower()
+    assert server._display_model(raw) == expected
+    assert server._display_model(footer) == expected
+    assert server._provider_of(raw) == "openai"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("claude-opus-5-5[1m]", "Opus 5.5"),
+    ("Opus 5.5", "Opus 5.5"),
+    ("qwen3.8-flash-next-iq3_xxs", "Qwen 3.8 flash"),
+    ("glm-5.3-flash", "GLM 5.3 flash"),
+    ("qwen3.8-gpt-7-nova", "Qwen 3.8"),
+])
+def test_non_gpt_model_display_keeps_existing_short_labels(raw,expected):
+    assert server._display_model(raw) == expected
+
+
+def test_registered_gpt_model_gets_the_same_display_as_a_pane(monkeypatch):
+    import sqlite3
+    monkeypatch.setattr(server,'_has_retired_at',lambda:True)
+    with sqlite3.connect(':memory:') as con:
+        con.row_factory=sqlite3.Row
+        con.execute('CREATE TABLE agents (id INTEGER, name TEXT, model TEXT, program TEXT, task_description TEXT, last_active_ts TEXT, retired_at TEXT)')
+        con.execute("INSERT INTO agents VALUES (1,'FixtureGPT','gpt-7-nova','codex','','2026-01-01T00:00:00Z',NULL)")
+        row=server._mail_registrations(con)['FixtureGPT']
+    assert row['model']=='GPT-7-Nova'
+    assert row['model_raw']=='gpt-7-nova'
+
+
+def test_codex_app_gpt_model_uses_full_display_and_retains_raw(monkeypatch):
+    monkeypatch.setattr(server,'_codex_app_live',lambda value:dict(live='',running=True,act_state='wait'))
+    row={}
+    server._apply_codex_app_runtime(row,{'model':'gpt-7-nova'})
+    assert row['model']=='GPT-7-Nova'
+    assert row['model_raw']=='gpt-7-nova'

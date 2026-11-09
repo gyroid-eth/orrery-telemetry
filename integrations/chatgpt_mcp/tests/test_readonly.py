@@ -360,3 +360,11 @@ def test_long_fresh_names_are_rejected_not_shortened(name):
     rows = [{**AGENTS_FRESH["agents"][0], "name": name}]
     with pytest.raises(DashboardError):
         snapshot(FakeDashboard(agents={**AGENTS_FRESH, "agents": rows}), "fresh")
+
+
+@pytest.mark.parametrize('raw',['gpt-6.1-sol','gpt-7-nova-preview2'])
+def test_model_projection_prefers_complete_raw_identifier_to_display(raw):
+    roster=deepcopy(AGENTS_LEGACY)
+    roster['agents'][0].update(model='GPT-'+raw[4:].title(),model_raw=raw)
+    data=snapshot(FakeDashboard(LEGACY,roster),'legacy',project_key=PROJECT)
+    assert data.agents[0]['model']==raw
