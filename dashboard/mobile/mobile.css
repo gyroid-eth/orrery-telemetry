@@ -211,3 +211,47 @@ html.graph-fullscreen #settings{z-index:40}
 .mobile .conversation-preview-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.6 var(--mono);color:var(--ink)}
 .conversation-preview-image{display:block;max-width:100%;height:auto;margin:0 auto;image-rendering:auto;background:repeating-conic-gradient(color-mix(in srgb,var(--hair) 60%,transparent) 0 25%,transparent 0 50%) 0 0/16px 16px}
 .mobile .conversation-preview-notice{flex:none;font:9px/1.6 var(--mono);color:var(--ink-dim)}
+
+/* Full-screen Conversation: the bar and composer float above the record. */
+.mobile dialog.terminal-sheet.reader-fullscreen{inset:auto 0 0;width:100vw;max-width:none;margin:0;border:0;border-radius:0;padding:0 max(16px,env(safe-area-inset-right)) 0 max(16px,env(safe-area-inset-left));height:100dvh;max-height:100dvh;outline:none}
+.mobile .reader-fullscreen:before{display:none}
+.reader-bar{position:absolute;z-index:5;inset:0 0 auto;display:flex;align-items:center;gap:2px;height:calc(48px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 10px 0 12px;border-bottom:1px solid var(--hair);background:color-mix(in srgb,var(--panel) 96%,transparent);backdrop-filter:blur(10px)}
+.reader-person{position:relative;display:flex;align-items:center;gap:7px;flex:1;min-width:0;margin-right:4px}
+.mobile .reader-person h2{font:500 17px/1.2 var(--serif);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reader-person img,.reader-initials{flex:none;width:25px;height:25px;border:1px solid var(--hair);border-radius:50%;filter:grayscale(1);object-fit:cover}
+.reader-person img{position:absolute;left:0}.reader-initials{display:grid;place-items:center;font:12px var(--serif);color:var(--ink-dim)}
+.reader-state{flex:none;width:5px;height:5px;border-radius:50%;background:var(--ink-dim)}.reader-state[data-state=work]{background:var(--amber)}.reader-state[data-state=ask],.reader-state[data-state=question]{background:var(--alert)}
+.mobile .reader-icon{display:grid;place-items:center;width:32px;min-height:36px;flex:none;padding:0;border:0;border-radius:5px;color:var(--ink-dim)}
+.reader-icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.mobile .reader-icon[aria-pressed=true]{color:var(--amber);background:color-mix(in srgb,var(--amber) 8%,transparent)}
+.reader-fullscreen>.terminal-scroll{padding-top:calc(60px + env(safe-area-inset-top));padding-bottom:calc(82px + env(safe-area-inset-bottom))}
+.reader-fullscreen>.terminal-scroll.conversation-mode{padding:0}
+.reader-fullscreen .conversation-mode>.conversation{min-height:0}
+.reader-fullscreen .conversation-list{padding:calc(60px + env(safe-area-inset-top)) 0 calc(82px + env(safe-area-inset-bottom));gap:14px;scrollbar-width:none;scroll-padding-top:calc(60px + env(safe-area-inset-top));scroll-padding-bottom:calc(82px + env(safe-area-inset-bottom))}
+.reader-fullscreen .conversation-bubble.assistant{align-self:stretch;max-width:100%;padding:0;background:none;border:0;border-radius:0;font:13px/1.7 var(--mono)}
+.reader-fullscreen .conversation-bubble.user{max-width:90%;padding:7px 10px}
+.reader-fullscreen .conversation-text p{margin:0 0 10px;white-space:pre-wrap}
+.reader-fullscreen .conversation-text h1,.reader-fullscreen .conversation-text h2,.reader-fullscreen .conversation-text h3,.reader-fullscreen .conversation-text h4,.reader-fullscreen .conversation-text h5,.reader-fullscreen .conversation-text h6{font:600 14px/1.6 var(--mono);margin:12px 0 8px}
+.conversation-text ul,.conversation-text ol{padding-left:22px;margin:8px 0}.conversation-text li p{margin:0}.conversation-text blockquote{margin:8px 0;padding-left:12px;border-left:2px solid var(--hair);color:var(--ink-dim)}
+.conversation-text a{color:var(--ink);text-decoration:underline;text-underline-offset:3px}.conversation-text code{font-family:var(--mono);background:color-mix(in srgb,var(--hair) 40%,transparent);border-radius:3px}
+.mobile .reader-fullscreen .conversation-code{padding:0;margin:8px 0;background:var(--bg);border:1px solid var(--hair);border-radius:6px;overflow:hidden;white-space:normal}
+.conversation-code-head{display:flex;align-items:center;gap:8px;padding:5px 9px;border-bottom:1px solid var(--hair);color:var(--ink-dim);font:9.5px var(--mono)}
+.conversation-code-language{flex:1}.mobile .conversation-code-copy,.mobile .conversation-table-copy,.mobile .conversation-output-toggle,.mobile .conversation-dismiss{border:0;background:none;color:var(--ink-dim);font:9.5px var(--mono);min-height:28px;padding:3px 5px;text-transform:uppercase}
+.mobile .conversation-code pre{margin:0;padding:8px 10px;overflow:auto;white-space:pre;font:11px/1.7 var(--mono);color:var(--ink);background:none;border:0;overflow-wrap:normal}.conversation-code code{background:none}
+.mobile .conversation-code pre.conversation-output-collapsed{max-height:168px}
+.reader-fullscreen .conversation-table{display:block;margin:8px 0;font:11px/1.6 var(--mono)}.conversation-table-scroll{overflow:auto}.conversation-table table{width:100%;border-collapse:collapse}.conversation-table th,.conversation-table td{padding:6px 8px}
+.conversation-table-copy{display:block;margin-left:auto}
+.mobile .reader-compose-toggle{position:absolute;z-index:4;right:max(18px,env(safe-area-inset-right));bottom:calc(18px + env(safe-area-inset-bottom));display:grid;place-items:center;width:52px;height:52px;padding:0;min-height:0;border:1px solid var(--hair);border-radius:50%;background:var(--panel-2);color:var(--ink);font:28px var(--serif);box-shadow:0 8px 24px color-mix(in srgb,var(--shade) 30%,transparent)}
+.reader-composer{position:absolute;z-index:6;inset:auto 0 0;padding:14px 16px calc(14px + env(safe-area-inset-bottom));border-top:1px solid var(--hair);background:var(--panel);max-height:calc(100% - 48px - env(safe-area-inset-top));overflow:auto;overscroll-behavior:contain}
+.mobile .reader-compose-close{float:right;border:0;background:none;padding:0;min-height:30px;min-width:30px;font-size:20px}
+.reader-composer .terminal-compose-label{clear:both}.reader-composer .terminal-pane-button{margin-bottom:8px;max-width:calc(100% - 40px);overflow-wrap:anywhere}.reader-composer .terminal-help,.reader-composer .terminal-input-meta>span:first-child{display:none}.mobile .reader-composer .terminal-text{height:86px;font-size:16px}
+.reader-info{position:absolute;z-index:7;inset:calc(48px + env(safe-area-inset-top)) 8px auto;padding:14px;border:1px solid var(--hair);border-radius:0 0 8px 8px;background:var(--panel);max-height:65%;overflow:auto;font:11px/1.7 var(--mono);color:var(--ink-dim)}.mobile .reader-info p{margin-bottom:10px}
+.mobile .reader-fullscreen>.terminal-message:empty{display:none}.mobile .reader-fullscreen>.terminal-message:not(:empty){position:static;order:-1;flex:none;margin:calc(48px + env(safe-area-inset-top)) 0 0;background:var(--panel);border:1px solid var(--alert);color:var(--ink);padding:7px 10px;max-height:25%;overflow:auto}
+.mobile .reader-fullscreen .conversation-status:not([hidden]){position:static;flex:none;padding:calc(60px + env(safe-area-inset-top)) 10px 7px;border:0;border-bottom:1px solid var(--hair);background:var(--panel);font:11px/1.7 var(--mono);color:var(--ink)}
+.reader-fullscreen .conversation-retry{position:absolute;z-index:3;top:100px;right:8px;background:var(--panel)}
+.reader-fullscreen .conversation-preview{position:absolute;inset:calc(48px + env(safe-area-inset-top)) -8px 0;z-index:8;border-radius:0;padding-bottom:env(safe-area-inset-bottom)}
+.conversation-activity{font:10px/1.7 var(--mono);color:var(--ink-dim);padding:3px 0}.conversation-activity:before{content:'● ';color:var(--amber)}.conversation-activity.reply-needed{color:var(--alert)}.conversation-activity.reply-needed:before{color:var(--alert)}
+.conversation-shell{width:100%;min-width:0}.conversation-speaker{display:block;font:9px var(--mono);color:var(--ink-dim);letter-spacing:.08em}.reader-fullscreen>.terminal-actions{padding-bottom:env(safe-area-inset-bottom)}
+
+.reader-fullscreen:has(>.terminal-message:not(:empty)) .conversation-status:not([hidden]){padding-top:7px}
+.reader-fullscreen:has(>.terminal-message:not(:empty)) .conversation-list,.reader-fullscreen .conversation:has(>.conversation-status:not([hidden])) .conversation-list{padding-top:14px}

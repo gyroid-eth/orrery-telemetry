@@ -7,6 +7,7 @@ const $=s=>document.querySelector(s),node=(tag,cls,text)=>{const e=document.crea
 let snapshot=null,kind='all',agentFilter='',desiredWindow='day',timer=0,active=null,pending=false,receivedAt=0,lastNotices=[];
 const mailRef=a=>a&&/^[a-f0-9]{32}$/.test(a.mail_instance_id)&&Number.isSafeInteger(a.mail_agent_id)&&a.mail_agent_id>0?{mail_instance_id:a.mail_instance_id,mail_agent_id:a.mail_agent_id}:null;
 function markRef(element,value){const ref=mailRef(value);if(ref){element.dataset.mailInstanceId=ref.mail_instance_id;element.dataset.mailAgentId=String(ref.mail_agent_id);}}
+window.OrreryMobileAgent={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?{state:rows[0].act_state,running:rows[0].running,workDisplay:typeof rows[0].work_disp==='string'?rows[0].work_disp:'',stale:snapshot.sources.agents.status!=='available'||snapshot.sources.agents.age_seconds===null||snapshot.sources.agents.age_seconds+(performance.now()-receivedAt)/1000>30}:null;}};
 window.OrreryMobileIdentity={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?mailRef(rows[0]):null;}};
 let mailPage=null,mailPositions=[null],mailPosition=0,mailController=null,mailGeneration=0;
 let pair=null,pairController=null,pairGeneration=0,detailController=null,detailGeneration=0;
@@ -226,7 +227,7 @@ function clearDetail(close=true){
 }
 async function openMessage(event,window){
  clearDetail(false);const generation=detailGeneration,controller=new AbortController();detailController=controller;
- const sheet=$('#message-sheet');if(!sheet.open)sheet.showModal();
+ const sheet=$('#message-sheet');if(!sheet.open){sheet.showModal();if(history){window.history.pushState({orreryConversation:true},'');backEntry=true;}}
  $('#message-route').textContent=event.source+' → '+event.target+' · '+time(event.event_at)+' · '+event.kind;
  globalThis.OrreryMobileTerminal?.mail(event);
  $('#message-status').textContent='Loading one message…';
@@ -407,7 +408,7 @@ poll();
 const q=s=>document.querySelector(s),make=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!==undefined)e.textContent=txt;return e;};
 const sheet=q('#terminal-sheet'),contract='orrery-mobile-pane-v1';
 let capability=null,enabled=false,phase='loading',name='',choices=[],choice=null,target=null,text='',output='',preview=null,previewOK=false,message='';
-let selector=null,history=false,tab='terminal';
+let selector=null,history=false,tab='terminal',composer=false,info=false,backEntry=false,backClosing=false;
 const conversation=()=>window.OrreryMobileConversation;
 const fresh=()=>capability?.api===34;
 const ref=value=>value&&/^[a-f0-9]{32}$/.test(value.mail_instance_id)&&Number.isSafeInteger(value.mail_agent_id)&&value.mail_agent_id>0?{mail_instance_id:value.mail_instance_id,mail_agent_id:value.mail_agent_id}:null;
@@ -435,8 +436,9 @@ function cancelIntent(){
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
 function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;generation++;}
-function clear(){stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
-function close(){const restore=previousFocus;previousFocus=null;clear();if(sheet.open)sheet.close();if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});}
+function clear(){composer=false;info=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
+function close(fromBack=false){const remove=backEntry&&window.history.state?.orreryConversation===true;backEntry=false;const restore=previousFocus;previousFocus=null;clear();if(sheet.open)sheet.close();if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});if(remove&&fromBack!==true){backClosing=true;window.history.back();}}
+window.addEventListener('popstate',event=>{if(backClosing){backClosing=false;event.stopImmediatePropagation();return;}if(sheet.open&&backEntry){event.stopImmediatePropagation();if(dismissLayer()){window.history.pushState({orreryConversation:true},'');return;}backEntry=false;close(true);}},true);
 const entryLabel=()=>history?'History':'Terminal';
 function entry(n,cls='',identity=null){
  const b=make('button','terminal-entry '+cls,entryLabel());b.type='button';b.dataset.terminalName=n;
@@ -459,7 +461,7 @@ function mail(event){
 }
 async function open(n,identity=null){
  if(!(enabled||history)||document.hidden)return;previousFocus=sheet.open?previousFocus:document.activeElement;clear();name=n;selector=ref(identity);window.scrollTo({top:0,behavior:'instant'});
- if(!sheet.open)sheet.showModal();
+ if(!sheet.open){sheet.showModal();if(history){window.history.pushState({orreryConversation:true},'');backEntry=true;}}
  if(history){tab='conversation';conversation().mount(n);}
  if(!enabled){phase='history-only';render();return;}
  if(fresh()&&!selector){phase='unavailable';message='A unique Mail identity is required. Refresh the agent list or open a Mail participant.';render();return;}
@@ -590,21 +592,45 @@ async function status(){
 }
 function resizeSheet(){
  if(!sheet.open)return;const v=window.visualViewport,h=v?.height||innerHeight,offset=v?.offsetTop||0;
- sheet.style.height=Math.min(746,h-(h<610?8:86))+'px';sheet.style.maxHeight=Math.max(120,h-8)+'px';
+ sheet.style.height=(history?h:Math.min(746,h-(h<610?8:86)))+'px';sheet.style.maxHeight=(history?h:Math.max(120,h-8))+'px';
  sheet.style.bottom=Math.max(0,innerHeight-h-offset)+'px';sheet.classList.toggle('terminal-keyboard',h<610);
  refreshOutput();
 }
 window.visualViewport?.addEventListener('resize',resizeSheet);window.visualViewport?.addEventListener('scroll',resizeSheet);window.addEventListener('resize',resizeSheet);
+function dismissLayer(){if(conversation()?.dismissPreview?.())return true;if(info){info=false;render();queueMicrotask(()=>q('.reader-info-toggle')?.focus({preventScroll:true}));return true;}if(composer&&phase==='editing'){toggleComposer(false);return true;}return false;}
+function toggleComposer(on){
+ if(!on&&phase==='preparing'){stop();cancelIntent();phase='editing';poll();}
+ composer=on;info=false;render();queueMicrotask(()=>q(on?'#terminal-text':'.reader-compose-toggle')?.focus({preventScroll:true}));
+}
+function readerBar(){
+ const bar=make('div','reader-bar'),who=make('div','reader-person'),portrait=make('img');portrait.src=window.AGENTSTACK_DEMO.portraitURL(name);portrait.alt='';portrait.onerror=()=>{portrait.remove();};
+ const initials=make('span','reader-initials',name.slice(0,2)),title=make('h2','',name);title.id='terminal-title';who.append(initials,portrait,title,make('span','reader-state'));bar.append(who);
+ const icons={conversation:['Conversation','M3 4h6l3 2 3-2h6v15h-6l-3 2-3-2H3z M12 6v15'],terminal:['Terminal','m5 7 5 5-5 5 M13 17h6'],info:['Conversation information','M12 11v6 M12 7v1'],close:['Close Conversation','m6 6 12 12 M18 6 6 18']};
+ for(const value of ['conversation','terminal','info','close']){
+  if(value==='terminal'&&!enabled)continue;
+  const [label,path]=icons[value],b=action('','reader-icon '+(value==='info'?'reader-info-toggle':value==='close'?'terminal-close':''),()=>value==='close'?close():value==='info'?(info=!info,render()):switchTab(value));b.setAttribute('aria-label',label);b.title=label;
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),line=document.createElementNS('http://www.w3.org/2000/svg','path');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');line.setAttribute('d',path);svg.append(line);b.append(svg);
+  if(['conversation','terminal'].includes(value)){b.setAttribute('aria-pressed',String(tab===value));b.disabled=['sending','preparing'].includes(phase);}
+  if(value==='info'){b.setAttribute('aria-expanded',String(info));b.setAttribute('aria-controls','reader-info');}bar.append(b);
+ }
+ sheet.append(bar);queueMicrotask(()=>conversation()?.refreshActivity?.());
+ if(info){const box=make('div','reader-info');box.id='reader-info';box.append(make('p','','Conversation record · read-only. New messages below stay paused while you read.'),make('p','','One line + Enter · up to 4096 bytes. Review shows the terminal tail before Send once.'),make('p','',choice?'Sends to '+choice.pane_label+'. Existing terminal input may be combined with it.':'Choose a verified pane in Terminal to write.'),make('p','','Working shows the recorded turn duration when available. Links open in a new tab; local paths stay text.'));
+ if(choice)box.append(action(choice.pane_label+' · Change pane','terminal-pane-button',()=>{info=false;tab='terminal';list();}));sheet.append(box);}
+}
+function composeToggle(){const b=action('','reader-compose-toggle',()=>toggleComposer(true));b.setAttribute('aria-label','Write input');b.title='Write input';b.setAttribute('aria-expanded','false');const mark=make('span','','✎');mark.setAttribute('aria-hidden','true');b.append(mark);sheet.append(b);}
 function render(){
+ const focus=document.activeElement,hadFocus=focus&&sheet.contains?.(focus);if(hadFocus){sheet.tabIndex=-1;sheet.focus({preventScroll:true});}
  const previous=q('#terminal-output');
  // Review/edit rebuild the sheet for the same pane. Choosing a pane and
  // reopening clear output first, so their new preview still opens at its tail.
  const readTop=previewOK&&previous&&!terminalFollowing(previous)?previous.scrollTop:null;
  const readOutput=readTop!==null?previous.textContent:'',readPreview=readTop!==null?previous._preview:null,readView=readTop!==null?previous._scrollView:null;
- resizeSheet();sheet.replaceChildren();
+ resizeSheet();sheet.replaceChildren();if(hadFocus)queueMicrotask(()=>{if(focus.isConnected)focus.focus({preventScroll:true});else if(focus.id)q('#'+focus.id)?.focus({preventScroll:true});else if(focus.classList?.contains('reader-info-toggle'))q('.reader-info-toggle')?.focus({preventScroll:true});});
  // Review always shows the terminal tail, even when it was started from the
  // Conversation tab: nothing is sent without seeing the pane first.
  const reading=tab==='conversation'&&phase!=='review';
+ sheet.classList.toggle('reader-fullscreen',history);
+ if(history)readerBar();else{
  const header=make('div','terminal-header'),title=make('h2','',phase==='review'?'Review input':reading?'Conversation':'Terminal');title.id='terminal-title';header.append(title,action('Close','terminal-close',close));sheet.append(header);
  const who=make('div','terminal-identity'),copy=make('div'),portrait=make('img');portrait.src=window.AGENTSTACK_DEMO.portraitURL(name);portrait.alt='';portrait.onerror=()=>portrait.remove();copy.append(make('strong','',name),make('small','',reading?'Conversation record · read-only':'Cockpit session'));who.append(portrait,copy);
  if(choice){const b=make('button','terminal-pane-button',choice.pane_label+' ⌄');b.type='button';b.disabled=['sending','preparing'].includes(phase);b.onclick=list;who.append(b);}
@@ -614,13 +640,15 @@ function render(){
   for(const [value,label]of[['conversation','Conversation'],['terminal','Terminal']]){const b=make('button','',label);b.type='button';b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===value));b.disabled=['sending','preparing'].includes(phase);b.onclick=()=>switchTab(value);tabs.append(b);}
   sheet.append(tabs);
  }
- const scroll=make('div','terminal-scroll'+(reading?' conversation-mode':''));sheet.append(scroll);
+ }
+ let scroll=make('div','terminal-scroll'+(reading?' conversation-mode':''));sheet.append(scroll);
  if(reading){
-  const view=conversation()?.element()||conversation()?.mount(name);if(view){scroll.append(view);queueMicrotask(()=>conversation()?.restore());}
+  const view=conversation()?.element()||conversation()?.mount(name);if(view){scroll.append(view);queueMicrotask(()=>{conversation()?.restore();if(focus?.isConnected&&hadFocus)focus.focus({preventScroll:true});});}
+  const warning=make('p','terminal-message',message);warning.setAttribute('role','status');sheet.append(warning);
   if(phase==='history-only')return;
   if(['loading','choose','unavailable','changed'].includes(phase)){
    const hint=make('div','conversation-compose-hint');hint.append(make('span','',phase==='loading'?'Finding a pane to write to…':'To write, choose a pane in Terminal.'));
-   if(phase!=='loading')hint.append(action('Terminal','',()=>switchTab('terminal')));scroll.append(hint);return;
+   if(phase!=='loading')hint.append(action('Terminal','',()=>switchTab('terminal')));hint.append(make('p','terminal-result',message));scroll.append(hint);return;
   }
  }
  if(phase==='loading'){scroll.append(make('p','terminal-help','Finding selectable panes…'));return;}
@@ -661,12 +689,18 @@ function render(){
  });
  const observed=make('div','terminal-observed');observed.append(make('span','','Latest 40 lines · up to 6 KiB'),make('span','terminal-age',''));scroll.append(observed,make('p','terminal-preview-note',''));
  }
+ let actionsHost=sheet;
+ if(history&&['editing','preparing'].includes(phase)){
+  if(!composer){composeToggle();if(!reading)scroll.append(make('p','terminal-message',message));refreshOutput();return;}
+  const panel=make('div','reader-composer');panel.setAttribute('role','region');panel.setAttribute('aria-label','Write input');const hide=action('×','reader-compose-close',()=>toggleComposer(false));hide.setAttribute('aria-label','Close input');panel.append(hide);sheet.append(panel);scroll=panel;actionsHost=panel;
+  if(choice)panel.append(action(choice.pane_label+' ⌄','terminal-pane-button',()=>{tab='terminal';list();}));
+ }
  if(['editing','preparing'].includes(phase)){
   const label=make('label','terminal-compose-label','Your input');label.htmlFor='terminal-text';const field=make('textarea','terminal-text');field.id='terminal-text';field.rows=2;field.value=text;field.placeholder='Write one line…';field.autocomplete='off';field.spellcheck=false;field.disabled=phase==='preparing';
   const count=make('span','',new TextEncoder().encode(text).length+' / 4096 bytes'),meta=make('div','terminal-input-meta');meta.append(make('span','','One line + Enter'),count);
   scroll.append(label,field,meta,make('p','terminal-help',reading?'Sends to '+choice.pane_label+'. Review shows its terminal tail before you send.':'Check the terminal above before sending.'));
   const actions=make('div','terminal-actions'),review=action(phase==='preparing'?'Preparing…':'Review input','terminal-primary',reviewInput);review.id='terminal-review';review.disabled=phase==='preparing'||!previewOK||!validText(text);
-  field.oninput=()=>{text=field.value;count.textContent=new TextEncoder().encode(text).length+' / 4096 bytes';review.disabled=!previewOK||!validText(text);};field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};actions.append(action('Cancel','',close),review);sheet.append(actions);
+  field.oninput=()=>{text=field.value;count.textContent=new TextEncoder().encode(text).length+' / 4096 bytes';review.disabled=!previewOK||!validText(text);};field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};actions.append(action('Cancel','',history?()=>toggleComposer(false):close),review);actionsHost.append(actions);
  }else if(phase==='review'){
   scroll.append(make('p','terminal-compose-label','Exact text to '+prepared.target.name),make('pre','terminal-exact',prepared.text));const enter=make('div','terminal-enter');enter.append(make('span','','After this text'),make('kbd','','Enter ↵'));scroll.append(enter,make('p','terminal-help','Sends once to this pane. It may be a shell. Existing terminal input may be combined with it.'));
   const actions=make('div','terminal-actions');actions.append(action('Edit','',()=>{cancelIntent();phase='editing';render();}),action('Send once','terminal-primary',send));sheet.append(actions);
@@ -675,11 +709,11 @@ function render(){
   if(accepted)scroll.append(make('p','terminal-result-note','The pane keeps updating while this sheet is open.'));
   const actions=make('div','terminal-actions');actions.append(action('Close','',close));if(unknown)actions.append(action('Check receipt','terminal-primary',status));else if(phase!=='sending')actions.append(action('Write again','terminal-primary',()=>{cancelIntent();phase='editing';text='';render();}));sheet.append(actions);
  }
- scroll.append(make('p','terminal-message',message));
+ if(!reading)scroll.append(make('p','terminal-message',message));
  if(readTop!==null&&pre){pre.textContent=readOutput;pre._preview=readPreview;pre._scrollView=readView;pre.scrollTop=readTop;}
  refreshOutput();
 }
-sheet.addEventListener('cancel',e=>{e.preventDefault();close();});sheet.addEventListener('close',()=>{if(name)close();});
+sheet.addEventListener('cancel',e=>{e.preventDefault();if(!dismissLayer())close();});sheet.addEventListener('close',()=>{if(name&&!sheet.open)close();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)close();});window.addEventListener('pagehide',close);
 window.OrreryMobileTerminal={open,close,mail};entries();
 const historyChecked=window.OrreryMobileConversation?window.OrreryMobileConversation.enabled():Promise.resolve(false);

@@ -70,7 +70,6 @@ badgeが**ON**になり、Setupの手順は消えます。**自分で確かめ�
 
 スマホで、手順2の**Address on the phone**（`https://…:9443/`）を開き、agentを開きます。最初のHTTPSは、証明書の発行で数秒かかることがあります。**Conversation** tabが出れば、会話の記録まで届いています（[会話の記録を読む](#スマホでagentの会話の記録を読む)）。
 
-<img src="images/mobile-conversation.png" width="300" alt="スマホのConversation tab。発言とMailのcardが並ぶ">
 
 ### demo modeのとき
 
@@ -291,18 +290,17 @@ Terminalだけを戻す場合は共有設定を`false`にするか項目を除�
 | 3 | agent | readerの起動コマンドに`--phone-policy-reviewed`（8791以外なら`--cockpit-port`も）があることを確かめる。先に同じflagで`--check`し（`conversation history and previews are on`と出る）、今の管理方法でreaderを再起動する。以前の`--enable-history`もそのまま使える |
 | 4 | **本人** | スマホでagentを開き、**Conversation** tabを確認する。末尾に**›**の付いたfileのchipを押してpreviewが開き、**Close**で消えることを確かめる |
 
-有効にすると上部に**History enabled**（Terminalも有効なら**History · Terminal**）と出て、Terminalの入口が**History**に変わります。agentのsheetは**Conversation**で開きます。Terminalも有効なら、上部に**Conversation | Terminal**の切替が出ます。
+有効にすると上部に**History enabled**（Terminalも有効なら**History · Terminal**）と出て、入口が**History**になります。agentを開くと**Conversationが全画面**になり、上の細い帯に顔・名前・状態・Conversation／Terminal・**i**・**×**が並びます。入力は右下の丸い鉛筆から開きます。**i**に読み取り専用・更新・送信先・入力の説明をまとめますが、未確認・通信断・送信失敗は画面上に残ります。**×**で閉じ、Back／Escapeはpreviewや入力欄を先に閉じます。末尾の**Working**は、記録に作業の経過があるときだけ**Working · 2m05s**のように出し、無いときは**Working**だけです。返事待ちは赤い短い行で出します。
 
-<img src="images/mobile-conversation.png" width="300" alt="Conversation tab。上にShow older、発言とMailのcardが並ぶ"> <img src="images/mobile-conversation-table.png" width="300" alt="同じ記録の新しい側。Markdownの表とcode blockが文字のまま組まれている">
 
 - スマホが送るのは、表示中の名簿にあるagentの名前と、**Show older**のときにreaderが発行したpageの印（10分有効。最新のpageを更新している間は延びる）と、fileを開くときにreaderが発行した参照のID（同じ条件）だけです。fileのpath、記録のcursor、cockpitの参照のIDは送りも受け取りもしません。readerは固定のloopbackのcockpitのroute `GET /telemetry/conversation`だけを呼びます。dashboardのboundの記録はcockpitが自分で引き、読んだ後にも確かめ直します。中身は伏せません（下記）。
 - 表示するのは**bound**の記録だけです。unbound・stale・未確認のagentは、短い説明と`binding_missing`などの理由のcodeだけを出し、記録の本文は出しません。
 - 1 pageは最大40件・512 KiBです。発言1件とMailの本文1通はそれぞれ16 KiBで切り、切ったことを示します。pageに収まらなかった発言は飛ばさず、次の**Show older**で出します。1件だけでpageに収まらない発言は、さらに短く切って切ったことを示します。それでも出せないものがあれば、その位置に**Some messages are omitted here**と出します。toolの呼び出しは名前の1行だけで、toolの出力とdiffは送りません。fileと画像は名前のchipで出ます（下記のpreview）。発言から端末の行へ移る機能はスマホにはありません。
 - 開けるfileのchipは押せる形（末尾に**›**）で、押すとConversationの上にpreviewを出します。readerはcockpitの固定のroute `GET /telemetry/conversation/preview`をloopbackで呼び、cockpitがそのたびに、記録とbindingが変わっていないこと、agentの作業folder（またはPCで指定したroot）の中であること、symlinkでない本来のpathであること、種類と大きさ・画素数を確かめます。fileの名前では断りません。textは先頭32 KiBまでで、伏せずに文字として表示し、切ったときは**Showing the start of the file**と出します。HTML・SVGも文字として出し、実行しません。画像はcockpitが画素だけをPNGに描き直したものを、readerがさらに確かめます（IHDR・IDAT・IENDだけのPNG、1辺8192 px・合計8 Mpx・4 MiBまで）。これを超えるもの、開けない種類、範囲外のfileは理由だけを出します。表示するのは**今のfile**で、記録した時点の中身と違うことがあり、previewの下にそう出します。previewを表示できたときだけ上に**Save**が出て、押すと、表示しているものと同じ中身（textは表示した範囲、画像は描き直したPNG）を端末に保存します。HTML・SVG・XMLは文字のfileとして、名前の末尾に`.txt`を足します。新しく読みに行くことはありません。Android・iOSとも、browserのdownloadとしてDownloadsやFilesに入ります。iOSで画像を写真に入れたいときは、画像を長押しして保存します。保存したfileは端末に残り、Closeでは消えません。toolの呼び出しから取り出した参照だけが対象です。範囲外・previewしない種類のfileには、cockpitが参照を付けないので、名前だけの押せないchipになります。
-- 発言・Markdownの表・code blockは文字としてDOMに組みます。HTML・link・記録の中の画像は実行しません。記録の中のORRERY Mailの通知と送ったMailはcardになり、押すと記録にある本文を出します。cardを開いても、Mailの既読・ACK・返信はしません。
+- assistantの本文は太字・見出し・リスト・表・コードを描き、コードと表に**COPY**を付けます。生のHTMLは文字、画像はラベルのままで読み込みません。HTTP(S)／mailtoのリンクだけを別tabで開き、それ以外のリンクとローカルpathは文字のままです。`!`の記録は**SHELL**のコマンドと出力にまとめ、それぞれコピーできます。長い出力は畳んで開けます。自動通知は短い活動の要約だけを出し、task IDや出力fileのpathなどのsystemの詳細は渡しません。記録中のORRERY Mailはcardから本文を開けますが、既読・ACK・返信はしません。描画器の出典と同期確認は[同梱ソースの説明](../dashboard/mobile/MARKDOWN_SOURCE.md)にあります。
 - コンピューターの負荷が高いと、cockpitが記録とbindingを確かめるのに数秒かかり、最初の表示まで**Loading the record…**が数秒続くことがあります。readerは15秒まで待ち、それでも返らなければ**Taking longer than usual**と**Retry**を出します。待つか押せば読み直し、表示中の発言は消しません。
-- tabを前面で開いている間、最新のpageを約5秒ごとに更新します。上へscrollして読んでいる間は新しい発言で表示が動かず、**New messages below · paused**と出ます。sheetを開いている間に保持するのは最大200件で、そこに達すると**Show older**は止まります。pageの印が切れていたら、最新のpageを読み直し、**Show older**も戻ります。
-- 送信は既存のTerminalの経路のままです。Terminalが有効でpaneを選んであれば、Conversationの下の入力欄は同じ**Review input → Send once**の確認・上限・受領を使います。Reviewの画面には、Terminal tabと同じ端末の末尾（最新40行・最大6 KiB）を必ず出すので、paneを見ずに送ることはありません。**Received by terminal**の後、送った文が記録に現れるまで（最長3分）点線の仮の行を出します。この行はこの画面の中だけのもので、agentが受け取ったことの証明にはなりません。
+- tabが前面の間は約5秒ごとに最新のpageを更新します。上へscrollして読んでいる間は新しい発言で表示が動きません。更新と停止の説明は**i**にあります。保持は最大200件で、そこに達すると**Show older**は止まります。pageの印が切れたら最新のpageを読み直します。
+- 送信は既存のTerminal経路のままです。Terminalが有効でpaneを選んだら、鉛筆で入力欄を開き、同じ**Review input → Send once**の確認・上限・受領を使います。Reviewでは必ず端末の末尾（最新40行・最大6 KiB）を出します。**Received by terminal**の後の仮の行は、送信後の記録に同じ文が届けば消え、**Dismiss**で閉じるか、最長3分で消えます。`!`は対応するSHELLの記録と照合します。この行は画面内だけの表示で、agentの受領の証明ではありません。
 - Close・別agentへの切替・背景移行・離脱で更新を止め、スマホから記録・pageの印・参照のID・開いていたpreview（画像のdataを含む）・仮の行を消します。遅れた応答で復活させず、URL・log・browser storageへ残しません。reader側で発行済みの印は期限まで残りますが、本文を含まず、同じagentにしか使えません。
 
 **伏せる処理はありません。** 名前で隠したり、中身を伏せたりはしません。表示は記録とfileのままで、何を出してよいかは持ち主が判断します。会話の本文・Mailの本文・fileのtext・画像の中の鍵、promptに貼った秘密、私的な文章は、書かれたままスマホに届きます。名前が秘密らしいfile（`credentials.yaml`・`api_key.md`など）も、作業folderの中で種類と大きさが合えば開けます（拡張子の無い`.env`や鍵のfileなど、previewする種類に無いものは開けません）。toolの出力は送りませんが、agentがそこから書き写したものは届きます。それでよいagentと端末に限ってHistoryを有効にしてください。
