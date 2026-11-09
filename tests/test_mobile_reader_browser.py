@@ -1,5 +1,6 @@
 """Selected full-screen mobile Conversation, using synthetic local APIs."""
 import time
+import json
 
 import pytest
 
@@ -147,3 +148,41 @@ def test_mail_detail_fetches_and_displays_body_from_both_views(phone, view):
     assert [p for p in state['get_calls'] if p.startswith('/view/message?')] == ['/view/message?window=day&event=' + event['key']]
     assert js("document.querySelector('#message-sheet').open&&document.querySelector('#message-subject').textContent==='Fixture subject'&&document.querySelector('#message-body').textContent==='Fixture message body'")
     assert js("history.state?.orreryConversation!==true")
+
+
+@pytest.mark.parametrize(('operation', 'outcome'), [('prepare', 'accepted'), ('commit', 'accepted'), ('commit', 'unknown')])
+def test_pending_send_cannot_change_pane_or_discard_its_receipt(phone, operation, outcome):
+    _, js, wait, state = phone
+    wait("document.querySelector('.reader-compose-toggle')!==null")
+    js("document.querySelector('.reader-info-toggle').click();window.__oldPaneAction=document.querySelector('.reader-info .terminal-pane-button').onclick;document.querySelector('.reader-info-toggle').click()")
+    js("window.__realFetch=fetch;window.__release=null;window.fetch=async(...args)=>{const response=await __realFetch(...args);if(String(args[0]).endsWith('/'+" + json.dumps(operation) + "))return new Promise((resolve,reject)=>{__release=()=>" + ("reject(Error('Fixture response lost'))" if outcome == 'unknown' else "resolve(response)") + "});return response};document.querySelector('.reader-compose-toggle').click();const field=document.querySelector('#terminal-text');field.value='One fixture action';field.dispatchEvent(new Event('input',{bubbles:true}))")
+    wait("document.querySelector('#terminal-review').disabled===false")
+    js("document.querySelector('#terminal-review').click()")
+    if operation == 'commit':
+        wait("[...document.querySelectorAll('button')].some(b=>b.textContent==='Send once')")
+        js("[...document.querySelectorAll('button')].find(b=>b.textContent==='Send once').click()")
+    wait('window.__release!==null')
+    before = list(state['calls'])
+    js("document.querySelector('.reader-info-toggle').click()")
+    assert js("document.querySelector('.reader-info .terminal-pane-button').disabled")
+    assert js("[...document.querySelectorAll('.reader-bar [aria-pressed]')].every(b=>b.disabled)")
+    if operation == 'prepare':
+        assert js("document.querySelector('.reader-composer .terminal-pane-button').disabled")
+    js("document.querySelector('.reader-info .terminal-pane-button').click();document.querySelector('.reader-bar [aria-label=Terminal]').click()")
+    # A callback retained from before the operation must obey the same guard.
+    js("__oldPaneAction();OrreryMobileTerminal.open('OtherAgent')")
+    assert state['calls'] == before
+    js('window.__release();void 0')
+    if operation == 'prepare':
+        wait("[...document.querySelectorAll('button')].some(b=>b.textContent==='Send once')")
+        assert js("document.querySelector('.terminal-exact').textContent==='One fixture action'")
+        assert not any(op == 'commit' for op, _ in state['calls'])
+    else:
+        wait("document.querySelector('#terminal-sheet').innerText.includes(" + json.dumps('Outcome unknown' if outcome == 'unknown' else 'Received by terminal') + ")")
+        assert sum(op == 'commit' for op, _ in state['calls']) == 1
+        assert not any(op == 'cancel' for op, _ in state['calls'])
+        if outcome == 'unknown':
+            js("[...document.querySelectorAll('button')].find(b=>b.textContent==='Check receipt').click()")
+            wait("document.querySelector('#terminal-sheet').innerText.includes('Receipt unavailable')")
+            assert next(p for op, p in state['calls'] if op == 'status')['intent'] == 'fixture-intent'
+            assert sum(op == 'commit' for op, _ in state['calls']) == 1
