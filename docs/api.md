@@ -62,7 +62,7 @@ POST の Origin は、検証済み Host に対応する固定 origin とだけ�
 | POST | `/api/jump` | `{session, open?, base?, tools?}` | open / focus / resume action |
 | POST | `/api/exit` | `{session}` | graceful exit action |
 | POST | `/api/kill` | `{session, mode}` | kill / retire action |
-| POST | `/api/annotate` | `{name, role, emoji, group}` | saved annotation |
+| POST | `/api/annotate` | `{name, role?, emoji?, group?, task?}` | saved annotation |
 | POST | `/api/spawn` | spawn payload | child launch result |
 
 ## GET `/api/version`
@@ -72,7 +72,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":37}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":38}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -97,7 +97,7 @@ version の解決順は [インストール](install.md#version)を参照して�
 
 成功応答の `ok:true,pending:true,child_name,job_id,I/A` は handoff の受付であり、native 起動完了ではありません。status の `state:launching,result:null` は未確認、`detail:unknown` は自動再試行しない結果不明、`detail:not_started` は保存済み準備後の未開始です。native receipt が成立した起動verdictは既存callerと同じ `state:ready`。実行中／終了は `detail:started/ended` と `result.native_ready` で別に示します。native未成立の終了は `state:failed` であり、終了だけを成功へ寄せません。roster の native_ready も receipt の観測であり、OS process の現在の生存を証明しないため、未確認時の running は null のままです。準備後に失敗した場合は同じ job/I/A をエラーへ返し、status と手順で解決します。同名で自動的に別の agent を起こしません。fresh Iは生成された32桁の小文字hexをそのまま投影し、hyphen形式へ変換しません。
 
-API2a は下記の Mail/graph 読取、API2b-1 は PC の現在対象に対する term/history/jump/exit を接続します。終了済み kill/retire は下記の管理契約、R4 は別の本人opt-inの契約です。reactivate／退役済みresume／App GUI activationは未接続です。worktree、browser、独自 base/tools、spawn 時の terminal 指定、annotation(role/group/emoji)、dry_run も明示拒否です。通常の standalone／親付き自動起動の代わりに手動子作成を要求する意味ではありません。必要な作業folderやprovider設定は利用者のagentが手順で準備します。設定・切替・復旧は [日英の移行手順](fresh-global-update.md) を参照してください。
+API2a は下記の Mail/graph 読取、API2b-1 は PC の現在対象に対する term/history/jump/exit を接続します。終了済み kill/retire は下記の管理契約、R4 は別の本人opt-inの契約です。reactivate／退役済みresume／App GUI activationは未接続です。worktree、browser、独自 base/tools、spawn 時の terminal 指定、annotation(role/group/emoji/task)、dry_run も明示拒否です。通常の standalone／親付き自動起動の代わりに手動子作成を要求する意味ではありません。必要な作業folderやprovider設定は利用者のagentが手順で準備します。設定・切替・復旧は [日英の移行手順](fresh-global-update.md) を参照してください。
 
 #### PC の現在対象（API2b-1）
 
@@ -514,7 +514,7 @@ response は live comet 用の message list と watermark を含みます。設�
 {
   "ok":true,
   "annotations":{
-    "WindyFermi":{"role":"docs","emoji":"","group":"release"}
+    "WindyFermi":{"role":"docs","emoji":"","group":"release","task":"Review release documentation"}
   }
 }
 ```
@@ -661,7 +661,7 @@ request:
 request:
 
 ```json
-{"name":"WindyFermi","role":"docs","emoji":"","group":"release"}
+{"name":"WindyFermi","role":"docs","emoji":"","group":"release","task":"Review release documentation"}
 ```
 
 `name` の代わりに `session` も使えます。
@@ -671,11 +671,11 @@ response:
 ```json
 {
   "ok":true,
-  "annot":{"name":"WindyFermi","role":"docs","emoji":"","group":"release"}
+  "annot":{"name":"WindyFermi","role":"docs","emoji":"","group":"release","task":"Review release documentation"}
 }
 ```
 
-`role` と `emoji` を空にし、group も残さない場合は annotation を削除します。spawn は `emoji` を保存せず role / group だけを使います。
+API 38から、省略した欄は現在の値を維持します。明示的な空文字でその欄だけを消し、4欄がすべて空のときだけannotationを削除します。`role`・`emoji`・`group`・`task`は前後の空白を除き、それぞれ40・8・24・200 Unicode文字まで保存します。空でない`task`は利用者による表示の上書きで、空にして保存すると登録時の説明へ戻ります。`/api/agents`の`task`は元の登録値を維持し、上書きは`annot.task`で返します。`/api/annotations`とgraphの`annot`も同じ形式で、上書きがなければ`annot.task`を省略します。表示側は`annot.task`を優先します。Mailの登録値は変えません。既存のspawn・delegateからrole / emoji / groupを送る呼び出しはその値を保存し、省略したtask上書きは維持します。以前のAPI世代では省略した旧欄は空で置き換わり、task上書きは扱えません。
 
 ## POST `/api/spawn`
 
