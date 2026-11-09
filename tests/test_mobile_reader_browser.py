@@ -7,6 +7,44 @@ import pytest
 from mobile_reader_browser import AREA, phone  # noqa: F401
 
 
+def test_tool_group_keyboard_keeps_position_open_state_and_nodes_on_poll(phone):
+    client, js, wait, state = phone
+    state['events'].extend(dict(id='tool-'+str(i),kind='tool',role='assistant',text=t,ts='2026-01-01T08:45:00Z')
+                           for i,t in enumerate(['Read','Bash','Read','Edit','Read','Bash']))
+    wait("document.querySelector('.conversation-tool-group')!==null",8)
+    assert js("document.querySelector('.conversation-tool-count').textContent==='6 tool calls'")
+    assert js("document.querySelector('.conversation-tool-names').textContent==='· Read ×3, Bash ×2, Edit ×1'")
+    assert js("[...document.querySelectorAll('.conversation-tool')].every(e=>e.hidden)")
+    js("window.__group=document.querySelector('.conversation-tool-group');window.__tool=document.querySelector('[data-id=tool-0]');__group.focus({preventScroll:true});window.__top=__group.getBoundingClientRect().top")
+    client.call('Input.dispatchKeyEvent',type='keyDown',key='Enter',code='Enter',windowsVirtualKeyCode=13)
+    client.call('Input.dispatchKeyEvent',type='char',text='\r',unmodifiedText='\r',key='Enter',windowsVirtualKeyCode=13)
+    client.call('Input.dispatchKeyEvent',type='keyUp',key='Enter',code='Enter',windowsVirtualKeyCode=13)
+    wait("__group.getAttribute('aria-expanded')==='true'")
+    assert js("Math.abs(__group.getBoundingClientRect().top-__top)<=1")
+    state['events'].append(dict(id='tool-extra',kind='tool',role='assistant',text='Read',ts='2026-01-01T08:46:00Z'))
+    wait("document.querySelector('[data-id=tool-extra]')!==null",8)
+    assert js("document.querySelector('.conversation-tool-group')===__group&&document.activeElement===__group&&document.querySelector('[data-id=tool-0]')===__tool")
+    assert js("__group.getAttribute('aria-expanded')==='true'&&document.querySelector('[data-id=tool-extra]').hidden===false")
+    js("window.__top=__group.getBoundingClientRect().top")
+    client.call('Input.dispatchKeyEvent',type='keyDown',key=' ',code='Space',windowsVirtualKeyCode=32)
+    client.call('Input.dispatchKeyEvent',type='keyUp',key=' ',code='Space',windowsVirtualKeyCode=32)
+    wait("__group.getAttribute('aria-expanded')==='false'")
+    assert js("Math.abs(__group.getBoundingClientRect().top-__top)<=1")
+    assert js("document.querySelector('.conversation-tool-group').scrollWidth<=document.querySelector('.conversation-tool-group').clientWidth+1")
+
+
+def test_received_mail_without_recipient_uses_owner_portrait_and_sent_is_explicit(phone):
+    _,js,wait,state=phone
+    for direction in ['received','sent']:
+        state['events'].append(dict(id='no-recipient-'+direction,kind='mail',role='assistant',text='',ts='',mail=[dict(
+            direction=direction,sender='Lead',recipients=[],importance='normal',subject='Recorded subject',
+            body='Recorded body',coverage='complete',truncated=False)]))
+    wait("document.querySelector('[data-id=no-recipient-sent]')!==null",8)
+    assert js("document.querySelector('[data-id=no-recipient-received] .conversation-mail-recipients .conversation-mail-peer-name').textContent==='SampleAgent'")
+    assert js("document.querySelector('[data-id=no-recipient-received] .conversation-mail-recipients .conversation-avatar')!==null")
+    assert js("document.querySelector('[data-id=no-recipient-sent] .conversation-mail-recipients .conversation-mail-peer-name').textContent==='recorded recipient unavailable'")
+
+
 def test_reader_speaker_uses_profile_model_and_missing_portrait_initials(phone):
     _, js, wait, state = phone
     assert js("document.querySelector('[data-id=question] .conversation-speaker-name')?.textContent==='SampleAgent'")
