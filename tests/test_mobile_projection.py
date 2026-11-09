@@ -389,3 +389,11 @@ def test_current_scope_change_on_tap_expires_issued_keys_and_cached_content():
         with pytest.raises(LookupError):store.message('day',row['event']['key'])
         assert not store._issued and not store._cache and store._scope is None
     finally:store.close()
+
+
+@pytest.mark.parametrize('raw',['gpt-6.1-sol','gpt-7-nova-preview2'])
+def test_mobile_model_projection_keeps_raw_identifier_after_full_display(raw):
+    from dashboard import server
+    agent=inputs()['agents']['agents'][0]
+    agent.update(model=server._display_model(raw),model_raw=raw)
+    assert project_agents({'agents':[agent]})[0]['model']==raw

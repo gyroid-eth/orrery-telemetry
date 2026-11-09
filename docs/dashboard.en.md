@@ -58,7 +58,7 @@ The six screenshots on this page are real screens from an isolated demo environm
 
 | Display | Interpretation |
 | --- | --- |
-| `GPT 5.6`, `SONNET 5`, etc. under the name | Current model. `◷ 200K` or `◷ 1M`, when present, is the model's total working-memory capacity. |
+| `GPT-6.1-Sol`, `SONNET 5`, etc. under the name | Current model. `◷ 200K` or `◷ 1M`, when present, is the model's total working-memory capacity. |
 | Thin line below the model | **Context remaining**. Longer means more room; below 20% it becomes redder. It is absent when telemetry cannot be obtained. |
 | Black strip | Current terminal display, useful for judging whether the agent is working or waiting. |
 | `ORD` | Most recent instruction assigned to the agent. |

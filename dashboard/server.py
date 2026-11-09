@@ -331,6 +331,25 @@ _MN_FAMILY_RE = re.compile(
     r"v?(?P<version>\d+(?:[.\-]\d+)?)"
     r"(?P<variant>[-_]?(?:codex|thinking|mini|nano|turbo|flash|pro|preview|exp))?"
 )
+# GPT suffixes are identifiers, including future names and compound variants.
+_GPT_MODEL_RE = re.compile(
+    r"\bgpt[-_. ]*v?(?P<version>\d+(?:[.\-]\d+)?)"
+    r"(?P<variant>(?:-[a-z0-9_]+)*)\b", re.IGNORECASE,
+)
+
+
+def _display_gpt_model(raw: str | None) -> str:
+    family = _MN_FAMILY_RE.search((raw or "").lower())
+    if not family or family.group("family") != "gpt":
+        return ""
+    match = _GPT_MODEL_RE.search(raw or "")
+    if not match:
+        return ""
+    version = match.group("version").replace("-", ".")
+    variant = "-".join(word[:1].upper() + word[1:] for word in match.group("variant").split("-")[1:])
+    return f"GPT-{version}" + (f"-{variant}" if variant else "")
+
+
 _MN_VENDOR_RE = re.compile(r"^(?:claude|anthropic|openai|google)[-_. ]*")
 _MN_CTX_RE = re.compile(r"[\[\(\-_ ]*\d+\s*m(?:[-_ ]?context)?[\]\)]*\s*$")
 _MN_DISPLAY = {"fable": "Fable", "mythos": "Mythos", "opus": "Opus", "sonnet": "Sonnet", "haiku": "Haiku",
@@ -350,12 +369,19 @@ def _normalize_model(raw: str | None) -> str:
     m = _MN_FAMILY_RE.search(s)
     if not m:
         return original
+    if m.group("family") == "gpt":
+        gpt = _GPT_MODEL_RE.match(s, m.start())
+        if gpt:
+            return "gpt-" + gpt.group("version").replace("-", ".") + gpt.group("variant")
     variant = (m.group("variant") or "").lstrip("-_")
     canon = f"{m.group('family')}-{m.group('version').replace('-', '.')}"
     return f"{canon}-{variant}" if variant else canon
 
 
 def _display_model(raw: str | None) -> str:
+    gpt = _display_gpt_model(raw)
+    if gpt:
+        return gpt
     canon = _normalize_model(raw)
     if not canon:
         return ""
@@ -1673,7 +1699,7 @@ def _apply_codex_app_runtime(row: dict, runtime: dict) -> None:
     """Promote a gone Codex App agent from its provider-validated snapshot."""
     app_live = _codex_app_live(runtime)
     row.update(cmd="codex-app", live=app_live["live"],
-               surface="codex-app", model=runtime["model"],
+               surface="codex-app", model=_display_gpt_model(runtime["model"]) or runtime["model"],
                model_raw=runtime["model"],
                provider=_provider_of(runtime["model"]))
     if app_live["running"]:
@@ -2720,7 +2746,8 @@ def graph_payload(days: float, show_all: bool) -> dict:
                         else lv.get("ctx_window") or _ctx_window(n.get("model"))),
          # モデル: pane 由来を優先 (warm pool claim で DB が乖離するケース)
          #   display 形式に揃える (build_agents と同じ正規化)
-         "model": _display_model(_pane_model_for(lv.get("pane_model"), n.get("program"))) or n.get("model"),
+         "model": _display_model(_pane_model_for(lv.get("pane_model"), n.get("program")))
+                  or _display_gpt_model(n.get("model")) or n.get("model"),
          "model_raw": _pane_model_for(lv.get("pane_model"), n.get("program")) or n.get("model") or "",
          # provider: family ベースで anthropic / openai 等を判定（logo 用）
          "provider": _provider_of(_pane_model_for(lv.get("pane_model"), n.get("program"))
@@ -6544,7 +6571,7 @@ _WIN_TRUNC_RE = re.compile(
 #   モデル名（"gpt-5.6-sol に委任"）を statusline より先に拾わないようにする。
 _MODEL_PANE_RE = re.compile(
     r"\b(Opus|Sonnet|Haiku|Fable|Mythos)\s+(\d+(?:\.\d+)?)\b"
-    r"|\b(gpt-\d+(?:\.\d+)?)(?:-(codex|mini|nano|turbo|thinking))?\b",
+    r"|\b(gpt-\d+(?:\.\d+)?)(?:-([a-z0-9_]+(?:-[a-z0-9_]+)*))?\b",
     re.IGNORECASE,
 )
 _STATUSLINE_HINT_RE = re.compile(
