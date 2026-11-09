@@ -1300,6 +1300,7 @@ esac
         "HOME": str(test_home),
         "AGENTSTACK_HOME": str(install_home),
         "AGENTSTACK_HOOKS_DIR": str(install_home / "hooks"),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_MAIL_DB": str(database),
