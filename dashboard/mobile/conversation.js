@@ -66,20 +66,57 @@ async function request(token,slot){
 }
 function clock(ts){const d=new Date(ts);return Number.isFinite(d.getTime())?d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'';}
 const markdown=()=>window.OrreryConversationMarkdown;
+function displayModel(value){
+ if(typeof value!=='string')return '';const raw=value.trim();
+ const claude=/^(?:anthropic[\/:])?claude-([a-z]+)-(\d+)(?:[.-](\d{1,2}))?(?:-\d{8})?$/i.exec(raw);
+ if(claude)return claude[1][0].toUpperCase()+claude[1].slice(1)+' '+claude[2]+(claude[3]?'.'+claude[3]:'');
+ if(/^gpt-/i.test(raw))return 'GPT-'+raw.slice(4).split('-').map(s=>s?s[0].toUpperCase()+s.slice(1):s).join('-');
+ if(/^deepseek[- ]v/i.test(raw))return 'DeepSeek '+raw.replace(/^deepseek[- ]/i,'').replace(/^v/i,'V');
+ return raw;
+}
+function paintSpeaker(head){
+ const recorded=head.dataset.model||'',profile=window.OrreryMobileProfile?.forName(name,recorded),model=recorded||profile?.model||'';
+ const key=JSON.stringify([name,model,profile?.provider,profile?.locality]);if(head.dataset.profile===key)return;head.dataset.profile=key;
+ const face=window.OrreryMobileProfile?.face(name,recorded);head.querySelector('.conversation-avatar')?.remove();
+ if(face){face.classList.add('conversation-avatar');head.prepend(face);}
+ head.querySelector('.conversation-speaker-name').textContent=name;
+ const label=head.querySelector('.conversation-speaker-model');label.textContent=displayModel(model);label.hidden=!model;label.title=model;
+}
+function speaker(e){
+ const head=make('div','conversation-byline');head.dataset.model=typeof e.model==='string'?e.model:'';
+ head.append(make('span','conversation-speaker-name'),make('span','conversation-speaker-model'));
+ const at=clock(e.ts);if(at){const time=make('time','conversation-speaker-time',at);time.dateTime=e.ts;head.append(time);}
+ paintSpeaker(head);return head;
+}
+function refreshProfiles(){
+ if(!list)return;
+ list.querySelectorAll('.conversation-byline').forEach(paintSpeaker);
+ for(const mark of list.querySelectorAll('.conversation-mail-mark')){
+  const p=window.OrreryMobileProfile?.forName(mark.dataset.peerName),key=JSON.stringify(p);if(mark.dataset.profile===key)continue;mark.dataset.profile=key;
+  const logo=window.OrreryMobileProfile?.logo(mark.dataset.peerName);mark.replaceChildren();mark.hidden=!logo;if(logo){logo.classList.add('conversation-provider-logo');mark.append(logo);}
+ }
+}
 function body(text,assistant=false){
  const box=make('div','conversation-text'),m=markdown();
  if(m&&assistant)m.renderDocument(text,box,{codeControls:true});
  else if(m)m.renderText(text,box);else box.textContent=text;
  return box;
 }
-function mailCard(m){
+function mailCard(m,ts){
  const card=make('button','conversation-mail '+m.direction);card.type='button';
- const who=m.direction==='received'?'Mail received · from '+(m.sender||'unknown'):'Mail sent · to '+(m.recipients.join(', ')||'unknown');
- card.append(make('small','',who),make('strong','',m.subject||'(no subject)'));
+ const head=make('div','conversation-mail-head'),route=make('div','conversation-mail-route');
+ const peer=(value,strong)=>{const p=make('span','conversation-mail-peer'+(strong?' is-counterpart':'')),mark=make('span','conversation-mail-mark');mark.dataset.peerName=value||'';mark.hidden=true;p.title=value||'unknown';p.append(mark,make('span','conversation-mail-peer-name',value||'unknown'));return p;};
+ route.append(make('span','conversation-mail-chevron','▸'),peer(m.sender,m.direction==='received'),make('span','conversation-mail-arrow','→'),peer(m.recipients[0],m.direction==='sent'));
+ if(m.recipients.length>1){const more=make('span','conversation-mail-more','+'+(m.recipients.length-1));more.title=m.recipients.slice(1).join(', ');route.append(more);}
+ head.append(route);const at=clock(ts);if(at){const time=make('time','conversation-mail-time',at);time.dateTime=ts;head.append(time);}
+ const subject=make('div','conversation-mail-subject-row');
+ if(['high','urgent'].includes(m.importance)){const dot=make('span','conversation-mail-importance');dot.dataset.importance=m.importance;dot.title=dot.ariaLabel=m.importance==='high'?'High importance':'Urgent importance';dot.setAttribute('role','img');subject.append(dot);}
+ subject.append(make('strong','conversation-mail-subject',m.subject||'(no subject)'));
+ card.append(make('div','conversation-mail-label','Mail · '+(m.direction==='received'?'Received':'Sent')),head,subject);
  const detail=make('pre','conversation-mail-body',m.body);detail.hidden=true;
  const note=make('small','conversation-mail-note',m.coverage==='preview'?'Recorded preview only':m.coverage==='unavailable'?'Body not in the record':m.truncated?'Shortened':'Tap to show the recorded body');
  card.append(note,detail);card.setAttribute('aria-expanded','false');
- const closedNote=note.textContent;card.onclick=()=>{detail.hidden=!detail.hidden;card.setAttribute('aria-expanded',String(!detail.hidden));note.textContent=detail.hidden?closedNote:'Recorded body · tap to hide';};
+ const closedNote=note.textContent;card.onclick=()=>{detail.hidden=!detail.hidden;card.setAttribute('aria-expanded',String(!detail.hidden));card.querySelector('.conversation-mail-chevron').textContent=detail.hidden?'▸':'▾';note.textContent=detail.hidden?closedNote:'Recorded body · tap to hide';};
  return card;
 }
 // The cockpit puts file references on the file tool calls (Read, Write,
@@ -87,14 +124,14 @@ function mailCard(m){
 function files(e,r){if(Array.isArray(e.files)&&e.files.length){const f=make('div','conversation-files');e.files.forEach(x=>f.append(chip(x)));r.append(f);}}
 function row(e){
  if(e.kind==='tool'){const r=make('div','conversation-tool',e.text);r.dataset.id=e.id;files(e,r);return r;}
- if(e.kind==='mail'){const r=make('div','conversation-mails');r.dataset.id=e.id;e.mail.forEach(m=>r.append(mailCard(m)));return r;}
+ if(e.kind==='mail'){const r=make('div','conversation-mails');r.dataset.id=e.id;e.mail.forEach(m=>r.append(mailCard(m,e.ts)));return r;}
  const command=e.role==='user'&&markdown()?.commandRecord(e.text);
  const r=make('div',command?.shell?'conversation-shell':'conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
- if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(e.text,r);}else r.append(body(e.text,e.role==='assistant'));
+ if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(e.text,r);}else{if(e.role==='assistant')r.append(speaker(e));r.append(body(e.text,e.role==='assistant'));}
 
- if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m)));
+ if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts)));
  files(e,r);
- const meta=[clock(e.ts),e.truncated?'shortened':''].filter(Boolean).join(' · ');if(meta)r.append(make('small','conversation-time',meta));
+ const meta=[e.role==='assistant'&&!command?'':clock(e.ts),e.truncated?'shortened':''].filter(Boolean).join(' · ');if(meta)r.append(make('small','conversation-time',meta));
  return r;
 }
 function chip(x){
@@ -225,6 +262,7 @@ function append(page){
  let dropped=false;
  while(events.length>MAX_KEPT){const gone=events.shift();seen.delete(gone.id);dropEvent(gone.id);older=null;dropped=true;}
  groupShellRows();
+ refreshProfiles();
  // An omitted marker belongs to its page's old edge. Only when that edge's
  // messages are dropped at the kept limit does a marker above them go too.
  if(dropped)for(const n of [...list.children]){if(n.dataset?.id!==undefined)break;if(n.className==='conversation-omitted')n.remove();}
@@ -244,6 +282,7 @@ function prepend(page,omitted){
  for(const e of fresh){seen.add(e.id);list.insertBefore(row(e),first);}
  events=fresh.concat(events);
  groupShellRows();
+ refreshProfiles();
  list.scrollTop+=list.scrollHeight-before;following=false;savedTop=list.scrollTop;
 }
 function reset(){closePreview();events=[];seen.clear();older=null;list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());}
@@ -308,5 +347,5 @@ function unmount(){
  events=[];seen=new Set();older=null;pending=[];failures=0;loadingOlder=false;following=true;savedTop=0;name='';
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)unmount();});window.addEventListener('pagehide',unmount);
-window.OrreryMobileConversation={enabled,mount,element,unmount,addPending,restore,dismissPreview,refreshActivity:activity};
+window.OrreryMobileConversation={enabled,mount,element,unmount,addPending,restore,dismissPreview,refreshActivity:activity,refreshProfiles};
 })();

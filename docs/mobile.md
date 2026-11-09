@@ -284,6 +284,8 @@ Terminalだけを戻す場合は共有設定を`false`にするか項目を除�
 
 ## スマホでagentの会話の記録を読む
 
+発言者は肖像（無ければ頭文字）と小さなproviderのロゴ、agent名、控えめなモデル名、時刻で示します。Mailは送り手から宛先への1行と件名を表示し、追加の宛先人数`+N`は切りません。名簿にいない相手のロゴは推測して出さず、high・urgentは件名前の小さな点で示します。compactの要約は人の発言にせず、短い活動の1行のままです。
+
 **HistoryはPhone accessに含まれ、policyの確認（`--phone-policy-reviewed`、SettingsではI reviewed the policy）があれば既定でオンです。** **更新する前に:** これまで`--phone-policy-reviewed`を付け、`--enable-history`を付けずに手で起動していたreaderは、更新後に再起動すると会話の記録とfile・画像のpreviewもスマホに出すようになります。出したくなければ、再起動の前に`--disable-history`を足してください。起動時にも、この変更を1行で知らせます。 確認がなければオフのままreaderが起動し、`/view/history`は`policy_not_reviewed`を返します。cockpitがそのagent自身の記録だと確認できた会話（Codex・Claude Code・dsh・Hermes）を、読み取り専用で表示します。「全履歴はスマホに送らない」の例外になるのは、Historyがオンの間だけです。出したくない場合は、手で起動するreaderに`--disable-history`を付けます。Settingsには会話だけを切るスイッチはなく、Phone accessごと切ります。Historyがオンなら、会話のtoolの呼び出しに出てきた、agentの作業folderの中のfileと画像の今の中身もスマホで開けます（下記のpreview）。これだけを別に切り替える設定はありません。**名前で隠したり中身を伏せたりはしません。** 何を出してよいかは本人が決めます（下記）。下の手順はagentに頼めます。先にアクセスできる人と端末を確認してください。
 
 | 段 | 誰が | 何をする |

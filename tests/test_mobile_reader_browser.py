@@ -7,6 +7,51 @@ import pytest
 from mobile_reader_browser import AREA, phone  # noqa: F401
 
 
+def test_reader_speaker_uses_profile_model_and_missing_portrait_initials(phone):
+    _, js, wait, state = phone
+    assert js("document.querySelector('[data-id=question] .conversation-speaker-name')?.textContent==='SampleAgent'")
+    wait("document.querySelector('[data-id=question] .conversation-avatar .initials')!==null")
+    assert js("document.querySelector('[data-id=question] .conversation-avatar .initials').textContent==='S'")
+    state['snapshot']['agents'][0].update(model='gpt-6.1-sol')
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("document.querySelector('[data-id=question] .conversation-speaker-model')?.textContent==='GPT-6.1-Sol'")
+    assert js("document.querySelector('[data-id=question] .conversation-byline time').textContent.length>0")
+    assert js("document.querySelector('[data-id=question] .conversation-avatar [data-provider=openai]')!==null")
+    state['events'].append(dict(id='recorded-model',kind='text',role='assistant',text='Recorded reply',model='claude-opus-5-5',ts=''))
+    wait("document.querySelector('[data-id=recorded-model]')!==null",8)
+    assert js("document.querySelector('[data-id=recorded-model] .conversation-speaker-model').textContent==='Opus 5.5'")
+    assert js("document.querySelector('[data-id=recorded-model] [data-provider=anthropic]')!==null")
+
+
+@pytest.mark.parametrize('theme',['dark','light'])
+def test_reader_mail_route_keeps_recipient_count_and_unknown_peer_has_no_logo(phone,theme):
+    _, js, wait, state = phone
+    if theme=='light':
+        from pathlib import Path
+        js((Path(__file__).resolve().parents[1]/'dashboard/theme_core.js').read_text())
+        js("(()=>{document.documentElement.dataset.colorTheme='light';Object.entries(AgentStackColorThemeCore.deriveWarmPaperLightTheme().cssVariables).forEach(([k,v])=>document.documentElement.style.setProperty(k,v))})()")
+    recipients=['ExtraordinarilyLongRecipientName'+str(i) for i in range(12)]
+    state['events'].append(dict(id='route',kind='mail',role='assistant',text='',ts='2026-01-01T08:45:00Z',mail=[dict(
+        direction='sent',sender='SampleAgent',recipients=recipients,importance='high',subject='Long subject '+('確認 '*25),
+        body='Recorded body',coverage='request',truncated=False)]))
+    wait("document.querySelector('[data-id=route]')!==null",8)
+    assert js("document.querySelector('[data-id=route] .conversation-mail-more')?.textContent==='+11'")
+    assert js("document.querySelectorAll('[data-id=route] .conversation-mail-peer')[1].querySelector('.conversation-provider-logo')===null")
+    assert js("document.querySelectorAll('[data-id=route] .conversation-mail-peer')[0].querySelector('.conversation-provider-logo')!==null")
+    assert js("document.querySelector('[data-id=route] [data-importance=high]')?.getAttribute('aria-label')==='High importance'")
+    assert js("(()=>{const c=document.querySelector('[data-id=route]'),n=c.querySelector('.conversation-mail-more'),r=n.getBoundingClientRect(),p=c.getBoundingClientRect();return n.clientWidth>=n.scrollWidth&&r.left>=p.left&&r.right<=p.right&&c.scrollWidth<=c.clientWidth+1})()")
+    js("document.querySelector('[data-id=route] .conversation-mail').click()")
+    assert js("document.querySelector('[data-id=route] .conversation-mail').getAttribute('aria-expanded')==='true'&&document.querySelector('[data-id=route] .conversation-mail-body').hidden===false")
+
+
+def test_compact_record_stays_a_short_activity_line(phone):
+    _, js, wait, state=phone
+    state['events'].append(dict(id='compact',kind='tool',role='assistant',text='Context compacted',ts=''))
+    wait("document.querySelector('[data-id=compact]')!==null",8)
+    assert js("document.querySelector('[data-id=compact]').classList.contains('conversation-tool')")
+    assert js("document.querySelector('[data-id=compact] .conversation-speaker-name')===null")
+
+
 @pytest.mark.parametrize('phone', [(390, 844), (360, 800)], indirect=True)
 def test_body_uses_at_least_eighty_percent(phone):
     _, js, _, _ = phone

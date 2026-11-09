@@ -63,6 +63,8 @@ def phone(request):
                 return self.send(dict(contract, api=31, supported='legacy-managed-pane', enabled=True, ack='tmux-command-accepted'))
             if path == '/view/conversation/preview':
                 return self.send(dict(ok=True, kind='text', text='File contents', notice='Current file, not a recorded snapshot.'))
+            if path == '/view/portrait' and state.get('portrait'):
+                return self.send(state['portrait'], 'image/png')
             if path == '/network.css':
                 return self.send(css, 'text/css')
             if path in assets:
