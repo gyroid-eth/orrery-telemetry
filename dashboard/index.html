@@ -34530,7 +34530,7 @@ function bay(a,i){
   }
 
   const task=a.task
-    ?`<div class="kv"><b>ord</b><span>${esc(a.task)}</span></div>`:'';
+    ?`<div class="kv"><b>ord</b><span title="${esc(a.annot?.task?'Edited · registered: '+(a.registered_task||'—'):'')}">${esc(a.task)}</span></div>`:'';
   let instr='';
   if(a.instruction){
     const im=(a.instruction.importance||'').toLowerCase();
@@ -34700,6 +34700,7 @@ async function tick(){
     if(r.status===503)return;
     const j=await r.json();
     if(seq!==tickSeq)return;   // a newer range was requested while this was in flight
+    j.agents.forEach(a=>{a.registered_task=a.task||'';a.task=a.annot?.task||a.registered_task;});
     lastData=j.agents;deckStateAt=Date.now();
     settleExitSent(j.agents);
     refreshPanelButtons();
@@ -34816,7 +34817,7 @@ async function netTick(){
         model_raw:n.model_raw||'',locality:n.locality||null,
         running:!!n.running,
         present:!!n.present,retired:!!n.retired,rel:n.rel||'—',
-        task:n.task||'',live:n.live||'',deg:0,act:+n.act||0,
+        task:n.annot?.task||n.task||'',registered_task:n.task||'',live:n.live||'',deg:0,act:+n.act||0,
         state:n.state||'',sig:+n.sig||0,deliv:+n.deliv||0,
         ctxUsed:(typeof n.ctx_used==='number'?n.ctx_used:null),
         actState:n.act_state||'',ctxWindow:n.ctx_window||'',
@@ -37199,10 +37200,12 @@ async function saveAnnot(name,clear){
       body:JSON.stringify({name,role,emoji})});
     const j=await r.json();
     if(!j.ok){flashAnnot('FAILED'); return;}
-    const next=role?{role,emoji,
-      group:(typeof gmap!=='undefined'&&gmap.get(name)?.annot?.group)||''}:null;
+    const next=j.annot||null;
     const g=(typeof gmap!=='undefined')&&gmap.get(name);
-    if(g)g.annot=next;                        // 次 netTick を待たず即反映
+    if(g){g.annot=next;g.task=next?.task||g.registered_task||'';}
+    const a=lastData.find(agent=>agent.name===name);
+    if(a){a.annot=next;a.task=next?.task||a.registered_task||'';}
+    render();
     renderAnnotEditor(name,next);
     flashAnnot(clear?'CLEARED':'ASSIGNED');
     if(typeof buildEls==='function')buildEls(); // チップを即再描画

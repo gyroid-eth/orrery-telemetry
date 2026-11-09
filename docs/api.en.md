@@ -63,7 +63,7 @@ with HTTP 400. A media-type mismatch is HTTP 415, a cross-origin POST is HTTP 40
 | POST | `/api/jump` | `{session, open?, base?, tools?}` | open / focus / resume action |
 | POST | `/api/exit` | `{session}` | graceful exit action |
 | POST | `/api/kill` | `{session, mode}` | kill / retire action |
-| POST | `/api/annotate` | `{name, role, emoji, group}` | saved annotation |
+| POST | `/api/annotate` | `{name, role?, emoji?, group?, task?}` | saved annotation |
 | POST | `/api/spawn` | spawn payload | child launch result |
 
 ## GET `/api/version`
@@ -73,7 +73,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":37}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":38}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -98,7 +98,7 @@ A parent name must be unique across the whole directory, including retired rows.
 
 The successful response `ok:true,pending:true,child_name,job_id,I/A` means handoff acceptance, not completed native startup. Status `state:launching,result:null` is unconfirmed; detail:unknown means an uncertain outcome that must not be automatically retried, and detail:not_started means saved preparation without handoff. A confirmed native receipt yields the existing caller's launch verdict state:ready. Execution state stays separate in detail:started/ended and result.native_ready. Ending without native confirmation yields state:failed; termination alone never means success. Roster native_ready also describes a receipt, not current OS process liveness; unconfirmed running remains null. A failure after preparation returns the same job/I/A for status and manual resolution; it does not automatically create another same-name agent. Fresh I is projected byte-for-byte as its generated 32 lowercase hex digits, without converting it to a hyphenated UUID.
 
-API2a connects the Mail/graph readers below; API2b-1 connects PC term/history/jump/exit for the current target. Ended kill/retire uses the management contract below; R4 has a separate human opt-in contract. Reactivate, retired resume and App GUI activation remain unconnected. Worktree, browser, custom base/tools, spawn's terminal option, annotations(role/group/emoji), and dry_run are also explicitly unavailable. This does not replace ordinary standalone/parented automatic spawning with manual child creation. The user's agent can prepare work folders and provider settings using the [migration procedure](fresh-global-update.en.md), which also covers configuration, cutover and recovery.
+API2a connects the Mail/graph readers below; API2b-1 connects PC term/history/jump/exit for the current target. Ended kill/retire uses the management contract below; R4 has a separate human opt-in contract. Reactivate, retired resume and App GUI activation remain unconnected. Worktree, browser, custom base/tools, spawn's terminal option, annotations(role/group/emoji/task), and dry_run are also explicitly unavailable. This does not replace ordinary standalone/parented automatic spawning with manual child creation. The user's agent can prepare work folders and provider settings using the [migration procedure](fresh-global-update.en.md), which also covers configuration, cutover and recovery.
 
 #### Current PC targets (API2b-1)
 
@@ -513,7 +513,7 @@ The response contains the message list and watermark for live comet. Missing con
 {
   "ok":true,
   "annotations":{
-    "WindyFermi":{"role":"docs","emoji":"","group":"release"}
+    "WindyFermi":{"role":"docs","emoji":"","group":"release","task":"Review release documentation"}
   }
 }
 ```
@@ -660,7 +660,7 @@ Expected `mode` values are `tmux`, `retire`, and `both`. The response is `{ok, s
 Request:
 
 ```json
-{"name":"WindyFermi","role":"docs","emoji":"","group":"release"}
+{"name":"WindyFermi","role":"docs","emoji":"","group":"release","task":"Review release documentation"}
 ```
 
 `session` can be used instead of `name`.
@@ -670,11 +670,17 @@ Response:
 ```json
 {
   "ok":true,
-  "annot":{"name":"WindyFermi","role":"docs","emoji":"","group":"release"}
+  "annot":{"name":"WindyFermi","role":"docs","emoji":"","group":"release","task":"Review release documentation"}
 }
 ```
 
-An annotation is deleted when `role` and `emoji` are empty and no group remains. Spawn does not save `emoji`; it uses only role / group.
+Since API 38, omitted fields retain their current values. Send an explicit empty string or `null` to clear a field; this applies equally to `role`, `emoji`, `group`, and `task`. All four fields must be empty to delete the entire annotation. `role`, `emoji`, `group`, and `task` are trimmed and limited to 40, 8, 24, and 200 Unicode characters respectively. A nonempty `task` is a user display override; saving an empty string or `null` restores the registered description. `/api/agents` retains the original registered description in `task` and includes the override in `annot.task`. `/api/annotations` and graph-node `annot` use the same shape; `annot.task` is omitted when no override exists. Display clients prefer `annot.task` to `task`. This never changes Mail registration. Existing spawn/delegate callers that send role / emoji / group keep their values and preserve any omitted task override. Earlier API generations replace omitted legacy fields with empty strings and do not support task overrides.
+
+Clear only the task override (omitted role, emoji, and group retain their values):
+
+```json
+{"name":"WindyFermi","task":null}
+```
 
 ## POST `/api/spawn`
 

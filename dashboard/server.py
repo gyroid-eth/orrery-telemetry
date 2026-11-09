@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 37
+API_GENERATION = 38
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -1988,9 +1988,11 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
             if con is not None:
                 con.close()
 
+    annotations = _annotations()
     observed_now = time.time()
     claude_history_index = None
     for row in rows:
+        row['annot'] = annotations.get(row['name'])
         row.update(harness_runtime.metadata(RUNTIME_DIR, row["name"], row.get("program")))
         profile = persistent_profiles.get(row["name"])
         row.update(
@@ -2343,6 +2345,8 @@ def _deliverables_index() -> dict:
 # --------------------------------------------------------------------------- #
 ANNOT_PATH = os.path.join(RUNTIME_DIR, "annotations.json")
 LEGACY_ANNOT_PATH = os.path.join(HERE, "annotations.json")
+_ANNOT_UNSET = object()
+_ANNOT_LIMITS = {'role': 40, 'emoji': 8, 'group': 24, 'task': 200}
 _ANNOT_CACHE: dict = {"path": "", "mtime": -1.0, "data": {}}
 _ANNOT_LOCK = threading.Lock()
 
@@ -2389,8 +2393,11 @@ def _annotations() -> dict:
             role = str(v.get("role", "")).strip()[:40]
             emoji = str(v.get("emoji", "")).strip()[:8]
             group = str(v.get("group", "")).strip()[:24]
-            if role or emoji or group:
+            task = str(v.get("task") or "").strip()[:200]
+            if role or emoji or group or task:
                 data[name] = {"role": role, "emoji": emoji, "group": group}
+                if task:
+                    data[name]['task'] = task
     _ANNOT_CACHE.update(path=path, mtime=mt, data=data)
     return data
 
@@ -2473,20 +2480,19 @@ def _record_name_substitution(registered: str, requested: str) -> None:
                         requested, registered, e)
 
 
-def _write_annotation(name: str, role: str, emoji: str,
-                      group: str = "") -> dict:
-    """1 エージェント分の annotation を upsert / 削除。
+def _write_annotation(name: str, role=_ANNOT_UNSET, emoji=_ANNOT_UNSET,
+                      group=_ANNOT_UNSET, task=_ANNOT_UNSET) -> dict:
+    """Patch one annotation atomically; omitted fields retain their values.
 
-    role / emoji / group がすべて空な場合だけ削除する。
-
-    runtime の annotations.json をロックして read-modify-write（atomic
-    replace）。旧 dashboard path しかない場合は内容を引き継いで新 path
-    に書く。"""
-    if not name or _NAME_RE.fullmatch(name) is None:
+    Explicit empty strings clear fields. Remove the entry only when every
+    field is empty. Migrate the legacy store on the next successful write.
+    """
+    if not isinstance(name, str) or not name or _NAME_RE.fullmatch(name) is None:
         return {"ok": False, "error": "invalid name"}
-    role = (role or "").strip()[:40]
-    emoji = (emoji or "").strip()[:8]
-    group = (group or "").strip()[:24]
+    updates = dict(role=role, emoji=emoji, group=group, task=task)
+    if any(value is not _ANNOT_UNSET and value is not None and not isinstance(value, str)
+           for value in updates.values()):
+        return {'ok': False, 'error': 'annotation fields must be strings'}
     with _ANNOT_LOCK:
         source_path = _annotation_read_path()
         try:
@@ -2498,9 +2504,17 @@ def _write_annotation(name: str, role: str, emoji: str,
             raw = {}
         wrapped = isinstance(raw.get("agents"), dict)
         store = raw["agents"] if wrapped else raw
+        previous = store.get(name) if isinstance(store.get(name), dict) else {}
+        annotation = {
+            field: str((previous.get(field, '') if value is _ANNOT_UNSET else value) or '').strip()[:_ANNOT_LIMITS[field]]
+            for field, value in updates.items()
+        }
         removed = False
-        if role or emoji or group:
-            store[name] = {"role": role, "emoji": emoji, "group": group}
+        if any(annotation.values()):
+            # Preserve the legacy shape when no task override is present.
+            if not annotation['task']:
+                annotation.pop('task')
+            store[name] = annotation
         else:
             store.pop(name, None)
             removed = True
@@ -2513,8 +2527,7 @@ def _write_annotation(name: str, role: str, emoji: str,
     _ANNOT_CACHE.update(path="", mtime=-1.0)  # 次回 _annotations で強制再読込
     if removed:
         return {"ok": True, "removed": name}
-    return {"ok": True, "annot": {"name": name, "role": role,
-                                  "emoji": emoji, "group": group}}
+    return {"ok": True, "annot": {"name": name, **annotation}}
 
 
 def _graph_health(g: dict) -> dict:
@@ -10164,9 +10177,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/annotate":
             # 役割ラベルの upsert/削除。name は session でも name でも受ける。
             nm = body.get("name") or body.get("session") or ""
-            result = _write_annotation(
-                nm, body.get("role", ""), body.get("emoji", ""),
-                body.get("group", ""))
+            result = _write_annotation(nm, **{
+                field: body[field] for field in _ANNOT_LIMITS if field in body
+            })
         elif path == "/api/jserr":
             result = _log_js_error(body)
         elif path == "/api/spawn":
