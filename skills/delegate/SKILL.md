@@ -21,12 +21,12 @@ The goal is not only to launch a child. The parent agent remains responsible for
 <!-- native-delegate:start -->
 ## DeepSeek / Local children: choose this route before preregistration
 
-For a **DeepSeek or Local (Strata) child**, use the dashboard's standard `POST /api/spawn`, with `provider=deepseek|strata` and `harness=dsh|hermes`. This applies whether the parent is Claude, Codex, dsh or Hermes. For a **Claude or Codex child**, continue with the existing procedure below. Explicit global mode still follows the global contract above.
+For a **DeepSeek or Local (Strata) child**, use the dashboard's standard `POST /api/spawn`, with `provider` set to the native connection `id` the catalog returns (`deepseek`, `strata`, or an added connection such as `strata-epyc`) and `harness=dsh|hermes`. This applies whether the parent is Claude, Codex, dsh or Hermes. For a **Claude or Codex child**, continue with the existing procedure below. Explicit global mode still follows the global contract above.
 
 Do the risk/task preparation in sections 1–2, then use this route instead of sections 3–5. Do not preregister separately or call `spawn_child.sh --harness` yourself: the API owns preregistration and its launcher handoff. Do not search private manifests, credentials, child state or `~/.agentstack` to reconstruct a request.
 
-1. Read the public catalog: `curl -sS "http://127.0.0.1:${AGENTSTACK_PORT:-8770}/api/spawn-names"`. Select the requested provider's formal `models[].id` and a matching `harnesses[]` entry with `available: true`. Local's API ID is `strata`. If the requested model/harness is unavailable, report its reason; if the user's choice is ambiguous, ask rather than substituting a provider/model. Do not guess effort from a different harness.
-2. Prepare the complete task in a file, including scope, expected result and a completion report to the parent over ORRERY Mail. The API's `parent` is **your own `AGENT_NAME`**, even when you are somebody else's child; never use `PARENT_AGENT`. If your identity is unresolved, stop. Set `DELEGATE_PROVIDER`, `DELEGATE_HARNESS`, `DELEGATE_MODEL`, `DELEGATE_DIR` (the child's existing absolute working directory), and `DELEGATE_TASK_FILE` to those selected values. These are inputs for the example, not new product configuration.
+1. Read the public catalog: `curl -sS "http://127.0.0.1:${AGENTSTACK_PORT:-8770}/api/spawn-names"`. Select the requested provider's formal `models[].id` and a matching `harnesses[]` entry with `available: true`. Send the provider's `id` exactly as the catalog returns it, never its `kind` or label. A dynamic Local provider (`dynamic_models: true`) lists the models its server reports, and each of those rows carries `url_index` and `url_key`: copy both from the selected row. Without them the API refuses the spawn as `spawn_pair_unavailable`. If the requested model/harness is unavailable, report its reason; if the user's choice is ambiguous, ask rather than substituting a provider/model. Do not guess effort from a different harness.
+2. Prepare the complete task in a file, including scope, expected result and a completion report to the parent over ORRERY Mail. The API's `parent` is **your own `AGENT_NAME`**, even when you are somebody else's child; never use `PARENT_AGENT`. If your identity is unresolved, stop. Set `DELEGATE_PROVIDER`, `DELEGATE_HARNESS`, `DELEGATE_MODEL`, `DELEGATE_DIR` (the child's existing absolute working directory), and `DELEGATE_TASK_FILE` to those selected values, plus `DELEGATE_URL_INDEX` and `DELEGATE_URL_KEY` only for a dynamic Local row. These are inputs for the example, not new product configuration.
 3. Send a 0600 JSON file using curl. The quoted Python heredoc reads the task as data, preserving quotes, newlines, backticks and `$()` without shell evaluation. This uses only curl and the install prerequisite Python 3; no development fixture/helper is needed.
 
 ```bash
@@ -41,12 +41,15 @@ Do the risk/task preparation in sections 1–2, then use this route instead of s
   request_file="$(mktemp "${TMPDIR:-/tmp}/delegate-request.XXXXXX")"
   response_file="$(mktemp "${TMPDIR:-/tmp}/delegate-response.XXXXXX")"
   python3 - "$request_file" "$DELEGATE_PROVIDER" "$DELEGATE_HARNESS" \
-    "$DELEGATE_MODEL" "$DELEGATE_DIR" "$DELEGATE_TASK_FILE" <<'PY'
+    "$DELEGATE_MODEL" "$DELEGATE_DIR" "$DELEGATE_TASK_FILE" \
+    "${DELEGATE_URL_INDEX:-}" "${DELEGATE_URL_KEY:-}" <<'PY'
 import json, os, pathlib, sys
-output, provider, harness, model, directory, task_file = sys.argv[1:]
+output, provider, harness, model, directory, task_file, url_index, url_key = sys.argv[1:]
 payload = {"provider": provider, "harness": harness, "model": model,
            "parent": os.environ["AGENT_NAME"], "dir": directory,
            "task": pathlib.Path(task_file).read_text(), "async": True}
+if url_index or url_key:
+    payload.update(url_index=int(url_index), url_key=url_key)
 pathlib.Path(output).write_text(json.dumps(payload))
 PY
   dashboard="http://127.0.0.1:${AGENTSTACK_PORT:-8770}"
