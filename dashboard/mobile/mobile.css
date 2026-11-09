@@ -253,6 +253,44 @@ html.graph-fullscreen #settings{z-index:40}
 .conversation-activity{font:10px/1.7 var(--mono);color:var(--ink-dim);padding:3px 0}.conversation-activity:before{content:'● ';color:var(--amber)}.conversation-activity.reply-needed{color:var(--alert)}.conversation-activity.reply-needed:before{color:var(--alert)}
 .conversation-shell{width:100%;min-width:0}.conversation-speaker{display:block;font:9px var(--mono);color:var(--ink-dim);letter-spacing:.08em}.reader-fullscreen>.terminal-actions{padding-bottom:env(safe-area-inset-bottom)}
 
+/* Speaker identity shares the roster portrait and provider marks. */
+.conversation-byline{display:flex;align-items:center;gap:7px;min-width:0;margin:0 0 9px;color:var(--ink)}
+.conversation-byline .conversation-avatar{width:20px;height:20px;flex:none}
+.conversation-avatar,.conversation-avatar *{-webkit-user-select:none;user-select:none}
+.conversation-avatar .initials{font:500 10px var(--mono)}
+.conversation-avatar .badge{right:-3px;bottom:-2px;width:12px;height:12px}
+html[data-color-theme=light] .conversation-byline .provider-logo,html[data-color-theme=light] .conversation-mail-mark .provider-logo{filter:brightness(0)}
+.conversation-speaker-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 12px/1.6 var(--mono)}
+.conversation-speaker-model{flex:0 1000 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-dim);font:10px/1.6 var(--mono)}
+.conversation-speaker-model:before{content:'·';margin-right:7px;color:var(--ink-faint)}
+.mobile .conversation-speaker-time{flex:none;margin-left:auto;white-space:nowrap;font:9px var(--mono);color:var(--ink-dim)}
+
+/* Mail is a route and recorded content, separate from a human message. */
+.mobile .conversation-mail{padding:8px 0;border:0;border-radius:0;background:none;margin:0;box-shadow:none}
+.conversation-mail-label{font:9px/1.6 var(--mono);color:var(--ink-dim);margin-bottom:5px}
+.conversation-mail-head{display:flex;align-items:center;gap:7px;min-width:0;color:var(--ink-dim);font:11px/1.6 var(--mono)}
+.conversation-mail-route{display:flex;align-items:center;gap:6px;flex:1;min-width:0}
+.conversation-mail-peer{display:inline-flex;align-items:center;gap:5px;min-width:0;flex:0 1 auto}
+.conversation-mail-peer-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conversation-mail-peer.is-counterpart{font-size:13px;font-weight:600;color:var(--ink)}
+.conversation-mail-mark{display:inline-flex;flex:none;width:18px;height:18px}
+.conversation-mail-mark .conversation-avatar{width:18px;height:18px}
+.conversation-mail-mark .badge{right:-2px;bottom:-1px;width:11px;height:11px}
+.conversation-mail-recipients{display:inline-flex;align-items:center;gap:6px;flex:0 1000 auto;min-width:0}
+.conversation-mail-recipients[data-mode=names]>.conversation-mail-peer{flex:none}
+.conversation-mail-recipients[data-mode=icons]{flex:none;gap:0}
+.conversation-mail-recipients[data-mode=icons]>.conversation-mail-peer{overflow:visible}
+.conversation-mail-recipients[data-mode=icons]>.conversation-mail-peer:not([hidden])~.conversation-mail-peer:not([hidden]){margin-left:-4px}
+.conversation-mail-recipients[data-mode=icons] .conversation-mail-peer-name{display:none}
+.conversation-mail-more,.conversation-mail-arrow,.conversation-mail-chevron{flex:none;font:10px var(--mono);white-space:nowrap}
+.mobile .conversation-mail-time{flex:none;margin-left:auto;font:9px var(--mono);white-space:nowrap;color:var(--ink-dim)}
+.conversation-mail-subject-row{display:flex;align-items:baseline;gap:7px;margin-top:5px}
+.conversation-mail-subject-row .conversation-mail-subject{min-width:0;font:12px/1.8 var(--mono);color:var(--ink);overflow-wrap:anywhere}
+.conversation-mail-importance{width:4px;height:4px;flex:none;border-radius:50%;position:relative;top:-2px;background:var(--amber)}
+.conversation-mail-importance[data-importance=urgent]{background:var(--alert)}
+.mobile .conversation-mail-note{margin:4px 0 7px;padding-left:15px;font:10px/1.7 var(--mono)}
+.mobile .conversation-mail-body{padding-left:15px;font:12px/1.8 var(--mono);margin:0}
+
 .reader-fullscreen:has(>.terminal-message:not(:empty)) .conversation-status:not([hidden]){padding-top:7px}
 .reader-fullscreen:has(>.terminal-message:not(:empty)) .conversation-list,.reader-fullscreen .conversation:has(>.conversation-status:not([hidden])) .conversation-list{padding-top:14px}
 
