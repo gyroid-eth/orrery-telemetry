@@ -1290,8 +1290,17 @@ esac
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
 
+    test_home = tmp_path / "home"
+    test_home.mkdir()
+    install_home = test_home / ".agentstack"
     env = os.environ.copy()
+    env.pop("TMUX", None)
+    env.pop("TMUX_TMPDIR", None)
     env.update({
+        "HOME": str(test_home),
+        "AGENTSTACK_HOME": str(install_home),
+        "AGENTSTACK_HOOKS_DIR": str(install_home / "hooks"),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_MAIL_DB": str(database),
