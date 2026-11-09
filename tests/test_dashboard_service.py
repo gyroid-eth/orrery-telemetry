@@ -1290,8 +1290,16 @@ esac
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
 
+    test_home = tmp_path / "home"
+    test_home.mkdir()
+    install_home = test_home / ".agentstack"
     env = os.environ.copy()
+    env.pop("TMUX", None)
+    env.pop("TMUX_TMPDIR", None)
     env.update({
+        "HOME": str(test_home),
+        "AGENTSTACK_HOME": str(install_home),
+        "AGENTSTACK_HOOKS_DIR": str(install_home / "hooks"),
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_MAIL_DB": str(database),
@@ -1334,10 +1342,10 @@ esac
         assert health["status"] == "green"
 
         agents = get_json("/api/agents")["agents"]
-        # The health endpoint authenticates the PID-file watcher. The synthetic
-        # tmux executable has no valid target proof, so the roster must not
-        # promote it into an authenticated live pane.
-        assert not any(row["name"] == "mail-watcher" for row in agents)
+        watcher_card = next(row for row in agents if row["name"] == "mail-watcher")
+        assert watcher_card["category"] == "infra"
+        assert watcher_card["running"] is True
+        assert watcher_card["live"] == "watcher: pidfile"
 
         watcher.terminate()
         watcher.wait(timeout=5)
