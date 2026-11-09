@@ -238,7 +238,7 @@ def test_terminal_fills_the_screen_with_tail_at_the_bottom_and_notes_in_info(pho
     assert js("getComputedStyle(document.querySelector('.terminal-preview-head')).display==='none'&&getComputedStyle(document.querySelector('.terminal-observed')).display==='none'")
     assert js("(()=>{const pre=document.querySelector('#terminal-output'),range=document.createRange();range.selectNodeContents(pre);const text=range.getBoundingClientRect(),box=pre.getBoundingClientRect();return text.bottom<=box.bottom+1&&box.bottom-text.bottom<12;})()")
     js("document.querySelector('.reader-info-toggle').click()")
-    assert js("document.querySelector('.reader-info').innerText.includes('40 lines')&&document.querySelector('.reader-info').innerText.includes('Shown')")
+    assert js("document.querySelector('.reader-info').innerText.includes('120 lines')&&document.querySelector('.reader-info').innerText.includes('Shown')")
 
 
 def test_terminal_long_output_pauses_while_reading_and_failures_stay_visible(phone):
@@ -259,3 +259,30 @@ def test_terminal_long_output_pauses_while_reading_and_failures_stay_visible(pho
     state['preview_error'] = True
     wait("document.querySelector('.terminal-message').textContent.includes('Preview unavailable')", 8)
     assert js("document.querySelector('.terminal-message').getBoundingClientRect().height>0")
+
+
+@pytest.mark.parametrize('phone', [(390,844), (430,932)], indirect=True)
+@pytest.mark.parametrize('provider', ['Claude', 'Codex'])
+def test_expanded_terminal_tail_fills_phone_and_retains_all_120_lines(phone, provider):
+    client, js, wait, state = phone
+    lines = [f'{i:03d} {provider} · 計測結果を確認しています。処理は正常に完了しました。' for i in range(120)]
+    text = '\n'.join(lines)
+    assert 6144 < len(text.encode()) <= 12288
+    state['preview_text'] = text
+    js("document.querySelector('.reader-bar [aria-label=Terminal]').click()")
+    wait("document.querySelector('#terminal-output')?.textContent.startsWith('000')===true")
+    got = js("""(()=>{const p=document.querySelector('#terminal-output'),r=p.getBoundingClientRect(),bar=document.querySelector('.reader-bar').getBoundingClientRect();return {text:p.textContent,top:r.top,bar:bar.bottom,height:r.height,visible:innerHeight,scroll:p.scrollHeight,at:p.scrollTop}})()""")
+    assert got['text'] == text
+    assert got['top'] <= got['bar'] + 16
+    assert got['height'] >= got['visible'] * .8
+    assert got['scroll'] > got['height']
+    assert abs(got['scroll'] - got['height'] - got['at']) <= 2
+
+
+def test_older_preview_limits_are_reported_accurately_in_info(phone):
+    client, js, wait, state = phone
+    state.update(preview_lines=40, preview_bytes=6144, preview_text="Legacy preview fixture")
+    js("document.querySelector('.reader-bar [aria-label=Terminal]').click()")
+    wait("document.querySelector('#terminal-output')?.textContent==='Legacy preview fixture'")
+    js("document.querySelector('.reader-info-toggle').click()")
+    assert js("document.querySelector('.reader-info').innerText.includes('40 lines · up to 6 KiB')")

@@ -185,8 +185,8 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self._send(code, {'ok':False,'error':'request_rejected'})
 
-    def _send(self, status, data, mime='application/json; charset=utf-8'):
-        if isinstance(data, dict):data=json.dumps(data,separators=(',',':'),allow_nan=False).encode()
+    def _send(self, status, data, mime='application/json; charset=utf-8', *, utf8=False):
+        if isinstance(data, dict):data=json.dumps(data,separators=(',',':'),allow_nan=False,ensure_ascii=not utf8).encode()
         self.send_response(status)
         for key,value in [('Content-Type',mime),('Content-Length',str(len(data))),
                           ('Cache-Control','no-store'),('Content-Security-Policy',CSP),
@@ -386,7 +386,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400,{'error':'input_request_invalid'});return
         finally:
             if timer is not None:timer.cancel()
-        try:self._send(200,self.server.mobile_input.call(operation,payload))
+        try:self._send(200,self.server.mobile_input.call(operation,payload),utf8=operation=='preview')
         except Exception:
             # A lost response cannot establish whether a commit reached tmux.
             # The UI retains only the operation ID, offers status, and never

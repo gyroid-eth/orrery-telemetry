@@ -39,7 +39,7 @@ def phone(request):
 
         def send(self, data, mime='application/json', status=200):
             if not isinstance(data, bytes):
-                data = json.dumps(data).encode()
+                data = json.dumps(data,ensure_ascii=False).encode()
             self.send_response(status)
             self.send_header('Content-Type', mime)
             self.send_header('Content-Length', str(len(data)))
@@ -77,7 +77,7 @@ def phone(request):
             if operation == 'targets':
                 return self.send(dict(contract, targets=[choice]))
             if operation == 'preview':
-                return self.send(dict(contract, target=choice, text=state.get('preview_text', 'Generated terminal tail\nReady.'), observed_at=time.time()), status=503 if state['preview_error'] else 200)
+                return self.send(dict(contract, target=choice, text=state.get('preview_text', 'Generated terminal tail\nReady.'), max_lines=state.get('preview_lines',120), max_bytes=state.get('preview_bytes',12288), observed_at=time.time()), status=503 if state['preview_error'] else 200)
             if operation == 'prepare':
                 state['draft'] = payload['text']
                 return self.send(dict(contract, state='prepared', target=choice, text=payload['text'], expires_in=30, intent='fixture-intent', confirmation='fixture-confirmation'))

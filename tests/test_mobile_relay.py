@@ -619,3 +619,48 @@ function button(label){const visit=n=>{if(n.tag==='button'&&n.textContent===labe
     result=subprocess.run([node,'-'],input=script,text=True,capture_output=True,timeout=10)
     assert result.returncode==0,result.stderr
     assert json.loads(result.stdout)['ok'] is True
+
+
+@pytest.mark.parametrize('limits', [(40, 6144), (120, 12288)])
+@pytest.mark.parametrize('case', ['valid', 'too_many_lines', 'too_many_bytes', 'unbounded_lines', 'unbounded_bytes'])
+def test_preview_limits_are_declared_bounded_and_checked(limits, case):
+    from dashboard.mobile_input import CONTRACT, InputClient, InputUnavailable
+    lines, size = limits
+    text = ('界' * 33 + '\n') * (lines - 1) + 'ready'
+    if case == 'too_many_lines': text = 'x\n' * lines + 'x'
+    if case == 'too_many_bytes': text = 'x' * (size + 1)
+    declared_lines = 121 if case == 'unbounded_lines' else lines
+    declared_bytes = 12289 if case == 'unbounded_bytes' else size
+    value = dict(contract=CONTRACT, epoch='a'*32, target=dict(name='TailFixture', pane_label='Pane 0',
+        choice='b'*64, revision='c'*64), text=text, truncated=False, controls_removed=False,
+        observed_at=1, max_lines=declared_lines, max_bytes=declared_bytes)
+    calls = []
+    class Adapter(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            calls.append(self.headers.get('X-ORRERY-Mobile-Preview'))
+            data=json.dumps(value, ensure_ascii=False).encode()
+            self.send_response(200)
+            for key, val in [('Content-Type','application/json'), ('Cache-Control','no-store'), ('Content-Length',str(len(data)))]: self.send_header(key,val)
+            self.end_headers(); self.wfile.write(data)
+    with serving(ThreadingHTTPServer(('127.0.0.1',0),Adapter)) as port:
+        client=InputClient(port,'owner@example.test')
+        payload=dict(epoch='a'*32,choice='b'*64)
+        if case == 'valid': assert client.call('preview',payload)['text']==text
+        else:
+            with pytest.raises(InputUnavailable): client.call('preview',payload)
+        assert calls == ['120/12288']
+        if case == 'valid':
+            config=relay.Config('owner@example.test','https://viewer.example.ts.net:9443',input_enabled=True,phone_policy_reviewed=True)
+            server=relay.make_server(config,store=Store(),input_client=client,test_port=0)
+            with serving(server) as relay_port:
+                con=http.client.HTTPConnection('127.0.0.1',relay_port,timeout=3)
+                try:
+                    con.request('POST','/view/terminal/preview',body=json.dumps(payload),headers={
+                        'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test',
+                        'Origin':'https://viewer.example.ts.net:9443','Content-Type':'application/json'})
+                    response=con.getresponse(); data=response.read()
+                    assert response.status==200 and json.loads(data)['text']==text
+                    assert len(data)<=16384 and b'\\u754c' not in data
+                finally: con.close()

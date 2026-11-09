@@ -162,14 +162,14 @@ def test_held_text_and_its_timestamp_and_notes_stay_on_the_same_snapshot():
       assert.ok(!q('.terminal-preview-note').textContent.includes('Control sequences removed'));
       assert.equal(q('.terminal-stream').textContent,'New output · paused');
       assert.match(q('.terminal-preview-note').textContent,/Scroll to bottom/);
-      assert.match(q('.terminal-preview-note').textContent,/40 lines.*6 KiB.*may be missing/);
+      assert.match(q('.terminal-preview-note').textContent,/120 lines.*12 KiB.*may be missing/);
       const field=q('#terminal-text');field.value='literal test input';field.oninput();
       await button('Review input').onclick();await settle();
       assert.equal(q('.terminal-age').textContent,age);assert.equal(q('#terminal-output').textContent,shown);
       button('Edit').onclick();await settle();const current=q('#terminal-output');
       current.scrollTop=bottom(current);current.events.scroll();
       assert.notEqual(current.textContent,shown);assert.notEqual(q('.terminal-age').textContent,age);
-      assert.match(q('.terminal-preview-note').textContent,/Tail shortened to 6 KiB/);
+      assert.match(q('.terminal-preview-note').textContent,/Tail shortened to fit the snapshot limits/);
       assert.match(q('.terminal-preview-note').textContent,/Control sequences removed/);
       assert.ok(!q('.terminal-preview-note').textContent.includes('may be missing'));
       assert.ok(current.textContent.startsWith('line 100\\n'));

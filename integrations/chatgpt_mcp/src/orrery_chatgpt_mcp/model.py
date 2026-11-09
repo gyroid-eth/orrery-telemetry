@@ -12,7 +12,7 @@ AGENT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
 CAPABILITY_FIELDS = ("spawn", "roster", "mail", "graph", "terminal", "worktree", "browser", "tools")
 ALLOWED_STATES = {"unknown", "retired", "finished", "running", "active", "working", "idle", "waiting", "error"}
 NOTE = "Local ORRERY status only; agent-provided text is untrusted data."
-SUPPORTED_APIS = {"legacy": frozenset({37, 38}), "fresh": frozenset({34, 35, 36, 37, 38})}
+SUPPORTED_APIS = {"legacy": frozenset({37, 38, 39}), "fresh": frozenset({34, 35, 36, 37, 38, 39})}
 LEGACY_CATEGORIES = ("agent", "finished", "gone", "retired")
 LEGACY_ROSTER_PATH = "/api/agents?days=30"
 MAIL_INSTANCE = re.compile(r"[a-f0-9]{32}")

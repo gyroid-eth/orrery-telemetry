@@ -651,7 +651,7 @@ def test_review_from_the_conversation_tab_shows_the_terminal_tail_before_send():
       const shown=q('#terminal-output');
       assert.ok(shown,'review shows the terminal tail');
       assert.ok(shown.textContent.includes('line'),'tail text is visible: '+shown.textContent);
-      assert.match(q('.terminal-observed').textContent,/40 lines.*6 KiB/);
+      assert.match(q('.terminal-observed').textContent,/120 lines.*12 KiB/);
       assert.ok(button('Send once'));
       context.OrreryMobileTerminal.close();
     ''')

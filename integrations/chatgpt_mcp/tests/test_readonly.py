@@ -21,12 +21,12 @@ from orrery_chatgpt_mcp.server import Config, ConfigurationError, Gateway, Serve
 INSTANCE = "0123456789abcdef0123456789abcdef"
 PROJECT = "/fixture/selected"
 FRESH = {
-    "name": "orrery-telemetry", "version": "test", "api": 38, "runtime_mode": "fresh",
+    "name": "orrery-telemetry", "version": "test", "api": 39, "runtime_mode": "fresh",
     "mail_instance_id": INSTANCE, "capabilities": {
         "roster": True, "mail": True, "spawn": True, "terminal": True
     },
 }
-LEGACY = {"name": "orrery-telemetry", "version": "test", "api": 38}
+LEGACY = {"name": "orrery-telemetry", "version": "test", "api": 39}
 AGENTS_FRESH = {
     "mail_instance_id": INSTANCE, "observation_truncated": False, "agents": [
         {"mail_instance_id": INSTANCE, "mail_agent_id": 7, "name": "QuietBohr",
@@ -319,7 +319,7 @@ def test_http_legacy_mode_and_mode_mismatch(tmp_path):
             assert response[1]["result"]["structuredContent"]["error"]["code"] == "dashboard_unavailable"
 
 
-@pytest.mark.parametrize("api", [34, 35, 36, 37, 38])
+@pytest.mark.parametrize("api", [34, 35, 36, 37, 38, 39])
 def test_supported_fresh_generations_still_require_fresh_contract(api):
     version = {**FRESH, "api": api}
     data = snapshot(FakeDashboard(version, AGENTS_FRESH), "fresh")
@@ -328,7 +328,7 @@ def test_supported_fresh_generations_still_require_fresh_contract(api):
     assert data.scope["includes_unobserved"] is True
 
 
-@pytest.mark.parametrize("api", [999, 39, 33, True, "38", None])
+@pytest.mark.parametrize("api", [999, 40, 33, True, "39", None])
 def test_unknown_fresh_generations_are_rejected_before_roster_read(api):
     backend = FakeDashboard({**FRESH, "api": api}, AGENTS_FRESH)
     with pytest.raises(DashboardError):

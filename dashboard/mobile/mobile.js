@@ -529,7 +529,8 @@ function refreshOutput(){
  const pending=previewOK&&shown&&shown.text!==output;
  const stream=q('.terminal-stream');if(stream)stream.textContent=previewOK?(pending?'New output · paused':reading?'Reading earlier output':'Updating every 3s'):'Preview unavailable';
  const age=q('.terminal-age');if(age)age.textContent=shown?'Shown '+new Date(shown.observed_at*1000).toLocaleTimeString('en-GB'):'';
- const note=q('.terminal-preview-note');if(note)note.textContent=[shown?.truncated?'Tail shortened to 6 KiB.':'',shown?.controls_removed?'Control sequences removed.':'',pending?'Scroll to bottom to show the latest tail. Output between snapshots (40 lines / 6 KiB) may be missing.':''].filter(Boolean).join(' ');
+ const limits=shown||preview;
+ const note=q('.terminal-preview-note');if(note)note.textContent=[shown?.truncated?'Tail shortened to fit the snapshot limits.':'',shown?.controls_removed?'Control sequences removed.':'',pending?'Scroll to bottom to show the latest tail. Output between snapshots ('+(limits?.max_lines||120)+' lines / '+((limits?.max_bytes||12288)/1024)+' KiB) may be missing.':''].filter(Boolean).join(' ');
  const terminalState=q('.reader-terminal-state');if(terminalState)terminalState.textContent=previewOK?(pending?'New output · paused':reading?'Reading earlier output':''):'';
  const terminalInfo=q('.reader-terminal-info');if(terminalInfo)terminalInfo.textContent=[stream?.textContent,age?.textContent].filter(Boolean).join(' · ');
  const terminalNote=q('.reader-terminal-note');if(terminalNote)terminalNote.textContent=note?.textContent||'';
@@ -543,7 +544,7 @@ async function poll(){
  try{
   const data=await request('preview',{epoch:capability.epoch,choice:c.choice},controller);
   if(g!==generation||previewController!==controller||document.hidden||!sheet.open||choice!==c)return;
-  if(data.target?.choice!==c.choice||data.target?.name!==name||!sameTarget(data.target)||typeof data.target?.revision!=='string'||typeof data.text!=='string'||new TextEncoder().encode(data.text).length>6144)throw Error('unavailable');
+  if(data.target?.choice!==c.choice||data.target?.name!==name||!sameTarget(data.target)||typeof data.target?.revision!=='string'||typeof data.text!=='string'||new TextEncoder().encode(data.text).length>12288)throw Error('unavailable');
   if(target&&data.target.revision!==target.revision){invalidate('Pane changed. Refresh panes and review again.');return;}
   target=Object.freeze({...data.target});preview=data;output=data.text;previewOK=true;failures=0;
   if(!['preparing','review','sending','accepted','unknown'].includes(phase))message='';
@@ -627,7 +628,7 @@ function readerBar(){
  }
  sheet.append(bar);queueMicrotask(()=>{conversation()?.refreshActivity?.();refreshOutput();});
  if(info){const box=make('div','reader-info');box.id='reader-info';
- if(tab==='terminal')box.append(make('p','','Terminal tail · latest 40 lines · up to 6 KiB. Snapshots update every 3s; output between snapshots may be missing.'),make('p','reader-terminal-info',''),make('p','reader-terminal-note',''),make('p','','Long lines scroll horizontally. Reading earlier output pauses the displayed snapshot; scroll to the bottom to resume.'));
+ if(tab==='terminal')box.append(make('p','','Terminal tail · latest '+(preview?.max_lines||120)+' lines · up to '+((preview?.max_bytes||12288)/1024)+' KiB. Snapshots update every 3s; output between snapshots may be missing.'),make('p','reader-terminal-info',''),make('p','reader-terminal-note',''),make('p','','Long lines scroll horizontally. Reading earlier output pauses the displayed snapshot; scroll to the bottom to resume.'));
  else box.append(make('p','','Conversation record · read-only. New messages below stay paused while you read.'),make('p','','Working shows the recorded turn duration when available. Links open in a new tab; local paths stay text.'));
  box.append(make('p','','One line + Enter · up to 4096 bytes. Review shows the terminal tail before Send once.'),make('p','',choice?'Sends to '+choice.pane_label+'. Existing terminal input may be combined with it.':'Choose a verified pane in Terminal to write.'));
  if(choice)box.append(paneButton(choice.pane_label+' · Change pane'));sheet.append(box);}
@@ -717,7 +718,7 @@ function render(){
  pre.addEventListener('keydown',event=>{
   terminalScrollGesture(pre,!event.defaultPrevented&&(['ArrowDown','PageDown','End'].includes(event.key)||event.key===' '&&!event.shiftKey));
  });
- const observed=make('div','terminal-observed');observed.append(make('span','','Latest 40 lines · up to 6 KiB'),make('span','terminal-age',''));scroll.append(observed,make('p','terminal-preview-note',''));
+ const observed=make('div','terminal-observed');observed.append(make('span','','Latest '+(preview?.max_lines||120)+' lines · up to '+((preview?.max_bytes||12288)/1024)+' KiB'),make('span','terminal-age',''));scroll.append(observed,make('p','terminal-preview-note',''));
  if(history&&!inlineReview){const state=make('p','reader-terminal-state');state.setAttribute('role','status');scroll.append(state);}
  }
  if(history&&!reading&&['sending','accepted','unknown','refused'].includes(phase)){

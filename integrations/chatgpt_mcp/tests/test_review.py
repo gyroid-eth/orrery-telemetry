@@ -7,7 +7,7 @@ from orrery_chatgpt_mcp.model import DashboardError, ToolError, invoke, snapshot
 from orrery_chatgpt_mcp.server import Config, ConfigurationError
 
 PROJECT = "/fixture/selected"
-VERSION = {"name": "orrery-telemetry", "api": 38, "version": "test"}
+VERSION = {"name": "orrery-telemetry", "api": 39, "version": "test"}
 ROSTER = {
     "ts": 100, "history_days": 30.0, "project_key": PROJECT,
     "agents": [
@@ -56,7 +56,7 @@ def test_scoped_legacy_list_status_and_get_keep_stopped_agents():
             invoke("orrery_get_agent", {"name": name}, backend, "legacy", project_key=PROJECT)
 
 
-@pytest.mark.parametrize("api", [999, 39, 0, -1, True, "38", None])
+@pytest.mark.parametrize("api", [999, 40, 0, -1, True, "39", None])
 def test_unknown_generations_fail_before_reading_any_roster(api):
     backend = Backend({**VERSION, "api": api})
     with pytest.raises(DashboardError):
@@ -64,7 +64,7 @@ def test_unknown_generations_fail_before_reading_any_roster(api):
     assert backend.calls == ["/api/version"]
 
 
-@pytest.mark.parametrize("api", [37, 38])
+@pytest.mark.parametrize("api", [37, 38, 39])
 def test_supported_legacy_generations_preserve_project_scope(api):
     data = snapshot(Backend({**VERSION, "api": api}), "legacy", project_key=PROJECT)
     assert data.api == api
