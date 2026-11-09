@@ -675,7 +675,13 @@ response:
 }
 ```
 
-API 38から、省略した欄は現在の値を維持します。明示的な空文字でその欄だけを消し、4欄がすべて空のときだけannotationを削除します。`role`・`emoji`・`group`・`task`は前後の空白を除き、それぞれ40・8・24・200 Unicode文字まで保存します。空でない`task`は利用者による表示の上書きで、空にして保存すると登録時の説明へ戻ります。`/api/agents`の`task`は元の登録値を維持し、上書きは`annot.task`で返します。`/api/annotations`とgraphの`annot`も同じ形式で、上書きがなければ`annot.task`を省略します。表示側は`annot.task`を優先します。Mailの登録値は変えません。既存のspawn・delegateからrole / emoji / groupを送る呼び出しはその値を保存し、省略したtask上書きは維持します。以前のAPI世代では省略した旧欄は空で置き換わり、task上書きは扱えません。
+API 38から、省略した欄は現在の値を維持します。`role`・`emoji`・`group`・`task`は、明示的な空文字または`null`でその欄だけを外し、4欄がすべて空のときだけannotation全体を削除します。`role`・`emoji`・`group`・`task`は前後の空白を除き、それぞれ40・8・24・200 Unicode文字まで保存します。空でない`task`は利用者による表示の上書きで、空文字または`null`で保存すると登録時の説明へ戻ります。`/api/agents`の`task`は元の登録値を維持し、上書きは`annot.task`で返します。`/api/annotations`とgraphの`annot`も同じ形式で、上書きがなければ`annot.task`を省略します。表示側は`annot.task`を優先します。Mailの登録値は変えません。既存のspawn・delegateからrole / emoji / groupを送る呼び出しはその値を保存し、省略したtask上書きは維持します。以前のAPI世代では省略した旧欄は空で置き換わり、task上書きは扱えません。
+
+taskの上書きだけを外す例（省略したrole・emoji・groupは維持）:
+
+```json
+{"name":"WindyFermi","task":null}
+```
 
 ## POST `/api/spawn`
 

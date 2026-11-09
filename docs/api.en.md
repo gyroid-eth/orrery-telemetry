@@ -674,7 +674,13 @@ Response:
 }
 ```
 
-Since API 38, omitted fields retain their current values. Send an explicit empty string to clear a field. All four fields must be empty to delete the annotation. `role`, `emoji`, `group`, and `task` are trimmed and limited to 40, 8, 24, and 200 Unicode characters respectively. A nonempty `task` is a user display override; clearing it restores the registered description. `/api/agents` retains the original registered description in `task` and includes the override in `annot.task`. `/api/annotations` and graph-node `annot` use the same shape; `annot.task` is omitted when no override exists. Display clients prefer `annot.task` to `task`. This never changes Mail registration. Existing spawn/delegate callers that send role / emoji / group keep their values and preserve any omitted task override. Earlier API generations replace omitted legacy fields with empty strings and do not support task overrides.
+Since API 38, omitted fields retain their current values. Send an explicit empty string or `null` to clear a field; this applies equally to `role`, `emoji`, `group`, and `task`. All four fields must be empty to delete the entire annotation. `role`, `emoji`, `group`, and `task` are trimmed and limited to 40, 8, 24, and 200 Unicode characters respectively. A nonempty `task` is a user display override; saving an empty string or `null` restores the registered description. `/api/agents` retains the original registered description in `task` and includes the override in `annot.task`. `/api/annotations` and graph-node `annot` use the same shape; `annot.task` is omitted when no override exists. Display clients prefer `annot.task` to `task`. This never changes Mail registration. Existing spawn/delegate callers that send role / emoji / group keep their values and preserve any omitted task override. Earlier API generations replace omitted legacy fields with empty strings and do not support task overrides.
+
+Clear only the task override (omitted role, emoji, and group retain their values):
+
+```json
+{"name":"WindyFermi","task":null}
+```
 
 ## POST `/api/spawn`
 

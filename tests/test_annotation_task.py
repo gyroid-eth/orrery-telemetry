@@ -73,6 +73,42 @@ def test_http_partial_update_preserves_omitted_fields(annotations):
         thread.join(timeout=2)
 
 
+@pytest.mark.parametrize('field', ['task', 'role', 'emoji', 'group'])
+@pytest.mark.parametrize('alone', [False, True], ids=['keep-other-fields', 'remove-last-field'])
+def test_http_null_clears_field_and_removes_annotation_only_when_empty(annotations, field, alone):
+    values = {'role': 'builder', 'emoji': '✳', 'group': 'fixtures', 'task': 'User summary'}
+    server._write_annotation('BuilderFixture', **({field: values[field]} if alone else values))
+    http = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
+    thread = threading.Thread(target=http.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f'http://127.0.0.1:{http.server_port}/api/annotate',
+            data=json.dumps({'name': 'BuilderFixture', field: None}).encode(),
+            headers={'Content-Type': 'application/json'}, method='POST',
+        )
+        with urllib.request.urlopen(request) as response:
+            result = json.load(response)
+        assert result['ok']
+        if alone:
+            assert result == {'ok': True, 'removed': 'BuilderFixture'}
+            assert json.loads(annotations.read_text()) == {}
+            assert server._annotations() == {}
+        else:
+            assert result['annot'].get(field, '') == ''
+            for other, value in values.items():
+                if other != field:
+                    assert result['annot'][other] == value
+            with urllib.request.urlopen(f'http://127.0.0.1:{http.server_port}/api/annotations') as response:
+                stored = json.load(response)['annotations']['BuilderFixture']
+            assert stored.get(field, '') == ''
+            assert stored == json.loads(annotations.read_text())['BuilderFixture']
+    finally:
+        http.shutdown()
+        http.server_close()
+        thread.join(timeout=2)
+
+
 def test_roster_annotation_does_not_replace_registered_task(annotations, monkeypatch):
     from test_dashboard_identity_link import _build
     server._write_annotation('BuilderFixture', task='User summary')
