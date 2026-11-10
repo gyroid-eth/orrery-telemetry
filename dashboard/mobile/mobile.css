@@ -265,11 +265,16 @@ html.graph-fullscreen #settings{z-index:40}
 .conversation-avatar .initials{font:500 10px var(--mono)}
 .conversation-avatar .badge{right:-3px;bottom:-2px;width:12px;height:12px}
 html[data-color-theme=light] .conversation-byline .provider-logo,html[data-color-theme=light] .conversation-mail-mark .provider-logo{filter:brightness(0)}
+html[data-color-theme=light] .conversation-avatar .provider-seat{fill:var(--panel)}
+html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-local-ring){stroke:var(--hair)}
 .conversation-speaker-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 12px/1.6 var(--mono)}
 .mobile .conversation-speaker-time{flex:none;margin-left:auto;white-space:nowrap;font:9px var(--mono);color:var(--ink-dim)}
 
 /* Mail is a route and recorded content, separate from a human message. */
-.mobile .conversation-mail{padding:8px 0;border:0;border-radius:0;background:none;margin:0;box-shadow:none}
+.mobile .conversation-mail{padding:8px 0;border:0;border-radius:0;background:none;margin:0;box-shadow:none;position:relative}
+.conversation-mail-thread{position:absolute;bottom:8px;width:1px;background:color-mix(in srgb,var(--ink-dim) 38%,transparent);pointer-events:none;user-select:none;-webkit-user-select:none}
+.conversation-mail[aria-expanded=true].is-threaded .conversation-mail-subject-row{margin-left:var(--mail-thread-inset)}
+.mobile .conversation-mail[aria-expanded=true].is-threaded .conversation-mail-note,.mobile .conversation-mail[aria-expanded=true].is-threaded .conversation-mail-body{padding-left:var(--mail-thread-inset)}
 .conversation-mail-label{font:9px/1.6 var(--mono);color:var(--ink-dim);margin-bottom:5px}
 .conversation-mail-head{display:flex;align-items:center;gap:7px;min-width:0;color:var(--ink-dim);font:11px/1.6 var(--mono)}
 .conversation-mail-route{display:flex;align-items:center;gap:6px;flex:1;min-width:0}

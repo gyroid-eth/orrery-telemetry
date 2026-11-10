@@ -7,6 +7,70 @@ import pytest
 from mobile_reader_browser import AREA, phone  # noqa: F401
 
 
+@pytest.mark.parametrize('theme',['dark','light'])
+def test_open_mail_thread_tracks_sender_and_body_end(phone,theme):
+    client,js,wait,state=phone
+    if theme=='light':
+        from pathlib import Path
+        js((Path(__file__).resolve().parents[1]/'dashboard/theme_core.js').read_text())
+        js("document.documentElement.dataset.colorTheme='light';Object.entries(AgentStackColorThemeCore.deriveWarmPaperLightTheme().cssVariables).forEach(([k,v])=>document.documentElement.style.setProperty(k,v))")
+    names=['RecipientAlpha','RecipientBeta','RecipientGamma','UnregisteredPeer']
+    state['snapshot']['agents'].extend(dict(name=n,provider='anthropic') for n in names[:-1])
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("OrreryMobileProfile.forName('RecipientAlpha')!==null")
+    state['events'].append(dict(id='mail-thread',kind='mail',role='assistant',text='',ts='2026-01-01T08:45:00Z',mail=[dict(direction='sent',sender='SampleAgent',recipients=names,importance='high',subject='Generated subject',body='First line\nA longer second line for wrapping. '+('確認 '*20)+'\nLast line',coverage='request',truncated=False)]))
+    wait("document.querySelector('[data-id=mail-thread]')!==null",8)
+    js("window.threadCard=document.querySelector('[data-id=mail-thread] .conversation-mail')")
+    assert js("threadCard.querySelector('.conversation-mail-thread')!==null")
+    assert js("threadCard.querySelector('.conversation-mail-thread').getClientRects().length===0")
+    js("threadCard.click()")
+    wait("threadCard.querySelector('.conversation-mail-thread').getBoundingClientRect().height>0")
+    def geometry():
+        return js("""(()=>{const t=threadCard.querySelector('.conversation-mail-thread'),l=t.getBoundingClientRect(),a=threadCard.querySelector('.conversation-mail-sender .conversation-avatar').getBoundingClientRect(),b=threadCard.querySelector('.conversation-mail-body').getBoundingClientRect();return {x:Math.abs((l.left+l.width/2)-(a.left+a.width/2)),top:l.top-a.bottom,end:Math.abs(l.bottom-b.bottom),width:l.width,decorative:t.getAttribute('aria-hidden')==='true'&&getComputedStyle(t).userSelect==='none'&&getComputedStyle(t).pointerEvents==='none',empty:t.textContent==='',right:b.left+parseFloat(getComputedStyle(threadCard.querySelector('.conversation-mail-body')).paddingLeft)>l.right}})()""")
+    value=geometry()
+    assert value['x']<=1 and value['end']<=1 and value['width']==1 and 0<=value['top']<=4,value
+    assert value['decorative'] and value['empty'] and value['right'],value
+    assert js("threadCard.querySelector('.conversation-mail-sender .initials')!==null&&threadCard.querySelector('.conversation-mail-recipients').dataset.mode==='icons'")
+    client.call('Emulation.setDeviceMetricsOverride',width=280,height=844,deviceScaleFactor=1,mobile=True)
+    wait("innerWidth===280")
+    js("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))")
+    value=geometry()
+    assert value['x']<=1 and value['end']<=1,value
+    js("threadCard.click()")
+    wait("threadCard.querySelector('.conversation-mail-thread').getClientRects().length===0")
+
+
+def test_light_reader_provider_seat_uses_paper_tokens(phone):
+    _,js,wait,_=phone
+    from pathlib import Path
+    js((Path(__file__).resolve().parents[1]/'dashboard/theme_core.js').read_text())
+    js("document.documentElement.dataset.colorTheme='light';Object.entries(AgentStackColorThemeCore.deriveWarmPaperLightTheme().cssVariables).forEach(([k,v])=>document.documentElement.style.setProperty(k,v))")
+    wait("document.querySelector('.conversation-avatar .provider-seat')!==null")
+    assert js("""(()=>{const seat=getComputedStyle(document.querySelector('.conversation-avatar .provider-seat')),probe=document.createElement('span');probe.style.background='var(--panel)';probe.style.border='1px solid var(--hair)';document.body.append(probe);const expected=getComputedStyle(probe),matches=seat.fill===expected.backgroundColor&&seat.stroke===expected.borderTopColor;probe.remove();return matches})()""")
+
+
+def test_open_long_mail_refresh_and_poll_keep_reader_position(phone):
+    _,js,wait,state=phone
+    state['events'].append(dict(id='longmail',kind='mail',role='assistant',text='',ts='2026-11-10T07:12:00Z',mail=[dict(
+        direction='received',sender='SampleAgent',recipients=['Recipient'],importance='normal',subject='A long message to review with wrapping.',
+        body='A long recorded message with many words, 0123456789. '*120,coverage='complete',truncated=False)]))
+    wait("document.querySelector('[data-id=longmail]')!==null",8)
+    value=js("""(()=>{const c=document.querySelector('[data-id=longmail] .conversation-mail'),l=document.querySelector('.conversation-list');
+      c.click();l.scrollTop=l.scrollHeight-l.clientHeight-60;l.dispatchEvent(new Event('scroll'));
+      window.mailReadingTop=l.scrollTop;window.keptLongMail=c;window.mailThreadChanges=0;
+      window.threadObserver=new MutationObserver(records=>mailThreadChanges+=records.length);
+      threadObserver.observe(c,{attributes:true});threadObserver.observe(c.querySelector('.conversation-mail-thread'),{attributes:true});
+      OrreryMobileConversation.refreshProfiles();return {before:mailReadingTop,after:l.scrollTop,delta:l.scrollTop-mailReadingTop};})()""")
+    assert value['before']>1000 and abs(value['delta'])<=1,value
+    # A new record proves that the ordinary asynchronous poll also finished.
+    state['events'].append(dict(id='after-long-mail',kind='text',role='assistant',text='A later record.',ts=''))
+    wait("document.querySelector('[data-id=after-long-mail]')!==null",8)
+    assert abs(js("document.querySelector('.conversation-list').scrollTop-mailReadingTop"))<=1
+    assert js("document.querySelector('[data-id=longmail] .conversation-mail')===keptLongMail&&keptLongMail.getAttribute('aria-expanded')==='true'")
+    assert js('mailThreadChanges')==0
+    js('threadObserver.disconnect()')
+
+
 def test_tool_group_keyboard_keeps_position_open_state_and_nodes_on_poll(phone):
     client, js, wait, state = phone
     state['events'].extend(dict(id='tool-'+str(i),kind='tool',role='assistant',text=t,ts='2026-01-01T08:45:00Z')
