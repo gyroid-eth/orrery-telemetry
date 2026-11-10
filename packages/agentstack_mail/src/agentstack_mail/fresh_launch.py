@@ -149,7 +149,10 @@ def command(root, home, binary, provider, plan, run, cwd, session_id):
     plugin_id = plan['plugin_id']
     if not isinstance(plugin_id, str) or not re.fullmatch(r'agentstack-codex-app@[a-z0-9-]+', plugin_id):
         raise B1Error('CODEX_HOOK_CONFIGURE_REQUIRED')
-    args = [binary, '-C', str(cwd), '-c', 'check_for_update_on_startup=false',
+    # Codex 0.163 drops root -c values when resume also has -c overrides.
+    # Keep every native option at the same level, including later skills.
+    args = [binary] + (['resume', session_id] if session_id is not None else [])
+    args += ['-C', str(cwd), '-c', 'check_for_update_on_startup=false',
             '--sandbox', os.environ.get('AGENTSTACK_CODEX_SANDBOX', 'workspace-write'),
             '--ask-for-approval', os.environ.get('AGENTSTACK_CODEX_APPROVAL', 'on-request'),
             '-c', 'mcp_servers.orrery-mail.command=' + json.dumps(proxy[0]),
@@ -161,6 +164,9 @@ def command(root, home, binary, provider, plan, run, cwd, session_id):
                 'AGENTSTACK_RUNTIME_MODE', 'AGENTSTACK_FRESH_CLIENT_CONTEXT',
                 'AGENTSTACK_PYTHON']),
             '-c', 'plugins.' + plugin_id + '.mcp_servers.agentstack.enabled=false']
+    # Match the existing child launcher: network is on unless explicitly off.
+    if os.environ.get('AGENTSTACK_CODEX_NETWORK', '1') not in {'0', 'off', 'false', 'no'}:
+        args += ['-c', 'sandbox_workspace_write.network_access=true']
     for name in values.get('mcp_servers', {}):
         if name != 'orrery-mail' and policy['looks_like_agent_mail'](name):
             if not re.fullmatch(r'[A-Za-z0-9_-]+', name):
@@ -168,7 +174,6 @@ def command(root, home, binary, provider, plan, run, cwd, session_id):
             args += ['-c', 'mcp_servers.' + name + '.enabled=false']
     vault = os.environ.get('AGENTSTACK_VAULT')
     if vault and Path(vault).is_dir():args += ['--add-dir', vault]
-    if session_id is not None:args += ['resume', session_id]
     return args
 
 
@@ -310,7 +315,7 @@ def launch(client, wrapper_root, provider, cwd, *, session_id=None):
                                        prompt if session_id is None else '', session_id)
             args = managed_plan['argv']
         else:args = command(root, home, binary, provider, plan, run, cwd, session_id)
-        config_args = args[:-2] if provider == 'codex' and session_id is not None else list(args)
+        config_args = [args[0], *args[3:]] if provider == 'codex' and session_id is not None else list(args)
         if task is not None:
             _, _, child_record = family(client)
             if binary != task['binary']:raise B1Error('FRESH_CHILD_INTENT_CONFLICT')

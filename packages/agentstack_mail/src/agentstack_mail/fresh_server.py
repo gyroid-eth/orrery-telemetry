@@ -14,7 +14,22 @@ from fastmcp.tools import FunctionTool
 
 from .boundary import ToolArgumentBoundary, install_tool_validation_log_sanitizer
 from .fresh_runtime import FreshRuntime
-from .storage_origin_contract import AUTH_SCHEMA, Auth, B1Error, integer, name_keys, string
+from .storage_origin_contract import AUTH_SCHEMA, MAX_INT, Auth, B1Error, integer, name_keys, string
+
+
+def recipient_schema():
+    """Publish the same exclusive selector shape admitted by FreshBoundary."""
+    properties = {
+        'target_agent_id': {'type': 'integer', 'minimum': 1, 'maximum': MAX_INT},
+        'target_name': {'type': 'string', 'minLength': 1, 'maxLength': 128},
+        'expected_target_name': {'type': 'string', 'minLength': 1, 'maxLength': 128},
+        'kind': {'type': 'string', 'enum': ['to', 'cc', 'bcc'], 'default': 'to'},
+    }
+    alternatives = [dict(type='object', additionalProperties=False, required=[selector],
+        properties={key: value for key, value in properties.items() if key != other})
+        for selector, other in (('target_agent_id', 'target_name'), ('target_name', 'target_agent_id'))]
+    return dict(type='array', minItems=1, maxItems=100,
+                items=dict(type='object', properties=properties, additionalProperties=False, anyOf=alternatives))
 
 
 class FreshBoundary(ToolArgumentBoundary):
@@ -105,6 +120,10 @@ def build_fresh_server(config_path=None, *, core=None):
         tool.parameters['additionalProperties'] = False
         if 'auth' in tool.parameters['properties']:
             tool.parameters['properties']['auth'] = copy.deepcopy(AUTH_SCHEMA)
+        if 'recipients' in tool.parameters['properties']:
+            schema = recipient_schema()
+            if name == 'reply_message':schema = {'anyOf': [schema, {'type': 'null'}], 'default': None}
+            tool.parameters['properties']['recipients'] = schema
         server.add_tool(tool)
 
     async def health_check(expected_server_instance_id: str | None = None) -> dict:

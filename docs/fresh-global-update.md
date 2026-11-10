@@ -287,6 +287,10 @@ resumeは **この新clientで記録済みのnative sessionだけ** が対象で
 
 以下はClaudeの例です。Codexではprogramを `codex` にし、spawnへ `--codex` を加えます。modelは実際に使う値を指定します。本人が先に準備した同じfamilyのprovider HOMEを使うため、子ごとのhook承認を自動コピーしません。指示・binary・現行trustが不足すれば、spawn前に止まります。native transcriptはそのprovider HOMEへ、Mail本人・task・run/session記録は子ごとの領域へ保存します。自動login／hook承認や実HOME探索はありません。
 
+新しいClaude provider HOMEの初回だけ、theme・security notes・workspace trustの画面を人が操作します。作業folder外のtaskや補助fileの読取も許可を求める場合があります。起動の `accepted` をこれらの完了とみなさず、実画面を確認してから子の報告を待ちます。
+
+fresh Codexの起動は、既存の子launcherと同じく `AGENTSTACK_CODEX_NETWORK` が未指定ならworkspace-writeのnetwork許可を追加します。`0`／`off`／`false`／`no` ではその追加を止め、native configの設定に従います。networkが無効ならshellからのMail接続にも通常のsandbox制限が適用されます。tool承認は引き続き既定の `on-request` です。Codex 0.163.0では `resume` の前後に `-c` を分けると前の設定が失われるため、fresh launcherはproxy・plugin MCP無効化・skills等の設定をすべて `resume <ID>` の後ろへ置きます。
+
 ```sh
 orrery_child_slot='worker_01'
 orrery_child_name='ChildWorker'
@@ -397,6 +401,8 @@ APFSの日本語profileは [絶対予約の支持範囲](absolute-reservations.m
 Claudeは既存hookで、tmuxは既存watcherと起動時に固定したpaneで通知します。watcherを手で準備する場合も、別の保守端末で上記の変数を同じ確認済みの値へ再設定します。`AGENTSTACK_FRESH_CLIENT_CONTEXT`／`AGENTSTACK_CLIENT_CONFIG`／`AGENTSTACK_GLOBAL_SERVER_CONFIG` を選択していないことを確認し、実装済み入口 `AGENTSTACK_PYTHON="$orrery_python" "$orrery_install/bin/agentstack-runtime-client" watch-fresh --config "$orrery_config"` を使います。1回だけの確認では末尾へ `--once` を付けます。PATHや既定python3へ任せません。通常のforeground terminalにtmux配送先が自動生成されるわけではなく、通常installerは同configだけを渡すwatcherサービスを描画し、本人contextのkeyを除去します。Appやdashboardとの接続確認も限定fixtureであり、実App/providerの受入とは分けます。
 
 freshのClaudeのSessionStart hookが通知を渡すのは、`source` が文字列 `startup` のときだけです。resume／clear／compact、未知・欠落・文字列以外の `source` では、本人・現在の起動・所有者の確認はこれまでどおり行いますが、通知の取得・出力・completionはせず、read／ACKも変えず、pendingのまま通常のwatcherへ残します。SessionStartの文脈への引渡しだけでは、nativeのターンが始まることを保証しないためです。PostToolUseでの受渡しは従来どおりです。watcherへ残しても起床の成功は保証しません。watcherは、固定したpane・プロセスの出生と祖先・画面の状態（待機中または作業中）・入力欄が空であることを含む既存の確認を満たしたときだけ配送し、承認画面・未知の状態・入力欄に文字がある場合などは見送ります。
+
+Codexの既知の空欄表示 `› Ask Codex to do anything` は空欄として扱います。利用者が同じ文 `Ask Codex to do anything` を入力している場合も空欄と区別できず、入力へ通知を追記して送信することがある既知の制限があります。未知のplaceholderは入力ありとして見送ります。Claudeの提案の薄い文字も、現在の色なしcaptureでは実入力と区別できないため入力ありとして見送る既知の制限があります。提案文の内容だけで空欄と推測しません。processの出生は記録・照合とも `LC_ALL=C` の `ps` で取得します。既存の別localeの出生記録が一致しなければ `FRESH_TMUX_TARGET_CHANGED` のまま止め、通常の終了を確認してから正規launcherで起動し直します。古い記録を書き換えたり、PIDだけで再接続したりしません。
 
 通知completionはstdout／paneへの受渡し処理の記録で、read／ACKやagentの理解・仕事完了ではありません。外部入力とDB更新を一度だけにする保証はなく、不明な結果では再通知の可能性があります。Codexの複数file patchは後のfileで拒否されても先行fileのleaseだけ延長される場合があります。編集は許可されませんが、patch全体で時刻が不変とは保証しません。ClaudeのMultiEdit／NotebookEditは現在拒否されます。
 

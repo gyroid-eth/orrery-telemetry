@@ -58,6 +58,9 @@ def compact_readiness(text,provider):
     if provider not in ('claude','codex'):
         return dict(state='unknown',input_empty=None,context_used_percent=context_used(text))
     suffix=prompt_suffix(text,provider)
+    # Only this observed native placeholder is known to mean no input.
+    # Unknown prompts and Claude's unstyled suggestions remain pending input.
+    if provider=='codex' and suffix=='Ask Codex to do anything':suffix=''
     rows=text.splitlines()
     glyph={'claude':'❯','codex':'›'}[provider]
     indices=[i for i,line in enumerate(rows) if line.strip().startswith(glyph)]
