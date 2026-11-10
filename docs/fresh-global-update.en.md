@@ -289,6 +289,8 @@ This example uses Claude. For Codex, use program `codex` and add `--codex` to sp
 
 On the first launch in a new Claude provider HOME, a person completes the theme, security notes and workspace trust screens. Reading tasks or supporting files outside the working folder may also require permission. An `accepted` launch does not prove these steps are complete; check the actual screen before waiting for the child's report.
 
+Launching a child from Codex's workspace-write sandbox requires the operator's approval to execute outside the sandbox because it writes the child client area outside the working folder.
+
 Fresh Codex launches add workspace-write network permission by default, matching the existing child launcher. Setting `AGENTSTACK_CODEX_NETWORK` to `0`, `off`, `false` or `no` omits that override and leaves the native config in effect. When network access is disabled, shell connections to Mail are subject to the ordinary sandbox restrictions too. Tool approval still defaults to `on-request`. Codex 0.163.0 loses earlier settings when `-c` options are split across `resume`; the fresh launcher puts all proxy, plugin MCP disablement, skills and other settings after `resume <ID>`.
 
 ```sh

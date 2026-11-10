@@ -66,6 +66,11 @@ def test_backend_and_bound_proxy_publish_recipient_selectors(name):
 
 @pytest.mark.parametrize('screen,ready', [
     ('› Ask Codex to do anything\n? for shortcuts', True),
+    ('› Ask Codex to do anything\nGPT-6.1-Sol default · /fixture/work\n'
+     '? for shortcuts                       ⚠ 3 warnings · f2 to view', True),
+    ('› Ask Codex to do anything\nGPT-6.1-Sol default · /fixture/work\n'
+     '? for shortcuts\nunknown continuation', False),
+    ('❯\u00a0\n────────────────\n  ⏵⏵ auto mode on (shift+tab to cycle)', True),
     ('› Ask Codex to do anything else', False),
     ('❯ 親から COMPLETE が届いたので確認して進めてください', False),
 ])
@@ -101,6 +106,31 @@ def test_old_localized_birth_stays_refused_instead_of_rebinding(tmp_path, monkey
                 101: (100, os.getuid(), current), 102: (101, os.getuid(), current)}
             with pytest.raises(B1Error, match='FRESH_TMUX_TARGET_CHANGED'):delivery.target(client, ROOT)
             assert commands == []
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('draft', [
+    'GPT-6.1-Sol default · please review this transcript',
+    '⚠ 3 warnings · f2 to view',
+])
+def test_multiline_footer_shaped_draft_is_not_delivered(tmp_path, monkeypatch, draft):
+    # Adapted from RockyTuring's review regression: real pending delivery,
+    # isolated Mail fixture and mocked tmux, never a live pane.
+    from agentstack_mail.fresh_launch import layout
+    from test_fresh_mail import send_args
+    async def run():
+        async with live(tmp_path) as (runtime, people, client, _):
+            run, _ = await prepared_route(client, tmp_path, monkeypatch)
+            for path in (run/'intent.json', run/'session.json', *list((layout(client)/'sessions').glob('*.json'))):
+                value = json.loads(path.read_text());value['provider'] = 'codex'
+                path.write_text(json.dumps(value));path.chmod(0o600)
+            screen = '›\n  ' + draft + '\n\n  GPT-6.1-Sol default · /fixture/work\n? for shortcuts'
+            commands, _, _ = mocked_os(monkeypatch, screen=screen)
+            await runtime.core.write_message('send', **send_args(runtime, people,
+                auth=people[1]['auth'], recipients=[{'target_name': 'Alpha'}]))
+            with pytest.raises(B1Error, match='FRESH_TMUX_TARGET_NOT_READY'):
+                await delivery.deliver(client, ROOT)
+            assert all(args[0] not in ('paste-buffer', 'send-keys') for args, _ in commands)
     asyncio.run(run())
 
 
