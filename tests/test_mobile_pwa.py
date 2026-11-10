@@ -119,7 +119,7 @@ def test_reload_restores_only_agent_and_tab(phone):
     assert js("document.querySelector('#terminal-text').value")==''
 
 
-def test_reload_reacquires_fresh_identity_from_the_current_roster(phone):
+def test_reload_restores_the_same_fresh_identity_from_the_current_roster(phone):
     client,js,wait,state=phone
     identity=dict(mail_instance_id='a'*32,mail_agent_id=7)
     state['snapshot']['agents'][0].update(identity)
@@ -136,13 +136,19 @@ def test_reload_reacquires_fresh_identity_from_the_current_roster(phone):
       };
     """)
     client.call('Page.reload',ignoreCache=True)
+    wait("typeof OrreryMobileTerminal!=='undefined'&&document.querySelector('body>header>span').textContent==='History · Terminal'&&OrreryMobileIdentity.forName('SampleAgent')!==null")
+    assert not js("document.querySelector('#terminal-sheet').open"),'name-only legacy state cannot prove a fresh identity'
+    js("OrreryMobileTerminal.open('SampleAgent',OrreryMobileIdentity.forName('SampleAgent'))")
     wait("document.querySelector('#terminal-sheet').open&&document.querySelector('#terminal-text')!==null")
     js("document.querySelector('#terminal-text').value='Fresh identity';document.querySelector('#terminal-text').dispatchEvent(new Event('input'))")
     wait("document.querySelector('#terminal-review').disabled===false")
     payload=[value for op,value in state['calls'] if op=='targets'][-1]
     assert all(payload[k]==v for k,v in identity.items())
     stored=js("JSON.parse(sessionStorage.getItem('orrery-mobile-view-v1'))")
-    assert stored==dict(agent='SampleAgent',tab='conversation')
+    assert stored==dict(agent='SampleAgent',tab='conversation',**identity)
+    client.call('Page.reload',ignoreCache=True)
+    wait("document.querySelector('#terminal-sheet').open&&document.querySelector('#terminal-text')?.disabled===false")
+    assert js("document.querySelector('#terminal-text').value")==''
 
 
 def test_background_renews_choice_and_expires_confirmation_without_sending(phone):
