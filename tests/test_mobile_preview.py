@@ -223,7 +223,7 @@ def test_phone_shows_a_text_preview_as_text_and_closes_it():
     ''')
 
 
-def test_phone_shows_only_a_checked_png_and_clears_it_on_close_and_background():
+def test_phone_keeps_checked_png_in_background_and_clears_it_on_close():
     phone(r'''
       let answer={ok:true,kind:'image',label:'chart.png',data:PNG64,width:3,height:2,notice:'n'};
       reply=async url=>url.startsWith('/view/conversation/preview?')?{body:answer}:withFile([{label:'chart.png',kind:'image',ref:REF}]);
@@ -233,8 +233,10 @@ def test_phone_shows_only_a_checked_png_and_clears_it_on_close_and_background():
       assert.equal(img.src,'data:image/png;base64,'+PNG64);
       // Polls keep the open preview.
       await tick();assert.ok(panel(root));
-      doc.hidden=true;docListeners.visibilitychange();doc.hidden=false;
-      assert.equal(img.src,'','background drops the image data');assert.equal(root.textContent,'');
+      doc.hidden=true;docListeners.visibilitychange();
+      assert.equal(img.src,'data:image/png;base64,'+PNG64);assert.ok(panel(root));
+      doc.hidden=false;docListeners.visibilitychange();await settle();assert.ok(panel(root));
+      C.unmount();assert.equal(img.src,'','leaving drops the image data');assert.equal(root.textContent,'');
       for(const bad of [{...answer,mime:'text/html'},{...answer,data:'<svg onload=x>'},{...answer,data:'iVBO'.repeat(3)},{...answer,width:0},{...answer,kind:'html'}]){
         answer=bad;root=C.mount('Vega');body.append(root);await settle();
         await chip(root).onclick();await settle();
@@ -484,8 +486,9 @@ def test_save_writes_the_checked_png_bytes_with_a_png_name():
       assert.equal(clicks[0].download,'photo.jpg.png');
       assert.equal(made[0].type,'image/png');
       assert.deepEqual(Buffer.from(await made[0].arrayBuffer()),Buffer.from(PNG64,'base64'));
-      // Background clears the preview and revokes the URL.
-      doc.hidden=true;docListeners.visibilitychange();doc.hidden=false;
+      // Background retains this in-memory preview; leaving revokes its URL.
+      doc.hidden=true;docListeners.visibilitychange();assert.deepEqual(revoked,[]);
+      doc.hidden=false;docListeners.visibilitychange();await settle();C.unmount();
       assert.deepEqual(revoked,['blob:saved-1']);
       for(const [given,want] of [['..','image.png'],['a\\b\u0007c.PNG','bc.PNG'],['x'.repeat(300),'x'.repeat(120)+'.png'],
                                  ['shot\u202egnp.html','shotgnp.html.png'],['a\u0085\u200e\u2066b.png','ab.png']]){

@@ -446,6 +446,12 @@ function unmount(){
  root?.replaceChildren();root?.remove();root=list=status=olderButton=retryButton=null;
  events=[];seen=new Set();older=null;pending=[];failures=0;loadingOlder=false;following=true;savedTop=0;name='';
 }
-document.addEventListener('visibilitychange',()=>{if(document.hidden)unmount();});window.addEventListener('pagehide',unmount);
+document.addEventListener('visibilitychange',()=>{
+ if(document.hidden){
+  gen++;clearTimeout(timer);timer=0;
+  for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
+  loadingOlder=false;if(olderButton)olderButton.hidden=!older;
+ }else if(root){restore();poll();}
+});window.addEventListener('pagehide',unmount);
 window.OrreryMobileConversation={enabled,mount,element,unmount,addPending,restore,dismissPreview,refreshActivity:activity,refreshProfiles};
 })();
