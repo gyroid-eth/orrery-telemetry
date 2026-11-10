@@ -47,9 +47,12 @@ def test_documented_request_uses_current_public_api_contract():
     api = (ROOT / 'docs/api.md').read_text()
     for field in fields:
         assert f'`{field}`' in api
+    # A dynamic Local row adds both of its fields to the same request.
+    for field in ('url_index', 'url_key'):
+        assert f'DELEGATE_{field.upper()}' in body and f'`{field}`' in api
 
 
-@pytest.mark.parametrize('outcome', ['pending', 'refused', 'transport'])
+@pytest.mark.parametrize('outcome', ['pending', 'dynamic', 'refused', 'transport'])
 def test_documented_curl_request_and_cleanup(tmp_path, outcome):
     tools = tmp_path / 'bin'
     tools.mkdir()
@@ -92,19 +95,24 @@ else:
            'DELEGATE_DIR': str(tmp_path), 'DELEGATE_TASK_FILE': str(task),
            'AGENTSTACK_PORT': '12345', 'TMPDIR': str(requests),
            'RECORD': str(record), 'OUTCOME': outcome}
+    dynamic = {'url_index': 0, 'url_key': 'opaque-key'} if outcome == 'dynamic' else {}
+    if dynamic:
+        env.update(DELEGATE_PROVIDER='strata-epyc', DELEGATE_URL_INDEX='0',
+                   DELEGATE_URL_KEY='opaque-key')
     script = re.search(r'```bash\n(.*?)\n```', native_section(), re.S)[1]
     result = subprocess.run(['/bin/bash', '-c', script], env=env, cwd=tmp_path,
                             capture_output=True, text=True, timeout=10)
     events = [json.loads(line) for line in record.read_text().splitlines()]
     post = events[0]
     assert post['mode'] == 0o600
-    assert post['payload'] == {'provider': 'strata', 'harness': 'hermes',
+    assert post['payload'] == {'provider': env['DELEGATE_PROVIDER'], 'harness': 'hermes',
                                'model': 'formal-model-id', 'parent': 'ParentTesla',
-                               'dir': str(tmp_path), 'task': content, 'async': True}
+                               'dir': str(tmp_path), 'task': content, 'async': True,
+                               **dynamic}
     assert 'http://127.0.0.1:12345/api/spawn' in post['args']
     assert not list(requests.iterdir())
     assert not (tmp_path / 'forbidden').exists()
-    if outcome == 'pending':
+    if outcome in ('pending', 'dynamic'):
         assert result.returncode == 0, result.stderr
         assert [event['kind'] for event in events] == ['post', 'status']
         assert 'name=BrightCurie' in events[1]['args']
