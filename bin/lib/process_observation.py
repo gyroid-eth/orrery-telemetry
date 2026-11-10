@@ -2,6 +2,7 @@
 import subprocess
 import time
 import signal
+import os
 
 
 def request_provider_exit(*, send, interrupt, delegated_antigravity=False,
@@ -47,7 +48,8 @@ def process_start(pid, *, deadline=None):
     if not integer(pid,1):
         return None
     try:
-        result = subprocess.run(['ps','-p',str(pid),'-o','lstart='], capture_output=True, text=True, timeout=remaining(deadline, 3))
+        result = subprocess.run(['ps','-p',str(pid),'-o','lstart='], capture_output=True, text=True,
+                                env=dict(os.environ, LC_ALL='C'), timeout=remaining(deadline, 3))
         if result.returncode == 1 and not result.stderr:
             return 'absent'
         return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
@@ -59,7 +61,8 @@ def process_snapshot(*, deadline=None):
     """One ephemeral PID/parent/UID/birth observation; never cache it."""
     try:
         result = subprocess.run(['ps', '-axo', 'pid=,ppid=,uid=,lstart='],
-                                capture_output=True, text=True, timeout=remaining(deadline))
+                                capture_output=True, text=True, env=dict(os.environ, LC_ALL='C'),
+                                timeout=remaining(deadline))
         if result.returncode:
             return None
         rows = {}
