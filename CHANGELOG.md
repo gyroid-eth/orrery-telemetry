@@ -10,6 +10,99 @@
 
 ---
 
+## 2026.11.10
+
+### スマホの会話で、開いた Mail に肖像からの線を引く
+
+開いた Mail の左に、送り手の肖像の下から本文の終わりまで細い線を引き、会話の続きとして読めるようにしました。light では、肖像の右下の provider のロゴが黒い丸で表示されていたのを、PC と同じ色にそろえました。
+
+### 子を立てる手順に、サーバーから model を読む Local の指定を足す
+
+delegate skill の DeepSeek・Local の子を立てる手順で、provider には catalog が返した接続の id をそのまま送るようにしました。サーバーから model の一覧を読む Local では、選んだ model 行の `url_index` と `url_key` を写して送ります。これまでの例ではこの2つが無く、起動が `spawn_pair_unavailable` で断られていました。
+
+### スマホの会話で、続いたツールの呼び出しを1行にまとめる
+
+続いたツールの呼び出しを「N tool calls · 名前 ×回数 · 時刻」の1行にまとめ、押すと開閉します。新しい行が届いても、開いたまとめ・focus・見ている位置はそのままです。受け取った Mail の記録に宛先が無いときは、unknown ではなく会話の本人を宛先として肖像付きで出します。
+
+### スマホの会話で発言者と Mail の相手を読みやすく
+
+発言者の見出しを、肖像・provider の小さなロゴ・agent 名・時刻にまとめました。Mail も同じ肖像を使い、色枠を外して送り手から宛先への1行と件名を主役にします。複数の宛先が入りきらなければ丸を重ねた列と残りの人数に切り替え、送り手の名前を優先して残します。high・urgent は小さな点で示し、肖像の頭文字は本文をまたぐコピーに混ぜません。
+
+### 狭い Codex pane の作業中表示を正しく読み取る
+
+現在の `Working` / `Thinking` 行が幅で省略されても作業中と判定し、読み取れた経過時間だけを表示します。過去の状態行や引用を現在の作業とみなさない判定は維持します。
+
+### dsh でサーバーが宣言した画像入力を使えるように
+
+動的 backend の `/v1/models` が返す画像対応を dsh のモデル定義へ渡し、DeepSeek・GLM などで画像を送れるようにしました。`video` なども併記された宣言では対応する種類だけを残し、宣言の欠落・不正・過大、`text` の欠落では text のみを保ちます。固定 backend の宣言と context・出力予算は変更しません。
+
+### GPTのモデル名を省略せず表示
+Codexのstatuslineと登録値にある接尾語を、未知の名前も含めて保持し、`GPT-6.1-Sol`のように完全な名前で表示します。effortは含めず、Claude・Localの短い表示は維持します。
+
+### スマホのConversationを本文中心の全画面に
+
+上部を顔・名前と操作の細い帯にまとめ、入力は右下の鉛筆から開く形にしました。説明はiに置き、未確認・通信断・送信失敗は隠しません。Review input → Send onceの確認を残し、キーボード・safe area・Back・previewの重なりに対応します。
+
+assistantのMarkdownに太字・見出し・リスト・表・コードとCOPYを追加し、SHELLのコマンドと出力をまとめます。自動通知は短い活動の要約で出し、送信の仮の行はSHELLとも対応づけ、Dismissか期限で消せます。描画器は既存ソースを無改変で同梱し、同期を確かめる試験を付けました。360px・390pxで本文の面積80%以上を回帰試験にしています。API世代を38→39に上げ、mobileのsnapshotに作業中だけの任意の`work_disp`を追加しました。経過が無いときはWorkingだけを出し、画面を開いてからの時間は数えません。
+
+[スマホの使い方](docs/mobile.md)
+
+ReviewはConversationの上の小さな入力panelで送り先と端末末尾を確かめる形にし、送った後は会話と送信の吹き出しへ戻ります。受領と結果不明時の照会は残します。上の帯の操作は44px四方以上にし、mobileのtouchでiの開閉を試験しています。
+
+Terminal tabも枠と常時の注記を外し、短い末尾を画面の下端へ寄せて表示します。長い行は元の字下げを保って折り返し、罫線だけの行は幅で切ります。読み返し中の停止と取得失敗は表に残し、更新時刻・上限などはiで確認できます。
+
+Terminalの末尾を対応する組み合わせでは120行・12KiBまで増やしました。古い取得側・表示側との組み合わせでは40行・6KiBを保ち、JSON全体の16KiB上限に合わせて末尾を短くします。
+
+Conversationの本文を左へ、Terminalの本文を右へスワイプして切り替えられます。縦スクロール・選択・横スクロールが必要な表やコード・画面端の戻る操作を優先し、入力や確認のpanelと送信中は切り替えません。
+
+### agent の役割とタスクの説明を利用者が編集できるようにする
+
+annotationに200字までの`task`を追加しました。Mailへ登録された元の説明を変えずに表示を上書きでき、空文字または`null`で保存すると元の説明へ戻ります。dashboardの一覧とNETWORKでも上書きを表示します。
+
+`POST /api/annotate`は、省略した欄を維持し、明示的な空文字または`null`でその欄を外す部分更新になりました。role・emoji・group・taskに共通で、全欄が空になったときだけannotation全体を削除します。role・emoji・groupの既存の全項目送信は従来どおりです。新しい欄と更新の意味を API の利用側が識別できるよう、`GET /api/version`の互換世代を37から38へ上げました。
+
+読み取り専用MCPアダプターもlegacy・freshの両方式でAPI 38を受け付けます。公開するagentの欄は増やさず、annotationとタスクの説明は返しません。未知のAPI世代は引き続き拒否します。
+
+### Local GLM の表示と DeepSeek の版表記を揃える
+
+Local の GLM を名簿・ネットワーク図で識別できるようにし、`glm-5.3-flash` を `GLM 5.3 flash` と表示します。`deepseek-v4.1-flash` のような `v` 付きの版も正規化します。送信用の元の model ID は保持します。
+
+### MCPの読み取り専用の範囲と一覧APIの説明を明確化
+
+MCPアダプターの[日本語ガイド](integrations/chatgpt_mcp/README.md)と[英語ガイド](integrations/chatgpt_mcp/README.en.md)に、freshの一覧取得は既存のMailの書き込み用transactionを通り、「読み取り専用」はMCPに書き込み操作を公開しない意味であることを補足しました。DB層で書き込みや書き込み用ロックが一切ないという保証ではありません。
+
+一覧APIのdocstringも、API 37で追加したproject情報を含む現在の応答に合わせました。機能・API世代・認可・transactionの実装は変更していません。
+
+### NETWORKの線の上の数が、cometと同時に増えるようにする
+
+これまで、comet と Mail の card はすぐ出るのに、線の上の数は最大で約13秒遅れて増えていました。今は、新しい message が入るとdashboardがgraphをその場で作り直すので、comet と同時に増えます。新しい message が無い間は、今までどおり8秒に1回だけ作り直すので、負荷は増えません。数は今までどおりgraphの値で、表示の期間の絞りもそのまま効きます。
+
+### agent が作った file や画像を、cockpit の History の chip にする `show_files`
+
+ORRERY Mail の proxy に local の tool `show_files` を足しました（`paths` に 1〜8個）。proxy の中だけで完結し、Mail server へは送らず、何も書かず、file の中身も読みません。`lstat` で在るか・種類・大きさだけを返します。cockpit は記録に残ったこの呼び出しから History に chip を出し、作業 folder の中・種類・大きさの確認は preview の側で従来どおり行います（cockpit 側の対応が要ります）。Claude・Codex・dsh・Hermes の managed な指示に「Showing Files」の節を足し、同梱の `/log` は書いたログを、`/delegate` は報告の前に成果の file を `show_files` で見せます。`/log` は、ログが作業 folder の中にあるとき、その機械で初回に一度だけ chip のことを一行添えます。Claude の設定の雛形はこの tool を確認なしで許可します。詳しくは [Codex App 統合](docs/codex-app.md) と [Launchers の `/log`](docs/launchers.md#log) を参照してください。
+
+### スマホの会話の記録で、file の tool の行にも file と画像の chip を出す
+
+cockpit は file や画像の参照を、file の tool の呼び出し（Read・Write・Edit・apply_patch・SendUserFile など）の行に付けます。スマホの Conversation は、chip を発言の吹き出しにだけ描き、tool の行では描いていなかったため、実際の記録では preview を開ける chip が出ませんでした。tool の行にも chip を描くようにしました。preview の守り（cockpit の確認・大きさ・PNG の確かめ）は変えていません。
+
+### スマホのfile・画像のpreviewから、表示している中身を端末に保存できるようにする
+
+previewを表示できたときだけ**Save**が出て、表示しているもの（textは表示した範囲、画像はcockpitが描き直したPNG）をbrowserのdownloadとして端末に保存します。新しい経路や読み直しはなく、保存するのはpreviewと同じ物だけです。保存したfileは端末に残ります。詳しくは[スマホで状況を見る](docs/mobile.md#スマホでagentの会話の記録を読む)を参照してください。
+
+### スマホの会話の記録で、fileと画像のpreviewを開けるようにする（Phone access の History の中）
+
+Historyがオンのreader（policyの確認があれば既定でオン。SettingsではPhone access）では、Conversationのtoolの呼び出しに出てきたfileと画像のchipを押すと、今の中身をpreviewで開けます。`--disable-history`で会話の記録と一緒に切れます。readerはcockpitの固定のroute `GET /telemetry/conversation/preview`をloopbackで呼び、記録・binding・作業folderの範囲・canonical path・種類・大きさ・画素数の確認は、cockpitがそのたびに行います。名前で隠したり中身を伏せたりはしません。スマホが送るのはagentの名前とreaderが発行した参照のIDだけで、pathもcockpitの参照も送りも受け取りもしません。textは先頭32 KiBを文字として表示し、HTMLやSVGも実行しません。画像は画素だけのPNG（1辺8192 px・8 Mpx・4 MiBまで）に限ります。text・画像に写った鍵や私的な文章はそのまま届くので、それでよい端末に限ってください。Close・背景移行でpreviewを消します。詳しくは[スマホで状況を見る](docs/mobile.md#スマホでagentの会話の記録を読む)を参照してください。
+
+### 任意の読み取り専用MCPアダプターと所属確認
+
+ChatGPTなどからORRERYの状態・一覧・個別agentを読み取る任意のアダプターを追加しました。通常のinstaller、サービスの起動設定、UI、hook、Mail操作は変えません。spawn・送信・OAuth・常駐化には対応しません。
+
+legacyは明示した1つのprojectに限定し、agent・finished・gone・retiredと直近30日の履歴という範囲を返します。freshは同一Mail instance全体の安定ID・capability・退役/未観測状態を保持します。未知API世代は拒否し、名前を切り詰めて別名として公開しません。
+
+所属を確認できない旧応答を推測で通さないため、Dashboard APIを36から37へ上げました。legacyの `/api/agents` に応答全体と各行の `project_key` を追加し、曖昧なtmux行の所属はnullにします。既存の行の表示・生存判定・書込み認可は変更しません。アダプターのlegacyはAPI 37、freshは検証済みの34・35・36・37だけを受け付けます。
+
+秘密pathを保持するTunnel転送、Host/Origin検査、接続先の実証、pair時のローカル書込みと公開fieldを日英で説明しました。[日本語ガイド](integrations/chatgpt_mcp/README.md)・[English](integrations/chatgpt_mcp/README.en.md)を参照してください。
+
 ## 2026.11.05.2
 
 ### 別の場所の install を uninstall しても、スマホの reader の launchd job を止めない
