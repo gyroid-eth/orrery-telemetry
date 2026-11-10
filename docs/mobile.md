@@ -116,6 +116,14 @@ Telemetryを動かしているコンピューターのClaude CodeやCodexのagen
 
 macOSで`tailscale`がPATHに無いときは、CLIは通常`/Applications/Tailscale.app/Contents/MacOS/Tailscale`です。手で起動したreaderは前面で動きます。常駐させるならcockpitのSettings（または`agentstack-mobile apply`）を使ってください。launchdのjobで動きます。
 
+## ホーム画面にインストールする
+
+Tailscaleを接続し、Android ChromeでreaderのHTTPSのServeアドレスを開きます。Chromeのメニューから **アプリをインストール**（版によっては **ホーム画面に追加** の中）を選び、インストールします。古いブラウザのショートカットは消して入れ直してください。新しい **ORRERY** のアイコンから開くとURLバーなしで表示されます。通常のブラウザのタブでアドレスを開いた場合はURLバーが出ます。iOSではSafariの **ホーム画面に追加** を使います。
+
+インストール後も、本人のアクセス条件と接続は必要です。記録のoffline保存やservice workerは追加しません。Android Chromeのメニューからのインストールにservice workerは不要です（[Chrome公式の条件](https://developer.chrome.com/blog/update-install-criteria)）。操作は端末のsafe-area内に収めます。更新後のインストールと背景からの復帰は実機でも確かめてください。
+
+同梱のアイコンは `dashboard/assets/orbit.svg` から `python3 scripts/mobile_pwa_icons.py` で再生成します（開発用に `rsvg-convert` が必要）。
+
 ## 画面で分かること
 
 <img src="images/mobile-home.png" width="300" alt="スマホ幅の画面。上に要確認のagent、下にGraphのFocus表示">
@@ -126,7 +134,7 @@ macOSで`tailscale`がPATHに無いときは、CLIは通常`/Applications/Tailsc
 - 文脈残量弧とWorkingの動きはPCと共通です。文脈の取得時刻は不明なまま扱い、未知値には弧を描きません。アカウント利用枠はUnavailableで、更新要求もしません。
 - **Tune graph**の6設定はこのブラウザ内の表示調整だけです。agentの起動・停止・Mail返信はありません。Activityの絞込も閲覧だけです。会話の記録は下のpolicyの確認の後に、ターミナルの表示と送信はさらにその設定を有効にした場合だけ使えます。
 
-前面では約10秒ごとに取得し、背景ではpollを止めます。取得に失敗した値は「Last known」として残し、失敗を正常な0件や待機状態には変えません。SnapshotはHTTPで観測した時刻です。Mailは1ページ200宛先行までで、**Older / Newer**で差し替えます。古いページを見ている間もGraphは更新されますが、一覧が勝手に先頭へ戻ることはありません。Statusは最新ページだけに表示します。graphは最大10,000集約リンクまでで、切詰めは画面に明示します。ブラウザに保存するのは6つの表示設定だけで、観測データのoffline保存やservice workerはありません。
+前面では約10秒ごとに取得し、背景ではpollを止めます。取得に失敗した値は「Last known」として残し、失敗を正常な0件や待機状態には変えません。SnapshotはHTTPで観測した時刻です。Mailは1ページ200宛先行までで、**Older / Newer**で差し替えます。古いページを見ている間もGraphは更新されますが、一覧が勝手に先頭へ戻ることはありません。Statusは最新ページだけに表示します。graphは最大10,000集約リンクまでで、切詰めは画面に明示します。ブラウザには6つの表示設定と、sessionStorageに開いているagent名・Conversation/Terminalのタブと、選択時に得たMailのinstance/agentのID（ある場合）を保存します。記録や下書きのoffline保存やservice workerはありません。
 
 GraphのMail線をタップすると、その2体間の選択期間の一覧が開きます。初期表示は**Both**（両方向）で、差出人→宛先のボタンで方向を絞れます。親子線はMail一覧を開きません。一覧の1件をタップして本文を開き、**Back**で一覧、**Done**でGraphへ戻ります。選択と拡大率は保持します。
 
@@ -271,7 +279,7 @@ Conversationの本文で左へ、Terminalの本文で右へ、はっきり横に
 
 操作中に向きを反転した時は、最後の動きの向きで再開を判断します。上向きへ戻す・2本指にする・touch操作がキャンセルされる場合は保留を続け、再び下向きへ動かして下端にいる時に再開します。
 
-安全に試せる専用paneで、別paneへの切替とClose後の開き直しが新しい末尾から始まること、**Review input**→**Edit**で入力が保たれ、確認するpaneと文面が正しいことを確認します。送信を試す場合は、受け手が分かり、副作用のない短いテスト入力を明示的に受け入れるpaneだけを使い、宛先・全文・Enterを確認して**Send once**を1回押し、応答と受理表示を確認してください。実行中のagentや用途不明のshellにはテスト文字を送らないでください。背景へ回すとsheetと表示・下書き・確認が消え、前面へ戻してTerminalを開き直すと新しい末尾が表示されることも確かめます。
+安全に試せる専用paneで、別paneへの切替とClose後の開き直しが新しい末尾から始まること、**Review input**→**Edit**で入力が保たれ、確認するpaneと文面が正しいことを確認します。送信を試す場合は、受け手が分かり、副作用のない短いテスト入力を明示的に受け入れるpaneだけを使い、宛先・全文・Enterを確認して**Send once**を1回押し、応答と受理表示を確認してください。実行中のagentや用途不明のshellにはテスト文字を送らないでください。背景では取得が止まり、開いているagent・タブ・読む位置・メモリ内の下書きが残ることも確かめます。復帰時はpaneのrevisionを再確認し、変化・消失した場合は選び直しと再確認が必要です。期限切れの確認は編集へ戻ります。結果不明の送信は再送せず **Check receipt** を残します。
 
 ConversationとTerminalの下には宛先chipと丸い入力欄を常に表示します。UTF-8で4KiB以内の1行を書き、**↑（Review input）**で同じ欄を確認へ切り替えます。宛先agent・window・pane、まだ送信していないこと、全文と続くEnterを確認し、**Send once**を1回押します。**Edit**で文面を保持して入力に戻れます。確認は30秒で失効し、出力更新で本文や宛先・期限を差し替えません。paneの交換や取得失敗後は再確認が必要です。送信後も前面で開いていれば同じpaneの応答を見られます。**Received by terminal**はtmuxの受理までで、agentの実行やタスク完了を意味しません。**Outcome unknown**では一部だけ届いた可能性があり、自動再送しません。**Check receipt**は受理状態の照会だけです。
 
@@ -282,7 +290,7 @@ ConversationとTerminalの下には宛先chipと丸い入力欄を常に表示�
 
 これは人が画面を見て送るターミナル操作です。同じpane内でprogramが変わったりshellへ戻ったりすることは検出保証しません。文章がshellコマンドとして解釈されること、既存の入力bufferや別writerと混ざること、確認後に画面が変わることは残ります。送信のためにbufferを消去・interruptしません。
 
-Close、別paneへの切替、背景移行、離脱でpollを止め、表示・下書き・未送信の確認を消します。遅れた応答で復活させず、内容をURL・log・browser storage・serverのpreview cacheへ残しません。既存PC recorderやOSの記録・撮影まで消す保証はありません。実Android keyboard、実Serve/phone policyと実paneの受入は、隔離HTTP/CDP試験とは別に確認してください。
+Close、別paneへの切替、ページの離脱でpollを止め、表示・下書き・未送信の確認を消します。遅れた応答で復活させません。背景では取得だけ止め、画面と下書きをメモリに残し、復帰時にpaneを再確認してから入力を有効にします。確認の期限は30秒のままです。Androidがページを破棄して再読込みした場合はsessionStorageのagent名とタブを戻し、記録は取り直し、下書きは空になります。Mailのinstance/agentのIDが保存にある場合は、今の送信のON/OFFやlegacyへの切替に関係なく、現在の名簿と両方一致するときだけ戻します。名簿にIDが無い・違う場合は一覧のまま選び直します。IDの無い旧保存は名前で戻します。内容をURL・log・browser storage・serverのpreview cacheへ残しません。既存PC recorderやOSの記録・撮影まで消す保証はありません。実Android keyboard、実Serve/phone policyと実paneの受入は、隔離HTTP/CDP試験とは別に確認してください。
 
 Terminalだけを戻す場合は共有設定を`false`にするか項目を除き、独自のbackend起動に`--enable-mobile-terminal`があればそれも外します。readerの上記3flagも外し、両方を各既存手順で再起動します。稼働中のprocessを残しただけでは無効化されません。通常の閲覧設定や無関係なServe設定を変更する必要はありません。
 
@@ -310,7 +318,7 @@ Terminalだけを戻す場合は共有設定を`false`にするか項目を除�
 - コンピューターの負荷が高いと、cockpitが記録とbindingを確かめるのに数秒かかり、最初の表示まで**Loading the record…**が数秒続くことがあります。readerは15秒まで待ち、それでも返らなければ**Taking longer than usual**と**Retry**を出します。待つか押せば読み直し、表示中の発言は消しません。
 - tabが前面の間は約5秒ごとに最新のpageを更新します。上へscrollして読んでいる間は新しい発言で表示が動きません。読み返している間は新しい発言の追従を止め、下端へ戻すと再開します。保持は最大200件で、そこに達すると**Show older**は止まります。pageの印が切れたら最新のpageを読み直します。
 - 送信は既存のTerminal経路のままです。Terminalが有効でpaneを選んだら、両タブ共通の常設欄で**↑（Review input）→ Send once**の確認・上限・受領を使います。Reviewは現在のタブの入力欄内で行い、送り先・送る文面・その後のEnterを確認します。確認欄に端末の末尾は出しません。送り先の行を押すとpaneを選び直せ、そのとき元の確認と下書きは破棄します。共通のpane確認の更新は続き、対象の変更や取得失敗があれば送信前に再確認が必要です。Terminalから入力を始めた場合も、送信後はConversationへ戻って送った文の吹き出しを末尾に出します。受領は小さな表示で残し、結果不明時のCheck receiptは自動再送せず照会だけを行います。送信・準備中と結果不明時は、宛先の変更や新しい入力で受領情報を捨てません。**Received by terminal**の後の仮の行は、送信後の記録に同じ文が届けば消え、**Dismiss**で閉じるか、最長3分で消えます。`!`は対応するSHELLの記録と照合します。この行は画面内だけの表示で、agentの受領の証明ではありません。
-- Close・別agentへの切替・背景移行・離脱で更新を止め、スマホから記録・pageの印・参照のID・開いていたpreview（画像のdataを含む）・仮の行を消します。遅れた応答で復活させず、URL・log・browser storageへ残しません。reader側で発行済みの印は期限まで残りますが、本文を含まず、同じagentにしか使えません。
+- Close・別agentへの切替・ページの離脱で更新を止め、スマホから記録・pageの印・参照のID・開いていたpreview（画像のdataを含む）・仮の行を消します。遅れた応答で復活させません。背景では取得を止め、画面と読む位置をメモリに残します。読み込み中に中断したpreviewは復帰時に同じ参照で取り直し、表示済みのpreviewはそのまま残します。再読込み用にagent名・タブと選択時に得たMailの識別IDだけをsessionStorageに残し、記録の本文・下書き・previewはURL・log・browser storageへ残しません。reader側で発行済みの印は期限まで残りますが、本文を含まず、同じagentにしか使えません。
 
 **伏せる処理はありません。** 名前で隠したり、中身を伏せたりはしません。表示は記録とfileのままで、何を出してよいかは持ち主が判断します。会話の本文・Mailの本文・fileのtext・画像の中の鍵、promptに貼った秘密、私的な文章は、書かれたままスマホに届きます。名前が秘密らしいfile（`credentials.yaml`・`api_key.md`など）も、作業folderの中で種類と大きさが合えば開けます（拡張子の無い`.env`や鍵のfileなど、previewする種類に無いものは開けません）。toolの出力は送りませんが、agentがそこから書き写したものは届きます。それでよいagentと端末に限ってHistoryを有効にしてください。
 

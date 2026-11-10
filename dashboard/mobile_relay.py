@@ -33,7 +33,7 @@ HERE = Path(__file__).resolve().parent
 MAX_UPSTREAM_BYTES = 4 * 1024 * 1024
 UPSTREAM_TIMEOUT = 2
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-       "font-src 'self'; img-src 'self' data:; connect-src 'self'; "
+       "font-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; "
        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 
 
@@ -144,6 +144,7 @@ def static_assets(root=HERE):
     """Fixed bundled files only; no file path, overlay or provider lookup."""
     fixed = {
         '/': (root/'mobile/index.html', 'text/html; charset=utf-8'),
+        '/manifest.webmanifest': (root/'mobile/manifest.webmanifest', 'application/manifest+json; charset=utf-8'),
         '/mobile.css': (root/'mobile/mobile.css', 'text/css; charset=utf-8'),
         '/mobile.js': (root/'mobile/mobile.js', 'text/javascript; charset=utf-8'),
         '/network_view.js': (root/'mobile/network_view.js', 'text/javascript; charset=utf-8'),
@@ -153,6 +154,8 @@ def static_assets(root=HERE):
         '/network_core.js': (root/'network_core.js', 'text/javascript; charset=utf-8'),
         '/network_node.js': (root/'network_node.js', 'text/javascript; charset=utf-8'),
     }
+    for icon in ('orbit-192.png','orbit-512.png','orbit-maskable-512.png','apple-touch-icon.png'):
+        fixed['/icons/'+icon]=(root/'mobile/icons'/icon,'image/png')
     for font in ('fraunces-normal','fraunces-italic','ibm-plex-mono-400','ibm-plex-mono-500','ibm-plex-mono-600'):
         fixed['/fonts/'+font+'.woff2']=(root/'mobile/fonts'/(font+'.woff2'),'font/woff2')
     for logo in ('orbit','anthropic','openai','google','qwen','glm'):

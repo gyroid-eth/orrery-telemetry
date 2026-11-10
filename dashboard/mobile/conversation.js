@@ -14,7 +14,7 @@ let capability=null,gen=0,timer=0,name='',root=null,list=null,status=null,olderB
 const WAIT=20000;
 /* Poll and Show older each own a controller, so neither aborts the other. */
 const controllers={poll:null,older:null,preview:null};
-let panel=null,saveUrl='',previewFocus=null;
+let panel=null,saveUrl='',previewFocus=null,previewRequest=null,previewRetry=false;
 let events=[],seen=new Set(),older=null,pending=[],failures=0,loadingOlder=false,following=true,savedTop=0;
 let mailResize=null,mailWidth=0;
 let toolGroups=[],toolGroupFor=new Map(),toolSerial=0;
@@ -193,6 +193,7 @@ function pngSource(v){
 }
 function closePreview(restoreFocus=false){
  controllers.preview?.abort();controllers.preview=null;dropSave();
+ previewRequest=null;previewRetry=false;
  if(panel){for(const img of panel.querySelectorAll('img'))img.src='';panel.replaceChildren();panel.remove();}
  panel=null;
  if(restoreFocus&&previewFocus?.isConnected)previewFocus.focus?.({preventScroll:true});previewFocus=null;
@@ -222,6 +223,7 @@ function saveButton(head,close,label,blob){
 function pngBytes(data){const raw=atob(data),out=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);return out;}
 async function openPreview(x){
  closePreview();if(!root)return;
+ previewRequest=x;
  previewFocus=document.activeElement;
  const g=gen,box=make('div','conversation-preview');panel=box;box.setAttribute('role','dialog');box.setAttribute('aria-label','Preview of '+x.label);
  const head=make('div','conversation-preview-head'),close=make('button','conversation-preview-close','Close');close.type='button';close.onclick=()=>closePreview(true);
@@ -238,6 +240,7 @@ async function openPreview(x){
  }catch(_){v=late?{ok:false,error:'history_slow'}:null;}
  finally{clearTimeout(t);if(controllers.preview===c)controllers.preview=null;}
  if(g!==gen||panel!==box)return;
+ previewRequest=null;
  if(status===410)v={ok:false,error:'preview_expired'};
  if(v?.ok===true&&v.kind==='text'&&typeof v.text==='string'){
   state.textContent=v.truncated===true?'Showing the start of the file.':'';
@@ -446,6 +449,16 @@ function unmount(){
  root?.replaceChildren();root?.remove();root=list=status=olderButton=retryButton=null;
  events=[];seen=new Set();older=null;pending=[];failures=0;loadingOlder=false;following=true;savedTop=0;name='';
 }
-document.addEventListener('visibilitychange',()=>{if(document.hidden)unmount();});window.addEventListener('pagehide',unmount);
+document.addEventListener('visibilitychange',()=>{
+ if(document.hidden){
+  gen++;clearTimeout(timer);timer=0;
+  if(controllers.preview&&previewRequest)previewRetry=true;
+  for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
+  loadingOlder=false;if(olderButton)olderButton.hidden=!older;
+ }else if(root){
+  if(previewRetry&&previewRequest&&panel){const x=previewRequest,focus=previewFocus;openPreview(x);previewFocus=focus;}
+  restore();poll();
+ }
+});window.addEventListener('pagehide',unmount);
 window.OrreryMobileConversation={enabled,mount,element,unmount,addPending,restore,dismissPreview,refreshActivity:activity,refreshProfiles};
 })();

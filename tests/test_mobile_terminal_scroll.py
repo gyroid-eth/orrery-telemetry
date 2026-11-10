@@ -207,18 +207,34 @@ def test_input_review_send_keeps_the_exact_text_and_sends_once_while_output_is_h
     """)
 
 
-def test_backgrounding_clears_held_output_and_draft_and_ignores_late_preview():
+def test_backgrounding_keeps_held_output_and_draft_and_ignores_late_preview():
     run("""
       const p=q('#terminal-output');p.scrollTop=100;updates++;await tick();
       const field=q('#terminal-text');field.value='private fixture draft';field.oninput();
       holdPreview=true;const pending=tick();await settle();assert.equal(typeof releasePreview,'function');
+      const shown=p.textContent;
       doc.hidden=true;doc.events.visibilitychange();
-      assert.equal(q('#terminal-sheet').open,false);assert.equal(q('#terminal-sheet').children.length,0);
-      releasePreview();await pending;assert.equal(q('#terminal-output'),null);
+      assert.equal(q('#terminal-sheet').open,true);assert.equal(q('#terminal-output'),p);
+      releasePreview();await pending;assert.equal(p.textContent,shown);
       assert.equal([...timers.values()].filter(t=>t.ms===3000||t.ms===6000).length,0);
-      doc.hidden=false;holdPreview=false;await open();
-      assert.equal(q('#terminal-text').value,'');
-      assert.equal(q('#terminal-output').scrollTop,bottom(q('#terminal-output')));
+      doc.hidden=false;holdPreview=false;doc.events.visibilitychange();await settle();
+      assert.equal(q('#terminal-text').value,'private fixture draft');
+      assert.equal(q('#terminal-output'),p);assert.equal(p.scrollTop,100);
+      context.OrreryMobileTerminal.close();
+      assert.equal(q('#terminal-sheet').children.length,0);
+      await open();assert.equal(q('#terminal-text').value,'');
+    """)
+
+
+def test_background_resize_preserves_held_snapshot_until_the_pane_is_rechecked():
+    run("""
+      const p=q('#terminal-output');p.scrollTop=100;p.events.scroll();const shown=p.textContent;
+      updates++;shift+=3;await tick();assert.equal(p.textContent,shown);
+      doc.hidden=true;doc.events.visibilitychange();
+      // Mobile viewport callbacks may arrive while the app is suspended.
+      p.events.scroll();assert.equal(p.textContent,shown);assert.equal(p.scrollTop,100);
+      doc.hidden=false;doc.events.visibilitychange();await settle();
+      assert.equal(p.textContent,shown);assert.equal(p.scrollTop,100);
     """)
 
 

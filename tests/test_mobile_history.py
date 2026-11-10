@@ -461,7 +461,7 @@ def test_recorded_html_stays_text_and_tables_are_built_as_dom():
     ''')
 
 
-def test_close_and_background_clear_dom_requests_timers_and_pending():
+def test_close_clears_dom_and_background_pauses_requests_without_unmounting():
     run(r'''
       reply=async()=>({body:{ok:true,agent:'Vega',events:[{id:'1',kind:'text',role:'assistant',text:'kept?',ts:'',truncated:false}],older:'a'.repeat(32),limited:false}});
       let root=C.mount('Vega');body.append(root);await settle();
@@ -478,7 +478,10 @@ def test_close_and_background_clear_dom_requests_timers_and_pending():
       reply=async()=>({body:{ok:true,agent:'Vega',events:[{id:'1',kind:'text',role:'assistant',text:'again',ts:'',truncated:false}],older:null,limited:false}});
       root=C.mount('Vega');body.append(root);await settle();assert.ok(root.textContent.includes('again'));
       doc.hidden=true;docListeners.visibilitychange();
-      assert.equal(root.textContent,'');assert.equal(timers.size,0);
+      assert.ok(root.textContent.includes('again'));assert.equal(C.element(),root);assert.equal(timers.size,0);
+      doc.hidden=false;docListeners.visibilitychange();await settle();
+      assert.ok(root.textContent.includes('again'));assert.ok([...timers.values()].some(t=>t.ms===5000));
+      C.unmount();assert.equal(root.textContent,'');assert.equal(timers.size,0);
     ''')
 
 
