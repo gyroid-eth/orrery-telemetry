@@ -81,6 +81,12 @@ def phone(request):
                 return self.send(dict(contract, targets=state.get('targets', [choice])))
             if operation == 'preview':
                 return self.send(dict(contract, target=selected, text=state.get('preview_text', 'Generated terminal tail\nReady.'), max_lines=state.get('preview_lines',120), max_bytes=state.get('preview_bytes',12288), observed_at=time.time()), status=503 if state['preview_error'] else 200)
+            if operation == 'image':
+                if payload.get('image') is None:
+                    return self.send(dict(contract,target=selected,enabled=state.get('images',False)))
+                if state.get('image_error'):
+                    return self.send(dict(error=state['image_error']),status=403)
+                return self.send(dict(contract,target=selected,enabled=True,path='/workspace/.orrery-input-images/'+'a'*32+'.png'))
             if operation == 'prepare':
                 state['draft'] = payload['text']
                 state['prepared_target'] = selected

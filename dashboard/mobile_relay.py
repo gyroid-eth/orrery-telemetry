@@ -228,7 +228,8 @@ class Handler(BaseHTTPRequestHandler):
         if any(self.headers.get_all(h,[]) for h in ('Upgrade','Transfer-Encoding','X-HTTP-Method-Override','X-Method-Override','X-HTTP-Method')):return False
         lengths=self.headers.get_all('Content-Length',[])
         if write:
-            if (len(lengths)!=1 or re.fullmatch(r'[0-9]{1,5}',lengths[0]) is None or not 0<int(lengths[0])<=mobile_input.MAX_JSON_BYTES
+            limit=mobile_input.MAX_IMAGE_JSON if self.path=='/view/terminal/image' else mobile_input.MAX_JSON_BYTES
+            if (len(lengths)!=1 or re.fullmatch(r'[0-9]{1,8}',lengths[0]) is None or not 0<int(lengths[0])<=limit
                     or self.headers.get_all('Content-Type',[])!=['application/json']
                     or any(self.headers.get_all(h,[]) for h in ('Content-Encoding','Expect'))):return False
         elif len(lengths)>1 or (lengths and lengths[0]!='0'):return False
@@ -377,21 +378,22 @@ class Handler(BaseHTTPRequestHandler):
             def expire():
                 try:self.connection.shutdown(socket.SHUT_RDWR)
                 except OSError:pass
-            timer=threading.Timer(5,expire);timer.daemon=True;timer.start()
+            timer=threading.Timer(20 if operation=='image' else 5,expire);timer.daemon=True;timer.start()
             size=int(self.headers['Content-Length']);data=self.rfile.read(size)
             if len(data)!=size:raise ValueError('input_json_invalid')
-            payload=mobile_input.decode_json(data)
+            payload=mobile_input.decode_json(data,max_bytes=mobile_input.MAX_IMAGE_JSON if operation=='image' else mobile_input.MAX_JSON_BYTES)
             if not mobile_input.request_fields(operation,payload):raise ValueError('input_json_invalid')
         except (ValueError,OSError):
             self._send(400,{'error':'input_request_invalid'});return
         finally:
             if timer is not None:timer.cancel()
         try:self._send(200,self.server.mobile_input.call(operation,payload),utf8=operation=='preview')
-        except Exception:
+        except Exception as error:
             # A lost response cannot establish whether a commit reached tmux.
             # The UI retains only the operation ID, offers status, and never
             # repeats the send automatically.
-            self._send(503,{'error':'input_unavailable','state':'unknown' if operation=='commit' else 'unavailable'})
+            reason=str(error) if operation=='image' and isinstance(error,mobile_input.InputUnavailable) and re.fullmatch(r'image_[a-z_]+',str(error)) else 'input_unavailable'
+            self._send(503,{'error':reason,'state':'unknown' if operation=='commit' else 'unavailable'})
 
     def _no_method(self):
         self.close_connection=True
