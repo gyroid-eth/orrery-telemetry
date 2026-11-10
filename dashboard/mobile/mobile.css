@@ -246,9 +246,7 @@ html.graph-fullscreen #settings{z-index:40}
 .mobile .conversation-code pre.conversation-output-collapsed{max-height:168px}
 .reader-fullscreen .conversation-table{display:block;margin:8px 0;font:11px/1.6 var(--mono)}.conversation-table-scroll{overflow:auto}.conversation-table table{width:100%;border-collapse:collapse}.conversation-table th,.conversation-table td{padding:6px 8px}
 .conversation-table-copy{display:block;margin-left:auto}
-.mobile .reader-compose-toggle{position:absolute;z-index:4;right:max(18px,env(safe-area-inset-right));bottom:calc(18px + env(safe-area-inset-bottom));display:grid;place-items:center;width:52px;height:52px;padding:0;min-height:0;border:1px solid var(--hair);border-radius:50%;background:var(--panel-2);color:var(--ink);font:28px var(--serif);box-shadow:0 8px 24px color-mix(in srgb,var(--shade) 30%,transparent)}
 .reader-composer{position:absolute;z-index:6;inset:auto 0 0;padding:14px 16px calc(14px + env(safe-area-inset-bottom));border-top:1px solid var(--hair);background:var(--panel);max-height:calc(100% - 48px - env(safe-area-inset-top));overflow:auto;overscroll-behavior:contain}
-.mobile .reader-compose-close{float:right;border:0;background:none;padding:0;min-height:30px;min-width:30px;font-size:20px}
 .reader-composer .terminal-compose-label{clear:both}.reader-composer .terminal-pane-button{margin-bottom:8px;max-width:calc(100% - 40px);overflow-wrap:anywhere}.reader-composer .terminal-help,.reader-composer .terminal-input-meta>span:first-child{display:none}.mobile .reader-composer .terminal-text{height:86px;font-size:16px}
 .mobile .reader-fullscreen>.terminal-message:empty{display:none}.mobile .reader-fullscreen>.terminal-message:not(:empty){position:static;order:-1;flex:none;margin:calc(48px + env(safe-area-inset-top)) 0 0;background:var(--panel);border:1px solid var(--alert);color:var(--ink);padding:7px 10px;max-height:25%;overflow:auto}
 .mobile .reader-fullscreen .conversation-status:not([hidden]){position:static;flex:none;padding:calc(60px + env(safe-area-inset-top)) 10px 7px;border:0;border-bottom:1px solid var(--hair);background:var(--panel);font:11px/1.7 var(--mono);color:var(--ink)}
@@ -301,7 +299,7 @@ html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-l
 .reader-fullscreen:has(>.terminal-message:not(:empty)) .conversation-status:not([hidden]){padding-top:7px}
 .reader-fullscreen:has(>.terminal-message:not(:empty)) .conversation-list,.reader-fullscreen .conversation:has(>.conversation-status:not([hidden])) .conversation-list{padding-top:14px}
 
-/* Keep confirmation within Conversation; the ordinary Terminal tab is separate. */
+/* Confirmation and receipts stay inside the shared text dock. */
 .reader-icon svg,.reader-icon svg *{pointer-events:none}
 .mobile .reader-review{max-height:min(70dvh,calc(100% - 48px - env(safe-area-inset-top)));outline:none}
 .mobile .reader-review h3{font:500 17px var(--serif);margin:0 0 5px}
@@ -316,11 +314,33 @@ html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-l
 .mobile .reader-receipt .terminal-button{min-height:34px;padding:4px 10px;font-size:11px;margin-top:6px}
 .reader-fullscreen:has(.reader-receipt.unknown) .conversation-list{padding-bottom:calc(150px + env(safe-area-inset-bottom))}
 
+/* The same text dock and in-place confirmation on both reading tabs. */
+.mobile .reader-input-bar{inset:auto 12px calc(12px + env(safe-area-inset-bottom));padding:6px;border:1px solid var(--hair);border-radius:22px;background:var(--panel);max-height:calc(100% - 64px - env(safe-area-inset-top));box-shadow:0 6px 24px color-mix(in srgb,var(--shade) 18%,transparent)}
+.mobile .reader-input-target{display:block;min-height:30px;max-width:100%;margin:0 3px 3px;padding:4px 9px;border:1px solid var(--hair);border-radius:16px;background:var(--bg);color:var(--ink-dim);text-align:left;font:10px/1.5 var(--mono);overflow-wrap:anywhere}
+.reader-input-row{display:flex;align-items:center;gap:5px}
+.reader-input-label{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.mobile .reader-input-bar .terminal-text{flex:1;min-width:0;height:44px;min-height:44px;padding:10px 9px;border:0;border-radius:15px;background:none;font:16px/1.4 var(--mono)}
+.mobile .reader-input-send{flex:none;display:grid;place-items:center;width:44px;height:44px;min-height:44px;padding:0;border-radius:50%;font-size:23px}
+.mobile .reader-input-bar .terminal-primary{flex:none;color:var(--amber);border-color:color-mix(in srgb,var(--amber) 50%,transparent);background:color-mix(in srgb,var(--amber) 18%,transparent)}
+.reader-input-count{display:block;font:9px/1.5 var(--mono);padding:1px 9px 3px;color:var(--ink-dim)}
+.mobile .reader-input-bar .terminal-help{display:block;font:10px/1.6 var(--mono);margin:7px 4px;color:var(--ink-dim)}
+.mobile .reader-input-bar.reader-review{padding:12px;border-color:color-mix(in srgb,var(--amber) 35%,var(--hair))}
+.mobile .reader-input-bar h3{font:500 18px/1.4 var(--serif);margin:8px 3px 3px}
+.reader-not-sent{font:10px/1.5 var(--mono);color:var(--ink-dim);padding:0 3px 10px}
+.mobile .reader-input-bar .terminal-exact{padding:12px 3px;border-top:1px solid var(--hair);margin:0;max-height:120px;font:13px/1.7 var(--mono)}
+.reader-input-bar .terminal-actions{border-top:0;margin:4px 0 0;padding:0;gap:8px}
+.reader-input-bar .terminal-actions .terminal-button{border-radius:22px;min-height:44px}
+.reader-input-bar .terminal-actions .terminal-primary{flex:1}
+.reader-input-bar .reader-receipt{position:static;max-height:none;padding:6px 8px;margin:2px 0 7px;border-radius:12px}
+.reader-fullscreen .conversation-list,.reader-fullscreen:has(.reader-receipt.unknown) .conversation-list{padding-bottom:calc(var(--reader-input-space,100px) + 12px);scroll-padding-bottom:calc(var(--reader-input-space,100px) + 12px)}
+.reader-fullscreen .conversation-list{margin-inline:-16px;padding-left:16px;padding-right:16px}
+.reader-fullscreen>.terminal-scroll.reader-terminal{padding-top:calc(48px + env(safe-area-inset-top));padding-bottom:var(--reader-input-space,100px)}
+
 /* Terminal uses the same full-screen reading surface, with an aligned tail. */
 .reader-fullscreen>.reader-terminal{display:flex;flex-direction:column;overflow:hidden}
 .reader-terminal .terminal-preview{flex:1;height:auto;min-height:0;border:0;border-radius:0;background:none}
 .reader-terminal .terminal-preview-head,.reader-terminal .terminal-observed{display:none}
-.mobile .reader-terminal-meta,.mobile .reader-terminal .terminal-preview-note{flex:none;font:9px/1.6 var(--mono);color:var(--ink-dim);margin:0;padding:3px 0}
+.mobile .reader-terminal-meta,.mobile .reader-terminal .terminal-preview-note{flex:none;font:9px/1.6 var(--mono);color:var(--ink-dim);margin:0;padding:1px 0}
 .reader-terminal .terminal-preview-note:empty{display:none}
 .mobile .reader-terminal .terminal-output{display:flex;flex-direction:column;justify-content:safe flex-end;white-space:normal;overflow-wrap:anywhere;overflow-x:hidden;overflow-y:auto;font:11px/1.75 var(--mono);padding:0 0 6px;scrollbar-width:thin}
 .mobile .reader-terminal-state{flex:none;font:10px/1.6 var(--mono);color:var(--ink-dim);padding:5px 0}

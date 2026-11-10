@@ -133,4 +133,4 @@ def phone(request):
         socket.setdefaulttimeout(old_timeout)
 
 
-AREA = """(()=>{const r=document.querySelector('.conversation-list').getBoundingClientRect(),w=innerWidth,h=innerHeight;let area=Math.max(0,Math.min(w,r.right)-Math.max(0,r.left))*Math.max(0,Math.min(h,r.bottom)-Math.max(0,r.top));for(const el of document.querySelectorAll('.reader-bar,.reader-compose-toggle')){const o=el.getBoundingClientRect();area-=Math.max(0,Math.min(r.right,o.right)-Math.max(r.left,o.left))*Math.max(0,Math.min(r.bottom,o.bottom)-Math.max(r.top,o.top));}return 100*area/(w*h);})()"""
+AREA = """(()=>{const r=document.querySelector('.conversation-list').getBoundingClientRect(),w=innerWidth,h=innerHeight;let area=Math.max(0,Math.min(w,r.right)-Math.max(0,r.left))*Math.max(0,Math.min(h,r.bottom)-Math.max(0,r.top));for(const el of document.querySelectorAll('.reader-bar,.reader-input-bar')){const o=el.getBoundingClientRect();area-=Math.max(0,Math.min(r.right,o.right)-Math.max(r.left,o.left))*Math.max(0,Math.min(r.bottom,o.bottom)-Math.max(r.top,o.top));}return 100*area/(w*h);})()"""
