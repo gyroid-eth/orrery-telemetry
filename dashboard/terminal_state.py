@@ -4,6 +4,14 @@ import re
 _CTX_RE = re.compile(r"ctx:\s*(\d+)%\s*used")
 _CTX_CODEX_LEFT_RE = re.compile(r"Context\s+(\d+)%\s*left", re.IGNORECASE)
 _CTX_CODEX_USED_RE = re.compile(r"Context\s+(\d+)%\s*used", re.IGNORECASE)
+# Native Codex 0.163.0 displays a model/effort row, optionally followed by cwd.
+# Match complete rows; an unfamiliar effort or continuation is not evidence.
+_CODEX_MODEL_FOOTER_RE = re.compile(
+    r"gpt-\S+\s+(?:default|low|medium|high|xhigh|max|ultra)(?:\s+·\s+\S[^\n]*)?",
+    re.IGNORECASE)
+_CODEX_WARNING_FOOTER_RE = re.compile(r"⚠\s+\d+\s+warnings?\s+·\s+f2 to view")
+_CODEX_SHORTCUT_FOOTER_RE = re.compile(
+    r"\? for shortcuts(?:\s+⚠\s+\d+\s+warnings?\s+·\s+f2 to view)?")
 _WORK_RE = re.compile(
     r"esc to interrupt"
     r"|·\s*[↑↓]?\s*[\d.]+k?\s*tokens"
@@ -53,6 +61,21 @@ def prompt_suffix(text,provider):
     rows=[line.strip()[1:].strip() for line in normalize(text).splitlines() if line.strip().startswith(glyph)]
     return rows[-1] if rows else None
 
+def codex_footer_ready(rows):
+    # Validate the entire nonblank tail, not independently skippable lines:
+    # at most one model row, then at most one controls/context row.
+    # Sparse legacy captures may omit either row. Repeated or reversed rows
+    # can be multiline input resembling metadata and must remain ambiguous.
+    tail=[line.strip() for line in rows if line.strip()]
+    if tail and _CODEX_MODEL_FOOTER_RE.fullmatch(tail[0]):tail=tail[1:]
+    if not tail:return True
+    if len(tail)!=1:return False
+    value=tail[0]
+    return bool(_CODEX_SHORTCUT_FOOTER_RE.fullmatch(value)
+                or _CODEX_WARNING_FOOTER_RE.fullmatch(value)
+                or _CTX_RE.fullmatch(value) or _CTX_CODEX_LEFT_RE.fullmatch(value)
+                or _CTX_CODEX_USED_RE.fullmatch(value))
+
 def compact_readiness(text,provider):
     text=normalize(text)
     if provider not in ('claude','codex'):
@@ -66,14 +89,17 @@ def compact_readiness(text,provider):
     indices=[i for i,line in enumerate(rows) if line.strip().startswith(glyph)]
     ambiguous=False
     if suffix=='' and indices:
-        for line in rows[indices[-1]+1:]:
-            value=line.strip()
-            if not value:continue
-            if re.fullmatch(r'[─━]+.*',value):break
-            if (_CTX_RE.search(value) or _CTX_CODEX_LEFT_RE.search(value) or _CTX_CODEX_USED_RE.search(value)
-                    or re.match(r'gpt-\S+\s+(?:low|medium|high|xhigh|max|ultra)\b',value)
-                    or value.startswith(('? for shortcuts','⏵','←','→','% context left'))):continue
-            ambiguous=True;break
+        tail=rows[indices[-1]+1:]
+        if provider=='codex':ambiguous=not codex_footer_ready(tail)
+        else:
+            for line in tail:
+                value=line.strip()
+                if not value:continue
+                if re.fullmatch(r'[─━]+.*',value):break
+                if (_CTX_RE.search(value) or _CTX_CODEX_LEFT_RE.search(value) or _CTX_CODEX_USED_RE.search(value)
+                        or re.match(r'gpt-\S+\s+(?:low|medium|high|xhigh|max|ultra)\b',value)
+                        or value.startswith(('? for shortcuts','⏵','←','→','% context left'))):continue
+                ambiguous=True;break
     state=activity(text)
     if 'Selected model is at capacity. Please try a different model.' in text or state in ('ask','question') or suffix is None or ambiguous:
         state='unknown'

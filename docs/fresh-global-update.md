@@ -289,6 +289,8 @@ resumeは **この新clientで記録済みのnative sessionだけ** が対象で
 
 新しいClaude provider HOMEの初回だけ、theme・security notes・workspace trustの画面を人が操作します。作業folder外のtaskや補助fileの読取も許可を求める場合があります。起動の `accepted` をこれらの完了とみなさず、実画面を確認してから子の報告を待ちます。
 
+Codexのworkspace-write sandboxからの子の起動は、作業folder外の子client領域へ書き込むため、sandboxの外で実行する本人の承認が必要です。
+
 fresh Codexの起動は、既存の子launcherと同じく `AGENTSTACK_CODEX_NETWORK` が未指定ならworkspace-writeのnetwork許可を追加します。`0`／`off`／`false`／`no` ではその追加を止め、native configの設定に従います。networkが無効ならshellからのMail接続にも通常のsandbox制限が適用されます。tool承認は引き続き既定の `on-request` です。Codex 0.163.0では `resume` の前後に `-c` を分けると前の設定が失われるため、fresh launcherはproxy・plugin MCP無効化・skills等の設定をすべて `resume <ID>` の後ろへ置きます。
 
 ```sh
