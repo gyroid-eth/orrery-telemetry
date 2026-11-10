@@ -431,6 +431,7 @@ const ref=value=>value&&/^[a-f0-9]{32}$/.test(value.mail_instance_id)&&Number.is
 const rowRef=row=>ref({mail_instance_id:row.dataset.mailInstanceId,mail_agent_id:Number(row.dataset.mailAgentId)});
 const sameTarget=value=>!fresh()||!!ref(value)&&!!selector&&value.mail_instance_id===selector.mail_instance_id&&value.mail_agent_id===selector.mail_agent_id;
 let generation=0,previewController=null,operationController=null,pollTimer=0,expiryTimer=0,failures=0,prepared=null,receipt=null,previousFocus=null;
+let imageAvailable=false,imageProbe='',imageController=null,imageProbeController=null,attachment=null;
 const action=(label,cls,fn)=>{const b=make('button','terminal-button '+cls,label);b.type='button';b.onclick=fn;return b;};
 async function request(operation,payload,controller,timeout=3000){
  const timer=setTimeout(()=>controller.abort(),timeout);
@@ -440,7 +441,7 @@ async function request(operation,payload,controller,timeout=3000){
    credentials:'same-origin',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});
   const raw=await response.text();if(new TextEncoder().encode(raw).length>16384)throw Error('unavailable');
   const value=JSON.parse(raw);
-  if(!response.ok||value.contract!==contract||operation&&value.epoch!==capability.epoch)throw Error('unavailable');
+  if(!response.ok||value.contract!==contract||operation&&value.epoch!==capability.epoch)throw Error(operation==='image'&&/^image_[a-z_]+$/.test(value.error)?value.error:'unavailable');
   return value;
  }finally{clearTimeout(timer);}
 }
@@ -451,7 +452,7 @@ function cancelIntent(){
  // Best effort cancellation never retries commit, and keeps no text or preview.
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
-function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;generation++;}
+function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;imageController?.abort();imageController=null;imageProbeController?.abort();imageProbeController=null;imageAvailable=false;imageProbe='';attachment=null;generation++;}
 function clear(){inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
 function close(fromBack=false){const remove=backEntry&&window.history.state?.orreryConversation===true;backEntry=false;const restore=previousFocus;previousFocus=null;clear();if(sheet.open)sheet.close();if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});if(remove&&fromBack!==true){backClosing=true;window.history.back();}}
 window.addEventListener('popstate',event=>{if(backClosing){backClosing=false;event.stopImmediatePropagation();return;}if(sheet.open&&backEntry){event.stopImmediatePropagation();if(dismissLayer()){window.history.pushState({orreryConversation:true},'');return;}backEntry=false;close(true);}},true);
@@ -502,7 +503,7 @@ function switchTab(value){if(busy()||value===tab||!history||!enabled&&value==='t
 // Tab swipes belong only to reading surfaces; native scroll and selection win.
 let readerSwipe=null;
 function swipeAvailable(){
- return sheet.open&&history&&enabled&&!composer&&!text&&!busy()&&phase!=='review'
+ return sheet.open&&history&&enabled&&!composer&&!text&&!imageController&&!busy()&&phase!=='review'
   &&!q('.conversation-preview')&&!window.getSelection?.()?.toString();
 }
 function swipeSurface(target){
@@ -606,7 +607,8 @@ function refreshOutput(){
  const terminalState=q('.reader-terminal-state');if(terminalState)terminalState.textContent=previewOK?(pending?'New output · paused':reading?'Reading earlier output':''):'';
  const terminalMeta=q('.reader-terminal-meta');if(terminalMeta)terminalMeta.textContent=limits?'Latest '+(limits.max_lines||120)+' lines · up to '+((limits.max_bytes||12288)/1024)+' KiB · every 3s'+(shown?' · '+age.textContent:''):'Waiting for a verified terminal snapshot.';
  const dot=q('.reader-state');if(tab==='terminal'&&dot){dot.dataset.state=previewOK?'work':'unknown';dot.title=previewOK?'Terminal updating every 3s':'Terminal preview unavailable';dot.setAttribute('aria-label',dot.title);}
- const review=q('#terminal-review');if(review)review.disabled=phase!=='editing'||!previewOK||!validText(text);
+ const review=q('#terminal-review');if(review)review.disabled=phase!=='editing'||!previewOK||!!imageController||!validText(inputText());
+ refreshImageControls();
  const status=q('.terminal-message');if(status)status.textContent=message;
  // Metadata below the terminal can reflow after following was sampled above.
  // Account for that layout without treating a later scroll as a resize clamp.
@@ -631,6 +633,7 @@ async function poll(){
   target=Object.freeze({...data.target});preview=data;output=data.text;previewOK=true;failures=0;
   if(!['preparing','review','sending','accepted','unknown'].includes(phase))message='';
   refreshOutput();
+  probeImages();
  }catch(_){
   if(g!==generation||previewController!==controller||!sheet.open||document.hidden)return;
   failures++;previewOK=false;output='';preview=null;
@@ -645,11 +648,55 @@ function invalidate(reason){
  stop();cancelIntent();text='';output='';preview=null;previewOK=false;target=null;phase='changed';message=reason;render();
 }
 function validText(value){return typeof value==='string'&&value.trim()&&new TextEncoder().encode(value).length<=4096&&!/[\p{Cc}\p{Cs}\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value);}
+const inputText=()=>text+(attachment?(text?' ':'')+attachment.marker:'');
+function refreshImageControls(){
+ const add=q('#terminal-image-add');if(!add)return;
+ add.hidden=!imageAvailable;
+ add.disabled=!previewOK||!!imageController||!!attachment||!['editing','accepted','refused'].includes(phase);
+ const panel=add.closest('.reader-input-bar');if(panel)layoutInputBar(panel);
+}
+async function probeImages(){
+ if(!target||imageProbe===target.choice+target.revision||imageProbeController)return;
+ const g=generation,t=target,controller=new AbortController();imageProbeController=controller;imageProbe=t.choice+t.revision;
+ try{
+  const result=await request('image',{epoch:capability.epoch,choice:t.choice,revision:t.revision,image:null},controller,10000);
+  if(g!==generation||!sheet.open||target?.choice!==t.choice||result.target?.revision!==t.revision||!sameTarget(result.target))return;
+  imageAvailable=result.enabled===true;refreshImageControls();
+ }catch(_){if(g===generation){imageAvailable=false;refreshImageControls();}}
+ finally{if(imageProbeController===controller)imageProbeController=null;}
+}
+function imageThumbnail(panel,removable){
+ if(!attachment)return;
+ const box=make('div','reader-image'),image=make('img','reader-image-thumb');image.src=attachment.url;image.alt='Attached image';
+ box.append(image,make('span','','Image attached'));
+ if(removable){const remove=action('×','reader-image-remove',()=>{attachment=null;render();});remove.setAttribute('aria-label','Remove attached image');remove.disabled=!!imageController;box.append(remove);}
+ panel.append(box);
+}
+async function uploadImage(file){
+ if(!file||!target||!previewOK||!imageAvailable||imageController||attachment||!['editing','accepted','refused'].includes(phase))return;
+ if(file.size>10*1024*1024||!['image/jpeg','image/png','image/webp'].includes(file.type)){
+  message=file.size>10*1024*1024?'Choose an image up to 10 MiB.':'Choose a JPEG, PNG or WebP image.';render();return;
+ }
+ if(phase!=='editing'){cancelIntent();phase='editing';}
+ const g=generation,t=target,controller=new AbortController();imageController=controller;message='Uploading image…';render();
+ try{
+  const url=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(Error('image_invalid'));controller.signal.addEventListener('abort',()=>{reader.abort();reject(Error('cancelled'));},{once:true});reader.readAsDataURL(file);});
+  if(g!==generation||controller.signal.aborted)return;
+  const result=await request('image',{epoch:capability.epoch,choice:t.choice,revision:t.revision,image:url.slice(url.indexOf(',')+1)},controller,30000);
+  if(g!==generation||!sheet.open||document.hidden)return;
+  if(result.enabled!==true||result.target?.choice!==t.choice||result.target?.revision!==t.revision||!sameTarget(result.target)||typeof result.path!=='string'||!result.path.startsWith('/'))throw Error('unavailable');
+  const quoted="'"+result.path.replaceAll("'","'\\''")+"'",marker='[image: '+quoted+']',final=text+(text?' ':'')+marker;
+  if(!validText(final))throw Error('image_text_too_large');
+  attachment={url,marker};message='';
+ }catch(error){
+  if(g===generation){const reasons={image_folder_full:'This workspace already has 50 images. Remove older files before attaching another.',image_too_large:'Choose an image up to 10 MiB.',image_pixels_too_large:'Choose an image up to 24 megapixels.',image_format_unsupported:'Choose a static JPEG, PNG or WebP image.',image_text_too_large:'The image path and text exceed 4096 bytes. Shorten the text and attach again.'};message=reasons[error.message]||'Image could not be saved. No input was sent. Choose the image again.';}
+ }finally{if(g===generation&&imageController===controller){imageController=null;render();}}
+}
 async function reviewInput(){
- if(phase!=='editing'||!target||!choice||!previewOK||!validText(text))return;
+ if(phase!=='editing'||imageController||!target||!choice||!previewOK||!validText(inputText()))return;
  composer=false;
  clearTimeout(pollTimer);previewController?.abort();previewController=null;
- const g=generation,t=target,draft=text,controller=new AbortController();operationController=controller;phase='preparing';render();
+ const g=generation,t=target,draft=inputText(),controller=new AbortController();operationController=controller;phase='preparing';render();
  try{
   const data=await request('prepare',{epoch:capability.epoch,choice:t.choice,revision:t.revision,text:draft},controller);
   if(g!==generation||!sheet.open||document.hidden)return;
@@ -662,7 +709,7 @@ async function reviewInput(){
 async function send(){
  if(phase!=='review'||!prepared||!previewOK)return;
  const sentText=prepared.text,p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target};
- prepared=null;receipt=p;text='';clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
+ prepared=null;receipt=p;text='';attachment=null;clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,controller=new AbortController();operationController=controller;phase='sending';message='';render();
  try{
   const result=await request('commit',{epoch:p.epoch,intent:p.intent,confirmation:p.confirmation},controller,7000);
@@ -728,6 +775,7 @@ function readerInputBar(){
  panel.append(destination);
  if(phase==='review'){
   panel.append(make('h3','',prepared.target.name+' — send this input?'),make('p','reader-not-sent','Not sent yet'),make('pre','terminal-exact',prepared.text));
+  imageThumbnail(panel,false);
   const enter=make('div','terminal-enter');enter.append(make('span','','After this text'),make('kbd','','Enter ↵'));
   panel.append(enter,make('p','terminal-help','Sends once to this pane. It may be a shell. Existing terminal input may be combined with it.'));
   const actions=make('div','terminal-actions');actions.append(action('Edit','',()=>{cancelIntent();phase='editing';composer=true;render();queueMicrotask(()=>q('#terminal-text')?.focus({preventScroll:true}));}),action('Send once','terminal-primary',send));panel.append(actions);
@@ -735,17 +783,19 @@ function readerInputBar(){
   if(['sending','accepted','unknown','refused'].includes(phase))readerReceipt(panel);
   const available=!!choice&&['editing','accepted','refused'].includes(phase),label=make('label','reader-input-label','Your input');label.htmlFor='terminal-text';
   const row=make('div','reader-input-row'),field=make('textarea','terminal-text');field.id='terminal-text';field.rows=1;field.value=text;field.placeholder=choice?'Write one line…':'Choose a pane first';field.autocomplete='off';field.spellcheck=false;field.disabled=!available;
-  const review=action(phase==='preparing'?'…':'↑','terminal-primary reader-input-send',reviewInput);review.id='terminal-review';review.title='Review input';review.setAttribute('aria-label','Review input');review.disabled=!available||!previewOK||!validText(text);
-  const count=make('span','reader-input-count',new TextEncoder().encode(text).length+' / 4096 bytes');count.hidden=!text;
+  const file=make('input');file.type='file';file.id='terminal-image-file';file.accept='image/jpeg,image/png,image/webp';file.hidden=true;file.onchange=()=>uploadImage(file.files?.[0]);
+  const add=action('+','reader-image-add',()=>file.click());add.id='terminal-image-add';add.title='Attach image';add.setAttribute('aria-label','Attach image');add.hidden=!imageAvailable;add.disabled=!available||!previewOK||!!imageController||!!attachment;
+  const review=action(phase==='preparing'?'…':'↑','terminal-primary reader-input-send',reviewInput);review.id='terminal-review';review.title='Review input';review.setAttribute('aria-label','Review input');review.disabled=!available||!previewOK||!!imageController||!validText(inputText());
+  const count=make('span','reader-input-count',new TextEncoder().encode(inputText()).length+' / 4096 bytes');count.hidden=!inputText();
   field.onfocus=()=>{composer=true;};field.onblur=()=>{composer=false;};
   field.oninput=()=>{
    if(!['editing','accepted','refused'].includes(phase))return;
    if(['accepted','refused'].includes(phase)){cancelIntent();phase='editing';panel.querySelector('.reader-receipt')?.remove();}
-   text=field.value;count.textContent=new TextEncoder().encode(text).length+' / 4096 bytes';count.hidden=!text;review.disabled=!previewOK||!validText(text);fitInput(field);layoutInputBar(panel);
+   text=field.value;count.textContent=new TextEncoder().encode(inputText()).length+' / 4096 bytes';count.hidden=!inputText();review.disabled=!previewOK||!!imageController||!validText(inputText());fitInput(field);layoutInputBar(panel);
   };
   field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};
   if(!choice)panel.append(make('p','terminal-help','Choose a verified pane in Terminal to write.'));
-  row.append(field,review);panel.append(label,row,count);
+  imageThumbnail(panel,true);row.append(add,field,review);panel.append(label,file,row,count);
  }
  sheet.append(panel);layoutInputBar(panel);
  if(typeof ResizeObserver!=='undefined'){inputObserver=new ResizeObserver(()=>layoutInputBar(panel));inputObserver.observe(panel);}

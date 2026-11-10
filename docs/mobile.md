@@ -273,7 +273,11 @@ Conversationの本文で左へ、Terminalの本文で右へ、はっきり横に
 
 安全に試せる専用paneで、別paneへの切替とClose後の開き直しが新しい末尾から始まること、**Review input**→**Edit**で入力が保たれ、確認するpaneと文面が正しいことを確認します。送信を試す場合は、受け手が分かり、副作用のない短いテスト入力を明示的に受け入れるpaneだけを使い、宛先・全文・Enterを確認して**Send once**を1回押し、応答と受理表示を確認してください。実行中のagentや用途不明のshellにはテスト文字を送らないでください。背景へ回すとsheetと表示・下書き・確認が消え、前面へ戻してTerminalを開き直すと新しい末尾が表示されることも確かめます。
 
-ConversationとTerminalの下には宛先chipと丸い入力欄を常に表示します。UTF-8で4KiB以内の1行を書き、**↑（Review input）**で同じ欄を確認へ切り替えます。宛先agent・window・pane、まだ送信していないこと、全文と続くEnterを確認し、**Send once**を1回押します。**Edit**で文面を保持して入力に戻れます。画像を添付するボタンはまだありません。確認は30秒で失効し、出力更新で本文や宛先・期限を差し替えません。paneの交換や取得失敗後は再確認が必要です。送信後も前面で開いていれば同じpaneの応答を見られます。**Received by terminal**はtmuxの受理までで、agentの実行やタスク完了を意味しません。**Outcome unknown**では一部だけ届いた可能性があり、自動再送しません。**Check receipt**は受理状態の照会だけです。
+ConversationとTerminalの下には宛先chipと丸い入力欄を常に表示します。UTF-8で4KiB以内の1行を書き、**↑（Review input）**で同じ欄を確認へ切り替えます。宛先agent・window・pane、まだ送信していないこと、全文と続くEnterを確認し、**Send once**を1回押します。**Edit**で文面を保持して入力に戻れます。確認は30秒で失効し、出力更新で本文や宛先・期限を差し替えません。paneの交換や取得失敗後は再確認が必要です。送信後も前面で開いていれば同じpaneの応答を見られます。**Received by terminal**はtmuxの受理までで、agentの実行やタスク完了を意味しません。**Outcome unknown**では一部だけ届いた可能性があり、自動再送しません。**Check receipt**は受理状態の照会だけです。
+
+**画像の添付:** 選んだpaneの作業folderを検証でき、bridgeにPillowがあるときだけ、**＋**でスマホのfile pickerを開けます。JPEG・PNG・静止WebPを1枚、10MiB・2400万画素まで選べます。thumbnailは手元で選んだ画像で、**×**で添付を外すと、確認用の全文にもpathを含めなくなります。HEIC・動画やアニメーション画像は対象外です。uploadだけでは入力を送りません。bridgeは向きを直し、EXIF/GPS等の元のメタデータを含めず画素を描き直して、agentの作業folderの`.orrery-input-images/<乱数>.jpg|png`へ保存します。編集欄には利用者の文とthumbnailだけを出し、↑で文に`[image: '<絶対path>']`を足した全文を組み立てます。普段と同じReview input・Send onceでその全文を確認し、Editでは利用者の文だけに戻ります。bytes表示と4KiBの上限は、pathを含む全文で数えます。agentはnativeの画像toolでそのpathを開くため、modelも画像入力に対応している必要があります。dashboardのAPIや、文字だけの送信経路は変えません。
+
+専用folderに`*`だけの`.gitignore`を置きます。次の画像を保存するときに7日より古い生成画像を掃除し、folderあたり現在の画像を50枚まで保持します。thumbnailの削除・取消・Closeでは保存物をすぐ消さず、古い会話に残ったpathは掃除後に読めなくなることがあります。同期・backupは作業folderの方針のままです。MacとWindowsの**WSL2**で同じ実装を使い、relay・bridge・ローカルのharnessが同じLinux/POSIXのpathを読みます。WSLのLinux側の作業folderを推奨します。`/mnt/c/...`もWSLのpathのまま扱いますが、WindowsのACL・DrvFSの設定によっては指定した`0700`/`0600`が効かず、Windowsから共有されたfolderを非公開にする保証にはなりません。同じpathを読めないWindows nativeのprocess・remote/containerのharnessは対象外です。Pillow・使える作業folder・新しいbridgeが無ければ＋を出さず、文字だけの送信は引き続き使えます。
 
 
 これは人が画面を見て送るターミナル操作です。同じpane内でprogramが変わったりshellへ戻ったりすることは検出保証しません。文章がshellコマンドとして解釈されること、既存の入力bufferや別writerと混ざること、確認後に画面が変わることは残ります。送信のためにbufferを消去・interruptしません。

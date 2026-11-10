@@ -8,6 +8,82 @@ from mobile_reader_browser import AREA, phone  # noqa: F401
 
 
 @pytest.mark.parametrize('theme',['dark','light'])
+def test_image_path_uses_existing_review_and_once_send(phone,tmp_path,theme):
+    import base64
+    import io
+    import os
+    from pathlib import Path
+    from PIL import Image, ImageDraw
+    client,js,wait,state=phone
+    if theme=='light':
+        js((Path(__file__).resolve().parents[1]/'dashboard/theme_core.js').read_text())
+        js("document.documentElement.dataset.colorTheme='light';Object.entries(AgentStackColorThemeCore.deriveWarmPaperLightTheme().cssVariables).forEach(([k,v])=>document.documentElement.style.setProperty(k,v))")
+    def capture(stage):
+        folder=Path(os.environ.get('MOBILE_IMAGE_CAPTURE_DIR',str(tmp_path)))
+        folder.mkdir(parents=True,exist_ok=True)
+        data=client.call('Page.captureScreenshot',format='png',captureBeyondViewport=False)['data']
+        (folder/(theme+'-'+stage+'.png')).write_bytes(base64.b64decode(data))
+    state['images']=True
+    js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelector('#terminal-image-add')&&!document.querySelector('#terminal-image-add').hidden")
+    capture('plus')
+    js("document.querySelector('#terminal-text').value='Inspect this';document.querySelector('#terminal-text').dispatchEvent(new Event('input'))")
+    image=Image.new('RGB',(320,180),'#f4eee2');draw=ImageDraw.Draw(image);draw.ellipse((25,45,100,120),fill='#dd713f');draw.rectangle((215,45,290,120),fill='#427aa3');draw.text((125,85),'7342',fill='#263540');out=io.BytesIO();image.save(out,'PNG')
+    js("""(()=>{const bytes=Uint8Array.from(atob(DATA),c=>c.charCodeAt(0)),files=new DataTransfer();files.items.add(new File([bytes],'phone.png',{type:'image/png'}));const f=document.querySelector('#terminal-image-file');f.files=files.files;f.dispatchEvent(new Event('change'));})()""".replace('DATA',json.dumps(base64.b64encode(out.getvalue()).decode())))
+    wait("document.querySelector('.reader-image-thumb')!==null")
+    wait("document.querySelector('.reader-image-thumb').complete")
+    capture('thumbnail')
+    value=js("document.querySelector('#terminal-text').value")
+    assert value=='Inspect this'
+    complete=value+" [image: '/workspace/.orrery-input-images/"+'a'*32+".png']"
+    assert js("document.querySelector('.reader-input-count').textContent")==str(len(complete.encode()))+' / 4096 bytes'
+    js("document.querySelector('#terminal-text').value='x'.repeat(4050);document.querySelector('#terminal-text').dispatchEvent(new Event('input'))")
+    assert js("document.querySelector('#terminal-review').disabled")
+    assert js("parseInt(document.querySelector('.reader-input-count').textContent)>4096")
+    js("document.querySelector('#terminal-text').value='Inspect this';document.querySelector('#terminal-text').dispatchEvent(new Event('input'))")
+    assert not any(op in {'prepare','commit'} for op,_ in state['calls'])
+    js("document.querySelector('#terminal-review').click()")
+    wait("document.querySelector('.reader-review')!==null")
+    assert js("document.querySelector('.terminal-exact').textContent")==complete
+    assert js("document.querySelector('.reader-image-thumb')!==null")
+    capture('review')
+    js("[...document.querySelectorAll('button')].find(b=>b.textContent==='Edit').click()")
+    assert js("document.querySelector('#terminal-text').value")==value
+    js("document.querySelector('#terminal-review').click()")
+    wait("document.querySelector('.reader-review')!==null")
+    js("[...document.querySelectorAll('button')].find(b=>b.textContent==='Send once').click()")
+    wait("document.querySelector('.reader-receipt.accepted')!==null")
+    assert state['draft']==complete
+    assert sum(op=='commit' for op,_ in state['calls'])==1
+    assert not js("document.querySelector('.reader-image-thumb')!==null")
+    capture('sent')
+
+
+@pytest.mark.parametrize('case',['remove','invalid_type','too_large','full_folder','full_draft'])
+def test_image_failure_and_removal_never_send_or_lose_original_draft(phone,case):
+    client,js,wait,state=phone
+    state['images']=True
+    js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelector('#terminal-image-add')&&!document.querySelector('#terminal-image-add').hidden")
+    draft='x'*4096 if case=='full_draft' else 'Keep these spaces  '
+    js("document.querySelector('#terminal-text').value="+json.dumps(draft)+";document.querySelector('#terminal-text').dispatchEvent(new Event('input'))")
+    if case=='full_folder':state['image_error']='image_folder_full'
+    kind='image/heic' if case=='invalid_type' else 'image/png'
+    content='new Uint8Array(10*1024*1024+1)' if case=='too_large' else "Uint8Array.from([137,80,78,71])"
+    js("""(()=>{const files=new DataTransfer();files.items.add(new File([CONTENT],'phone-image',{type:KIND}));const f=document.querySelector('#terminal-image-file');f.files=files.files;f.dispatchEvent(new Event('change'));})()""".replace('CONTENT',content).replace('KIND',json.dumps(kind)))
+    if case=='remove':
+        wait("document.querySelector('.reader-image-remove')!==null")
+        js("document.querySelector('.reader-image-remove').click()")
+        assert js("document.querySelector('.reader-image-thumb')===null")
+    else:
+        reason={'invalid_type':'JPEG','too_large':'10 MiB','full_folder':'50 images','full_draft':'4096 bytes'}[case]
+        wait("document.querySelector('.terminal-message').textContent.includes("+json.dumps(reason)+")")
+        assert not js("document.querySelector('.reader-image-thumb')!==null")
+    assert js("document.querySelector('#terminal-text').value")==draft
+    assert not any(op in {'prepare','commit'} for op,_ in state['calls'])
+
+
+@pytest.mark.parametrize('theme',['dark','light'])
 def test_open_mail_thread_tracks_sender_and_body_end(phone,theme):
     client,js,wait,state=phone
     if theme=='light':

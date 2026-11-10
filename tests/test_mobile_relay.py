@@ -566,7 +566,7 @@ class Element{
  constructor(tag='div'){this.tag=tag;this.children=[];this.dataset={};this.style={};this.classList={toggle(){}};this.isConnected=true;this.open=false;this.textContent='';}
  set id(value){this._id=value;elements.set('#'+value,this);}get id(){return this._id;}
  append(...values){this.children.push(...values);}replaceChildren(...values){this.children=[...values];}
- setAttribute(){}addEventListener(){}focus(){}querySelectorAll(){return [];}querySelector(){return null;}after(value){this.afterValue=value;}remove(){}
+ setAttribute(){}addEventListener(){}focus(){}querySelectorAll(){return [];}querySelector(){return null;}closest(){return null;}after(value){this.afterValue=value;}remove(){}
  showModal(){this.open=true;}close(){this.open=false;}
 }
 const q=s=>{if(!elements.has(s))elements.set(s,new Element());return elements.get(s);};

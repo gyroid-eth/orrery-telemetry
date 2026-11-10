@@ -318,6 +318,11 @@ html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-l
 .mobile .reader-input-bar{inset:auto 12px calc(12px + env(safe-area-inset-bottom));padding:6px;border:1px solid var(--hair);border-radius:22px;background:var(--panel);max-height:calc(100% - 64px - env(safe-area-inset-top));box-shadow:0 6px 24px color-mix(in srgb,var(--shade) 18%,transparent)}
 .mobile .reader-input-target{display:block;min-height:30px;max-width:100%;margin:0 3px 3px;padding:4px 9px;border:1px solid var(--hair);border-radius:16px;background:var(--bg);color:var(--ink-dim);text-align:left;font:10px/1.5 var(--mono);overflow-wrap:anywhere}
 .reader-input-row{display:flex;align-items:center;gap:5px}
+.mobile .reader-image-add,.mobile .reader-image-remove{flex:none;min-width:44px;min-height:44px;padding:0;border:0;background:none;color:var(--ink-dim);font-size:24px}
+.mobile .reader-image-add[hidden]{display:none}
+.reader-image{display:flex;align-items:center;gap:9px;padding:3px 9px 6px;font:10px/1.5 var(--mono);color:var(--ink-dim)}
+.reader-image-thumb{width:56px;height:56px;object-fit:contain;border:1px solid var(--hair);border-radius:10px;background:var(--bg)}
+.reader-image-remove{margin-left:auto}
 .reader-input-label{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .mobile .reader-input-bar .terminal-text{flex:1;min-width:0;height:44px;min-height:44px;padding:10px 9px;border:0;border-radius:15px;background:none;font:16px/1.4 var(--mono)}
 .mobile .reader-input-send{flex:none;display:grid;place-items:center;width:44px;height:44px;min-height:44px;padding:0;border-radius:50%;font-size:23px}
