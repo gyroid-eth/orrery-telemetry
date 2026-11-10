@@ -662,7 +662,7 @@ async function probeImages(){
   const result=await request('image',{epoch:capability.epoch,choice:t.choice,revision:t.revision,image:null},controller,10000);
   if(g!==generation||!sheet.open||target?.choice!==t.choice||result.target?.revision!==t.revision||!sameTarget(result.target))return;
   imageAvailable=result.enabled===true;refreshImageControls();
- }catch(_){if(g===generation){imageAvailable=false;refreshImageControls();}}
+ }catch(_){if(g===generation){imageProbe='';imageAvailable=false;refreshImageControls();}}
  finally{if(imageProbeController===controller)imageProbeController=null;}
 }
 function imageThumbnail(panel,removable){
