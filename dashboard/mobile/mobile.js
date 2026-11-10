@@ -614,7 +614,9 @@ function refreshOutput(){
   const view=pre._scrollView,width=pre.clientWidth,height=pre.clientHeight;
   if(view.width!==width||view.height!==height){
    if(view.following)pre.scrollTop=pre.scrollHeight;
-   pre._scrollView={...view,width,height};
+   // A shorter footer can clamp paused reading onto the new bottom.
+   const clamped=view.clamped||!view.following&&pre.scrollHeight-height-pre.scrollTop<=2;
+   pre._scrollView={...view,width,height,clamped};
   }
  }
 }

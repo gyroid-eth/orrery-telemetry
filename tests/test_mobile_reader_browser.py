@@ -738,3 +738,27 @@ def test_review_without_tail_still_invalidates_confirmation_on_preview_failure(p
     assert js("document.querySelector('#terminal-text').value==='Keep this draft'&&document.querySelector('#terminal-review').disabled")
     assert any(op=='cancel' for op,_ in state['calls'])
     assert not any(op=='commit' for op,_ in state['calls'])
+
+
+def test_metadata_shrink_cannot_release_paused_near_tail(phone):
+    client,js,wait,state=phone
+    raw='\n'.join('Synthetic terminal line '+str(i) for i in range(100))
+    state['preview_text']=raw
+    js("document.querySelector('.reader-bar [aria-label=Terminal]').click()")
+    wait('document.querySelector("#terminal-output")?.textContent==='+json.dumps(raw),8)
+    js("window.p=document.querySelector('#terminal-output');p.scrollTop=p.scrollHeight-p.clientHeight-12;p.dispatchEvent(new Event('scroll'))")
+    assert js('p._scrollView.following===false')
+    state['preview_text']=raw+'\nNext output'
+    wait("document.querySelector('.reader-terminal-state').textContent==='New output · paused'",8)
+    js("p.scrollTop=p.scrollHeight-p.clientHeight-12;p.dispatchEvent(new Event('scroll'));window.beforeMetaShrink={top:p.scrollTop,height:p.clientHeight,following:p._scrollView.following,observed:p._preview.observed_at}")
+    state['preview_text']=raw
+    wait("document.querySelector('.terminal-preview-note').textContent===''",8)
+    js('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+    print('BEFORE',js('beforeMetaShrink'),'AFTER',js('({top:p.scrollTop,height:p.clientHeight,following:p._scrollView.following,observed:p._preview.observed_at,remaining:p.scrollHeight-p.clientHeight-p.scrollTop})'))
+    assert js('p._scrollView.following===false'),'removing metadata released paused reading without a user gesture'
+    assert js('p._scrollView.clamped===true')
+    assert js('p._preview.observed_at===beforeMetaShrink.observed'),'Shown must remain on the held snapshot'
+    point=js('(()=>{const r=p.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()')
+    client.call('Input.dispatchMouseEvent',type='mouseWheel',deltaX=0,deltaY=40,**point)
+    wait('p._scrollView.following===true&&p._preview.observed_at>beforeMetaShrink.observed')
+
