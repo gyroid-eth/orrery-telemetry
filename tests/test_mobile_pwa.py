@@ -137,8 +137,8 @@ def test_reload_restores_the_same_fresh_identity_from_the_current_roster(phone):
     """)
     client.call('Page.reload',ignoreCache=True)
     wait("typeof OrreryMobileTerminal!=='undefined'&&document.querySelector('body>header>span').textContent==='History · Terminal'&&OrreryMobileIdentity.forName('SampleAgent')!==null")
-    assert not js("document.querySelector('#terminal-sheet').open"),'name-only legacy state cannot prove a fresh identity'
-    js("OrreryMobileTerminal.open('SampleAgent',OrreryMobileIdentity.forName('SampleAgent'))")
+    # A legacy name-only selection still restores by name, then retains the
+    # current roster identity for subsequent reloads.
     wait("document.querySelector('#terminal-sheet').open&&document.querySelector('#terminal-text')!==null")
     js("document.querySelector('#terminal-text').value='Fresh identity';document.querySelector('#terminal-text').dispatchEvent(new Event('input'))")
     wait("document.querySelector('#terminal-review').disabled===false")

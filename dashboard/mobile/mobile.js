@@ -419,7 +419,7 @@ poll();
 })();
 
 /* Common, opt-in pane terminal. No preview/draft/intent enters storage or URLs.
-   Only the agent, tab and fresh identity IDs enter this launch's sessionStorage. */
+   Only the agent, tab and available Mail identity IDs enter this launch's sessionStorage. */
 (()=>{'use strict';
 const q=s=>document.querySelector(s),make=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!==undefined)e.textContent=txt;return e;};
 const sheet=q('#terminal-sheet'),contract='orrery-mobile-pane-v1';
@@ -437,14 +437,14 @@ let paused=false,checkingView=false,resumeController=null,reviewUntil=0,startupR
 const viewKey='orrery-mobile-view-v1';
 function savedView(){try{const v=JSON.parse(window.sessionStorage.getItem(viewKey));return v&&(Object.keys(v).length===2||Object.keys(v).length===4&&ref(v))&&Object.keys(v).every(k=>['agent','tab','mail_instance_id','mail_agent_id'].includes(k))&&/^[A-Za-z][A-Za-z0-9_-]{0,95}$/.test(v.agent)&&['conversation','terminal'].includes(v.tab)?v:null;}catch(_){return null;}}
 let restoreView=savedView();
-function rememberView(){if(!sheet.open||!name)return;const identity=fresh()?ref(selector):null;if(fresh()&&!identity){forgetView();return;}try{window.sessionStorage.setItem(viewKey,JSON.stringify({agent:name,tab,...identity}));}catch(_){}}
+function rememberView(){if(!sheet.open||!name)return;const identity=ref(selector);try{window.sessionStorage.setItem(viewKey,JSON.stringify({agent:name,tab,...identity}));}catch(_){}}
 function forgetView(){try{window.sessionStorage.removeItem(viewKey);}catch(_){}}
 function restoreSavedView(){
  if(!startupReady||!restoreView||sheet.open||document.hidden||!(enabled||history))return;
  const identity=window.OrreryMobileIdentity?.forName(restoreView.agent);
- if(fresh()){
+ const saved=ref(restoreView);
+ if(saved){
   // A display name can be reassigned. Never resume another Mail identity.
-  const saved=ref(restoreView);if(!saved){restoreView=null;forgetView();return;}
   if(!identity)return;
   if(identity.mail_instance_id!==saved.mail_instance_id||identity.mail_agent_id!==saved.mail_agent_id){restoreView=null;forgetView();return;}
  }
