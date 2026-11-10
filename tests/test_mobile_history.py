@@ -737,7 +737,7 @@ def test_reopening_the_same_agent_ignores_the_previous_sheets_response():
     ''')
 
 
-def test_review_from_the_conversation_tab_shows_the_terminal_tail_before_send():
+def test_review_from_the_conversation_tab_shows_only_the_target_and_text():
     run_sheet(r'''
       await context.OrreryMobileTerminal.open('ScrollFixture');await settle();
       q('.reader-bar').children.find(b=>b['aria-label']==='Terminal').onclick();await settle();
@@ -747,10 +747,10 @@ def test_review_from_the_conversation_tab_shows_the_terminal_tail_before_send():
       q('.reader-compose-toggle').onclick();
       const field=q('#terminal-text');field.value='synthetic line';field.oninput();
       await button('Review input').onclick();await settle();
-      const shown=q('#terminal-output');
-      assert.ok(shown,'review shows the terminal tail');
-      assert.ok(shown.textContent.includes('line'),'tail text is visible: '+shown.textContent);
-      assert.match(q('.terminal-observed').textContent,/120 lines.*12 KiB/);
+      assert.equal(q('#terminal-output'),null,'review omits the terminal tail');
+      assert.equal(q('.terminal-observed'),null);
+      assert.match(q('.reader-review-target').textContent,/ScrollFixture.*Pane 1/);
+      assert.equal(q('.terminal-exact').textContent,'synthetic line');
       assert.ok(button('Send once'));
       context.OrreryMobileTerminal.close();
     ''')

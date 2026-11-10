@@ -76,15 +76,17 @@ def phone(request):
             payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
             operation = self.path.rsplit('/', 1)[-1]
             state['calls'].append((operation, payload))
+            selected = next((t for t in state.get('targets', [choice]) if t['choice'] == payload.get('choice')), choice)
             if operation == 'targets':
-                return self.send(dict(contract, targets=[choice]))
+                return self.send(dict(contract, targets=state.get('targets', [choice])))
             if operation == 'preview':
-                return self.send(dict(contract, target=choice, text=state.get('preview_text', 'Generated terminal tail\nReady.'), max_lines=state.get('preview_lines',120), max_bytes=state.get('preview_bytes',12288), observed_at=time.time()), status=503 if state['preview_error'] else 200)
+                return self.send(dict(contract, target=selected, text=state.get('preview_text', 'Generated terminal tail\nReady.'), max_lines=state.get('preview_lines',120), max_bytes=state.get('preview_bytes',12288), observed_at=time.time()), status=503 if state['preview_error'] else 200)
             if operation == 'prepare':
                 state['draft'] = payload['text']
-                return self.send(dict(contract, state='prepared', target=choice, text=payload['text'], expires_in=30, intent='fixture-intent', confirmation='fixture-confirmation'))
+                state['prepared_target'] = selected
+                return self.send(dict(contract, state='prepared', target=selected, text=payload['text'], expires_in=30, intent='fixture-intent', confirmation='fixture-confirmation'))
             if operation == 'commit':
-                return self.send(dict(contract, state='accepted', target=choice, intent='fixture-intent'))
+                return self.send(dict(contract, state='accepted', target=state.get('prepared_target',choice), intent='fixture-intent'))
             return self.send(dict(contract, state='cancelled'))
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
