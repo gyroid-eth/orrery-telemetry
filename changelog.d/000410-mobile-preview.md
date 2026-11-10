@@ -1,3 +1,0 @@
-### スマホの会話の記録で、fileと画像のpreviewを開けるようにする（Phone access の History の中）
-
-Historyがオンのreader（policyの確認があれば既定でオン。SettingsではPhone access）では、Conversationのtoolの呼び出しに出てきたfileと画像のchipを押すと、今の中身をpreviewで開けます。`--disable-history`で会話の記録と一緒に切れます。readerはcockpitの固定のroute `GET /telemetry/conversation/preview`をloopbackで呼び、記録・binding・作業folderの範囲・canonical path・種類・大きさ・画素数の確認は、cockpitがそのたびに行います。名前で隠したり中身を伏せたりはしません。スマホが送るのはagentの名前とreaderが発行した参照のIDだけで、pathもcockpitの参照も送りも受け取りもしません。textは先頭32 KiBを文字として表示し、HTMLやSVGも実行しません。画像は画素だけのPNG（1辺8192 px・8 Mpx・4 MiBまで）に限ります。text・画像に写った鍵や私的な文章はそのまま届くので、それでよい端末に限ってください。Close・背景移行でpreviewを消します。詳しくは[スマホで状況を見る](../docs/mobile.md#スマホでagentの会話の記録を読む)を参照してください。
