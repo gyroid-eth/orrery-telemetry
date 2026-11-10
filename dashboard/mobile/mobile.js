@@ -423,7 +423,7 @@ poll();
 const q=s=>document.querySelector(s),make=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!==undefined)e.textContent=txt;return e;};
 const sheet=q('#terminal-sheet'),contract='orrery-mobile-pane-v1';
 let capability=null,enabled=false,phase='loading',name='',choices=[],choice=null,target=null,text='',output='',preview=null,previewOK=false,message='';
-let selector=null,history=false,tab='terminal',composer=false,backEntry=false,backClosing=false;
+let selector=null,history=false,tab='terminal',composer=false,backEntry=false,backClosing=false,inputObserver=null;
 const conversation=()=>window.OrreryMobileConversation;
 const busy=()=>['sending','preparing'].includes(phase);
 const fresh=()=>capability?.api===34;
@@ -452,7 +452,7 @@ function cancelIntent(){
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
 function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;generation++;}
-function clear(){readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
+function clear(){inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
 function close(fromBack=false){const remove=backEntry&&window.history.state?.orreryConversation===true;backEntry=false;const restore=previousFocus;previousFocus=null;clear();if(sheet.open)sheet.close();if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});if(remove&&fromBack!==true){backClosing=true;window.history.back();}}
 window.addEventListener('popstate',event=>{if(backClosing){backClosing=false;event.stopImmediatePropagation();return;}if(sheet.open&&backEntry){event.stopImmediatePropagation();if(dismissLayer()){window.history.pushState({orreryConversation:true},'');return;}backEntry=false;close(true);}},true);
 const entryLabel=()=>history?'History':'Terminal';
@@ -476,7 +476,7 @@ function mail(event){
  q('#message-route').after(people);
 }
 async function open(n,identity=null){
- if(busy()||!(enabled||history)||document.hidden)return;previousFocus=sheet.open?previousFocus:document.activeElement;clear();name=n;selector=ref(identity);window.scrollTo({top:0,behavior:'instant'});
+ if(busy()||sheet.open&&phase==='unknown'||!(enabled||history)||document.hidden)return;previousFocus=sheet.open?previousFocus:document.activeElement;clear();name=n;selector=ref(identity);window.scrollTo({top:0,behavior:'instant'});
  if(!sheet.open){sheet.showModal();if(history){window.history.pushState({orreryConversation:true},'');backEntry=true;}}
  if(history){tab='conversation';conversation().mount(n);}
  if(!enabled){phase='history-only';render();return;}
@@ -484,7 +484,7 @@ async function open(n,identity=null){
  render();await list();
 }
 async function list(){
- if(busy())return;
+ if(busy()||phase==='unknown')return;
  stop();cancelIntent();choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;phase='loading';message='';render();
  const g=generation,controller=new AbortController();operationController=controller;
  try{
@@ -502,8 +502,8 @@ function switchTab(value){if(busy()||value===tab||!history||!enabled&&value==='t
 // Tab swipes belong only to reading surfaces; native scroll and selection win.
 let readerSwipe=null;
 function swipeAvailable(){
- return sheet.open&&history&&enabled&&!composer&&!busy()&&phase!=='review'
-  &&!q('.reader-composer')&&!q('.conversation-preview')&&!window.getSelection?.()?.toString();
+ return sheet.open&&history&&enabled&&!composer&&!text&&!busy()&&phase!=='review'
+  &&!q('.conversation-preview')&&!window.getSelection?.()?.toString();
 }
 function swipeSurface(target){
  if(target.closest?.('button,a,input,textarea,select,summary,[role="button"],.reader-receipt'))return null;
@@ -557,7 +557,7 @@ function terminalText(pre,value){
  }));
 }
 function choose(value){
- if(busy())return;
+ if(busy()||phase==='unknown')return;
  stop();cancelIntent();choice=value;target=null;text='';output='';preview=null;previewOK=false;phase='editing';message='';failures=0;render();poll();
 }
 function terminalFollowing(pre){
@@ -640,11 +640,14 @@ async function poll(){
   if(g===generation&&previewController===controller){previewController=null;if(sheet.open&&!document.hidden&&choice)pollTimer=setTimeout(poll,failures?Math.min(24000,3000*2**failures):3000);}
  }
 }
-function invalidate(reason){stop();cancelIntent();text='';output='';preview=null;previewOK=false;target=null;phase='changed';message=reason;render();}
+function invalidate(reason){
+ if(receipt&&['sending','unknown'].includes(phase)){previewOK=false;message=reason+' Receipt retained; check its status before writing again.';refreshOutput();return;}
+ stop();cancelIntent();text='';output='';preview=null;previewOK=false;target=null;phase='changed';message=reason;render();
+}
 function validText(value){return typeof value==='string'&&value.trim()&&new TextEncoder().encode(value).length<=4096&&!/[\p{Cc}\p{Cs}\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value);}
 async function reviewInput(){
- if(!target||!choice||!previewOK||!validText(text))return;
- if(history)tab='conversation';
+ if(phase!=='editing'||!target||!choice||!previewOK||!validText(text))return;
+ composer=false;
  clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,t=target,draft=text,controller=new AbortController();operationController=controller;phase='preparing';render();
  try{
@@ -688,15 +691,13 @@ function resizeSheet(){
  refreshOutput();
 }
 window.visualViewport?.addEventListener('resize',resizeSheet);window.visualViewport?.addEventListener('scroll',resizeSheet);window.addEventListener('resize',resizeSheet);
-function dismissLayer(){if(conversation()?.dismissPreview?.())return true;if(composer&&['editing','choose','unavailable','changed'].includes(phase)){toggleComposer(false);return true;}return false;}
-function toggleComposer(on){
- if(on&&busy())return;
- if(on&&history){tab='conversation';if(['accepted','refused'].includes(phase)){cancelIntent();phase='editing';}}
- if(!on&&phase==='preparing'){stop();cancelIntent();phase='editing';poll();}
- composer=on;render();queueMicrotask(()=>q(on?'#terminal-text':'.reader-compose-toggle')?.focus({preventScroll:true}));
+function dismissLayer(){
+ if(conversation()?.dismissPreview?.())return true;
+ if(composer){composer=false;sheet.focus({preventScroll:true});return true;}
+ return false;
 }
-function changePane(){if(busy())return;tab='terminal';return list();}
-function paneButton(label){const b=action(label,'terminal-pane-button',changePane);b.disabled=busy();return b;}
+function changePane(){if(busy()||phase==='unknown')return;composer=false;tab='terminal';return list();}
+function paneButton(label){const b=action(label,'terminal-pane-button',changePane);b.disabled=busy()||phase==='unknown';return b;}
 function readerBar(){
  const bar=make('div','reader-bar'),who=make('div','reader-person'),portrait=make('img');portrait.src=window.AGENTSTACK_DEMO.portraitURL(name);portrait.alt='';portrait.onerror=()=>{portrait.remove();};
  const initials=make('span','reader-initials',name.slice(0,2)),title=make('h2','',name);title.id='terminal-title';who.append(initials,portrait,title,make('span','reader-state'));bar.append(who);
@@ -710,17 +711,55 @@ function readerBar(){
  }
  sheet.append(bar);queueMicrotask(()=>{conversation()?.refreshActivity?.();refreshOutput();});
 }
-function composeToggle(){const b=action('','reader-compose-toggle',()=>toggleComposer(true));b.disabled=busy();b.setAttribute('aria-label','Write input');b.title='Write input';b.setAttribute('aria-expanded','false');const mark=make('span','','✎');mark.setAttribute('aria-hidden','true');b.append(mark);sheet.append(b);}
-function readerReceipt(){
+function fitInput(field){
+ field.style.height='44px';field.style.height=Math.min(120,Math.max(44,field.scrollHeight))+'px';
+}
+function layoutInputBar(panel){
+ if(!panel.isConnected)return;
+ const field=panel.querySelector('#terminal-text');
+ if(field&&field._inputWidth!==field.clientWidth){field._inputWidth=field.clientWidth;fitInput(field);}
+ const space=Math.ceil(panel.getBoundingClientRect().height)+12+'px';
+ if(sheet.style.getPropertyValue('--reader-input-space')!==space){sheet.style.setProperty('--reader-input-space',space);refreshOutput();}
+}
+function readerInputBar(){
+ const panel=make('div','reader-composer reader-input-bar'+(phase==='review'?' reader-review':''));panel.setAttribute('role','region');panel.setAttribute('aria-label',phase==='review'?'Review input':'Write input');
+ const shown=phase==='review'?prepared.target:choice;
+ const destination=paneButton((shown?shown.name+' · '+shown.pane_label:'Choose pane')+' ⌄');destination.className+=' reader-input-target';destination.setAttribute('aria-label','Change pane for '+name+(shown?' · '+shown.pane_label:''));
+ panel.append(destination);
+ if(phase==='review'){
+  panel.append(make('h3','',prepared.target.name+' — send this input?'),make('p','reader-not-sent','Not sent yet'),make('pre','terminal-exact',prepared.text));
+  const enter=make('div','terminal-enter');enter.append(make('span','','After this text'),make('kbd','','Enter ↵'));
+  panel.append(enter,make('p','terminal-help','Sends once to this pane. It may be a shell. Existing terminal input may be combined with it.'));
+  const actions=make('div','terminal-actions');actions.append(action('Edit','',()=>{cancelIntent();phase='editing';composer=true;render();queueMicrotask(()=>q('#terminal-text')?.focus({preventScroll:true}));}),action('Send once','terminal-primary',send));panel.append(actions);
+ }else{
+  if(['sending','accepted','unknown','refused'].includes(phase))readerReceipt(panel);
+  const available=!!choice&&['editing','accepted','refused'].includes(phase),label=make('label','reader-input-label','Your input');label.htmlFor='terminal-text';
+  const row=make('div','reader-input-row'),field=make('textarea','terminal-text');field.id='terminal-text';field.rows=1;field.value=text;field.placeholder=choice?'Write one line…':'Choose a pane first';field.autocomplete='off';field.spellcheck=false;field.disabled=!available;
+  const review=action(phase==='preparing'?'…':'↑','terminal-primary reader-input-send',reviewInput);review.id='terminal-review';review.title='Review input';review.setAttribute('aria-label','Review input');review.disabled=!available||!previewOK||!validText(text);
+  const count=make('span','reader-input-count',new TextEncoder().encode(text).length+' / 4096 bytes');count.hidden=!text;
+  field.onfocus=()=>{composer=true;};field.onblur=()=>{composer=false;};
+  field.oninput=()=>{
+   if(!['editing','accepted','refused'].includes(phase))return;
+   if(['accepted','refused'].includes(phase)){cancelIntent();phase='editing';panel.querySelector('.reader-receipt')?.remove();}
+   text=field.value;count.textContent=new TextEncoder().encode(text).length+' / 4096 bytes';count.hidden=!text;review.disabled=!previewOK||!validText(text);fitInput(field);layoutInputBar(panel);
+  };
+  field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};
+  if(!choice)panel.append(make('p','terminal-help','Choose a verified pane in Terminal to write.'));
+  row.append(field,review);panel.append(label,row,count);
+ }
+ sheet.append(panel);layoutInputBar(panel);
+ if(typeof ResizeObserver!=='undefined'){inputObserver=new ResizeObserver(()=>layoutInputBar(panel));inputObserver.observe(panel);}
+}
+function readerReceipt(host=sheet){
  const accepted=phase==='accepted',unknown=phase==='unknown',sending=phase==='sending',box=make('div','reader-receipt '+phase);box.setAttribute('role','status');
  box.append(make('strong','',accepted?'Received by terminal':unknown?'Outcome unknown':sending?'Sending once…':'Input not sent'));
  box.append(make('small','',accepted?'Input and Enter received. Completion is not confirmed.':unknown?'Some input may have arrived. No automatic retry.':sending?'Waiting for the terminal receipt.':'Input refused or confirmation expired.'));
  if(unknown)box.append(action('Check receipt','',status));
- sheet.append(box);if(accepted||phase==='refused')composeToggle();
+ host.append(box);
 }
 function render(){
+ inputObserver?.disconnect();inputObserver=null;
  const focus=document.activeElement,hadFocus=focus&&sheet.contains?.(focus);if(hadFocus){sheet.tabIndex=-1;sheet.focus({preventScroll:true});}
- const previousReview=q('.reader-review');
  const previous=q('#terminal-output');
  // Review/edit rebuild the sheet for the same pane. Choosing a pane and
  // reopening clear output first, so their new preview still opens at its tail.
@@ -747,40 +786,20 @@ function render(){
   const view=conversation()?.element()||conversation()?.mount(name);if(view){scroll.append(view);queueMicrotask(()=>{conversation()?.restore();if(focus?.isConnected&&hadFocus)focus.focus({preventScroll:true});});}
   const warning=make('p','terminal-message',message);warning.setAttribute('role','status');sheet.append(warning);
   if(phase==='history-only')return;
-  if(['loading','choose','unavailable','changed'].includes(phase)){
-   const hint=make('div','conversation-compose-hint');hint.append(make('span','',phase==='loading'?'Finding a pane to write to…':'Choose a verified pane in Terminal to write.'));
-   if(phase!=='loading'){
-    hint.append(action('Terminal','',()=>switchTab('terminal')));composeToggle();
-    if(composer){
-     const panel=make('div','reader-composer');panel.setAttribute('role','region');panel.setAttribute('aria-label','Write input');
-     const hide=action('×','reader-compose-close',()=>toggleComposer(false));hide.setAttribute('aria-label','Close input');
-     const label=make('label','terminal-compose-label','Your input');label.htmlFor='terminal-text';const field=make('textarea','terminal-text');field.id='terminal-text';field.disabled=true;field.placeholder='Choose a pane first';
-     panel.append(hide,make('p','terminal-help','Choose a verified pane in Terminal to write.'),label,field,action('Choose pane','',()=>switchTab('terminal')));sheet.append(panel);
-    }
-   }
-   hint.append(make('p','terminal-result',message));scroll.append(hint);return;
-  }
-  if(['sending','accepted','unknown','refused'].includes(phase)){readerReceipt();refreshOutput();return;}
  }
- if(phase==='loading'){scroll.append(make('p','terminal-help','Finding selectable panes…'));return;}
+ if(phase==='loading'){if(!reading)scroll.append(make('p','terminal-help','Finding selectable panes…'));if(history)readerInputBar();return;}
  if(phase==='choose'){
   scroll.append(make('p','terminal-help','Choose the pane you want to view and send input to.'));
   const paneList=make('div','terminal-choices');for(const c of choices){const b=action('','',()=>choose(c));b.append(make('strong','',c.pane_label),make('small','',c.name));paneList.append(b);}scroll.append(paneList);
-  if(message)scroll.append(make('p','terminal-help',message));scroll.append(action('Refresh panes','',list));return;
+  if(message)scroll.append(make('p','terminal-help',message));scroll.append(action('Refresh panes','',list));if(history)readerInputBar();return;
  }
  if(['unavailable','changed'].includes(phase)){
-  scroll.append(make('p','terminal-result',phase==='changed'?'Pane changed':'Terminal unavailable'),make('p','terminal-help',message));sheet.append(action('Refresh panes','terminal-button',list));return;
+  if(!reading)scroll.append(make('p','terminal-result',phase==='changed'?'Pane changed':'Terminal unavailable'),make('p','terminal-help',message));
+  if(history){if(!reading)scroll.append(action('Refresh panes','',list));readerInputBar();}else sheet.append(action('Refresh panes','terminal-button',list));return;
  }
  let pre=null,actionsHost=sheet;
- const inlineReview=reading&&phase==='review';
- if(inlineReview){
-  const panel=make('div','reader-composer reader-review');panel.setAttribute('role','region');panel.setAttribute('aria-label','Review input');panel.tabIndex=-1;
-  const destination=paneButton(prepared.target.name+' · '+prepared.target.pane_label+' ⌄');destination.className+=' reader-review-target';destination.setAttribute('aria-label','Change pane for '+prepared.target.name+' · '+prepared.target.pane_label);
-  panel.append(make('h3','','Review input'),destination);sheet.append(panel);scroll=panel;actionsHost=panel;
-  if(!previousReview)queueMicrotask(()=>{if(panel.isConnected)panel.focus({preventScroll:true});});
- }
  if(!reading){
- const terminal=make('div','terminal-preview'),bar=make('div','terminal-preview-head');bar.append(make('span','terminal-stream',''),make('span','','Terminal tail'));pre=make('pre','terminal-output');pre.id='terminal-output';pre._wrapLines=history&&!inlineReview;terminal.append(bar,pre);scroll.append(terminal);
+ const terminal=make('div','terminal-preview'),bar=make('div','terminal-preview-head');bar.append(make('span','terminal-stream',''),make('span','','Terminal tail'));pre=make('pre','terminal-output');pre.id='terminal-output';pre._wrapLines=history;terminal.append(bar,pre);scroll.append(terminal);
  pre.addEventListener('scroll',refreshOutput,{passive:true});
  pre.addEventListener('wheel',event=>{
   terminalScrollGesture(pre,event.deltaY>0&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey);
@@ -808,27 +827,16 @@ function render(){
  const observed=make('div','terminal-observed');observed.append(make('span','','Latest '+(preview?.max_lines||120)+' lines · up to '+((preview?.max_bytes||12288)/1024)+' KiB'),make('span','terminal-age',''));scroll.append(observed,make('p','terminal-preview-note',''));
  if(history){scroll.append(make('p','reader-terminal-meta'));const state=make('p','reader-terminal-state');state.setAttribute('role','status');scroll.append(state);}
  }
- if(history&&!reading&&['sending','accepted','unknown','refused'].includes(phase)){
-  readerReceipt();scroll.append(make('p','terminal-message',message));
+ if(history){
   if(readTop!==null&&pre){terminalText(pre,readOutput);pre._preview=readPreview;pre._scrollView=readView;pre.scrollTop=readTop;}
-  refreshOutput();return;
- }
- if(history&&['editing','preparing'].includes(phase)){
-  if(!composer){
-   composeToggle();if(!reading)scroll.append(make('p','terminal-message',message));
-   // Restore the held snapshot before an empty pre can be treated as following.
-   if(readTop!==null&&pre){terminalText(pre,readOutput);pre._preview=readPreview;pre._scrollView=readView;pre.scrollTop=readTop;}
-   refreshOutput();return;
-  }
-  const panel=make('div','reader-composer');panel.setAttribute('role','region');panel.setAttribute('aria-label','Write input');const hide=action('×','reader-compose-close',()=>toggleComposer(false));hide.setAttribute('aria-label','Close input');panel.append(hide);sheet.append(panel);scroll=panel;actionsHost=panel;
-  if(choice)panel.append(paneButton(choice.pane_label+' ⌄'));
+  readerInputBar();if(!reading)scroll.append(make('p','terminal-message',message));refreshOutput();return;
  }
  if(['editing','preparing'].includes(phase)){
   const label=make('label','terminal-compose-label','Your input');label.htmlFor='terminal-text';const field=make('textarea','terminal-text');field.id='terminal-text';field.rows=2;field.value=text;field.placeholder='Write one line…';field.autocomplete='off';field.spellcheck=false;field.disabled=phase==='preparing';
   const count=make('span','',new TextEncoder().encode(text).length+' / 4096 bytes'),meta=make('div','terminal-input-meta');meta.append(make('span','','One line + Enter'),count);
   scroll.append(label,field,meta,make('p','terminal-help',reading?'Sends to '+choice.pane_label+'. Review the destination and exact text before sending.':'Check the terminal above before sending.'));
   const actions=make('div','terminal-actions'),review=action(phase==='preparing'?'Preparing…':'Review input','terminal-primary',reviewInput);review.id='terminal-review';review.disabled=phase==='preparing'||!previewOK||!validText(text);
-  field.oninput=()=>{text=field.value;count.textContent=new TextEncoder().encode(text).length+' / 4096 bytes';review.disabled=!previewOK||!validText(text);};field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};actions.append(action('Cancel','',history?()=>toggleComposer(false):close),review);actionsHost.append(actions);
+  field.oninput=()=>{text=field.value;count.textContent=new TextEncoder().encode(text).length+' / 4096 bytes';review.disabled=!previewOK||!validText(text);};field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};actions.append(action('Cancel','',close),review);actionsHost.append(actions);
  }else if(phase==='review'){
   scroll.append(make('p','terminal-compose-label','Exact text to '+prepared.target.name),make('pre','terminal-exact',prepared.text));const enter=make('div','terminal-enter');enter.append(make('span','','After this text'),make('kbd','','Enter ↵'));scroll.append(enter,make('p','terminal-help','Sends once to this pane. It may be a shell. Existing terminal input may be combined with it.'));
   const actions=make('div','terminal-actions');actions.append(action('Edit','',()=>{cancelIntent();phase='editing';render();}),action('Send once','terminal-primary',send));actionsHost.append(actions);

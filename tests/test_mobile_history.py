@@ -529,6 +529,8 @@ vm.runInNewContext(SOURCE,context);"""),
         assert harness.count(old) == 1, old
         harness = harness.replace(old, new)
     harness = harness.replace("setAttribute(){}", "setAttribute(k,v){this[k]=v;}")
+    harness = harness.replace("setProperty(key,value){this[key]=value;}", "setProperty(key,value){this[key]=value;},getPropertyValue(key){return this[key]||'';}")
+    harness = harness.replace("focus(){}", "focus(){}getBoundingClientRect(){return {height:80};}")
     harness = harness.replace("createElement:t=>new Element(t)", "createElement:t=>new Element(t),createElementNS:(_ns,t)=>new Element(t)")
     harness = harness.replace("document:doc,console", "history:{state:null,pushState(v){this.state=v;},back(){}},document:doc,console")
     source = (ROOT / 'dashboard/mobile/mobile.js').read_text()
@@ -545,15 +547,15 @@ def test_sheet_opens_on_conversation_and_sends_only_through_the_reviewed_termina
       await context.OrreryMobileTerminal.open('ScrollFixture');await settle();
       assert.deepEqual(mounted,['ScrollFixture']);assert.ok(q('#conversation'));
       assert.equal(q('#terminal-output'),null,'conversation tab hides the terminal tail');
-      assert.equal(q('#terminal-text'),null,'no compose before a pane is chosen');
+      assert.equal(q('#terminal-text').disabled,true,'no input before a pane is chosen');
       q('.reader-bar').children.find(b=>b['aria-label']==='Terminal').onclick();await settle();
       button('Pane 1ScrollFixture').onclick();await settle();
       assert.ok(q('#terminal-output'));
       q('.reader-bar').children.find(b=>b['aria-label']==='Conversation').onclick();await settle();
       assert.ok(q('#conversation'));assert.equal(q('#terminal-output'),null);
-      q('.reader-compose-toggle').onclick();
+      q('#terminal-text').onfocus();
       const field=q('#terminal-text');field.value='synthetic line';field.oninput();
-      await button('Review input').onclick();await settle();
+      await q('#terminal-review').onclick();await settle();
       assert.ok(calls.some(c=>c.op==='prepare'),'review uses the existing prepare step');
       assert.ok(!calls.some(c=>c.op==='commit'),'nothing is sent before Send once');
       await button('Send once').onclick();await settle();
@@ -744,12 +746,12 @@ def test_review_from_the_conversation_tab_shows_only_the_target_and_text():
       button('Pane 1ScrollFixture').onclick();await settle();
       const tail=q('#terminal-output').textContent;assert.ok(tail.includes('line'));
       q('.reader-bar').children.find(b=>b['aria-label']==='Conversation').onclick();await settle();
-      q('.reader-compose-toggle').onclick();
+      q('#terminal-text').onfocus();
       const field=q('#terminal-text');field.value='synthetic line';field.oninput();
-      await button('Review input').onclick();await settle();
+      await q('#terminal-review').onclick();await settle();
       assert.equal(q('#terminal-output'),null,'review omits the terminal tail');
       assert.equal(q('.terminal-observed'),null);
-      assert.match(q('.reader-review-target').textContent,/ScrollFixture.*Pane 1/);
+      assert.match(q('.reader-input-target').textContent,/ScrollFixture.*Pane 1/);
       assert.equal(q('.terminal-exact').textContent,'synthetic line');
       assert.ok(button('Send once'));
       context.OrreryMobileTerminal.close();
