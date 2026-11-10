@@ -68,40 +68,49 @@ async function request(token,slot){
 }
 function clock(ts){const d=new Date(ts);return Number.isFinite(d.getTime())?d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'';}
 const markdown=()=>window.OrreryConversationMarkdown;
-function displayModel(value){
- if(typeof value!=='string')return '';const raw=value.trim();
- const claude=/^(?:anthropic[\/:])?claude-([a-z]+)-(\d+)(?:[.-](\d{1,2}))?(?:-\d{8})?$/i.exec(raw);
- if(claude)return claude[1][0].toUpperCase()+claude[1].slice(1)+' '+claude[2]+(claude[3]?'.'+claude[3]:'');
- if(/^gpt-/i.test(raw))return 'GPT-'+raw.slice(4).split('-').map(s=>s?s[0].toUpperCase()+s.slice(1):s).join('-');
- if(/^deepseek[- ]v/i.test(raw))return 'DeepSeek '+raw.replace(/^deepseek[- ]/i,'').replace(/^v/i,'V');
- return raw;
-}
 function paintSpeaker(head){
  const recorded=head.dataset.model||'',profile=window.OrreryMobileProfile?.forName(name,recorded),model=recorded||profile?.model||'';
  const key=JSON.stringify([name,model,profile?.provider,profile?.locality]);if(head.dataset.profile===key)return;head.dataset.profile=key;
  const face=window.OrreryMobileProfile?.face(name,recorded);head.querySelector('.conversation-avatar')?.remove();
  if(face){face.classList.add('conversation-avatar');head.prepend(face);}
  head.querySelector('.conversation-speaker-name').textContent=name;
- const label=head.querySelector('.conversation-speaker-model');label.textContent=displayModel(model);label.hidden=!model;label.title=model;
 }
 function speaker(e){
  const head=make('div','conversation-byline');head.dataset.model=typeof e.model==='string'?e.model:'';
- head.append(make('span','conversation-speaker-name'),make('span','conversation-speaker-model'));
+ head.append(make('span','conversation-speaker-name'));
  const at=clock(e.ts);if(at){const time=make('time','conversation-speaker-time',at);time.dateTime=e.ts;head.append(time);}
  paintSpeaker(head);return head;
 }
 function refreshProfiles(){
  if(!list)return;
+ let mailChanged=false;
  list.querySelectorAll('.conversation-byline').forEach(paintSpeaker);
  for(const mark of list.querySelectorAll('.conversation-mail-mark')){
-  const p=window.OrreryMobileProfile?.forName(mark.dataset.peerName),key=JSON.stringify(p);if(mark.dataset.profile===key)continue;mark.dataset.profile=key;
+  const p=window.OrreryMobileProfile?.forName(mark.dataset.peerName),key=JSON.stringify(p)||'';if(mark.dataset.profile===key)continue;mark.dataset.profile=key;mailChanged=true;
   const face=p&&window.OrreryMobileProfile?.face(mark.dataset.peerName);mark.replaceChildren();mark.hidden=!face;if(face){face.classList.add('conversation-avatar');mark.append(face);}
  }
- layoutMailRoutes();
+ if(mailChanged)layoutMailRoutes();
 }
 function peerWidth(peer){
  const mark=peer.querySelector('.conversation-mail-mark'),label=peer.querySelector('.conversation-mail-peer-name');
  return label.scrollWidth+(mark.hidden?0:mark.getBoundingClientRect().width+5);
+}
+function layoutMailThread(card){
+ const line=card.querySelector('.conversation-mail-thread'),avatar=card.querySelector('.conversation-mail-sender .conversation-avatar');
+ if(card.getAttribute('aria-expanded')!=='true'||!avatar){
+  if(!line.hidden)line.hidden=true;
+  if(card.classList.contains('is-threaded'))card.classList.remove('is-threaded');
+  return;
+ }
+ // Keep the body's inset while measuring: removing it can clamp scrollTop.
+ const box=card.getBoundingClientRect(),face=avatar.getBoundingClientRect();
+ if(!face.width)return;
+ const x=face.left+face.width/2-box.left,inset=(x+16)+'px',left=(x-.5)+'px',top=(face.bottom-box.top+3)+'px';
+ if(card.style.getPropertyValue('--mail-thread-inset')!==inset)card.style.setProperty('--mail-thread-inset',inset);
+ if(line.style.left!==left)line.style.left=left;
+ if(line.style.top!==top)line.style.top=top;
+ if(!card.classList.contains('is-threaded'))card.classList.add('is-threaded');
+ if(line.hidden)line.hidden=false;
 }
 function layoutMailRoutes(){
  if(!list?.isConnected)return;
@@ -124,6 +133,7 @@ function layoutMailRoutes(){
   const shown=new Set(known.slice(0,visible));peers.forEach(p=>p.hidden=!shown.has(p));
   more.style.marginLeft=visible?'6px':'0';
  }
+ for(const card of list.querySelectorAll('.conversation-mail'))layoutMailThread(card);
 }
 function body(text,assistant=false){
  const box=make('div','conversation-text'),m=markdown();
@@ -148,8 +158,9 @@ function mailCard(m,ts){
  card.append(make('div','conversation-mail-label','Mail · '+(m.direction==='received'?'Received':'Sent')),head,subject);
  const detail=make('pre','conversation-mail-body',m.body);detail.hidden=true;
  const note=make('small','conversation-mail-note',m.coverage==='preview'?'Recorded preview only':m.coverage==='unavailable'?'Body not in the record':m.truncated?'Shortened':'Tap to show the recorded body');
- card.append(note,detail);card.setAttribute('aria-expanded','false');
- const closedNote=note.textContent;card.onclick=()=>{detail.hidden=!detail.hidden;card.setAttribute('aria-expanded',String(!detail.hidden));card.querySelector('.conversation-mail-chevron').textContent=detail.hidden?'▸':'▾';note.textContent=detail.hidden?closedNote:'Recorded body · tap to hide';};
+ const line=make('span','conversation-mail-thread');line.hidden=true;line.setAttribute('aria-hidden','true');
+ card.append(note,detail,line);card.setAttribute('aria-expanded','false');
+ const closedNote=note.textContent;card.onclick=()=>{detail.hidden=!detail.hidden;card.setAttribute('aria-expanded',String(!detail.hidden));card.querySelector('.conversation-mail-chevron').textContent=detail.hidden?'▸':'▾';note.textContent=detail.hidden?closedNote:'Recorded body · tap to hide';layoutMailThread(card);};
  return card;
 }
 // The cockpit puts file references on the file tool calls (Read, Write,
