@@ -266,8 +266,6 @@ html.graph-fullscreen #settings{z-index:40}
 .conversation-avatar .badge{right:-3px;bottom:-2px;width:12px;height:12px}
 html[data-color-theme=light] .conversation-byline .provider-logo,html[data-color-theme=light] .conversation-mail-mark .provider-logo{filter:brightness(0)}
 .conversation-speaker-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 12px/1.6 var(--mono)}
-.conversation-speaker-model{flex:0 1000 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-dim);font:10px/1.6 var(--mono)}
-.conversation-speaker-model:before{content:'·';margin-right:7px;color:var(--ink-faint)}
 .mobile .conversation-speaker-time{flex:none;margin-left:auto;white-space:nowrap;font:9px var(--mono);color:var(--ink-dim)}
 
 /* Mail is a route and recorded content, separate from a human message. */

@@ -45,19 +45,30 @@ def test_received_mail_without_recipient_uses_owner_portrait_and_sent_is_explici
     assert js("document.querySelector('[data-id=no-recipient-sent] .conversation-mail-recipients .conversation-mail-peer-name').textContent==='recorded recipient unavailable'")
 
 
-def test_reader_speaker_uses_profile_model_and_missing_portrait_initials(phone):
+def test_reader_speaker_has_no_model_element_or_label(phone):
+    _,js,wait,state=phone
+    state['snapshot']['agents'][0]['model']='gpt-6.1-sol'
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("OrreryMobileProfile.forName('SampleAgent').model==='gpt-6.1-sol'")
+    assert js("document.querySelector('.conversation-speaker-model')===null")
+    assert js("[...document.querySelectorAll('.conversation-byline')].every(e=>!e.textContent.includes('GPT-6.1-Sol'))")
+    assert js("document.querySelector('.conversation-avatar')!==null&&document.querySelector('.conversation-byline time').textContent.length>0")
+
+
+def test_reader_speaker_keeps_provider_identity_and_missing_portrait_initials(phone):
     _, js, wait, state = phone
     assert js("document.querySelector('[data-id=question] .conversation-speaker-name')?.textContent==='SampleAgent'")
     wait("document.querySelector('[data-id=question] .conversation-avatar .initials')!==null")
     assert js("document.querySelector('[data-id=question] .conversation-avatar .initials').textContent==='S'")
     state['snapshot']['agents'][0].update(model='gpt-6.1-sol')
     js("document.dispatchEvent(new Event('visibilitychange'))")
-    wait("document.querySelector('[data-id=question] .conversation-speaker-model')?.textContent==='GPT-6.1-Sol'")
+    wait("OrreryMobileProfile.forName('SampleAgent').model==='gpt-6.1-sol'")
+    assert js("document.querySelector('.conversation-speaker-model')===null")
     assert js("document.querySelector('[data-id=question] .conversation-byline time').textContent.length>0")
     assert js("document.querySelector('[data-id=question] .conversation-avatar [data-provider=openai]')!==null")
     state['events'].append(dict(id='recorded-model',kind='text',role='assistant',text='Recorded reply',model='claude-opus-5-5',ts=''))
     wait("document.querySelector('[data-id=recorded-model]')!==null",8)
-    assert js("document.querySelector('[data-id=recorded-model] .conversation-speaker-model').textContent==='Opus 5.5'")
+    assert js("document.querySelector('[data-id=recorded-model] .conversation-speaker-model')===null")
     assert js("document.querySelector('[data-id=recorded-model] [data-provider=anthropic]')!==null")
 
 

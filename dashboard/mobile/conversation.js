@@ -68,25 +68,16 @@ async function request(token,slot){
 }
 function clock(ts){const d=new Date(ts);return Number.isFinite(d.getTime())?d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'';}
 const markdown=()=>window.OrreryConversationMarkdown;
-function displayModel(value){
- if(typeof value!=='string')return '';const raw=value.trim();
- const claude=/^(?:anthropic[\/:])?claude-([a-z]+)-(\d+)(?:[.-](\d{1,2}))?(?:-\d{8})?$/i.exec(raw);
- if(claude)return claude[1][0].toUpperCase()+claude[1].slice(1)+' '+claude[2]+(claude[3]?'.'+claude[3]:'');
- if(/^gpt-/i.test(raw))return 'GPT-'+raw.slice(4).split('-').map(s=>s?s[0].toUpperCase()+s.slice(1):s).join('-');
- if(/^deepseek[- ]v/i.test(raw))return 'DeepSeek '+raw.replace(/^deepseek[- ]/i,'').replace(/^v/i,'V');
- return raw;
-}
 function paintSpeaker(head){
  const recorded=head.dataset.model||'',profile=window.OrreryMobileProfile?.forName(name,recorded),model=recorded||profile?.model||'';
  const key=JSON.stringify([name,model,profile?.provider,profile?.locality]);if(head.dataset.profile===key)return;head.dataset.profile=key;
  const face=window.OrreryMobileProfile?.face(name,recorded);head.querySelector('.conversation-avatar')?.remove();
  if(face){face.classList.add('conversation-avatar');head.prepend(face);}
  head.querySelector('.conversation-speaker-name').textContent=name;
- const label=head.querySelector('.conversation-speaker-model');label.textContent=displayModel(model);label.hidden=!model;label.title=model;
 }
 function speaker(e){
  const head=make('div','conversation-byline');head.dataset.model=typeof e.model==='string'?e.model:'';
- head.append(make('span','conversation-speaker-name'),make('span','conversation-speaker-model'));
+ head.append(make('span','conversation-speaker-name'));
  const at=clock(e.ts);if(at){const time=make('time','conversation-speaker-time',at);time.dateTime=e.ts;head.append(time);}
  paintSpeaker(head);return head;
 }
