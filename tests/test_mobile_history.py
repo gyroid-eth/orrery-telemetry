@@ -426,7 +426,7 @@ def test_phone_tool_group_range_uses_earliest_and_latest_when_middle_arrives_lat
 def test_conversation_source_has_no_html_sinks():
     import re
     source = re.sub(r'/\*.*?\*/', '', (ROOT / 'dashboard/mobile/conversation.js').read_text(), flags=re.S)
-    # The one image source is the checked PNG data URL; closing clears it.
+    # Preview and thumbnails share the checked PNG source and cleanup.
     assert source.count('.src=') == 2 and "img.src=pngSource(v);" in source and "img.src='';" in source
     assert source.count("'data:image/png;base64,'+v.data") == 1
     source = source.replace('img.src=pngSource(v);', '').replace("img.src='';", '')
