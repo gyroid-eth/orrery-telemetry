@@ -34,6 +34,32 @@ def fixture_for(harness):
         fixture.doCleanups()
 
 
+@pytest.mark.parametrize('provider', ['exa', 'searxng'])
+def test_fresh_telegram_bot_keeps_web_search_and_both_credential_references(provider):
+    with fixture_for('hermes') as f:
+        client = f.base / 'fresh-client'
+        client.mkdir()
+        (client / 'context.json').write_text('{}')
+        document = dict(f.document, fresh_client_dir=str(client), web_search=provider,
+            telegram={'token_ref': {'store': 'keychain', 'service': 'fixture.telegram',
+                                   'account': 'fixture'}, 'allow_from': [123]})
+        manifest = json.loads(f.manifest.read_text())
+        manifest['web_search'] = SETTINGS
+        f.manifest.write_text(json.dumps(manifest))
+        plan = hermes.config.generate(document)
+        overlay = hermes.config.read(Path(plan['config_dir']) / 'config.yaml')
+        definitions = hermes.config.read(Path(plan['env']['AGENTSTACK_LLM_KEY_DEFINITIONS']))
+        assert '--tui' in plan['argv']
+        assert overlay['telegram'] == document['telegram']
+        assert 'orrery-telegram' in overlay['plugins']['enabled']
+        assert overlay['web']['search_backend'] == ('orrery-searxng' if provider == 'searxng' else 'exa')
+        assert set(definitions['backends']) == {'hermes', 'telegram', 'web-search'}
+        if provider == 'searxng':
+            assert 'orrery-web-search' in overlay['plugins']['enabled']
+        else:
+            assert overlay['secrets']['command']['enabled']
+
+
 @pytest.mark.parametrize('harness', ['dsh', 'hermes'])
 @pytest.mark.parametrize('provider', ['exa', 'searxng', None])
 def test_shared_settings_and_launch_override_without_credential_or_network(harness, provider):

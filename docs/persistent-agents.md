@@ -52,6 +52,57 @@ launcher が provider の終了を確認して `ended.json` を記録した後�
 Mac の bot process の再起動と機体再起動は別です。Mac／WSL の機体再起動・自動 unlock は
 未受入で、この手順だけで対応済みとはしません。通常の旧 profile は次の enrollment 手順を使います。
 
+## fresh の Hermes Telegram（interactive）
+
+Hermes も準備済みの同じ登録を使います。本物の `hermes chat --tui` に同梱の
+`orrery-telegram` plugin を載せ、Telegram の受信を生きた TUI へ入れます。
+返信は `telegram_reply` tool、Mail は bound proxy と標準 watcher、端末からの入力は同じ TUI です。
+独自の gateway や headless bridge は起動しません。
+
+```json
+{
+  "kind": "orrery-fresh-persistent-v1",
+  "context": "/path/to/prepared/context.json",
+  "provider": "hermes",
+  "working_directory": "/path/to/workspace",
+  "model": "configured-model-id",
+  "managed": {
+    "manifest_file": "/path/to/native-manifest.json",
+    "backend_id": "deepseek"
+  },
+  "telegram": {
+    "token_ref": {"store": "keychain", "service": "telegram-bot", "account": "owner"},
+    "allow_from": [123456789]
+  }
+}
+```
+
+profile は `0600`、context と Hermes HOME は Linux／Mac の私有 filesystem に置きます。
+allowlist の数字は例で、自分の Telegram user ID に置き換えてください。group の受信は対象外です。
+Mac は本人が Keychain に保存した参照、Linux／WSL は
+`{"store":"secret-service","attributes":{"application":"telegram-bot"}}` のような
+既存の [Secret Service 参照](install.md#ubuntu-wsl-の-secret-service-参照実機受け入れ前)を使います。
+値を profile や環境へ入れません。plugin が process 内で読み、通常の鍵読み取り guard にも参照を渡します。
+provider は通常の子と同じ manifest・`key_cmd`・設定生成器を使います。
+
+本人が provider の設定・hook／plugin の承認を済ませてから、上と同じ `inspect`／`run` を使います。
+Hermes HOME は context の隣の `providers/hermes` です。必要な非秘密の personality／設定は
+起動前に本人が置き、古い Mail MCP・鍵の値・旧 token をコピーしないでください。
+常駐登録は既存の launchd／systemd user unit から同じ foreground launcher を起動します。
+新しい service の自動登録はありません。Linux／WSL は user bus と Secret Service の unlock が前提です。
+`/mnt/c` は私有 runtime の既定保存先にしません。
+
+停止・再起動と会話変更の規則は Channels と共通です。Hermes の停止時は、その起動が所有する
+TUI／backend を起動中から観測し、通常終了でも子の終了を確認してから `ended.json` を残します。
+この run の独立した前景 pane／job の process group が必要です。子が残る・観測できない場合は unknown で止めます。
+`logs/telegram-status.json` の `telegram-ready` は poller の準備であり、Mail や返信の成功を保証しません。
+409・credential-unavailable・allowlist-empty は失敗として扱い、新旧の同 token を並走させません。
+
+既知の制限: 既存 plugin の並行 flush と、長文返信の途中失敗による部分返信は今回直していません。
+Hermes の子が別 session に離れて残ったまま起動役が終わると、その子が終わるまで新しい bot は Telegram を受けない（profile ごとの lock で二重受信は起きない）。
+新 run は新会話で、旧会話の自動復元はありません。合成 transport／native による試験と実 Telegram の
+受け入れは別です。実 provider／Telegram の往復、WSL 実機、Mac／WSL の機体再起動は未受入です。
+
 ## 保証範囲
 
 ここでいう **operator** は、この機体の local terminal で専用 CLI を明示的に実行する人です。実装が保証するのは次の範囲です。

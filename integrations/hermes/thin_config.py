@@ -317,6 +317,12 @@ def child_home(document, facts=None):
 
 def generate(document):
     facts = validate_input(document)
+    telegram = document.get('telegram')
+    if telegram is not None:
+        settings = runpy.run_path(str(Path(__file__).with_name('telegram') / 'settings.py'))
+        telegram = settings['validate'](telegram)
+        if 'fresh_client_dir' not in document or document.get('resume_session_id') is not None:
+            raise ValueError('invalid_input')
     search = None
     search_manifest = CONNECTIONS['read_manifest'](document['manifest_file'])
     if document.get('web_search') or search_manifest.get('web_search', {}).get('provider'):
@@ -385,6 +391,10 @@ def generate(document):
             raise ValueError('owned_link_conflict')
         _save(plugin / 'plugin.yaml', manifest)
         _link(plugin / '__init__.py', product / 'integrations/hermes/thin_guard.py')
+        if telegram is not None:
+            target = profile / 'plugins/orrery-telegram'
+            for name in ('__init__.py', 'managed_guard.py', 'settings.py', 'plugin.yaml'):
+                _link(target / name, product / 'integrations/hermes/telegram' / name)
         skills = Path(document.get('skills_root') or product / 'skills').resolve()
         for source in skills.glob('*/SKILL.md'):
             _link(profile / 'skills' / source.parent.name, source.parent)
@@ -409,6 +419,9 @@ def generate(document):
                           for task in tasks},
             'delegation': _helper_route(native_provider, facts['helper_model']),
         }
+        if telegram is not None:
+            overlay['telegram'] = telegram
+            overlay['plugins']['enabled'].append('orrery-telegram')
         if search:
             settings_file = state / 'web-search.json'
             _save(settings_file, search)
@@ -449,14 +462,18 @@ def generate(document):
             _save(profile / 'config.yaml', raw)
         _save(state / 'overlay/config.yaml', overlay)
     definitions = state / 'credential-references.json'
-    _save(definitions, {'backends': {'hermes': {
+    references = {'hermes': {
         'auth_command': shlex.split(facts['route']['key_cmd']),
-        **({'credential_ref': facts['credential_ref']} if facts['credential_ref'] is not None else {})}}})
+        **({'credential_ref': facts['credential_ref']} if facts['credential_ref'] is not None else {})}}
+    if telegram is not None:
+        ref = telegram['token_ref']
+        references['telegram'] = ({'keychain': {key: ref[key] for key in ('service', 'account')}}
+                                  if ref['store'] == 'keychain' else {'credential_ref': ref})
     if search:
-        entries = read(definitions)
-        entries['backends']['web-search'] = web['definition'](search, reader)
-        _save(definitions, entries)
+        references['web-search'] = web['definition'](search, reader)
+    _save(definitions, {'backends': references})
     argv = [facts['executable'], 'chat', '--provider', native_provider, '--model', facts['model']]
+    if telegram is not None:argv.append('--tui')
     if document.get('effort') is not None:
         argv.extend(['--reasoning', document['effort']])
     if document.get('resume_session_id') is not None:

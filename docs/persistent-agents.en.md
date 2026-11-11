@@ -52,6 +52,58 @@ Never run old and new pollers with the same Telegram token; verify that the old 
 Bot process restart differs from machine restart. Mac/WSL machine reboot and automatic unlock
 remain unverified. Legacy profiles continue to use the enrollment procedure below.
 
+## Fresh Hermes Telegram (interactive)
+
+Use the same prepared registration with the native `hermes chat --tui` and the bundled
+`orrery-telegram` plugin. Incoming Telegram DMs enter that live TUI; replies use the
+`telegram_reply` tool. Bound Mail, the standard watcher, and terminal input share the same TUI.
+No separate gateway or headless bridge is started.
+
+```json
+{
+  "kind": "orrery-fresh-persistent-v1",
+  "context": "/path/to/prepared/context.json",
+  "provider": "hermes",
+  "working_directory": "/path/to/workspace",
+  "model": "configured-model-id",
+  "managed": {
+    "manifest_file": "/path/to/native-manifest.json",
+    "backend_id": "deepseek"
+  },
+  "telegram": {
+    "token_ref": {"store": "keychain", "service": "telegram-bot", "account": "owner"},
+    "allow_from": [123456789]
+  }
+}
+```
+
+Keep the profile at `0600`, with the context and Hermes HOME on a private Linux/macOS filesystem.
+Replace the example number with your Telegram user ID; group messages are excluded.
+On macOS, store the token yourself in Keychain. Linux/WSL uses the existing
+[Secret Service reference](install.en.md#ubuntu-wsl-secret-service-references-real-machine-acceptance-pending),
+for example `{"store":"secret-service","attributes":{"application":"telegram-bot"}}`.
+Keep values out of profiles and environments. The plugin reads the value in-process;
+the same reference enters the ordinary credential-read guard. Provider selection, `key_cmd`,
+and config generation reuse the ordinary managed-child path.
+
+Prepare the provider and personally approve hooks/plugins before using the same `inspect`/`run` commands.
+Hermes HOME is `providers/hermes` beside the context. Place any non-secret personality/settings there
+before launch; do not copy old Mail MCP definitions, credential values, or legacy tokens.
+An existing launchd/systemd user unit can run this foreground launcher; no service is registered automatically.
+Linux/WSL requires the user bus and an unlocked Secret Service. Do not default private runtime state to `/mnt/c`.
+
+Stop/restart and session changes follow the Channels rules. A requested Hermes stop also waits for
+that launch's TUI/backend descendants from startup through normal exit before writing `ended.json`.
+The foreground pane/job must give this run its own process group; surviving children or unavailable observation leave it unknown.
+`telegram-ready` in `logs/telegram-status.json` means the poller is ready, not that Mail or replies succeeded.
+Treat 409, credential-unavailable, and allowlist-empty as failures. Never overlap old/new pollers for one token.
+
+Known limits: the existing plugin's concurrent flush and partial long replies after a send failure are unchanged.
+If a Hermes child detaches into another session and outlives its launcher, a new bot cannot receive Telegram until that child exits (the per-profile lock prevents duplicate reception).
+Each run starts a new conversation; old conversations are not automatically restored. Synthetic transport/native
+tests are separate from real Telegram acceptance. Real provider/Telegram round trips, real WSL, and machine
+reboots on macOS/WSL remain unverified.
+
 ## Scope of the guarantee
 
 An **operator** here means a person who explicitly runs the dedicated CLI in a local terminal on this machine. The implementation guarantees only:
