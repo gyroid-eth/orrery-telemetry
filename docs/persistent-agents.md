@@ -99,6 +99,7 @@ TUI／backend を起動中から観測し、通常終了でも子の終了を確
 409・credential-unavailable・allowlist-empty は失敗として扱い、新旧の同 token を並走させません。
 
 既知の制限: 既存 plugin の並行 flush と、長文返信の途中失敗による部分返信は今回直していません。
+Hermes の子が別 session に離れて残ったまま起動役が終わると、その子が終わるまで新しい bot は Telegram を受けない（profile ごとの lock で二重受信は起きない）。
 新 run は新会話で、旧会話の自動復元はありません。合成 transport／native による試験と実 Telegram の
 受け入れは別です。実 provider／Telegram の往復、WSL 実機、Mac／WSL の機体再起動は未受入です。
 

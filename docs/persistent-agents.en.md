@@ -99,6 +99,7 @@ The foreground pane/job must give this run its own process group; surviving chil
 Treat 409, credential-unavailable, and allowlist-empty as failures. Never overlap old/new pollers for one token.
 
 Known limits: the existing plugin's concurrent flush and partial long replies after a send failure are unchanged.
+If a Hermes child detaches into another session and outlives its launcher, a new bot cannot receive Telegram until that child exits (the per-profile lock prevents duplicate reception).
 Each run starts a new conversation; old conversations are not automatically restored. Synthetic transport/native
 tests are separate from real Telegram acceptance. Real provider/Telegram round trips, real WSL, and machine
 reboots on macOS/WSL remain unverified.
