@@ -75,6 +75,7 @@ def route(client):
     if set(current) != {'launch_id'}:raise B1Error('FRESH_TMUX_TARGET_CHANGED')
     run = base / 'runs' / native_id(current['launch_id']);_directory(run)
     if (run / 'ended.json').exists():raise B1Error('FRESH_TMUX_TARGET_ENDED')
+    if (run / 'restart-required.json').exists():raise B1Error('FRESH_BOT_RESTART_REQUIRED')
     intent, observed, row = (_read_private(run / name) for name in ('intent.json','session.json','tmux.json'))
     for value in (intent, observed, row):pinned(client, value)
     if (row.get('kind') != 'orrery-fresh-tmux-route-v1'
@@ -184,6 +185,7 @@ async def deliver(client, wrapper_root):
                 transport, _ = target(client, wrapper_root, captured, readiness=False)
                 submitted = transport.command('send-keys','-t',captured['pane']['pane_id'],'C-m')
                 if submitted.returncode:raise B1Error('FRESH_TMUX_SUBMIT_UNKNOWN')
+                if route(client)[0] != captured:raise B1Error('FRESH_TMUX_TARGET_CHANGED')
                 await client.call('notification_complete', {'message_id':mid})
                 path.unlink();count += 1
             finally:

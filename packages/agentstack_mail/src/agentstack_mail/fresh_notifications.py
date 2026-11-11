@@ -140,6 +140,7 @@ def current_hook(client, payload):
     run = base / 'runs' / launch_id
     _directory(run)
     intent = _read_private(run / 'intent.json');pinned(client, intent)
+    if (run / 'restart-required.json').exists():raise B1Error('FRESH_BOT_RESTART_REQUIRED')
     receipt = _read_private(run / 'session.json');pinned(client, receipt)
     if (intent['provider'] != 'claude' or receipt.get('provider') != 'claude'
             or receipt.get('launch_id') != launch_id
