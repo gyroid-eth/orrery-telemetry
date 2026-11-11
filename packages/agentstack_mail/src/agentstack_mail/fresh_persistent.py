@@ -94,17 +94,28 @@ def request_restart(client, payload):
 
 
 def wait_provider(process, run, *, wrapper_root=None):
-    """Only a requested, observed stop may end a persistent run after a signal."""
+    """Observe this bot's children through normal exit as well as requested stop."""
     observation = (runpy.run_path(str(Path(wrapper_root) / 'bin/lib/process_observation.py'))
                    if wrapper_root is not None else None)
     descendants = {}
+    # The owned foreground pane/job supplies one process group for this run.
+    # It also identifies a short-lived wrapper's reparented TUI children.
+    group = os.getpid()
+    if observation is not None and os.getpgrp() != group:
+        raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
 
     def remaining():
-        if not descendants:return {}
-        rows = observation['process_snapshot']()
+        if observation is None:return {}
+        rows = observation['process_snapshot'](include_groups=True)
         if rows is None:raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
+        for pid, row in rows.items():
+            if pid in {process.pid, os.getpid()} or row[1] != os.getuid():continue
+            # The observer's ps is a direct child of this launcher, not the TUI.
+            grouped = row[3] == group and row[0] != os.getpid()
+            if grouped or observation['snapshot_belongs_to'](rows, pid, process.pid, os.getuid()):
+                descendants[pid] = row[2]
         return {pid: birth for pid, birth in descendants.items()
-                if pid in rows and rows[pid][1:] == (os.getuid(), birth)}
+                if pid in rows and rows[pid][1:3] == (os.getuid(), birth)}
 
     previous = {}
     stopping = None
@@ -112,39 +123,39 @@ def wait_provider(process, run, *, wrapper_root=None):
     restarted = False
 
     def stop(signum, _frame):
-        nonlocal stopping, requested_signal, descendants
+        nonlocal stopping, requested_signal
         if stopping is None:
             stopping = time.monotonic()
+            for pid in remaining():
+                try:os.kill(pid, signum)
+                except ProcessLookupError:pass
             try:
-                if observation is not None:
-                    rows = observation['process_snapshot']()
-                    if rows is None:raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
-                    descendants = {pid: row[2] for pid, row in rows.items() if pid != process.pid
-                        and observation['snapshot_belongs_to'](rows, pid, process.pid, os.getuid())}
-                    for pid in remaining():
-                        try:os.kill(pid, signum)
-                        except ProcessLookupError:pass
                 process.send_signal(signum)
                 requested_signal = signum
-            except ProcessLookupError:stopping = None
+            except ProcessLookupError:pass
 
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
             previous[sig] = signal.signal(sig, stop)
-        while process.poll() is None or remaining():
+        while True:
+            alive = process.poll() is None
+            children = remaining()
+            if not alive:
+                if not children:break
+                if stopping is None:raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
             if (run / 'restart-required.json').exists() and stopping is None:
                 restarted = True
                 stop(signal.SIGTERM, None)
             if stopping is not None and time.monotonic() - stopping > 15:
-                for pid in remaining():
+                for pid in children:
                     try:os.kill(pid, signal.SIGKILL)
                     except ProcessLookupError:pass
                 if process.poll() is None:process.kill()
                 process.wait()
                 raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
-            if process.poll() is not None:time.sleep(0.1)
+            if not alive:time.sleep(0.1)
             else:
-                try:process.wait(timeout=0.1)
+                try:process.wait(timeout=1 if observation is not None else 0.1)
                 except subprocess.TimeoutExpired:pass
         code = process.wait()
         if code != 0 and (requested_signal is None or code not in {-requested_signal, 128 + requested_signal}):

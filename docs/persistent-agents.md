@@ -93,7 +93,8 @@ Hermes HOME は context の隣の `providers/hermes` です。必要な非秘密
 `/mnt/c` は私有 runtime の既定保存先にしません。
 
 停止・再起動と会話変更の規則は Channels と共通です。Hermes の停止時は、その起動が所有する
-TUI／backend の終了も待ってから `ended.json` を残します。観測できない場合は unknown で止めます。
+TUI／backend を起動中から観測し、通常終了でも子の終了を確認してから `ended.json` を残します。
+この run の独立した前景 pane／job の process group が必要です。子が残る・観測できない場合は unknown で止めます。
 `logs/telegram-status.json` の `telegram-ready` は poller の準備であり、Mail や返信の成功を保証しません。
 409・credential-unavailable・allowlist-empty は失敗として扱い、新旧の同 token を並走させません。
 

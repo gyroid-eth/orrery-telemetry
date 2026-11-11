@@ -93,7 +93,8 @@ An existing launchd/systemd user unit can run this foreground launcher; no servi
 Linux/WSL requires the user bus and an unlocked Secret Service. Do not default private runtime state to `/mnt/c`.
 
 Stop/restart and session changes follow the Channels rules. A requested Hermes stop also waits for
-that launch's TUI/backend descendants before writing `ended.json`; unavailable observation leaves it unknown.
+that launch's TUI/backend descendants from startup through normal exit before writing `ended.json`.
+The foreground pane/job must give this run its own process group; surviving children or unavailable observation leave it unknown.
 `telegram-ready` in `logs/telegram-status.json` means the poller is ready, not that Mail or replies succeeded.
 Treat 409, credential-unavailable, and allowlist-empty as failures. Never overlap old/new pollers for one token.
 
