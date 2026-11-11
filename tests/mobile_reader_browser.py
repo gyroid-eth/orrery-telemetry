@@ -6,6 +6,7 @@ import socket
 import threading
 import time
 import urllib.request
+from urllib.parse import parse_qs, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -58,7 +59,8 @@ def phone(request):
             if path == '/view/snapshot':
                 return self.send(snapshot)
             if path == '/view/conversation':
-                return self.send(dict(ok=False, error=state['error']) if state['error'] else dict(ok=True, agent='SampleAgent', events=state['events'], older=None, limited=False, tail_only=False))
+                agent=parse_qs(urlsplit(self.path).query).get('name',['SampleAgent'])[0]
+                return self.send(dict(ok=False, error=state['error']) if state['error'] else dict(ok=True, agent=agent, events=state['events'], older=None, limited=False, tail_only=False))
             if path == '/view/terminal':
                 return self.send(dict(contract, api=31, supported='legacy-managed-pane', enabled=True, ack='tmux-command-accepted'))
             if path == '/view/conversation/preview':
