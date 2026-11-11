@@ -18,6 +18,7 @@ let panel=null,saveUrl='',previewFocus=null,previewRequest=null,previewRetry=fal
 let events=[],seen=new Set(),older=null,pending=[],failures=0,loadingOlder=false,following=true,savedTop=0;
 let mailResize=null,mailWidth=0;
 let toolGroups=[],toolGroupFor=new Map(),toolSerial=0;
+const thumbnails=new Map();let thumbnailObserver=null;
 const messages={
  history_unconfirmed:'This agent’s record is not verified as its own, so history stays hidden.',
  history_stale:'The verified record predates this launch, so history stays hidden.',
@@ -184,6 +185,67 @@ function chip(x){
  const b=make('button','conversation-chip '+x.kind+' previewable',label);b.type='button';
  b.setAttribute('aria-label','Preview '+x.label);b.onclick=()=>openPreview(x);return b;
 }
+/* Shown files stay in the conversation even when the original tool chip is
+   folded. The relay marks only the exact show_files tool; references and
+   image bytes still come from the existing preview grant. */
+function shownFiles(e){
+ if(e.shown!==true||!Array.isArray(e.files)||!e.files.length)return null;
+ const box=make('div','conversation-shown-files');box.dataset.shownFor=e.id;
+ for(const x of e.files){
+  if(x.kind!=='image'||typeof x.ref!=='string'||!REF.test(x.ref)){
+   box.append(make('span','conversation-chip',x.label));continue;
+  }
+  const button=make('button','conversation-thumbnail');button.type='button';button.setAttribute('aria-label','画像を拡大: '+x.label);
+  const image=make('img','conversation-thumbnail-image');image.alt=x.label;image.hidden=true;
+  const hint=make('small','conversation-thumbnail-status','画像を読み込み中…');
+  button.append(image,make('span','conversation-thumbnail-label',x.label),hint);button.onclick=()=>openPreview(x);box.append(button);
+  const item={button,image,hint,x,state:'waiting',visible:typeof IntersectionObserver!=='function',controller:null};thumbnails.set(button,item);
+  if(typeof IntersectionObserver==='function'){
+   if(!thumbnailObserver)thumbnailObserver=new IntersectionObserver(entries=>{
+    for(const entry of entries){const item=thumbnails.get(entry.target);if(item)item.visible=entry.isIntersecting;}
+    loadThumbnails();
+   },{root:list,rootMargin:'160px'});
+   thumbnailObserver.observe(button);
+  }
+ }
+ return box;
+}
+function forgetThumbnails(node){
+ for(const [button,item] of thumbnails)if(!node||node.contains(button)){
+  item.controller?.abort();thumbnailObserver?.unobserve(button);clearImage(item.image);thumbnails.delete(button);
+ }
+ if(!node){thumbnailObserver?.disconnect();thumbnailObserver=null;}
+}
+function clearImage(img){img.src='';}
+function paintImage(img,v){img.src=pngSource(v);}
+function loadThumbnails(){
+ if(!root||document.hidden)return;
+ let active=[...thumbnails.values()].filter(x=>x.state==='loading').length;
+ for(const item of thumbnails.values()){
+  if(active>=2)break;
+  if(item.state!=='waiting'||!item.visible||!item.button.isConnected)continue;
+  active++;loadThumbnail(item);
+ }
+}
+async function loadThumbnail(item){
+ const g=gen,c=new AbortController();item.controller=c;item.state='loading';
+ const t=setTimeout(()=>c.abort(),WAIT);let value=null;
+ try{
+  const response=await fetch('/view/conversation/preview?name='+encodeURIComponent(name)+'&ref='+item.x.ref+'&thumbnail=1',
+   {credentials:'same-origin',cache:'no-store',referrerPolicy:'no-referrer',signal:c.signal});
+  const raw=await response.text();if(raw.length>MAX_PREVIEW_BYTES)throw Error('unavailable');
+  if(response.ok)value=JSON.parse(raw);
+ }catch(_){}finally{clearTimeout(t);item.controller=null;}
+ if(!thumbnails.has(item.button))return;
+ if(g!==gen||document.hidden){item.state='waiting';loadThumbnails();return;}
+ if(value?.ok===true&&pngSource(value)){
+  paintImage(item.image,value);item.image.hidden=false;item.hint.textContent='タップして拡大';item.state='done';
+ }else{item.hint.textContent='画像を取得できません。タップして開く';item.state='failed';}
+ // Keep only a small number of decoded thumbnails as the reader scrolls.
+ const loaded=[...thumbnails.values()].filter(x=>x.state==='done');
+ for(const old of loaded){if(loaded.filter(x=>x.state==='done').length<=24)break;if(!old.visible){clearImage(old.image);old.image.hidden=true;old.state='waiting';}}
+ loadThumbnails();
+}
 /* Checked again here: a PNG data URL from strict base64 within the relay's
    side and pixel limits. */
 function pngSource(v){
@@ -194,7 +256,7 @@ function pngSource(v){
 function closePreview(restoreFocus=false){
  controllers.preview?.abort();controllers.preview=null;dropSave();
  previewRequest=null;previewRetry=false;
- if(panel){for(const img of panel.querySelectorAll('img'))img.src='';panel.replaceChildren();panel.remove();}
+ if(panel){for(const img of panel.querySelectorAll('img'))clearImage(img);panel.replaceChildren();panel.remove();}
  panel=null;
  if(restoreFocus&&previewFocus?.isConnected)previewFocus.focus?.({preventScroll:true});previewFocus=null;
 }
@@ -248,7 +310,7 @@ async function openPreview(x){
   const text=v.text;saveButton(head,close,x.label,()=>new Blob([text],{type:'text/plain;charset=utf-8'}));
  }else if(v?.ok===true&&pngSource(v)){
   const img=make('img','conversation-preview-image');img.alt=x.label;img.width=v.width;img.height=v.height;
-  img.src=pngSource(v);state.textContent='';view.append(img);
+  paintImage(img,v);state.textContent='';view.append(img);
   const data=v.data,blob=()=>new Blob([pngBytes(data)],{type:'image/png'});blob.image=true;saveButton(head,close,x.label,blob);
  }else{
   state.textContent=previewMessages[v?.error]||messages[v?.error]||'Preview unavailable right now.';return;
@@ -258,7 +320,7 @@ async function openPreview(x){
 function atBottom(){return !list||(list.isConnected?list.scrollHeight-list.clientHeight-list.scrollTop<=24:following);}
 /* The sheet rebuilds its children; detaching resets scrollTop. Restore the
    reader's place (or the tail) after each reattachment. */
-function restore(){if(!list||!list.isConnected)return;list.scrollTop=following?list.scrollHeight:savedTop;}
+function restore(){if(!list||!list.isConnected)return;list.scrollTop=following?list.scrollHeight:savedTop;loadThumbnails();}
 function setStatus(text){if(!status)return;status.textContent=text;
  // Routine explanations live in Information; failures remain on the surface.
  status.hidden=/^(?:Read-only record · updating|Latest record · updating|New messages below · paused while you read)$/.test(text);
@@ -331,7 +393,9 @@ function regroupTools(focused=toolGroups.find(g=>g.button===document.activeEleme
   for(const row of run)row.hidden=!open;
   groups.push(group);run=[];
  };
- for(const row of [...list.children].filter(r=>r.dataset.id!==undefined)){
+ for(const row of [...list.children]){
+  if(row.className==='conversation-shown-files'){finish();continue;}
+  if(row.dataset.id===undefined)continue;
   const e=byId.get(row.dataset.id);
   if(e?.kind==='tool'&&!e.mail?.length)run.push(row);else{finish();row.hidden=false;}
  }
@@ -345,6 +409,7 @@ function clearToolGroups(){
  toolGroups=[];toolGroupFor.clear();toolSerial=0;
 }
 function dropEvent(id){
+ const shown=list.querySelector('[data-shown-for="'+CSS.escape(id)+'"]');if(shown){forgetThumbnails(shown);shown.remove();}
  const node=list.querySelector('[data-id="'+CSS.escape(id)+'"]');if(!node)return;
  // A group can outlive its oldest member at the 200-event limit. Promote
  // retained output before removing that member, so its text is not lost.
@@ -355,7 +420,7 @@ function dropEvent(id){
 }
 function append(page){
  const follow=atBottom(),fresh=page.filter(e=>!seen.has(e.id));
- for(const e of fresh){seen.add(e.id);events.push(e);list.insertBefore(row(e),list.querySelector(':scope > .conversation-pending'));}
+ for(const e of fresh){seen.add(e.id);events.push(e);const anchor=list.querySelector(':scope > .conversation-pending');list.insertBefore(row(e),anchor);const shown=shownFiles(e);if(shown)list.insertBefore(shown,anchor);}
  let dropped=false;
  while(events.length>MAX_KEPT){const gone=events.shift();seen.delete(gone.id);dropEvent(gone.id);older=null;dropped=true;}
  groupShellRows();
@@ -367,6 +432,7 @@ function append(page){
  settlePending();renderPending();activity();
  if(follow){following=true;list.scrollTop=list.scrollHeight;}
  else if(fresh.length)setStatus('New messages below · paused while you read');
+ loadThumbnails();
 }
 /* An older page is oldest-first. At the kept limit keep its newest part, the
    part next to what is shown, and stop offering older pages so no gap opens. */
@@ -377,14 +443,15 @@ function prepend(page,omitted){
  let fresh=page.filter(e=>!seen.has(e.id));const room=Math.max(0,MAX_KEPT-events.length);
  if(fresh.length>room){fresh=room?fresh.slice(-room):[];older=null;setStatus(messages.kept_limit);}
  if(omitted)list.insertBefore(gap(),first);
- for(const e of fresh){seen.add(e.id);list.insertBefore(row(e),first);}
+ for(const e of fresh){seen.add(e.id);list.insertBefore(row(e),first);const shown=shownFiles(e);if(shown)list.insertBefore(shown,first);}
  events=fresh.concat(events);
  groupShellRows();
  regroupTools();
  refreshProfiles();
  list.scrollTop+=list.scrollHeight-before;following=false;savedTop=list.scrollTop;
+ loadThumbnails();
 }
-function reset(){closePreview();clearToolGroups();events=[];seen.clear();older=null;list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());}
+function reset(){closePreview();forgetThumbnails();clearToolGroups();events=[];seen.clear();older=null;list.querySelectorAll(':scope > .conversation-shown-files').forEach(x=>x.remove());list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());}
 function slow(on){if(retryButton)retryButton.hidden=!on;if(on)setStatus(messages.history_slow);}
 function showError(v){
  const code=typeof v?.error==='string'?v.error:'history_unavailable';
@@ -443,7 +510,7 @@ function mount(n){
 function element(){return root;}
 function addPending(text){if(!root||typeof text!=='string'||!text.trim())return;pending.push({text,at:Date.now(),before:new Set(seen)});renderPending();following=true;restore();}
 function unmount(){
- gen++;clearTimeout(timer);timer=0;closePreview();for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
+ gen++;clearTimeout(timer);timer=0;closePreview();forgetThumbnails();for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
  mailResize?.disconnect();mailResize=null;mailWidth=0;
  clearToolGroups();
  root?.replaceChildren();root?.remove();root=list=status=olderButton=retryButton=null;
@@ -453,6 +520,7 @@ document.addEventListener('visibilitychange',()=>{
  if(document.hidden){
   gen++;clearTimeout(timer);timer=0;
   if(controllers.preview&&previewRequest)previewRetry=true;
+  for(const item of thumbnails.values())item.controller?.abort();
   for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
   loadingOlder=false;if(olderButton)olderButton.hidden=!older;
  }else if(root){

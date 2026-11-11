@@ -279,13 +279,17 @@ class Handler(BaseHTTPRequestHandler):
             # The cockpit reference, path and file stay on this machine.
             query=parse_qs(parts.query,keep_blank_values=True)
             nm=query.get('name',[''])[0];ref=query.get('ref',[''])[0]
-            if (set(query)!={'name','ref'} or any(len(v)!=1 for v in query.values()) or not NAME.fullmatch(nm)
+            if (set(query)-{'name','ref','thumbnail'} or not {'name','ref'}<=set(query)
+                    or 'thumbnail' in query and query['thumbnail']!=['1']
+                    or any(len(v)!=1 for v in query.values()) or not NAME.fullmatch(nm)
                     or not mobile_history.TOKEN.fullmatch(ref)):
                 self._send(400,{'ok':False,'error':'invalid_preview_query'});return
             if not self.server.mobile_store.known_name(nm):
                 self._send(404,{'ok':False,'error':'agent_unavailable'});return
             if self.command=='HEAD':self._send(200,b'');return
-            try:self._send(200,mobile_history.encode(self.server.mobile_history.preview(nm,ref)))
+            try:
+                options={'thumbnail':True} if 'thumbnail' in query else {}
+                self._send(200,mobile_history.encode(self.server.mobile_history.preview(nm,ref,**options)))
             except LookupError:self._send(410,{'ok':False,'error':'preview_expired'})
             except mobile_history.HistoryUnavailable as exc:
                 self._send(503 if exc.code in {'preview_unavailable','dashboard_unavailable','history_slow'} else 200,
