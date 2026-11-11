@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 from collections import OrderedDict
 import http.client
+import io
 import json
 import re
 import secrets
@@ -57,6 +58,8 @@ MAX_PREVIEW_PIXELS = 8_000_000
 # Base64 of the largest accepted PNG plus a small JSON envelope.
 MAX_PREVIEW_UPSTREAM = MAX_PREVIEW_PNG * 4 // 3 + 64 * 1024
 PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+SHOW_FILES = re.compile(r'mcp__orrery[-_]mail__show_files\Z')
+THUMBNAIL_SIDE = 320
 ERRORS = frozenset({
     'agent_unavailable', 'provider_unavailable', 'dashboard_upgrade_required',
     'history_unconfirmed', 'history_stale', 'invalid_binding', 'history_unreadable',
@@ -146,6 +149,9 @@ def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None
         chips.append(chip)
     if chips:
         result['files'] = chips
+        if (raw.get('kind') == 'tool' and raw.get('role') == 'assistant' and isinstance(raw.get('text'), str) and SHOW_FILES.fullmatch(raw['text'])
+                or raw.get('kind') == 'text' and raw.get('role') == 'user' and raw.get('input_images') is True):
+            result['shown'] = True
     return result
 
 
@@ -256,6 +262,29 @@ def project_preview(raw):
             'data': base64.b64encode(decoded).decode('ascii'), 'notice': notice}
 
 
+def thumbnail_preview(preview):
+    """Shrink only an already checked PNG; the upstream reference still grants it."""
+    if preview.get('kind') != 'image':
+        raise HistoryUnavailable('preview_type_denied')
+    try:
+        from PIL import Image
+    except ImportError:
+        return preview
+    try:
+        with Image.open(io.BytesIO(base64.b64decode(preview['data']))) as source:
+            source.thumbnail((THUMBNAIL_SIDE, THUMBNAIL_SIDE))
+            # A fresh image drops even metadata synthesized by the decoder.
+            clean = Image.new('RGBA', source.size)
+            clean.paste(source.convert('RGBA'))
+            output = io.BytesIO()
+            clean.save(output, format='PNG')
+            width, height = clean.size
+        return project_preview(dict(preview, mime='image/png', width=width, height=height,
+                                    data=base64.b64encode(output.getvalue()).decode('ascii')))
+    except (OSError, ValueError, SyntaxError):
+        raise HistoryUnavailable('preview_unavailable') from None
+
+
 class HistoryClient:
     """Fixed loopback GET to cockpit; no redirects, proxy env or retries."""
     def __init__(self, port, *, clock=time.monotonic):
@@ -302,7 +331,7 @@ class HistoryClient:
             raise HistoryUnavailable('record_too_large')
         return result
 
-    def preview(self, name, ref):
+    def preview(self, name, ref, *, thumbnail=False):
         """One previewable file named by an ID this reader issued for ``name``."""
         if not isinstance(name, str) or not NAME.fullmatch(name):
             raise HistoryUnavailable('invalid_agent')
@@ -322,7 +351,8 @@ class HistoryClient:
                 raise HistoryUnavailable('preview_too_large')
             known = isinstance(error, str) and error in ERRORS and error != 'history_unavailable'
             raise HistoryUnavailable(error if known else 'preview_unavailable')
-        return project_preview(raw)
+        preview = project_preview(raw)
+        return thumbnail_preview(preview) if thumbnail else preview
 
     def _issue_ref(self, name, cockpit_ref):
         """One phone ID per (agent, cockpit reference), renewed while its

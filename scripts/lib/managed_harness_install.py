@@ -42,7 +42,7 @@ if not arch or not os_name:
     raise SystemExit('Hermes CA recipe supports macOS and GNU/Linux only; Bionic is unsupported')
 print(os_name + '-' + arch)
 '''
-HERMES_CA_PROBE_SCRIPT = '''import certifi,importlib.metadata,json
+HERMES_CA_PROBE_SCRIPT = '''import certifi,exa_py,importlib.metadata,json
 from pathlib import Path
 d=importlib.metadata.distribution('certifi')
 metadata=next(f for f in d.files if str(f).endswith('.dist-info/METADATA'))
@@ -269,8 +269,9 @@ def install_hermes(repo, root, python, cache=None):
     # Existing PM owns its own fixed runtime/dependency graph; no general setup,
     # login import, browser, or computer-use installer is invoked.
     # PM rejects --without combined with --extra. First prepare its default
-    # closure and persist the optional-tool opt-outs, then add the provider SDK.
-    for arguments in (['--without', 'agent-browser', '--without', 'cua-driver'], ['--extra', 'anthropic']):
+    # closure and persist the optional-tool opt-outs, then add the provider SDKs
+    # before publishing the fixed environment used by every child.
+    for arguments in (['--without', 'agent-browser', '--without', 'cua-driver'], ['--extra', 'anthropic', '--extra', 'exa']):
         ca.verify_inputs(source, policy, 'after')
         run([python, '-m', 'pm.cli', 'install', *arguments], cwd=source, env=env)
         ca.verify_inputs(source, policy, 'after')
@@ -289,7 +290,7 @@ def install_hermes(repo, root, python, cache=None):
 
 def generation_id(repo, harness, *, datadir=True):
     if harness == 'hermes':
-        return HERMES_COMMIT[:16] + '-ca1-' + hermes_ca().load(repo)[2][:16]
+        return HERMES_COMMIT[:16] + '-ca1-' + hermes_ca().load(repo)[2][:16] + '-exa1'
     inputs = ['runtime-pins.json', 'runtime-package-lock.json', 'ui-package.json', 'ui-package-lock.json']
     if datadir:
         inputs.append('tui-datadir.patch.json')

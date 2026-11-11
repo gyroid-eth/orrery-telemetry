@@ -208,6 +208,11 @@ def link(source, target):
 
 def generate(document):
     facts = validate_input(document)
+    manifest = read(document['manifest_file'])
+    search = None
+    if document.get('web_search') or manifest.get('web_search', {}).get('provider'):
+        web = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'hooks/native_web_search.py'))
+        search = web['select'](document, manifest)
     name = document['agent_name']
     if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', name):
         raise ValueError('invalid_agent_name')
@@ -324,6 +329,21 @@ def generate(document):
         save(definitions, {'backends': {document['backend_id']: {
             'credential_ref': facts['credential_ref'], 'auth_command': facts['reader_command']}}})
         protected.extend([str(definitions), str(Path(document['manifest_file']).resolve())])
+    if search:
+        settings_file = state / 'web-search.json'
+        save(settings_file, search)
+        reader = web['command'](facts['root'], settings_file, sys.executable)
+        rows.extend([
+            {'id': 'web', 'config': {'searchProvider': 'orrery-' + search['provider']}},
+            {'insert': [{'id': 'orrery-web-search', 'name': str(facts['root'] / 'integrations/dsh/web_search.mjs'),
+                         'config': {**search, 'runtime': str(facts['runtime']), 'reader_command': reader}}]},
+        ])
+        save(overlay, rows)
+        entries = read(definitions)
+        entries.setdefault('backends', {})['web-search'] = web['definition'](search, reader)
+        definitions = state / 'credential-references.json'
+        save(definitions, entries)
+        protected.extend([str(settings_file), str(definitions)])
     return {'argv': argv, 'cwd': str(cwd), 'config_dir': str(config_dir),
             'env': {'DSH_HOME': str(home), 'DSH_TUI_DATA_DIR': str(tui_data), 'DSH_TUI_LANG': language,
                     **facts['credential_context'],

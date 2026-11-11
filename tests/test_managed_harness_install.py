@@ -129,22 +129,28 @@ class InstallTests(unittest.TestCase):
     def generation(self, harness):
         return self.install / 'harnesses' / harness / installer.generation_id(ROOT, harness)
 
-    def test_hermes_ca_upgrade_acquires_new_generation_and_keeps_v2(self):
-        old = self.install / 'harnesses/hermes' / (installer.HERMES_COMMIT[:16] + '-v2')
-        old.mkdir(parents=True)
-        details = self.fake_acquire(ROOT, old)
-        installer.save(old / installer.OWNER, {'harness': 'hermes', 'complete': True,
-            'variant': 'plain', 'thin_config_contract': 1, 'details': details})
-        original = (old / installer.OWNER).read_bytes()
-        profile = old.parent / 'profiles/keep/memory.txt'
-        profile.parent.mkdir(parents=True)
-        profile.write_text('existing memory')
-        with patch.object(installer, 'install_hermes', side_effect=self.fake_acquire) as acquire:
-            installer.provision(ROOT, self.install, 'hermes', choice='enable')
-        acquire.assert_called_once()
-        self.assertNotEqual(self.generation('hermes'), old)
-        self.assertEqual((old / installer.OWNER).read_bytes(), original)
-        self.assertEqual(profile.read_text(), 'existing memory')
+    def test_hermes_sdk_upgrade_acquires_new_generation_and_keeps_old_runtime(self):
+        for suffix in ('-v2', '-ca1-' + installer.hermes_ca().load(ROOT)[2][:16]):
+            with self.subTest(previous=suffix):
+                self.install = self.home / ('upgrade-' + suffix)
+                old = self.install / 'harnesses/hermes' / (installer.HERMES_COMMIT[:16] + suffix)
+                old.mkdir(parents=True)
+                details = self.fake_acquire(ROOT, old)
+                installer.save(old / installer.OWNER, {'harness': 'hermes', 'complete': True,
+                    'variant': 'plain', 'thin_config_contract': 1, 'details': details})
+                original = (old / installer.OWNER).read_bytes()
+                profile = old.parent / 'profiles/keep/memory.txt'
+                profile.parent.mkdir(parents=True)
+                profile.write_text('existing memory')
+                installer.save(self.install / 'dashboard/hermes-provider.json', {'enabled': True})
+                with patch.object(installer, 'install_hermes', side_effect=self.fake_acquire) as acquire:
+                    installer.provision(ROOT, self.install, 'hermes')
+                acquire.assert_called_once()
+                self.assertNotEqual(self.generation('hermes'), old)
+                self.assertEqual((old / installer.OWNER).read_bytes(), original)
+                self.assertEqual(profile.read_text(), 'existing memory')
+                current = installer.read(old.parent / 'current.json')
+                self.assertEqual(current['generation'], self.generation('hermes').name)
 
     def write_product_manifest(self):
         text = (ROOT / 'scripts/install.sh').read_text()
@@ -477,7 +483,7 @@ class AcquisitionTests(unittest.TestCase):
             raise subprocess.CalledProcessError(1, argv,
                 output='--without shapes the default closure; it does not take names, --extra, or --target')
         self.assertIn(argv[1:], (['-m', 'pm.cli', 'install', '--without', 'agent-browser', '--without', 'cua-driver'],
-                                ['-m', 'pm.cli', 'install', '--extra', 'anthropic']))
+                                ['-m', 'pm.cli', 'install', '--extra', 'anthropic', '--extra', 'exa']))
         self.pm_inputs.append(self.ca.ca.verify_inputs(cwd, self.ca.policy, 'after'))
         self.assertEqual(env['HERMES_HOME'], str(self.root))
         key = hashlib.sha256(str(Path(cwd).resolve()).encode()).hexdigest()[:16]
@@ -485,14 +491,14 @@ class AcquisitionTests(unittest.TestCase):
         previous = store / 'facts.json'
         if '--extra' in argv:
             self.assertEqual(installer.read(previous)['packages']['venv']['extras'], ['all'])
-        generation = store / ('environments/with-anthropic' if '--extra' in argv else 'environments/default')
+        generation = store / ('environments/with-provider-sdks' if '--extra' in argv else 'environments/default')
         for name in ('python', 'hermes'):
             file = generation / 'bin' / name
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_text('synthetic executable')
             file.chmod(0o700)
         installer.save(store / 'facts.json', {'packages': {'venv': {'environment': str(generation),
-            'extras': ['all', 'anthropic'] if '--extra' in argv else ['all']}}})
+            'extras': ['all', 'anthropic', 'exa'] if '--extra' in argv else ['all']}}})
         (generation / 'pyvenv.cfg').write_text('synthetic venv')
         self.paths = self.ca.material(self.root, Path(cwd), generation)
         return ''
@@ -614,8 +620,8 @@ class AcquisitionTests(unittest.TestCase):
         commands = [argv for argv, _, _ in self.calls if argv[1:4] == ['-m', 'pm.cli', 'install']]
         self.assertEqual(commands, [
             [sys.executable, '-m', 'pm.cli', 'install', '--without', 'agent-browser', '--without', 'cua-driver'],
-            [sys.executable, '-m', 'pm.cli', 'install', '--extra', 'anthropic']])
-        self.assertIn('/environments/with-anthropic/', details['hermes_executable'])
+            [sys.executable, '-m', 'pm.cli', 'install', '--extra', 'anthropic', '--extra', 'exa']])
+        self.assertIn('/environments/with-provider-sdks/', details['hermes_executable'])
         self.assertEqual(details['install_stamp'], str(self.root / 'source/install-stamp.json'))
         self.assertIn('-ca1-', installer.generation_id(self.repo, 'hermes'))
         self.assertTrue(installer.read(Path(details['install_stamp']))['dirty'])

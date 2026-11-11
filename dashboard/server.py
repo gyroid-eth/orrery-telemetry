@@ -8263,7 +8263,7 @@ def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
         "parent", "standalone", "task", "role", "group", "worktree",
         "worktree_base", "name", "dir", "provider", "model", "effort",
         "claude_chrome", "claude_chrome_device", "async", "dry_run", "headless", "emoji",
-        "base", "tools", "harness", "helper_model", "url_index", "url_key",
+        "base", "tools", "harness", "helper_model", "url_index", "url_key", "web_search",
     }
     if str(payload.get("provider") or "").strip().lower() == "gemini":
         allowed.add("resources")
@@ -8413,6 +8413,9 @@ def do_spawn(payload: dict) -> dict:
                 and harness not in native.get(provider, ()))):
         return {"ok": False, "error": "unsupported harness", "error_code": "unsupported_harness"}
     helper_model = payload.get("helper_model")
+    web_search = payload.get('web_search')
+    if web_search is not None and (not is_native or web_search not in ('exa', 'searxng')):
+        return {'ok': False, 'error': 'web_search には native harness と exa または searxng が必要です'}
     if not is_native and ('url_index' in payload or 'url_key' in payload):
         return {'ok': False, 'error': 'url_index requires a dynamic Local connection'}
     if not is_native and helper_model not in (None, "same"):
@@ -8551,7 +8554,8 @@ def do_spawn(payload: dict) -> dict:
         spec = SpawnLaunchSpec(
             provider=provider, program=harness, model=model, script=SPAWN_SCRIPT,
             provider_args=("--harness", harness, "--backend", provider)
-                + (("--url-index", str(payload['url_index']), "--url-key", payload['url_key']) if dynamic else ()) + helper_args + tools_args,
+                + (("--url-index", str(payload['url_index']), "--url-key", payload['url_key']) if dynamic else ()) + helper_args
+                + (('--web-search', web_search) if web_search else ()) + tools_args,
             effort=effort, effort_arg=bool(effort),
         )
     else:

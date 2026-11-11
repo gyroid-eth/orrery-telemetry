@@ -6,6 +6,7 @@ import socket
 import threading
 import time
 import urllib.request
+from urllib.parse import parse_qs, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -58,11 +59,16 @@ def phone(request):
             if path == '/view/snapshot':
                 return self.send(snapshot)
             if path == '/view/conversation':
-                return self.send(dict(ok=False, error=state['error']) if state['error'] else dict(ok=True, agent='SampleAgent', events=state['events'], older=None, limited=False, tail_only=False))
+                agent=parse_qs(urlsplit(self.path).query).get('name',['SampleAgent'])[0]
+                return self.send(dict(ok=False, error=state['error']) if state['error'] else dict(ok=True, agent=agent, events=state['events'], older=None, limited=False, tail_only=False))
             if path == '/view/terminal':
                 return self.send(dict(contract, api=31, supported='legacy-managed-pane', enabled=True, ack='tmux-command-accepted'))
             if path == '/view/conversation/preview':
-                return self.send(dict(ok=True, kind='text', text='File contents', notice='Current file, not a recorded snapshot.'))
+                preview=state.get('file_preview',dict(ok=True, kind='text', text='File contents', notice='Current file, not a recorded snapshot.'))
+                if 'thumbnail=1' in self.path and preview.get('kind')=='image':
+                    from dashboard.mobile_history import thumbnail_preview
+                    preview=thumbnail_preview(preview)
+                return self.send(preview)
             if path == '/view/portrait' and state.get('portrait'):
                 return self.send(state['portrait'], 'image/png')
             if path == '/network.css':
