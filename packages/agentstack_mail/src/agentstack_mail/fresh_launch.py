@@ -74,10 +74,10 @@ def root_path(value):
     return root
 
 
-def provider_setup(client, root, provider):
+def provider_setup(client, root, provider, *, persistent=None):
     if provider in {'dsh','hermes'}:
         from .fresh_harness import setup
-        return setup(client, root, provider)
+        return setup(client, root, provider, persistent=persistent)
     from .fresh_child import provider_home
     home = provider_home(client, provider)
     for folder in (home.parent, home):_directory(folder)
@@ -276,7 +276,7 @@ def launch(client, wrapper_root, provider, cwd, *, session_id=None, persistent=N
     owner = asyncio.run(verified_owner(client))
     from .fresh_child import family, launch_task
     task, prompt = launch_task(client)
-    if persistent is not None and (task is not None or provider != 'claude' or session_id is not None):
+    if persistent is not None and (task is not None or provider not in {'claude', 'hermes'} or session_id is not None):
         raise B1Error('FRESH_PERSISTENT_PROFILE_INVALID')
     if task is not None and (task['provider'] != provider or task['cwd'] != str(cwd) or task['wrapper_root'] != str(root)):
         raise B1Error('FRESH_CHILD_INTENT_CONFLICT')
@@ -291,7 +291,7 @@ def launch(client, wrapper_root, provider, cwd, *, session_id=None, persistent=N
             ended = _read_private(previous_run / 'ended.json')
             if (set(ended) != {'launch_id', 'exit_code'} or ended['launch_id'] != previous['launch_id']
                     or type(ended['exit_code']) is not int):raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
-        home, binary, plan = provider_setup(client, root, provider)
+        home, binary, plan = provider_setup(client, root, provider, persistent=persistent)
         if session_id is not None:
             if managed:
                 from .fresh_harness import native_session_id
@@ -323,7 +323,7 @@ def launch(client, wrapper_root, provider, cwd, *, session_id=None, persistent=N
         if managed:
             from .fresh_harness import plan as native_plan
             managed_plan = native_plan(client, root, provider, plan, run, cwd,
-                                       prompt if session_id is None else '', session_id)
+                                       prompt if session_id is None else '', session_id, persistent=persistent)
             args = managed_plan['argv']
         else:args = command(root, home, binary, provider, plan, run, cwd, session_id,
                            persistent=persistent, client=client)
@@ -386,7 +386,7 @@ def launch(client, wrapper_root, provider, cwd, *, session_id=None, persistent=N
             restarted = False
             if persistent is not None:
                 from .fresh_persistent import wait_provider
-                code, restarted = wait_provider(process, run)
+                code, restarted = wait_provider(process, run, wrapper_root=root if provider == 'hermes' else None)
             else:code = process.wait()
         except BaseException:
             if process is not None and process.poll() is None:

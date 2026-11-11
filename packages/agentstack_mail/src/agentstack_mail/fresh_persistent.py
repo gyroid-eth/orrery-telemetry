@@ -20,14 +20,27 @@ KIND = 'orrery-fresh-persistent-v1'
 SECRET_ENV = re.compile(r'(?:TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY)', re.I)
 
 
-def profile(path):
+def profile(path, wrapper_root=None):
     value = _read_private(Path(path))
-    if (set(value) - {'kind', 'context', 'provider', 'working_directory', 'channels', 'model', 'environment'}
-            or value.get('kind') != KIND or value.get('provider') != 'claude'):
+    if (set(value) - {'kind', 'context', 'provider', 'working_directory', 'channels', 'model', 'environment', 'managed', 'telegram'}
+            or value.get('kind') != KIND or value.get('provider') not in {'claude', 'hermes'}):
         raise B1Error('FRESH_PERSISTENT_PROFILE_INVALID')
     for key in ('context', 'working_directory'):
         if not isinstance(value.get(key), str) or not Path(value[key]).is_absolute():
             raise B1Error('FRESH_PERSISTENT_PROFILE_INVALID')
+    if value['provider'] == 'hermes':
+        if (wrapper_root is None or not isinstance(value.get('managed'), dict)
+                or not isinstance(value.get('model'), str) or not value['model']
+                or 'channels' in value or 'environment' in value):
+            raise B1Error('FRESH_PERSISTENT_PROFILE_INVALID')
+        try:
+            settings = runpy.run_path(str(Path(wrapper_root) / 'integrations/hermes/telegram/settings.py'))
+            settings['validate'](value.get('telegram'))
+        except (ValueError, TypeError):
+            raise B1Error('FRESH_PERSISTENT_TELEGRAM_INVALID') from None
+        return value
+    if 'managed' in value or 'telegram' in value:
+        raise B1Error('FRESH_PERSISTENT_PROFILE_INVALID')
     channels = value.get('channels')
     if (not isinstance(channels, list) or not 1 <= len(channels) <= 8
             or any(not isinstance(v, str) or not re.fullmatch(r'plugin:[A-Za-z0-9_.@/-]+', v) for v in channels)):
@@ -80,18 +93,37 @@ def request_restart(client, payload):
         raise B1Error('FRESH_BOT_RESTART_REQUIRED')
 
 
-def wait_provider(process, run):
+def wait_provider(process, run, *, wrapper_root=None):
     """Only a requested, observed stop may end a persistent run after a signal."""
+    observation = (runpy.run_path(str(Path(wrapper_root) / 'bin/lib/process_observation.py'))
+                   if wrapper_root is not None else None)
+    descendants = {}
+
+    def remaining():
+        if not descendants:return {}
+        rows = observation['process_snapshot']()
+        if rows is None:raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
+        return {pid: birth for pid, birth in descendants.items()
+                if pid in rows and rows[pid][1:] == (os.getuid(), birth)}
+
     previous = {}
     stopping = None
     requested_signal = None
     restarted = False
 
     def stop(signum, _frame):
-        nonlocal stopping, requested_signal
+        nonlocal stopping, requested_signal, descendants
         if stopping is None:
             stopping = time.monotonic()
             try:
+                if observation is not None:
+                    rows = observation['process_snapshot']()
+                    if rows is None:raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
+                    descendants = {pid: row[2] for pid, row in rows.items() if pid != process.pid
+                        and observation['snapshot_belongs_to'](rows, pid, process.pid, os.getuid())}
+                    for pid in remaining():
+                        try:os.kill(pid, signum)
+                        except ProcessLookupError:pass
                 process.send_signal(signum)
                 requested_signal = signum
             except ProcessLookupError:stopping = None
@@ -99,15 +131,21 @@ def wait_provider(process, run):
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
             previous[sig] = signal.signal(sig, stop)
-        while process.poll() is None:
+        while process.poll() is None or remaining():
             if (run / 'restart-required.json').exists() and stopping is None:
                 restarted = True
                 stop(signal.SIGTERM, None)
             if stopping is not None and time.monotonic() - stopping > 15:
-                process.kill();process.wait()
+                for pid in remaining():
+                    try:os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:pass
+                if process.poll() is None:process.kill()
+                process.wait()
                 raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
-            try:process.wait(timeout=0.1)
-            except subprocess.TimeoutExpired:pass
+            if process.poll() is not None:time.sleep(0.1)
+            else:
+                try:process.wait(timeout=0.1)
+                except subprocess.TimeoutExpired:pass
         code = process.wait()
         if code != 0 and (requested_signal is None or code not in {-requested_signal, 128 + requested_signal}):
             raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
@@ -126,7 +164,7 @@ def main(argv=None):
         from .fresh_client import FreshBoundClient
         from .fresh_launch import launch
         from .fresh_proxy import verified_owner
-        value = profile(args.profile)
+        value = profile(args.profile, args.wrapper_root)
         client = FreshBoundClient(value['context'])
         if (os.environ.get('AGENTSTACK_CLIENT_CONFIG') or os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG')
                 or os.environ.get('AGENTSTACK_FRESH_CLIENT_CONTEXT', str(client.path)) != str(client.path)):
