@@ -419,6 +419,8 @@ git pull
 
 The installer updates payloads and `VERSION`, reregisters services, and previews managed merges again. It validates and reuses the bundled ORRERY Mail candidate and state.
 
+After updating, restart running agents (Claude Code, Codex, dsh, Hermes, including persistent bots). Managed block instructions and the ORRERY Mail tool list (such as `show_files`) are loaded when a session starts, so a session keeps the pre-update versions until it restarts. If you decline the managed merge preview, the instructions are not updated either.
+
 ### Reservation protection migration
 
 Top-level and delegated-child launches protect their selected physical working directory, preceded by ordered `AGENTSTACK_EXTRA_PROTECTED_ROOTS`. Git root discovery does not automatically enlarge protection. Namespace selection and the installed project key are unchanged. Install/update automatically selects process extras (including empty), installed extras (including empty), then the installed legacy `AGENTSTACK_PROTECTED_ROOTS` literal value and order exactly once, then empty. It never imports ambient shell/tmux legacy roots. The installer shows the source, value, and destination in `--dry-run` and stops before overwrite if legacy configuration is invalid or ambiguous.
