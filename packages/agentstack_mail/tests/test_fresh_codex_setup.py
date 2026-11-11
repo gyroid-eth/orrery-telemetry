@@ -178,7 +178,7 @@ def test_launch_reads_sanitized_environment_before_publishing_or_starting(tmp_pa
                  'credential_generation': 1, 'root': str(tmp_path)}, _load=lambda: None)
     async def owner(_):return {'agent_name': 'SyntheticOwner', 'mail_agent_id': 1}
     monkeypatch.setattr(launch, 'verified_owner', owner)
-    monkeypatch.setattr(launch, 'provider_setup', lambda *args: (home, '/synthetic/codex', plan))
+    monkeypatch.setattr(launch, 'provider_setup', lambda *args, persistent=None: (home, '/synthetic/codex', plan))
     monkeypatch.setattr(child, 'launch_task', lambda _: (None, ''))
     for key in ('CHILD_REGISTRATION_TOKEN', 'MCP_AGENT_MAIL_TOKEN', 'AGENTSTACK_GLOBAL_SERVER_CONFIG'):
         monkeypatch.setenv(key, 'must-not-reach-native')
