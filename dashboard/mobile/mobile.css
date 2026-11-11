@@ -282,6 +282,11 @@ html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-l
 .conversation-mail-head{display:flex;align-items:center;gap:7px;min-width:0;color:var(--ink-dim);font:11px/1.6 var(--mono)}
 .conversation-mail-route{display:flex;align-items:center;gap:6px;flex:1;min-width:0}
 .conversation-mail-peer{display:inline-flex;align-items:center;gap:5px;min-width:0;flex:0 1 auto}
+.mobile .conversation-mail-peer,.mobile .conversation-mail-toggle{border:0;border-radius:0;background:none;box-shadow:none;color:inherit;font:inherit;padding:0;text-align:left}
+.mobile .conversation-mail-peer:disabled{opacity:1;cursor:default}
+.mobile .conversation-mail-toggle{display:block;width:100%}
+.mobile .conversation-mail-peer:not(:disabled):hover .conversation-mail-peer-name{text-decoration:underline}
+.mobile .conversation-mail-peer:focus-visible,.mobile .conversation-mail-toggle:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
 .conversation-mail-peer-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .conversation-mail-peer.is-counterpart{font-size:13px;font-weight:600;color:var(--ink)}
 .conversation-mail-mark{display:inline-flex;flex:none;width:18px;height:18px}

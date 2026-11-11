@@ -87,6 +87,7 @@ function refreshProfiles(){
  let mailChanged=false;
  list.querySelectorAll('.conversation-byline').forEach(paintSpeaker);
  for(const mark of list.querySelectorAll('.conversation-mail-mark')){
+  const peer=mark.closest?.('.conversation-mail-peer');if(peer)peer.disabled=!window.OrreryMobileProfile?.forName(mark.dataset.peerName);
   const p=window.OrreryMobileProfile?.forName(mark.dataset.peerName),key=JSON.stringify(p)||'';if(mark.dataset.profile===key)continue;mark.dataset.profile=key;mailChanged=true;
   const face=p&&window.OrreryMobileProfile?.face(mark.dataset.peerName);mark.replaceChildren();mark.hidden=!face;if(face){face.classList.add('conversation-avatar');mark.append(face);}
  }
@@ -143,25 +144,26 @@ function body(text,assistant=false){
  return box;
 }
 function mailCard(m,ts){
- const card=make('button','conversation-mail '+m.direction);card.type='button';
+ const card=make('div','conversation-mail '+m.direction);
  const head=make('div','conversation-mail-head'),route=make('div','conversation-mail-route');
- const peer=(value,strong)=>{const p=make('span','conversation-mail-peer'+(strong?' is-counterpart':'')),mark=make('span','conversation-mail-mark');mark.dataset.peerName=value||'';mark.hidden=true;p.title=value||'unknown';p.append(mark,make('span','conversation-mail-peer-name',value||'unknown'));return p;};
- const sender=peer(m.sender,m.direction==='received');sender.classList.add('conversation-mail-sender');
+ const peer=(value,strong)=>{const p=make('button','conversation-mail-peer'+(strong?' is-counterpart':'')),mark=make('span','conversation-mail-mark');p.type='button';mark.dataset.peerName=value||'';mark.hidden=true;p.title=value||'unknown';p.setAttribute('aria-label','Open '+(value||'unknown')+' conversation');p.disabled=!window.OrreryMobileProfile?.forName(value);p.onclick=e=>{e.stopPropagation();if(value&&value!==name)window.OrreryMobileTerminal?.open(value,window.OrreryMobileIdentity?.forName(value),'conversation');};p.append(mark,make('span','conversation-mail-peer-name',value||'unknown'));return p;};
+ const sender=peer(m.sender||(m.direction==='sent'?name:'recorded sender unavailable'),m.direction==='received');sender.classList.add('conversation-mail-sender');
  const targets=m.recipients.length?m.recipients:[m.direction==='received'?name:'recorded recipient unavailable'];
  const recipients=make('span','conversation-mail-recipients');recipients.title=targets.join(', ');recipients.setAttribute('role','group');recipients.setAttribute('aria-label','Recipients: '+targets.join(', '));
  for(const recipient of targets)recipients.append(peer(recipient,m.direction==='sent'));
  const more=make('span','conversation-mail-more');more.hidden=true;recipients.append(more);
  route.append(make('span','conversation-mail-chevron','▸'),sender,make('span','conversation-mail-arrow','→'),recipients);
  head.append(route);const at=clock(ts);if(at){const time=make('time','conversation-mail-time',at);time.dateTime=ts;head.append(time);}
- const subject=make('div','conversation-mail-subject-row');
+ const subject=make('span','conversation-mail-subject-row');
  if(['high','urgent'].includes(m.importance)){const dot=make('span','conversation-mail-importance');dot.dataset.importance=m.importance;dot.title=dot.ariaLabel=m.importance==='high'?'High importance':'Urgent importance';dot.setAttribute('role','img');subject.append(dot);}
  subject.append(make('strong','conversation-mail-subject',m.subject||'(no subject)'));
- card.append(make('div','conversation-mail-label','Mail · '+(m.direction==='received'?'Received':'Sent')),head,subject);
+ card.append(make('div','conversation-mail-label','Mail · '+(m.direction==='received'?'Received':'Sent')),head);
  const detail=make('pre','conversation-mail-body',m.body);detail.hidden=true;
  const note=make('small','conversation-mail-note',m.coverage==='preview'?'Recorded preview only':m.coverage==='unavailable'?'Body not in the record':m.truncated?'Shortened':'Tap to show the recorded body');
  const line=make('span','conversation-mail-thread');line.hidden=true;line.setAttribute('aria-hidden','true');
- card.append(note,detail,line);card.setAttribute('aria-expanded','false');
- const closedNote=note.textContent;card.onclick=()=>{detail.hidden=!detail.hidden;card.setAttribute('aria-expanded',String(!detail.hidden));card.querySelector('.conversation-mail-chevron').textContent=detail.hidden?'▸':'▾';note.textContent=detail.hidden?closedNote:'Recorded body · tap to hide';layoutMailThread(card);};
+ const toggle=make('button','conversation-mail-toggle');toggle.type='button';toggle.append(subject,note);toggle.setAttribute('aria-expanded','false');
+ card.append(toggle,detail,line);card.setAttribute('aria-expanded','false');
+ const closedNote=note.textContent;card.onclick=()=>{detail.hidden=!detail.hidden;card.setAttribute('aria-expanded',String(!detail.hidden));toggle.setAttribute('aria-expanded',String(!detail.hidden));card.querySelector('.conversation-mail-chevron').textContent=detail.hidden?'▸':'▾';note.textContent=detail.hidden?closedNote:'Recorded body · tap to hide';layoutMailThread(card);};
  return card;
 }
 // The cockpit puts file references on the file tool calls (Read, Write,
