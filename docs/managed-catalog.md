@@ -81,6 +81,7 @@ Hermes の SearXNG には native の HTTP・結果整形を使う薄い provider
 検索先を指定した Hermes では匿名検索への自動救済を使わず、失敗理由をそのまま返します。
 鍵の値は起動計画・設定ファイル・引数に保存しません。鍵無しや検索 service の停止は子の起動を止めず、検索時にエラーになります。
 PR の検証は fake HTTP と偽の資格によるものです。実資格・実サービスの4組の tool-call は別途受け入れで確認します。
+既知の差: dsh の上流 `dsh-web-search-exa@0.2.1-rc.2` は `contents:{highlights:{highlightsPerUrl:N}}` を使い、最初の有効な highlight だけを snippet にします（Exa 公式推奨は `contents:{highlights:true}`、Hermes は推奨どおり）。両 harness の検索内容は query ベースで、公式が推奨する `objective`（何を上位にし、除外し、抽出するか）は検索引数にありません。
 
 ## 現在の制限
 
