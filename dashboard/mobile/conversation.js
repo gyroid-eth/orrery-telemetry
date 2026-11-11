@@ -185,12 +185,12 @@ function chip(x){
  const b=make('button','conversation-chip '+x.kind+' previewable',label);b.type='button';
  b.setAttribute('aria-label','Preview '+x.label);b.onclick=()=>openPreview(x);return b;
 }
-/* Shown files stay in the conversation even when the original tool chip is
-   folded. The relay marks only the exact show_files tool; references and
-   image bytes still come from the existing preview grant. */
+/* 表示済み画像は tool を閉じても会話に残す。人の入力画像は吹き出しと
+   同じ側に置き、参照と画像は既存の preview の許可を使う。 */
 function shownFiles(e){
  if(e.shown!==true||!Array.isArray(e.files)||!e.files.length)return null;
  const box=make('div','conversation-shown-files');box.dataset.shownFor=e.id;
+ box.dataset.role=e.role==='user'?'user':'assistant';
  for(const x of e.files){
   if(x.kind!=='image'||typeof x.ref!=='string'||!REF.test(x.ref)){
    box.append(make('span','conversation-chip',x.label));continue;

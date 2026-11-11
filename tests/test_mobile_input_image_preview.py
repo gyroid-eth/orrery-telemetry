@@ -47,6 +47,7 @@ def test_real_phone_renders_the_user_thumbnail_and_opens_the_same_image(phone):
     js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
     wait("document.querySelector('.conversation-thumbnail-image')?.naturalWidth>0")
     assert js("document.querySelector('.conversation-shown-files').previousElementSibling.classList.contains('user')")
+    assert js("(()=>{const box=document.querySelector('.conversation-shown-files'),bubble=box.previousElementSibling,button=box.querySelector('.conversation-thumbnail');return Math.abs(button.getBoundingClientRect().right-bubble.getBoundingClientRect().right)<1&&box.getBoundingClientRect().top>=bubble.getBoundingClientRect().bottom;})()")
     if os.environ.get('MOBILE_INPUT_IMAGE_CAPTURE'):
         path=Path(os.environ['MOBILE_INPUT_IMAGE_CAPTURE'])
         path.with_name(path.name.replace('expanded','inline')).write_bytes(base64.b64decode(client.call('Page.captureScreenshot',format='png')['data']))
@@ -54,3 +55,14 @@ def test_real_phone_renders_the_user_thumbnail_and_opens_the_same_image(phone):
     wait("document.querySelector('.conversation-preview-image')?.naturalWidth===640")
     if os.environ.get('MOBILE_INPUT_IMAGE_CAPTURE'):
         Path(os.environ['MOBILE_INPUT_IMAGE_CAPTURE']).write_bytes(base64.b64decode(client.call('Page.captureScreenshot',format='png')['data']))
+
+
+def test_show_files_thumbnail_stays_on_the_assistant_side(phone):
+    _,js,wait,state=phone
+    raw=event(2,kind='tool',role='assistant',text='mcp__orrery_mail__show_files',
+              references=[dict(id=COCKPIT_REF,label='共有画像.png',kind='image')])
+    state['events']=[history.project_event(raw,issue=lambda _: 'b'*32)]
+    state['file_preview']=image(png(640,320),width=640,height=320)
+    js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelector('.conversation-thumbnail-image')?.naturalWidth>0")
+    assert js("(()=>{const box=document.querySelector('.conversation-shown-files'),button=box.querySelector('.conversation-thumbnail');return box.dataset.role==='assistant'&&Math.abs(button.getBoundingClientRect().left-box.getBoundingClientRect().left)<1;})()")
