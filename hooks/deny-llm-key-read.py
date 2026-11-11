@@ -283,8 +283,8 @@ def decide(payload):
         invocations = list(commands(text))
         forms = [form for words in invocations if (form := extraction(words))]
         refs, auth_commands = read_definitions(paths)
-        readers = {auth[3] for auth in auth_commands if len(auth) == 8 and auth[1:3] == ['-I', '-B']
-                   and Path(auth[3]).name == 'llm_secret_reader.py'}
+        readers = {auth[3] for auth in auth_commands if len(auth) >= 4 and auth[1:3] == ['-I', '-B']
+                   and Path(auth[3]).name in ('llm_secret_reader.py', 'native_web_search.py')}
         for words in commands(text, executables={auth[0] for auth in auth_commands} | readers):
             if any(words[:len(auth)] == auth for auth in auth_commands):
                 return True

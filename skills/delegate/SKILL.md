@@ -75,6 +75,8 @@ Add optional fields to `payload` only when selected: `name` (omit for Auto), `ro
 
 The generator already links this product skill into `DSH_HOME/skills/delegate` or `HERMES_HOME/skills/delegate`; read it there, without searching private runtime state. Use the native bash/terminal tool for curl and keep its normal guard/approval behavior. If an approval or hook denies it, report the reason; do not disable approvals or change transports.
 
+検索先を今回だけ切り替える場合、上の `payload` に `web_search: "exa"` または `web_search: "searxng"` を追加します。URL・資格は共通の managed spawn manifest の設定を使います。省略時はその設定、共通設定も無ければ従来の動作です。内部 launcher の指定は `--web-search exa|searxng` ですが、delegate は上の API を使ってください。
+
 <!-- native-delegate:end -->
 ## Environment
 

@@ -218,12 +218,12 @@ class Backend:
     @staticmethod
     def validate(payload, roots):
         allowed = {'parent','parent_ref','standalone','task','name','dir','provider','model','harness',
-                   'url_index','url_key','effort','helper_model','async','role','group','emoji','resources',
+                   'url_index','url_key','effort','helper_model','web_search','async','role','group','emoji','resources',
                    'headless','worktree','worktree_base','claude_chrome','claude_chrome_device','base','tools','dry_run'}
         if not isinstance(payload, dict) or set(payload) - allowed:raise B1Error('FRESH_SPAWN_FIELDS_INVALID')
         for key in ('standalone','async','headless','worktree','claude_chrome','dry_run'):
             if key in payload and type(payload[key]) is not bool:raise B1Error('FRESH_SPAWN_ARGUMENTS_INVALID')
-        for key in ('task','name','dir','provider','model','parent','role','group','emoji','effort','harness','helper_model'):
+        for key in ('task','name','dir','provider','model','parent','role','group','emoji','effort','harness','helper_model','web_search'):
             if key in payload and not isinstance(payload[key],str):raise B1Error('FRESH_SPAWN_ARGUMENTS_INVALID')
         if (payload.get('worktree') or payload.get('worktree_base') or payload.get('claude_chrome')
                 or payload.get('claude_chrome_device') or payload.get('base') not in (None,'default')
@@ -266,7 +266,7 @@ class Backend:
             from agentstack_mail.fresh_harness import selection
             selected=dict(manifest_file=str(Path(os.environ['AGENTSTACK_MANAGED_SPAWN_CONFIG']).resolve(strict=True)),
                           backend_id=spec.provider)
-            for key in ('effort','helper_model','url_index','url_key'):
+            for key in ('effort','helper_model','url_index','url_key','web_search'):
                 if key in payload:selected[key]=payload[key]
             if spec.effort:selected['effort']=spec.effort
             _,_,pins=selection(self.root,spec.program,spec.model,selected)

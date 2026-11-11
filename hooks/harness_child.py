@@ -367,6 +367,8 @@ def prepare(args):
     document.update({key: runner[key] for key in ('url_index', 'server_url', 'url_key') if key in runner})
     if getattr(args,'helper_model',None) not in (None,'','same'):
         document['helper_model'] = args.helper_model
+    if getattr(args, 'web_search', None):
+        document['web_search'] = args.web_search
     if args.effort is not None:
         document['effort'] = args.effort
     prepare_dsh_history(document, state)
@@ -439,6 +441,7 @@ def main():
         parser.add_argument('--' + key)
     parser.add_argument('--tools', default='{"base":"default","tools":{}}')
     parser.add_argument('--url-index', type=int)
+    parser.add_argument('--web-search', choices=('exa', 'searxng'))
     args = parser.parse_args()
     try:
         if args.action == 'validate':

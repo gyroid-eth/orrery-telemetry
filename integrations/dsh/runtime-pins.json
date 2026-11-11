@@ -12,5 +12,12 @@
     "integrity": "sha512-xk8Nviy55RvLnAdjYj04DekUu6D1Pc0kEa5R+2EXoL3H/h6ZEzv8L0bxtSTrWxtNdXd4ufOXMu4TQ7HjrpYhbg==",
     "file": "package-1.tgz",
     "url": "https://registry.npmjs.org/@deepseek-harness-tui/dsh-tui/-/dsh-tui-0.16.1.tgz"
+  },
+  {
+    "name": "@deepseek-ai/dsh-web-search-exa",
+    "version": "0.2.1-rc.2",
+    "integrity": "sha512-tomodKj3FT93mmbtAd8JSAV46B6fQlYmYuMzLjo5elJnJ/Bya6xg4FX+nwGidIJOT9fXiHmLeJUozhzJlW4WNg==",
+    "file": "package-2.tgz",
+    "url": "https://registry.npmjs.org/@deepseek-ai/dsh-web-search-exa/-/dsh-web-search-exa-0.2.1-rc.2.tgz"
   }
 ]
