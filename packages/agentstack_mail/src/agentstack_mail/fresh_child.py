@@ -248,7 +248,7 @@ def main(operation_name, argv):
         if operation_name == 'child-preregister':
             for field in ('name', 'program', 'model', 'task-description'):parser.add_argument('--' + field, required=True)
             parser.add_argument('--prepare-only', action='store_true')
-            for field in ('manifest','backend','effort','helper-model'):parser.add_argument('--' + field)
+            for field in ('manifest','backend','effort','helper-model','web-search'):parser.add_argument('--' + field)
             parser.add_argument('--url-index', type=int);parser.add_argument('--url-key')
         else:
             parser.add_argument('--pre-registered');parser.add_argument('--embed-task', action='store_true', required=True)
@@ -304,13 +304,13 @@ def main(operation_name, argv):
             if args.program in {'dsh','hermes'}:
                 from .fresh_harness import selection
                 spec = dict(manifest_file=args.manifest, backend_id=args.backend)
-                for field in ('effort','helper_model','url_index','url_key'):
+                for field in ('effort','helper_model','url_index','url_key','web_search'):
                     value = getattr(args,field)
                     if value is not None:spec[field] = value
                 runner, _, pins = selection(root, args.program, args.model, spec)
                 spec.update({key:runner[key] for key in ('url_index','url_key','server_url') if key in runner})
                 managed = dict(selection=spec,pins=pins)
-            elif any(getattr(args,k) is not None for k in ('manifest','backend','effort','helper_model','url_index','url_key')):
+            elif any(getattr(args,k) is not None for k in ('manifest','backend','effort','helper_model','url_index','url_key','web_search')):
                 raise B1Error('FRESH_CHILD_ARGUMENTS_INVALID')
             result = asyncio.run(prepare(client, args.child_client_name, args.name, args.program, args.model, args.task_description, managed=managed))
         else:

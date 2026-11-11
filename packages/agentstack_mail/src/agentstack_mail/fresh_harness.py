@@ -29,7 +29,9 @@ def helper(root):
 
 
 def selection(root, program, model, spec):
-    if program not in PROGRAMS or not isinstance(spec, dict) or set(spec) - {'manifest_file','backend_id','effort','helper_model','tools','url_index','url_key','server_url'}:
+    if program not in PROGRAMS or not isinstance(spec, dict) or set(spec) - {'manifest_file','backend_id','effort','helper_model','web_search','tools','url_index','url_key','server_url'}:
+        raise B1Error('FRESH_HARNESS_SELECTION_INVALID')
+    if 'web_search' in spec and spec['web_search'] not in ('exa', 'searxng'):
         raise B1Error('FRESH_HARNESS_SELECTION_INVALID')
     try:
         manifest = Path(spec['manifest_file'])
@@ -81,7 +83,7 @@ def plan(client, root, provider, settings, run, cwd, prompt, session_id):
         state_dir=str(state), runtime_dir=str(client.path.parent), fresh_client_dir=str(client.path.parent),
         cwd=str(cwd), mcp_config=str(mcp), prompt_file=str(task), instructions_file=str(instructions),
         tools=selection_spec.get('tools', {'base':'default','tools':{}}), env=env)
-    for key in ('effort','helper_model'):
+    for key in ('effort','helper_model','web_search'):
         if key in selection_spec:document[key] = selection_spec[key]
     document.update({key:settings['runner'][key] for key in ('url_index','url_key','server_url') if key in settings['runner']})
     if session_id is not None:

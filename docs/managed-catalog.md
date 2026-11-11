@@ -48,6 +48,40 @@ Hermes の公開既定は `default_effort=null` です。未指定や「Use defa
 
 旧manifestやprivate backendに残る試行low/highは利用者設定の移行対象です。installerはprivate設定を無断書換せず、標準起動の未指定 effort 経路はこれらをハーネス既定として投影しません。
 
+## native の web_search
+
+managed spawn manifest の `web_search` で dsh・Hermes の検索先を共通に設定できます。
+この節を省略した製品の既定は従来どおりです。接続先の model や backend ID に依存しません。
+
+```json
+{
+  "web_search": {
+    "provider": "exa",
+    "exa": {
+      "credential_ref": {
+        "store": "keychain",
+        "service": "orrery-web-search-exa",
+        "account": "your-account"
+      }
+    },
+    "searxng": {"url": "http://search.example.invalid:8080"}
+  }
+}
+```
+
+本人の端末で `security add-generic-password -U -s orrery-web-search-exa -a your-account -w` を実行し、末尾の `-w` が出す入力待ちに Exa の鍵を入れてください（値をコマンドに書かない）。
+Linux / WSL では同じ `credential_ref` に既存の `{"store":"secret-service","attributes":{"service":"orrery-web-search-exa","account":"your-account"}}` を使います。
+
+起動ごとに切り替える場合、native の `POST /api/spawn` に `"web_search":"searxng"` または `"web_search":"exa"` を付けます。
+内部 launcher の対応する指定は `--web-search searxng|exa` です。URL と資格の参照は manifest の同じ設定を使い、指定は保存されるので resume にも渡ります。
+
+dsh は固定 runtime の `@deepseek-ai/dsh-web-search-exa` と小さな SearXNG provider を使い、検索先を固定します。
+Hermes は native の Exa と資格 helper（`secrets.command`）を使い、子専用 config に helper の非秘密参照を写します。
+Hermes の SearXNG には native の HTTP・結果整形を使う薄い provider を足し、両 harness とも「結果0件かつ `unresponsive_engines` がある」応答は engine 名つきのエラーにします。
+検索先を指定した Hermes では匿名検索への自動救済を使わず、失敗理由をそのまま返します。
+鍵の値は起動計画・設定ファイル・引数に保存しません。鍵無しや検索 service の停止は子の起動を止めず、検索時にエラーになります。
+PR の検証は fake HTTP と偽の資格によるものです。実資格・実サービスの4組の tool-call は別途受け入れで確認します。
+
 ## 現在の制限
 
 - **手動設定**: B（runtime 参照入りの非有効な例の配布）と A（既存 agent による非秘密設定の補助）は、[日本語 README](../examples/native-harnesses/README.md)・[English README](../examples/native-harnesses/README.en.md) に案内があります。コピー後の参照整合、本人の秘密入力と有効化承認が必要です。実資格・標準例を使う Mac / WSL の全 DeepSeek / Local × dsh / Hermes の組合せは通し受け入れ前で、共通 provider ログイン CLI はありません。

@@ -285,6 +285,7 @@ HARNESS_BACKEND=""
 HARNESS_URL_INDEX=""
 HARNESS_URL_KEY=""
 HARNESS_HELPER_MODEL=""
+HARNESS_WEB_SEARCH=""
 HARNESS_STATE=""
 HARNESS_HELPER="${AGENTSTACK_HARNESS_CHILD_HELPER:-$HOOKS_DIR/harness_child.py}"
 CLAUDE_MODEL=""
@@ -347,6 +348,14 @@ while [[ "${1:-}" == --* ]]; do
                 exit 1
             fi
             HARNESS_HELPER_MODEL="$2"
+            shift 2
+            ;;
+        --web-search)
+            if [[ $# -lt 2 || ( "${2:-}" != exa && "${2:-}" != searxng ) ]]; then
+                echo "Error: --web-search は exa または searxng を指定してください" >&2
+                exit 1
+            fi
+            HARNESS_WEB_SEARCH="$2"
             shift 2
             ;;
         --url-index)
@@ -489,6 +498,10 @@ fi
 
 if [[ -n "$HARNESS_HELPER_MODEL" && -z "$HARNESS" ]]; then
     echo "Error: --helper-model requires --harness" >&2
+    exit 1
+fi
+if [[ -n "$HARNESS_WEB_SEARCH" && -z "$HARNESS" ]]; then
+    echo "Error: --web-search には --harness が必要です" >&2
     exit 1
 fi
 
@@ -3134,6 +3147,7 @@ start_harness_child() {
     [[ -n "$tools_spec" ]] || tools_spec='{"base":"default","tools":{}}'
     [[ -z "$CODEX_EFFORT" ]] || native_args=(--effort "$CODEX_EFFORT")
     [[ -z "$HARNESS_HELPER_MODEL" ]] || native_args+=(--helper-model "$HARNESS_HELPER_MODEL")
+    [[ -z "$HARNESS_WEB_SEARCH" ]] || native_args+=(--web-search "$HARNESS_WEB_SEARCH")
     [[ -z "$HARNESS_URL_INDEX" ]] || native_args+=(--url-index "$HARNESS_URL_INDEX")
     [[ -z "$HARNESS_URL_KEY" ]] || native_args+=(--url-key "$HARNESS_URL_KEY")
     HARNESS_STATE="$("${AGENTSTACK_PYTHON:-python3}" "$HARNESS_HELPER" prepare \

@@ -317,6 +317,11 @@ def child_home(document, facts=None):
 
 def generate(document):
     facts = validate_input(document)
+    search = None
+    search_manifest = CONNECTIONS['read_manifest'](document['manifest_file'])
+    if document.get('web_search') or search_manifest.get('web_search', {}).get('provider'):
+        web = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'hooks/native_web_search.py'))
+        search = web['select'](document, search_manifest)
     product, profile = Path(document['product_root']).resolve(), child_home(document, facts)
     state, cwd = Path(document['state_dir']).resolve(), Path(document['cwd']).resolve()
     # A private config slug keeps old named/custom credential pools and endpoint
@@ -404,6 +409,25 @@ def generate(document):
                           for task in tasks},
             'delegation': _helper_route(native_provider, facts['helper_model']),
         }
+        if search:
+            settings_file = state / 'web-search.json'
+            _save(settings_file, search)
+            reader = web['command'](product, settings_file, facts['python'])
+            overlay['web'] = {'search_backend': search['provider'], 'keyless_rescue': False}
+            if search['provider'] == 'searxng':
+                search_plugin = profile / 'plugins/orrery-web-search'
+                _save(search_plugin / 'plugin.yaml', {'name': 'orrery-web-search', 'version': '1.0.0',
+                    'description': 'SearXNG の応答状態を保持する', 'kind': 'backend',
+                    'provides_web_providers': ['orrery-searxng']})
+                _link(search_plugin / '__init__.py', product / 'integrations/hermes/web_search.py')
+                overlay['plugins']['enabled'].append('orrery-web-search')
+                overlay['web']['search_backend'] = 'orrery-searxng'
+            if search['provider'] == 'exa':
+                # 明示した有料の資格が無い時、匿名の別経路に切り替えない。
+                overlay['web']['provider_tier'] = {'exa': 'paid'}
+                helper = shlex.join([*reader, '--emit-env'])
+                overlay['secrets'] = {'command': {'enabled': True,
+                    'command': helper, 'helper_timeout_seconds': 20, 'override_existing': True}}
         personality = _personality_prompt(existing, Path(facts['source']))
         # Native consent reads raw config, so the overlay alone cannot settle
         # its offer. Preserve all explicit choices and every other config byte.
@@ -413,11 +437,25 @@ def generate(document):
         spec.loader.exec_module(defaults)
         defaults.settle_unanswered(profile, state)
         defaults.project_mcp(profile, raw_mcp)
+        if search:
+            # native の dotenv 入口は secrets だけ raw config から読む。
+            # 非秘密の helper 参照をここにも写す（overlay のみでは起動時に読まれない）。
+            raw = read(profile / 'config.yaml')
+            secrets = raw.setdefault('secrets', {})
+            if search['provider'] == 'exa':
+                secrets['command'] = overlay['secrets']['command']
+            elif str(product / 'hooks/native_web_search.py') in secrets.get('command', {}).get('command', ''):
+                secrets['command'] = {'enabled': False}
+            _save(profile / 'config.yaml', raw)
         _save(state / 'overlay/config.yaml', overlay)
     definitions = state / 'credential-references.json'
     _save(definitions, {'backends': {'hermes': {
         'auth_command': shlex.split(facts['route']['key_cmd']),
         **({'credential_ref': facts['credential_ref']} if facts['credential_ref'] is not None else {})}}})
+    if search:
+        entries = read(definitions)
+        entries['backends']['web-search'] = web['definition'](search, reader)
+        _save(definitions, entries)
     argv = [facts['executable'], 'chat', '--provider', native_provider, '--model', facts['model']]
     if document.get('effort') is not None:
         argv.extend(['--reasoning', document['effort']])
@@ -437,6 +475,11 @@ def generate(document):
         # Native personality normally wins over agent.system_prompt. Its
         # official ephemeral override preserves it plus the shared block.
         env['HERMES_EPHEMERAL_SYSTEM_PROMPT'] = personality + '\n\n' + instructions
+    if search:
+        protected = json.loads(env['AGENTSTACK_LLM_KEY_FILES'])
+        env['AGENTSTACK_LLM_KEY_FILES'] = json.dumps([*protected, str(settings_file)])
+        if search['provider'] == 'searxng':
+            env['SEARXNG_URL'] = search['url']
     return {'argv': argv, 'env': env, 'cwd': str(cwd), 'program': 'hermes',
             'native_entry': facts['executable'], 'config_dir': str(state / 'overlay'),
             'profile_home': str(profile), 'guard': {'plugin': str(plugin / '__init__.py'), 'contract': 1}}
