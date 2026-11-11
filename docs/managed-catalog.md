@@ -77,6 +77,7 @@ Linux / WSL では同じ `credential_ref` に既存の `{"store":"secret-service
 
 dsh は固定 runtime の `@deepseek-ai/dsh-web-search-exa` と小さな SearXNG provider を使い、検索先を固定します。
 Hermes は native の Exa と資格 helper（`secrets.command`）を使い、子専用 config に helper の非秘密参照を写します。
+managed Hermes の固定 runtime は、上流で版が固定された `exa` extra を install 時に準備します。既存の install も新しい世代へ更新し、私有設定の runtime 参照を更新後の `current.json` に合わせてから新しい子を起動してください。子の初回検索で SDK を別の環境へ入れる手順には頼りません。
 Hermes の SearXNG には native の HTTP・結果整形を使う薄い provider を足し、両 harness とも「結果0件かつ `unresponsive_engines` がある」応答は engine 名つきのエラーにします。
 検索先を指定した Hermes では匿名検索への自動救済を使わず、失敗理由をそのまま返します。
 鍵の値は起動計画・設定ファイル・引数に保存しません。鍵無しや検索 service の停止は子の起動を止めず、検索時にエラーになります。
