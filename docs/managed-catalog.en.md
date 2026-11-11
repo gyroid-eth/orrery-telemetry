@@ -31,6 +31,8 @@ The API provider IDs are `deepseek` / `strata`, and the harness IDs are `dsh` / 
 
 Appearing in the catalog does not confirm successful startup or work. In Telemetry's bundled **NEW AGENT**, you can select a DeepSeek / Local model and Harness (dsh or Hermes) marked available in the catalog. If you have also installed cockpit, follow the [end-to-end New Agent / Harness / Lineage and Mail check](getting-started.en.md#5-play-shiritori-as-an-end-to-end-check). For a launch without the screen, follow the provider, model, harness, parent and authentication requirements in the [API reference](api.en.md).
 
+Managed Hermes runtimes prepare the upstream-pinned `exa` extra during installation. Existing installations receive a new runtime generation; update private runtime references to match the new `current.json` before launching a new child. Exa search then uses the SDK in that fixed environment, without installing it into a separate environment on the first search.
+
 ## Effort capabilities and defaults
 
 Handwritten `efforts` / `default_effort` fields in a manifest do not establish capability. Each selected model's harness entry carries `efforts`, `default_effort` and `effort_source`; the picker and validation of explicit POST requests use that same entry.
