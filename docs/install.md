@@ -425,6 +425,8 @@ git pull
 
 installer は payload と `VERSION` を更新し、service を再登録して、managed merge を再び preview します。同梱 ORRERY Mail の candidate と state を検証して再利用します。
 
+更新の後は、動いている agent（Claude Code・Codex・dsh・Hermes、常駐 bot を含む）を起動し直してください。managed block の指示と ORRERY Mail の道具の一覧（`show_files` など）は session の起動時に読み込まれるので、起動し直すまでは更新前のままです。managed merge の preview を承認しなかった場合は、指示も更新されません。
+
 ### Reservation 保護設定の移行
 
 対象の top-level と delegated child 起動は、順序付き `AGENTSTACK_EXTRA_PROTECTED_ROOTS` の後に選択した物理作業 directory を保護します。Git root へ自動拡張はしません。namespace の選択と installed project key は変えません。install/update は process extras（空も含む）、installed extras（空も含む）、installed の旧 `AGENTSTACK_PROTECTED_ROOTS` の literal 値と順序をそのまま一度だけ、最後に空、の順で自動選択します。ambient shell/tmux の旧 root は取り込みません。移行元・値・保存先を `--dry-run` でも表示し、不正・曖昧な旧設定は上書き前に停止します。
