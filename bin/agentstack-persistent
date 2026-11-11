@@ -1485,6 +1485,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     profile_path = _expand_path(args.profile)
     try:
+        # An explicit fresh profile dispatches to the shared native launcher;
+        # legacy enrollment and global preparation keep their existing paths.
+        if _read_private_json(profile_path, 'profile-invalid').get('kind') == 'orrery-fresh-persistent-v1':
+            if args.operation not in {'run', 'inspect'}:
+                raise PersistentError('fresh-profile-operation-unsupported')
+            command = [os.environ.get('AGENTSTACK_PYTHON', sys.executable), '-m',
+                       'agentstack_mail.fresh_persistent', args.operation, '--profile', str(profile_path),
+                       '--wrapper-root', str(Path(__file__).resolve().parent.parent)]
+            os.execvpe(command[0], command, os.environ)
+        if 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in os.environ or os.environ.get('AGENTSTACK_RUNTIME_MODE') == 'fresh':
+            raise PersistentError('FRESH_PROFILE_REQUIRED')
         api = runpy.run_path(str(Path(__file__).resolve().parent / 'lib/runtime_client.py'))
         try:
             if args.operation == 'configure':

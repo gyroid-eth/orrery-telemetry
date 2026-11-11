@@ -8,6 +8,50 @@
 
 通常の `agent-start` / `agent-start-codex` や child launcher を通る一時的な agent は、従来の登録経路を使います。この文書の enrollment は、launcher を一度も通らなかった既存 bot、または local credential を失った同じ数値 row を移行するための operator 手順です。
 
+## fresh の Claude Channels
+
+`runtime_mode=fresh` では、先に [fresh の登録と準備](fresh-global-update.md) を行い、
+本人が prepared Claude HOME のログイン・hook・Channels plugin を準備します。
+`AGENTSTACK_PYTHON` には、通常の fresh 起動と同じ確認済みの Mail package を import できる Python を指定します。
+旧 enrollment や旧 Mail token を移す操作は行いません。owner 限定の JSON profile を作ります。
+
+```json
+{
+  "kind": "orrery-fresh-persistent-v1",
+  "context": "/path/to/prepared/context.json",
+  "provider": "claude",
+  "working_directory": "/path/to/workspace",
+  "channels": ["plugin:telegram@claude-plugins-official"],
+  "model": "sonnet",
+  "environment": {"TELEGRAM_STATE_DIR": "/path/to/channel-state"}
+}
+```
+
+```bash
+chmod 600 /path/to/bot.json
+agentstack-persistent inspect --profile /path/to/bot.json
+agentstack-persistent run --profile /path/to/bot.json
+```
+
+profile は明示的な fresh 分岐で通常の launch へ渡ります。登録、prepare、service 登録を
+自動で行いません。Channels の設定 source の検査と Mail alias の置換は従来の interactive
+と共用し、Channels を残したまま bound Mail と通常の予約 hook を使います。
+待機中の Mail は既存の fresh watcher が同じ tmux の入力面へ届けます。
+
+起動元の環境と profile に鍵の値を入れず、Channels の既存 state の読取を使います。
+公式 plugin が起動後に自分の process 内で `.env` を読む挙動は変更しません。
+旧 raw Mail token は引き継ぎません。モデルが使う Bash へ鍵を渡しません。
+
+停止は **pane を kill せず、この launcher process へ SIGTERM** を送って完了を待ちます。
+launcher が provider の終了を確認して `ended.json` を記録した後、同じ profile で再起動します。
+異常終了・強制 kill・停止 timeout は unknown で止まり、次の run を起動しません。
+会話は 1 起動につき 1 つです。`/clear` などで session が変わるとその run を停止し、
+`FRESH_BOT_RESTART_REQUIRED` を表示します。旧会話の自動復元や無停止の切替は行いません。
+本番と同じ Telegram token の新旧 poller を並走させず、旧 poller の終了も確認してください。
+
+Mac の bot process の再起動と機体再起動は別です。Mac／WSL の機体再起動・自動 unlock は
+未受入で、この手順だけで対応済みとはしません。通常の旧 profile は次の enrollment 手順を使います。
+
 ## 保証範囲
 
 ここでいう **operator** は、この機体の local terminal で専用 CLI を明示的に実行する人です。実装が保証するのは次の範囲です。

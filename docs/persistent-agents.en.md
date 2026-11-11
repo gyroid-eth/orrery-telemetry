@@ -8,6 +8,50 @@ A persistent agent is a parentless bot that keeps the same ORRERY Mail identity 
 
 Temporary agents started through the normal `agent-start` / `agent-start-codex` or child launchers continue to use their existing registration path. The enrollment procedure here is for migrating an existing bot that never passed through a launcher, or for recovering the same numeric row after its local credential was lost.
 
+## Claude Channels in fresh mode
+
+In `runtime_mode=fresh`, complete [fresh registration and preparation](fresh-global-update.en.md)
+first. The operator prepares login, hooks and the Channels plugin in the prepared Claude HOME.
+Set `AGENTSTACK_PYTHON` to the same verified Python that imports this Mail package for ordinary fresh launch.
+Do not import legacy enrollment or Mail tokens. Create an owner-only JSON profile:
+
+```json
+{
+  "kind": "orrery-fresh-persistent-v1",
+  "context": "/path/to/prepared/context.json",
+  "provider": "claude",
+  "working_directory": "/path/to/workspace",
+  "channels": ["plugin:telegram@claude-plugins-official"],
+  "model": "sonnet",
+  "environment": {"TELEGRAM_STATE_DIR": "/path/to/channel-state"}
+}
+```
+
+```bash
+chmod 600 /path/to/bot.json
+agentstack-persistent inspect --profile /path/to/bot.json
+agentstack-persistent run --profile /path/to/bot.json
+```
+
+This explicit fresh profile dispatches to ordinary launch. It does not register an agent,
+prepare a context or install a service. Channels reuse interactive configuration source checks
+and Mail alias replacement, preserving Channels alongside bound Mail and regular reservation hooks.
+The existing fresh watcher delivers idle Mail to the same tmux input surface.
+
+Keep credential values out of the launch environment and profile. Use the existing Channels state
+reader; the official plugin still reads its `.env` inside its own process after startup.
+Legacy raw Mail tokens are not inherited. Credential values are not passed to the model's Bash.
+
+To stop, send **SIGTERM to this launcher process rather than killing its pane**, and wait for it.
+The launcher observes provider exit and writes `ended.json`; restart with the same profile afterward.
+Unexpected exit, forced kill or stop timeout stays unknown and blocks another run.
+One launch owns one conversation. A session change such as `/clear` stops that run and reports
+`FRESH_BOT_RESTART_REQUIRED`. Automatic old-conversation restoration and seamless reset are not supported.
+Never run old and new pollers with the same Telegram token; verify that the old poller has stopped.
+
+Bot process restart differs from machine restart. Mac/WSL machine reboot and automatic unlock
+remain unverified. Legacy profiles continue to use the enrollment procedure below.
+
 ## Scope of the guarantee
 
 An **operator** here means a person who explicitly runs the dedicated CLI in a local terminal on this machine. The implementation guarantees only:
