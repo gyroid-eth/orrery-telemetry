@@ -414,6 +414,11 @@ def generate(document):
             'agent': {'system_prompt': '\n\n'.join(filter(None, [existing.get('agent', {}).get('system_prompt'), instructions]))},
             'auth': {'adopt_external_logins': False},
             'mcp_servers': mcp,
+            # TTY --query-file uses native interactive startup (otherwise 1.5s).
+            # Join discovery before the first tool snapshot; return as soon as
+            # it completes, with a finite budget for slow/unreachable servers.
+            'mcp_discovery_timeout': 45.0,
+            'mcp_single_query_discovery_timeout': 45.0,
             'plugins': {'enabled': list(dict.fromkeys([*enabled, PLUGIN]))},
             'auxiliary': {task: {**_helper_route(native_provider, facts['helper_model']), 'fallback_chain': []}
                           for task in tasks},
