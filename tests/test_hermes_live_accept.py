@@ -173,7 +173,7 @@ with tempfile.TemporaryDirectory() as temporary:
 
 
 FAKE_MCP_SCRIPT = r'''
-import json,sys
+import json,sys,time
 from pathlib import Path
 trace=Path(sys.argv[1])
 for line in sys.stdin:
@@ -182,6 +182,8 @@ for line in sys.stdin:
     with trace.open('a') as out:out.write(str(method)+'\n')
     if 'id' not in request:continue
     if method=='initialize':
+        delay=trace.with_name('connect-delay.json')
+        if delay.exists():time.sleep(json.loads(delay.read_text()))
         result={'protocolVersion':request['params']['protocolVersion'],'capabilities':{'tools':{}},'serverInfo':{'name':'offline-fixture','version':'1'}}
     elif method=='tools/list':
         result={'tools':[{'name':'fixture_ping','description':'Offline synthetic probe','inputSchema':{'type':'object','properties':{}}}]}
@@ -191,7 +193,7 @@ for line in sys.stdin:
 '''
 
 NATIVE_MCP_SCRIPT = r'''
-import json,logging,os,sys
+import json,logging,os,sys,time
 from pathlib import Path
 source=Path(sys.argv[1]).resolve();root=Path(sys.argv[2]).resolve();plan=json.loads(Path(sys.argv[3]).read_text());expected=sys.argv[4]
 os.environ.update(plan['env'])
@@ -222,12 +224,16 @@ assert Path(config.__file__).resolve().is_relative_to(source)
 assert all(Path(module.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()) for module in (httpx,mcp))
 try:
     gate=_has_configured_mcp_servers()
-    ensure_mcp_discovery_before_agent_build(logger=logging.getLogger('offline-fixture'),single_query=True)
+    single_query=json.loads(sys.argv[5])
+    started=time.monotonic()
+    ensure_mcp_discovery_before_agent_build(logger=logging.getLogger('offline-fixture'),single_query=single_query)
+    elapsed=time.monotonic()-started
     status=get_mcp_status()
     name=mcp_prefixed_tool_name('orrery-mail','fixture_ping')
     methods=(root/'methods.log').read_text().splitlines() if (root/'methods.log').exists() else []
     registered=registry.get_entry(name) is not None
     summary={'startup_gate':gate,'methods':methods,'registered':registered,'blocked':blocked,
+             'single_query':single_query,'wait_seconds':elapsed,
              'connected':any(row['name']=='orrery-mail' and row['connected'] and row['tools']==1 for row in status),
              'imports':{module.__name__:str(Path(module.__file__).resolve()) for module in (config,httpx,mcp)}}
     print(json.dumps(summary),flush=True)
@@ -251,18 +257,28 @@ class NativeAcceptanceData(unittest.TestCase):
     def test_real_native_managed_mcp_discovery_reaches_stdio_tools(self):
         self.mcp_case('selected')
 
+    def test_real_native_slow_mcp_is_in_first_interactive_and_single_query_snapshot(self):
+        # Exceed both native defaults (1.5s interactive, 15s single query).
+        # The TTY --query-file launch takes the interactive branch.
+        for single_query in (False, True):
+            with self.subTest(single_query=single_query):
+                summary = self.mcp_case('selected', delay=17, single_query=single_query)
+                self.assertGreaterEqual(summary['wait_seconds'], 17)
+                self.assertLess(summary['wait_seconds'], 40)  # returns on discovery, not a fixed sleep
+
     def test_real_native_empty_disabled_and_unselected_mcp_never_spawns(self):
         for mode in ('empty', 'disabled', 'unselected'):
             with self.subTest(mode=mode):
                 self.mcp_case(mode)
 
-    def mcp_case(self, mode):
+    def mcp_case(self, mode, *, delay=0, single_query=True):
         source, python = self.native()
         real_popen = subprocess.Popen
         fixture = fixtures.ThinConfig()
         fixture.setUp()
         try:
             (fixture.base / 'fake-mcp.py').write_text(FAKE_MCP_SCRIPT)
+            fixture.save(fixture.base / 'connect-delay.json', delay)
             definition = {'command': python, 'args': ['-I', '-B', str(fixture.base / 'fake-mcp.py'), str(fixture.base / 'methods.log')]}
             servers = {'orrery-mail': definition} if mode == 'selected' else {'orrery-mail': {**definition, 'enabled': False}} if mode == 'disabled' else {}
             fixture.save(fixture.base / 'mcp.json', {'mcpServers': servers})
@@ -273,7 +289,7 @@ class NativeAcceptanceData(unittest.TestCase):
             fixture.save(plan_file, plan)
             with patch.object(subprocess, 'Popen', real_popen):
                 result = subprocess.run([python, '-I', '-B', '-c', NATIVE_MCP_SCRIPT,
-                    source, str(fixture.base), str(plan_file), mode], cwd=fixture.base,
+                    source, str(fixture.base), str(plan_file), mode, json.dumps(single_query)], cwd=fixture.base,
                     env={'HOME': str(fixture.base), 'TMPDIR': str(fixture.base), 'PATH': os.defpath,
                          'PYTHONDONTWRITEBYTECODE': '1', 'HERMES_DISABLE_LAZY_INSTALLS': '1', 'UV_OFFLINE': '1'},
                     capture_output=True, text=True, timeout=40)
@@ -287,6 +303,7 @@ class NativeAcceptanceData(unittest.TestCase):
                 self.assertFalse(summary['registered'] or summary['connected'])
                 self.assertEqual(summary['methods'], [])
             self.assertEqual(summary['blocked'], [])
+            return summary
         finally:
             fixture.doCleanups()
 

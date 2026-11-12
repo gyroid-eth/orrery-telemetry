@@ -55,6 +55,16 @@ The native input queue uses `busy_input_mode=queue`. The initial prompt uses
 output-token or session-lifetime limit, native-command ban, egress preload or
 usage evaluator is added by this entry.
 
+The managed overlay sets both native MCP discovery wait budgets
+(`mcp_discovery_timeout` and `mcp_single_query_discovery_timeout`) to 45 seconds.
+This covers interactive TTY launches seeded with `--query-file` as well as
+single-query launches, for every backend. Hermes waits before its first tool
+snapshot and proceeds as soon as discovery finishes; this is not a fixed sleep.
+Slow Mail startup therefore has time to register its tools before the initial
+task. If discovery is still pending after the budget, native startup continues
+and those tools can still be absent from the first turn. No retry, required-server
+gate or upstream patch is added; private raw timeout settings are not rewritten.
+
 `thin_guard.py` adapts native pre-tool events to the common credential-read,
 registration and acquired-reservation hooks, in that order. A failed check
 blocks the tool with a fixed diagnostic, without exposing hook output.
