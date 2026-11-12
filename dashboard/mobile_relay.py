@@ -106,7 +106,7 @@ class Upstream:
         query='' if cursor is None else '?'+urlencode({'cursor':cursor})
         return json.loads(self._read('/api/mobile-cache-page'+query,'application/json',MAX_UPSTREAM_BYTES))
 
-    def _read(self,path,mime,limit,*,expired=False):
+    def _read(self,path,mime,limit,*,expired=False,missing=False):
         con = http.client.HTTPConnection('127.0.0.1', self.port, timeout=UPSTREAM_TIMEOUT)
         timer = None
         deadline = time.monotonic() + UPSTREAM_TIMEOUT
@@ -119,11 +119,13 @@ class Upstream:
             timer = threading.Timer(max(0.001,deadline-time.monotonic()),expire)
             timer.daemon = True
             timer.start()
+            types=(mime,) if isinstance(mime,str) else mime
             con.request('GET', path, headers={'Host':f'127.0.0.1:{self.port}',
-                                            'Accept':mime,'Connection':'close'})
+                                            'Accept':', '.join(types),'Connection':'close'})
             response = con.getresponse()
             if expired and response.status==410:raise LookupError('upstream_event_or_cursor_expired')
-            if response.status != 200 or response.getheader('Content-Type','').split(';')[0].strip().lower() != mime:
+            if missing and response.status==404:raise LookupError('upstream_unsupported')
+            if response.status != 200 or response.getheader('Content-Type','').split(';')[0].strip().lower() not in types:
                 raise ValueError('upstream_unavailable')
             if response.getheader('Content-Encoding', 'identity').lower() != 'identity':
                 raise ValueError('upstream_encoding')
@@ -140,6 +142,39 @@ class Upstream:
             con.close()
 
 
+class DemoClient:
+    """Only the desktop's Demo snapshot and its two maintained mask scripts."""
+    ASSETS={'/demo-mask.js':'/demo_mask.js','/demo-mode.js':'/demo_mode.js'}
+
+    def __init__(self,port):
+        self.upstream=Upstream(port)
+
+    def status(self):
+        try:raw=self.upstream._read('/telemetry/demo','application/json',32768,missing=True)
+        except LookupError:return {'version':1,'supported':False,'on':False,'words':[],'identity':None}
+        except ConnectionRefusedError:return {'version':1,'supported':False,'on':False,'words':[],'identity':None}
+        value=json.loads(raw)
+        if (not isinstance(value,dict) or set(value)!={'version','on','words','identity'} or
+                type(value['version']) is not int or value['version']!=1 or type(value['on']) is not bool or
+                not isinstance(value['words'],list) or len(value['words'])>256 or
+                any(not isinstance(word,str) or not 2<=len(word)<=4096 for word in value['words'])):
+            raise ValueError('demo_schema')
+        identity=value['identity']
+        if value['on']:
+            if (not isinstance(identity,dict) or set(identity)!={'users','hosts'} or
+                    any(not isinstance(identity[key],list) or len(identity[key])>16 or
+                        any(not isinstance(name,str) or not 1<=len(name)<=254 for name in identity[key])
+                        for key in ('users','hosts')) or not any(identity.values())):
+                raise ValueError('demo_identity')
+        elif identity is not None or value['words']:
+            raise ValueError('demo_disabled_state')
+        return dict(value,supported=True)
+
+    def asset(self,path):
+        if path not in self.ASSETS:raise ValueError('demo_asset')
+        return self.upstream._read(self.ASSETS[path],('text/javascript','application/javascript'),128*1024)
+
+
 def static_assets(root=HERE):
     """Fixed bundled files only; no file path, overlay or provider lookup."""
     fixed = {
@@ -147,6 +182,7 @@ def static_assets(root=HERE):
         '/manifest.webmanifest': (root/'mobile/manifest.webmanifest', 'application/manifest+json; charset=utf-8'),
         '/mobile.css': (root/'mobile/mobile.css', 'text/css; charset=utf-8'),
         '/mobile.js': (root/'mobile/mobile.js', 'text/javascript; charset=utf-8'),
+        '/demo-sync.js': (root/'mobile/demo_sync.js', 'text/javascript; charset=utf-8'),
         '/network_view.js': (root/'mobile/network_view.js', 'text/javascript; charset=utf-8'),
         '/mail_comets.js': (root/'mobile/mail_comets.js', 'text/javascript; charset=utf-8'),
         '/conversation_markdown.js': (root/'mobile/conversation_markdown.js', 'text/javascript; charset=utf-8'),
@@ -242,6 +278,13 @@ class Handler(BaseHTTPRequestHandler):
         if not self._admitted():
             self._send(403,{'ok':False,'error':'request_denied'});return
         parts=urlsplit(self.path)
+        if self.path=='/view/demo' or self.path in DemoClient.ASSETS:
+            if self.command=='HEAD':self._send(200,b'');return
+            try:
+                if self.path=='/view/demo':self._send(200,self.server.mobile_demo.status())
+                else:self._send(200,self.server.mobile_demo.asset(self.path),'text/javascript; charset=utf-8')
+            except (OSError,ValueError,TypeError):self._send(503,{'ok':False,'error':'demo_unavailable'})
+            return
         if self.path=='/view/terminal':
             if self.command=='HEAD':self._send(200,b'');return
             if not self.server.mobile_config.input_enabled:
@@ -415,7 +458,7 @@ class ReaderServer(ThreadingHTTPServer):
         super().server_close()
 
 
-def make_server(config:Config, *, store=None, mail_store=None, input_client=None, history_client=None, root=HERE, test_port=None):
+def make_server(config:Config, *, store=None, mail_store=None, input_client=None, history_client=None, demo_client=None, root=HERE, test_port=None):
     # Tests can request an ephemeral loopback port; CLI has no bind-host option.
     server=ReaderServer(('127.0.0.1',config.listen_port if test_port is None else test_port),Handler)
     server.daemon_threads=True
@@ -423,6 +466,7 @@ def make_server(config:Config, *, store=None, mail_store=None, input_client=None
     server.mobile_store=store if store is not None else SnapshotStore(Upstream(config.upstream_port))
     server.mobile_mail=mail_store if mail_store is not None else MobileMailStore(Upstream(config.upstream_port))
     server.mobile_root=Path(root)
+    server.mobile_demo=demo_client if demo_client is not None else DemoClient(config.cockpit_port)
     server.mobile_assets=static_assets(Path(root))
     server.mobile_input=(input_client if input_client is not None else
                          mobile_input.InputClient(config.cockpit_port,config.owner_login) if config.input_enabled else None)

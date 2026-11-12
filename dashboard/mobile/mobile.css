@@ -1,3 +1,8 @@
+html[data-demo-sync="pending"] body,html[data-demo-sync="failed"] body,html[data-demo-sync="pending"] body *,html[data-demo-sync="failed"] body *{visibility:hidden!important}
+html[data-demo-sync="failed"] .mobile-demo-status,html[data-demo-sync="failed"] .mobile-demo-status *{visibility:visible!important}
+.mobile-demo-status{visibility:visible;position:fixed;inset:0;z-index:2147483601;display:grid;place-items:center;margin:0;width:100vw;height:100dvh;max-width:none;max-height:none;padding:0;border:0;background:var(--bg,#0b0d11);color:var(--ink,#ede8db);font:13px/1.6 Arial,sans-serif}
+.mobile-demo-status>div{max-width:360px;padding:24px}.mobile-demo-status button{font:inherit;padding:8px 18px;background:none;border:1px solid currentColor;border-radius:8px;color:inherit}
+html[data-demo="on"] .reader-person::after,html[data-demo="on"] body>header>span::after{content:'DEMO';flex:none;font:8px/1.2 Arial,sans-serif;letter-spacing:1px;color:var(--amber,#e5ba6a);border:1px solid currentColor;border-radius:4px;padding:3px;margin-left:5px}
 @font-face{font-family:Fraunces;src:url('/fonts/fraunces-normal.woff2') format('woff2');font-style:normal;font-weight:400 600;font-display:swap}
 @font-face{font-family:Fraunces;src:url('/fonts/fraunces-italic.woff2') format('woff2');font-style:italic;font-weight:400 600;font-display:swap}
 @font-face{font-family:'IBM Plex Mono';src:url('/fonts/ibm-plex-mono-400.woff2') format('woff2');font-style:normal;font-weight:400;font-display:swap}
