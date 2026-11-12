@@ -90,9 +90,12 @@ def phone(request):
             if operation == 'image':
                 if payload.get('image') is None:
                     return self.send(dict(contract,target=selected,enabled=state.get('images',False)))
-                if state.get('image_error'):
+                attempt = sum(op == 'image' and body.get('image') is not None for op, body in state['calls'])
+                if state.get('image_error') and attempt == state.get('image_error_at', attempt):
                     return self.send(dict(error=state['image_error']),status=403)
-                return self.send(dict(contract,target=selected,enabled=True,path='/workspace/.orrery-input-images/'+'a'*32+'.png'))
+                paths = state.get('image_paths')
+                path = paths[attempt - 1] if paths else '/workspace/.orrery-input-images/'+'a'*32+'.png'
+                return self.send(dict(contract,target=selected,enabled=True,path=path))
             if operation == 'prepare':
                 state['draft'] = payload['text']
                 state['prepared_target'] = selected

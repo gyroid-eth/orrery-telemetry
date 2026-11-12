@@ -432,7 +432,8 @@ const ref=value=>value&&/^[a-f0-9]{32}$/.test(value.mail_instance_id)&&Number.is
 const rowRef=row=>ref({mail_instance_id:row.dataset.mailInstanceId,mail_agent_id:Number(row.dataset.mailAgentId)});
 const sameTarget=value=>!fresh()||!!ref(value)&&!!selector&&value.mail_instance_id===selector.mail_instance_id&&value.mail_agent_id===selector.mail_agent_id;
 let generation=0,previewController=null,operationController=null,pollTimer=0,expiryTimer=0,failures=0,prepared=null,receipt=null,previousFocus=null;
-let imageAvailable=false,imageProbe='',imageController=null,imageProbeController=null,attachment=null;
+const MAX_ATTACHED_IMAGES=10;
+let imageAvailable=false,imageProbe='',imageController=null,imageProbeController=null,attachments=[];
 let paused=false,checkingView=false,resumeController=null,reviewUntil=0,startupReady=false;
 const viewKey='orrery-mobile-view-v1';
 function savedView(){try{const v=JSON.parse(window.sessionStorage.getItem(viewKey));return v&&(Object.keys(v).length===2||Object.keys(v).length===4&&ref(v))&&Object.keys(v).every(k=>['agent','tab','mail_instance_id','mail_agent_id'].includes(k))&&/^[A-Za-z][A-Za-z0-9_-]{0,95}$/.test(v.agent)&&['conversation','terminal'].includes(v.tab)?v:null;}catch(_){return null;}}
@@ -470,7 +471,7 @@ function cancelIntent(){
  // Best effort cancellation never retries commit, and keeps no text or preview.
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
-function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;imageController?.abort();imageController=null;imageProbeController?.abort();imageProbeController=null;imageAvailable=false;imageProbe='';attachment=null;paused=false;checkingView=false;generation++;}
+function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;imageController?.abort();imageController=null;imageProbeController?.abort();imageProbeController=null;imageAvailable=false;imageProbe='';clearAttachments();paused=false;checkingView=false;generation++;}
 function clear(){inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
 function close(fromBack=false,keepView=false){if(!keepView){restoreView=null;forgetView();}const remove=backEntry&&window.history.state?.orreryConversation===true;backEntry=false;const restore=previousFocus;previousFocus=null;clear();if(sheet.open)sheet.close();if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});if(remove&&fromBack!==true){backClosing=true;window.history.back();}}
 window.addEventListener('popstate',event=>{if(backClosing){backClosing=false;event.stopImmediatePropagation();return;}if(sheet.open&&backEntry){event.stopImmediatePropagation();if(dismissLayer()){window.history.pushState({orreryConversation:true},'');return;}backEntry=false;close(true);}},true);
@@ -667,11 +668,12 @@ function invalidate(reason){
  stop();cancelIntent();text='';output='';preview=null;previewOK=false;target=null;phase='changed';message=reason;render();
 }
 function validText(value){return typeof value==='string'&&value.trim()&&new TextEncoder().encode(value).length<=4096&&!/[\p{Cc}\p{Cs}\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value);}
-const inputText=()=>text+(attachment?(text?' ':'')+attachment.marker:'');
+function clearAttachments(){for(const attachment of attachments)URL.revokeObjectURL(attachment.url);attachments=[];}
+const inputText=()=>[text,...attachments.map(attachment=>attachment.marker)].filter(Boolean).join(' ');
 function refreshImageControls(){
  const add=q('#terminal-image-add');if(!add)return;
  add.hidden=!imageAvailable;
- add.disabled=!previewOK||!!imageController||!!attachment||!['editing','accepted','refused'].includes(phase);
+ add.disabled=!previewOK||!!imageController||attachments.length>=MAX_ATTACHED_IMAGES||!['editing','accepted','refused'].includes(phase);
  const panel=add.closest('.reader-input-bar');if(panel)layoutInputBar(panel);
 }
 async function probeImages(){
@@ -685,30 +687,48 @@ async function probeImages(){
  finally{if(imageProbeController===controller)imageProbeController=null;}
 }
 function imageThumbnail(panel,removable){
- if(!attachment)return;
- const box=make('div','reader-image'),image=make('img','reader-image-thumb');image.src=attachment.url;image.alt='Attached image';
- box.append(image,make('span','','Image attached'));
- if(removable){const remove=action('×','reader-image-remove',()=>{attachment=null;render();});remove.setAttribute('aria-label','Remove attached image');remove.disabled=!!imageController;box.append(remove);}
- panel.append(box);
+ if(!attachments.length)return;
+ const list=make('div','reader-images');list.setAttribute('aria-label','Attached images');
+ for(const [index,attachment] of attachments.entries()){
+  const box=make('div','reader-image'),image=make('img','reader-image-thumb');image.src=attachment.url;image.alt='Attached image '+(index+1);
+  box.append(image,make('span','','Image '+(index+1)+' of '+attachments.length));
+  if(removable){const remove=action('×','reader-image-remove',()=>{attachments=attachments.filter(value=>value!==attachment);URL.revokeObjectURL(attachment.url);render();});remove.setAttribute('aria-label','Remove attached image '+(index+1));remove.disabled=!!imageController;box.append(remove);}
+  list.append(box);
+ }
+ panel.append(list);
 }
-async function uploadImage(file){
- if(!file||!target||!previewOK||!imageAvailable||imageController||attachment||!['editing','accepted','refused'].includes(phase))return;
- if(file.size>10*1024*1024||!['image/jpeg','image/png','image/webp'].includes(file.type)){
-  message=file.size>10*1024*1024?'Choose an image up to 10 MiB.':'Choose a JPEG, PNG or WebP image.';render();return;
+async function uploadImages(files){
+ const selected=Array.from(files||[]);
+ if(!selected.length||!target||!previewOK||!imageAvailable||imageController||!['editing','accepted','refused'].includes(phase))return;
+ if(attachments.length+selected.length>MAX_ATTACHED_IMAGES){message='Attach up to '+MAX_ATTACHED_IMAGES+' images per input.';render();return;}
+ for(const file of selected){
+  if(file.size>10*1024*1024||!['image/jpeg','image/png','image/webp'].includes(file.type)){
+   message=file.size>10*1024*1024?'Choose an image up to 10 MiB.':'Choose a JPEG, PNG or WebP image.';render();return;
+  }
  }
  if(phase!=='editing'){cancelIntent();phase='editing';}
- const g=generation,t=target,controller=new AbortController();imageController=controller;message='Uploading image…';render();
+ const g=generation,t=target,controller=new AbortController();imageController=controller;
  try{
-  const url=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(Error('image_invalid'));controller.signal.addEventListener('abort',()=>{reader.abort();reject(Error('cancelled'));},{once:true});reader.readAsDataURL(file);});
-  if(g!==generation||controller.signal.aborted)return;
-  const result=await request('image',{epoch:capability.epoch,choice:t.choice,revision:t.revision,image:url.slice(url.indexOf(',')+1)},controller,30000);
-  if(g!==generation||!sheet.open||document.hidden)return;
-  if(result.enabled!==true||result.target?.choice!==t.choice||result.target?.revision!==t.revision||!sameTarget(result.target)||typeof result.path!=='string'||!result.path.startsWith('/'))throw Error('unavailable');
-  const quoted="'"+result.path.replaceAll("'","'\\''")+"'",marker='[image: '+quoted+']',final=text+(text?' ':'')+marker;
-  if(!validText(final))throw Error('image_text_too_large');
-  attachment={url,marker};message='';
+  for(const [index,file] of selected.entries()){
+   if(g!==generation||controller.signal.aborted)return;
+   message='Uploading image '+(index+1)+' of '+selected.length+'…';render();
+   const url=await new Promise((resolve,reject)=>{
+    const reader=new FileReader(),cleanup=()=>controller.signal.removeEventListener('abort',abort);
+    const abort=()=>{reader.abort();cleanup();reject(Error('cancelled'));};
+    reader.onload=()=>{cleanup();resolve(reader.result);};reader.onerror=()=>{cleanup();reject(Error('image_invalid'));};
+    controller.signal.addEventListener('abort',abort,{once:true});reader.readAsDataURL(file);
+   });
+   if(g!==generation||controller.signal.aborted)return;
+   const result=await request('image',{epoch:capability.epoch,choice:t.choice,revision:t.revision,image:url.slice(url.indexOf(',')+1)},controller,30000);
+   if(g!==generation||!sheet.open||document.hidden)return;
+   if(result.enabled!==true||result.target?.choice!==t.choice||result.target?.revision!==t.revision||!sameTarget(result.target)||typeof result.path!=='string'||!result.path.startsWith('/'))throw Error('unavailable');
+   const quoted="'"+result.path.replaceAll("'","'\\''")+"'",marker='[image: '+quoted+']',final=[inputText(),marker].filter(Boolean).join(' ');
+   if(!validText(final))throw Error('image_text_too_large');
+   attachments.push({url:URL.createObjectURL(file),marker});
+  }
+  message='';
  }catch(error){
-  if(g===generation){const reasons={image_folder_full:'This workspace already has 50 images. Remove older files before attaching another.',image_too_large:'Choose an image up to 10 MiB.',image_pixels_too_large:'Choose an image up to 24 megapixels.',image_format_unsupported:'Choose a static JPEG, PNG or WebP image.',image_text_too_large:'The image path and text exceed 4096 bytes. Shorten the text and attach again.'};message=reasons[error.message]||'Image could not be saved. No input was sent. Choose the image again.';}
+  if(g===generation){const reasons={image_folder_full:'This workspace already has 50 images. Remove older files before attaching another.',image_too_large:'Choose an image up to 10 MiB.',image_pixels_too_large:'Choose an image up to 24 megapixels.',image_format_unsupported:'Choose a static JPEG, PNG or WebP image.',image_text_too_large:'The image paths and text exceed 4096 bytes. Shorten the text or remove an image.'};message=(attachments.length?attachments.length+' image(s) attached. ':'')+(reasons[error.message]||'Image could not be saved. No input was sent. Choose the image again.');}
  }finally{if(g===generation&&imageController===controller){imageController=null;render();}}
 }
 async function reviewInput(){
@@ -728,7 +748,7 @@ async function reviewInput(){
 async function send(){
  if(phase!=='review'||!prepared||!previewOK)return;
  const sentText=prepared.text,p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target};
- prepared=null;receipt=p;text='';attachment=null;clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
+ prepared=null;receipt=p;text='';clearAttachments();clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,controller=new AbortController();operationController=controller;phase='sending';message='';render();
  try{
   const result=await request('commit',{epoch:p.epoch,intent:p.intent,confirmation:p.confirmation},controller,7000);
@@ -802,8 +822,8 @@ function readerInputBar(){
   if(['sending','accepted','unknown','refused'].includes(phase))readerReceipt(panel);
   const available=!!choice&&['editing','accepted','refused'].includes(phase),label=make('label','reader-input-label','Your input');label.htmlFor='terminal-text';
   const row=make('div','reader-input-row'),field=make('textarea','terminal-text');field.id='terminal-text';field.rows=1;field.value=text;field.placeholder=choice?'Write one line…':'Choose a pane first';field.autocomplete='off';field.spellcheck=false;field.disabled=!available;
-  const file=make('input');file.type='file';file.id='terminal-image-file';file.accept='image/jpeg,image/png,image/webp';file.hidden=true;file.onchange=()=>uploadImage(file.files?.[0]);
-  const add=action('+','reader-image-add',()=>file.click());add.id='terminal-image-add';add.title='Attach image';add.setAttribute('aria-label','Attach image');add.hidden=!imageAvailable;add.disabled=!available||!previewOK||!!imageController||!!attachment;
+  const file=make('input');file.type='file';file.id='terminal-image-file';file.accept='image/jpeg,image/png,image/webp';file.multiple=true;file.hidden=true;file.onchange=()=>uploadImages(file.files);
+  const add=action('+','reader-image-add',()=>file.click());add.id='terminal-image-add';add.title='Attach images';add.setAttribute('aria-label','Attach images');add.hidden=!imageAvailable;add.disabled=!available||!previewOK||!!imageController||attachments.length>=MAX_ATTACHED_IMAGES;
   const review=action(phase==='preparing'?'…':'↑','terminal-primary reader-input-send',reviewInput);review.id='terminal-review';review.title='Review input';review.setAttribute('aria-label','Review input');review.disabled=!available||!previewOK||!!imageController||!validText(inputText());
   const count=make('span','reader-input-count',new TextEncoder().encode(inputText()).length+' / 4096 bytes');count.hidden=!inputText();
   field.onfocus=()=>{composer=true;};field.onblur=()=>{composer=false;};
