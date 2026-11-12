@@ -14,7 +14,13 @@ let pair=null,pairController=null,pairGeneration=0,detailController=null,detailG
 const minutesAt=position=>Math.max(15,Math.min(43200,Math.round(Math.exp(Math.log(15)+position/1000*Math.log(43200/15))/15)*15));
 const duration=seconds=>seconds===null?'All history':seconds<3600?'Last '+Math.round(seconds/60)+' min':seconds<=86400?'Last '+(seconds/3600).toLocaleString('en-GB',{maximumFractionDigits:2})+'h':'Last '+(seconds/86400).toLocaleString('en-GB',{maximumFractionDigits:2})+'d';
 window.OrreryMobileWindow={duration};
-const network=new window.OrreryMobileNetwork(null,(a,b)=>openPair(a,b));
+const network=new window.OrreryMobileNetwork(null,(a,b)=>openPair(a,b),openGraphAgent);
+function openGraphAgent(name){
+ const terminal=window.OrreryMobileTerminal,status=$('#graph-reader-status');
+ status.hidden=terminal?.available()===true;
+ if(!status.hidden){status.textContent='Reader is unavailable. Check Phone access on the desktop.';return;}
+ terminal.open(name,window.OrreryMobileIdentity?.forName(name));
+}
 let graphFullscreen=null;
 const time=ts=>typeof ts==='number'?new Date(ts*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'Unknown';
 function face(a,initialLength=2){
@@ -481,15 +487,12 @@ function entry(n,cls='',identity=null){
  b.setAttribute('aria-label','Open '+entryLabel()+' for '+n);b.disabled=!(enabled||history);b.title=history?'Read this agent’s verified conversation record':enabled?'View this agent’s selectable cockpit panes':'Terminal is off. Designated-phone policy acceptance and explicit opt-in are required.';
  b.onclick=()=>open(n,identity);return b;
 }
-const graphEntry=entry('','terminal-graph-entry');graphEntry.id='terminal-graph-entry';q('.selected-agent').after(graphEntry);
 function entries(){
- const selected=q('#agent-picker').value;graphEntry.replaceChildren(make('span','',selected||'Select an agent'),make('strong','',entryLabel()+' ⌁'));graphEntry.disabled=!(enabled||history)||!selected;graphEntry.onclick=()=>open(selected,window.OrreryMobileIdentity?.forName(selected));
  q('#attention').querySelectorAll(':scope > .attention-row').forEach(row=>{const n=row.dataset.agentName;if(!n)return;const wrap=make('div','terminal-attention');row.replaceWith(wrap);wrap.append(row,entry(n,'',rowRef(row)));});
  q('#events').querySelectorAll('.status-line').forEach(row=>{const n=row.dataset.agentName;if(n&&!row.querySelector('.terminal-entry'))row.append(entry(n,'',rowRef(row)));});
  document.querySelectorAll('.terminal-entry:not(#terminal-graph-entry)').forEach(b=>{b.disabled=!(enabled||history);b.textContent=entryLabel();b.setAttribute('aria-label','Open '+entryLabel()+' for '+b.dataset.terminalName);});
  restoreSavedView();
 }
-new MutationObserver(entries).observe(q('#selected-name'),{childList:true,subtree:true});
 new MutationObserver(entries).observe(q('#attention'),{childList:true});new MutationObserver(entries).observe(q('#events'),{childList:true});
 function mail(event){
  q('.terminal-mail-people')?.remove();const people=make('div','terminal-mail-people');
@@ -976,7 +979,7 @@ async function resumeView(){
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseView();else if(paused){paused=false;resumeView();}else restoreSavedView();});
 window.addEventListener('pagehide',()=>{rememberView();close(true,true);},true);
-window.OrreryMobileTerminal={open,close,mail};entries();
+window.OrreryMobileTerminal={open,close,mail,available:()=>enabled||history};entries();
 const historyChecked=window.OrreryMobileConversation?window.OrreryMobileConversation.enabled():Promise.resolve(false);
 historyChecked.then(value=>{if(value!==true)return;history=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent=enabled?'History · Terminal':'History enabled';entries();});
 const controller=new AbortController();const terminalChecked=request('',null,controller).then(value=>{if(((value.api===31&&value.supported==='legacy-managed-pane')||(value.api===34&&value.supported==='fresh-managed-pane'))&&value.enabled===true&&value.ack==='tmux-command-accepted'){capability=Object.freeze({...value});enabled=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent=history?'History · Terminal':'Terminal enabled';entries();}}).catch(()=>{});
