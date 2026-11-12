@@ -573,7 +573,8 @@ class Element{
  showModal(){this.open=true;}close(){this.open=false;}
 }
 const q=s=>{if(!elements.has(s))elements.set(s,new Element());return elements.get(s);};
-q('#selected-name').textContent='Alpha';
+q('#selected-name').textContent='Masked display name';
+q('#agent-picker').value='Alpha';
 const doc={querySelector:q,querySelectorAll:()=>[],createElement:t=>new Element(t),addEventListener(){},hidden:false,activeElement:new Element()};
 const timers=new Map();let timer=0;
 function target(){return {name:'Alpha',pane_label:'Window 0 · pane 0',choice:'c'.repeat(64),revision:'d'.repeat(64),...(kind==='legacy'?{}:ids)};}

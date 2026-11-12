@@ -27,8 +27,9 @@ class Element{
  setAttribute(){}addEventListener(kind,fn){this.events[kind]=fn;}focus(){}querySelectorAll(){return [];}querySelector(){return null;}closest(){return null;}after(){}remove(){}
  showModal(){this.open=true;}close(){this.open=false;}
 }
-for(const s of ['#terminal-sheet','#selected-name','.selected-agent','#attention','#events','body>header>span'])staticElements.set(s,new Element());
+for(const s of ['#terminal-sheet','#selected-name','#agent-picker','.selected-agent','#attention','#events','body>header>span'])staticElements.set(s,new Element());
 staticElements.get('#selected-name').textContent='ScrollFixture';
+staticElements.get('#agent-picker').value='ScrollFixture';
 function find(selector,root=staticElements.get('#terminal-sheet')){
  const match=selector[0]==='#'?root.id===selector.slice(1):(root.className||'').split(' ').includes(selector.slice(1));
  if(match)return root;for(const child of root.children){const got=find(selector,child);if(got)return got;}return null;
