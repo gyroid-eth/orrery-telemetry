@@ -73,6 +73,10 @@ badgeが**ON**になり、Setupの手順は消えます。**自分で確かめ�
 
 ### demo modeのとき
 
+更新済みのcockpitで**Demo mode**を有効にすると、スマホも自動でユーザー名・機械名・追加した語を伏せます。画面を再読み込みせず約4秒以内（前面で接続できるとき）に追従し、書きかけの文章と画像を保持します。**Settings**のスイッチを切るとスマホ側も解除します。デスクトップを閉じても最後の状態を保持し、URLの`?demo=0`だけではスマホを解除しません。コピーや送信は伏せる前の値を使います。
+
+最初の表示前にもDemo状態を確認します。通信エラーでは画面を隠して**Retry**を出します。同じブラウザにDemo状態が残っている間は、cockpitの停止や旧版への切替だけでは実名表示に戻りません。cockpit未導入・未起動、または未対応の旧版で、Demoを受け取った履歴もない場合は従来の閲覧表示を続けます。両方を更新して、Demo中のデスクトップとスマホを一度再読み込みしてください。
+
 loginとaddressをまだ設定していない状態でdemo modeのまま**Phone access**を押すと、スイッチのすぐ下に「Turn off demo mode to set up phone access (once). After that you can switch it on and off in demo mode.」と出ます。**Turn off demo mode**を押すと、demo modeを切ってpageを開き直します。Settingsは閉じるので、もう一度**Settings**を開いて**Phone access**を押し、上の手順を進めます。
 
 設定した後は、demo modeに戻しても、スイッチはそのまま使えます。loginとaddressは「hidden in demo mode」と表示され、画面には出ません。変更するときだけdemo modeを切ります。
