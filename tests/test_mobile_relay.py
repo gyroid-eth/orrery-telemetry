@@ -92,6 +92,9 @@ def test_owner_and_outer_authority_accept_originless_get_and_assets(reader):
     assert status==200 and store.calls==['day']
     assert headers['Cache-Control']=='no-store'
     assert "connect-src 'self'" in headers['Content-Security-Policy']
+    directives = dict(part.strip().split(' ', 1) for part in headers['Content-Security-Policy'].split(';') if part.strip())
+    assert set(directives['img-src'].split()) == {"'self'", 'data:', 'blob:'}
+    assert directives['script-src'] == directives['connect-src'] == "'self'"
     status,_,body=request(port,'/network_node.js')
     assert status==200 and b'OrreryNetworkNode' in body
     status,_,css=request(port,'/network.css')

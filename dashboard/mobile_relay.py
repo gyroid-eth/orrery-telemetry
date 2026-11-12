@@ -33,7 +33,7 @@ HERE = Path(__file__).resolve().parent
 MAX_UPSTREAM_BYTES = 4 * 1024 * 1024
 UPSTREAM_TIMEOUT = 2
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-       "font-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; "
+       "font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; "
        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 
 

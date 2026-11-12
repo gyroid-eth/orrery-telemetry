@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from dashboard.mobile_relay import static_assets
+from dashboard.mobile_relay import CSP, static_assets
 from test_dashboard_help_map import _WebSocket
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +43,7 @@ def phone(request):
                 data = json.dumps(data,ensure_ascii=False).encode()
             self.send_response(status)
             self.send_header('Content-Type', mime)
+            self.send_header('Content-Security-Policy', CSP)
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)
