@@ -38,7 +38,9 @@ def test_new_routes_keep_owner_admission_and_head_does_not_fetch(path):
     (200,dict(ON,identity=dict(users=['mira'],hosts=['mira-node'],home='/Users/mira')),'error'),
     (200,dict(ON,identity=dict(users=[],hosts=[])),'error'),
     (200,dict(OFF,words=['Orchid']),'error'),
-    (200,dict(ON,words=['x'*4097]),'error'),
+    (200,dict(ON,words=['x'*5000]),'on'),
+    (200,dict(ON,words=['ab']*300),'on'),
+    (200,dict(ON,words=['x'*16385]),'error'),
     (200,dict(ON,extra='secret'),'error'),
 ])
 def test_http_errors_never_silently_disable_demo(status,value,expected):

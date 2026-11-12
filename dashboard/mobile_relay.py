@@ -150,14 +150,16 @@ class DemoClient:
         self.upstream=Upstream(port)
 
     def status(self):
-        try:raw=self.upstream._read('/telemetry/demo','application/json',32768,missing=True)
+        # Shared preference values are at most 16 Ki characters; allow their
+        # UTF-8 expansion plus the finite user/host identity envelope.
+        try:raw=self.upstream._read('/telemetry/demo','application/json',128*1024,missing=True)
         except LookupError:return {'version':1,'supported':False,'on':False,'words':[],'identity':None}
         except ConnectionRefusedError:return {'version':1,'supported':False,'on':False,'words':[],'identity':None}
         value=json.loads(raw)
         if (not isinstance(value,dict) or set(value)!={'version','on','words','identity'} or
                 type(value['version']) is not int or value['version']!=1 or type(value['on']) is not bool or
-                not isinstance(value['words'],list) or len(value['words'])>256 or
-                any(not isinstance(word,str) or not 2<=len(word)<=4096 for word in value['words'])):
+                not isinstance(value['words'],list) or len(value['words'])>4096 or
+                any(not isinstance(word,str) or not 2<=len(word)<=16384 for word in value['words'])):
             raise ValueError('demo_schema')
         identity=value['identity']
         if value['on']:
