@@ -3,12 +3,13 @@
 'use strict';
 const core=window.OrreryNetworkCore;
 class NetworkView{
- constructor(onSelect,onMailPair){
+ constructor(onSelect,onMailPair,onOpen){
   this.svg=document.getElementById('gsvg');this.net=document.getElementById('net');
   this.map=new Map();this.elements={node:new Map(),edge:[],badge:[]};this.edges=[];this.spawn=[];
   this.params={...core.defaults};this.mode='focus';this.selected='';this.agents=[];
   this.view={vx:0,vy:0,k:1};this.raf=0;this.hot=0;this.userView=false;this.onSelect=onSelect;this.onMailPair=onMailPair;this.pointerEnded=-Infinity;
   this.reduced=matchMedia('(prefers-reduced-motion:reduce)').matches;
+  this.onOpen=onOpen;
   try{
    const saved=JSON.parse(localStorage.getItem('orrery.mobile.network')||'{}');
    for(const[k,p]of Object.entries(core.parameters))if(typeof saved[k]==='number'&&Number.isFinite(saved[k]))this.params[k]=Math.max(p.min,Math.min(p.max,saved[k]));
@@ -23,19 +24,19 @@ class NetworkView{
   if(!this.agents.some(a=>a.name===this.selected)){
    this.selected=this.agents.find(a=>a.running)?.name||this.agents[0]?.name||'';this.userView=false;
   }
-  const picker=document.getElementById('agent-picker');
   const names=this.agents.map(a=>a.name);
-  if(names.join('\0')!==this.namesKey){
-   picker.replaceChildren();
-   for(const n of names){const o=document.createElement('option');o.value=o.textContent=n;picker.appendChild(o);}
-   if(!names.length){const o=document.createElement('option');o.value='';o.textContent='No agents yet';picker.appendChild(o);}
-   this.namesKey=names.join('\0');
-  }
-  picker.value=this.selected;
+  const searchKey=JSON.stringify(this.agents.map(a=>[a.name,a.role]));
+  if(searchKey!==this.searchKey){this.searchKey=searchKey;this.search();}
   const key=JSON.stringify([this.mode,this.mode==='focus'?this.selected:'',
-   snapshot.agents.map(a=>[a.name,a.provider,a.model,a.locality,a.running,a.retired,a.state,a.act_state,typeof a.ctx_used==='number'?Math.round(a.ctx_used):null]),
+   snapshot.agents.map(a=>[a.name,a.role,a.provider,a.model,a.locality,a.running,a.retired,a.state,a.act_state,typeof a.ctx_used==='number'?Math.round(a.ctx_used):null]),
    snapshot.graph.edges.map(e=>[e.source,e.target,e.kind,e.count]),snapshot.graph.spawn]);
-  if(key!==this.renderKey){this.renderKey=key;this.rebuild();}
+  if(key!==this.renderKey){
+   const layoutKey=JSON.stringify([this.mode,this.mode==='focus'?this.selected:'',names,
+    snapshot.graph.edges.map(e=>[e.source,e.target,e.kind,e.count]),snapshot.graph.spawn]);
+   this.renderKey=key;
+   if(layoutKey!==this.layoutKey){this.layoutKey=layoutKey;this.rebuild();}
+   else this.refreshMetadata();
+  }
   this.comets.update(snapshot);
   this.selection();
   const mailStatus=this.snapshot.sources.mail.status;
@@ -44,6 +45,31 @@ class NetworkView{
   const rosterFresh=rosterSources.every(s=>s.status==='available');
   const prefix=mailStatus==='unavailable'?'Mail unavailable · ':!rosterFresh||mailStatus==='stale'?'Last known · ':'';
   document.getElementById('netinfo').textContent=!rosterObserved?'Agent roster unavailable':prefix+this.map.size+' / '+this.agents.length+' agents · '+this.edges.length+' Mail links'+(this.snapshot.timeline.edges_truncated?' · truncated':'');
+ }
+ metadata(a){
+  return {provider:a.provider,model:a.model,locality:a.locality,running:a.running===true,retired:a.retired,
+   state:a.state,present:a.state!=='gone'&&a.state!=='unknown',actState:a.act_state,ctxUsed:a.ctx_used,roleLabel:a.role||''};
+ }
+ refreshMetadata(){
+  const agents=new Map(this.agents.map(a=>[a.name,a]));let restack=false;
+  for(const[name,g]of this.map){
+   const meta=this.metadata(agents.get(name));
+   if(!Object.keys(meta).some(key=>g[key]!==meta[key]))continue;
+   restack=restack||['running','retired','state','actState'].some(key=>g[key]!==meta[key]);
+   Object.assign(g,meta);
+   const entry=this.elements.node.get(name),node=this.renderNode(name,g);
+   const focused=entry.grp===document.activeElement;
+   entry.grp.replaceWith(node);entry.grp=node;if(focused)node.focus({preventScroll:true});
+  }
+  if(restack){
+   const running=[],attention=[];
+   for(const[name,g]of this.map){
+    const state=g.retired?'retired':(g.state||(g.running?'run':g.present?'finished':'gone'));
+    if(state==='run'){running.push(this.elements.node.get(name).grp);if(g.actState==='ask'||g.actState==='question')attention.push(this.elements.node.get(name).grp);}
+   }
+   running.forEach(node=>this.svg.append(node));attention.forEach(node=>this.svg.append(node));
+  }
+  core.paint(this.map,this.elements,this.params.NSIZE);
  }
  rebuild(){
   if(!this.snapshot)return;
@@ -59,8 +85,7 @@ class NetworkView{
    const a=this.agents.find(x=>x.name===n);if(!a)return;
    const prev=old.get(n),theta=i*2.3999632297,rad=35+Math.sqrt(i)*17;
    this.map.set(n,{x:prev?.x??world.w/2+Math.cos(theta)*rad,y:prev?.y??world.h/2+Math.sin(theta)*rad,vx:0,vy:0,fixed:false,
-    provider:a.provider,model:a.model,locality:a.locality,running:a.running===true,retired:a.retired,
-    state:a.state,present:a.state!=='gone'&&a.state!=='unknown',actState:a.act_state,ctxUsed:a.ctx_used,deg:0});
+    ...this.metadata(a),deg:0});
   });
   this.edges=this.snapshot.graph.edges.filter(e=>keep.has(e.source)&&keep.has(e.target));
   this.spawn=this.snapshot.graph.spawn.filter(e=>keep.has(e.source)&&keep.has(e.target));
@@ -69,11 +94,12 @@ class NetworkView{
   this.drawElements();this.hot=150;this.run();
   if(!this.map.size)this.fit();
  }
- drawElements(){
-  this.elements=core.buildElements(this.svg,this.map,this.edges,this.spawn,{
-   widthMultiplier:this.params.LWMUL,
-   render:(name,g)=>{
-    const node=window.OrreryNetworkNode.render(name,g,{selected:name===this.selected,avatar:n=>n});
+ renderNode(name,g){
+    const node=window.OrreryNetworkNode.render(name,{...g,annot:g.roleLabel?{role:g.roleLabel}:null},{selected:name===this.selected,avatar:n=>n});
+    const hit=document.createElementNS('http://www.w3.org/2000/svg','circle');hit.setAttribute('class','mobile-node-hit');hit.setAttribute('r','24');node.prepend(hit);
+    node.setAttribute('tabindex','0');node.setAttribute('role','button');
+    node.setAttribute('aria-label','Open Reader for '+name+(g.roleLabel?' · '+g.roleLabel:''));
+    node.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();this.onOpen?.(name);}});
     // The mobile PNG endpoint already resolves custom/science fallback. Use
     // initials on decode failure instead of retrying the PC hi-resolution URL.
     const original=node.querySelector('.pimg');
@@ -81,7 +107,11 @@ class NetworkView{
      img.remove();const text=document.createElementNS('http://www.w3.org/2000/svg','text');text.setAttribute('text-anchor','middle');text.setAttribute('dominant-baseline','central');text.setAttribute('class','portrait-initials');text.textContent=name.slice(0,2);node.appendChild(text);
     });}
     node.dataset.name=name;return node;
-   },
+ }
+ drawElements(){
+  this.elements=core.buildElements(this.svg,this.map,this.edges,this.spawn,{
+   widthMultiplier:this.params.LWMUL,
+   render:(name,g)=>this.renderNode(name,g),
    onEdgeClick:e=>{
     // Pointer capture retargets touch clicks to the SVG. Pointerup below owns
     // those gestures; retain this listener only for non-pointer activation.
@@ -122,7 +152,7 @@ class NetworkView{
  }
  select(n,{center=false}={}){
   if(!this.agents.some(a=>a.name===n))return;
-  this.selected=n;document.getElementById('agent-picker').value=n;
+  this.selected=n;
   if(this.mode==='focus'){this.userView=false;this.renderKey='';this.update(this.snapshot);}
   else{
    for(const[nm,o]of this.elements.node)o.grp.classList.toggle('selnode',nm===n);
@@ -131,11 +161,26 @@ class NetworkView{
   this.selection();if(this.onSelect)this.onSelect(n);
  }
  selection(){
-  const a=this.agents.find(x=>x.name===this.selected);
-  document.getElementById('selection-label').textContent='Selected';
-  document.getElementById('selected-name').textContent=a?.name||'None';
-  const ctx=typeof a?.ctx_used==='number'?Math.round(100-a.ctx_used)+'% context left':'Context unknown';
-  document.getElementById('context-detail').textContent=ctx+(a?' · '+(a.act_state||a.state):'');
+  document.querySelector('[data-mode=focus]').title=this.selected?'Focus on '+this.selected:'Focus';
+ }
+ search(){
+  const input=document.getElementById('agent-search'),results=document.getElementById('agent-results');
+  const query=input.value.trim().toLocaleLowerCase();
+  document.getElementById('search-clear').hidden=!query;
+  results.hidden=!query;results.replaceChildren();if(!query)return;
+  const matches=this.agents.filter(a=>(a.name+' '+(a.role||'')).toLocaleLowerCase().includes(query));
+  for(const a of matches.slice(0,12)){
+   const row=document.createElement('div');row.className='agent-result';
+   const open=document.createElement('button');open.type='button';open.className='agent-result-open';
+   const name=document.createElement('strong');name.textContent=a.name;
+   const role=document.createElement('span');role.textContent=a.role||'Role not set';
+   open.append(name,role);open.onclick=()=>this.onOpen?.(a.name);
+   const focus=document.createElement('button');focus.type='button';focus.className='agent-result-focus';focus.textContent='Focus';focus.setAttribute('aria-label','Focus on '+a.name);
+   focus.onclick=()=>{this.mode='focus';document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode==='focus'));this.select(a.name,{center:true});input.value='';this.search();document.querySelector('[data-mode=focus]').focus();};
+   row.append(open,focus);results.append(row);
+  }
+  const note=document.createElement('p');note.className='agent-search-note';note.setAttribute('role','status');
+  note.textContent=!matches.length?'No matching agents':matches.length>12?'Showing 12 of '+matches.length+' · keep typing to narrow your search':matches.length+' matching '+(matches.length===1?'agent':'agents');results.append(note);
  }
  initControls(){
   const rows=document.getElementById('nctl-rows');
@@ -155,10 +200,12 @@ class NetworkView{
   }
   this.syncControls();
   document.getElementById('nc-reset').onclick=()=>{this.params={...core.defaults};this.syncControls();save();this.drawElements();this.hot=150;this.run();};
-  document.getElementById('agent-picker').onchange=e=>this.select(e.target.value,{center:true});
+  document.getElementById('agent-search').addEventListener('input',()=>this.search());
+  document.getElementById('agent-search').addEventListener('keydown',event=>{if(event.key==='Escape'){event.target.value='';this.search();}else if(event.key==='ArrowDown'){event.preventDefault();document.querySelector('.agent-result-open')?.focus();}});
+  document.getElementById('search-clear').onclick=()=>{const input=document.getElementById('agent-search');input.value='';this.search();input.focus();};
   document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{
    if(!this.snapshot)return;
-   this.mode=b.dataset.mode;this.map.clear();this.renderKey='';this.userView=false;
+   this.mode=b.dataset.mode;this.map.clear();this.layoutKey='';this.renderKey='';this.userView=false;
    document.querySelectorAll('[data-mode]').forEach(x=>x.classList.toggle('active',x===b));this.update(this.snapshot);
   });
   document.getElementById('zoom-out').onclick=()=>this.zoom(1/1.15);document.getElementById('zoom-in').onclick=()=>this.zoom(1.15);
@@ -183,7 +230,7 @@ class NetworkView{
    this.pointerEnded=performance.now();points.delete(e.pointerId);if(pinch){if(points.size<2){pinch=null;pan=null;}return;}
    const old=pan;pan=null;
    if(old&&!old.moved&&e.type==='pointerup'){
-    if(old.node)this.select(old.node);
+    if(old.node)this.onOpen?.(old.node);
     else if(old.edge)this.onMailPair?.(...old.edge);
    }
   };

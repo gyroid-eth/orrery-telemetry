@@ -78,6 +78,12 @@ def project_agent(row):
             'ctx_used': number(row.get('ctx_used'), maximum=100) if running is True else None,
             # HTTP observation time does not prove a context sampling time.
             'context_sampled_at': None, 'last_active': number(row.get('last_active'))}
+    annotation = row.get('annot')
+    role = annotation.get('role') if isinstance(annotation, dict) else None
+    # Only the operator's short display role crosses this boundary, never
+    # task/group metadata or the remaining annotation dictionary.
+    if isinstance(role, str) and role.strip() and not any(ord(c) < 32 or ord(c) == 127 for c in role):
+        result['role'] = role.strip()[:40]
     duration = row.get('work_disp')
     if (act == 'work' and isinstance(duration, str)
             and re.fullmatch(r'[0-9]{1,6}(?:s|m[0-9]{2}s|h[0-9]{2}m)', duration)):

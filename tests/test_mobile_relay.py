@@ -594,8 +594,8 @@ vm.runInNewContext(source,context);
 const settle=async()=>{for(let i=0;i<15;i++)await new Promise(resolve=>setImmediate(resolve));};
 function button(label){const visit=n=>{if(n.tag==='button'&&n.textContent===label)return n;for(const child of n.children||[]){const found=visit(child);if(found)return found;}};return visit(q('#terminal-sheet'));}
 (async()=>{await settle();
- // The existing graph button calls the real entry/open/list code.
- await q('#terminal-graph-entry').onclick();await settle();
+ // The graph/search callback supplies the raw name and current Mail identity.
+ await context.OrreryMobileTerminal.open('Alpha',context.OrreryMobileIdentity.forName('Alpha'));await settle();
  const selected=calls.find(c=>c.operation==='targets').payload;
  assert.equal(selected.name,'Alpha');assert.equal('owner' in selected,false);
  if(kind!=='legacy'){assert.equal(selected.mail_instance_id,ids.mail_instance_id);assert.equal(selected.mail_agent_id,ids.mail_agent_id);}

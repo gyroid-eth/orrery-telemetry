@@ -95,8 +95,8 @@ def test_a_masked_agent_label_still_opens_the_original_agent(phone):
     _,js,wait,state=phone
     state['demo']=dict(ON,words=['SampleAgent'])
     js('OrreryMobileDemo.refresh();OrreryMobileTerminal.close()')
-    wait("document.querySelector('#selected-name').textContent==='***********'")
-    js("document.querySelector('#terminal-graph-entry').click()")
+    wait("document.querySelector('#gsvg .node text:not([class])').textContent==='***********'")
+    js("document.querySelector('#gsvg .node').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))")
     wait("document.querySelector('#terminal-sheet').open")
     assert any('/view/conversation?name=SampleAgent' in path for path in state['get_calls'])
     assert not any('name=%2A' in path for path in state['get_calls'])
