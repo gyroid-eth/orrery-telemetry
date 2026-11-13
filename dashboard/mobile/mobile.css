@@ -50,7 +50,8 @@ body.mobile{position:static;display:block;max-width:520px;margin:0 auto;padding:
 .mobile #gsvg{touch-action:none}.mobile #net .node.unknown{opacity:.42}
 .mobile .node .portrait-initials{font:500 10px var(--mono);fill:var(--ink);pointer-events:none}
 #net.overview .node text:not([class]),#net.overview .node .annot-pill,#net.overview .node .annot-lab{display:none}
-#net.all-scope .node text:not([class]){display:none}#net.all-scope:not(.overview) .node.selnode text:not([class]){display:block}
+.mobile #net:not(.overview) .node>text:not([class]),.mobile #net:not(.overview) .node .annot-lab,.mobile #net:not(.overview) .node .annot-pill{display:block}
+.mobile #net:not(.overview) .node:not(.selnode)>text:not([class]){font-size:10px}
 .graph-tools{position:absolute;right:9px;bottom:9px;display:flex;align-items:center;gap:4px;font-size:10px;color:var(--ink-dim)}.graph-tools button{min-width:32px;padding:5px 8px}
 .mobile #settings{display:block;position:fixed;z-index:20;left:max(0px,calc(50% - 260px));right:max(0px,calc(50% - 260px));top:auto;bottom:0;width:auto;transform:none;border:1px solid var(--hair);border-radius:16px 16px 0 0;background:var(--panel);box-shadow:0 -24px 60px rgb(0 0 0/.5);padding:17px 20px 18px;max-height:75vh;overflow-y:auto;visibility:visible;opacity:1}
 .mobile .st-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding:0;border:0}.mobile .st-bar h2{font-size:22px}.st-bar button{border:0;background:none;font-size:18px;min-width:30px;min-height:30px}.st-note{font:11px/1.6 var(--mono);color:var(--ink-dim);margin-bottom:13px}
