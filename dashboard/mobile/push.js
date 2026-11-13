@@ -85,13 +85,5 @@ function button(name){
  if(states.get(name)?.enabled&&states.get(name)?.finished)b.classList.add('on');
  if(supported()&&!states.has(name))state(name).then(v=>updateBells(name,v.state)).catch(()=>{});return b;
 }
-function roster(rows){
- const match=/^#notify=([A-Za-z][A-Za-z0-9_-]{0,95})$/.exec(location.hash);if(!match)return;
- history.replaceState(history.state,'',location.pathname+location.search);
- const found=rows.filter(a=>a.name===match[1]&&!a.retired);
- if(found.length===1)queueMicrotask(()=>window.OrreryMobileTerminal?.open(found[0].name));
- else{const status=document.querySelector('#graph-reader-status');if(status){status.hidden=false;status.textContent='That agent is no longer available.';}}
-}
-window.addEventListener('hashchange',()=>{ /* The next fresh roster poll validates the target. */ });
-window.OrreryMobilePush={button,close,roster};
+window.OrreryMobilePush={button,close};
 })();

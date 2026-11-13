@@ -289,3 +289,108 @@ def test_observer_runs_with_no_browser_and_closes_its_thread(env,monkeypatch):
         assert len(env.state['calls'])==1
     finally:env.service.close()
     assert not env.service.thread.is_alive()
+
+
+@pytest.mark.parametrize('agents_count',[9,25])
+def test_simultaneous_work_baselines_carry_over_without_losing_completions(env,agents_count):
+    # Review proof: the ninth selected agent used to lose its whole turn.
+    agents=[dict(env.agent,name='Agent'+str(n),mail_agent_id=n+1) for n in range(agents_count)]
+    env.state['agents']=agents
+    for agent in agents:
+        env.service.call('save',dict(subscription=env.sub,agent=agent['name'],reply_needed=False,finished=True,previews=False))
+    reads=[]
+    env.service.history=lambda name:reads.append(name) or {'events':env.state['events']}
+    env.tick()
+    for agent in agents:agent['act_state']='work'
+    for _ in range((agents_count+7)//8):
+        before=len(reads);env.tick();assert len(reads)-before<=8
+    assert len(reads)==agents_count and set(reads)=={a['name'] for a in agents}
+    assert all(env.service.previous[push.identity(a)]['baseline']=='old' for a in agents)
+    env.state['events'].append(dict(id='new',kind='text',role='assistant',text='Done.'))
+    for agent in agents:agent['act_state']='wait'
+    env.tick(count=agents_count//4+3)
+    titles=[p['title'] for _,p in env.state['calls']]
+    assert set(titles)=={a['name']+' — Work finished' for a in agents} and len(titles)==agents_count
+
+
+def test_unavailable_baselines_do_not_starve_unattempted_or_new_baselines(env):
+    agents=[dict(env.agent,name='Agent'+str(n),mail_agent_id=n+1) for n in range(17)]
+    env.state['agents']=agents
+    for agent in agents:
+        env.service.call('save',dict(subscription=env.sub,agent=agent['name'],reply_needed=True,finished=True,previews=True))
+    reads=[]
+    def history(name):
+        reads.append(name)
+        if int(name[5:])<8:return {'events':None}
+        return {'events':env.state['events']}
+    env.service.history=history;env.tick()
+    for agent in agents[:16]:agent['act_state']='work'
+    env.tick();assert reads==['Agent'+str(n) for n in range(8)]
+    agents[16]['act_state']='work';env.tick()
+    assert reads[8:]==['Agent'+str(n) for n in range(8,16)]
+    env.tick(count=2)
+    assert env.service.previous[push.identity(agents[16])]['baseline']=='old'
+    assert all(env.service.previous[push.identity(a)]['baseline_pending'] for a in agents[:8])
+
+
+@pytest.mark.parametrize('adapter',['history','roster','demo'])
+@pytest.mark.parametrize('gap',[300,-300])
+def test_sleep_inside_observation_discards_it_and_next_tick_only_baselines(env,adapter,gap):
+    env.tick();env.tick('work')
+    env.state['events'].append(dict(id='new',kind='text',role='assistant',text='Done.'))
+    env.tick('wait')
+    original=getattr(env.service,adapter)
+    def interrupted(*args):
+        result=original(*args);env.state['now']+=gap;return result
+    setattr(env.service,adapter,interrupted)
+    env.tick()
+    assert not env.state['calls'] and not env.service.pending and not env.service.previous
+    setattr(env.service,adapter,original)
+    env.tick(count=3);assert not env.state['calls']
+    env.tick('work');env.state['events'].append(dict(id='later',kind='text',role='assistant',text='A fresh result.'))
+    env.tick('wait',2);assert len(env.state['calls'])==1
+
+
+def test_sleep_during_first_send_discards_remaining_phones(env):
+    for suffix in ['b','c','d']:
+        _,sub=recipient(suffix)
+        env.service.call('save',dict(subscription=sub,agent='SampleAgent',reply_needed=True,finished=False,previews=False))
+    calls=[]
+    def sender(sub,payload,*_):
+        calls.append(copy.deepcopy(payload));env.state['now']+=300;return 201
+    env.service.sender=sender;env.tick();env.tick('ask',2)
+    # The in-flight first publication cannot be recalled, but the other three
+    # must not be sent after waking. Its successful dedup marker is retained.
+    assert len(calls)==len(env.service.sent)==1
+    assert not env.service.pending and not env.service.previous
+    env.tick(count=3);assert len(calls)==1
+
+
+def test_sleep_inside_presend_demo_check_sends_nothing(env):
+    env.tick();env.tick('ask')
+    checks=0
+    def demo():
+        nonlocal checks
+        checks+=1
+        if checks==2:env.state['now']+=300
+        return {'supported':True,'on':False}
+    env.service.demo=demo;env.tick()
+    assert checks==2 and not env.state['calls'] and not env.service.previous and not env.service.pending
+
+
+def test_pending_expiry_uses_each_sends_current_time(env):
+    # Keep the current roster fresh while a prior retry reaches its own TTL.
+    env.state['code']=503;env.tick();env.tick('ask',2)
+    for event in env.service.pending.values():
+        event['created']=env.state['now']-110;event['due']=env.state['now']
+    def demo():env.state['now']+=3;return {'supported':True,'on':False}
+    env.service.demo=demo;env.tick()
+    assert len(env.state['calls'])==1 and not env.service.pending
+
+
+def test_payload_uses_latest_preview_preference_at_publication(env):
+    env.save(previews=True);env.state['code']=503;env.tick();env.tick('work')
+    env.state['events'].append(dict(id='new',kind='text',role='assistant',text='The checks passed.'))
+    env.tick('wait',2);assert env.state['calls'][-1][1]['body']=='The checks passed.'
+    env.save(previews=False);env.state['code']=201;env.tick(count=3)
+    assert env.state['calls'][-1][1]['body']=='' and len(env.state['calls'])==2

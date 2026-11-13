@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -93,14 +94,110 @@ def test_reader_bell_permission_local_subscription_options_and_remove(phone_push
     assert calls.count('save')==3 and calls.count('remove')==1 and not env.state['calls']
 
 
-def test_notification_link_only_opens_an_agent_from_fresh_roster(phone_push):
-    client,js,wait,click,env,calls=phone_push
-    js("window.opened=[];OrreryMobileTerminal.open=n=>opened.push(n);location.hash='notify=SampleAgent';OrreryMobilePush.roster([{name:'SampleAgent'}])")
-    assert js('opened')==['SampleAgent'] and js('location.hash')==''
-    js("location.hash='notify=MissingAgent';OrreryMobilePush.roster([{name:'SampleAgent'}])")
-    assert js('opened')==['SampleAgent']
-    assert js("document.querySelector('#graph-reader-status').textContent")=='That agent is no longer available.'
-    assert js('pushPermissionCalls')==0 and not env.service.devices
+@pytest.mark.parametrize('roster_problem',['missing','duplicate','retired','stale'])
+def test_notification_waits_for_fresh_unique_nonretired_roster(roster_problem):
+    fixture=browser.phone.__wrapped__(SimpleNamespace(param=(390,844)))
+    client,js,wait,state=next(fixture)
+    try:
+        js('OrreryMobileTerminal.close(true);sessionStorage.clear()')
+        original=state['snapshot']['agents'];source=state['snapshot']['sources']['agents']
+        if roster_problem=='missing':state['snapshot']['agents']=[]
+        elif roster_problem=='duplicate':state['snapshot']['agents']=original*2
+        elif roster_problem=='retired':original[0]['retired']=True
+        else:source['status']='stale'
+        # Use the normal snapshot entry point, not a synthetic notification
+        # dispatcher that bypasses Reader startup/identity validation.
+        js("location.hash='notify=SampleAgent';document.querySelector('#time-window').dispatchEvent(new Event('input'))")
+        wait("document.querySelector('#observed').textContent!=='Unknown'")
+        # Poll completion is observed via its graph data, including stale source.
+        wait("OrreryMobileIdentity.roster()===null" if roster_problem=='stale' else
+             "document.querySelector('#graph-reader-status').textContent==='That agent is no longer available.'")
+        assert not js("document.querySelector('#terminal-sheet').open")
+        assert js('location.hash')=='#notify=SampleAgent'
+        state['snapshot']['agents']=original;original[0]['retired']=False;source['status']='available'
+        js("document.querySelector('#time-window').dispatchEvent(new Event('input'))")
+        wait("document.querySelector('#terminal-sheet').open&&location.hash===''")
+        js('history.back()');wait("!document.querySelector('#terminal-sheet').open")
+        js('OrreryMobileTerminal.restore()');assert not js("document.querySelector('#terminal-sheet').open")
+        assert js('location.hash')==''
+    finally:fixture.close()
+
+
+@pytest.mark.parametrize('delayed',['capabilities','roster'])
+@pytest.mark.parametrize('theme',['dark','light'])
+def test_notification_cold_open_waits_for_reader_and_roster(monkeypatch,delayed,theme):
+    # Review proof: a fast roster used to consume the hash before capability
+    # checks completed; also cover the reverse response order.
+    original=browser.ThreadingHTTPServer;gate={'delay':False}
+    def server(address,parent):
+        class Handler(parent):
+            def do_GET(self):
+                paths={'/view/history','/view/terminal'} if delayed=='capabilities' else {'/view/snapshot'}
+                if gate['delay'] and self.path.split('?')[0] in paths:time.sleep(1.5)
+                return super().do_GET()
+        return original(address,Handler)
+    monkeypatch.setattr(browser,'ThreadingHTTPServer',server)
+    fixture=browser.phone.__wrapped__(SimpleNamespace(param=(390,844)))
+    client,js,wait,state=next(fixture)
+    try:
+        js('OrreryMobileTerminal.close(true);sessionStorage.clear()');gate['delay']=True
+        client.call('Page.navigate',url=js('location.origin')+'/?cold=1#notify=SampleAgent')
+        wait("typeof OrreryMobileTerminal!=='undefined'")
+        assert js('location.hash')=='#notify=SampleAgent' and not js("document.querySelector('#terminal-sheet').open")
+        wait("document.querySelector('#terminal-sheet').open&&location.hash===''")
+        wait("document.querySelector('[data-id=question]')!==null")
+        js('document.fonts.ready')
+        js('document.documentElement.dataset.colorTheme='+json.dumps(theme))
+        if theme=='light':
+            js((ROOT/'dashboard/theme_core.js').read_text())
+            js("Object.entries(AgentStackColorThemeCore.deriveWarmPaperLightTheme().cssVariables).forEach(([k,v])=>document.documentElement.style.setProperty(k,v))")
+        capture(client,theme+'-cold-'+delayed+'-reader-open')
+        assert sum(op=='targets' for op,_ in state['calls'])==2  # initial fixture + notification
+    finally:fixture.close()
+
+
+def test_notification_reload_discards_existing_input_draft():
+    # Preserve the review's documented existing navigation behavior. The worker
+    # navigates to a URL, so this does not persist a private draft in storage.
+    fixture=browser.phone.__wrapped__(SimpleNamespace(param=(390,844)))
+    client,js,wait,state=next(fixture)
+    try:
+        js("document.querySelector('.reader-input-bar button').click()")
+        wait("document.querySelector('#terminal-text')!==null&&!document.querySelector('#terminal-text').disabled")
+        js("(()=>{const e=document.querySelector('#terminal-text');e.value='Unsaved review draft';e.dispatchEvent(new Event('input',{bubbles:true}));})()")
+        assert js("document.querySelector('#terminal-text').value")=='Unsaved review draft'
+        client.call('Page.navigate',url=js('location.origin')+'/#notify=SampleAgent')
+        wait("document.querySelector('#terminal-sheet').open&&location.hash===''",timeout=12)
+        assert not js("document.body.textContent.includes('Unsaved review draft')")
+        assert js("document.querySelector('#terminal-text')?.value||''")!='Unsaved review draft'
+    finally:fixture.close()
+
+
+def test_notification_dispatch_passes_fresh_mail_identity(monkeypatch):
+    original=browser.ThreadingHTTPServer
+    def server(address,parent):
+        class Handler(parent):
+            def send(self,data,*args,**kwargs):
+                if isinstance(data,dict) and data.get('api')==31:
+                    data={**data,'api':34,'supported':'fresh-managed-pane'}
+                return super().send(data,*args,**kwargs)
+        return original(address,Handler)
+    monkeypatch.setattr(browser,'ThreadingHTTPServer',server)
+    fixture=browser.phone.__wrapped__(SimpleNamespace(param=(390,844)))
+    client,js,wait,state=next(fixture)
+    try:
+        identity=dict(mail_instance_id='a'*32,mail_agent_id=1)
+        state['snapshot']['agents'][0].update(identity)
+        state['targets']=[dict(choice='fixture-choice',name='SampleAgent',pane_label='Window 0 · pane 0',revision='fixture-revision',**identity)]
+        state['calls'].clear();js('OrreryMobileTerminal.close(true);sessionStorage.clear()')
+        js("location.hash='notify=SampleAgent';document.querySelector('#time-window').dispatchEvent(new Event('input'))")
+        wait("document.querySelector('#terminal-sheet').open&&location.hash===''")
+        wait("document.querySelector('.reader-input-bar button')!==null")
+        targets=[p for op,p in state['calls'] if op=='targets']
+        assert len(targets)==1 and all(targets[0][k]==v for k,v in identity.items())
+        assert not js("document.querySelector('#terminal-sheet').textContent.includes('A unique Mail identity is required')")
+        capture(client,'fresh-notification-reader-open')
+    finally:fixture.close()
 
 
 def test_service_worker_only_notifies_and_clicks_same_origin(tmp_path):

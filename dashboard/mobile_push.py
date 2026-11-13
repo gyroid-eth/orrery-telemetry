@@ -364,32 +364,42 @@ class PushService:
             token = digest([did,stamp])
             if token in self.sent:
                 continue
-            title = agent['name'] + (' — Reply needed' if kind == 'reply' else ' — Work finished')
-            fallback = ('Approval requested' if expected == 'ask' else 'Question' if expected == 'question' else '')
-            payload = {'title':title,'body':body if device['previews'] and body else fallback,
-                       'tag':digest([key,kind])[:32],'agent':agent['name']}
             self.pending[(did,key,kind)] = {'device':did,'agent':key,'expected':expected,
-                'token':token,'payload':payload,'created':now,'due':now,'attempts':0}
+                'token':token,'name':agent['name'],'body':body,'created':now,'due':now,'attempts':0}
             while len(self.pending) > MAX_PENDING:
                 self.pending.popitem(last=False)
+
+    def _reset(self):
+        with self.lock:
+            self.previous.clear();self.pending.clear();self.last_tick=None
+
+    def _fresh(self, observed):
+        if 0 <= self.clock()-observed <= 30:
+            return True
+        # A blocking adapter or send may span sleep, even within one tick.
+        # Discard its snapshot; only the next fresh observation is a baseline.
+        self._reset()
+        return False
 
     def tick(self):
         # Never hold the settings lock while adapters/DNS/TLS wait. A slow
         # provider must not prevent the phone from turning notifications off.
         with self.observer_lock:
+            observed = self.clock()
             if not self.devices or not self.capability()['available']:
-                self.previous.clear();self.pending.clear();return
+                self._reset();return
+            if self.last_tick is None or not 0<=observed-self.last_tick<=30:
+                self._reset()
+            self.last_tick=observed
             try:
                 if not self._demo_off():
                     raise PushError('demo_unknown')
+                if not self._fresh(observed):return
                 agents = self.roster()
             except (OSError,ValueError,TypeError):
-                self.previous.clear();self.pending.clear();return
-            now = self.clock()
-            if self.last_tick is None or not 0<=now-self.last_tick<=30:
-                self.previous.clear();self.pending.clear()
-            self.last_tick=now
-            latest={}
+                self._reset();return
+            if not self._fresh(observed):return
+            latest={};reads=[]
             with self.lock:devices=[{**d,'agents':dict(d['agents'])} for d in self.devices.values()]
             for agent in agents[:5000]:
                 if self.stop.is_set():return
@@ -397,13 +407,20 @@ class PushService:
                 old=self.previous.get(key)
                 watched=any(key in d['agents'] or d['reply_needed'] and d['previews'] for d in devices)
                 want_preview=any(d['reply_needed'] and d['previews'] for d in devices)
-                if (old and watched and act!=old['act'] and act=='work'
+                if (old and watched and act=='work' and (act!=old['act'] or old.get('baseline_pending'))
                         or old and watched and act=='wait' and old['armed']
                         or old and want_preview and act=='question' and old['count']<=2):
-                    if len(latest)>=8:break
-                    latest[agent['name']]=self._latest(agent['name'],require_tail=act!='work')
+                    # Carry-over baselines first, least recently attempted first.
+                    # Failed reads must not starve later agents either.
+                    priority=0 if act=='work' and old.get('baseline_pending') else 1 if act=='work' else 2
+                    reads.append((priority,old.get('baseline_attempted',0),agent))
+            for _,_,agent in sorted(reads,key=lambda item:item[:2])[:8]:
+                if self.stop.is_set():return
+                latest[agent['name']]=self._latest(agent['name'],require_tail=agent['act_state']!='work')
+                if not self._fresh(observed):return
+            if not self._fresh(observed):return
             with self.lock:self._observe(agents,latest)
-            self._send_pending({identity(a):a.get('act_state') for a in agents if a.get('running') is True})
+            self._send_pending({identity(a):a.get('act_state') for a in agents if a.get('running') is True},observed)
 
     def _observe(self,agents,latest):
         current = {}
@@ -421,6 +438,8 @@ class PushService:
                     old['armed'] = True
                     old['cycle'] = str(self.clock())
                     old['baseline'] = latest.get(agent['name'],(None,''))[0]
+                    old['baseline_pending'] = old['baseline'] is None
+                    old['baseline_attempted'] = self.clock() if agent['name'] in latest else 0
                 elif act=='wait' and old['armed']:
                     old['until']=self.clock()+MAX_AGE
                 elif act in {'ask','question'}:
@@ -428,6 +447,10 @@ class PushService:
                 old.update(act=act,count=1)
             else:
                 old['count'] += 1
+                if act=='work' and old['armed'] and old.get('baseline_pending') and agent['name'] in latest:
+                    old['baseline'] = latest[agent['name']][0]
+                    old['baseline_pending'] = old['baseline'] is None
+                    old['baseline_attempted'] = self.clock()
             if old['count'] != 2 and not (act=='wait' and old['armed'] and old['count']>=2):
                 continue
             if act in {'ask','question'}:
@@ -444,20 +467,23 @@ class PushService:
                     old['armed'] = False
         self.previous = {k:v for k,v in self.previous.items() if k in current}
 
-    def _send_pending(self,current):
-        now=self.clock();budget=4
+    def _send_pending(self,current,observed):
+        budget=4
         with self.lock:pending=list(self.pending.items())
         for slot,event in pending:
+            if not self._fresh(observed):return
+            now=self.clock()
             if event['attempts']>=MAX_ATTEMPTS or now-event['created']>MAX_AGE:
                 with self.lock:self.pending.pop(slot,None)
                 continue
             if event['due']>now or not budget or self.stop.is_set():continue
             try:
                 if not self._demo_off():
-                    with self.lock:self.pending.clear();self.previous.clear()
-                    return
+                    self._reset();return
                 self._read('vapid.pem')
+                if not self._fresh(observed):return
                 with self.lock:
+                    now=self.clock()
                     device=self.devices.get(event['device'])
                     if (self.error or self.pending.get(slot) is not event or not device
                             or current.get(event['agent'])!=event['expected']
@@ -465,24 +491,27 @@ class PushService:
                         self.pending.pop(slot,None);continue
                     allowed=device['reply_needed'] if slot[2]=='reply' else event['agent'] in device['agents']
                     if not allowed:self.pending.pop(slot,None);continue
-                    payload=dict(event['payload'])
-                    if not device['previews']:
-                        payload['body']='Approval requested' if event['expected']=='ask' else 'Question' if slot[2]=='reply' else ''
+                    fallback='Approval requested' if event['expected']=='ask' else 'Question' if slot[2]=='reply' else ''
+                    payload={'title':event['name']+(' — Reply needed' if slot[2]=='reply' else ' — Work finished'),
+                             'body':event['body'] if device['previews'] and event['body'] else fallback,
+                             'tag':digest([event['agent'],slot[2]])[:32],'agent':event['name']}
                     sub=dict(device['subscription'])
+                if not self._fresh(observed):return
                 code=self.sender(sub,payload,self.root/'vapid.pem','mailto:'+self.owner)
             except (OSError,ValueError):code=503
             budget-=1
             with self.lock:
-                if self.pending.get(slot) is not event:continue
-                event['attempts']+=1
-                if code in (200,201,202):
-                    self.sent[event['token']]=None
-                    while len(self.sent)>MAX_SENT:self.sent.popitem(last=False)
-                    self._save();self.pending.pop(slot,None)
-                elif code in (404,410):
-                    self.devices.pop(event['device'],None);self._save();self.pending.pop(slot,None)
-                elif code==429 or code>=500:event['due']=now+5*3**event['attempts']
-                else:self.pending.pop(slot,None)
+                if self.pending.get(slot) is event:
+                    event['attempts']+=1
+                    if code in (200,201,202):
+                        self.sent[event['token']]=None
+                        while len(self.sent)>MAX_SENT:self.sent.popitem(last=False)
+                        self._save();self.pending.pop(slot,None)
+                    elif code in (404,410):
+                        self.devices.pop(event['device'],None);self._save();self.pending.pop(slot,None)
+                    elif code==429 or code>=500:event['due']=self.clock()+5*3**event['attempts']
+                    else:self.pending.pop(slot,None)
+            if not self._fresh(observed):return
 
     def _demo_off(self):
         value=self.demo()
