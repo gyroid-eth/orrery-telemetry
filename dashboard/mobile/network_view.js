@@ -98,8 +98,8 @@ class NetworkView{
     const node=window.OrreryNetworkNode.render(name,{...g,annot:g.roleLabel?{role:g.roleLabel}:null},{selected:name===this.selected,avatar:n=>n});
     const hit=document.createElementNS('http://www.w3.org/2000/svg','circle');hit.setAttribute('class','mobile-node-hit');hit.setAttribute('r','24');node.prepend(hit);
     node.setAttribute('tabindex','0');node.setAttribute('role','button');
-    node.setAttribute('aria-label','Open Reader for '+name+(g.roleLabel?' · '+g.roleLabel:''));
-    node.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();this.onOpen?.(name);}});
+    node.setAttribute('aria-label',(this.mode==='focus'&&name!==this.selected?'Focus on ':'Open Reader for ')+name+(g.roleLabel?' · '+g.roleLabel:''));
+    node.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();this.activateNode(name,{keyboard:true});}});
     // The mobile PNG endpoint already resolves custom/science fallback. Use
     // initials on decode failure instead of retrying the PC hi-resolution URL.
     const original=node.querySelector('.pimg');
@@ -149,6 +149,13 @@ class NetworkView{
   const d=this.dimensions(),v=this.view,cx=v.vx+d.w/v.k/2,cy=v.vy+d.h/v.k/2;
   v.k=Math.max(.3,Math.min(4,v.k*factor));v.vx=cx-d.w/v.k/2;v.vy=cy-d.h/v.k/2;
   this.userView=true;this.applyView();
+ }
+ activateNode(name,{keyboard=false}={}){
+  if(this.mode==='focus'&&name!==this.selected){
+   this.select(name);this.fit();
+   if(keyboard)this.elements.node.get(name)?.grp.focus({preventScroll:true});
+   else if(this.svg.contains(document.activeElement))document.activeElement.blur();
+  }else this.onOpen?.(name);
  }
  select(n,{center=false}={}){
   if(!this.agents.some(a=>a.name===n))return;
@@ -215,6 +222,9 @@ class NetworkView{
   const points=new Map();let pan=null,pinch=null;
   const geometry=()=>{const[a,b]=[...points.values()];return{d:Math.hypot(a.x-b.x,a.y-b.y),x:(a.x+b.x)/2,y:(a.y+b.y)/2};};
   this.svg.addEventListener('pointerdown',e=>{
+   const node=e.target.closest('.node')?.dataset.name;
+   // A touch's compatibility mousedown can hit a different node after rebuild.
+   if(this.mode==='focus'&&node&&node!==this.selected)e.preventDefault();
    points.set(e.pointerId,{x:e.clientX,y:e.clientY});this.svg.setPointerCapture(e.pointerId);
    if(points.size===2){const g=geometry(),r=this.svg.getBoundingClientRect();pinch={d:g.d,k:this.view.k,wx:this.view.vx+(g.x-r.x)/this.view.k,wy:this.view.vy+(g.y-r.y)/this.view.k};pan=null;return;}
    if(points.size===1){const hit=e.target.closest('.edge-hit');pan={id:e.pointerId,x:e.clientX,y:e.clientY,vx:this.view.vx,vy:this.view.vy,node:e.target.closest('.node')?.dataset.name,edge:hit?.dataset.kind==='comm'?[hit.dataset.s,hit.dataset.t]:null,moved:false};}
@@ -230,7 +240,7 @@ class NetworkView{
    this.pointerEnded=performance.now();points.delete(e.pointerId);if(pinch){if(points.size<2){pinch=null;pan=null;}return;}
    const old=pan;pan=null;
    if(old&&!old.moved&&e.type==='pointerup'){
-    if(old.node)this.onOpen?.(old.node);
+    if(old.node)this.activateNode(old.node);
     else if(old.edge)this.onMailPair?.(...old.edge);
    }
   };
