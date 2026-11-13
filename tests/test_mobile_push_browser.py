@@ -10,7 +10,8 @@ from types import SimpleNamespace
 import pytest
 
 import mobile_reader_browser as browser
-from test_mobile_push import env  # Local cryptographic receiver and private temp store.
+from test_mobile_push import env, DEMO_NAME_CASES  # Local receiver and private temp store.
+from dashboard.mobile_push import demo_name
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -53,6 +54,7 @@ def phone_push(monkeypatch,env):
             point=js("(()=>{const r=document.querySelector("+json.dumps(selector)+").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()")
             client.call('Input.dispatchMouseEvent',type='mousePressed',button='left',clickCount=1,**point)
             client.call('Input.dispatchMouseEvent',type='mouseReleased',button='left',clickCount=1,**point)
+        env.browser_state=state
         yield client,js,wait,click,env,calls
     finally:
         client.call('Browser.setPermission',permission={'name':'notifications'},setting='prompt',origin=origin)
@@ -222,3 +224,66 @@ def test_service_worker_only_notifies_and_clicks_same_origin(tmp_path):
     path=tmp_path/'worker-check.cjs';path.write_text(script)
     done=subprocess.run(['node',str(path),str(ROOT/'dashboard/mobile/push-sw.js')],capture_output=True,text=True)
     assert done.returncode==0,done.stderr
+
+
+def set_demo(env,js,wait,on,words=None):
+    if not os.environ.get('ORRERY_DEMO_BRIDGE_ROOT'):
+        pytest.skip('paired desktop scripts required')
+    env.browser_state['demo']=dict(version=1,supported=True,on=on,words=(words or ['Orchid']) if on else [],
+                                   identity=dict(users=['viewer'],hosts=['viewer-host']) if on else None)
+    env.state['demo']=on
+    js('OrreryMobileDemo.refresh()')
+    wait("document.documentElement.dataset.demoSync==='ready'&&window.OrreryDemo?.on==="+str(on).lower())
+
+
+@pytest.mark.parametrize('theme',['dark','light'])
+def test_demo_enable_and_other_settings_preserve_saved_preview(phone_push,theme):
+    client,js,wait,click,env,calls=phone_push
+    if theme=='light':
+        js((ROOT/'dashboard/theme_core.js').read_text())
+        js("document.documentElement.dataset.colorTheme='light';Object.entries(AgentStackColorThemeCore.deriveWarmPaperLightTheme().cssVariables).forEach(([k,v])=>document.documentElement.style.setProperty(k,v))")
+    set_demo(env,js,wait,True)
+    assert js("document.querySelector('#terminal-title').textContent")=='SampleAgent'
+    click('.reader-push-bell');wait("document.querySelector('.push-enable:not([disabled])')!==null")
+    assert js('pushPermissionCalls')==0
+    assert not js("document.querySelector('.push-sheet').textContent.includes('paused in Demo')")
+    click('.push-enable');wait("document.querySelector('.push-enabled')!==null")
+    assert js('pushPermissionCalls')==js('pushSubscribeCalls')==1
+    click('[data-setting=reply_needed]');wait("document.querySelector('.push-message').textContent==='Saved for this phone.'")
+    click('[data-setting=finished]');wait("document.querySelector('.reader-push-bell').getAttribute('aria-pressed')==='true'")
+    assert js("document.querySelector('[data-setting=previews]').disabled&&!document.querySelector('[data-setting=previews]').checked")
+    assert js("document.querySelector('[data-setting=previews]').closest('label').querySelector('small').textContent")=='Previews are hidden in Demo.'
+    assert next(iter(env.service.devices.values()))['reply_needed'] is False
+    capture(client,theme+'-demo-enabled')
+    saves=calls.count('save');set_demo(env,js,wait,False)
+    wait("!document.querySelector('[data-setting=previews]').disabled")
+    assert calls.count('save')==saves
+    click('[data-setting=previews]');wait("document.querySelector('[data-setting=previews]').checked&&!document.querySelector('[data-setting=previews]').disabled")
+    assert next(iter(env.service.devices.values()))['previews'] is True
+    saves=calls.count('save');set_demo(env,js,wait,True)
+    wait("document.querySelector('[data-setting=previews]').disabled&&!document.querySelector('[data-setting=previews]').checked")
+    assert calls.count('save')==saves and next(iter(env.service.devices.values()))['previews'] is True
+    capture(client,theme+'-demo-preview-hidden')
+    click('[data-setting=reply_needed]');wait("document.querySelector('.push-message').textContent==='Saved for this phone.'")
+    assert next(iter(env.service.devices.values()))['previews'] is True
+    set_demo(env,js,wait,False)
+    wait("document.querySelector('[data-setting=previews]').checked&&!document.querySelector('[data-setting=previews]').disabled")
+    assert not env.state['calls']
+
+
+def test_demo_notification_name_matches_phone_mask_and_keeps_raw_route(phone_push):
+    client,js,wait,click,env,calls=phone_push
+    set_demo(env,js,wait,True,['SampleAgent'])
+    wait("document.querySelector('#terminal-title').textContent==='***********'")
+    click('.reader-push-bell');wait("document.querySelector('.push-agent').textContent==='***********'")
+    wait("document.querySelector('.push-enable:not([disabled])')!==null")
+    click('.push-enable');wait("document.querySelector('.push-enabled')!==null")
+    device=next(iter(env.service.devices.values()))
+    click('[data-setting=finished]');wait("document.querySelector('.reader-push-bell').getAttribute('aria-pressed')==='true'")
+    assert list(device['agents'].values())==['SampleAgent']
+    for name,settings,expected in DEMO_NAME_CASES:
+        identity={**settings.get('identity',{}),'words':settings.get('words',[])}
+        shown=js('OrreryDemoMask.create('+json.dumps(identity)+').mask('+json.dumps(name)+')')
+        assert shown==expected==demo_name(name,dict(on=True,**settings))
+    capture(client,'demo-name-masked')
+    assert not env.state['calls']

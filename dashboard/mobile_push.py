@@ -128,6 +128,34 @@ def preview(text):
     return re.sub(r'\s+', ' ', ''.join(c for c in text if c.isprintable() or c.isspace())).strip()[:600]
 
 
+def demo_name(name, state):
+    """Phone Demo's host/extra-word rules on canonical ASCII agent names.
+
+    Agent names contain no home paths, prompts, ANSI or wide characters; the
+    other display-mask rules cannot match them. Routing keeps the raw name.
+    """
+    if not state['on']:
+        return name
+    identity = state.get('identity') or {}
+    spans, lower = [], name.lower()
+    for values, host in [(identity.get('hosts', []), True), (state.get('words', []), False)]:
+        words = {}
+        for word in values:
+            if isinstance(word, str) and len(word.strip()) >= 2:
+                words.setdefault(word.strip().lower(), word.strip())
+        for original in sorted(words.values(), key=len, reverse=True):
+            word = original.lower()
+            boundary = r'[A-Za-z0-9-]' if host else r'[A-Za-z0-9_]' if re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_ .'-]*", original) else None
+            start = lower.find(word)
+            while start >= 0:
+                end = start + len(word)
+                before, after = name[start-1:start] if start else '', name[end:end+1]
+                if (not boundary or not (re.fullmatch(boundary, before) or re.fullmatch(boundary, after))) and not any(start < b and end > a for a, b in spans):
+                    spans.append((start, end))
+                start = lower.find(word, start+1)
+    return ''.join('*' if any(a <= i < b for a, b in spans) else char for i, char in enumerate(name))
+
+
 class SafeTransport:
     """pywebpush's session protocol, with pinned public IP + original TLS SNI.
 
@@ -392,7 +420,7 @@ class PushService:
                 self._reset()
             self.last_tick=observed
             try:
-                if not self._demo_off():
+                if self._demo_state() is None:
                     raise PushError('demo_unknown')
                 if not self._fresh(observed):return
                 agents = self.roster()
@@ -475,7 +503,8 @@ class PushService:
                 continue
             if event['due']>now or not budget or self.stop.is_set():continue
             try:
-                if not self._demo_off():
+                demo = self._demo_state()
+                if demo is None:
                     self._reset();return
                 self._read('vapid.pem')
                 if not self._fresh(observed):return
@@ -489,8 +518,8 @@ class PushService:
                     allowed=device['reply_needed'] if slot[2]=='reply' else event['agent'] in device['agents']
                     if not allowed:self.pending.pop(slot,None);continue
                     fallback='Approval requested' if event['expected']=='ask' else 'Question' if slot[2]=='reply' else ''
-                    payload={'title':event['name']+(' — Reply needed' if slot[2]=='reply' else ' — Work finished'),
-                             'body':event['body'] if device['previews'] and event['body'] else fallback,
+                    payload={'title':demo_name(event['name'],demo)+(' — Reply needed' if slot[2]=='reply' else ' — Work finished'),
+                             'body':event['body'] if not demo['on'] and device['previews'] and event['body'] else fallback,
                              'tag':digest([event['agent'],slot[2]])[:32],'agent':event['name']}
                     sub=dict(device['subscription'])
                 if not self._fresh(observed):return
@@ -510,9 +539,9 @@ class PushService:
                     else:self.pending.pop(slot,None)
             if not self._fresh(observed):return
 
-    def _demo_off(self):
+    def _demo_state(self):
         value=self.demo()
-        return isinstance(value,dict) and value.get('supported') is True and value.get('on') is False
+        return value if isinstance(value,dict) and value.get('supported') is True and type(value.get('on')) is bool else None
 
     def start(self):
         if not self.capability()['available'] or self.thread:

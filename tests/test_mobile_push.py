@@ -144,11 +144,10 @@ def test_private_text_never_enters_preview(text):assert push.preview(text)==''
 def test_plain_preview_is_bounded():assert len(push.preview('Result is ready. '*100))==600
 
 
-@pytest.mark.parametrize('reason',['demo','unknown_demo','unsupported_demo','sleep','generation','missing_agent'])
-def test_demo_resume_generation_and_lost_roster_reset_baseline(env,reason):
+@pytest.mark.parametrize('reason',['unknown_demo','unsupported_demo','sleep','generation','missing_agent'])
+def test_unknown_demo_resume_generation_and_lost_roster_reset_baseline(env,reason):
     env.tick();env.tick('work');env.state['events'].append(dict(id='new',role='assistant',kind='text',text='Done.'))
-    if reason=='demo':env.state['demo']=True;env.tick();env.state['demo']=False
-    elif reason=='unknown_demo':env.state['demo']=None;env.tick();env.state['demo']=False
+    if reason=='unknown_demo':env.state['demo']=None;env.tick();env.state['demo']=False
     elif reason=='unsupported_demo':env.state['demo_supported']=False;env.tick();env.state['demo_supported']=True
     elif reason=='sleep':env.state['now']+=60
     elif reason=='generation':env.agent['_generation']=42
@@ -453,3 +452,110 @@ def test_failed_question_previews_share_history_slots_with_completion_checks(env
     for _ in range(5):
         before=len(env.state['calls']);env.tick();assert len(env.state['calls'])-before<=4
     assert sum(p['title']=='Agent8 — Work finished' for _,p in env.state['calls'])==1
+
+
+@pytest.mark.parametrize('act,fallback,kind',[('ask','Approval requested','Reply needed'),('question','Question','Reply needed'),('wait','','Work finished')])
+def test_demo_on_publishes_without_message_preview(env,act,fallback,kind):
+    env.state['demo']=True;env.save(previews=True);env.tick();env.tick('work')
+    env.state['events'].append(dict(id='new',kind='text',role='assistant',text='A readable private response.'))
+    env.tick(act,2)
+    assert len(env.state['calls'])==1
+    payload=env.state['calls'][0][1]
+    assert payload['title']=='SampleAgent — '+kind and payload['body']==fallback
+    assert payload['agent']=='SampleAgent' and env.service.devices[next(iter(env.service.devices))]['previews'] is True
+    env.tick(count=3);assert len(env.state['calls'])==1
+
+
+@pytest.mark.parametrize('start',[False,True])
+def test_demo_toggle_keeps_work_baseline_and_does_not_repeat_completion(env,start):
+    env.state['demo']=start;env.save(previews=True);env.tick();env.tick('work')
+    old=env.service.previous[push.identity(env.agent)];baseline=old['baseline']
+    env.state['demo']=not start
+    env.state['events'].append(dict(id='new',kind='text',role='assistant',text='The checks passed.'))
+    env.tick('wait',2)
+    assert env.service.previous[push.identity(env.agent)] is old and old['baseline']==baseline
+    assert len(env.state['calls'])==1
+    assert env.state['calls'][0][1]['body']==('The checks passed.' if start else '')
+    env.state['demo']=start;env.tick(count=3)
+    assert len(env.state['calls'])==1
+
+
+@pytest.mark.parametrize('start',[False,True])
+def test_demo_toggle_keeps_the_same_pending_retry(env,start):
+    env.state['demo']=start;env.save(previews=True);env.state['code']=503;env.tick();env.tick('question',2)
+    pending=next(iter(env.service.pending.values()));token=pending['token'];created=pending['created']
+    old=env.service.previous[push.identity(env.agent)]
+    env.state['demo']=not start;env.tick()
+    assert next(iter(env.service.pending.values())) is pending
+    assert pending['token']==token and pending['created']==created
+    assert env.service.previous[push.identity(env.agent)] is old
+    env.state['code']=201;env.tick(count=2)
+    assert len(env.state['calls'])==2 and not env.service.pending and token in env.service.sent
+    env.state['demo']=start;env.tick(count=3);assert len(env.state['calls'])==2
+
+
+@pytest.mark.parametrize('observed_on',[False,True])
+def test_presend_demo_state_controls_preview_and_display_name(env,observed_on):
+    env.save(previews=True);env.tick();env.tick('work')
+    env.state['events'].append(dict(id='new',kind='text',role='assistant',text='A new answer.'))
+    env.tick('wait');checks=0
+    def demo():
+        nonlocal checks
+        checks+=1
+        return dict(supported=True,on=observed_on if checks==1 else not observed_on,
+                    words=['SampleAgent'],identity=dict(users=['viewer'],hosts=['viewer-host']))
+    env.service.demo=demo;env.tick()
+    assert checks==2 and len(env.state['calls'])==1
+    payload=env.state['calls'][0][1]
+    assert payload['body']==('A new answer.' if observed_on else '')
+    assert payload['title']==('SampleAgent' if observed_on else '*'*11)+' — Work finished'
+    assert payload['agent']=='SampleAgent'
+
+
+@pytest.mark.parametrize('phase',['observe','presend'])
+@pytest.mark.parametrize('invalid',[None,[],{},dict(supported=False,on=True),dict(supported=True,on=None),dict(supported=1,on=False),dict(supported=True,on=0)])
+def test_unknown_or_unsupported_demo_still_suppresses_and_resets(env,phase,invalid):
+    env.tick();env.tick('ask');checks=0
+    def demo():
+        nonlocal checks
+        checks+=1
+        return dict(supported=True,on=False) if phase=='presend' and checks==1 else invalid
+    env.service.demo=demo;env.tick()
+    assert not env.state['calls'] and not env.service.pending and not env.service.previous
+    assert checks==(2 if phase=='presend' else 1)
+
+
+def test_demo_is_rechecked_for_each_device_in_the_same_tick(env):
+    env.save(previews=True);_,sub=recipient('b')
+    env.service.call('save',dict(subscription=sub,agent='SampleAgent',reply_needed=True,finished=False,previews=True))
+    env.tick();env.tick('work')
+    env.state['events'].append(dict(id='new',kind='text',role='assistant',text='A new question.'))
+    def sender(sub,payload,*_):
+        env.state['calls'].append((sub,copy.deepcopy(payload)));env.state['demo']=True;return 201
+    env.service.sender=sender;env.tick('question',2)
+    assert [p['body'] for _,p in env.state['calls']]==['A new question.','Question']
+
+
+DEMO_NAME_CASES=[
+    ('SampleAgent',dict(words=['private'],identity=dict(hosts=['viewer-host'])),'SampleAgent'),
+    ('SampleAgent',dict(words=['sampleagent']),'*'*11),
+    ('SampleAgent',dict(words=['Sample']),'SampleAgent'),
+    ('Sample-Agent',dict(words=['Sample']),'******-Agent'),
+    ('Sample-Agent',dict(identity=dict(hosts=['Sample'])),'Sample-Agent'),
+    ('Lab_SampleAgent',dict(identity=dict(hosts=['SampleAgent'])),'Lab_'+'*'*11),
+    ('Lab_SampleAgent',dict(words=['SampleAgent']),'Lab_SampleAgent'),
+    ('SampleAgent2',dict(words=['SampleAgent']),'SampleAgent2'),
+    ('SampleAgent',dict(words=['SampleAgent','Sample']),'*'*11),
+    ('SampleAgent',dict(identity=dict(users=['SampleAgent'])),'SampleAgent'),
+    ('Alpha-Beta',dict(words=['Alpha-Beta','Alpha']),'*'*10),
+    ('Alpha_Beta',dict(words=['Alpha_Beta'],identity=dict(hosts=['Alpha'])),'*****_Beta'),
+    ('KaAgent',dict(words=['Ka']),'**Agent'),
+    ('SampleAgent',dict(words=[' sampleagent ','SAMPLEAGENT']),'*'*11),
+    ('X-SampleAgent',dict(words=['-Sample']),'X*******Agent'),
+]
+
+
+@pytest.mark.parametrize('name,settings,expected',DEMO_NAME_CASES)
+def test_notification_name_uses_phone_demo_boundaries(name,settings,expected):
+    assert push.demo_name(name,dict(on=True,**settings))==expected
+    assert push.demo_name(name,dict(on=False,**settings))==name

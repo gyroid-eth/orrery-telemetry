@@ -32,11 +32,12 @@ function draw(){
  const handle=make('div','push-handle'),head=make('div','push-head'),title=make('h2','','Agent notifications'),done=make('button','','Done');done.type='button';done.onclick=close;head.append(title,done);panel.append(handle,head,make('p','push-agent',agent));
  const note=make('p','push-message',message);note.setAttribute('role','status');panel.append(note);
  if(!current.enabled){
-  const enable=make('button','push-enable','Enable on this phone');enable.type='button';enable.disabled=busy||!available||demo();enable.onclick=enablePhone;panel.append(enable);
+  const enable=make('button','push-enable','Enable on this phone');enable.type='button';enable.disabled=busy||!available;enable.onclick=enablePhone;panel.append(enable);
  }else panel.append(make('p','push-enabled','✓ Enabled on this phone'));
  for(const [key,label,description]of[['reply_needed','Reply needed','All agents · Questions and approvals'],['finished','Work finished','This agent · End of a turn'],['previews','Message previews','Show a short part of questions and replies']]){
-  const row=make('label','push-row'),copy=make('span','push-copy'),input=make('input');input.type='checkbox';input.checked=current[key];input.disabled=busy||!current.enabled||demo();input.dataset.setting=key;
-  copy.append(make('strong','',label),make('small','',description));row.append(copy,input,make('span','push-switch'));input.onchange=()=>change(key,input.checked);panel.append(row);
+  const hidden=key==='previews'&&demo();
+  const row=make('label','push-row'),copy=make('span','push-copy'),input=make('input');input.type='checkbox';input.checked=hidden?false:current[key];input.disabled=busy||!current.enabled||hidden;input.dataset.setting=key;
+  copy.append(make('strong','',label),make('small','',hidden?'Previews are hidden in Demo.':description));row.append(copy,input,make('span','push-switch'));input.onchange=()=>change(key,input.checked);panel.append(row);
  }
  panel.append(make('p','push-footnote','Previews are off by default. Notifications pause while this Mac sleeps.'));
  if(sub){const off=make('button','push-disable','Disable on this phone');off.type='button';off.disabled=busy;off.onclick=disablePhone;panel.append(off);}
@@ -47,12 +48,12 @@ async function open(name){
  try{
   if(!supported()){message='Use Android Chrome over HTTPS to enable notifications.';return;}
   const v=await state(name);if(panel!==own)return;available=v.available;current=v.state;sub=v.sub;updateBells(name,current);
-  message=demo()?'Notifications are paused in Demo.':!available?'Phone notifications have not been set up on this Mac.':Notification.permission==='denied'?'Notifications are blocked. Allow ORRERY in Chrome’s site settings.':'';
+  message=!available?'Phone notifications have not been set up on this Mac.':Notification.permission==='denied'?'Notifications are blocked. Allow ORRERY in Chrome’s site settings.':'';
  }catch(_){message='Could not check notifications. Check the connection and try again.';}
  finally{if(panel===own){busy=false;draw();}}
 }
 async function enablePhone(){
- if(busy||!available||demo())return;const own=panel,name=agent,settings={...current};
+ if(busy||!available)return;const own=panel,name=agent,settings={...current};
  // Invoke directly in this click, before the first await.
  const permission=Notification.requestPermission();busy=true;message='Waiting for notification permission…';draw();
  try{
@@ -70,7 +71,7 @@ async function enablePhone(){
  finally{if(panel===own){busy=false;draw();}}
 }
 async function change(key,value){
- if(busy||!sub)return;const own=panel,name=agent,change={...current,[key]:value};busy=true;message='Saving…';draw();
+ if(busy||!sub||key==='previews'&&demo())return;const own=panel,name=agent,change={...current,[key]:value};busy=true;message='Saving…';draw();
  try{const result=await request('save',{subscription:sub.toJSON(),agent:name,reply_needed:change.reply_needed,finished:change.finished,previews:change.previews});if(panel!==own)return;current=result;updateBells(name,current);message='Saved for this phone.';}
  catch(e){message=explain(e.message);}finally{if(panel===own){busy=false;draw();}}
 }
@@ -85,5 +86,6 @@ function button(name){
  if(states.get(name)?.enabled&&states.get(name)?.finished)b.classList.add('on');
  if(supported()&&!states.has(name))state(name).then(v=>updateBells(name,v.state)).catch(()=>{});return b;
 }
+new MutationObserver(()=>{if(panel)draw();}).observe(document.documentElement,{attributes:true,attributeFilter:['data-demo']});
 window.OrreryMobilePush={button,close};
 })();
