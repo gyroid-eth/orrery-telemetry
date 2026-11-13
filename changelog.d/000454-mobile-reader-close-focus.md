@@ -1,0 +1,3 @@
+### スマホでReaderを閉じると、読んでいたagentを中心に表示
+
+Graphのagentや検索結果から開いたReaderを×やBackで閉じると、最後に読んでいたagentと関連の強い最大5体をFocusで表示してFitします。Activityなどから開いたReaderは元の画面に戻ります。

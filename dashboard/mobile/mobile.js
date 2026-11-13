@@ -19,7 +19,10 @@ function openGraphAgent(name){
  const terminal=window.OrreryMobileTerminal,status=$('#graph-reader-status');
  status.hidden=terminal?.available()===true;
  if(!status.hidden){status.textContent='Reader is unavailable. Check Phone access on the desktop.';return;}
- terminal.open(name,window.OrreryMobileIdentity?.forName(name));
+ terminal.open(name,window.OrreryMobileIdentity?.forName(name),null,closedName=>{
+  network.focus(closedName);
+  if(network.svg.contains(document.activeElement))document.activeElement.blur();
+ });
 }
 let graphFullscreen=null;
 const time=ts=>typeof ts==='number'?new Date(ts*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'Unknown';
@@ -437,7 +440,7 @@ const fresh=()=>capability?.api===34;
 const ref=value=>value&&/^[a-f0-9]{32}$/.test(value.mail_instance_id)&&Number.isSafeInteger(value.mail_agent_id)&&value.mail_agent_id>0?{mail_instance_id:value.mail_instance_id,mail_agent_id:value.mail_agent_id}:null;
 const rowRef=row=>ref({mail_instance_id:row.dataset.mailInstanceId,mail_agent_id:Number(row.dataset.mailAgentId)});
 const sameTarget=value=>!fresh()||!!ref(value)&&!!selector&&value.mail_instance_id===selector.mail_instance_id&&value.mail_agent_id===selector.mail_agent_id;
-let generation=0,previewController=null,operationController=null,pollTimer=0,expiryTimer=0,failures=0,prepared=null,receipt=null,previousFocus=null;
+let generation=0,previewController=null,operationController=null,pollTimer=0,expiryTimer=0,failures=0,prepared=null,receipt=null,previousFocus=null,afterClose=null;
 let replyReference=null,preparedReference=null;
 const referenceTarget=()=>target?JSON.stringify([name,capability?.epoch,target.choice,target.revision,selector?.mail_instance_id,selector?.mail_agent_id]):'';
 const referenceCurrent=value=>!value||value.target===referenceTarget()&&value.value.isCurrent();
@@ -494,7 +497,14 @@ function cancelIntent(){
 }
 function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;imageController?.abort();imageController=null;imageProbeController?.abort();imageProbeController=null;imageAvailable=false;imageProbe='';clearAttachments();paused=false;checkingView=false;generation++;}
 function clear(){replyReference=preparedReference=null;inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
-function close(fromBack=false,keepView=false){if(!keepView){restoreView=null;forgetView();}const remove=backEntry&&window.history.state?.orreryConversation===true;backEntry=false;const restore=previousFocus;previousFocus=null;clear();if(sheet.open)sheet.close();if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});if(remove&&fromBack!==true){backClosing=true;window.history.back();}}
+function close(fromBack=false,keepView=false){
+ if(!keepView){restoreView=null;forgetView();}
+ const remove=backEntry&&window.history.state?.orreryConversation===true,closedName=name,finished=afterClose,restore=previousFocus;
+ backEntry=false;previousFocus=afterClose=null;clear();if(sheet.open)sheet.close();
+ if(!document.hidden&&!keepView&&finished)finished(closedName);
+ else if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});
+ if(remove&&fromBack!==true){backClosing=true;window.history.back();}
+}
 window.addEventListener('popstate',event=>{if(backClosing){backClosing=false;event.stopImmediatePropagation();return;}if(sheet.open&&backEntry){event.stopImmediatePropagation();if(dismissLayer()){window.history.pushState({orreryConversation:true},'');return;}backEntry=false;close(true);}},true);
 const entryLabel=()=>history?'History':'Terminal';
 function entry(n,cls='',identity=null){
@@ -514,8 +524,11 @@ function mail(event){
  for(const [label,n,id]of[['From',event.source,event.source_agent_id],['To',event.target,event.target_agent_id]]){const row=make('div','terminal-mail-person');row.append(make('span','',label+' '+n),entry(n,'',ref({mail_instance_id:event.mail_instance_id,mail_agent_id:id})));people.append(row);}
  q('#message-route').after(people);
 }
-async function open(n,identity=null,initialTab=null){
- if(busy()||sheet.open&&phase==='unknown'||!(enabled||history)||document.hidden)return;previousFocus=sheet.open?previousFocus:document.activeElement;clear();name=n;selector=ref(identity);window.scrollTo({top:0,behavior:'instant'});
+async function open(n,identity=null,initialTab=null,onClose=null){
+ if(busy()||sheet.open&&phase==='unknown'||!(enabled||history)||document.hidden)return;
+ // Keep the entry route while navigating to another agent within this sheet.
+ if(!sheet.open){previousFocus=document.activeElement;afterClose=onClose;}
+ clear();name=n;selector=ref(identity);window.scrollTo({top:0,behavior:'instant'});
  if(!sheet.open){sheet.showModal();if(history){window.history.pushState({orreryConversation:true},'');backEntry=true;}}
  if(history){tab=initialTab==='terminal'&&enabled?'terminal':'conversation';conversation().mount(n);}
  if(!enabled){phase='history-only';render();return;}

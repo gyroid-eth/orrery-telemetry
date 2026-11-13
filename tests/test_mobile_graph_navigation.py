@@ -25,11 +25,11 @@ def test_roles_use_the_existing_renderer_and_update_without_relayout(phone):
     capture(client,'graph-with-roles')
 
 
-def test_all_node_tap_opens_reader_and_keeps_graph_view(phone):
+def test_all_node_tap_opens_reader_and_returns_to_focus(phone):
     client,js,wait,state=phone
     graph(js,wait,state)
     # Restore SampleAgent so the fixture's selectable pane matches the tap.
-    js("testNetwork.snapshot.agents[0].name='SampleAgent';testNetwork.update(testNetwork.snapshot);testNetwork.pause();testNetwork.fit();window.viewBefore=document.querySelector('#gsvg').getAttribute('viewBox')")
+    js("testNetwork.snapshot.agents[0].name='SampleAgent';testNetwork.update(testNetwork.snapshot);testNetwork.pause();testNetwork.fit()")
     js('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
     wait("testNetwork.elements.node.get('SampleAgent').grp.querySelector('.pimg')===null")
     point=js("(()=>{const m=testNetwork.elements.node.get('SampleAgent').grp.getScreenCTM();return{x:m.e,y:m.f}})()")
@@ -38,7 +38,7 @@ def test_all_node_tap_opens_reader_and_keeps_graph_view(phone):
     wait("document.querySelector('#terminal-sheet').open&&document.querySelector('[data-id=result]')!==null")
     assert [body for op,body in state['calls'] if op=='targets'][-1]['name']=='SampleAgent'
     js('OrreryMobileTerminal.close()')
-    assert js("document.querySelector('#gsvg').getAttribute('viewBox')===viewBefore")
+    assert js("testNetwork.mode==='focus'&&testNetwork.selected==='SampleAgent'&&!testNetwork.userView")
     assert not any(op in {'prepare','commit'} for op,_ in state['calls'])
 
 
@@ -162,7 +162,7 @@ def test_search_uses_raw_identity_and_drag_does_not_open_reader(phone):
     graph(js,wait,state)
     # A spy at the Reader boundary checks the real graph/search adapter's
     # I/A argument independently of visible labels and target selection.
-    js("window.opened=[];window.expectedIdentity={mail_instance_id:'a'.repeat(32),mail_agent_id:7};OrreryMobileIdentity.forName=name=>name==='Agent0'?expectedIdentity:null;OrreryMobileTerminal.open=(...args)=>opened.push(args);document.querySelector('#agent-search').value='Agent0';document.querySelector('#agent-search').dispatchEvent(new Event('input'));document.querySelector('.agent-result-open strong').textContent='Masked';document.querySelector('.agent-result-open').click()")
+    js("window.opened=[];window.expectedIdentity={mail_instance_id:'a'.repeat(32),mail_agent_id:7};OrreryMobileIdentity.forName=name=>name==='Agent0'?expectedIdentity:null;OrreryMobileTerminal.open=(...args)=>opened.push(args.slice(0,2));document.querySelector('#agent-search').value='Agent0';document.querySelector('#agent-search').dispatchEvent(new Event('input'));document.querySelector('.agent-result-open strong').textContent='Masked';document.querySelector('.agent-result-open').click()")
     assert js('opened')==[['Agent0',dict(mail_instance_id='a'*32,mail_agent_id=7)]]
     js("document.querySelector('#search-clear').click();testNetwork.fit();window.opened=[]")
     js('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
