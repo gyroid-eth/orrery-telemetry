@@ -140,7 +140,13 @@ def relay_config(settings: dict) -> mobile_relay.Config:
         input_enabled=settings['send'] and reviewed,
         phone_policy_reviewed=reviewed,
         cockpit_port=settings['cockpit_port'],
-        history_enabled=reviewed)
+        history_enabled=reviewed,
+        push_enabled=reviewed and push_python() is not None)
+
+
+def push_python():
+    try:return mobile_relay.mobile_push.runtime_python(home())
+    except ValueError:raise SettingsError('mobile_push_runtime_invalid') from None
 
 
 # --- outside world ------------------------------------------------------------
@@ -282,6 +288,7 @@ def status() -> dict:
 
 
 def _plist(python: str) -> bytes:
+    python=push_python() or python
     logs = home() / 'logs'
     logs.mkdir(parents=True, exist_ok=True)
     return plistlib.dumps({

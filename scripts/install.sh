@@ -102,6 +102,7 @@ CODEX_MODELS_SETTING="${AGENTSTACK_CODEX_MODELS:-}"
 CODEX_DEFAULT_MODEL_SETTING="${AGENTSTACK_CODEX_DEFAULT_MODEL:-}"
 CODEX_DEFAULT_EFFORT_SETTING="${AGENTSTACK_CODEX_DEFAULT_EFFORT:-}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-}"
+WITH_MOBILE_PUSH=false
 PYTHON_CHOICE="${AGENTSTACK_PYTHON:-}"
 PYTHON_REQUESTED=""
 PYTHON_INHERITED=""
@@ -138,6 +139,7 @@ Options:
   --dry-run              Print planned actions without writing files
   -y, --assume-yes       Pre-approve MCP/settings/managed-block prompts only
   --dashboard-only       Tier0 footprint; install dashboard assets only
+  --with-mobile-push     Prepare optional phone notification dependencies (no permission or delivery)
   --scoped               Tier2 placeholder; no user-settings merge
   --enable-dsh           DeepSeek 表示と固定 dsh runtime を導入（子の起動なし）
   --enable-hermes        固定 Hermes を専用 managed root に導入（鍵なし）
@@ -264,6 +266,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -y|--assume-yes)
       ASSUME_YES=1
+      shift
+      ;;
+    --with-mobile-push)
+      WITH_MOBILE_PUSH=true
       shift
       ;;
     --enable-hermes)
@@ -5555,6 +5561,12 @@ PY
   migrate_legacy_annotations
   migrate_legacy_dashboard_log
   install_payload
+  if [[ "$WITH_MOBILE_PUSH" == true ]]; then
+    local mobile_push_args=(--install "$INSTALL_DIR" --python "$PYTHON_BIN"
+      --requirements "$SCRIPT_DIR/mobile-push-requirements.txt")
+    [[ "$DRY_RUN" != true ]] || mobile_push_args+=(--dry-run)
+    "$PYTHON_BIN" "$SCRIPT_DIR/lib/mobile_push_install.py" "${mobile_push_args[@]}"
+  fi
   install_dsh_presentation
   install_managed_harnesses
   install_claude_skill_links
