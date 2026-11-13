@@ -16,6 +16,33 @@ const WAIT=20000;
 const controllers={poll:null,older:null,preview:null};
 let panel=null,saveUrl='',previewFocus=null,previewRequest=null,previewRetry=false;
 let events=[],seen=new Set(),older=null,pending=[],failures=0,loadingOlder=false,following=true,savedTop=0;
+let recordVersion=0,recordConfirmed=false,replySelection=null;
+function dismissReferenceSelection(){replySelection?.remove();replySelection=null;}
+function selectionInRecord(){const selection=window.getSelection?.();return !!(selection?.toString()&&list?.contains(selection.anchorNode));}
+function selectionReply(){
+ const selection=window.getSelection?.(),terminal=window.OrreryMobileTerminal;
+ if(!root?.isConnected||!recordConfirmed||!terminal?.canReference?.()||!selection?.rangeCount||!selection.toString().trim()){dismissReferenceSelection();return;}
+ const range=selection.getRangeAt(0),parent=node=>node?.nodeType===1?node:node?.parentElement;
+ const start=parent(range.startContainer)?.closest('.conversation-text'),end=parent(range.endContainer)?.closest('.conversation-text');
+ if(!start||start!==end||!list.contains(start)){dismissReferenceSelection();return;}
+ if([...start.querySelectorAll('button,.conversation-code-head')].some(node=>range.intersectsNode(node))){dismissReferenceSelection();return;}
+ const row=start.closest('[data-id]'),event=events.find(e=>e.id===row?.dataset.id);
+ if(!event||event.kind!=='text'||!['user','assistant'].includes(event.role)){dismissReferenceSelection();return;}
+ const box=range.getBoundingClientRect(),viewport=window.visualViewport;
+ const top=box.bottom+10,bottom=(viewport?.offsetTop||0)+(viewport?.height||innerHeight);
+ if(box.bottom<=list.getBoundingClientRect().top||top+44>bottom-8){dismissReferenceSelection();return;}
+ const heldRoot=root,version=recordVersion,agent=name;
+ const value={agent,role:event.role,ts:event.ts,eventId:event.id,text:selection.toString(),
+  isCurrent:()=>root===heldRoot&&recordConfirmed&&recordVersion===version&&events.includes(event)};
+ const button=replySelection||make('button','reader-selection-reference','Reply with reference');button.type='button';
+ button.style.left=Math.max(12,Math.min(box.left,innerWidth-238))+'px';button.style.top=top+'px';
+ button.onpointerdown=event=>event.preventDefault();button.onmousedown=event=>event.preventDefault();
+ button.onclick=()=>{if(terminal.reference(value)){selection.removeAllRanges();dismissReferenceSelection();}};
+ if(!replySelection)document.querySelector('#terminal-sheet').append(button);replySelection=button;
+}
+document.addEventListener('selectionchange',selectionReply);
+window.addEventListener('resize',selectionReply);
+window.visualViewport?.addEventListener('resize',selectionReply);
 let mailResize=null,mailWidth=0;
 let toolGroups=[],toolGroupFor=new Map(),toolSerial=0;
 const thumbnails=new Map();let thumbnailObserver=null;
@@ -421,7 +448,7 @@ function dropEvent(id){
  if(node.contains?.(document.activeElement))list.focus?.({preventScroll:true});node.remove();
 }
 function append(page){
- const follow=atBottom(),fresh=page.filter(e=>!seen.has(e.id));
+ const follow=atBottom()&&!selectionInRecord(),fresh=page.filter(e=>!seen.has(e.id));
  for(const e of fresh){seen.add(e.id);events.push(e);const anchor=list.querySelector(':scope > .conversation-pending');list.insertBefore(row(e),anchor);const shown=shownFiles(e);if(shown)list.insertBefore(shown,anchor);}
  let dropped=false;
  while(events.length>MAX_KEPT){const gone=events.shift();seen.delete(gone.id);dropEvent(gone.id);older=null;dropped=true;}
@@ -453,7 +480,7 @@ function prepend(page,omitted){
  list.scrollTop+=list.scrollHeight-before;following=false;savedTop=list.scrollTop;
  loadThumbnails();
 }
-function reset(){closePreview();forgetThumbnails();clearToolGroups();events=[];seen.clear();older=null;list.querySelectorAll(':scope > .conversation-shown-files').forEach(x=>x.remove());list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());}
+function reset(){recordVersion++;dismissReferenceSelection();closePreview();forgetThumbnails();clearToolGroups();events=[];seen.clear();older=null;list.querySelectorAll(':scope > .conversation-shown-files').forEach(x=>x.remove());list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());window.OrreryMobileTerminal?.refreshReference?.();}
 function slow(on){if(retryButton)retryButton.hidden=!on;if(on)setStatus(messages.history_slow);}
 function showError(v){
  const code=typeof v?.error==='string'?v.error:'history_unavailable';
@@ -469,8 +496,9 @@ async function poll(){
   if(v.ok!==true){
    // A hidden, stale or changed record also hides any file opened from it;
    // a slow answer is only a delay and leaves it open.
-   if(v.error!=='history_slow')closePreview();showError(v);if(v.error==='history_changed')reset();}
+   if(v.error!=='history_slow'){recordConfirmed=false;recordVersion++;dismissReferenceSelection();window.OrreryMobileTerminal?.refreshReference?.();closePreview();}showError(v);if(v.error==='history_changed')reset();}
   else{
+   recordConfirmed=true;
    failures=0;slow(false);if(!events.length&&v.omitted===true)list.insertBefore(gap(),list.querySelector(':scope > .conversation-pending'));append(v.events);
    // The latest page's older token stays valid only while the oldest shown
    // message is still in that page; it is renewed on every such poll.
@@ -478,6 +506,7 @@ async function poll(){
    if(atBottom())setStatus(v.events.length?(v.tail_only?'Latest record · updating':'Read-only record · updating'):'No messages in the record yet.');
    if(v.limited&&!events.length)setStatus('The latest record was shortened.');
    olderButton.hidden=!older||loadingOlder;
+   selectionReply();window.OrreryMobileTerminal?.refreshReference?.();
   }
  }catch(e){if(g!==gen||e?.superseded)return;failures++;if(e?.slow)slow(true);else setStatus('History unavailable. Retrying.');}
  if(g===gen&&root&&!document.hidden)timer=setTimeout(poll,failures?Math.min(30000,POLL*2**failures):POLL);
@@ -502,7 +531,7 @@ function mount(n){
  status=make('p','conversation-status','Loading the record…');status.setAttribute('role','status');
  olderButton=make('button','conversation-older','Show older');olderButton.type='button';olderButton.hidden=true;olderButton.onclick=loadOlder;
  list=make('div','conversation-list');list.tabIndex=-1;list.setAttribute('aria-label','Conversation record for '+n);
- list.addEventListener('scroll',()=>{if(!list.isConnected)return;following=list.scrollHeight-list.clientHeight-list.scrollTop<=24;savedTop=list.scrollTop;if(following&&/paused/.test(status.textContent))setStatus('Read-only record · updating');},{passive:true});
+ list.addEventListener('scroll',()=>{if(!list.isConnected)return;following=list.scrollHeight-list.clientHeight-list.scrollTop<=24;savedTop=list.scrollTop;if(following&&/paused/.test(status.textContent))setStatus('Read-only record · updating');selectionReply();},{passive:true});
  retryButton=make('button','conversation-retry','Retry');retryButton.type='button';retryButton.hidden=true;
  retryButton.onclick=()=>{retryButton.hidden=true;setStatus('Loading the record…');return poll();};
  list.append(olderButton);root.append(status,retryButton,list);
@@ -512,6 +541,7 @@ function mount(n){
 function element(){return root;}
 function addPending(text){if(!root||typeof text!=='string'||!text.trim())return;pending.push({text,at:Date.now(),before:new Set(seen)});renderPending();following=true;restore();}
 function unmount(){
+ recordVersion++;recordConfirmed=false;dismissReferenceSelection();
  gen++;clearTimeout(timer);timer=0;closePreview();forgetThumbnails();for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
  mailResize?.disconnect();mailResize=null;mailWidth=0;
  clearToolGroups();
@@ -530,5 +560,5 @@ document.addEventListener('visibilitychange',()=>{
   restore();poll();
  }
 });window.addEventListener('pagehide',unmount);
-window.OrreryMobileConversation={enabled,mount,element,unmount,addPending,restore,dismissPreview,refreshActivity:activity,refreshProfiles};
+window.OrreryMobileConversation={enabled,mount,element,unmount,addPending,restore,dismissPreview,refreshActivity:activity,refreshProfiles,dismissReferenceSelection};
 })();

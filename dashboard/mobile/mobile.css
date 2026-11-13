@@ -346,6 +346,13 @@ html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-l
 .mobile .reader-input-send{flex:none;display:grid;place-items:center;width:44px;height:44px;min-height:44px;padding:0;border-radius:50%;font-size:23px}
 .mobile .reader-input-bar .terminal-primary{flex:none;color:var(--amber);border-color:color-mix(in srgb,var(--amber) 50%,transparent);background:color-mix(in srgb,var(--amber) 18%,transparent)}
 .reader-input-count{display:block;font:9px/1.5 var(--mono);padding:1px 9px 3px;color:var(--ink-dim)}
+.mobile .reader-selection-reference{position:fixed;z-index:9;min-height:44px;padding:10px 14px;border:1px solid var(--hair);border-radius:12px;background:var(--elev);color:var(--ink);font:12px var(--mono);box-shadow:0 8px 24px color-mix(in srgb,var(--shade) 35%,transparent)}
+.mobile .reader-input-bar .reader-reference-card{position:relative;margin:4px 5px 8px;padding:10px 42px 10px 11px;border:1px solid var(--hair);border-left:2px solid var(--amber);border-radius:10px;background:var(--panel-2)}
+.reader-reference-label{margin-bottom:5px;font:10px/1.5 var(--mono);color:var(--ink-dim);overflow-wrap:anywhere}
+.reader-reference-quote{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;margin:0;font:12px/1.6 var(--mono);color:var(--ink);overflow-wrap:anywhere;white-space:normal}
+.mobile .reader-input-bar .reader-reference-remove{position:absolute;right:0;top:0;width:44px;height:44px;min-height:44px;padding:0;border:0;background:none;color:var(--ink-dim);font:20px var(--mono)}
+.reader-reference-error{margin:7px 0 0;font:11px/1.6 var(--mono);color:var(--alert)}
+.mobile .reader-input-bar.reader-review.has-reference .terminal-exact{max-height:min(40dvh,340px)}
 .mobile .reader-input-bar .terminal-help{display:block;font:10px/1.6 var(--mono);margin:7px 4px;color:var(--ink-dim)}
 .mobile .reader-input-bar.reader-review{padding:12px;border-color:color-mix(in srgb,var(--amber) 35%,var(--hair))}
 .mobile .reader-input-bar h3{font:500 18px/1.4 var(--serif);margin:8px 3px 3px}
