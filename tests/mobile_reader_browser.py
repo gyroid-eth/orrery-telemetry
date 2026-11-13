@@ -51,6 +51,12 @@ def phone(request):
         def do_GET(self):
             path = self.path.split('?')[0]
             state['get_calls'].append(self.path)
+            if path == '/view/demo':
+                if state.get('demo_delay'):time.sleep(state['demo_delay'])
+                return self.send(state.get('demo',dict(version=1,supported=True,on=False,words=[],identity=None)), status=503 if state.get('demo_error') else 200)
+            if path in {'/demo-mask.js','/demo-mode.js'} and os.environ.get('ORRERY_DEMO_BRIDGE_ROOT'):
+                filename={'/demo-mask.js':'demo_mask.js','/demo-mode.js':'demo_mode.js'}[path]
+                return self.send((Path(os.environ['ORRERY_DEMO_BRIDGE_ROOT'])/filename).read_bytes(),'text/javascript')
             if path == '/view/message' and state['mail']:
                 return self.send(dict(event=state['mail'], subject='Fixture subject', body='Fixture message body', subject_truncated=False, body_truncated=False))
             if path == '/view/mail' and state['mail']:

@@ -6,7 +6,7 @@ window.AGENTSTACK_DEMO={assetURL:n=>'/assets/'+n+'.svg',portraitURL:n=>'/view/po
 const $=s=>document.querySelector(s),node=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e;};
 let snapshot=null,kind='all',agentFilter='',desiredWindow='day',timer=0,active=null,pending=false,receivedAt=0,lastNotices=[];
 const mailRef=a=>a&&/^[a-f0-9]{32}$/.test(a.mail_instance_id)&&Number.isSafeInteger(a.mail_agent_id)&&a.mail_agent_id>0?{mail_instance_id:a.mail_instance_id,mail_agent_id:a.mail_agent_id}:null;
-function markRef(element,value){const ref=mailRef(value);if(ref){element.dataset.mailInstanceId=ref.mail_instance_id;element.dataset.mailAgentId=String(ref.mail_agent_id);}}
+function markRef(element,value){if(typeof value?.name==='string')element.dataset.agentName=value.name;const ref=mailRef(value);if(ref){element.dataset.mailInstanceId=ref.mail_instance_id;element.dataset.mailAgentId=String(ref.mail_agent_id);}}
 window.OrreryMobileAgent={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?{state:rows[0].act_state,running:rows[0].running,workDisplay:typeof rows[0].work_disp==='string'?rows[0].work_disp:'',stale:snapshot.sources.agents.status!=='available'||snapshot.sources.agents.age_seconds===null||snapshot.sources.agents.age_seconds+(performance.now()-receivedAt)/1000>30}:null;}};
 window.OrreryMobileIdentity={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?mailRef(rows[0]):null;}};
 let mailPage=null,mailPositions=[null],mailPosition=0,mailController=null,mailGeneration=0;
@@ -483,9 +483,9 @@ function entry(n,cls='',identity=null){
 }
 const graphEntry=entry('','terminal-graph-entry');graphEntry.id='terminal-graph-entry';q('.selected-agent').after(graphEntry);
 function entries(){
- const selected=q('#selected-name').textContent;graphEntry.replaceChildren(make('span','',selected==='None'?'Select an agent':selected),make('strong','',entryLabel()+' ⌁'));graphEntry.disabled=!(enabled||history)||selected==='None';graphEntry.onclick=()=>open(selected,window.OrreryMobileIdentity?.forName(selected));
- q('#attention').querySelectorAll(':scope > .attention-row').forEach(row=>{const n=row.querySelector('.name')?.textContent;if(!n)return;const wrap=make('div','terminal-attention');row.replaceWith(wrap);wrap.append(row,entry(n,'',rowRef(row)));});
- q('#events').querySelectorAll('.status-line').forEach(row=>{const n=row.querySelector('.name')?.textContent;if(n&&!row.querySelector('.terminal-entry'))row.append(entry(n,'',rowRef(row)));});
+ const selected=q('#agent-picker').value;graphEntry.replaceChildren(make('span','',selected||'Select an agent'),make('strong','',entryLabel()+' ⌁'));graphEntry.disabled=!(enabled||history)||!selected;graphEntry.onclick=()=>open(selected,window.OrreryMobileIdentity?.forName(selected));
+ q('#attention').querySelectorAll(':scope > .attention-row').forEach(row=>{const n=row.dataset.agentName;if(!n)return;const wrap=make('div','terminal-attention');row.replaceWith(wrap);wrap.append(row,entry(n,'',rowRef(row)));});
+ q('#events').querySelectorAll('.status-line').forEach(row=>{const n=row.dataset.agentName;if(n&&!row.querySelector('.terminal-entry'))row.append(entry(n,'',rowRef(row)));});
  document.querySelectorAll('.terminal-entry:not(#terminal-graph-entry)').forEach(b=>{b.disabled=!(enabled||history);b.textContent=entryLabel();b.setAttribute('aria-label','Open '+entryLabel()+' for '+b.dataset.terminalName);});
  restoreSavedView();
 }

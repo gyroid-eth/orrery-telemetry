@@ -73,6 +73,10 @@ On the phone, open the **Address on the phone** from step 2 (`https://…:9443/`
 
 ### In demo mode
 
+Enabling **Demo mode** in an updated cockpit also masks user names, host names and the extra words on the phone. A connected foreground page follows within about four seconds without reloading or losing its draft and pictures. Turning the desktop Settings switch off unmasks the phone. Closing the desktop keeps the last state; URL `?demo=0` alone does not unmask the phone. Copying and sending still use the original values.
+
+The phone checks Demo state before its first display. Communication errors hide the screen and show **Retry**. While that browser retains its Demo state, stopping the cockpit or switching to an older version does not reveal names. If no cockpit is running or the version is unsupported, and the phone has never received Demo mode, ordinary viewing still works. Update both components and reload the active Demo desktop and phone once.
+
 If you press **Phone access** in demo mode before the login and address are set, the line right under the switch says "Turn off demo mode to set up phone access (once). After that you can switch it on and off in demo mode." **Turn off demo mode** turns demo mode off and reloads the page. Settings closes, so open **Settings** again, press **Phone access**, and go through the steps above.
 
 Once it is set up, you can go back to demo mode and the switch keeps working. The login and the address read "hidden in demo mode" and are not put on the page. Turn demo mode off only to change them.
