@@ -1,7 +1,10 @@
 """The original graph opens a verified Reader and supports name/role search."""
 import base64
+import json
 import os
 from pathlib import Path
+
+import pytest
 
 from mobile_reader_browser import phone
 from test_mobile_graph_updates import graph
@@ -22,7 +25,7 @@ def test_roles_use_the_existing_renderer_and_update_without_relayout(phone):
     capture(client,'graph-with-roles')
 
 
-def test_real_node_tap_opens_reader_and_keeps_graph_view(phone):
+def test_all_node_tap_opens_reader_and_keeps_graph_view(phone):
     client,js,wait,state=phone
     graph(js,wait,state)
     # Restore SampleAgent so the fixture's selectable pane matches the tap.
@@ -37,6 +40,104 @@ def test_real_node_tap_opens_reader_and_keeps_graph_view(phone):
     js('OrreryMobileTerminal.close()')
     assert js("document.querySelector('#gsvg').getAttribute('viewBox')===viewBefore")
     assert not any(op in {'prepare','commit'} for op,_ in state['calls'])
+
+
+def focus_graph(js,wait,state):
+    graph(js,wait,state,8)
+    agents=state['snapshot']['agents']
+    agents[0]['role']='Coordinator'
+    agents[1].update(name='SampleAgent',role='Review')
+    edges=[dict(source='Agent0',target=a['name'],kind='to',count=100 if i==1 else 80-i*10)
+           for i,a in enumerate(agents[1:7],1)]
+    edges.extend(dict(source='SampleAgent',target=a['name'],kind='to',count=200 if i==7 else 110-i*10)
+                 for i,a in enumerate(agents[2:],2))
+    state['snapshot']['graph']['edges']=edges
+    js('testNetwork.update('+json.dumps(state['snapshot'])+');testNetwork.selected="Agent0";document.querySelector("[data-mode=focus]").click()')
+    wait('testNetwork.raf===0')
+
+
+def node_point(js,wait,name):
+    # Let the compositor catch up after a layout/fit and the failed PNG's
+    # initials fallback; these are actual touch inputs, not DOM clicks.
+    js('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+    wait("testNetwork.elements.node.get("+json.dumps(name)+").grp.querySelector('.pimg')===null")
+    return js('(()=>{const m=testNetwork.elements.node.get('+json.dumps(name)+').grp.getScreenCTM();return{x:m.e,y:m.f}})()')
+
+
+@pytest.mark.parametrize('theme',['dark','light'])
+@pytest.mark.parametrize('pointer',['touch','mouse'])
+def test_focus_peer_tap_changes_center_then_center_tap_opens_reader(phone,theme,pointer):
+    client,js,wait,state=phone
+    focus_graph(js,wait,state)
+    if theme=='light':
+        js((Path(__file__).resolve().parents[1]/'dashboard/theme_core.js').read_text())
+        js("document.documentElement.dataset.colorTheme='light';Object.entries(AgentStackColorThemeCore.deriveWarmPaperLightTheme().cssVariables).forEach(([k,v])=>document.documentElement.style.setProperty(k,v))")
+    assert 'Focus: tap a peer to focus' in js("document.querySelector('#gsvg').getAttribute('aria-label')")
+    assert js("testNetwork.map.has('Agent5')&&!testNetwork.map.has('Agent7')")
+    assert js("testNetwork.elements.node.get('Agent0').grp.getAttribute('aria-label')")=='Open Reader for Agent0 · Coordinator'
+    assert js("testNetwork.elements.node.get('SampleAgent').grp.getAttribute('aria-label')")=='Focus on SampleAgent · Review'
+    capture(client,'focus-'+theme+'-'+pointer+'-before')
+    calls=len(state['calls'])
+    # Pointer activation must also clear any prior keyboard focus in the graph.
+    js("testNetwork.elements.node.get('Agent0').grp.focus()")
+    point=node_point(js,wait,'SampleAgent')
+    if pointer=='touch':
+        client.call('Input.dispatchTouchEvent',type='touchStart',touchPoints=[dict(point,id=1)])
+        client.call('Input.dispatchTouchEvent',type='touchEnd',touchPoints=[])
+    else:
+        client.call('Input.dispatchMouseEvent',type='mousePressed',button='left',clickCount=1,**point)
+        client.call('Input.dispatchMouseEvent',type='mouseReleased',button='left',clickCount=1,**point)
+    wait("testNetwork.selected==='SampleAgent'&&testNetwork.raf===0")
+    js('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+    assert js("!document.querySelector('#gsvg').contains(document.activeElement)")
+    assert js("document.querySelector('#gsvg :focus')===null")
+    assert js("testNetwork.mode==='focus'&&!document.querySelector('#terminal-sheet').open&&!testNetwork.userView")
+    assert js("[...testNetwork.map.keys()]")==['SampleAgent','Agent7','Agent0','Agent2','Agent3','Agent4']
+    assert len(state['calls'])==calls
+    assert js("document.querySelector('#gsvg .selnode').dataset.name")=='SampleAgent'
+    assert js("testNetwork.elements.node.get('SampleAgent').grp.getAttribute('aria-label')")=='Open Reader for SampleAgent · Review'
+    assert js("testNetwork.elements.node.get('Agent0').grp.getAttribute('aria-label')")=='Focus on Agent0 · Coordinator'
+    assert js("(()=>{const v=OrreryNetworkCore.fit(testNetwork.map,testNetwork.dimensions());return ['vx','vy','k'].every(key=>Math.abs(v[key]-testNetwork.view[key])<.001)})()")
+    capture(client,'focus-'+theme+'-'+pointer+'-after')
+    point=node_point(js,wait,'SampleAgent')
+    client.call('Input.dispatchTouchEvent',type='touchStart',touchPoints=[dict(point,id=1)])
+    client.call('Input.dispatchTouchEvent',type='touchEnd',touchPoints=[])
+    wait("document.querySelector('#terminal-sheet').open&&document.querySelector('[data-id=result]')!==null")
+    assert [body for op,body in state['calls'] if op=='targets'][-1]['name']=='SampleAgent'
+    capture(client,'focus-'+theme+'-'+pointer+'-center-reader')
+    assert not any(op in {'prepare','commit'} for op,_ in state['calls'])
+
+
+@pytest.mark.parametrize('key,code,keycode',[('Enter','Enter',13),(' ','Space',32)])
+def test_focus_keyboard_keeps_focus_for_the_second_activation(phone,key,code,keycode):
+    client,js,wait,state=phone
+    focus_graph(js,wait,state)
+    js("testNetwork.elements.node.get('SampleAgent').grp.focus()")
+    for step in range(2):
+        client.call('Input.dispatchKeyEvent',type='keyDown',key=key,code=code,windowsVirtualKeyCode=keycode)
+        client.call('Input.dispatchKeyEvent',type='keyUp',key=key,code=code,windowsVirtualKeyCode=keycode)
+        if step==0:
+            assert js("testNetwork.selected==='SampleAgent'&&!document.querySelector('#terminal-sheet').open")
+            assert js("document.activeElement===testNetwork.elements.node.get('SampleAgent').grp")
+            assert js("document.activeElement.getAttribute('aria-label')")=='Open Reader for SampleAgent · Review'
+    wait("document.querySelector('#terminal-sheet').open&&document.querySelector('[data-id=result]')!==null")
+
+
+@pytest.mark.parametrize('gesture',['drag','cancel','pinch'])
+def test_focus_gestures_do_not_change_center_or_open_reader(phone,gesture):
+    client,js,wait,state=phone
+    focus_graph(js,wait,state)
+    point=node_point(js,wait,'SampleAgent')
+    first=dict(point,id=1)
+    client.call('Input.dispatchTouchEvent',type='touchStart',touchPoints=[first])
+    if gesture=='drag':
+        client.call('Input.dispatchTouchEvent',type='touchMove',touchPoints=[dict(first,x=point['x']+35,y=point['y']+20)])
+    elif gesture=='pinch':
+        second=dict(point,id=2,x=point['x']+20)
+        client.call('Input.dispatchTouchEvent',type='touchStart',touchPoints=[first,second])
+        client.call('Input.dispatchTouchEvent',type='touchMove',touchPoints=[dict(first,x=point['x']-15),dict(second,x=point['x']+35)])
+    client.call('Input.dispatchTouchEvent',type='touchCancel' if gesture=='cancel' else 'touchEnd',touchPoints=[])
+    assert js("testNetwork.selected==='Agent0'&&!document.querySelector('#terminal-sheet').open")
 
 
 def test_search_matches_role_and_focus_is_separate_from_opening_reader(phone):
