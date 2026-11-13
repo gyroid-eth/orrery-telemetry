@@ -83,6 +83,8 @@ The header numbers are a **tally** of the states each card shows in its top-righ
 
 In a narrow Codex pane, a current `Working` / `Thinking` line ending in `…` still indicates work. Elapsed time includes only readable units and is absent when unreadable. Historical status lines superseded by a later reply or completion marker, and quoted examples, do not establish current work.
 
+Work also remains current while Codex shows queued follow-up inputs (`Queued follow-up inputs`) between the current `Working` line and the input box; a queue alone never indicates work. A footer whose model display name separates the variant with a space, such as `GPT-6.1 Terra max`, is recognized as the input footer, and the model is shown as `GPT-6.1-Terra`.
+
 `NEED YOU` appears only while such agents exist; clicking it narrows the DECK to them (click again to restore). An agent whose process has stopped and returned to the shell is in none of these counts; its card says `○ SHELL`. The total of active agents is in the sector heading, `ACTIVE AGENTS [ 29 ]`.
 
 **Decide where the next task goes from the header (WAITING and LEFT); read what each agent is doing from its card.**
