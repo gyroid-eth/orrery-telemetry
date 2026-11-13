@@ -1,0 +1,5 @@
+### スマホのReaderから通知するagentを選べるようにする
+
+Android ChromeのReader上部にベルを追加し、全agentの返事待ちと、選んだagentのターン終了を端末へ通知できるようにしました。本文previewは端末ごとに既定オフで、明示操作からだけ通知の許可を求めます。同じoriginの最新名簿を確かめてReaderを開きます。
+
+`--with-mobile-push` で通知用のoptional依存を正規installerから用意できます。通常installでは追加せず、通知を有効にするまで購読も鍵も作りません。relay側の観測、重複・再試行・件数の上限、本人確認、配送先制限とDemo中の抑止を追加しました。

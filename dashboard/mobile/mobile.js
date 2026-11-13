@@ -104,6 +104,7 @@ function showNotices(notices,data,label){
 function render(data){
  if(snapshot?.timeline.scope&&snapshot.timeline.scope!==data.timeline.scope){clearDetail();clearPair();resetMail();}
  snapshot=data;receivedAt=performance.now();
+ if(data.sources.agents.status==='available')window.OrreryMobilePush?.roster(data.agents);
  // The displayed roster is the projection's graph.nodes + agents union.
  // Mail success cannot establish an empty roster or working/waiting counts.
  const rosterSources=[data.sources.agents,data.sources.graph],mail=data.sources.mail;
@@ -478,7 +479,7 @@ function cancelIntent(){
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
 function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;imageController?.abort();imageController=null;imageProbeController?.abort();imageProbeController=null;imageAvailable=false;imageProbe='';clearAttachments();paused=false;checkingView=false;generation++;}
-function clear(){inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
+function clear(){window.OrreryMobilePush?.close();inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
 function close(fromBack=false,keepView=false){if(!keepView){restoreView=null;forgetView();}const remove=backEntry&&window.history.state?.orreryConversation===true;backEntry=false;const restore=previousFocus;previousFocus=null;clear();if(sheet.open)sheet.close();if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});if(remove&&fromBack!==true){backClosing=true;window.history.back();}}
 window.addEventListener('popstate',event=>{if(backClosing){backClosing=false;event.stopImmediatePropagation();return;}if(sheet.open&&backEntry){event.stopImmediatePropagation();if(dismissLayer()){window.history.pushState({orreryConversation:true},'');return;}backEntry=false;close(true);}},true);
 const entryLabel=()=>history?'History':'Terminal';
@@ -798,6 +799,7 @@ function readerBar(){
   if(['conversation','terminal'].includes(value)){b.setAttribute('aria-pressed',String(tab===value));b.disabled=busy();}
   bar.append(b);
  }
+ const bell=window.OrreryMobilePush?.button(name);if(bell){bell.disabled=busy();bar.insertBefore(bell,bar.lastElementChild);}
  sheet.append(bar);queueMicrotask(()=>{conversation()?.refreshActivity?.();refreshOutput();});
 }
 function fitInput(field){

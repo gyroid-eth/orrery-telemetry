@@ -8,6 +8,26 @@ The mobile reader shows agents needing attention, a Mail timeline and NETWORK in
 
 With the ORRERY cockpit you can turn it on and off from **Settings → Phone** ([next section](#turn-it-on-from-cockpit-settings)). The table after it and [Enable manually](#enable-manually) are for setting it up by hand without the cockpit.
 
+## Phone notifications (optional, Android Chrome)
+
+Notifications are off by default. Complete Phone access's owner and policy review, then prepare the optional dependencies through the regular installer. Review `bash scripts/install.sh --with-mobile-push --dry-run`, then use `--with-mobile-push` for the same installation with its normal approval steps. Ordinary installation does not install these dependencies. Do not pip-install into production Python by hand.
+
+For an existing phone job, reapply its settings with `printf '%s\n' '{"access":true}' | agentstack-mobile apply`. The job then selects the managed notification Python. Preparing dependencies creates no browser permission or subscription. A manually launched relay needs that optional Python, `--enable-push`, and reviewed history settings.
+
+Tap the **bell** in an agent's Reader, then **Enable on this phone** and allow Chrome's notification prompt. Only that explicit action requests permission. Settings belong to this phone:
+
+- **Reply needed** covers every agent's question or approval wait, using the Reader's existing ask/question observations.
+- **Work finished** covers this agent only: new work followed by waiting and a new recorded assistant reply marks the end of a turn. It does not establish completion of an entire task or process exit. Selected agents have a marked bell.
+- **Message previews** is one setting per phone, off by default. Off sends only the agent and event type. On can include up to 600 characters from a new question or last reply. Code, images, suspected secrets/tokens and text containing absolute paths are hidden. Without a verified new question or approval text, only its type is shown.
+
+**Disable on this phone** removes the server subscription before unsubscribing the browser. Use the bell to enable it again. After a denied permission, allow ORRERY notifications in Chrome's site settings. This version targets Android Chrome; iOS/Safari is outside its scope.
+
+The Mac publishes over outbound HTTPS to Google's Push service using standard Web Push payload encryption. Google still receives delivery metadata and the configured owner's login email as the VAPID contact (an email-form login is required). No Funnel or public inbound endpoint is added. Clicking a notification opens the same origin and opens the Reader only after matching the agent against the fresh roster. Receipt does not fetch conversation history through Tailscale; reading still needs Tailscale and an awake Mac.
+
+Keys, subscriptions and sent markers live in `~/.agentstack/runtime/mobile-push/` with directory mode 0700 and file mode 0600. The VAPID key is created once on enable; endpoints and keys are not logged. Demo mode, unknown Demo status, disconnected and unknown agent states do not publish. Startup and recovery after a gap longer than 30 seconds only establish a baseline. No new notifications are sent while the Mac sleeps. The relay observes every five seconds even with the page closed; short work between observations and turns without readable records may be missed.
+
+Two observations settle a reply-needed transition, and an unchanged state does not repeatedly alert. Limits are eight phones, 128 selected agents per phone, 64 pending items, four publications per pass, three attempts and a 120-second expiry. Turning alerts off cannot recall an already accepted notification. HTTP acceptance is not proof of phone display; OS power and notification settings can delay or omit delivery. Exactly-once delivery is not guaranteed.
+
 ## Turn it on from cockpit Settings
 
 The cockpit's **Settings** has a **Phone** section with two switches:

@@ -8,6 +8,26 @@
 
 ORRERYのcockpitがあれば、**Settings → Phone**からオン・オフできます（[次節](#cockpitのsettingsからオンにする)）。その下の表と[手動で有効にする](#手動で有効にする)は、cockpitを使わずに手で設定する場合の手順です。
 
+## スマホへ通知する（Android Chrome・任意）
+
+通知は既定でオフです。Phone accessの本人確認とpolicy確認を済ませた後、正規installerでoptional依存を用意します。まず `bash scripts/install.sh --with-mobile-push --dry-run` で計画を確認し、同じinstall先への `--with-mobile-push` 付きinstallを通常の承認手順で実行します。通常のinstallにはこの依存を追加しません。productionのPythonへ手でpipを実行しないでください。
+
+既にPhone accessを使っている場合は、`printf '%s\n' '{"access":true}' | agentstack-mobile apply` で同じ設定を再適用します。これにより管理対象の通知用Pythonをphone jobが選びます。依存だけを用意しても、通知の許可や購読は作られません。手動でrelayを起動する場合は、optional依存の入ったPythonと `--enable-push`、確認済みのhistory設定が必要です。
+
+スマホのReaderの上の**ベル**を押し、**Enable on this phone**を押してChromeの許可を与えます。許可を求めるのはこの操作だけです。設定は端末ごとに保存します。
+
+- **Reply needed**: 全agentの質問・承認待ち。既存Readerと同じask/questionを観測します。
+- **Work finished**: このagentだけ。新しい作業の後に待機となり、新しいassistantの返答が記録された「ターンの終わり」です。タスク全体の達成やプロセス終了を表しません。オンにしたagentのベルに印が付きます。
+- **Message previews**: 端末ごとに1つ、既定はオフです。オフならagent名と種類だけ。オンなら質問や最終返答の先頭を最大600文字まで表示します。コード・画像・token等の疑いがある本文・絶対pathを含む本文はpreviewを隠します。承認の具体文や検証済みの新しい質問文が取れない場合は、種類だけを表示します。
+
+**Disable on this phone**はサーバーの購読を消してからブラウザの購読を解除します。再有効化には同じベルを使います。Chromeで拒否した場合はChromeのsite settingsでORRERYの通知を許可し直します。最初の対象はAndroid Chromeです。iOS/Safariはこの版の対象外です。
+
+送信はMacからGoogleのPush serviceへの外向きHTTPSで行います。本文は標準Web Pushの暗号化を使いますが、Googleには配送先と時刻等のmetadata、およびVAPIDの連絡先として設定済みowner loginのメールアドレスが渡ります（メール形式のloginが必要です）。Funnelや公開の着信口は追加しません。通知を押すと同じoriginを開き、そのagentが最新の名簿にある場合だけReaderを開きます。本文を受け取るたびにTailscale内の会話を取得する仕組みではありません。Reader閲覧にはTailscaleと起きているMacが必要です。
+
+鍵・購読・送信済みの印は `~/.agentstack/runtime/mobile-push/` に0700/0600で保存し、VAPID鍵は有効化時に1回だけ作ります。endpointと鍵はログへ出しません。demo mode中・Demo状態不明・切断・unknownは送信せず、初回起動や30秒を超える観測中断からの復帰はbaselineだけを取り直します。Macのsleep中は新しい通知を送れません。画面を閉じてもrelayが5秒間隔で観測しますが、観測間の短い作業や、記録が取れないターンの完了通知は届かないことがあります。
+
+連打を抑えるため返事待ちを2回の観測で確定し、同じ状態を繰り返し通知しません。購読8端末・完了の選択は端末ごと128agent・pending64件・1巡4送信・最大3試行・120秒の期限を設けます。配送中に設定を切っても、既に受理された通知を取り消せるとは限りません。HTTP受理と端末表示は別で、OSの省電力・通知制限等による遅延や欠落があり、exactly-onceは保証しません。
+
 ## cockpitのSettingsからオンにする
 
 cockpitの**Settings**に**Phone**の節があり、スイッチは2つです。
