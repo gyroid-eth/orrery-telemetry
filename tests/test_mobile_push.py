@@ -198,7 +198,8 @@ def test_public_ip_is_pinned_tls_uses_provider_name_and_redirect_is_not_followed
 
 
 def test_real_encryption_and_vapid_with_no_network(env,monkeypatch):
-    import http_ece
+    http_ece=pytest.importorskip('http_ece')
+    pytest.importorskip('pywebpush')
     receiver,sub=recipient();captured={}
     def post(self,url,**kwargs):captured.update(kwargs);return SimpleNamespace(status_code=201,text='',headers={})
     monkeypatch.setattr(push.SafeTransport,'post',post)
