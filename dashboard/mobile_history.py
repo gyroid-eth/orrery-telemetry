@@ -160,6 +160,15 @@ def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None
 SHRINK_LIMITS = ((4096, 2048), (1024, 512), (256, 128))
 
 
+def claude_pasted_text(text):
+    """Match the cockpit's single, same-id native paste envelope rule."""
+    match = re.fullmatch(r'\s*<pasted_content id="([A-Za-z0-9_-]{1,128})">(.*)</pasted_content id="\1">\s*',
+                         text, re.DOTALL)
+    if not match or re.search(r'</?pasted_content\b', match[2]):
+        return text
+    return re.sub(r'\A\r?\n|\r?\n\Z', '', match[2])
+
+
 def project_page(raw, issue=None):
     """Newest displayable events within one bounded page.
 
@@ -171,7 +180,12 @@ def project_page(raw, issue=None):
     """
     if not isinstance(raw, dict) or raw.get('ok') is not True or not isinstance(raw.get('events'), list):
         raise HistoryUnavailable('history_unavailable')
-    pairs = [(e, x) for x in raw['events'][-200:] for e in (project_event(x, issue=issue),) if e]
+    items = raw['events'][-200:]
+    if raw.get('provider') == 'claude':
+        items = [dict(x, text=claude_pasted_text(x['text'])) if isinstance(x, dict)
+                 and x.get('kind') == 'text' and x.get('role') == 'user'
+                 and isinstance(x.get('text'), str) else x for x in items]
+    pairs = [(e, x) for x in items for e in (project_event(x, issue=issue),) if e]
     trimmed = len(raw['events']) > 200 or len(pairs) > PAGE_EVENTS
     pairs = pairs[-PAGE_EVENTS:]
     limited = raw.get('limited') is True or trimmed

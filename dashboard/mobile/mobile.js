@@ -438,6 +438,20 @@ const ref=value=>value&&/^[a-f0-9]{32}$/.test(value.mail_instance_id)&&Number.is
 const rowRef=row=>ref({mail_instance_id:row.dataset.mailInstanceId,mail_agent_id:Number(row.dataset.mailAgentId)});
 const sameTarget=value=>!fresh()||!!ref(value)&&!!selector&&value.mail_instance_id===selector.mail_instance_id&&value.mail_agent_id===selector.mail_agent_id;
 let generation=0,previewController=null,operationController=null,pollTimer=0,expiryTimer=0,failures=0,prepared=null,receipt=null,previousFocus=null;
+let replyReference=null,preparedReference=null;
+const referenceTarget=()=>target?JSON.stringify([name,capability?.epoch,target.choice,target.revision,selector?.mail_instance_id,selector?.mail_agent_id]):'';
+const referenceCurrent=value=>!value||value.target===referenceTarget()&&value.value.isCurrent();
+const referenceError=()=>replyReference&&!referenceCurrent(replyReference)?'Target or conversation changed. Remove this reference and select again.':'';
+function addReference(value){
+ if(phase!=='editing'||!previewOK||!target||value.agent!==name||!value.isCurrent())return false;
+ replyReference={value:{...value,text:value.text.replace(/\s+/gu,' ').trim()},target:referenceTarget()};
+ render();q('#terminal-text')?.focus({preventScroll:true});return true;
+}
+function refreshReference(){
+ if(replyReference&&phase==='review'&&!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='';render();return;}
+ q('#terminal-input-error')?.refresh?.();
+ const review=q('#terminal-review');if(review&&replyReference)review.disabled=phase!=='editing'||!previewOK||!!imageController||!inputValid();
+}
 const MAX_ATTACHED_IMAGES=10;
 let imageAvailable=false,imageProbe='',imageController=null,imageProbeController=null,attachments=[];
 let paused=false,checkingView=false,resumeController=null,reviewUntil=0,startupReady=false;
@@ -471,6 +485,7 @@ async function request(operation,payload,controller,timeout=3000){
  }finally{clearTimeout(timer);}
 }
 function cancelIntent(){
+ preparedReference=null;
  const old=prepared||receipt;prepared=null;receipt=null;reviewUntil=0;clearTimeout(expiryTimer);
  if(!old||!enabled)return;
  const controller=new AbortController();
@@ -478,7 +493,7 @@ function cancelIntent(){
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
 function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;imageController?.abort();imageController=null;imageProbeController?.abort();imageProbeController=null;imageAvailable=false;imageProbe='';clearAttachments();paused=false;checkingView=false;generation++;}
-function clear(){inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
+function clear(){replyReference=preparedReference=null;inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
 function close(fromBack=false,keepView=false){if(!keepView){restoreView=null;forgetView();}const remove=backEntry&&window.history.state?.orreryConversation===true;backEntry=false;const restore=previousFocus;previousFocus=null;clear();if(sheet.open)sheet.close();if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});if(remove&&fromBack!==true){backClosing=true;window.history.back();}}
 window.addEventListener('popstate',event=>{if(backClosing){backClosing=false;event.stopImmediatePropagation();return;}if(sheet.open&&backEntry){event.stopImmediatePropagation();if(dismissLayer()){window.history.pushState({orreryConversation:true},'');return;}backEntry=false;close(true);}},true);
 const entryLabel=()=>history?'History':'Terminal';
@@ -630,7 +645,8 @@ function refreshOutput(){
  const terminalState=q('.reader-terminal-state');if(terminalState)terminalState.textContent=previewOK?(pending?'New output · paused':reading?'Reading earlier output':''):'';
  const terminalMeta=q('.reader-terminal-meta');if(terminalMeta)terminalMeta.textContent=limits?'Latest '+(limits.max_lines||120)+' lines · up to '+((limits.max_bytes||12288)/1024)+' KiB · every 3s'+(shown?' · '+age.textContent:''):'Waiting for a verified terminal snapshot.';
  const dot=q('.reader-state');if(tab==='terminal'&&dot){dot.dataset.state=previewOK?'work':'unknown';dot.title=previewOK?'Terminal updating every 3s':'Terminal preview unavailable';dot.setAttribute('aria-label',dot.title);}
- const review=q('#terminal-review');if(review)review.disabled=phase!=='editing'||!previewOK||!!imageController||!validText(inputText());
+ const review=q('#terminal-review');if(review)review.disabled=phase!=='editing'||!previewOK||!!imageController||!inputValid();
+ refreshReference();
  refreshImageControls();
  const status=q('.terminal-message');if(status)status.textContent=message;
  // Metadata below the terminal can reflow after following was sampled above.
@@ -670,9 +686,25 @@ function invalidate(reason){
  if(receipt&&['sending','unknown'].includes(phase)){previewOK=false;message=reason+' Receipt retained; check its status before writing again.';refreshOutput();return;}
  stop();cancelIntent();text='';output='';preview=null;previewOK=false;target=null;phase='changed';message=reason;render();
 }
-function validText(value){return typeof value==='string'&&value.trim()&&new TextEncoder().encode(value).length<=4096&&!/[\p{Cc}\p{Cs}\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value);}
+function inputError(value){
+ if(/[\r\n]/u.test(value))return 'Line breaks cannot be sent. Use one line.';
+ if(new TextEncoder().encode(value).length>4096)return 'Input exceeds 4096 bytes. Shorten the text or remove an image.';
+ if(/[\p{Cc}\p{Cs}\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value))return 'Unsupported characters. Remove control characters before reviewing.';
+ return '';
+}
+function validText(value){return typeof value==='string'&&value.trim()&&!inputError(value);}
 function clearAttachments(){for(const attachment of attachments)URL.revokeObjectURL(attachment.url);attachments=[];}
-const inputText=()=>[text,...attachments.map(attachment=>attachment.marker)].filter(Boolean).join(' ');
+const draftText=()=>[text.replace(/[\r\n]+$/u,''),...attachments.map(attachment=>attachment.marker)].filter(Boolean).join(' ');
+const inputText=()=>{
+ if(!replyReference)return draftText();
+ const r=replyReference.value;
+ return 'Reference: '+r.agent+' · '+r.role+' · '+r.ts+' | Recorded message: '+r.eventId+' | Quote: '+JSON.stringify(r.text)+' | Reply: '+draftText();
+};
+const inputValid=()=>validText(draftText())&&validText(inputText())&&referenceCurrent(replyReference);
+function inputErrorNote(){
+ const note=make('p','terminal-input-error');note.id='terminal-input-error';note.setAttribute('role','status');
+ note.refresh=()=>{note.textContent=referenceError()||inputError(inputText());note.hidden=!note.textContent;};note.refresh();return note;
+}
 function refreshImageControls(){
  const add=q('#terminal-image-add');if(!add)return;
  add.hidden=!imageAvailable;
@@ -735,23 +767,25 @@ async function uploadImages(files){
  }finally{if(g===generation&&imageController===controller){imageController=null;render();}}
 }
 async function reviewInput(){
- if(phase!=='editing'||imageController||!target||!choice||!previewOK||!validText(inputText()))return;
+ if(phase!=='editing'||imageController||!target||!choice||!previewOK||!inputValid())return;
  composer=false;
  clearTimeout(pollTimer);previewController?.abort();previewController=null;
- const g=generation,t=target,draft=inputText(),controller=new AbortController();operationController=controller;phase='preparing';render();
+ const g=generation,t=target,draft=inputText(),reference=replyReference,controller=new AbortController();operationController=controller;phase='preparing';render();
  try{
   const data=await request('prepare',{epoch:capability.epoch,choice:t.choice,revision:t.revision,text:draft},controller);
   if(g!==generation||!sheet.open||document.hidden)return;
   if(data.state!=='prepared'||data.text!==draft||data.expires_in!==30||data.target?.revision!==t.revision||data.target?.choice!==t.choice||data.target?.name!==name||!sameTarget(data.target))throw Error('unavailable');
-  prepared=Object.freeze({...data,target:Object.freeze({...data.target})});reviewUntil=Date.now()+data.expires_in*1000;receipt=null;phase='review';message='';render();
+  if(!referenceCurrent(reference))throw Error('reference_changed');
+  preparedReference=reference;prepared=Object.freeze({...data,target:Object.freeze({...data.target})});reviewUntil=Date.now()+data.expires_in*1000;receipt=null;phase='review';message='';render();
   const identity=prepared;expiryTimer=setTimeout(()=>{if(prepared!==identity||document.hidden)return;cancelIntent();phase='editing';message='Confirmation expired. Review again.';render();},data.expires_in*1000);
  }catch(_){if(g===generation&&sheet.open){prepared=null;phase='editing';message='Could not prepare this input. Refresh the pane and review again.';render();}}
  finally{if(g===generation){operationController=null;if(!document.hidden&&sheet.open)pollTimer=setTimeout(poll,3000);}}
 }
 async function send(){
  if(phase!=='review'||!prepared||!previewOK)return;
+ if(!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='';render();return;}
  const sentText=prepared.text,p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target};
- prepared=null;receipt=p;text='';clearAttachments();clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
+ prepared=null;preparedReference=replyReference=null;receipt=p;text='';clearAttachments();clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,controller=new AbortController();operationController=controller;phase='sending';message='';render();
  try{
   const result=await request('commit',{epoch:p.epoch,intent:p.intent,confirmation:p.confirmation},controller,7000);
@@ -812,9 +846,18 @@ function layoutInputBar(panel){
 }
 function readerInputBar(){
  const panel=make('div','reader-composer reader-input-bar'+(phase==='review'?' reader-review':''));panel.setAttribute('role','region');panel.setAttribute('aria-label',phase==='review'?'Review input':'Write input');
+ panel.classList.toggle('has-reference',!!replyReference);
  const shown=phase==='review'?prepared.target:choice;
  const destination=paneButton((shown?shown.name+' · '+shown.pane_label:'Choose pane')+' ⌄');destination.className+=' reader-input-target';destination.setAttribute('aria-label','Change pane for '+name+(shown?' · '+shown.pane_label:''));
  panel.append(destination);
+ if(replyReference&&phase!=='review'){
+  const r=replyReference.value,card=make('section','reader-reference-card');card.setAttribute('aria-label','Reply reference');
+  const at=new Date(r.ts),clock=Number.isFinite(at.getTime())?at.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'';
+  const label=make('div','reader-reference-label',r.agent+' · Selected text'+(clock?' · '+clock:''));
+  const quote=make('blockquote','reader-reference-quote',r.text);quote.title=r.text;
+  const remove=action('×','reader-reference-remove',()=>{replyReference=null;render();q('#terminal-text')?.focus({preventScroll:true});});remove.setAttribute('aria-label','Remove reference');remove.disabled=busy();
+  card.append(label,quote,remove);panel.append(card);
+ }
  if(phase==='review'){
   panel.append(make('h3','',prepared.target.name+' — send this input?'),make('p','reader-not-sent','Not sent yet'),make('pre','terminal-exact',prepared.text));
   imageThumbnail(panel,false);
@@ -827,17 +870,18 @@ function readerInputBar(){
   const row=make('div','reader-input-row'),field=make('textarea','terminal-text');field.id='terminal-text';field.rows=1;field.value=text;field.placeholder=choice?'Write one line…':'Choose a pane first';field.autocomplete='off';field.spellcheck=false;field.disabled=!available;
   const file=make('input');file.type='file';file.id='terminal-image-file';file.accept='image/jpeg,image/png,image/webp';file.multiple=true;file.hidden=true;file.onchange=()=>uploadImages(file.files);
   const add=action('+','reader-image-add',()=>file.click());add.id='terminal-image-add';add.title='Attach images';add.setAttribute('aria-label','Attach images');add.hidden=!imageAvailable;add.disabled=!available||!previewOK||!!imageController||attachments.length>=MAX_ATTACHED_IMAGES;
-  const review=action(phase==='preparing'?'…':'↑','terminal-primary reader-input-send',reviewInput);review.id='terminal-review';review.title='Review input';review.setAttribute('aria-label','Review input');review.disabled=!available||!previewOK||!!imageController||!validText(inputText());
+  const review=action(phase==='preparing'?'…':'↑','terminal-primary reader-input-send',reviewInput);review.id='terminal-review';review.title='Review input';review.setAttribute('aria-label','Review input');review.disabled=!available||!previewOK||!!imageController||!inputValid();
   const count=make('span','reader-input-count',new TextEncoder().encode(inputText()).length+' / 4096 bytes');count.hidden=!inputText();
+  const error=inputErrorNote();field.setAttribute('aria-describedby','terminal-input-error');
   field.onfocus=()=>{composer=true;};field.onblur=()=>{composer=false;};
   field.oninput=()=>{
    if(!['editing','accepted','refused'].includes(phase))return;
    if(['accepted','refused'].includes(phase)){cancelIntent();phase='editing';panel.querySelector('.reader-receipt')?.remove();}
-   text=field.value;count.textContent=new TextEncoder().encode(inputText()).length+' / 4096 bytes';count.hidden=!inputText();review.disabled=!previewOK||!!imageController||!validText(inputText());fitInput(field);layoutInputBar(panel);
+   text=field.value;count.textContent=new TextEncoder().encode(inputText()).length+' / 4096 bytes';count.hidden=!inputText();review.disabled=!previewOK||!!imageController||!inputValid();refreshReference();fitInput(field);layoutInputBar(panel);
   };
   field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};
   if(!choice)panel.append(make('p','terminal-help','Choose a verified pane in Terminal to write.'));
-  imageThumbnail(panel,true);row.append(add,field,review);panel.append(label,file,row,count);
+  imageThumbnail(panel,true);row.append(add,field,review);panel.append(label,file,row,count,error);
  }
  sheet.append(panel);layoutInputBar(panel);
  if(typeof ResizeObserver!=='undefined'){inputObserver=new ResizeObserver(()=>layoutInputBar(panel));inputObserver.observe(panel);}
@@ -850,6 +894,7 @@ function readerReceipt(host=sheet){
  host.append(box);
 }
 function render(){
+ conversation()?.dismissReferenceSelection?.();
  rememberView();
  inputObserver?.disconnect();inputObserver=null;
  const focus=document.activeElement,hadFocus=focus&&sheet.contains?.(focus);if(hadFocus){sheet.tabIndex=-1;sheet.focus({preventScroll:true});}
@@ -926,10 +971,11 @@ function render(){
  }
  if(['editing','preparing'].includes(phase)){
   const label=make('label','terminal-compose-label','Your input');label.htmlFor='terminal-text';const field=make('textarea','terminal-text');field.id='terminal-text';field.rows=2;field.value=text;field.placeholder='Write one line…';field.autocomplete='off';field.spellcheck=false;field.disabled=phase==='preparing';
-  const count=make('span','',new TextEncoder().encode(text).length+' / 4096 bytes'),meta=make('div','terminal-input-meta');meta.append(make('span','','One line + Enter'),count);
-  scroll.append(label,field,meta,make('p','terminal-help',reading?'Sends to '+choice.pane_label+'. Review the destination and exact text before sending.':'Check the terminal above before sending.'));
-  const actions=make('div','terminal-actions'),review=action(phase==='preparing'?'Preparing…':'Review input','terminal-primary',reviewInput);review.id='terminal-review';review.disabled=phase==='preparing'||!previewOK||!validText(text);
-  field.oninput=()=>{text=field.value;count.textContent=new TextEncoder().encode(text).length+' / 4096 bytes';review.disabled=!previewOK||!validText(text);};field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};actions.append(action('Cancel','',close),review);actionsHost.append(actions);
+  const count=make('span','',new TextEncoder().encode(inputText()).length+' / 4096 bytes'),meta=make('div','terminal-input-meta');meta.append(make('span','','One line + Enter'),count);
+  const error=inputErrorNote();field.setAttribute('aria-describedby','terminal-input-error');
+  scroll.append(label,field,meta,error,make('p','terminal-help',reading?'Sends to '+choice.pane_label+'. Review the destination and exact text before sending.':'Check the terminal above before sending.'));
+  const actions=make('div','terminal-actions'),review=action(phase==='preparing'?'Preparing…':'Review input','terminal-primary',reviewInput);review.id='terminal-review';review.disabled=phase==='preparing'||!previewOK||!validText(inputText());
+  field.oninput=()=>{text=field.value;count.textContent=new TextEncoder().encode(inputText()).length+' / 4096 bytes';review.disabled=!previewOK||!validText(inputText());error.refresh();};field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};actions.append(action('Cancel','',close),review);actionsHost.append(actions);
  }else if(phase==='review'){
   scroll.append(make('p','terminal-compose-label','Exact text to '+prepared.target.name),make('pre','terminal-exact',prepared.text));const enter=make('div','terminal-enter');enter.append(make('span','','After this text'),make('kbd','','Enter ↵'));scroll.append(enter,make('p','terminal-help','Sends once to this pane. It may be a shell. Existing terminal input may be combined with it.'));
   const actions=make('div','terminal-actions');actions.append(action('Edit','',()=>{cancelIntent();phase='editing';render();}),action('Send once','terminal-primary',send));actionsHost.append(actions);
@@ -979,7 +1025,7 @@ async function resumeView(){
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseView();else if(paused){paused=false;resumeView();}else restoreSavedView();});
 window.addEventListener('pagehide',()=>{rememberView();close(true,true);},true);
-window.OrreryMobileTerminal={open,close,mail,available:()=>enabled||history};entries();
+window.OrreryMobileTerminal={open,close,mail,available:()=>enabled||history,reference:addReference,refreshReference,canReference:()=>phase==='editing'&&tab==='conversation'&&previewOK&&!!target};entries();
 const historyChecked=window.OrreryMobileConversation?window.OrreryMobileConversation.enabled():Promise.resolve(false);
 historyChecked.then(value=>{if(value!==true)return;history=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent=enabled?'History · Terminal':'History enabled';entries();});
 const controller=new AbortController();const terminalChecked=request('',null,controller).then(value=>{if(((value.api===31&&value.supported==='legacy-managed-pane')||(value.api===34&&value.supported==='fresh-managed-pane'))&&value.enabled===true&&value.ack==='tmux-command-accepted'){capability=Object.freeze({...value});enabled=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent=history?'History · Terminal':'Terminal enabled';entries();}}).catch(()=>{});
