@@ -99,7 +99,7 @@ def test_reference_and_reply_share_the_byte_limit(phone):
     assert js("!document.querySelector('#terminal-review').disabled")
     draft(js,'x'*(4097-overhead))
     assert js("document.querySelector('#terminal-review').disabled")
-    assert '4096 bytes' in js("document.querySelector('.reader-reference-error').textContent")
+    assert '4096 bytes' in js("document.querySelector('.terminal-input-error').textContent")
     js("document.querySelector('#terminal-review').click()")
     assert not any(op=='prepare' for op,_ in state['calls'])
 
@@ -123,7 +123,7 @@ def test_long_quote_is_retained_and_blocked_without_truncation(phone):
     draft(js,'Check this quote.')
     assert js("document.querySelector('.reader-reference-quote').textContent")==text.strip()
     assert js("document.querySelector('#terminal-review').disabled")
-    assert '4096 bytes' in js("document.querySelector('.reader-reference-error').textContent")
+    assert '4096 bytes' in js("document.querySelector('.terminal-input-error').textContent")
     capture(client,'long-quote-limit')
     assert not any(op=='prepare' for op,_ in state['calls'])
 
@@ -137,7 +137,7 @@ def test_history_reset_blocks_reference_and_keeps_draft(phone,when):
         wait("document.querySelector('.reader-review')!==null")
     state['error']='history_changed'
     js("document.dispatchEvent(new Event('visibilitychange'))")
-    wait("document.querySelector('.reader-reference-error')?.textContent.includes('changed')")
+    wait("document.querySelector('.terminal-input-error')?.textContent.includes('changed')")
     assert js("document.querySelector('#terminal-review').disabled")
     assert not any(op=='commit' for op,_ in state['calls'])
     js("document.querySelector('.reader-reference-remove').click()")
@@ -149,7 +149,7 @@ def test_pane_revision_change_blocks_reference(phone):
     stage(client,js,wait);draft(js,'Check this part.')
     state['targets']=[dict(choice='fixture-choice',name='SampleAgent',pane_label='Window 0 · pane 0',revision='new-revision')]
     js("document.dispatchEvent(new Event('visibilitychange'))")
-    wait("document.querySelector('.reader-reference-error')?.textContent.includes('changed')")
+    wait("document.querySelector('.terminal-input-error')?.textContent.includes('changed')")
     assert js("document.querySelector('#terminal-review').disabled")
     assert not any(op in {'prepare','commit'} for op,_ in state['calls'])
 

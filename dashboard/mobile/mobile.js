@@ -441,15 +441,15 @@ let generation=0,previewController=null,operationController=null,pollTimer=0,exp
 let replyReference=null,preparedReference=null;
 const referenceTarget=()=>target?JSON.stringify([name,capability?.epoch,target.choice,target.revision,selector?.mail_instance_id,selector?.mail_agent_id]):'';
 const referenceCurrent=value=>!value||value.target===referenceTarget()&&value.value.isCurrent();
-const referenceError=()=>replyReference&&!referenceCurrent(replyReference)?'Target or conversation changed. Remove this reference and select again.':replyReference&&new TextEncoder().encode(inputText()).length>4096?'Reference and reply exceed 4096 bytes. Shorten the selection or remove the reference.':'';
+const referenceError=()=>replyReference&&!referenceCurrent(replyReference)?'Target or conversation changed. Remove this reference and select again.':'';
 function addReference(value){
  if(phase!=='editing'||!previewOK||!target||value.agent!==name||!value.isCurrent())return false;
  replyReference={value:{...value,text:value.text.replace(/\s+/gu,' ').trim()},target:referenceTarget()};
  render();q('#terminal-text')?.focus({preventScroll:true});return true;
 }
 function refreshReference(){
- if(replyReference&&phase==='review'&&!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='Reference changed. Select it again or remove it.';render();return;}
- const note=q('.reader-reference-error');if(note){note.textContent=referenceError();note.hidden=!note.textContent;}
+ if(replyReference&&phase==='review'&&!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='';render();return;}
+ q('#terminal-input-error')?.refresh?.();
  const review=q('#terminal-review');if(review&&replyReference)review.disabled=phase!=='editing'||!previewOK||!!imageController||!inputValid();
 }
 const MAX_ATTACHED_IMAGES=10;
@@ -686,15 +686,25 @@ function invalidate(reason){
  if(receipt&&['sending','unknown'].includes(phase)){previewOK=false;message=reason+' Receipt retained; check its status before writing again.';refreshOutput();return;}
  stop();cancelIntent();text='';output='';preview=null;previewOK=false;target=null;phase='changed';message=reason;render();
 }
-function validText(value){return typeof value==='string'&&value.trim()&&new TextEncoder().encode(value).length<=4096&&!/[\p{Cc}\p{Cs}\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value);}
+function inputError(value){
+ if(/[\r\n]/u.test(value))return 'Line breaks cannot be sent. Use one line.';
+ if(new TextEncoder().encode(value).length>4096)return 'Input exceeds 4096 bytes. Shorten the text or remove an image.';
+ if(/[\p{Cc}\p{Cs}\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value))return 'Unsupported characters. Remove control characters before reviewing.';
+ return '';
+}
+function validText(value){return typeof value==='string'&&value.trim()&&!inputError(value);}
 function clearAttachments(){for(const attachment of attachments)URL.revokeObjectURL(attachment.url);attachments=[];}
-const draftText=()=>[text,...attachments.map(attachment=>attachment.marker)].filter(Boolean).join(' ');
+const draftText=()=>[text.replace(/[\r\n]+$/u,''),...attachments.map(attachment=>attachment.marker)].filter(Boolean).join(' ');
 const inputText=()=>{
  if(!replyReference)return draftText();
  const r=replyReference.value;
  return 'Reference: '+r.agent+' · '+r.role+' · '+r.ts+' | Recorded message: '+r.eventId+' | Quote: '+JSON.stringify(r.text)+' | Reply: '+draftText();
 };
 const inputValid=()=>validText(draftText())&&validText(inputText())&&referenceCurrent(replyReference);
+function inputErrorNote(){
+ const note=make('p','terminal-input-error');note.id='terminal-input-error';note.setAttribute('role','status');
+ note.refresh=()=>{note.textContent=referenceError()||inputError(inputText());note.hidden=!note.textContent;};note.refresh();return note;
+}
 function refreshImageControls(){
  const add=q('#terminal-image-add');if(!add)return;
  add.hidden=!imageAvailable;
@@ -773,7 +783,7 @@ async function reviewInput(){
 }
 async function send(){
  if(phase!=='review'||!prepared||!previewOK)return;
- if(!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='Reference changed. Select it again or remove it.';render();return;}
+ if(!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='';render();return;}
  const sentText=prepared.text,p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target};
  prepared=null;preparedReference=replyReference=null;receipt=p;text='';clearAttachments();clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,controller=new AbortController();operationController=controller;phase='sending';message='';render();
@@ -846,8 +856,7 @@ function readerInputBar(){
   const label=make('div','reader-reference-label',r.agent+' · Selected text'+(clock?' · '+clock:''));
   const quote=make('blockquote','reader-reference-quote',r.text);quote.title=r.text;
   const remove=action('×','reader-reference-remove',()=>{replyReference=null;render();q('#terminal-text')?.focus({preventScroll:true});});remove.setAttribute('aria-label','Remove reference');remove.disabled=busy();
-  const error=make('p','reader-reference-error',referenceError());error.hidden=!error.textContent;error.setAttribute('role','status');
-  card.append(label,quote,remove,error);panel.append(card);
+  card.append(label,quote,remove);panel.append(card);
  }
  if(phase==='review'){
   panel.append(make('h3','',prepared.target.name+' — send this input?'),make('p','reader-not-sent','Not sent yet'),make('pre','terminal-exact',prepared.text));
@@ -863,6 +872,7 @@ function readerInputBar(){
   const add=action('+','reader-image-add',()=>file.click());add.id='terminal-image-add';add.title='Attach images';add.setAttribute('aria-label','Attach images');add.hidden=!imageAvailable;add.disabled=!available||!previewOK||!!imageController||attachments.length>=MAX_ATTACHED_IMAGES;
   const review=action(phase==='preparing'?'…':'↑','terminal-primary reader-input-send',reviewInput);review.id='terminal-review';review.title='Review input';review.setAttribute('aria-label','Review input');review.disabled=!available||!previewOK||!!imageController||!inputValid();
   const count=make('span','reader-input-count',new TextEncoder().encode(inputText()).length+' / 4096 bytes');count.hidden=!inputText();
+  const error=inputErrorNote();field.setAttribute('aria-describedby','terminal-input-error');
   field.onfocus=()=>{composer=true;};field.onblur=()=>{composer=false;};
   field.oninput=()=>{
    if(!['editing','accepted','refused'].includes(phase))return;
@@ -871,7 +881,7 @@ function readerInputBar(){
   };
   field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};
   if(!choice)panel.append(make('p','terminal-help','Choose a verified pane in Terminal to write.'));
-  imageThumbnail(panel,true);row.append(add,field,review);panel.append(label,file,row,count);
+  imageThumbnail(panel,true);row.append(add,field,review);panel.append(label,file,row,count,error);
  }
  sheet.append(panel);layoutInputBar(panel);
  if(typeof ResizeObserver!=='undefined'){inputObserver=new ResizeObserver(()=>layoutInputBar(panel));inputObserver.observe(panel);}
@@ -961,10 +971,11 @@ function render(){
  }
  if(['editing','preparing'].includes(phase)){
   const label=make('label','terminal-compose-label','Your input');label.htmlFor='terminal-text';const field=make('textarea','terminal-text');field.id='terminal-text';field.rows=2;field.value=text;field.placeholder='Write one line…';field.autocomplete='off';field.spellcheck=false;field.disabled=phase==='preparing';
-  const count=make('span','',new TextEncoder().encode(text).length+' / 4096 bytes'),meta=make('div','terminal-input-meta');meta.append(make('span','','One line + Enter'),count);
-  scroll.append(label,field,meta,make('p','terminal-help',reading?'Sends to '+choice.pane_label+'. Review the destination and exact text before sending.':'Check the terminal above before sending.'));
-  const actions=make('div','terminal-actions'),review=action(phase==='preparing'?'Preparing…':'Review input','terminal-primary',reviewInput);review.id='terminal-review';review.disabled=phase==='preparing'||!previewOK||!validText(text);
-  field.oninput=()=>{text=field.value;count.textContent=new TextEncoder().encode(text).length+' / 4096 bytes';review.disabled=!previewOK||!validText(text);};field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};actions.append(action('Cancel','',close),review);actionsHost.append(actions);
+  const count=make('span','',new TextEncoder().encode(inputText()).length+' / 4096 bytes'),meta=make('div','terminal-input-meta');meta.append(make('span','','One line + Enter'),count);
+  const error=inputErrorNote();field.setAttribute('aria-describedby','terminal-input-error');
+  scroll.append(label,field,meta,error,make('p','terminal-help',reading?'Sends to '+choice.pane_label+'. Review the destination and exact text before sending.':'Check the terminal above before sending.'));
+  const actions=make('div','terminal-actions'),review=action(phase==='preparing'?'Preparing…':'Review input','terminal-primary',reviewInput);review.id='terminal-review';review.disabled=phase==='preparing'||!previewOK||!validText(inputText());
+  field.oninput=()=>{text=field.value;count.textContent=new TextEncoder().encode(inputText()).length+' / 4096 bytes';review.disabled=!previewOK||!validText(inputText());error.refresh();};field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};actions.append(action('Cancel','',close),review);actionsHost.append(actions);
  }else if(phase==='review'){
   scroll.append(make('p','terminal-compose-label','Exact text to '+prepared.target.name),make('pre','terminal-exact',prepared.text));const enter=make('div','terminal-enter');enter.append(make('span','','After this text'),make('kbd','','Enter ↵'));scroll.append(enter,make('p','terminal-help','Sends once to this pane. It may be a shell. Existing terminal input may be combined with it.'));
   const actions=make('div','terminal-actions');actions.append(action('Edit','',()=>{cancelIntent();phase='editing';render();}),action('Send once','terminal-primary',send));actionsHost.append(actions);
