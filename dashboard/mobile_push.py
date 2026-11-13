@@ -410,13 +410,12 @@ class PushService:
                 if (old and watched and act=='work' and (act!=old['act'] or old.get('baseline_pending'))
                         or old and watched and act=='wait' and old['armed']
                         or old and want_preview and act=='question' and old['count']<=2):
-                    # Carry-over baselines first, least recently attempted first.
-                    # Failed reads must not starve later agents either.
-                    priority=0 if act=='work' and old.get('baseline_pending') else 1 if act=='work' else 2
-                    reads.append((priority,old.get('baseline_attempted',0),agent))
-            for _,_,agent in sorted(reads,key=lambda item:item[:2])[:8]:
+                    # All history uses share the same least-recently-read queue.
+                    reads.append((old.get('history_attempted',0),agent))
+            for _,agent in sorted(reads,key=lambda item:item[0])[:8]:
                 if self.stop.is_set():return
                 latest[agent['name']]=self._latest(agent['name'],require_tail=agent['act_state']!='work')
+                self.previous[identity(agent)]['history_attempted']=self.clock()
                 if not self._fresh(observed):return
             if not self._fresh(observed):return
             with self.lock:self._observe(agents,latest)
@@ -439,7 +438,6 @@ class PushService:
                     old['cycle'] = str(self.clock())
                     old['baseline'] = latest.get(agent['name'],(None,''))[0]
                     old['baseline_pending'] = old['baseline'] is None
-                    old['baseline_attempted'] = self.clock() if agent['name'] in latest else 0
                 elif act=='wait' and old['armed']:
                     old['until']=self.clock()+MAX_AGE
                 elif act in {'ask','question'}:
@@ -450,7 +448,6 @@ class PushService:
                 if act=='work' and old['armed'] and old.get('baseline_pending') and agent['name'] in latest:
                     old['baseline'] = latest[agent['name']][0]
                     old['baseline_pending'] = old['baseline'] is None
-                    old['baseline_attempted'] = self.clock()
             if old['count'] != 2 and not (act=='wait' and old['armed'] and old['count']>=2):
                 continue
             if act in {'ask','question'}:

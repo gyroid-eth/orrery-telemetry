@@ -394,3 +394,61 @@ def test_payload_uses_latest_preview_preference_at_publication(env):
     env.tick('wait',2);assert env.state['calls'][-1][1]['body']=='The checks passed.'
     env.save(previews=False);env.state['code']=201;env.tick(count=3)
     assert env.state['calls'][-1][1]['body']=='' and len(env.state['calls'])==2
+
+
+@pytest.mark.parametrize('unavailable_phase',['work','wait'])
+def test_failed_history_reads_do_not_starve_healthy_completion(env,unavailable_phase):
+    # R2 review proofs: both failed work baselines and failed waiting tails
+    # used to occupy all eight slots until a healthy ninth turn expired.
+    agents=[dict(env.agent,name='Agent'+str(n),mail_agent_id=n+1) for n in range(9)]
+    env.state['agents']=agents
+    for agent in agents:
+        env.service.call('save',dict(subscription=env.sub,agent=agent['name'],reply_needed=False,finished=True,previews=False))
+    attempts=[]
+    def history(name):
+        attempts.append((env.state['now'],name))
+        if name!='Agent8':raise ValueError('history_unavailable')
+        return {'events':env.state['events']}
+    env.tick()
+    if unavailable_phase=='work':
+        env.service.history=history
+        agents[8]['act_state']='work';env.tick()
+        assert env.service.previous[push.identity(agents[8])]['baseline']=='old'
+        for agent in agents[:8]:agent['act_state']='work'
+        env.tick(count=2)
+    else:
+        for agent in agents:agent['act_state']='work'
+        env.tick(count=3)
+        env.service.history=history
+    attempts.clear();started=env.state['now']
+    env.state['events'].append(dict(id='new',kind='text',role='assistant',text='Done.'))
+    for agent in agents if unavailable_phase=='wait' else agents[8:]:agent['act_state']='wait'
+    env.tick(count=30)
+    assert any(name=='Agent8' and now-started<=15 for now,name in attempts)
+    assert len(env.state['calls'])==1 and env.state['calls'][0][1]['title']=='Agent8 — Work finished'
+    assert max(sum(t==now for t,_ in attempts) for now,_ in attempts)<=8
+
+
+def test_failed_question_previews_share_history_slots_with_completion_checks(env):
+    agents=[dict(env.agent,name='Agent'+str(n),mail_agent_id=n+1) for n in range(9)]
+    env.state['agents']=agents
+    for agent in agents:
+        env.service.call('save',dict(subscription=env.sub,agent=agent['name'],reply_needed=True,finished=True,previews=True))
+    attempts=[]
+    def history(name):
+        attempts.append(name)
+        if name!='Agent8':raise ValueError('history_unavailable')
+        return {'events':env.state['events']}
+    env.service.history=history;env.tick()
+    agents[8]['act_state']='work';env.tick()
+    for agent in agents[:8]:agent['act_state']='question'
+    env.tick(count=2);assert attempts[-8:]==['Agent'+str(n) for n in range(8)]
+    attempts.clear()
+    env.state['events'].append(dict(id='new',kind='text',role='assistant',text='Done.'))
+    agents[8]['act_state']='wait';env.tick()
+    # The healthy baseline was read before the failed previews. Its completion
+    # check now gets a slot before retrying those newer, failed preview reads.
+    assert attempts[0]=='Agent8' and len(attempts)<=8
+    for _ in range(5):
+        before=len(env.state['calls']);env.tick();assert len(env.state['calls'])-before<=4
+    assert sum(p['title']=='Agent8 — Work finished' for _,p in env.state['calls'])==1
