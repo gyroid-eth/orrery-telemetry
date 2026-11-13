@@ -1,0 +1,3 @@
+### スマホのFocus表示でタップして中心を切り替える
+
+GraphのFocus表示では、周りのagentをタップするとそのagentと関連の強い最大5体へ切り替えてFitし、中心のagentをタップするとReaderを開きます。All表示はこれまでどおりタップでReaderを開きます。Enter・Spaceと読み上げ用の操作名も同じ規則に揃えました。
