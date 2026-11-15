@@ -59,6 +59,8 @@ Hermes も準備済みの同じ登録を使います。本物の `hermes chat --
 返信は `telegram_reply` tool、Mail は bound proxy と標準 watcher、端末からの入力は同じ TUI です。
 独自の gateway や headless bridge は起動しません。
 
+管理 installer が完成・検証した世代内の TUI product を使います。Telegram の起動計画は管理 receipt と選択済み runtime を照合し、`HERMES_TUI_DIR` と `HERMES_NODE` に検証済みの path だけを渡します。欠落・改ざんがあれば profile を書く前に `invalid_runtime` で停止します。起動時に npm 取得や build は行わず、Python PM workspace に `ui-tui` をコピーしません。この2つの env は通常の子／CLI の起動計画には追加しません。旧世代への手動コピーではなく、installer で新世代を取得してください。TUI の準備だけでは Telegram の資格・Mail・model 接続の受入は完了しません。
+
 ```json
 {
   "kind": "orrery-fresh-persistent-v1",

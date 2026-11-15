@@ -59,6 +59,8 @@ Use the same prepared registration with the native `hermes chat --tui` and the b
 `telegram_reply` tool. Bound Mail, the standard watcher, and terminal input share the same TUI.
 No separate gateway or headless bridge is started.
 
+Use the complete, verified TUI product built within the managed generation. The Telegram launch plan checks the management receipt against the selected runtime and passes only the verified `HERMES_TUI_DIR` and `HERMES_NODE` paths. Missing or modified products stop with `invalid_runtime` before profile writes. Startup performs no npm acquisition or build and does not copy `ui-tui` into the Python PM workspace. These environment entries are not added to ordinary child/CLI plans. Acquire a new generation with the installer instead of patching an old one manually. TUI readiness alone does not establish Telegram credentials, Mail or model connectivity.
+
 ```json
 {
   "kind": "orrery-fresh-persistent-v1",
