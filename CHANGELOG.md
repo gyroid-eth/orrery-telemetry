@@ -10,6 +10,46 @@
 
 ---
 
+## 2026.11.16
+
+### Hermes の Mail 起動と Telegram の資格診断
+
+fresh の管理下 agent が使う Mail MCP に、選択済み Python を明示的に渡し、PATH の別の Python で起動する失敗を修正しました。Hermes Telegram の `credential-unavailable` は維持し、設定・参照・資格取得の失敗理由だけを owner 専用の診断に残します。資格の値や helper の出力は記録せず、HOME や Keychain の設定も変更しません。
+
+### 管理下の Hermes に bot 用の TUI を同梱
+
+Hermes の管理 installer は、固定 source と既存 PM の Node/npm で TUI を build し、独立した新世代に収録します。TUI が欠ける・build に失敗する場合は公開せず、以前の世代を保持します。source・lock・tool・出力を receipt で照合し、Telegram bot には検証済みの TUI と Node の path を渡します。通常の子と CLI の起動計画は従来どおりです。起動時の npm 取得や手動での旧世代の修理は必要ありません。
+
+### スマホの会話にも Agent steps を表示
+
+Claude・Codex の完了操作を PC と同じ段で表示し、作業中の経過時間と終了後の折り畳みを追加しました。Demo の既存の伏せ方と reduced motion に対応します。道具の重複ラベルを省き、ファイル・画像・Mail・未対応の道具の表示は保持します。中継は短い投影済み項目だけを追加し、生の引数・出力や preview の許可を追加しません。
+
+### fresh の未終了 run を確認して閉じる
+
+prepared context 共通の `resolve-ended --launch-id --confirm-ended` を追加しました。現在の本人・世代・run と記録済みの process／pane／group を再照合し、終了コード不明の解決記録を実際の終了記録と区別します。観測不能・記録不足・生存は拒否し、旧 run を保持します。
+
+Hermes の wait と子の終了を確認した非0終了は実コード付きの失敗として記録し、次の通常起動へ進めます。閉じた run への配送・hook・session の追記を止め、日英の復旧手順を更新しました。
+
+API の互換の世代を **39 → 40** に上げました。fresh の spawn-status は `resolved-ended` を区別し、この確認終了では過去の receipt があっても `native_ready:false` とします。`ended` の native_ready は起動 receipt の成立を示し、task の成功ではありません。
+
+### Demo中もスマホへ通知し、本文のプレビューを隠す
+
+Demo中も返事待ちとターン終了を通知し、本文のプレビューは端末の設定にかかわらず隠します。通知名はスマホ画面と同じ伏せる規則を使います。ベルから有効化や通知種類の変更ができ、Message previewsの保存済み設定はDemoを切ると戻ります。Demo状態が不明・未対応の場合は引き続き送信しません。
+
+### スマホでReaderを閉じると、読んでいたagentを中心に表示
+
+Graphのagentや検索結果から開いたReaderを×やBackで閉じると、最後に読んでいたagentと関連の強い最大5体をFocusで表示してFitします。Activityなどから開いたReaderは元の画面に戻ります。
+
+### スマホのグラフで全agentの名前を表示する
+
+Focus・Allの両方で、肖像の下に全agentの名前とRoleを表示します。選択中の名前は従来の大きさを保ち、それ以外は小さく表示します。拡大率が75%未満では名前とRoleを隠します。Demoの伏字と、名前から正しいagentのReaderを開く動きを維持しています。デスクトップのNETWORKの表示は変わりません。
+
+### スマホのReaderから通知するagentを選べるようにする
+
+Android ChromeのReader上部にベルを追加し、全agentの返事待ちと、選んだagentのターン終了を端末へ通知できるようにしました。本文previewは端末ごとに既定オフで、明示操作からだけ通知の許可を求めます。Readerの起動完了と同じoriginの最新名簿を待って開き、FreshではMail identityも入力先へ渡します。
+
+`--with-mobile-push` で通知用のoptional依存を正規installerから用意できます。通常installでは追加せず、通知を有効にするまで購読も鍵も作りません。relay側の観測、重複・再試行・件数の上限、本人確認、配送先制限とDemo中の抑止を追加しました。取得・送信の途中でsleepをまたいだ古い観測は捨て、履歴取得は用途や成否によらず最終試行が古い順に回します。同時に作業を始めたagentの履歴を取り切れなければ次巡へ持ち越します。
+
 ## 2026.11.13
 
 ### スマホのReaderで本文を参照して返信する

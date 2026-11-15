@@ -11,6 +11,7 @@ import pytest
 
 from test_hermes_telegram import plugin
 import test_hermes_thin_config as thin_fixture
+import test_hermes_tui_product as hermes_tui
 
 config = thin_fixture.config
 
@@ -112,6 +113,17 @@ def test_real_generated_overlay_reaches_plugin_and_reader_with_gateway_home(host
     ctx, _, _ = host
     fixture = thin_fixture.ThinConfig();fixture.setUp()
     try:
+        hermes_tui.add_source_inputs(fixture.source)
+        hermes_tui.save(fixture.source / 'pm/lock.json', {'packages': hermes_tui.pins()})
+        hermes_tui.add_tools(fixture.runtime, fixture.source)
+        hermes_tui.make_product(fixture.runtime)
+        receipt = fixture.runtime / '.orrery-managed-install.json'
+        runtime = {**fixture.template_data, **hermes_tui.details(fixture.runtime),
+                   'generation_receipt': str(receipt)}
+        hermes_tui.save(receipt, {'harness': 'hermes', 'hermes_commit': hermes_tui.tui.BASE,
+                                  'complete': True, 'details': runtime})
+        fixture.template_data['generation_receipt'] = str(receipt)
+        fixture.save(fixture.template, fixture.template_data)
         client = fixture.base / 'client';client.mkdir()
         (client / 'context.json').write_text('{}')
         selected = dict(token_ref=dict(REF), allow_from=[123, 456])
