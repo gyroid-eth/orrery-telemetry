@@ -58,6 +58,14 @@ def hermes_ca():
     return module
 
 
+def hermes_tui():
+    path = Path(__file__).resolve().parents[2] / 'integrations/hermes/tui_product.py'
+    spec = importlib.util.spec_from_file_location('_managed_hermes_tui', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def hermes_stamp_details(source):
     path = Path(source) / 'install-stamp.json'
     stamp = read(path)
@@ -194,7 +202,7 @@ def _hermes_local_source(root, env):
         return None
     _hermes_owned_path(base.parent, directory=True)
     _hermes_owned_path(base, directory=True)
-    pattern = re.escape(HERMES_COMMIT[:16]) + r'-(?:v[12]|ca1-[0-9a-f]{16})'
+    pattern = re.escape(HERMES_COMMIT[:16]) + r'-(?:v[12]|ca1-[0-9a-f]{16}(?:-exa1(?:-tui1-[0-9a-f]{16})?)?)'
     for generation in sorted(base.iterdir()):
         if generation == root or not re.fullmatch(pattern, generation.name):
             continue
@@ -283,14 +291,15 @@ def install_hermes(repo, root, python, cache=None):
         raise ValueError('Hermes PM did not publish a committed runtime')
     paths = json.loads(run([str(generation / 'bin/python'), '-I', '-B', '-c', HERMES_CA_PROBE_SCRIPT], cwd=source, env=env))
     proof = ca.runtime_evidence(repo, root, source, generation, target, paths)
+    tui = hermes_tui().build(root, source, target, env, run)
     print('Hermes: existing manual homes/logins are untouched; no credentials were installed.')
     return {'hermes_source': str(source), 'managed_root': str(root), 'hermes_executable': str(executable),
-            'variant': 'plain', 'thin_config_contract': 1, 'ca_recipe': recipe, 'ca_evidence': proof, **stamp}
+            'variant': 'plain', 'thin_config_contract': 1, 'ca_recipe': recipe, 'ca_evidence': proof, **stamp, **tui}
 
 
 def generation_id(repo, harness, *, datadir=True):
     if harness == 'hermes':
-        return HERMES_COMMIT[:16] + '-ca1-' + hermes_ca().load(repo)[2][:16] + '-exa1'
+        return HERMES_COMMIT[:16] + '-ca1-' + hermes_ca().load(repo)[2][:16] + '-exa1-tui1-' + hermes_tui().recipe_id()[:16]
     inputs = ['runtime-pins.json', 'runtime-package-lock.json', 'ui-package.json', 'ui-package-lock.json']
     if datadir:
         inputs.append('tui-datadir.patch.json')
@@ -346,6 +355,7 @@ def validate(repo, harness, receipt):
                 or not os.access(generation / 'bin/python', os.X_OK)):
             raise ValueError('Hermes committed runtime is missing or changed')
         hermes_ca().validate_static(repo, details)
+        hermes_tui().validate(details)
 
 
 def provision(repo, install, harness, choice='keep', node='', python=sys.executable,

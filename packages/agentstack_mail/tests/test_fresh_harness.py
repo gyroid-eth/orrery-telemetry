@@ -21,6 +21,7 @@ from test_fresh_proxy import environment
 import test_dsh_thin_config as dsh_fixture
 import test_fresh_child as common_child
 from test_managed_harness_install import CAFixture, fixture_stamp
+from test_hermes_tui_product import make_product, details as tui_details, tui
 
 ROOT=Path(__file__).resolve().parents[3]
 pytestmark = pytest.mark.usefixtures('isolated_managed_harness_home')
@@ -153,9 +154,12 @@ def fixture(program,tmp,parent_id):
         (generation/'pyvenv.cfg').write_text('fixture')
         paths=ca.material(managed,source,generation)
         stamp=fixture_stamp(source)
+        make_product(managed, ca.target)
         details=dict(hermes_executable=str(generation/'bin/hermes'),hermes_source=str(source),managed_root=str(managed),
             ca_recipe=ca.ca.load(product)[2],ca_evidence=ca.ca.runtime_evidence(product,managed,source,generation,ca.target,paths),**stamp)
-        receipt=tmp/'owner.json';save(receipt,dict(harness='hermes',variant='plain',thin_config_contract=1,complete=True,details=details))
+        details.update(tui_details(managed,ca.target))
+        receipt=managed/'.orrery-managed-install.json';details['generation_receipt']=str(receipt)
+        save(receipt,dict(harness='hermes',hermes_commit=tui.BASE,variant='plain',thin_config_contract=1,complete=True,details=details))
         template=tmp/'template.json';save(template,{**details,'generation_receipt':str(receipt),
             'hermes_python':str(generation/'bin/python'),'profiles':{'strata':dict(provider='fixture-api',model='a',base_url='https://fixture.invalid/v1',api_mode='chat_completions',key_cmd='/fixture/no-key-call')}})
         manifest=tmp/'manifest.json';save(manifest,dict(enabled=True,backends={'strata':{'model':'a','models':['a']}},

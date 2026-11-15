@@ -318,11 +318,17 @@ def child_home(document, facts=None):
 def generate(document):
     facts = validate_input(document)
     telegram = document.get('telegram')
+    tui_env = {}
     if telegram is not None:
         settings = runpy.run_path(str(Path(__file__).with_name('telegram') / 'settings.py'))
         telegram = settings['validate'](telegram)
         if 'fresh_client_dir' not in document or document.get('resume_session_id') is not None:
             raise ValueError('invalid_input')
+        try:
+            tui = runpy.run_path(str(Path(__file__).with_name('tui_product.py')))
+            tui_env = tui['launch_environment'](read(facts['template_file']))
+        except (OSError, ValueError, KeyError, TypeError):
+            raise ValueError('invalid_runtime') from None
     search = None
     search_manifest = CONNECTIONS['read_manifest'](document['manifest_file'])
     if document.get('web_search') or search_manifest.get('web_search', {}).get('provider'):
@@ -486,7 +492,7 @@ def generate(document):
     if prompt_text:
         argv.extend(['--query-file', str(prompt)])
     env = {'HERMES_HOME': str(profile), 'HERMES_MANAGED_DIR': str(state / 'overlay'),
-           **facts['credential_context'],
+           **facts['credential_context'], **tui_env,
            'HERMES_BUNDLED_LOCALES': str(Path(facts['source']) / 'locales'),
            'AGENTSTACK_LLM_KEY_DEFINITIONS': str(definitions),
            'AGENTSTACK_NATIVE_SESSION_FILE': str(state / 'native-session.json'),

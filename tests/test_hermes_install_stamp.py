@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from test_hermes_tui_product import make_product
 from test_managed_harness_install import CAFixture
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +48,13 @@ class InstallStamp(unittest.TestCase):
             def acquire(argv, *, cwd, env):
                 nonlocal paths
                 cwd = Path(cwd)
+                if '-p' in argv:
+                    return json.dumps({'version': 'v26.7.0', 'execPath': argv[0]})
+                if len(argv) > 1 and argv[1].endswith('/scripts/build/node-deps.mjs'):
+                    return ''
+                if len(argv) > 1 and argv[1].endswith('/scripts/build/tui.mjs'):
+                    make_product(root, ca.target)
+                    return ''
                 if argv[:2] == ['git', 'clone']:
                     target = Path(argv[-1])
                     for relative in files:
