@@ -38,7 +38,7 @@ def _configuration(ctx) -> dict:
         # Read the plugin manager's profile config explicitly.
         with _plugin_home_scope(ctx._manager.home_path):
             cfg = load_config_readonly() or {}
-        return settings.validate(cfg.get("telegram"))
+        return settings.validate_configuration(cfg.get("telegram"))
     except Exception:
         return {}
 
@@ -49,7 +49,12 @@ class TelegramChannel:
         managed_guard.install_network_log_redaction()
         self.owner = managed_guard.PollOwner(ctx._manager.home_path)
         configuration = _configuration(ctx)
-        self.token = settings.read_token(configuration.get("token_ref"))
+        self.credential_failure = None
+        if configuration:
+            self.token = settings.read_token(configuration.get("token_ref"), on_failure=self._credential_failed)
+        else:
+            self.token = ""
+            self._credential_failed("configuration-invalid")
         self.allow = set(configuration.get("allow_from", []))
         self.session_key: str | None = None
         self.pending: deque[str] = deque(maxlen=50)
@@ -61,6 +66,9 @@ class TelegramChannel:
         self._client: httpx.AsyncClient | None = None
         self._offset = 0
 
+    def _credential_failed(self, reason, returncode=None):
+        self.credential_failure = (reason, returncode)
+
     # ---- lifecycle -----------------------------------------------------
     def start(self) -> None:
         LOG.info("Hermes Telegram: start tui=%s token=%s allow=%d",
@@ -70,6 +78,11 @@ class TelegramChannel:
             return
         if not self.token:
             LOG.warning("Hermes Telegram: managed token reference is unavailable; Telegram startup failed")
+            reason, code = self.credential_failure or ("empty-or-invalid-value", None)
+            try:
+                managed_guard.write_credential_diagnostic(self.owner.home, reason, code)
+            except OSError:
+                LOG.warning("Hermes Telegram: credential diagnostic could not be written")
             self.owner.status("credential-unavailable")
             return
         if not self.allow:

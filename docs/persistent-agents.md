@@ -98,6 +98,8 @@ TUI／backend を起動中から観測し、通常終了でも子の終了を確
 `logs/telegram-status.json` の `telegram-ready` は poller の準備であり、Mail や返信の成功を保証しません。
 409・credential-unavailable・allowlist-empty は失敗として扱い、新旧の同 token を並走させません。
 
+`credential-unavailable` の詳細は、同じ Hermes HOME の `logs/telegram-credential-diagnostic.json`（0600）に残ります。固定理由は `configuration-invalid`（設定の読取・形）、`reference-invalid`（参照の形）、`unsupported-store`、`security-nonzero`（整数の returncode のみ追加）、`security-timeout`、`security-unavailable`、`empty-or-invalid-value`、Secret Service の `secret-service-timeout` / `secret-service-unavailable` です。設定・参照・token の値や helper の stdout/stderr・全環境は記録しません。これは最後の失敗なので、`pid`・`updated_at` を現在の status と照合してください。HOME や Keychain の設定をこの診断だけで変更せず、理由に対応する確認を行います。
+
 既知の制限: 既存 plugin の並行 flush と、長文返信の途中失敗による部分返信は今回直していません。
 launcher が観測した子の残存は終了判定を拒否します。close 用 snapshot で把握した子の PID／出生も保存し、後で別 group／session に移っても生存中は close を拒否します。snapshot 後に初めて生じた未記録の離脱子は、この記録だけでは捕捉できません。
 launcher の `operation.lock` はその process が終了すると解放されます。一方、Hermes の Telegram plugin は別の `telegram-poller.lock` を同じ Hermes HOME で使い、**実際にその lock を保持する poller process が生きている間だけ**、同じ HOME の別 poller を拒否します（[保持・解放の実装](../integrations/hermes/telegram/managed_guard.py)、[poll thread 終了時の解放](../integrations/hermes/telegram/__init__.py)）。未観測の子や別 HOME の process がこの lock を保持するとは保証しません。二重受信防止を、未知の子が全て終了した証拠にしないでください。
