@@ -1109,6 +1109,7 @@ REQUIRED_RUNTIME_MODULES = {
     "fresh_child.py",
     "fresh_client.py",
     "fresh_delivery.py",
+    "fresh_end.py",
     "fresh_guard.py",
     "fresh_harness.py",
     "fresh_launch.py",

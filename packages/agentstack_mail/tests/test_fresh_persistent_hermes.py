@@ -81,7 +81,9 @@ def process_snapshot(*, include_groups=False, **_):
                 if ending == 'requested-stop':
                     child = json.loads((tmp_path / 'tree.json').read_text())[2]
                     with pytest.raises(ProcessLookupError):os.kill(child, 0)
-                assert (first / 'ended.json').exists() == (ending != 'unexpected-exit')
+                assert (first / 'ended.json').exists()
+                if ending == 'unexpected-exit':
+                    assert json.loads((first / 'ended.json').read_text())['exit_code'] == 23
                 if ending == 'session-change':
                     assert (first / 'restart-required.json').exists()
                     saved = json.loads((first / 'session.json').read_text())
@@ -98,14 +100,11 @@ def process_snapshot(*, include_groups=False, **_):
                 assert (client.path.parent / 'providers/hermes/plugins/orrery-telegram/__init__.py').is_file()
                 definitions = json.loads((first / 'managed/credential-references.json').read_text())
                 assert definitions['backends']['telegram']['keychain']['service'] == 'fixture.telegram'
-                # Normal stop allows a new run with the same owner; unexpected exit does not.
+                # An observed failed exit also permits a new run with the same owner.
                 binary.write_text(binary.read_text().split("assert '--tui'")[0])
                 again = await asyncio.to_thread(subprocess.run, argv, env=env, capture_output=True, text=True, timeout=60, start_new_session=True)
-                if ending == 'unexpected-exit':
-                    assert 'FRESH_LAUNCH_OUTCOME_UNKNOWN' in again.stderr and current(client) == first
-                else:
-                    assert again.returncode == 0, again.stderr
-                    assert current(client) != first
+                assert again.returncode == 0, again.stderr
+                assert current(client) != first
             finally:
                 try:os.killpg(process.pid, signal.SIGTERM)
                 except ProcessLookupError:pass

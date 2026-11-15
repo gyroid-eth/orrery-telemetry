@@ -15,6 +15,7 @@ import time
 
 from .fresh_runtime import _read_private, _write_private
 from .storage_origin_contract import B1Error
+from .fresh_end import read_run_end
 
 KIND = 'orrery-fresh-persistent-v1'
 SECRET_ENV = re.compile(r'(?:TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY)', re.I)
@@ -81,7 +82,7 @@ def request_restart(client, payload):
     intent = _read_private(run / 'intent.json');pinned(client, intent)
     if (not intent.get('persistent') or intent.get('nonce') != os.environ.get('AGENTSTACK_FRESH_LAUNCH_NONCE')
             or _read_private(base / 'current.json') != {'launch_id': run.name}
-            or (run / 'ended.json').exists()):return
+            or read_run_end(client, run) is not None):return
     saved = _read_private(run / ('session.json' if (run / 'session.json').exists() else 'session-start.json'))
     pinned(client, saved)
     if saved.get('native_session_id') != payload.get('session_id'):
@@ -158,7 +159,10 @@ def wait_provider(process, run, *, wrapper_root=None):
                 try:process.wait(timeout=1 if observation is not None else 0.1)
                 except subprocess.TimeoutExpired:pass
         code = process.wait()
-        if code != 0 and (requested_signal is None or code not in {-requested_signal, 128 + requested_signal}):
+        # Only the descendant-observing path can certify an unexpected failed
+        # exit. Channels without those observations retain the unknown gate.
+        if (observation is None and code != 0
+                and (requested_signal is None or code not in {-requested_signal, 128 + requested_signal})):
             raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
         return code, restarted or (run / 'restart-required.json').exists()
     finally:
@@ -188,6 +192,10 @@ def main(argv=None):
     except (B1Error, OSError, ValueError, TypeError) as exc:
         reason = exc.code if isinstance(exc, B1Error) else 'FRESH_PERSISTENT_PROFILE_INVALID'
         print('FRESH PERSISTENT: ' + reason, file=sys.stderr)
+        if isinstance(exc, B1Error) and reason == 'FRESH_LAUNCH_OUTCOME_UNKNOWN' and exc.details.get('launch_id'):
+            print('Current run: ' + exc.details['launch_id'] +
+                  '; inspect the run, then use resolve-ended --launch-id ' +
+                  exc.details['launch_id'] + ' --confirm-ended', file=sys.stderr)
         return 2
 
 

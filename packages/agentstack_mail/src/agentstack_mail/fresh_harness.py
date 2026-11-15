@@ -145,6 +145,7 @@ def session_reference(client, intent, session_id):
 
 
 async def hook(client, action, payload):
+    from .fresh_end import read_run_end
     from .fresh_launch import layout, native_id, pinned, record_session
     from .fresh_proxy import verified_owner
     if (os.environ.get('AGENTSTACK_FRESH_CLIENT_CONTEXT') != str(client.path)
@@ -159,12 +160,13 @@ async def hook(client, action, payload):
     launch_id = native_id(os.environ.get('AGENTSTACK_FRESH_LAUNCH_ID'))
     run = base / 'runs' / launch_id
     intent = _read_private(run / 'intent.json');pinned(client, intent)
+    if read_run_end(client, run) is not None:raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
     receipt = _read_private(run / 'session.json');pinned(client, receipt)
     if (intent.get('provider') not in PROGRAMS | {'claude','codex'} or intent.get('nonce') != os.environ.get('AGENTSTACK_FRESH_LAUNCH_NONCE')
             or receipt.get('launch_id') != launch_id or receipt.get('provider') != intent['provider']
             or receipt.get('native_session_id') != payload.get('session_id')
             or _read_private(base / 'current.json') != {'launch_id':launch_id}
-            or (run / 'ended.json').exists()):raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
+            or read_run_end(client, run) is not None):raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
     if action == 'post-edit':
         # Fresh leases are explicit release/TTL, as for the existing fresh clients.
         # Do not dispatch the legacy project-scoped debounce worker after an edit.

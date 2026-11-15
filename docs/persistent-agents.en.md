@@ -104,6 +104,58 @@ Each run starts a new conversation; old conversations are not automatically rest
 tests are separate from real Telegram acceptance. Real provider/Telegram round trips, real WSL, and machine
 reboots on macOS/WSL remain unverified.
 
+## Close an unfinished fresh run
+
+Closure does not mean task success or cancellation of side effects. Distinguish:
+
+| State | Record and next action |
+| --- | --- |
+| Normal exit | `ended.json` with observed wait exit 0; one ordinary run |
+| Observed failure | `ended.json` with the actual nonzero exit after required child-exit observations; one ordinary run |
+| Confirmed closure | `resolved-ended.json`, provider exit unknown (JSON null); one separate ordinary run |
+| Unknown | Missing wait, remaining processes, unavailable observations or insufficient records; refuse the next run and report why |
+
+Hermes can close an observed exit 23 as failed when descendant observations also establish no remaining children.
+Unexpected nonzero Channels exits without descendant observation, lost launchers and stop timeouts remain unknown.
+An exit 0 without a valid session receipt is recorded as ended, but native startup acceptance still fails.
+
+Use the same prepared context, verified Python and profile. `RUN_UUID` is the current run UUID shown in the diagnostic.
+
+```sh
+AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_PYTHON="$orrery_python" \
+  "$orrery_install/bin/agentstack-runtime-client" resolve-ended \
+    --launch-id "$RUN_UUID" --confirm-ended
+# Only after ok:true above, launch normally as a separate operation.
+AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_PYTHON="$orrery_python" \
+  "$orrery_install/bin/agentstack-persistent" run --profile "$orrery_profile"
+```
+
+`--confirm-ended` expresses the caller's explicit judgment, without new authentication or force.
+The command rechecks the same I/A, credential generation, context, current UUID, launch mutex,
+recorded PID/births, pane/socket and job groups. Sufficient observations publish one new private record.
+Intent/session/current stay intact; an exit code is never invented. Repeated resolution returns the same end kind.
+Closed runs reject Mail delivery, hooks and session publication. Resolution does not kill processes, remove panes
+or restart automatically. Do not bypass it by deleting current/lock/receipts or handwriting termination records.
+
+`FRESH_RESOLVE_PROCESS_ALIVE` / `FRESH_RESOLVE_GROUP_ALIVE` mean remaining processes;
+`FRESH_RESOLVE_PROCESS_CHANGED` / `FRESH_RESOLVE_TARGET_CHANGED` mean changed PID/pane/socket facts;
+`FRESH_RESOLVE_OBSERVATION_UNAVAILABLE` means unavailable observations;
+`FRESH_RESOLVE_RECORD_INSUFFICIENT` means insufficient records. Stop and report these, launch-busy and identity/credential refusals.
+Any necessary ordinary stop is separate; resolve again only after confirming termination.
+
+New tmux runs add versioned PGID, leader birth and known PID observations to the existing `tmux.json`.
+Old runs without that field, and foreground runs without tmux observations, HOLD for insufficient proof.
+Three absent PIDs or human confirmation alone cannot close a run. This does not fully track arbitrary daemonization,
+double forks or unrecorded orphans in separate sessions. The shared ps/tmux adapter covers Mac and Linux;
+Windows native processes in WSL are outside this boundary.
+
+An agent already authorized to recover needs no extra human commands or product approvals per incident:
+one ordinary run after observed termination, or resolve plus ordinary run for two commands after an unfinished run.
+Direct human operation also takes two commands; unknown cases are not guaranteed to recover in two steps.
+Telegram/Mail round trips, natural wake, provider login/hook trust and machine restart acceptance remain separate.
+
 ## Scope of the guarantee
 
 An **operator** here means a person who explicitly runs the dedicated CLI in a local terminal on this machine. The implementation guarantees only:

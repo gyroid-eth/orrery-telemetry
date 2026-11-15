@@ -103,6 +103,56 @@ Hermes の子が別 session に離れて残ったまま起動役が終わると�
 新 run は新会話で、旧会話の自動復元はありません。合成 transport／native による試験と実 Telegram の
 受け入れは別です。実 provider／Telegram の往復、WSL 実機、Mac／WSL の機体再起動は未受入です。
 
+## fresh の未終了 run を閉じる
+
+終了は次の4つを区別します。close は task の成功や副作用の取消ではありません。
+
+| 状態 | 記録と次の操作 |
+| --- | --- |
+| 正常終了 | 実 wait の `ended.json`、exit 0。通常の run を1回 |
+| 観測済みの失敗 | 子の終了まで観測した実 wait の `ended.json`、実際の非0 exit。通常の run を1回 |
+| 確認して閉じた終了 | `resolved-ended.json`、provider exit は unknown（JSON null）。通常の run を別に1回 |
+| 未確定 | wait 不明、残 process、観測不能、記録不足。次の run は拒否し、理由を報告 |
+
+子孫を観測する Hermes の wait で exit 23 と子の不在を確認した場合は失敗として閉じます。
+子孫観測のない Channels の予期しない非0終了、launcher 消失、停止 timeout は未確定です。
+exit 0 でも session receipt が成立しなかった場合、終了は記録しますが native の起動受入は失敗です。
+
+未終了の current run を利用者の指示で閉じるときは、同じ prepared context と確認済み Python を使います。
+`RUN_UUID` は診断に表示された現在 run の UUID、profile は今までの同じものです。
+
+```sh
+AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_PYTHON="$orrery_python" \
+  "$orrery_install/bin/agentstack-runtime-client" resolve-ended \
+    --launch-id "$RUN_UUID" --confirm-ended
+# 上の結果が ok:true の場合だけ、別操作として通常起動する。
+AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_PYTHON="$orrery_python" \
+  "$orrery_install/bin/agentstack-persistent" run --profile "$orrery_profile"
+```
+
+`--confirm-ended` は呼出側の明示判断で、追加の認証や force ではありません。同じ I/A・資格世代・context、
+current の UUID、起動 mutex、記録済み PID／出生・pane／socket・job group を再照合します。
+確認できたときだけ private record を新規に保存し、intent／session／current と元の終了コードを変更しません。
+重複 resolve は同じ終了種別を返します。閉じた run へ Mail 配送・hook・session の追記は行いません。
+kill、pane 削除、自動 restart は含みません。current／lock／receipt の削除や終了 record の手書きで回避しないでください。
+
+`FRESH_RESOLVE_PROCESS_ALIVE`／`FRESH_RESOLVE_GROUP_ALIVE` は残存、`FRESH_RESOLVE_PROCESS_CHANGED`／
+`FRESH_RESOLVE_TARGET_CHANGED` は PID・pane・socket 等の変更、`FRESH_RESOLVE_OBSERVATION_UNAVAILABLE` は観測不能、
+`FRESH_RESOLVE_RECORD_INSUFFICIENT` は記録不足です。`FRESH_LAUNCH_BUSY` や identity／資格の拒否も含め、停止して理由を報告します。
+必要な通常停止は別に行い、終了確認後に再度 resolve します。
+
+新しい tmux run は既存の `tmux.json` に版付きの PGID・leader 出生と既知 PID を記録します。
+その field がない古い run、tmux 観測のない foreground run は根拠が足りないため HOLD します。
+PID 3つの不在や人の確認 flag だけでは閉じません。任意の daemon 化／二重 fork や未記録の別 session の孤児を
+完全に証明する機能ではありません。Mac と Linux の共通 ps／tmux adapter を使い、WSL の Windows native process は対象外です。
+
+復旧を既に任された agent が操作する場合、人の毎回のコマンド・追加の製品承認は0回です。
+観測済み終了後は agent が通常 run を1回、未終了なら resolve と通常 run の2回です。
+人が直接操作する場合も2コマンドで、未確定を必ず2手で復旧できるとは限りません。
+Telegram・Mail の往復と自然 wake、provider login／hook trust、機体再起動の受入は別に確認します。
+
 ## 保証範囲
 
 ここでいう **operator** は、この機体の local terminal で専用 CLI を明示的に実行する人です。実装が保証するのは次の範囲です。

@@ -22,6 +22,7 @@ from uuid import uuid4
 from . import fresh_delivery as delivery
 from .fresh_client import FreshBoundClient
 from .fresh_launch import identity, native_id, operation, pinned, root_path
+from .fresh_end import RunEnd, read_run_end
 from .fresh_runtime import FreshRuntime, _directory, _read_private, _write_private
 from .storage_origin_contract import B1Error, canonical, digest
 
@@ -36,7 +37,7 @@ class Selected:
     run: Path
     intent: dict
     receipt: dict
-    ended: dict | None
+    ended: RunEnd | None
     route: dict | None
     signature: str
 
@@ -127,16 +128,15 @@ class Targets:
                 else:raise B1Error('FRESH_TARGET_PROVIDER_UNAVAILABLE')
                 if receipt!=dict(_read_private(base/'sessions'/(sid+'.json')),launch_id=current['launch_id']):
                     raise B1Error('FRESH_NATIVE_SESSION_MISMATCH')
-                ended=_read_private(run/'ended.json') if (run/'ended.json').exists() else None
-                if ended is not None and (set(ended)!={'launch_id','exit_code'} or ended['launch_id']!=current['launch_id'] or type(ended['exit_code']) is not int):
-                    raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
+                ended=read_run_end(client,run)
                 route=_read_private(run/'tmux.json') if (run/'tmux.json').exists() else None
                 if route is not None:
                     pinned(client,route)
                     if route.get('kind')!='orrery-fresh-tmux-route-v1' or route.get('launch_id')!=current['launch_id']:
                         raise B1Error('FRESH_TMUX_TARGET_CHANGED')
                 signature=digest(dict(context=client.context_digest,binding=client.context['binding_digest'],
-                    identity=identity(client),current=current,intent=intent,receipt=receipt,ended=ended,route=route))
+                    identity=identity(client),current=current,intent=intent,receipt=receipt,
+                    ended=ended.record if ended is not None else None,route=route))
                 return Selected(client,row.name,run,intent,receipt,ended,route,signature)
           except B1Error:raise
           except (OSError,ValueError,TypeError,KeyError):
@@ -620,12 +620,11 @@ async def execute(args, payload):
             old=selected.run.parent/native_id(payload.get('resume_from'))
             old_intent=_read_private(old/'intent.json');old_receipt=_read_private(old/'session.json')
             for value in (old_intent,old_receipt):pinned(selected.client,value)
-            marker=_read_private(old/'pc-resume.json');ended=_read_private(old/'ended.json')
+            marker=_read_private(old/'pc-resume.json');ended=read_run_end(selected.client,old)
             if (selected.ended is not None or marker.get('revision')!=payload.get('expected') or
                     any(marker.get(k)!=v for k,v in selected.public().items()) or
-                    any(value.get('launch_id')!=old.name for value in (old_intent,old_receipt,ended)) or
-                    set(ended)!={'launch_id','exit_code'} or type(ended['exit_code']) is not int or
-                    ended.get('launch_id')!=old_intent['launch_id'] or
+                    any(value.get('launch_id')!=old.name for value in (old_intent,old_receipt)) or
+                    ended is None or
                     selected.intent.get('resume_session_id')!=old_receipt['native_session_id'] or
                     selected.receipt['native_session_id']!=old_receipt['native_session_id'] or
                     selected.intent['provider']!=old_intent['provider'] or selected.run==old):
