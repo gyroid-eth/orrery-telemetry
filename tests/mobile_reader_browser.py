@@ -67,7 +67,7 @@ def phone(request):
                 return self.send(snapshot)
             if path == '/view/conversation':
                 agent=parse_qs(urlsplit(self.path).query).get('name',['SampleAgent'])[0]
-                return self.send(dict(ok=False, error=state['error']) if state['error'] else dict(ok=True, agent=agent, events=state['events'], older=None, limited=False, tail_only=False))
+                return self.send(dict(ok=False, error=state['error']) if state['error'] else dict(ok=True, agent=agent, provider=state.get('provider', ''), events=state['events'], older=None, limited=False, tail_only=False))
             if path == '/view/terminal':
                 return self.send(dict(contract, api=31, supported='legacy-managed-pane', enabled=True, ack='tmux-command-accepted'))
             if path == '/view/conversation/preview':
