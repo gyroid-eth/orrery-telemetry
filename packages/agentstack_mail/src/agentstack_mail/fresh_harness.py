@@ -75,7 +75,10 @@ def plan(client, root, provider, settings, run, cwd, prompt, session_id, *, pers
     fd = os.open(task, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'w') as output:output.write(prompt or '')
     mcp = state / 'mail.json'
-    env = dict(AGENTSTACK_RUNTIME_MODE='fresh', AGENTSTACK_FRESH_CLIENT_CONTEXT=str(client.path))
+    # Native stdio MCP filters its parent's environment. Pin the Mail client
+    # interpreter here, as Channels does, rather than relying on PATH's python3.
+    env = dict(AGENTSTACK_RUNTIME_MODE='fresh', AGENTSTACK_FRESH_CLIENT_CONTEXT=str(client.path),
+               AGENTSTACK_PYTHON=sys.executable)
     _write_private(mcp, {'mcpServers': {'orrery-mail': {'command':'/bin/bash',
         'args':[str(root / 'bin/agentstack-runtime-client'),'proxy'], 'env':env}}})
     from .fresh_proxy import verified_owner

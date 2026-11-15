@@ -44,23 +44,39 @@ def is_tui_backend():
     return getattr(spec, "name", None) == "tui_gateway.entry"
 
 
-def write_status(state, home=None, **details):
-    home = home or os.environ.get("HERMES_HOME")
+def _write_private_log(home, filename, data):
     if not home:
         raise RuntimeError("managed Telegram requires HERMES_HOME")
     directory = Path(home) / "logs"
     directory.mkdir(parents=True, exist_ok=True)
-    data = dict(state=state, pid=os.getpid(), updated_at=time.time(),
-                run_id=os.environ.get("HERMES_TELEGRAM_RUN_ID", ""), **details)
     fd, name = tempfile.mkstemp(prefix=".telegram-status-", dir=str(directory))
     try:
         with os.fdopen(fd, "w") as stream:
             json.dump(data, stream)
             stream.write("\n")
-        os.replace(name, directory / "telegram-status.json")
+        os.replace(name, directory / filename)
     finally:
         if os.path.exists(name):
             os.unlink(name)
+
+
+def write_status(state, home=None, **details):
+    data = dict(state=state, pid=os.getpid(), updated_at=time.time(),
+                run_id=os.environ.get("HERMES_TELEGRAM_RUN_ID", ""), **details)
+    _write_private_log(home or os.environ.get("HERMES_HOME"), "telegram-status.json", data)
+
+
+def write_credential_diagnostic(home, reason, returncode=None):
+    # A separate, owner-only last-failure record. Never accept arbitrary error
+    # text, reference fields, helper output, or an environment dump.
+    if reason not in {"configuration-invalid", "reference-invalid", "unsupported-store",
+                      "security-nonzero", "security-timeout", "security-unavailable",
+                      "empty-or-invalid-value", "secret-service-timeout", "secret-service-unavailable"}:
+        raise ValueError("invalid_telegram_diagnostic")
+    data = dict(reason=reason, pid=os.getpid(), updated_at=time.time())
+    if reason == "security-nonzero" and type(returncode) is int:
+        data["returncode"] = returncode
+    _write_private_log(home, "telegram-credential-diagnostic.json", data)
 
 
 class PollOwner:
