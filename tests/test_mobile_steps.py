@@ -114,3 +114,20 @@ def test_large_numeric_times_and_display_only_step_fields():
         assert not {'started','ended'} & result['step'].keys()
     boundary = history.project_event(raw('t', 'system', 'system', step_turn=dict(id='b'*32, phase='end', duration=10**1000)))
     assert boundary['step_turn'] == dict(id='b'*32, phase='end')
+
+
+@pytest.mark.parametrize('later_prompt', [False, True])
+def test_unpaired_claude_call_is_consumed_only_after_its_matching_result(later_prompt):
+    sequence = fixtures('claude')
+    events = [history.project_event(x) for x in sequence[:2]]
+    if later_prompt:
+        events.append(history.project_event(raw('later-prompt', 'text', 'user', step_boundary=True)))
+    pending = collect(events, 'claude')
+    assert 'call' not in pending['consumed']
+    assert sum(len(g['steps']) for g in pending['groups']) == 0
+    assert sum(g['orphans'] for g in pending['groups']) == 0
+    events.append(history.project_event(sequence[2]))
+    paired = collect(events, 'claude')
+    assert {'call', 'result'} <= set(paired['consumed'])
+    assert len(paired['groups'][0]['steps']) == 1
+    assert sum(len(g['steps']) for g in paired['groups']) == 1

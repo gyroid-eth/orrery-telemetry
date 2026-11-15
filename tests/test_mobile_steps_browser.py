@@ -104,3 +104,47 @@ def test_steps_add_finish_toggle_demo_and_keep_original_extras(phone, provider, 
     js("OrreryMobileTerminal.close()")
     assert js("document.querySelector('.conversation-steps')===null")
     assert not any(op in {'prepare', 'commit'} for op, _ in state['calls'])
+
+
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+def test_stopped_unpaired_call_keeps_original_group_until_late_result(phone, theme, tmp_path):
+    client, js, wait, state = phone
+    if theme == 'light':
+        js((ROOT/'dashboard/theme_core.js').read_text())
+        js("document.documentElement.dataset.colorTheme='light';Object.entries(AgentStackColorThemeCore.deriveWarmPaperLightTheme().cssVariables).forEach(([k,v])=>document.documentElement.style.setProperty(k,v))")
+    js("window.OrreryMobileAgent={forName:()=>({running:false,stale:false,state:'wait',workDisplay:''})}")
+    sequence = fixtures('claude')
+    state.update(provider='claude', events=project('claude', sequence[:2]))
+    js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelector('[data-id=call]')!==null")
+    wait("document.querySelector('.conversation-tool-group')!==null")
+    assert js("document.querySelectorAll('.conversation-step').length") == 0
+    assert js("document.querySelectorAll('.conversation-steps:not([hidden])').length") == 0
+    js("document.querySelector('.conversation-tool-group').click();window.pendingCall=document.querySelector('[data-id=call]')")
+    assert js('pendingCall.hidden') is False
+    assert js("pendingCall.querySelector('.conversation-tool-label').textContent") == 'Read'
+    folder = Path(os.environ.get('MOBILE_STEPS_UNPAIRED_CAPTURE_DIR', str(tmp_path)))
+    folder.mkdir(parents=True, exist_ok=True)
+    def capture(stage):
+        js('new Promise(r=>setTimeout(r,300))')
+        data = client.call('Page.captureScreenshot', format='png', captureBeyondViewport=False)['data']
+        (folder/('mobile-'+theme+'-'+stage+'.png')).write_bytes(base64.b64decode(data))
+    capture('call-only')
+    later = raw('later-prompt', 'text', 'user', step_boundary=True)
+    later['text'] = 'Now inspect another file.'
+    state['events'] = project('claude', sequence[:2]+[later])
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("document.querySelector('[data-id=later-prompt]')!==null")
+    assert js('pendingCall.hidden') is False
+    assert js("document.querySelectorAll('.conversation-tool-group').length") == 1
+    assert js("document.querySelectorAll('.conversation-step').length") == 0
+    capture('later-prompt')
+    state['events'] = project('claude', sequence[:2]+[later, sequence[2]])
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("document.querySelectorAll('.conversation-step').length===1")
+    assert js('pendingCall.hidden') is True
+    assert js("document.querySelectorAll('.conversation-tool-group').length") == 0
+    assert js("document.querySelectorAll('.conversation-step-icon.done').length") == 1
+    js("document.querySelector('.conversation-steps:not([hidden]) .conversation-steps-toggle').click()")
+    capture('matched')
+    assert not any(op in {'prepare', 'commit'} for op, _ in state['calls'])
