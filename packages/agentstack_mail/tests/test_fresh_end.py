@@ -438,3 +438,106 @@ def test_incomplete_or_invalid_intent_is_not_resolvable(closed_candidate,field,v
     replace(run/'intent.json',intent)
     with pytest.raises(B1Error,match='FRESH_LAUNCH_BINDING_MISMATCH'):close(closed_candidate)
     assert not (run/'resolved-ended.json').exists()
+
+
+@pytest.mark.parametrize('initial_group',[101,109])
+@pytest.mark.parametrize('grandchild',[False,True])
+def test_captured_descendant_that_leaves_group_blocks_resolution(closed_candidate,initial_group,grandchild):
+    _,run,_,route,state,api,_=closed_candidate
+    uid=os.getuid()
+    state['rows']={100:(1,uid,'pane-birth',100),101:(100,uid,'runner-birth',101),
+        102:(101,uid,'provider-birth',101),109:(108 if grandchild else 102,uid,'child-birth',initial_group)}
+    if grandchild:state['rows'][108]=(102,uid,'middle-birth',101)
+    # Persist the product's output, without inserting a child into members by hand.
+    route['process_observation']=end.capture_groups(api,route)
+    replace(run/'tmux.json',route)
+    state['rows']={109:(1,uid,'child-birth',109)}
+    state['starts']={109:'child-birth'}
+    before=bytes_before(run)
+    with pytest.raises(B1Error,match='FRESH_RESOLVE_PROCESS_ALIVE'):close(closed_candidate)
+    assert dict(pid=109,process_start='child-birth') in route['process_observation']['members']
+    assert bytes_before(run)==before and not (run/'resolved-ended.json').exists()
+
+
+@pytest.mark.parametrize('damage',['overflow','short-row','bad-birth','foreign-child','cycle'])
+def test_capture_cannot_silently_drop_unrecordable_descendants(closed_candidate,damage):
+    _,run,_,route,state,api,_=closed_candidate
+    uid=os.getuid()
+    state['rows']={100:(1,uid,'pane-birth',100),101:(100,uid,'runner-birth',101),
+        102:(101,uid,'provider-birth',101),109:(102,uid,'child-birth',109)}
+    if damage=='overflow':
+        state['rows'].update({pid:(102,uid,'child-birth',pid) for pid in range(200,262)})
+    elif damage=='short-row':state['rows'][109]=(102,uid,'child-birth')
+    elif damage=='bad-birth':state['rows'][109]=(102,uid,None,109)
+    elif damage=='foreign-child':state['rows'][109]=(102,uid+1,'child-birth',109)
+    elif damage=='cycle':state['rows'][100]=(109,uid,'pane-birth',100)
+    before=bytes_before(run)
+    with pytest.raises(B1Error):end.capture_groups(api,route)
+    assert bytes_before(run)==before
+
+
+@pytest.mark.parametrize('with_command',[False,True])
+@pytest.mark.parametrize('pid,dead,valid',[('100','0',True),('100','1',True),('','1',True),
+    ('','0',False),('0','1',False),('-1','1',False),('100','?',False)])
+def test_shared_pane_parser_retains_only_dead_empty_pid(with_command,pid,dead,valid):
+    raw=f'$1\t%2\t{pid}\t{dead}'+('\tpython' if with_command else '')+'\n'
+    if valid:
+        row,=delivery.parse_panes(raw,with_command=with_command)
+        assert row['pid']==(int(pid) if pid else None) and row['dead']==(dead=='1')
+    else:
+        with pytest.raises(ValueError):delivery.parse_panes(raw,with_command=with_command)
+
+
+def test_capture_member_bound_is_not_truncated_and_gone_children_allow_close(closed_candidate):
+    _,run,_,route,state,api,_=closed_candidate
+    uid=os.getuid()
+    state['rows']={100:(1,uid,'pane-birth',100),101:(100,uid,'runner-birth',101),
+        102:(101,uid,'provider-birth',101)}
+    state['rows'].update({pid:(102,uid,'child-birth',pid) for pid in range(200,261)})
+    value=end.capture_groups(api,route)
+    assert len(value['members'])==64
+    route['process_observation']=value;replace(run/'tmux.json',route)
+    state['rows']={999:(1,uid,'other-birth',999)}
+    assert close(closed_candidate)['end_kind']=='resolved'
+
+
+@pytest.mark.parametrize('kind',['normal','resolved'])
+@pytest.mark.parametrize('with_receipt',[False,True])
+def test_api40_spawn_status_keeps_resolution_separate_from_native_receipt(tmp_path,monkeypatch,closed_candidate,kind,with_receipt):
+    from test_fresh_guard import live
+    from test_fresh_child import binary_for_child
+    from test_fresh_dashboard import dashboard,Transport
+    from dashboard.fresh_backend import Backend
+    from agentstack_mail.fresh_child import family,provider_home
+    async def check():
+        async with live(tmp_path) as (_,_,parent,_):
+            _,binary=binary_for_child(parent,'claude',tmp_path)
+            monkeypatch.setenv('AGENTSTACK_CLAUDE_BIN',str(binary))
+            transport=Transport(tmp_path);backend=Backend(parent.path,ROOT,transport=lambda:transport)
+            with dashboard(parent,backend,monkeypatch,tmp_path) as (module,request):
+                code,version=await asyncio.to_thread(request,'/api/version')
+                assert code==200 and version['api']==module.API_GENERATION==40
+                payload=dict(standalone=True,name='ResolvedVerdict',task='bounded status fixture',
+                    dir=str(tmp_path),provider='claude',model='claude-sonnet-4-6')
+                code,accepted=await asyncio.to_thread(request,'/api/spawn',payload)
+                assert code==200 and accepted['ok']
+                child=backend.context_for(await backend.resolve(name='ResolvedVerdict'))
+                _,task_base,_=family(child)
+                run,intent,_=actual_candidate(child,closed_candidate)
+                intent['child_spawn_id']=_read_private(task_base/'task.json')['spawn_id'];replace(run/'intent.json',intent)
+                if with_receipt:
+                    sid=str(uuid4());transcript=provider_home(child,'claude')/(sid+'.jsonl')
+                    transcript.write_text('synthetic native receipt\n')
+                    await launch.record_session(child,dict(hook_event_name='SessionStart',session_id=sid,transcript_path=str(transcript)))
+                if kind=='resolved':
+                    assert (await asyncio.to_thread(end.resolve_ended,child,ROOT,run.name,confirm_ended=True))['end_kind']=='resolved'
+                else:_write_private(run/'ended.json',dict(launch_id=run.name,exit_code=23))
+                code,status=await asyncio.to_thread(request,'/api/spawn-status?name=ResolvedVerdict')
+                assert code==200
+                expected='resolved-ended' if kind=='resolved' else 'ended'
+                ready=with_receipt and kind=='normal'
+                assert status['detail']==status['result']['execution']==expected
+                assert status['result']['native_ready'] is ready
+                assert status['state']==('ready' if ready else 'failed')
+                assert len(transport.calls)==1  # Status never launches another native.
+    asyncio.run(check())

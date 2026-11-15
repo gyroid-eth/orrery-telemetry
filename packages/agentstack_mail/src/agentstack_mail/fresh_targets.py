@@ -349,13 +349,8 @@ class Targets:
             raise B1Error('FRESH_CLEANUP_OBSERVATION_UNAVAILABLE')
         if len(panes.stdout.encode())>262144 or len(clients.stdout.encode())>65536:
             raise B1Error('FRESH_CLEANUP_OBSERVATION_UNAVAILABLE')
-        rows=[];seen=set()
-        for line in panes.stdout.splitlines():
-            f=line.split('\t')
-            if (len(f)!=5 or not re.fullmatch(r'\$[0-9]+',f[0]) or not re.fullmatch(r'%[0-9]+',f[1])
-                    or not f[2].isdigit() or int(f[2])<1 or f[3] not in {'0','1'}
-                    or (f[0],f[1]) in seen):raise B1Error('FRESH_CLEANUP_OBSERVATION_UNAVAILABLE')
-            seen.add((f[0],f[1]));rows.append(dict(session_id=f[0],pane_id=f[1],pid=int(f[2]),dead=f[3]=='1',command=f[4]))
+        try:rows=delivery.parse_panes(panes.stdout,with_command=True)
+        except ValueError:raise B1Error('FRESH_CLEANUP_OBSERVATION_UNAVAILABLE') from None
         attached=set(clients.stdout.splitlines())
         if any(not re.fullmatch(r'\$[0-9]+',value) for value in attached):
             raise B1Error('FRESH_CLEANUP_OBSERVATION_UNAVAILABLE')
@@ -379,9 +374,11 @@ class Targets:
         if not actual:
             if route['pane']['pid'] in snapshot:raise B1Error('FRESH_CLEANUP_TARGET_CHANGED')
             return dict(category='gone',running=False,attached=route['pane']['session_id'] in attached)
-        if len(actual)!=1 or any(actual[0][k]!=v for k,v in route['pane'].items()):
+        if (len(actual)!=1 or any(actual[0][k]!=route['pane'][k] for k in ('session_id','pane_id'))
+                or actual[0]['pid'] not in (route['pane']['pid'],None)):
             raise B1Error('FRESH_CLEANUP_TARGET_CHANGED')
         row=actual[0];pid=row['pid'];process=snapshot.get(pid)
+        if pid is None and route['pane']['pid'] in snapshot:raise B1Error('FRESH_CLEANUP_TARGET_CHANGED')
         if process is None:
             if not row['dead']:raise B1Error('FRESH_CLEANUP_TARGET_CHANGED')
         else:

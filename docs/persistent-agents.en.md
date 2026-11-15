@@ -99,7 +99,8 @@ The foreground pane/job must give this run its own process group; surviving chil
 Treat 409, credential-unavailable, and allowlist-empty as failures. Never overlap old/new pollers for one token.
 
 Known limits: the existing plugin's concurrent flush and partial long replies after a send failure are unchanged.
-If a Hermes child detaches into another session and outlives its launcher, a new bot cannot receive Telegram until that child exits (the per-profile lock prevents duplicate reception).
+A surviving child observed by the launcher prevents a confirmed end. The close snapshot also saves known descendants' PID/births, so a later group/session change cannot hide their survival. A child first created after that snapshot and then detached is not captured by this record alone.
+The launcher's `operation.lock` is released when that process exits. Separately, the Hermes Telegram plugin uses `telegram-poller.lock` in the same Hermes HOME: **only while a poller process actually holds that lock** does it reject another poller using that HOME ([acquire/release](../integrations/hermes/telegram/managed_guard.py), [release after poll-thread shutdown](../integrations/hermes/telegram/__init__.py)). An unobserved child or a process using another HOME is not guaranteed to hold it. Duplicate-reception protection does not prove that all unknown children have ended.
 Each run starts a new conversation; old conversations are not automatically restored. Synthetic transport/native
 tests are separate from real Telegram acceptance. Real provider/Telegram round trips, real WSL, and machine
 reboots on macOS/WSL remain unverified.
@@ -145,7 +146,8 @@ or restart automatically. Do not bypass it by deleting current/lock/receipts or 
 `FRESH_RESOLVE_RECORD_INSUFFICIENT` means insufficient records. Stop and report these, launch-busy and identity/credential refusals.
 Any necessary ordinary stop is separate; resolve again only after confirming termination.
 
-New tmux runs add versioned PGID, leader birth and known PID observations to the existing `tmux.json`.
+New tmux runs add versioned PGID, leader birth and provider descendants' PID/births known from the saved snapshot's parent chain to the existing `tmux.json`. Known children remain subject to survival refusal after changing group. A snapshot exceeding the 64-member bound, containing ancestry cycles, or having unknown birth/ownership shape is refused instead of publishing sufficient evidence.
+Children first created after this snapshot and later unrecorded detachment are not tracked. No resident watcher or descendant history database is added.
 Old runs without that field, and foreground runs without tmux observations, HOLD for insufficient proof.
 Three absent PIDs or human confirmation alone cannot close a run. This does not fully track arbitrary daemonization,
 double forks or unrecorded orphans in separate sessions. The shared ps/tmux adapter covers Mac and Linux;

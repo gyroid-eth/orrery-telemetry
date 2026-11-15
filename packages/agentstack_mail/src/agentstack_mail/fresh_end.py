@@ -131,6 +131,13 @@ def capture_groups(processes, route):
     """Capture PID/birth and foreground groups once, without changing role shapes."""
     rows = processes['process_snapshot'](include_groups=True)
     if rows is None:raise B1Error('FRESH_TMUX_PROCESS_UNAVAILABLE')
+    children = {}
+    for pid, row in rows.items():
+        if (not isinstance(row, (tuple, list)) or len(row) != 4
+                or not process_record(dict(pid=pid, process_start=row[2]))
+                or any(type(row[i]) is not int or row[i] < 0 for i in (0, 1, 3))):
+            raise B1Error('FRESH_TMUX_PROCESS_UNAVAILABLE')
+        children.setdefault(row[0], []).append(pid)
     members = []
     for member in (route['runner'], route['provider'],
                    dict(pid=route['pane']['pid'], process_start=route['pane_process_start'])):
@@ -148,11 +155,24 @@ def capture_groups(processes, route):
         if group not in groups:groups.append(group)
         leader_record = dict(pid=pgid, process_start=leader[2])
         if leader_record not in members:members.append(leader_record)
+    # Keep every descendant already visible in this snapshot, even if it has
+    # left the foreground group or changes group after publication. No history
+    # watcher: children first created after this snapshot remain outside it.
+    seen = {route['provider']['pid']}
+    pending = list(children.get(route['provider']['pid'], []))
+    while pending:
+        pid = pending.pop()
+        if pid in seen or rows[pid][1] != os.getuid():raise B1Error('FRESH_TMUX_PROCESS_UNAVAILABLE')
+        seen.add(pid)
+        member = dict(pid=pid, process_start=rows[pid][2])
+        if member not in members:members.append(member)
+        if len(members) > 64:raise B1Error('FRESH_TMUX_PROCESS_UNAVAILABLE')
+        pending.extend(children.get(pid, []))
     return dict(kind=GROUPS_KIND, groups=groups, members=members)
 
 
 def observe_ended(route, wrapper_root, *, deadline):
-    from .fresh_delivery import helpers
+    from .fresh_delivery import helpers, parse_panes
     tmux, processes, _ = helpers(wrapper_root)
     groups, members = recorded(route)
     if time.monotonic() >= deadline:raise B1Error('FRESH_RESOLVE_OBSERVATION_UNAVAILABLE')
@@ -183,27 +203,21 @@ def observe_ended(route, wrapper_root, *, deadline):
                 '#{session_id}\t#{pane_id}\t#{pane_pid}\t#{pane_dead}', deadline=deadline)
             if result.returncode or len(result.stdout.encode()) > 262144:
                 raise B1Error('FRESH_RESOLVE_OBSERVATION_UNAVAILABLE')
-            seen = set();found = None
-            import re
-            for line in result.stdout.splitlines():
-                fields = line.split('\t')
-                if (len(fields) != 4 or not re.fullmatch(r'\$[0-9]+', fields[0])
-                        or not re.fullmatch(r'%[0-9]+', fields[1]) or fields[3] not in ('0','1')
-                        or not (fields[2].isdigit() and int(fields[2]) > 0
-                                or fields[2] == '' and fields[3] == '1') or fields[1] in seen):
-                    raise B1Error('FRESH_RESOLVE_OBSERVATION_UNAVAILABLE')
-                seen.add(fields[1])
-                if fields[1] == route['pane']['pane_id']:
+            try:panes = parse_panes(result.stdout)
+            except ValueError:raise B1Error('FRESH_RESOLVE_OBSERVATION_UNAVAILABLE') from None
+            found = None
+            for actual in panes:
+                if actual['pane_id'] == route['pane']['pane_id']:
                     # tmux 3.8 omits pane_pid when its PTY fd is closed. Only
                     # an explicitly dead pane may omit it; recorded births and
                     # groups above must already be absent, on both observations.
-                    if (fields[:2] != [route['pane']['session_id'], route['pane']['pane_id']]
-                            or fields[2] not in (str(route['pane']['pid']), '')):
+                    if (actual['session_id'] != route['pane']['session_id']
+                            or actual['pid'] not in (route['pane']['pid'], None)):
                         raise B1Error('FRESH_RESOLVE_TARGET_CHANGED')
-                    found = fields[3]
-            if found == '0':raise B1Error('FRESH_RESOLVE_PROCESS_ALIVE')
+                    found = actual['dead']
+            if found is False:raise B1Error('FRESH_RESOLVE_PROCESS_ALIVE')
             if tmux['validate_socket'](path) != transport.identity:raise B1Error('FRESH_RESOLVE_TARGET_CHANGED')
-            pane = 'dead' if found == '1' else 'absent'
+            pane = 'dead' if found is True else 'absent'
     except tmux['TargetError']:
         raise B1Error('FRESH_RESOLVE_OBSERVATION_UNAVAILABLE') from None
     if time.monotonic() >= deadline:raise B1Error('FRESH_RESOLVE_OBSERVATION_UNAVAILABLE')

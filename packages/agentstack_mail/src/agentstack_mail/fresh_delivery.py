@@ -30,6 +30,29 @@ def helpers(root):
             runpy.run_path(str(root / 'bin/lib/runtime_delivery.py')))
 
 
+def parse_panes(text, *, with_command=False):
+    """Lexical inventory only; callers own socket/target/process admission.
+
+    A closed PTY can have an empty pane_pid. Keep it None, never substitute
+    a historical PID; a live pane must always supply a positive PID.
+    """
+    if not isinstance(text, str) or len(text.encode()) > 262144:raise ValueError('invalid pane inventory')
+    rows, seen = [], set()
+    for line in text.splitlines():
+        fields = line.split('\t')
+        if (len(fields) != (5 if with_command else 4)
+                or not re.fullmatch(r'\$[0-9]+', fields[0]) or not re.fullmatch(r'%[0-9]+', fields[1])
+                or fields[3] not in ('0','1') or fields[1] in seen
+                or not (fields[2].isdigit() and int(fields[2]) > 0 or fields[2] == '' and fields[3] == '1')):
+            raise ValueError('invalid pane inventory')
+        seen.add(fields[1])
+        row = dict(session_id=fields[0], pane_id=fields[1],
+                   pid=int(fields[2]) if fields[2] else None, dead=fields[3] == '1')
+        if with_command:row['command'] = fields[4]
+        rows.append(row)
+    return rows
+
+
 def require_birth(api, pid):
     value = api['process_start'](pid)
     if value in (None, 'absent'):raise B1Error('FRESH_TMUX_PROCESS_UNAVAILABLE')

@@ -99,7 +99,8 @@ TUI／backend を起動中から観測し、通常終了でも子の終了を確
 409・credential-unavailable・allowlist-empty は失敗として扱い、新旧の同 token を並走させません。
 
 既知の制限: 既存 plugin の並行 flush と、長文返信の途中失敗による部分返信は今回直していません。
-Hermes の子が別 session に離れて残ったまま起動役が終わると、その子が終わるまで新しい bot は Telegram を受けない（profile ごとの lock で二重受信は起きない）。
+launcher が観測した子の残存は終了判定を拒否します。close 用 snapshot で把握した子の PID／出生も保存し、後で別 group／session に移っても生存中は close を拒否します。snapshot 後に初めて生じた未記録の離脱子は、この記録だけでは捕捉できません。
+launcher の `operation.lock` はその process が終了すると解放されます。一方、Hermes の Telegram plugin は別の `telegram-poller.lock` を同じ Hermes HOME で使い、**実際にその lock を保持する poller process が生きている間だけ**、同じ HOME の別 poller を拒否します（[保持・解放の実装](../integrations/hermes/telegram/managed_guard.py)、[poll thread 終了時の解放](../integrations/hermes/telegram/__init__.py)）。未観測の子や別 HOME の process がこの lock を保持するとは保証しません。二重受信防止を、未知の子が全て終了した証拠にしないでください。
 新 run は新会話で、旧会話の自動復元はありません。合成 transport／native による試験と実 Telegram の
 受け入れは別です。実 provider／Telegram の往復、WSL 実機、Mac／WSL の機体再起動は未受入です。
 
@@ -143,7 +144,8 @@ kill、pane 削除、自動 restart は含みません。current／lock／receip
 `FRESH_RESOLVE_RECORD_INSUFFICIENT` は記録不足です。`FRESH_LAUNCH_BUSY` や identity／資格の拒否も含め、停止して理由を報告します。
 必要な通常停止は別に行い、終了確認後に再度 resolve します。
 
-新しい tmux run は既存の `tmux.json` に版付きの PGID・leader 出生と既知 PID を記録します。
+新しい tmux run は既存の `tmux.json` に版付きの PGID・leader 出生と、保存時の snapshot の親子関係から分かる provider の子孫の PID／出生を記録します。後で別 group に移った既知の子も生存を拒否します。64件の上限を超える、親子関係が循環する、出生や所有の形が不明な snapshot は、十分な記録として保存せず起動を止めます。
+この snapshot より後に初めて生じた子や、その後の未記録の離脱までは追跡しません。常駐 watcher や子孫の履歴 DB は作りません。
 その field がない古い run、tmux 観測のない foreground run は根拠が足りないため HOLD します。
 PID 3つの不在や人の確認 flag だけでは閉じません。任意の daemon 化／二重 fork や未記録の別 session の孤児を
 完全に証明する機能ではありません。Mac と Linux の共通 ps／tmux adapter を使い、WSL の Windows native process は対象外です。
