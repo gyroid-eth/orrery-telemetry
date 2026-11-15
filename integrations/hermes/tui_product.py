@@ -117,7 +117,7 @@ def build(root, source, target, env, run):
     clean = dict(env, PATH=str(Path(node).parent) + os.pathsep + os.defpath,
                  npm_execpath=npm, npm_config_cache=str(root / 'cache/npm'),
                  npm_config_registry='https://registry.npmjs.org/',
-                 npm_config_fetch_retries='0', CI='1')
+                 npm_config_fetch_retries='0', npm_config_ignore_scripts='true', CI='1')
     for name in ('userconfig', 'globalconfig'):
         path = root / ('npm-' + name)
         path.write_text('')

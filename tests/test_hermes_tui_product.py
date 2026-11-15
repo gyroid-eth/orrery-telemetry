@@ -111,6 +111,7 @@ def test_locked_official_build_uses_only_pm_node_npm_and_private_configuration(t
     def run(argv, *, cwd, env):
         calls.append(argv)
         assert cwd == source
+        assert env['npm_config_ignore_scripts'] == 'true'
         assert env['npm_execpath'] == str(root / 'tools/npm-fixture/lib/node_modules/npm/bin/npm-cli.js')
         assert Path(env['npm_config_userconfig']).read_text() == ''
         assert Path(env['npm_config_globalconfig']).read_text() == ''

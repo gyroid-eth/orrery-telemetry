@@ -649,7 +649,7 @@ class AcquisitionTests(unittest.TestCase):
                 installer.validate(self.repo, 'hermes', {'harness': 'hermes', 'complete': True, 'details': details})
 
     def test_tui_failure_never_publishes_and_retains_previous_generation(self):
-        for stage in ('node-deps.mjs', 'tui.mjs', 'missing-product'):
+        for stage in ('node-deps.mjs', 'tui.mjs', 'missing-product', 'missing-esbuild'):
             with self.subTest(stage=stage):
                 install = self.base / ('failed-tui-' + stage)
                 previous = install / 'harnesses/hermes/previous-exa1'
@@ -660,7 +660,12 @@ class AcquisitionTests(unittest.TestCase):
                 installer.save(install / 'dashboard/hermes-provider.json', {'enabled': True})
                 before = current.read_bytes()
                 self.root = install / 'harnesses/hermes' / installer.generation_id(self.repo, 'hermes')
+                first_call = len(self.calls)
                 def fail(argv, *, cwd, env):
+                    if stage == 'missing-esbuild' and len(argv) > 1 and '/scripts/build/' in argv[1]:
+                        self.assertEqual(env['npm_config_ignore_scripts'], 'true')
+                        if argv[1].endswith('/tui.mjs'):
+                            raise subprocess.CalledProcessError(1, argv, stderr='missing locked @esbuild platform binary')
                     if len(argv) > 1 and argv[1].endswith('/' + stage):
                         raise subprocess.CalledProcessError(1, argv, stderr='locked TUI build failed')
                     if stage == 'missing-product' and len(argv) > 1 and argv[1].endswith('/tui.mjs'):
@@ -672,6 +677,11 @@ class AcquisitionTests(unittest.TestCase):
                 self.assertFalse(self.root.exists())
                 self.assertEqual(current.read_bytes(), before)
                 self.assertEqual(sentinel.read_text(), 'keep old runtime')
+                if stage == 'missing-esbuild':
+                    build_commands = [argv for argv, cwd, env in self.calls[first_call:]
+                        if len(argv) > 1 and '/scripts/build/' in argv[1]]
+                    self.assertTrue(build_commands)
+                    self.assertTrue(all(argv[1].endswith('/node-deps.mjs') for argv in build_commands))
 
     def test_keep_rejects_tui_tamper_without_reacquisition_or_current_change(self):
         install = self.base / 'tui-keep'
