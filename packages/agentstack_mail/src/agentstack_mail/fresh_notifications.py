@@ -133,6 +133,7 @@ def consumer_lock(client):
 
 
 def current_hook(client, payload):
+    from .fresh_end import read_run_end
     from .fresh_launch import identity, layout, native_id, pinned
     from .fresh_runtime import _directory, _read_private
     base = layout(client)
@@ -140,6 +141,7 @@ def current_hook(client, payload):
     run = base / 'runs' / launch_id
     _directory(run)
     intent = _read_private(run / 'intent.json');pinned(client, intent)
+    if read_run_end(client, run) is not None:raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
     if (run / 'restart-required.json').exists():raise B1Error('FRESH_BOT_RESTART_REQUIRED')
     receipt = _read_private(run / 'session.json');pinned(client, receipt)
     if (intent['provider'] != 'claude' or receipt.get('provider') != 'claude'
@@ -147,7 +149,7 @@ def current_hook(client, payload):
             or receipt.get('native_session_id') != payload.get('session_id')
             or intent.get('nonce') != os.environ.get('AGENTSTACK_FRESH_LAUNCH_NONCE')
             or _read_private(base / 'current.json') != {'launch_id': launch_id}
-            or (run / 'ended.json').exists()):raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
+            or read_run_end(client, run) is not None):raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
     return identity(client)
 
 

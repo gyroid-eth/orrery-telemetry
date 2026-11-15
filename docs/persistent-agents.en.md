@@ -99,10 +99,64 @@ The foreground pane/job must give this run its own process group; surviving chil
 Treat 409, credential-unavailable, and allowlist-empty as failures. Never overlap old/new pollers for one token.
 
 Known limits: the existing plugin's concurrent flush and partial long replies after a send failure are unchanged.
-If a Hermes child detaches into another session and outlives its launcher, a new bot cannot receive Telegram until that child exits (the per-profile lock prevents duplicate reception).
+A surviving child observed by the launcher prevents a confirmed end. The close snapshot also saves known descendants' PID/births, so a later group/session change cannot hide their survival. A child first created after that snapshot and then detached is not captured by this record alone.
+The launcher's `operation.lock` is released when that process exits. Separately, the Hermes Telegram plugin uses `telegram-poller.lock` in the same Hermes HOME: **only while a poller process actually holds that lock** does it reject another poller using that HOME ([acquire/release](../integrations/hermes/telegram/managed_guard.py), [release after poll-thread shutdown](../integrations/hermes/telegram/__init__.py)). An unobserved child or a process using another HOME is not guaranteed to hold it. Duplicate-reception protection does not prove that all unknown children have ended.
 Each run starts a new conversation; old conversations are not automatically restored. Synthetic transport/native
 tests are separate from real Telegram acceptance. Real provider/Telegram round trips, real WSL, and machine
 reboots on macOS/WSL remain unverified.
+
+## Close an unfinished fresh run
+
+Closure does not mean task success or cancellation of side effects. Distinguish:
+
+| State | Record and next action |
+| --- | --- |
+| Normal exit | `ended.json` with observed wait exit 0; one ordinary run |
+| Observed failure | `ended.json` with the actual nonzero exit after required child-exit observations; one ordinary run |
+| Confirmed closure | `resolved-ended.json`, provider exit unknown (JSON null); one separate ordinary run |
+| Unknown | Missing wait, remaining processes, unavailable observations or insufficient records; refuse the next run and report why |
+
+Hermes can close an observed exit 23 as failed when descendant observations also establish no remaining children.
+Unexpected nonzero Channels exits without descendant observation, lost launchers and stop timeouts remain unknown.
+An exit 0 without a valid session receipt is recorded as ended, but native startup acceptance still fails.
+
+Use the same prepared context, verified Python and profile. `RUN_UUID` is the current run UUID shown in the diagnostic.
+
+```sh
+AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_PYTHON="$orrery_python" \
+  "$orrery_install/bin/agentstack-runtime-client" resolve-ended \
+    --launch-id "$RUN_UUID" --confirm-ended
+# Only after ok:true above, launch normally as a separate operation.
+AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_PYTHON="$orrery_python" \
+  "$orrery_install/bin/agentstack-persistent" run --profile "$orrery_profile"
+```
+
+`--confirm-ended` expresses the caller's explicit judgment, without new authentication or force.
+The command rechecks the same I/A, credential generation, context, current UUID, launch mutex,
+recorded PID/births, pane/socket and job groups. Sufficient observations publish one new private record.
+Intent/session/current stay intact; an exit code is never invented. Repeated resolution returns the same end kind.
+Closed runs reject Mail delivery, hooks and session publication. Resolution does not kill processes, remove panes
+or restart automatically. Do not bypass it by deleting current/lock/receipts or handwriting termination records.
+
+`FRESH_RESOLVE_PROCESS_ALIVE` / `FRESH_RESOLVE_GROUP_ALIVE` mean remaining processes;
+`FRESH_RESOLVE_PROCESS_CHANGED` / `FRESH_RESOLVE_TARGET_CHANGED` mean changed PID/pane/socket facts;
+`FRESH_RESOLVE_OBSERVATION_UNAVAILABLE` means unavailable observations;
+`FRESH_RESOLVE_RECORD_INSUFFICIENT` means insufficient records. Stop and report these, launch-busy and identity/credential refusals.
+Any necessary ordinary stop is separate; resolve again only after confirming termination.
+
+New tmux runs add versioned PGID, leader birth and provider descendants' PID/births known from the saved snapshot's parent chain to the existing `tmux.json`. Known children remain subject to survival refusal after changing group. A snapshot exceeding the 64-member bound, containing ancestry cycles, or having unknown birth/ownership shape is refused instead of publishing sufficient evidence.
+Children first created after this snapshot and later unrecorded detachment are not tracked. No resident watcher or descendant history database is added.
+Old runs without that field, and foreground runs without tmux observations, HOLD for insufficient proof.
+Three absent PIDs or human confirmation alone cannot close a run. This does not fully track arbitrary daemonization,
+double forks or unrecorded orphans in separate sessions. The shared ps/tmux adapter covers Mac and Linux;
+Windows native processes in WSL are outside this boundary.
+
+An agent already authorized to recover needs no extra human commands or product approvals per incident:
+one ordinary run after observed termination, or resolve plus ordinary run for two commands after an unfinished run.
+Direct human operation also takes two commands; unknown cases are not guaranteed to recover in two steps.
+Telegram/Mail round trips, natural wake, provider login/hook trust and machine restart acceptance remain separate.
 
 ## Scope of the guarantee
 

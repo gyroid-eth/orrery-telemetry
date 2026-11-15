@@ -279,6 +279,20 @@ Codexのstdio MCPへは、launcherが固定したfresh context・mode・Python�
 
 resumeは **この新clientで記録済みのnative sessionだけ** が対象です。旧Mailのresume、別clientのsession、終了が確認できないrunへ自動でつなぎません。記録が揃っている場合の引数は `agentstack-resume claude "$orrery_workdir" --session-id <recorded-native-UUID>`（Codexは `codex`）で、上と同じfresh環境変数を渡します。終了不明なら起動を止め、本人が実行状況を確認するまでreceiptを手で書き換えません。
 
+### 未終了 run の解決と通常の再起動
+
+prepared context 共通の `agentstack-runtime-client resolve-ended --launch-id <current-run-UUID> --confirm-ended`
+を、上と同じ fresh 環境・Python で呼びます。[終了種別と拒否理由](persistent-agents.md#fresh-の未終了-run-を閉じる)を確認し、
+`ok:true` のときだけ同じ context の通常 launch／persistent run を別に実行します。旧 run は保持します。
+これは旧 global の `operator-json launch-resolve` とは別の契約です。legacy と Desktop の終了口は変えません。
+版付き group 記録のない古い run、観測不能、生きた process、別 identity／世代は HOLD／拒否で、手書きの復旧はしません。
+
+普通の fresh 子も共通 close の対象です。親が元 task の副作用を確認して明示的に再実行を選んだ場合だけ、
+準備済みの同じ子 context から `agentstack-runtime-client launch <provider> <元のcwd>` を呼びます。
+元の親子・spawn・task の照合を保持し、新しい run に元 task を渡します。`exec.json`／handoff は変更せず、
+元の child-spawn／child-run の再送は状態確認・一度きりの実行契約のままです。自動 retry ではありません。
+close だけでは native_ready や task 成功を主張しません。session receipt のない run は Reader／preview の会話や resume の根拠になりません。
+
 ### 自動の子: 既存preregister／spawn入口のfresh接続
 
 切替の完了には `/delegate`、New Agent、`/api/spawn` を含む自動子起動が必要です。**Claude/Codexの共通入口、managed dsh／Hermes／Local、App adapterと画面APIの接続を限定fixtureで確認しています。手動で別agentを作れることを、自動子起動の代わりの完了条件にしません。** 実provider・実環境での起動停止・在席受入が揃うまで切替は行いません。

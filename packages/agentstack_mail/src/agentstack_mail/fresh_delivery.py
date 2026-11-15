@@ -21,12 +21,36 @@ from .fresh_notifications import IMPORTANCE, consumer_lock
 from .fresh_runtime import _directory, _read_private, _write_private, read_config
 from .fresh_proxy import verified_owner
 from .storage_origin_contract import B1Error, digest
+from .fresh_end import capture_groups, read_run_end
 
 
 def helpers(root):
     return (runpy.run_path(str(root / 'bin/lib/runtime_tmux.py')),
             runpy.run_path(str(root / 'bin/lib/process_observation.py')),
             runpy.run_path(str(root / 'bin/lib/runtime_delivery.py')))
+
+
+def parse_panes(text, *, with_command=False):
+    """Lexical inventory only; callers own socket/target/process admission.
+
+    A closed PTY can have an empty pane_pid. Keep it None, never substitute
+    a historical PID; a live pane must always supply a positive PID.
+    """
+    if not isinstance(text, str) or len(text.encode()) > 262144:raise ValueError('invalid pane inventory')
+    rows, seen = [], set()
+    for line in text.splitlines():
+        fields = line.split('\t')
+        if (len(fields) != (5 if with_command else 4)
+                or not re.fullmatch(r'\$[0-9]+', fields[0]) or not re.fullmatch(r'%[0-9]+', fields[1])
+                or fields[3] not in ('0','1') or fields[1] in seen
+                or not (fields[2].isdigit() and int(fields[2]) > 0 or fields[2] == '' and fields[3] == '1')):
+            raise ValueError('invalid pane inventory')
+        seen.add(fields[1])
+        row = dict(session_id=fields[0], pane_id=fields[1],
+                   pid=int(fields[2]) if fields[2] else None, dead=fields[3] == '1')
+        if with_command:row['command'] = fields[4]
+        rows.append(row)
+    return rows
 
 
 def require_birth(api, pid):
@@ -65,7 +89,9 @@ def publish(run, captured, process, wrapper_root):
     provider = dict(pid=process.pid, process_start=require_birth(processes, process.pid))
     if not processes['belongs_to'](process.pid, captured['runner']['pid'], os.getuid()):
         raise B1Error('FRESH_TMUX_TARGET_CHANGED')
-    _write_private(run / 'tmux.json', dict(captured, provider=provider))
+    row = dict(captured, provider=provider)
+    row['process_observation'] = capture_groups(processes, row)
+    _write_private(run / 'tmux.json', row)
 
 
 def route(client):
@@ -74,7 +100,7 @@ def route(client):
     current = _read_private(base / 'current.json')
     if set(current) != {'launch_id'}:raise B1Error('FRESH_TMUX_TARGET_CHANGED')
     run = base / 'runs' / native_id(current['launch_id']);_directory(run)
-    if (run / 'ended.json').exists():raise B1Error('FRESH_TMUX_TARGET_ENDED')
+    if read_run_end(client, run) is not None:raise B1Error('FRESH_TMUX_TARGET_ENDED')
     if (run / 'restart-required.json').exists():raise B1Error('FRESH_BOT_RESTART_REQUIRED')
     intent, observed, row = (_read_private(run / name) for name in ('intent.json','session.json','tmux.json'))
     for value in (intent, observed, row):pinned(client, value)
@@ -218,7 +244,7 @@ async def watch_once(config_path, wrapper_root):
             if not (base/'current.json').exists():continue
             current = _read_private(base/'current.json')
             run = base/'runs'/native_id(current.get('launch_id'))
-            if (run/'ended.json').exists() or not (run/'tmux.json').exists():continue
+            if read_run_end(client, run) is not None or not (run/'tmux.json').exists():continue
             row, _ = route(client)
             groups.setdefault(client.context['mail_agent_id'],[]).append(client)
         except (B1Error,OSError,ValueError,TypeError,KeyError) as error:

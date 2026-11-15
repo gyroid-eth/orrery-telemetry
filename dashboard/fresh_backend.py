@@ -98,6 +98,7 @@ class Backend:
 
     async def roster(self):
         from agentstack_mail.fresh_targets import Targets, Selected
+        from agentstack_mail.fresh_end import read_run_end
         context, proof = self.client._load()
         runtime = await FreshRuntime.open(Path(context['root']) / 'config.json')
         try:
@@ -126,22 +127,22 @@ class Backend:
                     if str(UUID(launch_id))!=launch_id:raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
                     run=launch/'runs'/launch_id
                     intent=_read_private(run/'intent.json');pinned(client,intent)
-                    ended=(run/'ended.json').exists()
+                    outcome=read_run_end(client,run)
+                    ended=outcome is not None
                     row.update(running=False if ended else None,state='retired' if row['retired'] else 'finished' if ended else 'unknown')
                     if (run/'session.json').exists():
                         receipt=_read_private(run/'session.json');pinned(client,receipt)
                         if receipt.get('launch_id')!=launch_id or receipt.get('provider')!=intent['provider']:
                             raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
-                        row.update(native_session_id=receipt['native_session_id'],native_ready=True)
+                        row.update(native_session_id=receipt['native_session_id'],
+                            native_ready=outcome is None or outcome.kind=='normal')
                         if len(selections)<128 and (run/'tmux.json').exists():
                             route=_read_private(run/'tmux.json');pinned(client,route)
                             Targets.validate_display_route(route)
-                            outcome=_read_private(run/'ended.json') if ended else None
-                            if outcome is not None and (set(outcome)!={'launch_id','exit_code'} or outcome['launch_id']!=launch_id
-                                    or type(outcome['exit_code']) is not int):raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
                             if route.get('launch_id')!=launch_id:raise B1Error('FRESH_TMUX_TARGET_CHANGED')
                             from agentstack_mail.storage_origin_contract import digest
-                            signature=digest(dict(context=client.context_digest,intent=intent,receipt=receipt,route=route,ended=outcome))
+                            signature=digest(dict(context=client.context_digest,intent=intent,receipt=receipt,route=route,
+                                ended=outcome.record if outcome is not None else None))
                             selections.append(Selected(client,row['name'],run,intent,receipt,outcome,route,signature))
                     # A receipt proves native startup, not a currently live OS process.
                 except (B1Error,OSError,ValueError,KeyError):
@@ -315,7 +316,7 @@ class Backend:
         result={k:v for k,v in result.items() if k in {'accepted','execution','native_ready','mail_instance_id','mail_agent_id'}}
         # This is the existing caller's launch verdict, not process liveness.
         # Ending before a native receipt must never turn an attempt into success.
-        state='ready' if result['native_ready'] else 'failed' if result['execution']=='ended' else 'launching'
+        state='ready' if result['native_ready'] else 'failed' if result['execution'] in {'ended','resolved-ended'} else 'launching'
         return dict(ok=True,name=row['name'],state=state,age=max(0,time.time()-saved['created']),
             error='FRESH_NATIVE_STARTUP_UNCONFIRMED' if state=='failed' else None,
             detail=result['execution'],result=result if state!='launching' else None,
