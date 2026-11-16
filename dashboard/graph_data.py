@@ -101,12 +101,16 @@ ACT_WINDOW_SEC = 6 * 3600
 
 _LIVE_PARENT_CACHE: dict[str, object] = {"ts": 0.0, "value": None}
 _LIVE_PARENT_TTL = 10.0
-# PARENT_AGENT is fixed for a session's life, so it is read once per session
-# generation (name, id, creation time) rather than on every refresh. A session
-# that answered "no parent" is asked again after this long, in case the
-# variable was set just after the session appeared.
+# PARENT_AGENT is read once per session generation (name, id, creation time, server pid)
+# rather than on every refresh, and asked again after this long, whether it was
+# found or not: a variable set just after the session appeared, or set again
+# later, is picked up. Any POST drops the memo too (forget_parents).
 _PARENT_MISS_TTL = 60.0
-_PARENT_BY_SESSION: dict[str, tuple[tuple[str, str], str, float]] = {}
+_PARENT_BY_SESSION: dict[str, tuple[tuple[str, ...], str, float]] = {}
+
+
+def forget_parents() -> None:
+    _PARENT_BY_SESSION.clear()
 
 
 def _live_parents() -> dict[str, str]:
@@ -136,7 +140,7 @@ def _live_parents() -> dict[str, str]:
     try:
         listing = subprocess.run(
             [tmux, "list-sessions", "-F",
-             "#{session_name}\t#{session_id}\t#{session_created}"],
+             "#{session_name}\t#{session_id}\t#{session_created}\t#{pid}"],
             capture_output=True, text=True, timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
@@ -151,15 +155,17 @@ def _live_parents() -> dict[str, str]:
     parents: dict[str, str] = {}
     seen: set[str] = set()
     for line in listing.stdout.split("\n"):
-        fields = line.rsplit("\t", 2)
+        # name, id, creation time, server pid. The pid tells apart a session of
+        # a restarted tmux server that got the same id in the same second.
+        fields = line.rsplit("\t", 3)
         session = fields[0].strip()
-        generation = (fields[1], fields[2]) if len(fields) == 3 else None
+        generation = tuple(fields[1:]) if len(fields) == 4 else None
         if not session:
             continue
         seen.add(session)
         known = _PARENT_BY_SESSION.get(session)
         if (generation is not None and known is not None and known[0] == generation
-                and (known[1] or now - known[2] < _PARENT_MISS_TTL)):
+                and now - known[2] < _PARENT_MISS_TTL):
             if known[1]:
                 parents[session] = known[1]
             continue
@@ -181,7 +187,7 @@ def _live_parents() -> dict[str, str]:
         if generation is not None and (shown.returncode == 0 or shown.returncode == 1):
             _PARENT_BY_SESSION[session] = (generation, parent, now)
     for gone in set(_PARENT_BY_SESSION) - seen:
-        del _PARENT_BY_SESSION[gone]
+        _PARENT_BY_SESSION.pop(gone, None)  # a POST may have cleared it meanwhile
     _LIVE_PARENT_CACHE.update(ts=now, value=dict(parents))
     return parents
 

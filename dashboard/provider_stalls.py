@@ -301,7 +301,9 @@ class Monitor:
 
     def run(self, sample, stop, *, interval=10):
         # Each sample captures every running Codex pane; ten seconds halves that.
-        # A stop is reported at most five seconds later than with the old five.
+        # A stop is confirmed by two separate captures, so it is now reported
+        # 10 to 20 seconds after it happens instead of 5 to 10: up to about ten
+        # seconds later.
         while not stop.is_set():
             try:
                 self.tick(sample())

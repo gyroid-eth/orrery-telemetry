@@ -1368,6 +1368,12 @@ def invalidate_display_reuse() -> None:
     """Forget every reused display answer; call after any state change."""
     _AGENTS_REUSE.invalidate()
     _GRAPH_REUSE.invalidate()
+    with _parent_env_lock:
+        _parent_env_memo.clear()
+    for module_name in ("graph_data", "dashboard.graph_data"):
+        module = sys.modules.get(module_name)
+        if module is not None and hasattr(module, "forget_parents"):
+            module.forget_parents()
     _STOPPED_BINDING_REUSE.invalidate()
 
 
@@ -6841,23 +6847,24 @@ def _provider_stall_view(name: str, session: dict):
 
 
 # PARENT_AGENT is set when a session is created and never changes during it, so
-# the sampler asks tmux once per (session, generation). An answer without a
-# value (not a child, or a failed query) is asked again after a short while.
-_PARENT_ENV_MISS_SECONDS = 30.0
-_parent_env_memo: dict[str, tuple[str, str, float]] = {}
+# a parent that was found is kept for that session generation. An empty or
+# failed answer is never kept: the stop monitor settles "no parent" on its own
+# second capture and does not retry, so a parent that appears late must still be
+# seen on the next sample.
+_parent_env_memo: dict[str, tuple[str, str]] = {}
 _parent_env_lock = threading.Lock()
 
 
 def _stall_parent(name: str, generation: str) -> str:
-    now = time.monotonic()
     with _parent_env_lock:
         hit = _parent_env_memo.get(name)
-        if hit and hit[0] == generation and (hit[1] or now - hit[2] < _PARENT_ENV_MISS_SECONDS):
+        if hit and hit[0] == generation:
             return hit[1]
     env = _tmux(["show-environment", "-t", "=" + name, "PARENT_AGENT"]).strip()
     parent = env.removeprefix("PARENT_AGENT=") if env.startswith("PARENT_AGENT=") else ""
-    with _parent_env_lock:
-        _parent_env_memo[name] = (generation, parent, now)
+    if parent:
+        with _parent_env_lock:
+            _parent_env_memo[name] = (generation, parent)
     return parent
 
 
