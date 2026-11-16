@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from time import perf_counter
 
@@ -204,6 +205,47 @@ _CLAUDE_USAGE_INPUT = "❯\n[Opus 5.5] | 5h 85% left | 7d 88% left\n"
 _CLAUDE_ASK = "Do you want to run this command?\n❯ 1. Yes\n  2. No\n"
 _CODEX_ASK = "Would you like to run this command?\n› Yes\n  No\nPress enter to confirm or esc to cancel\n"
 _QUESTION = "Choose a result\n❯ 1. Option\nEnter to select · Esc to cancel\n"
+
+
+def test_claude_auto_mode_without_statusline_keeps_current_work():
+    # Claude Code 2.1.291 screen reported in #465; the tip text is synthetic.
+    text = (Path(__file__).parent / 'fixtures/claude-auto-mode-work.txt').read_text()
+    assert server._runtime_activity(text) == (
+        'work', '· Effecting… (43s · ↓ 3.4k tokens)')
+    parsed = server._parse_runtime(text)
+    assert parsed['work_secs'] == 43
+    assert parsed['ctx_used'] is None and parsed['pane_model'] is None
+
+
+@pytest.mark.parametrize('footer', [
+    '⏵⏵ auto mode on',
+    '  ⏵⏵ auto mode on (shift+tab to cycle)',
+    '  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← 1 agent',
+    '  ⏵⏵ accept edits on (shift+tab to cycle)',
+    '  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt',
+])
+@pytest.mark.parametrize('current,state', [
+    (_OLD_WORK, 'work'),
+    ('', 'wait'),
+    (_OLD_WORK + '\n⏺ Finished the requested work.\n', 'wait'),
+])
+def test_claude_mode_footer_without_statusline_needs_current_work(footer, current, state):
+    composer = '────────────────────────────────────────\n❯\n────────────────────────────────────────\n'
+    assert server._runtime_activity(current + composer + footer)[0] == state
+
+
+@pytest.mark.parametrize('footer', [
+    'The footer reads ⏵⏵ auto mode on (shift+tab to cycle).',
+    '> ⏵⏵ auto mode on (shift+tab to cycle)',
+    '⏵⏵ auto mode on is a setting, not a work indicator.',
+    '⏵⏵ accept edits on means edits need no approval.',
+    '⏵⏵ ordinary conversation',
+    '⏵⏵ unknown mode on (shift+tab to cycle)',
+    '⏵⏵ auto mode only',
+    '⏵⏵ auto mode on (shift+tab to cycle)\nAn ordinary reply follows.',
+])
+def test_claude_mode_mentions_do_not_identify_a_composer(footer):
+    assert server._runtime_activity(_OLD_WORK + '❯\n' + footer) == ('wait', '')
 
 
 def test_current_claude_usage_footer_keeps_spinner_without_context():
