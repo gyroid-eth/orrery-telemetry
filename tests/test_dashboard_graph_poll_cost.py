@@ -81,6 +81,7 @@ def roster(monkeypatch, tmp_path):
         server._HTTP_SINGLE_FLIGHT.clear()
     # These tests are about single flight: nothing may be reused over time.
     monkeypatch.setattr(server, "_AGENTS_REUSE", server._TimedReuse(0.0))
+    monkeypatch.setattr(server, "_GRAPH_REUSE", server._TimedReuse(0.0))
     opened = []
     original = server._db
 
