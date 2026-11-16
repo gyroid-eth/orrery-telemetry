@@ -53,6 +53,7 @@ def roster(monkeypatch):
     fake_build_agents.delay = 0.0
     monkeypatch.setattr(server, "build_agents", fake_build_agents)
     server._HTTP_SINGLE_FLIGHT.clear()
+    server.invalidate_display_reuse()
     return fake_build_agents, calls
 
 
