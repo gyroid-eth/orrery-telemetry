@@ -6980,6 +6980,14 @@ def _runtime_activity(text: str) -> tuple[str, str]:
             rf"5h\s+{percent}%\s+left\s*\|\s*7d\s+{percent}%\s+left\s*",
             line, re.IGNORECASE) is not None
 
+    def mode_footer(line):
+        # Claude's built-in footer also identifies a composer when no custom
+        # statusLine is configured. Only recognize the known mode labels.
+        return re.fullmatch(
+            r"\s*⏵⏵\s+(?:auto mode|accept edits) on"
+            r"(?:\s+\(shift\+tab to cycle\))?(?:\s+·\s+.*)?\s*",
+            line) is not None
+
     def chrome(line):
         row = line.strip()
         return (not row or rule(row) or bool(_STATUSLINE_HINT_RE.search(row)) or usage_footer(row)
@@ -6993,7 +7001,8 @@ def _runtime_activity(text: str) -> tuple[str, str]:
         if prompt is None or re.match(r"\d+\.\s", prompt.group(1) or ""):
             continue
         suffix = lines[index + 1:]
-        if (any(_STATUSLINE_HINT_RE.search(row) or usage_footer(row) or row.strip().startswith("? for shortcuts")
+        if (any(_STATUSLINE_HINT_RE.search(row) or usage_footer(row) or mode_footer(row)
+                or row.strip().startswith("? for shortcuts")
                 for row in suffix) and all(chrome(row) for row in suffix)):
             composer = index
             break
