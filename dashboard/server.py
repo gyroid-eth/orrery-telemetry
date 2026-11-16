@@ -1307,6 +1307,83 @@ class _AgentsAnswer:
         }
 
 
+# How long one /api/agents computation is reused, from the moment it started.
+# A display poll never sees an answer older than this, and any state-changing
+# POST drops it at once, so an operation's result shows on the next read.
+AGENTS_REUSE_SECONDS = 4.0
+# Conversation bindings of rows that are not running change only through an
+# operation (resume, spawn) or a provider writing a record; a poll can wait.
+# Known limit: a resume followed by an exit that happens outside this server's
+# POST routes does not drop the memo, so for at most this many seconds plus
+# AGENTS_REUSE_SECONDS a stopped row can still show its previous binding.
+_STOPPED_BINDING_REUSE_SECONDS = 30.0
+
+
+class _TimedReuse:
+    """Short-lived answers shared across requests, dropped by `invalidate()`.
+
+    An entry is stored only if no invalidation happened since its computation
+    started, so a computation that overlapped a state change never outlives it.
+    """
+
+    def __init__(self, seconds: float, clock=time.monotonic) -> None:
+        self._seconds, self._clock = seconds, clock
+        self._lock = threading.Lock()
+        self._generation = 0
+        self._entries: dict = {}
+
+    def get(self, key):
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            started, value = entry
+            if not 0 <= self._clock() - started < self._seconds:
+                del self._entries[key]
+                return None
+            return value
+
+    def begin(self) -> tuple[float, int]:
+        with self._lock:
+            return self._clock(), self._generation
+
+    def put(self, key, value, mark: tuple[float, int]) -> None:
+        with self._lock:
+            if mark[1] == self._generation:
+                self._entries[key] = (mark[0], value)
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._generation += 1
+            self._entries.clear()
+
+
+_AGENTS_REUSE = _TimedReuse(AGENTS_REUSE_SECONDS)
+_STOPPED_BINDING_REUSE = _TimedReuse(_STOPPED_BINDING_REUSE_SECONDS)
+
+
+def invalidate_display_reuse() -> None:
+    """Forget every reused display answer; call after any state change."""
+    _AGENTS_REUSE.invalidate()
+    _STOPPED_BINDING_REUSE.invalidate()
+
+
+def _agents_answer(history_days: float | None, single_flight) -> "_AgentsAnswer | None":
+    """The reusable /api/agents answer, or one computed through single flight."""
+    key = ("agents", history_days)
+    answer = _AGENTS_REUSE.get(key)
+    if answer is not None:
+        return answer
+
+    def compute():
+        mark = _AGENTS_REUSE.begin()
+        fresh = _AgentsAnswer(history_days)
+        _AGENTS_REUSE.put(key, fresh, mark)
+        return fresh
+
+    return single_flight(key, compute)
+
+
 def _with_registration_batch(function):
     """Run one display computation over a single registration read."""
 
@@ -1394,6 +1471,34 @@ def _retired_names(project_key: str) -> set[str]:
             con.close()
 
 
+_INSTRUCTION_MEMO: dict[tuple, dict] = {}
+
+
+def _mail_db_signature() -> tuple | None:
+    """Identity of the Mail database's committed content, or None to not reuse.
+
+    The last-instruction query is the heaviest read of a roster build and is a
+    pure function of that content. Reuse only when the database and its WAL are
+    unchanged and have been quiet for two seconds, so a fresh write (whose
+    mtime may not have moved enough to tell) always recomputes.
+    """
+    parts = []
+    newest = 0.0
+    for path in (DB_PATH, DB_PATH + "-wal"):
+        try:
+            info = os.stat(path)
+        except FileNotFoundError:
+            parts.append(None)
+            continue
+        except OSError:
+            return None
+        parts.append((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns))
+        newest = max(newest, info.st_mtime)
+    if parts[0] is None or time.time() - newest < 2.0:
+        return None
+    return (DB_PATH, *parts)
+
+
 def agentmail_state() -> tuple[dict, dict]:
     """(agents_by_name, last_instruction_by_name)。DB が無くても空で返す。"""
     agents: dict[str, dict] = {}
@@ -1408,6 +1513,10 @@ def agentmail_state() -> tuple[dict, dict]:
 
         agents.update(_mail_registrations(con))
 
+        signature = _mail_db_signature()
+        reused = _INSTRUCTION_MEMO.get(signature) if signature else None
+        if reused is not None:
+            return agents, {name: dict(value) for name, value in reused.items()}
         cur.execute(
             """
             SELECT a.name AS aname, m.subject, m.created_ts, m.importance,
@@ -1431,6 +1540,9 @@ def agentmail_state() -> tuple[dict, dict]:
                 "importance": r["importance"],
                 "ts": _iso_to_epoch(r["created_ts"]),
             }
+        if signature and _mail_db_signature() == signature:
+            _INSTRUCTION_MEMO.clear()
+            _INSTRUCTION_MEMO[signature] = {name: dict(value) for name, value in instr.items()}
     except Exception:
         pass
     finally:
@@ -1439,6 +1551,7 @@ def agentmail_state() -> tuple[dict, dict]:
     return agents, instr
 
 
+@functools.lru_cache(maxsize=16384)
 def _iso_to_epoch(s: str | None) -> int:
     if not s:
         return 0
@@ -1810,12 +1923,23 @@ def lookup_agent(name: str, history_days: float | None = None) -> dict | None:
     return row
 
 
-def _history_binding_fields(row: dict, *, now: float, claude_index=None) -> dict:
+def _history_binding_fields(row: dict, *, now: float, claude_index=None,
+                            reuse_stopped: bool = False) -> dict:
     """The conversation-record binding fields of one roster row.
 
     The single place build_agents() and history_binding_row() take them from,
     so the light route can never judge a binding differently from the roster.
+    `reuse_stopped` lets the roster poll reuse the verdict of a row that is not
+    running for a short while; the light route never does.
     """
+    if reuse_stopped and row.get("running") is False:
+        key = (row.get("name"), row.get("program"), row.get("category"), row.get("created"))
+        cached = _STOPPED_BINDING_REUSE.get(key)
+        if cached is None:
+            mark = _STOPPED_BINDING_REUSE.begin()
+            cached = _history_binding_fields(row, now=now, claude_index=claude_index)
+            _STOPPED_BINDING_REUSE.put(key, cached, mark)
+        return dict(cached)
     program = row.get("program")
     if program in {"codex", "codex-cli"}:
         return _codex_history_binding(row["name"], now=now)
@@ -2029,7 +2153,8 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
         )
         if row.get("program") in {"claude", "claude-code"} and claude_history_index is None:
             claude_history_index = claude_history.ReceiptIndex(SESSION_INDEX_DIR)
-        row.update(_history_binding_fields(row, now=observed_now, claude_index=claude_history_index))
+        row.update(_history_binding_fields(row, now=observed_now, claude_index=claude_history_index,
+                                          reuse_stopped=True))
         row["resume_capability"] = _resume_capability_for_row(
             row["name"],
             row.get("program") or "",
@@ -9806,6 +9931,10 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _send(self, code: int, body: bytes, ctype: str):
+        if self.command == "POST":
+            # Before the client can see the answer: its next GET must not be
+            # served a roster computed before the operation.
+            invalidate_display_reuse()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -9943,8 +10072,7 @@ class Handler(BaseHTTPRequestHandler):
             scope = (q.get("scope") or [""])[0]
             # Every scope shares the one roster computation for this window;
             # only the answer written from it differs.
-            answer = self._single_flight(("agents", history_days),
-                                         lambda: _AgentsAnswer(history_days))
+            answer = _agents_answer(history_days, self._single_flight)
             if answer is not None:
                 self._send(200, answer.body(scope), "application/json; charset=utf-8")
         elif _HISTORY_BINDING_PATH.fullmatch(path):
@@ -10151,6 +10279,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
+        try:
+            self._do_post()
+        finally:
+            # Again after the operation, for replies not written by _send.
+            invalidate_display_reuse()
+
+    def _do_post(self):
         path = urlparse(self.path).path
         if GLOBAL_MODE:
             try:
