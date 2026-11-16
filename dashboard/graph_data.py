@@ -101,6 +101,12 @@ ACT_WINDOW_SEC = 6 * 3600
 
 _LIVE_PARENT_CACHE: dict[str, object] = {"ts": 0.0, "value": None}
 _LIVE_PARENT_TTL = 10.0
+# PARENT_AGENT is fixed for a session's life, so it is read once per session
+# generation (name, id, creation time) rather than on every refresh. A session
+# that answered "no parent" is asked again after this long, in case the
+# variable was set just after the session appeared.
+_PARENT_MISS_TTL = 60.0
+_PARENT_BY_SESSION: dict[str, tuple[tuple[str, str], str, float]] = {}
 
 
 def _live_parents() -> dict[str, str]:
@@ -129,7 +135,8 @@ def _live_parents() -> dict[str, str]:
         return {}
     try:
         listing = subprocess.run(
-            [tmux, "list-sessions", "-F", "#{session_name}"],
+            [tmux, "list-sessions", "-F",
+             "#{session_name}\t#{session_id}\t#{session_created}"],
             capture_output=True, text=True, timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
@@ -142,9 +149,19 @@ def _live_parents() -> dict[str, str]:
         # below, which this path never reaches.
         return {}
     parents: dict[str, str] = {}
-    for session in listing.stdout.split("\n"):
-        session = session.strip()
+    seen: set[str] = set()
+    for line in listing.stdout.split("\n"):
+        fields = line.rsplit("\t", 2)
+        session = fields[0].strip()
+        generation = (fields[1], fields[2]) if len(fields) == 3 else None
         if not session:
+            continue
+        seen.add(session)
+        known = _PARENT_BY_SESSION.get(session)
+        if (generation is not None and known is not None and known[0] == generation
+                and (known[1] or now - known[2] < _PARENT_MISS_TTL)):
+            if known[1]:
+                parents[session] = known[1]
             continue
         try:
             shown = subprocess.run(
@@ -153,15 +170,18 @@ def _live_parents() -> dict[str, str]:
             )
         except (OSError, subprocess.SubprocessError):
             continue
-        if shown.returncode != 0:
-            continue                   # unset for this session
-        value = shown.stdout.strip()
-        # "-PARENT_AGENT" marks the variable as removed; only NAME=VALUE counts.
-        if not value.startswith("PARENT_AGENT="):
-            continue
-        parent = value.split("=", 1)[1].strip()
+        parent = ""
+        if shown.returncode == 0:      # otherwise unset for this session
+            value = shown.stdout.strip()
+            # "-PARENT_AGENT" marks the variable as removed; only NAME=VALUE counts.
+            if value.startswith("PARENT_AGENT="):
+                parent = value.split("=", 1)[1].strip()
         if parent:
             parents[session] = parent
+        if generation is not None and (shown.returncode == 0 or shown.returncode == 1):
+            _PARENT_BY_SESSION[session] = (generation, parent, now)
+    for gone in set(_PARENT_BY_SESSION) - seen:
+        del _PARENT_BY_SESSION[gone]
     _LIVE_PARENT_CACHE.update(ts=now, value=dict(parents))
     return parents
 

@@ -1359,12 +1359,15 @@ class _TimedReuse:
 
 
 _AGENTS_REUSE = _TimedReuse(AGENTS_REUSE_SECONDS)
+# /api/graph is reused the same way, for the same time.
+_GRAPH_REUSE = _TimedReuse(AGENTS_REUSE_SECONDS)
 _STOPPED_BINDING_REUSE = _TimedReuse(_STOPPED_BINDING_REUSE_SECONDS)
 
 
 def invalidate_display_reuse() -> None:
     """Forget every reused display answer; call after any state change."""
     _AGENTS_REUSE.invalidate()
+    _GRAPH_REUSE.invalidate()
     _STOPPED_BINDING_REUSE.invalidate()
 
 
@@ -6837,6 +6840,27 @@ def _provider_stall_view(name: str, session: dict):
     return _provider_monitor.view(name, _provider_generation(session))
 
 
+# PARENT_AGENT is set when a session is created and never changes during it, so
+# the sampler asks tmux once per (session, generation). An answer without a
+# value (not a child, or a failed query) is asked again after a short while.
+_PARENT_ENV_MISS_SECONDS = 30.0
+_parent_env_memo: dict[str, tuple[str, str, float]] = {}
+_parent_env_lock = threading.Lock()
+
+
+def _stall_parent(name: str, generation: str) -> str:
+    now = time.monotonic()
+    with _parent_env_lock:
+        hit = _parent_env_memo.get(name)
+        if hit and hit[0] == generation and (hit[1] or now - hit[2] < _PARENT_ENV_MISS_SECONDS):
+            return hit[1]
+    env = _tmux(["show-environment", "-t", "=" + name, "PARENT_AGENT"]).strip()
+    parent = env.removeprefix("PARENT_AGENT=") if env.startswith("PARENT_AGENT=") else ""
+    with _parent_env_lock:
+        _parent_env_memo[name] = (generation, parent, now)
+    return parent
+
+
 @_with_registration_batch
 def _provider_stall_samples():
     samples = []
@@ -6859,13 +6883,15 @@ def _provider_stall_samples():
             generation = _runtime_generation(session.get("created"), session.get("session_id"))
             if not captured or captured[0] != generation:
                 continue
-            env = _tmux(["show-environment", "-t", "=" + name, "PARENT_AGENT"]).strip()
-            parent = env.removeprefix("PARENT_AGENT=") if env.startswith("PARENT_AGENT=") else ""
+            parent = _stall_parent(name, _provider_generation(session))
             samples.append(dict(name=name, agent_id=registration["agent_id"],
                 project_key=registration["project_key"], generation=_provider_generation(session),
                 parent=parent, capture_id=captured[1], evidence=captured[2]))
         except Exception:
             logging.warning("Provider-stop sample unavailable for %s", name)
+    with _parent_env_lock:
+        for gone in set(_parent_env_memo) - set(sessions):
+            del _parent_env_memo[gone]
     return samples
 
 
@@ -10120,11 +10146,16 @@ class Handler(BaseHTTPRequestHandler):
             # lineage.  The ORRERY cockpit is one — it was pulling the full
             # node+edge payload every 6s just to read `spawn` out of it.
             spawn_only = (q.get("spawn_only") or ["0"])[0] in ("1", "true")
-            body = self._single_flight(
-                ("graph", days, show_all, spawn_only),
-                lambda: json.dumps(_graph_response(days, show_all, spawn_only),
-                                   ensure_ascii=False).encode(),
-            )
+            key = ("graph", days, show_all, spawn_only)
+
+            def compute_graph():
+                mark = _GRAPH_REUSE.begin()
+                made = json.dumps(_graph_response(days, show_all, spawn_only),
+                                  ensure_ascii=False).encode()
+                _GRAPH_REUSE.put(key, made, mark)
+                return made
+
+            body = _GRAPH_REUSE.get(key) or self._single_flight(key, compute_graph)
             if body is not None:
                 self._send(
                     200,

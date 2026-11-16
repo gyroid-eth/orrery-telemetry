@@ -299,7 +299,9 @@ class Monitor:
         row = self._views.get((name, generation))
         return dict(row) if row else None
 
-    def run(self, sample, stop, *, interval=5):
+    def run(self, sample, stop, *, interval=10):
+        # Each sample captures every running Codex pane; ten seconds halves that.
+        # A stop is reported at most five seconds later than with the old five.
         while not stop.is_set():
             try:
                 self.tick(sample())
