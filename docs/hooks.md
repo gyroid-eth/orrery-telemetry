@@ -125,7 +125,7 @@ service が応答しているなら登録は可能なので、既定は**要求�
 
 | 実行ファイル | 呼び出し元 / 起動タイミング | 主な動作 |
 | --- | --- | --- |
-| [`record-session-index.py`](../hooks/record-session-index.py) | `mark-agent-registered.sh` が PostToolUse payload を渡して**同期**起動 | ORRERY Mail ID と Claude `session_id`、transcript、cwd、`project_key`、`registered_by` の exact mapping を atomic write。他人を登録した呼び出しは記録しない |
+| [`record-session-index.py`](../hooks/record-session-index.py) | PostToolUse・SessionStart・Claude 再登録成功時に**同期**起動 | ORRERY Mail ID と Claude `session_id`、transcript、cwd、`project_key`、`registered_by` の exact mapping を atomic write。他人を登録した呼び出しは記録しない |
 | [`prepare-codex-session-binding.py`](../hooks/prepare-codex-session-binding.py) | Codex CLI launcher が ORRERY Mail 登録後、CLI 起動直前に実行 | server 応答由来の project・数値 agent ID・name・program に fresh `launch_id` を加える。child は非秘密の launch origin / MCP profile も加え、今回の receipt 期待を atomic write |
 | [`record-codex-session-index.py`](../integrations/codex_app/plugin/scripts/record-codex-session-index.py) | 公式 Codex `SessionStart` payload を plugin runner が同期入力 | payload の `session_id` と rollout header ID を照合し、同じ `launch_id` の current launch だけを Codex session index として atomic write。検証済み `child` / `standalone` provenance も receipt へ引き継ぐ |
 | [`resolve-agent-name.sh`](../hooks/resolve-agent-name.sh) | identity が必要な reminder、reservation、cleanup helper が source | env → exact tmux session → session index（caller が `AGENTSTACK_SESSION_ID` を渡した場合）の順で identity を解決 |
@@ -137,6 +137,10 @@ service が応答しているなら登録は可能なので、既定は**要求�
 ### `record-session-index.py`
 
 PostToolUse payload から ORRERY Mail の数値 ID、canonical name、Claude `session_id`、transcript path、cwd を取り出し、`$AGENTSTACK_RUNTIME_DIR/session_index/<agent_id>.json` へ一時 file + `os.replace` で書きます。record は `schema_version: 2` と `binding_kind: "self"` を持ちます。**呼び出し元が別の agent を登録した場合（親による child 登録）は record を書きません** — この index は dashboard の resume と guard の identity 解決の両方に読まれるので、読む側で除外するのではなく、書かない方が誤用の余地が残りません。dashboard はこの exact mapping を session resume に優先し、古い session だけ heuristic へ fallback します。入力不備や I/O failure は registration を妨げない quiet no-op です。
+
+SessionStart の shell 登録成功時も、同じ writer にその event の payload を渡します。Mail 不在や credential 不足で登録できなかった場合、名前が解決済みで `CLAUDE_ENV_FILE` があれば、session ID・transcript・cwd・名前・project を `AGENTSTACK_CLAUDE_SESSION_CONTEXT` として後続の Bash に引き継ぎます。値は shell quote し、credential は含めません。通常の登録成功時は既に receipt があるため、この回復用 context を空にするだけで追加の Python は起動しません。Mail の追加呼び出しや待機・retry はありません。
+
+同じ session の Bash で `agentstack-reregister <name> claude-code` が成功したときだけ、この context と現在の identity・project が一致することを再確認し、現在の SessionStart payload から receipt を書きます。他人の再登録、identity conflict、別 project、失敗した登録では receipt を更新しません。remote 登録は成功しても receipt を書けなければ、exit 0 と登録成功の stdout を維持しつつ stderr に `stage=session-receipt reason=binding-not-written` を出します。未 enroll の identity は引き続き operator による credential 復旧が必要です。`CLAUDE_ENV_FILE` がない起動や更新前に開始した session は自動補修できず、古い receipt や transcript 検索からの推測も行いません。dashboard の self receipt 検証・古い receipt の拒否は変更しません。
 
 ### Codex CLI session binding helper
 

@@ -162,6 +162,27 @@ if [ -f "$HOOKS_DIR/resolve-agent-name.sh" ]; then
     source "$HOOKS_DIR/resolve-agent-name.sh"
 fi
 
+# Keep the exact SessionStart fields available to a later Bash recovery even
+# when Mail is not up yet. This is session-local provider state, not a receipt
+# or proof of registration. Do not discover a transcript from an old receipt.
+persist_recovery_context() {
+    printf '%s' "${SESSION_START_INPUT:-}" | python3 -c '
+import json, shlex, sys
+context = ""
+try:
+    start = json.load(sys.stdin)
+    fields = {key: start.get(key) for key in ("session_id", "transcript_path", "cwd")}
+    if all(isinstance(value, str) and value for value in fields.values()) and sys.argv[2] and sys.argv[3]:
+        fields.update(agent_name=sys.argv[2], project_key=sys.argv[3])
+        context = json.dumps(fields)
+except (ValueError, AttributeError):
+    pass
+# An empty value also clears a context inherited from a previous session.
+with open(sys.argv[1], "a", encoding="utf-8") as handle:
+    handle.write("export AGENTSTACK_CLAUDE_SESSION_CONTEXT=" + shlex.quote(context) + "\n")
+' "$CLAUDE_ENV_FILE" "$RESOLVED_AGENT" "$PROJECT_KEY" 2>/dev/null || true
+}
+
 find_register_lib() {
     local candidate
     if [ -n "${AGENTSTACK_REGISTER_LIB:-}" ] && [ -f "$AGENTSTACK_REGISTER_LIB" ]; then
@@ -428,6 +449,16 @@ else
         echo "あなたは既に「${RESOLVED_AGENT}」です（source: ${RESOLVED_AGENT_SRC}）。復旧後も新しい名前を生成せず、提供された接続 schema に対応する同じ identity の経路だけを使ってください。"
     fi
     echo "この間、ファイル予約は取得も確認もできません。他のエージェントと同じファイルを編集しても衝突は検出されません。"
+fi
+
+# Healthy starts already wrote their receipt. Avoid an extra Python process on
+# that common path; clear inherited recovery data with a shell builtin only.
+if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+    if [ -n "$SHELL_REGISTERED_AGENT" ] || [ -z "$RESOLVED_AGENT" ]; then
+        printf "export AGENTSTACK_CLAUDE_SESSION_CONTEXT=''\n" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
+    else
+        persist_recovery_context
+    fi
 fi
 
 # A child started with --claude-chrome gets its browser policy again at every

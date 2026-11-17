@@ -158,6 +158,16 @@ CHILD_REGISTRATION_TOKEN="$registration_token"
 export CHILD_REGISTRATION_TOKEN
 
 if ags_register_session "$project_key" "$program" "$model" "$prefix" "${PWD:-$project_key}" "$agent_name" "reserved" >/dev/null 2>&1; then
+  # SessionStart may have run before Mail. Claude persists its exact payload
+  # into later Bash commands, so successful recovery can now write the same
+  # self receipt without another remote call or a transcript guess.
+  if [[ "$program" == "claude-code" && -n "${AGENTSTACK_CLAUDE_SESSION_CONTEXT:-}" ]]; then
+    if ! python3 "$SCRIPT_DIR/../hooks/record-session-index.py" --reregister \
+        "${AGS_REGISTERED_AGENT_ID:-}" "${AGS_REGISTERED_AGENT_NAME:-$agent_name}" \
+        "$project_key" >/dev/null 2>&1; then
+      emit_diagnostic "session-receipt" "binding-not-written"
+    fi
+  fi
   printf 'agentstack-reregister: registered %s\n' "${AGS_REGISTERED_AGENT_NAME:-$agent_name}"
 else
   register_status=$?
