@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """record-session-index.py
 
-Called from mark-agent-registered.sh (PostToolUse on register_agent).
+Called from mark-agent-registered.sh (PostToolUse on register_agent), the
+SessionStart hook, or a successful Claude agentstack-reregister recovery.
 
 Records a precise, unambiguous mapping so the agent-dashboard can resume the
 EXACT Claude session belonging to an ORRERY Mail row — instead of guessing via
@@ -20,8 +21,9 @@ simply overwrite (keeps the entry fresh). The dashboard reads this first and
 only falls back to the heuristic for old sessions registered before this hook
 existed.
 
-Reads the PostToolUse hook payload (JSON) on stdin. Never raises — a failure
-here must not disturb registration.
+Reads the hook payload (JSON) on stdin, or the provider-persisted SessionStart
+context with --reregister <id> <name> <project>. Never raises — a failure here
+must not disturb registration.
 """
 import json
 from pathlib import Path
@@ -118,14 +120,54 @@ def _bindings_for(out_dir, session_id):
     return names
 
 
+def _reregister_payload(agent_id, agent_name, project_key):
+    """Use only this session's provider-persisted context and live identity.
+
+    Recovery authenticates the remote owner, but that alone cannot bind the
+    caller's transcript: a parent can recover a child identity too. Re-resolve
+    the caller and require both the captured and current name to match.
+    """
+    context = json.loads(os.environ["AGENTSTACK_CLAUDE_SESSION_CONTEXT"])
+    if (context.get("agent_name") != agent_name
+            or context.get("project_key") != project_key):
+        raise ValueError("session context belongs to another identity or project")
+    fields = {key: context.get(key) for key in ("session_id", "transcript_path", "cwd")}
+    if not all(isinstance(value, str) and value for value in fields.values()):
+        raise ValueError("incomplete session context")
+    env = dict(os.environ, AGENTSTACK_SESSION_ID=fields["session_id"],
+               AGENTSTACK_LOOKUP_PROJECT_KEY=project_key)
+    resolver = Path(__file__).with_name("resolve-agent-name.sh")
+    result = subprocess.run(
+        ["/bin/bash", "-c", '. "$1"; printf "%s|%s" "$RESOLVED_AGENT_SRC" "$RESOLVED_AGENT"',
+         "reregister-receipt", str(resolver)],
+        env=env, capture_output=True, text=True, check=True, timeout=10,
+    )
+    source, _, caller = result.stdout.partition("|")
+    if source not in _SOURCES_THAT_MAY_BIND - {"none"} or caller != agent_name:
+        raise ValueError("caller does not own this session")
+    os.environ["AGENTSTACK_REGISTERING_SOURCE"] = source
+    os.environ["AGENTSTACK_REGISTERING_AGENT"] = caller
+    fields.update(tool_response={"id": int(agent_id), "name": agent_name},
+                  tool_input={"project_key": project_key, "name": agent_name})
+    return fields
+
+
 def main():
-    try:
-        d = json.loads(sys.stdin.read())
-    except Exception:
-        return EXIT_NOT_APPLICABLE
+    args = sys.argv[1:]
+    if args[:1] == ["--reregister"]:
+        try:
+            d = _reregister_payload(*args[1:])
+        except Exception:
+            return EXIT_CALLER_UNRESOLVED
+        args = []
+    else:
+        try:
+            d = json.loads(sys.stdin.read())
+        except Exception:
+            return EXIT_NOT_APPLICABLE
 
     helper = Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'
-    selection = subprocess.run(['/bin/bash', str(helper.with_name('global-client-loader.sh')), 'select', *sys.argv[1:]])
+    selection = subprocess.run(['/bin/bash', str(helper.with_name('global-client-loader.sh')), 'select', *args])
     if selection.returncode not in (0, 125):
         return EXIT_CALLER_UNRESOLVED
     if selection.returncode == 0:
