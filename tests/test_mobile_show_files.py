@@ -44,7 +44,10 @@ def test_thumbnail_is_small_plain_png_and_full_preview_stays_full_size():
     from PIL import Image
     original=image(png(640,320),width=640,height=320)
     def reply(query):
-        if 'ref' in query:return 200,original
+        if 'ref' in query:
+            if query.get('thumbnail')==['1']:
+                return 200,image(png(320,160),width=320,height=160)
+            return 200,original
         return 200,dict(ok=True,provider='codex',events=[event(1,kind='tool',text='mcp__orrery_mail__show_files',
             references=[dict(id=COCKPIT_REF,label='chart.png',kind='image')])])
     with cockpit(reply) as upstream:
@@ -65,10 +68,10 @@ def test_thumbnail_is_small_plain_png_and_full_preview_stays_full_size():
             full=json.loads(get(port,'/view/conversation/preview?name=Vega&ref='+ref)[1])
             assert full['data']==original['data']
             assert (full['width'],full['height'])==(640,320)
-        for path,_ in Cockpit.requests:
-            query=parse_qs(urlsplit(path).query)
-            assert 'thumbnail' not in query
-            if urlsplit(path).path.endswith('/preview'):assert query=={'ref':[COCKPIT_REF]}
+        requests=[parse_qs(urlsplit(path).query) for path,_ in Cockpit.requests
+                  if urlsplit(path).path.endswith('/preview')]
+        mobile={'ref':[COCKPIT_REF],'mobile':['1']}
+        assert requests==[dict(mobile,thumbnail=['1']),mobile]
 
 
 @pytest.mark.parametrize('query',[

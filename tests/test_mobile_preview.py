@@ -72,7 +72,7 @@ def test_page_gives_relay_issued_reference_ids_and_never_the_cockpit_ones():
     assert chip_ref(again) == chip_ref(first), 'polling reuses the ID instead of growing the table'
 
 
-def test_preview_calls_the_fixed_cockpit_route_with_only_the_kept_reference():
+def test_preview_calls_the_fixed_cockpit_route_for_a_mobile_rendition():
     with fake_cockpit(lambda ref: (200, text('# Notes\n<script>x</script>'))) as port:
         client = history.HistoryClient(port)
         with serving(reader(client=client)) as relay_port:
@@ -83,7 +83,7 @@ def test_preview_calls_the_fixed_cockpit_route_with_only_the_kept_reference():
         path, headers = Cockpit.requests[0]
     assert status == 200
     assert urlsplit(path).path == '/telemetry/conversation/preview'
-    assert parse_qs(urlsplit(path).query) == {'ref': [COCKPIT_REF]}
+    assert parse_qs(urlsplit(path).query) == {'ref': [COCKPIT_REF], 'mobile': ['1']}
     assert not {'Origin', 'Tailscale-User-Login', 'Cookie'} & set(headers)
     result = json.loads(body)
     assert result == {'ok': True, 'kind': 'text', 'label': 'notes.md', 'text': '# Notes\n<script>x</script>',
