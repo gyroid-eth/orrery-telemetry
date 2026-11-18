@@ -191,6 +191,14 @@ def test_approval_policy_comes_from_the_installer_setting():
         "--ask-for-approval never"
 
 
+@pytest.mark.parametrize("policy", [None, "never", "untrusted"])
+def test_standalone_codex_has_no_approval_arguments(policy):
+    env = {"USE_CODEX": "true", "STANDALONE": "true"}
+    if policy is not None:
+        env["AGENTSTACK_CODEX_CHILD_APPROVAL"] = policy
+    assert _flags_with_env(_MODERN_HELP, env) == ""
+
+
 def test_missing_codex_on_the_spawner_path_still_pins_the_policy():
     # The dashboard runs under launchd's minimal PATH. Probing `codex --help`
     # there used to yield an empty string, and the child silently fell back to
@@ -1319,7 +1327,9 @@ def test_child_proxy_configs_carry_the_bearer_mode():
     assert "  AGENTSTACK_PYTHON\n" in run_mcp
 
 
-def test_actual_codex_launch_commands_keep_models_and_optional_efforts():
+@pytest.mark.parametrize("approval", ["", "--ask-for-approval never"])
+def test_actual_codex_launch_commands_keep_models_and_optional_efforts(approval, monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTSTACK_HOME", str(tmp_path / "agentstack"))
     text = _SPAWN.read_text(encoding="utf-8")
     snippets = re.findall(r'EXTRA_ARGS=\(\)\n.*?--model "\$AGENTSTACK_CODEX_MODEL" -- "\$AGENTSTACK_CODEX_TASK"', text, re.S)
     assert len(snippets) == 2
@@ -1343,11 +1353,16 @@ def test_actual_codex_launch_commands_keep_models_and_optional_efforts():
                     "AGENTSTACK_CODEX_MODEL": model,
                     "AGENTSTACK_CODEX_EFFORT": validated.stdout.strip(),
                     "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED": "",
-                    "AGENTSTACK_CODEX_APPROVAL": "--ask-for-approval never",
+                    "AGENTSTACK_CODEX_APPROVAL": approval,
                     "AGENTSTACK_CODEX_NETWORK_FLAGS": "",
                 })
                 assert result.returncode == 0, result.stderr
                 argv = json.loads(result.stdout)
+                if approval:
+                    index = argv.index("--ask-for-approval")
+                    assert argv[index + 1] == "never"
+                else:
+                    assert "--ask-for-approval" not in argv and "--full-auto" not in argv
                 assert argv[argv.index("--model")+1] == model
                 assert [x for x in argv if x.startswith("model_reasoning_effort=")] == (
                     ["model_reasoning_effort="+effort] if effort else [])
