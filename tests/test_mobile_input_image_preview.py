@@ -27,9 +27,12 @@ def test_only_marked_user_input_uses_the_existing_shown_image_display(kind,role,
     assert 'input_images' not in result and COCKPIT_REF not in json.dumps(result)
 
 
-def test_user_image_preview_is_issued_and_read_via_the_existing_relay():
+def test_user_image_preview_works_with_an_older_bridge():
     def reply(query):
-        if 'ref' in query:return 200,image(png(640,320),width=640,height=320)
+        if 'ref' in query:
+            if 'mobile' in query:
+                return 400,dict(ok=False,error='invalid_query')
+            return 200,image(png(640,320),width=640,height=320)
         return 200,dict(ok=True,provider='codex',events=[input_event()])
     with cockpit(reply) as upstream:
         with serving(reader(client=history.HistoryClient(upstream))) as port:
