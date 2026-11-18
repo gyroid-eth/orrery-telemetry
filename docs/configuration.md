@@ -312,7 +312,7 @@ namespace を使います。この分離は namespace の選択を変えず、in
 | `AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE` | 未設定 | Claude child に使わせるブラウザの deviceId。設定すると `AGENTSTACK_CLAUDE_CHILD_CHROME=1` と同じ。CLI の `--claude-chrome-device` が優先。技術的な隔離ではなく child への指示 |
 | `AGENTSTACK_CHILD_RESUME_RETENTION_DAYS` | `30` | 正常終了した Claude / Codex child の再開用 state / credential を保持する日数。installer の `--child-resume-retention-days DAYS` で永続化。`0` は従来どおり cleanup 時に全削除 |
 
-Codex child の起動フラグは製品が直接組み立てます。親付きの起動と dashboard からの再開では、承認方針の既定値は `never` です。ネットワークアクセスの既定値は on です。書込を許す root は project、`AGENTSTACK_SPAWN_DIRS` / `AGENTSTACK_SPAWN_ROOTS`、install dir、`AGENTSTACK_WORKTREE_ROOT`、`~/.claude`、`~/.codex`、child 専用 `CODEX_HOME`、`AGENTSTACK_CODEX_ADD_DIRS` のうち実在する directory です。dashboard service のこれらの値は installer に渡してください。config overlay は macOS と Linux（WSL2 を含む）で `spawn_child.sh` を経由して適用されます。
+Codex child の起動フラグは製品が直接組み立てます。親付きの起動と、親なし起動の記録がないセッションの dashboard からの再開では、承認方針の既定値は `never` です。ネットワークアクセスの既定値は on です。書込を許す root は project、`AGENTSTACK_SPAWN_DIRS` / `AGENTSTACK_SPAWN_ROOTS`、install dir、`AGENTSTACK_WORKTREE_ROOT`、`~/.claude`、`~/.codex`、child 専用 `CODEX_HOME`、`AGENTSTACK_CODEX_ADD_DIRS` のうち実在する directory です。dashboard service のこれらの値は installer に渡してください。config overlay は macOS と Linux（WSL2 を含む）で `spawn_child.sh` を経由して適用されます。
 
 製品が起動する Codex（child・dashboard の再開・`agent-start-codex`・Windows の launcher）には、`-c check_for_update_on_startup=false` を必ず付けます。Codex の起動時の更新案内は既定の選択が `npm install -g @openai/codex` で、無人の child では断る人がいません。更新の途中で child が止められると、機体の `codex` が旧版も新版も使えない状態で残ります（#60）。Codex の更新は `npm install -g @openai/codex@latest` などで利用者が行ってください。
 

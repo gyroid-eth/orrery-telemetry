@@ -966,6 +966,7 @@ prepare_codex_child_resume_state() {
         --runtime-dir "$RUNTIME_DIR" \
         --agent-name "$agent_name" \
         --project-key "$PROJECT_KEY" \
+        --codex-standalone "$STANDALONE" \
         --mcp-profile "$mcp_profile" --program codex --parent-agent "$(recordable_parent_name)" ${generation_args[@]+"${generation_args[@]}"}
 }
 

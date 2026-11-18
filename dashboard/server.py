@@ -4070,16 +4070,17 @@ def _codex_child_add_dirs(extra: list[str] | None = None) -> list[str]:
     return seen
 
 
-def _codex_child_launch_flags(extra_dirs: list[str] | None = None) -> str:
+def _codex_child_launch_flags(extra_dirs: list[str] | None = None, *, standalone: bool = False) -> str:
     """Sandbox / approval / network / --add-dir flags for a product-launched Codex.
 
-    Same policy as spawn_child.sh: AGENTSTACK_CODEX_CHILD_APPROVAL (default
-    `never` — an unattended agent has nobody to answer prompts),
-    AGENTSTACK_CODEX_NETWORK (default on; workspace-write blocks the network
-    otherwise and every curl / git fetch becomes a prompt or a failure)."""
+    A recorded standalone start uses Codex configuration. Other resumes use
+    AGENTSTACK_CODEX_CHILD_APPROVAL (default `never`). Network access follows
+    AGENTSTACK_CODEX_NETWORK (default on)."""
     approval = os.environ.get("AGENTSTACK_CODEX_CHILD_APPROVAL", "").strip() or "never"
     network = os.environ.get("AGENTSTACK_CODEX_NETWORK", "").strip().lower() or "on"
-    parts = [f"--sandbox workspace-write --ask-for-approval {shlex.quote(approval)}"]
+    parts = ["--sandbox workspace-write"]
+    if not standalone:
+        parts.append(f"--ask-for-approval {shlex.quote(approval)}")
     # No update screen in a product-launched Codex: its default choice runs
     # `npm install -g`, and nobody is there to decline it (#60).
     parts.append("-c check_for_update_on_startup=false")
@@ -4224,8 +4225,8 @@ def _private_file_capability(
 
 def _codex_resume_child_home(
     session: str, registration: dict
-) -> tuple[str, str]:
-    """Verify retained state and return the fresh-home target plus saved profile."""
+) -> tuple[str, str, bool]:
+    """Verify retained state and return the home target, profile and standalone flag."""
 
     if not _valid(session):
         raise _ResumeCapabilityError(
@@ -4301,7 +4302,7 @@ def _codex_resume_child_home(
                 "config_unrestorable",
                 f"the tools this Codex child was started with cannot be restored: {exc}",
             ) from exc
-    return child_home, state["codex_mcp_profile"]
+    return child_home, state["codex_mcp_profile"], state.get("codex_standalone") is True
 
 
 def _validate_codex_standalone_credential(session: str) -> None:
@@ -5099,7 +5100,7 @@ def _resume_capability(
     launch_origin = provenance.get("launch_origin") if provenance else None
     if launch_origin == "child":
         try:
-            child_home, child_profile = _codex_resume_child_home(
+            child_home, child_profile, _ = _codex_resume_child_home(
                 session, registration
             )
         except _ResumeCapabilityError as exc:
@@ -5294,7 +5295,7 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None) -> dict
     child_profile = ""
     try:
         if launch_origin == "child":
-            child_home, child_profile = _codex_resume_child_home(
+            child_home, child_profile, codex_standalone = _codex_resume_child_home(
                 session, registration
             )
             _rebuild_codex_child_home(
@@ -5354,7 +5355,7 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None) -> dict
             f'if {src}; then '
             f'env -u OPENAI_API_KEY codex resume {sid} '
             f'-C {shlex.quote(cwd)} '
-            f'{_codex_child_launch_flags([child_home])}; '
+            f'{_codex_child_launch_flags([child_home], standalone=codex_standalone)}; '
             'CODEX_STATUS=$?; '
             f'/bin/bash {shlex.quote(cleanup)}; CLEANUP_STATUS=$?; '
             '[[ "$CODEX_STATUS" -ne 0 ]] && exit "$CODEX_STATUS"; '

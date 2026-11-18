@@ -59,7 +59,7 @@ Codex では `$delegate` でこの skill を呼びます（`/skills` でも選�
 
 ## Codex child と MCP 承認
 
-親付きの Codex child は無人実行のため既定で `--ask-for-approval never` です。`AGENTSTACK_CODEX_CHILD_APPROVAL` でこの値を変更できます。NEW AGENT から親なしで起動する Codex は承認引数を省略します。Codex は overlay を適用した `config.toml` の `approval_policy` に従い、未設定なら自身の既定値を使います。
+親付きの Codex child は無人実行のため既定で `--ask-for-approval never` です。`AGENTSTACK_CODEX_CHILD_APPROVAL` でこの値を変更できます。NEW AGENT の親なし起動と、その記録があるセッションの再開では承認引数を省略します。Codex は overlay を適用した `config.toml` の `approval_policy` に従い、未設定なら自身の既定値を使います。親なし起動の記録がない既存セッションの再開には、従来の子の承認設定を適用します。
 
 shell command の承認とは別に MCP tool にも承認設定があります。承認方針が `never` のとき、明示的な許可がない inherited server を呼ぶと `MCP tool call requires approval, but approval policy is never` で直ちに失敗します。全 Codex child に同じ許可を与えるには TOML fragment を用意し、installer の `--codex-child-overlay /absolute/path/to/overlay.toml` で保存します。
 

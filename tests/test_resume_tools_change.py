@@ -343,7 +343,7 @@ def test_codex_forecast_accepts_missing_source_config_for_empty_selection(stoppe
     monkeypatch.setenv("AGENTSTACK_MCP_PROXY", sys.executable)
     child_tools.write_codex_record(str(record), child_tools.normalize("mail-only", {}))
     registration = {key: state[key] for key in ("agent_id", "project_key", "program")}
-    home, profile = server._codex_resume_child_home(NAME, registration)
+    home, profile, _ = server._codex_resume_child_home(NAME, registration)
     assert home == str(runtime / "child-agents" / f"{NAME}.codex-home")
     assert profile == "orrery-only"
 

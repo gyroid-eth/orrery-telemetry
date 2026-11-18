@@ -59,7 +59,7 @@ Run `agentstack-selftest` immediately after installation. It verifies **function
 
 ## Codex children and MCP approvals
 
-Parented Codex children default to `--ask-for-approval never` because they run unattended. `AGENTSTACK_CODEX_CHILD_APPROVAL` can override this value. A standalone Codex started from NEW AGENT omits approval arguments. Codex uses `approval_policy` from its effective `config.toml`, including any configured overlay, or its built-in default when unset.
+Parented Codex children default to `--ask-for-approval never` because they run unattended. `AGENTSTACK_CODEX_CHILD_APPROVAL` can override this value. Standalone NEW AGENT starts and resumes with a recorded standalone start omit approval arguments. Codex uses `approval_policy` from its effective `config.toml`, including any configured overlay, or its built-in default when unset. Resuming sessions without that record uses the existing child approval setting.
 
 MCP tools have an approval setting separate from shell-command approvals. Under `never`, calling an inherited server without an explicit allow rule immediately fails with `MCP tool call requires approval, but approval policy is never`. To give every Codex child the same rule, create a TOML fragment and persist it with installer flag `--codex-child-overlay /absolute/path/to/overlay.toml`.
 
