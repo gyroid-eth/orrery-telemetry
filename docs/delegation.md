@@ -59,7 +59,9 @@ Codex では `$delegate` でこの skill を呼びます（`/skills` でも選�
 
 ## Codex child と MCP 承認
 
-Codex child は無人実行のため既定で `--ask-for-approval never` です。shell command の承認とは別に MCP tool にも承認設定があり、明示的な許可がない inherited server を呼ぶと `MCP tool call requires approval, but approval policy is never` で直ちに失敗します。全 Codex child に同じ許可を与えるには TOML fragment を用意し、installer の `--codex-child-overlay /absolute/path/to/overlay.toml` で保存します。
+親付きの Codex child は無人実行のため既定で `--ask-for-approval never` です。`AGENTSTACK_CODEX_CHILD_APPROVAL` でこの値を変更できます。NEW AGENT の親なし起動と、その記録があるセッションの再開では承認引数を省略します。Codex は overlay を適用した `config.toml` の `approval_policy` に従い、未設定なら自身の既定値を使います。親なし起動の記録がない既存セッションの再開には、従来の子の承認設定を適用します。
+
+shell command の承認とは別に MCP tool にも承認設定があります。承認方針が `never` のとき、明示的な許可がない inherited server を呼ぶと `MCP tool call requires approval, but approval policy is never` で直ちに失敗します。全 Codex child に同じ許可を与えるには TOML fragment を用意し、installer の `--codex-child-overlay /absolute/path/to/overlay.toml` で保存します。
 
 server 全体を許可する最小例です。
 
@@ -333,7 +335,7 @@ ORRERY から起動した agent（child・NEW AGENT）に、ブラウザと comp
 | 経路 | 届き方 |
 |---|---|
 | `/delegate` の child | `--tools`・`--claude-chrome(-device)`・overlay が効く |
-| NEW AGENT（親なし、`--standalone`） | Codex は child と同じ生成 home・同じ承認方針なので、overlay と `--tools` の記録が効く。Claude は NEW AGENT のフォームで指定した値だけを使い、`AGENTSTACK_CLAUDE_CHILD_CHROME` の env は使いません。`--tools` の欄は NEW AGENT にまだありません |
+| NEW AGENT（親なし、`--standalone`） | Codex は child と同じ生成 home を使い、overlay と `--tools` の記録が効きます。承認方針は Codex の設定に従います。Claude は NEW AGENT のフォームで指定した値だけを使い、`AGENTSTACK_CLAUDE_CHILD_CHROME` の env は使いません。`--tools` の欄は NEW AGENT にまだありません |
 | resume | Codex は起動と resume のたびに home を作り直すので overlay が効きます。Claude は起動の記録から同じ設定を復元します（記録が無い child は ORRERY の選択を復元せず、利用者の Claude 設定をそのまま継承します。ブラウザや computer use が付かないことを意味しません） |
 | 人が端末で直接起動した `claude` / `codex` | 対象外です。実際の `~/.claude`・`~/.codex` の設定だけで決まり、ORRERY は変えません |
 

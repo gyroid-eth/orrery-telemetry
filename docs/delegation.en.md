@@ -59,7 +59,9 @@ Run `agentstack-selftest` immediately after installation. It verifies **function
 
 ## Codex children and MCP approvals
 
-Codex children default to `--ask-for-approval never` because they run unattended. MCP tools have an approval setting separate from shell-command approvals, so calling an inherited server without an explicit allow rule immediately fails with `MCP tool call requires approval, but approval policy is never`. To give every Codex child the same rule, create a TOML fragment and persist it with installer flag `--codex-child-overlay /absolute/path/to/overlay.toml`.
+Parented Codex children default to `--ask-for-approval never` because they run unattended. `AGENTSTACK_CODEX_CHILD_APPROVAL` can override this value. Standalone NEW AGENT starts and resumes with a recorded standalone start omit approval arguments. Codex uses `approval_policy` from its effective `config.toml`, including any configured overlay, or its built-in default when unset. Resuming sessions without that record uses the existing child approval setting.
+
+MCP tools have an approval setting separate from shell-command approvals. Under `never`, calling an inherited server without an explicit allow rule immediately fails with `MCP tool call requires approval, but approval policy is never`. To give every Codex child the same rule, create a TOML fragment and persist it with installer flag `--codex-child-overlay /absolute/path/to/overlay.toml`.
 
 The minimal server-wide approval is:
 
@@ -333,7 +335,7 @@ How each launch path is affected:
 | Path | What reaches it |
 |---|---|
 | `/delegate` child | `--tools`, `--claude-chrome(-device)` and the overlay apply |
-| NEW AGENT (no parent, `--standalone`) | Codex builds the same generated home with the same approval policy as a child, so the overlay and a `--tools` record apply. Claude uses only what the NEW AGENT form says and ignores the `AGENTSTACK_CLAUDE_CHILD_CHROME` environment default. NEW AGENT has no `--tools` field yet |
+| NEW AGENT (no parent, `--standalone`) | Codex builds the same generated home as a child, so the overlay and a `--tools` record apply. The approval policy comes from Codex configuration. Claude uses only what the NEW AGENT form says and ignores the `AGENTSTACK_CLAUDE_CHILD_CHROME` environment default. NEW AGENT has no `--tools` field yet |
 | resume | Codex rebuilds the home on every launch and resume, so the overlay applies. Claude restores the same settings from the launch record (a child without a record gets no ORRERY selection restored and simply inherits the user's Claude settings; that does not mean browser or computer use is absent) |
 | `claude` / `codex` a person starts directly in a terminal | Out of scope. Only the real `~/.claude` and `~/.codex` settings decide, and ORRERY does not change them |
 

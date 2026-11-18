@@ -457,6 +457,7 @@ def _validate_identity(
 def prepare_active_state(
     runtime_dir: Path, agent_name: str, *, project_key: str, mcp_profile: str = "inherit",
     program: str | None = None, generation: str | None = None, parent_agent: str | None = None,
+    codex_standalone: bool = False,
 ) -> dict[str, Any]:
     """Mark the child active. ``parent_agent`` records the launcher's parent
     (``""`` for a standalone launch clears it; ``None`` leaves it as is) so a
@@ -507,6 +508,7 @@ def prepare_active_state(
         )
         if state["provider"] == "codex":
             state["codex_mcp_profile"] = mcp_profile
+            state["codex_standalone"] = codex_standalone
         else:
             state.pop("codex_mcp_profile", None)
         state.pop("resume_in_progress_at", None)
@@ -2180,6 +2182,7 @@ def main() -> int:
     active.add_argument("--agent-name", required=True)
     active.add_argument("--project-key", required=True)
     active.add_argument("--mcp-profile", choices=sorted(MCP_PROFILES), default="inherit")
+    active.add_argument("--codex-standalone", choices=("true", "false"), default="false")
     active.add_argument("--program", choices=sorted(CODEX_PROGRAMS | CLAUDE_PROGRAMS | HARNESS_PROGRAMS))
     active.add_argument("--generation")
     active.add_argument("--parent-agent")
@@ -2274,6 +2277,7 @@ def main() -> int:
                 mcp_profile=args.mcp_profile,
                 program=args.program, generation=args.generation,
                 parent_agent=args.parent_agent,
+                codex_standalone=args.codex_standalone == "true",
             )
         elif args.command == "stage-registration":
             if bool(args.source) != bool(args.binding):

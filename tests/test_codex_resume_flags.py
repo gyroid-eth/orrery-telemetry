@@ -26,6 +26,8 @@ from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
 
 import dashboard.server as server
 from claude_resume_harness import cleanup_mail
+from hooks import child_resume
+from test_spawn_child_parent_lineage import _codex_child, _spawn
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -176,7 +178,7 @@ def _seed_child_identity(
     return child_home, token_file, before
 
 
-def _invoke_resume_entry(monkeypatch, tmp_path, project, runtime):
+def _invoke_resume_entry(monkeypatch, tmp_path, project, runtime, *, registration_project=None):
     rollout = tmp_path / "rollout-session.jsonl"
     rollout.write_text(
         json.dumps({
@@ -211,7 +213,7 @@ def _invoke_resume_entry(monkeypatch, tmp_path, project, runtime):
     registration = {
         "agent_id": AGENT_ID,
         "agent_name": AGENT,
-        "project_key": str(project),
+        "project_key": str(registration_project or project),
         "program": "codex",
     }
     launched = []
@@ -235,6 +237,36 @@ def test_resume_defaults_to_never_with_network_and_project_root(policy_env):
     assert f"--add-dir {shlex.quote(os.path.realpath(str(project)))}" in flags
     # The old hardcoded on-request is gone.
     assert "on-request" not in flags
+
+
+@pytest.mark.parametrize("standalone", [True, False, None], ids=["standalone", "parented", "legacy"])
+def test_resume_uses_the_recorded_codex_launch_policy(policy_env, monkeypatch, standalone):
+    tmp_path, project = policy_env
+    runtime = tmp_path / "runtime"
+    registration_project = None
+    if standalone is None:
+        _seed_child_identity(runtime, project)
+    else:
+        launch_dir = tmp_path / "launch"
+        launch_dir.mkdir()
+        opts = ("--standalone",) if standalone else ()
+        env, args = _codex_child(launch_dir, AGENT, *opts)
+        started = _spawn(env, args)
+        assert started.returncode == 0, started.stderr
+        runtime = Path(env["AGENTSTACK_RUNTIME_DIR"])
+        registration_project = env["PROJECT_KEY"]
+        project = Path(args[-1])
+        assert child_resume.mark_retired(runtime, AGENT, retention_days=30)
+    result, launched = _invoke_resume_entry(
+        monkeypatch, tmp_path, project, runtime, registration_project=registration_project
+    )
+
+    assert result["ok"], result
+    flags = shlex.split(launched[0][-1])
+    if standalone:
+        assert "--ask-for-approval" not in flags
+    else:
+        assert flags[flags.index("--ask-for-approval") + 1] == "never"
 
 
 def test_resume_honours_installer_settings_and_extra_roots(policy_env, monkeypatch):

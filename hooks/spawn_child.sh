@@ -966,6 +966,7 @@ prepare_codex_child_resume_state() {
         --runtime-dir "$RUNTIME_DIR" \
         --agent-name "$agent_name" \
         --project-key "$PROJECT_KEY" \
+        --codex-standalone "$STANDALONE" \
         --mcp-profile "$mcp_profile" --program codex --parent-agent "$(recordable_parent_name)" ${generation_args[@]+"${generation_args[@]}"}
 }
 
@@ -1301,13 +1302,12 @@ cleanup_worktree() {
 # the child's login shell can word-split it (unquoted command substitution,
 # which zsh and bash both expand).
 #
-# The policy comes from AGENTSTACK_CODEX_CHILD_APPROVAL (installer setting,
-# default `never`): a spawned child works unattended, so every "may I run this"
-# prompt is a stall nobody is watching. The probe resolves the binary the same
-# way the child will (PATH plus ~/.local/bin, or AGENTSTACK_CODEX_BIN); when
-# the dashboard's minimal launchd PATH cannot find codex at all, the modern flag
-# is emitted instead of nothing — an empty result silently reverted every child
-# to Codex's own `on-request` default (2026-09-04).
+# A standalone Codex uses its configured approval policy. A parented Codex
+# uses AGENTSTACK_CODEX_CHILD_APPROVAL (installer setting, default `never`)
+# because an unattended child has nobody to answer prompts. The probe resolves
+# it the same way as the child (PATH plus ~/.local/bin or AGENTSTACK_CODEX_BIN).
+# If the dashboard's minimal launchd PATH cannot find Codex, the launcher emits
+# the modern flag to preserve the child policy (2026-09-04).
 # The child's tmux session runs `<shell> -lc '<launch>'`. This used to be a
 # hard-coded zsh path, which does not exist on a stock Ubuntu (WSL2 included):
 # the session died two seconds after spawn with nothing in the pane. Prefer zsh
@@ -1436,6 +1436,9 @@ resolve_codex_bin() {
 }
 
 codex_approval_flags() {
+    if [[ "${USE_CODEX:-false}" == true && "${STANDALONE:-false}" == true ]]; then
+        return 0
+    fi
     local help_text codex_bin policy
     policy="${AGENTSTACK_CODEX_CHILD_APPROVAL:-never}"
     codex_bin="$(find_codex_bin)"
@@ -3580,11 +3583,8 @@ ${TASK}"
                 # The child never sources a user-side bootstrap: identity comes
                 # from the reserved name and token file, and a failing script
                 # under set -e would take the whole session with it (2026-09-03).
-                # The product decides sandbox, approval, network and writable
-                # roots itself; a user-side launcher (~/.codex/bin/...) is never
-                # consulted. Handing off to one silently replaced `never` with
-                # its `on-request` default and dropped the network flag and the
-                # extra roots (2026-09-04).
+                # The product supplies sandbox, network, writable roots and any
+                # parented approval flag without consulting a user-side launcher.
                 # Claude in Chrome defaults are for Claude children; do not hand them on
                 # through a Codex child (the tmux server env may carry them).
                 unset AGENTSTACK_CLAUDE_CHILD_CHROME AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE
