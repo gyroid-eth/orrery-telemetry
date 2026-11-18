@@ -10,12 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def bundled():
     header, source = (ROOT / 'dashboard/mobile/conversation_markdown.js').read_bytes().split(b'\n', 1)
-    assert header.startswith(b'// Source: gyroid-eth/orrery bridge/conversation_markdown.js @ 58171cb ')
+    assert header.startswith(b'// Source: gyroid-eth/orrery bridge/conversation_markdown.js @ d12a266 ')
     return source
 
 
 def test_bundled_parser_has_the_reviewed_upstream_digest():
-    assert hashlib.sha256(bundled()).hexdigest() == '6d9c7a65d425d404f82dc811d1eb8c365aa6ed6533f291ff65f1837ce0abddc6'
+    assert hashlib.sha256(bundled()).hexdigest() == '9382246debb5ad63fdadf69e67c188537e1938e315264bfd40a28195632f7bc1'
 
 
 def test_bundled_parser_matches_upstream_byte_for_byte():
