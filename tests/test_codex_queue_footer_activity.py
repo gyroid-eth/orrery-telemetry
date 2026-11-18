@@ -5,6 +5,8 @@ from __future__ import annotations
 from time import perf_counter
 from types import SimpleNamespace
 
+import pytest
+
 import dashboard.server as server
 
 
@@ -128,12 +130,13 @@ def test_existing_hyphenated_footer_and_context():
     assert parsed["ctx_used"] == 54
 
 
-def test_unsent_draft_does_not_count_as_work_or_override_model():
+@pytest.mark.parametrize("draft_prompt", ["› Ask Codex to do anything", "❯"])
+def test_unsent_draft_does_not_count_as_work_or_override_model(draft_prompt):
     text = (
         "■ Selected model is at capacity. Please try a different model.\n\n"
         "› Repro:\n"
         "  • Working (26m 32s • esc to interrupt)\n"
-        "  › Ask Codex to do anything\n"
+        f"  {draft_prompt}\n"
         "  GPT-6.1 Terra max · ~/snippet\n\n"
         "  GPT-6.1-Sol max · ~/project · task\n"
     )

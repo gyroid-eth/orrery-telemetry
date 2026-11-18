@@ -7011,9 +7011,8 @@ def _runtime_activity(text: str) -> tuple[str, str]:
     # choices use the same pointer, but are not an ordinary input prompt.
     composer = None
     for index in range(len(lines) - 1, max(-1, len(lines) - 17), -1):
-        # Codex draft content is indented, even if it reproduces a prompt.
-        # Only a column-zero Codex prompt is a composer.
-        prompt = re.fullmatch(r"(?:\s*❯|›)(?:\s+(.*))?", lines[index])
+        # Draft lines are indented, even when they quote a Claude or Codex prompt.
+        prompt = re.fullmatch(r"[❯›](?:\s+(.*))?", lines[index])
         if prompt is None or re.match(r"\d+\.\s", prompt.group(1) or ""):
             continue
         suffix = lines[index + 1:]

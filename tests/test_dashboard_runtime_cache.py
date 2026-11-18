@@ -213,7 +213,7 @@ def test_claude_auto_mode_without_statusline_keeps_current_work():
     assert server._runtime_activity(text) == (
         'work', '· Effecting… (43s · ↓ 3.4k tokens)')
     parsed = server._parse_runtime(text)
-    assert parsed['work_secs'] == 43
+    assert (parsed['act_state'], parsed['work_secs'], parsed['work_disp']) == ('work', 43, '43s')
     assert parsed['ctx_used'] is None and parsed['pane_model'] is None
 
 
