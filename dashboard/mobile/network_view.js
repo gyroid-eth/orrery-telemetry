@@ -170,6 +170,12 @@ class NetworkView{
  selection(){
   document.querySelector('[data-mode=focus]').title=this.selected?'Focus on '+this.selected:'Focus';
  }
+ focus(name){
+  if(!this.agents.some(a=>a.name===name))return;
+  this.mode='focus';document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode==='focus'));
+  this.select(name);this.fit();
+  document.getElementById('agent-search').value='';this.search();
+ }
  search(){
   const input=document.getElementById('agent-search'),results=document.getElementById('agent-results');
   const query=input.value.trim().toLocaleLowerCase();
@@ -183,7 +189,7 @@ class NetworkView{
    const role=document.createElement('span');role.textContent=a.role||'Role not set';
    open.append(name,role);open.onclick=()=>this.onOpen?.(a.name);
    const focus=document.createElement('button');focus.type='button';focus.className='agent-result-focus';focus.textContent='Focus';focus.setAttribute('aria-label','Focus on '+a.name);
-   focus.onclick=()=>{this.mode='focus';document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode==='focus'));this.select(a.name,{center:true});input.value='';this.search();document.querySelector('[data-mode=focus]').focus();};
+   focus.onclick=()=>{this.focus(a.name);document.querySelector('[data-mode=focus]').focus();};
    row.append(open,focus);results.append(row);
   }
   const note=document.createElement('p');note.className='agent-search-note';note.setAttribute('role','status');

@@ -101,6 +101,16 @@ ACT_WINDOW_SEC = 6 * 3600
 
 _LIVE_PARENT_CACHE: dict[str, object] = {"ts": 0.0, "value": None}
 _LIVE_PARENT_TTL = 10.0
+# PARENT_AGENT is read once per session generation (name, id, creation time, server pid)
+# rather than on every refresh, and asked again after this long, whether it was
+# found or not: a variable set just after the session appeared, or set again
+# later, is picked up. Any POST drops the memo too (forget_parents).
+_PARENT_MISS_TTL = 60.0
+_PARENT_BY_SESSION: dict[str, tuple[tuple[str, ...], str, float]] = {}
+
+
+def forget_parents() -> None:
+    _PARENT_BY_SESSION.clear()
 
 
 def _live_parents() -> dict[str, str]:
@@ -129,7 +139,8 @@ def _live_parents() -> dict[str, str]:
         return {}
     try:
         listing = subprocess.run(
-            [tmux, "list-sessions", "-F", "#{session_name}"],
+            [tmux, "list-sessions", "-F",
+             "#{session_name}\t#{session_id}\t#{session_created}\t#{pid}"],
             capture_output=True, text=True, timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
@@ -142,9 +153,21 @@ def _live_parents() -> dict[str, str]:
         # below, which this path never reaches.
         return {}
     parents: dict[str, str] = {}
-    for session in listing.stdout.split("\n"):
-        session = session.strip()
+    seen: set[str] = set()
+    for line in listing.stdout.split("\n"):
+        # name, id, creation time, server pid. The pid tells apart a session of
+        # a restarted tmux server that got the same id in the same second.
+        fields = line.rsplit("\t", 3)
+        session = fields[0].strip()
+        generation = tuple(fields[1:]) if len(fields) == 4 else None
         if not session:
+            continue
+        seen.add(session)
+        known = _PARENT_BY_SESSION.get(session)
+        if (generation is not None and known is not None and known[0] == generation
+                and now - known[2] < _PARENT_MISS_TTL):
+            if known[1]:
+                parents[session] = known[1]
             continue
         try:
             shown = subprocess.run(
@@ -153,15 +176,18 @@ def _live_parents() -> dict[str, str]:
             )
         except (OSError, subprocess.SubprocessError):
             continue
-        if shown.returncode != 0:
-            continue                   # unset for this session
-        value = shown.stdout.strip()
-        # "-PARENT_AGENT" marks the variable as removed; only NAME=VALUE counts.
-        if not value.startswith("PARENT_AGENT="):
-            continue
-        parent = value.split("=", 1)[1].strip()
+        parent = ""
+        if shown.returncode == 0:      # otherwise unset for this session
+            value = shown.stdout.strip()
+            # "-PARENT_AGENT" marks the variable as removed; only NAME=VALUE counts.
+            if value.startswith("PARENT_AGENT="):
+                parent = value.split("=", 1)[1].strip()
         if parent:
             parents[session] = parent
+        if generation is not None and (shown.returncode == 0 or shown.returncode == 1):
+            _PARENT_BY_SESSION[session] = (generation, parent, now)
+    for gone in set(_PARENT_BY_SESSION) - seen:
+        _PARENT_BY_SESSION.pop(gone, None)  # a POST may have cleared it meanwhile
     _LIVE_PARENT_CACHE.update(ts=now, value=dict(parents))
     return parents
 

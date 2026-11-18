@@ -8,6 +8,28 @@ The mobile reader shows agents needing attention, a Mail timeline and NETWORK in
 
 With the ORRERY cockpit you can turn it on and off from **Settings → Phone** ([next section](#turn-it-on-from-cockpit-settings)). The table after it and [Enable manually](#enable-manually) are for setting it up by hand without the cockpit.
 
+## Phone notifications (optional, Android Chrome)
+
+Notifications are off by default. Complete Phone access's owner and policy review, then prepare the optional dependencies through the regular installer. Review `bash scripts/install.sh --with-mobile-push --dry-run`, then use `--with-mobile-push` for the same installation with its normal approval steps. Ordinary installation does not install these dependencies. Do not pip-install into production Python by hand.
+
+For an existing phone job, reapply its settings with `printf '%s\n' '{"access":true}' | agentstack-mobile apply`. The job then selects the managed notification Python. Preparing dependencies creates no browser permission or subscription. A manually launched relay needs that optional Python, `--enable-push`, and reviewed history settings.
+
+Tap the **bell** in an agent's Reader, then **Enable on this phone** and allow Chrome's notification prompt. Only that explicit action requests permission. Settings belong to this phone:
+
+- **Reply needed** covers every agent's question or approval wait, using the Reader's existing ask/question observations.
+- **Work finished** covers this agent only: new work followed by waiting and a new recorded assistant reply marks the end of a turn. It does not establish completion of an entire task or process exit. Selected agents have a marked bell.
+- **Message previews** is one setting per phone, off by default. Off sends only the agent and event type. On can include up to 600 characters from a new question or last reply. Code, images, suspected secrets/tokens and text containing absolute paths are hidden. Without a verified new question or approval text, only its type is shown.
+
+Notifications continue in Demo, but message previews are hidden immediately before publication regardless of this phone’s setting. Names follow the phone display’s host-name and extra-word masking rules. The bell still allows enabling and changing alert types; **Message previews** is temporarily shown off and disabled. Its saved value is retained and restored when Demo is off. Switching Demo on or off does not reset baselines or pending alerts.
+
+**Disable on this phone** removes the server subscription before unsubscribing the browser. Use the bell to enable it again. After a denied permission, allow ORRERY notifications in Chrome's site settings. This version targets Android Chrome; iOS/Safari is outside its scope.
+
+The Mac publishes over outbound HTTPS to Google's Push service using standard Web Push payload encryption. Google still receives delivery metadata and the configured owner's login email as the VAPID contact (an email-form login is required). No Funnel or public inbound endpoint is added. Clicking a notification opens the same origin and waits for Reader startup and a fresh roster before opening that agent. Fresh also passes the roster’s Mail identity to the input target. Receipt does not fetch conversation history through Tailscale; reading still needs Tailscale and an awake Mac.
+
+Keys, subscriptions and sent markers live in `~/.agentstack/runtime/mobile-push/` with directory mode 0700 and file mode 0600. The VAPID key is created once on enable; endpoints and keys are not logged. Unknown or unsupported Demo status, disconnected and unknown agent states do not publish. Startup and recovery after a gap longer than 30 seconds only establish a baseline. An interruption longer than 30 seconds during a read or publication also discards that observation and its unsent notifications. No new notifications are sent while the Mac sleeps. History reads are limited to eight per pass. Work-start baselines, completion checks and question previews share one oldest-attempt-first order, updated even on failed reads. Uncollected baselines carry over while work continues. The relay observes every five seconds even with the page closed; short work between observations and turns without readable records may be missed.
+
+Two observations settle a reply-needed transition, and an unchanged state does not repeatedly alert. Limits are eight phones, 128 selected agents per phone, 64 pending items, four publications per pass, three attempts and a 120-second expiry. Turning alerts off cannot recall an already accepted notification. HTTP acceptance is not proof of phone display; OS power and notification settings can delay or omit delivery. Exactly-once delivery is not guaranteed.
+
 ## Turn it on from cockpit Settings
 
 The cockpit's **Settings** has a **Phone** section with two switches:
@@ -67,6 +89,10 @@ The badge says **ON** and the setup steps are gone. **Check it yourself:** all f
 <img src="images/phone-settings-5-on.png" width="360" alt="Badge ON. Status lists reader running, Serve, Funnel off and Policy reviewed, all green">
 
 ### Conversations on the phone
+
+Claude and Codex records show the same **Agent steps** as the desktop Reader. Completed operations appear one at a time, with **Working…** and elapsed time during work. On completion the card folds into **Worked for … · N steps**; tap to expand it. Historical turns start collapsed. Only explicit failure is **Failed**; an operation without a recorded outcome is **Observed**. Codex inner operations appear after their completion record arrives; execution in progress is not inferred. Target summaries use one ellipsized line.
+
+Replaced tool labels do not repeat, while files, images, Mail and unsupported tool groups stay available. An unmatched Claude result asks to load earlier requests. The phone receives only bounded tool names, existing target summaries, times, status, opaque IDs and turn markers; no new raw arguments, output, paths or cockpit reference IDs. Page and byte limits stay the same. Demo continues to work and masks targets by the same existing rules as other text. Backgrounding pauses motion and the clock; Close clears them. OS reduced motion is respected. Motion reuses the desktop adaptation of [kokonutUI AI Loading](https://kokonutui.com/) (MIT), retaining its license in source.
 
 On the phone, open the **Address on the phone** from step 2 (`https://…:9443/`) and open an agent. The first HTTPS request can take a few seconds while the certificate is issued. When the **Conversation** tab appears, conversation records reach the phone ([Read an agent's conversation history](#read-an-agents-conversation-history-on-your-phone)).
 
@@ -134,6 +160,7 @@ Regenerate the committed icons from `dashboard/assets/orbit.svg` with `python3 s
 
 - **Activity** lists sender, recipient, time and To/Cc only. Tap one Mail event to open its subject and body. Tasks and private paths are not separately fetched, but anything written in a Mail body is visible. Status records changes observed after this reader starts, rather than claiming to know when each change actually happened.
 - **Graph** defaults to agents with observed activity in the last 24 hours. Focus shows the selected agent and up to five strongest peers within that period; All shows every agent in that period. Use **Find an agent** to search by name or Role. Tap a result name to open its Reader; the adjacent **Focus** button centers the graph on that agent. In Focus, tap a surrounding agent to make it the center and fit the graph; tap the center agent to open its Reader. In All, tapping any agent opens its Reader. Enter and Space follow the same rules. A short Role from its existing annotation appears beneath the name; missing roles are not inferred. Pinch to zoom, drag to pan, and Fit. Large graphs do not guarantee that every name is readable at once.
+- Close a Reader opened from a Graph agent or search-result name with **×** or **Back** to focus and fit the last agent you read, with up to five strongest peers. Readers opened from Activity or elsewhere return to the previous view.
 - In both Focus and All, zoom levels of 75% or more show every agent’s name below its portrait and its existing Role below the name. The selected name keeps its previous size; other names are smaller. Below 75%, names and Roles are hidden.
 - Line width and arrow size follow Mail counts in the selected period. Counts are **recipient rows** by direction and To/Cc, rather than unread counts or unique sent messages. Dashed parent–child lines are separate from Mail.
 - Context arcs and working motion use the PC renderer. Unknown context has no arc, and its sampling time remains unknown. Account usage is Unavailable; this reader never refreshes it.

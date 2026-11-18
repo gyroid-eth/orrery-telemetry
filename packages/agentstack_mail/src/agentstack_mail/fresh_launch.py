@@ -25,6 +25,7 @@ from uuid import UUID, uuid4
 from .fresh_runtime import _directory, _read_private, _write_private
 from .fresh_proxy import verified_owner
 from .storage_origin_contract import B1Error, digest
+from .fresh_end import read_run_end
 
 
 def native_id(value):
@@ -287,10 +288,8 @@ def launch(client, wrapper_root, provider, cwd, *, session_id=None, persistent=N
             previous = _read_private(current)
             previous_run = base / 'runs' / native_id(previous.get('launch_id'))
             _directory(previous_run)
-            if not (previous_run / 'ended.json').exists():raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
-            ended = _read_private(previous_run / 'ended.json')
-            if (set(ended) != {'launch_id', 'exit_code'} or ended['launch_id'] != previous['launch_id']
-                    or type(ended['exit_code']) is not int):raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN')
+            if read_run_end(client, previous_run) is None:
+                raise B1Error('FRESH_LAUNCH_OUTCOME_UNKNOWN', launch_id=previous_run.name)
         home, binary, plan = provider_setup(client, root, provider, persistent=persistent)
         if session_id is not None:
             if managed:
@@ -388,20 +387,21 @@ def launch(client, wrapper_root, provider, cwd, *, session_id=None, persistent=N
                 from .fresh_persistent import wait_provider
                 code, restarted = wait_provider(process, run, wrapper_root=root if provider == 'hermes' else None)
             else:code = process.wait()
-        except BaseException:
+        except BaseException as error:
             if process is not None and process.poll() is None:
                 process.terminate()
                 try:process.wait(timeout=5)
                 except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)
             # Leave current as unknown; recovery is a documented operator action.
+            if isinstance(error, B1Error) and error.code == 'FRESH_LAUNCH_OUTCOME_UNKNOWN':
+                error.details['launch_id'] = launch_id
             raise
-        if persistent is None:
-            _write_private(run / 'ended.json', {'launch_id': launch_id, 'exit_code': code})
+        # Lifecycle closure does not imply native readiness. A missing receipt
+        # must not strand a run whose actual wait/required child checks finished.
+        _write_private(run / 'ended.json', {'launch_id': launch_id, 'exit_code': code})
         if code == 0:
             observed = _read_private(run / 'session.json')
             pinned(client, observed)
-        if persistent is not None:
-            _write_private(run / 'ended.json', {'launch_id': launch_id, 'exit_code': code})
         if restarted:raise B1Error('FRESH_BOT_RESTART_REQUIRED')
         return code
 
@@ -415,7 +415,7 @@ def session_state(client, payload):
     intent = _read_private(run / 'intent.json')
     pinned(client, intent)
     if (intent.get('launch_id') != launch_id or intent.get('nonce') != os.environ.get('AGENTSTACK_FRESH_LAUNCH_NONCE')
-            or (run / 'ended.json').exists()):raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
+            or read_run_end(client, run) is not None):raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
     current = _read_private(base / 'current.json')
     if current != {'launch_id': launch_id}:raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
     managed = intent['provider'] in {'dsh','hermes'}
@@ -505,6 +505,7 @@ async def complete_pending_session(client, payload):
     base = layout(client)
     run = base / 'runs' / native_id(os.environ.get('AGENTSTACK_FRESH_LAUNCH_ID'))
     _directory(run)
+    if read_run_end(client, run) is not None:raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
     if (run / 'session.json').exists() or (run / 'session.json').is_symlink():return True
     await verified_owner(client)
     state = session_state(client, payload)

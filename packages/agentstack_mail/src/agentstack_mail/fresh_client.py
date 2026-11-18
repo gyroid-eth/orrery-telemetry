@@ -313,6 +313,11 @@ def main(argv=None):
         launch.add_argument('provider', choices=('claude', 'codex', 'dsh', 'hermes'))
         launch.add_argument('cwd')
         if operation == 'resume':launch.add_argument('--session-id', required=True)
+    resolve = commands.add_parser('resolve-ended')
+    resolve.add_argument('--context', required=True)
+    resolve.add_argument('--wrapper-root', required=True)
+    resolve.add_argument('--launch-id', required=True)
+    resolve.add_argument('--confirm-ended', action='store_true', required=True)
     options = parser.parse_args(argv)
 
     async def run():
@@ -328,6 +333,12 @@ def main(argv=None):
         return await client.call(options.tool, json.loads(sys.stdin.read(MAX_REQUEST_BYTES + 1)),
                                  request_id=options.request_id)
     try:
+        if options.command == 'resolve-ended':
+            from .fresh_end import resolve_ended
+            result = resolve_ended(FreshBoundClient(options.context), options.wrapper_root,
+                                  options.launch_id, confirm_ended=options.confirm_ended)
+            print(canonical(result))
+            return 0
         if options.command in {'startup-plan', 'startup-health'}:
             result = (startup_projection(options.context) if options.command == 'startup-plan'
                       else asyncio.run(startup_health(options.context)))
@@ -365,14 +376,24 @@ def main(argv=None):
         print(canonical(asyncio.run(run())))
         return 0
     except B1Error as error:
+        if options.command == 'resolve-ended':
+            print(canonical(dict(ok=False, code=error.code, launch_id=options.launch_id)))
+            return 2
         if options.command in {'proxy', 'launch', 'resume', 'session-hook', 'notifications', 'watch-fresh', 'harness-hook'}:
             import sys
             print('FRESH PROXY: ' + error.code, file=sys.stderr)
+            if error.code == 'FRESH_LAUNCH_OUTCOME_UNKNOWN' and error.details.get('launch_id'):
+                print('Current run: ' + error.details['launch_id'] +
+                      '; inspect the run, then use resolve-ended --launch-id ' +
+                      error.details['launch_id'] + ' --confirm-ended', file=sys.stderr)
             return 2
         print(canonical({'code': error.code} if options.command.startswith('startup-')
                         else {'code': error.code, **error.details}))
         return 1
     except (OSError, ValueError, TypeError):
+        if options.command == 'resolve-ended':
+            print(canonical(dict(ok=False, code='FRESH_RESOLVE_OBSERVATION_UNAVAILABLE', launch_id=options.launch_id)))
+            return 2
         if options.command in {'proxy', 'launch', 'resume', 'session-hook', 'notifications', 'watch-fresh', 'harness-hook'}:
             import sys
             print('FRESH PROXY: FRESH_CLIENT_UNAVAILABLE', file=sys.stderr)

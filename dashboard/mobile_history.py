@@ -22,6 +22,8 @@ from collections import OrderedDict
 import http.client
 import io
 import json
+import math
+from datetime import datetime
 import re
 import secrets
 import socket
@@ -112,6 +114,47 @@ def project_mail(item, body_limit=MAX_MAIL_BODY):
             'body': body, 'truncated': cut or item.get('truncated') is True}
 
 
+def _step_time(value):
+    if type(value) in (int, float):
+        return value if 0 <= value < 1e15 and math.isfinite(value) else None
+    if isinstance(value, str) and 1 <= len(value) <= 40:
+        try:
+            parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            if parsed.tzinfo is not None:
+                return value
+        except ValueError:
+            pass
+    return None
+
+
+def project_step(raw, boundary=False):
+    """Already summarized cockpit metadata, never arguments, output or grants."""
+    phases = {'start', 'end'} if boundary else {'call', 'result', 'complete'}
+    if (not isinstance(raw, dict) or not isinstance(raw.get('id'), str)
+            or not TOKEN.fullmatch(raw['id']) or not isinstance(raw.get('phase'), str)
+            or raw['phase'] not in phases):
+        return None
+    value = {'id': raw['id'], 'phase': raw['phase']}
+    if not boundary and raw['phase'] != 'result':
+        tool = _label(raw.get('tool'))
+        if not tool:
+            return None
+        value.update(tool=tool, detail=_label(raw.get('detail'), 240))
+    if not boundary and raw['phase'] in {'result', 'complete'}:
+        value['status'] = raw.get('status') if isinstance(raw.get('status'), str) and raw['status'] in {'done', 'failed', 'observed'} else 'observed'
+    for key in ('started', 'ended'):
+        time_value = _step_time(raw.get(key))
+        if time_value is not None:
+            value[key] = time_value
+    if boundary:
+        duration = raw.get('duration')
+        if type(duration) in (int, float) and 0 <= duration < 1e15 and math.isfinite(duration):
+            value['duration'] = duration
+    elif isinstance(raw.get('turn'), str) and TOKEN.fullmatch(raw['turn']):
+        value['turn'] = raw['turn']
+    return value
+
+
 def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None):
     """Only displayed fields. Diffs, cockpit reference IDs, cursors and paths
     never pass. ``issue`` turns a well-formed cockpit reference into this
@@ -119,6 +162,12 @@ def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None
     if not isinstance(raw, dict):
         return None
     kind, role = raw.get('kind'), raw.get('role')
+    step = project_step(raw.get('step'))
+    # Pair Claude results without ever relaying their output body.
+    if kind == 'tool_result':
+        if not step or step['phase'] != 'result' or role != 'assistant':
+            return None
+        kind = 'tool'
     # Generated notifications use the existing concise activity projection;
     # private task IDs, output paths and full system details are not forwarded.
     if kind == 'system' and role == 'system':
@@ -129,10 +178,21 @@ def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None
     if not isinstance(event_id, str) or not 1 <= len(event_id) <= 160 or not event_id.isascii():
         return None
     text, cut = _text(raw.get('text'), 160 if kind == 'tool' else text_limit)
-    if kind == 'tool':
+    if raw.get('kind') == 'tool_result':
+        text, cut = '', False
+    elif kind == 'tool':
         text = _label(text)
     result = {'id': event_id, 'kind': kind, 'role': role, 'text': text,
               'ts': _label(raw.get('ts'), 40), 'truncated': cut or raw.get('truncated') is True}
+    if step and kind == 'tool':
+        result['step'] = step
+    turn = project_step(raw.get('step_turn'), boundary=True)
+    if turn and raw.get('kind') == 'system':
+        result['step_turn'] = turn
+    if raw.get('step_boundary') is True and kind == 'text' and role == 'user':
+        result['step_boundary'] = True
+    if raw.get('step_wrapper') is True and kind == 'tool':
+        result['step_wrapper'] = True
     mail = [m for m in (project_mail(x, mail_limit) for x in (raw.get('mail') or [])[:8]) if m] if isinstance(raw.get('mail'), list) else []
     if kind == 'mail' and not mail:
         return None

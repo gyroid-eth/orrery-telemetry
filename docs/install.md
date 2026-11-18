@@ -42,7 +42,9 @@ installは `examples/native-harnesses/` に[日本語手順と4つの非有効�
 
 MacのKeychain形式とLinuxのSecret Service `credential_ref` は同梱手順で区別します。Linux対応sourceの静的準備は、実WSLの秘密取得/接続/Mail/終了/resumeの受入を意味しません。uninstall/purgeは所有記録のhashと一致する未編集の例だけを削除し、利用者コピー・編集済み/未記録fileは保持します。
 
-`install.sh --enable-dsh --dsh-node /absolute/node` はdsh 0.2.1-rc.2 / TUI 0.16.1と標準起動用のnative hook adapter、`--enable-hermes` は固定commit d923a5eb487a17c0a68801bba9ef0f56c81040a8のHermesを `harnesses/{dsh,hermes}/<世代>` へ導入します。両方なら2つのenableを指定します。既定ではどちらも取得せず、更新時は各々の保存済みenabledを継承します。Nodeは既存の24.2以上を絶対pathで指定し、本体は取得しません。取得はnpm/GitHubとHermesの固定PMに必要な配布元から行います。`--harness-cache PATH` はdshのtarball/npm offline cacheとHermesのlocal sourceを参照します（Hermes PMの依存取得は別です）。`--dry-run` は取得・書込なしです。
+`install.sh --enable-dsh --dsh-node /absolute/node` はdsh 0.2.1-rc.2 / TUI 0.16.1と標準起動用のnative hook adapter、`--enable-hermes` は固定commit d923a5eb487a17c0a68801bba9ef0f56c81040a8のHermesを `harnesses/{dsh,hermes}/<世代>` へ導入します。両方なら2つのenableを指定します。既定ではどちらも取得せず、更新時は各々の保存済みenabledを継承します。dsh用のNodeは既存の24.2以上を絶対pathで指定し、本体は取得しません。取得はnpm/GitHubとHermesの固定PMに必要な配布元から行います。`--harness-cache PATH` はdshのtarball/npm offline cacheとHermesのlocal sourceを参照します（Hermes PMの依存取得は別です）。`--dry-run` は取得・書込なしです。
+
+Hermes は既存 PM が取得した固定 Node/npm と、同じ固定 source の公式 `scripts/build/node-deps.mjs`・`tui.mjs` を使い、`ui-tui` と `apps/shared` の依存だけを lock に従って準備して、世代内の `tui-product/` を build します。web・desktop・一般 setup は実行しません。TUI recipe は世代 ID に含め、旧 `exa1` と profile を保持して新世代を作ります。Python があっても TUI の欠落・build 失敗があれば新世代を公開せず、従来の `current.json` を保持します。receipt は source・lock・PM の Node/npm・出力の hash を記録し、`keep` でも照合します。dsh 用の外部 Node の指定を Hermes に流用することはありません。Hermes の依存取得と TUI build には通信・追加容量が必要です。
 
 Hermesのsource取得では、明示した `--harness-cache` を最優先します。指定がなければ、所有記録とpathを検証でき、固定commitを持つ既存の管理世代からGit repositoryを独立コピーして再利用します。元repositoryの履歴とtagを残し、未commitの変更は引き継ぎません。利用できる管理sourceがない場合は、従来どおり公式GitHubからcloneします。cacheや選択済みsourceの取得失敗を、別の取得経路への切替で隠しません。固定commitの照合、CA修正とPM依存関係の検証は従来どおりです。対象は既存管理sourceを使える更新であり、新規導入の取得量や所要時間の短縮を保証するものではありません。PMの依存取得には別途通信が必要な場合があります。
 

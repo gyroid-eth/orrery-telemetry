@@ -279,6 +279,20 @@ The same effective config must show the approved plugin enabled and its bundled 
 
 Resume accepts **only native sessions already recorded by this new client**. It does not automatically attach an old Mail session, another client's session, or a run whose termination is unknown. With matching records, the arguments are `agentstack-resume claude "$orrery_workdir" --session-id <recorded-native-UUID>` (`codex` for Codex), with the same fresh environment variables as above. If termination is unknown, stop and let the operator establish execution state; do not rewrite receipts manually.
 
+### Resolve an unfinished run, then restart normally
+
+Call the shared prepared-context command `agentstack-runtime-client resolve-ended --launch-id <current-run-UUID> --confirm-ended`
+with the same fresh environment and Python as above. Check [end kinds and refusal reasons](persistent-agents.en.md#close-an-unfinished-fresh-run).
+Only after `ok:true`, separately use ordinary launch or persistent run with the same context. Preserve the old run.
+This differs from the old global `operator-json launch-resolve` contract; legacy and Desktop closure are unchanged.
+Old runs without versioned group observations, unavailable observations, live processes or a different identity/generation HOLD or refuse; do not handwrite recovery records.
+
+Ordinary fresh children use the same close operation. Only when the parent explicitly chooses to rerun the original task after reviewing its side effects,
+call `agentstack-runtime-client launch <provider> <original-cwd>` from the same prepared child context.
+Original parent/child, spawn and task checks remain, and the new run receives the original task.
+Keep `exec.json` and the handoff intact. Replaying child-spawn/child-run retains its status/one-execution contract; this is not automatic retry.
+Closure alone claims neither native_ready nor task success. Runs without a session receipt cannot establish a Reader/preview conversation or a resumable session.
+
 ### Automatic children: fresh routing through existing preregister/spawn entries
 
 Cutover requires automatic children through `/delegate`, New Agent and `/api/spawn`. **Limited fixtures cover the common Claude/Codex entries, managed dsh/Hermes/Local, App adapters and screen API wiring. Manually creating another agent is not a substitute completion condition.** Do not cut over until real-provider, real-environment startup/shutdown and attended acceptance are complete.

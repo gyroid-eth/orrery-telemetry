@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 39
+API_GENERATION = 40
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -1307,6 +1307,92 @@ class _AgentsAnswer:
         }
 
 
+# How long one /api/agents computation is reused, from the moment it started.
+# A display poll never sees an answer older than this, and any state-changing
+# POST drops it at once, so an operation's result shows on the next read.
+AGENTS_REUSE_SECONDS = 4.0
+# Conversation bindings of rows that are not running change only through an
+# operation (resume, spawn) or a provider writing a record; a poll can wait.
+# Known limit: a resume followed by an exit that happens outside this server's
+# POST routes does not drop the memo, so for at most this many seconds plus
+# AGENTS_REUSE_SECONDS a stopped row can still show its previous binding.
+_STOPPED_BINDING_REUSE_SECONDS = 30.0
+
+
+class _TimedReuse:
+    """Short-lived answers shared across requests, dropped by `invalidate()`.
+
+    An entry is stored only if no invalidation happened since its computation
+    started, so a computation that overlapped a state change never outlives it.
+    """
+
+    def __init__(self, seconds: float, clock=time.monotonic) -> None:
+        self._seconds, self._clock = seconds, clock
+        self._lock = threading.Lock()
+        self._generation = 0
+        self._entries: dict = {}
+
+    def get(self, key):
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            started, value = entry
+            if not 0 <= self._clock() - started < self._seconds:
+                del self._entries[key]
+                return None
+            return value
+
+    def begin(self) -> tuple[float, int]:
+        with self._lock:
+            return self._clock(), self._generation
+
+    def put(self, key, value, mark: tuple[float, int]) -> None:
+        with self._lock:
+            if mark[1] == self._generation:
+                self._entries[key] = (mark[0], value)
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._generation += 1
+            self._entries.clear()
+
+
+_AGENTS_REUSE = _TimedReuse(AGENTS_REUSE_SECONDS)
+# /api/graph is reused the same way, for the same time.
+_GRAPH_REUSE = _TimedReuse(AGENTS_REUSE_SECONDS)
+_STOPPED_BINDING_REUSE = _TimedReuse(_STOPPED_BINDING_REUSE_SECONDS)
+
+
+def invalidate_display_reuse() -> None:
+    """Forget every reused display answer; call after any state change."""
+    _AGENTS_REUSE.invalidate()
+    _GRAPH_REUSE.invalidate()
+    with _parent_env_lock:
+        _parent_env_memo.clear()
+    for module_name in ("graph_data", "dashboard.graph_data"):
+        module = sys.modules.get(module_name)
+        if module is not None and hasattr(module, "forget_parents"):
+            module.forget_parents()
+    _STOPPED_BINDING_REUSE.invalidate()
+
+
+def _agents_answer(history_days: float | None, single_flight) -> "_AgentsAnswer | None":
+    """The reusable /api/agents answer, or one computed through single flight."""
+    key = ("agents", history_days)
+    answer = _AGENTS_REUSE.get(key)
+    if answer is not None:
+        return answer
+
+    def compute():
+        mark = _AGENTS_REUSE.begin()
+        fresh = _AgentsAnswer(history_days)
+        _AGENTS_REUSE.put(key, fresh, mark)
+        return fresh
+
+    return single_flight(key, compute)
+
+
 def _with_registration_batch(function):
     """Run one display computation over a single registration read."""
 
@@ -1394,6 +1480,34 @@ def _retired_names(project_key: str) -> set[str]:
             con.close()
 
 
+_INSTRUCTION_MEMO: dict[tuple, dict] = {}
+
+
+def _mail_db_signature() -> tuple | None:
+    """Identity of the Mail database's committed content, or None to not reuse.
+
+    The last-instruction query is the heaviest read of a roster build and is a
+    pure function of that content. Reuse only when the database and its WAL are
+    unchanged and have been quiet for two seconds, so a fresh write (whose
+    mtime may not have moved enough to tell) always recomputes.
+    """
+    parts = []
+    newest = 0.0
+    for path in (DB_PATH, DB_PATH + "-wal"):
+        try:
+            info = os.stat(path)
+        except FileNotFoundError:
+            parts.append(None)
+            continue
+        except OSError:
+            return None
+        parts.append((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns))
+        newest = max(newest, info.st_mtime)
+    if parts[0] is None or time.time() - newest < 2.0:
+        return None
+    return (DB_PATH, *parts)
+
+
 def agentmail_state() -> tuple[dict, dict]:
     """(agents_by_name, last_instruction_by_name)。DB が無くても空で返す。"""
     agents: dict[str, dict] = {}
@@ -1408,6 +1522,10 @@ def agentmail_state() -> tuple[dict, dict]:
 
         agents.update(_mail_registrations(con))
 
+        signature = _mail_db_signature()
+        reused = _INSTRUCTION_MEMO.get(signature) if signature else None
+        if reused is not None:
+            return agents, {name: dict(value) for name, value in reused.items()}
         cur.execute(
             """
             SELECT a.name AS aname, m.subject, m.created_ts, m.importance,
@@ -1431,6 +1549,9 @@ def agentmail_state() -> tuple[dict, dict]:
                 "importance": r["importance"],
                 "ts": _iso_to_epoch(r["created_ts"]),
             }
+        if signature and _mail_db_signature() == signature:
+            _INSTRUCTION_MEMO.clear()
+            _INSTRUCTION_MEMO[signature] = {name: dict(value) for name, value in instr.items()}
     except Exception:
         pass
     finally:
@@ -1439,6 +1560,7 @@ def agentmail_state() -> tuple[dict, dict]:
     return agents, instr
 
 
+@functools.lru_cache(maxsize=16384)
 def _iso_to_epoch(s: str | None) -> int:
     if not s:
         return 0
@@ -1810,12 +1932,23 @@ def lookup_agent(name: str, history_days: float | None = None) -> dict | None:
     return row
 
 
-def _history_binding_fields(row: dict, *, now: float, claude_index=None) -> dict:
+def _history_binding_fields(row: dict, *, now: float, claude_index=None,
+                            reuse_stopped: bool = False) -> dict:
     """The conversation-record binding fields of one roster row.
 
     The single place build_agents() and history_binding_row() take them from,
     so the light route can never judge a binding differently from the roster.
+    `reuse_stopped` lets the roster poll reuse the verdict of a row that is not
+    running for a short while; the light route never does.
     """
+    if reuse_stopped and row.get("running") is False:
+        key = (row.get("name"), row.get("program"), row.get("category"), row.get("created"))
+        cached = _STOPPED_BINDING_REUSE.get(key)
+        if cached is None:
+            mark = _STOPPED_BINDING_REUSE.begin()
+            cached = _history_binding_fields(row, now=now, claude_index=claude_index)
+            _STOPPED_BINDING_REUSE.put(key, cached, mark)
+        return dict(cached)
     program = row.get("program")
     if program in {"codex", "codex-cli"}:
         return _codex_history_binding(row["name"], now=now)
@@ -2029,7 +2162,8 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
         )
         if row.get("program") in {"claude", "claude-code"} and claude_history_index is None:
             claude_history_index = claude_history.ReceiptIndex(SESSION_INDEX_DIR)
-        row.update(_history_binding_fields(row, now=observed_now, claude_index=claude_history_index))
+        row.update(_history_binding_fields(row, now=observed_now, claude_index=claude_history_index,
+                                          reuse_stopped=True))
         row["resume_capability"] = _resume_capability_for_row(
             row["name"],
             row.get("program") or "",
@@ -6719,6 +6853,28 @@ def _provider_stall_view(name: str, session: dict):
     return _provider_monitor.view(name, _provider_generation(session))
 
 
+# PARENT_AGENT is set when a session is created and never changes during it, so
+# a parent that was found is kept for that session generation. An empty or
+# failed answer is never kept: the stop monitor settles "no parent" on its own
+# second capture and does not retry, so a parent that appears late must still be
+# seen on the next sample.
+_parent_env_memo: dict[str, tuple[str, str]] = {}
+_parent_env_lock = threading.Lock()
+
+
+def _stall_parent(name: str, generation: str) -> str:
+    with _parent_env_lock:
+        hit = _parent_env_memo.get(name)
+        if hit and hit[0] == generation:
+            return hit[1]
+    env = _tmux(["show-environment", "-t", "=" + name, "PARENT_AGENT"]).strip()
+    parent = env.removeprefix("PARENT_AGENT=") if env.startswith("PARENT_AGENT=") else ""
+    if parent:
+        with _parent_env_lock:
+            _parent_env_memo[name] = (generation, parent)
+    return parent
+
+
 @_with_registration_batch
 def _provider_stall_samples():
     samples = []
@@ -6741,13 +6897,15 @@ def _provider_stall_samples():
             generation = _runtime_generation(session.get("created"), session.get("session_id"))
             if not captured or captured[0] != generation:
                 continue
-            env = _tmux(["show-environment", "-t", "=" + name, "PARENT_AGENT"]).strip()
-            parent = env.removeprefix("PARENT_AGENT=") if env.startswith("PARENT_AGENT=") else ""
+            parent = _stall_parent(name, _provider_generation(session))
             samples.append(dict(name=name, agent_id=registration["agent_id"],
                 project_key=registration["project_key"], generation=_provider_generation(session),
                 parent=parent, capture_id=captured[1], evidence=captured[2]))
         except Exception:
             logging.warning("Provider-stop sample unavailable for %s", name)
+    with _parent_env_lock:
+        for gone in set(_parent_env_memo) - set(sessions):
+            del _parent_env_memo[gone]
     return samples
 
 
@@ -6829,6 +6987,14 @@ def _runtime_activity(text: str) -> tuple[str, str]:
             rf"5h\s+{percent}%\s+left\s*\|\s*7d\s+{percent}%\s+left\s*",
             line, re.IGNORECASE) is not None
 
+    def mode_footer(line):
+        # Claude's built-in footer also identifies a composer when no custom
+        # statusLine is configured. Only recognize the known mode labels.
+        return re.fullmatch(
+            r"\s*⏵⏵\s+(?:auto mode|accept edits) on"
+            r"(?:\s+\(shift\+tab to cycle\))?(?:\s+·\s+.*)?\s*",
+            line) is not None
+
     def chrome(line):
         row = line.strip()
         return (not row or rule(row) or bool(_STATUSLINE_HINT_RE.search(row)) or usage_footer(row)
@@ -6842,7 +7008,8 @@ def _runtime_activity(text: str) -> tuple[str, str]:
         if prompt is None or re.match(r"\d+\.\s", prompt.group(1) or ""):
             continue
         suffix = lines[index + 1:]
-        if (any(_STATUSLINE_HINT_RE.search(row) or usage_footer(row) or row.strip().startswith("? for shortcuts")
+        if (any(_STATUSLINE_HINT_RE.search(row) or usage_footer(row) or mode_footer(row)
+                or row.strip().startswith("? for shortcuts")
                 for row in suffix) and all(chrome(row) for row in suffix)):
             composer = index
             break
@@ -9834,6 +10001,10 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _send(self, code: int, body: bytes, ctype: str):
+        if self.command == "POST":
+            # Before the client can see the answer: its next GET must not be
+            # served a roster computed before the operation.
+            invalidate_display_reuse()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -9971,8 +10142,7 @@ class Handler(BaseHTTPRequestHandler):
             scope = (q.get("scope") or [""])[0]
             # Every scope shares the one roster computation for this window;
             # only the answer written from it differs.
-            answer = self._single_flight(("agents", history_days),
-                                         lambda: _AgentsAnswer(history_days))
+            answer = _agents_answer(history_days, self._single_flight)
             if answer is not None:
                 self._send(200, answer.body(scope), "application/json; charset=utf-8")
         elif _HISTORY_BINDING_PATH.fullmatch(path):
@@ -10020,11 +10190,16 @@ class Handler(BaseHTTPRequestHandler):
             # lineage.  The ORRERY cockpit is one — it was pulling the full
             # node+edge payload every 6s just to read `spawn` out of it.
             spawn_only = (q.get("spawn_only") or ["0"])[0] in ("1", "true")
-            body = self._single_flight(
-                ("graph", days, show_all, spawn_only),
-                lambda: json.dumps(_graph_response(days, show_all, spawn_only),
-                                   ensure_ascii=False).encode(),
-            )
+            key = ("graph", days, show_all, spawn_only)
+
+            def compute_graph():
+                mark = _GRAPH_REUSE.begin()
+                made = json.dumps(_graph_response(days, show_all, spawn_only),
+                                  ensure_ascii=False).encode()
+                _GRAPH_REUSE.put(key, made, mark)
+                return made
+
+            body = _GRAPH_REUSE.get(key) or self._single_flight(key, compute_graph)
             if body is not None:
                 self._send(
                     200,
@@ -10179,6 +10354,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
+        try:
+            self._do_post()
+        finally:
+            # Again after the operation, for replies not written by _send.
+            invalidate_display_reuse()
+
+    def _do_post(self):
         path = urlparse(self.path).path
         if GLOBAL_MODE:
             try:

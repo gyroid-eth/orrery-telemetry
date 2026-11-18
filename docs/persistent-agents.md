@@ -59,6 +59,8 @@ Hermes も準備済みの同じ登録を使います。本物の `hermes chat --
 返信は `telegram_reply` tool、Mail は bound proxy と標準 watcher、端末からの入力は同じ TUI です。
 独自の gateway や headless bridge は起動しません。
 
+管理 installer が完成・検証した世代内の TUI product を使います。Telegram の起動計画は管理 receipt と選択済み runtime を照合し、`HERMES_TUI_DIR` と `HERMES_NODE` に検証済みの path だけを渡します。欠落・改ざんがあれば profile を書く前に `invalid_runtime` で停止します。起動時に npm 取得や build は行わず、Python PM workspace に `ui-tui` をコピーしません。この2つの env は通常の子／CLI の起動計画には追加しません。旧世代への手動コピーではなく、installer で新世代を取得してください。TUI の準備だけでは Telegram の資格・Mail・model 接続の受入は完了しません。
+
 ```json
 {
   "kind": "orrery-fresh-persistent-v1",
@@ -98,10 +100,64 @@ TUI／backend を起動中から観測し、通常終了でも子の終了を確
 `logs/telegram-status.json` の `telegram-ready` は poller の準備であり、Mail や返信の成功を保証しません。
 409・credential-unavailable・allowlist-empty は失敗として扱い、新旧の同 token を並走させません。
 
+`credential-unavailable` の詳細は、同じ Hermes HOME の `logs/telegram-credential-diagnostic.json`（0600）に残ります。固定理由は `configuration-invalid`（設定の読取・形）、`reference-invalid`（参照の形）、`unsupported-store`、`security-nonzero`（整数の returncode のみ追加）、`security-timeout`、`security-unavailable`、`empty-or-invalid-value`、Secret Service の `secret-service-timeout` / `secret-service-unavailable` です。設定・参照・token の値や helper の stdout/stderr・全環境は記録しません。これは最後の失敗なので、`pid`・`updated_at` を現在の status と照合してください。HOME や Keychain の設定をこの診断だけで変更せず、理由に対応する確認を行います。
+
 既知の制限: 既存 plugin の並行 flush と、長文返信の途中失敗による部分返信は今回直していません。
-Hermes の子が別 session に離れて残ったまま起動役が終わると、その子が終わるまで新しい bot は Telegram を受けない（profile ごとの lock で二重受信は起きない）。
+launcher が観測した子の残存は終了判定を拒否します。close 用 snapshot で把握した子の PID／出生も保存し、後で別 group／session に移っても生存中は close を拒否します。snapshot 後に初めて生じた未記録の離脱子は、この記録だけでは捕捉できません。
+launcher の `operation.lock` はその process が終了すると解放されます。一方、Hermes の Telegram plugin は別の `telegram-poller.lock` を同じ Hermes HOME で使い、**実際にその lock を保持する poller process が生きている間だけ**、同じ HOME の別 poller を拒否します（[保持・解放の実装](../integrations/hermes/telegram/managed_guard.py)、[poll thread 終了時の解放](../integrations/hermes/telegram/__init__.py)）。未観測の子や別 HOME の process がこの lock を保持するとは保証しません。二重受信防止を、未知の子が全て終了した証拠にしないでください。
 新 run は新会話で、旧会話の自動復元はありません。合成 transport／native による試験と実 Telegram の
 受け入れは別です。実 provider／Telegram の往復、WSL 実機、Mac／WSL の機体再起動は未受入です。
+
+## fresh の未終了 run を閉じる
+
+終了は次の4つを区別します。close は task の成功や副作用の取消ではありません。
+
+| 状態 | 記録と次の操作 |
+| --- | --- |
+| 正常終了 | 実 wait の `ended.json`、exit 0。通常の run を1回 |
+| 観測済みの失敗 | 子の終了まで観測した実 wait の `ended.json`、実際の非0 exit。通常の run を1回 |
+| 確認して閉じた終了 | `resolved-ended.json`、provider exit は unknown（JSON null）。通常の run を別に1回 |
+| 未確定 | wait 不明、残 process、観測不能、記録不足。次の run は拒否し、理由を報告 |
+
+子孫を観測する Hermes の wait で exit 23 と子の不在を確認した場合は失敗として閉じます。
+子孫観測のない Channels の予期しない非0終了、launcher 消失、停止 timeout は未確定です。
+exit 0 でも session receipt が成立しなかった場合、終了は記録しますが native の起動受入は失敗です。
+
+未終了の current run を利用者の指示で閉じるときは、同じ prepared context と確認済み Python を使います。
+`RUN_UUID` は診断に表示された現在 run の UUID、profile は今までの同じものです。
+
+```sh
+AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_PYTHON="$orrery_python" \
+  "$orrery_install/bin/agentstack-runtime-client" resolve-ended \
+    --launch-id "$RUN_UUID" --confirm-ended
+# 上の結果が ok:true の場合だけ、別操作として通常起動する。
+AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_PYTHON="$orrery_python" \
+  "$orrery_install/bin/agentstack-persistent" run --profile "$orrery_profile"
+```
+
+`--confirm-ended` は呼出側の明示判断で、追加の認証や force ではありません。同じ I/A・資格世代・context、
+current の UUID、起動 mutex、記録済み PID／出生・pane／socket・job group を再照合します。
+確認できたときだけ private record を新規に保存し、intent／session／current と元の終了コードを変更しません。
+重複 resolve は同じ終了種別を返します。閉じた run へ Mail 配送・hook・session の追記は行いません。
+kill、pane 削除、自動 restart は含みません。current／lock／receipt の削除や終了 record の手書きで回避しないでください。
+
+`FRESH_RESOLVE_PROCESS_ALIVE`／`FRESH_RESOLVE_GROUP_ALIVE` は残存、`FRESH_RESOLVE_PROCESS_CHANGED`／
+`FRESH_RESOLVE_TARGET_CHANGED` は PID・pane・socket 等の変更、`FRESH_RESOLVE_OBSERVATION_UNAVAILABLE` は観測不能、
+`FRESH_RESOLVE_RECORD_INSUFFICIENT` は記録不足です。`FRESH_LAUNCH_BUSY` や identity／資格の拒否も含め、停止して理由を報告します。
+必要な通常停止は別に行い、終了確認後に再度 resolve します。
+
+新しい tmux run は既存の `tmux.json` に版付きの PGID・leader 出生と、保存時の snapshot の親子関係から分かる provider の子孫の PID／出生を記録します。後で別 group に移った既知の子も生存を拒否します。64件の上限を超える、親子関係が循環する、出生や所有の形が不明な snapshot は、十分な記録として保存せず起動を止めます。
+この snapshot より後に初めて生じた子や、その後の未記録の離脱までは追跡しません。常駐 watcher や子孫の履歴 DB は作りません。
+その field がない古い run、tmux 観測のない foreground run は根拠が足りないため HOLD します。
+PID 3つの不在や人の確認 flag だけでは閉じません。任意の daemon 化／二重 fork や未記録の別 session の孤児を
+完全に証明する機能ではありません。Mac と Linux の共通 ps／tmux adapter を使い、WSL の Windows native process は対象外です。
+
+復旧を既に任された agent が操作する場合、人の毎回のコマンド・追加の製品承認は0回です。
+観測済み終了後は agent が通常 run を1回、未終了なら resolve と通常 run の2回です。
+人が直接操作する場合も2コマンドで、未確定を必ず2手で復旧できるとは限りません。
+Telegram・Mail の往復と自然 wake、provider login／hook trust、機体再起動の受入は別に確認します。
 
 ## 保証範囲
 

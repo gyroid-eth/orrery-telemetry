@@ -8,6 +8,28 @@
 
 ORRERYのcockpitがあれば、**Settings → Phone**からオン・オフできます（[次節](#cockpitのsettingsからオンにする)）。その下の表と[手動で有効にする](#手動で有効にする)は、cockpitを使わずに手で設定する場合の手順です。
 
+## スマホへ通知する（Android Chrome・任意）
+
+通知は既定でオフです。Phone accessの本人確認とpolicy確認を済ませた後、正規installerでoptional依存を用意します。まず `bash scripts/install.sh --with-mobile-push --dry-run` で計画を確認し、同じinstall先への `--with-mobile-push` 付きinstallを通常の承認手順で実行します。通常のinstallにはこの依存を追加しません。productionのPythonへ手でpipを実行しないでください。
+
+既にPhone accessを使っている場合は、`printf '%s\n' '{"access":true}' | agentstack-mobile apply` で同じ設定を再適用します。これにより管理対象の通知用Pythonをphone jobが選びます。依存だけを用意しても、通知の許可や購読は作られません。手動でrelayを起動する場合は、optional依存の入ったPythonと `--enable-push`、確認済みのhistory設定が必要です。
+
+スマホのReaderの上の**ベル**を押し、**Enable on this phone**を押してChromeの許可を与えます。許可を求めるのはこの操作だけです。設定は端末ごとに保存します。
+
+- **Reply needed**: 全agentの質問・承認待ち。既存Readerと同じask/questionを観測します。
+- **Work finished**: このagentだけ。新しい作業の後に待機となり、新しいassistantの返答が記録された「ターンの終わり」です。タスク全体の達成やプロセス終了を表しません。オンにしたagentのベルに印が付きます。
+- **Message previews**: 端末ごとに1つ、既定はオフです。オフならagent名と種類だけ。オンなら質問や最終返答の先頭を最大600文字まで表示します。コード・画像・token等の疑いがある本文・絶対pathを含む本文はpreviewを隠します。承認の具体文や検証済みの新しい質問文が取れない場合は、種類だけを表示します。
+
+Demo mode中も通知を送りますが、端末の設定にかかわらず本文のプレビューは送信直前に隠し、種類だけを表示します。名前はスマホ画面と同じ規則で、ホスト名や追加の伏せる単語に一致した部分だけを隠します。ベルでは有効化と通知種類の変更ができ、**Message previews**は一時的にオフ表示で操作できません。保存済みの値は変えず、Demoを切ると元に戻ります。Demoのオン・オフだけではbaselineや送信待ちを捨てません。
+
+**Disable on this phone**はサーバーの購読を消してからブラウザの購読を解除します。再有効化には同じベルを使います。Chromeで拒否した場合はChromeのsite settingsでORRERYの通知を許可し直します。最初の対象はAndroid Chromeです。iOS/Safariはこの版の対象外です。
+
+送信はMacからGoogleのPush serviceへの外向きHTTPSで行います。本文は標準Web Pushの暗号化を使いますが、Googleには配送先と時刻等のmetadata、およびVAPIDの連絡先として設定済みowner loginのメールアドレスが渡ります（メール形式のloginが必要です）。Funnelや公開の着信口は追加しません。通知を押すと同じoriginを開き、Readerの起動完了と最新名簿を待って、そのagentを開きます。Freshでは名簿のMail identityも入力先へ渡します。本文を受け取るたびにTailscale内の会話を取得する仕組みではありません。Reader閲覧にはTailscaleと起きているMacが必要です。
+
+鍵・購読・送信済みの印は `~/.agentstack/runtime/mobile-push/` に0700/0600で保存し、VAPID鍵は有効化時に1回だけ作ります。endpointと鍵はログへ出しません。Demo状態が不明・未対応の場合や、切断・unknownでは送信せず、初回起動や30秒を超える観測中断からの復帰はbaselineだけを取り直します。取得や送信の途中で30秒を超えて中断した場合も、その観測と未送信の通知を捨てます。Macのsleep中は新しい通知を送れません。履歴は1巡8件まで取得し、作業開始・完了確認・質問previewを共通の最終取得試行時刻が古い順に回します。取得の失敗も時刻を更新し、取り切れなかった作業開始の履歴は作業中の次巡へ持ち越します。画面を閉じてもrelayが5秒間隔で観測しますが、観測間の短い作業や、記録が取れないターンの完了通知は届かないことがあります。
+
+連打を抑えるため返事待ちを2回の観測で確定し、同じ状態を繰り返し通知しません。購読8端末・完了の選択は端末ごと128agent・pending64件・1巡4送信・最大3試行・120秒の期限を設けます。配送中に設定を切っても、既に受理された通知を取り消せるとは限りません。HTTP受理と端末表示は別で、OSの省電力・通知制限等による遅延や欠落があり、exactly-onceは保証しません。
+
 ## cockpitのSettingsからオンにする
 
 cockpitの**Settings**に**Phone**の節があり、スイッチは2つです。
@@ -67,6 +89,10 @@ badgeが**ON**になり、Setupの手順は消えます。**自分で確かめ�
 <img src="images/phone-settings-5-on.png" width="360" alt="badgeはON。Statusにreader running、Serve、Funnel off、Policy reviewedの4行が緑で並ぶ">
 
 ### スマホで会話を見る
+
+Claude・Codex の会話には、PC の Reader と同じ **Agent steps** を表示します。記録された完了操作を段で追加し、作業中は **Working…** と経過時間、終了後は **Worked for … · N steps** に畳みます。押すと開き、過去のターンは最初は畳んで表示します。明示された失敗だけを **Failed**、結果が記録されないものを **Observed** とします。Codex の実行途中の内側の操作は推測せず、完了記録が届いてから追加します。狭い画面では対象の要約を1行に省略します。
+
+段になった道具のラベルは重ねず、ファイル・画像・Mail と未対応の道具のまとまりは残します。古いページで Claude の対応する要求が見つからない場合は **Load earlier** の説明を表示します。段に必要な短い道具名・対象の要約・時刻・状態・opaque ID とターン区切りだけを中継し、生の引数や出力、path、cockpit の参照 ID は追加しません。ページ数・bytes 上限は同じです。Demo でも動作し、対象は他の本文と同じ既存の規則で伏せます。背景化で動き・時計を止め、Close で解除します。OS の reduced motion に従います。動きは [kokonutUI AI Loading](https://kokonutui.com/)（MIT）の PC 版を流用し、ライセンスを source に保持しています。
 
 スマホで、手順2の**Address on the phone**（`https://…:9443/`）を開き、agentを開きます。最初のHTTPSは、証明書の発行で数秒かかることがあります。**Conversation** tabが出れば、会話の記録まで届いています（[会話の記録を読む](#スマホでagentの会話の記録を読む)）。
 
@@ -134,6 +160,7 @@ Tailscaleを接続し、Android ChromeでreaderのHTTPSのServeアドレスを�
 
 - **Activity**: 一覧は差出人、宛先、時刻、To/Ccだけです。Mailを1件タップすると、その件名と本文を開きます。taskや私有パスを別途取得しませんが、Mail本文に書かれた内容は表示されます。Statusは、このreaderを起動した後に観測した変化です。実際に変化した時刻とは区別します。
 - **Graph**: 既定は直近24時間に活動が確認されたagentです。Focusはその中の選択agentと関連の強い最大5体、Allは選択期間内の全体です。**Find an agent**で名前またはRoleを検索できます。結果の名前を押すとReaderが開き、横の**Focus**はそのagentを中心にGraphを絞ります。Focus表示では周りのagentをタップすると中心を切り替えてFitし、中心のagentをタップするとReaderが開きます。All表示ではどのagentもタップでReaderが開きます。Enter・Spaceも同じ動きです。Roleは既存の注釈に登録された短い表示名だけを名前の下に表示し、未設定なら補いません。ピンチで拡大、ドラッグで移動、Fitで収めます。大きなgraphで全名前を同時に読めることは保証しません。
+- Graphのagentや検索結果の名前から開いたReaderを**×**や**Back**で閉じると、最後に読んでいたagentと関連の強い最大5体をFocusで表示してFitします。Activityなどから開いた場合は元の画面へ戻ります。
 - Focus・Allとも、75%以上の拡大率では全agentの肖像の下に名前、その下に登録済みのRoleを表示します。選択中の名前は従来の大きさを保ち、それ以外は小さく表示します。75%未満では名前とRoleを隠します。
 - 線の太さと矢印の大きさは選択期間のMail件数に対応します。件数は方向・To/Ccごとの**宛先行数**で、未読数や一意の送信数ではありません。親子の破線はMailとは別です。
 - 文脈残量弧とWorkingの動きはPCと共通です。文脈の取得時刻は不明なまま扱い、未知値には弧を描きません。アカウント利用枠はUnavailableで、更新要求もしません。

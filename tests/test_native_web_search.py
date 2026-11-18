@@ -14,6 +14,7 @@ import pytest
 
 import test_dsh_thin_config as dsh
 import test_hermes_thin_config as hermes
+import test_hermes_tui_product as hermes_tui
 import test_harness_child as harness_child
 from test_spawn_parity import catalog, preview
 
@@ -37,6 +38,17 @@ def fixture_for(harness):
 @pytest.mark.parametrize('provider', ['exa', 'searxng'])
 def test_fresh_telegram_bot_keeps_web_search_and_both_credential_references(provider):
     with fixture_for('hermes') as f:
+        hermes_tui.add_source_inputs(f.source)
+        hermes_tui.save(f.source / 'pm/lock.json', {'packages': hermes_tui.pins()})
+        hermes_tui.add_tools(f.runtime, f.source)
+        hermes_tui.make_product(f.runtime)
+        receipt = f.runtime / '.orrery-managed-install.json'
+        runtime = {**f.template_data, **hermes_tui.details(f.runtime),
+                   'generation_receipt': str(receipt)}
+        hermes_tui.save(receipt, {'harness': 'hermes', 'hermes_commit': hermes_tui.tui.BASE,
+                                  'complete': True, 'details': runtime})
+        f.template_data['generation_receipt'] = str(receipt)
+        f.save(f.template, f.template_data)
         client = f.base / 'fresh-client'
         client.mkdir()
         (client / 'context.json').write_text('{}')
@@ -50,6 +62,8 @@ def test_fresh_telegram_bot_keeps_web_search_and_both_credential_references(prov
         overlay = hermes.config.read(Path(plan['config_dir']) / 'config.yaml')
         definitions = hermes.config.read(Path(plan['env']['AGENTSTACK_LLM_KEY_DEFINITIONS']))
         assert '--tui' in plan['argv']
+        assert plan['env']['HERMES_TUI_DIR'] == runtime['hermes_tui_dir']
+        assert plan['env']['HERMES_NODE'] == runtime['hermes_node']
         assert overlay['telegram'] == document['telegram']
         assert 'orrery-telegram' in overlay['plugins']['enabled']
         assert overlay['web']['search_backend'] == ('orrery-searxng' if provider == 'searxng' else 'exa')

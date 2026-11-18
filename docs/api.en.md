@@ -73,7 +73,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":39}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":40}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -96,7 +96,13 @@ This path requires `AGENTSTACK_RUNTIME_MODE=fresh` and the protected `AGENTSTACK
 
 A parent name must be unique across the whole directory, including retired rows. Ambiguity returns candidate IDs; newest row, largest ID and folder never select an owner. An explicit I/A can select an active target. Missing, ambiguous or revoked protected parent contexts stop launch. A standalone task's technical preparation client is not its logical parent or report recipient. Registration, preparation and handoff reuse the common fresh child path for Claude/Codex/dsh/Hermes/Local. Hermes retains its HTTPS requirement.
 
-The successful response `ok:true,pending:true,child_name,job_id,I/A` means handoff acceptance, not completed native startup. Status `state:launching,result:null` is unconfirmed; detail:unknown means an uncertain outcome that must not be automatically retried, and detail:not_started means saved preparation without handoff. A confirmed native receipt yields the existing caller's launch verdict state:ready. Execution state stays separate in detail:started/ended and result.native_ready. Ending without native confirmation yields state:failed; termination alone never means success. Roster native_ready also describes a receipt, not current OS process liveness; unconfirmed running remains null. A failure after preparation returns the same job/I/A for status and manual resolution; it does not automatically create another same-name agent. Fresh I is projected byte-for-byte as its generated 32 lowercase hex digits, without converting it to a hyphenated UUID.
+A successful `ok:true,pending:true,child_name,job_id,I/A` accepts the handoff, not native startup. `state:launching,result:null` is unconfirmed; `detail:unknown` is an uncertain outcome that is not retried automatically, and `detail:not_started` means preparation is saved but execution has not started.
+
+API 40 distinguishes `started`, `ended` and `resolved-ended` in `detail` and, when `result` is present, `result.execution`. `started` and an observed-wait `ended` return `state:ready,result.native_ready:true` only with an established native receipt. An end without a native receipt returns `state:failed,result.native_ready:false`. `ended` also covers actual nonzero exits: `native_ready` reports startup receipt establishment, not task success or current OS liveness.
+
+`resolved-ended` means explicit confirmation closed a run whose exit code is unknown. **Even with a historical receipt, it returns `state:failed,result.native_ready:false`** rather than treating closure as successful native startup. The roster's `native_ready` is also false for a resolved run. Closure never manufactures a receipt, and status queries never restart a run. Without a current OS observation, `running` remains null.
+
+Failures after preparation retain the same job/I/A for status and procedural recovery. They never create another agent automatically under the same name. Fresh I projects its generated 32-character lowercase hex unchanged rather than converting it to a hyphenated representation.
 
 API2a connects the Mail/graph readers below; API2b-1 connects PC term/history/jump/exit for the current target. Ended kill/retire uses the management contract below; R4 has a separate human opt-in contract. Reactivate, retired resume and App GUI activation remain unconnected. Worktree, browser, custom base/tools, spawn's terminal option, annotations(role/group/emoji/task), and dry_run are also explicitly unavailable. This does not replace ordinary standalone/parented automatic spawning with manual child creation. The user's agent can prepare work folders and provider settings using the [migration procedure](fresh-global-update.en.md), which also covers configuration, cutover and recovery.
 

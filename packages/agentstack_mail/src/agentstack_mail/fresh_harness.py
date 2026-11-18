@@ -75,7 +75,10 @@ def plan(client, root, provider, settings, run, cwd, prompt, session_id, *, pers
     fd = os.open(task, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'w') as output:output.write(prompt or '')
     mcp = state / 'mail.json'
-    env = dict(AGENTSTACK_RUNTIME_MODE='fresh', AGENTSTACK_FRESH_CLIENT_CONTEXT=str(client.path))
+    # Native stdio MCP filters its parent's environment. Pin the Mail client
+    # interpreter here, as Channels does, rather than relying on PATH's python3.
+    env = dict(AGENTSTACK_RUNTIME_MODE='fresh', AGENTSTACK_FRESH_CLIENT_CONTEXT=str(client.path),
+               AGENTSTACK_PYTHON=sys.executable)
     _write_private(mcp, {'mcpServers': {'orrery-mail': {'command':'/bin/bash',
         'args':[str(root / 'bin/agentstack-runtime-client'),'proxy'], 'env':env}}})
     from .fresh_proxy import verified_owner
@@ -145,6 +148,7 @@ def session_reference(client, intent, session_id):
 
 
 async def hook(client, action, payload):
+    from .fresh_end import read_run_end
     from .fresh_launch import layout, native_id, pinned, record_session
     from .fresh_proxy import verified_owner
     if (os.environ.get('AGENTSTACK_FRESH_CLIENT_CONTEXT') != str(client.path)
@@ -159,12 +163,13 @@ async def hook(client, action, payload):
     launch_id = native_id(os.environ.get('AGENTSTACK_FRESH_LAUNCH_ID'))
     run = base / 'runs' / launch_id
     intent = _read_private(run / 'intent.json');pinned(client, intent)
+    if read_run_end(client, run) is not None:raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
     receipt = _read_private(run / 'session.json');pinned(client, receipt)
     if (intent.get('provider') not in PROGRAMS | {'claude','codex'} or intent.get('nonce') != os.environ.get('AGENTSTACK_FRESH_LAUNCH_NONCE')
             or receipt.get('launch_id') != launch_id or receipt.get('provider') != intent['provider']
             or receipt.get('native_session_id') != payload.get('session_id')
             or _read_private(base / 'current.json') != {'launch_id':launch_id}
-            or (run / 'ended.json').exists()):raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
+            or read_run_end(client, run) is not None):raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
     if action == 'post-edit':
         # Fresh leases are explicit release/TTL, as for the existing fresh clients.
         # Do not dispatch the legacy project-scoped debounce worker after an edit.

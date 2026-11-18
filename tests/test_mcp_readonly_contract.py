@@ -67,6 +67,7 @@ def isolated_roster(monkeypatch, tmp_path):
     monkeypatch.setattr(server.harness_runtime, "metadata", lambda *a, **k: {})
     server._RETIRED_AT_CACHE.clear()
     server._HTTP_SINGLE_FLIGHT.clear()
+    server.invalidate_display_reuse()
     return database
 
 

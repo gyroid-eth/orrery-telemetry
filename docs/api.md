@@ -72,7 +72,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":39}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":40}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -95,7 +95,13 @@ version の解決順は [インストール](install.md#version)を参照して�
 
 親の名前は全台帳・retired 込みで一意の場合だけ解決し、曖昧なら候補 ID を添えて拒否します。最新行・最大 ID・folder で選びません。明示 I/A は active な対象だけを選べます。対象に対応する保護 client が欠落・曖昧・失効なら停止します。standalone の技術的な準備元 client は、task の論理上の親／報告先にはなりません。登録・prepare・handoff は共通 fresh child 経路で、Claude/Codex/dsh/Hermes/Local の選択を引き継ぎます。Hermes の HTTPS 要件は維持します。
 
-成功応答の `ok:true,pending:true,child_name,job_id,I/A` は handoff の受付であり、native 起動完了ではありません。status の `state:launching,result:null` は未確認、`detail:unknown` は自動再試行しない結果不明、`detail:not_started` は保存済み準備後の未開始です。native receipt が成立した起動verdictは既存callerと同じ `state:ready`。実行中／終了は `detail:started/ended` と `result.native_ready` で別に示します。native未成立の終了は `state:failed` であり、終了だけを成功へ寄せません。roster の native_ready も receipt の観測であり、OS process の現在の生存を証明しないため、未確認時の running は null のままです。準備後に失敗した場合は同じ job/I/A をエラーへ返し、status と手順で解決します。同名で自動的に別の agent を起こしません。fresh Iは生成された32桁の小文字hexをそのまま投影し、hyphen形式へ変換しません。
+成功応答の `ok:true,pending:true,child_name,job_id,I/A` は handoff の受付であり、native 起動完了ではありません。status の `state:launching,result:null` は未確認、`detail:unknown` は自動再試行しない結果不明、`detail:not_started` は保存済み準備後の未開始です。
+
+API 40 では、`detail` と（`result` がある場合の）`result.execution` は `started`／`ended`／`resolved-ended` を区別します。`started` と実 wait の `ended` は、native receipt が成立した場合だけ `state:ready,result.native_ready:true` です。native 未成立の終了は `state:failed,result.native_ready:false` です。`ended` は実際の非0終了も含み、`native_ready` は起動 receipt の成立を表すだけで task の成功や現在の OS 生存を意味しません。
+
+`resolved-ended` は、終了コード不明の run を明示確認で閉じた状態です。**過去の receipt が残っていても `state:failed,result.native_ready:false`** を返し、確認終了を native 起動成功へ変換しません。roster の `native_ready` も resolved run では false です。終了だけで receipt を作らず、照会から再起動もしません。OS の現在観測が無ければ `running` は null のままです。
+
+準備後に失敗した場合は同じ job/I/A をエラーへ返し、status と手順で解決します。同名で自動的に別の agent を起こしません。fresh I は生成された32桁の小文字hexをそのまま投影し、hyphen形式へ変換しません。
 
 API2a は下記の Mail/graph 読取、API2b-1 は PC の現在対象に対する term/history/jump/exit を接続します。終了済み kill/retire は下記の管理契約、R4 は別の本人opt-inの契約です。reactivate／退役済みresume／App GUI activationは未接続です。worktree、browser、独自 base/tools、spawn 時の terminal 指定、annotation(role/group/emoji/task)、dry_run も明示拒否です。通常の standalone／親付き自動起動の代わりに手動子作成を要求する意味ではありません。必要な作業folderやprovider設定は利用者のagentが手順で準備します。設定・切替・復旧は [日英の移行手順](fresh-global-update.md) を参照してください。
 

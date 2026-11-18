@@ -8,7 +8,7 @@ let snapshot=null,kind='all',agentFilter='',desiredWindow='day',timer=0,active=n
 const mailRef=a=>a&&/^[a-f0-9]{32}$/.test(a.mail_instance_id)&&Number.isSafeInteger(a.mail_agent_id)&&a.mail_agent_id>0?{mail_instance_id:a.mail_instance_id,mail_agent_id:a.mail_agent_id}:null;
 function markRef(element,value){if(typeof value?.name==='string')element.dataset.agentName=value.name;const ref=mailRef(value);if(ref){element.dataset.mailInstanceId=ref.mail_instance_id;element.dataset.mailAgentId=String(ref.mail_agent_id);}}
 window.OrreryMobileAgent={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?{state:rows[0].act_state,running:rows[0].running,workDisplay:typeof rows[0].work_disp==='string'?rows[0].work_disp:'',stale:snapshot.sources.agents.status!=='available'||snapshot.sources.agents.age_seconds===null||snapshot.sources.agents.age_seconds+(performance.now()-receivedAt)/1000>30}:null;}};
-window.OrreryMobileIdentity={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?mailRef(rows[0]):null;}};
+window.OrreryMobileIdentity={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?mailRef(rows[0]):null;},roster(){const source=snapshot?.sources.agents;return source?.status==='available'&&source.age_seconds!==null&&source.age_seconds+(performance.now()-receivedAt)/1000<=30?snapshot.agents:null;}};
 let mailPage=null,mailPositions=[null],mailPosition=0,mailController=null,mailGeneration=0;
 let pair=null,pairController=null,pairGeneration=0,detailController=null,detailGeneration=0;
 const minutesAt=position=>Math.max(15,Math.min(43200,Math.round(Math.exp(Math.log(15)+position/1000*Math.log(43200/15))/15)*15));
@@ -19,7 +19,10 @@ function openGraphAgent(name){
  const terminal=window.OrreryMobileTerminal,status=$('#graph-reader-status');
  status.hidden=terminal?.available()===true;
  if(!status.hidden){status.textContent='Reader is unavailable. Check Phone access on the desktop.';return;}
- terminal.open(name,window.OrreryMobileIdentity?.forName(name));
+ terminal.open(name,window.OrreryMobileIdentity?.forName(name),null,closedName=>{
+  network.focus(closedName);
+  if(network.svg.contains(document.activeElement))document.activeElement.blur();
+ });
 }
 let graphFullscreen=null;
 const time=ts=>typeof ts==='number'?new Date(ts*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'Unknown';
@@ -104,6 +107,7 @@ function showNotices(notices,data,label){
 function render(data){
  if(snapshot?.timeline.scope&&snapshot.timeline.scope!==data.timeline.scope){clearDetail();clearPair();resetMail();}
  snapshot=data;receivedAt=performance.now();
+ window.OrreryMobileTerminal?.restore?.();
  // The displayed roster is the projection's graph.nodes + agents union.
  // Mail success cannot establish an empty roster or working/waiting counts.
  const rosterSources=[data.sources.agents,data.sources.graph],mail=data.sources.mail;
@@ -437,7 +441,7 @@ const fresh=()=>capability?.api===34;
 const ref=value=>value&&/^[a-f0-9]{32}$/.test(value.mail_instance_id)&&Number.isSafeInteger(value.mail_agent_id)&&value.mail_agent_id>0?{mail_instance_id:value.mail_instance_id,mail_agent_id:value.mail_agent_id}:null;
 const rowRef=row=>ref({mail_instance_id:row.dataset.mailInstanceId,mail_agent_id:Number(row.dataset.mailAgentId)});
 const sameTarget=value=>!fresh()||!!ref(value)&&!!selector&&value.mail_instance_id===selector.mail_instance_id&&value.mail_agent_id===selector.mail_agent_id;
-let generation=0,previewController=null,operationController=null,pollTimer=0,expiryTimer=0,failures=0,prepared=null,receipt=null,previousFocus=null;
+let generation=0,previewController=null,operationController=null,pollTimer=0,expiryTimer=0,failures=0,prepared=null,receipt=null,previousFocus=null,afterClose=null;
 let replyReference=null,preparedReference=null;
 const referenceTarget=()=>target?JSON.stringify([name,capability?.epoch,target.choice,target.revision,selector?.mail_instance_id,selector?.mail_agent_id]):'';
 const referenceCurrent=value=>!value||value.target===referenceTarget()&&value.value.isCurrent();
@@ -461,7 +465,16 @@ let restoreView=savedView();
 function rememberView(){if(!sheet.open||!name)return;const identity=ref(selector);try{window.sessionStorage.setItem(viewKey,JSON.stringify({agent:name,tab,...identity}));}catch(_){}}
 function forgetView(){try{window.sessionStorage.removeItem(viewKey);}catch(_){}}
 function restoreSavedView(){
- if(!startupReady||!restoreView||sheet.open||document.hidden||!(enabled||history))return;
+ if(!startupReady||document.hidden||!(enabled||history))return;
+ const notification=/^#notify=([A-Za-z][A-Za-z0-9_-]{0,95})$/.exec(window.location?.hash||'');
+ if(notification){
+  const rows=window.OrreryMobileIdentity?.roster();if(!rows)return;
+  const found=rows.filter(a=>a.name===notification[1]&&!a.retired);
+  if(found.length!==1){const status=q('#graph-reader-status');status.hidden=false;status.textContent='That agent is no longer available.';return;}
+  const identity=ref(found[0]);if(fresh()&&!identity)return;
+  open(found[0].name,identity);return;
+ }
+ if(!restoreView||sheet.open)return;
  const identity=window.OrreryMobileIdentity?.forName(restoreView.agent);
  const saved=ref(restoreView);
  if(saved){
@@ -493,8 +506,15 @@ function cancelIntent(){
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
 function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;imageController?.abort();imageController=null;imageProbeController?.abort();imageProbeController=null;imageAvailable=false;imageProbe='';clearAttachments();paused=false;checkingView=false;generation++;}
-function clear(){replyReference=preparedReference=null;inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
-function close(fromBack=false,keepView=false){if(!keepView){restoreView=null;forgetView();}const remove=backEntry&&window.history.state?.orreryConversation===true;backEntry=false;const restore=previousFocus;previousFocus=null;clear();if(sheet.open)sheet.close();if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});if(remove&&fromBack!==true){backClosing=true;window.history.back();}}
+function clear(){window.OrreryMobilePush?.close();replyReference=preparedReference=null;inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
+function close(fromBack=false,keepView=false){
+ if(!keepView){restoreView=null;forgetView();}
+ const remove=backEntry&&window.history.state?.orreryConversation===true,closedName=name,finished=afterClose,restore=previousFocus;
+ backEntry=false;previousFocus=afterClose=null;clear();if(sheet.open)sheet.close();
+ if(!document.hidden&&!keepView&&finished)finished(closedName);
+ else if(!document.hidden&&restore?.isConnected)restore.focus({preventScroll:true});
+ if(remove&&fromBack!==true){backClosing=true;window.history.back();}
+}
 window.addEventListener('popstate',event=>{if(backClosing){backClosing=false;event.stopImmediatePropagation();return;}if(sheet.open&&backEntry){event.stopImmediatePropagation();if(dismissLayer()){window.history.pushState({orreryConversation:true},'');return;}backEntry=false;close(true);}},true);
 const entryLabel=()=>history?'History':'Terminal';
 function entry(n,cls='',identity=null){
@@ -514,9 +534,17 @@ function mail(event){
  for(const [label,n,id]of[['From',event.source,event.source_agent_id],['To',event.target,event.target_agent_id]]){const row=make('div','terminal-mail-person');row.append(make('span','',label+' '+n),entry(n,'',ref({mail_instance_id:event.mail_instance_id,mail_agent_id:id})));people.append(row);}
  q('#message-route').after(people);
 }
-async function open(n,identity=null,initialTab=null){
- if(busy()||sheet.open&&phase==='unknown'||!(enabled||history)||document.hidden)return;previousFocus=sheet.open?previousFocus:document.activeElement;clear();name=n;selector=ref(identity);window.scrollTo({top:0,behavior:'instant'});
- if(!sheet.open){sheet.showModal();if(history){window.history.pushState({orreryConversation:true},'');backEntry=true;}}
+async function open(n,identity=null,initialTab=null,onClose=null){
+ if(busy()||sheet.open&&phase==='unknown'||!(enabled||history)||document.hidden)return;
+ const opening=!sheet.open;
+ // Keep the entry route while navigating to another agent within this sheet.
+ if(opening){previousFocus=document.activeElement;afterClose=onClose;}
+ clear();name=n;selector=ref(identity);window.scrollTo({top:0,behavior:'instant'});
+ if(opening)sheet.showModal();
+ // Consume only after the Reader accepts the target, before adding its Back
+ // entry so Back cannot resurrect the same notification link.
+ if(window.location?.hash==='#notify='+n)window.history.replaceState(window.history.state,'',window.location.pathname+window.location.search);
+ if(opening&&history){window.history.pushState({orreryConversation:true},'');backEntry=true;}
  if(history){tab=initialTab==='terminal'&&enabled?'terminal':'conversation';conversation().mount(n);}
  if(!enabled){phase='history-only';render();return;}
  if(fresh()&&!selector){phase='unavailable';message='A unique Mail identity is required. Refresh the agent list or open a Mail participant.';render();return;}
@@ -832,6 +860,7 @@ function readerBar(){
   if(['conversation','terminal'].includes(value)){b.setAttribute('aria-pressed',String(tab===value));b.disabled=busy();}
   bar.append(b);
  }
+ const bell=window.OrreryMobilePush?.button(name);if(bell){bell.disabled=busy();bar.insertBefore(bell,bar.lastElementChild);}
  sheet.append(bar);queueMicrotask(()=>{conversation()?.refreshActivity?.();refreshOutput();});
 }
 function fitInput(field){
@@ -1025,7 +1054,7 @@ async function resumeView(){
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseView();else if(paused){paused=false;resumeView();}else restoreSavedView();});
 window.addEventListener('pagehide',()=>{rememberView();close(true,true);},true);
-window.OrreryMobileTerminal={open,close,mail,available:()=>enabled||history,reference:addReference,refreshReference,canReference:()=>phase==='editing'&&tab==='conversation'&&previewOK&&!!target};entries();
+window.OrreryMobileTerminal={open,close,mail,restore:restoreSavedView,available:()=>enabled||history,reference:addReference,refreshReference,canReference:()=>phase==='editing'&&tab==='conversation'&&previewOK&&!!target};entries();
 const historyChecked=window.OrreryMobileConversation?window.OrreryMobileConversation.enabled():Promise.resolve(false);
 historyChecked.then(value=>{if(value!==true)return;history=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent=enabled?'History · Terminal':'History enabled';entries();});
 const controller=new AbortController();const terminalChecked=request('',null,controller).then(value=>{if(((value.api===31&&value.supported==='legacy-managed-pane')||(value.api===34&&value.supported==='fresh-managed-pane'))&&value.enabled===true&&value.ack==='tmux-command-accepted'){capability=Object.freeze({...value});enabled=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent=history?'History · Terminal':'Terminal enabled';entries();}}).catch(()=>{});

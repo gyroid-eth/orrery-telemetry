@@ -33,6 +33,9 @@ def fixture_stamp(source):
     return installer.hermes_stamp_details(source)
 
 
+from test_hermes_tui_product import add_source_inputs, add_tools, make_product, details as tui_details, pins as tui_pins
+
+
 class CAFixture:
     """Synthetic trust inputs; real recipe/patch/evidence code, no package calls."""
     def __init__(self, module, directory):
@@ -65,6 +68,7 @@ class CAFixture:
         current = '[[package]]\n' + '\n'.join(k + '=' + inline(v) for k, v in policy['certifi']['lock_record'].items()) + '\n'
         new_uv = {'packages': {'uv': {'version': '0.13.5', 'artifacts': {
             name: {k: item[k] for k in ('url', 'sha256')} for name, item in policy['uv_artifacts'].items()}}}}
+        new_uv['packages'].update(tui_pins(self.target))
         after = {'pyproject.toml': '[project]\nname="fixture"\ndependencies=["certifi==2026.10.19"]\n',
                  'uv.lock': current, 'pm/lock.json': json.dumps(new_uv, indent=2) + '\n'}
         self.before = {name: value.replace('2026.10.19', '2026.5.20').replace('0.13.5', '0.12.3') for name, value in after.items()}
@@ -88,6 +92,7 @@ class CAFixture:
         self.stack.close()
 
     def source(self, source):
+        add_source_inputs(Path(source))
         for name, text in self.before.items():
             target = Path(source) / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -114,6 +119,7 @@ class CAFixture:
         binary.write_bytes(self.uv)
         installer.save(root / 'tools/facts.json', {'packages': {'uv': {'entry': 'uv-fixture', 'target': self.target,
             'version': '0.13.5', 'artifacts': [item['sha256']]}}})
+        add_tools(root, source, self.target)
         return {'bundle': str(bundle), 'metadata': str(metadata)}
 
 
@@ -130,7 +136,8 @@ class InstallTests(unittest.TestCase):
         return self.install / 'harnesses' / harness / installer.generation_id(ROOT, harness)
 
     def test_hermes_sdk_upgrade_acquires_new_generation_and_keeps_old_runtime(self):
-        for suffix in ('-v2', '-ca1-' + installer.hermes_ca().load(ROOT)[2][:16]):
+        for suffix in ('-v2', '-ca1-' + installer.hermes_ca().load(ROOT)[2][:16],
+                       '-ca1-' + installer.hermes_ca().load(ROOT)[2][:16] + '-exa1'):
             with self.subTest(previous=suffix):
                 self.install = self.home / ('upgrade-' + suffix)
                 old = self.install / 'harnesses/hermes' / (installer.HERMES_COMMIT[:16] + suffix)
@@ -221,9 +228,10 @@ class InstallTests(unittest.TestCase):
         paths = self.ca.material(root, source, generation)
         stamp = fixture_stamp(source)
         proof = self.ca.ca.runtime_evidence(ROOT, root, source, generation, self.ca.target, paths)
+        make_product(root, self.ca.target)
         return {'hermes_source': str(source), 'managed_root': str(root), 'hermes_executable': str(generation / 'bin/hermes'),
                 'variant': 'plain', 'thin_config_contract': 1,
-                'ca_recipe': self.ca.ca.load(ROOT)[2], 'ca_evidence': proof, **stamp}
+                'ca_recipe': self.ca.ca.load(ROOT)[2], 'ca_evidence': proof, **stamp, **tui_details(root, self.ca.target)}
 
     def test_default_and_dry_run_do_not_acquire_or_copy(self):
         with patch.object(installer, 'install_dsh') as dsh, patch.object(installer, 'install_hermes') as hermes:
@@ -440,6 +448,13 @@ class AcquisitionTests(unittest.TestCase):
         self.calls.append((argv, Path(cwd), dict(env)))
         self.assertNotIn('DEEPSEEK_API_KEY', env)
         self.assertNotIn('ANTHROPIC_API_KEY', env)
+        if '-p' in argv and 'npm_execpath' in env:
+            return json.dumps({'version': 'v26.7.0', 'execPath': argv[0]})
+        if len(argv) > 1 and argv[1].endswith('/scripts/build/node-deps.mjs'):
+            return ''
+        if len(argv) > 1 and argv[1].endswith('/scripts/build/tui.mjs'):
+            make_product(self.root, self.ca.target)
+            return ''
         if '-p' in argv:
             return json.dumps({'version': self.version, 'execPath': self.exec_path})
         if 'ci' in argv:
@@ -631,6 +646,61 @@ class AcquisitionTests(unittest.TestCase):
         stamp.write_text(stamp.read_text() + ' ')
         with patch.object(installer, 'run', return_value=installer.HERMES_COMMIT):
             with self.assertRaisesRegex(ValueError, 'stamp receipt changed'):
+                installer.validate(self.repo, 'hermes', {'harness': 'hermes', 'complete': True, 'details': details})
+
+    def test_tui_failure_never_publishes_and_retains_previous_generation(self):
+        for stage in ('node-deps.mjs', 'tui.mjs', 'missing-product', 'missing-esbuild'):
+            with self.subTest(stage=stage):
+                install = self.base / ('failed-tui-' + stage)
+                previous = install / 'harnesses/hermes/previous-exa1'
+                previous.mkdir(parents=True)
+                sentinel = previous / 'keep.txt';sentinel.write_text('keep old runtime')
+                current = previous.parent / 'current.json'
+                installer.save(current, {'generation': previous.name})
+                installer.save(install / 'dashboard/hermes-provider.json', {'enabled': True})
+                before = current.read_bytes()
+                self.root = install / 'harnesses/hermes' / installer.generation_id(self.repo, 'hermes')
+                first_call = len(self.calls)
+                def fail(argv, *, cwd, env):
+                    if stage == 'missing-esbuild' and len(argv) > 1 and '/scripts/build/' in argv[1]:
+                        self.assertEqual(env['npm_config_ignore_scripts'], 'true')
+                        if argv[1].endswith('/tui.mjs'):
+                            raise subprocess.CalledProcessError(1, argv, stderr='missing locked @esbuild platform binary')
+                    if len(argv) > 1 and argv[1].endswith('/' + stage):
+                        raise subprocess.CalledProcessError(1, argv, stderr='locked TUI build failed')
+                    if stage == 'missing-product' and len(argv) > 1 and argv[1].endswith('/tui.mjs'):
+                        return ''  # A successful subprocess without its product is insufficient.
+                    return self.fake_run(argv, cwd=cwd, env=env)
+                with patch.object(installer, 'run', side_effect=fail):
+                    with self.assertRaises((subprocess.CalledProcessError, ValueError)):
+                        installer.provision(self.repo, install, 'hermes', cache=self.cache)
+                self.assertFalse(self.root.exists())
+                self.assertEqual(current.read_bytes(), before)
+                self.assertEqual(sentinel.read_text(), 'keep old runtime')
+                if stage == 'missing-esbuild':
+                    build_commands = [argv for argv, cwd, env in self.calls[first_call:]
+                        if len(argv) > 1 and '/scripts/build/' in argv[1]]
+                    self.assertTrue(build_commands)
+                    self.assertTrue(all(argv[1].endswith('/node-deps.mjs') for argv in build_commands))
+
+    def test_keep_rejects_tui_tamper_without_reacquisition_or_current_change(self):
+        install = self.base / 'tui-keep'
+        self.root = install / 'harnesses/hermes' / installer.generation_id(self.repo, 'hermes')
+        with patch.object(installer, 'run', side_effect=self.fake_run):
+            installer.provision(self.repo, install, 'hermes', choice='enable', cache=self.cache)
+            current = self.root.parent / 'current.json';before = current.read_bytes()
+            installer.provision(self.repo, install, 'hermes', cache=self.cache)
+            (self.root / 'tui-product/dist/entry.js').write_text('tampered product')
+            with patch.object(installer, 'install_hermes', side_effect=AssertionError('keep reacquired')):
+                with self.assertRaisesRegex(ValueError, 'TUI receipt changed'):
+                    installer.provision(self.repo, install, 'hermes', cache=self.cache)
+            self.assertEqual(current.read_bytes(), before)
+
+    def test_python_only_install_cannot_pass_receipt_validation(self):
+        with patch.object(installer, 'run', side_effect=self.fake_run):
+            details = installer.install_hermes(self.repo, self.root, sys.executable, self.cache)
+            (self.root / 'tui-product/dist/entry.js').unlink()
+            with self.assertRaises(ValueError):
                 installer.validate(self.repo, 'hermes', {'harness': 'hermes', 'complete': True, 'details': details})
 
     def test_hermes_wrong_commit_stops_before_pm(self):

@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from test_hermes_tui_product import make_product
 from test_managed_harness_install import CAFixture, fixture_stamp
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +26,10 @@ class ThinInstall(unittest.TestCase):
             calls, paths = [], {}
             def acquire(argv, *, cwd, env):
                 calls.append(argv)
+                if '-p' in argv:
+                    return json.dumps({'version': 'v26.7.0', 'execPath': argv[0]})
+                if len(argv) > 1 and argv[1].endswith('/scripts/build/tui.mjs'):
+                    make_product(root, ca.target)
                 if argv[:2] == ['git', 'clone']:
                     (root / 'source').mkdir()
                     ca.source(root / 'source')

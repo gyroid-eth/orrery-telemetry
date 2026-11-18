@@ -79,7 +79,8 @@ def test_managed_current_recipient_completion_read_ack_and_refusal(tmp_path,monk
                 rejected,_,_=mocked_os(monkeypatch,screen=invalid)
                 with pytest.raises(B1Error,match='FRESH_TMUX_TARGET_NOT_READY'):await delivery.deliver(client,ROOT)
                 assert not any(args[0]=='load-buffer' for args,_ in rejected)
-            (saved/'ended.json').write_text('{}')
+            from agentstack_mail.fresh_runtime import _write_private
+            _write_private(saved/'ended.json',dict(launch_id=saved.name,exit_code=0))
             with pytest.raises(B1Error,match='FRESH_TMUX_TARGET_ENDED'):await delivery.deliver(client,ROOT)
             facts,pairs=await rows(runtime)
             assert facts[1]['completed_ts'] is None and all(pair[2:]==(None,None) for pair in pairs)

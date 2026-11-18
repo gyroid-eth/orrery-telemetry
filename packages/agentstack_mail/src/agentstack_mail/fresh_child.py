@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from .fresh_client import FreshBoundClient
 from .fresh_launch import identity, native_id, operation, pinned, provider_setup, root_path
+from .fresh_end import read_run_end
 from .fresh_proxy import verified_owner
 from .fresh_runtime import FreshRuntime, _directory, _read_private, _write_private
 from .storage_origin_contract import B1Error, canonical
@@ -214,9 +215,13 @@ def status(child, base):
         task = read_task(base)
         if intent.get('child_spawn_id') != row['spawn_id'] or row['spawn_id'] != task['spawn_id']:
             raise B1Error('FRESH_CHILD_BINDING_MISMATCH')
-        result['execution'] = 'ended' if (run / 'ended.json').exists() else 'started'
+        ended = read_run_end(child, run)
+        result['execution'] = ('resolved-ended' if ended.kind == 'resolved' else 'ended') if ended else 'started'
+        if ended is not None:
+            result.update(end_kind=ended.kind, provider_exit_code=ended.exit_code)
         if (run / 'session.json').exists():
-            pinned(child, _read_private(run / 'session.json'));result['native_ready'] = True
+            pinned(child, _read_private(run / 'session.json'))
+            result['native_ready'] = ended is None or ended.kind == 'normal'
     return result
 
 
@@ -286,7 +291,7 @@ def main(operation_name, argv):
             receipt=_read_private(run/'session.json');pinned(client,receipt)
             if (_read_private(base/'current.json')!={'launch_id':launch_id}
                     or intent.get('nonce')!=os.environ.get('AGENTSTACK_FRESH_LAUNCH_NONCE')
-                    or receipt.get('launch_id')!=launch_id or (run/'ended.json').exists()):
+                    or receipt.get('launch_id')!=launch_id or read_run_end(client,run) is not None):
                 raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
         app_selected=app_runtime and not launch_id
         if app_selected:
