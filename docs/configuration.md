@@ -270,7 +270,7 @@ cutover 前に作業を完了するか active reservation を解放してくだ�
 | `AGENTSTACK_CLAUDE_MODEL` | `claude-code` | Claude 登録 model label。子と dashboard から resume した session は、その session の model（`CLAUDE_CHILD_MODEL`）を優先します。子の tmux session に開いた新しい window はこの値を継ぐので、そこで別の agent を `AGENT_NAME=<name> claude --resume` で開くときは、先に `unset CLAUDE_CHILD_MODEL` してください（しないと子の model で登録されます） |
 | `AGENTSTACK_CODEX_BIN` | install 時に operator の shell で解決した、`--version` に答える `codex`（WSL では `/mnt/<drive>/` 配下の Windows 版を除く。`--codex-bin` で明示可） | Codex CLI。dashboard は launchd / systemd の最小 PATH で動くので、nvm / nodebrew / `~/.npm-global` の codex はこの値で届く |
 | `AGENTSTACK_CODEX_MODEL` | launcher / bootstrap の既定 | Codex 登録 model |
-| `AGENTSTACK_CODEX_SANDBOX` | `workspace-write` | Codex `--sandbox` |
+| `AGENTSTACK_CODEX_SANDBOX` | `workspace-write` | `danger-full-access` で legacy mode の Codex CLI を Full Access にする。対象は `agent-start-codex`、`/delegate`、親なしの NEW AGENT と dashboard からの再開。直接の `agent-start-codex` では `read-only` も指定可 |
 | `AGENTSTACK_CODEX_APPROVAL` | `on-request` | `agent-start-codex`（利用者自身の対話 session）の `--ask-for-approval`。spawn される child は `AGENTSTACK_CODEX_CHILD_APPROVAL`（Child spawn 参照） |
 | `AGENTSTACK_VAULT` | 未設定 | Codex へ追加する writable `--add-dir` |
 | `AGENTSTACK_MCP_URL` | `http://127.0.0.1:18765/mcp` | registration / hook endpoint |
@@ -290,6 +290,9 @@ namespace を使います。この分離は namespace の選択を変えず、in
 
 `AGENTSTACK_TCC_DIRS` は空白を含む path も保持できる `:` 区切りが正本です。colon を含まない旧 whitespace 区切りも legacy compatibility として解釈します。
 
+Full Access を使うには、`~/.agentstack/env.sh` に `export AGENTSTACK_CODEX_SANDBOX=danger-full-access` を設定します。通常の再インストールでもこの値を引き継ぎます。
+Full Access では Codex の sandbox とコマンド承認が無効になり、OS が許す任意の場所への書き込みや削除、認証済みのリモートへの `git push` が可能になります。
+
 `AGENTSTACK_RESERVED_IDENTITY`、proxy token path、child token などは spawner が session ごとに設定する内部値です。top-level launcher へ手動で設定しないでください。
 
 ## Child spawn
@@ -302,7 +305,7 @@ namespace を使います。この分離は namespace の選択を変えず、in
 | `AGENTSTACK_FOCUS_CHILD` | 未設定 | 自動表示が有効な場合、`1` で前面に出す。単独では自動表示を有効にしない |
 | `AGENTSTACK_STRICT_AGENT_NAMES` | 未設定 | `1` で off-list な child 名を警告ではなくエラーにする |
 | `AGENTSTACK_MONITOR_DANGER_CHECK` | `0` | `1` で monitor の危険コマンド検知を有効にする。既定は passive |
-| `AGENTSTACK_CODEX_CHILD_APPROVAL` | `never` | 親付きの Codex child の起動に渡す `--ask-for-approval`。installer の `--codex-approval` で永続化。NEW AGENT の親なし起動は Codex の設定に従う |
+| `AGENTSTACK_CODEX_CHILD_APPROVAL` | `never` | `workspace-write` で親付きの Codex child に渡す `--ask-for-approval`。installer の `--codex-approval` で永続化。親なしの NEW AGENT は Codex の設定に従う。Full Access は常に `never` |
 | `AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY` | 未設定 | macOS/Linux の全 Codex child の `config.toml` に重ねる TOML fragment の絶対 path。installer の `--codex-child-overlay <path>` で永続化 |
 | `AGENTSTACK_CODEX_NETWORK` | `on` | Codex child の sandbox network（`-c sandbox_workspace_write.network_access=true`）。`--codex-network off` で切る |
 | `AGENTSTACK_CHILD_DEFAULT_TOOLS` | 空 | installer で選ぶ子の道具。`--tools` と同じ文法。明示の base/tools/MCP profile が優先し、不適用の既定項目は通知して外す |

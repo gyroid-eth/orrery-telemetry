@@ -247,7 +247,7 @@ Before cutover, finish work or release active reservations. Older relative reser
 | `AGENTSTACK_CLAUDE_MODEL` | `claude-code` | Claude registration model label. Children and dashboard-resumed sessions use their own model (`CLAUDE_CHILD_MODEL`) first. A new window in a child's tmux session inherits that value, so `unset CLAUDE_CHILD_MODEL` before opening another agent there with `AGENT_NAME=<name> claude --resume`; otherwise it registers with the child's model |
 | `AGENTSTACK_CODEX_BIN` | `codex` resolved in the operator's shell at install time that answers `--version` (under WSL, a Windows install under `/mnt/<drive>/` is skipped; `--codex-bin` to override) | Codex CLI. The dashboard runs under launchd / systemd with the minimal PATH, so a codex under nvm / nodebrew / `~/.npm-global` is reachable only through this value |
 | `AGENTSTACK_CODEX_MODEL` | launcher / bootstrap default | Codex registration model |
-| `AGENTSTACK_CODEX_SANDBOX` | `workspace-write` | Codex `--sandbox` |
+| `AGENTSTACK_CODEX_SANDBOX` | `workspace-write` | Set to `danger-full-access` for Codex CLI Full Access in legacy mode. Applies to `agent-start-codex`, `/delegate`, standalone NEW AGENT, and dashboard resumes. Direct `agent-start-codex` also supports `read-only` |
 | `AGENTSTACK_CODEX_APPROVAL` | `on-request` | `--ask-for-approval` for `agent-start-codex`, the user's own interactive session. Spawned children use `AGENTSTACK_CODEX_CHILD_APPROVAL`; see Child spawn |
 | `AGENTSTACK_VAULT` | unset | Additional writable `--add-dir` passed to Codex |
 | `AGENTSTACK_MCP_URL` | `http://127.0.0.1:18765/mcp` | Registration / hook endpoint |
@@ -262,6 +262,9 @@ The launchers (`agent-start`, `agent-start-codex`, `agent-start-gemini`) load `e
 
 The canonical `AGENTSTACK_TCC_DIRS` syntax is colon-separated so paths may contain spaces. Legacy whitespace-separated values without a colon are also interpreted for compatibility.
 
+To enable Full Access, set `export AGENTSTACK_CODEX_SANDBOX=danger-full-access` in `~/.agentstack/env.sh`. A normal reinstall preserves the setting.
+Full Access disables the Codex sandbox and command approvals. Codex can write and delete files anywhere the OS permits and run `git push` to authenticated remotes.
+
 `AGENTSTACK_RESERVED_IDENTITY`, proxy-token paths, child tokens, and similar values are internal values set per session by the spawner. Do not set them manually for a top-level launcher.
 
 ## Child spawn
@@ -274,7 +277,7 @@ These variables change `spawn_child.sh` and `agentstack-preregister-child` behav
 | `AGENTSTACK_FOCUS_CHILD` | unset | When automatic opening is enabled, `1` brings the window forward. It does not enable automatic opening on its own |
 | `AGENTSTACK_STRICT_AGENT_NAMES` | unset | Set to `1` to make an off-list child name an error instead of a warning |
 | `AGENTSTACK_MONITOR_DANGER_CHECK` | `0` | Set to `1` to enable dangerous-command detection in the monitor. Passive by default |
-| `AGENTSTACK_CODEX_CHILD_APPROVAL` | `never` | `--ask-for-approval` when starting a parented Codex child, persisted by installer `--codex-approval`. Standalone NEW AGENT starts use Codex configuration |
+| `AGENTSTACK_CODEX_CHILD_APPROVAL` | `never` | `--ask-for-approval` for parented Codex children under `workspace-write`, persisted by installer `--codex-approval`. Standalone NEW AGENT starts follow Codex configuration. Full Access always uses `never` |
 | `AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY` | unset | Absolute path to a TOML fragment overlaid on every macOS/Linux Codex child's `config.toml`, persisted by installer `--codex-child-overlay <path>` |
 | `AGENTSTACK_CODEX_NETWORK` | `on` | Codex child sandbox network (`-c sandbox_workspace_write.network_access=true`). Disable with `--codex-network off` |
 | `AGENTSTACK_CHILD_DEFAULT_TOOLS` | empty | Installer-selected child tools, using the `--tools` grammar; explicit base/tools/MCP profile wins. Unavailable defaults are omitted with a notice |

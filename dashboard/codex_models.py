@@ -219,7 +219,7 @@ def _allow_list() -> tuple[str, ...] | None:
     return tuple(dict.fromkeys(values))
 
 
-def _default_setting(name: str) -> str:
+def read_launcher_setting(name: str, *, install_home: str = "~/.agentstack") -> str:
     """Read the installer's literal assignment when the environment is empty.
 
     Direct delegate/launcher calls do not necessarily source env.sh. Match the
@@ -228,7 +228,7 @@ def _default_setting(name: str) -> str:
     value = os.environ.get(name, "")
     if value:
         return value
-    path = Path(os.environ.get("AGENTSTACK_HOME", "") or "~/.agentstack").expanduser() / "env.sh"
+    path = Path(os.environ.get("AGENTSTACK_HOME", "") or install_home).expanduser() / "env.sh"
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             match = re.match(r"^\s*export\s+" + re.escape(name) + r"=(.*)$", line)
@@ -457,7 +457,7 @@ def resolve_catalog(now: float | None = None, *, launcher: LauncherPolicy | None
             aliases[family] = max(matches)[1]
         elif snapshot is not None and snapshot.fresh:
             aliases[family] = ""
-    configured = _default_setting("AGENTSTACK_CODEX_DEFAULT_MODEL").strip()
+    configured = read_launcher_setting("AGENTSTACK_CODEX_DEFAULT_MODEL").strip()
     config_error = ""
     if configured:
         configured_model = aliases.get(configured.lower(), configured)
@@ -504,7 +504,7 @@ def resolve_effort(model: str, raw: str = "", catalog: ModelCatalog | None = Non
         raise ValueError(catalog.error)
     policy = catalog.efforts.get(model)
     if not effort:
-        effort = _default_setting("AGENTSTACK_CODEX_DEFAULT_EFFORT").strip().lower()
+        effort = read_launcher_setting("AGENTSTACK_CODEX_DEFAULT_EFFORT").strip().lower()
         if not effort:
             return policy.default if policy else ""
     if effort not in EFFORTS:
@@ -515,7 +515,7 @@ def resolve_effort(model: str, raw: str = "", catalog: ModelCatalog | None = Non
 
 def provider_catalog() -> dict:
     catalog = resolve_catalog()
-    configured_effort = _default_setting("AGENTSTACK_CODEX_DEFAULT_EFFORT").strip().lower()
+    configured_effort = read_launcher_setting("AGENTSTACK_CODEX_DEFAULT_EFFORT").strip().lower()
     effort_error = "invalid AGENTSTACK_CODEX_DEFAULT_EFFORT" if configured_effort and configured_effort not in EFFORTS else ""
     return {
         "id": "codex", "label": "Codex", "program": "codex-cli",

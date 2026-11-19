@@ -4073,13 +4073,19 @@ def _codex_child_add_dirs(extra: list[str] | None = None) -> list[str]:
 def _codex_child_launch_flags(extra_dirs: list[str] | None = None, *, standalone: bool = False) -> str:
     """Sandbox / approval / network / --add-dir flags for a product-launched Codex.
 
-    A recorded standalone start uses Codex configuration. Other resumes use
+    Full Access uses approval policy `never`. With workspace-write, a recorded
+    standalone start uses Codex configuration. Other resumes use
     AGENTSTACK_CODEX_CHILD_APPROVAL (default `never`). Network access follows
     AGENTSTACK_CODEX_NETWORK (default on)."""
     approval = os.environ.get("AGENTSTACK_CODEX_CHILD_APPROVAL", "").strip() or "never"
     network = os.environ.get("AGENTSTACK_CODEX_NETWORK", "").strip().lower() or "on"
+    sandbox = codex_models.read_launcher_setting(
+        "AGENTSTACK_CODEX_SANDBOX", install_home=os.path.dirname(HERE)
+    )
     parts = ["--sandbox workspace-write"]
-    if not standalone:
+    if sandbox == "danger-full-access":
+        parts = ["--sandbox danger-full-access --ask-for-approval never"]
+    elif not standalone:
         parts.append(f"--ask-for-approval {shlex.quote(approval)}")
     # No update screen in a product-launched Codex: its default choice runs
     # `npm install -g`, and nobody is there to decline it (#60).
