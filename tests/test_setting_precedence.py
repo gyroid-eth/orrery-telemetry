@@ -239,6 +239,12 @@ def _resolve_like_the_installer(
     return result.stdout.splitlines()
 
 
+def test_reinstall_preserves_codex_full_access(tmp_path):
+    home, _ = _previous_install(tmp_path, CODEX_SANDBOX_SETTING="danger-full-access")
+    assert _resolve_like_the_installer(home, "CODEX_SANDBOX_SETTING") == ["danger-full-access"]
+    assert _resolve_like_the_installer(home, "CODEX_SANDBOX_SETTING", args=("--reset-settings",)) == ["workspace-write"]
+
+
 def test_dashboard_origins_follow_setting_precedence_and_safe_env_writer(tmp_path):
     home, chosen = _previous_install(tmp_path)
     variable = "DASHBOARD_ALLOWED_ORIGINS_SETTING"

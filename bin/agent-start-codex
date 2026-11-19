@@ -40,6 +40,7 @@ CODEX_BIN="${AGENTSTACK_CODEX_BIN:-codex}"
 BOOTSTRAP="$BIN_DIR/agentstack-codex-bootstrap"
 SANDBOX="${AGENTSTACK_CODEX_SANDBOX:-workspace-write}"
 APPROVAL="${AGENTSTACK_CODEX_APPROVAL:-on-request}"
+[[ "$SANDBOX" == danger-full-access ]] && APPROVAL=never
 
 TMUX_BIN="$(ags_resolve_tmux)"
 [[ -n "$TMUX_BIN" ]] || ags_die "tmux not found (install tmux first)"

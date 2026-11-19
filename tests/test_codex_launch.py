@@ -444,7 +444,7 @@ def test_launcher_owns_the_codex_flags_and_never_hands_off_to_a_user_launcher():
     ), "spawn_child.sh still defers to the user's ~/.codex/bin launcher"
     # Both launch paths apply network flags and the resolved writable roots.
     # (Written in the zsh/bash-shared subset: see test_child_shell_portability.)
-    assert text.count('$(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS")') == 2
+    assert text.count('$(printf "%s" "$AGENTSTACK_CODEX_PERMISSION_FLAGS") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS")') == 2
     assert text.count('for d in $(printf "%s" "$AGENTSTACK_CODEX_ADD_DIRS_RESOLVED"); do') == 2
     assert text.count('-e "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=$(codex_child_add_dirs "$CHILD_CODEX_HOME")"') == 2
     assert text.count('CHILD_CODEX_BIN="$(resolve_codex_bin)"') == 2
@@ -675,8 +675,8 @@ def test_launcher_no_longer_hardcodes_full_auto():
     text = _SPAWN.read_text(encoding="utf-8")
     assert "--full-auto \\" not in text, "hardcoded --full-auto still in a launch line"
     # Both launch paths take the probed flags from the child environment.
-    assert text.count('--sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL")') == 2
-    assert text.count('-e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)"') == 2
+    assert text.count('$(printf "%s" "$AGENTSTACK_CODEX_PERMISSION_FLAGS")') == 2
+    assert text.count('-e "AGENTSTACK_CODEX_PERMISSION_FLAGS=$(codex_permission_flags)"') == 2
 
 
 def test_dead_child_fails_fast_instead_of_waiting_out_the_timeout():
@@ -1327,8 +1327,12 @@ def test_child_proxy_configs_carry_the_bearer_mode():
     assert "  AGENTSTACK_PYTHON\n" in run_mcp
 
 
-@pytest.mark.parametrize("approval", ["", "--ask-for-approval never"])
-def test_actual_codex_launch_commands_keep_models_and_optional_efforts(approval, monkeypatch, tmp_path):
+@pytest.mark.parametrize("permissions", [
+    "--sandbox workspace-write",
+    "--sandbox workspace-write --ask-for-approval never",
+    "--sandbox danger-full-access --ask-for-approval never",
+])
+def test_actual_codex_launch_commands_keep_models_and_optional_efforts(permissions, monkeypatch, tmp_path):
     monkeypatch.setenv("AGENTSTACK_HOME", str(tmp_path / "agentstack"))
     text = _SPAWN.read_text(encoding="utf-8")
     snippets = re.findall(r'EXTRA_ARGS=\(\)\n.*?--model "\$AGENTSTACK_CODEX_MODEL" -- "\$AGENTSTACK_CODEX_TASK"', text, re.S)
@@ -1353,16 +1357,12 @@ def test_actual_codex_launch_commands_keep_models_and_optional_efforts(approval,
                     "AGENTSTACK_CODEX_MODEL": model,
                     "AGENTSTACK_CODEX_EFFORT": validated.stdout.strip(),
                     "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED": "",
-                    "AGENTSTACK_CODEX_APPROVAL": approval,
+                    "AGENTSTACK_CODEX_PERMISSION_FLAGS": permissions,
                     "AGENTSTACK_CODEX_NETWORK_FLAGS": "",
                 })
                 assert result.returncode == 0, result.stderr
                 argv = json.loads(result.stdout)
-                if approval:
-                    index = argv.index("--ask-for-approval")
-                    assert argv[index + 1] == "never"
-                else:
-                    assert "--ask-for-approval" not in argv and "--full-auto" not in argv
+                assert argv[2:argv.index("-c")] == permissions.split()
                 assert argv[argv.index("--model")+1] == model
                 assert [x for x in argv if x.startswith("model_reasoning_effort=")] == (
                     ["model_reasoning_effort="+effort] if effort else [])
