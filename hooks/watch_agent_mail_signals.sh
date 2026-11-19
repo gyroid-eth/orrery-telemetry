@@ -661,16 +661,13 @@ deliver_worker() {
         else
             headless_rc=$?
         fi
-        if [[ "$headless_rc" -ne 10 ]]; then
-            state_mark_result "$agent_name" "$msg_key" "headless_reply_failed" "persistent-headless"
-            release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
-            return 0
-        fi
+    elif [[ -e "$STATE_DIR/persistent/${agent_name}.json" || -L "$STATE_DIR/persistent/${agent_name}.json" ]]; then
+        # A manifest without its helper cannot be classified safely.
+        headless_rc=20
     fi
 
-    # A claimed headless identity remains on its retry path if its helper is
-    # missing or cannot resolve the manifest; it has no tmux destination.
-    if [[ -e "$STATE_DIR/persistent/${agent_name}.json" || -L "$STATE_DIR/persistent/${agent_name}.json" ]]; then
+    # Exit 10 allows the ordinary tmux checks, including for interactive persistent agents.
+    if [[ "$headless_rc" -ne 10 ]]; then
         state_mark_result "$agent_name" "$msg_key" "headless_reply_failed" "persistent-headless"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0

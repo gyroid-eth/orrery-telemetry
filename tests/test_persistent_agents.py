@@ -2299,8 +2299,57 @@ def test_help_routes_enrollment_receipt_to_profile_start():
     assert "agentstack-persistent run --profile" in result.stdout
 
 
-def test_watcher_routes_headless_without_tmux_fallback():
+@pytest.mark.parametrize("mode", ["interactive", "headless", "invalid", "dangling-link", "missing-helper"])
+def test_watcher_routes_persistent_delivery(tmp_path: Path, mode: str):
+    runtime, _wake_socket, signal_file = _delivery_fixture(tmp_path)
+    manifest = runtime / "persistent" / "PersistentBot.json"
+    if mode in {"interactive", "missing-helper"}:
+        payload = json.loads(manifest.read_text())
+        payload["interaction"] = "interactive"
+        del payload["bridge_contract"], payload["wake_socket"]
+        manifest.write_text(json.dumps(payload))
+    elif mode == "invalid":
+        manifest.write_text("{}")
+    elif mode == "dangling-link":
+        manifest.unlink()
+        manifest.symlink_to(tmp_path / "missing.json")
+
     source = (ROOT / "hooks" / "watch_agent_mail_signals.sh").read_text(encoding="utf-8")
-    assert '"$PERSISTENT_DELIVER"' in source
-    assert '"headless_reply_failed"' in source
-    assert source.index('"$PERSISTENT_DELIVER"') < source.index("tmux list-sessions")
+    worker = source[source.index("deliver_worker() {") : source.index("process_existing_signals() {")]
+    script = worker + r'''
+set -euo pipefail
+STATE_DIR=$1
+PERSISTENT_DELIVER=$2
+TMUX_TIMEOUT=5
+HEADLESS_REPLY_TIMEOUT=1
+run_to() { shift; "$@"; }
+sleep() { :; }
+log() { :; }
+state_mark_result() { printf '%s %s\n' "$3" "$4"; }
+release_delivery_lease() { :; }
+tmux() {
+    touch "$STATE_DIR/tmux-called"
+    case "$1" in
+        list-sessions) echo PersistentBot ;;
+        capture-pane) echo Claude ;;
+        paste-buffer) printf 'paste %s\n' "$7" ;;
+        send-keys) printf 'submit %s %s\n' "$3" "$4" ;;
+        show-environment|load-buffer) : ;;
+        *) return 98 ;;
+    esac
+}
+deliver_worker "$3" PersistentBot 12 Sender subject high 1
+'''
+    helper = tmp_path / "missing-helper" if mode == "missing-helper" else DELIVER
+    result = subprocess.run(
+        ["/bin/bash", "-c", script, "fixture", str(runtime), str(helper), str(signal_file)],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    if mode == "interactive":
+        assert result.stdout.splitlines() == ["paste PersistentBot", "submit PersistentBot C-m", "success watcher"]
+        assert not signal_file.exists()
+    else:
+        assert result.stdout.splitlines() == ["headless_reply_failed persistent-headless"]
+        assert not (runtime / "tmux-called").exists()
+        assert signal_file.exists()
