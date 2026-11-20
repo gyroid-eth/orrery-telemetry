@@ -10,6 +10,9 @@ import json
 import os
 import subprocess
 import time
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -106,6 +109,129 @@ def test_a_resume_cut_off_by_a_reboot_is_cleared(resume):
     assert server.do_resume(NAME)["ok"]
 
 
+def test_dashboard_recovers_a_child_that_exits_between_maintenance_passes(resume, monkeypatch):
+    runtime, registration, launches, calls = resume
+    registration["retired_at"] = None  # its Mail row stayed active
+    boot = time.time() - 3600
+    monkeypatch.setattr(server._child_resume_module(), "boot_time", lambda: boot)
+    monkeypatch.setattr(server._child_resume_module(), "child_process_live", lambda name: False)
+    monkeypatch.setattr(server, "_child_session_live", lambda name, boot: False)
+    monkeypatch.setattr(server, "_has_session", lambda name: False)
+    monkeypatch.setattr(server, "_cached_claude_transcript_path",
+                        lambda name: (True, server._transcript_path(name), None))
+
+    def between_passes(seconds):
+        assert seconds == 30
+        if (runtime / "child-agents" / f"{NAME}.json").exists():
+            raise StopIteration
+        path = _active_child(runtime, registration, written_before_boot=False)
+        os.utime(path, (time.time() - 120,) * 2)
+        assert server._resume_capability_for_row(NAME, "claude-code", category="gone") == "config_unrestorable"
+
+    monkeypatch.setattr(server.threading, "Thread", lambda *, target, **kwargs: SimpleNamespace(start=target))
+    monkeypatch.setattr(server.time, "sleep", between_passes)
+    with pytest.raises(StopIteration):
+        server._start_child_resume_maintenance()
+
+    assert _state(runtime)["retired_at"] and _state(runtime)["resume_expires_at"]
+    assert server._resume_capability_for_row(NAME, "claude-code", category="gone") == "ready"
+    assert not calls
+    assert server.do_jump(NAME)["ok"] and launches
+    assert [method for method, _ in calls] == ["register_agent", "unretire_agent"]
+
+
+def test_interrupted_codex_resume_clears_the_marker_and_keeps_retention(resume, monkeypatch):
+    runtime, registration, _launches, _calls = resume
+    registration = {**registration, "program": "codex"}
+    path = _active_child(runtime, registration)
+    now = datetime.now(timezone.utc)
+    boot = now.timestamp() - 3600
+    started = now - timedelta(minutes=2)
+    identity = {key: registration[key] for key in ("agent_id", "project_key", "program")}
+    assert child_resume.mark_retired(runtime, NAME, retention_days=30, now=started)
+    child_resume.begin_resume(runtime, NAME, now=started, **identity)
+    os.utime(path, (started.timestamp(),) * 2)
+    monkeypatch.setattr(child_resume, "child_process_live", lambda name: False)
+
+    before = _state(runtime)
+    assert child_resume.recover_stopped_children(runtime, is_live=lambda name: False,
+                                                 retention_days=30, boot=boot, now=now) == [(NAME, "resume_cleared")]
+    assert child_resume.inspect_retained(runtime, NAME, now=now, **identity) == {
+        key: value for key, value in before.items() if key != "resume_in_progress_at"
+    }
+    child_resume.begin_resume(runtime, NAME, now=now, **identity)
+    assert _state(runtime)["resume_in_progress_at"]
+
+
+@pytest.mark.parametrize("resuming", [False, True])
+def test_startup_grace_protects_fresh_launches_and_resume_markers(resume, monkeypatch, resuming):
+    runtime, registration, _launches, _calls = resume
+    path = _active_child(runtime, registration, written_before_boot=False)
+    if resuming:
+        assert child_resume.mark_retired(runtime, NAME, retention_days=30)
+        identity = {key: registration[key] for key in ("agent_id", "project_key", "program")}
+        child_resume.begin_resume(runtime, NAME, **identity)
+        os.utime(path, (time.time() - 120,) * 2)  # the timestamp still protects it
+    monkeypatch.setattr(child_resume, "child_process_live", lambda name: pytest.fail("fresh child probed"))
+    before = _state(runtime)
+    assert child_resume.recover_stopped_children(runtime, is_live=lambda name: False,
+                                                 retention_days=30, boot=time.time() - 3600) == []
+    assert _state(runtime) == before
+
+
+def test_a_live_lease_keeps_a_child_without_tmux_running(resume, monkeypatch):
+    runtime, registration, _launches, _calls = resume
+    path = _active_child(runtime, registration, written_before_boot=False)
+    os.utime(path, (time.time() - 120,) * 2)
+    child_resume.write_lease(runtime, NAME, os.getpid())
+    monkeypatch.setattr(child_resume, "child_process_live", lambda name: False)
+    assert child_resume.recover_stopped_children(runtime, is_live=lambda name: False,
+                                                 retention_days=30, boot=time.time() - 3600) == []
+    assert _state(runtime)["retired_at"] is None
+
+
+def test_unknown_tmux_status_keeps_a_child_running(resume, monkeypatch):
+    runtime, registration, _launches, _calls = resume
+    path = _active_child(runtime, registration, written_before_boot=False)
+    os.utime(path, (time.time() - 120,) * 2)
+    monkeypatch.setattr(child_resume, "child_process_live", lambda name: pytest.fail("tmux status unknown"))
+    assert child_resume.recover_stopped_children(runtime, is_live=lambda name: None,
+                                                 retention_days=30, boot=time.time() - 3600) == []
+    assert _state(runtime)["retired_at"] is None
+
+
+@pytest.mark.parametrize("tty,command_line,recovered", [
+    ("ttys001", f"/bin/codex AGENT_NAME={NAME}", False),
+    ("ttys001", "(codex)", False),
+    ("??", f"fixture-app AGENT_NAME={NAME}", True),
+], ids=["attached", "environment-unknown", "detached"])
+def test_dashboard_checks_process_tty_before_recovery(resume, monkeypatch, tty, command_line, recovered):
+    runtime, registration, _launches, _calls = resume
+    path = _active_child(runtime, {**registration, "program": "codex"}, written_before_boot=False)
+    os.utime(path, (time.time() - 120,) * 2)
+    module = server._child_resume_module()
+    monkeypatch.setattr(module, "boot_time", lambda: time.time() - 3600)
+    monkeypatch.setattr(module, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(server, "_child_session_live", lambda name, boot: False)
+    probes = []
+
+    def process_list(argv, **kwargs):
+        probes.append(argv)
+        rows = f"123 S {tty} {command_line}\n456 R ?? /bin/ps AGENTSTACK_PS_PROBE=1\n"
+        return subprocess.CompletedProcess(argv, 0, rows.encode(), b"")
+
+    monkeypatch.setattr(module, "subprocess", SimpleNamespace(run=process_list, SubprocessError=subprocess.SubprocessError))
+    monkeypatch.setattr(module.os, "kill", lambda pid, signal: None)
+    before = _state(runtime)
+    server._recover_stopped_children()
+
+    assert len(probes) == 1 and probes[0][:2] == ["/bin/ps", "-Eww"]
+    if recovered:
+        assert _state(runtime)["retired_at"] and _state(runtime)["resume_expires_at"]
+    else:
+        assert _state(runtime) == before
+
+
 def test_a_lease_from_before_the_boot_does_not_count_as_alive(tmp_path):
     """A reboot reuses PIDs: an old lease may name an unrelated live process."""
     holder = tmp_path / "live-sessions" / NAME
@@ -185,17 +311,26 @@ def test_the_dashboard_recovers_at_start(resume, monkeypatch):
     _active_child(runtime, registration)
     # The dashboard loads its own instance of child_resume.py from HOOKS_DIR.
     monkeypatch.setattr(server._child_resume_module(), "boot_time", _boot)
+    monkeypatch.setattr(server._child_resume_module(), "child_process_live", lambda name: pytest.fail("pre-boot child probed"))
     monkeypatch.setattr(server, "_child_session_live", lambda name, boot: False)
-    server._recover_children_after_reboot()
+    server._recover_stopped_children()
     assert _state(runtime)["retired_at"]
 
 
-def test_a_session_that_starts_while_recovery_waits_for_the_lock_is_left_alone(resume):
-    """#182 review: liveness is checked again under the lock, before writing."""
+def test_a_session_that_starts_while_recovery_waits_for_the_lock_is_left_alone(resume, monkeypatch):
     runtime, registration, launches, calls = resume
     _active_child(runtime, registration)
-    answers = iter([False, True])  # gone before the lock, live by the time it writes
-    assert child_resume.recover_after_reboot(runtime, is_live=lambda _n: next(answers),
+    live = set()
+    original_lock = child_resume.tools_change_lock
+
+    @contextmanager
+    def after_jump(runtime_dir, name):
+        with original_lock(runtime_dir, name):
+            live.add(name)  # the jump published its session before releasing the lock
+            yield
+
+    monkeypatch.setattr(child_resume, "tools_change_lock", after_jump)
+    assert child_resume.recover_after_reboot(runtime, is_live=lambda name: name in live,
                                              retention_days=30, boot=_boot()) == []
     assert _state(runtime)["retired_at"] is None
 

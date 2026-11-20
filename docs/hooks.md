@@ -45,6 +45,7 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 ### `session-start-reminder.sh`
 
 - **発火:** すべての `SessionStart` source。startup だけでなく resume、`/clear`、compact 後にも走ります。
+- **入れ子の起動:** macOS・Linux 共通の `ps` で shell wrapper を越えて祖先をたどり、Claude が別の Claude または Codex の内側にいると確認できた場合は、SessionStart の登録・owner token・セッション索引の更新を省きます。内側の Claude の会話は続行します。祖先から確認できない起動では、通常どおり identity の解決へ進みます。
 - **動作:** identity を `AGENT_NAME` → pane metadata → exact tmux session の順で解決し、ORRERY Mail の liveness を確認します。owner token と project key があれば shell 側で同じ identity を再登録します。そのうえで、登録済み・儀式不要を明示した embedded task、提供 tool schema が示す bound proxy、raw/direct 接続の順に最初に一致した経路だけを使うよう案内します。embedded task は parent の有無だけで除外しません。shell 登録と raw MCP tool session の認証は別です。
 - **経路の境界:** child proxy の設定 artifact は案内を具体化する hint にだけ使い、model に実際に提供された tool の説明と引数 schema を優先します。bound proxy では helper・再登録・token file 読取を指示せず、障害時も raw/helper へ自動 fallback させません。raw/direct の既存 identity だけ token-safe helper に進み、新規 raw 登録とは分けます。generic な登録失敗を stale token と断定しません。
 
@@ -160,7 +161,7 @@ source 専用 helper で、`RESOLVED_AGENT` と解決 source を caller へ返�
 
 `--resources` による対象宣言を既定で必須にし、競合を確認してから child を起動します。Claude / Codex、model、pre-registered identity、child-owned token file、per-child MCP proxy、任意 worktree に対応します。tmux REPL が ready または早期終了と判定されるまで待ち、正本 task を注入します。引数 / server / worktree failure は exit 1、resource 未宣言は2、reservation conflict は21です。通常は直接叩かず、[/delegate](launchers.md#delegate) または dashboard から利用します。
 
-`AGENTSTACK_CHILD_DEFAULT_TOOLS` は `--base` / `--tools` / `--codex-mcp` が無い CLI 起動だけに適用します。最終の作業フォルダと provider で確認して使えない既定項目だけを外し、spawn 出力と最初の指示に残します。明示選択と resume は既存の fail-closed 経路です。[既定の道具](delegation.md#installer-の既定の道具)。
+`AGENTSTACK_CHILD_DEFAULT_TOOLS` は、CLI で `--base` / `--tools` / `--codex-mcp` を、標準の `/api/spawn` で `base` / `tools` を省略した Claude・Codex・dsh・Hermes の新規起動に適用します。最終の作業フォルダと provider で確認して使えない既定項目だけを外し、spawn 出力と最初の指示に残します。明示選択と resume は既存の fail-closed 経路です。[既定の道具](delegation.md#installer-の既定の道具)。
 
 ### `cleanup-child-agent.sh`
 
@@ -169,6 +170,8 @@ child の Claude / Codex command の後段へ連結され、REPL が戻った時
 `AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=0` の Claude / Codex child は state、token、MCP config、分離 home を全削除します。既定の Claude / Codex child は MCP config、home、proxy runtime を削除しますが、schema version、`retired_at`、`resume_expires_at`、非秘密 provenance を含む state と canonical owner credential を0600で保持します。保持処理が安全に完了しない場合は credential を推測で削除せず、明示 recovery / purge 用に private state を残して非0で終わります。bound session receipt と transcript はどちらの cleanup / purge の対象にも含みません。
 
 共有 `child_resume.py` helper は fresh spawn / resume の state 準備、private material の検証、current source home からの child home 再生成、期限切れ maintenance、明示 purge を同じ lock と判定で行います。Codex の子の home を作る前に利用者の Codex home（`CODEX_HOME`、未指定なら `~/.codex`）に `sessions/`・`history.jsonl`・`session_index.jsonl` を作り、子からは symlink で共有します。既存の記録は上書きしません。子としてしか Codex を使わない初回環境でも、記録は cleanup 後に残ります。旧 home などに実体の `sessions/` が残っていた場合、cleanup は会話の記録が失われる旨と対象パスを stderr に警告してから削除します。operator 向け入口は `agentstack-purge-child-resume <agent>` と `agentstack-purge-child-resume --expired` です。`agentstack-doctor` は期限切れを報告するだけで、この helper の purge を呼びません。
+
+dashboard は30秒間隔で子の終了状態を確認します。終了処理を通らずに停止した子は、起動や再開から60秒が経過し、tmux セッションや生きている lease が見つからず、保留中の登録・移行・道具変更がなく、保存済みの認証情報が一致した時点で、再開用の状態を修復します。今のマシン起動中に書かれた状態は、別の tmux サーバーに残っている子を保護するため、端末に接続されたプロセスに子の名前がないことも確認します。子が起動した端末のない GUI アプリやサーバーは再開を妨げません。プロセスの有無を判定できない場合は修復を見送ります。中断された再開の保持期限は元のままです。ORRERY Mail の復帰は実際に再開するときに行います。
 
 これは Claude Code `SessionEnd` hook ではありません。`SessionEnd` は crash や resume でも発生しうるため、remote identity の retire をその event へ結びつけていません。
 

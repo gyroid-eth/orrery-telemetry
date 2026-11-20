@@ -223,7 +223,7 @@ Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux �
 --spawn-roots PATHS     directory typeahead が閲覧できる root（`:` 区切り）
 --codex-approval MODE   Codex child の `--ask-for-approval`（never | on-request | on-failure | untrusted、既定 never）
 --codex-network MODE    Codex child の sandbox network（on | off、既定 on）
---child-default-tools SPEC  子の既定の道具（--tools と同じ文法、既定は空）
+--child-default-tools SPEC  子の既定の道具（例: 'mcp:cua-driver;dsh=' で dsh だけ既定なし）
 --codex-add-dirs PATHS  Codex child に追加で書込を許す root（`:` 区切り）
 --retire-legacy-mail    付録参照（以前の MCP Agent Mail を退役させる）
 --mail auto|update|keep 稼働中の ORRERY Mail をどうするか（既定 keep。--update-mail / --keep-mail はその別名）

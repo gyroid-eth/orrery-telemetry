@@ -9141,7 +9141,8 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     # A launcher that delivers the task itself owns the only task authority;
     # a second copy by mail would carry conflicting completion instructions.
     if not standalone and spec.task_mail:
-        subject = f"タスク依頼: {task[:50]}"
+        task_preview = " ".join(task.split())[:50]
+        subject = f"タスク依頼: {task_preview}"
         body_lines = [
             "> [via dashboard +NEW AGENT]",
             "",
@@ -9363,10 +9364,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     # the CLI env defaults would otherwise turn an unchecked box back on.
     env.pop("AGENTSTACK_CLAUDE_CHILD_CHROME", None)
     env.pop("AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE", None)
-    # The form/API selection is authoritative. The UI initializes its visible
-    # choices from installer defaults; the launcher must not append them again
-    # (or restore a choice the operator removed).
-    env.pop("AGENTSTACK_CHILD_DEFAULT_TOOLS", None)
+    # The standard launcher resolves defaults in the final working directory.
+    # Explicit base or tools already take precedence via _spawn_tools_args.
+    if spec.provider not in ("claude", "codex") and spec.program not in harness_runtime.HARNESSES:
+        env.pop("AGENTSTACK_CHILD_DEFAULT_TOOLS", None)
     if spec.provider == "codex" and not env.get("AGENTSTACK_PYTHON", "").strip():
         # Direct development servers need the same interpreter as the API;
         # installed services already carry the installer's pinned interpreter.
@@ -10767,8 +10768,6 @@ def _child_session_live(name: str, boot: float | None) -> bool | None:
     tell" and left every child a reboot stopped unresumable.
     """
     try:
-        # Under the lease lock: both calls together stay shorter than a lease
-        # writer waits (10 s).
         listed = _tmux_run(['list-sessions', '-F', '#{session_name}'],
                            capture_output=True, text=True, timeout=2)
     except (OSError, RuntimeError, subprocess.SubprocessError):
@@ -10794,48 +10793,44 @@ def _child_session_live(name: str, boot: float | None) -> bool | None:
     return _child_resume_module().live_lease(pathlib.Path(RUNTIME_DIR), name, boot=boot)
 
 
-def _recover_children_after_reboot() -> None:
-    """Children a reboot stopped mid-run become resumable (child_resume.recover_after_reboot)."""
+def _recover_stopped_children() -> None:
+    """Repair interrupted children so the dashboard can offer resume again."""
     module = _child_resume_module()
     try:
         retention = int(_env_text("AGENTSTACK_CHILD_RESUME_RETENTION_DAYS", "30"))
     except ValueError:
         return
     boot = module.boot_time()
-    recovered = module.recover_after_reboot(
+    recovered = module.recover_stopped_children(
         pathlib.Path(RUNTIME_DIR), retention_days=retention, boot=boot,
         is_live=lambda name: _child_session_live(name, boot),
     )
     for name, outcome in recovered:
-        logging.info("child %s stopped by a reboot is resumable again (%s)", name, outcome)
+        logging.info("recovered local resume state for stopped child %s (%s)", name, outcome)
         _invalidate_resume_capability_cache(name)
 
 
 def _start_child_resume_maintenance() -> None:
-    """Purge expired private resume material while the dashboard is running.
-
-    The first pass, at start, also makes children that a reboot stopped
-    mid-run resumable again (see _recover_children_after_reboot).
-    """
+    """Recover stopped children every 30 seconds and purge expired state hourly."""
 
     def worker() -> None:
+        next_purge = time.monotonic()
         while True:
             try:
-                _recover_children_after_reboot()
+                _recover_stopped_children()
             except Exception as exc:  # maintenance must not stop the dashboard
-                logging.warning("child resume recovery after reboot failed: %s", exc)
-            try:
-                removed = _child_resume_module().purge_expired(
-                    pathlib.Path(RUNTIME_DIR)
-                )
-                if removed:
-                    logging.info(
-                        "purged expired Codex child resume material (count=%d)",
-                        len(removed),
+                logging.warning("stopped child resume recovery failed: %s", exc)
+            if time.monotonic() >= next_purge:
+                next_purge = time.monotonic() + 3600
+                try:
+                    removed = _child_resume_module().purge_expired(
+                        pathlib.Path(RUNTIME_DIR)
                     )
-            except Exception as exc:  # maintenance must not stop the dashboard
-                logging.warning("child resume retention maintenance failed: %s", exc)
-            time.sleep(3600)
+                    if removed:
+                        logging.info("purged expired child resume material (count=%d)", len(removed))
+                except Exception as exc:  # maintenance must not stop the dashboard
+                    logging.warning("child resume retention maintenance failed: %s", exc)
+            time.sleep(30)
 
     threading.Thread(
         target=worker, name="child-resume-maintenance", daemon=True

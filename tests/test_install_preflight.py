@@ -310,9 +310,10 @@ def _env_for_a_complete_dry_run(tmp_path: pathlib.Path) -> dict[str, str]:
 
 def test_child_default_tools_accepts_cli_grammar_before_installing(tmp_path):
     env = _env_for_a_complete_dry_run(tmp_path)
-    result = _run(env, "--dry-run", "--child-default-tools", "browser,screen:operate")
+    selection = "browser,screen:operate;dsh=;hermes=mcp:notes"
+    result = _run(env, "--dry-run", "--child-default-tools", selection)
     assert result.returncode == 0, result.stderr
-    assert "child default tools: browser,screen:operate" in result.stdout
+    assert f"child default tools: {selection}" in result.stdout
 
 
 def test_child_default_tools_rejects_invalid_syntax_before_writing(tmp_path):

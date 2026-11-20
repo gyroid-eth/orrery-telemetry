@@ -83,12 +83,38 @@ def mail() -> object:
 
 
 def _run_child_session_start(
-    tmp_path: Path, mcp_url: str, *, with_transcript: bool = True, extra_env: dict | None = None
+    tmp_path: Path, mcp_url: str, *, with_transcript: bool = True,
+    extra_env: dict | None = None, ancestry: tuple[tuple[str, str], ...] | None = None,
 ):
     runtime = tmp_path / "runtime"
-    runtime.mkdir()
+    runtime.mkdir(exist_ok=True)
     # spawn_child.sh leaves the child's owner token here before the session starts.
     (runtime / f"agent_token_{CHILD}").write_text("tok-child\n", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    tmux = fake_bin / "tmux"
+    tmux.write_text(f"#!/bin/bash\necho {CHILD}\n", encoding="utf-8")
+    tmux.chmod(0o755)
+    if ancestry is not None:
+        ps = fake_bin / "ps"
+        ps.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os, sys\n"
+            "if sys.argv[1:3] != ['-ww', '-p']:\n"
+            "    os.execv('/bin/ps', ['/bin/ps', *sys.argv[1:]])\n"
+            f"ancestry = {ancestry!r}\n"
+            "pid = int(sys.argv[3])\n"
+            "level = pid - 5000001 if pid >= 5000002 else 0\n"
+            "if level >= len(ancestry):\n"
+            "    raise SystemExit(1)\n"
+            "comm, args = ancestry[level]\n"
+            "if not comm:\n"
+            "    raise SystemExit(1)\n"
+            "parent = 5000002 + level if level + 1 < len(ancestry) else 1\n"
+            "print(args if sys.argv[5] == 'args=' else f'{parent} {comm}')\n",
+            encoding="utf-8",
+        )
+        ps.chmod(0o755)
     project = tmp_path / "project"
     project.mkdir()
     transcript = tmp_path / "claude" / "projects" / "-p" / "abc123.jsonl"
@@ -98,7 +124,7 @@ def _run_child_session_start(
     if with_transcript:
         payload["transcript_path"] = str(transcript)
     env = {
-        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
         "HOME": str(tmp_path / "home"),
         "AGENT_NAME": CHILD,
         "AGENTSTACK_RESERVED_IDENTITY": "1",
@@ -109,6 +135,8 @@ def _run_child_session_start(
         "AGENTSTACK_RUNTIME_DIR": str(runtime),
         "AGENTSTACK_HOOKS_DIR": str(REPO_ROOT / "hooks"),
         "AGENTSTACK_REGISTER_LIB": str(REPO_ROOT / "bin" / "lib" / "agentstack-register.sh"),
+        "CLAUDECODE": "1",
+        "TMUX_PANE": "%42",
     }
     env.update(extra_env or {})
     (tmp_path / "home").mkdir()
@@ -135,15 +163,57 @@ def test_shell_registration_without_a_handed_model_still_names_the_program(mail:
 
 
 def test_shell_registration_writes_the_session_index(mail: str, tmp_path: Path) -> None:
-    result, runtime, transcript = _run_child_session_start(tmp_path, mail)
+    result, runtime, transcript = _run_child_session_start(tmp_path, mail, ancestry=(
+        ("/bin/sh", ""), ("claude", ""), ("/bin/zsh", ""), ("tmux: server", ""),
+    ))
     assert "register_agent" in _Mail.calls, _Mail.calls
     assert "already registered" in result.stdout, result.stdout
+    assert (runtime / f"agent_token_{CHILD}").read_bytes() == b"tok-child"
     record = json.loads((runtime / "session_index" / f"{AGENT_ID}.json").read_text(encoding="utf-8"))
     assert record["agent_name"] == CHILD
     assert record["session_id"] == "sess-child-1"
     assert record["transcript_path"] == str(transcript)
     assert record["schema_version"] == 2 and record["binding_kind"] == "self"
     assert record["registered_by"] == CHILD, "the child bound itself, not a parent"
+
+
+def test_nested_claude_keeps_the_parent_token_and_session_index(mail: str, tmp_path: Path) -> None:
+    index = tmp_path / "runtime" / "session_index" / f"{AGENT_ID}.json"
+    index.parent.mkdir(parents=True)
+    parent_record = b'{"session_id":"parent-session"}\n'
+    index.write_bytes(parent_record)
+
+    result, runtime, _ = _run_child_session_start(tmp_path, mail, with_transcript=False, ancestry=(
+        ("/bin/bash", ""),
+        ("2.1.300", "/home/example/.local/share/claude/versions/2.1.300 -p"),
+        ("/bin/zsh", ""),
+        ("/home/example/.local/share/claude/versions/2.1.299", ""),
+    ))
+
+    assert _Mail.calls == []
+    assert (runtime / f"agent_token_{CHILD}").read_bytes() == b"tok-child\n"
+    assert index.read_bytes() == parent_record
+    assert result.stdout == ""
+
+
+def test_claude_nested_in_codex_skips_the_global_entry(mail: str, tmp_path: Path) -> None:
+    result, runtime, _ = _run_child_session_start(tmp_path, mail, ancestry=(
+        ("node", "node /opt/npm/node_modules/@anthropic-ai/claude-code/cli.js -p"),
+        ("/bin/bash", ""), ("codex", ""),
+    ), extra_env={"AGENTSTACK_CLIENT_CONFIG": str(tmp_path / "missing-client-config.json")})
+
+    assert result.stdout == ""
+    assert _Mail.calls == []
+    assert (runtime / f"agent_token_{CHILD}").read_bytes() == b"tok-child\n"
+    assert not (runtime / "session_index").exists()
+
+
+def test_unavailable_ancestry_preserves_shell_registration(mail: str, tmp_path: Path) -> None:
+    _, runtime, _ = _run_child_session_start(tmp_path, mail, ancestry=(("claude", ""), ("", "")))
+
+    assert "register_agent" in _Mail.calls
+    record = json.loads((runtime / "session_index" / f"{AGENT_ID}.json").read_text())
+    assert record["session_id"] == "sess-child-1"
 
 
 def test_the_index_is_exact_authority_for_the_dashboard(mail: str, tmp_path: Path, monkeypatch) -> None:

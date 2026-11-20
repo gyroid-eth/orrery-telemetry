@@ -204,7 +204,8 @@ Options:
                          Absolute path to a TOML fragment merged over every
                          macOS/Linux Codex child's config.toml (default:
                          existing env.sh, else disabled)
-  --child-default-tools SPEC  default child tools (same grammar as --tools; empty by default)
+  --child-default-tools SPEC  default child tools (same grammar as --tools; empty by default).
+                         Append ;claude=SPEC, ;codex=SPEC, ;dsh=SPEC or ;hermes=SPEC to override.
   --codex-network MODE   on or off: sandbox network access for Codex children
                          (default: existing env.sh, else on)
   --codex-bin PATH       Codex CLI executable used by the dashboard and child
@@ -1336,9 +1337,8 @@ preflight_python() {
     return
   fi
   if [[ -n "$CHILD_DEFAULT_TOOLS_SETTING" ]] && ! "$PYTHON_BIN" \
-      "$REPO_ROOT/hooks/child_tools.py" parse --provider claude \
-      --tools "$CHILD_DEFAULT_TOOLS_SETTING" >/dev/null; then
-    preflight_error "--child-default-tools must use the --tools grammar"
+      "$REPO_ROOT/hooks/child_tools.py" validate-defaults -- "$CHILD_DEFAULT_TOOLS_SETTING"; then
+    preflight_error "--child-default-tools must use the --tools grammar, with optional ;provider=SPEC overrides"
   fi
 }
 

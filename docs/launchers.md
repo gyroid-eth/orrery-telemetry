@@ -127,7 +127,7 @@ ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json
 
 private な `harness_state_dir` に初期 prompt・native launch plan・native 専用の短い指示を保存します。指示の正本は `bin/lib/harness_instructions.md` で、既存の共通 renderer が起動・Mail 等の共通規則を取り込みます。初回起動と同じ ID の再開で、dsh の `AGENTS.md` / Hermes の system prompt へ渡します。ORRERY の子作成・raw 認証回復・他 runtime 専用の手順は載せません。共有編集の予約と自己専用 scratch の区別、停止条件は保持します。dsh の tool-subagent や Hermes の auxiliary/delegation 設定、skills の配布は変えません。Claude / Codex の指示本文も不変です。
 
-鍵や親 token の値は指示に含めません。追加の stdio/HTTP MCP は共通の tool 選択からコピーし、native config に写せない承認や filter は明示して拒否します。native tool の adapter は、既存の鍵読取・登録・予約 hook の判定を呼びます。 明示していない installer の default-tools は追加 harness へ暗黙に落とさず、未対応として停止します。利用者が `--base default` または対応する `--tools` を明示して選択できます。
+鍵や親 token の値は指示に含めません。追加の stdio/HTTP MCP は共通の tool 選択からコピーし、明示指定の承認や filter を native config に写せない場合は起動を止めます。installer の既定に含まれる項目は、native config に写せるものを適用し、使えない項目を通知して外します。native tool の adapter は、既存の鍵読取・登録・予約 hook の判定を呼びます。
 
 Hermes の新しい子は、世代の外にある profiles 実体の
 `children/<project key の SHA256>/<canonical name>` を永続的な `HERMES_HOME` として使います。
@@ -303,7 +303,7 @@ child とのやりとりにも同じ境界があります。Claude Code 2.1.224 
 
 `--base mail-only` と `--tools browser[:<deviceId>]` / `screen[:read|:operate]` / `screen:<read|operate>:<server>` / `mcp:<server>[:all]` で、child に渡す道具を選べます。選択がある child は、指定どおりにできなければ起動しません（[子に渡す道具を選ぶ](delegation.md#子に渡す道具を選ぶ--base----tools)）。
 
-base/tools/MCP profile を省略した CLI 起動は installer の `AGENTSTACK_CHILD_DEFAULT_TOOLS`（既定は空）を使い、使えない既定項目だけを通知して外します。`--base default` の明示で既定を適用しない起動にできます。resume は記録済みの選択を復元します（[既定の道具](delegation.md#installer-の既定の道具)）。
+Claude・Codex・dsh・Hermes の新規起動では、CLI で base/tools/MCP profile を、標準の `/api/spawn` で base/tools を省略すると、installer の `AGENTSTACK_CHILD_DEFAULT_TOOLS`（既定は空）を使います。使えない既定項目だけを通知して外します。`--base default` の明示で既定を抑止できます。resume は記録済みの選択を復元します（[既定の道具](delegation.md#installer-の既定の道具)）。
 
 Codex child の MCP は既定で `inherit`（従来互換）です。`/delegate --codex-mcp orrery-only` は認証済み ORRERY Mail と session-binding plugin を残して、他の継承 MCP/plugin を無効化します。plugin skill や外部 app tool が必要な task では使いません。
 

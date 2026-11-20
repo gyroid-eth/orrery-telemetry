@@ -218,7 +218,7 @@ See the [consent contract](instruction-migration.en.md#consent) for confirmation
 --spawn-roots PATHS     roots the directory typeahead may browse (`:`-separated)
 --codex-approval MODE   Codex child `--ask-for-approval` (never | on-request | on-failure | untrusted; default never)
 --codex-network MODE    Codex child sandbox network (on | off; default on)
---child-default-tools SPEC  Default child tools (--tools grammar; empty by default)
+--child-default-tools SPEC  Default child tools (e.g. 'mcp:cua-driver;dsh=' clears defaults for dsh)
 --codex-add-dirs PATHS  extra writable roots for Codex children (`:`-separated)
 --retire-legacy-mail    see the appendix (retire a previous MCP Agent Mail)
 --mail auto|update|keep what to do with a running ORRERY Mail (default keep; --update-mail / --keep-mail are aliases)
