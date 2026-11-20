@@ -46,6 +46,7 @@ POST の Origin は、検証済み Host に対応する固定 origin とだけ�
 | GET | `/api/suggest-name` | `scientist` | verified `Adjective-Scientist`（要求形。実登録名は register 応答の read-back が正） |
 | GET | `/api/fs/dirs` | optional `path` | root-scoped child directories |
 | GET | `/api/agents` | なし | `{ts, agents}` |
+| GET / POST | `/api/computer-use` | operator capability | [起動世代の権限](#computer-use-api) |
 | GET | `/api/agents/<name>/history-binding` | なし | `{ok, agent}`（1人分の会話の記録の binding、API 36） |
 | GET | `/api/graph` | `days`, `all` | `{nodes, edges, spawn, timestamp_diagnostics, degraded, ts}` |
 | GET | `/api/history` | `session`, `limit` | transcript events |
@@ -65,6 +66,20 @@ POST の Origin は、検証済み Host に対応する固定 origin とだけ�
 | POST | `/api/annotate` | `{name, role?, emoji?, group?, task?}` | saved annotation |
 | POST | `/api/spawn` | spawn payload | child launch result |
 
+## computer use API
+
+API 42 の computer use は、標準の子が `orrery-screen` を選択したときに利用できます。[準備と確認手順](computer-use.md)
+
+| Method | Path | 資格 | Request と Response |
+| --- | --- | --- | --- |
+| GET | `/api/computer-use` | operator | クエリなしで `{launches: [...]}`。対象の4項目を指定すると、その起動の権限を返す。 |
+| POST | `/api/computer-use` | operator | JSON の対象4項目と `computer_use: off / view / control`。変更後の値を返す。 |
+| GET | `/api/computer-use/events` | operator | 対象4項目をクエリで指定。`{calls: [...]}`。 |
+| GET | `/api/computer-use/child` | 世代の子資格 | クエリなし。自身の `project`、`runtime`、`generation`、`computer_use`、`source`。 |
+| POST | `/api/computer-use/child/events` | 世代の子資格 | relay が開始と終了を記録する。権限の変更には使えない。 |
+
+対象4項目は `project`、`runtime`、`agent`、`generation` です。`source` は初期 Off の `default`、起動時に指定した `launch`、人が変更した `operator` のいずれかです。資格は HTTP `Authorization: Bearer …` に渡します。対象が一致しなければ HTTP 404、資格が異なれば HTTP 403 です。operator に返す直近の記録は全体で200件までで、各行は `call_id`、`agent`、`tool`、`started`、`finished`、`result` を含みます。終了が受信できなければ `finished` と `result` は null になります。
+
 ## GET `/api/version`
 
 ```bash
@@ -72,7 +87,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":41}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":42}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。

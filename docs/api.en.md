@@ -47,6 +47,7 @@ with HTTP 400. A media-type mismatch is HTTP 415, a cross-origin POST is HTTP 40
 | GET | `/api/suggest-name` | `scientist` | verified `Adjective-Scientist` (requested form; read-back from the registration response is authoritative for the actual registered name) |
 | GET | `/api/fs/dirs` | optional `path` | root-scoped child directories |
 | GET | `/api/agents` | none | `{ts, agents}` |
+| GET / POST | `/api/computer-use` | Operator capability | [Launch permission](#computer-use-api) |
 | GET | `/api/agents/<name>/history-binding` | none | `{ok, agent}` (one agent's conversation-record binding, API 36) |
 | GET | `/api/graph` | `days`, `all` | `{nodes, edges, spawn, timestamp_diagnostics, degraded, ts}` |
 | GET | `/api/history` | `session`, `limit` | transcript events |
@@ -66,6 +67,20 @@ with HTTP 400. A media-type mismatch is HTTP 415, a cross-origin POST is HTTP 40
 | POST | `/api/annotate` | `{name, role?, emoji?, group?, task?}` | saved annotation |
 | POST | `/api/spawn` | spawn payload | child launch result |
 
+## Computer use API
+
+API 42 adds explicit computer use for standard children launched with `orrery-screen`. [Setup and verification](computer-use.md)
+
+| Method | Path | Credential | Request and response |
+| --- | --- | --- | --- |
+| GET | `/api/computer-use` | Operator | With no query, returns `{launches: [...]}`. With all four target fields, returns that launch’s permission. |
+| POST | `/api/computer-use` | Operator | The four target fields and `computer_use: off / view / control` in JSON. Returns the updated permission. |
+| GET | `/api/computer-use/events` | Operator | The four target fields in the query. Returns `{calls: [...]}`. |
+| GET | `/api/computer-use/child` | Launch-bound child | With no query, returns its own `project`, `runtime`, `generation`, `computer_use` and `source`. |
+| POST | `/api/computer-use/child/events` | Launch-bound child | Records a relay call’s start or finish. Permission changes require the operator credential. |
+
+The target fields are `project`, `runtime`, `agent` and `generation`. The `source` is `default` for initial Off, `launch` for an explicit initial permission, or `operator` after a human changes it. Send the credential as `Authorization: Bearer …`. A mismatched target returns HTTP 404 and a mismatched credential returns HTTP 403. The service keeps up to 200 recent calls across targets. Each entry includes `call_id`, `agent`, `tool`, `started`, `finished` and `result`. The last two fields are null until a finish arrives.
+
 ## GET `/api/version`
 
 ```bash
@@ -73,7 +88,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":41}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":42}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.

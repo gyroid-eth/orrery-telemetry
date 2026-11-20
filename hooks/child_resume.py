@@ -1958,6 +1958,7 @@ def _build_home_unlocked(
     overlay_setting: str = "",
     parent_agent: str = "",
     work_dir: Path | None = None,
+    screen_generation: str = "",
 ) -> Path:
     if not SAFE_NAME.fullmatch(child) or mcp_profile not in MCP_PROFILES:
         raise ValueError("invalid child identity or MCP profile")
@@ -1967,10 +1968,10 @@ def _build_home_unlocked(
     # fails: a child that asked for less must not silently get everything.
     # child_tools.py is loaded only for a child that has a record; a missing
     # helper then fails the build instead of skipping the selection.
+    tools = _child_tools()
     tools_spec = None
     record = tools_record_path(runtime_dir, child)
     if record.exists() or record.is_symlink():
-        tools = _child_tools()
         try:
             tools_spec = tools.read_codex_record(os.fspath(record))
         except tools.ToolsError as exc:
@@ -2148,12 +2149,17 @@ def _build_home_unlocked(
                 if isinstance(plugin, dict):
                     plugin["enabled"] = False
             config_text = _emit_toml(config)
-        if tools_spec is not None:
-            config = _toml().loads(config_text)
-            try:
-                tools.codex_apply(config, tools_spec)
-            except tools.ToolsError as exc:
-                raise ValueError(str(exc)) from exc
+        config = _toml().loads(config_text)
+        try:
+            selection = tools_spec or tools.normalize()
+            managed_screen = tools.screen_definition(
+                selection, runtime_dir, project_key, child, screen_generation,
+                mail_env=mail_env,
+            )
+            tools.codex_apply(config, selection, managed_screen=managed_screen)
+        except tools.ToolsError as exc:
+            raise ValueError(str(exc)) from exc
+        if _toml().loads(config_text) != config:
             config_text = _emit_toml(config)
             _toml().loads(config_text)
         target = temporary / "config.toml"
@@ -2199,6 +2205,7 @@ def build_home(
     overlay_setting: str = "",
     parent_agent: str = "",
     work_dir: Path | None = None,
+    screen_generation: str = "",
 ) -> Path:
     """Build only the canonical generated home while holding the child lock."""
 
@@ -2230,6 +2237,7 @@ def build_home(
             overlay_setting=overlay_setting,
             parent_agent=parent_agent,
             work_dir=work_dir,
+            screen_generation=screen_generation,
         )
 
 
@@ -2339,6 +2347,7 @@ def main() -> int:
     build.add_argument("--overlay", default="")
     build.add_argument("--parent-agent", default="")
     build.add_argument("--work-dir", default="")
+    build.add_argument("--screen-generation", default="")
     args = parser.parse_args()
     try:
         runtime = Path(getattr(args, "runtime_dir", "")).expanduser()
@@ -2441,6 +2450,7 @@ def main() -> int:
                 overlay_setting=args.overlay,
                 parent_agent=args.parent_agent,
                 work_dir=Path(args.work_dir).expanduser() if args.work_dir else None,
+                screen_generation=args.screen_generation,
             )
             print(home)
     except (OSError, ValueError, ResumeStateError) as exc:

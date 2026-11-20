@@ -228,7 +228,8 @@ def generate(document):
     # Home-level native patches are inherited after profile patches. A
     # mail-only selection cannot promise to suppress unknown plugin clients.
     inherited = home / 'cordis.patch.yml'
-    if document.get('mcp_selection', {}).get('inherit') is False and inherited.exists():
+    selection = document.get('mcp_selection', {})
+    if (selection.get('inherit') is False or selection.get('managed_screen')) and inherited.exists():
         if inherited.read_text().strip() not in ('', '[]'):
             raise ValueError('inherited_mcp_conflict')
     config_dir = state / 'dsh-config'

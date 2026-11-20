@@ -364,7 +364,10 @@ def generate(document):
         enabled = existing.get('plugins', {}).get('enabled', [])
         if not isinstance(enabled, list):
             raise ValueError('inherited_mcp_conflict')
-        if selection.get('inherit') is False and any(name != PLUGIN for name in enabled):
+        screen = selection.get('managed_screen')
+        if ((selection.get('inherit') is False and any(name != PLUGIN for name in enabled))
+                or (screen and any(name not in (PLUGIN, 'orrery-telegram', 'orrery-web-search')
+                                   for name in enabled))):
             # Portable plugins can append MCP servers after config is loaded.
             # No plugin import/preflight or silent expansion of the selection.
             raise ValueError('inherited_mcp_conflict')
@@ -377,6 +380,10 @@ def generate(document):
         if not isinstance(inherited, dict) or any(not isinstance(value, dict) for value in inherited.values()):
             raise ValueError('invalid_mcp_config')
         for name, definition in mcp.items():
+            if name == 'orrery-screen' and screen:
+                # A resume rotates the generated binding. The new private
+                # definition replaces this one server in the child's HOME.
+                continue
             if name in inherited and _effective_mcp(inherited[name], definition) != definition:
                 state.mkdir(parents=True, exist_ok=True, mode=0o700)
                 with (state / 'config-generation.log').open('a', encoding='utf-8') as handle:

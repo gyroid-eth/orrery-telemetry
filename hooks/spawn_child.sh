@@ -2587,6 +2587,9 @@ write_child_mcp_config() {
     if [[ -n "${CHILD_TOOLS_SPEC:-}" && -z "$HARNESS" ]]; then
         spec_args=(--spec "$CHILD_TOOLS_SPEC")
     fi
+    if [[ -z "$HARNESS" && -n "${CHILD_REGISTRATION_GENERATION:-}" ]]; then
+        spec_args+=(--screen-generation "$CHILD_REGISTRATION_GENERATION")
+    fi
     python3 "$HOOKS_DIR/child_tools.py" claude-config \
         ${spec_args[@]+"${spec_args[@]}"} --cwd "${WORK_DIR:-$PWD}" \
         --chrome "$([[ "${CLAUDE_CHILD_CHROME:-false}" == true ]] && echo 1 || echo 0)" \
@@ -2645,6 +2648,7 @@ write_child_codex_home() {
         --mail-env "$MAIL_ENV" \
         --bearer-mode "$HTTP_BEARER_MODE" \
         --python-bin "${AGENTSTACK_PYTHON:-}" \
+        --screen-generation "${CHILD_REGISTRATION_GENERATION:-}" \
         --mcp-profile "$mcp_profile" \
         --parent-agent "${PARENT_NAME:-}" \
         --work-dir "$WORK_DIR" \

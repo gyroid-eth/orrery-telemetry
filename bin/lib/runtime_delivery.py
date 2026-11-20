@@ -742,7 +742,7 @@ class RuntimeDelivery(RuntimeFiles):
                 return 'Your delegated task is in ORRERY Mail. Fetch your inbox and read the task before beginning work.'
         return content.decode()
 
-    def child_tool_plan(self, provider, home, cwd):
+    def child_tool_plan(self, provider, home, cwd, launch_id=None):
         """Use the existing tool policy against this provider's fixed HOME."""
         child = self.client.outputs['child']
         if not child.exists():
@@ -753,11 +753,18 @@ class RuntimeDelivery(RuntimeFiles):
             spec = policy_api['normalize'](selection['base'], selection['tools'])
             policy_api['check_provider'](spec, provider)
             prompt = policy_api['prompt_text'](spec, provider)
+            c = self.client
+            managed_screen = policy_api['screen_definition'](
+                spec, Path(c.config['agentstack_home']) / 'runtime',
+                c.binding['expected_server_instance_id'], c.identity['name'], launch_id,
+                scope=c.runtime_dir,
+            )
             if provider == 'claude':
                 settings = home/'.claude.json'
                 if settings.exists() or settings.is_symlink():
                     self.api['read_private'](settings)
-                plan = policy_api['claude_plan'](spec, cwd=cwd, chrome=False, claude_json=str(settings))
+                plan = policy_api['claude_plan'](spec, cwd=cwd, chrome=False, claude_json=str(settings),
+                                                 managed_screen=managed_screen)
                 if spec['base'] == 'default':
                     # Strict MCP configuration must preserve the fixed HOME's
                     # default servers rather than silently narrowing selection.
@@ -766,8 +773,9 @@ class RuntimeDelivery(RuntimeFiles):
                               policy_api['_project_entry'](saved,cwd).get('mcpServers', {})]
                     for scope in scopes:
                         if isinstance(scope,dict):
-                            for name in scope:
-                                if not policy_api['looks_like_agent_mail'](name):
+                            for name, definition in scope.items():
+                                if (name not in plan['servers'] and not policy_api['looks_like_agent_mail'](name)
+                                        and not policy_api['_cua_server'](name, definition)):
                                     plan['servers'][name] = policy_api['_copyable_definition'](name,saved,cwd)
                 return plan['servers'], plan['flags'], prompt
             if provider == 'codex':
@@ -779,7 +787,7 @@ class RuntimeDelivery(RuntimeFiles):
                     for name, value in servers.items():
                         if not policy_api['looks_like_agent_mail'](name):
                             value['enabled'] = False
-                policy_api['codex_apply'](config, spec)
+                policy_api['codex_apply'](config, spec, managed_screen=managed_screen)
                 serializer = runpy.run_path(str(Path(self.client.config['wrapper_root'])/'hooks/child_resume.py'))
                 flags = []
                 for name, value in config.get('mcp_servers', {}).items():
@@ -788,6 +796,9 @@ class RuntimeDelivery(RuntimeFiles):
                     # All Mail aliases are replaced by the bound global proxy.
                     value = {**value, 'enabled':False} if policy_api['looks_like_agent_mail'](name) else value
                     flags += ['-c', 'mcp_servers.'+json.dumps(name)+'='+serializer['_toml_value'](value)]
+                for name, value in config.get('plugins', {}).items():
+                    if isinstance(value,dict) and value.get('enabled') is False:
+                        flags += ['-c', 'plugins.'+json.dumps(name)+'.enabled=false']
                 return {}, flags, prompt
             return {}, [], prompt
         except (ValueError, RuntimeError, KeyError, TypeError, OSError):
@@ -812,7 +823,7 @@ class RuntimeDelivery(RuntimeFiles):
             provider_instructions,Refused=instructions['provider_instructions'],instructions['Refused']
             try:provider_instructions(home,provider,c.config['wrapper_root'],'')
             except (OSError,Refused):self.fail('INSTRUCTION_PROVIDER_CONFIG_REQUIRED')
-        extra_servers, tool_flags, tool_prompt = self.child_tool_plan(provider,home,row['cwd'])
+        extra_servers, tool_flags, tool_prompt = self.child_tool_plan(provider,home,row['cwd'],row['launch_id'])
         proxy=[sys.executable,str(Path(__file__).with_name('runtime_client.py')),'--context',str(c.path),'proxy']
         if provider=='claude':
             config=home/'mcp.json'

@@ -25,6 +25,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Read from a designated phone](mobile.en.md) — The reader is off by default; owner admission, device restrictions, manual enable and disable steps.
 - [Delegation and child agents](delegation.en.md) — ORRERY /delegate, differences from native children, and tool selection.
 - [Launchers and identity](launchers.en.md) — agent-start, names, resume, /delegate and /log, and notification flow.
+- [Computer use for children (Japanese)](computer-use.md)
 - [Using Obsidian](obsidian.en.md) — Store logs, paper notes, and tasks in a vault and Daily Note.
 
 ## Candidate switch to empty Mail

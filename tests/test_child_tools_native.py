@@ -97,3 +97,24 @@ def test_default_browser_and_explicit_plain_mcp_are_combined(tmp_path):
 def test_browser_discovery_ambiguity_is_not_silently_ignored(tmp_path):
     with pytest.raises(tools.ToolsError, match='several match'):
         browser_plan(tmp_path, servers={'first': CHROME, 'second': CHROME})
+
+
+def test_native_screen_has_product_definition_and_no_inherited_cua(tmp_path):
+    from agentstack_mail import screen_contract
+    spec = tools.normalize(tools={"screen": {"access": "read", "server": "orrery-screen"}})
+    definition = {"command": "/fixture/python", "args": ["-m", "agentstack_mail.screen_mcp"],
+                  "env": {"AGENTSTACK_SCREEN_BINDING_FILE": "/fixture/binding.json"}}
+    config = settings(tmp_path)
+    plan = tools.native_plan(spec, cwd=str(tmp_path), claude_json=config,
+                             managed_screen=definition)
+    assert plan["servers"] == {"orrery-screen": definition}
+    assert tuple(plan["managed_screen"]) == screen_contract.TOOLS
+    assert plan["approved"] == plan["enabled_tools"] == {}
+    assert tools.screen_mode(spec) == "view"
+    settings_path = tmp_path / "source.json"
+    settings_path.write_text(json.dumps({"mcpServers": {
+        "alias": {"command": "/fixture/wrapper", "args": ["/fixture/cua-driver"]}}}))
+    conflicting = tools.normalize(tools={"mcp": ["orrery-screen", "alias"]})
+    with pytest.raises(tools.ToolsError, match="direct Cua Driver"):
+        tools.native_plan(conflicting, cwd=str(tmp_path), claude_json=str(settings_path),
+                          managed_screen=definition)
