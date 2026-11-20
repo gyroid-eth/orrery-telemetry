@@ -170,6 +170,8 @@ child の Claude / Codex command の後段へ連結され、REPL が戻った時
 
 共有 `child_resume.py` helper は fresh spawn / resume の state 準備、private material の検証、current source home からの child home 再生成、期限切れ maintenance、明示 purge を同じ lock と判定で行います。Codex の子の home を作る前に利用者の Codex home（`CODEX_HOME`、未指定なら `~/.codex`）に `sessions/`・`history.jsonl`・`session_index.jsonl` を作り、子からは symlink で共有します。既存の記録は上書きしません。子としてしか Codex を使わない初回環境でも、記録は cleanup 後に残ります。旧 home などに実体の `sessions/` が残っていた場合、cleanup は会話の記録が失われる旨と対象パスを stderr に警告してから削除します。operator 向け入口は `agentstack-purge-child-resume <agent>` と `agentstack-purge-child-resume --expired` です。`agentstack-doctor` は期限切れを報告するだけで、この helper の purge を呼びません。
 
+dashboard は30秒間隔で子の終了状態を確認します。終了処理を通らずに停止した子は、起動や再開から60秒が経過し、tmux セッションや生きている lease が見つからず、保留中の登録・移行・道具変更がなく、保存済みの認証情報が一致した時点で、再開用の状態を修復します。今のマシン起動中に書かれた状態は、別の tmux サーバーに残っている子を保護するため、端末に接続されたプロセスに子の名前がないことも確認します。子が起動した端末のない GUI アプリやサーバーは再開を妨げません。プロセスの有無を判定できない場合は修復を見送ります。中断された再開の保持期限は元のままです。ORRERY Mail の復帰は実際に再開するときに行います。
+
 これは Claude Code `SessionEnd` hook ではありません。`SessionEnd` は crash や resume でも発生しうるため、remote identity の retire をその event へ結びつけていません。
 
 ### `monitor_child_agent.sh`
