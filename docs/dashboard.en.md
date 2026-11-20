@@ -326,6 +326,8 @@ Displays `AGENTSTACK_SPAWN_DIRS` preset chips and an exact-path input. Persist p
 
 Typeahead does not leave `AGENTSTACK_SPAWN_ROOTS` or suggest hidden directories, `..`, or symlinks outside a root.
 
+The ORRERY folder picker also supports name search. Results show folders recently used to launch agents from that browser, then presets, then matches from the configured search scope. Use the arrow keys to move and Enter to select. The [folder search API](api.en.md#get-apifsdir-search) describes the scope and limits.
+
 ### Task and ADVANCED
 
 Task is required and limited to 4,000 characters. ADVANCED open/closed state is saved in `localStorage`.

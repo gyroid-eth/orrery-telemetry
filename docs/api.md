@@ -45,6 +45,7 @@ POST の Origin は、検証済み Host に対応する固定 origin とだけ�
 | GET | `/api/name-status` | `name` | exact identity status |
 | GET | `/api/suggest-name` | `scientist` | verified `Adjective-Scientist`（要求形。実登録名は register 応答の read-back が正） |
 | GET | `/api/fs/dirs` | optional `path` | root-scoped child directories |
+| GET | `/api/fs/dir-search` | `q` | 作業フォルダ名の検索（API 41） |
 | GET | `/api/agents` | なし | `{ts, agents}` |
 | GET | `/api/agents/<name>/history-binding` | なし | `{ok, agent}`（1人分の会話の記録の binding、API 36） |
 | GET | `/api/graph` | `days`, `all` | `{nodes, edges, spawn, timestamp_diagnostics, degraded, ts}` |
@@ -316,6 +317,16 @@ curl -s 'http://127.0.0.1:8770/api/fs/dirs?path=/Users/me/code'
 ```
 
 を返します。hidden directory と root 外へ出る symlink は除外し、名前順に最大 500 件を返します（page 側が入力中の prefix で絞るので、一覧全体が要ります）。501 件以上なら `truncated: true` です。
+
+## GET `/api/fs/dir-search`
+
+API 41 から利用できます。前後の空白を除いた `q` をフォルダ名に部分一致させます。大文字と小文字を区別せず、先頭一致を優先します。空の検索語には空の一覧を返します。`q` の省略、重複、255 文字超過、未知のパラメーターは HTTP 400 です。
+
+```json
+{"dirs":[{"name":"Project-A","path":"/workspace/experiments/Project-A"}],"truncated":false}
+```
+
+`AGENTSTACK_SPAWN_ROOTS` と、`AGENTSTACK_SPAWN_DIRS` に明示したプリセットを起点に、最大 4 階層を検索します。隠しフォルダ、`Library`、`node_modules`、`__pycache__`、`venv`、`vendor`、探索中に見つけたシンボリックリンクは除きます。最大 12,000 件のディレクトリエントリを調べ、探索結果を 20 秒間再利用します。候補は最大 30 件で、探索または候補の件数上限に達して一部を省いた場合は `truncated: true` を返します。
 
 ## GET `/api/agents`
 

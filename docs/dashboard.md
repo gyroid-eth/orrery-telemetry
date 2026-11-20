@@ -348,6 +348,8 @@ Local Qwen は六角形の中に Qwen のロゴを表示し、DeepSeek は接続
 
 typeahead は `AGENTSTACK_SPAWN_ROOTS` の外へ出ず、hidden directory、`..`、root 外への symlink を候補にしません。
 
+ORRERY のフォルダ選択画面では、フォルダ名を入力して検索できます。同じブラウザーから最近起動したフォルダ、プリセット、検索範囲内の一致順に候補が並びます。上下キーで移動し、Enter で選択します。探索範囲と上限は [フォルダ検索 API](api.md#get-apifsdir-search) を参照してください。
+
 ### Task と ADVANCED
 
 task は必須、最大4000文字です。ADVANCED の開閉状態は `localStorage` に保存します。
