@@ -721,6 +721,48 @@ def test_spawn_directory_search_scope_order_and_cache(monkeypatch, tmp_path):
     assert names("Project-home") == []
 
 
+def test_scoped_directory_search_reuses_limits_exclusion_and_cache(monkeypatch, tmp_path):
+    root = tmp_path / "roots"
+    vault = root / "Vault"
+    projects = vault / "21_Coding Projects"
+    alternate = vault / "other"
+    outside = tmp_path / "outside"
+    for folder in (
+        projects / "tm3000",
+        projects / "one" / "two" / "three" / "tm3000-level-four",
+        projects / "one" / "two" / "three" / "four" / "tm3000-too-deep",
+        projects / "vendor" / "sub" / "tm3000-vendor",
+        projects / ".hidden" / "tm3000-hidden",
+        alternate / "tm3000-other",
+        outside / "tm3000-outside",
+    ):
+        folder.mkdir(parents=True)
+    (projects / "tm3000-link").symlink_to(outside, target_is_directory=True)
+    (projects / "alias").symlink_to(alternate, target_is_directory=True)
+    monkeypatch.setenv("AGENTSTACK_SPAWN_ROOTS", str(root))
+    monkeypatch.setenv("AGENTSTACK_SPAWN_DIRS", str(outside))
+    monkeypatch.setattr(server, "_spawn_search_cache", None)
+
+    def names(under, query="tm3000"):
+        return [row["name"] for row in server.spawn_directory_search(query, str(under))["dirs"]]
+
+    assert names(projects) == ["tm3000", "tm3000-level-four"]
+    assert names(vault) == ["tm3000", "tm3000-other"]
+    assert names(projects, "21_coding") == []
+    assert names(projects / "alias") == ["tm3000-other"]
+    assert names(projects / "vendor" / "sub") == []
+    assert names(projects / ".hidden") == []
+    for invalid in ("", outside, projects / "tm3000-link", str(projects) + "/..", projects / "missing"):
+        with pytest.raises(ValueError, match="QUERY_INVALID"):
+            names(invalid)
+    assert names(projects) == ["tm3000", "tm3000-level-four"]
+    (projects / "tm3000-new").mkdir()
+    assert names(projects) == ["tm3000", "tm3000-level-four"]
+    key, _, paths, truncated = server._spawn_search_cache
+    server._spawn_search_cache = key, 0, paths, truncated
+    assert names(projects) == ["tm3000", "tm3000-level-four", "tm3000-new"]
+
+
 def test_spawn_directory_search_reports_truncation(monkeypatch, tmp_path):
     for name in ("MatchOne", "MatchTwo", "MatchThree"):
         (tmp_path / name).mkdir()
@@ -749,11 +791,17 @@ def test_spawn_directory_search_http_preserves_browsing(monkeypatch, tmp_path):
                 "dirs": [{"name": "FindMe", "path": str(found.resolve())}],
                 "truncated": False,
             }
+        from urllib.parse import urlencode
+        under = urlencode({"q": "find", "under": str(found.parent)})
+        with urllib.request.urlopen(base + "/dir-search?" + under) as response:
+            assert [row["name"] for row in json.load(response)["dirs"]] == ["FindMe"]
         with urllib.request.urlopen(base + "/dirs") as response:
             assert [item["name"] for item in json.load(response)["dirs"]] == ["group"]
-        with pytest.raises(urllib.error.HTTPError) as error:
-            urllib.request.urlopen(base + "/dir-search?q=find&q=other")
-        assert error.value.code == 400
+        for query in ("q=find&q=other", "q=find&under=", "q=find&under=/&under=/", "q=find&under=%00",
+                      urlencode({"q": "find", "under": str(tmp_path.parent)})):
+            with pytest.raises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(base + "/dir-search?" + query)
+            assert error.value.code == 400
     finally:
         httpd.shutdown()
         thread.join()

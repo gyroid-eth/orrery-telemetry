@@ -7807,17 +7807,25 @@ def _is_within_root(path: str, root: str) -> bool:
 _SPAWN_DIR_SUGGESTION_CAP = 500
 
 
-def spawn_directory_suggestions(raw_path: str) -> dict:
-    """List visible child directories without allowing traversal outside configured roots."""
+def _resolve_spawn_directory(raw_path: str) -> tuple[str, str] | None:
+    """Return the canonical path and its most specific configured root."""
     roots = _spawn_roots()
     raw_path = (raw_path or "").strip()
-    if not roots or any(part == ".." for part in raw_path.split(os.sep)):
-        return {"path": None, "dirs": []}
+    if not roots or "\0" in raw_path or ".." in raw_path.split(os.sep):
+        return None
     target = os.path.realpath(os.path.expanduser(raw_path or roots[0]))
     allowed_roots = [root for root in roots if _is_within_root(target, root)]
     if not allowed_roots or not os.path.isdir(target):
+        return None
+    return target, max(allowed_roots, key=len)
+
+
+def spawn_directory_suggestions(raw_path: str) -> dict:
+    """List visible child directories without allowing traversal outside configured roots."""
+    resolved = _resolve_spawn_directory(raw_path)
+    if resolved is None:
         return {"path": None, "dirs": []}
-    root = max(allowed_roots, key=len)
+    target, root = resolved
     dirs: list[dict[str, str]] = []
     try:
         with os.scandir(target) as entries:
@@ -7887,17 +7895,29 @@ def _index_spawn_directories(roots: tuple[str, ...]) -> tuple[set[str], bool]:
     return seen, False
 
 
-def spawn_directory_search(query: str) -> dict:
-    """Match directory basenames within the configured picker search scope."""
+def spawn_directory_search(query: str, under: str | None = None) -> dict:
+    """Match directory basenames within the configured scope or one allowed subtree."""
     query = unicodedata.normalize("NFC", query.strip()).casefold()
+    if not query and under is None:
+        return {"dirs": [], "truncated": False}
+    target = None
+    if under is not None:
+        resolved = _resolve_spawn_directory(under) if under.strip() else None
+        if resolved is None:
+            raise ValueError("QUERY_INVALID")
+        target, root = resolved
+        parts = os.path.relpath(target, root).split(os.sep) if target != root else []
+        if any(not _spawn_search_visible(part) for part in [os.path.basename(root), *parts]):
+            return {"dirs": [], "truncated": False}
+        scope = (target,)
+    else:
+        roots = set(_spawn_roots())
+        roots.update(os.path.realpath(os.path.expanduser(preset))
+                     for preset in _spawn_directory_presets()
+                     if os.path.isdir(os.path.expanduser(preset)))
+        scope = tuple(sorted(root for root in roots if _spawn_search_visible(os.path.basename(root))))
     if not query:
         return {"dirs": [], "truncated": False}
-
-    roots = set(_spawn_roots())
-    roots.update(os.path.realpath(os.path.expanduser(preset))
-                 for preset in _spawn_directory_presets()
-                 if os.path.isdir(os.path.expanduser(preset)))
-    scope = tuple(sorted(root for root in roots if _spawn_search_visible(os.path.basename(root))))
 
     global _spawn_search_cache
     with _SPAWN_SEARCH_LOCK:
@@ -7909,6 +7929,8 @@ def spawn_directory_search(query: str) -> dict:
 
     matches = []
     for path in paths:
+        if path == target:
+            continue
         name = os.path.basename(path) or path
         folded = unicodedata.normalize("NFC", name).casefold()
         if query in folded:
@@ -7922,9 +7944,12 @@ def spawn_directory_search(query: str) -> dict:
 
 def _spawn_directory_search_query(raw_query: str) -> dict:
     fields = parse_qs(raw_query, keep_blank_values=True)
-    if set(fields) != {"q"} or len(fields["q"]) != 1 or len(fields["q"][0]) > 255:
+    if ("q" not in fields or set(fields) - {"q", "under"}
+            or any(len(values) != 1 for values in fields.values())
+            or len(fields["q"][0]) > 255
+            or len(fields.get("under", [""])[0]) > 4096):
         raise ValueError("QUERY_INVALID")
-    return spawn_directory_search(fields["q"][0])
+    return spawn_directory_search(fields["q"][0], fields.get("under", [None])[0])
 
 
 _SPAWN_STATUS_CACHE: dict = {"ts": 0.0, "key": None, "data": {}}

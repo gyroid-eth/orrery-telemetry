@@ -326,7 +326,7 @@ Displays `AGENTSTACK_SPAWN_DIRS` preset chips and an exact-path input. Persist p
 
 Typeahead does not leave `AGENTSTACK_SPAWN_ROOTS` or suggest hidden directories, `..`, or symlinks outside a root.
 
-The ORRERY folder picker also supports name search. Results show folders recently used to launch agents from that browser, then presets, then matches from the configured search scope. Use the arrow keys to move and Enter to select. The [folder search API](api.en.md#get-apifsdir-search) describes the scope and limits.
+In the ORRERY folder picker, the breadcrumbs set the scope for a name search. With an empty query, the picker shows the current folder’s children. As you type, it shows matches below the current folder by relative path. Use the arrow keys to move and Enter to open a child folder or select a search result. The [folder search API](api.en.md#get-apifsdir-search) describes the scope and limits.
 
 ### Task and ADVANCED
 
