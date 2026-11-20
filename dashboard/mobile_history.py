@@ -184,6 +184,8 @@ def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None
         text = _label(text)
     result = {'id': event_id, 'kind': kind, 'role': role, 'text': text,
               'ts': _label(raw.get('ts'), 40), 'truncated': cut or raw.get('truncated') is True}
+    if kind == 'text' and role == 'assistant' and raw.get('variant') == 'update':
+        result['variant'] = 'update'
     if step and kind == 'tool':
         result['step'] = step
     turn = project_step(raw.get('step_turn'), boundary=True)
