@@ -25,23 +25,28 @@ CHILD = "CozyPlanck"
 
 
 class _Mail(http.server.BaseHTTPRequestHandler):
-    """health_check, ensure_project and register_agent, nothing else."""
+    """Simulate a profile read and the effect of re-registering its name."""
 
     calls: list[str] = []
+    profile: dict
 
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length") or 0)
         req = json.loads(self.rfile.read(length) or b"{}")
         params = req.get("params") or {}
         name = params.get("name")
+        args = params.get("arguments") or {}
         _Mail.calls.append(name)
         if name == "health_check":
             result = {"structuredContent": {"status": "ok"}}
+        elif name == "whois" and _Mail.profile:
+            assert args["include_recent_commits"] is False
+            result = {"structuredContent": {"name": args["agent_name"], **_Mail.profile}}
         elif name == "ensure_project":
             result = {"structuredContent": {"id": 1}}
         elif name == "register_agent":
-            args = params.get("arguments") or {}
             _Mail.register_args.append(dict(args))
+            _Mail.profile.update({key: args[key] for key in ("program", "model", "task_description")})
             result = {"structuredContent": {
                 "id": AGENT_ID, "name": args.get("name"),
                 "registration_token": args.get("registration_token", ""),
@@ -72,6 +77,7 @@ class _Mail(http.server.BaseHTTPRequestHandler):
 def mail() -> object:
     _Mail.calls = []
     _Mail.register_args = []
+    _Mail.profile = {"program": "claude-code"}
     server = http.server.HTTPServer(("127.0.0.1", 0), _Mail)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
@@ -83,7 +89,7 @@ def mail() -> object:
 
 
 def _run_child_session_start(
-    tmp_path: Path, mcp_url: str, *, with_transcript: bool = True,
+    tmp_path: Path, mcp_url: str, *, with_transcript: bool = True, source: str = "startup",
     extra_env: dict | None = None, ancestry: tuple[tuple[str, str], ...] | None = None,
 ):
     runtime = tmp_path / "runtime"
@@ -120,7 +126,7 @@ def _run_child_session_start(
     transcript = tmp_path / "claude" / "projects" / "-p" / "abc123.jsonl"
     transcript.parent.mkdir(parents=True)
     transcript.write_text("{}\n", encoding="utf-8")
-    payload = {"session_id": "sess-child-1", "hook_event_name": "SessionStart", "cwd": str(project)}
+    payload = {"session_id": "sess-child-1", "hook_event_name": "SessionStart", "cwd": str(project), "source": source}
     if with_transcript:
         payload["transcript_path"] = str(transcript)
     env = {
@@ -162,8 +168,9 @@ def test_shell_registration_without_a_handed_model_still_names_the_program(mail:
     assert _Mail.register_args and _Mail.register_args[-1]["model"] == "claude-code", _Mail.register_args
 
 
-def test_shell_registration_writes_the_session_index(mail: str, tmp_path: Path) -> None:
-    result, runtime, transcript = _run_child_session_start(tmp_path, mail, ancestry=(
+@pytest.mark.parametrize("source", ["startup", "resume"])
+def test_shell_registration_writes_the_session_index(mail: str, tmp_path: Path, source: str) -> None:
+    result, runtime, transcript = _run_child_session_start(tmp_path, mail, source=source, ancestry=(
         ("/bin/sh", ""), ("claude", ""), ("/bin/zsh", ""), ("tmux: server", ""),
     ))
     assert "register_agent" in _Mail.calls, _Mail.calls
@@ -194,6 +201,60 @@ def test_nested_claude_keeps_the_parent_token_and_session_index(mail: str, tmp_p
     assert (runtime / f"agent_token_{CHILD}").read_bytes() == b"tok-child\n"
     assert index.read_bytes() == parent_record
     assert result.stdout == ""
+
+
+def test_claude_nested_in_agy_preserves_the_live_parent(mail: str, tmp_path: Path, monkeypatch) -> None:
+    from dashboard import server
+
+    parent = {"name": CHILD, "program": "antigravity", "model": "gemini-fixture",
+              "task_description": "Parent task", "last_active": 0}
+    _Mail.profile = parent.copy()
+    index = tmp_path / "runtime" / "session_index" / f"{AGENT_ID}.json"
+    index.parent.mkdir(parents=True)
+    index.write_bytes(b'{"session_id":"parent-session"}\n')
+    env_file = tmp_path / "claude.env"
+    result, runtime, _ = _run_child_session_start(tmp_path, mail, ancestry=(
+        ("/bin/sh", ""), ("claude", ""), ("/bin/zsh", ""), ("agy", ""),
+    ), extra_env={"CLAUDE_ENV_FILE": str(env_file)})
+
+    assert _Mail.calls == ["health_check", "whois"]
+    assert _Mail.profile == parent
+    assert (runtime / f"agent_token_{CHILD}").read_bytes() == b"tok-child\n"
+    assert index.read_bytes() == b'{"session_id":"parent-session"}\n'
+    assert not (runtime / "live-sessions").exists()
+    assert not env_file.exists()
+    assert result.stdout == ""
+
+    pane = {"cmd": "agy", "title": "", "pane_pid": 123}
+    tree = ({123: "agy"}, {})
+    _, category, running, _ = server._tmux_row_state(CHILD, pane, _Mail.profile, tree)
+    assert server._is_live_roster_row({"category": category, "running": running})
+
+    monkeypatch.setattr(server, "_raw_graph", lambda: {"nodes": [_Mail.profile.copy()]})
+    monkeypatch.setattr(server, "tmux_state", lambda: {CHILD: pane})
+    monkeypatch.setattr(server, "_process_tree_snapshot", lambda: tree)
+    for attr in ("_codex_app_runtimes", "_deliverables_index", "_annotations", "_name_substitutions", "_persistent_profiles"):
+        monkeypatch.setattr(server, attr, dict)
+    monkeypatch.setattr(server, "_agent_runtime", lambda *_: {})
+    monkeypatch.setattr(server, "_provider_stall_view", lambda *_: None)
+    graph = server.graph_payload(days=7, show_all=False)
+    assert [(node["name"], node["state"]) for node in graph["nodes"]] == [(CHILD, "run")]
+
+
+def test_unconfirmed_provider_skips_registration(mail: str, tmp_path: Path) -> None:
+    _Mail.profile = {}
+    result, runtime, _ = _run_child_session_start(tmp_path, mail)
+    assert _Mail.calls == ["health_check", "whois"]
+    assert "provider を確認できなかった" in result.stdout
+    assert not (runtime / "session_index").exists()
+
+
+def test_mail_disabled_skips_profile_lookup_and_registration(mail: str, tmp_path: Path) -> None:
+    result, runtime, _ = _run_child_session_start(tmp_path, mail, source="resume",
+                                                  extra_env={"AGENTSTACK_MAIL_DISABLED": "1"})
+    assert _Mail.calls == []
+    assert result.stdout == ""
+    assert not (runtime / "session_index").exists()
 
 
 def test_claude_nested_in_codex_skips_the_global_entry(mail: str, tmp_path: Path) -> None:
