@@ -45,6 +45,7 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 ### `session-start-reminder.sh`
 
 - **発火:** すべての `SessionStart` source。startup だけでなく resume、`/clear`、compact 後にも走ります。
+- **入れ子の起動:** macOS・Linux 共通の `ps` で shell wrapper を越えて祖先をたどり、Claude が別の Claude または Codex の内側にいると確認できた場合は、SessionStart の登録・owner token・セッション索引の更新を省きます。内側の Claude の会話は続行します。祖先から確認できない起動では、通常どおり identity の解決へ進みます。
 - **動作:** identity を `AGENT_NAME` → pane metadata → exact tmux session の順で解決し、ORRERY Mail の liveness を確認します。owner token と project key があれば shell 側で同じ identity を再登録します。そのうえで、登録済み・儀式不要を明示した embedded task、提供 tool schema が示す bound proxy、raw/direct 接続の順に最初に一致した経路だけを使うよう案内します。embedded task は parent の有無だけで除外しません。shell 登録と raw MCP tool session の認証は別です。
 - **経路の境界:** child proxy の設定 artifact は案内を具体化する hint にだけ使い、model に実際に提供された tool の説明と引数 schema を優先します。bound proxy では helper・再登録・token file 読取を指示せず、障害時も raw/helper へ自動 fallback させません。raw/direct の既存 identity だけ token-safe helper に進み、新規 raw 登録とは分けます。generic な登録失敗を stale token と断定しません。
 
