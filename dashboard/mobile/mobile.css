@@ -286,7 +286,22 @@ html[data-color-theme=light] .graph-status-flag.question{color:#076c80}
 .agent-result{display:flex;align-items:center;gap:10px}.agent-result+.agent-result{border-top:1px solid var(--hair)}
 .agent-result-open{flex:1;min-width:0;text-align:left;background:none;border:0;padding:11px 0;min-height:54px}.agent-result-open strong{display:block;font:500 17px var(--serif);overflow-wrap:anywhere}.agent-result-open span{display:block;margin-top:2px;font:10px var(--mono);color:var(--ink-dim);overflow-wrap:anywhere}
 .mobile .agent-search-note{font:10px/1.6 var(--mono);color:var(--ink-dim);padding:6px 0}
-.mobile #net .node[role=button]{cursor:pointer}.mobile #net .node[role=button]:focus-visible{outline:1px solid var(--amber);outline-offset:5px}
+.mobile #net .node[role=button]{cursor:pointer}
+.mobile #net .node[role=button]:focus{outline:none}
+.mobile #net .node[role=button]:focus-visible:not(.selnode) .ring{
+  r:21;opacity:.92;stroke:var(--ink);stroke-width:1;stroke-dasharray:2 1
+}
+.mobile #net .node.selnode .ring{r:21;opacity:.85;stroke:var(--ink);stroke-width:1}
+.mobile #net .node.selnode:focus-visible .ring{stroke-width:1.5}
+.mobile #net .node.selnode :is(.node-halo,.ctx-arc-glow,.motion-ring){opacity:0;animation:none}
+.mobile #net .node.selnode :is(.qbub .bq,.askbub .bx){animation:none;filter:none}
+.mobile #net .node.selnode .ctx-arc{stroke-width:.8;opacity:.7}
+.mobile #net .node.selnode .ctx-track{stroke-width:.8}
+.mobile #net:not(.focus) .node.selnode .prole{stroke-width:1.3}
+@media(prefers-reduced-motion:no-preference){
+  .mobile #net .node.selnode .ring{animation:graph-selection-appear 140ms ease-out both}
+  @keyframes graph-selection-appear{from{opacity:0}}
+}
 .mobile #net .node .mobile-node-hit{fill:transparent;stroke:none;pointer-events:all}.mobile #net .node[role=button]>text{pointer-events:all}
 .mobile .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
 .mobile #gsvg{touch-action:none}
@@ -427,6 +442,26 @@ html[data-color-theme=light] .graph-status-flag.question{color:#076c80}
 .mobile #settings{font-family:system-ui,sans-serif;display:block;position:fixed;z-index:20;left:max(0px,calc(50% - 260px));right:max(0px,calc(50% - 260px));top:auto;bottom:0;width:auto;transform:none;border:1px solid var(--hair);border-radius:16px 16px 0 0;background:var(--panel);box-shadow:0 -24px 60px rgb(0 0 0/.5);padding:17px 20px 18px;max-height:75vh;overflow-y:auto;visibility:visible;opacity:1}
 .mobile .st-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding:0;border:0}.mobile .st-bar h2{font-size:22px}.st-bar button{border:0;background:none;font-size:18px;min-width:30px;min-height:30px}
 .mobile .st-row{display:grid;grid-template-columns:1fr auto;column-gap:15px;margin:11px 0;padding:0}.mobile .st-row .lab{font:13px/1.4 system-ui,sans-serif;letter-spacing:0;text-transform:none}.mobile .st-row .val{font:13px/1.4 system-ui,sans-serif;font-variant-numeric:tabular-nums;color:var(--amber)}.mobile .st-row .mobile-scrubber{grid-column:1/-1;margin-top:4px}.st-foot{text-align:right}#nc-reset{min-height:44px;border:1px solid var(--hair);border-radius:8px;background:none;padding:7px 10px;font:13px system-ui,sans-serif}
+@media(max-width:739.98px), (max-height:539.98px){
+  .mobile #settings{
+    --settings-surface:color-mix(in srgb,var(--panel) 86%,transparent);
+    padding:0 max(16px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));
+    max-height:40dvh;background:var(--settings-surface);color:var(--ink);
+    -webkit-backdrop-filter:none;backdrop-filter:none;
+    box-shadow:0 -6px 18px color-mix(in srgb,var(--shade) 21%,transparent);overscroll-behavior:contain
+  }
+  .mobile #settings:has(.om-range-dragging,:where(input[type=range]):active){
+    --settings-surface:color-mix(in srgb,var(--panel) 58%,transparent)
+  }
+  .mobile #settings:has(.om-range-dragging,:where(input[type=range]):active) :is(.lab,.val){
+    text-shadow:0 1px 2px var(--panel),0 0 4px var(--panel)
+  }
+  .mobile #settings .st-bar{
+    position:sticky;z-index:3;top:0;margin:0;
+    background:color-mix(in srgb,var(--panel) 95%,transparent)
+  }
+  .mobile #settings-close{min-width:44px;min-height:44px}
+}
 .mobile .period-trigger {
   display:inline-flex;gap:5px;align-items:center;justify-content:center;
   min-height:44px;padding:0 7px;border:0;background:none;color:var(--ink-dim);
