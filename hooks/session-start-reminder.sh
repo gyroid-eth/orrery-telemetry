@@ -1,5 +1,45 @@
 #!/bin/bash
 
+# A second provider in the hook's ancestry identifies a nested launch even
+# through shell wrappers and with the CLAUDECODE value inherited from tmux.
+is_nested_claude_session() {
+    local pid="$PPID" depth row parent command args executable script seen_claude=0
+    for ((depth = 0; pid > 1 && depth < 16; depth++)); do
+        row="$(ps -ww -p "$pid" -o ppid= -o comm= 2>/dev/null)" || return 1
+        read -r parent command <<< "$row"
+        case "$parent" in ''|*[!0-9]*) return 1 ;; esac
+        case "$command" in */claude/versions/*) command=claude ;; esac
+        command="${command##*/}"
+        case "$command" in
+            node|[0-9]*.[0-9]*.[0-9]*)
+                # Confirm npm and versioned installs by the executable or script path.
+                args="$(ps -ww -p "$pid" -o args= 2>/dev/null)" || args=""
+                read -r executable script _ <<< "$args"
+                case "$executable" in claude|*/claude|*/claude/versions/*) command=claude ;; esac
+                case "$script" in */node_modules/@anthropic-ai/claude-code/cli.js) command=claude ;; esac
+                ;;
+        esac
+        case "$command" in
+            claude)
+                [[ "$seen_claude" == 0 ]] || return 0
+                seen_claude=1
+                ;;
+            codex|codex-*)
+                [[ "$seen_claude" == 1 ]] && return 0
+                return 1
+                ;;
+        esac
+        pid="$parent"
+    done
+    # Preserve existing starts when the ancestry is missing or inconclusive.
+    return 1
+}
+
+# Exit only this hook, before either registration path can claim the session.
+if is_nested_claude_session; then
+    exit 0
+fi
+
 _ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
 . "$_ags_global_loader" || exit 2
 if declare -F ags_client_entry >/dev/null; then
