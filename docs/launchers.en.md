@@ -125,7 +125,7 @@ ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json
 
 Private `harness_state_dir` contains the initial prompt, native launch plan and concise native instructions. Their source is `bin/lib/harness_instructions.md`; the existing shared renderer includes common startup and Mail rules. Initial launch and resume of the same ID pass them to dsh's `AGENTS.md` or Hermes's system prompt. They omit ORRERY child-creation procedures, raw authentication recovery and instructions for other runtimes. Shared-edit reservations, the private scratch exception and stop conditions remain. dsh tool-subagent, Hermes auxiliary/delegation settings and skill distribution are unchanged, as are the Claude/Codex instruction bodies.
 
-Credential values and parent tokens are not included in the instructions. Additional plain stdio/HTTP MCP selections use the common tool policy; approvals or filters the native configuration cannot express are explicitly rejected. Native tool adapters call the existing credential-read, registration and reservation hooks. Installer default-tools are not silently omitted for an additional harness: unsupported implicit defaults stop launch; select an explicit `--base default` or supported `--tools`.
+Credential values and parent tokens are not included in the instructions. Additional plain stdio/HTTP MCP selections use the common tool policy. Explicit approvals or filters that the native configuration cannot express stop the launch. Installer defaults apply items that can be represented in native configuration and report any items they omit. Native tool adapters call the existing credential-read, registration and reservation hooks.
 
 New Hermes children use `children/<SHA256 of project key>/<canonical name>` beneath the
 generation-external profiles directory as their persistent `HERMES_HOME`. Different names or
@@ -303,7 +303,7 @@ The parent agent does not finish when it hands off the task. It remains responsi
 
 `--base mail-only` and `--tools browser[:<deviceId>]` / `screen[:read|:operate]` / `screen:<read|operate>:<server>` / `mcp:<server>[:all]` choose the tools a child gets. A child with a selection is not started when the selection cannot be applied ([Choosing the tools a child gets](delegation.en.md#choosing-the-tools-a-child-gets---base----tools)).
 
-A CLI launch that omits base/tools/MCP profile uses the installer's `AGENTSTACK_CHILD_DEFAULT_TOOLS` (empty by default), reporting and omitting only unavailable default items. Explicit `--base default` suppresses those defaults. Resume restores the recorded selection ([Installer defaults](delegation.en.md#installer-defaults)).
+New Claude, Codex, dsh and Hermes launches use the installer's `AGENTSTACK_CHILD_DEFAULT_TOOLS` (empty by default) when base/tools/MCP profile are omitted on the CLI or base/tools are omitted from the standard `/api/spawn`. The launcher reports and omits unavailable default items. Explicit `--base default` suppresses those defaults. Resume restores the recorded selection ([Installer defaults](delegation.en.md#installer-defaults)).
 
 Codex children default to MCP profile `inherit` for backward compatibility. `/delegate --codex-mcp orrery-only` keeps authenticated ORRERY Mail and the session-binding plugin while disabling other inherited MCP servers and plugins. Do not use it for tasks that require plugin skills or external app tools.
 

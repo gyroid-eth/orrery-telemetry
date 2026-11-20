@@ -927,6 +927,22 @@ def prompt_text(spec: dict, provider: str, standalone: bool = False) -> str:
             "technical lock.")
 
 
+DEFAULT_TOOL_PROVIDERS = ("claude", "codex", "dsh", "hermes")
+
+
+def default_tool_selections(selection: str) -> tuple[str, dict[str, str]]:
+    """Read the common selection followed by optional ;provider=selection overrides."""
+    common, *entries = selection.split(";")
+    overrides = {}
+    for entry in entries:
+        provider, separator, value = entry.partition("=")
+        provider = provider.strip()
+        if not separator or provider not in DEFAULT_TOOL_PROVIDERS or provider in overrides:
+            raise ToolsError("use each provider at most once as ;claude=SPEC, ;codex=SPEC, ;dsh=SPEC or ;hermes=SPEC")
+        overrides[provider] = value.strip()
+    return common, overrides
+
+
 def resolve_defaults(selection: str, provider: str, *, cwd: str,
                      chrome: bool = False, chrome_device: str = "",
                      claude_json: str = "", codex_config: dict | None = None,
@@ -940,6 +956,12 @@ def resolve_defaults(selection: str, provider: str, *, cwd: str,
     accepted: list[str] = []
     omitted: list[str] = []
     spec = normalize()
+    try:
+        common, overrides = default_tool_selections(selection)
+        selection = overrides.get(provider, common)
+    except ToolsError:
+        selection = ""
+        omitted.append("Default tools were omitted because the provider override syntax is invalid.")
     for item in selection.split(",") if selection.strip() else []:
         item = item.strip()
         label = "invalid selection"
@@ -951,6 +973,9 @@ def resolve_defaults(selection: str, provider: str, *, cwd: str,
             merge_chrome(candidate, chrome, chrome_device)
             if provider == "codex":
                 codex_apply(copy.deepcopy(codex_config or {}), candidate)
+            elif provider in ("dsh", "hermes"):
+                native_plan(candidate, cwd=cwd, claude_json=claude_json,
+                            codex_config=codex_config)
             else:
                 claude_plan(candidate, cwd=cwd, chrome=chrome,
                             claude_json=claude_json, platform=platform)
@@ -1016,9 +1041,11 @@ def main(argv: list[str]) -> int:
     p.add_argument("--tools", action="append", default=[])
     p.add_argument("--chrome", default="0")
     p.add_argument("--chrome-device", default="")
+    validate_defaults = sub.add_parser("validate-defaults")
+    validate_defaults.add_argument("selection")
     defaults = sub.add_parser("defaults")
     defaults.add_argument("--selection", required=True)
-    defaults.add_argument("--provider", required=True, choices=("claude", "codex"))
+    defaults.add_argument("--provider", required=True, choices=DEFAULT_TOOL_PROVIDERS)
     defaults.add_argument("--cwd", required=True)
     defaults.add_argument("--chrome", default="0")
     defaults.add_argument("--chrome-device", default="")
@@ -1052,9 +1079,15 @@ def main(argv: list[str]) -> int:
     ws.add_argument("--spec", required=True)
     args = parser.parse_args(argv[1:])
     try:
+        if args.command == "validate-defaults":
+            common, overrides = default_tool_selections(args.selection)
+            for selection in (common, *overrides.values()):
+                if selection:
+                    normalize(tools=parse_cli([selection]))
+            return 0
         if args.command == "defaults":
             config = _defaults_codex_config(args.codex_config, args.overlay) \
-                if args.provider == "codex" else None
+                if args.provider != "claude" else None
             result = resolve_defaults(args.selection, args.provider, cwd=args.cwd,
                                       chrome=args.chrome == "1", chrome_device=args.chrome_device,
                                       claude_json=args.claude_json, codex_config=config)

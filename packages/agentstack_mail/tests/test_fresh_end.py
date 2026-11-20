@@ -516,7 +516,7 @@ def test_api40_spawn_status_keeps_resolution_separate_from_native_receipt(tmp_pa
             transport=Transport(tmp_path);backend=Backend(parent.path,ROOT,transport=lambda:transport)
             with dashboard(parent,backend,monkeypatch,tmp_path) as (module,request):
                 code,version=await asyncio.to_thread(request,'/api/version')
-                assert code==200 and version['api']==module.API_GENERATION==40
+                assert code==200 and version['api']==module.API_GENERATION and version['api']>=40
                 payload=dict(standalone=True,name='ResolvedVerdict',task='bounded status fixture',
                     dir=str(tmp_path),provider='claude',model='claude-sonnet-4-6')
                 code,accepted=await asyncio.to_thread(request,'/api/spawn',payload)

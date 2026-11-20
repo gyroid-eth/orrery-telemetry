@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 40
+API_GENERATION = 41
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -9028,7 +9028,8 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     # A launcher that delivers the task itself owns the only task authority;
     # a second copy by mail would carry conflicting completion instructions.
     if not standalone and spec.task_mail:
-        subject = f"タスク依頼: {task[:50]}"
+        task_preview = " ".join(task.split())[:50]
+        subject = f"タスク依頼: {task_preview}"
         body_lines = [
             "> [via dashboard +NEW AGENT]",
             "",
@@ -9250,10 +9251,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     # the CLI env defaults would otherwise turn an unchecked box back on.
     env.pop("AGENTSTACK_CLAUDE_CHILD_CHROME", None)
     env.pop("AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE", None)
-    # The form/API selection is authoritative. The UI initializes its visible
-    # choices from installer defaults; the launcher must not append them again
-    # (or restore a choice the operator removed).
-    env.pop("AGENTSTACK_CHILD_DEFAULT_TOOLS", None)
+    # The standard launcher resolves defaults in the final working directory.
+    # Explicit base or tools already take precedence via _spawn_tools_args.
+    if spec.provider not in ("claude", "codex") and spec.program not in harness_runtime.HARNESSES:
+        env.pop("AGENTSTACK_CHILD_DEFAULT_TOOLS", None)
     if spec.provider == "codex" and not env.get("AGENTSTACK_PYTHON", "").strip():
         # Direct development servers need the same interpreter as the API;
         # installed services already carry the installer's pinned interpreter.

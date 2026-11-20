@@ -72,7 +72,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":40}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":41}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -756,7 +756,7 @@ DeepSeek / Local の通常 catalog は、plain 世代の識別と generator の�
 
 dsh / Hermes では、選択を native config で表せる場合だけ `base` / `tools` を受け付けます。stdio / HTTP の MCP server を写し、内蔵 computer use・Chrome device・表せない tool 単位の承認やフィルターは理由つきで拒否します。起動できたことを、それらの承認が有効になった意味にはしません。
 
-API 8 では、`tools: {}` または `base: "default"` を明示すると `--base default` を渡します。dashboard/API はフォームの選択を正とし、installer の `AGENTSTACK_CHILD_DEFAULT_TOOLS` を launcher の env から外して、選択から外した道具を追加しません。明示した道具が使えなければ起動を止めます。CLI で base/tools/MCP profile を省略したときだけ、使えない既定の項目を通知して外す経路を使います。
+API 41 から、標準の `/api/spawn` で `base` と `tools` を両方省略すると、Claude・Codex・dsh・Hermes に installer の `AGENTSTACK_CHILD_DEFAULT_TOOLS` を適用します。NEW AGENT もこの経路を使います。launcher は最終の作業フォルダと provider に合わせて使えない既定の項目を外し、通知します。明示した選択を優先し、追加の道具を指定しない `tools: {}` や `base: "default"` は API 8 と同じく `--base default` を渡して installer の既定を抑止します。明示した道具が使えなければ起動を止めます。
 
 `base` か `tools` で選択した child は、選択どおりにできなければ（Mail の proxy が無い、server を写せない、computer use が有効な project での `mail-only` など）起動しません。形の誤りはここで 400、child の起動ディレクトリで決まる誤りは launcher の失敗として返ります。Gemini など他の provider では、`mail-only` と `tools` を拒否します。
 

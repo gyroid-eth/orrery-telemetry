@@ -254,9 +254,11 @@ What a screen selection exposes and approves is decided by the classification ta
 
 ### Installer defaults
 
-`--child-default-tools 'browser,screen:operate'` writes `AGENTSTACK_CHILD_DEFAULT_TOOLS` into env.sh, the service definition and install-state. The default is empty. The launcher uses it only when none of `--base`, `--tools` or `--codex-mcp` is explicit; `--base default` clears the installer choice for that launch.
+`--child-default-tools 'mcp:cua-driver'` writes `AGENTSTACK_CHILD_DEFAULT_TOOLS` into env.sh, the service definition and install-state. The default is empty. Standard new launches of Claude, Codex, dsh and Hermes use it when the CLI omits `--base`, `--tools` and `--codex-mcp`, or when `/api/spawn` (including NEW AGENT) omits both `base` and `tools`.
 
-Defaults are checked for the provider and final directory, one item at a time. An unavailable item is omitted while applicable items remain; the omission appears in spawn output and the child's first instructions. Explicit base/tools/MCP profiles take precedence over defaults; output and the first instruction also state when defaults were not applied. Explicit selections keep failing closed. Mail proxy, authentication and startup failures are outside per-item default omission and stop a selected launch. The effective selection is saved in the existing Claude launch record or Codex tools record, so resume uses that selection instead of current installer defaults. On macOS Codex, `screen:operate` without a named server is omitted and node_repl is not automatically approved.
+Append `;claude=SPEC`, `;codex=SPEC`, `;dsh=SPEC` or `;hermes=SPEC` after the common list to replace that provider's defaults. Each list uses the `--tools` grammar. Providers without an override use the common list. An empty override clears the installer defaults for that provider. For example, `--child-default-tools 'mcp:cua-driver;dsh='` gives `cua-driver` to Claude, Codex and Hermes and clears the installer defaults for dsh.
+
+Defaults are checked for the provider and final directory, one item at a time. Applicable items remain, and omissions appear in spawn output and the child's first instructions. Explicit base/tools/MCP profiles take precedence. To suppress installer defaults, pass `--base default` on the CLI, or `base: "default"` or `tools: {}` in the API. Unavailable explicit tools and Mail proxy, authentication or startup failures stop the launch. Resume uses the selection recorded at launch and does not add current installer defaults. On macOS Codex, `screen:operate` without a named server is omitted and node_repl is not automatically approved.
 
 ### Approval
 
