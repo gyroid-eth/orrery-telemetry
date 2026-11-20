@@ -18,7 +18,7 @@ function icon(name){
  return svg;
 }
 const tabletView=matchMedia('(min-width: 740px) and (min-height: 540px)');
-let readingView='graph';
+let readingView='graph',tabletLayout=tabletView.matches;
 let snapshot=null,kind='all',agentFilter='',desiredWindow='day',timer=0,active=null,pending=false,receivedAt=0,lastNotices=[];
 const mailRef=a=>a&&/^[a-f0-9]{32}$/.test(a.mail_instance_id)&&Number.isSafeInteger(a.mail_agent_id)&&a.mail_agent_id>0?{mail_instance_id:a.mail_instance_id,mail_agent_id:a.mail_agent_id}:null;
 function markRef(element,value){if(typeof value?.name==='string')element.dataset.agentName=value.name;const ref=mailRef(value);if(ref){element.dataset.mailInstanceId=ref.mail_instance_id;element.dataset.mailAgentId=String(ref.mail_agent_id);}}
@@ -73,6 +73,7 @@ function person(name){const a=snapshot.agents.find(x=>x.name===name)||{name,prov
 function syncView(){
  const graphPanel=$('#graph-panel'),wasHidden=graphPanel.hidden;
  const split=tabletView.matches,showGraph=split||readingView==='graph';
+ tabletLayout=split;
  const activity=$('#activity'),controls=$('.activity-head'),controlsParent=split?$('.sidebar-head'):activity;
  $('#mobile-main').dataset.mobileView=readingView;
  activity.hidden=!split&&readingView==='graph';
@@ -343,6 +344,7 @@ async function poll(){
  }
 }
 tabletView.addEventListener('change',syncView);
+window.addEventListener('resize',()=>{if(tabletView.matches!==tabletLayout)syncView();});
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{
  showView(b.dataset.view);
  $('[data-view]:not([hidden])')?.focus({preventScroll:true});

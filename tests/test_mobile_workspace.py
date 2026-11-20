@@ -44,6 +44,8 @@ def test_phone_activity_and_tablet_split_use_the_same_views(phone):
     for width, height in [(820, 1180), (1180, 820)]:
         client.call('Emulation.setDeviceMetricsOverride', width=width, height=height,
                     deviceScaleFactor=2, mobile=True)
+        wait(f"innerWidth === {width} && innerHeight === {height}")
+        js("window.dispatchEvent(new Event('resize'))")
         wait("""(() => {
             const graph = document.querySelector('#net').getBoundingClientRect();
             const sidebar = document.querySelector('.mobile-sidebar').getBoundingClientRect();
@@ -63,6 +65,8 @@ def test_phone_activity_and_tablet_split_use_the_same_views(phone):
 
     client.call('Emulation.setDeviceMetricsOverride', width=390, height=844,
                 deviceScaleFactor=2, mobile=True)
+    wait("innerWidth === 390 && innerHeight === 844")
+    js("window.dispatchEvent(new Event('resize'))")
     wait("document.querySelector('#graph-panel').hidden && !document.querySelector('#activity').hidden")
     assert js("document.querySelector('#activity > .activity-head') !== null")
     assert js('timeVisibility()') == ['visible', 'visible', 'visible']
@@ -77,7 +81,7 @@ def test_dark_default_and_explicit_light_persist_across_reload(phone):
     js('OrreryMobileTerminal.close()')
     client.call('Emulation.setEmulatedMedia', features=[dict(name='prefers-color-scheme', value='light')])
     client.call('Page.reload', ignoreCache=True)
-    wait("document.querySelector('#mobile-theme')?.getAttribute('aria-label') === 'Use light theme'")
+    wait("document.readyState === 'complete' && document.querySelector('#mobile-theme')?.getAttribute('aria-label') === 'Use light theme'")
     assert js("matchMedia('(prefers-color-scheme: light)').matches")
     assert js("document.documentElement.dataset.colorTheme") == 'dark'
     assert js("getComputedStyle(document.documentElement).colorScheme") == 'dark'
