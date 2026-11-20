@@ -77,11 +77,8 @@ def phone(request):
                     from dashboard.mobile_history import thumbnail_preview
                     preview=thumbnail_preview(preview)
                 return self.send(preview)
-            if path == '/view/portrait':
-                name = parse_qs(urlsplit(self.path).query).get('name', [''])[0]
-                portrait = state.get('portraits', {}).get(name, state.get('portrait'))
-                if portrait:
-                    return self.send(portrait, 'image/png')
+            if path == '/view/portrait' and state.get('portrait'):
+                return self.send(state['portrait'], 'image/png')
             if path == '/network.css':
                 return self.send(css, 'text/css')
             if path in assets:
@@ -115,7 +112,9 @@ def phone(request):
                 state['prepared_target'] = selected
                 return self.send(dict(contract, state='prepared', target=selected, text=payload['text'], expires_in=30, intent='fixture-intent', confirmation='fixture-confirmation'))
             if operation == 'commit':
-                return self.send(dict(contract, state='accepted', target=state.get('prepared_target',choice), intent='fixture-intent'))
+                return self.send(dict(contract, state=state.get('commit_state','accepted'), target=state.get('prepared_target',choice), intent='fixture-intent'))
+            if operation == 'status' and state.get('receipt_state'):
+                return self.send(dict(contract, state=state['receipt_state'], target=state.get('prepared_target',choice), intent='fixture-intent'))
             return self.send(dict(contract, state='cancelled'))
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)

@@ -303,6 +303,7 @@ function render(data){
  renderActivity();network.update(data);
  window.OrreryMobileWorkspace?.refresh();
  window.OrreryMobileConversation?.refreshProfiles?.();
+ window.OrreryMobileConversation?.refreshActivity?.();
  $('#snapshot-note').textContent='Snapshot observed '+time(data.observed_at)+'. Account usage unavailable. Context arcs are separate.';
 }
 function syncFilters(){
@@ -645,7 +646,7 @@ const fresh=()=>capability?.api===34;
 const ref=value=>value&&/^[a-f0-9]{32}$/.test(value.mail_instance_id)&&Number.isSafeInteger(value.mail_agent_id)&&value.mail_agent_id>0?{mail_instance_id:value.mail_instance_id,mail_agent_id:value.mail_agent_id}:null;
 const rowRef=row=>ref({mail_instance_id:row.dataset.mailInstanceId,mail_agent_id:Number(row.dataset.mailAgentId)});
 const sameTarget=value=>!fresh()||!!ref(value)&&!!selector&&value.mail_instance_id===selector.mail_instance_id&&value.mail_agent_id===selector.mail_agent_id;
-let generation=0,previewController=null,operationController=null,pollTimer=0,expiryTimer=0,failures=0,prepared=null,receipt=null,previousFocus=null,afterClose=null;
+let generation=0,previewController=null,operationController=null,pollTimer=0,expiryTimer=0,receiptTimer=0,failures=0,prepared=null,receipt=null,previousFocus=null,afterClose=null;
 let replyReference=null,preparedReference=null;
 const referenceTarget=()=>target?JSON.stringify([name,capability?.epoch,target.choice,target.revision,selector?.mail_instance_id,selector?.mail_agent_id]):'';
 const referenceCurrent=value=>!value||value.target===referenceTarget()&&value.value.isCurrent();
@@ -704,6 +705,7 @@ async function request(operation,payload,controller,timeout=3000){
 }
 function cancelIntent(){
  preparedReference=null;
+ clearTimeout(receiptTimer);
  const old=prepared||receipt;prepared=null;receipt=null;reviewUntil=0;clearTimeout(expiryTimer);
  if(!old||!enabled)return;
  const controller=new AbortController();
@@ -1042,16 +1044,27 @@ async function send(){
   phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';
   // Local display only, until the same words appear in the verified record.
   if(phase==='accepted'&&history){tab='conversation';composer=false;conversation()?.addPending(sentText);}
+  if(phase==='accepted')scheduleReceiptDismissal();
   render();
  }catch(_){if(g===generation&&sheet.open){phase='unknown';render();}}
  finally{if(g===generation){operationController=null;if(!document.hidden&&sheet.open)poll();}}
+}
+function scheduleReceiptDismissal(){
+ clearTimeout(receiptTimer);
+ const shown=receipt;
+ receiptTimer=setTimeout(()=>{
+  if(!sheet.open||phase!=='accepted'||receipt!==shown)return;
+  receipt=null;phase='editing';sendFeedback?.reset();render();
+ },3000);
 }
 async function status(){
  if(!receipt||operationController)return;const g=generation,p=receipt,controller=new AbortController();operationController=controller;
  try{const result=await request('status',{epoch:p.epoch,intent:p.intent},controller);
   if(g!==generation||!sheet.open)return;
   if(result.intent!==p.intent||result.target?.revision!==p.target.revision||!sameTarget(result.target))throw Error('unavailable');
-  phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';render();
+  phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';
+  if(phase==='accepted')scheduleReceiptDismissal();
+  render();
  }catch(_){if(g===generation&&sheet.open){message='Receipt unavailable. Input was not sent again.';render();}}
  finally{if(g===generation)operationController=null;}
 }

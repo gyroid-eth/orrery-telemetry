@@ -518,7 +518,9 @@
         if (focused) [...roster.querySelectorAll('input')].find(input=>input.dataset.agent===focused)?.focus({preventScroll:true});
       }
       for (const card of cards.values()) {
-        card.firstElementChild.contentWindow?.OrreryMobileConversation?.refreshProfiles();
+        const conversation = card.firstElementChild.contentWindow?.OrreryMobileConversation;
+        conversation?.refreshProfiles();
+        conversation?.refreshActivity();
       }
     },
     readerEntry(name,identity){
