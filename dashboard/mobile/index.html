@@ -96,10 +96,16 @@
     <div id="net">
       <svg id="gsvg" role="group" aria-label="Agent relationships. Focus: tap a peer to focus, tap the center to read. All: tap an agent to read. Pinch to zoom. Drag an agent to move it, or drag the background to pan."></svg>
       <div class="graph-status icon-group">
-        <div id="summary" role="status">
-          <span id="graph-count-label" class="sr-only">No observations yet</span>
-          <span class="graph-count working" title="Working: unavailable"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-working"/></svg><b id="working-count" aria-hidden="true">–</b></span>
-          <span class="graph-count waiting" title="Waiting: unavailable"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-waiting"/></svg><b id="waiting-count" aria-hidden="true">–</b></span>
+        <div id="summary">
+          <span id="graph-count-label" class="sr-only" role="status">No observations yet</span>
+          <details class="graph-agent-count" data-agent-status="work">
+            <summary class="graph-count working" title="Working: unavailable" aria-label="Working: unavailable" aria-controls="graph-working-agents"><span class="graph-working-icon" aria-hidden="true"><svg class="mobile-icon"><use href="#icon-working"/></svg></span><b id="working-count" aria-hidden="true">–</b></summary>
+            <div id="graph-working-agents" class="graph-status-agents" aria-label="Working agents"></div>
+          </details>
+          <details class="graph-agent-count" data-agent-status="wait">
+            <summary class="graph-count waiting" title="Waiting: unavailable" aria-label="Waiting: unavailable" aria-controls="graph-waiting-agents"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-waiting"/></svg><b id="waiting-count" aria-hidden="true">–</b></summary>
+            <div id="graph-waiting-agents" class="graph-status-agents" aria-label="Waiting agents"></div>
+          </details>
         </div>
         <details id="observation-notice" class="observation-note">
           <summary class="icon-button" title="Graph details" aria-label="Graph details"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-info"/></svg><span id="health-label" class="sr-only" role="status"></span></summary>
