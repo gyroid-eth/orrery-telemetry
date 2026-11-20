@@ -88,7 +88,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":42}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":43}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -648,7 +648,15 @@ If Claude startup preparation fails, the original husk is preserved and Mail is 
 
 A known three-field legacy Claude child can be `ready` when its private token and existing owned registration pass local validation. Roster GET remains read-only; owner authentication and migration of the same identity happen only on explicit resume. Authentication failure refuses startup ([migration, retention, and rollback](launchers.en.md)).
 
-API 9 accepts optional `base` / `tools`. `tools` replaces the whole selection; `{}` removes extra tools. Omitted base keeps the recorded base; base alone keeps prior tools. Omitting both preserves existing behavior. Changes refuse running/unknown children, missing retained state, standalone, conversation-only and Codex App. Complete `/api/exit` and confirm `gone` / `finished` first. Changes are serialized per child, using existing authentication and native resume; startup failure restores that generation's previous record/generated settings. Success means tmux/the terminal accepted the launch, without waiting for shell bootstrap/authentication. Later failures keep the new selection for the next resume. Confirm receipt of the child’s report. Success adds `tools_changed: true`, `base` and `tools`. Installer defaults are not appended. See [procedure and limits](delegation.en.md#resume-a-stopped-child-with-different-tools).
+API 9 accepts optional `base` / `tools` to change the saved selection of a stopped Claude/Codex CLI child with retained state. `tools` replaces the whole selection; `{}` removes extra tools. Omitted base keeps the recorded base; base alone keeps prior tools. Omitting both preserves existing behavior. Complete `/api/exit` and confirm `gone` / `finished` first. Changes are serialized per child, using existing authentication and native resume; startup failure restores that generation's previous record/generated settings. Success means tmux/the terminal accepted the launch, without waiting for shell bootstrap/authentication. Later failures keep the new selection for the next resume. Confirm receipt of the child’s report. Success adds `tools_changed: true`, `base` and `tools`. Installer defaults are not appended. See [procedure and limits](delegation.en.md#resume-a-stopped-child-with-different-tools).
+
+API 43 accepts `tools` on a standard `/api/jump` for a stopped Claude session with `resume_mode: conversation_only`. The supported choices are `browser` and `orrery-screen`. Omit `base` or set it to `"default"`. The selection applies to one launch, and a successful response includes the normalized `tools` when explicitly requested. Omit `tools` or set it to `{}` to resume with no extra tools. Claude hooks are disabled, with no Mail registration or MCP server.
+
+The request below selects Claude in Chrome with a device ID and starts `orrery-screen` with `control` permission. `mcp: ["orrery-screen"]` starts it in `off` and `screen.access: "read"` starts it in `view`. Each resume with `orrery-screen` creates a new launch generation. Change its permission through the [computer use API](#computer-use-api).
+
+```json
+{"session":"SampleAgent","open":false,"tools":{"browser":{"device":"browser-device-id"},"screen":{"server":"orrery-screen","access":"operate"}}}
+```
 
 ## POST `/api/exit`
 

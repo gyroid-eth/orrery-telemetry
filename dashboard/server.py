@@ -44,7 +44,7 @@ import urllib.request
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 42
+API_GENERATION = 43
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -3758,15 +3758,15 @@ def _claude_resume_tools_capability(session: str, sid: str, transcript: str) -> 
         return "config_unrestorable"
     if spec is not None:
         try:
-            _, reason = _claude_conversation_reason(session)
-            if not reason and _claude_resume_material(session)[2] is None:
+            if _claude_resume_material(session)[2] is None:
                 return "config_unrestorable"
         except _ResumeCapabilityError as exc:
             return exc.code
     return None
 
 
-def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: bool = False) -> dict:
+def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: bool = False,
+              conversation_tools: dict | None = None) -> dict:
     """retire 済み / 過去セッションを tmux 再開する。
 
     Claude は `claude --resume <sid>`、Codex は `codex resume <sid>`。
@@ -3779,6 +3779,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
       する別 agent(=子)の transcript」を誤マッチする(親 agent が子 agent の
       会話で復元される事故の実績あり)。program で先に分岐して回避する。"""
     program = _agent_program(session)
+    if conversation_tools is not None and program not in {"claude", "claude-code"}:
+        return {"ok": False, "error": "Claude resume prerequisites changed"}
     if program in harness_runtime.HARNESSES:
         return _do_resume_native(session, program, open_terminal=open_terminal, replace_husk=replace_husk)
     if program.startswith("antigravity"):
@@ -3811,6 +3813,17 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
                 "error": "元の作業ディレクトリ(cwd)を特定できず再開できません"}
     if not os.path.exists(ABS_CLAUDE):
         return {"ok": False, "error": "claude CLI が見つかりません"}
+    try:
+        _, conversation_reason = _claude_conversation_reason(session)
+        if conversation_reason:
+            return _launch_claude_conversation(session, sid, cwd, conversation_reason,
+                                               open_terminal=open_terminal, replace_husk=replace_husk,
+                                               tools=conversation_tools)
+        if conversation_tools is not None:
+            raise _ResumeCapabilityError("identity_mismatch", "Claude resume prerequisites changed")
+    except _ResumeCapabilityError as exc:
+        return {"ok": False, "resume_capability": exc.code, "error": str(exc)}
+
     # Claude tmux is prepared detached; an optional terminal attaches afterward.
     #
     # 重要: claude を「単一文字列」で tmux に渡すと tmux は `/bin/sh -c`
@@ -3862,14 +3875,6 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
             # Restore the launch's browser approvals without changing MCP scope.
             allowed = _child_tools_module().claude_chrome_allowed_tools()
             inner += ' --allowed-tools ' + shlex.quote(','.join(allowed))
-
-    try:
-        _, conversation_reason = _claude_conversation_reason(session)
-        if conversation_reason:
-            return _launch_claude_conversation(session, sid, cwd, conversation_reason,
-                                               open_terminal=open_terminal, replace_husk=replace_husk)
-    except _ResumeCapabilityError as exc:
-        return {"ok": False, "resume_capability": exc.code, "error": str(exc)}
 
     mail_was_retired = False
     mail_restore_attempted = False
@@ -4543,8 +4548,25 @@ def _conversation_mail_fields(reason: str) -> dict:
 
 
 def _launch_claude_conversation(session: str, sid: str, cwd: str, reason: str, *,
-                                open_terminal: bool | None, replace_husk: bool) -> dict:
+                                open_terminal: bool | None, replace_husk: bool,
+                                tools: dict | None) -> dict:
     module = _child_resume_module()
+    selection = _child_tools_module()
+    # Use the restrictive Claude plan for approvals and Chrome's opt-in flag.
+    # The standard Mail proxy is never added to this plan's servers.
+    try:
+        spec = selection.normalize("mail-only", tools)
+        chosen = spec["tools"]
+        if (set(chosen) - {"browser", "mcp", "screen"}
+                or set(chosen.get("mcp", ())) - {selection.SCREEN_SERVER}
+                or ("screen" in chosen and chosen["screen"]["server"] != selection.SCREEN_SERVER)):
+            raise selection.ToolsError("Conversation-only resume supports only browser and orrery-screen")
+        chrome = "browser" in chosen
+        plan = (selection.claude_plan(spec, cwd=cwd, chrome=chrome,
+                                    claude_json=_env_path("AGENTSTACK_CLAUDE_JSON", "~/.claude.json"))
+                if chosen else {"servers": {}, "flags": ["--no-chrome"]})
+    except selection.ToolsError as exc:
+        raise _ResumeCapabilityError("config_unrestorable", str(exc)) from exc
     # Serialize with modern migration/purge. Revalidate immediately before the
     # gated launch; no canonical state, token, proxy config or Mail row is changed.
     try:
@@ -4563,10 +4585,39 @@ def _launch_claude_conversation(session: str, sid: str, cwd: str, reason: str, *
             if fields.get("mail_remedy"):
                 # The remedy restarts the shared Mail: it is the person's to choose, not this agent's.
                 notice += " Leave the Mail update to the person running this machine; do not run it yourself."
+            prompt = notice
+            if chrome:
+                prompt += "\n\n" + _claude_chrome_policy_module().policy_text(
+                    chosen["browser"]["device"], standalone=True)
+
+            screen_state = _screen_http().state_module(HOOKS_DIR)
+            screen_mode = selection.screen_mode(spec)
+            screen_store = screen_state.Store(RUNTIME_DIR)
+            # A competing resume can finish while this one waits for the lock.
+            # Leave the already running generation's permissions alone.
+            if (screen_mode is not None or screen_store.path.exists()) and _has_session(session):
+                current_row = lookup_agent(session) if replace_husk else None
+                if not current_row or current_row.get("category") != "finished":
+                    return {"ok": False, "error": "A Claude session is already running", **fields}
+            screen_target = dict(project=registration["project_key"], runtime=screen_state.launch_runtime(RUNTIME_DIR),
+                                 agent=session, generation=secrets.token_hex(16))
+            try:
+                screen = screen_state.definition(
+                    RUNTIME_DIR, screen_target["project"], session, screen_target["generation"],
+                    screen_mode,
+                    origin=f"http://127.0.0.1:{PORT}", mail_env=MAIL_ENV_PATH,
+                )
+            except screen_state.ScreenStateError as exc:
+                raise _ResumeCapabilityError("config_unrestorable", str(exc)) from exc
+            except (OSError, sqlite3.Error) as exc:
+                raise _ResumeCapabilityError("config_unrestorable", "Computer use launch state unavailable") from exc
+            if screen is not None:
+                plan["servers"][selection.SCREEN_SERVER] = screen
+            config = json.dumps({"mcpServers": plan["servers"]}, separators=(",", ":"))
             command = [ABS_CLAUDE, "--resume", sid, "-n", session,
-                       "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-                       "--settings", '{"disableAllHooks":true}', "--no-chrome",
-                       "--append-system-prompt", notice]
+                       "--strict-mcp-config", "--mcp-config", config,
+                       "--settings", '{"disableAllHooks":true}', *plan["flags"],
+                       *(["--chrome"] if chrome else []), "--append-system-prompt", prompt]
             inner = ('unset CHILD_REGISTRATION_TOKEN PARENT_AGENT CLAUDE_CHILD_MCP_CONFIG '
                      'AGENTSTACK_CLAUDE_LAUNCH_ID MCP_AGENT_MAIL_TOKEN; '
                      'export PATH="$HOME/.local/bin:$PATH"; ' +
@@ -4576,6 +4627,11 @@ def _launch_claude_conversation(session: str, sid: str, cwd: str, reason: str, *
                 ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
                  *[arg for key, value in environment.items() for arg in ("-e", f"{key}={value}")],
                  _login_shell(), "-lic", inner], title=session, open_terminal=open_terminal, replace_husk=replace_husk)
+            if not launch.get("ok") and screen is not None:
+                try:
+                    screen_store.revoke(screen_target)
+                except (OSError, ValueError, sqlite3.Error):
+                    launch.setdefault("rollback_errors", []).append("Computer use launch state could not be revoked")
     except module.ResumeStateError as exc:
         raise _ResumeCapabilityError(exc.code, str(exc)) from exc
     if not launch.get("ok"):
@@ -4585,6 +4641,7 @@ def _launch_claude_conversation(session: str, sid: str, cwd: str, reason: str, *
     return {"ok": True, "action": "resumed", "resume_mode": "conversation_only", "resume_capability": "ready",
             "detail": f"Conversation resumed in tmux (sid {sid[:8]}… / {cwd}); Mail unavailable",
             "terminal": launch.get("adapter"), **fields,
+            **({"tools": chosen} if tools is not None else {}),
             **({"warning": launch["warning"]} if launch.get("warning") else {})}
 
 
@@ -5089,9 +5146,10 @@ def _resume_capability(
                 _claude_resume_material(session)
         except _ResumeCapabilityError as exc:
             return exc.code
-        tools_code = _claude_resume_tools_capability(session, sid, path)
-        if tools_code:
-            return tools_code
+        if not reason:
+            tools_code = _claude_resume_tools_capability(session, sid, path)
+            if tools_code:
+                return tools_code
         return "ready"
 
     path = _codex_transcript_path(session)
@@ -7327,7 +7385,7 @@ _TOOLS_UNSET = object()
 
 def do_jump(session: str, *, open_terminal: bool | None = None,
             base=_TOOLS_UNSET, tools=_TOOLS_UNSET) -> dict:
-    """A tools request replaces a stopped managed child's selection."""
+    """A tools request selects tools for a stopped agent's next launch."""
     if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_.\-]+", session):
         return {"ok": False, "error": "invalid session name"}
     requested = base is not _TOOLS_UNSET or tools is not _TOOLS_UNSET
@@ -7377,10 +7435,15 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal):
         old = selection.read_codex_record(str(record)) or {
             "base": "mail-only" if state["codex_mcp_profile"] == "orrery-only" else "default", "tools": {}}
     else:
+        if _claude_conversation_reason(session)[1]:
+            if base not in (_TOOLS_UNSET, "default"):
+                return {"ok": False, "error": "Conversation-only resume requires base default"}
+            return _do_jump(session, open_terminal=open_terminal,
+                            conversation_tools={} if tools is _TOOLS_UNSET else tools)
         path = _transcript_path(session)
         sid = os.path.basename(path)[:-6] if path else ""
         cwd = _transcript_cwd(path) if path else ""
-        if not sid or not cwd or _claude_conversation_reason(session)[1]:
+        if not sid or not cwd:
             return {"ok": False, "error": "Tools changes require a retained child conversation"}
         registration, _token, state = _claude_resume_material(session)
         if state is None or "_legacy_sha256" in state:
@@ -7445,13 +7508,16 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal):
     return result
 
 
-def _do_jump(session: str, *, open_terminal: bool | None = None) -> dict:
+def _do_jump(session: str, *, open_terminal: bool | None = None,
+             conversation_tools: dict | None = None) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_.\-]+", session or ""):
         return {"ok": False, "error": "invalid session name"}
     # Codex App lives outside tmux and its provider owns the safe activation
     # action.  Check it before the terminal-adapter gate. Keep the program
     # read-back for the finished-session policy below as well.
     program = _agent_program(session)
+    if conversation_tools is not None and program not in {"claude", "claude-code"}:
+        return {"ok": False, "error": "Claude resume prerequisites changed"}
     if program == "codex-app" and session in _codex_app_runtimes():
         # open:false asks for nothing to be brought forward (the embedded
         # cockpit asks before every jump): it is running, so say so and leave
@@ -7460,6 +7526,9 @@ def _do_jump(session: str, *, open_terminal: bool | None = None) -> dict:
             return {"ok": True, "action": "already_running", "terminal": "codex-app"}
         return _open_codex_app(session)
     preference = {} if open_terminal is None else {"open_terminal": open_terminal}
+    resume_options = dict(preference)
+    if conversation_tools is not None:
+        resume_options["conversation_tools"] = conversation_tools
     has_session = _has_session(session)
     if not has_session:
         # tmux セッションが無い = retire済み/過去セッション(gone)。
@@ -7467,7 +7536,7 @@ def _do_jump(session: str, *, open_terminal: bool | None = None) -> dict:
         capability = _resume_capability(session, program, category="gone", **preference)
         if capability != "ready":
             return _resume_unavailable(capability)
-        return do_resume(session, **preference)
+        return do_resume(session, **resume_options)
 
     # tmux セッションは在るが、claude が死んで「素の zsh 残骸(husk)」だけが
     # 残っている場合がある(= category 'finished')。この husk に attach しても
@@ -7497,10 +7566,12 @@ def _do_jump(session: str, *, open_terminal: bool | None = None) -> dict:
         if capability != "ready":
             return _resume_unavailable(capability)
         if program.startswith("claude") or program in harness_runtime.HARNESSES:
-            return do_resume(session, replace_husk=True, **preference)
+            return do_resume(session, replace_husk=True, **resume_options)
         _tmux_run(['kill-session', '-t', f'={session}'], capture_output=True)
         return do_resume(session, **preference)
 
+    if conversation_tools is not None:
+        return {"ok": False, "error": "Exit the agent and confirm it has stopped before selecting tools"}
     if open_terminal is False:
         return {"ok": True, "action": "already_running", "terminal": "detached"}
     if _terminal_adapter() == "none":

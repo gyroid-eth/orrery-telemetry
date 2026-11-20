@@ -87,7 +87,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":42}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":43}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -649,7 +649,15 @@ Claude の起動準備が失敗した場合、元の husk を残し、元が ret
 
 旧3項目形式の Claude child は、private token と既存の正式 owner 登録が検証できれば `ready` になります。表示 GET は読み取りだけです。実際の認証・同じ identity の新形式への移行は明示 resume 時に行い、認証失敗では起動しません（[移行条件・保持期限・失敗時の復元](launchers.md)）。
 
-API 9 は任意の `base` / `tools` を受け付けます。`tools` は全置換、`{}` は追加の道具の解除です。base 省略は既存 base、base だけの指定は既存 tools を維持し、両方省略した呼び出しは従来の動作です。動作中・状態不明・retained state が無い子・standalone・conversation-only・Codex App は道具変更を拒否します。まず `/api/exit` を終え、`gone` / `finished` を確認します。変更は子ごとに直列化し、既存の認証と native resume を使い、起動失敗時に当該世代の旧記録・生成設定へ戻します。成功は tmux／terminal の起動受理であり、shell 内の bootstrap／認証の完了は待ちません。後発失敗でも新しい選択は保持し、次の resume に使います。子からの受信確認が必要です。成功応答に `tools_changed: true`, `base`, `tools` を追加します。installer の既定は追加しません。[手順と制限](delegation.md#停止した子の道具を変更して-resume-する)。
+API 9 から、retained state がある停止済みの Claude/Codex CLI child は任意の `base` / `tools` で保持している選択を変更できます。`tools` は全置換、`{}` は追加の道具の解除です。base 省略は既存 base、base だけの指定は既存 tools を維持し、両方省略した呼び出しは従来の動作です。まず `/api/exit` を終え、`gone` / `finished` を確認します。変更は子ごとに直列化し、既存の認証と native resume を使い、起動失敗時に当該世代の旧記録・生成設定へ戻します。成功は tmux／terminal の起動受理であり、shell 内の bootstrap／認証の完了は待ちません。後発失敗でも新しい選択は保持し、次の resume に使います。子からの受信確認が必要です。成功応答に `tools_changed: true`, `base`, `tools` を追加します。installer の既定は追加しません。[手順と制限](delegation.md#停止した子の道具を変更して-resume-する)。
+
+API 43 から、停止した Claude の `resume_mode: conversation_only` でも、通常の `/api/jump` に `tools` を渡せます。利用できる項目は `browser` と `orrery-screen` です。`base` は省略するか `"default"` を指定します。選択は一回の起動に適用され、明示した場合は成功応答に正規化した `tools` が付きます。`tools` の省略または `{}` で追加の道具を付けずに再開します。ORRERY Mail の登録と MCP サーバー、Claude の hook は無効です。
+
+次の指定で Claude in Chrome と初期権限 `control` の `orrery-screen` が使えます。`browser.device` には使用するデバイスの ID を指定します。`mcp: ["orrery-screen"]` の初期値は `off`、`screen.access: "read"` の初期値は `view` です。`orrery-screen` を指定した再開ごとに新しい起動世代を作り、実行中は [computer use API](#computer-use-api) で権限を変更できます。
+
+```json
+{"session":"SampleAgent","open":false,"tools":{"browser":{"device":"browser-device-id"},"screen":{"server":"orrery-screen","access":"operate"}}}
+```
 
 ## POST `/api/exit`
 
