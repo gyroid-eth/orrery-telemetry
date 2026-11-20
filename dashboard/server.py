@@ -36,6 +36,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 from dataclasses import dataclass, replace as _dataclass_replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -110,8 +111,9 @@ except ModuleNotFoundError:  # direct script execution
 
 
 try:
-    from dashboard import legacy_http_admission, claude_history
+    from dashboard import agent_card, legacy_http_admission, claude_history
 except ModuleNotFoundError:  # direct script execution
+    import agent_card
     import legacy_http_admission
     import claude_history
 
@@ -789,7 +791,7 @@ def _tmux(args: list[str]) -> str:
 
 
 def tmux_state() -> dict:
-    """セッション名 -> {created, activity, attached, cmd, pane_pid, title} を返す。"""
+    """Batch session and active-pane metadata for the roster and its callers."""
     sessions: dict[str, dict] = {}
 
     fmt = SEP.join([
@@ -799,6 +801,9 @@ def tmux_state() -> dict:
         "#{session_id}",
         "#{AGENTSTACK_MAIL_DISABLED}",
         "#{AGENTSTACK_MAIL_DISABLED_REASON}",
+        "#{PARENT_AGENT}",
+        "#{AGENTSTACK_CODEX_LAUNCH_ID}",
+        "#{pid}",
     ])
     for line in _tmux(["list-sessions", "-F", fmt]).splitlines():
         parts = _split_tmux_fields(line)
@@ -811,11 +816,15 @@ def tmux_state() -> dict:
             "session_id": parts[3] if len(parts) >= 4 else "",
             "mail_disabled": parts[4] if len(parts) >= 5 else "",
             "mail_disabled_reason": parts[5] if len(parts) >= 6 else "",
+            "parent_agent": parts[6] if len(parts) >= 7 else "",
+            "codex_launch_id": parts[7] if len(parts) >= 8 else "",
+            "server_pid": parts[8] if len(parts) >= 9 else "",
             "activity": _to_int(activity),
             "attached": False,
             "client_tty": None,
             "cmd": "",
             "pane_pid": 0,
+            "cwd": None,
             "title": "",
         }
 
@@ -826,13 +835,20 @@ def tmux_state() -> dict:
             "#{window_active}#{pane_active}",
             "#{pane_current_command}",
             "#{pane_pid}",
+            "cwd=#{pane_current_path}",
             "#{pane_title}",
         ]
     )
     for line in _tmux(["list-panes", "-a", "-F", fmt]).splitlines():
-        parts = _split_tmux_fields(line, 4)
-        if len(parts) == 5:
-            name, flags, cmd, pane_pid, title = parts
+        parts = _split_tmux_fields(line, 5)
+        cwd = None
+        if len(parts) >= 5:
+            name, flags, cmd, pane_pid = parts[:4]
+            if len(parts) == 6 and parts[4].startswith("cwd="):
+                cwd = agent_card.absolute_cwd(parts[4][4:])
+                title = parts[5]
+            else:
+                title = SEP.join(parts[4:])
         elif len(parts) == 4:
             # demo / older fake tmux adapters may still emit the historical
             # four-field row even when a fifth format field was requested.
@@ -845,6 +861,7 @@ def tmux_state() -> dict:
         if name in sessions:
             sessions[name]["cmd"] = cmd
             sessions[name]["pane_pid"] = _to_int(pane_pid)
+            sessions[name]["cwd"] = cwd
             sessions[name]["title"] = title
 
     fmt = SEP.join(["#{client_session}", "#{client_tty}"])
@@ -1368,6 +1385,7 @@ def invalidate_display_reuse() -> None:
     """Forget every reused display answer; call after any state change."""
     _AGENTS_REUSE.invalidate()
     _GRAPH_REUSE.invalidate()
+    _card_local_tmux_value.cache_clear()
     with _parent_env_lock:
         _parent_env_memo.clear()
     for module_name in ("graph_data", "dashboard.graph_data"):
@@ -1989,6 +2007,165 @@ def history_binding_row(name: str) -> dict | None:
     return {key: found.get(key) for key in HISTORY_BINDING_FIELDS}
 
 
+def _card_private_mapping(path: Path) -> dict:
+    try:
+        if path.parent.is_symlink():
+            return {}
+        raw = _read_private_regular(str(path), "Agent card metadata", 65536)
+        data = tomllib.loads(raw.decode()) if path.suffix == ".toml" else json.loads(raw)
+    except (OSError, ValueError, RecursionError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _card_child_state(directory: Path, name: str, registration: dict) -> dict:
+    state = _card_private_mapping(directory / f"{name}.json")
+    if (state.get("launch_origin") != "child"
+            or state.get("resume_in_progress_at") or state.get("tools_change_generation")
+            or os.path.lexists(directory / f".{name}.registration-pending.json")
+            or os.path.lexists(directory / f".{name}.legacy-migration.json")):
+        return {}
+    try:
+        _child_resume_module()._validate_identity(
+            state, agent_name=name, agent_id=registration["agent_id"],
+            project_key=registration["project_key"], program=registration["program"])
+    except ValueError:
+        return {}
+    return state
+
+
+@functools.lru_cache(maxsize=512)
+def _card_local_tmux_value(name, key, candidate, generation, refresh_bucket):
+    # tmux formats also see server-global values. A session-local lookup proves
+    # positive candidates only and its cache key follows the session generation.
+    value = _tmux(["show-environment", "-t", "=" + name, key]).rstrip("\n")
+    return candidate if value == f"{key}={candidate}" else ""
+
+
+def _card_session_env(name, session, key, candidate):
+    if not candidate or not _valid(name):
+        return ""
+    generation = (session.get("server_pid"), session.get("session_id"), session.get("created"))
+    return _card_local_tmux_value(name, key, candidate, generation, int(time.monotonic() // 10))
+
+
+def _card_codex_provenance(row, session, registration):
+    if session:
+        launch = _card_private_mapping(Path(CODEX_LAUNCH_DIR) / f"{registration['agent_id']}.json")
+        live_id = _card_session_env(row["name"], session, "AGENTSTACK_CODEX_LAUNCH_ID",
+                                    session.get("codex_launch_id"))
+        expected_at = launch.get("expected_at")
+        if live_id:
+            if live_id != launch.get("launch_id"):
+                return {}
+        elif (type(expected_at) not in (int, float)
+              or not session.get("created") or not session["created"] <= expected_at <= time.time()):
+            return {}
+    provenance, error = _codex_resume_provenance(
+        row["name"], registration=registration, transcript_path=row["transcript_path"])
+    return provenance if provenance and not error else {}
+
+
+def _agent_card_fields(row, session, runtime, registration, codex_catalog):
+    name, program = row["name"], row.get("program")
+    kind = agent_card.HARNESS_KIND.get(program)
+    cwd = agent_card.absolute_cwd(session.get("cwd")) if kind else None
+    candidate_parent = agent_card.parent_name(session.get("parent_agent"), name) if kind else None
+    parent = _card_session_env(name, session, "PARENT_AGENT", candidate_parent) or None
+    parent_state = "child" if parent else "top" if row.get("parentless") is True else None
+    model = effort = computer = browser = None
+    if kind == "codex":
+        model = agent_card.codex_model_id(runtime.get("codex_card_model"), codex_catalog)
+        effort = runtime.get("codex_card_effort")
+    elif kind == "dsh":
+        effort = runtime.get("dsh_card_effort")
+
+    transcript = row.get("transcript_path") if row.get("history_binding") == "bound" else None
+    if registration and transcript and _valid(name):
+        children = Path(RUNTIME_DIR) / "child-agents"
+        state = _card_child_state(children, name, registration)
+        state_parent = agent_card.parent_name(state.get("parent_agent"), name)
+        spec = None
+        servers = {}
+        chrome = isolated = False
+        if kind == "claude":
+            sid = row.get("history_session_id")
+            model, effort, last_cwd = agent_card.claude_turn(transcript, sid)
+            cwd = cwd or last_cwd
+            launch = None
+            if sid:
+                try:
+                    launch = _claude_chrome_policy_module().session_record(str(children), name, sid)
+                except (OSError, ValueError, RuntimeError):
+                    pass
+            if launch:
+                if not parent:
+                    parent_state = "top" if launch["standalone"] else "child"
+                    if parent_state == "child":
+                        parent = state_parent
+                spec = launch
+                chrome = launch["claude_chrome"]
+                isolated = launch["base"] == "mail-only"
+                # An unrelated or replaced definition does not represent this launch.
+                selected = {"cua-driver", "chrome-devtools"}.intersection(launch["tools"].get("mcp", ()))
+                if selected:
+                    saved = _card_private_mapping(children / f"{name}.mcp.json").get("mcpServers")
+                    if isinstance(saved, dict):
+                        servers = {key: saved[key] for key in selected if key in saved}
+            elif state_parent and not session:
+                parent, parent_state = state_parent, "child"
+        elif kind == "codex":
+            provenance = _card_codex_provenance(row, session, registration)
+            if not cwd and (provenance or not session):
+                cwd = agent_card.absolute_cwd(_codex_meta(transcript)[1])
+            origin = provenance.get("launch_origin")
+            if origin == "standalone" and not parent:
+                parent_state = "top"
+            if origin == "child" and state:
+                if not parent and state.get("codex_standalone") is True:
+                    parent_state = "top"
+                elif not parent and state_parent:
+                    parent, parent_state = state_parent, "child"
+                try:
+                    spec = _child_tools_module().read_codex_record(str(children / f"{name}.tools.json"))
+                except (OSError, ValueError, RuntimeError):
+                    pass
+                settings = _card_private_mapping(children / f"{name}.codex-home" / "config.toml")
+                servers = settings.get("mcp_servers", {})
+                isolated = bool(spec and spec["base"] == "mail-only" and settings)
+        elif kind in harness_runtime.HARNESSES and state:
+            try:
+                launch = _child_resume_module().native_resume_input(Path(RUNTIME_DIR), state)
+            except (OSError, ValueError, TypeError):
+                launch = {}
+            if launch.get("resume_session_id") == row.get("history_session_id") and launch:
+                cwd = cwd or agent_card.absolute_cwd(launch.get("cwd"))
+                model = agent_card.native_model_id(launch.get("model") or registration.get("model"))
+                if not parent and "parent_agent" in launch:
+                    if launch["parent_agent"] is None and not state_parent:
+                        parent_state = "top"
+                    elif state_parent == launch["parent_agent"] and state_parent:
+                        parent, parent_state = state_parent, "child"
+                plan = launch.get("mcp_selection")
+                if isinstance(plan, dict):
+                    try:
+                        selection = launch["tools"]
+                        spec = _child_tools_module().normalize(selection.get("base"), selection.get("tools"))
+                    except (AttributeError, KeyError, ValueError, RuntimeError):
+                        pass
+                    servers = plan.get("servers", {})
+                    isolated = plan.get("inherit") is False and bool(spec and spec["base"] == "mail-only")
+        computer, browser = agent_card.tool_permissions(
+            spec, servers if isinstance(servers, dict) else {}, chrome=chrome, isolated=isolated)
+
+    return {
+        "cwd": cwd, "model_id": model, "effort": effort, "harness_kind": kind,
+        "ctx_window_tokens": harness_context.window_tokens(row.get("ctx_window")) if kind else None,
+        "computer_use": computer, "browser_use": browser,
+        "parent_state": parent_state, "parent_agent": parent,
+    }
+
+
 @_with_registration_batch
 def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict]:
     """Roster rows for the DECK. Live tmux sessions always appear; agents known
@@ -2007,6 +2184,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
     substitutions = _name_substitutions()
     persistent_profiles = _persistent_profiles()
     rows = []
+    runtime_by_name = {}
     for name, s in sessions.items():
         m = mail_agents.get(name)
         program, cat, running, watcher_health = _tmux_row_state(name, s, m, process_tree)
@@ -2029,6 +2207,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
              else _agent_runtime(name, s.get("created"), s.get("session_id")))
             if running else {}
         )
+        runtime_by_name[name] = rt
         pane_model = _pane_model_for(rt.get("pane_model"), (m or {}).get("program"))
         rows.append(
             {
@@ -2150,8 +2329,13 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
     annotations = _annotations()
     observed_now = time.time()
     claude_history_index = None
+    codex_catalog = ()
+    if any(rt.get("codex_card_model") and not codex_models.is_model_id(rt["codex_card_model"])
+           for rt in runtime_by_name.values()):
+        codex_catalog = (*codex_models.DEFAULT_MODELS, *codex_models.discover_models())
     for row in rows:
-        row['annot'] = annotations.get(row['name'])
+        name = row["name"]
+        row['annot'] = annotations.get(name)
         row.update(harness_runtime.metadata(RUNTIME_DIR, row["name"], row.get("program")))
         profile = persistent_profiles.get(row["name"])
         row.update(
@@ -2164,6 +2348,14 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
             claude_history_index = claude_history.ReceiptIndex(SESSION_INDEX_DIR)
         row.update(_history_binding_fields(row, now=observed_now, claude_index=claude_history_index,
                                           reuse_stopped=True))
+        registration = None
+        if registrations is not None and project_key and row.get("project_key") == project_key:
+            registered = registrations.by_project.get((project_key, name))
+            if registered is not None and registered["program"] == row.get("program"):
+                registration = {"agent_id": registered["id"], "project_key": project_key,
+                                "program": registered["program"], "model": registered["model"]}
+        row.update(_agent_card_fields(row, sessions.get(name, {}), runtime_by_name.get(name, {}),
+                                      registration, codex_catalog))
         row["resume_capability"] = _resume_capability_for_row(
             row["name"],
             row.get("program") or "",
@@ -6712,9 +6904,9 @@ def agent_history_payload(name: str = "", hours: int | None = 24,
 
 
 try:
-    from dashboard.terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE)
+    from dashboard.terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort)
 except ModuleNotFoundError:
-    from terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE)
+    from terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort)
 # --------------------------------------------------------------------------- #
 # Agent runtime probe — コンテキスト残量(HP) + 動作状態を tmux ペインから読む
 #   Claude Code / Codex の TUI 表示を read-only パース。新データ源は持たない。
@@ -7267,10 +7459,13 @@ def _parse_runtime(text: str) -> dict:
         if ms:
             h, m, s = ms[-1]
             _, last_disp = _dur(int(h or 0), int(m or 0), int(s))
-    return {"ctx_used": ctx_used, "act_state": act,
-            "ctx_window": ctx_window, "work_secs": work_secs,
-            "work_disp": work_disp, "last_disp": last_disp,
-            "pane_model": pane_model}
+    card_model, card_effort = codex_model_effort(tail_for_model)
+    result = {"ctx_used": ctx_used, "act_state": act,
+              "ctx_window": ctx_window, "work_secs": work_secs,
+              "work_disp": work_disp, "last_disp": last_disp, "pane_model": pane_model}
+    if card_model:
+        result.update(codex_card_model=card_model, codex_card_effort=card_effort)
+    return result
 
 
 def _runtime_generation(created: int | None, session_id: str | None) -> str:
@@ -7312,6 +7507,8 @@ def _native_context_runtime(session, created, session_id, program):
             if capture.returncode == 0:
                 result = harness_context.parse_context(capture.stdout, program)
                 result['act_state'] = harness_activity.parse_activity(capture.stdout, program)
+                if program == 'dsh':
+                    result['dsh_card_effort'] = harness_context.dsh_effort(capture.stdout)
         except (OSError, subprocess.SubprocessError):
             pass
     with _rt_lock:
