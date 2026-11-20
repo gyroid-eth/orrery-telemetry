@@ -419,6 +419,54 @@ def test_jump_conversation_browser_only_leaves_mcp_empty(conversation_jump):
     assert not screen_state.Store(runtime).path.exists()
 
 
+@pytest.mark.parametrize('tools,expected', [
+    (None, ('off', False)),
+    ({'browser': True, 'screen': {'server': 'orrery-screen', 'access': 'operate'}}, ('control', True)),
+])
+def test_conversation_tools_reach_agents_response(conversation_jump, monkeypatch, tools, expected):
+    name, runtime, launches = conversation_jump
+    options = {'tools': tools} if tools is not None else {}
+    assert server.do_jump(name, open_terminal=False, **options)['ok']
+    tmux_argv = launches[-1]
+    env = dict(value.split('=', 1) for flag, value in zip(tmux_argv, tmux_argv[1:]) if flag == '-e')
+    session_fields = dict(env, session_name=name, session_id='$71', session_created='171',
+                          session_activity='172', pid='73')
+
+    def tmux(args):
+        command = args[0]
+        if command == 'list-sessions':
+            return server.SEP.join(session_fields.get(field[2:-1], '') for field in args[-1].split(server.SEP))
+        if command == 'list-panes':
+            return server.SEP.join((name, '11', 'claude', '301', f'cwd={runtime}', 'Ready'))
+        if command == 'show-environment' and args[2] == f'={name}':
+            key = args[3]
+            return f'{key}={env[key]}\n' if key in env else ''
+        return ''
+
+    server._card_local_tmux_value.cache_clear()
+    monkeypatch.setattr(server, '_tmux', tmux)
+    monkeypatch.setattr(server, 'DB_PATH', str(runtime / 'absent.sqlite3'))
+    monkeypatch.setattr(server, '_project_key', lambda: None)
+    monkeypatch.setattr(server, 'agentmail_state', lambda: ({}, {}))
+    for helper in ('_codex_app_runtimes', '_deliverables_index', '_name_substitutions', '_persistent_profiles', '_annotations'):
+        monkeypatch.setattr(server, helper, dict)
+    monkeypatch.setattr(server, '_agent_runtime', lambda *_: {})
+    monkeypatch.setattr(server, '_provider_stall_view', lambda *_: None)
+
+    def fields():
+        body = server._AgentsAnswer(server.HISTORY_DAYS_DEFAULT).body('live')
+        [row] = json.loads(body)['agents']
+        assert row['name'] == name and row['mail_status'] == 'unavailable'
+        return row['computer_use'], row['browser_use']
+
+    assert fields() == expected
+    if tools:
+        store = screen_state.Store(runtime)
+        [launch] = store.list()
+        store.change({key: launch[key] for key in screen_state.TARGET}, 'view')
+        assert fields() == ('view', True)
+
+
 @pytest.mark.parametrize('tools', [{'mcp': ['orrery-mail']}, {'mcp': ['cua-driver']}, {'screen': 'operate'}])
 def test_jump_conversation_refuses_other_tools(conversation_jump, tools):
     name, runtime, launches = conversation_jump

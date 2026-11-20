@@ -346,12 +346,12 @@ Legacy agent rows include these display fields in both the full roster and `scop
 | `effort` | String or `null` | Claude Code uses the last recorded turn or session effort. Codex CLI and dsh use the current footer when legible. Hermes does not report its current effort here. |
 | `harness_kind` | `claude`, `codex`, `dsh`, `hermes`, or `null` | Normalized CLI name from the registered `program`. |
 | `ctx_window_tokens` | Positive integer or `null` | Observed `ctx_window` converted to tokens at the precision of the reported count. |
-| `computer_use` | `off`, `view`, `control`, or `null` | Recorded screen selection or a standard Cua Driver configuration. |
-| `browser_use` | Boolean or `null` | Recorded browser selection or an enabled Chrome MCP configuration. |
+| `computer_use` | `off`, `view`, `control`, or `null` | The current `orrery-screen` launch permission for a running Claude session, or a recorded screen selection or standard Cua Driver configuration for other screen tools. |
+| `browser_use` | Boolean or `null` | Recorded browser selection or an enabled Chrome MCP configuration. Conversation-only Claude sessions use the choice for that launch. |
 | `parent_state` | `child`, `top`, or `null` | Explicit tmux parent metadata, records tied to the launch, or a verified persistent profile. |
 | `parent_agent` | Parent name or `null` | Populated for a child with a verified parent name. |
 
-Permissions describe launch configuration. Connection status and OS grants are outside this check. Existing `model_raw`, `program`, and `parentless` retain their meanings.
+The next roster refresh reports permission changes for `orrery-screen`. Other permissions describe launch configuration. Connection status and OS grants are outside this check.
 
 ### Project-scope read metadata (legacy, API 37)
 

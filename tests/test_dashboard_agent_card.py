@@ -5,6 +5,7 @@ import json
 import pytest
 
 from dashboard import agent_card, harness_context, server, terminal_state
+from hooks import claude_chrome_policy, screen_state
 
 
 @pytest.mark.parametrize(
@@ -118,6 +119,43 @@ def test_card_permissions_distinguish_selection_and_configuration(monkeypatch):
 def _write_private_json(path, data):
     path.write_text(json.dumps(data))
     path.chmod(0o600)
+
+
+@pytest.mark.parametrize(('tools', 'initial'), [
+    ({'mcp': ['orrery-screen']}, 'off'),
+    ({'screen': {'server': 'orrery-screen', 'access': 'operate'}}, 'control'),
+])
+def test_claude_child_card_uses_bound_screen_generation(tmp_path, monkeypatch, tools, initial):
+    name, sid = 'ScreenCardFixture', '0432dc16-e219-4b20-8bb2-519f2f9d428a'
+    monkeypatch.setattr(server, 'RUNTIME_DIR', str(tmp_path))
+    children = tmp_path / 'child-agents'
+    children.mkdir()
+    _write_private_json(children / f'{name}.claude-launch.{sid}.json', {
+        'version': claude_chrome_policy.TOOLS_VERSION, 'launch_id': 'card-fixture-launch',
+        'agent_name': name, 'session_id': sid, 'claude_chrome': False,
+        'chrome_device': '', 'standalone': False, 'base': 'default', 'tools': tools,
+    })
+    store = screen_state.Store(tmp_path)
+    target = dict(project='test-project', runtime=screen_state.launch_runtime(tmp_path), agent=name, generation='a' * 32)
+    store.launch(*target.values(), initial)
+    _write_private_json(children / f'{name}.mcp.json', {'mcpServers': {
+        'orrery-screen': {'env': {'AGENTSTACK_SCREEN_BINDING_FILE': str(screen_state.binding_path(store, target))}},
+    }})
+    transcript = tmp_path / f'{sid}.jsonl'
+    transcript.write_text(json.dumps(_assistant(sid, 'claude-opus-5-5', 'high')) + '\n')
+    row = dict(name=name, program='claude-code', running=True, history_binding='bound',
+               transcript_path=str(transcript), history_session_id=sid)
+    registration = dict(agent_id=1, project_key=target['project'], program=row['program'])
+
+    def mode():
+        return server._agent_card_fields(row, {}, {}, registration, (),
+                                         screen_launch=server._card_screen_launches()[name])['computer_use']
+
+    assert mode() == initial
+    store.change(target, 'view')
+    assert mode() == 'view'
+    store.launch(target['project'], target['runtime'], name, 'b' * 32, 'control')
+    assert mode() is None
 
 
 def test_card_requires_current_codex_launch_for_retained_parent(tmp_path, monkeypatch):

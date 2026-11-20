@@ -345,12 +345,12 @@ legacy の各エージェント行に以下の表示用フィールドを追加�
 | `effort` | 文字列または `null` | Claude Code は最後の assistant 記録のターン値か session 値、Codex CLI と dsh は判読できる現在の footer。Hermes の現在値は未確認です。 |
 | `harness_kind` | `claude`、`codex`、`dsh`、`hermes` または `null` | 登録 `program` の CLI 名を正規化します。 |
 | `ctx_window_tokens` | 正の整数または `null` | 観測できた `ctx_window` をトークン数に換算します。省略表示の精度を引き継ぎます。 |
-| `computer_use` | `off`、`view`、`control` または `null` | 記録された画面の選択と、標準構成の Cua Driver を確認します。 |
-| `browser_use` | 真偽値または `null` | 記録されたブラウザ選択や有効な Chrome 用 MCP の設定を確認します。 |
+| `computer_use` | `off`、`view`、`control` または `null` | 稼働中の Claude が `orrery-screen` を使う場合は現在の世代の権限を確認します。ほかの画面操作は記録された選択と標準構成の Cua Driver を確認します。 |
+| `browser_use` | 真偽値または `null` | 記録されたブラウザ選択や有効な Chrome 用 MCP の設定を確認します。会話だけで再開した Claude は、その起動での指定を使います。 |
 | `parent_state` | `child`、`top` または `null` | tmux の明示的な親名、現在の起動に対応した記録、永続プロファイルを使います。 |
 | `parent_agent` | 親の名前または `null` | 親名を確認できた子にだけ返します。 |
 
-権限は起動時の設定を示します。サーバーの接続状況や OS の許可は検査しません。既存の `model_raw`、`program`、`parentless` の意味は従来どおりです。
+`orrery-screen` の権限を変更すると、次回の一覧取得時に現在の値を返します。ほかの権限は起動時の設定を示します。サーバーの接続状況や OS の許可は検査しません。
 
 ### 所属projectの読み取りメタデータ（legacy、API 37）
 

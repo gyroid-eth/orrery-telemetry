@@ -581,6 +581,7 @@ def mobile_portrait_payload(name: str) -> tuple[int,bytes,str]:
 
 # tmux フォーマットのフィールド区切り。制御文字 US(0x1f) はペインタイトルに出ない。
 SEP = "\x1f"
+_CLAUDE_CONVERSATION_TOOLS_ENV = "AGENTSTACK_CLAUDE_CONVERSATION_TOOLS"
 # tmux 3.4 (Ubuntu 24.04) は `-F` 出力の制御文字を可視化して 4 文字の "\037"
 # にする。macOS の 3.6a や WSL2 の tmux は素の 0x1f を返す。どちらも同じ
 # 区切りとして受けないと、Linux では list-sessions の全行が 1 フィールドに
@@ -804,6 +805,7 @@ def tmux_state() -> dict:
         "#{PARENT_AGENT}",
         "#{AGENTSTACK_CODEX_LAUNCH_ID}",
         "#{pid}",
+        "#{" + _CLAUDE_CONVERSATION_TOOLS_ENV + "}",
     ])
     for line in _tmux(["list-sessions", "-F", fmt]).splitlines():
         parts = _split_tmux_fields(line)
@@ -819,6 +821,7 @@ def tmux_state() -> dict:
             "parent_agent": parts[6] if len(parts) >= 7 else "",
             "codex_launch_id": parts[7] if len(parts) >= 8 else "",
             "server_pid": parts[8] if len(parts) >= 9 else "",
+            "claude_conversation_tools": parts[9] if len(parts) >= 10 else "",
             "activity": _to_int(activity),
             "attached": False,
             "client_tty": None,
@@ -2066,7 +2069,31 @@ def _card_codex_provenance(row, session, registration):
     return provenance if provenance and not error else {}
 
 
-def _agent_card_fields(row, session, runtime, registration, codex_catalog):
+def _card_screen_launches():
+    """Read the screen gate's current permissions once per roster."""
+    try:
+        screen = _screen_http().state_module(HOOKS_DIR)
+        store = screen.Store(RUNTIME_DIR)
+        runtime = screen.launch_runtime(RUNTIME_DIR)
+        launches = store.list()
+    except (OSError, ValueError, sqlite3.Error):
+        return {}
+    return {
+        launch["agent"]: {**launch, "binding_file": str(screen.binding_path(
+            store, {key: launch[key] for key in screen.TARGET}))}
+        for launch in launches if launch["runtime"] == runtime
+    }
+
+
+def _card_claude_screen_mode(screen_launch, definition, project):
+    env = definition.get("env") if isinstance(definition, dict) else None
+    if (screen_launch and screen_launch["project"] == project and isinstance(env, dict)
+            and env.get("AGENTSTACK_SCREEN_BINDING_FILE") == screen_launch["binding_file"]):
+        return screen_launch["computer_use"]
+    return None
+
+
+def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, screen_launch=None):
     name, program = row["name"], row.get("program")
     kind = agent_card.HARNESS_KIND.get(program)
     cwd = agent_card.absolute_cwd(session.get("cwd")) if kind else None
@@ -2087,7 +2114,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog):
         state_parent = agent_card.parent_name(state.get("parent_agent"), name)
         spec = None
         servers = {}
-        chrome = isolated = False
+        chrome = isolated = managed_screen = False
         if kind == "claude":
             sid = row.get("history_session_id")
             model, effort, last_cwd = agent_card.claude_turn(transcript, sid)
@@ -2107,7 +2134,11 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog):
                 chrome = launch["claude_chrome"]
                 isolated = launch["base"] == "mail-only"
                 # An unrelated or replaced definition does not represent this launch.
-                selected = {"cua-driver", "chrome-devtools"}.intersection(launch["tools"].get("mcp", ()))
+                selected = {"cua-driver", "chrome-devtools", "orrery-screen"}.intersection(
+                    launch["tools"].get("mcp", ()))
+                if launch["tools"].get("screen", {}).get("server") == "orrery-screen":
+                    selected.add("orrery-screen")
+                managed_screen = "orrery-screen" in selected
                 if selected:
                     saved = _card_private_mapping(children / f"{name}.mcp.json").get("mcpServers")
                     if isinstance(saved, dict):
@@ -2157,6 +2188,21 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog):
                     isolated = plan.get("inherit") is False and bool(spec and spec["base"] == "mail-only")
         computer, browser = agent_card.tool_permissions(
             spec, servers if isinstance(servers, dict) else {}, chrome=chrome, isolated=isolated)
+        if managed_screen and row.get("running"):
+            computer = _card_claude_screen_mode(screen_launch, servers.get("orrery-screen"), registration["project_key"])
+
+    if (row.get("running") and kind in (None, "claude") and session.get("mail_disabled") == "1"
+            and session.get("mail_disabled_reason") in _CLAUDE_MAIL_UNAVAILABLE):
+        marker = session.get("claude_conversation_tools", "")
+        match = re.fullmatch(r"([01]):([0-9a-f]{32})?", marker)
+        if match and _card_session_env(name, session, _CLAUDE_CONVERSATION_TOOLS_ENV, marker):
+            chrome_flag, generation = match.groups()
+            browser = chrome_flag == "1"
+            computer = "off" if generation is None else (
+                screen_launch["computer_use"] if screen_launch and screen_launch["generation"] == generation else None)
+        elif kind == "claude" and _card_session_env(name, session, "AGENTSTACK_MAIL_DISABLED", "1"):
+            # An older conversation-only launch has no evidence for its tools.
+            computer = browser = None
 
     return {
         "cwd": cwd, "model_id": model, "effort": effort, "harness_kind": kind,
@@ -2326,6 +2372,8 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
             if con is not None:
                 con.close()
 
+    screen_launches = (_card_screen_launches() if any(
+        row["running"] and row.get("program") in ("", "claude", "claude-code") for row in rows) else {})
     annotations = _annotations()
     observed_now = time.time()
     claude_history_index = None
@@ -2355,7 +2403,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 registration = {"agent_id": registered["id"], "project_key": project_key,
                                 "program": registered["program"], "model": registered["model"]}
         row.update(_agent_card_fields(row, sessions.get(name, {}), runtime_by_name.get(name, {}),
-                                      registration, codex_catalog))
+                                      registration, codex_catalog, screen_launch=screen_launches.get(name)))
         row["resume_capability"] = _resume_capability_for_row(
             row["name"],
             row.get("program") or "",
@@ -4805,6 +4853,8 @@ def _launch_claude_conversation(session: str, sid: str, cwd: str, reason: str, *
                 raise _ResumeCapabilityError("config_unrestorable", "Computer use launch state unavailable") from exc
             if screen is not None:
                 plan["servers"][selection.SCREEN_SERVER] = screen
+            generation = screen_target["generation"] if screen is not None else ""
+            environment[_CLAUDE_CONVERSATION_TOOLS_ENV] = f"{int(chrome)}:{generation}"
             config = json.dumps({"mcpServers": plan["servers"]}, separators=(",", ":"))
             command = [ABS_CLAUDE, "--resume", sid, "-n", session,
                        "--strict-mcp-config", "--mcp-config", config,
