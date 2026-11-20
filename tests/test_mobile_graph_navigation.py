@@ -143,6 +143,7 @@ def test_focus_gestures_do_not_change_center_or_open_reader(phone,gesture):
 def test_search_matches_role_and_focus_is_separate_from_opening_reader(phone):
     client,js,wait,state=phone
     graph(js,wait,state,18)
+    js("document.querySelector('#graph-search-toggle').click()")
     js("window.changed=structuredClone(testNetwork.snapshot);changed.agents.forEach(a=>a.role='Review');changed.agents[1].role='Coordinator';testNetwork.update(changed);testNetwork.pause();document.querySelector('#agent-search').value='coordin';document.querySelector('#agent-search').dispatchEvent(new Event('input'))")
     assert js("document.querySelectorAll('.agent-result-open').length")==1
     assert js("document.querySelector('.agent-result-open strong').textContent")=='Agent1'
