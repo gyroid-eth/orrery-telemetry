@@ -158,6 +158,10 @@ Regenerate the committed icons from `dashboard/assets/orbit.svg` with `python3 s
 
 Graph shows working and waiting counts in its upper-left corner. Tap a count to see the matching agents and their portraits, then choose an agent to open Reading View. When agents need attention, the working icon shows a dot and its list starts with review requests (`!`) and questions (`?`). The information icon opens the observation time, range, and status. On a phone, agents needing attention sit below Graph. Tap the list icon in that panel to open Activity. On a wide screen such as an iPad, Graph and the attention and activity panel appear side by side. The Activity information icon also shows observation warnings.
 
+Select multiple agents with the selection icon in Graph, the panes icon in the header, or the add icon in Reading View. Drag the divider between Graph and the panes to resize them. Release at an edge to show only one side, and use the header to return to the split. On a phone, the home divider between Graph and the attention list also resizes those areas.
+
+Each pane opens in Reading View. The pencil opens a wider composer when several panes are open, and each pane keeps its own draft as you switch views. The attachment menu opens a photo picker or lets you browse files for images. It accepts JPEG, PNG, and WebP.
+
 Dark is the default. Use the sun or moon icon in the upper-right corner to switch between light and dark. The browser remembers the choice.
 
 - **Activity** lists sender, recipient, and time. To/Cc is included in the action label and Mail detail. Tap one Mail event to open its subject and body. Tasks and private paths are not separately fetched, but anything written in a Mail body is visible. Status records changes observed after this reader starts, rather than claiming to know when each change actually happened.

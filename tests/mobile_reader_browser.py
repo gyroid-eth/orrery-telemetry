@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from dashboard.mobile_relay import CSP, static_assets
+from dashboard.mobile_relay import CSP, PANE_CSP, SHELL_CSP, static_assets
 from test_dashboard_help_map import _WebSocket
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,7 +43,8 @@ def phone(request):
                 data = json.dumps(data,ensure_ascii=False).encode()
             self.send_response(status)
             self.send_header('Content-Type', mime)
-            self.send_header('Content-Security-Policy', CSP)
+            path = urlsplit(self.path).path
+            self.send_header('Content-Security-Policy', {'/': SHELL_CSP, '/reader-pane': PANE_CSP}.get(path, CSP))
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -76,8 +77,11 @@ def phone(request):
                     from dashboard.mobile_history import thumbnail_preview
                     preview=thumbnail_preview(preview)
                 return self.send(preview)
-            if path == '/view/portrait' and state.get('portrait'):
-                return self.send(state['portrait'], 'image/png')
+            if path == '/view/portrait':
+                name = parse_qs(urlsplit(self.path).query).get('name', [''])[0]
+                portrait = state.get('portraits', {}).get(name, state.get('portrait'))
+                if portrait:
+                    return self.send(portrait, 'image/png')
             if path == '/network.css':
                 return self.send(css, 'text/css')
             if path in assets:
@@ -91,7 +95,10 @@ def phone(request):
             state['calls'].append((operation, payload))
             selected = next((t for t in state.get('targets', [choice]) if t['choice'] == payload.get('choice')), choice)
             if operation == 'targets':
-                return self.send(dict(contract, targets=state.get('targets', [choice])))
+                targets = state.get('targets', [choice])
+                if state.get('workspace'):
+                    targets = [target for target in targets if target['name'] == payload.get('name')]
+                return self.send(dict(contract, targets=targets))
             if operation == 'preview':
                 return self.send(dict(contract, target=selected, text=state.get('preview_text', 'Generated terminal tail\nReady.'), max_lines=state.get('preview_lines',120), max_bytes=state.get('preview_bytes',12288), observed_at=time.time()), status=503 if state['preview_error'] else 200)
             if operation == 'image':

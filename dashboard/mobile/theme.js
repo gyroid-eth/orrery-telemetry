@@ -3,6 +3,7 @@
   'use strict';
   const key = 'orrery.mobile.theme.v1';
   const root = document.documentElement;
+  if (location.pathname === '/reader-pane') root.dataset.readerPane = '';
   const light = window.AgentStackColorThemeCore.deriveWarmPaperLightTheme().cssVariables;
   const themeColor = document.querySelector('meta[name="theme-color"]');
   const darkCanvas = themeColor.content;
@@ -31,6 +32,11 @@
   }
 
   apply();
+  window.addEventListener('storage', event => {
+    if (event.key !== key) return;
+    theme = event.newValue === 'light' ? 'light' : 'dark';
+    apply();
+  });
   document.addEventListener('DOMContentLoaded', () => {
     apply();
     document.getElementById('mobile-theme').addEventListener('click', () => {

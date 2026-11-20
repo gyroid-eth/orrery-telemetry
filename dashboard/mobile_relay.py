@@ -40,6 +40,8 @@ UPSTREAM_TIMEOUT = 2
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; "
        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+SHELL_CSP = CSP + "; frame-src 'self'"
+PANE_CSP = CSP.replace("frame-ancestors 'none'", "frame-ancestors 'self'")
 
 
 @dataclass(frozen=True)
@@ -208,9 +210,12 @@ def static_assets(root=HERE):
     """Fixed bundled files only; no file path, overlay or provider lookup."""
     fixed = {
         '/': (root/'mobile/index.html', 'text/html; charset=utf-8'),
+        '/reader-pane': (root/'mobile/index.html', 'text/html; charset=utf-8'),
         '/manifest.webmanifest': (root/'mobile/manifest.webmanifest', 'application/manifest+json; charset=utf-8'),
         '/mobile.css': (root/'mobile/mobile.css', 'text/css; charset=utf-8'),
         '/mobile.js': (root/'mobile/mobile.js', 'text/javascript; charset=utf-8'),
+        '/mobile-workspace.js': (root/'mobile/workspace.js', 'text/javascript; charset=utf-8'),
+        '/mobile-workspace.css': (root/'mobile/workspace.css', 'text/css; charset=utf-8'),
         '/mobile-spawn.js': (root/'mobile/spawn.js', 'text/javascript; charset=utf-8'),
         '/mobile-spawn-controls.js': (root/'mobile/spawn_controls.js', 'text/javascript; charset=utf-8'),
         '/mobile-spawn-controls.css': (root/'mobile/spawn_controls.css', 'text/css; charset=utf-8'),
@@ -264,13 +269,15 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self._send(code, {'ok':False,'error':'request_rejected'})
 
-    def _send(self, status, data, mime='application/json; charset=utf-8', *, utf8=False):
+    def _send(self, status, data, mime='application/json; charset=utf-8', *, utf8=False, page=None):
         if isinstance(data, dict):data=json.dumps(data,separators=(',',':'),allow_nan=False,ensure_ascii=not utf8).encode()
         self.send_response(status)
+        policy={'shell':SHELL_CSP,'pane':PANE_CSP}.get(page,CSP)
         for key,value in [('Content-Type',mime),('Content-Length',str(len(data))),
-                          ('Cache-Control','no-store'),('Content-Security-Policy',CSP),
+                          ('Cache-Control','no-store'),('Content-Security-Policy',policy),
                           ('X-Content-Type-Options','nosniff'),('Referrer-Policy','no-referrer'),
-                          ('X-Frame-Options','DENY'),('Permissions-Policy','camera=(), microphone=(), geolocation=()')]:
+                          ('X-Frame-Options','SAMEORIGIN' if page=='pane' else 'DENY'),
+                          ('Permissions-Policy','camera=(), microphone=(), geolocation=()')]:
             self.send_header(key,value)
         self.end_headers()
         if self.command != 'HEAD':self.wfile.write(data)
@@ -447,6 +454,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200,style[1].encode(),'text/css; charset=utf-8')
             except (OSError,ValueError):self._send(503,{'ok':False,'error':'asset_unavailable'})
             return
+        if parts.path=='/reader-pane' and parts.query:
+            self._send(404,{'ok':False,'error':'not_found'});return
         asset=self.server.mobile_assets.get(parts.path)
         if asset is None:
             self._send(404,{'ok':False,'error':'not_found'});return
@@ -454,7 +463,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if file.is_symlink():raise OSError('asset_symlink')
             data=file.read_bytes()
-            self._send(200,data,mime)
+            page={'/':'shell','/reader-pane':'pane'}.get(parts.path)
+            self._send(200,data,mime,page=page)
         except OSError:self._send(503,{'ok':False,'error':'asset_unavailable'})
 
     def do_HEAD(self):self.do_GET()
