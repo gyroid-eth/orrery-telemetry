@@ -73,7 +73,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":40}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":41}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -319,6 +319,24 @@ When `path` is omitted, the first `AGENTSTACK_SPAWN_ROOTS` entry is used. For a 
 Hidden directories and symlinks that leave the root are excluded. Up to 500 entries are returned in name order because the page filters the complete list by the typed prefix. With 501 or more entries, `truncated` is `true`.
 
 ## GET `/api/agents`
+
+### Agent runtime details (legacy, API 41)
+
+Legacy agent rows include these display fields in both the full roster and `scope=live`. Values without evidence are `null`. Read the existing `annot.role` for the role and `ctx_used` for context usage.
+
+| Field | Value | Source |
+|---|---|---|
+| `cwd` | Absolute path or `null` | The active tmux pane takes priority. Verified history and launch records provide fallbacks. |
+| `model_id` | Canonical ID or `null` | Claude Code uses the last assistant record from the bound transcript. Codex CLI uses the footer below the composer and resolves a display name only when it has one match in the local catalog. dsh and Hermes use their verified launch records. |
+| `effort` | String or `null` | Claude Code uses the last recorded turn or session effort. Codex CLI and dsh use the current footer when legible. Hermes does not report its current effort here. |
+| `harness_kind` | `claude`, `codex`, `dsh`, `hermes`, or `null` | Normalized CLI name from the registered `program`. |
+| `ctx_window_tokens` | Positive integer or `null` | Observed `ctx_window` converted to tokens at the precision of the reported count. |
+| `computer_use` | `off`, `view`, `control`, or `null` | Recorded screen selection or a standard Cua Driver configuration. |
+| `browser_use` | Boolean or `null` | Recorded browser selection or an enabled Chrome MCP configuration. |
+| `parent_state` | `child`, `top`, or `null` | Explicit tmux parent metadata, records tied to the launch, or a verified persistent profile. |
+| `parent_agent` | Parent name or `null` | Populated for a child with a verified parent name. |
+
+Permissions describe launch configuration. Connection status and OS grants are outside this check. Existing `model_raw`, `program`, and `parentless` retain their meanings.
 
 ### Project-scope read metadata (legacy, API 37)
 

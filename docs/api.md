@@ -72,7 +72,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":40}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":41}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -318,6 +318,24 @@ curl -s 'http://127.0.0.1:8770/api/fs/dirs?path=/Users/me/code'
 を返します。hidden directory と root 外へ出る symlink は除外し、名前順に最大 500 件を返します（page 側が入力中の prefix で絞るので、一覧全体が要ります）。501 件以上なら `truncated: true` です。
 
 ## GET `/api/agents`
+
+### エージェントの実行情報（legacy、API 41）
+
+legacy の各エージェント行に以下の表示用フィールドを追加します。`scope=live` にも含まれます。根拠のない値は `null` です。既存の担当ラベルは `annot.role`、使用率は `ctx_used` を使います。
+
+| フィールド | 値 | 取得元 |
+|---|---|---|
+| `cwd` | 絶対パスまたは `null` | tmux のアクティブペインを優先し、検証済みの会話や起動記録で補完します。 |
+| `model_id` | 正式 ID または `null` | Claude Code は本人の最後の assistant 記録、Codex CLI は入力欄直下の footer。Codex の表示名はローカルの catalog に一意な対応がある場合に変換します。dsh と Hermes は本人の起動記録を使います。 |
+| `effort` | 文字列または `null` | Claude Code は最後の assistant 記録のターン値か session 値、Codex CLI と dsh は判読できる現在の footer。Hermes の現在値は未確認です。 |
+| `harness_kind` | `claude`、`codex`、`dsh`、`hermes` または `null` | 登録 `program` の CLI 名を正規化します。 |
+| `ctx_window_tokens` | 正の整数または `null` | 観測できた `ctx_window` をトークン数に換算します。省略表示の精度を引き継ぎます。 |
+| `computer_use` | `off`、`view`、`control` または `null` | 記録された画面の選択と、標準構成の Cua Driver を確認します。 |
+| `browser_use` | 真偽値または `null` | 記録されたブラウザ選択や有効な Chrome 用 MCP の設定を確認します。 |
+| `parent_state` | `child`、`top` または `null` | tmux の明示的な親名、現在の起動に対応した記録、永続プロファイルを使います。 |
+| `parent_agent` | 親の名前または `null` | 親名を確認できた子にだけ返します。 |
+
+権限は起動時の設定を示します。サーバーの接続状況や OS の許可は検査しません。既存の `model_raw`、`program`、`parentless` の意味は従来どおりです。
 
 ### 所属projectの読み取りメタデータ（legacy、API 37）
 
