@@ -119,7 +119,14 @@ html[data-color-theme=light] .mobile .node .provider-seat{fill:var(--panel);stro
 }
 .mobile .graph-status-agent:hover{background:var(--control-active)}
 .graph-status-agent .face{width:28px;height:28px}
-.mobile #net .graph-status-agent>.mobile-icon{flex:none;width:15px;height:15px;margin-inline-start:auto;color:var(--alert)}
+.graph-status-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.graph-status-flag{
+  flex:none;width:16px;margin-inline-start:auto;text-align:center;font:italic 600 20px/1 var(--serif)
+}
+.graph-status-flag.ask{color:#ff8a7d}
+.graph-status-flag.question{color:#7ceeff}
+html[data-color-theme=light] .graph-status-flag.ask{color:#a1382e}
+html[data-color-theme=light] .graph-status-flag.question{color:#076c80}
 .mobile #net .graph-status-agent .badge{inset:auto -3px -3px auto;width:15px;height:15px;cursor:inherit}
 .mobile .graph-status-agents p{padding:10px 8px;color:var(--ink-dim)}
 

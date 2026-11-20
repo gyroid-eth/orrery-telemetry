@@ -221,11 +221,13 @@ function renderGraphCounts(data,observed,fresh){
   for(const a of agents){
    const button=node('button','graph-status-agent');button.type='button';button.dataset.name=a.name;
    const portrait=face(a);portrait.setAttribute('aria-hidden','true');
-   button.append(portrait,node('span','',a.name));
+   button.append(portrait,node('span','graph-status-name',a.name));
    if(needsReview(a)){
     button.title=attentionReasons[a.act_state];
     button.setAttribute('aria-label',a.name+' · '+button.title);
-    button.append(icon(a.act_state==='ask'?'review':'unknown'));
+    const flag=node('span','graph-status-flag '+a.act_state,a.act_state==='ask'?'!':'?');
+    flag.setAttribute('aria-hidden','true');
+    button.append(flag);
    }
    button.onclick=()=>{closeGraphMenus();group.trigger.focus({preventScroll:true});openGraphAgent(a.name,group.trigger);};
    group.menu.append(button);
