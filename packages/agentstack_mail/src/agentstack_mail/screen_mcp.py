@@ -27,6 +27,7 @@ from fastmcp.tools import Tool
 from jsonschema import Draft202012Validator
 from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
+from mcp.server.stdio import stdio_server
 from PIL import Image
 
 from . import screen_contract as contract
@@ -350,7 +351,8 @@ class Relay:
 
     async def run(self):
         async with AsyncExitStack() as stack:
-            while (job := await self.calls.get()) is not None:
+            while True:
+                job = await self.calls.get()
                 if job.reply.cancelled():
                     continue
                 result = await self._dispatch(job, stack)
@@ -452,6 +454,7 @@ class Relay:
                 if "full_output" in self.definitions[name]["inputSchema"]["properties"]:
                     args["full_output"] = False
             try:
+                outcome = "upstream_error"
                 with anyio.fail_after(self.timeout):
                     response = await self.session.call_tool(name, args)
             except Exception as exc:
@@ -485,8 +488,12 @@ class ScreenServer(FastMCP):
             try:
                 yield {}
             finally:
-                await relay.calls.put(None)
-                await worker
+                worker.cancel()
+                with anyio.CancelScope(shield=True):
+                    try:
+                        await worker
+                    except asyncio.CancelledError:
+                        pass
 
         super().__init__(contract.SERVER, lifespan=lifespan, strict_input_validation=False)
         for name in contract.TOOLS:
@@ -500,6 +507,20 @@ class ScreenServer(FastMCP):
 
     async def _call_tool_mcp(self, key, arguments):
         return await self.relay.call(key, arguments)
+
+    async def run_stdio_async(self, show_banner=False, log_level=None):
+        # The SDK's default threaded stdin can keep SIGTERM waiting on a
+        # harness that has stopped reading but still holds the pipe open.
+        reader = asyncio.StreamReader(limit=2 * MAX_ARGUMENT_BYTES)
+        protocol = asyncio.StreamReaderProtocol(reader)
+        with os.fdopen(os.dup(sys.stdin.fileno()), "rb") as pipe:
+            transport, _ = await asyncio.get_running_loop().connect_read_pipe(lambda: protocol, pipe)
+            try:
+                async with self._lifespan_manager():
+                    async with stdio_server(stdin=reader) as (read, write):
+                        await self._mcp_server.run(read, write, self._mcp_server.create_initialization_options())
+            finally:
+                transport.close()
 
 
 async def _run(server):

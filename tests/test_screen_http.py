@@ -168,3 +168,66 @@ async def test_tool_calls_are_rechecked_via_real_stdio_and_http(monkeypatch, tmp
                 assert len(log.read_text().splitlines()) == 2
                 store.revoke({key: state[key] for key in screen_state.TARGET})
                 assert (await mcp.call_tool("click", {"pid": 2})).isError
+
+
+def test_sigterm_closes_inflight_upstream_with_open_stdin(monkeypatch, tmp_path):
+    import os
+    import select
+    import subprocess
+    import sys
+    import time
+
+    from agentstack_mail.screen_mcp import driver_platform
+    from test_screen_mcp import FIXTURE
+
+    platform = driver_platform()
+    driver, log = tmp_path / "driver", tmp_path / "calls"
+    fixture = FIXTURE.replace('SCHEMAS["darwin"]', f"SCHEMAS[{platform!r}]")
+    driver.write_text("#!" + sys.executable + "\n" + fixture.replace(
+        "log, scenario = sys.argv[1:]", f"log, scenario = {str(log)!r}, 'hang'",
+    ))
+    driver.chmod(0o700)
+    monkeypatch.setenv("AGENTSTACK_SCREEN_PYTHON", sys.executable)
+    monkeypatch.setenv("AGENTSTACK_CUA_DRIVER", str(driver))
+    with dashboard(monkeypatch, tmp_path, False) as (_request, _operator, store):
+        definition = screen_state.definition(
+            store.directory.parent, "sample-project", "SampleAgent", "1"*32, "control",
+        )
+        proc = subprocess.Popen([definition["command"], *definition["args"]],
+                                env={**os.environ, **definition["env"]}, text=True,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL)
+
+        def send(method, **fields):
+            proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method, **fields}) + "\n")
+            proc.stdin.flush()
+
+        try:
+            send("initialize", id=1, params={"protocolVersion": "2025-11-25",
+                "capabilities": {}, "clientInfo": {"name": "fixture", "version": "1"}})
+            assert select.select([proc.stdout], [], [], 5)[0]
+            assert "result" in json.loads(proc.stdout.readline())
+            send("notifications/initialized")
+            send("tools/call", id=2, params={"name": "click", "arguments": {"pid": 2}})
+            deadline = time.monotonic() + 5
+            while not (log.exists() and '"click"' in log.read_text()):
+                assert time.monotonic() < deadline
+                time.sleep(0.05)
+            upstream_pid = int(log.with_suffix(".pid").read_text())
+            proc.terminate()
+            assert proc.wait(timeout=6) == 0
+            with pytest.raises(ProcessLookupError):
+                os.kill(upstream_pid, 0)
+            target = {key: store.list()[0][key] for key in screen_state.TARGET}
+            assert store.recent(target)[0]["result"] == "upstream_error"
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+            pid_file = log.with_suffix(".pid")
+            if pid_file.exists():
+                pid = int(pid_file.read_text())
+                status = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                                        capture_output=True, text=True)
+                if str(driver) in status.stdout:
+                    os.kill(pid, 15)
