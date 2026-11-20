@@ -1180,42 +1180,47 @@ function attachmentPicker(panel,row,available){
  add.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-attachment"/></svg>';
  function show(open,focus=false){
   sources.hidden=!open;add.setAttribute('aria-expanded',String(open));
-  if(focus)(open?sources.querySelector('button:not([hidden])'):add)?.focus({preventScroll:true});
+  if(focus)(open?sources.querySelector('label:not([hidden]) input:enabled'):add)?.focus({preventScroll:true});
   layoutInputBar(panel);
  }
  const choices={};
  for(const [kind,id] of [['photo','terminal-image-file'],['file','terminal-file-image']]){
-  const input=make('input');input.type='file';input.id=id;input.multiple=true;input.hidden=true;
+  const label=make('label','icon-button');
+  label.htmlFor=id;
+  label.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-'+kind+'"/></svg>';
+  const input=make('input');input.type='file';input.id=id;input.multiple=true;
   input.onchange=()=>{
    const files=Array.from(input.files);
    input.value='';
-   if(!files.length||!input.isConnected||!target)return;
+   if(!input.isConnected)return;
+   show(false,true);
+   if(!files.length||!target)return;
    // A native picker can deliver its selection while the pane is being reverified.
    if(document.hidden||checkingView||attachmentProbeController){
     pendingAttachmentSelection={files,source:kind,revision:target.revision,epoch:capability.epoch};
    }else uploadAttachments(files,kind);
   };
-  const button=action('','icon-button',()=>{if(!add.disabled&&!button.hidden){input.click();show(false,true);}});
-  button.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-'+kind+'"/></svg>';
-  choices[kind]={input,button};sources.append(button);panel.append(input);
+  input.oncancel=()=>show(false,true);
+  choices[kind]={input,label};label.append(input);sources.append(label);
  }
  panel.refreshAttachmentPicker=()=>{
   const {image,file}=attachmentAccess;
   add.hidden=!image&&!file;
   add.disabled=!available||!previewOK||!!attachmentController||attachments.length>=MAX_ATTACHMENTS;
   if(add.hidden||add.disabled){sources.hidden=true;add.setAttribute('aria-expanded','false');}
-  choices.photo.button.hidden=!image;choices.photo.input.accept=imageTypes.join(',');
+  choices.photo.label.hidden=!image;choices.photo.input.accept=imageTypes.join(',');
   if(file)choices.file.input.removeAttribute('accept');
   else choices.file.input.accept=imageExtensions.map(format=>'.'+format).join(',');
-  for(const [choice,label] of [[choices.photo,'Choose a photo'],[choices.file,file?'Choose a file':'Choose an image from files']]){
-   choice.button.title=label;choice.button.setAttribute('aria-label',label);
+  for(const [choice,description] of [[choices.photo,'Choose a photo'],[choices.file,file?'Choose a file':'Choose an image from files']]){
+   choice.input.disabled=add.disabled||choice.label.hidden;
+   choice.label.title=description;choice.input.setAttribute('aria-label',description);
   }
  };
  panel.addEventListener('keydown',event=>{
   if(event.key==='Escape'&&!sources.hidden){event.preventDefault();show(false,true);}
  });
  panel.addEventListener('focusout',event=>{
-  if(!sources.hidden&&event.relatedTarget&&!panel.contains(event.relatedTarget))show(false);
+  if(!sources.hidden&&!sources.contains(event.target)&&event.relatedTarget&&!panel.contains(event.relatedTarget))show(false);
  });
  add.setAttribute('aria-expanded','false');panel.refreshAttachmentPicker();panel.append(sources);row.append(add);
 }
@@ -1367,7 +1372,7 @@ function render(){
  refreshOutput();
 }
 sheet.addEventListener('keydown',e=>{if(e.key==='Escape'&&!e.defaultPrevented){e.preventDefault();if(!dismissLayer())close();}});
-sheet.addEventListener('cancel',e=>{e.preventDefault();if(!dismissLayer())close();});sheet.addEventListener('close',()=>{if(name&&!sheet.open)close();});
+sheet.addEventListener('cancel',e=>{if(e.target!==sheet)return;e.preventDefault();if(!dismissLayer())close();});sheet.addEventListener('close',()=>{if(name&&!sheet.open)close();});
 function pauseView(){
  if(!sheet.open)return;paused=true;checkingView=true;rememberView();clearTimeout(pollTimer);pollTimer=0;
  previewController?.abort();previewController=null;resumeController?.abort();resumeController=null;

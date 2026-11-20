@@ -4,6 +4,34 @@ import pytest
 from mobile_reader_browser import phone  # noqa: F401
 
 
+def tap_attachment_input(client, js, wait, input_id, frame=None):
+    client.call('Page.setInterceptFileChooserDialog', enabled=True)
+    client.call('Emulation.setTouchEmulationEnabled', enabled=True)
+    origin = f'workspaceFrame({frame!r})' if frame else 'null'
+    if frame:
+        wait(f"""(() => {{
+            const frame = {origin}, doc = frame.contentDocument;
+            return !frame.getAnimations().some(animation => animation.playState === 'running')
+                && parseFloat(frame.style.getPropertyValue('--workspace-compose-height')) ===
+                   doc.querySelector('.reader-bar').offsetHeight + doc.querySelector('.reader-input-bar').offsetHeight;
+        }})()""")
+    point = js(f"""(() => {{
+        const frame = {origin}, doc = frame?.contentDocument ?? document;
+        const input = doc.getElementById({input_id!r}), bounds = input.getBoundingClientRect();
+        const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height / 2;
+        if (input.disabled || doc.elementFromPoint(x, y) !== input) return null;
+        input.addEventListener('click', event => {{
+            input.dataset.activated = String(event.isTrusted && doc.defaultView.navigator.userActivation.isActive);
+        }}, {{once:true}});
+        const offset = frame?.getBoundingClientRect() ?? {{x:0, y:0}};
+        return {{x:x + offset.x, y:y + offset.y}};
+    }})()""")
+    assert point is not None
+    client.call('Input.dispatchTouchEvent', type='touchStart', touchPoints=[point])
+    client.call('Input.dispatchTouchEvent', type='touchEnd', touchPoints=[])
+    wait(f"(({origin})?.contentDocument ?? document).getElementById({input_id!r})?.dataset.activated === 'true'")
+
+
 def test_phone_activity_and_tablet_split_use_the_same_views(phone):
     client, js, wait, state = phone
     js('OrreryMobileTerminal.close()')
@@ -165,11 +193,17 @@ def test_workspace_keeps_the_same_reader_and_private_draft_across_layouts(phone)
         doc.querySelector('#terminal-image-add').click();
     })()""")
     wait("!paneDoc('SampleAgent').querySelector('.reader-attachment-sources').hidden")
-    assert js("""Array.from(paneDoc('SampleAgent').querySelectorAll('.reader-attachment-sources button'),
-        b=>[b.textContent,b.querySelector('use').getAttribute('href')])""") == [['', '#icon-photo'], ['', '#icon-file']]
+    assert js("""Array.from(paneDoc('SampleAgent').querySelectorAll('.reader-attachment-sources label'),
+        label=>[label.textContent,label.querySelector('use').getAttribute('href'),label.control.id])""") == [
+            ['', '#icon-photo', 'terminal-image-file'], ['', '#icon-file', 'terminal-file-image']]
     assert js("paneDoc('SampleAgent').querySelector('#terminal-image-file').accept") == 'image/jpeg,image/png,image/webp'
     assert js("paneDoc('SampleAgent').querySelector('#terminal-file-image').accept") == '.jpg,.jpeg,.png,.webp'
     assert js("paneDoc('Peer').querySelector('#terminal-text').value === ''")
+    tap_attachment_input(client, js, wait, 'terminal-image-file', frame='SampleAgent')
+    js("paneDoc('SampleAgent').getElementById('terminal-image-file').dispatchEvent(new Event('cancel',{bubbles:true}))")
+    assert js("""workspaceFrame('SampleAgent').dataset.composerOverlay === 'true'
+        && paneDoc('SampleAgent').querySelector('.reader-attachment-sources').hidden
+        && paneDoc('SampleAgent').activeElement.id === 'terminal-image-add'""")
     # The image uses the existing upload and review operations of this pane.
     js("""(() => {
         const doc=paneDoc('SampleAgent'), picker=doc.getElementById('terminal-image-file');
@@ -294,7 +328,7 @@ def test_model_list_opens_inside_tablet_sheet(phone):
 
 @pytest.mark.parametrize('phone', [(390, 844), (820, 1180), (1180, 820)], indirect=True)
 def test_file_picker_adds_a_document_to_existing_input_review(phone):
-    _, js, wait, state = phone
+    client, js, wait, state = phone
     state['files'] = True
     js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
     wait("document.querySelector('#terminal-image-add')?.disabled === false")
@@ -305,8 +339,13 @@ def test_file_picker_adds_a_document_to_existing_input_review(phone):
             && photo.accept === 'image/jpeg,image/png,image/webp';
     })()""")
     js("document.querySelector('#terminal-image-add').click()")
-    assert js("document.querySelector('.reader-attachment-sources button[aria-label=\"Choose a file\"]').textContent") == ''
-    assert js("document.querySelector('.reader-attachment-sources button[aria-label=\"Choose a photo\"]').hidden")
+    assert js("document.querySelector('label[for=terminal-file-image]').textContent") == ''
+    assert js("document.querySelector('label[for=terminal-image-file]').hidden")
+    tap_attachment_input(client, js, wait, 'terminal-file-image')
+    js("document.getElementById('terminal-file-image').dispatchEvent(new Event('cancel',{bubbles:true}))")
+    assert js("""document.getElementById('terminal-sheet').open
+        && document.querySelector('.reader-attachment-sources').hidden
+        && document.activeElement.id === 'terminal-image-add'""")
 
     def choose_file():
         js("""(() => {
