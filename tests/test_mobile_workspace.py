@@ -1,4 +1,6 @@
 """The responsive layout and theme use the packaged mobile page."""
+import pytest
+
 from mobile_reader_browser import phone  # noqa: F401
 
 
@@ -241,12 +243,67 @@ def test_successful_receipt_disappears_but_unknown_waits_for_a_status_check(phon
     assert [op for op, _ in state['calls'] if op in {'commit','status'}] == ['commit','commit','status']
 
 
+@pytest.mark.parametrize('phone', [(820, 1180), (1180, 820)], indirect=True)
+def test_model_list_opens_inside_tablet_sheet(phone):
+    client, js, wait, state = phone
+    harnesses = [
+        dict(id='codex', key='codex', label='Codex', efforts=['low', 'medium', 'high'],
+             default_effort='medium', default=True, effort_required=False),
+        dict(id='dsh', key='dsh', label='DSH', efforts=[], default_effort='', default=False),
+    ]
+    state['spawn_catalog'] = dict(
+        configurable=True,
+        models=[dict(provider='fixture', provider_label='Fixture', model=f'Model {i}',
+                     default=i == 1, harnesses=harnesses) for i in range(1, 13)],
+        directories=[dict(path='/workspace/projects/design/', label='/workspace/projects/design/'),
+                     dict(path='~', label='Home directory')],
+    )
+    js("OrreryMobileTerminal.close();document.getElementById('mobile-new-agent').click()")
+    wait("!document.getElementById('spawn-editor').hidden")
+    assert js("document.querySelector('.spawn-folder .om-select-slot:not([aria-hidden])').textContent") == 'design'
+    js("document.querySelector('.spawn-folder .om-select-trigger').click()")
+    wait("document.querySelector('.spawn-folder .om-select-option:last-child').getBoundingClientRect().height > 0")
+    js("document.querySelector('.spawn-folder .om-select-option:last-child').click()")
+    assert js("document.querySelector('.spawn-folder .om-select-slot:not([aria-hidden])').textContent") == '~'
+    js("document.getElementById('spawn-model-chip').click()")
+    js("document.querySelector('#spawn-model + .om-select .om-select-trigger').click()")
+    wait("""(() => {
+        const sheet = document.getElementById('spawn-settings');
+        const host = document.querySelector('#spawn-model + .om-select');
+        const menu = host.querySelector('.om-select-menu');
+        const popup = host.querySelector('.om-select-popup').getBoundingClientRect();
+        const bounds = sheet.getBoundingClientRect(), viewport = visualViewport;
+        const trigger = host.querySelector('.om-select-trigger').getBoundingClientRect();
+        const row = menu.querySelectorAll('[role=option]')[2].getBoundingClientRect();
+        const hit = document.elementFromPoint(row.x + row.width/2, row.y + row.height/2);
+        return bounds.top >= viewport.offsetTop && bounds.bottom <= viewport.offsetTop + viewport.height
+            && popup.top >= trigger.bottom - 1 && popup.bottom <= bounds.bottom
+            && popup.height >= menu.clientHeight && menu.scrollHeight > menu.clientHeight
+            && hit?.closest('[role=option]')?.textContent === 'Model 3';
+    })()""")
+    point = js("""(() => {
+        const row = document.querySelectorAll('#spawn-model + .om-select [role=option]')[2].getBoundingClientRect();
+        return {x: row.x + row.width/2, y: row.y + row.height/2};
+    })()""")
+    client.call('Emulation.setTouchEmulationEnabled', enabled=True)
+    client.call('Input.dispatchTouchEvent', type='touchStart', touchPoints=[point])
+    client.call('Input.dispatchTouchEvent', type='touchEnd', touchPoints=[])
+    wait("document.getElementById('spawn-model-name').textContent === 'Model 3'")
+    assert js("document.getElementById('spawn-directory').value") == '1'
+
+
+@pytest.mark.parametrize('phone', [(390, 844), (820, 1180), (1180, 820)], indirect=True)
 def test_file_picker_adds_a_document_to_existing_input_review(phone):
     _, js, wait, state = phone
     state['files'] = True
     js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
-    wait("document.querySelector('#terminal-file-image')?.accept === '.pdf,.txt,.md,.csv,.json'")
     wait("document.querySelector('#terminal-image-add')?.disabled === false")
+    assert js("""(() => {
+        const file = document.querySelector('#terminal-file-image');
+        const photo = document.querySelector('#terminal-image-file');
+        return !file.hasAttribute('accept') && !file.hasAttribute('capture')
+            && photo.accept === 'image/jpeg,image/png,image/webp';
+    })()""")
     js("document.querySelector('#terminal-image-add').click()")
     assert js("document.querySelector('.reader-attachment-sources button[aria-label=\"Choose a file\"]').textContent") == ''
     assert js("document.querySelector('.reader-attachment-sources button[aria-label=\"Choose a photo\"]').hidden")
@@ -257,13 +314,26 @@ def test_file_picker_adds_a_document_to_existing_input_review(phone):
             selection.items.add(new File(['# Example\\n'],'Notes <v2>.MD',{type:'text/markdown'}));
             input.files=selection.files; input.dispatchEvent(new Event('change'));
         })()""")
-        wait("document.querySelector('.reader-attachment-label')?.textContent === 'Notes <v2>.MD'")
-        wait("document.querySelector('#terminal-review')?.disabled === false")
 
+    if js('innerWidth') > 720:
+        target = next(payload for op,payload in state['calls'] if op == 'preview')
+        state['targets'] = [dict(choice='resumed-choice', name='SampleAgent',
+                                 pane_label='Window 0 · pane 0', revision='fixture-revision')]
+        assert target['choice'] != 'resumed-choice'
+        js("""Object.defineProperty(document,'hidden',{configurable:true,value:true});
+              document.dispatchEvent(new Event('visibilitychange'));""")
     choose_file()
-    assert [payload['file'] for op,payload in state['calls'] if op=='file' and payload.get('file')] == [
+    if js('document.hidden'):
+        assert not any(op=='file' and payload.get('file') for op,payload in state['calls'])
+        js("""delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));""")
+    wait("document.querySelector('.reader-attachment-label')?.textContent === 'Notes <v2>.MD'")
+    wait("document.querySelector('#terminal-review')?.disabled === false")
+    uploads = [payload for op,payload in state['calls'] if op=='file' and payload.get('file')]
+    assert [payload['file'] for payload in uploads] == [
         {'format':'md','data':'IyBFeGFtcGxlCg=='},
     ]
+    if js('innerWidth') > 720:
+        assert uploads[0]['choice'] == 'resumed-choice'
     assert not any(op=='prepare' or op=='commit' for op,_ in state['calls'])
     js("document.querySelector('#terminal-review').click()")
     wait("document.querySelector('.reader-review .reader-attachment-label')?.textContent === 'Notes <v2>.MD'")
@@ -273,3 +343,12 @@ def test_file_picker_adds_a_document_to_existing_input_review(phone):
     wait("!!document.querySelector('button[aria-label=\"Remove Notes <v2>.MD\"]')")
     js("document.querySelector('button[aria-label=\"Remove Notes <v2>.MD\"]').click()")
     assert js("!document.querySelector('.reader-file-mark') && document.querySelector('#terminal-review').disabled")
+
+    if js('innerWidth') > 720:
+        js("""Object.defineProperty(document,'hidden',{configurable:true,value:true});
+              document.dispatchEvent(new Event('visibilitychange'));""")
+        choose_file()
+        state['targets'][0]['revision'] = 'different-revision'
+        js("""delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));""")
+        wait("document.querySelector('#terminal-sheet').innerText.includes('Pane changed.')")
+        assert [payload for op,payload in state['calls'] if op=='file' and payload.get('file')] == uploads

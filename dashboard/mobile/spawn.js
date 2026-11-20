@@ -10,7 +10,11 @@
   const modelName = $('spawn-model-name'), effortMark = $('spawn-model-effort');
   const computer = $('spawn-computer'), browser = $('spawn-browser');
   const mobileControls = window.OrrerySpawnControls;
-  const selects = new Map([model, directory, harness].map(select => [select, mobileControls?.mountDropdown(select)]));
+  const selects = new Map([
+    [model, mobileControls?.mountDropdown(model, {inline:true})],
+    [harness, mobileControls?.mountDropdown(harness, {inline:true})],
+    [directory, mobileControls?.mountDropdown(directory, {selectedLabel:option => option?.dataset.shortLabel})],
+  ]);
   const effortRange = $('spawn-effort-range'), effortControl = $('spawn-effort-control');
   const tools = $('spawn-tools');
   const scrubber = mobileControls?.mountScrubber(effortRange, {
@@ -230,6 +234,10 @@
       catalog = next;
       modelChoices(catalog.models);
       fill(directory, catalog.directories.map((item, index) => [index, item.label]));
+      for (const [index, option] of [...directory.options].entries()) {
+        const path = catalog.directories[index].path;
+        option.dataset.shortLabel = path.split('/').filter(Boolean).at(-1) || path;
+      }
       const restoreModel = catalog.models.findIndex(item => item.provider === previousModel?.provider
         && item.model === previousModel.model && item.url_index === previousModel.url_index);
       const restoreDir = catalog.directories.findIndex(item => item.path === previousDir);
@@ -351,18 +359,21 @@
     else if (!submitting) checkReceipt();
   });
   function positionModelSheet() {
+    if (!settings.open) return;
     const anchor = modelChip.getBoundingClientRect();
     const {width, height} = settings.getBoundingClientRect();
-    const left = Math.max(12, Math.min(anchor.left, innerWidth - width - 12));
-    const below = anchor.bottom + 8;
     const viewport = window.visualViewport;
+    const visibleLeft = viewport?.offsetLeft ?? 0;
+    const visibleRight = visibleLeft + (viewport?.width ?? innerWidth);
     const visibleTop = viewport?.offsetTop ?? 0;
     const visibleBottom = visibleTop + (viewport?.height ?? innerHeight);
-    const top = below + height <= visibleBottom - 12 ? below : Math.max(visibleTop + 12, anchor.top - height - 8);
+    const left = Math.max(visibleLeft + 12, Math.min(anchor.left, visibleRight - width - 12));
+    const top = Math.max(visibleTop + 12, Math.min(anchor.bottom + 8, visibleBottom - height - 12));
     settings.style.setProperty('--spawn-model-left', left + 'px');
     settings.style.setProperty('--spawn-model-top', top + 'px');
     return anchor;
   }
+  new ResizeObserver(positionModelSheet).observe(settings);
 
   modelChip.onclick = () => {
     dismissToolHelp();

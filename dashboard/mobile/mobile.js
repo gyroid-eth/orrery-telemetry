@@ -667,7 +667,7 @@ function refreshReference(){
 const MAX_ATTACHMENTS=10;
 const imageTypes=['image/jpeg','image/png','image/webp'], imageExtensions=['jpg','jpeg','png','webp'];
 const fileFormats=['pdf','txt','md','csv','json'];
-let attachmentAccess={image:false,file:false},attachmentProbe='',attachmentController=null,attachmentProbeController=null,attachments=[];
+let attachmentAccess={image:false,file:false},attachmentProbe='',attachmentController=null,attachmentProbeController=null,attachments=[],pendingAttachmentSelection=null;
 let paused=false,checkingView=false,resumeController=null,reviewUntil=0,startupReady=false;
 const viewKey='orrery-mobile-view-v1';
 function savedView(){try{const v=JSON.parse(window.sessionStorage.getItem(viewKey));return v&&(Object.keys(v).length===2||Object.keys(v).length===4&&ref(v))&&Object.keys(v).every(k=>['agent','tab','mail_instance_id','mail_agent_id'].includes(k))&&/^[A-Za-z][A-Za-z0-9_-]{0,95}$/.test(v.agent)&&['conversation','terminal'].includes(v.tab)?v:null;}catch(_){return null;}}
@@ -716,7 +716,7 @@ function cancelIntent(){
  // Best effort cancellation never retries commit, and keeps no text or preview.
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
-function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;attachmentController?.abort();attachmentController=null;attachmentProbeController?.abort();attachmentProbeController=null;attachmentAccess={image:false,file:false};attachmentProbe='';clearAttachments();paused=false;checkingView=false;generation++;}
+function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;attachmentController?.abort();attachmentController=null;attachmentProbeController?.abort();attachmentProbeController=null;attachmentAccess={image:false,file:false};attachmentProbe='';pendingAttachmentSelection=null;clearAttachments();paused=false;checkingView=false;generation++;}
 function clear(){window.OrreryMobilePush?.close();sendFeedback?.reset();replyReference=preparedReference=null;inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
 function close(fromBack=false,keepView=false){
  if(pane&&fromBack!==true){pane.close();return;}
@@ -924,7 +924,7 @@ async function poll(){
   target=Object.freeze({...data.target});preview=data;output=data.text;previewOK=true;checkingView=false;failures=0;
   if(!['preparing','review','sending','accepted','unknown'].includes(phase))message='';
   refreshOutput();
-  probeAttachments();
+  probeAttachments().then(flushAttachmentSelection);
  }catch(_){
   if(g!==generation||previewController!==controller||!sheet.open||document.hidden)return;
   failures++;previewOK=false;output='';preview=null;
@@ -1011,6 +1011,12 @@ function attachmentType(file,source){
  if(attachmentAccess.image&&(imageTypes.includes(file.type)||!file.type&&imageExtensions.includes(extension)))return {kind:'image'};
  if(source==='file'&&attachmentAccess.file&&fileFormats.includes(extension))return {kind:'file',format:extension};
  return null;
+}
+function flushAttachmentSelection(){
+ if(!pendingAttachmentSelection||!previewOK||document.hidden||attachmentProbeController)return;
+ const {files,source,revision,epoch}=pendingAttachmentSelection;
+ pendingAttachmentSelection=null;
+ if(target?.revision===revision&&capability?.epoch===epoch)uploadAttachments(files,source);
 }
 function readAttachment(file,signal){
  return new Promise((resolve,reject)=>{
@@ -1180,8 +1186,16 @@ function attachmentPicker(panel,row,available){
  const choices={};
  for(const [kind,id] of [['photo','terminal-image-file'],['file','terminal-file-image']]){
   const input=make('input');input.type='file';input.id=id;input.multiple=true;input.hidden=true;
-  input.onchange=()=>uploadAttachments(input.files,kind);
-  const button=action('','icon-button',()=>{if(!add.disabled&&!button.hidden){show(false,true);input.click();}});
+  input.onchange=()=>{
+   const files=Array.from(input.files);
+   input.value='';
+   if(!files.length||!input.isConnected||!target)return;
+   // A native picker can deliver its selection while the pane is being reverified.
+   if(document.hidden||checkingView||attachmentProbeController){
+    pendingAttachmentSelection={files,source:kind,revision:target.revision,epoch:capability.epoch};
+   }else uploadAttachments(files,kind);
+  };
+  const button=action('','icon-button',()=>{if(!add.disabled&&!button.hidden){input.click();show(false,true);}});
   button.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-'+kind+'"/></svg>';
   choices[kind]={input,button};sources.append(button);panel.append(input);
  }
@@ -1191,7 +1205,8 @@ function attachmentPicker(panel,row,available){
   add.disabled=!available||!previewOK||!!attachmentController||attachments.length>=MAX_ATTACHMENTS;
   if(add.hidden||add.disabled){sources.hidden=true;add.setAttribute('aria-expanded','false');}
   choices.photo.button.hidden=!image;choices.photo.input.accept=imageTypes.join(',');
-  choices.file.input.accept=[...(image?imageExtensions:[]),...(file?fileFormats:[])].map(format=>'.'+format).join(',');
+  if(file)choices.file.input.removeAttribute('accept');
+  else choices.file.input.accept=imageExtensions.map(format=>'.'+format).join(',');
   for(const [choice,label] of [[choices.photo,'Choose a photo'],[choices.file,file?'Choose a file':'Choose an image from files']]){
    choice.button.title=label;choice.button.setAttribute('aria-label',label);
   }

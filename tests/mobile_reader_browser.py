@@ -64,6 +64,8 @@ def phone(request):
                 return self.send(dict(window='day', direction='both', events=[state['mail']], next_cursor=None))
             if path == '/view/history':
                 return self.send(dict(enabled=True))
+            if path == '/view/spawn' and state.get('spawn_catalog'):
+                return self.send(state['spawn_catalog'])
             if path == '/view/snapshot':
                 return self.send(snapshot)
             if path == '/view/conversation':
