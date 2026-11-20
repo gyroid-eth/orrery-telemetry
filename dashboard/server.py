@@ -7103,6 +7103,16 @@ def _runtime_activity(text: str) -> tuple[str, str]:
     if composer is not None:
         return "wait", ""
 
+    # Claude wraps the permission modal before tmux captures it. Its heading
+    # can be above the 16-line window, while the menu must end the capture.
+    permission = " ".join(" ".join(current[-32:]).split()).replace("❯ ", "")
+    # The menu lists only the permissions still missing, so after one is
+    # granted it shrinks to that setting and "Try again".
+    if ("Computer use needs macOS permissions " in permission
+            and " Open System Settings → " in permission
+            and permission.endswith(" Try again Enter to confirm · Esc to cancel")):
+        return "ask", ""
+
     # These footer controls must still be current. Looking at the last control
     # rather than reversing work/ask priority also preserves new work after an
     # answered modal that remains in the scrollback.
