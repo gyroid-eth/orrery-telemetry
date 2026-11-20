@@ -348,6 +348,8 @@ reason code は `binding_missing`（receipt なし）、`invalid_binding`（自�
 
 receipt の時刻が現在の tmux `session_created` より古ければ `stale` / `receipt_predates_session` とし、native ID・receipt 時刻だけを残して path は null にします。offset のない時刻は dashboard host の local time として比較するため、host の timezone が変わらない前提です。hook による receipt 置換は次の roster 計算で反映し、旧 path の cache には戻りません。同じ tmux の中の CLI 交換・秒単位で同時刻の再起動・receipt 時刻の欠落はこの比較で区別できず、新しい hook 完了まで最後の自己登録済み会話が見える可能性があります。退役だけでは正確な過去の会話の binding を消しません。binding は最後に自己登録した会話との対応であり、プロセス生存の証明ではありません。Codex の既存状態と fresh の保護された `/api/history` 経路は変更しません。
 
+ダッシュボードから Claude の会話だけを再開した場合も、同じ会話の自己登録 receipt と今回の tmux 起動証跡が一致すれば、Reader は `bound` の transcript を読めます。
+
 #### dsh（DeepSeek Harness）
 
 `history_receipt_ts` は callback が発行した UTC ISO 8601 時刻です。更新後に準備した子の起動証跡と、本人の `agent/created` callback が native persistence の `locate(header)` から得た場所・flush 後の device/inode を、現在の project の Mail ID と照合します。会話本体は子専用 `DSH_HOME/sessions/<workspace>/<session>/session.v4.jsonl.zstd`（現行版・既定の圧縮設定）です。`DSH_TUI_DATA_DIR` は TUI 設定用です。root ID の観測は locator / flush / receipt 保存に先行し、同一起動で別 root を観測すれば、その後の保存処理が失敗しても競合を保持します。元の root の callback が再び来ても、新しい正式な起動まで bound に戻しません。root 観測自体の書込み失敗でも取得済み lock を保持し、競合側の marker 保存が失敗した場合も所有側が公開・lock 解除を止めます。書込みの回復だけでは復活させず、新しい正式な起動 nonce を必要とします。receipt の時刻が現在の terminal の生成より古い場合は `stale` / `receipt_predates_session` とし、native ID・元時刻を残して path を null にします。terminal のない退役 archive は同じ条件で検証します。resume は起動証跡の nonce を更新し、新しい callback が届くまで古い記録を公開しません。退役後も同じ登録と証跡が残れば閲覧でき、登録の変更・証跡の削除・同一起動で複数の root session・ファイルの差し替え・symlink は未確認になります。古い起動で証跡が無い場合や保存先を変更した場合、cwd・時刻・最新履歴から補いません。raw path を使うこの契約は legacy のみで、fresh の保護された history 経路と `/api/history` の provider 対応範囲は不変です。cockpit は dsh 用の Zstd / native event parser を別途必要とします。

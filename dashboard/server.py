@@ -799,6 +799,8 @@ def tmux_state() -> dict:
         "#{session_id}",
         "#{AGENTSTACK_MAIL_DISABLED}",
         "#{AGENTSTACK_MAIL_DISABLED_REASON}",
+        "#{pid}",
+        "#{" + claude_history.CONVERSATION_RESUME_OPTION + "}",
     ])
     for line in _tmux(["list-sessions", "-F", fmt]).splitlines():
         parts = _split_tmux_fields(line)
@@ -811,6 +813,8 @@ def tmux_state() -> dict:
             "session_id": parts[3] if len(parts) >= 4 else "",
             "mail_disabled": parts[4] if len(parts) >= 5 else "",
             "mail_disabled_reason": parts[5] if len(parts) >= 6 else "",
+            "tmux_pid": _to_int(parts[6]) if len(parts) >= 7 else 0,
+            "claude_conversation_receipt": parts[7] if len(parts) >= 8 else "",
             "activity": _to_int(activity),
             "attached": False,
             "client_tty": None,
@@ -1789,6 +1793,9 @@ def _tmux_row_state(name: str, s: dict, m: dict | None, process_tree) -> tuple[s
     do_kill killed a live session).
     """
     program = (m or {}).get("program") or ""
+    if not program and s.get("mail_disabled") == "1" and s.get("claude_conversation_receipt"):
+        # The owner may still be retired and absent from the active Mail roster.
+        program = (_claude_registration(name) or {}).get("program", "")
     agent_alive = (
         _agent_process_alive(s.get("pane_pid"), process_tree, program)
         if m is not None
@@ -1878,7 +1885,7 @@ def _mail_agent_for(name: str) -> dict | None:
             con.close()
 
 
-def lookup_agent(name: str, history_days: float | None = None) -> dict | None:
+def lookup_agent(name: str, history_days: float | None = None, *, sessions: dict | None = None) -> dict | None:
     """One agent's name, category, running, attached and program, by name and
     however old it is: the same verdict build_agents(None) gives that row,
     without building every row of the whole history (each with its resume
@@ -1890,7 +1897,7 @@ def lookup_agent(name: str, history_days: float | None = None) -> dict | None:
 
     `history_days` limits an agent without a tmux session to the same window
     as build_agents(history_days); the default, None, is the whole history."""
-    s = tmux_state().get(name)
+    s = (tmux_state() if sessions is None else sessions).get(name)
     if s is not None:
         m = _mail_agent_for(name)
         process_tree = _process_tree_snapshot() if m is not None else None
@@ -1932,7 +1939,7 @@ def lookup_agent(name: str, history_days: float | None = None) -> dict | None:
     return row
 
 
-def _history_binding_fields(row: dict, *, now: float, claude_index=None,
+def _history_binding_fields(row: dict, *, now: float, claude_index=None, session_state=None,
                             reuse_stopped: bool = False) -> dict:
     """The conversation-record binding fields of one roster row.
 
@@ -1955,7 +1962,13 @@ def _history_binding_fields(row: dict, *, now: float, claude_index=None,
     if program in {"claude", "claude-code"}:
         if claude_index is None:
             claude_index = claude_history.ReceiptIndex(SESSION_INDEX_DIR)
-        return _claude_history_binding(row["name"], index=claude_index, session_created=row.get("created"))
+        conversation_resume = None
+        if row.get("running") and session_state and session_state.get("mail_disabled") == "1":
+            receipt = session_state.get("claude_conversation_receipt")
+            if receipt:
+                conversation_resume = (session_state["session_id"], session_state["tmux_pid"], receipt)
+        return _claude_history_binding(row["name"], index=claude_index,
+                                       session_created=row.get("created"), conversation_resume=conversation_resume)
     if program == "dsh":
         return _dsh_history_binding(row["name"], session_created=row.get("created"))
     if program == "hermes":
@@ -1981,11 +1994,12 @@ def history_binding_row(name: str) -> dict | None:
     when the name is not a live roster row (the cockpit treats that as
     agent_unavailable).
     """
-    found = lookup_agent(name, HISTORY_DAYS_DEFAULT)
+    sessions = tmux_state()
+    found = lookup_agent(name, HISTORY_DAYS_DEFAULT, sessions=sessions)
     if found is None or not _is_live_roster_row(found):
         return None
     found.setdefault("created", 0)
-    found.update(_history_binding_fields(found, now=time.time()))
+    found.update(_history_binding_fields(found, now=time.time(), session_state=sessions.get(name)))
     return {key: found.get(key) for key in HISTORY_BINDING_FIELDS}
 
 
@@ -2163,6 +2177,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
         if row.get("program") in {"claude", "claude-code"} and claude_history_index is None:
             claude_history_index = claude_history.ReceiptIndex(SESSION_INDEX_DIR)
         row.update(_history_binding_fields(row, now=observed_now, claude_index=claude_history_index,
+                                          session_state=sessions.get(row["name"]),
                                           reuse_stopped=True))
         row["resume_capability"] = _resume_capability_for_row(
             row["name"],
@@ -3170,7 +3185,8 @@ def _launch_resume_tmux(tmux_args: list[str], title: str, open_terminal: bool | 
 
 
 def _launch_claude_resume_tmux(tmux_args: list[str], title: str,
-                             open_terminal: bool | None, replace_husk: bool) -> dict:
+                             open_terminal: bool | None, replace_husk: bool, *,
+                             conversation: tuple[dict, str, str] | None = None) -> dict:
     """Prepare a gated replacement, preserving the old shell until startup commits."""
     generation = secrets.token_hex(12)
     staging = f"{title}.resume-{generation}"
@@ -3197,7 +3213,10 @@ def _launch_claude_resume_tmux(tmux_args: list[str], title: str,
         staged = list(tmux_args)
         staged[staged.index("-s") + 1] = staging
         staged = ["-d" if arg == "-A" else arg for arg in staged]
-        staged[2:2] = ["-P", "-F", "#{session_id}"]
+        launch_format = "#{session_id}"
+        if conversation is not None:
+            launch_format += "|#{session_created}|#{pid}"
+        staged[2:2] = ["-P", "-F", launch_format]
         wait_bin = shlex.quote(shutil.which("tmux") or "tmux")
         staged[-1] = f"{wait_bin} wait-for {shlex.quote(channel)} || exit $?; " + staged[-1]
         creation_attempted = True
@@ -3206,10 +3225,19 @@ def _launch_claude_resume_tmux(tmux_args: list[str], title: str,
         if result.returncode:
             raise RuntimeError("Detached Claude tmux preparation failed")
         new_id = result.stdout.strip()
+        if conversation is not None:
+            new_id, *launch_fields = new_id.split("|")
         if not re.fullmatch(r"\$\d+", new_id):
             # A successful creation has a unique name even if its receipt is malformed.
             new_id = f"={staging}"
             raise RuntimeError("New Claude session could not be identified")
+        if conversation is not None:
+            if len(launch_fields) != 2 or not all(_to_int(value) > 0 for value in launch_fields):
+                raise RuntimeError("New Claude session creation could not be verified")
+            created, tmux_pid = map(int, launch_fields)
+            receipt = claude_history.conversation_resume_receipt(
+                *conversation, tmux_id=new_id, created=created, tmux_pid=tmux_pid)
+            tmux("set-option", "-t", new_id, claude_history.CONVERSATION_RESUME_OPTION, receipt)
         adapter = "detached"
         if _resume_opens_terminal(open_terminal):
             opened = _open_terminal_tmux(["tmux", "attach-session", "-t", new_id], title=title)
@@ -3866,7 +3894,7 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     try:
         _, conversation_reason = _claude_conversation_reason(session)
         if conversation_reason:
-            return _launch_claude_conversation(session, sid, cwd, conversation_reason,
+            return _launch_claude_conversation(session, sid, path, cwd, conversation_reason,
                                                open_terminal=open_terminal, replace_husk=replace_husk)
     except _ResumeCapabilityError as exc:
         return {"ok": False, "resume_capability": exc.code, "error": str(exc)}
@@ -4533,7 +4561,7 @@ def _conversation_mail_fields(reason: str) -> dict:
             **({"mail_remedy": remedy} if remedy else {})}
 
 
-def _launch_claude_conversation(session: str, sid: str, cwd: str, reason: str, *,
+def _launch_claude_conversation(session: str, sid: str, path: str, cwd: str, reason: str, *,
                                 open_terminal: bool | None, replace_husk: bool) -> dict:
     module = _child_resume_module()
     # Serialize with modern migration/purge. Revalidate immediately before the
@@ -4566,7 +4594,8 @@ def _launch_claude_conversation(session: str, sid: str, cwd: str, reason: str, *
             launch = _launch_claude_resume_tmux(
                 ["tmux", "new-session", "-A", "-s", session, "-c", cwd,
                  *[arg for key, value in environment.items() for arg in ("-e", f"{key}={value}")],
-                 _login_shell(), "-lic", inner], title=session, open_terminal=open_terminal, replace_husk=replace_husk)
+                 _login_shell(), "-lic", inner], title=session, open_terminal=open_terminal, replace_husk=replace_husk,
+                conversation=(registration, sid, path))
     except module.ResumeStateError as exc:
         raise _ResumeCapabilityError(exc.code, str(exc)) from exc
     if not launch.get("ok"):
@@ -5539,11 +5568,11 @@ def _claude_registration(session: str) -> dict | None:
     return _resume_registration(session, {"claude", "claude-code"})
 
 
-def _claude_history_binding(session: str, *, index=None, session_created=None) -> dict:
+def _claude_history_binding(session: str, *, index=None, session_created=None, conversation_resume=None) -> dict:
     return claude_history.history_binding(
         session, _claude_registration(session), projects=CLAUDE_PROJECTS,
         index=index if index is not None else claude_history.ReceiptIndex(SESSION_INDEX_DIR),
-        session_created=session_created,
+        session_created=session_created, conversation_resume=conversation_resume,
     )
 
 
