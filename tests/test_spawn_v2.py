@@ -546,14 +546,15 @@ def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path)
     monkeypatch.setattr(server.subprocess, "Popen", lambda args, **kwargs: launched.append(args))
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
 
-    result = server.do_spawn({"parent": "Parent", "task": "work", "dir": str(tmp_path)})
+    task = "work\r\n\n## Task summary\twith details"
+    result = server.do_spawn({"parent": "Parent", "task": task, "dir": str(tmp_path)})
 
     assert result["ok"] is True
     assert result["requested_name"] == "Zesty-Curie"
     assert result["name_substituted"] is False
     assert calls[0] == ("register_agent", {
         "project_key": "/project", "program": "claude-code", "model": "claude-opus-5-5",
-        "task_description": "work", "registration_token": calls[0][1]["registration_token"],
+        "task_description": task, "registration_token": calls[0][1]["registration_token"],
         "name": "Zesty-Curie",
     })
     assert calls[1] == ("set_contact_policy", {
@@ -562,6 +563,9 @@ def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path)
     })
     assert calls[2][0] == "send_message"
     assert calls[2][1]["sender_token"] == "parent-owner-token"
+    assert calls[2][1]["subject"] == "タスク依頼: work ## Task summary with details"
+    assert calls[2][1]["cc"] == ["Parent"]
+    assert task in calls[2][1]["body_md"]
     assert pathlib.Path(launched[0][4]).read_text() == "server-child-token"
     assert launched[0][2] == "Zesty-Curie"
 

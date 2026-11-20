@@ -951,6 +951,9 @@ def resolve_defaults(selection: str, provider: str, *, cwd: str,
             merge_chrome(candidate, chrome, chrome_device)
             if provider == "codex":
                 codex_apply(copy.deepcopy(codex_config or {}), candidate)
+            elif provider in ("dsh", "hermes"):
+                native_plan(candidate, cwd=cwd, claude_json=claude_json,
+                            codex_config=codex_config)
             else:
                 claude_plan(candidate, cwd=cwd, chrome=chrome,
                             claude_json=claude_json, platform=platform)
@@ -1018,7 +1021,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--chrome-device", default="")
     defaults = sub.add_parser("defaults")
     defaults.add_argument("--selection", required=True)
-    defaults.add_argument("--provider", required=True, choices=("claude", "codex"))
+    defaults.add_argument("--provider", required=True, choices=("claude", "codex", "dsh", "hermes"))
     defaults.add_argument("--cwd", required=True)
     defaults.add_argument("--chrome", default="0")
     defaults.add_argument("--chrome-device", default="")
@@ -1054,7 +1057,7 @@ def main(argv: list[str]) -> int:
     try:
         if args.command == "defaults":
             config = _defaults_codex_config(args.codex_config, args.overlay) \
-                if args.provider == "codex" else None
+                if args.provider != "claude" else None
             result = resolve_defaults(args.selection, args.provider, cwd=args.cwd,
                                       chrome=args.chrome == "1", chrome_device=args.chrome_device,
                                       claude_json=args.claude_json, codex_config=config)

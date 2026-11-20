@@ -44,10 +44,11 @@ fi
 #   chrome を要求した子は warm pool を使わず cold start する。
 #
 # 子に渡す道具（base / tools。hooks/child_tools.py が解釈する）:
-#   --base default|mail-only   省略・default は今までと同じ起動。mail-only は ORRERY Mail と
+#   --base default|mail-only   default の明示は installer の既定を抑止。mail-only は ORRERY Mail と
 #                              --tools で選んだものだけを渡す（Claude は --no-chrome も付ける）
 #   --tools SPEC               繰り返し・カンマ区切り可: browser[:deviceId] / screen[:read|:operate]
 #                              / screen:<read|operate>:<server> / mcp:<server>
+#   base・tools・MCP profile の省略時は installer の既定から使える項目を選ぶ。
 #   選択（mail-only かいずれかの tools）がある子は fail closed: Mail の proxy が作れない、
 #   選んだ server を写せない、computer use が有効な project での mail-only などは起動しない。
 #   これは子への方針であって、技術的な隔離ではない。
@@ -545,12 +546,7 @@ fi
 # Tools selection. Parsed here so that an invalid request stops before any
 # registration or tmux work; what can only be checked in the child's final
 # directory (servers, computer use) is checked again just before launch.
-if [[ -n "$HARNESS" && -n "${AGENTSTACK_CHILD_DEFAULT_TOOLS:-}" \
-        && -z "$CHILD_TOOLS_BASE" && ${#CHILD_TOOLS_ARGS[@]} -eq 0 ]]; then
-    echo "Error: native_default_tools_unsupported: choose explicit --base and --tools for this harness" >&2
-    exit 1
-fi
-if [[ -n "${AGENTSTACK_CHILD_DEFAULT_TOOLS:-}" && -z "$HARNESS" ]]; then
+if [[ -n "${AGENTSTACK_CHILD_DEFAULT_TOOLS:-}" ]]; then
     # Resolve defaults only after the final directory is known. Explicit base
     # or tools/profile bypass them entirely, including --base default and the
     # legacy --codex-mcp reduction. Defaults must never widen that reduction.
@@ -3023,7 +3019,7 @@ resolve_child_default_tools() {
     local resolved tools_chrome tools_device
     resolved="$(python3 "$HOOKS_DIR/child_tools.py" defaults \
         --selection "$AGENTSTACK_CHILD_DEFAULT_TOOLS" \
-        --provider "$([[ "$USE_CODEX" == true ]] && echo codex || echo claude)" \
+        --provider "${HARNESS:-$([[ "$USE_CODEX" == true ]] && echo codex || echo claude)}" \
         --cwd "$WORK_DIR" \
         --chrome "$([[ "$CLAUDE_CHILD_CHROME" == true ]] && echo 1 || echo 0)" \
         --chrome-device "$CLAUDE_CHILD_CHROME_DEVICE" \
@@ -3032,7 +3028,7 @@ resolve_child_default_tools() {
         --overlay "${AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY:-}")" || return 1
     IFS='|' read -r CHILD_TOOLS_SPEC tools_chrome tools_device \
         CHILD_TOOLS_RESTRICTIVE CHILD_DEFAULT_TOOLS_NOTICE <<< "$resolved"
-    if [[ "$USE_CODEX" != true ]]; then
+    if [[ "$USE_CODEX" != true && -z "$HARNESS" ]]; then
         CLAUDE_CHILD_CHROME="$([[ "$tools_chrome" == 1 ]] && echo true || echo false)"
         CLAUDE_CHILD_CHROME_DEVICE="$tools_device"
     fi
@@ -3056,7 +3052,7 @@ child_tools_prompt_block() {
     [[ "$CHILD_TOOLS_RESTRICTIVE" == true ]] || return 0
     local text
     text="$(python3 "$HOOKS_DIR/child_tools.py" prompt --spec "$CHILD_TOOLS_SPEC" \
-        --provider "$([[ "$USE_CODEX" == true ]] && echo codex || echo claude)" \
+        --provider "${HARNESS:-$([[ "$USE_CODEX" == true ]] && echo codex || echo claude)}" \
         --standalone "$([[ "$STANDALONE" == true ]] && echo 1 || echo 0)")" || return 1
     printf '\n\n%s' "$text"
 }
@@ -3142,12 +3138,14 @@ prepare_harness_child_state() {
 }
 
 start_harness_child() {
-    local prompt="$TASK" prompt_file command tools_spec="$CHILD_TOOLS_SPEC"
+    local prompt="$TASK" tools_prompt prompt_file command tools_spec="$CHILD_TOOLS_SPEC"
     local native_args=()
     if [[ "$EMBED_TASK" == true ]]; then prompt="$EMBEDDED_TASK_PROMPT"; fi
     if [[ "$STANDALONE" != true && "$EMBED_TASK" != true ]]; then
         prompt="$(build_codex_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"
     fi
+    tools_prompt="$(child_tools_prompt_block)" || return 1
+    prompt+="$tools_prompt"
     ensure_child_proxy_parent before claude || return 1
     CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
     if [[ -z "$CHILD_MCP_CONFIG" ]]; then
@@ -3488,7 +3486,7 @@ PY
         echo "[spawn_child/pre-reg] WORK_DIR overridden to worktree: $WORK_DIR" >&2
     fi
 
-    if [[ -z "$HARNESS" ]]; then resolve_child_default_tools || exit 1; fi
+    resolve_child_default_tools || exit 1
 
     if ! grep -qxF "$CHILD_NAME" "$MANAGED_FILE" 2>/dev/null; then
         mkdir -p "$(dirname "$MANAGED_FILE")"

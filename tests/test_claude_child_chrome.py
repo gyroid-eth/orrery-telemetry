@@ -817,7 +817,7 @@ def test_new_agent_rejects_invalid_requests(monkeypatch, payload, message):
     assert captured == []
 
 
-def test_new_agent_strips_the_cli_env_defaults_from_the_launcher(monkeypatch, tmp_path):
+def test_new_agent_passes_installer_tools_and_strips_legacy_chrome_env(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENTSTACK_CLAUDE_CHILD_CHROME", "1")
     monkeypatch.setenv("AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE", "from-env")
     monkeypatch.setenv("AGENTSTACK_CHILD_DEFAULT_TOOLS", "browser,screen:operate")
@@ -856,7 +856,7 @@ def test_new_agent_strips_the_cli_env_defaults_from_the_launcher(monkeypatch, tm
     assert "--claude-chrome" not in args and "--claude-chrome-device" not in args
     assert "AGENTSTACK_CLAUDE_CHILD_CHROME" not in env
     assert "AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE" not in env
-    assert "AGENTSTACK_CHILD_DEFAULT_TOOLS" not in env
+    assert env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] == "browser,screen:operate"
 
 
 def test_new_agent_form_offers_chrome_only_for_claude():
