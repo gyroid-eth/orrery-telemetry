@@ -662,10 +662,12 @@ function addReference(value){
 function refreshReference(){
  if(replyReference&&phase==='review'&&!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='';render();return;}
  q('#terminal-input-error')?.refresh?.();
- const review=q('#terminal-review');if(review&&replyReference)review.disabled=phase!=='editing'||!previewOK||!!imageController||!inputValid();
+ const review=q('#terminal-review');if(review&&replyReference)review.disabled=phase!=='editing'||!previewOK||!!attachmentController||!inputValid();
 }
-const MAX_ATTACHED_IMAGES=10;
-let imageAvailable=false,imageProbe='',imageController=null,imageProbeController=null,attachments=[];
+const MAX_ATTACHMENTS=10;
+const imageTypes=['image/jpeg','image/png','image/webp'], imageExtensions=['jpg','jpeg','png','webp'];
+const fileFormats=['pdf','txt','md','csv','json'];
+let attachmentAccess={image:false,file:false},attachmentProbe='',attachmentController=null,attachmentProbeController=null,attachments=[];
 let paused=false,checkingView=false,resumeController=null,reviewUntil=0,startupReady=false;
 const viewKey='orrery-mobile-view-v1';
 function savedView(){try{const v=JSON.parse(window.sessionStorage.getItem(viewKey));return v&&(Object.keys(v).length===2||Object.keys(v).length===4&&ref(v))&&Object.keys(v).every(k=>['agent','tab','mail_instance_id','mail_agent_id'].includes(k))&&/^[A-Za-z][A-Za-z0-9_-]{0,95}$/.test(v.agent)&&['conversation','terminal'].includes(v.tab)?v:null;}catch(_){return null;}}
@@ -701,7 +703,7 @@ async function request(operation,payload,controller,timeout=3000){
    credentials:'same-origin',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});
   const raw=await response.text();if(new TextEncoder().encode(raw).length>16384)throw Error('unavailable');
   const value=JSON.parse(raw);
-  if(!response.ok||value.contract!==contract||operation&&value.epoch!==capability.epoch)throw Error(operation==='image'&&/^image_[a-z_]+$/.test(value.error)?value.error:'unavailable');
+  if(!response.ok||value.contract!==contract||operation&&value.epoch!==capability.epoch)throw Error((operation==='image'&&/^image_[a-z_]+$/.test(value.error)||operation==='file'&&/^file_[a-z_]+$/.test(value.error))?value.error:'unavailable');
   return value;
  }finally{clearTimeout(timer);}
 }
@@ -714,7 +716,7 @@ function cancelIntent(){
  // Best effort cancellation never retries commit, and keeps no text or preview.
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
-function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;imageController?.abort();imageController=null;imageProbeController?.abort();imageProbeController=null;imageAvailable=false;imageProbe='';clearAttachments();paused=false;checkingView=false;generation++;}
+function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;attachmentController?.abort();attachmentController=null;attachmentProbeController?.abort();attachmentProbeController=null;attachmentAccess={image:false,file:false};attachmentProbe='';clearAttachments();paused=false;checkingView=false;generation++;}
 function clear(){window.OrreryMobilePush?.close();sendFeedback?.reset();replyReference=preparedReference=null;inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
 function close(fromBack=false,keepView=false){
  if(pane&&fromBack!==true){pane.close();return;}
@@ -791,7 +793,7 @@ function switchTab(value){if(busy()||value===tab||!history||!enabled&&value==='t
 // Tab swipes belong only to reading surfaces; native scroll and selection win.
 let readerSwipe=null;
 function swipeAvailable(){
- return sheet.open&&history&&enabled&&!composer&&!text&&!imageController&&!busy()&&phase!=='review'
+ return sheet.open&&history&&enabled&&!composer&&!text&&!attachmentController&&!busy()&&phase!=='review'
   &&!q('.conversation-preview')&&!window.getSelection?.()?.toString();
 }
 function swipeSurface(target){
@@ -895,9 +897,9 @@ function refreshOutput(){
  const terminalState=q('.reader-terminal-state');if(terminalState)terminalState.textContent=previewOK?(pending?'New output · paused':reading?'Reading earlier output':''):'';
  const terminalMeta=q('.reader-terminal-meta');if(terminalMeta)terminalMeta.textContent=limits?'Latest '+(limits.max_lines||120)+' lines · up to '+((limits.max_bytes||12288)/1024)+' KiB · every 3s'+(shown?' · '+age.textContent:''):'Waiting for a verified terminal snapshot.';
  const dot=q('.reader-state');if(tab==='terminal'&&dot){dot.dataset.state=previewOK?'work':'unknown';dot.title=previewOK?'Terminal updating every 3s':'Terminal preview unavailable';dot.setAttribute('aria-label',dot.title);}
- const review=q('#terminal-review');if(review)review.disabled=phase!=='editing'||!previewOK||!!imageController||!inputValid();
+ const review=q('#terminal-review');if(review)review.disabled=phase!=='editing'||!previewOK||!!attachmentController||!inputValid();
  refreshReference();
- refreshImageControls();
+ refreshAttachmentControls();
  const status=q('.terminal-message');if(status)status.textContent=message;
  // Metadata below the terminal can reflow after following was sampled above.
  // Account for that layout without treating a later scroll as a resize clamp.
@@ -922,7 +924,7 @@ async function poll(){
   target=Object.freeze({...data.target});preview=data;output=data.text;previewOK=true;checkingView=false;failures=0;
   if(!['preparing','review','sending','accepted','unknown'].includes(phase))message='';
   refreshOutput();
-  probeImages();
+  probeAttachments();
  }catch(_){
   if(g!==generation||previewController!==controller||!sheet.open||document.hidden)return;
   failures++;previewOK=false;output='';preview=null;
@@ -943,7 +945,7 @@ function inputError(value){
  return '';
 }
 function validText(value){return typeof value==='string'&&value.trim()&&!inputError(value);}
-function clearAttachments(){for(const attachment of attachments)URL.revokeObjectURL(attachment.url);attachments=[];}
+function clearAttachments(){for(const attachment of attachments)if(attachment.url)URL.revokeObjectURL(attachment.url);attachments=[];}
 const draftText=()=>[text.replace(/[\r\n]+$/u,''),...attachments.map(attachment=>attachment.marker)].filter(Boolean).join(' ');
 const inputText=()=>{
  if(!replyReference)return draftText();
@@ -955,70 +957,124 @@ function inputErrorNote(){
  const note=make('p','terminal-input-error');note.id='terminal-input-error';note.setAttribute('role','status');
  note.refresh=()=>{note.textContent=referenceError()||inputError(inputText());note.hidden=!note.textContent;};note.refresh();return note;
 }
-function refreshImageControls(){
- const add=q('#terminal-image-add');if(!add)return;
- add.hidden=!imageAvailable;
- add.disabled=!previewOK||!!imageController||attachments.length>=MAX_ATTACHED_IMAGES||!['editing','accepted','refused'].includes(phase);
- if(add.disabled){const sources=q('#reader-attachment-sources');if(sources)sources.hidden=true;add.setAttribute('aria-expanded','false');}
- const panel=add.closest('.reader-input-bar');if(panel)layoutInputBar(panel);
+function refreshAttachmentControls(){
+ const add=q('#terminal-image-add'),panel=add?.closest('.reader-input-bar');
+ if(!panel)return;
+ panel.refreshAttachmentPicker?.();
+ layoutInputBar(panel);
 }
-async function probeImages(){
- if(!target||imageProbe===target.choice+target.revision||imageProbeController)return;
- const g=generation,t=target,controller=new AbortController();imageProbeController=controller;imageProbe=t.choice+t.revision;
- try{
-  const result=await request('image',{epoch:capability.epoch,choice:t.choice,revision:t.revision,image:null},controller,10000);
-  if(g!==generation||!sheet.open||target?.choice!==t.choice||result.target?.revision!==t.revision||!sameTarget(result.target))return;
-  imageAvailable=result.enabled===true;refreshImageControls();
- }catch(_){if(g===generation){imageProbe='';imageAvailable=false;refreshImageControls();}}
- finally{if(imageProbeController===controller)imageProbeController=null;}
+async function probeAttachments(){
+ if(!target||attachmentProbe===target.choice+target.revision||attachmentProbeController)return;
+ const g=generation,t=target,controller=new AbortController();attachmentProbeController=controller;
+ attachmentProbe=t.choice+t.revision;
+ await Promise.all(['image','file'].map(async kind=>{
+  try{
+   const result=await request(kind,{epoch:capability.epoch,choice:t.choice,revision:t.revision,[kind]:null},controller,10000);
+   if(g!==generation||controller.signal.aborted||!sheet.open||target?.choice!==t.choice||
+    result.target?.choice!==t.choice||result.target?.revision!==t.revision||!sameTarget(result.target))return;
+   attachmentAccess[kind]=result.enabled===true;refreshAttachmentControls();
+  }catch(_){
+   if(g!==generation||controller.signal.aborted)return;
+   attachmentAccess[kind]=false;refreshAttachmentControls();
+   if(kind==='image')attachmentProbe='';
+  }
+ }));
+ if(attachmentProbeController===controller)attachmentProbeController=null;
 }
-function imageThumbnail(panel,removable){
+function renderAttachments(panel,removable){
  if(!attachments.length)return;
- const list=make('div','reader-images');list.setAttribute('aria-label','Attached images');
- for(const [index,attachment] of attachments.entries()){
-  const box=make('div','reader-image'),image=make('img','reader-image-thumb');image.src=attachment.url;image.alt='Attached image '+(index+1);
-  box.append(image,make('span','','Image '+(index+1)+' of '+attachments.length));
-  if(removable){const remove=action('×','reader-image-remove',()=>{attachments=attachments.filter(value=>value!==attachment);URL.revokeObjectURL(attachment.url);render();});remove.setAttribute('aria-label','Remove attached image '+(index+1));remove.disabled=!!imageController;box.append(remove);}
+ const list=make('div','reader-images');list.setAttribute('aria-label','Attachments');
+ const imageTotal=attachments.filter(item=>item.kind==='image').length;
+ let imageIndex=0;
+ for(const attachment of attachments){
+  const box=make('div','reader-image');
+  const caption=attachment.kind==='image'?'Image '+(++imageIndex)+' of '+imageTotal:attachment.label;
+  if(attachment.url){
+   const image=make('img','reader-image-thumb');image.src=attachment.url;image.alt='Attached image '+imageIndex;box.append(image);
+  }else{
+   const icon=make('span','reader-file-mark');icon.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-file"/></svg>';box.append(icon);
+  }
+  const label=make('span','reader-attachment-label',caption);label.title=caption;box.append(label);
+  if(removable){
+   const remove=action('×','reader-image-remove',()=>{
+    attachments=attachments.filter(value=>value!==attachment);if(attachment.url)URL.revokeObjectURL(attachment.url);render();
+   });
+   remove.setAttribute('aria-label',attachment.kind==='image'?'Remove attached image '+imageIndex:'Remove '+caption);
+   remove.disabled=!!attachmentController;box.append(remove);
+  }
   list.append(box);
  }
  panel.append(list);
 }
-async function uploadImages(files){
+function attachmentType(file,source){
+ const extension=/\.([a-z]+)$/i.exec(file.name)?.[1].toLowerCase();
+ if(attachmentAccess.image&&(imageTypes.includes(file.type)||!file.type&&imageExtensions.includes(extension)))return {kind:'image'};
+ if(source==='file'&&attachmentAccess.file&&fileFormats.includes(extension))return {kind:'file',format:extension};
+ return null;
+}
+function readAttachment(file,signal){
+ return new Promise((resolve,reject)=>{
+  const reader=new FileReader(),cleanup=()=>signal.removeEventListener('abort',abort);
+  const abort=()=>{reader.abort();cleanup();reject(Error('cancelled'));};
+  reader.onload=()=>{cleanup();const url=reader.result;resolve(url.slice(url.indexOf(',')+1));};
+  reader.onerror=()=>{cleanup();reject(Error('unavailable'));};
+  signal.addEventListener('abort',abort,{once:true});reader.readAsDataURL(file);
+ });
+}
+async function uploadAttachments(files,source){
  const selected=Array.from(files||[]);
- if(!selected.length||!target||!previewOK||!imageAvailable||imageController||!['editing','accepted','refused'].includes(phase))return;
- if(attachments.length+selected.length>MAX_ATTACHED_IMAGES){message='Attach up to '+MAX_ATTACHED_IMAGES+' images per input.';render();return;}
- for(const file of selected){
-  if(file.size>10*1024*1024||!['image/jpeg','image/png','image/webp'].includes(file.type)){
-   message=file.size>10*1024*1024?'Choose an image up to 10 MiB.':'Choose a JPEG, PNG or WebP image.';render();return;
-  }
+ if(!selected.length||!target||!previewOK||attachmentController||!['editing','accepted','refused'].includes(phase))return;
+ const typed=selected.map(file=>({file,type:attachmentType(file,source)}));
+ const includesFiles=typed.some(({type})=>type?.kind==='file')||attachments.some(item=>item.kind==='file');
+ if(attachments.length+selected.length>MAX_ATTACHMENTS){
+  message='Attach up to '+MAX_ATTACHMENTS+(includesFiles?' items':' images')+' per input.';render();return;
+ }
+ for(const {file,type} of typed){
+  if(!type){message=source==='file'&&attachmentAccess.file?'Choose a JPEG, PNG, WebP, PDF, TXT, MD, CSV or JSON file.':'Choose a JPEG, PNG or WebP image.';render();return;}
+  const limit=type.kind==='image'?10:5;
+  if(file.size>limit*1024*1024){message=(type.kind==='image'?'Choose an image up to ':'Choose a document up to ')+limit+' MiB.';render();return;}
+  if(type.kind==='file'&&!file.size){message='Choose a document that is not empty.';render();return;}
  }
  if(phase!=='editing'){cancelIntent();phase='editing';}
- const g=generation,t=target,controller=new AbortController();imageController=controller;
+ const g=generation,t=target,controller=new AbortController();attachmentController=controller;
+ let kind=source==='photo'?'image':'file';
  try{
-  for(const [index,file] of selected.entries()){
+  for(const [index,{file,type}] of typed.entries()){
    if(g!==generation||controller.signal.aborted)return;
-   message='Uploading image '+(index+1)+' of '+selected.length+'…';render();
-   const url=await new Promise((resolve,reject)=>{
-    const reader=new FileReader(),cleanup=()=>controller.signal.removeEventListener('abort',abort);
-    const abort=()=>{reader.abort();cleanup();reject(Error('cancelled'));};
-    reader.onload=()=>{cleanup();resolve(reader.result);};reader.onerror=()=>{cleanup();reject(Error('image_invalid'));};
-    controller.signal.addEventListener('abort',abort,{once:true});reader.readAsDataURL(file);
-   });
+   kind=type.kind;
+   message='Uploading '+(kind==='image'?'image ':'file ')+(index+1)+' of '+typed.length+'…';render();
+   const data=await readAttachment(file,controller.signal);
    if(g!==generation||controller.signal.aborted)return;
-   const result=await request('image',{epoch:capability.epoch,choice:t.choice,revision:t.revision,image:url.slice(url.indexOf(',')+1)},controller,30000);
+   const result=await request(kind,{epoch:capability.epoch,choice:t.choice,revision:t.revision,
+    [kind]:kind==='image'?data:{format:type.format,data}},controller,30000);
    if(g!==generation||!sheet.open||document.hidden)return;
-   if(result.enabled!==true||result.target?.choice!==t.choice||result.target?.revision!==t.revision||!sameTarget(result.target)||typeof result.path!=='string'||!result.path.startsWith('/'))throw Error('unavailable');
-   const quoted="'"+result.path.replaceAll("'","'\\''")+"'",marker='[image: '+quoted+']',final=[inputText(),marker].filter(Boolean).join(' ');
-   if(!validText(final))throw Error('image_text_too_large');
-   attachments.push({url:URL.createObjectURL(file),marker});
+   if(result.enabled!==true||result.target?.choice!==t.choice||result.target?.revision!==t.revision||
+    !sameTarget(result.target)||typeof result.path!=='string'||!result.path.startsWith('/'))throw Error('unavailable');
+   const quoted="'"+result.path.replaceAll("'","'\\''")+"'",marker='['+kind+': '+quoted+']';
+   if(!validText([inputText(),marker].filter(Boolean).join(' ')))throw Error(kind+'_text_too_large');
+   attachments.push({kind,marker,label:file.name,url:kind==='image'?URL.createObjectURL(file):null});
   }
   message='';
  }catch(error){
-  if(g===generation){const reasons={image_folder_full:'This workspace already has 50 images. Remove older files before attaching another.',image_too_large:'Choose an image up to 10 MiB.',image_pixels_too_large:'Choose an image up to 24 megapixels.',image_format_unsupported:'Choose a static JPEG, PNG or WebP image.',image_text_too_large:'The image paths and text exceed 4096 bytes. Shorten the text or remove an image.'};message=(attachments.length?attachments.length+' image(s) attached. ':'')+(reasons[error.message]||'Image could not be saved. No input was sent. Choose the image again.');}
- }finally{if(g===generation&&imageController===controller){imageController=null;render();}}
+  if(g===generation){
+   const reasons={
+    image_folder_full:'This workspace already has 50 images. Remove older files before attaching another.',
+    image_too_large:'Choose an image up to 10 MiB.',image_pixels_too_large:'Choose an image up to 24 megapixels.',
+    image_format_unsupported:'Choose a static JPEG, PNG or WebP image.',
+    image_text_too_large:'The image paths and text exceed 4096 bytes. Shorten the text or remove an image.',
+    file_folder_full:'This workspace already has 50 documents. Remove older files before attaching another.',
+    file_too_large:'Choose a document up to 5 MiB.',file_empty:'Choose a document that is not empty.',
+    file_format_unsupported:'Choose a PDF or UTF-8 TXT, MD, CSV or JSON file.',
+    file_text_too_large:'The attachment paths and text exceed 4096 bytes. Shorten the text or remove an attachment.',
+   };
+   const noun=includesFiles?' attachment(s)':' image(s)';
+   const failed=kind==='image'?'Image':'Document';
+   message=(attachments.length?attachments.length+noun+' attached. ':'')+(reasons[error.message]||failed+' could not be saved. No input was sent. Choose the file again.');
+  }
+ }finally{if(g===generation&&attachmentController===controller){attachmentController=null;render();}}
 }
 async function reviewInput(){
- if(phase!=='editing'||imageController||!target||!choice||!previewOK||!inputValid())return;
+ if(phase!=='editing'||attachmentController||!target||!choice||!previewOK||!inputValid())return;
  composer=false;
  clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,t=target,draft=inputText(),reference=replyReference,controller=new AbortController();operationController=controller;phase='preparing';render();
@@ -1110,34 +1166,43 @@ function layoutInputBar(panel){
  const space=Math.ceil(panel.getBoundingClientRect().height)+12+'px';
  if(sheet.style.getPropertyValue('--reader-input-space')!==space){sheet.style.setProperty('--reader-input-space',space);refreshOutput();}
 }
-function imagePicker(panel,row,available){
+function attachmentPicker(panel,row,available){
  const sources=make('div','reader-attachment-sources');sources.id='reader-attachment-sources';sources.hidden=true;
  sources.setAttribute('role','group');sources.setAttribute('aria-label','Choose an attachment source');
  const add=action('','reader-image-add',()=>show(sources.hidden,true));add.id='terminal-image-add';
  add.title='Attach';add.setAttribute('aria-label','Attach');add.setAttribute('aria-controls',sources.id);
- add.hidden=!imageAvailable;add.disabled=!available||!previewOK||!!imageController||attachments.length>=MAX_ATTACHED_IMAGES;
  add.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-attachment"/></svg>';
  function show(open,focus=false){
   sources.hidden=!open;add.setAttribute('aria-expanded',String(open));
-  if(focus)(open?sources.querySelector('button'):add).focus({preventScroll:true});
+  if(focus)(open?sources.querySelector('button:not([hidden])'):add)?.focus({preventScroll:true});
   layoutInputBar(panel);
  }
- const formats=[['photo','Choose a photo','image/jpeg,image/png,image/webp','terminal-image-file'],
-  ['file','Choose an image from files','.jpg,.jpeg,.png,.webp','terminal-file-image']];
- for(const [kind,label,accept,id] of formats){
-  const file=make('input');file.type='file';file.id=id;file.accept=accept;file.multiple=true;file.hidden=true;file.onchange=()=>uploadImages(file.files);
-  const button=action('','icon-button',()=>{if(!add.disabled){show(false,true);file.click();}});
-  button.title=label;button.setAttribute('aria-label',label);
+ const choices={};
+ for(const [kind,id] of [['photo','terminal-image-file'],['file','terminal-file-image']]){
+  const input=make('input');input.type='file';input.id=id;input.multiple=true;input.hidden=true;
+  input.onchange=()=>uploadAttachments(input.files,kind);
+  const button=action('','icon-button',()=>{if(!add.disabled&&!button.hidden){show(false,true);input.click();}});
   button.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-'+kind+'"/></svg>';
-  sources.append(button);panel.append(file);
+  choices[kind]={input,button};sources.append(button);panel.append(input);
  }
+ panel.refreshAttachmentPicker=()=>{
+  const {image,file}=attachmentAccess;
+  add.hidden=!image&&!file;
+  add.disabled=!available||!previewOK||!!attachmentController||attachments.length>=MAX_ATTACHMENTS;
+  if(add.hidden||add.disabled){sources.hidden=true;add.setAttribute('aria-expanded','false');}
+  choices.photo.button.hidden=!image;choices.photo.input.accept=imageTypes.join(',');
+  choices.file.input.accept=[...(image?imageExtensions:[]),...(file?fileFormats:[])].map(format=>'.'+format).join(',');
+  for(const [choice,label] of [[choices.photo,'Choose a photo'],[choices.file,file?'Choose a file':'Choose an image from files']]){
+   choice.button.title=label;choice.button.setAttribute('aria-label',label);
+  }
+ };
  panel.addEventListener('keydown',event=>{
   if(event.key==='Escape'&&!sources.hidden){event.preventDefault();show(false,true);}
  });
  panel.addEventListener('focusout',event=>{
   if(!sources.hidden&&event.relatedTarget&&!panel.contains(event.relatedTarget))show(false);
  });
- add.setAttribute('aria-expanded','false');panel.append(sources);row.append(add);
+ add.setAttribute('aria-expanded','false');panel.refreshAttachmentPicker();panel.append(sources);row.append(add);
 }
 function readerInputBar(){
  const panel=make('div','reader-composer reader-input-bar'+(phase==='review'?' reader-review':''));panel.setAttribute('role','region');panel.setAttribute('aria-label',phase==='review'?'Review input':'Write input');
@@ -1156,7 +1221,7 @@ function readerInputBar(){
  }
  if(phase==='review'){
   panel.append(make('h3','',prepared.target.name+' — send this input?'),make('p','reader-not-sent','Not sent yet'),make('pre','terminal-exact',prepared.text));
-  imageThumbnail(panel,false);
+  renderAttachments(panel,false);
   const enter=make('div','terminal-enter');enter.append(make('span','','After this text'),make('kbd','','Enter ↵'));
   panel.append(enter,make('p','terminal-help','Sends once to this pane. It may be a shell. Existing terminal input may be combined with it.'));
   const actions=make('div','terminal-actions'),confirm=action('Send once','terminal-primary',send);
@@ -1166,18 +1231,18 @@ function readerInputBar(){
   if(['sending','accepted','unknown','refused'].includes(phase))receiptBox=readerReceipt(panel);
   const available=!!choice&&['editing','accepted','refused'].includes(phase),label=make('label','reader-input-label','Your input');label.htmlFor='terminal-text';
   const row=make('div','reader-input-row'),field=make('textarea','terminal-text');field.id='terminal-text';field.rows=1;field.value=text;field.placeholder=choice?'Write one line…':'Choose a pane first';field.autocomplete='off';field.spellcheck=false;field.disabled=!available;
-  const review=action(phase==='preparing'?'…':'↑','terminal-primary reader-input-send',reviewInput);review.id='terminal-review';review.title='Review input';review.setAttribute('aria-label','Review input');review.disabled=!available||!previewOK||!!imageController||!inputValid();
+  const review=action(phase==='preparing'?'…':'↑','terminal-primary reader-input-send',reviewInput);review.id='terminal-review';review.title='Review input';review.setAttribute('aria-label','Review input');review.disabled=!available||!previewOK||!!attachmentController||!inputValid();
   const count=make('span','reader-input-count',new TextEncoder().encode(inputText()).length+' / 4096 bytes');count.hidden=!inputText();
   const error=inputErrorNote();field.setAttribute('aria-describedby','terminal-input-error');
   field.onfocus=()=>{composer=true;};field.onblur=()=>{composer=false;};
   field.oninput=()=>{
    if(!['editing','accepted','refused'].includes(phase))return;
    if(['accepted','refused'].includes(phase)){cancelIntent();sendFeedback?.reset();phase='editing';panel.querySelector('.reader-receipt')?.remove();}
-   text=field.value;count.textContent=new TextEncoder().encode(inputText()).length+' / 4096 bytes';count.hidden=!inputText();review.disabled=!previewOK||!!imageController||!inputValid();refreshReference();fitInput(field,!!inputObserver);layoutInputBar(panel);
+   text=field.value;count.textContent=new TextEncoder().encode(inputText()).length+' / 4096 bytes';count.hidden=!inputText();review.disabled=!previewOK||!!attachmentController||!inputValid();refreshReference();fitInput(field,!!inputObserver);layoutInputBar(panel);
   };
   field.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing)e.preventDefault();};
   if(!choice)panel.append(make('p','terminal-help','Choose a verified pane in Terminal to write.'));
-  imageThumbnail(panel,true);imagePicker(panel,row,available);row.append(field,review);panel.append(label,row,count,error);
+  renderAttachments(panel,true);attachmentPicker(panel,row,available);row.append(field,review);panel.append(label,row,count,error);
  }
  sheet.append(panel);
  if(receiptBox)sendFeedback?.show(receiptBox,phase);
@@ -1291,8 +1356,8 @@ sheet.addEventListener('cancel',e=>{e.preventDefault();if(!dismissLayer())close(
 function pauseView(){
  if(!sheet.open)return;paused=true;checkingView=true;rememberView();clearTimeout(pollTimer);pollTimer=0;
  previewController?.abort();previewController=null;resumeController?.abort();resumeController=null;
- imageProbeController?.abort();imageProbeController=null;imageProbe='';
- imageController?.abort();imageController=null;operationController?.abort();operationController=null;generation++;
+ attachmentProbeController?.abort();attachmentProbeController=null;attachmentProbe='';
+ attachmentController?.abort();attachmentController=null;operationController?.abort();operationController=null;generation++;
  // Settle the visible phase even if an already resolved response reaches its
  // hidden-page guard without rejecting the aborted request.
  if(phase==='sending'){phase='unknown';render();}
@@ -1325,7 +1390,7 @@ function startPane(){if(startupReady&&!sheet.open&&!document.hidden&&(enabled||h
 document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseView();else if(paused){paused=false;resumeView();}else if(pane)startPane();else restoreSavedView();});
 window.addEventListener('pagehide',()=>{rememberView();close(true,true);},true);
 window.OrreryMobileTerminal={open,close,mail,restore:restoreSavedView,available:()=>enabled||history,inputAvailable:()=>enabled,reference:addReference,refreshReference,canReference:()=>phase==='editing'&&tab==='conversation'&&previewOK&&!!target,
- canLeave:()=>!busy()&&phase!=='unknown'&&!imageController};entries();
+ canLeave:()=>!busy()&&phase!=='unknown'&&!attachmentController};entries();
 const historyChecked=window.OrreryMobileConversation?window.OrreryMobileConversation.enabled():Promise.resolve(false);
 historyChecked.then(value=>{if(value!==true)return;history=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent=enabled?'History · Terminal':'History enabled';entries();});
 const controller=new AbortController();const terminalChecked=request('',null,controller).then(value=>{if(((value.api===31&&value.supported==='legacy-managed-pane')||(value.api===34&&value.supported==='fresh-managed-pane'))&&value.enabled===true&&value.ack==='tmux-command-accepted'){capability=Object.freeze({...value});enabled=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent=history?'History · Terminal':'Terminal enabled';entries();}}).catch(()=>{});

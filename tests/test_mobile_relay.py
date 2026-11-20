@@ -519,6 +519,74 @@ def test_input_client_checks_adapter_contract_and_never_retries_lost_commit(case
         assert calls[0][2]['owner']=='owner@example.test' and calls[0][2]['reader_epoch']==client.reader_epoch
 
 
+@pytest.mark.parametrize('case',['probe','upload','wrong_format','wrong_directory','wrong_choice','supplied_path'])
+def test_file_transport_checks_format_and_verified_attachment_response(monkeypatch,case):
+    from dashboard import mobile_input as mobile
+
+    client=mobile.InputClient(1,'owner@example.test')
+    proof=dict(epoch='a'*32,choice='b'*64,revision='c'*64)
+    upload={'format':'md','data':'IyBGaXh0dXJlCg=='}
+    target=dict(name='FixtureCurie',pane_label='Main',choice=proof['choice'],revision=proof['revision'])
+    response=dict(contract=mobile.CONTRACT,epoch=proof['epoch'],target=target,enabled=True)
+    path='/workspace/.orrery-input-files/'+'d'*32+'.md'
+    if case!='probe':response['path']=path
+    if case=='wrong_format':response['path']=path.removesuffix('.md')+'.pdf'
+    if case=='wrong_directory':response['path']=path.replace('input-files','input-images')
+    if case=='wrong_choice':target['choice']='e'*64
+    if case=='supplied_path':upload['path']='/workspace/forged.md'
+    calls=[]
+
+    def post(operation,data):
+        calls.append((operation,json.loads(data)))
+        return response
+
+    monkeypatch.setattr(client,'_post',post)
+    args=dict(proof,file=None if case=='probe' else upload)
+    if case in {'probe','upload'}:
+        assert client.call('file',args)==response
+        assert calls[0][1]['reader_epoch']==client.reader_epoch
+    else:
+        with pytest.raises(mobile.InputUnavailable):client.call('file',args)
+    if case=='supplied_path':assert not calls
+
+
+def test_document_request_uses_the_opt_in_owner_and_attachment_limit():
+    from dashboard import mobile_input as mobile
+
+    calls=[]
+
+    class Input:
+        def call(self,operation,payload):
+            calls.append((operation,payload));return {'ok':True}
+
+    config=relay.Config('owner@example.test','https://viewer.example.ts.net:9443',
+                        input_enabled=True,phone_policy_reviewed=True)
+    server=relay.make_server(config,store=Store(),input_client=Input(),test_port=0)
+    scope=dict(epoch='a'*32,choice='b'*64,revision='c'*64)
+    document=dict(format='txt',data='YWFh'*5000)
+    controlled=json.dumps(dict(scope,file=document)).encode()
+    assert len(controlled)>mobile.MAX_JSON_BYTES
+    with serving(server) as port:
+        headers={'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test',
+                 'Origin':'https://viewer.example.ts.net:9443','Content-Type':'application/json'}
+        for body,expected in [(controlled,200),(json.dumps(dict(scope,file=dict(document,format='html'))).encode(),400)]:
+            con=http.client.HTTPConnection('127.0.0.1',port,timeout=3)
+            try:
+                con.request('POST','/view/terminal/file',body=body,headers=headers)
+                response=con.getresponse();response.read()
+                assert response.status==expected
+            finally:
+                con.close()
+        con=http.client.HTTPConnection('127.0.0.1',port,timeout=3)
+        try:
+            con.request('POST','/view/terminal/file',headers={**headers,'Content-Length':str(mobile.MAX_FILE_JSON+1)})
+            response=con.getresponse();response.read()
+            assert response.status==403
+        finally:
+            con.close()
+    assert calls==[('file',dict(scope,file=document))]
+
+
 def test_disabled_terminal_capability_does_not_contact_cockpit():
     class NoInput:
         def call(self,*a,**kw):raise AssertionError('disabled terminal must not contact cockpit')

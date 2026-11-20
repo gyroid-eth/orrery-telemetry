@@ -107,6 +107,14 @@ def phone(request):
                 paths = state.get('image_paths')
                 path = paths[attempt - 1] if paths else '/workspace/.orrery-input-images/'+'a'*32+'.png'
                 return self.send(dict(contract,target=selected,enabled=True,path=path))
+            if operation == 'file':
+                file = payload.get('file')
+                if file is None:
+                    return self.send(dict(contract,target=selected,enabled=state.get('files',False)))
+                if not state.get('files',False):
+                    return self.send(dict(error='file_workspace_unavailable'),status=503)
+                path = '/workspace/.orrery-input-files/'+'b'*32+'.'+file['format']
+                return self.send(dict(contract,target=selected,enabled=True,path=path))
             if operation == 'prepare':
                 state['draft'] = payload['text']
                 state['prepared_target'] = selected

@@ -314,7 +314,8 @@ class Handler(BaseHTTPRequestHandler):
         if any(self.headers.get_all(h,[]) for h in ('Upgrade','Transfer-Encoding','X-HTTP-Method-Override','X-Method-Override','X-HTTP-Method')):return False
         lengths=self.headers.get_all('Content-Length',[])
         if write:
-            limit=mobile_input.MAX_IMAGE_JSON if self.path=='/view/terminal/image' else mobile_input.MAX_JSON_BYTES
+            operation=self.path.removeprefix('/view/terminal/')
+            limit=mobile_input.ATTACHMENT_JSON_LIMITS.get(operation,mobile_input.MAX_JSON_BYTES)
             if (len(lengths)!=1 or re.fullmatch(r'[0-9]{1,8}',lengths[0]) is None or not 0<int(lengths[0])<=limit
                     or self.headers.get_all('Content-Type',[])!=['application/json']
                     or any(self.headers.get_all(h,[]) for h in ('Content-Encoding','Expect'))):return False
@@ -482,8 +483,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._admitted(write=True):
             self._send(403,{'error':'input_request_denied'});return
         try:
-            payload=self._request_json(mobile_input.MAX_IMAGE_JSON if operation=='image' else mobile_input.MAX_JSON_BYTES,
-                                       20 if operation=='image' else 5)
+            payload=self._request_json(mobile_input.ATTACHMENT_JSON_LIMITS.get(operation,mobile_input.MAX_JSON_BYTES),
+                                       20 if operation in mobile_input.ATTACHMENT_JSON_LIMITS else 5)
             if not mobile_input.request_fields(operation,payload):raise ValueError('input_json_invalid')
         except (ValueError,OSError):
             self._send(400,{'error':'input_request_invalid'});return
@@ -492,7 +493,7 @@ class Handler(BaseHTTPRequestHandler):
             # A lost response cannot establish whether a commit reached tmux.
             # The UI retains only the operation ID, offers status, and never
             # repeats the send automatically.
-            reason=str(error) if operation=='image' and isinstance(error,mobile_input.InputUnavailable) and re.fullmatch(r'image_[a-z_]+',str(error)) else 'input_unavailable'
+            reason=str(error) if isinstance(error,mobile_input.InputUnavailable) and mobile_input.attachment_error(operation,str(error)) else 'input_unavailable'
             self._send(503,{'error':reason,'state':'unknown' if operation=='commit' else 'unavailable'})
 
     def _request_json(self, limit, timeout):
