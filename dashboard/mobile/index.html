@@ -19,6 +19,7 @@
 <link rel="stylesheet" href="/mobile.css">
 <link rel="stylesheet" href="/reader_reply_motion.css">
 <link rel="stylesheet" href="/reader_send_motion.css">
+<link rel="stylesheet" href="/mobile-spawn-controls.css">
 <script src="/demo-sync.js"></script>
 <script defer src="/network_core.js"></script>
 <script defer src="/network_node.js"></script>
@@ -30,6 +31,7 @@
 <script defer src="/push.js"></script>
 <script defer src="/reader_send_motion.js"></script>
 <script defer src="/mobile.js"></script>
+<script defer src="/mobile-spawn-controls.js"></script>
 <script defer src="/mobile-spawn.js"></script>
 </head>
 <body class="mobile">
@@ -189,22 +191,26 @@
   </header>
   <p id="spawn-notice" role="status" hidden></p>
   <form id="spawn-editor" class="spawn-body" hidden>
-    <textarea id="spawn-task" rows="5" maxlength="4000" aria-label="Agent task" placeholder="What should this agent do?"></textarea>
+    <textarea id="spawn-task" rows="4" maxlength="4000" aria-label="Agent task" placeholder="What should this agent do?"></textarea>
     <div class="spawn-context">
-      <label class="spawn-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-model"/></svg><select id="spawn-model" aria-label="Model" title="Model"></select></label>
-      <label class="spawn-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-folder"/></svg><select id="spawn-directory" aria-label="Launch directory" title="Launch directory"></select></label>
-    </div>
-    <div id="spawn-settings" class="spawn-settings" hidden>
-      <label class="spawn-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-terminal"/></svg><select id="spawn-harness" aria-label="Harness" title="Harness"></select></label>
+      <button class="spawn-model-chip" id="spawn-model-chip" type="button" aria-controls="spawn-settings" aria-expanded="false" aria-haspopup="dialog" aria-label="Model settings">
+        <svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-model"/></svg>
+        <span id="spawn-model-name"></span>
+        <span id="spawn-model-effort" aria-hidden="true" hidden><i></i><i></i><i></i><i></i><i></i></span>
+      </button>
+      <div class="spawn-field spawn-select-field spawn-folder"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-folder"/></svg><select id="spawn-directory" aria-label="Launch directory" title="Launch directory"></select></div>
       <div id="spawn-tools" role="group" aria-label="Agent tools">
-        <button class="icon-button" id="spawn-computer" type="button" role="switch" aria-label="Computer use" title="Computer use" aria-checked="false"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-computer"/></svg><span aria-hidden="true"></span></button>
-        <button class="icon-button" id="spawn-browser" type="button" role="switch" aria-label="Browser" title="Browser" aria-checked="false"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-browser"/></svg><span aria-hidden="true"></span></button>
+        <div class="spawn-tool">
+          <button class="icon-button" id="spawn-computer" type="button" role="switch" aria-label="Computer use" aria-describedby="spawn-computer-help" aria-checked="false"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-computer"/></svg></button>
+          <span id="spawn-computer-help" class="spawn-tool-help" role="tooltip">Computer use lets the agent view the Mac screen and use its mouse and keyboard.</span>
+        </div>
+        <div class="spawn-tool">
+          <button class="icon-button" id="spawn-browser" type="button" role="switch" aria-label="Browser" aria-describedby="spawn-browser-help" aria-checked="false"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-browser"/></svg></button>
+          <span id="spawn-browser-help" class="spawn-tool-help" role="tooltip">Browser lets the agent open and interact with pages in Chrome.</span>
+        </div>
       </div>
-      <label class="spawn-field" id="spawn-effort-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-working"/></svg><select id="spawn-effort" aria-label="Effort" title="Effort"></select></label>
-      <label class="spawn-field" id="spawn-role-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-agents"/></svg><input id="spawn-role" type="text" maxlength="40" aria-label="Role" placeholder="Role"></label>
     </div>
     <div class="spawn-actions">
-      <button class="icon-button" id="spawn-settings-toggle" type="button" aria-controls="spawn-settings" aria-expanded="false" aria-label="Launch settings" title="Launch settings"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-tune"/></svg></button>
       <button class="spawn-primary" id="spawn-review-button" type="submit" disabled>Review launch</button>
     </div>
   </form>
@@ -217,5 +223,24 @@
     </div>
   </section>
   <div class="spawn-body" id="spawn-result" hidden></div>
+</dialog>
+<dialog id="spawn-settings" class="spawn-sheet spawn-model-sheet" aria-labelledby="spawn-settings-title">
+  <header class="spawn-head">
+    <h2 id="spawn-settings-title">Model</h2>
+    <button class="icon-button" id="spawn-settings-close" type="button" aria-label="Close model settings" title="Close" autofocus><svg class="mobile-icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
+  </header>
+  <div class="spawn-body">
+    <div class="spawn-field spawn-select-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-model"/></svg><select id="spawn-model" aria-label="Model" title="Model"></select></div>
+    <div class="spawn-field spawn-select-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-terminal"/></svg><select id="spawn-harness" aria-label="Harness" title="Harness"></select></div>
+    <div class="spawn-field" id="spawn-effort-field">
+      <svg class="mobile-icon" aria-hidden="true"><use href="#icon-working"/></svg>
+      <select id="spawn-effort" aria-label="Effort" title="Effort"></select>
+      <div id="spawn-effort-control" hidden>
+        <div class="spawn-effort-slider"><input id="spawn-effort-range" type="range" min="0" max="0" step="1" value="0" aria-label="Effort"></div>
+        <span id="spawn-effort-value" aria-hidden="true"></span>
+      </div>
+    </div>
+    <label class="spawn-field" id="spawn-role-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-agents"/></svg><input id="spawn-role" type="text" maxlength="40" aria-label="Role" placeholder="Role"></label>
+  </div>
 </dialog>
 </body></html>
