@@ -42,6 +42,8 @@ HARNESS_PROGRAMS = {"dsh", "hermes"}
 MCP_PROFILES = {"inherit", "orrery-only"}
 MAX_STATE_BYTES = 65536
 MAX_TOKEN_BYTES = 4096
+# Allow launch setup to reach tmux before a child can be treated as stopped.
+CHILD_STARTUP_GRACE = timedelta(seconds=60)
 
 
 def _provider(program: object) -> str | None:
@@ -72,15 +74,14 @@ def _retained_shape(state: dict[str, Any]) -> bool:
 
 # What a person reads when a resume is refused for state a crash left behind.
 NOT_ENDED_NORMALLY = (
-    "This child did not end normally (for example, the computer was shut down or "
-    "forced off), so it was never retired. The dashboard makes such a child "
-    "resumable when it starts after a reboot; if it is still refused, a session of "
-    "this child may still be running (look for its tmux session)."
+    "This child did not end normally, so it was never retired. The dashboard "
+    "repairs its resume state once it can confirm the child has stopped. "
+    "Check for a running session if resume stays unavailable."
 )
 RESUME_NOT_FINISHED = (
-    "A resume of this child started and did not finish (for example, the computer "
-    "went off right after). The dashboard clears this when it starts after a "
-    "reboot; if it is still refused, the resumed session may still be starting."
+    "A resume of this child started and did not finish. The dashboard clears "
+    "this once it can confirm the child has stopped and the startup grace period "
+    "has passed."
 )
 
 
@@ -1248,12 +1249,69 @@ def boot_time() -> float | None:
         return None
 
 
-def _recovery_candidate(state: dict[str, Any]) -> bool:
-    if not _retained_shape(state):
+def child_process_live(agent_name: str) -> bool | None:
+    """Look for this child's terminal-attached process independently of tmux."""
+    uid = str(os.getuid()) if os.name == "posix" else ""
+    marker = f"AGENT_NAME={agent_name}".encode("ascii")
+    darwin = sys.platform == "darwin"
+    if darwin:
+        command = ["/bin/ps", "-Eww", "-x", "-U", uid, "-o", "pid=,stat=,tty=,command="]
+    elif sys.platform.startswith("linux"):
+        command = ["ps", "-U", uid, "-o", "pid=,stat=,tty="]
+    else:
+        return None
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=2,
+                                env={"PATH": os.defpath, "LC_ALL": "C", "AGENTSTACK_PS_PROBE": "1"})
+        if result.returncode or result.stderr or not result.stdout.strip():
+            return None
+        if darwin and b"AGENTSTACK_PS_PROBE=1" not in result.stdout.split():
+            return None
+        for line in result.stdout.splitlines():
+            fields = line.split(None, 3)
+            if len(fields) != (4 if darwin else 3) or not fields[0].isdigit():
+                return None
+            pid, status, tty = fields[:3]
+            # Detached apps can inherit AGENT_NAME and outlive the child.
+            if status.startswith(b"Z") or tty in {b"??", b"?"}:
+                continue
+            try:
+                if darwin:
+                    command_line = fields[3]
+                    if command_line.startswith(b"(") and command_line.endswith(b")"):
+                        # Darwin ps uses (comm) if it cannot read the arguments.
+                        os.kill(int(pid), 0)
+                        return None
+                    if marker in command_line.split():
+                        return True
+                elif marker in (Path("/proc") / pid.decode("ascii") / "environ").read_bytes().split(b"\0"):
+                    return True
+            except (FileNotFoundError, ProcessLookupError):
+                continue  # the process exited after ps listed it
         return False
-    running = state.get("retired_at") is None and state.get("resume_in_progress_at") is None
-    cut_off = state.get("retired_at") is not None and state.get("resume_in_progress_at") is not None
-    return running or cut_off
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _read_recovery_candidate(
+    path: Path, *, boot: float | None, written_before: float
+) -> tuple[dict[str, Any], bool] | None:
+    modified = path.lstat().st_mtime
+    if modified >= written_before:
+        return None
+    state = _load_state(path)
+    if not _retained_shape(state):
+        return None
+    before_boot = boot is not None and modified < boot
+    resume_started = state.get("resume_in_progress_at")
+    if state.get("retired_at") is None:
+        return (state, before_boot) if resume_started is None else None
+    if resume_started is None:
+        return None
+    if not before_boot:
+        if _parse_timestamp(resume_started, "resume_in_progress_at").timestamp() >= written_before:
+            return None
+    return state, before_boot
 
 
 def recover_after_reboot(
@@ -1264,27 +1322,46 @@ def recover_after_reboot(
     boot: float | None = None,
     now: datetime | None = None,
 ) -> list[tuple[str, str]]:
-    """Make children that a reboot stopped mid-run resumable again.
-
-    A child's state says "running" (retired_at null) until its normal exit
-    retires it. A forced shutdown skips that exit, and every resume then
-    refused with "retired_at is missing" (162nd seminar: after each reboot the
-    agents could not resume until retired by hand). Likewise a resume that
-    launched and was cut off before its session started stays "pending".
-
-    Only state last written before this machine booted is touched: no process
-    from before a boot can still be running, so that is proof, not a guess.
-    It must also have no tmux session now (is_live: True = live, False = not
-    live, None = cannot tell, which skips it), a matching owner credential,
-    and no pending registration or migration (left as they are). Everything is
-    re-read under the child's lock. Returns (name, "retired" | "resume_cleared").
-    """
-    recovered: list[tuple[str, str]] = []
+    """Recover children whose state predates the last boot."""
     if retention_days <= 0:
-        return recovered
+        return []
     boot = boot_time() if boot is None else boot
     if boot is None:
-        return recovered
+        return []
+    return _recover_stopped_children(runtime_dir, is_live=is_live, retention_days=retention_days,
+                                     boot=boot, written_before=boot, now=_utc_now(now))
+
+
+def recover_stopped_children(
+    runtime_dir: Path,
+    *,
+    is_live: Callable[[str], bool | None],
+    retention_days: int,
+    boot: float | None,
+    now: datetime | None = None,
+) -> list[tuple[str, str]]:
+    """Recover children stopped before boot or past the startup grace period."""
+    if retention_days <= 0:
+        return []
+    current = _utc_now(now)
+    written_before = (current - CHILD_STARTUP_GRACE).timestamp()
+    if boot is not None:
+        written_before = max(boot, written_before)
+    return _recover_stopped_children(runtime_dir, is_live=is_live, retention_days=retention_days,
+                                     boot=boot, written_before=written_before, now=current)
+
+
+def _recover_stopped_children(
+    runtime_dir: Path,
+    *,
+    is_live: Callable[[str], bool | None],
+    retention_days: int,
+    boot: float | None,
+    written_before: float,
+    now: datetime,
+) -> list[tuple[str, str]]:
+    """Repair stale state only when the evidence confirms the child has stopped."""
+    recovered: list[tuple[str, str]] = []
     try:
         candidates = tuple((runtime_dir / "child-agents").glob("*.json"))
     except OSError:
@@ -1295,46 +1372,45 @@ def recover_after_reboot(
             continue
         state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, name)
         try:
-            if state_path.lstat().st_mtime >= boot:
-                continue
-            # Only a child left running or mid-resume is a candidate. Ask nothing
-            # about the rest (proxy configs, retired children, other files): the
-            # liveness question runs tmux, once per candidate.
-            if not _recovery_candidate(_load_state(state_path)):
+            # Limit tmux probes to children that look interrupted.
+            if _read_recovery_candidate(state_path, boot=boot, written_before=written_before) is None:
                 continue
             if is_live(name) is not False:
                 continue
-            with _AgentLock(lock_path, exclusive=True):
-                if state_path.lstat().st_mtime >= boot:
+            # A dashboard jump can stage tmux under a temporary name before
+            # publishing the child's name. Use the same lock as that jump.
+            with tools_change_lock(runtime_dir, name), _AgentLock(lock_path, exclusive=True):
+                candidate = _read_recovery_candidate(state_path, boot=boot, written_before=written_before)
+                if candidate is None:
                     continue
+                state, before_boot = candidate
                 pending = state_path.with_name(f".{name}.registration-pending.json")
-                if any(item.exists() or item.is_symlink() for item in (pending, _legacy_pending(state_path))):
+                if any(os.path.lexists(item) for item in (
+                    pending, _legacy_pending(state_path), _tools_journal(state_path),
+                )):
                     continue
-                state = _load_state(state_path)
                 _validate_identity(state, agent_name=name)
-                if not _retained_shape(state):
-                    continue
                 canonical = _read_private(token_path, "canonical child credential",
                                           MAX_TOKEN_BYTES).decode("utf-8").strip()
                 token = state.get("registration_token")
                 if (not isinstance(token, str) or not token or not canonical
                         or not hmac.compare_digest(canonical.encode("utf-8"), token.encode("utf-8"))):
                     continue
-                if state.get("retired_at") is None and state.get("resume_in_progress_at") is None:
-                    retired = _utc_now(now)
-                    state["retired_at"] = _timestamp(retired)
-                    state["resume_expires_at"] = _timestamp(retired + timedelta(days=retention_days))
+                if state.get("retired_at") is None:
+                    state["retired_at"] = _timestamp(now)
+                    state["resume_expires_at"] = _timestamp(now + timedelta(days=retention_days))
                     outcome = "retired"
-                elif state.get("retired_at") is not None and state.get("resume_in_progress_at") is not None:
+                else:
                     _parse_timestamp(state.get("retired_at"), "retired_at")
                     _parse_timestamp(state.get("resume_expires_at"), "resume_expires_at")
                     state.pop("resume_in_progress_at")
                     outcome = "resume_cleared"
-                else:
-                    continue
                 # A session may have started while this waited for the child's
                 # lock: look again (tmux and leases) before taking the lease lock.
                 if is_live(name) is not False:
+                    continue
+                # A different tmux server can still host this child without a lease.
+                if not before_boot and child_process_live(name) is not False:
                     continue
                 # Then only the leases again, and the write, under the lease lock
                 # every lease writer takes: no lease can appear in between.
