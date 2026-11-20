@@ -135,13 +135,14 @@ def synthetic_approval(app,binary,cwd):
     plugin=app.home/'plugin';shutil.copytree(APP/'plugin',plugin)
     trust=runpy.run_path(str(ROOT/'scripts/codex_plugin_trust.py'))
     pid='agentstack-codex-app@fresh-fixture';key='synthetic-app-wake'
+    hook_hash='sha256:'+'a'*64
     plan=dict(schema_version=1,approved=True,enable_hooks=True,codex_binary=str(binary),
         shared_codex_home=str(app.home),cwd=str(cwd),plugin_id=pid,plugin_root=str(plugin),
         payload_digest=trust['payload_digest'](plugin),declared_hooks=json.loads((plugin/'hooks/hooks.json').read_text()),
-        hooks=[dict(key=key,currentHash='sha256:synthetic')])
+        hooks=[dict(key=key,currentHash=hook_hash)])
     _write_private(app.home/'hook-plan.json',plan)
     config=app.home/'config.toml'
-    config.write_text('[plugins.'+json.dumps(pid)+']\nenabled=true\n[hooks.state.'+json.dumps(key)+']\ntrusted_hash="sha256:synthetic"\nenabled=true\n')
+    config.write_text('[plugins.'+json.dumps(pid)+']\nenabled=true\n[hooks.state.'+json.dumps(key)+']\ntrusted_hash="'+hook_hash+'"\nenabled=true\n')
     config.chmod(0o600)
 
 

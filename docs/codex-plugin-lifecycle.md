@@ -36,7 +36,7 @@ plan は approved=false で生成します。呼出側が現在の承認経路�
 
 plan は対象 binary/HOME、plugin ID/root、payload digest、宣言と runtime が返す実定義を保持します。適用前に同じ対象・定義・payload と照合し、他の hook を承認しません。JSON の変更、API 未対応、policy 拒否、競合、再取得で信頼が確認できない場合は needs_review と `/hooks` の案内に戻します。plugin の配置自体と信頼の成否を分けます。
 
-Codex CLI 0.169 系で currentHash が2つの SHA-256 の連結形式になった場合、実際の設定では trusted_hash と trusted_content_hash に分けて保存されます。確認処理は両方の一致を必須とし、旧形式の単一ハッシュも引き続き受け付けます。
+Codex CLI 0.169 系で currentHash が2つの SHA-256 の連結形式になった場合、実際の設定では trusted_hash と trusted_content_hash に分けて保存されます。確認処理は両方の一致を必須とし、旧形式の単一ハッシュも引き続き受け付けます。hook の enabled は真偽値 true のみを受け付け、数値の 1 や 1.0 は拒否します。
 
 CLI 0.161.0 の隔離確認では6 hook の trusted/enabled を再取得でき、無関係な hooks.state は維持されました。history は unobserved です。同版では metadata が平坦な handlerType/command で、実効 timeoutSec は宣言の1/5秒に対して全て600秒でした。plan は実効値も表示し、宣言値のまま実行されるとは扱いません。metadata の新しい handler 形式にも対応します。
 

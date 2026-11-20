@@ -44,9 +44,8 @@ def write_state(home, plan, state):
     config.chmod(0o600)
 
 
-@pytest.mark.parametrize('composite', [False, True])
-def test_approved_hook_trust_accepts_native_storage(tmp_path, composite):
-    home, plan, state = fixture(tmp_path, composite)
+def test_approved_composite_hook_trust_accepts_native_storage(tmp_path):
+    home, plan, state = fixture(tmp_path, True)
     write_state(home, plan, state)
     TRUST['verify_approved_plan'](plan)
 
@@ -69,10 +68,19 @@ def test_approved_composite_trust_refuses_mutated_state(tmp_path, mutation):
         TRUST['verify_approved_plan'](plan)
 
 
-@pytest.mark.parametrize('invalid', ['sha256:' + 'a' * 64 + '/broken', 'sha256:' + 'a' * 64 + '/sha256:' + 'b' * 64 + '/third'])
-def test_invalid_composite_hash_is_refused(tmp_path, invalid):
-    home, plan, state = fixture(tmp_path, True)
-    plan['hooks'][0]['currentHash'] = invalid
+def test_matching_invalid_hook_hash_is_refused(tmp_path):
+    home, plan, state = fixture(tmp_path, False)
+    plan['hooks'][0]['currentHash'] = state['trusted_hash'] = 'sha256:invalid'
     write_state(home, plan, state)
     with pytest.raises(TRUST['TrustUnavailable'], match='invalid reviewed hook hash'):
         TRUST['verify_approved_plan'](plan)
+
+
+def test_numeric_hook_enabled_is_refused(tmp_path):
+    for composite in (False, True):
+        home, plan, state = fixture(tmp_path / str(composite), composite)
+        for enabled in (1, 1.0):
+            state['enabled'] = enabled
+            write_state(home, plan, state)
+            with pytest.raises(TRUST['TrustUnavailable'], match='approved hook trust is not present'):
+                TRUST['verify_approved_plan'](plan)

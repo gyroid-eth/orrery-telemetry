@@ -286,7 +286,8 @@ def verify_approved_plan(plan: dict) -> None:
         raise TrustUnavailable('approved plugin is not enabled')
     state = config.get('hooks', {}).get('state', {})
     if not plan.get('hooks') or any(
-        state.get(h['key']) != _persisted_trust_state(h['currentHash']) for h in plan['hooks']
+        state.get(h['key']) != _persisted_trust_state(h['currentHash'])
+        or state[h['key']].get('enabled') is not True for h in plan['hooks']
     ):
         raise TrustUnavailable('approved hook trust is not present')
 
