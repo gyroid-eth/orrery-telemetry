@@ -313,11 +313,17 @@ function periodLabel(text){
  $('#period-label').textContent=text;
  periodButtons.forEach(b=>{
   b.querySelector('span').textContent=text==='All history'?'∞':text.replace('Last ','').replace(' min','m');
-  b.title='Change time range: '+text;b.setAttribute('aria-label',b.title);
+  const label='Change time range: '+text;
+  b.title=label+'. Applies to Graph and Activity.';b.setAttribute('aria-label',label);
  });
 }
 range.value=Math.round(Math.log(1440/15)/Math.log(43200/15)*1000);
 range.setAttribute('aria-valuetext',duration(86400));
+window.OrrerySpawnControls?.mountScrubber(range, {
+ stops:[0,Number(range.value),1000],
+ stopLabels:['15 min','24h','30 days'],
+ formatValue:value=>duration(minutesAt(value)*60),
+});
 function choosePeriod(all){
  clearDetail();clearPair();resetMail();
  const minutes=minutesAt(Number(range.value));

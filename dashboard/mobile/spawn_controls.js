@@ -84,7 +84,7 @@ function element(tag, className, text) {
 }
 
 // The original range stays focusable, form-associated, and receives all input.
-function mountScrubber(input, {output, formatValue} = {}) {
+function mountScrubber(input, {output, formatValue, stops, stopLabels} = {}) {
   const root = input.parentElement;
   const art = element('span', 'om-range-art');
   art.setAttribute('aria-hidden', 'true');
@@ -95,7 +95,7 @@ function mountScrubber(input, {output, formatValue} = {}) {
   const listeners = new AbortController();
   const {signal} = listeners;
   let pointer;
-  let resetFrame, tickCount;
+  let resetFrame, tickKey;
   handle.append(thumb);
   track.append(element('span', 'om-range-fill'));
   const ticks = element('span', 'om-range-ticks');
@@ -104,17 +104,37 @@ function mountScrubber(input, {output, formatValue} = {}) {
   art.append(track);
   root.classList.add('om-range');
   input.after(art);
+  const hint = stopLabels && element('span', 'om-range-stop-label');
+  if (hint) {
+    hint.hidden = true;
+    hint.setAttribute('aria-hidden', 'true');
+    root.append(hint);
+    input.addEventListener('pointermove', event => {
+      const index = [...ticks.children].findIndex(tick => Math.abs(event.clientX - (tick.getBoundingClientRect().left + tick.offsetWidth/2)) < 8);
+      const show = index >= 0 && pointer === undefined && event.pointerType === 'mouse';
+      hint.hidden = !show;
+      if (!show) return;
+      hint.textContent = stopLabels[index];
+      const x = event.clientX - root.getBoundingClientRect().left;
+      hint.style.left = `clamp(38px,${x}px,calc(100% - 38px))`;
+    }, {signal});
+    input.addEventListener('pointerleave', () => {hint.hidden = true;}, {signal});
+  }
 
   function sync() {
     const min = input.min && Number.isFinite(Number(input.min)) ? Number(input.min) : 0;
     const max = input.max && Number.isFinite(Number(input.max)) ? Number(input.max) : 100;
-    const stops = max - min + 1;
-    if (tickCount !== stops) {
-      tickCount = stops;
+    const step = Number(input.step) || 1;
+    const range = Math.max(0, max - min);
+    const count = Math.min(7, Math.floor(range / step) + 1);
+    const key = [min, max, step].join('/');
+    if (tickKey !== key) {
+      tickKey = key;
+      const values = stops ?? Array.from({length:count}, (_,index) => min + index * range / Math.max(1,count - 1));
       ticks.replaceChildren();
-      for (let index = 0; index < stops; index++) {
+      for (const value of values) {
         const tick = element('span', 'om-range-tick');
-        tick.style.insetInlineStart = `${index * 100 / Math.max(1, stops - 1)}%`;
+        tick.style.insetInlineStart = `${(range ? unit((value-min)/range) : 0)*100}%`;
         ticks.append(tick);
       }
     }
@@ -130,6 +150,7 @@ function mountScrubber(input, {output, formatValue} = {}) {
   input.addEventListener('pointerdown', event => {
     if (input.disabled || event.button !== 0 || pointer !== undefined) return;
     pointer = event.pointerId;
+    if (hint) hint.hidden = true;
     root.classList.add('om-range-dragging');
   }, {signal});
   function release(event) {
@@ -155,6 +176,7 @@ function mountScrubber(input, {output, formatValue} = {}) {
       changes.disconnect();
       cancelAnimationFrame(resetFrame);
       art.remove();
+      hint?.remove();
       root.classList.remove('om-range', 'om-range-dragging');
       root.style.removeProperty('--om-range-fraction');
       if (originalValueText === null) input.removeAttribute('aria-valuetext');
