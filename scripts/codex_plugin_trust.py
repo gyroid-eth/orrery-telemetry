@@ -242,6 +242,21 @@ def apply_trust(plan: dict):
             'plugin_id': plan['plugin_id'], 'shared_codex_home': str(home), 'hook_count': len(hooks)}
 
 
+def _persisted_trust_state(current_hash: str) -> dict:
+    """Codex persists a composite hook/content hash as two separate fields."""
+    if not isinstance(current_hash, str):
+        raise TrustUnavailable('invalid reviewed hook hash')
+    parts = current_hash.split('/')
+    if len(parts) not in (1, 2) or any(
+        re.fullmatch(r'sha256:[0-9a-f]{64}', part) is None for part in parts
+    ):
+        raise TrustUnavailable('invalid reviewed hook hash')
+    state = {'trusted_hash': parts[0], 'enabled': True}
+    if len(parts) == 2:
+        state['trusted_content_hash'] = parts[1]
+    return state
+
+
 def verify_approved_plan(plan: dict) -> None:
     """Read-only verification of the approved placement and persisted trust.
 
@@ -270,7 +285,9 @@ def verify_approved_plan(plan: dict) -> None:
     if not isinstance(plugin_id,str) or not re.fullmatch(r'agentstack-codex-app@[a-z0-9-]+',plugin_id) or config.get('plugins',{}).get(plugin_id,{}).get('enabled') is not True:
         raise TrustUnavailable('approved plugin is not enabled')
     state = config.get('hooks', {}).get('state', {})
-    if not plan.get('hooks') or any(state.get(h['key']) != {'trusted_hash': h['currentHash'], 'enabled': True} for h in plan['hooks']):
+    if not plan.get('hooks') or any(
+        state.get(h['key']) != _persisted_trust_state(h['currentHash']) for h in plan['hooks']
+    ):
         raise TrustUnavailable('approved hook trust is not present')
 
 
