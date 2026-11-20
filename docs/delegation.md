@@ -256,6 +256,8 @@ MCP tool から拒否メッセージが返った場合、子は拒否された�
 
 `--child-default-tools 'mcp:cua-driver'` は `AGENTSTACK_CHILD_DEFAULT_TOOLS` を env.sh・service 定義・install-state に保存します。既定は空です。Claude・Codex・dsh・Hermes の標準の新規起動に適用します。CLI では `--base`・`--tools`・`--codex-mcp` を、`/api/spawn`（NEW AGENT を含む）では `base`・`tools` を省略した場合が対象です。
 
+共通の一覧の後に `;claude=SPEC`、`;codex=SPEC`、`;dsh=SPEC`、`;hermes=SPEC` を付けると、該当する provider の一覧を置き換えます。各一覧は `--tools` と同じ文法で、上書きを省略すると共通の一覧を使い、空の上書きは installer の既定を抑止します。たとえば `--child-default-tools 'mcp:cua-driver;dsh='` は dsh 以外に `cua-driver` を渡します。
+
 provider と最終の作業フォルダで、既定の項目を1つずつ確認します。使えない項目だけを外して使える項目は保ち、外したことを spawn の出力と子の最初の指示に残します。明示した base/tools/MCP profile は既定より優先します。`--base default`、API の `base: "default"` や `tools: {}` でも installer の既定を抑止できます。明示した道具を適用できないときや、Mail proxy・認証・起動に失敗したときは起動を止めます。resume は起動時に記録した選択を使い、installer の現在の既定を追加しません。Mac の Codex は server 名なしの `screen:operate` を外し、node_repl を自動承認しません。
 
 ### 承認

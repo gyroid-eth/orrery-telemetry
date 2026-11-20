@@ -256,6 +256,8 @@ What a screen selection exposes and approves is decided by the classification ta
 
 `--child-default-tools 'mcp:cua-driver'` writes `AGENTSTACK_CHILD_DEFAULT_TOOLS` into env.sh, the service definition and install-state. The default is empty. Standard new launches of Claude, Codex, dsh and Hermes use it when the CLI omits `--base`, `--tools` and `--codex-mcp`, or when `/api/spawn` (including NEW AGENT) omits both `base` and `tools`.
 
+Append `;claude=SPEC`, `;codex=SPEC`, `;dsh=SPEC` or `;hermes=SPEC` after the common list to replace that provider's defaults. Each list uses the `--tools` grammar. Providers without an override use the common list. An empty override clears the installer defaults for that provider. For example, `--child-default-tools 'mcp:cua-driver;dsh='` gives `cua-driver` to Claude, Codex and Hermes and clears the installer defaults for dsh.
+
 Defaults are checked for the provider and final directory, one item at a time. Applicable items remain, and omissions appear in spawn output and the child's first instructions. Explicit base/tools/MCP profiles take precedence. To suppress installer defaults, pass `--base default` on the CLI, or `base: "default"` or `tools: {}` in the API. Unavailable explicit tools and Mail proxy, authentication or startup failures stop the launch. Resume uses the selection recorded at launch and does not add current installer defaults. On macOS Codex, `screen:operate` without a named server is omitted and node_repl is not automatically approved.
 
 ### Approval
