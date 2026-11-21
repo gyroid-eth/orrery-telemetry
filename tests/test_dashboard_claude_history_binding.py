@@ -1,13 +1,20 @@
 """Claude history is exported only from a verified self-registration receipt."""
 from __future__ import annotations
 
-import json
-import sqlite3
 from datetime import datetime
+import json
+import os
+from pathlib import Path
+import shlex
+import sqlite3
+import subprocess
+import time
 
 import pytest
 
 from dashboard import server
+from test_dashboard_history_binding_route import http  # noqa: F401 (fixture)
+from test_legacy_default_tmux_compatibility import native_default  # noqa: F401 (fixture)
 
 AGENT = "ExactClaude"
 SID = "125687ab-1111-4222-8333-123456789abc"
@@ -38,7 +45,7 @@ def binding(tmp_path, monkeypatch):
     directory = projects / "-workspace"
     directory.mkdir(parents=True)
     transcript = directory / f"{SID}.jsonl"
-    transcript.write_text(json.dumps({"type": "user", "sessionId": SID,
+    transcript.write_text(json.dumps({"type": "user", "sessionId": SID, "cwd": str(tmp_path),
                                       "message": {"role": "user", "content": "fixture"}}) + "\n")
     record = {"schema_version": 2, "binding_kind": "self", "agent_id": 42,
               "agent_name": AGENT, "registered_by": AGENT, "project_key": project,
@@ -55,10 +62,11 @@ def binding(tmp_path, monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("verified binding entered a heuristic or another provider")
 
-    for name in ("_transcript_path", "_indexed_transcript", "_scan_selfref", "_codex_transcript_path"):
+    resolvers = {name: getattr(server, name) for name in ("_transcript_path", "_indexed_transcript")}
+    for name in (*resolvers, "_scan_selfref", "_codex_transcript_path"):
         monkeypatch.setattr(server, name, forbidden)
     return {"record": record, "path": path, "transcript": transcript, "db": db,
-            "indices": indices, "directory": directory}
+            "indices": indices, "directory": directory, "resolvers": resolvers}
 
 
 def rewrite(binding, **changes):
@@ -200,6 +208,103 @@ def test_receipt_older_than_current_tmux_session_is_stale(binding, created_delta
     if expected == "stale":
         assert result["transcript_path"] is None
         assert result["history_binding_reason_code"] == "receipt_predates_session"
+
+
+def test_conversation_resume_binds_reader_to_the_launched_tmux_session(binding, http, native_default, monkeypatch, tmp_path):
+    tmux, socket, _, _ = native_default
+    wrapper = tmp_path / "tmux"
+    wrapper.write_text(f"#!/bin/sh\nexec {shlex.quote(tmux)} -f /dev/null \"$@\"\n")
+    wrapper.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("AGENTSTACK_CHILD_RESUME_HELPER", str(Path(server.HOOKS_DIR) / "child_resume.py"))
+    runtime = binding["indices"].parent
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    tombstone = runtime / "child-resume-tombstones" / "42.json"
+    tombstone.parent.mkdir()
+    tombstone.write_text(json.dumps({"agent_id": 42, "agent_name": AGENT,
+                                    "project_key": binding["record"]["project_key"],
+                                    "reason": "retention_expired"}))
+    tombstone.chmod(0o600)
+    monkeypatch.setattr(server, "_login_shell", lambda: "/bin/bash")
+    for name, resolver in binding["resolvers"].items():
+        monkeypatch.setattr(server, name, resolver)
+    monkeypatch.setattr(server, "_mcp_call", lambda *_a, **_kw: pytest.fail("Mail called during conversation resume"))
+    with sqlite3.connect(binding["db"]) as con:
+        con.execute("UPDATE agents SET retired_at='2026-11-04 01:30:00'")
+        con.execute("DELETE FROM agents WHERE id=99")
+    assert server._mail_agent_for(AGENT) is None
+    original = binding["path"].read_bytes()
+    cli = tmp_path / "fixture-claude"
+    argv = tmp_path / "argv"
+    cli.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > {shlex.quote(str(argv))}\n"
+                   "printf '\\033]2;* Fixture\\007'\nexec /bin/sleep 30\n")
+    cli.chmod(0o700)
+    monkeypatch.setattr(server, "ABS_CLAUDE", str(cli))
+
+    def command(*args):
+        return subprocess.run([tmux, "-S", str(socket), *args], capture_output=True, text=True, timeout=8)
+
+    def wait_for_claude():
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            state = server.tmux_state().get(AGENT, {})
+            if state.get("title") == "* Fixture":
+                return state
+            time.sleep(0.02)
+        pytest.fail("fixture Claude did not start")
+
+    def read_binding():
+        status, body = http(f"/api/agents/{AGENT}/history-binding")
+        assert status == 200, body
+        return json.loads(body)["agent"]
+
+    result = server.do_resume(AGENT, open_terminal=False)
+    assert result["ok"] and result["resume_mode"] == "conversation_only", result
+    assert result["mail_reason"] == "retention_expired"
+    state = wait_for_claude()
+    assert argv.read_text().splitlines()[:2] == ["--resume", SID]
+    assert state["mail_disabled"] == "1"
+    assert server._claude_history_binding(AGENT, session_created=state["created"])["history_binding"] == "stale"
+    row = read_binding()
+    assert row["program"] == "claude-code" and row["running"]
+    assert row["history_binding"] == "bound" and row["history_session_id"] == SID
+    assert '"content": "fixture"' in Path(row["transcript_path"]).read_text()
+    assert binding["path"].read_bytes() == original
+
+    # Keep the server alive while replacing the same-named tmux session.
+    assert command("new-session", "-d", "-s", "FixtureKeep", "/bin/sleep 30").returncode == 0
+    assert command("kill-session", "-t", state["session_id"]).returncode == 0
+    assert command("new-session", "-d", "-s", AGENT, "-e", "AGENTSTACK_MAIL_DISABLED=1", str(cli)).returncode == 0
+    replacement = wait_for_claude()
+    assert replacement["session_id"] != state["session_id"]
+    copied = command("set-option", "-t", replacement["session_id"],
+                     server.claude_history.CONVERSATION_RESUME_OPTION, state["claude_conversation_receipt"])
+    assert copied.returncode == 0, copied.stderr
+    row = read_binding()
+    assert row["history_binding"] == "stale" and row["transcript_path"] is None
+
+
+@pytest.mark.parametrize("changed", ["agent", "native_session"])
+def test_conversation_resume_receipt_does_not_refresh_another_binding(binding, changed):
+    project = binding["record"]["project_key"]
+    registration = server._claude_registration(AGENT)
+    created = int(datetime.fromisoformat(RECEIPT_TS).timestamp()) + 1
+    receipt = server.claude_history.conversation_resume_receipt(
+        registration, SID, str(binding["transcript"]), tmux_id="$1", created=created, tmux_pid=123)
+    name = AGENT
+    if changed == "agent":
+        name = "OtherFixtureClaude"
+        with sqlite3.connect(binding["db"]) as con:
+            con.execute("UPDATE agents SET id=77, name=? WHERE id=42", (name,))
+        rewrite(binding, agent_id=77, agent_name=name, registered_by=name)
+        binding["path"].rename(binding["indices"] / "77.json")
+    else:
+        transcript = binding["directory"] / f"{OTHER_SID}.jsonl"
+        transcript.write_text(json.dumps({"type": "user", "sessionId": OTHER_SID}) + "\n")
+        rewrite(binding, session_id=OTHER_SID, transcript_path=str(transcript))
+    assert server._claude_registration(name)["project_key"] == project
+    result = server._claude_history_binding(name, session_created=created, conversation_resume=("$1", 123, receipt))
+    assert result["history_binding"] == "stale" and result["transcript_path"] is None
 
 
 @pytest.mark.parametrize("timestamp", [None, "", "not-a-date", {}, 123])
