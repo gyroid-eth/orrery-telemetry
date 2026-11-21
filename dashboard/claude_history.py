@@ -1,17 +1,29 @@
 """Exact legacy Claude transcript bindings from hook-written self receipts.
 
 No database, tmux, process, content-name or cwd discovery takes place here.
-The dashboard supplies a project-scoped registration and existing tmux time.
+The dashboard supplies the project registration and current tmux launch data.
 """
 from __future__ import annotations
 
 import collections
 from datetime import datetime
+import hashlib
 import json
 import math
 import os
 import re
 import stat
+
+
+CONVERSATION_RESUME_OPTION = "@agentstack_claude_conversation_resume"
+
+
+def conversation_resume_receipt(registration: dict, sid: str, path: str, *,
+                                tmux_id: str, created: int, tmux_pid: int) -> str:
+    """Fingerprint the exact conversation passed to this tmux launch."""
+    fields = (registration["agent_id"], registration["agent_name"], registration["project_key"],
+              registration["program"], sid, os.path.realpath(path), tmux_id, created, tmux_pid)
+    return hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
 
 
 def _history_regular_json(path: str) -> dict | None:
@@ -112,7 +124,7 @@ def _claude_transcript_matches(path: str, session_id: str) -> bool:
 
 def history_binding(
     session: str, registration: dict | None, *, projects: str, index: ReceiptIndex,
-    session_created: float | None = None,
+    session_created: float | None = None, conversation_resume: tuple[str, int, str] | None = None,
 ) -> dict:
     """Export an exact legacy Claude receipt, never the heuristic resolver."""
     def unbound(reason):
@@ -180,9 +192,17 @@ def history_binding(
     if (receipt_epoch is not None and type(session_created) in (int, float)
             and math.isfinite(session_created) and 0 < session_created
             and receipt_epoch < session_created):
-        result = unbound("receipt_predates_session")
-        result.update(metadata, history_binding="stale")
-        return result
+        # Hooks are disabled in conversation-only mode. Its tmux receipt can
+        # confirm freshness for this launch after the self receipt has proved
+        # ownership of the same native conversation.
+        tmux_id, tmux_pid, receipt = conversation_resume or ("", 0, "")
+        if not (re.fullmatch(r"\$\d+", tmux_id) and tmux_pid > 0
+                and receipt == conversation_resume_receipt(
+                    registration, sid, real_path, tmux_id=tmux_id,
+                    created=int(session_created), tmux_pid=tmux_pid)):
+            result = unbound("receipt_predates_session")
+            result.update(metadata, history_binding="stale")
+            return result
     return {"history_binding": "bound", "history_binding_reason": "",
             "history_binding_reason_code": "bound", "transcript_path": real_path,
             **metadata}
