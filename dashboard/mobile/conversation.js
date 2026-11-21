@@ -260,6 +260,7 @@ const WAIT=20000;
 const controllers={poll:null,older:null,preview:null};
 let panel=null,saveUrl='',previewFocus=null,previewRequest=null,previewRetry=false;
 let events=[],seen=new Set(),older=null,pending=[],failures=0,loadingOlder=false,following=true,savedTop=0;
+let lastRecordPoll=null;
 let recordVersion=0,recordConfirmed=false,replySelection=null;
 function dismissReferenceSelection(){replySelection?.remove();replySelection=null;}
 function selectionInRecord(){const selection=window.getSelection?.();return !!(selection?.toString()&&list?.contains(selection.anchorNode));}
@@ -449,6 +450,7 @@ function row(e){
  const command=e.role==='user'&&markdown()?.commandRecord(e.text);
  const r=make('div',command?.shell?'conversation-shell':'conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
  if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(e.text,r);}else{if(e.role==='assistant')r.append(speaker(e));r.append(body(e.text,e.role==='assistant'));}
+ if(command||e.role==='assistant')window.OrreryReaderReplyMotion?.enhanceCopies?.(r);
 
  if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts)));
  files(e,r);
@@ -697,9 +699,19 @@ function dropEvent(id){
  }
  if(node.contains?.(document.activeElement))list.focus?.({preventScroll:true});node.remove();
 }
-function append(page){
+function append(page,replySince){
  const follow=atBottom()&&!selectionInRecord(),fresh=page.filter(e=>!seen.has(e.id));
- for(const e of fresh){seen.add(e.id);events.push(e);const anchor=list.querySelector(':scope > .conversation-pending');list.insertBefore(row(e),anchor);const shown=shownFiles(e);if(shown)list.insertBefore(shown,anchor);}
+ const motion=follow&&replySince!==null&&window.OrreryReaderReplyMotion;
+ // Use the known tail and the poll time to avoid animating backfilled records.
+ const replies=motion?new Set(page.slice(page.findLastIndex(e=>seen.has(e.id))+1)
+  .filter(e=>e.kind==='text'&&e.role==='assistant'&&Date.parse(e.ts)>=replySince).slice(-3)):null;
+ for(const e of fresh){
+  seen.add(e.id);events.push(e);
+  const anchor=list.querySelector(':scope > .conversation-pending'),node=row(e);
+  list.insertBefore(node,anchor);
+  if(replies?.has(e))motion.revealReply?.(node.querySelector('.conversation-text'));
+  const shown=shownFiles(e);if(shown)list.insertBefore(shown,anchor);
+ }
  let dropped=false;
  while(events.length>MAX_KEPT){const gone=events.shift();seen.delete(gone.id);dropEvent(gone.id);older=null;dropped=true;}
  groupShellRows();
@@ -730,7 +742,7 @@ function prepend(page,omitted){
  list.scrollTop+=list.scrollHeight-before;following=false;savedTop=list.scrollTop;
  loadThumbnails();
 }
-function reset(){stepView?.reset();provider='';recordVersion++;dismissReferenceSelection();closePreview();forgetThumbnails();clearToolGroups();events=[];seen.clear();older=null;list.querySelectorAll(':scope > .conversation-shown-files').forEach(x=>x.remove());list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());window.OrreryMobileTerminal?.refreshReference?.();}
+function reset(){stepView?.reset();provider='';lastRecordPoll=null;recordVersion++;dismissReferenceSelection();closePreview();forgetThumbnails();clearToolGroups();events=[];seen.clear();older=null;list.querySelectorAll(':scope > .conversation-shown-files').forEach(x=>x.remove());list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());window.OrreryMobileTerminal?.refreshReference?.();}
 function slow(on){if(retryButton)retryButton.hidden=!on;if(on)setStatus(messages.history_slow);}
 function showError(v){
  const code=typeof v?.error==='string'?v.error:'history_unavailable';
@@ -741,15 +753,18 @@ function showError(v){
 async function poll(){
  const g=gen;clearTimeout(timer);timer=0;
  if(!root||document.hidden)return;
+ const started=Date.now();
  try{
   const v=await request(null,'poll');if(g!==gen)return;
   if(v.ok!==true){
    // A hidden, stale or changed record also hides any file opened from it;
    // a slow answer is only a delay and leaves it open.
-   if(v.error!=='history_slow'){recordConfirmed=false;recordVersion++;dismissReferenceSelection();window.OrreryMobileTerminal?.refreshReference?.();closePreview();}showError(v);if(v.error==='history_changed')reset();}
+   if(v.error!=='history_slow'){recordConfirmed=false;lastRecordPoll=null;recordVersion++;dismissReferenceSelection();window.OrreryMobileTerminal?.refreshReference?.();closePreview();}showError(v);if(v.error==='history_changed')reset();}
   else{
    recordConfirmed=true;provider=({claude:'Claude',codex:'Codex'})[v.provider]||'';
-   failures=0;slow(false);if(!events.length&&v.omitted===true)list.insertBefore(gap(),list.querySelector(':scope > .conversation-pending'));append(v.events);
+   failures=0;slow(false);if(!events.length&&v.omitted===true)list.insertBefore(gap(),list.querySelector(':scope > .conversation-pending'));
+   const replySince=lastRecordPoll===null?null:Math.max(lastRecordPoll,started-2*POLL)-POLL;
+   append(v.events,replySince);lastRecordPoll=started;
    // The latest page's older token stays valid only while the oldest shown
    // message is still in that page; it is renewed on every such poll.
    if(events.length&&v.events.some(e=>e.id===events[0].id))older=v.older;
@@ -793,7 +808,7 @@ function element(){return root;}
 function addPending(text){if(!root||typeof text!=='string'||!text.trim())return;pending.push({text,at:Date.now(),before:new Set(seen)});renderPending();following=true;restore();}
 function unmount(){
  stepView?.reset();stepView=null;provider='';
- recordVersion++;recordConfirmed=false;dismissReferenceSelection();
+ recordVersion++;recordConfirmed=false;lastRecordPoll=null;dismissReferenceSelection();
  gen++;clearTimeout(timer);timer=0;closePreview();forgetThumbnails();for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
  mailResize?.disconnect();mailResize=null;mailWidth=0;
  clearToolGroups();
@@ -802,6 +817,7 @@ function unmount(){
 }
 document.addEventListener('visibilitychange',()=>{
  if(document.hidden){
+  lastRecordPoll=null;
   stepView?.activity(stepContext(),false);
   gen++;clearTimeout(timer);timer=0;
   if(controllers.preview&&previewRequest)previewRetry=true;
