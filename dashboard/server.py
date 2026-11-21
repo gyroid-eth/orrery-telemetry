@@ -37,11 +37,13 @@ import sys
 import threading
 import time
 import tomllib
+import unicodedata
 from dataclasses import dataclass, replace as _dataclass_replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.parse
 import urllib.request
+from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
@@ -8002,17 +8004,25 @@ def _is_within_root(path: str, root: str) -> bool:
 _SPAWN_DIR_SUGGESTION_CAP = 500
 
 
-def spawn_directory_suggestions(raw_path: str) -> dict:
-    """List visible child directories without allowing traversal outside configured roots."""
+def _resolve_spawn_directory(raw_path: str) -> tuple[str, str] | None:
+    """Return the canonical path and its most specific configured root."""
     roots = _spawn_roots()
     raw_path = (raw_path or "").strip()
-    if not roots or any(part == ".." for part in raw_path.split(os.sep)):
-        return {"path": None, "dirs": []}
+    if not roots or "\0" in raw_path or ".." in raw_path.split(os.sep):
+        return None
     target = os.path.realpath(os.path.expanduser(raw_path or roots[0]))
     allowed_roots = [root for root in roots if _is_within_root(target, root)]
     if not allowed_roots or not os.path.isdir(target):
+        return None
+    return target, max(allowed_roots, key=len)
+
+
+def spawn_directory_suggestions(raw_path: str) -> dict:
+    """List visible child directories without allowing traversal outside configured roots."""
+    resolved = _resolve_spawn_directory(raw_path)
+    if resolved is None:
         return {"path": None, "dirs": []}
-    root = max(allowed_roots, key=len)
+    target, root = resolved
     dirs: list[dict[str, str]] = []
     try:
         with os.scandir(target) as entries:
@@ -8032,6 +8042,111 @@ def spawn_directory_suggestions(raw_path: str) -> dict:
     # enough to hold a whole directory listing: capped at 20, a vault with
     # 25 top-level folders could never suggest the last five, whatever was typed.
     return {"path": target, "dirs": dirs[:_SPAWN_DIR_SUGGESTION_CAP], "truncated": len(dirs) > _SPAWN_DIR_SUGGESTION_CAP}
+
+
+def _spawn_directory_presets() -> list[str]:
+    raw_dirs = os.environ.get("AGENTSTACK_SPAWN_DIRS", "").split(":")
+    return [value for value in raw_dirs if value]
+
+
+_SPAWN_SEARCH_DEPTH = 4
+_SPAWN_SEARCH_ENTRY_CAP = 12_000
+_SPAWN_SEARCH_RESULT_CAP = 30
+_SPAWN_SEARCH_TTL = 20
+_SPAWN_SEARCH_SKIP = {"library", "node_modules", "__pycache__", "venv", "vendor"}
+_SPAWN_SEARCH_LOCK = threading.Lock()
+_spawn_search_cache = None
+
+
+def _spawn_search_visible(name: str) -> bool:
+    return not name.startswith(".") and name.casefold() not in _SPAWN_SEARCH_SKIP
+
+
+def _index_spawn_directories(roots: tuple[str, ...]) -> tuple[set[str], bool]:
+    seen = set(roots)
+    pending = deque((root, 0) for root in roots)
+    examined = 0
+    while pending:
+        path, depth = pending.popleft()
+        try:
+            # A previously queued directory may have been replaced by a symlink.
+            if os.path.realpath(path) != path:
+                continue
+            with os.scandir(path) as entries:
+                for entry in entries:
+                    examined += 1
+                    if examined > _SPAWN_SEARCH_ENTRY_CAP:
+                        return seen, True
+                    if not _spawn_search_visible(entry.name) or entry.path in seen:
+                        continue
+                    try:
+                        if not entry.is_dir(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        continue
+                    seen.add(entry.path)
+                    if depth + 1 < _SPAWN_SEARCH_DEPTH:
+                        pending.append((entry.path, depth + 1))
+        except OSError:
+            continue
+    return seen, False
+
+
+def spawn_directory_search(query: str, under: str | None = None) -> dict:
+    """Match directory basenames within the configured scope or one allowed subtree."""
+    query = unicodedata.normalize("NFC", query.strip()).casefold()
+    if not query and under is None:
+        return {"dirs": [], "truncated": False}
+    target = None
+    if under is not None:
+        resolved = _resolve_spawn_directory(under) if under.strip() else None
+        if resolved is None:
+            raise ValueError("QUERY_INVALID")
+        target, root = resolved
+        parts = os.path.relpath(target, root).split(os.sep) if target != root else []
+        if any(not _spawn_search_visible(part) for part in [os.path.basename(root), *parts]):
+            return {"dirs": [], "truncated": False}
+        scope = (target,)
+    else:
+        roots = set(_spawn_roots())
+        roots.update(os.path.realpath(os.path.expanduser(preset))
+                     for preset in _spawn_directory_presets()
+                     if os.path.isdir(os.path.expanduser(preset)))
+        scope = tuple(sorted(root for root in roots if _spawn_search_visible(os.path.basename(root))))
+    if not query:
+        return {"dirs": [], "truncated": False}
+
+    global _spawn_search_cache
+    with _SPAWN_SEARCH_LOCK:
+        if (_spawn_search_cache is None or _spawn_search_cache[0] != scope
+                or time.monotonic() >= _spawn_search_cache[1]):
+            paths, truncated = _index_spawn_directories(scope)
+            _spawn_search_cache = (scope, time.monotonic() + _SPAWN_SEARCH_TTL, paths, truncated)
+        _, _, paths, truncated = _spawn_search_cache
+
+    matches = []
+    for path in paths:
+        if path == target:
+            continue
+        name = os.path.basename(path) or path
+        folded = unicodedata.normalize("NFC", name).casefold()
+        if query in folded:
+            matches.append((not folded.startswith(query), folded, path, name))
+    matches.sort()
+    return {
+        "dirs": [{"name": name, "path": path} for _, _, path, name in matches[:_SPAWN_SEARCH_RESULT_CAP]],
+        "truncated": truncated or len(matches) > _SPAWN_SEARCH_RESULT_CAP,
+    }
+
+
+def _spawn_directory_search_query(raw_query: str) -> dict:
+    fields = parse_qs(raw_query, keep_blank_values=True)
+    if ("q" not in fields or set(fields) - {"q", "under"}
+            or any(len(values) != 1 for values in fields.values())
+            or len(fields["q"][0]) > 255
+            or len(fields.get("under", [""])[0]) > 4096):
+        raise ValueError("QUERY_INVALID")
+    return spawn_directory_search(fields["q"][0], fields.get("under", [None])[0])
 
 
 _SPAWN_STATUS_CACHE: dict = {"ts": 0.0, "key": None, "data": {}}
@@ -8135,11 +8250,9 @@ def spawn_names_payload() -> dict:
     adjectives = [line.strip() for line in adjective_text.splitlines() if line.strip()]
     scientists = [line.strip() for line in scientist_text.splitlines() if line.strip()]
     statuses = _spawn_scientist_statuses(adjectives, scientists)
-    raw_dirs = os.environ.get("AGENTSTACK_SPAWN_DIRS", "").split(":")
-    # Keep `~` symbolic in the API; do_spawn expands it only at launch time.
-    # Unset: the project folder first (the first chip is the default, and only
-    # there does the agent get the project's CLAUDE.md), then home.
-    dirs = [value for value in raw_dirs if value] or (["~"] if FRESH_MODE else [d for d in (PROJECT_KEY, "~") if d])
+    # Keep ~ symbolic for the catalog. The launcher expands it when needed.
+    # The legacy fallback starts in the project, with home as a second chip.
+    dirs = _spawn_directory_presets() or (["~"] if FRESH_MODE else [d for d in (PROJECT_KEY, "~") if d])
     claude_catalog = _claude_catalog()
     claude_models = list(claude_catalog.models)
     claude_default = _claude_default_model(claude_models)
@@ -10038,7 +10151,7 @@ class Handler(BaseHTTPRequestHandler):
         from agentstack_mail.storage_origin_contract import B1Error
         # Explicit allow-list: no unknown fresh read enters a legacy Mail,
         # process, credential or project lookup. API2 fills the remaining routes.
-        if path in {'/api/quotas','/api/fs/dirs','/api/mobile-portrait','/api/custom-portraits'} or path.startswith('/api/portrait'):
+        if path in {'/api/quotas','/api/fs/dirs','/api/fs/dir-search','/api/mobile-portrait','/api/custom-portraits'} or path.startswith('/api/portrait'):
             return False
         if not path.startswith('/api/'):return False
         query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
@@ -10210,6 +10323,8 @@ class Handler(BaseHTTPRequestHandler):
                 if set(query)-{'path'} or len(query.get('path',[]))>1:
                     raise ValueError('QUERY_INVALID')
                 payload={'ok':True,'runtime_mode':'global',**spawn_directory_suggestions((query.get('path') or [''])[0])}
+            elif path == '/api/fs/dir-search':
+                payload={'ok':True,'runtime_mode':'global',**_spawn_directory_search_query(urlparse(self.path).query)}
             elif path == '/api/deliverables':
                 payload={'ok':True,'runtime_mode':'global','configured':bool(os.environ.get('AGENTSTACK_DELIVERABLE_ROOTS','').strip()),'items':_deliverables_index()}
             else:
@@ -10358,6 +10473,13 @@ class Handler(BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             payload = spawn_directory_suggestions((query.get("path") or [""])[0])
             self._send(200, json.dumps(payload).encode(), "application/json; charset=utf-8")
+        elif path == "/api/fs/dir-search":
+            try:
+                payload = _spawn_directory_search_query(urlparse(self.path).query)
+            except ValueError:
+                self._send(400, b'{"error":"QUERY_INVALID"}', "application/json; charset=utf-8")
+            else:
+                self._send(200, json.dumps(payload).encode(), "application/json; charset=utf-8")
         elif path == "/api/agents":
             q = parse_qs(urlparse(self.path).query)
             history_days = _parse_history_days((q.get("days") or [""])[0])

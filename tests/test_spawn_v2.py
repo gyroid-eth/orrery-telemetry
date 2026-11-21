@@ -691,6 +691,127 @@ def test_spawn_dirs_rejects_traversal_external_and_symlink_escape(monkeypatch, t
     assert [item["name"] for item in result["dirs"]] == ["alpha", "zulu"]
 
 
+def test_spawn_directory_search_scope_order_and_cache(monkeypatch, tmp_path):
+    root = tmp_path / "root"
+    preset = tmp_path / "preset"
+    home = tmp_path / "home"
+    for parent, dirs in (
+        (root, ["Project", "team/myproject", "a/b/c/Project-depth",
+                "a/b/c/d/Project-too-deep", "Library/Project-mac",
+                "node_modules/Project-dependency", ".cache/Project-hidden"]),
+        (preset, ["PROJECT-preset", "Cafe\u0301"]),
+        (home, ["Project-home"]),
+    ):
+        for path in dirs:
+            (parent / path).mkdir(parents=True)
+    (root / "Project-link").symlink_to(home, target_is_directory=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("AGENTSTACK_SPAWN_ROOTS", str(root))
+    monkeypatch.setenv("AGENTSTACK_SPAWN_DIRS", str(preset))
+    monkeypatch.setattr(server, "_spawn_search_cache", None)
+
+    def names(query):
+        return [item["name"] for item in server.spawn_directory_search(query)["dirs"]]
+
+    assert names(" ProJECT ") == ["Project", "Project-depth", "PROJECT-preset", "myproject"]
+    assert len(names("CafÉ")) == 1
+    (root / "Project-new").mkdir()
+    assert names("new") == []
+    scope, _, paths, truncated = server._spawn_search_cache
+    server._spawn_search_cache = (scope, 0.0, paths, truncated)
+    assert names("new") == ["Project-new"]
+    monkeypatch.delenv("AGENTSTACK_SPAWN_DIRS")
+    assert names("preset") == []
+    assert names("Project-home") == []
+
+
+def test_scoped_directory_search_reuses_limits_exclusion_and_cache(monkeypatch, tmp_path):
+    root = tmp_path / "roots"
+    vault = root / "Vault"
+    projects = vault / "21_Coding Projects"
+    alternate = vault / "other"
+    outside = tmp_path / "outside"
+    for folder in (
+        projects / "tm3000",
+        projects / "one" / "two" / "three" / "tm3000-level-four",
+        projects / "one" / "two" / "three" / "four" / "tm3000-too-deep",
+        projects / "vendor" / "sub" / "tm3000-vendor",
+        projects / ".hidden" / "tm3000-hidden",
+        alternate / "tm3000-other",
+        outside / "tm3000-outside",
+    ):
+        folder.mkdir(parents=True)
+    (projects / "tm3000-link").symlink_to(outside, target_is_directory=True)
+    (projects / "alias").symlink_to(alternate, target_is_directory=True)
+    monkeypatch.setenv("AGENTSTACK_SPAWN_ROOTS", str(root))
+    monkeypatch.setenv("AGENTSTACK_SPAWN_DIRS", str(outside))
+    monkeypatch.setattr(server, "_spawn_search_cache", None)
+
+    def names(under, query="tm3000"):
+        return [row["name"] for row in server.spawn_directory_search(query, str(under))["dirs"]]
+
+    assert names(projects) == ["tm3000", "tm3000-level-four"]
+    assert names(vault) == ["tm3000", "tm3000-other"]
+    assert names(projects, "21_coding") == []
+    assert names(projects / "alias") == ["tm3000-other"]
+    assert names(projects / "vendor" / "sub") == []
+    assert names(projects / ".hidden") == []
+    for invalid in ("", outside, projects / "tm3000-link", str(projects) + "/..", projects / "missing"):
+        with pytest.raises(ValueError, match="QUERY_INVALID"):
+            names(invalid)
+    assert names(projects) == ["tm3000", "tm3000-level-four"]
+    (projects / "tm3000-new").mkdir()
+    assert names(projects) == ["tm3000", "tm3000-level-four"]
+    key, _, paths, truncated = server._spawn_search_cache
+    server._spawn_search_cache = key, 0, paths, truncated
+    assert names(projects) == ["tm3000", "tm3000-level-four", "tm3000-new"]
+
+
+def test_spawn_directory_search_reports_truncation(monkeypatch, tmp_path):
+    for name in ("MatchOne", "MatchTwo", "MatchThree"):
+        (tmp_path / name).mkdir()
+    monkeypatch.setenv("AGENTSTACK_SPAWN_ROOTS", str(tmp_path))
+    monkeypatch.setattr(server, "_spawn_search_cache", None)
+    monkeypatch.setattr(server, "_SPAWN_SEARCH_RESULT_CAP", 2)
+    result = server.spawn_directory_search("match")
+    assert result["truncated"] and len(result["dirs"]) == 2
+    monkeypatch.setattr(server, "_spawn_search_cache", None)
+    monkeypatch.setattr(server, "_SPAWN_SEARCH_ENTRY_CAP", 1)
+    result = server.spawn_directory_search("match")
+    assert result["truncated"] and len(result["dirs"]) == 1
+
+
+def test_spawn_directory_search_http_preserves_browsing(monkeypatch, tmp_path):
+    found = tmp_path / "group" / "FindMe"
+    found.mkdir(parents=True)
+    monkeypatch.setenv("AGENTSTACK_SPAWN_ROOTS", str(tmp_path))
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{httpd.server_port}/api/fs"
+    try:
+        with urllib.request.urlopen(base + "/dir-search?q=find") as response:
+            assert json.load(response) == {
+                "dirs": [{"name": "FindMe", "path": str(found.resolve())}],
+                "truncated": False,
+            }
+        from urllib.parse import urlencode
+        under = urlencode({"q": "find", "under": str(found.parent)})
+        with urllib.request.urlopen(base + "/dir-search?" + under) as response:
+            assert [row["name"] for row in json.load(response)["dirs"]] == ["FindMe"]
+        with urllib.request.urlopen(base + "/dirs") as response:
+            assert [item["name"] for item in json.load(response)["dirs"]] == ["group"]
+        for query in ("q=find&q=other", "q=find&under=", "q=find&under=/&under=/", "q=find&under=%00",
+                      urlencode({"q": "find", "under": str(tmp_path.parent)})):
+            with pytest.raises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(base + "/dir-search?" + query)
+            assert error.value.code == 400
+    finally:
+        httpd.shutdown()
+        thread.join()
+        httpd.server_close()
+
+
 def test_async_spawn_returns_pending_and_settles_in_the_background(monkeypatch, tmp_path):
     """The page closes its modal at once; the verdict arrives via spawn-status."""
     import threading as _threading
