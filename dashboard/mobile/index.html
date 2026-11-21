@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#0b0d11" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#f5efe1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0d11">
+<script src="/theme_core.js"></script>
+<script src="/mobile-theme.js"></script>
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="ORRERY">
@@ -16,65 +17,160 @@
 <link rel="icon" type="image/svg+xml" href="/assets/orbit.svg">
 <link rel="stylesheet" href="/network.css">
 <link rel="stylesheet" href="/mobile.css">
+<link rel="stylesheet" href="/reader_reply_motion.css">
+<link rel="stylesheet" href="/reader_send_motion.css">
+<link rel="stylesheet" href="/mobile-spawn-controls.css">
+<link rel="stylesheet" href="/mobile-workspace.css">
 <script src="/demo-sync.js"></script>
 <script defer src="/network_core.js"></script>
 <script defer src="/network_node.js"></script>
 <script defer src="/mail_comets.js"></script>
 <script defer src="/network_view.js"></script>
 <script defer src="/conversation_markdown.js"></script>
+<script defer src="/reader_reply_motion.js"></script>
 <script defer src="/conversation.js"></script>
 <script defer src="/push.js"></script>
+<script defer src="/reader_send_motion.js"></script>
+<script defer src="/mobile-spawn-controls.js"></script>
+<script defer src="/mobile-workspace.js"></script>
 <script defer src="/mobile.js"></script>
+<script defer src="/mobile-spawn.js"></script>
 </head>
 <body class="mobile">
-<header><div class="mobile-brand"><img src="/assets/orbit.svg" width="40" height="40" alt=""><strong>ORRERY</strong></div><span>View only</span></header>
-<main id="mobile-main">
-  <div class="reading-summary">
-    <span id="summary">No observations yet</span>
-    <details id="observation-notice" class="observation-note" hidden>
-      <summary><span id="health-label" role="status">Observations</span><span aria-hidden="true"> ⓘ</span></summary>
-      <div class="observation-content"><p id="health"></p><p id="snapshot-period-note"></p></div>
-    </details>
-    <time id="observed"></time>
+<svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="5.8"/><path d="m15 15 4.5 4.5"/></symbol>
+  <symbol id="icon-tune" viewBox="0 0 24 24"><path d="M4 6h6m4 0h6M4 12h10m4 0h2M4 18h2m4 0h10"/><path d="M10 4h4v4h-4zm4 6h4v4h-4zm-8 6h4v4H6z"/></symbol>
+  <symbol id="icon-expand" viewBox="0 0 24 24"><path d="M9 5H5v4m10-4h4v4M5 15v4h4m10-4v4h-4"/></symbol>
+  <symbol id="icon-collapse" viewBox="0 0 24 24"><path d="M5 9h4V5m10 4h-4V5M9 19v-4H5m10 4v-4h4"/></symbol>
+  <symbol id="icon-graph" viewBox="0 0 24 24"><path d="m7.6 14.6 3.1-6m2.9.3 3 5.5M8.5 16h7"/><circle cx="12" cy="6.5" r="2.6"/><circle cx="6" cy="16.5" r="2.6"/><circle cx="18" cy="16.5" r="2.6"/></symbol>
+  <symbol id="icon-activity" viewBox="0 0 24 24"><path d="M9 6h10M9 12h10M9 18h10M5 6h.1M5 12h.1M5 18h.1"/></symbol>
+  <symbol id="icon-bell" viewBox="0 0 24 24"><path d="M6 10a6 6 0 1 1 12 0c0 2.5 1 4.5 2 6H4c1-1.5 2-3.5 2-6Zm4 9a2 2 0 0 0 4 0"/></symbol>
+  <symbol id="icon-focus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2.4"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21"/></symbol>
+  <symbol id="icon-agents" viewBox="0 0 24 24"><circle cx="9" cy="8" r="2.5"/><path d="M4 18v-1.5a4.5 4.5 0 0 1 4.5-4.5h1a4.5 4.5 0 0 1 4.5 4.5V18m1-12a2.5 2.5 0 0 1 0 5m2 1a4.5 4.5 0 0 1 3 4.3V18"/></symbol>
+  <symbol id="icon-working" viewBox="0 0 24 24"><path d="M2 12h4l2.4-6 4.2 12 2.7-6H22"/></symbol>
+  <symbol id="icon-waiting" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8.5V12l2.7 1.6"/></symbol>
+  <symbol id="icon-calendar" viewBox="0 0 24 24"><path d="M4 7h16v13H4Z M4 10h16M8 4v4m8-4v4m-8 7h3m3 0h2"/></symbol>
+  <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5m0-8h.01"/></symbol>
+  <symbol id="icon-review" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.2m0 3.2h.01"/></symbol>
+  <symbol id="icon-unknown" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.6a2.5 2.5 0 1 1 3.6 2.2c-.8.4-1.2.9-1.2 1.7m0 2.3h.01"/></symbol>
+  <symbol id="icon-finished" viewBox="0 0 24 24"><path d="m5 12 4.5 4.5L19 7"/></symbol>
+  <symbol id="icon-stopped" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="icon-retired" viewBox="0 0 24 24"><path d="M5 8h14v12H5zM4 4h16v4H4zm6 8h4"/></symbol>
+  <symbol id="icon-idle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/></symbol>
+  <symbol id="icon-history" viewBox="0 0 24 24"><path d="M4 5.5c2.8-.5 5.4.1 8 1.8 2.6-1.7 5.2-2.3 8-1.8v12c-2.8-.5-5.4.1-8 1.8-2.6-1.7-5.2-2.3-8-1.8Zm8 2v12"/></symbol>
+  <symbol id="icon-terminal" viewBox="0 0 24 24"><path d="m5 7 5 5-5 5m8 0h6"/></symbol>
+  <symbol id="icon-mail" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="m4 8 8 6 8-6"/></symbol>
+  <symbol id="icon-recipient" viewBox="0 0 24 24"><path d="M6 4v7a4 4 0 0 0 4 4h9m-4-4 4 4-4 4"/></symbol>
+  <symbol id="icon-forward" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
+  <symbol id="icon-attachment" viewBox="0 0 24 24"><path d="m9 13.8 6.3-6.3a2.1 2.1 0 0 1 3 3l-8 8a4 4 0 1 1-5.7-5.7l8.2-8.2a2.8 2.8 0 0 1 4 0"/></symbol>
+  <symbol id="icon-photo" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="9" r="1.3"/><path d="m4 17 4.5-4 3 2.5 4-4.5 5 5"/></symbol>
+  <symbol id="icon-file" viewBox="0 0 24 24"><path d="M7 3.5h6.5l4 4V19a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5Z M13 4v4h4 M9 12h5m-5 4h5"/></symbol>
+  <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M5 12h14m-7-7v14"/></symbol>
+  <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12m0-12L6 18"/></symbol>
+  <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5m-11 11L5 19"/></symbol>
+  <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M20.6 14.2A8.7 8.7 0 0 1 9.8 3.4a9 9 0 1 0 10.8 10.8Z"/></symbol>
+  <symbol id="icon-new-agent" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a5 5 0 0 1 5-5h2a5 5 0 0 1 5 5v2M19 7v8m-4-4h8"/></symbol>
+  <symbol id="icon-launch-folder" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3z"/></symbol>
+  <symbol id="icon-launch-model" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M9 3v4m6-4v4M9 17v4m6-4v4M3 9h4m-4 6h4m10-6h4m-4 6h4"/></symbol>
+  <symbol id="icon-launch-computer" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4m-4 0h8"/></symbol>
+  <symbol id="icon-launch-browser" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01m3 0h.01"/></symbol>
+</svg>
+<header>
+  <div class="mobile-brand"><img src="/assets/orbit.svg" width="30" height="30" alt=""><strong>ORRERY</strong></div>
+  <span class="sr-only" role="status">View only</span>
+  <div class="mobile-header-actions">
+    <button id="mobile-new-agent" class="icon-button" type="button" title="New agent" aria-label="New agent" aria-haspopup="dialog" hidden><svg class="mobile-icon" aria-hidden="true"><use href="#icon-new-agent"/></svg></button>
+    <button id="mobile-theme" class="icon-button" type="button" title="Use light theme" aria-label="Use light theme"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-sun"/></svg></button>
   </div>
-  <section id="attention" aria-label="Needs attention"></section>
-  <nav class="view-tabs" aria-label="Reading view"><button type="button" data-view="activity">Activity</button><button type="button" data-view="graph" class="active">Graph</button></nav>
-  <section id="activity" hidden>
-    <div class="activity-head"><nav aria-label="Activity filter"><button type="button" data-kind="all" class="active">All</button><button type="button" data-kind="mail">Mail</button><button type="button" data-kind="state">Status</button></nav><button type="button" class="period-trigger" data-period aria-controls="period-sheet" aria-expanded="false" aria-label="Change time range: Last 24h"><svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.7"/><path d="M8 4.5V8l2.5 1.5"/></svg><span>24h</span><i aria-hidden="true">⌄</i></button></div>
-    <button id="agent-filter" type="button" hidden></button>
-    <div id="events"><p class="empty">Waiting for observations</p></div>
-    <nav class="mail-paging" aria-label="Mail pages"><button id="mail-newer" type="button" disabled>Newer</button><span id="mail-page-label">Latest Mail</span><button id="mail-older" type="button" disabled>Older</button></nav>
-    <p id="mail-page-error" class="quiet" role="status"></p>
-    <p id="timeline-note" class="quiet"></p>
-    <p id="mail-cache-note" class="quiet"></p>
-  </section>
-  <section id="graph-panel">
-    <div class="graph-toolbar"><nav class="graph-mode" aria-label="Graph scope"><button type="button" data-mode="focus" class="active">Focus</button><button type="button" data-mode="all">All</button></nav><div class="graph-toolbar-actions"><button id="settings-btn" type="button" aria-controls="settings" aria-expanded="false">Tune graph</button><button id="graph-fullscreen" type="button" aria-label="Expand graph" aria-expanded="false" aria-controls="graph-panel">Expand</button></div></div>
-    <div class="graph-search">
-      <label for="agent-search">Find an agent</label>
-      <div class="graph-search-field"><input id="agent-search" type="search" placeholder="Search name or role" autocomplete="off" spellcheck="false" aria-controls="agent-results"><button id="search-clear" type="button" aria-label="Clear agent search" hidden>×</button></div>
-      <p id="graph-reader-status" class="quiet" role="status" hidden></p>
+</header>
+<main id="mobile-main" data-mobile-view="graph">
+  <section id="graph-panel" aria-label="Graph">
+    <div class="graph-toolbar">
+      <div class="graph-toolbar-actions icon-group">
+        <button id="graph-search-toggle" class="icon-button" type="button" title="Find an agent" aria-label="Find an agent" aria-controls="graph-search" aria-expanded="false"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-search"/></svg></button>
+        <button id="settings-btn" class="icon-button" type="button" title="Tune graph. Changes apply to this browser." aria-label="Tune graph" aria-controls="settings" aria-expanded="false"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-tune"/></svg></button>
+        <button id="graph-fullscreen" class="icon-button" type="button" title="Expand graph" aria-label="Expand graph" aria-expanded="false" aria-controls="graph-panel"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-expand"/></svg></button>
+      </div>
+    </div>
+    <div class="graph-search" id="graph-search" hidden>
+      <div class="graph-search-field"><input id="agent-search" type="search" title="Search name or role" aria-label="Search name or role" placeholder="Search name or role" autocomplete="off" spellcheck="false" aria-controls="agent-results"><button id="search-clear" class="icon-button" type="button" title="Clear agent search" aria-label="Clear agent search" hidden><svg class="mobile-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div>
       <div id="agent-results" aria-label="Matching agents" hidden></div>
     </div>
-    <div class="graph-meta"><span id="netinfo">Graph unavailable</span><span id="zoom-label"></span></div>
-    <div id="net"><svg id="gsvg" role="group" aria-label="Agent relationships. Focus: tap a peer to focus, tap the center to read. All: tap an agent to read. Pinch to zoom, drag to move."></svg><button type="button" class="period-trigger graph-period" data-period aria-controls="period-sheet" aria-expanded="false" aria-label="Change time range: Last 24h"><svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.7"/><path d="M8 4.5V8l2.5 1.5"/></svg><span>24h</span><i aria-hidden="true">⌄</i></button>
-      <div class="graph-tools"><button type="button" id="zoom-out" aria-label="Zoom out">−</button><button type="button" id="zoom-in" aria-label="Zoom in">+</button><button type="button" id="fit">Fit</button></div>
+    <p id="graph-reader-status" class="quiet" role="status" hidden></p>
+    <div id="net">
+      <svg id="gsvg" role="group" aria-label="Agent relationships. Focus: tap a peer to focus, tap the center to read. All: tap an agent to read. Pinch to zoom. Drag an agent to move it, or drag the background to pan."></svg>
+      <div class="graph-status icon-group">
+        <div id="summary">
+          <span id="graph-count-label" class="sr-only" role="status">No observations yet</span>
+          <details class="graph-agent-count" data-agent-status="work">
+            <summary class="graph-count working" title="Working: unavailable" aria-label="Working: unavailable" aria-controls="graph-working-agents"><span class="graph-working-icon" aria-hidden="true"><svg class="mobile-icon"><use href="#icon-working"/></svg></span><b id="working-count" aria-hidden="true">–</b></summary>
+            <div id="graph-working-agents" class="graph-status-agents" aria-label="Working agents"></div>
+          </details>
+          <details class="graph-agent-count" data-agent-status="wait">
+            <summary class="graph-count waiting" title="Waiting: unavailable" aria-label="Waiting: unavailable" aria-controls="graph-waiting-agents"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-waiting"/></svg><b id="waiting-count" aria-hidden="true">–</b></summary>
+            <div id="graph-waiting-agents" class="graph-status-agents" aria-label="Waiting agents"></div>
+          </details>
+        </div>
+        <details id="observation-notice" class="observation-note">
+          <summary class="icon-button" title="Graph details" aria-label="Graph details"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-info"/></svg><span id="health-label" class="sr-only" role="status"></span></summary>
+          <div class="observation-content"><p id="health" hidden></p><p id="snapshot-period-note"></p><p id="netinfo">Graph unavailable</p><p><span id="zoom-label"></span> <time id="observed"></time></p></div>
+        </details>
+      </div>
+      <div class="graph-footer">
+        <div class="graph-footer-start">
+          <button type="button" class="period-trigger graph-period" data-period aria-controls="period-sheet" aria-expanded="false" title="Change time range: Last 24h. Applies to Graph and Activity." aria-label="Change time range: Last 24h"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-calendar"/></svg><span>24h</span></button>
+          <nav class="graph-mode icon-group" aria-label="Graph scope">
+            <button class="icon-button active" type="button" data-mode="focus" aria-pressed="true" title="Focus" aria-label="Focus"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-focus"/></svg></button>
+            <button class="icon-button" type="button" data-mode="all" aria-pressed="false" title="Show all agents" aria-label="Show all agents"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-agents"/></svg></button>
+          </nav>
+        </div>
+      </div>
     </div>
   </section>
+  <aside class="mobile-sidebar" aria-label="Attention and activity">
+    <div class="sidebar-head">
+      <span id="attention-count" class="attention-count" title="Needs attention"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-bell"/></svg><b aria-hidden="true">–</b><span class="sr-only">Needs attention</span></span>
+      <nav class="view-tabs" aria-label="Reading view">
+        <button class="icon-button" type="button" data-view="activity" title="Show activity" aria-label="Show activity" aria-controls="activity"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-activity"/></svg></button>
+        <button class="icon-button" type="button" data-view="graph" title="Show graph" aria-label="Show graph" aria-controls="graph-panel" hidden><svg class="mobile-icon" aria-hidden="true"><use href="#icon-graph"/></svg></button>
+      </nav>
+    </div>
+    <section id="attention" aria-label="Needs attention"></section>
+    <section id="activity" aria-label="Activity" hidden>
+      <div class="activity-head">
+        <nav aria-label="Activity filter">
+          <button class="icon-button active" type="button" data-kind="all" aria-pressed="true" title="All activity" aria-label="All activity"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-activity"/></svg></button>
+          <button class="icon-button" type="button" data-kind="mail" aria-pressed="false" title="Mail" aria-label="Mail"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-mail"/></svg></button>
+          <button class="icon-button" type="button" data-kind="state" aria-pressed="false" title="Status changes" aria-label="Status changes"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-working"/></svg></button>
+        </nav>
+        <button type="button" class="period-trigger" data-period aria-controls="period-sheet" aria-expanded="false" title="Change time range: Last 24h. Applies to Graph and Activity." aria-label="Change time range: Last 24h"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-calendar"/></svg><span>24h</span></button>
+        <details id="activity-notes" class="observation-note">
+          <summary class="icon-button" title="Activity details" aria-label="Activity details"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-info"/></svg></summary>
+          <div class="observation-content">
+            <p id="activity-health" hidden></p>
+            <p id="timeline-note"></p>
+            <p id="mail-cache-note" hidden></p>
+          </div>
+        </details>
+      </div>
+      <button id="agent-filter" type="button" hidden></button>
+      <div id="events"><p class="empty">Waiting for observations</p></div>
+      <nav class="mail-paging" aria-label="Mail pages"><button id="mail-newer" type="button" disabled>Newer</button><span id="mail-page-label">Latest Mail</span><button id="mail-older" type="button" disabled>Older</button></nav>
+      <p id="mail-page-error" class="quiet" role="status"></p>
+    </section>
+  </aside>
   <p id="snapshot-note" class="sr-only">Account usage unavailable. Context arcs are separate.</p>
 </main>
 <aside id="settings" role="dialog" aria-labelledby="settings-title" aria-hidden="true" hidden>
   <div class="st-bar"><h2 id="settings-title">Network settings</h2><button id="settings-close" type="button" aria-label="Close settings">×</button></div>
-  <p class="st-note">Display on this browser only</p>
   <div id="nctl-rows"></div>
   <div class="st-foot"><button type="button" id="nc-reset">Reset</button></div>
 </aside>
 <dialog id="period-sheet" aria-labelledby="period-title">
-  <div class="period-head"><h2 id="period-title">Time range</h2><button id="period-close" type="button">Done</button></div>
+  <div class="period-head"><h2 id="period-title" title="Applies to Graph and Activity">Time range</h2><button id="period-close" type="button">Done</button></div>
   <label for="time-window" class="period-current"><output id="period-label">Last 24h</output></label>
-  <input id="time-window" type="range" min="0" max="1000" step="1" value="573" aria-label="Observation period">
-  <div class="range-stops" aria-hidden="true"><span>15 min</span><span>24h</span><span>30 days</span></div>
-  <div class="period-foot"><span>Graph and Activity</span><button id="all-history" type="button" aria-pressed="false">All history</button></div>
+  <div class="mobile-scrubber"><input id="time-window" type="range" min="0" max="1000" step="1" value="573" aria-label="Observation period"></div>
+  <div class="period-foot"><button id="all-history" type="button" aria-pressed="false">All history</button></div>
 </dialog>
 <dialog id="pair-sheet" class="mail-sheet" aria-labelledby="pair-title">
   <div class="period-head"><h2 id="pair-title">Mail between agents</h2><button id="pair-close" type="button">Done</button></div>
@@ -89,4 +185,63 @@
   <h3 id="message-subject"></h3><pre id="message-body"></pre>
 </dialog>
 <dialog id="terminal-sheet" class="terminal-sheet" aria-labelledby="terminal-title"></dialog>
+<dialog id="spawn-sheet" class="spawn-sheet" aria-labelledby="spawn-title">
+  <header class="spawn-head">
+    <h2 id="spawn-title">New agent</h2>
+    <button class="icon-button" id="spawn-close" type="button" aria-label="Close" title="Close"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
+  </header>
+  <p id="spawn-notice" role="status" hidden></p>
+  <form id="spawn-editor" class="spawn-body" hidden>
+    <textarea id="spawn-task" rows="4" maxlength="4000" aria-label="Agent task" placeholder="What should this agent do?"></textarea>
+    <div class="spawn-context">
+      <button class="spawn-model-chip" id="spawn-model-chip" type="button" aria-controls="spawn-settings" aria-expanded="false" aria-haspopup="dialog" aria-label="Model settings">
+        <svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-model"/></svg>
+        <span id="spawn-model-name"></span>
+        <span id="spawn-model-effort" aria-hidden="true" hidden><i></i><i></i><i></i><i></i><i></i></span>
+      </button>
+      <div class="spawn-field spawn-select-field spawn-folder"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-folder"/></svg><select id="spawn-directory" aria-label="Launch directory" title="Launch directory"></select></div>
+      <div id="spawn-tools" role="group" aria-label="Agent tools">
+        <div class="spawn-tool">
+          <button class="icon-button" id="spawn-computer" type="button" role="switch" aria-label="Computer use" aria-describedby="spawn-computer-help" aria-checked="false"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-computer"/></svg></button>
+          <span id="spawn-computer-help" class="spawn-tool-help" role="tooltip">Computer use lets the agent view the Mac screen and use its mouse and keyboard.</span>
+        </div>
+        <div class="spawn-tool">
+          <button class="icon-button" id="spawn-browser" type="button" role="switch" aria-label="Browser" aria-describedby="spawn-browser-help" aria-checked="false"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-browser"/></svg></button>
+          <span id="spawn-browser-help" class="spawn-tool-help" role="tooltip">Browser lets the agent open and interact with pages in Chrome.</span>
+        </div>
+      </div>
+    </div>
+    <div class="spawn-actions">
+      <button class="spawn-primary" id="spawn-review-button" type="submit" disabled>Review launch</button>
+    </div>
+  </form>
+  <section class="spawn-body" id="spawn-review" hidden>
+    <div id="spawn-summary" class="spawn-summary"></div>
+    <pre id="spawn-task-copy"></pre>
+    <div class="spawn-actions">
+      <button class="spawn-secondary" id="spawn-edit" type="button">Edit</button>
+      <button class="spawn-primary" id="spawn-confirm" type="button">Launch</button>
+    </div>
+  </section>
+  <div class="spawn-body" id="spawn-result" hidden></div>
+</dialog>
+<dialog id="spawn-settings" class="spawn-sheet spawn-model-sheet" aria-labelledby="spawn-settings-title">
+  <header class="spawn-head">
+    <h2 id="spawn-settings-title">Model</h2>
+    <button class="icon-button" id="spawn-settings-close" type="button" aria-label="Close model settings" title="Close" autofocus><svg class="mobile-icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
+  </header>
+  <div class="spawn-body">
+    <div class="spawn-field spawn-select-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-model"/></svg><select id="spawn-model" aria-label="Model" title="Model"></select></div>
+    <div class="spawn-field spawn-select-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-terminal"/></svg><select id="spawn-harness" aria-label="Harness" title="Harness"></select></div>
+    <div class="spawn-field" id="spawn-effort-field">
+      <svg class="mobile-icon" aria-hidden="true"><use href="#icon-working"/></svg>
+      <select id="spawn-effort" aria-label="Effort" title="Effort"></select>
+      <div id="spawn-effort-control" hidden>
+        <div class="spawn-effort-slider"><input id="spawn-effort-range" type="range" min="0" max="0" step="1" value="0" aria-label="Effort"></div>
+        <span id="spawn-effort-value" aria-hidden="true"></span>
+      </div>
+    </div>
+    <label class="spawn-field" id="spawn-role-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-agents"/></svg><input id="spawn-role" type="text" maxlength="40" aria-label="Role" placeholder="Role"></label>
+  </div>
+</dialog>
 </body></html>

@@ -348,11 +348,12 @@ def test_codex_launch_reads_approved_fixed_plan_without_approving(server,monkeyp
     hooks={'hooks':{'SessionStart':[]}}
     (plugin/'hooks/hooks.json').write_text(json.dumps(hooks));(plugin/'hooks/hooks.json').chmod(0o600)
     trust=delivery.plugin_helpers()[0]
+    hook_hash='sha256:'+'a'*64
     plan={'schema_version':1,'approved':True,'enable_hooks':True,'shared_codex_home':str(home),
         'cwd':str(client.isolation),'plugin_id':'agentstack-codex-app@agentstack-global','plugin_root':str(plugin),'payload_digest':trust['payload_digest'](plugin),
-        'declared_hooks':hooks,'hooks':[{'key':'fixture-key','currentHash':'sha256:fixture'}]}
+        'declared_hooks':hooks,'hooks':[{'key':'fixture-key','currentHash':hook_hash}]}
     api['atomic_json'](home/'hook-plan.json',plan)
-    (home/'config.toml').write_text('[plugins."agentstack-codex-app@agentstack-global"]\nenabled = true\n[hooks.state."fixture-key"]\nenabled = true\ntrusted_hash = "sha256:fixture"\n')
+    (home/'config.toml').write_text('[plugins."agentstack-codex-app@agentstack-global"]\nenabled = true\n[hooks.state."fixture-key"]\nenabled = true\ntrusted_hash = "'+hook_hash+'"\n')
     (home/'config.toml').chmod(0o600)
     assert delivery.codex_trust()==plan
     row=delivery.prepare_launch('codex',cwd=client.isolation)
