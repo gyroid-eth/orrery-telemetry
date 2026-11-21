@@ -195,6 +195,18 @@ def test_client_calls_one_fixed_route_and_projects_only_displayed_fields():
     assert isinstance(page['older'], str) and history.TOKEN.fullmatch(page['older'])
 
 
+def test_mobile_reader_preserves_assistant_update_variant():
+    raw = [event(1, text='確認を進めています。', variant='update', signature='PRIVATE_SIGNATURE'),
+           event(2, variant='update'),
+           event(3, variant='other'),
+           event(4, role='assistant', kind='thinking', text='private reasoning')]
+    events, *_ = history.project_page({'ok': True, 'provider': 'claude', 'events': raw})
+
+    assert [(e['id'], e.get('variant')) for e in events] == [('1', 'update'), ('2', None), ('3', None)]
+    assert (events[0]['kind'], events[0]['role'], events[0]['text']) == ('text', 'assistant', '確認を進めています。')
+    assert 'PRIVATE_SIGNATURE' not in json.dumps(events)
+
+
 def test_page_bounds_event_count_text_and_serialized_bytes():
     with cockpit(lambda q: (200, {'ok': True, 'events': [event(i) for i in range(300)], 'has_older': False})) as port:
         page = history.HistoryClient(port).page('Vega')

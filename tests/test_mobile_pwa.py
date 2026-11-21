@@ -113,8 +113,11 @@ def test_reload_restores_only_agent_and_tab(phone):
     js("document.querySelector('[aria-label=Terminal]').click();document.querySelector('#terminal-text').value='Do not persist this';document.querySelector('#terminal-text').dispatchEvent(new Event('input'))")
     stored=js("JSON.parse(sessionStorage.getItem('orrery-mobile-view-v1'))")
     assert stored=={'agent':'SampleAgent','tab':'terminal'}
+    origin = js('performance.timeOrigin')
     client.call('Page.reload',ignoreCache=True)
-    wait("document.querySelector('#terminal-sheet').open&&document.querySelector('[aria-label=Terminal]')?.getAttribute('aria-pressed')==='true'")
+    wait(f"performance.timeOrigin !== {origin} && "
+         "document.querySelector('#terminal-sheet')?.open && "
+         "document.querySelector('[aria-label=Terminal]')?.getAttribute('aria-pressed') === 'true'")
     wait("document.querySelector('#terminal-text')!==null")
     assert js("document.querySelector('#terminal-text').value")==''
 
@@ -146,8 +149,10 @@ def test_reload_restores_the_same_fresh_identity_from_the_current_roster(phone):
     assert all(payload[k]==v for k,v in identity.items())
     stored=js("JSON.parse(sessionStorage.getItem('orrery-mobile-view-v1'))")
     assert stored==dict(agent='SampleAgent',tab='conversation',**identity)
+    origin = js('performance.timeOrigin')
     client.call('Page.reload',ignoreCache=True)
-    wait("document.querySelector('#terminal-sheet').open&&document.querySelector('#terminal-text')?.disabled===false")
+    wait(f"performance.timeOrigin !== {origin} && "
+         "document.querySelector('#terminal-sheet')?.open && document.querySelector('#terminal-text')?.disabled === false")
     assert js("document.querySelector('#terminal-text').value")==''
 
 
