@@ -25,12 +25,14 @@ try:
     from dashboard import mobile_input
     from dashboard import mobile_history
     from dashboard import mobile_push
+    from dashboard import mobile_spawn
 except ModuleNotFoundError:
     import legacy_http_admission as admission
     from mobile_projection import SnapshotStore, MobileMailStore, WINDOWS, NAME, EVENT_KEY, png_image
     import mobile_input
     import mobile_history
     import mobile_push
+    import mobile_spawn
 
 HERE = Path(__file__).resolve().parent
 MAX_UPSTREAM_BYTES = 4 * 1024 * 1024
@@ -38,6 +40,8 @@ UPSTREAM_TIMEOUT = 2
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; "
        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+SHELL_CSP = CSP + "; frame-src 'self'"
+PANE_CSP = CSP.replace("frame-ancestors 'none'", "frame-ancestors 'self'")
 
 
 @dataclass(frozen=True)
@@ -112,10 +116,25 @@ class Upstream:
         query='' if cursor is None else '?'+urlencode({'cursor':cursor})
         return json.loads(self._read('/api/mobile-cache-page'+query,'application/json',MAX_UPSTREAM_BYTES))
 
-    def _read(self,path,mime,limit,*,expired=False,missing=False):
-        con = http.client.HTTPConnection('127.0.0.1', self.port, timeout=UPSTREAM_TIMEOUT)
+    def spawn_catalog(self):
+        data=self._read('/telemetry/spawn-catalog','application/json',MAX_UPSTREAM_BYTES,timeout=23)
+        return mobile_input.decode_json(data,max_bytes=MAX_UPSTREAM_BYTES)
+
+    def spawn_agent(self,payload):
+        data=self._read('/api/spawn','application/json',65536,timeout=90,
+                        payload=payload,statuses=(200,202,400,403,409,422))
+        return mobile_input.decode_json(data,max_bytes=65536)
+
+    def spawn_status(self,name):
+        if not NAME.fullmatch(name):raise ValueError('invalid_name')
+        data=self._read('/api/spawn-status?name='+name,'application/json',65536)
+        return mobile_input.decode_json(data,max_bytes=65536)
+
+    def _read(self,path,mime,limit,*,expired=False,missing=False,timeout=None,payload=None,statuses=(200,)):
+        timeout = UPSTREAM_TIMEOUT if timeout is None else timeout
+        con = http.client.HTTPConnection('127.0.0.1', self.port, timeout=timeout)
         timer = None
-        deadline = time.monotonic() + UPSTREAM_TIMEOUT
+        deadline = time.monotonic() + timeout
         try:
             con.connect()
             sock = con.sock
@@ -126,12 +145,16 @@ class Upstream:
             timer.daemon = True
             timer.start()
             types=(mime,) if isinstance(mime,str) else mime
-            con.request('GET', path, headers={'Host':f'127.0.0.1:{self.port}',
-                                            'Accept':', '.join(types),'Connection':'close'})
+            headers={'Host':f'127.0.0.1:{self.port}','Accept':', '.join(types),'Connection':'close'}
+            body=None
+            if payload is not None:
+                headers['Content-Type']='application/json'
+                body=json.dumps(payload,separators=(',',':'),ensure_ascii=False,allow_nan=False).encode()
+            con.request('GET' if body is None else 'POST',path,body=body,headers=headers)
             response = con.getresponse()
             if expired and response.status==410:raise LookupError('upstream_event_or_cursor_expired')
             if missing and response.status==404:raise LookupError('upstream_unsupported')
-            if response.status != 200 or response.getheader('Content-Type','').split(';')[0].strip().lower() not in types:
+            if response.status not in statuses or response.getheader('Content-Type','').split(';')[0].strip().lower() not in types:
                 raise ValueError('upstream_unavailable')
             if response.getheader('Content-Encoding', 'identity').lower() != 'identity':
                 raise ValueError('upstream_encoding')
@@ -187,9 +210,17 @@ def static_assets(root=HERE):
     """Fixed bundled files only; no file path, overlay or provider lookup."""
     fixed = {
         '/': (root/'mobile/index.html', 'text/html; charset=utf-8'),
+        '/reader-pane': (root/'mobile/index.html', 'text/html; charset=utf-8'),
         '/manifest.webmanifest': (root/'mobile/manifest.webmanifest', 'application/manifest+json; charset=utf-8'),
         '/mobile.css': (root/'mobile/mobile.css', 'text/css; charset=utf-8'),
         '/mobile.js': (root/'mobile/mobile.js', 'text/javascript; charset=utf-8'),
+        '/mobile-workspace.js': (root/'mobile/workspace.js', 'text/javascript; charset=utf-8'),
+        '/mobile-workspace.css': (root/'mobile/workspace.css', 'text/css; charset=utf-8'),
+        '/mobile-spawn.js': (root/'mobile/spawn.js', 'text/javascript; charset=utf-8'),
+        '/mobile-spawn-controls.js': (root/'mobile/spawn_controls.js', 'text/javascript; charset=utf-8'),
+        '/mobile-spawn-controls.css': (root/'mobile/spawn_controls.css', 'text/css; charset=utf-8'),
+        '/mobile-theme.js': (root/'mobile/theme.js', 'text/javascript; charset=utf-8'),
+        '/theme_core.js': (root/'theme_core.js', 'text/javascript; charset=utf-8'),
         '/push.js': (root/'mobile/push.js', 'text/javascript; charset=utf-8'),
         '/push-sw.js': (root/'mobile/push-sw.js', 'text/javascript; charset=utf-8'),
         '/demo-sync.js': (root/'mobile/demo_sync.js', 'text/javascript; charset=utf-8'),
@@ -197,6 +228,10 @@ def static_assets(root=HERE):
         '/mail_comets.js': (root/'mobile/mail_comets.js', 'text/javascript; charset=utf-8'),
         '/conversation_markdown.js': (root/'mobile/conversation_markdown.js', 'text/javascript; charset=utf-8'),
         '/conversation.js': (root/'mobile/conversation.js', 'text/javascript; charset=utf-8'),
+        '/reader_reply_motion.js': (root/'mobile/reader_reply_motion.js', 'text/javascript; charset=utf-8'),
+        '/reader_reply_motion.css': (root/'mobile/reader_reply_motion.css', 'text/css; charset=utf-8'),
+        '/reader_send_motion.js': (root/'mobile/reader_send_motion.js', 'text/javascript; charset=utf-8'),
+        '/reader_send_motion.css': (root/'mobile/reader_send_motion.css', 'text/css; charset=utf-8'),
         '/network_core.js': (root/'network_core.js', 'text/javascript; charset=utf-8'),
         '/network_node.js': (root/'network_node.js', 'text/javascript; charset=utf-8'),
     }
@@ -204,7 +239,7 @@ def static_assets(root=HERE):
         fixed['/icons/'+icon]=(root/'mobile/icons'/icon,'image/png')
     for font in ('fraunces-normal','fraunces-italic','ibm-plex-mono-400','ibm-plex-mono-500','ibm-plex-mono-600'):
         fixed['/fonts/'+font+'.woff2']=(root/'mobile/fonts'/(font+'.woff2'),'font/woff2')
-    for logo in ('orbit','anthropic','openai','google','qwen','glm'):
+    for logo in ('orbit','orbit-light','anthropic','openai','google','qwen','glm'):
         fixed['/assets/'+logo+'.svg']=(root/'assets'/(logo+'.svg'),'image/svg+xml')
     # Byte-identical canonical icon, bundled for the manual mobile reader even
     # when ordinary dashboard DeepSeek presentation is not opted in.
@@ -234,13 +269,15 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self._send(code, {'ok':False,'error':'request_rejected'})
 
-    def _send(self, status, data, mime='application/json; charset=utf-8', *, utf8=False):
+    def _send(self, status, data, mime='application/json; charset=utf-8', *, utf8=False, page=None):
         if isinstance(data, dict):data=json.dumps(data,separators=(',',':'),allow_nan=False,ensure_ascii=not utf8).encode()
         self.send_response(status)
+        policy={'shell':SHELL_CSP,'pane':PANE_CSP}.get(page,CSP)
         for key,value in [('Content-Type',mime),('Content-Length',str(len(data))),
-                          ('Cache-Control','no-store'),('Content-Security-Policy',CSP),
+                          ('Cache-Control','no-store'),('Content-Security-Policy',policy),
                           ('X-Content-Type-Options','nosniff'),('Referrer-Policy','no-referrer'),
-                          ('X-Frame-Options','DENY'),('Permissions-Policy','camera=(), microphone=(), geolocation=()')]:
+                          ('X-Frame-Options','SAMEORIGIN' if page=='pane' else 'DENY'),
+                          ('Permissions-Policy','camera=(), microphone=(), geolocation=()')]:
             self.send_header(key,value)
         self.end_headers()
         if self.command != 'HEAD':self.wfile.write(data)
@@ -277,7 +314,8 @@ class Handler(BaseHTTPRequestHandler):
         if any(self.headers.get_all(h,[]) for h in ('Upgrade','Transfer-Encoding','X-HTTP-Method-Override','X-Method-Override','X-HTTP-Method')):return False
         lengths=self.headers.get_all('Content-Length',[])
         if write:
-            limit=mobile_input.MAX_IMAGE_JSON if self.path=='/view/terminal/image' else mobile_input.MAX_JSON_BYTES
+            operation=self.path.removeprefix('/view/terminal/')
+            limit=mobile_input.ATTACHMENT_JSON_LIMITS.get(operation,mobile_input.MAX_JSON_BYTES)
             if (len(lengths)!=1 or re.fullmatch(r'[0-9]{1,8}',lengths[0]) is None or not 0<int(lengths[0])<=limit
                     or self.headers.get_all('Content-Type',[])!=['application/json']
                     or any(self.headers.get_all(h,[]) for h in ('Content-Encoding','Expect'))):return False
@@ -288,6 +326,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._admitted():
             self._send(403,{'ok':False,'error':'request_denied'});return
         parts=urlsplit(self.path)
+        if parts.path in {'/view/spawn','/view/spawn/status'}:
+            self._spawn_get(parts);return
         if self.path=='/view/push':
             self._send(200,self.server.mobile_push.capability());return
         if self.path=='/view/demo' or self.path in DemoClient.ASSETS:
@@ -415,6 +455,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200,style[1].encode(),'text/css; charset=utf-8')
             except (OSError,ValueError):self._send(503,{'ok':False,'error':'asset_unavailable'})
             return
+        if parts.path=='/reader-pane' and parts.query:
+            self._send(404,{'ok':False,'error':'not_found'});return
         asset=self.server.mobile_assets.get(parts.path)
         if asset is None:
             self._send(404,{'ok':False,'error':'not_found'});return
@@ -422,12 +464,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if file.is_symlink():raise OSError('asset_symlink')
             data=file.read_bytes()
-            self._send(200,data,mime)
+            page={'/':'shell','/reader-pane':'pane'}.get(parts.path)
+            self._send(200,data,mime,page=page)
         except OSError:self._send(503,{'ok':False,'error':'asset_unavailable'})
 
     def do_HEAD(self):self.do_GET()
 
     def do_POST(self):
+        if self.path=='/view/spawn':
+            self._spawn_post();return
         if self.path in {'/view/push/key','/view/push/status','/view/push/save','/view/push/remove'}:
             self._push_post();return
         operation=self.path.removeprefix('/view/terminal/')
@@ -437,27 +482,71 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection=True
         if not self._admitted(write=True):
             self._send(403,{'error':'input_request_denied'});return
-        timer=None
         try:
-            def expire():
-                try:self.connection.shutdown(socket.SHUT_RDWR)
-                except OSError:pass
-            timer=threading.Timer(20 if operation=='image' else 5,expire);timer.daemon=True;timer.start()
-            size=int(self.headers['Content-Length']);data=self.rfile.read(size)
-            if len(data)!=size:raise ValueError('input_json_invalid')
-            payload=mobile_input.decode_json(data,max_bytes=mobile_input.MAX_IMAGE_JSON if operation=='image' else mobile_input.MAX_JSON_BYTES)
+            payload=self._request_json(mobile_input.ATTACHMENT_JSON_LIMITS.get(operation,mobile_input.MAX_JSON_BYTES),
+                                       20 if operation in mobile_input.ATTACHMENT_JSON_LIMITS else 5)
             if not mobile_input.request_fields(operation,payload):raise ValueError('input_json_invalid')
         except (ValueError,OSError):
             self._send(400,{'error':'input_request_invalid'});return
-        finally:
-            if timer is not None:timer.cancel()
         try:self._send(200,self.server.mobile_input.call(operation,payload),utf8=operation=='preview')
         except Exception as error:
             # A lost response cannot establish whether a commit reached tmux.
             # The UI retains only the operation ID, offers status, and never
             # repeats the send automatically.
-            reason=str(error) if operation=='image' and isinstance(error,mobile_input.InputUnavailable) and re.fullmatch(r'image_[a-z_]+',str(error)) else 'input_unavailable'
+            reason=str(error) if isinstance(error,mobile_input.InputUnavailable) and mobile_input.attachment_error(operation,str(error)) else 'input_unavailable'
             self._send(503,{'error':reason,'state':'unknown' if operation=='commit' else 'unavailable'})
+
+    def _request_json(self, limit, timeout):
+        def expire():
+            try:self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:pass
+        timer=threading.Timer(timeout,expire);timer.daemon=True;timer.start()
+        try:
+            size=int(self.headers['Content-Length']);data=self.rfile.read(size)
+            if len(data)!=size:raise ValueError('input_json_invalid')
+            return mobile_input.decode_json(data,max_bytes=limit)
+        finally:timer.cancel()
+
+    def _spawn_capability(self):
+        if self.server.mobile_config.input_enabled:
+            try:capability=self.server.mobile_input.call('capability')
+            except (OSError,ValueError):raise mobile_spawn.SpawnError('launch_unavailable',503) from None
+            if capability.get('enabled') is True and capability.get('contract')==mobile_input.CONTRACT:
+                return capability
+        raise mobile_spawn.SpawnError('launch_disabled',404)
+
+    def _spawn_get(self, parts):
+        try:
+            capability=self._spawn_capability()
+            if parts.path=='/view/spawn':
+                if parts.query:raise mobile_spawn.SpawnError('invalid_launch',400)
+                if self.command=='HEAD':self._send(200,b'');return
+                result=self.server.mobile_spawn.catalog(capability['epoch'],configurable=capability['api']==31)
+            else:
+                query=parse_qs(parts.query,keep_blank_values=True)
+                if set(query)!={'receipt'} or len(query['receipt'])!=1:
+                    raise mobile_spawn.SpawnError('invalid_launch',400)
+                result=self.server.mobile_spawn.status(capability['epoch'],query['receipt'][0])
+            self._send(200,result,utf8=True)
+        except mobile_spawn.SpawnError as error:
+            self._send(error.status,{'error':str(error)})
+        except (OSError,ValueError):
+            self._send(503,{'error':'launch_unavailable'})
+
+    def _spawn_post(self):
+        if not self.server.mobile_config.input_enabled:
+            self._no_method();return
+        self.close_connection=True
+        if not self._admitted(write=True):
+            self._send(403,{'error':'request_denied'});return
+        try:payload=self._request_json(mobile_input.MAX_JSON_BYTES,5)
+        except (OSError,ValueError):
+            self._send(400,{'error':'invalid_launch'});return
+        try:
+            capability=self._spawn_capability()
+            self._send(200,self.server.mobile_spawn.launch(capability['epoch'],payload))
+        except mobile_spawn.SpawnError as error:
+            self._send(error.status,{'error':str(error)})
 
     def _push_post(self):
         self.close_connection=True
@@ -501,6 +590,9 @@ def make_server(config:Config, *, store=None, mail_store=None, input_client=None
     server.mobile_assets=static_assets(Path(root))
     server.mobile_input=(input_client if input_client is not None else
                          mobile_input.InputClient(config.cockpit_port,config.owner_login) if config.input_enabled else None)
+    spawn_backend=Upstream(config.upstream_port)
+    server.mobile_spawn=mobile_spawn.MobileSpawn(Upstream(config.cockpit_port).spawn_catalog,
+                                                spawn_backend.spawn_agent,spawn_backend.spawn_status)
     server.mobile_history=(history_client if history_client is not None else
                            mobile_history.HistoryClient(config.cockpit_port) if config.history_enabled else None)
     push_root=Path(os.environ.get('AGENTSTACK_HOME') or Path.home()/'.agentstack')/'runtime/mobile-push'

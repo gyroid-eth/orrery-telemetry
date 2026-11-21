@@ -229,14 +229,19 @@ ags_mcp_call() {
   fi
   local mcp_url="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:18765/mcp}}"
   local args_json payload
-  args_json="$(python3 - "$@" <<'PY'
+  args_json="$(python3 - "$tool" "$@" <<'PY'
 import json
 import sys
 
+tool = sys.argv[1]
 args = {}
-for item in sys.argv[1:]:
+for item in sys.argv[2:]:
     key, value = item.split("=", 1)
-    args[key] = value
+    # whois normally reads archive history. A provider check only needs the profile.
+    if tool == "whois" and key == "include_recent_commits" and value in ("true", "false"):
+        args[key] = value == "true"
+    else:
+        args[key] = value
 print(json.dumps(args, separators=(",", ":")))
 PY
 )"
@@ -668,6 +673,35 @@ ags_sanitize_agent_name() {
   # Keep this byte-for-byte compatible with Mail's [^A-Za-z0-9]+ removal and
   # 128-character limit. The C locale makes the shell character class ASCII.
   printf '%s' "$1" | LC_ALL=C tr -cd '[:alnum:]' | LC_ALL=C cut -c 1-128
+}
+
+ags_registered_program() {
+  local response
+  response="$(ags_mcp_call whois "project_key=$1" "agent_name=$2" include_recent_commits=false)" || return 1
+  [[ "$(printf '%s' "$response" | ags_classify_mcp_response)" == "ok" ]] || return 1
+  printf '%s' "$response" | python3 -c '
+import json, sys
+
+reply = json.load(sys.stdin)
+result = reply.get("result", reply)
+profile = result.get("structuredContent", result)
+if "program" not in profile:
+    for part in result.get("content") or []:
+        try:
+            data = json.loads(part.get("text", ""))
+        except (TypeError, ValueError):
+            continue
+        if isinstance(data, dict) and "program" in data:
+            profile = data
+            break
+program = profile.get("program")
+name = profile.get("name")
+if not isinstance(program, str) or not program.strip():
+    raise SystemExit(1)
+if not isinstance(name, str) or name.casefold() != sys.argv[1].casefold():
+    raise SystemExit(1)
+print(program)
+' "$2"
 }
 
 ags_agent_name_status_once() {

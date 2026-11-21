@@ -1,9 +1,24 @@
 /* View-only reader: metadata lists, explicit single-message disclosure, no offline bodies. */
 (function(){
 'use strict';
+if(location.pathname==='/reader-pane'){
+ const parentView=window.OrreryMobilePane?.parent;
+ if(parentView){
+  for(const key of ['AGENTSTACK_DEMO','OrreryMobileAgent','OrreryMobileIdentity','OrreryMobileProfile','OrreryMobileWindow'])window[key]=parentView[key];
+ }
+ return;
+}
 window.AGENTSTACK_DSH_ENABLED=true;
 window.AGENTSTACK_DEMO={assetURL:n=>'/assets/'+n+'.svg',portraitURL:n=>'/view/portrait?window='+desiredWindow+'&name='+n};
 const $=s=>document.querySelector(s),node=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e;};
+function icon(name){
+ const namespace='http://www.w3.org/2000/svg';
+ const svg=document.createElementNS(namespace,'svg'),use=document.createElementNS(namespace,'use');
+ svg.setAttribute('class','mobile-icon');svg.setAttribute('aria-hidden','true');use.setAttribute('href','#icon-'+name);svg.append(use);
+ return svg;
+}
+const tabletView=matchMedia('(min-width: 740px) and (min-height: 540px)');
+let readingView='graph',tabletLayout=tabletView.matches;
 let snapshot=null,kind='all',agentFilter='',desiredWindow='day',timer=0,active=null,pending=false,receivedAt=0,lastNotices=[];
 const mailRef=a=>a&&/^[a-f0-9]{32}$/.test(a.mail_instance_id)&&Number.isSafeInteger(a.mail_agent_id)&&a.mail_agent_id>0?{mail_instance_id:a.mail_instance_id,mail_agent_id:a.mail_agent_id}:null;
 function markRef(element,value){if(typeof value?.name==='string')element.dataset.agentName=value.name;const ref=mailRef(value);if(ref){element.dataset.mailInstanceId=ref.mail_instance_id;element.dataset.mailAgentId=String(ref.mail_agent_id);}}
@@ -15,13 +30,20 @@ const minutesAt=position=>Math.max(15,Math.min(43200,Math.round(Math.exp(Math.lo
 const duration=seconds=>seconds===null?'All history':seconds<3600?'Last '+Math.round(seconds/60)+' min':seconds<=86400?'Last '+(seconds/3600).toLocaleString('en-GB',{maximumFractionDigits:2})+'h':'Last '+(seconds/86400).toLocaleString('en-GB',{maximumFractionDigits:2})+'d';
 window.OrreryMobileWindow={duration};
 const network=new window.OrreryMobileNetwork(null,(a,b)=>openPair(a,b),openGraphAgent);
-function openGraphAgent(name){
+window.OrreryMobileGraph={
+ agents:()=>snapshot?.agents||[],
+ show(){graphFullscreen?.exit();setGraphSearch(false);if(!$('#settings').hidden)settings(false);showView('graph');},
+ pickWith(callback){network.pickNode=callback;},
+ resize(){if(network.svg.clientHeight&&network.svg.clientWidth){if(network.userView)network.applyView();else network.fit();}},
+};
+function openGraphAgent(name,returnFocus){
  const terminal=window.OrreryMobileTerminal,status=$('#graph-reader-status');
  status.hidden=terminal?.available()===true;
  if(!status.hidden){status.textContent='Reader is unavailable. Check Phone access on the desktop.';return;}
  terminal.open(name,window.OrreryMobileIdentity?.forName(name),null,closedName=>{
   network.focus(closedName);
   if(network.svg.contains(document.activeElement))document.activeElement.blur();
+  returnFocus?.focus({preventScroll:true});
  });
 }
 let graphFullscreen=null;
@@ -48,28 +70,70 @@ function readerProfile(name,recordedModel=''){
 }
 window.OrreryMobileProfile={forName:readerProfile,face(name,model){const e=face(readerProfile(name,model)||{name},1);e.setAttribute('aria-hidden','true');return e;}};
 function person(name){const a=snapshot.agents.find(x=>x.name===name)||{name,provider:'',model:'',locality:null};const e=node('div','person');e.append(face(a),node('span','name',name));return e;}
+function syncView(){
+ const graphPanel=$('#graph-panel'),wasHidden=graphPanel.hidden;
+ const split=tabletView.matches,showGraph=split||readingView==='graph';
+ tabletLayout=split;
+ const activity=$('#activity'),controls=$('.activity-head'),controlsParent=split?$('.sidebar-head'):activity;
+ $('#mobile-main').dataset.mobileView=readingView;
+ activity.hidden=!split&&readingView==='graph';
+ if(controls.parentElement!==controlsParent){
+  const focus=document.activeElement;
+  if(split)controlsParent.append(controls);
+  else controlsParent.prepend(controls);
+  if(controls.contains(focus)&&!activity.hidden)focus.focus({preventScroll:true});
+ }
+ graphPanel.hidden=!showGraph;
+ $('[data-view="activity"]').hidden=split||readingView==='activity';
+ $('[data-view="graph"]').hidden=split||readingView==='graph';
+ if(!showGraph){
+  graphFullscreen?.exit();
+  setGraphSearch(false);
+  if(!$('#settings').hidden)settings(false);
+  closeGraphMenus();
+  network.pause();
+ }else if(wasHidden){
+  network.applyView();network.hot=Math.max(network.hot,120);network.run();
+ }
+}
 function showView(view){
  clearDetail();clearPair();
- const graph=view==='graph';$('#activity').hidden=graph;$('#graph-panel').hidden=!graph;
- if(!graph)graphFullscreen?.exit();
- document.querySelectorAll('[data-view]').forEach(x=>x.classList.toggle('active',x.dataset.view===view));
- if(graph){network.applyView();network.hot=Math.max(network.hot,120);network.run();}else network.pause();
+ readingView=view;syncView();
 }
+function setGraphSearch(open){
+ const search=$('#graph-search'),toggle=$('#graph-search-toggle');
+ search.hidden=!open;toggle.setAttribute('aria-expanded',String(open));
+ if(open)$('#agent-search').focus({preventScroll:true});
+}
+const stateIcons={work:'working',wait:'waiting',ask:'review',question:'review',finished:'finished',gone:'stopped',retired:'retired',idle:'idle'};
+
 function renderActivity(){
  if(!snapshot)return;
  const mail=mailPage?.events||snapshot.timeline.mail;
  const events=[...mail.map(x=>({...x,type:'mail',sort:x.event_at})),...(mailPage?[]:snapshot.timeline.states).map(x=>({...x,type:'state',sort:x.observed_at}))].sort((a,b)=>b.sort-a.sort);
  const container=$('#events');container.replaceChildren();
  const messages={work:'Started working',wait:'Now waiting',ask:'Awaiting review',question:'Needs an answer',finished:'Finished',gone:'Stopped',retired:'Retired',idle:'Idle'};
+ let previousMailMinute=null;
  for(const e of events){
   if(kind!=='all'&&e.type!==kind)continue;
   if(agentFilter&&![e.source,e.target,e.name].includes(agentFilter))continue;
   const article=node('article','event'+(e.to==='ask'||e.to==='question'?' review':''));
-  const stamp=node('time','',time(e.sort)+(e.type==='state'?' · observed':''));article.appendChild(stamp);
+  const stamp=node('time','',time(e.sort));
+  stamp.title=e.type==='state'?'Observed at '+stamp.textContent:stamp.textContent;
   if(e.type==='mail'){
-   article.appendChild(mailButton(e,mailPage?.window||snapshot.window));
+   const minute=Number.isFinite(e.sort)?Math.floor(e.sort/60):null;
+   stamp.classList.toggle('repeat-minute',minute!==null&&minute===previousMailMinute);
+   previousMailMinute=minute;
+   article.appendChild(mailButton(e,mailPage?.window||snapshot.window,stamp));
   }else{
-   const row=node('div','status-line'+(e.to==='ask'||e.to==='question'?' review':''));markRef(row,e);const who=snapshot.agents.find(a=>a.name===e.name)||{name:e.name};row.appendChild(face(who));const copy=node('div');copy.append(node('div','name',e.name),node('p','',messages[e.to]||'Status changed'));row.appendChild(copy);article.appendChild(row);
+   previousMailMinute=null;
+   article.appendChild(stamp);
+   const row=node('div','status-line'+(e.to==='ask'||e.to==='question'?' review':''));
+   markRef(row,e);
+   const status=messages[e.to]||'Status changed',who=snapshot.agents.find(a=>a.name===e.name)||{name:e.name};
+   const state=node('span','event-state');state.title=status;
+   state.append(icon(stateIcons[e.to]||'info'),node('span','sr-only',status));
+   row.append(face(who),node('span','name',e.name),state);article.appendChild(row);
   }
   container.appendChild(article);
  }
@@ -85,13 +149,14 @@ function renderActivity(){
  $('#mail-newer').disabled=mailPosition===0||!!mailController;
  $('#mail-page-label').textContent=mailPage?'Older Mail · Status stays on latest page':'Latest Mail';
  const cache=snapshot.mail_cache;
- $('#mail-cache-note').textContent=cache?'Mac 24h cache: '+cache.status+' · '+cache.messages+' messages. Cache coverage does not limit older message viewing.':'';
+ const cacheNote=$('#mail-cache-note');
+ cacheNote.hidden=!cache;
+ cacheNote.textContent=cache?'Mac 24h cache: '+cache.status+' · '+cache.messages+' messages. Cache coverage does not limit older message viewing.':'';
  $('#agent-filter').hidden=!agentFilter;$('#agent-filter').textContent=agentFilter+' ×';
 }
 function showNotices(notices,data,label){
  lastNotices=notices;
- const notice=$('#observation-notice');notice.hidden=notices.length===0;
- if(notice.hidden)notice.open=false;
+
  const sources=data?.sources,unknown=data?.period?.activity_unknown;
  if(!label){
   if(sources&&[sources.agents,sources.graph].some(s=>s.status==='unavailable'))label='Unavailable';
@@ -100,27 +165,106 @@ function showNotices(notices,data,label){
   else if(unknown)label=unknown+(data.period.seconds===null?' unknown':' excluded');
   else label='Observation notes';
  }
- $('#health-label').textContent=label;
- $('#health').textContent=notices.join(' ');
+ for(const [id,name] of [['observation-notice','Graph'],['activity-notes','Activity']]){
+  const notice=$('#'+id),summary=notice.querySelector('summary');
+  summary.title=name+' details'+(notices.length?': '+label:'');
+  summary.setAttribute('aria-label',summary.title);
+  notice.classList.toggle('has-warning',Boolean(notices.length));
+ }
+ const healthLabel=$('#health-label'),warning=notices.length?label:'';
+ if(healthLabel.textContent!==warning)healthLabel.textContent=warning;
+ for(const id of ['health','activity-health']){
+  const health=$('#'+id);
+  health.textContent=notices.join(' ');
+  health.hidden=!notices.length;
+ }
  $('#snapshot-period-note').textContent=data?.period?'Snapshot period: '+duration(data.period.seconds)+'.':'No snapshot has been observed yet.';
+}
+const attentionReasons={ask:'Awaiting review',question:'Needs an answer'};
+const needsReview=a=>Object.hasOwn(attentionReasons,a.act_state);
+const statusAgentMenus=[...document.querySelectorAll('[data-agent-status]')].map(details=>{
+ const state=details.dataset.agentStatus;
+ return {
+  details, trigger:details.querySelector('summary'), menu:details.querySelector('.graph-status-agents'),
+  count:details.querySelector('b'), state, signature:'',
+  label:state==='work'?'Working':'Waiting',
+ };
+});
+const graphStatusMenu=$('#graph-panel .graph-status'), observationMenu=$('#observation-notice');
+const graphMenus=[...statusAgentMenus.map(group=>group.details),observationMenu];
+function closeGraphMenus(keep=null){
+ for(const details of graphMenus)if(details!==keep&&details.open)details.open=false;
+}
+for(const details of graphMenus)details.addEventListener('toggle',()=>{
+ if(details.open)closeGraphMenus(details);
+});
+document.addEventListener('pointerdown',event=>{
+ if(!graphStatusMenu.contains(event.target))closeGraphMenus();
+});
+graphStatusMenu.addEventListener('keydown',event=>{
+ if(event.key!=='Escape')return;
+ const open=graphMenus.find(details=>details.open);
+ if(open){event.preventDefault();closeGraphMenus();open.querySelector('summary').focus({preventScroll:true});}
+});
+new ResizeObserver(()=>{
+ const net=$('#net').getBoundingClientRect(),position=graphStatusMenu.getBoundingClientRect();
+ graphStatusMenu.style.setProperty('--graph-agent-list-width',Math.max(0,net.right-position.left-10)+'px');
+ graphStatusMenu.style.setProperty('--graph-agent-list-height',Math.max(0,net.bottom-position.bottom-10)+'px');
+}).observe($('#net'));
+
+function renderGraphCounts(data,observed,fresh){
+ const summary=$('#summary'), labels=[];
+ const running=observed?data.agents.filter(a=>a.running):[];
+ for(const group of statusAgentMenus){
+  const {state,label}=group;
+  const active=running.filter(a=>a.act_state===state);
+  const attention=state==='work'?running.filter(needsReview):[];
+  const agents=[...attention,...active];
+  const labelWithCount=label+': '+active.length;
+  const note=attention.length?', need attention: '+attention.length:'';
+  labels.push(labelWithCount+note);
+  group.count.textContent=observed?String(active.length):'–';
+  group.details.classList.toggle('has-attention',attention.length>0);
+  group.trigger.title=label+': '+(observed?(fresh?'':'last known ')+active.length+note:'unavailable');
+  group.trigger.setAttribute('aria-label',group.trigger.title);
+  const signature=JSON.stringify([observed,agents.map(a=>[a.name,a.provider,a.model,a.locality,a.act_state])]);
+  if(group.signature===signature)continue;
+  group.signature=signature;
+  const focus=group.menu.contains(document.activeElement)?document.activeElement.dataset.name:'';
+  group.menu.replaceChildren();
+  for(const a of agents){
+   const button=node('button','graph-status-agent');button.type='button';button.dataset.name=a.name;
+   const portrait=face(a);portrait.setAttribute('aria-hidden','true');
+   button.append(portrait,node('span','graph-status-name',a.name));
+   if(needsReview(a)){
+    button.title=attentionReasons[a.act_state];
+    button.setAttribute('aria-label',a.name+' · '+button.title);
+    const flag=node('span','graph-status-flag '+a.act_state,a.act_state==='ask'?'!':'?');
+    flag.setAttribute('aria-hidden','true');
+    button.append(flag);
+   }
+   button.onclick=()=>{closeGraphMenus();group.trigger.focus({preventScroll:true});openGraphAgent(a.name,group.trigger);};
+   group.menu.append(button);
+  }
+  if(!agents.length)group.menu.append(node('p','',observed?'No '+label.toLowerCase()+' agents':'Agent observations unavailable'));
+  if(focus)(Array.from(group.menu.children).find(item=>item.dataset.name===focus)||group.trigger).focus({preventScroll:true});
+ }
+ const label=observed?(fresh?'':'Last known: ')+labels.join(', '):'Agent counts unavailable';
+ const status=$('#graph-count-label');
+ if(status.textContent!==label)status.textContent=label;
+ summary.classList.toggle('is-stale',observed&&!fresh);
 }
 function render(data){
  if(snapshot?.timeline.scope&&snapshot.timeline.scope!==data.timeline.scope){clearDetail();clearPair();resetMail();}
  snapshot=data;receivedAt=performance.now();
  window.OrreryMobileTerminal?.restore?.();
  // The displayed roster is the projection's graph.nodes + agents union.
- // Mail success cannot establish an empty roster or working/waiting counts.
+ // Mail success cannot establish an empty roster or agent status counts.
  const rosterSources=[data.sources.agents,data.sources.graph],mail=data.sources.mail;
  const rosterObserved=rosterSources.some(s=>s.observed_at!==null&&s.status!=='unavailable');
  const rosterFresh=rosterSources.every(s=>s.status==='available');
- const working=data.agents.filter(a=>a.running&&a.act_state==='work').length,waiting=data.agents.filter(a=>a.running&&a.act_state==='wait').length;
- const summary=$('#summary');summary.replaceChildren();
- if(!rosterObserved)summary.textContent='Agent counts unavailable';
- else{
-  if(!rosterFresh)summary.appendChild(document.createTextNode('Last known: '));
-  summary.append(node('b','',working),document.createTextNode(' working / '),node('b','',waiting),document.createTextNode(' waiting'));
- }
- $('#observed').textContent=time(data.observed_at);
+ renderGraphCounts(data,rosterObserved,rosterFresh);
+ $('#observed').textContent='Observed '+time(data.observed_at);
  const notices=[];
  if(!rosterObserved)notices.push('Agent observations unavailable.');
  else if(!rosterFresh)notices.push('Agent observations are stale or incomplete. Counts are last known.');
@@ -133,19 +277,42 @@ function render(data){
  if(data.period?.activity_unknown){const n=data.period.activity_unknown;notices.push(n+(n===1?' agent has an unknown activity time':' agents have unknown activity times')+(data.period.seconds===null?'.':n===1?' and is excluded from this period.':' and are excluded from this period.'));}
  showNotices(notices,data);
  const attention=$('#attention');attention.replaceChildren();
- const needs=data.agents.filter(a=>['ask','question'].includes(a.act_state)||a.state==='unknown');
+ const needs=data.agents.filter(a=>needsReview(a)||a.state==='unknown');
+ const attentionCount=$('#attention-count');
+ attentionCount.querySelector('b').textContent=rosterObserved?String(needs.length):'–';
+ attentionCount.title=rosterObserved?'Needs attention: '+(rosterFresh?'':'last known ')+needs.length:'Attention count unavailable';
+ attentionCount.querySelector('.sr-only').textContent=attentionCount.title;
  for(const a of needs.slice(0,3)){
-  const row=node('button','attention-row '+(['ask','question'].includes(a.act_state)?'review':'unknown'));row.type='button';
+  const review=needsReview(a);
+  const row=node('button','attention-row '+(review?'review':'unknown'));row.type='button';
   markRef(row,a);
-  row.appendChild(face(a));const copy=node('span','copy');copy.append(node('span','name',a.name),node('span','reason',a.act_state==='ask'?'Awaiting review':a.act_state==='question'?'Needs an answer':a.last_active?'Unknown · last active '+time(a.last_active):'Observation unavailable'));row.append(copy,node('span','alert-dot'),node('span','chevron','›'));
-  row.onclick=()=>{agentFilter=a.name;kind='all';syncFilters();showView('activity');renderActivity();$('#activity').scrollIntoView({block:'start'});};attention.appendChild(row);
+  const reason=review?attentionReasons[a.act_state]:a.last_active?'Unknown · last active '+time(a.last_active):'Observation unavailable';
+  row.title=reason;row.setAttribute('aria-label',a.name+' · '+reason);
+  const status=node('span','attention-status');status.append(icon(review?'review':'unknown'));
+  row.append(face(a),node('span','name',a.name),status);
+  row.onclick=()=>{
+   agentFilter=a.name;kind='all';syncFilters();showView('activity');renderActivity();
+   $('#activity').scrollTop=0;$('#agent-filter').focus({preventScroll:true});
+  };
+  attention.append(row);
  }
- if(needs.length>3)attention.appendChild(node('p','quiet',(needs.length-3)+' more agents need attention. Use Find in Graph to inspect.'));
+ if(needs.length>3){
+  const more=node('span','attention-more','+'+(needs.length-3));
+  more.title=(needs.length-3)+' more agents need attention';
+  attention.append(more);
+ }
  renderActivity();network.update(data);
+ window.OrreryMobileWorkspace?.refresh();
  window.OrreryMobileConversation?.refreshProfiles?.();
+ window.OrreryMobileConversation?.refreshActivity?.();
  $('#snapshot-note').textContent='Snapshot observed '+time(data.observed_at)+'. Account usage unavailable. Context arcs are separate.';
 }
-function syncFilters(){document.querySelectorAll('[data-kind]').forEach(b=>b.classList.toggle('active',b.dataset.kind===kind));}
+function syncFilters(){
+ document.querySelectorAll('[data-kind]').forEach(b=>{
+  const selected=b.dataset.kind===kind;
+  b.classList.toggle('active',selected);b.setAttribute('aria-pressed',String(selected));
+ });
+}
 function markStale(message){
  if(snapshot){
   const elapsed=(performance.now()-receivedAt)/1000;
@@ -176,7 +343,18 @@ async function poll(){
   if(!document.hidden){const soon=pending;pending=false;timer=setTimeout(poll,soon?0:10000);}
  }
 }
-document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>showView(b.dataset.view));
+tabletView.addEventListener('change',syncView);
+window.addEventListener('resize',()=>{if(tabletView.matches!==tabletLayout)syncView();});
+document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{
+ showView(b.dataset.view);
+ $('[data-view]:not([hidden])')?.focus({preventScroll:true});
+});
+$('#graph-search-toggle').onclick=()=>setGraphSearch($('#graph-search').hidden);
+$('#graph-search').addEventListener('keydown',event=>{
+ if(event.key==='Escape'){
+  setGraphSearch(false);$('#graph-search-toggle').focus({preventScroll:true});
+ }
+});
 document.querySelectorAll('[data-kind]').forEach(b=>b.onclick=()=>{kind=b.dataset.kind;syncFilters();renderActivity();});
 $('#agent-filter').onclick=()=>{agentFilter='';renderActivity();};
 let previousFocus=null;
@@ -216,10 +394,19 @@ periodSheet.addEventListener('close',()=>{
 });
 function periodLabel(text){
  $('#period-label').textContent=text;
- periodButtons.forEach(b=>{b.querySelector('span').textContent=text.replace('Last ','').replace(' min','m');b.setAttribute('aria-label','Change time range: '+text);});
+ periodButtons.forEach(b=>{
+  b.querySelector('span').textContent=text==='All history'?'∞':text.replace('Last ','').replace(' min','m');
+  const label='Change time range: '+text;
+  b.title=label+'. Applies to Graph and Activity.';b.setAttribute('aria-label',label);
+ });
 }
 range.value=Math.round(Math.log(1440/15)/Math.log(43200/15)*1000);
 range.setAttribute('aria-valuetext',duration(86400));
+window.OrrerySpawnControls?.mountScrubber(range, {
+ stops:[0,Number(range.value),1000],
+ stopLabels:['15 min','24h','30 days'],
+ formatValue:value=>duration(minutesAt(value)*60),
+});
 function choosePeriod(all){
  clearDetail();clearPair();resetMail();
  const minutes=minutesAt(Number(range.value));
@@ -237,10 +424,19 @@ document.addEventListener('visibilitychange',()=>{
 });
 window.addEventListener('pagehide',()=>{clearDetail();clearPair();cancelMail();active?.abort();});
 
-function mailButton(event,period){
- const route=node('button','mail-route');route.type='button';route.dataset.event=event.key;
- route.appendChild(person(event.source));const to=person(event.target);to.classList.add('route-to');route.appendChild(to);
- route.append(node('span','route-kind',event.kind==='cc'?'Cc recipient':'To recipient'),node('span','open-message','Read message ›'));
+function mailButton(event,period,stamp=null){
+ const route=node('button','mail-route'+(stamp?' activity-mail':''));route.type='button';route.dataset.event=event.key;
+ const from=person(event.source),to=person(event.target),recipient=event.kind==='cc'?'Cc':'To';
+ to.classList.add('route-to');
+ if(stamp){
+  route.title=event.source+' → '+event.target+' · '+recipient;
+  route.setAttribute('aria-label','Read Mail from '+event.source+' · '+recipient+' '+event.target+' · '+stamp.textContent);
+  const forward=icon('forward');forward.classList.add('mail-forward');
+  from.append(forward);to.prepend(icon('recipient'));
+  route.append(from,stamp,to,icon('mail'));
+ }else{
+  route.append(from,to,node('span','route-kind',recipient+' recipient'),node('span','open-message','Read message ›'));
+ }
  route.onclick=()=>openMessage(event,period);return route;
 }
 function clearDetail(close=true){
@@ -346,7 +542,13 @@ setInterval(()=>{
 // of the native fullscreen element. Unsupported/rejected API uses CSS only.
 function initGraphFullscreen(){
  const root=document.documentElement,button=$('#graph-fullscreen');
- const notice=$('#observation-notice'),noticeAnchor=document.createComment('observation position');notice.before(noticeAnchor);
+ const notice=$('#observation-notice');
+ const buttonIcon=button.querySelector('use');
+ function setExpanded(expanded){
+  const label=expanded?'Close expanded graph':'Expand graph';
+  button.title=label;button.setAttribute('aria-label',label);button.setAttribute('aria-expanded',String(expanded));
+  buttonIcon.setAttribute('href',expanded?'#icon-collapse':'#icon-expand');
+ }
  let active=false,nativeOwned=false,generation=0,sequence=0,entry=0,scroll=null;
  let oldRestoration=null,size=network.dimensions();
  const ownHistory=()=>entry&&history.state?.orreryGraphFullscreen===entry;
@@ -354,10 +556,12 @@ function initGraphFullscreen(){
   const dialogs=[...document.querySelectorAll('dialog[open]')],top=dialogs.at(-1);
   if(top){if(top.id==='terminal-sheet')window.OrreryMobileTerminal.close();else top.close();return true;}
   if(!$('#settings').hidden){settings(false);return true;}
-  if(notice.open){notice.open=false;return true;}
+  if(graphMenus.some(details=>details.open)){closeGraphMenus();return true;}
+  if(!$('#graph-search').hidden){setGraphSearch(false);$('#graph-search-toggle').focus({preventScroll:true});return true;}
   return false;
  };
  const resize=()=>{
+  if($('#graph-panel').hidden)return;
   const next=network.dimensions();
   if(next.w===size.w&&next.h===size.h)return;
   if(network.userView){
@@ -371,8 +575,7 @@ function initGraphFullscreen(){
   if(!active)return;
   const remove=pop&&ownHistory(),restore=scroll,restoration=oldRestoration,g=++generation;active=false;nativeOwned=false;
   root.classList.remove('graph-fullscreen');delete root.dataset.graphDisplay;
-  notice.open=false;noticeAnchor.after(notice);
-  button.textContent='Expand';button.setAttribute('aria-label','Expand graph');button.setAttribute('aria-expanded','false');
+  notice.open=false;setExpanded(false);
   const finished=document.fullscreenElement===document.body?document.exitFullscreen().catch(()=>{}):Promise.resolve();
   if(restoration!==null)history.scrollRestoration=restoration;
   if(remove)history.back();
@@ -392,8 +595,7 @@ function initGraphFullscreen(){
   history.pushState({orreryGraphFullscreen:entry},'');
   history.scrollRestoration='manual';
   root.classList.add('graph-fullscreen');root.dataset.graphDisplay='css';
-  $('#netinfo').after(notice);
-  button.textContent='Close';button.setAttribute('aria-label','Close expanded graph');button.setAttribute('aria-expanded','true');
+  setExpanded(true);
   requestAnimationFrame(resize);
   if(document.fullscreenEnabled&&typeof document.body.requestFullscreen==='function'){
    try{
@@ -425,23 +627,28 @@ function initGraphFullscreen(){
  return {exit};
 }
 graphFullscreen=initGraphFullscreen();
+syncView();
 poll();
 })();
 
 /* Common, opt-in pane terminal. No preview/draft/intent enters storage or URLs.
    Only the agent, tab and available Mail identity IDs enter this launch's sessionStorage. */
 (()=>{'use strict';
+const pane=window.OrreryMobilePane;
+if(window.location?.pathname==='/reader-pane'&&!pane)return;
 const q=s=>document.querySelector(s),make=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!==undefined)e.textContent=txt;return e;};
 const sheet=q('#terminal-sheet'),contract='orrery-mobile-pane-v1';
 let capability=null,enabled=false,phase='loading',name='',choices=[],choice=null,target=null,text='',output='',preview=null,previewOK=false,message='';
 let selector=null,history=false,tab='terminal',composer=false,backEntry=false,backClosing=false,inputObserver=null;
 const conversation=()=>window.OrreryMobileConversation;
+const readerMotion=window.OrreryReaderSendMotion;
+const sendFeedback=readerMotion?.createSendFeedback();
 const busy=()=>['sending','preparing'].includes(phase);
 const fresh=()=>capability?.api===34;
 const ref=value=>value&&/^[a-f0-9]{32}$/.test(value.mail_instance_id)&&Number.isSafeInteger(value.mail_agent_id)&&value.mail_agent_id>0?{mail_instance_id:value.mail_instance_id,mail_agent_id:value.mail_agent_id}:null;
 const rowRef=row=>ref({mail_instance_id:row.dataset.mailInstanceId,mail_agent_id:Number(row.dataset.mailAgentId)});
 const sameTarget=value=>!fresh()||!!ref(value)&&!!selector&&value.mail_instance_id===selector.mail_instance_id&&value.mail_agent_id===selector.mail_agent_id;
-let generation=0,previewController=null,operationController=null,pollTimer=0,expiryTimer=0,failures=0,prepared=null,receipt=null,previousFocus=null,afterClose=null;
+let generation=0,previewController=null,operationController=null,pollTimer=0,expiryTimer=0,receiptTimer=0,failures=0,prepared=null,receipt=null,previousFocus=null,afterClose=null;
 let replyReference=null,preparedReference=null;
 const referenceTarget=()=>target?JSON.stringify([name,capability?.epoch,target.choice,target.revision,selector?.mail_instance_id,selector?.mail_agent_id]):'';
 const referenceCurrent=value=>!value||value.target===referenceTarget()&&value.value.isCurrent();
@@ -449,23 +656,26 @@ const referenceError=()=>replyReference&&!referenceCurrent(replyReference)?'Targ
 function addReference(value){
  if(phase!=='editing'||!previewOK||!target||value.agent!==name||!value.isCurrent())return false;
  replyReference={value:{...value,text:value.text.replace(/\s+/gu,' ').trim()},target:referenceTarget()};
- render();q('#terminal-text')?.focus({preventScroll:true});return true;
+ render();window.OrreryReaderReplyMotion?.confirmReference?.(sheet.querySelector('.reader-reference-card'));
+ q('#terminal-text')?.focus({preventScroll:true});return true;
 }
 function refreshReference(){
  if(replyReference&&phase==='review'&&!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='';render();return;}
  q('#terminal-input-error')?.refresh?.();
- const review=q('#terminal-review');if(review&&replyReference)review.disabled=phase!=='editing'||!previewOK||!!imageController||!inputValid();
+ const review=q('#terminal-review');if(review&&replyReference)review.disabled=phase!=='editing'||!previewOK||!!attachmentController||!inputValid();
 }
-const MAX_ATTACHED_IMAGES=10;
-let imageAvailable=false,imageProbe='',imageController=null,imageProbeController=null,attachments=[];
+const MAX_ATTACHMENTS=10;
+const imageTypes=['image/jpeg','image/png','image/webp'], imageExtensions=['jpg','jpeg','png','webp'];
+const fileFormats=['pdf','txt','md','csv','json'];
+let attachmentAccess={image:false,file:false},attachmentProbe='',attachmentController=null,attachmentProbeController=null,attachments=[];
 let paused=false,checkingView=false,resumeController=null,reviewUntil=0,startupReady=false;
 const viewKey='orrery-mobile-view-v1';
 function savedView(){try{const v=JSON.parse(window.sessionStorage.getItem(viewKey));return v&&(Object.keys(v).length===2||Object.keys(v).length===4&&ref(v))&&Object.keys(v).every(k=>['agent','tab','mail_instance_id','mail_agent_id'].includes(k))&&/^[A-Za-z][A-Za-z0-9_-]{0,95}$/.test(v.agent)&&['conversation','terminal'].includes(v.tab)?v:null;}catch(_){return null;}}
-let restoreView=savedView();
-function rememberView(){if(!sheet.open||!name)return;const identity=ref(selector);try{window.sessionStorage.setItem(viewKey,JSON.stringify({agent:name,tab,...identity}));}catch(_){}}
-function forgetView(){try{window.sessionStorage.removeItem(viewKey);}catch(_){}}
+let restoreView=pane?null:savedView();
+function rememberView(){if(pane||!sheet.open||!name)return;const identity=ref(selector);try{window.sessionStorage.setItem(viewKey,JSON.stringify({agent:name,tab,...identity}));}catch(_){}}
+function forgetView(){if(pane)return;try{window.sessionStorage.removeItem(viewKey);}catch(_){}}
 function restoreSavedView(){
- if(!startupReady||document.hidden||!(enabled||history))return;
+ if(pane||!startupReady||document.hidden||!(enabled||history))return;
  const notification=/^#notify=([A-Za-z][A-Za-z0-9_-]{0,95})$/.exec(window.location?.hash||'');
  if(notification){
   const rows=window.OrreryMobileIdentity?.roster();if(!rows)return;
@@ -493,21 +703,23 @@ async function request(operation,payload,controller,timeout=3000){
    credentials:'same-origin',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});
   const raw=await response.text();if(new TextEncoder().encode(raw).length>16384)throw Error('unavailable');
   const value=JSON.parse(raw);
-  if(!response.ok||value.contract!==contract||operation&&value.epoch!==capability.epoch)throw Error(operation==='image'&&/^image_[a-z_]+$/.test(value.error)?value.error:'unavailable');
+  if(!response.ok||value.contract!==contract||operation&&value.epoch!==capability.epoch)throw Error((operation==='image'&&/^image_[a-z_]+$/.test(value.error)||operation==='file'&&/^file_[a-z_]+$/.test(value.error))?value.error:'unavailable');
   return value;
  }finally{clearTimeout(timer);}
 }
 function cancelIntent(){
  preparedReference=null;
+ clearTimeout(receiptTimer);
  const old=prepared||receipt;prepared=null;receipt=null;reviewUntil=0;clearTimeout(expiryTimer);
  if(!old||!enabled)return;
  const controller=new AbortController();
  // Best effort cancellation never retries commit, and keeps no text or preview.
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
-function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;imageController?.abort();imageController=null;imageProbeController?.abort();imageProbeController=null;imageAvailable=false;imageProbe='';clearAttachments();paused=false;checkingView=false;generation++;}
-function clear(){window.OrreryMobilePush?.close();replyReference=preparedReference=null;inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
+function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;attachmentController?.abort();attachmentController=null;attachmentProbeController?.abort();attachmentProbeController=null;attachmentAccess={image:false,file:false};attachmentProbe='';clearAttachments();paused=false;checkingView=false;generation++;}
+function clear(){window.OrreryMobilePush?.close();sendFeedback?.reset();replyReference=preparedReference=null;inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
 function close(fromBack=false,keepView=false){
+ if(pane&&fromBack!==true){pane.close();return;}
  if(!keepView){restoreView=null;forgetView();}
  const remove=backEntry&&window.history.state?.orreryConversation===true,closedName=name,finished=afterClose,restore=previousFocus;
  backEntry=false;previousFocus=afterClose=null;clear();if(sheet.open)sheet.close();
@@ -516,16 +728,27 @@ function close(fromBack=false,keepView=false){
  if(remove&&fromBack!==true){backClosing=true;window.history.back();}
 }
 window.addEventListener('popstate',event=>{if(backClosing){backClosing=false;event.stopImmediatePropagation();return;}if(sheet.open&&backEntry){event.stopImmediatePropagation();if(dismissLayer()){window.history.pushState({orreryConversation:true},'');return;}backEntry=false;close(true);}},true);
-const entryLabel=()=>history?'History':'Terminal';
+function updateEntry(b){
+ const label=history?'History':'Terminal';
+ b.disabled=!(enabled||history);
+ const actionLabel='Open '+label+' for '+b.dataset.terminalName;
+ b.title=b.disabled?'Reader unavailable':actionLabel;
+ b.setAttribute('aria-label',actionLabel);
+ if(b.dataset.entryKind===label)return;
+ b.dataset.entryKind=label;
+ const symbol=history?'history':'terminal';
+ b.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-'+symbol+'"></use></svg>';
+}
 function entry(n,cls='',identity=null){
- const b=make('button','terminal-entry '+cls,entryLabel());b.type='button';b.dataset.terminalName=n;
- b.setAttribute('aria-label','Open '+entryLabel()+' for '+n);b.disabled=!(enabled||history);b.title=history?'Read this agent’s verified conversation record':enabled?'View this agent’s selectable cockpit panes':'Terminal is off. Designated-phone policy acceptance and explicit opt-in are required.';
+ const b=make('button','terminal-entry icon-button '+cls);b.type='button';b.dataset.terminalName=n;
+ updateEntry(b);
  b.onclick=()=>open(n,identity);return b;
 }
 function entries(){
+ if(pane)return;
  q('#attention').querySelectorAll(':scope > .attention-row').forEach(row=>{const n=row.dataset.agentName;if(!n)return;const wrap=make('div','terminal-attention');row.replaceWith(wrap);wrap.append(row,entry(n,'',rowRef(row)));});
  q('#events').querySelectorAll('.status-line').forEach(row=>{const n=row.dataset.agentName;if(n&&!row.querySelector('.terminal-entry'))row.append(entry(n,'',rowRef(row)));});
- document.querySelectorAll('.terminal-entry:not(#terminal-graph-entry)').forEach(b=>{b.disabled=!(enabled||history);b.textContent=entryLabel();b.setAttribute('aria-label','Open '+entryLabel()+' for '+b.dataset.terminalName);});
+ document.querySelectorAll('.terminal-entry:not(#terminal-graph-entry)').forEach(updateEntry);
  restoreSavedView();
 }
 new MutationObserver(entries).observe(q('#attention'),{childList:true});new MutationObserver(entries).observe(q('#events'),{childList:true});
@@ -536,6 +759,7 @@ function mail(event){
 }
 async function open(n,identity=null,initialTab=null,onClose=null){
  if(busy()||sheet.open&&phase==='unknown'||!(enabled||history)||document.hidden)return;
+ if(pane&&n!==pane.name){pane.openPeer(n,identity);return;}
  const opening=!sheet.open;
  // Keep the entry route while navigating to another agent within this sheet.
  if(opening){previousFocus=document.activeElement;afterClose=onClose;}
@@ -544,7 +768,7 @@ async function open(n,identity=null,initialTab=null,onClose=null){
  // Consume only after the Reader accepts the target, before adding its Back
  // entry so Back cannot resurrect the same notification link.
  if(window.location?.hash==='#notify='+n)window.history.replaceState(window.history.state,'',window.location.pathname+window.location.search);
- if(opening&&history){window.history.pushState({orreryConversation:true},'');backEntry=true;}
+ if(opening&&history&&!pane){window.history.pushState({orreryConversation:true},'');backEntry=true;}
  if(history){tab=initialTab==='terminal'&&enabled?'terminal':'conversation';conversation().mount(n);}
  if(!enabled){phase='history-only';render();return;}
  if(fresh()&&!selector){phase='unavailable';message='A unique Mail identity is required. Refresh the agent list or open a Mail participant.';render();return;}
@@ -569,7 +793,7 @@ function switchTab(value){if(busy()||value===tab||!history||!enabled&&value==='t
 // Tab swipes belong only to reading surfaces; native scroll and selection win.
 let readerSwipe=null;
 function swipeAvailable(){
- return sheet.open&&history&&enabled&&!composer&&!text&&!imageController&&!busy()&&phase!=='review'
+ return sheet.open&&history&&enabled&&!composer&&!text&&!attachmentController&&!busy()&&phase!=='review'
   &&!q('.conversation-preview')&&!window.getSelection?.()?.toString();
 }
 function swipeSurface(target){
@@ -673,9 +897,9 @@ function refreshOutput(){
  const terminalState=q('.reader-terminal-state');if(terminalState)terminalState.textContent=previewOK?(pending?'New output · paused':reading?'Reading earlier output':''):'';
  const terminalMeta=q('.reader-terminal-meta');if(terminalMeta)terminalMeta.textContent=limits?'Latest '+(limits.max_lines||120)+' lines · up to '+((limits.max_bytes||12288)/1024)+' KiB · every 3s'+(shown?' · '+age.textContent:''):'Waiting for a verified terminal snapshot.';
  const dot=q('.reader-state');if(tab==='terminal'&&dot){dot.dataset.state=previewOK?'work':'unknown';dot.title=previewOK?'Terminal updating every 3s':'Terminal preview unavailable';dot.setAttribute('aria-label',dot.title);}
- const review=q('#terminal-review');if(review)review.disabled=phase!=='editing'||!previewOK||!!imageController||!inputValid();
+ const review=q('#terminal-review');if(review)review.disabled=phase!=='editing'||!previewOK||!!attachmentController||!inputValid();
  refreshReference();
- refreshImageControls();
+ refreshAttachmentControls();
  const status=q('.terminal-message');if(status)status.textContent=message;
  // Metadata below the terminal can reflow after following was sampled above.
  // Account for that layout without treating a later scroll as a resize clamp.
@@ -700,7 +924,7 @@ async function poll(){
   target=Object.freeze({...data.target});preview=data;output=data.text;previewOK=true;checkingView=false;failures=0;
   if(!['preparing','review','sending','accepted','unknown'].includes(phase))message='';
   refreshOutput();
-  probeImages();
+  probeAttachments();
  }catch(_){
   if(g!==generation||previewController!==controller||!sheet.open||document.hidden)return;
   failures++;previewOK=false;output='';preview=null;
@@ -721,7 +945,7 @@ function inputError(value){
  return '';
 }
 function validText(value){return typeof value==='string'&&value.trim()&&!inputError(value);}
-function clearAttachments(){for(const attachment of attachments)URL.revokeObjectURL(attachment.url);attachments=[];}
+function clearAttachments(){for(const attachment of attachments)if(attachment.url)URL.revokeObjectURL(attachment.url);attachments=[];}
 const draftText=()=>[text.replace(/[\r\n]+$/u,''),...attachments.map(attachment=>attachment.marker)].filter(Boolean).join(' ');
 const inputText=()=>{
  if(!replyReference)return draftText();
@@ -733,69 +957,124 @@ function inputErrorNote(){
  const note=make('p','terminal-input-error');note.id='terminal-input-error';note.setAttribute('role','status');
  note.refresh=()=>{note.textContent=referenceError()||inputError(inputText());note.hidden=!note.textContent;};note.refresh();return note;
 }
-function refreshImageControls(){
- const add=q('#terminal-image-add');if(!add)return;
- add.hidden=!imageAvailable;
- add.disabled=!previewOK||!!imageController||attachments.length>=MAX_ATTACHED_IMAGES||!['editing','accepted','refused'].includes(phase);
- const panel=add.closest('.reader-input-bar');if(panel)layoutInputBar(panel);
+function refreshAttachmentControls(){
+ const add=q('#terminal-image-add'),panel=add?.closest('.reader-input-bar');
+ if(!panel)return;
+ panel.refreshAttachmentPicker?.();
+ layoutInputBar(panel);
 }
-async function probeImages(){
- if(!target||imageProbe===target.choice+target.revision||imageProbeController)return;
- const g=generation,t=target,controller=new AbortController();imageProbeController=controller;imageProbe=t.choice+t.revision;
- try{
-  const result=await request('image',{epoch:capability.epoch,choice:t.choice,revision:t.revision,image:null},controller,10000);
-  if(g!==generation||!sheet.open||target?.choice!==t.choice||result.target?.revision!==t.revision||!sameTarget(result.target))return;
-  imageAvailable=result.enabled===true;refreshImageControls();
- }catch(_){if(g===generation){imageProbe='';imageAvailable=false;refreshImageControls();}}
- finally{if(imageProbeController===controller)imageProbeController=null;}
+async function probeAttachments(){
+ if(!target||attachmentProbe===target.choice+target.revision||attachmentProbeController)return;
+ const g=generation,t=target,controller=new AbortController();attachmentProbeController=controller;
+ attachmentProbe=t.choice+t.revision;
+ await Promise.all(['image','file'].map(async kind=>{
+  try{
+   const result=await request(kind,{epoch:capability.epoch,choice:t.choice,revision:t.revision,[kind]:null},controller,10000);
+   if(g!==generation||controller.signal.aborted||!sheet.open||target?.choice!==t.choice||
+    result.target?.choice!==t.choice||result.target?.revision!==t.revision||!sameTarget(result.target))return;
+   attachmentAccess[kind]=result.enabled===true;refreshAttachmentControls();
+  }catch(_){
+   if(g!==generation||controller.signal.aborted)return;
+   attachmentAccess[kind]=false;refreshAttachmentControls();
+   if(kind==='image')attachmentProbe='';
+  }
+ }));
+ if(attachmentProbeController===controller)attachmentProbeController=null;
 }
-function imageThumbnail(panel,removable){
+function renderAttachments(panel,removable){
  if(!attachments.length)return;
- const list=make('div','reader-images');list.setAttribute('aria-label','Attached images');
- for(const [index,attachment] of attachments.entries()){
-  const box=make('div','reader-image'),image=make('img','reader-image-thumb');image.src=attachment.url;image.alt='Attached image '+(index+1);
-  box.append(image,make('span','','Image '+(index+1)+' of '+attachments.length));
-  if(removable){const remove=action('×','reader-image-remove',()=>{attachments=attachments.filter(value=>value!==attachment);URL.revokeObjectURL(attachment.url);render();});remove.setAttribute('aria-label','Remove attached image '+(index+1));remove.disabled=!!imageController;box.append(remove);}
+ const list=make('div','reader-images');list.setAttribute('aria-label','Attachments');
+ const imageTotal=attachments.filter(item=>item.kind==='image').length;
+ let imageIndex=0;
+ for(const attachment of attachments){
+  const box=make('div','reader-image');
+  const caption=attachment.kind==='image'?'Image '+(++imageIndex)+' of '+imageTotal:attachment.label;
+  if(attachment.url){
+   const image=make('img','reader-image-thumb');image.src=attachment.url;image.alt='Attached image '+imageIndex;box.append(image);
+  }else{
+   const icon=make('span','reader-file-mark');icon.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-file"/></svg>';box.append(icon);
+  }
+  const label=make('span','reader-attachment-label',caption);label.title=caption;box.append(label);
+  if(removable){
+   const remove=action('×','reader-image-remove',()=>{
+    attachments=attachments.filter(value=>value!==attachment);if(attachment.url)URL.revokeObjectURL(attachment.url);render();
+   });
+   remove.setAttribute('aria-label',attachment.kind==='image'?'Remove attached image '+imageIndex:'Remove '+caption);
+   remove.disabled=!!attachmentController;box.append(remove);
+  }
   list.append(box);
  }
  panel.append(list);
 }
-async function uploadImages(files){
+function attachmentType(file,source){
+ const extension=/\.([a-z]+)$/i.exec(file.name)?.[1].toLowerCase();
+ if(attachmentAccess.image&&(imageTypes.includes(file.type)||!file.type&&imageExtensions.includes(extension)))return {kind:'image'};
+ if(source==='file'&&attachmentAccess.file&&fileFormats.includes(extension))return {kind:'file',format:extension};
+ return null;
+}
+function readAttachment(file,signal){
+ return new Promise((resolve,reject)=>{
+  const reader=new FileReader(),cleanup=()=>signal.removeEventListener('abort',abort);
+  const abort=()=>{reader.abort();cleanup();reject(Error('cancelled'));};
+  reader.onload=()=>{cleanup();const url=reader.result;resolve(url.slice(url.indexOf(',')+1));};
+  reader.onerror=()=>{cleanup();reject(Error('unavailable'));};
+  signal.addEventListener('abort',abort,{once:true});reader.readAsDataURL(file);
+ });
+}
+async function uploadAttachments(files,source){
  const selected=Array.from(files||[]);
- if(!selected.length||!target||!previewOK||!imageAvailable||imageController||!['editing','accepted','refused'].includes(phase))return;
- if(attachments.length+selected.length>MAX_ATTACHED_IMAGES){message='Attach up to '+MAX_ATTACHED_IMAGES+' images per input.';render();return;}
- for(const file of selected){
-  if(file.size>10*1024*1024||!['image/jpeg','image/png','image/webp'].includes(file.type)){
-   message=file.size>10*1024*1024?'Choose an image up to 10 MiB.':'Choose a JPEG, PNG or WebP image.';render();return;
-  }
+ if(!selected.length||!target||!previewOK||attachmentController||!['editing','accepted','refused'].includes(phase))return;
+ const typed=selected.map(file=>({file,type:attachmentType(file,source)}));
+ const includesFiles=typed.some(({type})=>type?.kind==='file')||attachments.some(item=>item.kind==='file');
+ if(attachments.length+selected.length>MAX_ATTACHMENTS){
+  message='Attach up to '+MAX_ATTACHMENTS+(includesFiles?' items':' images')+' per input.';render();return;
+ }
+ for(const {file,type} of typed){
+  if(!type){message=source==='file'&&attachmentAccess.file?'Choose a JPEG, PNG, WebP, PDF, TXT, MD, CSV or JSON file.':'Choose a JPEG, PNG or WebP image.';render();return;}
+  const limit=type.kind==='image'?10:5;
+  if(file.size>limit*1024*1024){message=(type.kind==='image'?'Choose an image up to ':'Choose a document up to ')+limit+' MiB.';render();return;}
+  if(type.kind==='file'&&!file.size){message='Choose a document that is not empty.';render();return;}
  }
  if(phase!=='editing'){cancelIntent();phase='editing';}
- const g=generation,t=target,controller=new AbortController();imageController=controller;
+ const g=generation,t=target,controller=new AbortController();attachmentController=controller;
+ let kind=source==='photo'?'image':'file';
  try{
-  for(const [index,file] of selected.entries()){
+  for(const [index,{file,type}] of typed.entries()){
    if(g!==generation||controller.signal.aborted)return;
-   message='Uploading image '+(index+1)+' of '+selected.length+'…';render();
-   const url=await new Promise((resolve,reject)=>{
-    const reader=new FileReader(),cleanup=()=>controller.signal.removeEventListener('abort',abort);
-    const abort=()=>{reader.abort();cleanup();reject(Error('cancelled'));};
-    reader.onload=()=>{cleanup();resolve(reader.result);};reader.onerror=()=>{cleanup();reject(Error('image_invalid'));};
-    controller.signal.addEventListener('abort',abort,{once:true});reader.readAsDataURL(file);
-   });
+   kind=type.kind;
+   message='Uploading '+(kind==='image'?'image ':'file ')+(index+1)+' of '+typed.length+'…';render();
+   const data=await readAttachment(file,controller.signal);
    if(g!==generation||controller.signal.aborted)return;
-   const result=await request('image',{epoch:capability.epoch,choice:t.choice,revision:t.revision,image:url.slice(url.indexOf(',')+1)},controller,30000);
+   const result=await request(kind,{epoch:capability.epoch,choice:t.choice,revision:t.revision,
+    [kind]:kind==='image'?data:{format:type.format,data}},controller,30000);
    if(g!==generation||!sheet.open||document.hidden)return;
-   if(result.enabled!==true||result.target?.choice!==t.choice||result.target?.revision!==t.revision||!sameTarget(result.target)||typeof result.path!=='string'||!result.path.startsWith('/'))throw Error('unavailable');
-   const quoted="'"+result.path.replaceAll("'","'\\''")+"'",marker='[image: '+quoted+']',final=[inputText(),marker].filter(Boolean).join(' ');
-   if(!validText(final))throw Error('image_text_too_large');
-   attachments.push({url:URL.createObjectURL(file),marker});
+   if(result.enabled!==true||result.target?.choice!==t.choice||result.target?.revision!==t.revision||
+    !sameTarget(result.target)||typeof result.path!=='string'||!result.path.startsWith('/'))throw Error('unavailable');
+   const quoted="'"+result.path.replaceAll("'","'\\''")+"'",marker='['+kind+': '+quoted+']';
+   if(!validText([inputText(),marker].filter(Boolean).join(' ')))throw Error(kind+'_text_too_large');
+   attachments.push({kind,marker,label:file.name,url:kind==='image'?URL.createObjectURL(file):null});
   }
   message='';
  }catch(error){
-  if(g===generation){const reasons={image_folder_full:'This workspace already has 50 images. Remove older files before attaching another.',image_too_large:'Choose an image up to 10 MiB.',image_pixels_too_large:'Choose an image up to 24 megapixels.',image_format_unsupported:'Choose a static JPEG, PNG or WebP image.',image_text_too_large:'The image paths and text exceed 4096 bytes. Shorten the text or remove an image.'};message=(attachments.length?attachments.length+' image(s) attached. ':'')+(reasons[error.message]||'Image could not be saved. No input was sent. Choose the image again.');}
- }finally{if(g===generation&&imageController===controller){imageController=null;render();}}
+  if(g===generation){
+   const reasons={
+    image_folder_full:'This workspace already has 50 images. Remove older files before attaching another.',
+    image_too_large:'Choose an image up to 10 MiB.',image_pixels_too_large:'Choose an image up to 24 megapixels.',
+    image_format_unsupported:'Choose a static JPEG, PNG or WebP image.',
+    image_text_too_large:'The image paths and text exceed 4096 bytes. Shorten the text or remove an image.',
+    file_folder_full:'This workspace already has 50 documents. Remove older files before attaching another.',
+    file_too_large:'Choose a document up to 5 MiB.',file_empty:'Choose a document that is not empty.',
+    file_format_unsupported:'Choose a PDF or UTF-8 TXT, MD, CSV or JSON file.',
+    file_text_too_large:'The attachment paths and text exceed 4096 bytes. Shorten the text or remove an attachment.',
+   };
+   const noun=includesFiles?' attachment(s)':' image(s)';
+   const failed=kind==='image'?'Image':'Document';
+   message=(attachments.length?attachments.length+noun+' attached. ':'')+(reasons[error.message]||failed+' could not be saved. No input was sent. Choose the file again.');
+  }
+ }finally{if(g===generation&&attachmentController===controller){attachmentController=null;render();}}
 }
 async function reviewInput(){
- if(phase!=='editing'||imageController||!target||!choice||!previewOK||!inputValid())return;
+ if(phase!=='editing'||attachmentController||!target||!choice||!previewOK||!inputValid())return;
  composer=false;
  clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,t=target,draft=inputText(),reference=replyReference,controller=new AbortController();operationController=controller;phase='preparing';render();
@@ -812,6 +1091,7 @@ async function reviewInput(){
 async function send(){
  if(phase!=='review'||!prepared||!previewOK)return;
  if(!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='';render();return;}
+ sendFeedback?.begin(q('.reader-send-confirm'));
  const sentText=prepared.text,p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target};
  prepared=null;preparedReference=replyReference=null;receipt=p;text='';clearAttachments();clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,controller=new AbortController();operationController=controller;phase='sending';message='';render();
@@ -822,16 +1102,27 @@ async function send(){
   phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';
   // Local display only, until the same words appear in the verified record.
   if(phase==='accepted'&&history){tab='conversation';composer=false;conversation()?.addPending(sentText);}
+  if(phase==='accepted')scheduleReceiptDismissal();
   render();
  }catch(_){if(g===generation&&sheet.open){phase='unknown';render();}}
  finally{if(g===generation){operationController=null;if(!document.hidden&&sheet.open)poll();}}
+}
+function scheduleReceiptDismissal(){
+ clearTimeout(receiptTimer);
+ const shown=receipt;
+ receiptTimer=setTimeout(()=>{
+  if(!sheet.open||phase!=='accepted'||receipt!==shown)return;
+  receipt=null;phase='editing';sendFeedback?.reset();render();
+ },3000);
 }
 async function status(){
  if(!receipt||operationController)return;const g=generation,p=receipt,controller=new AbortController();operationController=controller;
  try{const result=await request('status',{epoch:p.epoch,intent:p.intent},controller);
   if(g!==generation||!sheet.open)return;
   if(result.intent!==p.intent||result.target?.revision!==p.target.revision||!sameTarget(result.target))throw Error('unavailable');
-  phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';render();
+  phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';
+  if(phase==='accepted')scheduleReceiptDismissal();
+  render();
  }catch(_){if(g===generation&&sheet.open){message='Receipt unavailable. Input was not sent again.';render();}}
  finally{if(g===generation)operationController=null;}
 }
@@ -847,7 +1138,7 @@ function dismissLayer(){
  if(composer){composer=false;sheet.focus({preventScroll:true});return true;}
  return false;
 }
-function changePane(){if(busy()||phase==='unknown')return;composer=false;tab='terminal';return list();}
+function changePane(){if(busy()||phase==='unknown')return;window.OrreryMobileComposer?.fold();composer=false;tab='terminal';return list();}
 function paneButton(label){const b=action(label,'terminal-pane-button',changePane);b.disabled=busy()||phase==='unknown';return b;}
 function readerBar(){
  const bar=make('div','reader-bar'),who=make('div','reader-person'),portrait=make('img');portrait.src=window.AGENTSTACK_DEMO.portraitURL(name);portrait.alt='';portrait.onerror=()=>{portrait.remove();};
@@ -861,9 +1152,11 @@ function readerBar(){
   bar.append(b);
  }
  const bell=window.OrreryMobilePush?.button(name);if(bell){bell.disabled=busy();bar.insertBefore(bell,bar.lastElementChild);}
+ if(!pane){const add=window.OrreryMobileWorkspace?.readerEntry(name,selector);if(add)bar.insertBefore(add,bar.lastElementChild);}
  sheet.append(bar);queueMicrotask(()=>{conversation()?.refreshActivity?.();refreshOutput();});
 }
-function fitInput(field){
+function fitInput(field,animate=false){
+ if(readerMotion){readerMotion.fit(field,animate);return;}
  field.style.height='44px';field.style.height=Math.min(120,Math.max(44,field.scrollHeight))+'px';
 }
 function layoutInputBar(panel){
@@ -873,8 +1166,47 @@ function layoutInputBar(panel){
  const space=Math.ceil(panel.getBoundingClientRect().height)+12+'px';
  if(sheet.style.getPropertyValue('--reader-input-space')!==space){sheet.style.setProperty('--reader-input-space',space);refreshOutput();}
 }
+function attachmentPicker(panel,row,available){
+ const sources=make('div','reader-attachment-sources');sources.id='reader-attachment-sources';sources.hidden=true;
+ sources.setAttribute('role','group');sources.setAttribute('aria-label','Choose an attachment source');
+ const add=action('','reader-image-add',()=>show(sources.hidden,true));add.id='terminal-image-add';
+ add.title='Attach';add.setAttribute('aria-label','Attach');add.setAttribute('aria-controls',sources.id);
+ add.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-attachment"/></svg>';
+ function show(open,focus=false){
+  sources.hidden=!open;add.setAttribute('aria-expanded',String(open));
+  if(focus)(open?sources.querySelector('button:not([hidden])'):add)?.focus({preventScroll:true});
+  layoutInputBar(panel);
+ }
+ const choices={};
+ for(const [kind,id] of [['photo','terminal-image-file'],['file','terminal-file-image']]){
+  const input=make('input');input.type='file';input.id=id;input.multiple=true;input.hidden=true;
+  input.onchange=()=>uploadAttachments(input.files,kind);
+  const button=action('','icon-button',()=>{if(!add.disabled&&!button.hidden){show(false,true);input.click();}});
+  button.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-'+kind+'"/></svg>';
+  choices[kind]={input,button};sources.append(button);panel.append(input);
+ }
+ panel.refreshAttachmentPicker=()=>{
+  const {image,file}=attachmentAccess;
+  add.hidden=!image&&!file;
+  add.disabled=!available||!previewOK||!!attachmentController||attachments.length>=MAX_ATTACHMENTS;
+  if(add.hidden||add.disabled){sources.hidden=true;add.setAttribute('aria-expanded','false');}
+  choices.photo.button.hidden=!image;choices.photo.input.accept=imageTypes.join(',');
+  choices.file.input.accept=[...(image?imageExtensions:[]),...(file?fileFormats:[])].map(format=>'.'+format).join(',');
+  for(const [choice,label] of [[choices.photo,'Choose a photo'],[choices.file,file?'Choose a file':'Choose an image from files']]){
+   choice.button.title=label;choice.button.setAttribute('aria-label',label);
+  }
+ };
+ panel.addEventListener('keydown',event=>{
+  if(event.key==='Escape'&&!sources.hidden){event.preventDefault();show(false,true);}
+ });
+ panel.addEventListener('focusout',event=>{
+  if(!sources.hidden&&event.relatedTarget&&!panel.contains(event.relatedTarget))show(false);
+ });
+ add.setAttribute('aria-expanded','false');panel.refreshAttachmentPicker();panel.append(sources);row.append(add);
+}
 function readerInputBar(){
  const panel=make('div','reader-composer reader-input-bar'+(phase==='review'?' reader-review':''));panel.setAttribute('role','region');panel.setAttribute('aria-label',phase==='review'?'Review input':'Write input');
+ let receiptBox=null;
  panel.classList.toggle('has-reference',!!replyReference);
  const shown=phase==='review'?prepared.target:choice;
  const destination=paneButton((shown?shown.name+' · '+shown.pane_label:'Choose pane')+' ⌄');destination.className+=' reader-input-target';destination.setAttribute('aria-label','Change pane for '+name+(shown?' · '+shown.pane_label:''));
@@ -889,38 +1221,40 @@ function readerInputBar(){
  }
  if(phase==='review'){
   panel.append(make('h3','',prepared.target.name+' — send this input?'),make('p','reader-not-sent','Not sent yet'),make('pre','terminal-exact',prepared.text));
-  imageThumbnail(panel,false);
+  renderAttachments(panel,false);
   const enter=make('div','terminal-enter');enter.append(make('span','','After this text'),make('kbd','','Enter ↵'));
   panel.append(enter,make('p','terminal-help','Sends once to this pane. It may be a shell. Existing terminal input may be combined with it.'));
-  const actions=make('div','terminal-actions');actions.append(action('Edit','',()=>{cancelIntent();phase='editing';composer=true;render();queueMicrotask(()=>q('#terminal-text')?.focus({preventScroll:true}));}),action('Send once','terminal-primary',send));panel.append(actions);
+  const actions=make('div','terminal-actions'),confirm=action('Send once','terminal-primary',send);
+  if(sendFeedback)confirm.classList.add('reader-send-confirm');
+  actions.append(action('Edit','',()=>{cancelIntent();phase='editing';composer=true;render();queueMicrotask(()=>q('#terminal-text')?.focus({preventScroll:true}));}),confirm);panel.append(actions);
  }else{
-  if(['sending','accepted','unknown','refused'].includes(phase))readerReceipt(panel);
+  if(['sending','accepted','unknown','refused'].includes(phase))receiptBox=readerReceipt(panel);
   const available=!!choice&&['editing','accepted','refused'].includes(phase),label=make('label','reader-input-label','Your input');label.htmlFor='terminal-text';
   const row=make('div','reader-input-row'),field=make('textarea','terminal-text');field.id='terminal-text';field.rows=1;field.value=text;field.placeholder=choice?'Write one line…':'Choose a pane first';field.autocomplete='off';field.spellcheck=false;field.disabled=!available;
-  const file=make('input');file.type='file';file.id='terminal-image-file';file.accept='image/jpeg,image/png,image/webp';file.multiple=true;file.hidden=true;file.onchange=()=>uploadImages(file.files);
-  const add=action('+','reader-image-add',()=>file.click());add.id='terminal-image-add';add.title='Attach images';add.setAttribute('aria-label','Attach images');add.hidden=!imageAvailable;add.disabled=!available||!previewOK||!!imageController||attachments.length>=MAX_ATTACHED_IMAGES;
-  const review=action(phase==='preparing'?'…':'↑','terminal-primary reader-input-send',reviewInput);review.id='terminal-review';review.title='Review input';review.setAttribute('aria-label','Review input');review.disabled=!available||!previewOK||!!imageController||!inputValid();
+  const review=action(phase==='preparing'?'…':'↑','terminal-primary reader-input-send',reviewInput);review.id='terminal-review';review.title='Review input';review.setAttribute('aria-label','Review input');review.disabled=!available||!previewOK||!!attachmentController||!inputValid();
   const count=make('span','reader-input-count',new TextEncoder().encode(inputText()).length+' / 4096 bytes');count.hidden=!inputText();
   const error=inputErrorNote();field.setAttribute('aria-describedby','terminal-input-error');
   field.onfocus=()=>{composer=true;};field.onblur=()=>{composer=false;};
   field.oninput=()=>{
    if(!['editing','accepted','refused'].includes(phase))return;
-   if(['accepted','refused'].includes(phase)){cancelIntent();phase='editing';panel.querySelector('.reader-receipt')?.remove();}
-   text=field.value;count.textContent=new TextEncoder().encode(inputText()).length+' / 4096 bytes';count.hidden=!inputText();review.disabled=!previewOK||!!imageController||!inputValid();refreshReference();fitInput(field);layoutInputBar(panel);
+   if(['accepted','refused'].includes(phase)){cancelIntent();sendFeedback?.reset();phase='editing';panel.querySelector('.reader-receipt')?.remove();}
+   text=field.value;count.textContent=new TextEncoder().encode(inputText()).length+' / 4096 bytes';count.hidden=!inputText();review.disabled=!previewOK||!!attachmentController||!inputValid();refreshReference();fitInput(field,!!inputObserver);layoutInputBar(panel);
   };
-  field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};
+  field.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing)e.preventDefault();};
   if(!choice)panel.append(make('p','terminal-help','Choose a verified pane in Terminal to write.'));
-  imageThumbnail(panel,true);row.append(add,field,review);panel.append(label,file,row,count,error);
+  renderAttachments(panel,true);attachmentPicker(panel,row,available);row.append(field,review);panel.append(label,row,count,error);
  }
- sheet.append(panel);layoutInputBar(panel);
+ sheet.append(panel);
+ if(receiptBox)sendFeedback?.show(receiptBox,phase);
+ layoutInputBar(panel);
  if(typeof ResizeObserver!=='undefined'){inputObserver=new ResizeObserver(()=>layoutInputBar(panel));inputObserver.observe(panel);}
 }
-function readerReceipt(host=sheet){
+function readerReceipt(host){
  const accepted=phase==='accepted',unknown=phase==='unknown',sending=phase==='sending',box=make('div','reader-receipt '+phase);box.setAttribute('role','status');
  box.append(make('strong','',accepted?'Received by terminal':unknown?'Outcome unknown':sending?'Sending once…':'Input not sent'));
  box.append(make('small','',accepted?'Input and Enter received. Completion is not confirmed.':unknown?'Some input may have arrived. No automatic retry.':sending?'Waiting for the terminal receipt.':'Input refused or confirmation expired.'));
  if(unknown)box.append(action('Check receipt','',status));
- host.append(box);
+ host.append(box);return box;
 }
 function render(){
  conversation()?.dismissReferenceSelection?.();
@@ -1022,8 +1356,8 @@ sheet.addEventListener('cancel',e=>{e.preventDefault();if(!dismissLayer())close(
 function pauseView(){
  if(!sheet.open)return;paused=true;checkingView=true;rememberView();clearTimeout(pollTimer);pollTimer=0;
  previewController?.abort();previewController=null;resumeController?.abort();resumeController=null;
- imageProbeController?.abort();imageProbeController=null;imageProbe='';
- imageController?.abort();imageController=null;operationController?.abort();operationController=null;generation++;
+ attachmentProbeController?.abort();attachmentProbeController=null;attachmentProbe='';
+ attachmentController?.abort();attachmentController=null;operationController?.abort();operationController=null;generation++;
  // Settle the visible phase even if an already resolved response reaches its
  // hidden-page guard without rejecting the aborted request.
  if(phase==='sending'){phase='unknown';render();}
@@ -1052,11 +1386,17 @@ async function resumeView(){
  }}
  finally{if(resumeController===controller)resumeController=null;}
 }
-document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseView();else if(paused){paused=false;resumeView();}else restoreSavedView();});
+function startPane(){if(startupReady&&!sheet.open&&!document.hidden&&(enabled||history))open(pane.name,pane.identity,'conversation');}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseView();else if(paused){paused=false;resumeView();}else if(pane)startPane();else restoreSavedView();});
 window.addEventListener('pagehide',()=>{rememberView();close(true,true);},true);
-window.OrreryMobileTerminal={open,close,mail,restore:restoreSavedView,available:()=>enabled||history,reference:addReference,refreshReference,canReference:()=>phase==='editing'&&tab==='conversation'&&previewOK&&!!target};entries();
+window.OrreryMobileTerminal={open,close,mail,restore:restoreSavedView,available:()=>enabled||history,inputAvailable:()=>enabled,reference:addReference,refreshReference,canReference:()=>phase==='editing'&&tab==='conversation'&&previewOK&&!!target,
+ canLeave:()=>!busy()&&phase!=='unknown'&&!attachmentController};entries();
 const historyChecked=window.OrreryMobileConversation?window.OrreryMobileConversation.enabled():Promise.resolve(false);
 historyChecked.then(value=>{if(value!==true)return;history=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent=enabled?'History · Terminal':'History enabled';entries();});
 const controller=new AbortController();const terminalChecked=request('',null,controller).then(value=>{if(((value.api===31&&value.supported==='legacy-managed-pane')||(value.api===34&&value.supported==='fresh-managed-pane'))&&value.enabled===true&&value.ack==='tmux-command-accepted'){capability=Object.freeze({...value});enabled=true;const mode=document.querySelector('body>header>span');if(mode)mode.textContent=history?'History · Terminal':'Terminal enabled';entries();}}).catch(()=>{});
-Promise.all([historyChecked,terminalChecked]).then(()=>{startupReady=true;restoreSavedView();});
+Promise.all([historyChecked,terminalChecked]).then(()=>{
+ startupReady=true;document.dispatchEvent?.(new Event('orrery-mobile-input-ready'));
+ if(pane){if(enabled||history)startPane();else pane.unavailable();}
+ else restoreSavedView();
+});
 })();

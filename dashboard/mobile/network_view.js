@@ -9,6 +9,7 @@ class NetworkView{
   this.params={...core.defaults};this.mode='focus';this.selected='';this.agents=[];
   this.view={vx:0,vy:0,k:1};this.raf=0;this.hot=0;this.userView=false;this.onSelect=onSelect;this.onMailPair=onMailPair;this.pointerEnded=-Infinity;
   this.reduced=matchMedia('(prefers-reduced-motion:reduce)').matches;
+  this.highlighted='';this.dragged='';
   this.onOpen=onOpen;
   try{
    const saved=JSON.parse(localStorage.getItem('orrery.mobile.network')||'{}');
@@ -70,6 +71,7 @@ class NetworkView{
    running.forEach(node=>this.svg.append(node));attention.forEach(node=>this.svg.append(node));
   }
   core.paint(this.map,this.elements,this.params.NSIZE);
+  if(this.highlighted)this.highlightLinks(this.highlighted);
  }
  rebuild(){
   if(!this.snapshot)return;
@@ -84,9 +86,10 @@ class NetworkView{
   names.forEach((n,i)=>{
    const a=this.agents.find(x=>x.name===n);if(!a)return;
    const prev=old.get(n),theta=i*2.3999632297,rad=35+Math.sqrt(i)*17;
-   this.map.set(n,{x:prev?.x??world.w/2+Math.cos(theta)*rad,y:prev?.y??world.h/2+Math.sin(theta)*rad,vx:0,vy:0,fixed:false,
+   this.map.set(n,{x:prev?.x??world.w/2+Math.cos(theta)*rad,y:prev?.y??world.h/2+Math.sin(theta)*rad,vx:0,vy:0,fixed:n===this.dragged,
     ...this.metadata(a),deg:0});
   });
+  if(this.dragged&&!this.map.has(this.dragged))this.releaseNode();
   this.edges=this.snapshot.graph.edges.filter(e=>keep.has(e.source)&&keep.has(e.target));
   this.spawn=this.snapshot.graph.spawn.filter(e=>keep.has(e.source)&&keep.has(e.target));
   for(const e of this.edges){this.map.get(e.source).deg++;this.map.get(e.target).deg++;}
@@ -122,22 +125,41 @@ class NetworkView{
    },events:{}
   });
   core.paint(this.map,this.elements,this.params.NSIZE);
+  if(this.highlighted)this.highlightLinks(this.highlighted);
+ }
+ highlightLinks(name){
+  this.highlighted=this.map.has(name)?name:'';
+  const selected=this.highlighted;
+  const adjacent=new Set(selected?[selected]:[]);
+  for(const {ln,s,t} of this.elements.edge){
+   const connected=Boolean(selected&&(s===selected||t===selected));
+   ln.classList.toggle('hl',connected);
+   if(connected)adjacent.add(s===selected?t:s);
+  }
+  for(const [node,{grp}] of this.elements.node)grp.classList.toggle('hl',adjacent.has(node));
+  for(const {tx,s,t} of this.elements.badge)tx.classList.toggle('hl',Boolean(selected&&(s===selected||t===selected)));
+  this.net.classList.toggle('focus',Boolean(selected));
+ }
+ releaseNode(){
+  const grabbed=this.map.get(this.dragged);if(grabbed){grabbed.fixed=false;this.hot=Math.max(this.hot,40);}
+  this.dragged='';
+  this.net.classList.remove('node-dragging');
  }
  run(){
   if(this.raf||document.hidden||document.getElementById('graph-panel').hidden)return;
   let settled=0,first=true;
   const frame=()=>{
-   const cool=this.hot<30?.70:this.hot<60?.90:1;let move=0;
+   const dragging=Boolean(this.dragged),cool=dragging?1:this.hot<30?.70:this.hot<60?.90:1;let move=0;
    for(let i=0;i<(this.reduced?6:1);i++)move=Math.max(move,core.step(this.map,this.edges,this.spawn,this.world(),this.params,cool));
-   if(first||move>=.01)core.paint(this.map,this.elements,this.params.NSIZE);
-   first=false;settled=move<.45?settled+1:0;this.hot--;
+   if(first||dragging||move>=.01)core.paint(this.map,this.elements,this.params.NSIZE);
+   first=false;settled=!dragging&&move<.45?settled+1:0;this.hot--;
    if(!this.userView&&(this.hot%6===0||settled>=5))this.fit();
-   if(this.hot>0&&settled<5)this.raf=requestAnimationFrame(frame);
+   if(dragging||this.hot>0&&settled<5)this.raf=requestAnimationFrame(frame);
    else{this.raf=0;if(!this.userView)this.fit();}
   };
   this.raf=requestAnimationFrame(frame);
  }
- pause(){if(this.raf)cancelAnimationFrame(this.raf);this.raf=0;this.comets.pause();}
+ pause(){this.cancelPointers();if(this.raf)cancelAnimationFrame(this.raf);this.raf=0;this.comets.pause();}
  fit(){const v=core.fit(this.map,this.dimensions());if(v)this.view=v;this.applyView();}
  applyView(){
   const {w,h}=this.dimensions(),v=this.view;
@@ -151,6 +173,7 @@ class NetworkView{
   this.userView=true;this.applyView();
  }
  activateNode(name,{keyboard=false}={}){
+  if(this.pickNode){this.pickNode(name);return;}
   if(this.mode==='focus'&&name!==this.selected){
    this.select(name);this.fit();
    if(keyboard)this.elements.node.get(name)?.grp.focus({preventScroll:true});
@@ -167,12 +190,20 @@ class NetworkView{
   }
   this.selection();if(this.onSelect)this.onSelect(n);
  }
+ syncMode(){
+  document.querySelectorAll('[data-mode]').forEach(button=>{
+   const selected=button.dataset.mode===this.mode;
+   button.classList.toggle('active',selected);button.setAttribute('aria-pressed',String(selected));
+  });
+ }
  selection(){
-  document.querySelector('[data-mode=focus]').title=this.selected?'Focus on '+this.selected:'Focus';
+  const focus=document.querySelector('[data-mode=focus]');
+  focus.title=this.selected?'Focus on '+this.selected:'Focus';
+  focus.setAttribute('aria-label',focus.title);
  }
  focus(name){
   if(!this.agents.some(a=>a.name===name))return;
-  this.mode='focus';document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode==='focus'));
+  this.mode='focus';this.syncMode();
   this.select(name);this.fit();
   document.getElementById('agent-search').value='';this.search();
  }
@@ -186,9 +217,14 @@ class NetworkView{
    const row=document.createElement('div');row.className='agent-result';
    const open=document.createElement('button');open.type='button';open.className='agent-result-open';
    const name=document.createElement('strong');name.textContent=a.name;
-   const role=document.createElement('span');role.textContent=a.role||'Role not set';
-   open.append(name,role);open.onclick=()=>this.onOpen?.(a.name);
-   const focus=document.createElement('button');focus.type='button';focus.className='agent-result-focus';focus.textContent='Focus';focus.setAttribute('aria-label','Focus on '+a.name);
+   open.append(name);
+   if(a.role){
+    const role=document.createElement('span');role.textContent=a.role;open.append(role);
+   }
+   open.onclick=()=>this.onOpen?.(a.name);
+   const focus=document.createElement('button');focus.type='button';focus.className='agent-result-focus icon-button';
+   focus.title='Focus on '+a.name;focus.setAttribute('aria-label',focus.title);
+   focus.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-focus"></use></svg>';
    focus.onclick=()=>{this.focus(a.name);document.querySelector('[data-mode=focus]').focus();};
    row.append(open,focus);results.append(row);
   }
@@ -198,10 +234,10 @@ class NetworkView{
  initControls(){
   const rows=document.getElementById('nctl-rows');
   const bindings=Object.fromEntries(Object.keys(core.defaults).map(k=>[k,{get:()=>this.params[k],set:v=>this.params[k]=v}]));
-  const tuning=core.tuning(bindings);
+  const tuning=core.tuning(bindings),scrubbers=new Map();
   const save=()=>{try{localStorage.setItem('orrery.mobile.network',JSON.stringify(this.params));}catch(_){}};
   this.syncControls=()=>{
-   for(const row of rows.children){const k=row.dataset.p,p=core.parameters[k],v=this.params[k];row.querySelector('input').value=v;row.querySelector('.val').textContent=tuning[k].fmt(v);row.querySelector('input').style.setProperty('--fill',((v-p.min)/(p.max-p.min)*100)+'%');}
+   for(const row of rows.children){const k=row.dataset.p,v=this.params[k];row.querySelector('input').value=v;row.querySelector('.val').textContent=tuning[k].fmt(v);scrubbers.get(k)?.sync();}
   };
   for(const[k,p]of Object.entries(core.parameters)){
    const row=document.createElement('div');row.className='st-row';row.dataset.p=k;
@@ -209,7 +245,9 @@ class NetworkView{
    const val=document.createElement('span');val.className='val';
    const input=document.createElement('input');input.type='range';input.id='net-'+k;input.min=p.min;input.max=p.max;input.step=p.step;input.setAttribute('aria-label',p.label);
    input.addEventListener('input',()=>{tuning[k].set(Number(input.value));this.syncControls();save();if(p.apply==='repaint')core.paint(this.map,this.elements,this.params.NSIZE);else{if(p.apply==='rebuild')this.drawElements();this.hot=Math.max(this.hot,80);this.run();}});
-   row.append(label,val,input);rows.appendChild(row);
+   const track=document.createElement('div');track.className='mobile-scrubber';track.append(input);
+   row.append(label,val,track);rows.appendChild(row);
+   scrubbers.set(k,window.OrrerySpawnControls?.mountScrubber(input,{formatValue:tuning[k].fmt,stops:[]}));
   }
   this.syncControls();
   document.getElementById('nc-reset').onclick=()=>{this.params={...core.defaults};this.syncControls();save();this.drawElements();this.hot=150;this.run();};
@@ -218,42 +256,85 @@ class NetworkView{
   document.getElementById('search-clear').onclick=()=>{const input=document.getElementById('agent-search');input.value='';this.search();input.focus();};
   document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{
    if(!this.snapshot)return;
-   this.mode=b.dataset.mode;this.map.clear();this.layoutKey='';this.renderKey='';this.userView=false;
-   document.querySelectorAll('[data-mode]').forEach(x=>x.classList.toggle('active',x===b));this.update(this.snapshot);
+   this.cancelPointers();this.mode=b.dataset.mode;this.map.clear();this.layoutKey='';this.renderKey='';this.userView=false;
+   this.syncMode();this.update(this.snapshot);
   });
-  document.getElementById('zoom-out').onclick=()=>this.zoom(1/1.15);document.getElementById('zoom-in').onclick=()=>this.zoom(1.15);
-  document.getElementById('fit').onclick=()=>{this.userView=false;this.fit();};
  }
  initPointers(){
   const points=new Map();let pan=null,pinch=null;
   const geometry=()=>{const[a,b]=[...points.values()];return{d:Math.hypot(a.x-b.x,a.y-b.y),x:(a.x+b.x)/2,y:(a.y+b.y)/2};};
+  const highlight=name=>{if(name!==this.highlighted)this.highlightLinks(name);};
+  this.cancelPointers=()=>{
+   if(pan?.grab&&!pan.moved)this.userView=pan.camera;
+   points.clear();pan=pinch=null;
+   this.releaseNode();highlight('');
+  };
   this.svg.addEventListener('pointerdown',e=>{
-   const node=e.target.closest('.node')?.dataset.name;
+   if(e.button!==0)return;
+   const target=e.target.closest('.node'),node=target?.dataset.name;
    // A touch's compatibility mousedown can hit a different node after rebuild.
    if(this.mode==='focus'&&node&&node!==this.selected)e.preventDefault();
    points.set(e.pointerId,{x:e.clientX,y:e.clientY});this.svg.setPointerCapture(e.pointerId);
-   if(points.size===2){const g=geometry(),r=this.svg.getBoundingClientRect();pinch={d:g.d,k:this.view.k,wx:this.view.vx+(g.x-r.x)/this.view.k,wy:this.view.vy+(g.y-r.y)/this.view.k};pan=null;return;}
-   if(points.size===1){const hit=e.target.closest('.edge-hit');pan={id:e.pointerId,x:e.clientX,y:e.clientY,vx:this.view.vx,vy:this.view.vy,node:e.target.closest('.node')?.dataset.name,edge:hit?.dataset.kind==='comm'?[hit.dataset.s,hit.dataset.t]:null,moved:false};}
+   if(points.size===2){
+    const g=geometry(),r=this.svg.getBoundingClientRect();
+    pinch={d:g.d,k:this.view.k,wx:this.view.vx+(g.x-r.left)/this.view.k,wy:this.view.vy+(g.y-r.top)/this.view.k};
+    pan=null;this.userView=true;this.releaseNode();highlight('');return;
+   }
+   if(points.size!==1)return;
+   const hit=e.target.closest('.edge-hit'),grabbed=node&&!this.pickNode?this.map.get(node):null;
+   pan={id:e.pointerId,x:e.clientX,y:e.clientY,vx:this.view.vx,vy:this.view.vy,node,camera:this.userView,
+    grab:grabbed?{x:grabbed.x,y:grabbed.y}:null,edge:hit?.dataset.kind==='comm'?[hit.dataset.s,hit.dataset.t]:null,moved:false};
+   if(grabbed)this.userView=true;
+   highlight(node||'');
   });
   this.svg.addEventListener('pointermove',e=>{
-   if(!points.has(e.pointerId))return;points.set(e.pointerId,{x:e.clientX,y:e.clientY});
-   if(pinch&&points.size===2){const g=geometry(),r=this.svg.getBoundingClientRect(),k=Math.max(.3,Math.min(4,pinch.k*g.d/(pinch.d||1)));this.view={k,vx:pinch.wx-(g.x-r.x)/k,vy:pinch.wy-(g.y-r.y)/k};this.userView=true;this.applyView();return;}
+   if(!points.has(e.pointerId)){
+    if(!points.size&&e.pointerType==='mouse')highlight(e.target.closest('.node')?.dataset.name||'');
+    return;
+   }
+   points.set(e.pointerId,{x:e.clientX,y:e.clientY});
+   if(pinch&&points.size===2){
+    const g=geometry(),r=this.svg.getBoundingClientRect(),k=Math.max(.3,Math.min(4,pinch.k*g.d/(pinch.d||1)));
+    this.view={k,vx:pinch.wx-(g.x-r.left)/k,vy:pinch.wy-(g.y-r.top)/k};this.userView=true;this.applyView();return;
+   }
    if(!pan||e.pointerId!==pan.id)return;
-   if(Math.hypot(e.clientX-pan.x,e.clientY-pan.y)>5)pan.moved=true;
-   if(pan.moved){this.view.vx=pan.vx-(e.clientX-pan.x)/this.view.k;this.view.vy=pan.vy-(e.clientY-pan.y)/this.view.k;this.userView=true;this.applyView();}
+   const dx=e.clientX-pan.x,dy=e.clientY-pan.y;
+   if(!pan.moved&&Math.hypot(dx,dy)<=5)return;
+   pan.moved=true;this.userView=true;
+   if(pan.grab){
+    const grabbed=this.map.get(pan.node);if(!grabbed)return;
+    if(this.dragged!==pan.node){
+     this.dragged=pan.node;this.net.classList.add('node-dragging');highlight(pan.node);
+    }
+    grabbed.fixed=true;
+    grabbed.x=pan.grab.x+dx/this.view.k;grabbed.y=pan.grab.y+dy/this.view.k;grabbed.vx=grabbed.vy=0;
+    core.paint(this.map,this.elements,this.params.NSIZE);
+    this.hot=Math.max(this.hot,40);this.run();
+   }else{
+    this.view.vx=pan.vx-dx/this.view.k;this.view.vy=pan.vy-dy/this.view.k;this.applyView();
+   }
   });
   const end=e=>{
-   this.pointerEnded=performance.now();points.delete(e.pointerId);if(pinch){if(points.size<2){pinch=null;pan=null;}return;}
+   if(!points.has(e.pointerId))return;
+   this.pointerEnded=performance.now();points.delete(e.pointerId);
+   if(pinch){if(points.size<2){pinch=null;pan=null;}return;}
+   if(!pan||pan.id!==e.pointerId)return;
    const old=pan;pan=null;
-   if(old&&!old.moved&&e.type==='pointerup'){
-    if(old.node)this.activateNode(old.node);
-    else if(old.edge)this.onMailPair?.(...old.edge);
-   }
+   if(old.grab&&!old.moved)this.userView=old.camera;
+   this.releaseNode();
+   const hovered=e.pointerType==='mouse'&&e.type==='pointerup'?
+    document.elementFromPoint(e.clientX,e.clientY)?.closest('#gsvg .node')?.dataset.name:'';
+   highlight(hovered||'');
+   if(old.moved||e.type!=='pointerup')return;
+   if(old.node)this.activateNode(old.node);
+   else if(old.edge)this.onMailPair?.(...old.edge);
   };
-  this.svg.addEventListener('pointerup',end);this.svg.addEventListener('pointercancel',end);
+  for(const type of ['pointerup','pointercancel','lostpointercapture'])this.svg.addEventListener(type,end);
+  this.svg.addEventListener('pointerleave',()=>{if(!points.size)highlight('');});
   this.svg.addEventListener('wheel',e=>{e.preventDefault();this.zoom(e.deltaY<0?1.15:1/1.15);},{passive:false});
   window.addEventListener('resize',()=>this.applyView());
  }
+
 }
 window.OrreryMobileNetwork=NetworkView;
 })();
