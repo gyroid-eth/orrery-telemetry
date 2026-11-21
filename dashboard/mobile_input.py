@@ -18,6 +18,10 @@ CONTRACT='orrery-mobile-pane-v1'
 MAX_JSON_BYTES=16384
 MAX_IMAGE_BYTES=10*1024*1024
 MAX_IMAGE_JSON=4*((MAX_IMAGE_BYTES+2)//3)+MAX_JSON_BYTES
+MAX_FILE_BYTES=5*1024*1024
+MAX_FILE_JSON=4*((MAX_FILE_BYTES+2)//3)+MAX_JSON_BYTES
+FILE_FORMATS=frozenset({'pdf','txt','md','csv','json'})
+ATTACHMENT_JSON_LIMITS={'image':MAX_IMAGE_JSON,'file':MAX_FILE_JSON}
 MAX_PREVIEW_LINES=120
 MAX_PREVIEW_BYTES=12288
 HEX=re.compile(r'[a-f0-9]{64}\Z')
@@ -25,7 +29,7 @@ EPOCH=re.compile(r'[a-f0-9]{32}\Z')
 NAME=re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,95}\Z')
 OPERATIONS={'targets':{'epoch','name'},'preview':{'epoch','choice'},'prepare':{'epoch','choice','revision','text'},
             'commit':{'epoch','intent','confirmation'},'cancel':{'epoch','intent'},'status':{'epoch','intent'},
-            'image':{'epoch','choice','revision','image'}}
+            'image':{'epoch','choice','revision','image'},'file':{'epoch','choice','revision','file'}}
 
 def request_fields(operation,payload,*,fresh=None):
     fields=set() if operation=='capability' else OPERATIONS.get(operation)
@@ -36,7 +40,18 @@ def request_fields(operation,payload,*,fresh=None):
         fields|={'mail_instance_id','mail_agent_id'}
         if (not _matches(EPOCH,payload.get('mail_instance_id')) or type(payload.get('mail_agent_id')) is not int
                 or payload['mail_agent_id']<=0):return False
-    return set(payload)==fields
+    if set(payload)!=fields:return False
+    if operation=='file' and payload['file'] is not None:
+        file=payload['file']
+        return (isinstance(file,dict) and set(file)=={'format','data'}
+                and isinstance(file['format'],str) and file['format'] in FILE_FORMATS
+                and isinstance(file['data'],str) and 0<len(file['data'])<=4*((MAX_FILE_BYTES+2)//3))
+    return True
+
+
+def attachment_error(operation,reason):
+    return (operation in ATTACHMENT_JSON_LIMITS and isinstance(reason,str)
+            and re.fullmatch(operation+r'_[a-z_]+',reason) is not None)
 
 
 class InputUnavailable(ValueError):
@@ -88,7 +103,7 @@ class InputClient:
         request=dict(payload,contract=CONTRACT,owner=self.owner,reader_epoch=self.reader_epoch)
         try: data=json.dumps(request,separators=(',',':'),ensure_ascii=False,allow_nan=False).encode('utf-8')
         except (ValueError,UnicodeError): raise InputUnavailable('input_request_invalid') from None
-        if len(data)>(MAX_IMAGE_JSON if operation=='image' else MAX_JSON_BYTES): raise InputUnavailable('input_request_invalid')
+        if len(data)>ATTACHMENT_JSON_LIMITS.get(operation,MAX_JSON_BYTES): raise InputUnavailable('input_request_invalid')
         value=self._post(operation,data)
         if value.get('contract')!=CONTRACT or not _matches(EPOCH,value.get('epoch')):
             raise InputUnavailable('input_capability_incompatible')
@@ -121,8 +136,8 @@ class InputClient:
                     or type(value['observed_at']) is not int or value['observed_at']<=0
                     ):raise InputUnavailable('input_response_invalid')
             return value
-        if operation=='image':
-            upload=payload['image'] is not None
+        if operation in ATTACHMENT_JSON_LIMITS:
+            upload=payload[operation] is not None
             if set(value)!={'contract','epoch','target','enabled'}|({'path'} if upload else set()):
                 raise InputUnavailable('input_response_invalid')
             value['target']=_public_target(value['target'],fresh=fresh)
@@ -130,9 +145,11 @@ class InputClient:
                     or value['target']['revision']!=payload['revision']):raise InputUnavailable('input_response_invalid')
             if upload:
                 path=value['path']
+                suffix=r'(?:png|jpg)' if operation=='image' else re.escape(payload['file']['format'])
+                directory='images' if operation=='image' else 'files'
                 if (value['enabled'] is not True or not isinstance(path,str) or not path.startswith('/') or len(path.encode('utf-8'))>4096
                         or any(ord(c)<32 or ord(c)==127 for c in path)
-                        or not re.search(r'/\.orrery-input-images/[a-f0-9]{32}\.(?:png|jpg)\Z',path)):
+                        or not re.search(r'/\.orrery-input-'+directory+r'/[a-f0-9]{32}\.'+suffix+r'\Z',path)):
                     raise InputUnavailable('input_response_invalid')
             return value
         expected={'contract','epoch','target','state','intent'}
@@ -151,7 +168,7 @@ class InputClient:
     def _post(self,operation,data):
         # Every operation has one fixed path. This is not the cockpit proxy or
         # terminal WebSocket. No redirects, environment proxy or auto-retry.
-        timeout=25 if operation=='image' else 7
+        timeout=25 if operation in ATTACHMENT_JSON_LIMITS else 7
         connection=http.client.HTTPConnection('127.0.0.1',self.port,timeout=timeout)
         timer=None; deadline=time.monotonic()+timeout
         try:
@@ -165,7 +182,7 @@ class InputClient:
                 'Host':f'127.0.0.1:{self.port}','Origin':f'http://127.0.0.1:{self.port}',
                 'X-ORRERY-Mobile-Contract':CONTRACT,'Content-Type':'application/json','Connection':'close',**headers})
             response=connection.getresponse(); lengths=response.headers.get_all('Content-Length',[])
-            if (response.status not in ({200,403} if operation=='image' else {200}) or response.getheader('Content-Type','').split(';')[0]!='application/json'
+            if (response.status not in ({200,403} if operation in ATTACHMENT_JSON_LIMITS else {200}) or response.getheader('Content-Type','').split(';')[0]!='application/json'
                     or response.headers.get_all('Transfer-Encoding',[]) or response.headers.get_all('Content-Encoding',[])
                     or response.getheader('Cache-Control')!='no-store' or len(lengths)!=1
                     or re.fullmatch(r'[0-9]{1,5}',lengths[0]) is None or not 0<int(lengths[0])<=MAX_JSON_BYTES):
@@ -176,7 +193,7 @@ class InputClient:
             value=decode_json(body)
             if response.status!=200:
                 reason=value.get('error')
-                raise InputUnavailable(reason if isinstance(reason,str) and re.fullmatch(r'image_[a-z_]+',reason) else 'input_unavailable')
+                raise InputUnavailable(reason if attachment_error(operation,reason) else 'input_unavailable')
             return value
         except InputUnavailable:
             raise

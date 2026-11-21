@@ -239,3 +239,37 @@ def test_successful_receipt_disappears_but_unknown_waits_for_a_status_check(phon
     wait("!!document.querySelector('.reader-receipt.accepted')")
     wait("!document.querySelector('.reader-receipt')", timeout=5)
     assert [op for op, _ in state['calls'] if op in {'commit','status'}] == ['commit','commit','status']
+
+
+def test_file_picker_adds_a_document_to_existing_input_review(phone):
+    _, js, wait, state = phone
+    state['files'] = True
+    js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelector('#terminal-file-image')?.accept === '.pdf,.txt,.md,.csv,.json'")
+    wait("document.querySelector('#terminal-image-add')?.disabled === false")
+    js("document.querySelector('#terminal-image-add').click()")
+    assert js("document.querySelector('.reader-attachment-sources button[aria-label=\"Choose a file\"]').textContent") == ''
+    assert js("document.querySelector('.reader-attachment-sources button[aria-label=\"Choose a photo\"]').hidden")
+
+    def choose_file():
+        js("""(() => {
+            const input=document.getElementById('terminal-file-image'), selection=new DataTransfer();
+            selection.items.add(new File(['# Example\\n'],'Notes <v2>.MD',{type:'text/markdown'}));
+            input.files=selection.files; input.dispatchEvent(new Event('change'));
+        })()""")
+        wait("document.querySelector('.reader-attachment-label')?.textContent === 'Notes <v2>.MD'")
+        wait("document.querySelector('#terminal-review')?.disabled === false")
+
+    choose_file()
+    assert [payload['file'] for op,payload in state['calls'] if op=='file' and payload.get('file')] == [
+        {'format':'md','data':'IyBFeGFtcGxlCg=='},
+    ]
+    assert not any(op=='prepare' or op=='commit' for op,_ in state['calls'])
+    js("document.querySelector('#terminal-review').click()")
+    wait("document.querySelector('.reader-review .reader-attachment-label')?.textContent === 'Notes <v2>.MD'")
+    assert state['draft'] == "[file: '/workspace/.orrery-input-files/"+'b'*32+".md']"
+    assert not any(op=='commit' for op,_ in state['calls'])
+    js("Array.from(document.querySelectorAll('.reader-review button')).find(b=>b.textContent==='Edit').click()")
+    wait("!!document.querySelector('button[aria-label=\"Remove Notes <v2>.MD\"]')")
+    js("document.querySelector('button[aria-label=\"Remove Notes <v2>.MD\"]').click()")
+    assert js("!document.querySelector('.reader-file-mark') && document.querySelector('#terminal-review').disabled")

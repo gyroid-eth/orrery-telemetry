@@ -750,6 +750,9 @@ html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-l
 .reader-images{max-height:198px;overflow:auto;overscroll-behavior:contain}
 .reader-image{display:flex;align-items:center;gap:9px;padding:3px 9px 6px;font:10px/1.5 var(--mono);color:var(--ink-dim)}
 .reader-image-thumb{width:56px;height:56px;object-fit:contain;border:1px solid var(--hair);border-radius:10px;background:var(--bg)}
+.reader-file-mark{display:grid;place-items:center;flex:none;width:36px;height:36px;border:1px solid var(--hair);border-radius:8px;background:var(--bg);color:var(--ink)}
+.reader-file-mark+.reader-attachment-label{font:13px/1.4 system-ui,sans-serif;color:var(--ink)}
+.reader-attachment-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .reader-image-remove{margin-left:auto}
 .reader-input-label{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .mobile .reader-input-bar .terminal-text{flex:1;min-width:0;height:44px;min-height:44px;padding:10px 9px;border:0;border-radius:15px;background:none;font:16px/1.4 var(--mono)}
