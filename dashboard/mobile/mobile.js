@@ -23,13 +23,14 @@ const minutesAt=position=>Math.max(15,Math.min(43200,Math.round(Math.exp(Math.lo
 const duration=seconds=>seconds===null?'All history':seconds<3600?'Last '+Math.round(seconds/60)+' min':seconds<=86400?'Last '+(seconds/3600).toLocaleString('en-GB',{maximumFractionDigits:2})+'h':'Last '+(seconds/86400).toLocaleString('en-GB',{maximumFractionDigits:2})+'d';
 window.OrreryMobileWindow={duration};
 const network=new window.OrreryMobileNetwork(null,(a,b)=>openPair(a,b),openGraphAgent);
-function openGraphAgent(name){
+function openGraphAgent(name,returnFocus){
  const terminal=window.OrreryMobileTerminal,status=$('#graph-reader-status');
  status.hidden=terminal?.available()===true;
  if(!status.hidden){status.textContent='Reader is unavailable. Check Phone access on the desktop.';return;}
  terminal.open(name,window.OrreryMobileIdentity?.forName(name),null,closedName=>{
   network.focus(closedName);
   if(network.svg.contains(document.activeElement))document.activeElement.blur();
+  returnFocus?.focus({preventScroll:true});
  });
 }
 let graphFullscreen=null;
@@ -75,6 +76,7 @@ function syncView(){
   graphFullscreen?.exit();
   setGraphSearch(false);
   if(!$('#settings').hidden)settings(false);
+  closeGraphMenus();
   network.pause();
  }else if(wasHidden){
   network.applyView();network.hot=Math.max(network.hot,120);network.run();
@@ -164,26 +166,90 @@ function showNotices(notices,data,label){
  }
  $('#snapshot-period-note').textContent=data?.period?'Snapshot period: '+duration(data.period.seconds)+'.':'No snapshot has been observed yet.';
 }
+const attentionReasons={ask:'Awaiting review',question:'Needs an answer'};
+const needsReview=a=>Object.hasOwn(attentionReasons,a.act_state);
+const statusAgentMenus=[...document.querySelectorAll('[data-agent-status]')].map(details=>{
+ const state=details.dataset.agentStatus;
+ return {
+  details, trigger:details.querySelector('summary'), menu:details.querySelector('.graph-status-agents'),
+  count:details.querySelector('b'), state, signature:'',
+  label:state==='work'?'Working':'Waiting',
+ };
+});
+const graphStatusMenu=$('#graph-panel .graph-status'), observationMenu=$('#observation-notice');
+const graphMenus=[...statusAgentMenus.map(group=>group.details),observationMenu];
+function closeGraphMenus(keep=null){
+ for(const details of graphMenus)if(details!==keep&&details.open)details.open=false;
+}
+for(const details of graphMenus)details.addEventListener('toggle',()=>{
+ if(details.open)closeGraphMenus(details);
+});
+document.addEventListener('pointerdown',event=>{
+ if(!graphStatusMenu.contains(event.target))closeGraphMenus();
+});
+graphStatusMenu.addEventListener('keydown',event=>{
+ if(event.key!=='Escape')return;
+ const open=graphMenus.find(details=>details.open);
+ if(open){event.preventDefault();closeGraphMenus();open.querySelector('summary').focus({preventScroll:true});}
+});
+new ResizeObserver(()=>{
+ const net=$('#net').getBoundingClientRect(),position=graphStatusMenu.getBoundingClientRect();
+ graphStatusMenu.style.setProperty('--graph-agent-list-width',Math.max(0,net.right-position.left-10)+'px');
+ graphStatusMenu.style.setProperty('--graph-agent-list-height',Math.max(0,net.bottom-position.bottom-10)+'px');
+}).observe($('#net'));
+
+function renderGraphCounts(data,observed,fresh){
+ const summary=$('#summary'), labels=[];
+ const running=observed?data.agents.filter(a=>a.running):[];
+ for(const group of statusAgentMenus){
+  const {state,label}=group;
+  const active=running.filter(a=>a.act_state===state);
+  const attention=state==='work'?running.filter(needsReview):[];
+  const agents=[...attention,...active];
+  const labelWithCount=label+': '+active.length;
+  const note=attention.length?', need attention: '+attention.length:'';
+  labels.push(labelWithCount+note);
+  group.count.textContent=observed?String(active.length):'–';
+  group.details.classList.toggle('has-attention',attention.length>0);
+  group.trigger.title=label+': '+(observed?(fresh?'':'last known ')+active.length+note:'unavailable');
+  group.trigger.setAttribute('aria-label',group.trigger.title);
+  const signature=JSON.stringify([observed,agents.map(a=>[a.name,a.provider,a.model,a.locality,a.act_state])]);
+  if(group.signature===signature)continue;
+  group.signature=signature;
+  const focus=group.menu.contains(document.activeElement)?document.activeElement.dataset.name:'';
+  group.menu.replaceChildren();
+  for(const a of agents){
+   const button=node('button','graph-status-agent');button.type='button';button.dataset.name=a.name;
+   const portrait=face(a);portrait.setAttribute('aria-hidden','true');
+   button.append(portrait,node('span','graph-status-name',a.name));
+   if(needsReview(a)){
+    button.title=attentionReasons[a.act_state];
+    button.setAttribute('aria-label',a.name+' · '+button.title);
+    const flag=node('span','graph-status-flag '+a.act_state,a.act_state==='ask'?'!':'?');
+    flag.setAttribute('aria-hidden','true');
+    button.append(flag);
+   }
+   button.onclick=()=>{closeGraphMenus();group.trigger.focus({preventScroll:true});openGraphAgent(a.name,group.trigger);};
+   group.menu.append(button);
+  }
+  if(!agents.length)group.menu.append(node('p','',observed?'No '+label.toLowerCase()+' agents':'Agent observations unavailable'));
+  if(focus)(Array.from(group.menu.children).find(item=>item.dataset.name===focus)||group.trigger).focus({preventScroll:true});
+ }
+ const label=observed?(fresh?'':'Last known: ')+labels.join(', '):'Agent counts unavailable';
+ const status=$('#graph-count-label');
+ if(status.textContent!==label)status.textContent=label;
+ summary.classList.toggle('is-stale',observed&&!fresh);
+}
 function render(data){
  if(snapshot?.timeline.scope&&snapshot.timeline.scope!==data.timeline.scope){clearDetail();clearPair();resetMail();}
  snapshot=data;receivedAt=performance.now();
  window.OrreryMobileTerminal?.restore?.();
  // The displayed roster is the projection's graph.nodes + agents union.
- // Mail success cannot establish an empty roster or working/waiting counts.
+ // Mail success cannot establish an empty roster or agent status counts.
  const rosterSources=[data.sources.agents,data.sources.graph],mail=data.sources.mail;
  const rosterObserved=rosterSources.some(s=>s.observed_at!==null&&s.status!=='unavailable');
  const rosterFresh=rosterSources.every(s=>s.status==='available');
- const working=data.agents.filter(a=>a.running&&a.act_state==='work').length,waiting=data.agents.filter(a=>a.running&&a.act_state==='wait').length;
- const summary=$('#summary');
- const countLabel=rosterObserved?(rosterFresh?'':'Last known: ')+working+' working, '+waiting+' waiting':'Agent counts unavailable';
- const countStatus=$('#graph-count-label');
- if(countStatus.textContent!==countLabel)countStatus.textContent=countLabel;
- summary.classList.toggle('is-stale',rosterObserved&&!rosterFresh);
- for(const [id,label,count] of [['working-count','Working',working],['waiting-count','Waiting',waiting]]){
-  const value=$('#'+id);
-  value.textContent=rosterObserved?String(count):'–';
-  value.parentElement.title=label+': '+(rosterObserved?(rosterFresh?'':'last known ')+count:'unavailable');
- }
+ renderGraphCounts(data,rosterObserved,rosterFresh);
  $('#observed').textContent='Observed '+time(data.observed_at);
  const notices=[];
  if(!rosterObserved)notices.push('Agent observations unavailable.');
@@ -197,16 +263,16 @@ function render(data){
  if(data.period?.activity_unknown){const n=data.period.activity_unknown;notices.push(n+(n===1?' agent has an unknown activity time':' agents have unknown activity times')+(data.period.seconds===null?'.':n===1?' and is excluded from this period.':' and are excluded from this period.'));}
  showNotices(notices,data);
  const attention=$('#attention');attention.replaceChildren();
- const needs=data.agents.filter(a=>['ask','question'].includes(a.act_state)||a.state==='unknown');
+ const needs=data.agents.filter(a=>needsReview(a)||a.state==='unknown');
  const attentionCount=$('#attention-count');
  attentionCount.querySelector('b').textContent=rosterObserved?String(needs.length):'–';
  attentionCount.title=rosterObserved?'Needs attention: '+(rosterFresh?'':'last known ')+needs.length:'Attention count unavailable';
  attentionCount.querySelector('.sr-only').textContent=attentionCount.title;
  for(const a of needs.slice(0,3)){
-  const row=node('button','attention-row '+(['ask','question'].includes(a.act_state)?'review':'unknown'));row.type='button';
+  const review=needsReview(a);
+  const row=node('button','attention-row '+(review?'review':'unknown'));row.type='button';
   markRef(row,a);
-  const review=['ask','question'].includes(a.act_state);
-  const reason=a.act_state==='ask'?'Awaiting review':a.act_state==='question'?'Needs an answer':a.last_active?'Unknown · last active '+time(a.last_active):'Observation unavailable';
+  const reason=review?attentionReasons[a.act_state]:a.last_active?'Unknown · last active '+time(a.last_active):'Observation unavailable';
   row.title=reason;row.setAttribute('aria-label',a.name+' · '+reason);
   const status=node('span','attention-status');status.append(icon(review?'review':'unknown'));
   row.append(face(a),node('span','name',a.name),status);
@@ -473,7 +539,7 @@ function initGraphFullscreen(){
   const dialogs=[...document.querySelectorAll('dialog[open]')],top=dialogs.at(-1);
   if(top){if(top.id==='terminal-sheet')window.OrreryMobileTerminal.close();else top.close();return true;}
   if(!$('#settings').hidden){settings(false);return true;}
-  if(notice.open){notice.open=false;return true;}
+  if(graphMenus.some(details=>details.open)){closeGraphMenus();return true;}
   if(!$('#graph-search').hidden){setGraphSearch(false);$('#graph-search-toggle').focus({preventScroll:true});return true;}
   return false;
  };

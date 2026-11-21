@@ -103,9 +103,44 @@ html[data-color-theme=light] .mobile .node .provider-seat{fill:var(--panel);stro
 #summary{display:flex;align-items:center}
 #summary.is-stale{color:var(--alert)}
 .graph-count{display:flex;align-items:center;justify-content:center;gap:5px;min-width:43px;height:44px;padding:0 6px;font:600 13px/1 system-ui,sans-serif}
-.graph-count+.graph-count{border-left:1px solid var(--hair)}
+.graph-agent-count+.graph-agent-count{border-left:1px solid var(--hair)}
+.graph-count{list-style:none;cursor:pointer;touch-action:manipulation}
+.graph-count::-webkit-details-marker{display:none}
+.graph-agent-count[open]>.graph-count,.graph-count:hover{background:var(--control-active);color:var(--amber)}
+.graph-status-agents{
+  position:absolute;left:0;top:calc(100% + 6px);z-index:3;width:min(260px,var(--graph-agent-list-width,calc(100vw - 44px)));
+  max-height:min(250px,var(--graph-agent-list-height,250px));overflow:auto;overscroll-behavior:contain;
+  padding:5px;border:1px solid var(--hair);border-radius:11px;background:var(--panel);
+  box-shadow:0 10px 26px color-mix(in srgb,var(--shade) 42%,transparent);font:14px system-ui,sans-serif
+}
+.mobile .graph-status-agent{
+  width:100%;min-height:44px;padding:6px 8px;display:flex;align-items:center;gap:10px;
+  border:none;border-radius:7px;background:transparent;text-align:start
+}
+.mobile .graph-status-agent:hover{background:var(--control-active)}
+.graph-status-agent .face{width:28px;height:28px}
+.graph-status-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.graph-status-flag{
+  flex:none;width:16px;margin-inline-start:auto;text-align:center;font:italic 600 20px/1 var(--serif)
+}
+.graph-status-flag.ask{color:#ff8a7d}
+.graph-status-flag.question{color:#7ceeff}
+html[data-color-theme=light] .graph-status-flag.ask{color:#a1382e}
+html[data-color-theme=light] .graph-status-flag.question{color:#076c80}
+.mobile #net .graph-status-agent .badge{inset:auto -3px -3px auto;width:15px;height:15px;cursor:inherit}
+.mobile .graph-status-agents p{padding:10px 8px;color:var(--ink-dim)}
+
 #net .graph-count .mobile-icon,#net .graph-period .mobile-icon{width:15px;height:15px}
+.graph-working-icon{position:relative;display:flex}
 .graph-count.working .mobile-icon{color:var(--amber)}
+.graph-agent-count.has-attention .graph-working-icon::after{
+  content:"";position:absolute;top:-2px;inset-inline-end:-2px;width:5px;height:5px;border-radius:50%;
+  background:var(--alert);box-shadow:0 0 0 1px var(--panel);pointer-events:none
+}
+@media(prefers-reduced-motion:no-preference){
+  .graph-agent-count.has-attention .graph-working-icon::after{animation:graph-attention-appear 180ms ease-out both}
+  @keyframes graph-attention-appear{from{opacity:0}}
+}
 .graph-count.waiting .mobile-icon{color:var(--ink-dim)}
 .observation-note.has-warning:not([open])>summary{color:var(--amber)}
 .observation-content {

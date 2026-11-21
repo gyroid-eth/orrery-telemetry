@@ -156,7 +156,7 @@ Regenerate the committed icons from `dashboard/assets/orbit.svg` with `python3 s
 
 ## Reading the screen
 
-Graph shows working and waiting counts as icons in its upper-left corner. The information icon opens the observation time, range, and status. On a phone, agents needing attention sit below Graph. Tap the list icon in that panel to open Activity. On a wide screen such as an iPad, Graph and the attention and activity panel appear side by side. The Activity information icon also shows observation warnings.
+Graph shows working and waiting counts in its upper-left corner. Tap a count to see the matching agents and their portraits, then choose an agent to open Reading View. When agents need attention, the working icon shows a dot and its list starts with review requests (`!`) and questions (`?`). The information icon opens the observation time, range, and status. On a phone, agents needing attention sit below Graph. Tap the list icon in that panel to open Activity. On a wide screen such as an iPad, Graph and the attention and activity panel appear side by side. The Activity information icon also shows observation warnings.
 
 Dark is the default. Use the sun or moon icon in the upper-right corner to switch between light and dark. The browser remembers the choice.
 
