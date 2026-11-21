@@ -745,8 +745,10 @@ html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-l
 .mobile .reader-image-add[hidden]{display:none}
 .mobile .reader-image-add .mobile-icon{margin-inline:auto}
 .reader-attachment-sources{display:flex;gap:6px;margin:5px 3px}
-.mobile .reader-attachment-sources .icon-button{border:1px solid var(--hair);border-radius:10px;color:var(--ink);background:var(--bg)}
-.mobile .reader-attachment-sources .icon-button:where(:hover,:focus-visible){color:var(--amber);border-color:var(--amber)}
+.mobile .reader-attachment-sources .icon-button{position:relative;border:1px solid var(--hair);border-radius:10px;color:var(--ink);background:var(--bg)}
+.mobile .reader-attachment-sources .icon-button[hidden]{display:none}
+.mobile .reader-attachment-sources .icon-button:where(:hover,:has(input:focus-visible)){color:var(--amber);border-color:var(--amber)}
+.reader-attachment-sources input[type=file]{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
 .reader-images{max-height:198px;overflow:auto;overscroll-behavior:contain}
 .reader-image{display:flex;align-items:center;gap:9px;padding:3px 9px 6px;font:10px/1.5 var(--mono);color:var(--ink-dim)}
 .reader-image-thumb{width:56px;height:56px;object-fit:contain;border:1px solid var(--hair);border-radius:10px;background:var(--bg)}

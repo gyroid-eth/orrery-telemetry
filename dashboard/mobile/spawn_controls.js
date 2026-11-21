@@ -249,12 +249,13 @@ function lineIcon(className, data) {
 }
 
 // Progressive enhancement for single selects, including optgroups. Forms still use select.value.
-function mountDropdown(select) {
+function mountDropdown(select, {inline = false, selectedLabel = option => option?.label} = {}) {
   const noop = () => {};
   if (select.multiple || select.size > 1) return {refresh: noop, destroy: noop};
 
   const id = `om-choice-${++dropdownCount}`;
   const host = element('div', 'om-select');
+  host.classList.toggle('om-select-inline', inline);
   const trigger = element('button', 'om-select-trigger');
   trigger.type = 'button';
   trigger.setAttribute('role', 'combobox');
@@ -358,10 +359,18 @@ function mountDropdown(select) {
   const driver = springDriver(springs, render);
 
   function layoutMenu() {
-    const bounds = trigger.getBoundingClientRect();
     const viewport = window.visualViewport;
+    const visibleHeight = viewport?.height ?? window.innerHeight;
+    if (inline) {
+      menu.style.height = '';
+      const preferred = Math.min(336, menu.offsetHeight + 2);
+      menuHeight = Math.min(preferred, Math.max(92, Math.floor(visibleHeight * .42)));
+      menu.style.height = `${menuHeight - 2}px`;
+      return;
+    }
+    const bounds = trigger.getBoundingClientRect();
     const topEdge = viewport?.offsetTop ?? 0;
-    const bottomEdge = topEdge + (viewport?.height ?? window.innerHeight);
+    const bottomEdge = topEdge + visibleHeight;
     const below = bottomEdge - bounds.bottom - 12;
     const above = bounds.top - topEdge - 12;
     const width = Math.min(Math.max(bounds.width, 250), window.innerWidth - 24);
@@ -419,7 +428,7 @@ function mountDropdown(select) {
 
   function morph(opening) {
     sheetMotion?.cancel();
-    if (reducedMotion.matches || !popup.animate) return;
+    if (inline || reducedMotion.matches || !popup.animate) return;
     const anchor = trigger.getBoundingClientRect();
     const left = parseFloat(popup.style.left);
     const right = left + popup.offsetWidth;
@@ -482,7 +491,7 @@ function mountDropdown(select) {
 
   function syncValue(animate = true) {
     const option = select.selectedOptions[0];
-    const name = option?.label || 'Choose an option';
+    const name = selectedLabel(option) || 'Choose an option';
     if (!animate) rest(roll, 1);
     if (option !== selectedOption || name !== selectedText) {
       if (animate && selectedText !== undefined && !reducedMotion.matches) {
@@ -670,7 +679,7 @@ function mountDropdown(select) {
   }
   window.addEventListener('resize', reposition, {signal});
   window.visualViewport?.addEventListener('resize', reposition, {signal});
-  select.closest('dialog')?.addEventListener('scroll', reposition, {passive:true, signal});
+  if (!inline) select.closest('dialog')?.addEventListener('scroll', reposition, {passive:true, signal});
   for (const label of labels) {
     label.addEventListener('click', event => {
       if (event.target.closest('button, a, input, select, textarea')) return;

@@ -667,7 +667,7 @@ function refreshReference(){
 const MAX_ATTACHMENTS=10;
 const imageTypes=['image/jpeg','image/png','image/webp'], imageExtensions=['jpg','jpeg','png','webp'];
 const fileFormats=['pdf','txt','md','csv','json'];
-let attachmentAccess={image:false,file:false},attachmentProbe='',attachmentController=null,attachmentProbeController=null,attachments=[];
+let attachmentAccess={image:false,file:false},attachmentProbe='',attachmentController=null,attachmentProbeController=null,attachments=[],pendingAttachmentSelection=null;
 let paused=false,checkingView=false,resumeController=null,reviewUntil=0,startupReady=false;
 const viewKey='orrery-mobile-view-v1';
 function savedView(){try{const v=JSON.parse(window.sessionStorage.getItem(viewKey));return v&&(Object.keys(v).length===2||Object.keys(v).length===4&&ref(v))&&Object.keys(v).every(k=>['agent','tab','mail_instance_id','mail_agent_id'].includes(k))&&/^[A-Za-z][A-Za-z0-9_-]{0,95}$/.test(v.agent)&&['conversation','terminal'].includes(v.tab)?v:null;}catch(_){return null;}}
@@ -716,7 +716,7 @@ function cancelIntent(){
  // Best effort cancellation never retries commit, and keeps no text or preview.
  request('cancel',{epoch:old.epoch,intent:old.intent},controller,2000).catch(()=>{});
 }
-function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;attachmentController?.abort();attachmentController=null;attachmentProbeController?.abort();attachmentProbeController=null;attachmentAccess={image:false,file:false};attachmentProbe='';clearAttachments();paused=false;checkingView=false;generation++;}
+function stop(){clearTimeout(pollTimer);pollTimer=0;previewController?.abort();previewController=null;operationController?.abort();operationController=null;resumeController?.abort();resumeController=null;attachmentController?.abort();attachmentController=null;attachmentProbeController?.abort();attachmentProbeController=null;attachmentAccess={image:false,file:false};attachmentProbe='';pendingAttachmentSelection=null;clearAttachments();paused=false;checkingView=false;generation++;}
 function clear(){window.OrreryMobilePush?.close();sendFeedback?.reset();replyReference=preparedReference=null;inputObserver?.disconnect();inputObserver=null;readerSwipe=null;composer=false;stop();cancelIntent();conversation()?.unmount();tab='terminal';name='';selector=null;choices=[];choice=null;target=null;text='';output='';preview=null;previewOK=false;message='';phase='loading';failures=0;sheet.replaceChildren();}
 function close(fromBack=false,keepView=false){
  if(pane&&fromBack!==true){pane.close();return;}
@@ -924,7 +924,7 @@ async function poll(){
   target=Object.freeze({...data.target});preview=data;output=data.text;previewOK=true;checkingView=false;failures=0;
   if(!['preparing','review','sending','accepted','unknown'].includes(phase))message='';
   refreshOutput();
-  probeAttachments();
+  probeAttachments().then(flushAttachmentSelection);
  }catch(_){
   if(g!==generation||previewController!==controller||!sheet.open||document.hidden)return;
   failures++;previewOK=false;output='';preview=null;
@@ -1011,6 +1011,12 @@ function attachmentType(file,source){
  if(attachmentAccess.image&&(imageTypes.includes(file.type)||!file.type&&imageExtensions.includes(extension)))return {kind:'image'};
  if(source==='file'&&attachmentAccess.file&&fileFormats.includes(extension))return {kind:'file',format:extension};
  return null;
+}
+function flushAttachmentSelection(){
+ if(!pendingAttachmentSelection||!previewOK||document.hidden||attachmentProbeController)return;
+ const {files,source,revision,epoch}=pendingAttachmentSelection;
+ pendingAttachmentSelection=null;
+ if(target?.revision===revision&&capability?.epoch===epoch)uploadAttachments(files,source);
 }
 function readAttachment(file,signal){
  return new Promise((resolve,reject)=>{
@@ -1174,33 +1180,47 @@ function attachmentPicker(panel,row,available){
  add.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-attachment"/></svg>';
  function show(open,focus=false){
   sources.hidden=!open;add.setAttribute('aria-expanded',String(open));
-  if(focus)(open?sources.querySelector('button:not([hidden])'):add)?.focus({preventScroll:true});
+  if(focus)(open?sources.querySelector('label:not([hidden]) input:enabled'):add)?.focus({preventScroll:true});
   layoutInputBar(panel);
  }
  const choices={};
  for(const [kind,id] of [['photo','terminal-image-file'],['file','terminal-file-image']]){
-  const input=make('input');input.type='file';input.id=id;input.multiple=true;input.hidden=true;
-  input.onchange=()=>uploadAttachments(input.files,kind);
-  const button=action('','icon-button',()=>{if(!add.disabled&&!button.hidden){show(false,true);input.click();}});
-  button.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-'+kind+'"/></svg>';
-  choices[kind]={input,button};sources.append(button);panel.append(input);
+  const label=make('label','icon-button');
+  label.htmlFor=id;
+  label.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-'+kind+'"/></svg>';
+  const input=make('input');input.type='file';input.id=id;input.multiple=true;
+  input.onchange=()=>{
+   const files=Array.from(input.files);
+   input.value='';
+   if(!input.isConnected)return;
+   show(false,true);
+   if(!files.length||!target)return;
+   // A native picker can deliver its selection while the pane is being reverified.
+   if(document.hidden||checkingView||attachmentProbeController){
+    pendingAttachmentSelection={files,source:kind,revision:target.revision,epoch:capability.epoch};
+   }else uploadAttachments(files,kind);
+  };
+  input.oncancel=()=>show(false,true);
+  choices[kind]={input,label};label.append(input);sources.append(label);
  }
  panel.refreshAttachmentPicker=()=>{
   const {image,file}=attachmentAccess;
   add.hidden=!image&&!file;
   add.disabled=!available||!previewOK||!!attachmentController||attachments.length>=MAX_ATTACHMENTS;
   if(add.hidden||add.disabled){sources.hidden=true;add.setAttribute('aria-expanded','false');}
-  choices.photo.button.hidden=!image;choices.photo.input.accept=imageTypes.join(',');
-  choices.file.input.accept=[...(image?imageExtensions:[]),...(file?fileFormats:[])].map(format=>'.'+format).join(',');
-  for(const [choice,label] of [[choices.photo,'Choose a photo'],[choices.file,file?'Choose a file':'Choose an image from files']]){
-   choice.button.title=label;choice.button.setAttribute('aria-label',label);
+  choices.photo.label.hidden=!image;choices.photo.input.accept=imageTypes.join(',');
+  if(file)choices.file.input.removeAttribute('accept');
+  else choices.file.input.accept=imageExtensions.map(format=>'.'+format).join(',');
+  for(const [choice,description] of [[choices.photo,'Choose a photo'],[choices.file,file?'Choose a file':'Choose an image from files']]){
+   choice.input.disabled=add.disabled||choice.label.hidden;
+   choice.label.title=description;choice.input.setAttribute('aria-label',description);
   }
  };
  panel.addEventListener('keydown',event=>{
   if(event.key==='Escape'&&!sources.hidden){event.preventDefault();show(false,true);}
  });
  panel.addEventListener('focusout',event=>{
-  if(!sources.hidden&&event.relatedTarget&&!panel.contains(event.relatedTarget))show(false);
+  if(!sources.hidden&&!sources.contains(event.target)&&event.relatedTarget&&!panel.contains(event.relatedTarget))show(false);
  });
  add.setAttribute('aria-expanded','false');panel.refreshAttachmentPicker();panel.append(sources);row.append(add);
 }
@@ -1352,7 +1372,7 @@ function render(){
  refreshOutput();
 }
 sheet.addEventListener('keydown',e=>{if(e.key==='Escape'&&!e.defaultPrevented){e.preventDefault();if(!dismissLayer())close();}});
-sheet.addEventListener('cancel',e=>{e.preventDefault();if(!dismissLayer())close();});sheet.addEventListener('close',()=>{if(name&&!sheet.open)close();});
+sheet.addEventListener('cancel',e=>{if(e.target!==sheet)return;e.preventDefault();if(!dismissLayer())close();});sheet.addEventListener('close',()=>{if(name&&!sheet.open)close();});
 function pauseView(){
  if(!sheet.open)return;paused=true;checkingView=true;rememberView();clearTimeout(pollTimer);pollTimer=0;
  previewController?.abort();previewController=null;resumeController?.abort();resumeController=null;
