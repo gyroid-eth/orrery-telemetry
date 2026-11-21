@@ -106,6 +106,20 @@ def test_owner_and_outer_authority_accept_originless_get_and_assets(reader):
     assert request(port,'/network_node.js',method='HEAD')[0]==200
 
 
+def test_only_admitted_reader_pane_can_be_framed_by_the_shell(reader):
+    port,_=reader
+    status,headers,shell=request(port,'/')
+    assert status==200 and headers['Content-Security-Policy']==relay.SHELL_CSP
+    assert headers['X-Frame-Options']=='DENY'
+    status,headers,pane=request(port,'/reader-pane')
+    assert status==200 and pane==shell
+    assert headers['Content-Security-Policy']==relay.PANE_CSP and headers['X-Frame-Options']=='SAMEORIGIN'
+    assert request(port,'/reader-pane?agent=Alpha')[0]==404
+    assert request(port,'/reader-pane',headers={'Host':'viewer.example.ts.net:9443'})[0]==403
+    assert request(port,'/reader-pane',headers={'Host':'viewer.example.ts.net:9443',
+        'Tailscale-User-Login':'owner@example.test','Sec-Fetch-Site':'cross-site'})[0]==403
+
+
 def test_mobile_default_is_one_day_and_fine_window_is_allowlisted(reader):
     port,store=reader
     assert request(port)[0]==200 and store.calls==['day']
@@ -401,7 +415,7 @@ def test_shortcut_root_document_navigation_accepts_only_the_authenticated_shell(
     assert headers['Content-Type']=='text/html; charset=utf-8'
     assert int(headers['Content-Length'])==len(expected)
     assert body==(expected if method=='GET' else b'')
-    assert headers['Cache-Control']=='no-store' and headers['Content-Security-Policy']==relay.CSP
+    assert headers['Cache-Control']=='no-store' and headers['Content-Security-Policy']==relay.SHELL_CSP
     assert headers['X-Frame-Options']=='DENY' and store.calls==calls==[]
 
 

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from dashboard.mobile_relay import CSP, static_assets
+from dashboard.mobile_relay import CSP, PANE_CSP, SHELL_CSP, static_assets
 from test_dashboard_help_map import _WebSocket
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,7 +43,8 @@ def phone(request):
                 data = json.dumps(data,ensure_ascii=False).encode()
             self.send_response(status)
             self.send_header('Content-Type', mime)
-            self.send_header('Content-Security-Policy', CSP)
+            path = urlsplit(self.path).path
+            self.send_header('Content-Security-Policy', {'/': SHELL_CSP, '/reader-pane': PANE_CSP}.get(path, CSP))
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -91,7 +92,10 @@ def phone(request):
             state['calls'].append((operation, payload))
             selected = next((t for t in state.get('targets', [choice]) if t['choice'] == payload.get('choice')), choice)
             if operation == 'targets':
-                return self.send(dict(contract, targets=state.get('targets', [choice])))
+                targets = state.get('targets', [choice])
+                if state.get('workspace'):
+                    targets = [target for target in targets if target['name'] == payload.get('name')]
+                return self.send(dict(contract, targets=targets))
             if operation == 'preview':
                 return self.send(dict(contract, target=selected, text=state.get('preview_text', 'Generated terminal tail\nReady.'), max_lines=state.get('preview_lines',120), max_bytes=state.get('preview_bytes',12288), observed_at=time.time()), status=503 if state['preview_error'] else 200)
             if operation == 'image':
@@ -108,7 +112,9 @@ def phone(request):
                 state['prepared_target'] = selected
                 return self.send(dict(contract, state='prepared', target=selected, text=payload['text'], expires_in=30, intent='fixture-intent', confirmation='fixture-confirmation'))
             if operation == 'commit':
-                return self.send(dict(contract, state='accepted', target=state.get('prepared_target',choice), intent='fixture-intent'))
+                return self.send(dict(contract, state=state.get('commit_state','accepted'), target=state.get('prepared_target',choice), intent='fixture-intent'))
+            if operation == 'status' and state.get('receipt_state'):
+                return self.send(dict(contract, state=state['receipt_state'], target=state.get('prepared_target',choice), intent='fixture-intent'))
             return self.send(dict(contract, state='cancelled'))
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)

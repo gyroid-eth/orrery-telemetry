@@ -173,6 +173,7 @@ class NetworkView{
   this.userView=true;this.applyView();
  }
  activateNode(name,{keyboard=false}={}){
+  if(this.pickNode){this.pickNode(name);return;}
   if(this.mode==='focus'&&name!==this.selected){
    this.select(name);this.fit();
    if(keyboard)this.elements.node.get(name)?.grp.focus({preventScroll:true});
@@ -280,7 +281,7 @@ class NetworkView{
     pan=null;this.userView=true;this.releaseNode();highlight('');return;
    }
    if(points.size!==1)return;
-   const hit=e.target.closest('.edge-hit'),grabbed=node&&!target.hasAttribute('aria-pressed')?this.map.get(node):null;
+   const hit=e.target.closest('.edge-hit'),grabbed=node&&!this.pickNode?this.map.get(node):null;
    pan={id:e.pointerId,x:e.clientX,y:e.clientY,vx:this.view.vx,vy:this.view.vy,node,camera:this.userView,
     grab:grabbed?{x:grabbed.x,y:grabbed.y}:null,edge:hit?.dataset.kind==='comm'?[hit.dataset.s,hit.dataset.t]:null,moved:false};
    if(grabbed)this.userView=true;

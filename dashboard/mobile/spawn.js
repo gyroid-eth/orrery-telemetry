@@ -1,5 +1,6 @@
 (() => {
   'use strict';
+  if (location.pathname === '/reader-pane') return;
   const $ = id => document.getElementById(id);
   const entry = $('mobile-new-agent'), sheet = $('spawn-sheet'), title = $('spawn-title');
   const editor = $('spawn-editor'), review = $('spawn-review'), result = $('spawn-result'), notice = $('spawn-notice');
