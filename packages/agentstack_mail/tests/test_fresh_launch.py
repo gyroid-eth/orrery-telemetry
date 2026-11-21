@@ -120,6 +120,7 @@ def prepare(client, provider, tmp_path):
         shutil.copytree(ROOT / 'integrations/codex_app/plugin', plugin)
         trust = runpy.run_path(str(ROOT / 'scripts/codex_plugin_trust.py'))
         plugin_id = 'agentstack-codex-app@fresh-fixture'
+        hook_hash = 'sha256:' + 'a' * 64
         hooks = []
         for event, groups in json.loads((plugin/'hooks/hooks.json').read_text())['hooks'].items():
             for group in groups:
@@ -127,7 +128,7 @@ def prepare(client, provider, tmp_path):
                     hooks.append(dict(key='synthetic-hook:'+str(len(hooks)), eventName=event,
                         handler={k: handler[k] for k in ('type', 'command', 'async')},
                         isManaged=False, source='plugin', sourcePath=str(plugin/'hooks/hooks.json'),
-                        pluginId=plugin_id, timeoutSec=handler['timeoutSec'], currentHash='sha256:synthetic'))
+                        pluginId=plugin_id, timeoutSec=handler['timeoutSec'], currentHash=hook_hash))
         hooks.sort(key=lambda h: h['key'])
         # Synthetic native trust evidence only: no Codex process or real /hooks
         # approval is run. The production read-only verifier checks this shape.
@@ -139,7 +140,7 @@ def prepare(client, provider, tmp_path):
         _write_private(home / 'hook-plan.json', plan)
         config = home / 'config.toml'
         states = ''.join('[hooks.state.' + json.dumps(h['key'])
-            + ']\ntrusted_hash="sha256:synthetic"\nenabled=true\n' for h in hooks)
+            + ']\ntrusted_hash="' + hook_hash + '"\nenabled=true\n' for h in hooks)
         config.write_text('[plugins.' + json.dumps(plugin_id) + ']\nenabled=true\n' + states
             + '[mcp_servers.agent_mail]\ncommand="FORBIDDEN-OLD-MAIL"\n')
         config.chmod(0o600)
