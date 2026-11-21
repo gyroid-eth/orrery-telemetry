@@ -47,7 +47,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 41
+API_GENERATION = 42
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -4124,9 +4124,18 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
                 "this conversation was started with base/tools, and without its child "
                 "state it would resume with all of the user's MCP servers")
         if child_state is not None:
+            tools = _child_tools_module()
+            screen = tools.screen_definition(
+                tools_spec or tools.normalize(), RUNTIME_DIR, registration["project_key"],
+                session, secrets.token_hex(16), origin=f"http://127.0.0.1:{PORT}",
+                mail_env=MAIL_ENV_PATH,
+            )
+            servers = dict((tools_plan or {}).get("servers", {}))
+            if screen is not None:
+                servers[tools.SCREEN_SERVER] = screen
             mcp_config = _write_claude_resume_mcp_config(
                 session, registration, parent=child_state.get("parent_agent"),
-                servers=(tools_plan or {}).get("servers"))
+                servers=servers)
             flags = "".join(" " + shlex.quote(flag) for flag in (tools_plan or {}).get("flags", ()))
             inner = inner.replace(" --resume ", f" --mcp-config {shlex.quote(mcp_config)} --strict-mcp-config{flags} --resume ", 1)
         if not legacy:
@@ -5469,6 +5478,8 @@ def _rebuild_codex_child_home(
         # A child in a git worktree keeps the hook trust given to its source.
         "--work-dir",
         work_dir,
+        "--screen-generation",
+        secrets.token_hex(16),
     ]
     try:
         result = subprocess.run(
@@ -10174,6 +10185,14 @@ def _fresh_failure(exc):
     return failure(exc)
 
 
+def _screen_http():
+    try:
+        from dashboard import screen_http
+    except ModuleNotFoundError:
+        import screen_http
+    return screen_http
+
+
 class Handler(BaseHTTPRequestHandler):
     def _fresh_get(self, path):
         from agentstack_mail.storage_origin_contract import B1Error
@@ -10250,6 +10269,15 @@ class Handler(BaseHTTPRequestHandler):
         self._legacy_origins = frozenset()
         if not super().parse_request():
             return False
+        path = urlparse(self.path).path
+        if path.startswith("/api/computer-use") and path in _screen_http().PATHS:
+            try:
+                _screen_http().admit(self, path, _env_path("AGENTSTACK_HOME", "~/.agentstack"))
+                return True
+            except Exception as exc:
+                self.close_connection = True
+                self._global_failure(exc)
+                return False
         if not GLOBAL_MODE:
             try:
                 self._legacy_origins = legacy_http_admission.admit(
@@ -10400,6 +10428,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path.startswith("/api/computer-use") and path in _screen_http().PATHS:
+            _screen_http().respond(self, path, RUNTIME_DIR, HOOKS_DIR)
+            return
         # Catalog discovery may invoke an authenticated local CLI in every
         # runtime mode, including fresh; reject foreign pages before routing.
         if path == "/api/spawn-names" and not _same_origin_request(self):
@@ -10734,6 +10765,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _do_post(self):
         path = urlparse(self.path).path
+        if path.startswith("/api/computer-use") and path in _screen_http().PATHS:
+            _screen_http().respond(self, path, RUNTIME_DIR, HOOKS_DIR)
+            return
         if GLOBAL_MODE:
             try:
                 try:

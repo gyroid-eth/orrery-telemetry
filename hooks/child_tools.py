@@ -61,9 +61,12 @@ import copy
 import json
 import os
 import re
+import runpy
 import subprocess
 import sys
 import tempfile
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 BASES = ("default", "mail-only")
@@ -152,6 +155,55 @@ _PACKAGE_VERSION_RE = re.compile(
 
 class ToolsError(ValueError):
     """The selection is invalid or cannot be applied as requested."""
+
+
+SCREEN_SERVER = "orrery-screen"
+
+
+@lru_cache(maxsize=1)
+def _screen_state():
+    return runpy.run_path(str(Path(__file__).with_name("screen_state.py")))
+
+
+def screen_mode(spec: dict) -> str | None:
+    tools = spec["tools"]
+    screen = tools.get("screen") or {}
+    if screen.get("server") == SCREEN_SERVER:
+        return "view" if screen["access"] == "read" else "control"
+    return "off" if SCREEN_SERVER in tools.get("mcp", ()) else None
+
+
+def screen_definition(spec, runtime, project, child, generation, **options):
+    mode = screen_mode(spec)
+    if not generation:
+        if mode is not None:
+            raise ToolsError("orrery-screen requires a bound child launch generation")
+        return None
+    state = _screen_state()
+    try:
+        return state["definition"](runtime, project, child, generation, mode, **options)
+    except (OSError, ValueError) as exc:
+        raise ToolsError(str(exc)) from exc
+
+
+def _cua_server(name: str, definition=None) -> bool:
+    def normalized(value):
+        return re.sub(r"[^a-z0-9]", "", value.lower())
+    if normalized(name) in ("cuadriver", "cuarelay", "cuadriverwsl", "orreryscreen"):
+        return True
+    if not isinstance(definition, dict):
+        return False
+    args = definition.get("args", ())
+    for word in (definition.get("command"), *(args if isinstance(args, list) else ())):
+        if isinstance(word, str) and re.search(
+                r"(?<![a-z0-9_-])cua[-_](?:driver(?:-wsl)?|relay)(?![a-z0-9_-])", word.lower()):
+            return True
+    return False
+
+
+def _check_screen_source(spec, name, definition):
+    if screen_mode(spec) is not None and name != SCREEN_SERVER and _cua_server(name, definition):
+        raise ToolsError("orrery-screen cannot be combined with a direct Cua Driver server")
 
 
 def looks_like_agent_mail(name: str) -> bool:
@@ -243,6 +295,8 @@ def normalize(base: Any = None, tools: Any = None) -> dict:
         if len(set(checked)) != len(checked) or not set(checked) <= set(result.get("mcp", ())):
             raise ToolsError(
                 "each tools.approve_all server must be listed once and also in tools.mcp")
+        if SCREEN_SERVER in checked:
+            raise ToolsError("orrery-screen already has a fixed per-tool approval list")
         result["approve_all"] = sorted(checked)
     return {"base": base, "tools": result}
 
@@ -520,7 +574,7 @@ def claude_chrome_allowed_tools() -> list[str]:
 
 
 def claude_plan(spec: dict, *, cwd: str, chrome: bool, claude_json: str,
-                platform: str | None = None) -> dict:
+                platform: str | None = None, managed_screen: dict | None = None) -> dict:
     """What a Claude child is launched with: extra servers and CLI flags.
 
     Raises ToolsError whenever the selection cannot be honoured."""
@@ -561,9 +615,17 @@ def claude_plan(spec: dict, *, cwd: str, chrome: bool, claude_json: str,
     if screen is not None and screen["server"] is not None:
         names.append(screen["server"])
     for name in names:
+        if name == SCREEN_SERVER:
+            if managed_screen is not None:
+                servers[name] = managed_screen
+            continue
         servers[name] = _copyable_definition(name, settings, cwd)
+        _check_screen_source(spec, name, servers[name])
 
     for name in names:
+        if name == SCREEN_SERVER:
+            allowed += [f"mcp__{name}__{tool}" for tool in _screen_state()["TOOLS"]]
+            continue
         if screen is not None and screen["server"] == name:
             entry = table_entry(servers[name])
             if entry is not None and entry[0] in NAME_CLASSIFIED and entry[1] == "*":
@@ -621,7 +683,8 @@ def _native_codex_browser(config: dict, *, explicit: bool = False) -> tuple[str,
 def native_plan(spec: dict, *, cwd: str, claude_json: str,
                 codex_config: dict | None = None,
                 transports=("stdio", "http"),
-                tool_filtering=False, tool_approval=False) -> dict:
+                tool_filtering=False, tool_approval=False,
+                managed_screen: dict | None = None) -> dict:
     """Project the same selection; refuse any promise the CLI cannot express."""
     spec = normalize(spec.get('base'), spec.get('tools'))
     tools = spec['tools']
@@ -657,8 +720,13 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
             browser_server = codex_browser_server(combined)
         names.append(browser_server)
     for name in dict.fromkeys(names):
+        if name == SCREEN_SERVER:
+            if managed_screen is not None:
+                servers[name] = managed_screen
+            continue
         definition = codex_browser[1] if codex_browser and name == browser_server \
             else _copyable_definition(name, settings, cwd)
+        _check_screen_source(spec, name, definition)
         if definition.get('type','stdio') not in transports:
             raise ToolsError('native_mcp_transport_unsupported')
         allow, hide = _approval(spec, name, definition, browser_server)
@@ -671,8 +739,11 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
             approved[name] = allow
         if hide:
             enabled[name] = allow
-    return dict(servers=servers, inherit=spec['base']!='mail-only', approved=approved,
+    plan = dict(servers=servers, inherit=spec['base']!='mail-only', approved=approved,
                 enabled_tools=enabled)
+    if screen_mode(spec) is not None:
+        plan["managed_screen"] = list(_screen_state()["TOOLS"])
+    return plan
 
 
 def mail_alias_names(settings: dict) -> list[str]:
@@ -751,7 +822,7 @@ def codex_browser_server(servers: dict) -> str:
         + (": several match" if found else ""))
 
 
-def codex_apply(config: dict, spec: dict) -> None:
+def codex_apply(config: dict, spec: dict, *, managed_screen: dict | None = None) -> None:
     """Apply a selection to a child's parsed config.toml, in place.
 
     The base (mail-only = the orrery-only profile) is applied by the caller
@@ -768,6 +839,31 @@ def codex_apply(config: dict, spec: dict) -> None:
     screen = tools.get("screen")
     if screen is not None:
         names.append(screen["server"])
+    for name, server in list(servers.items()):
+        if name in names:
+            _check_screen_source(spec, name, server)
+        elif isinstance(server, dict) and _cua_server(name, server):
+            servers[name] = {**server, "enabled": False}
+    plugins = config.get("plugins")
+    for plugin_id, plugin in plugins.items() if isinstance(plugins, dict) else ():
+        if not isinstance(plugin, dict):
+            continue
+        plugin_servers = plugin.get("mcp_servers")
+        known_cua = isinstance(plugin_servers, dict) and any(
+            _cua_server(name, definition) for name, definition in plugin_servers.items()
+        )
+        if (_cua_server(plugin_id.split("@", 1)[0]) or known_cua
+                or (screen_mode(spec) is not None and not plugin_id.startswith("agentstack-codex-app@"))):
+            plugin["enabled"] = False
+    if SCREEN_SERVER in names:
+        names.remove(SCREEN_SERVER)
+        if managed_screen is not None:
+            servers[SCREEN_SERVER] = {
+                **managed_screen, "enabled": True, "required": True, "startup_timeout_sec": 60,
+                "enabled_tools": list(_screen_state()["TOOLS"]),
+                "tools": {name: {"approval_mode": "approve"} for name in _screen_state()["TOOLS"]},
+            }
+            config["mcp_servers"] = servers
     browser_server = None
     if "browser" in tools:
         browser_server = codex_browser_server(servers)
@@ -874,7 +970,7 @@ def windows_session_warning(spec: dict, *, environ: dict | None = None,
     server that was started elsewhere can be in another session, so this is
     a warning, not a stop."""
     screen = spec["tools"].get("screen")
-    if screen is None or screen["server"] is None or not running_in_wsl(environ):
+    if screen is None or screen["server"] in (None, SCREEN_SERVER) or not running_in_wsl(environ):
         return ""
     try:
         result = subprocess.run(
@@ -912,7 +1008,9 @@ def prompt_text(spec: dict, provider: str, standalone: bool = False) -> str:
         head = ("Tools: in addition to the default ones, this child was given "
                 + ", ".join(given) + ".")
     screen = spec["tools"].get("screen")
-    if screen is not None and screen["access"] == "read":
+    if screen_mode(spec) is not None:
+        head += " The operator can change the orrery-screen permission while this child is running."
+    elif screen is not None and screen["access"] == "read":
         head += (" The computer use tools are read only: do not click, type or "
                  "open applications.")
     if spec["tools"].get("approve_all"):
@@ -969,6 +1067,8 @@ def resolve_defaults(selection: str, provider: str, *, cwd: str,
             normalize(None, parse_cli([item]))
             label = item  # validated names/device IDs contain no shell delimiters
             candidate = normalize(None, parse_cli(accepted + [item]))
+            if screen_mode(candidate) is not None:
+                raise ToolsError("orrery-screen requires an explicit child selection")
             check_provider(candidate, provider)
             merge_chrome(candidate, chrome, chrome_device)
             if provider == "codex":
@@ -1067,6 +1167,7 @@ def main(argv: list[str]) -> int:
         cfg.add_argument(name, required=True)
     cfg.add_argument("--python-bin", default="")
     cfg.add_argument("--parent-agent", default="")
+    cfg.add_argument("--screen-generation", default="")
     cfg.add_argument("--program", default="claude-code", choices=("claude-code","dsh","hermes"))
     rec = sub.add_parser("codex-record")
     rec.add_argument("--spec", required=True)
@@ -1112,10 +1213,14 @@ def main(argv: list[str]) -> int:
             return 0
         if args.command == "claude-config":
             spec = _spec_arg(args.spec)
+            managed_screen = screen_definition(
+                spec, args.runtime_dir, args.project_key, args.child, args.screen_generation,
+                mail_env=args.mail_env,
+            )
             servers: dict = {}
             if restrictive(spec):
                 servers = claude_plan(spec, cwd=args.cwd, chrome=args.chrome == "1",
-                                      claude_json=args.claude_json)["servers"]
+                                      claude_json=args.claude_json, managed_screen=managed_screen)["servers"]
             env = dict(
                 AGENTSTACK_PROXY_AGENT_NAME=args.child,
                 AGENTSTACK_PROXY_TOKEN_FILE=args.token_file,

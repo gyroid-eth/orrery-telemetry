@@ -226,6 +226,10 @@ Claude の子も正常終了後、state と owner credential を既定30日、mo
 
 credential が旧版の cleanup で消えた場合は `credential_missing`、期限切れは `retention_expired`、明示 purge 後は `purged` で起動を拒否します。別名への登録や credential の自動発行は行いません。必要な復旧は operator が [Persistent-agent enrollment and startup](persistent-agents.md) に従って行います。Mail の再登録・unretire、子専用 proxy の復元に失敗しても Claude は起動しません。起動準備では detached tmux の一時 session を作り、CLI を `tmux wait-for` で待機させます。窓表示と session 名の置換が成功してから CLI を解放し、元の husk を片付けます。途中の失敗では一時 session を除去して元の shell を残し、再登録応答で元が retired と確認できた場合だけ Mail を再 retire します。元から active の identity は retire しません。復元処理自体が失敗した場合は応答の `rollback_errors` に明示します。
 
+## 子の computer use
+
+Claude、Codex、dsh、Hermes の標準 launcher で `--tools mcp:orrery-screen` または `--tools screen:read:orrery-screen` を選べます。実行中の権限を変える場合は operator API を使います。 [Cua Driver の準備、権限と確認手順](computer-use.md)
+
 ## Codex 固有の起動
 
 `agent-start-codex` は次を行います。

@@ -196,7 +196,8 @@ def _invoke_resume_entry(monkeypatch, tmp_path, project, runtime, *, registratio
     bootstrap.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     installed_hooks = install_home / "hooks"
     installed_hooks.mkdir()
-    shutil.copy2(ROOT / "hooks" / "child_resume.py", installed_hooks)
+    for helper in ("child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / helper, installed_hooks)
     (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
     copy_client_library(install_home)
     runner = (
@@ -330,7 +331,8 @@ def test_resume_sources_the_installed_product_bootstrap(policy_env, monkeypatch)
     bootstrap.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     hooks = install_home / "hooks"
     hooks.mkdir()
-    shutil.copy2(ROOT / "hooks" / "child_resume.py", hooks)
+    for helper in ("child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / helper, hooks)
     (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
     copy_client_library(install_home)
     runner = (
@@ -497,6 +499,8 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     shutil.copy2(ROOT / "hooks" / "prepare-codex-session-binding.py", hooks)
     for name in (
         "child_resume.py",
+        "child_tools.py",
+        "screen_state.py",
         "cleanup-child-agent.sh",
         "project-context.sh",
         "resolve-agent-name.sh",
@@ -1063,7 +1067,8 @@ def test_resume_valid_state_without_home_regenerates_private_home(
     bootstrap.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     installed_hooks = install_home / "hooks"
     installed_hooks.mkdir()
-    shutil.copy2(ROOT / "hooks" / "child_resume.py", installed_hooks)
+    for helper in ("child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / helper, installed_hooks)
     (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
     copy_client_library(install_home)
     runner = (
@@ -1120,7 +1125,8 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
         ),
         encoding="utf-8",
     )
-    shutil.copy2(ROOT / "hooks" / "child_resume.py", hooks)
+    for helper in ("child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / helper, hooks)
     (libdir / "agentstack-register.sh").write_text(
         "ags_mail_load_token() { :; }\n"
         "ags_mcp_call() { printf '{\"result\":{}}\\n'; }\n"

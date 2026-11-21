@@ -226,6 +226,10 @@ A session reopened from a terminal with `claude --resume` is unretired on the sa
 
 Credentials deleted by an older cleanup return `credential_missing`; expired material returns `retention_expired`, and explicitly purged material returns `purged`. Resume refuses startup and never registers an alias or issues a credential. Any necessary recovery is an operator procedure described in [Persistent-agent enrollment and startup](persistent-agents.en.md). Failed Mail registration, unretire, or child proxy restoration also prevents Claude startup. Startup preparation creates a temporary detached tmux session and gates the CLI with `tmux wait-for`. Only after window opening and session-name replacement succeed does it release the CLI and dispose of the old husk. Failure removes the temporary session, preserves the original shell, and re-retires Mail only when the registration response confirmed that the identity was previously retired. An originally active identity is never retired as compensation. Failures of the restoration itself are explicitly reported in `rollback_errors`.
 
+## Computer use for children
+
+The standard launcher can give Claude, Codex, dsh and Hermes the generated relay by choosing `--tools mcp:orrery-screen` or `--tools screen:read:orrery-screen`. The operator API changes a running child’s permission. [Cua Driver setup and verification (Japanese)](computer-use.md)
+
 ## Codex-specific startup
 
 `agent-start-codex` performs the following steps.

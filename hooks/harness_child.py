@@ -220,7 +220,15 @@ def generate_plan(document, runner):
     # Re-evaluate against authenticated Mail, never the previous merged output.
     # Keep the source in saved input for dynamic prelaunch regeneration as well.
     document.setdefault('mcp_base_config', document['mcp_config'])
+    managed_screen = None
+    if 'project_key' in document:
+        generation = document.setdefault('screen_generation', uuid.uuid4().hex)
+        managed_screen = child_tools.screen_definition(document['tools'], document['runtime_dir'],
+            document['project_key'], document['agent_name'], generation)
+    elif child_tools.screen_mode(document['tools']) is not None:
+        raise child_tools.ToolsError('orrery-screen requires the standard child launcher')
     document['mcp_selection'] = child_tools.native_plan(document['tools'], cwd=document['cwd'],
+        managed_screen=managed_screen,
         claude_json=os.environ.get('AGENTSTACK_CLAUDE_JSON',str(Path.home()/'.claude.json')),
         codex_config=child_tools._defaults_codex_config(
             str(Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex'))) / 'config.toml'),
@@ -306,6 +314,7 @@ def prepare_resume(runtime_dir, name, project_key=None):
     document.update(product_root=str(ROOT), parent_agent=parent, mcp_config=str(mcp),
                     mcp_base_config=str(mcp),
                     prompt_file=str(prompt), instructions_file=str(write_instructions(state_dir,state['project_key'])),
+                    screen_generation=uuid.uuid4().hex,
                     resume_attempt_at=state['resume_in_progress_at'])
     prepare_dsh_history(document, state)
     generate_plan(document, runner)
@@ -358,6 +367,7 @@ def prepare(args):
     document = dict(agent_name=args.agent_name, program=args.harness, backend_id=args.backend,
         backend_kind=kind,
         model=args.model, project_key=args.project_key, cwd=str(Path(args.cwd).resolve()),
+        screen_generation=args.generation,
         parent_agent=args.parent_agent or None, product_root=str(ROOT), runtime_dir=str(runtime),
         state_dir=str(state_dir), mcp_config=str(Path(args.mcp_config).resolve()),
         prompt_file=str(prompt), instructions_file=str(instructions),

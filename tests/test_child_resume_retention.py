@@ -369,7 +369,8 @@ def test_resume_bootstrap_preserves_child_provenance_before_unretire(
     bootstrap = bindir / "agentstack-codex-bootstrap"
     shutil.copy2(ROOT / "bin" / "agentstack-codex-bootstrap", bootstrap)
     shutil.copy2(ROOT / "hooks" / "prepare-codex-session-binding.py", hooks)
-    shutil.copy2(ROOT / "hooks" / "child_resume.py", hooks)
+    for helper in ("child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / helper, hooks)
     call_log = tmp_path / "mcp-calls.log"
     (libdir / "agentstack-register.sh").write_text(
         "ags_mail_load_token() { :; }\n"
@@ -532,7 +533,8 @@ def test_failure_before_codex_exec_discards_home_but_keeps_retired_credential(
     install_home = tmp_path / "agentstack"
     hooks = install_home / "hooks"
     hooks.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / "hooks" / "child_resume.py", hooks)
+    for helper in ("child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / helper, hooks)
     (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
     copy_client_library(install_home)
     bootstrap = install_home / "bin" / "agentstack-codex-bootstrap"
@@ -647,6 +649,8 @@ def test_real_resume_command_can_cleanup_and_resume_again(
         (ROOT / "bin" / "lib" / "agentstack-scientists.sh", libdir / "agentstack-scientists.sh"),
         (ROOT / "hooks" / "prepare-codex-session-binding.py", hooks / "prepare-codex-session-binding.py"),
         (ROOT / "hooks" / "child_resume.py", hooks / "child_resume.py"),
+        (ROOT / "hooks" / "child_tools.py", hooks / "child_tools.py"),
+        (ROOT / "hooks" / "screen_state.py", hooks / "screen_state.py"),
         (ROOT / "hooks" / "cleanup-child-agent.sh", hooks / "cleanup-child-agent.sh"),
         (ROOT / "hooks" / "project-context.sh", hooks / "project-context.sh"),
         (ROOT / "hooks" / "resolve-agent-name.sh", hooks / "resolve-agent-name.sh"),
