@@ -30,8 +30,8 @@
 <script defer src="/conversation.js"></script>
 <script defer src="/push.js"></script>
 <script defer src="/reader_send_motion.js"></script>
-<script defer src="/mobile.js"></script>
 <script defer src="/mobile-spawn-controls.js"></script>
+<script defer src="/mobile.js"></script>
 <script defer src="/mobile-spawn.js"></script>
 </head>
 <body class="mobile">
@@ -40,7 +40,6 @@
   <symbol id="icon-tune" viewBox="0 0 24 24"><path d="M4 6h6m4 0h6M4 12h10m4 0h2M4 18h2m4 0h10"/><path d="M10 4h4v4h-4zm4 6h4v4h-4zm-8 6h4v4H6z"/></symbol>
   <symbol id="icon-expand" viewBox="0 0 24 24"><path d="M9 5H5v4m10-4h4v4M5 15v4h4m10-4v4h-4"/></symbol>
   <symbol id="icon-collapse" viewBox="0 0 24 24"><path d="M5 9h4V5m10 4h-4V5M9 19v-4H5m10 4v-4h4"/></symbol>
-  <symbol id="icon-fit" viewBox="0 0 24 24"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/><rect x="8" y="8" width="8" height="8" rx="1"/></symbol>
   <symbol id="icon-graph" viewBox="0 0 24 24"><path d="m7.6 14.6 3.1-6m2.9.3 3 5.5M8.5 16h7"/><circle cx="12" cy="6.5" r="2.6"/><circle cx="6" cy="16.5" r="2.6"/><circle cx="18" cy="16.5" r="2.6"/></symbol>
   <symbol id="icon-activity" viewBox="0 0 24 24"><path d="M9 6h10M9 12h10M9 18h10M5 6h.1M5 12h.1M5 18h.1"/></symbol>
   <symbol id="icon-bell" viewBox="0 0 24 24"><path d="M6 10a6 6 0 1 1 12 0c0 2.5 1 4.5 2 6H4c1-1.5 2-3.5 2-6Zm4 9a2 2 0 0 0 4 0"/></symbol>
@@ -62,7 +61,6 @@
   <symbol id="icon-recipient" viewBox="0 0 24 24"><path d="M6 4v7a4 4 0 0 0 4 4h9m-4-4 4 4-4 4"/></symbol>
   <symbol id="icon-forward" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
   <symbol id="icon-attachment" viewBox="0 0 24 24"><path d="m9 13.8 6.3-6.3a2.1 2.1 0 0 1 3 3l-8 8a4 4 0 1 1-5.7-5.7l8.2-8.2a2.8 2.8 0 0 1 4 0"/></symbol>
-  <symbol id="icon-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
   <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M5 12h14m-7-7v14"/></symbol>
   <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12m0-12L6 18"/></symbol>
   <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5m-11 11L5 19"/></symbol>
@@ -86,7 +84,7 @@
     <div class="graph-toolbar">
       <div class="graph-toolbar-actions icon-group">
         <button id="graph-search-toggle" class="icon-button" type="button" title="Find an agent" aria-label="Find an agent" aria-controls="graph-search" aria-expanded="false"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-search"/></svg></button>
-        <button id="settings-btn" class="icon-button" type="button" title="Tune graph" aria-label="Tune graph" aria-controls="settings" aria-expanded="false"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-tune"/></svg></button>
+        <button id="settings-btn" class="icon-button" type="button" title="Tune graph. Changes apply to this browser." aria-label="Tune graph" aria-controls="settings" aria-expanded="false"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-tune"/></svg></button>
         <button id="graph-fullscreen" class="icon-button" type="button" title="Expand graph" aria-label="Expand graph" aria-expanded="false" aria-controls="graph-panel"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-expand"/></svg></button>
       </div>
     </div>
@@ -96,7 +94,7 @@
     </div>
     <p id="graph-reader-status" class="quiet" role="status" hidden></p>
     <div id="net">
-      <svg id="gsvg" role="group" aria-label="Agent relationships. Focus: tap a peer to focus, tap the center to read. All: tap an agent to read. Pinch to zoom, drag to move."></svg>
+      <svg id="gsvg" role="group" aria-label="Agent relationships. Focus: tap a peer to focus, tap the center to read. All: tap an agent to read. Pinch to zoom. Drag an agent to move it, or drag the background to pan."></svg>
       <div class="graph-status icon-group">
         <div id="summary" role="status">
           <span id="graph-count-label" class="sr-only">No observations yet</span>
@@ -110,16 +108,11 @@
       </div>
       <div class="graph-footer">
         <div class="graph-footer-start">
-          <button type="button" class="period-trigger graph-period" data-period aria-controls="period-sheet" aria-expanded="false" title="Change time range: Last 24h" aria-label="Change time range: Last 24h"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-calendar"/></svg><span>24h</span></button>
+          <button type="button" class="period-trigger graph-period" data-period aria-controls="period-sheet" aria-expanded="false" title="Change time range: Last 24h. Applies to Graph and Activity." aria-label="Change time range: Last 24h"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-calendar"/></svg><span>24h</span></button>
           <nav class="graph-mode icon-group" aria-label="Graph scope">
             <button class="icon-button active" type="button" data-mode="focus" aria-pressed="true" title="Focus" aria-label="Focus"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-focus"/></svg></button>
             <button class="icon-button" type="button" data-mode="all" aria-pressed="false" title="Show all agents" aria-label="Show all agents"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-agents"/></svg></button>
           </nav>
-        </div>
-        <div class="graph-tools icon-group">
-          <button id="zoom-out" class="icon-button" type="button" title="Zoom out" aria-label="Zoom out"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-minus"/></svg></button>
-          <button id="zoom-in" class="icon-button" type="button" title="Zoom in" aria-label="Zoom in"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-plus"/></svg></button>
-          <button id="fit" class="icon-button" type="button" title="Fit graph" aria-label="Fit graph"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-fit"/></svg></button>
         </div>
       </div>
     </div>
@@ -140,7 +133,7 @@
           <button class="icon-button" type="button" data-kind="mail" aria-pressed="false" title="Mail" aria-label="Mail"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-mail"/></svg></button>
           <button class="icon-button" type="button" data-kind="state" aria-pressed="false" title="Status changes" aria-label="Status changes"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-working"/></svg></button>
         </nav>
-        <button type="button" class="period-trigger" data-period aria-controls="period-sheet" aria-expanded="false" title="Change time range: Last 24h" aria-label="Change time range: Last 24h"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-calendar"/></svg><span>24h</span></button>
+        <button type="button" class="period-trigger" data-period aria-controls="period-sheet" aria-expanded="false" title="Change time range: Last 24h. Applies to Graph and Activity." aria-label="Change time range: Last 24h"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-calendar"/></svg><span>24h</span></button>
         <details id="activity-notes" class="observation-note">
           <summary class="icon-button" title="Activity details" aria-label="Activity details"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-info"/></svg></summary>
           <div class="observation-content">
@@ -160,16 +153,14 @@
 </main>
 <aside id="settings" role="dialog" aria-labelledby="settings-title" aria-hidden="true" hidden>
   <div class="st-bar"><h2 id="settings-title">Network settings</h2><button id="settings-close" type="button" aria-label="Close settings">×</button></div>
-  <p class="st-note">Display on this browser only</p>
   <div id="nctl-rows"></div>
   <div class="st-foot"><button type="button" id="nc-reset">Reset</button></div>
 </aside>
 <dialog id="period-sheet" aria-labelledby="period-title">
-  <div class="period-head"><h2 id="period-title">Time range</h2><button id="period-close" type="button">Done</button></div>
+  <div class="period-head"><h2 id="period-title" title="Applies to Graph and Activity">Time range</h2><button id="period-close" type="button">Done</button></div>
   <label for="time-window" class="period-current"><output id="period-label">Last 24h</output></label>
-  <input id="time-window" type="range" min="0" max="1000" step="1" value="573" aria-label="Observation period">
-  <div class="range-stops" aria-hidden="true"><span>15 min</span><span>24h</span><span>30 days</span></div>
-  <div class="period-foot"><span>Graph and Activity</span><button id="all-history" type="button" aria-pressed="false">All history</button></div>
+  <div class="mobile-scrubber"><input id="time-window" type="range" min="0" max="1000" step="1" value="573" aria-label="Observation period"></div>
+  <div class="period-foot"><button id="all-history" type="button" aria-pressed="false">All history</button></div>
 </dialog>
 <dialog id="pair-sheet" class="mail-sheet" aria-labelledby="pair-title">
   <div class="period-head"><h2 id="pair-title">Mail between agents</h2><button id="pair-close" type="button">Done</button></div>
