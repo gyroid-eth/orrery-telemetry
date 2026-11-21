@@ -92,13 +92,15 @@ def test_one_capture_cache_generation_and_unknown_transition(monkeypatch, progra
 
     monkeypatch.setattr(server, '_tmux_run', capture)
     value = server._native_context_runtime('ExampleAgent', 1, '$1', program)
-    assert value == {'ctx_used': 19, 'ctx_window': '128K', 'act_state': 'work'}
+    # dsh also reports the effort from its footer; Hermes does not.
+    extra = {'dsh_card_effort': None} if program == 'dsh' else {}
+    assert value == {'ctx_used': 19, 'ctx_window': '128K', 'act_state': 'work', **extra}
     assert server._native_context_runtime('ExampleAgent', 1, '$1', program) == value
     assert len(calls) == 1
     text[0] = 'status hidden'
     # Same session name, new generation: never reuse the old work observation.
     assert server._native_context_runtime('ExampleAgent', 2, '$2', program) == {
-        'ctx_used': None, 'ctx_window': None, 'act_state': None}
+        'ctx_used': None, 'ctx_window': None, 'act_state': None, **extra}
     text[0] = working
     clock[0] += server._RT_TTL + 1
     assert server._native_context_runtime('ExampleAgent', 2, '$2', program)['act_state'] == 'work'

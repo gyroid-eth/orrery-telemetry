@@ -167,12 +167,20 @@ class NetworkView{
   }
   this.selection();if(this.onSelect)this.onSelect(n);
  }
+ syncMode(){
+  document.querySelectorAll('[data-mode]').forEach(button=>{
+   const selected=button.dataset.mode===this.mode;
+   button.classList.toggle('active',selected);button.setAttribute('aria-pressed',String(selected));
+  });
+ }
  selection(){
-  document.querySelector('[data-mode=focus]').title=this.selected?'Focus on '+this.selected:'Focus';
+  const focus=document.querySelector('[data-mode=focus]');
+  focus.title=this.selected?'Focus on '+this.selected:'Focus';
+  focus.setAttribute('aria-label',focus.title);
  }
  focus(name){
   if(!this.agents.some(a=>a.name===name))return;
-  this.mode='focus';document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode==='focus'));
+  this.mode='focus';this.syncMode();
   this.select(name);this.fit();
   document.getElementById('agent-search').value='';this.search();
  }
@@ -186,9 +194,14 @@ class NetworkView{
    const row=document.createElement('div');row.className='agent-result';
    const open=document.createElement('button');open.type='button';open.className='agent-result-open';
    const name=document.createElement('strong');name.textContent=a.name;
-   const role=document.createElement('span');role.textContent=a.role||'Role not set';
-   open.append(name,role);open.onclick=()=>this.onOpen?.(a.name);
-   const focus=document.createElement('button');focus.type='button';focus.className='agent-result-focus';focus.textContent='Focus';focus.setAttribute('aria-label','Focus on '+a.name);
+   open.append(name);
+   if(a.role){
+    const role=document.createElement('span');role.textContent=a.role;open.append(role);
+   }
+   open.onclick=()=>this.onOpen?.(a.name);
+   const focus=document.createElement('button');focus.type='button';focus.className='agent-result-focus icon-button';
+   focus.title='Focus on '+a.name;focus.setAttribute('aria-label',focus.title);
+   focus.innerHTML='<svg class="mobile-icon" aria-hidden="true"><use href="#icon-focus"></use></svg>';
    focus.onclick=()=>{this.focus(a.name);document.querySelector('[data-mode=focus]').focus();};
    row.append(open,focus);results.append(row);
   }
@@ -219,7 +232,7 @@ class NetworkView{
   document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{
    if(!this.snapshot)return;
    this.mode=b.dataset.mode;this.map.clear();this.layoutKey='';this.renderKey='';this.userView=false;
-   document.querySelectorAll('[data-mode]').forEach(x=>x.classList.toggle('active',x===b));this.update(this.snapshot);
+   this.syncMode();this.update(this.snapshot);
   });
   document.getElementById('zoom-out').onclick=()=>this.zoom(1/1.15);document.getElementById('zoom-in').onclick=()=>this.zoom(1.15);
   document.getElementById('fit').onclick=()=>{this.userView=false;this.fit();};

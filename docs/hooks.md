@@ -46,7 +46,8 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 
 - **発火:** すべての `SessionStart` source。startup だけでなく resume、`/clear`、compact 後にも走ります。
 - **入れ子の起動:** macOS・Linux 共通の `ps` で shell wrapper を越えて祖先をたどり、Claude が別の Claude または Codex の内側にいると確認できた場合は、SessionStart の登録・owner token・セッション索引の更新を省きます。内側の Claude の会話は続行します。祖先から確認できない起動では、通常どおり identity の解決へ進みます。
-- **動作:** identity を `AGENT_NAME` → pane metadata → exact tmux session の順で解決し、ORRERY Mail の liveness を確認します。owner token と project key があれば shell 側で同じ identity を再登録します。そのうえで、登録済み・儀式不要を明示した embedded task、提供 tool schema が示す bound proxy、raw/direct 接続の順に最初に一致した経路だけを使うよう案内します。embedded task は parent の有無だけで除外しません。shell 登録と raw MCP tool session の認証は別です。
+- 従来の shell 登録経路では、Mail が応答したら同じ project・名前のプロフィールを `whois` で確認します。登録済みの `program` が `claude` または `claude-code` の場合にだけ shell から再登録します。非 Claude の名前を継承した場合やプロフィールを確認できない場合は、owner token やセッション索引、稼働記録に触れる前にフックを終えます。
+- **動作:** identity を `AGENT_NAME` → pane metadata → exact tmux session の順で解決し、ORRERY Mail の liveness を確認します。確認済みの Claude identity を owner token で shell 側から再登録します。そのうえで、登録済み・儀式不要を明示した embedded task、提供 tool schema が示す bound proxy、raw/direct 接続の順に最初に一致した経路だけを使うよう案内します。embedded task は parent の有無だけで除外しません。shell 登録と raw MCP tool session の認証は別です。
 - **経路の境界:** child proxy の設定 artifact は案内を具体化する hint にだけ使い、model に実際に提供された tool の説明と引数 schema を優先します。bound proxy では helper・再登録・token file 読取を指示せず、障害時も raw/helper へ自動 fallback させません。raw/direct の既存 identity だけ token-safe helper に進み、新規 raw 登録とは分けます。generic な登録失敗を stale token と断定しません。
 
 ### `check-file-reservation.sh`
@@ -139,7 +140,7 @@ service が応答しているなら登録は可能なので、既定は**要求�
 
 PostToolUse payload から ORRERY Mail の数値 ID、canonical name、Claude `session_id`、transcript path、cwd を取り出し、`$AGENTSTACK_RUNTIME_DIR/session_index/<agent_id>.json` へ一時 file + `os.replace` で書きます。record は `schema_version: 2` と `binding_kind: "self"` を持ちます。**呼び出し元が別の agent を登録した場合（親による child 登録）は record を書きません** — この index は dashboard の resume と guard の identity 解決の両方に読まれるので、読む側で除外するのではなく、書かない方が誤用の余地が残りません。dashboard はこの exact mapping を session resume に優先し、古い session だけ heuristic へ fallback します。入力不備や I/O failure は registration を妨げない quiet no-op です。
 
-SessionStart の shell 登録成功時も、同じ writer にその event の payload を渡します。Mail 不在や credential 不足で登録できなかった場合、名前が解決済みで `CLAUDE_ENV_FILE` があれば、session ID・transcript・cwd・名前・project を `AGENTSTACK_CLAUDE_SESSION_CONTEXT` として後続の Bash に引き継ぎます。値は shell quote し、credential は含めません。通常の登録成功時は既に receipt があるため、この回復用 context を空にするだけで追加の Python は起動しません。Mail の追加呼び出しや待機・retry はありません。
+SessionStart の shell 登録成功時も、同じ writer にその event の payload を渡します。Mail 不在や credential 不足で登録できなかった場合、名前が解決済みで `CLAUDE_ENV_FILE` があれば、session ID・transcript・cwd・名前・project を `AGENTSTACK_CLAUDE_SESSION_CONTEXT` として後続の Bash に引き継ぎます。値は shell quote し、credential は含めません。通常の登録成功時は既に receipt があるため、この回復用 context を空にするだけで追加の Python は起動しません。回復用 context の記録と消去はローカルで完結します。
 
 同じ session の Bash で `agentstack-reregister <name> claude-code` が成功したときだけ、この context と現在の identity・project が一致することを再確認し、現在の SessionStart payload から receipt を書きます。他人の再登録、identity conflict、別 project、失敗した登録では receipt を更新しません。remote 登録は成功しても receipt を書けなければ、exit 0 と登録成功の stdout を維持しつつ stderr に `stage=session-receipt reason=binding-not-written` を出します。未 enroll の identity は引き続き operator による credential 復旧が必要です。`CLAUDE_ENV_FILE` がない起動や更新前に開始した session は自動補修できず、古い receipt や transcript 検索からの推測も行いません。dashboard の self receipt 検証・古い receipt の拒否は変更しません。
 

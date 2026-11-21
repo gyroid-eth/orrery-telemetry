@@ -256,14 +256,7 @@ child_has_mcp_proxy_config() {
 }
 
 shell_register_resolved_agent() {
-    local register_lib restored_token work_dir model
-    [ -n "$RESOLVED_AGENT" ] || return 1
-    [ -n "$PROJECT_KEY" ] || return 1
-    register_lib="$(find_register_lib)" || return 1
-    # shellcheck disable=SC1090
-    . "$register_lib" || return 1
-
-    ags_mail_load_token
+    local restored_token work_dir model
     restored_token="${CHILD_REGISTRATION_TOKEN:-}"
     if [ -z "$restored_token" ]; then
         restored_token="$(ags_load_registration_token "$RESOLVED_AGENT" 2>/dev/null || true)"
@@ -415,6 +408,28 @@ print(json.dumps({
         python3 "$HOOKS_DIR/record-session-index.py" >/dev/null 2>&1 || true
 }
 
+MAIL_SERVER_ANSWERING=0
+CLAUDE_REGISTRATION_CONFIRMED=0
+if mail_server_is_answering; then
+    MAIL_SERVER_ANSWERING=1
+    if [ -n "$RESOLVED_AGENT" ] && [ -n "$PROJECT_KEY" ] && REGISTER_LIB="$(find_register_lib)"; then
+        # shellcheck disable=SC1090
+        if . "$REGISTER_LIB"; then
+            ags_mail_load_token
+            # A nested CLI can inherit both the name and owner credential. Check
+            # the existing profile before using the credential or writing a lease.
+            if ! REGISTERED_PROGRAM="$(ags_registered_program "$PROJECT_KEY" "$RESOLVED_AGENT" 2>/dev/null)"; then
+                echo "ORRERY Mail の登録済み provider を確認できなかったため、Claude の shell 再登録を省きました。"
+                exit 0
+            fi
+            case "$REGISTERED_PROGRAM" in
+                claude|claude-code) CLAUDE_REGISTRATION_CONFIRMED=1 ;;
+                *) exit 0 ;;
+            esac
+        fi
+    fi
+fi
+
 mkdir -p "$RUNTIME_DIR" 2>/dev/null
 if [ -n "${TMUX_PANE:-}" ]; then
     CURRENT_SESSION=$(tmux display-message -t "$TMUX_PANE" -p '#S' 2>/dev/null)
@@ -436,8 +451,8 @@ if [[ -f "$INSTRUCTION_ENGINE" ]] &&
 fi
 write_live_session_lease "${RESOLVED_AGENT:-}"
 
-if mail_server_is_answering; then
-    if [ -n "$RESOLVED_AGENT" ] && shell_register_resolved_agent; then
+if [ "$MAIL_SERVER_ANSWERING" = 1 ]; then
+    if [ "$CLAUDE_REGISTRATION_CONFIRMED" = 1 ] && shell_register_resolved_agent; then
         echo "ORRERY Mail server is running. This session is already registered."
         [ -n "${SHELL_UNRETIRE_NOTE:-}" ] && echo "$SHELL_UNRETIRE_NOTE"
         echo "あなたは「${SHELL_REGISTERED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。shell hook で登録済みです。"
