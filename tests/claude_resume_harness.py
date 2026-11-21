@@ -40,6 +40,7 @@ class StandInMail(http.server.BaseHTTPRequestHandler):
             result = {"structuredContent": {"released": 0}}
         elif name == "whois":
             result = {"structuredContent": {"name": arguments.get("agent_name"),
+                                             "program": "claude-code",
                                              "retired_at": StandInMail.retired_at}}
         elif name in {"retire_agent", "unretire_agent"}:
             StandInMail.retired_at = "2026-01-01T00:00:00+00:00" if name == "retire_agent" else None
