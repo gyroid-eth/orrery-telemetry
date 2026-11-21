@@ -94,8 +94,11 @@ def upstream(tmp_path):
     return config, log
 
 
-@pytest.mark.asyncio
-async def test_fixed_list_and_live_permissions(upstream):
+def test_fixed_list_and_live_permissions(upstream):
+    asyncio.run(_fixed_list_and_live_permissions(upstream))
+
+
+async def _fixed_list_and_live_permissions(upstream):
     config, log = upstream
     authority = Authority()
     relay = Relay(SCHEMAS["darwin"], authority, lambda: config("normal"), timeout=4)
@@ -147,9 +150,12 @@ async def test_fixed_list_and_live_permissions(upstream):
     assert "fixture title" not in repr(authority.events)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("scenario", ["schema", "hang", "exit"])
-async def test_relay_stops_and_never_replays(upstream, scenario):
+def test_relay_stops_and_never_replays(upstream, scenario):
+    asyncio.run(_relay_stops_and_never_replays(upstream, scenario))
+
+
+async def _relay_stops_and_never_replays(upstream, scenario):
     config, log = upstream
     authority = Authority()
     authority.mode = "control"

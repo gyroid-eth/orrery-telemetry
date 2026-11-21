@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import contextmanager
 import http.client
 import json
@@ -101,8 +102,11 @@ def test_audit_scope_and_shape(monkeypatch, tmp_path):
         assert all(r["agent"] == target["agent"] for r in rows)
 
 
-@pytest.mark.asyncio
-async def test_tool_calls_are_rechecked_via_real_stdio_and_http(monkeypatch, tmp_path):
+def test_tool_calls_are_rechecked_via_real_stdio_and_http(monkeypatch, tmp_path):
+    asyncio.run(_tool_calls_are_rechecked_via_real_stdio_and_http(monkeypatch, tmp_path))
+
+
+async def _tool_calls_are_rechecked_via_real_stdio_and_http(monkeypatch, tmp_path):
     from datetime import timedelta
     import sys
 
