@@ -10,6 +10,8 @@
 
 `/api/spawn` では `{"tools":{"mcp":["orrery-screen"]}}` または `{"tools":{"screen":{"server":"orrery-screen","access":"read"}}}` を渡します。操作を初期値にする場合は `access` を `operate` にします。既存の名前なし `screen:operate` は Claude の組み込み computer use を選びます。installer の既定の道具に `orrery-screen` は追加されません。
 
+Claude を会話だけで再開するときも、`/api/jump` に同じ `tools` を渡せます。指定した回の起動に世代を作ります。再開時に追加の道具を省略すると、前の世代の画面操作資格も失効します。[再開 API の指定例](api.md#post-apijump)
+
 ## 準備
 
 1. [配布元の Cua Driver 0.55.0](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.55.0) から対象 OS の artifact を選び、配布元の SHA256 と署名を照合します。

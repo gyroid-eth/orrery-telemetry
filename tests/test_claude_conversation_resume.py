@@ -7,10 +7,11 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 
 import pytest
 from dashboard import server
-from hooks import child_resume
+from hooks import child_resume, child_tools, screen_state
 from test_claude_resume_mail import NAME, TOKEN, ROOT, child, private, resume
 from test_claude_legacy_resume import legacy, snapshot, same_material
 
@@ -62,6 +63,8 @@ def test_safe_missing_or_expired_material_resumes_without_any_mail(resume, monke
     args = captured['args']
     assert json.loads(args[args.index('--mcp-config') + 1]) == {'mcpServers': {}}
     assert json.loads(args[args.index('--settings') + 1]) == {'disableAllHooks': True}
+    assert '--no-chrome' in args and '--chrome' not in args
+    assert not (runtime / 'computer-use').exists()
     assert 'cannot send or receive' in process.stdout
     same_material(before)
 
@@ -328,6 +331,163 @@ def test_jump_missing_credential_resumes_in_one_request_and_reports_mail_status(
     result = server.do_jump(NAME, open_terminal=False)
     assert result['ok'] and result['action'] == 'resumed'
     assert result['mail_reason'] == 'credential_absent' and launches and not calls
+
+
+@pytest.fixture
+def conversation_jump(resume, monkeypatch, tmp_path):
+    runtime, registration, launches, _ = resume
+    (runtime / f'agent_token_{NAME}').unlink()
+    name = 'ScreenResumeFixture'
+    registration['agent_name'] = name
+    settings = tmp_path / 'claude.json'
+    settings.write_text(json.dumps({'mcpServers': {
+        'orrery-mail': {'command': '/bin/false'},
+        'cua-driver': {'command': '/bin/false'},
+    }}))
+    monkeypatch.setenv('AGENTSTACK_CLAUDE_JSON', str(settings))
+    monkeypatch.setenv('AGENTSTACK_SCREEN_PYTHON', sys.executable)
+    monkeypatch.setattr(server, 'PORT', 18090)
+    monkeypatch.setattr(server, '_has_session', lambda _name: False)
+    monkeypatch.setattr(server, '_child_session_live', lambda *_args: False)
+    monkeypatch.setattr(server, '_mcp_call', lambda *_args: pytest.fail('Mail tool called'))
+    return name, runtime, launches
+
+
+def test_jump_conversation_tools_use_strict_config_and_fresh_screen_permissions(conversation_jump, monkeypatch):
+    name, runtime, launches = conversation_jump
+    store = screen_state.Store(runtime)
+    previous = None
+    for tools, expected, chrome in (
+        ({'mcp': ['orrery-screen']}, 'off', False),
+        ({'browser': {'device': 'fixture-browser'},
+          'screen': {'server': 'orrery-screen', 'access': 'operate'}}, 'control', True),
+    ):
+        result = server.do_jump(name, tools=tools, open_terminal=False)
+        assert result['ok'] and result['resume_mode'] == 'conversation_only', result
+        assert result['tools'] == tools
+        command = launches[-1][-1]
+        args = shlex.split(command)
+        assert '--strict-mcp-config' in args
+        assert ('--chrome' in args) is chrome
+        assert ('--no-chrome' in args) is not chrome
+        assert json.loads(args[args.index('--settings') + 1]) == {'disableAllHooks': True}
+        assert 'AGENTSTACK_MAIL_DISABLED=1' in launches[-1]
+        assert 'cleanup-child-agent.sh' not in command
+        servers = json.loads(args[args.index('--mcp-config') + 1])['mcpServers']
+        assert set(servers) == {'orrery-screen'}
+        allowed = set(args[args.index('--allowed-tools') + 1].split(','))
+        expected_tools = {f'mcp__orrery-screen__{tool}' for tool in screen_state.TOOLS}
+        if chrome:
+            expected_tools.update(child_tools.claude_chrome_allowed_tools())
+            assert 'deviceId fixture-browser' in args[args.index('--append-system-prompt') + 1]
+        assert allowed == expected_tools
+        relay = servers['orrery-screen']
+        binding_path = Path(relay['env']['AGENTSTACK_SCREEN_BINDING_FILE'])
+        binding = json.loads(binding_path.read_text())
+        assert binding['credential'] not in command + json.dumps(result)
+        assert store.child(binding['credential'])['computer_use'] == expected
+        [launch] = store.list()
+        assert launch['generation'] == binding['generation']
+        if previous is not None:
+            assert previous['generation'] != binding['generation']
+            with pytest.raises(screen_state.ScreenStateError, match='SCREEN_CHILD_REQUIRED'):
+                store.child(previous['credential'])
+        previous = binding
+
+    # A resume that waited for a concurrent launch must preserve its binding.
+    with monkeypatch.context() as race:
+        probes = iter((False, True))
+        race.setattr(server, '_has_session', lambda _name: next(probes))
+        assert not server.do_jump(name, open_terminal=False)['ok']
+    assert len(launches) == 2
+    assert store.child(previous['credential'])['computer_use'] == 'control'
+
+    assert server.do_jump(name, open_terminal=False)['ok']
+    assert not store.list()
+    assert '{"mcpServers":{}}' in launches[-1][-1]
+    assert '--no-chrome' in launches[-1][-1]
+    assert not list((runtime / 'child-agents').glob('*.json'))
+
+
+def test_jump_conversation_browser_only_leaves_mcp_empty(conversation_jump):
+    name, runtime, launches = conversation_jump
+    result = server.do_jump(name, open_terminal=False, tools={'browser': True})
+    assert result['ok'] and result['tools'] == {'browser': {'device': ''}}
+    args = shlex.split(launches[-1][-1])
+    assert '--chrome' in args and '--no-chrome' not in args
+    assert json.loads(args[args.index('--mcp-config') + 1]) == {'mcpServers': {}}
+    assert not screen_state.Store(runtime).path.exists()
+
+
+@pytest.mark.parametrize('tools,expected', [
+    (None, ('off', False)),
+    ({'browser': True, 'screen': {'server': 'orrery-screen', 'access': 'operate'}}, ('control', True)),
+])
+def test_conversation_tools_reach_agents_response(conversation_jump, monkeypatch, tools, expected):
+    name, runtime, launches = conversation_jump
+    options = {'tools': tools} if tools is not None else {}
+    assert server.do_jump(name, open_terminal=False, **options)['ok']
+    tmux_argv = launches[-1]
+    env = dict(value.split('=', 1) for flag, value in zip(tmux_argv, tmux_argv[1:]) if flag == '-e')
+    session_fields = dict(env, session_name=name, session_id='$71', session_created='171',
+                          session_activity='172', pid='73')
+
+    def tmux(args):
+        command = args[0]
+        if command == 'list-sessions':
+            return server.SEP.join(session_fields.get(field[2:-1], '') for field in args[-1].split(server.SEP))
+        if command == 'list-panes':
+            return server.SEP.join((name, '11', 'claude', '301', f'cwd={runtime}', 'Ready'))
+        if command == 'show-environment' and args[2] == f'={name}':
+            key = args[3]
+            return f'{key}={env[key]}\n' if key in env else ''
+        return ''
+
+    server._card_local_tmux_value.cache_clear()
+    monkeypatch.setattr(server, '_tmux', tmux)
+    monkeypatch.setattr(server, 'DB_PATH', str(runtime / 'absent.sqlite3'))
+    monkeypatch.setattr(server, '_project_key', lambda: None)
+    monkeypatch.setattr(server, 'agentmail_state', lambda: ({}, {}))
+    for helper in ('_codex_app_runtimes', '_deliverables_index', '_name_substitutions', '_persistent_profiles', '_annotations'):
+        monkeypatch.setattr(server, helper, dict)
+    monkeypatch.setattr(server, '_agent_runtime', lambda *_: {})
+    monkeypatch.setattr(server, '_provider_stall_view', lambda *_: None)
+
+    def fields():
+        body = server._AgentsAnswer(server.HISTORY_DAYS_DEFAULT).body('live')
+        [row] = json.loads(body)['agents']
+        assert row['name'] == name and row['mail_status'] == 'unavailable'
+        return row['computer_use'], row['browser_use']
+
+    assert fields() == expected
+    if tools:
+        store = screen_state.Store(runtime)
+        [launch] = store.list()
+        store.change({key: launch[key] for key in screen_state.TARGET}, 'view')
+        assert fields() == ('view', True)
+
+
+@pytest.mark.parametrize('tools', [{'mcp': ['orrery-mail']}, {'mcp': ['cua-driver']}, {'screen': 'operate'}])
+def test_jump_conversation_refuses_other_tools(conversation_jump, tools):
+    name, runtime, launches = conversation_jump
+    assert not server.do_jump(name, tools=tools, open_terminal=False)['ok']
+    assert not launches and not screen_state.Store(runtime).path.exists()
+
+
+def test_jump_conversation_startup_failure_revokes_screen_generation(conversation_jump, monkeypatch):
+    name, runtime, _ = conversation_jump
+    store = screen_state.Store(runtime)
+
+    def launch(*_args, **_kwargs):
+        assert store.list()[0]['computer_use'] == 'control'
+        return {'ok': False, 'error': 'fixture startup failure'}
+
+    monkeypatch.setattr(server, '_launch_claude_resume_tmux', launch)
+    result = server.do_jump(name, open_terminal=False,
+                            tools={'screen': {'server': 'orrery-screen', 'access': 'operate'}})
+    assert not result['ok'] and result['mail_status'] == 'unavailable'
+    assert store.list() == []
+    assert not list(store.directory.glob('binding-*.json'))
 
 
 def test_conversation_startup_failure_keeps_material_and_mail_untouched(legacy, monkeypatch):
