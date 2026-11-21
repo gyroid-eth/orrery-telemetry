@@ -710,7 +710,7 @@
       fold(true);
     }, true);
     sheet.addEventListener('cancel', event => {
-      if (!overlay()) return;
+      if (event.target !== sheet || !overlay()) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       fold(true);

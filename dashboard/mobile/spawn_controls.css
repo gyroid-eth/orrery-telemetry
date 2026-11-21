@@ -257,6 +257,14 @@
   box-shadow: 0 20px 36px rgb(0 0 0 / .34);
 }
 .om-select-popup[hidden] { display: none; }
+.om-select-inline .om-select-popup {
+  position: relative;
+  inset: auto;
+  margin-block-end: 6px;
+  box-shadow: none;
+}
+.spawn-select-field:has(.om-select-inline) { align-items: flex-start; }
+.spawn-select-field:has(.om-select-inline) > .mobile-icon { margin-block-start: 14px; }
 .om-select-above {
   inset: auto auto var(--om-select-edge);
   transform-origin: center bottom;

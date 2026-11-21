@@ -46,6 +46,7 @@ with HTTP 400. A media-type mismatch is HTTP 415, a cross-origin POST is HTTP 40
 | GET | `/api/name-status` | `name` | exact identity status |
 | GET | `/api/suggest-name` | `scientist` | verified `Adjective-Scientist` (requested form; read-back from the registration response is authoritative for the actual registered name) |
 | GET | `/api/fs/dirs` | optional `path` | root-scoped child directories |
+| GET | `/api/fs/dir-search` | `q`, optional `under` | work folder name search (API 41) |
 | GET | `/api/agents` | none | `{ts, agents}` |
 | GET / POST | `/api/computer-use` | Operator capability | [Launch permission](#computer-use-api) |
 | GET | `/api/agents/<name>/history-binding` | none | `{ok, agent}` (one agent's conversation-record binding, API 36) |
@@ -332,6 +333,18 @@ When `path` is omitted, the first `AGENTSTACK_SPAWN_ROOTS` entry is used. For a 
 ```
 
 Hidden directories and symlinks that leave the root are excluded. Up to 500 entries are returned in name order because the page filters the complete list by the typed prefix. With 501 or more entries, `truncated` is `true`.
+
+## GET `/api/fs/dir-search`
+
+Available from API 41. Matches the trimmed query against folder names case-insensitively, with prefix matches first. An empty query returns an empty list. Missing or repeated `q`, values longer than 255 characters, and unknown parameters return HTTP 400.
+
+```json
+{"dirs":[{"name":"Project-A","path":"/workspace/experiments/Project-A"}],"truncated":false}
+```
+
+Search covers up to four levels under `AGENTSTACK_SPAWN_ROOTS` and presets explicitly listed in `AGENTSTACK_SPAWN_DIRS`. It skips hidden directories, `Library`, `node_modules`, `__pycache__`, `venv`, `vendor`, and symlinks encountered during discovery. The server inspects up to 12,000 directory entries and reuses the index for 20 seconds. It returns up to 30 matches and sets `truncated: true` when either entry or result limits omit items.
+
+The optional `under` parameter sets the starting directory. It accepts an existing directory within the roots allowed by `/api/fs/dirs` and searches up to four levels below it. Results exclude the starting directory. An empty, repeated, oversized (over 4,096 characters), disallowed, or nonexistent `under` returns HTTP 400. Starting inside an excluded directory returns no matches. The result `path` is absolute.
 
 ## GET `/api/agents`
 
