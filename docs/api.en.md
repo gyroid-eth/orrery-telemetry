@@ -46,7 +46,10 @@ with HTTP 400. A media-type mismatch is HTTP 415, a cross-origin POST is HTTP 40
 | GET | `/api/name-status` | `name` | exact identity status |
 | GET | `/api/suggest-name` | `scientist` | verified `Adjective-Scientist` (requested form; read-back from the registration response is authoritative for the actual registered name) |
 | GET | `/api/fs/dirs` | optional `path` | root-scoped child directories |
+| GET | `/api/fs/dir-search` | `q`, optional `under` | work folder name search (API 41) |
 | GET | `/api/agents` | none | `{ts, agents}` |
+| GET / POST | `/api/computer-use` | Operator capability | [Launch permission](#computer-use-api) |
+| GET | `/api/agents/<name>/history-binding` | none | `{ok, agent}` (one agent's conversation-record binding, API 36) |
 | GET | `/api/graph` | `days`, `all` | `{nodes, edges, spawn, timestamp_diagnostics, degraded, ts}` |
 | GET | `/api/history` | `session`, `limit` | transcript events |
 | GET | `/api/agent-history` | `name` or `names`, `hours`, `include_pane_states` | agent event timeline |
@@ -62,8 +65,22 @@ with HTTP 400. A media-type mismatch is HTTP 415, a cross-origin POST is HTTP 40
 | POST | `/api/jump` | `{session, open?, base?, tools?}` | open / focus / resume action |
 | POST | `/api/exit` | `{session}` | graceful exit action |
 | POST | `/api/kill` | `{session, mode}` | kill / retire action |
-| POST | `/api/annotate` | `{name, role, emoji, group}` | saved annotation |
+| POST | `/api/annotate` | `{name, role?, emoji?, group?, task?}` | saved annotation |
 | POST | `/api/spawn` | spawn payload | child launch result |
+
+## Computer use API
+
+API 42 adds explicit computer use for standard children launched with `orrery-screen`. [Setup and verification](computer-use.md)
+
+| Method | Path | Credential | Request and response |
+| --- | --- | --- | --- |
+| GET | `/api/computer-use` | Operator | With no query, returns `{launches: [...]}`. With all four target fields, returns that launch’s permission. |
+| POST | `/api/computer-use` | Operator | The four target fields and `computer_use: off / view / control` in JSON. Returns the updated permission. |
+| GET | `/api/computer-use/events` | Operator | The four target fields in the query. Returns `{calls: [...]}`. |
+| GET | `/api/computer-use/child` | Launch-bound child | With no query, returns its own `project`, `runtime`, `generation`, `computer_use` and `source`. |
+| POST | `/api/computer-use/child/events` | Launch-bound child | Records a relay call’s start or finish. Permission changes require the operator credential. |
+
+The target fields are `project`, `runtime`, `agent` and `generation`. The `source` is `default` for initial Off, `launch` for an explicit initial permission, or `operator` after a human changes it. Send the credential as `Authorization: Bearer …`. A mismatched target returns HTTP 404 and a mismatched credential returns HTTP 403. The service keeps up to 200 recent calls across targets. Each entry includes `call_id`, `agent`, `tool`, `started`, `finished` and `result`. The last two fields are null until a finish arrives.
 
 ## GET `/api/version`
 
@@ -72,7 +89,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":34}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":43}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -95,9 +112,15 @@ This path requires `AGENTSTACK_RUNTIME_MODE=fresh` and the protected `AGENTSTACK
 
 A parent name must be unique across the whole directory, including retired rows. Ambiguity returns candidate IDs; newest row, largest ID and folder never select an owner. An explicit I/A can select an active target. Missing, ambiguous or revoked protected parent contexts stop launch. A standalone task's technical preparation client is not its logical parent or report recipient. Registration, preparation and handoff reuse the common fresh child path for Claude/Codex/dsh/Hermes/Local. Hermes retains its HTTPS requirement.
 
-The successful response `ok:true,pending:true,child_name,job_id,I/A` means handoff acceptance, not completed native startup. Status `state:launching,result:null` is unconfirmed; detail:unknown means an uncertain outcome that must not be automatically retried, and detail:not_started means saved preparation without handoff. A confirmed native receipt yields the existing caller's launch verdict state:ready. Execution state stays separate in detail:started/ended and result.native_ready. Ending without native confirmation yields state:failed; termination alone never means success. Roster native_ready also describes a receipt, not current OS process liveness; unconfirmed running remains null. A failure after preparation returns the same job/I/A for status and manual resolution; it does not automatically create another same-name agent. Fresh I is projected byte-for-byte as its generated 32 lowercase hex digits, without converting it to a hyphenated UUID.
+A successful `ok:true,pending:true,child_name,job_id,I/A` accepts the handoff, not native startup. `state:launching,result:null` is unconfirmed; `detail:unknown` is an uncertain outcome that is not retried automatically, and `detail:not_started` means preparation is saved but execution has not started.
 
-API2a connects the Mail/graph readers below; API2b-1 connects PC term/history/jump/exit for the current target. Ended kill/retire uses the management contract below; R4 has a separate human opt-in contract. Reactivate, retired resume and App GUI activation remain unconnected. Worktree, browser, custom base/tools, spawn's terminal option, annotations(role/group/emoji), and dry_run are also explicitly unavailable. This does not replace ordinary standalone/parented automatic spawning with manual child creation. The user's agent can prepare work folders and provider settings using the [migration procedure](fresh-global-update.en.md), which also covers configuration, cutover and recovery.
+API 40 distinguishes `started`, `ended` and `resolved-ended` in `detail` and, when `result` is present, `result.execution`. `started` and an observed-wait `ended` return `state:ready,result.native_ready:true` only with an established native receipt. An end without a native receipt returns `state:failed,result.native_ready:false`. `ended` also covers actual nonzero exits: `native_ready` reports startup receipt establishment, not task success or current OS liveness.
+
+`resolved-ended` means explicit confirmation closed a run whose exit code is unknown. **Even with a historical receipt, it returns `state:failed,result.native_ready:false`** rather than treating closure as successful native startup. The roster's `native_ready` is also false for a resolved run. Closure never manufactures a receipt, and status queries never restart a run. Without a current OS observation, `running` remains null.
+
+Failures after preparation retain the same job/I/A for status and procedural recovery. They never create another agent automatically under the same name. Fresh I projects its generated 32-character lowercase hex unchanged rather than converting it to a hyphenated representation.
+
+API2a connects the Mail/graph readers below; API2b-1 connects PC term/history/jump/exit for the current target. Ended kill/retire uses the management contract below; R4 has a separate human opt-in contract. Reactivate, retired resume and App GUI activation remain unconnected. Worktree, browser, custom base/tools, spawn's terminal option, annotations(role/group/emoji/task), and dry_run are also explicitly unavailable. This does not replace ordinary standalone/parented automatic spawning with manual child creation. The user's agent can prepare work folders and provider settings using the [migration procedure](fresh-global-update.en.md), which also covers configuration, cutover and recovery.
 
 #### Current PC targets (API2b-1)
 
@@ -311,9 +334,80 @@ When `path` is omitted, the first `AGENTSTACK_SPAWN_ROOTS` entry is used. For a 
 
 Hidden directories and symlinks that leave the root are excluded. Up to 500 entries are returned in name order because the page filters the complete list by the typed prefix. With 501 or more entries, `truncated` is `true`.
 
+## GET `/api/fs/dir-search`
+
+Available from API 41. Matches the trimmed query against folder names case-insensitively, with prefix matches first. An empty query returns an empty list. Missing or repeated `q`, values longer than 255 characters, and unknown parameters return HTTP 400.
+
+```json
+{"dirs":[{"name":"Project-A","path":"/workspace/experiments/Project-A"}],"truncated":false}
+```
+
+Search covers up to four levels under `AGENTSTACK_SPAWN_ROOTS` and presets explicitly listed in `AGENTSTACK_SPAWN_DIRS`. It skips hidden directories, `Library`, `node_modules`, `__pycache__`, `venv`, `vendor`, and symlinks encountered during discovery. The server inspects up to 12,000 directory entries and reuses the index for 20 seconds. It returns up to 30 matches and sets `truncated: true` when either entry or result limits omit items.
+
+The optional `under` parameter sets the starting directory. It accepts an existing directory within the roots allowed by `/api/fs/dirs` and searches up to four levels below it. Results exclude the starting directory. An empty, repeated, oversized (over 4,096 characters), disallowed, or nonexistent `under` returns HTTP 400. Starting inside an excluded directory returns no matches. The result `path` is absolute.
+
 ## GET `/api/agents`
 
-`last_active` and `last_active_rel` describe historical event time and its relative display, not a heartbeat of current work or progress. Legacy tmux `/api/agents` uses the maximum of tmux session activity and Mail last activity; it can correctly remain old throughout a long tool run. Read independent `running` / nullable `act_state` for current state. DECK displays the existing `act_state=work` regardless of duration or context availability. This is the provider's reported or observed state, not proof of subprocess progress. Codex App keeps its existing provider snapshot policy (registering also maps to work; a 600-second last-observation boundary); fresh roster returns Mail time and separate observation facts, without inferring work from running. Graph timestamps originate in Mail and its relative display uses a different reference from roster age. Missing/unknown values never become now or work. API generation 34, timestamp semantics, ordering and history windows are unchanged.
+`last_active` is the time of the last recorded activity. For legacy tmux rows it is the later of the tmux session and Mail activity timestamps. `last_active_rel` gives the relative age. Use `running` and nullable `act_state` to read the current state. Running DECK cards show `act_state=work` even when elapsed time and context usage are unavailable. The last event can stay old during a long operation while the card still shows the current state.
+
+### Agent runtime details (legacy, API 41)
+
+Legacy agent rows include these display fields in both the full roster and `scope=live`. Values without evidence are `null`. Read the existing `annot.role` for the role and `ctx_used` for context usage.
+
+| Field | Value | Source |
+|---|---|---|
+| `cwd` | Absolute path or `null` | The active tmux pane takes priority. Verified history and launch records provide fallbacks. |
+| `model_id` | Canonical ID or `null` | Claude Code uses the last assistant record from the bound transcript. Codex CLI uses the footer below the composer and resolves a display name only when it has one match in the local catalog. dsh and Hermes use their verified launch records. |
+| `effort` | String or `null` | Claude Code uses the last recorded turn or session effort. Codex CLI and dsh use the current footer when legible. Hermes does not report its current effort here. |
+| `harness_kind` | `claude`, `codex`, `dsh`, `hermes`, or `null` | Normalized CLI name from the registered `program`. |
+| `ctx_window_tokens` | Positive integer or `null` | Observed `ctx_window` converted to tokens at the precision of the reported count. |
+| `computer_use` | `off`, `view`, `control`, or `null` | The current `orrery-screen` launch permission for a running Claude session, or a recorded screen selection or standard Cua Driver configuration for other screen tools. |
+| `browser_use` | Boolean or `null` | Recorded browser selection or an enabled Chrome MCP configuration. Conversation-only Claude sessions use the choice for that launch. |
+| `parent_state` | `child`, `top`, or `null` | Explicit tmux parent metadata, records tied to the launch, or a verified persistent profile. |
+| `parent_agent` | Parent name or `null` | Populated for a child with a verified parent name. |
+
+The next roster refresh reports permission changes for `orrery-screen`. Other permissions describe launch configuration. Connection status and OS grants are outside this check.
+
+### Project-scope read metadata (legacy, API 37)
+
+Legacy responses add top-level project_key, identifying the Dashboard project used to select historical registrations without tmux. It does not mean every roster row belongs to that project. Each agent row adds nullable project_key. Live tmux rows use the existing single registration-index read; names shared by projects, missing registrations and unavailable registration indexes yield null. Historical rows identify the project already selected by the exact-project SQL query. A Mail project is a coordination namespace, not a working-directory claim.
+
+Read-only clients restricting exposure must verify the top-level project separately from every row and never treat null as an allowed project. Existing row selection/order, liveness, UI and write authorization are unchanged. Scope=live also carries the same top-level project key. Fresh retains its instance/agent-ID contract without adding legacy projects.
+
+### Conversation history binding (legacy, API 35)
+
+Claude / Claude Code, dsh and Hermes return only verified own conversations through these common fields. Determine the storage format from the existing `program` and provider conditions; no separate format field is added.
+
+| Field | Type and meaning |
+| --- | --- |
+| `history_binding` | `bound` (own record verified), `unbound` (unverified), or `stale` (own record predates the current launch) |
+| `transcript_path` | Absolute physical file path only when bound; otherwise null |
+| `history_binding_reason` | Short human-readable reason; empty when bound |
+| `history_binding_reason_code` | Stable machine-readable code, including provider-specific conditions |
+| `history_session_id` | Provider-native session ID (required for Hermes database reads), or null if unverified |
+| `history_receipt_ts` | Original receipt timestamp (ISO 8601 string), or null if unavailable; preserve offset-free values as written |
+
+Cwd, timestamps and latest-session scans never establish ownership. Binding does not prove process liveness. Existing Codex fields and states and the protected fresh `/api/history` path remain unchanged.
+
+#### Claude / Claude Code
+
+Existing Claude receipts use host local time without an offset; the original value is preserved for display. Authority comes from the current project's Mail agent ID and its `session_index/<id>.json` receipt (schema 2, `binding_kind:self`), written by SessionStart or the self-registration hook. Agent ID, name, project and registering caller must agree. A regular transcript directly inside a Claude projects project directory must have the receipt's session ID as its filename and as the first native user/assistant record's `sessionId`. Names in message text, cwd and modification times never establish binding.
+
+Reason codes are `binding_missing` (no receipt), `invalid_binding` (invalid self-registration, project or format, or a receipt changed during verification), `ambiguous_binding` (another agent's self receipt claims this conversation), `no_transcript` (file type/location requirements failed), and `id_mismatch` (session ID mismatch or unverified metadata). Prefix inspection is limited to 64 lines / 256 KiB. Empty or partial files, a native ID absent within that limit, symlinks, subagent files and storage outside standard Claude projects remain unbound.
+
+A receipt timestamp older than the current tmux `session_created` returns `stale` / `receipt_predates_session`, retaining native ID and receipt time with a null path. Offset-free timestamps are compared in dashboard host local time, assuming its timezone has not changed. Hook receipt replacements are reflected by the next roster computation, without restoring a cached old path. This comparison cannot distinguish CLI replacement inside the same tmux session, same-second restarts or a missing receipt time: until a new hook completes, the last self-registered conversation may remain visible. Retirement alone preserves exact archival binding. Binding identifies the last self-registered conversation; it does not prove process liveness. Existing Codex states and the protected fresh `/api/history` path are unchanged.
+
+#### dsh (DeepSeek Harness)
+
+`history_receipt_ts` is the callback's UTC ISO 8601 timestamp. A launch expectation prepared after this update and the child's own `agent/created` callback bind the current project's Mail ID to the native persistence backend's `locate(header)` address and its device/inode after flush. Current default storage is Zstd-framed JSONL at the child's private `DSH_HOME/sessions/<workspace>/<session>/session.v4.jsonl.zstd`; `DSH_TUI_DATA_DIR` holds TUI settings. Root IDs are recorded before locator, flush or receipt publication. Observing another root in the same launch permanently conflicts that launch even if later persistence fails; a repeated callback from the original root cannot restore binding before a new formal launch. A failed root-observation write retains the acquired lock; a failed contender marker also prevents the owner from publishing or releasing its lock. I/O recovery alone cannot restore binding: a new formal launch nonce is required. A receipt older than the current terminal returns `stale` / `receipt_predates_session`, keeping native ID and original timestamp with a null path. Terminal-free retired archives keep the same exact verification. Resume rotates the launch nonce and withholds the old receipt until a new callback arrives. Retirement preserves exact archival binding while the same registration and receipts remain. Changed registration, removed proof, multiple root sessions in one launch, file replacement or symlinks remain unbound. Old launches without these receipts and custom storage locations never fall back to cwd, timestamps or latest-session scans. This raw-path contract is legacy-only; protected fresh history and the provider support of `/api/history` are unchanged. Cockpit needs a separate dsh Zstd/native-event parser.
+
+#### Hermes
+
+Only `history_binding: bound` publishes `transcript_path` (the absolute child-owned `HERMES_HOME/state.db` path). Bound/stale rows include the evidence's `history_session_id` (native ID) and `history_receipt_ts` (the callback's original ISO timestamp, with UTC offset). Existing `program: hermes` identifies the format. Readers must verify **both the database path and session ID** and filter `messages.session_id`: multiple sessions share one HOME/database. This path is not a JSONL transcript.
+
+Binding verifies the project/agent registration, child-specific launch/input, pinned private HOME, self `on_session_start` callback, and exact CLI session in SQLite. It never selects by cwd, newest session, or modification time. Missing/mismatched proof or a launch/resume in preparation yields `unbound`; a receipt older than a new terminal launch without explicit exact resume yields `stale`. Neither publishes a path; `history_binding_reason` / `history_binding_reason_code` explain why. Success uses an empty explanation and code `bound`. Retired children remain readable while proof is retained; removal/purge unbinds them. Provider-internal switching/compression without a new callback can leave this binding on the earlier recorded segment; it never guesses descendant sessions or emergency diverted JSONL. The protected fresh history path and `/api/history` provider scope are unchanged.
+
+### Other agent display fields
 
 API generation 24 lets running dsh/Hermes agent rows and `/api/graph` nodes return `work`, `question` or `ask` in `act_state` from supported current operation controls. A complete current input frame with no work/question/approval evidence returns `wait`. Hidden, incomplete or unsupported shapes return `null` (unknown); absence alone never implies waiting. Activity does not determine liveness, completion or stop eligibility. Existing Claude/Codex classification is unchanged. See [supported native displays and limits](native-capabilities.md#activity-classification-boundary).
 
@@ -353,6 +447,27 @@ API generation 4 adds these fields. GET `/api/agents` and `/api/graph` Claude ro
 API generation 5 adds `resume_mode` to finished Claude rows that can be resumed (`ready` or `verification_required`), before any resume. `mail` means the resume authenticates the owner and unretires its Mail row, or refuses without launching; it never falls back to a conversation-only resume. `conversation_only` means the conversation resumes without touching Mail, and the row also carries `mail_status: unavailable` with `mail_reason` / `mail_message`. The `/api/jump` response reports the same `resume_mode`; a Claude resume that restores Mail now returns `resume_mode: mail`. `resume_capability` keeps its codes and meaning, so a caller that resumes on `ready` is unaffected. Codex rows, rows that cannot be resumed and running rows carry no `resume_mode`.
 
 Rows and responses with `mail_reason: mail_schema_unsupported` also carry `mail_remedy`: update the ORRERY Mail this installer deployed with `./scripts/install.sh --update-mail`, let the conversation-only session exit, then resume again; if the dry run refuses, follow [the Mail update guide](agentstack-mail-update.en.md) instead. The same text ends `mail_message`, so a caller that shows `mail_message` gets it without reading the new field (the API generation is unchanged). `credential_absent` and `retention_expired` cannot be fixed from the dashboard and carry no remedy. A running conversation-only session reports `mail_status` / `mail_reason` / `mail_message` even when its retired Mail row leaves `program` empty.
+
+## GET `/api/agents/<name>/history-binding`
+
+The binding of one agent, which the cockpit's conversation-history reader confirms before it shows content (API 36). It is the same verdict as that agent's row of `/api/agents?scope=live` (running judgement by `lookup_agent`, the 30-day window, binding by the same functions as the roster), without reading any pane or building any other agent's row.
+
+```bash
+curl -s http://127.0.0.1:8770/api/agents/AgentName/history-binding
+```
+
+Response:
+
+```json
+{"ok":true,"agent":{"name":"AgentName","program":"claude-code","category":"agent","running":true,"created":1793775600,
+ "history_binding":"bound","transcript_path":"/abs/path.jsonl","history_binding_reason":"","history_binding_reason_code":"bound",
+ "history_session_id":"…","history_receipt_ts":"…"}}
+```
+
+- Only these 11 fields are returned; their meaning is as in [conversation history binding](#conversation-history-binding-legacy-api-35)
+- A name that is not a live-roster row (retired, gone, warm-up, unregistered) or is malformed returns 404 `{"ok":false,"error":"agent_unavailable"}`
+- A read-only GET with the same Host/Origin handling as `/api/agents` (loopback). Fresh and global answer 404 `agent_unavailable` without a legacy judgement (in global, a failed operator admission before any route answers 503). The protected fresh history path is unchanged
+- Use it only when `api` is 36 or later; on any other failure (another 404, a 5xx, a transport failure) or with an older dashboard, confirm with `/api/agents?scope=live` as before
 
 ## GET `/api/graph`
 
@@ -452,7 +567,7 @@ The response contains the message list and watermark for live comet. Missing con
 {
   "ok":true,
   "annotations":{
-    "WindyFermi":{"role":"docs","emoji":"","group":"release"}
+    "WindyFermi":{"role":"docs","emoji":"","group":"release","task":"Review release documentation"}
   }
 }
 ```
@@ -566,7 +681,15 @@ If Claude startup preparation fails, the original husk is preserved and Mail is 
 
 A known three-field legacy Claude child can be `ready` when its private token and existing owned registration pass local validation. Roster GET remains read-only; owner authentication and migration of the same identity happen only on explicit resume. Authentication failure refuses startup ([migration, retention, and rollback](launchers.en.md)).
 
-API 9 accepts optional `base` / `tools`. `tools` replaces the whole selection; `{}` removes extra tools. Omitted base keeps the recorded base; base alone keeps prior tools. Omitting both preserves existing behavior. Changes refuse running/unknown children, missing retained state, standalone, conversation-only and Codex App. Complete `/api/exit` and confirm `gone` / `finished` first. Changes are serialized per child, using existing authentication and native resume; startup failure restores that generation's previous record/generated settings. Success means tmux/the terminal accepted the launch, without waiting for shell bootstrap/authentication. Later failures keep the new selection for the next resume. Confirm receipt of the child’s report. Success adds `tools_changed: true`, `base` and `tools`. Installer defaults are not appended. See [procedure and limits](delegation.en.md#resume-a-stopped-child-with-different-tools).
+API 9 accepts optional `base` / `tools` to change the saved selection of a stopped Claude/Codex CLI child with retained state. `tools` replaces the whole selection; `{}` removes extra tools. Omitted base keeps the recorded base; base alone keeps prior tools. Omitting both preserves existing behavior. Complete `/api/exit` and confirm `gone` / `finished` first. Changes are serialized per child, using existing authentication and native resume; startup failure restores that generation's previous record/generated settings. Success means tmux/the terminal accepted the launch, without waiting for shell bootstrap/authentication. Later failures keep the new selection for the next resume. Confirm receipt of the child’s report. Success adds `tools_changed: true`, `base` and `tools`. Installer defaults are not appended. See [procedure and limits](delegation.en.md#resume-a-stopped-child-with-different-tools).
+
+API 43 accepts `tools` on a standard `/api/jump` for a stopped Claude session with `resume_mode: conversation_only`. The supported choices are `browser` and `orrery-screen`. Omit `base` or set it to `"default"`. The selection applies to one launch, and a successful response includes the normalized `tools` when explicitly requested. Omit `tools` or set it to `{}` to resume with no extra tools. Claude hooks are disabled, with no Mail registration or MCP server.
+
+The request below selects Claude in Chrome with a device ID and starts `orrery-screen` with `control` permission. `mcp: ["orrery-screen"]` starts it in `off` and `screen.access: "read"` starts it in `view`. Each resume with `orrery-screen` creates a new launch generation. Change its permission through the [computer use API](#computer-use-api).
+
+```json
+{"session":"SampleAgent","open":false,"tools":{"browser":{"device":"browser-device-id"},"screen":{"server":"orrery-screen","access":"operate"}}}
+```
 
 ## POST `/api/exit`
 
@@ -599,7 +722,7 @@ Expected `mode` values are `tmux`, `retire`, and `both`. The response is `{ok, s
 Request:
 
 ```json
-{"name":"WindyFermi","role":"docs","emoji":"","group":"release"}
+{"name":"WindyFermi","role":"docs","emoji":"","group":"release","task":"Review release documentation"}
 ```
 
 `session` can be used instead of `name`.
@@ -609,11 +732,17 @@ Response:
 ```json
 {
   "ok":true,
-  "annot":{"name":"WindyFermi","role":"docs","emoji":"","group":"release"}
+  "annot":{"name":"WindyFermi","role":"docs","emoji":"","group":"release","task":"Review release documentation"}
 }
 ```
 
-An annotation is deleted when `role` and `emoji` are empty and no group remains. Spawn does not save `emoji`; it uses only role / group.
+Since API 38, omitted fields retain their current values. Send an explicit empty string or `null` to clear a field; this applies equally to `role`, `emoji`, `group`, and `task`. All four fields must be empty to delete the entire annotation. `role`, `emoji`, `group`, and `task` are trimmed and limited to 40, 8, 24, and 200 Unicode characters respectively. A nonempty `task` is a user display override; saving an empty string or `null` restores the registered description. `/api/agents` retains the original registered description in `task` and includes the override in `annot.task`. `/api/annotations` and graph-node `annot` use the same shape; `annot.task` is omitted when no override exists. Display clients prefer `annot.task` to `task`. This never changes Mail registration. Existing spawn/delegate callers that send role / emoji / group keep their values and preserve any omitted task override. Earlier API generations replace omitted legacy fields with empty strings and do not support task overrides.
+
+Clear only the task override (omitted role, emoji, and group retain their values):
+
+```json
+{"name":"WindyFermi","task":null}
+```
 
 ## POST `/api/spawn`
 
@@ -681,7 +810,7 @@ The ordinary DeepSeek / Local catalog shares plain-generation admission and gene
 
 dsh / Hermes accept `base` / `tools` only when the selection can be represented in native configuration. They copy stdio / HTTP MCP servers and reject built-in computer use, Chrome devices, and unrepresentable per-tool approvals or filters with a reason. A successful launch does not imply those approvals are enabled.
 
-In API 8, explicit `tools: {}` or `base: "default"` passes `--base default`. Dashboard/API launches honor the form selection and remove installer `AGENTSTACK_CHILD_DEFAULT_TOOLS` from the launcher environment, so removed choices are not appended again. Unavailable explicit tools stop the launch. Only CLI launches omitting base/tools/MCP profile use the path that omits unavailable defaults with a notice.
+Since API 41, the standard `/api/spawn` applies the installer's `AGENTSTACK_CHILD_DEFAULT_TOOLS` to Claude, Codex, dsh and Hermes when both `base` and `tools` are omitted. NEW AGENT uses this path. The launcher evaluates defaults for the provider and final working directory, and reports any unavailable items it omits. Explicit selections take precedence. An empty `tools: {}` or `base: "default"` with no extra tools still passes `--base default`, as in API 8, to suppress installer defaults. Unavailable explicit tools stop the launch.
 
 A child with a `base` or `tools` selection is not started when the selection cannot be applied (no Mail proxy, a server that cannot be copied, `mail-only` in a project where the computer use is enabled, ...). Malformed selections return 400 here; errors that depend on the child's directory are returned as a launcher failure. Other providers such as Gemini reject `mail-only` and `tools`.
 
@@ -788,6 +917,8 @@ API 25: legacy managed `attempt_id` spawn/status requests are retired and return
 
 ## Mobile reader (API 30)
 
+From API 39, snapshot agents optionally include `work_disp` only while running with `act_state: work` and a validated compact upstream duration such as `2m05s`. The field is omitted for stopped agents, other states, missing or invalid values. The viewer does not invent elapsed time.
+
 `GET /api/mobile-mail?window=<period>` is a legacy, loopback-only metadata endpoint. The default is `day` (24h). Allowed values are `all`, `day`, `15m`, and `m<N>` for integer minutes from 15 to 43200 divisible by 15; leading zeros and fractions are rejected. It keeps the existing dashboard Host admission. Missing DB or project/schema/read failure returns 503; unsupported global mode is explicitly refused (501 after admission, or the existing global admission refusal). It never falls back to a legacy DB from global mode. Unknown or repeated query fields return 400.
 
 A 200 response has `status: available`, `window`, `observed_at`, `edges`, `events`, `events_truncated`, `edges_truncated`, `invalid_timestamps`, and `degraded`. `edges` contains source/target/kind/count/last_ts aggregated over the actual period, at most 10,000 rows. Counts are direction-specific to/cc recipient rows, excluding bcc and cross-project endpoints. `events` contains the latest 200 recipient rows with stable opaque `key`, source/target/kind/`count:1`/event_at, ordered by event time, message id and recipient id descending. The SQL reads only metadata; subjects, bodies and read/ack writes are excluded. Invalid timestamps are excluded and reported as degraded. An empty successful query differs from an unavailable query.
@@ -812,6 +943,12 @@ The viewing contract remains; a separate pane adapter is opt-in. Preview and inp
 
 External JSON is `targets:{epoch,name}`, `preview:{epoch,choice}`, `prepare:{epoch,choice,revision,text}`, `commit:{epoch,intent,confirmation}` and `cancel/status:{epoch,intent}`. Targets use an exact existing manager session-name match. At most 128 candidates fit within the actual 16 KiB serialized response; omissions are explicit. The user chooses among panes. Aliases and the active pane are not guessed. Owner/reader/bridge/pane-bound handles live in memory for 30 seconds, with at most 16 selected proofs. Foreground previews can renew that selection lease, never a prepared confirmation's text, proof or 30 second expiry.
 
-Preview uses fresh shared-helper legacy admission and kernel birth, comparing socket/server/session/pane/UID/bridge incarnation before and after capture. Unknown helpers, OS facts or targets are refused; no Codex launch binding or registration DB is used. Fixed capture is limited to the last 40 lines/6 KiB displayed UTF-8, 64 KiB collected and 3 seconds overall. The actual serialized JSON response is capped at 16 KiB. ANSI/OSC/C0/C1/directional controls are removed; literal text, observation time and removal/truncation flags are returned. No preview body is cached. Collection overflow discards the body while preserving the ACK queue position. Missing termination after 3 seconds quarantines that control stream rather than reusing uncertain synchronization.
+Preview uses fresh shared-helper legacy admission and kernel birth, comparing socket/server/session/pane/UID/bridge incarnation before and after capture. Unknown helpers, OS facts or targets are refused; no Codex launch binding or registration DB is used. Fixed capture is limited to the last 120 lines/12 KiB displayed UTF-8, 64 KiB collected and 3 seconds overall. The actual serialized JSON response is capped at 16 KiB. ANSI/OSC/C0/C1/directional controls are removed; literal text, observation time and removal/truncation flags are returned. No preview body is cached. Collection overflow discards the body while preserving the ACK queue position. Missing termination after 3 seconds quarantines that control stream rather than reusing uncertain synchronization.
+
+Expanded terminal previews require `X-ORRERY-Mobile-Preview: 120/12288` on the loopback request. If either side is older, previews keep the 40-line/6-KiB limits; the newer reader validates text against the declared limits. Expanded responses still fit within 16 KiB of serialized JSON, shortening the tail further when quote escaping requires it. The relay sends UTF-8 without expanding non-ASCII characters into `\uXXXX`.
 
 Prepare binds an unchanged UTF-8 line of at most 4 KiB. Limits are 16 pending confirmations, 256 result metadata entries/10 minutes, one simultaneous send per pane and 6 sends/minute per pane. Commit claims once and holds the same write lock from fresh pane validation through every chunk/Enter write, then releases it before awaiting all tmux ACKs. All ACKs within 5 seconds mean accepted; partial failure/timeout/error means unknown with no retries or remaining-chunk compensation. Status only queries. Program identity or task completion is not guaranteed: return to a shell, existing input, external writers and races after the final check remain possible. See the [mobile guide](mobile.en.md#inspect-a-pane-and-send-input-from-your-phone) for UI, enabling and disabling.
+
+Conversation history and file and image previews are read-only and on by default once `--phone-policy-reviewed` is given (in Settings, Phone access with I reviewed the policy). `--disable-history` turns them off; `--enable-history` is an older flag kept for existing launch commands. `GET /view/history` always returns `{enabled, page_events}`, plus `reason` (`policy_not_reviewed` or `disabled`) when off. Only when enabled, `GET /view/conversation?name=<NAME>[&page=<token>]` exists; otherwise it is 404. The name must be in a published roster, and `page` must be a 32-hex token issued by this reader for the same name (256 entries/600 seconds, one token per name and cursor, renewed when the same page is served again; expiry returns 410). Paths, cursors and other query fields return 400 before any upstream call. The reader makes an originless fixed loopback `GET /telemetry/conversation?agent=<NAME>&limit=40[&before=<cursor>]` to the cockpit port, where cockpit resolves and rechecks the API 35 bound row; text is not masked. Upstream JSON is limited to 8 MiB and 15 seconds; running out of time returns 503 with the fixed code `history_slow` (retrying later helps). The phone receives `{ok, agent, provider, events, older, limited, omitted, tail_only}`; each event has `id/kind(text|tool|mail)/role(user|assistant)/text/ts/truncated` plus optional `mail` (`direction/sender/recipients/subject/importance/coverage/body/truncated`) and `files` (`label/kind`, plus `ref` only when previewable). API 41 also preserves `variant: "update"` on assistant text events that carry it upstream. Text and Mail bodies are cut at 16 KiB, tool names at 160 characters, and a page at 40 events/512 KiB. Responses are UTF-8 JSON without `\u` escapes, at most 640 KiB on the wire. Events trimmed to fit a page are not skipped: `older` then continues from the oldest kept event's own `cursor_before`. A single event that cannot fit is shortened further; `omitted` is true only when events could not be shown or reached, and the phone marks that place. Tool output, diffs, cockpit reference IDs, cursors and paths are dropped. Unbound/stale/unconfirmed returns `{ok:false, error, reason_code}` with fixed codes; the human-readable reason is not forwarded.
+
+Only while History is on, `GET /view/conversation/preview?name=<NAME>&ref=<id>` exists. A `files` entry gets a `ref` only when cockpit attached a well-formed reference to it: a 32-hex ID issued by this reader, one per name and cockpit reference, renewed each time that page is served (1024 entries/600 seconds). The query requires `name` and `ref` and accepts `thumbnail=1` for an inline image. A `ref` issued for another name, or an expired one, returns 410 `preview_expired` without an upstream call, and anything else returns 400. The reader makes an originless fixed loopback `GET /telemetry/conversation/preview?ref=<cockpit reference>&mobile=1` and adds `thumbnail=1` for inline images. If an older bridge returns `invalid_query`, the reader retries with the reference alone. Cockpit rechecks the record, binding, root, canonical path, type, size and pixel count on every read; it refuses nothing by name and does not mask text. Upstream JSON is limited to about 5.4 MiB and 15 seconds; a larger Content-Length is refused as `preview_too_large` without reading. The phone receives `{ok, kind:"text", label, text, truncated, notice}` (the first 32 KiB of UTF-8) or `{ok, kind:"image", label, width, height, data, notice}`. Images pass only as PNG with IHDR, IDAT and IEND chunks and valid CRCs, IHDR dimensions equal to cockpit's, at most 8192 px a side, 8 Mpx and 4 MiB; `data` is its standard base64. Failures are `{ok:false, error}` with fixed codes (`preview_too_large`, `preview_type_denied`, `preview_path_denied`, `preview_changed`, `history_*`, otherwise `preview_unavailable`); no other cockpit text is forwarded. Cockpit's `reference_expired` becomes 410, and its `record_too_large` (the record holding the reference exceeds 1 MiB) becomes `preview_too_large`. An upstream body whose length differs from its Content-Length is refused.

@@ -31,6 +31,7 @@ from test_fresh_mail import snapshot
 from test_fresh_harness import fixture as managed_fixture
 
 ROOT=Path(__file__).resolve().parents[3]
+pytestmark = pytest.mark.usefixtures('isolated_managed_harness_home')
 
 
 def test_roster_display_cache_parallel_get_expiry_and_owner_changes_are_not_authority(tmp_path,monkeypatch):
@@ -123,7 +124,7 @@ def test_handler_new_agent_native_common_handoff_and_roster(tmp_path,monkeypatch
                 effort='high',resources=['note.py'],role='',group='',**({'standalone':True} if standalone else {'parent':'Alpha'}))
             with dashboard(parent,backend,monkeypatch,tmp_path) as (module,request):
                 code,version=await asyncio.to_thread(request,'/api/version')
-                assert code==200 and version['api']==34 and version['runtime_mode']=='fresh'
+                assert code==200 and version['api']==module.API_GENERATION and version['runtime_mode']=='fresh'
                 assert version['capabilities']['terminal'] is True
                 code,result=await asyncio.to_thread(request,'/api/spawn',payload)
                 assert code==200 and result['ok'] and result['pending'],result
@@ -351,7 +352,8 @@ def test_public_status_drives_real_new_agent_watch_and_preserves_unconfirmed(tmp
                 path.write_text(json.dumps(intent))
                 started=await observe()
                 assert started['state']=='ready' and started['detail']=='started' and started['result']['native_ready']
-                (run_dir/'ended.json').write_text('{}')
+                from agentstack_mail.fresh_runtime import _write_private
+                _write_private(run_dir/'ended.json',dict(launch_id=run_dir.name,exit_code=0))
                 ended=await observe()
                 assert ended['state']=='ready' and ended['detail']=='ended' and ended['result']['native_ready']
                 (run_dir/'session.json').unlink()

@@ -668,6 +668,8 @@ def test_codex_selection_keeps_global_optional_startup_grace(grace):
 # --------------------------------------------------------------------------- #
 def _env(tmp_path, *, codex=False, proxy=True, claude_json=None):
     env, workdir = _fake_launch_env(tmp_path, codex=codex)
+    env["AGENTSTACK_PYTHON"] = sys.executable
+    env["PATH"] = str(pathlib.Path(sys.executable).parent) + os.pathsep + env["PATH"]
     for key in ("AGENTSTACK_CLAUDE_CHILD_CHROME", "AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE"):
         env.pop(key, None)
     if proxy:
@@ -1273,3 +1275,94 @@ def test_codex_forecast_checks_the_tools_record(monkeypatch, tmp_path):
     with pytest.raises(server._ResumeCapabilityError) as exc:
         server._codex_resume_child_home("CodexCast", registration)
     assert exc.value.code == "config_unrestorable"
+
+
+def test_screen_standard_claude_launch_uses_generated_binding(tmp_path):
+    from hooks import screen_state
+    cj = _claude_json(tmp_path / "settings.json", servers={
+        "cua-driver": {"command": "/fixture/cua-driver"},
+        "orrery-screen": {"command": "/fixture/untrusted", "env": {"INHERITED": "fixture"}},
+    })
+    env, workdir = _env(tmp_path, claude_json=cj)
+    env["AGENTSTACK_SCREEN_PYTHON"] = sys.executable
+    name = "ScreenChild"
+    result = _launch(tmp_path, env, workdir, name, "--tools", "screen:read:orrery-screen")
+    assert result.returncode == 0, result.stderr
+    runtime = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"])
+    config = json.loads((runtime / "child-agents" / f"{name}.mcp.json").read_text())
+    assert set(config["mcpServers"]) == {"orrery-mail", "orrery-screen"}
+    assert screen_state.Store(runtime).list()[0]["computer_use"] == "view"
+    for tool in screen_state.TOOLS:
+        assert f"mcp__orrery-screen__{tool}" in _inner(env)
+    definition = config["mcpServers"]["orrery-screen"]
+    assert definition["args"] == ["-I", "-m", "agentstack_mail.screen_mcp"]
+    assert set(definition["env"]) == {"AGENTSTACK_SCREEN_BINDING_FILE"}
+
+
+def test_screen_claude_resume_uses_a_new_generation(resume, monkeypatch, tmp_path):
+    from hooks import screen_state
+    runtime, registration, launches, calls = resume
+    monkeypatch.setenv("AGENTSTACK_SCREEN_PYTHON", sys.executable)
+    monkeypatch.setenv("AGENTSTACK_CLAUDE_JSON", _claude_json(
+        tmp_path / "claude.json", servers={"cua-driver": {"command": "/fixture/cua-driver"}}))
+    child(runtime, registration)
+    _bound_tools_record(runtime, _spec(None, {"mcp": ["orrery-screen"]}))
+    store = screen_state.Store(runtime)
+    token = store.launch(registration["project_key"], screen_state.launch_runtime(runtime),
+                         NAME, "a" * 32, "control")
+    result = server.do_resume(NAME)
+    assert result["ok"], result
+    assert "mcp__orrery-screen__get_window_state" in launches[0][-1]
+    settings = json.loads((runtime / "child-agents" / f"{NAME}.mcp.json").read_text())
+    assert set(settings["mcpServers"]) == {"orrery-mail", "orrery-screen"}
+    assert store.list()[0]["generation"] != "a" * 32
+    assert store.list()[0]["computer_use"] == "off"
+    with pytest.raises(screen_state.ScreenStateError, match="SCREEN_CHILD_REQUIRED"):
+        store.child(token)
+
+
+def test_screen_codex_home_filters_source_overlay_and_plugins(tmp_path, monkeypatch):
+    from hooks import child_resume, screen_state
+    monkeypatch.setenv("AGENTSTACK_SCREEN_PYTHON", sys.executable)
+    runtime = tmp_path / "runtime"
+    source = tmp_path / "codex"
+    source.mkdir()
+    config_text = ('[mcp_servers.cua-driver]\ncommand = "/fixture/cua-driver"\n'
+                   '[plugins."third-party@market"]\nenabled = true\n')
+    (source / "config.toml").write_text(config_text)
+    overlay = tmp_path / "overlay.toml"
+    overlay.write_text('[mcp_servers.alias]\ncommand = "/fixture/cua-relay.py"\n')
+    runner = tmp_path / "run-mcp.sh"
+    _executable(runner, "#!/bin/bash\nexit 0\n")
+    name = "ScreenChild"
+    runtime.mkdir()
+    token = runtime / ("agent_token_" + name)
+    token.write_text("synthetic")
+    token.chmod(0o600)
+    record = child_resume.tools_record_path(runtime, name)
+
+    def build(generation):
+        return child_resume.build_home(
+            home=runtime / "child-agents" / (name + ".codex-home"), source=source,
+            runner=runner, child=name, project_key="/fixture/project", token_file=token,
+            mcp_url="http://127.0.0.1:1/mcp", mail_env="", runtime_dir=runtime,
+            bearer_mode="auto", python_bin="", mcp_profile="inherit",
+            overlay_setting=str(overlay), screen_generation=generation)
+
+    child_tools.write_codex_record(str(record), _spec(None, {"mcp": ["orrery-screen"]}))
+    home = build("a" * 32)
+    config = tomllib.loads((home / "config.toml").read_text())
+    screen = config["mcp_servers"]["orrery-screen"]
+    assert screen["required"] and config["plugins"]["third-party@market"]["enabled"] is False
+    assert set(screen["enabled_tools"]) == set(screen_state.TOOLS)
+    assert all(tool["approval_mode"] == "approve" for tool in screen["tools"].values())
+    for alias in ("alias", "cua-driver"):
+        assert config["mcp_servers"][alias]["enabled"] is False
+    record.unlink()
+    home = build("b" * 32)
+    config = tomllib.loads((home / "config.toml").read_text())
+    assert "orrery-screen" not in config["mcp_servers"]
+    assert config["mcp_servers"]["cua-driver"]["enabled"] is False
+    assert config["plugins"]["third-party@market"]["enabled"] is True
+    assert screen_state.Store(runtime).list() == []
+    assert (source / "config.toml").read_text() == config_text

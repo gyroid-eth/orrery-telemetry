@@ -48,6 +48,42 @@ Hermes の公開既定は `default_effort=null` です。未指定や「Use defa
 
 旧manifestやprivate backendに残る試行low/highは利用者設定の移行対象です。installerはprivate設定を無断書換せず、標準起動の未指定 effort 経路はこれらをハーネス既定として投影しません。
 
+## native の web_search
+
+managed spawn manifest の `web_search` で dsh・Hermes の検索先を共通に設定できます。
+この節を省略した製品の既定は従来どおりです。接続先の model や backend ID に依存しません。
+
+```json
+{
+  "web_search": {
+    "provider": "exa",
+    "exa": {
+      "credential_ref": {
+        "store": "keychain",
+        "service": "orrery-web-search-exa",
+        "account": "your-account"
+      }
+    },
+    "searxng": {"url": "http://search.example.invalid:8080"}
+  }
+}
+```
+
+本人の端末で `security add-generic-password -U -s orrery-web-search-exa -a your-account -w` を実行し、末尾の `-w` が出す入力待ちに Exa の鍵を入れてください（値をコマンドに書かない）。
+Linux / WSL では同じ `credential_ref` に既存の `{"store":"secret-service","attributes":{"service":"orrery-web-search-exa","account":"your-account"}}` を使います。
+
+起動ごとに切り替える場合、native の `POST /api/spawn` に `"web_search":"searxng"` または `"web_search":"exa"` を付けます。
+内部 launcher の対応する指定は `--web-search searxng|exa` です。URL と資格の参照は manifest の同じ設定を使い、指定は保存されるので resume にも渡ります。
+
+dsh は固定 runtime の `@deepseek-ai/dsh-web-search-exa` と小さな SearXNG provider を使い、検索先を固定します。
+Hermes は native の Exa と資格 helper（`secrets.command`）を使い、子専用 config に helper の非秘密参照を写します。
+managed Hermes の固定 runtime は、上流で版が固定された `exa` extra を install 時に準備します。既存の install も新しい世代へ更新し、私有設定の runtime 参照を更新後の `current.json` に合わせてから新しい子を起動してください。子の初回検索で SDK を別の環境へ入れる手順には頼りません。
+Hermes の SearXNG には native の HTTP・結果整形を使う薄い provider を足し、両 harness とも「結果0件かつ `unresponsive_engines` がある」応答は engine 名つきのエラーにします。
+検索先を指定した Hermes では匿名検索への自動救済を使わず、失敗理由をそのまま返します。
+鍵の値は起動計画・設定ファイル・引数に保存しません。鍵無しや検索 service の停止は子の起動を止めず、検索時にエラーになります。
+PR の検証は fake HTTP と偽の資格によるものです。実資格・実サービスの4組の tool-call は別途受け入れで確認します。
+既知の差: dsh の上流 `dsh-web-search-exa@0.2.1-rc.2` は `contents:{highlights:{highlightsPerUrl:N}}` を使い、最初の有効な highlight だけを snippet にします（Exa 公式推奨は `contents:{highlights:true}`、Hermes は推奨どおり）。両 harness の検索内容は query ベースで、公式が推奨する `objective`（何を上位にし、除外し、抽出するか）は検索引数にありません。
+
 ## 現在の制限
 
 - **手動設定**: B（runtime 参照入りの非有効な例の配布）と A（既存 agent による非秘密設定の補助）は、[日本語 README](../examples/native-harnesses/README.md)・[English README](../examples/native-harnesses/README.en.md) に案内があります。コピー後の参照整合、本人の秘密入力と有効化承認が必要です。実資格・標準例を使う Mac / WSL の全 DeepSeek / Local × dsh / Hermes の組合せは通し受け入れ前で、共通 provider ログイン CLI はありません。
@@ -55,4 +91,4 @@ Hermes の公開既定は `default_effort=null` です。未指定や「Use defa
 - **Local effort**: Hermes の manual 4段は要求を組み立てる能力です。実 Local server の受理・効果は未受け入れです。固定版は temperature を1、出力上限を budget+4096 以上にするため、context 制約で拒否される場合があります。fallback して会話が続いたことを、選んだ effort が効いた証拠にしません。
 - **Localの接続条件**: キーを保存・参照しない構成は現在非対応です。dshは固定adapterと互換のHTTP/HTTPS API、HermesはHTTPSと対応するAPI形式が必要です。キー不要・HTTPのみのサーバーを、任意のharnessでそのまま使えるものではありません。[初期設定の条件](native-setup.md#1-最初に使う組合せを選ぶ)を確認してください。
 - **記憶と resume**: Hermes の新しい子は project と canonical 名ごとの安定した独立 HOME を使い、正規 resume は保存 pin と exact native session ID を照合して同じ HOME を使います。旧共有 HOME の pin は `native_resume_legacy_profile` で停止し、旧データや pin は自動移行しません。合成 provider を使う実 CLI で native store の保存・同 HOME / ID の復帰・別子との非共有を確認しています。resume 時に最新 memory を初回 system prompt へ再注入するものではなく、実 provider・full Mail の通し受け入れは未完です。会話履歴の resume と memory の分離・復帰は別の確認です。
-- **Telegram**: Hermes の共通 Telegram 入口は設計中です。稼働済みの ORRERY 入口として使えるとは案内しません。
+- **Telegram**: fresh の interactive Hermes TUI と同梱 plugin の入口は[常駐 agent](persistent-agents.md#fresh-の-hermes-telegraminteractive)で案内します。登録・provider の準備と本人の plugin 承認が必要です。合成試験と実 Telegram／WSL の受け入れは別で、後者は未完です。

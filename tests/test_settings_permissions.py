@@ -64,6 +64,8 @@ def test_template_ships_a_permissions_block():
         "register_agent",
         "fetch_inbox",
         "runtime_status",
+        # Read-only and local: an agent shows a file without a prompt.
+        "show_files",
     ):
         assert f"mcp__orrery-mail__{tool}" in permissions["allow"], tool
     # Only irreversible tools without a recovery path are denied outright.

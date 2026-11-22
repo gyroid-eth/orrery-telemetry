@@ -29,7 +29,9 @@ def helper(root):
 
 
 def selection(root, program, model, spec):
-    if program not in PROGRAMS or not isinstance(spec, dict) or set(spec) - {'manifest_file','backend_id','effort','helper_model','tools','url_index','url_key','server_url'}:
+    if program not in PROGRAMS or not isinstance(spec, dict) or set(spec) - {'manifest_file','backend_id','effort','helper_model','web_search','tools','url_index','url_key','server_url'}:
+        raise B1Error('FRESH_HARNESS_SELECTION_INVALID')
+    if 'web_search' in spec and spec['web_search'] not in ('exa', 'searxng'):
         raise B1Error('FRESH_HARNESS_SELECTION_INVALID')
     try:
         manifest = Path(spec['manifest_file'])
@@ -47,7 +49,11 @@ def selection(root, program, model, spec):
         raise B1Error('FRESH_HARNESS_CONFIGURE_REQUIRED') from None
 
 
-def setup(client, root, provider):
+def setup(client, root, provider, *, persistent=None):
+    if persistent is not None:
+        runner, binary, pins = selection(root, provider, persistent['model'], persistent['managed'])
+        return client.path.parent / 'providers' / provider, binary, dict(
+            runner=runner, spec=dict(selection=persistent['managed'], pins=pins), model=persistent['model'])
     from .fresh_child import family
     _, _, ready = family(client)
     if ready is None or ready['program'] != provider or not ready.get('managed'):
@@ -58,7 +64,7 @@ def setup(client, root, provider):
     return client.path.parent / 'providers' / provider, binary, dict(runner=runner, spec=spec, model=ready['model'])
 
 
-def plan(client, root, provider, settings, run, cwd, prompt, session_id):
+def plan(client, root, provider, settings, run, cwd, prompt, session_id, *, persistent=None):
     api = helper(root)
     for folder in (client.path.parent / 'providers', client.path.parent / 'providers' / provider):
         folder.mkdir(mode=0o700, exist_ok=True);_directory(folder)
@@ -69,7 +75,10 @@ def plan(client, root, provider, settings, run, cwd, prompt, session_id):
     fd = os.open(task, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'w') as output:output.write(prompt or '')
     mcp = state / 'mail.json'
-    env = dict(AGENTSTACK_RUNTIME_MODE='fresh', AGENTSTACK_FRESH_CLIENT_CONTEXT=str(client.path))
+    # Native stdio MCP filters its parent's environment. Pin the Mail client
+    # interpreter here, as Channels does, rather than relying on PATH's python3.
+    env = dict(AGENTSTACK_RUNTIME_MODE='fresh', AGENTSTACK_FRESH_CLIENT_CONTEXT=str(client.path),
+               AGENTSTACK_PYTHON=sys.executable)
     _write_private(mcp, {'mcpServers': {'orrery-mail': {'command':'/bin/bash',
         'args':[str(root / 'bin/agentstack-runtime-client'),'proxy'], 'env':env}}})
     from .fresh_proxy import verified_owner
@@ -81,9 +90,11 @@ def plan(client, root, provider, settings, run, cwd, prompt, session_id):
         state_dir=str(state), runtime_dir=str(client.path.parent), fresh_client_dir=str(client.path.parent),
         cwd=str(cwd), mcp_config=str(mcp), prompt_file=str(task), instructions_file=str(instructions),
         tools=selection_spec.get('tools', {'base':'default','tools':{}}), env=env)
-    for key in ('effort','helper_model'):
+    for key in ('effort','helper_model','web_search'):
         if key in selection_spec:document[key] = selection_spec[key]
     document.update({key:settings['runner'][key] for key in ('url_index','url_key','server_url') if key in settings['runner']})
+    if persistent is not None:
+        document['telegram'] = persistent['telegram']
     if session_id is not None:
         home = client.path.parent / 'providers' / provider
         document.update(resume_session_id=session_id, native_profile_env={
@@ -137,6 +148,7 @@ def session_reference(client, intent, session_id):
 
 
 async def hook(client, action, payload):
+    from .fresh_end import read_run_end
     from .fresh_launch import layout, native_id, pinned, record_session
     from .fresh_proxy import verified_owner
     if (os.environ.get('AGENTSTACK_FRESH_CLIENT_CONTEXT') != str(client.path)
@@ -151,12 +163,13 @@ async def hook(client, action, payload):
     launch_id = native_id(os.environ.get('AGENTSTACK_FRESH_LAUNCH_ID'))
     run = base / 'runs' / launch_id
     intent = _read_private(run / 'intent.json');pinned(client, intent)
+    if read_run_end(client, run) is not None:raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
     receipt = _read_private(run / 'session.json');pinned(client, receipt)
     if (intent.get('provider') not in PROGRAMS | {'claude','codex'} or intent.get('nonce') != os.environ.get('AGENTSTACK_FRESH_LAUNCH_NONCE')
             or receipt.get('launch_id') != launch_id or receipt.get('provider') != intent['provider']
             or receipt.get('native_session_id') != payload.get('session_id')
             or _read_private(base / 'current.json') != {'launch_id':launch_id}
-            or (run / 'ended.json').exists()):raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
+            or read_run_end(client, run) is not None):raise B1Error('FRESH_LAUNCH_RECEIPT_MISMATCH')
     if action == 'post-edit':
         # Fresh leases are explicit release/TTL, as for the existing fresh clients.
         # Do not dispatch the legacy project-scoped debounce worker after an edit.

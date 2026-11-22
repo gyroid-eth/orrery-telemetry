@@ -50,6 +50,7 @@ const _PROVIDER_ASPECT = {
   google:    1,         // 24x24 正方形（Gemini logo）
   deepseek:  71.69/52.76,
   qwen:      1,
+  glm:       1,
 };
 // asset の更新が SVG <image> 要素のキャッシュに引っかかるため、ページごとに
 // 一意な version 文字列を付けて確実に最新を取得する（page load ごとに 1 回）。
@@ -70,9 +71,10 @@ function providerKeyFor(g){
     if(/(?:^|[\/\s_-])qwen/.test(model))return 'local:qwen';
     if(/(?:^|[\/\s_-])deepseek/.test(model)&&window.AGENTSTACK_DSH_ENABLED===true)
       return 'local:deepseek';
+    if(/(?:^|[^a-z0-9])glm/.test(model))return 'local:glm';
     return 'local';
   }
-  if(_PROVIDER_ASPECT[raw]&&raw!=='qwen'&&
+  if(_PROVIDER_ASPECT[raw]&&raw!=='qwen'&&raw!=='glm'&&
      (raw!=='deepseek'||window.AGENTSTACK_DSH_ENABLED===true))return raw;
   const model=String((g&&g.model)||'').toLowerCase();
   if(/claude|opus|sonnet|haiku|fable|mythos/.test(model))return 'anthropic';

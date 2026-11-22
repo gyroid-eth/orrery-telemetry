@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import types
+import uuid
 
 if __package__:
     from . import child_resume, child_tools, native_connections, native_server_models
@@ -42,6 +43,23 @@ def read(path):
 
 def save(path, value):
     child_resume._atomic_json(Path(path), value)
+
+
+def prepare_dsh_history(document, state):
+    """Issue a non-secret launch expectation; old callbacks cannot claim a resume."""
+    if (document.get('program') != 'dsh' or 'fresh_client_dir' in document
+            or os.environ.get('AGENTSTACK_RUNTIME_MODE') in ('fresh', 'global')
+            or 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in os.environ):
+        document.pop('history_binding', None)
+        return
+    runtime = Path(document['runtime_dir'])
+    name = document['agent_name']
+    expectation = dict(schema_version=1, provider='dsh', program='dsh',
+        agent_name=name, agent_id=state['agent_id'], project_key=document['project_key'],
+        launch_id=uuid.uuid4().hex, state_dir=document['state_dir'],
+        native_home=str(runtime / 'native/dsh' / name))
+    document['history_binding'] = expectation
+    save(runtime / 'dsh-history' / (name + '.json'), expectation)
 
 
 def config_generator(root, harness):
@@ -199,9 +217,23 @@ def fresh_instructions(state_dir, root):
 def generate_plan(document, runner):
     """One generator path for initial launch and exact-ID resume."""
     state_dir = Path(document['state_dir'])
+    # Re-evaluate against authenticated Mail, never the previous merged output.
+    # Keep the source in saved input for dynamic prelaunch regeneration as well.
+    document.setdefault('mcp_base_config', document['mcp_config'])
+    managed_screen = None
+    if 'project_key' in document:
+        generation = document.setdefault('screen_generation', uuid.uuid4().hex)
+        managed_screen = child_tools.screen_definition(document['tools'], document['runtime_dir'],
+            document['project_key'], document['agent_name'], generation)
+    elif child_tools.screen_mode(document['tools']) is not None:
+        raise child_tools.ToolsError('orrery-screen requires the standard child launcher')
     document['mcp_selection'] = child_tools.native_plan(document['tools'], cwd=document['cwd'],
-        claude_json=os.environ.get('AGENTSTACK_CLAUDE_JSON',str(Path.home()/'.claude.json')))
-    merged_mcp = read(document['mcp_config'])
+        managed_screen=managed_screen,
+        claude_json=os.environ.get('AGENTSTACK_CLAUDE_JSON',str(Path.home()/'.claude.json')),
+        codex_config=child_tools._defaults_codex_config(
+            str(Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex'))) / 'config.toml'),
+            os.environ.get('AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY', '')))
+    merged_mcp = read(document['mcp_base_config'])
     merged_mcp['mcpServers'].update(document['mcp_selection']['servers'])
     selected_mcp = state_dir / 'selected-mcp.json'
     save(selected_mcp, merged_mcp)
@@ -280,8 +312,11 @@ def prepare_resume(runtime_dir, name, project_key=None):
     document['env'].update(AGENT_NAME=name, AGENTSTACK_HOME=str(ROOT),
         AGENTSTACK_RUNTIME_DIR=str(runtime), AGENTSTACK_PROJECT_KEY=state['project_key'])
     document.update(product_root=str(ROOT), parent_agent=parent, mcp_config=str(mcp),
+                    mcp_base_config=str(mcp),
                     prompt_file=str(prompt), instructions_file=str(write_instructions(state_dir,state['project_key'])),
+                    screen_generation=uuid.uuid4().hex,
                     resume_attempt_at=state['resume_in_progress_at'])
+    prepare_dsh_history(document, state)
     generate_plan(document, runner)
     (state_dir / 'native-exit.status').unlink(missing_ok=True)
     return state_dir
@@ -332,6 +367,7 @@ def prepare(args):
     document = dict(agent_name=args.agent_name, program=args.harness, backend_id=args.backend,
         backend_kind=kind,
         model=args.model, project_key=args.project_key, cwd=str(Path(args.cwd).resolve()),
+        screen_generation=args.generation,
         parent_agent=args.parent_agent or None, product_root=str(ROOT), runtime_dir=str(runtime),
         state_dir=str(state_dir), mcp_config=str(Path(args.mcp_config).resolve()),
         prompt_file=str(prompt), instructions_file=str(instructions),
@@ -341,8 +377,11 @@ def prepare(args):
     document.update({key: runner[key] for key in ('url_index', 'server_url', 'url_key') if key in runner})
     if getattr(args,'helper_model',None) not in (None,'','same'):
         document['helper_model'] = args.helper_model
+    if getattr(args, 'web_search', None):
+        document['web_search'] = args.web_search
     if args.effort is not None:
         document['effort'] = args.effort
+    prepare_dsh_history(document, state)
     generate_plan(document, runner)
     state.update(harness=args.harness, harness_backend=args.backend,
                  harness_backend_kind=kind, harness_state_dir=str(state_dir))
@@ -379,6 +418,7 @@ def dynamic_prelaunch(source):
         key = native_server_models.read_key(facts, source['program'])
         row = native_server_models.require_model(route['server_url'], source['model'], key)
         source['server_context'] = row.get('meta', {})
+        source['server_input_modalities'] = row.get('architecture', {}).get('input_modalities')
         return runner
     return None
 
@@ -411,6 +451,7 @@ def main():
         parser.add_argument('--' + key)
     parser.add_argument('--tools', default='{"base":"default","tools":{}}')
     parser.add_argument('--url-index', type=int)
+    parser.add_argument('--web-search', choices=('exa', 'searxng'))
     args = parser.parse_args()
     try:
         if args.action == 'validate':

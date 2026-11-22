@@ -18,6 +18,10 @@ set -euo pipefail
 PROG="spawn_gemini_preregistered.sh"
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-$(cd "$HOOKS_DIR/.." && pwd)}"
+# Use this launcher version's workspace policy even when cleanup hooks differ.
+PROJECT_CONTEXT_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-context.sh"
+[[ -f "$PROJECT_CONTEXT_HELPER" ]] || PROJECT_CONTEXT_HELPER="$HOOKS_DIR/project-context.sh"
+. "$PROJECT_CONTEXT_HELPER" || { echo "$PROG: workspace context helper is unavailable" >&2; exit 1; }
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
@@ -302,6 +306,8 @@ PY
 }
 RESOURCES="$(validate_resources)" || exit 2
 
+agentstack_apply_workspace_context "$WORK_DIR" "$PROJECT_KEY" || exit 1
+WORK_DIR="$AGENTSTACK_PROJECT_WORK_DIR"
 SOURCE_REPO="$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$SOURCE_REPO" ]] || { echo "$PROG: Gemini dashboard launch requires a git repository" >&2; exit 1; }
 if [[ -n "$WORKTREE_BASE_REV" ]]; then
@@ -378,6 +384,7 @@ if git -C "$SOURCE_REPO" show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; th
 fi
 git -C "$SOURCE_REPO" worktree add -b "$BRANCH_NAME" "$WORKTREE_DIR" "$BASE_REV" >/dev/null
 WORKTREE_CREATED=true
+agentstack_apply_workspace_context "$WORKTREE_DIR" "$PROJECT_KEY" || exit 1
 
 # Linked worktrees share .git/info/exclude. Use a child-owned excludes file
 # injected only into the Antigravity runner instead of mutating shared repo
@@ -457,6 +464,9 @@ export AGENTSTACK_MCP_URL=$(printf '%q' "$MCP_URL")
 export AGENTSTACK_MAIL_ENV=$(printf '%q' "$MAIL_ENV")
 export AGENTSTACK_MAIL_HTTP_BEARER_MODE=$(printf '%q' "$HTTP_BEARER_MODE")
 export AGENTSTACK_PYTHON=$(printf '%q' "$PYTHON_BIN")
+export AGENTSTACK_EXTRA_PROTECTED_ROOTS=$(printf '%q' "$AGENTSTACK_EXTRA_PROTECTED_ROOTS")
+. $(printf '%q' "$PROJECT_CONTEXT_HELPER") || exit 1
+agentstack_apply_workspace_context "\$PWD" "\$AGENTSTACK_PROJECT_KEY" || exit 1
 git_excludes_file=$(printf '%q' "$GIT_EXCLUDES_FILE")
 git_config_count="\${GIT_CONFIG_COUNT:-0}"
 case "\$git_config_count" in

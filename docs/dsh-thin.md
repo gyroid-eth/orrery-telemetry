@@ -20,6 +20,8 @@ install の opt-in は従来どおり `--enable-dsh`。同じ固定版でも新�
 
 native session 作成イベントから本人の `harness_state_dir/native-session.json` に ID を保存します。subagent の ID で上書きせず、保存失敗で起動は止めません。再開は `resume_session_id` を native `--resume` へ渡し、その子の profile/履歴を再利用します。MRU で本人の ID を推測しません。指示は共有 renderer の出力を読み、skill は共通の元へ link します。
 
+legacy の会話記録用 receipt は native の保存先と inode を照合して発行します。TUI は最初の作業まで保存を遅らせるため、作成時に記録がまだ無ければ session の flush と turn 終了でも再試行します。同じ session の再試行は直列に処理し、発行済み receipt の inode と時刻は固定します。別の root、古い launch、lock・conflict の検査は再試行にも適用します。
+
 再開時の任意入力 `native_profile_env: {DSH_HOME: 元の dir}` が生成予定と違う場合は、file/link を書く前に `native_resume_profile_changed` で拒否します。入力がない新規起動は従来どおりです。
 
 TUI の状態は本人の `harness_state_dir/tui` に保存し、起動時に選択した provider/model をその中の `model.json` へ設定します。native `/model` が変更するのもこの子の file だけです。他の子と利用者の `~/.dsh-tui` は共有せず、HOME は変更しません。resume は同じ state dir を再利用します。env 未指定の通常の upstream TUI は従来どおり `~/.dsh-tui` を使います。
@@ -27,6 +29,10 @@ TUI の状態は本人の `harness_state_dir/tui` に保存し、起動時に選
 標準launcherからの子は英語の画面で起動します。生成時に`DSH_TUI_LANG=en`と子の`lang.json`を設定し、同じdirの`onboarding.json`を完了済みにして初回設定・移行pickerが初期入力を塞ぐことを防ぎます。利用者のTUI設定は読み書きしません。
 
 この最小 patch は固定版の preimage と適用後 hash を別世代の receipt に記録します。旧い `plain` と旧 managed の世代は書き換えずに残し、現在の generator は明示の `plain-datadir` を要求します。upstream に同等の設定が入ったら patch を外します。
+
+## モデルの画像入力
+
+動的 backend は起動直前の `/v1/models` の選択行から `architecture.input_modalities` を読み、native Messages adapter の `model_definition.inputModalities` に渡します。32要素以内の文字列配列に `text` があれば、対応する `text` / `image` だけを重複なく残します。`video` など未知の種類は除き、`["text","image","video"]` でも画像入力を使えます。欠落・型が不正・32要素超・`text` がない場合は従来どおり text のみです。モデル名や提供元から画像対応を推測しません。context と同じ1回の取得を使い、再開時にも取得し直すため、以前の画像対応を引き継ぎません。固定 backend の `model_definition.inputModalities` はそのまま尊重します。
 
 ## Compaction の予算
 

@@ -100,3 +100,35 @@ def test_real_http_selected_id_one_lookup_redirect_and_response_cap():
         assert len(calls) == 5
     finally:
         server.shutdown(); server.server_close(); thread.join()
+
+
+def test_local_maker_ids_remain_server_ids():
+    ids = ['glm-5.3-flash', 'deepseek-v4.1-flash', 'qwen3.8-flash-next-iq3_xxs']
+    rows = models.parse_models({'data': [{'id': model} for model in ids]})
+    assert [row['id'] for row in rows] == ids
+    assert all(row['available'] for row in rows)
+
+
+@pytest.mark.parametrize('identity,context', [('deepseek-v4.1-flash', 131072), ('glm-5.3-flash', 262144)])
+@pytest.mark.parametrize('modalities,expected', [
+    (['text', 'image'], ['text', 'image']), (['text'], ['text']),
+    (['text', 'image', 'video'], ['text', 'image']), (['text', 'video'], ['text']),
+    (['video', 'image', 'text', 'image'], ['text', 'image']),
+    (['text', 'image'] + ['video'] * 30, ['text', 'image']),
+])
+def test_model_architecture_preserved_without_changing_context(identity, context, modalities, expected):
+    row = models.parse_models({'data': [{'id': identity, 'meta': {'n_ctx': context},
+        'architecture': {'input_modalities': modalities}}]})[0]
+    assert row['architecture'] == {'input_modalities': expected}
+    assert models.context({}, row) == (context, 'server')
+
+
+@pytest.mark.parametrize('architecture', [None, [], 'image', {}, {'input_modalities': None},
+    {'input_modalities': 'text,image'}, {'input_modalities': []},
+    {'input_modalities': ['image']}, {'input_modalities': ['image', 'image']},
+    {'input_modalities': [1, 'image']}, {'input_modalities': [{'image': True}]},
+    {'input_modalities': ['text', 'image', None]},
+    {'input_modalities': ['text', 'image'] + ['video'] * 31}])
+def test_invalid_architecture_does_not_advertise_image(architecture):
+    row = models.parse_models({'data': [{'id': 'local', 'architecture': architecture}]})[0]
+    assert 'architecture' not in row

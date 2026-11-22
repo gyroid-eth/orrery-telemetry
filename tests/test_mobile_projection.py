@@ -3,6 +3,29 @@ import pytest
 from dashboard.mobile_projection import SnapshotStore, project_agents, project_mail
 
 
+@pytest.mark.parametrize('role', [None, 42, {}, '', '  ', 'Review\nprivate', 'Review\x00private'])
+def test_invalid_role_is_not_guessed_or_forwarded(role):
+    from dashboard.mobile_projection import project_agent
+    assert 'role' not in project_agent(dict(name='Alpha', annot=dict(role=role, task='private')))
+
+
+def test_only_the_bounded_display_role_is_projected():
+    from dashboard.mobile_projection import project_agent
+    row=project_agent(dict(name='Alpha', annot=dict(role='  '+'R'*50+'  ', task='private',group='private')))
+    assert row['role']=='R'*40 and 'annot' not in row and 'task' not in row and 'group' not in row
+
+
+def test_working_duration_is_only_the_current_upstream_display():
+    from dashboard.mobile_projection import project_agent
+    raw = dict(name='SampleAgent', running=True, state='run', act_state='work', work_disp='2m05s')
+    assert project_agent(raw)['work_disp'] == '2m05s'
+    for invalid in (None, '', 'made up', '2m05s\nprivate', '9'*100, 123):
+        assert 'work_disp' not in project_agent({**raw, 'work_disp': invalid})
+    for state in ('wait', 'ask', 'question'):
+        assert 'work_disp' not in project_agent({**raw, 'act_state': state})
+    assert 'work_disp' not in project_agent({**raw, 'running': False})
+
+
 def test_fresh_identity_projection_and_same_name_instance_change_do_not_merge():
     from uuid import uuid4
     data=inputs();clock=[100.0]
@@ -66,7 +89,7 @@ def inputs():
              'last_active':90,
              'running': True, 'state': 'run', 'act_state': 'work', 'ctx_used': 20,
              'task': 'PRIVATE-TASK', 'live': 'PRIVATE-PANE', 'transcript_path': '/private/file',
-             'annot': {'role': 'PRIVATE-ROLE'}, 'provider_stall': {'error': 'PRIVATE-ERROR'}}
+             'annot': {'role': 'Reviewer', 'task': 'PRIVATE-TASK', 'group': 'PRIVATE-GROUP'}, 'provider_stall': {'error': 'PRIVATE-ERROR'}}
     return {'agents': {'agents': [agent]},
             'graph': {'nodes': [agent], 'spawn': [], 'edges': [{'kind':'bcc','source':'Alpha','target':'Secret','count':10}]},
             'mail:day': {'status':'available','window':'day','scope':'b'*32,'next_cursor':None,'edges':[], 'events':[],
@@ -115,6 +138,8 @@ def test_projection_omits_private_fields_and_unknown_is_not_zero():
     text = str(first)
     assert 'PRIVATE' not in text and '/private' not in text and 'bcc' not in text
     assert first['agents'][0]['ctx_used'] == 20
+    assert first['agents'][0]['role'] == 'Reviewer'
+    assert 'annot' not in first['agents'][0]
     assert first['agents'][0]['context_sampled_at'] is None
     assert first['quota'] == {'status':'unavailable'}
     assert first['timeline']['states'] == []
@@ -378,3 +403,11 @@ def test_current_scope_change_on_tap_expires_issued_keys_and_cached_content():
         with pytest.raises(LookupError):store.message('day',row['event']['key'])
         assert not store._issued and not store._cache and store._scope is None
     finally:store.close()
+
+
+@pytest.mark.parametrize('raw',['gpt-6.1-sol','gpt-7-nova-preview2'])
+def test_mobile_model_projection_keeps_raw_identifier_after_full_display(raw):
+    from dashboard import server
+    agent=inputs()['agents']['agents'][0]
+    agent.update(model=server._display_model(raw),model_raw=raw)
+    assert project_agents({'agents':[agent]})[0]['model']==raw

@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${AGENTSTACK_FRESH_PYTHON+x}" == x || -n "${AGENTSTACK_FRESH_LAUNCH_ID:-}" ]]; then
+  _ags_env="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fresh-cli-env.sh"
+  [[ -f "$_ags_env" ]] || { printf '%s\n' FRESH_CODEX_ENV_UNAVAILABLE >&2; exit 2; }
+  . "$_ags_env" || exit 2
+fi
+
 # CLI-only fresh handoff, before the Desktop installation can replace caller
 # context. SessionStart is recorded locally; no Desktop binding is created.
 if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
@@ -18,6 +24,9 @@ if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:
     [[ -d "$_ags_app_source/agentstack_codex_app" ]] || _ags_app_source="$(cd "$_ags_app_root/../src" && pwd)"
     exec "${AGENTSTACK_PYTHON:-python3}" "$_ags_app_source/agentstack_codex_app/hook_entry.py"
   fi
+  [[ "${AGENTSTACK_PYTHON:-}" == "${AGENTSTACK_FRESH_PYTHON:-}" && -n "${AGENTSTACK_FRESH_PYTHON:-}" ]] || {
+    printf '%s\n' FRESH_CODEX_PYTHON_UNAVAILABLE >&2; exit 2;
+  }
   _ags_fresh_payload="$(</dev/stdin)"
   _ags_fresh_event="$(printf '%s' "$_ags_fresh_payload" | "${AGENTSTACK_PYTHON:-python3}" -c '
 import json, sys

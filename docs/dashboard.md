@@ -61,7 +61,7 @@ Codex 自身が固定エラー文を折り返す場合も検知します。固�
 
 | 表示 | 読み方 |
 | --- | --- |
-| 名前の下の `GPT 5.6`、`SONNET 5` など | 使用中のモデル。`◷ 200K`、`◷ 1M` がある場合は、そのモデルが使える作業メモリ全体の大きさです。 |
+| 名前の下の `GPT-6.1-Sol`、`SONNET 5` など | 使用中のモデル。`◷ 200K`、`◷ 1M` がある場合は、そのモデルが使える作業メモリ全体の大きさです。 |
 | モデルの下の細い横線 | **残りの作業メモリ（context remaining）**。長いほど余裕があり、残り20%未満では赤寄りになります。telemetry を取得できないカードには出ません。 |
 | 黒い帯 | terminal で観測した現在の表示。作業中か待機中かを読む手掛かりです。 |
 | `ORD` | そのエージェントに与えられている直近の指示です。 |
@@ -86,6 +86,10 @@ Codex 自身が固定エラー文を折り返す場合も検知します。固�
 | `NEED YOU` | 人を待っている agent。承認待ち（`APPROVAL`）と、選択肢を聞いている（`?`） | 赤枠、または `?` |
 | `WORKING` | turn が進行中の agent | amber の LED と所要時間（不明なら `WORKING`） |
 | `WAITING` | prompt で入力を待っていて、仕事を渡せる agent | `LAST 1M41S` |
+
+Codex の狭い pane で現在の `Working` / `Thinking` 行が `…` に省略されても、作業中として読み取ります。経過時間は見えている単位までを表示し、読めなければ出しません。後の返答や完了表示に置き換わった状態行・本文中の引用は、現在の作業の証拠にしません。
+
+Codex が現在の `Working` 行と入力欄の間に追加指示のキュー（`Queued follow-up inputs`）を表示している間も、作業中として読み取ります。キューだけでは作業中にしません。footer のモデルが `GPT-6.1 Terra max` のように種類を空白で区切る表示名でも入力欄の footer と認め、モデルを `GPT-6.1-Terra` と表示します。
 
 `NEED YOU` は該当する agent がいるときだけ現れ、クリックすると DECK がその agent だけに絞られます（もう一度クリックで戻ります）。process が止まって shell に戻った agent はどの数にも入りません。カードの `○ SHELL` で分かります。active agent の総数は sector 見出しの `ACTIVE AGENTS [ 29 ]` にあります。
 
@@ -346,6 +350,8 @@ Local Qwen は六角形の中に Qwen のロゴを表示し、DeepSeek は接続
 `AGENTSTACK_SPAWN_DIRS` の preset chip と exact path input を表示します。preset は installer の `--spawn-dirs` で永続化します（shell の `export` は service に届きません。[configuration.md](configuration.md) の「Spawn directory」参照）。input は `/api/fs/dirs` の root-scoped typeahead で、arrow key / Enter でも選択できます。最後に使った directory は `localStorage` に保存します。
 
 typeahead は `AGENTSTACK_SPAWN_ROOTS` の外へ出ず、hidden directory、`..`、root 外への symlink を候補にしません。
+
+ORRERY のフォルダ選択画面では、パンくずで検索の起点を選べます。検索欄が空の間はその場所の子フォルダが並び、入力すると配下の一致を現在の場所からの相対パスで表示します。上下キーで移動し、Enter で子フォルダを開くか検索結果を選択します。探索範囲と上限は [フォルダ検索 API](api.md#get-apifsdir-search) を参照してください。
 
 ### Task と ADVANCED
 

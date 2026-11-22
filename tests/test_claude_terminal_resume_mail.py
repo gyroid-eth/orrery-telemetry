@@ -67,6 +67,9 @@ def test_terminal_resume_unretires_an_authenticated_retired_owner(resume, mail, 
     assert registers and registers[-1]["registration_token"] == TOKEN
     assert unretires(mail) == [{"project_key": registration["project_key"], "agent_name": NAME}]
     assert (runtime / f"agent_token_{NAME}").read_text().strip() == TOKEN
+    if kind == "retained_child":
+        state = json.loads((runtime / "child-agents" / f"{NAME}.json").read_text())
+        assert state.get("resume_in_progress_at")
 
 
 def test_terminal_resume_leaves_an_active_row_alone(resume, mail, tmp_path):
@@ -74,6 +77,22 @@ def test_terminal_resume_leaves_an_active_row_alone(resume, mail, tmp_path):
     session_start(runtime, registration, tmp_path)
     assert [method for method, _ in mail if method == "register_agent"]
     assert unretires(mail) == []
+
+
+def test_terminal_resume_unretire_failure_cancels_retained_marker(resume, mail, tmp_path):
+    runtime, registration, *_ = resume
+    child(runtime, registration)
+    state_path = runtime / "child-agents" / f"{NAME}.json"
+    retained = json.loads(state_path.read_text())
+    StandInMail.retired_at = RETIRED_AT
+    register = tmp_path / "register.sh"
+    register.write_text(f'. "{ROOT / "bin/lib/agentstack-register.sh"}"\n'
+                        'ags_unretire_owned_identity() { return 1; }\n')
+
+    result = session_start(runtime, registration, tmp_path, extra={"AGENTSTACK_REGISTER_LIB": str(register)})
+
+    assert "unretire に失敗しました" in result.stdout
+    assert json.loads(state_path.read_text()) == retained
 
 
 @pytest.mark.parametrize("kind", ["expired", "legacy", "purged", "resume_pending", "no_token"])

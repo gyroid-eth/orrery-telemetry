@@ -573,3 +573,74 @@ def test_catalog_and_use_specific_inspection_keep_current_owner_and_bounded_publ
             with pytest.raises(B1Error):await execute(args,dict(operation='catalog'))
     asyncio.run(run_test())
 
+
+
+@pytest.mark.parametrize('damage',['none','pid-reuse','runner','provider','session','different-pid','empty-live'])
+def test_dead_empty_pid_inventory_keeps_recorded_process_and_identity_checks(damage):
+    import time
+    class Transport:
+        def command(self,*args,**kwargs):
+            text='$1\t%2\t\t1\tpython\n' if args[0]=='list-panes' else ''
+            if damage=='session':text=text.replace('$1','$2')
+            if damage=='different-pid':text=text.replace('%2\t\t','%2\t300\t')
+            if damage=='empty-live':text=text.replace('\t1\tpython','\t0\tpython')
+            return subprocess.CompletedProcess(args,0,text,'')
+    route=dict(pane=dict(session_id='$1',pane_id='%2',pid=100),pane_process_start='pane-birth',
+        runner=dict(pid=101,process_start='runner-birth'),provider=dict(pid=102,process_start='provider-birth'))
+    selected=SimpleNamespace(route=route,ended=object())
+    rows={999:(1,os.getuid(),'other')}
+    if damage=='pid-reuse':rows[100]=(1,os.getuid(),'reused-birth')
+    if damage in {'runner','provider'}:
+        member=route[damage];rows[member['pid']]=(1,os.getuid(),member['process_start'])
+    if damage=='none':
+        inventory=Targets._inventory(Transport(),time.monotonic()+5)
+        assert inventory[0][0]['pid'] is None
+        assert Targets._ended_view(selected,rows,inventory)==dict(category='finished',running=False,attached=False)
+    else:
+        with pytest.raises(B1Error):
+            inventory=Targets._inventory(Transport(),time.monotonic()+5)
+            Targets._ended_view(selected,rows,inventory)
+
+
+@pytest.mark.parametrize('kind',['normal','resolved'])
+@pytest.mark.parametrize('reused',[False,True])
+def test_dead_empty_pid_display_and_cleanup_after_real_end_reader(tmp_path,monkeypatch,kind,reused):
+    from agentstack_mail import fresh_end
+    import time
+    async def check():
+        async with cleanup_fixture(tmp_path,monkeypatch) as (runtime,people,client,operator,run,row,calls,tmux,processes,state):
+            uid=os.getuid()
+            capture={100:(1,uid,'pane-birth',100),101:(100,uid,'runner-birth',101),102:(101,uid,'provider-birth',101)}
+            row['process_observation']=fresh_end.capture_groups(dict(process_snapshot=lambda **_:capture),row)
+            replace(run/'tmux.json',row)
+            observed={999:(1,uid,'other-birth',999)}
+            processes['process_snapshot']=lambda **kwargs:(dict(observed) if kwargs.get('include_groups') else
+                {pid:value[:3] for pid,value in observed.items()})
+            processes['process_start']=lambda pid,**_:observed[pid][2] if pid in observed else 'absent'
+            original=tmux['Transport'].command
+            def command(self,*args,**kwargs):
+                if args[0]=='list-panes' and state['present']:
+                    calls.append((args,kwargs))
+                    suffix='\tpython' if 'pane_current_command' in args[-1] else ''
+                    return subprocess.CompletedProcess(args,0,'$1\t%2\t\t1'+suffix+'\n','')
+                return original(self,*args,**kwargs)
+            monkeypatch.setattr(tmux['Transport'],'command',command)
+            if kind=='resolved':
+                (run/'ended.json').rename(run/'fixture-observed-ended.json')
+                result=await asyncio.to_thread(fresh_end.resolve_ended,client,ROOT,run.name,confirm_ended=True)
+                assert result['end_kind']=='resolved'
+            targets=Targets(operator,ROOT)
+            query=dict(session='Alpha')
+            selected=await targets.select(query)
+            assert selected.ended.kind==kind
+            if reused:
+                observed[100]=(1,uid,'different-pane-birth',100)
+                with pytest.raises(B1Error):await targets.cleanup(query,mode='tmux')
+                assert not any(args[0]=='kill-pane' for args,_ in calls)
+            else:
+                facts=targets.display_snapshot([selected],deadline=time.monotonic()+5)
+                assert facts[client.context['mail_agent_id']]==dict(category='finished',running=False,attached=False)
+                result=await targets.cleanup(query,mode='tmux')
+                assert result['ok'] and result['effects']['tmux']=='pane_removed'
+                assert len([args for args,_ in calls if args[0]=='kill-pane'])==1
+    asyncio.run(check())

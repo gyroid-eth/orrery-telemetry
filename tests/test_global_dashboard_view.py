@@ -57,6 +57,16 @@ def test_global_folders_keep_guard_and_deliverables_have_no_implicit_scope(ui,mo
     assert code==200 and row['items']=={} and row['configured'] is False
     code,body=request(ui,'/api/fs/dirs?path='+str(work));row=json.loads(body)
     assert code==200 and {x['name'] for x in row['dirs']}=={'allowed','logs'}
+    code,body=request(ui,'/api/fs/dir-search?q=ALLOW')
+    assert code==200 and json.loads(body)['dirs']==[
+        {'name':'allowed','path':str((work/'allowed').resolve())}]
+    from urllib.parse import urlencode
+    scoped='/api/fs/dir-search?'+urlencode({'q':'ALLOW','under':str(work)})
+    code,body=request(ui,scoped)
+    assert code==200 and json.loads(body)['dirs']==[{'name':'allowed','path':str((work/'allowed').resolve())}]
+    assert request(ui,scoped,auth=False)[0]==403
+    denied='/api/fs/dir-search?'+urlencode({'q':'ALLOW','under':str(work.parent)})
+    assert request(ui,denied)[0]==400
     (work/'outside').symlink_to(state['root'])
     code,body=request(ui,'/api/fs/dirs?path='+str(work/'outside'))
     assert code==200 and json.loads(body)['path'] is None

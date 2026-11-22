@@ -21,12 +21,12 @@ The goal is not only to launch a child. The parent agent remains responsible for
 <!-- native-delegate:start -->
 ## DeepSeek / Local children: choose this route before preregistration
 
-For a **DeepSeek or Local (Strata) child**, use the dashboard's standard `POST /api/spawn`, with `provider=deepseek|strata` and `harness=dsh|hermes`. This applies whether the parent is Claude, Codex, dsh or Hermes. For a **Claude or Codex child**, continue with the existing procedure below. Explicit global mode still follows the global contract above.
+For a **DeepSeek or Local (Strata) child**, use the dashboard's standard `POST /api/spawn`, with `provider` set to the native connection `id` the catalog returns (`deepseek`, `strata`, or an added connection such as `strata-epyc`) and `harness=dsh|hermes`. This applies whether the parent is Claude, Codex, dsh or Hermes. For a **Claude or Codex child**, continue with the existing procedure below. Explicit global mode still follows the global contract above.
 
 Do the risk/task preparation in sections 1–2, then use this route instead of sections 3–5. Do not preregister separately or call `spawn_child.sh --harness` yourself: the API owns preregistration and its launcher handoff. Do not search private manifests, credentials, child state or `~/.agentstack` to reconstruct a request.
 
-1. Read the public catalog: `curl -sS "http://127.0.0.1:${AGENTSTACK_PORT:-8770}/api/spawn-names"`. Select the requested provider's formal `models[].id` and a matching `harnesses[]` entry with `available: true`. Local's API ID is `strata`. If the requested model/harness is unavailable, report its reason; if the user's choice is ambiguous, ask rather than substituting a provider/model. Do not guess effort from a different harness.
-2. Prepare the complete task in a file, including scope, expected result and a completion report to the parent over ORRERY Mail. The API's `parent` is **your own `AGENT_NAME`**, even when you are somebody else's child; never use `PARENT_AGENT`. If your identity is unresolved, stop. Set `DELEGATE_PROVIDER`, `DELEGATE_HARNESS`, `DELEGATE_MODEL`, `DELEGATE_DIR` (the child's existing absolute working directory), and `DELEGATE_TASK_FILE` to those selected values. These are inputs for the example, not new product configuration.
+1. Read the public catalog: `curl -sS "http://127.0.0.1:${AGENTSTACK_PORT:-8770}/api/spawn-names"`. Select the requested provider's formal `models[].id` and a matching `harnesses[]` entry with `available: true`. Send the provider's `id` exactly as the catalog returns it, never its `kind` or label. A dynamic Local provider (`dynamic_models: true`) lists the models its server reports, and each of those rows carries `url_index` and `url_key`: copy both from the selected row. Without them the API refuses the spawn as `spawn_pair_unavailable`. If the requested model/harness is unavailable, report its reason; if the user's choice is ambiguous, ask rather than substituting a provider/model. Do not guess effort from a different harness.
+2. Prepare the complete task in a file, including scope, expected result and a completion report to the parent over ORRERY Mail. The API's `parent` is **your own `AGENT_NAME`**, even when you are somebody else's child; never use `PARENT_AGENT`. If your identity is unresolved, stop. Set `DELEGATE_PROVIDER`, `DELEGATE_HARNESS`, `DELEGATE_MODEL`, `DELEGATE_DIR` (the child's existing absolute working directory), and `DELEGATE_TASK_FILE` to those selected values, plus `DELEGATE_URL_INDEX` and `DELEGATE_URL_KEY` only for a dynamic Local row. These are inputs for the example, not new product configuration.
 3. Send a 0600 JSON file using curl. The quoted Python heredoc reads the task as data, preserving quotes, newlines, backticks and `$()` without shell evaluation. This uses only curl and the install prerequisite Python 3; no development fixture/helper is needed.
 
 ```bash
@@ -41,12 +41,15 @@ Do the risk/task preparation in sections 1–2, then use this route instead of s
   request_file="$(mktemp "${TMPDIR:-/tmp}/delegate-request.XXXXXX")"
   response_file="$(mktemp "${TMPDIR:-/tmp}/delegate-response.XXXXXX")"
   python3 - "$request_file" "$DELEGATE_PROVIDER" "$DELEGATE_HARNESS" \
-    "$DELEGATE_MODEL" "$DELEGATE_DIR" "$DELEGATE_TASK_FILE" <<'PY'
+    "$DELEGATE_MODEL" "$DELEGATE_DIR" "$DELEGATE_TASK_FILE" \
+    "${DELEGATE_URL_INDEX:-}" "${DELEGATE_URL_KEY:-}" <<'PY'
 import json, os, pathlib, sys
-output, provider, harness, model, directory, task_file = sys.argv[1:]
+output, provider, harness, model, directory, task_file, url_index, url_key = sys.argv[1:]
 payload = {"provider": provider, "harness": harness, "model": model,
            "parent": os.environ["AGENT_NAME"], "dir": directory,
            "task": pathlib.Path(task_file).read_text(), "async": True}
+if url_index or url_key:
+    payload.update(url_index=int(url_index), url_key=url_key)
 pathlib.Path(output).write_text(json.dumps(payload))
 PY
   dashboard="http://127.0.0.1:${AGENTSTACK_PORT:-8770}"
@@ -71,6 +74,8 @@ Add optional fields to `payload` only when selected: `name` (omit for Auto), `ro
 5. Wait for the child's actual work report through ORRERY Mail notifications or the bundled `agentstack-await-reply` (section 6); follow-ups use Mail, never pane injection or inbox polling. Verify the result as in section 7. When truly finished, use standard `POST /api/exit` with `{"session":"<child_name>"}` and confirm its state; common cleanup owns release/retire. Do not read token files or retire another agent. Startup readiness is distinct from task completion.
 
 The generator already links this product skill into `DSH_HOME/skills/delegate` or `HERMES_HOME/skills/delegate`; read it there, without searching private runtime state. Use the native bash/terminal tool for curl and keep its normal guard/approval behavior. If an approval or hook denies it, report the reason; do not disable approvals or change transports.
+
+検索先を今回だけ切り替える場合、上の `payload` に `web_search: "exa"` または `web_search: "searxng"` を追加します。URL・資格は共通の managed spawn manifest の設定を使います。省略時はその設定、共通設定も無ければ従来の動作です。内部 launcher の指定は `--web-search exa|searxng` ですが、delegate は上の API を使ってください。
 
 <!-- native-delegate:end -->
 ## Environment
@@ -204,6 +209,7 @@ Embedded task template:
 - Registration is already complete; do not call ensure_project, register_agent, or fetch_inbox.
 - Treat the launch prompt and its embedded task as canonical. There is no task mail.
 - Do not modify files outside the declared scope.
+- Before reporting, call `show_files` with the reports, figures or screenshots the parent or the person should look at.
 - Report completion to <parent-agent-name> with `send_message` at importance `high`, including changed paths, summary, and verification.
 ```
 
@@ -470,7 +476,7 @@ When completion is detected:
 5. For implementation changes, run a doc-sync pass and update README or
    managed docs (`claude/CLAUDE.md`, `codex/AGENTS.md`) when behavior changed.
 6. Release file reservations.
-7. Report the verified outcome to the user.
+7. Report the verified outcome to the user. Call `show_files` with the files or images the user should look at (the child's report, figures, screenshots), so they open from the cockpit's History.
 
 If the child reports uncertainty, partial completion, or skipped tests, preserve that information in your report.
 

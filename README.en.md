@@ -33,6 +33,8 @@ cd orrery-telemetry
 ./scripts/install.sh --project-key /absolute/path/to/your-project
 ```
 
+Top-level and delegated-child launches protect the selected working folder (not automatically the Git root) and deliberately shared folders (`AGENTSTACK_EXTRA_PROTECTED_ROOTS`). Updates copy saved legacy protection settings once. Review the [protection migration](docs/configuration.en.md#reservation-protection-and-migration) in a dry run, release reservations before updating, and restart cooperating sessions together.
+
 `--project-key` is the absolute path of the folder where agents work, not this repository. Review and confirm the changes, then check the shared components with `~/.agentstack/bin/agentstack-doctor` and `~/.agentstack/bin/agentstack-selftest`. Continue with your chosen provider:
 
 - **Claude Code / Codex**: Install and sign in to the chosen CLI in the same OS environment. Start it with `~/.agentstack/bin/agent-start <project folder>` or `~/.agentstack/bin/agent-start-codex <project folder>`.

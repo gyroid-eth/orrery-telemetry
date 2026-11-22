@@ -45,16 +45,19 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 ### `session-start-reminder.sh`
 
 - **発火:** すべての `SessionStart` source。startup だけでなく resume、`/clear`、compact 後にも走ります。
-- **動作:** identity を `AGENT_NAME` → pane metadata → exact tmux session の順で解決し、ORRERY Mail の liveness を確認します。owner token と project key があれば shell 側で同じ identity を再登録します。そのうえで、登録済み・儀式不要を明示した embedded task、提供 tool schema が示す bound proxy、raw/direct 接続の順に最初に一致した経路だけを使うよう案内します。embedded task は parent の有無だけで除外しません。shell 登録と raw MCP tool session の認証は別です。
+- **入れ子の起動:** macOS・Linux 共通の `ps` で shell wrapper を越えて祖先をたどり、Claude が別の Claude または Codex の内側にいると確認できた場合は、SessionStart の登録・owner token・セッション索引の更新を省きます。内側の Claude の会話は続行します。祖先から確認できない起動では、通常どおり identity の解決へ進みます。
+- 従来の shell 登録経路では、Mail が応答したら同じ project・名前のプロフィールを `whois` で確認します。登録済みの `program` が `claude` または `claude-code` の場合にだけ shell から再登録します。非 Claude の名前を継承した場合やプロフィールを確認できない場合は、owner token やセッション索引、稼働記録に触れる前にフックを終えます。
+- **動作:** identity を `AGENT_NAME` → pane metadata → exact tmux session の順で解決し、ORRERY Mail の liveness を確認します。確認済みの Claude identity を owner token で shell 側から再登録します。そのうえで、登録済み・儀式不要を明示した embedded task、提供 tool schema が示す bound proxy、raw/direct 接続の順に最初に一致した経路だけを使うよう案内します。embedded task は parent の有無だけで除外しません。shell 登録と raw MCP tool session の認証は別です。
 - **経路の境界:** child proxy の設定 artifact は案内を具体化する hint にだけ使い、model に実際に提供された tool の説明と引数 schema を優先します。bound proxy では helper・再登録・token file 読取を指示せず、障害時も raw/helper へ自動 fallback させません。raw/direct の既存 identity だけ token-safe helper に進み、新規 raw 登録とは分けます。generic な登録失敗を stale token と断定しません。
 
 ### `check-file-reservation.sh`
 
-- **発火:** `Edit` / `Write` の直前。対象 path が `AGENTSTACK_PROTECTED_ROOTS`、または未指定時の project root 内にある場合だけ enforcement します。
+- **発火:** `Edit` / `Write` の直前。managed 起動では、計算済み `AGENTSTACK_PROTECTED_ROOTS`（設定順の意図的な `AGENTSTACK_EXTRA_PROTECTED_ROOTS`、次に実際の起動 workspace）内だけ enforcement します。保護するかどうかは root との一致で決めますが、managed 起動の予約識別子は root に依存しない物理絶対 path とし、同じ file を別の起動 folder から編集しても衝突を検知します。managed hook は file/root の canonical path を比較します。legacy/direct session は、root 未設定時の project root fallback を含む従来の root/path 解決を維持します。新しい managed 起動は path 形式の namespace を追加保護 root と見なしません。旧 session の restart 前に[保護設定の移行](configuration.md#reservation-の保護範囲と移行)を確認してください。
 - **project key:** `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → `${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh` の `AGENTSTACK_PROJECT_KEY` → hook input の cwd の順で解決します。installed `env.sh` は shell として source せず、対象の `export AGENTSTACK_PROJECT_KEY=...` だけを literal として読みます。この共通 resolver は registration guard、session reminder、child cleanup、`agentstack-await-reply` も使うため、launcher を経由しない editor session でも install 時と同じ project を参照します。
 - **identity:** `AGENT_NAME` を優先します。無い場合は `TMUX_PANE` で対象 pane の tmux session を明示取得し、pane metadata は一致確認にだけ使います。metadata と session が違う、placeholder、または解決不能なら HTTP を送る前に exit 2 で block します。untargeted な ambient tmux session は使いません。tmux 外の client でも、`register_agent` を呼んで `<runtime>/session_index/` に記録されていれば、hook input の `session_id` から identity を解決します（優先度は env → tmux → session index）。`session_id` は `[a-zA-Z0-9_-]` 以外を含むなら使わず、symlink の index entry は読みません。identity source が1つも無い session の扱いは下記「unmanaged session」に従います。
-- **動作:** 既存 reservation を相対 path / absolute path の両方で renew-only 確認し、他者の有効な exclusive 予約との重複も read-only で照会します。重複時は予約者を理由に示します。owner `registration_token` は読み込まず tool arguments に送りません。legacy HTTP bearer は別の transport credential で、generated selector が `disabled` の native endpoint には送りません。0件なら非同期 commit を考慮して1回だけ再確認し、auto-acquire はしません。
+- **動作:** managed 起動では物理絶対 path、従来の legacy/direct session では相対 path / absolute path の両方で既存 reservation を renew-only 確認し、他者の有効な exclusive 予約との重複も read-only で照会します。重複時は予約者を理由に示します。owner `registration_token` は読み込まず tool arguments に送りません。legacy HTTP bearer は別の transport credential で、generated selector が `disabled` の native endpoint には送りません。0件なら非同期 commit を考慮して1回だけ再確認し、auto-acquire はしません。
 - **判定:** 既存 reservation は exit 0、definitive zero、HTTP rejection、JSON-RPC error、MCP `isError=true`または非boolean、schema違反、malformed response、zero後のretry failureは exit 2 です。`isError` は省略または boolean `false` だけを成功として許します。exact identity と protected scope の確定後、**最初の照会**が transport unreachable の場合だけ運用上の fail-open があります。pathなしと protected root外は enforcement 対象外なので exit 0 です。
+- **予約の取得:** managed `workspace-v1` の拒否文は、必要な物理絶対 path を示します。bound proxy の `reserve_files` にその path を渡し、更新・解放にも同じ path を使います。相対予約を自動で絶対化する機能はありません。[共通 proxy の path 契約と更新手順](codex-app.md#agent-の利用手順)を参照してください。dsh/Hermes の native adapter と Codex の承認済み hook も同じ guard を使います。
 - **deploy順:** strict identity版を既存sessionへ途中適用しません。cutover C5で全clientを`agent-start`経由でrestart/rebindし、exact identityを確認してからrepo版をliveへ同期し、予約あり/なしの両方向testを通します。
 
 ### `check-agent-registered.sh`
@@ -124,7 +127,7 @@ service が応答しているなら登録は可能なので、既定は**要求�
 
 | 実行ファイル | 呼び出し元 / 起動タイミング | 主な動作 |
 | --- | --- | --- |
-| [`record-session-index.py`](../hooks/record-session-index.py) | `mark-agent-registered.sh` が PostToolUse payload を渡して**同期**起動 | ORRERY Mail ID と Claude `session_id`、transcript、cwd、`project_key`、`registered_by` の exact mapping を atomic write。他人を登録した呼び出しは記録しない |
+| [`record-session-index.py`](../hooks/record-session-index.py) | PostToolUse・SessionStart・Claude 再登録成功時に**同期**起動 | ORRERY Mail ID と Claude `session_id`、transcript、cwd、`project_key`、`registered_by` の exact mapping を atomic write。他人を登録した呼び出しは記録しない |
 | [`prepare-codex-session-binding.py`](../hooks/prepare-codex-session-binding.py) | Codex CLI launcher が ORRERY Mail 登録後、CLI 起動直前に実行 | server 応答由来の project・数値 agent ID・name・program に fresh `launch_id` を加える。child は非秘密の launch origin / MCP profile も加え、今回の receipt 期待を atomic write |
 | [`record-codex-session-index.py`](../integrations/codex_app/plugin/scripts/record-codex-session-index.py) | 公式 Codex `SessionStart` payload を plugin runner が同期入力 | payload の `session_id` と rollout header ID を照合し、同じ `launch_id` の current launch だけを Codex session index として atomic write。検証済み `child` / `standalone` provenance も receipt へ引き継ぐ |
 | [`resolve-agent-name.sh`](../hooks/resolve-agent-name.sh) | identity が必要な reminder、reservation、cleanup helper が source | env → exact tmux session → session index（caller が `AGENTSTACK_SESSION_ID` を渡した場合）の順で identity を解決 |
@@ -136,6 +139,10 @@ service が応答しているなら登録は可能なので、既定は**要求�
 ### `record-session-index.py`
 
 PostToolUse payload から ORRERY Mail の数値 ID、canonical name、Claude `session_id`、transcript path、cwd を取り出し、`$AGENTSTACK_RUNTIME_DIR/session_index/<agent_id>.json` へ一時 file + `os.replace` で書きます。record は `schema_version: 2` と `binding_kind: "self"` を持ちます。**呼び出し元が別の agent を登録した場合（親による child 登録）は record を書きません** — この index は dashboard の resume と guard の identity 解決の両方に読まれるので、読む側で除外するのではなく、書かない方が誤用の余地が残りません。dashboard はこの exact mapping を session resume に優先し、古い session だけ heuristic へ fallback します。入力不備や I/O failure は registration を妨げない quiet no-op です。
+
+SessionStart の shell 登録成功時も、同じ writer にその event の payload を渡します。Mail 不在や credential 不足で登録できなかった場合、名前が解決済みで `CLAUDE_ENV_FILE` があれば、session ID・transcript・cwd・名前・project を `AGENTSTACK_CLAUDE_SESSION_CONTEXT` として後続の Bash に引き継ぎます。値は shell quote し、credential は含めません。通常の登録成功時は既に receipt があるため、この回復用 context を空にするだけで追加の Python は起動しません。回復用 context の記録と消去はローカルで完結します。
+
+同じ session の Bash で `agentstack-reregister <name> claude-code` が成功したときだけ、この context と現在の identity・project が一致することを再確認し、現在の SessionStart payload から receipt を書きます。他人の再登録、identity conflict、別 project、失敗した登録では receipt を更新しません。remote 登録は成功しても receipt を書けなければ、exit 0 と登録成功の stdout を維持しつつ stderr に `stage=session-receipt reason=binding-not-written` を出します。未 enroll の identity は引き続き operator による credential 復旧が必要です。`CLAUDE_ENV_FILE` がない起動や更新前に開始した session は自動補修できず、古い receipt や transcript 検索からの推測も行いません。dashboard の self receipt 検証・古い receipt の拒否は変更しません。
 
 ### Codex CLI session binding helper
 
@@ -155,7 +162,7 @@ source 専用 helper で、`RESOLVED_AGENT` と解決 source を caller へ返�
 
 `--resources` による対象宣言を既定で必須にし、競合を確認してから child を起動します。Claude / Codex、model、pre-registered identity、child-owned token file、per-child MCP proxy、任意 worktree に対応します。tmux REPL が ready または早期終了と判定されるまで待ち、正本 task を注入します。引数 / server / worktree failure は exit 1、resource 未宣言は2、reservation conflict は21です。通常は直接叩かず、[/delegate](launchers.md#delegate) または dashboard から利用します。
 
-`AGENTSTACK_CHILD_DEFAULT_TOOLS` は `--base` / `--tools` / `--codex-mcp` が無い CLI 起動だけに適用します。最終の作業フォルダと provider で確認して使えない既定項目だけを外し、spawn 出力と最初の指示に残します。明示選択と resume は既存の fail-closed 経路です。[既定の道具](delegation.md#installer-の既定の道具)。
+`AGENTSTACK_CHILD_DEFAULT_TOOLS` は、CLI で `--base` / `--tools` / `--codex-mcp` を、標準の `/api/spawn` で `base` / `tools` を省略した Claude・Codex・dsh・Hermes の新規起動に適用します。最終の作業フォルダと provider で確認して使えない既定項目だけを外し、spawn 出力と最初の指示に残します。明示選択と resume は既存の fail-closed 経路です。[既定の道具](delegation.md#installer-の既定の道具)。
 
 ### `cleanup-child-agent.sh`
 
@@ -164,6 +171,12 @@ child の Claude / Codex command の後段へ連結され、REPL が戻った時
 `AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=0` の Claude / Codex child は state、token、MCP config、分離 home を全削除します。既定の Claude / Codex child は MCP config、home、proxy runtime を削除しますが、schema version、`retired_at`、`resume_expires_at`、非秘密 provenance を含む state と canonical owner credential を0600で保持します。保持処理が安全に完了しない場合は credential を推測で削除せず、明示 recovery / purge 用に private state を残して非0で終わります。bound session receipt と transcript はどちらの cleanup / purge の対象にも含みません。
 
 共有 `child_resume.py` helper は fresh spawn / resume の state 準備、private material の検証、current source home からの child home 再生成、期限切れ maintenance、明示 purge を同じ lock と判定で行います。Codex の子の home を作る前に利用者の Codex home（`CODEX_HOME`、未指定なら `~/.codex`）に `sessions/`・`history.jsonl`・`session_index.jsonl` を作り、子からは symlink で共有します。既存の記録は上書きしません。子としてしか Codex を使わない初回環境でも、記録は cleanup 後に残ります。旧 home などに実体の `sessions/` が残っていた場合、cleanup は会話の記録が失われる旨と対象パスを stderr に警告してから削除します。operator 向け入口は `agentstack-purge-child-resume <agent>` と `agentstack-purge-child-resume --expired` です。`agentstack-doctor` は期限切れを報告するだけで、この helper の purge を呼びません。
+
+dashboard は30秒間隔で子の終了状態を確認します。終了処理を通らずに停止した子は、起動や再開から60秒が経過し、tmux セッションや生きている lease が見つからず、保留中の登録・移行・道具変更がなく、保存済みの認証情報が一致した時点で、再開用の状態を修復します。今のマシン起動中に書かれた状態は、別の tmux サーバーに残っている子を保護するため、端末に接続されたプロセスに子の名前がないことも確認します。子が起動した端末のない GUI アプリやサーバーは再開を妨げません。プロセスの有無を判定できない場合は修復を見送ります。中断された再開の保持期限は元のままです。ORRERY Mail の復帰は実際に再開するときに行います。
+
+ダッシュボードの毎時の期限切れ削除と `agentstack-purge-child-resume --expired` は、tmux セッション、生きている lease、端末に接続された子のプロセスを調べ、停止が確認できた子だけを削除します。最後の lease 確認は、資格を削除する処理と同じ lock の内側で行います。
+
+端末から保持期間内の Claude の子を再開する際は、SessionStart が Mail の退役を解除する前に `resume_in_progress_at` を記録します。退役解除に失敗した場合はマーカーを取り消します。
 
 これは Claude Code `SessionEnd` hook ではありません。`SessionEnd` は crash や resume でも発生しうるため、remote identity の retire をその event へ結びつけていません。
 

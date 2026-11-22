@@ -111,6 +111,7 @@ def test_real_proxy_schema_and_all_tools_reject_model_proof_anchor_uuid_and_unkn
                     'release_reservations': {}, 'check_reservations': {'paths': ['note.py']},
                     'fetch_inbox': {}, 'whois': {'target_name': 'Beta'},
                     'list_candidates': {'target_name': 'Beta'}, 'runtime_status': {},
+                    'show_files': {'paths': ['note.py']},
                 }
                 assert definitions.keys() == samples.keys()
                 before = await snapshot(runtime)

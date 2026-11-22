@@ -109,6 +109,24 @@ class ThinTests(unittest.TestCase):
         self.assertNotIn('HOME', plan['env'])
         self.assertEqual(plan, thin.generate(self.doc))
 
+    def test_inherited_codex_browser_becomes_native_mcp_client(self):
+        from hooks import child_tools
+        definition = {'command': 'npx', 'args': ['-y', 'chrome-devtools-mcp@latest',
+                      '--autoConnect', '--no-usage-statistics'],
+                      'env': {'npm_config_cache': '/fixture/cache'}, 'cwd': str(self.root)}
+        selected = child_tools.native_plan(child_tools.normalize(), cwd=str(self.root),
+            claude_json=str(self.root / 'absent.json'),
+            codex_config={'mcp_servers': {'chrome-devtools': definition}})
+        mcp = thin.read(self.doc['mcp_config'])
+        mcp['mcpServers'].update(selected['servers'])
+        thin.save(self.doc['mcp_config'], mcp)
+        self.doc['mcp_selection'] = selected
+        plan = thin.generate(self.doc)
+        row = next(row for parent in self.rows(plan) for row in parent.get('insert', [])
+                   if row['id'] == 'orrery-mcp-chrome-devtools')
+        self.assertEqual(row['name'], '@deepseek-ai/dsh-mcp-client')
+        self.assertEqual(row['config'], {'serverName': 'chrome-devtools', 'transport': 'stdio', **definition})
+
     def test_dynamic_url_model_context_and_resume_pin_without_communication(self):
         manifest = thin.read(self.manifest)
         manifest['backends']['strata'] = {'model_source': 'server', 'urls': [
@@ -167,6 +185,42 @@ class ThinTests(unittest.TestCase):
             thin.generate({**self.doc, 'model': 'model', 'url_index': 0,
                 'server_url': 'https://fixture.invalid/v1', 'server_context': {'n_ctx': 8}})
 
+    def test_dynamic_model_input_modalities_and_budget(self):
+        manifest = thin.read(self.manifest)
+        manifest['backends']['strata'] = {'model_source': 'server', 'urls': ['https://fixture.invalid/v1']}
+        thin.save(self.manifest, manifest)
+        for identity, context in [('deepseek-v4.1-flash', 131072), ('glm-5.3-flash', 262144)]:
+            for modalities, expected in [
+                (['text', 'image'], ['text', 'image']), (['text'], ['text']),
+                (['text', 'image', 'video'], ['text', 'image']),
+                (['text', 'video'], ['text']), (['text', 'image', 'image'], ['text', 'image']),
+                (None, ['text']), ([], ['text']), ('image', ['text']),
+                (['image'], ['text']), (['image', 'image'], ['text']),
+                ([True, 'image'], ['text']), (['text', 'image', None], ['text']),
+                (['text', 'image'] + ['video'] * 31, ['text']),
+            ]:
+                with self.subTest(identity=identity, modalities=modalities):
+                    plan = thin.generate({**self.doc, 'model': identity, 'url_index': 0,
+                        'server_url': 'https://fixture.invalid/v1', 'server_context': {'n_ctx': context},
+                        'server_input_modalities': modalities})
+                    provider = next(row['config'] for row in self.rows(plan) if row.get('id') == 'llm-deepseek')
+                    definition = provider['models'][0]
+                    self.assertEqual(definition['id'], identity)
+                    self.assertEqual(definition['contextWindow'], context)
+                    self.assertEqual(definition['maxTokens'], 8192)
+                    self.assertEqual(definition.get('inputModalities', ['text']), expected)
+
+    def test_fixed_backend_preserves_explicit_input_modalities(self):
+        backends = self.root / 'backends.json'
+        value = thin.read(backends)
+        definition = value['backends']['strata']['model_definition']
+        definition.update(inputModalities=['text', 'image'], maxTokens=8192)
+        thin.save(backends, value)
+        # Discovery metadata must never replace a fixed backend's declaration.
+        plan = thin.generate({**self.doc, 'server_input_modalities': ['text']})
+        provider = next(row['config'] for row in self.rows(plan) if row.get('id') == 'llm-deepseek')
+        self.assertEqual(provider['models'], [definition])
+
     def test_dynamic_context_source_precedence_is_preserved(self):
         manifest = thin.read(self.manifest)
         manifest['backends']['strata'] = {'model_source': 'server', 'urls': ['https://fixture.invalid/v1'],
@@ -219,6 +273,15 @@ class ThinTests(unittest.TestCase):
                                  'native_profile_env': {'DSH_HOME': plan['env']['DSH_HOME']}})
         self.assertEqual(resumed['env']['DSH_TUI_DATA_DIR'], str(tui))
         self.assertEqual({p.name: p.read_bytes() for p in user.iterdir()}, before)
+
+    def test_native_history_expectation_is_passed_only_to_legacy_guard(self):
+        self.doc['history_binding'] = {'agent_id': 7, 'launch_id': 'a' * 32}
+        plan = thin.generate(self.doc)
+        guard = next(r for row in self.rows(plan) for r in row.get('insert', []) if r.get('id') == 'orrery-tools')
+        self.assertEqual(guard['config']['history_binding'], self.doc['history_binding'])
+        fresh = thin.generate({**self.doc, 'fresh_client_dir': str(self.root)})
+        guard = next(r for row in self.rows(fresh) for r in row.get('insert', []) if r.get('id') == 'orrery-tools')
+        self.assertNotIn('history_binding', guard['config'])
 
     def test_model_helper_effort_and_exact_resume_are_projected(self):
         self.doc.update(model='b', helper_model='a', effort='high', resume_session_id='own-session')

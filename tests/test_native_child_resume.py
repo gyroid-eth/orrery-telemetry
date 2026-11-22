@@ -1,5 +1,6 @@
 """Native resume reads only the exact child's callback and retained identity."""
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -10,6 +11,9 @@ import pytest
 from hooks import child_resume as resume
 from dashboard import server
 from hooks import harness_child as native
+
+
+pytestmark = pytest.mark.usefixtures('isolated_native_mcp_sources')
 
 
 def child(tmp_path, name, harness='dsh', native_id='session-one'):
@@ -164,11 +168,31 @@ if __name__ == '__main__':
     return runtime, state, directory, generator
 
 
+def test_resume_suite_ignores_unrelated_user_browser_settings(tmp_path):
+    # A legitimate user configuration must not become an input to resume fixtures.
+    home = tmp_path / 'user-home'
+    codex = home / '.codex'
+    codex.mkdir(parents=True)
+    (codex / 'config.toml').write_text('[mcp_servers.chrome-devtools]\ncommand="npx"\n'
+        'args=["chrome-devtools-mcp@latest"]\nenabled_tools=["list_pages"]\n')
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith('AGENTSTACK_') and key not in ('CODEX_HOME', 'CLAUDE_CONFIG_DIR')}
+    root = Path(__file__).resolve().parents[1]
+    env.update(HOME=str(home), PYTHONPATH=str(root / 'packages/agentstack_mail/src'),
+               PYTHONDONTWRITEBYTECODE='1')
+    result = subprocess.run([sys.executable, '-B', '-m', 'pytest', '-q', '-p', 'no:cacheprovider',
+        '--tb=short', 'tests/test_native_child_resume.py::test_prepare_and_foreground_resume_keep_exact_id_and_profile'],
+        cwd=root, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.mark.parametrize('harness', ['dsh', 'hermes'])
 def test_prepare_and_foreground_resume_keep_exact_id_and_profile(tmp_path, monkeypatch, harness):
     runtime, state, directory, _ = prepared_native(tmp_path, monkeypatch, harness)
     assert native.prepare_resume(runtime, 'FirstAgent') == directory
     source = native.read(directory / 'input.json')
+    assert source['mcp_base_config'] == str(directory / 'resume-mail.json')
+    assert set(native.read(source['mcp_config'])['mcpServers']) == {'orrery-mail'}
     assert source['resume_session_id'] == 'owned-session'
     assert Path(source['prompt_file']).read_text() == ''
     assert not (directory / 'native-exit.status').exists()
@@ -180,6 +204,21 @@ def test_prepare_and_foreground_resume_keep_exact_id_and_profile(tmp_path, monke
     current = resume._load_state(runtime / 'child-agents/FirstAgent.json')
     assert current['retired_at'] is None and 'resume_in_progress_at' not in current
     assert current['harness_state_dir'] == str(directory)
+
+
+@pytest.mark.parametrize('harness', ['dsh', 'hermes'])
+def test_prepare_resume_inherits_explicit_fixture_browser(tmp_path, monkeypatch, harness):
+    runtime, _, directory, _ = prepared_native(tmp_path, monkeypatch, harness)
+    codex = tmp_path / 'codex'
+    codex.mkdir()
+    (codex / 'config.toml').write_text('[mcp_servers.chrome-devtools]\ncommand="npx"\n'
+        'args=["chrome-devtools-mcp@latest","--autoConnect"]\n')
+    assert native.prepare_resume(runtime, 'FirstAgent') == directory
+    source = native.read(directory / 'input.json')
+    assert source['resume_session_id'] == 'owned-session'
+    assert source['native_profile_env'] == {
+        'DSH_HOME' if harness == 'dsh' else 'HERMES_HOME': str(tmp_path / 'owned-profile')}
+    assert set(native.read(source['mcp_config'])['mcpServers']) == {'orrery-mail', 'chrome-devtools'}
 
 
 def test_foreground_refuses_unprepared_or_canceled_attempt(tmp_path, monkeypatch):

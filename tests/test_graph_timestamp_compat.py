@@ -229,6 +229,7 @@ def test_graph_payload_and_spawn_only_preserve_timestamp_health(monkeypatch):
         "degraded": True,
     }
     monkeypatch.setattr(server, "_raw_graph", lambda: unhealthy)
+    server.invalidate_display_reuse()  # an answer another test left must not stand in
     payload = server.graph_payload(4, True)
     assert payload["degraded"] is True
     assert payload["timestamp_diagnostics"]["invalid_count"] == 1
@@ -254,6 +255,7 @@ def test_graph_payload_and_spawn_only_preserve_timestamp_health(monkeypatch):
             raise RuntimeError("timestamp fixture failed")
 
         monkeypatch.setattr(server, "graph_spawn_payload", failing)
+        server.invalidate_display_reuse()  # the second request must compute again
         spawn_only = get_spawn_only()
     finally:
         httpd.shutdown()

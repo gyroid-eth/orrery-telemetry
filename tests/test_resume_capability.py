@@ -112,7 +112,7 @@ def test_codex_row_with_verified_child_provenance_can_be_ready(
     monkeypatch.setattr(
         server,
         "_codex_resume_child_home",
-        lambda _session, _registration: (str(child_home), "orrery-only"),
+        lambda _session, _registration: (str(child_home), "orrery-only", False),
     )
 
     assert server._resume_capability(AGENT, "codex-cli", category="retired") == "ready"

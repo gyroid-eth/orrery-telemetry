@@ -78,6 +78,16 @@ def project_agent(row):
             'ctx_used': number(row.get('ctx_used'), maximum=100) if running is True else None,
             # HTTP observation time does not prove a context sampling time.
             'context_sampled_at': None, 'last_active': number(row.get('last_active'))}
+    annotation = row.get('annot')
+    role = annotation.get('role') if isinstance(annotation, dict) else None
+    # Only the operator's short display role crosses this boundary, never
+    # task/group metadata or the remaining annotation dictionary.
+    if isinstance(role, str) and role.strip() and not any(ord(c) < 32 or ord(c) == 127 for c in role):
+        result['role'] = role.strip()[:40]
+    duration = row.get('work_disp')
+    if (act == 'work' and isinstance(duration, str)
+            and re.fullmatch(r'[0-9]{1,6}(?:s|m[0-9]{2}s|h[0-9]{2}m)', duration)):
+        result['work_disp'] = duration
     if 'mail_instance_id' in row or 'mail_agent_id' in row:
         instance=row.get('mail_instance_id');agent=row.get('mail_agent_id')
         # FreshRuntime publishes uuid4().hex. Keep those opaque bytes unchanged;
@@ -216,6 +226,10 @@ class SnapshotStore:
         return {'status': status, 'observed_at': stamp,
                 'age_seconds': None if stamp is None else max(0, int(now - stamp)),
                 'error': part.get('error')}
+
+    def known_name(self,nm):
+        """A name in any published roster; never a path or provider lookup."""
+        return any(any(a['name']==nm for a in p['agents']) for p in list(self._published.values()))
 
     def known_agent(self,window,nm):
         published=self._published.get(window)

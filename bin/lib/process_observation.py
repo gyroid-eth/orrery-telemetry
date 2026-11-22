@@ -2,6 +2,7 @@
 import subprocess
 import time
 import signal
+import os
 
 
 def request_provider_exit(*, send, interrupt, delegated_antigravity=False,
@@ -47,7 +48,8 @@ def process_start(pid, *, deadline=None):
     if not integer(pid,1):
         return None
     try:
-        result = subprocess.run(['ps','-p',str(pid),'-o','lstart='], capture_output=True, text=True, timeout=remaining(deadline, 3))
+        result = subprocess.run(['ps','-p',str(pid),'-o','lstart='], capture_output=True, text=True,
+                                env=dict(os.environ, LC_ALL='C'), timeout=remaining(deadline, 3))
         if result.returncode == 1 and not result.stderr:
             return 'absent'
         return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
@@ -55,22 +57,26 @@ def process_start(pid, *, deadline=None):
         return None
 
 
-def process_snapshot(*, deadline=None):
+def process_snapshot(*, deadline=None, include_groups=False):
     """One ephemeral PID/parent/UID/birth observation; never cache it."""
     try:
-        result = subprocess.run(['ps', '-axo', 'pid=,ppid=,uid=,lstart='],
-                                capture_output=True, text=True, timeout=remaining(deadline))
+        fields = 'pid=,ppid=,uid=,pgid=,lstart=' if include_groups else 'pid=,ppid=,uid=,lstart='
+        result = subprocess.run(['ps', '-axo', fields],
+                                capture_output=True, text=True, env=dict(os.environ, LC_ALL='C'),
+                                timeout=remaining(deadline))
         if result.returncode:
             return None
         rows = {}
         for line in result.stdout.splitlines():
-            parts = line.split(maxsplit=3)
-            if len(parts) != 4 or not all(value.isdigit() for value in parts[:3]) or not parts[3].strip():
+            count = 4 if include_groups else 3
+            parts = line.split(maxsplit=count)
+            if len(parts) != count + 1 or not all(value.isdigit() for value in parts[:count]) or not parts[count].strip():
                 return None
             pid, parent, owner = map(int, parts[:3])
             if pid in rows:
                 return None
-            rows[pid] = (parent, owner, parts[3].strip())
+            rows[pid] = (parent, owner, parts[count].strip())
+            if include_groups:rows[pid] += (int(parts[3]),)
         return rows or None
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return None

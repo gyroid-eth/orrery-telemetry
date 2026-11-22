@@ -45,7 +45,10 @@ POST の Origin は、検証済み Host に対応する固定 origin とだけ�
 | GET | `/api/name-status` | `name` | exact identity status |
 | GET | `/api/suggest-name` | `scientist` | verified `Adjective-Scientist`（要求形。実登録名は register 応答の read-back が正） |
 | GET | `/api/fs/dirs` | optional `path` | root-scoped child directories |
+| GET | `/api/fs/dir-search` | `q`, `under`（任意） | 作業フォルダ名の検索（API 41） |
 | GET | `/api/agents` | なし | `{ts, agents}` |
+| GET / POST | `/api/computer-use` | operator capability | [起動世代の権限](#computer-use-api) |
+| GET | `/api/agents/<name>/history-binding` | なし | `{ok, agent}`（1人分の会話の記録の binding、API 36） |
 | GET | `/api/graph` | `days`, `all` | `{nodes, edges, spawn, timestamp_diagnostics, degraded, ts}` |
 | GET | `/api/history` | `session`, `limit` | transcript events |
 | GET | `/api/agent-history` | `name` または `names`, `hours`, `include_pane_states` | agent event timeline |
@@ -61,8 +64,22 @@ POST の Origin は、検証済み Host に対応する固定 origin とだけ�
 | POST | `/api/jump` | `{session, open?, base?, tools?}` | open / focus / resume action |
 | POST | `/api/exit` | `{session}` | graceful exit action |
 | POST | `/api/kill` | `{session, mode}` | kill / retire action |
-| POST | `/api/annotate` | `{name, role, emoji, group}` | saved annotation |
+| POST | `/api/annotate` | `{name, role?, emoji?, group?, task?}` | saved annotation |
 | POST | `/api/spawn` | spawn payload | child launch result |
+
+## computer use API
+
+API 42 の computer use は、標準の子が `orrery-screen` を選択したときに利用できます。[準備と確認手順](computer-use.md)
+
+| Method | Path | 資格 | Request と Response |
+| --- | --- | --- | --- |
+| GET | `/api/computer-use` | operator | クエリなしで `{launches: [...]}`。対象の4項目を指定すると、その起動の権限を返す。 |
+| POST | `/api/computer-use` | operator | JSON の対象4項目と `computer_use: off / view / control`。変更後の値を返す。 |
+| GET | `/api/computer-use/events` | operator | 対象4項目をクエリで指定。`{calls: [...]}`。 |
+| GET | `/api/computer-use/child` | 世代の子資格 | クエリなし。自身の `project`、`runtime`、`generation`、`computer_use`、`source`。 |
+| POST | `/api/computer-use/child/events` | 世代の子資格 | relay が開始と終了を記録する。権限の変更には使えない。 |
+
+対象4項目は `project`、`runtime`、`agent`、`generation` です。`source` は初期 Off の `default`、起動時に指定した `launch`、人が変更した `operator` のいずれかです。資格は HTTP `Authorization: Bearer …` に渡します。対象が一致しなければ HTTP 404、資格が異なれば HTTP 403 です。operator に返す直近の記録は全体で200件までで、各行は `call_id`、`agent`、`tool`、`started`、`finished`、`result` を含みます。終了が受信できなければ `finished` と `result` は null になります。
 
 ## GET `/api/version`
 
@@ -71,7 +88,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":34}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":43}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -94,9 +111,15 @@ version の解決順は [インストール](install.md#version)を参照して�
 
 親の名前は全台帳・retired 込みで一意の場合だけ解決し、曖昧なら候補 ID を添えて拒否します。最新行・最大 ID・folder で選びません。明示 I/A は active な対象だけを選べます。対象に対応する保護 client が欠落・曖昧・失効なら停止します。standalone の技術的な準備元 client は、task の論理上の親／報告先にはなりません。登録・prepare・handoff は共通 fresh child 経路で、Claude/Codex/dsh/Hermes/Local の選択を引き継ぎます。Hermes の HTTPS 要件は維持します。
 
-成功応答の `ok:true,pending:true,child_name,job_id,I/A` は handoff の受付であり、native 起動完了ではありません。status の `state:launching,result:null` は未確認、`detail:unknown` は自動再試行しない結果不明、`detail:not_started` は保存済み準備後の未開始です。native receipt が成立した起動verdictは既存callerと同じ `state:ready`。実行中／終了は `detail:started/ended` と `result.native_ready` で別に示します。native未成立の終了は `state:failed` であり、終了だけを成功へ寄せません。roster の native_ready も receipt の観測であり、OS process の現在の生存を証明しないため、未確認時の running は null のままです。準備後に失敗した場合は同じ job/I/A をエラーへ返し、status と手順で解決します。同名で自動的に別の agent を起こしません。fresh Iは生成された32桁の小文字hexをそのまま投影し、hyphen形式へ変換しません。
+成功応答の `ok:true,pending:true,child_name,job_id,I/A` は handoff の受付であり、native 起動完了ではありません。status の `state:launching,result:null` は未確認、`detail:unknown` は自動再試行しない結果不明、`detail:not_started` は保存済み準備後の未開始です。
 
-API2a は下記の Mail/graph 読取、API2b-1 は PC の現在対象に対する term/history/jump/exit を接続します。終了済み kill/retire は下記の管理契約、R4 は別の本人opt-inの契約です。reactivate／退役済みresume／App GUI activationは未接続です。worktree、browser、独自 base/tools、spawn 時の terminal 指定、annotation(role/group/emoji)、dry_run も明示拒否です。通常の standalone／親付き自動起動の代わりに手動子作成を要求する意味ではありません。必要な作業folderやprovider設定は利用者のagentが手順で準備します。設定・切替・復旧は [日英の移行手順](fresh-global-update.md) を参照してください。
+API 40 では、`detail` と（`result` がある場合の）`result.execution` は `started`／`ended`／`resolved-ended` を区別します。`started` と実 wait の `ended` は、native receipt が成立した場合だけ `state:ready,result.native_ready:true` です。native 未成立の終了は `state:failed,result.native_ready:false` です。`ended` は実際の非0終了も含み、`native_ready` は起動 receipt の成立を表すだけで task の成功や現在の OS 生存を意味しません。
+
+`resolved-ended` は、終了コード不明の run を明示確認で閉じた状態です。**過去の receipt が残っていても `state:failed,result.native_ready:false`** を返し、確認終了を native 起動成功へ変換しません。roster の `native_ready` も resolved run では false です。終了だけで receipt を作らず、照会から再起動もしません。OS の現在観測が無ければ `running` は null のままです。
+
+準備後に失敗した場合は同じ job/I/A をエラーへ返し、status と手順で解決します。同名で自動的に別の agent を起こしません。fresh I は生成された32桁の小文字hexをそのまま投影し、hyphen形式へ変換しません。
+
+API2a は下記の Mail/graph 読取、API2b-1 は PC の現在対象に対する term/history/jump/exit を接続します。終了済み kill/retire は下記の管理契約、R4 は別の本人opt-inの契約です。reactivate／退役済みresume／App GUI activationは未接続です。worktree、browser、独自 base/tools、spawn 時の terminal 指定、annotation(role/group/emoji/task)、dry_run も明示拒否です。通常の standalone／親付き自動起動の代わりに手動子作成を要求する意味ではありません。必要な作業folderやprovider設定は利用者のagentが手順で準備します。設定・切替・復旧は [日英の移行手順](fresh-global-update.md) を参照してください。
 
 #### PC の現在対象（API2b-1）
 
@@ -310,9 +333,82 @@ curl -s 'http://127.0.0.1:8770/api/fs/dirs?path=/Users/me/code'
 
 を返します。hidden directory と root 外へ出る symlink は除外し、名前順に最大 500 件を返します（page 側が入力中の prefix で絞るので、一覧全体が要ります）。501 件以上なら `truncated: true` です。
 
+## GET `/api/fs/dir-search`
+
+API 41 から利用できます。前後の空白を除いた `q` をフォルダ名に部分一致させます。大文字と小文字を区別せず、先頭一致を優先します。空の検索語には空の一覧を返します。`q` の省略、重複、255 文字超過、未知のパラメーターは HTTP 400 です。
+
+```json
+{"dirs":[{"name":"Project-A","path":"/workspace/experiments/Project-A"}],"truncated":false}
+```
+
+`AGENTSTACK_SPAWN_ROOTS` と、`AGENTSTACK_SPAWN_DIRS` に明示したプリセットを起点に、最大 4 階層を検索します。隠しフォルダ、`Library`、`node_modules`、`__pycache__`、`venv`、`vendor`、探索中に見つけたシンボリックリンクは除きます。最大 12,000 件のディレクトリエントリを調べ、探索結果を 20 秒間再利用します。候補は最大 30 件で、探索または候補の件数上限に達して一部を省いた場合は `truncated: true` を返します。
+
+任意の `under` で起点のフォルダを指定できます。`/api/fs/dirs` と同じ許可範囲にある実在のフォルダから、その配下を最大 4 階層検索します。起点自身は候補に含めません。空、重複、4,096 文字超過、許可範囲外、または存在しない `under` は HTTP 400 です。除外対象のフォルダ配下からは候補を返しません。検索結果の `path` は絶対パスです。
+
 ## GET `/api/agents`
 
-`last_active` と `last_active_rel` は履歴の時刻・相対表示で、現在の作業状態や進捗の heartbeat ではありません。legacy tmux の `/api/agents` は tmux session activity と Mail 最終活動の最大値を使います。長い tool 実行中も古いままで正常です。現在の状態は独立した `running` / nullable な `act_state` を読みます。DECK は既存の `act_state=work` を所要時間・context の有無によらず表示します。これは provider が報告・観測した状態であり、subprocess の進捗保証ではありません。Codex App は既存の provider snapshot（registering も work、最終観測から600秒の境界）を使い、fresh roster は Mail 時刻と独立した observation を返します。fresh の running から work を補いません。graph の時刻は Mail 由来で、相対表示の基準も roster と異なります。未取得・不明を現在時刻や work に置き換えません。API 世代34、時刻・並び順・履歴期間の意味は不変です。
+`last_active` は最後に記録された活動の時刻です。legacy の tmux 行では、tmux session と Mail の活動時刻のうち新しい方を返します。`last_active_rel` はその相対表示です。現在の作業状態は `running` と nullable な `act_state` で確認できます。稼働中の DECK カードは `act_state=work` を所要時間やコンテキスト使用率が無い場合も表示します。長い処理の間に最終イベント時刻が古いままでも、作業状態は別に表示されます。
+
+### エージェントの実行情報（legacy、API 41）
+
+legacy の各エージェント行に以下の表示用フィールドを追加します。`scope=live` にも含まれます。根拠のない値は `null` です。既存の担当ラベルは `annot.role`、使用率は `ctx_used` を使います。
+
+| フィールド | 値 | 取得元 |
+|---|---|---|
+| `cwd` | 絶対パスまたは `null` | tmux のアクティブペインを優先し、検証済みの会話や起動記録で補完します。 |
+| `model_id` | 正式 ID または `null` | Claude Code は本人の最後の assistant 記録、Codex CLI は入力欄直下の footer。Codex の表示名はローカルの catalog に一意な対応がある場合に変換します。dsh と Hermes は本人の起動記録を使います。 |
+| `effort` | 文字列または `null` | Claude Code は最後の assistant 記録のターン値か session 値、Codex CLI と dsh は判読できる現在の footer。Hermes の現在値は未確認です。 |
+| `harness_kind` | `claude`、`codex`、`dsh`、`hermes` または `null` | 登録 `program` の CLI 名を正規化します。 |
+| `ctx_window_tokens` | 正の整数または `null` | 観測できた `ctx_window` をトークン数に換算します。省略表示の精度を引き継ぎます。 |
+| `computer_use` | `off`、`view`、`control` または `null` | 稼働中の Claude が `orrery-screen` を使う場合は現在の世代の権限を確認します。ほかの画面操作は記録された選択と標準構成の Cua Driver を確認します。 |
+| `browser_use` | 真偽値または `null` | 記録されたブラウザ選択や有効な Chrome 用 MCP の設定を確認します。会話だけで再開した Claude は、その起動での指定を使います。 |
+| `parent_state` | `child`、`top` または `null` | tmux の明示的な親名、現在の起動に対応した記録、永続プロファイルを使います。 |
+| `parent_agent` | 親の名前または `null` | 親名を確認できた子にだけ返します。 |
+
+`orrery-screen` の権限を変更すると、次回の一覧取得時に現在の値を返します。ほかの権限は起動時の設定を示します。サーバーの接続状況や OS の許可は検査しません。
+
+### 所属projectの読み取りメタデータ（legacy、API 37）
+
+legacyの応答全体に `project_key` を追加します。これはtmuxのない履歴登録を抽出するDashboardのprojectであり、一覧全体がそのprojectに限定されるという意味ではありません。各agent行にもnullableな `project_key` を追加します。tmux行は既存の1回の登録index読取りで所属を確認し、同名が別projectにも存在する場合、未登録、登録indexが読めない場合はnullです。履歴行は既存のproject完全一致SQLから得た所属を示します。projectはMailの名前空間で、作業フォルダではありません。
+
+対象projectを絞る読み取り利用側は、応答全体と各行を別々に照合し、nullを許可対象として扱わないでください。既存の行の採否・並び・生存判定・UI・書込み認可は変えません。scope=liveでも同じ応答全体のproject keyを返します。freshはinstance/agent IDの既存契約のままで、legacy projectを加えません。
+
+### 会話の記録の binding（legacy、API 35）
+
+Claude / Claude Code・dsh・Hermes は、検証した本人の会話だけを次の共通 field で返します。記録の形式は既存の `program` と provider の条件で判断し、別の format field は追加しません。
+
+| field | 型・意味 |
+| --- | --- |
+| `history_binding` | `bound`（本人の記録を検証済み）/ `unbound`（未確認）/ `stale`（本人の記録だが現在の起動より古い） |
+| `transcript_path` | `bound` のときだけ物理 file の絶対 path。それ以外は null |
+| `history_binding_reason` | 人向けの短い理由。bound は空文字 |
+| `history_binding_reason_code` | 機械向けの固定 code。provider 固有の事情もこの値で表す |
+| `history_session_id` | provider の native session ID。Hermes の DB 読取では必須。未確認なら null |
+| `history_receipt_ts` | receipt の元時刻（ISO 8601 string）。未確認なら null。offset がなければ元の表記を保つ |
+
+cwd・時刻・最新履歴だけから所有を推測しません。binding はプロセス生存の証明ではありません。既存 Codex の field・状態と、fresh の保護された `/api/history` 経路は変更しません。
+
+#### Claude / Claude Code
+
+Claude の既存 receipt の時刻は offset なしの host local time なので、そのまま表示用に返します。根拠は現在の project に属する Mail の agent ID と、SessionStart または自己登録 hook が書いた `session_index/<id>.json`（schema 2・`binding_kind:self`）です。ID・名前・project・登録者を照合し、Claude projects 直下の project directory にある通常 file の名前と先頭の native user/assistant record の `sessionId` が receipt の session ID に一致する必要があります。本文の名前・cwd・更新時刻からは推測しません。
+
+reason code は `binding_missing`（receipt なし）、`invalid_binding`（自己登録・project・形式が不正、または検証中に receipt が変更）、`ambiguous_binding`（別 agent の自己登録 receipt と会話が競合）、`no_transcript`（通常 file・場所の条件を満たさない）、`id_mismatch`（session ID の不一致・metadata 未確認）です。先頭の検査は最大64行・256 KiBで、空・書きかけ・上限内に native ID がない file、symlink・subagent file・標準 Claude projects 外の保存先は unbound です。
+
+receipt の時刻が現在の tmux `session_created` より古ければ `stale` / `receipt_predates_session` とし、native ID・receipt 時刻だけを残して path は null にします。offset のない時刻は dashboard host の local time として比較するため、host の timezone が変わらない前提です。hook による receipt 置換は次の roster 計算で反映し、旧 path の cache には戻りません。同じ tmux の中の CLI 交換・秒単位で同時刻の再起動・receipt 時刻の欠落はこの比較で区別できず、新しい hook 完了まで最後の自己登録済み会話が見える可能性があります。退役だけでは正確な過去の会話の binding を消しません。binding は最後に自己登録した会話との対応であり、プロセス生存の証明ではありません。Codex の既存状態と fresh の保護された `/api/history` 経路は変更しません。
+
+ダッシュボードから Claude の会話だけを再開した場合も、同じ会話の自己登録 receipt と今回の tmux 起動証跡が一致すれば、Reader は `bound` の transcript を読めます。
+
+#### dsh（DeepSeek Harness）
+
+`history_receipt_ts` は callback が発行した UTC ISO 8601 時刻です。更新後に準備した子の起動証跡と、本人の `agent/created` callback が native persistence の `locate(header)` から得た場所・flush 後の device/inode を、現在の project の Mail ID と照合します。会話本体は子専用 `DSH_HOME/sessions/<workspace>/<session>/session.v4.jsonl.zstd`（現行版・既定の圧縮設定）です。`DSH_TUI_DATA_DIR` は TUI 設定用です。root ID の観測は locator / flush / receipt 保存に先行し、同一起動で別 root を観測すれば、その後の保存処理が失敗しても競合を保持します。元の root の callback が再び来ても、新しい正式な起動まで bound に戻しません。root 観測自体の書込み失敗でも取得済み lock を保持し、競合側の marker 保存が失敗した場合も所有側が公開・lock 解除を止めます。書込みの回復だけでは復活させず、新しい正式な起動 nonce を必要とします。receipt の時刻が現在の terminal の生成より古い場合は `stale` / `receipt_predates_session` とし、native ID・元時刻を残して path を null にします。terminal のない退役 archive は同じ条件で検証します。resume は起動証跡の nonce を更新し、新しい callback が届くまで古い記録を公開しません。退役後も同じ登録と証跡が残れば閲覧でき、登録の変更・証跡の削除・同一起動で複数の root session・ファイルの差し替え・symlink は未確認になります。古い起動で証跡が無い場合や保存先を変更した場合、cwd・時刻・最新履歴から補いません。raw path を使うこの契約は legacy のみで、fresh の保護された history 経路と `/api/history` の provider 対応範囲は不変です。cockpit は dsh 用の Zstd / native event parser を別途必要とします。
+
+#### Hermes
+
+`history_binding: bound` のときだけ `transcript_path`（子専用 `HERMES_HOME/state.db` の絶対 path）を返します。根拠の `history_session_id`（native session ID）と `history_receipt_ts`（callback の元の ISO 時刻、UTC offset 付き）は bound/stale に付けます。形式は既存の `program: hermes` で判断します。reader は **DB path と session ID の両方**を照合し、`messages.session_id` を必ず絞ってください。同じ HOME の別 session は同じ DB を共有します。JSONL reader へ渡せません。
+
+正式な project/agent 登録、子固有の launch/input、固定された専用 HOME、`on_session_start` の本人 callback、DB 内の exact な CLI session を検証します。cwd・最新 session・更新時刻で探しません。証拠の欠落・不一致・起動/resume の準備中は `unbound`、明示 exact resume ではない新 terminal より callback が古い場合は `stale` です。bound 以外は path を返さず、`history_binding_reason` / `history_binding_reason_code` で理由を示します。正常時の理由は空文字 / `bound`。退役後も対応付けの証拠が残れば読めますが、削除・purge 後は unbound です。callback が更新されない provider 内の session 切替・圧縮では古い記録を指す可能性があり、子孫 session や緊急退避 JSONL を推測して追いません。fresh の保護された履歴経路と `/api/history` の provider 対応範囲は変わりません。
+
+### その他の agent 表示 field
 
 API 世代24では dsh/Hermes の稼働中 row と `/api/graph` node の `act_state` が、確認できた現在の操作表示から `work`・`question`・`ask` を返します。完全な入力欄の形があり、作業・質問・承認の印が無い場合は `wait` です。非表示・不完全・未対応の形は `null`（不明）とし、単なる表示の欠如を入力待ちにしません。生存・終了・停止可能性の判定には使いません。既存 Claude/Codex の分類は不変です。[対応する native 表示と制限](native-capabilities.md#activity-classification-boundary)を参照してください。
 
@@ -354,6 +450,27 @@ API 世代4からの追加 field です。GET `/api/agents` / `/api/graph` の C
 API 世代5からの追加 field です。resume できる（`ready` または `verification_required`）終了済み Claude row には、resume の前に `resume_mode` を出します。`mail` は、resume が owner を認証して Mail の row を unretire すること（できなければ起動せずに拒否し、会話だけの再開に切り替えないこと）を、`conversation_only` は Mail に触れずに会話だけを再開することを示し、このときは `mail_status: unavailable` と `mail_reason` / `mail_message` も付きます。`/api/jump` の応答の `resume_mode` はこの見込みと同じ値で、Mail まで戻した Claude の resume も `resume_mode: mail` を返します。`resume_capability` の code と意味は変えていないので、`ready` で resume を許す利用側はそのまま動きます。Codex row と、resume できない row・稼働中の row には `resume_mode` を出しません。
 
 `mail_reason: mail_schema_unsupported` の row と応答には `mail_remedy` も付きます。この installer が入れた ORRERY Mail を `./scripts/install.sh --update-mail` で更新し、会話だけのセッションを終えてから再開し直す手順で、dry-run が拒否したら [Mail の更新手順](agentstack-mail-update.md) に従うよう案内します。同じ文は `mail_message` の末尾にも入るので、`mail_message` を表示する利用側には新しい field を読まなくても届きます（API 世代は変えていません）。`credential_absent` と `retention_expired` は dashboard から直せないので付きません。稼働中の会話だけのセッションは、Mail の row が retired で `program` が空でも `mail_status` / `mail_reason` / `mail_message` を出します。
+
+## GET `/api/agents/<name>/history-binding`
+
+cockpit の会話の履歴の表示が、中身を見せる前に確かめる 1 人分の binding です（API 36）。`/api/agents?scope=live` のその人の行と同じ判断（稼働の判定は `lookup_agent`、30 日の窓、binding は roster と同じ関数）で、pane の読み取りも、他の agent の行も作りません。
+
+```bash
+curl -s http://127.0.0.1:8770/api/agents/AgentName/history-binding
+```
+
+response:
+
+```json
+{"ok":true,"agent":{"name":"AgentName","program":"claude-code","category":"agent","running":true,"created":1793775600,
+ "history_binding":"bound","transcript_path":"/abs/path.jsonl","history_binding_reason":"","history_binding_reason_code":"bound",
+ "history_session_id":"…","history_receipt_ts":"…"}}
+```
+
+- 返す field は上の 11 個だけです。意味は [会話の記録の binding](#会話の記録の-bindinglegacyapi-35) と同じです
+- live roster の行でない名前（retired・gone・warm-up・未登録）と、形式の不正な名前は 404 `{"ok":false,"error":"agent_unavailable"}` です
+- 読むだけの GET で、Host・Origin の扱いは `/api/agents` と同じです（loopback）。fresh と global では 404 `agent_unavailable` を返し、legacy の判断はしません（global では、それより前の operator admission に失敗すると、どの route も 503 です）。fresh の保護された history 経路は変わりません
+- 利用者は `api` が 36 以上のときだけ使い、`agent_unavailable` 以外の失敗（他の 404・5xx・通信の失敗）や古い dashboard では、従来の `/api/agents?scope=live` で確かめてください
 
 ## GET `/api/graph`
 
@@ -453,7 +570,7 @@ response は live comet 用の message list と watermark を含みます。設�
 {
   "ok":true,
   "annotations":{
-    "WindyFermi":{"role":"docs","emoji":"","group":"release"}
+    "WindyFermi":{"role":"docs","emoji":"","group":"release","task":"Review release documentation"}
   }
 }
 ```
@@ -567,7 +684,15 @@ Claude の起動準備が失敗した場合、元の husk を残し、元が ret
 
 旧3項目形式の Claude child は、private token と既存の正式 owner 登録が検証できれば `ready` になります。表示 GET は読み取りだけです。実際の認証・同じ identity の新形式への移行は明示 resume 時に行い、認証失敗では起動しません（[移行条件・保持期限・失敗時の復元](launchers.md)）。
 
-API 9 は任意の `base` / `tools` を受け付けます。`tools` は全置換、`{}` は追加の道具の解除です。base 省略は既存 base、base だけの指定は既存 tools を維持し、両方省略した呼び出しは従来の動作です。動作中・状態不明・retained state が無い子・standalone・conversation-only・Codex App は道具変更を拒否します。まず `/api/exit` を終え、`gone` / `finished` を確認します。変更は子ごとに直列化し、既存の認証と native resume を使い、起動失敗時に当該世代の旧記録・生成設定へ戻します。成功は tmux／terminal の起動受理であり、shell 内の bootstrap／認証の完了は待ちません。後発失敗でも新しい選択は保持し、次の resume に使います。子からの受信確認が必要です。成功応答に `tools_changed: true`, `base`, `tools` を追加します。installer の既定は追加しません。[手順と制限](delegation.md#停止した子の道具を変更して-resume-する)。
+API 9 から、retained state がある停止済みの Claude/Codex CLI child は任意の `base` / `tools` で保持している選択を変更できます。`tools` は全置換、`{}` は追加の道具の解除です。base 省略は既存 base、base だけの指定は既存 tools を維持し、両方省略した呼び出しは従来の動作です。まず `/api/exit` を終え、`gone` / `finished` を確認します。変更は子ごとに直列化し、既存の認証と native resume を使い、起動失敗時に当該世代の旧記録・生成設定へ戻します。成功は tmux／terminal の起動受理であり、shell 内の bootstrap／認証の完了は待ちません。後発失敗でも新しい選択は保持し、次の resume に使います。子からの受信確認が必要です。成功応答に `tools_changed: true`, `base`, `tools` を追加します。installer の既定は追加しません。[手順と制限](delegation.md#停止した子の道具を変更して-resume-する)。
+
+API 43 から、停止した Claude の `resume_mode: conversation_only` でも、通常の `/api/jump` に `tools` を渡せます。利用できる項目は `browser` と `orrery-screen` です。`base` は省略するか `"default"` を指定します。選択は一回の起動に適用され、明示した場合は成功応答に正規化した `tools` が付きます。`tools` の省略または `{}` で追加の道具を付けずに再開します。ORRERY Mail の登録と MCP サーバー、Claude の hook は無効です。
+
+次の指定で Claude in Chrome と初期権限 `control` の `orrery-screen` が使えます。`browser.device` には使用するデバイスの ID を指定します。`mcp: ["orrery-screen"]` の初期値は `off`、`screen.access: "read"` の初期値は `view` です。`orrery-screen` を指定した再開ごとに新しい起動世代を作り、実行中は [computer use API](#computer-use-api) で権限を変更できます。
+
+```json
+{"session":"SampleAgent","open":false,"tools":{"browser":{"device":"browser-device-id"},"screen":{"server":"orrery-screen","access":"operate"}}}
+```
 
 ## POST `/api/exit`
 
@@ -600,7 +725,7 @@ request:
 request:
 
 ```json
-{"name":"WindyFermi","role":"docs","emoji":"","group":"release"}
+{"name":"WindyFermi","role":"docs","emoji":"","group":"release","task":"Review release documentation"}
 ```
 
 `name` の代わりに `session` も使えます。
@@ -610,11 +735,17 @@ response:
 ```json
 {
   "ok":true,
-  "annot":{"name":"WindyFermi","role":"docs","emoji":"","group":"release"}
+  "annot":{"name":"WindyFermi","role":"docs","emoji":"","group":"release","task":"Review release documentation"}
 }
 ```
 
-`role` と `emoji` を空にし、group も残さない場合は annotation を削除します。spawn は `emoji` を保存せず role / group だけを使います。
+API 38から、省略した欄は現在の値を維持します。`role`・`emoji`・`group`・`task`は、明示的な空文字または`null`でその欄だけを外し、4欄がすべて空のときだけannotation全体を削除します。`role`・`emoji`・`group`・`task`は前後の空白を除き、それぞれ40・8・24・200 Unicode文字まで保存します。空でない`task`は利用者による表示の上書きで、空文字または`null`で保存すると登録時の説明へ戻ります。`/api/agents`の`task`は元の登録値を維持し、上書きは`annot.task`で返します。`/api/annotations`とgraphの`annot`も同じ形式で、上書きがなければ`annot.task`を省略します。表示側は`annot.task`を優先します。Mailの登録値は変えません。既存のspawn・delegateからrole / emoji / groupを送る呼び出しはその値を保存し、省略したtask上書きは維持します。以前のAPI世代では省略した旧欄は空で置き換わり、task上書きは扱えません。
+
+taskの上書きだけを外す例（省略したrole・emoji・groupは維持）:
+
+```json
+{"name":"WindyFermi","task":null}
+```
 
 ## POST `/api/spawn`
 
@@ -666,6 +797,7 @@ request:
 | `provider` | no | `claude`（既定）、`codex`、またはcatalogが返したnative接続ID（旧`deepseek`/`strata`、追加例`strata-epyc`）。表示名や`kind`へ置き換えず、そのIDを送る |
 | `harness` | DeepSeek / Local 必須 | `dsh` または `hermes`。Claude は `claude-code`（従来 alias `claudecode`）、Codex は `codex-cli`（従来 alias `codex`）を省略可 |
 | `helper_model` | no | 省略または `same` は主モデルを継承。DeepSeek / Local は選択した model × harness の `helper_models` にある同 backend の正式 ID も指定可。未提供・別 backend の ID は拒否 |
+| `web_search` | no | native の dsh / Hermes だけ。`exa` または `searxng` で今回の検索先を上書きする。URL・資格の参照は managed spawn manifest の共通 `web_search` を使う。省略時は共通設定、共通設定も無ければ従来どおり。既存 API 世代の任意 field |
 | `model` | DeepSeek / Local 必須 | 正式 ID。DeepSeek / Local は選択した provider と harness の有効な catalog entry と一致必須。Claude / Codex は既存の省略時の既定を維持 |
 | `url_index`, `url_key` | 動的Local必須 | 選択model行の両値をそのまま送る。indexは0以上の整数、keyは設定URLと束縛。URL変更・並べ替えは拒否し、再取得・再選択が必要。固定model・他providerには指定不可 |
 | `effort` | no | 明示時だけ送る。Claude / Codex は `model_efforts` / `model_effort_defaults`、DeepSeek / Local は選択した model × harness の能力で検証。未指定は CLI 設定を使用し、能力不明の値は推測しない |
@@ -682,7 +814,7 @@ DeepSeek / Local の通常 catalog は、plain 世代の識別と generator の�
 
 dsh / Hermes では、選択を native config で表せる場合だけ `base` / `tools` を受け付けます。stdio / HTTP の MCP server を写し、内蔵 computer use・Chrome device・表せない tool 単位の承認やフィルターは理由つきで拒否します。起動できたことを、それらの承認が有効になった意味にはしません。
 
-API 8 では、`tools: {}` または `base: "default"` を明示すると `--base default` を渡します。dashboard/API はフォームの選択を正とし、installer の `AGENTSTACK_CHILD_DEFAULT_TOOLS` を launcher の env から外して、選択から外した道具を追加しません。明示した道具が使えなければ起動を止めます。CLI で base/tools/MCP profile を省略したときだけ、使えない既定の項目を通知して外す経路を使います。
+API 41 から、標準の `/api/spawn` で `base` と `tools` を両方省略すると、Claude・Codex・dsh・Hermes に installer の `AGENTSTACK_CHILD_DEFAULT_TOOLS` を適用します。NEW AGENT もこの経路を使います。launcher は最終の作業フォルダと provider に合わせて使えない既定の項目を外し、通知します。明示した選択を優先し、追加の道具を指定しない `tools: {}` や `base: "default"` は API 8 と同じく `--base default` を渡して installer の既定を抑止します。明示した道具が使えなければ起動を止めます。
 
 `base` か `tools` で選択した child は、選択どおりにできなければ（Mail の proxy が無い、server を写せない、computer use が有効な project での `mail-only` など）起動しません。形の誤りはここで 400、child の起動ディレクトリで決まる誤りは launcher の失敗として返ります。Gemini など他の provider では、`mail-only` と `tools` を拒否します。
 
@@ -789,6 +921,8 @@ API 25: 旧 managed の `attempt_id` による起動・状態照会は廃止し�
 
 ## スマホ閲覧用（API 30）
 
+API 39から、snapshotのagentに任意の`work_disp`を含めます。稼働中かつ`act_state: work`で、上流の短い経過表示（例`2m05s`）を検証できたときだけです。停止・別状態・欠損・不正値では欄を付けず、表示側で経過を推測しません。
+
 `GET /api/mobile-mail?window=<period>`はlegacy modeのloopback専用metadata endpointです。期間の既定は`day`（24h）。`all`、`day`、`15m`と、15〜43200の15の倍数を表す`m<N>`（分）だけを受け付け、先頭ゼロや小数は拒否します。既存のHost admissionを維持します。DB不在・project/schema/読取失敗は503、global modeは明示拒否（admission通過後501、または既存global admissionの拒否）です。globalから旧DBへfallbackしません。不明・重複queryは400です。
 
 200応答は`status: available`、`window`、`observed_at`、`edges`、`events`、`events_truncated`、`edges_truncated`、`invalid_timestamps`、`degraded`を返します。`edges`は実際の期間で集計したsource/target/kind/count/last_tsで最大10,000行。件数は方向別のto/cc宛先行数で、bcc・別projectの端点を除きます。`events`は最新200宛先行までで、安定した不透明`key`とsource/target/kind/count1/event_atを持ち、時刻・message id・recipient idの降順です。SQLはmetadataだけを読み、件名・本文・read/ack更新を含みません。不正時刻は除外してdegradedとして報告します。正常な空結果と取得不能は別です。
@@ -813,6 +947,12 @@ metadata pageのloopback経路は`/api/mobile-mail-page`、固定24hの内部cac
 
 外側JSONは`targets:{epoch,name}`、`preview:{epoch,choice}`、`prepare:{epoch,choice,revision,text}`、`commit:{epoch,intent,confirmation}`、`cancel/status:{epoch,intent}`です。targetsは既存manager上でsession名が厳密一致するpane候補を最大128件、serialized16KiB以内に収まる件数まで返し、切詰めを明示します。複数は利用者が選び、別名/active paneへ推測しません。候補handleはowner/reader/bridge/paneへ束縛してメモリに30秒、選択後proofは最大16件です。前面previewは同じ選択leaseを更新できますが、preparedの本文・proof・30秒期限を延長しません。
 
-previewは既存shared helperのfresh legacy admissionとkernel birthを使い、socket/server/session/pane/UID/bridge incarnationを取得前後に照合します。未知helper/OS/対象は拒否し、Codex launch bindingや登録DBを使いません。固定captureは末尾40行・表示6KiB、収集64KiB・全体3秒、返却JSON全体は実serialized byteで16KiB以内です。ANSI/OSC/C0/C1/方向制御を除去し、literal textと観測時刻・除去/切詰めを返します。本文はcacheしません。収集上限超過では本文を破棄してACK位置を維持し、3秒で終端未着ならそのcontrol streamを隔離して再利用しません。
+previewは既存shared helperのfresh legacy admissionとkernel birthを使い、socket/server/session/pane/UID/bridge incarnationを取得前後に照合します。未知helper/OS/対象は拒否し、Codex launch bindingや登録DBを使いません。固定captureは末尾120行・表示12KiB、収集64KiB・全体3秒、返却JSON全体は実serialized byteで16KiB以内です。ANSI/OSC/C0/C1/方向制御を除去し、literal textと観測時刻・除去/切詰めを返します。本文はcacheしません。収集上限超過では本文を破棄してACK位置を維持し、3秒で終端未着ならそのcontrol streamを隔離して再利用しません。
+
+端末の拡張previewは`X-ORRERY-Mobile-Preview: 120/12288`をloopback側で要求したときだけ有効です。新旧どちらかが古い場合は40行・6KiBを使い、新しいreaderは応答が宣言した上限で検証します。拡張時もJSON全体は16KiBまでで、引用符のescape等で収まらない場合は末尾をさらに短くします。relayはUTF-8で応答し、非ASCII文字を`\uXXXX`へ膨らませません。
 
 prepareは1行4KiB UTF-8を改変せず束縛します。pending最大16件、結果metadataは最大256件/10分、同pane同時送信1件・6件/分です。commitは一回claimし、同write lock内でfresh同一pane検査から全chunk/Enterのwriteまでを行い、lock解放後に全tmux ACKを待ちます。5秒以内の全ACKでaccepted、部分失敗/timeout/errorはunknownで再送・残chunk補送0です。statusは照会のみ。プログラムの同一性や実行完了は保証せず、shell化/既存buffer/外部writer/最終検査後raceは残ります。UIと有効化・停止手順は[mobile guide](mobile.md#スマホからpaneを確認して送る)を参照してください。
+
+会話の記録とfile・画像のpreviewは読み取り専用で、`--phone-policy-reviewed`（SettingsではPhone accessとI reviewed the policy）があれば既定でオンです。`--disable-history`で切れ、`--enable-history`は以前の起動コマンドのために残した旧flagです。`GET /view/history`は常に`{enabled, page_events}`を返し、オフのときは`reason`（`policy_not_reviewed`か`disabled`）も返します。有効時だけ`GET /view/conversation?name=<NAME>[&page=<token>]`があり、無効なら404です。nameは公開済み名簿にある名前に限り、`page`は同じ名前にこのreaderが発行した32桁hexの印に限ります（256件/600秒。名前とcursorごとに1つで、同じpageを返すたびに延びる。期限切れは410）。path・cursor・その他のqueryは上流を呼ぶ前に400です。readerはOriginなしの固定loopback `GET /telemetry/conversation?agent=<NAME>&limit=40[&before=<cursor>]`をcockpitのportへ送り、API 35のboundの行の解決・再確認はcockpitが行います。本文は伏せません。上流JSONは8 MiB・15秒までで、時間切れは503の固定code `history_slow`（待てば直る）です。スマホへは`{ok, agent, provider, events, older, limited, omitted, tail_only}`を返し、eventは`id/kind(text|tool|mail)/role(user|assistant)/text/ts/truncated`と、任意の`mail`（`direction/sender/recipients/subject/importance/coverage/body/truncated`）と`files`（`label/kind`と、previewできるときだけ`ref`）を含みます。API 41 では、上流で `variant: "update"` が付いた assistant のテキストイベントに同じフィールドを付けます。本文とMail本文は16 KiB、tool名は160文字、1 pageは40件・512 KiBで切ります。応答は`\u`のescapeを使わないUTF-8のJSONで、送る大きさは最大640 KiBです。pageに収めるために外した発言は飛ばさず、`older`は残した中で一番古い発言の`cursor_before`から続けます。1件で収まらない発言はさらに短く切ります。`omitted`は、出せない・たどれない発言があったときだけ真で、スマホはその位置に印を出します。toolの出力・diff・cockpitの参照ID・cursor・pathは落とします。unbound/stale/未確認は固定codeの`{ok:false, error, reason_code}`で、人向けの理由文は渡しません。
+
+Historyがオンの間だけ`GET /view/conversation/preview?name=<NAME>&ref=<id>`があります。`files`の要素のうち、cockpitが付けた形の正しい参照を持つものだけに`ref`（このreaderが発行した32桁hex。名前とcockpitの参照ごとに1つで、そのpageを返すたびに延びる。1024件/600秒）が付きます。queryは`name`と`ref`に加えて、画像の縮小表示用に`thumbnail=1`を受け付けます。別の名前に発行した`ref`・期限切れは上流を呼ばずに410 `preview_expired`、その他は400です。readerはOriginなしの固定loopback `GET /telemetry/conversation/preview?ref=<cockpitの参照>&mobile=1`を送り、縮小表示には`thumbnail=1`も付けます。旧版が`invalid_query`を返した場合は参照だけで再取得します。記録・binding・root・canonical path・種類・大きさ・画素数の確認はcockpitが毎回行います。名前では断らず、textも伏せません。上流JSONは約5.4 MiB・15秒までで、Content-Lengthがこれを超えると読まずに`preview_too_large`です。スマホへは`{ok, kind:"text", label, text, truncated, notice}`（textはUTF-8で先頭32 KiB）か`{ok, kind:"image", label, width, height, data, notice}`を返します。画像はIHDR・IDAT・IENDのchunkだけでCRCが正しく、IHDRの幅と高さがcockpitの値と一致し、1辺8192 px・8 Mpx・4 MiB以内のPNGだけで、dataはその標準base64です。失敗は固定codeの`{ok:false, error}`（`preview_too_large`・`preview_type_denied`・`preview_path_denied`・`preview_changed`・`history_*`、それ以外は`preview_unavailable`）で、cockpitのcode以外の文字列は渡しません。cockpitの`reference_expired`は410、`record_too_large`（参照を持つ記録が1 MiBを超える）は`preview_too_large`です。Content-Lengthと長さが違う上流の本文は拒みます。

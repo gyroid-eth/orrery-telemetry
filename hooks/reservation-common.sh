@@ -155,10 +155,16 @@ except (ValueError, TypeError, AttributeError, OSError, RuntimeError) as exc:
     export AGENTSTACK_SESSION_ID="$SESSION_ID"
     MATCHED_ROOT=""
     if [[ -n "$PROTECTED_ROOTS" ]]; then
-        local old_ifs="$IFS"
-        local root
-        IFS=":"
-        for root in $PROTECTED_ROOTS; do
+        local remaining="$PROTECTED_ROOTS" root
+        # Split only on the protocol delimiter. An unquoted shell word would
+        # expand literal [, *, or ? in a physical workspace into sibling paths.
+        # This leaves the caller's IFS and pathname-expansion options untouched.
+        while [[ -n "$remaining" ]]; do
+            root="${remaining%%:*}"
+            case "$remaining" in
+                *:*) remaining="${remaining#*:}" ;;
+                *) remaining="" ;;
+            esac
             root="$(expand_path "$root")"
             [[ -z "$root" ]] && continue
             root=$("${AGENTSTACK_PYTHON:-python3}" -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$root") || {
@@ -167,19 +173,24 @@ except (ValueError, TypeError, AttributeError, OSError, RuntimeError) as exc:
             }
             [[ "$root" != "/" ]] && root="${root%/}"
             case "$FILE_PATH" in
-                "$root"|"$root/"*)
+                "$root"|"${root%/}/"*)
                     MATCHED_ROOT="$root"
                     break
                     ;;
             esac
         done
-        IFS="$old_ifs"
     fi
     [ -n "$MATCHED_ROOT" ] || return 1
 
-    REL_PATH="${FILE_PATH#$MATCHED_ROOT/}"
+    REL_PATH="${FILE_PATH#"${MATCHED_ROOT%/}/"}"
     if [[ "$REL_PATH" == "$FILE_PATH" ]]; then
         REL_PATH="$(basename "$FILE_PATH")"
+    fi
+    # Managed agents may protect nested folders within the same Mail namespace.
+    # Scope matching stays root-based; reservation identity must not depend on
+    # the first matching root or two agents can edit one file concurrently.
+    if [[ "${AGENTSTACK_PROTECTION_CONTEXT:-}" == "workspace-v1" ]]; then
+        REL_PATH="$FILE_PATH"
     fi
     RESERVATION_PROJECT_KEY="${PROJECT_KEY:-$MATCHED_ROOT}"
     export AGENTSTACK_LOOKUP_PROJECT_KEY="$RESERVATION_PROJECT_KEY"

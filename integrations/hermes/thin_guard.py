@@ -130,6 +130,14 @@ def session_started(session_id, **_):
         if is_delegated_child_context() or not session_id:
             return
         path = Path(os.environ['AGENTSTACK_NATIVE_SESSION_FILE'])
+        if os.environ.get('AGENTSTACK_RUNTIME_MODE') == 'fresh' and path.exists():
+            saved = json.loads(path.read_text())
+            intent = json.loads((path.parent.parent / 'intent.json').read_text())
+            if intent.get('persistent') and saved.get('native_session_id') != session_id:
+                # Let the shared hook request a restart before changing the old proof.
+                call_hook('check-agent-registered.sh', dict(hook_event_name='SessionStart',
+                    session_id=session_id, cwd=os.getcwd()))
+                raise RuntimeError('FRESH_BOT_RESTART_REQUIRED')
         value = {'harness': 'hermes', 'native_session_id': session_id,
                  'created_at': datetime.now(timezone.utc).isoformat()}
         temporary = path.with_name(path.name + '.' + str(os.getpid()) + '.tmp')

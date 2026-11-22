@@ -8,6 +8,160 @@ A persistent agent is a parentless bot that keeps the same ORRERY Mail identity 
 
 Temporary agents started through the normal `agent-start` / `agent-start-codex` or child launchers continue to use their existing registration path. The enrollment procedure here is for migrating an existing bot that never passed through a launcher, or for recovering the same numeric row after its local credential was lost.
 
+## Claude Channels in fresh mode
+
+In `runtime_mode=fresh`, complete [fresh registration and preparation](fresh-global-update.en.md)
+first. The operator prepares login, hooks and the Channels plugin in the prepared Claude HOME.
+Set `AGENTSTACK_PYTHON` to the same verified Python that imports this Mail package for ordinary fresh launch.
+Do not import legacy enrollment or Mail tokens. Create an owner-only JSON profile:
+
+```json
+{
+  "kind": "orrery-fresh-persistent-v1",
+  "context": "/path/to/prepared/context.json",
+  "provider": "claude",
+  "working_directory": "/path/to/workspace",
+  "channels": ["plugin:telegram@claude-plugins-official"],
+  "model": "sonnet",
+  "environment": {"TELEGRAM_STATE_DIR": "/path/to/channel-state"}
+}
+```
+
+```bash
+chmod 600 /path/to/bot.json
+agentstack-persistent inspect --profile /path/to/bot.json
+agentstack-persistent run --profile /path/to/bot.json
+```
+
+This explicit fresh profile dispatches to ordinary launch. It does not register an agent,
+prepare a context or install a service. Channels reuse interactive configuration source checks
+and Mail alias replacement, preserving Channels alongside bound Mail and regular reservation hooks.
+The existing fresh watcher delivers idle Mail to the same tmux input surface.
+
+Keep credential values out of the launch environment and profile. Use the existing Channels state
+reader; the official plugin still reads its `.env` inside its own process after startup.
+Legacy raw Mail tokens are not inherited. Credential values are not passed to the model's Bash.
+
+To stop, send **SIGTERM to this launcher process rather than killing its pane**, and wait for it.
+The launcher observes provider exit and writes `ended.json`; restart with the same profile afterward.
+Unexpected exit, forced kill or stop timeout stays unknown and blocks another run.
+One launch owns one conversation. A session change such as `/clear` stops that run and reports
+`FRESH_BOT_RESTART_REQUIRED`. Automatic old-conversation restoration and seamless reset are not supported.
+Never run old and new pollers with the same Telegram token; verify that the old poller has stopped.
+
+Bot process restart differs from machine restart. Mac/WSL machine reboot and automatic unlock
+remain unverified. Legacy profiles continue to use the enrollment procedure below.
+
+## Fresh Hermes Telegram (interactive)
+
+Use the same prepared registration with the native `hermes chat --tui` and the bundled
+`orrery-telegram` plugin. Incoming Telegram DMs enter that live TUI; replies use the
+`telegram_reply` tool. Bound Mail, the standard watcher, and terminal input share the same TUI.
+No separate gateway or headless bridge is started.
+
+Use the complete, verified TUI product built within the managed generation. The Telegram launch plan checks the management receipt against the selected runtime and passes only the verified `HERMES_TUI_DIR` and `HERMES_NODE` paths. Missing or modified products stop with `invalid_runtime` before profile writes. Startup performs no npm acquisition or build and does not copy `ui-tui` into the Python PM workspace. These environment entries are not added to ordinary child/CLI plans. Acquire a new generation with the installer instead of patching an old one manually. TUI readiness alone does not establish Telegram credentials, Mail or model connectivity.
+
+```json
+{
+  "kind": "orrery-fresh-persistent-v1",
+  "context": "/path/to/prepared/context.json",
+  "provider": "hermes",
+  "working_directory": "/path/to/workspace",
+  "model": "configured-model-id",
+  "managed": {
+    "manifest_file": "/path/to/native-manifest.json",
+    "backend_id": "deepseek"
+  },
+  "telegram": {
+    "token_ref": {"store": "keychain", "service": "telegram-bot", "account": "owner"},
+    "allow_from": [123456789]
+  }
+}
+```
+
+Keep the profile at `0600`, with the context and Hermes HOME on a private Linux/macOS filesystem.
+Replace the example number with your Telegram user ID; group messages are excluded.
+On macOS, store the token yourself in Keychain. Linux/WSL uses the existing
+[Secret Service reference](install.en.md#ubuntu-wsl-secret-service-references-real-machine-acceptance-pending),
+for example `{"store":"secret-service","attributes":{"application":"telegram-bot"}}`.
+Keep values out of profiles and environments. The plugin reads the value in-process;
+the same reference enters the ordinary credential-read guard. Provider selection, `key_cmd`,
+and config generation reuse the ordinary managed-child path.
+
+Prepare the provider and personally approve hooks/plugins before using the same `inspect`/`run` commands.
+Hermes HOME is `providers/hermes` beside the context. Place any non-secret personality/settings there
+before launch; do not copy old Mail MCP definitions, credential values, or legacy tokens.
+An existing launchd/systemd user unit can run this foreground launcher; no service is registered automatically.
+Linux/WSL requires the user bus and an unlocked Secret Service. Do not default private runtime state to `/mnt/c`.
+
+Stop/restart and session changes follow the Channels rules. A requested Hermes stop also waits for
+that launch's TUI/backend descendants from startup through normal exit before writing `ended.json`.
+The foreground pane/job must give this run its own process group; surviving children or unavailable observation leave it unknown.
+`telegram-ready` in `logs/telegram-status.json` means the poller is ready, not that Mail or replies succeeded.
+Treat 409, credential-unavailable, and allowlist-empty as failures. Never overlap old/new pollers for one token.
+
+Details for `credential-unavailable` are saved in `logs/telegram-credential-diagnostic.json` (0600) under the same Hermes HOME. Fixed reasons are `configuration-invalid` (settings read/shape), `reference-invalid` (reference shape), `unsupported-store`, `security-nonzero` (only an integer returncode is added), `security-timeout`, `security-unavailable`, `empty-or-invalid-value`, and Secret Service's `secret-service-timeout` / `secret-service-unavailable`. Settings, reference/token values, helper stdout/stderr and full environments are never recorded. This is the last failure: compare its `pid` and `updated_at` with the current status. Investigate the reported reason before changing HOME or Keychain settings.
+
+Known limits: the existing plugin's concurrent flush and partial long replies after a send failure are unchanged.
+A surviving child observed by the launcher prevents a confirmed end. The close snapshot also saves known descendants' PID/births, so a later group/session change cannot hide their survival. A child first created after that snapshot and then detached is not captured by this record alone.
+The launcher's `operation.lock` is released when that process exits. Separately, the Hermes Telegram plugin uses `telegram-poller.lock` in the same Hermes HOME: **only while a poller process actually holds that lock** does it reject another poller using that HOME ([acquire/release](../integrations/hermes/telegram/managed_guard.py), [release after poll-thread shutdown](../integrations/hermes/telegram/__init__.py)). An unobserved child or a process using another HOME is not guaranteed to hold it. Duplicate-reception protection does not prove that all unknown children have ended.
+Each run starts a new conversation; old conversations are not automatically restored. Synthetic transport/native
+tests are separate from real Telegram acceptance. Real provider/Telegram round trips, real WSL, and machine
+reboots on macOS/WSL remain unverified.
+
+## Close an unfinished fresh run
+
+Closure does not mean task success or cancellation of side effects. Distinguish:
+
+| State | Record and next action |
+| --- | --- |
+| Normal exit | `ended.json` with observed wait exit 0; one ordinary run |
+| Observed failure | `ended.json` with the actual nonzero exit after required child-exit observations; one ordinary run |
+| Confirmed closure | `resolved-ended.json`, provider exit unknown (JSON null); one separate ordinary run |
+| Unknown | Missing wait, remaining processes, unavailable observations or insufficient records; refuse the next run and report why |
+
+Hermes can close an observed exit 23 as failed when descendant observations also establish no remaining children.
+Unexpected nonzero Channels exits without descendant observation, lost launchers and stop timeouts remain unknown.
+An exit 0 without a valid session receipt is recorded as ended, but native startup acceptance still fails.
+
+Use the same prepared context, verified Python and profile. `RUN_UUID` is the current run UUID shown in the diagnostic.
+
+```sh
+AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_PYTHON="$orrery_python" \
+  "$orrery_install/bin/agentstack-runtime-client" resolve-ended \
+    --launch-id "$RUN_UUID" --confirm-ended
+# Only after ok:true above, launch normally as a separate operation.
+AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_PYTHON="$orrery_python" \
+  "$orrery_install/bin/agentstack-persistent" run --profile "$orrery_profile"
+```
+
+`--confirm-ended` expresses the caller's explicit judgment, without new authentication or force.
+The command rechecks the same I/A, credential generation, context, current UUID, launch mutex,
+recorded PID/births, pane/socket and job groups. Sufficient observations publish one new private record.
+Intent/session/current stay intact; an exit code is never invented. Repeated resolution returns the same end kind.
+Closed runs reject Mail delivery, hooks and session publication. Resolution does not kill processes, remove panes
+or restart automatically. Do not bypass it by deleting current/lock/receipts or handwriting termination records.
+
+`FRESH_RESOLVE_PROCESS_ALIVE` / `FRESH_RESOLVE_GROUP_ALIVE` mean remaining processes;
+`FRESH_RESOLVE_PROCESS_CHANGED` / `FRESH_RESOLVE_TARGET_CHANGED` mean changed PID/pane/socket facts;
+`FRESH_RESOLVE_OBSERVATION_UNAVAILABLE` means unavailable observations;
+`FRESH_RESOLVE_RECORD_INSUFFICIENT` means insufficient records. Stop and report these, launch-busy and identity/credential refusals.
+Any necessary ordinary stop is separate; resolve again only after confirming termination.
+
+New tmux runs add versioned PGID, leader birth and provider descendants' PID/births known from the saved snapshot's parent chain to the existing `tmux.json`. Known children remain subject to survival refusal after changing group. A snapshot exceeding the 64-member bound, containing ancestry cycles, or having unknown birth/ownership shape is refused instead of publishing sufficient evidence.
+Children first created after this snapshot and later unrecorded detachment are not tracked. No resident watcher or descendant history database is added.
+Old runs without that field, and foreground runs without tmux observations, HOLD for insufficient proof.
+Three absent PIDs or human confirmation alone cannot close a run. This does not fully track arbitrary daemonization,
+double forks or unrecorded orphans in separate sessions. The shared ps/tmux adapter covers Mac and Linux;
+Windows native processes in WSL are outside this boundary.
+
+An agent already authorized to recover needs no extra human commands or product approvals per incident:
+one ordinary run after observed termination, or resolve plus ordinary run for two commands after an unfinished run.
+Direct human operation also takes two commands; unknown cases are not guaranteed to recover in two steps.
+Telegram/Mail round trips, natural wake, provider login/hook trust and machine restart acceptance remain separate.
+
 ## Scope of the guarantee
 
 An **operator** here means a person who explicitly runs the dedicated CLI in a local terminal on this machine. The implementation guarantees only:
@@ -303,6 +457,16 @@ A startup service or tmux script should make this its final `exec`. Do not hide 
 ### credential-unavailable
 
 Only when restart reports `local-credential-unavailable` or the exact diagnostic `stage=local-token reason=credential-unavailable` should an operator stop the bot, begin again with `$HOME/.agentstack/bin/agentstack-enroll inspect`, and choose `recover` if the state is `server-token` plus a missing local credential. Do not have the model run it. Do not infer credential loss from a generic registration failure, HTTP 401/403, or a stopped Mail service.
+
+### Resume Claude in DECK after retention expires
+
+Use this procedure when retention expiry removed the child state and local credential and DECK reports `mail_reason: retention_expired`. The operator uses the original numeric ID, name, project, and connection pinned to the same Mail UUID.
+
+1. Run `"$HOME/.agentstack/bin/agentstack-enroll" inspect --agent-id "$TARGET_ID" --project-key "$PROJECT_KEY" --connection "$CONNECTION" --name "$TARGET_NAME"`. Verify the target, `connection_pinned: true`, `retired: false`, `credential_state: server-token`, and a local credential state of `missing` or `missing-token-same-identity`.
+2. Run `"$HOME/.agentstack/bin/agentstack-enroll" recover --agent-id "$TARGET_ID" --project-key "$PROJECT_KEY" --connection "$CONNECTION" --name "$TARGET_NAME"` once. Confirm `result: accepted` and `reason: operator-recover`. A previous successful recovery is sufficient while its receipt and saved credential are current.
+3. Exit any running conversation-only session and choose **Resume** in DECK. DECK matches the recovery receipt issued after expiry against the current credential, authenticates the same Mail identity, and returns `resume_mode: mail`. Later DECK resumes can use the same credential.
+
+Mail continues to reject `recover` for retired rows, and DECK rejects resumes after an explicit purge. The original child state is required when Claude needs its child-specific tool configuration and when resuming a Codex child.
 
 ## Applying the contract to another Mail instance or machine
 

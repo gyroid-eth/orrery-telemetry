@@ -6,6 +6,8 @@
 
 Shared normalization and explicit proxy/hook/CLI adapters remain. The only candidate reservation server is the [S2c SQLite runtime](global-reservations.en.md). PR2's in-memory ReservationServer, PersistentReservations copy/flush and reservation_activity probe/collector are removed. Default Mail/proxy/hooks remain legacy with activation=false. Candidate adapters require explicit fixture transport injection.
 
+The default bound proxy also supports acquiring, renewing, and releasing physical absolute paths matching the managed `workspace-v1` guard. This is separate from activating the candidate normalizer below. The default proxy forwards relative paths and globs unchanged without making them absolute. See [the shared proxy contract](codex-app.en.md#agent-usage).
+
 ## Shared normalization
 
 Server, client, CLI and hook use `reservation_paths.normalize_path()`. The server requires absolute paths. Clients explicitly provide their observed cwd for relative inputs. Legacy `project_key` is accepted and ignored; it never supplies an anchor. Unknown legacy anchors require reacquisition or migration evidence. This PR does not convert existing leases.
@@ -34,7 +36,7 @@ The profile includes ASCII and characters assigned in Unicode 3.2 within these r
 
 The pinned source is Unicode's official [CaseFolding-9.0.0](https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data/ucd/9.0.0-Update/CaseFolding.txt) C+F mappings (downloaded data SHA256 `37d40cf8c2c35637f4a04e746814e1fc4eb764c272bed9238a87ee96a4866857`). Static analysis of the profile's 27,978 assigned characters found no other case mappings, and NFD remains within the profile. The APFS FAQ is retired documentation: distinguish this source evidence from acceptance on a current Mac's private temporary filesystem. No full Unicode table distribution dependency is added. This is not acceptance of arbitrary Unicode names, all filesystems, or Windows-side WSL folders. Default legacy operation is unchanged.
 
-`ReservationClient` requires an authenticated binding resolver and candidate dispatch, sharing normalization across acquire/check/renew/release. The existing proxy's explicit `candidate_reservations()` factory uses `_resolve()` on each call and requires observed cwd and backend injection. It is not connected to default `tools/call`; the legacy proxy still requires relative paths.
+`ReservationClient` requires an authenticated binding resolver and candidate dispatch, sharing normalization across acquire/check/renew/release. The existing proxy's explicit `candidate_reservations()` factory uses `_resolve()` on each call and requires observed cwd and backend injection. It is not connected to default `tools/call`; the default proxy accepts physical absolute paths and legacy relative/glob patterns without candidate normalization.
 
 `hook_guard()` and `hook_release()` use that client. Confirmed nonparticipants are noops. Bound participants require reservations in any folder; unknown binding, authentication failure and transport errors block. The adapters never register identities or search for credentials. The shell's explicit `reservation_absolute_paths()` helper uses the same CLI with observed cwd; existing hooks do not call it. Sandbox, OS access, Codex add-dir and browsing permissions remain unchanged.
 

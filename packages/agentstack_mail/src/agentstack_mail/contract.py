@@ -79,6 +79,7 @@ LOCAL_ONLY_TOOLS = frozenset(
         "renew_reservations",
         "release_reservations",
         "runtime_status",
+        "show_files",
     }
 )
 

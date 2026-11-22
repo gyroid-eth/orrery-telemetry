@@ -48,8 +48,8 @@ def test_fresh_runtime_modules_match_artifact_inventory():
     assert {path.name for path in source.glob('*.py')} == expected
     assert {name for name in expected if name.startswith('fresh_') or name == 'archive_cli.py'} == {
         'archive_cli.py', 'fresh_child.py', 'fresh_cli.py', 'fresh_client.py', 'fresh_delivery.py', 'fresh_guard.py',
-        'fresh_harness.py', 'fresh_targets.py',
-        'fresh_launch.py', 'fresh_notifications.py', 'fresh_proxy.py', 'fresh_reservations.py',
+        'fresh_harness.py', 'fresh_targets.py', 'fresh_end.py',
+        'fresh_launch.py', 'fresh_notifications.py', 'fresh_persistent.py', 'fresh_proxy.py', 'fresh_reservations.py',
         'fresh_runtime.py', 'fresh_server.py'}
 
 
@@ -74,7 +74,12 @@ def test_fresh_manifest_owns_exact_four_files_and_private_uninstall_keeps_neighb
     script = '\n'.join(['set -eu', 'plan() { :; }',
         *[name + '=' + shlex.quote(value) for name, value in variables.items()], function,
         'write_manifest manual "" "" ""'])
-    made = subprocess.run(['/bin/bash', '-c', script], cwd=tmp_path, env=os.environ.copy(),
+    # The uninstaller acts on things under HOME (the phone reader's launchd plist,
+    # among others). With the real HOME this test once removed the real job.
+    home = tmp_path / 'home';home.mkdir()
+    env = {key: value for key, value in os.environ.items() if not key.startswith(('AGENTSTACK_', 'ORRERY_'))}
+    env['HOME'] = str(home)
+    made = subprocess.run(['/bin/bash', '-c', script], cwd=tmp_path, env=env,
         stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=15)
     assert made.returncode == 0, made.stdout + made.stderr
     state = json.loads((install / 'install-state.json').read_text())
@@ -85,7 +90,7 @@ def test_fresh_manifest_owns_exact_four_files_and_private_uninstall_keeps_neighb
         assert str((install / name).parent) in directories
     for name in neighbors:assert str(install / name) not in owned
     removed = subprocess.run(['/bin/bash', str(ROOT / 'scripts/uninstall.sh'), '--install-dir', str(install)],
-        cwd=tmp_path, env=os.environ.copy(), stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=20)
+        cwd=tmp_path, env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=20)
     assert removed.returncode == 0, removed.stdout + removed.stderr
     for name in FRESH_FILES[:4]:assert not (install / name).exists()
     for name, raw in neighbors.items():assert (install / name).read_bytes() == raw

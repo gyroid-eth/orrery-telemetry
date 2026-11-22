@@ -94,6 +94,21 @@ class ThinConfig(unittest.TestCase):
         self.assertFalse(any('API_KEY' in name or name == 'HERMES_MANAGED' for name in plan['env']))
         self.assertFalse((self.base / 'forbidden').exists())
 
+    def test_inherited_codex_browser_becomes_native_mcp_server(self):
+        from hooks import child_tools
+        definition = {'command': 'npx', 'args': ['-y', 'chrome-devtools-mcp@latest',
+                      '--autoConnect', '--no-usage-statistics'],
+                      'env': {'npm_config_cache': '/fixture/cache'}, 'cwd': str(self.base)}
+        selected = child_tools.native_plan(child_tools.normalize(), cwd=str(self.base),
+            claude_json=str(self.base / 'absent.json'),
+            codex_config={'mcp_servers': {'chrome-devtools': definition}})
+        mcp = config.read(self.document['mcp_config'])
+        mcp['mcpServers'].update(selected['servers'])
+        self.save(Path(self.document['mcp_config']), mcp)
+        plan = self.generate(mcp_selection=selected)
+        overlay = config.read(Path(plan['config_dir']) / 'config.yaml')
+        self.assertEqual(overlay['mcp_servers']['chrome-devtools'], {'enabled': True, **definition})
+
     def test_dynamic_selected_url_and_model_ignore_old_per_model_settings(self):
         self.template_data['profiles']['strata'] = {'provider': 'fixture-api', 'key_cmd': self.profile_spec['key_cmd']}
         self.save(self.template, self.template_data)

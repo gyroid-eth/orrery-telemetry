@@ -42,7 +42,7 @@ if not arch or not os_name:
     raise SystemExit('Hermes CA recipe supports macOS and GNU/Linux only; Bionic is unsupported')
 print(os_name + '-' + arch)
 '''
-HERMES_CA_PROBE_SCRIPT = '''import certifi,importlib.metadata,json
+HERMES_CA_PROBE_SCRIPT = '''import certifi,exa_py,importlib.metadata,json
 from pathlib import Path
 d=importlib.metadata.distribution('certifi')
 metadata=next(f for f in d.files if str(f).endswith('.dist-info/METADATA'))
@@ -53,6 +53,14 @@ print(json.dumps({'bundle':str(Path(certifi.where()).resolve()),'metadata':str(P
 def hermes_ca():
     path = Path(__file__).resolve().parents[2] / 'integrations/hermes/ca_recipe.py'
     spec = importlib.util.spec_from_file_location('_managed_hermes_ca', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def hermes_tui():
+    path = Path(__file__).resolve().parents[2] / 'integrations/hermes/tui_product.py'
+    spec = importlib.util.spec_from_file_location('_managed_hermes_tui', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -194,7 +202,7 @@ def _hermes_local_source(root, env):
         return None
     _hermes_owned_path(base.parent, directory=True)
     _hermes_owned_path(base, directory=True)
-    pattern = re.escape(HERMES_COMMIT[:16]) + r'-(?:v[12]|ca1-[0-9a-f]{16})'
+    pattern = re.escape(HERMES_COMMIT[:16]) + r'-(?:v[12]|ca1-[0-9a-f]{16}(?:-exa1(?:-tui1-[0-9a-f]{16})?)?)'
     for generation in sorted(base.iterdir()):
         if generation == root or not re.fullmatch(pattern, generation.name):
             continue
@@ -269,8 +277,9 @@ def install_hermes(repo, root, python, cache=None):
     # Existing PM owns its own fixed runtime/dependency graph; no general setup,
     # login import, browser, or computer-use installer is invoked.
     # PM rejects --without combined with --extra. First prepare its default
-    # closure and persist the optional-tool opt-outs, then add the provider SDK.
-    for arguments in (['--without', 'agent-browser', '--without', 'cua-driver'], ['--extra', 'anthropic']):
+    # closure and persist the optional-tool opt-outs, then add the provider SDKs
+    # before publishing the fixed environment used by every child.
+    for arguments in (['--without', 'agent-browser', '--without', 'cua-driver'], ['--extra', 'anthropic', '--extra', 'exa']):
         ca.verify_inputs(source, policy, 'after')
         run([python, '-m', 'pm.cli', 'install', *arguments], cwd=source, env=env)
         ca.verify_inputs(source, policy, 'after')
@@ -282,14 +291,15 @@ def install_hermes(repo, root, python, cache=None):
         raise ValueError('Hermes PM did not publish a committed runtime')
     paths = json.loads(run([str(generation / 'bin/python'), '-I', '-B', '-c', HERMES_CA_PROBE_SCRIPT], cwd=source, env=env))
     proof = ca.runtime_evidence(repo, root, source, generation, target, paths)
+    tui = hermes_tui().build(root, source, target, env, run)
     print('Hermes: existing manual homes/logins are untouched; no credentials were installed.')
     return {'hermes_source': str(source), 'managed_root': str(root), 'hermes_executable': str(executable),
-            'variant': 'plain', 'thin_config_contract': 1, 'ca_recipe': recipe, 'ca_evidence': proof, **stamp}
+            'variant': 'plain', 'thin_config_contract': 1, 'ca_recipe': recipe, 'ca_evidence': proof, **stamp, **tui}
 
 
 def generation_id(repo, harness, *, datadir=True):
     if harness == 'hermes':
-        return HERMES_COMMIT[:16] + '-ca1-' + hermes_ca().load(repo)[2][:16]
+        return HERMES_COMMIT[:16] + '-ca1-' + hermes_ca().load(repo)[2][:16] + '-exa1-tui1-' + hermes_tui().recipe_id()[:16]
     inputs = ['runtime-pins.json', 'runtime-package-lock.json', 'ui-package.json', 'ui-package-lock.json']
     if datadir:
         inputs.append('tui-datadir.patch.json')
@@ -345,6 +355,7 @@ def validate(repo, harness, receipt):
                 or not os.access(generation / 'bin/python', os.X_OK)):
             raise ValueError('Hermes committed runtime is missing or changed')
         hermes_ca().validate_static(repo, details)
+        hermes_tui().validate(details)
 
 
 def provision(repo, install, harness, choice='keep', node='', python=sys.executable,

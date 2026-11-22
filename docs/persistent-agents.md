@@ -8,6 +8,157 @@
 
 通常の `agent-start` / `agent-start-codex` や child launcher を通る一時的な agent は、従来の登録経路を使います。この文書の enrollment は、launcher を一度も通らなかった既存 bot、または local credential を失った同じ数値 row を移行するための operator 手順です。
 
+## fresh の Claude Channels
+
+`runtime_mode=fresh` では、先に [fresh の登録と準備](fresh-global-update.md) を行い、
+本人が prepared Claude HOME のログイン・hook・Channels plugin を準備します。
+`AGENTSTACK_PYTHON` には、通常の fresh 起動と同じ確認済みの Mail package を import できる Python を指定します。
+旧 enrollment や旧 Mail token を移す操作は行いません。owner 限定の JSON profile を作ります。
+
+```json
+{
+  "kind": "orrery-fresh-persistent-v1",
+  "context": "/path/to/prepared/context.json",
+  "provider": "claude",
+  "working_directory": "/path/to/workspace",
+  "channels": ["plugin:telegram@claude-plugins-official"],
+  "model": "sonnet",
+  "environment": {"TELEGRAM_STATE_DIR": "/path/to/channel-state"}
+}
+```
+
+```bash
+chmod 600 /path/to/bot.json
+agentstack-persistent inspect --profile /path/to/bot.json
+agentstack-persistent run --profile /path/to/bot.json
+```
+
+profile は明示的な fresh 分岐で通常の launch へ渡ります。登録、prepare、service 登録を
+自動で行いません。Channels の設定 source の検査と Mail alias の置換は従来の interactive
+と共用し、Channels を残したまま bound Mail と通常の予約 hook を使います。
+待機中の Mail は既存の fresh watcher が同じ tmux の入力面へ届けます。
+
+起動元の環境と profile に鍵の値を入れず、Channels の既存 state の読取を使います。
+公式 plugin が起動後に自分の process 内で `.env` を読む挙動は変更しません。
+旧 raw Mail token は引き継ぎません。モデルが使う Bash へ鍵を渡しません。
+
+停止は **pane を kill せず、この launcher process へ SIGTERM** を送って完了を待ちます。
+launcher が provider の終了を確認して `ended.json` を記録した後、同じ profile で再起動します。
+異常終了・強制 kill・停止 timeout は unknown で止まり、次の run を起動しません。
+会話は 1 起動につき 1 つです。`/clear` などで session が変わるとその run を停止し、
+`FRESH_BOT_RESTART_REQUIRED` を表示します。旧会話の自動復元や無停止の切替は行いません。
+本番と同じ Telegram token の新旧 poller を並走させず、旧 poller の終了も確認してください。
+
+Mac の bot process の再起動と機体再起動は別です。Mac／WSL の機体再起動・自動 unlock は
+未受入で、この手順だけで対応済みとはしません。通常の旧 profile は次の enrollment 手順を使います。
+
+## fresh の Hermes Telegram（interactive）
+
+Hermes も準備済みの同じ登録を使います。本物の `hermes chat --tui` に同梱の
+`orrery-telegram` plugin を載せ、Telegram の受信を生きた TUI へ入れます。
+返信は `telegram_reply` tool、Mail は bound proxy と標準 watcher、端末からの入力は同じ TUI です。
+独自の gateway や headless bridge は起動しません。
+
+管理 installer が完成・検証した世代内の TUI product を使います。Telegram の起動計画は管理 receipt と選択済み runtime を照合し、`HERMES_TUI_DIR` と `HERMES_NODE` に検証済みの path だけを渡します。欠落・改ざんがあれば profile を書く前に `invalid_runtime` で停止します。起動時に npm 取得や build は行わず、Python PM workspace に `ui-tui` をコピーしません。この2つの env は通常の子／CLI の起動計画には追加しません。旧世代への手動コピーではなく、installer で新世代を取得してください。TUI の準備だけでは Telegram の資格・Mail・model 接続の受入は完了しません。
+
+```json
+{
+  "kind": "orrery-fresh-persistent-v1",
+  "context": "/path/to/prepared/context.json",
+  "provider": "hermes",
+  "working_directory": "/path/to/workspace",
+  "model": "configured-model-id",
+  "managed": {
+    "manifest_file": "/path/to/native-manifest.json",
+    "backend_id": "deepseek"
+  },
+  "telegram": {
+    "token_ref": {"store": "keychain", "service": "telegram-bot", "account": "owner"},
+    "allow_from": [123456789]
+  }
+}
+```
+
+profile は `0600`、context と Hermes HOME は Linux／Mac の私有 filesystem に置きます。
+allowlist の数字は例で、自分の Telegram user ID に置き換えてください。group の受信は対象外です。
+Mac は本人が Keychain に保存した参照、Linux／WSL は
+`{"store":"secret-service","attributes":{"application":"telegram-bot"}}` のような
+既存の [Secret Service 参照](install.md#ubuntu-wsl-の-secret-service-参照実機受け入れ前)を使います。
+値を profile や環境へ入れません。plugin が process 内で読み、通常の鍵読み取り guard にも参照を渡します。
+provider は通常の子と同じ manifest・`key_cmd`・設定生成器を使います。
+
+本人が provider の設定・hook／plugin の承認を済ませてから、上と同じ `inspect`／`run` を使います。
+Hermes HOME は context の隣の `providers/hermes` です。必要な非秘密の personality／設定は
+起動前に本人が置き、古い Mail MCP・鍵の値・旧 token をコピーしないでください。
+常駐登録は既存の launchd／systemd user unit から同じ foreground launcher を起動します。
+新しい service の自動登録はありません。Linux／WSL は user bus と Secret Service の unlock が前提です。
+`/mnt/c` は私有 runtime の既定保存先にしません。
+
+停止・再起動と会話変更の規則は Channels と共通です。Hermes の停止時は、その起動が所有する
+TUI／backend を起動中から観測し、通常終了でも子の終了を確認してから `ended.json` を残します。
+この run の独立した前景 pane／job の process group が必要です。子が残る・観測できない場合は unknown で止めます。
+`logs/telegram-status.json` の `telegram-ready` は poller の準備であり、Mail や返信の成功を保証しません。
+409・credential-unavailable・allowlist-empty は失敗として扱い、新旧の同 token を並走させません。
+
+`credential-unavailable` の詳細は、同じ Hermes HOME の `logs/telegram-credential-diagnostic.json`（0600）に残ります。固定理由は `configuration-invalid`（設定の読取・形）、`reference-invalid`（参照の形）、`unsupported-store`、`security-nonzero`（整数の returncode のみ追加）、`security-timeout`、`security-unavailable`、`empty-or-invalid-value`、Secret Service の `secret-service-timeout` / `secret-service-unavailable` です。設定・参照・token の値や helper の stdout/stderr・全環境は記録しません。これは最後の失敗なので、`pid`・`updated_at` を現在の status と照合してください。HOME や Keychain の設定をこの診断だけで変更せず、理由に対応する確認を行います。
+
+既知の制限: 既存 plugin の並行 flush と、長文返信の途中失敗による部分返信は今回直していません。
+launcher が観測した子の残存は終了判定を拒否します。close 用 snapshot で把握した子の PID／出生も保存し、後で別 group／session に移っても生存中は close を拒否します。snapshot 後に初めて生じた未記録の離脱子は、この記録だけでは捕捉できません。
+launcher の `operation.lock` はその process が終了すると解放されます。一方、Hermes の Telegram plugin は別の `telegram-poller.lock` を同じ Hermes HOME で使い、**実際にその lock を保持する poller process が生きている間だけ**、同じ HOME の別 poller を拒否します（[保持・解放の実装](../integrations/hermes/telegram/managed_guard.py)、[poll thread 終了時の解放](../integrations/hermes/telegram/__init__.py)）。未観測の子や別 HOME の process がこの lock を保持するとは保証しません。二重受信防止を、未知の子が全て終了した証拠にしないでください。
+新 run は新会話で、旧会話の自動復元はありません。合成 transport／native による試験と実 Telegram の
+受け入れは別です。実 provider／Telegram の往復、WSL 実機、Mac／WSL の機体再起動は未受入です。
+
+## fresh の未終了 run を閉じる
+
+終了は次の4つを区別します。close は task の成功や副作用の取消ではありません。
+
+| 状態 | 記録と次の操作 |
+| --- | --- |
+| 正常終了 | 実 wait の `ended.json`、exit 0。通常の run を1回 |
+| 観測済みの失敗 | 子の終了まで観測した実 wait の `ended.json`、実際の非0 exit。通常の run を1回 |
+| 確認して閉じた終了 | `resolved-ended.json`、provider exit は unknown（JSON null）。通常の run を別に1回 |
+| 未確定 | wait 不明、残 process、観測不能、記録不足。次の run は拒否し、理由を報告 |
+
+子孫を観測する Hermes の wait で exit 23 と子の不在を確認した場合は失敗として閉じます。
+子孫観測のない Channels の予期しない非0終了、launcher 消失、停止 timeout は未確定です。
+exit 0 でも session receipt が成立しなかった場合、終了は記録しますが native の起動受入は失敗です。
+
+未終了の current run を利用者の指示で閉じるときは、同じ prepared context と確認済み Python を使います。
+`RUN_UUID` は診断に表示された現在 run の UUID、profile は今までの同じものです。
+
+```sh
+AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_PYTHON="$orrery_python" \
+  "$orrery_install/bin/agentstack-runtime-client" resolve-ended \
+    --launch-id "$RUN_UUID" --confirm-ended
+# 上の結果が ok:true の場合だけ、別操作として通常起動する。
+AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  AGENTSTACK_PYTHON="$orrery_python" \
+  "$orrery_install/bin/agentstack-persistent" run --profile "$orrery_profile"
+```
+
+`--confirm-ended` は呼出側の明示判断で、追加の認証や force ではありません。同じ I/A・資格世代・context、
+current の UUID、起動 mutex、記録済み PID／出生・pane／socket・job group を再照合します。
+確認できたときだけ private record を新規に保存し、intent／session／current と元の終了コードを変更しません。
+重複 resolve は同じ終了種別を返します。閉じた run へ Mail 配送・hook・session の追記は行いません。
+kill、pane 削除、自動 restart は含みません。current／lock／receipt の削除や終了 record の手書きで回避しないでください。
+
+`FRESH_RESOLVE_PROCESS_ALIVE`／`FRESH_RESOLVE_GROUP_ALIVE` は残存、`FRESH_RESOLVE_PROCESS_CHANGED`／
+`FRESH_RESOLVE_TARGET_CHANGED` は PID・pane・socket 等の変更、`FRESH_RESOLVE_OBSERVATION_UNAVAILABLE` は観測不能、
+`FRESH_RESOLVE_RECORD_INSUFFICIENT` は記録不足です。`FRESH_LAUNCH_BUSY` や identity／資格の拒否も含め、停止して理由を報告します。
+必要な通常停止は別に行い、終了確認後に再度 resolve します。
+
+新しい tmux run は既存の `tmux.json` に版付きの PGID・leader 出生と、保存時の snapshot の親子関係から分かる provider の子孫の PID／出生を記録します。後で別 group に移った既知の子も生存を拒否します。64件の上限を超える、親子関係が循環する、出生や所有の形が不明な snapshot は、十分な記録として保存せず起動を止めます。
+この snapshot より後に初めて生じた子や、その後の未記録の離脱までは追跡しません。常駐 watcher や子孫の履歴 DB は作りません。
+その field がない古い run、tmux 観測のない foreground run は根拠が足りないため HOLD します。
+PID 3つの不在や人の確認 flag だけでは閉じません。任意の daemon 化／二重 fork や未記録の別 session の孤児を
+完全に証明する機能ではありません。Mac と Linux の共通 ps／tmux adapter を使い、WSL の Windows native process は対象外です。
+
+復旧を既に任された agent が操作する場合、人の毎回のコマンド・追加の製品承認は0回です。
+観測済み終了後は agent が通常 run を1回、未終了なら resolve と通常 run の2回です。
+人が直接操作する場合も2コマンドで、未確定を必ず2手で復旧できるとは限りません。
+Telegram・Mail の往復と自然 wake、provider login／hook trust、機体再起動の受入は別に確認します。
+
 ## 保証範囲
 
 ここでいう **operator** は、この機体の local terminal で専用 CLI を明示的に実行する人です。実装が保証するのは次の範囲です。
@@ -303,6 +454,16 @@ exec "$HOME/.agentstack/bin/agentstack-persistent" run \
 ### credential-unavailable
 
 再起動後に `local-credential-unavailable` または `stage=local-token reason=credential-unavailable` が出たときだけ、bot を停止した状態で operator が `$HOME/.agentstack/bin/agentstack-enroll inspect` からやり直し、状態が `server-token` + local missing なら `recover` を選びます。モデル自身に実行させません。単なる registration failure、HTTP 401 / 403、Mail 停止を credential 紛失と推定しないでください。
+
+### 期限切れの Claude を DECK で再開する
+
+保管期限切れで子の state と local credential が削除され、DECK が `mail_reason: retention_expired` を表示する Claude が対象です。operator は元の数値 ID、名前、project、同じ Mail UUID に pin した connection を指定します。
+
+1. `"$HOME/.agentstack/bin/agentstack-enroll" inspect --agent-id "$TARGET_ID" --project-key "$PROJECT_KEY" --connection "$CONNECTION" --name "$TARGET_NAME"` を実行します。対象が一致し、`connection_pinned: true`、`retired: false`、`credential_state: server-token`、local credential が `missing` または `missing-token-same-identity` であることを確かめます。
+2. `"$HOME/.agentstack/bin/agentstack-enroll" recover --agent-id "$TARGET_ID" --project-key "$PROJECT_KEY" --connection "$CONNECTION" --name "$TARGET_NAME"` を一度実行し、`result: accepted` と `reason: operator-recover` を確認します。すでに復旧が成功していれば、その receipt と保存済み credential が現在も有効な限り再実行は不要です。
+3. 会話だけで動いているセッションがあれば終了し、DECK で **Resume** を選びます。DECK は期限切れの記録より新しい復旧 receipt を現在の credential と照合し、同じ Mail identity を認証して `resume_mode: mail` で再開します。以降の DECK での再開にも同じ credential を使えます。
+
+Mail が退役済みの行に対する `recover` と明示 purge 後の再開は引き続き拒否されます。Claude の元の起動に子専用の道具設定が必要な場合と、Codex の子を再開する場合には元の子 state が必要です。
 
 ## 別 Mail と別の機体へ適用する
 

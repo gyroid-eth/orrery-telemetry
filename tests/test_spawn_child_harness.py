@@ -10,11 +10,14 @@ import pytest
 from test_spawn_child_embed_task import _fake_launch_env, _codex_handoff, _executable, SPAWN, ROOT
 
 
-def fixture(tmp_path, *, gone=False):
+def fixture(tmp_path, *, gone=False, harness='dsh'):
     env,work=_fake_launch_env(tmp_path,codex=False)
     token=_codex_handoff(tmp_path,'HarnessChild')
     binding=Path(str(token)+'.binding.json')
-    data=json.loads(binding.read_text());data['program']='dsh';binding.write_text(json.dumps(data));binding.chmod(0o600)
+    data = json.loads(binding.read_text())
+    data['program'] = harness
+    binding.write_text(json.dumps(data))
+    binding.chmod(0o600)
     proxy=tmp_path/'product-proxy.sh';_executable(proxy,'#!/bin/sh\nexit 0\n')
     env['AGENTSTACK_MCP_PROXY']=str(proxy)
     fake=tmp_path/'harness-fixture.py'
@@ -96,15 +99,43 @@ def test_bad_harness_flags_stop_before_any_registration_or_tmux(tmp_path,flags):
     assert not Path(env['FAKE_TMUX_LOG']).exists()
 
 
-def test_harness_does_not_silently_drop_installed_default_tools(tmp_path):
-    env,work,token=fixture(tmp_path)
-    env['AGENTSTACK_CHILD_DEFAULT_TOOLS']='browser'
-    result=subprocess.run(['/bin/bash',str(SPAWN),'--pre-registered','HarnessChild',
-        '--child-token-file',str(token),'--harness','dsh','--backend','strata',
-        '--model','formal-model','--standalone','',str(work)],env=env,cwd=ROOT,
-        text=True,capture_output=True,timeout=10)
-    assert result.returncode!=0 and 'native_default_tools_unsupported' in result.stderr
-    assert token.exists() and not Path(env['FAKE_TMUX_LOG']).exists()
+@pytest.mark.parametrize('harness,explicit,overrides,expected', [
+    ('dsh', (), '', ['cua-driver']),
+    ('hermes', (), ';dsh=', ['cua-driver']),
+    ('dsh', ('--base', 'default'), ';dsh=mcp:notes', []),
+    ('dsh', (), ';dsh=', []),
+    ('hermes', (), ';dsh=;hermes=mcp:notes', ['notes']),
+])
+def test_harness_resolves_installer_default_tools(tmp_path, harness, explicit, overrides, expected):
+    env, work, token = fixture(tmp_path, harness=harness)
+    definitions = {'cua-driver': {'command': '/fixture/cua-driver'},
+                   'notes': {'command': '/fixture/notes'}}
+    claude_json = tmp_path / 'claude.json'
+    claude_json.write_text(json.dumps({
+        'projects': {str(work.resolve()): {'mcpServers': definitions}},
+    }))
+    env['AGENTSTACK_CLAUDE_JSON'] = str(claude_json)
+    env['AGENTSTACK_CHILD_DEFAULT_TOOLS'] = 'mcp:cua-driver,screen:operate,mcp:missing' + overrides
+    result = subprocess.run([
+        '/bin/bash', str(SPAWN), '--pre-registered', 'HarnessChild',
+        '--child-token-file', str(token), '--harness', harness, '--backend', 'strata',
+        '--model', 'formal-model', *explicit, '--standalone', '', str(work),
+    ], env=env, cwd=ROOT, text=True, capture_output=True, timeout=25)
+    assert result.returncode == 0, result.stderr
+    state = json.loads((Path(env['AGENTSTACK_RUNTIME_DIR']) / 'child-agents/HarnessChild.json').read_text())
+    launch = json.loads((Path(state['harness_state_dir']) / 'input.json').read_text())
+    servers = json.loads(Path(launch['mcp_config']).read_text())['mcpServers']
+    prompt = Path(launch['prompt_file']).read_text()
+    assert launch['tools'] == {'base': 'default', 'tools': {'mcp': expected} if expected else {}}
+    assert {name: servers[name] for name in definitions if name in servers} == {
+        name: definitions[name] for name in expected
+    }
+    if explicit:
+        assert 'an explicit base' in prompt and 'an explicit base' in result.stderr
+    if expected == ['cua-driver']:
+        for item in ('screen:operate', 'mcp:missing'):
+            message = f'Default tool {item} is unavailable'
+            assert message in prompt and message in result.stderr
 
 
 @pytest.mark.parametrize('stop_fails,start_pending', [(False, False), (True, False), (False, True)])

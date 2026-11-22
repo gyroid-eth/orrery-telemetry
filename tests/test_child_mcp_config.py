@@ -37,6 +37,7 @@ _CODEX_PROXY_TOOLS = (
     "renew_reservations",
     "release_reservations",
     "runtime_status",
+    "show_files",
     "whois",
 )
 
@@ -212,6 +213,9 @@ def _run_codex_home_process(
     if corrupt_emitted_candidate:
         altered_root = tmpdir / "altered-payload"
         (altered_root / "hooks").mkdir(parents=True)
+        (altered_root / "hooks" / "child_tools.py").write_bytes(
+            (_ROOT / "hooks" / "child_tools.py").read_bytes()
+        )
         library = altered_root / "bin" / "lib"
         library.mkdir(parents=True)
         copy_client_library(altered_root)

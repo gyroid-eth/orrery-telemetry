@@ -721,10 +721,8 @@ def test_a_pid_file_that_appears_during_the_wait_is_still_checked(tmp_path: Path
     pidfile = home / ".agentstack" / "runtime" / "dashboard.pid"
 
     def write_late():
-        pending = pidfile.with_name(pidfile.name + ".pending")
-        pending.write_text(f"{bystander.pid}\n", encoding="utf-8")
         time.sleep(0.05)
-        pending.replace(pidfile)
+        pidfile.write_text(f"{bystander.pid}\n", encoding="utf-8")
 
     writer = threading.Thread(target=write_late)
     original_run = service_teardown._run_command

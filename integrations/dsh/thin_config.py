@@ -153,6 +153,9 @@ def validate_input(document):
             backend = {**backend, 'base_url': base.removesuffix('/v1'), 'model': document['model'],
                 'model_definition': {'id': document['model'], 'contextWindow': context,
                                      'maxTokens': min(SERVER_MODELS['DEFAULT_OUTPUT'], context // 4)}}
+            inputs = SERVER_MODELS['input_modalities'](document.get('server_input_modalities'))
+            if inputs is not None:
+                backend['model_definition']['inputModalities'] = inputs
         url = urlsplit(backend['base_url'])
         if url.scheme not in ('https', 'http') or not url.hostname or url.username or url.password:
             raise ValueError('invalid_backend_url')
@@ -205,6 +208,11 @@ def link(source, target):
 
 def generate(document):
     facts = validate_input(document)
+    manifest = read(document['manifest_file'])
+    search = None
+    if document.get('web_search') or manifest.get('web_search', {}).get('provider'):
+        web = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'hooks/native_web_search.py'))
+        search = web['select'](document, manifest)
     name = document['agent_name']
     if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', name):
         raise ValueError('invalid_agent_name')
@@ -220,7 +228,8 @@ def generate(document):
     # Home-level native patches are inherited after profile patches. A
     # mail-only selection cannot promise to suppress unknown plugin clients.
     inherited = home / 'cordis.patch.yml'
-    if document.get('mcp_selection', {}).get('inherit') is False and inherited.exists():
+    selection = document.get('mcp_selection', {})
+    if (selection.get('inherit') is False or selection.get('managed_screen')) and inherited.exists():
         if inherited.read_text().strip() not in ('', '[]'):
             raise ValueError('inherited_mcp_conflict')
     config_dir = state / 'dsh-config'
@@ -259,6 +268,8 @@ def generate(document):
         tui['effort'] = document['effort']
     guard_config = {'cwd': str(cwd), 'state_dir': str(state), 'hooks_dir': str(facts['root'] / 'hooks'),
                     'env': document.get('env', {})}
+    if 'history_binding' in document and 'fresh_client_dir' not in document:
+        guard_config['history_binding'] = document['history_binding']
     # In native patches, `name` is a match predicate, not a replacement.
     # Disable the bundled file/env source and insert our credentials service.
     rows = [
@@ -319,6 +330,21 @@ def generate(document):
         save(definitions, {'backends': {document['backend_id']: {
             'credential_ref': facts['credential_ref'], 'auth_command': facts['reader_command']}}})
         protected.extend([str(definitions), str(Path(document['manifest_file']).resolve())])
+    if search:
+        settings_file = state / 'web-search.json'
+        save(settings_file, search)
+        reader = web['command'](facts['root'], settings_file, sys.executable)
+        rows.extend([
+            {'id': 'web', 'config': {'searchProvider': 'orrery-' + search['provider']}},
+            {'insert': [{'id': 'orrery-web-search', 'name': str(facts['root'] / 'integrations/dsh/web_search.mjs'),
+                         'config': {**search, 'runtime': str(facts['runtime']), 'reader_command': reader}}]},
+        ])
+        save(overlay, rows)
+        entries = read(definitions)
+        entries.setdefault('backends', {})['web-search'] = web['definition'](search, reader)
+        definitions = state / 'credential-references.json'
+        save(definitions, entries)
+        protected.extend([str(settings_file), str(definitions)])
     return {'argv': argv, 'cwd': str(cwd), 'config_dir': str(config_dir),
             'env': {'DSH_HOME': str(home), 'DSH_TUI_DATA_DIR': str(tui_data), 'DSH_TUI_LANG': language,
                     **facts['credential_context'],

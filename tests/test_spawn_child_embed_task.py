@@ -229,12 +229,25 @@ def test_orrery_only_stops_before_cli_when_profile_home_cannot_be_built(
     )
 
 
-@pytest.mark.parametrize("prompt_path", ["embed", "mail", "standalone"])
+@pytest.mark.parametrize("prompt_path,approval_override,full_access,expected_flags", [
+    ("embed", "untrusted", False, "--sandbox workspace-write --ask-for-approval untrusted"),
+    ("mail", None, False, "--sandbox workspace-write --ask-for-approval never"),
+    ("standalone", "never", False, "--sandbox workspace-write"),
+    ("embed", "on-request", True, "--sandbox danger-full-access --ask-for-approval never"),
+    ("standalone", None, True, "--sandbox danger-full-access --ask-for-approval never"),
+])
 def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
-    tmp_path: pathlib.Path, prompt_path: str,
+    tmp_path: pathlib.Path, prompt_path: str, approval_override: str | None,
+    full_access: bool, expected_flags: str,
 ) -> None:
     env, workdir = _fake_launch_env(tmp_path, codex=True)
     _enable_fake_codex_profile(tmp_path, env)
+    if approval_override is not None:
+        env["AGENTSTACK_CODEX_CHILD_APPROVAL"] = approval_override
+    if full_access:
+        install_home = pathlib.Path(env["AGENTSTACK_HOME"])
+        install_home.mkdir(exist_ok=True)
+        (install_home / "env.sh").write_text("export AGENTSTACK_CODEX_SANDBOX=danger-full-access\n")
     child_name = f"Profile-{prompt_path}"
     handoff = _codex_handoff(tmp_path, child_name)
     args = [
@@ -267,6 +280,7 @@ def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
 
     assert result.returncode == 0, result.stderr
     injected = pathlib.Path(env["FAKE_TMUX_LOG"]).read_text(encoding="utf-8")
+    assert f"\034AGENTSTACK_CODEX_PERMISSION_FLAGS={expected_flags}\034" in injected
     # The task went in as the child's argv, never through a paste buffer. No
     # history-binding receipt exists here, so its start is reported as unknown.
     assert "ARGV_TASK" in injected

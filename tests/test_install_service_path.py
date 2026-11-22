@@ -788,7 +788,7 @@ def test_external_normal_startup_private_mail_dashboard_and_saved_cockpit(tmp_pa
             env=_normal_dashboard_environment(layout,context,port,label)
             entry=owned.spawn(label,[sys.executable,str(layout['target']/'dashboard/service_runner.py')],env)
             wait_json('http://127.0.0.1:'+str(port)+'/api/version',entry,
-                lambda value:value.get('api')==34 and value.get('runtime_mode')=='fresh' and value.get('mail_instance_id')==layout['instance'])
+                lambda value:value.get('api')==35 and value.get('runtime_mode')=='fresh' and value.get('mail_instance_id')==layout['instance'])
             return entry
         proof['last_stage']='dashboard-and-host'
         dash=start_dashboard('dashboard-a',layout['contexts'][0],ports[1])

@@ -267,7 +267,31 @@ AGENTSTACK_PYTHON="$orrery_python" AGENTSTACK_RUNTIME_MODE=fresh \
 
 For Codex, replace `agent-start` with `agent-start-codex`. The launched model verifies its owner through the bound proxy's `runtime_status`; it does not add project, credentials, or owner IDs absent from the schema. Reservation paths are anchored to the actual working folder. Missing/corrupt fresh contexts or expired credentials do not authorize fallback to old registration.
 
+The launcher explicitly forwards its fixed fresh context, mode, and Python to Codex's stdio MCP process. It does not forward credential contents or old global contexts. The reviewed hook plugin stays enabled while its bundled MCP and old Mail MCP entries are disabled; coordination uses the `orrery-mail` fresh proxy. Stop if owner verification is unavailable or Desktop-style `bootstrap` is requested; do not compensate with another server or registration. An old Mail MCP name that cannot be safely addressed by Codex CLI settings also stops with `FRESH_CODEX_MCP_CONFIG_UNSUPPORTED`. This does not automatically approve normal tool calls or human hook consent.
+
+An existing `mcp_servers.orrery-mail` may contain only the replaced `command`, `args`, and `env_vars`, plus an empty `env` and `enabled=true`; an empty definition is also accepted. Nonempty `env`, a disabled entry, or any other fields such as URL or cwd stop before launch with `FRESH_CODEX_MCP_CONFIG_UNSUPPORTED`, preventing native config merging from retaining old environment settings.
+
+Before launch, one bounded native `config/read` uses the same binary, provider HOME, working folder, sanitized environment and native default profile selection to inspect effective settings, including applicable project layers. The canonical MCP must be enabled with `environment_id="local"`, the exact wrapper/arguments and three forwarded variables. Nonempty env, alternate cwd, disabled or unknown settings stop launch; known null timeout defaults are handled separately. Read/schema failures stop without falling back to HOME alone. Full config and env values are never logged. Old Mail aliases from the effective map are also disabled.
+
+The approved plugin payload stays unchanged. A CLI `skills.config` override preserves existing order and unrelated enabled/disabled intent while excluding only the installed `coordinate/SKILL.md`. The supported `skills:null` shape means empty; missing keys and invalid types do not. Unrelated duplicates, directories and symlink entries are retained. Ambiguous target aliases/duplicates or unresolved relative paths are unsupported. This is a startup snapshot, not an atomic guarantee against concurrent configuration changes or arbitrary explicit-profile equivalence. Actual native Mail, approved hooks and normal tool approval still require reacceptance.
+
+The same effective config must show the approved plugin enabled and its bundled MCP disabled. The existing read-only `scoped_hooks`/`hooks/list` then checks the actual working folder within the SAME AppServer and shared 20-second deadline: approved definitions, keys and current hashes must match, with every planned hook trusted and enabled. Unknown, disabled, untrusted or mismatched evidence stops with `CODEX_HOOK_CONFIGURE_REQUIRED`; enablement and trust are never rewritten. Reader initialization failures attempt cleanup of any created process and pipes. These reads do not replace acceptance of actual hook execution.
+
 Resume accepts **only native sessions already recorded by this new client**. It does not automatically attach an old Mail session, another client's session, or a run whose termination is unknown. With matching records, the arguments are `agentstack-resume claude "$orrery_workdir" --session-id <recorded-native-UUID>` (`codex` for Codex), with the same fresh environment variables as above. If termination is unknown, stop and let the operator establish execution state; do not rewrite receipts manually.
+
+### Resolve an unfinished run, then restart normally
+
+Call the shared prepared-context command `agentstack-runtime-client resolve-ended --launch-id <current-run-UUID> --confirm-ended`
+with the same fresh environment and Python as above. Check [end kinds and refusal reasons](persistent-agents.en.md#close-an-unfinished-fresh-run).
+Only after `ok:true`, separately use ordinary launch or persistent run with the same context. Preserve the old run.
+This differs from the old global `operator-json launch-resolve` contract; legacy and Desktop closure are unchanged.
+Old runs without versioned group observations, unavailable observations, live processes or a different identity/generation HOLD or refuse; do not handwrite recovery records.
+
+Ordinary fresh children use the same close operation. Only when the parent explicitly chooses to rerun the original task after reviewing its side effects,
+call `agentstack-runtime-client launch <provider> <original-cwd>` from the same prepared child context.
+Original parent/child, spawn and task checks remain, and the new run receives the original task.
+Keep `exec.json` and the handoff intact. Replaying child-spawn/child-run retains its status/one-execution contract; this is not automatic retry.
+Closure alone claims neither native_ready nor task success. Runs without a session receipt cannot establish a Reader/preview conversation or a resumable session.
 
 ### Automatic children: fresh routing through existing preregister/spawn entries
 
@@ -276,6 +300,12 @@ Cutover requires automatic children through `/delegate`, New Agent and `/api/spa
 The parent's explicit fresh context prepares a separate numeric ID, credential and context for each child. The same `child-client-name` identifies a preparation retry; only identical arguments return to that same child. Changed name/program/model/task-description or parent is refused. Choose a new slot explicitly for a new child; do not create another name after a communication failure.
 
 This example uses Claude. For Codex, use program `codex` and add `--codex` to spawn. Specify the actual provider model. The child uses the same family's provider HOME already prepared by the operator; it never automatically copies hook approval for a new HOME. Missing instructions, binary or current trust stop before spawn. Native transcripts live in that provider HOME; Mail ownership, task and run/session records remain separate for each child. There is no automatic login/hook approval or real-HOME discovery.
+
+On the first launch in a new Claude provider HOME, a person completes the theme, security notes and workspace trust screens. Reading tasks or supporting files outside the working folder may also require permission. An `accepted` launch does not prove these steps are complete; check the actual screen before waiting for the child's report.
+
+Launching a child from Codex's workspace-write sandbox requires the operator's approval to execute outside the sandbox because it writes the child client area outside the working folder.
+
+Fresh Codex launches add workspace-write network permission by default, matching the existing child launcher. Setting `AGENTSTACK_CODEX_NETWORK` to `0`, `off`, `false` or `no` omits that override and leaves the native config in effect. When network access is disabled, shell connections to Mail are subject to the ordinary sandbox restrictions too. Tool approval still defaults to `on-request`. Codex 0.163.0 loses earlier settings when `-c` options are split across `resume`; the fresh launcher puts all proxy, plugin MCP disablement, skills and other settings after `resume <ID>`.
 
 ```sh
 orrery_child_slot='worker_01'
@@ -388,6 +418,8 @@ Claude notifications use existing hooks; tmux notifications use the existing wat
 
 The fresh Claude SessionStart hook hands over notifications only when `source` is the string `startup`. For resume, clear, compact, or an unknown, missing, or non-string `source`, the hook still checks the client, current launch, and owner as before, but it does not fetch, print, or complete notifications, and it leaves read/ACK unchanged; they stay pending for the regular watcher. Handing context over at SessionStart does not by itself guarantee that a native turn starts. PostToolUse handoff is unchanged. Leaving notifications to the watcher does not guarantee a wake. The watcher delivers only when its existing checks pass, including the pinned pane, process births and ancestry, a screen state of idle or working, and an empty input line; it skips approval screens, unknown states, and pending input.
 
+The known Codex empty placeholder `› Ask Codex to do anything` counts as empty. If a user types the identical text `Ask Codex to do anything`, the capture cannot distinguish it from an empty composer, so a notification may be appended to that input and submitted; this is a known limitation. Unknown placeholders count as pending input. Claude's faint suggestions also count as pending input: the current capture has no styling and cannot distinguish them from a draft. This is a known limitation; suggestion text alone never proves an empty composer. Both process birth recording and comparison use `ps` with `LC_ALL=C`. If a birth recorded under another locale differs, keep the `FRESH_TMUX_TARGET_CHANGED` refusal, confirm normal termination and restart through the regular launcher. Do not rewrite old evidence or reconnect by PID alone.
+
 Notification completion records the stdout/pane handoff operation, not read/ACK, understanding, or task completion. External input and the DB update are not guaranteed to happen exactly once; uncertain outcomes can produce another notification. For a Codex patch affecting multiple files, refusal on a later file can leave an earlier file's lease extended. Editing is still refused, but expiry timestamps are not guaranteed unchanged across the entire patch. Claude MultiEdit/NotebookEdit are currently refused.
 
 ## 8. Recover by procedure after a failure
@@ -399,5 +431,25 @@ For shutdown, record work, stop provider/agent and notification writers, close C
 Before new writes, the old connection can be restored. After new writes, first record new Mail, pending replies, and work in progress. New Mail is not automatically migrated back; this is not lossless rollback. Reacquire reservations instead of relying on expired leases when resuming the old operation, and verify there is no simultaneous old/new execution.
 
 If a write reached the server but its response was lost, the saved request can be replayed. The local caller's `fresh_client replay --context <same-context> --request-id <saved-UUID>` uses the original body, recipients, and absolute paths, while verifying current credentials. Resending under a new UUID or editing the saved request is not a continuation of the original operation. An old experimental context lacking the mode pin is refused rather than repaired by inference: prepare a new client UUID from the same owner binding. That does not transfer old native-session resume records.
+
+Fresh Codex CLI lifecycle hooks, reservation and key-read guards, and `session-hook` use the absolute interpreter pinned by the launcher in `AGENTSTACK_FRESH_PYTHON`. A login shell replacing the old `AGENTSTACK_PYTHON` does not select that interpreter or PATH's python3. A missing, empty, relative or non-executable pin is refused with `FRESH_CODEX_PYTHON_UNAVAILABLE`. CLI fresh guards also reject interpreter/import failures with `FRESH_CODEX_GUARD_UNAVAILABLE`. The key-read guard does not enter the legacy shell guard's ordinary-command fallback on that path. Desktop and Claude retain their separate existing paths. After updating this plugin payload, have the human review and approve it again, complete the regular plan/trust apply, then accept a new native process. Do not reuse approval for an older or diagnostic payload.
+
+The launcher also pins `AGENTSTACK_FRESH_WRAPPER_ROOT`, `AGENTSTACK_FRESH_RUNTIME_DIR`, `AGENTSTACK_FRESH_CODEX_HOME` and `AGENTSTACK_FRESH_CODEX_BIN`. The CLI fresh payload prelude `fresh-cli-env.sh` restores core/hooks/runtime locations, Codex home/binary and mode after login-shell initialization. Missing or invalid pins, runtime disagreement with the context, or a missing prelude are refused with `FRESH_CODEX_ENV_UNAVAILABLE`; mixed legacy/global contexts retain their existing refusal. Provider home uses the shared location verified and selected by the launcher; it is not inferred again from the child's context. OS HOME and legacy settings files are unchanged. The normal fresh child tmux entry also passes the selected provider binary, Python, mode and context after shell initialization.
+
+To check the real hook, use the approved payload and the Python selected above for this single run. Send the first identity-check input in the new Codex process, verify that the screen shows no `Hook failed`, then exit normally with `/quit`. Only after a successful launch does the command list session records newer than the pre-launch time marker. It displays file metadata, not context/receipt contents, environment values or credentials, and inserts no diagnostic code into the payload or execution environment.
+
+```sh
+orrery_hook_marker="$(mktemp "${TMPDIR:-/tmp}/orrery-hook-check.XXXXXX")" || exit 1
+if AGENTSTACK_PYTHON="$orrery_python" AGENTSTACK_RUNTIME_MODE=fresh \
+  AGENTSTACK_FRESH_CLIENT_CONTEXT="$orrery_context" \
+  "$orrery_install/bin/agent-start-codex" "$orrery_workdir"; then
+  find "$(dirname "$orrery_context")/launch/runs" -type f -name session.json \
+    -newer "$orrery_hook_marker" -exec ls -l {} \;
+else
+  printf '%s\n' 'STOP: fresh launch failed; inspect the fixed code above.' >&2
+fi
+```
+
+Expect no `Hook failed` and **exactly one `session.json` for this run**. No result, multiple results or a different run's record is unconfirmed: stop rather than substituting an earlier success. Together these observations confirm that the approved hook path using the selected Python executed and recorded the session. Python import checks and pre-launch read-only `hooks/list` do not replace this real execution check. Verify MCP identity through `runtime_status` and ordinary tool approval separately. Stop on `FRESH_CODEX_PYTHON_UNAVAILABLE` (missing/invalid Python pin), `FRESH_CODEX_ENV_UNAVAILABLE` (other pins, nonce or runtime inconsistency), `FRESH_CODEX_GUARD_UNAVAILABLE` (guard execution/import failure), or `CODEX_HOOK_CONFIGURE_REQUIRED` (payload/plan/trust mismatch). Do not fall back to PATH's python3 or a legacy route. An exit-time `FRESH_PRIVATE_FILE_UNAVAILABLE` also requires investigating the missing record before proceeding with acceptance.
 
 Reactivation and App foregrounding are outside this cutover scope. Do not report overall completion until real OS managers/Finder GUI, real provider/App/login/trust/live-install acceptance, support for the actual working paths, final CI and an attended cutover are confirmed. Private Mac checks do not establish acceptance for untested environments such as WSL.

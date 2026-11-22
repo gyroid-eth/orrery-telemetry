@@ -58,7 +58,7 @@ The six screenshots on this page are real screens from an isolated demo environm
 
 | Display | Interpretation |
 | --- | --- |
-| `GPT 5.6`, `SONNET 5`, etc. under the name | Current model. `◷ 200K` or `◷ 1M`, when present, is the model's total working-memory capacity. |
+| `GPT-6.1-Sol`, `SONNET 5`, etc. under the name | Current model. `◷ 200K` or `◷ 1M`, when present, is the model's total working-memory capacity. |
 | Thin line below the model | **Context remaining**. Longer means more room; below 20% it becomes redder. It is absent when telemetry cannot be obtained. |
 | Black strip | Current terminal display, useful for judging whether the agent is working or waiting. |
 | `ORD` | Most recent instruction assigned to the agent. |
@@ -83,6 +83,10 @@ The header numbers are a **tally** of the states each card shows in its top-righ
 | `NEED YOU` | Agents waiting on a human: pending approval (`APPROVAL`) or asking a question (`?`) | red border, or `?` |
 | `WORKING` | Agents with a turn in progress | amber LED and duration (or `WORKING` when unavailable) |
 | `WAITING` | Agents at the prompt, free to take work | `LAST 1M41S` |
+
+In a narrow Codex pane, a current `Working` / `Thinking` line ending in `…` still indicates work. Elapsed time includes only readable units and is absent when unreadable. Historical status lines superseded by a later reply or completion marker, and quoted examples, do not establish current work.
+
+Work also remains current while Codex shows queued follow-up inputs (`Queued follow-up inputs`) between the current `Working` line and the input box; a queue alone never indicates work. A footer whose model display name separates the variant with a space, such as `GPT-6.1 Terra max`, is recognized as the input footer, and the model is shown as `GPT-6.1-Terra`.
 
 `NEED YOU` appears only while such agents exist; clicking it narrows the DECK to them (click again to restore). An agent whose process has stopped and returned to the shell is in none of these counts; its card says `○ SHELL`. The total of active agents is in the sector heading, `ACTIVE AGENTS [ 29 ]`.
 
@@ -324,6 +328,8 @@ Local Qwen uses the Qwen logo inside a hexagon; DeepSeek uses its provider badge
 Displays `AGENTSTACK_SPAWN_DIRS` preset chips and an exact-path input. Persist presets with installer `--spawn-dirs`; shell `export` does not reach the service. See “Spawn directory” in [configuration](configuration.en.md). The input uses root-scoped `/api/fs/dirs` typeahead and supports arrow keys / Enter. The last directory is saved in `localStorage`.
 
 Typeahead does not leave `AGENTSTACK_SPAWN_ROOTS` or suggest hidden directories, `..`, or symlinks outside a root.
+
+In the ORRERY folder picker, the breadcrumbs set the scope for a name search. With an empty query, the picker shows the current folder’s children. As you type, it shows matches below the current folder by relative path. Use the arrow keys to move and Enter to open a child folder or select a search result. The [folder search API](api.en.md#get-apifsdir-search) describes the scope and limits.
 
 ### Task and ADVANCED
 

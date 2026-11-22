@@ -147,7 +147,8 @@ def test_fresh_agentctl_uses_saved_preparation_and_renders_same_context_without_
         finally:await runtime.close()
     context,instance,config=asyncio.run(prepare())
     home=tmp_path/'home';install=home/'installed';(install/'dashboard').mkdir(parents=True)
-    for rel in ('dashboard/agentctl.sh','dashboard/agentdashboard.plist.template','bin/lib/global-client-loader.sh','hooks/project-context.sh'):
+    for rel in ('dashboard/agentctl.sh','dashboard/agentdashboard.plist.template','bin/lib/global-client-loader.sh',
+                'hooks/project-context.sh','hooks/installed-env.py'):
         dst=install/rel;dst.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(ROOT/rel,dst)
     fake=tmp_path/'fake-bin';fake.mkdir();calls=tmp_path/'calls'
     for name,body in {'uname':'echo Darwin','curl':'echo 200','launchctl':

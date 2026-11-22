@@ -28,6 +28,16 @@ agent-start
 
 The precedence order is an explicit argument, the `fzf` picker, then the current directory.
 
+## Launch workspace and reservation protection
+
+Namespace selection is unchanged: installed `AGENTSTACK_PROJECT_KEY` still supplies the coordination namespace unless overridden by the existing environment settings. A path-shaped key can coordinate agents in different repositories and does not add that path to protection. Selecting a working directory does not change the namespace.
+
+Top-level and delegated-child launches compute `AGENTSTACK_PROTECTED_ROOTS` from the ordered `AGENTSTACK_EXTRA_PROTECTED_ROOTS`, then the selected physical working directory. Git root discovery does not automatically expand protection: include an ancestor explicitly in extras if needed. Aliases and duplicates are collapsed in order. Resume and persistent-agent re-resolution are follow-up work.
+
+Inherited `GIT_DIR`, `GIT_WORK_TREE`, and `GIT_COMMON_DIR` do not choose the workspace and are removed from the launched process. Broken Git metadata stops the launch rather than selecting another directory. New tmux sessions receive the current workspace context instead of the server's stale roots; the server's global environment is not changed. `AGENTSTACK_VAULT`, Codex sandbox/approval, and OAuth behavior are unchanged.
+
+Install/update automatically migrates the installed legacy protection list once. Ambient shell/tmux `AGENTSTACK_PROTECTED_ROOTS` is never imported; a different nonempty legacy value warns even when extras exist. Before cutover, finish work or release reservations, then restart affected sessions together: managed launches now use physical absolute file paths for reservation identity instead of first-matching-root-relative names. See [automatic protection migration](configuration.en.md#reservation-protection-and-migration).
+
 ## Codex and the Node.js PATH
 
 Codex children select and validate the CLI with the shared `hooks/codex-bin.sh` functions, running `codex --version` in the login-shell launch context. Doctor uses the same selection and validation. The search includes nvm bin directories. If executable `node` exists beside the resolved Codex symlink target, that directory is included in the execution PATH. nvm version directories take precedence; shared prefixes retain existing command order and are appended when absent. If the selected node already resolves there, PATH is unchanged. For npm symlinks without adjacent node at the target, the selected shim's bin directory is used when it contains node. Otherwise the login-shell PATH and `~/.local/bin` apply.
@@ -35,6 +45,8 @@ Codex children select and validate the CLI with the shared `hooks/codex-bin.sh` 
 The launcher requires its bundled `codex-bin.sh` and stops with reinstall guidance when it is missing or incompatible. Doctor prefers its adjacent helper and reports unavailable checks when it cannot use it.
 
 Dashboard `SPAWN FAILED` reads the current launch interval, showing explicit reasons or the first ordinary error before registration cleanup errors. Candidate rejection details are added only when all candidates fail. If node cannot be found, check Node.js for the selected CLI installation.
+
+Warm-pool selection is unchanged in this PR. The existing `claim-model` contract cannot prove a prestarted provider's cwd or protected roots; ensuring that boundary for warm-pool users and measuring the performance impact remain separate work.
 
 ## tmux session
 
@@ -113,7 +125,7 @@ ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json
 
 Private `harness_state_dir` contains the initial prompt, native launch plan and concise native instructions. Their source is `bin/lib/harness_instructions.md`; the existing shared renderer includes common startup and Mail rules. Initial launch and resume of the same ID pass them to dsh's `AGENTS.md` or Hermes's system prompt. They omit ORRERY child-creation procedures, raw authentication recovery and instructions for other runtimes. Shared-edit reservations, the private scratch exception and stop conditions remain. dsh tool-subagent, Hermes auxiliary/delegation settings and skill distribution are unchanged, as are the Claude/Codex instruction bodies.
 
-Credential values and parent tokens are not included in the instructions. Additional plain stdio/HTTP MCP selections use the common tool policy; approvals or filters the native configuration cannot express are explicitly rejected. Native tool adapters call the existing credential-read, registration and reservation hooks. Installer default-tools are not silently omitted for an additional harness: unsupported implicit defaults stop launch; select an explicit `--base default` or supported `--tools`.
+Credential values and parent tokens are not included in the instructions. Additional plain stdio/HTTP MCP selections use the common tool policy. Explicit approvals or filters that the native configuration cannot express stop the launch. Installer defaults apply items that can be represented in native configuration and report any items they omit. Native tool adapters call the existing credential-read, registration and reservation hooks.
 
 New Hermes children use `children/<SHA256 of project key>/<canonical name>` beneath the
 generation-external profiles directory as their persistent `HERMES_HOME`. Different names or
@@ -210,9 +222,15 @@ The value is set with `tmux new-session -e` when the session is created, not in 
 
 Normally completed Claude children retain mode-`0600` state and their owner credential for 30 days by default. The dashboard verifies the original project, numeric ID, name, program, credential, expiry, and permissions. It regenerates the child-owned Mail proxy configuration, re-registers the same identity using the saved credential, and calls `unretire_agent` to restore delivery before opening a terminal. A running child resume is protected from expiry purge and runs cleanup again when its CLI exits. Top-level Claude sessions use the same registration and unretire sequence when their existing owner token is available. The resumed session's SessionStart hook re-registers from the shell with the registered model (or `claude-code` when none is registered), handed as `CLAUDE_CHILD_MODEL`, never a model left in the tmux server environment. `AGENTSTACK_CLAUDE_MODEL` is left alone, so agents launched from that session keep their default model. For a top-level session (an owner token without child state) whose registration response confirmed that it was previously retired, a normal CLI exit re-retires it in Mail with the same token (a tmux kill or SIGHUP skips this). Reservations are left to the session's SessionEnd hook. Nothing is retired while the identity is live in another session: a tmux pane other than this one whose pane metadata names it, a running CLI behind a SessionStart lease under `runtime/live-sessions/<name>/<pid>` (the next SessionStart removes leases whose CLI has ended), or a pane list that cannot be read from inside tmux. The token is kept for the next resume, and an originally active identity is not retired.
 
-A session reopened from a terminal with `claude --resume` is unretired on the same terms, but only when the SessionStart source is `startup` or `resume`; on `/clear` or compaction a retirement made while the session ran stands, and the session is told it is retired: its SessionStart shell registration authenticates the saved owner credential, and when Mail reports the row retired it unretires only retained child state (within its period, same token, no resume in progress) or an owner token with neither child state nor a tombstone. Legacy three-field state, expired or purged material stays retired, with a one-line note to resume from the dashboard.
+A session reopened from a terminal with `claude --resume` is unretired only when the SessionStart source is `startup` or `resume`; on `/clear` or compaction a retirement made while the session ran stands, and the session is told it is retired: its SessionStart shell registration authenticates the saved owner credential, and when Mail reports the row retired it unretires only retained child state (within its period, same token, no resume in progress) or an owner token with neither child state nor a tombstone. Legacy three-field state, expired or purged material stays retired, with a one-line note to resume from the dashboard.
 
-Credentials deleted by an older cleanup return `credential_missing`; expired material returns `retention_expired`, and explicitly purged material returns `purged`. Resume refuses startup and never registers an alias or issues a credential. Any necessary recovery is an operator procedure described in [Persistent-agent enrollment and startup](persistent-agents.en.md). Failed Mail registration, unretire, or child proxy restoration also prevents Claude startup. Startup preparation creates a temporary detached tmux session and gates the CLI with `tmux wait-for`. Only after window opening and session-name replacement succeed does it release the CLI and dispose of the old husk. Failure removes the temporary session, preserves the original shell, and re-retires Mail only when the registration response confirmed that the identity was previously retired. An originally active identity is never retired as compensation. Failures of the restoration itself are explicitly reported in `rollback_errors`.
+DECK can resume Claude with Mail after expiry if the operator subsequently recovers the credential for the same Mail identity and the conversation can resume without its original child-specific tool configuration. See [Resume Claude in DECK after retention expires](persistent-agents.en.md#resume-claude-in-deck-after-retention-expires) for the requirements and commands. Before recovery the conversation resumes with `mail_reason: retention_expired`. After an explicit purge, resume is refused with `purged`.
+
+Resume never registers an alias or issues a credential. Failed Mail registration, unretire, or child proxy restoration also prevents Claude startup. Startup preparation creates a temporary detached tmux session and gates the CLI with `tmux wait-for`. Only after window opening and session-name replacement succeed does it release the CLI and dispose of the old husk. Failure removes the temporary session, preserves the original shell, and re-retires Mail only when the registration response confirmed that the identity was previously retired. An originally active identity is never retired as compensation. Failures of the restoration itself are explicitly reported in `rollback_errors`.
+
+## Computer use for children
+
+The standard launcher can give Claude, Codex, dsh and Hermes the generated relay by choosing `--tools mcp:orrery-screen` or `--tools screen:read:orrery-screen`. The operator API changes a running child’s permission. [Cua Driver setup and verification (Japanese)](computer-use.md)
 
 ## Codex-specific startup
 
@@ -291,7 +309,7 @@ The parent agent does not finish when it hands off the task. It remains responsi
 
 `--base mail-only` and `--tools browser[:<deviceId>]` / `screen[:read|:operate]` / `screen:<read|operate>:<server>` / `mcp:<server>[:all]` choose the tools a child gets. A child with a selection is not started when the selection cannot be applied ([Choosing the tools a child gets](delegation.en.md#choosing-the-tools-a-child-gets---base----tools)).
 
-A CLI launch that omits base/tools/MCP profile uses the installer's `AGENTSTACK_CHILD_DEFAULT_TOOLS` (empty by default), reporting and omitting only unavailable default items. Explicit `--base default` suppresses those defaults. Resume restores the recorded selection ([Installer defaults](delegation.en.md#installer-defaults)).
+New Claude, Codex, dsh and Hermes launches use the installer's `AGENTSTACK_CHILD_DEFAULT_TOOLS` (empty by default) when base/tools/MCP profile are omitted on the CLI or base/tools are omitted from the standard `/api/spawn`. The launcher reports and omits unavailable default items. Explicit `--base default` suppresses those defaults. Resume restores the recorded selection ([Installer defaults](delegation.en.md#installer-defaults)).
 
 Codex children default to MCP profile `inherit` for backward compatibility. `/delegate --codex-mcp orrery-only` keeps authenticated ORRERY Mail and the session-binding plugin while disabling other inherited MCP servers and plugins. Do not use it for tasks that require plugin skills or external app tools.
 
@@ -332,6 +350,8 @@ Otherwise, it writes to:
 ```
 
 The log is not a transcript. It focuses on Goal, Decisions, Work Performed, Verification, Related Notes, and Next Actions.
+
+After writing the log, the agent passes its path to ORRERY Mail's `show_files`. In an ORRERY-launched session the cockpit's History then shows the log as a file chip that opens a preview drawn as Markdown. The first time on a machine, and only when the log is inside the session's working folder, the agent adds one line about this in the language you are using. Delete `${AGENTSTACK_RUNTIME_DIR:-~/.agentstack/runtime}/hints/log-history-preview` to see it again.
 
 ### Hooks and reservation enforcement
 

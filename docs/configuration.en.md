@@ -182,7 +182,8 @@ export AGENTSTACK_DELIVERABLE_ROOTS="$HOME/project-a/logs:$HOME/shared logs"
 | `AGENTSTACK_MAIL_ENROLL_BIN` | derived from the adopted Mail deployment | Matching `agentstack-enroll` saved by the installer in `env.sh`; normally not set by hand |
 | `AGENTSTACK_MAIL_HTTP_BEARER_MODE` | `disabled` | Do not use the legacy HTTP bearer |
 | `AGENTSTACK_PROJECT_KEY` | existing `env.sh` on reinstall; required initially | Human project key. `--project-key` has highest priority |
-| `AGENTSTACK_PROTECTED_ROOTS` | live project key, then existing `env.sh`, then resolved project key | Roots protected by the reservation hook |
+| `AGENTSTACK_EXTRA_PROTECTED_ROOTS` | process value (including empty) → installed extras (including empty) → installed legacy roots once → empty | Persistent ordered additional reservation roots; see automatic migration below |
+| `AGENTSTACK_PROTECTED_ROOTS` | computed at every managed launch | Runtime output: extras, then the actual workspace. Installed legacy value is retained only for direct/unmanaged-hook compatibility |
 | `AGENTSTACK_RELEASE_GRACE_SECONDS` | `90` | Debounce seconds before releasing a reservation after successful Edit / Write. Legacy `FILE_RESERVATION_RELEASE_GRACE_SECONDS` is also accepted as a fallback |
 | `AGENTSTACK_DELIVERABLE_ROOTS` | unset | `:`-separated Output-index scan roots, saved to env / service / manifest |
 | `AGENTSTACK_LANG` | unset | `ja` / `en` murmur override; browser-selected when unset |
@@ -200,13 +201,42 @@ When a healthy ORRERY Mail listener already exists, the installer adopts the dep
 
 When a healthy listener uses the expected database but its service environment cannot be identified, an ordinary unpinned reinstall reuses the listener unchanged. In this degraded state deployment and enrollment paths are empty, and the installer updates neither the enrollment connection profile nor Mail autostart. Existing triggers are not deleted or stopped, but the installer cannot guarantee restart at the next login. Installation instead stops explicitly, without switching the listener, when an explicit `AGENTSTACK_MAIL_SERVICE_VENV` / `AGENTSTACK_MAIL_SERVICE_ENV` cannot be matched to the running deployment, known metadata is invalid, or metadata promises an enrollment CLI that is missing.
 
-On a re-install, the settings in the table above that a person chooses (project key, protected roots, port, label prefix, terminal, MCP URL, `PATH`, Python, the Mail state / service roots, `LANG` / `MURMUR` / `DELIVERABLE_ROOTS`, and so on) are decided as explicit value → previous `env.sh` → default. The list is `AGENTSTACK_INHERITED_SETTINGS` in `hooks/project-context.sh`; see "What a re-install inherits" under Upgrade in [install.en.md](install.en.md) for how to return to the defaults.
+On a re-install, the settings in the table above that a person chooses (project key, explicit extra protected roots, port, label prefix, terminal, MCP URL, `PATH`, Python, the Mail state / service roots, `LANG` / `MURMUR` / `DELIVERABLE_ROOTS`, and so on) are decided as explicit value → previous `env.sh` → default. The list is `AGENTSTACK_INHERITED_SETTINGS` in `hooks/project-context.sh`; see "What a re-install inherits" under Upgrade in [install.en.md](install.en.md) for how to return to the defaults.
 
 The installer's project-key precedence is `--project-key` / process `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → existing `env.sh` at the install destination. If none exist on first install, it does not guess that the repository checkout is the project; it stops with exit 2 before making changes. `AGENTSTACK_PROJECT_KEY` is recommended for persistent configuration.
 
-At hook and helper runtime the precedence is `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → `${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh` → current cwd. The installed `env.sh` is not sourced; only `AGENTSTACK_PROJECT_KEY`, and `AGENTSTACK_PROTECTED_ROOTS` when falling back for protected roots, are read literally. Thus an installed editor started from another directory uses the same project key for reservation and registration without executing arbitrary shell code from `env.sh`.
+At hook and helper runtime the precedence is `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → `${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh` → current cwd. The shared resolvers read project and extra-root settings from installed `env.sh` literally, without sourcing shell code. Direct/unmanaged hooks may still read the retained legacy `AGENTSTACK_PROTECTED_ROOTS`; managed launches ignore it as configuration. Thus an installed editor started from another directory uses the same project key for reservation and registration without executing arbitrary shell code from `env.sh`.
 
 The installer derives `AGENTSTACK_MAIL_DB`, `AGENTSTACK_MAIL_ENV`, and `AGENTSTACK_SIGNALS_DIR` from state / render and stores the state root together with `AGENTSTACK_MAIL_HTTP_BEARER_MODE=disabled` in `env.sh`.
+
+## Reservation protection and migration
+
+On covered managed `workspace-v1` launch paths, `*`, `?`, `[`, or `\` in the physical paths of the launch directory and `AGENTSTACK_EXTRA_PROTECTED_ROOTS` are rejected. ORRERY Mail interprets the first three characters as glob markers and replaces `\` with `/` when comparing reservation names, which can break self-matching or cause false conflicts with another folder. The error identifies the characters and path. A standalone `]` is allowed.
+
+`AGENTSTACK_EXTRA_PROTECTED_ROOTS` is the persistent setting for additional reservation roots. Use colon-separated absolute or `~/` paths (spaces are supported; colons inside a path are not). Managed launches resolve physical paths, collapse symlink/trailing-slash aliases, and deduplicate without reordering. Top-level and delegated-child launches covered by this change protect their selected physical working directory after the ordered extras. Git root discovery does not automatically extend protection; explicitly include it in `AGENTSTACK_EXTRA_PROTECTED_ROOTS` if wanted. These launches do not reuse a previous runtime `AGENTSTACK_PROTECTED_ROOTS` list. A path-shaped project key and `AGENTSTACK_VAULT` do not add protection by themselves. Namespace selection is unchanged; the installed project key remains in use.
+
+At launch, an explicitly set process extras value (including empty) wins over installed extras, then empty. Only install/update performs the legacy conversion.
+
+Install/update automatically selects and saves extras in this order, using presence rather than non-emptiness:
+
+1. Process `AGENTSTACK_EXTRA_PROTECTED_ROOTS`, including an explicit empty string
+2. Installed `env.sh` `AGENTSTACK_EXTRA_PROTECTED_ROOTS`, including an empty string
+3. Installed `env.sh` legacy `AGENTSTACK_PROTECTED_ROOTS`, copied exactly once with its literal value and order intact
+4. Empty, if none of those settings exists
+
+Migration reads the installed file literally; it does not execute shell expressions, infer which roots were intentional, or import ambient shell/tmux `AGENTSTACK_PROTECTED_ROOTS`. Invalid or ambiguous legacy configuration stops the update before the installed file is overwritten. The installer displays the selected source, value, and destination, including in `--dry-run`. Normal updates perform this migration automatically; no manual copy is needed. The installed file must contain literal export assignments, as generated by the installer; hand-written shell commands, computed variable names, or expanding values require review before update. Unrelated quoted multiline values, such as model lists, remain valid.
+
+Every successful install writes an extras marker, even when empty, to `env.sh`, dashboard service settings, and install-state. That presence prevents the legacy list from being imported again. The installed legacy value is retained only for direct/unmanaged-hook compatibility; managed launches ignore it as configuration. A different nonempty shell/tmux legacy value still triggers a warning even when extras already exist. Reopen stale shells or clear their old variable; do not copy a runtime-root list to silence the warning.
+
+Reinstall and `--reset-settings` keep extras. An explicit `AGENTSTACK_EXTRA_PROTECTED_ROOTS=` clears them while retaining the empty marker and mandatory launch-workspace protection. To preview a deliberate replacement or clearing of extras, use these commands, then rerun without `--dry-run` after reviewing the result:
+
+```bash
+AGENTSTACK_EXTRA_PROTECTED_ROOTS="$HOME/shared-vault" ./scripts/install.sh --dry-run
+# Or deliberately keep no additional roots:
+AGENTSTACK_EXTRA_PROTECTED_ROOTS= ./scripts/install.sh --dry-run
+```
+
+Before cutover, finish work or release active reservations. Older relative reservation names depended on the first matching root, but updated managed launches use the physical absolute path as their reservation identity, independent of root order. Existing relative leases cannot be reused as-is. Review the dry run, update, then restart affected sessions together. Existing sessions keep their environments until restart; updating files does not refresh them. Dashboard resume and persistent-agent re-resolution are follow-up work. Existing resume paths may retain older roots and are not guaranteed to implement the new protection boundary in this PR.
 
 ## Launcher
 
@@ -217,7 +247,7 @@ The installer derives `AGENTSTACK_MAIL_DB`, `AGENTSTACK_MAIL_ENV`, and `AGENTSTA
 | `AGENTSTACK_CLAUDE_MODEL` | `claude-code` | Claude registration model label. Children and dashboard-resumed sessions use their own model (`CLAUDE_CHILD_MODEL`) first. A new window in a child's tmux session inherits that value, so `unset CLAUDE_CHILD_MODEL` before opening another agent there with `AGENT_NAME=<name> claude --resume`; otherwise it registers with the child's model |
 | `AGENTSTACK_CODEX_BIN` | `codex` resolved in the operator's shell at install time that answers `--version` (under WSL, a Windows install under `/mnt/<drive>/` is skipped; `--codex-bin` to override) | Codex CLI. The dashboard runs under launchd / systemd with the minimal PATH, so a codex under nvm / nodebrew / `~/.npm-global` is reachable only through this value |
 | `AGENTSTACK_CODEX_MODEL` | launcher / bootstrap default | Codex registration model |
-| `AGENTSTACK_CODEX_SANDBOX` | `workspace-write` | Codex `--sandbox` |
+| `AGENTSTACK_CODEX_SANDBOX` | `workspace-write` | Set to `danger-full-access` for Codex CLI Full Access in legacy mode. Applies to `agent-start-codex`, `/delegate`, standalone NEW AGENT, and dashboard resumes. Direct `agent-start-codex` also supports `read-only` |
 | `AGENTSTACK_CODEX_APPROVAL` | `on-request` | `--ask-for-approval` for `agent-start-codex`, the user's own interactive session. Spawned children use `AGENTSTACK_CODEX_CHILD_APPROVAL`; see Child spawn |
 | `AGENTSTACK_VAULT` | unset | Additional writable `--add-dir` passed to Codex |
 | `AGENTSTACK_MCP_URL` | `http://127.0.0.1:18765/mcp` | Registration / hook endpoint |
@@ -228,9 +258,12 @@ The installer derives `AGENTSTACK_MAIL_DB`, `AGENTSTACK_MAIL_ENV`, and `AGENTSTA
 | `AGENTSTACK_TCC_DIRS` | `$HOME/Desktop:$HOME/Downloads:$HOME/Documents` | `:`-separated TCC probe targets |
 | `AGENTSTACK_SCIENTISTS_JSON` | bundled JSON | Scientist vocabulary override |
 
-The launchers (`agent-start`, `agent-start-codex`, `agent-start-gemini`) load `env.sh` at startup but do not overwrite a value from `AGENTSTACK_INHERITED_SETTINGS` that was already set. For example `AGENTSTACK_PROJECT_KEY=/path/to/other ./agent-start` registers under `/path/to/other`, not the installed project, and its protected roots follow that project unless given explicitly. Without an explicit value, `env.sh` supplies it.
+The launchers (`agent-start`, `agent-start-codex`, `agent-start-gemini`) load `env.sh` at startup but do not overwrite a value from `AGENTSTACK_INHERITED_SETTINGS` that was already set. For example `AGENTSTACK_PROJECT_KEY=/path/to/other ./agent-start` registers under `/path/to/other`; reservation protection still comes from the actual launch workspace plus explicit extras. Without an explicit project key, `env.sh` supplies the namespace. This separation does not change namespace selection or remove the installed project key.
 
 The canonical `AGENTSTACK_TCC_DIRS` syntax is colon-separated so paths may contain spaces. Legacy whitespace-separated values without a colon are also interpreted for compatibility.
+
+To enable Full Access, set `export AGENTSTACK_CODEX_SANDBOX=danger-full-access` in `~/.agentstack/env.sh`. A normal reinstall preserves the setting.
+Full Access disables the Codex sandbox and command approvals. Codex can write and delete files anywhere the OS permits and run `git push` to authenticated remotes.
 
 `AGENTSTACK_RESERVED_IDENTITY`, proxy-token paths, child tokens, and similar values are internal values set per session by the spawner. Do not set them manually for a top-level launcher.
 
@@ -244,17 +277,17 @@ These variables change `spawn_child.sh` and `agentstack-preregister-child` behav
 | `AGENTSTACK_FOCUS_CHILD` | unset | When automatic opening is enabled, `1` brings the window forward. It does not enable automatic opening on its own |
 | `AGENTSTACK_STRICT_AGENT_NAMES` | unset | Set to `1` to make an off-list child name an error instead of a warning |
 | `AGENTSTACK_MONITOR_DANGER_CHECK` | `0` | Set to `1` to enable dangerous-command detection in the monitor. Passive by default |
-| `AGENTSTACK_CODEX_CHILD_APPROVAL` | `never` | Codex child `--ask-for-approval`, persisted by installer `--codex-approval` |
+| `AGENTSTACK_CODEX_CHILD_APPROVAL` | `never` | `--ask-for-approval` for parented Codex children under `workspace-write`, persisted by installer `--codex-approval`. Standalone NEW AGENT starts follow Codex configuration. Full Access always uses `never` |
 | `AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY` | unset | Absolute path to a TOML fragment overlaid on every macOS/Linux Codex child's `config.toml`, persisted by installer `--codex-child-overlay <path>` |
 | `AGENTSTACK_CODEX_NETWORK` | `on` | Codex child sandbox network (`-c sandbox_workspace_write.network_access=true`). Disable with `--codex-network off` |
-| `AGENTSTACK_CHILD_DEFAULT_TOOLS` | empty | Installer-selected child tools, using the `--tools` grammar; explicit base/tools/MCP profile wins. Unavailable defaults are omitted with a notice |
+| `AGENTSTACK_CHILD_DEFAULT_TOOLS` | empty | Tools for new Claude, Codex, dsh and Hermes launches via CLI or standard `/api/spawn`. The common list can include provider overrides such as `;dsh=`. Explicit base/tools/MCP profiles take precedence. [Installer defaults](delegation.en.md#installer-defaults) |
 | `AGENTSTACK_CODEX_ADD_DIRS` | unset | Additional writable roots for Codex children (`:`-separated), persisted by `--codex-add-dirs` |
 | `AGENTSTACK_WORKTREE_ROOT` | `$AGENTSTACK_HOME/worktrees` | Persistent root for new isolated worktrees; override and persist it by setting the variable when running the installer |
 | `AGENTSTACK_CLAUDE_CHILD_CHROME` | unset | `1` makes `spawn_child.sh` start Claude children with `--chrome` (Claude in Chrome). Unset or `0` means inherit (the launch command is unchanged). The CLI `--claude-chrome` takes precedence. Ignored for Codex children. [Details](delegation.en.md#claude-children-and-browser-control-claude-in-chrome) |
 | `AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE` | unset | deviceId of the browser Claude children should use. Setting it implies `AGENTSTACK_CLAUDE_CHILD_CHROME=1`. The CLI `--claude-chrome-device` takes precedence. An instruction to the child, not a technical isolation |
 | `AGENTSTACK_CHILD_RESUME_RETENTION_DAYS` | `30` | Days to retain resume state / credentials for normally completed Claude / Codex children. Persist with installer `--child-resume-retention-days DAYS`; `0` restores full deletion during cleanup |
 
-The product assembles Codex child startup flags. It does not consult user launchers under `~/.codex/bin/`, because doing so can silently substitute that launcher's default `on-request` and drop the network flag and additional roots. Since children run unattended, the defaults are approval `never` and network on. Writable roots are the project, `AGENTSTACK_SPAWN_DIRS` / `AGENTSTACK_SPAWN_ROOTS`, install directory, `AGENTSTACK_WORKTREE_ROOT`, `~/.claude`, `~/.codex`, child-specific `CODEX_HOME`, and `AGENTSTACK_CODEX_ADD_DIRS`; nonexistent directories are silently omitted. Dashboard Codex resume uses the same values. These belong to dashboard service environment, so a shell `export` does not reach them. Pass them to the installer. The config overlay currently applies only to macOS/Linux (including Windows through WSL2) via `spawn_child.sh`; the native-Windows launcher does not apply it.
+The product assembles Codex child startup flags directly. For parented starts and dashboard resumes without a recorded standalone start, approval defaults to `never`. Network access defaults to on. Writable roots are the project, `AGENTSTACK_SPAWN_DIRS` / `AGENTSTACK_SPAWN_ROOTS`, install directory, `AGENTSTACK_WORKTREE_ROOT`, `~/.claude`, `~/.codex`, child-specific `CODEX_HOME`, and `AGENTSTACK_CODEX_ADD_DIRS`. Only existing directories are included. Set these dashboard service values through the installer. The config overlay applies through `spawn_child.sh` on macOS and Linux, including WSL2.
 
 Every Codex the product launches (children, dashboard resume, `agent-start-codex`, the Windows launcher) gets `-c check_for_update_on_startup=false`. Codex's startup update screen defaults to `npm install -g @openai/codex`, and an unattended child has nobody to decline it; if the child is stopped mid-install, the machine's `codex` is left with neither the old nor the new version usable (#60). Update Codex yourself, for example with `npm install -g @openai/codex@latest`.
 
