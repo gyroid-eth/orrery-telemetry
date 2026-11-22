@@ -1,5 +1,6 @@
 """Existing Telegram plugin, synthetic transport and credential readers only."""
 import asyncio
+from contextlib import nullcontext
 import importlib.util
 import json
 from pathlib import Path
@@ -14,6 +15,25 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('fixture_telegram', ROOT / 'integrations/hermes/telegram/__init__.py',
     submodule_search_locations=[str(ROOT / 'integrations/hermes/telegram')])
 plugin = importlib.util.module_from_spec(spec);sys.modules[spec.name] = plugin;spec.loader.exec_module(plugin)
+
+
+def test_plugin_reads_orrery_settings_from_hermes_merged_config(tmp_path, monkeypatch):
+    ref = dict(store='keychain', service='fixture.telegram', account='fixture')
+    merged = dict(token_ref=ref, allow_from=[123], allowed_chats=[],
+                  channel_prompts={}, extra={}, reactions=False)
+    monkeypatch.setitem(sys.modules, 'hermes_cli.config',
+                        SimpleNamespace(load_config_readonly=lambda: {'telegram': merged}))
+    monkeypatch.setitem(sys.modules, 'hermes_cli.plugins_loader',
+                        SimpleNamespace(_plugin_home_scope=lambda home: nullcontext()))
+    ctx = SimpleNamespace(_manager=SimpleNamespace(home_path=tmp_path))
+    assert plugin._configuration(ctx) == dict(token_ref=ref, allow_from=[123])
+    with pytest.raises(ValueError, match='invalid_telegram_settings'):
+        plugin.settings.validate(merged)
+    merged['allow_from'] = []
+    assert plugin._configuration(ctx) == {}
+    merged['allow_from'] = [123]
+    merged.pop('token_ref')
+    assert plugin._configuration(ctx) == {}
 
 
 @pytest.mark.parametrize('store', ['keychain', 'secret-service'])
