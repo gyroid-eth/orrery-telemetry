@@ -13,6 +13,7 @@ import sys
 import threading
 import tempfile
 import hashlib
+from urllib.request import urlopen
 
 import pytest
 from fastmcp import Client
@@ -20,6 +21,7 @@ from agentstack_mail import app, config, db
 from agentstack_mail.enrollment import ensure_mail_instance
 from dashboard import server
 from hooks import child_resume
+from _dashboard_http_fixture import dashboard_http_fixture
 
 REAL_CLAUDE_LAUNCH = server._launch_claude_resume_tmux
 ROOT = Path(__file__).resolve().parents[1]
@@ -152,6 +154,35 @@ def test_top_level_missing_token_resumes_conversation_without_mail(resume):
     assert launches and not calls
 
 
+def assert_conversation_only_roster(monkeypatch, launch, project):
+    environment = dict(value.split("=", 1) for option, value in zip(launch, launch[1:]) if option == "-e")
+    session = {"title": "", "activity": 1, "cmd": "claude", "attached": False, "created": 1,
+               "mail_disabled": environment["AGENTSTACK_MAIL_DISABLED"],
+               "mail_disabled_reason": environment["AGENTSTACK_MAIL_DISABLED_REASON"]}
+    with monkeypatch.context() as roster:
+        roster.setattr(server, "_project_key", lambda: project)
+        roster.setattr(server, "tmux_state", lambda: {NAME: session})
+        roster.setattr(server, "_process_tree_snapshot", lambda: None)
+        roster.setattr(server, "_agent_runtime", lambda *_args: {})
+        roster.setattr(server, "_provider_stall_view", lambda *_args: None)
+        roster.setattr(server, "_codex_app_runtimes", lambda: {})
+        roster.setattr(server, "_card_session_env", lambda _name, _session, key, value: environment.get(key) == value)
+        roster.setattr(server, "_AGENTS_REUSE", server._TimedReuse(0))
+        with dashboard_http_fixture(server) as httpd:
+            httpd.timeout = 5
+            request = threading.Thread(target=httpd.handle_request)
+            request.start()
+            try:
+                with urlopen(f"http://127.0.0.1:{httpd.server_port}/api/agents", timeout=5) as response:
+                    rows = json.load(response)["agents"]
+            finally:
+                request.join(timeout=6)
+    row = next(row for row in rows if row["name"] == NAME)
+    assert row["running"] and row["mail_linked"]  # The Mail row itself is active.
+    assert row["mail_status"] == "unavailable" and row["mail_reason"] == "retention_expired"
+    assert "resume_mode" not in row
+
+
 @pytest.mark.parametrize("is_child,launch_ok", [
     (False, False), (True, False), ("legacy", False),
     (False, True), (True, True), ("legacy", True), ("expired", True),
@@ -277,6 +308,8 @@ def test_real_mail_cleanup_resume_receive_and_reply(resume, monkeypatch, tmp_pat
             assert not inspected["retired"] and inspected["local_credential_state"] == "missing"
             recover = subprocess.run([cli, "recover", *enrollment_target], check=True, capture_output=True, timeout=15)
             assert json.loads(recover.stdout)["reason"] == "operator-recover"
+            assert server._claude_conversation_reason(NAME)[1] is None
+            assert_conversation_only_roster(monkeypatch, launches[-1], project)
 
             identity_path = credential.with_name(f"{credential.name}.identity.json")
             identity = identity_path.read_text()
