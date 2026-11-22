@@ -22,6 +22,8 @@ class StandInMail(http.server.BaseHTTPRequestHandler):
     calls: list[tuple[str, dict]] = []
     # What register_agent reports as the row's retirement (None: active).
     retired_at: str | None = None
+    # Model reported by the verified profile (None: model unknown).
+    registered_model: str | None = None
 
     def do_POST(self) -> None:  # noqa: N802
         request = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
@@ -41,7 +43,8 @@ class StandInMail(http.server.BaseHTTPRequestHandler):
         elif name == "whois":
             result = {"structuredContent": {"name": arguments.get("agent_name"),
                                              "program": "claude-code",
-                                             "retired_at": StandInMail.retired_at}}
+                                             "retired_at": StandInMail.retired_at,
+                                             "model": StandInMail.registered_model}}
         elif name in {"retire_agent", "unretire_agent"}:
             StandInMail.retired_at = "2026-01-01T00:00:00+00:00" if name == "retire_agent" else None
             result = {"structuredContent": {
@@ -64,6 +67,7 @@ class StandInMail(http.server.BaseHTTPRequestHandler):
 def mail(monkeypatch):
     StandInMail.calls = []
     StandInMail.retired_at = None
+    StandInMail.registered_model = None
     httpd = http.server.HTTPServer(("127.0.0.1", 0), StandInMail)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     host, port = httpd.server_address[:2]

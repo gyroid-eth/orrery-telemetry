@@ -675,12 +675,12 @@ ags_sanitize_agent_name() {
   printf '%s' "$1" | LC_ALL=C tr -cd '[:alnum:]' | LC_ALL=C cut -c 1-128
 }
 
-ags_registered_program() {
+ags_registered_profile() {
   local response
   response="$(ags_mcp_call whois "project_key=$1" "agent_name=$2" include_recent_commits=false)" || return 1
   [[ "$(printf '%s' "$response" | ags_classify_mcp_response)" == "ok" ]] || return 1
   printf '%s' "$response" | python3 -c '
-import json, sys
+import json, re, sys
 
 reply = json.load(sys.stdin)
 result = reply.get("result", reply)
@@ -696,11 +696,14 @@ if "program" not in profile:
             break
 program = profile.get("program")
 name = profile.get("name")
-if not isinstance(program, str) or not program.strip():
+if not isinstance(program, str) or not program.strip() or any(c in program for c in "\t\r\n"):
     raise SystemExit(1)
 if not isinstance(name, str) or name.casefold() != sys.argv[1].casefold():
     raise SystemExit(1)
-print(program)
+model = profile.get("model")
+if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,255}", model):
+    model = ""
+print(program + "\t" + model)
 ' "$2"
 }
 

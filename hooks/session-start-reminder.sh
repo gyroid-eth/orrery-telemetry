@@ -195,6 +195,19 @@ try:
 except Exception:
     print("")
 ' 2>/dev/null || echo "")"
+    # The model of this session, as Claude Code reports it to SessionStart
+    # (2.1.286 sends it; older versions do not). Only a model id is used:
+    # Anthropic ids, Bedrock ARNs ("arn:aws:bedrock:...:application-inference-
+    # profile/x") and Vertex ids ("claude-...@20250929") pass; whitespace,
+    # quotes and shell metacharacters do not.
+    SESSION_START_MODEL="$(printf '%s' "$SESSION_START_INPUT" | python3 -c '
+import json, re, sys
+try:
+    value = json.loads(sys.stdin.read(262144)).get("model", "")
+except Exception:
+    value = ""
+print(value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,255}", value) else "")
+' 2>/dev/null || echo "")"
 fi
 
 if [ -f "$HOOKS_DIR/resolve-agent-name.sh" ]; then
@@ -274,8 +287,14 @@ shell_register_resolved_agent() {
     # program name, and the dashboard lost the provider (no logo, chip said
     # "CLAUDE-CODE" — seen on WSL2, where no pane model is parsed either).
     # The session's own model wins over the install-wide label; a dashboard
-    # resume hands the registered one the same way (#144).
-    model="${CLAUDE_CHILD_MODEL:-${AGENTSTACK_CLAUDE_MODEL:-claude-code}}"
+    # resume hands the registered one the same way (#144). A session reopened
+    # from a terminal (`claude --resume`) has neither, and wrote `claude-code`
+    # over the model (RUNTHROUGH 2026-10-01, problem 2): use the model Claude
+    # Code reports for this session, else the one already registered.
+    model="${CLAUDE_CHILD_MODEL:-${AGENTSTACK_CLAUDE_MODEL:-}}"
+    [ -n "$model" ] || model="${SESSION_START_MODEL:-}"
+    [ -n "$model" ] || model="${REGISTERED_MODEL:-}"
+    [ -n "$model" ] || model="claude-code"
     ags_register_session "$PROJECT_KEY" "claude-code" "$model" "cc" "$work_dir" "$RESOLVED_AGENT" "reserved" >/dev/null 2>&1
     register_status=$?
     if [ "$register_status" -ne 0 ]; then
@@ -427,10 +446,11 @@ if mail_server_is_answering; then
             ags_mail_load_token
             # A nested CLI can inherit both the name and owner credential. Check
             # the existing profile before using the credential or writing a lease.
-            if ! REGISTERED_PROGRAM="$(ags_registered_program "$PROJECT_KEY" "$RESOLVED_AGENT" 2>/dev/null)"; then
+            if ! REGISTERED_PROFILE="$(ags_registered_profile "$PROJECT_KEY" "$RESOLVED_AGENT" 2>/dev/null)"; then
                 echo "ORRERY Mail の登録済み provider を確認できなかったため、Claude の shell 再登録を省きました。"
                 exit 0
             fi
+            IFS=$'\t' read -r REGISTERED_PROGRAM REGISTERED_MODEL <<< "$REGISTERED_PROFILE"
             case "$REGISTERED_PROGRAM" in
                 claude|claude-code) CLAUDE_REGISTRATION_CONFIRMED=1 ;;
                 *) exit 0 ;;
