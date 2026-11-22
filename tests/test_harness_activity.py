@@ -8,6 +8,7 @@ import pytest
 
 from dashboard.harness_activity import parse_activity
 from dashboard import server
+from agentstack_mail.fresh_harness import readiness
 
 
 @pytest.mark.parametrize('program,text,state', [
@@ -146,6 +147,18 @@ def test_hermes_prompt_shape_survives_profile_and_translation_changes(profile):
     busy = (_CAPTURES / 'hermes-work.txt').read_text()
     for placeholder in ('cli.tui.placeholder_busy', 'msg=interrupt', '翻訳した入力の案内', ''):
         assert parse_activity(busy.replace('cli.tui.placeholder_busy', placeholder), 'hermes') == 'work'
+
+
+def test_hermes_ink_ready_requires_a_current_empty_composer():
+    root = Path(__file__).resolve().parents[1]
+    status = ' ─ ready │ model │ 13s │ voice off ─ /workspace'
+    screen = status + '\n ❯ \n'
+    assert parse_activity(screen, 'hermes') == 'wait'
+    assert readiness(root, screen, 'hermes') == {'state': 'idle', 'input_empty': True}
+    for other in (' ❯ ', status, screen + 'new output', status + '\n ❯ a draft',
+                  status + '\n ❯ first draft line\n ❯', screen.replace('ready', 'working'),
+                  status + '\n ⚠️ Dangerous Command\n ❯'):
+        assert readiness(root, other, 'hermes') == {'state': 'unknown', 'input_empty': False}
 
 
 @pytest.mark.parametrize('program,file', [('hermes', 'hermes-idle.txt'), ('dsh', 'dsh-idle.txt')])
