@@ -28,7 +28,8 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv('GIT_COMMITTER_DATE', '2000-01-01T00:00:00+0000')
     monkeypatch.setenv('GIT_AUTHOR_NAME', 'Ambient Author')
     monkeypatch.setenv('GIT_COMMITTER_NAME', 'Ambient Committer')
-    monkeypatch.setattr(storage.sys, 'platform', 'darwin')
+    # Keep the host platform visible to filelock and GitPython.
+    monkeypatch.setattr(storage, 'sys', SimpleNamespace(platform='darwin'))
     return tmp_path
 
 
@@ -227,10 +228,8 @@ def test_non_mac_commit_branch_is_unchanged(tmp_path, monkeypatch, platform):
         git=SimpleNamespace(add=lambda *args: calls.append(('git.add', args))),
         is_dirty=lambda **kwargs: True, close=lambda: None)
     monkeypatch.setattr(storage, 'Repo', lambda *a: fake)
-    async def run():
-        monkeypatch.setattr(storage.sys, 'platform', platform)
-        await storage._commit_direct(tmp_path, SETTINGS, 'unchanged', ['file.md'])
-    asyncio.run(run())
+    monkeypatch.setattr(storage, 'sys', SimpleNamespace(platform=platform))
+    direct(tmp_path, 'unchanged', ['file.md'])
     assert calls[0] == (('git.add', ('--', 'file.md')) if platform == 'win32'
                         else ('index.add', ['file.md']))
     assert calls[1][0:2] == ('index.commit', ('unchanged',))
