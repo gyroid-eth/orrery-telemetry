@@ -967,3 +967,75 @@ def test_reap_does_not_swallow_a_refused_signal(monkeypatch, tmp_path: Path) -> 
     with pytest.raises(PermissionError):
         _reap(env)
     assert (12345, 15) in calls
+
+
+def test_fresh_controller_keeps_owned_manager_boundary_and_refuses_foreign_or_wrong_identity(tmp_path):
+    import asyncio,re,shlex,sys
+    from agentstack_mail.fresh_runtime import FreshRuntime
+    from agentstack_mail.fresh_client import FreshBoundClient,_http
+    from agentstack_mail.fresh_server import build_fresh_server
+    from uuid import uuid4
+    async def prepare():
+        runtime=await FreshRuntime.initialize(tmp_path/'prepared',mode='fresh')
+        try:
+            person=await runtime.register_local(request_id=str(uuid4()),name='Controller',program='fixture',model='fixture')
+            server=build_fresh_server(core=runtime.core)
+            async def wire(endpoint,tool,args):return await _http(server,tool,args)
+            client=await FreshBoundClient.prepare(runtime.root/'config.json',person['binding_path'],
+                'http://127.0.0.1:19876/mcp',client_id=str(uuid4()),dispatch=wire)
+            return str(client.path),runtime.config['instance_id'],str(runtime.root/'config.json')
+        finally:await runtime.close()
+    context,instance,config=asyncio.run(prepare())
+    fake=tmp_path/'python-health';healthy=tmp_path/'healthy';healthy.touch()
+    # Only the transport health is synthetic. Projection validates the actual
+    # private prepared config/context/binding using the configured interpreter.
+    fake.write_text('#!/bin/bash\nif [[ "$1" == - ]]; then exec '+shlex.quote(sys.executable)+' "$@"; fi\n[[ -f '+shlex.quote(str(healthy))+' ]]\n')
+    fake.chmod(0o700)
+    text=MAILCTL.read_text()
+    def function(name):
+        start=text.index(name+'() {');m=re.search(r'^\w+\(\) \{',text[start+len(name)+5:],re.M)
+        block=text[start:] if m is None else text[start:start+len(name)+5+m.start()]
+        return block[:block.rindex('\n}')+2]
+    body='\n'.join(function(n) for n in ('validate_config','health_ok','start_service','stop_service','status_service'))
+    body+='\nrestart_fixture() {\n'+text.split('\n  restart)\n',1)[1].split('\n    ;;',1)[0]+'\n}\n'
+    root=tmp_path/'runtime';root.mkdir();plist=tmp_path/'owned.plist';plist.write_text('fixture')
+    log=tmp_path/'manager.log';loaded=tmp_path/'loaded';loaded.touch()
+    values=dict(MAIL_ENV=str(tmp_path/'env'),MAIL_RUNNER=str(tmp_path/'runner'),MCP_URL='http://127.0.0.1:19876/mcp',
+        PYTHON_BIN=str(fake),START_GRACE='0',HEALTH_GRACE='0',AGENTSTACK_RUNTIME_MODE='fresh',
+        AGENTSTACK_FRESH_CLIENT_CONTEXT=context,AGENTSTACK_FRESH_SERVER_CONFIG=config,ORRERY_FRESH_MAIL_INSTANCE_ID=instance,
+        LAUNCHD_PLIST_MEMO=str(root/'memo'),MAIL_LAUNCHD_LABEL='org.orrery.test.fresh',SWEEP='0',RUNTIME_DIR=str(root),PIDFILE=str(root/'pid'),STOPPED_MARKER=str(root/'stopped'))
+    base='set -eu\n'+'\n'.join(k+'='+shlex.quote(v) for k,v in values.items())+'\n'+body+'\n'+r'''
+    say() { printf '%s\n' "$*"; }
+    die() { printf '%s\n' "$*" >&2; exit 1; }
+    read_pid() { :; }
+    pid_running() { return 1; }
+    endpoint_port_open() { return 0; }
+    launchd_supervises_mail() { [[ -f "$TEST_LOADED" ]]; }
+    launchd_job_is_ours() { [[ "$TEST_OWNER" == ours ]]; }
+    launchd_state() { printf '%s' "$TEST_OWNER"; }
+    launchd_service_pid() { printf 'fixture-pid'; }
+    launchd_service_target() { printf 'gui/test/org.orrery.test.fresh'; }
+    launchd_service_plist() { printf '%s' "$TEST_PLIST"; }
+    plist_defines_this_service() { [[ "$1" == "$TEST_PLIST" ]]; }
+    acquire_lock() { :; }
+    wait_for_health() { health_ok; }
+    launchctl() { printf '%s\n' "$*" >> "$TEST_LOG"; if [[ "$1" == bootout ]]; then rm -f "$TEST_LOADED" "$TEST_HEALTHY"; fi; }
+    '''
+    def call(commands,owner='ours',wrong=False):
+        script=base+('ORRERY_FRESH_MAIL_INSTANCE_ID='+'b'*32+'\n' if wrong else '')+'validate_config\n'+commands
+        env=dict(os.environ,HOME=str(tmp_path),TEST_OWNER=owner,TEST_LOADED=str(loaded),TEST_PLIST=str(plist),TEST_LOG=str(log),TEST_HEALTHY=str(healthy))
+        return subprocess.run(['/bin/bash','-c',script],env=env,cwd=tmp_path,capture_output=True,text=True,timeout=12)
+    for command in ('status_service','start_service'):
+        result=call(command);assert result.returncode==0,result.stderr
+        assert not log.exists() # no second process or kickstart
+    result=call('restart_fixture');assert result.returncode==0,result.stderr
+    assert log.read_text().splitlines()==['kickstart -k gui/test/org.orrery.test.fresh']
+    log.unlink()
+    result=call('status_service',wrong=True)
+    assert result.returncode==1 and 'FRESH_SERVICE_CONFIG_MISMATCH' in result.stderr and not log.exists()
+    for command in ('start_service','stop_service','status_service','restart_fixture'):
+        result=call(command,owner='foreign');assert result.returncode==1,result.stdout+result.stderr
+        assert not log.exists()
+    result=call('stop_service');assert result.returncode==0,result.stderr
+    assert log.read_text().splitlines()==['bootout gui/test/org.orrery.test.fresh']
+    assert not loaded.exists() and (root/'memo').exists()

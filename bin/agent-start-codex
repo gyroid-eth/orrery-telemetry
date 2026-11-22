@@ -23,6 +23,10 @@ AGS_PROG="agent-start-codex"
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/agentstack-launch.sh
 . "$BIN_DIR/lib/agentstack-launch.sh"
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  DIR="$(ags_choose_dir "$@")" || exit 0
+  exec /bin/bash "$BIN_DIR/agentstack-runtime-client" launch codex "$DIR"
+fi
 AGS_RUNTIME_CLIENT="$BIN_DIR/lib/runtime_client.py"
 . "$BIN_DIR/lib/global-client-loader.sh" || exit 2
 ags_load_env "$@"
@@ -36,6 +40,7 @@ CODEX_BIN="${AGENTSTACK_CODEX_BIN:-codex}"
 BOOTSTRAP="$BIN_DIR/agentstack-codex-bootstrap"
 SANDBOX="${AGENTSTACK_CODEX_SANDBOX:-workspace-write}"
 APPROVAL="${AGENTSTACK_CODEX_APPROVAL:-on-request}"
+[[ "$SANDBOX" == danger-full-access ]] && APPROVAL=never
 
 TMUX_BIN="$(ags_resolve_tmux)"
 [[ -n "$TMUX_BIN" ]] || ags_die "tmux not found (install tmux first)"
@@ -44,6 +49,8 @@ command -v "$CODEX_BIN" >/dev/null 2>&1 || ags_die "codex not found on PATH (set
 
 DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
 [[ -n "$DIR" ]] || exit 0
+ags_prepare_top_level_context "$DIR" "${AGENTSTACK_PROJECT_KEY:-}" || exit $?
+DIR="$AGENTSTACK_PROJECT_WORK_DIR"
 
 # Prevent identity hijack; the bootstrap re-exports the selected name after
 # registering. Clear the explicit reserved-identity marker as well: this is a
@@ -82,6 +89,10 @@ fi
 # the bootstrap (registration + Adjective-Scientist name) and then codex. The temp script
 # keeps the tab alive after codex exits, then self-deletes.
 CODEX_CMD="$(build_codex_cmd "$DIR")"
+TMUX_PROJECT_OPTIONS="$(ags_tmux_project_options)"
+TMUX_CLEAR_GIT_COMMAND="$(ags_tmux_clear_git_command "$SESSION")"
+TMUX_RESTORE_WORKSPACE_COMMAND="$(ags_tmux_restore_workspace_command)"
+ags_clear_client_project_context
 INNER="$(mktemp -t agent-start-codex.XXXXXX)"
 cat > "$INNER" <<EOF
 #!/usr/bin/env bash
@@ -90,13 +101,14 @@ unset AGENT_NAME PARENT_AGENT CHILD_REGISTRATION_TOKEN AGENTSTACK_RESERVED_IDENT
   AGENTSTACK_CODEX_LAUNCH_BINDING AGENTSTACK_CODEX_LAUNCH_ID \
   AGENTSTACK_CODEX_LAUNCH_KIND 2>/dev/null || true
 $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf '%q' "$DIR") \
+  $TMUX_PROJECT_OPTIONS \
   -e AGENT_NAME= -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
   -e $(printf '%q' "AGENTSTACK_RUNTIME_MODE=$AGENTSTACK_RUNTIME_MODE") \
   -e $(printf '%q' "AGENTSTACK_GLOBAL_SERVER_CONFIG=${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}") \
   -e $(printf '%q' "AGENTSTACK_CLIENT_CONFIG=${AGENTSTACK_CLIENT_CONFIG:-}") \
   -e AGENTSTACK_CODEX_LAUNCH_BINDING= -e AGENTSTACK_CODEX_LAUNCH_ID= -e AGENTSTACK_CODEX_LAUNCH_KIND= \
   -e CLAUDECODE=1 \
-  "source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR") && $CODEX_CMD; exec \"\$SHELL\" -l"
+  "$TMUX_RESTORE_WORKSPACE_COMMAND unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; $TMUX_CLEAR_GIT_COMMAND || exit 1; source $(printf '%q' "$BOOTSTRAP") $(printf '%q' "$DIR") && $CODEX_CMD; exec \"\$SHELL\" -l"
 rm -f -- "\$0"
 exec "\$SHELL" -l
 EOF

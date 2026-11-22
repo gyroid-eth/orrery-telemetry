@@ -232,18 +232,30 @@ def known_error(reason):
 
 def read_private(path):
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, 'rb') as stream:
-            info = os.fstat(stream.fileno())
-            current = os.lstat(path)
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                    or info.st_mode & 0o077 or info.st_nlink != 1
-                    or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino)):
-                raise ClientError('PRIVATE_FILE_UNSAFE')
-            raw = stream.read(1048577)
-            if len(raw) > 1048576:
-                raise ClientError('PRIVATE_FILE_TOO_LARGE')
-            return raw
+        for _ in range(3):
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                info = os.fstat(fd)
+                current = os.lstat(path)
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                        or info.st_mode & 0o077 or info.st_nlink not in (0, 1)
+                        or not stat.S_ISREG(current.st_mode) or current.st_uid != os.getuid()
+                        or current.st_mode & 0o077 or current.st_nlink != 1):
+                    raise ClientError('PRIVATE_FILE_UNSAFE')
+                if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+                    # Atomic replace may unlink the opened inode. Only a
+                    # different, independently safe path justifies re-opening.
+                    continue
+                if info.st_nlink != 1:
+                    raise ClientError('PRIVATE_FILE_UNSAFE')
+                with os.fdopen(fd, 'rb', closefd=False) as stream:
+                    raw = stream.read(1048577)
+                if len(raw) > 1048576:
+                    raise ClientError('PRIVATE_FILE_TOO_LARGE')
+                return raw
+            finally:
+                os.close(fd)
+        raise ClientError('PRIVATE_FILE_UNSAFE')
     except OSError as exc:
         raise ClientError('PRIVATE_FILE_UNAVAILABLE') from exc
 

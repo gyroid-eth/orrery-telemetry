@@ -61,7 +61,7 @@ Codex 自身が固定エラー文を折り返す場合も検知します。固�
 
 | 表示 | 読み方 |
 | --- | --- |
-| 名前の下の `GPT 5.6`、`SONNET 5` など | 使用中のモデル。`◷ 200K`、`◷ 1M` がある場合は、そのモデルが使える作業メモリ全体の大きさです。 |
+| 名前の下の `GPT-6.1-Sol`、`SONNET 5` など | 使用中のモデル。`◷ 200K`、`◷ 1M` がある場合は、そのモデルが使える作業メモリ全体の大きさです。 |
 | モデルの下の細い横線 | **残りの作業メモリ（context remaining）**。長いほど余裕があり、残り20%未満では赤寄りになります。telemetry を取得できないカードには出ません。 |
 | 黒い帯 | terminal で観測した現在の表示。作業中か待機中かを読む手掛かりです。 |
 | `ORD` | そのエージェントに与えられている直近の指示です。 |
@@ -83,6 +83,10 @@ Codex 自身が固定エラー文を折り返す場合も検知します。固�
 | `NEED YOU` | 人を待っている agent。承認待ち（`APPROVAL`）と、選択肢を聞いている（`?`） | 赤枠、または `?` |
 | `WORKING` | turn が進行中の agent | amber の LED と経過時間 |
 | `WAITING` | prompt で入力を待っていて、仕事を渡せる agent | `LAST 1M41S` |
+
+Codex の狭い pane で現在の `Working` / `Thinking` 行が `…` に省略されても、作業中として読み取ります。経過時間は見えている単位までを表示し、読めなければ出しません。後の返答や完了表示に置き換わった状態行・本文中の引用は、現在の作業の証拠にしません。
+
+Codex が現在の `Working` 行と入力欄の間に追加指示のキュー（`Queued follow-up inputs`）を表示している間も、作業中として読み取ります。キューだけでは作業中にしません。footer のモデルが `GPT-6.1 Terra max` のように種類を空白で区切る表示名でも入力欄の footer と認め、モデルを `GPT-6.1-Terra` と表示します。
 
 `NEED YOU` は該当する agent がいるときだけ現れ、クリックすると DECK がその agent だけに絞られます（もう一度クリックで戻ります）。process が止まって shell に戻った agent はどの数にも入りません。カードの `○ SHELL` で分かります。active agent の総数は sector 見出しの `ACTIVE AGENTS [ 29 ]` にあります。
 
@@ -297,7 +301,7 @@ TIME-TRAVEL ON は initial snapshot から node、edge、state を再構築し�
 
 ## NEW AGENT
 
-![NEW AGENT modal — identity / engine / directory / task の launch manifest](img/new-agent.jpg)
+![NEW AGENT で設定済み Local Qwen の Model と dsh / Hermes の Harness を選ぶ](img/native-harness-picker.png)
 
 `+ NEW AGENT` は identity、engine、directory、task を順に確認する launch manifest です。通常項目を一方向に並べ、parent / role / group / isolation は ADVANCED に畳むことで、standalone agent の起動を最短経路にしています。
 
@@ -314,19 +318,37 @@ scientist rail の `available` は bare surname ではなく、134 adjective の
 
 ### Engine
 
-- Claude / Codex provider tab
+- provider tab（server の catalog から作られ、設定済みの環境では DeepSeek / Local も並びます）
 - provider ごとの model card と用途 guide
 - Claude は Sonnet / Opus / Haiku
 - Codex の既定は起動対象 CLI が 0.159.0 以上なら `gpt-6.1-sol`、古い版なら `gpt-6-sol`（版不明なら新鮮な catalog で判定）。旧世代は `gpt-6-sol` など正式 ID で指定できます
 - Codex の effort 候補は model catalog の `model_efforts` / `model_effort_defaults` に従います。明示 effort の最終可否は Codex CLI が判定します
+- DeepSeek / Local は設定済み catalog の Model と Harness（dsh / Hermes）から選びます。model を選んで利用可能な harness を指定し、利用不可の項目は「Coming soon」と表示され、選択できません。Helper と Effort は選んだ model / harness の能力に従います。[設定手順](install.md)と[API reference](api.md)も参照してください。
 
 server の provider / model / effort allow-list を catalog と validation の両方に使います。
+
+この節は Telemetry 同梱画面の説明です。Model / Harness は cockpit と同じ英語の語彙を使いますが、directory dialog や Lineage の項目まで同一ではありません。OS の資格設定・memory・Local effort の範囲は[対応組合せと制限](managed-catalog.md)を参照してください。
+
+<a id="native-models-and-harnesses"></a>
+### DeepSeek / Local と dsh / Hermes
+
+設定済みの provider、Model、利用可能な Harness を順に選びます。GIF は SPAWN の手前までです。[Model / Harness の選択操作を見る](img/native-harness-selection.gif)。
+
+NEW AGENT の画像と GIF は、実際の catalog・科学者名・正規の肖像を使った Telemetry 同梱画面です。Claude / Codex / DeepSeek / Local models と dsh / Hermes の選択を起動前まで撮影し、作業ディレクトリと task は切り取っています。[cockpit の NEW AGENT](https://github.com/gyroid-eth/orrery/blob/master/docs/usage.md)とは画面が異なります。以下の DECK / NETWORK は引き続き合成データの表示例です。いずれも資格の登録や全組合せの通し受け入れを示すものではありません。
+
+![DECK で DeepSeek と Local Qwen の dsh / Hermes agent を見分ける画面例](img/native-local-deck.png)
+
+Local Qwen は六角形の中に Qwen のロゴを表示し、DeepSeek は接続先の badge を表示します。agent を比べるときは Harness も別に確認してください。
+
+![NETWORK のメダリオンで Local Qwen と DeepSeek を見分ける画面例](img/native-local-network.png)
 
 ### Directory
 
 `AGENTSTACK_SPAWN_DIRS` の preset chip と exact path input を表示します。preset は installer の `--spawn-dirs` で永続化します（shell の `export` は service に届きません。[configuration.md](configuration.md) の「Spawn directory」参照）。input は `/api/fs/dirs` の root-scoped typeahead で、arrow key / Enter でも選択できます。最後に使った directory は `localStorage` に保存します。
 
 typeahead は `AGENTSTACK_SPAWN_ROOTS` の外へ出ず、hidden directory、`..`、root 外への symlink を候補にしません。
+
+ORRERY のフォルダ選択画面では、パンくずで検索の起点を選べます。検索欄が空の間はその場所の子フォルダが並び、入力すると配下の一致を現在の場所からの相対パスで表示します。上下キーで移動し、Enter で子フォルダを開くか検索結果を選択します。探索範囲と上限は [フォルダ検索 API](api.md#get-apifsdir-search) を参照してください。
 
 ### Task と ADVANCED
 
@@ -428,56 +450,15 @@ python3 scripts/dashboard_theme_manifest.py --check
 
 `source` は token / declaration の coverage、`mutation` は apply 直前の immutable snapshot から導出した token-write / element / effect-component の compiled 適用数です。source unit は軸ごとに厳密で、`dim-contrast` / `background` は `token-write`、`small-text` / `tracking` / `glow` は `declaration` です。`effect` の membership は generated eligibility の pre-apply live match だけで固定し、適用前・適用後・endpoint の値から対象を増減しません。そのうち rendered・nonzero box・viewport 内を `visibleExpected`、cascade 後の computed が requested derivation へ到達したものを `visibleReached` と数えます。元から requested 値だった member も reached です。`visibleChanged` は可視 member の canonical post が pre と異なる数、`changed` は全 evaluated member の同じ差分を数える独立 no-op gate です。hidden / zero-box / offscreen は `deferred` に数えます。non-null apply は `visibleExpected > 0`、`visibleReached === visibleExpected`、`visibleChanged > 0`、`changed > 0` をすべて満たす場合だけ成功します。0や量子化以下は `no-effective-change`、可視対象0は `no-visible-targets`、requested derivation に到達しない member があれば `effect-count-mismatch` として reject し、直前の valid axis を復元します。面や単位を合算しません。`glow` の effect unit は live `effect-component` です。同一 surface に対象 radial layer が2つあれば2件と数え、CSS rule 1件が可視 element 10件へ match すれば10件と数えます。selector と keyframe の source component は `emissive | elevation | focus | state` に分け、色 halo だけを弱めて elevation と focus を維持します。
 
-### Atomic theme profile bridge
-
-`small-text` と `tracking` は complete five-axis vector を使う1つの atomic profile として同時適用できます。全キーは必須で、non-null の組み合わせは空、`small-text` / `tracking` の任意 subset、または legacy 1軸だけです。
-
-```js
-frame.contentWindow.postMessage({
-  type: "agentstack-theme-profile",
-  version: 1,
-  requestId: "theme-42",
-  values: {
-    "dim-contrast": null,
-    "small-text": 0.5,
-    tracking: 0.25,
-    glow: null,
-    background: null,
-  },
-}, location.origin);
-```
-
-receiver は全 experimental override を外した同じ A snapshot から両軸を導出します。baseline font size を `s0`、baseline letter-spacing ratio を `r0` とすると、small の final size は `s(vs)`、tracking ratio は `lerp(r0, min(r0, 0.08), vt)`、final spacing はその ratio と `s(vs)` の積です。前の profile render を次の baseline にしないため、UI で small→tracking と tracking→small の順に操作しても complete final vector が同じなら computed size / weight / spacing は一致します。適用後に追加された DOM node も override を一時無効化した A baseline から両軸を同時導出し、各軸の独立 envelope へ加算します。
-
-成功時は次の response を返します。`requested` / `applied` は常に exact five-key map、`axes` は non-null 軸の exact set です。
-
-```js
-{
-  type: "agentstack-theme-profile-result",
-  version: 1,
-  requestId: "theme-42",
-  surface: "telemetry",
-  requested: {"dim-contrast": null, "small-text": 0.5,
-    tracking: 0.25, glow: null, background: null},
-  applied: {"dim-contrast": null, "small-text": 0.5,
-    tracking: 0.25, glow: null, background: null},
-  status: "applied",
-  axes: {
-    "small-text": {status: "applied", source: {}, mutation: {}, effect: {}},
-    tracking: {status: "applied", source: {}, mutation: {}, effect: {}},
-  },
-}
-```
-
-1軸でも source / mutation / effect guard に失敗すれば profile 全体を reject し、`applied` には receiver が復元した last-valid complete map を返します。schema 違反も state を変更しません。legacy `agentstack-theme-axis` v1 は対象1軸以外を null にした complete profile と同じで、legacy `value: null` は全軸 reset です。result reply が失われた場合、parent coordinator は fresh `requestId` の last-valid complete profile を compensating request として送れます。
-
-embed の初期化完了時と reload 後には、dashboard が `agentstack-theme-axis-ready` と `agentstack-theme-profile-ready`（ともに version 1、`surface: "telemetry"`）を same-origin parent へ送ります。recovery はこの明示 signal の後に compensating profile を送り、その result が acknowledged になるまで完了扱いにしません。ready が来ない場合の timeout と UI failure 表示は parent coordinator が担当します。
+embed初期化/reload後は`agentstack-theme-axis-ready`（version 1、surface `telemetry`）をsame-origin parentへ通知します。従来のVision profileメッセージ受け口は廃止しました。上記の単一axis契約は維持します。
 
 ## Terminal bridge
 
-カードまたは node から terminal を開くと、server は Ghostty / iTerm2 / Terminal.app への jump、または browser terminal 用 `ttyd` を確保します。
+カードまたは node から terminal を開くと、server は Ghostty / iTerm2 / Terminal.app への jumpを行います。
 
 `AGENTSTACK_BIND_HOST=0.0.0.0` は terminal bridge と control endpoint も外部へ公開します。dashboard に認証 layer はないため、trusted LAN / VPN 以外では使わないでください。
+
+legacy dashboard の Host 検査は既定で実待受ポートの loopback だけを許可します。LAN / VPN の URL を使う既存利用者は、更新前に [`AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS`](configuration.md#lan--vpn-から使う場合の-host-設定) で固定 origin を指定し、installer で保存・service へ反映してください。wildcard bind 自体では外部 Host を許可しません。通常の loopback 接続の cockpit bridge は設定追加不要です。この検査は認証を追加するものではありません。
 
 ## デモ（サーバー不要）
 

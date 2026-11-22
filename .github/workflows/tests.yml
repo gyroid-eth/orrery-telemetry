@@ -1,17 +1,42 @@
 name: tests
 
 on:
+  # PR の branch への push は pull_request の run と同じ試験になる。macOS の job は
+  # 同時に回せる数が少なく、両方を走らせると待ち行列が倍になるので、push は master だけ。
   push:
     branches: [master]
   pull_request:
 
 concurrency:
   group: tests-${{ github.event.pull_request.number || github.ref }}
-  # A PR's older run is cancelled by its newer one. A master run is not: a streak of
-  # merges would otherwise cancel every master run before it finishes.
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
+  secret-service-linux:
+    # 合成storeだけ。WSL/D-Bus/unlockや実providerの受入ではない。
+    runs-on: ubuntu-latest
+    name: native credential references (Ubuntu)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.3.0"
+      - run: python -m pip install pytest pytest-timeout pytest-asyncio -e ./packages/agentstack_mail pyyaml
+      - name: Check references, generators, guards and offline balance
+        env:
+          PYTHONPATH: .
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          python -m pytest -q tests/test_llm_secret_reader.py
+          tests/test_dsh_thin_config.py tests/test_hermes_thin_config.py
+          tests/test_llm_key_read_guard.py tests/test_harness_runtime.py
+          tests/test_deepseek_balance.py tests/test_install_service_path.py -k 'not NativeThinConfig'
+      - name: Check the dsh credential adapter with synthetic helpers
+        run: node --test --test-name-pattern='one memory lookup|secret service reader' tests/test_dsh_thin_credentials.mjs
+
   portable-startup:
     # These regressions cover portable components, not a full Windows install.
     runs-on: windows-latest
@@ -83,6 +108,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      # The fresh target tests run the real JS caller with the node on PATH.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.3.0"
       # tmux: agents run inside it and tests exercise the real binary.
       # uv: the installer provisions ORRERY Mail with it and fails preflight without it.
       - name: Install tmux and uv

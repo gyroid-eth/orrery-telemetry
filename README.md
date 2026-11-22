@@ -2,9 +2,26 @@
 
 [English](README.en.md)
 
-複数の Claude Code / Codex が直接話し、仕事を分担し、結果を確かめ合う。その働きと Mail の往復を一枚の画面で見渡せるのが ORRERY Telemetry です。端末も同じ画面で使う [ORRERY cockpit](https://github.com/gyroid-eth/orrery) と組み合わせて使えます。
+Claude Code・Codex・DeepSeek・Local LLMのagentが直接話し、仕事を分担し、結果を確かめ合う。その働きとMailの往復を一枚の画面で見渡せるのがORRERY Telemetryです。Claude CodeとCodexは各CLI、DeepSeekとLocal LLMはdshまたはHermesを使います。使いたい系統を選んで準備でき、DeepSeek・LocalのためにClaude CodeやCodexを先に入れる必要はありません。ターミナルも同じ画面で使う[ORRERY cockpit](https://github.com/gyroid-eth/orrery)と組み合わせて使えます。
 
 ![NETWORK を開いたまま子が加わり、ready の後にしりとりの Mail が3往復する](docs/img/network-mail.gif)
+
+## 目的から始める
+
+| やりたいこと | 入口 |
+| --- | --- |
+| 手元のagentの働きを見る | 準備済みのagentを起動し、DECK / NETWORKを開く |
+| Claude CodeやCodexで始める | 共通部分を導入し、使うCLIにログインして[最初のagentを起動する](docs/getting-started.md#3-最初の-agent-を起動しdashboard-で見る) |
+| DeepSeekやLocal LLMで始める | 共通部分を導入し、[APIの初期設定ガイド](docs/native-setup.md)でdsh/Hermesの追加・キーの保存・接続設定・画面からの起動へ進む。Claude/Codexのログインは不要 |
+| agent 同士で仕事を分担する | [delegate と Mail の通し確認](docs/getting-started.md#5-しりとりで通しの確認をする)へ進む |
+
+provider は接続先、model はそこで使うモデル、harness は道具や会話を動かす CLI です。現在、API を使う標準の組合せは DeepSeek / Local × dsh / Hermes に限り、設定済みの model ごとに利用可否を検査します。任意の API と任意の harness の組合せを保証するものではありません。
+
+準備済みのDeepSeek / Localは、NEW AGENTのModelとHarness（dsh / Hermes）から選べます。初めて追加するときは、アプリの導入、APIキーの保存、接続先の設定が必要です。[初期設定ガイド](docs/native-setup.md)で順番に進めてください。キーはMacのキーチェーン、またはUbuntuのSecret Serviceへ保存し、NEW AGENTには貼りません。API起動はlegacy modeが対象です。Hermesの会話・記憶はprojectとagentの正式名ごとに分かれます。すべての接続先に使えるログイン機能やHermes共通のTelegram入口はまだなく、Localのeffort設定にも未確認範囲があります。[対応範囲と制限](docs/managed-catalog.md#現在の制限)・[画面の選択例](docs/dashboard.md#native-models-and-harnesses)を参照してください。
+
+![NEW AGENT で設定済み Local model と dsh / Hermes を選ぶ](docs/img/native-harness-picker.png)
+
+Telemetry 同梱 NEW AGENT の実画面です。正規の科学者名・肖像と、Claude / Codex / DeepSeek / Local models の選択を表示しています。[選択操作の GIF](docs/img/native-harness-selection.gif)は起動前までです。[cockpit の NEW AGENT](https://github.com/gyroid-eth/orrery/blob/master/docs/usage.md)とは別の画面です。
 
 ## Telemetry だけを入れる
 
@@ -16,7 +33,14 @@ cd orrery-telemetry
 ./scripts/install.sh --project-key /absolute/path/to/your-project
 ```
 
-`--project-key` は、agent に作業させる folder の絶対パスです（この repository ではありません）。変更内容は表示され、承認してから入ります。終わったら `~/.agentstack/bin/agentstack-doctor` と `~/.agentstack/bin/agentstack-selftest` で確かめ、同じ環境でログイン済みの Claude Code か Codex CLI を用意して、Claude Code なら `~/.agentstack/bin/agent-start <project folder>`、Codex CLI なら `~/.agentstack/bin/agent-start-codex <project folder>` で agent を起動して `http://127.0.0.1:8770/` を開きます。手順は[単独の導入手順](docs/getting-started.md#telemetry-単独の導入と確認)にあります。
+top-level / delegated child の起動は、選択した作業フォルダ（Git root へ自動拡張しない）と明示した共有フォルダ（`AGENTSTACK_EXTRA_PROTECTED_ROOTS`）を予約で保護します。更新時には保存済みの旧保護設定を一度だけ引き継ぎます。[保護設定の移行](docs/configuration.md#reservation-の保護範囲と移行)を dry-run で確認し、予約の解放後に更新して関係する session を再起動してください。
+
+`--project-key`は、agentに作業させるfolderの絶対パスです（このrepositoryではありません）。変更内容を確認・承認して導入し、`~/.agentstack/bin/agentstack-doctor`と`~/.agentstack/bin/agentstack-selftest`で共通部分を確かめます。その後、使う系統に合わせて準備します。
+
+- **Claude Code / Codex**: 同じOS環境に使うCLIを入れてログインし、`~/.agentstack/bin/agent-start <project folder>`または`~/.agentstack/bin/agent-start-codex <project folder>`で起動します。
+- **DeepSeek / Local LLM**: [APIの初期設定ガイド](docs/native-setup.md)でdshまたはHermes、キー、接続設定を準備し、`http://127.0.0.1:8770/`のNEW AGENTから選んで起動します。上のinstallだけでは、このAPI設定は済みません。
+
+どちらもDECKにagentが現れることを確認します。[単独の導入手順](docs/getting-started.md#telemetry-単独の導入と確認)に、準備・起動・Mail確認の流れがあります。
 
 子に渡す道具の既定は installer の `--child-default-tools`（既定は空）で選べます。明示の指定を優先し、使えない既定の項目は通知して外します。[道具の選び方](docs/delegation.md#installer-の既定の道具)を参照してください。
 
@@ -24,16 +48,16 @@ cd orrery-telemetry
 
 作業の区切りで子を EXIT し、`~/.agentstack/bin/agentstack-resume <NAME> --tools <spec>` で同じ会話の道具を変更できます。[resume の道具変更](docs/delegation.md#停止した子の道具を変更して-resume-する)を参照してください。
 
-**単独で使えるもの**: dashboard の Telemetry 画面（DECK・NETWORK・REPLAY・退出した agent の RESUME・NEW AGENT）、`agent-start` / `agent-start-codex` での agent 起動、delegate skill（Claude Code: `/delegate`、Codex: `$delegate`）での子の作成、agent 同士の ORRERY Mail。agent の端末は OS の terminal（Windows は Windows Terminal のタブ）で開きます。
+**単独で使えるもの**: dashboard の Telemetry 画面（DECK・NETWORK・REPLAY・退出した agent の RESUME・NEW AGENT）、`agent-start` / `agent-start-codex` での agent 起動、delegate skill（Claude Code: `/delegate`、Codex: `$delegate`）での子の作成、agent 同士の ORRERY Mail。agent のターミナルは OS の terminal（Windows は Windows Terminal のタブ）で開きます。
 
-**入らないもの**: ブラウザの中で端末を並べて操作する cockpit の画面（composer・Split・Planetarium・`ORRERY.app`）。
+**入らないもの**: ブラウザの中でターミナルを並べて操作する cockpit の画面（composer・Split・Planetarium・`ORRERY.app`）。
 
 ## cockpit との関係
 
 ![cockpit は terminal を操作する画面、Telemetry は dashboard と agent graph の画面。cockpit は Telemetry の画面を埋め込める。agent は tmux の中で動き、両方の画面から見え、Mail で話す](https://raw.githubusercontent.com/gyroid-eth/orrery/master/docs/images/cockpit_telemetry_relation.svg)
 
 - **Telemetry** は、agent・Mail・dashboard を動かす裏方と、その状態を見る Telemetry 画面です。
-- **[cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.md)** は、端末を並べて操作する画面です。agent の起動・Mail・Telemetry 画面は Telemetry が担うので、cockpit は Telemetry と組み合わせて使います（端末だけなら Telemetry が止まっていても開けます）。
+- **[cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.md)** は、ターミナルを並べて操作する画面です。agent の起動・Mail・Telemetry 画面は Telemetry が担うので、cockpit は Telemetry と組み合わせて使います（ターミナルだけなら Telemetry が止まっていても開けます）。
 - cockpit 側から入れると、**両方まとめて入ります。**
 
 ## 両方入れるなら（orrery の 1 行）
@@ -52,9 +76,9 @@ cockpit の **Your first flight → help map → Full tour** を順に試しま�
 
 Telemetry の header の `HELP MAP`（NETWORK では `SETTINGS` の隣）を押すと、いま表示されている DECK / NETWORK の操作に注記が付きます。agent の詳細パネルでは、操作列の `HELP MAP` を押すと、そのパネルの操作に注記が付きます。cockpit 内に埋め込まれた Telemetry でも同じ操作で使えます。注記が収まらない場合は凡例で表示し、`Esc` または `Close` で閉じられます。
 
-Full tour は delegate skill（Claude Code: `/delegate`、Codex: `$delegate`）で子を1体作り、ORRERY Mail でしりとりを3往復し、端末の配置、Telemetry の EXIT / RESUME、NETWORK / REPLAY を試す案内です。画面の説明に従って操作すると進みます。[現在のクイックスタート](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート)と [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/FULL_TOUR.md)を参照してください。
+Full tour は delegate skill（Claude Code: `/delegate`、Codex: `$delegate`）で子を1体作り、ORRERY Mail でしりとりを3往復し、ターミナルの配置、Telemetry の EXIT / RESUME、NETWORK / REPLAY を試す案内です。画面の説明に従って操作すると進みます。DeepSeek・Local の子でも、dsh・Hermes それぞれで同じ3往復を手動で確認できます（[確認手順](docs/getting-started.md#5-しりとりで通しの確認をする)）。[現在のクイックスタート](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート)と [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/FULL_TOUR.md)を参照してください。
 
-端末で仕事をするのは cockpit、チームの状態や履歴を見るのが Telemetry です。画面内のガイドを入口にし、詳しい参照は[目的別索引](docs/README.md)から開けます。
+ターミナルで仕事をするのは cockpit、チームの状態や履歴を見るのが Telemetry です。画面内のガイドを入口にし、詳しい参照は[目的別索引](docs/README.md)から開けます。
 
 ## 退出した agent を再開する
 
@@ -83,6 +107,7 @@ global network の稼働状態・本人照合と unknown の境界は [観測の
 | 目的から資料を探す | [全 docs の索引](docs/README.md) |
 | Telemetry 単独で始める・言葉を調べる | [Getting started](docs/getting-started.md) |
 | install・update・要件を確認する | [インストール](docs/install.md) |
+| 指定したスマホで状況だけを見る | [スマホ閲覧用画面](docs/mobile.md)（既定オフ） |
 | 困ったところを調べる | [トラブルシューティング](docs/troubleshooting.md) |
 | 決定的daemonのlocal helperを開発する | [専用bindingと通知](docs/daemon-agents.md)（配備は別承認） |
 | 絶対 path の予約候補を検証する | [候補の契約と試験](docs/absolute-reservations.md)（既定は旧 mode） |

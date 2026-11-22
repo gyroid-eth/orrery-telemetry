@@ -40,6 +40,26 @@ def test_current_terminal_error_only():
     assert stalls.classify(WORK)["state"] == "work"
 
 
+@pytest.mark.parametrize("footer", [
+    "GPT-6.1 Terra high · Context 52% left · ~/project · weekly 84% left",
+    "gpt-6.1-terra high · Context 52% left · ~/project",
+    "GPT-5.6 Sol medium · Context 80% left · ~/project",
+])
+def test_capacity_accepts_model_id_and_display_name_footers(footer):
+    text = ERROR + "\n\n› Ask Codex to do anything\n  " + footer + (
+        "\n  ? for shortcuts                ⚠ 6 warnings · f2 to view\n")
+    assert stalls.classify(text)["state"] == "capacity"
+
+
+@pytest.mark.parametrize("footer", [
+    "GPT-6.1 Terra · Context 52% left",
+    "GPT-6.1 Terra Sol high · Context 52% left",
+    "Terra GPT-6.1 high · Context 52% left",
+])
+def test_capacity_rejects_footers_that_are_not_a_model_and_effort(footer):
+    assert stalls.classify(ERROR + "\n› \n  " + footer + "\n")["state"] != "capacity"
+
+
 def test_live_capacity_frame_with_background_terminals_notifies(tmp_path):
     frame = (Path(__file__).parent / "fixtures" / "codex-capacity-background-terminals.txt").read_text()
     assert stalls.classify(frame) == {"state": "capacity", "error": ERROR}

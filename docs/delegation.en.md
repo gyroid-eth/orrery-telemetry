@@ -59,7 +59,9 @@ Run `agentstack-selftest` immediately after installation. It verifies **function
 
 ## Codex children and MCP approvals
 
-Codex children default to `--ask-for-approval never` because they run unattended. MCP tools have an approval setting separate from shell-command approvals, so calling an inherited server without an explicit allow rule immediately fails with `MCP tool call requires approval, but approval policy is never`. To give every Codex child the same rule, create a TOML fragment and persist it with installer flag `--codex-child-overlay /absolute/path/to/overlay.toml`.
+Parented Codex children default to `--ask-for-approval never` because they run unattended. `AGENTSTACK_CODEX_CHILD_APPROVAL` can override this value. Standalone NEW AGENT starts and resumes with a recorded standalone start omit approval arguments. Codex uses `approval_policy` from its effective `config.toml`, including any configured overlay, or its built-in default when unset. Resuming sessions without that record uses the existing child approval setting.
+
+MCP tools have an approval setting separate from shell-command approvals. Under `never`, calling an inherited server without an explicit allow rule immediately fails with `MCP tool call requires approval, but approval policy is never`. To give every Codex child the same rule, create a TOML fragment and persist it with installer flag `--codex-child-overlay /absolute/path/to/overlay.toml`.
 
 The minimal server-wide approval is:
 
@@ -156,7 +158,7 @@ The task used to be pasted into the input box. Claude Code wraps a paste in `<pa
 
 A task too long for one argument (128 KiB per argument on Linux and WSL) is kept in a file only the child can read, and the argument only says to read that file. A task passed as an argument is visible in the process list (`ps`) while the child runs, as it already was for Codex children.
 
-A warm-pool session (`hooks/warm_pool.sh`) is already running, so its task is still pasted. If you use a warm pool, give it the same system prompt when it is pre-started. Codex children already received their task as an argument.
+Managed Claude children receive their current workspace, ordered `AGENTSTACK_EXTRA_PROTECTED_ROOTS`, and task argument in a fresh process. Warm-pool selection remains unchanged in this PR; the existing claim-model protocol cannot guarantee a prestarted provider uses the requested workspace or protection settings. This limitation needs separate assessment. Codex children also receive the task as an argument.
 
 **Run after a model changes:** `scripts/canary-embed-task.sh` starts short-lived children for each model and place (inside or outside the vault) and tabulates them as started, reported outside Mail, declined, or timed out. It is run by hand, not in CI. Every child is ended and retired at the end. It creates temporary identities in the live ORRERY Mail, so it asks before starting.
 
@@ -168,7 +170,7 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 
 You can choose a child's tools when you start it, for example `/delegate "<task>" --base mail-only --tools screen:read:windows-mcp`. In `/api/spawn` the fields are `base` and `tools` ([API](api.en.md#post-apispawn)). `hooks/child_tools.py` is the single interpreter of both.
 
-- **`--base` omitted or `default`**: the launch is the same as before (same command and arguments). A Claude child's only MCP server is ORRERY Mail, while the browser (Claude in Chrome) and the macOS computer use still depend on the user's Claude settings and the child's working directory. A Codex child inherits the user's MCP servers. Whatever `--tools` selects is added on top
+- **`--base` omitted or `default`**: a Claude child's only MCP server is ORRERY Mail, while the browser (Claude in Chrome) and the macOS computer use still depend on the user's Claude settings and the child's working directory. A Codex child inherits the user's MCP servers. dsh and Hermes children inherit only the enabled Chrome MCP definition from Codex, alongside authenticated Mail (see below). Whatever `--tools` selects is added on top
 - **`--base mail-only`**: the child gets ORRERY Mail and only what `--tools` selects. A Claude child also gets `--no-chrome` unless a browser was selected. A Codex child gets the same disabling as `--codex-mcp orrery-only`, and then only the selected servers are enabled (combining it with `--codex-mcp inherit` is rejected)
 
 | `--tools` | Claude child | Codex child |
@@ -178,6 +180,40 @@ You can choose a child's tools when you start it, for example `/delegate "<task>
 | `screen:<read\|operate>:<server>` | Copies the user's screen server (such as Windows-MCP on WSL) into the strict config | Enables that server in the child's `config.toml` |
 | `mcp:<server>` | Copies the user's server definition into the strict config (no tool approved) | Enables that server in the child's `config.toml` (no tool approved) |
 | `mcp:<server>:all` | The same, and approves every tool the table knows | The same, and approves every tool the table knows, tool by tool |
+
+### The default browser for dsh and Hermes
+
+With `base=default`, native children inherit the enabled `chrome-devtools` server, or the one server running `chrome-devtools-mcp`, from `CODEX_HOME/config.toml` (otherwise `~/.codex/config.toml`) and the Codex child overlay. Other Codex MCP servers are not added. The `command`, `args`, `env` and `cwd` are the same definition, so `--autoConnect` connects to the user's usual signed-in Chrome. Without a configured, enabled browser the child still gets only Mail. `base=mail-only` does not add the browser automatically. Environment values are not displayed.
+
+This follows Codex's default MCP inheritance, which differs from explicit `--tools browser` and its classified tool exposure and individual approvals. Explicit native browser selection also discovers the Codex definition, but stops while dsh and Hermes cannot express those approval requirements. Default inheritance also refuses Codex-specific tool filters/approvals or other unrepresentable settings, rather than dropping them and broadening permissions. Supported definitions contain only the stdio `command`, `args`, `env`, `cwd` and `enabled` fields. The CLI displays `Harness prepare failed: unsupported_mcp_selection` (or `Harness resume-prepare failed: unsupported_mcp_selection` during resume preparation). `native_mcp_selection_unsupported` and `native_mcp_approval_unsupported` are internal exception reasons, not the displayed diagnostic.
+
+Inheritance does not add native CLI execution approvals. A person answers Chrome's connection permission. Downloads follow the usual Chrome settings; this selection grants no additional sandbox filesystem access. Check whether the child's native shell can read the destination.
+
+To check configuration generation, create a new native child through the regular launcher and pass its state directory's `input.json` to this script. Run it with the same `CODEX_HOME` and overlay environment used at launch. It prints only server names and whether transport fields match, without displaying whole configurations or environment values.
+
+```bash
+python3 - /path/to/child-state/input.json <<'PY'
+import json, os, sys
+from pathlib import Path
+document = json.loads(Path(sys.argv[1]).read_text())
+sys.path.insert(0, str(Path(document['product_root']) / 'hooks'))
+import child_tools
+config = child_tools._defaults_codex_config(
+    str(Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))) / 'config.toml'),
+    os.environ.get('AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY', ''))
+emitted = json.loads(Path(document['mcp_config']).read_text())['mcpServers']
+print('servers:', sorted(emitted))
+for name in document['mcp_selection']['servers']:
+    if name in config.get('mcp_servers', {}):
+        source = config['mcp_servers'][name]
+        print(name, {field: emitted.get(name, {}).get(field) == source.get(field)
+                     for field in ('command', 'args', 'env', 'cwd')})
+PY
+```
+
+- With `base=default` and no `--tools browser`, an enabled Chrome definition produces Mail and Chrome server names, with all four fields `True`. An absent or disabled browser leaves only Mail names (there may be multiple Mail aliases).
+- With `base=mail-only` and no additional tools, only Mail names remain. Explicit `--tools browser` must fail with the public diagnostic above before the native CLI starts.
+- Matching configuration is not a browser operation test. Check the child's native tool list for Chrome tools, actually call `list_pages` once, and verify the exact tool name and success/refusal in the tool-call record. Do not copy page names or contents into the report. For file retrieval, use a harmless test file and check the actual destination and a native read from the same child. These live operations have not been measured by this change's automated tests.
 
 ### When an MCP tool is refused by the approval policy
 
@@ -218,9 +254,11 @@ What a screen selection exposes and approves is decided by the classification ta
 
 ### Installer defaults
 
-`--child-default-tools 'browser,screen:operate'` writes `AGENTSTACK_CHILD_DEFAULT_TOOLS` into env.sh, the service definition and install-state. The default is empty. The launcher uses it only when none of `--base`, `--tools` or `--codex-mcp` is explicit; `--base default` clears the installer choice for that launch.
+`--child-default-tools 'mcp:cua-driver'` writes `AGENTSTACK_CHILD_DEFAULT_TOOLS` into env.sh, the service definition and install-state. The default is empty. Standard new launches of Claude, Codex, dsh and Hermes use it when the CLI omits `--base`, `--tools` and `--codex-mcp`, or when `/api/spawn` (including NEW AGENT) omits both `base` and `tools`.
 
-Defaults are checked for the provider and final directory, one item at a time. An unavailable item is omitted while applicable items remain; the omission appears in spawn output and the child's first instructions. Explicit base/tools/MCP profiles take precedence over defaults; output and the first instruction also state when defaults were not applied. Explicit selections keep failing closed. Mail proxy, authentication and startup failures are outside per-item default omission and stop a selected launch. The effective selection is saved in the existing Claude launch record or Codex tools record, so resume uses that selection instead of current installer defaults. On macOS Codex, `screen:operate` without a named server is omitted and node_repl is not automatically approved.
+Append `;claude=SPEC`, `;codex=SPEC`, `;dsh=SPEC` or `;hermes=SPEC` after the common list to replace that provider's defaults. Each list uses the `--tools` grammar. Providers without an override use the common list. An empty override clears the installer defaults for that provider. For example, `--child-default-tools 'mcp:cua-driver;dsh='` gives `cua-driver` to Claude, Codex and Hermes and clears the installer defaults for dsh.
+
+Defaults are checked for the provider and final directory, one item at a time. Applicable items remain, and omissions appear in spawn output and the child's first instructions. Explicit base/tools/MCP profiles take precedence. To suppress installer defaults, pass `--base default` on the CLI, or `base: "default"` or `tools: {}` in the API. Unavailable explicit tools and Mail proxy, authentication or startup failures stop the launch. Resume uses the selection recorded at launch and does not add current installer defaults. On macOS Codex, `screen:operate` without a named server is omitted and node_repl is not automatically approved.
 
 ### Approval
 
@@ -262,7 +300,7 @@ At a work boundary, the parent or operator can request `/delegate --resume <NAME
 "${AGENTSTACK_HOME:-$HOME/.agentstack}/bin/agentstack-resume" <NAME> --clear-tools --detached
 ```
 
-`tools` replaces the whole selection: include everything you want to keep. `--clear-tools` (API `tools: {}`) removes extra tools. Omitted base keeps the recorded base; base alone keeps the recorded tools. Omitting both resumes with the prior selection. Installer defaults are never appended. Grammar, provider, cwd, classification, MCP copying and the existing Mail authentication are checked; unavailable explicit choices stop the launch. Only retained Claude/Codex CLI children support changes. Standalone, unmigrated legacy, conversation-only and Codex App entries refuse them.
+`tools` replaces the whole selection: include everything you want to keep. `--clear-tools` (API `tools: {}`) removes extra tools. Omitted base keeps the recorded base; base alone keeps the recorded tools. Omitting both resumes with the prior selection. Installer defaults are never appended. Grammar, provider, cwd, classification, MCP copying and the existing Mail authentication are checked; unavailable explicit choices stop the launch. Retained Claude/Codex CLI children support persistent selection changes. For a conversation-only Claude resume, `/api/jump` accepts a per-launch choice of Chrome and `orrery-screen`. [Resume API example](api.en.md#post-apijump)
 
 Per-child exclusion and a generation stage the candidate for the existing resume path. Startup success commits it; startup failure restores that generation's prior record and generated settings. An older rollback cannot overwrite a new registration or selection. Claude replacement records use version 4, including empty choices, while versions 2/3 remain readable. API success means tmux/the terminal accepted the launch; it does not wait for shell bootstrap/authentication or a successful MCP call. If bootstrap fails later, the new tools record remains committed and is used on the next resume. Receive the resumed child’s Mail report confirming the same conversation and a real call to the required tool. The final receipt confirmation in /delegate is required.
 
@@ -299,7 +337,7 @@ How each launch path is affected:
 | Path | What reaches it |
 |---|---|
 | `/delegate` child | `--tools`, `--claude-chrome(-device)` and the overlay apply |
-| NEW AGENT (no parent, `--standalone`) | Codex builds the same generated home with the same approval policy as a child, so the overlay and a `--tools` record apply. Claude uses only what the NEW AGENT form says and ignores the `AGENTSTACK_CLAUDE_CHILD_CHROME` environment default. NEW AGENT has no `--tools` field yet |
+| NEW AGENT (no parent, `--standalone`) | Codex builds the same generated home as a child, so the overlay and a `--tools` record apply. The approval policy comes from Codex configuration. Claude uses only what the NEW AGENT form says and ignores the `AGENTSTACK_CLAUDE_CHILD_CHROME` environment default. NEW AGENT has no `--tools` field yet |
 | resume | Codex rebuilds the home on every launch and resume, so the overlay applies. Claude restores the same settings from the launch record (a child without a record gets no ORRERY selection restored and simply inherits the user's Claude settings; that does not mean browser or computer use is absent) |
 | `claude` / `codex` a person starts directly in a terminal | Out of scope. Only the real `~/.claude` and `~/.codex` settings decide, and ORRERY does not change them |
 

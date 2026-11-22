@@ -121,6 +121,8 @@ def test_child_and_profile_settings_survive_every_service_writer(tmp_path, write
         "AGENTSTACK_PORTRAITS_DIR": path + '/portraits',
         "AGENTSTACK_CUSTOM_PORTRAITS": path + '/custom',
         "AGENTSTACK_CODEX_MODELS": "codex-fixture-1,codex-fixture-2",
+        "AGENTSTACK_CODEX_DEFAULT_MODEL": "gpt-5.6-sol",
+        "AGENTSTACK_CODEX_DEFAULT_EFFORT": "high",
         "AGENTSTACK_PERSISTENT_PROFILES_DIR": path + '/profiles',
     }
     settings = dict(expected)

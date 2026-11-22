@@ -12,7 +12,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_TITLE = re.compile(r"\d{4}\.\d{2}\.\d{2}(?:\.\d+)?")
+RELEASE_TITLE = re.compile(r"\d{4}\.\d{2}\.\d{2}(?:\.[1-9]\d*)?")
 FRAGMENT_NAME = re.compile(r"\d{6}-[a-z0-9][a-z0-9-]*\.md")
 
 
@@ -99,10 +99,15 @@ def read_fragments(root: Path) -> list[tuple[Path, str]]:
     ]
 
 
+def release_order(version: str) -> tuple[str, int]:
+    """Compare validated release dates, then their numeric same-day revision."""
+    return version[:10], int(version[11:] or "0")
+
+
 def release(root: Path, version: str) -> int:
-    if not re.fullmatch(r"\d{4}\.\d{2}\.\d{2}", version):
-        raise ValueError("version must be YYYY.MM.DD")
-    datetime.strptime(version, "%Y.%m.%d")
+    if not RELEASE_TITLE.fullmatch(version):
+        raise ValueError("version must be YYYY.MM.DD or YYYY.MM.DD.N (N >= 1)")
+    datetime.strptime(version[:10], "%Y.%m.%d")
     changelog = root / "CHANGELOG.md"
     original = changelog.read_text(encoding="utf-8")
     headings = validate_changelog(original)
@@ -111,7 +116,7 @@ def release(root: Path, version: str) -> int:
         return 0
     if any(title == version for title, _ in headings):
         raise ValueError("version already released; review remaining fragments")
-    if headings and version <= headings[0][0]:
+    if headings and release_order(version) <= release_order(headings[0][0]):
         raise ValueError("version must be newer than the latest release")
 
     contents = [render_fragment(text) for _, text in fragments]
@@ -148,7 +153,7 @@ def release(root: Path, version: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("version", help="new release date: YYYY.MM.DD")
+    parser.add_argument("version", help="new release: YYYY.MM.DD, or YYYY.MM.DD.N for a same-day revision")
     args = parser.parse_args()
     try:
         count = release(ROOT, args.version)

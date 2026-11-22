@@ -191,6 +191,14 @@ def test_approval_policy_comes_from_the_installer_setting():
         "--ask-for-approval never"
 
 
+@pytest.mark.parametrize("policy", [None, "never", "untrusted"])
+def test_standalone_codex_has_no_approval_arguments(policy):
+    env = {"USE_CODEX": "true", "STANDALONE": "true"}
+    if policy is not None:
+        env["AGENTSTACK_CODEX_CHILD_APPROVAL"] = policy
+    assert _flags_with_env(_MODERN_HELP, env) == ""
+
+
 def test_missing_codex_on_the_spawner_path_still_pins_the_policy():
     # The dashboard runs under launchd's minimal PATH. Probing `codex --help`
     # there used to yield an empty string, and the child silently fell back to
@@ -436,7 +444,7 @@ def test_launcher_owns_the_codex_flags_and_never_hands_off_to_a_user_launcher():
     ), "spawn_child.sh still defers to the user's ~/.codex/bin launcher"
     # Both launch paths apply network flags and the resolved writable roots.
     # (Written in the zsh/bash-shared subset: see test_child_shell_portability.)
-    assert text.count('$(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS")') == 2
+    assert text.count('$(printf "%s" "$AGENTSTACK_CODEX_PERMISSION_FLAGS") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS")') == 2
     assert text.count('for d in $(printf "%s" "$AGENTSTACK_CODEX_ADD_DIRS_RESOLVED"); do') == 2
     assert text.count('-e "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=$(codex_child_add_dirs "$CHILD_CODEX_HOME")"') == 2
     assert text.count('CHILD_CODEX_BIN="$(resolve_codex_bin)"') == 2
@@ -667,8 +675,8 @@ def test_launcher_no_longer_hardcodes_full_auto():
     text = _SPAWN.read_text(encoding="utf-8")
     assert "--full-auto \\" not in text, "hardcoded --full-auto still in a launch line"
     # Both launch paths take the probed flags from the child environment.
-    assert text.count('--sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL")') == 2
-    assert text.count('-e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)"') == 2
+    assert text.count('$(printf "%s" "$AGENTSTACK_CODEX_PERMISSION_FLAGS")') == 2
+    assert text.count('-e "AGENTSTACK_CODEX_PERMISSION_FLAGS=$(codex_permission_flags)"') == 2
 
 
 def test_dead_child_fails_fast_instead_of_waiting_out_the_timeout():
@@ -678,19 +686,21 @@ def test_dead_child_fails_fast_instead_of_waiting_out_the_timeout():
     assert text.count("exited before starting its task") == 2
 
 
-def test_required_mcp_initialization_failure_is_a_failed_start():
-    # No native Codex or live tmux: replay a required-server startup failure.
+def test_unproven_mcp_error_is_not_explicit_session_absence():
+    # An error string alone proves neither process death nor task startup.
     script = (
         'sleep() { :; }\n'
         'tmux() { echo "Error: required MCP server chosen failed to initialize"; return 1; }\n'
-        'codex_session_alive() { return 1; }\n'
+        'codex_initial_task_status() { echo unknown; }\n'
+        'spawn_note() { printf "%s\\n" "$*"; }\n'
+        + _extract("codex_session_alive") + "\n"
         + _extract("codex_watch_initial_task")
         + '\nSECONDS=0; codex_watch_initial_task Child task test /l id\n'
     )
     result = _run_bash(script)
-    assert result.returncode == 2
-    assert "died after 3s" in result.stderr
-    assert "required MCP server chosen failed to initialize" in result.stderr
+    assert result.returncode == 3
+    assert "died" not in result.stderr
+    assert "confirmation unknown" in result.stdout
 
 
 def test_trust_dialog_uses_carriage_return_and_has_a_hard_attempt_limit():
@@ -1317,7 +1327,13 @@ def test_child_proxy_configs_carry_the_bearer_mode():
     assert "  AGENTSTACK_PYTHON\n" in run_mcp
 
 
-def test_actual_codex_launch_commands_keep_models_and_optional_efforts():
+@pytest.mark.parametrize("permissions", [
+    "--sandbox workspace-write",
+    "--sandbox workspace-write --ask-for-approval never",
+    "--sandbox danger-full-access --ask-for-approval never",
+])
+def test_actual_codex_launch_commands_keep_models_and_optional_efforts(permissions, monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTSTACK_HOME", str(tmp_path / "agentstack"))
     text = _SPAWN.read_text(encoding="utf-8")
     snippets = re.findall(r'EXTRA_ARGS=\(\)\n.*?--model "\$AGENTSTACK_CODEX_MODEL" -- "\$AGENTSTACK_CODEX_TASK"', text, re.S)
     assert len(snippets) == 2
@@ -1341,11 +1357,12 @@ def test_actual_codex_launch_commands_keep_models_and_optional_efforts():
                     "AGENTSTACK_CODEX_MODEL": model,
                     "AGENTSTACK_CODEX_EFFORT": validated.stdout.strip(),
                     "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED": "",
-                    "AGENTSTACK_CODEX_APPROVAL": "--ask-for-approval never",
+                    "AGENTSTACK_CODEX_PERMISSION_FLAGS": permissions,
                     "AGENTSTACK_CODEX_NETWORK_FLAGS": "",
                 })
                 assert result.returncode == 0, result.stderr
                 argv = json.loads(result.stdout)
+                assert argv[2:argv.index("-c")] == permissions.split()
                 assert argv[argv.index("--model")+1] == model
                 assert [x for x in argv if x.startswith("model_reasoning_effort=")] == (
                     ["model_reasoning_effort="+effort] if effort else [])
@@ -1508,7 +1525,7 @@ def test_the_dashboard_never_kills_a_codex_updating_itself(monkeypatch):
                             lambda argv, s=screen, **_kw: server.subprocess.CompletedProcess(argv, 0, s, ""))
         assert server._codex_self_update_on_screen("Child") is (name == "updating")
     source = (_ROOT / "dashboard" / "server.py").read_text(encoding="utf-8")
-    body = source[source.index("    def kill_spawn_session() -> None:"):]
+    body = source[source.index("    def kill_spawn_session() -> bool:"):]
     body = body[:body.index("\n\n")]
     assert body.index("_codex_self_update_on_screen") < body.index("'kill-session'")
 
@@ -1549,11 +1566,18 @@ def test_delegate_launcher_default_falls_back_and_prints_notice(tmp_path, age):
     env = {"AGENTSTACK_CODEX_BIN": str(binary), "CODEX_HOME": str(tmp_path)}
     for requested in ("", "sol"):
         result = _model_call("normalize_codex_model", requested, extra_env=env)
+        if requested == "sol" and age == 0:
+            assert result.returncode != 0 and "no eligible sol" in result.stderr
+            continue
         assert result.returncode == 0, result.stderr
-        assert result.stdout.strip() == "gpt-6-luna"
-        assert "from gpt-6.1-sol to gpt-6-luna" in result.stderr
-        if age:
-            assert fetched in result.stderr and "Start codex once" in result.stderr
+        if requested == "sol":
+            assert result.stdout.strip() == "gpt-6.1-sol"
+            assert result.stderr == ""
+        else:
+            assert result.stdout.strip() == "gpt-6-luna"
+            assert "from gpt-6.1-sol to gpt-6-luna" in result.stderr
+            if age:
+                assert fetched in result.stderr and "Start codex once" in result.stderr
     explicit = _model_call("normalize_codex_model", "gpt-6.1-sol", extra_env=env)
     assert explicit.stdout.strip() == "gpt-6.1-sol"
     assert explicit.stderr == ""
@@ -1564,11 +1588,32 @@ def test_delegate_launcher_default_falls_back_and_prints_notice(tmp_path, age):
         result = subprocess.run([sys.executable, str(_ROOT / "dashboard/codex_models.py"),
                                  "resolve", requested], env=resolve_env,
                                 capture_output=True, text=True, timeout=20)
+        if requested == "sol" and age == 0:
+            assert result.returncode != 0 and "no eligible sol" in result.stderr
+            continue
         assert result.returncode == 0, result.stderr
         policy = json.loads(result.stdout)
-        if requested.startswith("gpt-"):
-            assert policy["model"] == requested
+        if requested:
+            assert policy["model"] == ("gpt-6.1-sol" if requested == "sol" else requested)
             assert "model_note" not in policy and result.stderr == ""
         else:
             assert policy["model"] == "gpt-6-luna"
             assert policy["model_note"] in result.stderr
+
+
+def test_delegate_example_omits_effort_and_launcher_resolves_configured_default(tmp_path):
+    skill = (_ROOT / 'skills/delegate/SKILL.md').read_text()
+    example = skill.split('AGENTSTACK_CODEX_BIN="$CODEX_BIN" PARENT_AGENT=', 1)[1].split('```', 1)[0]
+    assert '--model "$CODEX_MODEL"' in example
+    assert '--effort' not in example
+    stack = tmp_path / 'stack'
+    stack.mkdir()
+    (stack / 'env.sh').write_text('export AGENTSTACK_CODEX_DEFAULT_EFFORT=high\n')
+    result = _model_call('validate_codex_effort', 'gpt-6-sol', '',
+                         extra_env={'AGENTSTACK_HOME': str(stack), 'AGENTSTACK_LABEL_PREFIX': 'org.agentstack.test.codex-default-effort'})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'high'
+    explicit = _model_call('validate_codex_effort', 'gpt-6-sol', 'medium',
+                           extra_env={'AGENTSTACK_HOME': str(stack), 'AGENTSTACK_LABEL_PREFIX': 'org.agentstack.test.codex-default-effort'})
+    assert explicit.returncode == 0, explicit.stderr
+    assert explicit.stdout.strip() == 'medium'

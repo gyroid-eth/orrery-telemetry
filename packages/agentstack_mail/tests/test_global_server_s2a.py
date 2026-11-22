@@ -1029,6 +1029,7 @@ def test_fts_snapshot_refuses_unsafe_fixed_directory(prepared, tmp_path, unsafe)
         directory.symlink_to(outside, target_is_directory=True)
     else:
         directory.mkdir(mode=0o755)
+        directory.chmod(0o755)
     with pytest.raises(GlobalError, match="ISOLATION_ROOT_UNSAFE"):
         S2aRuntime(prepared["config_path"])
     assert not list(outside.iterdir())
@@ -1054,6 +1055,7 @@ def test_fts_recovers_only_own_stale_snapshots_without_following_symlinks(
     unrelated.write_bytes(b"unrelated private data")
     foreign = directory / "snapshot-mode0001"
     foreign.mkdir(mode=0o755)
+    foreign.chmod(0o755)
     (foreign / "keep").write_bytes(b"not an own private snapshot")
     S2aRuntime(prepared["config_path"])
     assert not stale.exists()

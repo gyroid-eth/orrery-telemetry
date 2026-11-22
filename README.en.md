@@ -2,9 +2,26 @@
 
 [日本語](README.md)
 
-Multiple Claude Code / Codex agents can talk directly, divide the work, and check each other's results. ORRERY Telemetry shows their work and Mail round trips in one screen. Pair it with [ORRERY cockpit](https://github.com/gyroid-eth/orrery) to use their terminals in the same workspace.
+Claude Code, Codex, DeepSeek and Local LLM agents can talk directly, divide the work and check each other's results. ORRERY Telemetry shows their work and Mail round trips on one screen. Claude Code and Codex use their own CLIs; DeepSeek and Local LLMs use dsh or Hermes. Choose which to prepare: you do not need to install Claude Code or Codex before using DeepSeek or Local models. Pair Telemetry with [ORRERY cockpit](https://github.com/gyroid-eth/orrery) to use their terminals in the same workspace.
 
 ![A child joins the open NETWORK view, sends ready, and exchanges three shiritori Mail round trips](docs/img/network-mail.gif)
+
+## Start from your goal
+
+| Goal | Entry point |
+| --- | --- |
+| Observe agents on your machine | Start a configured agent and open DECK / NETWORK |
+| Start with Claude Code or Codex | Install the shared components, sign in to your chosen CLI, then [start the first agent](docs/getting-started.en.md#3-start-the-first-agent-and-watch-it-on-the-dashboard) |
+| Start with DeepSeek or Local LLMs | Install the shared components, then follow the [API setup guide](docs/native-setup.en.md) for dsh/Hermes, key storage, connection settings and launch. Claude/Codex login is not required |
+| Have agents divide work | Follow the [delegate and Mail end-to-end check](docs/getting-started.en.md#5-play-shiritori-as-an-end-to-end-check) |
+
+A provider supplies the connection, a model identifies what runs there, and a harness is the CLI that runs tools and the conversation. Standard API combinations currently cover DeepSeek / Local × dsh / Hermes, with availability checked per configured model. This does not promise arbitrary API and harness combinations.
+
+Once configured, DeepSeek / Local models appear under Model and Harness (dsh / Hermes) in NEW AGENT. When adding one for the first time, install the application, store your API key and connect the settings using the [setup guide](docs/native-setup.en.md). Keys belong in Mac Keychain or Ubuntu Secret Service, not in NEW AGENT. API launching currently requires legacy mode. Hermes keeps each agent's conversations and memory separate by project and registered name. There is no universal provider login or shared Hermes Telegram entry point yet, and manual Local effort still needs real-server verification. See the [supported scope and limitations](docs/managed-catalog.en.md#current-limitations) and the [selection screen examples](docs/dashboard.en.md#native-models-and-harnesses).
+
+![Select a configured Local model and dsh / Hermes in NEW AGENT](docs/img/native-harness-picker.png)
+
+The actual bundled Telemetry NEW AGENT, showing the real scientist names, portraits, and Claude / Codex / DeepSeek / Local models choices. [Watch the selection GIF](docs/img/native-harness-selection.gif); it stops before launching. The [cockpit NEW AGENT](https://github.com/gyroid-eth/orrery/blob/master/docs/en/usage.md) is a separate screen.
 
 ## Install Telemetry only
 
@@ -16,7 +33,14 @@ cd orrery-telemetry
 ./scripts/install.sh --project-key /absolute/path/to/your-project
 ```
 
-`--project-key` is the absolute path of the folder where agents work (not this repository). The changes are shown and applied only after you confirm. Afterwards, check with `~/.agentstack/bin/agentstack-doctor` and `~/.agentstack/bin/agentstack-selftest`, with Claude Code or Codex CLI installed and signed in in the same environment, start an agent with `~/.agentstack/bin/agent-start <project folder>` for Claude Code or `~/.agentstack/bin/agent-start-codex <project folder>` for Codex CLI, and open `http://127.0.0.1:8770/`. The steps are in the [standalone installation procedure](docs/getting-started.en.md#standalone-installation-and-verification).
+Top-level and delegated-child launches protect the selected working folder (not automatically the Git root) and deliberately shared folders (`AGENTSTACK_EXTRA_PROTECTED_ROOTS`). Updates copy saved legacy protection settings once. Review the [protection migration](docs/configuration.en.md#reservation-protection-and-migration) in a dry run, release reservations before updating, and restart cooperating sessions together.
+
+`--project-key` is the absolute path of the folder where agents work, not this repository. Review and confirm the changes, then check the shared components with `~/.agentstack/bin/agentstack-doctor` and `~/.agentstack/bin/agentstack-selftest`. Continue with your chosen provider:
+
+- **Claude Code / Codex**: Install and sign in to the chosen CLI in the same OS environment. Start it with `~/.agentstack/bin/agent-start <project folder>` or `~/.agentstack/bin/agent-start-codex <project folder>`.
+- **DeepSeek / Local LLMs**: Follow the [API setup guide](docs/native-setup.en.md) to prepare dsh or Hermes, key storage and connection settings. Then select and launch it from NEW AGENT at `http://127.0.0.1:8770/`. The install command above does not complete this API setup.
+
+For either route, check that the agent appears in DECK. The [standalone procedure](docs/getting-started.en.md#standalone-installation-and-verification) covers preparation, launch and Mail verification.
 
 Installer `--child-default-tools` selects default child tools (empty by default). Explicit choices win; unavailable default items are omitted with a notice. See [tool selection](docs/delegation.en.md#installer-defaults).
 
@@ -52,7 +76,7 @@ Try **Your first flight → help map → Full tour** in cockpit. Learn the basic
 
 In the Telemetry header, choose `HELP MAP` (beside `SETTINGS` in NETWORK) to annotate the visible DECK / NETWORK controls. In an agent detail panel, choose the `HELP MAP` button in its action row to annotate the panel’s controls. These entries also work when Telemetry is embedded in cockpit. If the annotations do not fit, they appear as a legend; press `Esc` or choose `Close` to dismiss it.
 
-Full tour guides you through creating one child with the delegate skill (Claude Code: `/delegate`, Codex: `$delegate`), playing three shiritori round trips over ORRERY Mail, arranging terminals, and trying Telemetry EXIT / RESUME and NETWORK / REPLAY. Follow the controls described on screen to advance. See the [current quick start](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) and [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/en/FULL_TOUR.md).
+Full tour guides you through creating one child with the delegate skill (Claude Code: `/delegate`, Codex: `$delegate`), playing three shiritori round trips over ORRERY Mail, arranging terminals, and trying Telemetry EXIT / RESUME and NETWORK / REPLAY. Follow the controls described on screen to advance. DeepSeek and Local children can use the same manual three-round-trip check; verify dsh and Hermes separately ([steps](docs/getting-started.en.md#5-play-shiritori-as-an-end-to-end-check)). See the [current quick start](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) and [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/en/FULL_TOUR.md).
 
 Cockpit is where you work in terminals; Telemetry is where you view the team's status and history. Start with the in-app guides, then use the [documentation index](docs/README.en.md) for detailed references.
 
@@ -83,6 +107,7 @@ Japanese documents are the source of truth. The English entry point is the [Engl
 | Find material by purpose | [All docs](docs/README.en.md) |
 | Start Telemetry on its own or look up a term | [Getting started](docs/getting-started.en.md) |
 | Check installation, updates, and requirements | [Installation](docs/install.en.md) |
+| Read from one designated phone | [Mobile view-only setup](docs/mobile.en.md) (off by default) |
 | Diagnose a problem | [Troubleshooting](docs/troubleshooting.en.md) |
 | Develop a local deterministic daemon helper | [Dedicated bindings and notifications](docs/daemon-agents.en.md) (deployment requires separate approval) |
 | Validate candidate absolute reservations | [Candidate contract and tests](docs/absolute-reservations.en.md) (legacy mode remains the default) |

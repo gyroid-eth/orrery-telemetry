@@ -91,8 +91,29 @@ def _retained_state(*, expires_at: str) -> dict[str, object]:
     }
 
 
+@pytest.fixture
+def cleanup_mail():
+    """Successful cleanup needs acknowledged Mail calls, not an unreachable port."""
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_POST(self):
+            request=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            name=request['params']['name']; args=request['params']['arguments']
+            if name=='release_file_reservations': result={'released':0}
+            elif name=='retire_agent': result={'status':'retired','agent_name':args['agent_name'],'project_key':args['project_key']}
+            elif name=='whois': result={'name':args['agent_name'],'retired_at':'2026-10-20T00:00:00Z'}
+            else: raise AssertionError(name)
+            self.send_response(200); self.end_headers()
+            self.wfile.write(json.dumps({'result':result}).encode())
+    service=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+    thread=threading.Thread(target=service.serve_forever,daemon=True);thread.start()
+    try: yield 'http://127.0.0.1:'+str(service.server_port)+'/mcp'
+    finally:
+        service.shutdown();service.server_close();thread.join(timeout=5)
+
+
 def test_normal_cleanup_retains_codex_credential_but_removes_generated_home(
-    tmp_path: Path,
+    tmp_path: Path, cleanup_mail,
 ) -> None:
     runtime = tmp_path / "runtime"
     state_file = runtime / "child-agents" / f"{AGENT}.json"
@@ -121,7 +142,7 @@ def test_normal_cleanup_retains_codex_credential_but_removes_generated_home(
             "AGENTSTACK_HOOKS_DIR": str(ROOT / "hooks"),
             "AGENTSTACK_MANAGED_AGENTS_FILE": str(runtime / "managed_agents.txt"),
             "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "disabled",
-            "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+            "AGENTSTACK_MCP_URL": cleanup_mail,
             "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "30",
         }
     )
@@ -146,7 +167,7 @@ def test_normal_cleanup_retains_codex_credential_but_removes_generated_home(
     assert not mcp_config.exists()
 
 
-def test_zero_day_retention_keeps_the_historical_full_delete(tmp_path: Path) -> None:
+def test_zero_day_retention_keeps_the_historical_full_delete(tmp_path: Path, cleanup_mail) -> None:
     runtime = tmp_path / "runtime"
     state_file = runtime / "child-agents" / f"{AGENT}.json"
     token_file = runtime / f"agent_token_{AGENT}"
@@ -170,7 +191,7 @@ def test_zero_day_retention_keeps_the_historical_full_delete(tmp_path: Path) -> 
             "AGENTSTACK_HOOKS_DIR": str(ROOT / "hooks"),
             "AGENTSTACK_MANAGED_AGENTS_FILE": str(runtime / "managed_agents.txt"),
             "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "disabled",
-            "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+            "AGENTSTACK_MCP_URL": cleanup_mail,
             "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "0",
         },
         text=True,
@@ -348,7 +369,8 @@ def test_resume_bootstrap_preserves_child_provenance_before_unretire(
     bootstrap = bindir / "agentstack-codex-bootstrap"
     shutil.copy2(ROOT / "bin" / "agentstack-codex-bootstrap", bootstrap)
     shutil.copy2(ROOT / "hooks" / "prepare-codex-session-binding.py", hooks)
-    shutil.copy2(ROOT / "hooks" / "child_resume.py", hooks)
+    for helper in ("child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / helper, hooks)
     call_log = tmp_path / "mcp-calls.log"
     (libdir / "agentstack-register.sh").write_text(
         "ags_mail_load_token() { :; }\n"
@@ -511,7 +533,8 @@ def test_failure_before_codex_exec_discards_home_but_keeps_retired_credential(
     install_home = tmp_path / "agentstack"
     hooks = install_home / "hooks"
     hooks.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / "hooks" / "child_resume.py", hooks)
+    for helper in ("child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / helper, hooks)
     (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
     copy_client_library(install_home)
     bootstrap = install_home / "bin" / "agentstack-codex-bootstrap"
@@ -542,6 +565,7 @@ def test_failure_before_codex_exec_discards_home_but_keeps_retired_credential(
     monkeypatch.setenv("AGENTSTACK_HOME", str(install_home))
     monkeypatch.setenv("AGENTSTACK_PYTHON", sys.executable)
     monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    monkeypatch.setattr(server, "SESSION_INDEX_DIR", str(runtime / "session_index"))
     monkeypatch.setattr(server, "_codex_transcript_path", lambda _name: str(rollout))
     monkeypatch.setattr(
         server,
@@ -625,6 +649,8 @@ def test_real_resume_command_can_cleanup_and_resume_again(
         (ROOT / "bin" / "lib" / "agentstack-scientists.sh", libdir / "agentstack-scientists.sh"),
         (ROOT / "hooks" / "prepare-codex-session-binding.py", hooks / "prepare-codex-session-binding.py"),
         (ROOT / "hooks" / "child_resume.py", hooks / "child_resume.py"),
+        (ROOT / "hooks" / "child_tools.py", hooks / "child_tools.py"),
+        (ROOT / "hooks" / "screen_state.py", hooks / "screen_state.py"),
         (ROOT / "hooks" / "cleanup-child-agent.sh", hooks / "cleanup-child-agent.sh"),
         (ROOT / "hooks" / "project-context.sh", hooks / "project-context.sh"),
         (ROOT / "hooks" / "resolve-agent-name.sh", hooks / "resolve-agent-name.sh"),
@@ -694,7 +720,11 @@ def test_real_resume_command_can_cleanup_and_resume_again(
                 if arguments.get("registration_token") != TOKEN:
                     error = "owner credential missing"
                 remote["retired"] = True
-                result = {"id": AGENT_ID, "name": AGENT}
+                result = {"status":"retired", "agent_name":AGENT, "project_key":str(project)}
+            elif name == "release_file_reservations":
+                result = {"released":0}
+            elif name == "whois":
+                result = {"name":AGENT, "retired_at":"2026-10-20T00:00:00Z" if remote["retired"] else None}
             else:
                 result = {"id": 1, "status": "ok"}
             if error:

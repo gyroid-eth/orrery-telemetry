@@ -465,7 +465,7 @@ def test_operation_mutex_is_never_read_half_written(tmp_path, monkeypatch):
     assert sorted(p.name for p in tmp_path.iterdir()) == ['child.lock']
 
 
-def test_new_caller_shares_the_inode_of_an_earlier_client_creator(tmp_path):
+def test_new_caller_shares_the_inode_of_an_earlier_client_creator(tmp_path, monkeypatch):
     """While an update is in progress an earlier client may create the same mutex.
 
     The earlier creator below is the create of the previous release: O_EXCL,
@@ -488,25 +488,45 @@ def test_new_caller_shares_the_inode_of_an_earlier_client_creator(tmp_path):
             os.fsync(out.fileno())
         lock = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         fcntl.flock(lock, fcntl.LOCK_EX)
-        old['inode'] = os.fstat(lock).st_ino
-        held.set()
-        assert release.wait(5)
-        os.close(lock)
+        try:
+            old['inode'] = os.fstat(lock).st_ino
+            held.set()
+            assert release.wait(5)
+        finally:
+            os.close(lock)
 
     result, inodes, entered = {}, {}, threading.Event()
     creator = threading.Thread(target=earlier_creator)
     new = threading.Thread(target=_run_operation, args=(path, 'new', result, inodes, entered))
+    at_lock = threading.Event()
+    real_flock = fcntl.flock
+
+    def after_earlier_lock(fd, operation):
+        if threading.current_thread() is new and operation == fcntl.LOCK_EX:
+            # Complete JSON can become visible before its creator locks it.
+            # Fix only the acquisition order; the real flock must still block.
+            assert held.wait(5)
+            at_lock.set()
+        return real_flock(fd, operation)
+
+    monkeypatch.setattr(fcntl, 'flock', after_earlier_lock)
     creator.start()
-    assert created.wait(5)
-    new.start()
-    assert not entered.wait(0.3), result
-    write.set()
-    assert held.wait(5)
-    assert not entered.wait(0.3), result
-    assert os.stat(path).st_ino == old['inode']
-    release.set()
-    creator.join(5)
-    new.join(5)
+    try:
+        assert created.wait(5)
+        new.start()
+        assert not entered.wait(0.3), result
+        write.set()
+        assert held.wait(5)
+        assert at_lock.wait(5)
+        assert not entered.wait(0.3), result
+        assert os.stat(path).st_ino == old['inode']
+    finally:
+        write.set()
+        release.set()
+        creator.join(5)
+        if new.ident is not None:
+            new.join(5)
+    assert not creator.is_alive() and not new.is_alive()
     assert result == {'new': 'accepted'}
     assert inodes['new'] == old['inode'] == os.stat(path).st_ino
     assert path.read_bytes() == OPERATION_MUTEX
@@ -1188,7 +1208,13 @@ def test_reregister_observe_only_has_distinct_output_and_status(prepared):
 def test_waiting_client_survives_another_process_metadata_update(prepared, monkeypatch):
     import inspect
     import time
+    from types import SimpleNamespace
     module = runpy.run_path(str(ROOT / 'bin/agentstack-await-reply'))
+    # Metadata refresh is a correctness check, not a five-second performance gate.
+    # Replace only this loaded entrypoint's clock; real RPC/subprocess clocks remain real.
+    clock = [time.monotonic()]
+    monkeypatch.setitem(module['main'].__globals__, 'time',
+                        SimpleNamespace(monotonic=lambda: clock[0]))
     context_before = prepared['client_path'].read_bytes()
     diagnostics = {'rpc_errors': [], 'registration_seconds': None}
     def waiting(fetch, **kwargs):
@@ -1215,6 +1241,7 @@ def test_waiting_client_survives_another_process_metadata_update(prepared, monke
                     })
                 return trace_exception
             started = time.monotonic()
+            deadline_remaining_before = deadline - clock[0]
             previous_trace = sys.gettrace()
             try:
                 sys.settrace(trace_exception)
@@ -1225,8 +1252,8 @@ def test_waiting_client_survives_another_process_metadata_update(prepared, monke
             assert isinstance(rows, list), json.dumps({
                 'phase': phase, 'fetch_seconds': finished - started,
                 'elapsed_since_main': finished - main_started,
-                'deadline_remaining_before': deadline - started,
-                'deadline_remaining_after': deadline - finished,
+                'deadline_remaining_before': deadline_remaining_before,
+                'deadline_remaining_after': deadline - clock[0],
                 **diagnostics,
             }, indent=2, sort_keys=True)
         fetch_checked('before-metadata-update')
@@ -1235,6 +1262,9 @@ def test_waiting_client_survives_another_process_metadata_update(prepared, monke
         diagnostics['registration_seconds'] = time.monotonic() - registration_started
         assert result.returncode == 0, result.stderr
         fetch_checked('after-metadata-update')
+        # The same fetch still honors the unchanged five-second deadline.
+        clock[0] = deadline
+        assert fetch() is None
         return 124, None
     monkeypatch.setitem(module['main'].__globals__, 'wait_for_reply', waiting)
     main_started = time.monotonic()

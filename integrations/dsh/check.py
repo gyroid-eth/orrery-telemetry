@@ -54,20 +54,18 @@ def prepare(node, runtime, output):
         package = runtime / 'node_modules' / name / 'package.json'
         if json.loads(package.read_text()).get('version') != expected:
             raise ValueError('Pinned dsh/TUI runtime versions are required')
-    receipt_file = runtime.parent / 'evidence/tui-patch-applied.json'
-    recipe_file = HERE / 'tui-managed.patch'
-    receipt, recipe = json.loads(receipt_file.read_text()), json.loads(recipe_file.read_text())
-    expected_files = sorted({r['file'] for r in recipe['replacements']})
-    if (receipt.get('recipe_sha256') != hashlib.sha256(recipe_file.read_bytes()).hexdigest()
-            or sorted(r['file'] for r in receipt['changes']) != expected_files):
-        raise ValueError('Matching managed TUI patch receipt is required')
-    for row in receipt['changes']:
-        relative = Path(row['file'])
-        if relative.is_absolute() or '..' in relative.parts:
-            raise ValueError('Invalid patch receipt file')
-        target = runtime / 'node_modules/@deepseek-harness-tui/dsh-tui' / relative
-        if hashlib.sha256(target.read_bytes()).hexdigest() != row['after']:
-            raise ValueError('Managed TUI patch differs from its receipt')
+    receipt_file = runtime.parent / 'evidence/upstream-runtime.json'
+    if not receipt_file.is_file():
+        raise ValueError('Plain dsh/TUI runtime receipt is required')
+    source = json.loads(receipt_file.read_text())
+    if source.get('variant') not in ('plain', 'plain-datadir'):
+        raise ValueError('Plain dsh/TUI runtime receipt is required')
+    # Use the installer's same native hash/recipe checks without importing dsh.
+    sys.path.insert(0, str(ROOT))
+    from scripts.lib.managed_harness_install import validate
+    validate(ROOT, 'dsh', {'harness': 'dsh', 'complete': True,
+        'variant': source['variant'], 'thin_config_contract': 1,
+        'details': {'node': str(node), 'runtime': str(runtime), 'runtime_receipt': str(receipt_file)}})
     output.mkdir(mode=0o700, parents=True, exist_ok=True)
     home = output / 'home'
     home.mkdir(mode=0o700, exist_ok=True)
@@ -77,9 +75,9 @@ def prepare(node, runtime, output):
     env = {'HOME': str(home), 'PATH': str(node.parent) + os.pathsep + os.defpath,
            'LANG': 'en_US.UTF-8', 'LC_ALL': 'en_US.UTF-8', 'TMPDIR': str(scratch),
            'ORRERY_DSH_TEST_NODE': str(node), 'ORRERY_DSH_TEST_RUNTIME': str(runtime),
-           'ORRERY_DSH_TEST_PYTHON': sys.executable, 'ORRERY_DSH_TEST_BACKEND': 'strata'}
+           'ORRERY_DSH_TEST_PYTHON': sys.executable}
     return env, {'node': {'path': str(node), 'version': version, 'sha256': hashlib.sha256(node.read_bytes()).hexdigest()},
-                 'runtime': str(runtime), 'patch_receipt': str(receipt_file), 'python': sys.executable}
+                 'runtime': str(runtime), 'runtime_receipt': str(receipt_file), 'variant': source['variant'], 'python': sys.executable}
 
 
 def main():
@@ -102,28 +100,25 @@ def main():
         os.chdir(ROOT)
         sys.path.insert(0, str(ROOT))
         totals, failures, errors, skips = 0, 0, 0, []
-        tap = args.out / 'egress.tap'
+        tap = args.out / 'node.tap'
         with tap.open('w') as log:
-            run = subprocess.run([env['ORRERY_DSH_TEST_NODE'], '--test', '--test-reporter=tap',
-                                  str(ROOT / 'tests/test_dsh_egress.mjs')], env=env,
+            run = subprocess.run([env['ORRERY_DSH_TEST_NODE'], '--test', '--test-concurrency=1', '--test-reporter=tap',
+                                  str(ROOT / 'tests/test_dsh_capabilities.mjs'),
+                                  str(ROOT / 'tests/test_dsh_compaction_preset.mjs'),
+                                  str(ROOT / 'tests/test_dsh_thin_tools.mjs'),
+                                  str(ROOT / 'tests/test_dsh_thin_credentials.mjs'),
+                                  str(ROOT / 'tests/test_dsh_tui_datadir.mjs')], env=env,
                                  stdout=log, stderr=subprocess.STDOUT, timeout=120)
         n, f, e, s = node_result(tap.read_text(), run.returncode)
         totals += n; failures += f; errors += e; skips += s
-        for backend in ('strata', 'deepseek'):
-            os.environ['ORRERY_DSH_TEST_BACKEND'] = backend
-            evidence = args.out.resolve() / (backend + '-evidence')
-            evidence.mkdir(mode=0o700, exist_ok=True)
-            os.environ['ORRERY_DSH_TEST_EVIDENCE'] = str(evidence)
-            loader = unittest.TestLoader()
-            suite = (loader.discover(str(ROOT / 'tests'), pattern='test_dsh_*.py') if backend == 'strata'
-                     else loader.loadTestsFromName('test_dsh_run_connection.ProductLifecycle.test_keyless_full_preflight_with_real_tui_and_synthetic_stdio_server'))
-            if backend == 'strata':
-                suite.addTests(loader.loadTestsFromName('test_managed_catalog'))
-                suite.addTests(loader.loadTestsFromName('test_managed_harness_install'))
-            with (args.out / (backend + '-tests.txt')).open('w') as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
-                checked = unittest.TextTestRunner(stream=log, verbosity=2).run(suite)
-            totals += checked.testsRun; failures += len(checked.failures); errors += len(checked.errors)
-            skips += [{'test': test.id(), 'reason': reason} for test, reason in checked.skipped]
+        loader = unittest.TestLoader()
+        suite = loader.discover(str(ROOT / 'tests'), pattern='test_dsh_*.py')
+        for module in ('test_managed_catalog', 'test_managed_capabilities', 'test_managed_harness_install'):
+            suite.addTests(loader.loadTestsFromName(module))
+        with (args.out / 'python-tests.txt').open('w') as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+            checked = unittest.TextTestRunner(stream=log, verbosity=2).run(suite)
+        totals += checked.testsRun; failures += len(checked.failures); errors += len(checked.errors)
+        skips += [{'test': test.id(), 'reason': reason} for test, reason in checked.skipped]
         result = {**summarize(totals, failures, errors, skips, allowed), 'environment': proof,
                   'offline': True, 'real_key_reads': 0, 'live_requests': 0}
     except Exception as error:

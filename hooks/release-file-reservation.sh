@@ -1,5 +1,11 @@
 #!/bin/bash
 
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_client harness-hook \
+    --context "${AGENTSTACK_FRESH_CLIENT_CONTEXT:-}" --action post-edit
+  exit $? # No old project/name/debounce fallback, including a broken context.
+fi
+
 # Decide explicit global context before loading any legacy environment/state.
 _ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
 . "$_ags_global_loader" || exit 2

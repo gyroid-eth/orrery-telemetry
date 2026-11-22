@@ -1,0 +1,106 @@
+.reader-input-bar .reader-input-row {
+  align-items: flex-end;
+}
+
+.mobile .reader-review .terminal-actions .reader-send-confirm {
+  flex: 0 1 152px;
+  margin-inline-start: auto;
+}
+
+.reader-input-bar .reader-receipt-motion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) min(60%, 174px);
+  align-items: center;
+  gap: 6px;
+  overflow: visible;
+}
+
+.reader-send-copy {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+.reader-send-pill {
+  --reader-send-accent: color-mix(in srgb, var(--ink) var(--reader-send-success, 0%), var(--amber));
+  position: relative;
+  grid-area: 1 / 2;
+  justify-self: end;
+  box-sizing: border-box;
+  width: 44px;
+  max-width: 100%;
+  height: 44px;
+  overflow: hidden;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--reader-send-accent) 50%, var(--hair));
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--reader-send-accent) 14%, var(--panel));
+  color: var(--reader-send-accent);
+}
+
+.reader-send-exit,
+.reader-send-result {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.reader-send-exit {
+  font: 12px var(--mono);
+}
+
+.reader-receipt-motion .reader-send-result strong {
+  color: var(--ink);
+}
+
+.reader-send-result svg {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+}
+
+.reader-send-spinner {
+  position: absolute;
+  inset: 0;
+  width: 20px;
+  height: 20px;
+  margin: auto;
+  border: 2px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+}
+
+.reader-receipt-motion .reader-send-spinner {
+  animation: reader-send-rotate 714ms linear infinite;
+}
+
+@keyframes reader-send-rotate {
+  to { transform: rotate(1turn); }
+}
+
+@media (max-width: 320px) {
+  .reader-input-bar .reader-receipt-motion.accepted {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .reader-receipt-motion.accepted .reader-send-pill {
+    grid-area: 1 / 1;
+  }
+
+  .reader-receipt-motion.accepted .reader-send-copy {
+    grid-area: 2 / 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-receipt-motion .reader-send-spinner {
+    animation: none;
+  }
+}

@@ -1,5 +1,10 @@
 #!/bin/bash
 
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  exec "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_client harness-hook \
+    --context "${AGENTSTACK_FRESH_CLIENT_CONTEXT:-}" --action registered
+fi
+
 _ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
 . "$_ags_global_loader" || exit 2
 if declare -F ags_client_entry >/dev/null; then

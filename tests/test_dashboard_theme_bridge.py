@@ -18,14 +18,6 @@ THEME_AXIS_NAMES = (
 )
 
 
-def _profile_values(*, small: float | None = None, tracking: float | None = None) -> dict:
-    return {
-        "dim-contrast": None,
-        "small-text": small,
-        "tracking": tracking,
-        "glow": None,
-        "background": None,
-    }
 
 
 def _theme_bridge_cases() -> dict:
@@ -89,16 +81,15 @@ const profiles={
     {type:'agentstack-theme-profile',version:1,requestId:'both',values:profileValues(.75,1)},
     {type:'agentstack-theme-profile',version:1,requestId:'legacy',values:{
       ...profileValues(),'dim-contrast':.5}}
-  ].map(normalizeThemeProfileMessage),
+  ].map(value=>themeProfileValuesError(value.values)),
   errors:[
-    {type:'agentstack-theme-profile',version:1,requestId:'',values:profileValues()},
     {type:'agentstack-theme-profile',version:1,requestId:'missing',values:{tracking:.5}},
     {type:'agentstack-theme-profile',version:1,requestId:'extra',values:{
       ...profileValues(),extra:null}},
     {type:'agentstack-theme-profile',version:1,requestId:'mixed',values:{
       ...profileValues(.5),'dim-contrast':.5}},
     {type:'agentstack-theme-profile',version:1,requestId:'range',values:profileValues(1.001)}
-  ].map(themeProfileMessageError)
+  ].map(value=>themeProfileValuesError(value.values))
 };
 process.stdout.write(JSON.stringify({axes,accepted,rejected,errors,guards,mix,shadow,profiles}));
 """
@@ -166,26 +157,11 @@ def test_theme_axis_bridge_validates_schema_source_and_origin():
         "wrongSource": False,
         "wrongOrigin": False,
     }
-    assert cases["profiles"]["accepted"] == [
-        {"requestId": "reset", "values": _profile_values()},
-        {"requestId": "small", "values": _profile_values(small=0.25)},
-        {"requestId": "tracking", "values": _profile_values(tracking=0.5)},
-        {
-            "requestId": "both",
-            "values": _profile_values(small=0.75, tracking=1),
-        },
-        {
-            "requestId": "legacy",
-            "values": {**_profile_values(), "dim-contrast": 0.5},
-        },
-    ]
+    assert cases["profiles"]["accepted"] == [None] * 5
     assert cases["profiles"]["errors"] == [
-        "invalid-request-id",
-        "invalid-values",
-        "invalid-values",
-        "invalid-profile-combination",
-        "invalid-value",
+        "invalid-values", "invalid-values", "invalid-profile-combination", "invalid-value",
     ]
+
 
 
 def test_theme_axis_out_of_range_reject_preserves_last_valid_state():

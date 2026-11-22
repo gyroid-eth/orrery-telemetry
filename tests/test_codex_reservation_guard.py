@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 import threading
@@ -338,9 +339,58 @@ def test_r1_inner_python_failure_cannot_become_noop(sandbox, tmp_path, selective
     assert result.returncode == 2, result.stdout + result.stderr
 
 
+def _assert_r1_changelog_recorded(root):
+    assert not (root / 'changelog.d/000267-codex-reservation-guard.md').exists()
+    fragment = root / 'changelog.d/000269-codex-reservation-guard.md'
+    heading = '### Codex の apply_patch に予約 guard を追加'
+    release_api = runpy.run_path(str(ROOT / 'scripts/changelog-release.py'))
+    if fragment.is_file():
+        text = release_api['validate_fragment'](fragment)
+        assert text.startswith(heading + '\n')
+    else:
+        # The canonical release consumes fragments. The note must survive in
+        # an actual released section, rather than require its source forever.
+        text = (root / 'CHANGELOG.md').read_text(encoding='utf-8')
+        releases = release_api['validate_changelog'](text)
+        assert releases
+        assert any(level == 3 and title == heading[4:] and offset > releases[0][1]
+                   for level, title, offset in release_api['markdown_headings'](text))
+
+
 def test_r1_changelog_uses_pr_number():
-    assert (ROOT / 'changelog.d/000269-codex-reservation-guard.md').is_file()
-    assert not (ROOT / 'changelog.d/000267-codex-reservation-guard.md').exists()
+    _assert_r1_changelog_recorded(ROOT)
+
+
+def test_r1_changelog_accepts_canonical_release_consumption(tmp_path):
+    fragments = tmp_path / 'changelog.d'
+    fragments.mkdir()
+    fragment = fragments / '000269-codex-reservation-guard.md'
+    fragment.write_text('### Codex の apply_patch に予約 guard を追加\n\n予約を検査します。\n', encoding='utf-8')
+    (tmp_path / 'CHANGELOG.md').write_text('# Changelog\n\n## 2026.10.06\n\n### Previous change\n\nEarlier.\n', encoding='utf-8')
+    _assert_r1_changelog_recorded(tmp_path)
+    release_api = runpy.run_path(str(ROOT / 'scripts/changelog-release.py'))
+    assert release_api['release'](tmp_path, '2026.10.22') == 1
+    assert not fragment.exists()
+    _assert_r1_changelog_recorded(tmp_path)
+
+
+def test_r1_changelog_missing_note_or_wrong_number_still_fails(tmp_path):
+    fragments = tmp_path / 'changelog.d'
+    fragments.mkdir()
+    (tmp_path / 'CHANGELOG.md').write_text('# Changelog\n\n## 2026.10.22\n\n### Other change\n\nOther.\n', encoding='utf-8')
+    with pytest.raises(AssertionError):
+        _assert_r1_changelog_recorded(tmp_path)
+    changelog = tmp_path / 'CHANGELOG.md'
+    changelog.write_text(changelog.read_text(encoding='utf-8') +
+                         '\n```markdown\n### Codex の apply_patch に予約 guard を追加\n```\n', encoding='utf-8')
+    with pytest.raises(AssertionError):
+        _assert_r1_changelog_recorded(tmp_path)
+    (fragments / '000269-codex-reservation-guard.md').write_text(
+        '### Codex の apply_patch に予約 guard を追加\n\n記録。\n', encoding='utf-8')
+    _assert_r1_changelog_recorded(tmp_path)
+    (fragments / '000267-codex-reservation-guard.md').write_text('wrong PR', encoding='utf-8')
+    with pytest.raises(AssertionError):
+        _assert_r1_changelog_recorded(tmp_path)
 
 
 @pytest.mark.parametrize('status', [1, 3, 42])

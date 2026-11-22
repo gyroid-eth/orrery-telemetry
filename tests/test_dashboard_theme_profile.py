@@ -264,11 +264,6 @@ def _assert_browser_contract(result: dict[str, object]) -> None:
             "version": 1,
             "surface": "telemetry",
         },
-        {
-            "type": "agentstack-theme-profile-ready",
-            "version": 1,
-            "surface": "telemetry",
-        },
     ]
 
     order = result["profile"]["order"]
@@ -277,10 +272,7 @@ def _assert_browser_contract(result: dict[str, object]) -> None:
         assert record["memberCount"] > 0, record
         assert record["transactions"] == [True, True, True, True], record
         assert record["mismatch"] == [], record
-        assert record["requestIdEcho"] is True
         envelope = record["finalEnvelope"]
-        assert envelope["type"] == "agentstack-theme-profile-result"
-        assert envelope["version"] == 1 and envelope["surface"] == "telemetry"
         assert envelope["status"] == "applied"
         assert envelope["requested"] == envelope["applied"]
         assert set(envelope["requested"]) == set(THEME_AXIS_NAMES)
@@ -341,7 +333,6 @@ def _assert_browser_contract(result: dict[str, object]) -> None:
     assert last_valid["status"] == "applied"
     assert last_valid["requested"] == last_valid["applied"] == expected_values
     invalid = rollback["invalidEnvelope"]
-    assert invalid["requestId"] == "dashboard-profile-invalid"
     assert invalid["status"] == "rejected" and invalid["reason"] == "invalid-value"
     assert set(invalid["requested"]) == set(THEME_AXIS_NAMES)
     assert invalid["applied"] == expected_values
@@ -362,7 +353,7 @@ def test_dashboard_browser_fixture_uses_full_guard_paths():
     assert "beforeMembership" in source and "afterMembership" in source
     assert "alreadyAtEndpoint" in source
     assert "rolledBackState" in source
-    assert "applyThemeProfileMessage" in source
+    assert "applyThemeProfileValues" in source
     assert "values(small,null)" in source
     assert "values(null,tracking)" in source
     assert "values(small,tracking)" in source

@@ -1,0 +1,4 @@
+# Optional phone relay environment. Core install never installs this file.
+pywebpush==2.5.0
+# Preserve existing image previews when the phone job selects this Python.
+pillow==13.0.0

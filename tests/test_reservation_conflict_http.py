@@ -118,6 +118,179 @@ def test_real_mail_guards_require_owned_and_no_active_foreign_conflict(reserved,
     if foreign=='active':assert 'EditorBeta' in result.stderr
 
 
+
+@pytest.mark.parametrize("kind", ["claude", "codex", "dsh", "hermes"])
+def test_managed_bound_proxy_reservations_reach_guards(mail, tmp_path, monkeypatch, kind):
+    monkeypatch.syspath_prepend(str(ROOT / "integrations/codex_app/src"))
+    from agentstack_codex_app.agent_mail_client import AgentMailClient, HttpJsonRpcTransport
+    from agentstack_codex_app.identity_store import IdentityStore
+    from agentstack_codex_app.mcp_server import AgentStackProxy, StdioMcpServer
+    from agentstack_codex_app.snapshot import SnapshotStore
+
+    repo = tmp_path / "foldera"
+    nested = repo / "sub"
+    other = tmp_path / "folderb" / "sub"
+    nested.mkdir(parents=True)
+    other.mkdir(parents=True)
+    same_file = nested / "deep" / "note.md"
+    different_file = other / "deep" / "note.md"
+    same_file.parent.mkdir()
+    different_file.parent.mkdir()
+
+    def managed_environment(cwd):
+        env = clean_env()
+        env.update(
+            HOME=str(tmp_path), PROJECT_KEY=str(repo),
+            AGENTSTACK_HOME=str(ROOT),
+            AGENTSTACK_PROJECT_KEY=str(repo),
+            AGENTSTACK_EXTRA_PROTECTED_ROOTS="",
+            AGENTSTACK_PYTHON=sys.executable,
+        )
+        context = subprocess.run(
+            ["/bin/bash", str(ROOT / "hooks/project-context.sh"),
+             "workspace-context-json", str(cwd), str(repo)],
+            cwd=cwd, env=env, text=True, capture_output=True, timeout=12,
+        )
+        assert context.returncode == 0, context.stderr
+        env.update(json.loads(context.stdout)["environment"])
+        return env
+
+    def managed_key(cwd, target):
+        env = managed_environment(cwd)
+        script = '. "$1"; reservation_resolve_tool_context "$2" || exit $?; printf "%s" "$REL_PATH"'
+        result = subprocess.run(
+            ["/bin/bash", "-eu", "-c", script, "test",
+             str(ROOT / "hooks/reservation-common.sh"),
+             json.dumps({"tool_input": {"file_path": str(target)}})],
+            cwd=cwd, env=env, text=True, capture_output=True, timeout=12,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    outer_key = managed_key(repo, same_file)
+    inner_key = managed_key(nested, same_file)
+    different_key = managed_key(other, different_file)
+    assert outer_key == inner_key == str(same_file.resolve())
+    assert different_key == str(different_file.resolve())
+    assert different_key != inner_key
+
+    call(mail, "ensure_project", human_key=str(repo))
+    proxies = {}
+    for agent in ("EditorAlpha", "EditorBeta"):
+        call(mail, "register_agent", project_key=str(repo),
+             name=agent, program="codex", model="fixture")
+        proxy = AgentStackProxy(
+            IdentityStore(tmp_path / agent / "identity"),
+            SnapshotStore(tmp_path / agent / "snapshot.json"),
+            AgentMailClient(HttpJsonRpcTransport(mail["url"])),
+        )
+        # Synthetic credential only; the legacy server advertises no owner
+        # token parameter for these tools. No installed identity is consulted.
+        proxy.bind_direct(agent_name=agent, project_key=str(repo),
+                          owner_token="fixture-only", parent_agent="FixtureParent")
+        proxies[agent] = StdioMcpServer(proxy)
+
+    def proxy_call(agent, name, **arguments):
+        document = proxies[agent].handle({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        })
+        assert "error" not in document, document
+        assert not document["result"].get("isError"), document
+        return document["result"]["structuredContent"]
+
+    def check_edit(cwd, agent, target=same_file):
+        env = managed_environment(cwd)
+        env.update(
+            AGENTSTACK_RUNTIME_DIR=str(tmp_path / ("runtime-" + agent)),
+            AGENTSTACK_MCP_URL=mail["url"],
+            AGENTSTACK_MAIL_HTTP_BEARER_MODE="disabled",
+            FILE_RESERVATION_RETRY_DELAY_SECONDS="0", AGENT_NAME=agent,
+        )
+        payload = {"session_id": "fixture", "cwd": str(cwd)}
+        if kind == "claude":
+            command = ["/bin/bash", str(ROOT / "hooks/check-file-reservation.sh")]
+            payload.update(tool_name="Edit", tool_input={"file_path": str(target)})
+        elif kind == "codex":
+            command = [sys.executable, str(ROOT / "hooks/check-codex-file-reservation.py")]
+            payload.update(tool_name="apply_patch", tool_input={"command":
+                "*** Begin Patch\n*** Add File: " + str(target) + "\n+text\n*** End Patch"})
+        elif kind == "hermes":
+            # Host cwd resolution is supplied by Hermes upstream. Exercise the
+            # product adapter and real common hooks without loading a harness.
+            command = [sys.executable, "-c", """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import thin_guard
+p = json.load(sys.stdin)
+thin_guard._cwd = lambda *_: p['cwd']
+result = thin_guard.before('write_file', {'path': sys.argv[2]})
+if result:
+    print(result['message'], file=sys.stderr)
+    raise SystemExit(2)
+""", str(ROOT / "integrations/hermes"), str(target)]
+        else:
+            node = shutil.which("node")
+            if not node:
+                pytest.skip("Node is required for the native dsh adapter")
+            command = [node, "--input-type=module", "--eval", """
+import fs from 'node:fs';
+import {pathToFileURL} from 'node:url';
+const {apply} = await import(pathToFileURL(process.argv[1]));
+const p = JSON.parse(fs.readFileSync(0, 'utf8'));
+const handlers = new Map();
+const ctx = {on: (name, fn) => handlers.set(name, fn),
+  workingDirectory: {ensure: async () => p.cwd}};
+apply(ctx, {cwd: p.cwd, hooks_dir: process.argv[2], env: {}});
+const result = await handlers.get('tools/pre-execute')({name: 'write',
+  arguments: {file_path: process.argv[3]}, agent: {session: {id: ''}}}, () => null);
+if (result?.kind === 'deny') { console.error(result.reason); process.exit(2); }
+""", str(ROOT / "integrations/dsh/orrery_tools.mjs"), str(ROOT / "hooks"), str(target)]
+        return subprocess.run(
+            command, input=json.dumps(payload),
+            text=True, capture_output=True, env=env, cwd=cwd, timeout=15,
+        )
+
+    missing = check_edit(repo, "EditorAlpha")
+    assert missing.returncode == 2, missing.stdout + missing.stderr
+    assert "has no reservation" in missing.stderr
+    first = proxy_call("EditorAlpha", "reserve_files", paths=[outer_key], ttl_seconds=900)
+    assert len(first["granted"]) == 1 and not first["conflicts"], first
+    lease = first["granted"][0]
+    assert lease["path_pattern"] == outer_key
+    conflict = proxy_call("EditorBeta", "reserve_files", paths=[inner_key], ttl_seconds=900)
+    assert not conflict["granted"] and "EditorAlpha" in str(conflict["conflicts"]), conflict
+    separate = proxy_call("EditorBeta", "reserve_files", paths=[different_key], ttl_seconds=900)
+    assert len(separate["granted"]) == 1 and not separate["conflicts"], separate
+    for cwd in (repo, nested):
+        allowed = check_edit(cwd, "EditorAlpha")
+        assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+    denied = check_edit(nested, "EditorBeta")
+    assert denied.returncode == 2, denied.stdout + denied.stderr
+    assert "EditorAlpha" in denied.stderr
+    assert check_edit(other, "EditorBeta", different_file).returncode == 0
+
+    # Ordinary sibling folders survive launch validation and use literal Mail
+    # identities through acquire, edit checks, renewal and path-based release.
+    wrong = proxy_call("EditorAlpha", "renew_reservations", paths=[different_key])
+    assert wrong["renewed"] == 0, wrong
+    untouched = proxy_call("EditorAlpha", "release_reservations", paths=[different_key])
+    assert untouched["released"] == 0, untouched
+    renewed = proxy_call("EditorAlpha", "renew_reservations", paths=[inner_key])
+    assert renewed["renewed"] == 1 and not renewed["conflict_check"]["conflicts"], renewed
+    assert [row["id"] for row in renewed["file_reservations"]] == [lease["id"]]
+    released = proxy_call("EditorAlpha", "release_reservations", paths=[inner_key])
+    assert released["released"] == 1, released
+    # Path release removed that exact lease, not the sibling agent's lease.
+    assert proxy_call("EditorAlpha", "renew_reservations",
+                      file_reservation_ids=[lease["id"]])["renewed"] == 0
+    assert check_edit(repo, "EditorAlpha").returncode == 2
+    assert check_edit(other, "EditorBeta", different_file).returncode == 0
+    # Check the new diagnostic after the lifecycle so an old proxy fails on
+    # absolute acquisition rather than the absence of this guidance text.
+    assert "Managed workspace-v1: reserve the physical absolute path: " + outer_key in missing.stderr
+
+
 def test_real_renew_carries_checked_scope_and_keeps_resources_unpublished(reserved):
     service,project=reserved;paths=['docs/note.md',str(project/'docs/note.md')]
     result=call(service,'renew_file_reservations',project_key=str(project),agent_name='EditorAlpha',paths=paths)

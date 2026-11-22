@@ -8,12 +8,40 @@ import subprocess
 import sys
 import threading
 import time
+import pytest
+
+
+@pytest.mark.parametrize('available', [True, False])
+def test_secret_service_balance_uses_same_explicit_ref_without_keychain_fallback(tmp_path, monkeypatch, capsys, available):
+    reference = {'store': 'secret-service', 'attributes': {'service': 'fixture-service', 'account': 'fixture-account'}}
+    manifest = tmp_path / 'manifest.json'
+    manifest.write_text(json.dumps({'backends': {'deepseek': {'credential_ref': reference}}}))
+    monkeypatch.setattr(sys, 'argv', ['deepseek_worker.py', '--manifest', str(manifest)])
+    calls = []
+    def read_ref(ref):
+        calls.append(ref)
+        if not available:
+            raise ValueError('credential_unavailable')
+        return 'synthetic-ss-canary'
+    monkeypatch.setattr(worker.runpy, 'run_path', lambda _: {'read_ref': read_ref})
+    monkeypatch.setattr(worker, 'keychain_key', lambda: pytest.fail('fell back to a different key'))
+    def fetch(key, endpoint):
+        assert key == 'synthetic-ss-canary' and 'DEEPSEEK_API_KEY' not in os.environ
+        assert os.environ['DBUS_SESSION_BUS_ADDRESS'] == 'unix:path=/fixture/bus'
+        return {'ok': True, 'observed_at': 1, 'balance': PAYLOAD}
+    monkeypatch.setattr(worker, 'fetch_balance', fetch if available else lambda *a: pytest.fail('HTTP after lookup failure'))
+    with patch.dict(os.environ, {'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/fixture/bus', 'DEEPSEEK_API_KEY': 'ambient-wrong-key'}):
+        assert worker.main() == (0 if available else 1)
+    assert calls == [reference]
+    result = json.loads(capsys.readouterr().out)
+    assert 'synthetic-ss-canary' not in json.dumps(result)
+    if not available:
+        assert result == {'ok': False, 'reason': 'balance_key_unavailable'}
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import patch
 import urllib.request
 
-import pytest
 import dashboard.server as server
 from dashboard.quotas import build_default_service
 from dashboard.quotas.balance import AccountBalance
@@ -21,6 +49,20 @@ from dashboard.quotas.base import QuotaSnapshot
 from dashboard.quotas.deepseek import DeepSeekBalanceProvider
 from dashboard.quotas import deepseek_worker as worker
 from dashboard.quotas.service import QuotaService
+
+
+def test_manifest_without_deepseek_reference_preserves_legacy_balance_key(monkeypatch, tmp_path, capsys):
+    manifest = tmp_path / 'manifest.json'
+    manifest.write_text('{"backends":{"strata":{"model":"fixture"}}}')
+    monkeypatch.setattr(sys, 'argv', ['deepseek_worker.py', '--manifest', str(manifest)])
+    monkeypatch.setattr(worker, 'keychain_key', lambda: 'synthetic-legacy-key')
+    def fetch(key, endpoint):
+        assert key == 'synthetic-legacy-key'
+        return {'ok': True, 'observed_at': 1, 'balance': PAYLOAD}
+    monkeypatch.setattr(worker, 'fetch_balance', fetch)
+    with patch.dict(os.environ):
+        assert worker.main() == 0
+    assert 'synthetic-legacy-key' not in capsys.readouterr().out
 
 ROOT = Path(__file__).resolve().parents[1]
 USD_USAGE = {'currency': 'USD', 'total_balance': '12.3400', 'is_available': True}

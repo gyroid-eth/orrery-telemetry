@@ -112,7 +112,7 @@ def test_codex_row_with_verified_child_provenance_can_be_ready(
     monkeypatch.setattr(
         server,
         "_codex_resume_child_home",
-        lambda _session, _registration: (str(child_home), "orrery-only"),
+        lambda _session, _registration: (str(child_home), "orrery-only", False),
     )
 
     assert server._resume_capability(AGENT, "codex-cli", category="retired") == "ready"
@@ -610,11 +610,12 @@ def _large_retired_claude_roster(
             INSERT INTO projects VALUES (1, 'fixture-project');
             """
         )
+        # Keep the roster inside the server's SQLite-clock history window.
         con.executemany(
             """
             INSERT INTO agents VALUES (?, 1, ?, 'claude-sonnet-5',
-                'claude-code', '', '2026-09-01 00:00:00',
-                '2026-09-22 00:00:00', '2026-09-22 00:01:00')
+                'claude-code', '', datetime('now', '-22 days'),
+                datetime('now', '-1 day'), datetime('now', '-1 day', '+1 minute'))
             """,
             [(index + 1, f"RetiredClaude{index:02d}") for index in range(60)],
         )

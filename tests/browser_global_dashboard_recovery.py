@@ -12,6 +12,7 @@ import pytest
 from service_teardown import TEST_LABEL_PREFIX
 from test_global_child_client import server
 from dashboard import server as dashboard
+from _dashboard_http_fixture import install_offline_quotas, dashboard_http_fixture
 from dashboard.http_operator import configure,read_capability
 from dashboard.global_backend import OPERATOR_API
 from agentstack_mail.global_s2c import S2cRuntime
@@ -53,7 +54,8 @@ with pytest.MonkeyPatch.context() as mp:
    op.api['atomic_json'](directory/'fixture.json',dict(kind='orrery-global-live-session-v1',**c.binding,agent_id=c.identity['agent_id'],session_id='fixture',pid=pid,process_start='fixture',pane_id='%10'))
    with c.operation_mutex():pass
   mp.setitem(__import__('dashboard.global_backend',fromlist=['OPERATOR_API']).OPERATOR_API['API'],'pane_evidence',lambda live,**kw:('live','%10','ctx: 42% used\n✻ Working…' if live['pid']==101 else 'ctx: 0% used\nReady'))
-  http=ThreadingHTTPServer(('127.0.0.1',0),dashboard.Handler)
+  install_offline_quotas(dashboard,monkeypatch=mp)
+  http=dashboard_http_fixture(dashboard)
   thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()
   op.create('trust-needed',agent_name='TrustNeedsApproval',program='codex',model='fixture')
   origin=f'http://127.0.0.1:{http.server_port}'

@@ -32,9 +32,15 @@ class DeepSeekBalanceProvider:
         if not self.is_enabled():
             return unknown('telemetry_opt_in_required')
         try:
+            argv = [sys.executable, str(Path(__file__).with_name('deepseek_worker.py'))]
+            manifest = os.environ.get('AGENTSTACK_MANAGED_SPAWN_CONFIG')
+            if manifest:
+                argv.extend(['--manifest', manifest])
+            context = {key: os.environ[key] for key in ('DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR')
+                       if manifest and os.environ.get(key)}
             result = self.runner(
-                [sys.executable, str(Path(__file__).with_name('deepseek_worker.py'))],
-                env={'PATH': '/usr/bin:/bin', 'HOME': os.path.expanduser('~')},
+                argv,
+                env={'PATH': '/usr/bin:/bin', 'HOME': os.path.expanduser('~'), **context},
                 stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
             payload = json.loads(result.stdout)
             if result.returncode != 0 or payload.get('ok') is not True:

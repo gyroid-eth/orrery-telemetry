@@ -21,10 +21,17 @@ def install_legacy_transport(monkeypatch, tmp_path, server, invoke, *, sessions=
     stream.bind(str(path))
     path.chmod(0o600)
 
+    requested = {"name": "FixtureSession"}
+
     def evidence(argv, **kwargs):
         args = argv[3:]
-        if '#{socket_path}\t#{pid}' in args:
-            return subprocess.CompletedProcess(argv, 0, str(path) + '\t300\n', '')
+        if '#{socket_path}|#{pid}' in args:
+            return subprocess.CompletedProcess(argv, 0, str(path) + '|300\n', '')
+        if args[0] == 'list-sessions' and args[-1] == '#{session_id}\t#{session_name}':
+            rows = sessions() if callable(sessions) else sessions
+            if rows is None:
+                rows = {'$1': requested['name']}
+            return subprocess.CompletedProcess(argv, 0, ''.join(f'{sid}\t{name}\n' for sid, name in rows.items()), '')
         if args[0] == 'list-sessions' and args[-1] == '#{session_name}' and sessions is not None:
             rows = sessions() if callable(sessions) else sessions
             return subprocess.CompletedProcess(argv, 0, '\n'.join(rows.values()), '')
@@ -44,6 +51,15 @@ def install_legacy_transport(monkeypatch, tmp_path, server, invoke, *, sessions=
     transport = api['Transport'](path, binary='tmux', run=evidence)
     transport.server_pid = 300
     consumer = api['LegacyConsumer'](tmp_path or Path(directory.name).resolve(), transport=transport, api={'process_start': lambda *a, **kw: 'fixture-start'}, proof_reader=lambda *a, **kw: [])
+    # The default double promises any requested session exists. Supply the
+    # same synthetic name to inventory; explicit sessions still model absence.
+    original_command = consumer.command
+    def command(args, **kwargs):
+        if args[:2] == ['has-session', '-t'] and len(args) == 3:
+            target = args[2].lstrip('=')
+            requested['name'] = target if not target.startswith('$') else 'FixtureSession'
+        return original_command(args, **kwargs)
+    consumer.command = command
     monkeypatch.setattr(server, '_legacy_tmux_consumer', lambda: consumer)
     # Restoring the server factory releases this consumer even on failure.
     def cleanup():

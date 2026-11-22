@@ -21,6 +21,20 @@ from typing import Callable, Mapping, Sequence
 VIRTUAL_PREFIXES = ("tool://", "resource://", "service://")
 GLOB_MARKERS = "*?["
 
+# Restricted APFS profile, not Python's evolving Unicode casefold. In Unicode
+# 9 C+F folding, assigned Unicode-3.2 characters in these ranges are identity
+# except FF21..FF3A -> FF41..FF5A. Their canonical decompositions stay inside
+# this profile. See docs/absolute-reservations.md for the data/version boundary.
+APFS_JAPANESE_CASE_RANGES = (
+    (0x3000, 0x303F), (0x3040, 0x309F), (0x30A0, 0x30FF),
+    (0x31F0, 0x31FF), (0x3400, 0x4DBF), (0x4E00, 0x9FFF),
+    (0xFF00, 0xFFEF),
+)
+_CASE_TRANSLATION = str.maketrans({
+    **{code: code + 0x20 for code in range(0x41, 0x5B)},
+    **{code: code + 0x20 for code in range(0xFF21, 0xFF3B)},
+})
+
 
 class ReservationError(ValueError):
     """Stable non-secret diagnostic for a candidate reservation request."""
@@ -114,7 +128,7 @@ def normalize_path(
     unicode_rule = unicode_rule_at(prefix)
     _unicode_key(value, unicode_rule)  # Unknown Unicode rules cannot grant a lease.
     case_insensitive = case_insensitive_at(prefix)
-    _case_key(value, case_insensitive)
+    _case_key(value, case_insensitive, unicode_rule)
     return ReservationPath(
         "filesystem", value, str(prefix), case_insensitive, unicode_rule
     )
@@ -287,17 +301,23 @@ def normalize_paths(values: Sequence[str], **kwargs: object) -> list[Reservation
     return [normalize_path(value, **kwargs) for value in values]
 
 
-def _case_key(value: str, fold: bool) -> str:
+def _case_key(value: str, fold: bool, unicode_rule: str | None = None) -> str:
     if not fold:
         return value
-    # An existing ASCII directory alias proves case-insensitivity, not the
-    # filesystem's versioned non-ASCII case table. No Python-wide casefold.
-    # Refuse acquisition and keep probes unknown until that table is supported.
+    # An ASCII alias alone proves no non-ASCII rules. Only the existing native
+    # APFS detection may select this small pinned profile; other FSs still fail.
     if not value.isascii():
-        raise ReservationError("CASE_RULES_UNKNOWN")
-    return value.translate(
-        str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
-    )
+        if unicode_rule != "apfs":
+            raise ReservationError("CASE_RULES_UNKNOWN")
+        for character in value:
+            code = ord(character)
+            if code < 128:
+                continue
+            if (unicodedata.ucd_3_2_0.category(character) == "Cn" or not any(
+                start <= code <= end for start, end in APFS_JAPANESE_CASE_RANGES
+            )):
+                raise ReservationError("CASE_RULES_UNKNOWN")
+    return value.translate(_CASE_TRANSLATION)
 
 
 def component_matches(
@@ -306,7 +326,7 @@ def component_matches(
     value, pattern = _unicode_key(value, unicode_rule), _unicode_key(
         pattern, unicode_rule
     )
-    value, pattern = _case_key(value, fold), _case_key(pattern, fold)
+    value, pattern = _case_key(value, fold, unicode_rule), _case_key(pattern, fold, unicode_rule)
     return fnmatch.fnmatchcase(value, pattern)
 
 
@@ -320,7 +340,7 @@ def _component_overlap(
     left, right = _unicode_key(left, unicode_rules[0]), _unicode_key(
         right, unicode_rules[1]
     )
-    left, right = _case_key(left, fold), _case_key(right, fold)
+    left, right = _case_key(left, fold, unicode_rules[0]), _case_key(right, fold, unicode_rules[1])
     left_glob = any(c in left for c in GLOB_MARKERS)
     right_glob = any(c in right for c in GLOB_MARKERS)
     if not left_glob:

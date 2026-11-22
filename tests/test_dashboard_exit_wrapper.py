@@ -86,15 +86,16 @@ def _run_exit(server, pane_cmd: str, tree: str, category: str):
             return _Done()
         raise AssertionError(f"unexpected command {argv}")
 
-    originals = (server.subprocess.run, server.lookup_agent, server._has_session, server.time.sleep)
+    originals = (server.subprocess.run, server.lookup_agent, server._has_session, server.time.sleep, server._tmux_run)
     try:
         server.subprocess.run = fake_run
+        server._tmux_run = lambda args, **kwargs: fake_run(["tmux", *args], **kwargs)
         server.lookup_agent = lambda name, _rows=[{"name": "SandyTuring", "category": category, "attached": False}]: next((r for r in _rows if r['name'] == name), None)
         server._has_session = lambda _s: True
         server.time.sleep = lambda _s: None
         result = server.do_exit("SandyTuring")
     finally:
-        server.subprocess.run, server.lookup_agent, server._has_session, server.time.sleep = originals
+        server.subprocess.run, server.lookup_agent, server._has_session, server.time.sleep, server._tmux_run = originals
     return result, sent
 
 

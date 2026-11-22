@@ -3,6 +3,7 @@
     "allow": [
       "mcp__orrery-mail__health_check",
       "mcp__orrery-mail__runtime_status",
+      "mcp__orrery-mail__show_files",
       "mcp__orrery-mail__ensure_project",
       "mcp__orrery-mail__register_agent",
       "mcp__orrery-mail__whois",

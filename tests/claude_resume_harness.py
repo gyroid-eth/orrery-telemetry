@@ -15,6 +15,7 @@ import threading
 import pytest
 
 from dashboard import server
+from _cleanup_mail import cleanup_mail_server
 
 
 class StandInMail(http.server.BaseHTTPRequestHandler):
@@ -35,7 +36,14 @@ class StandInMail(http.server.BaseHTTPRequestHandler):
             result = {"structuredContent": {"id": 73, "name": arguments.get("name"),
                                             "registration_token": arguments.get("registration_token", ""),
                                             "retired_at": StandInMail.retired_at}}
+        elif name == "release_file_reservations":
+            result = {"structuredContent": {"released": 0}}
+        elif name == "whois":
+            result = {"structuredContent": {"name": arguments.get("agent_name"),
+                                             "program": "claude-code",
+                                             "retired_at": StandInMail.retired_at}}
         elif name in {"retire_agent", "unretire_agent"}:
+            StandInMail.retired_at = "2026-01-01T00:00:00+00:00" if name == "retire_agent" else None
             result = {"structuredContent": {
                 "status": "retired" if name == "retire_agent" else "active",
                 "agent_name": arguments.get("agent_name"), "project_key": arguments.get("project_key")}}
@@ -95,3 +103,10 @@ def run_resumed(launches, tmp_path, cli_body, env=None):
     if pane is not None:environment['TMUX_PANE']=pane
     return subprocess.run(["/bin/bash", "-c", launches[-1][-1]], cwd=tmp_path, env=environment,
                           capture_output=True, text=True, timeout=60)
+
+
+@pytest.fixture
+def cleanup_mail():
+    """Synthetic successful RPCs for retention tests, not a delivery proof."""
+    with cleanup_mail_server() as url:
+        yield url

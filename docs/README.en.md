@@ -2,7 +2,7 @@
 
 [日本語](README.md) · [README](../README.en.md)
 
-Start with **Your first flight → help map → Full tour** on screen, from cockpit’s `Settings → Getting started`. This index is for install/update, troubleshooting, and detailed references when you need them.
+You can start with Claude Code, Codex, DeepSeek or Local LLMs. Choose a [standalone install](getting-started.en.md#standalone-installation-and-verification) or [install with the cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start), then sign in to your chosen Claude/Codex CLI or follow [API setup for DeepSeek/Local](native-setup.en.md). Once configured, explore **Your first flight → help map → Full tour** from the cockpit’s `Settings → Getting started`. This index covers installation, updates, troubleshooting and detailed references.
 
 Explore Telemetry’s own controls with `HELP MAP` in its header (beside `SETTINGS` in NETWORK). It annotates DECK / NETWORK controls, whether Telemetry is standalone or embedded in cockpit. In an agent detail panel, choose the panel’s own `HELP MAP` to annotate that panel’s controls.
 
@@ -12,15 +12,25 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 
 ## Start here
 
+- [Set up DeepSeek or Local LLMs](native-setup.en.md) — After the shared install, prepare dsh/Hermes, key storage and connection settings, then launch from the screen. This works for new and returning users; Claude/Codex login is not required.
+- [Save an API key in Ubuntu WSL](wsl-keyring.en.md) — Prepare a keyring with the standard GUI and save the key through hidden input.
+
+- [Choose a goal, provider, model and harness](getting-started.en.md#provider-model-harness) — Observe agents, create one with an API model, or coordinate agents. Check the [combinations and limitations](managed-catalog.en.md). Configured DeepSeek/Local models offer dsh/Hermes selection in NEW AGENT; runtime and API settings must be prepared separately.
 - [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) — Install both with one line and start with the on-screen first-flight guide.
 - [Standalone getting started](getting-started.en.md) — Audience, terms, standalone install, agent startup, and an end-to-end Mail check.
 
 ## Use the screen
 
 - [Dashboard](dashboard.en.md) — Reference for DECK/NETWORK, history, RESUME/EXIT, REPLAY, and details.
+- [Read from a designated phone](mobile.en.md) — The reader is off by default; owner admission, device restrictions, manual enable and disable steps.
 - [Delegation and child agents](delegation.en.md) — ORRERY /delegate, differences from native children, and tool selection.
 - [Launchers and identity](launchers.en.md) — agent-start, names, resume, /delegate and /log, and notification flow.
+- [Computer use for children (Japanese)](computer-use.md)
 - [Using Obsidian](obsidian.en.md) — Store logs, paper notes, and tasks in a vault and Daily Note.
+
+## Candidate switch to empty Mail
+
+- [Fresh migration, shutdown and recovery](fresh-global-update.en.md) — Explicit steps for a new empty instance. Private startup/shutdown from saved settings is covered. Ordinary updates do not switch it; real OS managers/Finder GUI, real providers/trust/installation, final CI and an attended cutover remain unaccepted. Reactivation and App foregrounding are outside this cutover scope.
 
 ## Install and update
 
@@ -30,7 +40,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Reusable Codex plugin lifecycle (Japanese)](codex-plugin-lifecycle.md) — Shared operations, scoped hook trust, and isolated verification.
 - [Codex App integration](codex-app.en.md) — Add Desktop tasks/subagents as an optional provider.
 - [Antigravity / Gemini](antigravity.en.md) — Add an optional provider and understand authentication and feature boundaries.
-- [DeepSeekの表示と残高](dsh-stage-a.md) — 明示opt-inのロゴ・USD残高。子の起動は次の版。
+- [DeepSeek display and balance (Japanese)](dsh-stage-a.md) — Historical stage-A record. For current dsh / Hermes installation, see [Installation](install.en.md); child spawning needs provider and harness selection ([API](api.en.md)).
 - [Persistent agents](persistent-agents.en.md) — Enrollment, interactive/headless startup, and credential recovery.
 - [Deterministic daemons](daemon-agents.en.md) — Dedicated identity, canonical binding, notification waits, and shutdown.
 - [Mail service updates](agentstack-mail-update.en.md) — Operational procedure to verify and replace a running Mail build.
@@ -45,6 +55,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 ## Troubleshoot
 
 - [Troubleshooting](troubleshooting.en.md) — Isolate service, notification, spawn, authentication, and WSL problems.
+- [Local HTTP trust boundary (Japanese)](local-http-security.md) — Which request origins Dashboard and Mail accept, and what they trust.
 
 ## Design and development
 
@@ -56,6 +67,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Namespace contract and migration planning](project-removal-plan.en.md) — PR1 candidate APIs and gates; defaults stay unchanged and cutover belongs to later PRs.
 - [Absolute reservation candidate](absolute-reservations.en.md) — PR2 shared normalizer, authenticated isolated store, client adapters and per-lease activity/GC; legacy mode remains the default.
 - [Candidate Mail and delivery state migration](namespace-state-migration.en.md) — PR3 isolated snapshots, persistent stores and phase recovery; activation stays false.
+- [Internal storage-origin B1 kernel](storage-origin-b1.en.md) — S′ candidate resolution, owner operations and pure peek; unpublished, with the default startup path unchanged.
 - [Global server S1 preparation](global-server.en.md) — Isolated HTTP registration/reconnection, inbox, enrollment and authority epoch; legacy mode stays default.
 - [Isolated global reservations/welcome](global-reservations.en.md) — S2c SQL authority, TTL, operator recovery and test migration; legacy remains default.
 - [Isolated global messages and signals (S2b)](global-messages.en.md) — Eight tools, DB attachments, pure inbox, and signal reconciliation; legacy remains default.
@@ -78,7 +90,7 @@ Documents without a translation are labelled with their original language. Image
 
 - [Dedicated tmux launch and termination acceptance plan (Japanese)](r2-tb-lifecycle-plan-v3.md) — Approved R2-Tb callers, schemas, interruption points and fixtures.
 
-- [Managed child requests, status, and lifecycle](managed-spawn-contract.md)
-- [dsh stage A-min](dsh-stage-a-min.md)
+- [dsh thin launch (Japanese)](dsh-thin.md)
 
-- [Managed catalog](managed-catalog.md)
+- [Native context and helper models](native-capabilities.md) — dsh / Hermes context observations and per-model capabilities.
+- [Native catalog and effort capabilities](managed-catalog.en.md)

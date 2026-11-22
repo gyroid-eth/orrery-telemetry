@@ -53,17 +53,26 @@ def atomic_json(path: Path, value: dict) -> None:
 
 
 class AppServer:
-    def __init__(self, binary: str, home: Path, cwd: Path, timeout: float = 30):
+    def __init__(self, binary: str, home: Path, cwd: Path, timeout: float = 30,
+                 *, argv=None, environment=None):
         self.deadline = time.monotonic() + timeout
-        environment = os.environ.copy()
+        environment = dict(os.environ if environment is None else environment)
         environment['CODEX_HOME'] = str(home)
-        self.process = subprocess.Popen(
-            [binary, 'app-server'], cwd=cwd, env=environment,
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
         self.selector = selectors.DefaultSelector()
-        self.selector.register(self.process.stdout, selectors.EVENT_READ)
+        self.process = None
+        try:
+            self.process = subprocess.Popen(
+                [binary, 'app-server'] if argv is None else argv, cwd=cwd, env=environment,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            self.selector.register(self.process.stdout, selectors.EVENT_READ)
+        except BaseException:
+            try:
+                self.close()
+            except BaseException:
+                pass  # Preserve the constructor failure after attempting cleanup.
+            raise
         self.buffer = b''
         self.request_id = 0
 
@@ -114,16 +123,24 @@ class AppServer:
         raise TrustUnavailable('app-server timeout')
 
     def close(self):
-        self.selector.close()
-        if self.process.poll() is None:
-            os.killpg(self.process.pid, signal.SIGTERM)
-            try:
-                self.process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                os.killpg(self.process.pid, signal.SIGKILL)
-                self.process.wait(timeout=2)
-        for stream in (self.process.stdin, self.process.stdout):
-            stream.close()
+        try:
+            self.selector.close()
+        finally:
+            # Selector failure must not skip child/pipe cleanup.
+            if self.process is not None:
+                try:
+                    if self.process.poll() is None:
+                        os.killpg(self.process.pid, signal.SIGTERM)
+                        try:
+                            self.process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(self.process.pid, signal.SIGKILL)
+                            self.process.wait(timeout=2)
+                finally:
+                    try:
+                        self.process.stdin.close()
+                    finally:
+                        self.process.stdout.close()
 
     def __exit__(self, *args):
         self.close()
@@ -225,6 +242,21 @@ def apply_trust(plan: dict):
             'plugin_id': plan['plugin_id'], 'shared_codex_home': str(home), 'hook_count': len(hooks)}
 
 
+def _persisted_trust_state(current_hash: str) -> dict:
+    """Codex persists a composite hook/content hash as two separate fields."""
+    if not isinstance(current_hash, str):
+        raise TrustUnavailable('invalid reviewed hook hash')
+    parts = current_hash.split('/')
+    if len(parts) not in (1, 2) or any(
+        re.fullmatch(r'sha256:[0-9a-f]{64}', part) is None for part in parts
+    ):
+        raise TrustUnavailable('invalid reviewed hook hash')
+    state = {'trusted_hash': parts[0], 'enabled': True}
+    if len(parts) == 2:
+        state['trusted_content_hash'] = parts[1]
+    return state
+
+
 def verify_approved_plan(plan: dict) -> None:
     """Read-only verification of the approved placement and persisted trust.
 
@@ -253,7 +285,10 @@ def verify_approved_plan(plan: dict) -> None:
     if not isinstance(plugin_id,str) or not re.fullmatch(r'agentstack-codex-app@[a-z0-9-]+',plugin_id) or config.get('plugins',{}).get(plugin_id,{}).get('enabled') is not True:
         raise TrustUnavailable('approved plugin is not enabled')
     state = config.get('hooks', {}).get('state', {})
-    if not plan.get('hooks') or any(state.get(h['key']) != {'trusted_hash': h['currentHash'], 'enabled': True} for h in plan['hooks']):
+    if not plan.get('hooks') or any(
+        state.get(h['key']) != _persisted_trust_state(h['currentHash'])
+        or state[h['key']].get('enabled') is not True for h in plan['hooks']
+    ):
         raise TrustUnavailable('approved hook trust is not present')
 
 

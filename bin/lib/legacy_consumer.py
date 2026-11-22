@@ -37,7 +37,7 @@ class LegacyConsumer:
         selector={'pane':target} if re.fullmatch(r'%[0-9]+',target) else ({'window':target} if re.fullmatch(r'@[0-9]+',target) else {'session':target.split(':',1)[0]})
         return self.tmux['legacy_admission'](self.transport,self.home,operation=operation,api=self.api,proof_reader=self.proof_reader,**selector)
 
-    def admitted_argv(self,args):
+    def admitted_argv(self,args,*,_creation=None):
         args=list(args)
         if not args:raise self.tmux['TargetError']('TMUX_TARGET_INPUT_INVALID')
         command=args[0]
@@ -55,7 +55,13 @@ class LegacyConsumer:
             name_index=args.index('-s')+1
             if name_index>=len(args):raise self.tmux['TargetError']('TMUX_TARGET_INPUT_INVALID')
             existing=self.transport.command('list-sessions','-F','#{session_name}')
-            if existing.returncode:raise self.tmux['TargetError']('TMUX_TARGET_UNAVAILABLE')
+            if existing.returncode:
+                if not server_absent(existing) or (existing.stdout or '').strip():
+                    raise self.tmux['TargetError']('TMUX_TARGET_UNAVAILABLE')
+                # Keep this observation local to command(); an interactive
+                # handoff only needs the admitted argv. Transport.command()
+                # has checked the same safe socket before and after inventory.
+                if _creation is not None:_creation['recreating']=True
             if args[name_index] in existing.stdout.splitlines():
                 # -A may attach an existing session. Creation is not permission
                 # to bypass the same current-target guard.
@@ -78,6 +84,30 @@ class LegacyConsumer:
         return [*self.transport.argv,*args]
 
     def command(self,args,**kwargs):
+        # Absence needs no target/process admission, but must be proved on the
+        # same pinned endpoint. Existing targets still pass every normal gate.
+        # Do not turn arbitrary pane/socket/permission failures into absence.
+        if len(args) == 3 and args[:2] == ['has-session', '-t']:
+            target = args[2].removeprefix('=')
+            if (args[2].startswith(('=', '$'))
+                    and re.fullmatch(r'[A-Za-z0-9_.-]+|\$[0-9]+', target)):
+                def names():
+                    reply = self.command(['list-sessions', '-F', '#{session_id}\t#{session_name}'])
+                    if reply.returncode:
+                        raise self.tmux['TargetError']('TMUX_TARGET_UNAVAILABLE')
+                    rows = []
+                    for line in reply.stdout.splitlines():
+                        fields = line.split('\t')
+                        if len(fields) != 2 or re.fullmatch(r'\$[0-9]+', fields[0]) is None or not fields[1]:
+                            raise self.tmux['TargetError']('TMUX_TARGET_UNAVAILABLE')
+                        rows.append(tuple(fields))
+                    return rows
+                before = names()
+                if not any(target in row for row in before):
+                    if names() != before:
+                        raise self.tmux['TargetError']('TMUX_TARGET_CHANGED')
+                    return subprocess.CompletedProcess(self.transport.argv + list(args), 1, '',
+                                                       "can't find session: " + target + '\n')
         inventory = bool(args) and args[0] in ('list-sessions', 'list-panes') and '-t' not in args
         if inventory:
             # Read the pinned destination afresh. ENOENT is a known empty
@@ -89,7 +119,8 @@ class LegacyConsumer:
                 return subprocess.CompletedProcess(self.transport.argv + list(args), 0, '', '')
             if current.identity != self.transport.identity:
                 raise self.tmux['TargetError']('TMUX_SOCKET_CHANGED')
-        argv=self.admitted_argv(args)
+        creation={}
+        argv=self.admitted_argv(args,_creation=creation) if args and args[0]=='new-session' else self.admitted_argv(args)
         creating=args and args[0]=='new-session' and self.transport.identity is None
         if creating:self.tmux['private_directory'](self.transport.path.parent,create=True)
         elif self.transport.identity is None:raise self.tmux['TargetError']('TMUX_TARGET_UNAVAILABLE')
@@ -104,7 +135,11 @@ class LegacyConsumer:
             if current.identity is not None and current.identity != self.transport.identity:
                 raise self.tmux['TargetError']('TMUX_SOCKET_CHANGED')
             return subprocess.CompletedProcess(argv, 0, '', '')
-        if creating and result.returncode==0:self.transport.identity=self.tmux['validate_socket'](self.transport.path)
+        if (creating or creation.get('recreating')) and result.returncode==0:
+            # tmux may replace its stale socket when starting a new server.
+            # Re-pin only after a successful creation, never an unknown error.
+            self.transport.identity=self.tmux['validate_socket'](self.transport.path)
+            if creation.get('recreating'):self.transport.server_pid=None
         return result
 
     def stop_group(self,target):

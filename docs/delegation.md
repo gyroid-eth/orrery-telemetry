@@ -59,7 +59,9 @@ Codex では `$delegate` でこの skill を呼びます（`/skills` でも選�
 
 ## Codex child と MCP 承認
 
-Codex child は無人実行のため既定で `--ask-for-approval never` です。shell command の承認とは別に MCP tool にも承認設定があり、明示的な許可がない inherited server を呼ぶと `MCP tool call requires approval, but approval policy is never` で直ちに失敗します。全 Codex child に同じ許可を与えるには TOML fragment を用意し、installer の `--codex-child-overlay /absolute/path/to/overlay.toml` で保存します。
+親付きの Codex child は無人実行のため既定で `--ask-for-approval never` です。`AGENTSTACK_CODEX_CHILD_APPROVAL` でこの値を変更できます。NEW AGENT の親なし起動と、その記録があるセッションの再開では承認引数を省略します。Codex は overlay を適用した `config.toml` の `approval_policy` に従い、未設定なら自身の既定値を使います。親なし起動の記録がない既存セッションの再開には、従来の子の承認設定を適用します。
+
+shell command の承認とは別に MCP tool にも承認設定があります。承認方針が `never` のとき、明示的な許可がない inherited server を呼ぶと `MCP tool call requires approval, but approval policy is never` で直ちに失敗します。全 Codex child に同じ許可を与えるには TOML fragment を用意し、installer の `--codex-child-overlay /absolute/path/to/overlay.toml` で保存します。
 
 server 全体を許可する最小例です。
 
@@ -156,7 +158,7 @@ launcher が確かめていない「人が頼んだ」といった主張は書�
 
 1 つの引数に収まらない長いタスク（Linux・WSL は 1 引数 128 KiB）は、子だけが読める file に置き、引数にはその file を読むようにという短い文だけを渡します。引数で渡したタスクは、子が動いている間 process の一覧（`ps`）から見えます。Codex の子も同じです。
 
-warm pool（`hooks/warm_pool.sh`）の session は起動済みなので、タスクは今も貼り付けで渡します。warm pool を使う場合は、事前起動の時に同じ system prompt を渡してください。Codex の子は前からタスクを引数で受け取っています。
+managed 起動の Claude child は、現在の workspace、順序付き `AGENTSTACK_EXTRA_PROTECTED_ROOTS`、task 引数を新しい process に渡します。warm pool の選択自体は今回変更しません。事前起動済み process の作業場所や保護設定を `claim-model` だけで保証できない点は残り、後続で検討します。Codex の子も task を引数で受け取ります。
 
 **モデルが変わったら回す:** `scripts/canary-embed-task.sh` は、モデル × vault の内外ごとに一時の子を起動し、それぞれを「実行した／Mail 以外で報告した／断った／時間切れ」に分けて表にします。CI には入れず、手で回します。子は最後に必ず終了させ、retire します。live の ORRERY Mail に一時の identity を作るので、始める前に確認を求めます。
 
@@ -168,7 +170,7 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 
 `/delegate "<task>" --base mail-only --tools screen:read:windows-mcp` のように、child に渡す道具を起動時に選べます。`/api/spawn` では `base` と `tools` です（[API](api.md#post-apispawn)）。解釈は `hooks/child_tools.py` が一手に行います。
 
-- **`--base` を省く・`default`**: 従来と同じ起動です（コマンドも引数も変わりません）。Claude child の MCP は ORRERY Mail だけで、ブラウザ（Claude in Chrome）と Mac の computer use は利用者の Claude 設定と起動ディレクトリしだいで届きます。Codex child は利用者の MCP を継承します。`--tools` で選んだものはこれに足します
+- **`--base` を省く・`default`**: Claude child の MCP は ORRERY Mail だけで、ブラウザ（Claude in Chrome）と Mac の computer use は利用者の Claude 設定と起動ディレクトリしだいで届きます。Codex child は利用者の MCP を継承します。dsh・Hermes child は認証済み Mail に加え、Codex の有効な Chrome MCP 定義だけを継承します（下記）。`--tools` で選んだものはこれに足します
 - **`--base mail-only`**: ORRERY Mail と `--tools` で選んだものだけを渡します。Claude child はブラウザを選ばなければ `--no-chrome` も付けます。Codex child は `--codex-mcp orrery-only` と同じ無効化をしてから、選んだ server だけを有効にします（`--codex-mcp inherit` との併用は拒否します）
 
 | `--tools` | Claude child | Codex child |
@@ -178,6 +180,40 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 | `screen:<read\|operate>:<server>` | 利用者の画面系 server（WSL の Windows-MCP など）を strict の設定に写します | 子の `config.toml` でその server を有効にします |
 | `mcp:<server>` | 利用者の server の定義を strict の設定に写します（tool は承認しない） | 子の `config.toml` でその server を有効にします（tool は承認しない） |
 | `mcp:<server>:all` | 上に加えて、表で分かる全 tool を承認します | 上に加えて、表で分かる全 tool を tool ごとに承認します |
+
+### dsh・Hermes の既定ブラウザ
+
+`base=default` の native child は、`CODEX_HOME/config.toml`（未指定なら `~/.codex/config.toml`）と Codex child overlay から、有効な `chrome-devtools`、または `chrome-devtools-mcp` を起動する1つの server を継承します。他の Codex MCP は追加しません。`command`・`args`・`env`・`cwd` は同じ定義なので、`--autoConnect` ならログイン済みの普段の Chrome につながります。Chrome が未設定・無効なら従来どおり Mail のみで、`base=mail-only` は自動追加しません。env の値は表示しません。
+
+これは Codex の既定の MCP 継承に合わせたもので、明示 `--tools browser` の分類済み tool の公開・個別承認とは別です。native の明示 browser も Codex 定義を探しますが、dsh・Hermes がその承認条件を表現できない間は起動を止めます。既定の継承でも、Codex 固有の tool filter/approval など native に写せない項目を捨てて権限を広げず停止します。通常の stdio `command`・`args`・`env`・`cwd` と `enabled` だけの定義が対象です。CLI の表示は `Harness prepare failed: unsupported_mcp_selection`（resume の準備は `Harness resume-prepare failed: unsupported_mcp_selection`）。`native_mcp_selection_unsupported` や `native_mcp_approval_unsupported` は内部の例外理由であり、表示名ではありません。
+
+既定の継承は native CLI の実行確認を追加承認しません。Chrome 側の接続許可は人が応答します。ダウンロード先は普段の Chrome の設定に従い、この設定で sandbox の読取権限を追加することはありません。native の shell から保存先を読めるかは、その子で確認してください。
+
+設定生成を確かめるには、正規の launcher で新しい native 子を作り、その子の state dir の `input.json` を次のスクリプトに渡します。起動時と同じ `CODEX_HOME` と overlay の環境で実行してください。config 全文や env 値は出さず、server 名と transport field の一致判定だけを表示します。
+
+```bash
+python3 - /path/to/child-state/input.json <<'PY'
+import json, os, sys
+from pathlib import Path
+document = json.loads(Path(sys.argv[1]).read_text())
+sys.path.insert(0, str(Path(document['product_root']) / 'hooks'))
+import child_tools
+config = child_tools._defaults_codex_config(
+    str(Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))) / 'config.toml'),
+    os.environ.get('AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY', ''))
+emitted = json.loads(Path(document['mcp_config']).read_text())['mcpServers']
+print('servers:', sorted(emitted))
+for name in document['mcp_selection']['servers']:
+    if name in config.get('mcp_servers', {}):
+        source = config['mcp_servers'][name]
+        print(name, {field: emitted.get(name, {}).get(field) == source.get(field)
+                     for field in ('command', 'args', 'env', 'cwd')})
+PY
+```
+
+- `base=default`（`--tools browser` なし）: 有効な Chrome 定義があれば Mail と Chrome の server 名が出て、4 field はすべて `True`。未設定・無効なら Mail の名前だけです（Mail の alias が複数出る場合があります）。
+- `base=mail-only`（追加 tool なし）: Mail の名前だけ。明示 `--tools browser` は上記の公開エラーで native CLI の開始前に拒否されることを確認します。
+- 設定の一致だけでは browser の動作確認になりません。子の native tool 一覧で Chrome の tool を確認し、`list_pages` を実際に1回呼び、tool-call 記録の正確な tool 名と成功・拒否を確認します。ページ名や内容は報告へ転載しません。ファイル取得は無害なテストファイルで実保存先と同じ子からの native read を確かめます。これらの実機操作は今回の自動試験では未実測です。
 
 ### MCP tool が承認の方針で拒否されたとき
 
@@ -218,9 +254,11 @@ MCP tool から拒否メッセージが返った場合、子は拒否された�
 
 ### installer の既定の道具
 
-`--child-default-tools 'browser,screen:operate'` は `AGENTSTACK_CHILD_DEFAULT_TOOLS` を env.sh・service 定義・install-state に保存します。既定は空です。launcher が適用するのは `--base`・`--tools`・`--codex-mcp` を明示していないときだけで、`--base default` を明示するとその起動には既定を追加しません。
+`--child-default-tools 'mcp:cua-driver'` は `AGENTSTACK_CHILD_DEFAULT_TOOLS` を env.sh・service 定義・install-state に保存します。既定は空です。Claude・Codex・dsh・Hermes の標準の新規起動に適用します。CLI では `--base`・`--tools`・`--codex-mcp` を、`/api/spawn`（NEW AGENT を含む）では `base`・`tools` を省略した場合が対象です。
 
-provider と最終の作業フォルダで、既定の項目を1つずつ確認します。使えない項目だけを外して使える項目は保ち、外したことを spawn の出力と子の最初の指示に残します。明示した base/tools/MCP profile は既定より優先し、既定を適用しなかった理由も出力と最初の指示に残します。明示指定は従来どおり、適用できなければ起動を止めます。道具以外の Mail proxy・認証・起動の失敗は、この項目別の省略では回避しません。選んだ結果は既存の Claude launch record／Codex tools record に保存し、resume は installer の現在の既定を足さず同じ道具を再構築します。Mac の Codex は server 名なしの `screen:operate` を外し、node_repl を自動承認しません。
+共通の一覧の後に `;claude=SPEC`、`;codex=SPEC`、`;dsh=SPEC`、`;hermes=SPEC` を付けると、該当する provider の一覧を置き換えます。各一覧は `--tools` と同じ文法で、上書きを省略すると共通の一覧を使い、空の上書きは installer の既定を抑止します。たとえば `--child-default-tools 'mcp:cua-driver;dsh='` は dsh 以外に `cua-driver` を渡します。
+
+provider と最終の作業フォルダで、既定の項目を1つずつ確認します。使えない項目だけを外して使える項目は保ち、外したことを spawn の出力と子の最初の指示に残します。明示した base/tools/MCP profile は既定より優先します。`--base default`、API の `base: "default"` や `tools: {}` でも installer の既定を抑止できます。明示した道具を適用できないときや、Mail proxy・認証・起動に失敗したときは起動を止めます。resume は起動時に記録した選択を使い、installer の現在の既定を追加しません。Mac の Codex は server 名なしの `screen:operate` を外し、node_repl を自動承認しません。
 
 ### 承認
 
@@ -262,7 +300,7 @@ WSL から起動した Windows のプロセスは、その WSL が動く Windows
 "${AGENTSTACK_HOME:-$HOME/.agentstack}/bin/agentstack-resume" <NAME> --clear-tools --detached
 ```
 
-`tools` は全置換です。残したい項目もすべて指定し、`--clear-tools`（API の `tools: {}`）で追加の道具を外します。base 省略は既存の base を維持し、`--base` だけの指定は道具を維持します。両方省略すると従来の選択で resume します。installer の既定は追加しません。grammar・provider・cwd・分類表・MCP コピーと既存の Mail 認証を検証し、適用できない明示指定は止めます。変更できるのは retained state がある Claude/Codex CLI child だけで、standalone・古い移行前の子・conversation-only・Codex App は拒否します。
+`tools` は全置換です。残したい項目もすべて指定し、`--clear-tools`（API の `tools: {}`）で追加の道具を外します。base 省略は既存の base を維持し、`--base` だけの指定は道具を維持します。両方省略すると従来の選択で resume します。installer の既定は追加しません。grammar・provider・cwd・分類表・MCP コピーと既存の Mail 認証を検証し、適用できない明示指定は止めます。選択を保持する変更は retained state がある Claude/Codex CLI child が対象です。会話だけで Claude を再開する場合は、`/api/jump` で起動ごとに Chrome と `orrery-screen` を選べます。[再開 API の指定例](api.md#post-apijump)
 
 子ごとの排他と世代を使って候補を準備し、既存 resume の起動成功で確定します。起動失敗はその世代の旧記録・生成設定に戻します。別の登録・変更を古い rollback で上書きしません。Claude の置換記録は version 4 で、空の選択も保存でき、既存 version 2/3 は読めます。API 成功は tmux／terminal が起動を受け付けたことを意味し、shell 内の bootstrap／認証の完了や MCP 呼び出しの成功は待ちません。後から bootstrap が失敗しても新しい道具の記録は確定したまま残り、次の resume にも使います。再開した子から Mail で同じ会話と必要な道具の実呼び出しの報告を受け、受信を確認してください。/delegate の最後の受信確認は省略できません。
 
@@ -299,7 +337,7 @@ ORRERY から起動した agent（child・NEW AGENT）に、ブラウザと comp
 | 経路 | 届き方 |
 |---|---|
 | `/delegate` の child | `--tools`・`--claude-chrome(-device)`・overlay が効く |
-| NEW AGENT（親なし、`--standalone`） | Codex は child と同じ生成 home・同じ承認方針なので、overlay と `--tools` の記録が効く。Claude は NEW AGENT のフォームで指定した値だけを使い、`AGENTSTACK_CLAUDE_CHILD_CHROME` の env は使いません。`--tools` の欄は NEW AGENT にまだありません |
+| NEW AGENT（親なし、`--standalone`） | Codex は child と同じ生成 home を使い、overlay と `--tools` の記録が効きます。承認方針は Codex の設定に従います。Claude は NEW AGENT のフォームで指定した値だけを使い、`AGENTSTACK_CLAUDE_CHILD_CHROME` の env は使いません。`--tools` の欄は NEW AGENT にまだありません |
 | resume | Codex は起動と resume のたびに home を作り直すので overlay が効きます。Claude は起動の記録から同じ設定を復元します（記録が無い child は ORRERY の選択を復元せず、利用者の Claude 設定をそのまま継承します。ブラウザや computer use が付かないことを意味しません） |
 | 人が端末で直接起動した `claude` / `codex` | 対象外です。実際の `~/.claude`・`~/.codex` の設定だけで決まり、ORRERY は変えません |
 

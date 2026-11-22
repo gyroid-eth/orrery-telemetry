@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import stat
@@ -24,7 +25,7 @@ import subprocess
 import sys
 import tempfile
 
-BEGIN = {p: f'<!-- >>> claude-agent-stack (managed: agentstack-{p}-setup) -->'.encode() for p in ('claude', 'codex')}
+BEGIN = {p: f'<!-- >>> claude-agent-stack (managed: agentstack-{p}-setup) -->'.encode() for p in ('claude', 'codex', 'harness')}
 END = b'<!-- <<< claude-agent-stack -->'
 MESSAGES = {
     'identity-unavailable': 'This session is not participating in ORRERY; use agent-start <workdir> (Claude) or agent-start-codex <workdir> (Codex) to start a coordinated session.',
@@ -87,8 +88,29 @@ def replace_block(data, block):
     return data + (b'\n' if data and not data.endswith(b'\n') else b'') + block
 
 
+def harness_template(shared):
+    """Compose neutral instructions from explicitly bounded shared sections.
+
+    Include boundaries live in the neutral template. A changed or duplicated
+    boundary is an error, never a successful render with missing safety rules.
+    """
+    template = Path(__file__).with_name('harness_instructions.md').read_bytes()
+    def include(match):
+        start, end = match.group(1), match.group(2)
+        if shared.splitlines().count(start) != 1 or shared.splitlines().count(end) != 1:
+            raise Refused('INSTRUCTION_SHARED_SECTION_INVALID', start.decode())
+        begin = shared.index(start + b'\n')
+        finish = shared.index(end + b'\n')
+        if finish <= begin:
+            raise Refused('INSTRUCTION_SHARED_SECTION_INVALID', start.decode())
+        return shared[begin:finish]
+    return re.sub(rb'^<!-- include: (.+) UNTIL (.+) -->$', include, template, flags=re.M)
+
+
 @cache
 def render(provider, template, install, project, renderer='literal-v2'):
+    if provider == 'harness':
+        template = harness_template(template)
     if renderer == 'legacy-sed-v1':
         # These are the actual released sed replacement rules (including '&',
         # backslashes and the delimiter). A sed error cannot prove provenance.
@@ -736,10 +758,10 @@ def instruction_observation(provider, home, wrapper, cwd):
                           for f in result['findings'] if f['block_sha256']]}
 
 
-def provider_instructions(home, provider, wrapper, project, *, configure=False):
+def provider_instructions(home, provider, wrapper, project, *, configure=False, template_home=None):
     if provider not in ('claude','codex'):return
     name='CLAUDE.md' if provider=='claude' else 'AGENTS.md'
-    template=(Path(wrapper)/provider/name).read_bytes()
+    template=(Path(template_home if template_home is not None else wrapper)/provider/name).read_bytes()
     block=render(provider,template,str(wrapper),project)
     path=Path(home)/name
     if path.is_symlink():

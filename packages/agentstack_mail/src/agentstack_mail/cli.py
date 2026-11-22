@@ -9,6 +9,7 @@ from typing import Any
 
 from .config import get_settings
 from .path_alias import PathAliasMiddleware, expand_alias_paths
+from .local_http import LocalPageMiddleware
 
 
 _GRACEFUL_SHUTDOWN_SECONDS = 8.0
@@ -81,10 +82,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         )
 
     canonical_path = _normalized_path(path)
-    middleware = []
-    if expand_alias_paths(canonical_path, settings.http.path_aliases):
-        from starlette.middleware import Middleware
+    from starlette.middleware import Middleware
 
+    middleware = [Middleware(LocalPageMiddleware)]
+    if expand_alias_paths(canonical_path, settings.http.path_aliases):
         middleware.append(
             Middleware(
                 PathAliasMiddleware,

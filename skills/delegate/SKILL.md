@@ -18,6 +18,66 @@ Do not use Claude Code's built-in Agent or Task tool, agent teams, or `SendMessa
 
 The goal is not only to launch a child. The parent agent remains responsible for scoping the task, reducing collision risk, monitoring the child, reading the result, and reporting a verified outcome to the user.
 
+<!-- native-delegate:start -->
+## DeepSeek / Local children: choose this route before preregistration
+
+For a **DeepSeek or Local (Strata) child**, use the dashboard's standard `POST /api/spawn`, with `provider` set to the native connection `id` the catalog returns (`deepseek`, `strata`, or an added connection such as `strata-epyc`) and `harness=dsh|hermes`. This applies whether the parent is Claude, Codex, dsh or Hermes. For a **Claude or Codex child**, continue with the existing procedure below. Explicit global mode still follows the global contract above.
+
+Do the risk/task preparation in sections 1–2, then use this route instead of sections 3–5. Do not preregister separately or call `spawn_child.sh --harness` yourself: the API owns preregistration and its launcher handoff. Do not search private manifests, credentials, child state or `~/.agentstack` to reconstruct a request.
+
+1. Read the public catalog: `curl -sS "http://127.0.0.1:${AGENTSTACK_PORT:-8770}/api/spawn-names"`. Select the requested provider's formal `models[].id` and a matching `harnesses[]` entry with `available: true`. Send the provider's `id` exactly as the catalog returns it, never its `kind` or label. A dynamic Local provider (`dynamic_models: true`) lists the models its server reports, and each of those rows carries `url_index` and `url_key`: copy both from the selected row. Without them the API refuses the spawn as `spawn_pair_unavailable`. If the requested model/harness is unavailable, report its reason; if the user's choice is ambiguous, ask rather than substituting a provider/model. Do not guess effort from a different harness.
+2. Prepare the complete task in a file, including scope, expected result and a completion report to the parent over ORRERY Mail. The API's `parent` is **your own `AGENT_NAME`**, even when you are somebody else's child; never use `PARENT_AGENT`. If your identity is unresolved, stop. Set `DELEGATE_PROVIDER`, `DELEGATE_HARNESS`, `DELEGATE_MODEL`, `DELEGATE_DIR` (the child's existing absolute working directory), and `DELEGATE_TASK_FILE` to those selected values, plus `DELEGATE_URL_INDEX` and `DELEGATE_URL_KEY` only for a dynamic Local row. These are inputs for the example, not new product configuration.
+3. Send a 0600 JSON file using curl. The quoted Python heredoc reads the task as data, preserving quotes, newlines, backticks and `$()` without shell evaluation. This uses only curl and the install prerequisite Python 3; no development fixture/helper is needed.
+
+```bash
+(
+  set -eu
+  : "${AGENT_NAME:?resolved parent identity required}"
+  : "${DELEGATE_PROVIDER:?}" "${DELEGATE_HARNESS:?}" "${DELEGATE_MODEL:?}"
+  : "${DELEGATE_DIR:?}" "${DELEGATE_TASK_FILE:?}"
+  umask 077
+  request_file='' response_file=''
+  trap 'rm -f -- "$request_file" "$response_file"' EXIT
+  request_file="$(mktemp "${TMPDIR:-/tmp}/delegate-request.XXXXXX")"
+  response_file="$(mktemp "${TMPDIR:-/tmp}/delegate-response.XXXXXX")"
+  python3 - "$request_file" "$DELEGATE_PROVIDER" "$DELEGATE_HARNESS" \
+    "$DELEGATE_MODEL" "$DELEGATE_DIR" "$DELEGATE_TASK_FILE" \
+    "${DELEGATE_URL_INDEX:-}" "${DELEGATE_URL_KEY:-}" <<'PY'
+import json, os, pathlib, sys
+output, provider, harness, model, directory, task_file, url_index, url_key = sys.argv[1:]
+payload = {"provider": provider, "harness": harness, "model": model,
+           "parent": os.environ["AGENT_NAME"], "dir": directory,
+           "task": pathlib.Path(task_file).read_text(), "async": True}
+if url_index or url_key:
+    payload.update(url_index=int(url_index), url_key=url_key)
+pathlib.Path(output).write_text(json.dumps(payload))
+PY
+  dashboard="http://127.0.0.1:${AGENTSTACK_PORT:-8770}"
+  curl -sS --max-time 120 -X POST "$dashboard/api/spawn" \
+    -H 'Content-Type: application/json' --data-binary "@$request_file" > "$response_file"
+  cat "$response_file"
+  child_name="$(python3 - "$response_file" <<'PY'
+import json, pathlib, sys
+reply = json.loads(pathlib.Path(sys.argv[1]).read_text())
+if reply.get("ok") is not True or not reply.get("child_name"):
+    raise SystemExit("Spawn not confirmed; inspect the response, do not resend automatically")
+print(reply["child_name"])
+PY
+  )"
+  curl -sS --get --data-urlencode "name=$child_name" "$dashboard/api/spawn-status"
+)
+```
+
+Add optional fields to `payload` only when selected: `name` (omit for Auto), `role`, `group`, `worktree` / `worktree_base`, `effort`, `helper_model`, `base`, `tools`. `effort` must be supported by the selected model × harness; omission keeps the native setting. `helper_model` is `same` or a formal ID in that entry's `helper_models`. Preserve the user's tool selection; do not silently add MCP servers or reduce it to mail-only. Tool choices that native config cannot express fail with a reason. Do not send `attempt_id` or the old managed task/scope fields. Field definitions are in the installed `docs/api.md`, `POST /api/spawn` section.
+
+4. Save the returned `child_name` before continuing. `ok: true, pending: true` means accepted, not ready. Check `GET /api/spawn-status?name=<child_name>`: `launching` is still starting, `ready` confirms startup, and `failed` carries `error` / `detail`. Check the same name again when needed; do not repeat POST to check progress. A transport failure, `registration_retained`, or `cleanup_incomplete` is not permission to create a replacement: report it and use the known child's status, or ask the operator if its name is unknown. An unknown/expired status is not success.
+5. Wait for the child's actual work report through ORRERY Mail notifications or the bundled `agentstack-await-reply` (section 6); follow-ups use Mail, never pane injection or inbox polling. Verify the result as in section 7. When truly finished, use standard `POST /api/exit` with `{"session":"<child_name>"}` and confirm its state; common cleanup owns release/retire. Do not read token files or retire another agent. Startup readiness is distinct from task completion.
+
+The generator already links this product skill into `DSH_HOME/skills/delegate` or `HERMES_HOME/skills/delegate`; read it there, without searching private runtime state. Use the native bash/terminal tool for curl and keep its normal guard/approval behavior. If an approval or hook denies it, report the reason; do not disable approvals or change transports.
+
+検索先を今回だけ切り替える場合、上の `payload` に `web_search: "exa"` または `web_search: "searxng"` を追加します。URL・資格は共通の managed spawn manifest の設定を使います。省略時はその設定、共通設定も無ければ従来の動作です。内部 launcher の指定は `--web-search exa|searxng` ですが、delegate は上の API を使ってください。
+
+<!-- native-delegate:end -->
 ## Environment
 
 Use these variables instead of hard-coded personal paths:
@@ -62,7 +122,7 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 | --- | --- |
 | `codex` | `--codex` (a Codex child) |
 | `claude` | a Claude child (the default) |
-| `sol`, `terra`, `luna`, `astra` | Codex model shorthand: `--codex --model <word>`. `sol` follows the cache-aware default below; `terra`, `luna`, and `astra` pin `gpt-5.6-terra`, `gpt-6-luna`, and `gpt-6-astra` |
+| `sol`, `terra`, `luna`, `astra` | Codex model shorthand: `--codex --model <word>`. each follows the newest eligible version of its family in the fresh local catalog; see the Codex model catalog guide |
 | `opus`, `sonnet`, `haiku`, `fable` | Claude model shorthand for the current model of that family: `--model <word>` |
 | `Sonnet 5.5`, `sonnet-5-5`, `Opus 5.5`, `sonnet-5`, `haiku-4-5`, `fable-5-1` | A specific Claude version: `--model sonnet-5-5` and so on (the version with `-` between its numbers). It pins that version; the bare family name follows the newest |
 | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` | `--effort <word>` (Codex reasoning effort) |
@@ -76,11 +136,11 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 
 The child's name is never taken from the arguments. Only an explicit `--name <Adjective-Scientist>` names a child; otherwise the registration helper picks one. A word such as `terra` is a model, not a name.
 
-Model defaults: Claude children use the current Opus, the same model `--model opus` resolves to. Codex omission uses the same shared model and effort policy as `sol`.
+Model defaults: Claude children use the current Opus, the same model `--model opus` resolves to. Codex omission uses the configured model and effort defaults, or the existing built-in policy when unset.
 
-For Codex, the initial default is `gpt-6.1-sol` with selected CLI 0.159.0+, or `gpt-6-sol` on an older CLI; unknown versions use fresh catalog evidence for the initial decision. If that ID is absent from the selected `CODEX_HOME/models_cache.json`, choose the next cached candidate in order: `gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna`. Expired caches can lower the default, while candidate additions and effort metadata still require a cache fetched within 300 seconds. An older CLI never moves up to GPT-6.1 Sol. Missing, corrupt, unreadable or future-dated caches, and snapshots without a next candidate, preserve the existing default. Explicit formal IDs are never substituted. Report both IDs and the reason to the operator when the default changes; stale-cache notices also include `fetched_at` and guidance to start `codex` once to refresh the list. Cache `identity` is not checked against the current login, so retained snapshots after an account switch may differ from current access; fallback does not prove authorization.
+For Codex, when no default is configured, the initial default is `gpt-6.1-sol` with selected CLI 0.159.0+, or `gpt-6-sol` on an older CLI; unknown versions use fresh catalog evidence for the initial decision. If that ID is absent from the selected `CODEX_HOME/models_cache.json`, choose the next cached candidate in order: `gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna`. Expired caches can lower the default, while candidate additions and effort metadata still require a cache fetched within 300 seconds. An older CLI never moves up to GPT-6.1 Sol. Missing, corrupt, unreadable or future-dated caches, and snapshots without a next candidate, preserve the existing default. Explicit formal IDs are never substituted. Report both IDs and the reason to the operator when the default changes; stale-cache notices also include `fetched_at` and guidance to start `codex` once to refresh the list. Cache `identity` is not checked against the current login, so retained snapshots after an account switch may differ from current access; fallback does not prove authorization.
 
-Resolve the CLI and model together before registration with the public `resolve` command below (use `""` for omission). It uses the same environment → saved `env.sh` → usable PATH selection and child login shell as the spawner. Pass the returned formal ID (and the same resolved `--effort`) to both the registration helper and `spawn_child.sh`, so the roster and running process agree, and pin the returned `AGENTSTACK_CODEX_BIN` for the spawn. Do not derive the omitted default from candidate order.
+Resolve the CLI and model together before registration with the public `resolve` command below (use `""` for omission). It uses the same environment → saved `env.sh` → usable PATH selection and child login shell as the spawner. Pass the returned formal ID to both the registration helper and `spawn_child.sh`, so the roster and running process agree, and pin the returned `AGENTSTACK_CODEX_BIN` for the spawn. Pass `--effort` only when explicitly requested. Do not derive the omitted default from candidate order.
 
 Claude models: the launcher resolves `opus` / `sonnet` / `haiku` / `fable` (and omission) to the model the local Claude Code catalog names as current for that family, or its bundled table when the catalog cannot be used, and prints which one it chose. When the user names a version ("Sonnet 5.5"), pass that version (`sonnet-5-5` or the formal `claude-sonnet-5-5`), not the bare family name: a family name follows whatever is newest, which is not always the version the user asked for. To get the formal IDs for the registration helper, run:
 
@@ -149,6 +209,7 @@ Embedded task template:
 - Registration is already complete; do not call ensure_project, register_agent, or fetch_inbox.
 - Treat the launch prompt and its embedded task as canonical. There is no task mail.
 - Do not modify files outside the declared scope.
+- Before reporting, call `show_files` with the reports, figures or screenshots the parent or the person should look at.
 - Report completion to <parent-agent-name> with `send_message` at importance `high`, including changed paths, summary, and verification.
 ```
 
@@ -243,11 +304,11 @@ PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/h
 
 For a Claude child with a chosen model, add `--model "<formal Claude ID>"` (the same ID you registered) before the working directory.
 
-For a Codex child, pass the same resolved formal model ID and effort used for registration. Without `--model`, the launcher resolves the shared `sol` default from CLI compatibility and cache evidence regardless of what was registered. Resolve omission before registration with `resolve ""`, relay any fallback notice to the operator, pass `$CODEX_MODEL` to both steps, and pass `$CODEX_BIN` to this launch:
+For a Codex child, pass the same resolved formal model ID used for registration. Pass `--effort` only when explicitly requested; otherwise the launcher resolves the configured default. Without `--model`, the launcher resolves the configured default or the built-in CLI compatibility and cache policy regardless of what was registered. Resolve omission before registration with `resolve ""`, relay any fallback notice to the operator, pass `$CODEX_MODEL` to both steps, and pass `$CODEX_BIN` to this launch:
 
 ```bash
 AGENTSTACK_CODEX_BIN="$CODEX_BIN" PARENT_AGENT="<parent-name>" bash "${AGENTSTACK_SPAWN_SCRIPT:-$AGENTSTACK_HOME/hooks/spawn_child.sh}" \
-  --pre-registered "<child-name>" --codex --model "$CODEX_MODEL" --effort medium \
+  --pre-registered "<child-name>" --codex --model "$CODEX_MODEL" \
   --child-token-file "$CHILD_TOKEN_FILE" \
   --embed-task --task-file "$TASK_FILE" \
   "<working-directory>"
@@ -415,7 +476,7 @@ When completion is detected:
 5. For implementation changes, run a doc-sync pass and update README or
    managed docs (`claude/CLAUDE.md`, `codex/AGENTS.md`) when behavior changed.
 6. Release file reservations.
-7. Report the verified outcome to the user.
+7. Report the verified outcome to the user. Call `show_files` with the files or images the user should look at (the child's report, figures, screenshots), so they open from the cockpit's History.
 
 If the child reports uncertainty, partial completion, or skipped tests, preserve that information in your report.
 

@@ -1,0 +1,954 @@
+{
+  "synthetic": true,
+  "provenance": "Approved mobile mock: same36 names,47 directed Mail edges and separate5 lineage links. Portraits use product canonical scientist mapping. No real user data.",
+  "agents": [
+    {
+      "name": "AmberCurie",
+      "provider": "anthropic",
+      "locality": null,
+      "model": "",
+      "running": true,
+      "retired": false,
+      "state": "run",
+      "act_state": "work",
+      "ctx_used": 68,
+      "last_active_age": 80
+    },
+    {
+      "name": "PatientFaraday",
+      "provider": "openai",
+      "locality": null,
+      "model": "",
+      "running": true,
+      "retired": false,
+      "state": "run",
+      "act_state": "ask",
+      "ctx_used": 42,
+      "last_active_age": 80
+    },
+    {
+      "name": "NimbleTuring",
+      "provider": "strata",
+      "locality": "local",
+      "model": "qwen-test",
+      "running": true,
+      "retired": false,
+      "state": "run",
+      "act_state": "work",
+      "ctx_used": 81,
+      "last_active_age": 80
+    },
+    {
+      "name": "CalmGauss",
+      "provider": "deepseek",
+      "locality": null,
+      "model": "",
+      "running": true,
+      "retired": false,
+      "state": "run",
+      "act_state": "work",
+      "ctx_used": 57,
+      "last_active_age": 80
+    },
+    {
+      "name": "QuietNoether",
+      "provider": "anthropic",
+      "locality": null,
+      "model": "",
+      "running": true,
+      "retired": false,
+      "state": "run",
+      "act_state": "wait",
+      "ctx_used": 76,
+      "last_active_age": 80
+    },
+    {
+      "name": "BrightHopper",
+      "provider": "openai",
+      "locality": null,
+      "model": "",
+      "running": null,
+      "retired": false,
+      "state": "unknown",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "CedarKepler",
+      "provider": "anthropic",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "SilverPlanck",
+      "provider": "openai",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "MildBohr",
+      "provider": "strata",
+      "locality": "local",
+      "model": "qwen-test",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "ClearFermi",
+      "provider": "deepseek",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "VividBell",
+      "provider": "anthropic",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "CalmBose",
+      "provider": "openai",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "SoftDirac",
+      "provider": "anthropic",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "PaleNewton",
+      "provider": "openai",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "WarmHooke",
+      "provider": "strata",
+      "locality": "local",
+      "model": "qwen-test",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "BrightKoch",
+      "provider": "deepseek",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "QuietEdison",
+      "provider": "anthropic",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "StillPauling",
+      "provider": "openai",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "FreshMendel",
+      "provider": "anthropic",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "SwiftTesla",
+      "provider": "openai",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "NeatEuler",
+      "provider": "strata",
+      "locality": "local",
+      "model": "qwen-test",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "KeenMaxwell",
+      "provider": "deepseek",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "BlueFabre",
+      "provider": "anthropic",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "GreenLovelace",
+      "provider": "openai",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "WarmSomerville",
+      "provider": "anthropic",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "NeatFranklin",
+      "provider": "openai",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "KeenHubble",
+      "provider": "strata",
+      "locality": "local",
+      "model": "qwen-test",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "MildDarwin",
+      "provider": "deepseek",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "FreshWatt",
+      "provider": "anthropic",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "BlueKoch",
+      "provider": "openai",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "QuietLamarr",
+      "provider": "anthropic",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "CedarTesla",
+      "provider": "openai",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "SilverHooke",
+      "provider": "strata",
+      "locality": "local",
+      "model": "qwen-test",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "ClearGalileo",
+      "provider": "deepseek",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "SwiftDirac",
+      "provider": "anthropic",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    },
+    {
+      "name": "PaleGuericke",
+      "provider": "openai",
+      "locality": null,
+      "model": "",
+      "running": false,
+      "retired": false,
+      "state": "finished",
+      "act_state": "",
+      "ctx_used": null,
+      "last_active_age": 600
+    }
+  ],
+  "spawn": [
+    {
+      "source": "AmberCurie",
+      "target": "PatientFaraday"
+    },
+    {
+      "source": "AmberCurie",
+      "target": "NimbleTuring"
+    },
+    {
+      "source": "AmberCurie",
+      "target": "CalmGauss"
+    },
+    {
+      "source": "CalmGauss",
+      "target": "QuietNoether"
+    },
+    {
+      "source": "CalmGauss",
+      "target": "CedarKepler"
+    }
+  ],
+  "recipient_rows": [
+    {
+      "source": "AmberCurie",
+      "target": "CalmGauss",
+      "kind": "cc",
+      "age_seconds": 30
+    },
+    {
+      "source": "AmberCurie",
+      "target": "CalmGauss",
+      "kind": "cc",
+      "age_seconds": 31
+    },
+    {
+      "source": "NimbleTuring",
+      "target": "QuietNoether",
+      "kind": "to",
+      "age_seconds": 40
+    },
+    {
+      "source": "CalmGauss",
+      "target": "AmberCurie",
+      "kind": "to",
+      "age_seconds": 50
+    },
+    {
+      "source": "CalmGauss",
+      "target": "AmberCurie",
+      "kind": "to",
+      "age_seconds": 51
+    },
+    {
+      "source": "CalmGauss",
+      "target": "AmberCurie",
+      "kind": "to",
+      "age_seconds": 52
+    },
+    {
+      "source": "AmberCurie",
+      "target": "PatientFaraday",
+      "kind": "to",
+      "age_seconds": 60
+    },
+    {
+      "source": "AmberCurie",
+      "target": "PatientFaraday",
+      "kind": "to",
+      "age_seconds": 61
+    },
+    {
+      "source": "AmberCurie",
+      "target": "PatientFaraday",
+      "kind": "to",
+      "age_seconds": 62
+    },
+    {
+      "source": "AmberCurie",
+      "target": "PatientFaraday",
+      "kind": "to",
+      "age_seconds": 63
+    },
+    {
+      "source": "AmberCurie",
+      "target": "PatientFaraday",
+      "kind": "to",
+      "age_seconds": 64
+    },
+    {
+      "source": "AmberCurie",
+      "target": "PatientFaraday",
+      "kind": "to",
+      "age_seconds": 65
+    },
+    {
+      "source": "AmberCurie",
+      "target": "NimbleTuring",
+      "kind": "to",
+      "age_seconds": 70
+    },
+    {
+      "source": "AmberCurie",
+      "target": "NimbleTuring",
+      "kind": "to",
+      "age_seconds": 71
+    },
+    {
+      "source": "AmberCurie",
+      "target": "NimbleTuring",
+      "kind": "to",
+      "age_seconds": 72
+    },
+    {
+      "source": "AmberCurie",
+      "target": "NimbleTuring",
+      "kind": "to",
+      "age_seconds": 73
+    },
+    {
+      "source": "AmberCurie",
+      "target": "NimbleTuring",
+      "kind": "to",
+      "age_seconds": 74
+    },
+    {
+      "source": "AmberCurie",
+      "target": "QuietNoether",
+      "kind": "to",
+      "age_seconds": 80
+    },
+    {
+      "source": "AmberCurie",
+      "target": "QuietNoether",
+      "kind": "to",
+      "age_seconds": 81
+    },
+    {
+      "source": "AmberCurie",
+      "target": "QuietNoether",
+      "kind": "to",
+      "age_seconds": 82
+    },
+    {
+      "source": "AmberCurie",
+      "target": "QuietNoether",
+      "kind": "to",
+      "age_seconds": 83
+    },
+    {
+      "source": "AmberCurie",
+      "target": "BrightHopper",
+      "kind": "to",
+      "age_seconds": 90
+    },
+    {
+      "source": "AmberCurie",
+      "target": "BrightHopper",
+      "kind": "to",
+      "age_seconds": 91
+    },
+    {
+      "source": "AmberCurie",
+      "target": "BrightHopper",
+      "kind": "to",
+      "age_seconds": 92
+    },
+    {
+      "source": "CalmGauss",
+      "target": "CedarKepler",
+      "kind": "cc",
+      "age_seconds": 4020
+    },
+    {
+      "source": "CalmGauss",
+      "target": "SilverPlanck",
+      "kind": "to",
+      "age_seconds": 4080
+    },
+    {
+      "source": "CalmGauss",
+      "target": "SilverPlanck",
+      "kind": "to",
+      "age_seconds": 4080
+    },
+    {
+      "source": "CalmGauss",
+      "target": "MildBohr",
+      "kind": "to",
+      "age_seconds": 4140
+    },
+    {
+      "source": "CalmGauss",
+      "target": "MildBohr",
+      "kind": "to",
+      "age_seconds": 4140
+    },
+    {
+      "source": "CalmGauss",
+      "target": "MildBohr",
+      "kind": "to",
+      "age_seconds": 4140
+    },
+    {
+      "source": "CalmGauss",
+      "target": "ClearFermi",
+      "kind": "to",
+      "age_seconds": 4200
+    },
+    {
+      "source": "CalmGauss",
+      "target": "VividBell",
+      "kind": "to",
+      "age_seconds": 4260
+    },
+    {
+      "source": "CalmGauss",
+      "target": "VividBell",
+      "kind": "to",
+      "age_seconds": 4260
+    },
+    {
+      "source": "CalmGauss",
+      "target": "CalmBose",
+      "kind": "to",
+      "age_seconds": 4320
+    },
+    {
+      "source": "CalmGauss",
+      "target": "CalmBose",
+      "kind": "to",
+      "age_seconds": 4320
+    },
+    {
+      "source": "CalmGauss",
+      "target": "CalmBose",
+      "kind": "to",
+      "age_seconds": 4320
+    },
+    {
+      "source": "CalmGauss",
+      "target": "SoftDirac",
+      "kind": "to",
+      "age_seconds": 4380
+    },
+    {
+      "source": "CalmGauss",
+      "target": "PaleNewton",
+      "kind": "cc",
+      "age_seconds": 4440
+    },
+    {
+      "source": "CalmGauss",
+      "target": "PaleNewton",
+      "kind": "cc",
+      "age_seconds": 4440
+    },
+    {
+      "source": "CalmGauss",
+      "target": "WarmHooke",
+      "kind": "to",
+      "age_seconds": 4500
+    },
+    {
+      "source": "CalmGauss",
+      "target": "WarmHooke",
+      "kind": "to",
+      "age_seconds": 4500
+    },
+    {
+      "source": "CalmGauss",
+      "target": "WarmHooke",
+      "kind": "to",
+      "age_seconds": 4500
+    },
+    {
+      "source": "CalmGauss",
+      "target": "BrightKoch",
+      "kind": "to",
+      "age_seconds": 4560
+    },
+    {
+      "source": "CalmGauss",
+      "target": "QuietEdison",
+      "kind": "to",
+      "age_seconds": 4620
+    },
+    {
+      "source": "CalmGauss",
+      "target": "QuietEdison",
+      "kind": "to",
+      "age_seconds": 4620
+    },
+    {
+      "source": "CalmGauss",
+      "target": "StillPauling",
+      "kind": "to",
+      "age_seconds": 4680
+    },
+    {
+      "source": "CalmGauss",
+      "target": "StillPauling",
+      "kind": "to",
+      "age_seconds": 4680
+    },
+    {
+      "source": "CalmGauss",
+      "target": "StillPauling",
+      "kind": "to",
+      "age_seconds": 4680
+    },
+    {
+      "source": "CalmGauss",
+      "target": "FreshMendel",
+      "kind": "to",
+      "age_seconds": 4740
+    },
+    {
+      "source": "CalmGauss",
+      "target": "SwiftTesla",
+      "kind": "to",
+      "age_seconds": 4800
+    },
+    {
+      "source": "CalmGauss",
+      "target": "SwiftTesla",
+      "kind": "to",
+      "age_seconds": 4800
+    },
+    {
+      "source": "CalmGauss",
+      "target": "NeatEuler",
+      "kind": "cc",
+      "age_seconds": 4860
+    },
+    {
+      "source": "CalmGauss",
+      "target": "NeatEuler",
+      "kind": "cc",
+      "age_seconds": 4860
+    },
+    {
+      "source": "CalmGauss",
+      "target": "NeatEuler",
+      "kind": "cc",
+      "age_seconds": 4860
+    },
+    {
+      "source": "CalmGauss",
+      "target": "KeenMaxwell",
+      "kind": "to",
+      "age_seconds": 4920
+    },
+    {
+      "source": "CalmGauss",
+      "target": "BlueFabre",
+      "kind": "to",
+      "age_seconds": 4980
+    },
+    {
+      "source": "CalmGauss",
+      "target": "BlueFabre",
+      "kind": "to",
+      "age_seconds": 4980
+    },
+    {
+      "source": "CalmGauss",
+      "target": "GreenLovelace",
+      "kind": "to",
+      "age_seconds": 5040
+    },
+    {
+      "source": "CalmGauss",
+      "target": "GreenLovelace",
+      "kind": "to",
+      "age_seconds": 5040
+    },
+    {
+      "source": "CalmGauss",
+      "target": "GreenLovelace",
+      "kind": "to",
+      "age_seconds": 5040
+    },
+    {
+      "source": "CedarKepler",
+      "target": "WarmSomerville",
+      "kind": "to",
+      "age_seconds": 174300
+    },
+    {
+      "source": "SilverPlanck",
+      "target": "NeatFranklin",
+      "kind": "to",
+      "age_seconds": 174360
+    },
+    {
+      "source": "MildBohr",
+      "target": "KeenHubble",
+      "kind": "to",
+      "age_seconds": 174420
+    },
+    {
+      "source": "ClearFermi",
+      "target": "MildDarwin",
+      "kind": "cc",
+      "age_seconds": 174480
+    },
+    {
+      "source": "VividBell",
+      "target": "FreshWatt",
+      "kind": "to",
+      "age_seconds": 174540
+    },
+    {
+      "source": "CalmBose",
+      "target": "BlueKoch",
+      "kind": "to",
+      "age_seconds": 174600
+    },
+    {
+      "source": "SoftDirac",
+      "target": "QuietLamarr",
+      "kind": "to",
+      "age_seconds": 174660
+    },
+    {
+      "source": "PaleNewton",
+      "target": "CedarTesla",
+      "kind": "to",
+      "age_seconds": 174720
+    },
+    {
+      "source": "WarmHooke",
+      "target": "SilverHooke",
+      "kind": "to",
+      "age_seconds": 174780
+    },
+    {
+      "source": "BrightKoch",
+      "target": "ClearGalileo",
+      "kind": "to",
+      "age_seconds": 174840
+    },
+    {
+      "source": "QuietEdison",
+      "target": "SwiftDirac",
+      "kind": "cc",
+      "age_seconds": 174900
+    },
+    {
+      "source": "StillPauling",
+      "target": "PaleGuericke",
+      "kind": "to",
+      "age_seconds": 174960
+    },
+    {
+      "source": "CedarKepler",
+      "target": "SilverPlanck",
+      "kind": "to",
+      "age_seconds": 175020
+    },
+    {
+      "source": "ClearFermi",
+      "target": "VividBell",
+      "kind": "to",
+      "age_seconds": 175080
+    },
+    {
+      "source": "SoftDirac",
+      "target": "PaleNewton",
+      "kind": "to",
+      "age_seconds": 175140
+    },
+    {
+      "source": "BrightKoch",
+      "target": "QuietEdison",
+      "kind": "to",
+      "age_seconds": 175200
+    },
+    {
+      "source": "FreshMendel",
+      "target": "SwiftTesla",
+      "kind": "to",
+      "age_seconds": 175260
+    },
+    {
+      "source": "KeenMaxwell",
+      "target": "BlueFabre",
+      "kind": "cc",
+      "age_seconds": 175320
+    },
+    {
+      "source": "WarmSomerville",
+      "target": "NeatFranklin",
+      "kind": "to",
+      "age_seconds": 175380
+    },
+    {
+      "source": "MildDarwin",
+      "target": "FreshWatt",
+      "kind": "to",
+      "age_seconds": 175440
+    },
+    {
+      "source": "QuietLamarr",
+      "target": "CedarTesla",
+      "kind": "to",
+      "age_seconds": 175500
+    },
+    {
+      "source": "ClearGalileo",
+      "target": "SwiftDirac",
+      "kind": "to",
+      "age_seconds": 175560
+    }
+  ]
+}

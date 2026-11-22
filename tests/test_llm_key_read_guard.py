@@ -11,6 +11,41 @@ SH = ROOT / 'hooks/deny-llm-key-read.sh'
 PLUGIN = ROOT / 'integrations/codex_app/plugin/scripts/run-key-read-guard.sh'
 
 
+@pytest.mark.parametrize('command', [
+    'secret-tool lookup service fixture-service account fixture-account',
+    'secret-tool lookup service fixture-service',
+    'secret-tool lookup',
+    'secret-tool search service fixture-service account fixture-account',
+    'secret-tool search --all --unlock account fixture-account service fixture-service',
+    'secret-tool search account fixture-account --all --unlock service fixture-service',
+    'secret-tool search service --all fixture-service --unlock account fixture-account',
+    'secret-tool search --unlock --all -- service fixture-service',
+    'secret-tool search --all account fixture-account',
+    'secret-tool search --all',
+    "bash -lc 'secret-tool search --all service fixture-service'",
+    'env secret-tool search --unlock service fixture-service | cat',
+    'python3 /fixture/llm_secret_reader.py --manifest /fixture/manifest.json --backend deepseek',
+    '/fixture/llm_secret_reader.py --manifest /fixture/manifest.json --backend deepseek',
+    "bash -c 'python3 /fixture/llm_secret_reader.py --backend strata --manifest /fixture/manifest.json'",
+])
+def test_secret_service_and_selected_reader_direct_extraction_denied(tmp_path, command):
+    e = env(tmp_path)
+    source = tmp_path / 'references.json'
+    source.write_text(json.dumps({'backends': {'deepseek': {
+        'credential_ref': {'store': 'secret-service', 'attributes': {'service': 'fixture-service', 'account': 'fixture-account'}},
+        'auth_command': ['python3', '-I', '-B', '/fixture/llm_secret_reader.py',
+                         '--manifest', '/fixture/manifest.json', '--backend', 'deepseek']}}}))
+    e['AGENTSTACK_LLM_KEY_DEFINITIONS'] = str(source)
+    denied = hook(command, e)
+    assert denied.returncode == 2 and denied.stdout == ''
+    assert 'fixture-service' not in denied.stderr
+    # Removing the reference changes the result, proving this is the selected
+    # credential boundary rather than an unrelated unconditional shell block.
+    source.write_text('{"backends":{}}')
+    assert hook(command, e).returncode == 0
+    assert hook('printf ordinary-work', e).returncode == 0
+
+
 def env(tmp_path):
     home = tmp_path / 'home'
     home.mkdir(exist_ok=True)
@@ -88,8 +123,35 @@ def test_r3_auth_argv_and_wsl_selector_share_the_guard(tmp_path):
     e['AGENTSTACK_LLM_KEY_DEFINITIONS'] = str(root)
     assert hook('secret-tool lookup account fixture-user service fixture-local', e).returncode == 2
     assert hook('secret-tool lookup service unrelated', e).returncode == 0
-    assert hook('secret-tool search service fixture-local', e).returncode == 0
+    assert hook('secret-tool search service fixture-local', e).returncode == 2
+    assert hook('secret-tool search --all service unrelated', e).returncode == 0
+    assert hook('secret-tool search --unlock service fixture-local account unrelated', e).returncode == 0
+    assert hook('secret-tool search service fixture-local account --all', e).returncode == 2
+    assert hook('secret-tool search -- service fixture-local account --all', e).returncode == 0
+    assert hook("grep 'secret-tool search --all' guide.md", e).returncode == 0
+    assert hook("printf '%s' 'secret-tool search --all'", e).returncode == 0
     assert hook('grep auth_command local.toml', e).returncode == 0
+
+
+@pytest.mark.parametrize('command, expected', [
+    ('secret-tool search service --all fixture-service --unlock account fixture-account', 2),
+    ('secret-tool search service --all unrelated --unlock account fixture-account', 0),
+    ('secret-tool search -- service --all fixture-service --unlock account fixture-account', 0),
+    ('secret-tool search -- service fixture-service account --all', 0),
+    ('secret-tool search service fixture-service account --all', 2),
+    ('secret-tool search service --unknown fixture-service account fixture-account', 2),
+])
+def test_search_options_are_removed_before_forming_selectors(tmp_path, command, expected):
+    e = env(tmp_path)
+    source = tmp_path / 'references.json'
+    source.write_text(json.dumps({'backends': {'fixture': {'credential_ref': {
+        'store': 'secret-service',
+        'attributes': {'service': 'fixture-service', 'account': 'fixture-account'},
+    }}}}))
+    e['AGENTSTACK_LLM_KEY_DEFINITIONS'] = str(source)
+    done = hook(command, e)
+    assert done.returncode == expected and done.stdout == ''
+    assert 'fixture-service' not in done.stderr
 
 
 def test_failure_only_closes_credential_extraction_shapes(tmp_path):
@@ -97,12 +159,25 @@ def test_failure_only_closes_credential_extraction_shapes(tmp_path):
     path = definitions(tmp_path, e)
     path.write_text('{invalid json')
     assert hook('security find-generic-password -w -s fixture-model-key', e).returncode == 2
+    assert hook('secret-tool search --all service fixture-service', e).returncode == 2
+    assert hook('secret-tool search --all service', e).returncode == 2
+    assert hook('secret-tool search --unknown service fixture-service', e).returncode == 2
     assert hook('git status', e).returncode == 0
     assert hook('security find-generic-password -s fixture-model-key', e).returncode == 0
     assert hook("grep 'security find-generic-password -w' guide.md", e).returncode == 0
+    assert hook("grep 'secret-tool search --all' guide.md", e).returncode == 0
     e['AGENTSTACK_PYTHON'] = '/does-not-exist/fixture-python'
     assert hook('git status', e).returncode == 0
     assert hook('security find-generic-password -w -s fixture-model-key', e).returncode == 2
+    assert hook('secret-tool search --all service fixture-service', e).returncode == 2
+
+
+def test_malformed_payload_preserves_search_extraction_boundary(tmp_path):
+    e = env(tmp_path)
+    for raw, expected in [('not-json secret-tool search --all', 2), ('not-json git status', 0)]:
+        done = subprocess.run([sys.executable, str(SH.with_suffix('.py'))], input=raw,
+                              text=True, capture_output=True, env=e, timeout=10)
+        assert done.returncode == expected and done.stdout == ''
 
 
 def test_non_shell_tools_never_block(tmp_path):
@@ -124,6 +199,7 @@ def test_codex_plugin_executes_same_installed_guard(tmp_path):
     (core_hooks / 'deny-llm-key-read.sh').unlink()
     assert hook('git status', e, tool='exec_command', entry=PLUGIN).returncode == 0
     assert hook('secret-tool lookup service fixture-local', e, tool='exec_command', entry=PLUGIN).returncode == 2
+    assert hook('secret-tool search --all service fixture-local', e, tool='exec_command', entry=PLUGIN).returncode == 2
 
 
 def test_launch_auth_helper_is_not_a_shell_tool_and_is_not_executed_by_inspection(tmp_path):
@@ -231,3 +307,60 @@ def test_control_prefix_also_protects_defined_auth_helper_and_broken_definitions
     path.write_text('{broken')
     assert hook('if true; then security find-generic-password -w -s fixture-model-key; fi', e).returncode == 2
     assert hook('if true; then git status; fi', e).returncode == 0
+
+
+@pytest.mark.parametrize('tool', ['bash', 'terminal'])
+def test_native_shell_names_use_shared_key_guard(tmp_path, tool):
+    e = env(tmp_path)
+    definitions(tmp_path, e)
+    assert hook('security find-generic-password -w -s fixture-model-key', e, tool=tool).returncode == 2
+
+
+@pytest.mark.parametrize('tool,args', [
+    ('read', {'path': 'provider.yaml'}),
+    ('read_file', {'file_path': 'provider.yaml'}),
+    ('bash', {'command': 'cat provider.yaml'}),
+    ('terminal', {'command': 'cat < provider.yaml'}),
+])
+def test_provider_file_read_is_blocked_without_opening_file(tmp_path, tool, args):
+    e = env(tmp_path)
+    # File intentionally absent: inspection must compare references only.
+    e['AGENTSTACK_LLM_KEY_FILES'] = json.dumps([str(tmp_path / 'provider.yaml')])
+    payload = {'tool_name': tool, 'tool_input': args, 'cwd': str(tmp_path)}
+    result = subprocess.run([sys.executable, str(ROOT / 'hooks/deny-llm-key-read.py')],
+                            input=json.dumps(payload), env=e, capture_output=True, text=True)
+    assert result.returncode == 2
+    payload['tool_input'] = {'command': 'cat ordinary.txt'} if tool in ('bash', 'terminal') else {'path': 'ordinary.txt'}
+    result = subprocess.run([sys.executable, str(ROOT / 'hooks/deny-llm-key-read.py')],
+                            input=json.dumps(payload), env=e, capture_output=True, text=True)
+    assert result.returncode == 0
+
+
+@pytest.mark.parametrize('operand', [
+    '$HOME/.dsh/.credentials.yaml', '${HOME}/.dsh/.credentials.yaml',
+    '$DSH_HOME/.credentials.yaml', '${DSH_HOME}/.credentials.yaml',
+    '~/.dsh/.credentials.yaml', 'absolute',
+])
+def test_native_file_guard_expands_known_environment_references(tmp_path, operand):
+    e = env(tmp_path)
+    e['DSH_HOME'] = str(Path(e['HOME']) / '.dsh')
+    protected = Path(e['DSH_HOME']) / '.credentials.yaml'
+    # This file does not exist; resolving a reference never reads its contents.
+    e['AGENTSTACK_LLM_KEY_FILES'] = json.dumps([str(protected)])
+    path = str(protected) if operand == 'absolute' else operand
+    assert hook('cat "' + path + '"', e, tool='bash').returncode == 2
+    assert hook('cat "$HOME/ordinary.txt"', e, tool='bash').returncode == 0
+
+
+@pytest.mark.parametrize('command', [
+    'FILE="$HOME/.dsh/.credentials.yaml"; cat "$FILE"',
+    'export FILE="${HOME}/.dsh/.credentials.yaml"; cat "$FILE"',
+    'FILE="$DSH_HOME/.credentials.yaml" cat "$FILE"',
+])
+def test_native_file_guard_checks_simple_assignment_values(tmp_path, command):
+    e = env(tmp_path)
+    e['DSH_HOME'] = str(Path(e['HOME']) / '.dsh')
+    e['AGENTSTACK_LLM_KEY_FILES'] = json.dumps([str(Path(e['DSH_HOME']) / '.credentials.yaml')])
+    assert hook(command, e, tool='bash').returncode == 2
+    assert hook('FILE="$HOME/ordinary.txt"; cat "$FILE"', e, tool='bash').returncode == 0
+    assert hook('FOO=bar echo hello', e, tool='bash').returncode == 0

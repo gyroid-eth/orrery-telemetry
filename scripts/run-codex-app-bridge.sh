@@ -5,6 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFERRED_INSTALL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_DIR="${AGENTSTACK_CODEX_APP_INSTALL_DIR:-$INFERRED_INSTALL_DIR}"
 ENV_FILE="$INSTALL_DIR/env.sh"
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  # The same foreground bridge; no new service or legacy env qualification.
+  export PYTHONPATH="$INSTALL_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+  exec "${AGENTSTACK_PYTHON:-python3}" -m agentstack_codex_app.daemon
+fi
 printf '{"event":"bridge_launcher_start","pid":%d,"timestamp":"%s"}\n' \
   "$$" "$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" >&2
 [[ -f "$ENV_FILE" ]] || {

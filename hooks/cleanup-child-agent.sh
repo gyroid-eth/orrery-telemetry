@@ -106,6 +106,31 @@ if [[ ! "$AGENT_NAME" =~ ^[A-Za-z0-9_.-]+$ ]]; then
     exit 0
 fi
 
+confirm_cleanup_rpc() {
+    "${AGENTSTACK_PYTHON:-python3}" -c '
+import json,sys
+method,name,project=sys.argv[1:]
+def unwrap(value):
+    if not isinstance(value,dict) or value.get("error") or value.get("isError"):
+        raise ValueError("RPC failed")
+    for key in ("result","structuredContent"):
+        if key in value:return unwrap(value[key])
+    if "content" in value:
+        for block in value["content"]:
+            if block.get("type")=="text":
+                try:return unwrap(json.loads(block["text"]))
+                except json.JSONDecodeError:pass
+        raise ValueError("RPC result missing")
+    return value
+try:
+    value=unwrap(json.load(sys.stdin))
+    if method=="release":ok=type(value.get("released")) is int and value["released"]>=0
+    elif method=="retire":ok=value.get("status")=="retired" and value.get("agent_name")==name and value.get("project_key")==project
+    else:ok=value.get("name")==name and bool(value.get("retired_at"))
+    sys.exit(0 if ok else 1)
+except (ValueError,TypeError,KeyError):sys.exit(1)
+' "$1" "$AGENT_NAME" "$PROJECT_KEY"
+}
 STATE_FILE="$STATE_DIR/${AGENT_NAME}.json"
 TOKEN_KEY="$(printf '%s' "$AGENT_NAME" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
 TOKEN_FILE="$RUNTIME_DIR/agent_token_$TOKEN_KEY"
@@ -148,10 +173,10 @@ else
     TOKEN=""
 fi
 if [[ "$bearer_status" == "2" ]]; then
-    exit 0
+    exit 1
 fi
 if [[ "$bearer_status" == "0" && -z "$TOKEN" ]]; then
-    exit 0
+    exit 1
 fi
 
 call_mcp() {
@@ -252,7 +277,11 @@ print(json.dumps({
     'agent_name': sys.argv[2],
 }))
 " "$PROJECT_KEY" "$AGENT_NAME")
-call_mcp "release_file_reservations" "$release_args" > /dev/null 2>&1 || true
+if ! release_result=$(call_mcp "release_file_reservations" "$release_args") || \
+    ! printf '%s' "$release_result" | confirm_cleanup_rpc release; then
+    echo "[cleanup-child-agent] reservation release unconfirmed; keeping private state" >&2
+    exit 1
+fi
 fi
 
 retire_args=$(python3 -c '
@@ -280,7 +309,21 @@ print(json.dumps({
 }))
 ' "$PROJECT_KEY" "$AGENT_NAME" "$TOKEN_FILE" "$STATE_FILE") || retire_args=""
 if [[ -n "$retire_args" ]]; then
-    call_mcp "retire_agent" "$retire_args" > /dev/null 2>&1 || true
+    if ! retire_result=$(call_mcp "retire_agent" "$retire_args") || \
+        ! printf '%s' "$retire_result" | confirm_cleanup_rpc retire; then
+        echo "[cleanup-child-agent] retirement unconfirmed; keeping private state" >&2
+        exit 1
+    fi
+else
+    echo "[cleanup-child-agent] owner credential unavailable; keeping private state" >&2
+    exit 1
+fi
+
+whois_args=$(python3 -c 'import json,sys; print(json.dumps({"project_key":sys.argv[1],"agent_name":sys.argv[2]}))' "$PROJECT_KEY" "$AGENT_NAME")
+if ! whois_result=$(call_mcp "whois" "$whois_args") || \
+    ! printf '%s' "$whois_result" | confirm_cleanup_rpc whois; then
+    echo "[cleanup-child-agent] retired identity not confirmed; keeping private state" >&2
+    exit 1
 fi
 
 # A resumed top-level Claude (owner token, no child state) only gives back the

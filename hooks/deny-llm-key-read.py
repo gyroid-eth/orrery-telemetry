@@ -15,7 +15,7 @@ import shlex
 import stat
 import sys
 
-SHELL_TOOLS = {'Bash', 'exec_command', 'shell_command', 'shell'}
+SHELL_TOOLS = {'bash', 'exec_command', 'shell_command', 'shell', 'terminal'}
 MESSAGE = 'LOCAL_MODEL_KEY_READ_DENIED: do not read model credentials in the agent shell; use the managed launcher/auth runner.'
 
 
@@ -116,8 +116,22 @@ def extraction(words):
                         break
             i += 1
         return ('keychain', attrs) if read else None
-    if name == 'secret-tool' and len(words) > 1 and words[1] == 'lookup':
+    if name == 'secret-tool' and len(words) > 1 and words[1] in {'lookup', 'search'}:
         args = words[2:]
+        if words[1] == 'search':
+            # GOption removes options anywhere before --, before secret-tool
+            # forms attribute/value pairs. Only tokens after -- are literal.
+            selectors, options = [], True
+            for arg in args:
+                if options and arg in {'--all', '--unlock'}:
+                    continue
+                elif options and arg == '--':
+                    options = False
+                else:
+                    if options and arg.startswith('-'):
+                        raise ValueError('unknown secret search option')
+                    selectors.append(arg)
+            args = selectors
         if len(args) % 2:
             raise ValueError('incomplete secret selector')
         return 'secret-tool', dict(zip(args[::2], args[1::2]))
@@ -161,6 +175,15 @@ def read_definitions(paths):
             if not isinstance(adapter, dict):
                 raise ValueError('invalid adapter')
             keychain = adapter.get('keychain')
+            credential_ref = adapter.get('credential_ref')
+            if credential_ref is not None:
+                if (not isinstance(credential_ref, dict) or credential_ref.get('store') != 'secret-service'
+                        or not isinstance(credential_ref.get('attributes'), dict)
+                        or not credential_ref['attributes']
+                        or not all(isinstance(k, str) and k and isinstance(v, str) and v
+                                   for k, v in credential_ref['attributes'].items())):
+                    raise ValueError('invalid credential reference')
+                refs.append(('secret-tool', credential_ref['attributes']))
             if keychain is not None:
                 if not isinstance(keychain, dict) or not isinstance(keychain.get('service'), str) or not keychain['service']:
                     raise ValueError('invalid credential reference')
@@ -189,7 +212,7 @@ def same_key(candidate, reference):
 
 
 def command_text(payload):
-    name = payload.get('tool_name', '').rsplit('.', 1)[-1]
+    name = payload.get('tool_name', '').rsplit('.', 1)[-1].lower()
     if name not in SHELL_TOOLS:
         return None
     args = payload.get('tool_input') or {}
@@ -203,12 +226,55 @@ def command_text(payload):
     return value
 
 
+def protected_file_read(payload, text):
+    """Compare references only: never open the credential/provider files."""
+    raw = os.environ.get('AGENTSTACK_LLM_KEY_FILES')
+    if not raw:
+        return False
+    paths = json.loads(raw)
+    if not isinstance(paths, list) or not all(isinstance(p, str) and p for p in paths):
+        raise ValueError('invalid protected file references')
+    cwd = Path(payload.get('cwd') or os.getcwd())
+    def resolved(value):
+        path = Path(os.path.expandvars(value)).expanduser()
+        return (path if path.is_absolute() else cwd / path).resolve()
+    protected = {resolved(path) for path in paths}
+    args = payload.get('tool_input') or {}
+    if isinstance(args, str):
+        args = json.loads(args)
+    name = payload.get('tool_name', '').rsplit('.', 1)[-1].lower()
+    if name in {'read', 'read_file', 'view', 'file_read'}:
+        path = args.get('file_path', args.get('path'))
+        if not isinstance(path, str):
+            raise ValueError('missing read path')
+        return resolved(path) in protected
+    if text is None:
+        return False
+    # Ordinary shell file reads, including redirects and quoted path operands.
+    # Like the existing shell guard this does not interpret encoded scripts.
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=';&|()<>')
+    lexer.whitespace_split = True
+    for token in lexer:
+        if token and not all(c in ';&|()<>' for c in token):
+            if resolved(token) in protected:
+                return True
+            name, separator, value = token.partition('=')
+            if separator and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
+                # A normal FILE="$HOME/credential" assignment names the file
+                # before its later use; no shell evaluation is needed.
+                if resolved(value) in protected:
+                    return True
+    return False
+
+
 def decide(payload):
     text = command_text(payload)
+    if protected_file_read(payload, text):
+        return True
     if text is None:
         return False
     # Parsing errors must not stop unrelated shell commands.
-    shape = ('find-generic-password' in text and bool(re.search(r'-[a-zA-Z]*[wg]', text))) or ('secret-tool' in text and 'lookup' in text)
+    shape = ('find-generic-password' in text and bool(re.search(r'-[a-zA-Z]*[wg]', text))) or ('secret-tool' in text and any(verb in text for verb in ('lookup', 'search')))
     forms = None
     try:
         paths = definition_paths()
@@ -217,8 +283,14 @@ def decide(payload):
         invocations = list(commands(text))
         forms = [form for words in invocations if (form := extraction(words))]
         refs, auth_commands = read_definitions(paths)
-        for words in commands(text, executables={auth[0] for auth in auth_commands}):
+        readers = {auth[3] for auth in auth_commands if len(auth) >= 4 and auth[1:3] == ['-I', '-B']
+                   and Path(auth[3]).name in ('llm_secret_reader.py', 'native_web_search.py')}
+        for words in commands(text, executables={auth[0] for auth in auth_commands} | readers):
             if any(words[:len(auth)] == auth for auth in auth_commands):
+                return True
+            # Python flags are not part of the credential identity. Detect an
+            # ordinary alternate invocation of the selected internal reader.
+            if any(word in readers for word in words):
                 return True
         return any(same_key(form, ref) for form in forms for ref in refs)
     except Exception:
@@ -230,7 +302,7 @@ def main():
     try:
         denied = decide(json.loads(raw))
     except Exception:
-        denied = ('find-generic-password' in raw and ('-w' in raw or '-g' in raw)) or ('secret-tool' in raw and 'lookup' in raw)
+        denied = ('find-generic-password' in raw and ('-w' in raw or '-g' in raw)) or ('secret-tool' in raw and any(verb in raw for verb in ('lookup', 'search')))
     if denied:
         print(MESSAGE, file=sys.stderr)
         return 2

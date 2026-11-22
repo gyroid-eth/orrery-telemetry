@@ -1229,6 +1229,11 @@ def _recv_payload(connection: socket.socket) -> dict[str, Any]:
 def serve() -> None:
     """Build the configured Bridge and serve until interrupted."""
 
+    if 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in os.environ or os.environ.get('AGENTSTACK_RUNTIME_MODE')=='fresh':
+        from .fresh_bridge import selected, AppContext, FreshBridge
+        selected()  # Fail closed before legacy/global imports.
+        FreshBridge(AppContext(create=True)).serve_forever()
+        return
     from .global_runtime import selected_client
     selected=selected_client()
     if selected is not None:

@@ -70,7 +70,8 @@ def test_initial_release_and_links(tmp_path):
     assert "[api]: docs/api.md" in result
 
 
-@pytest.mark.parametrize("version", ["invalid", "2026.2.01", "2026.02.30", "2026.10.06", "2026.10.05"])
+@pytest.mark.parametrize("version", ["invalid", "2026.2.01", "2026.02.30", "2026.10.06", "2026.10.05",
+                                     "2026.10.06.0", "2026.10.06.01", "2026.10.06.1.1", "2026.02.30.1"])
 def test_invalid_or_reused_version_keeps_all_files(tmp_path, version):
     root = repository(tmp_path)
     fragment = root / "changelog.d/000251-new.md"
@@ -79,6 +80,51 @@ def test_invalid_or_reused_version_keeps_all_files(tmp_path, version):
         release(root, version)
     assert fragment.read_text() == "### New\n\nPending.\n"
     assert (root / "CHANGELOG.md").read_text() == OLD
+
+
+@pytest.mark.parametrize("suffix", [".0", ".01"])
+def test_invalid_revision_heading_is_rejected_without_writes(tmp_path, suffix):
+    root = repository(tmp_path)
+    original = OLD.replace("## 2026.10.06", "## 2026.10.06" + suffix)
+    (root / "CHANGELOG.md").write_text(original)
+    fragment = root / "changelog.d/000350-new.md"
+    fragment.write_text("### New\n\nPending.\n")
+    module = runpy.run_path(str(SCRIPT))
+    with pytest.raises(ValueError):
+        module["validate_changelog"](original)
+    with pytest.raises(ValueError):
+        release(root, "2026.10.07")
+    assert (root / "CHANGELOG.md").read_text() == original
+    assert fragment.read_text() == "### New\n\nPending.\n"
+
+
+@pytest.mark.parametrize("previous,version,allowed", [
+    ("2026.10.06", "2026.10.06.1", True),
+    ("2026.10.06.9", "2026.10.06.10", True),
+    ("2026.10.06.10", "2026.10.06.9", False),
+    ("2026.10.06.1", "2026.10.06", False),
+    ("2026.10.06.1", "2026.10.06.1", False),
+    ("2026.10.06.10", "2026.10.07", True),
+])
+def test_same_day_revision_preserves_released_notes(tmp_path, previous, version, allowed):
+    root = repository(tmp_path)
+    original = OLD.replace("## 2026.10.06", "## " + previous)
+    (root / "CHANGELOG.md").write_text(original)
+    fragment = root / "changelog.d/000350-new.md"
+    fragment.write_text("### New\n\nFollow-up.\n")
+    if allowed:
+        assert release(root, version) == 1
+        updated = (root / "CHANGELOG.md").read_text()
+        assert "## " + version + "\n" in updated
+        assert updated[updated.index("## " + previous + "\n"):] == original[original.index("## " + previous + "\n"):]
+        assert not fragment.exists()
+        assert release(root, version) == 0
+    else:
+        with pytest.raises(ValueError):
+            release(root, version)
+        assert (root / "CHANGELOG.md").read_text() == original
+        assert fragment.read_text() == "### New\n\nFollow-up.\n"
+    assert (root / "VERSION").read_text() == "2026.10.06\n"
 
 
 @pytest.mark.parametrize("text", ["", "# Title\n", "Plain prose\n", "### Change\n\n## Unreleased\n"])

@@ -42,7 +42,7 @@ def _install(home, *, codex_home=None, tier="tier1", dry_run=False):
     variables = sorted(set(re.findall(r"\$(?:\{)?([A-Z][A-Z_0-9]*)", functions)))
     values = {key: "" for key in variables}
     values.update({
-        "PYTHON_BIN": sys.executable, "REPO_ROOT": str(ROOT),
+        "PYTHON_BIN": sys.executable, "REPO_ROOT": str(ROOT), "SCRIPT_DIR": str(ROOT / "scripts"),
         "INSTALL_DIR": str(install_dir), "SKILLS_DIR": str(install_dir / "skills"),
         "RUNTIME_DIR": str(install_dir / "runtime"), "TIER": tier,
         "DRY_RUN": "true" if dry_run else "false",

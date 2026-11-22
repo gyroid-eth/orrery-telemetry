@@ -29,6 +29,7 @@ def run_ui(provider, scenario):
 @pytest.fixture
 def provider(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENTSTACK_HOME", str(tmp_path / "stack"))
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
     monkeypatch.setattr(codex_models, "cli_version", lambda: (0, 159, 1))
     return codex_models.provider_catalog()
@@ -56,9 +57,9 @@ out.explicitHidden=SPM('spm-model-note').hidden;
 
 def test_model_switch_removes_unsupported_effort_and_preserves_id(provider):
     result = run_ui(provider, """
-selectSpawnModel('gpt-6.1-sol');selectSpawnEffort('ultra');out.sol=state();
+selectSpawnModel('gpt-6.1-sol');chooseEffort('ultra');out.sol=state();
 selectSpawnModel('gpt-6-luna');out.luna=state();
-out.lunaEfforts=SPM('spm-efforts').children.map(x=>x.dataset.effort);
+out.lunaEfforts=displayedEfforts();
 """)
     assert result["sol"]["payload"]["model"] == "gpt-6.1-sol"
     assert result["sol"]["payload"]["effort"] == "ultra"
@@ -97,14 +98,19 @@ def test_unknown_metadata_omits_effort_from_payload(provider):
     provider["models"].append("gpt-future")
     provider["model_efforts"]["gpt-future"] = []
     provider["model_effort_defaults"]["gpt-future"] = ""
-    result = run_ui(provider, "selectSpawnModel('gpt-future');out.state=state();out.hidden=SPM('spm-effort-row').hidden;")
+    result = run_ui(provider, """
+selectSpawnModel('gpt-future');out.state=state();out.hidden=SPM('spm-effort-row').hidden;
+out.unsupported=SPM('spm-efforts').querySelector('.effort-not-supported').textContent;
+""")
     assert result["state"]["payload"]["model"] == "gpt-future"
     assert "effort" not in result["state"]["payload"]
-    assert result["hidden"] and not result["state"]["launchDisabled"]
+    # The slider keeps its row visible even when the catalog offers no effort.
+    assert result["hidden"] is False and result["unsupported"] == "Not supported"
+    assert not result["state"]["launchDisabled"]
 
 
 def test_supported_effort_survives_model_change(provider):
-    result = run_ui(provider, "selectSpawnModel('gpt-6.1-sol');selectSpawnEffort('high');selectSpawnModel('gpt-6-luna');out.state=state();out.note=SPM('spm-engine-note').textContent;")
+    result = run_ui(provider, "selectSpawnModel('gpt-6.1-sol');chooseEffort('high');selectSpawnModel('gpt-6-luna');out.state=state();out.note=SPM('spm-engine-note').textContent;")
     assert result["state"]["payload"]["effort"] == "high"
     assert "gpt-6-luna" in result["note"] and "high" in result["note"]
 
@@ -130,3 +136,22 @@ selectSpawnModel('gpt-5.6-sol');out.folded=state();
         assert f'data-model="{model}"' in front
     assert result["initial"]["payload"]["model"] == codex_models.DEFAULT_MODEL
     assert result["folded"]["payload"]["model"] == "gpt-5.6-sol"
+
+
+def test_invalid_defaults_are_visible_but_explicit_choices_work(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_MODEL", "bad!")
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_EFFORT", "bad")
+    provider = codex_models.provider_catalog()
+    result = run_ui(provider, """
+out.initial=state();out.note=SPM('spm-model-note').textContent;
+selectSpawnModel('gpt-6-sol');out.model=state();chooseEffort('high');out.explicit=state();
+""")
+    assert result["initial"]["launchDisabled"]
+    assert "AGENTSTACK_CODEX_DEFAULT_MODEL" in result["note"]
+    assert "AGENTSTACK_CODEX_DEFAULT_EFFORT" in result["note"]
+    assert result["model"]["launchDisabled"]
+    assert not result["explicit"]["launchDisabled"]
+    assert result["explicit"]["payload"]["effort"] == "high"
+    catalog = codex_models.resolve_catalog()
+    model = codex_models.normalize_model(result["explicit"]["payload"]["model"], catalog=catalog)
+    assert codex_models.resolve_effort(model, "high", catalog) == "high"

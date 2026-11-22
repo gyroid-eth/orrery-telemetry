@@ -10,13 +10,14 @@ import sys
 import pytest
 
 from dashboard import server
+from claude_resume_harness import cleanup_mail
 from test_claude_legacy_resume import legacy, same_material, snapshot
 from test_claude_resume_mail import NAME, TOKEN, resume
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def cleanup(runtime, registration, *, days='30'):
+def cleanup(runtime, registration, *, days='30', mail_url='http://127.0.0.1:1/mcp'):
     env = dict(os.environ)
     for key in ('AGENT_NAME', 'CHILD_REGISTRATION_TOKEN', 'MCP_AGENT_MAIL_TOKEN', 'MCP_URL'):
         env.pop(key, None)
@@ -24,20 +25,20 @@ def cleanup(runtime, registration, *, days='30'):
                AGENTSTACK_CHILD_RESUME_HELPER=str(ROOT / 'hooks/child_resume.py'),
                AGENTSTACK_PYTHON=sys.executable, PROJECT_KEY=registration['project_key'],
                AGENTSTACK_MANAGED_AGENTS_FILE=str(runtime / 'managed_agents.txt'),
-               AGENTSTACK_MAIL_HTTP_BEARER_MODE='disabled', AGENTSTACK_MCP_URL='http://127.0.0.1:1/mcp',
+               AGENTSTACK_MAIL_HTTP_BEARER_MODE='disabled', AGENTSTACK_MCP_URL=mail_url,
                AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=days)
     return subprocess.run(['/bin/bash', str(ROOT / 'hooks/cleanup-child-agent.sh'), NAME],
                           env=env, cwd=ROOT, capture_output=True, text=True, timeout=30)
 
 
 @pytest.mark.parametrize('mode', [0o400, 0o600])
-def test_old_child_exit_keeps_original_owner_and_then_authenticated_resume(legacy, mode):
+def test_old_child_exit_keeps_original_owner_and_then_authenticated_resume(legacy, mode, cleanup_mail):
     runtime, registration, launches, calls, state, config, _ = legacy
     token = runtime / ('agent_token_' + NAME)
     state.chmod(mode)
     token.chmod(mode)
     before = {path: value for path, value in snapshot(runtime).items() if path != config}
-    result = cleanup(runtime, registration)
+    result = cleanup(runtime, registration, mail_url=cleanup_mail)
     assert result.returncode == 0, result.stderr
     same_material(before)
     assert set(json.loads(state.read_text())) == {'agent_name', 'project_key', 'registration_token'}
@@ -50,11 +51,11 @@ def test_old_child_exit_keeps_original_owner_and_then_authenticated_resume(legac
     assert json.loads(state.read_text())['agent_id'] == registration['agent_id']
 
 
-def test_retention_zero_remains_an_explicit_legacy_opt_out(legacy):
+def test_retention_zero_remains_an_explicit_legacy_opt_out(legacy, cleanup_mail):
     runtime, registration, launches, calls, state, config, _ = legacy
     token = runtime / ('agent_token_' + NAME)
     other = {path: value for path, value in snapshot(runtime).items() if 'OtherOwner' in path.name}
-    result = cleanup(runtime, registration, days='0')
+    result = cleanup(runtime, registration, days='0', mail_url=cleanup_mail)
     assert result.returncode == 0, result.stderr
     assert not state.exists() and not token.exists() and not config.exists()
     same_material(other)

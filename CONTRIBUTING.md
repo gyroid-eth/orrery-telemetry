@@ -109,7 +109,15 @@ To release, start from an up-to-date clean branch and run:
 python3 scripts/changelog-release.py YYYY.MM.DD
 ```
 
-Replace `YYYY.MM.DD` with the new release date. The stdlib-only script inserts
+Replace `YYYY.MM.DD` with the new release date.
+
+For another release on the same date, use `YYYY.MM.DD.N`, starting at `.1`
+and increasing the positive integer each time. For example, `2026.10.22.1`
+follows `2026.10.22`. Revisions are ordered numerically, so `.10` follows
+`.9`. Do not reuse a version, overwrite its tag, or choose a future date to
+make the ordering check pass.
+
+The stdlib-only script inserts
 a version section before the newest release, in descending six-digit
 PR-number order, then removes the consumed `NNNNNN-description.md` fragments. Other `.md` filenames are
 rejected. The permanent `changelog.d/README.txt` is never consumed and keeps
@@ -122,7 +130,7 @@ saved section and remaining fragments before completing their removal; do not
 rerun with another version. Run only one release process at a time.
 
 Review the generated diff and update the root `VERSION` to the same release
-date in the release commit. The script deliberately does not change `VERSION`
+version (including any same-day revision) in the release commit. The script deliberately does not change `VERSION`
 or the dashboard `API_GENERATION`: that generation changes only for API
 compatibility changes, not for assembling release notes. Check the release
 with:

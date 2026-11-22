@@ -467,14 +467,19 @@ if directory.is_dir():
         name = record.get("agent_name")
         if isinstance(name, str) and name:
             names.add(name)
-# The claims: a launcher name, the tmux session this pane is really in, and
-# what the session registered as. Pane metadata arrives here only when it was
-# read alongside a live tmux session, where it corroborates rather than claims.
-# Two distinct names means one of them would be writing under the other's.
+tmux_name = os.environ.get("AGENTSTACK_CONFLICT_TMUX_NAME", "")
+pane_meta = os.environ.get("AGENTSTACK_CONFLICT_PANE_META", "")
+# Pane IDs are reused after tmux restarts. An unscoped name file cannot
+# override three agreeing current sources: launcher, targeted live session,
+# and this session's project-scoped self registration. Without all three,
+# retain the refusal; never rewrite/delete metadata while observing it.
+if project and env_name and env_name == tmux_name and names == {env_name}:
+    pane_meta = ""
+# Two distinct authoritative names still means one would write as the other.
 for claim in (
     env_name,
-    os.environ.get("AGENTSTACK_CONFLICT_TMUX_NAME", ""),
-    os.environ.get("AGENTSTACK_CONFLICT_PANE_META", ""),
+    tmux_name,
+    pane_meta,
 ):
     if claim:
         names.add(claim)

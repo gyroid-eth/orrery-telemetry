@@ -131,7 +131,7 @@ def test_delegate_skill_reads_bare_model_words_as_models_not_names():
     "never a name" rule must ship with the skill."""
     skill = _read("skills/delegate/SKILL.md")
     assert "### How to read the arguments" in skill
-    for word in ("`sol`, `terra`, `luna`, `astra`", "gpt-5.6-terra", "gpt-6-astra"):
+    for word in ("`sol`, `terra`, `luna`, `astra`", "newest eligible version of its family", "Explicit formal IDs are never substituted"):
         assert word in skill
     assert "A word such as `terra` is a model, not a name." in skill
     assert "The child's name is never taken from the arguments." in skill

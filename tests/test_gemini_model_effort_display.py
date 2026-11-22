@@ -82,7 +82,10 @@ def test_engine_note_uses_effort_free_display_model():
         "const displayModel=spawnProviderDisplayModelLabel(provider,spmSelectedModel);"
         in source
     )
-    assert "displayModel,spmSelectedEffort" in source
+    # The note shows the effort-free display model; a dynamic Local row may
+    # carry its own display_name and URL before the effort.
+    assert "selected&&(selected.display_name||displayModel)||displayModel," in source
+    assert "'URL '+(selected.url_index+1):'',spmSelectedEffort]" in source
 
 
 def test_other_provider_model_display_is_unchanged():

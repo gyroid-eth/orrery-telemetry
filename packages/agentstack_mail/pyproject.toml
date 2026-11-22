@@ -16,6 +16,8 @@ authors = [
 dependencies = [
   "anyio>=4.5,<5",
   "fastmcp==2.13.0.2",
+  # .18 removed the affected emSign roots; .19 preserves unaffected roots too.
+  "certifi>=2026.10.19",
   # boundary.py intentionally follows Uvicorn's signal-capture contract so
   # FastMCP's outer database lifespan can finish after SIGTERM.
   "uvicorn==0.52.1",

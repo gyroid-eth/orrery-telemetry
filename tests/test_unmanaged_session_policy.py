@@ -1783,6 +1783,52 @@ def test_stale_pane_metadata_alone_does_not_block(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize("guard", ["registration", "reservation"])
+def test_registered_session_ignores_stale_reused_pane_metadata(tmp_path: Path, guard: str) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    session_id = "reused-pane"
+    _record_registration(tmp_path, session_id, 41, "LiveSession", str(project))
+    metadata = tmp_path / "runtime" / "agent_name__9"
+    metadata.write_text("PreviousSession", encoding="utf-8")
+    bin_dir = _fake_tmux_session(tmp_path, "LiveSession")
+    common = dict(AGENT_NAME="LiveSession", TMUX="/tmp/x,1,0", TMUX_PANE="%9",
+                  PATH=f"{bin_dir}:{BASE_ENV['PATH']}", AGENTSTACK_PROJECT_KEY=str(project),
+                  AGENTSTACK_MCP_URL=UNREACHABLE)
+    if guard == "registration":
+        result = _run(REGISTRATION_GUARD, _registration_payload(session_id), tmp_path, **common)
+    else:
+        target = project / "note.md"
+        target.write_text("x", encoding="utf-8")
+        result = _run(RESERVATION_GUARD, _edit_payload(session_id, target), tmp_path,
+                      AGENTSTACK_PROTECTED_ROOTS=str(project), **common)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "AGENT IDENTITY CONFLICT" not in result.stderr
+    assert metadata.read_text() == "PreviousSession"  # observation must not rewrite another identity
+
+
+@pytest.mark.parametrize("mismatch", ["env", "tmux", "registered", "second-registration", "project"])
+def test_stale_metadata_exception_preserves_authoritative_conflicts(tmp_path: Path, mismatch: str) -> None:
+    project = str(tmp_path / "project")
+    session_id = "reused-pane-conflict"
+    _record_registration(tmp_path, session_id, 41,
+                         "OtherAgent" if mismatch == "registered" else "LiveSession",
+                         project + "-other" if mismatch == "project" else project)
+    if mismatch == "second-registration":
+        # The writer correctly refuses a second identity. Exercise the reader's
+        # defensive handling of an already ambiguous saved index explicitly.
+        _bind(tmp_path, 42, session_id, "OtherAgent", project)
+    metadata = tmp_path / "runtime" / "agent_name__9"
+    metadata.write_text("PreviousSession", encoding="utf-8")
+    bin_dir = _fake_tmux_session(tmp_path, "OtherAgent" if mismatch == "tmux" else "LiveSession")
+    result = _run(REGISTRATION_GUARD, _registration_payload(session_id), tmp_path,
+                  AGENT_NAME="OtherAgent" if mismatch == "env" else "LiveSession",
+                  TMUX="/tmp/x,1,0", TMUX_PANE="%9", PATH=f"{bin_dir}:{BASE_ENV['PATH']}",
+                  AGENTSTACK_PROJECT_KEY=project, AGENTSTACK_MCP_URL=UNREACHABLE)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "AGENT IDENTITY CONFLICT" in result.stderr
+
+
 def test_metadata_that_contradicts_a_live_tmux_session_is_still_a_conflict(
     tmp_path: Path,
 ) -> None:

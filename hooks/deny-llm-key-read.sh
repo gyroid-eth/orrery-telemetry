@@ -10,7 +10,7 @@ fi
 [[ "$RC" == 2 ]] && exit 2
 # A broken interpreter/partial install must not disable all agent shell work.
 case "$PAYLOAD" in
-  *find-generic-password*-w*|*find-generic-password*-g*|*secret-tool*lookup*)
+  *find-generic-password*-w*|*find-generic-password*-g*|*secret-tool*lookup*|*secret-tool*search*)
     echo 'LOCAL_MODEL_KEY_READ_UNAVAILABLE: credential-read inspection failed.' >&2
     exit 2 ;;
 esac

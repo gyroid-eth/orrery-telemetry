@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
+from time import perf_counter
+
+import pytest
 
 import dashboard.server as server
 
@@ -117,7 +121,7 @@ def test_pane_model_comes_only_from_a_statusline():
         "› Ask Codex to do anything\n"
         "  gpt-5.6-terra medium · ~/work/wsl-test-project\n"
     )
-    assert fresh["pane_model"] == "gpt-5.6"
+    assert fresh["pane_model"] == "gpt-5.6-terra"
 
     # Claude's Model: line does too
     assert server._parse_runtime("Model: Default (Sonnet 5)")["pane_model"] == "Sonnet 5"
@@ -128,6 +132,20 @@ def test_pane_model_comes_only_from_a_statusline():
     assert server._pane_model_for("Sonnet 5", "codex") is None
     assert server._pane_model_for("Sonnet 5", "claude-code") == "Sonnet 5"
     assert server._pane_model_for("gpt-5.6", None) == "gpt-5.6"
+
+
+@pytest.mark.parametrize("variant", ["Sol", "Terra", "Luna", "Astra", None])
+@pytest.mark.parametrize("footer_style", ["workdir", "context"])
+def test_codex_statusline_preserves_model_variant_without_effort(variant, footer_style):
+    raw = "GPT-6.1" + ("-" + variant if variant else "")
+    footer = (raw + " high · /workspace" if footer_style == "workdir"
+              else raw + " xhigh · Context 70% left")
+    parsed = server._parse_runtime("Compare with gpt-5.6-sol later.\n› \n" + footer + "\n")
+
+    assert parsed["pane_model"] == raw
+    assert server._pane_model_for(parsed["pane_model"], "codex") == raw
+    assert server._display_model(parsed["pane_model"]) == raw
+    assert server._provider_of(parsed["pane_model"]) == "openai"
 
 
 def test_stale_claude_approval_outside_current_tail_is_not_ask():
@@ -173,3 +191,538 @@ def test_fresh_codex_approval_in_current_tail_is_ask():
     )
 
     assert server._parse_runtime(text)["act_state"] == "ask"
+
+
+_CLAUDE_INPUT = (
+    "────────────────────────────────────────\n"
+    "❯ \n"
+    "────────────────────────────────────────\n"
+    "fixture | Sonnet 5 | ctx: 33% used\n"
+)
+_CODEX_INPUT = "› Ask Codex to do anything\ngpt-5.6-terra medium · Context 70% left\n"
+_OLD_WORK = "✽ Stewing… (18s · ↓ 1.2k tokens)\n"
+_CLAUDE_USAGE_INPUT = "❯\n[Opus 5.5] | 5h 85% left | 7d 88% left\n"
+_CLAUDE_ASK = "Do you want to run this command?\n❯ 1. Yes\n  2. No\n"
+_CODEX_ASK = "Would you like to run this command?\n› Yes\n  No\nPress enter to confirm or esc to cancel\n"
+_QUESTION = "Choose a result\n❯ 1. Option\nEnter to select · Esc to cancel\n"
+
+
+def test_claude_auto_mode_without_statusline_keeps_current_work():
+    # Claude Code 2.1.291 screen reported in #465; the tip text is synthetic.
+    text = (Path(__file__).parent / 'fixtures/claude-auto-mode-work.txt').read_text()
+    assert server._runtime_activity(text) == (
+        'work', '· Effecting… (43s · ↓ 3.4k tokens)')
+    parsed = server._parse_runtime(text)
+    assert (parsed['act_state'], parsed['work_secs'], parsed['work_disp']) == ('work', 43, '43s')
+    assert parsed['ctx_used'] is None and parsed['pane_model'] is None
+
+
+@pytest.mark.parametrize('footer', [
+    '⏵⏵ auto mode on',
+    '  ⏵⏵ auto mode on (shift+tab to cycle)',
+    '  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← 1 agent',
+    '  ⏵⏵ accept edits on (shift+tab to cycle)',
+    '  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt',
+])
+@pytest.mark.parametrize('current,state', [
+    (_OLD_WORK, 'work'),
+    ('', 'wait'),
+    (_OLD_WORK + '\n⏺ Finished the requested work.\n', 'wait'),
+])
+def test_claude_mode_footer_without_statusline_needs_current_work(footer, current, state):
+    composer = '────────────────────────────────────────\n❯\n────────────────────────────────────────\n'
+    assert server._runtime_activity(current + composer + footer)[0] == state
+
+
+@pytest.mark.parametrize('footer', [
+    'The footer reads ⏵⏵ auto mode on (shift+tab to cycle).',
+    '> ⏵⏵ auto mode on (shift+tab to cycle)',
+    '⏵⏵ auto mode on is a setting, not a work indicator.',
+    '⏵⏵ accept edits on means edits need no approval.',
+    '⏵⏵ ordinary conversation',
+    '⏵⏵ unknown mode on (shift+tab to cycle)',
+    '⏵⏵ auto mode only',
+    '⏵⏵ auto mode on (shift+tab to cycle)\nAn ordinary reply follows.',
+])
+def test_claude_mode_mentions_do_not_identify_a_composer(footer):
+    assert server._runtime_activity(_OLD_WORK + '❯\n' + footer) == ('wait', '')
+
+
+def test_current_claude_usage_footer_keeps_spinner_without_context():
+    text = ("⏺ Running a synthetic task · 1m 1s\n"
+            "  ⎿  $ synthetic command\n"
+            "✻ Herding… (54m 18s · ↓ 134.2k tokens)\n" + _CLAUDE_USAGE_INPUT)
+    parsed = server._parse_runtime(text)
+    assert parsed['act_state'] == 'work'
+    assert parsed['work_secs'] == 3258
+    assert parsed['ctx_used'] is None and parsed['pane_model'] is None
+
+
+@pytest.mark.parametrize('history', [
+    _OLD_WORK + '\n⏺ Finished the requested work.\n',
+    _OLD_WORK + '\n✻ Worked for 6s · done 6:39 PM\n',
+    '```text\n' + _OLD_WORK + '```\n',
+])
+def test_claude_usage_footer_does_not_revive_history(history):
+    parsed = server._parse_runtime(history + _CLAUDE_USAGE_INPUT)
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_secs'] is None and parsed['ctx_used'] is None
+
+
+@pytest.mark.parametrize('footer', [
+    '[Opus 5.5] | 5h 101% left | 7d 88% left',
+    '[Opus 5.5] | 5h 85% left',
+    'Example: [Opus 5.5] | 5h 85% left | 7d 88% left',
+])
+def test_claude_usage_footer_near_matches_do_not_imply_work(footer):
+    parsed = server._parse_runtime(_OLD_WORK + '\n⏺ Finished.\n❯\n' + footer + '\n')
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_secs'] is None
+
+
+@pytest.mark.parametrize("history,current,state", [
+    (_OLD_WORK + "\n⏺ Finished the requested work.\n\n", _CLAUDE_INPUT, "wait"),
+    (_OLD_WORK + "\n✻ Worked for 6s · done 6:39 PM\n", _CLAUDE_INPUT, "wait"),
+    ("• Working (18s • esc to interrupt)\n\n• Finished.\n\n", _CODEX_INPUT, "wait"),
+    ("The example mentions esc to interrupt and · 1.2k tokens.\n\n", _CLAUDE_INPUT, "wait"),
+    ("```text\n" + _OLD_WORK + "```\n", _CLAUDE_INPUT, "wait"),
+    (_OLD_WORK + "\n", _CLAUDE_ASK, "ask"),
+    (_OLD_WORK + "\n", "\n".join("  " + row for row in _CLAUDE_ASK.splitlines()), "ask"),
+    (_OLD_WORK + "\n", _CODEX_ASK, "ask"),
+    (_OLD_WORK + "\n", _QUESTION, "question"),
+    (_CLAUDE_ASK + "\n⏺ Permission was granted; the task is complete.\n", _CLAUDE_INPUT, "wait"),
+    (_QUESTION + "\n⏺ Your answer was recorded.\n", _CLAUDE_INPUT, "wait"),
+])
+def test_current_terminal_activity_ignores_history(history, current, state):
+    parsed = server._parse_runtime(history + current)
+    assert parsed["act_state"] == state
+    assert parsed["work_secs"] is None
+    assert parsed["work_disp"] is None
+
+
+@pytest.mark.parametrize("current,footer,seconds", [
+    ("✳ Stewing… (7s · ↓ 1.1k tokens)\n", _CLAUDE_INPUT, 7),
+    ("✽ Inspecting files…\n", _CLAUDE_INPUT, None),
+    ("✽\n Inspecting files…\n", _CLAUDE_INPUT, None),
+    ("✽ Inspecting several\n wrapped task labels…\n", _CLAUDE_INPUT, None),
+    ("✽ Inspecting several\n wrapped task\n labels…\n", _CLAUDE_INPUT, None),
+    ("✽\n", _CLAUDE_INPUT, None),
+    ("• Working (2s • esc to interrupt)\n", _CODEX_INPUT, 2),
+    ("▌ Thinking (2s • esc to interrupt)\n", _CODEX_INPUT, 2),
+    ("● Working (2s • esc to interrupt)\n", _CODEX_INPUT, 2),
+    ("• Starting MCP servers (2/3): fixture (0s • esc to interrupt)\n", _CODEX_INPUT, 0),
+    ("• Working (5s • esc to interrupt) · 2 background terminals running · /ps to view · /stop to close\n",
+     _CODEX_INPUT, 5),
+])
+def test_current_terminal_activity_keeps_work_with_an_input_prompt(current, footer, seconds):
+    # Old completed controls and an old elapsed time must not win either way.
+    parsed = server._parse_runtime(_OLD_WORK + _CLAUDE_ASK + _QUESTION + "\n" + current + footer)
+    assert parsed["act_state"] == "work"
+    assert parsed["work_secs"] == seconds
+    assert parsed["work_disp"] == (None if seconds is None else f"{seconds}s")
+
+
+_CLAUDE_NAMED_INPUT = (
+    "──────────────────────────────── FixtureAgent ─\n"
+    "❯\xa0\n"
+    "────────────────────────────────────────\n"
+    "fixture | Opus 5.5 | ctx: 80% used\n"
+    "  ⏵⏵ auto mode on (shift+tab to cycle)\n"
+)
+
+
+@pytest.mark.parametrize("current", [
+    "✢ Orbiting… (running Stop hook · 7s · ↓ 303 tokens)\n",
+    "✢ Orbiting… (running Stop hook · 7s · ↓ 303 tokens)\n"
+    "                                  ✔ Update installed · Restart to update\n",
+])
+def test_claude_work_above_a_named_input_border_is_work(current):
+    # Claude Code 2.1.307 puts the session name in the input box's top border.
+    parsed = server._parse_runtime("⏺ Earlier reply.\n\n" + current + _CLAUDE_NAMED_INPUT)
+    assert parsed["act_state"] == "work"
+    assert parsed["work_disp"] == "7s"
+
+
+def test_reply_above_a_named_input_border_is_not_work():
+    parsed = server._parse_runtime(_OLD_WORK + "\n⏺ Finished the requested work.\n\n" + _CLAUDE_NAMED_INPUT)
+    assert parsed["act_state"] == "wait"
+
+
+
+def test_long_codex_work_with_background_terminals_and_tip_is_work():
+    # Codex appends the exact background-terminal summary after the interrupt
+    # hint and may show a tip line under it while work continues for minutes.
+    current = (
+        "• Working (48m 48s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close\n"
+        "  └ Tip: Use /side to start a side conversation in a temporary fork without polluting the main thread.\n")
+    parsed = server._parse_runtime(_OLD_WORK + current + _CODEX_INPUT)
+    assert parsed["act_state"] == "work"
+    assert parsed["work_secs"] == 2928
+    assert parsed["work_disp"] == "48m48s"
+
+
+@pytest.mark.parametrize("suffix", [
+    " · 0 background terminals running · /ps to view · /stop to close",
+    " · 1 background terminal running · /ps to view · /stop to close; arbitrary output",
+    " · arbitrary output",
+])
+def test_long_codex_work_rejects_unknown_trailing_text(suffix):
+    current = "• Working (48m 48s • esc to interrupt)" + suffix + "\n"
+    assert server._parse_runtime(current + _CODEX_INPUT)["act_state"] == "wait"
+
+
+# Literal Codex status shapes at 20/28/40/80 columns. The 28-column row is
+# transcribed from the reported narrow pane; wider panes retain the full hint.
+_NARROW_CODEX_WORK = [
+    (20, '• Working (11m 57s …', 717, '11m57s'),
+    (28, '• Working (11m 57s • esc to…', 717, '11m57s'),
+    (40, '• Working (11m 57s • esc to interrupt)', 717, '11m57s'),
+    (80, '• Working (11m 57s • esc to interrupt)', 717, '11m57s'),
+]
+
+
+def _codex_input_at_width(columns):
+    rows = ['› Ask Codex to do anything', 'GPT-6.1-Sol high · Context 70% left']
+    return '\n'.join(row if len(row) <= columns else row[:columns - 1] + '…' for row in rows) + '\n'
+
+
+@pytest.mark.parametrize('columns,status,seconds,display', _NARROW_CODEX_WORK)
+def test_codex_work_status_at_narrow_widths(columns, status, seconds, display):
+    assert len(status) <= columns
+    parsed = server._parse_runtime('• Earlier reply.\n\n' + status + '\n\n' + _codex_input_at_width(columns))
+    assert parsed['act_state'] == 'work'
+    assert parsed['work_secs'] == seconds
+    assert parsed['work_disp'] == display
+
+
+@pytest.mark.parametrize('status,seconds,display', [
+    ('• Working…', None, None), ('• Working (…', None, None),
+    ('• Working (11…', None, None), ('• Working (11m…', 660, '11m'),
+    ('• Working (11m 5…', 660, '11m'),
+    ('▌ Thinking (1h 2m…', 3720, '1h02m'),
+    ('● Working (1h 2m 3s • esc to inter…', 3723, '1h02m'),
+    ('• Working (11m 57s • esc to interrupt) · 1 background termin…', 717, '11m57s'),
+    ('• Working (11m 57s • esc to interrupt) · 2 background terminals running · /ps…', 717, '11m57s'),
+    ('✻ Working… (12s · esc to…', 12, '12s'),
+])
+def test_truncated_work_reports_only_readable_elapsed_units(status, seconds, display):
+    parsed = server._parse_runtime(status + '\n' + _CODEX_INPUT)
+    assert parsed['act_state'] == 'work'
+    assert parsed['work_secs'] == seconds
+    assert parsed['work_disp'] == display
+
+
+@pytest.mark.parametrize('columns,status,seconds,display', _NARROW_CODEX_WORK)
+@pytest.mark.parametrize('later', ['• Finished the task.\n', '  ⏺ Finished the task.\n',
+    'Press enter to confirm or esc to cancel\n• Finished.\n'])
+def test_narrow_codex_work_in_scrollback_does_not_revive(columns, status, seconds, display, later):
+    parsed = server._parse_runtime(status + '\n\n' + later + _codex_input_at_width(columns))
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_secs'] is None
+    assert parsed['work_disp'] is None
+
+
+@pytest.mark.parametrize('text', [
+    '', '• Finished the task.\n', '> • Working…\n', 'The pane says • Working…\n',
+    '```text\n• Working (11m 57s • esc to…\n```\n',
+    '• Working on the documentation…\n', '• Working (finished the task…\n',
+    '• Working (11m 57s • arbitrary output…\n',
+    '• Working (11m 57s • esc to interrupt) · arbitrary output…\n',
+    '• Working (11m 57s • esc to interrupt) · 0 background terminals…\n',
+    '• Working (11m 57s • esc to interrupt) · 2 background terminal running…\n',
+])
+def test_missing_or_quoted_narrow_work_is_wait(text):
+    parsed = server._parse_runtime(text + _CODEX_INPUT)
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_disp'] is None
+
+
+def test_runtime_clears_narrow_work_time_after_current_status_disappears(monkeypatch):
+    captures = iter([
+        SimpleNamespace(returncode=0, stdout='• Working (11m 57s • esc to…\n' + _codex_input_at_width(28)),
+        SimpleNamespace(returncode=0, stdout='• Working (11m 57s • esc to…\n• Finished.\n' + _codex_input_at_width(28)),
+    ])
+    ticks = iter((0.0, 10.0))
+    monkeypatch.setattr(server.time, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(server, '_tmux_run', lambda *args, **kwargs: next(captures))
+    monkeypatch.setattr(server, '_rt_cache', {})
+    monkeypatch.setattr(server, '_provider_captures', {})
+    first = server._agent_runtime('FixtureAgent', session_created=101, session_id='$1')
+    assert first['act_state'] == 'work' and first['work_disp'] == '11m57s'
+    second = server._agent_runtime('FixtureAgent', session_created=101, session_id='$1')
+    assert second['act_state'] == 'wait'
+    assert second['work_secs'] is None and second['work_disp'] is None
+
+
+def test_pathological_codex_elapsed_line_does_not_block_runtime_parser():
+    text = '• Working (' + ' ' * 16000 + 'x…\n' + _CODEX_INPUT
+    start = perf_counter()
+    parsed = server._parse_runtime(text)
+    duration = perf_counter() - start
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_secs'] is None and parsed['work_disp'] is None
+    # The normal parser takes milliseconds here; leave room for slow CI hosts.
+    assert duration < 0.25, f'pathological status took {duration:.3f}s'
+
+
+@pytest.mark.parametrize('status', ['• Working (11m 57s • esc to…', '• Working…'])
+@pytest.mark.parametrize('indent', ['', '    '])
+@pytest.mark.parametrize('footer', ['❯\n Opus 5 | ctx: 42% used\n', '›\n Opus 5 | ctx: 42% used\n'])
+def test_codex_truncated_quote_above_other_provider_footer_is_wait(status, indent, footer):
+    parsed = server._parse_runtime('⏺ Captured child status:\n\n' + indent + status + '\n\n' + footer)
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_secs'] is None and parsed['work_disp'] is None
+
+
+@pytest.mark.parametrize('status', ['• Working (11m 57s • esc to…', '• Working…'])
+@pytest.mark.parametrize('indent', [' ', '    '])
+def test_indented_codex_truncated_quote_above_codex_composer_is_wait(status, indent):
+    parsed = server._parse_runtime('• Captured example:\n\n' + indent + status + '\n' + _CODEX_INPUT)
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_secs'] is None and parsed['work_disp'] is None
+
+
+@pytest.mark.parametrize('footer', ['', '›\n', '›\n? for shortcuts\n'])
+def test_codex_truncated_status_requires_codex_composer_and_footer(footer):
+    parsed = server._parse_runtime('• Working (11m 57s • esc to…\n' + footer)
+    assert parsed['act_state'] == 'wait'
+    assert parsed['work_disp'] is None
+
+# Transcribed from the operator-supplied hook review screenshot. This is not
+# the repository's older folder-access trust fixture.
+_HOOK_REVIEW = (
+    "Hooks need review\n"
+    "1 hook is new or changed.\n"
+    "Hooks can run outside the sandbox after you trust them.\n\n"
+    "› 1. Review hooks\n"
+    "  2. Trust all and continue\n"
+    "  3. Continue without trusting (hooks won't run)\n\n"
+    "enter confirm · esc skip\n"
+)
+
+
+@pytest.mark.parametrize("history", ["", _OLD_WORK + "\n"])
+def test_current_hook_review_is_approval(history):
+    parsed = server._parse_runtime(history + _HOOK_REVIEW)
+    assert parsed["act_state"] == "ask"
+    assert parsed["work_disp"] is None
+
+
+@pytest.mark.parametrize("text", [
+    "The Hooks need review screen offers Review hooks or Trust all and continue.\n",
+    "```text\n" + _HOOK_REVIEW + "```\n" + _CLAUDE_INPUT,
+    _HOOK_REVIEW.replace("  3. Continue without trusting (hooks won't run)\n", ""),
+    _HOOK_REVIEW.replace("enter confirm · esc skip", ""),
+])
+def test_quoted_or_incomplete_hook_review_is_not_approval(text):
+    assert server._parse_runtime(text)["act_state"] == "wait"
+
+
+def test_current_work_after_hook_review_remains_work():
+    parsed = server._parse_runtime(_HOOK_REVIEW + "\n• Working (3s • esc to interrupt)\n" + _CODEX_INPUT)
+    assert parsed["act_state"] == "work"
+    assert parsed["work_disp"] == "3s"
+
+
+_COMPUTER_USE_PERMISSIONS_NARROW = '''\
+──────────────────────────
+  Computer use needs
+  macOS permissions
+
+
+   Accessibility: ✘ not
+   granted
+   Screen Recording: ✘
+   not granted
+
+   Grant the missing
+   permissions in
+   System Settings,
+   then select "Try
+   again". macOS may
+   require you to
+   restart Claude Code
+   after granting
+   Screen Recording.
+
+   ❯ Open System
+     Settings →
+     Accessibility
+     Open System
+     Settings → Screen
+     Recording
+     Try again
+
+
+  Enter to confirm · Esc
+  to cancel
+'''
+
+_COMPUTER_USE_PERMISSIONS_WIDE = '''\
+────────────────────────────────────────────────────────────────────────────────
+  Computer use needs macOS permissions
+
+   Accessibility: ✘ not granted
+   Screen Recording: ✘ not granted
+
+   Grant the missing permissions in System Settings, then select "Try again".
+   macOS may require you to restart Claude Code after granting Screen Recording.
+
+     Open System Settings → Accessibility
+     Open System Settings → Screen Recording
+   ❯ Try again
+
+  Enter to confirm · Esc to cancel
+'''
+
+
+_COMPUTER_USE_SCREEN_RECORDING_ONLY = (
+    _COMPUTER_USE_PERMISSIONS_WIDE
+    .replace("   Accessibility: ✘ not granted\n", "")
+    .replace("     Open System Settings → Accessibility\n", ""))
+
+
+@pytest.mark.parametrize(
+    "screen", [_COMPUTER_USE_PERMISSIONS_NARROW, _COMPUTER_USE_PERMISSIONS_WIDE,
+               _COMPUTER_USE_SCREEN_RECORDING_ONLY],
+    ids=["narrow", "wide", "one-missing"],
+)
+def test_current_claude_computer_use_permissions_is_ask(screen):
+    assert server._parse_runtime(_OLD_WORK + screen)["act_state"] == "ask"
+
+
+def test_quoted_claude_computer_use_permissions_in_scrollback_is_wait():
+    text = ("⏺ Example terminal output:\n```text\n"
+            + _COMPUTER_USE_PERMISSIONS_WIDE + "```\n" + _CLAUDE_INPUT)
+    assert server._parse_runtime(text)["act_state"] == "wait"
+
+
+def test_output_after_claude_computer_use_permissions_is_wait():
+    text = _COMPUTER_USE_PERMISSIONS_WIDE + "⏺ Permissions are now granted.\n"
+    assert server._parse_runtime(text)["act_state"] == "wait"
+
+
+@pytest.mark.parametrize("prefix", ["", "  "])
+def test_reply_after_old_work_is_not_a_wrapped_task_label(prefix):
+    parsed = server._parse_runtime(
+        _OLD_WORK + prefix + "⏺ The completed reply contains an ellipsis…\n" + _CLAUDE_INPUT
+    )
+    assert parsed["act_state"] == "wait"
+    assert parsed["work_disp"] is None
+
+
+def test_current_work_above_an_indented_task_widget_is_retained():
+    # The existing parser documents a 25-line work window for task widgets.
+    parsed = server._parse_runtime(
+        _OLD_WORK + "\n✽ Inspecting files…\n"
+        "  Current tasks\n    first task\n    second task\n    third task\n"
+        + _CLAUDE_INPUT
+    )
+    assert parsed["act_state"] == "work"
+    assert parsed["work_disp"] is None
+
+
+def test_newest_indented_work_label_owns_the_elapsed_time():
+    parsed = server._parse_runtime(
+        _OLD_WORK + "\n  ✳ Stewing… (7s · ↓ 1.1k tokens)\n" + _CLAUDE_INPUT
+    )
+    assert parsed["act_state"] == "work"
+    assert parsed["work_disp"] == "7s"
+
+
+def test_question_footer_before_numbered_options_remains_question():
+    # Preserve the existing literal in test_runtime_tmux_target.py.
+    parsed = server._parse_runtime("Enter to select · Esc to cancel\n❯ 1. Option")
+    assert parsed["act_state"] == "question"
+    assert parsed["work_disp"] is None
+
+
+_CLAUDE_EDIT_APPROVAL = (
+    "Edit file\nfixture.json\n"
+    "────────────────────────────────────────\n"
+    "Do you want to make this edit to fixture.json?\n"
+    "❯ 1. Yes\n"
+    "  2. Yes, and allow Claude to edit files in its folder for this session\n"
+    "  3. No\n\n"
+    "Esc to cancel · Tab to amend\n"
+)
+
+
+@pytest.mark.parametrize("history", ["", _OLD_WORK + "\n"])
+@pytest.mark.parametrize("footer", ["Esc to cancel", "Esc to cancel · Tab to amend"])
+def test_current_claude_edit_approval_with_cancel_footer_is_ask(history, footer):
+    text = history + _CLAUDE_EDIT_APPROVAL.replace("Esc to cancel · Tab to amend", footer)
+    parsed = server._parse_runtime(text)
+    assert parsed["act_state"] == "ask"
+    assert parsed["work_secs"] is None
+    assert parsed["work_disp"] is None
+
+
+@pytest.mark.parametrize("text", [
+    "Esc to cancel · Tab to amend\n",
+    "❯ 1. Yes\n2. No\nEsc to cancel · Tab to amend\n",
+    _CLAUDE_EDIT_APPROVAL + "The tool finished.\n",
+    _CLAUDE_EDIT_APPROVAL.replace("Esc to cancel · Tab to amend", "Please use Esc to cancel · Tab to amend"),
+    "```text\n" + _CLAUDE_EDIT_APPROVAL + "```\n" + _CLAUDE_INPUT,
+    _CLAUDE_EDIT_APPROVAL + _CLAUDE_INPUT,
+])
+def test_claude_edit_approval_footer_does_not_promote_old_or_incomplete_ui(text):
+    assert server._parse_runtime(text)["act_state"] == "wait"
+
+
+def test_current_work_after_claude_edit_approval_remains_work():
+    parsed = server._parse_runtime(
+        _CLAUDE_EDIT_APPROVAL + "\n✳ Stewing… (7s · ↓ 1.1k tokens)\n" + _CLAUDE_INPUT
+    )
+    assert parsed["act_state"] == "work"
+    assert parsed["work_disp"] == "7s"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("GPT-7-Nova", "GPT-7-Nova"),
+    ("gpt-7-nova", "GPT-7-Nova"),
+    ("gpt-7-nova-preview2", "GPT-7-Nova-Preview2"),
+    ("GPT-7-NovaXL", "GPT-7-NovaXL"),
+    ("gpt-6.1-sol", "GPT-6.1-Sol"),
+    ("gpt-5-codex", "GPT-5-Codex"),
+    ("gpt-5-mini", "GPT-5-Mini"),
+])
+def test_gpt_model_keeps_future_suffixes_and_full_display(raw, expected):
+    footer=raw+" xhigh · Context 72% left"
+    parsed=server._parse_runtime(footer)
+    assert parsed["pane_model"] == raw
+    assert server._normalize_model(raw) == raw.lower()
+    assert server._display_model(raw) == expected
+    assert server._display_model(footer) == expected
+    assert server._provider_of(raw) == "openai"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("claude-opus-5-5[1m]", "Opus 5.5"),
+    ("Opus 5.5", "Opus 5.5"),
+    ("qwen3.8-flash-next-iq3_xxs", "Qwen 3.8 flash"),
+    ("glm-5.3-flash", "GLM 5.3 flash"),
+    ("qwen3.8-gpt-7-nova", "Qwen 3.8"),
+])
+def test_non_gpt_model_display_keeps_existing_short_labels(raw,expected):
+    assert server._display_model(raw) == expected
+
+
+def test_registered_gpt_model_gets_the_same_display_as_a_pane(monkeypatch):
+    import sqlite3
+    monkeypatch.setattr(server,'_has_retired_at',lambda:True)
+    with sqlite3.connect(':memory:') as con:
+        con.row_factory=sqlite3.Row
+        con.execute('CREATE TABLE agents (id INTEGER, name TEXT, model TEXT, program TEXT, task_description TEXT, last_active_ts TEXT, retired_at TEXT)')
+        con.execute("INSERT INTO agents VALUES (1,'FixtureGPT','gpt-7-nova','codex','','2026-01-01T00:00:00Z',NULL)")
+        row=server._mail_registrations(con)['FixtureGPT']
+    assert row['model']=='GPT-7-Nova'
+    assert row['model_raw']=='gpt-7-nova'
+
+
+def test_codex_app_gpt_model_uses_full_display_and_retains_raw(monkeypatch):
+    monkeypatch.setattr(server,'_codex_app_live',lambda value:dict(live='',running=True,act_state='wait'))
+    row={}
+    server._apply_codex_app_runtime(row,{'model':'gpt-7-nova'})
+    assert row['model']=='GPT-7-Nova'
+    assert row['model_raw']=='gpt-7-nova'

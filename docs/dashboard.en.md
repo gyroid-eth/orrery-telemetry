@@ -58,7 +58,7 @@ The six screenshots on this page are real screens from an isolated demo environm
 
 | Display | Interpretation |
 | --- | --- |
-| `GPT 5.6`, `SONNET 5`, etc. under the name | Current model. `◷ 200K` or `◷ 1M`, when present, is the model's total working-memory capacity. |
+| `GPT-6.1-Sol`, `SONNET 5`, etc. under the name | Current model. `◷ 200K` or `◷ 1M`, when present, is the model's total working-memory capacity. |
 | Thin line below the model | **Context remaining**. Longer means more room; below 20% it becomes redder. It is absent when telemetry cannot be obtained. |
 | Black strip | Current terminal display, useful for judging whether the agent is working or waiting. |
 | `ORD` | Most recent instruction assigned to the agent. |
@@ -80,6 +80,10 @@ The header numbers are a **tally** of the states each card shows in its top-righ
 | `NEED YOU` | Agents waiting on a human: pending approval (`APPROVAL`) or asking a question (`?`) | red border, or `?` |
 | `WORKING` | Agents with a turn in progress | amber LED and elapsed time |
 | `WAITING` | Agents at the prompt, free to take work | `LAST 1M41S` |
+
+In a narrow Codex pane, a current `Working` / `Thinking` line ending in `…` still indicates work. Elapsed time includes only readable units and is absent when unreadable. Historical status lines superseded by a later reply or completion marker, and quoted examples, do not establish current work.
+
+Work also remains current while Codex shows queued follow-up inputs (`Queued follow-up inputs`) between the current `Working` line and the input box; a queue alone never indicates work. A footer whose model display name separates the variant with a space, such as `GPT-6.1 Terra max`, is recognized as the input footer, and the model is shown as `GPT-6.1-Terra`.
 
 `NEED YOU` appears only while such agents exist; clicking it narrows the DECK to them (click again to restore). An agent whose process has stopped and returned to the shell is in none of these counts; its card says `○ SHELL`. The total of active agents is in the sector heading, `ACTIVE AGENTS [ 29 ]`.
 
@@ -275,7 +279,7 @@ The history range auto-fits to the oldest and newest events, widening ranges too
 
 ## NEW AGENT
 
-![NEW AGENT modal — launch manifest for identity / engine / directory / task](img/new-agent.jpg)
+![Configured Local Qwen model and dsh / Hermes Harness choices in NEW AGENT](img/native-harness-picker.png)
 
 `+ NEW AGENT` is a launch manifest that confirms identity, engine, directory, and task in order. Common fields form a one-way path; parent / role / group / isolation are folded into ADVANCED, creating the shortest path for a standalone agent.
 
@@ -292,19 +296,37 @@ Scientist-rail `available` means that at least one pairing with the 134 adjectiv
 
 ### Engine
 
-- Claude / Codex provider tabs
+- provider tabs built from the server catalog; configured environments also list DeepSeek / Local
 - model cards and usage guidance per provider
 - Claude: Sonnet / Opus / Haiku
 - Codex defaults to `gpt-6.1-sol` when the selected CLI is 0.159.0 or later (fresh catalog evidence is used if its version is unknown), otherwise `gpt-6-sol`; prior generations remain available through formal IDs such as `gpt-6-sol`
 - Codex effort choices follow `model_efforts` / `model_effort_defaults`; Codex CLI makes the final decision for an explicit effort
+- DeepSeek / Local show Model and Harness (dsh / Hermes) choices from the configured catalog. Select a model, then an available harness; unavailable choices are disabled and labeled “Coming soon”. Helper and Effort follow that model and harness's capabilities. See the [setup guide](install.en.md) and [API reference](api.en.md).
 
 The server uses the provider / model / effort allowlist for both catalog and validation.
+
+This section describes the bundled Telemetry screen. Model / Harness uses the same English vocabulary as cockpit; directory dialogs and Lineage controls need not be identical. See the [current combinations and limitations (Japanese)](managed-catalog.md) for OS credential setup, memory and manual Local effort.
+
+<a id="native-models-and-harnesses"></a>
+### DeepSeek / Local with dsh / Hermes
+
+Choose a configured provider, its Model, and an available Harness. The selection GIF stops before SPAWN: [watch the Model / Harness selection](img/native-harness-selection.gif).
+
+The NEW AGENT image and GIF show the actual bundled Telemetry screen, real catalog, scientist names and official portraits. They show Claude / Codex / DeepSeek / Local models and dsh / Hermes selection before launching, with the working directory and task cropped out. The [cockpit NEW AGENT](https://github.com/gyroid-eth/orrery/blob/master/docs/en/usage.md) is a different screen. The DECK / NETWORK examples below still use synthetic data. These images do not demonstrate credential setup or end-to-end acceptance of every combination.
+
+![DECK examples for DeepSeek and Local Qwen with dsh and Hermes](img/native-local-deck.png)
+
+Local Qwen uses the Qwen logo inside a hexagon; DeepSeek uses its provider badge. Check Harness separately when comparing agents.
+
+![NETWORK medallions distinguish Local Qwen from DeepSeek](img/native-local-network.png)
 
 ### Directory
 
 Displays `AGENTSTACK_SPAWN_DIRS` preset chips and an exact-path input. Persist presets with installer `--spawn-dirs`; shell `export` does not reach the service. See “Spawn directory” in [configuration](configuration.en.md). The input uses root-scoped `/api/fs/dirs` typeahead and supports arrow keys / Enter. The last directory is saved in `localStorage`.
 
 Typeahead does not leave `AGENTSTACK_SPAWN_ROOTS` or suggest hidden directories, `..`, or symlinks outside a root.
+
+In the ORRERY folder picker, the breadcrumbs set the scope for a name search. With an empty query, the picker shows the current folder’s children. As you type, it shows matches below the current folder by relative path. Use the arrow keys to move and Enter to open a child folder or select a search result. The [folder search API](api.en.md#get-apifsdir-search) describes the scope and limits.
 
 ### Task and ADVANCED
 
@@ -404,56 +426,15 @@ python3 scripts/dashboard_theme_manifest.py --check
 
 `source` is token / declaration coverage; `mutation` is the compiled count of token-write / element / effect-component applications derived from an immutable snapshot immediately before application. Source units are axis-specific: `dim-contrast` / `background` use `token-write`, while `small-text` / `tracking` / `glow` use `declaration`. Effect membership is fixed only by generated eligibility's pre-apply live match; neither pre/post/endpoint values add or remove targets. Of these, rendered members with nonzero boxes inside the viewport are `visibleExpected`; members whose post-cascade computed value reaches the requested derivation are `visibleReached`. A member already at the requested value also counts as reached. `visibleChanged` counts visible members whose canonical post differs from pre; `changed` is an independent no-op gate counting that difference for all evaluated members. Hidden / zero-box / offscreen members count as `deferred`. A non-null apply succeeds only with `visibleExpected > 0`, `visibleReached === visibleExpected`, `visibleChanged > 0`, and `changed > 0`. Zero or sub-quantization changes are rejected as `no-effective-change`, zero visible targets as `no-visible-targets`, and any member failing to reach the requested derivation as `effect-count-mismatch`, restoring the previous valid axis. Surfaces and units are not summed. The `glow` effect unit is a live `effect-component`: two target radial layers on one surface count as two, and one CSS rule matching ten visible elements counts as ten. Selector and keyframe source components are divided into `emissive | elevation | focus | state`, allowing color halos to weaken while preserving elevation and focus.
 
-### Atomic theme profile bridge
-
-`small-text` and `tracking` can be applied together as one atomic profile using a complete five-axis vector. Every key is required; non-null combinations may be empty, any subset of `small-text` / `tracking`, or a single legacy axis.
-
-```js
-frame.contentWindow.postMessage({
-  type: "agentstack-theme-profile",
-  version: 1,
-  requestId: "theme-42",
-  values: {
-    "dim-contrast": null,
-    "small-text": 0.5,
-    tracking: 0.25,
-    glow: null,
-    background: null,
-  },
-}, location.origin);
-```
-
-The receiver derives both axes from the same A snapshot with every experimental override removed. With baseline font size `s0` and baseline letter-spacing ratio `r0`, final small size is `s(vs)`, tracking ratio is `lerp(r0, min(r0, 0.08), vt)`, and final spacing is that ratio times `s(vs)`. Because the previous profile render is not used as the next baseline, UI operations small→tracking and tracking→small produce identical computed size / weight / spacing for the same complete final vector. DOM nodes added later also derive both axes together from an A baseline with overrides temporarily disabled and add them to each axis's independent envelope.
-
-On success, it returns the response below. `requested` / `applied` are always exact five-key maps; `axes` is the exact set of non-null axes.
-
-```js
-{
-  type: "agentstack-theme-profile-result",
-  version: 1,
-  requestId: "theme-42",
-  surface: "telemetry",
-  requested: {"dim-contrast": null, "small-text": 0.5,
-    tracking: 0.25, glow: null, background: null},
-  applied: {"dim-contrast": null, "small-text": 0.5,
-    tracking: 0.25, glow: null, background: null},
-  status: "applied",
-  axes: {
-    "small-text": {status: "applied", source: {}, mutation: {}, effect: {}},
-    tracking: {status: "applied", source: {}, mutation: {}, effect: {}},
-  },
-}
-```
-
-If any axis fails a source / mutation / effect guard, the complete profile is rejected and `applied` contains the restored last-valid complete map. Schema violations also leave state unchanged. Legacy `agentstack-theme-axis` v1 is equivalent to a complete profile with every axis except the target set to null, and legacy `value: null` resets all axes. If the result reply is lost, the parent coordinator can send the last-valid complete profile with a fresh `requestId` as a compensating request.
-
-After embed initialization and reload, the dashboard sends `agentstack-theme-axis-ready` and `agentstack-theme-profile-ready`, both version 1 with `surface: "telemetry"`, to the same-origin parent. Recovery sends a compensating profile after this explicit signal and does not count as complete until its result is acknowledged. The parent coordinator owns timeout and UI failure display when ready never arrives.
+After embed initialization or reload, `agentstack-theme-axis-ready` (version 1, surface `telemetry`) is sent to the same-origin parent. The former Vision profile message protocol has been removed; the single-axis contract above remains available.
 
 ## Terminal bridge
 
-Opening a terminal from a card or node makes the server allocate a Ghostty / iTerm2 / Terminal.app jump or `ttyd` browser terminal.
+Opening a terminal from a card or node makes the server open a Ghostty / iTerm2 / Terminal.app jump.
 
 `AGENTSTACK_BIND_HOST=0.0.0.0` also exposes the terminal bridge and control endpoints externally. Because the dashboard has no authentication layer, do not use it outside a trusted LAN / VPN.
+
+Legacy Host admission allows only loopback authorities at the actual listening port by default. Existing LAN / VPN users must configure fixed origins with [`AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS`](configuration.en.md#host-configuration-for-lan--vpn-access) before updating, then use the installer to save them and update the service environment. A wildcard bind alone does not allow external Hosts. A cockpit bridge using its normal loopback connection needs no additional setting. This check does not add authentication.
 
 ## Demo (no server required)
 

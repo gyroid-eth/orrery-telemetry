@@ -71,6 +71,25 @@ class SavedNodeTests(unittest.TestCase):
         self.assertIn(shlex.quote(node), env)
         self.assertIn(shlex.quote(manifest), env)
 
+    def test_native_settings_loader_keeps_saved_values_and_explicit_overrides(self):
+        saved = ('/fixture/saved node/bin/node', '/fixture/saved manifest.json')
+        result = self.invoke(node=saved[0], manifest=saved[1])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        script = ('. ' + shlex.quote(str(ROOT / 'hooks/project-context.sh')) + '\n'
+                  + 'agentstack_load_installed_env "$1"\n'
+                  + shlex.quote(sys.executable) + ' -c '
+                  + shlex.quote('import json,os; print(json.dumps([os.environ["AGENTSTACK_DSH_NODE"], os.environ["AGENTSTACK_MANAGED_SPAWN_CONFIG"]]))'))
+        for explicit in (None, ('/fixture/operator node/bin/node', '/fixture/operator manifest.json')):
+            with self.subTest(explicit=explicit):
+                env = {'HOME': str(self.root), 'PATH': '/usr/bin:/bin'}
+                if explicit:
+                    env.update(AGENTSTACK_DSH_NODE=explicit[0],
+                               AGENTSTACK_MANAGED_SPAWN_CONFIG=explicit[1])
+                loaded = subprocess.run(['/bin/bash', '-c', script, 'fixture', str(self.install / 'env.sh')],
+                                        env=env, capture_output=True, text=True)
+                self.assertEqual(loaded.returncode, 0, loaded.stderr)
+                self.assertEqual(json.loads(loaded.stdout), list(explicit or saved))
+
     def test_existing_install_backfills_node_from_current_receipt(self):
         current = self.install / 'harnesses/dsh/current.json'
         current.parent.mkdir(parents=True)

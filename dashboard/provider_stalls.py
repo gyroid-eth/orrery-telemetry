@@ -32,7 +32,9 @@ try:
 except ModuleNotFoundError:
     from terminal_state import _ANSI, _STALL_WORK as _WORK
 
-_FOOTER = re.compile(r"^(?:gpt-\S+|sol|luna|astra|terra)\s+(?:low|medium|high|xhigh|max|ultra)\b.*$", re.I)
+# Newer Codex shows the display name ("GPT-6.1 Terra high"), older ones the ID.
+_FOOTER = re.compile(r"^(?:gpt-\S+(?:\s+(?:sol|luna|astra|terra))?|sol|luna|astra|terra)"
+                     r"\s+(?:low|medium|high|xhigh|max|ultra)\b.*$", re.I)
 _UI = re.compile(r"^(?:[─━\s]+|\? for shortcuts.*|\d+% context left.*)$")
 # Codex rust-v0.159.2, tui/src/bottom_pane/unified_exec_footer.rs::summary_text.
 # Only this complete footer may sit between the error and the composer.
@@ -297,7 +299,11 @@ class Monitor:
         row = self._views.get((name, generation))
         return dict(row) if row else None
 
-    def run(self, sample, stop, *, interval=5):
+    def run(self, sample, stop, *, interval=10):
+        # Each sample captures every running Codex pane; ten seconds halves that.
+        # A stop is confirmed by two separate captures, so it is now reported
+        # 10 to 20 seconds after it happens instead of 5 to 10: up to about ten
+        # seconds later.
         while not stop.is_set():
             try:
                 self.tick(sample())

@@ -1,0 +1,19 @@
+{
+  "enabled": false,
+  "backends": {
+    "deepseek": {
+      "model": "deepseek-flash",
+      "models": ["deepseek-flash"]
+    }
+  },
+  "harnesses": {
+    "dsh": {
+      "python": "<ABS_GENERATOR_PYTHON>",
+      "config_file": "<ABS_DSH_CONFIG_JSON>"
+    },
+    "hermes": {
+      "python": "<ABS_HERMES_COMMITTED_PYTHON>",
+      "config_file": "<ABS_HERMES_CONFIG_JSON>"
+    }
+  }
+}

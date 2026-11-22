@@ -1104,6 +1104,30 @@ EXPECTED_CUTOVER_APPROVAL = {
 }
 
 REQUIRED_RUNTIME_MODULES = {
+    "archive_cli.py",
+    "fresh_cli.py",
+    "fresh_child.py",
+    "fresh_client.py",
+    "fresh_delivery.py",
+    "fresh_end.py",
+    "fresh_guard.py",
+    "fresh_harness.py",
+    "fresh_launch.py",
+    "fresh_notifications.py",
+    "fresh_persistent.py",
+    "fresh_proxy.py",
+    "fresh_reservations.py",
+    "fresh_runtime.py",
+    "fresh_server.py",
+    "fresh_targets.py",
+    "local_http.py",
+    "show_files.py",
+    "screen_contract.py",
+    "screen_mcp.py",
+    "storage_origin_contract.py",
+    "storage_origin_directory.py",
+    "storage_origin_core.py",
+    "storage_origin_candidate.py",
     "namespace_state_io.py",
     "namespace_transform.py",
     "namespace_migration.py",
@@ -1160,6 +1184,7 @@ REQUIRED_RUNTIME_MODULES = {
 }
 
 WHEEL_REQUIRED_SUFFIXES = {
+    "agentstack_mail/fixtures/storage-origin-b1.json",
     ".dist-info/entry_points.txt",
     ".dist-info/licenses/AGENTSTACK_LICENSE",
     ".dist-info/licenses/UPSTREAM_LICENSE",
@@ -1178,9 +1203,13 @@ WHEEL_REQUIRED_SUFFIXES = {
     "agentstack_mail/fixtures/global-server-s2c.json",
     "agentstack_mail/fixtures/global-ui.json",
     "agentstack_mail/fixtures/namespace-legacy-delivery-v1.sql",
+    "agentstack_mail/screen_schemas.json",
+    "agentstack_mail/screen_schemas.LICENSE",
 } | {f"agentstack_mail/{module}" for module in REQUIRED_RUNTIME_MODULES}
 
 SDIST_REQUIRED_SUFFIXES = {
+    "/fixtures/storage-origin-b1.json",
+    "/tests/test_storage_origin_b1.py",
     "/tests/test_global_server.py",
     "/tests/test_global_server_s2a.py",
     "/fixtures/global-server-s2a.json",

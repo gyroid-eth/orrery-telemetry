@@ -4,11 +4,58 @@
 
 ## Optional dsh / Hermes installation
 
-`install.sh --enable-dsh --dsh-node /absolute/node` installs dsh 0.2.1-rc.2 / TUI 0.16.1 and its managed adapter. `--enable-hermes` installs Hermes commit d923a5eb487a17c0a68801bba9ef0f56c81040a8. Each lives in `harnesses/{dsh,hermes}/<generation>`. Supply both enable flags for both harnesses. Neither is acquired by default; updates preserve each saved enabled choice. Supply an existing Node >=24.2 by absolute path; Node itself is not downloaded. Acquisition uses npm/GitHub and the distributions required by Hermes PM. `--harness-cache PATH` supplies dsh tarballs/npm offline cache and local Hermes source; Hermes PM may still acquire its dependencies. `--dry-run` downloads and writes nothing.
+**Already using Claude Code or Codex?** Start with [Add DeepSeek or Local models](native-setup.en.md). An ordinary update does not install a new harness or register an API key for you. The sections below are the detailed configuration reference.
 
-The absolute Node path is saved as `AGENTSTACK_DSH_NODE` in env.sh and preserved on ordinary updates. Older installs recover an unsaved path from dsh’s `current.json`. `--managed-spawn-config /absolute/manifest.json` saves only the private manifest reference as `AGENTSTACK_MANAGED_SPAWN_CONFIG` and passes it to dashboard launchd/systemd/background services. It survives restarts, subsequent logins and ordinary updates; the manifest and credentials are not copied. Explicit options/environment override saved values.
+### Prepare settings from bundled examples
 
-`--disable-dsh` / `--disable-hermes` disable the selection and retain installed files. Normal uninstall removes receipt-owned runtime generations and adapters, retaining memories/skills in `harnesses/<harness>/profiles`. Manual `hermes-managed` and Hermes homes are neither read nor modified. External Node and supplied caches remain untouched. Credentials and logins are never installed or migrated. Each harness's `current.json` records its runtime references. Configure backend URL/model, Keychain service/account and a run template separately, then perform full preflight. Installation alone does not make the catalog available.
+Installation distributes [instructions and four inactive examples](../examples/native-harnesses/README.en.md) under `examples/native-harnesses/`. For installed runtimes it validates owned receipts/current references and reports an inactive `resolved/<snapshot-id>/` snapshot (B). For missing runtimes, model changes or adjustments, an existing agent can help with non-secret settings (A). Adjust the three peer-file absolute references after copying, then confirm the destination and backend. Secret input and activation require the person. Examples always have `enabled: false`; existing examples/private settings are not overwritten or automatically enabled.
+
+The guide separates Mac Keychain references from Linux Secret Service `credential_ref`. Static Linux preparation does not establish real WSL secret retrieval, connectivity, Mail, exit or resume acceptance. Uninstall/purge removes only recorded, unchanged examples; edited/unrecorded files and private copies are retained.
+
+### Ubuntu WSL Secret Service references (real-machine acceptance pending)
+
+Linux catalog admission requires an explicit non-secret `backends.<id>.credential_ref` in the manifest:
+`{"store":"secret-service","attributes":{"service":"example-service","account":"example-account"}}`.
+Never put a key value in this reference. Attribute names start with an ASCII letter and use letters, digits,
+`_`, `.`, or `-`; values are nonempty strings. Control characters, leading option-like `-` values and unknown stores are rejected.
+
+dsh, Hermes and DeepSeek balance use this same reference through an internal reader.
+Combining it with the existing dsh `keychain` or Hermes `key_cmd` produces `credential_reference_conflict`.
+Mac configurations without the new reference retain their existing behavior.
+The reader only performs `/usr/bin/secret-tool lookup`; it does not register, unlock, persist a key or fall back to another credential.
+Do not run this internal reader to display a key as a verification step.
+
+Secret Service, the same user's session D-Bus and an unlocked collection must be prepared separately.
+`DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` are non-secret connection context forwarded only to the relevant lookup process.
+`credential_reader_unavailable` means a missing executable, `credential_unavailable` a failed lookup and
+`credential_timeout` a lookup timeout. Static catalog checks do not look up keys or verify unlock state.
+Balance availability remains separate from conversation success.
+
+Checks use synthetic stores, generators and guards. Real WSL version/architecture/services, Linux runtime dependencies,
+authentication, Mail, exit and resume remain unaccepted. This is not a verified Secret Service/D-Bus setup guide.
+Windows bridging, a public login CLI and automatic configuration migration are outside this change.
+
+### Existing installation and configuration
+
+For Claude Code / Codex CLI, start with the common installation and each CLI's login below. For an API model through dsh / Hermes, first check the [supported combinations and limitations (Japanese)](managed-catalog.md). The real-machine checks currently cover macOS in legacy mode; the common WSL2 / Linux installation alone does not enable it.
+
+Before launching, prepare the optional harness, backend URL and formal model IDs, credential references, the private manifest and harness configuration connecting them, a work folder, and a choice of parent or standalone. The installer does not create backends or logins; common provider login is in design. Preparing these settings is a separate step from installing a runtime.
+
+`install.sh --enable-dsh --dsh-node /absolute/node` installs dsh 0.2.1-rc.2 / TUI 0.16.1 and its native hook adapter for standard spawning. `--enable-hermes` installs Hermes commit d923a5eb487a17c0a68801bba9ef0f56c81040a8. Each lives in `harnesses/{dsh,hermes}/<generation>`. Supply both enable flags for both harnesses. Neither is acquired by default; updates preserve each saved enabled choice. For dsh, supply an existing Node >=24.2 by absolute path; that external Node is not downloaded. Acquisition uses npm/GitHub and the distributions required by Hermes PM. `--harness-cache PATH` supplies dsh tarballs/npm offline cache and local Hermes source; Hermes PM may still acquire its dependencies. `--dry-run` downloads and writes nothing.
+
+Hermes uses the pinned Node/npm already acquired by its PM and the official `scripts/build/node-deps.mjs` and `tui.mjs` from the same pinned source. It prepares the locked `ui-tui` and `apps/shared` workspace dependencies and builds `tui-product/` within the generation. It does not run web/desktop builds or general setup. The generation ID includes the TUI recipe; updates create a new generation and retain old `exa1` runtimes and profiles. Python alone is insufficient: a missing TUI or failed build prevents publication and leaves the previous `current.json` intact. Receipts bind source, lock, PM Node/npm and output hashes, including on `keep`. The external Node selected for dsh is not used for Hermes. Hermes dependency acquisition and the TUI build need network access and additional disk space.
+
+For Hermes source, an explicit `--harness-cache` takes priority. Without it, the installer checks ownership records, paths and the pinned commit before making an independent copy of an existing managed Git repository. It retains that repository's history and tags; uncommitted changes are not copied. If no usable managed source is available, it clones from the official GitHub repository as before. A cache or selected-source failure stops acquisition rather than silently trying another source. The pinned commit, CA changes and PM dependencies retain their existing checks. This improves updates that can reuse managed source; it does not promise smaller or faster fresh installs. PM dependency downloads may still need network access.
+
+The absolute Node path is saved as `AGENTSTACK_DSH_NODE` in env.sh and preserved on ordinary updates. Older installs recover an unsaved path from dsh’s `current.json`. `--managed-spawn-config /absolute/manifest.json` saves only the private manifest reference used by the standard DeepSeek/Local catalog and launcher as `AGENTSTACK_MANAGED_SPAWN_CONFIG` and passes it to dashboard launchd/systemd/background services. It survives restarts, subsequent logins and ordinary updates; the manifest and credentials are not copied. Explicit options/environment override saved values.
+
+When a standard catalog manifest is configured, dsh installation/update extracts effort levels and defaults from the pinned runtime without credentials or network requests and stores a capability cache inside that generation. Stale model/runtime metadata is not reused; an unavailable cache leaves the picker unknown. It never falls back to handwritten low/high choices. Launching without an effort uses the harness default.
+
+`--disable-dsh` / `--disable-hermes` disable the selection and retain installed files. Normal uninstall removes receipt-owned runtime generations and adapters, retaining memories/skills in `harnesses/<harness>/profiles`. Manual `hermes-managed` and Hermes homes are neither read nor modified. External Node and supplied caches remain untouched. Credentials and logins are never installed or migrated. Each harness's `current.json` records its runtime references. Configure backend URL/model and Keychain service/account separately; startup performs static configuration validation. Installation alone does not make the catalog available.
+
+Once configured, check catalog availability, then [exchange Mail through cockpit New Agent / Harness / Lineage](getting-started.en.md#5-play-shiritori-as-an-end-to-end-check). The bundled dashboard NEW AGENT does not send a harness and cannot launch DeepSeek / Local children. See the [API reference](api.en.md) for a launch without the screen. Catalog visibility does not test credentials, connections, tools or Mail delivery.
+
+New Hermes children use a stable, separate HOME for each project and canonical name. Standard resume checks the saved pin and exact native session ID and reuses that HOME. Old shared-HOME pins stop with `native_resume_legacy_profile`; old data and pins are not migrated automatically. Real CLI checks with a synthetic provider confirmed storage, same-HOME/ID restoration and separation between children. Resume does not reinject the latest memory into the initial system prompt, and real-provider/full-Mail end-to-end acceptance remains incomplete. A common Telegram entry point is in design, and manual Local effort has not passed real Local server acceptance. See [current limitations (Japanese)](managed-catalog.md#現在の制限).
 
 [Back to README](../README.en.md) · [Next: Launchers and identity](launchers.en.md)
 
@@ -171,7 +218,7 @@ See the [consent contract](instruction-migration.en.md#consent) for confirmation
 --spawn-roots PATHS     roots the directory typeahead may browse (`:`-separated)
 --codex-approval MODE   Codex child `--ask-for-approval` (never | on-request | on-failure | untrusted; default never)
 --codex-network MODE    Codex child sandbox network (on | off; default on)
---child-default-tools SPEC  Default child tools (--tools grammar; empty by default)
+--child-default-tools SPEC  Default child tools (e.g. 'mcp:cua-driver;dsh=' clears defaults for dsh)
 --codex-add-dirs PATHS  extra writable roots for Codex children (`:`-separated)
 --retire-legacy-mail    see the appendix (retire a previous MCP Agent Mail)
 --mail auto|update|keep what to do with a running ORRERY Mail (default keep; --update-mail / --keep-mail are aliases)
@@ -363,13 +410,24 @@ Do not attempt to repair these permission errors only with `chmod`. The deciding
 
 ## Upgrade
 
+Finish work or release active file reservations before updating protection settings; restart affected sessions together after the update. Preview the selected roots first.
+
 ```bash
 git pull
+./scripts/install.sh --dry-run
 ./scripts/install.sh
 ~/.agentstack/bin/agentstack-doctor
 ```
 
 The installer updates payloads and `VERSION`, reregisters services, and previews managed merges again. It validates and reuses the bundled ORRERY Mail candidate and state.
+
+After updating, restart running agents (Claude Code, Codex, dsh, Hermes, including persistent bots). Managed block instructions and the ORRERY Mail tool list (such as `show_files`) are loaded when a session starts, so a session keeps the pre-update versions until it restarts. If you decline the managed merge preview, the instructions are not updated either.
+
+### Reservation protection migration
+
+Top-level and delegated-child launches protect their selected physical working directory, preceded by ordered `AGENTSTACK_EXTRA_PROTECTED_ROOTS`. Git root discovery does not automatically enlarge protection. Namespace selection and the installed project key are unchanged. Install/update automatically selects process extras (including empty), installed extras (including empty), then the installed legacy `AGENTSTACK_PROTECTED_ROOTS` literal value and order exactly once, then empty. It never imports ambient shell/tmux legacy roots. The installer shows the source, value, and destination in `--dry-run` and stops before overwrite if legacy configuration is invalid or ambiguous.
+
+An empty extras marker is persisted, so an old list cannot be imported again. The old installed field is retained only for direct/unmanaged-hook compatibility; managed launches ignore it. A different nonempty shell/tmux legacy value still warns even when extras exist. `--reset-settings` keeps extras; `AGENTSTACK_EXTRA_PROTECTED_ROOTS=` deliberately clears them. Finish work or release active reservations before cutover, then restart affected sessions together after updating: relative reservation names use the first matching root. See [configuration and migration](configuration.en.md#reservation-protection-and-migration).
 
 ### What a re-install inherits
 
@@ -379,18 +437,18 @@ A re-install decides each setting in this order:
 2. the value the previous install wrote to `~/.agentstack/env.sh`
 3. the default
 
-A setting you changed from its default therefore survives `./scripts/install.sh` in a new terminal without the environment variable. This covers the project key and protected roots, the dashboard port (`AGENTSTACK_PORT`), the label prefix (`AGENTSTACK_LABEL_PREFIX`) and the ORRERY Mail launchd label derived from it, the terminal, the MCP URL, the service `PATH`, Python, the ORRERY Mail state root (where the database lives), service root and management socket, `AGENTSTACK_LANG` / `AGENTSTACK_MURMUR` / `AGENTSTACK_DELIVERABLE_ROOTS`, `AGENTSTACK_VAULT`, `AGENTSTACK_MANAGED_AGENTS_FILE`, the dashboard log and restart settings (`AGENTSTACK_DASHBOARD_LOG` / `_LOG_MAX_BYTES` / `_LOG_BACKUPS` / `_RESTART_DELAY`), spawn dirs / roots, the worktree root, the Codex child settings, `AGENTSTACK_CODEX_BIN`, portraits and the model catalogs. The canonical list is `AGENTSTACK_INHERITED_SETTINGS` in `hooks/project-context.sh`.
+A setting you changed from its default therefore survives `./scripts/install.sh` in a new terminal without the environment variable. This covers the project key and explicit extra protected roots, the dashboard port (`AGENTSTACK_PORT`), the label prefix (`AGENTSTACK_LABEL_PREFIX`) and the ORRERY Mail launchd label derived from it, the terminal, the MCP URL, the service `PATH`, Python, the ORRERY Mail state root (where the database lives), service root and management socket, `AGENTSTACK_LANG` / `AGENTSTACK_MURMUR` / `AGENTSTACK_DELIVERABLE_ROOTS`, `AGENTSTACK_VAULT`, `AGENTSTACK_MANAGED_AGENTS_FILE`, the dashboard log and restart settings (`AGENTSTACK_DASHBOARD_LOG` / `_LOG_MAX_BYTES` / `_LOG_BACKUPS` / `_RESTART_DELAY`), spawn dirs / roots, the worktree root, the Codex child settings, `AGENTSTACK_CODEX_BIN`, portraits and the model catalogs. The canonical list is `AGENTSTACK_INHERITED_SETTINGS` in `hooks/project-context.sh`.
 
-- **Only values you chose are inherited.** `env.sh` writes every value out, defaults included, so it also records which ones were chosen explicitly (`AGENTSTACK_CHOSEN_SETTINGS`), and the next install inherits only those. A value you never chose (a default written out, or the Python and PATH the installer found) follows the new default when a later release changes it. An `env.sh` from an earlier release has no such record; there a value that differs from today's default counts as chosen, except PATH and Python, which the installer always worked out itself. `AGENTSTACK_CODEX_BIN` also inherits the location the installer found (and searches again when it no longer runs).
+- **Saved values that differ from the current defaults are preserved.** This also applies when `AGENTSTACK_CHOSEN_SETTINGS` is missing or does not list the setting. Settings such as child terminal auto-open and the portrait folder are added to that list for subsequent updates. This includes `PATH` and Python. A setting already listed is inherited even when its value matches the current default. `AGENTSTACK_CODEX_BIN` also inherits the location the installer found (and searches again when it no longer runs). Protection extras are selected separately by the presence-aware migration order described above, regardless of `AGENTSTACK_CHOSEN_SETTINGS`.
 - To change a previous value, give that option or environment variable explicitly (for example `./scripts/install.sh --port 8771`).
-- **To put just one setting back to its default, give it explicitly empty** (for example `AGENTSTACK_VAULT= ./scripts/install.sh` or `./scripts/install.sh --codex-add-dirs ""`).
-- To put every chosen value back to its default, pass `--reset-settings` (or `AGENTSTACK_RESET_SETTINGS=1`). Where the data lives, and what the services running on it are called, are inherited even then: the project key, protected roots, the ORRERY Mail state root, service root and management socket, the label prefix, the ORRERY Mail launchd label and the MCP URL. Resetting those would leave the previous service registered while a second ORRERY Mail, under another name, started on the same database. Give them explicitly to change them (and stop the previous service yourself).
-- An environment variable equal to the value `env.sh` recorded is taken to come from a shell that sourced `env.sh`, or from ORRERY cockpit's update script, not as a new choice: it keeps the status it had, and `--reset-settings` resets it. A value passed as an option is always explicit. Against an `env.sh` from an earlier release, which has no record of choices, an equal value is still explicit, so a value you have always passed is not reset.
+- **To put just one setting back to its default, give it explicitly empty** (for example `AGENTSTACK_VAULT= ./scripts/install.sh` or `./scripts/install.sh --codex-add-dirs ""`). Removing that setting's value line from `env.sh` also restores the default unless you pass a value for this run. Removing only its name from `AGENTSTACK_CHOSEN_SETTINGS` still preserves a saved nondefault value.
+- To put every chosen value back to its default, pass `--reset-settings` (or `AGENTSTACK_RESET_SETTINGS=1`). Where the data lives, and what the services running on it are called, are inherited even then: the project key, explicitly configured extra protected roots, the ORRERY Mail state root, service root and management socket, the label prefix, the ORRERY Mail launchd label and the MCP URL. Resetting those would leave the previous service registered while a second ORRERY Mail, under another name, started on the same database. Give them explicitly to change them (and stop the previous service yourself). Explicit extra protected roots stay protected after reset; pass `AGENTSTACK_EXTRA_PROTECTED_ROOTS=` to clear them deliberately.
+- An environment variable equal to the value `env.sh` recorded is taken to come from a shell that sourced `env.sh`, or from ORRERY cockpit's update script, not as a new choice: the inheritance rules above apply, and `--reset-settings` resets it. A value passed as an option is always explicit. Against an `env.sh` from an earlier release, which has no record of choices, an equal value is still explicit, so a value you have always passed is not reset.
 - If the Python recorded last time is gone or too old, the installer says so and searches again (an explicit `AGENTSTACK_PYTHON` that cannot be used still stops the install).
 - `AGENTSTACK_CLAUDE_JSON` is not inherited. It is an override for installing into a sandbox; the next ordinary install writes `~/.claude.json`.
 - The ORRERY Mail service env (`AGENTSTACK_MAIL_ENV`) and database path (`AGENTSTACK_MAIL_DB`) are not inherited settings; they are derived again from the state root and render each time (below).
 
-The start of a dry-run prints the resolved project key, port, label prefix, terminal and MCP URL.
+The start of a dry-run prints the resolved project key, port, label prefix, terminal and MCP URL. When `AGENTSTACK_AUTO_OPEN_CHILD` or `AGENTSTACK_PORTRAITS_DIR` actually changes, it also shows the old → new value, including resets (an empty value appears as `(empty)`).
 
 If your shell sources `env.sh` at startup, its `AGENTSTACK_*` values count as explicit. After re-installing from another shell, open a new shell or source `env.sh` again before using a launcher or the installer.
 
@@ -474,6 +532,10 @@ The migration helper and service controller reject configurations that share a s
 ### Rollback
 
 The installer does not automatically switch back to the third-party version. If necessary, stop ORRERY Mail and recover manually with the migration and settings backups.
+
+## Optional mobile reader
+
+Normal installation and updates leave the mobile reader off and do not start a listener or Serve. To configure a dedicated, view-only route for the owner’s designated phone, follow [mobile setup](mobile.en.md). It uses legacy Telemetry API 30 or later; global mode is unsupported. Mail content opens only after authentication and a tap on one event. Device policy, real Serve and phone acceptance are separate operator steps.
 
 ## Related documentation
 

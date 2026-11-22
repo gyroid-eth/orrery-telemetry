@@ -45,6 +45,10 @@ DSH_OPT_IN=""
 HERMES_OPT_IN=""
 DSH_NODE="${AGENTSTACK_DSH_NODE:-}"
 MANAGED_SPAWN_CONFIG_SETTING="${AGENTSTACK_MANAGED_SPAWN_CONFIG:-}"
+RUNTIME_MODE_SETTING="${AGENTSTACK_RUNTIME_MODE:-}"
+FRESH_CONTEXT_SETTING="${AGENTSTACK_FRESH_CLIENT_CONTEXT:-}"
+FRESH_SOCKET_SETTING="${AGENTSTACK_FRESH_DASHBOARD_SOCKET:-}"
+DASHBOARD_ALLOWED_ORIGINS_SETTING="${AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS:-}"
 HARNESS_CACHE="${AGENTSTACK_HARNESS_CACHE:-}"
 INSTALL_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
 MAIL_DB_EXPLICIT="${AGENTSTACK_MAIL_DB+x}"
@@ -60,7 +64,7 @@ LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-}"
 TERMINAL="${AGENTSTACK_TERMINAL:-}"
 AUTO_OPEN_CHILD_SETTING="${AGENTSTACK_AUTO_OPEN_CHILD:-}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
-PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-}"
+EXTRA_PROTECTED_ROOTS="${AGENTSTACK_EXTRA_PROTECTED_ROOTS-}"
 DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
 LANG_SETTING="${AGENTSTACK_LANG:-}"
 MURMUR_SETTING="${AGENTSTACK_MURMUR:-}"
@@ -76,6 +80,7 @@ WORKTREE_ROOT_SETTING="${AGENTSTACK_WORKTREE_ROOT:-}"
 # installed env.sh > product default (approval `never`, network on, no extra
 # writable roots). Children run unattended, so the defaults avoid prompts
 # nobody is there to answer.
+CODEX_SANDBOX_SETTING="${AGENTSTACK_CODEX_SANDBOX:-}"
 CODEX_CHILD_APPROVAL_SETTING="${AGENTSTACK_CODEX_CHILD_APPROVAL:-}"
 CODEX_CHILD_CONFIG_OVERLAY_SETTING="${AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY:-}"
 CODEX_NETWORK_SETTING="${AGENTSTACK_CODEX_NETWORK:-}"
@@ -95,7 +100,10 @@ PORTRAITS_DIR_SETTING="${AGENTSTACK_PORTRAITS_DIR:-}"
 CUSTOM_PORTRAITS_SETTING="${AGENTSTACK_CUSTOM_PORTRAITS:-}"
 CLAUDE_MODELS_SETTING="${AGENTSTACK_CLAUDE_MODELS:-}"
 CODEX_MODELS_SETTING="${AGENTSTACK_CODEX_MODELS:-}"
+CODEX_DEFAULT_MODEL_SETTING="${AGENTSTACK_CODEX_DEFAULT_MODEL:-}"
+CODEX_DEFAULT_EFFORT_SETTING="${AGENTSTACK_CODEX_DEFAULT_EFFORT:-}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-}"
+WITH_MOBILE_PUSH=false
 PYTHON_CHOICE="${AGENTSTACK_PYTHON:-}"
 PYTHON_REQUESTED=""
 PYTHON_INHERITED=""
@@ -132,6 +140,7 @@ Options:
   --dry-run              Print planned actions without writing files
   -y, --assume-yes       Pre-approve MCP/settings/managed-block prompts only
   --dashboard-only       Tier0 footprint; install dashboard assets only
+  --with-mobile-push     Prepare optional phone notification dependencies (no permission or delivery)
   --scoped               Tier2 placeholder; no user-settings merge
   --enable-dsh           DeepSeek 表示と固定 dsh runtime を導入（子の起動なし）
   --enable-hermes        固定 Hermes を専用 managed root に導入（鍵なし）
@@ -177,7 +186,7 @@ Options:
                          existing env.sh, else auto)
   --reset-settings       Do not inherit settings from the existing env.sh:
                          anything not given explicitly goes back to its
-                         default. Kept even then: the project key, protected
+                         default. Kept even then: the project key, extra protected
                          roots, the ORRERY Mail state/service roots and
                          socket, the label prefix, the Mail launchd label and
                          the MCP URL. An empty explicit value (for example
@@ -195,7 +204,8 @@ Options:
                          Absolute path to a TOML fragment merged over every
                          macOS/Linux Codex child's config.toml (default:
                          existing env.sh, else disabled)
-  --child-default-tools SPEC  default child tools (same grammar as --tools; empty by default)
+  --child-default-tools SPEC  default child tools (same grammar as --tools; empty by default).
+                         Append ;claude=SPEC, ;codex=SPEC, ;dsh=SPEC or ;hermes=SPEC to override.
   --codex-network MODE   on or off: sandbox network access for Codex children
                          (default: existing env.sh, else on)
   --codex-bin PATH       Codex CLI executable used by the dashboard and child
@@ -260,6 +270,10 @@ while [[ $# -gt 0 ]]; do
       ASSUME_YES=1
       shift
       ;;
+    --with-mobile-push)
+      WITH_MOBILE_PUSH=true
+      shift
+      ;;
     --enable-hermes)
       HERMES_OPT_IN="enable"
       shift
@@ -309,7 +323,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --project-key)
       PROJECT_KEY="$2"
-      PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-$PROJECT_KEY}"
       shift 2
       ;;
     --port)
@@ -511,13 +524,63 @@ fi
 . "$PROJECT_CONTEXT_LIB"
 AGENTSTACK_LEGACY_PROJECT_KEY="$(agentstack_installed_env_value AGENTSTACK_PROJECT_KEY "$INSTALL_DIR/env.sh")"
 export AGENTSTACK_LEGACY_PROJECT_KEY
-PROJECT_KEY_INPUT="$PROJECT_KEY"
 PROJECT_KEY="$(agentstack_resolve_project_key "" "$INSTALL_DIR/env.sh" 0)"
-if [[ -z "$PROJECT_KEY" ]]; then
+if [[ -z "$PROJECT_KEY" && "${AGENTSTACK_RUNTIME_MODE:-$(agentstack_installed_env_value AGENTSTACK_RUNTIME_MODE "$INSTALL_DIR/env.sh")}" != fresh ]]; then
   echo "error: project key is required on first install; pass --project-key /absolute/path/to/project or set AGENTSTACK_PROJECT_KEY" >&2
   exit 2
 fi
-PROTECTED_ROOTS="$(agentstack_resolve_protected_roots "$PROJECT_KEY" "$PROJECT_KEY_INPUT" "$INSTALL_DIR/env.sh")"
+# Protection migration is installed-file-only. Presence (including empty) is
+# significant, and both installed fields are validated before any writes.
+# Ambient ROOTS is a computed session value and is never migration input.
+PROTECTION_ENV_READER="$REPO_ROOT/hooks/installed-env.py"
+INSTALLED_EXTRA_STATE=absent
+INSTALLED_EXTRA_PROTECTED_ROOTS=""
+INSTALLED_LEGACY_STATE=absent
+LEGACY_PROTECTED_ROOTS=""
+# A fresh install has no protection data to read. Do not require Python on PATH
+# before preflight can aggregate missing commands / an incompatible interpreter.
+# Existing settings still fail closed: no unreadable/invalid file is absence.
+if [[ -e "$INSTALL_DIR/env.sh" || -L "$INSTALL_DIR/env.sh" ]]; then
+  if [[ ! -f "$INSTALL_DIR/env.sh" ]]; then
+    echo "error: installed env.sh must be a readable regular file; installed settings were not changed" >&2
+    exit 2
+  fi
+  PROTECTION_READER_PYTHON="${AGENTSTACK_PYTHON:-python3}"
+  command -v "$PROTECTION_READER_PYTHON" >/dev/null 2>&1 || PROTECTION_READER_PYTHON=python3
+  if ! command -v "$PROTECTION_READER_PYTHON" >/dev/null 2>&1; then
+    echo "error: Python is required to validate installed protection settings; installed settings were not changed" >&2
+    exit 2
+  fi
+  INSTALLED_EXTRA_STATE="$("$PROTECTION_READER_PYTHON" "$PROTECTION_ENV_READER" state AGENTSTACK_EXTRA_PROTECTED_ROOTS "$INSTALL_DIR/env.sh")"
+  INSTALLED_EXTRA_PROTECTED_ROOTS="$("$PROTECTION_READER_PYTHON" "$PROTECTION_ENV_READER" value AGENTSTACK_EXTRA_PROTECTED_ROOTS "$INSTALL_DIR/env.sh")"
+  INSTALLED_LEGACY_STATE="$("$PROTECTION_READER_PYTHON" "$PROTECTION_ENV_READER" state AGENTSTACK_PROTECTED_ROOTS "$INSTALL_DIR/env.sh")"
+  LEGACY_PROTECTED_ROOTS="$("$PROTECTION_READER_PYTHON" "$PROTECTION_ENV_READER" value AGENTSTACK_PROTECTED_ROOTS "$INSTALL_DIR/env.sh")"
+fi
+PRESERVE_LEGACY_PROTECTED_ROOTS=false
+[[ "$INSTALLED_LEGACY_STATE" == absent ]] || PRESERVE_LEGACY_PROTECTED_ROOTS=true
+PROTECTION_MIGRATION=false
+if [[ "${AGENTSTACK_EXTRA_PROTECTED_ROOTS+x}" == x ]]; then
+  EXTRA_PROTECTED_ROOTS="$AGENTSTACK_EXTRA_PROTECTED_ROOTS"
+  EXTRA_PROTECTED_ROOTS_SOURCE="process AGENTSTACK_EXTRA_PROTECTED_ROOTS"
+elif [[ "$INSTALLED_EXTRA_STATE" != absent ]]; then
+  EXTRA_PROTECTED_ROOTS="$INSTALLED_EXTRA_PROTECTED_ROOTS"
+  EXTRA_PROTECTED_ROOTS_SOURCE="$INSTALL_DIR/env.sh:AGENTSTACK_EXTRA_PROTECTED_ROOTS"
+elif [[ "$INSTALLED_LEGACY_STATE" != absent ]]; then
+  EXTRA_PROTECTED_ROOTS="$LEGACY_PROTECTED_ROOTS"
+  EXTRA_PROTECTED_ROOTS_SOURCE="$INSTALL_DIR/env.sh:AGENTSTACK_PROTECTED_ROOTS"
+  PROTECTION_MIGRATION=true
+else
+  EXTRA_PROTECTED_ROOTS=""
+  EXTRA_PROTECTED_ROOTS_SOURCE="default (empty)"
+fi
+case "$EXTRA_PROTECTED_ROOTS" in
+  *$'\n'*|*$'\r'*) echo "error: AGENTSTACK_EXTRA_PROTECTED_ROOTS must be a single-line literal value; installed settings were not changed" >&2; exit 2 ;;
+esac
+if [[ -n "${AGENTSTACK_PROTECTED_ROOTS:-}" &&
+      "$AGENTSTACK_PROTECTED_ROOTS" != "$LEGACY_PROTECTED_ROOTS" ]]; then
+  printf 'warning: ambient AGENTSTACK_PROTECTED_ROOTS=%q differs from installed legacy value %q; ignoring ambient roots (never migrated)\n' \
+    "$AGENTSTACK_PROTECTED_ROOTS" "$LEGACY_PROTECTED_ROOTS" >&2
+fi
 
 # --dashboard-only copies no hooks/ and never launches a Codex child
 # (spawn_child.sh): nothing on that path needs hooks/codex-bin.sh, so it must
@@ -560,17 +623,16 @@ esac
 #
 # - Explicit includes an empty value: `AGENTSTACK_VAULT=` or `--codex-add-dirs ""`
 #   puts that one setting back to its default.
-# - env.sh writes every value out, defaults included, so it also records which
-#   were chosen (AGENTSTACK_CHOSEN_SETTINGS). Only those are inherited; a default
-#   written out follows the current default next time. An env.sh from before
-#   that record counts a value as chosen when it differs from today's default,
-#   except PATH and Python, which the installer always worked out itself.
+# - Keep saved nondefault values even when the choice record is absent or
+#   incomplete (#354). Record them for subsequent installs. A recorded choice
+#   equal to today's default remains a choice; removing a value or explicitly
+#   clearing it still returns that setting to its default.
 # - A value in the environment equal to what env.sh recorded is an echo of
 #   env.sh (cockpit's update.sh and some shell profiles source it), not a new
-#   choice: it keeps the status it had. An option is always a request. Only
+#   choice: normal inheritance or reset applies. An option is always a request. Only
 #   an env.sh with the record can be echoed; before it, the value is explicit.
 # - --reset-settings drops the previous choices. What names the data and the
-#   services running on it (project key, protected roots, the Mail state and
+#   services running on it (project key, extra protected roots, the Mail state and
 #   service roots and socket, the label prefix, the Mail launchd label, the MCP
 #   URL) is kept: resetting those left the old Mail job running on the same
 #   database next to a new one (review of #146).
@@ -633,7 +695,8 @@ resolve_setting() {
   elif [[ -n "$saved" ]] && {
     [[ "$mode" == kept ]] ||
       { [[ "$RESET_SETTINGS" != 1 ]] &&
-        { [[ "$mode" == found ]] || setting_previously_chosen "$name" "$saved" "$default"; }; }
+        { [[ "$mode" == found ]] || [[ "$saved" != "$default" ]] ||
+          setting_previously_chosen "$name" "$saved" "$default"; }; }
   }; then
     value="$saved"
     SETTING_SOURCE=saved
@@ -652,6 +715,10 @@ resolve_setting() {
 resolve_setting PORT AGENTSTACK_PORT 8770
 resolve_setting DSH_NODE AGENTSTACK_DSH_NODE "" kept
 resolve_setting MANAGED_SPAWN_CONFIG_SETTING AGENTSTACK_MANAGED_SPAWN_CONFIG ""
+resolve_setting RUNTIME_MODE_SETTING AGENTSTACK_RUNTIME_MODE legacy kept
+resolve_setting FRESH_CONTEXT_SETTING AGENTSTACK_FRESH_CLIENT_CONTEXT "" kept
+resolve_setting FRESH_SOCKET_SETTING AGENTSTACK_FRESH_DASHBOARD_SOCKET "" kept
+resolve_setting DASHBOARD_ALLOWED_ORIGINS_SETTING AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS ""
 resolve_setting LABEL_PREFIX AGENTSTACK_LABEL_PREFIX org.agentstack kept
 LABEL_PREFIX_SOURCE="$SETTING_SOURCE"
 resolve_setting TERMINAL AGENTSTACK_TERMINAL auto
@@ -672,6 +739,7 @@ resolve_setting AUTO_OPEN_CHILD_SETTING AGENTSTACK_AUTO_OPEN_CHILD 1
 resolve_setting SPAWN_DIRS_SETTING AGENTSTACK_SPAWN_DIRS
 resolve_setting SPAWN_ROOTS_SETTING AGENTSTACK_SPAWN_ROOTS
 resolve_setting WORKTREE_ROOT_SETTING AGENTSTACK_WORKTREE_ROOT "$INSTALL_DIR/worktrees"
+resolve_setting CODEX_SANDBOX_SETTING AGENTSTACK_CODEX_SANDBOX workspace-write
 resolve_setting CODEX_CHILD_APPROVAL_SETTING AGENTSTACK_CODEX_CHILD_APPROVAL never
 resolve_setting CODEX_CHILD_CONFIG_OVERLAY_SETTING AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY
 resolve_setting CODEX_NETWORK_SETTING AGENTSTACK_CODEX_NETWORK on
@@ -796,6 +864,8 @@ resolve_setting CUSTOM_PORTRAITS_SETTING AGENTSTACK_CUSTOM_PORTRAITS
 # An empty AGENTSTACK_CLAUDE_MODELS is itself a choice: the built-in list.
 resolve_setting CLAUDE_MODELS_SETTING AGENTSTACK_CLAUDE_MODELS
 resolve_setting CODEX_MODELS_SETTING AGENTSTACK_CODEX_MODELS
+resolve_setting CODEX_DEFAULT_MODEL_SETTING AGENTSTACK_CODEX_DEFAULT_MODEL
+resolve_setting CODEX_DEFAULT_EFFORT_SETTING AGENTSTACK_CODEX_DEFAULT_EFFORT
 
 # Pass the new settings as data, never interpolate them into Python source.
 export AGENTSTACK_CLAUDE_MODELS="$CLAUDE_MODELS_SETTING"
@@ -935,6 +1005,26 @@ say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
+# Show actual changes only for these documented, non-secret settings. Never
+# dump arbitrary saved settings: other values may contain credentials.
+report_setting_changes() {
+  [[ -f "$SETTINGS_ENV_FILE" ]] || return 0
+  local name before after
+  for name in AGENTSTACK_AUTO_OPEN_CHILD AGENTSTACK_PORTRAITS_DIR; do
+    before="$(agentstack_installed_env_value "$name" "$SETTINGS_ENV_FILE")"
+    case "$name" in
+      AGENTSTACK_AUTO_OPEN_CHILD)
+        before="${before:-1}"
+        after="$AUTO_OPEN_CHILD_SETTING"
+        ;;
+      AGENTSTACK_PORTRAITS_DIR) after="$PORTRAITS_DIR_SETTING" ;;
+    esac
+    if [[ "$before" != "$after" ]]; then
+      say "setting change: $name: ${before:-(empty)} -> ${after:-(empty)}"
+    fi
+  done
+}
+
 # Each `:`-separated entry must be absolute or start with `~` (the dashboard
 # expands `~` itself). A missing directory is only a warning: presets often
 # name checkouts that are cloned after the install.
@@ -973,6 +1063,10 @@ case "$AUTO_OPEN_CHILD_SETTING" in
     echo "error: AGENTSTACK_AUTO_OPEN_CHILD must be 0 or 1" >&2
     exit 2
     ;;
+esac
+case "$CODEX_SANDBOX_SETTING" in
+  read-only|workspace-write|danger-full-access) ;;
+  *) die "AGENTSTACK_CODEX_SANDBOX must be read-only, workspace-write or danger-full-access" ;;
 esac
 case "$CODEX_CHILD_APPROVAL_SETTING" in
   never|on-request|on-failure|untrusted) ;;
@@ -1243,10 +1337,26 @@ preflight_python() {
     return
   fi
   if [[ -n "$CHILD_DEFAULT_TOOLS_SETTING" ]] && ! "$PYTHON_BIN" \
-      "$REPO_ROOT/hooks/child_tools.py" parse --provider claude \
-      --tools "$CHILD_DEFAULT_TOOLS_SETTING" >/dev/null; then
-    preflight_error "--child-default-tools must use the --tools grammar"
+      "$REPO_ROOT/hooks/child_tools.py" validate-defaults -- "$CHILD_DEFAULT_TOOLS_SETTING"; then
+    preflight_error "--child-default-tools must use the --tools grammar, with optional ;provider=SPEC overrides"
   fi
+}
+
+preflight_codex_defaults() {
+  local model="${CODEX_DEFAULT_MODEL_SETTING:-}" effort="${CODEX_DEFAULT_EFFORT_SETTING:-}"
+  local family
+  family="$(printf '%s_' "$model" | tr '[:upper:]' '[:lower:]')"
+  family="${family%_}"
+  case "$family" in
+    ""|sol|terra|luna|astra) ;;
+    *) [[ ${#model} -le 128 && "$model" =~ ^gpt-[a-z0-9]+([._-][a-z0-9]+)*$ ]] || preflight_error "invalid AGENTSTACK_CODEX_DEFAULT_MODEL" ;;
+  esac
+  effort="$(printf '%s_' "$effort" | tr '[:upper:]' '[:lower:]')"
+  effort="${effort%_}"
+  case "$effort" in
+    ""|none|minimal|low|medium|high|xhigh|max|ultra) ;;
+    *) preflight_error "invalid AGENTSTACK_CODEX_DEFAULT_EFFORT" ;;
+  esac
 }
 
 normalize_path() {
@@ -1500,6 +1610,11 @@ mcp_endpoint_listening() {
 }
 
 preflight_agent_mail_port() {
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+    # Resolve the endpoint from the prepared context before probing it. The
+    # legacy default port is not evidence about a fresh installation.
+    return
+  fi
   if [[ "$PREFLIGHT_SKIP_PORT" == "1" ]]; then
     say "preflight: ORRERY Mail port check skipped by AGENTSTACK_PREFLIGHT_SKIP_PORT=1"
     return
@@ -1552,6 +1667,7 @@ run_preflight() {
   preflight_required_commands
   preflight_platform
   preflight_python
+  preflight_codex_defaults
   preflight_target_writable
   preflight_agent_mail_port
   preflight_finish
@@ -1667,7 +1783,99 @@ raise SystemExit(1)
 PY
 }
 
+fresh_environment_json() {
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" != fresh ]]; then printf '%s\n' '{}'; return; fi
+  "$PYTHON_BIN" - "$INSTALL_DIR" "$FRESH_CONTEXT_SETTING" "$FRESH_SOCKET_SETTING" \
+    "${AGENTSTACK_FRESH_SERVER_CONFIG:-}" "${ORRERY_FRESH_MAIL_INSTANCE_ID:-}" <<'PY'
+import json,sys
+home,context,socket,config,instance=sys.argv[1:]
+print(json.dumps(dict(AGENTSTACK_HOME=home,AGENTSTACK_RUNTIME_MODE='fresh',
+    AGENTSTACK_FRESH_CLIENT_CONTEXT=context,AGENTSTACK_FRESH_DASHBOARD_SOCKET=socket,
+    AGENTSTACK_FRESH_SERVER_CONFIG=config,ORRERY_FRESH_MAIL_INSTANCE_ID=instance)))
+PY
+}
+
+prepare_fresh_install() {
+  [[ -n "$FRESH_CONTEXT_SETTING" && -n "$FRESH_SOCKET_SETTING" ]] || die FRESH_HOST_PREPARATION_REQUIRED
+  [[ -z "${AGENTSTACK_CLIENT_CONFIG:-}" && -z "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}" ]] || die FRESH_CONTEXT_CONFLICT
+  # The same configured Python runs the installed dashboard, watcher and
+  # host wrapper. A source-only projection cannot prove that runtime exists.
+  "$PYTHON_BIN" -c 'from agentstack_mail.fresh_client import startup_projection; from agentstack_mail.fresh_targets import Targets' \
+    >/dev/null 2>&1 || die FRESH_RUNTIME_PYTHON_UNAVAILABLE
+  local projected
+  projected="$(PYTHONPATH="$REPO_ROOT/packages/agentstack_mail/src" "$PYTHON_BIN" - \
+    "$FRESH_CONTEXT_SETTING" "$FRESH_SOCKET_SETTING" "$REPO_ROOT/bin/lib/runtime_tmux.py" \
+    "${AGENTSTACK_MCP_URL:-}" <<'PY'
+import runpy,shlex,sys
+from pathlib import Path
+from agentstack_mail.fresh_client import startup_projection
+try:
+    p=startup_projection(sys.argv[1])
+    if sys.argv[4] and sys.argv[4]!=p['endpoint']:raise ValueError
+    runpy.run_path(sys.argv[3])['validate_socket'](Path(sys.argv[2]))
+except Exception:
+    raise SystemExit('FRESH_INSTALL_PREPARATION_INVALID') from None
+for k,v in dict(AGENTSTACK_FRESH_SERVER_CONFIG=p['server_config'],
+    ORRERY_FRESH_MAIL_INSTANCE_ID=p['mail_instance_id'],MCP_URL=p['endpoint'],
+    NATIVE_MAIL_STATE_ROOT=str(Path(p['server_config']).parent)).items():
+    print('export '+k+'='+shlex.quote(v))
+PY
+)" || die FRESH_INSTALL_PREPARATION_INVALID
+  eval "$projected"
+  export AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_FRESH_CLIENT_CONTEXT="$FRESH_CONTEXT_SETTING"
+  export AGENTSTACK_FRESH_DASHBOARD_SOCKET="$FRESH_SOCKET_SETTING"
+  export AGENTSTACK_INSTALL_FRESH_ENV="$(fresh_environment_json)"
+}
+
+resolve_fresh_mail_connection() {
+  local render_id saved_env saved_mode saved_deployment
+  NATIVE_MAIL_ENROLL_AVAILABLE=false
+  MAIL_DB="$NATIVE_MAIL_STATE_ROOT/storage.sqlite3"
+  render_id="$(native_mail_render_id "$NATIVE_MAIL_SOURCE_ID" "$NATIVE_MAIL_VENV" "$MCP_URL" "$NATIVE_MAIL_STATE_ROOT")"
+  NATIVE_MAIL_ENV="$NATIVE_MAIL_SERVICE_ROOT/renders/fresh-$NATIVE_MAIL_SOURCE_ID-$render_id/service.env"
+  NATIVE_MAIL_RUNNER="$(dirname "$NATIVE_MAIL_ENV")/run-agentstack-mail.sh"
+  NATIVE_MAIL_DEPLOYMENT="$(dirname "$NATIVE_MAIL_ENV")/deployment.json"
+  NATIVE_MAIL_EXISTING=false
+  PROVISION_NATIVE_MAIL=true
+  if mcp_endpoint_listening; then
+    saved_mode="$(agentstack_installed_env_value AGENTSTACK_RUNTIME_MODE "$ENV_FILE")"
+    saved_env="$(agentstack_installed_env_value AGENTSTACK_MAIL_ENV "$ENV_FILE")"
+    [[ "$saved_mode" == fresh && -n "$saved_env" ]] || die FRESH_SERVICE_FOREIGN_ENDPOINT
+    [[ "$(agentstack_installed_env_value AGENTSTACK_FRESH_SERVER_CONFIG "$ENV_FILE")" == "$AGENTSTACK_FRESH_SERVER_CONFIG" ]] || die FRESH_SERVICE_CONFIG_MISMATCH
+    [[ "$MAIL_UPDATE_MODE" == keep ]] || die FRESH_MAIL_UPDATE_REQUIRES_OPERATOR_STOP
+    NATIVE_MAIL_ENV="$saved_env";NATIVE_MAIL_RUNNER="$(dirname "$saved_env")/run-agentstack-mail.sh"
+    NATIVE_MAIL_DEPLOYMENT="$(dirname "$saved_env")/deployment.json"
+    native_mailctl "$NATIVE_MAIL_ENV" "$NATIVE_MAIL_RUNNER" status >/dev/null || die FRESH_SERVICE_FOREIGN_ENDPOINT
+    saved_deployment="$("$PYTHON_BIN" - "$NATIVE_MAIL_DEPLOYMENT" "$NATIVE_MAIL_ENV" \
+      "$NATIVE_MAIL_STATE_ROOT" "$MCP_URL" "$AGENTSTACK_FRESH_SERVER_CONFIG" "$ORRERY_FRESH_MAIL_INSTANCE_ID" <<'PY'
+import shlex,sys
+from pathlib import Path
+from agentstack_mail.fresh_runtime import _read_private
+try:
+    value=_read_private(Path(sys.argv[1]))
+    if (value['kind'],value['runtime_mode'],value['service_env'],value['state_root'],value['mcp_url'],
+            value['fresh_config'],value['mail_instance_id'])!=('orrery-mail-deployment-v1','fresh',*sys.argv[2:]):raise ValueError
+    candidate=Path(value['candidate_venv'])
+    if not candidate.is_absolute() or not (candidate/'bin/python').is_file():raise ValueError
+    fields=dict(NATIVE_MAIL_VENV=str(candidate),NATIVE_MAIL_SOURCE_ID=value['source_id'])
+except Exception:raise SystemExit('FRESH_SERVICE_DEPLOYMENT_INVALID') from None
+for key,item in fields.items():print('export '+key+'='+shlex.quote(item))
+PY
+)" || die FRESH_SERVICE_DEPLOYMENT_INVALID
+    eval "$saved_deployment"
+    NATIVE_MAIL_ENROLL_BIN=""
+    NATIVE_MAIL_EXISTING=true
+    PROVISION_NATIVE_MAIL=false
+  fi
+  MAIL_ENV="$NATIVE_MAIL_ENV"
+  AGENT_MAIL_ENV_RESULT="$MAIL_ENV"
+}
+
 resolve_native_mail_connection() {
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+    resolve_fresh_mail_connection
+    return
+  fi
   local expected_db resolved_db database_url explicit_db render_id explicit_mail_env
   expected_db="$(normalize_path "$NATIVE_MAIL_STATE_ROOT/storage.sqlite3")"
   NATIVE_MAIL_STATE_ROOT="$(normalize_path "$NATIVE_MAIL_STATE_ROOT")"
@@ -2047,6 +2255,10 @@ validate_repo_assets() {
     [[ -f "$REPO_ROOT/hooks/settings.template.json" ]] || die "missing hooks/settings.template.json"
     [[ -d "$REPO_ROOT/skills" ]] || die "missing skills directory"
     [[ -f "$REPO_ROOT/claude/CLAUDE.md" ]] || die "missing claude/CLAUDE.md"
+    for source in templates/fresh/claude/CLAUDE.md templates/fresh/codex/AGENTS.md \
+        integrations/codex_app/schemas/migrations/001_delivery_state.sql; do
+      [[ -f "$REPO_ROOT/$source" ]] || die "missing fresh preparation payload: $source"
+    done
   fi
   [[ -f "$MERGE_SETTINGS_SCRIPT" ]] || die "missing scripts/lib/merge_settings.py"
   [[ -f "$MERGE_CLAUDE_MCP_SCRIPT" ]] || die "missing scripts/lib/merge_claude_mcp.py"
@@ -2300,12 +2512,14 @@ RUNTIME_SCHEMA_SOURCE="$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/s
 RUNTIME_FIXTURE_SOURCE="$REPO_ROOT/packages/agentstack_mail/fixtures/global-server-s2a.json"
 RUNTIME_CLIENT_CONTRACT_SOURCES=(
   "$REPO_ROOT/bin/lib/instruction_blocks.py"
+  "$REPO_ROOT/bin/lib/harness_instructions.md"
   "$REPO_ROOT/bin/lib/instruction_contract.json"
   "$REPO_ROOT/bin/lib/instruction_templates.json"
   "$REPO_ROOT/scripts/codex_plugin_trust.py"
   "$REPO_ROOT/scripts/codex-reservation-status.py"
   "$REPO_ROOT/scripts/build-codex-app-marketplace.py"
   "$REPO_ROOT/bin/lib/runtime_delivery.py"
+  "$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/show_files.py"
   "$REPO_ROOT/bin/lib/runtime_operator.py"
   "$REPO_ROOT/bin/lib/runtime_observation.py"
   "$REPO_ROOT/bin/lib/runtime_tmux.py"
@@ -2377,7 +2591,7 @@ copy_core_tree() {
 # this, hooks/spawn_child.sh silently falls back to the shared endpoint and the
 # child must read its own token instead of the proxy injecting it.
 #
-# Only the runtime subset ships here (the runner plus the package it imports).
+# The runtime subset and schemas also support explicit fresh hook preparation.
 # The full optional bridge — daemon, launchd, marketplace — still comes from
 # scripts/install-codex-app-integration.sh into this same directory.
 install_child_mcp_proxy() {
@@ -2398,7 +2612,7 @@ import sys
 
 source, dest = (pathlib.Path(p) for p in sys.argv[1:3])
 ignore = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo")
-for name in ("plugin", "src"):
+for name in ("plugin", "src", "schemas"):
     src = source / name
     if not src.is_dir():
         continue
@@ -2447,6 +2661,7 @@ PYNODE
   local args=(--repo "$REPO_ROOT" --install "$INSTALL_DIR" --node "$DSH_NODE" --python "$PYTHON_BIN")
   [[ "$DRY_RUN" != true ]] || args+=(--dry-run)
   [[ -z "$HARNESS_CACHE" ]] || args+=(--cache "$HARNESS_CACHE")
+  [[ -z "${MANAGED_SPAWN_CONFIG_SETTING:-}" ]] || args+=(--managed-spawn-config "$MANAGED_SPAWN_CONFIG_SETTING")
   for harness in dsh hermes; do
     if [[ "$harness" == dsh ]]; then choice="${DSH_OPT_IN:-keep}"; else choice="${HERMES_OPT_IN:-keep}"; fi
     "$PYTHON_BIN" "$SCRIPT_DIR/lib/managed_harness_install.py" \
@@ -2460,12 +2675,32 @@ install_payload() {
     copy_tree "$REPO_ROOT/skills" "$SKILLS_DIR"
     copy_tree "$REPO_ROOT/codex" "$INSTALL_DIR/codex"
     copy_tree "$REPO_ROOT/claude" "$INSTALL_DIR/claude"
+    copy_tree "$REPO_ROOT/templates/fresh" "$INSTALL_DIR/templates/fresh"
+    plan "install explicit fresh hook preparation helpers -> $INSTALL_DIR/scripts"
+    if [[ "$DRY_RUN" != true ]]; then
+      mkdir -p "$INSTALL_DIR/scripts"
+      cp "$SCRIPT_DIR/codex_plugin_trust.py" "$SCRIPT_DIR/build-codex-app-marketplace.py" "$INSTALL_DIR/scripts/"
+    fi
     install_child_mcp_proxy
   else
     plan "skip hooks copy for --dashboard-only"
     plan "skip skills copy for --dashboard-only"
+    # Balance and native credential readers use the same internal reference.
+    plan "copy internal credential reader -> $HOOKS_DIR/llm_secret_reader.py"
+    if [[ "$DRY_RUN" != true ]]; then
+      mkdir -p "$HOOKS_DIR"
+      cp "$REPO_ROOT/hooks/llm_secret_reader.py" "$HOOKS_DIR/llm_secret_reader.py"
+      cp "$REPO_ROOT/hooks/native_connections.py" "$HOOKS_DIR/native_connections.py"
+    fi
   fi
   copy_core_tree "$REPO_ROOT/dashboard" "$DASHBOARD_DIR" "dashboard"
+  # agentctl validates protection settings even in dashboard-only installs,
+  # which intentionally do not install the hooks tree.
+  plan "copy literal protection reader -> $DASHBOARD_DIR/installed-env.py"
+  if [[ "$DRY_RUN" != true ]]; then
+    mkdir -p "$DASHBOARD_DIR"
+    cp "$REPO_ROOT/hooks/installed-env.py" "$DASHBOARD_DIR/installed-env.py"
+  fi
   plan "copy VERSION -> $INSTALL_DIR/VERSION"
   if [[ "$DRY_RUN" != true ]]; then
     cp "$REPO_ROOT/VERSION" "$INSTALL_DIR/VERSION"
@@ -2481,6 +2716,7 @@ install_payload() {
     cp "$SCRIPT_DIR/lib/mcp_endpoint.py" "$BIN_DIR/lib/mcp_endpoint.py"
     cp "$SCRIPT_DIR/lib/mail_required_features.json" "$BIN_DIR/lib/mail_required_features.json"
     cp "$SCRIPT_DIR/lib/mail_update_notice.py" "$BIN_DIR/lib/mail_update_notice.py"
+    cp "$SCRIPT_DIR/lib/install_examples.py" "$BIN_DIR/lib/install_examples.py"
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
     cp "$REPO_ROOT/bin/lib/runtime_client.py" "$BIN_DIR/lib/runtime_client.py"
@@ -2511,6 +2747,9 @@ install_payload() {
     cp "$REPO_ROOT/bin/agentstack-persistent-deliver" "$BIN_DIR/agentstack-persistent-deliver"
     cp "$REPO_ROOT/bin/agentstack-preregister-child" "$BIN_DIR/agentstack-preregister-child"
     cp "$REPO_ROOT/bin/agentstack-await-reply" "$BIN_DIR/agentstack-await-reply"
+    # Phone access helper; it creates no launchd job until the person turns
+    # Phone access on (cockpit Settings or `agentstack-mobile apply`).
+    cp "$REPO_ROOT/bin/agentstack-mobile" "$BIN_DIR/agentstack-mobile"
     cp "$REPO_ROOT/bin/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-codex-bootstrap"
     cp "$REPO_ROOT/bin/agentstack-resume" "$BIN_DIR/agentstack-resume"
     cp "$REPO_ROOT/bin/agentstack-purge-child-resume" "$BIN_DIR/agentstack-purge-child-resume"
@@ -2522,7 +2761,7 @@ install_payload() {
       "$BIN_DIR/agentstack-merge-claude-mcp" \
       "$BIN_DIR/agent-start" "$BIN_DIR/agent-start-codex" "$BIN_DIR/agentstack-reregister" "$BIN_DIR/agentstack-enroll" \
       "$BIN_DIR/agentstack-persistent" "$BIN_DIR/agentstack-persistent-deliver" \
-      "$BIN_DIR/agentstack-preregister-child" "$BIN_DIR/agentstack-await-reply" \
+      "$BIN_DIR/agentstack-preregister-child" "$BIN_DIR/agentstack-await-reply" "$BIN_DIR/agentstack-mobile" \
       "$BIN_DIR/agentstack-codex-bootstrap" "$BIN_DIR/agentstack-resume" "$BIN_DIR/agentstack-purge-child-resume" "$BIN_DIR/agentstack-codex-setup" "$BIN_DIR/agentstack-claude-setup" \
       "$BIN_DIR/agentstack-mailctl"
   fi
@@ -2801,16 +3040,27 @@ write_env_file() {
   if [[ "$DRY_RUN" == true ]]; then
     return
   fi
+  local fresh_env='{}'
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then fresh_env="$(fresh_environment_json)"; fi
   umask 077
+  AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS="${EXTRA_PROTECTED_ROOTS-}" \
+  AGENTSTACK_INSTALL_LEGACY_PROTECTED_ROOTS="${LEGACY_PROTECTED_ROOTS-}" \
+  AGENTSTACK_INSTALL_PRESERVE_LEGACY_PROTECTED_ROOTS="${PRESERVE_LEGACY_PROTECTED_ROOTS:-false}" \
+  AGENTSTACK_INSTALL_FRESH_ENV="$fresh_env" \
+  AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL="${CODEX_DEFAULT_MODEL_SETTING:-}" \
+  AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT="${CODEX_DEFAULT_EFFORT_SETTING:-}" \
+  AGENTSTACK_INSTALL_DASHBOARD_ORIGINS="${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}" \
   "$PYTHON_BIN" - "$ENV_FILE" <<PY
 import os
 import pathlib
 import shlex
 import sys
+import tempfile
 
 path = pathlib.Path(sys.argv[1])
 values = {
     "AGENTSTACK_PORT": "$PORT",
+    "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS": os.environ.get("AGENTSTACK_INSTALL_DASHBOARD_ORIGINS", ""),
     "AGENTSTACK_LABEL_PREFIX": "$LABEL_PREFIX",
     # An install that chose its own label prefix gets its own mail service
     # label too. Otherwise agentstack-mailctl falls back to the built-in
@@ -2825,13 +3075,14 @@ values = {
     "AGENTSTACK_TERMINAL": "$TERMINAL",
     "AGENTSTACK_AUTO_OPEN_CHILD": "$AUTO_OPEN_CHILD_SETTING",
     "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
-    "AGENTSTACK_PROTECTED_ROOTS": "$PROTECTED_ROOTS",
+    "AGENTSTACK_EXTRA_PROTECTED_ROOTS": os.environ["AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS"],
     "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
     "AGENTSTACK_LANG": "$LANG_SETTING",
     "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
     "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
     "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
     "AGENTSTACK_WORKTREE_ROOT": "$WORKTREE_ROOT_SETTING",
+    "AGENTSTACK_CODEX_SANDBOX": "$CODEX_SANDBOX_SETTING",
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
     "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
@@ -2843,6 +3094,8 @@ values = {
     "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
     "AGENTSTACK_CLAUDE_MODELS": os.environ.get("AGENTSTACK_CLAUDE_MODELS", ""),
     "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
+    "AGENTSTACK_CODEX_DEFAULT_MODEL": os.environ["AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL"],
+    "AGENTSTACK_CODEX_DEFAULT_EFFORT": os.environ["AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT"],
     "AGENTSTACK_DSH_NODE": "$DSH_NODE",
     "AGENTSTACK_MANAGED_SPAWN_CONFIG": "$MANAGED_SPAWN_CONFIG_SETTING",
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
@@ -2861,8 +3114,8 @@ values = {
     "AGENTSTACK_RUNTIME_MODE": "${AGENTSTACK_RUNTIME_MODE:-legacy}",
     "AGENTSTACK_GLOBAL_SERVER_CONFIG": "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}",
     "AGENTSTACK_PATH": "$PATH_VALUE",
-    # Which of the values above were chosen, not written-out defaults: only
-    # these are inherited by the next install.
+    # Record chosen values; the next install also preserves saved nondefaults
+    # even when their names are absent from this list.
     "AGENTSTACK_CHOSEN_SETTINGS": "$CHOSEN_SETTINGS",
 }
 values.update({
@@ -2870,11 +3123,25 @@ values.update({
     "AGENTSTACK_MAIL_STATE_ROOT": "$NATIVE_MAIL_STATE_ROOT",
     "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "$MAIL_HTTP_BEARER_MODE",
 })
+if os.environ["AGENTSTACK_INSTALL_PRESERVE_LEGACY_PROTECTED_ROOTS"] == "true":
+    values.update({"AGENTSTACK_PROTECTED_ROOTS": os.environ["AGENTSTACK_INSTALL_LEGACY_PROTECTED_ROOTS"]})
+if values['AGENTSTACK_RUNTIME_MODE']=='fresh':
+    values.update(__import__('json').loads(os.environ['AGENTSTACK_INSTALL_FRESH_ENV']))
+    values['AGENTSTACK_MAIL_RUNNER'] = "$NATIVE_MAIL_RUNNER"
 lines = ["# Generated by ORRERY Telemetry install.sh", "# Do not put secrets in this file.", ""]
 for key, value in values.items():
     lines.append(f"export {key}={shlex.quote(value)}")
-path.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
-path.chmod(0o600)
+fd, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write("\\n".join(lines) + "\\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
 PY
 }
 
@@ -3076,12 +3343,29 @@ initialize_native_mail_state() {
     die "ORRERY Mail bootstrap did not create its canonical database/archive"
 }
 
+write_fresh_mail_runner() {
+  plan "render prepared fresh Mail runner $NATIVE_MAIL_RUNNER"
+  [[ "$DRY_RUN" != true ]] || return
+  mkdir -p "$(dirname "$NATIVE_MAIL_ENV")" "$NATIVE_MAIL_SERVICE_ROOT/runtime"
+  "$PYTHON_BIN" - "$NATIVE_MAIL_ENV" "$AGENTSTACK_FRESH_SERVER_CONFIG" "$ORRERY_FRESH_MAIL_INSTANCE_ID" <<'PY'
+from pathlib import Path
+import sys
+path=Path(sys.argv[1])
+payload='AGENTSTACK_RUNTIME_MODE=fresh\nAGENTSTACK_FRESH_SERVER_CONFIG='+sys.argv[2]+'\nORRERY_FRESH_MAIL_INSTANCE_ID='+sys.argv[3]+'\n'
+if '\n' in sys.argv[2] or '\r' in sys.argv[2]:raise SystemExit('FRESH_SERVICE_CONFIG_INVALID')
+if path.exists() and path.read_text()!=payload:raise SystemExit('FRESH_SERVICE_RENDER_CONFLICT')
+path.write_text(payload);path.chmod(0o600)
+PY
+  render_native_mail_runner
+}
+
 render_native_mail_runner() {
   "$PYTHON_BIN" - "$NATIVE_MAIL_RUNNER" \
     "$NATIVE_MAIL_VENV/bin/agentstack-mail-service" \
     "$NATIVE_MAIL_VENV/bin/agentstack-mail" "$NATIVE_MAIL_ENV" \
     "$NATIVE_MAIL_STATE_ROOT" "$NATIVE_MAIL_SOURCE_ID" "$NATIVE_MAIL_VENV" \
-    "$MCP_URL" "$NATIVE_MAIL_ENROLL_BIN" "$NATIVE_MAIL_DEPLOYMENT" "$BIN_DIR/lib/runtime_client.py" "$PYTHON_BIN" "${AGENTSTACK_RUNTIME_MODE:-legacy}" <<'PY'
+    "$MCP_URL" "$NATIVE_MAIL_ENROLL_BIN" "$NATIVE_MAIL_DEPLOYMENT" "$BIN_DIR/lib/runtime_client.py" "$PYTHON_BIN" "${AGENTSTACK_RUNTIME_MODE:-legacy}" \
+    "${AGENTSTACK_FRESH_SERVER_CONFIG:-}" "${ORRERY_FRESH_MAIL_INSTANCE_ID:-}" <<'PY'
 import json
 import pathlib
 import shlex
@@ -3101,6 +3385,8 @@ import sys
     runtime_client,
     python_bin,
     runtime_mode,
+    fresh_config,
+    fresh_instance,
 ) = sys.argv[1:]
 command = [
     service, "foreground",
@@ -3110,6 +3396,11 @@ command = [
 ]
 if runtime_mode == "global":
     command = [python_bin, runtime_client, "service-exec", *command]
+elif runtime_mode == 'fresh':
+    from urllib.parse import urlsplit
+    port=urlsplit(mcp_url).port
+    command=[service,'foreground','--server-executable',str(pathlib.Path(candidate_venv)/'bin/python'),
+        '--env-file',env_file,'--state-root',state_root,'--fresh-config',fresh_config,'--fresh-port',str(port)]
 payload = "\n".join([
     "#!/usr/bin/env bash",
     "set -u",
@@ -3147,6 +3438,8 @@ deployment = {
     "state_root": state_root,
     "mcp_url": mcp_url,
 }
+if runtime_mode == 'fresh':
+    deployment.update(runtime_mode='fresh',fresh_config=fresh_config,mail_instance_id=fresh_instance)
 deployment_payload = json.dumps(
     deployment, sort_keys=True, separators=(",", ":")
 ) + "\n"
@@ -3750,6 +4043,14 @@ update_native_mail() {
 
 ensure_native_agentstack_mail() {
   AGENT_MAIL_NAME_CAPABILITY_JSON='{"status":"honored","evidence":"agentstack-cutover-profile","enforcement_mode":"passthrough","mail_dir":"","detail":"ORRERY Mail service env requires passthrough","warning":""}'
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+    if [[ "$NATIVE_MAIL_EXISTING" != true ]]; then
+      ensure_native_mail_candidate
+      write_fresh_mail_runner
+      if [[ "$DRY_RUN" != true ]]; then native_mailctl "$NATIVE_MAIL_ENV" "$NATIVE_MAIL_RUNNER" start; fi
+    fi
+    return
+  fi
   if [[ "$NATIVE_MAIL_EXISTING" == true ]]; then
     if [[ "$MAIL_UPDATE_PLANNED" == true ]]; then
       update_native_mail
@@ -4244,6 +4545,10 @@ AGENTSTACK_RUNTIME_DIR=$RUNTIME_DIR
 AGENTSTACK_RUNTIME_MODE=${AGENTSTACK_RUNTIME_MODE:-legacy}
 AGENTSTACK_GLOBAL_SERVER_CONFIG=${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}
 ENVLIST
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+    printf 'AGENTSTACK_FRESH_SERVER_CONFIG=%s\n' "$AGENTSTACK_FRESH_SERVER_CONFIG"
+    printf 'AGENTSTACK_PYTHON=%s\n' "$PYTHON_BIN"
+  fi
 } # end mail_watcher_environment
 
 render_mail_watcher_unit() {
@@ -4282,6 +4587,9 @@ plist = {
     "StandardErrorPath": logfile,
     "EnvironmentVariables": env,
 }
+if env.get('AGENTSTACK_RUNTIME_MODE')=='fresh':
+    plist['ProgramArguments'] = ['/usr/bin/env','-u','AGENTSTACK_FRESH_CLIENT_CONTEXT',
+        *plist['ProgramArguments'],'--fresh-config',env['AGENTSTACK_FRESH_SERVER_CONFIG']]
 path = pathlib.Path(dst)
 tmp = path.with_suffix(path.suffix + ".tmp")
 tmp.write_bytes(plistlib.dumps(plist))
@@ -4311,7 +4619,11 @@ for line in env_blob.splitlines():
     if "=" in line:
         key, value = line.split("=", 1)
         print(f"Environment={key}={quote(value)}")
-print(f"ExecStart=/bin/bash {quote(script)}")
+arguments='/bin/bash '+quote(script)
+values=dict(line.split('=',1) for line in env_blob.splitlines() if '=' in line)
+if values.get('AGENTSTACK_RUNTIME_MODE')=='fresh':
+    arguments = '/usr/bin/env -u AGENTSTACK_FRESH_CLIENT_CONTEXT '+arguments+' --fresh-config '+quote(values['AGENTSTACK_FRESH_SERVER_CONFIG'])
+print('ExecStart='+arguments)
 PY_UNIT
     printf 'Restart=always\nRestartSec=5\n'
     printf 'StandardOutput=append:%s\nStandardError=append:%s\n\n' \
@@ -4480,6 +4792,7 @@ render_launchd_plist() {
       __RUNTIME_MODE__ "${AGENTSTACK_RUNTIME_MODE:-legacy}"
       __GLOBAL_SERVER_CONFIG__ "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}"
       __PORT__ "$PORT"
+      __DASHBOARD_ALLOWED_ORIGINS__ "${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}"
       __MAIL_DB__ "$MAIL_DB"
       __MAIL_ENV__ "$MAIL_ENV"
       __MAIL_HOME__ "$MAIL_HOME"
@@ -4489,7 +4802,7 @@ render_launchd_plist() {
       __TERMINAL__ "$TERMINAL"
       __AUTO_OPEN_CHILD__ "$AUTO_OPEN_CHILD_SETTING"
       __PROJECT_KEY__ "$PROJECT_KEY"
-      __PROTECTED_ROOTS__ "$PROTECTED_ROOTS"
+      __EXTRA_PROTECTED_ROOTS__ "$EXTRA_PROTECTED_ROOTS"
       __DELIVERABLE_ROOTS__ "$DELIVERABLE_ROOTS"
       __LANG__ "$LANG_SETTING"
       __MURMUR__ "$MURMUR_SETTING"
@@ -4505,6 +4818,8 @@ render_launchd_plist() {
       __PORTRAITS_DIR__ "$PORTRAITS_DIR_SETTING"
       __CUSTOM_PORTRAITS__ "$CUSTOM_PORTRAITS_SETTING"
       __CODEX_MODELS__ "$CODEX_MODELS_SETTING"
+      __CODEX_DEFAULT_MODEL__ "$CODEX_DEFAULT_MODEL_SETTING"
+      __CODEX_DEFAULT_EFFORT__ "$CODEX_DEFAULT_EFFORT_SETTING"
       __HOOKS_DIR__ "$HOOKS_DIR"
       __RUNTIME_DIR__ "$RUNTIME_DIR"
       __PERSISTENT_PROFILES_DIR__ "$PERSISTENT_PROFILES_DIR"
@@ -4542,6 +4857,11 @@ overlay_entry = (
     + "</string>\n"
 )
 text = text.replace(overlay_marker, overlay_entry + overlay_marker)
+if repl.get('__RUNTIME_MODE__')=='fresh':
+    import json,plistlib
+    data=plistlib.loads(text.encode())
+    data['EnvironmentVariables'].update(json.loads(os.environ['AGENTSTACK_INSTALL_FRESH_ENV']))
+    text=plistlib.dumps(data).decode()
 tmp = dst.with_suffix(dst.suffix + ".tmp")
 tmp.write_text(text, encoding="utf-8")
 tmp.replace(dst)
@@ -4556,6 +4876,10 @@ render_systemd_unit() {
   plan "render systemd user unit $unit"
   if [[ "$DRY_RUN" != true ]]; then
     mkdir -p "$dir"
+    AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS="${EXTRA_PROTECTED_ROOTS-}" \
+    AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL="${CODEX_DEFAULT_MODEL_SETTING:-}" \
+    AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT="${CODEX_DEFAULT_EFFORT_SETTING:-}" \
+    AGENTSTACK_INSTALL_DASHBOARD_ORIGINS="${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}" \
     "$PYTHON_BIN" - "$unit" <<PY
 import os
 import pathlib
@@ -4564,6 +4888,7 @@ import sys
 path = pathlib.Path(sys.argv[1])
 env = {
     "AGENTSTACK_PYTHON": "$PYTHON_BIN",
+    "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS": os.environ.get("AGENTSTACK_INSTALL_DASHBOARD_ORIGINS", ""),
     "AGENTSTACK_RUNTIME_MODE": "${AGENTSTACK_RUNTIME_MODE:-legacy}",
     "AGENTSTACK_GLOBAL_SERVER_CONFIG": "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}",
     "AGENTSTACK_PORT": "$PORT",
@@ -4577,7 +4902,7 @@ env = {
     "AGENTSTACK_TERMINAL": "$TERMINAL",
     "AGENTSTACK_AUTO_OPEN_CHILD": "$AUTO_OPEN_CHILD_SETTING",
     "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
-    "AGENTSTACK_PROTECTED_ROOTS": "$PROTECTED_ROOTS",
+    "AGENTSTACK_EXTRA_PROTECTED_ROOTS": os.environ["AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS"],
     "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
     "AGENTSTACK_LANG": "$LANG_SETTING",
     "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
@@ -4595,6 +4920,8 @@ env = {
     "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
     "AGENTSTACK_CLAUDE_MODELS": os.environ.get("AGENTSTACK_CLAUDE_MODELS", ""),
     "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
+    "AGENTSTACK_CODEX_DEFAULT_MODEL": os.environ["AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL"],
+    "AGENTSTACK_CODEX_DEFAULT_EFFORT": os.environ["AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT"],
     "AGENTSTACK_HOOKS_DIR": "$HOOKS_DIR",
     "AGENTSTACK_SKILLS_DIR": "$SKILLS_DIR",
     "AGENTSTACK_RUNTIME_DIR": "$RUNTIME_DIR",
@@ -4609,8 +4936,15 @@ env = {
     "AGENTSTACK_VAULT": "$VAULT_SETTING",
     "PATH": "$PATH_VALUE",
 }
+if env['AGENTSTACK_RUNTIME_MODE']=='fresh':
+    env.update(__import__('json').loads(os.environ['AGENTSTACK_INSTALL_FRESH_ENV']))
 def esc(v):
-    return str(v).replace("\\\\", "\\\\\\\\").replace('"', '\\"')
+    # Numeric characters avoid double interpretation by this shell heredoc.
+    # Environment= performs systemd percent specifier expansion, not $ expansion.
+    return (str(v).replace("%", "%%").replace(chr(92), chr(92) * 2)
+            .replace(chr(34), chr(92) + chr(34))
+            .replace(chr(10), chr(92) + "n").replace(chr(13), chr(92) + "r")
+            .replace(chr(9), chr(92) + "t"))
 lines = [
     "[Unit]",
     "Description=ORRERY Telemetry dashboard",
@@ -4720,6 +5054,8 @@ start_supervised_background() {
   (
     # shellcheck disable=SC1090
     . "$ENV_FILE"
+    # Legacy ROOTS is retained for direct hooks, never service configuration.
+    unset AGENTSTACK_PROTECTED_ROOTS
     AGENTSTACK_DASHBOARD_SELF_RESTART=1 \
       nohup "$PYTHON_BIN" "$DASHBOARD_DIR/service_runner.py" >> "$DASHBOARD_LOG" 2>&1 &
     echo $! > "$SERVICE_PATH"
@@ -4826,6 +5162,7 @@ PY
 
 write_manifest() {
   plan "write manifest $MANIFEST"
+  plan "distribute inactive native harness examples; keep existing files"
   if [[ "$DRY_RUN" == true ]]; then
     return
   fi
@@ -4844,7 +5181,12 @@ write_manifest() {
       requested_service_env "${NEW_NATIVE_MAIL_ENV:-}" requested_candidate_venv "${NEW_NATIVE_MAIL_VENV:-}" \
       database_backup "$MAIL_UPDATE_BACKUP")"
   fi
+  AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS="${EXTRA_PROTECTED_ROOTS-}" \
   AGENTSTACK_INSTALL_MAIL_UPDATE="$mail_update" \
+  AGENTSTACK_INSTALL_FRESH_ENV="${AGENTSTACK_INSTALL_FRESH_ENV:-}" \
+  AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL="${CODEX_DEFAULT_MODEL_SETTING:-}" \
+  AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT="${CODEX_DEFAULT_EFFORT_SETTING:-}" \
+  AGENTSTACK_INSTALL_DASHBOARD_ORIGINS="${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}" \
   "$PYTHON_BIN" - "$tmp" "$service_kind" "$service_path" \
     "$mail_service_kind" "$mail_service_path" "$AGENT_MAIL_NAME_CAPABILITY_JSON" \
     "${AGENT_MAIL_AUTOSTART_KIND:-}" "${AGENT_MAIL_AUTOSTART_PATH:-}" \
@@ -4852,7 +5194,9 @@ write_manifest() {
     "${AGENT_MAIL_WATCHER_KIND:-}" "${AGENT_MAIL_WATCHER_PATH:-}" \
     "$MAIL_WATCHER_LABEL" "$NATIVE_MAIL_DEPLOYMENT_IDENTIFIED" \
     "$NATIVE_MAIL_ENROLL_AVAILABLE" "$NATIVE_MAIL_AUTOSTART_MANAGED_BY_INSTALL" \
-    "$CLAUDE_SKILLS_DIR" "$CODEX_SKILLS_DIR" <<PY
+    "$CLAUDE_SKILLS_DIR" "$CODEX_SKILLS_DIR" \
+    "$SCRIPT_DIR/lib/install_examples.py" "$REPO_ROOT" "$MANIFEST" <<PY
+import importlib.util
 import json
 import os
 import pathlib
@@ -4891,6 +5235,13 @@ for rel in ("hooks", "skills", "dashboard", "bin", "codex", "claude", "integrati
                 continue
             if path.is_file() or path.is_symlink():
                 owned_files.append(str(path))
+# Only these fresh preparation files are core-owned; other templates/scripts
+# under the install root may belong to the operator or optional installers.
+for rel in ("templates/fresh/claude/CLAUDE.md", "templates/fresh/codex/AGENTS.md",
+            "scripts/codex_plugin_trust.py", "scripts/build-codex-app-marketplace.py"):
+    path = install_dir / rel
+    if path.is_file() or path.is_symlink():
+        owned_files.append(str(path))
 version_path = install_dir / "VERSION"
 if version_path.is_file() or version_path.is_symlink():
     owned_files.append(str(version_path))
@@ -4998,15 +5349,17 @@ manifest = {
     },
     "env": {
         "AGENTSTACK_PORT": "$PORT",
+        "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS": os.environ.get("AGENTSTACK_INSTALL_DASHBOARD_ORIGINS", ""),
         "AGENTSTACK_LABEL_PREFIX": "$LABEL_PREFIX",
         "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
-        "AGENTSTACK_PROTECTED_ROOTS": "$PROTECTED_ROOTS",
+        "AGENTSTACK_EXTRA_PROTECTED_ROOTS": os.environ["AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS"],
         "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
         "AGENTSTACK_LANG": "$LANG_SETTING",
         "AGENTSTACK_MURMUR": "$MURMUR_SETTING",
         "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
         "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
         "AGENTSTACK_WORKTREE_ROOT": "$WORKTREE_ROOT_SETTING",
+        "AGENTSTACK_CODEX_SANDBOX": "$CODEX_SANDBOX_SETTING",
         "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
         "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
         "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
@@ -5018,6 +5371,8 @@ manifest = {
         "AGENTSTACK_CUSTOM_PORTRAITS": "$CUSTOM_PORTRAITS_SETTING",
         "AGENTSTACK_CLAUDE_MODELS": os.environ.get("AGENTSTACK_CLAUDE_MODELS", ""),
         "AGENTSTACK_CODEX_MODELS": "$CODEX_MODELS_SETTING",
+    "AGENTSTACK_CODEX_DEFAULT_MODEL": os.environ["AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL"],
+    "AGENTSTACK_CODEX_DEFAULT_EFFORT": os.environ["AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT"],
         "AGENTSTACK_DSH_NODE": "$DSH_NODE",
         "AGENTSTACK_MANAGED_SPAWN_CONFIG": "$MANAGED_SPAWN_CONFIG_SETTING",
         "AGENTSTACK_MAIL_LAUNCHD_LABEL": "$MAIL_LAUNCHD_LABEL_SETTING",
@@ -5098,29 +5453,61 @@ manifest["env"].update({
     "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "$MAIL_HTTP_BEARER_MODE",
     "AGENTSTACK_MAIL_ENROLL_BIN": "$NATIVE_MAIL_ENROLL_BIN",
 })
-out.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+# Publish inactive examples only now, after service/settings processing. The
+# helper commits ownership with this manifest or cleans up this run's new,
+# unchanged examples on a normal failure; existing examples are retained.
+example_spec = importlib.util.spec_from_file_location("install_examples", sys.argv[19])
+example_module = importlib.util.module_from_spec(example_spec)
+example_spec.loader.exec_module(example_module)
+if os.environ.get('AGENTSTACK_INSTALL_FRESH_ENV'):
+    manifest['env'].update(json.loads(os.environ['AGENTSTACK_INSTALL_FRESH_ENV']))
+example_module.write_manifest(manifest, sys.argv[21], repo=sys.argv[20], python=sys.executable)
 PY
-  "$PYTHON_BIN" -m json.tool "$tmp" >/dev/null
-  mv "$tmp" "$MANIFEST"
+}
+
+report_protection_settings() {
+  printf 'extra protected roots: source=%s value=%q destination=%s:AGENTSTACK_EXTRA_PROTECTED_ROOTS\n' \
+    "$EXTRA_PROTECTED_ROOTS_SOURCE" "$EXTRA_PROTECTED_ROOTS" "$ENV_FILE"
+  if [[ "$PROTECTION_MIGRATION" == true ]]; then
+    if [[ "$DRY_RUN" == true ]]; then
+      say "would migrate installed AGENTSTACK_PROTECTED_ROOTS to AGENTSTACK_EXTRA_PROTECTED_ROOTS once; no files written"
+    else
+      say "migrating installed AGENTSTACK_PROTECTED_ROOTS to AGENTSTACK_EXTRA_PROTECTED_ROOTS once"
+    fi
+  fi
+}
+
+protection_restart_guidance() {
+  if [[ "$PRESERVE_LEGACY_PROTECTED_ROOTS" != true &&
+        ( "$INSTALLED_EXTRA_STATE" == absent || "$EXTRA_PROTECTED_ROOTS" == "$INSTALLED_EXTRA_PROTECTED_ROOTS" ) ]]; then
+    return 0
+  fi
+  warn "Protection cutover: finish work or release active reservations before changing roots; restart affected coordinated sessions together because relative reservation names can change."
 }
 
 main() {
   validate_repo_assets
   # Select once before installer probes or lifecycle actions. Live/global
   # cutover is still a later operator procedure, never a legacy install.
-  . "$REPO_ROOT/bin/lib/global-client-loader.sh"
-  ags_client_bootstrap "$ENV_FILE" --literal --system "$@" || return $?
-  ags_client_select && _ags_install_rc=0 || _ags_install_rc=$?
-  if [[ "$_ags_install_rc" == 0 ]]; then
-    printf '%s\n' GLOBAL_INSTALL_REQUIRES_PR7 >&2
-    return 2
+  if [[ "$RUNTIME_MODE_SETTING" == fresh ]]; then
+    export AGENTSTACK_RUNTIME_MODE=fresh
+  else
+    . "$REPO_ROOT/bin/lib/global-client-loader.sh"
+    ags_client_bootstrap "$ENV_FILE" --literal --system "$@" || return $?
+    ags_client_select && _ags_install_rc=0 || _ags_install_rc=$?
+    if [[ "$_ags_install_rc" == 0 ]]; then
+      printf '%s\n' GLOBAL_INSTALL_REQUIRES_PR7 >&2
+      return 2
+    fi
+    [[ "$_ags_install_rc" == 125 ]] || return "$_ags_install_rc"
   fi
-  [[ "$_ags_install_rc" == 125 ]] || return "$_ags_install_rc"
   resolve_codex_install_setting
   say "ORRERY Telemetry core installer"
   say "tier: $TIER"
   say "install dir: $INSTALL_DIR"
   say "project key: $PROJECT_KEY"
+  report_protection_settings
+  protection_restart_guidance
   if [[ "$RESET_SETTINGS" == 1 ]]; then
     say "settings: reset (not inherited from the existing env.sh)"
   fi
@@ -5132,6 +5519,7 @@ main() {
   say "spawn roots: ${SPAWN_ROOTS_SETTING:-(default: \$HOME)}"
   say "worktree root: $WORKTREE_ROOT_SETTING"
   say "automatically open child terminals: $AUTO_OPEN_CHILD_SETTING (set AGENTSTACK_AUTO_OPEN_CHILD=0 on reinstall to disable auto-open while keeping Deck Open tmux)"
+  report_setting_changes
   say "codex child approval: $CODEX_CHILD_APPROVAL_SETTING"
   say "codex child config overlay: ${CODEX_CHILD_CONFIG_OVERLAY_SETTING:-(disabled)}"
   say "codex network: $CODEX_NETWORK_SETTING"
@@ -5147,6 +5535,13 @@ main() {
   if ! run_preflight; then
     exit 1
   fi
+  # Validate before copying assets, writing settings or changing services.
+  # Pass the new setting as data, never interpolate it into Python source.
+  "$PYTHON_BIN" - "$REPO_ROOT/dashboard/legacy_http_admission.py" "$DASHBOARD_ALLOWED_ORIGINS_SETTING" <<'PY'
+import runpy, sys
+runpy.run_path(sys.argv[1])["configured_origins"](sys.argv[2])
+PY
+  say "additional dashboard origins: ${DASHBOARD_ALLOWED_ORIGINS_SETTING:-(none; loopback only)}"
   validate_codex_child_overlay
   if [[ "$TIER" == "tier1" ]]; then
     say "Tier1 will show MCP and user-settings dry-run diffs before any merge."
@@ -5154,11 +5549,12 @@ main() {
     say "Phase 3a note: Tier2 project enable is a placeholder; no project settings are modified."
   fi
   check_dependencies
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then prepare_fresh_install; fi
   check_port
   # A legacy listener can answer health_check but report its database relative
   # to its own working directory. Honor the explicit retirement choice before
   # treating that listener as a reusable ORRERY Mail service.
-  retire_legacy_mail_services
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" != fresh ]]; then retire_legacy_mail_services; fi
   resolve_native_mail_connection
   if ! check_agent_mail_provisioning_dependencies; then
     exit 1
@@ -5173,6 +5569,12 @@ main() {
   migrate_legacy_annotations
   migrate_legacy_dashboard_log
   install_payload
+  if [[ "$WITH_MOBILE_PUSH" == true ]]; then
+    local mobile_push_args=(--install "$INSTALL_DIR" --python "$PYTHON_BIN"
+      --requirements "$SCRIPT_DIR/mobile-push-requirements.txt")
+    [[ "$DRY_RUN" != true ]] || mobile_push_args+=(--dry-run)
+    "$PYTHON_BIN" "$SCRIPT_DIR/lib/mobile_push_install.py" "${mobile_push_args[@]}"
+  fi
   install_dsh_presentation
   install_managed_harnesses
   install_claude_skill_links
@@ -5191,9 +5593,11 @@ main() {
   # update, and they need the autostart most.
   enable_mail_autostart
   enable_mail_watcher
-  safe_merge_claude_mcp
-  safe_merge_settings
-  safe_managed_doc_setups
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" != fresh ]]; then
+    safe_merge_claude_mcp
+    safe_merge_settings
+    safe_managed_doc_setups
+  fi
   start_service "$service_kind"
   write_manifest "${ACTIVE_SERVICE_KIND:-manual}" "${SERVICE_PATH:-}" \
     "${AGENT_MAIL_SERVICE_KIND:-}" "${AGENT_MAIL_SERVICE_PATH:-}"
@@ -5219,15 +5623,16 @@ main() {
       report_managed_instructions
     fi
   fi
+  protection_restart_guidance
   case "$MAIL_UPDATE_RESULT" in
     not-switched|rolled-back)
       if [[ "$MAIL_UPDATE_MODE" == auto ]]; then
         print_mail_stale_notice
-        print_mail_result
         # auto chose not to, or could not, switch: the install itself is done
         # and Mail is serving its previous build.
         warn "ORRERY Mail was not updated ($MAIL_UPDATE_RESULT): $MAIL_UPDATE_REASON"
         warn "ORRERY Mail still runs $NATIVE_MAIL_ENV; to retry at a time you choose: install.sh --update-mail"
+        print_mail_result
         return 0
       fi
       # The rest of the install finished against the build that is serving, but

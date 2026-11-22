@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
+import runpy
 import subprocess
 import time
 import urllib.error
@@ -61,29 +63,49 @@ def keychain_key():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--offline-endpoint', help='dummy専用・loopback /user/balance')
+    parser.add_argument('--manifest', help='標準起動と共通の非秘密manifest参照')
     args = parser.parse_args()
     dummy = os.environ.get('DEEPSEEK_API_KEY')
     home = os.path.expanduser('~')
+    context = {key: os.environ[key] for key in ('DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR')
+               if os.environ.get(key)}
     # 親のproxy/SSL設定や別の秘密を取得processへ引き継がない。
     os.environ.clear()
-    os.environ.update({'PATH': '/usr/bin:/bin', 'HOME': home})
+    os.environ.update({'PATH': '/usr/bin:/bin', 'HOME': home, **context})
     endpoint = ENDPOINT
+    selected_ref = False
     if args.offline_endpoint:
         url = urllib.parse.urlsplit(args.offline_endpoint)
         if dummy != DUMMY_KEY or url.scheme != 'http' or url.hostname != '127.0.0.1' or url.path != '/user/balance' or url.username or url.password:
             print(json.dumps({'ok': False, 'reason': 'offline_fixture_required'}))
             return 2
         endpoint, key = args.offline_endpoint, dummy
+    elif args.manifest:
+        try:
+            manifest = json.loads(Path(args.manifest).read_text())
+            backend = manifest['backends'].get('deepseek', {})
+            if 'credential_ref' in backend:
+                selected_ref = True
+                reader = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'hooks/llm_secret_reader.py'))
+                key = reader['read_ref'](backend['credential_ref'])
+            else:
+                key = keychain_key()
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            key = None
     else:
         key = keychain_key()
     if not key:
         print(json.dumps({'ok': False, 'reason': 'balance_key_unavailable'}))
         return 1
-    os.environ['DEEPSEEK_API_KEY'] = key
-    try:
+    if selected_ref:
         result = fetch_balance(key, endpoint)
-    finally:
-        os.environ.pop('DEEPSEEK_API_KEY', None)
+    else:
+        # Preserve the legacy worker contract; the new SS path never uses env.
+        os.environ['DEEPSEEK_API_KEY'] = key
+        try:
+            result = fetch_balance(key, endpoint)
+        finally:
+            os.environ.pop('DEEPSEEK_API_KEY', None)
     print(json.dumps(result, ensure_ascii=True))
     return 0 if result['ok'] else 1
 

@@ -6,10 +6,34 @@ For the usual entry point, use the [ORRERY cockpit quick start](https://github.c
 
 ## Who this is for
 
-- **People who run coding agents, not chat**: not chat in the ChatGPT sense, but agents like Claude Code or Codex that take an instruction, write code, change files, and run commands on their own. It does not matter whether you drive them from a terminal or from a desktop app such as Claude Desktop or the ChatGPT app.
+- **People who want to use coding agents**: prepare Claude Code, Codex, DeepSeek or Local LLM agents that write code, change files and run commands. You can start here even if this is your first agent. DeepSeek/Local run through dsh or Hermes and do not require Claude Code or Codex login.
 - **A good fit**: you run several agents and find yourself acting as the go-between: pasting Codex output into Claude Code, or hopping between apps and tabs to check on each one. You want that manual relay gone and the whole picture on one screen.
 - **Not a fit**: one agent is enough for you. The value here is in coordinating several agents and watching them.
-- **Supported agents**: Claude Code and Codex CLI are the core. Codex Desktop tasks and subagents, and Google Antigravity / Gemini, are optional providers you can add after the core install, and they appear on the same dashboard.
+- **Supported agents**: Claude Code, Codex, DeepSeek and Local models. DeepSeek and Local models run through dsh or Hermes. Codex Desktop tasks and subagents, and Google Antigravity / Gemini, are optional providers you can add after the core install. Their connection methods and supported features differ.
+
+## Choose by goal
+
+First [install and verify the shared components](#standalone-installation-and-verification), then prepare your chosen provider.
+
+| Provider | After the shared install |
+| --- | --- |
+| Claude Code / Codex | Install and sign in to the chosen CLI, then [start the first agent](#3-start-the-first-agent-and-watch-it-on-the-dashboard) |
+| DeepSeek / Local LLMs | Follow [API setup](native-setup.en.md) for dsh/Hermes, key storage and connection settings, then launch from NEW AGENT. Claude/Codex login is not required |
+
+Open DECK / NETWORK to observe configured agents. To connect them, continue with the [Mail check](#5-play-shiritori-as-an-end-to-end-check). Check the [supported API combinations and limitations (Japanese)](managed-catalog.md) too.
+
+<a id="provider-model-harness"></a>
+## Provider, model and harness
+
+| Choice | Meaning and current examples |
+| --- | --- |
+| provider / backend | Connection and credential settings. API spawn provider IDs are `deepseek` and `strata` (displayed as Local). Existing `claude` / `codex` routes use each CLI's login |
+| model | A formal model ID selected from the models configured for the same backend |
+| harness | The CLI that runs the conversation and tools. API spawning requires `dsh` or `hermes`; Claude Code / Codex CLI each use their own harness |
+
+The model's maker need not be the API host: a DeepSeek model hosted locally still uses Local as its connection. Agent identity, parent, work project and Mail recipient are separate from these choices. Selecting a model or harness does not select a parent or recipient.
+
+API spawning uses legacy mode with macOS Keychain or explicitly configured Linux Secret Service references; it separately requires backend, runtime and credential configuration. Arbitrary API × harness combinations are not promised. New Hermes children use a separate HOME per project and canonical name. Common login and Telegram entry points are in design; real-server acceptance of manual Local effort remains incomplete. See the [current limitations (Japanese)](managed-catalog.md#現在の制限) and the [Model / Harness screen examples and selection GIF](dashboard.en.md#native-models-and-harnesses).
 
 
 ## Six words
@@ -18,7 +42,7 @@ These six terms help you read this standalone procedure and the reference guides
 
 | Term | Meaning |
 | --- | --- |
-| agent | One Claude Code / Codex CLI session running in a terminal. Each one gets a scientist's name. |
+| agent | One session running through Claude Code / Codex CLI, dsh / Hermes, or another supported runtime. Each gets a scientist's name. |
 | child | Another agent that an agent started by asking it to do a job. The one that asked is the parent. A parent creates a child with `/delegate`; when the child is done it reports back to the parent. See [what happens after completion](dashboard.en.md#after-a-child-completes). |
 | ORRERY Mail | The small bundled server through which agents message each other and that manages names and file reservations. |
 | dashboard | The page you open in a browser. It shows every agent's state, the parent-child tree, and the messages going back and forth. |
@@ -30,7 +54,7 @@ These six terms help you read this standalone procedure and the reference guides
 
 The steps are the same on macOS and Windows. You need Python 3.11 or newer, `git`, `tmux`, and `uv`; on macOS, `brew install tmux uv` covers the last two.
 
-**On Windows**: install inside the Ubuntu of WSL2. Ubuntu is Linux, so the steps below apply unchanged; the dashboard opens in your Windows browser and agent terminals open as Windows Terminal tabs. The [WSL2 section of the install guide](install.en.md#installing-on-windows-wsl2) walks from setting up WSL2 to logging in to Claude Code / Codex, so Windows readers should open that first.
+**On Windows**: install inside WSL2 Ubuntu and run the commands below there. Open the dashboard in your Windows browser. Complete the [WSL2 preparation](install.en.md#installing-on-windows-wsl2), then sign in to the chosen CLI for Claude/Codex or follow [API setup](native-setup.en.md) for DeepSeek/Local.
 
 ### 1. Install
 
@@ -58,6 +82,10 @@ agentstack-selftest
 
 ### 3. Start the first agent and watch it on the dashboard
 
+**For DeepSeek / Local LLMs**: Complete [API setup](native-setup.en.md), then choose the configured Model and Harness in NEW AGENT at `http://127.0.0.1:8770/` and launch. When a card with the scientist's name appears in DECK, try the guide's short conversation check and the [Mail check below](#5-play-shiritori-as-an-end-to-end-check).
+
+**For Claude Code / Codex**: Sign in to your chosen CLI in the same OS environment, then run:
+
 ```bash
 agent-start ~/code/my-project          # for Codex CLI: agent-start-codex ~/code/my-project
 ```
@@ -68,9 +96,11 @@ On macOS, open the dashboard from another terminal. On Windows, paste the same U
 open http://127.0.0.1:8770/
 ```
 
-**Success**: your usual Claude Code or Codex starts, and one card with a scientist's name appears in the dashboard's DECK, showing the model and remaining context.
+**Claude/Codex success check**: Your chosen CLI starts and a card with a scientist's name appears in DECK, showing the model and remaining context.
 
 ### 4. Spawn one child
+
+This is the delegation example for Claude Code / Codex. If you started with DeepSeek/Local, use the API guide's launch check and the [Mail check in the next section](#5-play-shiritori-as-an-end-to-end-check).
 
 Inside the running agent, ask for a child. This is the same in Claude Code and Codex.
 
@@ -84,7 +114,9 @@ By default the child's OS terminal opens automatically in the background. If you
 
 ### 5. Play shiritori as an end-to-end check
 
-The quickest way to confirm the whole install at once is a game of shiritori (Japanese word chain) between a Claude Code agent and a Codex child. Name registration, ORRERY Mail round trips, notification injection, and dashboard rendering all have to work for even one round to complete.
+For an unconfigured dsh / Hermes backend, first complete [API setup](native-setup.en.md), including the instructions for people without an existing agent. Start one agent from NEW AGENT and check its response to a short request. The Mail round trip below is an additional check once two agents are ready; it does not require you to install Claude/Codex or add the cockpit.
+
+If you use both Claude Code and Codex, the following shiritori (Japanese word-chain) example checks name registration, ORRERY Mail round trips, notification injection and dashboard rendering together.
 
 ```text
 /delegate spawn one Codex child and play shiritori with it. Use the installed ORRERY /delegate skill to create the child and ORRERY Mail (send_message) to communicate; pass these tool requirements to the child too. Do not use built-in Agent or SendMessage. Exchange one word per turn and report the result after ten round trips.
@@ -93,6 +125,12 @@ The quickest way to confirm the whole install at once is a game of shiritori (Ja
 This standalone example uses ten round trips. [Workshop shiritori](https://github.com/gyroid-eth/orrery-workshop/blob/master/play/shiritori.md) and Full tour use three; the lecture uses that shorter version.
 
 If you start from Codex, make the child a Claude Code agent. Either way, the point is to see the game go round between agents from two vendors.
+
+The same shiritori check also works with DeepSeek or Local children in an environment with cockpit added and a configured provider and harness. In cockpit New Agent, select a [configured provider](install.en.md) (DeepSeek or Local) and Harness (dsh or Hermes), select the Claude Code or Codex agent you will play with as the parent under Lineage, and create the child for three round trips.
+
+With Telemetry alone, the bundled dashboard NEW AGENT also lets you select a provider, model and Harness (dsh or Hermes) marked available in the catalog. For a launch without the screen, use `POST /api/spawn` in the [API reference](api.en.md), including its authentication and parent (parent or standalone) contract, and always specify `harness`.
+
+Have the parent start by sending the child “Play three shiritori round trips over ORRERY Mail, putting each turn’s word in the subject of each Mail” using ORRERY Mail `send_message`. Success looks the same: lines flow back and forth in NETWORK, and the last instruction on both DECK cards updates to the latest Mail subject (that turn’s word). Check dsh and Hermes separately; success with one does not verify the other.
 
 **Success**: lines keep flowing back and forth between the two agents in NETWORK, and the "last instruction" on both DECK cards updates word by word. On the author's machine each turn took about five to six seconds per agent ([post with video](https://x.com/i/status/2095650715008168255), played at double speed).
 
@@ -121,7 +159,7 @@ Details of these mechanisms and the API are in [Hooks](hooks.en.md), [Launchers]
 ## How it fits together
 
 ```text
-Claude Code / Codex CLI
+Claude Code / Codex CLI / dsh / Hermes
         │ launchers + hooks
         ▼
 tmux session ── telemetry ──► dashboard
@@ -145,7 +183,9 @@ The bundled ORRERY Mail server is the source of truth, with launchers, operation
 | Linux | Field reports received. On Ubuntu 24.04 / tmux 3.4, install, the dashboard, and Codex agents worked, and the two problems found there ([#26](https://github.com/gyroid-eth/orrery-telemetry/issues/26), [#27](https://github.com/gyroid-eth/orrery-telemetry/issues/27)) are fixed. The author has not verified `systemd --user` registration, so please report results as issues |
 | Windows native (without WSL2) | The supported route is WSL2, but community contributions provide an experimental PowerShell helper that starts Mail and the dashboard, and a native Codex child launcher ([startup helper](windows-local.en.md), [Codex launcher](windows-codex-launcher.en.md)). Policy: [#3](https://github.com/gyroid-eth/orrery-telemetry/issues/3) |
 
-Python 3.11 or newer, `git`, `tmux`, and `uv` are required, and at runtime at least one of Claude Code or Codex CLI. The installer checks these before writing anything and stops without changes if something is missing. The details of the checks and the optional dependencies (`fswatch`, `fzf`, Ghostty, Obsidian) are in the [install guide's environment section](install.en.md#supported-environment).
+The table above covers the common infrastructure and existing CLI routes. DeepSeek / Local × dsh / Hermes use a separate legacy-mode route requiring backend, runtime and OS credential-reference configuration. Catalog visibility does not guarantee a successful connection: verify launch and Mail round trips for each configured combination.
+
+Python 3.11 or newer, `git`, `tmux`, and `uv` are required. The CLI procedure above needs a signed-in Claude Code or Codex CLI; API spawning separately needs dsh / Hermes and backend configuration. The installer checks common dependencies before writing anything and stops without changes if something is missing. The details of the checks and the optional dependencies (`fswatch`, `fzf`, Ghostty, Obsidian) are in the [install guide's environment section](install.en.md#supported-environment).
 
 
 ## Look before installing

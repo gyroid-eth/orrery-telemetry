@@ -35,6 +35,9 @@ while not Path(os.environ['FIXTURE_STOP']).exists() and time.monotonic()<end:tim
     expected_parent=Path('/tmp').resolve()/('orrery-tmux-'+str(os.getuid()))
     assert path.parent==expected_parent and path.name.endswith('.sock')
     name=client.identity['name'];delivery=api['runtime_delivery'](client)
+    def launch_snapshot():
+        with client.operation_mutex():
+            return delivery.launch()
     def wait_for(predicate):
         deadline=time.monotonic()+20
         while time.monotonic()<deadline:
@@ -45,7 +48,7 @@ while not Path(os.environ['FIXTURE_STOP']).exists() and time.monotonic()<end:tim
     try:
         delivery.start('claude',client.isolation,detached=True)
         wait_for(lambda:evidence.exists())
-        data=json.loads(evidence.read_text());launch=delivery.launch();runner=launch['execution']['runner']
+        data=json.loads(evidence.read_text());launch=launch_snapshot();runner=launch['execution']['runner']
         assert runner['pid']!=data['pid'] and runner['pid']==data['parent_pid']
         assert data['tty'] is True and data['pgid']==os.getpgid(runner['pid'])
         live=api['read_json'](client.runtime_dir/'live-sessions/native_fixture.json')
@@ -61,12 +64,12 @@ while not Path(os.environ['FIXTURE_STOP']).exists() and time.monotonic()<end:tim
             wait_for(lambda:api['process_start'](runner['pid'])=='absent')
             state=delivery.status(launch['launch_id'])
             assert state['operator_required'] and 'launch-resolve' in state['next_operations']
-            assert delivery.launch()['execution']['outcome']['state']=='pending'
+            assert launch_snapshot()['execution']['outcome']['state']=='pending'
             assert not api['read_json'](client.runtime_dir/'live-sessions/native_fixture.json')['ended']
         else:
             stop.touch()
-            wait_for(lambda:delivery.launch()['phase']=='ended')
-            assert delivery.launch()['execution']['outcome']=={'state':'exited','returncode':0}
+            wait_for(lambda:launch_snapshot()['phase']=='ended')
+            assert launch_snapshot()['execution']['outcome']=={'state':'exited','returncode':0}
             assert api['read_json'](client.runtime_dir/'live-sessions/native_fixture.json')['ended']
             assert client.inspect_owner()['retired_at'] is None  # standalone never retires
     finally:

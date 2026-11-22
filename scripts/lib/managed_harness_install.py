@@ -6,11 +6,13 @@ Runtime generations are separate from manual installations and user profiles.
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -19,6 +21,59 @@ import urllib.request
 HERMES_COMMIT = 'd923a5eb487a17c0a68801bba9ef0f56c81040a8'
 HERMES_URL = 'https://github.com/NousResearch/hermes-agent.git'
 OWNER = '.orrery-managed-install.json'
+UPSTREAM_PROOF_FILES = ('lib/types/utils/paths.js', 'lib/types/screens/Chat.js')
+HERMES_STAMP_SCRIPT = '''import sys
+from hermes_cli.version_info import get_version_info
+from scripts.write_install_stamp import write_stamp
+info = get_version_info()
+if info.commit != sys.argv[1]:
+    raise ValueError('Hermes version provenance does not match the pinned commit')
+if info.dirty is not True:
+    raise ValueError('Hermes CA inputs must be recorded as a dirty source build')
+write_stamp('install-stamp.json', update_mechanism='external', commit=info.commit,
+    branch=info.branch, dirty=info.dirty, commit_date=info.commit_date,
+    base_version=None if info.base_version == 'unknown' else info.base_version,
+    display_version=info.derived_version, distance=info.distance, source='local')
+'''
+HERMES_TARGET_SCRIPT = '''import platform,sys
+arch = {'arm64':'arm64','aarch64':'arm64','x86_64':'x64','amd64':'x64'}.get(platform.machine().lower())
+os_name = 'darwin' if sys.platform == 'darwin' else 'linux' if sys.platform.startswith('linux') and not hasattr(sys,'getandroidapilevel') and platform.libc_ver()[0] == 'glibc' else None
+if not arch or not os_name:
+    raise SystemExit('Hermes CA recipe supports macOS and GNU/Linux only; Bionic is unsupported')
+print(os_name + '-' + arch)
+'''
+HERMES_CA_PROBE_SCRIPT = '''import certifi,exa_py,importlib.metadata,json
+from pathlib import Path
+d=importlib.metadata.distribution('certifi')
+metadata=next(f for f in d.files if str(f).endswith('.dist-info/METADATA'))
+print(json.dumps({'bundle':str(Path(certifi.where()).resolve()),'metadata':str(Path(d.locate_file(metadata)).resolve())}))
+'''
+
+
+def hermes_ca():
+    path = Path(__file__).resolve().parents[2] / 'integrations/hermes/ca_recipe.py'
+    spec = importlib.util.spec_from_file_location('_managed_hermes_ca', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def hermes_tui():
+    path = Path(__file__).resolve().parents[2] / 'integrations/hermes/tui_product.py'
+    spec = importlib.util.spec_from_file_location('_managed_hermes_tui', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def hermes_stamp_details(source):
+    path = Path(source) / 'install-stamp.json'
+    stamp = read(path)
+    if (stamp.get('commit') != HERMES_COMMIT or stamp.get('source') != 'local'
+            or stamp.get('updateMechanism') != 'external' or stamp.get('payload') != 'bootstrap'
+            or stamp.get('runtimeDir') is not None):
+        raise ValueError('Hermes install stamp does not match the owned source layout')
+    return {'install_stamp': str(path), 'install_stamp_sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
 def read(path):
@@ -47,7 +102,7 @@ def environment(root):
             'GIT_CONFIG_NOSYSTEM': '1', 'GIT_TERMINAL_PROMPT': '0'}
 
 
-def install_dsh(repo, root, node, cache=None):
+def install_dsh(repo, root, node, cache=None, *, datadir=True):
     node = Path(node).expanduser()
     if not node.is_absolute() or not node.is_file() or not os.access(node, os.X_OK):
         raise ValueError('dsh requires --dsh-node with an absolute Node executable (>=24.2)')
@@ -111,20 +166,82 @@ def install_dsh(repo, root, node, cache=None):
         package = runtime / 'node_modules' / item['name']
         if read(package / 'package.json')['version'] != item['version']:
             raise ValueError('Installed dsh/TUI version mismatch')
-    recipe_file = repo / 'integrations/dsh/tui-managed.patch'
-    changes = {}
-    for row in read(recipe_file)['replacements']:
-        target = tui / row['file']
-        text = target.read_text()
-        if text.count(row['old']) != 1:
-            raise ValueError('Pinned TUI patch preimage mismatch')
-        target.write_text(text.replace(row['old'], row['new'], 1))
-        changes[row['file']] = hashlib.sha256(target.read_bytes()).hexdigest()
-    save(evidence / 'tui-patch-applied.json', {
-        'recipe_sha256': hashlib.sha256(recipe_file.read_bytes()).hexdigest(),
-        'changes': [{'file': name, 'after': digest} for name, digest in changes.items()]})
     save(evidence / 'node-runtime.json', proof)
-    return {'node': str(node), 'runtime': str(runtime), 'patch_receipt': str(evidence / 'tui-patch-applied.json')}
+    # Isolate only the TUI data root; keep the rest of upstream untouched.
+    variant, recipe_sha = 'plain', None
+    if datadir:
+        recipe_file = repo / 'integrations/dsh/tui-datadir.patch.json'
+        recipe = read(recipe_file)
+        target = tui / recipe['file']
+        text = target.read_text()
+        if text.count(recipe['old']) != 1:
+            raise ValueError('Pinned TUI data-dir patch preimage mismatch')
+        target.write_text(text.replace(recipe['old'], recipe['new'], 1))
+        variant = 'plain-datadir'
+        recipe_sha = hashlib.sha256(recipe_file.read_bytes()).hexdigest()
+    receipt = evidence / 'upstream-runtime.json'
+    save(receipt, {'variant': variant, 'source_patch': 'tui-datadir-v1' if datadir else None,
+         'recipe_sha256': recipe_sha,
+         'files': [{'file': name, 'sha256': hashlib.sha256((tui / name).read_bytes()).hexdigest()}
+                   for name in UPSTREAM_PROOF_FILES]})
+    return {'node': str(node), 'runtime': str(runtime), 'runtime_receipt': str(receipt),
+            'variant': variant, 'thin_config_contract': 1}
+
+
+def _hermes_owned_path(path, *, directory=False, private=False):
+    metadata = path.lstat()
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if (not expected_type(metadata.st_mode) or metadata.st_uid != os.getuid()
+            or private and metadata.st_mode & 0o022):
+        raise ValueError('Unsafe owned Hermes source path: ' + str(path))
+
+
+def _hermes_local_source(root, env):
+    base = root.parent
+    if base.name != 'hermes' or base.parent.name != 'harnesses':
+        return None
+    _hermes_owned_path(base.parent, directory=True)
+    _hermes_owned_path(base, directory=True)
+    pattern = re.escape(HERMES_COMMIT[:16]) + r'-(?:v[12]|ca1-[0-9a-f]{16}(?:-exa1(?:-tui1-[0-9a-f]{16})?)?)'
+    for generation in sorted(base.iterdir()):
+        if generation == root or not re.fullmatch(pattern, generation.name):
+            continue
+        _hermes_owned_path(generation, directory=True)
+        owner = generation / OWNER
+        if not owner.exists() and not owner.is_symlink():
+            continue
+        _hermes_owned_path(generation, directory=True, private=True)
+        _hermes_owned_path(owner, private=True)
+        receipt = read(owner)
+        source = generation / 'source'
+        details = receipt.get('details') if isinstance(receipt, dict) else None
+        if (not isinstance(details, dict) or receipt.get('harness') != 'hermes'
+                or receipt.get('complete') is not True or receipt.get('hermes_commit') != HERMES_COMMIT
+                or details.get('managed_root') != str(generation)
+                or details.get('hermes_source') != str(source)):
+            raise ValueError('Owned Hermes source receipt mismatch')
+        # Old v1/v2 receipts need no CA evidence: only their immutable pinned
+        # Git object is reused. Never copy their worktree or validate their PM.
+        for directory in (source, source / '.git', source / '.git/objects'):
+            _hermes_owned_path(directory, directory=True)
+        for relative in ('HEAD', 'config', 'objects/info', 'objects/pack'):
+            path = source / '.git' / relative
+            if path.exists() or path.is_symlink():
+                _hermes_owned_path(path, directory=relative.startswith('objects/'))
+        for relative in ('commondir', 'objects/info/alternates'):
+            path = source / '.git' / relative
+            if path.exists() or path.is_symlink():
+                raise ValueError('External owned Hermes Git object storage is unsupported')
+        try:
+            commit = run(['git', 'rev-parse', '--verify', '--quiet', HERMES_COMMIT + '^{commit}'], cwd=source, env=env)
+        except subprocess.CalledProcessError as error:
+            if error.returncode == 1:  # Absent fixed object, not a Git failure.
+                continue
+            raise
+        if commit != HERMES_COMMIT:
+            raise ValueError('Owned Hermes source commit mismatch')
+        return source
+    return None
 
 
 def install_hermes(repo, root, python, cache=None):
@@ -132,34 +249,62 @@ def install_hermes(repo, root, python, cache=None):
     save(root / 'config.yaml', {'auth': {'adopt_external_logins': False}, 'updates': {'check': False},
          'telemetry': {'shared_metrics': {'enabled': False, 'send': False}}})
     source = root / 'source'
-    run(['git', 'clone', '--no-checkout', str(Path(cache) / 'hermes-agent') if cache else HERMES_URL, str(source)], cwd=root, env=env)
+    if cache:
+        # Explicit cache failures remain failures; do not search or fetch.
+        run(['git', 'clone', '--no-checkout', str(Path(cache) / 'hermes-agent'), str(source)], cwd=root, env=env)
+    else:
+        local = _hermes_local_source(root, env)
+        if local:
+            # Preserve release tags/history for upstream version gates, without
+            # copying dirty worktree files or sharing the donor's object files.
+            run(['git', 'clone', '--no-checkout', '--no-hardlinks', str(local), str(source)], cwd=root, env=env)
+            run(['git', 'remote', 'set-url', 'origin', HERMES_URL], cwd=source, env=env)
+        else:
+            run(['git', 'clone', '--no-checkout', HERMES_URL, str(source)], cwd=root, env=env)
     run(['git', 'checkout', '--detach', HERMES_COMMIT], cwd=source, env=env)
     if run(['git', 'rev-parse', 'HEAD'], cwd=source, env=env) != HERMES_COMMIT:
         raise ValueError('Hermes commit mismatch')
+    ca = hermes_ca()
+    recipe = ca.apply(repo, source)
+    policy, _, _ = ca.load(repo)
+    target = run([python, '-I', '-B', '-c', HERMES_TARGET_SCRIPT], cwd=source, env=env)
+    ca.target_artifact(policy, target, source)
+    # Resolve provenance only at install time using the pinned upstream writer.
+    # source=local avoids its git-stamp live-HEAD probe during runtime import;
+    # external keeps updates owned by this installer, without changing PM paths.
+    run([python, '-c', HERMES_STAMP_SCRIPT, HERMES_COMMIT], cwd=source, env=env)
+    stamp = hermes_stamp_details(source)
     # Existing PM owns its own fixed runtime/dependency graph; no general setup,
     # login import, browser, or computer-use installer is invoked.
     # PM rejects --without combined with --extra. First prepare its default
-    # closure and persist the optional-tool opt-outs, then add the provider SDK.
-    run([python, '-m', 'pm.cli', 'install', '--without', 'agent-browser',
-         '--without', 'cua-driver'], cwd=source, env=env)
-    run([python, '-m', 'pm.cli', 'install', '--extra', 'anthropic'], cwd=source, env=env)
+    # closure and persist the optional-tool opt-outs, then add the provider SDKs
+    # before publishing the fixed environment used by every child.
+    for arguments in (['--without', 'agent-browser', '--without', 'cua-driver'], ['--extra', 'anthropic', '--extra', 'exa']):
+        ca.verify_inputs(source, policy, 'after')
+        run([python, '-m', 'pm.cli', 'install', *arguments], cwd=source, env=env)
+        ca.verify_inputs(source, policy, 'after')
     key = hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
     install = root / 'installs' / key
     generation = Path(read(install / 'facts.json')['packages']['venv']['environment']).resolve()
     executable = generation / 'bin/hermes'
     if not generation.is_relative_to((install / 'environments').resolve()) or not executable.is_file():
         raise ValueError('Hermes PM did not publish a committed runtime')
+    paths = json.loads(run([str(generation / 'bin/python'), '-I', '-B', '-c', HERMES_CA_PROBE_SCRIPT], cwd=source, env=env))
+    proof = ca.runtime_evidence(repo, root, source, generation, target, paths)
+    tui = hermes_tui().build(root, source, target, env, run)
     print('Hermes: existing manual homes/logins are untouched; no credentials were installed.')
-    return {'hermes_source': str(source), 'managed_root': str(root), 'hermes_executable': str(executable)}
+    return {'hermes_source': str(source), 'managed_root': str(root), 'hermes_executable': str(executable),
+            'variant': 'plain', 'thin_config_contract': 1, 'ca_recipe': recipe, 'ca_evidence': proof, **stamp, **tui}
 
 
-def generation_id(repo, harness):
+def generation_id(repo, harness, *, datadir=True):
     if harness == 'hermes':
-        return HERMES_COMMIT[:16] + '-v1'
-    inputs = ['runtime-pins.json', 'runtime-package-lock.json', 'ui-package.json',
-              'ui-package-lock.json', 'tui-managed.patch']
+        return HERMES_COMMIT[:16] + '-ca1-' + hermes_ca().load(repo)[2][:16] + '-exa1-tui1-' + hermes_tui().recipe_id()[:16]
+    inputs = ['runtime-pins.json', 'runtime-package-lock.json', 'ui-package.json', 'ui-package-lock.json']
+    if datadir:
+        inputs.append('tui-datadir.patch.json')
     digest = hashlib.sha256(b''.join((repo / 'integrations/dsh' / name).read_bytes() for name in inputs)).hexdigest()[:16]
-    return 'dsh-0.2.1-rc.2-tui-0.16.1-' + digest
+    return 'dsh-0.2.1-rc.2-tui-0.16.1-' + digest + ('-plain-datadir1' if datadir else '-plain1')
 
 
 def validate(repo, harness, receipt):
@@ -167,6 +312,8 @@ def validate(repo, harness, receipt):
         raise ValueError('Managed installation receipt is incomplete')
     details = receipt['details']
     if harness == 'dsh':
+        if receipt.get('variant') not in ('plain', 'plain-datadir'):
+            raise ValueError('Legacy managed dsh runtime is unsupported; existing files were retained')
         runtime = Path(details['runtime'])
         proof = read(runtime.parent / 'evidence/node-runtime.json')
         node = Path(details['node'])
@@ -175,22 +322,29 @@ def validate(repo, harness, receipt):
         for item in read(repo / 'integrations/dsh/runtime-pins.json'):
             if read(runtime / 'node_modules' / item['name'] / 'package.json')['version'] != item['version']:
                 raise ValueError('Installed dsh/TUI version mismatch')
-        patch = read(details['patch_receipt'])
-        recipe_file = repo / 'integrations/dsh/tui-managed.patch'
-        files = {row['file'] for row in read(recipe_file)['replacements']}
-        if (patch['recipe_sha256'] != hashlib.sha256(recipe_file.read_bytes()).hexdigest()
-                or sorted(row['file'] for row in patch['changes']) != sorted(files)):
-            raise ValueError('Managed TUI patch receipt mismatch')
-        for row in patch['changes']:
-            target = runtime / 'node_modules/@deepseek-harness-tui/dsh-tui' / row['file']
-            if hashlib.sha256(target.read_bytes()).hexdigest() != row['after']:
-                raise ValueError('Managed TUI patch changed')
+        source = read(details['runtime_receipt'])
+        if (receipt.get('thin_config_contract') != 1 or source.get('variant') != receipt['variant']
+                or source.get('source_patch') != ('tui-datadir-v1' if receipt['variant'] == 'plain-datadir' else None) or not source.get('files')):
+            raise ValueError('Plain runtime receipt is incomplete')
+        if receipt['variant'] == 'plain-datadir' and source.get('recipe_sha256') != hashlib.sha256(
+                (repo / 'integrations/dsh/tui-datadir.patch.json').read_bytes()).hexdigest():
+            raise ValueError('TUI data-dir patch receipt mismatch')
+        for row in source['files']:
+            relative = Path(row['file'])
+            if relative.is_absolute() or '..' in relative.parts:
+                raise ValueError('Plain runtime path is invalid')
+            target = runtime / 'node_modules/@deepseek-harness-tui/dsh-tui' / relative
+            if hashlib.sha256(target.read_bytes()).hexdigest() != row['sha256']:
+                raise ValueError('Plain upstream runtime changed')
+        return
     else:
         root = Path(details['managed_root'])
         source = Path(details['hermes_source'])
         env = environment(root)
         if run(['git', 'rev-parse', 'HEAD'], cwd=source, env=env) != HERMES_COMMIT:
             raise ValueError('Hermes commit mismatch')
+        if any(details.get(key) != value for key, value in hermes_stamp_details(source).items()):
+            raise ValueError('Hermes install stamp receipt changed')
         key = hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
         install = root / 'installs' / key
         generation = Path(read(install / 'facts.json')['packages']['venv']['environment']).resolve()
@@ -200,10 +354,12 @@ def validate(repo, harness, receipt):
                 or not os.access(generation / 'bin/hermes', os.X_OK)
                 or not os.access(generation / 'bin/python', os.X_OK)):
             raise ValueError('Hermes committed runtime is missing or changed')
+        hermes_ca().validate_static(repo, details)
+        hermes_tui().validate(details)
 
 
 def provision(repo, install, harness, choice='keep', node='', python=sys.executable,
-              cache=None, dry_run=False):
+              cache=None, dry_run=False, capabilities_manifest=None):
     repo, install = Path(repo).resolve(), Path(install).resolve()
     setting = install / 'dashboard' / (harness + '-provider.json')
     enabled = choice == 'enable' or choice == 'keep' and setting.is_file() and read(setting).get('enabled') is True
@@ -229,9 +385,11 @@ def provision(repo, install, harness, choice='keep', node='', python=sys.executa
             # User data is outside the owned runtime generation. PM/runner still
             # see the expected HERMES_HOME/profiles path.
             (root / 'profiles').symlink_to(profiles, target_is_directory=True)
-            details = (install_dsh(repo, root, node, cache) if harness == 'dsh'
+            details = (install_dsh(repo, root, node, cache, datadir=True) if harness == 'dsh'
                        else install_hermes(repo, root, python, cache))
+            details['generation_receipt'] = str(root / OWNER)
             receipt = {'harness': harness, 'complete': True, 'details': details,
+                       **{key: details[key] for key in ('variant', 'thin_config_contract') if key in details},
                        'hermes_commit': HERMES_COMMIT if harness == 'hermes' else None}
             validate(repo, harness, receipt)
             save(root / OWNER, receipt)
@@ -243,6 +401,13 @@ def provision(repo, install, harness, choice='keep', node='', python=sys.executa
     for file in (repo / 'integrations' / harness).iterdir():
         if file.is_file() and file.suffix in ('.py', '.mjs', '.json', '.patch', '.yml', '.md'):
             shutil.copy2(file, destination / file.name)
+    if harness == 'dsh':
+        spec = importlib.util.spec_from_file_location('_managed_capabilities', repo / 'dashboard/managed_capabilities.py')
+        capabilities = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(capabilities)
+        facts = capabilities.refresh_dsh_capabilities(repo, receipt['details'], capabilities_manifest)
+        if facts['extraction_status'] != 'known':
+            print('Managed dsh effort capabilities unknown; runtime defaults remain available.')
     save(base / 'current.json', {'generation': root.name, **receipt['details']})
     save(setting, {'enabled': True})
     print(f'Managed {harness} installed; configure backend and Keychain service/account separately (no key installed).')
@@ -257,6 +422,7 @@ def main():
     parser.add_argument('--node', default='')
     parser.add_argument('--python', default=sys.executable)
     parser.add_argument('--cache')
+    parser.add_argument('--managed-spawn-config', dest='capabilities_manifest')
     parser.add_argument('--dry-run', action='store_true')
     args = vars(parser.parse_args())
     try:

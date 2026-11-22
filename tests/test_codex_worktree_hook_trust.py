@@ -13,6 +13,8 @@ Codex still refuses any hook that differs. The user's own config is not touched.
 from __future__ import annotations
 
 import json
+import fcntl
+import os
 import tomllib
 from pathlib import Path
 
@@ -240,3 +242,257 @@ def test_metadata_elsewhere_cannot_point_its_commondir_at_a_trusted_repository(t
     (metadata / "gitdir").write_text(f"{stranger}/.git\n", encoding="utf-8")
     (metadata / "commondir").write_text(f"{source}/.git\n", encoding="utf-8")
     assert _carried(tmp_path, stranger, source) == []
+
+
+PARENT = "ParentCurie"
+PLUGIN = "agentstack-codex-app@fixture"
+PARENT_HOOK = f"{PLUGIN}:hooks/hooks.json:pre_tool_use:1:0"
+
+
+@pytest.fixture
+def parent_case(tmp_path):
+    """Two private generated homes; the ordinary source lacks the new approval."""
+    runtime = tmp_path / "runtime"
+    source = tmp_path / "source-home"
+    source.mkdir()
+    private(source / "config.toml", child_resume._emit_toml({
+        "model": "source-model", "sandbox_mode": "read-only",
+        "plugins": {PLUGIN: {"enabled": True}},
+        "mcp_servers": {"source-only": {"command": "source-only"}},
+    }))
+    parent_source = tmp_path / "parent-source"
+    parent_source.mkdir()
+    private(parent_source / "config.toml", child_resume._emit_toml({
+        "model": "parent-model", "sandbox_mode": "danger-full-access",
+        "plugins": {PLUGIN: {"enabled": True}},
+        "mcp_servers": {"parent-only": {"command": "parent-only"}},
+        "hooks": {"state": {PARENT_HOOK: {"trusted_hash": TRUSTED}}},
+    }))
+    runner = tmp_path / "run-mcp.sh"
+    runner.write_text("#!/bin/bash\nexit 0\n")
+    runner.chmod(0o700)
+
+    def build(name, source_home, parent="", work_dir=None, overlay="", use_recorded_parent=False):
+        private(runtime / f"agent_token_{name}", TOKEN)
+        private(runtime / "child-agents" / f"{name}.json", json.dumps({
+            "agent_id": 74 if name == PARENT else 73, "agent_name": name,
+            "project_key": "/p", "program": "codex", "registration_token": TOKEN,
+        }))
+        child_resume.prepare_active_state(runtime, name, project_key="/p", program="codex",
+                                         parent_agent=parent)
+        home = child_resume.build_home(
+            home=runtime / "child-agents" / f"{name}.codex-home", source=source_home,
+            runner=runner, child=name, project_key="/p", token_file=runtime / f"agent_token_{name}",
+            mcp_url="http://127.0.0.1:9/mcp", mail_env="", runtime_dir=runtime,
+            bearer_mode="disabled", python_bin="", mcp_profile="inherit",
+            parent_agent="" if use_recorded_parent else parent,
+            work_dir=work_dir, overlay_setting=overlay,
+        )
+        return tomllib.loads((home / "config.toml").read_text())
+
+    build(PARENT, parent_source)
+    return {"runtime": runtime, "source": source, "build": build,
+            "parent_home": runtime / "child-agents" / f"{PARENT}.codex-home",
+            "parent_state": runtime / "child-agents" / f"{PARENT}.json",
+            "parent_lock": runtime / "child-agents" / f".{PARENT}.resume.lock"}
+
+
+def test_verified_parent_approval_reaches_child_without_changing_source_home(parent_case):
+    case = parent_case
+    watched = [case["source"] / "config.toml", case["parent_state"],
+               case["parent_home"] / "config.toml", case["parent_lock"]]
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_mode) for p in watched}
+    result = case["build"](NAME, case["source"], PARENT)
+    assert result.get("hooks", {}).get("state", {}).get(PARENT_HOOK) == {"trusted_hash": TRUSTED}
+    assert result["model"] == "source-model" and result["sandbox_mode"] == "read-only"
+    assert result["mcp_servers"]["source-only"] == {"command": "source-only"}
+    assert "parent-only" not in result["mcp_servers"]
+    assert all((p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_mode) == before[p] for p in watched)
+
+
+def test_parent_approval_keeps_the_original_hash_for_native_change_detection(parent_case):
+    result = parent_case["build"](NAME, parent_case["source"], PARENT)
+    copied = result.get("hooks", {}).get("state", {}).get(PARENT_HOOK, {})
+    # The launcher carries the approval; it must not manufacture approval for
+    # a different definition. Codex performs the current-hash check itself.
+    assert copied.get("trusted_hash") == TRUSTED
+    assert copied.get("trusted_hash") != OTHER
+
+
+def _set_case_config(path, change):
+    config = tomllib.loads(path.read_text())
+    change(config)
+    private(path, child_resume._emit_toml(config))
+
+
+def _child_hook_state(case, parent=PARENT):
+    return case["build"](NAME, case["source"], parent).get("hooks", {}).get("state", {})
+
+
+@pytest.mark.parametrize("parent", ["", "UnknownParent", NAME])
+def test_no_formal_verified_parent_does_not_borrow_another_agents_approval(parent_case, parent):
+    assert PARENT_HOOK not in _child_hook_state(parent_case, parent)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("agent_name", "AnotherParent"), ("project_key", "/other-project"),
+    ("program", "claude-code"), ("agent_id", True), ("provider", "claude"),
+    ("retired_at", "2026-10-01T00:00:00Z"), ("resume_in_progress_at", "pending"),
+    ("tools_change_generation", "a" * 32),
+])
+def test_foreign_or_incomplete_parent_falls_back_to_native_review(parent_case, field, value):
+    path = parent_case["parent_state"]
+    state = json.loads(path.read_text())
+    state[field] = value
+    private(path, json.dumps(state))
+    assert PARENT_HOOK not in _child_hook_state(parent_case)
+
+
+@pytest.mark.parametrize("damage", [
+    "missing-state", "missing-lock", "invalid-state", "invalid-config",
+    "state-symlink", "config-symlink", "lock-symlink", "home-symlink",
+    "config-readable", "state-readable", "lock-readable", "home-readable", "config-hardlink",
+])
+def test_unsafe_parent_paths_are_not_repaired_or_used(parent_case, damage):
+    case = parent_case
+    paths = {"state": case["parent_state"], "lock": case["parent_lock"],
+             "config": case["parent_home"] / "config.toml", "home": case["parent_home"]}
+    operation, item = damage.split("-", 1)
+    if operation == "missing":
+        paths[item].unlink()
+    elif operation == "invalid":
+        paths[item].write_text("[invalid")
+    elif item == "symlink":
+        original = paths[operation]
+        saved = original.with_name(original.name + ".saved")
+        original.rename(saved)
+        original.symlink_to(saved)
+    elif item == "readable":
+        paths[operation].chmod(0o755 if operation == "home" else 0o644)
+    elif item == "hardlink":
+        os.link(paths[operation], paths[operation].with_name("extra-link"))
+    assert PARENT_HOOK not in _child_hook_state(case)
+    if operation == "missing":
+        assert not paths[item].exists()
+
+
+def test_a_parent_directory_with_another_owner_is_not_used(parent_case, monkeypatch):
+    original = Path.lstat
+
+    def foreign(path, *args, **kwargs):
+        info = original(path, *args, **kwargs)
+        if path == parent_case["parent_home"]:
+            fields = list(info)
+            fields[4] = os.getuid() + 1
+            return os.stat_result(fields)
+        return info
+
+    monkeypatch.setattr(Path, "lstat", foreign)
+    assert PARENT_HOOK not in _child_hook_state(parent_case)
+
+
+@pytest.mark.timeout(5)
+def test_busy_parent_does_not_wait_while_the_child_lock_is_held(parent_case):
+    with parent_case["parent_lock"].open("rb") as writer:
+        fcntl.flock(writer.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert PARENT_HOOK not in _child_hook_state(parent_case)
+
+
+@pytest.mark.parametrize("pending", ["tools-change", "legacy-migration", "registration-pending"])
+def test_dangling_parent_transaction_marker_still_requires_review(parent_case, pending):
+    marker = parent_case["parent_state"].with_name(f".{PARENT}.{pending}.json")
+    marker.symlink_to(marker.with_name("missing-transaction"))
+    assert PARENT_HOOK not in _child_hook_state(parent_case)
+    assert marker.is_symlink()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("AGENTSTACK_PROXY_AGENT_NAME", "AnotherParent"),
+    ("AGENTSTACK_PROJECT_KEY", "/foreign"), ("AGENTSTACK_PROXY_PROGRAM", "claude"),
+    ("AGENTSTACK_PROXY_TOKEN_FILE", "/unrelated/token"),
+    ("AGENTSTACK_RUNTIME_DIR", "/unrelated/runtime"),
+])
+def test_parent_proxy_binding_must_match_the_canonical_identity(parent_case, field, value):
+    _set_case_config(parent_case["parent_home"] / "config.toml",
+                     lambda c: c["mcp_servers"]["orrery-mail"]["env"].update({field: value}))
+    assert PARENT_HOOK not in _child_hook_state(parent_case)
+
+
+@pytest.mark.parametrize("hooks", [
+    [], {"state": []}, {"state": {PARENT_HOOK: "not-a-record"}},
+    {"state": {PARENT_HOOK: {"trusted_hash": 42}}},
+    {"state": {PARENT_HOOK: {"trusted_hash": "unapproved"}}},
+    {"state": {PARENT_HOOK: {"trusted_hash": TRUSTED, "enabled": 1}}},
+    {"state": {PARENT_HOOK: {"enabled": True}}},
+])
+def test_malformed_or_unapproved_parent_records_add_no_trust(parent_case, hooks):
+    _set_case_config(parent_case["parent_home"] / "config.toml", lambda c: c.update(hooks=hooks))
+    assert PARENT_HOOK not in _child_hook_state(parent_case)
+
+
+def test_explicit_source_disable_wins_over_parent_approval(parent_case):
+    _set_case_config(parent_case["source"] / "config.toml",
+                     lambda c: c.update(hooks={"state": {PARENT_HOOK: {"enabled": False}}}))
+    assert _child_hook_state(parent_case)[PARENT_HOOK] == {"enabled": False}
+
+
+def test_explicit_disable_in_existing_child_is_not_reenabled_on_rebuild(parent_case):
+    case = parent_case
+    case["build"](NAME, case["source"], "")
+    target = case["runtime"] / "child-agents" / f"{NAME}.codex-home" / "config.toml"
+    _set_case_config(target, lambda c: c.update(hooks={"state": {PARENT_HOOK: {"enabled": False}}}))
+    assert _child_hook_state(case)[PARENT_HOOK] == {"enabled": False}
+
+
+@pytest.mark.parametrize("entry", [{"trusted_hash": TRUSTED, "enabled": False}, {"enabled": False}])
+def test_parent_disabled_or_unapproved_hook_is_not_inherited(parent_case, entry):
+    _set_case_config(parent_case["parent_home"] / "config.toml",
+                     lambda c: c["hooks"]["state"].update({PARENT_HOOK: entry}))
+    assert PARENT_HOOK not in _child_hook_state(parent_case)
+
+
+def test_parent_disabled_entry_does_not_replace_a_baseline_decision(parent_case):
+    _set_case_config(parent_case["source"] / "config.toml",
+                     lambda c: c.update(hooks={"state": {PARENT_HOOK: {"trusted_hash": OTHER}}}))
+    _set_case_config(parent_case["parent_home"] / "config.toml",
+                     lambda c: c["hooks"]["state"][PARENT_HOOK].update(enabled=False))
+    assert _child_hook_state(parent_case)[PARENT_HOOK] == {"trusted_hash": OTHER}
+
+
+def test_parent_approval_replaces_stale_source_hash_without_enabling_anything(parent_case):
+    _set_case_config(parent_case["source"] / "config.toml",
+                     lambda c: c.update(hooks={"state": {PARENT_HOOK: {"trusted_hash": OTHER}}}))
+    assert _child_hook_state(parent_case)[PARENT_HOOK] == {"trusted_hash": TRUSTED}
+
+
+@pytest.mark.parametrize("approval", [{"trusted_hash": TRUSTED, "enabled": False}, {"enabled": False}])
+def test_source_project_disable_survives_worktree_rekey(parent_case, tmp_path, approval):
+    checkout, worktree = _checkouts(tmp_path)
+    key = f"{checkout}/.codex/hooks.json:pre_tool_use:0:0"
+    _set_case_config(parent_case["source"] / "config.toml",
+                     lambda c: c.update(hooks={"state": {key: approval}}))
+    result = parent_case["build"](NAME, parent_case["source"], PARENT, worktree)
+    assert result["hooks"]["state"][f"{worktree}/.codex/hooks.json:pre_tool_use:0:0"] == approval
+
+
+def test_overlay_disable_is_not_lost_when_adding_parent_approval(parent_case, tmp_path):
+    overlay = tmp_path / "overlay.toml"
+    private(overlay, child_resume._emit_toml({"hooks": {"state": {PARENT_HOOK: {"enabled": False}}}}))
+    result = parent_case["build"](NAME, parent_case["source"], PARENT, overlay=str(overlay))
+    assert result["hooks"]["state"][PARENT_HOOK].get("enabled") is False
+
+
+def test_overlay_project_disable_applies_before_worktree_aliases(parent_case, tmp_path):
+    checkout, worktree = _checkouts(tmp_path)
+    key = f"{checkout}/.codex/hooks.json:pre_tool_use:0:0"
+    _set_case_config(parent_case["parent_home"] / "config.toml",
+                     lambda c: c["hooks"]["state"].update({key: {"trusted_hash": TRUSTED}}))
+    overlay = tmp_path / "overlay.toml"
+    private(overlay, child_resume._emit_toml({"hooks": {"state": {key: {"enabled": False}}}}))
+    result = parent_case["build"](NAME, parent_case["source"], PARENT, worktree, str(overlay))
+    assert result["hooks"]["state"][f"{worktree}/.codex/hooks.json:pre_tool_use:0:0"]["enabled"] is False
+
+
+def test_rebuild_uses_the_parent_in_the_existing_child_record(parent_case):
+    result = parent_case["build"](NAME, parent_case["source"], PARENT, use_recorded_parent=True)
+    assert result["hooks"]["state"][PARENT_HOOK] == {"trusted_hash": TRUSTED}

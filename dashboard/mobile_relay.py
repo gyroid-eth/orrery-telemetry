@@ -1,0 +1,684 @@
+#!/usr/bin/env python3
+"""Opt-in mobile reader behind Tailscale Serve; never starts from normal install.
+
+Started by hand with flags, or by the launchd job that ``agentstack-mobile``
+(the cockpit's Settings panel) writes, with ``--config ~/.agentstack/mobile.json``.
+"""
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+import http.client
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import os
+from pathlib import Path
+import re
+import socket
+import threading
+import time
+from urllib.parse import parse_qs, urlsplit, urlencode
+
+try:
+    from dashboard import legacy_http_admission as admission
+    from dashboard.mobile_projection import SnapshotStore, MobileMailStore, WINDOWS, NAME, EVENT_KEY, png_image
+    from dashboard import mobile_input
+    from dashboard import mobile_history
+    from dashboard import mobile_push
+    from dashboard import mobile_spawn
+except ModuleNotFoundError:
+    import legacy_http_admission as admission
+    from mobile_projection import SnapshotStore, MobileMailStore, WINDOWS, NAME, EVENT_KEY, png_image
+    import mobile_input
+    import mobile_history
+    import mobile_push
+    import mobile_spawn
+
+HERE = Path(__file__).resolve().parent
+MAX_UPSTREAM_BYTES = 4 * 1024 * 1024
+UPSTREAM_TIMEOUT = 2
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+       "font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; "
+       "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+SHELL_CSP = CSP + "; frame-src 'self'"
+PANE_CSP = CSP.replace("frame-ancestors 'none'", "frame-ancestors 'self'")
+
+
+@dataclass(frozen=True)
+class Config:
+    owner_login: str
+    public_origin: str
+    listen_port: int = 8781
+    upstream_port: int = 8770
+    input_enabled: bool = False
+    phone_policy_reviewed: bool = False
+    cockpit_port: int = 8791
+    history_enabled: bool = False
+    push_enabled: bool = False
+
+    def __post_init__(self):
+        if (not self.owner_login or len(self.owner_login)>254 or
+                not self.owner_login.isascii() or any(ord(x)<=32 or ord(x)>=127 for x in self.owner_login)):
+            raise ValueError('owner login must be the exact ASCII Serve login')
+        scheme, host, _ = admission.origin(self.public_origin)
+        if scheme != 'https' or not host.endswith('.ts.net'):
+            raise ValueError('public origin must be a fixed HTTPS .ts.net origin')
+        if (type(self.listen_port) is not int or type(self.upstream_port) is not int or
+                not 1 <= self.listen_port <= 65535 or not 1 <= self.upstream_port <= 65535 or
+                self.listen_port == self.upstream_port):
+            raise ValueError('valid separate relay/upstream ports are required')
+        if (type(self.input_enabled) is not bool or type(self.phone_policy_reviewed) is not bool
+                or self.input_enabled and not self.phone_policy_reviewed):
+            raise ValueError('input requires explicit opt-in and --phone-policy-reviewed acknowledgement')
+        if (type(self.history_enabled) is not bool
+                or self.history_enabled and not self.phone_policy_reviewed):
+            raise ValueError('history requires explicit opt-in and --phone-policy-reviewed acknowledgement')
+        if (type(self.push_enabled) is not bool or self.push_enabled and not self.history_enabled):
+            raise ValueError('push requires reviewed conversation history')
+        if (type(self.cockpit_port) is not int or not 1<=self.cockpit_port<=65535
+                or (self.input_enabled or self.history_enabled) and self.cockpit_port in {self.listen_port,self.upstream_port}):
+            raise ValueError('valid separate cockpit adapter port is required')
+
+
+class Upstream:
+    """Literal loopback plus a finite internal route set; no proxy/redirects."""
+    def __init__(self, port):
+        self.port = port
+
+    def __call__(self, key):
+        if key == 'agents':
+            path = '/api/agents'
+        elif key == 'graph':
+            path = '/api/graph?all=1'
+        elif key.startswith('mail:') and key[5:] in WINDOWS:
+            path = '/api/mobile-mail?window=' + key[5:]
+        else:
+            raise ValueError('internal_route')
+        return json.loads(self._read(path,'application/json',MAX_UPSTREAM_BYTES))
+
+    def portrait(self,name):
+        if not isinstance(name,str) or not NAME.fullmatch(name):raise ValueError('invalid_name')
+        data=self._read('/api/mobile-portrait?name='+name,'image/png',512*1024)
+        if not png_image(data):raise ValueError('portrait_format')
+        return data
+
+    def message(self,window,key,mode):
+        if window not in WINDOWS or not EVENT_KEY.fullmatch(key) or mode not in {'content','revision'}:raise ValueError('message_query')
+        return json.loads(self._read('/api/mobile-message?'+urlencode({'window':window,'event':key,'mode':mode}),'application/json',MAX_UPSTREAM_BYTES,expired=True))
+
+    def mail_page(self,window,cursor,*,pair=None,direction='both'):
+        query={'window':window}
+        if cursor is not None:query['cursor']=cursor
+        if pair is not None:query.update(a=pair[0],b=pair[1],direction=direction)
+        return json.loads(self._read('/api/mobile-mail-page?'+urlencode(query),'application/json',MAX_UPSTREAM_BYTES,expired=True))
+
+    def cache_page(self,cursor):
+        query='' if cursor is None else '?'+urlencode({'cursor':cursor})
+        return json.loads(self._read('/api/mobile-cache-page'+query,'application/json',MAX_UPSTREAM_BYTES))
+
+    def spawn_catalog(self):
+        data=self._read('/telemetry/spawn-catalog','application/json',MAX_UPSTREAM_BYTES,timeout=23)
+        return mobile_input.decode_json(data,max_bytes=MAX_UPSTREAM_BYTES)
+
+    def spawn_agent(self,payload):
+        data=self._read('/api/spawn','application/json',65536,timeout=90,
+                        payload=payload,statuses=(200,202,400,403,409,422))
+        return mobile_input.decode_json(data,max_bytes=65536)
+
+    def spawn_status(self,name):
+        if not NAME.fullmatch(name):raise ValueError('invalid_name')
+        data=self._read('/api/spawn-status?name='+name,'application/json',65536)
+        return mobile_input.decode_json(data,max_bytes=65536)
+
+    def _read(self,path,mime,limit,*,expired=False,missing=False,timeout=None,payload=None,statuses=(200,)):
+        timeout = UPSTREAM_TIMEOUT if timeout is None else timeout
+        con = http.client.HTTPConnection('127.0.0.1', self.port, timeout=timeout)
+        timer = None
+        deadline = time.monotonic() + timeout
+        try:
+            con.connect()
+            sock = con.sock
+            def expire():
+                try:sock.shutdown(socket.SHUT_RDWR)
+                except OSError:pass
+            timer = threading.Timer(max(0.001,deadline-time.monotonic()),expire)
+            timer.daemon = True
+            timer.start()
+            types=(mime,) if isinstance(mime,str) else mime
+            headers={'Host':f'127.0.0.1:{self.port}','Accept':', '.join(types),'Connection':'close'}
+            body=None
+            if payload is not None:
+                headers['Content-Type']='application/json'
+                body=json.dumps(payload,separators=(',',':'),ensure_ascii=False,allow_nan=False).encode()
+            con.request('GET' if body is None else 'POST',path,body=body,headers=headers)
+            response = con.getresponse()
+            if expired and response.status==410:raise LookupError('upstream_event_or_cursor_expired')
+            if missing and response.status==404:raise LookupError('upstream_unsupported')
+            if response.status not in statuses or response.getheader('Content-Type','').split(';')[0].strip().lower() not in types:
+                raise ValueError('upstream_unavailable')
+            if response.getheader('Content-Encoding', 'identity').lower() != 'identity':
+                raise ValueError('upstream_encoding')
+            length = response.getheader('Content-Length')
+            if length is not None and (not length.isdigit() or int(length)>limit):
+                raise ValueError('upstream_size')
+            data=response.read(limit+1)
+            if len(data)>limit:raise ValueError('upstream_size')
+            return data
+        except (http.client.HTTPException, UnicodeError) as exc:
+            raise ValueError('upstream_protocol') from exc
+        finally:
+            if timer is not None:timer.cancel()
+            con.close()
+
+
+class DemoClient:
+    """Only the desktop's Demo snapshot and its two maintained mask scripts."""
+    ASSETS={'/demo-mask.js':'/demo_mask.js','/demo-mode.js':'/demo_mode.js'}
+
+    def __init__(self,port):
+        self.upstream=Upstream(port)
+
+    def status(self):
+        # Shared preference values are at most 16 Ki characters; allow their
+        # UTF-8 expansion plus the finite user/host identity envelope.
+        try:raw=self.upstream._read('/telemetry/demo','application/json',128*1024,missing=True)
+        except LookupError:return {'version':1,'supported':False,'on':False,'words':[],'identity':None}
+        except ConnectionRefusedError:return {'version':1,'supported':False,'on':False,'words':[],'identity':None}
+        value=json.loads(raw)
+        if (not isinstance(value,dict) or set(value)!={'version','on','words','identity'} or
+                type(value['version']) is not int or value['version']!=1 or type(value['on']) is not bool or
+                not isinstance(value['words'],list) or len(value['words'])>4096 or
+                any(not isinstance(word,str) or not 2<=len(word)<=16384 for word in value['words'])):
+            raise ValueError('demo_schema')
+        identity=value['identity']
+        if value['on']:
+            if (not isinstance(identity,dict) or set(identity)!={'users','hosts'} or
+                    any(not isinstance(identity[key],list) or len(identity[key])>16 or
+                        any(not isinstance(name,str) or not 1<=len(name)<=254 for name in identity[key])
+                        for key in ('users','hosts')) or not any(identity.values())):
+                raise ValueError('demo_identity')
+        elif identity is not None or value['words']:
+            raise ValueError('demo_disabled_state')
+        return dict(value,supported=True)
+
+    def asset(self,path):
+        if path not in self.ASSETS:raise ValueError('demo_asset')
+        return self.upstream._read(self.ASSETS[path],('text/javascript','application/javascript'),128*1024)
+
+
+def static_assets(root=HERE):
+    """Fixed bundled files only; no file path, overlay or provider lookup."""
+    fixed = {
+        '/': (root/'mobile/index.html', 'text/html; charset=utf-8'),
+        '/reader-pane': (root/'mobile/index.html', 'text/html; charset=utf-8'),
+        '/manifest.webmanifest': (root/'mobile/manifest.webmanifest', 'application/manifest+json; charset=utf-8'),
+        '/mobile.css': (root/'mobile/mobile.css', 'text/css; charset=utf-8'),
+        '/mobile.js': (root/'mobile/mobile.js', 'text/javascript; charset=utf-8'),
+        '/mobile-workspace.js': (root/'mobile/workspace.js', 'text/javascript; charset=utf-8'),
+        '/mobile-workspace.css': (root/'mobile/workspace.css', 'text/css; charset=utf-8'),
+        '/mobile-spawn.js': (root/'mobile/spawn.js', 'text/javascript; charset=utf-8'),
+        '/mobile-spawn-controls.js': (root/'mobile/spawn_controls.js', 'text/javascript; charset=utf-8'),
+        '/mobile-spawn-controls.css': (root/'mobile/spawn_controls.css', 'text/css; charset=utf-8'),
+        '/mobile-theme.js': (root/'mobile/theme.js', 'text/javascript; charset=utf-8'),
+        '/theme_core.js': (root/'theme_core.js', 'text/javascript; charset=utf-8'),
+        '/push.js': (root/'mobile/push.js', 'text/javascript; charset=utf-8'),
+        '/push-sw.js': (root/'mobile/push-sw.js', 'text/javascript; charset=utf-8'),
+        '/demo-sync.js': (root/'mobile/demo_sync.js', 'text/javascript; charset=utf-8'),
+        '/network_view.js': (root/'mobile/network_view.js', 'text/javascript; charset=utf-8'),
+        '/mail_comets.js': (root/'mobile/mail_comets.js', 'text/javascript; charset=utf-8'),
+        '/conversation_markdown.js': (root/'mobile/conversation_markdown.js', 'text/javascript; charset=utf-8'),
+        '/conversation.js': (root/'mobile/conversation.js', 'text/javascript; charset=utf-8'),
+        '/reader_reply_motion.js': (root/'mobile/reader_reply_motion.js', 'text/javascript; charset=utf-8'),
+        '/reader_reply_motion.css': (root/'mobile/reader_reply_motion.css', 'text/css; charset=utf-8'),
+        '/reader_send_motion.js': (root/'mobile/reader_send_motion.js', 'text/javascript; charset=utf-8'),
+        '/reader_send_motion.css': (root/'mobile/reader_send_motion.css', 'text/css; charset=utf-8'),
+        '/network_core.js': (root/'network_core.js', 'text/javascript; charset=utf-8'),
+        '/network_node.js': (root/'network_node.js', 'text/javascript; charset=utf-8'),
+    }
+    for icon in ('orbit-192.png','orbit-512.png','orbit-maskable-512.png','apple-touch-icon.png'):
+        fixed['/icons/'+icon]=(root/'mobile/icons'/icon,'image/png')
+    for font in ('fraunces-normal','fraunces-italic','ibm-plex-mono-400','ibm-plex-mono-500','ibm-plex-mono-600'):
+        fixed['/fonts/'+font+'.woff2']=(root/'mobile/fonts'/(font+'.woff2'),'font/woff2')
+    for logo in ('orbit','orbit-light','anthropic','openai','google','qwen','glm'):
+        fixed['/assets/'+logo+'.svg']=(root/'assets'/(logo+'.svg'),'image/svg+xml')
+    # Byte-identical canonical icon, bundled for the manual mobile reader even
+    # when ordinary dashboard DeepSeek presentation is not opted in.
+    fixed['/assets/deepseek.svg']=(root/'mobile/assets/deepseek.svg','image/svg+xml')
+    # Names come from a fixed product-owned directory, never operator overlays.
+    # The allowlist is fixed at server construction; traversal/query is rejected.
+    for p in (root/'portraits_64').glob('*.png'):
+        if re.fullmatch(r'[A-Za-z]+',p.stem) and not p.is_symlink():
+            fixed['/portraits/'+p.name]=(p,'image/png')
+    return fixed
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = 'ORRERY-mobile'
+    sys_version = ''
+    protocol_version = 'HTTP/1.0'
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(5)
+
+    def log_message(self, *args):
+        # Do not persist raw request paths, supplied logins or query strings.
+        pass
+
+    def send_error(self, code, message=None, explain=None):
+        self.close_connection = True
+        self._send(code, {'ok':False,'error':'request_rejected'})
+
+    def _send(self, status, data, mime='application/json; charset=utf-8', *, utf8=False, page=None):
+        if isinstance(data, dict):data=json.dumps(data,separators=(',',':'),allow_nan=False,ensure_ascii=not utf8).encode()
+        self.send_response(status)
+        policy={'shell':SHELL_CSP,'pane':PANE_CSP}.get(page,CSP)
+        for key,value in [('Content-Type',mime),('Content-Length',str(len(data))),
+                          ('Cache-Control','no-store'),('Content-Security-Policy',policy),
+                          ('X-Content-Type-Options','nosniff'),('Referrer-Policy','no-referrer'),
+                          ('X-Frame-Options','SAMEORIGIN' if page=='pane' else 'DENY'),
+                          ('Permissions-Policy','camera=(), microphone=(), geolocation=()')]:
+            self.send_header(key,value)
+        self.end_headers()
+        if self.command != 'HEAD':self.wfile.write(data)
+
+    def _admitted(self,*,write=False):
+        cfg=self.server.mobile_config
+        hosts=self.headers.get_all('Host',[])
+        users=self.headers.get_all('Tailscale-User-Login',[])
+        origins=self.headers.get_all('Origin',[])
+        try:
+            expected=admission.origin(cfg.public_origin)
+            if len(hosts)!=1 or len(users)!=1 or users[0]!=cfg.owner_login or len(origins)>1:
+                return False
+            if write and len(origins)!=1:return False
+            host,port=admission.authority(hosts[0])
+            if (host,port if port is not None else 443)!=expected[1:]:return False
+            if origins and admission.origin(origins[0])!=expected:return False
+        except (ValueError,TypeError):
+            return False
+        if self.headers.get_all('Authority',[]):return False
+        words = self.requestline.split()
+        target = words[1] if len(words) == 3 else ''
+        site=self.headers.get_all('Sec-Fetch-Site',[])
+        mode=self.headers.get_all('Sec-Fetch-Mode',[])
+        dest=self.headers.get_all('Sec-Fetch-Dest',[])
+        if any(len(values)>1 for values in (site,mode,dest)):return False
+        if (site[0] if site else '').lower() not in {'','none','same-origin'}:
+            # Android home shortcuts can start an authenticated top-level
+            # document navigation cross-site. This admits only the root shell,
+            # never its data/assets, and still passes every other guard below.
+            if not (self.command in {'GET','HEAD'} and target==self.path=='/'
+                    and site==['cross-site'] and mode==['navigate'] and dest==['document']):
+                return False
+        if any(self.headers.get_all(h,[]) for h in ('Upgrade','Transfer-Encoding','X-HTTP-Method-Override','X-Method-Override','X-HTTP-Method')):return False
+        lengths=self.headers.get_all('Content-Length',[])
+        if write:
+            operation=self.path.removeprefix('/view/terminal/')
+            limit=mobile_input.ATTACHMENT_JSON_LIMITS.get(operation,mobile_input.MAX_JSON_BYTES)
+            if (len(lengths)!=1 or re.fullmatch(r'[0-9]{1,8}',lengths[0]) is None or not 0<int(lengths[0])<=limit
+                    or self.headers.get_all('Content-Type',[])!=['application/json']
+                    or any(self.headers.get_all(h,[]) for h in ('Content-Encoding','Expect'))):return False
+        elif len(lengths)>1 or (lengths and lengths[0]!='0'):return False
+        return target == self.path and target.startswith('/') and not target.startswith('//') and '#' not in target and '%' not in target and '\\' not in target
+
+    def do_GET(self):
+        if not self._admitted():
+            self._send(403,{'ok':False,'error':'request_denied'});return
+        parts=urlsplit(self.path)
+        if parts.path in {'/view/spawn','/view/spawn/status'}:
+            self._spawn_get(parts);return
+        if self.path=='/view/push':
+            self._send(200,self.server.mobile_push.capability());return
+        if self.path=='/view/demo' or self.path in DemoClient.ASSETS:
+            if self.command=='HEAD':self._send(200,b'');return
+            try:
+                if self.path=='/view/demo':self._send(200,self.server.mobile_demo.status())
+                else:self._send(200,self.server.mobile_demo.asset(self.path),'text/javascript; charset=utf-8')
+            except (OSError,ValueError,TypeError):self._send(503,{'ok':False,'error':'demo_unavailable'})
+            return
+        if self.path=='/view/terminal':
+            if self.command=='HEAD':self._send(200,b'');return
+            if not self.server.mobile_config.input_enabled:
+                self._send(200,{'contract':mobile_input.CONTRACT,'enabled':False});return
+            try:self._send(200,self.server.mobile_input.call('capability'))
+            except Exception:self._send(503,{'error':'input_unavailable','enabled':False})
+            return
+        if self.path=='/view/history':
+            if self.command=='HEAD':self._send(200,b'');return
+            cfg=self.server.mobile_config
+            body={'enabled':cfg.history_enabled,'page_events':mobile_history.PAGE_EVENTS}
+            if not cfg.history_enabled:body['reason']='disabled' if cfg.phone_policy_reviewed else 'policy_not_reviewed'
+            self._send(200,body);return
+        if parts.path=='/view/conversation' and self.server.mobile_config.history_enabled:
+            # The phone selects an agent from the published roster and may
+            # return an issued page token. It never supplies a path or cursor.
+            query=parse_qs(parts.query,keep_blank_values=True)
+            nm=query.get('name',[''])[0];token=query.get('page',[None])[0]
+            if (set(query)-{'name','page'} or any(len(v)!=1 for v in query.values()) or not NAME.fullmatch(nm)
+                    or token is not None and not mobile_history.TOKEN.fullmatch(token)):
+                self._send(400,{'ok':False,'error':'invalid_history_query'});return
+            if not self.server.mobile_store.known_name(nm):
+                self._send(404,{'ok':False,'error':'agent_unavailable'});return
+            if self.command=='HEAD':self._send(200,b'');return
+            # UTF-8 on the wire: \u escapes would double a Japanese page.
+            try:self._send(200,mobile_history.encode(self.server.mobile_history.page(nm,token)))
+            except LookupError:self._send(410,{'ok':False,'error':'page_expired'})
+            except mobile_history.HistoryUnavailable as exc:
+                self._send(409 if exc.code=='history_changed' else 503 if exc.code in {'history_unavailable','dashboard_unavailable','history_slow'} else 200,
+                           {'ok':False,'error':exc.code,'reason_code':exc.reason_code})
+            except Exception:self._send(503,{'ok':False,'error':'history_unavailable','reason_code':''})
+            return
+        if parts.path=='/view/conversation/preview' and self.server.mobile_config.history_enabled:
+            # Only a roster name and an ID this relay issued on a history page.
+            # The cockpit reference, path and file stay on this machine.
+            query=parse_qs(parts.query,keep_blank_values=True)
+            nm=query.get('name',[''])[0];ref=query.get('ref',[''])[0]
+            if (set(query)-{'name','ref','thumbnail'} or not {'name','ref'}<=set(query)
+                    or 'thumbnail' in query and query['thumbnail']!=['1']
+                    or any(len(v)!=1 for v in query.values()) or not NAME.fullmatch(nm)
+                    or not mobile_history.TOKEN.fullmatch(ref)):
+                self._send(400,{'ok':False,'error':'invalid_preview_query'});return
+            if not self.server.mobile_store.known_name(nm):
+                self._send(404,{'ok':False,'error':'agent_unavailable'});return
+            if self.command=='HEAD':self._send(200,b'');return
+            try:
+                options={'thumbnail':True} if 'thumbnail' in query else {}
+                self._send(200,mobile_history.encode(self.server.mobile_history.preview(nm,ref,**options)))
+            except LookupError:self._send(410,{'ok':False,'error':'preview_expired'})
+            except mobile_history.HistoryUnavailable as exc:
+                self._send(503 if exc.code in {'preview_unavailable','dashboard_unavailable','history_slow'} else 200,
+                           {'ok':False,'error':exc.code})
+            except Exception:self._send(503,{'ok':False,'error':'preview_unavailable'})
+            return
+        if parts.path=='/view/snapshot':
+            query=parse_qs(parts.query,keep_blank_values=True)
+            if set(query)-{'window'} or len(query.get('window',[]))>1 or query.get('window',['day'])[0] not in WINDOWS:
+                self._send(400,{'ok':False,'error':'invalid_window'});return
+            if self.command=='HEAD':self._send(200,b'');return
+            payload=self.server.mobile_store.snapshot(query.get('window',['day'])[0])
+            self.server.mobile_mail.observe(payload)
+            if payload.get('sources',{}).get('mail',{}).get('status')=='available':self.server.mobile_mail.start_warm()
+            payload['mail_cache']=self.server.mobile_mail.progress()
+            unavailable=all(x['status']=='unavailable' for x in payload['sources'].values())
+            self._send(503 if unavailable else 200,payload);return
+        if parts.path in {'/view/message','/view/mail'}:
+            query=parse_qs(parts.query,keep_blank_values=True)
+            window=query.get('window',['day'])[0]
+            allowed={'window','event'} if parts.path=='/view/message' else {'window','cursor','a','b','direction'}
+            if set(query)-allowed or any(len(v)!=1 for v in query.values()) or window not in WINDOWS:
+                self._send(400,{'error':'invalid_mail_query'});return
+            key=query.get('event',[''])[0];cursor=query.get('cursor',[None])[0]
+            pair=None;direction=query.get('direction',['both'])[0]
+            if parts.path=='/view/message':
+                valid=bool(EVENT_KEY.fullmatch(key))
+            else:
+                pair_fields=set(query)&{'a','b','direction'}
+                if pair_fields:
+                    pair=(query.get('a',[''])[0],query.get('b',[''])[0])
+                valid=(cursor is None or bool(EVENT_KEY.fullmatch(cursor))) and (
+                    pair is not None and pair_fields=={'a','b','direction'} and all(NAME.fullmatch(n) for n in pair) and
+                    direction in {'both','forward','reverse'} and (pair[0]!=pair[1] or direction=='both') or
+                    pair is None and cursor is not None)
+            if not valid:self._send(400,{'error':'invalid_mail_query'});return
+            if pair and not all(self.server.mobile_store.known_agent(window,n) for n in pair):
+                self._send(404,{'error':'pair_unavailable'});return
+            if self.command=='HEAD':self._send(200,b'');return
+            try:
+                if parts.path=='/view/message':payload=self.server.mobile_mail.message(window,key)
+                elif pair is None:payload=self.server.mobile_mail.page(window,cursor)
+                else:payload=self.server.mobile_mail.page(window,cursor,pair=pair,direction=direction)
+                self._send(200,payload)
+            except LookupError:self._send(410,{'error':'mail_event_or_cursor_expired'})
+            except (OSError,ValueError,TypeError):self._send(503,{'error':'mail_unavailable'})
+            return
+        if parts.path=='/view/portrait':
+            query=parse_qs(parts.query,keep_blank_values=True)
+            window=query.get('window',['day'])[0];nm=query.get('name',[''])[0]
+            if set(query)-{'name','window'} or any(len(v)!=1 for v in query.values()) or window not in WINDOWS or not NAME.fullmatch(nm):
+                self._send(400,{'ok':False,'error':'invalid_portrait'});return
+            if not self.server.mobile_store.known_agent(window,nm):
+                self._send(404,{'ok':False,'error':'portrait_unavailable'});return
+            if self.command=='HEAD':self._send(200,b'','image/png');return
+            try:self._send(200,Upstream(self.server.mobile_config.upstream_port).portrait(nm),'image/png')
+            except (OSError,ValueError):self._send(503,{'ok':False,'error':'portrait_unavailable'})
+            return
+        if parts.query:
+            self._send(404,{'ok':False,'error':'not_found'});return
+        if parts.path=='/network.css':
+            # One maintained PC stylesheet. Only its authored style block,
+            # never the full dashboard HTML/script/operation surface, is served.
+            try:
+                text=(self.server.mobile_root/'index.html').read_text()
+                style=re.search(r'<style id="agentstack-dashboard-styles">(.*?)</style>',text,re.S)
+                if style is None:raise ValueError('style_missing')
+                self._send(200,style[1].encode(),'text/css; charset=utf-8')
+            except (OSError,ValueError):self._send(503,{'ok':False,'error':'asset_unavailable'})
+            return
+        if parts.path=='/reader-pane' and parts.query:
+            self._send(404,{'ok':False,'error':'not_found'});return
+        asset=self.server.mobile_assets.get(parts.path)
+        if asset is None:
+            self._send(404,{'ok':False,'error':'not_found'});return
+        file,mime=asset
+        try:
+            if file.is_symlink():raise OSError('asset_symlink')
+            data=file.read_bytes()
+            page={'/':'shell','/reader-pane':'pane'}.get(parts.path)
+            self._send(200,data,mime,page=page)
+        except OSError:self._send(503,{'ok':False,'error':'asset_unavailable'})
+
+    def do_HEAD(self):self.do_GET()
+
+    def do_POST(self):
+        if self.path=='/view/spawn':
+            self._spawn_post();return
+        if self.path in {'/view/push/key','/view/push/status','/view/push/save','/view/push/remove'}:
+            self._push_post();return
+        operation=self.path.removeprefix('/view/terminal/')
+        if (not self.server.mobile_config.input_enabled or not self.path.startswith('/view/terminal/')
+                or operation not in mobile_input.OPERATIONS):
+            self._no_method();return
+        self.close_connection=True
+        if not self._admitted(write=True):
+            self._send(403,{'error':'input_request_denied'});return
+        try:
+            payload=self._request_json(mobile_input.ATTACHMENT_JSON_LIMITS.get(operation,mobile_input.MAX_JSON_BYTES),
+                                       20 if operation in mobile_input.ATTACHMENT_JSON_LIMITS else 5)
+            if not mobile_input.request_fields(operation,payload):raise ValueError('input_json_invalid')
+        except (ValueError,OSError):
+            self._send(400,{'error':'input_request_invalid'});return
+        try:self._send(200,self.server.mobile_input.call(operation,payload),utf8=operation=='preview')
+        except Exception as error:
+            # A lost response cannot establish whether a commit reached tmux.
+            # The UI retains only the operation ID, offers status, and never
+            # repeats the send automatically.
+            reason=str(error) if isinstance(error,mobile_input.InputUnavailable) and mobile_input.attachment_error(operation,str(error)) else 'input_unavailable'
+            self._send(503,{'error':reason,'state':'unknown' if operation=='commit' else 'unavailable'})
+
+    def _request_json(self, limit, timeout):
+        def expire():
+            try:self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:pass
+        timer=threading.Timer(timeout,expire);timer.daemon=True;timer.start()
+        try:
+            size=int(self.headers['Content-Length']);data=self.rfile.read(size)
+            if len(data)!=size:raise ValueError('input_json_invalid')
+            return mobile_input.decode_json(data,max_bytes=limit)
+        finally:timer.cancel()
+
+    def _spawn_capability(self):
+        if self.server.mobile_config.input_enabled:
+            try:capability=self.server.mobile_input.call('capability')
+            except (OSError,ValueError):raise mobile_spawn.SpawnError('launch_unavailable',503) from None
+            if capability.get('enabled') is True and capability.get('contract')==mobile_input.CONTRACT:
+                return capability
+        raise mobile_spawn.SpawnError('launch_disabled',404)
+
+    def _spawn_get(self, parts):
+        try:
+            capability=self._spawn_capability()
+            if parts.path=='/view/spawn':
+                if parts.query:raise mobile_spawn.SpawnError('invalid_launch',400)
+                if self.command=='HEAD':self._send(200,b'');return
+                result=self.server.mobile_spawn.catalog(capability['epoch'],configurable=capability['api']==31)
+            else:
+                query=parse_qs(parts.query,keep_blank_values=True)
+                if set(query)!={'receipt'} or len(query['receipt'])!=1:
+                    raise mobile_spawn.SpawnError('invalid_launch',400)
+                result=self.server.mobile_spawn.status(capability['epoch'],query['receipt'][0])
+            self._send(200,result,utf8=True)
+        except mobile_spawn.SpawnError as error:
+            self._send(error.status,{'error':str(error)})
+        except (OSError,ValueError):
+            self._send(503,{'error':'launch_unavailable'})
+
+    def _spawn_post(self):
+        if not self.server.mobile_config.input_enabled:
+            self._no_method();return
+        self.close_connection=True
+        if not self._admitted(write=True):
+            self._send(403,{'error':'request_denied'});return
+        try:payload=self._request_json(mobile_input.MAX_JSON_BYTES,5)
+        except (OSError,ValueError):
+            self._send(400,{'error':'invalid_launch'});return
+        try:
+            capability=self._spawn_capability()
+            self._send(200,self.server.mobile_spawn.launch(capability['epoch'],payload))
+        except mobile_spawn.SpawnError as error:
+            self._send(error.status,{'error':str(error)})
+
+    def _push_post(self):
+        self.close_connection=True
+        if not self._admitted(write=True):
+            self._send(403,{'error':'request_denied'});return
+        self.connection.settimeout(5)
+        try:
+            size=int(self.headers['Content-Length']);data=self.rfile.read(size)
+            if len(data)!=size:raise ValueError('request_invalid')
+            value=mobile_input.decode_json(data,max_bytes=mobile_push.MAX_JSON)
+            result=self.server.mobile_push.call(self.path.rsplit('/',1)[-1],value)
+        except mobile_push.PushError as exc:
+            self._send(409,{'error':str(exc)});return
+        except (OSError,ValueError,TypeError):
+            self._send(400,{'error':'request_invalid'});return
+        self._send(200,result)
+
+    def _no_method(self):
+        self.close_connection=True
+        self._send(405,{'ok':False,'error':'method_not_allowed'})
+
+    do_PUT=do_PATCH=do_DELETE=do_OPTIONS=do_TRACE=do_CONNECT=_no_method
+
+
+class ReaderServer(ThreadingHTTPServer):
+    def server_close(self):
+        if hasattr(self,'mobile_push'):self.mobile_push.close()
+        if hasattr(self,'mobile_mail'):self.mobile_mail.close()
+        super().server_close()
+
+
+def make_server(config:Config, *, store=None, mail_store=None, input_client=None, history_client=None, demo_client=None, push_service=None, root=HERE, test_port=None):
+    # Tests can request an ephemeral loopback port; CLI has no bind-host option.
+    server=ReaderServer(('127.0.0.1',config.listen_port if test_port is None else test_port),Handler)
+    server.daemon_threads=True
+    server.mobile_config=config
+    server.mobile_store=store if store is not None else SnapshotStore(Upstream(config.upstream_port))
+    server.mobile_mail=mail_store if mail_store is not None else MobileMailStore(Upstream(config.upstream_port))
+    server.mobile_root=Path(root)
+    server.mobile_demo=demo_client if demo_client is not None else DemoClient(config.cockpit_port)
+    server.mobile_assets=static_assets(Path(root))
+    server.mobile_input=(input_client if input_client is not None else
+                         mobile_input.InputClient(config.cockpit_port,config.owner_login) if config.input_enabled else None)
+    spawn_backend=Upstream(config.upstream_port)
+    server.mobile_spawn=mobile_spawn.MobileSpawn(Upstream(config.cockpit_port).spawn_catalog,
+                                                spawn_backend.spawn_agent,spawn_backend.spawn_status)
+    server.mobile_history=(history_client if history_client is not None else
+                           mobile_history.HistoryClient(config.cockpit_port) if config.history_enabled else None)
+    push_root=Path(os.environ.get('AGENTSTACK_HOME') or Path.home()/'.agentstack')/'runtime/mobile-push'
+    server.mobile_push=push_service if push_service is not None else mobile_push.PushService(
+        push_root,config.owner_login,config.public_origin,
+        lambda:mobile_push.project_roster(Upstream(config.upstream_port)('agents')),
+        lambda name:server.mobile_history.page(name),server.mobile_demo.status,enabled=config.push_enabled)
+    server.mobile_push.start()
+    return server
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--enable',action='store_true',help='explicitly start the opt-in loopback reader')
+    parser.add_argument('--check',action='store_true',help='validate options without networking or starting a listener')
+    parser.add_argument('--owner-login',default='')
+    parser.add_argument('--public-origin',default='')
+    parser.add_argument('--listen-port',type=int,default=8781)
+    parser.add_argument('--upstream-port',type=int,default=8770)
+    parser.add_argument('--enable-terminal',action='store_true',help='opt in to confirmed input; viewing alone does not enable it')
+    parser.add_argument('--phone-policy-reviewed',action='store_true',
+                        help='operator acknowledgement of the access policy; does not verify it or enforce a single phone')
+    parser.add_argument('--enable-history',action='store_true',
+                        help='kept for older launch commands; history is now on whenever --phone-policy-reviewed is given')
+    parser.add_argument('--enable-push',action='store_true',help='opt in to the optional reviewed Web Push observer')
+    parser.add_argument('--disable-history',action='store_true',
+                        help='keep bound conversation history and file previews off')
+    parser.add_argument('--config',default='',
+                        help='read every option from a settings file written by agentstack-mobile; no other option is allowed')
+    parser.add_argument('--cockpit-port',type=int,default=8791)
+    args=parser.parse_args(argv)
+    if args.config:
+        if any(value!=parser.get_default(key) for key,value in vars(args).items() if key!='config'):
+            parser.error('--config takes no other option')
+        return run_from_settings(Path(args.config),parser)
+    if args.enable_history and args.disable_history:parser.error('--enable-history and --disable-history conflict')
+    if args.enable_terminal and not (args.enable or args.check):parser.error('--enable-terminal also requires --enable or --check')
+    if args.enable_history and not (args.enable or args.check):parser.error('--enable-history also requires --enable or --check')
+    if args.enable_push and not (args.enable or args.check):parser.error('--enable-push also requires --enable or --check')
+    if not args.enable and not args.check:
+        print('Mobile reader is off. No listener started.');return 0
+    # Phone access reads everything, history and previews included, once the
+    # operator has acknowledged the access policy; --disable-history opts out.
+    history=args.enable_history or (args.phone_policy_reviewed and not args.disable_history)
+    try:config=Config(args.owner_login,args.public_origin,args.listen_port,args.upstream_port,
+                      args.enable_terminal,args.phone_policy_reviewed,args.cockpit_port,history,args.enable_push)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.check:
+        print('Options valid; '+history_note(config)+' Device policy, Serve and phone access remain unverified. No listener started.');return 0
+    if history and not args.enable_history:
+        # Until this release, --phone-policy-reviewed alone left history off.
+        # A reader restarted with the same command now shows it: say so.
+        print('Conversation history and file/image previews are on: --phone-policy-reviewed now turns them on. '
+              'Restart with --disable-history to keep them off.',flush=True)
+    return serve(config)
+
+
+def history_note(config):
+    if config.history_enabled:return 'conversation history and previews are on.'
+    if config.phone_policy_reviewed:return 'conversation history is off (--disable-history).'
+    return 'conversation history is off until --phone-policy-reviewed is given.'
+
+
+def run_from_settings(path,parser):
+    try:
+        from dashboard import mobile_settings
+    except ModuleNotFoundError:
+        import mobile_settings
+    try:
+        settings=mobile_settings.load(path)
+        if not settings['access']:
+            print('Phone access is off in the settings file. No listener started.');return 0
+        config=mobile_settings.relay_config(settings)
+    except ValueError as exc:
+        parser.error('settings file: '+str(exc))
+    return serve(config)
+
+
+def serve(config):
+    server=make_server(config)
+    print(f'Mobile reader listening on 127.0.0.1:{config.listen_port}; {history_note(config)} Serve and device policy are operator-managed.',flush=True)
+    try:server.serve_forever()
+    except KeyboardInterrupt:pass
+    finally:server.server_close()
+    return 0
+
+
+if __name__=='__main__':raise SystemExit(main())

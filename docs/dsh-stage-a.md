@@ -1,9 +1,15 @@
 # DeepSeekの表示と残高
 
-段A の前半: 表示と残高。DeepSeek の子の起動は次の版。
+> この文書は段A時点の表示・残高の記録です。現在の dsh / Hermes の導入は
+> [インストール](install.md) を参照してください。catalog の候補表示と子の起動は別で、
+> API からの子起動には provider と harness の明示が必要です。この文書の表示機能
+> だけでは子の起動は成立しません（[API](api.md)）。
 
-既定は無効。installerの `--enable-dsh` はDeepSeekロゴの配信とUSD残高の表示だけを
-有効化する。dsh・dsh-TUI・Nodeの取得、spawn catalogの候補、子の起動は含まない。
+段A の前半: 表示と残高。当時、DeepSeek の子の起動は次の版だった。
+
+既定は無効。段A時点では、installerの `--enable-dsh` はDeepSeekロゴの配信とUSD残高の表示だけを
+有効化し、dsh・dsh-TUI・Nodeの取得、spawn catalogの候補、子の起動は含まなかった。
+現在の導入内容は [インストール](install.md) を正本とする。
 installer自身は鍵・API・登録に触らず、有効化後の既存usage読取で残高workerを使う。
 
 `--disable-dsh` はロゴ配信・残高の取得と行を無効化する。配置済みassetは保持し、

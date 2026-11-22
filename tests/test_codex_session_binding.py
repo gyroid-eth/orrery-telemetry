@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from _cleanup_mail import cleanup_mail_server
+
 import fcntl
 import importlib.util
 import json
@@ -830,15 +832,16 @@ def test_normal_child_cleanup_keeps_spawned_codex_history_bound(
     assert receipt["codex_mcp_profile"] == "inherit"
     assert "registration_token" not in receipt
 
-    cleaned = subprocess.run(
-        ["/bin/bash", str(ROOT / "hooks" / "cleanup-child-agent.sh"), AGENT],
-        cwd=ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=30,
-    )
+    with cleanup_mail_server() as mail_url:
+        cleaned = subprocess.run(
+            ["/bin/bash", str(ROOT / "hooks" / "cleanup-child-agent.sh"), AGENT],
+            cwd=ROOT,
+            env={**env, "AGENTSTACK_MCP_URL": mail_url},
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
     assert cleaned.returncode == 0, cleaned.stderr
     assert not child_home.exists()
     assert rollout.is_file()

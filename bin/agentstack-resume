@@ -14,6 +14,9 @@ import child_tools
 
 
 def main():
+    if 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in os.environ or os.environ.get('AGENTSTACK_RUNTIME_MODE') == 'fresh':
+        wrapper = Path(__file__).with_name('agentstack-runtime-client')
+        return subprocess.run(['/bin/bash', str(wrapper), 'resume', *sys.argv[1:]]).returncode
     loader = Path(__file__).resolve().parent / 'lib/global-client-loader.sh'
     result = subprocess.run(['/bin/bash', str(loader), 'resume-child', *sys.argv[1:]])
     if result.returncode != 125:

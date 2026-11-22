@@ -4,11 +4,59 @@
 
 ## dsh / Hermes の任意導入
 
-`install.sh --enable-dsh --dsh-node /absolute/node` はdsh 0.2.1-rc.2 / TUI 0.16.1とmanaged adapter、`--enable-hermes` は固定commit d923a5eb487a17c0a68801bba9ef0f56c81040a8のHermesを `harnesses/{dsh,hermes}/<世代>` へ導入します。両方なら2つのenableを指定します。既定ではどちらも取得せず、更新時は各々の保存済みenabledを継承します。Nodeは既存の24.2以上を絶対pathで指定し、本体は取得しません。取得はnpm/GitHubとHermesの固定PMに必要な配布元から行います。`--harness-cache PATH` はdshのtarball/npm offline cacheとHermesのlocal sourceを参照します（Hermes PMの依存取得は別です）。`--dry-run` は取得・書込なしです。
+**これまでClaude Code/Codexだけを使っていた方へ：** [DeepSeek・Localを追加する初期設定ガイド](native-setup.md)から始めてください。通常の更新だけでは、アプリの追加やAPIキーの登録は完了しません。以下は詳しい設定を調べるための参照です。
 
-Nodeの絶対pathは `AGENTSTACK_DSH_NODE` としてenv.shに保存され、通常の更新で引き継ぎます。旧導入で未保存の場合はdshの `current.json` から補完します。`--managed-spawn-config /absolute/manifest.json` は私有manifestの参照だけを `AGENTSTACK_MANAGED_SPAWN_CONFIG` に保存し、dashboardのlaunchd/systemd/背景起動へ渡します。再起動・次のログイン・通常更新でも保持され、manifest本体や鍵はコピーしません。明示のオプション・環境変数が保存値より優先します。
+### Ubuntu WSL の Secret Service 参照（実機受け入れ前）
 
-`--disable-dsh` / `--disable-hermes` は選択を無効化し、導入済みfileは保持します。通常のuninstallは所有receiptに記録したruntime世代とadapterを削除し、`harnesses/<harness>/profiles` の記憶・skillsは保持します。既存の手動 `hermes-managed` / Hermes homeは読まず触れず、外部Node、提供したcacheも保持します。鍵やログインは導入/移行しません。各harnessの `current.json` がruntimeの絶対参照を記録します。backend URL・model・Keychain service/account・run-templateは別途利用者が設定し、full preflightが必要です。導入のみでcatalogを利用可にはしません。
+Linux の標準 catalog は、manifest の `backends.<id>.credential_ref` に
+`{"store":"secret-service","attributes":{"service":"example-service","account":"example-account"}}`
+という非秘密参照を明示した経路を静的に検査します。資格の値は書きません。
+attributes の名前は英字で始まる英数字・`_`・`.`・`-`、値は非空の文字列です。
+制御文字、option と紛らわしい先頭 `-`、未知の store は拒否します。
+
+同じ backend の参照を dsh・Hermes・DeepSeek 残高の内部 reader が使います。
+既存の dsh `keychain` や Hermes `key_cmd` と併記すると
+`credential_reference_conflict` で止まります。新しい参照を使わない Mac の設定は維持します。
+reader は `/usr/bin/secret-tool` の lookup だけを行い、登録・unlock・平文保存・別資格への fallback はしません。
+利用者や agent が内部 reader を直接実行して鍵を表示する確認手順ではありません。
+
+Ubuntu WSL の Secret Service、同じユーザー session の D-Bus、collection の unlock は別途必要です。
+`DBUS_SESSION_BUS_ADDRESS` / `XDG_RUNTIME_DIR` は秘密値ではない接続 context として必要な取得 process にだけ引き継ぎます。
+`credential_reader_unavailable` は実行 file の不足、`credential_unavailable` は取得不可、
+`credential_timeout` は取得時間切れです。catalog の静的な可否は、鍵の存在や unlock を検査しません。
+残高の取得不可は会話の成功・失敗とは別に表示します。
+
+ここで確認済みなのは合成 store・設定生成・guard の対照です。実 WSL の版・arch・サービス環境、
+runtime の Linux 依存と認証・Mail・終了/resume は受け入れ前です。Secret Service/D-Bus の構築を
+動作済みの手順として案内するものではありません。Windows bridge、公開 login CLI、設定の自動移行は含みません。
+
+### 既存の導入と設定
+
+Claude Code / Codex CLI を使う人は、下の共通導入と各 CLI のログインの手順から始めます。API の model を dsh / Hermes で使う人は、先に[対応組合せと制限](managed-catalog.md)を確認してください。実機で確認した経路は現在 macOS の legacy mode で、WSL2 / Linux の共通導入手順だけでは使えません。
+
+起動までに用意するものは、任意導入する harness、接続先 backend の URL と正式な model ID、資格を取り出す参照、これらを結ぶ私有 manifest と harness 設定、作業 folder と親を使うかの選択です。installer は backend やログインを作らず、共通の provider ログイン機能は設計中です。利用者が設定を準備する工程と、runtime を導入する工程を分けてください。
+
+### 同梱例から設定を準備する
+
+installは `examples/native-harnesses/` に[日本語手順と4つの非有効例](../examples/native-harnesses/README.md)を配ります。導入済みruntimeは所有receipt/currentを検証し、参照入りの `resolved/<snapshot-id>/` を完了時に案内します（B標準）。未導入・model変更・調整では、既存agentが非秘密設定を補助するAの手順を使えます。コピー後の絶対参照3箇所と接続先を合わせ、本人が秘密入力・有効化を承認します。例は常に `enabled: false`、既存例/私有設定は非上書きで、例を置くだけでcatalogを有効にしません。
+
+MacのKeychain形式とLinuxのSecret Service `credential_ref` は同梱手順で区別します。Linux対応sourceの静的準備は、実WSLの秘密取得/接続/Mail/終了/resumeの受入を意味しません。uninstall/purgeは所有記録のhashと一致する未編集の例だけを削除し、利用者コピー・編集済み/未記録fileは保持します。
+
+`install.sh --enable-dsh --dsh-node /absolute/node` はdsh 0.2.1-rc.2 / TUI 0.16.1と標準起動用のnative hook adapter、`--enable-hermes` は固定commit d923a5eb487a17c0a68801bba9ef0f56c81040a8のHermesを `harnesses/{dsh,hermes}/<世代>` へ導入します。両方なら2つのenableを指定します。既定ではどちらも取得せず、更新時は各々の保存済みenabledを継承します。dsh用のNodeは既存の24.2以上を絶対pathで指定し、本体は取得しません。取得はnpm/GitHubとHermesの固定PMに必要な配布元から行います。`--harness-cache PATH` はdshのtarball/npm offline cacheとHermesのlocal sourceを参照します（Hermes PMの依存取得は別です）。`--dry-run` は取得・書込なしです。
+
+Hermes は既存 PM が取得した固定 Node/npm と、同じ固定 source の公式 `scripts/build/node-deps.mjs`・`tui.mjs` を使い、`ui-tui` と `apps/shared` の依存だけを lock に従って準備して、世代内の `tui-product/` を build します。web・desktop・一般 setup は実行しません。TUI recipe は世代 ID に含め、旧 `exa1` と profile を保持して新世代を作ります。Python があっても TUI の欠落・build 失敗があれば新世代を公開せず、従来の `current.json` を保持します。receipt は source・lock・PM の Node/npm・出力の hash を記録し、`keep` でも照合します。dsh 用の外部 Node の指定を Hermes に流用することはありません。Hermes の依存取得と TUI build には通信・追加容量が必要です。
+
+Hermesのsource取得では、明示した `--harness-cache` を最優先します。指定がなければ、所有記録とpathを検証でき、固定commitを持つ既存の管理世代からGit repositoryを独立コピーして再利用します。元repositoryの履歴とtagを残し、未commitの変更は引き継ぎません。利用できる管理sourceがない場合は、従来どおり公式GitHubからcloneします。cacheや選択済みsourceの取得失敗を、別の取得経路への切替で隠しません。固定commitの照合、CA修正とPM依存関係の検証は従来どおりです。対象は既存管理sourceを使える更新であり、新規導入の取得量や所要時間の短縮を保証するものではありません。PMの依存取得には別途通信が必要な場合があります。
+
+Nodeの絶対pathは `AGENTSTACK_DSH_NODE` としてenv.shに保存され、通常の更新で引き継ぎます。旧導入で未保存の場合はdshの `current.json` から補完します。`--managed-spawn-config /absolute/manifest.json` は標準のDeepSeek・Local catalogと起動に使う私有manifestの参照だけを `AGENTSTACK_MANAGED_SPAWN_CONFIG` に保存し、dashboardのlaunchd/systemd/背景起動へ渡します。再起動・次のログイン・通常更新でも保持され、manifest本体や鍵はコピーしません。明示のオプション・環境変数が保存値より優先します。
+
+標準catalogのmanifestを設定済みなら、dshのinstall/updateで固定runtimeからeffortの段と既定を鍵なし・通信なしで取得し、世代内の能力cacheへ保存します。modelやruntime変更後の古いcacheは使わず、未取得時はpickerがunknownになります。手書きのlow/highへ戻しません。未指定の起動はハーネス既定を使います。
+
+`--disable-dsh` / `--disable-hermes` は選択を無効化し、導入済みfileは保持します。通常のuninstallは所有receiptに記録したruntime世代とadapterを削除し、`harnesses/<harness>/profiles` の記憶・skillsは保持します。既存の手動 `hermes-managed` / Hermes homeは読まず触れず、外部Node、提供したcacheも保持します。鍵やログインは導入/移行しません。各harnessの `current.json` がruntimeの絶対参照を記録します。backend URL・model・Keychain service/accountは別途利用者が設定し、起動前に静的に検査します。導入のみでcatalogを利用可にはしません。
+
+設定後に catalog の利用可否を確認し、[cockpit の New Agent / Harness / Lineage から Mail を往復](getting-started.md#5-しりとりで通しの確認をする)させます。同梱 dashboard の NEW AGENT は harness を送らないため、DeepSeek / Local の子の起動には使えません。画面を使わない起動の詳細は [API reference](api.md) を参照してください。catalog の候補表示は、資格・接続・tool・Mail の成功を確かめる試験ではありません。
+
+Hermes の新しい子は project と canonical 名ごとの安定した独立 HOME を使い、正規 resume では保存 pin と exact native session ID を照合して同じ HOME を使います。旧共有 HOME の pin は `native_resume_legacy_profile` で停止し、旧データや pin を自動移行しません。合成 provider を使う実 CLI で保存・同 HOME / ID の復帰・別子との非共有を確認していますが、resume 時に最新 memory を初回 system prompt へ再注入するものではなく、実 provider・full Mail の通し受け入れは未完です。共通 Telegram 入口は設計中、Local の手動 effort は実 Local server での受け入れ前です（[現在の制限](managed-catalog.md#現在の制限)）。
 
 [README に戻る](../README.md) · [次: Launcher と identity](launchers.md)
 
@@ -175,7 +223,7 @@ Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux �
 --spawn-roots PATHS     directory typeahead が閲覧できる root（`:` 区切り）
 --codex-approval MODE   Codex child の `--ask-for-approval`（never | on-request | on-failure | untrusted、既定 never）
 --codex-network MODE    Codex child の sandbox network（on | off、既定 on）
---child-default-tools SPEC  子の既定の道具（--tools と同じ文法、既定は空）
+--child-default-tools SPEC  子の既定の道具（例: 'mcp:cua-driver;dsh=' で dsh だけ既定なし）
 --codex-add-dirs PATHS  Codex child に追加で書込を許す root（`:` 区切り）
 --retire-legacy-mail    付録参照（以前の MCP Agent Mail を退役させる）
 --mail auto|update|keep 稼働中の ORRERY Mail をどうするか（既定 keep。--update-mail / --keep-mail はその別名）
@@ -368,13 +416,24 @@ export AGENTSTACK_TCC_DIRS="$HOME/Desktop:$HOME/Documents:$HOME/Downloads"
 
 ## Upgrade
 
+保護設定の更新前に作業を完了するか active file reservation を解放し、更新後に影響する session をまとめて再起動してください。先に選択される root を preview します。
+
 ```bash
 git pull
+./scripts/install.sh --dry-run
 ./scripts/install.sh
 ~/.agentstack/bin/agentstack-doctor
 ```
 
 installer は payload と `VERSION` を更新し、service を再登録して、managed merge を再び preview します。同梱 ORRERY Mail の candidate と state を検証して再利用します。
+
+更新の後は、動いている agent（Claude Code・Codex・dsh・Hermes、常駐 bot を含む）を起動し直してください。managed block の指示と ORRERY Mail の道具の一覧（`show_files` など）は session の起動時に読み込まれるので、起動し直すまでは更新前のままです。managed merge の preview を承認しなかった場合は、指示も更新されません。
+
+### Reservation 保護設定の移行
+
+対象の top-level と delegated child 起動は、順序付き `AGENTSTACK_EXTRA_PROTECTED_ROOTS` の後に選択した物理作業 directory を保護します。Git root へ自動拡張はしません。namespace の選択と installed project key は変えません。install/update は process extras（空も含む）、installed extras（空も含む）、installed の旧 `AGENTSTACK_PROTECTED_ROOTS` の literal 値と順序をそのまま一度だけ、最後に空、の順で自動選択します。ambient shell/tmux の旧 root は取り込みません。移行元・値・保存先を `--dry-run` でも表示し、不正・曖昧な旧設定は上書き前に停止します。
+
+空でも extras marker を永続化するため、旧 list を再取り込みしません。installed の旧 field は direct/unmanaged hook 互換のためだけに保持し、managed 起動は無視します。shell/tmux の旧値が非空で installed 値と異なれば、extras があっても警告します。`--reset-settings` は extras を保持し、`AGENTSTACK_EXTRA_PROTECTED_ROOTS=` で明示的に解除できます。相対 reservation 名は最初に一致する root から決まるため、cutover 前に作業を完了するか active reservation を解放し、更新後に影響する session をまとめて再起動してください。[設定と移行の詳細](configuration.md#reservation-の保護範囲と移行)を参照してください。
 
 ### 前回の設定の引き継ぎ
 
@@ -384,18 +443,18 @@ installer は payload と `VERSION` を更新し、service を再登録して、
 2. 前回の install が書いた `~/.agentstack/env.sh` の値
 3. 既定値
 
-したがって、既定値から変えた設定は、環境変数のない新しい端末で `./scripts/install.sh` を実行しても保たれます。対象は project key と protected roots、dashboard port（`AGENTSTACK_PORT`）、label prefix（`AGENTSTACK_LABEL_PREFIX`）とそこから決まる ORRERY Mail の launchd label、terminal、MCP URL、service の `PATH`、Python、ORRERY Mail の state root（DB の場所）と service root と management socket、`AGENTSTACK_LANG` / `AGENTSTACK_MURMUR` / `AGENTSTACK_DELIVERABLE_ROOTS`、`AGENTSTACK_VAULT`、`AGENTSTACK_MANAGED_AGENTS_FILE`、dashboard の log と再起動の設定（`AGENTSTACK_DASHBOARD_LOG` / `_LOG_MAX_BYTES` / `_LOG_BACKUPS` / `_RESTART_DELAY`）、spawn の dirs / roots、worktree root、Codex child の設定、`AGENTSTACK_CODEX_BIN`、portraits、model catalog です。一覧は `hooks/project-context.sh` の `AGENTSTACK_INHERITED_SETTINGS` が正本です。
+したがって、既定値から変えた設定は、環境変数のない新しいターミナルで `./scripts/install.sh` を実行しても保たれます。対象は project key と明示した追加 protected roots、dashboard port（`AGENTSTACK_PORT`）、label prefix（`AGENTSTACK_LABEL_PREFIX`）とそこから決まる ORRERY Mail の launchd label、terminal、MCP URL、service の `PATH`、Python、ORRERY Mail の state root（DB の場所）と service root と management socket、`AGENTSTACK_LANG` / `AGENTSTACK_MURMUR` / `AGENTSTACK_DELIVERABLE_ROOTS`、`AGENTSTACK_VAULT`、`AGENTSTACK_MANAGED_AGENTS_FILE`、dashboard の log と再起動の設定（`AGENTSTACK_DASHBOARD_LOG` / `_LOG_MAX_BYTES` / `_LOG_BACKUPS` / `_RESTART_DELAY`）、spawn の dirs / roots、worktree root、Codex child の設定、`AGENTSTACK_CODEX_BIN`、portraits、model catalog です。一覧は `hooks/project-context.sh` の `AGENTSTACK_INHERITED_SETTINGS` が正本です。
 
-- **引き継ぐのは選んだ値だけです。** `env.sh` には既定値も含めてすべての値が書かれるので、どれを明示して選んだかを `AGENTSTACK_CHOSEN_SETTINGS` に一緒に記録し、次の install はそれだけを引き継ぎます。選んでいない値（書き出された既定値、installer が探して見つけた Python や PATH）は、次の版で既定値が変われば新しい既定値になります。この記録が無い以前の版の `env.sh` では、今の既定値と違う値を選んだものとみなします（PATH と Python は installer が自分で決めていたので除きます）。`AGENTSTACK_CODEX_BIN` は探して見つけた場所も引き継ぎます（使えなくなっていれば探し直します）。
+- **今の既定値と違う保存済みの値は、そのまま引き継ぎます。** `AGENTSTACK_CHOSEN_SETTINGS` が無い場合や、対象の設定名が未列挙の場合も同じです。子のターミナル自動表示や肖像フォルダーなどの設定は、次の更新に備えてこの一覧へ記録します。`PATH` と Python も対象です。一覧に記録された設定は、今の既定値と同じ値でも引き継ぎます。`AGENTSTACK_CODEX_BIN` は探して見つけた場所も引き継ぎます（使えなくなっていれば探し直します）。 保護の追加 root は `AGENTSTACK_CHOSEN_SETTINGS` にかかわらず、上記の設定の有無に基づく移行順で選びます。
 - 前回の値を変えるには、その option か環境変数を明示します（例: `./scripts/install.sh --port 8771`）。
-- **1 つだけ既定値に戻すには、空の値を明示します**（例: `AGENTSTACK_VAULT= ./scripts/install.sh`、`./scripts/install.sh --codex-add-dirs ""`）。
-- 選んだ値をまとめて既定値に戻すには `--reset-settings`（または `AGENTSTACK_RESET_SETTINGS=1`）を付けます。ただし、データの置き場所と、そこで動いている service の名前は reset でも引き継ぎます。project key、protected roots、ORRERY Mail の state root・service root・management socket、label prefix、ORRERY Mail の launchd label、MCP URL です。これらを reset で既定値に戻すと、前の service が登録されたまま、同じ DB に別の名前の ORRERY Mail が立つためです。変えるときは明示してください（前の service は自分で止める必要があります）。
-- 環境変数の値が `env.sh` に記録された値と同じ場合は、`env.sh` を読み込んだ shell や ORRERY cockpit の更新 script から来た値とみなし、新しく選んだ値としては扱いません（前回の扱いを保ち、`--reset-settings` では既定値に戻ります）。option で渡した値は常に明示です。選んだ設定の記録が無い以前の版の `env.sh` に対しては、同じ値でも明示として扱います（毎回明示してきた値を既定値に戻さないため）。
+- **1 つだけ既定値に戻すには、空の値を明示します**（例: `AGENTSTACK_VAULT= ./scripts/install.sh`、`./scripts/install.sh --codex-add-dirs ""`）。`env.sh` からその設定の値の行を削除した場合も、今回明示した値がなければ既定値になります。`AGENTSTACK_CHOSEN_SETTINGS` から設定名だけを削除しても、保存済みの非既定値は引き継ぎます。
+- 選んだ値をまとめて既定値に戻すには `--reset-settings`（または `AGENTSTACK_RESET_SETTINGS=1`）を付けます。ただし、データの置き場所と、そこで動いている service の名前は reset でも引き継ぎます。project key、明示的な追加 protected roots、ORRERY Mail の state root・service root・management socket、label prefix、ORRERY Mail の launchd label、MCP URL です。これらを reset で既定値に戻すと、前の service が登録されたまま、同じ DB に別の名前の ORRERY Mail が立つためです。変えるときは明示してください（前の service は自分で止める必要があります）。 共有予約の保護を黙って外さないため、明示した追加 root は reset 後も引き継ぎます。解除する場合は `AGENTSTACK_EXTRA_PROTECTED_ROOTS=` を指定します。
+- 環境変数の値が `env.sh` に記録された値と同じ場合は、`env.sh` を読み込んだ shell や ORRERY cockpit の更新 script から来た値とみなし、新しく選んだ値としては扱いません（通常は上記の規則で引き継ぎ、`--reset-settings` では既定値に戻ります）。option で渡した値は常に明示です。選んだ設定の記録が無い以前の版の `env.sh` に対しては、同じ値でも明示として扱います（毎回明示してきた値を既定値に戻さないため）。
 - 前回記録した Python が無くなっていた・古すぎる場合は、通知を出して探し直します（明示した `AGENTSTACK_PYTHON` が使えない場合は従来どおり停止します）。
 - `AGENTSTACK_CLAUDE_JSON` は引き継ぎません。試験用に別の場所へ入れるための差し替え口で、次の通常の install は `~/.claude.json` に書きます。
 - ORRERY Mail の service env（`AGENTSTACK_MAIL_ENV`）と DB path（`AGENTSTACK_MAIL_DB`）は引き継ぐ設定ではなく、state root と render から毎回決め直します（下記）。
 
-dry-run の冒頭に、決まった project key・port・label prefix・terminal・MCP URL が表示されます。
+dry-run の冒頭に、決まった project key・port・label prefix・terminal・MCP URL が表示されます。`AGENTSTACK_AUTO_OPEN_CHILD` と `AGENTSTACK_PORTRAITS_DIR` に実際の変更がある場合は、reset も含めて旧値 → 新値を表示します（空の値は `(empty)`）。
 
 `env.sh` を shell の起動時に読み込んでいる場合、その shell の `AGENTSTACK_*` は「明示した値」として扱われます。別の shell で入れ直した後は、新しい shell を開くか `env.sh` を読み直してから launcher や installer を使ってください。
 
@@ -479,6 +538,10 @@ source と destination の DB / archive を共有する構成は migration helpe
 ### ロールバック
 
 installer は third-party 版への自動切替を行いません。必要なら ORRERY Mail を停止し、migration backup と設定 backup を使って手動で復旧します。
+
+## スマホ閲覧用画面（任意）
+
+通常のinstall・更新では既定オフのままで、待受もServeも開始しません。本人の指定スマホ向けに閲覧専用の経路を用意する場合は[スマホ用の設定手順](mobile.md)へ進んでください。legacy Telemetry API 30以上を使い、global modeは未対応です。Mail本文は認証後の1件タップで開きます。実効端末policy・実Serve・本人スマホの受入は別の運用手順です。
 
 ## 関連文書
 

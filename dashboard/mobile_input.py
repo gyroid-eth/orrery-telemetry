@@ -1,0 +1,204 @@
+"""Finite authenticated-reader client for the opt-in cockpit input adapter.
+
+No connection or process starts on import. No request text is kept on this
+object, written to disk, or placed in a URL. The reader supplies owner/scope;
+phone payloads cannot replace them. A failed commit is never retried here.
+"""
+from __future__ import annotations
+
+import http.client
+import json
+import re
+import secrets
+import socket
+import threading
+import time
+
+CONTRACT='orrery-mobile-pane-v1'
+MAX_JSON_BYTES=16384
+MAX_IMAGE_BYTES=10*1024*1024
+MAX_IMAGE_JSON=4*((MAX_IMAGE_BYTES+2)//3)+MAX_JSON_BYTES
+MAX_FILE_BYTES=5*1024*1024
+MAX_FILE_JSON=4*((MAX_FILE_BYTES+2)//3)+MAX_JSON_BYTES
+FILE_FORMATS=frozenset({'pdf','txt','md','csv','json'})
+ATTACHMENT_JSON_LIMITS={'image':MAX_IMAGE_JSON,'file':MAX_FILE_JSON}
+MAX_PREVIEW_LINES=120
+MAX_PREVIEW_BYTES=12288
+HEX=re.compile(r'[a-f0-9]{64}\Z')
+EPOCH=re.compile(r'[a-f0-9]{32}\Z')
+NAME=re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,95}\Z')
+OPERATIONS={'targets':{'epoch','name'},'preview':{'epoch','choice'},'prepare':{'epoch','choice','revision','text'},
+            'commit':{'epoch','intent','confirmation'},'cancel':{'epoch','intent'},'status':{'epoch','intent'},
+            'image':{'epoch','choice','revision','image'},'file':{'epoch','choice','revision','file'}}
+
+def request_fields(operation,payload,*,fresh=None):
+    fields=set() if operation=='capability' else OPERATIONS.get(operation)
+    if fields is None or not isinstance(payload,dict):return False
+    fields=set(fields)
+    if operation=='targets' and ('mail_instance_id' in payload or 'mail_agent_id' in payload):
+        if fresh is False:return False
+        fields|={'mail_instance_id','mail_agent_id'}
+        if (not _matches(EPOCH,payload.get('mail_instance_id')) or type(payload.get('mail_agent_id')) is not int
+                or payload['mail_agent_id']<=0):return False
+    if set(payload)!=fields:return False
+    if operation=='file' and payload['file'] is not None:
+        file=payload['file']
+        return (isinstance(file,dict) and set(file)=={'format','data'}
+                and isinstance(file['format'],str) and file['format'] in FILE_FORMATS
+                and isinstance(file['data'],str) and 0<len(file['data'])<=4*((MAX_FILE_BYTES+2)//3))
+    return True
+
+
+def attachment_error(operation,reason):
+    return (operation in ATTACHMENT_JSON_LIMITS and isinstance(reason,str)
+            and re.fullmatch(operation+r'_[a-z_]+',reason) is not None)
+
+
+class InputUnavailable(ValueError):
+    pass
+
+
+def decode_json(data,*,max_bytes=MAX_JSON_BYTES):
+    if not isinstance(data,bytes) or len(data)>max_bytes: raise InputUnavailable('input_json_invalid')
+    def pairs(items):
+        result={}
+        for key,value in items:
+            if key in result: raise InputUnavailable('input_json_invalid')
+            result[key]=value
+        return result
+    def constant(value): raise InputUnavailable('input_json_invalid')
+    try: value=json.loads(data.decode('utf-8'),object_pairs_hook=pairs,parse_constant=constant)
+    except (ValueError,UnicodeError,RecursionError): raise InputUnavailable('input_json_invalid') from None
+    if not isinstance(value,dict): raise InputUnavailable('input_json_invalid')
+    return value
+
+
+def _matches(pattern,value):
+    return isinstance(value,str) and pattern.fullmatch(value) is not None
+
+
+def _public_target(value,*,proof=True,fresh=False):
+    expected={'name','pane_label','choice'}|({'revision'} if proof else set())|({'mail_instance_id','mail_agent_id'} if fresh else set())
+    if (not isinstance(value,dict) or set(value)!=expected or not _matches(NAME,value['name'])
+            or not isinstance(value['pane_label'],str) or not 1<=len(value['pane_label'])<=96
+            or any(ord(c)<32 or ord(c)==127 for c in value['pane_label'])
+            or not _matches(HEX,value['choice']) or proof and not _matches(HEX,value['revision'])):
+        raise InputUnavailable('input_response_invalid')
+    if fresh and (not _matches(EPOCH,value['mail_instance_id']) or type(value['mail_agent_id']) is not int or value['mail_agent_id']<=0):
+        raise InputUnavailable('input_response_invalid')
+    return dict(value)
+
+
+class InputClient:
+    def __init__(self,port,owner):
+        if type(port) is not int or not 1<=port<=65535: raise ValueError('input_port')
+        self.port=port; self.owner=owner; self.reader_epoch=secrets.token_hex(16)
+        self.fresh=False
+
+    def call(self,operation,payload=None):
+        payload={} if payload is None else payload
+        fresh=self.fresh
+        if not request_fields(operation,payload,fresh=fresh):
+            raise InputUnavailable('input_request_invalid')
+        request=dict(payload,contract=CONTRACT,owner=self.owner,reader_epoch=self.reader_epoch)
+        try: data=json.dumps(request,separators=(',',':'),ensure_ascii=False,allow_nan=False).encode('utf-8')
+        except (ValueError,UnicodeError): raise InputUnavailable('input_request_invalid') from None
+        if len(data)>ATTACHMENT_JSON_LIMITS.get(operation,MAX_JSON_BYTES): raise InputUnavailable('input_request_invalid')
+        value=self._post(operation,data)
+        if value.get('contract')!=CONTRACT or not _matches(EPOCH,value.get('epoch')):
+            raise InputUnavailable('input_capability_incompatible')
+        if operation=='capability':
+            if (set(value)!={'contract','api','epoch','enabled','supported','ack'} or type(value['api']) is not int
+                    or (value['api'],value['supported']) not in {(31,'legacy-managed-pane'),(34,'fresh-managed-pane')}
+                    or type(value['enabled']) is not bool or value['ack']!='tmux-command-accepted'):
+                raise InputUnavailable('input_capability_incompatible')
+            self.fresh=value['api']==34
+            return value
+        if value['epoch']!=payload['epoch']: raise InputUnavailable('input_epoch_changed')
+        if operation=='targets':
+            if (set(value)!={'contract','epoch','targets','truncated'} or not isinstance(value['targets'],list)
+                    or len(value['targets'])>128 or type(value['truncated']) is not bool):raise InputUnavailable('input_response_invalid')
+            targets=[_public_target(v,proof=False,fresh=fresh) for v in value['targets']]
+            if len({t['choice'] for t in targets})!=len(targets) or any(t['name']!=payload['name'] for t in targets):raise InputUnavailable('input_response_invalid')
+            if 'mail_instance_id' in payload and any(any(t[k]!=payload[k] for k in ('mail_instance_id','mail_agent_id')) for t in targets):
+                raise InputUnavailable('input_response_invalid')
+            value['targets']=targets;return value
+        if operation=='preview':
+            expected={'contract','epoch','target','text','truncated','controls_removed','observed_at','max_lines','max_bytes'}
+            if set(value)!=expected:raise InputUnavailable('input_response_invalid')
+            value['target']=_public_target(value['target'],fresh=fresh)
+            lines,size=value['max_lines'],value['max_bytes']
+            if (type(lines) is not int or not 1<=lines<=MAX_PREVIEW_LINES
+                    or type(size) is not int or not 1<=size<=MAX_PREVIEW_BYTES):raise InputUnavailable('input_response_invalid')
+            if (value['target']['choice']!=payload['choice'] or not isinstance(value['text'],str)
+                    or len(value['text'].encode('utf-8'))>size or len(value['text'].splitlines())>lines
+                    or type(value['truncated']) is not bool or type(value['controls_removed']) is not bool
+                    or type(value['observed_at']) is not int or value['observed_at']<=0
+                    ):raise InputUnavailable('input_response_invalid')
+            return value
+        if operation in ATTACHMENT_JSON_LIMITS:
+            upload=payload[operation] is not None
+            if set(value)!={'contract','epoch','target','enabled'}|({'path'} if upload else set()):
+                raise InputUnavailable('input_response_invalid')
+            value['target']=_public_target(value['target'],fresh=fresh)
+            if (type(value['enabled']) is not bool or value['target']['choice']!=payload['choice']
+                    or value['target']['revision']!=payload['revision']):raise InputUnavailable('input_response_invalid')
+            if upload:
+                path=value['path']
+                suffix=r'(?:png|jpg)' if operation=='image' else re.escape(payload['file']['format'])
+                directory='images' if operation=='image' else 'files'
+                if (value['enabled'] is not True or not isinstance(path,str) or not path.startswith('/') or len(path.encode('utf-8'))>4096
+                        or any(ord(c)<32 or ord(c)==127 for c in path)
+                        or not re.search(r'/\.orrery-input-'+directory+r'/[a-f0-9]{32}\.'+suffix+r'\Z',path)):
+                    raise InputUnavailable('input_response_invalid')
+            return value
+        expected={'contract','epoch','target','state','intent'}
+        if operation=='prepare':expected|={'confirmation','expires_in','text'}
+        if set(value)!=expected:raise InputUnavailable('input_response_invalid')
+        value['target']=_public_target(value['target'],fresh=fresh)
+        if (not _matches(HEX,value['intent']) or value['state'] not in {'prepared','pending','accepted','refused','unknown','cancelled','expired'}
+                or operation!='prepare' and value['intent']!=payload['intent']):raise InputUnavailable('input_response_invalid')
+        if operation=='prepare':
+            if (value['text']!=payload['text'] or value['target']['choice']!=payload['choice']
+                    or value['target']['revision']!=payload['revision'] or not _matches(HEX,value['confirmation'])
+                    or type(value['expires_in']) is not int or value['expires_in']!=30 or value['state']!='prepared'):
+                raise InputUnavailable('input_response_invalid')
+        return value
+
+    def _post(self,operation,data):
+        # Every operation has one fixed path. This is not the cockpit proxy or
+        # terminal WebSocket. No redirects, environment proxy or auto-retry.
+        timeout=25 if operation in ATTACHMENT_JSON_LIMITS else 7
+        connection=http.client.HTTPConnection('127.0.0.1',self.port,timeout=timeout)
+        timer=None; deadline=time.monotonic()+timeout
+        try:
+            connection.connect(); sock=connection.sock
+            def expire():
+                try: sock.shutdown(socket.SHUT_RDWR)
+                except OSError: pass
+            timer=threading.Timer(max(.001,deadline-time.monotonic()),expire); timer.daemon=True; timer.start()
+            headers={'X-ORRERY-Mobile-Preview':f'{MAX_PREVIEW_LINES}/{MAX_PREVIEW_BYTES}'} if operation=='preview' else {}
+            connection.request('POST','/_mobile/terminal/'+operation,body=data,headers={
+                'Host':f'127.0.0.1:{self.port}','Origin':f'http://127.0.0.1:{self.port}',
+                'X-ORRERY-Mobile-Contract':CONTRACT,'Content-Type':'application/json','Connection':'close',**headers})
+            response=connection.getresponse(); lengths=response.headers.get_all('Content-Length',[])
+            if (response.status not in ({200,403} if operation in ATTACHMENT_JSON_LIMITS else {200}) or response.getheader('Content-Type','').split(';')[0]!='application/json'
+                    or response.headers.get_all('Transfer-Encoding',[]) or response.headers.get_all('Content-Encoding',[])
+                    or response.getheader('Cache-Control')!='no-store' or len(lengths)!=1
+                    or re.fullmatch(r'[0-9]{1,5}',lengths[0]) is None or not 0<int(lengths[0])<=MAX_JSON_BYTES):
+                raise InputUnavailable('input_unavailable')
+            body=response.read(MAX_JSON_BYTES+1)
+            if len(body)!=int(lengths[0]) or time.monotonic()>=deadline:
+                raise InputUnavailable('input_unavailable')
+            value=decode_json(body)
+            if response.status!=200:
+                reason=value.get('error')
+                raise InputUnavailable(reason if attachment_error(operation,reason) else 'input_unavailable')
+            return value
+        except InputUnavailable:
+            raise
+        except (OSError,http.client.HTTPException,ValueError):
+            raise InputUnavailable('input_unavailable') from None
+        finally:
+            if timer is not None: timer.cancel()
+            connection.close()
