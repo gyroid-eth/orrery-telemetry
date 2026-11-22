@@ -17,6 +17,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import functools
+import hashlib
 import importlib.util
 import json
 import logging
@@ -4629,16 +4630,15 @@ def _claude_resume_material(session: str) -> tuple[dict, str, dict | None]:
     tombstone = os.path.join(RUNTIME_DIR, "child-resume-tombstones",
                              f"{registration['agent_id']}.json")
     state = None
-    if os.path.lexists(state_path) or os.path.lexists(tombstone):
+    if os.path.lexists(state_path):
         module = _child_resume_module()
         try:
-            if os.path.lexists(state_path):
-                if not hasattr(module, "inspect_legacy_claude"):
-                    raise _ResumeCapabilityError("config_unrestorable", "Child resume helper needs updating")
-                state = module.inspect_legacy_claude(
-                    pathlib.Path(RUNTIME_DIR), session, agent_id=registration["agent_id"],
-                    project_key=registration["project_key"], program=registration["program"],
-                )
+            if not hasattr(module, "inspect_legacy_claude"):
+                raise _ResumeCapabilityError("config_unrestorable", "Child resume helper needs updating")
+            state = module.inspect_legacy_claude(
+                pathlib.Path(RUNTIME_DIR), session, agent_id=registration["agent_id"],
+                project_key=registration["project_key"], program=registration["program"],
+            )
             if state is not None:
                 _legacy_claude_retention_days()
                 registration = _legacy_claude_owned_registration(session, registration)
@@ -4660,6 +4660,15 @@ def _claude_resume_material(session: str) -> tuple[dict, str, dict | None]:
         raise _ResumeCapabilityError("credential_missing", "Invalid Claude credential") from exc
     if not token:
         raise _ResumeCapabilityError("credential_missing", "Claude owner credential is empty")
+    if state is None and os.path.lexists(tombstone):
+        try:
+            raw = _read_private_regular(tombstone, "Claude retention tombstone", 16384)
+        except _PrivateFileError:
+            raise _ResumeCapabilityError("credential_permission", "Claude retention tombstone is unsafe") from None
+        removed = _claude_retention_record(raw, registration)
+        if removed["reason"] != "retention_expired" or not _claude_expiry_recovered(registration, removed, token):
+            raise _ResumeCapabilityError(removed["reason"], "Claude resume material was removed")
+        registration = {**registration, "recovered_after_expiry": True}
     if state is not None and not secrets.compare_digest(token.encode(), state["registration_token"].encode()):
         raise _ResumeCapabilityError("identity_mismatch", "Claude credential changed during validation")
     if state is not None:
@@ -4669,6 +4678,55 @@ def _claude_resume_material(session: str) -> tuple[dict, str, dict | None]:
         if not os.path.isfile(runner) or not os.access(runner, os.X_OK):
             raise _ResumeCapabilityError("config_unrestorable", "Child Mail proxy unavailable")
     return registration, token, state
+
+
+def _claude_retention_record(raw: bytes, registration: dict) -> dict:
+    try:
+        removed = json.loads(raw)
+        if (not isinstance(removed, dict)
+                or any(removed.get(key) != registration[key] for key in ("agent_id", "agent_name", "project_key"))
+                or removed.get("reason") not in {"purged", "retention_expired"}):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise _ResumeCapabilityError("identity_mismatch", "Claude retention tombstone is invalid") from None
+    return removed
+
+
+def _claude_expiry_recovered(registration: dict, removed: dict, token: str) -> bool:
+    """Require a completed local activation and its current operator receipt."""
+    if removed.get("provider") != "claude":
+        return False
+    identity_path = os.path.join(RUNTIME_DIR, f"agent_token_{registration['agent_name']}.identity.json")
+    try:
+        identity = json.loads(_read_private_regular(identity_path, "Enrollment identity", 4096))
+        fingerprint = hashlib.sha256(token.encode()).hexdigest()[:16]
+        if (not isinstance(identity, dict) or identity.get("kind") != "orrery-enrollment-active-v1"
+                or any(identity.get(key) != registration[key] for key in ("agent_id", "agent_name", "project_key"))
+                or identity.get("credential_fingerprint") != fingerprint):
+            return False
+        purged = _child_resume_module()._parse_timestamp(removed.get("purged_at"), "purged_at")
+        # The receipt and credential generation commit in one Mail transaction.
+        with _db() as con:
+            receipt = con.execute(
+                """SELECT r.created_at FROM enrollment_requests r
+                   JOIN mail_instances m ON m.id=1 AND m.instance_id=r.server_instance_id
+                   JOIN agents a ON a.id=r.agent_id AND a.credential_generation=r.new_generation
+                   JOIN projects p ON p.id=a.project_id AND p.human_key=r.project_key
+                   WHERE r.request_id=? AND r.server_instance_id=? AND r.agent_id=? AND r.project_key=?
+                     AND a.name=? AND a.program=? AND a.registration_token=?
+                     AND r.result='accepted' AND r.reason='operator-recover' AND r.operation='recover'
+                     AND r.new_generation=? AND r.new_fingerprint=?""",
+                (identity.get("request_id"), identity.get("server_instance_id"), registration["agent_id"],
+                 registration["project_key"], registration["agent_name"], registration["program"], token,
+                 identity.get("credential_generation"), fingerprint),
+            ).fetchone()
+        if receipt is None:
+            return False
+        recovered = datetime.fromisoformat(receipt[0])
+        # SQLite stores the enrollment timestamp in UTC without an offset.
+        return (recovered if recovered.tzinfo else recovered.replace(tzinfo=timezone.utc)) > purged
+    except (OSError, sqlite3.Error, ValueError, TypeError):
+        return False
 
 
 
@@ -4782,19 +4840,10 @@ def _claude_conversation_reason(session: str) -> tuple[dict, str | None]:
     tombstone = read_optional(runtime / "child-resume-tombstones" / f"{registration['agent_id']}.json",
                               "Claude retention tombstone", 16384)
     if tombstone is not None:
-        try:
-            removed = json.loads(tombstone)
-            if (not isinstance(removed, dict) or removed.get("agent_id") != registration["agent_id"]
-                    or removed.get("agent_name") != session or removed.get("project_key") != registration["project_key"]):
-                raise ValueError()
-            reason = removed.get("reason")
-            if reason not in {"purged", "retention_expired"}:
-                raise ValueError()
-        except (ValueError, UnicodeDecodeError):
-            raise _ResumeCapabilityError("identity_mismatch", "Claude retention tombstone is invalid") from None
-        if reason == "purged":
+        removed = _claude_retention_record(tombstone, registration)
+        if removed["reason"] == "purged":
             raise _ResumeCapabilityError("purged", "Claude resume material was explicitly purged")
-        expired = True
+        expired = raw is not None or token is None or not _claude_expiry_recovered(registration, removed, token)
     if expired:
         return registration, "retention_expired"
     if token is None:
@@ -5057,15 +5106,16 @@ def _rollback_claude_resume_local(session: str, registration: dict, *, legacy_ge
 
 def _register_claude_resume(session: str, registration: dict, token: str, *, legacy: bool = False) -> bool:
     """Authenticate the saved identity and capture its authoritative Mail state."""
-    if legacy:
-        _legacy_claude_owned_registration(session, registration)
+    existing_owner = legacy or registration.get("recovered_after_expiry")
+    if existing_owner:
+        registration = _legacy_claude_owned_registration(session, registration)
     arguments = {
         "project_key": registration["project_key"], "name": session,
         "program": registration["program"], "model": registration.get("model", ""),
         "task_description": registration.get("task_description", ""),
         "registration_token": token,
     }
-    if legacy:
+    if existing_owner:
         arguments["existing_agent_id"] = registration["agent_id"]
     registered = _mcp_call("register_agent", arguments)
     if not registered.get("ok"):
@@ -5080,9 +5130,9 @@ def _register_claude_resume(session: str, registration: dict, token: str, *, leg
     if (type(data.get("id")) is not int or data["id"] != registration["agent_id"]
             or data.get("name") != session):
         raise _ResumeCapabilityError("identity_mismatch", "Claude registration changed; refusing resume")
-    if legacy and (data.get("program") != registration["program"]
-                   or type(data.get("project_id")) is not int
-                   or data["project_id"] != registration["project_id"]):
+    if existing_owner and (data.get("program") != registration["program"]
+                           or type(data.get("project_id")) is not int
+                           or data["project_id"] != registration["project_id"]):
         raise _ResumeCapabilityError("identity_mismatch", "Claude owner authentication returned another project/provider")
     return bool(data.get("retired_at"))
 

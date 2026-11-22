@@ -4,10 +4,12 @@ from __future__ import annotations
 from _cleanup_mail import cleanup_mail_server
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import threading
 import tempfile
 import hashlib
@@ -15,6 +17,7 @@ import hashlib
 import pytest
 from fastmcp import Client
 from agentstack_mail import app, config, db
+from agentstack_mail.enrollment import ensure_mail_instance
 from dashboard import server
 from hooks import child_resume
 
@@ -149,8 +152,10 @@ def test_top_level_missing_token_resumes_conversation_without_mail(resume):
     assert launches and not calls
 
 
-@pytest.mark.parametrize("is_child", [False, True, "legacy"])
-@pytest.mark.parametrize("launch_ok", [False, True])
+@pytest.mark.parametrize("is_child,launch_ok", [
+    (False, False), (True, False), ("legacy", False),
+    (False, True), (True, True), ("legacy", True), ("expired", True),
+])
 def test_real_mail_cleanup_resume_receive_and_reply(resume, monkeypatch, tmp_path, is_child, launch_ok):
     """Use the bundled Mail service in memory, never the installed service."""
     runtime, registration, launches, _ = resume
@@ -161,7 +166,8 @@ def test_real_mail_cleanup_resume_receive_and_reply(resume, monkeypatch, tmp_pat
     management = Path(tempfile.gettempdir()) / f"claude-resume-tests-{os.getpid()}"
     management.mkdir(mode=0o700, exist_ok=True)
     socket_id = hashlib.sha256(os.fsencode(tmp_path)).hexdigest()[:12]
-    monkeypatch.setenv("AGENTSTACK_MAIL_MANAGEMENT_SOCKET", str(management / f"{socket_id}.sock"))
+    socket_path = management / f"{socket_id}.sock"
+    monkeypatch.setenv("AGENTSTACK_MAIL_MANAGEMENT_SOCKET", str(socket_path))
     monkeypatch.setenv("AGENTSTACK_MAIL_AGENT_NAME_ENFORCEMENT_MODE", "passthrough")
     monkeypatch.setenv("AGENTSTACK_MAIL_TOOLS_LOG_ENABLED", "false")
     monkeypatch.setenv("AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED", "false")
@@ -221,11 +227,80 @@ def test_real_mail_cleanup_resume_receive_and_reply(resume, monkeypatch, tmp_pat
             assert cleaned.returncode == 0, cleaned.stderr
             assert (runtime / f"agent_token_{NAME}").stat().st_mode & 0o777 == 0o600
             assert json.loads((runtime / "child-agents" / f"{NAME}.json").read_text())["retired_at"]
-        monkeypatch.setattr(server, "_mcp_call", call)
+        reply_token = TOKEN
+        if is_child == "expired":
+            assert child_resume.purge_one(
+                runtime, NAME, reason="retention_expired", now=datetime.now(timezone.utc) + timedelta(days=31),
+            )
+            tombstone = runtime / "child-resume-tombstones" / f"{registration['agent_id']}.json"
+            original_tombstone = tombstone.read_text()
+            credential = runtime / f"agent_token_{NAME}"
+            assert not credential.exists()
+            # This recovery route applies to a row that is already active in Mail.
+            assert call("unretire_agent", {"project_key": project, "agent_name": NAME})["ok"]
+            monkeypatch.setattr(server, "DB_PATH", str(tmp_path / "fixture.sqlite3"))
+            monkeypatch.setattr(server, "_has_session", lambda _name: False)
+            resume_calls = []
+
+            def observe_mail(method, arguments):
+                nonlocal reply_token
+                resume_calls.append(method)
+                if method == "register_agent":
+                    assert arguments["existing_agent_id"] == registration["agent_id"]
+                    reply_token = arguments["registration_token"]
+                return call(method, arguments)
+
+            monkeypatch.setattr(server, "_mcp_call", observe_mail)
+
+            def assert_conversation_only():
+                response = server.do_jump(NAME, open_terminal=False)
+                assert response["ok"] and response["resume_mode"] == "conversation_only"
+                assert response["mail_reason"] == "retention_expired"
+                assert not resume_calls
+
+            assert_conversation_only()
+            private(credential, TOKEN)
+            assert_conversation_only()
+            credential.unlink()
+
+            connection = tmp_path / "connection.json"
+            private(connection, json.dumps({
+                "kind": "orrery-mail-connection-v1", "management_socket": str(socket_path),
+                "runtime_dir": str(runtime),
+                "expected_server_instance_id": run(ensure_mail_instance()).instance_id,
+            }))
+            cli = Path(sys.executable).with_name("agentstack-enroll")
+            enrollment_target = ["--agent-id", str(registration["agent_id"]), "--project-key", project,
+                                 "--name", NAME, "--connection", str(connection)]
+            inspect = subprocess.run([cli, "inspect", *enrollment_target], check=True, capture_output=True, timeout=15)
+            inspected = json.loads(inspect.stdout)
+            assert not inspected["retired"] and inspected["local_credential_state"] == "missing"
+            recover = subprocess.run([cli, "recover", *enrollment_target], check=True, capture_output=True, timeout=15)
+            assert json.loads(recover.stdout)["reason"] == "operator-recover"
+
+            identity_path = credential.with_name(f"{credential.name}.identity.json")
+            identity = identity_path.read_text()
+            private(identity_path, json.dumps({**json.loads(identity), "credential_generation": 0}))
+            assert_conversation_only()
+            private(identity_path, identity)
+            removed = json.loads(original_tombstone)
+            private(tombstone, json.dumps({**removed, "purged_at": "2999-01-01T00:00:00Z"}))
+            assert_conversation_only()
+            private(tombstone, json.dumps({**removed, "reason": "purged"}))
+            assert server.do_jump(NAME, open_terminal=False)["resume_capability"] == "purged"
+            assert not resume_calls
+            private(tombstone, original_tombstone)
+        else:
+            monkeypatch.setattr(server, "_mcp_call", call)
         if not launch_ok:
             monkeypatch.setattr(server, "_launch_claude_resume_tmux", lambda *a, **k: {"ok": False, "error": "fixture startup failed"})
-        result = server.do_resume(NAME)
+        result = server.do_jump(NAME, open_terminal=False) if is_child == "expired" else server.do_resume(NAME)
         assert result["ok"] is launch_ok, result
+        if is_child == "expired":
+            assert result["resume_mode"] == "mail" and "mail_reason" not in result
+            assert resume_calls == ["register_agent", "unretire_agent"]
+            assert tombstone.read_text() == original_tombstone
+            assert reply_token != TOKEN and reply_token not in json.dumps(launches) + json.dumps(result)
 
         async def retired_at():
             agent = await app._get_agent(await app._get_project_by_identifier(project), NAME)
@@ -243,7 +318,7 @@ def test_real_mail_cleanup_resume_receive_and_reply(resume, monkeypatch, tmp_pat
         assert question["ok"], question
         inbox = call("fetch_inbox", {"project_key": project, "agent_name": NAME})
         assert inbox["ok"] and inbox["data"], inbox
-        reply = call("send_message", {"project_key": project, "sender_name": NAME, "sender_token": TOKEN,
+        reply = call("send_message", {"project_key": project, "sender_name": NAME, "sender_token": reply_token,
                                       "to": ["GreenBohr"], "subject": "reply", "body_md": "test reply"})
         assert reply["ok"], reply
         assert launches
