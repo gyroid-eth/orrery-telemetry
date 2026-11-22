@@ -1,11 +1,12 @@
 """Current owner/launch/pane controls over real ORM and Handler, mocked OS."""
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 import json
 import os
 from pathlib import Path
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ from uuid import uuid4
 import pytest
 
 from agentstack_mail.fresh_client import FreshBoundClient
-from agentstack_mail.fresh_launch import identity
+from agentstack_mail.fresh_launch import identity, record_session
 from agentstack_mail.fresh_runtime import _read_private, _write_private
 from agentstack_mail.fresh_targets import Targets
 from agentstack_mail.storage_origin_contract import B1Error
@@ -24,6 +25,7 @@ from test_fresh_mail import snapshot
 from test_fresh_dashboard import dashboard
 from test_fresh_delivery import prepared_route, mocked_os
 from test_fresh_launch import prepare as prepare_provider
+from test_fresh_notifications import running
 
 ROOT=Path(__file__).resolve().parents[3]
 
@@ -281,6 +283,132 @@ def test_real_handler_capture_history_jump_exit_are_current_and_finite(tmp_path,
                 wire=json.dumps([term,history,focused,exited,repeated])
                 assert not any(v in wire for v in ('registration_token','context_digest','binding_path','socket_path','transcript_path'))
     asyncio.run(run_test())
+
+
+async def hermes_target(client, tmp_path, monkeypatch, *, provider='hermes', sid='fixture-tui'):
+    event = running(client, tmp_path, monkeypatch)
+    base = client.path.parent / 'launch'
+    run = base / 'runs' / _read_private(base / 'current.json')['launch_id']
+    intent = _read_private(run / 'intent.json')
+    replace(run / 'intent.json', dict(intent, provider=provider))
+    sidecar = run / 'managed/native-session.json'
+    sidecar.parent.mkdir(mode=0o700)
+    _write_private(sidecar, dict(harness=provider, native_session_id=sid))
+    monkeypatch.setenv('AGENTSTACK_NATIVE_SESSION_FILE', str(sidecar))
+    await record_session(client, dict(event, session_id=sid))
+    database = client.path.parent / 'providers/hermes/state.db'
+    database.parent.mkdir(mode=0o700)
+    return run, database
+
+
+def hermes_schema(con):
+    con.executescript('''
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL);
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id),
+            role TEXT NOT NULL, content TEXT, tool_call_id TEXT, tool_calls TEXT,
+            tool_name TEXT, timestamp REAL NOT NULL
+        );
+        CREATE INDEX idx_messages_session_id ON messages (session_id, id);
+    ''')
+
+
+def test_hermes_history_projects_current_tui_wal_and_successful_telegram_replies(tmp_path, monkeypatch):
+    def call(call_id, text):
+        return dict(id=call_id, type='function', function=dict(name='telegram_reply',
+                    arguments=json.dumps(dict(chat_id=123, text=text, reply_to=52))))
+
+    async def scenario():
+        async with live(tmp_path) as (runtime, people, client, _):
+            _, database = await hermes_target(client, tmp_path, monkeypatch)
+            with closing(sqlite3.connect(database)) as writer:
+                writer.execute('PRAGMA journal_mode=WAL')
+                writer.execute('PRAGMA wal_autocheckpoint=0')
+                hermes_schema(writer)
+                writer.executemany('INSERT INTO sessions VALUES (?, ?)',
+                                   [('fixture-tui', 'tui'), ('other-tui', 'tui'), ('gateway', 'telegram')])
+                writer.executemany('INSERT INTO messages VALUES (NULL, ?, ?, ?, ?, ?, ?, ?)', [
+                    ('fixture-tui', 'user', '\x00json:' + json.dumps([
+                        dict(type='text', text='Question'), dict(type='image_url', image_url='PRIVATE-IMAGE')]),
+                     None, None, None, 4),
+                    ('fixture-tui', 'assistant', None, None, json.dumps([
+                        call('sent', 'Sent to Telegram'), call('failed', 'PRIVATE-FAILED'),
+                        call('duplicated', 'Also in transcript'), call('missing', 'PRIVATE-CROSS-SESSION')]), None, 3),
+                    ('fixture-tui', 'tool', '{"ok":true,"message_ids":[53]}', 'sent', None, 'telegram_reply', 2),
+                    ('fixture-tui', 'tool', '{"ok":false}', 'failed', None, 'telegram_reply', 2),
+                    ('fixture-tui', 'tool', '{"ok":true}', 'duplicated', None, 'telegram_reply', 2),
+                    ('fixture-tui', 'tool', '{"ok":true}', 'missing', None, 'other_tool', 2),
+                    ('other-tui', 'tool', '{"ok":true}', 'missing', None, 'telegram_reply', 2),
+                    ('fixture-tui', 'tool', '{"ok":true}', 'unmatched', None, 'telegram_reply', 2),
+                    ('fixture-tui', 'assistant', 'Also in transcript', None, None, None, 1),
+                    ('fixture-tui', 'assistant', str(database), None, None, None, 1),
+                    ('other-tui', 'assistant', 'PRIVATE-OTHER-RUN', None, None, None, 1),
+                    ('gateway', 'assistant', 'PRIVATE-GATEWAY', None, None, None, 1),
+                ])
+                writer.commit()
+                wal = database.with_name('state.db-wal')
+                before = database.read_bytes(), wal.read_bytes(), await snapshot(runtime)
+                with dashboard(client, Backend(client.path, ROOT), monkeypatch, tmp_path) as (_, request):
+                    query = ('/api/history?session=Alpha&mail_instance_id=' + runtime.config['instance_id']
+                             + '&mail_agent_id=' + str(people[0]['agent_id']))
+                    code, history = await asyncio.to_thread(request, query)
+                    assert code == 200 and history['source'] == 'hermes' and history['history_binding'] == 'bound'
+                    assert [(e['role'], e['kind'], e['text']) for e in history['events']] == [
+                        ('user', 'text', 'Question'), ('assistant', 'text', 'Sent to Telegram'),
+                        ('assistant', 'text', 'Also in transcript'), ('assistant', 'text', '[private]')]
+                    assert history['events'][1]['ts'] == '1970-01-01T00:00:02+00:00'
+                    assert history['shown'] == history['total'] == 4 and not history['has_more']
+                    assert 'PRIVATE-' not in json.dumps(history) and str(database) not in json.dumps(history)
+                    code, tail = await asyncio.to_thread(request, query + '&limit=0')
+                    assert code == 200 and tail['events'] == history['events'][-1:] and tail['has_more']
+                    assert (database.read_bytes(), wal.read_bytes()) == before[:2]
+                    writer.executemany('INSERT INTO messages VALUES (NULL, ?, ?, ?, NULL, NULL, NULL, 6)',
+                                       [('fixture-tui', 'user', f'Tail {i}') for i in range(210)])
+                    writer.commit()
+                    code, tail = await asyncio.to_thread(request, query + '&limit=999')
+                    assert code == 200 and tail['shown'] == 200 and tail['has_more']
+                    assert [e['text'] for e in tail['events']] == [f'Tail {i}' for i in range(10, 210)]
+                    writer.execute('INSERT INTO messages VALUES (NULL, ?, ?, ?, NULL, NULL, NULL, 6)',
+                                   ('fixture-tui', 'assistant', '文' * 100_000))
+                    writer.commit()
+                    code, tail = await asyncio.to_thread(request, query + '&limit=1')
+                    assert code == 200 and tail['truncated'] and tail['has_more']
+                    assert tail['events'][0]['text'] == '文' * (65536 // 3)
+                # Only the fixture writer appended to the WAL.
+                assert (database.read_bytes(), await snapshot(runtime)) == (before[0], before[2])
+                assert wal.read_bytes().startswith(before[1])
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('case', ['other_native_id', 'not_tui', 'no_receipt', 'corrupt', 'redirect', 'dsh'])
+def test_hermes_history_refuses_unverified_targets(tmp_path, monkeypatch, case):
+    async def scenario():
+        async with live(tmp_path) as (_, _, client, _):
+            run, database = await hermes_target(client, tmp_path, monkeypatch,
+                                                provider='dsh' if case == 'dsh' else 'hermes')
+            with closing(sqlite3.connect(database)) as writer:
+                hermes_schema(writer)
+                writer.execute('INSERT INTO sessions VALUES (?, ?)',
+                               ('other-tui' if case == 'other_native_id' else 'fixture-tui',
+                                'telegram' if case == 'not_tui' else 'tui'))
+                writer.execute("INSERT INTO messages VALUES (NULL, 'other-tui', 'user', 'Other', NULL, NULL, NULL, 1)")
+                writer.commit()
+            expected = 'FRESH_NATIVE_SESSION_MISMATCH'
+            if case == 'no_receipt':
+                (run / 'session.json').unlink()
+                expected = 'FRESH_PRIVATE_FILE_UNAVAILABLE'
+            elif case == 'corrupt':
+                database.write_bytes(b'invalid SQLite file')
+            elif case == 'redirect':
+                destination = tmp_path / 'other-state.db'
+                database.rename(destination)
+                database.symlink_to(destination)
+            elif case == 'dsh':
+                expected = 'FRESH_HISTORY_PROVIDER_UNAVAILABLE'
+            with dashboard(client, Backend(client.path, ROOT), monkeypatch, tmp_path) as (_, request):
+                code, history = await asyncio.to_thread(request, '/api/history?session=Alpha')
+            assert code == 409 and history == dict(ok=False, error=expected, error_code=expected)
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize('changed',['current','native','generation','pane','socket','birth','owner'])
