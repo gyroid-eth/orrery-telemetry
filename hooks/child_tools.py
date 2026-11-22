@@ -8,7 +8,8 @@ A selection has two parts:
     a Claude child gets ORRERY Mail as its only configured MCP server, while
     Claude in Chrome and the built-in macOS computer use still follow the
     user's own settings and the child's working directory; a Codex child
-    inherits the user's MCP servers. ``"mail-only"`` promises that the child
+    inherits the user's MCP servers with direct screen and Chrome MCPs
+    requiring selection. ``"mail-only"`` promises that the child
     gets nothing beyond ORRERY Mail except what ``tools`` names.
 
 ``tools``
@@ -801,6 +802,10 @@ def write_private_json(path: str, payload: dict) -> None:
 # --------------------------------------------------------------------------- #
 # Codex
 # --------------------------------------------------------------------------- #
+def _codex_chrome_server(name: str, definition: dict) -> bool:
+    return name == "chrome-devtools" or _direct_chrome_package(definition) is not None
+
+
 def codex_browser_server(servers: dict) -> str:
     """The name of the user's browser MCP server in a Codex config.toml.
 
@@ -809,8 +814,7 @@ def codex_browser_server(servers: dict) -> str:
     found = [name for name, definition in servers.items()
              if isinstance(definition, dict)
              and name != "agentstack" and not looks_like_agent_mail(name)
-             and (name == "chrome-devtools" or (
-                 (table_entry(definition) or ("",))[0] in NAME_CLASSIFIED))]
+             and _codex_chrome_server(name, definition)]
     if "chrome-devtools" in found:
         return "chrome-devtools"
     if len(found) == 1:
@@ -842,7 +846,8 @@ def codex_apply(config: dict, spec: dict, *, managed_screen: dict | None = None)
     for name, server in list(servers.items()):
         if name in names:
             _check_screen_source(spec, name, server)
-        elif isinstance(server, dict) and _cua_server(name, server):
+        elif isinstance(server, dict) and (
+                _cua_server(name, server) or _codex_chrome_server(name, server)):
             servers[name] = {**server, "enabled": False}
     plugins = config.get("plugins")
     for plugin_id, plugin in plugins.items() if isinstance(plugins, dict) else ():

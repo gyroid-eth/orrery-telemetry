@@ -981,6 +981,23 @@ def test_codex_default_launch_writes_no_record(tmp_path):
     assert "enabled" not in _codex_child_config(env, "CodexPlain")["mcp_servers"]["windows-mcp"]
 
 
+@pytest.mark.parametrize("name", ["chrome-devtools", "custom-chrome"])
+@pytest.mark.parametrize("selected", [False, True])
+def test_codex_chrome_devtools_requires_selection(tmp_path, name, selected):
+    config_text = (f"[mcp_servers.{name}]\ncommand = \"npx\"\n"
+                   'args = ["-y", "chrome-devtools-mcp@latest", "--autoConnect"]\n')
+    env, workdir = _codex_env(tmp_path, config_text)
+    flags = ("--tools", f"mcp:{name}") if selected else ()
+    result = _launch(tmp_path, env, workdir, "CodexChrome", *flags, codex=True)
+    assert result.returncode == 0, result.stderr
+    chrome = _codex_child_config(env, "CodexChrome")["mcp_servers"][name]
+    assert chrome["enabled"] is selected
+    assert chrome["args"] == CHROME_DEVTOOLS["args"]
+    assert chrome.get("required", False) is selected
+    assert "enabled_tools" not in chrome and "tools" not in chrome
+    assert (pathlib.Path(env["CODEX_HOME"]) / "config.toml").read_text() == config_text
+
+
 def test_codex_default_browser_records_effective_selection_and_omission(tmp_path):
     env, workdir = _codex_env(tmp_path, CODEX_CONFIG + 'args = ["chrome-devtools-mcp@latest"]\n')
     env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser,screen:operate"
@@ -1002,8 +1019,7 @@ def test_explicit_codex_profile_wins_over_default_browser(tmp_path, profile):
     assert result.returncode == 0, result.stderr
     config = _codex_child_config(env, "CodexProfile")
     chrome = config["mcp_servers"]["chrome-devtools"]
-    if profile == "orrery-only":
-        assert chrome["enabled"] is False
+    assert chrome["enabled"] is False
     assert "enabled_tools" not in chrome and "tools" not in chrome
     record = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents" / "CodexProfile.tools.json"
     assert not record.exists()
