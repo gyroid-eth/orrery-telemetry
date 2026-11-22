@@ -348,6 +348,8 @@ The optional `under` parameter sets the starting directory. It accepts an existi
 
 ## GET `/api/agents`
 
+`last_active` is the time of the last recorded activity. For legacy tmux rows it is the later of the tmux session and Mail activity timestamps. `last_active_rel` gives the relative age. Use `running` and nullable `act_state` to read the current state. Running DECK cards show `act_state=work` even when elapsed time and context usage are unavailable. The last event can stay old during a long operation while the card still shows the current state.
+
 ### Agent runtime details (legacy, API 41)
 
 Legacy agent rows include these display fields in both the full roster and `scope=live`. Values without evidence are `null`. Read the existing `annot.role` for the role and `ctx_used` for context usage.

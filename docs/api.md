@@ -347,6 +347,8 @@ API 41 から利用できます。前後の空白を除いた `q` をフォル�
 
 ## GET `/api/agents`
 
+`last_active` は最後に記録された活動の時刻です。legacy の tmux 行では、tmux session と Mail の活動時刻のうち新しい方を返します。`last_active_rel` はその相対表示です。現在の作業状態は `running` と nullable な `act_state` で確認できます。稼働中の DECK カードは `act_state=work` を所要時間やコンテキスト使用率が無い場合も表示します。長い処理の間に最終イベント時刻が古いままでも、作業状態は別に表示されます。
+
 ### エージェントの実行情報（legacy、API 41）
 
 legacy の各エージェント行に以下の表示用フィールドを追加します。`scope=live` にも含まれます。根拠のない値は `null` です。既存の担当ラベルは `annot.role`、使用率は `ctx_used` を使います。
