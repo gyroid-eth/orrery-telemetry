@@ -191,7 +191,9 @@ def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None
     turn = project_step(raw.get('step_turn'), boundary=True)
     if turn and raw.get('kind') == 'system':
         result['step_turn'] = turn
-    if raw.get('step_boundary') is True and kind == 'text' and role == 'user':
+    elif raw.get('kind') == 'system' or (
+            raw.get('step_boundary') is True and kind == 'text' and role == 'user'):
+        # System notices are displayed as tools, so retain their boundary here.
         result['step_boundary'] = True
     if raw.get('step_wrapper') is True and kind == 'tool':
         result['step_wrapper'] = True

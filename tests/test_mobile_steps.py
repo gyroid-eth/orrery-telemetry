@@ -58,6 +58,57 @@ def test_native_projected_sequence_pairs_and_keeps_unknown_tools(provider):
     assert model['groups'][0]['closed'] == (provider == 'codex')
 
 
+@pytest.mark.parametrize('provider', ['claude', 'codex'])
+@pytest.mark.parametrize('separator', ['assistant', 'update', 'user', 'received', 'sent', 'system'])
+def test_projected_visible_output_splits_steps_in_the_same_turn(provider, separator):
+    sequence = fixtures(provider)
+    first_tool = sequence[1 if provider == 'claude' else 2]
+    if separator in {'assistant', 'update', 'user'}:
+        output = raw('progress', 'text', 'user' if separator == 'user' else 'assistant')
+        if separator == 'update':
+            output['variant'] = 'update'
+    elif separator == 'system':
+        output = raw('notice', 'system', 'system')
+    else:
+        mail = [dict(direction=separator, subject='Check complete')]
+        if separator == 'sent':
+            first_tool['mail'] = mail
+            output = None
+        else:
+            output = raw('notice', 'mail', 'user', mail=mail)
+    if output is not None:
+        # Claude can deliver the first result after the intervening output.
+        sequence.insert(2 if provider == 'claude' else 3, output)
+    projected, _, _, _ = history.project_page(dict(ok=True, provider=provider, events=sequence))
+    model = collect(projected, provider)
+    first, second = [g for g in model['groups'] if g['steps']]
+    assert [g['anchor'] for g in (first, second)] == (
+        ['call', 'call2'] if provider == 'claude' else ['complete', 'observed'])
+    assert [len(g['steps']) for g in (first, second)] == [1, 1]
+    assert first['closed']
+    assert first['duration'] == 2
+    assert second['duration'] == (3 if provider == 'claude' else None)
+
+
+def test_codex_completion_update_keeps_its_original_segment():
+    start, wrapper, first, unknown, second, end = fixtures('codex')
+    update = raw('repeat', step={**first['step'], 'status': 'failed'})
+    events = [start, wrapper, first, raw('progress', 'text'), update, unknown, second, end]
+    model = collect([history.project_event(e) for e in events], 'codex')
+    assert [[s['eventId'] for s in g['steps']] for g in model['groups']] == [['complete'], ['observed']]
+    assert model['groups'][0]['steps'][0]['status'] == 'failed'
+    assert 'repeat' in model['consumed']
+
+
+def test_codex_partial_turn_starting_with_mail_has_distinct_segments():
+    _, _, first, _, second, end = fixtures('codex')
+    first['mail'] = [dict(direction='sent', subject='Check complete')]
+    model = collect([history.project_event(e) for e in [first, second, end]], 'codex')
+    first_group, second_group = model['groups']
+    assert first_group['id'] != second_group['id']
+    assert [g['anchor'] for g in (first_group, second_group)] == ['complete', 'observed']
+
+
 def test_results_are_metadata_only_and_do_not_create_preview_grants():
     secret = '/private/credentials/hidden.txt SECRET_OUTPUT'
     event = raw('result', 'tool_result', step=dict(id='a'*32, phase='result', status='done', output=secret, arguments=secret, path=secret, references=[secret]))

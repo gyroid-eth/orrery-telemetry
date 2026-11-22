@@ -19,7 +19,7 @@ def project(provider, events):
 
 @pytest.mark.parametrize('provider', ['claude', 'codex'])
 @pytest.mark.parametrize('theme', ['light', 'dark', 'demo'])
-def test_steps_add_finish_toggle_demo_and_keep_original_extras(phone, provider, theme, tmp_path):
+def test_steps_add_finish_toggle_demo_and_keep_reference(phone, provider, theme):
     client, js, wait, state = phone
     if theme == 'light':
         js((ROOT/'dashboard/theme_core.js').read_text())
@@ -36,7 +36,6 @@ def test_steps_add_finish_toggle_demo_and_keep_original_extras(phone, provider, 
     # Codex's explicit closing marker comes only when the work actually finishes.
     ongoing = sequence[:-1] if provider == 'codex' else sequence
     first = ongoing[:3]
-    first[1 if provider == 'claude' else 2]['mail'] = [dict(direction='sent',sender='SampleAgent',recipients=['Reviewer'],subject='Check the report',importance='normal',coverage='complete',body='Please inspect the result.')]
     first[1 if provider == 'claude' else 2]['references'] = [dict(id='r'*32, label='report.md', kind='file')]
     state.update(provider=provider, events=project(provider, first))
     js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
@@ -45,9 +44,12 @@ def test_steps_add_finish_toggle_demo_and_keep_original_extras(phone, provider, 
     assert js("document.querySelector('.conversation-steps-toggle').getAttribute('aria-expanded')") == 'true'
     before = js("document.querySelector('.conversation-steps-time').textContent")
     wait("document.querySelector('.conversation-steps-time').textContent!=="+json.dumps(before), timeout=3)
-    folder = Path(os.environ.get('MOBILE_STEPS_CAPTURE_DIR', str(tmp_path)))
-    folder.mkdir(parents=True, exist_ok=True)
     def capture(stage):
+        destination = os.environ.get('MOBILE_STEPS_CAPTURE_DIR')
+        if not destination:
+            return
+        folder = Path(destination)
+        folder.mkdir(parents=True, exist_ok=True)
         js('new Promise(r=>setTimeout(r,300))')
         js("document.querySelector('.conversation-list').scrollTop=0")
         data = client.call('Page.captureScreenshot', format='png', captureBeyondViewport=False)['data']
@@ -59,7 +61,6 @@ def test_steps_add_finish_toggle_demo_and_keep_original_extras(phone, provider, 
     wait("document.querySelectorAll('.conversation-step').length===2")
     assert js("document.querySelectorAll('.conversation-steps').length") == 1
     assert js("document.querySelectorAll('.conversation-step-record:not([hidden]) .conversation-chip').length") == 1
-    assert js("document.querySelectorAll('.conversation-step-record:not([hidden]) .conversation-mail').length") == 1
     assert js("getComputedStyle(document.querySelector('.conversation-step-record'),'::before').display") == 'none'
     assert js("document.querySelectorAll('.conversation-tool-group').length") == 1
     assert js("document.querySelector('[data-id=unknown]').hidden")
@@ -107,7 +108,7 @@ def test_steps_add_finish_toggle_demo_and_keep_original_extras(phone, provider, 
 
 
 @pytest.mark.parametrize('theme', ['light', 'dark'])
-def test_stopped_unpaired_call_keeps_original_group_until_late_result(phone, theme, tmp_path):
+def test_stopped_unpaired_call_keeps_original_group_until_late_result(phone, theme):
     client, js, wait, state = phone
     if theme == 'light':
         js((ROOT/'dashboard/theme_core.js').read_text())
@@ -123,9 +124,12 @@ def test_stopped_unpaired_call_keeps_original_group_until_late_result(phone, the
     js("document.querySelector('.conversation-tool-group').click();window.pendingCall=document.querySelector('[data-id=call]')")
     assert js('pendingCall.hidden') is False
     assert js("pendingCall.querySelector('.conversation-tool-label').textContent") == 'Read'
-    folder = Path(os.environ.get('MOBILE_STEPS_UNPAIRED_CAPTURE_DIR', str(tmp_path)))
-    folder.mkdir(parents=True, exist_ok=True)
     def capture(stage):
+        destination = os.environ.get('MOBILE_STEPS_UNPAIRED_CAPTURE_DIR')
+        if not destination:
+            return
+        folder = Path(destination)
+        folder.mkdir(parents=True, exist_ok=True)
         js('new Promise(r=>setTimeout(r,300))')
         data = client.call('Page.captureScreenshot', format='png', captureBeyondViewport=False)['data']
         (folder/('mobile-'+theme+'-'+stage+'.png')).write_bytes(base64.b64decode(data))
@@ -148,3 +152,42 @@ def test_stopped_unpaired_call_keeps_original_group_until_late_result(phone, the
     js("document.querySelector('.conversation-steps:not([hidden]) .conversation-steps-toggle').click()")
     capture('matched')
     assert not any(op in {'prepare', 'commit'} for op, _ in state['calls'])
+
+
+@pytest.mark.parametrize('provider', ['claude', 'codex'])
+def test_visible_step_order_matches_on_live_append_and_reload(phone, provider):
+    _, js, wait, state = phone
+    js("window.OrreryMobileAgent={forName:()=>({running:false,stale:false,state:'wait'})}")
+    sequence = fixtures(provider)
+    first = sequence[:3]
+    notice = raw('progress', 'text', variant='update')
+    notice['text'] = 'The first check passed.'
+    # A sent Mail card remains visible on the second tool row.
+    sequence[4]['mail'] = [dict(direction='sent', subject='Second check complete')]
+    state.update(provider=provider, events=project(provider, first))
+    js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelectorAll('.conversation-steps:not([hidden])').length===1")
+    js("window.firstStepCard=document.querySelector('.conversation-steps:not([hidden])')")
+    state['events'] = project(provider, first+[notice]+sequence[3:])
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("document.querySelectorAll('.conversation-step').length===2")
+    measure = """(() => {
+        const rows = [...document.querySelector('.conversation-list').children].filter(el => !el.hidden);
+        const cards = rows.filter(el => el.matches('.conversation-steps'));
+        return {
+            cards: cards.length,
+            steps: cards.map(el => el.querySelectorAll('.conversation-step').length),
+            order: rows.flatMap(el => el.matches('.conversation-steps') ? ['steps']
+                : el.querySelector('.conversation-mail') ? ['mail']
+                : el.dataset.id === 'progress' ? ['assistant'] : [])
+        };
+    })()"""
+    live = js(measure)
+    assert live == dict(cards=2, steps=[1, 1], order=['steps', 'assistant', 'steps', 'mail'])
+    assert js("document.querySelector('.conversation-steps:not([hidden])')===firstStepCard")
+    js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelectorAll('.conversation-step').length===2")
+    reloaded = js(measure)
+    assert reloaded == live
+    print(json.dumps(dict(provider=provider, viewport=js('[innerWidth,innerHeight]'),
+                          live=live, reloaded=reloaded)))
