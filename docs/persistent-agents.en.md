@@ -458,6 +458,16 @@ A startup service or tmux script should make this its final `exec`. Do not hide 
 
 Only when restart reports `local-credential-unavailable` or the exact diagnostic `stage=local-token reason=credential-unavailable` should an operator stop the bot, begin again with `$HOME/.agentstack/bin/agentstack-enroll inspect`, and choose `recover` if the state is `server-token` plus a missing local credential. Do not have the model run it. Do not infer credential loss from a generic registration failure, HTTP 401/403, or a stopped Mail service.
 
+### Resume Claude in DECK after retention expires
+
+Use this procedure when retention expiry removed the child state and local credential and DECK reports `mail_reason: retention_expired`. The operator uses the original numeric ID, name, project, and connection pinned to the same Mail UUID.
+
+1. Run `"$HOME/.agentstack/bin/agentstack-enroll" inspect --agent-id "$TARGET_ID" --project-key "$PROJECT_KEY" --connection "$CONNECTION" --name "$TARGET_NAME"`. Verify the target, `connection_pinned: true`, `retired: false`, `credential_state: server-token`, and a local credential state of `missing` or `missing-token-same-identity`.
+2. Run `"$HOME/.agentstack/bin/agentstack-enroll" recover --agent-id "$TARGET_ID" --project-key "$PROJECT_KEY" --connection "$CONNECTION" --name "$TARGET_NAME"` once. Confirm `result: accepted` and `reason: operator-recover`. A previous successful recovery is sufficient while its receipt and saved credential are current.
+3. Exit any running conversation-only session and choose **Resume** in DECK. DECK matches the recovery receipt issued after expiry against the current credential, authenticates the same Mail identity, and returns `resume_mode: mail`. Later DECK resumes can use the same credential.
+
+Mail continues to reject `recover` for retired rows, and DECK rejects resumes after an explicit purge. The original child state is required when Claude needs its child-specific tool configuration and when resuming a Codex child.
+
 ## Applying the contract to another Mail instance or machine
 
 Each machine uses its own local Mail and connection profile. In the second machine's terminal:

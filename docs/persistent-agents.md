@@ -455,6 +455,16 @@ exec "$HOME/.agentstack/bin/agentstack-persistent" run \
 
 再起動後に `local-credential-unavailable` または `stage=local-token reason=credential-unavailable` が出たときだけ、bot を停止した状態で operator が `$HOME/.agentstack/bin/agentstack-enroll inspect` からやり直し、状態が `server-token` + local missing なら `recover` を選びます。モデル自身に実行させません。単なる registration failure、HTTP 401 / 403、Mail 停止を credential 紛失と推定しないでください。
 
+### 期限切れの Claude を DECK で再開する
+
+保管期限切れで子の state と local credential が削除され、DECK が `mail_reason: retention_expired` を表示する Claude が対象です。operator は元の数値 ID、名前、project、同じ Mail UUID に pin した connection を指定します。
+
+1. `"$HOME/.agentstack/bin/agentstack-enroll" inspect --agent-id "$TARGET_ID" --project-key "$PROJECT_KEY" --connection "$CONNECTION" --name "$TARGET_NAME"` を実行します。対象が一致し、`connection_pinned: true`、`retired: false`、`credential_state: server-token`、local credential が `missing` または `missing-token-same-identity` であることを確かめます。
+2. `"$HOME/.agentstack/bin/agentstack-enroll" recover --agent-id "$TARGET_ID" --project-key "$PROJECT_KEY" --connection "$CONNECTION" --name "$TARGET_NAME"` を一度実行し、`result: accepted` と `reason: operator-recover` を確認します。すでに復旧が成功していれば、その receipt と保存済み credential が現在も有効な限り再実行は不要です。
+3. 会話だけで動いているセッションがあれば終了し、DECK で **Resume** を選びます。DECK は期限切れの記録より新しい復旧 receipt を現在の credential と照合し、同じ Mail identity を認証して `resume_mode: mail` で再開します。以降の DECK での再開にも同じ credential を使えます。
+
+Mail が退役済みの行に対する `recover` と明示 purge 後の再開は引き続き拒否されます。Claude の元の起動に子専用の道具設定が必要な場合と、Codex の子を再開する場合には元の子 state が必要です。
+
 ## 別 Mail と別の機体へ適用する
 
 各機体は、その機体の local Mail と connection profile を使います。別の機体の terminal で:
