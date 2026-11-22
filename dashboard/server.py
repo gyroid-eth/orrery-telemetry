@@ -11186,41 +11186,9 @@ def _start_supervisor_watchdog():
 
 
 def _child_session_live(name: str, boot: float | None) -> bool | None:
-    """Is a session of this child running now? None when that cannot be told.
-
-    A tmux session of that name, or a live-session lease written since this
-    machine booted whose process is alive. A lease from before the boot is
-    ignored: its PID may belong to an unrelated process now.
-
-    Absence is read from the session list, not from has-session: the tmux
-    consumer refuses a has-session on a missing target (TMUX_TARGET_UNAVAILABLE)
-    instead of returning tmux's "can't find session", which read as "cannot
-    tell" and left every child a reboot stopped unresumable.
-    """
-    try:
-        listed = _tmux_run(['list-sessions', '-F', '#{session_name}'],
-                           capture_output=True, text=True, timeout=2)
-    except (OSError, RuntimeError, subprocess.SubprocessError):
-        return None
-    if listed.returncode == 0:
-        if name not in (listed.stdout or "").splitlines():
-            return _child_resume_module().live_lease(pathlib.Path(RUNTIME_DIR), name, boot=boot)
-        # Listed: a session of that name exists, and only admission can say
-        # whether it is this child's. Any refusal stays "cannot tell".
-        try:
-            done = _tmux_run(['has-session', '-t', f'={name}'], capture_output=True, text=True, timeout=2)
-        except (OSError, RuntimeError, subprocess.SubprocessError):
-            return None
-        return True if done.returncode == 0 else None
-    reason = (listed.stderr or "").lower()
-    # Only these mean "no such session". Any other failure, such as a server
-    # socket this user cannot open ("error connecting … (permission denied)"),
-    # says nothing about the session and must not be read as "gone".
-    gone = ("can't find session" in reason or "no server running" in reason
-            or ("error connecting" in reason and "no such file or directory" in reason))
-    if not gone:
-        return None
-    return _child_resume_module().live_lease(pathlib.Path(RUNTIME_DIR), name, boot=boot)
+    return _child_resume_module().child_session_live(
+        pathlib.Path(RUNTIME_DIR), name, boot=boot, tmux_run=_tmux_run,
+    )
 
 
 def _recover_stopped_children() -> None:
@@ -11254,7 +11222,7 @@ def _start_child_resume_maintenance() -> None:
                 next_purge = time.monotonic() + 3600
                 try:
                     removed = _child_resume_module().purge_expired(
-                        pathlib.Path(RUNTIME_DIR)
+                        pathlib.Path(RUNTIME_DIR), tmux_run=_tmux_run,
                     )
                     if removed:
                         logging.info("purged expired child resume material (count=%d)", len(removed))

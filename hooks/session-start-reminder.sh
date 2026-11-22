@@ -292,8 +292,8 @@ shell_register_resolved_agent() {
 
 # A session reopened from a terminal (`claude --resume`) came back with its row
 # still retired: only the dashboard resume unretired it (TRIAGE 5a, #143). The
-# owner credential has just authenticated; unretire on the dashboard's terms,
-# which child_resume.py judges without changing anything.
+# owner credential has just authenticated; reuse the dashboard's retained
+# state checks and protect the child from expiry before unretiring it.
 restore_retired_identity() {
     SHELL_UNRETIRE_NOTE=""
     [ -n "${AGS_REGISTERED_RETIRED_AT:-}" ] || return 0
@@ -307,21 +307,30 @@ restore_retired_identity() {
             return 0
             ;;
     esac
-    local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}" python_bin
+    local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}" python_bin eligibility
+    local -a resume_target
+    resume_target=(--runtime-dir "$RUNTIME_DIR" --agent-name "$SHELL_REGISTERED_AGENT"
+                   --agent-id "${AGS_REGISTERED_AGENT_ID:-}" --project-key "$PROJECT_KEY")
     # A terminal session may not carry the installer's interpreter; the
     # helper needs a newer Python than the system one on macOS.
     python_bin="${AGENTSTACK_PYTHON:-$(agentstack_installed_env_value AGENTSTACK_PYTHON 2>/dev/null)}"
     if [ ! -f "$helper" ] || [ -z "${AGS_REGISTERED_AGENT_ID:-}" ] ||
-        ! "${python_bin:-python3}" "$helper" resume-eligibility \
-            --runtime-dir "$RUNTIME_DIR" --agent-name "$SHELL_REGISTERED_AGENT" \
-            --agent-id "$AGS_REGISTERED_AGENT_ID" --project-key "$PROJECT_KEY" \
-            --program claude-code >/dev/null 2>&1; then
+        ! eligibility=$("${python_bin:-python3}" "$helper" resume-eligibility \
+            "${resume_target[@]}" --program claude-code 2>/dev/null); then
         SHELL_UNRETIRE_NOTE="この identity は ORRERY Mail で retired のままです（保持期間外・旧形式・purge 済み、または確認できませんでした）。受信するには dashboard から resume してください。"
+        return 0
+    fi
+    if [ "$eligibility" = retained ] && ! "${python_bin:-python3}" "$helper" begin-resume \
+        "${resume_target[@]}" --program claude-code >/dev/null 2>&1; then
+        SHELL_UNRETIRE_NOTE="この identity は ORRERY Mail で retired のままです（子の再開状態を確保できませんでした）。受信するには dashboard から resume してください。"
         return 0
     fi
     if ags_unretire_owned_identity "$PROJECT_KEY" "$SHELL_REGISTERED_AGENT" >/dev/null 2>&1; then
         SHELL_UNRETIRE_NOTE="retired だったこの identity を、保存した owner credential で確かめて active に戻しました。"
     else
+        if [ "$eligibility" = retained ]; then
+            "${python_bin:-python3}" "$helper" cancel-resume "${resume_target[@]}" >/dev/null 2>&1 || true
+        fi
         SHELL_UNRETIRE_NOTE="この identity は ORRERY Mail で retired のままです（unretire に失敗しました）。受信するには dashboard から resume してください。"
     fi
 }

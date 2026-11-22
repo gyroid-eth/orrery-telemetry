@@ -140,6 +140,46 @@ def test_dashboard_recovers_a_child_that_exits_between_maintenance_passes(resume
     assert [method for method, _ in calls] == ["register_agent", "unretire_agent"]
 
 
+@pytest.mark.parametrize("liveness", ["tmux", "lease", "process", "lease_after_tmux", "unknown", "stopped"])
+def test_hourly_expiry_purges_only_a_confirmed_stopped_child(resume, monkeypatch, liveness):
+    runtime, registration, _, _ = resume
+    state = _active_child(runtime, registration)
+    token = runtime / f"agent_token_{NAME}"
+    tombstone = runtime / "child-resume-tombstones" / f"{registration['agent_id']}.json"
+    child_resume.mark_retired(runtime, NAME, retention_days=30,
+                              now=datetime.now(timezone.utc) - timedelta(days=31))
+    if liveness == "lease":
+        child_resume.write_lease(runtime, NAME, os.getpid())
+    module = server._child_resume_module()
+    monkeypatch.setattr(module, "boot_time", _boot)
+
+    def live_process(_name):
+        if liveness == "lease_after_tmux":
+            assert not _lease_lock_is_held(runtime)
+            child_resume.write_lease(runtime, NAME, os.getpid())
+        return liveness == "process"
+
+    monkeypatch.setattr(module, "child_process_live", live_process)
+
+    def tmux(args, **_kwargs):
+        if liveness == "unknown":
+            return subprocess.CompletedProcess(args, 1, "", "unavailable")
+        return subprocess.CompletedProcess(args, 0, NAME if liveness == "tmux" else "", "")
+
+    def stop(_seconds):
+        raise StopIteration
+
+    monkeypatch.setattr(server, "_tmux_run", tmux)
+    monkeypatch.setattr(server.threading, "Thread", lambda *, target, **kw: SimpleNamespace(start=target))
+    monkeypatch.setattr(server.time, "sleep", stop)
+    with pytest.raises(StopIteration):
+        server._start_child_resume_maintenance()
+
+    stopped = liveness == "stopped"
+    assert state.exists() == token.exists() == (not stopped)
+    assert tombstone.exists() is stopped
+
+
 def test_interrupted_codex_resume_clears_the_marker_and_keeps_retention(resume, monkeypatch):
     runtime, registration, _launches, _calls = resume
     registration = {**registration, "program": "codex"}
