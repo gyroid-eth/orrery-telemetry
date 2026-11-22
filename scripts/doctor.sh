@@ -639,48 +639,60 @@ report_codex_history_binding_prereqs() {
 
   # Query only the public registry. A failed/changed response is unknown, not
   # evidence that the plugin is absent. Bound the CLI so doctor cannot hang.
+  # The full listing also contacts remote marketplaces, which can take more
+  # than a minute, so ask the default local marketplace first. Only a found
+  # plugin is decisive there; absence is confirmed by the full listing.
   plugin_result="$("$PYTHON_BIN" - "$codex_bin" "$codex_home" "$CHILD_SHELL" "$CODEX_CHILD_PATH_SETUP" <<'PYPLUGIN' 2>/dev/null || true
 import json
 import os
 import subprocess
 import sys
 
-try:
-    result = subprocess.run(
-        [sys.argv[3], "-lc", sys.argv[4] + '; exec "$0" "$@"',
-         sys.argv[1], "plugin", "list", "--json"],
-        env=dict(os.environ, CODEX_HOME=sys.argv[2], AGENTSTACK_CODEX_BIN=sys.argv[1],
-                 CLAUDECODE="1", AGENTSTACK_RESERVED_IDENTITY="1"),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        check=True,
-        timeout=5,
-    )
-    data = json.loads(result.stdout)
-    installed = data["installed"]
-    if not isinstance(installed, list) or any(
-        not isinstance(item, dict) or not isinstance(item.get("pluginId"), str)
-        for item in installed
-    ):
-        raise ValueError("unrecognised registry shape")
-    items = [
-        item for item in installed
-        if isinstance(item.get("pluginId"), str)
-        and item["pluginId"].startswith("agentstack-codex-app@")
-    ]
-    if not items:
-        print("absent")
-    else:
+
+def query(*extra):
+    try:
+        result = subprocess.run(
+            [sys.argv[3], "-lc", sys.argv[4] + '; exec "$0" "$@"',
+             sys.argv[1], "plugin", "list", "--json", *extra],
+            env=dict(os.environ, CODEX_HOME=sys.argv[2], AGENTSTACK_CODEX_BIN=sys.argv[1],
+                     CLAUDECODE="1", AGENTSTACK_RESERVED_IDENTITY="1"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        data = json.loads(result.stdout)
+        installed = data["installed"]
+        if not isinstance(installed, list) or any(
+            not isinstance(item, dict) or not isinstance(item.get("pluginId"), str)
+            for item in installed
+        ):
+            raise ValueError("unrecognised registry shape")
+        items = [
+            item for item in installed
+            if isinstance(item.get("pluginId"), str)
+            and item["pluginId"].startswith("agentstack-codex-app@")
+        ]
+        if not items:
+            return "absent"
         item = next((item for item in items if item.get("enabled") is True), None)
         if item is not None:
-            print("enabled", item["pluginId"], sep="\t")
-        elif all(item.get("enabled") is False for item in items):
-            print("disabled", items[0]["pluginId"], sep="\t")
-        else:
-            print("unknown")
-except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
-    print("unknown")
+            return "enabled\t" + item["pluginId"]
+        if all(item.get("enabled") is False for item in items):
+            return "disabled\t" + items[0]["pluginId"]
+        return "unknown"
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return "unknown"
+
+
+# A CLI that stalls on the local query would stall again, so wait only once.
+state = query("--marketplace", "agentstack-local")
+if state != "timeout" and not state.startswith(("enabled\t", "disabled\t")):
+    state = query()
+print("unknown" if state == "timeout" else state)
 PYPLUGIN
 )"
   plugin_state="${plugin_result%%$'\t'*}"
@@ -693,9 +705,16 @@ PYPLUGIN
       local reservation_diagnostic="${SCRIPT_DIR:-}/codex-reservation-status.py"
       [[ -f "$reservation_diagnostic" ]] || reservation_diagnostic="${INSTALL_DIR:-${AGENTSTACK_HOME:-$HOME/.agentstack}}/bin/lib/codex-reservation-status.py"
       if [[ -f "$reservation_diagnostic" ]]; then
-        "$PYTHON_BIN" "$reservation_diagnostic" \
+        # Start the app-server under the child's login PATH, as the plugin
+        # listing above does; doctor's own PATH may find a different node.
+        set -- "$PYTHON_BIN" "$reservation_diagnostic" \
           --codex-binary "$codex_bin" --codex-home "$codex_home" \
           --cwd "${AGENTSTACK_PROJECT_KEY:-$PWD}" --plugin-id "$plugin_id"
+        if [[ -n "${CHILD_SHELL:-}" ]]; then
+          set -- env CLAUDECODE=1 AGENTSTACK_RESERVED_IDENTITY=1 AGENTSTACK_CODEX_BIN="$codex_bin" \
+            "$CHILD_SHELL" -lc "${CODEX_CHILD_PATH_SETUP:-}"'; exec "$0" "$@"' "$@"
+        fi
+        "$@" || echo "warn: Codex apply_patch reservation guard status is unknown; refresh core/plugin and review /hooks before relying on guarded edits."
       else
         echo "warn: Codex apply_patch reservation guard status is unknown; refresh core/plugin and review /hooks before relying on guarded edits."
       fi

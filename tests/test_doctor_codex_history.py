@@ -40,9 +40,13 @@ def _fake_commands(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
         "if os.environ.get('AGENTSTACK_TEST_CODEX_LOG'):\n"
         "    with open(os.environ['AGENTSTACK_TEST_CODEX_LOG'], 'a') as log:\n"
         "        log.write(json.dumps({'args': sys.argv[1:], 'home': os.environ.get('CODEX_HOME')}) + '\\n')\n"
-        "if sys.argv[1:] == ['plugin', 'list', '--json']:\n"
+        "local = sys.argv[1:] == ['plugin', 'list', '--json', '--marketplace', 'agentstack-local']\n"
+        "if local and os.environ.get('AGENTSTACK_TEST_NO_MARKETPLACE_FLAG'):\n"
+        "    raise SystemExit(2)\n"
+        "if local or sys.argv[1:] == ['plugin', 'list', '--json']:\n"
         "    time.sleep(float(os.environ.get('AGENTSTACK_TEST_CODEX_DELAY', '0')))\n"
-        "    print(os.environ['AGENTSTACK_TEST_PLUGIN_LIST'])\n"
+        "    key = 'AGENTSTACK_TEST_LOCAL_PLUGIN_LIST'\n"
+        "    print(os.environ[key] if local and key in os.environ else os.environ['AGENTSTACK_TEST_PLUGIN_LIST'])\n"
         "    raise SystemExit(int(os.environ.get('AGENTSTACK_TEST_CODEX_RC', '0')))\n"
         "raise SystemExit(2)\n",
         encoding="utf-8",
@@ -122,7 +126,8 @@ def test_doctor_reports_launcher_paths_and_plugin_state(tmp_path, plugin_list, s
 
 # Exercise just the read-only diagnostic without unrelated missing-install
 # errors obscuring whether this optional feature changes the doctor status.
-def _probe(tmp_path, payload, *, returncode=0, delay=0, missing_binary=False, missing_home=False):
+def _probe(tmp_path, payload, *, returncode=0, delay=0, missing_binary=False, missing_home=False,
+           local_payload=None, no_marketplace_flag=False, script_dir=None):
     fake_bin, codex = _fake_commands(tmp_path)
     codex_home = tmp_path / "custom codex home"
     if not missing_home:
@@ -147,6 +152,14 @@ def _probe(tmp_path, payload, *, returncode=0, delay=0, missing_binary=False, mi
         AGENTSTACK_TEST_CODEX_DELAY=str(delay),
         AGENTSTACK_TEST_CODEX_LOG=str(log),
     )
+    if local_payload is not None:
+        env["AGENTSTACK_TEST_LOCAL_PLUGIN_LIST"] = json.dumps(local_payload)
+    if no_marketplace_flag:
+        env["AGENTSTACK_TEST_NO_MARKETPLACE_FLAG"] = "1"
+    if script_dir is not None:
+        env["SCRIPT_DIR"] = str(script_dir)
+    for key in ("AGENTSTACK_CODEX_BIN", "AGENTSTACK_RESERVED_IDENTITY"):
+        env.pop(key, None)
     result = subprocess.run(
         ["/bin/bash", "-c", script, "doctor-probe", "" if missing_binary else str(codex), str(codex_home)],
         env=env,
@@ -184,17 +197,74 @@ def test_failed_cli_cannot_claim_plugin_is_absent(tmp_path):
 
 
 def test_stalled_cli_is_bounded_and_reports_unknown(tmp_path):
-    result, _, _ = _probe(tmp_path, {"installed": []}, delay=10)
+    result, log, _ = _probe(tmp_path, {"installed": []}, delay=10)
     assert "plugin status is unknown" in result.stdout
+    # The stalled local query is not followed by a second wait.
+    assert len(log.read_text().splitlines()) == 1
+
+
+LOCAL_ARGS = ["plugin", "list", "--json", "--marketplace", "agentstack-local"]
+FULL_ARGS = ["plugin", "list", "--json"]
 
 
 def test_probe_uses_requested_home_and_only_lists_plugins(tmp_path):
     result, log, codex_home = _probe(tmp_path, {"installed": [{"pluginId": PLUGIN_ID, "enabled": True}]})
     calls = [json.loads(line) for line in log.read_text().splitlines()]
-    assert calls == [{"args": ["plugin", "list", "--json"], "home": str(codex_home)}]
+    # Found in the local marketplace: the slow remote listing is not needed.
+    assert calls == [{"args": LOCAL_ARGS, "home": str(codex_home)}]
     assert "installed and enabled" in result.stdout
     assert "hook approval is unknown" in result.stdout
     assert "new Codex process" in result.stdout
+
+
+def test_absent_from_local_marketplace_is_confirmed_by_full_listing(tmp_path):
+    custom = "agentstack-codex-app@custom-market"
+    result, log, codex_home = _probe(
+        tmp_path, {"installed": [{"pluginId": custom, "enabled": True}]},
+        local_payload={"installed": []},
+    )
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert calls == [{"args": LOCAL_ARGS, "home": str(codex_home)},
+                     {"args": FULL_ARGS, "home": str(codex_home)}]
+    assert f"installed and enabled ({custom})" in result.stdout
+    assert "is not installed" not in result.stdout
+
+
+def test_cli_without_marketplace_filter_falls_back_to_full_listing(tmp_path):
+    result, log, _ = _probe(
+        tmp_path, {"installed": [{"pluginId": PLUGIN_ID, "enabled": False}]}, no_marketplace_flag=True,
+    )
+    assert [json.loads(line)["args"] for line in log.read_text().splitlines()] == [LOCAL_ARGS, FULL_ARGS]
+    assert "installed but disabled" in result.stdout
+
+
+def _fake_reservation_diagnostic(tmp_path, exit_code=0):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "codex-reservation-status.py").write_text(
+        "import os, sys\n"
+        "print('ok: reservation probe', os.environ.get('AGENTSTACK_RESERVED_IDENTITY'),"
+        " os.environ.get('AGENTSTACK_CODEX_BIN'))\n"
+        f"raise SystemExit({exit_code})\n",
+        encoding="utf-8",
+    )
+    return scripts
+
+
+def test_reservation_diagnostic_runs_under_child_launch_context(tmp_path):
+    # The app-server it starts must find the same node as a spawned child.
+    scripts = _fake_reservation_diagnostic(tmp_path)
+    enabled = {"installed": [{"pluginId": PLUGIN_ID, "enabled": True}]}
+    result, _, _ = _probe(tmp_path, enabled, script_dir=scripts)
+    codex = tmp_path / "fake-bin" / "codex"
+    assert f"ok: reservation probe 1 {codex}" in result.stdout
+
+
+def test_failed_reservation_diagnostic_is_unknown_and_doctor_continues(tmp_path):
+    scripts = _fake_reservation_diagnostic(tmp_path, exit_code=3)
+    enabled = {"installed": [{"pluginId": PLUGIN_ID, "enabled": True}]}
+    result, _, _ = _probe(tmp_path, enabled, script_dir=scripts)
+    assert "reservation guard status is unknown" in result.stdout
 
 
 @pytest.mark.parametrize("missing", ["binary", "home"])
