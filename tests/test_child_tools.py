@@ -121,6 +121,7 @@ def test_claude_browser_and_screen_share_one_allowed_flag(tmp_path):
 @pytest.mark.parametrize("values, expected", [
     (["browser"], {"browser": {"device": ""}}),
     (["browser:win-brave"], {"browser": {"device": "win-brave"}}),
+    (["chrome-extension"], {"chrome_extension": True}),
     (["screen"], {"screen": {"access": "operate", "server": None}}),
     (["screen:read:windows-mcp"], {"screen": {"access": "read", "server": "windows-mcp"}}),
     (["mcp:b,mcp:a"], {"mcp": ["a", "b"]}),
@@ -140,6 +141,7 @@ def test_cli_forms(values, expected):
     (None, {"mcp": ["x", "x"]}, "twice"),
     (None, {"screen": {"access": "read", "server": "x"}, "mcp": ["x"]}, "only once"),
     (None, {"browser": {"device": "a b"}}, "must match"),
+    (None, {"chrome_extension": False}, "must be true"),
     (None, {"approve_all": ["x"]}, "also in tools.mcp"),
     (None, {"mcp": ["x"], "approve_all": ["y"]}, "also in tools.mcp"),
 ])
@@ -169,6 +171,17 @@ def test_codex_browser_is_chrome_devtools_and_has_no_device_or_builtin_screen():
         child_tools.check_provider(_spec(None, {"browser": {"device": "d"}}), "codex")
     with pytest.raises(child_tools.ToolsError, match="no built-in screen"):
         child_tools.check_provider(_spec(None, {"screen": "operate"}), "codex")
+
+
+def test_chrome_extension_selection_requires_codex_and_a_configured_plugin():
+    spec = _spec(None, {"chrome_extension": True})
+    for provider in ("claude", "dsh", "hermes"):
+        with pytest.raises(child_tools.ToolsError, match="only for Codex"):
+            child_tools.check_provider(spec, provider)
+    with pytest.raises(child_tools.ToolsError, match="is not in the user's Codex config"):
+        child_tools.codex_apply({}, spec)
+    with pytest.raises(child_tools.ToolsError, match="cannot be combined with orrery-screen"):
+        child_tools.check_provider(_spec(None, {"chrome_extension": True, "mcp": ["orrery-screen"]}), "codex")
 
 
 # --------------------------------------------------------------------------- #
@@ -998,15 +1011,36 @@ def test_codex_chrome_devtools_requires_selection(tmp_path, name, selected):
     assert (pathlib.Path(env["CODEX_HOME"]) / "config.toml").read_text() == config_text
 
 
+CHROME_PLUGIN_CONFIG = ('[plugins."chrome@openai-bundled"]\nenabled = true\n'
+                        '[plugins."browser@openai-bundled"]\nenabled = true\n'
+                        '[mcp_servers.node_repl]\ncommand = "node_repl"\nenabled = true\n')
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_codex_chrome_extension_requires_selection(tmp_path, selected):
+    env, workdir = _codex_env(tmp_path, CHROME_PLUGIN_CONFIG)
+    flags = ("--tools", "chrome-extension") if selected else ()
+    result = _launch(tmp_path, env, workdir, "CodexChromePlugin", *flags, codex=True)
+    assert result.returncode == 0, result.stderr
+    config = _codex_child_config(env, "CodexChromePlugin")
+    assert config["plugins"]["chrome@openai-bundled"]["enabled"] is selected
+    assert config["plugins"]["browser@openai-bundled"]["enabled"] is True
+    assert config["mcp_servers"]["node_repl"] == {"command": "node_repl", "enabled": True}
+    assert (pathlib.Path(env["CODEX_HOME"]) / "config.toml").read_text() == CHROME_PLUGIN_CONFIG
+    record = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents" / "CodexChromePlugin.tools.json"
+    assert child_tools.read_codex_record(str(record)) == (_spec(None, {"chrome_extension": True}) if selected else None)
+
+
 def test_codex_default_browser_records_effective_selection_and_omission(tmp_path):
-    env, workdir = _codex_env(tmp_path, CODEX_CONFIG + 'args = ["chrome-devtools-mcp@latest"]\n')
+    env, workdir = _codex_env(tmp_path, CODEX_CONFIG + 'args = ["chrome-devtools-mcp@latest"]\n' + CHROME_PLUGIN_CONFIG)
     env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser,screen:operate"
     result = _launch(tmp_path, env, workdir, "CodexDefaults", codex=True)
     assert result.returncode == 0, result.stderr
     record = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents" / "CodexDefaults.tools.json"
     assert child_tools.read_codex_record(str(record)) == _spec(None, {"browser": True})
-    server_cfg = _codex_child_config(env, "CodexDefaults")["mcp_servers"]["chrome-devtools"]
-    assert len(server_cfg["enabled_tools"]) == 30
+    config = _codex_child_config(env, "CodexDefaults")
+    assert len(config["mcp_servers"]["chrome-devtools"]["enabled_tools"]) == 30
+    assert config["plugins"]["chrome@openai-bundled"]["enabled"] is False
     notice = "Default tool screen:operate is unavailable on this machine and was omitted."
     assert notice in result.stderr and notice in _log_text(env)
 
@@ -1096,6 +1130,11 @@ def test_api_explicit_empty_tools_suppresses_installer_defaults(payload):
 
 def test_api_empty_selection_keeps_other_providers_legacy_launcher_arguments():
     assert server._spawn_tools_args({"tools": {}}, "gemini", False, "") == ((), None)
+
+
+def test_api_passes_chrome_extension_selection_to_codex_launcher():
+    payload = {"tools": {"chrome_extension": True}}
+    assert server._spawn_tools_args(payload, "codex", False, "") == (("--tools", "chrome-extension"), None)
 
 
 @pytest.mark.parametrize("payload, message", [

@@ -101,7 +101,7 @@ launcher は、子の `CODEX_HOME` の `config.toml` だけに、元の checkout
 
 `/delegate "<task>" --codex --codex-mcp orrery-only` を明示すると、child 専用 `config.toml` は認証済み ORRERY Mail と session-binding に必要な AgentStack plugin だけを残し、それ以外の継承 MCP server と plugin を `enabled = false` にします。shell と file 操作は残りますが、plugin が提供する skill / app tool も無効になるため、それらを使う task には指定しません。
 
-既定の `inherit` は利用者の MCP/plugin 設定を継承します。Codex child の生成設定では、`chrome-devtools` と `chrome-devtools-mcp` を直接起動する別名の server は、`--tools mcp:chrome-devtools` や `--tools browser` などで選んだ場合だけ有効になります。
+既定の `inherit` は利用者の MCP/plugin 設定を継承します。Codex child の生成設定では、`chrome-devtools` と `chrome-devtools-mcp` を直接起動する別名の server は、`--tools mcp:chrome-devtools` や `--tools browser` などで選んだ場合だけ有効になります。Chrome 拡張と連携する `chrome@openai-bundled` は `--tools chrome-extension` で選びます。
 
 #### 途中で必要な MCP が増えたとき
 
@@ -171,7 +171,7 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 `/delegate "<task>" --base mail-only --tools screen:read:windows-mcp` のように、child に渡す道具を起動時に選べます。`/api/spawn` では `base` と `tools` です（[API](api.md#post-apispawn)）。解釈は `hooks/child_tools.py` が一手に行います。
 
 - **`--base` を省く・`default`**: Claude child の MCP は ORRERY Mail だけで、ブラウザ（Claude in Chrome）と Mac の computer use は利用者の Claude 設定と起動ディレクトリしだいで届きます。Codex child は上記の `inherit` に従います。dsh・Hermes child は認証済み Mail に加え、Codex の有効な Chrome MCP 定義だけを継承します（下記）。`--tools` で選んだものはこれに足します
-- **`--base mail-only`**: ORRERY Mail と `--tools` で選んだものだけを渡します。Claude child はブラウザを選ばなければ `--no-chrome` も付けます。Codex child は `--codex-mcp orrery-only` と同じ無効化をしてから、選んだ server だけを有効にします（`--codex-mcp inherit` との併用は拒否します）
+- **`--base mail-only`**: ORRERY Mail と `--tools` で選んだものだけを渡します。Claude child はブラウザを選ばなければ `--no-chrome` も付けます。Codex child は `--codex-mcp orrery-only` と同じ無効化をしてから、選んだ server や plugin を有効にします（`--codex-mcp inherit` との併用は拒否します）
 
 | `--tools` | Claude child | Codex child |
 |---|---|---|
@@ -180,6 +180,7 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 | `screen:<read\|operate>:<server>` | 利用者の画面系 server（WSL の Windows-MCP など）を strict の設定に写します | 子の `config.toml` でその server を有効にします |
 | `mcp:<server>` | 利用者の server の定義を strict の設定に写します（tool は承認しない） | 子の `config.toml` でその server を有効にします（tool は承認しない） |
 | `mcp:<server>:all` | 上に加えて、表で分かる全 tool を承認します | 上に加えて、表で分かる全 tool を tool ごとに承認します |
+| `chrome-extension` | 使えません | `config.toml` で設定済みの `chrome@openai-bundled` を有効にします。`orrery-screen` との併用は拒否します |
 
 ### dsh・Hermes の既定ブラウザ
 

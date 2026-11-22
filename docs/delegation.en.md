@@ -101,7 +101,7 @@ The launcher therefore adds, in the child's own `CODEX_HOME` `config.toml` only,
 
 Explicitly use `/delegate "<task>" --codex --codex-mcp orrery-only` to make the child-owned `config.toml` keep only authenticated ORRERY Mail and the AgentStack plugin needed for session binding. Other inherited MCP servers and plugins are set to `enabled = false`. Shell and file operations remain available, but plugin-provided skills and app tools are disabled too, so do not use this profile when the task depends on them.
 
-The default `inherit` profile carries over the user's MCP and plugin settings. In the generated Codex child configuration, `chrome-devtools` and renamed servers that launch `chrome-devtools-mcp` directly are enabled only when selected, for example with `--tools mcp:chrome-devtools` or `--tools browser`.
+The default `inherit` profile carries over the user's MCP and plugin settings. In the generated Codex child configuration, `chrome-devtools` and renamed servers that launch `chrome-devtools-mcp` directly are enabled only when selected, for example with `--tools mcp:chrome-devtools` or `--tools browser`. Select `--tools chrome-extension` to enable the `chrome@openai-bundled` plugin that connects through the Chrome extension.
 
 #### When another MCP is needed partway through a task
 
@@ -171,7 +171,7 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 You can choose a child's tools when you start it, for example `/delegate "<task>" --base mail-only --tools screen:read:windows-mcp`. In `/api/spawn` the fields are `base` and `tools` ([API](api.en.md#post-apispawn)). `hooks/child_tools.py` is the single interpreter of both.
 
 - **`--base` omitted or `default`**: a Claude child's only MCP server is ORRERY Mail, while the browser (Claude in Chrome) and the macOS computer use still depend on the user's Claude settings and the child's working directory. A Codex child follows the `inherit` profile above. dsh and Hermes children inherit only the enabled Chrome MCP definition from Codex, alongside authenticated Mail (see below). Whatever `--tools` selects is added on top
-- **`--base mail-only`**: the child gets ORRERY Mail and only what `--tools` selects. A Claude child also gets `--no-chrome` unless a browser was selected. A Codex child gets the same disabling as `--codex-mcp orrery-only`, and then only the selected servers are enabled (combining it with `--codex-mcp inherit` is rejected)
+- **`--base mail-only`**: the child gets ORRERY Mail and only what `--tools` selects. A Claude child also gets `--no-chrome` unless a browser was selected. A Codex child gets the same disabling as `--codex-mcp orrery-only`, and then enables the selected servers and plugins (combining it with `--codex-mcp inherit` is rejected)
 
 | `--tools` | Claude child | Codex child |
 |---|---|---|
@@ -180,6 +180,7 @@ You can choose a child's tools when you start it, for example `/delegate "<task>
 | `screen:<read\|operate>:<server>` | Copies the user's screen server (such as Windows-MCP on WSL) into the strict config | Enables that server in the child's `config.toml` |
 | `mcp:<server>` | Copies the user's server definition into the strict config (no tool approved) | Enables that server in the child's `config.toml` (no tool approved) |
 | `mcp:<server>:all` | The same, and approves every tool the table knows | The same, and approves every tool the table knows, tool by tool |
+| `chrome-extension` | Unavailable | Enables `chrome@openai-bundled` when configured in `config.toml`. Combining it with `orrery-screen` is rejected |
 
 ### The default browser for dsh and Hermes
 
