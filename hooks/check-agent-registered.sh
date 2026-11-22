@@ -1,4 +1,17 @@
 #!/bin/bash
+
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  exec "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_client harness-hook \
+    --context "${AGENTSTACK_FRESH_CLIENT_CONTEXT:-}" --action registered
+fi
+
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader" || exit 2
+if declare -F ags_client_entry >/dev/null; then
+  if ags_client_entry registered "$@"; then exit 0; else _ags_global_rc=$?; fi
+  [[ "$_ags_global_rc" == 125 ]] || exit "$_ags_global_rc"
+
+fi
 # check-agent-registered.sh
 # PreToolUse hook: blocks Edit/Write/Bash if agent has not called register_agent.
 # Exit 2 = block, 0 = allow
@@ -117,9 +130,11 @@ if [ ! -f "$FLAG" ] && [ -f "$POLICY_LIB" ]; then
 fi
 
 if [ ! -f "$FLAG" ]; then
-    echo "AGENT NOT REGISTERED: call register_agent before using this tool." >&2
-    echo "Follow the session startup procedure and register with ORRERY Mail before working." >&2
-    echo "  1. ensure_project -> 2. register_agent -> 3. fetch_inbox" >&2
+    if command -v agentstack_instruction_message >/dev/null 2>&1; then
+        agentstack_instruction_message identity-binding-unresolved >&2
+    else
+        "${AGENTSTACK_PYTHON:-python3}" "$(dirname "$_ags_global_loader")/instruction_blocks.py" --message identity-binding-unresolved >&2 || true
+    fi
     exit 2
 fi
 

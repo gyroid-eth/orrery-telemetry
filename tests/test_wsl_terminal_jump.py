@@ -54,6 +54,8 @@ def test_jump_opens_a_tab_that_attaches_inside_the_distro(monkeypatch, tmp_path)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, tmp_path, server, fake_run)
     out = server._open_terminal_tmux(
         ["tmux", "attach", "-d", "-t", "=SwiftBohr"], title="SwiftBohr"
     )
@@ -66,7 +68,8 @@ def test_jump_opens_a_tab_that_attaches_inside_the_distro(monkeypatch, tmp_path)
     body = open(script, encoding="utf-8").read()
     # The script is run by bash explicitly, and bash has no EQUALS expansion,
     # so a bare `=SwiftBohr` is exactly what tmux receives.
-    assert body.endswith("exec env -u TMUX -u TMUX_PANE tmux attach -d -t =SwiftBohr\n"), body
+    assert body.endswith("runtime_tmux_consumer.py attach -d -t =SwiftBohr\n"), body
+    assert "TMUX=" in body and "AGENTSTACK_HOME=" in body
 
 
 def test_resume_line_with_semicolons_never_reaches_the_windows_command_line(monkeypatch, tmp_path):
@@ -80,6 +83,8 @@ def test_resume_line_with_semicolons_never_reaches_the_windows_command_line(monk
         server.subprocess, "run",
         lambda cmd, **kw: (seen.append(list(cmd)), subprocess.CompletedProcess(cmd, 0, "", ""))[1],
     )
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, tmp_path, server, lambda *a, **kw: subprocess.CompletedProcess([], 0, "", ""))
     inner = 'export PATH="$HOME/.local/bin:$PATH"; export AGENT_NAME=X; exec claude --resume abc -n X'
     server._open_terminal_tmux(
         ["tmux", "new-session", "-A", "-s", "X", "-c", "/tmp/p", "bash", "-lic", inner], title="X"
@@ -88,7 +93,7 @@ def test_resume_line_with_semicolons_never_reaches_the_windows_command_line(monk
     assert not any(";" in a or '"' in a or " " in a for a in cmd[cmd.index("--exec"):]), cmd
     body = open(cmd[-1], encoding="utf-8").read()
     # The script hands the exact argv to tmux, shell-quoted for bash.
-    assert "tmux new-session -A -s X -c /tmp/p bash -lic " in body
+    assert "runtime_tmux_consumer.py new-session -A -s X -c /tmp/p bash -lic " in body
     assert "exec claude --resume abc -n X" in body
     assert body.startswith("#!/bin/bash\n") and "rm -f" in body
 
@@ -99,6 +104,8 @@ def test_wt_failure_is_reported_not_swallowed(monkeypatch):
         server.subprocess, "run",
         lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "wt: no window"),
     )
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, None, server, lambda *a, **kw: subprocess.CompletedProcess([], 0, "", ""))
     out = server._open_terminal_tmux(["tmux", "attach", "-t", "=X"], title="X")
     assert out["ok"] is False and "wt: no window" in out["error"]
 

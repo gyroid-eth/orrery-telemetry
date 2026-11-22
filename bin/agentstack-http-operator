@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Explicit local capability configuration/show; no agent owner tokens."""
+import argparse
+import os
+import json
+from pathlib import Path
+import runpy
+
+api=runpy.run_path(str(Path(__file__).resolve().parents[1]/'dashboard/http_operator.py'))
+p=argparse.ArgumentParser()
+p.add_argument('action',choices=('configure','show','probe'))
+p.add_argument('--service',choices=('telemetry','cockpit'),default='telemetry')
+a=p.parse_args()
+if not os.environ.get('AGENTSTACK_HOME'):
+    p.exit(2,'HTTP_OPERATOR_HOME_REQUIRED: set AGENTSTACK_HOME explicitly\n')
+home=Path(os.environ['AGENTSTACK_HOME'])
+if a.action=='configure':
+    print(api['configure'](home))
+elif a.action=='show':
+    print(api['read_capability'](home))
+else:
+    try:
+        result=api['probe'](home,service=a.service,telemetry_url=os.environ.get('ORRERY_DASHBOARD_URL','http://127.0.0.1:'+os.environ.get('AGENTSTACK_PORT','8770')),cockpit_port=os.environ.get('PORT','8791'),config_path=os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG',''))
+        print(json.dumps(result))
+    except Exception as exc:
+        reason=str(exc)
+        if not __import__('re').fullmatch(r'[A-Z][A-Z0-9_]{0,95}',reason):reason='HTTP_OPERATOR_PROBE_FAILED'
+        print(json.dumps({'ok':False,'reason':reason}));raise SystemExit(2)

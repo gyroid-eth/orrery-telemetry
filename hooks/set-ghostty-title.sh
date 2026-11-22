@@ -1,7 +1,7 @@
 #!/bin/bash
 # set-ghostty-title.sh
-# Compatibility helper: records the current agent name, renames pending tmux
-# sessions, and optionally copies the title for terminals that need it.
+# Compatibility helper: records the current agent name and renames pending tmux
+# sessions.
 #
 # Usage: set-ghostty-title.sh <agent-name>
 
@@ -12,47 +12,6 @@ fi
 
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
-TERMINAL_SETTING="${AGENTSTACK_TERMINAL:-auto}"
-
-mac_app_exists() {
-    [[ -d "/Applications/$1" || -d "$HOME/Applications/$1" ]]
-}
-
-terminal_adapter() {
-    local setting
-    setting="$(printf '%s' "$TERMINAL_SETTING" | tr '[:upper:]' '[:lower:]')"
-    case "$setting" in
-        ""|auto)
-            if [[ "$(uname -s 2>/dev/null)" != "Darwin" ]]; then
-                echo "none"
-            elif mac_app_exists "Ghostty.app" || command -v ghostty >/dev/null 2>&1; then
-                echo "ghostty"
-            elif mac_app_exists "iTerm.app" || mac_app_exists "iTerm2.app"; then
-                echo "iterm"
-            elif mac_app_exists "Terminal.app" || [[ -d "/System/Applications/Utilities/Terminal.app" ]]; then
-                echo "terminal"
-            else
-                echo "none"
-            fi
-            ;;
-        ghostty|iterm|terminal|none)
-            echo "$setting"
-            ;;
-        *)
-            echo "none"
-            ;;
-    esac
-}
-
-# Copy the title only when the selected terminal path can use the macOS
-# clipboard. Missing pbcopy is a quiet no-op for Linux/WSL and headless setups.
-case "$(terminal_adapter)" in
-    ghostty|iterm|terminal)
-        if command -v pbcopy >/dev/null 2>&1; then
-            printf '%s' "$AGENT_NAME" | pbcopy
-        fi
-        ;;
-esac
 
 # Rename pending tmux sessions only, so child registration cannot overwrite a
 # parent's established session name.

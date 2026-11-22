@@ -423,12 +423,28 @@ def record_payload(
                 pass
 
 
+def _drain_stdin() -> None:
+    """Read and discard the rest of stdin.
+
+    run-hook.sh writes the payload into this process through a pipe under
+    `set -o pipefail`. Returning with part of it unread kills that writer with
+    SIGPIPE, and the hook reports a failure (exit 141, or a false
+    recorder_process_failed) for a payload it meant to ignore.
+    """
+    try:
+        while sys.stdin.buffer.read(1 << 16):
+            pass
+    except (OSError, ValueError):
+        pass
+
+
 def main() -> int:
     """Read a hook payload and always fail open for the Codex process."""
 
     launch_value = os.environ.get("AGENTSTACK_CODEX_LAUNCH_BINDING", "").strip()
     launch_id = os.environ.get("AGENTSTACK_CODEX_LAUNCH_ID", "").strip()
     if not launch_value or not launch_id:
+        _drain_stdin()
         return 0
     launch_path = Path(launch_value).expanduser()
     diagnostic_path = _diagnostic_path(launch_path)
@@ -455,6 +471,7 @@ def main() -> int:
     try:
         raw = sys.stdin.buffer.read(MAX_PAYLOAD + 1)
         if len(raw) > MAX_PAYLOAD:
+            _drain_stdin()
             trace("outcome", outcome="payload_too_large")
             return 0
         payload = json.loads(raw)

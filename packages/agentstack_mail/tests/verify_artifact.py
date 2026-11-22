@@ -76,6 +76,13 @@ EXPECTED_DESCRIPTION_DIGESTS = {
 }
 
 EXPECTED_STATIC_ALLOWLIST = {
+    "reservation.renew_scoped_conflict_check": {
+        "category": "scenario_payload_addition",
+        "selector": "checkpoints.10_reservation_renewed_by_overlap.result.conflict_check",
+        "comparator_disposition": "validate_exact_value_then_omit_addition",
+        "live": "absent",
+        "core": "version 1, exact requested project and paths, and no foreign conflict in this scenario",
+    },
     "payload.agent.last_active_ts": {
         "category": "scenario_payload_field",
         "selector": "checkpoints.**.last_active_ts",
@@ -1097,6 +1104,51 @@ EXPECTED_CUTOVER_APPROVAL = {
 }
 
 REQUIRED_RUNTIME_MODULES = {
+    "archive_cli.py",
+    "fresh_cli.py",
+    "fresh_child.py",
+    "fresh_client.py",
+    "fresh_delivery.py",
+    "fresh_end.py",
+    "fresh_guard.py",
+    "fresh_harness.py",
+    "fresh_launch.py",
+    "fresh_notifications.py",
+    "fresh_persistent.py",
+    "fresh_proxy.py",
+    "fresh_reservations.py",
+    "fresh_runtime.py",
+    "fresh_server.py",
+    "fresh_targets.py",
+    "local_http.py",
+    "show_files.py",
+    "screen_contract.py",
+    "screen_mcp.py",
+    "storage_origin_contract.py",
+    "storage_origin_directory.py",
+    "storage_origin_core.py",
+    "storage_origin_candidate.py",
+    "namespace_state_io.py",
+    "namespace_transform.py",
+    "namespace_migration.py",
+    "namespace_store.py",
+    "namespace_delivery.py",
+    "global_server.py",
+    "global_s2a.py",
+    "global_s2a_contract.py",
+    "global_s2b.py",
+    "global_s2b_contract.py",
+    "global_signals.py",
+    "global_prepare_s2b.py",
+    "global_prepare_s2c.py",
+    "global_s2c.py",
+    "global_s2c_contract.py",
+    "global_ui.py",
+    "global_ui_contract.py",
+    "global_reservations.py",
+    "schema_contract.py",
+    "global_prepare.py",
+    "global_incident.py",
     "__init__.py",
     "app.py",
     "authorization.py",
@@ -1116,6 +1168,11 @@ REQUIRED_RUNTIME_MODULES = {
     "migration.py",
     "model_normalize.py",
     "models.py",
+    "namespace_contract.py",
+    "namespace_plan.py",
+    "namespace_replies.py",
+    "reservation_paths.py",
+    "reservation_clients.py",
     "path_alias.py",
     "rich_logger.py",
     "restore_acceptance.py",
@@ -1127,6 +1184,7 @@ REQUIRED_RUNTIME_MODULES = {
 }
 
 WHEEL_REQUIRED_SUFFIXES = {
+    "agentstack_mail/fixtures/storage-origin-b1.json",
     ".dist-info/entry_points.txt",
     ".dist-info/licenses/AGENTSTACK_LICENSE",
     ".dist-info/licenses/UPSTREAM_LICENSE",
@@ -1135,9 +1193,39 @@ WHEEL_REQUIRED_SUFFIXES = {
     "agentstack_mail/fixtures/compatibility-tools-v1.json",
     f"agentstack_mail/fixtures/{DIVERGENCE_MANIFEST}",
     "agentstack_mail/fixtures/live-tools-list.json",
+    "agentstack_mail/fixtures/namespace-tools-v2.json",
+    "agentstack_mail/fixtures/namespace-plan-v1.json",
+    "agentstack_mail/fixtures/absolute-reservations-v1.json",
+    "agentstack_mail/fixtures/namespace-state-v2.json",
+    "agentstack_mail/fixtures/global-server-s1.json",
+    "agentstack_mail/fixtures/global-server-s2a.json",
+    "agentstack_mail/fixtures/global-server-s2b.json",
+    "agentstack_mail/fixtures/global-server-s2c.json",
+    "agentstack_mail/fixtures/global-ui.json",
+    "agentstack_mail/fixtures/namespace-legacy-delivery-v1.sql",
+    "agentstack_mail/screen_schemas.json",
+    "agentstack_mail/screen_schemas.LICENSE",
 } | {f"agentstack_mail/{module}" for module in REQUIRED_RUNTIME_MODULES}
 
 SDIST_REQUIRED_SUFFIXES = {
+    "/fixtures/storage-origin-b1.json",
+    "/tests/test_storage_origin_b1.py",
+    "/tests/test_global_server.py",
+    "/tests/test_global_server_s2a.py",
+    "/fixtures/global-server-s2a.json",
+    "/fixtures/global-server-s2b.json",
+    "/tests/test_global_server_s2b.py",
+    "/tests/test_global_server_s2c.py",
+    "/tests/fixtures/sql_reservations.py",
+    "/fixtures/global-server-s2c.json",
+    "/fixtures/global-ui.json",
+    "/tests/test_global_ui.py",
+    "/fixtures/global-server-s1.json",
+    "/tests/test_namespace_state_migration.py",
+    "/tests/test_namespace_state_runtime.py",
+    "/tests/fixtures/namespace_state.py",
+    "/fixtures/namespace-state-v2.json",
+    "/fixtures/namespace-legacy-delivery-v1.sql",
     "/AGENTSTACK_LICENSE",
     "/UPSTREAM_LICENSE",
     "/NOTICE.md",
@@ -1146,6 +1234,9 @@ SDIST_REQUIRED_SUFFIXES = {
     "/fixtures/compatibility-tools-v1.json",
     f"/fixtures/{DIVERGENCE_MANIFEST}",
     "/fixtures/live-tools-list.json",
+    "/fixtures/namespace-tools-v2.json",
+    "/fixtures/namespace-plan-v1.json",
+    "/fixtures/absolute-reservations-v1.json",
     "/pyproject.toml",
     "/tests/test_decision_manifest.py",
     "/tests/cutover_readiness.py",
@@ -1159,6 +1250,8 @@ SDIST_REQUIRED_SUFFIXES = {
     "/tests/test_pending_decision_d10.py",
     "/tests/test_pending_decision_d11_d12.py",
     "/tests/test_migration.py",
+    "/tests/test_namespace_contract_plan.py",
+    "/tests/test_absolute_reservations.py",
     "/tests/test_restore_acceptance.py",
     "/tests/test_consumer.py",
     "/tests/test_cutover_evidence.py",
@@ -1841,7 +1934,9 @@ def _assert_expected_divergences_manifest(
             raise SystemExit(
                 f"{artifact} divergence allowlist entry {entry.get('id')!r} has invalid keys"
             )
-        if entry["comparator_disposition"] != "allow":
+        expected_disposition = EXPECTED_STATIC_ALLOWLIST.get(entry['id'], {}).get(
+            'comparator_disposition', 'allow')
+        if entry["comparator_disposition"] != expected_disposition:
             raise SystemExit(
                 f"{artifact} divergence allowlist entry {entry['id']!r} is not allowed"
             )

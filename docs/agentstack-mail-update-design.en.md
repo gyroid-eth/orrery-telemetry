@@ -44,3 +44,16 @@ The database is never rolled back automatically: that would discard messages wri
 **Recommendation: A for now.** Run `--update-mail` a few times on a live machine, and move towards C once outage and rollback measurements are in. B is not recommended: it imposes an outage on every agent at every re-run. Between commits whose package tree is identical, A neither switches nor prints the notice.
 
 The final decision is the maintainer's.
+
+
+## Decision (2026-10-02): three modes, the default stays keep
+
+There are now three modes: `--keep-mail` (the default), `--update-mail` (strict) and `AGENTSTACK_MAIL_UPDATE=auto` (opt-in). The outcome is machine-readable through the final `mail-result:` line and the `mail-plan:` line of `install.sh --print-mail-plan` ([agentstack-mail-update.en.md](agentstack-mail-update.en.md#replacing-the-build-with---update-mail)); setup.sh and update.sh read them.
+
+`auto` switches only for a deployment managed by `agentstack-mailctl`, after verification passes, and when the expected outage (the time the candidate took to answer against the snapshot during verification, plus 1.5 s) is within `AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET` (default 8 s); otherwise it keeps the running build and exits 0. Outage measurements (2026-10-02, temporary HOME, separate port): a stop takes under a second and a start on an empty database 1 to 2 s. The stdio proxy (children) and top-level Codex come back on their next call (Codex even after 71 s); top-level Claude Code (direct HTTP) reconnected by itself after outages up to 15 s and needed a reconnect from `/mcp` after 18 s or more.
+
+**What must be closed before `auto` becomes the default** (design review, 2026-10-02):
+
+1. **A ceiling on the outage.** The estimate is for a successful start and does not prevent a long outage on failure. Set a deadline from the stop, and fit giving up on the new build and starting the previous one inside it (including the rollback and health waits).
+2. **Being able to go back.** Check on the snapshot that the previous build can read and write the database after the new build opened it (existing owner tokens, messages, reservations). An update that cannot be checked goes to an explicit `--update-mail`. Unchanged DDL does not prove unchanged data.
+3. **Older update.sh.** The published cockpit update.sh runs install.sh with no option, so its users would be switched the moment `auto` became the default. Change the default only once update.sh and setup.sh always pass an explicit mode, and say in the CHANGELOG that an older update.sh then gets `auto`.

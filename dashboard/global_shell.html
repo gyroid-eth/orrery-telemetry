@@ -1,0 +1,24 @@
+<body data-view="deck">
+<div class="fx scan"></div><div class="fx grain"></div><div class="fx vignette"></div>
+<header>
+  <div class="brand"><b>ORRERY <i>·</i> TELEMETRY</b><span>tmux × ORRERY Mail</span></div>
+  <div class="viewtog"><button id="v-deck" class="on">▤ Deck</button><button id="v-net">⊹ Network</button></div>
+  <div class="gauges" hidden></div>
+  <div id="mail-health" class="mail-health" title="Mail health unavailable"><span class="mh-dot"></span><span class="mh-label">mail</span></div>
+  <div class="spacer"></div>
+  <div class="controls"><div class="field"><input type="search" id="q" placeholder="FILTER · name / task" autocomplete="off"></div><button class="newbtn" id="newbtn" aria-label="spawn new agent"><span class="nb-plus">＋</span><span>NEW AGENT</span></button></div>
+  <button class="settings-btn" id="settings-btn" type="button" aria-controls="settings" aria-expanded="false">SETTINGS</button>
+</header>
+<aside id="settings" role="dialog" aria-modal="false" aria-labelledby="st-title" aria-hidden="true">
+  <div class="st-bar"><div class="st-title" id="st-title">Settings</div><span class="st-scope">THIS BROWSER</span><button class="st-x" id="settings-close" type="button" aria-label="close settings">✕</button></div>
+  <div class="st-body"><section class="st-sec" id="st-appearance">
+    <h3 class="st-h">APPEARANCE<span>COLOR THEME</span></h3>
+    <div class="seg" id="theme-pref" role="radiogroup" aria-label="color theme"><button type="button" role="radio" data-theme-pref="dark" aria-checked="true">dark</button><button type="button" role="radio" data-theme-pref="light" aria-checked="false">light</button><button type="button" role="radio" data-theme-pref="system" aria-checked="false">system</button></div>
+    <p class="st-note" id="theme-note" hidden>SET BY THE COCKPIT</p>
+  </section></div>
+</aside>
+<main id="wrap"></main>
+<section id="net"><div class="nettool"><span class="netinfo" id="netinfo">Locked</span></div><svg id="gsvg" xmlns="http://www.w3.org/2000/svg"></svg></section>
+<aside id="edrawer" aria-hidden="true"><div class="ed-bar"><div class="ed-pair"><span class="ed-a">—</span><span class="ed-arr">⇄</span><span class="ed-b">—</span><span class="ed-cnt">0</span></div><button class="ed-close" title="close (Esc)">✕</button></div><div class="ed-list" id="ed-list"></div></aside>
+<script src="network_node.js"></script><script src="theme_core.js"></script><script src="theme_controller.js"></script><script src="mail_flow.js"></script><script src="operator_session.js"></script><script src="mail_controller.js"></script><script src="operation_controller.js"></script><script src="runtime_node.js"></script><script src="global_ui.js"></script>
+</body>

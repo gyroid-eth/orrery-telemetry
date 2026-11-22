@@ -3,6 +3,7 @@
     "allow": [
       "mcp__orrery-mail__health_check",
       "mcp__orrery-mail__runtime_status",
+      "mcp__orrery-mail__show_files",
       "mcp__orrery-mail__ensure_project",
       "mcp__orrery-mail__register_agent",
       "mcp__orrery-mail__whois",
@@ -27,7 +28,11 @@
     "deny": [
       "mcp__orrery-mail__hard_delete_agent",
       "mcp__orrery-mail__hard_delete_project",
-      "mcp__orrery-mail__purge_old_messages"
+      "mcp__orrery-mail__purge_old_messages",
+      "Edit(/__AGENTSTACK_SKILLS_DIR__/**)"
+    ],
+    "additionalDirectories": [
+      "__AGENTSTACK_SKILLS_DIR__"
     ]
   },
   "hooks": {
@@ -70,6 +75,15 @@
           {
             "type": "command",
             "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/invalidate-release-debounce.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash __AGENTSTACK_HOOKS_DIR__/deny-llm-key-read.sh"
           }
         ]
       }

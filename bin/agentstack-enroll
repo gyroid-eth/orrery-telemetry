@@ -3,10 +3,33 @@
 
 set -euo pipefail
 
+# Explicit operator selection precedes installed legacy env loading.
+if [[ "${1:-}" == "--global-context" ]]; then
+  shift
+  context="${1:?global context path required}"
+  shift
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  exec python3 "$SCRIPT_DIR/lib/runtime_client.py" --context "$context" "$@"
+fi
 AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-$HOME/.agentstack}"
-if [[ -f "$AGENTSTACK_HOME_DIR/env.sh" ]]; then
-  # shellcheck disable=SC1090
-  . "$AGENTSTACK_HOME_DIR/env.sh"
+_ags_mode_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/global-client-loader.sh"
+if [[ -f "$_ags_mode_loader" ]]; then
+  . "$_ags_mode_loader"
+  ags_client_bootstrap "$AGENTSTACK_HOME_DIR/env.sh" --system "$@" || exit $?
+else
+  printf '%s\n' GLOBAL_ENTRY_UNAVAILABLE >&2
+  exit 2
+fi
+
+if [[ -f "${_ags_mode_loader:-}" ]]; then
+  ags_client_select "$@" && _ags_enroll_rc=0 || _ags_enroll_rc=$?
+  if [[ "$_ags_enroll_rc" == 0 ]]; then
+    if [[ -n "${AGENTSTACK_CLIENT_CONFIG:-}" ]]; then
+      exec python3 "$AGS_CLIENT_LOADER_DIR/runtime_client.py" "$@"
+    fi
+    exec python3 "$AGS_CLIENT_LOADER_DIR/runtime_client.py" operator-enroll "$@"
+  fi
+  [[ "$_ags_enroll_rc" == 125 ]] || exit "$_ags_enroll_rc"
 fi
 
 ENROLL_EXECUTABLE="${AGENTSTACK_MAIL_ENROLL_BIN:-}"

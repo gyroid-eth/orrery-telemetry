@@ -40,6 +40,7 @@ from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import asc as _sa_asc, bindparam, delete as _sa_delete, desc as _sa_desc, func, or_ as _sa_or, select as _sa_select, text, update as _sa_update
 from sqlalchemy.exc import IntegrityError, NoResultFound, OperationalError, TimeoutError as SATimeoutError
 from sqlalchemy.orm import aliased
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import rich_logger
 from .authorization import (
@@ -3574,7 +3575,7 @@ async def _get_or_create_agent(
     return agent
 
 
-async def _touch_agent_activity(agent: Agent) -> None:
+async def _touch_agent_activity(agent: Agent, *, session: AsyncSession | None = None) -> None:
     """Mark an agent as alive right now.
 
     ``last_active_ts`` decides whether the staleness sweep may take a holder's
@@ -3588,31 +3589,27 @@ async def _touch_agent_activity(agent: Agent) -> None:
     if agent_id is None:
         return
     now = _aware_utc()
-    try:
-        async with get_session() as session:
-            # Only ever move the clock forward. `now` is sampled before the
-            # SQLite writer lock is acquired, so a touch that waited behind a
-            # register/send/other-touch would otherwise commit an older stamp
-            # last and make the agent look *less* recently active than it is.
-            outcome = await session.execute(
-                update(Agent)
-                .where(
-                    cast(Any, Agent.id) == agent_id,
-                    or_(
-                        cast(Any, Agent.last_active_ts).is_(None),
-                        cast(Any, Agent.last_active_ts) < now,
-                    ),
-                )
-                .values(last_active_ts=now)
-            )
-            await session.commit()
-            written = bool(outcome.rowcount)
-    except Exception:
-        # Liveness bookkeeping must never fail the caller's actual request --
-        # but a silent failure here means the sweep goes on treating a working
-        # agent as idle, which is invisible from the outside. Say so.
-        logger.warning("could not refresh last_active_ts for agent id=%s", agent_id, exc_info=True)
-        return
+    async def write_activity(db: AsyncSession) -> bool:
+        outcome = await db.execute(
+            update(Agent).where(
+                cast(Any, Agent.id) == agent_id,
+                or_(cast(Any, Agent.last_active_ts).is_(None), cast(Any, Agent.last_active_ts) < now),
+            ).values(last_active_ts=now)
+        )
+        return bool(outcome.rowcount)
+
+    if session is not None:
+        # A reservation caller already owns the writer transaction. Errors
+        # propagate so its renewal/certificate cannot survive a rolled-back DB.
+        written = await write_activity(session)
+    else:
+        try:
+            async with get_session() as owned_session:
+                written = await write_activity(owned_session)
+                await owned_session.commit()
+        except Exception:
+            logger.warning("could not refresh last_active_ts for agent id=%s", agent_id, exc_info=True)
+            return
     if written:
         agent.last_active_ts = now
     # If the guard rejected the write, the row already holds something newer.
@@ -5298,6 +5295,7 @@ def build_mcp_server() -> FastMCP:
         dict
             {
               "status": "ok" | "degraded" | "error",
+              "server_instance_id": str,  # Persistent UUID, not a credential
               "environment": str,
               "http_host": str,
               "http_port": int,
@@ -5316,8 +5314,13 @@ def build_mcp_server() -> FastMCP:
         - If status != ok, sleep/retry with backoff and log `environment`/`http_host`/`http_port`.
         """
         await ctx.info("Running health check.")
+        # The HTTP endpoint and operator management socket must prove that
+        # they address the same persistent Mail instance. This is not a token.
+        from .enrollment import ensure_mail_instance
+        instance = await ensure_mail_instance()
         return {
             "status": "ok",
+            "server_instance_id": instance.instance_id,
             "environment": settings.environment,
             "http_host": settings.http.host,
             "http_port": settings.http.port,
@@ -10230,7 +10233,7 @@ def build_mcp_server() -> FastMCP:
         Returns
         -------
         dict
-            { renewed: int, file_reservations: [{id, path_pattern, old_expires_ts, new_expires_ts}] }
+            { renewed: int, file_reservations: [...], conflict_check: {version: 1, project_key, paths, conflicts: [{agent, path_pattern}]} }
         """
         if get_settings().tools_log_enabled:
             try:
@@ -10252,10 +10255,16 @@ def build_mcp_server() -> FastMCP:
         if project.id is None or agent.id is None:
             raise ValueError("Project and agent must have ids before renewing file_reservations.")
         await ensure_schema()
-        now = datetime.now(timezone.utc)
         bump = max(60, int(extend_seconds))
-
+        updated: list[dict[str, Any]] = []
+        conflicts: list[dict[str, str]] = []
         async with get_session() as session:
+            # SQLite's legacy driver does not start a transaction for SELECT.
+            # Lock before either read so renewal and the checked conflict scope
+            # are one database snapshot, including a definitive zero renewal.
+            if session.bind.dialect.name == "sqlite":
+                await session.execute(text("BEGIN IMMEDIATE"))
+            now = datetime.now(timezone.utc)
             stmt = (
                 select(FileReservation)
                 .where(
@@ -10267,48 +10276,36 @@ def build_mcp_server() -> FastMCP:
             )
             if file_reservation_ids:
                 stmt = stmt.where(cast(Any, FileReservation.id).in_(file_reservation_ids))
-            # Note: paths filtering is done post-query with fnmatch to support glob patterns
             result = await session.execute(stmt)
-            file_reservations: list[FileReservation] = list(result.scalars().all())
-
-        # Filter by paths using the same symmetric overlap semantics as release.
-        if paths and file_reservations:
-            filtered = []
-            for fr in file_reservations:
-                for p in paths:
-                    if _patterns_overlap(fr.path_pattern, p):
-                        filtered.append(fr)
-                        break
-            file_reservations = filtered
-
-        if not file_reservations:
-            await ctx.info(f"No active file_reservations to renew for '{agent.name}'.")
-            return {"renewed": 0, "file_reservations": []}
-
-        # Renewing something real is the heartbeat of an agent mid-edit. A
-        # no-op renew is not: counting that would let a retired identity's
-        # leftover cleanup calls keep it looking alive (it would drift back
-        # into the 30-day broadcast recipient set, among other things).
-        await _touch_agent_activity(agent)
-
-        updated: list[dict[str, Any]] = []
-        async with get_session() as session:
+            file_reservations = list(result.scalars().all())
+            if paths:
+                file_reservations = [fr for fr in file_reservations
+                    if any(_patterns_overlap(fr.path_pattern, path) for path in paths)]
+            checked_paths = list(paths) if paths is not None else [fr.path_pattern for fr in file_reservations]
+            if checked_paths:
+                foreign = await session.execute(
+                    select(FileReservation, Agent.name)
+                    .join(Agent, cast(Any, Agent.id) == FileReservation.agent_id)
+                    .where(
+                        cast(Any, FileReservation.project_id) == project.id,
+                        cast(Any, FileReservation.agent_id) != agent.id,
+                        cast(Any, FileReservation.exclusive).is_(True),
+                        cast(Any, FileReservation.released_ts).is_(None),
+                        cast(Any, FileReservation.expires_ts) > now,
+                    ).order_by(asc(cast(Any, FileReservation.id)))
+                )
+                conflicts = [{"agent": name, "path_pattern": fr.path_pattern}
+                    for fr, name in foreign.all()
+                    if any(_patterns_overlap(fr.path_pattern, path) for path in checked_paths)]
             for file_reservation in file_reservations:
-                old_exp = file_reservation.expires_ts
-                if getattr(old_exp, "tzinfo", None) is None:
-                    from datetime import timezone as _tz
-                    old_exp = old_exp.replace(tzinfo=_tz.utc)
+                old_exp = _aware_utc(file_reservation.expires_ts)
                 base = old_exp if old_exp > now else now
                 file_reservation.expires_ts = _aware_utc(base + timedelta(seconds=bump))
                 session.add(file_reservation)
-                updated.append(
-                    {
-                        "id": file_reservation.id,
-                        "path_pattern": file_reservation.path_pattern,
-                        "old_expires_ts": _iso(old_exp),
-                        "new_expires_ts": _iso(file_reservation.expires_ts),
-                    }
-                )
+                updated.append({"id": file_reservation.id, "path_pattern": file_reservation.path_pattern,
+                    "old_expires_ts": _iso(old_exp), "new_expires_ts": _iso(file_reservation.expires_ts)})
+            if updated:
+                await _touch_agent_activity(agent, session=session)
             await session.commit()
 
         # Update Git artifacts for the renewed file_reservations
@@ -10317,7 +10314,9 @@ def build_mcp_server() -> FastMCP:
             [(reservation, agent) for reservation in file_reservations],
         )
         await ctx.info(f"Renewed {len(updated)} file_reservation(s) for '{agent.name}'.")
-        return {"renewed": len(updated), "file_reservations": updated}
+        return {"renewed": len(updated), "file_reservations": updated,
+            "conflict_check": {"version": 1, "project_key": project_key,
+                "paths": checked_paths, "conflicts": conflicts}}
 
     # --- Build slots (coarse concurrency control) --------------------------------------------
     # Only registered when WORKTREES_ENABLED=1 to reduce token overhead for single-worktree setups

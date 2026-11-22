@@ -25,11 +25,14 @@ def main() -> int:
     if len(sys.argv) != 2:
         print("usage: agentstack-gemini-stream RESULT_LOG", file=sys.stderr)
         return 2
-    log_path = pathlib.Path(sys.argv[1])
+    return consume(pathlib.Path(sys.argv[1]), sys.stdin)
+
+
+def consume(log_path: pathlib.Path, input_stream, on_event=None) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     final_result: dict[str, Any] | None = None
     with log_path.open("w", encoding="utf-8") as log:
-        for raw in sys.stdin:
+        for raw in input_stream:
             log.write(raw)
             log.flush()
             try:
@@ -38,6 +41,8 @@ def main() -> int:
                 continue
             if not isinstance(event, dict):
                 continue
+            if on_event is not None:
+                on_event(event)
             kind = event.get("event")
             if kind == "init":
                 conversation = event.get("conversation_id") or "unknown"

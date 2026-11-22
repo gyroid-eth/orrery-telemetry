@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import runpy
 import os
 import subprocess
 import sys
@@ -91,6 +92,7 @@ class FirstTurn:
     def __init__(self, prompt_head: str, parent: str = "") -> None:
         self.head = prompt_head.strip()[:_HEAD_CHARS]
         self.parent = parent
+        self.parent_agent_id = None
         self.matched: bool | None = None  # None until the first human row is seen
         self.ended = False
         self.tools: list[str] = []
@@ -108,9 +110,16 @@ class FirstTurn:
                 self.tools.append(name)
                 if name.endswith(_MAIL_TOOL_SUFFIX):
                     # Only a message addressed to the parent is the report.
-                    recipients = (block.get("input") or {}).get("to")
-                    if isinstance(recipients, list) and (not self.parent or self.parent in recipients):
-                        self.report_ids.add(str(block.get("id", "")))
+                    data=block.get("input") or {}
+                    if self.parent_agent_id is not None:
+                        recipients=data.get("to_agent_ids")
+                        addressed=(type(self.parent_agent_id) is int and self.parent_agent_id>0
+                            and isinstance(recipients,list) and all(type(x) is int and x>0 for x in recipients)
+                            and self.parent_agent_id in recipients)
+                    else:
+                        recipients=data.get("to")
+                        addressed=isinstance(recipients,list) and (not self.parent or self.parent in recipients)
+                    if addressed:self.report_ids.add(str(block.get("id", "")))
         text = _content_text(content)
         if text:
             self.texts.append(text)
@@ -141,7 +150,23 @@ class FirstTurn:
                 if (isinstance(block, dict) and block.get("type") == "tool_result"
                         and str(block.get("tool_use_id", "")) in self.report_ids
                         and not block.get("is_error")):
-                    self.reported = True
+                    if self.parent_agent_id is None:
+                        self.reported=True
+                    else:
+                        try:
+                            import json
+                            value=json.loads(_content_text(block.get('content','')))
+                            # Reuse the same canonical response validator as the client.
+                            from pathlib import Path
+                            import runpy
+                            path=Path(__file__).resolve().parents[1]/'bin/lib/runtime_client.py'
+                            client=runpy.run_path(str(path))
+                            schema=client['wire_contract']()['fixture']['tool_contracts']['send_message']['output_schema']
+                            client['wire_contract']()['validate_schema'](value,schema)
+                            recipients=value['recipient_agent_ids']
+                            self.reported=(all(type(x) is int and x>0 for x in recipients)
+                                and self.parent_agent_id in recipients)
+                        except (OSError,ValueError,TypeError,KeyError,RuntimeError):pass
             return
         if row.get("type") != "assistant" or not isinstance(message, dict):
             return
@@ -320,6 +345,20 @@ def notice(kind: str, child: str, parent: str, wait: int, text: str) -> tuple[st
 
 def send_notice(kind: str, child: str, parent: str, wait: int, text: str) -> str:
     """Send as the child, with its token. Returns "" or why it could not."""
+    helper=Path(__file__).resolve().parents[1]/'bin/lib/runtime_client.py'
+    selection = subprocess.run(['/bin/bash', str(helper.with_name('global-client-loader.sh')), 'select', *sys.argv[1:]])
+    if selection.returncode not in (0, 125):
+        return 'global report unavailable'
+    if selection.returncode == 0:
+        try:
+            api=runpy.run_path(str(helper));client=api['configured']()
+            state=api['read_json'](client.outputs['child'])
+            subject,body=notice(kind,child,parent,wait,text)
+            client.call('send_message',{'to_agent_ids':[state['parent']['agent_id']],
+                'subject':subject,'body_md':body,'importance':'normal' if kind in ('started','thinking') else 'high'})
+            return ''
+        except (RuntimeError,ValueError,OSError,KeyError):
+            return 'global report pending or unavailable; use replay-pending'
     token_file = os.environ.get("CHILD_START_TOKEN_FILE", "")
     url = os.environ.get("CHILD_START_MCP_URL", "")
     project_key = os.environ.get("CHILD_START_PROJECT_KEY", "")

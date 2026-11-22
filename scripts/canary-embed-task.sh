@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader" || exit 2
+if ags_client_entry spawn-child "$@"; then exit 0; else _ags_global_rc=$?; fi
+[[ "$_ags_global_rc" == 125 ]] || exit "$_ags_global_rc"
 # canary-embed-task.sh — does each Claude model act on a launched task?
 #
 # Run by hand after a Claude model or Claude Code update; not part of CI. It

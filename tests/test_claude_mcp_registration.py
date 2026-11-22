@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
+
+import pytest
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -275,6 +278,73 @@ def test_doctor_warns_and_prints_safe_registration_commands(tmp_path):
     assert "/delegate cannot use ORRERY Mail" in result.stderr
     assert "agentstack-merge-claude-mcp" in result.stderr
     assert "--dry-run" in result.stderr
+
+
+def _doctor_with_claude_json(tmp_path, claude_json_text, *, claude_on_path=True):
+    home = tmp_path / "home"
+    install = home / ".agentstack"
+    runtime = install / "runtime"
+    runtime.mkdir(parents=True)
+    (tmp_path / "project").mkdir()
+    mail_db = tmp_path / "mail.sqlite3"
+    mail_db.touch()
+    claude_json = home / ".claude.json"
+    if claude_json_text is not None:
+        claude_json.write_text(claude_json_text, encoding="utf-8")
+    (install / "env.sh").write_text("\n".join((
+        f"export AGENTSTACK_MAIL_DB='{mail_db}'",
+        f"export AGENTSTACK_CLAUDE_JSON='{claude_json}'",
+        f"export AGENTSTACK_PROJECT_KEY='{tmp_path / 'project'}'",
+        f"export AGENTSTACK_RUNTIME_DIR='{runtime}'",
+        "",
+    )))
+    (install / "install-state.json").write_text('{"services": []}\n')
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for tool in ("bash", "sed", "grep", "cat", "dirname", "basename", "date", "mkdir",
+                 "tail", "head", "awk", "tr", "cut", "uname", "id", "ls", "wc", "sort"):
+        found = shutil.which(tool)
+        if found:
+            (bindir / tool).symlink_to(found)
+    if claude_on_path:
+        (bindir / "claude").write_text("#!/bin/sh\necho 2.1.289\n")
+        (bindir / "claude").chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("AGENTSTACK_")}
+    env.update({"HOME": str(home), "PATH": str(bindir), "AGENTSTACK_PYTHON": sys.executable})
+    return subprocess.run(
+        [shutil.which("bash"), str(DOCTOR), "--install-dir", str(install)],
+        env=env, text=True, capture_output=True, check=False,
+    )
+
+
+ONBOARDING_SECRET = "someone@example.invalid"
+
+
+@pytest.mark.parametrize("text", [
+    json.dumps({"oauthAccount": {"emailAddress": ONBOARDING_SECRET}, "mcpServers": {}}),
+    json.dumps({"oauthAccount": {"emailAddress": ONBOARDING_SECRET}, "hasCompletedOnboarding": False}),
+    None,
+], ids=["flag-missing", "flag-false", "no-file"])
+def test_doctor_warns_when_claude_first_run_setup_is_not_finished(tmp_path, text):
+    result = _doctor_with_claude_json(tmp_path, text)
+    assert "warn: Claude Code's first-run setup is not finished" in result.stderr
+    assert "Run 'claude' once in a" in result.stderr
+    assert "ok: Claude Code first-run setup finished" not in result.stdout
+    # Only whether the flag is set is reported, nothing else from the file.
+    assert ONBOARDING_SECRET not in result.stdout + result.stderr
+
+
+def test_doctor_says_ok_when_claude_first_run_setup_is_finished(tmp_path):
+    result = _doctor_with_claude_json(
+        tmp_path, json.dumps({"hasCompletedOnboarding": True, "oauthAccount": {"emailAddress": ONBOARDING_SECRET}}))
+    assert "ok: Claude Code first-run setup finished" in result.stdout
+    assert "first-run setup is not finished" not in result.stderr
+    assert ONBOARDING_SECRET not in result.stdout + result.stderr
+
+
+def test_doctor_skips_the_first_run_check_without_claude(tmp_path):
+    result = _doctor_with_claude_json(tmp_path, json.dumps({"mcpServers": {}}), claude_on_path=False)
+    assert "first-run setup" not in result.stdout + result.stderr
 
 
 def _config_with(url: str, token: str, tmp_path: pathlib.Path) -> pathlib.Path:

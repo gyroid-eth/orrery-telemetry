@@ -1,4 +1,44 @@
 #!/bin/bash
+
+# Explicit isolated fresh caller only. Never discover a context from old name,
+# project or token state, and never fall through after a fresh refusal.
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  if [[ -z "${AGENTSTACK_FRESH_CLIENT_CONTEXT:-}" || -n "${AGENTSTACK_CLIENT_CONFIG:-}" || -n "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}" ]]; then
+    printf '%s\n' FRESH_CONTEXT_CONFLICT >&2
+    exit 2
+  fi
+  case "${AGENTSTACK_RUNTIME_MODE:-legacy}" in
+    legacy|fresh) ;;
+    *) printf '%s\n' FRESH_CONTEXT_CONFLICT >&2; exit 2 ;;
+  esac
+  if "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_guard --context "$AGENTSTACK_FRESH_CLIENT_CONTEXT"; then
+    exit 0
+  fi
+  exit 2
+fi
+
+# Decide explicit global context before loading any legacy environment/state.
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader" || exit 2
+if declare -F ags_client_entry >/dev/null; then
+  _ags_global_error="$(ags_client_entry pre-edit "$@" 2>&1)" && _ags_global_rc=0 || _ags_global_rc=$?
+  if [[ "$_ags_global_rc" == 0 ]]; then exit 0; fi
+  if [[ "$_ags_global_rc" != 125 ]]; then
+    . "$(dirname "${BASH_SOURCE[0]}")/session-identity-policy.sh"
+    if [[ "$_ags_global_error" == *INITIAL_TRANSPORT_UNREACHABLE* ]]; then
+      agentstack_audit_unmanaged "pre-edit" "${AGENTSTACK_SESSION_ID:-global}" "transport=unreachable policy=$(agentstack_mail_outage_policy)"
+      if [[ "$(agentstack_mail_outage_policy)" == warn-open ]]; then
+        if agentstack_should_report_outage "${AGENTSTACK_SESSION_ID:-global}" "unreachable"; then
+          agentstack_emit_visible_warning "$(agentstack_outage_warning_text)"
+        fi
+        exit 0
+      fi
+    fi
+    printf '%s\n' "$_ags_global_error" >&2
+    exit "$_ags_global_rc"
+  fi
+
+fi
 # check-file-reservation.sh
 # PreToolUse hook: require an existing reservation before editing protected files.
 # Exit 2 = block, 0 = allow.
@@ -38,7 +78,13 @@ RENEW_SECONDS="${FILE_RESERVATION_RENEW_SECONDS:-900}"
 RETRY_DELAY_SECONDS="${FILE_RESERVATION_RETRY_DELAY_SECONDS:-0.5}"
 
 TOOL_INPUT=$(cat)
-reservation_resolve_tool_context "$TOOL_INPUT" || exit 0
+if reservation_resolve_tool_context "$TOOL_INPUT"; then
+    :
+else
+    context_status=$?
+    [ "$context_status" -eq 1 ] && exit 0
+    exit 2
+fi
 # Asked before anything decides which identity wins: the precedence resolver
 # returns on AGENT_NAME alone, so asking it about conflicts left named sessions
 # unchecked.
@@ -90,7 +136,7 @@ if [ -z "$AGENT" ]; then
     # instruction this whole change exists to remove.
     if [ -n "$SESSION_ID" ] && [ -f "/tmp/.claude-agent-registered-${SESSION_ID}" ]; then
         echo "AGENT IDENTITY UNRESOLVED: this session is registered, but no identity binding for it was found." >&2
-        echo "Call register_agent again so the binding is rewritten, then retry the edit." >&2
+        agentstack_instruction_message identity-binding-unresolved >&2
         exit 2
     fi
 
@@ -139,11 +185,13 @@ renew_reservation() {
     QUERY_PROJECT_KEY="$RESERVATION_PROJECT_KEY" QUERY_AGENT="$AGENT" \
         QUERY_REL_PATH="$REL_PATH" QUERY_ABS_PATH="$ABS_PATH" \
         QUERY_TOKEN="$TOKEN" QUERY_URL="$MCP_URL" \
+        QUERY_CONFLICT_VALIDATOR="$(dirname "${BASH_SOURCE[0]}")/check-reservation-conflicts.py" \
         QUERY_EXTEND_SECONDS="$RENEW_SECONDS" \
-        python3 - <<'PY'
+        "${AGENTSTACK_PYTHON:-python3}" - <<'PY'
 import json
 import os
 import socket
+import runpy
 import unicodedata
 import urllib.error
 import urllib.request
@@ -183,18 +231,38 @@ headers = {
 if token:
     headers["Authorization"] = "Bearer " + token
 request = urllib.request.Request(url, data=payload, headers=headers)
+
+
+class _KeepTheFirstAnswer(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
+# A redirect is already an HTTP answer, not an outage at its destination.
+opener = urllib.request.build_opener(_KeepTheFirstAnswer)
 try:
-    with urllib.request.urlopen(request, timeout=3) as response:
-        body = response.read().decode()
+    response = opener.open(request, timeout=3)
 except urllib.error.HTTPError as exc:
-    detail = exc.read().decode(errors="replace").strip()
+    try:
+        with exc:
+            detail = exc.read().decode(errors="replace").strip()
+    except Exception:
+        detail = "response body unavailable"
     print(f"HOOK_REJECTED: HTTP {exc.code}: {detail or exc.reason}")
     raise SystemExit(0)
 except (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout) as exc:
     print(f"HOOK_TRANSPORT_UNREACHABLE: {exc}")
     raise SystemExit(0)
 except Exception as exc:
-    print(f"HOOK_REJECTED: request or response failure: {exc}")
+    print(f"HOOK_REJECTED: request failure: {exc}")
+    raise SystemExit(0)
+
+# Headers have arrived. A missing or partial proof must never become warn-open.
+try:
+    with response:
+        body = response.read().decode()
+except Exception as exc:
+    print(f"HOOK_REJECTED: response read failure: {exc}")
     raise SystemExit(0)
 
 try:
@@ -218,6 +286,15 @@ renewed = structured.get("renewed") if isinstance(structured, dict) else None
 if isinstance(renewed, bool) or not isinstance(renewed, int) or renewed < 0:
     print("HOOK_REJECTED: response lacks a valid structuredContent.renewed count")
     raise SystemExit(0)
+try:
+    validate = runpy.run_path(os.environ['QUERY_CONFLICT_VALIDATOR'])['validate_conflict_check']
+    owners = validate(structured.get('conflict_check'), project_key, paths)
+except (OSError, ValueError, KeyError, TypeError) as exc:
+    print(f"HOOK_REJECTED: Reservation conflict check rejected: {exc}")
+    raise SystemExit(0)
+if owners:
+    print('HOOK_REJECTED: Other exclusive reservation holder(s): ' + ', '.join(owners))
+    raise SystemExit(0)
 print(f"HOOK_RENEWED: {renewed}")
 PY
 }
@@ -238,16 +315,16 @@ block_reservation_write() {
     echo "FILE RESERVATION REQUIRED: $FILE_PATH" >&2
     echo "$reason" >&2
     echo "Acquire one through the reservation tool provided by your connection schema before editing." >&2
+    if [ "${AGENTSTACK_PROTECTION_CONTEXT:-}" = "workspace-v1" ]; then
+        echo "Managed workspace-v1: reserve the physical absolute path: $FILE_PATH" >&2
+        echo "Use the same path for renew/release; relative paths are not converted automatically." >&2
+    fi
     exit 2
 }
 
 RESPONSE="$(renew_reservation 2>/dev/null || true)"
 RENEWED="$(classify_renew_response "$RESPONSE")"
 if [ "$RENEWED" = "transport" ]; then
-    # No authoritative answer was obtained because the service is not there.
-    # This is the same condition the unidentified path already routes through
-    # the outage policy, and it has to be the same decision -- an identified
-    # agent is not more entitled to write uncoordinated than an anonymous one.
     handle_reservation_outage "agent=$AGENT path=$REL_PATH"
 fi
 if [ "$RENEWED" = "rejected" ]; then

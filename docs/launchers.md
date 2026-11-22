@@ -4,6 +4,9 @@
 
 [前: インストール](install.md) · [README に戻る](../README.md) · [次: 委任と child agent](delegation.md)
 
+
+同じ会話の道具を変更する場合は、EXIT 後に停止を確認し、`"${AGENTSTACK_HOME:-$HOME/.agentstack}/bin/agentstack-resume" <NAME> --tools <spec>` を使います。再登録や新しい子の作成はしません。[手順と制限](delegation.md#停止した子の道具を変更して-resume-する)。
+
 ## 起動コマンド
 
 ```bash
@@ -24,6 +27,26 @@ agent-start
 ```
 
 優先順位は明示引数、`fzf` picker、現在 directory の順です。
+
+## 起動 workspace と reservation の保護範囲
+
+namespace の選択は変えません。既存の環境設定で上書きしなければ、installed `AGENTSTACK_PROJECT_KEY` を協調 namespace として使います。path 形式の key でも異なる repository の agent をまとめられ、その path 自体は保護に追加しません。作業 directory の選択で namespace は変わりません。
+
+top-level と delegated child 起動では、設定順の `AGENTSTACK_EXTRA_PROTECTED_ROOTS` の後へ、実際に起動する物理作業 directory を足して `AGENTSTACK_PROTECTED_ROOTS` を計算します。Git root は検出しますが保護を自動的には拡張しません。上位 root が必要なら extras に明示します。別名と重複は順序を変えずにまとめます。resume・persistent の再解決は後続PRで扱います。
+
+継承した `GIT_DIR`、`GIT_WORK_TREE`、`GIT_COMMON_DIR` は workspace の判定に使わず、起動 process から取り除きます。Git metadata が壊れていれば別 directory へ切り替えず起動を停止します。新しい tmux session には server に残った旧 root ではなく現在の workspace context を渡し、server の global environment は変えません。`AGENTSTACK_VAULT`、Codex の sandbox/approval、OAuth の扱いは変えません。
+
+install/update は installed の旧保護 list を一度だけ自動移行します。ambient shell/tmux の `AGENTSTACK_PROTECTED_ROOTS` は取り込まず、非空で installed と異なる旧値は extras があっても警告します。従来の相対予約名から、managed 起動では root に依存しない物理絶対 path の予約名へ変わるため、cutover 前に作業を完了するか予約を解放し、更新後に影響する session をまとめて再起動してください。[保護設定の自動移行](configuration.md#reservation-の保護範囲と移行)を参照してください。
+
+## Codex と Node.js の PATH
+
+Codex の子は `hooks/codex-bin.sh` の共通処理で CLI を選び、login shell 内で `codex --version` を確認してから起動します。doctor も同じ選択・確認処理を使います。nvm の bin は探索対象です。選んだ Codex の symlink を解決した先の directory に実行可能な `node` があれば、その directory を実行時の PATH に追加します。nvm の version directory は先頭に置き、共有 prefix は既存の順序を保って後ろに追加します。既にその node が見えている場合は変更しません。npm の symlink の先に node がない場合は、選んだ shim と同じ bin の node を使います。どちらにも node がなければ、login shell の PATH と `~/.local/bin` を使います。
+
+launcher は同梱の `codex-bin.sh` を必須とし、欠落・互換性不足なら再 install の案内付きで停止します。doctor は自身と同じ配置の helper を優先し、利用できなければ未確認と表示します。
+
+dashboard の `SPAWN FAILED` は、今回の起動区間の launcher の原因を登録の後始末のエラーより先に表示します。明示 reason、通常の Error の順で確認し、全候補失敗の場合だけ候補の拒否理由を添えます。node が見つからない場合は、CLI の置き場所に対応する Node.js が使えるかを確認してください。実際の WSL 環境の確認手順は [トラブルシューティング](troubleshooting.md#nvm-の-codex-で-node-が見つからない) を参照してください。
+
+warm pool の再利用判定は今回変更しません。既存 `claim-model` は事前起動済み process の cwd・保護 root を保証しないため、pool を使う環境での保護範囲保証と速度影響は後続の確認事項です。
 
 ## tmux session
 
@@ -76,7 +99,7 @@ launcher は CLI を起動する前に ORRERY Mail へ identity を登録しま�
 4. project key、program、model、task metadata で登録
 5. 要求名と返された canonical name を比較。不一致なら top-level は明示して tmux session を返却名へ rename、reserved identity は停止
 6. Codex CLI では数値 agent ID を含む今回の launch expectation を記録
-7. managed agent list と clipboard を更新
+7. managed agent list を更新
 
 `AGENTSTACK_PROJECT_KEY` が未設定、または ORRERY Mail が到達不能でも CLI 自体は preselected name で起動します。ただし mail、reservation、project-scoped dashboard 機能は使えません。
 
@@ -97,6 +120,38 @@ ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json
 ```
 
 に child-owned state を持ちます。
+
+### 標準 spawn の追加 harness（opt-in）
+
+`spawn_child.sh --harness dsh|hermes --backend deepseek|strata --model <正式ID>` は、名前・登録応答の binding・実際の作業場所・tmux session・Mail proxy を標準の子と同じ経路で用意します。明示 opt-in と、patch を当てない別の導入世代が必要です。launcher は native config を生成し、上流 CLI を pane でそのまま動かします。専用 supervisor・通信先の制限・usage 必須・task の寿命は加えません。報告後も pane は生存し、`--harness` を指定しない Claude / Codex は従来どおりです。
+
+private な `harness_state_dir` に初期 prompt・native launch plan・native 専用の短い指示を保存します。指示の正本は `bin/lib/harness_instructions.md` で、既存の共通 renderer が起動・Mail 等の共通規則を取り込みます。初回起動と同じ ID の再開で、dsh の `AGENTS.md` / Hermes の system prompt へ渡します。ORRERY の子作成・raw 認証回復・他 runtime 専用の手順は載せません。共有編集の予約と自己専用 scratch の区別、停止条件は保持します。dsh の tool-subagent や Hermes の auxiliary/delegation 設定、skills の配布は変えません。Claude / Codex の指示本文も不変です。
+
+鍵や親 token の値は指示に含めません。追加の stdio/HTTP MCP は共通の tool 選択からコピーし、明示指定の承認や filter を native config に写せない場合は起動を止めます。installer の既定に含まれる項目は、native config に写せるものを適用し、使えない項目を通知して外します。native tool の adapter は、既存の鍵読取・登録・予約 hook の判定を呼びます。
+
+Hermes の新しい子は、世代の外にある profiles 実体の
+`children/<project key の SHA256>/<canonical name>` を永続的な `HERMES_HOME` として使います。
+別名・別 project は別 HOME で、同じ project と canonical 名の標準 resume は保存 pin と
+exact native session ID を照合して同じ HOME を使います。通常の exit でその HOME は消しません。
+組込み MEMORY/USER の有効 flag と上限は native のままです。共通 MEMORY/USER、auth、`.env`、
+利用者 config、allowlist、個人 skills は読み出して配布せず、新しい子は空の HOME から
+既存の route・guard・Mail・製品 skills を構成します。共通 profile の保存 effort や個人設定を
+引き継がないため、新しい子の未指定設定は native の既定に従います。
+
+旧共有 HOME の pin を持つ resume は `native_resume_legacy_profile` で明示して停止し、
+共通データや pin の書換え・会話 DB の移行・空の新規会話への切替は行いません。
+この方式の導入には、旧 resume を中断する対象への operator の明示了承が必要です。
+pin 不一致・欠落・HOME 欠落も、resume の Mail/prompt/指示の更新より前に拒否します。
+resume 時は HOME 内の `state.db` の存在と読取可も確認し、欠落は
+`native_resume_history_missing` で停止します。初回起動には DB を要求しません。
+この検査は DB 内容を読まず、該当 session や会話履歴の存在を保証するものではありません。
+新方式の memory 復帰は、同じ HOME の保存値と初期 memory snapshot を実 CLI の exit/resume で
+別途確認します。会話履歴に同じ文字があることだけでは memory 復帰の証拠にしません。
+managed 設定の保存拒否や通知は維持します。自動 GC・purge は追加しません。
+
+終了は Codex と同じ `cleanup-child-agent.sh <name>` を使います。すべての provider で、予約の解放・retire の応答・`whois` の retired 確認に失敗したら、identity の state と owner credential を保持して非0を返します。
+
+通常の Claude・Codex の直接登録による起動も、登録後に失敗したら停止を確認してから同じ cleanup を呼びます。作成要求の応答が未確認なら、同名の別 session を止めないため kill・予約解放・retire をせず、state・credential・worktree を残します。停止や Mail の確認ができない場合も保持し、起動は非0で終わります。失敗した起動は確認付き retire 後に資格と state を即削除し、正常終了の再開用 retention は適用しません。Codex が自身を更新中なら watch に資格を引き継ぎ、停止と共通 cleanup の確認後だけ worktree を片付けます。未確認ならその旨を記録して保持します。pre-registered の起動 rollback は従来どおりです。
 
 pre-registered child へ親 token は渡しません。dashboard spawn は child 専用 token を生成し、mode `0600` の一時 token file 経由で `spawn_child.sh --pre-registered` へ渡します。Claude / Codex では正式な登録応答の数値 ID・name・project・program を非秘密の `.binding.json` sidecar に添えます。launcher は token と sidecar を検証します。Claude / Codex とも incoming receipt の正式 ID・name・project・provider と token の安全性を保存前に検証し、CLI の起動準備が成功してから一時 handoff を消費します。検証失敗では handoff と既存 canonical state / credential を変更しません。起動失敗では今回作ったファイルだけを片付け、置き換えた既存の canonical material を private undo record から戻します。token を transcript、command-line argument、dashboard response に表示しません。
 
@@ -139,6 +194,8 @@ AGENTSTACK_PROJECT_KEY=/path/to/project \
   ~/.agentstack/bin/agentstack-reregister "$AGENT_NAME"
 ```
 
+明示 global context の exit 3 は `observed`（登録は未更新）です。program/model を指定して helper を再実行してください。
+
 helper は owner token を runtime state から読み、同名 identity を復元します。同名登録に失敗しても別名を作らないでください。別名は inbox、thread、reservation、監査履歴を分断します。
 
 `agentstack-reregister` は既存 token を使う helper であり、token を新規発行しません。launcher を一度も通らない parentless bot、`server-null` row の初回 claim、または exact `stage=local-token reason=credential-unavailable` からの明示 recovery は、モデルではなく operator が [常駐 agent の enrollment と起動](persistent-agents.md) に従って行います。通常の再起動では enrollment を繰り返しません。
@@ -165,9 +222,15 @@ CLAUDECODE=1
 
 Claude の子も正常終了後、state と owner credential を既定30日、mode `0600` で保持します。dashboard は元の project・数値 ID・name・program と credential の一致、保持期限・権限を検証します。子専用 Mail proxy config を再生成し、保存済み credential 付きで同じ identity を再登録、`unretire_agent` で受信を復帰させてから端末を起動します。子では resume 中の保持状態を期限切れ purge から保護し、CLI の終了時に再び cleanup します。top-level も既存 owner token があれば同じ再登録・unretire を行います。resume した session の SessionStart hook が shell から再登録するときも、登録済みの model（無ければ `claude-code`）を `CLAUDE_CHILD_MODEL` で渡し、tmux server の環境に残った別の model で上書きしません。`AGENTSTACK_CLAUDE_MODEL` は変えないので、その session から起動する agent の既定の model には影響しません。top-level（子の state が無く owner token だけを持つ体）では、元が retired と確認できた場合だけ、CLI が正常に終了した後に同じ token で Mail を再 retire します（tmux の kill や SIGHUP で終わった場合は走りません）。reservation はその session の SessionEnd hook が解放するので、ここでは解放しません。同じ identity が別の session で生きている場合（自分以外の tmux pane の pane metadata がその名前を指す、または SessionStart が `runtime/live-sessions/<name>/<pid>` に残した lease の CLI が動いている（CLI が終わった lease は次の SessionStart が片付けます）、または tmux の中で pane 一覧を読めない）は、retire もしません。token は削除せず、次の resume に残します。元から active の identity は retire しません。
 
-端末から `claude --resume` で開き直した場合も（SessionStart の source が `startup` か `resume` のときだけ。`/clear` と compaction では、動いている間に意図して retire した状態を戻さず、retired であることを1行出すだけにします）、SessionStart の shell 登録が保存した owner credential で本人を確かめ、Mail が retired と返したときは dashboard と同じ条件で unretire します。条件は、子の state が retained（保持期間内・同じ token・resume 中でない）であるか、子の state も tombstone も無く owner token だけを持つことです。旧3項目形式の state、期限切れ、purge 済みでは retired のままにし、dashboard から resume するよう1行出します。
+端末から `claude --resume` で開き直した場合も（SessionStart の source が `startup` か `resume` のときだけ。`/clear` と compaction では、動いている間に意図して retire した状態を戻さず、retired であることを1行出すだけにします）、SessionStart の shell 登録が保存した owner credential で本人を確かめ、Mail が retired と返したときは 次の条件で unretire します。子の state が retained（保持期間内・同じ token・resume 中でない）であるか、子の state も tombstone も無く owner token だけを持つことです。旧3項目形式の state、期限切れ、purge 済みでは retired のままにし、dashboard から resume するよう1行出します。
 
-credential が旧版の cleanup で消えた場合は `credential_missing`、期限切れは `retention_expired`、明示 purge 後は `purged` で起動を拒否します。別名への登録や credential の自動発行は行いません。必要な復旧は operator が [Persistent-agent enrollment and startup](persistent-agents.md) に従って行います。Mail の再登録・unretire、子専用 proxy の復元に失敗しても Claude は起動しません。起動準備では detached tmux の一時 session を作り、CLI を `tmux wait-for` で待機させます。窓表示と session 名の置換が成功してから CLI を解放し、元の husk を片付けます。途中の失敗では一時 session を除去して元の shell を残し、再登録応答で元が retired と確認できた場合だけ Mail を再 retire します。元から active の identity は retire しません。復元処理自体が失敗した場合は応答の `rollback_errors` に明示します。
+期限切れの記録があっても、operator がその後に同じ Mail identity の credential を復旧し、元の子専用の道具設定を必要としない Claude は DECK から Mail 付きで再開できます。コマンドと適用条件は [期限切れの Claude を DECK で再開する](persistent-agents.md#期限切れの-claude-を-deck-で再開する) にまとめています。復旧前は `mail_reason: retention_expired` で会話だけを再開し、明示 purge 後は `purged` で再開を拒否します。
+
+別名への登録や credential の自動発行は行いません。Mail の再登録・unretire、子専用 proxy の復元に失敗しても Claude は起動しません。起動準備では detached tmux の一時 session を作り、CLI を `tmux wait-for` で待機させます。窓表示と session 名の置換が成功してから CLI を解放し、元の husk を片付けます。途中の失敗では一時 session を除去して元の shell を残し、再登録応答で元が retired と確認できた場合だけ Mail を再 retire します。元から active の identity は retire しません。復元処理自体が失敗した場合は応答の `rollback_errors` に明示します。
+
+## 子の computer use
+
+Claude、Codex、dsh、Hermes の標準 launcher で `--tools mcp:orrery-screen` または `--tools screen:read:orrery-screen` を選べます。実行中の権限を変える場合は operator API を使います。 [Cua Driver の準備、権限と確認手順](computer-use.md)
 
 ## Codex 固有の起動
 
@@ -191,6 +254,8 @@ resume bootstrap は retained credential で同じ identity を再登録し、fr
 `codex-cli 0.154.0` と `0.156.1` の interactive TUI では、resume の `SessionStart` hook は composer を開いて idle の間ではなく、最初の user message を submit した後に発火することを実測しています。resume bootstrap は dashboard が選んだ session ID を既存 receipt と rollout header の両方で照合し、fresh resume expectation が未 claim・非 conflict の間だけ、その receipt の exact `launch_id` / `receipt_id` を history の根拠として保持します。prompt を送らず終了しても同じ session を再び resume できます。最初の submit 後は公式 payload の session ID も固定済み ID と header に一致するときだけ fresh receipt に置き換わり、別 ID・競合・次の startup expectation は fallback を無効にします。この発火時点は上記 version の実測範囲であり、他 version / mode の一般保証ではありません。
 
 SessionStart recorder は lock 待ち、rollout header 検査、launch transition、receipt write、最終 outcome の所要時間を `$AGENTSTACK_RUNTIME_DIR/codex-session-binding.log` に JSONL で残します。session ID、launch nonce、transcript path、credential は記録しません。`started` の後に `outcome` が無ければ hook が途中で打ち切られたことを区別できます。SessionStart の hook deadline は、cold start や短い lock 待ちで receipt 作成が途切れないよう5秒です。
+
+Codex child の起動確認は、まずその launch の検証済み receipt と rollout を確認します。そこに最初の task の開始が記録されていれば、pane や `ps` の再観測は不要です。sandbox 内の親では Python からの `ps` が拒否され、tmux の所有確認が `TMUX_TARGET_UNAVAILABLE` になる場合があります。capture / has-session の取得失敗、timeout、権限拒否は死亡の証拠にせず、理由 code と rc を残して「起動未確認」とし、同じ子の identity と復旧情報を保持します。観測不能になった後は pane 系の処理を止め、期限までその launch の receipt だけで task 開始を確認します。明示的な session 不在だけを死亡として扱います。起動未確認は task 完了や ready の証明ではありません。期限後も子の生死は不明な場合があり、親は正規 Mail の報告または検証済み receipt を待って判断します。CLI の `start_unconfirmed` はこの区分を示し、終了値 0 は登録処理の完了だけを意味します。既存の子の正規 ORRERY Mail の報告と検証済み receipt を確認し、自動再送・重複 spawn・別 transport・強制 cleanup は行いません。runtime の実モデルは native 表示または対応する正規実行記録で確認し、登録時の model 名だけを実行証拠にしません。
 
 API key が環境にあると OAuth を上書きすることがあるため、Codex subprocess だけから除去します。
 
@@ -223,6 +288,16 @@ install 前から開いていた Claude Code session は追加された skill �
 
 ORRERY Telemetry の委譲は、必ず先頭の slash を付けて `/delegate ...` と入力します。`delegate ...` は通常の prompt であり、この skill の呼び出しではありません。Claude が組み込み subagent / Agent tool で処理した場合、成果物ができても ORRERY Telemetry の identity、reservation、専用 tmux session、dashboard telemetry には載りません。ORRERY Telemetry で監視する child を作る目的では、組み込み Agent tool を `/delegate` の代わりに使わないでください。
 
+child とのやりとりにも同じ境界があります。Claude Code 2.1.224 以降は組み込みの `SendMessage` / `ListAgents` で同じ machine の他 session に送れて、tmux の ORRERY child もその対象です。そのため、その経路で送ると届きはしますが、ORRERY Mail に記録が残らず dashboard にも出ません。`/delegate` skill の description と managed block は、どちらも `send_message` を使うよう指示しています。組み込みの経路を Claude Code に断らせたい場合は、deny rule を自分で足してください。同じ rule で組み込み subagent や agent team の teammate への送信も消えるため、installer は入れません:
+
+```json
+{
+  "permissions": {
+    "deny": ["SendMessage", "ListAgents"]
+  }
+}
+```
+
 | 項目 | 内容 |
 | --- | --- |
 | トリガー | child への委譲、subagent 起動、並列作業を依頼されたとき |
@@ -234,9 +309,17 @@ ORRERY Telemetry の委譲は、必ず先頭の slash を付けて `/delegate ..
 
 `--base mail-only` と `--tools browser[:<deviceId>]` / `screen[:read|:operate]` / `screen:<read|operate>:<server>` / `mcp:<server>[:all]` で、child に渡す道具を選べます。選択がある child は、指定どおりにできなければ起動しません（[子に渡す道具を選ぶ](delegation.md#子に渡す道具を選ぶ--base----tools)）。
 
+Claude・Codex・dsh・Hermes の新規起動では、CLI で base/tools/MCP profile を、標準の `/api/spawn` で base/tools を省略すると、installer の `AGENTSTACK_CHILD_DEFAULT_TOOLS`（既定は空）を使います。使えない既定項目だけを通知して外します。`--base default` の明示で既定を抑止できます。resume は記録済みの選択を復元します（[既定の道具](delegation.md#installer-の既定の道具)）。
+
 Codex child の MCP は既定で `inherit`（従来互換）です。`/delegate --codex-mcp orrery-only` は認証済み ORRERY Mail と session-binding plugin を残して、他の継承 MCP/plugin を無効化します。plugin skill や外部 app tool が必要な task では使いません。
 
-Claude の世代名は `spawn_child.sh`、Codex のモデル・effort規則は `dashboard/codex_models.py` が正本です。Claude は無指定 / `opus` が `claude-opus-5-5`、`sonnet` が `claude-sonnet-5`、Codex は無指定と `sol` のどちらも起動対象 CLI が 0.159.0 以上なら `gpt-6.1-sol`、古い版なら `gpt-6-sol` です。版不明なら新鮮な catalog で判定します。GPT-6.1 Sol には Codex CLI 0.159.0 以上が必要で、doctor が fallback と更新方法を note に出します。旧世代を固定する場合は `gpt-6-sol` のように正式 ID を指定します。`claude-opus-5` / `opus-5` は旧世代を明示指定する互換形として有効です。`luna` は `gpt-6-luna`、`terra` は `gpt-5.6-terra`、`astra` は `gpt-6-astra` のaliasです。旧世代の正式 ID は互換性のため有効なままですが、warm pool を claim するのは catalog が示す current 200K Opus / Sonnet と完全一致するときだけです。Opus 5.5 には Claude Code 2.1.280 以上が必要です。
+Claude の別名の行き先は `dashboard/claude_models.py`、Codex のモデル・effort規則は `dashboard/codex_models.py` が正本です。Claude の無指定 / `opus` / `sonnet` / `haiku` / `fable` は、Claude Code のローカル model catalog がその系統の現行として示すモデルに解決し、catalog が使えないときは同梱の表（今は `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-haiku-4-5-20251001` / `claude-fable-5-1`）を使います。どちらを使ったかは launcher の出力と doctor に出ます。`sonnet-5-5`（`sonnet55`・`Sonnet 5.5` も可）・`sonnet-5`・`opus-5-5` のような版つきの別名は世代を固定し、`spawn_child.sh` にあります。`claude-opus-5` / `opus-5` は旧世代を明示指定する互換形として有効です。Codex の系統別 alias は下記の新鮮な catalog に追従します。旧世代の正式 ID は互換性のため有効なままですが、warm pool を使うのは、要求モデルが `opus` / `sonnet` の別名の解決結果で、pool の status がその正式 ID を括弧で示す（例 `opus ready (claude-opus-5-5)`）ときだけです。claim は `warm_pool.sh claim-model <種類> <子の名前> <正式 ID>` で行い、pool はそのモデルで事前起動した session だけを不可分に claim して `<子の名前> <正式 ID>` を出力する必要があります（status を見た後に pool が入れ替わっても、別のモデルを渡さないため）。`claim-model` の無い pool や、拒否した pool は cold start になります。別のモデルを報告した claim は、その session を止めて起動を中止します。子は、`hooks/claude-child-bin.sh` が子の login shell（`~/.local/bin` を先頭）で見つけた `claude` の path を実行し、別名の版の確認もその binary で行います。dashboard も、モデル省略の起動の前と起動時に同じ script を実行し、NEW AGENT の既定もその結果で決めます。起動の前の実行が失敗した（timeout など）ときは、前の答えで決めずに、登録の前にエラーで止めます。モデルを明示した起動と dry run はこの実行をしません。Opus 5.5 には Claude Code 2.1.280 以上が必要です。
+
+Codex は既定設定がない場合、モデル省略時に、選択された CLI が 0.159.0 以上なら `gpt-6.1-sol`、それ未満なら `gpt-6-sol` を初期候補とし、版不明なら新鮮な catalog で初期判定します。その ID が選択された `CODEX_HOME/models_cache.json` の一覧に無ければ、`gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna` の順で次の掲載候補へ下げます。既定を下げる判断には期限切れの cache も使いますが、候補追加・effort metadata は取得から300秒以内に限り、古い CLI を GPT-6.1 Sol へ上げません。使える cache や次の候補が無ければ従来の既定を維持します。正式 ID の明示指定は置き換えません。
+
+`AGENTSTACK_CODEX_DEFAULT_MODEL` と `AGENTSTACK_CODEX_DEFAULT_EFFORT` で省略時の値を設定でき、明示指定が優先します。`sol` / `terra` / `luna` / `astra` は新鮮な catalog の同系統で最大の数値版に追従し、新鮮な catalog に該当がなければ拒否し、未取得・期限切れでは同梱値を使います。詳細は [設定](configuration.md#codex-model-catalog)。
+
+変更前後の ID と理由は launcher の出力、doctor、API の `model_note`、NEW AGENT に通知します。期限切れの場合は `fetched_at` と、`codex` を一度起動して一覧を更新する案内も出します。`/delegate` は登録前に共通の `resolve` で CLI とモデルを解決し、出力された通知を利用者へ伝え、返された正式 ID を登録と起動の両方に使います。cache の `identity` は現在のログインと照合していないため、アカウントを切り替えた後は古い一覧が残っている可能性があり、候補や fallback は利用権限の証明ではありません。詳細は [Codex model catalog](configuration.md#codex-model-catalog) を参照してください。
 
 1. 対象 resource、排他性、失敗点、可逆性から risk と監視頻度を決める
 2. `agentstack-preregister-child` で child-owned token と canonical name を作る
@@ -268,9 +351,13 @@ monitor の danger command 検知は既定では passive です。`AGENTSTACK_MO
 
 へ書きます。log は transcript ではなく、Goal、Decisions、Work Performed、Verification、Related Notes、Next Actions を中心にします。
 
+ログを書いた後、agent は ORRERY Mail の `show_files` にログの path を渡します。ORRERY で起動した session なら、cockpit の History にログの file chip が出て、Markdown として描いた preview で開けます。ログが session の作業 folder の中にあるときだけ、その機械で初回に一度、利用者が使っている言葉でそのことを一行添えます。もう一度出したいときは `${AGENTSTACK_RUNTIME_DIR:-~/.agentstack/runtime}/hints/log-history-preview` を消します。
+
 ### Hook と reservation enforcement
 
 Claude Code は `check-file-reservation.sh` の PreToolUse hook で `Edit` / `Write` を hard block します。Codex には同等 hook がないため、managed `~/.codex/AGENTS.md` が reserve / renew / release discipline を指示します。registry は共通なので、Claude と Codex の reservation は相互に見えます。
+
+`Bash`・script・別 tool で書く場合は Claude の予約 hook による確認・自動解放が無いため、書き終えた直後に自分で解放します（bound proxy は `release_reservations`、raw/direct は `release_file_reservations`）。
 
 repository にある11件の hook / helper の発火タイミング、caller、block 条件、cleanup lifecycle は [Hooks と運用 helper](hooks.md)を参照してください。
 

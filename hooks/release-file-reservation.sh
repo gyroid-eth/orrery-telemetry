@@ -1,4 +1,34 @@
 #!/bin/bash
+
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_client harness-hook \
+    --context "${AGENTSTACK_FRESH_CLIENT_CONTEXT:-}" --action post-edit
+  exit $? # No old project/name/debounce fallback, including a broken context.
+fi
+
+# Decide explicit global context before loading any legacy environment/state.
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader" || exit 2
+if declare -F ags_client_entry >/dev/null; then
+  _ags_global_error="$(ags_client_entry post-edit "$@" 2>&1)" && _ags_global_rc=0 || _ags_global_rc=$?
+  if [[ "$_ags_global_rc" == 0 ]]; then exit 0; fi
+  if [[ "$_ags_global_rc" != 125 ]]; then
+    . "$(dirname "${BASH_SOURCE[0]}")/session-identity-policy.sh"
+    if [[ "$_ags_global_error" == *INITIAL_TRANSPORT_UNREACHABLE* ]]; then
+      agentstack_audit_unmanaged "post-edit" "${AGENTSTACK_SESSION_ID:-global}" "transport=unreachable policy=$(agentstack_mail_outage_policy)"
+      if [[ "$(agentstack_mail_outage_policy)" == warn-open ]]; then
+        if agentstack_should_report_outage "${AGENTSTACK_SESSION_ID:-global}" "unreachable"; then
+          agentstack_emit_visible_warning "$(agentstack_outage_warning_text)"
+        fi
+        exit 0
+      fi
+    fi
+    agentstack_audit_unmanaged "post-edit" "${AGENTSTACK_SESSION_ID:-global}" "global-release-failed"
+    printf '%s\n' "$_ags_global_error" >&2
+    exit 0 # The completed edit cannot be rolled back by PostToolUse.
+  fi
+
+fi
 # PostToolUse(Edit|Write): after a successful edit, release its reservation.
 #
 # Release is deliberately debounced. Immediate release makes the next Edit in
@@ -12,7 +42,7 @@ RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/reservation-common.sh"
 
 TOOL_OUTPUT=$(cat)
-TOOL_SUCCESS=$(printf '%s' "$TOOL_OUTPUT" | python3 -c '
+TOOL_SUCCESS=$(printf '%s' "$TOOL_OUTPUT" | "${AGENTSTACK_PYTHON:-python3}" -c '
 import json
 import re
 import sys
@@ -77,7 +107,7 @@ case "$RELEASE_GRACE_SECONDS" in
     ''|*[!0-9]*) RELEASE_GRACE_SECONDS=90 ;;
 esac
 
-PATHS_JSON=$(QUERY_REL_PATH="$REL_PATH" QUERY_ABS_PATH="$FILE_PATH" python3 -c '
+PATHS_JSON=$(QUERY_REL_PATH="$REL_PATH" QUERY_ABS_PATH="$FILE_PATH" "${AGENTSTACK_PYTHON:-python3}" -c '
 import json
 import os
 import unicodedata
@@ -109,7 +139,7 @@ mkdir -p "$STATE_DIR" 2>/dev/null || {
     release_now
     exit 0
 }
-STATE_KEY=$(QUERY_AGENT="$AGENT" QUERY_REL_PATH="$REL_PATH" python3 -c '
+STATE_KEY=$(QUERY_AGENT="$AGENT" QUERY_REL_PATH="$REL_PATH" "${AGENTSTACK_PYTHON:-python3}" -c '
 import hashlib
 import os
 import unicodedata
@@ -151,6 +181,6 @@ nohup env \
     QUERY_STATE_TOKEN="$STATE_TOKEN" \
     QUERY_GRACE_SECONDS="$RELEASE_GRACE_SECONDS" \
     QUERY_COMMON_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/reservation-common.sh" \
-    python3 "$WORKER" >/dev/null 2>&1 &
+    "${AGENTSTACK_PYTHON:-python3}" "$WORKER" >/dev/null 2>&1 &
 
 exit 0

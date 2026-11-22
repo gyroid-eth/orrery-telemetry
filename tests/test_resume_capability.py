@@ -112,7 +112,7 @@ def test_codex_row_with_verified_child_provenance_can_be_ready(
     monkeypatch.setattr(
         server,
         "_codex_resume_child_home",
-        lambda _session, _registration: (str(child_home), "orrery-only"),
+        lambda _session, _registration: (str(child_home), "orrery-only", False),
     )
 
     assert server._resume_capability(AGENT, "codex-cli", category="retired") == "ready"
@@ -234,8 +234,8 @@ def test_finished_husk_is_preserved_when_resume_is_not_ready(monkeypatch):
     monkeypatch.setattr(server, "_terminal_adapter", lambda: "fixture")
     monkeypatch.setattr(
         server,
-        "build_agents",
-        lambda history_days=None: [{"name": AGENT, "category": "finished"}],
+        "lookup_agent",
+        lambda name, _rows=[{"name": AGENT, "category": "finished"}]: next((r for r in _rows if r['name'] == name), None),
     )
     monkeypatch.setattr(
         server,
@@ -459,6 +459,8 @@ def test_claude_display_defers_scan_then_reuses_mtime_keyed_result(
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout=""),
     )
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, tmp_path, server, lambda *a, **kw: SimpleNamespace(returncode=1, stdout="", stderr=""))
     server._TPATH_CACHE.clear()
     server._TPATH_OWNER.clear()
     server._RESUME_CAPABILITY_CACHE.clear()
@@ -558,6 +560,8 @@ def test_claude_failed_full_verification_is_cached_as_no_history(
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout=""),
     )
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, tmp_path, server, lambda *a, **kw: SimpleNamespace(returncode=1, stdout="", stderr=""))
     server._TPATH_CACHE.clear()
     server._TPATH_OWNER.clear()
     server._RESUME_CAPABILITY_CACHE.clear()
@@ -606,11 +610,12 @@ def _large_retired_claude_roster(
             INSERT INTO projects VALUES (1, 'fixture-project');
             """
         )
+        # Keep the roster inside the server's SQLite-clock history window.
         con.executemany(
             """
             INSERT INTO agents VALUES (?, 1, ?, 'claude-sonnet-5',
-                'claude-code', '', '2026-09-01 00:00:00',
-                '2026-09-22 00:00:00', '2026-09-22 00:01:00')
+                'claude-code', '', datetime('now', '-22 days'),
+                datetime('now', '-1 day'), datetime('now', '-1 day', '+1 minute'))
             """,
             [(index + 1, f"RetiredClaude{index:02d}") for index in range(60)],
         )

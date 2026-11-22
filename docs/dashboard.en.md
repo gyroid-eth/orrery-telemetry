@@ -25,6 +25,27 @@ NETWORK may omit nodes outside its selected time window. Absence from the curren
 
 ## DECK
 
+### Provider-stop notifications (legacy)
+
+The dashboard displays `MODEL CAPACITY` on DECK and `CAPACITY` on NETWORK when a running Codex CLI is waiting after `Selected model is at capacity. Please try a different model.` A background worker checks approximately every five seconds even with no browser open, confirms two distinct captures, and sends one ORRERY Mail notice to the child's verified `PARENT_AGENT`. The sender is the existing child identity; the message identifies itself as telemetry's automatic observation and includes the time in JST and the error line. It never resumes the child, changes models, or sends pane keystrokes.
+
+`AGENTSTACK_RUNTIME_DIR/provider-stalls.json` preserves each episode across dashboard restarts. Observed work rearms notification. A new stop can also be detected without observing work when the same pane proves an append of "previous stop → newly submitted input → new capacity error." A second distinct capture must confirm the same input/error boundary before one notice is sent. An unsubmitted composer, Mail delivery records alone, repainting the same error, or footer/width changes alone do not trigger another notice.
+
+Retry detection requires an unambiguous overlap with the previous stop's history. If history is pushed out between captures, repeated sequences make the boundary ambiguous, or quoted/complex input blocks cannot be identified, the current episode is retained without guessing. An old journal without history anchors also uses its first observation only as a baseline. These cases can miss retries. Several retries before confirmation coalesce into one notice after the latest boundary is confirmed. Only hashes and ordering of up to 64 normalized history blocks are stored, never their text.
+
+Parentless sessions get a marker alone. Unverified parents or owner credentials retain the marker. If a send times out with an uncertain acceptance, it is not retried: `delivery_unknown` / `MAIL UNCONFIRMED` remains visible. During transport failures this prioritizes avoiding duplicates over guaranteeing delivery.
+
+Only the confirmed Codex capacity message is supported, either bare or with remote compaction's `Error running remote compact task: ` prefix. Unknown prefixes and other compaction errors are excluded. Historical/quoted errors, busy or approval screens, and unknown provider errors do not trigger a notice. Codex App, headless, and **global mode are not supported yet**.
+
+Detection also handles Codex's own line wrapping of the fixed error text. A single newline is allowed only between its known words; blank lines and unrelated output are never joined.
+
+Detection also accepts Codex's single background-terminal count row, including its `/ps` and `/stop` hints, between the error and the composer. Only the exact singular/plural status row is allowed. Ordinary output, queued-input bodies, and `/ps` results are not skipped.
+
+The state file starts with the first capacity candidate and is saved only when state changes. Work observations for a child that has never been a candidate cause no writes. Once a child has been a candidate, observed work writes the small state file approximately every five seconds, including after rearming. Persisting the latest work capture's order prevents delayed capacity captures from causing another notice in a different process or after a restart. For ticks that do not update capture ordering, observation-time checkpoints are at most hourly.
+
+Capture ordering survives state transitions and work observations, so delayed older captures cannot confirm or clear newer transitions. Replaced generations expire after seven unobserved days; definitively absent sessions expire after thirty. An unavailable tmux inventory retains the record. Only recognized fixed Mail refusals that establish rejection before acceptance (argument validation, contact policy, sender authentication), or JSON-RPC request errors before execution, are `failed`. A tool error can also follow a database commit, so internal errors and unrecognized refusal messages remain `delivery_unknown`. Neither is automatically retried.
+
+
 DECK opens first. **One card represents one agent**, so you can inspect who is doing what and whether each agent is stopped waiting for input.
 
 In the following image, the top counter and card area both show three agents. The counter is the total; each card shows an individual state.
@@ -37,7 +58,7 @@ The six screenshots on this page are real screens from an isolated demo environm
 
 | Display | Interpretation |
 | --- | --- |
-| `GPT 5.6`, `SONNET 5`, etc. under the name | Current model. `◷ 200K` or `◷ 1M`, when present, is the model's total working-memory capacity. |
+| `GPT-6.1-Sol`, `SONNET 5`, etc. under the name | Current model. `◷ 200K` or `◷ 1M`, when present, is the model's total working-memory capacity. |
 | Thin line below the model | **Context remaining**. Longer means more room; below 20% it becomes redder. It is absent when telemetry cannot be obtained. |
 | Black strip | Current terminal display, useful for judging whether the agent is working or waiting. |
 | `ORD` | Most recent instruction assigned to the agent. |
@@ -59,6 +80,10 @@ The header numbers are a **tally** of the states each card shows in its top-righ
 | `NEED YOU` | Agents waiting on a human: pending approval (`APPROVAL`) or asking a question (`?`) | red border, or `?` |
 | `WORKING` | Agents with a turn in progress | amber LED and elapsed time |
 | `WAITING` | Agents at the prompt, free to take work | `LAST 1M41S` |
+
+In a narrow Codex pane, a current `Working` / `Thinking` line ending in `…` still indicates work. Elapsed time includes only readable units and is absent when unreadable. Historical status lines superseded by a later reply or completion marker, and quoted examples, do not establish current work.
+
+Work also remains current while Codex shows queued follow-up inputs (`Queued follow-up inputs`) between the current `Working` line and the input box; a queue alone never indicates work. A footer whose model display name separates the variant with a space, such as `GPT-6.1 Terra max`, is recognized as the input footer, and the model is shown as `GPT-6.1-Terra`.
 
 `NEED YOU` appears only while such agents exist; clicking it narrows the DECK to them (click again to restore). An agent whose process has stopped and returned to the shell is in none of these counts; its card says `○ SHELL`. The total of active agents is in the sector heading, `ACTIVE AGENTS [ 29 ]`.
 
@@ -254,7 +279,7 @@ The history range auto-fits to the oldest and newest events, widening ranges too
 
 ## NEW AGENT
 
-![NEW AGENT modal — launch manifest for identity / engine / directory / task](img/new-agent.jpg)
+![Configured Local Qwen model and dsh / Hermes Harness choices in NEW AGENT](img/native-harness-picker.png)
 
 `+ NEW AGENT` is a launch manifest that confirms identity, engine, directory, and task in order. Common fields form a one-way path; parent / role / group / isolation are folded into ADVANCED, creating the shortest path for a standalone agent.
 
@@ -271,19 +296,37 @@ Scientist-rail `available` means that at least one pairing with the 134 adjectiv
 
 ### Engine
 
-- Claude / Codex provider tabs
+- provider tabs built from the server catalog; configured environments also list DeepSeek / Local
 - model cards and usage guidance per provider
 - Claude: Sonnet / Opus / Haiku
 - Codex defaults to `gpt-6.1-sol` when the selected CLI is 0.159.0 or later (fresh catalog evidence is used if its version is unknown), otherwise `gpt-6-sol`; prior generations remain available through formal IDs such as `gpt-6-sol`
 - Codex effort choices follow `model_efforts` / `model_effort_defaults`; Codex CLI makes the final decision for an explicit effort
+- DeepSeek / Local show Model and Harness (dsh / Hermes) choices from the configured catalog. Select a model, then an available harness; unavailable choices are disabled and labeled “Coming soon”. Helper and Effort follow that model and harness's capabilities. See the [setup guide](install.en.md) and [API reference](api.en.md).
 
 The server uses the provider / model / effort allowlist for both catalog and validation.
+
+This section describes the bundled Telemetry screen. Model / Harness uses the same English vocabulary as cockpit; directory dialogs and Lineage controls need not be identical. See the [current combinations and limitations (Japanese)](managed-catalog.md) for OS credential setup, memory and manual Local effort.
+
+<a id="native-models-and-harnesses"></a>
+### DeepSeek / Local with dsh / Hermes
+
+Choose a configured provider, its Model, and an available Harness. The selection GIF stops before SPAWN: [watch the Model / Harness selection](img/native-harness-selection.gif).
+
+The NEW AGENT image and GIF show the actual bundled Telemetry screen, real catalog, scientist names and official portraits. They show Claude / Codex / DeepSeek / Local models and dsh / Hermes selection before launching, with the working directory and task cropped out. The [cockpit NEW AGENT](https://github.com/gyroid-eth/orrery/blob/master/docs/en/usage.md) is a different screen. The DECK / NETWORK examples below still use synthetic data. These images do not demonstrate credential setup or end-to-end acceptance of every combination.
+
+![DECK examples for DeepSeek and Local Qwen with dsh and Hermes](img/native-local-deck.png)
+
+Local Qwen uses the Qwen logo inside a hexagon; DeepSeek uses its provider badge. Check Harness separately when comparing agents.
+
+![NETWORK medallions distinguish Local Qwen from DeepSeek](img/native-local-network.png)
 
 ### Directory
 
 Displays `AGENTSTACK_SPAWN_DIRS` preset chips and an exact-path input. Persist presets with installer `--spawn-dirs`; shell `export` does not reach the service. See “Spawn directory” in [configuration](configuration.en.md). The input uses root-scoped `/api/fs/dirs` typeahead and supports arrow keys / Enter. The last directory is saved in `localStorage`.
 
 Typeahead does not leave `AGENTSTACK_SPAWN_ROOTS` or suggest hidden directories, `..`, or symlinks outside a root.
+
+In the ORRERY folder picker, the breadcrumbs set the scope for a name search. With an empty query, the picker shows the current folder’s children. As you type, it shows matches below the current folder by relative path. Use the arrow keys to move and Enter to open a child folder or select a search result. The [folder search API](api.en.md#get-apifsdir-search) describes the scope and limits.
 
 ### Task and ADVANCED
 
@@ -326,6 +369,8 @@ The normal install root is `~/.agentstack`; set `AGENTSTACK_WORKTREE_ROOT` when 
 ## Embed mode
 
 `/?embed=1` or a same-origin iframe uses embed mode with a compact header. [ORRERY cockpit](https://github.com/gyroid-eth/orrery) embeds the dashboard in this mode from the `TELEMETRY` button in its header.
+
+Host checklists can follow successful interactions through same-origin parent notifications. See [Embedded interaction notifications](embedded-tour-events.md) for the envelope, success boundaries and receiver validation. Standalone pages send none.
 
 From the parent window:
 
@@ -381,56 +426,15 @@ python3 scripts/dashboard_theme_manifest.py --check
 
 `source` is token / declaration coverage; `mutation` is the compiled count of token-write / element / effect-component applications derived from an immutable snapshot immediately before application. Source units are axis-specific: `dim-contrast` / `background` use `token-write`, while `small-text` / `tracking` / `glow` use `declaration`. Effect membership is fixed only by generated eligibility's pre-apply live match; neither pre/post/endpoint values add or remove targets. Of these, rendered members with nonzero boxes inside the viewport are `visibleExpected`; members whose post-cascade computed value reaches the requested derivation are `visibleReached`. A member already at the requested value also counts as reached. `visibleChanged` counts visible members whose canonical post differs from pre; `changed` is an independent no-op gate counting that difference for all evaluated members. Hidden / zero-box / offscreen members count as `deferred`. A non-null apply succeeds only with `visibleExpected > 0`, `visibleReached === visibleExpected`, `visibleChanged > 0`, and `changed > 0`. Zero or sub-quantization changes are rejected as `no-effective-change`, zero visible targets as `no-visible-targets`, and any member failing to reach the requested derivation as `effect-count-mismatch`, restoring the previous valid axis. Surfaces and units are not summed. The `glow` effect unit is a live `effect-component`: two target radial layers on one surface count as two, and one CSS rule matching ten visible elements counts as ten. Selector and keyframe source components are divided into `emissive | elevation | focus | state`, allowing color halos to weaken while preserving elevation and focus.
 
-### Atomic theme profile bridge
-
-`small-text` and `tracking` can be applied together as one atomic profile using a complete five-axis vector. Every key is required; non-null combinations may be empty, any subset of `small-text` / `tracking`, or a single legacy axis.
-
-```js
-frame.contentWindow.postMessage({
-  type: "agentstack-theme-profile",
-  version: 1,
-  requestId: "theme-42",
-  values: {
-    "dim-contrast": null,
-    "small-text": 0.5,
-    tracking: 0.25,
-    glow: null,
-    background: null,
-  },
-}, location.origin);
-```
-
-The receiver derives both axes from the same A snapshot with every experimental override removed. With baseline font size `s0` and baseline letter-spacing ratio `r0`, final small size is `s(vs)`, tracking ratio is `lerp(r0, min(r0, 0.08), vt)`, and final spacing is that ratio times `s(vs)`. Because the previous profile render is not used as the next baseline, UI operations small→tracking and tracking→small produce identical computed size / weight / spacing for the same complete final vector. DOM nodes added later also derive both axes together from an A baseline with overrides temporarily disabled and add them to each axis's independent envelope.
-
-On success, it returns the response below. `requested` / `applied` are always exact five-key maps; `axes` is the exact set of non-null axes.
-
-```js
-{
-  type: "agentstack-theme-profile-result",
-  version: 1,
-  requestId: "theme-42",
-  surface: "telemetry",
-  requested: {"dim-contrast": null, "small-text": 0.5,
-    tracking: 0.25, glow: null, background: null},
-  applied: {"dim-contrast": null, "small-text": 0.5,
-    tracking: 0.25, glow: null, background: null},
-  status: "applied",
-  axes: {
-    "small-text": {status: "applied", source: {}, mutation: {}, effect: {}},
-    tracking: {status: "applied", source: {}, mutation: {}, effect: {}},
-  },
-}
-```
-
-If any axis fails a source / mutation / effect guard, the complete profile is rejected and `applied` contains the restored last-valid complete map. Schema violations also leave state unchanged. Legacy `agentstack-theme-axis` v1 is equivalent to a complete profile with every axis except the target set to null, and legacy `value: null` resets all axes. If the result reply is lost, the parent coordinator can send the last-valid complete profile with a fresh `requestId` as a compensating request.
-
-After embed initialization and reload, the dashboard sends `agentstack-theme-axis-ready` and `agentstack-theme-profile-ready`, both version 1 with `surface: "telemetry"`, to the same-origin parent. Recovery sends a compensating profile after this explicit signal and does not count as complete until its result is acknowledged. The parent coordinator owns timeout and UI failure display when ready never arrives.
+After embed initialization or reload, `agentstack-theme-axis-ready` (version 1, surface `telemetry`) is sent to the same-origin parent. The former Vision profile message protocol has been removed; the single-axis contract above remains available.
 
 ## Terminal bridge
 
-Opening a terminal from a card or node makes the server allocate a Ghostty / iTerm2 / Terminal.app jump or `ttyd` browser terminal.
+Opening a terminal from a card or node makes the server open a Ghostty / iTerm2 / Terminal.app jump.
 
 `AGENTSTACK_BIND_HOST=0.0.0.0` also exposes the terminal bridge and control endpoints externally. Because the dashboard has no authentication layer, do not use it outside a trusted LAN / VPN.
+
+Legacy Host admission allows only loopback authorities at the actual listening port by default. Existing LAN / VPN users must configure fixed origins with [`AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS`](configuration.en.md#host-configuration-for-lan--vpn-access) before updating, then use the installer to save them and update the service environment. A wildcard bind alone does not allow external Hosts. A cockpit bridge using its normal loopback connection needs no additional setting. This check does not add authentication.
 
 ## Demo (no server required)
 
@@ -447,3 +451,61 @@ The public [agentstack-demo.pages.dev](https://agentstack-demo.pages.dev/) runs 
 - [API reference](api.en.md)
 - [Configuration](configuration.en.md)
 - [Troubleshooting](troubleshooting.en.md)
+
+<a id="global-mail-view"></a>
+## Mail in isolated global mode
+
+Legacy mode remains the default. The global dashboard requires an isolated global server and operator capability. Follow [unlock and Lock](global-delivery-client.en.md#operator-ui-access); never paste an agent owner token. The page checks its screen capability.
+
+Choose a numeric identity in `View as`, then open a NETWORK edge. Mail visible to that viewpoint appears in the existing right drawer. Replies link by `reply_to` message ID; indentation stays bounded even for long chains. Bodies are literal text, never executable HTML. Unavailable earlier Mail gets a short notice without exposing hidden IDs, bodies or recipients. `Load more visible mail` passes through the server’s keyset cursor.
+
+Save `?view=net&view_as_agent_id=ID&message_id=ID`. Old numeric `thread_id` links resolve a visible origin. Old labels retain separate source groups, never inferred replies or subject joins. Conflicting old/new IDs are refused.
+
+Old instructions produce a short English notice with `Details: English / 日本語`. Cleanup only copies a command; nothing is deleted automatically. Dismiss hides that exact finding for this page session. Settings still shows it; changes to path, block hash, version or state bring it back. Findings refresh every 60 seconds and on explicit inspection. Embedded pages defer the notice to their host. See [legacy block migration](instruction-migration.en.md#legacy-blocks). Session-start candidate observations do not prove what instructions the running session loaded.
+
+MAIL shows delivery `signal.status`, separately from server readiness. A red delivery state does not disable requests the server can accept. The roster does not infer process activity; unverified session activity is shown as unavailable.
+
+NEW AGENT uses fixed client slots. Existing names offer resume of the same identity without issuing credentials. Missing configuration or trust returns an explicit operator action. Recent work folders retain ten entries and consume the old scalar once. Work folders are not Mail scopes. The browser uses existing `AGENTSTACK_SPAWN_ROOTS`; deliverables use only explicit `AGENTSTACK_DELIVERABLE_ROOTS`. Unset deliverable roots yield an empty result, with no cwd/project fallback.
+
+Legacy screens and routes are retained. Cockpit’s global bridge and right-pane integration follow separately. A new dashboard with an old cockpit keeps the cockpit’s legacy display and does not infer global screen capabilities.
+
+Global network activity is shown as `ACTIVITY UNKNOWN`. A read projection for actual working/waiting, context, and parent/child state is required before PR7 switches the default.
+
+Registration recovery buttons follow status `next_operations`: replay/finalize/configure continue the same slot and intent; Resume is for an existing launch. Registration replay and abandon compare the displayed pending digest. Lock aborts in-flight fetches and invalidates delayed bodies and tab capability handoffs. A fresh tab accepts only its matching request within 500ms; after Lock it requires explicit Unlock. If browser storage is denied, `BROWSER_SESSION_STORAGE_UNAVAILABLE` indicates memory-only access and reload requires input again.
+
+Instruction checks select local contexts by identity, then verify only matching slots. The slot's `wrapper_root` is the sole installation provenance. Agents without a proven Claude/Codex provider slot show `PROVIDER_HOME_UNPROVEN` in Settings only, without repeated conversation notices. Copied cleanup commands explicitly carry the same HOME, provider HOME and installation environment used for detection; never remove a block by dropping those assignments.
+
+Lock also resets drawer participants, count and accessibility state. The configure-provider button is available only for instruction block setup. Codex trust approval and daemon execution configuration link to the English/Japanese CLI steps; an absent profile is reported as `PERSISTENT_EXECUTION_REQUIRED`.
+
+<a id="global-runtime-observation"></a>
+### Activity in the global network
+
+API 18 advertises `global_runtime_observation=1`. The network reads working / waiting, context use and parent/child colours from existing private client roots and owner verification through the management socket. Legacy rendering and default installation remain unchanged. Observation never registers agents, creates files or opens Mail SQLite directly.
+
+Readers take the existing operation mutex with a shared nonblocking lock. A busy writer, mismatched owner/generation/binding or uncertain PID/start/pane proof makes only that agent `ACTIVITY UNKNOWN`. The entire request has a five-second deadline. The volatile pane cache lasts at most 4.5 seconds and is invalidated by owner, binding or live-slot changes. Concurrent live sessions show `MULTIPLE SESSIONS`, without merging activity or context. Ended history does not hide a current session.
+
+Codex App snapshots and Desktop session metadata do not prove that the provider is currently alive. App activity and context remain **unknown / null**. Bridge, wake and snapshot writers are unchanged. Parent relationships use existing typed child-state and verified owners, never names or Mail traffic.
+
+Shared browser controllers own capability, Lock, Mail display and registration recovery. Lock invalidates outstanding requests and image object URLs. Extensions granted access to the page can read sessionStorage: use a trusted browser profile. Lock clears the page session, rather than revoking the server capability.
+
+Network and Deck show the same activity without a Mail viewpoint. Confirmed absence is NOT RUNNING; unavailable evidence is ACTIVITY UNKNOWN. Parent/child colours describe direct relationships, so a retired ancestor does not hide a grandchild’s direct parent.
+
+<a id="global-runtime-proof"></a>
+### Checking supported capabilities
+
+Prepare an isolated server/dashboard in a temporary HOME, then explicitly configure the existing [operator capability](global-delivery-client.en.md#operator-ui-access):
+
+```sh
+AGENTSTACK_HOME="$TEST_HOME/agentstack" \
+AGENTSTACK_GLOBAL_SERVER_CONFIG="$TEST_CONFIG" \
+ORRERY_DASHBOARD_URL="http://127.0.0.1:$TEST_PORT" \
+agentstack-http-operator probe --service telemetry
+```
+
+The capability is read internally and never placed in arguments, URLs or output. Inspect `binding`, `telemetry_api` and `capabilities`. With 6r alone, `cockpit_ready=false` and `cutover_ready=false` are expected. After cockpit integration, use `--service cockpit` with its existing `PORT` environment variable. No persisted cockpit port file or configuration key is added. PR7 activation is a separate gate; a successful probe does not activate global mode.
+
+Verification uses synthetic work / wait, context 0 / 42 / 100, standalone, parent/child, multiple sessions, a busy writer and App unknown. No real provider binary is required. Actual PID/start/tmux proof uses a dedicated test socket, never the live dashboard, Mail or tmux.
+
+Use `127.0.0.1` for the probe origin, matching the CLI default and these examples. `localhost` is a different Origin and is not interchangeable. The probe never uses environment HTTP proxies.
+
+If observation alone fails, that refresh falls back to `ACTIVITY UNKNOWN` for all agents; Unlock, Mail, and registration remain available. Authentication refusal (403) still locks the page. Each observation HTTP request enumerates the roster and client roots once and reuses them for IDs and parent checks. More than 200 IDs requires another enumeration per request. There is no persistent cache, and the 15-second refresh interval is unchanged.

@@ -19,6 +19,27 @@ class AgentMailError(RuntimeError):
     """Raised when the ORRERY Mail transport or response is invalid."""
 
 
+class AgentNotFoundError(AgentMailError):
+    """Mail answered that the named agent does not exist in the project."""
+
+
+# Mail sends a tool error's type only as text today, so this is the single
+# place that reads its fixed not-found line (pinned by a native contract test).
+# Replace it with the error type once Mail returns that in structuredContent.
+_AGENT_NOT_FOUND = re.compile(r"Error calling tool 'whois': Agent '(?P<name>[^']*)' not found in project ")
+
+
+def _agent_not_found(response: Mapping[str, Any], agent_name: str) -> bool:
+    rpc = response.get("result")
+    if response.get("error") or not isinstance(rpc, dict) or rpc.get("isError") is not True:
+        return False
+    content = rpc.get("content")
+    first = content[0] if isinstance(content, list) and content else None
+    text = first.get("text") if isinstance(first, dict) else None
+    match = _AGENT_NOT_FOUND.match(text) if isinstance(text, str) else None
+    return match is not None and match["name"] == agent_name
+
+
 class JsonRpcTransport(Protocol):
     """Injectable JSON-RPC transport used by :class:`AgentMailClient`."""
 
@@ -40,12 +61,14 @@ class HttpJsonRpcTransport:
         *,
         bearer_token: str | None = None,
         timeout: float = 10.0,
+        allow_redirects: bool = True,
     ) -> None:
         if not endpoint:
             raise ValueError("ORRERY Mail endpoint must be configured")
         self.endpoint = endpoint
         self.bearer_token = bearer_token
         self.timeout = timeout
+        self.opener = urllib.request if allow_redirects else urllib.request.build_opener(_NoRedirect())
 
     def __call__(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         headers = {
@@ -62,13 +85,19 @@ class HttpJsonRpcTransport:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with (self.opener.urlopen(request, timeout=self.timeout) if self.opener is urllib.request
+                  else self.opener.open(request, timeout=self.timeout)) as response:
                 body = json.loads(response.read())
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
             raise AgentMailError("ORRERY Mail HTTP request failed") from exc
         if not isinstance(body, dict):
             raise AgentMailError("ORRERY Mail returned a non-object response")
         return body
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise AgentMailError("ORRERY Mail redirect rejected")
 
 
 class AgentMailClient:
@@ -346,7 +375,14 @@ class AgentMailClient:
             "include_recent_commits": False,
         }
         self._with_owner_token("whois", arguments, registration_token)
-        profile = self._call_tool_object("whois", arguments)
+        response = self._request_tool("whois", arguments)
+        if _agent_not_found(response, agent_name):
+            # Same redacted Mail line as any tool error, so callers keep the
+            # name and "Did you mean" hint; only the type says "missing".
+            raise AgentNotFoundError(_safe_error_text(response["result"]))
+        profile = _decode_tool_response(response)
+        if not isinstance(profile, dict):
+            raise AgentMailError("whois returned a non-object result")
         returned_name = profile.get("name")
         if returned_name != agent_name:
             raise AgentMailError("whois returned a mismatched agent identity")

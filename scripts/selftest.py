@@ -473,7 +473,108 @@ def cleanup(mail: AgentMail, project_key: str, pair: list[str], report: Reporter
         report.ok("retired both test agents")
 
 
+def global_reply_stub(api, client):
+    """Synthetic non-provider worker, restricted by the global isolation gate."""
+    import socket
+    delivery=api['runtime_delivery'](client)
+    sid=os.environ['AGENTSTACK_LAUNCH_ID']
+    delivery.session_start({'session_id':sid,'provider_pid':None,'cwd':os.getcwd()})
+    path=client.runtime_dir/'provider-home/daemon/wake.sock'
+    try:
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(str(path));path.chmod(0o600);listener.listen(1);listener.settimeout(20)
+            with listener.accept()[0] as stream:
+                raw=b''
+                while not raw.endswith(b'\n') and len(raw)<=1048576:
+                    block=stream.recv(65536)
+                    if not block:raise Fail('selftest notification disconnected')
+                    raw+=block
+                request=json.loads(raw)
+                reply=client.call('reply_message',{'message_id':request['message']['id'],
+                    'body_md':'ORRERY isolated selftest reply','request_id':request['reply_request_id']})
+                stream.sendall(json.dumps({'version':1,'contract':request['contract'],
+                    'status':'replied','message_id':request['message']['id']}).encode()+b'\n')
+                print(json.dumps({'reply_message_id':reply['message_id']}),flush=True)
+    finally:
+        path.unlink(missing_ok=True)
+        client.end_session({'session_id':sid})
+    return 0
+
+
+def global_selftest(api, client):
+    """Exercise real launch, owner messaging and notification completion."""
+    import uuid
+    key=uuid.uuid4().hex
+    prepared=client.prepare_child({'child_client_name':'st-'+key[:8],'name':'SelfTest'+key,
+        'program':'daemon','model':'deterministic','task_description':'Isolated runtime selftest','prepare_only':True})
+    child=api['RuntimeClient'](pathlib.Path(prepared['client_config']))
+    sender_prepared=client.prepare_child({'child_client_name':'ss-'+key[:8],'name':'SelfTestSender'+key,
+        'program':'daemon','model':'deterministic','task_description':'Isolated runtime selftest sender','prepare_only':True})
+    sender=api['RuntimeClient'](pathlib.Path(sender_prepared['client_config']))
+    # Both endpoints belong to this explicit selftest. Do not change the
+    # operator's identity, policy, or existing contact links.
+    sender.call('request_contact',{'to_agent_id':child.identity['agent_id']})
+    child.call('respond_contact',{'from_agent_id':sender.identity['agent_id'],'accept':True})
+    child.call('request_contact',{'to_agent_id':sender.identity['agent_id']})
+    sender.call('respond_contact',{'from_agent_id':child.identity['agent_id'],'accept':True})
+    child.save_profile()
+    delivery=api['runtime_delivery'](child)
+    delivery.configure_execution({'argv':[sys.executable,str(pathlib.Path(__file__).resolve()),'--global-reply-stub'],
+        'interaction':'headless','cwd':str(child.isolation)})
+    env=dict(os.environ,AGENTSTACK_CLIENT_CONFIG=str(child.path),AGENTSTACK_HOME=child.config['wrapper_root'])
+    helper=pathlib.Path(child.config['wrapper_root'])/'bin/lib/runtime_client.py'
+    process=subprocess.Popen([sys.executable,str(helper),'--context',str(child.path),'launch','daemon',str(child.isolation)],
+        cwd=child.isolation,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+    try:
+        socket_path=child.runtime_dir/'provider-home/daemon/wake.sock'
+        deadline=time.monotonic()+20
+        while not socket_path.exists():
+            if process.poll() is not None:
+                out,err=process.communicate()
+                raise Fail('selftest worker exited before readiness: '+err.strip())
+            if time.monotonic()>=deadline:raise Fail('selftest worker readiness timed out')
+            time.sleep(.03)
+        sent=sender.call('send_message',{'to_agent_ids':[child.identity['agent_id']],
+            'subject':'Isolated runtime selftest','body_md':'Reply after receiving the canonical notification.'})
+        result=delivery.deliver_persistent(sent['message_id'])
+        if result['state']!='complete':
+            out,err=process.communicate(timeout=20)
+            raise Fail('selftest delivery did not complete: '+json.dumps(result)+' '+err.strip())
+        out,err=process.communicate(timeout=20)
+        if process.returncode:raise Fail('selftest worker failed')
+        reply=json.loads(out)['reply_message_id']
+        rows=sender.call('fetch_inbox',{'message_ids':[reply],'include_bodies':True,'limit':1})
+        if not rows or rows[0].get('body_md')!='ORRERY isolated selftest reply':raise Fail('selftest reply is unavailable')
+        # The bot may already be retired. Completion above is the management
+        # receipt; public inbox reads correctly remain unavailable after end.
+        print('ok 1: isolated global launch, bot reply and server notification completion')
+        return 0
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:process.kill();process.communicate()
+        for endpoint in (child,sender):
+            endpoint.call('retire_agent')
+
+
 def main() -> int:
+    import runpy
+    helper=pathlib.Path(__file__).resolve().parents[1]/'bin/lib/runtime_client.py'
+    selection = subprocess.run(['/bin/bash', str(helper.with_name('global-client-loader.sh')), 'select', *sys.argv[1:]])
+    if selection.returncode not in (0, 125):
+        return 2
+    if selection.returncode == 0:
+        try:
+            api=runpy.run_path(str(helper));client=api['configured']()
+            with client.fence():pass
+        except (RuntimeError,ValueError,OSError):
+            print('selftest: GLOBAL_CONTEXT_INVALID',file=sys.stderr);return 2
+        try:
+            return global_reply_stub(api,client) if sys.argv[1:]==['--global-reply-stub'] else global_selftest(api,client)
+        except (RuntimeError,ValueError,OSError,KeyError,subprocess.TimeoutExpired) as exc:
+            reason=str(exc) if isinstance(exc,api['ClientError']) else 'GLOBAL_SELFTEST_FAILED'
+            print('selftest: '+reason,file=sys.stderr);return 2
     parser = argparse.ArgumentParser(
         description="Check that an installed agent stack actually works.",
     )

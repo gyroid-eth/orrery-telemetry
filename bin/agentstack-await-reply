@@ -37,9 +37,11 @@ import argparse
 import json
 import os
 import pathlib
+import runpy
 import subprocess
 import sys
 import time
+import threading
 import urllib.error
 import urllib.request
 
@@ -126,16 +128,49 @@ def _pick(messages: list[dict], sender: str | None, after_id: int | None) -> dic
     return min(candidates, key=lambda m: m.get("id") or 0)
 
 
+def wait_for_reply(fetch, *, timeout, interval=3.0, sender=None, after_id=None,
+                   cancelled=None):
+    """The canonical wait primitive, with an authenticated fetch supplied by a helper.
+
+    No ACK/read mutation. Cancellation interrupts idle waits; the supplied fetch
+    must itself have a bounded network timeout. Existing CLI semantics are retained.
+    """
+    cancelled = cancelled if cancelled is not None else threading.Event()
+    deadline = time.monotonic() + timeout
+    ever_reached = False
+    while not cancelled.is_set():
+        messages = fetch()
+        if messages is not None:
+            ever_reached = True
+            match = _pick(messages, sender, after_id)
+            if match is not None:
+                return 0, match
+        if time.monotonic() >= deadline:
+            return (124 if ever_reached else 1), None
+        cancelled.wait(min(interval, max(0, deadline - time.monotonic())))
+    return 125, None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agentstack-await-reply", add_help=True)
-    parser.add_argument("--agent-name", required=True)
+    parser.add_argument("--agent-name", required=False)
     parser.add_argument("--project-key", default=None)
     parser.add_argument("--from", dest="sender", default=None)
+    parser.add_argument("--from-id", dest="sender_id", type=int, default=None)
     parser.add_argument("--after-id", type=int, default=None)
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--interval", type=float, default=3.0)
     args = parser.parse_args(argv)
-    if args.project_key is None:
+    runtime_api = runpy.run_path(str(pathlib.Path(__file__).resolve().parent / 'lib/runtime_client.py'))
+    try:
+        client = runtime_api['configured']()
+        if client is not None:
+            with client.fence():
+                pass
+    except runtime_api['ClientError'] as exc:
+        print(f"agentstack-await-reply: {exc}", file=sys.stderr)
+        return 2
+    if args.project_key is None and (client is None or client.mode == 'legacy'):
         try:
             args.project_key = _resolved_project_key()
         except RuntimeError as exc:
@@ -145,11 +180,37 @@ def main(argv: list[str] | None = None) -> int:
         print("agentstack-await-reply: --timeout and --interval must be positive", file=sys.stderr)
         return 2
 
-    url = _mcp_url()
-    deadline = time.monotonic() + args.timeout
-    ever_reached = False
-    while True:
+    if client is None and not args.agent_name:
+        parser.error('--agent-name is required in legacy mode')
+    sender_id = args.sender_id
+    if client is not None and args.sender:
         try:
+            sender_id = client.call('resolve_agent_identity', {'target_name':args.sender})['target']['agent_id']
+        except runtime_api['ClientError'] as exc:
+            print(f"agentstack-await-reply: {exc}", file=sys.stderr)
+            return 2
+    global_deadline = time.monotonic() + args.timeout
+    url = _mcp_url()
+    def fetch():
+        try:
+            if client is not None and client.mode == 'global':
+                rows = []
+                reached = False
+                before = None
+                while time.monotonic() < global_deadline:
+                    parameters = {'limit':20, 'include_bodies':True}
+                    if before is not None:
+                        parameters['before_id'] = before
+                    page = client.call('fetch_inbox', parameters)
+                    reached = True
+                    if sender_id is not None:
+                        rows.extend(row for row in page if row.get('sender', {}).get('agent_id', row.get('sender_id')) == sender_id)
+                    else:
+                        rows.extend(page)
+                    if args.after_id is None or len(page) < 20 or min(row['id'] for row in page) <= args.after_id:
+                        break
+                    before = min(row['id'] for row in page)
+                return rows if reached else None
             response = _call(
                 url,
                 "fetch_inbox",
@@ -160,28 +221,32 @@ def main(argv: list[str] | None = None) -> int:
                     "include_bodies": True,
                 },
             )
+        except runtime_api['ClientError'] as exc:
+            if str(exc) != 'TRANSPORT_FAILED':
+                raise
+            # A network outage is retryable; authority changes still fail closed.
+            with client.fence():
+                pass
+            response = None
         except (urllib.error.URLError, OSError, ValueError):
             response = None
-        if response is not None:
-            ever_reached = True
-            match = _pick(_messages(response), args.sender, args.after_id)
-            if match is not None:
-                print(json.dumps(match, ensure_ascii=False))
-                return 0
-        if time.monotonic() >= deadline:
-            if not ever_reached:
-                print("agentstack-await-reply: mail server unreachable for the whole wait", file=sys.stderr)
-                return 1
-            waited = args.timeout
-            target = f"from {args.sender}" if args.sender else "any sender"
-            print(
-                f"agentstack-await-reply: no matching message ({target}"
-                + (f", id > {args.after_id}" if args.after_id is not None else "")
-                + f") within {waited:g}s",
-                file=sys.stderr,
-            )
-            return 124
-        time.sleep(min(args.interval, max(0.1, deadline - time.monotonic())))
+        return _messages(response) if response is not None else None
+    try:
+        code, match = wait_for_reply(fetch, timeout=args.timeout, interval=args.interval,
+                                     sender=None if client is not None else args.sender, after_id=args.after_id)
+    except runtime_api['ClientError'] as exc:
+        print(f"agentstack-await-reply: {exc}", file=sys.stderr)
+        return 2
+    if match is not None:
+        print(json.dumps(match, ensure_ascii=False))
+    elif code == 1:
+        print("agentstack-await-reply: mail server unreachable for the whole wait", file=sys.stderr)
+    else:
+        target = f"from {args.sender}" if args.sender else "any sender"
+        print(f"agentstack-await-reply: no matching message ({target}"
+              + (f", id > {args.after_id}" if args.after_id is not None else "")
+              + f") within {args.timeout:g}s", file=sys.stderr)
+    return code
 
 
 if __name__ == "__main__":

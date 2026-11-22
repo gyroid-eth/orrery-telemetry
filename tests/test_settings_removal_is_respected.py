@@ -34,6 +34,8 @@ def _merge(tmp_path: Path, settings: Path, *extra: str) -> dict:
             str(tmp_path / "hooks"),
             "--bin-dir",
             str(tmp_path / "bin"),
+            "--skills-dir",
+            str(tmp_path / "skills"),
             "--backup-dir",
             str(tmp_path / "backups"),
             "--installed-entries",

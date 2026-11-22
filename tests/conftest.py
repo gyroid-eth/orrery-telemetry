@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 
@@ -45,7 +46,25 @@ PRODUCTION_LABELS = tuple(
     )
     if label
 )
-SAMPLE_SECONDS = 2.0
+SAMPLE_SECONDS = 10.0
+
+
+@pytest.fixture
+def isolated_native_mcp_sources(tmp_path, monkeypatch):
+    """Native generation/resume tests use only their own synthetic MCP inputs."""
+    monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'codex'))
+    monkeypatch.setenv('AGENTSTACK_CLAUDE_JSON', str(tmp_path / 'claude.json'))
+    monkeypatch.delenv('AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY', raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _close_synthetic_tmux_endpoints():
+    """Fixture sockets do not accumulate across a full serial worker."""
+    yield
+    import sys
+    module = sys.modules.get('_fake_tmux_transport')
+    if module is not None:
+        module._cleanup()
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -79,6 +98,32 @@ def _no_inherited_agentstack_env():
 
 
 @pytest.fixture(autouse=True)
+def _dashboard_quotas_are_offline_by_default(monkeypatch):
+    """HTTP/browser fixtures must not read host credentials or start providers.
+
+    HOME isolation does not cover Keychain. The optional provider entry loads a
+    separate dashboard core, so bind both before any per-test HTTP fixture.
+    Quota-specific tests may then install their own synthetic service.
+    """
+    from dashboard import server, provider_server
+    from _dashboard_http_fixture import install_offline_quotas
+    for dashboard in (server, provider_server):
+        install_offline_quotas(dashboard, monkeypatch=monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def _checkout_dashboard_helpers(monkeypatch):
+    """Workers must load this checkout's helpers, never an installed old copy."""
+    from pathlib import Path
+    from dashboard import server
+    monkeypatch.setattr(server, "HOOKS_DIR", str(Path(__file__).resolve().parents[1] / "hooks"))
+    # A tmux consumer kept by an earlier test would carry that test's doubles.
+    server._reset_tmux_consumer_cache()
+    yield
+    server._reset_tmux_consumer_cache()
+
+
+@pytest.fixture(autouse=True)
 def _no_child_start_watcher(monkeypatch):
     """A Claude child launched by spawn_child.sh gets a background watcher that
     reports to its parent by Mail when the child does not start its task.
@@ -86,6 +131,28 @@ def _no_child_start_watcher(monkeypatch):
     Per test, so nothing reaches suites that check for inherited AGENTSTACK_*.
     """
     monkeypatch.setenv("AGENTSTACK_CHILD_START_CHECK", "0")
+
+
+@pytest.fixture
+def isolated_provider_stall_runtime(tmp_path, monkeypatch):
+    """Import-time dashboard constants must not retain launcher runtime paths."""
+    from dashboard import server
+    for key in list(os.environ):
+        if is_inherited_stack_variable(key):
+            monkeypatch.delenv(key)
+    home = tmp_path / "provider-home"
+    home.mkdir()
+    runtime = home / ".agentstack" / "runtime"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(runtime))
+    monkeypatch.setenv("AGENTSTACK_MAIL_DB", str(home / "fixture.sqlite3"))
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    monkeypatch.setattr(server, "DB_PATH", str(home / "fixture.sqlite3"))
+    monkeypatch.setattr(server, "_provider_monitor", None)
+    monkeypatch.setattr(server, "_provider_thread", None)
+    monkeypatch.setattr(server, "_provider_stop", threading.Event())
+    yield runtime
+    server._stop_provider_stall_monitor()
 
 @pytest.fixture(autouse=True, scope="session")
 def _the_suite_leaves_real_user_instructions_alone():
@@ -268,6 +335,80 @@ def _listener_pids(port: int = 8765) -> tuple[int, ...] | str:
     return tuple(sorted(int(token) for token in tokens))
 
 
+
+# The real user's home, from the password database: tests set HOME to a temporary
+# directory, and the guard below must keep looking at the real one. launchd and
+# ~/Library/LaunchAgents exist only on macOS; elsewhere (Windows has no `pwd`)
+# the guard does nothing.
+def _real_launch_agents() -> str | None:
+    if sys.platform != "darwin":
+        return None
+    import pwd
+
+    return os.path.join(pwd.getpwuid(os.getuid()).pw_dir, "Library", "LaunchAgents")
+
+
+REAL_LAUNCH_AGENTS = _real_launch_agents()
+MOBILE_RELAY_LABEL = "org.agentstack.mobile-relay"
+# Only this project's jobs. Other apps, and a person switching Settings -> Phone
+# on during a long run, change launchd too; only a disappearance is a test's doing.
+ORRERY_LABEL = re.compile(r"org\.(agentstack|orrery)\.[A-Za-z0-9._-]+")
+
+
+def _orrery_plists() -> frozenset[str] | str:
+    try:
+        names = os.listdir(REAL_LAUNCH_AGENTS)
+    except FileNotFoundError:
+        return frozenset()
+    except OSError:
+        return UNKNOWN
+    return frozenset(name[:-len(".plist")] for name in names
+                     if name.endswith(".plist") and ORRERY_LABEL.fullmatch(name[:-len(".plist")]))
+
+
+def _loaded(label: str) -> bool | str:
+    """Whether launchd knows the job. Only `launchctl print`: reads."""
+    if not LAUNCHCTL:
+        return UNKNOWN
+    try:
+        result = _RUN([LAUNCHCTL, "print", f"gui/{os.getuid()}/{label}"],
+                      capture_output=True, text=True, timeout=10)
+    except (OSError, _SUBPROCESS.SubprocessError):
+        return UNKNOWN
+    return result.returncode == 0
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _the_suite_leaves_real_launch_agents_alone():
+    """Fail the run if one of this project's real launchd jobs disappeared.
+
+    A test once ran scripts/uninstall.sh with the real HOME, and the uninstaller
+    stopped the real phone reader and removed its plist. The service watcher
+    above follows the install's own labels and missed it: the reader is created
+    later by `agentstack-mobile`, not by the installer. This looks only at
+    org.agentstack.* / org.orrery.* plists in the real ~/Library/LaunchAgents
+    and whether those jobs are loaded, and only at what was there before the
+    run and is gone after it. It only reads (a listing and `launchctl print`).
+    """
+    if REAL_LAUNCH_AGENTS is None:
+        yield
+        return
+    plists = _orrery_plists()
+    labels = set() if plists == UNKNOWN else set(plists)
+    labels.add(MOBILE_RELAY_LABEL)
+    loaded = {label: _loaded(label) for label in sorted(labels)}
+    yield
+    gone = []
+    after = _orrery_plists()
+    if UNKNOWN not in (plists, after):
+        gone += [f"{os.path.join(REAL_LAUNCH_AGENTS, name)}.plist" for name in sorted(plists - after)]
+    for label, was in loaded.items():
+        if was is True and _loaded(label) is False:
+            gone.append(f"launchd job gui/{os.getuid()}/{label}")
+    if gone:
+        pytest.fail("disappeared during this test run: " + ", ".join(gone)
+                    + f" (last test in this process: {_CURRENT_TEST})", pytrace=False)
+
 class _Watcher(threading.Thread):
     def __init__(self, labels: tuple[str, ...]) -> None:
         super().__init__(daemon=True)
@@ -323,7 +464,6 @@ class _Watcher(threading.Thread):
                     )
 
 
-@pytest.fixture(scope="session", autouse=True)
 def _the_suite_leaves_real_services_alone():
     watcher = _Watcher(PRODUCTION_LABELS)
     watcher.start()
@@ -368,3 +508,30 @@ def _the_suite_leaves_real_services_alone():
             "(AGENTSTACK_MAIL_LAUNCHD_LABEL / AGENTSTACK_LABEL_PREFIX).",
             pytrace=False,
         )
+
+
+def pytest_sessionstart(session):
+    # Session fixtures run in every xdist worker, but not in its controller.
+    # Own this monitor in the controller hook instead; workers use a no-op.
+    if hasattr(session.config, 'workerinput') or os.environ.get('PYTEST_XDIST_WORKER'):
+        return
+    guard = _the_suite_leaves_real_services_alone()
+    next(guard)
+    session.config._orrery_service_watch_guard = guard
+
+
+def pytest_sessionfinish(session, exitstatus):
+    guard = getattr(session.config, '_orrery_service_watch_guard', None)
+    if guard is None:
+        return
+    del session.config._orrery_service_watch_guard
+    try:
+        next(guard)
+    except StopIteration:
+        pass
+    except pytest.fail.Exception as exc:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+        reporter = session.config.pluginmanager.get_plugin('terminalreporter')
+        if reporter is not None:
+            reporter.write_sep('=', 'production-service monitor failed', red=True)
+            reporter.write_line(str(exc), red=True)

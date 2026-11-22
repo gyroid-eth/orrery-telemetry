@@ -13,6 +13,8 @@ import subprocess
 import sys
 import tempfile
 
+from _installed_client_payload import copy_client_library
+
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -188,6 +190,7 @@ def _run_root_claude_substitution(*, collision: bool):
     bindir = tmpdir / "bin"
     libdir = bindir / "lib"
     libdir.mkdir(parents=True)
+    copy_client_library(tmpdir)
     launcher = bindir / "agent-start"
     launcher.write_text(_read("bin/agent-start"), encoding="utf-8")
     launcher.chmod(0o755)
@@ -211,6 +214,7 @@ def _run_root_claude_substitution(*, collision: bool):
     (libdir / "agentstack-launch.sh").write_text(
         'ags_die() { printf "%s: %s\\n" "$AGS_PROG" "$*" >&2; exit 1; }\n'
         "ags_load_env() { :; }\n"
+        'ags_prepare_top_level_context() { AGENTSTACK_PROJECT_WORK_DIR="$1"; }\n'
         'ags_resolve_tmux() { printf "%s\\n" "$FAKE_TMUX"; }\n'
         'ags_choose_dir() { printf "%s\\n" "$1"; }\n',
         encoding="utf-8",
@@ -286,6 +290,7 @@ def test_reserved_bootstrap_refuses_to_resume_without_prepare_helper(tmp_path):
     bindir = tmp_path / "bin"
     libdir = bindir / "lib"
     libdir.mkdir(parents=True)
+    copy_client_library(tmp_path)
     bootstrap = bindir / "agentstack-codex-bootstrap"
     bootstrap.write_text(_read("bin/agentstack-codex-bootstrap"), encoding="utf-8")
     (libdir / "agentstack-register.sh").write_text(
@@ -301,6 +306,9 @@ def test_reserved_bootstrap_refuses_to_resume_without_prepare_helper(tmp_path):
         encoding="utf-8",
     )
     missing_hooks = tmp_path / "missing-hooks"
+    missing_hooks.mkdir()
+    for helper in ("project-context.sh", "installed-env.py"):
+        (missing_hooks / helper).write_text(_read("hooks/" + helper), encoding="utf-8")
     script = (
         f'source "{bootstrap}" . >/dev/null 2>"{tmp_path / "stderr"}"; '
         "printf '%s\n' $?"
@@ -373,9 +381,10 @@ def _bootstrap_resume_fixture(
     hooks = tmp_path / "hooks"
     libdir.mkdir(parents=True)
     hooks.mkdir()
+    copy_client_library(tmp_path)
     bootstrap = bindir / "agentstack-codex-bootstrap"
     bootstrap.write_text(_read("bin/agentstack-codex-bootstrap"), encoding="utf-8")
-    for helper in ("prepare-codex-session-binding.py", "child_resume.py"):
+    for helper in ("prepare-codex-session-binding.py", "child_resume.py", "project-context.sh", "installed-env.py"):
         shutil.copy2(
             pathlib.Path(__file__).resolve().parents[1] / "hooks" / helper, hooks
         )

@@ -22,7 +22,7 @@ INSTALLER = ROOT / "scripts" / "install-codex-app-integration.sh"
 
 
 def _block() -> str:
-    text = INSTALLER.read_text(encoding="utf-8")
+    text = (ROOT / "scripts/lib/codex-app-integration.sh").read_text(encoding="utf-8")
     start = text.index("# Codex candidate rules shared with the core installer")
     return text[start:text.index("\nvalidate() {", start)]
 
@@ -112,7 +112,7 @@ def test_nothing_usable_leaves_it_empty_for_validate_to_explain(tmp_path):
     windows = _codex(tmp_path / "mnt" / "c" / "npm" / "codex")
     result = _resolve(tmp_path, path_dirs=[windows.parent])
     assert result.returncode == 0 and _value(result, "CODEX") == ""
-    text = INSTALLER.read_text(encoding="utf-8")
+    text = (ROOT / "scripts/lib/codex-app-integration.sh").read_text(encoding="utf-8")
     assert "no usable codex found" in text
 
 
@@ -134,6 +134,6 @@ def test_an_explicit_codex_that_does_not_answer_stops_before_anything_is_written
 
 
 def test_the_hook_guidance_names_the_chosen_codex():
-    text = INSTALLER.read_text(encoding="utf-8")
+    text = (ROOT / "scripts/lib/codex-app-integration.sh").read_text(encoding="utf-8")
     guidance = text[text.index("say_hook_approval_guidance() {"):text.index("\n}\n", text.index("say_hook_approval_guidance() {"))]
     assert 'printf \'%q\' "$CODEX_BIN"' in guidance and "-C" in guidance

@@ -26,6 +26,12 @@ _REAL_RUN = subprocess.run
 _REAL_POPEN = subprocess.Popen
 
 
+@pytest.fixture(autouse=True)
+def _no_live_gemini_catalog(monkeypatch):
+    # Existing launch tests use static fixtures, never the developer's live agy CLI.
+    monkeypatch.setattr(gemini_runtime, "_discover_models", lambda: ())
+
+
 def _git(*args: str, cwd: pathlib.Path) -> str:
     result = _REAL_RUN(
         ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", *args],
@@ -59,6 +65,9 @@ def _make_repo(tmp_path: pathlib.Path, links: dict[str, str] | None = None,
         (repo / relative).parent.mkdir(parents=True, exist_ok=True)
         (repo / relative).write_text("x\n", encoding="utf-8")
     _git("init", "-q", str(repo), cwd=tmp_path)
+    # Keep Git's background maintenance out of the dry-run side-effect snapshot.
+    _git("config", "maintenance.auto", "false", cwd=repo)
+    _git("config", "gc.auto", "0", cwd=repo)
     if root_escape:
         (repo / "escape").symlink_to(outside, target_is_directory=True)
     (repo / "src" / "shared").symlink_to("../docs", target_is_directory=True)
@@ -226,6 +235,8 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch):
         "models": ["gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"],
         "default_model": "gemini-3.8-flash-high",
         "efforts": ["low", "medium", "high"],
+        "model_efforts": {model: ["low", "medium", "high"] for model in (
+            "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low")},
         "effort_default": "",
         "provider_key": "google",
         "capabilities": {
@@ -240,6 +251,29 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch):
             "resources_required": True,
         },
     }
+
+
+def test_argon_from_cli_uses_selected_effort_in_launch(gemini_env, monkeypatch):
+    monkeypatch.setattr(gemini_runtime, "_discover_models", lambda: (
+        "gemini-4-argon-medium", "gemini-4-argon-high", "gemini-4-argon-low"))
+    model_list, error = gemini_runtime._gemini_models(server)
+    assert error == "" and "gemini-4-argon-medium" in model_list
+    result = server.do_spawn(_gemini_payload(
+        gemini_env, model="gemini-4-argon-medium", effort="high", dry_run=True))
+    assert result["ok"] is True
+    assert result["model"] == "gemini-4-argon-high"
+    assert result["argv"][result["argv"].index("--model") + 1] == "gemini-4-argon-high"
+
+
+def test_formal_gemini_model_does_not_depend_on_discovery(gemini_env, monkeypatch):
+    def unavailable():
+        pytest.fail("spawn should not probe agy models")
+
+    monkeypatch.setattr(gemini_runtime, "_discover_models", unavailable)
+    result = server.do_spawn(_gemini_payload(
+        gemini_env, model="gemini-future-99-high", effort="high", dry_run=True))
+    assert result["ok"] is True
+    assert result["model"] == "gemini-future-99-high"
 
 
 def test_spawn_catalog_honors_gemini_model_override(monkeypatch):
@@ -319,8 +353,8 @@ def test_gemini_spawn_rejects_standalone_and_invalid_engine_options(tmp_path):
     assert server.do_spawn({**common, "standalone": "yes"}) == {
         "ok": False, "error": "standalone must be boolean",
     }
-    bad_model = server.do_spawn({**common, "model": "gemini-not-allowed", "effort": "high"})
-    assert bad_model["error"] == "model not allowed for provider gemini: gemini-not-allowed"
+    bad_model = server.do_spawn({**common, "model": "foreign-not-allowed", "effort": "high"})
+    assert bad_model["error"] == "model not allowed for provider gemini: foreign-not-allowed"
     bad_effort = server.do_spawn({**common, "effort": "xhigh"})
     assert bad_effort["error"] == "effort not allowed for provider gemini: xhigh"
     assert server.do_spawn({**common, "effort": "high", "parent": ""}) == {
@@ -331,8 +365,8 @@ def test_gemini_spawn_rejects_standalone_and_invalid_engine_options(tmp_path):
 def test_native_providers_keep_canonical_validation():
     for module in (server, canonical_server):
         assert module.do_spawn({"parent": "P", "task": "w", "provider": "claude",
-                                "model": "claude-opus-5", "effort": "high"}) == {
-            "ok": False, "error": "effort not supported for provider: claude",
+                                "model": "claude-haiku-4-5-20251001", "effort": "high"}) == {
+            "ok": False, "error": "effort not supported for model: claude-haiku-4-5-20251001",
         }
         assert module.do_spawn({"parent": "P", "task": "w", "provider": "codex",
                                 "model": "gemini-3.8-flash-high"})["error"] == (
@@ -928,8 +962,9 @@ def test_concurrent_gemini_and_native_spawns_do_not_cross_contaminate(gemini_env
     assert not hasattr(gemini_runtime, "_PATCH_LOCK")
 
 
+@pytest.mark.parametrize("cleanup_confirmed", [False, True])
 def test_readiness_timeout_signals_gemini_process_group_and_cleans_handoff(
-        gemini_env, monkeypatch):
+        gemini_env, monkeypatch, cleanup_confirmed):
     signals = []
 
     class SlowProc:
@@ -961,11 +996,15 @@ def test_readiness_timeout_signals_gemini_process_group_and_cleans_handoff(
     monkeypatch.setattr(server.subprocess, "Popen", popen)
     monkeypatch.setattr(server.os, "killpg", lambda pid, signum: signals.append((pid, signum)))
 
+    # Model the common cleanup verdict without touching installed services.
+    monkeypatch.setattr(server, "_failed_spawn_cleanup", lambda *args: cleanup_confirmed)
     result = server.do_spawn(_gemini_payload(gemini_env))
     assert result["ok"] is False
     assert "did not finish readiness checks within 120s" in result["error"]
     assert signals == [(31337, signal.SIGTERM)]
-    assert not pathlib.Path(launched[0][1]["env"]["AGENTSTACK_GEMINI_TASK_FILE"]).exists()
+    assert pathlib.Path(launched[0][1]["env"]["AGENTSTACK_GEMINI_TASK_FILE"]).exists() is (not cleanup_confirmed)
+    if not cleanup_confirmed:
+        assert result["cleanup_incomplete"] and result["cleanup_state"] == "unknown"
 
     signals.clear()
     server.do_spawn({"parent": "Parent", "name": "Zesty-Bohr", "task": "work",
@@ -1018,7 +1057,9 @@ def test_rendered_dashboard_keeps_server_language_defaults(monkeypatch):
 _UI_FUNCTIONS = (
     "normalizeSpawnProviders", "spawnModelTone", "renderSpawnProviders",
     "selectSpawnProvider", "renderSpawnModels", "selectSpawnModel",
-    "spawnModelEfforts", "renderSpawnEfforts", "selectSpawnEffort", "renderSpawnEngineNote",
+    "spawnSelectedModel", "spawnSelectedHarness", "renderSpawnHarnesses",
+    "spawnEffortInfo", "resolveSpawnEffort", "spawnEffectiveEffort",
+    "spawnModelEfforts", "renderSpawnEfforts", "paintSpawnEffortDefault", "renderSpawnEngineNote",
     "updateSpawnButton", "setSpawnDraftStatus", "setSpawnStat", "buildSpawnPayload",
 )
 
@@ -1027,19 +1068,46 @@ const els={};
 function makeEl(id){
   const classes=new Set();
   return {id,value:'',checked:false,disabled:false,hidden:false,textContent:'',
-    style:{},dataset:{},children:[],_html:'',
+    style:{},dataset:{},children:[],_html:'',listeners:{},attrs:{},
     classList:{toggle(c,on){if(on===undefined?!classes.has(c):on)classes.add(c);else classes.delete(c);},
       add(c){classes.add(c)},remove(c){classes.delete(c)},contains(c){return classes.has(c)}},
-    setAttribute(){},
+    setAttribute(k,v){this.attrs[k]=v;},
+    addEventListener(type,callback){this.listeners[type]=callback;},
+    dispatchEvent(event){this.listeners[event.type]?.(event);},focus(){},
+    append(...children){this.children.push(...children);},
+    replaceChildren(...children){this.children=[...children];this._html='';},
     get innerHTML(){return this._html},
-    set innerHTML(v){this._html=v;this.children=[...v.matchAll(/data-(provider|model|effort)="([^"]*)"/g)]
-      .map(m=>({dataset:{[m[1]]:m[2]},classList:{toggle(){}},setAttribute(){}}));},
-    querySelectorAll(){return this.children;}};
+    set innerHTML(v){this._html=v;this.children=[...v.matchAll(/data-(provider|model|harness)="([^"]*)"/g)]
+      .map(m=>Object.assign(makeEl('button'),{dataset:{[m[1]]:m[2]},className:m[1]==='model'?'spm-model-chip':m[1]==='provider'?'spm-provider-tab':''}));},
+    querySelectorAll(selector){
+      const found=[],match=el=>selector.startsWith('.')?el.className?.split(' ').includes(selector.slice(1)):
+        selector.startsWith('[data-')?Object.hasOwn(el.dataset,selector.slice(6,-1)):el.id===selector;
+      const visit=el=>{for(const child of el.children){if(match(child))found.push(child);visit(child);}};
+      visit(this);return found;
+    },
+    querySelector(selector){return this.querySelectorAll(selector)[0]||null;}};
+}
+const document={createElement:makeEl,createElementNS:(_namespace,tag)=>makeEl(tag)};
+// Operate the extracted production slider; do not recreate its selection logic.
+function chooseEffort(value){
+  const input=SPM('spm-efforts').querySelector('.effort-range');
+  if(!input)throw Error('effort slider unavailable');
+  const levels=spawnModelEfforts(spmProviders.find(p=>p.id===spmSelectedProvider));
+  const index=levels.indexOf(value);if(index<0)throw Error('effort is not offered');
+  input.value=index;input.dispatchEvent({type:'input'});
+}
+function displayedEfforts(){
+  const input=SPM('spm-efforts').querySelector('.effort-range'),values=[];
+  if(input)for(let i=0;i<=Number(input.max);i++){
+    input.value=i;input.dispatchEvent({type:'input'});values.push(spmSelectedEffort);
+  }
+  return values;
 }
 const SPM=id=>els[id]||(els[id]=makeEl(id));
 const esc=s=>String(s);
 let spmSelectedName='',spmSelectedProvider='',spmSelectedModel='';
-let spmSelectedEffort='',spmProviders=[];
+let spmSelectedEffort='',spmProviders=[],spmSelectedHarness='';
+let spmTerminalExplicit=false;
 let spmBusy=false,spmReady=true,spmIdentityState='auto',spmSuggestedName='';
 let spmDraftDir='/repo',spmDraftRestored=false;
 const spmNameStatus=new Map();
@@ -1058,12 +1126,12 @@ selectSpawnProvider('gemini');
 out.geminiSelected=state();
 SPM('spm-resources').value='src/**';SPM('spm-resources').oninput();
 out.geminiResourcesOnly=state();
-selectSpawnEffort('medium');
+chooseEffort('medium');
 out.geminiReady=state();
 selectSpawnProvider('claude');
 out.claudeAfterGemini=state();
 selectSpawnProvider('gemini');
-SPM('spm-resources').value='tests/**';selectSpawnEffort('high');
+SPM('spm-resources').value='tests/**';chooseEffort('high');
 selectSpawnProvider('codex');
 out.codexAfterGemini=state();
 selectSpawnProvider('claude');
@@ -1076,7 +1144,7 @@ setSpawnDraftStatus(true);
 selectSpawnProvider('gemini');
 out.restoredGeminiMissing=state();
 SPM('spm-resources').value='docs/**';SPM('spm-resources').oninput();
-selectSpawnEffort('medium');
+chooseEffort('medium');
 out.restoredGeminiReady=state();
 process.stdout.write(JSON.stringify(out));
 """
@@ -1087,7 +1155,11 @@ def _extract_ui_script(rendered: str) -> str:
         r"/\* provider-capabilities:start \*/.*?/\* provider-capabilities:end \*/",
         rendered, re.DOTALL)
     assert helpers, "provider capability helpers missing"
-    parts = [helpers.group(0)]
+    picker = re.search(r"/\* Catalog-only model choices.*?\n\}\);", rendered, re.DOTALL)
+    slider = re.search(r"window\.EffortSlider=\{.*?\n\};", rendered, re.DOTALL)
+    assert picker and slider, "production picker and effort slider missing"
+    parts = ["const window={};", picker.group(0), "const SpawnPicker=module.exports;",
+             slider.group(0), "const EffortSlider=window.EffortSlider;", helpers.group(0)]
     for constant in ("SPM_MODEL_TONES", "SPM_EFFORT_HINTS"):
         match = re.search(rf"const {constant}=Object\.freeze\(\{{.*?\}}\);", rendered, re.DOTALL)
         assert match, constant
@@ -1107,7 +1179,7 @@ def test_provider_switching_does_not_leak_capability_state(monkeypatch):
         {"id": "codex", "label": "Codex", "program": "codex-cli",
          "models": ["gpt-5.6-sol"], "default_model": "gpt-5.6-sol",
          "efforts": ["low", "medium", "high", "xhigh"], "effort_default": "xhigh"},
-        gemini_runtime._catalog_item(["gemini-3.8-flash-high"]),
+        gemini_runtime._catalog_item(list(gemini_runtime._DEFAULT_MODELS)),
     ]}
     script = (f"const CATALOG={json.dumps(catalog)};\n"
               + _extract_ui_script(_rendered_index()) + "\n" + _UI_HARNESS)
@@ -1187,6 +1259,8 @@ def test_ui_marker_drift_disables_gemini_catalog_and_spawn(monkeypatch, tmp_path
 
 
 def test_broken_extension_keeps_canonical_dashboard_available(tmp_path):
+    from _installed_client_payload import copy_client_library
+    copy_client_library(tmp_path)
     dashboard = tmp_path / "dashboard"
     dashboard.mkdir()
     for name in ("provider_server.py", "server.py", "index.html"):
@@ -1203,7 +1277,7 @@ core = sys.modules["_orrery_provider_dashboard_core"]
 print(json.dumps({{
     "failures": core._PROVIDER_EXTENSION_FAILURES,
     "gemini": core.do_spawn({{"parent": "P", "task": "w", "provider": "gemini"}}),
-    "claude": core.do_spawn({{"parent": "P", "task": "w", "provider": "claude", "effort": "x"}}),
+    "claude": core.do_spawn({{"parent": "P", "task": "w", "provider": "claude", "model": "claude-haiku-4-5-20251001", "effort": "x"}}),
 }}))
 """
     result = _REAL_RUN([sys.executable, "-c", probe], capture_output=True, text=True,
@@ -1212,7 +1286,7 @@ print(json.dumps({{
     out = json.loads(result.stdout.strip().splitlines()[-1])
     assert out["failures"] == ["gemini_provider_runtime.py"]
     assert out["gemini"] == {"ok": False, "error": "provider not allowed: gemini"}
-    assert out["claude"] == {"ok": False, "error": "effort not supported for provider: claude"}
+    assert out["claude"] == {"ok": False, "error": "effort not supported for model: claude-haiku-4-5-20251001"}
     assert "optional dashboard provider extension disabled" in result.stderr
 
 

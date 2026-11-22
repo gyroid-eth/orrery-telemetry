@@ -1,0 +1,6 @@
+· Effecting… (43s · ↓ 3.4k tokens)
+  ⎿ Tip: Use /help to see available commands.
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← 1 agent

@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -92,7 +93,7 @@ def test_spawn_keeps_detached_session_and_propagates_observer_policy(
     tmp_path, codex, setting,
 ):
     env, workdir = _fake_launch_env(tmp_path, codex=codex)
-    env.update(AGENTSTACK_TERMINAL="ghostty", AGENTSTACK_PYTHON=sys.executable)
+    env.update(AGENTSTACK_TERMINAL="ghostty", AGENTSTACK_PYTHON=sys.executable, FAKE_CODEX_START_RUNNING="1")
     env.pop("AGENTSTACK_AUTO_OPEN_CHILD", None)
     if setting is not None:
         env["AGENTSTACK_AUTO_OPEN_CHILD"] = setting
@@ -140,9 +141,15 @@ def test_manual_deck_terminal_open_ignores_automatic_policy(monkeypatch, setting
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(server.subprocess, "run", run)
+    class Admitted:
+        home=ROOT
+        transport=SimpleNamespace(identity=('fixture',1),path=Path('/fixture/socket'),server_pid=7)
+        def admitted_argv(self,args):return ['tmux',*args]
+    monkeypatch.setattr(server, '_legacy_tmux_consumer', lambda:Admitted())
     result = server._open_terminal_tmux(["tmux", "attach", "-t", "=QuietCurie"], "QuietCurie")
     assert result == {"ok": True, "adapter": "ghostty"}
-    assert commands[0][-4:] == ["tmux", "attach", "-t", "=QuietCurie"]
+    assert commands[0][-4:] == [str(ROOT / "bin/lib/runtime_tmux_consumer.py"), "attach", "-t", "=QuietCurie"]
+    assert 'TMUX=/fixture/socket,7,0' in commands[0]
 
 
 @pytest.mark.parametrize("explicit,saved,expected", [

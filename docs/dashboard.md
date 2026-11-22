@@ -29,6 +29,26 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 ## DECK
 
+### Provider 停止の自動通知（legacy）
+
+稼働中の Codex CLI が `Selected model is at capacity. Please try a different model.` で入力待ちになったら、DECK に `MODEL CAPACITY`、NETWORK に `CAPACITY` を表示します。dashboard server はブラウザが閉じていても約5秒ごとに確認し、別の pane capture で2回確認した停止を親の `PARENT_AGENT` へ ORRERY Mail で通知します。差出人は停止した子の既存 identity、本文冒頭は「telemetry の自動検知」で、JST の検知時刻とエラー行を載せます。自動再開・モデル変更・pane へのキー送信はしません。
+
+同じ停止の通知は1回だけです。`AGENTSTACK_RUNTIME_DIR/provider-stalls.json` に状態を保存し、dashboard 再起動後も重複を防ぎます。作業再開を観測した後の次の停止は再び通知します。作業を観測できなくても、同じ pane の前の停止に続いて「提出済みの新しい入力→新しい容量エラー」が追記されたと特定できれば、新しい停止の候補にします。同じ入力とエラーの境界を別の capture でもう1回確認してから1回通知します。入力途中の composer・Mail の配送記録だけ・同じエラーの再描画・footer や幅の変更だけでは再通知しません。
+
+再試行の特定には、直前の停止と一意に重なる履歴が必要です。capture 間に履歴が押し出された場合、同じ並びが繰り返されて境界が曖昧な場合、引用や複雑な入力ブロックを識別できない場合は、推測せず今の停止を維持します。旧状態ファイルに履歴の境界が無い場合も、最初の観測は基準を保存するだけです。これらでは再試行を見逃すことがあります。2回確認する前に続けて再試行された場合は、最新の境界を確認した時点で1回にまとめます。履歴本文は保存せず、正規化した最大64ブロックの hash と順序を保存します。
+
+親無しは印だけ、親や子の credential を検証できない場合も印を残します。Mail の timeout など受理有無が不明な場合は、重複を避けるため再送せず `delivery_unknown` / `MAIL UNCONFIRMED` を表示します。障害時に「重複なし」と「必ず届く」を両方保証するものではありません。
+
+初版は上記 Codex capacity 文言と、remote compact がその前に `Error running remote compact task: ` を付けた形式だけが対象です。未知の前置きや compact 中の他のエラーへは広げません。過去ログに残ったエラー、作業中・承認待ち、未知の provider エラーは判定しません。tmux を使わない Codex App / headless と **global mode は未対応・後続**です。
+
+Codex 自身が固定エラー文を折り返す場合も検知します。固定文言の単語間だけで改行を1つ許し、空行や無関係な行は連結しません。
+
+エラーと入力欄の間に Codex の background terminal 件数と `/ps`・`/stop` の案内行がある場合も検知します。許すのは実際の単数・複数の固定表示1行だけで、通常の出力・queued input の本文・`/ps` の実行結果は読み飛ばしません。
+
+状態ファイルは capacity 候補を初めて観測したときから作り、変化がある場合だけ保存します。一度も候補になっていない子の work 観測では書き込みません。一度候補になった子は、作業中も約5秒ごとに小さな状態ファイルを書きます。解除後も最新の work capture の順序を永続化し、別 process や再起動後に遅れた capacity が届いて再通知するのを防ぐためです。capture の順序を更新しない巡回では、観測時刻だけの更新は最大1時間に1回です。
+
+状態遷移や work 観測に使った capture の順序を保持し、それ以前の遅れた capture は停止確認・解除に使いません。終了した世代の行は、新しい世代への置換なら7日、不在を tmux で確認できる場合は30日の未観測で削除します。tmux が観測不能なら保持します。Mail の入力検証・contact policy・送信者認証について、受理前だと特定できる固定の拒否文を認識した場合と、JSON-RPC の実行前の要求エラーだけを `failed` にします。DB 保存後の処理でも tool error が返るため、内部エラーや未知の拒否文は `delivery_unknown` に残します。どちらも自動再送しません。
+
 最初は DECK を開きます。**1エージェントが1枚のカード**として並ぶため、誰が何をしているか、入力待ちで止まっていないかを個別に読めます。
 
 次の画像では、上部のカウンタが3体、カードも3枚です。カウンタは全体の数、カードは各エージェントの状態を示します。
@@ -41,7 +61,7 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 | 表示 | 読み方 |
 | --- | --- |
-| 名前の下の `GPT 5.6`、`SONNET 5` など | 使用中のモデル。`◷ 200K`、`◷ 1M` がある場合は、そのモデルが使える作業メモリ全体の大きさです。 |
+| 名前の下の `GPT-6.1-Sol`、`SONNET 5` など | 使用中のモデル。`◷ 200K`、`◷ 1M` がある場合は、そのモデルが使える作業メモリ全体の大きさです。 |
 | モデルの下の細い横線 | **残りの作業メモリ（context remaining）**。長いほど余裕があり、残り20%未満では赤寄りになります。telemetry を取得できないカードには出ません。 |
 | 黒い帯 | terminal で観測した現在の表示。作業中か待機中かを読む手掛かりです。 |
 | `ORD` | そのエージェントに与えられている直近の指示です。 |
@@ -63,6 +83,10 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 | `NEED YOU` | 人を待っている agent。承認待ち（`APPROVAL`）と、選択肢を聞いている（`?`） | 赤枠、または `?` |
 | `WORKING` | turn が進行中の agent | amber の LED と経過時間 |
 | `WAITING` | prompt で入力を待っていて、仕事を渡せる agent | `LAST 1M41S` |
+
+Codex の狭い pane で現在の `Working` / `Thinking` 行が `…` に省略されても、作業中として読み取ります。経過時間は見えている単位までを表示し、読めなければ出しません。後の返答や完了表示に置き換わった状態行・本文中の引用は、現在の作業の証拠にしません。
+
+Codex が現在の `Working` 行と入力欄の間に追加指示のキュー（`Queued follow-up inputs`）を表示している間も、作業中として読み取ります。キューだけでは作業中にしません。footer のモデルが `GPT-6.1 Terra max` のように種類を空白で区切る表示名でも入力欄の footer と認め、モデルを `GPT-6.1-Terra` と表示します。
 
 `NEED YOU` は該当する agent がいるときだけ現れ、クリックすると DECK がその agent だけに絞られます（もう一度クリックで戻ります）。process が止まって shell に戻った agent はどの数にも入りません。カードの `○ SHELL` で分かります。active agent の総数は sector 見出しの `ACTIVE AGENTS [ 29 ]` にあります。
 
@@ -277,7 +301,7 @@ TIME-TRAVEL ON は initial snapshot から node、edge、state を再構築し�
 
 ## NEW AGENT
 
-![NEW AGENT modal — identity / engine / directory / task の launch manifest](img/new-agent.jpg)
+![NEW AGENT で設定済み Local Qwen の Model と dsh / Hermes の Harness を選ぶ](img/native-harness-picker.png)
 
 `+ NEW AGENT` は identity、engine、directory、task を順に確認する launch manifest です。通常項目を一方向に並べ、parent / role / group / isolation は ADVANCED に畳むことで、standalone agent の起動を最短経路にしています。
 
@@ -294,19 +318,37 @@ scientist rail の `available` は bare surname ではなく、134 adjective の
 
 ### Engine
 
-- Claude / Codex provider tab
+- provider tab（server の catalog から作られ、設定済みの環境では DeepSeek / Local も並びます）
 - provider ごとの model card と用途 guide
 - Claude は Sonnet / Opus / Haiku
 - Codex の既定は起動対象 CLI が 0.159.0 以上なら `gpt-6.1-sol`、古い版なら `gpt-6-sol`（版不明なら新鮮な catalog で判定）。旧世代は `gpt-6-sol` など正式 ID で指定できます
 - Codex の effort 候補は model catalog の `model_efforts` / `model_effort_defaults` に従います。明示 effort の最終可否は Codex CLI が判定します
+- DeepSeek / Local は設定済み catalog の Model と Harness（dsh / Hermes）から選びます。model を選んで利用可能な harness を指定し、利用不可の項目は「Coming soon」と表示され、選択できません。Helper と Effort は選んだ model / harness の能力に従います。[設定手順](install.md)と[API reference](api.md)も参照してください。
 
 server の provider / model / effort allow-list を catalog と validation の両方に使います。
+
+この節は Telemetry 同梱画面の説明です。Model / Harness は cockpit と同じ英語の語彙を使いますが、directory dialog や Lineage の項目まで同一ではありません。OS の資格設定・memory・Local effort の範囲は[対応組合せと制限](managed-catalog.md)を参照してください。
+
+<a id="native-models-and-harnesses"></a>
+### DeepSeek / Local と dsh / Hermes
+
+設定済みの provider、Model、利用可能な Harness を順に選びます。GIF は SPAWN の手前までです。[Model / Harness の選択操作を見る](img/native-harness-selection.gif)。
+
+NEW AGENT の画像と GIF は、実際の catalog・科学者名・正規の肖像を使った Telemetry 同梱画面です。Claude / Codex / DeepSeek / Local models と dsh / Hermes の選択を起動前まで撮影し、作業ディレクトリと task は切り取っています。[cockpit の NEW AGENT](https://github.com/gyroid-eth/orrery/blob/master/docs/usage.md)とは画面が異なります。以下の DECK / NETWORK は引き続き合成データの表示例です。いずれも資格の登録や全組合せの通し受け入れを示すものではありません。
+
+![DECK で DeepSeek と Local Qwen の dsh / Hermes agent を見分ける画面例](img/native-local-deck.png)
+
+Local Qwen は六角形の中に Qwen のロゴを表示し、DeepSeek は接続先の badge を表示します。agent を比べるときは Harness も別に確認してください。
+
+![NETWORK のメダリオンで Local Qwen と DeepSeek を見分ける画面例](img/native-local-network.png)
 
 ### Directory
 
 `AGENTSTACK_SPAWN_DIRS` の preset chip と exact path input を表示します。preset は installer の `--spawn-dirs` で永続化します（shell の `export` は service に届きません。[configuration.md](configuration.md) の「Spawn directory」参照）。input は `/api/fs/dirs` の root-scoped typeahead で、arrow key / Enter でも選択できます。最後に使った directory は `localStorage` に保存します。
 
 typeahead は `AGENTSTACK_SPAWN_ROOTS` の外へ出ず、hidden directory、`..`、root 外への symlink を候補にしません。
+
+ORRERY のフォルダ選択画面では、パンくずで検索の起点を選べます。検索欄が空の間はその場所の子フォルダが並び、入力すると配下の一致を現在の場所からの相対パスで表示します。上下キーで移動し、Enter で子フォルダを開くか検索結果を選択します。探索範囲と上限は [フォルダ検索 API](api.md#get-apifsdir-search) を参照してください。
 
 ### Task と ADVANCED
 
@@ -349,6 +391,8 @@ branch: exp/<child-name>
 ## Embed mode
 
 `/?embed=1` または same-origin iframe では compact header の embed mode になります。[ORRERY cockpit](https://github.com/gyroid-eth/orrery) は、header の `TELEMETRY` からこの mode で dashboard を埋め込みます。
+
+操作に追従する host の checklist 向けに、成功した操作だけを same-origin parent へ通知します。通知の型・成功条件・受信側の検証は [Embedded interaction notifications](embedded-tour-events.md) にあります。単独表示では通知しません。
 
 parent window から:
 
@@ -406,56 +450,15 @@ python3 scripts/dashboard_theme_manifest.py --check
 
 `source` は token / declaration の coverage、`mutation` は apply 直前の immutable snapshot から導出した token-write / element / effect-component の compiled 適用数です。source unit は軸ごとに厳密で、`dim-contrast` / `background` は `token-write`、`small-text` / `tracking` / `glow` は `declaration` です。`effect` の membership は generated eligibility の pre-apply live match だけで固定し、適用前・適用後・endpoint の値から対象を増減しません。そのうち rendered・nonzero box・viewport 内を `visibleExpected`、cascade 後の computed が requested derivation へ到達したものを `visibleReached` と数えます。元から requested 値だった member も reached です。`visibleChanged` は可視 member の canonical post が pre と異なる数、`changed` は全 evaluated member の同じ差分を数える独立 no-op gate です。hidden / zero-box / offscreen は `deferred` に数えます。non-null apply は `visibleExpected > 0`、`visibleReached === visibleExpected`、`visibleChanged > 0`、`changed > 0` をすべて満たす場合だけ成功します。0や量子化以下は `no-effective-change`、可視対象0は `no-visible-targets`、requested derivation に到達しない member があれば `effect-count-mismatch` として reject し、直前の valid axis を復元します。面や単位を合算しません。`glow` の effect unit は live `effect-component` です。同一 surface に対象 radial layer が2つあれば2件と数え、CSS rule 1件が可視 element 10件へ match すれば10件と数えます。selector と keyframe の source component は `emissive | elevation | focus | state` に分け、色 halo だけを弱めて elevation と focus を維持します。
 
-### Atomic theme profile bridge
-
-`small-text` と `tracking` は complete five-axis vector を使う1つの atomic profile として同時適用できます。全キーは必須で、non-null の組み合わせは空、`small-text` / `tracking` の任意 subset、または legacy 1軸だけです。
-
-```js
-frame.contentWindow.postMessage({
-  type: "agentstack-theme-profile",
-  version: 1,
-  requestId: "theme-42",
-  values: {
-    "dim-contrast": null,
-    "small-text": 0.5,
-    tracking: 0.25,
-    glow: null,
-    background: null,
-  },
-}, location.origin);
-```
-
-receiver は全 experimental override を外した同じ A snapshot から両軸を導出します。baseline font size を `s0`、baseline letter-spacing ratio を `r0` とすると、small の final size は `s(vs)`、tracking ratio は `lerp(r0, min(r0, 0.08), vt)`、final spacing はその ratio と `s(vs)` の積です。前の profile render を次の baseline にしないため、UI で small→tracking と tracking→small の順に操作しても complete final vector が同じなら computed size / weight / spacing は一致します。適用後に追加された DOM node も override を一時無効化した A baseline から両軸を同時導出し、各軸の独立 envelope へ加算します。
-
-成功時は次の response を返します。`requested` / `applied` は常に exact five-key map、`axes` は non-null 軸の exact set です。
-
-```js
-{
-  type: "agentstack-theme-profile-result",
-  version: 1,
-  requestId: "theme-42",
-  surface: "telemetry",
-  requested: {"dim-contrast": null, "small-text": 0.5,
-    tracking: 0.25, glow: null, background: null},
-  applied: {"dim-contrast": null, "small-text": 0.5,
-    tracking: 0.25, glow: null, background: null},
-  status: "applied",
-  axes: {
-    "small-text": {status: "applied", source: {}, mutation: {}, effect: {}},
-    tracking: {status: "applied", source: {}, mutation: {}, effect: {}},
-  },
-}
-```
-
-1軸でも source / mutation / effect guard に失敗すれば profile 全体を reject し、`applied` には receiver が復元した last-valid complete map を返します。schema 違反も state を変更しません。legacy `agentstack-theme-axis` v1 は対象1軸以外を null にした complete profile と同じで、legacy `value: null` は全軸 reset です。result reply が失われた場合、parent coordinator は fresh `requestId` の last-valid complete profile を compensating request として送れます。
-
-embed の初期化完了時と reload 後には、dashboard が `agentstack-theme-axis-ready` と `agentstack-theme-profile-ready`（ともに version 1、`surface: "telemetry"`）を same-origin parent へ送ります。recovery はこの明示 signal の後に compensating profile を送り、その result が acknowledged になるまで完了扱いにしません。ready が来ない場合の timeout と UI failure 表示は parent coordinator が担当します。
+embed初期化/reload後は`agentstack-theme-axis-ready`（version 1、surface `telemetry`）をsame-origin parentへ通知します。従来のVision profileメッセージ受け口は廃止しました。上記の単一axis契約は維持します。
 
 ## Terminal bridge
 
-カードまたは node から terminal を開くと、server は Ghostty / iTerm2 / Terminal.app への jump、または browser terminal 用 `ttyd` を確保します。
+カードまたは node から terminal を開くと、server は Ghostty / iTerm2 / Terminal.app への jumpを行います。
 
 `AGENTSTACK_BIND_HOST=0.0.0.0` は terminal bridge と control endpoint も外部へ公開します。dashboard に認証 layer はないため、trusted LAN / VPN 以外では使わないでください。
+
+legacy dashboard の Host 検査は既定で実待受ポートの loopback だけを許可します。LAN / VPN の URL を使う既存利用者は、更新前に [`AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS`](configuration.md#lan--vpn-から使う場合の-host-設定) で固定 origin を指定し、installer で保存・service へ反映してください。wildcard bind 自体では外部 Host を許可しません。通常の loopback 接続の cockpit bridge は設定追加不要です。この検査は認証を追加するものではありません。
 
 ## デモ（サーバー不要）
 
@@ -472,3 +475,61 @@ embed の初期化完了時と reload 後には、dashboard が `agentstack-them
 - [API reference](api.md)
 - [設定](configuration.md)
 - [トラブルシューティング](troubleshooting.md)
+
+<a id="global-mail-view"></a>
+## 隔離 global mode の Mail 表示
+
+既定は旧 mode のままです。隔離 global server と operator capability を準備した場合だけ、global dashboard が開きます。[解除と Lock](global-delivery-client.md#operator-ui-access)の手順を使い、agent の owner token は貼り付けないでください。画面は対応する capability を確認します。
+
+`View as` で数値 identity を選び、NETWORK の edge を開くと、その視点で見える Mail を同じ右欄で読めます。返信は `reply_to` の message ID で結びます。長い返信も字下げを増やし続けず、返信先のリンクから辿れます。本文は literal text として表示し、埋め込まれた HTML を実行しません。見えない前の Mail は短い案内だけにし、不可視の ID・本文・宛先を補いません。`Load more visible mail` は server の keyset cursor をそのまま使います。
+
+保存する URL は `?view=net&view_as_agent_id=ID&message_id=ID` です。旧 numeric `thread_id` は可視の origin へ変換し、旧 label は source ごとの群を保ちます。件名から返信を推測しません。新旧 ID の矛盾は拒否します。
+
+古い指示があれば Mail 欄に短い英語の案内と `Details: English / 日本語` を出します。片付けは command のコピーまでで、自動削除しません。Dismiss はこの page session の同じ finding を隠すだけです。Settings からいつでも確認でき、path・block hash・版・状態が変われば再表示します。60秒ごとと明示確認時に更新します。埋込表示では host 側の案内にまとめます。詳細は[既存 block の移行](instruction-migration.md#legacy-blocks)へ。起動時の候補の観測は、実際に読み込まれた指示の証明ではありません。
+
+MAIL の `signal.status` は配送の健康です。server readiness と別の値なので、配送が red でも server が受け付けられる要求は使えます。登録一覧から process の活動を推測せず、確認できない session 状態は unavailable と表示します。
+
+NEW AGENT は固定 client slot を使います。同じ名前は既存 identity の resume を案内し、資格情報を再発行しません。設定・trust が不足したら表示された operator 操作へ戻ります。最近の folder は10件、古い scalar は1回だけ移して削除します。folder は作業場所であり Mail の scope ではありません。folder browser は既存の `AGENTSTACK_SPAWN_ROOTS`、成果物は明示 `AGENTSTACK_DELIVERABLE_ROOTS` だけです。成果物未設定なら空と案内し、cwd・project へ fallback しません。
+
+旧 mode の画面と経路は維持します。cockpit の global bridge と右 pane への結線は後続です。新 dashboard と旧 cockpit の組合せでは旧 cockpit の表示を使い、global の画面 capability を推測して有効にしません。
+
+global network の稼働状態は `ACTIVITY UNKNOWN` と表示します。実際の working/waiting・ctx・親子を表示する read 投影は PR7 の切替前に必須です。
+
+登録の回復ボタンは status の `next_operations` に従い、再送・finalize・configure を同じ slot と intent で続けます。Resume は既存 launch の操作です。登録再送と abandon は表示した pending の digest を照合します。Lock は進行中の fetch を中止し、遅い body と tab の capability 引継ぎを失効させます。新 tab は自分の request と一致する500ms以内の返信だけを採用し、Lock 後は明示 Unlock が必要です。storage 拒否時は `BROWSER_SESSION_STORAGE_UNAVAILABLE` を表示して page memory だけで動作し、reload 後は再入力します。
+
+指示の確認は local context の identity で slot を選び、一致した slot だけを server と照合します。配置元は slot の `wrapper_root` が唯一の正本です。Claude/Codex の provider slot を証明できない agent の `PROVIDER_HOME_UNPROVEN` は Settings だけで表示し、会話に毎回案内を重ねません。コピーする cleanup command は検出に使った HOME・provider HOME・install の env を明示します。この指定を外して旧 block を消さないでください。
+
+Lock は drawer の見出し・件数と accessibility 状態も初期化します。configure-provider ボタンは指示 block の配置が必要な場合だけです。Codex trust の承認と daemon の実行設定は日英の CLI 手順へ案内し、profile 不在は `PERSISTENT_EXECUTION_REQUIRED` と表示します。
+
+<a id="global-runtime-observation"></a>
+### global network の稼働状態
+
+API 18 の `global_runtime_observation=1` は、既存の私有 client root と管理 socket の本人照合から、network の working / waiting・context 使用率・親子の色を読み取ります。旧 mode の表示と既定の導入は変わりません。観測のための登録・ファイル作成・Mail DB の直接読取は行いません。
+
+各 root の既存 operation mutex を共有・非待機で取得します。writer が使用中、本人・世代・binding が不一致、PID/start/pane の証明が不明なら、その agent だけ `ACTIVITY UNKNOWN` です。応答全体の期限は5秒。pane の揮発 cache は最大4.5秒で、本人・binding・live slot の変更で失効します。複数 session が同時に生きている場合は `MULTIPLE SESSIONS` とし、activity と context を合成しません。終了済みの履歴は現在の session を隠しません。
+
+Codex App の snapshot と Desktop session meta は現在の provider の生存証明ではありません。App の activity / context は **unknown / null** のままです。bridge・wake・snapshot の記録方式は変えません。親子は既存の typed child-state を本人照合し、名前や Mail の往復から推測しません。
+
+共有 browser controller は capability・Lock・Mail の表示・登録回復を1か所で扱います。Lock は進行中の要求と画像 URL を失効させます。sessionStorage はそのページに権限を持つ拡張機能から読めるため、信頼できる browser profile を使ってください。Lock はその page session の解除であり、server の capability の撤去ではありません。
+
+Mail の視点を選ばなくても network と deck に同じ稼働状態を表示します。不在を確認できたものは NOT RUNNING、確認できないものは ACTIVITY UNKNOWN です。親子は直接の関係を表示し、退役した祖先だけを理由に孫の関係を消しません。
+
+<a id="global-runtime-proof"></a>
+### 対応能力の確認
+
+一時 HOME の隔離 server/dashboard を準備し、既存の [operator capability](global-delivery-client.md#operator-ui-access) を明示的に設定した後で実行します。
+
+```sh
+AGENTSTACK_HOME="$TEST_HOME/agentstack" \
+AGENTSTACK_GLOBAL_SERVER_CONFIG="$TEST_CONFIG" \
+ORRERY_DASHBOARD_URL="http://127.0.0.1:$TEST_PORT" \
+agentstack-http-operator probe --service telemetry
+```
+
+capability は内部で読み、引数・URL・結果に出しません。結果の `binding`・`telemetry_api`・`capabilities` を確認します。6r だけでは `cockpit_ready=false`、`cutover_ready=false` が正常です。cockpit の実装後は同じ command に `--service cockpit` と既存の `PORT` 環境変数を使います。cockpit の port の永続 file / 設定 key は追加しません。PR7 の切替は別の関門です。この probe の成功だけでは切り替えません。
+
+確認には合成の work / wait、context 0 / 42 / 100、standalone、親子、複数 session、writer 使用中、App unknown を用います。実 provider の binary は不要です。PID/start/tmux の実機証明は専用の試験 socket で行い、live の dashboard・Mail・tmux は使いません。
+
+probe の origin は CLI の既定・docs とも `127.0.0.1` を使います。`localhost` は別 Origin なので代用しません。環境の HTTP proxy は使用しません。
+
+観測だけの失敗では、その回の稼働状態をすべて `ACTIVITY UNKNOWN` に戻し、Unlock・Mail・新規登録は利用できます。認証拒否（403）は従来どおり Lock します。1回の観測 HTTP 要求では roster と client root の列挙を各1回だけ行い、対象 ID と親の照合で共有します。200 ID を超える場合は要求ごとに再列挙します。永続 cache は作らず、15秒の更新間隔は変えません。

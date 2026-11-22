@@ -4,7 +4,8 @@ or with a tools selection (--base / --tools, hooks/child_tools.py).
 
 A record says "this Claude conversation was started with --chrome, and this is
 the browser it was told to use", and (version 3) which base and tools it was
-given. It holds no credential. Version 2 records (Chrome only) are still read;
+given. Version 4 records an explicit resume replacement, including an empty
+selection. It holds no credential. Version 2 records (Chrome only) are still read;
 their base is "default".
 
 Records are bound to one conversation, never to an agent name alone, so a later
@@ -50,6 +51,7 @@ import sys
 import tempfile
 
 VERSION = 2          # Chrome only (unchanged, still written without a selection)
+RESUME_TOOLS_VERSION = 4  # explicit replacement, including an empty selection
 TOOLS_VERSION = 3    # adds claude_chrome false/true, base and tools
 DEVICE_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 TOKEN_RE = re.compile(r"[A-Za-z0-9-]{8,128}")
@@ -144,7 +146,7 @@ def read_record(path: str, agent: str) -> dict | None:
             state = json.loads(handle.read(MAX_BYTES + 1).decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RecordError("not valid JSON") from exc
-    if not isinstance(state, dict) or state.get("version") not in (VERSION, TOOLS_VERSION):
+    if not isinstance(state, dict) or state.get("version") not in (VERSION, TOOLS_VERSION, RESUME_TOOLS_VERSION):
         raise RecordError("unknown schema")
     if state.get("agent_name") != agent:
         raise RecordError("recorded for a different agent")
@@ -162,7 +164,7 @@ def read_record(path: str, agent: str) -> dict | None:
             raise RecordError(f"invalid tools: {exc}") from exc
         if spec != {"base": state.get("base"), "tools": state.get("tools")}:
             raise RecordError("tools are not in normal form")
-        if not state["claude_chrome"] and not tools.restrictive(spec):
+        if state["version"] == TOOLS_VERSION and not state["claude_chrome"] and not tools.restrictive(spec):
             raise RecordError("records neither Chrome nor a tools selection")
     device = state.get("chrome_device")
     if not isinstance(device, str) or not valid_device(device):
@@ -240,7 +242,7 @@ def session_text(state: dict) -> str:
     parts = []
     if state.get("claude_chrome"):
         parts.append(policy_text(state["chrome_device"], state["standalone"]))
-    if state.get("version") == TOOLS_VERSION:
+    if state.get("version") in (TOOLS_VERSION, RESUME_TOOLS_VERSION):
         tools_text = _child_tools().prompt_text(
             {"base": state["base"], "tools": state["tools"]}, "claude", state["standalone"])
         if tools_text:

@@ -75,6 +75,15 @@
     ],
     "allowlisted_entries": [
       {
+        "id": "reservation.renew_scoped_conflict_check",
+        "category": "scenario_payload_addition",
+        "selector": "checkpoints.10_reservation_renewed_by_overlap.result.conflict_check",
+        "comparator_disposition": "validate_exact_value_then_omit_addition",
+        "live": "absent",
+        "core": "version 1, exact requested project and paths, and no foreign conflict in this scenario",
+        "reason": "The editing guard needs a server-checked ownership and foreign-exclusive decision from the same renewal transaction. Resources stay unpublished; original renewal fields and durable state remain compared."
+      },
+      {
         "id": "description.request_contact",
         "category": "tool_description",
         "selector": "tools.request_contact.description",

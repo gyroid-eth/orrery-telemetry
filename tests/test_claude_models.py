@@ -19,6 +19,7 @@ def profile(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root))
     monkeypatch.delenv("AGENTSTACK_CLAUDE_MODELS", raising=False)
     monkeypatch.setattr(catalog.time, "time", lambda: NOW / 1000)
+    monkeypatch.setattr(catalog, "_bound_child_path", None)
     return root
 
 
@@ -57,7 +58,7 @@ def test_freshest_cli_cache_is_selected_not_merged(profile):
     desktop = document("claude-desktop-9", fetched=400)
     desktop["catalog"]["surface"] = "ccd"
     write(profile, desktop, "desktop.json")
-    assert catalog.resolve_catalog(FALLBACK) == catalog.ModelCatalog((*FALLBACK, "claude-new-9"), "local_cache")
+    assert catalog.resolve_catalog(FALLBACK, bundled_overflow=()) == catalog.ModelCatalog((*FALLBACK, "claude-new-9"), "local_cache")
 
 
 def test_cache_refresh_and_expiry_apply_without_restart(profile):
@@ -66,7 +67,7 @@ def test_cache_refresh_and_expiry_apply_without_restart(profile):
     path.write_text(json.dumps(document("claude-new-10", fetched=200)))
     assert catalog.resolve_catalog(FALLBACK).models == (*FALLBACK, "claude-new-10")
     path.write_text(json.dumps(document("claude-new-10", stale=NOW)))
-    assert catalog.resolve_catalog(FALLBACK) == catalog.ModelCatalog(FALLBACK, "bundled")
+    assert catalog.resolve_catalog(FALLBACK, bundled_overflow=()) == catalog.ModelCatalog(FALLBACK, "bundled")
 
 
 @pytest.mark.parametrize("key,value", [
@@ -216,3 +217,208 @@ def test_future_or_inverted_catalog_windows_are_ignored(profile):
     assert catalog.resolve_catalog(FALLBACK, bundled_overflow=()).overflow == ()
     write(profile, _sectioned([("claude-sonnet-5", "overflow")], fetched=900, stale=800))
     assert catalog.resolve_catalog(FALLBACK, bundled_overflow=()).overflow == ()
+
+
+def _aliased(rows, fetched=100, stale=2000):
+    """rows: (id, section, short_name, min_claude_code_version)."""
+    data = document(*[row[0] for row in rows], fetched=fetched, stale=stale)
+    for target, (_, section, short_name, minimum) in zip(data["catalog"]["config"]["models"], rows):
+        target.update({"section": section, "short_name": short_name})
+        if minimum is not None:
+            target["min_claude_code_version"] = minimum
+    return data
+
+
+CURRENT = [("claude-opus-6", "main", "Opus", "2.2.0"), ("claude-sonnet-6", "main", "Sonnet", None),
+           ("claude-haiku-5", "main", "Haiku", None), ("claude-fable-6", "main", "Fable", None),
+           ("claude-sonnet-5-5", "overflow", "Sonnet", None), ("claude-opus-5-5", "overflow", "Opus", None)]
+
+
+def _new_cli():
+    return (2, 2, 1)
+
+
+def test_aliases_use_bundled_table_without_a_catalog():
+    for family, model in catalog.BUNDLED_ALIASES.items():
+        target = catalog.resolve_alias(family, cli_version=_new_cli)
+        assert (target.model, target.source) == (model, "bundled")
+        assert target.note == "no readable local Claude Code model catalog"
+    assert catalog.BUNDLED_ALIASES["sonnet"] == "claude-sonnet-5-5"
+    assert catalog.default_model() == catalog.BUNDLED_ALIASES["opus"]
+
+
+def test_aliases_follow_the_catalog_main_rows_not_overflow_or_order(profile):
+    write(profile, _aliased(list(reversed(CURRENT))))
+    resolved = {family: catalog.resolve_alias(family, cli_version=_new_cli) for family in catalog.BUNDLED_ALIASES}
+    assert {family: target.model for family, target in resolved.items()} == {
+        "opus": "claude-opus-6", "sonnet": "claude-sonnet-6", "haiku": "claude-haiku-5", "fable": "claude-fable-6"}
+    assert {target.source for target in resolved.values()} == {"local_catalog"}
+    assert {target.note for target in resolved.values()} == {""}
+
+
+def test_stale_catalog_still_names_the_current_model_and_says_so(monkeypatch, profile):
+    monkeypatch.setattr(catalog, "_probe_cli_version", _new_cli)
+    write(profile, _aliased(CURRENT, fetched=100, stale=500))
+    target = catalog.resolve_alias("sonnet", cli_version=_new_cli)
+    assert (target.model, target.source, target.note) == ("claude-sonnet-6", "local_catalog", "catalog is stale")
+    assert catalog.alias_note().startswith("ok: Claude model aliases follow the local Claude Code catalog (stale;")
+
+
+def test_a_row_the_installed_cli_cannot_run_falls_back(monkeypatch, profile):
+    write(profile, _aliased(CURRENT))
+    target = catalog.resolve_alias("opus", cli_version=lambda: (2, 1, 290))
+    assert (target.model, target.source) == (catalog.BUNDLED_ALIASES["opus"], "bundled")
+    assert target.note == "claude-opus-6 needs Claude Code 2.2.0; installed 2.1.290"
+    # Unknown CLI version is not evidence against the row.
+    assert catalog.resolve_alias("opus", cli_version=lambda: None).model == "claude-opus-6"
+    monkeypatch.setattr(catalog, "_probe_cli_version", lambda: (2, 1, 290))
+    assert catalog.alias_note().startswith("note: Claude model aliases use the bundled table")
+
+
+@pytest.mark.parametrize("minimum", ["two", 2.2, "2.2.0-beta"])
+def test_an_unreadable_version_requirement_is_not_trusted(profile, minimum):
+    write(profile, _aliased([("claude-opus-6", "main", "Opus", minimum)]))
+    target = catalog.resolve_alias("opus", cli_version=_new_cli)
+    assert (target.model, target.source) == (catalog.BUNDLED_ALIASES["opus"], "bundled")
+
+
+def test_catalog_without_the_family_falls_back_per_family(profile):
+    write(profile, _aliased([("claude-opus-6", "main", "Opus", None), ("claude-unknown-1", "main", "Mystery", None)]))
+    assert catalog.resolve_alias("opus", cli_version=_new_cli).model == "claude-opus-6"
+    fable = catalog.resolve_alias("fable", cli_version=_new_cli)
+    assert (fable.model, fable.source, fable.note) == (
+        catalog.BUNDLED_ALIASES["fable"], "bundled", "local catalog names no current fable model")
+
+
+def test_unknown_alias_is_rejected():
+    with pytest.raises(ValueError):
+        catalog.resolve_alias("sonnet-5")
+
+
+def test_cli_version_is_read_from_the_install_without_running_it(tmp_path):
+    native = tmp_path / "share/claude/versions/2.1.287"
+    native.parent.mkdir(parents=True)
+    native.write_text("#!/bin/sh\nexit 99\n")
+    link = tmp_path / "bin/claude"
+    link.parent.mkdir()
+    link.symlink_to(native)
+    assert catalog._probe_cli_version(str(link)) == (2, 1, 287)
+
+    package = tmp_path / "node_modules/@anthropic-ai/claude-code"
+    package.mkdir(parents=True)
+    (package / "package.json").write_text(json.dumps({"name": "@anthropic-ai/claude-code", "version": "2.1.250"}))
+    (package / "cli.js").write_text("")
+    assert catalog._probe_cli_version(str(package / "cli.js")) == (2, 1, 250)
+
+    other = tmp_path / "other/claude"
+    other.parent.mkdir()
+    other.write_text("")
+    assert catalog._probe_cli_version(str(other)) is None
+    assert catalog._probe_cli_version("") is None  # The launcher could not find it.
+
+
+def test_dashboard_checks_the_claude_a_child_runs_not_the_first_on_path(monkeypatch, tmp_path):
+    """Children put ~/.local/bin first on PATH; AGENTSTACK_CLAUDE_BIN is not theirs."""
+    home = tmp_path / "home"
+    old = home / ".local/share/claude/versions/2.0.0"
+    old.parent.mkdir(parents=True)
+    old.write_text("")
+    old.chmod(0o755)
+    (home / ".local/bin").mkdir(parents=True)
+    (home / ".local/bin/claude").symlink_to(old)
+    new = tmp_path / "elsewhere/versions/9.0.0"
+    new.parent.mkdir(parents=True)
+    new.write_text("")
+    new.chmod(0o755)
+    (tmp_path / "pathbin").mkdir()
+    (tmp_path / "pathbin/claude").symlink_to(new)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", str(tmp_path / "pathbin"))
+    monkeypatch.setenv("AGENTSTACK_CLAUDE_BIN", str(tmp_path / "pathbin/claude"))
+    assert catalog.child_cli_path() == str(home / ".local/bin/claude")
+    assert catalog._probe_cli_version() == (2, 0, 0)
+    (home / ".local/bin/claude").unlink()
+    assert catalog._probe_cli_version() == (9, 0, 0)
+
+
+def test_a_family_with_two_current_models_is_ambiguous(profile):
+    write(profile, _aliased([("claude-opus-6", "main", "Opus", None), ("claude-opus-7", "main", "Opus", None),
+                             ("claude-sonnet-6", "main", "Sonnet", None)]))
+    opus = catalog.resolve_alias("opus", cli_version=_new_cli)
+    assert (opus.model, opus.source) == (catalog.BUNDLED_ALIASES["opus"], "bundled")
+    assert catalog.resolve_alias("sonnet", cli_version=_new_cli).model == "claude-sonnet-6"
+
+
+def test_a_row_whose_id_is_not_its_family_is_not_trusted(profile):
+    write(profile, _aliased([("claude-haiku-9", "main", "Opus", None)]))
+    assert catalog.resolve_alias("opus", cli_version=_new_cli).source == "bundled"
+
+
+@pytest.mark.parametrize("minimum", ["9" * 5000, "1234567.0", "1.2.3.4.5"])
+def test_an_oversized_version_requirement_falls_back_without_failing(profile, minimum):
+    write(profile, _aliased([("claude-opus-6", "main", "Opus", minimum)]))
+    target = catalog.resolve_alias("opus", cli_version=_new_cli)
+    assert (target.model, target.source) == (catalog.BUNDLED_ALIASES["opus"], "bundled")
+
+
+def test_a_stale_catalog_naming_an_older_generation_loses_to_the_bundled_table(profile):
+    write(profile, _aliased([("claude-opus-5", "main", "Opus", None)], fetched=100, stale=500))
+    target = catalog.resolve_alias("opus", cli_version=_new_cli)
+    assert (target.model, target.source) == ("claude-opus-5-5", "bundled")
+    assert target.note == "stale catalog names an older opus (claude-opus-5)"
+    # A fresh catalog is the vendor's current word, even when older.
+    write(profile, _aliased([("claude-opus-5", "main", "Opus", None)]))
+    assert catalog.resolve_alias("opus", cli_version=_new_cli).model == "claude-opus-5"
+
+
+def test_alias_models_lists_what_the_aliases_launch(monkeypatch, profile):
+    monkeypatch.setattr(catalog, "_probe_cli_version", _new_cli)
+    write(profile, _aliased(CURRENT, fetched=100, stale=500))
+    assert catalog.alias_models() == ("claude-opus-6", "claude-sonnet-6", "claude-haiku-5", "claude-fable-6")
+
+
+def test_helper_checks_the_binary_the_launcher_passes(profile, tmp_path, capsys):
+    write(profile, _aliased(CURRENT))
+    old = tmp_path / "versions/2.1.0"
+    old.parent.mkdir()
+    old.write_text("")
+    assert catalog.main(["aliases", "--claude-bin", str(old)]) == 0
+    lines = dict(line.split("\t", 1) for line in capsys.readouterr().out.splitlines())
+    assert lines["opus"].startswith("claude-opus-5-5\tbundled\tclaude-opus-6 needs Claude Code 2.2.0")
+    assert lines["sonnet"].startswith("claude-sonnet-6\tlocal_catalog")
+    assert catalog.main(["aliases", "--claude-bin", ""]) == 0
+    assert "claude-opus-6\tlocal_catalog" in capsys.readouterr().out
+    assert catalog.main(["aliases", "--claude-bin"]) == 2
+
+
+def test_doctor_reports_where_the_aliases_resolve():
+    doctor = (Path(__file__).resolve().parent.parent / "scripts/doctor.sh").read_text(encoding="utf-8")
+    assert 'report_claude_model_aliases "$INSTALL_DIR/dashboard/claude_models.py"' in doctor
+    assert '"$PYTHON_BIN" "$helper" note' in doctor
+
+
+def test_the_shared_script_answers_for_the_child_and_is_remembered(monkeypatch, tmp_path):
+    hooks = Path(__file__).resolve().parent.parent / "hooks"
+    found = tmp_path / "versions/2.0.0"
+    found.parent.mkdir()
+    found.write_text("")
+    found.chmod(0o755)
+    shell = tmp_path / "shell"
+    shell.write_text(f"#!/bin/sh\necho noise from a profile\necho {found}\n")
+    shell.chmod(0o755)
+    monkeypatch.setenv("AGENTSTACK_CHILD_SHELL", str(shell))
+    assert catalog.bind_child_cli_path(str(hooks)) == str(found)
+    assert catalog.child_cli_path() == str(found)
+    assert catalog._probe_cli_version() == (2, 0, 0)
+    shell.write_text("#!/bin/sh\necho not-a-path\n")
+    assert catalog.bind_child_cli_path(str(hooks)) == ""
+    assert catalog._probe_cli_version() is None  # Found nothing: unknown, not a guess.
+    # An older hooks dir without the script: the launcher cannot find it either.
+    assert catalog.bind_child_cli_path(str(tmp_path / "no-hooks")) == ""
+    assert catalog.child_cli_path() == ""
+    # A failing script forgets the old answer instead of keeping it.
+    shell.write_text(f"#!/bin/sh\necho {found}\n")
+    assert catalog.bind_child_cli_path(str(hooks)) == str(found)
+    monkeypatch.setattr(catalog.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError("no shell")))
+    assert catalog.bind_child_cli_path(str(hooks)) is None
+    assert catalog._bound_child_path is None

@@ -192,6 +192,16 @@ Additional checks:
 
 ## Mail watcher is yellow / red
 
+Signals older than 24 hours with a confirmed absent tmux recipient are reported as `orphan_signal_count` and excluded from health backlog. The watcher now removes a notification signal once a successful session inventory confirms the recipient is absent, without changing the Mail message or inbox. Leftovers from older watchers or uncertain tmux lookups can still remain; retained signals alone do not prove a delivery failure. Live recipients, recent signals, headless runtime manifests and unknown tmux measurements remain actionable. Doctor warns with the orphan count and cleanup instructions; this warning alone does not fail a green health check.
+
+Preview candidates after loading the installed environment. Add `--prune` to recheck session absence immediately before deleting only old regular signal files beneath signals. The helper never opens the Mail DB or modifies inboxes or notify-state, follows no symlinks, and refuses deletion when tmux cannot be measured. Resume a recipient first if it should receive the retained notification.
+
+```sh
+source ~/.agentstack/env.sh
+"${AGENTSTACK_PYTHON:-python3}" ~/.agentstack/dashboard/mail_signals.py
+"${AGENTSTACK_PYTHON:-python3}" ~/.agentstack/dashboard/mail_signals.py --prune
+```
+
 ```bash
 curl -s http://127.0.0.1:8770/api/mail-watcher-health
 ```
@@ -214,11 +224,13 @@ Confirm that `AGENTSTACK_MAIL_HOME` and `AGENTSTACK_SIGNALS_DIR` match between s
 **If mail reaches inboxes but nothing is injected into tmux, and the log repeats `Stale watcher lock detected; taking ownership` followed by `mkdir: ... File exists` every few seconds**, the watcher is failing to take over its lock and the service manager keeps restarting it. A previous watcher that died without running its EXIT trap (SIGKILL, a host crash, a deploy that replaced the process) leaves its heartbeat inside the lock dir, and watchers before 2026-09-12 could not clear it. A `runs` count in the thousands under `launchctl print` is the tell. Recovery is removing the lock dir; keepalive picks it up on the next start:
 
 ```bash
-rm -rf /tmp/orrery-mail-watcher.lock   # or your AGENTSTACK_MAIL_WATCHER_LOCK_DIR
+rm -rf ~/.agentstack/runtime/mail-watcher.lock   # or your AGENTSTACK_MAIL_WATCHER_LOCK_DIR
 tail -3 ~/.agentstack/runtime/mail-watcher.log
 ```
 
 Update the repo and re-run `bash scripts/install.sh`; from then on takeover succeeds regardless of leftovers.
+
+**If a second account on the same Mac has a watcher that never runs, with the log alternating `Permission denied` and `Stale watcher lock detected` every few seconds**, the lock dir is shared with another user's watcher (before 2026-10-05 the default was the shared `/tmp/orrery-mail-watcher.lock`, so a second account on the same Mac could never take the first account's lock and retried forever). The default is now per user (`$AGENTSTACK_RUNTIME_DIR/mail-watcher.lock`); update the repo and re-run `bash scripts/install.sh`. If you pointed `AGENTSTACK_MAIL_WATCHER_LOCK_DIR`, `_PIDFILE`, or `_HEARTBEAT` at another account's path (somewhere shared under `/tmp`, say), the watcher **writes nothing and does not switch to another location**: it stops and logs once that the path belongs to another user and that you should remove the override or use your own path. Remove the setting (or point it somewhere only you can write) and it starts. If your own old watcher from before 2026-10-05 is still running on the old default, the new watcher also refuses to start, to avoid delivering mail twice, and tells you to stop the old one (a pid that is not a watcher process is treated as stale). `agentstack-doctor` also warns when the watcher is not running, its status is red or yellow, or its heartbeat is stale.
 
 ## Dashboard spawn disappears immediately
 
@@ -315,6 +327,8 @@ Without creating another name, run:
 AGENTSTACK_PROJECT_KEY=/absolute/project/path \
   ~/.agentstack/bin/agentstack-reregister "$AGENT_NAME"
 ```
+
+In an explicit global context, exit 3 means `observed` without refreshing registration; pass program/model and rerun the helper.
 
 On failure, stderr contains a fixed, secret-free diagnostic. For example,
 `stage=ensure_project reason=transport-failed curl_exit=7` identifies the first
@@ -474,13 +488,19 @@ If stale top-level environment may have been inherited, relaunch from a new term
 
 An agent with no transcript may show only its mail timeline.
 
+## Resume is refused after a reboot or a forced shutdown
+
+A `/delegate` child's state says "running" while it runs; a normal exit retires it, and it can then be resumed for the retention period. When the computer goes down (forced off, power loss, or an OS restart that skips the exit), the child is never retired, and both the dashboard's RESUME and a terminal `claude --resume` refuse it with "This child did not end normally …". A resume cut off right after it launched is refused with "A resume of this child started and did not finish …".
+
+When the dashboard starts (and hourly after that), it makes resumable again any "running" state, and any unfinished resume, **last written before this machine booted**. It changes nothing while a tmux session of that name exists, while a live-session lease written since the boot names a live process, when the tmux state cannot be read, while a registration or legacy migration is pending, or when the owner credential does not match the state. With the dashboard running after a reboot, no manual retire is needed. If a resume is still refused, check whether a tmux session of that child is still there.
+
+A live-session lease (`runtime/live-sessions/<name>/<pid>`) written before the boot does not count as alive: a reboot may have given that PID to an unrelated process.
+
 ## Terminal does not open
 
 - check `AGENTSTACK_TERMINAL`
 - check Ghostty / iTerm2 / Terminal.app installation paths
 - `tmux has-session -t '<name>'`
-- for a browser terminal, check `ttyd` is on PATH
-- inspect the error from `/api/ptty?session=<name>`
 
 `AGENTSTACK_TERMINAL=none` performs no OS-terminal open.
 

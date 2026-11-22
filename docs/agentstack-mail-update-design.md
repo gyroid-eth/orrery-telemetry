@@ -44,3 +44,16 @@ database は自動では戻しません。切り替え後に書かれた message
 **推薦: 今は A。** live machine で `--update-mail` を数回通し、outage と rollback の実測がそろったら C へ進める。B は再実行のたびに全 agent へ outage を課すので勧めません。package の tree が同じ commit 間では、A でも差し替えも notice も起きません。
 
 最終判断は maintainer が行います。
+
+
+## 決定（2026-10-02）: 3 値を入れ、既定は keep のまま
+
+`--keep-mail`（既定）、`--update-mail`（厳格）、`AGENTSTACK_MAIL_UPDATE=auto`（opt-in）の 3 値にし、結果を最後の `mail-result:` 行と `install.sh --print-mail-plan` の `mail-plan:` 行で機械が読めるようにしました（[agentstack-mail-update.md](agentstack-mail-update.md#--update-mail-による差し替え)）。setup.sh・update.sh はこれを読みます。
+
+`auto` は、`agentstack-mailctl` 管理の配置で、検証が通り、止まる時間の見込み（検証で candidate が snapshot に応答するまでの秒数 + 1.5 秒）が `AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET`（既定 8 秒）以内のときだけ差し替え、だめなら今の build を残して exit 0 で終わります。止まる時間の実測（2026-10-02、一時 HOME・別 port）: 停止は 1 秒未満、空の DB での起動は 1〜2 秒。stdio proxy（子）と top level の Codex は次の呼び出しで戻り（Codex は 71 秒でも）、top level の Claude Code（HTTP 直結）は 15 秒までなら自動で戻り、18 秒以上では `/mcp` から reconnect が要りました。
+
+**`auto` を既定にする前に閉じること**（2026-10-02 の設計レビュー）:
+
+1. **止まる時間の上限。** 見込みは成功時の値で、失敗時の長い停止を防ぎません。停止の開始からの deadline を決め、新しい build の起動を諦めて前の build に戻すまでを、その中に収めます（rollback と health の待ちも含める）。
+2. **前の build に戻れること。** 新しい build が開いた後の database を前の build が読み書きできることを、snapshot の上で確かめます（既存の owner token・message・reservation）。確かめられない更新は `--update-mail` の明示操作に送ります。DDL が変わらないことは data が変わらないことの証明ではありません。
+3. **古い update.sh。** 公開済みの cockpit の update.sh は install.sh を option なしで実行するので、既定を `auto` にした時点でその利用者は差し替えの対象になります。既定を変えるのは、update.sh と setup.sh が毎回明示の値を渡すようになってからにし、それでも古い update.sh では `auto` になることを CHANGELOG に書きます。

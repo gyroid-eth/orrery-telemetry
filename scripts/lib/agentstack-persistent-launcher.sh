@@ -16,14 +16,10 @@ IMPLEMENTATION="$SCRIPT_DIR/agentstack-persistent.py"
 # look valid. install.sh selected and version-checked this interpreter; it is
 # the authority for the installed entry point.
 unset AGENTSTACK_PYTHON
-set +e
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-env_status=$?
-set -e
-if [[ "$env_status" -ne 0 ]]; then
-  fail "could not load installed environment: $ENV_FILE"
-fi
+MODE_LOADER="$SCRIPT_DIR/lib/global-client-loader.sh"
+[[ -r "$MODE_LOADER" ]] || fail "GLOBAL_ENTRY_UNAVAILABLE"
+source "$MODE_LOADER"
+ags_client_bootstrap "$ENV_FILE" --system "$@" || fail "could not load installed environment: $ENV_FILE"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-}"
 [[ -n "$PYTHON_BIN" ]] || \
   fail "installed Python is unavailable; re-run install.sh"

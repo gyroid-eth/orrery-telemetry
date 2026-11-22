@@ -43,8 +43,8 @@ def _function(text: str, name: str) -> str:
 
 
 def _payload_declaration(text: str) -> str:
-    match = re.search(r"^OPTIONAL_PROVIDER_PAYLOAD=\(\n.*?^\)\n", text, re.DOTALL | re.MULTILINE)
-    assert match, "OPTIONAL_PROVIDER_PAYLOAD declaration missing"
+    match = re.search(r"^RUNTIME_SCHEMA_SOURCE=.*\nRUNTIME_FIXTURE_SOURCE=.*\nRUNTIME_CLIENT_CONTRACT_SOURCES=\(\n.*?^\)\nOPTIONAL_PROVIDER_PAYLOAD=\(\n.*?^\)\n", text, re.DOTALL | re.MULTILINE)
+    assert match, "core payload declarations missing"
     return match.group(0)
 
 
@@ -88,7 +88,8 @@ def _run_install_payload(install_dir: pathlib.Path, *, tier: str = "tier1",
 
 def test_core_exclusions_cover_every_provider_contract_file_it_would_copy():
     provider_files = _provider_installer_files()
-    declared = re.findall(r'^  "([^"]+)"$', _payload_declaration(_installer_text()), re.MULTILINE)
+    provider_declaration = _payload_declaration(_installer_text()).split('OPTIONAL_PROVIDER_PAYLOAD=(\n', 1)[1]
+    declared = re.findall(r'^  "([^"]+)"$', provider_declaration, re.MULTILINE)
     assert declared == list(PROVIDER_PAYLOAD)
     assert set(declared) <= set(provider_files)
 
@@ -122,10 +123,71 @@ def test_fresh_core_install_omits_provider_payload_and_runs_core_server(tmp_path
         assert (ROOT / relative).is_file(), relative
         assert not (install_dir / relative).exists(), relative
     for relative in ("dashboard/server.py", "dashboard/service_runner.py",
+                     "dashboard/global_page.py", "dashboard/global_shell.html", "dashboard/global_ui.js",
+                     "dashboard/global_ui.css", "dashboard/mail_flow.js", "dashboard/network_node.js", "dashboard/network_core.js",
                      "hooks/spawn_child.sh", "hooks/cleanup-child-agent.sh",
                      "hooks/project-context.sh"):
         assert (install_dir / relative).read_bytes() == (ROOT / relative).read_bytes(), relative
+    for relative in ("dashboard/mobile_relay.py", "dashboard/mobile_projection.py", "dashboard/mobile_input.py",
+                     "dashboard/mobile_history.py",
+                     *(str(p.relative_to(ROOT)) for p in (ROOT / "dashboard/mobile").rglob("*") if p.is_file())):
+        assert (install_dir / relative).read_bytes() == (ROOT / relative).read_bytes(), relative
+    checked = subprocess.run([sys.executable, str(install_dir / "dashboard/mobile_relay.py"),
+                              "--check", "--owner-login", "owner@example.test",
+                              "--public-origin", "https://viewer.example.ts.net:9443"],
+                             env={"HOME":str(tmp_path / "reader-home"),"PATH":"/usr/bin:/bin"},
+                             capture_output=True, text=True, check=False)
+    assert checked.returncode == 0 and "No listener started" in checked.stdout, checked.stderr
+    # Run the installed relay and its installed imports, rather than accidentally
+    # borrowing source-tree helpers/assets through this pytest process.
+    logo_probe = r'''
+import hashlib,http.client,json,pathlib,sys,threading
+import mobile_relay as relay
+here=pathlib.Path.cwd().resolve()
+assert pathlib.Path(relay.__file__).resolve().parent==here
+assert pathlib.Path(sys.modules[relay.SnapshotStore.__module__].__file__).resolve().parent==here
+assert pathlib.Path(relay.admission.__file__).resolve().parent==here
+assert pathlib.Path(relay.mobile_input.__file__).resolve().parent==here
+assert pathlib.Path(relay.mobile_history.__file__).resolve().parent==here
+class NoObservation:
+    def snapshot(self,*args):raise AssertionError('asset GET must not observe upstream')
+server=relay.make_server(relay.Config('owner@example.test','https://viewer.example.ts.net:9443'),store=NoObservation(),test_port=0)
+worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start();result={}
+try:
+    for logo in ('orbit','anthropic','openai','google','deepseek','qwen','glm'):
+        c=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=3)
+        try:
+            c.request('GET','/assets/'+logo+'.svg',headers={'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test'})
+            response=c.getresponse();body=response.read()
+            result[logo]={'status':response.status,'mime':response.getheader('Content-Type'),'bytes':len(body),'sha256':hashlib.sha256(body).hexdigest()}
+        finally:c.close()
+finally:
+    server.shutdown();server.server_close();worker.join(3);assert not worker.is_alive()
+print(json.dumps(result))
+'''
+    logos = subprocess.run([sys.executable, "-c", logo_probe], cwd=install_dir / "dashboard",
+                           env={"HOME":str(tmp_path / "reader-home"),"PATH":"/usr/bin:/bin"},
+                           capture_output=True, text=True, check=False)
+    assert logos.returncode == 0, logos.stderr
+    import hashlib
+    for logo, row in json.loads(logos.stdout).items():
+        source=(ROOT / "integrations/dsh/assets/deepseek.svg" if logo=="deepseek"
+                else ROOT / "dashboard/assets" / (logo+".svg"))
+        assert row["status"]==200 and row["mime"]=="image/svg+xml", (logo,row)
+        assert row["bytes"]>0 and row["sha256"]==hashlib.sha256(source.read_bytes()).hexdigest(), (logo,row)
     assert (install_dir / "dashboard" / "providers" / "codex_app.py").is_file()
+    for source, installed in (
+        ("bin/lib/global-client-loader.sh", "global-client-loader.sh"),
+        ("packages/agentstack_mail/src/agentstack_mail/schema_contract.py", "schema_contract.py"),
+        ("packages/agentstack_mail/fixtures/global-server-s2a.json", "global-server-s2a.json"),
+        ("packages/agentstack_mail/src/agentstack_mail/global_s2b_contract.py", "global_s2b_contract.py"),
+        ("packages/agentstack_mail/src/agentstack_mail/global_s2c_contract.py", "global_s2c_contract.py"),
+        ("packages/agentstack_mail/fixtures/global-server-s2b.json", "global-server-s2b.json"),
+        ("packages/agentstack_mail/fixtures/global-server-s2c.json", "global-server-s2c.json"),
+        ("packages/agentstack_mail/fixtures/global-client-4b.json", "global-client-4b.json"),
+    ):
+        assert (install_dir / "bin/lib" / installed).read_bytes() == (ROOT / source).read_bytes()
+
 
     monkeypatch.setattr(service_runner, "HERE", install_dir / "dashboard")
     assert service_runner._default_server_path() == install_dir / "dashboard" / "server.py"

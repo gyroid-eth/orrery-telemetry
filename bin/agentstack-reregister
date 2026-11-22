@@ -37,11 +37,45 @@ fail_diagnostic() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/lib/global-client-loader.sh" || { return 2 2>/dev/null || exit 2; }
+ags_client_bootstrap "${AGENTSTACK_ENV_FILE:-${AGENTSTACK_HOME:-$SCRIPT_DIR/..}/env.sh}" "$@" || exit 2
+ags_client_select "$@" && _ags_selected_rc=0 || _ags_selected_rc=$?
+[[ "$_ags_selected_rc" == 0 || "$_ags_selected_rc" == 125 ]] || { return "$_ags_selected_rc" 2>/dev/null || exit "$_ags_selected_rc"; }
+if [[ "$_ags_selected_rc" == 0 ]]; then
+  _ags_mode="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" mode)" || exit 1
+  if [[ "$_ags_mode" == "global" ]]; then
+    _ags_program="${2:-${AGENTSTACK_REREGISTER_PROGRAM:-}}"
+    _ags_model="${3:-${AGENTSTACK_REREGISTER_MODEL:-}}"
+    if [[ -n "$_ags_program" || -n "$_ags_model" ]]; then
+      _ags_program="${_ags_program:-codex}"
+      case "$_ags_program" in
+        codex) _ags_default_model="${AGENTSTACK_CODEX_MODEL:-codex}" ;;
+        claude-code) _ags_default_model="${AGENTSTACK_CLAUDE_MODEL:-claude-code}" ;;
+        *) _ags_default_model="$_ags_program" ;;
+      esac
+      _ags_result="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" reconnect "$_ags_program" "${_ags_model:-$_ags_default_model}")" || exit 1
+    else
+      _ags_result="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" reconnect)" || exit 1
+    fi
+    _ags_name="$(printf '%s' "$_ags_result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')"
+    _ags_reconnect_mode="$(printf '%s' "$_ags_result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reconnect_mode"])')"
+    if [[ "$_ags_reconnect_mode" == "observe-only" ]]; then
+      printf 'agentstack-reregister: observed %s (registration not refreshed; pass program/model)\n' "$_ags_name"
+      exit 3
+    fi
+    printf 'agentstack-reregister: registered %s\n' "$_ags_name"
+    exit 0
+  fi
+fi
+
+export AGENTSTACK_RUNTIME_MODE=legacy
 
 load_env_file() {
   local envf="$1"
   # shellcheck disable=SC1090
-  [[ -n "$envf" && -f "$envf" ]] && . "$envf"
+  if [[ -n "$envf" && -f "$envf" ]]; then
+    ags_client_bootstrap "$envf" || exit 2
+  fi
   return 0
 }
 
@@ -124,6 +158,16 @@ CHILD_REGISTRATION_TOKEN="$registration_token"
 export CHILD_REGISTRATION_TOKEN
 
 if ags_register_session "$project_key" "$program" "$model" "$prefix" "${PWD:-$project_key}" "$agent_name" "reserved" >/dev/null 2>&1; then
+  # SessionStart may have run before Mail. Claude persists its exact payload
+  # into later Bash commands, so successful recovery can now write the same
+  # self receipt without another remote call or a transcript guess.
+  if [[ "$program" == "claude-code" && -n "${AGENTSTACK_CLAUDE_SESSION_CONTEXT:-}" ]]; then
+    if ! python3 "$SCRIPT_DIR/../hooks/record-session-index.py" --reregister \
+        "${AGS_REGISTERED_AGENT_ID:-}" "${AGS_REGISTERED_AGENT_NAME:-$agent_name}" \
+        "$project_key" >/dev/null 2>&1; then
+      emit_diagnostic "session-receipt" "binding-not-written"
+    fi
+  fi
   printf 'agentstack-reregister: registered %s\n' "${AGS_REGISTERED_AGENT_NAME:-$agent_name}"
 else
   register_status=$?

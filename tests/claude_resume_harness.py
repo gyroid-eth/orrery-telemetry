@@ -15,13 +15,14 @@ import threading
 import pytest
 
 from dashboard import server
+from _cleanup_mail import cleanup_mail_server
 
 
 class StandInMail(http.server.BaseHTTPRequestHandler):
     calls: list[tuple[str, dict]] = []
     # What register_agent reports as the row's retirement (None: active).
     retired_at: str | None = None
-    # What whois reports as the registered model (None: whois fails).
+    # Model reported by the verified profile (None: model unknown).
     registered_model: str | None = None
 
     def do_POST(self) -> None:  # noqa: N802
@@ -37,13 +38,15 @@ class StandInMail(http.server.BaseHTTPRequestHandler):
             result = {"structuredContent": {"id": 73, "name": arguments.get("name"),
                                             "registration_token": arguments.get("registration_token", ""),
                                             "retired_at": StandInMail.retired_at}}
-        elif name == "whois" and StandInMail.registered_model is not None:
-            result = {"structuredContent": {"id": 73, "name": arguments.get("agent_name"),
-                                            "program": "claude-code",
-                                            "model": StandInMail.registered_model}}
+        elif name == "release_file_reservations":
+            result = {"structuredContent": {"released": 0}}
         elif name == "whois":
-            result = {"isError": True, "content": [{"type": "text", "text": "Agent not found"}]}
+            result = {"structuredContent": {"name": arguments.get("agent_name"),
+                                             "program": "claude-code",
+                                             "retired_at": StandInMail.retired_at,
+                                             "model": StandInMail.registered_model}}
         elif name in {"retire_agent", "unretire_agent"}:
+            StandInMail.retired_at = "2026-01-01T00:00:00+00:00" if name == "retire_agent" else None
             result = {"structuredContent": {
                 "status": "retired" if name == "retire_agent" else "active",
                 "agent_name": arguments.get("agent_name"), "project_key": arguments.get("project_key")}}
@@ -98,5 +101,16 @@ def run_resumed(launches, tmp_path, cli_body, env=None):
     environment.pop("TMUX", None)
     environment.pop("TMUX_PANE", None)
     environment.update(env or {})
+    from _fake_tmux_transport import add_transport_evidence
+    pane=environment.get('TMUX_PANE')
+    add_transport_evidence(bin_dir,environment,inherited=bool(environment.get('TMUX')))
+    if pane is not None:environment['TMUX_PANE']=pane
     return subprocess.run(["/bin/bash", "-c", launches[-1][-1]], cwd=tmp_path, env=environment,
                           capture_output=True, text=True, timeout=60)
+
+
+@pytest.fixture
+def cleanup_mail():
+    """Synthetic successful RPCs for retention tests, not a delivery proof."""
+    with cleanup_mail_server() as url:
+        yield url

@@ -85,6 +85,8 @@ def test_fresh_workdir_trust_prompt_is_accepted_without_waiting_out_timeout(tmp_
     })
     pathlib.Path(env["HOME"]).mkdir()
 
+    from _fake_tmux_transport import add_transport_evidence
+    add_transport_evidence(bindir,env)
     result = subprocess.run(
         [
             "/bin/bash", str(SPAWN),

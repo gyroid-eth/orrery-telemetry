@@ -24,7 +24,18 @@
 WORK_DIR="${1:-.}"
 if [ -n "${BASH_SOURCE:-}" ]; then _ags_bootstrap_src="${BASH_SOURCE[0]}"; else _ags_bootstrap_src="$0"; fi
 SCRIPT_DIR="$(cd "$(dirname "$_ags_bootstrap_src")" && pwd)"
-if [ -z "${AGENTSTACK_PROJECT_KEY:-}" ] && [ -f "$SCRIPT_DIR/../env.sh" ]; then . "$SCRIPT_DIR/../env.sh"; fi
+. "$SCRIPT_DIR/lib/global-client-loader.sh" || { return 2 2>/dev/null || exit 2; }
+ags_client_bootstrap "$SCRIPT_DIR/../env.sh" --continue "$@" || { return 2 2>/dev/null || exit 2; }
+ags_client_select "$@" && _ags_selected_rc=0 || _ags_selected_rc=$?
+[[ "$_ags_selected_rc" == 0 || "$_ags_selected_rc" == 125 ]] || { return "$_ags_selected_rc" 2>/dev/null || exit "$_ags_selected_rc"; }
+if [[ "$_ags_selected_rc" == 0 ]]; then
+  _ags_global_mode="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" mode)" || { return 1 2>/dev/null || exit 1; }
+  if [[ "$_ags_global_mode" == "global" ]]; then
+    _ags_global_exports="$(python3 "$SCRIPT_DIR/lib/runtime_client.py" bootstrap codex)" || { return 1 2>/dev/null || exit 1; }
+    eval "$_ags_global_exports"
+    return 0 2>/dev/null || exit 0
+  fi
+fi
 
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
@@ -160,7 +171,6 @@ finalize_agent_name() {
   fi
   if [[ "$TMUX_IDENTITY_MATCHED" == "1" ]]; then
     ags_record_managed_agent "$MANAGED_FILE" "${AGENT_NAME:-}"
-    command -v pbcopy >/dev/null 2>&1 && printf '%s' "${AGENT_NAME:-}" | pbcopy 2>/dev/null || true
   fi
   export AGENT_NAME="${AGENT_NAME:-}"
   [[ -n "${CHILD_REGISTRATION_TOKEN:-}" ]] && export CHILD_REGISTRATION_TOKEN
@@ -301,6 +311,10 @@ else
   echo "⚠️  agent registration failed; launching Codex with preselected AGENT_NAME=${AGENT_NAME:-}." >&2
 fi
 
+IDENTITY_POLICY="$HOOKS_DIR/session-identity-policy.sh"
+[[ -f "$IDENTITY_POLICY" ]] || IDENTITY_POLICY="$SCRIPT_DIR/../hooks/session-identity-policy.sh"
+. "$IDENTITY_POLICY"
+ags_require_launch_identity || { return 2 2>/dev/null || exit 2; }
 finalize_agent_name
 if [[ -z "$REGISTERED_AGENT_NAME" && "$REQUIRE_FRESH_BINDING" == "1" ]]; then
   echo "⚠️  reserved/resumed Codex identity could not be registered; refusing to start without a fresh history binding expectation." >&2

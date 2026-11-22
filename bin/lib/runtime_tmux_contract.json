@@ -1,0 +1,235 @@
+{
+  "contract": "orrery-tmux-target-v1",
+  "capabilities": [
+    "legacy-transport",
+    "legacy-target-admission",
+    "legacy-target-diagnostics",
+    "legacy-window-target-admission",
+    "global-target-read",
+    "global-target-attach",
+    "global-target-compact"
+  ],
+  "operations": [
+    "capture",
+    "attach",
+    "input",
+    "split",
+    "close",
+    "kill-session",
+    "signal"
+  ],
+  "result_properties": {
+    "contract": {
+      "const": "orrery-tmux-target-v1"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "allowed": {
+      "type": "boolean"
+    },
+    "reason": {},
+    "transport": {
+      "const": "legacy-default"
+    },
+    "socket_path": {
+      "type": "string",
+      "pattern": "^/.*"
+    },
+    "argv": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 3
+    },
+    "environment_unset": {
+      "const": [
+        "TMUX",
+        "TMUX_PANE"
+      ]
+    },
+    "server_pid": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "operation": {
+      "enum": [
+        "capture",
+        "attach",
+        "input",
+        "split",
+        "close",
+        "kill-session",
+        "signal"
+      ]
+    },
+    "panes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "session_id",
+          "session",
+          "pane_id",
+          "pid",
+          "process_start"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^\\$[0-9]+$"
+          },
+          "session": {
+            "type": "string"
+          },
+          "pane_id": {
+            "type": "string",
+            "pattern": "^%[0-9]+$"
+          },
+          "pid": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "process_start": {
+            "type": "string"
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "state_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "capabilities": {},
+    "failure_kind": {
+      "enum": [
+        "target",
+        "transport",
+        "helper"
+      ]
+    },
+    "global_complete": {
+      "type": "boolean"
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "client_name",
+          "mail_instance_id",
+          "check",
+          "reason"
+        ],
+        "properties": {
+          "client_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mail_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "check": {
+            "enum": [
+              "placement",
+              "context",
+              "snapshot"
+            ]
+          },
+          "reason": {
+            "enum": [
+              "GLOBAL_ROOT_UNAVAILABLE",
+              "GLOBAL_PLACEMENT_UNAVAILABLE"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "result_fields": {
+    "capabilities": [
+      "contract",
+      "capabilities"
+    ],
+    "legacy-transport": [
+      "contract",
+      "ok",
+      "transport",
+      "socket_path",
+      "argv",
+      "environment_unset",
+      "server_pid"
+    ],
+    "legacy-target": [
+      "contract",
+      "ok",
+      "transport",
+      "socket_path",
+      "argv",
+      "environment_unset",
+      "server_pid",
+      "allowed",
+      "operation",
+      "panes",
+      "state_sha256"
+    ],
+    "error": [
+      "contract",
+      "ok",
+      "allowed",
+      "reason",
+      "failure_kind"
+    ],
+    "diagnostics": [
+      "contract",
+      "ok",
+      "global_complete",
+      "diagnostics"
+    ]
+  },
+  "reasons": {
+    "TMUX_DIRECTORY_UNSAFE": "transport",
+    "TMUX_SOCKET_UNSAFE": "transport",
+    "TMUX_SOCKET_CHANGED": "transport",
+    "TMUX_UNAVAILABLE": "transport",
+    "TMUX_TARGET_UNAVAILABLE": "target",
+    "TMUX_TARGET_INPUT_INVALID": "target",
+    "TMUX_TARGET_CHANGED": "target",
+    "TMUX_OPERATION_INVALID": "target",
+    "LEGACY_TMUX_TRANSPORT_UNAVAILABLE": "transport",
+    "GLOBAL_TMUX_LEGACY_CONSUMER_REFUSED": "transport",
+    "LEGACY_TARGET_IS_GLOBAL": "target",
+    "GLOBAL_TARGET_OWNERSHIP_UNKNOWN": "target",
+    "TMUX_CLIENT_HOME_INVALID": "target",
+    "TMUX_INSTANCE_REQUIRED": "target",
+    "TMUX_SOCKET_PATH_TOO_LONG": "transport",
+    "TMUX_HELPER_FAILED": "helper",
+    "GLOBAL_ROOT_UNAVAILABLE": "target",
+    "GLOBAL_PLACEMENT_UNAVAILABLE": "target"
+  }
+}

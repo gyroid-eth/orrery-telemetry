@@ -1,0 +1,142 @@
+{
+  "version": 1,
+  "profile": "unpublished-candidate-backend",
+  "activation_enabled": false,
+  "ruleset": "storage-origin-sprime-v1",
+  "tools": {
+    "health_check": {
+      "properties": [
+        "expected_server_instance_id"
+      ],
+      "required": []
+    },
+    "fetch_inbox": {
+      "properties": [
+        "auth",
+        "expected_server_instance_id",
+        "limit",
+        "since",
+        "target_agent_id",
+        "target_name",
+        "topic"
+      ],
+      "required": [
+        "expected_server_instance_id"
+      ]
+    },
+    "whois": {
+      "properties": [
+        "auth",
+        "expected_server_instance_id",
+        "expected_target_name",
+        "target_agent_id",
+        "target_name"
+      ],
+      "required": [
+        "expected_server_instance_id"
+      ]
+    },
+    "list_candidates": {
+      "properties": [
+        "auth",
+        "cursor",
+        "expected_server_instance_id",
+        "limit",
+        "target_name"
+      ],
+      "required": [
+        "expected_server_instance_id",
+        "target_name"
+      ]
+    },
+    "send_message": {
+      "properties": [
+        "auth",
+        "expected_server_instance_id",
+        "recipients",
+        "request_id"
+      ],
+      "required": [
+        "auth",
+        "expected_server_instance_id",
+        "recipients",
+        "request_id"
+      ]
+    },
+    "reply_message": {
+      "properties": [
+        "auth",
+        "expected_server_instance_id",
+        "message_id",
+        "recipients",
+        "request_id"
+      ],
+      "required": [
+        "auth",
+        "expected_server_instance_id",
+        "message_id",
+        "request_id"
+      ]
+    },
+    "reconnect": {
+      "properties": [
+        "auth",
+        "expected_server_instance_id"
+      ],
+      "required": [
+        "auth",
+        "expected_server_instance_id"
+      ]
+    },
+    "mark_message_read": {
+      "properties": [
+        "auth",
+        "expected_server_instance_id",
+        "expected_target_name",
+        "message_id",
+        "request_id",
+        "target_agent_id",
+        "target_name"
+      ],
+      "required": [
+        "auth",
+        "expected_server_instance_id",
+        "message_id",
+        "request_id"
+      ]
+    },
+    "acknowledge_message": {
+      "properties": [
+        "auth",
+        "expected_server_instance_id",
+        "expected_target_name",
+        "message_id",
+        "request_id",
+        "target_agent_id",
+        "target_name"
+      ],
+      "required": [
+        "auth",
+        "expected_server_instance_id",
+        "message_id",
+        "request_id"
+      ]
+    },
+    "consume_notification": {
+      "properties": [
+        "auth",
+        "expected_server_instance_id",
+        "message_ids",
+        "request_id",
+        "target_agent_id"
+      ],
+      "required": [
+        "auth",
+        "expected_server_instance_id",
+        "message_ids",
+        "request_id",
+        "target_agent_id"
+      ]
+    }
+  }
+}

@@ -64,11 +64,13 @@ def test_codex_resume_uses_the_same_terminal_preference(policy_env, monkeypatch,
     monkeypatch.setattr(server, "_open_terminal_tmux", lambda argv, **kw: windows.append(argv) or {"ok": True, "adapter": "fixture"})
     real_run = server.subprocess.run
     def run(argv, **kw):
-        if argv[0] == "env":
+        if argv[0] == "env" or argv[:2] == ['tmux', 'new-session']:
             detached.append(argv)
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         return real_run(argv, **kw)
     monkeypatch.setattr(server.subprocess, "run", run)
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, tmp_path, server, run, sessions={})
     monkeypatch.setenv("AGENTSTACK_AUTO_OPEN_CHILD", setting)
     result = server._do_resume_codex("BoundCodex", open_terminal=explicit)
     assert result["ok"], result

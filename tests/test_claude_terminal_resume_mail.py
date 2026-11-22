@@ -24,7 +24,7 @@ from test_claude_resume_mail import NAME, ROOT, TOKEN, child, private, resume
 RETIRED_AT = "2026-09-30T14:32:36Z"
 
 
-def session_start(runtime, registration, cwd, source="resume"):
+def session_start(runtime, registration, cwd, source="resume", extra=None):
     env = {
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
         "HOME": os.environ["HOME"],
@@ -37,6 +37,7 @@ def session_start(runtime, registration, cwd, source="resume"):
         "AGENTSTACK_HOOKS_DIR": str(ROOT / "hooks"),
         "AGENTSTACK_REGISTER_LIB": str(ROOT / "bin/lib/agentstack-register.sh"),
         "AGENTSTACK_PYTHON": sys.executable,
+        **(extra or {}),
     }
     os.makedirs(env["HOME"], exist_ok=True)
     payload = {"session_id": "sess-terminal-1", "hook_event_name": "SessionStart", "cwd": str(cwd)}
@@ -66,6 +67,9 @@ def test_terminal_resume_unretires_an_authenticated_retired_owner(resume, mail, 
     assert registers and registers[-1]["registration_token"] == TOKEN
     assert unretires(mail) == [{"project_key": registration["project_key"], "agent_name": NAME}]
     assert (runtime / f"agent_token_{NAME}").read_text().strip() == TOKEN
+    if kind == "retained_child":
+        state = json.loads((runtime / "child-agents" / f"{NAME}.json").read_text())
+        assert state.get("resume_in_progress_at")
 
 
 def test_terminal_resume_leaves_an_active_row_alone(resume, mail, tmp_path):
@@ -73,6 +77,22 @@ def test_terminal_resume_leaves_an_active_row_alone(resume, mail, tmp_path):
     session_start(runtime, registration, tmp_path)
     assert [method for method, _ in mail if method == "register_agent"]
     assert unretires(mail) == []
+
+
+def test_terminal_resume_unretire_failure_cancels_retained_marker(resume, mail, tmp_path):
+    runtime, registration, *_ = resume
+    child(runtime, registration)
+    state_path = runtime / "child-agents" / f"{NAME}.json"
+    retained = json.loads(state_path.read_text())
+    StandInMail.retired_at = RETIRED_AT
+    register = tmp_path / "register.sh"
+    register.write_text(f'. "{ROOT / "bin/lib/agentstack-register.sh"}"\n'
+                        'ags_unretire_owned_identity() { return 1; }\n')
+
+    result = session_start(runtime, registration, tmp_path, extra={"AGENTSTACK_REGISTER_LIB": str(register)})
+
+    assert "unretire に失敗しました" in result.stdout
+    assert json.loads(state_path.read_text()) == retained
 
 
 @pytest.mark.parametrize("kind", ["expired", "legacy", "purged", "resume_pending", "no_token"])
@@ -145,3 +165,14 @@ def test_session_start_sweeps_leases_of_ended_sessions(resume, mail, tmp_path):
     assert live.exists()
     # This session's own lease (the pytest process runs the hook) is written.
     assert (runtime / "live-sessions" / NAME / str(os.getpid())).exists()
+
+
+def test_a_failing_lease_helper_writes_nothing_instead_of_going_around_the_lock(resume, mail, tmp_path):
+    """#182 review: only a missing helper falls back to a plain write. A helper
+    that runs and fails (an older python3, say) must not write a lease outside
+    the lock that recovery and pruning hold."""
+    runtime, registration, *_ = resume
+    failing = tmp_path / "failing_helper.py"
+    failing.write_text("import sys\nsys.exit(3)\n")
+    session_start(runtime, registration, tmp_path, extra={"AGENTSTACK_CHILD_RESUME_HELPER": str(failing)})
+    assert not (runtime / "live-sessions" / NAME / str(os.getpid())).exists()

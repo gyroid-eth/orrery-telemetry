@@ -1,5 +1,10 @@
 import json
+import hashlib
 import math
+import secrets
+import threading
+from collections import OrderedDict
+from contextlib import contextmanager
 import os
 import shutil
 import sqlite3
@@ -96,6 +101,16 @@ ACT_WINDOW_SEC = 6 * 3600
 
 _LIVE_PARENT_CACHE: dict[str, object] = {"ts": 0.0, "value": None}
 _LIVE_PARENT_TTL = 10.0
+# PARENT_AGENT is read once per session generation (name, id, creation time, server pid)
+# rather than on every refresh, and asked again after this long, whether it was
+# found or not: a variable set just after the session appeared, or set again
+# later, is picked up. Any POST drops the memo too (forget_parents).
+_PARENT_MISS_TTL = 60.0
+_PARENT_BY_SESSION: dict[str, tuple[tuple[str, ...], str, float]] = {}
+
+
+def forget_parents() -> None:
+    _PARENT_BY_SESSION.clear()
 
 
 def _live_parents() -> dict[str, str]:
@@ -124,7 +139,8 @@ def _live_parents() -> dict[str, str]:
         return {}
     try:
         listing = subprocess.run(
-            [tmux, "list-sessions", "-F", "#{session_name}"],
+            [tmux, "list-sessions", "-F",
+             "#{session_name}\t#{session_id}\t#{session_created}\t#{pid}"],
             capture_output=True, text=True, timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
@@ -137,9 +153,21 @@ def _live_parents() -> dict[str, str]:
         # below, which this path never reaches.
         return {}
     parents: dict[str, str] = {}
-    for session in listing.stdout.split("\n"):
-        session = session.strip()
+    seen: set[str] = set()
+    for line in listing.stdout.split("\n"):
+        # name, id, creation time, server pid. The pid tells apart a session of
+        # a restarted tmux server that got the same id in the same second.
+        fields = line.rsplit("\t", 3)
+        session = fields[0].strip()
+        generation = tuple(fields[1:]) if len(fields) == 4 else None
         if not session:
+            continue
+        seen.add(session)
+        known = _PARENT_BY_SESSION.get(session)
+        if (generation is not None and known is not None and known[0] == generation
+                and now - known[2] < _PARENT_MISS_TTL):
+            if known[1]:
+                parents[session] = known[1]
             continue
         try:
             shown = subprocess.run(
@@ -148,15 +176,18 @@ def _live_parents() -> dict[str, str]:
             )
         except (OSError, subprocess.SubprocessError):
             continue
-        if shown.returncode != 0:
-            continue                   # unset for this session
-        value = shown.stdout.strip()
-        # "-PARENT_AGENT" marks the variable as removed; only NAME=VALUE counts.
-        if not value.startswith("PARENT_AGENT="):
-            continue
-        parent = value.split("=", 1)[1].strip()
+        parent = ""
+        if shown.returncode == 0:      # otherwise unset for this session
+            value = shown.stdout.strip()
+            # "-PARENT_AGENT" marks the variable as removed; only NAME=VALUE counts.
+            if value.startswith("PARENT_AGENT="):
+                parent = value.split("=", 1)[1].strip()
         if parent:
             parents[session] = parent
+        if generation is not None and (shown.returncode == 0 or shown.returncode == 1):
+            _PARENT_BY_SESSION[session] = (generation, parent, now)
+    for gone in set(_PARENT_BY_SESSION) - seen:
+        _PARENT_BY_SESSION.pop(gone, None)  # a POST may have cleared it meanwhile
     _LIVE_PARENT_CACHE.update(ts=now, value=dict(parents))
     return parents
 
@@ -239,20 +270,278 @@ def _has_column(con: sqlite3.Connection, table: str, column: str) -> bool:
 
 
 def _resolve_project_id(con) -> int:
-    """project human_key から project id を解決。
-    見つからなければ PROJECT_ID(=1) にフォールバック。"""
+    """明示keyを解決し、未指定の場合だけ既定projectを使う。"""
     if not PROJECT_HUMAN_KEY:
         return PROJECT_ID
+    row = con.execute(
+        "SELECT id FROM projects WHERE human_key = ?",
+        (PROJECT_HUMAN_KEY,),
+    ).fetchone()
+    if row and row[0] is not None:
+        return int(row[0])
+    raise LookupError("Mail project not found")
+
+
+def mobile_mail_metadata(
+    con: sqlite3.Connection, project_id: int, window: str,
+    *, now: float | None = None, event_limit: int = 200, cursors=None,
+) -> dict:
+    """Read delivery metadata only; never select message content or change ACK.
+
+    Counts are recipient rows by direction/kind in the requested event-time
+    window. The bounded timeline is separate from those complete aggregates.
+    Same-second rows sort by message id then recipient id, both descending.
+    """
     try:
-        row = con.execute(
-            "SELECT id FROM projects WHERE human_key = ?",
-            (PROJECT_HUMAN_KEY,),
-        ).fetchone()
-        if row and row[0] is not None:
-            return int(row[0])
+        from dashboard.mobile_projection import WINDOWS as windows
+    except ModuleNotFoundError:
+        from mobile_projection import WINDOWS as windows
+    if window not in windows or not 1 <= event_limit <= 200:
+        raise ValueError('invalid mobile Mail window or limit')
+    checked = int(time.time() if now is None else now)
+    lower = checked - windows[window] if windows[window] is not None else None
+    epoch = _sql_epoch('m.created_ts')
+    cte = f'''WITH delivery AS (
+        SELECT m.id AS message_id, mr.agent_id AS recipient_id,
+               sa.name AS source, ra.name AS target, mr.kind AS kind,
+               {epoch} AS event_at
+        FROM messages m
+        JOIN message_recipients mr ON mr.message_id=m.id
+        JOIN agents sa ON sa.id=m.sender_id AND sa.project_id=m.project_id
+        JOIN agents ra ON ra.id=mr.agent_id AND ra.project_id=m.project_id
+        WHERE m.project_id=? AND mr.kind IN ('to','cc')
+    ) '''
+    bounds = 'event_at IS NOT NULL AND event_at<=?'
+    args = [project_id, checked]
+    if lower is not None:
+        bounds += ' AND event_at>=?'
+        args.append(lower)
+    # An extra row detects truncation without presenting a partial aggregate
+    # as a complete graph. This limit also bounds the metadata HTTP response.
+    edge_rows = con.execute(cte + f'''
+        SELECT source,target,kind,COUNT(*) AS count,MAX(event_at) AS last_ts
+        FROM delivery WHERE {bounds} GROUP BY source,target,kind
+        ORDER BY count DESC,source,target,kind LIMIT 10001
+    ''', args).fetchall()
+    timeline = con.execute(cte + f'''
+        SELECT message_id,recipient_id,source,target,kind,event_at
+        FROM delivery WHERE {bounds}
+        ORDER BY event_at DESC,message_id DESC,recipient_id DESC LIMIT ?
+    ''', [*args, event_limit + 1]).fetchall()
+    invalid = int(con.execute(cte + 'SELECT COUNT(*) FROM delivery WHERE event_at IS NULL',
+                              [project_id]).fetchone()[0])
+    edges = [dict(zip(('source','target','kind','count','last_ts'), row)) for row in edge_rows[:10000]]
+    events = []
+    for message_id, recipient_id, source, target, kind, event_at in timeline[:event_limit]:
+        # Stable per-recipient-row key: does not expose Mail's internal ids.
+        key = hashlib.sha256(f'{project_id}:{message_id}:{recipient_id}'.encode()).hexdigest()[:32]
+        events.append({'key': key, 'source': source, 'target': target,
+                       'kind': kind, 'event_at': event_at, 'count': 1})
+    registry = MOBILE_MAIL_CURSORS if cursors is None else cursors
+    scope = _mobile_scope(con, project_id)
+    next_cursor = registry.issue(scope, window, tuple(timeline[event_limit-1][:2])+ (timeline[event_limit-1][5],),
+                                 event_limit) if len(timeline)>event_limit else None
+    return {'status': 'available', 'window': window, 'events': events, 'scope':scope,
+            'next_cursor':next_cursor,
+            'edges': edges, 'events_truncated': len(timeline) > event_limit,
+            'edges_truncated': len(edge_rows) > 10000,
+            'invalid_timestamps': invalid, 'degraded': bool(invalid or len(edge_rows) > 10000),
+            'observed_at': checked}
+
+
+class MobileMailCursors:
+    """Opaque bounded process-local metadata positions, never body handles."""
+    def __init__(self, *, clock=time.monotonic, limit=256, ttl=600):
+        self.clock, self.limit, self.ttl = clock, limit, ttl
+        self._items, self._lock = OrderedDict(), threading.Lock()
+
+    def issue(self, scope, window, boundary, size=200, *, pair=None, direction='both', kind='mail', seen=0):
+        with self._lock:
+            self._expire()
+            key=secrets.token_hex(16)
+            self._items[key]=(self.clock()+self.ttl,scope,window,boundary,size,pair,direction,kind,seen)
+            while len(self._items)>self.limit:self._items.popitem(last=False)
+            return key
+
+    def _expire(self):
+        for key,value in list(self._items.items()):
+            if value[0]<=self.clock():self._items.pop(key,None)
+
+    def resolve(self,key,scope,window,*,pair=None,direction='both',kind='mail'):
+        with self._lock:
+            self._expire()
+            value=self._items.get(key)
+            if value is None or (value[1],value[2],value[5],value[6],value[7])!=(scope,window,pair,direction,kind):
+                raise LookupError('mobile_cursor_expired')
+            if kind=='cache':self._items.pop(key,None)
+            return value[3],value[4],value[8]
+
+
+MOBILE_MAIL_CURSORS=MobileMailCursors()
+_MOBILE_NONCE=secrets.token_hex(16)
+
+
+@contextmanager
+def mobile_mail_read(con):
+    """A read transaction and a two-second SQLite work budget, no Mail writes."""
+    deadline=time.monotonic()+2
+    own=not con.in_transaction
+    if own:con.execute('BEGIN')
+    con.set_progress_handler(lambda: int(time.monotonic()>deadline),1000)
+    try:yield
+    finally:
+        con.set_progress_handler(None,0)
+        if own:con.rollback()
+
+
+def _mobile_scope(con,pid):
+    db=next((row[2] for row in con.execute('PRAGMA database_list') if row[1]=='main'),'')
+    if db:
+        st=os.stat(db);identity=(os.path.realpath(db),st.st_dev,st.st_ino)
+    else:identity=('memory',id(con))
+    return hashlib.sha256(repr((_MOBILE_NONCE,pid,identity)).encode()).hexdigest()[:32]
+
+
+def _mobile_delivery(con,pid,window,now,pair=None,direction='both'):
+    try:from dashboard.mobile_projection import WINDOWS, name
+    except ModuleNotFoundError:from mobile_projection import WINDOWS, name
+    if window not in WINDOWS:raise ValueError('invalid_window')
+    if direction not in {'both','forward','reverse'}:raise ValueError('invalid_direction')
+    args=[pid,int(now)]
+    bounds='event_at IS NOT NULL AND event_at<=?'
+    if WINDOWS[window] is not None:
+        bounds+=' AND event_at>=?';args.append(int(now)-WINDOWS[window])
+    if pair is not None:
+        if len(pair)!=2:raise ValueError('invalid_pair')
+        a,b=map(name,pair)
+        if a==b and direction!='both':raise ValueError('invalid_direction')
+        if direction=='both':bounds+=' AND ((source=? AND target=?) OR (source=? AND target=?))';args.extend((a,b,b,a))
+        else:
+            bounds+=' AND source=? AND target=?';args.extend((a,b) if direction=='forward' else (b,a))
+    elif direction!='both':raise ValueError('invalid_pair')
+    cte=f'''WITH delivery AS (
+        SELECT m.id AS message_id,mr.agent_id AS recipient_id,sa.name AS source,ra.name AS target,
+               mr.kind AS kind,{_sql_epoch('m.created_ts')} AS event_at
+        FROM messages m JOIN message_recipients mr ON mr.message_id=m.id
+        JOIN agents sa ON sa.id=m.sender_id AND sa.project_id=m.project_id
+        JOIN agents ra ON ra.id=mr.agent_id AND ra.project_id=m.project_id
+        WHERE m.project_id=? AND mr.kind IN ('to','cc')) '''
+    return cte,bounds,args
+
+
+def _mobile_event(pid,row):
+    mid,rid,source,target,kind,stamp=row
+    return {'key':hashlib.sha256(f'{pid}:{mid}:{rid}'.encode()).hexdigest()[:32],
+            'source':source,'target':target,'kind':kind,'event_at':stamp,'count':1}
+
+
+def mobile_mail_page(con,pid,window,cursor=None,*,now=None,cursors=None,pair=None,direction='both'):
+    now=time.time() if now is None else now
+    registry=MOBILE_MAIL_CURSORS if cursors is None else cursors
+    scope=_mobile_scope(con,pid)
+    cte,bounds,args=_mobile_delivery(con,pid,window,now,pair,direction)
+    size=200
+    if cursor is not None:
+        (mid,rid,stamp),size,_=registry.resolve(cursor,scope,window,pair=pair,direction=direction)
+        bounds+=' AND (event_at,message_id,recipient_id)<(?,?,?)';args.extend((stamp,mid,rid))
+    with mobile_mail_read(con):
+        rows=con.execute(cte+f'''SELECT message_id,recipient_id,source,target,kind,event_at
+            FROM delivery WHERE {bounds} ORDER BY event_at DESC,message_id DESC,recipient_id DESC LIMIT ?''',
+            [*args,size+1]).fetchall()
+    more=len(rows)>size
+    last=rows[size-1] if more else None
+    token=registry.issue(scope,window,(last[0],last[1],last[5]),size,pair=pair,direction=direction) if more else None
+    return {'status':'available','scope':scope,'window':window,'events':[_mobile_event(pid,r) for r in rows[:size]],
+            'next_cursor':token,'observed_at':int(now),'pair':list(pair) if pair else None,'direction':direction}
+
+
+def _mobile_content(con,pid,mid):
+    # Read bounded values only AFTER canonical project/delivery/period admission.
+    row=con.execute('''SELECT typeof(subject),substr(subject,1,513),typeof(body_md),
+        substr(CAST(body_md AS BLOB),1,65537),length(CAST(body_md AS BLOB))
+        FROM messages WHERE id=? AND project_id=?''',(mid,pid)).fetchone()
+    if row is None or row[0]!='text' or row[2]!='text':raise LookupError('mobile_content_unavailable')
+    subject,raw=row[1],row[3]
+    cut=raw[:65536]
+    try:body=cut.decode('utf-8')
+    except UnicodeDecodeError as exc:
+        if len(raw)<=65536 or exc.end!=len(cut) or exc.reason!='unexpected end of data':raise ValueError('mobile_content_encoding') from None
+        body=cut[:exc.start].decode('utf-8')
+    value={'subject':subject[:512],'body':body,'subject_truncated':len(subject)>512,'body_truncated':row[4]>len(body.encode())}
+    revision=hashlib.sha256(json.dumps([value,row[4]],ensure_ascii=False,separators=(',',':')).encode()).hexdigest()[:32]
+    return value,revision
+
+
+def mobile_mail_detail(con,pid,window,key,*,mode='content',now=None):
+    try:from dashboard.mobile_projection import EVENT_KEY
+    except ModuleNotFoundError:from mobile_projection import EVENT_KEY
+    if not isinstance(key,str) or not EVENT_KEY.fullmatch(key) or mode not in {'content','revision'}:raise ValueError('invalid_event')
+    now=time.time() if now is None else now
+    cte,bounds,args=_mobile_delivery(con,pid,window,now)
+    scope=_mobile_scope(con,pid)
+    con.create_function('mobile_event_key',2,lambda mid,rid:hashlib.sha256(f'{pid}:{mid}:{rid}'.encode()).hexdigest()[:32],deterministic=True)
+    with mobile_mail_read(con):
+        found=con.execute(cte+f'''SELECT message_id,recipient_id,source,target,kind,event_at
+            FROM delivery WHERE {bounds} AND mobile_event_key(message_id,recipient_id)=? LIMIT 2''',[*args,key]).fetchall()
+        if len(found)!=1:raise LookupError('mobile_event_unavailable')
+        event=_mobile_event(pid,found[0]);value,revision=_mobile_content(con,pid,found[0][0])
+    fingerprint=hashlib.sha256(f'{scope}:{found[0][0]}'.encode()).hexdigest()[:32]
+    result={'scope':scope,'event':event,'fingerprint':fingerprint,'revision':revision}
+    if mode=='content':result.update(value)
+    return result
+
+
+def mobile_mail_cache_page(con,pid,cursor=None,*,now=None,cursors=None,max_bytes=4*1024*1024):
+    """Loopback-only bounded 24h distinct-message batch; never a relay route."""
+    now=time.time() if now is None else now
+    scope=_mobile_scope(con,pid);registry=MOBILE_MAIL_CURSORS if cursors is None else cursors
+    cte,bounds,args=_mobile_delivery(con,pid,'day',now)
+    seen=0
+    if cursor:
+        (mid,stamp),_,seen=registry.resolve(cursor,scope,'day',kind='cache')
+        bounds+=' AND (event_at,message_id)<(?,?)';args.extend((stamp,mid))
+    room=min(32,2000-seen)
+    with mobile_mail_read(con):
+        found=con.execute(cte+f'''SELECT message_id,MAX(recipient_id),source,target,kind,event_at
+            FROM delivery WHERE {bounds} GROUP BY message_id
+            ORDER BY event_at DESC,message_id DESC LIMIT ?''',[*args,room+1]).fetchall()
+        items=[];last=None;reason=None
+        for row in found[:room]:
+            # MAX(recipient_id) with SQLite's single MAX selects the same row's
+            # other columns, retaining one canonical to/cc delivery per message.
+            value,revision=_mobile_content(con,pid,row[0])
+            item={'scope':scope,'event':_mobile_event(pid,row),'revision':revision,
+                  'fingerprint':hashlib.sha256(f'{scope}:{row[0]}'.encode()).hexdigest()[:32],**value}
+            trial={'scope':scope,'items':[*items,item],'next_cursor':'f'*32,'complete':False,'reason':'count_limit'}
+            if len(json.dumps(trial,separators=(',',':'),allow_nan=False).encode())>max_bytes-512:
+                reason='serialized_batch_limit';break
+            items.append(item);last=(row[0],row[5])
+    more=len(found)>len(items)
+    seen+=len(items)
+    if more and seen>=2000:reason='count_limit'
+    next_cursor=registry.issue(scope,'day',last,kind='cache',seen=seen) if more and last and seen<2000 else None
+    return {'scope':scope,'items':items,'next_cursor':next_cursor,
+            'complete':not more,'reason':reason,'observed_at':int(now)}
+
+
+def mail_mark():
+    """Mail に新しい message か宛先が入ったかの印。build_graph と同じ DB・同じ ro の
+    経路で読む。読めない（無い・busy）ときは待たずに None。
+
+    宛先の行も見るのは、message の行だけが先に見える瞬間に作った graph を、
+    同じ印のまま残さないため。どちらも主キーの索引で引くので安い。"""
+    if not os.path.exists(DB_PATH):
+        return None
+    try:
+        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=0)
+        try:
+            return tuple(con.execute(
+                "SELECT (SELECT MAX(id) FROM messages),"
+                " (SELECT MAX(message_id) FROM message_recipients)").fetchone())
+        finally:
+            con.close()
     except sqlite3.Error:
-        pass
-    return PROJECT_ID
+        return None
 
 
 def build_graph() -> dict:
@@ -267,7 +556,19 @@ def build_graph() -> dict:
     try:
         cur = con.cursor()
         # 設定された project human_key から project id を解決する。
-        PROJECT_ID = _resolve_project_id(con)
+        try:
+            PROJECT_ID = _resolve_project_id(con)
+        except (LookupError, sqlite3.Error) as exc:
+            return {
+                "nodes": [], "edges": [], "spawn": [],
+                "error": (
+                    "Mail project not found"
+                    if isinstance(exc, LookupError)
+                    else "Mail project lookup failed (SQLite error)"
+                ),
+                "timestamp_diagnostics": diagnostics.payload(),
+                "degraded": True,
+            }
 
         # activity: 直近 ACT_WINDOW_SEC のメッセージ参加数（送信+受信）。
         # INTEGER microseconds と legacy ISO TEXT を同じ epoch seconds にしてから

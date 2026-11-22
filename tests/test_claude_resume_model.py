@@ -7,11 +7,13 @@ whatever model the tmux server's environment carried) over the original.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 
 import pytest
 
 from dashboard import server
-from claude_resume_harness import mail, run_resumed
+from claude_resume_harness import StandInMail, mail, run_resumed
 from test_claude_resume_mail import NAME, ROOT, child, resume
 
 
@@ -59,11 +61,6 @@ def test_resumed_session_does_not_hand_its_model_to_later_launchers(resume):
 # terminal has neither CLAUDE_CHILD_MODEL nor AGENTSTACK_CLAUDE_MODEL, and the
 # SessionStart re-registration wrote `claude-code` over the model (RUNTHROUGH
 # 2026-10-01, problem 2).
-import os  # noqa: E402
-import subprocess  # noqa: E402
-
-from claude_resume_harness import StandInMail  # noqa: E402
-
 HAIKU = "claude-haiku-4-5-20251001"
 
 
@@ -73,16 +70,23 @@ def terminal_session_start(tmp_path, mail_url, *, payload_model=None, env=None):
     token = runtime / f"agent_token_{NAME}"
     token.write_text("fixture-owner-token", encoding="utf-8")
     token.chmod(0o600)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    tmux = fake_bin / "tmux"
+    tmux.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    tmux.chmod(0o700)
     payload = {"session_id": "sess-terminal-1", "hook_event_name": "SessionStart",
                "source": "resume", "cwd": str(tmp_path)}
     if payload_model is not None:
         payload["model"] = payload_model
     environment = {
         key: value for key, value in os.environ.items()
-        if not key.startswith(("AGENTSTACK_", "CLAUDE_CHILD_")) and key not in ("TMUX", "TMUX_PANE")
+        if not key.startswith(("AGENTSTACK_", "CLAUDE_CHILD_"))
+        and key not in ("TMUX", "TMUX_PANE", "CLAUDE_ENV_FILE", "CHILD_REGISTRATION_TOKEN")
     }
     environment.update({
         "HOME": str(tmp_path / "home"), "AGENT_NAME": NAME,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "AGENTSTACK_RUNTIME_DIR": str(runtime), "AGENTSTACK_HOOKS_DIR": str(ROOT / "hooks"),
         "AGENTSTACK_REGISTER_LIB": str(ROOT / "bin/lib/agentstack-register.sh"),
         "AGENTSTACK_PROJECT_KEY": str(tmp_path), "PROJECT_KEY": str(tmp_path),

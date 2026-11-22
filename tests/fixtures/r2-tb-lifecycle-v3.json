@@ -1,0 +1,779 @@
+{
+  "proposal_version": 3,
+  "base": "b6d4720a25ee1b6617912b2b144cd5fecf1f3387",
+  "status": "pre-implementation; not a shipped capability",
+  "input_schemas": {
+    "end": {
+      "type": "object",
+      "properties": {
+        "entry": {
+          "const": "end"
+        },
+        "agent_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "confirm_state_digest": {
+          "type": "string",
+          "pattern": "[0-9a-f]{64}"
+        }
+      },
+      "required": [
+        "entry",
+        "agent_id",
+        "confirm_state_digest"
+      ],
+      "additionalProperties": false
+    },
+    "replay-end": {
+      "type": "object",
+      "properties": {
+        "entry": {
+          "const": "replay-end"
+        },
+        "agent_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "confirm_state_digest": {
+          "type": "string",
+          "pattern": "[0-9a-f]{64}"
+        },
+        "expected_intent_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "[0-9a-f]{64}"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "entry",
+        "agent_id",
+        "confirm_state_digest",
+        "expected_intent_sha256"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "output_delta": {
+    "end.lifecycle": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "agent_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "phase": {
+          "enum": [
+            "report-required",
+            "report-pending",
+            "report-confirmed",
+            "report-not-required",
+            "report-rejected",
+            "cleanup-pending",
+            "ended",
+            "unknown"
+          ]
+        },
+        "state_sha256": {
+          "type": "string",
+          "pattern": "[0-9a-f]{64}"
+        },
+        "pending_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "[0-9a-f]{64}"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_operations": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "target",
+              "end",
+              "replay-end",
+              "resolve-mutation",
+              "launch-resolve"
+            ]
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "agent_id",
+        "phase",
+        "state_sha256",
+        "pending_sha256",
+        "reason",
+        "next_operations"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "inheritance": {
+    "admission": "runtime_tmux_contract.json target_input_schemas / target_reason_table; same owner,parent,operator",
+    "errors": "existing target error schema/reason table and exit codes, no second classifier",
+    "definite_rejections": "S2a/S2b/S2c canonical before/after receipt-lookup classifications, REQUEST_ID_CONFLICT preserves pending",
+    "launch_operator_wire": "global-client-4c.json local_operator_wire (launch/retry/status/cancel/resolve)"
+  },
+  "launch_delta": {
+    "tmux_transport": "global-instance for new dedicated launches only",
+    "termination": "phase/report_kind/receipt_ref only; no body copy; existing launch output"
+  },
+  "stable_report_request_id": {
+    "namespace": "uuid.NAMESPACE_OID",
+    "preimage": "canonical JSON [server_instance_id,candidate_generation,authority_epoch,agent_id,launch_id,receipt_nonce,\"terminal\",report_kind]",
+    "canonical": "sort_keys=True,ensure_ascii=False,separators=(comma,colon)",
+    "body_storage": "existing mutation intent only"
+  },
+  "cases": [
+    {
+      "id": "F4.01",
+      "binding": "actual-product-entry"
+    },
+    {
+      "id": "F4.02",
+      "binding": "actual-product-entry"
+    },
+    {
+      "id": "F4.03",
+      "binding": "actual-product-entry"
+    },
+    {
+      "id": "F4.04",
+      "binding": "planned-caller-binding-gate"
+    },
+    {
+      "id": "F4.05",
+      "binding": "planned-caller-binding-gate"
+    },
+    {
+      "id": "F4.06",
+      "binding": "planned-caller-binding-gate"
+    },
+    {
+      "id": "F5.01",
+      "binding": "actual-product-entry"
+    },
+    {
+      "id": "F5.02",
+      "binding": "actual-product-entry"
+    },
+    {
+      "id": "F5.03",
+      "binding": "cli-syntax-only"
+    },
+    {
+      "id": "F5.04",
+      "binding": "planned-caller-binding-gate"
+    },
+    {
+      "id": "F5.05",
+      "binding": "planned-caller-binding-gate"
+    },
+    {
+      "id": "F5.06",
+      "binding": "planned-caller-binding-gate"
+    },
+    {
+      "id": "F5.07",
+      "binding": "planned-caller-binding-gate"
+    },
+    {
+      "id": "F4.07",
+      "binding": "new-record/actual-target-contract; native lifecycle binding remains gate"
+    },
+    {
+      "id": "F5.08",
+      "binding": "new-record/actual-target-contract; native lifecycle binding remains gate"
+    },
+    {
+      "id": "F5.09",
+      "binding": "new-record/actual-target-contract; native lifecycle binding remains gate"
+    },
+    {
+      "id": "F5.10",
+      "binding": "actual-classifier"
+    }
+  ],
+  "source_sha256": {
+    "hooks/spawn_child.sh": "383c677c17a143ecd37c915828e386b5143cf0fafe2af716ae7e2815a9d53949",
+    "bin/agentstack-resume": "2d22ada6af7cddf731b17540707c58be541e0cce0a49bc8613541f3a2cc6377a",
+    "bin/lib/runtime_client.py": "3377897287ec4cb08f691efb60aa73c1244dbcc226620cc11fefc09fee49e402",
+    "bin/lib/runtime_delivery.py": "f2f9ed8cf447a5e81e2477b99971dc7438cb8240a70897fa5d9d81cfc46cb161",
+    "bin/lib/runtime_operator.py": "da799323a5beb38248923ace7bc441790c771747465153dc8d9f77df7906d381",
+    "dashboard/global_backend.py": "b0c7dd57a9058fd9184a5ff8c0a2e5e168766524d9a762eac3ee79ee77d3a004",
+    "dashboard/server.py": "5a645adee52f8f48283b749d42327e060a4543a7f8190da637078307579f9907",
+    "bin/lib/runtime_target.py": "f32e5eadd995fa11175afe219f22c50d95cd58f2341c61ed3f2ff34e3ced66d9",
+    "bin/lib/runtime_observation.py": "ed8e99a60c78b1925476456567fe201bb2227bf2ae4e1e96e046cac7a327d1c8",
+    "hooks/cleanup-child-agent.sh": "93d3716b397f6ada99b1358552f7ba025d0762d2d8158436343adb9c3f9a75b1",
+    "hooks/release-all-reservations.sh": "7a9ddb17e8cc93ff569f8423be5c59d703a2658b657c7567a73207415b12af54",
+    "hooks/monitor_child_agent.sh": "b10b17e8c47d027c76b53256813153b20ca71394fd75cfc09a352f130032627c",
+    "hooks/claude-initial-task-status.py": "a2185dee9abf6995db3d13742918d807f7a564bf5b3ac54073dfe33c3aad3f71",
+    "hooks/codex-initial-task-status.py": "1b9cb18cb6b7ef712975608432cf04854fad7e733ce138edc9cc5ee778b031ed",
+    "skills/delegate/SKILL.md": "6a607d74a1c6cfed40c60576d45495719740de22359246c2608d113f65de814f",
+    "bin/agentstack-gemini-child-mail": "f757883b0f11748943ce59f8845436ca6b7031b8380ed6043aca03036f064081",
+    "bin/lib/global-client-loader.sh": "412353f5fe27cfbfaa81db3819c43688e5ca0d6947cdd635f0ff61f29c4cfe15",
+    "bin/agentstack-persistent": "c3d2f4627d3764f1bf7e89f9a239a88c09c8ef9dff49877c4d43cd18ef178efb",
+    "hooks/spawn_gemini_child.sh": "6fb9118c2a2e38f5501412f2e979ed4d6285c0180b0a1e458ec7a9453af6291e",
+    "hooks/spawn_gemini_preregistered.sh": "3ecab1b0fe3ba6a0086c47c53d96c5f92ef34930b1cbb45623d503c8a8c56a26",
+    "hooks/watch_agent_mail_signals.sh": "bc3f55df03c4a947cf267e2b224256315e3cb2e12dffbfcc6050ac50452cd103",
+    "bin/lib/legacy-tmux-consumer.sh": "eaadb6c3ab5054ddbc95981818f4d2e3b5e6186576b7dbba7618f24fb31210ea",
+    "bin/lib/runtime_tmux_target_contract.json": "5999cabc0cac3ad71dce389e5331a798d0ffe1c77a3b96fd23bc702e2e5f20b7"
+  },
+  "r3_boundary": {
+    "commit": "13b2bdb",
+    "file": "docs/r3-local-profile-fixtures.md",
+    "sha256": "020f89245be66eb4e7cfdcd76cd3b1cfc5001499b46edc86a13062c367762083",
+    "scope": "R3 resolves LaunchIntent/profile/auth/model/tools; Tb preserves its argv/env/cwd and post-exec outcome."
+  },
+  "reason_delta": {
+    "canonical_name_conflict": {
+      "reason": "TMUX_SESSION_NAME_CONFLICT",
+      "kind": "target",
+      "destination": "existing runtime_target_contract reason table; no second classifier"
+    }
+  },
+  "record_deltas": {
+    "launch_execution": {
+      "type": "object",
+      "properties": {
+        "runner": {
+          "type": "object",
+          "properties": {
+            "pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "process_start": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "pid",
+            "process_start"
+          ],
+          "additionalProperties": false
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "const": "pending"
+                },
+                "returncode": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "state",
+                "returncode"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "const": "exited"
+                },
+                "returncode": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "state",
+                "returncode"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "const": "not-started"
+                },
+                "returncode": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "state",
+                "returncode"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "const": "unknown"
+                },
+                "returncode": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "state",
+                "returncode"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "runner",
+        "outcome"
+      ],
+      "additionalProperties": false
+    },
+    "live_semantics": "pid/process_start = provider. pane base = launch.execution.runner. No runner copy in live; legacy exec receipts retain old meaning.",
+    "launch_termination": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "enum": [
+            "report-required",
+            "report-pending",
+            "report-confirmed",
+            "report-not-required",
+            "report-rejected",
+            "cleanup-pending",
+            "ended",
+            "unknown"
+          ]
+        },
+        "report_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "receipt_ref": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "request_id": {
+                  "type": "string"
+                },
+                "message_id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "mutation_revision": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "request_id",
+                "message_id",
+                "mutation_revision"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "report_kind",
+        "receipt_ref"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "retry_cases": {
+    "absent": {
+      "phase": "gated",
+      "created": 1,
+      "gate_submissions": 0,
+      "reason": null
+    },
+    "owned": {
+      "phase": "running",
+      "created": 0,
+      "gate_submissions": 0,
+      "reason": null
+    },
+    "foreign": {
+      "phase": "gated",
+      "created": 0,
+      "gate_submissions": 0,
+      "reason": "TMUX_SESSION_NAME_CONFLICT"
+    },
+    "pid-change": {
+      "phase": "gated",
+      "created": 0,
+      "gate_submissions": 0,
+      "reason": "TMUX_TARGET_CHANGED"
+    },
+    "nonce-change": {
+      "phase": "gated",
+      "created": 0,
+      "gate_submissions": 0,
+      "reason": "LAUNCH_RECEIPT_MISMATCH"
+    }
+  },
+  "classifier_vectors": [
+    {
+      "id": "global-parent-success",
+      "recipients": [
+        7
+      ],
+      "result": "success",
+      "expected": "reported",
+      "context": "global"
+    },
+    {
+      "id": "global-other-success",
+      "recipients": [
+        8
+      ],
+      "result": "success",
+      "expected": "ended_without_report",
+      "context": "global"
+    },
+    {
+      "id": "global-parent-error",
+      "recipients": [
+        7
+      ],
+      "result": "error",
+      "expected": "report_failed",
+      "context": "global"
+    },
+    {
+      "id": "global-parent-unknown",
+      "recipients": [
+        7
+      ],
+      "result": "unknown",
+      "expected": "report_failed",
+      "context": "global"
+    },
+    {
+      "id": "legacy-parent-success",
+      "legacy_to": [
+        "ParentFixture"
+      ],
+      "result": "success",
+      "expected": "reported",
+      "context": "legacy"
+    },
+    {
+      "id": "global-old-name-rejected",
+      "context": "global",
+      "legacy_to": [
+        "ParentFixture"
+      ],
+      "result": "success",
+      "expected": "ended_without_report"
+    },
+    {
+      "id": "global-string-id-rejected",
+      "context": "global",
+      "recipients": [
+        "7"
+      ],
+      "result": "success",
+      "expected": "ended_without_report"
+    },
+    {
+      "id": "global-bool-id-rejected",
+      "context": "global",
+      "recipients": [
+        true
+      ],
+      "result": "success",
+      "expected": "ended_without_report"
+    },
+    {
+      "id": "global-mismatched-receipt-rejected",
+      "context": "global",
+      "recipients": [
+        7
+      ],
+      "receipt_recipients": [
+        8
+      ],
+      "result": "success",
+      "expected": "report_failed"
+    }
+  ],
+  "recovery_cases": {
+    "report-pending-provider-and-runner-absent": {
+      "purpose": "lifecycle",
+      "next": "replay-end",
+      "provider_outcome": "exited",
+      "principal": "parent"
+    },
+    "retired-cleanup-local-incomplete": {
+      "purpose": "lifecycle",
+      "next": "replay-end",
+      "provider_outcome": "exited",
+      "principal": "parent"
+    },
+    "pre-sessionstart-real-exit": {
+      "purpose": "lifecycle",
+      "next": "replay-end",
+      "provider_outcome": "exited",
+      "principal": "operator"
+    },
+    "pre-sessionstart-runner-killed": {
+      "purpose": "lifecycle",
+      "next": "launch-resolve",
+      "provider_outcome": "unknown",
+      "principal": "operator"
+    }
+  },
+  "role_cases": [
+    {
+      "id": "both-live",
+      "runner": "alive",
+      "provider": "alive",
+      "valid_parentage": true,
+      "purpose": "runtime",
+      "signal_pid": 400
+    },
+    {
+      "id": "provider-exited",
+      "runner": "alive",
+      "provider": "absent",
+      "valid_parentage": false,
+      "purpose": "lifecycle",
+      "signal_pid": null
+    },
+    {
+      "id": "runner-exited",
+      "runner": "absent",
+      "provider": "alive",
+      "valid_parentage": false,
+      "purpose": "unknown",
+      "signal_pid": null
+    },
+    {
+      "id": "provider-reused",
+      "runner": "alive",
+      "provider": "reused",
+      "valid_parentage": true,
+      "purpose": "unknown",
+      "signal_pid": null
+    },
+    {
+      "id": "runner-reused",
+      "runner": "reused",
+      "provider": "alive",
+      "valid_parentage": true,
+      "purpose": "unknown",
+      "signal_pid": null
+    },
+    {
+      "id": "different-pane",
+      "runner": "alive",
+      "provider": "alive",
+      "valid_parentage": false,
+      "purpose": "unknown",
+      "signal_pid": null
+    },
+    {
+      "id": "wrong-parent",
+      "runner": "alive",
+      "provider": "alive",
+      "valid_parentage": false,
+      "purpose": "unknown",
+      "signal_pid": null
+    }
+  ],
+  "target_contract_delta": {
+    "source": "bin/lib/runtime_tmux_target_contract.json",
+    "schema_atom_additions": {
+      "lifecycle": {
+        "type": "object",
+        "properties": {
+          "phase": {
+            "enum": [
+              "report-required",
+              "report-pending",
+              "report-confirmed",
+              "report-not-required",
+              "report-rejected",
+              "cleanup-pending",
+              "ended",
+              "unknown"
+            ]
+          },
+          "provider_outcome": {
+            "enum": [
+              "pending",
+              "exited",
+              "not-started",
+              "unknown"
+            ]
+          },
+          "pending_sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "[0-9a-f]{64}"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "phase",
+          "provider_outcome",
+          "pending_sha256"
+        ],
+        "additionalProperties": false
+      },
+      "lifecycle_next_operations": {
+        "type": "array",
+        "items": {
+          "enum": [
+            "target",
+            "replay-end",
+            "launch-resolve",
+            "resolve-mutation"
+          ]
+        },
+        "uniqueItems": true
+      },
+      "lifecycle_readiness": {
+        "const": {
+          "state": "unknown",
+          "input_empty": null,
+          "context_used_percent": null
+        }
+      }
+    },
+    "target_variants": [
+      {
+        "inherit_kind": "standalone-process",
+        "properties": {
+          "pid": {
+            "const": null
+          },
+          "process_start": {
+            "const": null
+          },
+          "transport": {
+            "const": null
+          },
+          "socket_path": {
+            "const": null
+          },
+          "server_pid": {
+            "const": null
+          },
+          "session_id": {
+            "const": null
+          },
+          "session_name": {
+            "const": null
+          },
+          "window_id": {
+            "const": null
+          },
+          "pane_id": {
+            "const": null
+          },
+          "kind": {
+            "const": "launch-lifecycle"
+          },
+          "launch": {
+            "inherit_kind": "launched-tmux",
+            "property": "launch"
+          }
+        }
+      },
+      {
+        "inherit_kind": "standalone-process",
+        "properties": {
+          "pid": {
+            "const": null
+          },
+          "process_start": {
+            "const": null
+          },
+          "transport": {
+            "const": null
+          },
+          "socket_path": {
+            "const": null
+          },
+          "server_pid": {
+            "const": null
+          },
+          "session_id": {
+            "const": null
+          },
+          "session_name": {
+            "const": null
+          },
+          "window_id": {
+            "const": null
+          },
+          "pane_id": {
+            "const": null
+          },
+          "kind": {
+            "const": "standalone-lifecycle"
+          }
+        }
+      }
+    ],
+    "result_additions": {
+      "target.lifecycle.success": {
+        "inherit_result": "target.success",
+        "append_fields": [
+          "lifecycle"
+        ],
+        "atom_overrides": {
+          "target": "lifecycle_target",
+          "next_operations": "lifecycle_next_operations",
+          "compact_readiness": "lifecycle_readiness"
+        }
+      }
+    },
+    "dispatch": "target CLI uses target.lifecycle.success only for the two lifecycle kinds. Existing runtime target.success unchanged. No capture/attach/compact/end signal admission from lifecycle variants."
+  }
+}

@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Turn phone access on or off and read its state (see dashboard/mobile_settings.py).
+
+    agentstack-mobile status            # JSON: settings, launchd job, Tailscale (read-only)
+    agentstack-mobile apply < change    # JSON change from the cockpit Settings panel
+    agentstack-mobile off               # stop the reader and turn phone access off
+
+Installed beside ~/.agentstack/dashboard, which holds the implementation.
+"""
+from pathlib import Path
+import sys
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / 'dashboard'))
+import mobile_settings  # noqa: E402
+
+raise SystemExit(mobile_settings.main())

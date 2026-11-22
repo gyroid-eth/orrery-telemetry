@@ -79,7 +79,7 @@ def test_exit_leaves_mail_alone_while_the_identity_lives_elsewhere(resume, mail,
     assert (runtime / f"agent_token_{NAME}").read_text() == TOKEN
 
 
-@pytest.mark.parametrize("case", ["own_pane", "closed_pane", "dead_lease", "no_tmux"])
+@pytest.mark.parametrize("case", ["own_pane", "closed_pane", "dead_lease", "empty_inventory"])
 def test_exit_retires_when_no_other_copy_is_alive(resume, mail, tmp_path, case):
     runtime, registration, launches, calls = resume
     assert server.do_resume(NAME, open_terminal=False)["ok"]
@@ -93,8 +93,86 @@ def test_exit_retires_when_no_other_copy_is_alive(resume, mail, tmp_path, case):
         lease.parent.mkdir(parents=True)
         lease.write_text("")
     else:
-        env = {"FAKE_TMUX_FAIL": "1"}
+        # No other pane is a confirmed empty observation, not an unreadable
+        # server (the tmux_unreadable negative above covers that separately).
+        env = {"FAKE_TMUX_PANES": ""}
     process = run_resumed(launches, tmp_path, "exit 0\n", env=env)
     assert process.returncode == 0, process.stderr
     # Reservations are the SessionEnd hook's job; the retire-only exit never releases them.
     assert exit_calls(mail) == ["retire_agent"], mail
+
+
+@pytest.mark.parametrize("endpoint,retired", [("absent", True), ("stale", True), ("unsafe", False)])
+def test_plain_terminal_exit_classifies_actual_tmux_endpoint(resume, mail, tmp_path, endpoint, retired):
+    """Real absence retires; a socket rejected by admission keeps the row."""
+    import os
+    from pathlib import Path
+    import shutil
+    import socket
+    import tempfile
+    from test_claude_resume_mail import ROOT
+    binary = shutil.which('tmux')
+    if binary is None:
+        pytest.skip('tmux unavailable')
+    runtime, registration, _, _ = resume
+    with tempfile.TemporaryDirectory(prefix='cleanup-endpoint-', dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as directory:
+        base = Path(directory).resolve()
+        parent = base / ('tmux-' + str(os.getuid()))
+        parent.mkdir(mode=0o700)
+        path = parent / 'default'
+        if endpoint != 'absent':
+            with socket.socket(socket.AF_UNIX) as stream:
+                stream.bind(str(path))
+                path.chmod(0o600 if endpoint == 'stale' else 0o666)
+        env = {**os.environ, 'TMUX_TMPDIR': str(base), 'AGENTSTACK_RUNTIME_DIR': str(runtime),
+               'AGENTSTACK_HOOKS_DIR': str(ROOT / 'hooks'), 'AGENTSTACK_RUNTIME_MODE': 'legacy',
+               'AGENTSTACK_MAIL_HTTP_BEARER_MODE': 'disabled', 'AGENTSTACK_CLEANUP_RETIRE_ONLY': '1', 'PROJECT_KEY': registration['project_key']}
+        env.pop('TMUX', None)
+        env.pop('TMUX_PANE', None)
+        result = subprocess.run(['/bin/bash', str(ROOT / 'hooks/cleanup-child-agent.sh'), NAME],
+                                env=env, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        assert exit_calls(mail) == (['retire_agent'] if retired else []), (result.stderr, mail)
+        assert (runtime / f'agent_token_{NAME}').read_text() == TOKEN
+
+
+def test_permission_denied_endpoint_retains_identity_and_signal_inventory(resume, mail, tmp_path, monkeypatch):
+    """A real EACCES is unknown for both cleanup and signal pruning."""
+    import os
+    from pathlib import Path
+    import shutil
+    import socket
+    import tempfile
+    from dashboard import mail_signals
+    from test_claude_resume_mail import ROOT
+    if shutil.which('tmux') is None:
+        pytest.skip('tmux unavailable')
+    runtime, registration, _, _ = resume
+    token = runtime / f'agent_token_{NAME}'
+    before = token.read_bytes()
+    with tempfile.TemporaryDirectory(prefix='denied-endpoint-', dir='/private/tmp' if Path('/private/tmp').is_dir() else None) as directory:
+        base = Path(directory).resolve()
+        parent = base / ('tmux-' + str(os.getuid()))
+        parent.mkdir(mode=0o700)
+        path = parent / 'default'
+        with socket.socket(socket.AF_UNIX) as stream:
+            stream.bind(str(path))
+            path.chmod(0o600)
+            monkeypatch.setenv('TMUX_TMPDIR', str(base))
+            monkeypatch.delenv('TMUX', raising=False)
+            monkeypatch.delenv('TMUX_PANE', raising=False)
+            env = {**os.environ, 'AGENTSTACK_RUNTIME_DIR': str(runtime),
+                   'AGENTSTACK_HOOKS_DIR': str(ROOT / 'hooks'), 'AGENTSTACK_RUNTIME_MODE': 'legacy',
+                   'AGENTSTACK_MAIL_HTTP_BEARER_MODE': 'disabled', 'AGENTSTACK_CLEANUP_RETIRE_ONLY': '1',
+                   'PROJECT_KEY': registration['project_key']}
+            parent.chmod(0o000)
+            try:
+                with pytest.raises(PermissionError):
+                    os.lstat(path)
+                sessions = mail_signals.session_names()
+                result = subprocess.run(['/bin/bash', str(ROOT / 'hooks/cleanup-child-agent.sh'), NAME],
+                                        env=env, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+                assert result.returncode == 0, result.stderr
+                assert (sessions, exit_calls(mail), token.read_bytes()) == (None, [], before), (sessions, mail, result.stderr)
+            finally:
+                parent.chmod(0o700)

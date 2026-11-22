@@ -1,0 +1,1284 @@
+{
+  "operator_read_wire": {
+    "schema_derivation": {
+      "source": "packages/agentstack_mail/fixtures/global-server-s2b.json",
+      "rule": "Generate messages_<tool> arguments from that tool input minus exactly the auth/ignored envelope listed here. Generate response data from exact tool output. All $refs belong to each schema document root; materialized fixture below is generated, not separately maintained. No contract_ref keyword passed to validator.",
+      "strip_input_keys": [
+        "agent_id",
+        "agent_name",
+        "authority_epoch",
+        "candidate_generation",
+        "expected_credential_generation",
+        "expected_server_instance_id",
+        "format",
+        "project_key",
+        "registration_token"
+      ],
+      "tool_limits": {
+        "roster": 200,
+        "search_messages": "limit 1..100",
+        "summarize_thread": "HTTP limit maps to per_thread_limit 1..100; no limit field passed to tool",
+        "fetch_topic": "limit 1..100",
+        "activity": 100,
+        "edge_messages": 100
+      },
+      "compiler": "Resolve local $ref against its own request/response document before common schema_contract.validate_schema_definition. Drop $defs after expansion; no runtime $ref keyword extension. Materialized nullable types are converted to existing anyOf syntax. Same compiler used by fixture and product."
+    },
+    "request_template": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "action": {
+          "const": "ui_read"
+        },
+        "expected_server_instance_id": {
+          "type": "string"
+        },
+        "candidate_generation": {
+          "type": "string"
+        },
+        "authority_epoch": {
+          "type": "string"
+        },
+        "query": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/roster"
+            },
+            {
+              "$ref": "#/$defs/health"
+            },
+            {
+              "$ref": "#/$defs/message"
+            },
+            {
+              "$ref": "#/$defs/activity"
+            },
+            {
+              "$ref": "#/$defs/edge_messages"
+            },
+            {
+              "$ref": "#/$defs/messages_search_messages"
+            },
+            {
+              "$ref": "#/$defs/messages_summarize_thread"
+            },
+            {
+              "$ref": "#/$defs/messages_fetch_topic"
+            },
+            {
+              "$ref": "#/$defs/resolve_name"
+            }
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "action",
+        "expected_server_instance_id",
+        "candidate_generation",
+        "authority_epoch",
+        "query"
+      ],
+      "$defs": {
+        "roster": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "roster"
+            },
+            "before_agent_id": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          "required": [
+            "kind",
+            "before_agent_id",
+            "limit"
+          ]
+        },
+        "health": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "health"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        "message": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "message"
+            },
+            "view_as_agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "message_id": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "kind",
+            "view_as_agent_id",
+            "message_id"
+          ]
+        },
+        "activity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "activity"
+            },
+            "view_as_agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "cursor": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target_agent_id": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9223372036854775807
+            },
+            "after_id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9223372036854775807
+            }
+          },
+          "required": [
+            "kind",
+            "view_as_agent_id",
+            "limit",
+            "cursor"
+          ]
+        },
+        "edge_messages": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "edge_messages"
+            },
+            "view_as_agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "a_agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "b_agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "cursor": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "view_as_agent_id",
+            "a_agent_id",
+            "b_agent_id",
+            "limit",
+            "cursor"
+          ],
+          "additionalProperties": false
+        },
+        "messages_search_messages": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "messages"
+            },
+            "view_as_agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "tool": {
+              "const": "search_messages"
+            },
+            "arguments": {}
+          },
+          "required": [
+            "kind",
+            "view_as_agent_id",
+            "tool",
+            "arguments"
+          ],
+          "additionalProperties": false
+        },
+        "messages_summarize_thread": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "messages"
+            },
+            "view_as_agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "tool": {
+              "const": "summarize_thread"
+            },
+            "arguments": {}
+          },
+          "required": [
+            "kind",
+            "view_as_agent_id",
+            "tool",
+            "arguments"
+          ],
+          "additionalProperties": false
+        },
+        "messages_fetch_topic": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "messages"
+            },
+            "view_as_agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "tool": {
+              "const": "fetch_topic"
+            },
+            "arguments": {}
+          },
+          "required": [
+            "kind",
+            "view_as_agent_id",
+            "tool",
+            "arguments"
+          ],
+          "additionalProperties": false
+        },
+        "resolve_name": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "resolve_name"
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "response_template": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "binding": {
+              "type": "object",
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string"
+                },
+                "candidate_generation": {
+                  "type": "string"
+                },
+                "authority_epoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "additionalProperties": false
+            },
+            "as_of_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "query_kind": {
+              "const": "messages"
+            },
+            "data": {
+              "$ref": "#/$defs/search_messages"
+            },
+            "tool": {
+              "const": "search_messages"
+            }
+          },
+          "required": [
+            "ok",
+            "binding",
+            "as_of_revision",
+            "query_kind",
+            "data",
+            "tool"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "binding": {
+              "type": "object",
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string"
+                },
+                "candidate_generation": {
+                  "type": "string"
+                },
+                "authority_epoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "additionalProperties": false
+            },
+            "as_of_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "query_kind": {
+              "const": "messages"
+            },
+            "data": {
+              "$ref": "#/$defs/fetch_topic"
+            },
+            "tool": {
+              "const": "fetch_topic"
+            }
+          },
+          "required": [
+            "ok",
+            "binding",
+            "as_of_revision",
+            "query_kind",
+            "data",
+            "tool"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "binding": {
+              "type": "object",
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string"
+                },
+                "candidate_generation": {
+                  "type": "string"
+                },
+                "authority_epoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "additionalProperties": false
+            },
+            "as_of_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "query_kind": {
+              "const": "messages"
+            },
+            "data": {
+              "$ref": "#/$defs/summarize_thread"
+            },
+            "tool": {
+              "const": "summarize_thread"
+            }
+          },
+          "required": [
+            "ok",
+            "binding",
+            "as_of_revision",
+            "query_kind",
+            "data",
+            "tool"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "binding": {
+              "type": "object",
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string"
+                },
+                "candidate_generation": {
+                  "type": "string"
+                },
+                "authority_epoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "additionalProperties": false
+            },
+            "as_of_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "query_kind": {
+              "const": "roster"
+            },
+            "data": {
+              "$ref": "#/$defs/roster"
+            }
+          },
+          "required": [
+            "ok",
+            "binding",
+            "as_of_revision",
+            "query_kind",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "binding": {
+              "type": "object",
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string"
+                },
+                "candidate_generation": {
+                  "type": "string"
+                },
+                "authority_epoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "additionalProperties": false
+            },
+            "as_of_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "query_kind": {
+              "const": "resolve_name"
+            },
+            "data": {
+              "$ref": "#/$defs/resolve_name"
+            }
+          },
+          "required": [
+            "ok",
+            "binding",
+            "as_of_revision",
+            "query_kind",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "binding": {
+              "type": "object",
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string"
+                },
+                "candidate_generation": {
+                  "type": "string"
+                },
+                "authority_epoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "additionalProperties": false
+            },
+            "as_of_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "query_kind": {
+              "const": "message"
+            },
+            "data": {
+              "$ref": "#/$defs/message"
+            }
+          },
+          "required": [
+            "ok",
+            "binding",
+            "as_of_revision",
+            "query_kind",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "binding": {
+              "type": "object",
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string"
+                },
+                "candidate_generation": {
+                  "type": "string"
+                },
+                "authority_epoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "additionalProperties": false
+            },
+            "as_of_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "query_kind": {
+              "const": "activity"
+            },
+            "data": {
+              "$ref": "#/$defs/activity"
+            }
+          },
+          "required": [
+            "ok",
+            "binding",
+            "as_of_revision",
+            "query_kind",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "binding": {
+              "type": "object",
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string"
+                },
+                "candidate_generation": {
+                  "type": "string"
+                },
+                "authority_epoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "additionalProperties": false
+            },
+            "as_of_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "query_kind": {
+              "const": "edge_messages"
+            },
+            "data": {
+              "$ref": "#/$defs/edge_messages"
+            }
+          },
+          "required": [
+            "ok",
+            "binding",
+            "as_of_revision",
+            "query_kind",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "binding": {
+              "type": "object",
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string"
+                },
+                "candidate_generation": {
+                  "type": "string"
+                },
+                "authority_epoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "additionalProperties": false
+            },
+            "as_of_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "query_kind": {
+              "const": "health"
+            },
+            "data": {
+              "$ref": "#/$defs/health"
+            }
+          },
+          "required": [
+            "ok",
+            "binding",
+            "as_of_revision",
+            "query_kind",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": false
+            },
+            "error": {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "reason",
+                "retryable"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "ok",
+            "error"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "$defs": {
+        "search_messages": {},
+        "fetch_topic": {},
+        "summarize_thread": {},
+        "roster": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "agent_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "program": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "task_description": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "last_active_ts": {
+                    "type": "string"
+                  },
+                  "retired_at": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "agent_id",
+                  "name",
+                  "program",
+                  "model",
+                  "task_description",
+                  "last_active_ts",
+                  "retired_at"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "next_before_agent_id": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "items",
+            "next_before_agent_id"
+          ],
+          "additionalProperties": false
+        },
+        "resolve_name": {
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "agent_id"
+          ],
+          "additionalProperties": false
+        },
+        "message": {},
+        "activity": {},
+        "edge_messages": {},
+        "health": {
+          "type": "object",
+          "properties": {
+            "server_ready": {
+              "type": "boolean"
+            },
+            "signal": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "enum": [
+                    "ok",
+                    "degraded",
+                    "red",
+                    "unknown"
+                  ]
+                },
+                "pending_count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "oldest_pending_age_seconds": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "status",
+                "pending_count",
+                "oldest_pending_age_seconds"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "server_ready",
+            "signal"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "spawn_status_schema": {
+    "type": "object",
+    "properties": {
+      "ok": {
+        "const": true
+      },
+      "client_name": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+        "maxLength": 64
+      },
+      "stage": {
+        "enum": [
+          "absent",
+          "root_only",
+          "registration_pending",
+          "registration_saved",
+          "registered_unconfigured",
+          "configured",
+          "launch_present",
+          "unavailable"
+        ]
+      },
+      "agent_id": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "minimum": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "next_operations": {
+        "type": "array",
+        "items": {
+          "enum": [
+            "prepare-root",
+            "replay-registration",
+            "finalize-registration",
+            "configure-provider",
+            "launch",
+            "launch-status",
+            "registration-abandon",
+            "repair-local-state"
+          ]
+        }
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "launch_status": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "launch_id": {
+                "type": "string"
+              },
+              "state_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "phase": {
+                "type": "string"
+              },
+              "operator_required": {
+                "type": "boolean"
+              },
+              "next_operations": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "launch_id",
+              "state_sha256",
+              "phase",
+              "operator_required",
+              "next_operations"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "registration_sha256": {
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "ok",
+      "client_name",
+      "stage",
+      "agent_id",
+      "next_operations",
+      "reason",
+      "launch_status",
+      "registration_sha256"
+    ],
+    "additionalProperties": false
+  },
+  "client_lookup_schema": {
+    "type": "object",
+    "properties": {
+      "ok": {
+        "type": "boolean",
+        "const": true
+      },
+      "matches": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "client_name": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+              "maxLength": 64
+            },
+            "agent_id": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "stage": {
+              "enum": [
+                "absent",
+                "root_only",
+                "registration_pending",
+                "registration_saved",
+                "registered_unconfigured",
+                "configured",
+                "launch_present",
+                "unavailable"
+              ]
+            }
+          },
+          "required": [
+            "client_name",
+            "agent_id",
+            "stage"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "name_agent_id": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "minimum": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "diagnostics": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "client_name": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "client_name",
+            "reason"
+          ]
+        }
+      }
+    },
+    "required": [
+      "ok",
+      "matches",
+      "name_agent_id",
+      "diagnostics"
+    ],
+    "additionalProperties": false
+  },
+  "stage_capabilities": [
+    {
+      "stage": "PR6a",
+      "telemetry": {
+        "api": 15,
+        "operator_http_admission": 1,
+        "ui_read": 1,
+        "global_spawn": 1,
+        "instruction_migration": 0,
+        "global_dashboard_ui": 0
+      },
+      "cockpit": {
+        "global_mail_bridge": 0
+      },
+      "activation": false
+    },
+    {
+      "stage": "PR6a+PR6b",
+      "telemetry": {
+        "api": 15,
+        "operator_http_admission": 1,
+        "ui_read": 1,
+        "global_spawn": 1,
+        "instruction_migration": 1,
+        "global_dashboard_ui": 1
+      },
+      "cockpit": {
+        "global_mail_bridge": 0
+      },
+      "activation": false
+    },
+    {
+      "stage": "PR6a+PR6b+PR6c",
+      "telemetry": {
+        "api": 15,
+        "operator_http_admission": 1,
+        "ui_read": 1,
+        "global_spawn": 1,
+        "instruction_migration": 1,
+        "global_dashboard_ui": 1
+      },
+      "cockpit": {
+        "telemetry_api": 15,
+        "operator_http_admission": 1,
+        "global_mail_bridge": 1,
+        "instruction_migration": 1
+      },
+      "activation": false
+    }
+  ],
+  "http_spawn_schema": {
+    "type": "object",
+    "properties": {
+      "client_name": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+        "maxLength": 64
+      },
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "program": {
+        "enum": [
+          "claude-code",
+          "codex",
+          "antigravity",
+          "daemon"
+        ]
+      },
+      "model": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "cwd": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      },
+      "expected_digest": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    },
+    "required": [
+      "client_name",
+      "name",
+      "program",
+      "model",
+      "cwd"
+    ],
+    "additionalProperties": false
+  },
+  "http_resume_schema": {
+    "type": "object",
+    "properties": {
+      "client_name": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+        "maxLength": 64
+      },
+      "open": {
+        "type": "boolean",
+        "default": true
+      },
+      "prepare_only": {
+        "type": "boolean",
+        "default": false
+      }
+    },
+    "required": [
+      "client_name"
+    ],
+    "additionalProperties": false
+  },
+  "http_registration_abandon_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "client_name": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+        "maxLength": 64
+      },
+      "expected_digest": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    },
+    "required": [
+      "client_name",
+      "expected_digest"
+    ]
+  }
+}

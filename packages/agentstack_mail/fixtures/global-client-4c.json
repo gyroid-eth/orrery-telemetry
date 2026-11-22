@@ -1,0 +1,2270 @@
+{
+  "activation_enabled": false,
+  "default_runtime": "legacy",
+  "removed_or_not_added": [
+    "global側にnotify-state.jsonとdelivery.sqlite3を並行稼働させない",
+    "global IdentityStoreにtoken/nameのコピーを増やさない",
+    "任意のcredential/profile/signal/launch pathを受け取らない",
+    "schema2→schema5のin-place upgrade/切替/旧形式自動import無し",
+    "newroot全体scan/exec unknownの自動再起動無し。通知unknownは決定どおり期限/cooldown後at-least-once再配送",
+    "Mail DB本体/sidecarのfile open/hash/copy無し"
+  ],
+  "single_authority": {
+    "owner": "RuntimeClientのcredentialとcontextのみ。global proxy/bridge/daemonは同関数を呼び別auth/schema処理を複製しない。",
+    "message_completion": "S2b message_recipients.notification_fact/PENDINGだけ。localintentは外部操作中断の証拠/再送schedule、通知完了の第二正本ではない。DBread/ack/imported-consumedを常に優先。",
+    "delivery_key": [
+      "mail_instance_id",
+      "agent_id",
+      "message_id"
+    ],
+    "execution": "launch.jsonはlaunch固有値とphase/明示解消だけ。window=context、PID/pane/process_start=4b live-sessions＋launch_id、route=agent→client_name。child-stateからexecution値を削除。現在値の第二コピーを作らない。",
+    "migration": "PR3/S2bのdelivery/import proof/terminalresolutionは既存freshprepareの規則。旧leased/dead_letterを勝手にpendingへ戻さない。今回runtimeは保管DBを開かない。",
+    "concurrency": "A=agent directory flock(SH/EX) → C=固定client operation_mutex(EX) → M=message directory flock(EX) → U=既存mutation_mutex(必要なmutationのみ) → F=既存authority fence。必要なものだけ取得、逆順無し。同agent/client/messageを持ったまま別agent/client/messageへ渡らない（route変更で旧/新clientが必要ならclient_name順でCを取得）。serverはclient lockを取らない。 prepareはA→C→M下でcurrentとcaptured/phaseを検査しattempt/期限をfsync、全lockを解放して外部操作へ。wait/exec/tmux/hook flush/bot reply中はCを保持しない。confirm/failureは再びA→C→M、slot/attempt/current/launchをreloadしてlate callbackを検査。別messageもpreflight/commitの短区間だけC直列、外部待機は並行可。"
+  },
+  "fixed_layout": {
+    "client": "4a固定clientsparent/client_nameを維持。runtime/launch.jsonだけ追加、launch.lockは追加しない。session_index/schema3とlive-sessionsは既存writerを継承。provider派生HOMEはruntime/provider-home/<provider>、proxyconfigは同dirから固定導出。 launch.jsonからwindow/binding/世代/PID/pane/provider sessionを削除。live-sessionsだけにlaunch_idを追加。",
+    "consumer": "<client_home>/global-consumer/<sha256(mail_instance_id)>/agents/<agent_id>/。route.json、directory自体flock、messages/<message_id>/intent.jsonのみ。runtime_root/clients_parentとdisjointをpreflight。全consumerが同じserver authority pathから導出し、HOME/AGENTSTACK_HOME/env/root名で別台帳を選べない。任意override無し。",
+    "route": "agent numeric directoryのroute.jsonはkind/client_nameだけ。instance/agentは固定path、launchはclientのlaunch.json、external IDはtrusted Bridgeの既存external route1つだけ。どちらにもtoken/name/project/launchをコピーしない。",
+    "validation": "root/parents disjoint、allslotrole magic/schema/owner0700files0600/nlink1/nosymlink。newfilesはO_EXCL temp→fsync→rename。clientrootは固定親/名前、consumerrootは固定numeric/hashsegment。全root scan無し。 local新增schemaは全枝をreference展開して検証。対象slotはrole固定、unknown fileを他roleへ書き換えない。",
+    "preflight": "launch/coordinator output_planを一箇所。全派生slot・provider/route/cwd/tools/capability確認を登録/network/tmux前。postnetwork diskfailureは同intent/pendingを保持しexplicitfinalize/retryへ。 登録は既存4bのpreflight/pendingの1operation。DBがIDを返した後のlaunchは別operationとしてcentralroute/IDslotをpreflightし、bind-window/tmux前に確定する。 新launch専用lockを追加せず既存operation_lockを正本にする。",
+    "old_files": "released legacy token/profile/session schema2はLEGACY_FILE_REQUIRES_IMPORT、bytes不変。globalへの自動取込はPR7。新globalruntimeは旧notify-state/secretstore/delivery.sqlite3を読まない。"
+  },
+  "local_schemas": {
+    "launch_intent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "orrery-global-launch-intent-v1"
+        },
+        "launch_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "receipt_nonce": {
+          "type": "string",
+          "minLength": 1
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "planned",
+            "gated",
+            "exec-unknown",
+            "running",
+            "ended",
+            "cancelled",
+            "abandoned"
+          ]
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex",
+            "gemini",
+            "daemon"
+          ]
+        },
+        "launch_kind": {
+          "type": "string",
+          "enum": [
+            "startup",
+            "resume"
+          ]
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operator_resolution": {
+          "anyOf": [
+            {
+              "schema_ref": "operator_resolution"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tmux_transport": {
+          "const": "global-instance"
+        },
+        "execution": {
+          "type": "object",
+          "properties": {
+            "runner": {
+              "type": "object",
+              "properties": {
+                "pid": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "process_start": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "pid",
+                "process_start"
+              ],
+              "additionalProperties": false
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "pending"
+                    },
+                    "returncode": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "returncode"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "exited"
+                    },
+                    "returncode": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "returncode"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "not-started"
+                    },
+                    "returncode": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "returncode"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "unknown"
+                    },
+                    "returncode": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "returncode"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "runner",
+            "outcome"
+          ],
+          "additionalProperties": false
+        },
+        "termination": {
+          "type": "object",
+          "properties": {
+            "phase": {
+              "enum": [
+                "report-required",
+                "report-pending",
+                "report-confirmed",
+                "report-not-required",
+                "report-rejected",
+                "cleanup-pending",
+                "ended",
+                "unknown"
+              ]
+            },
+            "report_kind": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "receipt_ref": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "message_id": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "mutation_revision": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "message_id",
+                    "mutation_revision"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "phase",
+            "report_kind",
+            "receipt_ref"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "kind",
+        "launch_id",
+        "receipt_nonce",
+        "phase",
+        "provider",
+        "launch_kind",
+        "cwd",
+        "task_sha256",
+        "error",
+        "operator_resolution"
+      ],
+      "additionalProperties": false
+    },
+    "runtime_route": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "orrery-global-runtime-route-v1"
+        },
+        "client_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+        }
+      },
+      "required": [
+        "kind",
+        "client_name"
+      ],
+      "additionalProperties": false
+    },
+    "delivery_intent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "orrery-global-delivery-intent-v1"
+        },
+        "expected_server_instance_id": {
+          "type": "string"
+        },
+        "candidate_generation": {
+          "type": "string"
+        },
+        "authority_epoch": {
+          "type": "string"
+        },
+        "agent_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "credential_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "message_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "launch_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "attempt_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "planned",
+            "external-unknown",
+            "external-confirmed",
+            "callback-pending",
+            "blocked"
+          ]
+        },
+        "attempt_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "next_attempt_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "channel": {
+          "type": "string",
+          "enum": [
+            "tmux",
+            "claude-hook",
+            "codex-hook",
+            "codex-app",
+            "persistent",
+            "daemon"
+          ]
+        },
+        "duplicate_possible": {
+          "type": "boolean"
+        },
+        "attempt_expires_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operator_resolution": {
+          "anyOf": [
+            {
+              "schema_ref": "operator_resolution"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notify_min_importance": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "expected_server_instance_id",
+        "candidate_generation",
+        "authority_epoch",
+        "agent_id",
+        "credential_generation",
+        "message_id",
+        "launch_id",
+        "attempt_id",
+        "phase",
+        "attempt_count",
+        "next_attempt_at",
+        "error",
+        "channel",
+        "duplicate_possible",
+        "attempt_expires_at",
+        "operator_resolution"
+      ],
+      "additionalProperties": false
+    },
+    "persistent_execution": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          }
+        },
+        "interaction": {
+          "type": "string",
+          "enum": [
+            "interactive",
+            "headless"
+          ]
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "argv",
+        "interaction",
+        "cwd"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "local_operator_wire": {
+    "transport": "既存register.sh/runtime_client CLIへ追加。pathはclient_configと固定IDsから導出、rawtokenをargv/stdoutに載せない。resolveはoperator明示のみ、model/bootstrapから自動実行しない。",
+    "operations": {
+      "launch": {
+        "request_schema": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex",
+                "gemini",
+                "daemon"
+              ]
+            },
+            "launch_kind": {
+              "type": "string",
+              "enum": [
+                "startup",
+                "resume"
+              ]
+            },
+            "provider_session_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "detached": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "provider",
+            "launch_kind",
+            "detached"
+          ],
+          "additionalProperties": false
+        },
+        "response_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "launch_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "prepared": {
+              "const": true
+            },
+            "runtime_ready": {
+              "type": "boolean"
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "planned",
+                "gated",
+                "exec-unknown",
+                "running",
+                "ended",
+                "cancelled",
+                "abandoned"
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "ok",
+            "launch_id",
+            "prepared",
+            "runtime_ready",
+            "phase",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "launch-status": {
+        "request_schema": {
+          "type": "object",
+          "properties": {
+            "launch_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          "required": [
+            "launch_id"
+          ],
+          "additionalProperties": false
+        },
+        "response_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "state_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "operator_required": {
+              "type": "boolean"
+            },
+            "next_operations": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "current": {
+              "schema_ref": "status_current"
+            },
+            "remote_owner_verified": {
+              "type": "boolean"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "launch_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "planned",
+                "gated",
+                "exec-unknown",
+                "running",
+                "ended",
+                "cancelled",
+                "abandoned"
+              ]
+            },
+            "runtime_ready": {
+              "type": "boolean"
+            },
+            "observation": {
+              "type": "string",
+              "enum": [
+                "verified-running",
+                "verified-ended",
+                "verified-not-executed",
+                "unknown"
+              ]
+            },
+            "operator_resolution": {
+              "anyOf": [
+                {
+                  "schema_ref": "operator_resolution"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "ok",
+            "state_sha256",
+            "operator_required",
+            "next_operations",
+            "current",
+            "remote_owner_verified",
+            "reason",
+            "launch_id",
+            "phase",
+            "runtime_ready",
+            "observation",
+            "operator_resolution"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "launch-retry": {
+        "request_schema": {
+          "type": "object",
+          "properties": {
+            "launch_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "expected_state_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "launch_id",
+            "expected_state_sha256"
+          ],
+          "additionalProperties": false
+        },
+        "response_ref": "launch.response_schema"
+      },
+      "launch-cancel": {
+        "request_schema": {
+          "type": "object",
+          "properties": {
+            "launch_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "expected_state_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "confirm": {
+              "const": true
+            }
+          },
+          "required": [
+            "launch_id",
+            "expected_state_sha256",
+            "confirm"
+          ],
+          "additionalProperties": false
+        },
+        "response_ref": "launch.response_schema"
+      },
+      "resolve-delivery": {
+        "request_schema": {
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "expected_state_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "resolution": {
+              "schema_ref": "operator_resolution"
+            },
+            "confirm": {
+              "const": true
+            }
+          },
+          "required": [
+            "message_id",
+            "expected_state_sha256",
+            "resolution",
+            "confirm"
+          ],
+          "additionalProperties": false
+        },
+        "response_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "state_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "operator_required": {
+              "type": "boolean"
+            },
+            "next_operations": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "current": {
+              "schema_ref": "status_current"
+            },
+            "remote_owner_verified": {
+              "type": "boolean"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "message_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "planned",
+                "external-unknown",
+                "external-confirmed",
+                "callback-pending",
+                "blocked"
+              ]
+            },
+            "captured": {
+              "type": "object",
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string"
+                },
+                "candidate_generation": {
+                  "type": "string"
+                },
+                "authority_epoch": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "credential_generation": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "launch_id": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                }
+              },
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch",
+                "agent_id",
+                "credential_generation",
+                "launch_id"
+              ],
+              "additionalProperties": false
+            },
+            "attempt_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "attempt_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "attempt_expires_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "next_attempt_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "duplicate_possible": {
+              "type": "boolean"
+            },
+            "operator_resolution": {
+              "anyOf": [
+                {
+                  "schema_ref": "operator_resolution"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "ok",
+            "state_sha256",
+            "operator_required",
+            "next_operations",
+            "current",
+            "remote_owner_verified",
+            "reason",
+            "message_id",
+            "phase",
+            "captured",
+            "attempt_id",
+            "attempt_count",
+            "attempt_expires_at",
+            "next_attempt_at",
+            "duplicate_possible",
+            "operator_resolution"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "delivery-status": {
+        "request_schema": {
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "message_id"
+          ],
+          "additionalProperties": false
+        },
+        "response_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "state_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "operator_required": {
+              "type": "boolean"
+            },
+            "next_operations": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "current": {
+              "schema_ref": "status_current"
+            },
+            "remote_owner_verified": {
+              "type": "boolean"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "message_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "planned",
+                "external-unknown",
+                "external-confirmed",
+                "callback-pending",
+                "blocked"
+              ]
+            },
+            "captured": {
+              "type": "object",
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string"
+                },
+                "candidate_generation": {
+                  "type": "string"
+                },
+                "authority_epoch": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "credential_generation": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "launch_id": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                }
+              },
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch",
+                "agent_id",
+                "credential_generation",
+                "launch_id"
+              ],
+              "additionalProperties": false
+            },
+            "attempt_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "attempt_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "attempt_expires_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "next_attempt_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "duplicate_possible": {
+              "type": "boolean"
+            },
+            "operator_resolution": {
+              "anyOf": [
+                {
+                  "schema_ref": "operator_resolution"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "ok",
+            "state_sha256",
+            "operator_required",
+            "next_operations",
+            "current",
+            "remote_owner_verified",
+            "reason",
+            "message_id",
+            "phase",
+            "captured",
+            "attempt_id",
+            "attempt_count",
+            "attempt_expires_at",
+            "next_attempt_at",
+            "duplicate_possible",
+            "operator_resolution"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "launch-resolve": {
+        "request_schema": {
+          "type": "object",
+          "properties": {
+            "launch_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "expected_state_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "resolution": {
+              "schema_ref": "operator_resolution"
+            },
+            "confirm": {
+              "const": true
+            }
+          },
+          "required": [
+            "launch_id",
+            "expected_state_sha256",
+            "resolution",
+            "confirm"
+          ],
+          "additionalProperties": false
+        },
+        "response_ref": "launch-status.response_schema"
+      }
+    },
+    "errors": [
+      "GLOBAL_RUNTIME_BINDING_UNAVAILABLE",
+      "ROUTE_OWNER_CONFLICT",
+      "LAUNCH_PENDING_CONFLICT",
+      "LAUNCH_OUTCOME_UNKNOWN",
+      "LAUNCH_RECEIPT_MISMATCH",
+      "DELIVERY_OUTCOME_UNKNOWN",
+      "DELIVERY_ATTEMPTS_EXHAUSTED",
+      "DELIVERY_ROUTE_CHANGED",
+      "CREDENTIAL_GENERATION_MISMATCH",
+      "RESOLUTION_DIGEST_MISMATCH"
+    ],
+    "error_schema": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": false
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "ok",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "internal_operations": {
+      "notification-prepare": {
+        "request_schema": {
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "channel": {
+              "type": "string",
+              "enum": [
+                "tmux",
+                "claude-hook",
+                "codex-hook",
+                "codex-app",
+                "persistent",
+                "daemon"
+              ]
+            }
+          },
+          "required": [
+            "message_id",
+            "channel"
+          ],
+          "additionalProperties": false
+        },
+        "response_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "message_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "noop",
+                "handoff",
+                "retry-wait",
+                "blocked"
+              ]
+            },
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "notification": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "duplicate_possible": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok",
+            "message_id",
+            "state",
+            "attempt_id",
+            "notification",
+            "reason",
+            "duplicate_possible"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "notification-confirm": {
+        "request_schema": {
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "attempt_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "tmux-submitted",
+                "hook-flushed",
+                "provider-accepted",
+                "bot-replied"
+              ]
+            }
+          },
+          "required": [
+            "message_id",
+            "attempt_id",
+            "outcome"
+          ],
+          "additionalProperties": false
+        },
+        "response_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "message_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "callback-pending",
+                "complete"
+              ]
+            }
+          },
+          "required": [
+            "ok",
+            "message_id",
+            "state"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "notification-failure": {
+        "request_schema": {
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "attempt_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "known-not-submitted",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "message_id",
+            "attempt_id",
+            "outcome"
+          ],
+          "additionalProperties": false
+        },
+        "response_schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "message_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "retry-planned",
+                "blocked"
+              ]
+            }
+          },
+          "required": [
+            "ok",
+            "message_id",
+            "state"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "internal_semantics": "prepareはA→C→M下でcurrentとcaptured/phaseを検査しattempt/期限をfsync、全lockを解放して外部操作へ。wait/exec/tmux/hook flush/bot reply中はCを保持しない。confirm/failureは再びA→C→M、slot/attempt/current/launchをreloadしてlate callbackを検査。別messageもpreflight/commitの短区間だけC直列、外部待機は並行可。 prepareはhandoff前admission不可ならattemptを増やさずretry-wait、handoffを許可する直前にattemptを増やす。post-handoff unknownはduplicate_possible、旧attempt callbackを新attemptの成功にしない。",
+    "snapshot_contract": "配送status/resolveはAでroute先clientを固定→C→Mで現在値とintentを読む。launch-status/resolveはCで同subjectの現在値とintentを読む。remote whoisは補助観測でlocal hashに入れず、remote DBとの原子snapshotとは言わない。 intent_sha256/expected_intent_sha256を廃止しstate_sha256/expected_state_sha256の1組に置換。SHA256(canonical JSON({version:1, subject_kind, subject_id, intent, context_sha256, credential_sha256, launch_sha256, live_sessions_sha256}))。*_sha256は同C下の固定role JSONをcanonical化してhashした値（launch無しはnull、liveは同launchに属するslot名順配列）。preimage/component hash/tokenは出力・別ファイル保存しない。statusは最終state_sha256だけ返し、resolve/retry/cancelは同lock下で再計算する。phaseが同じでもcontext/credential/window/launch/livenessの更新ならdigest拒否。remote観測時刻/ネットワーク状態はhash対象外。 Mail停止中もimmutable layout/role admission→同C下のlocal statusとlocal abandonへ到達。remote_owner_verified=falseとreasonを表示しreadyは立てない。",
+    "resolution_contract": "単一定義operator_resolutionを入力/保存双方で展開し検証。actionは入口ごとに許可集合を絞る（launch=abandon/confirmed-running/confirmed-ended、delivery=retry-at-least-once/confirm-external-completed/abandon-without-consuming）、違えばARGUMENTS_UNSUPPORTEDで不変。同intentに最後の明示解消だけを保存、第二journal無し。operator_evidenceは4096文字以内、token/本文を要求しない。",
+    "launch_resolution": "exec-unknownだけ: abandonは証明不能でもphase=abandonedでこの起動operationを終える（processはkillせずready=false）。confirmed-runningは正規nonce/provider receipt/live-session証拠を同mutexで確認できる場合だけrunning/readyへ、自己申告だけではready不可。confirmed-endedはoperatorが外部で終了を確認した旨をevidenceで明示しphase=ended、該当launchのlive-sessionだけended扱いへ。どれも自動retire/予約解放/新exec無し。abandoned後に別launchを始めるには既存livenessが全て終了と確認できるか、operator confirmed-endedで明示終了を記録する必要がある（abandoned→endedも同resolve可）。別session liveは保護。解消はoperation mutex下で同launch.jsonへresolution/phaseを確定し、confirmed-endedの該当live-session ended更新まで同writerで行う。途中disk失敗はstatusの新digestから同resolutionを再提示して残りを確定（endedでも未反映の同解消は許可）。別launchを開始する前にこの未完了解消を先に完了させる。古いnonce/hookはterminal phaseをrunningへ戻せない。",
+    "notification_warning": "Mailに依存しない既存agentstack-doctorへwarning追加。正本intentからexec-unknown/abandoned（未終了確認）/delivery blocked/fencedを読み、1回のdoctor出力で各対象を1回だけ、短いreasonとlaunch-status又はdelivery-status→resolveのコマンドを示す。watcher/provider起動結果もoperator-requiredになった遷移で同案内をstderr/logに1回出す。警告済み台帳/警告Mail/別status cacheは作らない。再doctor実行時は未解消warningを再表示。token/本文/evidence本文は出さない。"
+  },
+  "proxy_contract": {
+    "global_local_tools": [
+      "bootstrap",
+      "runtime_status"
+    ],
+    "server_tool_allowlist": [
+      "acknowledge_message",
+      "check_file_reservations",
+      "fetch_inbox",
+      "fetch_summary",
+      "fetch_topic",
+      "file_reservation_paths",
+      "list_contacts",
+      "list_file_reservations",
+      "macro_contact_handshake",
+      "macro_file_reservation_cycle",
+      "macro_start_session",
+      "mark_message_read",
+      "refresh_registration",
+      "release_file_reservations",
+      "renew_file_reservations",
+      "reply_message",
+      "request_contact",
+      "resolve_agent_identity",
+      "respond_contact",
+      "search_messages",
+      "send_message",
+      "set_contact_policy",
+      "summarize_thread",
+      "touch_window_identity",
+      "verify_window_identity"
+    ],
+    "server_control_excluded": [
+      "bind_window_identity",
+      "ensure_project",
+      "health_check",
+      "register_agent",
+      "retire_agent",
+      "unretire_agent",
+      "whois"
+    ],
+    "schema_generation": "global bound schemasはserver fixtureの一つのschemaからowner/binding/ignoredscope fieldsを除去して生成。新window/controlはmodelへ公開しない。localbootstrap/runtime_statusは別local schema、外部sessionIDをcaller identityと同一視しない。",
+    "legacy": "旧narrowtool名/args/resultはlegacy接続で保持。globalでは旧to=name/relativepathを黙って変換せず既存typedCLIか明示resolverを案内。既存reserve_files等aliasを保持するなら単一dispatch mapからserver schemaを導出し意味の同じ二本のtoolをglobal公開しない。",
+    "app_registration": "明示globalBridge templateを持つ場合だけtrusted新external IDからhash由来client_nameのfreshrootを作成。登録/再送はRuntimeClient.create/register pending、tokenはclientrootだけ。既存externalrouteは同rootへ、別parent/owner再採用は拒否。nativeprovider subagent hookが親確認前に来ればretryspoolのみ。 外部routeにlaunch_idを保存しない。agent routeとexternal routeは別indexの参照でありowner/現在launchのコピーを持たない。",
+    "direct": "launcherは固定client_configと起動operation IDをprocessへ渡す。proxyはcanonical launch.jsonのid/nonceと4b trusted live-session receiptを確認、whois/owner/windowはcontextから読む。processがcaptureしたid/nonceは古いprocessの防止であり、別の永続current stateではない。",
+    "output": "server/client共通schema_contractでinput/output/preimageとUUIDを検証。不適合responseでpendingを消さない。runtime_statusは非秘密binding/ready/phaseだけ。"
+  },
+  "notification_contract": {
+    "hint_source": "S2b signals/agents/<id>/<mid>.signal、kind/version/instance/candidate/epoch/recipient/messageのみ。16KiB上限、private regular/nlink1/no symlink、固定dirfdからopen。serverのhintには本文を追加しない。",
+    "selection": "signal→owner pending_only+exact IDs fetch→S2b message projectionで確認。stale/purged/read/ack/importedconsumedならexternal0。本文は必要時のこのowner readだけ、visibility/BCCはserver正本へ委譲。",
+    "handoff": "single formatterでfrom/subject/importance/body_snippetを安全な1lineへ。complete-body/preview/no-body文言は旧notification規則を維持。長文metadata/read budgetはS2b MESSAGE_RESPONSE_TOO_LARGEで小limit/bodyfalseへ、全文fallbackをsignalで偽装しない。",
+    "success": "tmux submit結果、hook stdout flush、app provideraccepted、persistentのbot reply確認がadapter別の実完了境界。モデルが読んだ/応答した保証とは分ける。confirmed記録後のみ管理completion。",
+    "unknown": "execとは区別。注入/persistent external-unknownは同intentのchannel lease/backoff後、duplicate_possible=trueで自動retry。Appは最大5、tmux系は旧どおり無制限。binding/owner変更は自動repinせずfenced→operator、late attempt callback拒否。",
+    "filter": "importance/coalesce/rate/backoffは既存設定のdefault/boundsを保持し共通consumerへ。filtered/blocked/absentでnotification_factを消費しない。",
+    "health": "topstatus=serverreadiness、signal.status=DB通知projection。local operator-requiredはstatus readonlyと既存doctor warning、worker stderr/log（当該遷移1回）で案内し、Mailでの通知成功に依存しない。UI読取はPR6。",
+    "retry_policy": "channelごとの旧の値を保持、表retry_channelsを正本にする。handoff前のbare shell/capture timeout/session不在/disabled/route未確定はattempt_countを増やさずsignal eventで再確認、event無しは旧2秒poll（救済scanは旧30秒Mac/2秒Linux）（disabled中は外部/owner通信をskip）。上限に数えるのはhandoff後のfailure/unknownだけ。unknown時はmax(当該channel lease期限, backoffのnext_attempt_at)まで待つ。known failureではleaseを閉じ当該backoff後。confirmed後はcompletion再送だけでattemptを増やさない。",
+    "channel_policy_selection": "route_kind=codex-appならhook channel名によらず既存App WakePolicy、その他のtmux/standalone hook/persistent/daemonは旧watcher policy。selectorを共通consumer1関数にし各adapterが上限を別実装しない。"
+  },
+  "await_contract": {
+    "pure_read": true,
+    "legacy_exit_codes": {
+      "match": 0,
+      "all_transport_unreachable": 1,
+      "auth_binding_usage": 2,
+      "timeout_after_any_reachable": 124,
+      "cancelled": 125
+    },
+    "selection": "global --agent-name省略可、指定時は表示確認だけで宛先選択に使わない。不一致はCALLER_NAME_MISMATCH。--fromはresolve_agent_identityでsenderIDへ一回解決、--from-id追加は同じselectorのtypedalias。--after-idはglobalmessageID。",
+    "pagination": "--after-id未指定は旧どおり最新20件の1ページだけから最古の一致を選ぶ（過去全体へ継続しない、必須化しない）。指定時だけbefore_id降順ページをafter_id以下まで同monotonic deadline/cancel内で走査し最古一致を返す。純粋read。",
+    "result": "global stdoutはS2b共通messageprojection、legacy JSON shapeはlegacyのまま。sender名が変わってもIDfilterを保持。awaitのstdoutだけでdelivery_completed/markread/ackは呼ばない。",
+    "daemon": "wait_for_notificationも同waitprimitive、自己のsnapshot/afteridだけ更新。通知hookを届けたconsumerとwaitを同じ完了処理にしない。"
+  },
+  "state_transitions": [
+    {
+      "id": "T01",
+      "area": "mode",
+      "from": "entry",
+      "actor": "loader",
+      "operation": "selected(argv)、不正contextは拒否、Mail-disabled skipは選択後にowner読取より先",
+      "to": "legacy or global or stopped",
+      "recovery": "context無しは旧rc/stdout/stderr、globalエラーを旧へfallbackしない。modeはoperation中immutable。"
+    },
+    {
+      "id": "T02",
+      "area": "launch",
+      "from": "fresh root",
+      "actor": "parent/common helper",
+      "operation": "4b output_plan/登録pendingを確定後同name/token intentでregister",
+      "to": "registered/prepared",
+      "recovery": "HTTP前/応答喪失/token/context/metadata各保存後は4b同intent/finalize、追加row無し。"
+    },
+    {
+      "id": "T03",
+      "area": "launch",
+      "from": "prepared",
+      "actor": "launcher",
+      "operation": "capability・固定HOME/config・tools・cwd/task・全output slotsを通信前preflight、launch_id/nonceを固定launch.jsonへfsync",
+      "to": "planned",
+      "recovery": "中断はlaunch-status→同launch-id retry。意図変更は明示cancelだけ。"
+    },
+    {
+      "id": "T04",
+      "area": "launch",
+      "from": "planned/unmapped",
+      "actor": "common client",
+      "operation": "window/request UUIDを既存mutation pendingへ一度保存→bind_window_identity、同intent replay",
+      "to": "server window bound",
+      "recovery": "応答不明は同UUID replay。pendingはschema/owner/binding/requestID照合とcontext派生出力の全保存完了まで残す。"
+    },
+    {
+      "id": "T05",
+      "area": "launch",
+      "from": "window response accepted",
+      "actor": "common client",
+      "operation": "pendingのwindow応答を検証→context.identityへwindow2欄確定、credential writer/一致検査からwindowを削除",
+      "to": "window locally bound",
+      "recovery": "credential/launchにcurrent window無しでowner call成立。各保存後中断は既存pending同UUIDを再開、windowはcontextだけ。"
+    },
+    {
+      "id": "T06",
+      "area": "launch",
+      "from": "planned+window verified",
+      "actor": "launcher",
+      "operation": "同launch_id由来のtmux gate名/markerを観測、launch.jsonはphase=gatedだけ。PID/paneは正規SessionStartで既存live-sessionsへ書くまで永続コピーしない",
+      "to": "gated",
+      "recovery": "tmux応答喪失は同IDのpane/gateを観測。absentかつphase未execの証拠があれば同intent retry。unknownは止める。"
+    },
+    {
+      "id": "T07",
+      "area": "launch",
+      "from": "gated",
+      "actor": "gate wrapper",
+      "operation": "既存client operation mutex/authority/owner/windowを照合しexec-unknownをfsync、固定argvでprovider exec",
+      "to": "exec-unknown",
+      "recovery": "exec前後killは自動再exec無し。launch-statusのdigest/observation→証明不能でもlaunch-resolve abandonで終端。正規証拠ならconfirmed-running、operator外部終了確認ならconfirmed-ended。"
+    },
+    {
+      "id": "T08",
+      "area": "launch",
+      "from": "exec-unknown",
+      "actor": "trusted SessionStart/provider adapter",
+      "operation": "nonce/header/実sessionの信頼できるreceiptを既存session/live writerへ確定→launch.phase=running。routeはclient_nameだけ、relaunchで書換不要",
+      "to": "running",
+      "recovery": "各保存後killは同nonce replay、oldnonce/terminalcallback拒否。PID/paneをlaunchと比較する二重検査は不要。"
+    },
+    {
+      "id": "T09",
+      "area": "launch",
+      "from": "running",
+      "actor": "end/cleanup common",
+      "operation": "4b session livenessと共通end、他session live/unknownを保護",
+      "to": "ended or still-live",
+      "recovery": "childだけretire、standaloneは自己ACTIVE release。launch record/session receiptを勝手に削除しない。"
+    },
+    {
+      "id": "T10",
+      "area": "launch",
+      "from": "planned/gated",
+      "actor": "operator",
+      "operation": "digest付きlaunch-cancel、未execかつ所有gate/pane停止を確認",
+      "to": "cancelled",
+      "recovery": "exec-unknownはlaunch-resolveへ、runningは既存common endへ。statusからdigest取得。cancelは未execを証明できる場合だけ。"
+    },
+    {
+      "id": "T11",
+      "area": "resume",
+      "from": "retained",
+      "actor": "resume helper",
+      "operation": "同Mail ID/token/provider sessionとheaderを確認、4b resume intent→必要時unretire",
+      "to": "planned",
+      "recovery": "旧token保存前を含む4b各中断回復を継承、別identity/root採用無し。program/model無指定を上書きしない。"
+    },
+    {
+      "id": "T12",
+      "area": "proxy",
+      "from": "unbound process",
+      "actor": "trusted launcher/Bridge",
+      "operation": "固定client_name・launch_id又はBridge external routeをresolve、whois/nonce確認",
+      "to": "bound process",
+      "recovery": "route未確定ならGLOBAL_RUNTIME_BINDING_UNAVAILABLE。name/project/token pathから推測しない。"
+    },
+    {
+      "id": "T13",
+      "area": "proxy",
+      "from": "bound process",
+      "actor": "tool dispatcher",
+      "operation": "server由来bound schema→RuntimeClient.call。owner/window/contextを既存fence、processがcaptureしたlaunch id/nonceをcanonical launchへ照合",
+      "to": "same bound process",
+      "recovery": "現在window/paneを別JSON同士で比較しない。古いprocess callbackはcaptureしたoperation id/nonceで拒否。mutationは同pending。"
+    },
+    {
+      "id": "T14",
+      "area": "delivery",
+      "from": "signal observed",
+      "actor": "single coordinator",
+      "operation": "固定layout/envelope/binding/recipient ID、owner fetch pending_only+message_idsで現fact確認",
+      "to": "eligible or stale/no-op",
+      "recovery": "invalidは診断のみ。stale signal/既読/ack/imported-consumedはinjectもcompletionもしない。serverがclearする。"
+    },
+    {
+      "id": "T15",
+      "area": "delivery",
+      "from": "eligible",
+      "actor": "coordinator",
+      "operation": "A(SH)→C→M下で固定routeからcurrentをreload、pre-handoff判定。配送不能ならattempt0で待機、handoff可能時だけattempt/期限を同intentへ保存",
+      "to": "planned",
+      "recovery": "bare shell/capture timeout/session不在/disabledはsignal event/旧pollで待ち続け上限に数えない。全lock解放後外部handoff、callbackは同順で再取得。"
+    },
+    {
+      "id": "T16",
+      "area": "delivery",
+      "from": "planned",
+      "actor": "provider adapter",
+      "operation": "external-unknownをfsync、tmux exact pane paste/submit 又はhook stdout/app injection/persistent通知",
+      "to": "external-unknown",
+      "recovery": "post-handoff unknownのみattemptに数える。各channel旧lease/backoff後同intent自動retry＋duplicate_possible、App5回だけ上限、tmux無制限。"
+    },
+    {
+      "id": "T17",
+      "area": "delivery",
+      "from": "external-unknown",
+      "actor": "provider adapter",
+      "operation": "target側確認の成功（tmux submit成功、hook flush成功、persistent bot reply確認）をintentへfsync",
+      "to": "external-confirmed",
+      "recovery": "confirmed保存前killは期限/cooldown後at-least-once retry（上限以外operator0）。confirmed保存後はcompletionのみ。"
+    },
+    {
+      "id": "T18",
+      "area": "delivery",
+      "from": "external-confirmed",
+      "actor": "coordinator",
+      "operation": "captured binding/owner generation/launchが現在と一致→delivery_completed",
+      "to": "callback-pending or server consumed",
+      "recovery": "HTTP/Unixsocket応答不明は外部操作を繰り返さず同pair completionのみreplay。"
+    },
+    {
+      "id": "T19",
+      "area": "delivery",
+      "from": "callback-pending",
+      "actor": "coordinator restart",
+      "operation": "schema/digest/binding/owner照合済responseを受領",
+      "to": "intent removed",
+      "recovery": "管理completionはrecorded/already-completedで同fact。unknownならmessage purgeとして片付け、他recipientは拒否。"
+    },
+    {
+      "id": "T20",
+      "area": "delivery",
+      "from": "any attempt",
+      "actor": "authority change/recovery",
+      "operation": "callback時のcaptured candidate/epoch/credential generation拒否",
+      "to": "fenced unresolved",
+      "recovery": "自動repin無し。delivery-statusはcaptured/current/digestを同snapshotで表示、operator abandon等で解消、doctor warning。"
+    },
+    {
+      "id": "T21",
+      "area": "delivery",
+      "from": "route absent or retired/disabled",
+      "actor": "coordinator",
+      "operation": "signal保持、authority/route診断のみ",
+      "to": "pending/no dispatch",
+      "recovery": "signal event/旧pollで再確認、attempt_count不変。session不在を配送成功/削除/blockedへ変えない。REPL復帰後operator0で配送。"
+    },
+    {
+      "id": "T22",
+      "area": "delivery",
+      "from": "working/busy route",
+      "actor": "coordinator",
+      "operation": "tmux REPLは旧busy配送を保持、Appは既存hook notice/working policy",
+      "to": "pending or external-confirmed",
+      "recovery": "裸shell等handoff前不可はattempt0。busy REPL旧配送維持。post-handoffだけchannelのretry規則へ。"
+    },
+    {
+      "id": "T23",
+      "area": "delivery",
+      "from": "post-handoff failure/unknown",
+      "actor": "coordinator",
+      "operation": "各channel旧backoff/leaseで同intent retry。上限ありAppだけ5回でblocked",
+      "to": "planned later or blocked",
+      "recovery": "handoff前不可はここに入れずsignal event/旧pollで待機。tmux系は無制限。blockedはfact未消費、doctor/status→operator。"
+    },
+    {
+      "id": "T24",
+      "area": "delivery",
+      "from": "blocked/fenced",
+      "actor": "operator",
+      "operation": "delivery-statusからdigest取得→単一定義resolutionで明示retry/完了申告/abandon",
+      "to": "planned/callback-pending/blocked",
+      "recovery": "同intentへresolution保存、再起動後共通schemaで受理。unknown注入はまず自動retry、上限blockedだけoperator。binding変更後confirmはcurrentownerで歴史結果を盲目的に消費せず拒否、abandonはfact未消費。"
+    },
+    {
+      "id": "T25",
+      "area": "await",
+      "from": "waiting",
+      "actor": "CLI/daemon",
+      "operation": "after_id無しは20件1ページ、指定時だけsender ID/keysetで最古matchを選ぶ",
+      "to": "stdout match or timeout",
+      "recovery": "旧呼び方を維持。transportは同deadline retry、auth拒否exit2。read/ack/完了申告無し。"
+    },
+    {
+      "id": "T26",
+      "area": "mode",
+      "from": "operation captured global",
+      "actor": "wrapper restart/change",
+      "operation": "selectedとauthorityを再確認、不一致なら停止",
+      "to": "fenced",
+      "recovery": "envを旧に戻しても起動済globalworkerはlegacyへ移らない。actualcutoverはPR7。"
+    },
+    {
+      "id": "T27",
+      "area": "launch",
+      "from": "exec-unknown",
+      "actor": "operator",
+      "operation": "launch-statusのdigest＋resolution abandon、証明不能でも明示確認",
+      "to": "abandoned",
+      "recovery": "新exec/kill/retire/release無し。正規終了を確認した後だけconfirmed-ended又はcommon endへ。現routeはclient参照のまま、ready=false。"
+    },
+    {
+      "id": "T28",
+      "area": "launch",
+      "from": "exec-unknown or abandoned",
+      "actor": "operator",
+      "operation": "同digestで正規receipt confirmed-running（exec-unknownのみ）又は外部終了の明示confirmed-ended",
+      "to": "running or ended",
+      "recovery": "runningは信頼できる正規証拠必須。endedはoperator明示申告。別sessionを終了扱いにしない。resolutionのdisk保存失敗は同intentの同digest/currentphaseから再検証。"
+    },
+    {
+      "id": "T29",
+      "area": "delivery",
+      "from": "external-unknown expired",
+      "actor": "coordinator restart",
+      "operation": "A→C→M下で当該channel期限/backoff確認、handoff可否を再確認しattempt更新＋duplicate_possible",
+      "to": "external-unknown or blocked",
+      "recovery": "handoff前不可ならattempt増加0で待ち続ける。tmux無制限、App上限5。confirmedへ移った場合はcompletionだけ。"
+    },
+    {
+      "id": "T30",
+      "area": "diagnostic",
+      "from": "operator-required",
+      "actor": "doctor/worker",
+      "operation": "同intent readonly status＋案内をdoctorの1出力内1件/worker遷移1回",
+      "to": "same state",
+      "recovery": "警告配達にMailを使わず、警告済み台帳を増やさない。状態解除後は次doctorで消える。"
+    }
+  ],
+  "acceptance_cases": [
+    {
+      "id": "A01",
+      "group": "mode",
+      "input": "context無し/disabledの旧hook実入力、fake Python、旧partial/stub runtime",
+      "expected": "masterとrc/stdout/stderr/session index一致。context無しはPython起動0",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A02",
+      "group": "mode",
+      "input": "explicit/implicit/broken context、旧env/name/project/token pathを残す",
+      "expected": "canonical selected1/admission1。global失敗で旧routingへ戻らない",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A03",
+      "group": "delivery",
+      "input": "same message IDを別instance、改名前後sameagent、別agent",
+      "expected": "key=(instance,agent,message)、取り違え/terminalからpendingへの再生成無し",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A04",
+      "group": "delivery",
+      "input": "read/ack/imported-consumed＋残留signal",
+      "expected": "pending-only readは空、inject0・新通知時刻0",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A05",
+      "group": "delivery",
+      "input": "signalだけ改竄/ID不存在/他recipient/binding mismatch",
+      "expected": "owner APIのみが可視情報を返す。外部注入0、第三者ID/message本文をlogへ出さない",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A06",
+      "group": "delivery",
+      "input": "signalが消えた/増えた、fswatch missed Linux2s scan",
+      "expected": "DBが正本、active signal再生成とperiodic救済。directoryの追加でも取りこぼさない",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A07",
+      "group": "delivery",
+      "input": "既定/明示importance filterと unknown importance",
+      "expected": "旧rankを保持。filterでDB fact/dirtyを消さず後の明示設定変更で配送可",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A08",
+      "group": "delivery",
+      "input": "同stablepairをwatcher/App/daemon同時観測、hook handoff中に再prepare",
+      "expected": "flock＋同intent attempt期限で並行副作用1。中断後の期限満了再試行はduplicate_possible=true、別lease/成功台帳無し",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A09",
+      "group": "delivery",
+      "input": "client/rootが同agentへ異なるrouteを発行",
+      "expected": "live/unknown既存routeを別rootへ横取りしない、固定ROUTE_OWNER_CONFLICT",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A10",
+      "group": "delivery",
+      "input": "capturedowner generation0、recoverで1へ、latecallback",
+      "expected": "server側expected generationをTX内照合、完了fact更新0。epoch/candidate変更も同じ",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A11",
+      "group": "delivery",
+      "input": "外部confirmed→completion応答喪失→再起動",
+      "expected": "外部injectは1回、completion replayだけ。DBfactは同timestamp",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A12",
+      "group": "delivery",
+      "input": "planned/unknown/confirmed/callback各保存後kill、advance cooldown/lease clock",
+      "expected": "unknown注入は各channel lease/backoff満了前0、満了後同intent再注入・operator0、duplicate_possible。Appだけ上限5。confirmed後はcompletionのみ",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A13",
+      "group": "delivery",
+      "input": "delivery-status→digest→blocked解消、途中attempt更新、wrongdigest",
+      "expected": "同mutex snapshot state_sha256を取得、status→resolve間current更新でもdigest拒否・bytes/server不変。abandon未消費、明示retryはduplicate_possible。",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A14",
+      "group": "delivery",
+      "input": "tmux busy REPL、bare shell、session不在、disabled",
+      "expected": "busy通知互換、裸shell/不在/disabledはinject0。live宛未配送をredから隠さない",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A15",
+      "group": "delivery",
+      "input": "同tmux名でpane置換、異なるlaunch nonce/正規receipt",
+      "expected": "paneの正本live-sessionsと実paneのみ確認、windowはcontextのみ。別session注入0、重複pane/window欄無し",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A16",
+      "group": "delivery",
+      "input": "paste/submit timeout/SIGKILL/SIGSTOP→lease満了、bracketed paste",
+      "expected": "旧paste-buffer -p/C-m保持。結果不明は30秒cooldownかつlease後に自動再注入、duplicate_possible、上限までoperator0",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A17",
+      "group": "delivery",
+      "input": "persistent通知受信→reply前kill、reply送信応答喪失、lease前後scan",
+      "expected": "lease前二重worker0、満了後同reply UUID intent再送、二重reply row0、確認後だけcompletion",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A18",
+      "group": "delivery",
+      "input": "CodexApp working/waiting/dormant/blocked、subagent",
+      "expected": "旧再帰wake抑止・rate/coalesce/backoffを共通workerへ。subagentcoldwake未対応を成功にしない",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A19",
+      "group": "delivery",
+      "input": "Codex hook stdout broken pipe/flush前後kill",
+      "expected": "完了申告無し、期限/cooldown後同intent再handoff、duplicate_possible。owner正本context、上限だけoperator",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A20",
+      "group": "delivery",
+      "input": "purge競合、unknown message completion、known foreignrecipient",
+      "expected": "unknownは固定response、他ownerは全拒否、signalclientunlink無し",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A21",
+      "group": "launch",
+      "input": "register HTTP前/応答喪失/token/context/metadata保存後kill",
+      "expected": "既存4b同intent/finalizeで同ID/同token、row1つ、foreigncredential拒否",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A22",
+      "group": "launch",
+      "input": "prepared→windowrequest/response/context各保存後kill",
+      "expected": "同UUIDwindow1行、mutationpendingはprojection確定まで保持し明示replayで復旧",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A23",
+      "group": "launch",
+      "input": "exec-unknown後正規hook永久不在・PID観測unknown",
+      "expected": "launch-status→digest→abandonでterminal、ready=false/二重exec0。wrongdigest不変、confirmed-runningは正規証拠無し拒否、confirmed-endedは明示確認で終了",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A24",
+      "group": "launch",
+      "input": "standaloneをchildへ転用、childの別parent/name/tools/task変更",
+      "expected": "4b不変条件を保持し登録/起動前拒否",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A25",
+      "group": "launch",
+      "input": "旧session receiptのprovider headerが別、codex/codex-cli aliases",
+      "expected": "verified resumeだけ同MailID/token、programspelling保持、foreignresume拒否",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A26",
+      "group": "launch",
+      "input": "古いnonce callback、同ID別session live/psunknown、relaunch route不変",
+      "expected": "launch phase/operation IDと正規live receiptのみ照合、routeへlaunchコピー無し。共通endは別session予約を保持",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A27",
+      "group": "launch",
+      "input": "Claude/Codex/Gemini/daemonの実entry＋stubprovider",
+      "expected": "固定HOME/proxy config/argvにtoken無し、runtime_readyはverifiedreceipt後だけ",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A28",
+      "group": "launch",
+      "input": "tools/mail-only/embedded task/shell metachar/newlines",
+      "expected": "4btoolsselection正本、taskファイルhash一致、shell展開無し。mailtaskは同UUIDで1通",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A29",
+      "group": "window",
+      "input": "新uuid再送、同uuid他owner、owner0世代、expiredmapping",
+      "expected": "新規1行/他owner拒否/generation0受理、verify期限前不ready、touchだけの延命は単調",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A30",
+      "group": "proxy",
+      "input": "direct contextとBridgeexternalroute、任意name/project/tokenfields",
+      "expected": "bound toolはcallerfields非公開、第三者bootstrap/route差替え拒否",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A31",
+      "group": "proxy",
+      "input": "新global allowlistとS2b/S2c出力schema、invalidresponse",
+      "expected": "same schema_contractでinput/output検証、badresponseでpending保持、UUID競合も保持",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A32",
+      "group": "proxy",
+      "input": "旧numeric thread reply、名前付き旧宛先、cwdの違う相対予約",
+      "expected": "reply_toへ既存resolver、name宛先は要更新、absolutepath既存normalizer、scopeでrouteしない",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A33",
+      "group": "await",
+      "input": "1001通＋after_id指定で20件外match、未指定で古い同sender数千通",
+      "expected": "指定時はkeyset最古after_id。未指定は最新20件だけの最古match、API1ページ/周、read/ack/clear0",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A34",
+      "group": "await",
+      "input": "一時transportoutage/全期間outage/timeout/cancel/binding拒否",
+      "expected": "0/1/124/125/2既存semantics、同deadline。認証不能でtophealthok扱いしない",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A35",
+      "group": "storage",
+      "input": "route/launch/deliveryslotへsymlink/hardlink/任意text/SQLite、rootoverlap",
+      "expected": "全roleは自分のmagic/schemaのみ、preflight network前拒否、bytes不変",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A36",
+      "group": "storage",
+      "input": "root下1100history/provider files/130dir、sessionhistory増加",
+      "expected": "全rootscan無し、slot単位O(1)。既存固定clientsparent/nameだけ",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A37",
+      "group": "storage",
+      "input": "Mail SQLite同processconnection中安全検査",
+      "expected": "clientはmain/WAL/SHM/journalをopen/close/hash/copy0、S2cPOSIXlock回帰保持",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A38",
+      "group": "install",
+      "input": "installer全entryとcopylayout・partialmissingpayload",
+      "expected": "宣言1か所、commonpayloadhelper、missingfile preflightとfreshbytes維持",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A39",
+      "group": "test",
+      "input": "repoに.venv無し、sys.executable、HTTPhealth/profile/binding待ち",
+      "expected": "CI同環境で回帰file成功、sleep/socketexistsだけでyieldしない",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A40",
+      "group": "health",
+      "input": "signalredでも4aclientcall、unknownrouteとabsentsession",
+      "expected": "topreadinessとsignalhealth分離。globalを旧orphanpruneへ混入しない",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A41",
+      "group": "platform",
+      "input": "Unix/WSL、nativeWindowsexplicitglobal",
+      "expected": "Unix実HTTP/socket/tmuxstub。Windows固定unsupported、代替認証/lockを作らない",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A42",
+      "group": "schema",
+      "input": "launch/delivery解消resolution保存後再起動、evidence4096/4097文字・別入口action",
+      "expected": "同1定義展開validatorで保存受理、4097/誤actionはnetwork/bytes不変。第二journal無し",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A43",
+      "group": "diagnostic",
+      "input": "Mail停止中exec-unknown/blocked、doctor二回、worker反復scan",
+      "expected": "doctorは各出力1件とstatus/resolve手順、workerは同遷移1回だけ。Mail通知無し/警告済み台帳無し、解消後warning消える",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A44",
+      "group": "inventory",
+      "input": "実Gemini spawn生成argv→agentstack-gemini-child-mail report/release/retire",
+      "expected": "reportは親stableIDへ同UUID intent、release/retireは共通end/livenessを保持。旧argv/rc/stdoutはbase一致",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A45",
+      "group": "retry",
+      "input": "bare shell10分/20回→REPL、capture timeout/session不在/disabledも20回、App post-handoff failure5回",
+      "expected": "pre-handoff attempt0/blocked0/operator0、REPL復帰1回配送。tmux post-handoff6回後も30秒retry。App backoff2..300/lease900/最大5、blockedだけwarning。",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A46",
+      "group": "authority",
+      "input": "relaunchでwindow/PID/pane変更、root/providerhistory1100files",
+      "expected": "windowはcontextのみ、processはlive-sessionsのみ、routeclient_name不変。launchschemaにコピー欄を渡すと拒否。全root再帰scan無し",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A47",
+      "group": "window authority",
+      "input": "無window fresh client→bind→local_owner/whois/verify→reconnect→recover、各pending/context保存後中断",
+      "expected": "同UUID/同ID、contextだけwindow。credential/launch/profile新writerにwindowコピー無し、local_ownerはwindow比較無しで通る。server owner/window/期限検査は維持",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A48",
+      "group": "old global file",
+      "input": "旧global credential/profile/sessionにwindow有/無/不一致、contextに正規window又は無window",
+      "expected": "余分なコピーを認証/routingに使わずcontextのみ。読取はbytes不変、次の正規writerは省く。legacy/released rawtoken/schema2はimport待ちを保持",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A49",
+      "group": "lock snapshot",
+      "input": "delivery-statusのcontext読取barrierでrecover/relaunch、status後resolve前にcurrent更新",
+      "expected": "Cでwriter待機し旧/新一貫snapshot。current更新だけでもstate digest拒否、snapshotpreimageのtokenを出力しない",
+      "method": "isolated fixture"
+    },
+    {
+      "id": "A50",
+      "group": "lock ordering",
+      "input": "launch解消/late callback、別message並行handoff、trusted SessionStartを外部wait中に投入",
+      "expected": "全参加者A→C→M→U→Fの必要subsetのみ。外部待機中C未保持でhook進行、逆順/二重C取得無し。callbackは現attempt/launch再照合",
+      "method": "isolated fixture"
+    }
+  ],
+  "legacy_differences": [
+    {
+      "area": "notification",
+      "legacy": "name/project signalmetadata・permessageunlink・localsuccess",
+      "global": "stableID hint、ownerread、servercompletionだけがclear"
+    },
+    {
+      "area": "unknown external effect",
+      "legacy": "期限/失敗後retryし重複しうる",
+      "global": "通知は旧channel値のat-least-once自動retry＋duplicate_possible。tmux上限無し30秒、App5/2..300秒/lease900。pre-handoff不可はattempt0。provider lifecycle execだけunknown停止→operator終端。"
+    },
+    {
+      "area": "window",
+      "legacy": "windowuuid/name/projectの再登録",
+      "global": "ownerbind newUUID→verify/touch。Q1=A決定で追加、現時点未実装"
+    },
+    {
+      "area": "proxy",
+      "legacy": "name/projectのnarrowAPI",
+      "global": "ID/reply_to/absolutepathのboundschema、caller/token入力無し"
+    },
+    {
+      "area": "await",
+      "legacy": "from文字列・旧messageprojection",
+      "global": "senderIDへ解決、after_id無し20件1ページ・指定時keyset継続、S2bprojection/pure read"
+    },
+    {
+      "area": "launch",
+      "legacy": "旧HOME/config/token/env",
+      "global": "固定HOME/config・同launchIDgate/receipt、readyはsession確認後"
+    },
+    {
+      "area": "files",
+      "legacy": "既存token/profile/deliveryDB",
+      "global": "別globalrootだけ、released形式のimportはPR7"
+    }
+  ],
+  "schema_definitions": {
+    "operator_resolution": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "abandon",
+            "confirmed-running",
+            "confirmed-ended",
+            "retry-at-least-once",
+            "confirm-external-completed",
+            "abandon-without-consuming",
+            "mutation-abandoned"
+          ]
+        },
+        "operator_evidence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "action",
+        "operator_evidence"
+      ],
+      "additionalProperties": false
+    },
+    "status_current": {
+      "type": "object",
+      "properties": {
+        "server_instance_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "candidate_generation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authority_epoch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "agent_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "credential_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "launch_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "server_instance_id",
+        "candidate_generation",
+        "authority_epoch",
+        "agent_id",
+        "credential_generation",
+        "launch_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "schema_reference_contract": "schema_refはproposal/fixture compiler marker。schema_definitionsの単一定義を展開してから共通schema_contractで全枝admission。保存物にschema_refは入れない。operator_resolutionは入力と保存で同じ値を使い、別監査journal無し。",
+  "existing_record_deltas": {
+    "live_session": "4b live-sessions/<session_id>.jsonにlaunch_idを追加。pid/process_start/pane/session IDはtrusted SessionStartが既存record_liveの同じwriterでそこだけに確定。gate中はlaunch_id由来の一意なtmux名/markerを観測し、PID/paneの第二保存物や未確定session slotを作らない。正規hook前に証明不能ならexec-unknownとしてoperator入口へ。provider session期待値/既存Codex transcript headerは既存session binding receiptの正本を使いlaunch.jsonへコピーしない。",
+    "context": "window2欄はcontext.identityだけ。activate_credentialはcredentialにwindowを展開せず、local_ownerのwindow一致検査を削除。window pendingを確定してcontextへ書く。旧global credentialのwindowは無視し次の正規書込で省く。旧mode/released形式のimport契約は変更しない。",
+    "external_route": "CodexAppの外部session→client_nameは既存trusted Bridgeのroute recordを1つだけ保持（token/name/launch無し）。agent numeric pathのroute.jsonはagent→client_nameだけ。外部IDは認証済hook admissionから導出、current launchは当該clientのlaunch.jsonを読む。",
+    "launch_scope": "launch.jsonは起動operationのid/nonce/phase/provider/kind/cwd/task/error/明示解消だけ。現owner/bindingはcontext/credential、現在PID/paneはlive-sessions。delivery intentのcaptured binding/世代/launchは遅延callback比較の歴史値なので残す。"
+  },
+  "window_authority_changes": [
+    {
+      "where": "RuntimeClient.activate_credential (base1012〜)",
+      "remove": "identity全体をcredentialへ展開するwindow2欄",
+      "keep": "context.identityのwindow、credentialのkind/owner ID/name/世代/3binding/tokenと既存CAS・復旧順",
+      "old_file": "旧global kind credentialにwindow2欄があっても無視。contextへ逆輸入しない。次のcreate/claim/recover/finalizeの正規credential書込で省く（単なる読取で自動書換しない）"
+    },
+    {
+      "where": "RuntimeClient.local_owner (base687〜)",
+      "remove": "credential.windowとcontext.windowの一致検査",
+      "keep": "private role/magic、owner ID・世代・3binding一致、token検査、server owner認証",
+      "old_file": "余分なwindowの値/有無は認証根拠にしない。contextのwindow形式とserver verifyは残す"
+    },
+    {
+      "where": "bind_window_identity / T04/T05 / mutation pending",
+      "remove": "UUIDをlaunch.jsonへ保存という旧文",
+      "keep": "bind前のUUID/responseは既存mutation pendingのcanonical intent、応答検証・全保存完了までreplay、最後にcontextへwindow確定",
+      "old_file": "未完了の既存正規window pendingは同UUID再送、receiptの過去windowは履歴証拠。別currentコピーへ使わない"
+    },
+    {
+      "where": "save_profile / profile_operation、record_session writer",
+      "remove": "observe結果のwindowをprofile/current session projectionへ複写・そのコピーとcontextの一致検査",
+      "keep": "profile→client_config、sessionのprovider/transcript/自己owner証拠、contextから得る一時exports/statusのwindow表示",
+      "old_file": "旧global profile/sessionの余分なwindow欄は歴史値として読んでもcurrent routingへ使わない。次の通常writerは省く。legacy token/profile/schema2は従来どおりPR7 explicit import待ち"
+    },
+    {
+      "where": "context admission / call(register_agent) / observe / verify/touch",
+      "remove": "無し（正本に必要な検査）",
+      "keep": "context window pairの型、server応答とのowner/window一致、期限、nonce/launchと実sessionの対応",
+      "old_file": "context無window＋credentialだけwindowなら未mapped。credential値を採用しない。bind pending→context確定の通常入口へ"
+    }
+  ],
+  "lock_contract": {
+    "order": "A=agent directory flock(SH/EX) → C=固定client operation_mutex(EX) → M=message directory flock(EX) → U=既存mutation_mutex(必要なmutationのみ) → F=既存authority fence。必要なものだけ取得、逆順無し。同agent/client/messageを持ったまま別agent/client/messageへ渡らない（route変更で旧/新clientが必要ならclient_name順でCを取得）。serverはclient lockを取らない。",
+    "only_client_mutex": "launch.lockは追加しない。Cは既存binding非依存のoperation_lock inode1つ。public入口でimmutable layoutだけadmit→C取得→context/credential/live/launchをreload→全role検証。readerは完全construct前に同Cを取り、writer途中のcredential/contextを無関係なidentityとして拒否しない。内部locked helperへscopeを渡し、同Cを別fdで再取得しない。",
+    "handoff": "prepareはA→C→M下でcurrentとcaptured/phaseを検査しattempt/期限をfsync、全lockを解放して外部操作へ。wait/exec/tmux/hook flush/bot reply中はCを保持しない。confirm/failureは再びA→C→M、slot/attempt/current/launchをreloadしてlate callbackを検査。別messageもpreflight/commitの短区間だけC直列、外部待機は並行可。",
+    "writers": "context/credential activate/recover/finalize、launch/status/resolve、record_session/record_live/common end、profile/metadata確定はCの同scope内へ集約。既存関数がCを取っていない経路も4cで入口を集約する。Uからactivate(C)を呼ぶ順は許可せず入口でC→U、内部writerはC再取得しない。Aを必要としない自己writerはCだけを取る（後からA/Mを取らない）。",
+    "snapshots": "配送status/resolveはAでroute先clientを固定→C→Mで現在値とintentを読む。launch-status/resolveはCで同subjectの現在値とintentを読む。remote whoisは補助観測でlocal hashに入れず、remote DBとの原子snapshotとは言わない。",
+    "state_digest": "intent_sha256/expected_intent_sha256を廃止しstate_sha256/expected_state_sha256の1組に置換。SHA256(canonical JSON({version:1, subject_kind, subject_id, intent, context_sha256, credential_sha256, launch_sha256, live_sessions_sha256}))。*_sha256は同C下の固定role JSONをcanonical化してhashした値（launch無しはnull、liveは同launchに属するslot名順配列）。preimage/component hash/tokenは出力・別ファイル保存しない。statusは最終state_sha256だけ返し、resolve/retry/cancelは同lock下で再計算する。phaseが同じでもcontext/credential/window/launch/livenessの更新ならdigest拒否。remote観測時刻/ネットワーク状態はhash対象外。",
+    "old_unpublished_cli": "v1/v2は未実装なので旧digest field互換adapterは作らない。currentのコピーを固定ファイルへ足さず同正本から都度導出。"
+  },
+  "lock_order_table": [
+    {
+      "operation": "launch plan/status/retry/cancel/resolve、自己context/credential/profile/session/live/end writer",
+      "locks": "C → (U if mutation) → F if authenticated network",
+      "release": "各disk/network短操作の終わり。外部provider exec/wait前に全解放"
+    },
+    {
+      "operation": "agent route作成/変更",
+      "locks": "A(EX) → C（旧/新が必要ならname順）",
+      "release": "live/unknown旧launch保護を確認してroute確定後。CからAを取りに戻らない"
+    },
+    {
+      "operation": "delivery prepare/status/resolve",
+      "locks": "A(SH) → C → M → (U/F if needed)",
+      "release": "local snapshot/attempt/resolution保存後、handoff前に全解放"
+    },
+    {
+      "operation": "delivery confirm/failure/completion",
+      "locks": "A(SH) → C → M → F if network",
+      "release": "現attempt/captured-current検査と保存/管理要求後。bot reply等の待機は含めない"
+    },
+    {
+      "operation": "trusted SessionStart/SessionEnd hook callback",
+      "locks": "C → F if needed（既存record_live/common end）",
+      "release": "session/live/launch確定後。呼び手がholdしたCへlocked helperを渡す"
+    },
+    {
+      "operation": "doctor readonly",
+      "locks": "launch対象C、配送対象A(SH)→C→M（対象ごと独立）",
+      "release": "各対象status後。全rootの原子snapshotとは主張しない"
+    }
+  ],
+  "retry_channels": [
+    {
+      "channel": "tmux / claude-hook / codex-hook",
+      "pre_handoff": "attempt0、signal eventで再確認、event無しは旧2秒poll（救済scanは旧30秒Mac/2秒Linux）",
+      "post_handoff_backoff": "30秒固定",
+      "unknown_lease": "旧watcher HEADLESS_REPLY_TIMEOUT (1..300、既定/不正300)+30秒",
+      "max_attempts": null,
+      "source": "hooks/watch_agent_mail_signals.sh:77,92（hookは同watcher配送経路に統一）"
+    },
+    {
+      "channel": "persistent / deterministic daemon",
+      "pre_handoff": "attempt0、signal eventで再確認、event無しは旧2秒poll（救済scanは旧30秒Mac/2秒Linux）",
+      "post_handoff_backoff": "30秒固定",
+      "unknown_lease": "旧watcher HEADLESS_REPLY_TIMEOUT+30秒、bot reply待ち中は期限前重複無し",
+      "max_attempts": null,
+      "source": "watcher→agentstack-persistent-deliver既存経路"
+    },
+    {
+      "channel": "codex-app",
+      "pre_handoff": "attempt0、既存App wake poll/coalesceで再確認",
+      "post_handoff_backoff": "旧WakePolicy指数backoff 2秒から最大300秒、30秒floor無し",
+      "unknown_lease": "旧WakePolicy 900秒",
+      "max_attempts": 5,
+      "source": "WakePolicyの既定値とdaemon.wake_timing_settingsの共通AGENTSTACK_CODEX_APP_WAKE_* reader（global/旧共用）",
+      "wake_poll_seconds": 0.25,
+      "coalesce_seconds": 2,
+      "wakes_per_hour": 12,
+      "rate_limit_state": "blocked",
+      "rate_limit_dead_letter": false
+    }
+  ],
+  "kind": "orrery-global-client-4c-contract-v1",
+  "implementation_corrections": [
+    "consumer root は client_home/global-consumer へ導出し、既存 server-config.json の binding/path/isolation 一致で全 client の root を固定する。",
+    "新 window の legacy_project_id は NULL、既存 agent_id FK のみを使う。",
+    "固定 profile.json の typed execution は明示 operator configure だけで保存する。旧 persistent profile の import は PR7。",
+    "Codex の通常 launch は固定 provider HOME の承認済み plan の読取照合だけ。明示 operator configure は既存 capture_plan/apply_trust を再利用し、人の承認を必須にする。",
+    "Gemini は固定 provider HOME の .gemini/config/mcp_config.json と既存 stream renderer の init/conversation_id を使う。対話型 root は GEMINI_INTERACTIVE_RUNTIME_UNSUPPORTED、init 無しは GEMINI_SESSION_RECEIPT_UNAVAILABLE。fixture のみで実 agy 未確認。",
+    "Claude の生成 hook は編集用 matcher の予約 guard/release と、全 tool 後の通知を別 group にする。",
+    "tmux の宛先は live-sessions の PID/process_start と実 pane_pid を照合し、unknown/置換 pane は attempt を数えない。",
+    "管理delivery_completedだけは退役済みの既存recipientを受理し、exact credential generation・binding・UID・message/recipient照合を維持。公開toolと新規handoffは退役拒否。",
+    "子のtools_selectionは既存child_toolsのpolicyを固定provider HOMEへ適用し、選択不能なら拒否。mail taskは親の単一mutation intentと決定的UUIDで再送、embeddedと混同しない。",
+    "Appのwake上限は同じdelivery intentへattempt0のWAKE_RATE_LIMITEDを表示。1 rootにつき同時resumeは1つ。既存live slotのApp状態はprocess evidence更新で消さない。",
+    "operator codex-plan再実行は固定marketplaceだけ作り直す。planは毎回未承認にし、内容が同じでも改めて人の承認を必要にする単一規則。",
+    "confirmed-endedの中断は既存operator_resolutionとliveの共通判定でstatus/prepareを止め、同解消の残りだけ再実行する。新journal無し。",
+    "同owner/bindingの旧launch intentはduplicate_possibleを維持して再計画。owner/credential不一致は当該midだけblocked、明示retryでcurrentへ再束縛。hook/watch/Appはmid/root単位で例外を閉じ込める。",
+    "待機/blockedをfetch前に判定し、importance下限は同intentのnotify_min_importanceで再評価。Appは1対象につきfetch最大1回。",
+    "Claudeの生成hookは固定orrery-hooks.jsonを--settingsで渡し、providerのsettings.jsonを上書きしない。Geminiのnative mcp_config.jsonはoperation mutex下でorrery-mail entryだけCAS更新し、他key/entryは保持。破損JSONはGENERATED_CONFIG_JSON_INVALIDでbytes不変。Codexは-cの呼出し時設定だけ。",
+    "App _seenは各tickで現hint集合へ限定し、route directory消滅時も消す。",
+    "intent列挙は数字の候補名だけ。実体とpermissionと存在は既存message lock内へ一本化し、不正slotをdiagnosticsへ出して他midを継続。message lock出口で空slotをrmdirし、completion/pending無し/方針blocked削除と既存空slotの片付けを共通化。Cは削除後まで保持し、並行prepareのintentを失わない。",
+    "BELOW_MIN_IMPORTANCE/SELF_MESSAGEはoperator状態ではない。同hintが無くなったら既存reconcileでintentを削除。",
+    "旧shellの数値検証の上下限も宣言から読む。互換対象は先頭0のない10進と0/1/300/301/非数字の5境界。先頭0のtimeoutは旧shell算術が8進、globalは10進。signals directory不在時は作らず2秒pollで待つ。",
+    "dashboard API世代はserver.API_GENERATIONの1定義。実socket試験は短い専用fixture、製品の長さ拒否は維持。"
+  ]
+}

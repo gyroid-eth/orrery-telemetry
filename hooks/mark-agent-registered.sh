@@ -1,4 +1,12 @@
 #!/bin/bash
+
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader" || exit 2
+if declare -F ags_client_entry >/dev/null; then
+  if ags_client_entry record-self "$@"; then exit 0; else _ags_global_rc=$?; fi
+  [[ "$_ags_global_rc" == 125 ]] || exit "$_ags_global_rc"
+
+fi
 # mark-agent-registered.sh
 # PostToolUse hook: creates flag file after register_agent succeeds.
 # Paired with check-agent-registered.sh (PreToolUse).
@@ -221,7 +229,7 @@ if [ -n "$AGENT_NAME_VAL" ] && [ -n "$SESSION_ID" ]; then
     fi
 fi
 
-# Auto-rename tmux session and copy agent name to clipboard for Ghostty title.
+# Auto-rename the tmux session to the agent name.
 # set-ghostty-title.sh internally guards against renaming sessions that are not
 # pending-*, so re-runs on idempotent re-registration are safe no-ops.
 #

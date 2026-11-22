@@ -54,8 +54,9 @@ def _dry_run(tmp_path: pathlib.Path, *args: str) -> str:
 
 def test_explicit_checkout_project_key_does_not_write_into_the_checkout(tmp_path):
     output = _dry_run(tmp_path, "--project-key", str(ROOT))
-    assert SKIP_LINE in output
-    assert "Claude CLAUDE.md managed setup dry-run" not in output
+    assert SKIP_LINE not in output
+    assert "Claude CLAUDE.md managed setup dry-run" in output
+    assert not (ROOT / "CLAUDE.md.bak").exists()
 
 
 def test_a_real_project_key_still_gets_the_block(tmp_path):

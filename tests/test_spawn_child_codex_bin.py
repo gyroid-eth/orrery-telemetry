@@ -49,11 +49,16 @@ def _script(path: pathlib.Path, body: str) -> pathlib.Path:
 
 
 def _runner() -> str:
-    """The child PATH setup and the probe runner, as spawn_child.sh defines them."""
+    """The child PATH setup and the probe runner, as spawn_child.sh sets them up."""
     text = SPAWN.read_text(encoding="utf-8")
-    start = text.index("CODEX_CHILD_PATH_SETUP=")
-    end = text.index("CODEX_PROBE_RUNNER=run_like_codex_child\n", start) + len("CODEX_PROBE_RUNNER=run_like_codex_child\n")
-    return text[start:end]
+    marker = "codex_launch_context || exit 1\n"
+    assert marker in text, "spawn_child.sh no longer sets up the context this way"
+    return marker
+
+
+def _loader():
+    return (_extract("load_codex_launch_context") + "load_codex_launch_context || exit 1\n"
+            + f'. {shlex.quote(str(CONTEXT))}\n')
 
 
 def _resolve(tmp_path, *, path_dirs, env_bin=None, installed=None, wsl=False, lib=True, runner=True):
@@ -64,12 +69,11 @@ def _resolve(tmp_path, *, path_dirs, env_bin=None, installed=None, wsl=False, li
         (home / ".agentstack" / "env.sh").write_text(
             f"export AGENTSTACK_CODEX_BIN={shlex.quote(installed)}\n", encoding="utf-8")
     text = SPAWN.read_text(encoding="utf-8")
-    start = text.index("# Codex candidate rules, and the env.sh reader")
-    loader = text[start:text.index("codex_search_path() {", start)]
+    loader = _loader()
     script = (
         f"HOOKS_DIR={shlex.quote(str(ROOT / 'hooks') if lib else str(tmp_path / 'old-hooks'))}\n"
-        + ("CHILD_SHELL=/bin/bash\n" + _runner() if runner else "")
         + loader
+        + ("AGENTSTACK_CHILD_SHELL=/bin/bash\n" + _runner() if runner else "")
         # Stub the platform after the library is loaded; /mnt cannot exist on macOS CI.
         + ("running_under_wsl() { return 0; }\n" if wsl else "running_under_wsl() { return 1; }\n")
         + f"WSL_WINDOWS_MOUNT_ROOT={shlex.quote(str(tmp_path / 'mnt'))}\n"
@@ -155,10 +159,11 @@ def test_outside_wsl_a_path_under_mnt_is_an_ordinary_candidate(tmp_path):
     assert rc == 0 and out == str(windows)
 
 
-def test_an_older_hooks_dir_without_the_library_keeps_the_previous_rules(tmp_path):
+def test_missing_library_stops_instead_of_reimplementing_the_rules(tmp_path):
     first = _script(tmp_path / "first-bin" / "codex", BROKEN)
-    rc, out, _ = _resolve(tmp_path, path_dirs=[first.parent], lib=False)
-    assert rc == 0 and out == str(first)
+    rc, out, err = _resolve(tmp_path, path_dirs=[first.parent], lib=False)
+    assert rc == 1 and out == ""
+    assert "required launcher helper is missing" in err
 
 
 def test_the_installed_env_sh_is_read_not_sourced(tmp_path):
@@ -190,16 +195,18 @@ def test_the_probe_runs_codex_with_the_path_the_child_will_have(tmp_path):
     rc, out, err = _resolve(tmp_path, path_dirs=[])
     assert rc == 0, err
     assert out == str(codex)
-    # Probing with the launcher's PATH instead would reject it.
+    # Probing without the launcher runner still rejects it.
     rc, _, err = _resolve(tmp_path, path_dirs=[], runner=False)
     assert rc == 1 and "--version' exited with status" in err
 
 
 def test_both_codex_launches_use_the_one_path_setup():
     text = SPAWN.read_text(encoding="utf-8")
-    assert text.count("\'\"$CODEX_CHILD_PATH_SETUP\"\';") == 2
-    runner = text[text.index("run_like_codex_child() {"):text.index("CODEX_PROBE_RUNNER=run_like_codex_child")]
-    assert '"$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"' in runner
+    assert text.count("\'\"$CODEX_CHILD_PATH_SETUP_QUOTED\"\';") == 2
+    # Context assembly (CHILD_SHELL / CODEX_CHILD_PATH_SETUP / CODEX_PROBE_RUNNER,
+    # the latter naming codex_launch_runner) is codex_launch_context's job now
+    # (hooks/codex-bin.sh, #243), shared with doctor and the installer.
+    assert "codex_launch_context || exit 1" in text
     # The approval probe (--help) goes through the same runner.
     approval = text[text.index("codex_approval_flags() {"):]
     assert '${CODEX_PROBE_RUNNER:-} "$codex_bin" --help' in approval[:approval.index("\n}\n")]
@@ -224,10 +231,9 @@ def _spawn_resolution(tmp_path, *, path_dirs, installed=None, timeout=5, budget=
         (home / ".agentstack" / "env.sh").write_text(
             f"export AGENTSTACK_CODEX_BIN={shlex.quote(installed)}\n", encoding="utf-8")
     text = SPAWN.read_text(encoding="utf-8")
-    start = text.index("# Codex candidate rules, and the env.sh reader")
-    loader = text[start:text.index("codex_search_path() {", start)]
+    loader = _loader()
     script = (
-        f"HOOKS_DIR={shlex.quote(str(ROOT / 'hooks'))}\nCHILD_SHELL=/bin/bash\n" + _runner() + loader
+        f"HOOKS_DIR={shlex.quote(str(ROOT / 'hooks'))}\nAGENTSTACK_CHILD_SHELL=/bin/bash\n" + loader + _runner()
         + "running_under_wsl() { return 1; }\n"
         + f"CODEX_VERSION_TIMEOUT_SECONDS={timeout}\n"
         + (f"CODEX_PROBE_BUDGET_SECONDS={budget}\n" if budget is not None else "")
@@ -325,7 +331,7 @@ def test_the_probe_shell_has_the_guards_the_child_session_has(tmp_path):
     (home / ".bash_profile").write_text(
         '[ "$CLAUDECODE" = 1 ] && [ "$AGENTSTACK_RESERVED_IDENTITY" = 1 ] || exit 23\n', encoding="utf-8")
     codex = _script(tmp_path / "bin" / "codex", WORKS)
-    script = "CHILD_SHELL=/bin/bash\n" + _runner() + f"run_like_codex_child {shlex.quote(str(codex))} --version\n"
+    script = f'HOOKS_DIR={shlex.quote(str(ROOT / "hooks"))}\n' + _loader() + "AGENTSTACK_CHILD_SHELL=/bin/bash\n" + _runner() + f"codex_launch_runner {shlex.quote(str(codex))} --version\n"
     result = subprocess.run(["/bin/bash", "-c", script], env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
@@ -374,14 +380,18 @@ def test_model_policy_and_api_use_the_child_runner_and_selected_binary(tmp_path,
             "models": [{"slug": slug, "visibility": "list"}],
         }))
         assert models.cli_version() == tuple(map(int, version.split(".")))
-        for requested in ("", "sol"):
-            assert models.normalize_model(requested) == expected
-            assert server.do_spawn({"standalone": True, "task": "regression", "provider": "codex", "model": requested}) == {"ok": True}
-            assert specs[-1].model == expected
-            assert dict(specs[-1].launcher_env)["AGENTSTACK_CODEX_BIN"] == str(binary)
+        resolved = "gpt-6-sol" if slug == "gpt-6-sol" else expected
+        with pytest.raises(ValueError, match="no eligible sol"):
+            models.normalize_model("sol")
+        assert server.do_spawn({"standalone": True, "task": "regression", "provider": "codex", "model": ""}) == {"ok": True}
+        assert specs[-1].model == resolved
+        assert dict(specs[-1].launcher_env)["AGENTSTACK_CODEX_BIN"] == str(binary)
         result = subprocess.run([sys.executable, str(ROOT / "dashboard" / "codex_models.py"), "resolve", ""], capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout) == {"model": expected, "codex_bin": str(binary), "cli_version": version, "default_source": "cli_version"}
+        payload = json.loads(result.stdout)
+        note = payload.pop("model_note", "")
+        assert payload == {"model": resolved, "codex_bin": str(binary), "cli_version": version, "default_source": "cli_version"}
+        assert bool(note) is (resolved != models.DEFAULT_MODEL)
     # Formal generation pins remain explicit even on the older CLI.
     assert models.normalize_model("gpt-6.1-sol") == "gpt-6.1-sol"
     models._VERSION_CACHE.clear()
@@ -432,14 +442,15 @@ def test_slow_usable_cli_keeps_launcher_api_and_delegate_defaults_stable(tmp_pat
     try:
         for slug in ("gpt-6.1-sol", "gpt-6-sol", "gpt-6.1-sol"):
             (catalog / "models_cache.json").write_text(json.dumps({"fetched_at": datetime.now(timezone.utc).isoformat(), "models": [{"slug": slug, "visibility": "list"}]}))
-            for requested in ("", "sol"):
-                assert server.do_spawn({"standalone": True, "task": "work", "provider": "codex", "model": requested}) == {"ok": True}
-                assert specs[-1].model == expected
-                assert dict(specs[-1].launcher_env)["AGENTSTACK_CODEX_BIN"] == str(binary)
+            resolved = "gpt-6-sol" if slug == "gpt-6-sol" else expected
+            assert "no eligible sol" in server.do_spawn({"standalone": True, "task": "work", "provider": "codex", "model": "sol"})["error"]
+            assert server.do_spawn({"standalone": True, "task": "work", "provider": "codex", "model": ""}) == {"ok": True}
+            assert specs[-1].model == resolved
+            assert dict(specs[-1].launcher_env)["AGENTSTACK_CODEX_BIN"] == str(binary)
             # The actual launcher's normalize_codex_model calls this command
             # after prime with the selected binary; exercise that boundary.
             result = subprocess.run([sys.executable, str(ROOT / "dashboard" / "codex_models.py"), "normalize", ""], env={**os.environ, "AGENTSTACK_CODEX_BIN": selected}, capture_output=True, text=True, timeout=20)
-            assert result.returncode == 0 and result.stdout.strip() == expected, result.stderr
+            assert result.returncode == 0 and result.stdout.strip() == resolved, result.stderr
         result = subprocess.run([sys.executable, str(ROOT / "dashboard" / "codex_models.py"), "resolve", ""], capture_output=True, text=True, timeout=20)
         policy = json.loads(result.stdout)
         assert (policy["model"], policy["codex_bin"], policy["cli_version"]) == (expected, str(binary), version)
@@ -510,3 +521,13 @@ def test_dry_run_real_policy_uses_no_temporary_files(tmp_path, monkeypatch, vers
         assert sorted(tmp_path.rglob("*")) == before
     finally:
         models._VERSION_CACHE.clear()
+
+
+def test_incompatible_library_stops_before_a_candidate_is_executed(tmp_path):
+    marker = tmp_path / "executed"
+    first = _script(tmp_path / "first-bin/codex", f"touch {shlex.quote(str(marker))}\n")
+    _script(tmp_path / "old-hooks/codex-bin.sh", 'codex_launch_shell() { echo /bin/bash; }\n')
+    rc, out, err = _resolve(tmp_path, path_dirs=[first.parent], lib=False)
+    assert rc == 1 and out == ""
+    assert "launcher helper is incompatible" in err
+    assert not marker.exists()

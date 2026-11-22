@@ -1,0 +1,16 @@
+{
+  "generation_receipt": "<ABS_HERMES_GENERATION_RECEIPT>",
+  "managed_root": "<ABS_HERMES_MANAGED_ROOT>",
+  "hermes_source": "<ABS_HERMES_SOURCE>",
+  "hermes_executable": "<ABS_HERMES_EXECUTABLE>",
+  "hermes_python": "<ABS_HERMES_COMMITTED_PYTHON>",
+  "profiles": {
+    "deepseek": {
+      "provider": "orrery-deepseek-manual",
+      "model": "deepseek-flash",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_mode": "chat_completions",
+      "key_cmd": "/usr/bin/security find-generic-password -s orrery-dsh-deepseek -a api-key -w"
+    }
+  }
+}

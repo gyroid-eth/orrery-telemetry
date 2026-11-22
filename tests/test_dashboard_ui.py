@@ -11,9 +11,9 @@ INDEX = ROOT / "dashboard" / "index.html"
 
 
 def _live_bubble_cases() -> dict:
-    html = INDEX.read_text(encoding="utf-8")
+    html = (ROOT / "dashboard/network_node.js").read_text(encoding="utf-8")
     match = re.search(
-        r"(function renderLiveStateBubble\(grp,actState\)\{.*?\n\})\n\nfunction buildEls",
+        r"(function renderLiveStateBubble\(grp,actState\)\{.*?\n\})\n\nfunction render",
         html,
         re.DOTALL,
     )
@@ -90,7 +90,8 @@ def test_live_state_bubbles_follow_dense_and_replay_visibility_contracts():
     html = INDEX.read_text(encoding="utf-8")
     assert "#net.dense .askbub,#net.dense .qbub{display:none}" in html
     assert "body.replay-on .node .askbub,\n  body.replay-on .node .qbub{display:none}" in html
-    assert "renderLiveStateBubble(grp,g.actState);" in html
+    assert "window.OrreryNetworkNode.render(name,g," in html
+    assert "renderLiveStateBubble(grp,g.actState);" in (ROOT / "dashboard/network_node.js").read_text()
     assert "el.className='ask-replay-glyph';" in html
 
 
@@ -150,6 +151,7 @@ async function fetch(url){
   ]})};
 }
 function mailDrain(){}
+function netRefreshForMail(){}
 (async()=>{
   await mailPulseTick();await mailPulseTick();await mailPulseTick();
   process.stdout.write(JSON.stringify({requests,keys:mailQueue.map(mailMessageKey)}));
@@ -212,8 +214,9 @@ process.stdout.write(JSON.stringify({
 def test_network_growth_refits_and_reel_murmurs_have_an_english_table():
     html = INDEX.read_text(encoding="utf-8")
     assert "if(mapWasCleared||gmap.size!==previousNodeCount)fitPending=true;" in html
-    assert "g.x=Math.max(76,Math.min(w-76,g.x));" in html
-    assert "g.y=Math.max(36,Math.min(h-66,g.y));" in html
+    core = (ROOT / "dashboard/network_core.js").read_text(encoding="utf-8")
+    assert "g.x=Math.max(76,Math.min(w-76,g.x));" in core
+    assert "g.y=Math.max(36,Math.min(h-66,g.y));" in core
     assert "if(fitPending&&!viewUserAdjusted&&gmap.size&&++fitFollowTick%6===0)fitView();" in html
     assert "const table=INITIAL_ROUTE.language==='en'?MURMURS_EN:MURMURS;" in html
 

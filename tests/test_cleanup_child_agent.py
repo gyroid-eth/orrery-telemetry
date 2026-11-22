@@ -9,13 +9,17 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "hooks" / "cleanup-child-agent.sh"
 
 
-def _arrange_child_state(tmp_path: Path) -> tuple[str, dict[str, str], list[Path]]:
+@contextmanager
+def _arrange_child_state(tmp_path: Path, *, fail_method=None):
     hooks = tmp_path / "hooks"
     runtime = tmp_path / "runtime"
     state_dir = runtime / "child-agents"
@@ -66,107 +70,143 @@ def _arrange_child_state(tmp_path: Path) -> tuple[str, dict[str, str], list[Path
         }
     )
     artifacts = [state_file, token_file, mcp_config, codex_home]
-    return agent_name, env, artifacts
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            request=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            method=request['params']['name']
+            if method == fail_method:
+                result={'isError':True,'content':[{'type':'text','text':'synthetic failure'}]}
+            elif method == 'release_file_reservations':
+                result={'released':0}
+            elif method == 'retire_agent':
+                result={'status':'retired','agent_name':agent_name,'project_key':'/test/project'}
+            elif method == 'whois':
+                result={'name':agent_name,'retired_at':'2026-10-20T00:00:00Z'}
+            else:
+                raise AssertionError(method)
+            body=json.dumps({'result':result}).encode()
+            self.send_response(200);self.end_headers();self.wfile.write(body)
+        def log_message(self,*args):pass
+    server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    env['AGENTSTACK_MCP_URL']='http://127.0.0.1:'+str(server.server_port)+'/mcp'
+    try:
+        yield agent_name, env, artifacts
+    finally:
+        server.shutdown();server.server_close();thread.join(timeout=5)
+
+
+def test_cleanup_rpc_failure_keeps_recovery_files(tmp_path: Path) -> None:
+    # Routine transport/tool errors must not erase a still-owned identity.
+    for method in ('release_file_reservations', 'retire_agent', 'whois'):
+        case = tmp_path / method
+        case.mkdir()
+        with _arrange_child_state(case, fail_method=method) as (name, env, artifacts):
+            result = subprocess.run(['/bin/bash', str(HOOK), name], cwd=ROOT, env=env,
+                                    capture_output=True, text=True, timeout=30)
+            assert result.returncode != 0
+            assert all(path.exists() for path in artifacts)
+            assert 'keeping private state' in result.stderr
 
 
 def test_cleanup_without_explicit_identity_does_not_retire_resolved_agent(
     tmp_path: Path,
 ) -> None:
     """Ambient resolver state must never select another agent for cleanup."""
-    agent_name, env, artifacts = _arrange_child_state(tmp_path)
-    result = subprocess.run(
-        ["/bin/bash", str(HOOK)],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    with _arrange_child_state(tmp_path) as (agent_name, env, artifacts):
+        result = subprocess.run(
+            ["/bin/bash", str(HOOK)],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
-    assert result.returncode == 0, result.stderr
-    assert all(path.exists() for path in artifacts)
-    managed_file = Path(env["AGENTSTACK_MANAGED_AGENTS_FILE"])
-    assert managed_file.read_text(encoding="utf-8") == f"{agent_name}\n"
+        assert result.returncode == 0, result.stderr
+        assert all(path.exists() for path in artifacts)
+        managed_file = Path(env["AGENTSTACK_MANAGED_AGENTS_FILE"])
+        assert managed_file.read_text(encoding="utf-8") == f"{agent_name}\n"
 
 
 def test_cleanup_with_argument_still_cleans_named_child(tmp_path: Path) -> None:
-    agent_name, env, artifacts = _arrange_child_state(tmp_path)
-    result = subprocess.run(
-        ["/bin/bash", str(HOOK), agent_name],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    with _arrange_child_state(tmp_path) as (agent_name, env, artifacts):
+        result = subprocess.run(
+            ["/bin/bash", str(HOOK), agent_name],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
-    assert result.returncode == 0, result.stderr
-    assert not any(path.exists() for path in artifacts)
+        assert result.returncode == 0, result.stderr
+        assert not any(path.exists() for path in artifacts)
 
 
 def test_cleanup_warns_before_deleting_real_codex_sessions(tmp_path: Path) -> None:
-    agent_name, env, artifacts = _arrange_child_state(tmp_path)
-    sessions = artifacts[-1] / "sessions"
-    sessions.mkdir()
-    (sessions / "rollout.jsonl").write_text("legacy transcript\n", encoding="utf-8")
-    result = subprocess.run(
-        ["/bin/bash", str(HOOK), agent_name], cwd=ROOT, env=env,
-        capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stderr
-    assert "WARNING: deleting unshared Codex sessions" in result.stderr
-    assert str(sessions) in result.stderr and "conversation history may be lost" in result.stderr
-    assert not artifacts[-1].exists()
+    with _arrange_child_state(tmp_path) as (agent_name, env, artifacts):
+        sessions = artifacts[-1] / "sessions"
+        sessions.mkdir()
+        (sessions / "rollout.jsonl").write_text("legacy transcript\n", encoding="utf-8")
+        result = subprocess.run(
+            ["/bin/bash", str(HOOK), agent_name], cwd=ROOT, env=env,
+            capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        assert "WARNING: deleting unshared Codex sessions" in result.stderr
+        assert str(sessions) in result.stderr and "conversation history may be lost" in result.stderr
+        assert not artifacts[-1].exists()
 
 
 def test_cleanup_keeps_symlinked_codex_sessions_without_warning(tmp_path: Path) -> None:
-    agent_name, env, artifacts = _arrange_child_state(tmp_path)
-    shared = tmp_path / "source-codex" / "sessions"
-    shared.mkdir(parents=True)
-    transcript = shared / "rollout.jsonl"
-    transcript.write_text("shared transcript\n", encoding="utf-8")
-    (artifacts[-1] / "sessions").symlink_to(shared, target_is_directory=True)
-    result = subprocess.run(
-        ["/bin/bash", str(HOOK), agent_name], cwd=ROOT, env=env,
-        capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stderr
-    assert "deleting unshared Codex sessions" not in result.stderr
-    assert not artifacts[-1].exists()
-    assert transcript.read_text() == "shared transcript\n"
+    with _arrange_child_state(tmp_path) as (agent_name, env, artifacts):
+        shared = tmp_path / "source-codex" / "sessions"
+        shared.mkdir(parents=True)
+        transcript = shared / "rollout.jsonl"
+        transcript.write_text("shared transcript\n", encoding="utf-8")
+        (artifacts[-1] / "sessions").symlink_to(shared, target_is_directory=True)
+        result = subprocess.run(
+            ["/bin/bash", str(HOOK), agent_name], cwd=ROOT, env=env,
+            capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        assert "deleting unshared Codex sessions" not in result.stderr
+        assert not artifacts[-1].exists()
+        assert transcript.read_text() == "shared transcript\n"
 
 
 def test_cleanup_with_entry_environment_still_cleans_child(tmp_path: Path) -> None:
-    agent_name, env, artifacts = _arrange_child_state(tmp_path)
-    env["AGENT_NAME"] = agent_name
-    result = subprocess.run(
-        ["/bin/bash", str(HOOK)],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    with _arrange_child_state(tmp_path) as (agent_name, env, artifacts):
+        env["AGENT_NAME"] = agent_name
+        result = subprocess.run(
+            ["/bin/bash", str(HOOK)],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
-    assert result.returncode == 0, result.stderr
-    assert not any(path.exists() for path in artifacts)
+        assert result.returncode == 0, result.stderr
+        assert not any(path.exists() for path in artifacts)
 
 
 def test_invalid_child_state_fails_loudly_without_partial_cleanup(
     tmp_path: Path,
 ) -> None:
-    agent_name, env, artifacts = _arrange_child_state(tmp_path)
-    artifacts[0].write_text("{not-json", encoding="utf-8")
-    result = subprocess.run(
-        ["/bin/bash", str(HOOK), agent_name],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    with _arrange_child_state(tmp_path) as (agent_name, env, artifacts):
+        artifacts[0].write_text("{not-json", encoding="utf-8")
+        result = subprocess.run(
+            ["/bin/bash", str(HOOK), agent_name],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
-    assert result.returncode != 0
-    assert "could not read child state" in result.stderr
-    assert all(path.exists() for path in artifacts)
+        assert result.returncode != 0
+        assert "could not read child state" in result.stderr
+        assert all(path.exists() for path in artifacts)
 
 
 def _main() -> int:

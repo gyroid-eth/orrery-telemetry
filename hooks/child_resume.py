@@ -9,9 +9,13 @@ normal cleanup, dashboard resume, explicit purge, and expiry maintenance.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
+import secrets
 import fcntl
 import hmac
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -20,8 +24,10 @@ import re
 import shutil
 import stat
 import tempfile
+import runpy
+import sys
+import subprocess
 from datetime import date, datetime, time, timedelta, timezone
-import tomllib
 from typing import Any, Callable
 
 
@@ -32,9 +38,12 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 PROXY_AGENT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,127}")
 CODEX_PROGRAMS = {"codex", "codex-cli"}
 CLAUDE_PROGRAMS = {"claude", "claude-code"}
+HARNESS_PROGRAMS = {"dsh", "hermes"}
 MCP_PROFILES = {"inherit", "orrery-only"}
 MAX_STATE_BYTES = 65536
 MAX_TOKEN_BYTES = 4096
+# Allow launch setup to reach tmux before a child can be treated as stopped.
+CHILD_STARTUP_GRACE = timedelta(seconds=60)
 
 
 def _provider(program: object) -> str | None:
@@ -43,6 +52,8 @@ def _provider(program: object) -> str | None:
             return "codex"
         if program in CLAUDE_PROGRAMS:
             return "claude"
+        if program in HARNESS_PROGRAMS:
+            return program
     return None
 
 
@@ -61,6 +72,25 @@ def _retained_shape(state: dict[str, Any]) -> bool:
     )
 
 
+# What a person reads when a resume is refused for state a crash left behind.
+NOT_ENDED_NORMALLY = (
+    "This child did not end normally, so it was never retired. The dashboard "
+    "repairs its resume state once it can confirm the child has stopped. "
+    "Check for a running session if resume stays unavailable."
+)
+RESUME_NOT_FINISHED = (
+    "A resume of this child started and did not finish. The dashboard clears "
+    "this once it can confirm the child has stopped and the startup grace period "
+    "has passed."
+)
+
+
+def require_retired(state: dict[str, Any]) -> None:
+    """Refuse a child state a crash left running, saying so in plain words."""
+    if state.get("retired_at") is None and state.get("resume_in_progress_at") is None:
+        raise ResumeStateError("config_unrestorable", NOT_ENDED_NORMALLY)
+
+
 class ResumeStateError(ValueError):
     """A stable fail-closed reason suitable for dashboard capability output."""
 
@@ -68,6 +98,169 @@ class ResumeStateError(ValueError):
         super().__init__(message)
         self.code = code
 
+
+# A request owns only its generation. Other resume requests fail closed while
+# the selection is staged; a separate lock serializes dashboard jumps.
+_TOOLS_CHANGE = ContextVar("child_tools_change", default="")
+
+
+def tools_change_generation() -> str:
+    return _TOOLS_CHANGE.get() or os.environ.get("AGENTSTACK_TOOLS_CHANGE_GENERATION", "")
+
+
+@contextmanager
+def owned_tools_change(generation: str):
+    token = _TOOLS_CHANGE.set(generation)
+    try:
+        yield
+    finally:
+        _TOOLS_CHANGE.reset(token)
+
+
+def _tools_journal(state_path: Path) -> Path:
+    return state_path.with_name(f".{state_path.stem}.tools-change.json")
+
+
+def _check_tools_change(state: dict, state_path: Path) -> None:
+    pending = state.get("tools_change_generation")
+    journal = _tools_journal(state_path)
+    if os.path.lexists(journal):
+        saved = json.loads(_read_private(journal, "tools change journal", 16384))
+        pending = saved.get("generation") or "invalid"
+    if pending and pending != tools_change_generation():
+        label = pending if isinstance(pending, str) and re.fullmatch(r"[a-f0-9]{32}", pending) else "invalid"
+        raise ResumeStateError("config_unrestorable", f"A tools change ({label}) is still pending; finish or roll back that generation first")
+
+
+def tools_change_lock(runtime: Path, name: str):
+    state, *_ = _paths(runtime, name)
+    return _AgentLock(state.with_name(f".{name}.tools-change.lock"), exclusive=True)
+
+
+def _tools_record_is_canonical(runtime: Path, name: str, record: Path) -> bool:
+    state_path, *_ = _paths(runtime, name)
+    return record.parent == state_path.parent and (record == tools_record_path(runtime, name) or
+        re.fullmatch(re.escape(name) + r"\.claude-launch\.[A-Za-z0-9-]{8,128}\.json", record.name) is not None)
+
+
+def _file_identity(path: Path) -> list[int] | None:
+    try:
+        info = path.lstat()
+        return [info.st_dev, info.st_ino]
+    except FileNotFoundError:
+        return None
+
+
+def begin_tools_change(runtime: Path, name: str, validated: dict,
+                       record: Path, candidate: dict, profile: str | None) -> str:
+    """Write intent before staging; recovery never reads generated config."""
+    state_path, _, home, mcp, lock = _paths(runtime, name)
+    if not _tools_record_is_canonical(runtime, name, record):
+        raise ResumeStateError("invalid_identity", "Tools record is not canonical")
+    raw_candidate = (json.dumps(candidate, separators=(",", ":"), sort_keys=True) + "\n").encode()
+    if len(raw_candidate) > 4096:
+        raise ResumeStateError("config_unrestorable", "The tools selection is too large")
+    generation = secrets.token_hex(16)
+    journal = _tools_journal(state_path)
+    created = False
+    try:
+        with _AgentLock(lock, exclusive=True):
+            state = _load_state(state_path)
+            if state != validated or state.get("tools_change_generation") or os.path.lexists(journal):
+                raise ResumeStateError("config_unrestorable", "Child state changed before the tools change")
+            old = _read_private(record, "tools selection", 4096).hex() if os.path.lexists(record) else None
+            saved = {"generation": generation,
+                     "identity": {key: state.get(key) for key in ("agent_id", "agent_name", "project_key", "program")},
+                     "record": record.name, "old_record": old,
+                     "old_profile": state.get("codex_mcp_profile"),
+                     "new_profile": profile if profile is not None else state.get("codex_mcp_profile"),
+                     "candidate_sha256": hashlib.sha256(raw_candidate).hexdigest(),
+                     "generated": {path.name: _file_identity(path) for path in (home, mcp)},
+                     "phase": "prepared"}
+            _atomic_json(journal, saved)
+            created = True
+            state["tools_change_generation"] = generation
+            if profile is not None:
+                state["codex_mcp_profile"] = profile
+            _atomic_json(state_path, state)
+            for path in (home, mcp):
+                if saved["generated"][path.name] is not None:
+                    os.replace(path, path.with_name(f".{path.name}.tools-{generation}"))
+            _atomic_json(record, candidate)
+            saved["phase"] = "ready"
+            _atomic_json(journal, saved)
+    except Exception:
+        if created:
+            finish_tools_change(runtime, name, generation, commit=False)
+        raise
+    return generation
+
+
+def finish_tools_change(runtime: Path, name: str, generation: str, *, commit: bool) -> None:
+    """Persist the decision, then perform idempotent recovery of that decision.
+
+    A durable commit cannot later be undone by a rollback retry. A journal left
+    before the state marker, or after its removal, still owns the same identity.
+    """
+    state_path, _, home, mcp, lock = _paths(runtime, name)
+    if not re.fullmatch(r"[a-f0-9]{32}", generation):
+        raise ResumeStateError("invalid_identity", "Invalid tools change generation")
+    journal = _tools_journal(state_path)
+    with _AgentLock(lock, exclusive=True):
+        saved = json.loads(_read_private(journal, "tools change journal", 16384))
+        state = _load_state(state_path)
+        phase = saved.get("phase")
+        if (saved.get("generation") != generation or phase not in {"prepared", "ready", "rollback", "commit"}
+                or state.get("tools_change_generation") not in (None, generation)
+                or saved.get("identity") != {key: state.get(key) for key in ("agent_id", "agent_name", "project_key", "program")}):
+            raise ResumeStateError("identity_mismatch", "Tools change generation no longer owns this child")
+        record = state_path.with_name(saved["record"])
+        if not _tools_record_is_canonical(runtime, name, record):
+            raise ResumeStateError("invalid_identity", "Invalid tools change record")
+        raw = _read_private(record, "tools selection", 4096) if os.path.lexists(record) else None
+        old = bytes.fromhex(saved["old_record"]) if saved["old_record"] is not None else None
+        candidate_matches = raw is not None and hashlib.sha256(raw).hexdigest() == saved["candidate_sha256"]
+        if not candidate_matches and not (phase in {"prepared", "rollback"} and raw == old):
+            raise ResumeStateError("identity_mismatch", "The staged tools selection has changed")
+        # Once recorded, the decision is authoritative on every retry.
+        if phase not in {"rollback", "commit"}:
+            if commit and phase != "ready":
+                raise ResumeStateError("config_unrestorable", "Tools change was not fully staged")
+            phase = "commit" if commit else "rollback"
+            if phase == "rollback" and (state.get("retired_at") is None or state.get("resume_in_progress_at") is not None):
+                raise ResumeStateError("config_unrestorable", "Cannot roll back a child whose resume is running")
+            saved["phase"] = phase
+            _atomic_json(journal, saved)
+        if phase == "rollback":
+            if state.get("retired_at") is None or state.get("resume_in_progress_at") is not None:
+                raise ResumeStateError("config_unrestorable", "Cannot roll back a child whose resume is running")
+            # Validate every original before touching any generated path. An
+            # absent backup can mean either not yet moved or already restored.
+            for path in (home, mcp):
+                backup = path.with_name(f".{path.name}.tools-{generation}")
+                original = saved["generated"][path.name]
+                witness = backup if os.path.lexists(backup) else path
+                if original is not None and _file_identity(witness) != original:
+                    raise ResumeStateError("identity_mismatch", "Original generated settings no longer match")
+            if old is None:
+                record.unlink(missing_ok=True)
+            elif raw != old:
+                _atomic_bytes(record, old)
+            for path in (home, mcp):
+                backup = path.with_name(f".{path.name}.tools-{generation}")
+                if os.path.lexists(backup):
+                    _remove_exact(path)
+                    os.replace(backup, path)
+                elif saved["generated"][path.name] is None:
+                    _remove_exact(path)
+            if saved["old_profile"] is not None:
+                state["codex_mcp_profile"] = saved["old_profile"]
+        else:
+            for path in (home, mcp):
+                _remove_exact(path.with_name(f".{path.name}.tools-{generation}"))
+        state.pop("tools_change_generation", None)
+        _atomic_json(state_path, state)
+        journal.unlink()
 
 def _utc_now(now: datetime | None = None) -> datetime:
     value = now or datetime.now(timezone.utc)
@@ -265,6 +458,7 @@ def _validate_identity(
 def prepare_active_state(
     runtime_dir: Path, agent_name: str, *, project_key: str, mcp_profile: str = "inherit",
     program: str | None = None, generation: str | None = None, parent_agent: str | None = None,
+    codex_standalone: bool = False,
 ) -> dict[str, Any]:
     """Mark the child active. ``parent_agent`` records the launcher's parent
     (``""`` for a standalone launch clears it; ``None`` leaves it as is) so a
@@ -282,6 +476,7 @@ def prepare_active_state(
             if not _registration_matches(pending, generation):
                 raise ResumeStateError("identity_mismatch", "Child registration attempt has changed")
         state = _load_state(state_path)
+        _check_tools_change(state, state_path)
         _validate_identity(state, agent_name=agent_name, project_key=project_key, program=program)
         state_token = state.get("registration_token")
         try:
@@ -314,6 +509,7 @@ def prepare_active_state(
         )
         if state["provider"] == "codex":
             state["codex_mcp_profile"] = mcp_profile
+            state["codex_standalone"] = codex_standalone
         else:
             state.pop("codex_mcp_profile", None)
         state.pop("resume_in_progress_at", None)
@@ -654,6 +850,7 @@ def begin_resume(
         if any(path.exists() or path.is_symlink() for path in (pending, _legacy_pending(state_path))):
             raise ResumeStateError("config_unrestorable", "Child preregistration is still pending")
         state = _load_state(state_path)
+        _check_tools_change(state, state_path)
         _validate_identity(
             state,
             agent_name=agent_name,
@@ -725,6 +922,64 @@ def cancel_resume(
         _atomic_json(state_path, state)
 
 
+def native_resume_input(runtime_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
+    """Read this child's own native ID and configuration, never a latest ID.
+
+    The caller first authenticates retained identity/expiry with inspect_retained.
+    Callback metadata is separate from the shared credential-bearing child file.
+    """
+    name, harness = state.get('agent_name'), state.get('program')
+    try:
+        spec = importlib.util.spec_from_file_location('_resume_connection_rules', Path(__file__).with_name('native_connections.py'))
+        connections = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(connections)
+        kind_args = {'kind': state['harness_backend_kind']} if 'harness_backend_kind' in state else {}
+        kind = connections.connection_kind(state.get('harness_backend'), **kind_args)
+    except ValueError:
+        raise ResumeStateError('identity_mismatch', 'Native connection identity is invalid') from None
+    if (not isinstance(name, str) or not SAFE_NAME.fullmatch(name)
+            or harness not in HARNESS_PROGRAMS or state.get('harness') != harness):
+        raise ResumeStateError('identity_mismatch', 'Native child identity is invalid')
+    runtime_dir = runtime_dir.resolve()
+    owned = runtime_dir / 'child-agents' / (name + '.harness')
+    raw_directory = state.get('harness_state_dir')
+    if not isinstance(raw_directory, str):
+        raise ResumeStateError('config_unrestorable', 'Native configuration is unavailable')
+    directory = Path(raw_directory)
+    if (not directory.is_absolute() or directory.is_symlink() or owned.is_symlink()
+            or not directory.is_dir() or not owned.is_dir()
+            or (directory != owned and directory.parent != owned)):
+        raise ResumeStateError('identity_mismatch', 'Native configuration belongs to another child')
+    try:
+        event = json.loads(_read_private(directory / 'native-session.json', 'native session', 16384))
+        document = json.loads(_read_private(directory / 'input.json', 'native input', MAX_STATE_BYTES))
+    except ResumeStateError as exc:
+        if exc.code == 'credential_missing':
+            raise ResumeStateError('no_history', 'This child has no recorded native session') from None
+        raise
+    except (UnicodeError, ValueError):
+        raise ResumeStateError('config_unrestorable', 'Native resume metadata is invalid') from None
+    if not isinstance(event, dict) or not isinstance(document, dict):
+        raise ResumeStateError('config_unrestorable', 'Native resume metadata is invalid')
+    session_id = event.get('native_session_id')
+    if (event.get('harness') != harness or event.get('agent_name', name) != name
+            or not isinstance(session_id, str)
+            or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,255}', session_id)):
+        raise ResumeStateError('identity_mismatch', 'Native session identity is invalid')
+    _parse_timestamp(event.get('created_at'), 'native session creation')
+    if (document.get('agent_name') != name or document.get('program') != harness
+            or document.get('backend_id') != state['harness_backend']
+            or document.get('backend_kind', kind) != kind
+            or document.get('project_key') != state.get('project_key')
+            or document.get('state_dir') != str(directory)
+            or document.get('runtime_dir') != str(runtime_dir)):
+        raise ResumeStateError('identity_mismatch', 'Native input belongs to another child')
+    cwd = document.get('cwd')
+    if not isinstance(cwd, str) or not Path(cwd).is_absolute() or not Path(cwd).is_dir():
+        raise ResumeStateError('cwd_missing', 'Native working directory is unavailable')
+    return {**document, 'backend_kind': kind, 'resume_session_id': session_id}
+
+
 def inspect_retained(
     runtime_dir: Path,
     agent_name: str,
@@ -760,6 +1015,7 @@ def inspect_retained(
         if any(path.exists() or path.is_symlink() for path in (pending, _legacy_pending(state_path))):
             raise ResumeStateError("config_unrestorable", "Child preregistration is still pending")
         state = _load_state(state_path)
+        _check_tools_change(state, state_path)
         _validate_identity(
             state,
             agent_name=agent_name,
@@ -774,9 +1030,8 @@ def inspect_retained(
                 "config_unrestorable", "child resume state is incomplete"
             )
         if state.get("resume_in_progress_at") is not None:
-            raise ResumeStateError(
-                "config_unrestorable", "child resume is already in progress"
-            )
+            raise ResumeStateError("config_unrestorable", RESUME_NOT_FINISHED)
+        require_retired(state)
         _parse_timestamp(state.get("retired_at"), "retired_at")
         expires_at = _parse_timestamp(state.get("resume_expires_at"), "resume_expires_at")
         if _utc_now(now) >= expires_at:
@@ -865,6 +1120,8 @@ def purge_one(
     *,
     reason: str,
     now: datetime | None = None,
+    is_live: Callable[[str], bool | None] | None = None,
+    boot: float | None = None,
 ) -> bool:
     if reason not in {"purged", "retention_expired"}:
         raise ValueError("invalid purge reason")
@@ -889,6 +1146,8 @@ def purge_one(
             or state.get("launch_origin") != "child"
             or state.get("provider") != _provider(state.get("program"))
             or state.get("resume_in_progress_at") is not None
+            or state.get("tools_change_generation") is not None
+            or os.path.lexists(_tools_journal(state_path))
         ):
             return False
         if reason == "retention_expired":
@@ -900,7 +1159,14 @@ def purge_one(
                 return False
             if _utc_now(now) < expires:
                 return False
-        if state is not None:
+        if is_live is not None and (
+            is_live(agent_name) is not False or child_process_live(agent_name) is not False
+        ):
+            return False
+        with _LeaseLock(runtime_dir) if is_live is not None else nullcontext():
+            # SessionStart can write a lease while the tmux/process probes run.
+            if is_live is not None and live_lease(runtime_dir, agent_name, boot=boot):
+                return False
             tombstone = {
                 "schema_version": SCHEMA_VERSION,
                 "reason": reason,
@@ -916,11 +1182,11 @@ def purge_one(
                 / f"{state['agent_id']}.json",
                 tombstone,
             )
-        pending_path = state_path.with_name(f".{agent_name}.registration-pending.json")
-        tools_path = tools_record_path(runtime_dir, agent_name)
-        for path in (home_path, mcp_path, token_path, state_path, pending_path, _legacy_pending(state_path),
-                     tools_path):
-            _remove_exact(path)
+            pending_path = state_path.with_name(f".{agent_name}.registration-pending.json")
+            tools_path = tools_record_path(runtime_dir, agent_name)
+            for path in (home_path, mcp_path, token_path, state_path, pending_path, _legacy_pending(state_path),
+                         tools_path):
+                _remove_exact(path)
         return True
 
 
@@ -935,7 +1201,10 @@ def discard_generated(runtime_dir: Path, agent_name: str) -> None:
         _remove_exact(mcp_path)
 
 
-def purge_expired(runtime_dir: Path, *, now: datetime | None = None) -> list[str]:
+def purge_expired(
+    runtime_dir: Path, *, now: datetime | None = None,
+    tmux_run: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> list[str]:
     removed: list[str] = []
     state_dir = runtime_dir / "child-agents"
     try:
@@ -943,6 +1212,11 @@ def purge_expired(runtime_dir: Path, *, now: datetime | None = None) -> list[str
     except OSError:
         return removed
     current = _utc_now(now)
+    boot = boot_time() or 0.0
+
+    def is_live(name: str) -> bool | None:
+        return child_session_live(runtime_dir, name, boot=boot, tmux_run=tmux_run)
+
     for path in candidates:
         name = path.stem
         if not SAFE_NAME.fullmatch(name):
@@ -956,13 +1230,356 @@ def purge_expired(runtime_dir: Path, *, now: datetime | None = None) -> list[str
             expires = _parse_timestamp(
                 state.get("resume_expires_at"), "resume_expires_at"
             )
+            if current < expires:
+                continue
+            # Same lock order as dashboard resume and stopped-child recovery.
+            with tools_change_lock(runtime_dir, name):
+                if purge_one(runtime_dir, name, reason="retention_expired", now=current,
+                             is_live=is_live, boot=boot):
+                    removed.append(name)
         except ResumeStateError:
             continue
-        if current >= expires and purge_one(
-            runtime_dir, name, reason="retention_expired", now=current
-        ):
-            removed.append(name)
     return removed
+
+
+def _toml():
+    """tomllib, imported where TOML is read: the lease and recovery commands
+    must also run under an older python3 (3.9 on macOS), where it is absent."""
+    import tomllib
+
+    return tomllib
+
+
+def boot_time() -> float | None:
+    """When this machine last booted (epoch seconds), or None if unknown."""
+    try:
+        for line in Path("/proc/stat").read_text(encoding="ascii").splitlines():
+            if line.startswith("btime "):
+                return float(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        import subprocess
+
+        raw = subprocess.run(["sysctl", "-n", "kern.boottime"], capture_output=True,
+                             text=True, timeout=5, check=False).stdout
+        match = re.search(r"sec = (\d+)", raw)
+        return float(match.group(1)) if match else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def child_session_live(
+    runtime_dir: Path, name: str, *, boot: float | None,
+    tmux_run: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> bool | None:
+    """Check the current tmux server and live leases. None means unknown.
+
+    Absence is read from the session list, not from has-session: the tmux
+    consumer refuses a has-session on a missing target (TMUX_TARGET_UNAVAILABLE)
+    instead of returning tmux's "can't find session", which read as "cannot
+    tell" and left every child a reboot stopped unresumable.
+    """
+    if tmux_run is None:
+        def tmux_run(args, **kwargs):
+            return subprocess.run(["tmux", *args], **kwargs)
+
+    try:
+        listed = tmux_run(['list-sessions', '-F', '#{session_name}'],
+                           capture_output=True, text=True, timeout=2)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return None
+    if listed.returncode == 0:
+        if name not in (listed.stdout or "").splitlines():
+            return live_lease(runtime_dir, name, boot=boot)
+        # Listed: a session of that name exists, and only admission can say
+        # whether it is this child's. Any refusal stays "cannot tell".
+        try:
+            done = tmux_run(['has-session', '-t', f'={name}'], capture_output=True, text=True, timeout=2)
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            return None
+        return True if done.returncode == 0 else None
+    reason = (listed.stderr or "").lower()
+    # Only these mean "no such session". Any other failure, such as a server
+    # socket this user cannot open ("error connecting … (permission denied)"),
+    # says nothing about the session and must not be read as "gone".
+    gone = ("can't find session" in reason or "no server running" in reason
+            or ("error connecting" in reason and "no such file or directory" in reason))
+    if not gone:
+        return None
+    return live_lease(runtime_dir, name, boot=boot)
+
+
+def child_process_live(agent_name: str) -> bool | None:
+    """Look for this child's terminal-attached process independently of tmux."""
+    uid = str(os.getuid()) if os.name == "posix" else ""
+    marker = f"AGENT_NAME={agent_name}".encode("ascii")
+    darwin = sys.platform == "darwin"
+    if darwin:
+        command = ["/bin/ps", "-Eww", "-x", "-U", uid, "-o", "pid=,stat=,tty=,command="]
+    elif sys.platform.startswith("linux"):
+        command = ["ps", "-U", uid, "-o", "pid=,stat=,tty="]
+    else:
+        return None
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=2,
+                                env={"PATH": os.defpath, "LC_ALL": "C", "AGENTSTACK_PS_PROBE": "1"})
+        if result.returncode or result.stderr or not result.stdout.strip():
+            return None
+        if darwin and b"AGENTSTACK_PS_PROBE=1" not in result.stdout.split():
+            return None
+        for line in result.stdout.splitlines():
+            fields = line.split(None, 3)
+            if len(fields) != (4 if darwin else 3) or not fields[0].isdigit():
+                return None
+            pid, status, tty = fields[:3]
+            # Detached apps can inherit AGENT_NAME and outlive the child.
+            if status.startswith(b"Z") or tty in {b"??", b"?"}:
+                continue
+            try:
+                if darwin:
+                    command_line = fields[3]
+                    if command_line.startswith(b"(") and command_line.endswith(b")"):
+                        # Darwin ps uses (comm) if it cannot read the arguments.
+                        os.kill(int(pid), 0)
+                        return None
+                    if marker in command_line.split():
+                        return True
+                elif marker in (Path("/proc") / pid.decode("ascii") / "environ").read_bytes().split(b"\0"):
+                    return True
+            except (FileNotFoundError, ProcessLookupError):
+                continue  # the process exited after ps listed it
+        return False
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _read_recovery_candidate(
+    path: Path, *, boot: float | None, written_before: float
+) -> tuple[dict[str, Any], bool] | None:
+    modified = path.lstat().st_mtime
+    if modified >= written_before:
+        return None
+    state = _load_state(path)
+    if not _retained_shape(state):
+        return None
+    before_boot = boot is not None and modified < boot
+    resume_started = state.get("resume_in_progress_at")
+    if state.get("retired_at") is None:
+        return (state, before_boot) if resume_started is None else None
+    if resume_started is None:
+        return None
+    if not before_boot:
+        if _parse_timestamp(resume_started, "resume_in_progress_at").timestamp() >= written_before:
+            return None
+    return state, before_boot
+
+
+def recover_after_reboot(
+    runtime_dir: Path,
+    *,
+    is_live: Callable[[str], bool | None],
+    retention_days: int,
+    boot: float | None = None,
+    now: datetime | None = None,
+) -> list[tuple[str, str]]:
+    """Recover children whose state predates the last boot."""
+    if retention_days <= 0:
+        return []
+    boot = boot_time() if boot is None else boot
+    if boot is None:
+        return []
+    return _recover_stopped_children(runtime_dir, is_live=is_live, retention_days=retention_days,
+                                     boot=boot, written_before=boot, now=_utc_now(now))
+
+
+def recover_stopped_children(
+    runtime_dir: Path,
+    *,
+    is_live: Callable[[str], bool | None],
+    retention_days: int,
+    boot: float | None,
+    now: datetime | None = None,
+) -> list[tuple[str, str]]:
+    """Recover children stopped before boot or past the startup grace period."""
+    if retention_days <= 0:
+        return []
+    current = _utc_now(now)
+    written_before = (current - CHILD_STARTUP_GRACE).timestamp()
+    if boot is not None:
+        written_before = max(boot, written_before)
+    return _recover_stopped_children(runtime_dir, is_live=is_live, retention_days=retention_days,
+                                     boot=boot, written_before=written_before, now=current)
+
+
+def _recover_stopped_children(
+    runtime_dir: Path,
+    *,
+    is_live: Callable[[str], bool | None],
+    retention_days: int,
+    boot: float | None,
+    written_before: float,
+    now: datetime,
+) -> list[tuple[str, str]]:
+    """Repair stale state only when the evidence confirms the child has stopped."""
+    recovered: list[tuple[str, str]] = []
+    try:
+        candidates = tuple((runtime_dir / "child-agents").glob("*.json"))
+    except OSError:
+        return recovered
+    for path in candidates:
+        name = path.stem
+        if not SAFE_NAME.fullmatch(name):
+            continue
+        state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, name)
+        try:
+            # Limit tmux probes to children that look interrupted.
+            if _read_recovery_candidate(state_path, boot=boot, written_before=written_before) is None:
+                continue
+            if is_live(name) is not False:
+                continue
+            # A dashboard jump can stage tmux under a temporary name before
+            # publishing the child's name. Use the same lock as that jump.
+            with tools_change_lock(runtime_dir, name), _AgentLock(lock_path, exclusive=True):
+                candidate = _read_recovery_candidate(state_path, boot=boot, written_before=written_before)
+                if candidate is None:
+                    continue
+                state, before_boot = candidate
+                pending = state_path.with_name(f".{name}.registration-pending.json")
+                if any(os.path.lexists(item) for item in (
+                    pending, _legacy_pending(state_path), _tools_journal(state_path),
+                )):
+                    continue
+                _validate_identity(state, agent_name=name)
+                canonical = _read_private(token_path, "canonical child credential",
+                                          MAX_TOKEN_BYTES).decode("utf-8").strip()
+                token = state.get("registration_token")
+                if (not isinstance(token, str) or not token or not canonical
+                        or not hmac.compare_digest(canonical.encode("utf-8"), token.encode("utf-8"))):
+                    continue
+                if state.get("retired_at") is None:
+                    state["retired_at"] = _timestamp(now)
+                    state["resume_expires_at"] = _timestamp(now + timedelta(days=retention_days))
+                    outcome = "retired"
+                else:
+                    _parse_timestamp(state.get("retired_at"), "retired_at")
+                    _parse_timestamp(state.get("resume_expires_at"), "resume_expires_at")
+                    state.pop("resume_in_progress_at")
+                    outcome = "resume_cleared"
+                # A session may have started while this waited for the child's
+                # lock: look again (tmux and leases) before taking the lease lock.
+                if is_live(name) is not False:
+                    continue
+                # A different tmux server can still host this child without a lease.
+                if not before_boot and child_process_live(name) is not False:
+                    continue
+                # Then only the leases again, and the write, under the lease lock
+                # every lease writer takes: no lease can appear in between.
+                with _LeaseLock(runtime_dir):
+                    if live_lease(runtime_dir, name, boot=boot):
+                        continue
+                    _atomic_json(state_path, state)
+                    os.chmod(token_path, 0o600)
+                recovered.append((name, outcome))
+        except (ResumeStateError, OSError, UnicodeDecodeError):
+            continue
+    return recovered
+
+
+def _lease_alive(lease: Path, boot: float | None) -> bool:
+    """A live-session lease names a running process only if it was written since
+    this machine booted and that PID is alive. Before a boot, the PID may now
+    belong to an unrelated process (a reboot reuses PIDs)."""
+    if not lease.name.isdigit():
+        return False
+    try:
+        if boot is not None and lease.stat().st_mtime < boot:
+            return False
+        os.kill(int(lease.name), 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+class _LeaseLock:
+    """Serialize lease writes and pruning with recovery and expiry's last check.
+
+    Holders work on local files. Run tmux and process probes outside the lock.
+    A waiter that has waited `warn_after` seconds says so once on stderr and
+    keeps waiting.
+    """
+
+    def __init__(self, runtime_dir: Path, *, warn_after: float = 10.0) -> None:
+        self.root = runtime_dir / "live-sessions"
+        self.warn_after = warn_after
+        self.descriptor: int | None = None
+
+    def __enter__(self) -> "_LeaseLock":
+        import sys as _sys
+        import time as _time
+
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.descriptor = os.open(self.root / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        started, warned = _time.monotonic(), False
+        while True:
+            try:
+                fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except BlockingIOError:
+                if not warned and _time.monotonic() - started >= self.warn_after:
+                    print(f"child_resume: still waiting for {self.root / '.lock'}", file=_sys.stderr)
+                    warned = True
+                _time.sleep(0.02)
+
+    def __exit__(self, *_exc: object) -> None:
+        if self.descriptor is not None:
+            os.close(self.descriptor)
+            self.descriptor = None
+
+
+def write_lease(runtime_dir: Path, agent_name: str, pid: int) -> None:
+    """Record that `pid` (a provider CLI) runs `agent_name`, under the lease lock."""
+    if not SAFE_NAME.fullmatch(agent_name) or pid <= 1:
+        raise ResumeStateError("invalid_identity", "lease name or PID is not valid")
+    with _LeaseLock(runtime_dir) as lock:
+        holder = lock.root / agent_name
+        holder.mkdir(mode=0o700, exist_ok=True)
+        (holder / str(pid)).write_bytes(b"")
+
+
+def prune_leases(runtime_dir: Path, *, boot: float | None = None) -> None:
+    """Drop leases whose process has ended or that predate the last boot."""
+    boot = boot_time() if boot is None else boot
+    root = runtime_dir / "live-sessions"
+    if not root.is_dir():
+        return
+    with _LeaseLock(runtime_dir):
+        try:
+            holders = [path for path in root.iterdir() if path.is_dir()]
+        except OSError:
+            return
+        for holder in holders:
+            try:
+                for lease in holder.iterdir():
+                    if lease.name.isdigit() and not _lease_alive(lease, boot):
+                        lease.unlink(missing_ok=True)
+                holder.rmdir()
+            except OSError:
+                continue
+
+
+def live_lease(runtime_dir: Path, agent_name: str, *, exclude_pid: int | None = None,
+               boot: float | None = None) -> bool:
+    """Is a session of this identity alive, by its leases (not counting exclude_pid)?"""
+    boot = boot_time() if boot is None else boot
+    holder = runtime_dir / "live-sessions" / agent_name
+    try:
+        leases = list(holder.iterdir()) if holder.is_dir() else []
+    except OSError:
+        return True  # cannot tell: say yes, as identity_live_elsewhere does
+    return any(lease.name != str(exclude_pid) and _lease_alive(lease, boot) for lease in leases)
 
 
 def _looks_like_agent_mail(name: str) -> bool:
@@ -1127,6 +1744,263 @@ def _plugin_name(header: str) -> str:
     return (match.group(1) or match.group(2)) if match else ""
 
 
+def _git_dir_of(directory: Path) -> Path | None:
+    """The git directory a checkout's `.git` names (a directory or a gitdir: file)."""
+    marker = directory / ".git"
+    try:
+        if marker.is_dir():
+            return marker.resolve()
+        if marker.is_file():
+            text = marker.read_text(encoding="utf-8").strip()
+            if text.startswith("gitdir:"):
+                gitdir = Path(text[len("gitdir:"):].strip())
+                return (gitdir if gitdir.is_absolute() else directory / gitdir).resolve()
+    except (OSError, UnicodeError):
+        return None
+    return None
+
+
+def _linked_worktree(work_dir: Path) -> tuple[Path, Path] | None:
+    """(worktree root, shared git directory) when work_dir is in a linked worktree.
+
+    Read from files only (the worktree's `.git` and its `commondir`), never by
+    running git, so no GIT_* variable or repository config takes part. A main
+    checkout and a submodule are not linked worktrees.
+    """
+    for directory in (work_dir, *work_dir.parents):
+        marker = directory / ".git"
+        if marker.is_dir():
+            return None
+        if not marker.is_file():
+            continue
+        gitdir = _git_dir_of(directory)
+        if gitdir is None or gitdir.parent.name != "worktrees" or not gitdir.is_dir():
+            return None
+        # Only metadata git itself wrote for this very checkout counts: its
+        # commondir names the shared directory, and its gitdir points back at
+        # this `.git` (review of #174). A `.git` file merely naming some
+        # repository's worktrees/ directory borrows nothing.
+        try:
+            pointer = (gitdir / "commondir").read_text(encoding="utf-8").strip()
+            back = (gitdir / "gitdir").read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            return None
+        if not pointer or not back:
+            return None
+        back_path = Path(back) if Path(back).is_absolute() else gitdir / back
+        try:
+            if back_path.resolve() != marker.resolve():
+                return None
+            common = (gitdir / pointer).resolve()
+        except OSError:
+            return None
+        # The metadata must live under worktrees/ of the very git directory
+        # its commondir names: metadata kept in another repository cannot lend
+        # itself a trusted repository's identity (re-check of #174).
+        try:
+            if not common.is_dir() or common != gitdir.parent.parent.resolve():
+                return None
+        except OSError:
+            return None
+        return directory, common
+    return None
+
+
+def _source_checkout(key_path: str, common: Path) -> Path | None:
+    """The checkout above key_path whose `.git` names the shared git directory."""
+    path = Path(key_path)
+    if not path.is_absolute():
+        return None
+    for directory in path.parents:
+        gitdir = _git_dir_of(directory)
+        if gitdir is not None:
+            return directory if gitdir == common else None
+    return None
+
+
+def _worktree_hook_trust(config_text: str, work_dir: Path | None) -> list[str]:
+    """Config lines carrying a checkout's hook trust to its linked worktree.
+
+    Codex keys hook trust by the hooks.json path, so the project hooks a user
+    already trusted in a checkout wait for review again in its worktree, and do
+    not run meanwhile (a Codex child stopped on "4 hooks need review" for 4.5
+    minutes, 2026-10-01). The trust is a hash of the hook's content, which Codex
+    checks again: copying it re-trusts only hooks that are identical to the ones
+    the user trusted. The source checkout is the one whose `.git` names the same
+    git directory as the worktree (also when it is kept elsewhere, as for the
+    vault). Nothing the user has not trusted is added, an entry the user already
+    has for the worktree path is kept, and only this child's config.toml is
+    written.
+    """
+    if work_dir is None:
+        return []
+    found = _linked_worktree(work_dir)
+    if found is None:
+        return []
+    worktree, common = found
+    try:
+        state = _toml().loads(config_text).get("hooks", {}).get("state", {})
+    except _toml().TOMLDecodeError:
+        return []
+    if not isinstance(state, dict):
+        return []
+    roots = {os.fspath(worktree)}
+    try:
+        roots.add(os.fspath(worktree.resolve()))
+    except OSError:
+        pass
+    # One checkout can be trusted under more than one path (its real path and
+    # a symlink to it): every candidate for a worktree key is gathered first,
+    # each key is written once, and a key whose candidates disagree is left to
+    # Codex's own review rather than picked by order (review of #174).
+    carried: dict[str, set[tuple[str | None, bool]]] = {}
+    for key, entry in state.items():
+        trusted = entry.get("trusted_hash") if isinstance(entry, dict) else None
+        parts = key.rsplit(":", 3)
+        disabled = isinstance(entry, dict) and entry.get("enabled") is False
+        if (not isinstance(trusted, str) and not disabled) or len(parts) != 4:
+            continue
+        if not isinstance(trusted, str):
+            trusted = None
+        source = _source_checkout(parts[0], common)
+        if source is None:
+            continue
+        relative = key[len(os.fspath(source)):]
+        for root in sorted(roots):
+            new_key = root + relative
+            if new_key not in state:
+                carried.setdefault(new_key, set()).add((trusted, disabled))
+    lines: list[str] = []
+    for new_key in sorted(carried):
+        hashes = carried[new_key]
+        if len(hashes) != 1:
+            continue
+        trusted, disabled = next(iter(hashes))
+        lines.extend(["", "[hooks.state." + _toml_string(new_key) + "]"])
+        if isinstance(trusted, str):
+            lines.append("trusted_hash = " + _toml_string(trusted))
+        if disabled:
+            lines.append("enabled = false")
+    if lines:
+        lines[0:0] = ["", "# Written by spawn_child.sh: hook trust the user gave to this",
+                      "# worktree's source checkout, for the same hooks here."]
+    return lines
+
+
+def _checked_home_hook_state(
+    runtime: Path, name: str, project_key: str, runner: Path, *, active: bool
+) -> dict[str, dict] | None:
+    """Read approval metadata from an owned canonical home, never its credentials."""
+    state_path, token_path, home, _mcp, lock = _paths(runtime, name)
+    config_path = home / "config.toml"
+    paths = (runtime, state_path.parent, home, state_path, token_path, config_path, lock)
+    try:
+        if runtime.absolute() != runtime.resolve():
+            return None
+        before = {}
+        for path in paths:
+            info = path.lstat()
+            directory = path in paths[:3]
+            if (not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode))
+                    or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) & (0o022 if directory and path != home else 0o077)
+                    or (not directory and info.st_nlink != 1)):
+                return None
+            before[path] = info
+        state = _load_state(state_path)
+        _validate_identity(state, agent_name=name, project_key=project_key, program="codex")
+        if not _retained_shape(state):
+            return None
+        if active and (state.get("retired_at") is not None
+                       or state.get("resume_in_progress_at") is not None
+                       or state.get("tools_change_generation")
+                       or any(os.path.lexists(path) for path in (
+                           _tools_journal(state_path), _legacy_pending(state_path),
+                           state_path.with_name(f".{name}.registration-pending.json")))):
+            return None
+        config = _toml().loads(_read_private(config_path, "hook approval config", 1024 * 1024).decode("utf-8"))
+        servers = config.get("mcp_servers", {})
+        if not isinstance(servers, dict):
+            return None
+        expected = {"AGENTSTACK_PROXY_AGENT_NAME": name, "AGENTSTACK_PROXY_PROGRAM": "codex",
+                    "AGENTSTACK_PROJECT_KEY": project_key, "AGENTSTACK_RUNTIME_DIR": os.fspath(runtime),
+                    "AGENTSTACK_PROXY_TOKEN_FILE": os.fspath(token_path)}
+        for alias in ("orrery-mail", "agentstack"):
+            proxy = servers.get(alias)
+            if (not isinstance(proxy, dict) or proxy.get("enabled") is False
+                    or proxy.get("command") != os.fspath(runner)
+                    or not isinstance(proxy.get("env"), dict)
+                    or any(proxy["env"].get(k) != v for k, v in expected.items())):
+                return None
+        hooks = config.get("hooks", {})
+        approvals = hooks.get("state", {}) if isinstance(hooks, dict) else None
+        if not isinstance(approvals, dict):
+            return None
+        result = {}
+        for key, entry in approvals.items():
+            if (not isinstance(entry, dict) or ("enabled" in entry and type(entry["enabled"]) is not bool)
+                    or ("trusted_hash" in entry and (not isinstance(entry["trusted_hash"], str)
+                        or re.fullmatch(r"sha256:[0-9a-f]{64}", entry["trusted_hash"]) is None))):
+                return None
+            if "trusted_hash" in entry or entry.get("enabled") is False:
+                result[key] = {k: entry[k] for k in ("trusted_hash", "enabled") if k in entry}
+        for path, original in before.items():
+            current = path.lstat()
+            if any(getattr(current, k) != getattr(original, k) for k in (
+                "st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"
+            )):
+                return None
+        return result
+    except (OSError, ValueError, UnicodeError):
+        return None
+
+
+def _inherit_parent_hook_trust(
+    text: str, runtime: Path, parent: str, child: str, project_key: str, runner: Path
+) -> str:
+    """Carry existing human decisions only; unavailable parents add no trust."""
+    if not parent or parent == child or not PROXY_AGENT_NAME.fullmatch(parent):
+        return text
+    descriptor = None
+    try:
+        _state, _token, _home, _mcp, lock = _paths(runtime, parent)
+        # The child lock is already held. Never create/repair a parent lock or
+        # wait for it: another child can be generating that very parent's home.
+        descriptor = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        locked = os.fstat(descriptor)
+        current = lock.lstat()
+        if ((locked.st_dev, locked.st_ino) != (current.st_dev, current.st_ino)
+                or not stat.S_ISREG(locked.st_mode) or locked.st_uid != os.getuid()
+                or stat.S_IMODE(locked.st_mode) & 0o077 or locked.st_nlink != 1):
+            return text
+        approvals = _checked_home_hook_state(runtime, parent, project_key, runner, active=True)
+        if not approvals or (lock.lstat().st_dev, lock.lstat().st_ino) != (locked.st_dev, locked.st_ino):
+            return text
+        child_home = _paths(runtime, child)[2]
+        own = _checked_home_hook_state(runtime, child, project_key, runner, active=False) if os.path.lexists(child_home) else {}
+        if own is None:
+            return text
+        config = _toml().loads(text)
+        hooks = config.setdefault("hooks", {})
+        if not isinstance(hooks, dict) or not isinstance(hooks.get("state", {}), dict):
+            return text
+        target = hooks.setdefault("state", {})
+        for key, entry in approvals.items():
+            if entry.get("enabled") is False or "trusted_hash" not in entry:
+                continue
+            existing = target.get(key, {})
+            if not isinstance(existing, dict) or existing.get("enabled") is False:
+                continue
+            target[key] = own[key] if own.get(key, {}).get("enabled") is False else entry
+        return _emit_toml(config)
+    except (OSError, ValueError, UnicodeError):
+        return text
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def _build_home_unlocked(
     *,
     home: Path,
@@ -1143,6 +2017,8 @@ def _build_home_unlocked(
     mcp_profile: str,
     overlay_setting: str = "",
     parent_agent: str = "",
+    work_dir: Path | None = None,
+    screen_generation: str = "",
 ) -> Path:
     if not SAFE_NAME.fullmatch(child) or mcp_profile not in MCP_PROFILES:
         raise ValueError("invalid child identity or MCP profile")
@@ -1152,10 +2028,10 @@ def _build_home_unlocked(
     # fails: a child that asked for less must not silently get everything.
     # child_tools.py is loaded only for a child that has a record; a missing
     # helper then fails the build instead of skipping the selection.
+    tools = _child_tools()
     tools_spec = None
     record = tools_record_path(runtime_dir, child)
     if record.exists() or record.is_symlink():
-        tools = _child_tools()
         try:
             tools_spec = tools.read_codex_record(os.fspath(record))
         except tools.ToolsError as exc:
@@ -1252,6 +2128,7 @@ def _build_home_unlocked(
             "renew_reservations",
             "release_reservations",
             "runtime_status",
+            "show_files",
             "whois",
         )
         for name in claimed:
@@ -1294,14 +2171,14 @@ def _build_home_unlocked(
         config_text = "\n".join(lines) + "\n"
         if overlay_setting.strip():
             try:
-                overlay = tomllib.loads(
+                overlay = _toml().loads(
                     Path(overlay_setting).read_text(encoding="utf-8")
                 )
-                config = tomllib.loads(config_text)
+                config = _toml().loads(config_text)
                 _drop_protected_overlay_tables(overlay)
                 _deep_merge(config, overlay)
                 candidate = _emit_toml(config)
-                tomllib.loads(candidate)
+                _toml().loads(candidate)
                 config_text = candidate
             except Exception as exc:
                 print(
@@ -1312,8 +2189,15 @@ def _build_home_unlocked(
                     + "; continuing without it",
                     file=os.sys.stderr,
                 )
+        # Interpret final operator disable decisions before carrying approvals
+        # or giving the same checkout's hooks their worktree path.
+        config_text = _inherit_parent_hook_trust(config_text, runtime_dir, parent_agent,
+                                                 child, project_key, runner)
+        carried = _worktree_hook_trust(config_text, work_dir)
+        if carried:
+            config_text += "\n".join(carried) + "\n"
         if mcp_profile == "orrery-only":
-            config = tomllib.loads(config_text)
+            config = _toml().loads(config_text)
             for name, server in config.get("mcp_servers", {}).items():
                 if name == "agentstack" or _looks_like_agent_mail(name):
                     continue
@@ -1325,14 +2209,19 @@ def _build_home_unlocked(
                 if isinstance(plugin, dict):
                     plugin["enabled"] = False
             config_text = _emit_toml(config)
-        if tools_spec is not None:
-            config = tomllib.loads(config_text)
-            try:
-                tools.codex_apply(config, tools_spec)
-            except tools.ToolsError as exc:
-                raise ValueError(str(exc)) from exc
+        config = _toml().loads(config_text)
+        try:
+            selection = tools_spec or tools.normalize()
+            managed_screen = tools.screen_definition(
+                selection, runtime_dir, project_key, child, screen_generation,
+                mail_env=mail_env,
+            )
+            tools.codex_apply(config, selection, managed_screen=managed_screen)
+        except tools.ToolsError as exc:
+            raise ValueError(str(exc)) from exc
+        if _toml().loads(config_text) != config:
             config_text = _emit_toml(config)
-            tomllib.loads(config_text)
+            _toml().loads(config_text)
         target = temporary / "config.toml"
         target.write_text(config_text, encoding="utf-8")
         os.chmod(target, 0o600)
@@ -1375,6 +2264,8 @@ def build_home(
     mcp_profile: str,
     overlay_setting: str = "",
     parent_agent: str = "",
+    work_dir: Path | None = None,
+    screen_generation: str = "",
 ) -> Path:
     """Build only the canonical generated home while holding the child lock."""
 
@@ -1384,6 +2275,8 @@ def build_home(
     if home.absolute() != expected_home.absolute():
         raise ValueError("generated Codex home is not canonical for this child")
     with _AgentLock(lock_path, exclusive=True):
+        if _state.exists():
+            _check_tools_change(_load_state(_state), _state)
         if not parent_agent:
             # A resume rebuilds the home without being told the parent; the
             # launcher recorded it in the child's state.
@@ -1403,25 +2296,45 @@ def build_home(
             mcp_profile=mcp_profile,
             overlay_setting=overlay_setting,
             parent_agent=parent_agent,
+            work_dir=work_dir,
+            screen_generation=screen_generation,
         )
 
 
 def main() -> int:
+    helper=Path(__file__).resolve().parents[1]/'bin/lib/runtime_client.py'
+    selection = subprocess.run(['/bin/bash', str(helper.with_name('global-client-loader.sh')), 'select', *sys.argv[1:]])
+    if selection.returncode not in (0, 125):
+        return 2
+    if selection.returncode == 0:
+        try:
+            api=runpy.run_path(str(helper));client=api['configured']()
+            if client is not None:
+                with client.fence():pass
+                raise api['ClientError']('GLOBAL_CHILD_USE_REGISTER_ENTRY')
+        except (ValueError,RuntimeError,OSError) as exc:
+            print('child-resume: '+str(exc),file=sys.stderr)
+            return 2
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
+    recovery = sub.add_parser("rollback-tools-change")
+    recovery.add_argument("--runtime-dir", required=True)
+    recovery.add_argument("--agent-name", required=True)
+    recovery.add_argument("--generation", required=True)
     active = sub.add_parser("prepare-active")
     active.add_argument("--runtime-dir", required=True)
     active.add_argument("--agent-name", required=True)
     active.add_argument("--project-key", required=True)
     active.add_argument("--mcp-profile", choices=sorted(MCP_PROFILES), default="inherit")
-    active.add_argument("--program", choices=sorted(CODEX_PROGRAMS | CLAUDE_PROGRAMS))
+    active.add_argument("--codex-standalone", choices=("true", "false"), default="false")
+    active.add_argument("--program", choices=sorted(CODEX_PROGRAMS | CLAUDE_PROGRAMS | HARNESS_PROGRAMS))
     active.add_argument("--generation")
     active.add_argument("--parent-agent")
     stage = sub.add_parser("stage-registration")
     stage.add_argument("--runtime-dir", required=True)
     stage.add_argument("--agent-name", required=True)
     stage.add_argument("--project-key", required=True)
-    stage.add_argument("--program", required=True, choices=sorted(CODEX_PROGRAMS | CLAUDE_PROGRAMS))
+    stage.add_argument("--program", required=True, choices=sorted(CODEX_PROGRAMS | CLAUDE_PROGRAMS | HARNESS_PROGRAMS))
     stage.add_argument("--generation", required=True)
     stage.add_argument("--source")
     stage.add_argument("--binding")
@@ -1462,6 +2375,16 @@ def main() -> int:
     purge.add_argument("--runtime-dir", required=True)
     purge.add_argument("--expired", action="store_true")
     purge.add_argument("agent_name", nargs="?")
+    prune = sub.add_parser("prune-leases")
+    prune.add_argument("--runtime-dir", required=True)
+    write = sub.add_parser("write-lease")
+    write.add_argument("--runtime-dir", required=True)
+    write.add_argument("--agent-name", required=True)
+    write.add_argument("--pid", type=int, required=True)
+    lease = sub.add_parser("live-lease")
+    lease.add_argument("--runtime-dir", required=True)
+    lease.add_argument("--agent-name", required=True)
+    lease.add_argument("--exclude-pid", type=int, default=None)
     discard = sub.add_parser("discard-generated")
     discard.add_argument("--runtime-dir", required=True)
     discard.add_argument("--agent-name", required=True)
@@ -1483,10 +2406,15 @@ def main() -> int:
     build.add_argument("--python-bin", default="")
     build.add_argument("--overlay", default="")
     build.add_argument("--parent-agent", default="")
+    build.add_argument("--work-dir", default="")
+    build.add_argument("--screen-generation", default="")
     args = parser.parse_args()
     try:
         runtime = Path(getattr(args, "runtime_dir", "")).expanduser()
-        if args.command == "prepare-active":
+        if args.command == "rollback-tools-change":
+            with tools_change_lock(Path(args.runtime_dir), args.agent_name):
+                finish_tools_change(Path(args.runtime_dir), args.agent_name, args.generation, commit=False)
+        elif args.command == "prepare-active":
             prepare_active_state(
                 runtime,
                 args.agent_name,
@@ -1494,6 +2422,7 @@ def main() -> int:
                 mcp_profile=args.mcp_profile,
                 program=args.program, generation=args.generation,
                 parent_agent=args.parent_agent,
+                codex_standalone=args.codex_standalone == "true",
             )
         elif args.command == "stage-registration":
             if bool(args.source) != bool(args.binding):
@@ -1513,6 +2442,14 @@ def main() -> int:
         elif args.command == "resume-eligibility":
             print(resume_eligibility(runtime, args.agent_name, agent_id=args.agent_id,
                                      project_key=args.project_key, program=args.program))
+        elif args.command == "prune-leases":
+            prune_leases(runtime)
+        elif args.command == "write-lease":
+            write_lease(runtime, args.agent_name, args.pid)
+        elif args.command == "live-lease":
+            if not SAFE_NAME.fullmatch(args.agent_name):
+                return 2
+            return 0 if live_lease(runtime, args.agent_name, exclude_pid=args.exclude_pid) else 1
         elif args.command == "mark-retired":
             print(
                 "retained"
@@ -1572,6 +2509,8 @@ def main() -> int:
                 mcp_profile=args.mcp_profile,
                 overlay_setting=args.overlay,
                 parent_agent=args.parent_agent,
+                work_dir=Path(args.work_dir).expanduser() if args.work_dir else None,
+                screen_generation=args.screen_generation,
             )
             print(home)
     except (OSError, ValueError, ResumeStateError) as exc:

@@ -1,0 +1,118 @@
+{
+  "fixture_version": 1,
+  "generation": "fixture-generation-1",
+  "agents": [
+    {
+      "agent_id": 1,
+      "source": "legacy-a",
+      "name": "BlueLake",
+      "retired": false
+    },
+    {
+      "agent_id": 2,
+      "source": "legacy-b",
+      "name": "bluelake",
+      "retired": true
+    },
+    {
+      "agent_id": 3,
+      "source": "legacy-c",
+      "name": "Blue-Lake",
+      "retired": false
+    }
+  ],
+  "windows": [
+    {
+      "row_id": 12,
+      "source": "legacy-a",
+      "window_uuid": "old-window",
+      "display_name": "BlueLake",
+      "bindings": [
+        "session-a"
+      ],
+      "expired": false
+    },
+    {
+      "row_id": 34,
+      "source": "legacy-b",
+      "window_uuid": "old-window",
+      "display_name": "bluelake",
+      "bindings": [
+        "session-b"
+      ],
+      "expired": true
+    }
+  ],
+  "expected_writers": [
+    "mail",
+    "watcher",
+    "proxy-wake"
+  ],
+  "required_final_checks": [
+    "agent_names_unique",
+    "attachments_preserved",
+    "bindings_verified",
+    "block_hashes_verified",
+    "contact_policy_preserved",
+    "credential_generations_preserved",
+    "delivery_states_preserved",
+    "fts_valid",
+    "lease_anchors_resolved",
+    "message_ids_preserved",
+    "recipient_read_ack_preserved",
+    "reply_references_preserved",
+    "window_mapping_complete"
+  ],
+  "messages": [
+    {
+      "message_id": 101,
+      "source": "legacy-a",
+      "sender_id": 1,
+      "to": [
+        2
+      ],
+      "cc": [],
+      "bcc": [],
+      "thread_id": null,
+      "topic": "fixture"
+    },
+    {
+      "message_id": 102,
+      "source": "legacy-b",
+      "sender_id": 1,
+      "to": [
+        3
+      ],
+      "cc": [],
+      "bcc": [],
+      "thread_id": "101",
+      "topic": "fixture"
+    },
+    {
+      "message_id": 201,
+      "source": "legacy-a",
+      "sender_id": 1,
+      "to": [
+        2
+      ],
+      "cc": [],
+      "bcc": [
+        4
+      ],
+      "thread_id": "historic-label",
+      "topic": null
+    },
+    {
+      "message_id": 202,
+      "source": "legacy-b",
+      "sender_id": 1,
+      "to": [
+        3
+      ],
+      "cc": [],
+      "bcc": [],
+      "thread_id": "historic-label",
+      "topic": null
+    }
+  ]
+}

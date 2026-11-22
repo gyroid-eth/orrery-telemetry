@@ -60,6 +60,61 @@ def _claude_json(path: pathlib.Path, *, servers=None, projects=None) -> str:
     return str(path)
 
 
+CLAUDE_CHROME_NAMES = {
+    "browser_batch", "computer", "file_upload", "find", "form_input",
+    "get_page_text", "gif_creator", "javascript_tool", "list_connected_browsers",
+    "navigate", "read_console_messages", "read_network_requests", "read_page",
+    "resize_window", "select_browser", "shortcuts_execute", "shortcuts_list",
+    "switch_browser", "tabs_close_mcp", "tabs_context_mcp", "tabs_create_mcp",
+    "upload_image",
+}
+
+
+@pytest.mark.parametrize("source", ["browser", "legacy", "installer-default"])
+@pytest.mark.parametrize("base", ["default", "mail-only"])
+def test_claude_browser_approves_exactly_known_names(tmp_path, source, base):
+    cj = _claude_json(tmp_path / "c.json")
+    spec = _spec(base, {"browser": True} if source == "browser" else None)
+    chrome = source == "legacy"
+    if source == "installer-default":
+        defaults = child_tools.resolve_defaults(
+            "browser", provider="claude", cwd=str(tmp_path), claude_json=cj,
+            platform="linux")
+        spec, chrome = defaults["spec"], defaults["chrome"]
+        spec["base"] = base
+    plan = child_tools.claude_plan(spec, cwd=str(tmp_path), chrome=chrome,
+                                   claude_json=cj, platform="linux")
+    assert plan["servers"] == {}
+    assert plan["flags"] == ["--allowed-tools", ",".join(
+        f"mcp__claude-in-chrome__{name}" for name in sorted(CLAUDE_CHROME_NAMES))]
+    assert len(CLAUDE_CHROME_NAMES) == 22
+    assert len(child_tools.CLAUDE_CHROME_TOOLS) == 22
+    assert pathlib.Path(cj).read_text() == json.dumps({"mcpServers": {}, "projects": {}})
+
+
+@pytest.mark.parametrize("base, flags", [("default", []), ("mail-only", ["--no-chrome"])])
+def test_claude_without_browser_keeps_original_plan(tmp_path, base, flags):
+    cj = _claude_json(tmp_path / "c.json")
+    assert child_tools.claude_plan(_spec(base), cwd=str(tmp_path), chrome=False,
+                                   claude_json=cj, platform="linux") == {
+        "servers": {}, "flags": flags}
+
+
+def test_claude_browser_and_screen_share_one_allowed_flag(tmp_path):
+    cj = _claude_json(tmp_path / "c.json", servers={"windows-mcp": WINDOWS_MCP})
+    spec = _spec(None, {"browser": True,
+                       "screen": {"access": "read", "server": "windows-mcp"}})
+    flags = child_tools.claude_plan(spec, cwd=str(tmp_path), chrome=False,
+                                    claude_json=cj, platform="linux")["flags"]
+    assert flags.count("--allowed-tools") == 1
+    allowed = flags[flags.index("--allowed-tools") + 1].split(",")
+    assert len(allowed) == 24
+    assert set(allowed) == {
+        *(f"mcp__claude-in-chrome__{name}" for name in CLAUDE_CHROME_NAMES),
+        "mcp__windows-mcp__Screenshot", "mcp__windows-mcp__Snapshot"}
+    assert flags[2:] == READ_FLAGS[2:]
+
+
 # --------------------------------------------------------------------------- #
 # the selection
 # --------------------------------------------------------------------------- #
@@ -108,9 +163,10 @@ def test_chrome_fields_and_tools_browser_must_agree():
         child_tools.merge_chrome(spec, True, "b")
 
 
-def test_codex_has_no_claude_in_chrome_and_no_builtin_screen():
-    with pytest.raises(child_tools.ToolsError, match="Claude in Chrome"):
-        child_tools.check_provider(_spec(None, {"browser": True}), "codex")
+def test_codex_browser_is_chrome_devtools_and_has_no_device_or_builtin_screen():
+    child_tools.check_provider(_spec(None, {"browser": True}), "codex")
+    with pytest.raises(child_tools.ToolsError, match="deviceId"):
+        child_tools.check_provider(_spec(None, {"browser": {"device": "d"}}), "codex")
     with pytest.raises(child_tools.ToolsError, match="no built-in screen"):
         child_tools.check_provider(_spec(None, {"screen": "operate"}), "codex")
 
@@ -125,7 +181,7 @@ def test_mail_only_adds_no_chrome_unless_a_browser_was_chosen(tmp_path):
     assert plan == {"servers": {}, "flags": ["--no-chrome"]}
     plan = child_tools.claude_plan(_spec("mail-only", {"browser": True}), cwd=str(tmp_path),
                                    chrome=True, claude_json=cj, platform="darwin")
-    assert plan["flags"] == []
+    assert plan["flags"] == ["--allowed-tools", ",".join(child_tools.claude_chrome_allowed_tools())]
 
 
 def test_default_base_with_a_server_does_not_touch_chrome(tmp_path):
@@ -187,6 +243,11 @@ def test_read_only_windows_mcp_allows_only_the_table_tools(tmp_path):
         cwd=str(tmp_path), chrome=False, claude_json=cj, platform="linux")
     assert plan["servers"] == {"windows-mcp": WINDOWS_MCP}
     assert plan["flags"] == ["--no-chrome", *READ_FLAGS]
+    prompt = child_tools.prompt_text(
+        _spec("mail-only", {"screen": {"access": "read", "server": "windows-mcp"}}),
+        "claude")
+    assert "computer use, read (MCP server windows-mcp)" in prompt
+    assert "The computer use tools are read only: do not click, type or open applications." in prompt
 
 
 SCREEN_OPERATE = ("App", "Click", "DisplayInventory", "Move", "MultiEdit", "MultiSelect",
@@ -255,9 +316,190 @@ def test_codex_operate_exposes_and_approves_only_screen_tools():
     assert set(windows["enabled_tools"]) == screen
     assert set(windows["tools"]) == screen
     node = config["mcp_servers"]["node_repl"]
-    assert node == {"command": "/usr/bin/node_repl", "enabled": True}
+    assert node == {"command": "/usr/bin/node_repl", "enabled": True,
+                    "required": True, "startup_timeout_sec": 60}
     for server_cfg in config["mcp_servers"].values():
         assert "default_tools_approval_mode" not in server_cfg
+
+
+CHROME_DEVTOOLS = {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest", "--autoConnect"]}
+ARBITRARY = ("evaluate_script", "upload_file", "take_heapsnapshot",
+             "performance_start_trace", "performance_stop_trace", "lighthouse_audit",
+             "get_network_request", "take_screenshot", "take_snapshot")
+
+
+def test_chrome_devtools_table_splits_every_tool_into_one_class():
+    table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["1.10.1"]
+    tiers = [set(table["read"]), set(table["operate"])]
+    assert set().union(*tiers) == set(table["all"]) and sum(map(len, tiers)) == 30
+    # the name-classified entry exposes exactly the same names, and no "all"
+    star = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["*"]
+    assert star["read"] == table["read"] and star["operate"] == table["operate"]
+    assert "all" not in star
+
+
+@pytest.mark.parametrize("args", [
+    ["-y", "chrome-devtools-mcp@latest", "--autoConnect"],
+    ["chrome-devtools-mcp", "--autoConnect"],
+    ["-y", "chrome-devtools-mcp@9.9.9"],
+    ["-y", "chrome-devtools-mcp@1.10.1"],
+])
+def test_codex_browser_exposes_and_approves_only_the_listed_names(args):
+    config = {"mcp_servers": {"chrome-devtools": {
+        "command": "npx", "args": args,
+        "default_tools_approval_mode": "approve",
+        "tools": {"new_unknown_tool": {"approval_mode": "approve"}}}}}
+    child_tools.codex_apply(config, _spec(None, {"browser": True}))
+    server = config["mcp_servers"]["chrome-devtools"]
+    table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["*"]
+    names = set(table["read"]) | set(table["operate"])
+    assert server["enabled"] is True
+    assert set(server["enabled_tools"]) == names == set(server["tools"])
+    assert all(v == {"approval_mode": "approve"} for v in server["tools"].values())
+    assert "default_tools_approval_mode" not in server
+    for tool in ARBITRARY:
+        assert server["tools"][tool] == {"approval_mode": "approve"}
+    assert "new_unknown_tool" not in server["enabled_tools"]
+
+
+def test_codex_browser_read_only_through_the_screen_form():
+    config = {"mcp_servers": {"chrome-devtools": dict(CHROME_DEVTOOLS)}}
+    child_tools.codex_apply(config, _spec(None, {
+        "screen": {"access": "read", "server": "chrome-devtools"}}))
+    table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["*"]
+    assert set(config["mcp_servers"]["chrome-devtools"]["enabled_tools"]) == set(table["read"])
+
+
+def test_browser_read_cannot_approve_host_file_output_arguments():
+    config = {"mcp_servers": {"chrome-devtools": dict(CHROME_DEVTOOLS)}}
+    child_tools.codex_apply(config, _spec(None, {
+        "screen": {"access": "read", "server": "chrome-devtools"}}))
+    approved = config["mcp_servers"]["chrome-devtools"]["tools"]
+    assert not {"take_snapshot", "take_screenshot", "get_network_request"} & approved.keys()
+    assert not {"navigate_page", "evaluate_script", "upload_file"} & approved.keys()
+
+
+def test_browser_operate_approves_all_known_names_without_a_version_pin():
+    config = {"mcp_servers": {"chrome-devtools": dict(CHROME_DEVTOOLS)}}
+    child_tools.codex_apply(config, _spec(None, {
+        "screen": {"access": "operate", "server": "chrome-devtools"}}))
+    server = config["mcp_servers"]["chrome-devtools"]
+    known = set(child_tools.TOOL_TABLE["chrome-devtools-mcp"]["1.10.1"]["all"])
+    assert set(server["enabled_tools"]) == set(server["tools"]) == known
+    assert "default_tools_approval_mode" not in server
+
+
+@pytest.mark.parametrize("definition", [
+    {"command": "node", "args": ["/tmp/chrome-devtools-mcp"]},
+    {"command": "node", "args": ["/tmp/chrome-devtools-mcp@1.10.1"]},
+    {"command": "npx", "args": ["--package", "chrome-devtools-mcp@1.10.1",
+                                "node", "/tmp/custom-mcp.js"]},
+    {"command": "npx", "args": ["-p", "chrome-devtools-mcp@latest", "other-server"]},
+    {"command": "npx", "args": ["other-server", "chrome-devtools-mcp@1.10.1"]},
+    {"command": "npx", "args": ["--", "-y", "chrome-devtools-mcp@1.10.1"]},
+])
+def test_chrome_package_in_wrapper_or_dependency_never_gets_approved(definition):
+    assert child_tools.table_entry(definition) is None
+    for selection in ({"browser": True},
+                      {"screen": {"access": "read", "server": "chrome-devtools"}},
+                      {"mcp": ["chrome-devtools"], "approve_all": ["chrome-devtools"]}):
+        with pytest.raises(child_tools.ToolsError):
+            child_tools.codex_apply({"mcp_servers": {"chrome-devtools": definition.copy()}},
+                                    _spec(None, selection))
+
+
+def test_browser_server_name_does_not_classify_a_different_package():
+    with pytest.raises(child_tools.ToolsError, match="does not run chrome-devtools"):
+        child_tools.codex_apply({"mcp_servers": {"chrome-devtools": {
+            "command": "uvx", "args": ["windows-mcp@0.8.6"]}}},
+            _spec(None, {"browser": True}))
+
+
+@pytest.mark.parametrize("access", ["read", "operate"])
+def test_codex_browser_and_another_screen_have_independent_approvals(access):
+    config = {"mcp_servers": {
+        "cdp": dict(CHROME_DEVTOOLS),
+        "windows-mcp": {"command": "uvx", "args": ["windows-mcp@0.8.6"]}}}
+    child_tools.codex_apply(config, _spec(None, {
+        "browser": True, "screen": {"access": access, "server": "windows-mcp"}}))
+    chrome = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["*"]
+    assert set(config["mcp_servers"]["cdp"]["enabled_tools"]) == \
+        set(chrome["read"] + chrome["operate"])
+    windows = {"Screenshot", "Snapshot"}
+    if access == "operate":
+        windows.update(SCREEN_OPERATE)
+    assert set(config["mcp_servers"]["windows-mcp"]["enabled_tools"]) == windows
+
+
+def test_claude_pinned_chrome_read_explicitly_denies_operating_and_file_tools(tmp_path):
+    cj = _claude_json(tmp_path / "c.json", servers={"cdp": {
+        "command": "/usr/local/bin/npx", "args": ["chrome-devtools-mcp@1.10.1"]}})
+    plan = child_tools.claude_plan(_spec(None, {
+        "screen": {"access": "read", "server": "cdp"}}), cwd=str(tmp_path),
+        chrome=False, claude_json=cj, platform="linux")
+    flags = plan["flags"]
+    allowed = set(flags[flags.index("--allowed-tools") + 1].split(","))
+    denied = set(flags[flags.index("--disallowed-tools") + 1].split(","))
+    table = child_tools.TOOL_TABLE["chrome-devtools-mcp"]["1.10.1"]
+    assert allowed == {f"mcp__cdp__{tool}" for tool in table["read"]}
+    assert denied == {f"mcp__cdp__{tool}" for tool in table["all"] if tool not in table["read"]}
+    assert {"mcp__cdp__navigate_page", "mcp__cdp__evaluate_script", "mcp__cdp__upload_file"} <= denied
+
+
+def test_claude_pinned_chrome_operate_approves_scripts_and_file_tools(tmp_path):
+    cj = _claude_json(tmp_path / "c.json", servers={"cdp": {
+        "command": "/usr/local/bin/npx", "args": ["chrome-devtools-mcp@1.10.1"]}})
+    plan = child_tools.claude_plan(_spec(None, {
+        "screen": {"access": "operate", "server": "cdp"}}), cwd=str(tmp_path),
+        chrome=False, claude_json=cj, platform="linux")
+    flags = plan["flags"]
+    assert "--disallowed-tools" not in flags
+    allowed = set(flags[flags.index("--allowed-tools") + 1].split(","))
+    assert len(allowed) == 30
+    assert {f"mcp__cdp__{tool}" for tool in (*ARBITRARY, "navigate_page")} <= allowed
+
+
+@pytest.mark.parametrize("version", ["latest", "9.9.9", ""])
+@pytest.mark.parametrize("access", ["read", "operate"])
+def test_claude_unknown_chrome_version_cannot_hide_unknown_tools(tmp_path, version, access):
+    package = "chrome-devtools-mcp" + ("@" + version if version else "")
+    cj = _claude_json(tmp_path / "c.json", servers={"cdp": {
+        "command": "/usr/local/bin/npx", "args": [package]}})
+    with pytest.raises(child_tools.ToolsError, match="must pin"):
+        child_tools.claude_plan(_spec(None, {
+            "screen": {"access": access, "server": "cdp"}}), cwd=str(tmp_path),
+            chrome=False, claude_json=cj, platform="linux")
+
+
+def test_codex_browser_finds_a_renamed_server_and_needs_one():
+    config = {"mcp_servers": {"cdp": dict(CHROME_DEVTOOLS)}}
+    child_tools.codex_apply(config, _spec(None, {"browser": True}))
+    assert config["mcp_servers"]["cdp"]["enabled"] is True
+    with pytest.raises(child_tools.ToolsError, match="chrome-devtools MCP server"):
+        child_tools.codex_apply({"mcp_servers": {"x": {"command": "/bin/x"}}},
+                                _spec(None, {"browser": True}))
+    with pytest.raises(child_tools.ToolsError, match="wrapper"):
+        child_tools.codex_apply(
+            {"mcp_servers": {"chrome-devtools": {"command": "/home/me/cdp.sh"}}},
+            _spec(None, {"browser": True}))
+
+
+def test_codex_browser_all_needs_a_pinned_version_and_adds_evaluate_script():
+    unpinned = {"mcp_servers": {"chrome-devtools": dict(CHROME_DEVTOOLS)}}
+    with pytest.raises(child_tools.ToolsError, match="cannot list"):
+        child_tools.codex_apply(unpinned, _spec(None, {
+            "mcp": ["chrome-devtools"], "approve_all": ["chrome-devtools"]}))
+    pinned = {"mcp_servers": {"chrome-devtools": {
+        "command": "npx", "args": ["-y", "chrome-devtools-mcp@1.10.1"]}}}
+    child_tools.codex_apply(pinned, _spec(None, {
+        "mcp": ["chrome-devtools"], "approve_all": ["chrome-devtools"]}))
+    assert "evaluate_script" in pinned["mcp_servers"]["chrome-devtools"]["tools"]
+
+
+def test_codex_browser_mail_only_keeps_other_servers_off_and_describes_itself():
+    spec = _spec("mail-only", {"browser": True})
+    assert "chrome-devtools MCP server" in child_tools.prompt_text(spec, "codex")
+    assert "Claude in Chrome" in child_tools.prompt_text(spec, "claude")
 
 
 def test_codex_all_needs_a_known_version():
@@ -361,11 +603,73 @@ def test_codex_selected_server_must_exist():
         child_tools.codex_apply({"mcp_servers": {}}, _spec("mail-only", {"mcp": ["x"]}))
 
 
+@pytest.mark.parametrize("selection", [
+    {"browser": True},
+    {"screen": {"access": "operate", "server": "chosen"}},
+    {"mcp": ["chosen"]},
+])
+def test_codex_only_selected_servers_become_required(selection):
+    import copy
+    definition = {**CHROME_DEVTOOLS, "enabled": False, "required": False,
+                  "startup_timeout_sec": 120, "tool_timeout_sec": 75,
+                  "env": {"MODE": "fixture"}}
+    config = {"mcp_servers": {"chosen": definition, "other": {"command": "/bin/other"},
+                              "agentstack": {"command": "/bin/mail"},
+                              "orrery-mail": {"url": "http://localhost/mail"}}}
+    before = copy.deepcopy(config)
+    child_tools.codex_apply(config, _spec(None, selection))
+    chosen = config["mcp_servers"]["chosen"]
+    assert chosen["required"] is True and chosen["enabled"] is True
+    for key in ("command", "args", "startup_timeout_sec", "tool_timeout_sec", "env"):
+        assert chosen[key] == before["mcp_servers"]["chosen"][key]
+    for name in ("other", "agentstack", "orrery-mail"):
+        assert config["mcp_servers"][name] == before["mcp_servers"][name]
+
+
+@pytest.mark.parametrize("timeouts, expected", [
+    ({}, {"startup_timeout_sec": 60}),
+    ({"startup_timeout_sec": 10}, {"startup_timeout_sec": 60}),
+    ({"startup_timeout_sec": 120}, {"startup_timeout_sec": 120}),
+    ({"startup_timeout_ms": 10000}, {"startup_timeout_ms": 60000}),
+    ({"startup_timeout_ms": 120000}, {"startup_timeout_ms": 120000}),
+])
+def test_codex_selected_startup_timeout_has_a_floor(timeouts, expected):
+    config = {"mcp_servers": {"chosen": {"command": "/bin/chosen", **timeouts}}}
+    child_tools.codex_apply(config, _spec(None, {"mcp": ["chosen"]}))
+    assert config["mcp_servers"]["chosen"] == {
+        "command": "/bin/chosen", "enabled": True, "required": True, **expected}
+
+
+def test_codex_no_selection_and_mail_proxy_keep_startup_policy():
+    config = {"mcp_servers": {"agentstack": {"command": "/bin/mail"},
+                              "other": {"command": "/bin/other", "required": False}}}
+    child_tools.codex_apply(config, _spec())
+    assert config["mcp_servers"]["other"] == {"command": "/bin/other", "required": False}
+    assert config["mcp_servers"]["agentstack"] == {"command": "/bin/mail"}
+    child_tools.codex_apply(config, _spec(None, {"mcp": ["agentstack"]}))
+    assert config["mcp_servers"]["agentstack"] == {"command": "/bin/mail", "enabled": True}
+
+
+@pytest.mark.parametrize("grace", [None, 0, 1000, 5000])
+def test_codex_selection_keeps_global_optional_startup_grace(grace):
+    config = {"mcp_servers": {"chosen": {"command": "/bin/chosen"}}}
+    if grace is not None:
+        config["mcp_optional_startup_grace_ms"] = grace
+    child_tools.codex_apply(config, _spec(None, {"mcp": ["chosen"]}))
+    assert config["mcp_servers"]["chosen"]["required"] is True
+    if grace is None:
+        assert "mcp_optional_startup_grace_ms" not in config
+    else:
+        assert config["mcp_optional_startup_grace_ms"] == grace
+
+
 # --------------------------------------------------------------------------- #
 # launcher
 # --------------------------------------------------------------------------- #
 def _env(tmp_path, *, codex=False, proxy=True, claude_json=None):
     env, workdir = _fake_launch_env(tmp_path, codex=codex)
+    env["AGENTSTACK_PYTHON"] = sys.executable
+    env["PATH"] = str(pathlib.Path(sys.executable).parent) + os.pathsep + env["PATH"]
     for key in ("AGENTSTACK_CLAUDE_CHILD_CHROME", "AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE"):
         env.pop(key, None)
     if proxy:
@@ -408,6 +712,103 @@ def test_launcher_default_is_the_command_used_before(tmp_path):
     assert result.returncode == 0, result.stderr
     assert _inner(env) == _launched()
     assert _records(env, "PlainChild") == []
+
+
+def test_defaults_keep_available_browser_and_omit_only_unavailable_tools(tmp_path):
+    result = child_tools.resolve_defaults("browser,screen:operate,mcp:missing", "codex",
+        cwd=str(tmp_path), codex_config={"mcp_servers": {"cdp": dict(CHROME_DEVTOOLS)}})
+    assert result["spec"] == _spec(None, {"browser": True})
+    assert len(result["omitted"]) == 2
+    assert "screen:operate" in result["omitted"][0]
+    assert "mcp:missing" in result["omitted"][1]
+
+
+def test_defaults_check_computer_use_in_final_worktree_directory(tmp_path):
+    original = str(tmp_path / "source")
+    worktree = str(tmp_path / "worktree")
+    cj = _claude_json(tmp_path / "c.json",
+        projects={original: {"enabledMcpServers": ["computer-use"]}})
+    ready = child_tools.resolve_defaults("browser,screen:operate", "claude",
+        cwd=original, claude_json=cj, platform="darwin")
+    moved = child_tools.resolve_defaults("browser,screen:operate", "claude",
+        cwd=worktree, claude_json=cj, platform="darwin")
+    assert set(ready["spec"]["tools"]) == {"browser", "screen"}
+    assert set(moved["spec"]["tools"]) == {"browser"}
+    assert len(moved["omitted"]) == 1
+
+
+def test_invalid_default_does_not_remove_other_choices_or_echo_its_contents(tmp_path):
+    result = child_tools.resolve_defaults("unrecognized-value,browser", "codex",
+        cwd=str(tmp_path), codex_config={"mcp_servers": {"cdp": dict(CHROME_DEVTOOLS)}})
+    assert set(result["spec"]["tools"]) == {"browser"}
+    assert len(result["omitted"]) == 1
+    assert "unrecognized-value" not in result["omitted"][0]
+
+
+@pytest.mark.parametrize("overlay_text, browser", [
+    ('[mcp_servers.cdp]\ncommand = "node"\nargs = ["/tmp/chrome-devtools-mcp"]\n', False),
+    ('not valid TOML [', True),
+])
+def test_codex_defaults_check_the_merged_overlay_without_echoing_config(tmp_path, overlay_text, browser):
+    source = tmp_path / "config.toml"
+    source.write_text('[mcp_servers.cdp]\ncommand = "npx"\n'
+                      'args = ["chrome-devtools-mcp@latest"]\n', encoding="utf-8")
+    overlay = tmp_path / "overlay.toml"
+    overlay.write_text(overlay_text, encoding="utf-8")
+    result = subprocess.run([
+        sys.executable, str(ROOT / "hooks" / "child_tools.py"), "defaults",
+        "--provider", "codex", "--selection", "browser", "--cwd", str(tmp_path),
+        "--codex-config", str(source), "--overlay", str(overlay),
+    ], text=True, capture_output=True, check=True)
+    spec, _chrome, _device, _restrictive, notice = result.stdout.strip().split("|")
+    assert ("browser" in json.loads(spec)["tools"]) is browser
+    assert bool(notice) is not browser
+    assert overlay_text.strip() not in result.stdout + result.stderr
+
+
+def test_launcher_defaults_partial_omission_is_in_output_prompt_and_effective_record(tmp_path):
+    env, workdir = _env(tmp_path)
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser,mcp:missing"
+    result = _launch(tmp_path, env, workdir, "DefaultBrowser")
+    assert result.returncode == 0, result.stderr
+    assert "--chrome" in _inner(env)
+    notice = "Default tool mcp:missing is unavailable on this machine and was omitted."
+    assert notice in result.stderr
+    assert notice in _log_text(env)
+    record = json.loads(_records(env, "DefaultBrowser")[0].read_text())
+    assert record["tools"] == {"browser": {"device": ""}}
+
+
+def test_launcher_all_defaults_omitted_still_launches_and_announces_it(tmp_path):
+    env, workdir = _env(tmp_path)
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "mcp:missing"
+    result = _launch(tmp_path, env, workdir, "DefaultNone")
+    assert result.returncode == 0, result.stderr
+    assert _inner(env) == _launched()
+    assert _records(env, "DefaultNone") == []
+    notice = "Default tool mcp:missing is unavailable on this machine and was omitted."
+    assert notice in result.stderr and notice in _log_text(env)
+
+
+@pytest.mark.parametrize("flags", [("--base", "default"),
+                                  ("--tools", "browser")])
+def test_explicit_selection_bypasses_defaults_even_when_defaults_are_invalid(tmp_path, flags):
+    env, workdir = _env(tmp_path)
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "invalid-default"
+    result = _launch(tmp_path, env, workdir, "ExplicitChild", *flags)
+    assert result.returncode == 0, result.stderr
+    assert "omitted" not in result.stderr and "omitted" not in _log_text(env)
+    notice = "Default tools were not applied because an explicit base, tools or MCP profile takes precedence."
+    assert notice in result.stderr and notice in _log_text(env)
+
+
+def test_explicit_unavailable_tools_still_fail_with_defaults_configured(tmp_path):
+    env, workdir = _env(tmp_path)
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser"
+    result = _launch(tmp_path, env, workdir, "ExplicitMissing", "--tools", "mcp:missing")
+    assert result.returncode != 0
+    assert _no_launch(env)
+    assert "omitted" not in result.stderr
 
 
 def test_launcher_explicit_default_base_is_the_same_launch(tmp_path):
@@ -455,7 +856,9 @@ def test_launcher_browser_tool_is_claude_in_chrome(tmp_path):
                      "--base", "mail-only", "--tools", "browser:win-brave")
     assert result.returncode == 0, result.stderr
     inner = _inner(env)
-    assert inner == _launched(" --chrome")
+    assert inner == _launched(" --allowed-tools " + ",".join(
+        child_tools.claude_chrome_allowed_tools()) + " --chrome")
+    assert inner.count("--allowed-tools") == 1
     assert "--no-chrome" not in inner
     assert "deviceId win-brave" in _log_text(env)
 
@@ -510,7 +913,7 @@ def test_launcher_stops_when_a_server_cannot_be_copied(tmp_path):
     (["--base", "all"], "base must be"),
     (["--tools", "shell"], "unknown --tools entry"),
     (["--tools", "mcp:orrery-mail"], "is ORRERY Mail"),
-    (["--codex", "--tools", "browser"], "Claude in Chrome"),
+    (["--codex", "--tools", "browser:dev"], "deviceId"),
     (["--codex", "--codex-mcp", "inherit", "--base", "mail-only"], "contradicts"),
 ])
 def test_launcher_rejects_invalid_selections_before_launch(tmp_path, flags, message):
@@ -578,6 +981,36 @@ def test_codex_default_launch_writes_no_record(tmp_path):
     assert "enabled" not in _codex_child_config(env, "CodexPlain")["mcp_servers"]["windows-mcp"]
 
 
+def test_codex_default_browser_records_effective_selection_and_omission(tmp_path):
+    env, workdir = _codex_env(tmp_path, CODEX_CONFIG + 'args = ["chrome-devtools-mcp@latest"]\n')
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser,screen:operate"
+    result = _launch(tmp_path, env, workdir, "CodexDefaults", codex=True)
+    assert result.returncode == 0, result.stderr
+    record = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents" / "CodexDefaults.tools.json"
+    assert child_tools.read_codex_record(str(record)) == _spec(None, {"browser": True})
+    server_cfg = _codex_child_config(env, "CodexDefaults")["mcp_servers"]["chrome-devtools"]
+    assert len(server_cfg["enabled_tools"]) == 30
+    notice = "Default tool screen:operate is unavailable on this machine and was omitted."
+    assert notice in result.stderr and notice in _log_text(env)
+
+
+@pytest.mark.parametrize("profile", ["orrery-only", "inherit"])
+def test_explicit_codex_profile_wins_over_default_browser(tmp_path, profile):
+    env, workdir = _codex_env(tmp_path, CODEX_CONFIG + 'args = ["chrome-devtools-mcp@latest"]\n')
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser"
+    result = _launch(tmp_path, env, workdir, "CodexProfile", "--codex-mcp", profile, codex=True)
+    assert result.returncode == 0, result.stderr
+    config = _codex_child_config(env, "CodexProfile")
+    chrome = config["mcp_servers"]["chrome-devtools"]
+    if profile == "orrery-only":
+        assert chrome["enabled"] is False
+    assert "enabled_tools" not in chrome and "tools" not in chrome
+    record = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents" / "CodexProfile.tools.json"
+    assert not record.exists()
+    notice = "Default tools were not applied because an explicit base, tools or MCP profile takes precedence."
+    assert notice in result.stderr and notice in _log_text(env)
+
+
 def test_codex_fails_closed_on_an_unknown_server(tmp_path):
     env, workdir = _codex_env(tmp_path, CODEX_CONFIG)
     result = _launch(tmp_path, env, workdir, "CodexMissing", "--base", "mail-only",
@@ -636,15 +1069,29 @@ def test_api_passes_base_and_tools_to_the_launcher(monkeypatch):
     assert captured[0].provider_args == ("--tools", "mcp:a", "--tools", "mcp:b:all")
 
 
+@pytest.mark.parametrize("payload", [{"tools": {}}, {"base": "default"},
+                                     {"base": "default", "tools": {}}])
+def test_api_explicit_empty_tools_suppresses_installer_defaults(payload):
+    args, error = server._spawn_tools_args(payload, "claude", False, "")
+    assert error is None
+    assert args == ("--base", "default")
+    assert server._spawn_tools_args({}, "claude", False, "") == ((), None)
+
+
+def test_api_empty_selection_keeps_other_providers_legacy_launcher_arguments():
+    assert server._spawn_tools_args({"tools": {}}, "gemini", False, "") == ((), None)
+
+
 @pytest.mark.parametrize("payload, message", [
     ({"base": "all"}, "base must be"),
     ({"tools": ["mcp"]}, "tools must be an object"),
     ({"tools": {"mcp": ["orrery-mail"]}}, "is ORRERY Mail"),
     ({"claude_chrome_device": "a", "tools": {"browser": {"device": "b"}}}, "different browsers"),
-    ({"provider": "codex", "tools": {"browser": True}}, "Claude in Chrome"),
+    ({"provider": "codex", "tools": {"browser": {"device": "d"}}}, "deviceId"),
 ])
 def test_api_rejects_invalid_selections(monkeypatch, payload, message):
     captured = []
+    monkeypatch.setattr(server, "_child_tools_module", lambda: child_tools)
     monkeypatch.setattr(server, "_spawn_unavailable_error", lambda: None)
     monkeypatch.setattr(server, "_spawn_request", lambda _p: ({}, None))
     monkeypatch.setattr(server, "_claude_catalog", lambda: type(
@@ -683,6 +1130,8 @@ def test_resume_rebuilds_the_selected_config_and_flags(resume, monkeypatch, tmp_
     runtime, registration, launches, calls = resume
     cj = _claude_json(tmp_path / "c.json", servers={"notes": {"command": "/bin/notes"}})
     monkeypatch.setenv("AGENTSTACK_CLAUDE_JSON", cj)
+    # Changing installer defaults must not add browser access during resume.
+    monkeypatch.setenv("AGENTSTACK_CHILD_DEFAULT_TOOLS", "browser")
     child(runtime, registration)
     _bound_tools_record(runtime, _spec("mail-only", {"mcp": ["notes"]}))
     result = server.do_resume(NAME)
@@ -731,9 +1180,10 @@ def test_resume_stops_when_a_selected_server_is_gone(resume, monkeypatch, tmp_pa
     assert not launches and not calls
 
 
-def test_codex_resume_build_applies_the_record_or_fails(tmp_path):
+def test_codex_resume_build_applies_the_record_or_fails(tmp_path, monkeypatch):
     """build-home (used by spawn and by the dashboard resume) reads the record."""
     from hooks import child_resume
+    monkeypatch.setenv("AGENTSTACK_CHILD_DEFAULT_TOOLS", "browser")
     runtime = tmp_path / "runtime"
     source = tmp_path / "codex"
     source.mkdir()
@@ -760,6 +1210,11 @@ def test_codex_resume_build_applies_the_record_or_fails(tmp_path):
     home = build("orrery-only")
     config = tomllib.loads((home / "config.toml").read_text())
     assert config["mcp_servers"]["windows-mcp"]["enabled_tools"] == ["Screenshot", "Snapshot"]
+    assert config["mcp_servers"]["windows-mcp"]["required"] is True
+    assert config["mcp_servers"]["windows-mcp"]["startup_timeout_sec"] == 60
+    assert "required" not in config["mcp_servers"]["chrome-devtools"]
+    assert "required" not in config["mcp_servers"]["agentstack"]
+    assert (source / "config.toml").read_text() == CODEX_CONFIG
     # A damaged record stops the build instead of widening the child.
     record.write_text("{", encoding="utf-8")
     with pytest.raises(ValueError, match="not valid JSON"):
@@ -820,3 +1275,94 @@ def test_codex_forecast_checks_the_tools_record(monkeypatch, tmp_path):
     with pytest.raises(server._ResumeCapabilityError) as exc:
         server._codex_resume_child_home("CodexCast", registration)
     assert exc.value.code == "config_unrestorable"
+
+
+def test_screen_standard_claude_launch_uses_generated_binding(tmp_path):
+    from hooks import screen_state
+    cj = _claude_json(tmp_path / "settings.json", servers={
+        "cua-driver": {"command": "/fixture/cua-driver"},
+        "orrery-screen": {"command": "/fixture/untrusted", "env": {"INHERITED": "fixture"}},
+    })
+    env, workdir = _env(tmp_path, claude_json=cj)
+    env["AGENTSTACK_SCREEN_PYTHON"] = sys.executable
+    name = "ScreenChild"
+    result = _launch(tmp_path, env, workdir, name, "--tools", "screen:read:orrery-screen")
+    assert result.returncode == 0, result.stderr
+    runtime = pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"])
+    config = json.loads((runtime / "child-agents" / f"{name}.mcp.json").read_text())
+    assert set(config["mcpServers"]) == {"orrery-mail", "orrery-screen"}
+    assert screen_state.Store(runtime).list()[0]["computer_use"] == "view"
+    for tool in screen_state.TOOLS:
+        assert f"mcp__orrery-screen__{tool}" in _inner(env)
+    definition = config["mcpServers"]["orrery-screen"]
+    assert definition["args"] == ["-I", "-m", "agentstack_mail.screen_mcp"]
+    assert set(definition["env"]) == {"AGENTSTACK_SCREEN_BINDING_FILE"}
+
+
+def test_screen_claude_resume_uses_a_new_generation(resume, monkeypatch, tmp_path):
+    from hooks import screen_state
+    runtime, registration, launches, calls = resume
+    monkeypatch.setenv("AGENTSTACK_SCREEN_PYTHON", sys.executable)
+    monkeypatch.setenv("AGENTSTACK_CLAUDE_JSON", _claude_json(
+        tmp_path / "claude.json", servers={"cua-driver": {"command": "/fixture/cua-driver"}}))
+    child(runtime, registration)
+    _bound_tools_record(runtime, _spec(None, {"mcp": ["orrery-screen"]}))
+    store = screen_state.Store(runtime)
+    token = store.launch(registration["project_key"], screen_state.launch_runtime(runtime),
+                         NAME, "a" * 32, "control")
+    result = server.do_resume(NAME)
+    assert result["ok"], result
+    assert "mcp__orrery-screen__get_window_state" in launches[0][-1]
+    settings = json.loads((runtime / "child-agents" / f"{NAME}.mcp.json").read_text())
+    assert set(settings["mcpServers"]) == {"orrery-mail", "orrery-screen"}
+    assert store.list()[0]["generation"] != "a" * 32
+    assert store.list()[0]["computer_use"] == "off"
+    with pytest.raises(screen_state.ScreenStateError, match="SCREEN_CHILD_REQUIRED"):
+        store.child(token)
+
+
+def test_screen_codex_home_filters_source_overlay_and_plugins(tmp_path, monkeypatch):
+    from hooks import child_resume, screen_state
+    monkeypatch.setenv("AGENTSTACK_SCREEN_PYTHON", sys.executable)
+    runtime = tmp_path / "runtime"
+    source = tmp_path / "codex"
+    source.mkdir()
+    config_text = ('[mcp_servers.cua-driver]\ncommand = "/fixture/cua-driver"\n'
+                   '[plugins."third-party@market"]\nenabled = true\n')
+    (source / "config.toml").write_text(config_text)
+    overlay = tmp_path / "overlay.toml"
+    overlay.write_text('[mcp_servers.alias]\ncommand = "/fixture/cua-relay.py"\n')
+    runner = tmp_path / "run-mcp.sh"
+    _executable(runner, "#!/bin/bash\nexit 0\n")
+    name = "ScreenChild"
+    runtime.mkdir()
+    token = runtime / ("agent_token_" + name)
+    token.write_text("synthetic")
+    token.chmod(0o600)
+    record = child_resume.tools_record_path(runtime, name)
+
+    def build(generation):
+        return child_resume.build_home(
+            home=runtime / "child-agents" / (name + ".codex-home"), source=source,
+            runner=runner, child=name, project_key="/fixture/project", token_file=token,
+            mcp_url="http://127.0.0.1:1/mcp", mail_env="", runtime_dir=runtime,
+            bearer_mode="auto", python_bin="", mcp_profile="inherit",
+            overlay_setting=str(overlay), screen_generation=generation)
+
+    child_tools.write_codex_record(str(record), _spec(None, {"mcp": ["orrery-screen"]}))
+    home = build("a" * 32)
+    config = tomllib.loads((home / "config.toml").read_text())
+    screen = config["mcp_servers"]["orrery-screen"]
+    assert screen["required"] and config["plugins"]["third-party@market"]["enabled"] is False
+    assert set(screen["enabled_tools"]) == set(screen_state.TOOLS)
+    assert all(tool["approval_mode"] == "approve" for tool in screen["tools"].values())
+    for alias in ("alias", "cua-driver"):
+        assert config["mcp_servers"][alias]["enabled"] is False
+    record.unlink()
+    home = build("b" * 32)
+    config = tomllib.loads((home / "config.toml").read_text())
+    assert "orrery-screen" not in config["mcp_servers"]
+    assert config["mcp_servers"]["cua-driver"]["enabled"] is False
+    assert config["plugins"]["third-party@market"]["enabled"] is True
+    assert screen_state.Store(runtime).list() == []
+    assert (source / "config.toml").read_text() == config_text

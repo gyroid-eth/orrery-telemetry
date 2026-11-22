@@ -477,3 +477,15 @@ def test_teardown_leaves_a_concurrent_install_under_the_same_prefix_alone(monkey
     service_teardown = _with_fake(monkeypatch, fake)
     service_teardown.stop_dashboard(mine, appear_timeout=0.1, label_prefix=prefix)
     assert fake.booted_out() == [f"{prefix}.mail"]
+
+
+def test_linux_emulation_teardown_still_stops_owned_supervisor(tmp_path, monkeypatch):
+    import service_teardown
+    home = tmp_path / "home"
+    calls = []
+    monkeypatch.setattr(service_teardown, "bootout_install_jobs",
+                        lambda *a: pytest.fail("Linux fixture cannot load launchd jobs"))
+    monkeypatch.setattr(service_teardown, "stop_recorded_supervisor",
+                        lambda pidfile, owner: calls.append((pidfile, owner)) or True)
+    service_teardown.stop_dashboard(home, launchd=False)
+    assert calls == [(home / ".agentstack/runtime/dashboard.pid", home)]

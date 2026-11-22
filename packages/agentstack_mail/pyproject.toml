@@ -16,6 +16,8 @@ authors = [
 dependencies = [
   "anyio>=4.5,<5",
   "fastmcp==2.13.0.2",
+  # .18 removed the affected emSign roots; .19 preserves unaffected roots too.
+  "certifi>=2026.10.19",
   # boundary.py intentionally follows Uvicorn's signal-capture contract so
   # FastMCP's outer database lifespan can finish after SIGTERM.
   "uvicorn==0.52.1",
@@ -45,6 +47,10 @@ classifiers = [
 
 [project.scripts]
 agentstack-mail = "agentstack_mail.cli:main"
+agentstack-mail-global-prepare-s2b = "agentstack_mail.global_prepare_s2b:main"
+agentstack-mail-global-prepare-s2c = "agentstack_mail.global_prepare_s2c:main"
+agentstack-mail-global-prepare = "agentstack_mail.global_prepare:main"
+agentstack-mail-global-incident = "agentstack_mail.global_incident:main"
 agentstack-enroll = "agentstack_mail.enrollment_cli:main"
 agentstack-mail-migrate = "agentstack_mail.migration:main"
 agentstack-mail-service = "agentstack_mail.service:main"

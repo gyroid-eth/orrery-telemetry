@@ -53,13 +53,20 @@ def _fake_launch_env(
         "    if [[ \"${FAKE_CODEX:-0}\" == 1 ]]; then\n"
         "      [[ -f \"$FAKE_TMUX_LOG.screen\" ]] && cat \"$FAKE_TMUX_LOG.screen\"\n"
         "      printf '\\ngpt-5.5 xhigh · ~/workspace\\n'\n"
+        "      [[ \"${FAKE_CODEX_START_RUNNING:-0}\" == 1 ]] && printf '• Working (1s • esc to interrupt)\\n'\n"
         "    else\n"
         "      printf '\\n❯ \\n'\n"
-        "    fi ;;\n"
+        "    fi; exit 0 ;;\n"
         "  has-session) [[ -f \"$FAKE_TMUX_ALIVE\" ]] ;;\n"
         "  kill-session) rm -f \"$FAKE_TMUX_ALIVE\" ;;\n"
         "  load-buffer) cat \"$4\" >> \"$FAKE_TMUX_LOG\" ;;\n"
-        "  display-message) printf 'ParentAgent\\n' ;;\n"
+        "  display-message)\n"
+        "    if [[ -f \"$FAKE_TMUX_LOG.warm-name\" ]]; then\n"
+        "      name=$(cat \"$FAKE_TMUX_LOG.warm-name\")\n"
+        "      if [[ \"$*\" == *\"-t =$name\"* && \"$*\" == *'#{pane_id}'* ]]; then printf '%s\\n' '%warm-fixture'; exit 0; fi\n"
+        "      if [[ \"$*\" == *'-t %warm-fixture'* ]]; then printf '%s\\n' \"${FAKE_WARM_IDENTITY_OVERRIDE:-$name}\"; exit 0; fi\n"
+        "    fi\n"
+        "    printf 'ParentAgent\\n' ;;\n"
         "esac\n",
     )
     _executable(bindir / "sleep", "#!/bin/bash\nexit 0\n")
@@ -101,6 +108,8 @@ def _fake_launch_env(
         "FAKE_TMUX_ALIVE": str(tmux_alive),
         "FAKE_CODEX": "1" if codex else "0",
     })
+    from _fake_tmux_transport import add_transport_evidence
+    add_transport_evidence(bindir,env)
     return env, workdir
 
 
@@ -220,12 +229,25 @@ def test_orrery_only_stops_before_cli_when_profile_home_cannot_be_built(
     )
 
 
-@pytest.mark.parametrize("prompt_path", ["embed", "mail", "standalone"])
+@pytest.mark.parametrize("prompt_path,approval_override,full_access,expected_flags", [
+    ("embed", "untrusted", False, "--sandbox workspace-write --ask-for-approval untrusted"),
+    ("mail", None, False, "--sandbox workspace-write --ask-for-approval never"),
+    ("standalone", "never", False, "--sandbox workspace-write"),
+    ("embed", "on-request", True, "--sandbox danger-full-access --ask-for-approval never"),
+    ("standalone", None, True, "--sandbox danger-full-access --ask-for-approval never"),
+])
 def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
-    tmp_path: pathlib.Path, prompt_path: str,
+    tmp_path: pathlib.Path, prompt_path: str, approval_override: str | None,
+    full_access: bool, expected_flags: str,
 ) -> None:
     env, workdir = _fake_launch_env(tmp_path, codex=True)
     _enable_fake_codex_profile(tmp_path, env)
+    if approval_override is not None:
+        env["AGENTSTACK_CODEX_CHILD_APPROVAL"] = approval_override
+    if full_access:
+        install_home = pathlib.Path(env["AGENTSTACK_HOME"])
+        install_home.mkdir(exist_ok=True)
+        (install_home / "env.sh").write_text("export AGENTSTACK_CODEX_SANDBOX=danger-full-access\n")
     child_name = f"Profile-{prompt_path}"
     handoff = _codex_handoff(tmp_path, child_name)
     args = [
@@ -258,10 +280,12 @@ def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
 
     assert result.returncode == 0, result.stderr
     injected = pathlib.Path(env["FAKE_TMUX_LOG"]).read_text(encoding="utf-8")
+    assert f"\034AGENTSTACK_CODEX_PERMISSION_FLAGS={expected_flags}\034" in injected
     # The task went in as the child's argv, never through a paste buffer. No
     # history-binding receipt exists here, so its start is reported as unknown.
     assert "ARGV_TASK" in injected
-    assert "first-task confirmation unknown" in result.stderr
+    assert "first-task confirmation unknown" in result.stderr.lower()
+    assert "start_unconfirmed:" in result.stderr
     assert "\034load-buffer" not in injected and "\034paste-buffer" not in injected
     assert "shell/files and authenticated ORRERY Mail remain available" in injected
     assert "Other inherited MCP servers and plugins are disabled" in injected
@@ -412,7 +436,7 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
     assert "ARGV_TASK" in injected
     assert "\034paste-buffer" not in injected
     if codex:
-        assert "first-task confirmation unknown" in result.stderr
+        assert "first-task confirmation unknown" in result.stderr.lower()
     else:
         assert "ARGV_TASK\034600\034" in injected, "the first prompt file must be private"
     assert "IGNORED POSITIONAL TASK" not in injected
@@ -615,3 +639,42 @@ def test_late_launcher_exit_skips_the_new_attempt_session_registry_and_worktree(
     assert not marker.exists() and not pathlib.Path(env['FAKE_TMUX_LOG']).exists()
     for path, saved in before.items():
         assert (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns) == saved
+
+
+@pytest.mark.parametrize('capture_ok,alive,expected,captures,has_calls',[
+    (True,False,3,2,0),
+    (False,False,3,1,1),
+])
+def test_initial_watch_reuses_successful_capture_but_rechecks_failure(
+    tmp_path,capture_ok,alive,expected,captures,has_calls,
+):
+    import re
+    body=re.search(r'(?ms)^codex_watch_initial_task\(\) \{.*?^\}',SPAWN.read_text()).group()
+    alive_body=re.search(r'(?ms)^codex_session_alive\(\) \{.*?^\}',SPAWN.read_text()).group()
+    log=tmp_path/'calls';script=tmp_path/'watch.sh'
+    script.write_text("""#!/bin/bash
+sleep() { :; }
+tmux() {
+  printf '%s\n' "$1" >> "$CALL_LOG"
+  if [[ "$1" == capture-pane ]]; then
+    printf '%s\n' '• Working (1s • esc to interrupt)'
+    [[ "$CAPTURE_OK" == 1 ]]; return $?
+  fi
+  [[ "$ALIVE" == 1 ]]
+}
+codex_initial_task_status() { echo unknown; }
+codex_trust_screen_up() { return 1; }
+codex_turn_running_on_screen() { return 0; }
+codex_turn_finished_on_screen() { return 1; }
+pane_nonblank_tail() { cat; }
+spawn_note() { printf '%s\n' "$*"; }
+"""+alive_body+"\n"+body+"\ncodex_watch_initial_task Fixture task watch '' ''\n")
+    env={**os.environ,'CALL_LOG':str(log),'CAPTURE_OK':str(int(capture_ok)),'ALIVE':str(int(alive))}
+    result=subprocess.run(['/bin/bash',str(script)],env=env,text=True,capture_output=True,timeout=10)
+    assert result.returncode==expected,result.stderr
+    calls=log.read_text().splitlines()
+    assert calls.count('capture-pane')==captures
+    assert calls.count('has-session')==has_calls
+    assert not set(calls)-{'capture-pane','has-session'}
+    if expected==3:assert 'confirmation unknown' in result.stdout.lower()
+    else:assert 'died' in result.stderr

@@ -17,6 +17,7 @@ import math
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -108,9 +109,13 @@ def _parser() -> argparse.ArgumentParser:
     for operation, help_text in (
         ("inspect", "validate the profile and enrolled row without starting it"),
         ("run", "validate, take the instance lock, and exec the configured process"),
+        ("reconnect", "reconnect a global preparation profile without starting its proxy"),
     ):
         command = commands.add_parser(operation, help=help_text)
         command.add_argument("--profile", required=True, help="0600 persistent profile JSON path")
+    configure = commands.add_parser("configure", help="operator-only global execution settings from JSON stdin")
+    configure.add_argument("--profile", required=True)
+    configure.add_argument("--operator", required=True, action="store_true")
     return parser
 
 
@@ -1220,6 +1225,7 @@ def _write_codex_home(
             "reserve_files",
             "renew_reservations",
             "release_reservations",
+            "show_files",
         )
     }
     codex_proxy_env = dict(proxy_env)
@@ -1479,6 +1485,37 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     profile_path = _expand_path(args.profile)
     try:
+        # An explicit fresh profile dispatches to the shared native launcher;
+        # legacy enrollment and global preparation keep their existing paths.
+        if _read_private_json(profile_path, 'profile-invalid').get('kind') == 'orrery-fresh-persistent-v1':
+            if args.operation not in {'run', 'inspect'}:
+                raise PersistentError('fresh-profile-operation-unsupported')
+            command = [os.environ.get('AGENTSTACK_PYTHON', sys.executable), '-m',
+                       'agentstack_mail.fresh_persistent', args.operation, '--profile', str(profile_path),
+                       '--wrapper-root', str(Path(__file__).resolve().parent.parent)]
+            os.execvpe(command[0], command, os.environ)
+        if 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in os.environ or os.environ.get('AGENTSTACK_RUNTIME_MODE') == 'fresh':
+            raise PersistentError('FRESH_PROFILE_REQUIRED')
+        api = runpy.run_path(str(Path(__file__).resolve().parent / 'lib/runtime_client.py'))
+        try:
+            if args.operation == 'configure':
+                profile=api['read_json'](profile_path)
+                if profile.get('kind') != api['PROFILE_KIND']:
+                    raise api['ClientError']('LEGACY_FILE_REQUIRES_IMPORT')
+                client=api['RuntimeClient'](Path(profile['client_config']))
+                if profile_path != client.profile_path:
+                    raise api['ClientError']('FIXED_LAYOUT_PATH_NOT_SUPPORTED')
+                value=json.loads(sys.stdin.read(1048577))
+                print(json.dumps(api['runtime_delivery'](client).configure_execution(value)))
+                return
+            global_result = api['profile_operation'](profile_path, args.operation)
+        except api['ClientError'] as exc:
+            raise PersistentError(str(exc)) from None
+        if global_result is not None:
+            print(json.dumps(global_result))
+            return
+        if args.operation == 'reconnect':
+            raise PersistentError('global-profile-required')
         if args.operation == "inspect":
             profile, inspected, _connection_path, _connection_value, _runtime_dir, _state_dir = (
                 _validated(profile_path)

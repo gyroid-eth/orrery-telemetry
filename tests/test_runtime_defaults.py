@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import importlib.util
+import hashlib
 import os
 import re
 import pathlib
@@ -23,7 +25,16 @@ from service_teardown import (  # noqa: E402
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+_instruction_spec = importlib.util.spec_from_file_location(
+    "runtime_defaults_instruction_blocks", ROOT / "bin/lib/instruction_blocks.py"
+)
+_instruction_blocks = importlib.util.module_from_spec(_instruction_spec)
+_instruction_spec.loader.exec_module(_instruction_blocks)
 INSTALL_STATE_SAMPLE = ROOT / "scripts" / "install-state.sample.json"
+# These operator-only source entries are deliberately not installer payload.
+# Keep this literal list narrow: all other tracked bin entries must be copied.
+# Contract: docs/daemon-agents.md and docs/daemon-agents.en.md.
+SOURCE_ONLY_ENTRIES = frozenset({"bin/agentstack-daemon"})
 
 
 def _fake_systemctl() -> str:
@@ -153,7 +164,26 @@ def _tracked_core_payload_files() -> list[str]:
         check=True,
     ).stdout.split("\0")
     provider_owned = _provider_installer_files()
-    return [path for path in tracked if path and path not in provider_owned]
+    return [
+        path for path in tracked
+        if path and path not in provider_owned and path not in SOURCE_ONLY_ENTRIES
+    ]
+
+
+def test_source_only_payload_exception_does_not_hide_unlisted_bin(monkeypatch):
+    # An additional, unlisted command must still fail the installed-manifest
+    # comparison if the installer does not copy it.
+    paths = ["bin/agentstack-daemon", "bin/agentstack-unlisted", "bin/agentstack-enroll"]
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout="\0".join(paths) + "\0"
+        ),
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_provider_installer_files", lambda: set())
+    expected = {f"/installed/{path}" for path in _tracked_core_payload_files()}
+    actual = {"/installed/bin/agentstack-enroll"}
+    assert expected - actual == {"/installed/bin/agentstack-unlisted"}
 
 
 def _provider_installer_files() -> set[str]:
@@ -291,6 +321,19 @@ def test_runtime_code_has_no_legacy_claude_fallback():
     ).stdout.split("\0")
     paths = [ROOT / rel for rel in tracked if rel]
     for path in paths:
+        if path == ROOT / "bin/lib/instruction_templates.json":
+            # Historical bytes prove a user's old block, never configure a
+            # runtime path. Keep this exception a typed, content-addressed data
+            # catalog; every executable payload still goes through the scan.
+            catalog = json.loads(path.read_text(encoding="utf-8"))
+            assert isinstance(catalog, list) and catalog
+            for item in catalog:
+                assert set(item) == {"provider", "template_id", "renderer_id", "template"}
+                assert item["provider"] in {"claude", "codex"}
+                assert item["renderer_id"] == "legacy-sed-v1"
+                assert isinstance(item["template"], str)
+                assert hashlib.sha256(item["template"].encode()).hexdigest() == item["template_id"]
+            continue
         if path.is_file() and path.suffix not in {".png", ".pyc"}:
             try:
                 text = path.read_text(encoding="utf-8")
@@ -477,6 +520,8 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert settings.read_text(encoding="utf-8") == original_settings
         assert json.loads(claude_json.read_text()) == original_claude_json
         assert not (home / ".codex" / "AGENTS.md").exists()
+        claude_target = _instruction_blocks.Engine("claude", env=env).target
+        assert not claude_target.exists()
         assert not (project / "CLAUDE.md").exists()
     finally:
         _stop_fake_dashboard(env)
@@ -516,9 +561,8 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert "<!-- >>> claude-agent-stack" in (
             home / ".codex" / "AGENTS.md"
         ).read_text(encoding="utf-8")
-        assert "<!-- >>> claude-agent-stack" in (
-            project / "CLAUDE.md"
-        ).read_text(encoding="utf-8")
+        assert "<!-- >>> claude-agent-stack" in claude_target.read_text(encoding="utf-8")
+        assert not (project / "CLAUDE.md").exists()
         assert any((install_dir / "backups").iterdir())
     finally:
         _stop_fake_dashboard(env)
@@ -527,7 +571,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
     settings.write_text(original_settings, encoding="utf-8")
     claude_json.write_text(json.dumps(original_claude_json), encoding="utf-8")
     (home / ".codex" / "AGENTS.md").unlink()
-    (project / "CLAUDE.md").unlink()
+    claude_target.unlink()
     env["AGENTSTACK_ASSUME_YES"] = "not-a-boolean"
     from_flag = subprocess.run(
         [*command, "--assume-yes"],
@@ -547,9 +591,8 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         assert "<!-- >>> claude-agent-stack" in (
             home / ".codex" / "AGENTS.md"
         ).read_text(encoding="utf-8")
-        assert "<!-- >>> claude-agent-stack" in (
-            project / "CLAUDE.md"
-        ).read_text(encoding="utf-8")
+        assert "<!-- >>> claude-agent-stack" in claude_target.read_text(encoding="utf-8")
+        assert not (project / "CLAUDE.md").exists()
     finally:
         _stop_fake_dashboard(env)
 
@@ -626,20 +669,47 @@ def _stop_any_dashboard_this_module_started(tmp_path):
             continue
         deadline = time.monotonic() + 5.0
         while True:
-            command = subprocess.run(
-                ["ps", "-ww", "-o", "command=", "-p", str(pid)],
-                capture_output=True, text=True, check=False,
-            ).stdout
-            alive = bool(command.strip()) and runner in command
-            if not alive or time.monotonic() > deadline:
+            # A controller may return before its runner exits. Positive PID
+            # absence needs no process inventory, which a sandbox can forbid.
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
                 break
-            time.sleep(0.2)
-        if alive:
-            os.kill(pid, signal.SIGTERM)
-            failures.append(
-                f"ORRERY Mail runner pid {pid} was still running after the test "
-                f"(recorded in {pidfile}); the uninstall or teardown left it behind"
-            )
+            except PermissionError:
+                failures.append(f"cannot establish ownership of Mail runner pid {pid}")
+                break
+            if time.monotonic() < deadline:
+                time.sleep(0.2)
+                continue
+            try:
+                inspected = subprocess.run(
+                    ["ps", "-ww", "-o", "command=", "-p", str(pid)],
+                    capture_output=True, text=True, check=False,
+                )
+            except OSError as exc:
+                failures.append(f"cannot inspect recorded Mail runner pid {pid}: {exc}")
+                break
+            if inspected.returncode or inspected.stderr.strip():
+                failures.append(f"cannot inspect recorded Mail runner pid {pid}")
+                break
+            if not inspected.stdout.strip():
+                # An empty inventory is not proof that a formerly live PID
+                # exited. Confirm absence with the kernel before accepting it.
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                except PermissionError:
+                    pass
+                failures.append(f"cannot inspect recorded Mail runner pid {pid}")
+                break
+            if runner in inspected.stdout:
+                os.kill(pid, signal.SIGTERM)
+                failures.append(
+                    f"ORRERY Mail runner pid {pid} was still running after the test "
+                    f"(recorded in {pidfile}); the uninstall or teardown left it behind"
+                )
+            break
 
     # The fake system manager used by this module records its pid here rather
     # than in the install's runtime directory.
@@ -655,7 +725,9 @@ def _stop_any_dashboard_this_module_started(tmp_path):
         if not (home / ".agentstack" / "runtime" / "dashboard.pid").is_file():
             continue
         try:
-            stop_dashboard(home, appear_timeout=0.1)
+            # Every installer rehearsal in this module uses a Linux uname
+            # stub and a fake system manager; it cannot create launchd jobs.
+            stop_dashboard(home, appear_timeout=0.1, launchd=False)
         except Exception as exc:  # noqa: BLE001 - reported below, not hidden
             failures.append(f"{home}: {exc}")
 
@@ -748,6 +820,8 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_CUSTOM_PORTRAITS": f"{project_dir}/faces.json",
         "AGENTSTACK_CLAUDE_MODELS": "claude-sonnet-5,claude-opus-5-5",
         "AGENTSTACK_CODEX_MODELS": "gpt-5.6-sol,gpt-5.6-luna",
+        "AGENTSTACK_CODEX_DEFAULT_MODEL": "gpt-5.6-sol",
+        "AGENTSTACK_CODEX_DEFAULT_EFFORT": "high",
         "AGENTSTACK_CODEX_BIN": str(codex_bin),
         "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": str(codex_child_overlay),
         "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "45",
@@ -837,6 +911,9 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         for relative in _tracked_core_payload_files()
     }
     assert expected_payload_files <= set(manifest["owned_files"])
+    for relative in SOURCE_ONLY_ENTRIES:
+        assert not (install_dir / relative).exists()
+        assert str(install_dir / relative) not in manifest["owned_files"]
     assert str(install_dir / "VERSION") in manifest["owned_files"]
     assert str(installed_selftest) in manifest["owned_files"]
     assert str(
@@ -847,9 +924,10 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     ) in manifest["owned_files"]
     expected_skill_links = [
         {
-            "path": str(home / ".claude" / "skills" / name),
+            "path": str(home / host / "skills" / name),
             "target": str(install_dir / "skills" / name),
         }
+        for host in (".claude", ".codex")
         for name in ("delegate", "log")
     ]
     assert manifest["skill_links"] == expected_skill_links
@@ -892,6 +970,8 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert 'Environment="AGENTSTACK_PORTRAITS_DIR=~/faces"' in systemd_unit
     assert 'Environment="AGENTSTACK_CLAUDE_MODELS=claude-sonnet-5,claude-opus-5-5"' in systemd_unit
     assert 'Environment="AGENTSTACK_CODEX_MODELS=gpt-5.6-sol,gpt-5.6-luna"' in systemd_unit
+    assert 'Environment="AGENTSTACK_CODEX_DEFAULT_MODEL=gpt-5.6-sol"' in systemd_unit
+    assert 'Environment="AGENTSTACK_CODEX_DEFAULT_EFFORT=high"' in systemd_unit
     assert (
         f'Environment="AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY={codex_child_overlay}"'
         in systemd_unit
@@ -918,6 +998,10 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert manifest["env"]["AGENTSTACK_CUSTOM_PORTRAITS"] == f"{project_dir}/faces.json"
     assert manifest["env"]["AGENTSTACK_CLAUDE_MODELS"] == "claude-sonnet-5,claude-opus-5-5"
     assert manifest["env"]["AGENTSTACK_CODEX_MODELS"] == "gpt-5.6-sol,gpt-5.6-luna"
+    assert manifest["env"]["AGENTSTACK_CODEX_DEFAULT_MODEL"] == "gpt-5.6-sol"
+    assert manifest["env"]["AGENTSTACK_CODEX_DEFAULT_EFFORT"] == "high"
+    assert "export AGENTSTACK_CODEX_DEFAULT_MODEL=gpt-5.6-sol" in generated_env
+    assert "export AGENTSTACK_CODEX_DEFAULT_EFFORT=high" in generated_env
     assert manifest["env"]["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] == str(
         codex_child_overlay
     )
@@ -967,6 +1051,8 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     normalized_env["AGENTSTACK_CUSTOM_PORTRAITS"] = ""
     normalized_env["AGENTSTACK_CLAUDE_MODELS"] = ""
     normalized_env["AGENTSTACK_CODEX_MODELS"] = ""
+    normalized_env["AGENTSTACK_CODEX_DEFAULT_MODEL"] = ""
+    normalized_env["AGENTSTACK_CODEX_DEFAULT_EFFORT"] = ""
     normalized_env["AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY"] = ""
     normalized_env["AGENTSTACK_AUTO_OPEN_CHILD"] = sample["env"]["AGENTSTACK_AUTO_OPEN_CHILD"]
     normalized_env["AGENTSTACK_CHILD_RESUME_RETENTION_DAYS"] = sample["env"][
@@ -1040,6 +1126,8 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert not (install_dir / "integrations").exists()
     assert not (home / ".claude" / "skills" / "delegate").exists()
     assert not (home / ".claude" / "skills" / "log").exists()
+    assert not (home / ".codex" / "skills" / "delegate").is_symlink()
+    assert not (home / ".codex" / "skills" / "log").is_symlink()
     claude_remaining = {
         str(path.relative_to(home / ".claude"))
         for path in (home / ".claude").rglob("*")

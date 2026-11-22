@@ -1,0 +1,142 @@
+{
+  "version": 1,
+  "activation_enabled": false,
+  "response_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "ok",
+      "runtime_mode",
+      "binding",
+      "observed_at",
+      "items"
+    ],
+    "properties": {
+      "ok": {
+        "const": true
+      },
+      "runtime_mode": {
+        "const": "global"
+      },
+      "binding": {
+        "type": "object",
+        "properties": {
+          "expected_server_instance_id": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "authority_epoch": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_server_instance_id",
+          "candidate_generation",
+          "authority_epoch"
+        ],
+        "additionalProperties": false
+      },
+      "observed_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "items": {
+        "type": "array",
+        "maxItems": 200,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "agent_id",
+            "liveness",
+            "act_state",
+            "ctx_used",
+            "session_count",
+            "parent_agent_id",
+            "parent_state",
+            "reason",
+            "activity_freshness"
+          ],
+          "properties": {
+            "agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "liveness": {
+              "enum": [
+                "live",
+                "absent",
+                "unknown"
+              ]
+            },
+            "act_state": {
+              "enum": [
+                "work",
+                "wait",
+                "ask",
+                "question",
+                null
+              ]
+            },
+            "ctx_used": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "session_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "parent_agent_id": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "parent_state": {
+              "enum": [
+                "known",
+                "none",
+                "unknown"
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "activity_freshness": {
+              "enum": [
+                "current",
+                "stale",
+                "unknown"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "app_activity": "unknown",
+  "observation_lock": "LOCK_SH|LOCK_NB",
+  "request_deadline_seconds": 5
+}

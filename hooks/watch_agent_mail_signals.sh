@@ -13,10 +13,45 @@
 
 set -euo pipefail
 
+# Explicit fresh service admission precedes both old mode selectors. The
+# coordinator reads protected client contexts, never Mail storage or names.
+if [[ "${1:-}" == --fresh-config ]]; then
+    shift
+    if [[ "$#" != 1 && !( "$#" == 2 && "${2:-}" == --once ) ]]; then
+        printf '%s\n' FRESH_WATCH_ARGUMENTS_INVALID >&2; exit 2
+    fi
+    _ags_fresh_wrapper="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/agentstack-runtime-client"
+    if [[ "$#" == 2 ]]; then
+        exec /bin/bash "$_ags_fresh_wrapper" watch-fresh --config "$1" --once
+    fi
+    exec /bin/bash "$_ags_fresh_wrapper" watch-fresh --config "$1"
+fi
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+    printf '%s\n' FRESH_WATCH_CONFIG_REQUIRED >&2; exit 2
+fi
+
+# Global delivery has one coordinator and never enters legacy notify-state.
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader"
+_ags_legacy_consumer="$(dirname "$_ags_global_loader")/legacy-tmux-consumer.sh"
+if [[ -f "$_ags_legacy_consumer" ]]; then . "$_ags_legacy_consumer"; fi
+ags_client_select "$@" && _ags_selected_rc=0 || _ags_selected_rc=$?
+if [[ "$_ags_selected_rc" == 0 ]]; then
+    exec python3 "$(dirname "$_ags_global_loader")/runtime_client.py" watch-auto "$@"
+fi
+[[ "$_ags_selected_rc" == 125 ]] || exit "$_ags_selected_rc"
+
 MAIL_HOME="${AGENTSTACK_MAIL_HOME:-$HOME/.agentstack/mail}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$MAIL_HOME/signals}"
 POLL_INTERVAL=2  # seconds (fallback if fswatch unavailable)
-WATCHER_LOCK_DIR="${AGENTSTACK_MAIL_WATCHER_LOCK_DIR:-/tmp/orrery-mail-watcher.lock}"
+# 既定は利用者ごと（$HOME 配下）。1 台の Mac に複数利用者がいても lock dir が
+# 衝突しない。AGENTSTACK_MAIL_WATCHER_LOCK_DIR / _PIDFILE / _HEARTBEAT で明示した
+# path が他人の物（以前の /tmp 既定を踏襲した設定など）を指すときは、奪いにも
+# 別の場所へ切り替えにも行かず、何も書かずに止まって直し方を出す（2026-10-05 の
+# fresh install で 2 人目の利用者の watcher が共通 /tmp lock を取れず無限リトライ
+# し続けた件）。
+DEFAULT_WATCHER_LOCK_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/mail-watcher.lock"
+WATCHER_LOCK_DIR="${AGENTSTACK_MAIL_WATCHER_LOCK_DIR:-$DEFAULT_WATCHER_LOCK_DIR}"
 WATCHER_PIDFILE="${AGENTSTACK_MAIL_WATCHER_PIDFILE:-${WATCHER_LOCK_DIR}/watcher.pid}"
 WATCHER_HEARTBEAT="${AGENTSTACK_MAIL_WATCHER_HEARTBEAT:-${WATCHER_LOCK_DIR}/heartbeat}"
 WATCH_FIFO=""
@@ -42,10 +77,10 @@ importance_at_least() {
 }
 
 # 2026-05-20 SilverEuler 設計の non-destructive 通知パイプライン:
-#   - signal file は server-owned dirty bit (rename/delete しない)
+#   - legacy signal は server-owned dirty bit、per-message は配送ごとの通知
 #   - notify-state.json で「(agent, msg_id) → 配送結果」を永続キャッシュ
 #   - notify-locks/ で短命 lease lock (重複 inject 防止、watcher/daemon dual で必須)
-#   - 失敗時は state に記録するだけで signal は残し、後で再試行可能
+#   - 一時的な失敗は再試行し、確認済みの宛先不在は通知だけを取り下げる
 STATE_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 STATE_FILE="${STATE_DIR}/notify-state.json"
 LEASE_DIR="${STATE_DIR}/notify-locks"
@@ -88,6 +123,39 @@ mkdir -p "$STATE_DIR" "$LEASE_DIR"
 
 log() { echo "[mail-watcher $(date '+%H:%M:%S')] $*"; }
 
+bound_watcher_log() {
+    python3 - "$STATE_DIR/mail-watcher.log" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+path = Path(sys.argv[1])
+limit = 5 * 1024 * 1024
+try:
+    info = path.lstat()
+    output = os.fstat(1)
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+            or (info.st_dev, info.st_ino) != (output.st_dev, output.st_ino)
+            or info.st_size <= limit):
+        raise SystemExit(0)
+    # Keep the open service descriptors on the same inode (copy/truncate).
+    with path.open('rb') as source:
+        source.seek(-limit, os.SEEK_END)
+        recent = source.read(limit)
+    backup = path.with_name(path.name + '.1')
+    with backup.open('wb') as target:
+        os.chmod(backup, 0o600)
+        target.write(recent)
+    os.ftruncate(1, 0)
+    for fd in (1, 2):
+        current = os.fstat(fd)
+        if (current.st_dev, current.st_ino) == (info.st_dev, info.st_ino):
+            os.lseek(fd, 0, os.SEEK_END)
+except OSError:
+    pass
+PY
+}
+
 # run_to <secs> <cmd...> : cmd を最大 secs 秒で実行。超過したら TERM→KILL で
 # 強制終了し非ゼロを返す。macOS には timeout(1)/gtimeout が無く、watcher は
 # bash 3.2 で動くため、background + watchdog で自前実装する。これにより
@@ -117,8 +185,11 @@ import json, os, sys
 path = sys.argv[1]
 try:
     with open(path, encoding="utf-8") as fh:
+        st = os.fstat(fh.fileno())
         data = json.load(fh)
-    st = os.stat(path)
+        after = os.fstat(fh.fileno())
+        if (st.st_mtime_ns, st.st_size) != (after.st_mtime_ns, after.st_size):
+            raise ValueError('signal changed while reading')
 except Exception:
     data = None
 if not isinstance(data, dict) or not isinstance(data.get("message") or {}, dict):
@@ -138,6 +209,25 @@ print(int(st.st_mtime))
 snippet = (msg.get("body_snippet") or "").replace("\r", " ").replace("\n", " ⏎ ")
 print(snippet[:500])
 print("1" if msg.get("body_truncated") else "0")
+print(f"{st.st_dev}:{st.st_ino}:{st.st_mtime_ns}:{st.st_size}")
+PY
+}
+
+discard_absent_signal() {
+    python3 - "$1" "$2" <<'PY'
+import os
+import stat
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+try:
+    info = path.lstat()
+    identity = f"{info.st_dev}:{info.st_ino}:{info.st_mtime_ns}:{info.st_size}"
+    # A legacy dirty bit may have been refreshed while the worker ran.
+    if stat.S_ISREG(info.st_mode) and identity == sys.argv[2]:
+        path.unlink()
+except FileNotFoundError:
+    pass
 PY
 }
 
@@ -154,7 +244,7 @@ except Exception:
 entry = data.get(compound)
 if not entry:
     sys.exit(0)
-if entry.get("last_result") == "success":
+if entry.get("last_result") == "success" or entry.get("terminal") is True:
     sys.exit(1)
 last_attempt = int(entry.get("last_attempt_epoch", 0) or 0)
 if int(time.time()) - last_attempt >= cooldown:
@@ -195,6 +285,8 @@ try:
     if result == "success":
         entry["last_success_epoch"] = now
         entry["last_success_ts"] = entry["last_attempt_ts"]
+    if result == "session_not_found":
+        entry["terminal"] = True
     data[compound] = entry
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -209,9 +301,9 @@ acquire_delivery_lease() {
     local agent="$1"
     local msg_key="$2"
     local lease_path="${LEASE_DIR}/${agent}-${msg_key}.lock"
-    local guard_path="${lease_path}.guard"
-    python3 - "$lease_path" "$guard_path" "$LEASE_TTL" <<'PY'
+    python3 - "$lease_path" "$LEASE_TTL" <<'PY'
 import fcntl
+import hashlib
 import os
 from pathlib import Path
 import secrets
@@ -220,10 +312,11 @@ import sys
 import time
 
 lease = Path(sys.argv[1])
-guard_path = Path(sys.argv[2])
-ttl = int(sys.argv[3])
+ttl = int(sys.argv[2])
 now = int(time.time())
 owner = f"{os.getpid()}-{secrets.token_hex(16)}"
+# Fixed buckets keep guard inodes stable while bounding their count.
+guard_path = lease.parent / ("bucket-" + hashlib.sha256(lease.name.encode()).hexdigest()[:2] + ".guard")
 guard = open(guard_path, "a+", encoding="utf-8")
 os.chmod(guard_path, 0o600)
 fcntl.flock(guard, fcntl.LOCK_EX)
@@ -250,18 +343,18 @@ PY
 
 release_delivery_lease() {
     local lease_path="${LEASE_DIR}/$1-$2.lock"
-    local guard_path="${lease_path}.guard"
     local owner="$3"
-    python3 - "$lease_path" "$guard_path" "$owner" <<'PY'
+    python3 - "$lease_path" "$owner" <<'PY'
 import fcntl
+import hashlib
 import os
 from pathlib import Path
 import shutil
 import sys
 
 lease = Path(sys.argv[1])
-guard_path = Path(sys.argv[2])
-owner = sys.argv[3]
+owner = sys.argv[2]
+guard_path = lease.parent / ("bucket-" + hashlib.sha256(lease.name.encode()).hexdigest()[:2] + ".guard")
 guard = open(guard_path, "a+", encoding="utf-8")
 os.chmod(guard_path, 0o600)
 fcntl.flock(guard, fcntl.LOCK_EX)
@@ -283,13 +376,101 @@ is_pid_running() {
     [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
 }
 
+# stat(1) の所有者 UID の取り方は GNU (Linux/WSL, BusyBox も含む) の `-c` と
+# BSD (macOS) の `-f` で違う。GNU の `-f` は「ファイルシステム情報」を意味し、
+# 未知の directive (%u) でも先にファイルシステム情報を stdout へ出してから
+# 失敗する。`-f` を先に試すと、2>/dev/null で消えるのは stderr だけなので、
+# その出力が後続の `-c` の結果に混ざり、UID の比較が常に不一致になる
+# （2026-10-05 WSL・GNU coreutils 9.4 実機で確認、ext4）。`-c` を先に試す:
+# GNU/BusyBox ではそのまま正しい UID を返し、BSD では「unknown option」を
+# stderr にだけ出して stdout は空のまま失敗するので、`-f` へ安全に落ちる。
+lock_owner_uid() {
+    # $2 = L: symlink を辿った先の所有者（既定は path 自体。symlink なら link の持ち主）
+    if [[ "${2:-}" == L ]]; then
+        stat -L -c '%u' "$1" 2>/dev/null || stat -L -f '%u' "$1" 2>/dev/null || true
+    else
+        stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1" 2>/dev/null || true
+    fi
+}
+
 write_heartbeat() {
     mkdir -p "$(dirname "$WATCHER_HEARTBEAT")"
     : > "$WATCHER_HEARTBEAT"
 }
 
+# True only for a path that exists and, itself or (for a symlink) through its
+# target, belongs to a different UID. A path that does not exist yet is not
+# foreign: we are about to create it.
+path_is_foreign() {
+    local target="$1" owner me
+    [[ -e "$target" || -L "$target" ]] || return 1
+    me="$(id -u)"
+    owner="$(lock_owner_uid "$target")"
+    [[ -n "$owner" && "$owner" != "$me" ]] && return 0
+    owner="$(lock_owner_uid "$target" L)"
+    [[ -n "$owner" && "$owner" != "$me" ]]
+}
+
+# A pid counts as "an old watcher of mine" only if it is alive, is this user's
+# own process, and its command line is this script. A pidfile left behind by a
+# dead watcher can name a pid since reused by something unrelated; treating
+# that as a live watcher would refuse to start and tell the user to kill it.
+is_own_watcher_process() {
+    local pid="${1:-}" cmd uid
+    is_pid_running "$pid" || return 1
+    cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    [[ "$cmd" == *watch_agent_mail_signals.sh* ]] || return 1
+    uid="$(ps -p "$pid" -o uid= 2>/dev/null | tr -d '[:space:]' || true)"
+    [[ -n "$uid" && "$uid" == "$(id -u)" ]]
+}
+
+# The legacy, pre-2026-10-05 default: shared by every account on the Mac. Only
+# ever consulted to avoid starting a second watcher while one from before the
+# per-user default still runs there (see the LEGACY block in acquire_lock).
+LEGACY_WATCHER_LOCK_DIR="/tmp/orrery-mail-watcher.lock"
+
 acquire_lock() {
     local existing_pid=""
+
+    # The default lock is per-user (under $HOME), so the only way any of
+    # these three paths can belong to someone else is an explicit override
+    # (AGENTSTACK_MAIL_WATCHER_LOCK_DIR / _PIDFILE / _HEARTBEAT) that still
+    # points at another account's path (e.g. the pre-2026-10-05 shared /tmp
+    # default, carried over by hand). Taking such a path over either fails
+    # forever with "Permission denied" (the 2026-10-05 bug: "Stale watcher
+    # lock detected" retried every 5s and never started) or, worse, could
+    # succeed and corrupt or kill someone else's watcher. There is no safe
+    # fallback here either: a dashboard or agent-start started with the same
+    # override would keep reading the overridden path, not whatever this
+    # process quietly switched to, and would report the watcher as down while
+    # it was actually running elsewhere. So: touch nothing, say which path and
+    # whose it is, and stop.
+    local culprit owner_uid
+    for culprit in "$WATCHER_LOCK_DIR" "$(dirname "$WATCHER_PIDFILE")" "$(dirname "$WATCHER_HEARTBEAT")" \
+        "$WATCHER_PIDFILE" "$WATCHER_HEARTBEAT"; do
+        if path_is_foreign "$culprit"; then
+            owner_uid="$(lock_owner_uid "$culprit")"
+            [[ -n "$owner_uid" && "$owner_uid" != "$(id -u)" ]] || owner_uid="$(lock_owner_uid "$culprit" L)"
+            log "${culprit} belongs to another user (uid ${owner_uid}); not writing there. Remove the override (AGENTSTACK_MAIL_WATCHER_LOCK_DIR / _PIDFILE / _HEARTBEAT) or point it at a path only this user can write, then run this again."
+            exit 1
+        fi
+    done
+
+    # A watcher started before 2026-10-05 (or by hand per this file's own
+    # Usage comment, which install.sh's service restart cannot stop) may still
+    # be running on the old shared default. Since it is a different directory
+    # now, acquiring our own lock would not catch it, and both would deliver
+    # the same mail. Defer to it rather than risk a second instance.
+    if [[ "$WATCHER_LOCK_DIR" == "$DEFAULT_WATCHER_LOCK_DIR" && "$LEGACY_WATCHER_LOCK_DIR" != "$WATCHER_LOCK_DIR" ]] \
+        && [[ -f "${LEGACY_WATCHER_LOCK_DIR}/watcher.pid" ]] \
+        && ! path_is_foreign "$LEGACY_WATCHER_LOCK_DIR"; then
+        local legacy_pid
+        legacy_pid="$(<"${LEGACY_WATCHER_LOCK_DIR}/watcher.pid")"
+        if is_own_watcher_process "$legacy_pid"; then
+            log "A watcher from before 2026-10-05 is still running on the old shared lock (${LEGACY_WATCHER_LOCK_DIR}, PID ${legacy_pid}); not starting a second one. Stop it (kill ${legacy_pid}, or its tmux/background job) and run this again."
+            exit 1
+        fi
+    fi
 
     if mkdir "$WATCHER_LOCK_DIR" 2>/dev/null; then
         mkdir -p "$(dirname "$WATCHER_PIDFILE")"
@@ -299,6 +480,7 @@ acquire_lock() {
         return 0
     fi
 
+    # The dir already exists and (checked above) is ours.
     if [[ -f "$WATCHER_PIDFILE" ]]; then
         existing_pid=$(<"$WATCHER_PIDFILE")
     fi
@@ -365,10 +547,10 @@ handle_signal_file() {
         return
     fi
 
-    # signal は server-owned dirty bit。client は rename/delete しない。
+    # Retry state and leases distinguish delivery from a transient failure.
     # 重複処理防止は state_should_attempt + acquire_delivery_lease で行う。
     # bash 3.2 (macOS system) 互換: mapfile を使わず逐次 read する。
-    local meta_status msg_id from subject importance mtime body_snippet body_truncated msg_key
+    local meta_status msg_id from subject importance mtime body_snippet body_truncated msg_key signal_identity
     {
         IFS= read -r meta_status
         IFS= read -r msg_id
@@ -378,6 +560,7 @@ handle_signal_file() {
         IFS= read -r mtime
         IFS= read -r body_snippet
         IFS= read -r body_truncated
+        IFS= read -r signal_identity || signal_identity=""
     } < <(read_signal_meta "$signal_file")
     if [[ "${meta_status:-}" != "ok" ]]; then
         # 書きかけか壊れた signal。記録も削除もせず、次の scan に回す。
@@ -390,7 +573,7 @@ handle_signal_file() {
     mtime="${mtime:-0}"
     body_snippet="${body_snippet:-}"
     body_truncated="${body_truncated:-0}"
-    msg_key="${msg_id:-mtime-${mtime}}"
+    msg_key="${msg_id:-mtime-${mtime}-${signal_identity}}"
 
     # `set -e` 下で `|| return` だと return が直前の exit code を継承して
     # 関数が non-zero で抜け、呼び出し元の while ループが止まる。
@@ -434,7 +617,7 @@ handle_signal_file() {
 
     log "Signal: ${agent_name} ← ${from} [${importance}]: ${subject}"
 
-    deliver_worker "$signal_file" "$agent_name" "$msg_key" "$from" "$subject" "$importance" "$per_msg_file" "$body_snippet" "$body_truncated" "$lease_owner" &
+    deliver_worker "$signal_file" "$agent_name" "$msg_key" "$from" "$subject" "$importance" "$per_msg_file" "$body_snippet" "$body_truncated" "$lease_owner" "$signal_identity" &
 }
 
 # deliver_worker: 1 signal の配送を完結させる background ジョブ。すべての tmux
@@ -451,6 +634,7 @@ deliver_worker() {
     local from="$4" subject="$5" importance="$6" per_msg_file="$7"
     local body_snippet="${8:-}" body_truncated="${9:-0}"
     local lease_owner="${10:-}"
+    local signal_identity="${11:-}"
     local session_name="$agent_name"
 
     # A persistent headless profile has no REPL pane to inject. Its wrapper
@@ -477,11 +661,16 @@ deliver_worker() {
         else
             headless_rc=$?
         fi
-        if [[ "$headless_rc" -ne 10 ]]; then
-            state_mark_result "$agent_name" "$msg_key" "headless_reply_failed" "persistent-headless"
-            release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
-            return 0
-        fi
+    elif [[ -e "$STATE_DIR/persistent/${agent_name}.json" || -L "$STATE_DIR/persistent/${agent_name}.json" ]]; then
+        # A manifest without its helper cannot be classified safely.
+        headless_rc=20
+    fi
+
+    # Exit 10 allows the ordinary tmux checks, including for interactive persistent agents.
+    if [[ "$headless_rc" -ne 10 ]]; then
+        state_mark_result "$agent_name" "$msg_key" "headless_reply_failed" "persistent-headless"
+        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
+        return 0
     fi
 
     # Leave the server-owned signal unread; conversation-only sessions cannot
@@ -493,7 +682,16 @@ deliver_worker() {
         return 0
     fi
 
-    if ! run_to "$TMUX_TIMEOUT" tmux has-session -t "$session_name" 2>/dev/null; then
+    # Inventory uses the existing legacy transport/admission adapter. An empty
+    # successful inventory proves absence; timeout or denied lookup does not.
+    local sessions
+    if ! sessions=$(run_to "$TMUX_TIMEOUT" tmux list-sessions -F '#{session_name}' 2>/dev/null); then
+        state_mark_result "$agent_name" "$msg_key" "session_lookup_failed" "watcher"
+        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
+        return 0
+    fi
+    if ! printf '%s\n' "$sessions" | grep -Fxq -- "$session_name"; then
+        discard_absent_signal "$signal_file" "$signal_identity"
         state_mark_result "$agent_name" "$msg_key" "session_not_found" "watcher"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
@@ -596,6 +794,7 @@ deliver_worker() {
 }
 
 process_existing_signals() {
+    bound_watcher_log
     # Match both legacy (agents/{name}.signal) and per-message
     # (agents/{name}/{msg_id}.signal) layouts. find -name globs file names so
     # both layouts surface here; handle_signal_file disambiguates by parent dir.

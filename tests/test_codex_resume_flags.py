@@ -19,10 +19,15 @@ from pathlib import Path
 
 import pytest
 
+from _installed_client_payload import copy_client_library
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
 
 import dashboard.server as server
+from claude_resume_harness import cleanup_mail
+from hooks import child_resume
+from test_spawn_child_parent_lineage import _codex_child, _spawn
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,13 +39,14 @@ SESSION_ID = "01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
 
 @pytest.fixture
 def policy_env(monkeypatch, tmp_path):
-    for name in ("AGENTSTACK_CODEX_CHILD_APPROVAL", "AGENTSTACK_CODEX_NETWORK",
+    for name in ("AGENTSTACK_CODEX_SANDBOX", "AGENTSTACK_CODEX_CHILD_APPROVAL", "AGENTSTACK_CODEX_NETWORK",
                  "AGENTSTACK_CODEX_ADD_DIRS", "AGENTSTACK_SPAWN_DIRS",
                  "AGENTSTACK_SPAWN_ROOTS", "AGENTSTACK_HOME"):
         monkeypatch.delenv(name, raising=False)
     project = tmp_path / "proj with space"
     project.mkdir()
     monkeypatch.setattr(server, "PROJECT_KEY", str(project))
+    monkeypatch.setattr(server, "SESSION_INDEX_DIR", str(tmp_path / "runtime" / "session_index"))
     monkeypatch.setattr(server, "VAULT", "")
     monkeypatch.setenv("HOME", str(tmp_path))
     source_home = tmp_path / ".codex"
@@ -172,7 +178,7 @@ def _seed_child_identity(
     return child_home, token_file, before
 
 
-def _invoke_resume_entry(monkeypatch, tmp_path, project, runtime):
+def _invoke_resume_entry(monkeypatch, tmp_path, project, runtime, *, registration_project=None):
     rollout = tmp_path / "rollout-session.jsonl"
     rollout.write_text(
         json.dumps({
@@ -190,7 +196,10 @@ def _invoke_resume_entry(monkeypatch, tmp_path, project, runtime):
     bootstrap.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     installed_hooks = install_home / "hooks"
     installed_hooks.mkdir()
-    shutil.copy2(ROOT / "hooks" / "child_resume.py", installed_hooks)
+    for helper in ("child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / helper, installed_hooks)
+    (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
+    copy_client_library(install_home)
     runner = (
         install_home
         / "integrations"
@@ -205,7 +214,7 @@ def _invoke_resume_entry(monkeypatch, tmp_path, project, runtime):
     registration = {
         "agent_id": AGENT_ID,
         "agent_name": AGENT,
-        "project_key": str(project),
+        "project_key": str(registration_project or project),
         "program": "codex",
     }
     launched = []
@@ -229,6 +238,48 @@ def test_resume_defaults_to_never_with_network_and_project_root(policy_env):
     assert f"--add-dir {shlex.quote(os.path.realpath(str(project)))}" in flags
     # The old hardcoded on-request is gone.
     assert "on-request" not in flags
+
+
+def test_resume_reads_full_access_from_installed_env(policy_env, monkeypatch):
+    tmp_path, _ = policy_env
+    install_home = tmp_path / "custom-install"
+    install_home.mkdir()
+    monkeypatch.setattr(server, "HERE", str(install_home / "dashboard"))
+    (install_home / "env.sh").write_text("export AGENTSTACK_CODEX_SANDBOX=danger-full-access\n")
+    monkeypatch.setenv("AGENTSTACK_CODEX_CHILD_APPROVAL", "on-request")
+    for standalone in (False, True):
+        flags = server._codex_child_launch_flags(standalone=standalone)
+        assert shlex.split(flags)[:4] == ["--sandbox", "danger-full-access", "--ask-for-approval", "never"]
+
+
+@pytest.mark.parametrize("standalone", [True, False, None], ids=["standalone", "parented", "legacy"])
+def test_resume_uses_the_recorded_codex_launch_policy(policy_env, monkeypatch, standalone):
+    tmp_path, project = policy_env
+    runtime = tmp_path / "runtime"
+    registration_project = None
+    if standalone is None:
+        _seed_child_identity(runtime, project)
+    else:
+        launch_dir = tmp_path / "launch"
+        launch_dir.mkdir()
+        opts = ("--standalone",) if standalone else ()
+        env, args = _codex_child(launch_dir, AGENT, *opts)
+        started = _spawn(env, args)
+        assert started.returncode == 0, started.stderr
+        runtime = Path(env["AGENTSTACK_RUNTIME_DIR"])
+        registration_project = env["PROJECT_KEY"]
+        project = Path(args[-1])
+        assert child_resume.mark_retired(runtime, AGENT, retention_days=30)
+    result, launched = _invoke_resume_entry(
+        monkeypatch, tmp_path, project, runtime, registration_project=registration_project
+    )
+
+    assert result["ok"], result
+    flags = shlex.split(launched[0][-1])
+    if standalone:
+        assert "--ask-for-approval" not in flags
+    else:
+        assert flags[flags.index("--ask-for-approval") + 1] == "never"
 
 
 def test_resume_honours_installer_settings_and_extra_roots(policy_env, monkeypatch):
@@ -280,7 +331,10 @@ def test_resume_sources_the_installed_product_bootstrap(policy_env, monkeypatch)
     bootstrap.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     hooks = install_home / "hooks"
     hooks.mkdir()
-    shutil.copy2(ROOT / "hooks" / "child_resume.py", hooks)
+    for helper in ("child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / helper, hooks)
+    (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
+    copy_client_library(install_home)
     runner = (
         install_home / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh"
     )
@@ -415,7 +469,7 @@ def test_standalone_resume_uses_current_home_without_child_lifecycle(
     assert rollout.read_bytes() == original
 
 
-def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch):
+def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch, cleanup_mail):
     tmp_path, project = policy_env
     zsh = shutil.which("zsh")
     if not zsh:
@@ -439,11 +493,14 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     libdir = bindir / "lib"
     hooks = install_home / "hooks"
     libdir.mkdir(parents=True)
-    hooks.mkdir(parents=True)
+    copy_client_library(install_home)
+    hooks.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "bin" / "agentstack-codex-bootstrap", bindir)
     shutil.copy2(ROOT / "hooks" / "prepare-codex-session-binding.py", hooks)
     for name in (
         "child_resume.py",
+        "child_tools.py",
+        "screen_state.py",
         "cleanup-child-agent.sh",
         "project-context.sh",
         "resolve-agent-name.sh",
@@ -575,7 +632,7 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     monkeypatch.setenv("AGENTSTACK_HOME", str(install_home))
     monkeypatch.setenv("AGENTSTACK_PROJECT_KEY", str(project))
     monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(runtime))
-    monkeypatch.setenv("AGENTSTACK_MCP_URL", "http://127.0.0.1:1/mcp")
+    monkeypatch.setenv("AGENTSTACK_MCP_URL", cleanup_mail)
     # server.py resolves service configuration at import time.  Updating only
     # os.environ here made this fixture inherit the caller's import-time mode;
     # under env -i that was the default `auto`, so cleanup correctly stopped
@@ -1010,7 +1067,10 @@ def test_resume_valid_state_without_home_regenerates_private_home(
     bootstrap.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     installed_hooks = install_home / "hooks"
     installed_hooks.mkdir()
-    shutil.copy2(ROOT / "hooks" / "child_resume.py", installed_hooks)
+    for helper in ("child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / helper, installed_hooks)
+    (install_home / "bin/lib").mkdir(parents=True, exist_ok=True)
+    copy_client_library(install_home)
     runner = (
         install_home / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh"
     )
@@ -1051,7 +1111,8 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
     libdir = bindir / "lib"
     hooks = install_home / "hooks"
     libdir.mkdir(parents=True)
-    hooks.mkdir(parents=True)
+    copy_client_library(install_home)
+    hooks.mkdir(parents=True, exist_ok=True)
     bootstrap = bindir / "agentstack-codex-bootstrap"
     bootstrap.write_text(
         (ROOT / "bin" / "agentstack-codex-bootstrap").read_text(encoding="utf-8"),
@@ -1064,7 +1125,8 @@ def test_installed_bootstrap_creates_a_fresh_resume_generation(policy_env):
         ),
         encoding="utf-8",
     )
-    shutil.copy2(ROOT / "hooks" / "child_resume.py", hooks)
+    for helper in ("child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / helper, hooks)
     (libdir / "agentstack-register.sh").write_text(
         "ags_mail_load_token() { :; }\n"
         "ags_mcp_call() { printf '{\"result\":{}}\\n'; }\n"
@@ -1133,7 +1195,8 @@ def test_top_level_bootstrap_records_standalone_origin(policy_env):
     libdir = bindir / "lib"
     hooks = install_home / "hooks"
     libdir.mkdir(parents=True)
-    hooks.mkdir(parents=True)
+    copy_client_library(install_home)
+    hooks.mkdir(parents=True, exist_ok=True)
     bootstrap = bindir / "agentstack-codex-bootstrap"
     shutil.copy2(ROOT / "bin" / "agentstack-codex-bootstrap", bootstrap)
     shutil.copy2(ROOT / "hooks" / "prepare-codex-session-binding.py", hooks)
@@ -1234,6 +1297,7 @@ def test_reserved_resume_stops_before_exec_when_binding_preconditions_fail(
     bindir = install_home / "bin"
     libdir = bindir / "lib"
     libdir.mkdir(parents=True)
+    copy_client_library(install_home)
     bootstrap = bindir / "agentstack-codex-bootstrap"
     bootstrap.write_text(
         (ROOT / "bin" / "agentstack-codex-bootstrap").read_text(encoding="utf-8"),

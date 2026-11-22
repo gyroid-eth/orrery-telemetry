@@ -1,0 +1,1508 @@
+{
+  "schema_atoms": {
+    "contract": {
+      "const": "orrery-tmux-target-v1"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "allowed": {
+      "type": "boolean"
+    },
+    "operation": {
+      "enum": [
+        "target",
+        "capture",
+        "attach",
+        "send-compact",
+        "end",
+        "replay-end"
+      ]
+    },
+    "target": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "agent_id",
+            "agent_name",
+            "credential_generation",
+            "binding",
+            "pid",
+            "process_start",
+            "transport",
+            "socket_path",
+            "server_pid",
+            "session_id",
+            "session_name",
+            "window_id",
+            "pane_id",
+            "argv",
+            "environment_unset",
+            "kind",
+            "launch"
+          ],
+          "properties": {
+            "agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "agent_name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "credential_generation": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "binding": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "candidate_generation": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "authority_epoch": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "process_start": {
+              "type": "string",
+              "minLength": 1
+            },
+            "transport": {
+              "enum": [
+                "legacy-default",
+                "global-instance"
+              ]
+            },
+            "socket_path": {
+              "type": "string",
+              "pattern": "^/.*"
+            },
+            "server_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "session_id": {
+              "type": "string",
+              "pattern": "^\\$[0-9]+$"
+            },
+            "session_name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "window_id": {
+              "type": "string",
+              "pattern": "^@[0-9]+$"
+            },
+            "pane_id": {
+              "type": "string",
+              "pattern": "^%[0-9]+$"
+            },
+            "argv": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 3
+            },
+            "environment_unset": {
+              "const": [
+                "TMUX",
+                "TMUX_PANE"
+              ]
+            },
+            "kind": {
+              "const": "launched-tmux"
+            },
+            "launch": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "launch_id",
+                "receipt_nonce"
+              ],
+              "properties": {
+                "launch_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "receipt_nonce": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "agent_id",
+            "agent_name",
+            "credential_generation",
+            "binding",
+            "pid",
+            "process_start",
+            "transport",
+            "socket_path",
+            "server_pid",
+            "session_id",
+            "session_name",
+            "window_id",
+            "pane_id",
+            "argv",
+            "environment_unset",
+            "kind",
+            "launch"
+          ],
+          "properties": {
+            "agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "agent_name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "credential_generation": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "binding": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "candidate_generation": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "authority_epoch": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "process_start": {
+              "type": "string",
+              "minLength": 1
+            },
+            "transport": {
+              "enum": [
+                "legacy-default",
+                "global-instance"
+              ]
+            },
+            "socket_path": {
+              "type": "string",
+              "pattern": "^/.*"
+            },
+            "server_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "session_id": {
+              "type": "string",
+              "pattern": "^\\$[0-9]+$"
+            },
+            "session_name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "window_id": {
+              "type": "string",
+              "pattern": "^@[0-9]+$"
+            },
+            "pane_id": {
+              "type": "string",
+              "pattern": "^%[0-9]+$"
+            },
+            "argv": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 3
+            },
+            "environment_unset": {
+              "const": [
+                "TMUX",
+                "TMUX_PANE"
+              ]
+            },
+            "kind": {
+              "const": "standalone-tmux"
+            },
+            "launch": {
+              "const": null
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "agent_id",
+            "agent_name",
+            "credential_generation",
+            "binding",
+            "pid",
+            "process_start",
+            "kind",
+            "transport",
+            "socket_path",
+            "server_pid",
+            "session_id",
+            "session_name",
+            "window_id",
+            "pane_id",
+            "launch",
+            "argv",
+            "environment_unset"
+          ],
+          "properties": {
+            "agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "agent_name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "credential_generation": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "binding": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "candidate_generation": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "authority_epoch": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "process_start": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "const": "standalone-process"
+            },
+            "transport": {
+              "const": null
+            },
+            "socket_path": {
+              "const": null
+            },
+            "server_pid": {
+              "const": null
+            },
+            "session_id": {
+              "const": null
+            },
+            "session_name": {
+              "const": null
+            },
+            "window_id": {
+              "const": null
+            },
+            "pane_id": {
+              "const": null
+            },
+            "launch": {
+              "const": null
+            },
+            "argv": {
+              "const": []
+            },
+            "environment_unset": {
+              "const": [
+                "TMUX",
+                "TMUX_PANE"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "state_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "principal": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "uid",
+            "agent_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "operator"
+            },
+            "uid": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "agent_id": {
+              "const": null
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "uid",
+            "agent_id"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "owner",
+                "parent"
+              ]
+            },
+            "uid": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "agent_id": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      ]
+    },
+    "next_operations": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "target",
+          "capture",
+          "attach",
+          "send-compact",
+          "end"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "truncated",
+        "max_lines"
+      ],
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "max_lines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      }
+    },
+    "phase": {
+      "enum": [
+        "observed",
+        "admitted",
+        "submitted"
+      ]
+    },
+    "effects": {
+      "enum": [
+        "none",
+        "unknown"
+      ]
+    },
+    "compact_readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "input_empty",
+        "context_used_percent"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "idle",
+            "work",
+            "unknown"
+          ]
+        },
+        "input_empty": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context_used_percent": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "enum": [
+            "report-required",
+            "report-pending",
+            "report-confirmed",
+            "report-not-required",
+            "report-rejected",
+            "cleanup-pending",
+            "ended",
+            "unknown"
+          ]
+        },
+        "provider_outcome": {
+          "enum": [
+            "pending",
+            "exited",
+            "not-started",
+            "unknown"
+          ]
+        },
+        "pending_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "[0-9a-f]{64}"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "provider_outcome",
+        "pending_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "lifecycle_next_operations": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "target",
+          "replay-end",
+          "launch-resolve",
+          "resolve-mutation"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "lifecycle_readiness": {
+      "const": {
+        "state": "unknown",
+        "input_empty": null,
+        "context_used_percent": null
+      }
+    },
+    "lifecycle_target": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "agent_id",
+            "agent_name",
+            "credential_generation",
+            "binding",
+            "pid",
+            "process_start",
+            "kind",
+            "transport",
+            "socket_path",
+            "server_pid",
+            "session_id",
+            "session_name",
+            "window_id",
+            "pane_id",
+            "launch",
+            "argv",
+            "environment_unset"
+          ],
+          "properties": {
+            "agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "agent_name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "credential_generation": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "binding": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "candidate_generation": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "authority_epoch": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "pid": {
+              "const": null
+            },
+            "process_start": {
+              "const": null
+            },
+            "kind": {
+              "const": "launch-lifecycle"
+            },
+            "transport": {
+              "const": null
+            },
+            "socket_path": {
+              "const": null
+            },
+            "server_pid": {
+              "const": null
+            },
+            "session_id": {
+              "const": null
+            },
+            "session_name": {
+              "const": null
+            },
+            "window_id": {
+              "const": null
+            },
+            "pane_id": {
+              "const": null
+            },
+            "launch": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "launch_id",
+                "receipt_nonce"
+              ],
+              "properties": {
+                "launch_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "receipt_nonce": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "argv": {
+              "const": []
+            },
+            "environment_unset": {
+              "const": [
+                "TMUX",
+                "TMUX_PANE"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "agent_id",
+            "agent_name",
+            "credential_generation",
+            "binding",
+            "pid",
+            "process_start",
+            "kind",
+            "transport",
+            "socket_path",
+            "server_pid",
+            "session_id",
+            "session_name",
+            "window_id",
+            "pane_id",
+            "launch",
+            "argv",
+            "environment_unset"
+          ],
+          "properties": {
+            "agent_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "agent_name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "credential_generation": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "binding": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "expected_server_instance_id",
+                "candidate_generation",
+                "authority_epoch"
+              ],
+              "properties": {
+                "expected_server_instance_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "candidate_generation": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "authority_epoch": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "pid": {
+              "const": null
+            },
+            "process_start": {
+              "const": null
+            },
+            "kind": {
+              "const": "standalone-lifecycle"
+            },
+            "transport": {
+              "const": null
+            },
+            "socket_path": {
+              "const": null
+            },
+            "server_pid": {
+              "const": null
+            },
+            "session_id": {
+              "const": null
+            },
+            "session_name": {
+              "const": null
+            },
+            "window_id": {
+              "const": null
+            },
+            "pane_id": {
+              "const": null
+            },
+            "launch": {
+              "const": null
+            },
+            "argv": {
+              "const": []
+            },
+            "environment_unset": {
+              "const": [
+                "TMUX",
+                "TMUX_PANE"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "lifecycle_operation": {
+      "enum": [
+        "end",
+        "replay-end"
+      ]
+    }
+  },
+  "input_schemas": {
+    "operator_admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operator",
+        "runtime_mode",
+        "server_config"
+      ],
+      "properties": {
+        "operator": {
+          "const": true
+        },
+        "runtime_mode": {
+          "const": "global"
+        },
+        "server_config": {
+          "type": "string",
+          "pattern": "^/.*"
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entry",
+        "agent_id",
+        "print"
+      ],
+      "properties": {
+        "entry": {
+          "const": "target"
+        },
+        "agent_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "print": {
+          "const": true
+        }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entry",
+        "agent_id"
+      ],
+      "properties": {
+        "entry": {
+          "const": "capture"
+        },
+        "agent_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      }
+    },
+    "attach": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entry",
+        "agent_id"
+      ],
+      "properties": {
+        "entry": {
+          "const": "attach"
+        },
+        "agent_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "print": {
+          "type": "boolean"
+        },
+        "read_only": {
+          "type": "boolean"
+        }
+      }
+    },
+    "send-compact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entry",
+        "agent_id",
+        "confirm_state_digest"
+      ],
+      "properties": {
+        "entry": {
+          "const": "send-compact"
+        },
+        "agent_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "confirm_state_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "end": {
+      "type": "object",
+      "properties": {
+        "entry": {
+          "const": "end"
+        },
+        "agent_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "confirm_state_digest": {
+          "type": "string",
+          "pattern": "[0-9a-f]{64}"
+        }
+      },
+      "required": [
+        "entry",
+        "agent_id",
+        "confirm_state_digest"
+      ],
+      "additionalProperties": false
+    },
+    "replay-end": {
+      "type": "object",
+      "properties": {
+        "entry": {
+          "const": "replay-end"
+        },
+        "agent_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "confirm_state_digest": {
+          "type": "string",
+          "pattern": "[0-9a-f]{64}"
+        },
+        "expected_intent_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "[0-9a-f]{64}"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "entry",
+        "agent_id",
+        "confirm_state_digest",
+        "expected_intent_sha256"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "result_tables": {
+    "target.success": {
+      "fields": [
+        "contract",
+        "ok",
+        "allowed",
+        "operation",
+        "principal",
+        "target",
+        "state_sha256",
+        "next_operations",
+        "compact_readiness"
+      ],
+      "constants": {
+        "ok": true,
+        "allowed": true,
+        "operation": "target"
+      }
+    },
+    "capture.success": {
+      "fields": [
+        "contract",
+        "ok",
+        "allowed",
+        "operation",
+        "principal",
+        "target",
+        "state_sha256",
+        "next_operations",
+        "capture",
+        "compact_readiness"
+      ],
+      "constants": {
+        "ok": true,
+        "allowed": true,
+        "operation": "capture"
+      }
+    },
+    "attach.admission": {
+      "fields": [
+        "contract",
+        "ok",
+        "allowed",
+        "operation",
+        "principal",
+        "target",
+        "state_sha256",
+        "next_operations",
+        "phase"
+      ],
+      "constants": {
+        "ok": true,
+        "allowed": true,
+        "operation": "attach",
+        "phase": "admitted"
+      }
+    },
+    "compact.submitted": {
+      "fields": [
+        "contract",
+        "ok",
+        "allowed",
+        "operation",
+        "principal",
+        "target",
+        "state_sha256",
+        "next_operations",
+        "phase",
+        "compact_readiness"
+      ],
+      "constants": {
+        "ok": true,
+        "allowed": true,
+        "operation": "send-compact",
+        "phase": "submitted"
+      }
+    },
+    "error.before_effect": {
+      "fields": [
+        "contract",
+        "ok",
+        "allowed",
+        "operation",
+        "failure_kind",
+        "reason",
+        "effects",
+        "next_operations"
+      ],
+      "constants": {
+        "ok": false,
+        "allowed": false,
+        "effects": "none"
+      },
+      "exclude_failure_kinds": [
+        "outcome"
+      ]
+    },
+    "error.outcome_unknown": {
+      "fields": [
+        "contract",
+        "ok",
+        "allowed",
+        "operation",
+        "failure_kind",
+        "reason",
+        "effects",
+        "next_operations"
+      ],
+      "constants": {
+        "ok": false,
+        "allowed": false,
+        "operation": "send-compact",
+        "failure_kind": "outcome",
+        "reason": "TMUX_OPERATION_OUTCOME_UNKNOWN",
+        "effects": "unknown",
+        "next_operations": [
+          "target",
+          "capture"
+        ]
+      }
+    },
+    "target.lifecycle.success": {
+      "fields": [
+        "contract",
+        "ok",
+        "allowed",
+        "operation",
+        "principal",
+        "target",
+        "state_sha256",
+        "next_operations",
+        "compact_readiness",
+        "lifecycle"
+      ],
+      "constants": {
+        "ok": true,
+        "allowed": true,
+        "operation": "target"
+      },
+      "atom_overrides": {
+        "target": "lifecycle_target",
+        "next_operations": "lifecycle_next_operations",
+        "compact_readiness": "lifecycle_readiness"
+      }
+    },
+    "end.success": {
+      "fields": [
+        "contract",
+        "ok",
+        "allowed",
+        "operation",
+        "principal",
+        "target",
+        "state_sha256",
+        "next_operations",
+        "compact_readiness",
+        "lifecycle"
+      ],
+      "constants": {
+        "ok": true,
+        "allowed": true,
+        "operation": "end"
+      },
+      "atom_overrides": {
+        "target": "lifecycle_target",
+        "next_operations": "lifecycle_next_operations",
+        "compact_readiness": "lifecycle_readiness"
+      }
+    },
+    "replay-end.success": {
+      "fields": [
+        "contract",
+        "ok",
+        "allowed",
+        "operation",
+        "principal",
+        "target",
+        "state_sha256",
+        "next_operations",
+        "compact_readiness",
+        "lifecycle"
+      ],
+      "constants": {
+        "ok": true,
+        "allowed": true,
+        "operation": "replay-end"
+      },
+      "atom_overrides": {
+        "target": "lifecycle_target",
+        "next_operations": "lifecycle_next_operations",
+        "compact_readiness": "lifecycle_readiness"
+      }
+    },
+    "error.lifecycle_outcome_unknown": {
+      "fields": [
+        "contract",
+        "ok",
+        "allowed",
+        "operation",
+        "failure_kind",
+        "reason",
+        "effects",
+        "next_operations"
+      ],
+      "constants": {
+        "ok": false,
+        "allowed": false,
+        "failure_kind": "outcome",
+        "reason": "TMUX_OPERATION_OUTCOME_UNKNOWN",
+        "effects": "unknown",
+        "next_operations": [
+          "target"
+        ]
+      },
+      "atom_overrides": {
+        "operation": "lifecycle_operation"
+      }
+    }
+  },
+  "schema_derivation": {
+    "reason": "enum = emitted keys of inherited reasons merged with additional; no authored enum",
+    "failure_kind": "enum = unique values of merged reason kinds",
+    "error_by_kind": "before_effect anyOf schema generated per non-outcome kind; reason enum restricted to that kind, failure_kind const, effects const none; kind_exit from same reason table",
+    "outcome": "existing outcome constants validated against same merged table; only compact, rc3"
+  },
+  "reasons": {
+    "TARGET_UNAVAILABLE": {
+      "kind": "target",
+      "reader_inputs": [
+        "TARGET_UNAVAILABLE",
+        "AGENT_UNAVAILABLE"
+      ]
+    },
+    "OWNER_REQUIRED": {
+      "kind": "target",
+      "reader_inputs": [
+        "OWNER_REQUIRED"
+      ]
+    },
+    "OPERATOR_CONFIRMATION_REQUIRED": {
+      "kind": "target",
+      "reader_inputs": [
+        "OPERATOR_CONFIRMATION_REQUIRED"
+      ]
+    },
+    "RESOLUTION_DIGEST_MISMATCH": {
+      "kind": "target",
+      "reader_inputs": [
+        "RESOLUTION_DIGEST_MISMATCH"
+      ]
+    },
+    "GLOBAL_TARGET_HELPER_UNAVAILABLE": {
+      "kind": "target",
+      "reader_inputs": [
+        "GLOBAL_TARGET_HELPER_UNAVAILABLE"
+      ]
+    },
+    "CONTEXT_PATH_INVALID": {
+      "kind": "target",
+      "reader_inputs": [
+        "CONTEXT_PATH_INVALID"
+      ]
+    },
+    "CONFIG_PATH_INVALID": {
+      "kind": "target",
+      "reader_inputs": [
+        "CONFIG_PATH_INVALID"
+      ]
+    },
+    "ISOLATED_CONFIG_REQUIRED": {
+      "kind": "target",
+      "reader_inputs": [
+        "ISOLATED_CONFIG_REQUIRED"
+      ]
+    },
+    "BINDING_INVALID": {
+      "kind": "target",
+      "reader_inputs": [
+        "BINDING_INVALID"
+      ]
+    },
+    "PRIVATE_FILE_UNSAFE": {
+      "kind": "target",
+      "reader_inputs": [
+        "PRIVATE_FILE_UNSAFE"
+      ]
+    },
+    "PRIVATE_FILE_UNAVAILABLE": {
+      "kind": "target",
+      "reader_inputs": [
+        "PRIVATE_FILE_UNAVAILABLE"
+      ]
+    },
+    "PRIVATE_FILE_TOO_LARGE": {
+      "kind": "target",
+      "reader_inputs": [
+        "PRIVATE_FILE_TOO_LARGE"
+      ]
+    },
+    "PRIVATE_JSON_INVALID": {
+      "kind": "target",
+      "reader_inputs": [
+        "PRIVATE_JSON_INVALID"
+      ]
+    },
+    "PRIVATE_DIRECTORY_REQUIRED": {
+      "kind": "target",
+      "reader_inputs": [
+        "PRIVATE_DIRECTORY_REQUIRED"
+      ]
+    },
+    "CONTEXT_CHANGED": {
+      "kind": "target",
+      "reader_inputs": [
+        "CONTEXT_CHANGED"
+      ]
+    },
+    "MANAGEMENT_BINDING_MISMATCH": {
+      "kind": "target",
+      "reader_inputs": [
+        "MANAGEMENT_BINDING_MISMATCH"
+      ]
+    },
+    "MANAGEMENT_REJECTED": {
+      "kind": "target",
+      "reader_inputs": [
+        "MANAGEMENT_REJECTED"
+      ]
+    },
+    "WRITER_FENCED": {
+      "kind": "target",
+      "reader_inputs": [
+        "WRITER_FENCED"
+      ]
+    },
+    "RESPONSE_INVALID": {
+      "kind": "target",
+      "reader_inputs": [
+        "RESPONSE_INVALID"
+      ]
+    },
+    "TMUX_TARGET_NOT_IDLE": {
+      "kind": "target",
+      "reader_inputs": [
+        "TMUX_TARGET_NOT_IDLE"
+      ]
+    },
+    "TMUX_TARGET_INPUT_NOT_EMPTY": {
+      "kind": "target",
+      "reader_inputs": [
+        "TMUX_TARGET_INPUT_NOT_EMPTY"
+      ]
+    },
+    "TMUX_OPERATION_OUTCOME_UNKNOWN": {
+      "kind": "outcome",
+      "reader_inputs": [
+        "TMUX_OPERATION_OUTCOME_UNKNOWN"
+      ]
+    },
+    "IDENTITY_BINDING_MISMATCH": {
+      "kind": "target",
+      "reader_inputs": [
+        "IDENTITY_BINDING_MISMATCH"
+      ]
+    },
+    "CREDENTIAL_BINDING_MISMATCH": {
+      "kind": "target",
+      "reader_inputs": [
+        "CREDENTIAL_BINDING_MISMATCH"
+      ]
+    },
+    "SESSION_OWNER_CONFLICT": {
+      "kind": "target",
+      "reader_inputs": [
+        "SESSION_OWNER_CONFLICT"
+      ]
+    },
+    "PARENT_UNAVAILABLE": {
+      "kind": "target",
+      "reader_inputs": [
+        "PARENT_UNAVAILABLE"
+      ]
+    },
+    "LOCAL_OBSERVATION_CHANGED": {
+      "kind": "target",
+      "reader_inputs": [
+        "LOCAL_OBSERVATION_CHANGED"
+      ]
+    },
+    "OUTPUT_SCHEMA_INVALID": {
+      "kind": "target",
+      "reader_inputs": [
+        "OUTPUT_SCHEMA_INVALID"
+      ]
+    },
+    "MANAGEMENT_SOCKET_UNSAFE": {
+      "kind": "target",
+      "reader_inputs": [
+        "MANAGEMENT_SOCKET_UNSAFE"
+      ]
+    },
+    "MANAGEMENT_RESPONSE_INVALID": {
+      "kind": "target",
+      "reader_inputs": [
+        "MANAGEMENT_RESPONSE_INVALID"
+      ]
+    },
+    "QUERY_INVALID": {
+      "kind": "target",
+      "reader_inputs": [
+        "QUERY_INVALID"
+      ]
+    },
+    "CLIENT_NAME_INVALID": {
+      "kind": "target",
+      "reader_inputs": [
+        "CLIENT_NAME_INVALID"
+      ]
+    },
+    "CHILD_BINDING_MISMATCH": {
+      "kind": "target",
+      "reader_inputs": [
+        "CHILD_BINDING_MISMATCH"
+      ]
+    },
+    "SERVER_BINDING_MISMATCH": {
+      "kind": "target",
+      "reader_inputs": [
+        "SERVER_BINDING_MISMATCH"
+      ]
+    },
+    "CONTEXT_UNAVAILABLE": {
+      "kind": "target",
+      "reader_inputs": [
+        "CONTEXT_UNAVAILABLE"
+      ]
+    },
+    "RUNTIME_MODE_INVALID": {
+      "kind": "target",
+      "reader_inputs": [
+        "RUNTIME_MODE_INVALID"
+      ]
+    },
+    "RUNTIME_SELECTION_INVALID": {
+      "kind": "target",
+      "reader_inputs": [
+        "RUNTIME_SELECTION_INVALID"
+      ]
+    },
+    "RUNTIME_DEFAULT_UNAVAILABLE": {
+      "kind": "target",
+      "reader_inputs": [
+        "RUNTIME_DEFAULT_UNAVAILABLE"
+      ]
+    },
+    "RUNTIME_MODE_CONTEXT_CONFLICT": {
+      "kind": "target",
+      "reader_inputs": [
+        "RUNTIME_MODE_CONTEXT_CONFLICT"
+      ]
+    },
+    "LEGACY_CONTEXT_REQUIRES_PR7": {
+      "kind": "target",
+      "reader_inputs": [
+        "LEGACY_CONTEXT_REQUIRES_PR7"
+      ]
+    },
+    "LEGACY_SESSION_MODE_UNRESOLVED": {
+      "kind": "target",
+      "reader_inputs": [
+        "LEGACY_SESSION_MODE_UNRESOLVED"
+      ]
+    },
+    "ENDPOINT_NOT_LOCAL": {
+      "kind": "target",
+      "reader_inputs": [
+        "ENDPOINT_NOT_LOCAL"
+      ]
+    },
+    "TMUX_SESSION_NAME_CONFLICT": {
+      "kind": "target",
+      "reader_inputs": []
+    },
+    "MUTATION_PENDING_CONFLICT": {
+      "kind": "target",
+      "reader_inputs": [
+        "MUTATION_PENDING_CONFLICT"
+      ]
+    }
+  },
+  "inherited_reader_inputs": {
+    "TMUX_HELPER_FAILED": {
+      "reader_inputs": [
+        "TMUX_HELPER_FAILED",
+        "OBSERVATION_BUSY",
+        "OBSERVATION_MUTEX_UNAVAILABLE",
+        "OBSERVATION_INCOMPLETE",
+        "SCHEMA_VALIDATOR_UNAVAILABLE"
+      ]
+    },
+    "GLOBAL_TARGET_OWNERSHIP_UNKNOWN": {
+      "reader_inputs": [
+        "GLOBAL_TARGET_OWNERSHIP_UNKNOWN",
+        "AMBIGUOUS_CLIENT_ROOT",
+        "MULTIPLE_LIVE_SESSIONS"
+      ]
+    },
+    "TMUX_TARGET_UNAVAILABLE": {
+      "reader_inputs": [
+        "TMUX_TARGET_UNAVAILABLE",
+        "SESSION_UNAVAILABLE",
+        "CLIENT_ROOT_UNAVAILABLE",
+        "APP_ACTIVITY_UNPROVEN"
+      ]
+    }
+  },
+  "kind_exit": {
+    "target": 2,
+    "transport": 2,
+    "helper": 70,
+    "outcome": 3
+  },
+  "digest_contract": {
+    "identity": "target, principal and existing root/parent snapshot proofs; capture and attach return this digest and compare it before effects",
+    "compact": "identity plus readiness, normalized context use and current input suffix; target returns this digest for send-compact confirmation",
+    "excluded": "unrelated terminal prose, spinner, elapsed time and statusline changes",
+    "confirmation": "human confirmation outside all locks; fresh observation budget afterward, original expected compact digest retained",
+    "proof": "shared pane membership and PID/start verification after final screen observation"
+  }
+}

@@ -7,17 +7,10 @@
 # Claude Code directly -- an IDE's agent panel, the desktop app, a bare `claude`
 # -- never gets one.
 #
-# Having no identity source does NOT mean the session cannot register. A tester
-# reported an IDE panel that looked structurally excluded, and the same client
-# had registered successfully on other days: what failed that day was the mail
-# service, not the launch path. Whether registration is possible is a question
-# about the service (see the transport section at the end of this file), not
-# about how the client was started.
-#
-# What this policy decides is narrower: what to do with a session that has no
-# identity source while the service is answering. Such a session can register,
-# so the default is to require it. The opt-out exists for operators who
-# knowingly run a client outside coordination.
+# No identity means no automatic Mail registration/notification. This editing
+# policy is separate: outside-coordination writes remain blocked by default.
+# Start a coordinated session with the supported launcher; an unresolved
+# existing binding requires recovery of that identity rather than a new name.
 #
 # Policy is explicit and overridable:
 #   AGENTSTACK_UNMANAGED_SESSION_POLICY=block       (default) refuse, and say how to leave
@@ -192,12 +185,7 @@ WARNPY
 agentstack_unmanaged_block_message() {
     local guard="$1"
     echo "UNMANAGED SESSION BLOCKED ($guard): this session has no agent identity." >&2
-    echo "The mail service is answering, so registering is possible from here: call the mail MCP's" >&2
-    echo "register_agent tool, which records the identity this session will act under." >&2
-    echo "If this client has no mail MCP, choose one of these from outside the session:" >&2
-    echo "  - start the agent with agent-start, which registers an identity before launching Claude" >&2
-    echo "  - export AGENTSTACK_UNMANAGED_SESSION_POLICY=warn-open to run it outside coordination" >&2
-    echo "  - remove the guard from the PreToolUse hooks in ~/.claude/settings.json" >&2
+    agentstack_instruction_message identity-unavailable >&2
 }
 
 # --- mail transport ------------------------------------------------------
@@ -399,6 +387,19 @@ agentstack_invalid_endpoint_message() {
 #
 # Prints "ok", "conflict", or "none".
 agentstack_session_binding_conflict() {
+    local runtime_client runtime_mode
+    runtime_client="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/lib/runtime_client.py"
+    . "$(dirname "$runtime_client")/global-client-loader.sh" || { printf 'conflict\n'; return 0; }
+    local selected_status
+    ags_client_select && selected_status=0 || selected_status=$?
+    [[ "$selected_status" == 0 || "$selected_status" == 125 ]] || { printf 'conflict\n'; return 0; }
+    if [[ "$selected_status" == 0 ]]; then
+        runtime_mode="$(python3 "$runtime_client" mode 2>/dev/null)" || { printf 'conflict\n'; return 0; }
+        if [[ "$runtime_mode" == "global" ]]; then
+            if python3 "$runtime_client" observe >/dev/null 2>&1; then printf 'ok\n'; else printf 'conflict\n'; fi
+            return 0
+        fi
+    fi
     local session_id="$1" project="$2" env_name="$3"
     case "$session_id" in
         ""|*[!a-zA-Z0-9_-]*) printf 'none\n'; return 0 ;;
@@ -466,14 +467,19 @@ if directory.is_dir():
         name = record.get("agent_name")
         if isinstance(name, str) and name:
             names.add(name)
-# The claims: a launcher name, the tmux session this pane is really in, and
-# what the session registered as. Pane metadata arrives here only when it was
-# read alongside a live tmux session, where it corroborates rather than claims.
-# Two distinct names means one of them would be writing under the other's.
+tmux_name = os.environ.get("AGENTSTACK_CONFLICT_TMUX_NAME", "")
+pane_meta = os.environ.get("AGENTSTACK_CONFLICT_PANE_META", "")
+# Pane IDs are reused after tmux restarts. An unscoped name file cannot
+# override three agreeing current sources: launcher, targeted live session,
+# and this session's project-scoped self registration. Without all three,
+# retain the refusal; never rewrite/delete metadata while observing it.
+if project and env_name and env_name == tmux_name and names == {env_name}:
+    pane_meta = ""
+# Two distinct authoritative names still means one would write as the other.
 for claim in (
     env_name,
-    os.environ.get("AGENTSTACK_CONFLICT_TMUX_NAME", ""),
-    os.environ.get("AGENTSTACK_CONFLICT_PANE_META", ""),
+    tmux_name,
+    pane_meta,
 ):
     if claim:
         names.add(claim)
@@ -488,4 +494,36 @@ agentstack_conflict_message() {
     echo "identity this session is not, under ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/session_index," >&2
     echo "unset AGENT_NAME if it disagrees with the identity this session registered as, or clear the" >&2
     echo "pane metadata under ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_name_* if it names a different agent than this tmux session." >&2
+}
+
+# Catalog owns the text; missing engine remains a refusal, never an allow.
+agentstack_instruction_message() {
+    local engine
+    engine="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/lib/instruction_blocks.py"
+    "${AGENTSTACK_PYTHON:-python3}" "$engine" --message "$1" || {
+        echo "INSTRUCTION_ENTRY_UNAVAILABLE: ask the operator to repair the installed instruction helper." >&2
+        return 1
+    }
+}
+
+ags_require_launch_identity() {
+  if agentstack_is_placeholder_name "${AGENT_NAME:-}"; then
+    echo "LAUNCH_IDENTITY_UNAVAILABLE" >&2
+    agentstack_instruction_message identity-unavailable >&2
+    return 1
+  fi
+}
+
+# Mail/instruction admission consumes the existing resolver result only.
+# Editing policy remains independent; this function performs no registration.
+agentstack_instruction_admission() {
+    if [ "${RESOLVED_AGENT_SRC:-none}" = "identity-conflict" ]; then
+        printf 'unresolved\n'
+    elif ! agentstack_is_placeholder_name "${RESOLVED_AGENT:-}"; then
+        printf 'participant\n'
+    elif [ -n "${AGENTSTACK_SESSION_ID:-}" ] && [ -f "/tmp/.claude-agent-registered-${AGENTSTACK_SESSION_ID}" ]; then
+        printf 'unresolved\n'
+    else
+        printf 'unrelated\n'
+    fi
 }

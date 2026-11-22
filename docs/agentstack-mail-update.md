@@ -14,6 +14,9 @@ file が残っていることがあるので、下の事前確認は「消えて
 Mail をこの checkout の build に差し替えます（下の「[`--update-mail` による差し替え](#--update-mail-による差し替え)」）。
 candidate の build、scratch port での検証、database の backup を稼働中の Mail を
 止めずに済ませてから切り替え、新しい build が応答しなければ前の build に戻します。
+付けない再実行（既定 `keep`）は差し替えず、差を `notice:` で示します。
+`AGENTSTACK_MAIL_UPDATE=auto`（opt-in）は、安全に差し替えられるときだけ差し替え、
+だめなら今の build を残して install を成功させます。
 下の手動の手順は、`--update-mail` が拒否した配置を扱うときと、その各段階が何を
 しているかを確かめるときのためのものです。
 
@@ -47,12 +50,12 @@ service root を `AGENTSTACK_MAIL_DIR` として記録しますが、installer �
   `health_check` を送ります。答えに `database_url` があり、それが期待する state
   database に解決されれば listener を採用します。その render を `env.sh` に記録し、
   service には**触りません**。port が占有されているのに ORRERY Mail として答え
-  ない、あるいは別の database を配信している場合は error で止まります。この
-  採用経路が通常の再実行のすべてで、だから再実行だけでは Mail の build は決して
-  切り替わりません。稼働中の build がこの checkout の build と違えば、再実行は
-  `notice:` でそれを示し、`--update-mail` を案内します（package の tree が同じ
-  commit どうしなら何も言いません）。dashboard の `/api/version` は package の版で
-  あって、port の裏にある build ではありません。
+  ない、あるいは別の database を配信している場合は error で止まります。採用
+  したあと、稼働中の build がこの checkout の build と違えば、既定（`keep`）では
+  `notice:` で差を示すだけで、service には**触りません**。`--update-mail` と
+  `auto` は下の差し替えに進みます（package の tree が同じ commit どうしなら、
+  どれでも何もしません）。dashboard
+  の `/api/version` は package の版であって、port の裏にある build ではありません。
 - **何も応答していない。** installer は checkout の正確な commit で candidate を
   用意し（無ければ build、あるが不完全なら run を止める）、service env を render
   し、`agentstack-mailctl` で起動し、`env.sh` と autostart unit をその render に
@@ -60,14 +63,53 @@ service root を `AGENTSTACK_MAIL_DIR` として記録しますが、installer �
 
 したがって手動の更新とは「古い service を止めてから installer を走らせる」こと
 で、その間に autostart unit が古い build を起こさないよう unit を押さえておきます。
-`--update-mail` はこの二つの経路の間を installer の中で行います。
+差し替え（`auto` と `--update-mail`）はこの二つの経路の間を installer の中で行います。
 
 ## `--update-mail` による差し替え
 
 ```bash
-./scripts/install.sh --update-mail --dry-run   # 計画だけを表示する
-./scripts/install.sh --update-mail
+./scripts/install.sh --print-mail-plan         # Mail をどうするかを 1 行で（読むだけ）
+./scripts/install.sh --dry-run                 # 計画全体を表示する
+./scripts/install.sh --update-mail             # 差し替える（できなければ exit 1）
+AGENTSTACK_MAIL_UPDATE=auto ./scripts/install.sh   # 安全に差し替えられるときだけ（opt-in）
+./scripts/install.sh                           # 差し替えない（既定 keep、--keep-mail と同じ）
 ```
+
+| 指定 | 稼働中の build が違うとき | 差し替えられない・失敗したとき |
+| --- | --- | --- |
+| `AGENTSTACK_MAIL_UPDATE=auto`（opt-in） | 下の 1〜5 で差し替える。ただし `agentstack-mailctl` 管理の配置で、検証が通り、止まる時間の見込みが `AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET`（既定 8 秒）以内のときだけ | 今の build を残し、warning を出して exit 0 |
+| `--update-mail`（`AGENTSTACK_MAIL_UPDATE=update`） | 差し替える。止まる時間の予算は使わない（時期を人が選んだ） | exit 1 |
+| なし、`--keep-mail`（`AGENTSTACK_MAIL_UPDATE=keep`） | 差し替えず、`notice:` で差を示す | — |
+
+選び方は `--mail auto|update|keep`（`--mail=VALUE` も可）で、`--update-mail` と
+`--keep-mail` はその別名です。option は `AGENTSTACK_MAIL_UPDATE` より優先します
+（cockpit の update.sh は option で渡すので、外側の環境の値に負けません）。`AGENTSTACK_MAIL_UPDATE` は
+毎回の指定で、`env.sh` には記録しません（一度選んだ値が以後ずっと効かないように）。
+`auto` はまだ既定ではありません。既定にする前に、rollback まで含めた停止時間の
+上限と、更新後の database で前の build が動くことの確認を入れます
+（[設計メモ](agentstack-mail-update-design.md)）。止まる時間の見込みは、
+検証で candidate が database の snapshot に対して応答するまでの秒数に、停止と
+health の待ちの分（1.5 秒）を足したものです。
+
+最後に 1 行、機械が読む結果を出します。`--dry-run` では同じ欄を `mail-plan:` で
+出します。値に空白は入らず、reason は固定の code です。
+
+```text
+mail-result: <installed|switched|kept|unchanged|refused|rolled-back> mode=<auto|update|keep> from=<commit> to=<commit> running=<commit> outage_s=<秒> reason=<code>
+mail-plan: <install|switch|keep|unchanged|refuse> mode=<…> running=<commit> to=<commit> reason=<code>
+```
+
+`from` はこの run の前に動いていた build（無い・特定できないときは空）、`to` は
+この checkout の build、`running` は今動いている build です（switched / installed
+なら `to`、それ以外は `from`）。rollback の失敗、`--update-mail` の拒否、中断では
+行を出さずに非 0 で終わります。読む側は、行が無いことを失敗として扱ってください。
+
+reason の code: `no_running_mail`、`newer_build`、`same_candidate`、`same_package`、
+`keep_default`、`keep_requested`、`not_mailctl_managed`、`deployment_unidentified`、`verify_failed`、
+`outage_over_budget`、`outage_unknown`、`backup_failed`、`start_failed_rolled_back`、`adopted`、
+（`--print-mail-plan` だけ）`plan_unavailable`。`--print-mail-plan` は pidfile・
+render・git だけを読み、project key がなくても、何が起きても exit 0 で 1 行を
+出します。計画であって約束ではありません（実際の run は検証のうえで残すことがあります）。
 
 採用経路で稼働中の deployment を特定したあと、この checkout の candidate
 （`candidates/<commit>/venv`）が稼働中のものと違えば、次の順に進みます。
@@ -103,19 +145,22 @@ service root を `AGENTSTACK_MAIL_DIR` として記録しますが、installer �
 
 そのあと `env.sh`、autostart unit、`connections/local.json`、`install-state.json`
 を、実際に稼働している方の deployment で書きます。`install-state.json` の
-`agent_mail.update` に結果（`switched`・`rolled-back`・`not-switched`）、理由、
-前後の render と candidate、backup の path を記録します。
+`agent_mail.update` に結果（`switched`・`rolled-back`・`not-switched`）、理由と
+その code、mode、実際に止まっていた秒数（`outage_seconds`）、前後の render と
+candidate、backup の path を記録します。
 
-| 結果 | Mail | 終了 status |
-| --- | --- | --- |
-| `switched` | 新しい build | 0 |
-| `not-switched`（1〜3 で失敗） | 前の build。止めていない | 1 |
-| `rolled-back`（4 で失敗し 5 が成功） | 前の build。数秒〜 grace 分の停止あり | 1 |
-| rollback 失敗 | 停止中の可能性。error が状態と次の操作を示す | 1（その場で終了） |
-| 切り替え中に中断（Ctrl-C・SIGTERM・端末を閉じる） | `env.sh` がすでに新しい build を指していればそのまま、でなければ前の build に戻す | 130 |
+| 結果 | Mail | 終了 status（`auto`） | 終了 status（`--update-mail`） |
+| --- | --- | --- | --- |
+| `switched` | 新しい build | 0 | 0 |
+| `not-switched`（1〜3 で失敗、または止まる時間の見込みが予算超え） | 前の build。止めていない | 0（warning） | 1 |
+| `rolled-back`（4 で失敗し 5 が成功） | 前の build。数秒〜 grace 分の停止あり | 0（warning） | 1 |
+| rollback 失敗 | 停止中の可能性。error が状態と次の操作を示す | 1（その場で終了） | 1（その場で終了） |
+| 切り替え中に中断（Ctrl-C・SIGTERM・端末を閉じる） | `env.sh` がすでに新しい build を指していればそのまま、でなければ前の build に戻す | 130 | 130 |
 
 `not-switched` と `rolled-back` でも installer の残りは前の build に対して完了
-します。終了 status 1 は「頼まれた更新は起きていない」ことを示します。
+します。`--update-mail` の終了 status 1 は「頼まれた更新は起きていない」ことを
+示します。`auto` では更新は頼まれていないので 0 で終わり、warning と結果行で
+知らせます。
 
 **前の build に戻す。** 前の candidate を pin して同じ操作をします。render は
 同じ入力から同じ path になり、そのまま再利用されます。
@@ -130,7 +175,22 @@ AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<前の commi
 
 - **接続。** server は stateless HTTP なので、切り替えは session を失いません。
   停止から新しい server の応答までの間（前回の手動 run で 12 秒）に届いた
-  request は接続拒否になり、client の再試行で戻ります。
+  request は接続拒否になります。戻り方は client で違います（2026-10-02 に一時
+  HOME・別 port で測定）。launcher が bind した stdio proxy（子の Claude と
+  Codex）は呼び出しごとに接続するので、次の呼び出しから戻ります。top level の
+  Codex（`~/.codex/config.toml` の `url`）は 71 秒止めても次の呼び出しで戻り
+  ました。top level の Claude Code（`~/.claude.json` の `type: http`）は、止まって
+  いた時間が 15 秒までなら自動で戻り、18 秒以上では戻らず、`/mcp` から
+  orrery-mail を reconnect する必要がありました。installer は実際に止まっていた
+  秒数と、動いている Claude Code の session ごとに確かめる手順（`/mcp` で
+  orrery-mail が connected か、health_check などの小さい呼び出しが通るか）を、
+  止まった時間の長さに関わらず毎回出します。止まっている間に失敗と表示された
+  Mail の操作は、server が実行した後で返事だけ失われた場合があるので、繰り返す
+  前に実行済みかを確かめてください（送信は相手の inbox や送信履歴、登録は
+  `whois`、spawn・resume は dashboard）。文の正本は `scripts/install.sh` の
+  `mail_update_reconnect_hint` で、setup.sh も同じ文を出します。installer の health check や
+  selftest は Mail が応答することの確認で、すでに動いていた session の接続が
+  戻ったことの確認ではありません。
 - **token と credential。** agent の token は共有 database にあり、client 側の
   file（`~/.agentstack/runtime` など）には触れません。build が変わっても変わり
   ません。
@@ -159,8 +219,8 @@ AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<前の commi
 
 **扱わないもの。** `agentstack-mailctl` が起動した runner（pidfile が生きた
 runner を指す）だけを差し替えます。deployment を特定できない listener と
-launchd が直接 supervise する service は対象外で、何も止めずに error で終わり
-ます。state root・service root・endpoint の override（`AGENTSTACK_MAIL_*`、
+launchd が直接 supervise する service は対象外で、何も止めません。`--update-mail`
+は error で終わり、`auto` は今の build を残して続けます（`refused`）。state root・service root・endpoint の override（`AGENTSTACK_MAIL_*`、
 `AGENTSTACK_MCP_URL`）は同じ経路で扱い、test もこれらを override して実行して
 います。既定以外の `--install-dir` も拒否はしませんが、それ自体は test して
 いません。
@@ -168,7 +228,8 @@ launchd が直接 supervise する service は対象外で、何も止めずに 
 時間の上限: 検証 server の応答待ち `AGENTSTACK_MAIL_UPDATE_VERIFY_TIMEOUT`
 （既定 120 秒）、新しい build の起動待ち `AGENTSTACK_MAIL_UPDATE_START_GRACE`
 （既定は controller の `AGENTSTACK_MAIL_START_GRACE`、180 秒）。rollback の起動は
-controller の既定の grace で待ちます。
+controller の既定の grace で待ちます。`auto` が差し替える止まる時間の見込みの
+上限 `AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET`（既定 8 秒）。
 
 ## 配置
 
@@ -538,6 +599,41 @@ ps -o command= -p "$pid"          # which candidate's python is this
 測って「修正が反映された」と結論づけるのは、ここですでに一度起きた間違い
 です。dashboard の `/api/version` を読むのも同じ間違いで、それは package の版
 であり、Mail を切り替えたかどうかに関わらず再実行のたびに変わります。
+
+**動いている build に足りない機能。** `agentstack-doctor` は動いている Mail の
+`tools/list` を 1 回読み、この install が頼る機能（`scripts/lib/mail_required_features.json`。
+例: 旧形式の Claude の子を Mail 付きで再開する `register_agent` の `existing_agent_id`）
+のうち欠けているものごとに `warn:` を出し、直し方（`--update-mail`）を示します。
+Mail そのものは動いているので、doctor の exit status は変えません。最後に
+setup.sh が読む 1 行を出します。
+
+```text
+mail-features: status=<ok|missing|unknown> missing=<tool.parameter,...> running=<commit>
+```
+
+`unknown` は Mail に問い合わせられなかったことで、機能がそろっている意味では
+ありません。
+
+**古い Mail の案内。** install.sh は、この run で差し替えなかった Mail がこの
+checkout の build より**古いと分かるとき**（動いている build の commit がこの
+checkout の commit の祖先であるとき）、結果行の前に短い案内を出します。動いて
+いる build の方が新しいときは「checkout の方が古い。Mail をこの checkout から
+更新する前に pull する」と、どちらが新しいか分からない（分岐・この checkout に
+無い commit）ときはそう出し、どちらでもこの checkout からの更新は勧めません
+（古い checkout から更新すると Mail を戻してしまうため）。頼る機能が欠けている
+ことは、どの場合も知らせます。ただし欠けていることは「この checkout から更新
+すれば直る」根拠ではないので、そのときは「動いている build と同じか新しい
+checkout から更新する」と案内します。足りない機能、
+更新の仕方（`./scripts/install.sh --mail update`／`./scripts/setup.sh --mail update`）、
+更新のリスク（止まるのは通常は数秒。新しい build が起動しないと、切り替えと
+前の build への戻しに数分かかりうる。短い上限は保証しない。その間の Mail の
+呼び出しは失敗しうる。子と Codex は自分で戻る。top level の Claude Code は戻らない
+ことがある。Claude Code 2.1.287 の試験では 8 秒と 15 秒の停止は自分で戻り、18 秒と
+19 秒は戻らなかった）、戻らなかったときの操作（その session で `/mcp` →
+orrery-mail（✘ failed と表示）→ Reconnect。Authenticate ではない）です。doctor も
+欠けた機能があれば同じ案内を出します。文の正本は `scripts/lib/mail_update_notice.py`
+で、cockpit の setup.sh も `install.sh --print-mail-update-advice`（読むだけ・常に
+exit 0・古いと分かるときだけ出す・更新の command の行を除く）でこれを出します。
 
 ## 経緯
 

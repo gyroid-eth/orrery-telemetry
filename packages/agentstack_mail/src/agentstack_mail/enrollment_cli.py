@@ -107,13 +107,13 @@ def _load_profile(value: str) -> tuple[Path, dict[str, Any]]:
     return path, profile
 
 
-def _request(socket_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+def _request(socket_path: Path, payload: dict[str, Any], *, timeout: float = 5.0) -> dict[str, Any]:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
     if len(encoded) > MAX_REQUEST_BYTES:
         raise EnrollmentCliError("request-too-large")
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(5.0)
+            client.settimeout(timeout)
             client.connect(str(socket_path))
             client.sendall(encoded)
             chunks = bytearray()

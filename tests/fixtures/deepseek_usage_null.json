@@ -1,0 +1,38 @@
+{
+  "source_commit": "f698a61e",
+  "providers": [
+    {
+      "provider": "claude",
+      "status": "ok",
+      "observed_at": 1000,
+      "buckets": [
+        {
+          "id": "five_hour",
+          "label": "5h",
+          "scope": "account",
+          "used_percent": 25,
+          "remaining_percent": 75,
+          "window_seconds": 18000,
+          "resets_at": null,
+          "observed_at": 1000
+        }
+      ]
+    },
+    {
+      "provider": "codex",
+      "status": "unavailable",
+      "reason": "not_observed",
+      "observed_at": 1000,
+      "buckets": []
+    }
+  ],
+  "pill": {
+    "html": "<span class=\"up-p\"><img class=\"up-logo\" src=\"assets/anthropic.svg\" alt=\"\"><b>75%</b></span>",
+    "title": "Claude 5h 75% left · click for every window",
+    "hidden": false
+  },
+  "popover": {
+    "html": "<div class=\"up-prov\"><div class=\"up-h\"><b><img class=\"up-logo\" src=\"assets/anthropic.svg\" alt=\"\">Claude</b><span>last read 00:16</span></div><div class=\"up-dials\"><div class=\"up-dial \" title=\"5h · 75% left · last read 00:16\">\n    <svg viewBox=\"0 0 64 64\" aria-hidden=\"true\"><circle class=\"t\" cx=\"32\" cy=\"32\" r=\"25\"/>\n    <circle class=\"f\" cx=\"32\" cy=\"32\" r=\"25\" stroke-dasharray=\"117.81 157.08\" transform=\"rotate(-90 32 32)\"/>\n    <text class=\"n\" x=\"32\" y=\"32\" text-anchor=\"middle\" dominant-baseline=\"central\">75</text></svg>\n    <span class=\"lab\">5h</span><span class=\"rs\"></span>\n    \n    </div></div></div><div class=\"up-prov\"><div class=\"up-h\"><b><img class=\"up-logo\" src=\"assets/openai.svg\" alt=\"\">Codex</b><span></span></div>\n        <div class=\"up-wait\"><b>WAITING FOR UPDATE</b> · nothing observed yet</div></div>",
+    "kick": "last read 00:16 · numbers are % left"
+  }
+}

@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import runpy
 import os
 import pathlib
 import sys
+import subprocess
 from typing import Any
 
 
@@ -135,6 +137,35 @@ def _append_notice(response: str, notice: str) -> str:
 
 
 def main() -> int:
+    helper=pathlib.Path(__file__).resolve().parent/'lib/runtime_client.py'
+    selection = subprocess.run(['/bin/bash', str(helper.with_name('global-client-loader.sh')), 'select', *sys.argv[1:]])
+    if selection.returncode not in (0, 125):
+        return 2
+    if selection.returncode == 0:
+        try:
+            api=runpy.run_path(str(helper));client=api['configured']()
+            if client is None: raise api['ClientError']('CONTEXT_REQUIRED')
+            parser=argparse.ArgumentParser()
+            parser.add_argument('--context')
+            parser.add_argument('action',choices=['reserve','release','report','retire'])
+            parser.add_argument('--paths-json',default='[]')
+            parser.add_argument('--ttl',type=int,default=14400)
+            parser.add_argument('--result-log',type=pathlib.Path)
+            args=parser.parse_args()
+            if args.action=='reserve':
+                value=client.call('file_reservation_paths',{'paths':json.loads(args.paths_json),'ttl_seconds':args.ttl})
+            elif args.action=='release':
+                value=client.call('release_file_reservations',{'paths':json.loads(args.paths_json)})
+            elif args.action=='retire':
+                value=client.end_session({'session_id':os.environ.get('AGENTSTACK_SESSION_ID')})
+            else:
+                state=api['read_json'](client.outputs['child'])
+                body=args.result_log.read_text() if args.result_log else ''
+                value=client.call('send_message',{'to_agent_ids':[state['parent']['agent_id']],
+                    'subject':'Delegated task result','body_md':body})
+            print(json.dumps(value));return 0
+        except (RuntimeError,ValueError,OSError,KeyError):
+            print('agentstack-gemini-child-mail: global operation refused',file=sys.stderr);return 2
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=("reserve", "release", "report", "retire"))
     parser.add_argument("--project-key", required=True)

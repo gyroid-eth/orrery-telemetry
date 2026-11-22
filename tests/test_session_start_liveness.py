@@ -176,6 +176,7 @@ ags_load_registration_token() { return 1; }
     fake_lib.write_text(
         token_functions
         + """\
+ags_registered_profile() { printf 'claude-code\\t\\n'; }
 ags_register_session() {
     if [ "${FAKE_REGISTER_STATUS:-0}" -ne 0 ]; then
         return "$FAKE_REGISTER_STATUS"

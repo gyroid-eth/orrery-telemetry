@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import pytest
 
 from _env_isolation import INHERITED_CONFIG_DIR_VARS, is_inherited_stack_variable
 from service_teardown import TEST_LABEL_PREFIX
@@ -23,7 +24,8 @@ def test_tests_run_without_the_callers_config_dirs() -> None:
     assert not leaked, f"inherited into the test run: {leaked}"
 
 
-def test_installer_rehearsal_env_writes_codex_block_under_the_test_home(tmp_path) -> None:
+@pytest.mark.parametrize("consent", [False, True])
+def test_installer_rehearsal_env_writes_codex_block_under_the_test_home(tmp_path, consent) -> None:
     # Installer tests build their environment as os.environ.copy() plus a
     # temporary HOME. That must be enough to keep agentstack-codex-setup from
     # writing anywhere but the temporary home (#73).
@@ -46,8 +48,8 @@ def test_installer_rehearsal_env_writes_codex_block_under_the_test_home(tmp_path
             "AGENTSTACK_PROJECT_KEY": str(project),
         }
     )
-    subprocess.run(
-        ["bash", str(root / "bin" / "agentstack-codex-setup")],
+    result = subprocess.run(
+        ["bash", str(root / "bin" / "agentstack-codex-setup"), *(["--assume-yes"] if consent else [])],
         env=env,
         check=True,
         capture_output=True,

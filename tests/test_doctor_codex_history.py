@@ -17,6 +17,16 @@ DOCTOR = ROOT / "scripts" / "doctor.sh"
 PLUGIN_ID = "agentstack-codex-app@agentstack-local"
 
 
+def _doctor_functions(source, end):
+    return (
+        f'. {shlex.quote(str(ROOT / "hooks/codex-bin.sh"))}\n'
+        'CHILD_SHELL=/bin/bash\n'
+        'CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"\n'
+        'CODEX_PROBE_RUNNER=codex_launch_runner\nCODEX_LAUNCHER_CONTEXT_READY=1\n'
+        + source[source.index("codex_launcher_search_path() {"):source.index(end)]
+    )
+
+
 def _fake_commands(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
@@ -30,9 +40,13 @@ def _fake_commands(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
         "if os.environ.get('AGENTSTACK_TEST_CODEX_LOG'):\n"
         "    with open(os.environ['AGENTSTACK_TEST_CODEX_LOG'], 'a') as log:\n"
         "        log.write(json.dumps({'args': sys.argv[1:], 'home': os.environ.get('CODEX_HOME')}) + '\\n')\n"
-        "if sys.argv[1:] == ['plugin', 'list', '--json']:\n"
+        "local = sys.argv[1:] == ['plugin', 'list', '--json', '--marketplace', 'agentstack-local']\n"
+        "if local and os.environ.get('AGENTSTACK_TEST_NO_MARKETPLACE_FLAG'):\n"
+        "    raise SystemExit(2)\n"
+        "if local or sys.argv[1:] == ['plugin', 'list', '--json']:\n"
         "    time.sleep(float(os.environ.get('AGENTSTACK_TEST_CODEX_DELAY', '0')))\n"
-        "    print(os.environ['AGENTSTACK_TEST_PLUGIN_LIST'])\n"
+        "    key = 'AGENTSTACK_TEST_LOCAL_PLUGIN_LIST'\n"
+        "    print(os.environ[key] if local and key in os.environ else os.environ['AGENTSTACK_TEST_PLUGIN_LIST'])\n"
         "    raise SystemExit(int(os.environ.get('AGENTSTACK_TEST_CODEX_RC', '0')))\n"
         "raise SystemExit(2)\n",
         encoding="utf-8",
@@ -100,6 +114,7 @@ def test_doctor_reports_launcher_paths_and_plugin_state(tmp_path, plugin_list, s
     assert f"ok: Codex launcher binary {codex}" in output
     assert f"ok: Codex launcher CODEX_HOME {codex_home}" in output
     assert state_text in output
+    assert "Codex apply_patch reservation guard" in output
     if state_text == "installed and enabled":
         assert "Codex lifecycle hook approval is unknown" in output
         assert "/hooks" in output
@@ -111,7 +126,8 @@ def test_doctor_reports_launcher_paths_and_plugin_state(tmp_path, plugin_list, s
 
 # Exercise just the read-only diagnostic without unrelated missing-install
 # errors obscuring whether this optional feature changes the doctor status.
-def _probe(tmp_path, payload, *, returncode=0, delay=0, missing_binary=False, missing_home=False):
+def _probe(tmp_path, payload, *, returncode=0, delay=0, missing_binary=False, missing_home=False,
+           local_payload=None, no_marketplace_flag=False, script_dir=None):
     fake_bin, codex = _fake_commands(tmp_path)
     codex_home = tmp_path / "custom codex home"
     if not missing_home:
@@ -119,7 +135,7 @@ def _probe(tmp_path, payload, *, returncode=0, delay=0, missing_binary=False, mi
         (codex_home / "config.toml").write_text("# user-owned; do not modify\n")
     log = tmp_path / "codex-calls.jsonl"
     source = DOCTOR.read_text()
-    functions = source[source.index("codex_launcher_search_path() {"):source.index('\nCODEX_HOME="')]
+    functions = _doctor_functions(source, '\nCODEX_HOME="')
     script = (
         "set -euo pipefail\n"
         + f"PYTHON_BIN={shlex.quote(sys.executable)}\n"
@@ -129,11 +145,21 @@ def _probe(tmp_path, payload, *, returncode=0, delay=0, missing_binary=False, mi
     )
     env = dict(
         os.environ,
+        HOME=str(tmp_path),
+        AGENTSTACK_HOME=str(tmp_path / ".agentstack"),
         AGENTSTACK_TEST_PLUGIN_LIST=payload if isinstance(payload, str) else json.dumps(payload),
         AGENTSTACK_TEST_CODEX_RC=str(returncode),
         AGENTSTACK_TEST_CODEX_DELAY=str(delay),
         AGENTSTACK_TEST_CODEX_LOG=str(log),
     )
+    if local_payload is not None:
+        env["AGENTSTACK_TEST_LOCAL_PLUGIN_LIST"] = json.dumps(local_payload)
+    if no_marketplace_flag:
+        env["AGENTSTACK_TEST_NO_MARKETPLACE_FLAG"] = "1"
+    if script_dir is not None:
+        env["SCRIPT_DIR"] = str(script_dir)
+    for key in ("AGENTSTACK_CODEX_BIN", "AGENTSTACK_RESERVED_IDENTITY"):
+        env.pop(key, None)
     result = subprocess.run(
         ["/bin/bash", "-c", script, "doctor-probe", "" if missing_binary else str(codex), str(codex_home)],
         env=env,
@@ -171,17 +197,74 @@ def test_failed_cli_cannot_claim_plugin_is_absent(tmp_path):
 
 
 def test_stalled_cli_is_bounded_and_reports_unknown(tmp_path):
-    result, _, _ = _probe(tmp_path, {"installed": []}, delay=10)
+    result, log, _ = _probe(tmp_path, {"installed": []}, delay=10)
     assert "plugin status is unknown" in result.stdout
+    # The stalled local query is not followed by a second wait.
+    assert len(log.read_text().splitlines()) == 1
+
+
+LOCAL_ARGS = ["plugin", "list", "--json", "--marketplace", "agentstack-local"]
+FULL_ARGS = ["plugin", "list", "--json"]
 
 
 def test_probe_uses_requested_home_and_only_lists_plugins(tmp_path):
     result, log, codex_home = _probe(tmp_path, {"installed": [{"pluginId": PLUGIN_ID, "enabled": True}]})
     calls = [json.loads(line) for line in log.read_text().splitlines()]
-    assert calls == [{"args": ["plugin", "list", "--json"], "home": str(codex_home)}]
+    # Found in the local marketplace: the slow remote listing is not needed.
+    assert calls == [{"args": LOCAL_ARGS, "home": str(codex_home)}]
     assert "installed and enabled" in result.stdout
     assert "hook approval is unknown" in result.stdout
     assert "new Codex process" in result.stdout
+
+
+def test_absent_from_local_marketplace_is_confirmed_by_full_listing(tmp_path):
+    custom = "agentstack-codex-app@custom-market"
+    result, log, codex_home = _probe(
+        tmp_path, {"installed": [{"pluginId": custom, "enabled": True}]},
+        local_payload={"installed": []},
+    )
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert calls == [{"args": LOCAL_ARGS, "home": str(codex_home)},
+                     {"args": FULL_ARGS, "home": str(codex_home)}]
+    assert f"installed and enabled ({custom})" in result.stdout
+    assert "is not installed" not in result.stdout
+
+
+def test_cli_without_marketplace_filter_falls_back_to_full_listing(tmp_path):
+    result, log, _ = _probe(
+        tmp_path, {"installed": [{"pluginId": PLUGIN_ID, "enabled": False}]}, no_marketplace_flag=True,
+    )
+    assert [json.loads(line)["args"] for line in log.read_text().splitlines()] == [LOCAL_ARGS, FULL_ARGS]
+    assert "installed but disabled" in result.stdout
+
+
+def _fake_reservation_diagnostic(tmp_path, exit_code=0):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "codex-reservation-status.py").write_text(
+        "import os, sys\n"
+        "print('ok: reservation probe', os.environ.get('AGENTSTACK_RESERVED_IDENTITY'),"
+        " os.environ.get('AGENTSTACK_CODEX_BIN'))\n"
+        f"raise SystemExit({exit_code})\n",
+        encoding="utf-8",
+    )
+    return scripts
+
+
+def test_reservation_diagnostic_runs_under_child_launch_context(tmp_path):
+    # The app-server it starts must find the same node as a spawned child.
+    scripts = _fake_reservation_diagnostic(tmp_path)
+    enabled = {"installed": [{"pluginId": PLUGIN_ID, "enabled": True}]}
+    result, _, _ = _probe(tmp_path, enabled, script_dir=scripts)
+    codex = tmp_path / "fake-bin" / "codex"
+    assert f"ok: reservation probe 1 {codex}" in result.stdout
+
+
+def test_failed_reservation_diagnostic_is_unknown_and_doctor_continues(tmp_path):
+    scripts = _fake_reservation_diagnostic(tmp_path, exit_code=3)
+    enabled = {"installed": [{"pluginId": PLUGIN_ID, "enabled": True}]}
+    result, _, _ = _probe(tmp_path, enabled, script_dir=scripts)
+    assert "reservation guard status is unknown" in result.stdout
 
 
 @pytest.mark.parametrize("missing", ["binary", "home"])
@@ -199,12 +282,12 @@ def test_claude_only_or_missing_home_is_informational(tmp_path, missing):
 def test_binary_resolution_matches_child_launcher(tmp_path, explicit):
     fake_bin, codex = _fake_commands(tmp_path)
     source = DOCTOR.read_text()
-    functions = source[source.index("codex_launcher_search_path() {"):source.index("report_codex_history_binding_prereqs() {")]
+    functions = _doctor_functions(source, "report_codex_history_binding_prereqs() {")
     # An invalid configured path falls back to PATH, just as find_codex_bin does.
     configured = str(codex) if explicit else str(tmp_path / "removed-codex")
     result = subprocess.run(
         ["/bin/bash", "-c", "set -euo pipefail\n" + functions + "\nresolve_launcher_codex_bin"],
-        env=dict(os.environ, AGENTSTACK_CODEX_BIN=configured, PATH=f"{fake_bin}:{os.environ['PATH']}"),
+        env=dict(os.environ, HOME=str(tmp_path), AGENTSTACK_HOME=str(tmp_path / ".agentstack"), AGENTSTACK_CODEX_BIN=configured, PATH=f"{fake_bin}:{os.environ['PATH']}"),
         capture_output=True,
         text=True,
         check=True,
@@ -216,7 +299,7 @@ def test_binary_resolution_matches_child_launcher(tmp_path, explicit):
 
 def _report(tmp_path, codex, *, wsl=False, mount_root=None):
     source = DOCTOR.read_text()
-    functions = source[source.index("codex_launcher_search_path() {"):source.index('\nCODEX_HOME="')]
+    functions = _doctor_functions(source, '\nCODEX_HOME="')
     overrides = ""
     if wsl:
         overrides += "running_under_wsl() { return 0; }\n"
@@ -229,7 +312,7 @@ def _report(tmp_path, codex, *, wsl=False, mount_root=None):
     home = tmp_path / "codex-home"
     home.mkdir(exist_ok=True)
     return subprocess.run(["/bin/bash", "-c", script, "doctor-probe", str(codex), str(home)],
-                          env=dict(os.environ, AGENTSTACK_TEST_PLUGIN_LIST="{}"),
+                          env=dict(os.environ, HOME=str(tmp_path), AGENTSTACK_HOME=str(tmp_path / ".agentstack"), AGENTSTACK_TEST_PLUGIN_LIST="{}"),
                           capture_output=True, text=True, timeout=20)
 
 
@@ -246,7 +329,7 @@ def test_codex_whose_version_fails_is_a_warning_with_a_fix(tmp_path):
     result = _report(tmp_path, codex)
     assert result.returncode == 0, result.stderr
     assert f"warn: Codex launcher binary {codex} cannot start Codex" in result.stdout
-    assert "--version' exited with status 1 after 0." in result.stdout
+    assert "--version' exited with status 1 after" in result.stdout
     assert "Missing optional dependency @openai/codex-linux-x64" in result.stdout
     assert "within" not in result.stdout
     assert "hint: install Codex where this shell can run it" in result.stdout
@@ -257,7 +340,7 @@ def test_windows_codex_under_wsl_is_a_warning_naming_the_reason(tmp_path):
     mount = tmp_path / "mnt"
     codex = _script(mount / "c" / "Users" / "someone" / "AppData" / "Roaming" / "npm" / "codex", "exit 0\n")
     result = _report(tmp_path, codex, wsl=True, mount_root=mount)
-    assert "cannot start Codex: it is the Windows install under" in result.stdout
+    assert "cannot start Codex: it is a Windows install under" in result.stdout
     assert "ok: Codex launcher binary" not in result.stdout
     # Outside WSL the same path is an ordinary, runnable binary.
     result = _report(tmp_path, codex, wsl=False, mount_root=mount)
@@ -328,6 +411,47 @@ def test_doctor_model_default_reports_fallback_from_selected_cli(tmp_path, versi
     script += '\nreport_codex_model_default "$1" "$2"\n'
     result = subprocess.run(["/bin/bash", "-c", script, "doctor-models", str(ROOT / "dashboard/codex_models.py"), str(tmp_path / "codex-home")], capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
-    assert ("use gpt-6-sol" in result.stdout) is noted
+    assert ("starts from gpt-6-sol" in result.stdout) is noted
     if noted:
         assert "0.159.0 or later" in result.stdout
+
+
+@pytest.mark.parametrize('state,expected', [('trusted', 'trusted'), ('untrusted', 'needs_review'),
+                                          ('stale', 'needs_review'), ('disabled', 'disabled'),
+                                          ('missing', 'missing'), ('broken', 'unknown')])
+def test_read_only_reservation_guard_status(tmp_path, monkeypatch, state, expected):
+    import importlib.util
+    monkeypatch.syspath_prepend(str(ROOT / 'scripts'))
+    spec = importlib.util.spec_from_file_location('reservation_status', ROOT / 'scripts/codex-reservation-status.py')
+    diagnostic = importlib.util.module_from_spec(spec); spec.loader.exec_module(diagnostic)
+    hook = {'key': 'fixture', 'pluginId': PLUGIN_ID, 'eventName': 'preToolUse',
+            'matcher': '^apply_patch$', 'enabled': state != 'disabled',
+            'trustStatus': state, 'source': 'plugin', 'isManaged': False,
+            'sourcePath': str(tmp_path / 'plugin/hooks/hooks.json'), 'handlerType': 'command',
+            'command': '"$PLUGIN_ROOT/scripts/run-reservation-guard.sh"', 'async': False}
+    class Server:
+        def request(self, method, params):
+            assert method == 'hooks/list' and params == {'cwds': [str(tmp_path)]}
+            return {'data': [{'cwd': str(tmp_path), 'hooks': [] if state == 'missing' else [hook],
+                              'errors': ['discovery failed'] if state == 'broken' else []}]}
+    assert diagnostic.status(Server(), tmp_path, PLUGIN_ID) == expected
+
+
+@pytest.mark.parametrize('field,value', [('matcher', '^Bash$'), ('pluginId', 'other@local'),
+                                         ('command', 'echo run-reservation-guard.sh'),
+                                         ('async', True), ('source', 'user')])
+def test_unrelated_or_changed_hook_cannot_claim_protection(tmp_path, monkeypatch, field, value):
+    import importlib.util
+    monkeypatch.syspath_prepend(str(ROOT / 'scripts'))
+    spec = importlib.util.spec_from_file_location('reservation_status', ROOT / 'scripts/codex-reservation-status.py')
+    diagnostic = importlib.util.module_from_spec(spec); spec.loader.exec_module(diagnostic)
+    hook = dict(pluginId=PLUGIN_ID, eventName='preToolUse', matcher='^apply_patch$', enabled=True,
+                trustStatus='trusted', source='plugin', isManaged=False,
+                sourcePath=str(tmp_path / 'plugin/hooks/hooks.json'), handlerType='command',
+                command='"$PLUGIN_ROOT/scripts/run-reservation-guard.sh"', **{'async': False})
+    hook[field] = value
+    class Server:
+        def request(self, method, params):
+            assert method == 'hooks/list'
+            return {'data': [{'cwd': str(tmp_path), 'hooks': [hook], 'errors': []}]}
+    assert diagnostic.status(Server(), tmp_path, PLUGIN_ID) in {'unknown', 'missing'}

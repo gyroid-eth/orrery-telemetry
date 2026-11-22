@@ -1,4 +1,22 @@
 #!/usr/bin/env bash
+
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  _ags_fresh_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  exec "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_client child-preregister \
+    --wrapper-root "$_ags_fresh_root" "$@"
+fi
+
+# Decide explicit global context before loading any legacy environment/state.
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/global-client-loader.sh"
+. "$_ags_global_loader" || exit 2
+ags_client_bootstrap "${AGENTSTACK_ENV_FILE:-${AGENTSTACK_HOME:-$(dirname "$_ags_global_loader")/../..}/env.sh}" "$@" || exit 2
+if declare -F ags_client_entry >/dev/null; then
+  if ags_client_entry preregister-child "$@"; then exit 0; else _ags_global_rc=$?; fi
+  if [[ "$_ags_global_rc" != 125 ]]; then
+    exit "$_ags_global_rc"
+  fi
+
+fi
 # Pre-register a delegated child agent without exposing its registration token.
 #
 # Usage:
@@ -16,10 +34,14 @@ die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+export AGENTSTACK_RUNTIME_MODE=legacy
+
 load_env_file() {
   local envf="$1"
   # shellcheck disable=SC1090
-  [[ -n "$envf" && -f "$envf" ]] && . "$envf"
+  if [[ -n "$envf" && -f "$envf" ]]; then
+    ags_client_bootstrap "$envf" || exit 2
+  fi
   return 0
 }
 

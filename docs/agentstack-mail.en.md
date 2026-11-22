@@ -291,6 +291,14 @@ so Git history construction is not part of request latency. Set
 behavior; this kill switch remains available if a deployment observes queue or
 commit failures.
 
+On macOS, archive staging and commits use native Git to avoid reading and
+rewriting a large index in Python. Author, committer, message, Agent trailers,
+commit order, and existing commit-hook invocation and failure behavior are
+preserved. The asynchronous queue, batching policy, locks, retries, and
+non-macOS branches stay the same. This does not change the index format or
+the user’s Git configuration.
+Staging records original audit bytes and file modes without ignore rules or text/clean filters.
+
 The trade-off is limited to the Git projection. A hard process or machine
 shutdown can cancel a commit after the tool has returned. The database remains
 committed and the audit files remain as uncommitted files in the archive working

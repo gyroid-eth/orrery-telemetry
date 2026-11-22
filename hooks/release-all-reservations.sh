@@ -1,4 +1,15 @@
 #!/bin/bash
+
+# Decide explicit global context before loading any legacy environment/state.
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader" || exit 2
+if declare -F ags_client_entry >/dev/null; then
+  if ags_client_entry end-session "$@"; then exit 0; else _ags_global_rc=$?; fi
+  if [[ "$_ags_global_rc" != 125 ]]; then
+    exit "$_ags_global_rc"
+  fi
+
+fi
 # SessionEnd: release every file reservation held by this session's agent.
 # Failures do not block shutdown, but they are recorded in release-failures.log
 # instead of disappearing until the reservation TTL happens to expire.
