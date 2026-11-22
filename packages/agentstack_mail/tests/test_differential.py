@@ -10,6 +10,7 @@ state after every checkpoint.
 from __future__ import annotations
 
 import json
+import copy
 import os
 import re
 import secrets
@@ -1128,6 +1129,33 @@ def _mask_allowlisted_fields(value: Any, _names: frozenset[str] | None = None) -
     return value
 
 
+def _verified_renew_addition(checkpoints: list[dict[str, Any]], namespace: str) -> list[dict[str, Any]]:
+    """Validate the one additive response before comparing frozen payloads.
+
+    This does not mask a field by name throughout the tree. Every other
+    result/durable field, and copies at other checkpoints, remain observable.
+    """
+    manifest = json.loads(EXPECTED_DIVERGENCES.read_text(encoding="utf-8"))
+    additions = [entry for entry in manifest['intentional_differences']['allowlisted_entries']
+                 if entry.get('category') == 'scenario_payload_addition']
+    assert [(entry['selector'], entry['comparator_disposition']) for entry in additions] == [
+        ('checkpoints.10_reservation_renewed_by_overlap.result.conflict_check',
+         'validate_exact_value_then_omit_addition')]
+    result = copy.deepcopy(checkpoints)
+    project = next(row['result']['human_key'] for row in result if row['event'] == '01_project_ensured')
+    renewals = [row['result'] for row in result if row['event'] == '10_reservation_renewed_by_overlap']
+    assert len(renewals) == 1
+    renewal = renewals[0]
+    if namespace == CORE_NAMESPACE:
+        check = renewal['conflict_check']
+        assert type(check['version']) is int
+        assert check == {'version': 1, 'project_key': project, 'paths': ['src/café/app.py'], 'conflicts': []}
+        del renewal['conflict_check']
+    else:
+        assert namespace == LIVE_NAMESPACE and 'conflict_check' not in renewal
+    return result
+
+
 def _first_difference(left: Any, right: Any, path: str = "$") -> str | None:
     if type(left) is not type(right):
         return f"{path}: types differ ({type(left).__name__} != {type(right).__name__})"
@@ -1204,8 +1232,12 @@ def test_frozen_live_behavior_matches_core(
     # sides before ranks are assigned. The normalizer ranks every distinct
     # instant it can see, so one extra timestamp anywhere shifts the rank of
     # every later one and surfaces as differences in unrelated fields.
-    masked_live = _mask_allowlisted_fields(live["checkpoints"])
-    masked_core = _mask_allowlisted_fields(core["checkpoints"])
+    live_checkpoints, core_checkpoints = live['checkpoints'], core['checkpoints']
+    if scenario == 'reservation_signal':
+        live_checkpoints = _verified_renew_addition(live_checkpoints, LIVE_NAMESPACE)
+        core_checkpoints = _verified_renew_addition(core_checkpoints, CORE_NAMESPACE)
+    masked_live = _mask_allowlisted_fields(live_checkpoints)
+    masked_core = _mask_allowlisted_fields(core_checkpoints)
     live_normalizer = _TemporalNormalizer(
         masked_live,
         live_state_root,
@@ -1389,3 +1421,28 @@ def test_a_difference_in_any_other_field_still_fails_the_comparison() -> None:
     )
     assert difference is not None
     assert "released_ts" in difference
+
+
+def test_renew_addition_is_checked_without_masking_other_fields():
+    check={'version':1,'project_key':'fixture-project','paths':['src/café/app.py'],'conflicts':[]}
+    before=[{'event':'01_project_ensured','result':{'human_key':'fixture-project'}},
+        {'event':'10_reservation_renewed_by_overlap','result':{'renewed':1,'conflict_check':check}},
+        {'event':'other','result':{'conflict_check':'must stay observable'}}]
+    result=_verified_renew_addition(before,CORE_NAMESPACE)
+    assert result[1]['result']=={'renewed':1}
+    assert before[1]['result']['conflict_check']==check
+    assert result[2]['result']['conflict_check']=='must stay observable'
+    old=copy.deepcopy(before);del old[1]['result']['conflict_check']
+    assert _verified_renew_addition(old,LIVE_NAMESPACE)==result
+    result[1]['result']['renewed']=0
+    assert _first_difference(result,old) is not None
+
+
+@pytest.mark.parametrize('field,value',[('version',True),('version',2),('project_key','wrong'),
+    ('paths',[]),('conflicts',[{'agent':'unexpected','path_pattern':'src/**'}])])
+def test_renew_addition_cannot_hide_bad_scope_or_conflicts(field,value):
+    check={'version':1,'project_key':'fixture-project','paths':['src/café/app.py'],'conflicts':[]}
+    check[field]=value
+    rows=[{'event':'01_project_ensured','result':{'human_key':'fixture-project'}},
+        {'event':'10_reservation_renewed_by_overlap','result':{'renewed':1,'conflict_check':check}}]
+    with pytest.raises(AssertionError):_verified_renew_addition(rows,CORE_NAMESPACE)

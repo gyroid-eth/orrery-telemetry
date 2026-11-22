@@ -11,14 +11,10 @@ importantly, the three things you must not do.
 
 ## The four rules
 
-**1. Approvals belong to the human.** The installer asks before it merges
-anything into `~/.claude/settings.json` or adds a managed block to a
-`CLAUDE.md` / `AGENTS.md`. Those are the user's files. When you run the
-installer non-interactively it *skips* those steps rather than assuming
-consent — which means the install completes, the dashboard starts, and the
-skills quietly do not work. Do not paper over this. Either hand the terminal
-back so the user can answer, or use `--assume-yes` **only if they told you
-to**. Never add that flag on your own initiative to get a clean run.
+**1. Approvals belong to the human.** Follow the single
+[consent contract](docs/instruction-migration.en.md#consent) for installer
+and standalone setup. Hand the terminal back at human approval steps. Use
+`--assume-yes` only when the user explicitly chose it.
 
 **2. Never invent a path or a value to get past an error.** The installer
 stops when it cannot determine something — which database ORRERY Mail is
@@ -72,6 +68,15 @@ cd orrery-telemetry
 ./scripts/install.sh --project-key /absolute/project/path --dry-run
 ```
 
+The project key is a coordination namespace, not the reservation scope. Top-level and delegated-child
+launches protect their selected working directory plus `AGENTSTACK_EXTRA_PROTECTED_ROOTS`; the Git root is not added automatically.
+Install/update automatically migrates the installed legacy protection list once,
+preserving its literal value and order; it never imports a shell's old runtime
+roots. Review the migration source, value, and destination in `--dry-run`.
+Finish work or release active reservations before cutover, then restart affected
+sessions together after updating. See `docs/configuration.md` for precedence,
+explicit empty values, and invalid legacy settings that stop the update.
+
 Read the dry run with the user. It prints the planned service mode, the
 ORRERY Mail database it resolved, and the settings diff. If the resolved
 database is not the one they actually use, stop and ask — that is worth more
@@ -79,18 +84,10 @@ than a completed install.
 
 Then, for the real run, choose one of two paths.
 
-**Default — hand back at the approvals.** Run `./scripts/install.sh` in a
-terminal the user controls, or tell them to run it themselves. It pauses for a
-typed `yes` four times — the settings merge, the `~/.claude.json` MCP entry,
-the Codex `AGENTS.md` block, and the Claude `CLAUDE.md` block. Reuse of an
-already-running ORRERY Mail is reported, not prompted for. This is the right
-choice when you are unsure, and when the user has not said otherwise.
-
-**Opt-in — `./scripts/install.sh --assume-yes`.** Use this only when the user
-has explicitly said they trust the repo and do not want to be asked. It
-pre-approves the settings merge and the managed blocks, and prints one line
-per item it approved so the decision stays auditable. It does **not** suppress
-errors: the version, port, and database checks above still stop the install.
+Run the installer in a terminal the user controls, or tell them to run it.
+The [consent contract](docs/instruction-migration.en.md#consent) explains
+interactive prompts, non-interactive skips, and explicit `--assume-yes`.
+Reuse of a running ORRERY Mail is reported without another approval.
 
 ## After installing
 
@@ -133,6 +130,8 @@ once instead of over several rounds of questions.
 
 ## Reference
 
+For local daemon helper development use [docs/daemon-agents.md](docs/daemon-agents.md). Its operator-only creation is not a startup ritual for ordinary agents; live enrollment and deployment require separate approval.
+
 | Topic | File |
 |---|---|
 | Install, requirements, service modes | `docs/install.md` |
@@ -147,3 +146,7 @@ If you are changing this repository rather than installing it, read
 the mail package's dependencies are not importable from a bare `python3`),
 and run `PYTHONPATH=. .venv/bin/python -m pytest -q` before you report a
 change as done.
+
+隔離 global client の子・再開・予約 hook の準備は [global child client](docs/global-child-client.md) を参照してください。実起動と配送は [global delivery client](docs/global-delivery-client.md) を参照してください。既定の旧運用は維持し、実サービスの切替は後続です。
+
+User instruction migration uses the shared setup plan/receipt engine. Read [instruction migration](docs/instruction-migration.md) before editing user blocks. Bare sessions do not auto-register; editing guards retain their configured protection.

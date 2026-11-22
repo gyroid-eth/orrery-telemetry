@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import stat
 import tempfile
 import threading
 import time
@@ -807,3 +808,33 @@ def test_post_tool_use_coalesces_pending_agent_mail_signals(tmp_path):
 
 def stat_mode(path: Path) -> int:
     return os.stat(path).st_mode & 0o777
+
+
+def test_socket_appears_only_once_it_accepts_connections(monkeypatch):
+    """#122: a client that connects as soon as the socket path exists must not
+    be refused. The path used to appear at bind(), before chmod() and listen()."""
+    import agentstack_codex_app.daemon as daemon_module
+
+    class SlowListen(socket.socket):
+        def listen(self, *args):
+            time.sleep(0.3)
+            return super().listen(*args)
+
+    monkeypatch.setattr(daemon_module.socket, "socket", SlowListen)
+    with tempfile.TemporaryDirectory(prefix="cas-sock-", dir=SHORT_TMP_DIR) as directory:
+        config = _config(Path(directory))
+        daemon = BridgeDaemon(config, FakeAgentMail())
+        thread = threading.Thread(target=daemon.serve_forever)
+        thread.start()
+        try:
+            deadline = time.time() + 5
+            while not config.socket_path.exists() and time.time() < deadline:
+                time.sleep(0.005)
+            assert stat.S_IMODE(config.socket_path.lstat().st_mode) == 0o600
+            assert forward_event(_event(), config.socket_path, timeout=1) is True
+        finally:
+            daemon.stop()
+            thread.join(timeout=2)
+        assert not config.socket_path.exists()
+        assert [p.name for p in Path(config.socket_path).parent.iterdir()
+                if p.name.startswith(".") and p.name.endswith(".s")] == []

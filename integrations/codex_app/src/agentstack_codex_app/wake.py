@@ -51,6 +51,7 @@ AGENTSTACK_PROXY_TOOLS = (
     "renew_reservations",
     "release_reservations",
     "runtime_status",
+    "show_files",
     "whois",
 )
 _PLUGIN_ID = re.compile(r"[A-Za-z0-9_-]+@[A-Za-z0-9_-]+")
@@ -85,6 +86,7 @@ class WakePolicy:
     max_attempts: int = 5
     wakes_per_hour: int = 12
     process_timeout_seconds: float = 900.0
+    poll_seconds: float = 0.25
 
 
 @dataclass(slots=True)
@@ -688,6 +690,12 @@ def _resume_cwd(
         if path.is_absolute() and path.is_dir():
             return os.fspath(path)
     return str(binding["project_key"])
+
+
+def codex_provider_home(environ: Mapping[str, str] | None = None) -> Path:
+    """The same transcript HOME used by Desktop observation and cold resume."""
+    env = os.environ if environ is None else environ
+    return Path((env.get("CODEX_HOME") or "~/.codex").strip()).expanduser()
 
 
 def _resume_environment(

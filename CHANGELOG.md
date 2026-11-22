@@ -1,14 +1,1640 @@
 # Changelog
 
-版は日付で付けます（`YYYY.MM.DD`）。互換性の約束ではなく、**いつの配布物か**を言えるようにするためのものです。
+版は日付で付けます（`YYYY.MM.DD`）。同日の追加リリースには `.1` から始まる枝番を付けます（`YYYY.MM.DD.N`）。互換性の約束ではなく、**いつの配布物か**を言えるようにするためのものです。
 
-インストール済みの版は `GET /api/version`、または install root の `VERSION` で確認できます。更新手順は [docs/install.md](docs/install.md) の Upgrade を参照してください。
+インストール済みの版は `GET /api/version`、または install root の `VERSION` で確認できます。同じ応答の `api` は日付とは別の、利用者（ORRERY cockpit など）との互換の世代で、利用者が頼る API を足す・意味を変えるときだけ上げ、その版の節に書きます（[docs/api.md](docs/api.md#get-apiversion)）。更新手順は [docs/install.md](docs/install.md) の Upgrade を参照してください。
 
 **この記録は 2026.09.16 から始めます。** それ以前は `VERSION` が `0.9.0` のまま更新されておらず、版から中身を知ることができませんでした。過去 6 週間分を遡って記載することはせず、ここを新しい基点とします。以前の版を使っていた場合も、上書き更新の手順は変わりません。
 
+未リリースの変更は [changelog.d/](changelog.d/) の断片を参照してください。追加・リリースの手順は [CONTRIBUTING.md](CONTRIBUTING.md#changelog-fragments-and-releases) にまとめています。
+
 ---
 
-## 未リリース
+## 2026.11.21
+
+### Mail を使わずに再開する Claude にブラウザと画面操作を付ける
+
+- API 世代 43 から、`/api/jump` で Claude in Chrome と `orrery-screen` を起動ごとに指定できます。画面操作は新しい起動世代の初期権限を `off`、`view`、`control` から選べます。既定は追加の道具なしで、Mail と hook は無効です。[再開 API](docs/api.md#post-apijump)
+- 会話だけで再開した Claude のカードにブラウザの有無と画面操作の権限を表示します。通常の Claude の子も `orrery-screen` の現在の権限を表示します。
+
+### Mail なしで再開した Claude の会話を Reader で表示
+
+ダッシュボードから会話だけを再開した Claude も、既存の自己登録 receipt と今回の起動が同じ会話を指していれば、Reader で履歴を読めます。
+
+### 子 agent に computer use の権限を設定
+
+- `orrery-screen` を明示した子に、版を照合した Cua Driver の12道具を公開します。起動世代ごとの権限と応答上限を適用し、呼び出しの開始と終了を記録します。
+- API 42 で operator が Off / View / Control を実行中に変更できます。子の資格で読めるのは自分の起動の権限です。 [準備と確認手順](docs/computer-use.md)
+
+### NEW AGENT の作業フォルダ検索
+
+- 作業フォルダ名を、設定済みの検索ルートと明示したプリセットの配下から検索できます。
+- `GET /api/fs/dir-search?q=...` を追加し、公開 API 世代を 40 から 41 に更新しました。任意の `under` を渡すと、許可範囲内の指定フォルダの配下だけを検索できます。探索範囲と件数上限は [API リファレンス](docs/api.md#get-apifsdir-search) を参照してください。
+
+### スマホとiPadの閲覧画面を整理
+
+稼働・待機の件数をGraph内に表示し、検索や調整の操作をアイコン化しました。iPadなどの広い画面ではGraphと要確認・Activityを並べて表示します。デスクトップ版と配色を揃え、ダークを既定にしました。ライトへの切り替えはブラウザに保存されます。
+
+### スマホから新規エージェントを起動
+
+**Send from phone** が有効なとき、Graphから新規エージェントを開き、タスクと起動設定を確認してから起動できます。
+
+### Reading Viewの操作に反応する動き
+
+入力欄はテキストに合わせて伸び、送信結果、コードのコピー、参照の追加、新しく届いた返信が操作後に分かりやすく表示されます。
+
+### 非 Claude の親から起動した Claude による登録の上書きを防止
+
+Antigravity などから補助的に Claude を起動しても、内側の SessionStart は親の ORRERY Mail 登録を書き換えません。稼働中の親は DECK と NETWORK に表示され続けます。
+
+### Codex のフック承認状態を新しい保存形式でも正しく判定
+
+Codex CLI がフック定義とプラグイン内容のハッシュを別々に保存する場合も、承認済みの状態を正しく読み取れるようにしました。両方の値が一致しない場合は従来通り起動を拒否し、以前の単一ハッシュ形式との互換性も維持します。また、有効状態には真偽値の true を必須とし、数値の 1 や 1.0 を有効と誤認しないようにしました。
+
+### エージェント一覧で作業場所と実行情報を取得
+
+legacy dashboard の `GET /api/agents` から、作業ディレクトリ、正式モデル ID、effort、harness、context 上限、画面とブラウザの設定上の権限、親子関係を取得できます。確認できない値は `null` です。互換 API 世代は 41 です。[API の仕様](docs/api.md#get-apiagents)
+
+### スマホの Reader に Claude Code の途中経過を渡す
+
+会話の取得元が Claude Code の途中経過に付けた `variant: "update"` を、スマホの Reader が受け取る assistant のテキストイベントにも保持します。通常の発言と同じ表示で読めます。このフィールドの追加に伴い、API 世代は 41 です。
+
+### NEW AGENT と dsh・Hermes に installer の既定の道具を適用
+
+API 41 から、標準の `/api/spawn`（NEW AGENT）で `base` と `tools` を省略すると、Claude・Codex・dsh・Hermes の子に `AGENTSTACK_CHILD_DEFAULT_TOOLS` を適用します。CLI の dsh・Hermes も同じ設定を使います。明示指定を優先し、使えない既定の項目は通知して外します。resume は起動時に記録した選択を使います。[既定の道具](docs/delegation.md#installer-の既定の道具)
+
+installer の共通の一覧に `;dsh=` などを付けると、provider ごとの一覧を設定できます。`--child-default-tools 'mcp:cua-driver;dsh='` は dsh 以外に `cua-driver` を渡します。
+
+複数行の依頼を `/api/spawn` から送ったとき、依頼メールの件名を1行に整えます。依頼文はメール本文にそのまま載せます。
+
+### 入れ子の Claude 起動から親セッションの登録と履歴を保護
+
+Claude や Codex の中から別の Claude を起動した場合、内側の SessionStart は親の ORRERY Mail 登録、owner token、会話のセッション索引を更新しません。内側の Claude はそのまま利用できます。
+
+### 異常終了した子を再起動せずに再開
+
+終了処理を通らずに停止した子を、マシンの再起動を待たずに dashboard から再開できるようになりました。通常起動中と再開中の異常終了が対象です。dashboard は別の tmux サーバーに子が残っていないかも含めて停止を確認し、保存済みの認証情報が一致した場合に再開状態を修復します。中断された再開の保持期限は引き継ぎます。
+
+### Claude Code の computer use 権限画面を承認待ちとして表示
+
+Claude Code が macOS の computer use 権限を求めている間は、ダッシュボードの一覧と Reader に返事待ちを表示します。狭いペインで見出しや選択肢が折り返されても判定できます。
+
+### ORRERY で起動する Codex の Full Access 設定
+
+`AGENTSTACK_CODEX_SANDBOX=danger-full-access` を設定すると、legacy mode の Codex CLI の新規起動と dashboard からの再開で Full Access を使えます。既定は `workspace-write` です。設定は通常の再インストールで引き継ぎます。[設定ガイド](docs/configuration.md#launcher)
+
+### Legacy watcher が interactive persistent agent に Mail 通知を配送
+
+有効な interactive runtime を確認した場合は、agent 名と一致する tmux session に通知を届けます。headless 配送の失敗、不正な manifest、manifest がある状態での配送 helper 不在は再試行に回します。
+
+### Codex の未送信入力による作業中の誤表示を修正
+
+停止中の Codex で、未送信の下書きに字下げした `❯` と `Working` 行が含まれていても、ダッシュボードは待機中と表示します。
+
+### スマホの会話で大きな写真を開けるようにする
+
+スマホの表示上限に合わせた画像を取得し、会話内のサムネイルと拡大プレビューに表示します。
+
+### スマホ用の画面でも山括弧で囲んだリンク先を読む
+
+スマホ用の画面が同梱する Markdown の描画を本体の最新にそろえました。空白を含むパスを `[名前](</path with spaces/file.png>)` と書いたリンクが、スマホでもリンクとして読まれます。ローカルのパスを開くのは、これまでどおり relay が発行したプレビューの参照だけです。
+
+### NEW AGENT から親なしで立てた Codex は、普段の承認設定で起動・再開
+
+NEW AGENT で親を指定しない起動と、その記録があるセッションを dashboard から再開するときは `--ask-for-approval` を省略します。Codex は有効な設定の `approval_policy` か自身の既定値を使います。親付きの起動（delegate の子など）と、親なし起動の記録がないセッションの再開では、既定の `never` または明示した `AGENTSTACK_CODEX_CHILD_APPROVAL` を使います。詳しくは [delegation](docs/delegation.md) を参照してください。
+
+### Mail 復旧後の Claude 再登録で現在の会話を記録
+
+Mail の起動前などに開始して shell 登録できなかった Claude session は、SessionStart の情報を後続の Bash に引き継ぎ、同じ identity の `agentstack-reregister` 成功時に現在の会話の receipt を保存します。通常起動の追加待機・Mail 呼び出しはありません。他人の代筆・別 project・古い receipt の拒否は維持し、credential がない identity の自動 enroll は行いません。`CLAUDE_ENV_FILE` がない起動や更新前の session は対象外です。詳しくは [hook reference](docs/hooks.md#record-session-indexpy) を参照してください。
+
+### Codex の追加指示キューや表示名の footer があっても作業中と読む
+
+Codex が現在の `Working` 行と入力欄の間に追加指示のキュー（`Queued follow-up inputs`）を表示していると、そのキューを返答の区切りと読み、作業中の agent を入力待ちと表示していました。入力欄の直上にある完全なキュー表示だけを除いてから現在の操作領域を読み、`Working` 行の作業中と経過時間を保ちます。キューだけでは作業中にせず、キューの後の返答・完了表示・承認・質問や、本文の引用は従来どおり作業中にしません。
+
+footer のモデルが `GPT-6.1 Terra max` のように種類を空白で区切る表示名で、`Context` の表示が無い場合も、入力欄の footer と認めずに入力待ちとしていました。この表示名を footer と認め、モデルは `GPT-6.1-Terra` と種類まで読みます。effort（`max` など）はモデル名に含めません。compact の可否判定と API の世代は変えません。
+
+## 2026.11.16.1
+
+### statusLine 未設定の Claude Code でも作業中の状態を表示
+
+Claude Code の auto mode・accept edits で、statusLine を設定していなくても作業中の表示と経過時間が出るようになりました。入力待ちの画面は引き続き待機中として表示します。
+
+### Dashboard の tmux の起動を減らす
+
+provider の停止を見る 5 秒ごとの確認が、動いている Codex の agent ごとに毎回 tmux で PARENT_AGENT を読み直していたのを、session ごとに 1 回にしました。`/api/graph` の親子の読み取りも、10 秒ごとに全 session へ起動していた tmux を、新しい session だけにしました。`/api/graph` の答えも `/api/agents` と同じく 4 秒だけ使い回し、POST の操作のあとは捨てます。provider の停止を見る間隔は 5 秒から 10 秒にしたので、停止の検知は、停止から通知まで 5〜10 秒だったのが 10〜20 秒になり、最大で約 10 秒遅れます。API の形と各値は変わりません。
+
+### Dashboard の CPU 負荷を下げる
+
+`/api/agents` の答えを、計算を始めてから 4 秒だけ全 scope で使い回します。spawn・kill・exit・annotate・reactivate など POST の操作のあとは、すぐ作り直すので、操作の結果は次の読み取りに出ます。API の形と各行の内容は変わりません。実行中でない行の会話 record の結び付き、Mail の最後の指示、時刻の変換も、変わっていない間は読み直しません。
+
+## 2026.11.16
+
+### Hermes の Mail 起動と Telegram の資格診断
+
+fresh の管理下 agent が使う Mail MCP に、選択済み Python を明示的に渡し、PATH の別の Python で起動する失敗を修正しました。Hermes Telegram の `credential-unavailable` は維持し、設定・参照・資格取得の失敗理由だけを owner 専用の診断に残します。資格の値や helper の出力は記録せず、HOME や Keychain の設定も変更しません。
+
+### 管理下の Hermes に bot 用の TUI を同梱
+
+Hermes の管理 installer は、固定 source と既存 PM の Node/npm で TUI を build し、独立した新世代に収録します。TUI が欠ける・build に失敗する場合は公開せず、以前の世代を保持します。source・lock・tool・出力を receipt で照合し、Telegram bot には検証済みの TUI と Node の path を渡します。通常の子と CLI の起動計画は従来どおりです。起動時の npm 取得や手動での旧世代の修理は必要ありません。
+
+### スマホの会話にも Agent steps を表示
+
+Claude・Codex の完了操作を PC と同じ段で表示し、作業中の経過時間と終了後の折り畳みを追加しました。Demo の既存の伏せ方と reduced motion に対応します。道具の重複ラベルを省き、ファイル・画像・Mail・未対応の道具の表示は保持します。中継は短い投影済み項目だけを追加し、生の引数・出力や preview の許可を追加しません。
+
+### fresh の未終了 run を確認して閉じる
+
+prepared context 共通の `resolve-ended --launch-id --confirm-ended` を追加しました。現在の本人・世代・run と記録済みの process／pane／group を再照合し、終了コード不明の解決記録を実際の終了記録と区別します。観測不能・記録不足・生存は拒否し、旧 run を保持します。
+
+Hermes の wait と子の終了を確認した非0終了は実コード付きの失敗として記録し、次の通常起動へ進めます。閉じた run への配送・hook・session の追記を止め、日英の復旧手順を更新しました。
+
+API の互換の世代を **39 → 40** に上げました。fresh の spawn-status は `resolved-ended` を区別し、この確認終了では過去の receipt があっても `native_ready:false` とします。`ended` の native_ready は起動 receipt の成立を示し、task の成功ではありません。
+
+### Demo中もスマホへ通知し、本文のプレビューを隠す
+
+Demo中も返事待ちとターン終了を通知し、本文のプレビューは端末の設定にかかわらず隠します。通知名はスマホ画面と同じ伏せる規則を使います。ベルから有効化や通知種類の変更ができ、Message previewsの保存済み設定はDemoを切ると戻ります。Demo状態が不明・未対応の場合は引き続き送信しません。
+
+### スマホでReaderを閉じると、読んでいたagentを中心に表示
+
+Graphのagentや検索結果から開いたReaderを×やBackで閉じると、最後に読んでいたagentと関連の強い最大5体をFocusで表示してFitします。Activityなどから開いたReaderは元の画面に戻ります。
+
+### スマホのグラフで全agentの名前を表示する
+
+Focus・Allの両方で、肖像の下に全agentの名前とRoleを表示します。選択中の名前は従来の大きさを保ち、それ以外は小さく表示します。拡大率が75%未満では名前とRoleを隠します。Demoの伏字と、名前から正しいagentのReaderを開く動きを維持しています。デスクトップのNETWORKの表示は変わりません。
+
+### スマホのReaderから通知するagentを選べるようにする
+
+Android ChromeのReader上部にベルを追加し、全agentの返事待ちと、選んだagentのターン終了を端末へ通知できるようにしました。本文previewは端末ごとに既定オフで、明示操作からだけ通知の許可を求めます。Readerの起動完了と同じoriginの最新名簿を待って開き、FreshではMail identityも入力先へ渡します。
+
+`--with-mobile-push` で通知用のoptional依存を正規installerから用意できます。通常installでは追加せず、通知を有効にするまで購読も鍵も作りません。relay側の観測、重複・再試行・件数の上限、本人確認、配送先制限とDemo中の抑止を追加しました。取得・送信の途中でsleepをまたいだ古い観測は捨て、履歴取得は用途や成否によらず最終試行が古い順に回します。同時に作業を始めたagentの履歴を取り切れなければ次巡へ持ち越します。
+
+## 2026.11.13
+
+### スマホのReaderで本文を参照して返信する
+
+発言の本文を選ぶと選択範囲の下にReply with referenceを表示し、入力欄の上に参照カードを置きます。カードを外しても返信は残ります。参照・返信・画像pathを合わせた1行をReviewで確認し、4096 bytesを超える場合や送り先・Readerの参照元が変わった場合は送信を止めます。
+
+選択中のタブスワイプと履歴更新による移動を抑えます。Claudeの本文全体が同じidの単独pasted_contentで包まれていた場合は中身を表示・照合し、混在や不一致は変更しません。送信のrelay・入力検証・API世代は変更しません。
+
+### スマホで末尾の改行を含む貼り付けを確認して送る
+
+入力の末尾にある連続したCR/LFだけを送信文から除き、Reviewと送信で同じ1行を使います。途中の改行は自動で置換せず、4096 bytes超や使えない文字とともに、入力欄の近くへ送れない理由を表示します。ReaderとTerminalの入力・画像pathを足した合計に同じ規則を適用し、relay・cockpit・コードのCopyは変更しません。
+
+### スマホのFocus表示でタップして中心を切り替える
+
+GraphのFocus表示では、周りのagentをタップするとそのagentと関連の強い最大5体へ切り替えてFitし、中心のagentをタップするとReaderを開きます。All表示はこれまでどおりタップでReaderを開きます。Enter・Spaceと読み上げ用の操作名も同じ規則に揃えました。
+
+### スマホのグラフから会話を直接開き、名前と役割で探す
+
+既存のグラフ・ロゴ・書体を保ち、登録されたRoleを表示します。ノードや検索結果からそのagentのReaderへ直接移り、検索結果のFocusで中心を切り替えられます（Focus表示でのタップの規則は上の節）。下部の選択agent・Historyカードと凡例を整理し、拡大操作をグラフ内へまとめました。
+
+Context・状態・Roleだけの更新では該当ノードを描き直し、位置と手動の拡大率、他ノードの肖像を保ちます。モバイル用の限定表示項目だけを追加し、外部Telemetry APIの世代は変更しません。
+
+### デスクトップのDemo表示をスマホへ自動で反映
+
+デスクトップで有効にしたDemo modeと追加の伏せる語へスマホも追従します。画面を再読み込みせず表示だけを切り替え、入力中の文・添付画像とコピー・送信の元の値を保持します。状態を確認できないときは画面を隠して再確認を案内します。通常の閲覧だけを使う構成も維持します。
+
+デスクトップ側とreaderの両方の更新が必要です。内部の表示同期経路だけを追加し、外部向けTelemetry APIの世代は変更しません。手順は[スマホのDemo表示](docs/mobile.md#demo-modeのとき)を参照してください。
+
+### スマホから複数の画像をまとめて確認して送れるようにした
+
+画像を合計10枚まで複数選択し、後から追加・1枚ずつ取り外して、既存の確認画面から一度に送れます。画像一覧は高さを抑え、送信後やClose時にプレビューの参照を解放します。既存の保存経路を1枚ずつ使い、途中の失敗や宛先変更で残りの追加を止めます。1枚あたりのサイズ制限と、文・全画像のpathを含む4KiBの入力制限は引き続き適用します。APIの世代変更はありません。
+
+### Hermes の初回依頼で Mail の道具が見つからない問題を軽減
+
+Hermes の接続先を問わず、初回の道具一覧を作る前の MCP 検出待機枠を、対話・単発実行とも45秒に揃えました。起動の遅い Mail が登録される前に初回依頼が始まる事例への補正です。接続が完了すれば直ちに進み、45秒を超える場合は Hermes 本来の起動を続けます。固定時間の sleep や再試行は追加していません。
+
+### Hermes の Exa SDK を固定 runtime に同梱
+
+managed Hermes の install 時に、上流で版が固定された `exa` extra を準備します。Exa の初回検索で SDK が子専用の別環境に入り、再起動しても使えない問題を直します。既存の install も新しい runtime 世代へ更新し、公開前にその環境で SDK を import できることを確認します。私有設定の runtime 参照を更新後の `current.json` に合わせ、新しい子で利用してください。
+
+### スマホの Reader に入力画像を表示
+
+会話に記録された人の入力画像を、小さな preview で表示します。タップすると既存の拡大表示を開きます。画像の取得は PC が発行した既存の reference と relay の許可を使います。
+
+### スマホの Reader の Mail から agent に移動
+
+Mail カードの名簿にある agent の名前・肖像を押すと、その agent の Reader に移ります。本文の開閉とは別のボタンにし、キーボードでも操作できます。送った Mail の記録に送り手が無い場合は、読んでいる会話の本人の名前と肖像を表示します。
+
+### dsh・Hermes の web_search を共通設定で選択
+
+managed spawn manifest の `web_search` に Exa の資格参照と SearXNG の URL を設定し、両 harness の検索先を共通に選べるようにしました。未設定の製品の既定は従来どおりです。起動ごとの `POST /api/spawn` の任意 field `web_search=exa|searxng` と内部 launcher の `--web-search` も保存して引き継ぎます。API 世代は変えません。
+
+鍵の値は既存の Keychain / Secret Service と native の資格 helper で取得し、起動計画・設定ファイル・引数に保存しません。鍵無し・検索先の停止は検索時にエラーを返します。SearXNG の応答が200でも、結果0件かつ応答しなかった engine がある場合はその理由を表示します。[設定方法](docs/managed-catalog.md#native-の-web_search)を参照してください。
+
+### fresh の Hermes TUI で Telegram を使う
+
+準備済みの登録から本物の Hermes TUI と同梱 Telegram plugin を起動し、Telegram の受信・返信、Mail と待機中の通知、端末からの入力を同じ会話で使えます。鍵は非秘密の参照から process 内で読み、通常の子と同じ設定生成・本人照合・予約と鍵の guard を共用します。停止は TUI の終了と終了記録を確認し、異常終了は結果不明として次の起動を止めます。実 Telegram と WSL 実機の受け入れは未完です。
+
+### fresh の登録で Claude Channels を起動
+
+準備済みの fresh context を指定した常駐 profile から、通常の起動・本人照合・予約 hook を共用して Claude Channels を起動できます。停止時は provider の終了を待って終了記録を残し、同じ本人で再起動します。異常終了は結果不明として次の起動を止めます。旧形式の profile の動作は維持します。
+
+### スマホの会話にも、見せた画像を表示
+
+agent が ORRERY Mail の `show_files` で見せた画像を、スマホの Conversation の発言の流れに小さく表示します。タップすると拡大し、元のファイルの chip は tool の折りたたみの中にも残ります。画像以外は名前を表示します。
+
+取得には PC と同じ許可済み参照と、スマホの既存の受け付けを使います。一覧は画面付近の画像だけを取得し、Pillow がある環境では最大320pxへ縮小します。Mac と WSL で同じ処理です。
+
+### 更新の後に agent を起動し直す案内
+
+更新の後は、動いている agent（常駐 bot を含む）を起動し直すまで、新しい指示と ORRERY Mail の道具（`show_files` など）が届かないことを、インストールの手順に書きました。managed merge の preview を承認しなかった場合は、指示も更新されません。
+
+### スマホでORRERYをホーム画面のアプリとして開く
+
+Android Chromeのメニューからインストールすると、ホーム画面のアイコンからURLバーなしで開けます。古いブラウザのショートカットは消して入れ直してください。上の帯と下の入力欄は端末のsafe-areaに収めます。Tailscaleと本人のアクセス条件は今までどおり必要で、offlineで記録を保存する機能は追加しません。
+
+別のアプリを見て戻っても、開いていたagent・Conversation/Terminalのタブ・読む位置・下書きが残り、送り先のpaneを再確認してから入力を有効にします。Androidによるページの破棄などで読み込み直した場合は、その起動中のagent名とタブを戻します。Mailの識別IDが保存にある場合は、送信をOFFにしたりlegacyへ切り替えたりしても、名簿と一致するときだけ戻します。同じ名前の別agentに替わった場合や名簿にIDが無い場合は一覧から選び直します。IDの無い旧保存は名前で戻します。本文や下書きは保存しません。読み込み中に背景で中断したfile previewは、復帰時に同じ参照で取り直します。送信の確認は30秒で期限切れになり、結果不明の場合も自動で再送しません。
+
+## 2026.11.10.1
+
+### スマホの入力欄から画像を1枚送る
+
+スマホの入力欄の＋で画像を1枚選ぶと、送り先の pane の作業 folder の `.orrery-input-images/` に保存し、その置き場所を送る文の末尾に足します。保存の前に画像を描き直し、位置情報などのメタデータを落とします。JPEG・PNG・静止 WebP、10 MiB まで。7日より古い画像は次の保存のときに消え、1つの folder に 50 枚までです。送る前の確認には置き場所を含めた全文が出て、今までどおり Send once で一度だけ送ります。画像の受け口も文字の送信と同じ relay の検査を通り、Tailscale を通らない要求や本人以外からは保存しません。ORRERY 本体の bridge もこの版に更新したときだけ＋が出ます。
+
+### スマホの入力欄を画面の下に常に置き、送る前の確認をその場で行う
+
+スマホの Conversation と Terminal の下に、宛先のチップが付いた入力欄を常に置きます。鉛筆のボタンはなくしました。↑を押すと、同じ欄が「送りますか？」の確認に変わり、宛先・全文・Enter を見てから Send once で一度だけ送ります。Edit で入力に戻れます。宛先のチップを押すと pane を選び直せます。送信前の検証・一度だけの送信・結果不明の照会・30秒の期限は変わりません。
+
+### スマホの Review input からターミナルの末尾を外し、上の帯の i を削除
+
+スマホから agent に打つときの確認（Review input）では、ターミナルの末尾の枠を出さず、送り先と送る全文だけを見せます。送り先の行を押すと pane を選び直せます。上の帯の i ボタンと説明の panel を削除し、取得の上限・更新間隔・表示時刻は Terminal の下端の短い1行に移しました。pane を選ぶ前に鉛筆を押したときは、入力欄の上に案内を出します。送信前の検証・一度だけの送信・結果不明の照会は変わりません。
+
+### Codexの空欄とnative footerを認識して自然通知を届ける
+
+Codex 0.163.0の `GPT-6.1-Sol default · <cwd>` と警告footerを、空欄の下の既知の表示として認識します。未知の行・入力途中・承認待ちは引き続き通知を見送ります。子の起動に必要なsandbox外実行の本人承認を[日英のfresh手順](docs/fresh-global-update.md)に明記しました。Mac の実機で、Codex と Claude の子と親の自然通知の往復を確かめました。
+
+### freshの通知先照合とCodex再開設定を修正
+
+- Codexの既知の空欄placeholderを入力なしと扱い、processの出生を記録・照合ともC localeで取得します。未知のplaceholderとClaudeの色なし提案は引き続き入力ありとして通知を見送ります。既存の別locale記録は自動変換しません。
+- fresh Codexの再開では、proxy・plugin MCP無効化等の設定をすべてresumeの後ろに置きます。親のnetwork許可の追加も既存の子launcherと揃え、`AGENTSTACK_CODEX_NETWORK` で追加を止められます。通常のtool承認は維持します。
+- fresh Mailの送信・返信schemaに宛先のID／名前・期待名・to/cc/bccと制約を公開します。
+- [freshの手順](docs/fresh-global-update.md)にClaude初回画面の人による操作と通知の既知の制限を追記しました。Mac の実機で、Codex の親の再開後の本人照合を確かめました。
+
+## 2026.11.10
+
+### スマホの会話で、開いた Mail に肖像からの線を引く
+
+開いた Mail の左に、送り手の肖像の下から本文の終わりまで細い線を引き、会話の続きとして読めるようにしました。light では、肖像の右下の provider のロゴが黒い丸で表示されていたのを、PC と同じ色にそろえました。
+
+### 子を立てる手順に、サーバーから model を読む Local の指定を足す
+
+delegate skill の DeepSeek・Local の子を立てる手順で、provider には catalog が返した接続の id をそのまま送るようにしました。サーバーから model の一覧を読む Local では、選んだ model 行の `url_index` と `url_key` を写して送ります。これまでの例ではこの2つが無く、起動が `spawn_pair_unavailable` で断られていました。
+
+### スマホの会話で、続いたツールの呼び出しを1行にまとめる
+
+続いたツールの呼び出しを「N tool calls · 名前 ×回数 · 時刻」の1行にまとめ、押すと開閉します。新しい行が届いても、開いたまとめ・focus・見ている位置はそのままです。受け取った Mail の記録に宛先が無いときは、unknown ではなく会話の本人を宛先として肖像付きで出します。
+
+### スマホの会話で発言者と Mail の相手を読みやすく
+
+発言者の見出しを、肖像・provider の小さなロゴ・agent 名・時刻にまとめました。Mail も同じ肖像を使い、色枠を外して送り手から宛先への1行と件名を主役にします。複数の宛先が入りきらなければ丸を重ねた列と残りの人数に切り替え、送り手の名前を優先して残します。high・urgent は小さな点で示し、肖像の頭文字は本文をまたぐコピーに混ぜません。
+
+### 狭い Codex pane の作業中表示を正しく読み取る
+
+現在の `Working` / `Thinking` 行が幅で省略されても作業中と判定し、読み取れた経過時間だけを表示します。過去の状態行や引用を現在の作業とみなさない判定は維持します。
+
+### dsh でサーバーが宣言した画像入力を使えるように
+
+動的 backend の `/v1/models` が返す画像対応を dsh のモデル定義へ渡し、DeepSeek・GLM などで画像を送れるようにしました。`video` なども併記された宣言では対応する種類だけを残し、宣言の欠落・不正・過大、`text` の欠落では text のみを保ちます。固定 backend の宣言と context・出力予算は変更しません。
+
+### GPTのモデル名を省略せず表示
+Codexのstatuslineと登録値にある接尾語を、未知の名前も含めて保持し、`GPT-6.1-Sol`のように完全な名前で表示します。effortは含めず、Claude・Localの短い表示は維持します。
+
+### スマホのConversationを本文中心の全画面に
+
+上部を顔・名前と操作の細い帯にまとめ、入力は右下の鉛筆から開く形にしました。説明はiに置き、未確認・通信断・送信失敗は隠しません。Review input → Send onceの確認を残し、キーボード・safe area・Back・previewの重なりに対応します。
+
+assistantのMarkdownに太字・見出し・リスト・表・コードとCOPYを追加し、SHELLのコマンドと出力をまとめます。自動通知は短い活動の要約で出し、送信の仮の行はSHELLとも対応づけ、Dismissか期限で消せます。描画器は既存ソースを無改変で同梱し、同期を確かめる試験を付けました。360px・390pxで本文の面積80%以上を回帰試験にしています。API世代を38→39に上げ、mobileのsnapshotに作業中だけの任意の`work_disp`を追加しました。経過が無いときはWorkingだけを出し、画面を開いてからの時間は数えません。
+
+[スマホの使い方](docs/mobile.md)
+
+ReviewはConversationの上の小さな入力panelで送り先と端末末尾を確かめる形にし、送った後は会話と送信の吹き出しへ戻ります。受領と結果不明時の照会は残します。上の帯の操作は44px四方以上にし、mobileのtouchでiの開閉を試験しています。
+
+Terminal tabも枠と常時の注記を外し、短い末尾を画面の下端へ寄せて表示します。長い行は元の字下げを保って折り返し、罫線だけの行は幅で切ります。読み返し中の停止と取得失敗は表に残し、更新時刻・上限などはiで確認できます。
+
+Terminalの末尾を対応する組み合わせでは120行・12KiBまで増やしました。古い取得側・表示側との組み合わせでは40行・6KiBを保ち、JSON全体の16KiB上限に合わせて末尾を短くします。
+
+Conversationの本文を左へ、Terminalの本文を右へスワイプして切り替えられます。縦スクロール・選択・横スクロールが必要な表やコード・画面端の戻る操作を優先し、入力や確認のpanelと送信中は切り替えません。
+
+### agent の役割とタスクの説明を利用者が編集できるようにする
+
+annotationに200字までの`task`を追加しました。Mailへ登録された元の説明を変えずに表示を上書きでき、空文字または`null`で保存すると元の説明へ戻ります。dashboardの一覧とNETWORKでも上書きを表示します。
+
+`POST /api/annotate`は、省略した欄を維持し、明示的な空文字または`null`でその欄を外す部分更新になりました。role・emoji・group・taskに共通で、全欄が空になったときだけannotation全体を削除します。role・emoji・groupの既存の全項目送信は従来どおりです。新しい欄と更新の意味を API の利用側が識別できるよう、`GET /api/version`の互換世代を37から38へ上げました。
+
+読み取り専用MCPアダプターもlegacy・freshの両方式でAPI 38を受け付けます。公開するagentの欄は増やさず、annotationとタスクの説明は返しません。未知のAPI世代は引き続き拒否します。
+
+### Local GLM の表示と DeepSeek の版表記を揃える
+
+Local の GLM を名簿・ネットワーク図で識別できるようにし、`glm-5.3-flash` を `GLM 5.3 flash` と表示します。`deepseek-v4.1-flash` のような `v` 付きの版も正規化します。送信用の元の model ID は保持します。
+
+### MCPの読み取り専用の範囲と一覧APIの説明を明確化
+
+MCPアダプターの[日本語ガイド](integrations/chatgpt_mcp/README.md)と[英語ガイド](integrations/chatgpt_mcp/README.en.md)に、freshの一覧取得は既存のMailの書き込み用transactionを通り、「読み取り専用」はMCPに書き込み操作を公開しない意味であることを補足しました。DB層で書き込みや書き込み用ロックが一切ないという保証ではありません。
+
+一覧APIのdocstringも、API 37で追加したproject情報を含む現在の応答に合わせました。機能・API世代・認可・transactionの実装は変更していません。
+
+### NETWORKの線の上の数が、cometと同時に増えるようにする
+
+これまで、comet と Mail の card はすぐ出るのに、線の上の数は最大で約13秒遅れて増えていました。今は、新しい message が入るとdashboardがgraphをその場で作り直すので、comet と同時に増えます。新しい message が無い間は、今までどおり8秒に1回だけ作り直すので、負荷は増えません。数は今までどおりgraphの値で、表示の期間の絞りもそのまま効きます。
+
+### agent が作った file や画像を、cockpit の History の chip にする `show_files`
+
+ORRERY Mail の proxy に local の tool `show_files` を足しました（`paths` に 1〜8個）。proxy の中だけで完結し、Mail server へは送らず、何も書かず、file の中身も読みません。`lstat` で在るか・種類・大きさだけを返します。cockpit は記録に残ったこの呼び出しから History に chip を出し、作業 folder の中・種類・大きさの確認は preview の側で従来どおり行います（cockpit 側の対応が要ります）。Claude・Codex・dsh・Hermes の managed な指示に「Showing Files」の節を足し、同梱の `/log` は書いたログを、`/delegate` は報告の前に成果の file を `show_files` で見せます。`/log` は、ログが作業 folder の中にあるとき、その機械で初回に一度だけ chip のことを一行添えます。Claude の設定の雛形はこの tool を確認なしで許可します。詳しくは [Codex App 統合](docs/codex-app.md) と [Launchers の `/log`](docs/launchers.md#log) を参照してください。
+
+### スマホの会話の記録で、file の tool の行にも file と画像の chip を出す
+
+cockpit は file や画像の参照を、file の tool の呼び出し（Read・Write・Edit・apply_patch・SendUserFile など）の行に付けます。スマホの Conversation は、chip を発言の吹き出しにだけ描き、tool の行では描いていなかったため、実際の記録では preview を開ける chip が出ませんでした。tool の行にも chip を描くようにしました。preview の守り（cockpit の確認・大きさ・PNG の確かめ）は変えていません。
+
+### スマホのfile・画像のpreviewから、表示している中身を端末に保存できるようにする
+
+previewを表示できたときだけ**Save**が出て、表示しているもの（textは表示した範囲、画像はcockpitが描き直したPNG）をbrowserのdownloadとして端末に保存します。新しい経路や読み直しはなく、保存するのはpreviewと同じ物だけです。保存したfileは端末に残ります。詳しくは[スマホで状況を見る](docs/mobile.md#スマホでagentの会話の記録を読む)を参照してください。
+
+### スマホの会話の記録で、fileと画像のpreviewを開けるようにする（Phone access の History の中）
+
+Historyがオンのreader（policyの確認があれば既定でオン。SettingsではPhone access）では、Conversationのtoolの呼び出しに出てきたfileと画像のchipを押すと、今の中身をpreviewで開けます。`--disable-history`で会話の記録と一緒に切れます。readerはcockpitの固定のroute `GET /telemetry/conversation/preview`をloopbackで呼び、記録・binding・作業folderの範囲・canonical path・種類・大きさ・画素数の確認は、cockpitがそのたびに行います。名前で隠したり中身を伏せたりはしません。スマホが送るのはagentの名前とreaderが発行した参照のIDだけで、pathもcockpitの参照も送りも受け取りもしません。textは先頭32 KiBを文字として表示し、HTMLやSVGも実行しません。画像は画素だけのPNG（1辺8192 px・8 Mpx・4 MiBまで）に限ります。text・画像に写った鍵や私的な文章はそのまま届くので、それでよい端末に限ってください。Close・背景移行でpreviewを消します。詳しくは[スマホで状況を見る](docs/mobile.md#スマホでagentの会話の記録を読む)を参照してください。
+
+### 任意の読み取り専用MCPアダプターと所属確認
+
+ChatGPTなどからORRERYの状態・一覧・個別agentを読み取る任意のアダプターを追加しました。通常のinstaller、サービスの起動設定、UI、hook、Mail操作は変えません。spawn・送信・OAuth・常駐化には対応しません。
+
+legacyは明示した1つのprojectに限定し、agent・finished・gone・retiredと直近30日の履歴という範囲を返します。freshは同一Mail instance全体の安定ID・capability・退役/未観測状態を保持します。未知API世代は拒否し、名前を切り詰めて別名として公開しません。
+
+所属を確認できない旧応答を推測で通さないため、Dashboard APIを36から37へ上げました。legacyの `/api/agents` に応答全体と各行の `project_key` を追加し、曖昧なtmux行の所属はnullにします。既存の行の表示・生存判定・書込み認可は変更しません。アダプターのlegacyはAPI 37、freshは検証済みの34・35・36・37だけを受け付けます。
+
+秘密pathを保持するTunnel転送、Host/Origin検査、接続先の実証、pair時のローカル書込みと公開fieldを日英で説明しました。[日本語ガイド](integrations/chatgpt_mcp/README.md)・[English](integrations/chatgpt_mcp/README.en.md)を参照してください。
+
+## 2026.11.05.2
+
+### 別の場所の install を uninstall しても、スマホの reader の launchd job を止めない
+
+`scripts/uninstall.sh` は、スマホの reader の job（`org.agentstack.mobile-relay`）を、uninstall する install のものであるときだけ止めて plist を消します。対象は、既定の場所（`~/.agentstack`）の install、manifest がその job を記録している install、job の `--config` がその install の `mobile.json` を指している install、job の reader の script がその install の中にある install の 4 つです。`--install-dir` で別の場所の install を uninstall したときは、job に触れません。
+
+通常の uninstall の動作は変わりません。利用者への影響はありません。
+
+試験の 1 つが、本物の HOME のまま uninstall.sh を走らせていました。そのため、試験を回したコンピューターで動いていた reader の job が消えたことがあります。この試験は一時的な HOME で走るようにしました。また、試験の間に本物の `~/Library/LaunchAgents` から ORRERY の plist（`org.agentstack.*`・`org.orrery.*`）が消えたら、あるいは ORRERY の job が loaded から absent に変わったら、試験全体を失敗させる確認を足しました。増えた側の変化は見ません。この確認は読むだけで、launchd を変えません。
+
+## 2026.11.05.1
+
+### スマホの閲覧画面をcockpitのSettingsからオンにし、会話の記録を既定で読めるようにする
+
+新しい`agentstack-mobile`（`status`・`apply`・`off`）が、スマホのreaderの設定`~/.agentstack/mobile.json`（mode 0600）とlaunchdのjob `org.agentstack.mobile-relay`を管理します。cockpitの**Settings → Phone**はこのcommandを呼びます。Tailscaleのsign in・Serve・Funnelは読むだけで、Serve・Funnel・policyは変えません。policyは本人が**I reviewed the policy**を押した日時を残すだけで、確かめはしません。手で起動したreaderがportを使っていれば、止めずに断ります。installはcommandを置くだけでjobを作らず、uninstallはjobを止めます。readerは`--config`でこのfileを読みます。会話の記録（History）は、policyの確認（`--phone-policy-reviewed`）があれば既定でオンになり、`--disable-history`で切れます。確認がなければオフのまま起動し、`/view/history`が`policy_not_reviewed`を返します。以前の`--enable-history`もそのまま使えます。boundの記録だけを出すこと、pathを出さないことなどの約束は変えていません。詳しくは[スマホで状況を見る](docs/mobile.md#cockpitのsettingsからオンにする)を参照してください。
+
+**手で起動しているreaderを更新する人へ:** `--phone-policy-reviewed`を付け、`--enable-history`を付けずに起動していたreaderは、更新後の再起動から会話の記録とfile・画像のpreviewもスマホに出します。出したくなければ、再起動の前に`--disable-history`を足してください。起動時にもこの変更を1行で知らせます。
+
+手で起動したreaderが動いている間、Settingsは**MANUAL**と表示し、オン・オフのどちらも何も変えません（`port_in_use`）。loginかaddressを変えるとpolicyの確認は取り消されます。launchdが起動に失敗したときはPhone accessをオフに戻します。cockpitのdemo modeでは、Phoneの節はlogin・address・ServeのURLを出しません。
+
+### 会話の履歴の確認を軽くする 1 人分の binding
+
+legacy の dashboard に `GET /api/agents/<name>/history-binding` を足します。cockpit の会話の履歴は、中身を見せる前に binding を確かめるたびに roster 全体（稼働中の pane の読み取りを含み、live で約 1.3 秒）を待っていましたが、この route で 1 人分の binding を、`/api/agents?scope=live` のその行と同じ判断で、pane を読まずに得られます（私有の 595 人の bench で約 40ms）。API の互換世代は 35 から 36 へ上げます。fresh と global ではこの route に 404 `agent_unavailable` を返し、fresh の保護された履歴経路は変わりません。[1 人分の route](docs/api.md#get-apiagentsnamehistory-binding)を参照してください。
+
+## 2026.11.05
+
+### スマホの閲覧画面で、agentの会話の記録を読めるようにする（別のopt-in・既定オフ）
+
+readerに`--enable-history`（`--phone-policy-reviewed`も必要）を付けたときだけ、agentのsheetに**Conversation**のtabが出て、cockpitがそのagent自身のものと確認した会話の記録を読み取り専用で表示します。スマホが送るのはagentの名前とreaderが発行したpageの印だけで、fileのpathや記録のcursorは送りも受け取りもしません。readerは固定のloopbackのcockpitのroute `GET /telemetry/conversation`だけを呼び、boundでない記録は理由のcodeだけを示します。1 pageは40件・512 KiBまで、本文は文字としてだけ表示し、Mailはcard、fileと画像は名前だけです。送信は既存のTerminalの**Review input → Send once**のままで、Reviewの画面には必ず端末の末尾（40行・6 KiB）を出します。cockpitのredactは既知の形の鍵だけを隠すので、会話に書かれた他の秘密はそのまま届きます。負荷が高くcockpitの応答が遅いときは15秒まで待ち、それでも返らなければ**Taking longer than usual**と**Retry**を出します。Close・背景移行で表示を消します。詳しくは[スマホで状況を見る](docs/mobile.md#スマホでagentの会話の記録を読む)を参照してください。
+
+### Claude・dsh・Hermes の会話記録を本人の証拠から対応付け
+
+legacy の `/api/agents` は Claude / Claude Code・dsh・Hermes の本人の会話を検証し、`history_binding` と理由、native ID の `history_session_id`、元の receipt 時刻 `history_receipt_ts` を共通の契約で返します。`bound` のときだけ `transcript_path` を公開し、不明・競合は `unbound`、現在の起動より古いと分かる証拠は `stale` として path を null にします。cwd・最新履歴・本文の名前からは推測しません。
+
+Claude は自己登録 receipt と JSONL の native ID、dsh は新しい起動の callback と persistence が返した場所・inode、Hermes は子専用 SQLite DB と exact session ID を照合します。dsh の Zstd JSONL と Hermes の SQLite は、それぞれ対応した reader が必要です。Codex の既存の契約と fresh の保護された履歴経路は維持し、API の互換世代は3 provider をまとめて34から35へ1回だけ上げます。[共通契約と provider ごとの条件・限界](docs/api.md#get-apiagents)を参照してください。
+
+dsh は別 root の保存先・flush・receipt 発行が失敗しても起動単位の競合を保持し、古い会話を復活させません。新 terminal より古い receipt は `stale` とし、登録照合は既存のまとめ読取と接続解放を共有して roster の行数分の SQLite 接続を増やしません。
+
+root 観測や競合 marker 自体の書込みが失敗しても lock を保持し、競合側と所有側で失敗状態を共有して旧会話の公開・lock 解除を止めます。書込みの回復だけでは同じ起動を復活させません。
+
+### dsh の最初の作業後に会話記録を表示できない不具合を修正
+
+legacy dsh の TUI が起動時の履歴保存を遅らせる場合も、session の flush と turn 終了で会話記録の receipt 発行を再試行します。発行後の inode と時刻を固定し、launch・root・lock・conflict の照合を維持します。API 世代の変更はありません。
+
+### 共通 bound proxy の予約を managed guard と一致させる
+
+共通 proxy の予約取得・更新・解放が物理絶対 path を受け付け、managed `workspace-v1` の編集 guard と同じ予約を参照できるようになりました。相対 path / glob の既存互換と `..` 拒否は維持します。managed の拒否文と agent 向け案内に必要な path を示し、[更新後の取り直し手順](docs/codex-app.md#agent-の利用手順)を日英で追記しました。guard を相対照合へ戻す変更や、既存予約の自動変換はありません。
+
+### dsh・Hermes の子へ Codex と同じ Chrome MCP 定義を渡す
+
+dsh・Hermes の子は既定で Codex の有効な Chrome MCP 定義だけを継承し、`--autoConnect` を含む同じ command・args・env・cwd で普段の Chrome に接続します。`mail-only` は自動追加せず、未設定・無効なら Mail のみです。native で表現できない tool filter/approval は拒否し、明示 browser の承認条件も維持します。[子の道具選択](docs/delegation.md)を参照してください。
+
+### fresh Codex の Mail 接続へ必要な環境を渡す
+
+Codex の stdio MCP は provider の環境をそのまま継承しないため、fresh launcher が context・mode・選択済み Python の3変数を明示して転送します。資格本文と旧global contextは転送しません。また、Codex CLI の設定keyをTOMLのheaderと同じように引用すると別のkeyになるため、検証済みplugin IDと旧Mail server名をCLIのkeyとして正しく指定します。hook pluginを有効に保ちながら付属MCPだけを無効化し、同じfresh本人のproxyを使います。安全に指定できない旧Mail名は明示拒否します。
+
+既存の`orrery-mail`定義に非空の環境変数・無効化・URLやcwdなどの未対応項目がある場合は、旧設定をmergeで引き継がず起動前に拒否します。空の定義と上書き対象だけの通常設定は維持します。
+
+起動時に同じnative環境で有限のeffective設定読取を1回行い、project側の旧環境や無効化・旧Mail aliasも検査します。localの固定proxyだけを許容し、読取失敗・未対応schemaは旧設定へfallbackしません。承認済みpayloadを変えずにcoordinate skillだけをCLI設定で除外し、無関係な既存skill設定の順序と有効/無効の意図を保持します。
+
+同じeffective設定でpluginの有効状態を確認し、同一readerのread-only hook一覧を承認済みplanと照合します。無効・不明・未承認は強制有効化せず停止します。reader初期化途中の失敗でもprocess/pipe回収を試みます。
+
+本人のhook承認・通常toolの承認・APIとreadyの意味は変更しません。新しい実providerでの再受入は別途必要です。
+
+### スマホの Terminal で読み返し中に最下部へ戻されない
+
+スマホの Terminal で上へスクロールして読み返している間は、約3秒ごとの更新で表示を最下部へ戻さず、本文・Shown の時刻・注記を同じ snapshot に固定します。新しい出力が届くと New output · paused と表示し、下向きの操作で最下部へ戻した時に最新の末尾へ切り替えて追従を再開します。再開の判断は、次の描画の時点で最後の操作の向きと実際の位置から行い、上向きへの反転・2本指の操作・touch のキャンセルでは再開しません。保留中に表示範囲（40行・6KiB）を超える出力があった場合、その間の出力は表示できないことがあります。
+
+### Codex の起動確認で観測不能を死亡と誤判定しない
+
+Codex 子の起動確認は、その launch の receipt と rollout に記録された task 開始を先に確認します。pane や process の観測が sandbox の権限拒否・timeout 等で取得できない場合は、死亡と断定せず「起動未確認」として同じ子と復旧情報を保持し、固定の理由 code と終了値を残します。明示的な session 不在は引き続き失敗です。確認不能を理由に task 再送・重複 spawn・別 transport への切替は行いません。
+
+### NEW AGENT の Gemini の model の候補を `agy models` に追従させる
+
+Dashboard の NEW AGENT で Antigravity の Gemini モデル候補をローカル `agy models` に自動追従させ、新しい Argon モデルも選べるようにしました。従来モデルと新モデルを併記し、一時障害時も成功済み候補を保持します。明示的な許可リストを優先し、表示可能な effort だけを提示します。モデル候補の読み取りは同一オリジンのブラウザーからに限定します。
+
+### fresh の Claude 子: transcript がまだ無い SessionStart を保留し、同じ session の次の正規の PostToolUse で検査し直せたときに ready にする
+
+実機で、子の SessionStart の hook が `FRESH_CLIENT_UNAVAILABLE` で失敗し、session receipt が作られませんでした。そのため、子が ready にならず、Mail の通知が届かず、API で終了できませんでした。transcript が作られる前に SessionStart が来る場合は、合成の試験で再現した対応ケースです。今回の実機の症状と整合する有力な候補ですが、その hook に渡された path と元の例外は記録が無く、初めの原因は確定していません。
+
+transcript がまだ無い SessionStart は候補として保留します。同じ session で次の正規の PostToolUse が来たときに、本人・現在の起動・nonce・lineage・transcript の参照を全部検査し直し、通ったときだけ receipt を公開します。候補だけでは ready にも通知の完了にも数えないので、正規の PostToolUse が来なければ未 ready のままです。Codex と managed の経路、API の世代は変えていません。実機での受入は別途必要です。
+
+あわせて、SessionStart で通知を渡すのを `source` が文字列 `startup` のときだけにしました。resume・clear・compact・未知・欠落・文字列以外の `source` では、本人・現在の起動・所有者の確認は行いますが、通知の取得・出力・完了はせず、通常の watcher に残します。PostToolUse は従来どおりです。前の版の実機の受入では、子が ready になり API で終了できましたが、子どうしの Mail の往復は成立しませんでした。子の会話が resume された時点で別の子からの通知に相当する内容が SessionStart の文脈として渡り、その後ターンが始まらないまま子が待ち続けました。その通知が完了済みになったか、渡された内容がその Mail と同じものかを ID で照合した記録は無く、未確認です。watcher に残しても起床の成功は保証しません。この変更を入れた版の実機での受入はまだです。
+
+### Claude Code の新しい使用量の footer が出ていても作業中と表示する
+
+Claude Code の入力欄の下に出る使用量の footer（model と 5h/7d の残り）を、入力欄の一部と認識するようにしました。これまでは、spinner が出て作業中のセッションを待機中と表示することがありました。既知の model と 0〜100% の残りに全体が一致する行だけを認め、値は作業中の判定にしか使いません。最終活動時刻の意味、表示、terminal_state は変えていません。
+
+### Codex の表示名の最下行でも、容量エラーで止まった子を検出する
+
+Codex の最下行が「GPT-6.1 Terra high」のような表示名でも、model の容量エラーで止まった子を検出して親へ知らせるようにしました。
+
+### Mail の宛先と本人の確認を機械全体で1つにする仕組み（明示して選んだときだけ）
+
+project ごとに分かれていた Mail の宛先と本人の確認を、機械全体で1つにする新しい仕組みを入れました。明示して選んだ場合だけ使い、既定の動作は変わりません。古いデータは移さず読み取り専用で残し、新しい仕組みは空から始めます。retire した子の元の会話のままの復帰と、App を前面に出す操作は、新しい仕組みでは未対応です。
+
+### dsh の compact の予算を選択した model の context に合わせる
+
+dsh の compact の予算を選択した model の context に合わせました。動的 model の出力上限は context の 1/4 と 8192 の小さい方になり、選択した model の route だけに headroom 10%・閾値 0.8・保持 0.16 の policy を入れます。context 131072 では compact が始まる量が 57344 から 104857 になります。minimal と他の model は変わりません。
+
+### Codex の子の既定 model と effort を設定できるようにする
+
+Codex の子の既定 model と effort を `AGENTSTACK_CODEX_DEFAULT_MODEL` と `AGENTSTACK_CODEX_DEFAULT_EFFORT` で設定できるようにしました。installer で指定した値は `env.sh` と service に保存され、明示した `--model` と `--effort` はそれぞれの既定より優先します。
+
+### 短縮名で Codex の catalog の最新版を選ぶ
+
+`sol` / `terra` / `luna` / `astra` の短縮名は、新しい catalog にある同じ系統の最新版を選ぶようにしました。新しい版が出ても製品の release を待たずに使えます。catalog にその系統が無いときは短縮名を拒否し、catalog が無い・古いときは従来の対応を使います。
+
+### Mail watcher が宛先の無い通知を取り下げる
+
+Mail watcherは、宛先のsessionが無いことを確認した通知を取り下げ、一時的な取得失敗だけを再試行するようにしました。新しい通知やMail本体は保持します。leaseのguard数と標準logの世代サイズにも上限を設けました。
+
+### スマホの Graph に Mail の増加の光を出す
+
+スマホの Graph に、Mail 件数の増加を示す光の表示を追加。タップで既存の2体間の一覧を開き、動きを減らす設定では静止表示にします。件名・本文の自動送信は行いません。
+
+### Local接続のmodelを両NEW AGENTで動的に選択
+
+Local接続へ任意の表示名と1本以上のAPI URLを設定すると、両NEW AGENTが接続別にmodelを列挙します。model追加ごとのORRERY設定・再installは不要です。status欠損・未知の有効IDも選択でき、明示unloadedは選択不可。選択URL・IDを起動直前に1回照合し、不一致時に別modelへ移りません。contextの報告値／既定／任意fallbackを区別し、元URL・modelでのexact resume、従来の固定接続互換を保持します。
+
+API世代は33。動的Localのcatalogに `url_index` / `url_key` / `display_name` / context由来を追加し、spawnへ選択URLの識別値を渡します。[一度のagent支援移行手順](docs/native-setup.md)を追加しました。新しいtransport adapter、serverのmodel起動・停止、実機接続の自動移行は含みません。
+
+### ローカル HTTP の要求元検査を強化
+
+ローカルの HTTP/WebSocket の入口で、要求の送り元の検査を強めました。手元の CLI・hook と既存の proxy 経由の利用は継続できます。
+
+使われていない ttyd の端末の入口を削除した。API generation は 32 です。
+
+### スマホTerminalの通常起動設定とagent向け手順を整理
+
+ORRERY側の共有設定`enable_mobile_terminal`で通常の起動時にTerminalを有効にする手順を、[日本語](docs/mobile.md)・[英語](docs/mobile.en.md)のガイドへ追加しました。既定はオフで、稼働中のbackendには明示的な再起動が必要です。agentが行う設定・送信なしの確認と、本人が行うpolicy・実端末確認を分けています。
+
+操作に使う自分の端末だけへのアクセス制限を推奨し、スマホ・タブレットを複数許可する例と、既存の広いgrant/ACLも整理する必要を説明しました。端末限定は必須条件ではなく、既存の`--phone-policy-reviewed`は運用者の申告のままです。readerの新しい常駐機構・policy自動変更は追加していません。API世代31・既存の本人/Host/Origin照合・入力guardは維持します。
+
+### cockpitのVision profile連携を削除
+
+cockpitで廃止するVision profileのiframeメッセージ受け口・応答・ready通知を削除しました。一般の単一theme-axisメッセージと、その内部で使う描画・計測は維持します。
+
+### スマホでpaneを確認してから1回送信
+
+別途有効にしたTerminal sheetで、選択paneの短い画面を見ながら1行を書き、宛先・全文・Enterを毎回確認して送れます。前面の1paneだけを更新し、閉じる・背景移行で表示と未送信の確認を消します。通常の閲覧は維持し、画面取得も送信も指定スマホの実効policy確認と両側の明示opt-inが必要です。tmux受理とagentの実行完了は区別し、結果不明でも自動再送しません。API世代は31です。[手順と限界](docs/mobile.md#スマホからpaneを確認して送る)を参照してください。
+
+GraphのExpandで画面を広く使えます。ブラウザの全画面APIが使えない場合もページ内で全面表示し、縦横切替・Mail一覧・Terminal sheetに対応します。閉じる／戻るで通常表示へ戻り、既存の選択・手動zoomを保ちます。
+
+### 入力欄の枠に名前が出る Claude Code でも作業中を判定する
+
+Claude Code の新しい版（2.1.307 で確認）は、入力欄の上の枠に session の名前を出します（`──── 名前 ─`）。dashboard はこの枠を本文と読んでいたため、その上に作業中のスピナーがあっても待機中と表示していました。名前つきの枠も枠として扱うようにしました。あわせて、`(running Stop hook · 7s · …)` のように経過時間の前に段階の名前が入るスピナーからも、経過時間を読むようにしました。
+
+### 予約の保護範囲を起動先フォルダ基準に変更
+
+新規の top-level agent と対応する delegated child の予約保護範囲を、Git リポジトリ全体ではなく実際に起動した作業フォルダから計算するようにしました。共有フォルダの追加指定は `AGENTSTACK_EXTRA_PROTECTED_ROOTS` で行い、installed `env.sh` の旧保護範囲を更新時に一度だけ引き継ぎます。旧設定が曖昧な場合は更新を停止し、移行の確認と予約解放・関係セッションの再起動を案内します。managed 起動では予約名も作業フォルダ相対から物理絶対パスに変更し、入れ子の作業フォルダが同じファイルを別名で予約する衝突漏れを防ぎます。起動先と追加保護フォルダの物理パスに Mail が glob と解釈する `*`・`?`・`[` や、Mail が `/` に置き換えて比べる `\` を含む managed 起動は、予約の照合が崩れるため起動前に拒否します。Mail の名前空間は変更しません。resume / persistent と warm pool の追加保証は後続の対象です。API 世代は変更しません。
+
+詳細は [保護設定の移行](docs/configuration.md#reservation-の保護範囲と移行) を参照してください。
+
+### 空の Mail へ向けた project 非依存の接続
+
+旧 Mail を保管したまま別 instance を空から用意し、利用者のagentが日英手順で登録・設定・必要な本文の持越し・復旧を進める経路を追加します。自動の無損失移行や旧資格の継承は行いません。
+
+API世代を33から34へ上げ、明示fresh dashboardのNew Agentと有限rosterにMail instance／agent IDを付けます。standaloneの準備元と論理上の親を分け、一意な親名または明示IDで共通自動子起動へ接続します。旧運用は既定のままで、未接続APIは旧DBへfallbackせず拒否します。切替完了はまだ宣言しません。[移行手順](docs/fresh-global-update.md)の未受入事項を確認してください。
+
+## 2026.10.26
+
+### Androidホーム画面のショートカットからスマホ閲覧画面を開けるよう修正
+
+本人・Hostと指定されたOriginの照合を保ったまま、queryなしの厳密な`/`へのGET/HEADで、単一の`Sec-Fetch-Site: cross-site`・`Sec-Fetch-Mode: navigate`・`Sec-Fetch-Dest: document`が揃う画面遷移だけを受け付けます。画面の殻を返す例外で、`/view/*`、画像・JS・CSS・font、POSTなどの操作、不一致Originや曖昧なpathの許可には広げません。CSP・no-store・既定オフと既存の認証・framing検査を維持し、API世代は変更しません。実Android・Serveの確認は配備後の別受入です。
+
+### スマホ閲覧の設定をエージェントに頼めるようにする
+
+[スマホ閲覧の手順](docs/mobile.md)に、agent に渡して設定させるための表を加えました。agent が実行できる段と、Tailscale の管理画面やスマホでの操作が要る本人の段を分けています。Serve 名・本人の login・スマホの IP の調べ方、HTTPS 証明書の前提、Serve を `--bg` で残す方法、macOS での CLI の場所も書きました。
+
+### 指定したスマホからTelemetryの状況を見る閲覧用画面
+
+既定オフのmobile readerを追加しました。英語・darkの要確認一覧とMail metadataの時間軸、PCと共通のNETWORK描画・力学・6設定を使えます。task・private path・操作API・quota更新は含めず（Mail本文は後述の1件ずつの表示だけ）、取得不能/古い観測を正常0へ変えません。
+
+Graphは直近24時間に活動が確認されたagentを既定にし、15分〜30日の細かい期間sliderと明示した全履歴を選べます。Allは選択期間内の全体です。最近活動した退役済みを含め、不明な活動時刻を現在で補いません。専用アイコンは認証後にPCの既存設定から解決し、科学者の肖像・イニシャルへfallbackします。
+
+本人を照合するloopback relayと、指定スマホを絞る実効tailnet policyを分け、Tailscale Serveでの手動有効化/停止手順を[日英guide](docs/mobile.md)へ記載しました。通常installでは待受/Serveを開始しません。legacy loopback専用のMail metadata/肖像取得と期間契約を追加します。実Serve・本人スマホの受入は別途必要です。
+
+### スマホのMailを1件ずつ開き、Graphの2体間の履歴を確認
+
+ActivityのMail、またはGraphのMail線から2体間の一覧を開き、選んだ1件の件名と本文を文字として読めます。一覧はmetadataのみで、本文をまとめてスマホへ送りません。方向別の絞込、200宛先行ごとのOlder/Newer、Mac内だけの直近24h・最大2000通/32MiBのメモリcacheを追加しました。上限や失効・取得不能を明示し、read/ACK・返信・添付・操作は追加しません。既定オフと本人認証を維持し、指定スマホの実効policyは別途必要です。単件内容とmetadata pageの契約追加によりAPI世代を30へ更新します（前回のリリース 2026.10.25 は27。間の世代は単独では配布していません）。[手順と制限](docs/mobile.md)を参照してください。
+
+## 2026.10.25
+
+### Orbit ロゴを header と favicon に追加
+
+ORRERY Telemetry の名前の左に Orbit ロゴを配置し、favicon にも同じ形を使います。header は既存の dark / light 切替、favicon はブラウザの明暗設定に合わせます。既存の操作と API 世代は変えません。
+
+### dsh / Hermes の起動指示を短く整理
+
+dsh / Hermes の指示を専用の短い文書へ整理し、ORRERY の子作成や raw 認証回復などの手順を省きました。共通の Mail 規則、共有編集の予約と自己専用 scratch の区別、失敗時の停止条件は保持します。初回と同じ ID の再開で同じ生成経路を使い、Claude / Codex の指示本文、native helper 設定、skills の配布は変えません。API 世代の変更はありません。[起動方法](docs/launchers.md) / [English](docs/launchers.en.md)。
+
+### legacy dashboard で不信な Host を操作前に拒否
+
+全 HTTP メソッド・全パスの Host を固定の許可先と照合し、不信・欠落・重複・不正な Host を dispatch 前に拒否します。POST の Origin は、その Host に対応する固定 origin とだけ照合します。既定の loopback 利用は維持し、LAN / VPN 利用者は更新前に追加の固定 origin を [設定](docs/configuration.md#lan--vpn-から使う場合の-host-設定) してください。installer が保存し、dashboard の各 service 起動経路へ引き継ぎます。
+
+認証は追加しません。既存の global capability 認証と公開 static resource の扱いは維持します。API の endpoint・field・応答の意味は変わらないため、API generation は据え置きます。
+
+### 公開履歴中のファイル名に含まれる禁止識別子を検出
+
+履歴guardで、本文が無害でもblobのファイル名に禁止識別子があれば拒否するようにしました。従来のpath照合はblob以外に限られており、文字の大小ではなく対象の分岐による漏れでした。既存の禁止pattern・許可list・本文やmetadata・archiveの検査は維持し、合成入力で小文字・大文字・混在の回帰を確認します。
+
+## 2026.10.24
+
+### Hermesの更新で既存の管理sourceを再利用
+
+Hermesの新世代を作るとき、明示したcacheを優先し、指定がなければ所有記録を確認できる既存管理世代のGit repositoryを独立コピーして再利用します。履歴とtagを保ち、未commitの変更はコピーせず、元の世代にも依存しません。利用できる管理sourceがない場合の公式GitHubからのcloneと、固定commit照合・CA修正・PM依存関係の検証は従来どおりです。新規導入の取得量削減、PMの通信不要、実環境での導入時間を保証する変更ではありません（[導入手順](docs/install.md)）。
+
+### Keep multiple native connections (API 27)
+
+Keep existing `deepseek`/`strata` settings and add explicitly declared connection IDs such as `strata-epyc`. API 27 separates each connection's ID from its DeepSeek/Local kind. Equal wire model IDs on two servers retain their own route, credential reference, limits and helper choices. Catalog, standard API/CLI launch, static admission, Linux credential references and native resume share the selector rules. The existing NEW AGENT tabs show connection labels; bilingual setup/configuration guides explain meaningful server names for cockpit. This does not add global-mode native support or claim live multi-server acceptance.
+
+## 2026.10.23.2
+
+### 管理HermesのCA依存を検証する新世代を構築
+
+Hermesの実行コードは固定したまま、公式更新からcertifi 2026.10.19とPM用uv 0.13.5の依存入力3件だけを取り込みます。旧入力・patch・適用後のhashを照合し、両PM導入と再同期で同じ入力を使います。baseと更新元のcommitを分け、native stampには変更済みsourceであることを記録します。
+
+新世代はrecipeのdigestで識別し、旧v2やprofileを上書きしません。公開前と再利用時には、実際のCA bundle・version・解決済みlock・PM用uvの実行fileとartifactの整合を確認します。静的catalog検査はHermesや資格helperを実行しません。対象はMacとGNU/Linux（WSLを含む）のarm64/x64で、旧artifactが残るBionicなどは停止します。既存の稼働process・手動Hermes・システムCA・呼出し元のpip/uvは変更しません。[導入と検証](integrations/hermes/README.md#installation-and-offline-checks)を参照してください。
+
+### 新しいMail環境で修正版のCA bundleを要求
+
+新しく構築するORRERY Mail環境の依存に`certifi>=2026.10.19`を追加しました。再導入時もこの下限を適用します。2026.10.18でも影響するemSign rootは除去済みですが、影響しないrootとの互換性のため2026.10.19以上を採用します（[Pythonの公式案内](https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576)）。
+
+稼働中のMailをそのまま使う通常のkeepでは、既存venvを変更しません。既存Mailへの適用は[通常のbuild切替手順](docs/agentstack-mail-update.md#--update-mail-による差し替え)で行います。この変更はmanaged Hermesの固定依存や、pip/uv自身が内蔵するCA bundleの更新を含みません。
+
+### 更新時に保存済みの設定を保持
+
+`env.sh` に保存された非既定値を、`AGENTSTACK_CHOSEN_SETTINGS` の有無や列挙内容にかかわらず引き継ぐようにしました。子のターミナルを自動で開かない設定（`AGENTSTACK_AUTO_OPEN_CHILD=0`）や独自の肖像フォルダーが、更新時に既定値へ戻るのを防ぎます。今回明示した値・空値による個別reset・`--reset-settings` は引き続き優先し、設定の値自体を削除した場合は既定値に戻ります。ORRERY Mail の識別情報と配置を保持する規則も変わりません。
+
+子のターミナル自動表示と肖像フォルダーに実際の変更がある場合は、installer の計画に旧値 → 新値を表示します。[設定の引き継ぎ](docs/install.md#前回の設定の引き継ぎ)を日英で更新しました（[#354](https://github.com/gyroid-eth/orrery-telemetry/issues/354)）。
+
+### Codex の長い作業中に、背景のターミナルが動いていても作業中と表示する
+
+Codex が1分以上作業していて、背景のターミナルが動いている（「· 1 background terminal running · /ps to view · /stop to close」が続く）とき、作業中ではなく待機中と表示されることがありました。このときも作業中（WORKING）と表示します。この表示の後ろに、ほかの文字が続く場合は、これまでどおり作業中とは判定しません。
+
+### 内部ファイルの安全な置換中にも読取りを継続
+
+設定や実行状態の内部ファイルが安全な別ファイルへ置き換わった場合、読取りを最大2回までやり直すようにしました。所有者・アクセス権・ファイル種類・リンク数の検査とサイズ上限は維持し、安全でないファイルや権限・入出力エラーは再試行で無視しません。
+
+### 保存元を維持する Mail の未公開 B1 核を追加
+
+#213 の S′向けに、全保存元の名前解決、本人資格と対象の分離、純粋な閲覧、本人 read/ack、再試行の固定を隔離して検証する核を追加しました。既定 server・installer・hook・休眠 global mode には接続せず、本番挙動と dashboard API generation は変わりません。send/reply は宛先 decision までで、実配送・予約の絶対 path 化・切替は後続です。[実装範囲](docs/storage-origin-b1.md)を参照してください。
+
+private updater の旧 binding 解決は、資格履歴を反映した私有 index の全検証後に行います。準備不足・整合性破損は owner の要解決と分けて停止します。decision には接続先と解決 revision を含め、実 whois の返値と副作用のない境界も検証します。
+
+## 2026.10.23.1
+
+### tmux終了後に残ったsocketでも新しいセッションを起動
+
+標準のtmux接続先に安全な所有socketだけが残っている場合、tmuxがserver不在を明示すれば、新しいセッションを作成できるようにしました。作成成功後はsocketの識別情報を更新します。権限エラーや不明な応答、socketの差替え、既存の同名セッションやglobalセッションに対する検査は維持します。
+
+### WSL の鍵束の確認で、busctl の実際の表示例に合わせる
+
+WSL の鍵束で既存の項目を確かめる手順の表示例を、`busctl` が実際に出す形（`aoao 0 0`）に直しました（日英）。Unlock 済み・Locked の件数がどちらも0という意味は変わりません。手順と動作は変更していません。
+
+## 2026.10.23
+
+### 同日中の追加リリースに枝番を使えるようにする
+
+変更履歴の正規リリーススクリプトが、日付形式に加えて`YYYY.MM.DD.N`を受け付けます。同日の`.1`から正の整数で増やし、`.9`より`.10`を新しい版として扱います。公開済みの節・VERSION・タグを上書きする処理は追加せず、同じ版の再利用や古い版への巻き戻しは引き続き拒否します。API generationは変更しません。
+
+### DeepSeek・Local LLMもREADMEの冒頭から選べる導入案内
+
+README・ドキュメント索引・単独導入の入口を日英で整理しました。Claude Code・Codex・DeepSeek・Local LLMを最初から示し、共通installのあと、CLIへのログインかdsh/HermesとAPIの初期設定へ分岐します。DeepSeek/Localだけ使う場合にClaude/Codexの導入を前提とせず、APIの初期設定ガイドも新規利用者から開ける説明にしました。共通導入だけでAPI設定まで完了するという保証は加えていません。
+
+agentを使わない人向けに、導入時の設定例を私有フォルダーへコピーし、参照先を合わせて有効化・検査・反映する手順を追加しました。Ubuntu WSLでは標準GUIでの鍵束作成と非表示入力によるキー保存を日英で案内します。新規WSLでの鍵束準備を含む全経路の実機確認は未完了と明記し、保存成功と実接続・Mailの成功を区別しています。
+
+Localのキー参照、dshの対応API、HermesのHTTPSとAPI形式の条件を明示し、詳しい対応範囲にも英語版を追加しました。WSLの実Telemetryを表示したNEW AGENTのPNG・選択GIFを掲載し、科学者の肖像と4系統、dsh/Hermesの選択を示します。録画は起動前の選択で、実API応答の保証ではありません。API generationは変更しません。
+
+### 既存利用者向けにDeepSeek・Localの初期設定を案内
+
+通常更新と初回API追加を区別し、dsh/Hermesの導入、DeepSeek APIキーの取得、Mac/Ubuntuでの非表示保存、設定例の準備、NEW AGENTからの確認までを日英のガイドにまとめました。README・install・設定例から同じ案内へ進めます。APIキーの登録画面や自動ログイン機能を追加する変更ではありません。
+
+### Claudeのファイル編集承認待ちを表示
+
+編集確認の選択肢に「Esc to cancel · Tab to amend」が続く画面もAPPROVALとして表示します。過去の承認画面が残っていても、現在の入力待ちや作業中の状態を優先します。承認操作そのものは利用者が行います。
+
+## 2026.10.22
+
+DeepSeek と Strata（Local/Qwen）を dsh / Hermes から選ぶ標準 NEW AGENT、子ごとの安定した HOME と会話の再開、macOS Keychain / Linux Secret Service の資格参照、設定例と画面付き手順をまとめたリリースです。公開 API は世代26です。
+
+以下は PR 番号の降順に並べた変更の履歴です。途中段階の「managed」専用起動・backend 共有 HOME・当時の API 世代・後続予定は、その後の標準化と子別 HOME に置き換わっています。現在の導入方法と制限は [導入手順](docs/install.md)、[標準 catalog](docs/managed-catalog.md)、[native 機能の対応範囲](docs/native-capabilities.md) を参照してください。Windows の検証対象は Ubuntu WSL2 であり、Windows native 版とは区別します。
+
+### paneの再利用後にログ保存がidentity不一致で止まる問題を修正
+
+起動時のagent名・現在のtmux session名・同じsession/projectの自己登録がすべて一致するとき、古いpane名のメモだけを理由に編集を拒否しないようにしました。登録が不明な場合や、現在の名前・自己登録どうしが衝突する場合は引き続き拒否します。メモや他agentの登録を自動で書き換えず、予約確認も維持します。
+
+### 親が承認した同じ Codex hook を子へ継承
+
+正式な親を指定した Codex の起動・再開で、同じ project の検証済み親 HOME から hook の承認記録だけを子へ引き継ぎます。親が無効にした hook と承認 hash のない記録は継承対象にせず、source・既存子の明示した無効化を維持します。親の確認に失敗した場合や更新中の場合は承認を追加せず、変更された hook の再 review を維持します。共通 HOME・親の設定や、認証・MCP・履歴の継承元は変更しません。公開 API 世代は変更しません。
+
+### dsh の metrics 表示中も現在の作業状態を読む
+
+context の下に metrics が表示され、interrupt の案内が隠れる場合も、現在の入力枠と隣接する正規の作業表示から生成中を判定します。明示的な入力待ちの案内は待機とし、未対応の表示や証拠不足を待機・終了と推測しません。過去の出力を全画面検索する範囲は広げません。
+
+### 現在の端末表示に合わせて作業中・承認待ちを判定
+
+Claude Code / Codex の過去ログに作業中の表示が残っていても、現在の入力欄や承認画面に合わせて状態を表示するよう修正しました。現在の作業中表示と入力欄が同時に出ている場合は作業中を保ち、経過時間もその作業の表示から読みます。
+
+Codex の「Hooks need review」と正規の選択肢が現在表示されている場合は、既存の承認待ち表示で知らせます。フックの承認操作やエージェントの生存・終了判定は変更しません。
+
+### NEW AGENT の画像を実際の catalog と肖像へ差し替え
+
+同梱 Telemetry の画像と操作 GIF を、全4種類の接続先・正規の科学者名と肖像・dsh / Hermes を表示する実画面へ差し替えました。cockpit の起動画面とは別であることと、DECK / NETWORK の合成表示例との違いを日英の案内に明記しました。
+
+### Model・Harnessの画面ガイドを追加
+
+DeepSeek / Local と dsh / Hermes の選び方を、New Agent・DECK・NETWORK のスクリーンショットと短い操作 GIF で確認できるようにしました。日英の README と画面案内を現在の選択 UI・子別 HOME・資格参照の説明へ同期しました。画像は架空データを製品 UI で表示した操作例で、資格の登録や全組合せの通し受け入れを保証するものではありません。
+
+### Hermes の記憶分離と設定例の案内を更新
+
+Hermes の新しい子が project と正式名ごとの独立した HOME を使うこと、旧共有 HOME の再開を自動移行しないことを日英の導入手順へ反映しました。設定例の README と、会話の再開・記憶の復帰・実環境での受け入れの確認範囲も案内しています。
+
+metadata 更新への耐性を確認する試験の時計を制御し、CI の処理負荷で待機期限をまたぐと誤って失敗する条件を除きました。実際の更新前後の通信と、期限到達時の打ち切りは引き続き検査します。製品の待機期限は変更しません。
+
+### Hermes の Mail tools を標準の MCP discovery につなぐ
+
+Hermes の子で、起動時に Mail が configured と表示されても tools が登録されない問題を修正しました。選んだ MCP 設定を子の overlay に加え、native の起動判定が読む同じ private HOME の config.yaml にも生成します。選ばなかった server は無効にし、再選択・設定更新にも追随します。MCP 節以外の YAML、memory、HOME と resume の session ID は保持します。native 本体・導入世代・資格情報の guard と公開 API 世代は変更しません。
+
+### Linux の dsh が稼働中でも終了済みと表示される問題を修正
+
+Linux で Node の process 名が `MainThread` になる場合も、pane の子孫にある dsh の生存判定を行います。実行引数が正規の dsh entry と一致することを引き続き必須とし、無関係な process や他の provider の判定は変えません。
+
+### dsh・Hermesの非有効な設定例を同梱
+
+install時に日英手順と設定例を配り、導入済みruntimeの検証済み参照を埋めた非有効snapshotを用意します。既存例や私有設定を上書きせず、既存agentがコピー先と非秘密設定の準備を補助できます。MacのKeychain参照とLinuxのSecret Service参照を分け、鍵入力と有効化の承認は本人が行います。uninstallは所有記録とhashが一致する未編集の例だけを削除します。例の配布は、実資格・接続・Mac/WSLの通し受入の成功を意味しません。API世代は変更しません。
+
+### Strata の Local / Qwen 表示を Telemetry でも揃える
+
+Strata の子をメダリオンとカードで Local の六角形として表示し、Qwen のロゴを既存の資源から表示します。未知の maker は空の六角形を維持します。API 世代を26へ上げ、`/api/graph` の node に表示用の正規化前の `model_raw` を追加します。provider / locality の意味は変更しません。
+
+### 同梱の NEW AGENT にモデルとハーネスの選択を追加
+
+同梱ダッシュボードでも、モデルに対応する Harness と Helper model を標準の catalog から選べます。Effort は有効な catalog の既定値を送り、既定が不明な場合はハーネスの設定を使います。Terminal の未操作時の起動方針と、既存の親・作業ツリー・下書きを維持します。
+
+Mail 更新の機能試験を従来の「実停止10秒未満」の性能 smoke から分離し、更新後の PID・runner・同じ DB・manifest・再実行の検証を維持します。既定8秒の停止見込み予算は固定入力で境界を検証します。実測13.3秒の性能不合格と原因未確定の記録は残し、性能改善や10秒以内の達成を意味しません。
+
+### 試験の PID ファイル公開の競合を修正
+
+遅れて現れる PID ファイルの所有元を確かめる試験で、書込み途中の空ファイルを読む競合を防ぎました。試験用のファイルを完成させてから公開し、無関係なプロセスを終了しない検査は維持しています。製品の終了処理は変更していません。
+
+### Ubuntu WSL 向けに非秘密の資格参照を共通化
+
+明示した Secret Service の参照を dsh・Hermes・DeepSeek 残高に共通で渡す内部 reader と、Linux の静的な catalog 検査を追加しました。既存の Mac 設定は維持し、参照の競合や取得失敗で別の資格へ切り替えません。選択資格の直接抽出は既存 guard で拒否します。実 WSL の構築・認証・Mail・終了と再開は受け入れ前です。公開 login CLI、Windows bridge、設定の自動移行は追加しません。
+
+### provider・model・harness から導入方法を選べる文書に整理
+
+既存 agent の観測、API の model での agent 作成、agent 同士の連携の3つの入口を追加しました。DeepSeek / Local と dsh / Hermes の現在の組合せ、手動設定・OS・画面の制限、未完成の機能と未受け入れの Local effort を区別し、既存の英語入口にも反映しました。段Aの文書を歴史記録と明示し、古い Hermes effort の説明を更新しました。製品の機能や設定は変更しません。
+
+### Hermes の子ごとに記憶の保存先を分離
+
+新しい Hermes の子は project と正式な名前で決まる永続 HOME を使い、別の子の
+MEMORY/USER を共有しません。同じ identity の標準 resume は保存 HOME と正確な
+native session ID を維持します。共通の記憶・認証・利用者設定はコピーせず、
+通常の exit で子 HOME を削除しません。
+
+旧共有 HOME の resume は理由付きで停止し、旧データを保持します。適用には旧 resume
+中断の明示了承が必要です。HOME/pin の検査は resume 設定の更新より先に行います。
+実 CLI での記憶の復帰は、会話履歴とは分けて受け入れ確認します。
+
+### Mail通知が測定用端末へ届くまでの遅延を採取
+
+通常のbound proxyとwatcherを使う手動計測器を追加しました。送信呼出し・成功応答・端末での通知submitを単調時計で区別し、負の応答差、未確認送信、欠測、遅着、重複を残します。合成seedと隔離fixture用のJSON処理量の計数も備えます。watcherの配送・timer・製品の既定は変更しません。実identityとサービスの準備・採取はoperatorの明示操作です。
+
+送信の結果行が残らない中断も未確認に数えます。I/O観測は開始と終了を照合し、未終了のhelperや終了を証明できない配送workerを含むrunは不完全として残します。
+
+[採取手順と観測の境界](docs/agentstack-mail.md#通知端末までの遅延を採取する)を参照してください。
+
+### Local の Hermes で manual thinking の Effort を選択
+
+Anthropic 互換の manual thinking 経路で、ハーネスが異なる budget に変換する
+Low・Medium・High・Xhigh を選べるようにしました。選択中のモデルと固定版の
+native 構造から能力を読み、別の thinking 方針や未知の構造には適用しません。
+未操作と既定に戻す操作では Effort を指定せず、保存設定と既存の Chat 経路を維持します。
+Local サーバでの要求の受理・効果は別途確認が必要です。
+
+### DeepSeek・Local の子の委任手順を追加
+
+`delegate` skill に dsh・Hermes の子を標準の spawn API から作る手順を追加しました。公開 catalog の候補を選び、本人を親として登録し、返された子の名前で起動状態を確認します。Claude・Codex の既存手順は維持し、両ハーネスへの skill のリンクも試験で確認します。
+
+### Hermes の effort を選べるように
+
+Hermes の Chat Completions 経路では、固定版から reasoning の選択肢を読み、モデルとハーネスを選んだ時の effort に反映します。他の transport は不明のままです。未操作の時は引数を追加せず、保存済みの設定を含む Hermes の実効設定を使います。公開の既定値は推測しません。dsh・Claude・Codex の選択肢は変わりません。
+
+DeepSeek の正式な thinking 無効化の値 `none` を含め、ハーネスの値をそのまま渡します。`max` に丸められる `ultra` は別の段として表示しません。
+
+### しりとりの通しの確認を DeepSeek・Local の子にも広げる
+
+はじめての通しの確認（しりとり3往復）を、DeepSeek・Local の子（dsh・Hermes）でも行う手順を、getting-started と README に足しました。dsh と Hermes はそれぞれ確かめます。
+
+### Mail の archive commit の CPU 負荷を軽減
+
+- macOS の archive の stage・commit に native Git を使い、大きな index を Python で読み書きする負荷を減らします。既存の履歴・Agent trailer・commit hook・非同期 queue と、失敗時の retry は維持します。macOS 以外の処理は変更しません。
+
+- 監査fileのstageはignore・改行変換・clean filterを通さず、生bytesと実行bit・symlinkを保持します。
+
+### 子へ渡す指示を実際のハーネスにそろえる
+
+dsh・Hermes の子には、特定の別プログラムを自分として扱う記述を含まない指示を渡します。Mail・ファイル予約・待機の共通規則は保ち、共有する節を読み出せない場合は起動前に失敗を返します。既存の Claude・Codex 向けの指示は変わりません。
+
+### Claude の起動時刻を記録する順序を修正
+
+Claude の新規起動で、開始待ちの状態を設定してから時刻を記録し、直ちに子を起動する順序へそろえます。
+
+### Hermes の DeepSeek 接続で thinking をツール呼び出し後も引き継ぐ
+
+固定版の Anthropic 互換 converter が署名付き thinking を除くため、Hermes の DeepSeek 公式接続は `/v1` の chat-completions 経路を使用します。主モデルと補助モデルで同じ経路を使い、effort 未指定でも reasoning を引き継ぎます。Strata・独自の接続先や他のハーネスは変更せず、試し用の effort や token 上限は追加しません。
+
+### dsh の起動時に出る補助表示pluginの警告を抑制
+
+固定版runtimeで依存不足により読み込めない`working-activity`を生成設定で無効にし、起動のたびに出ていた警告とstack traceを抑制します。通常の状態行による作業中の判定は維持し、runtimeのlockや世代を作り直す変更はありません。
+
+### dsh の色付き内部診断を拒否理由から除外
+
+共通hookの拒否理由ではANSI CSIの装飾を除いてから内部診断を判定するようにしました。色付きのTracebackやRuntimeErrorが子へ返る問題を直し、通常の公開拒否理由と2000文字の扱いは維持します。
+
+### Native の作業・質問・承認の表示を判定
+
+dsh/Hermes の現在の操作表示から、作業中・質問待ち・承認待ちを既存の `act_state` に反映します。完全な入力欄があり作業・質問・承認の印が無い場合は入力待ちとします。表示が確認できない場合は不明のままとし、終了と推測しません。Claude/Codex の分類は維持します。API 世代は24です。[対応する表示と制限](docs/native-capabilities.md#activity-classification-boundary)を参照してください。
+
+Hermes の長い承認で見出しが画面外に出ても、現在の承認用入力欄と操作案内が揃えば承認待ちとして表示します。
+
+### Hermes の表示と hook の拒否理由を修正
+
+Hermes の子に同梱の翻訳 catalog を渡し、画面に翻訳 key が出る問題を修正した。hook が exit 2 で拒否したときは、公開の理由を最大 2000 文字で子へ返す。内部診断や成功時の生の出力は表示しない。
+
+MCP は製品の Mail と起動時に明示選択したものだけを子の overlay に写し、以前の profile に残る未選択の server を無効にする。永続 profile の MCP 設定は変更しない。
+
+未回答の telemetry 同意は製品の profile 内で「送らない」を既定にし、再開時に同意画面が入力を塞がないようにした。回答済みの選択と他の設定は維持する。
+
+### dsh の資格サービスと初回画面を修正
+
+標準起動の dsh が Keychain の資格サービスを使うよう、生成設定で bundled の資格サービスを無効にし、専用 plugin を別行で挿入します。既存行の `name` が一致条件として扱われ、変更が読み飛ばされる問題を直しました。
+
+子の TUI は英語で起動し、子ごとの設定領域に言語と初回設定の完了状態を用意します。利用者の TUI 設定は変更しません。偽の Keychain lookup とローカル HTTP 受け側を使い、実 dsh の provider が認証ヘッダーを送る正例、資格 plugin の欠落・lookup 失敗で代替の資格を使わない負例を追加しました。
+
+共通hookがexit 2で拒否した理由を子へ返し、予約が必要な場合にその案内を読めるようにしました。理由は2000文字までとし、他の失敗の内部診断は引き続き固定文にします。
+
+### 旧 managed 経路の削除
+
+- API 25: 旧 `attempt_id` による起動要求と `spawn-status` の attempt 照会を廃止しました。専用の managed controller と、usage 必須・通信先制限を含む旧 dsh/Hermes runtime 層を削除しました。DeepSeek と Local は標準の起動、名前による状態照会、native resume、共通の後片付けを使います。
+
+- 標準のDeepSeek・Local catalogと起動が使うmanifest参照およびNode pathを、通常の更新で引き継ぐ設定として分類しました。既存の設定名と導入optionを維持し、operatorの明示値を保存値で上書きしません。
+
+### DeepSeek・Local を標準の子エージェント起動へ合流
+
+DeepSeek・Local の選択したモデルと harness を catalog の能力で照合し、Claude・Codex と同じ `spawn_child.sh` へ渡します。モデル名から backend を推測せず、harness と backend を明示します。名前・親・作業場所・worktree・端末の選択と、名前による起動状況の確認は共通です。未指定の effort を試運転の値で補わず、helper は選択した model × harness が公開する同 backend の ID だけを受け付けます。native の context は専用の status 表示から読み、非表示・不明を推測で埋めません。
+
+API generation を 22 から 23 へ更新します。標準 `/api/spawn` は DeepSeek・Local でも `child_name` / `tmux_session` を返し、managed attempt の応答を混ぜません。通常の catalog から managed 専用の表示項目を除きます。第1段階の経路の変更であり、runtime の受け入れや tool の開放の完了を示すものではありません。
+
+起動失敗後の後片付けも共通 cleanup の結果に従います。確認に失敗したときは失敗・cleanup unknown を返し、復旧に必要な state・資格・handoff を API が削除しません。
+
+dsh・Hermes の再開は本人の session 作成イベントの native ID を使い、同じ登録・state・profile を保ちます。履歴の推測や初期 task の再送はせず、config 生成に失敗した場合も復旧の資格を残します。
+
+### dsh の子ごとに TUI の model と履歴を分離
+
+dsh の TUI に data dir の env の入口を1行だけ追加し、子ごとの永続 dir と起動時の model 選択を設定します。子Aの `/model` が子Bや利用者の dsh に影響しなくなります。HOME 全体は変えません。専用の `plain-datadir` 世代を作り、旧い世代を上書きしません。[起動と状態の保存](docs/dsh-thin.md)を参照してください。
+
+### dsh の許可された hook の公開警告を表示する
+
+dsh の標準 tool から共通 hook を呼ぶとき、成功した hook の stdout 全体が JSON object で、非空の `systemMessage` を持つ場合だけ警告を表示します。通常の成功では表示を増やさず、生の stderr・JSON でない出力・失敗した hook の出力は表示しません。
+
+### Fixed
+- Claude・Codex の直接登録後の起動失敗で、停止と予約解放・retire を確認してから後片付けするようにしました。確認できない場合は復旧用の state・資格・worktree を残し、非0で終了します。
+- 作成応答が未確認の子は保持し、自己更新を引き継いだ watch も停止後の Mail cleanup を確認します。失敗した起動は retire 確認後に資格を即削除します。
+
+### Added
+
+- 標準の子起動から上流の Hermes CLI を使い、子ごとの設定 overlay と種類ごとの
+  永続 profile で MCP・指示・skills・主と補助の model・明示した session ID を渡す。
+  task や session の上限は追加しない。
+- native の tool を実作業ディレクトリから共通の鍵読取・登録・予約の hook に通し、
+  編集成功後は予約を解放する。既存の owned な Hermes v2 は再検証して plain の識別を付ける。
+- 子専用の provider 設定で、永続 profile に残る旧宛先や保存済み認証が選択した
+  route・key_cmd に混ざるのを防ぐ。既存 profile と記憶は書き換えない。
+- 補助処理と delegation に残る旧宛先・認証の参照も子の overlay 内だけで空にし、
+  選択した provider の鍵を旧宛先へ継承しない。
+
+### dsh を標準の CLI と設定で起動する準備
+
+dsh の provider・model・effort・MCP・指示・skill を native profile へ投影し、標準の登録・鍵読取・予約 hook を tool の実行前へ接続します。鍵は credentials plugin が Keychain から一度だけ memory へ取得します。旧 managed の試し用上限・egress・専用の pane 入口は使わず、patch の無い別の固定 runtime 世代を用意します。旧世代と履歴は移行中も保持します。[設定と制限](docs/dsh-thin.md)を参照してください。
+
+### 標準の子の起動へ dsh・Hermes の接続口を追加
+
+- 明示 opt-in の plain 世代に対し、`spawn_child.sh --harness dsh|hermes --backend deepseek|strata` から正規の登録 binding・製品 Mail proxy・実作業dirを引き継ぎ、native CLI の config と argv を生成する基盤を追加しました。各ハーネスの generator の導入は後続 PR です。
+- 共通 cleanup は、予約の解放・retire・retired の確認に失敗したときに資格を残して非0を返します。native tool の小文字名と provider/credential file の参照も共通の鍵読取判定へ渡せます。
+- 追加 MCP の選択は共通の tool policy を使い、native config に写せない承認は起動前に明示して拒否します。API generation は変更しません。
+
+### Hermes のバージョン読込で Git を起動しないよう修正
+
+Hermes の新しい v2 runtime は、固定版の install stamp を検証して保存し、バージョン読込時の Git 起動を不要にします。既存 v1 は移行せず保持します。導入後は統括が私有 template の runtime 参照を新しい generation に向けてください。installer は template を自動変更しません。
+
+### effortの段と既定を固定runtimeから自動取得
+
+dshのinstall/updateで鍵なし・通信なしの能力cacheを作り、model×harnessごとのefforts/default_effort/effort_sourceをcatalogへ投影します。手書きmanifestのlow/highと試行既定を能力の根拠にせず、未取得・版違いはunknownとして未指定の起動を残します。Strataもharness由来と明記し、Hermesの初版はunknownです。
+
+APIのmodel.harnesses[]へ上記3fieldを追加します。API世代の更新は対話のI0契約拡張とまとめて行います。
+
+### managed の子を継続対話で使う
+
+API 世代を22へ上げ、親と初期入力を省略できる managed 対話を追加します。task の報告後も同じ pane で続け、閉じたときに予約の解放・retire・後片付けを確認します。通常の Mail tool を親なしでも保持し、task の報告と runtime・cleanup の成否を分けます。
+
+追加指示は pane から可能で、受信 Mail の自動配送は後続です。effort を明示しない場合はハーネスの既定を使い、選択肢は固定 runtime の能力 cache を harness ごとに検査します。
+
+### dsh の provider エラーを診断できるようにする
+
+失敗した要求の出力 token 数と、資格情報を伏せた長さ制限付きの構造化エラーを記録します。生成本文は保存しません。adapter の出力既定値より context が小さい経路向けに、Strata のサーバー側設定 `fit_max_tokens` を文書化しました。
+
+### dsh の起動失敗を安全な診断で示す
+
+CLI と起動記録に、失敗した操作・例外の種類・固定の要約を残します。Strata の状態は観測しますが、共有サーバーが使用中または状態不明であることだけを理由に要求を拒否しません。送信先と beta 互換性の検査は維持します。
+
+### dsh の初期化・起動から試運転用の負荷制限を外す
+
+試運転で追加された load 15 以上での拒否を廃止しました。
+
+### Hermes の準備時の失敗と後片付けを修正
+
+installer が所有する永続 profiles へのリンクを正しく検査し、準備時に誤って拒否する問題を修正します。失敗時は鍵や本文を含めず段と固定の理由コードを記録します。起動前・予約前に止まり退役が確認された失敗は、架空の process の消滅を記録せず後片付けを完了できます。
+
+### managed catalogの表示文言を英語へ統一
+
+英語のcockpitに合わせ、helperの表示を「Same as main」、未取得のcontext説明を「Server-reported context not available yet」に統一しました。選択肢とcontextの未取得状態は維持します。
+
+### launchd から managed provider と worker の module を解決する
+
+作業dirが `/` で PYTHONPATH が無い dashboard でも DeepSeek／Strata の catalog を返し、dsh／Hermes の worker が同じインストール先の adapter と core を読み込めるようにした。catalog と worker の失敗時は秘密を含めない診断を1行出す。
+
+### Hermes の任意導入の失敗を修正
+
+Hermes の PM が拒否するオプションの同時指定を避け、標準依存の導入後に Anthropic 用の依存を追加します。導入に失敗した場合は stdout と stderr の末尾をログに残し、失敗理由が欠ける問題を修正します。導入失敗を利用可能な runtime として保存しません。
+
+### managed 子の設定を更新・ログイン後も保持
+
+dshの固定Node参照をenv.shへ保存し、旧導入はcurrent.jsonから補完します。`--managed-spawn-config`で私有manifestの参照を保存し、dashboardのlaunchd/systemd/背景起動へ引き継ぎます。
+
+dshの製品雛形から試し用の要求回数・出力token上限を除去しました。未指定はモデルとハーネスの既定を使い、明示した正の整数の上限だけ適用します。要求timeoutと許可先・usageの検査は維持します。
+
+### Claude の子にも Effort を選べるようにする
+
+起動画面で Claude を選んだときも Effort を選べるようになりました。選べる段階は Claude Code の公式文書にあるモデルごとの表（Opus 4.6 と Sonnet 4.6 は xhigh なし、それ以前の対応外のモデルは無し）に従い、選んだ値は `claude --effort` で渡します。指定しなければ従来どおり何も渡しません。Effort を指定した子は、事前起動の待機セッションを使わずに新しく起動します。Codex の Effort の挙動は変わりません。Helper model は Claude Code に専用の指定手段がないため、対応していません。
+
+### 日本語localeでもshellの表示行で変数名を正しく区切る
+
+macOSのbash 3.2で、日本語localeのときにDeepSeekのopt-in処理や登録失敗の案内が未定義変数エラーで止まる問題を修正しました。非ASCII文字が続く変数参照の終端を明示し、同じ形を検出する静的試験と日本語localeでの回帰試験を追加しました。
+
+### dsh と Hermes の任意導入
+
+`install.sh --enable-dsh --dsh-node /absolute/node` と `--enable-hermes` で、固定版の各runtimeとmanaged adapterを個別に導入できます。既定は取得なし、更新時は保存した選択を継承します。鍵や既存ログインは導入しません。
+
+runtimeは `harnesses/<harness>/<世代>` に配置し、通常uninstallはinstaller所有の世代だけを削除します。利用者のprofiles・記憶・skillsと手動のHermes環境は保持します。[導入手順](docs/install.md)を参照してください。
+
+### 管理された子の起動を legacy の opt-in に追加
+
+DeepSeek／Strata と dsh／Hermes を分けて選ぶ子の起動を追加。要求 ID による再照会、実 plugin-ready と task の成否の区別、私有作業dir、stop・release・retire 確認後の clean を接続。既定は無効。Hermes の同じ固定profileの同時起動は profile_busy で拒否する。API 世代を 20 から 21 に更新。設定と限界は [現在の標準 catalog](docs/managed-catalog.md)（managed 専用経路は後続の変更で廃止） を参照。
+
+### USAGE の DeepSeek の文言を英語にそろえる
+
+dashboard の USAGE と Settings の DeepSeek の残高まわりの文言を、cockpit と同じ英語にしました。
+
+### agentのshellからモデルの鍵を取り出す操作を止める
+
+ClaudeとCodexの実行前hookで、既存のモデル設定が参照する鍵の値をshellから取り出す操作を拒否します。MacとLinux/WSLで同じ判定を使い、属性照会や設定の検索は許可します。定義が無い場合は何もせず、検査に失敗した場合も通常のshell作業は止めません。Codexは更新後のhookの確認・承認が必要です。
+
+### 明示したprojectを解決できないgraphを正常表示しない
+
+legacy dashboardで明示したproject keyが見つからない場合や、その解決でSQLiteエラーが起きた場合、別の既定projectへ切り替えず、空のgraphと理由・`degraded: true`を返します。通常のgraphとspawn-onlyの両応答で理由を保持します。project keyが未指定の場合の既定動作は変わりません。
+
+### DeepSeekのロゴとUSD残高を明示opt-inにする
+
+段A の前半: 表示と残高。DeepSeek の子の起動は次の版。
+
+installerの `--enable-dsh` でDeepSeekロゴと残高表示だけを有効化し、`--disable-dsh` で無効化できる。
+既定は無効、flagなしの更新は選択を保つ。dsh・dsh-TUI・Nodeの取得やspawn候補は含まない。
+鍵は短命の取得workerだけがKeychainから読み、既存usageのproviderと4分cacheを使う。
+USD総額・利用可否は既存usageへ1行で載せ、金額を百分率quotaから分ける。
+LEFTは整数ドル、開いた行は小数第2位でfloorして `$12` / `$12.34` と表示する。
+取得失敗は `$?` にし、過去の金額や利用可能を残さない。API/cacheは原精度を保つ。
+`/api/quotas` の任意残高型を含むAPI generationは21。
+
+### 予約の更新応答で編集前の衝突を確認
+
+予約 guard が非公開の Mail resource を呼び、自己予約があっても編集を拒否する不具合を修正しました。Mail は予約の更新と他者の有効な排他予約の照合を同じ transaction で行い、Claude と Codex の guard は同じ応答の検査範囲と結果を確認します。hook 側の pattern 判定の写しを削除しました。
+
+Mail の更新を先に行ってから hook を配備してください。新 hook は旧 Mail の検査結果のない応答を拒否します。旧 hook（#269 より前）は新 Mail でも従来どおり動きます。到達した Mail の照会拒否や不正な検査結果は編集前に拒否し、renew は redirect を追わず、HTTP 応答後の本文読取失敗も拒否します。応答前の通信不能は identity の有無によらず既存の outage policy に従います。実サービスの切替は別途行ってください。
+
+### global 起動の nonce を位置引数として保持
+
+global mode の起動・再開で、起動ごとの照合値が `-` で始まると内部 CLI が option と誤認して失敗する問題を修正しました。detached wrapper と provider 起動の両方で option を終端し、owner・起動世代・process の照合は維持します。
+
+### 入力直後に容量エラーで止まり直した子も通知する
+
+作業再開を表示する前に、提出済みの新しい入力に続いて同じ容量エラーで止まった Codex CLI を再び親へ通知します。前の停止からの追記と、同じ入力・エラーの境界を別の capture で2回確認し、同じ行の再描画や未提出の入力では再通知しません。
+
+履歴の重なりが消えた場合や境界が曖昧な場合は、推測せず元の停止を維持するため、再試行を見逃すことがあります。対象は legacy の tmux 型 Codex CLI で、global mode は未対応です。詳細は [dashboard の自動通知](docs/dashboard.md) を参照してください。
+
+### 終了した agent を UI の RESUME で再開でき、PC の再起動で止まった子も再開できる状態に戻ります
+
+#263 以降、dashboard の tmux の呼び出しは対象を照合してから実行します。この照合は、存在しない session への `has-session` に「見つからない」と答えず、拒否（`TMUX_TARGET_UNAVAILABLE`）していました。その結果、2つのことが起きていました。
+
+- 終了した agent の RESUME が、例外で応答を返さず「the dashboard's answer was lost」で失敗していました。
+- 再起動や強制終了で止まった子は、起動時と1時間ごとの復旧で、tmux session が無いことを確かめられずに飛ばされていました。一度も再開できる状態に戻らず、RESUME は `config_unrestorable` で拒否されていました。
+
+session が無いかどうかは、session の一覧で判定するようにしました。一覧に名前が無ければ「無い」と読みます。一覧に名前があるときだけ従来どおり照合付きで確かめ、一覧を取れないときは「分からない」として子の state を変えません。API generation は変更しません。
+
+### Changed
+
+- 隔離 global client の新規起動を専用 tmux socket と正確な agent 名へ統一し、runner/provider の生存証明を分離しました。
+- 終了報告・退役・local cleanup を既存の intent で再開できるようにし、process 終了後と SessionStart 前の失敗にも同じ target/replay-end 入口を追加しました。既定の旧 mode は変更しません。
+
+### dashboard EXIT 試験の signal 捕捉を試験内に限定
+
+Antigravity の EXIT 試験が共有の `os.kill` を置き換えないようにし、別の cleanup の
+signal が混ざる不安定さを解消した。旧形での混入と、EXIT 自身の余分な signal を
+検出する負対照を追加した。製品の PID 選択・signal・起動経路と API generation は変更しない。
+
+### Codex の apply_patch に予約 guard を追加
+
+optional ORRERY plugin の承認済み PreToolUse hook が、予約の無い patch を編集前に拒否します。全対象 path と移動元・移動先を Claude と共通の guard で検査し、legacy mode の他者 exclusive 予約との重複は予約者を示して拒否します。doctor は guard の導入・有効化・承認状態を報告します。core と plugin を更新後、人が `/hooks` で review・承認し、新しい Codex process を起動してください。shell 経由の書き込みは対象外です。API generation の変更はありません。
+
+### Bash などで書いた予約ファイルの手動解放を案内する
+
+Claude の予約 hook が確認・自動解放するのは Edit / Write だけであることを、Claude Code の配布指示に明記しました。Bash・スクリプト・別ツールで書き込んだ場合は、書き終えた直後に接続経路に合った release を自分で実行します。
+
+### Compact 中の容量停止も親へ知らせる
+
+Codex の remote compact が容量エラーへ前置きを付けると、停止を見逃して親へ通知しない問題を修正しました。ソースで確認した固定の前置きだけを許可し、他の compact エラー・未知の前置き・過去の出力や引用を停止とみなさない条件は維持します。
+
+端末幅に合わせてエラー文が折り返されても検知します。単語間の改行だけを許可し、空行や無関係な出力を連結しません。
+
+### tmux の対象照合と旧配送経路の保護
+
+隔離 global client に、安定した ID から実際の socket・pane・PID を照合する target/capture、operator の attach、証明済みの親による固定 compact を追加しました。旧 UUID と同名・prefix・大文字小文字の別対象へ入力せず、旧 watcher・monitor・dashboard の操作でも共通の照合を使います。専用 socket の起動はまだ有効にしません。
+
+compact は入力欄が空で待機している場合だけ受け付け、Claude の suggestion と placeholder も文字があれば拒否します。提出後の結果不明は自動再送せず、重複の可能性を明示します。既定の旧 mode と、provider の自動 compact は維持します。[対象の読取と復旧](docs/global-delivery-client.md#explicit-tmux-target)を参照してください。
+
+端末・ttyd の実接続と detached resume も共通の対象照合に通し、観測中の PID 再使用や不明な cleanup で他の session に作用しないようにしました。対象の同一性と compact の入力欄の証明を分け、画面の更新だけで capture・attach が止まらないようにしています。人の確認待ちは観測期限に含めません。
+
+文書用の read-only demo も共有 consumer に接続し、合成 pane の観測を明示しました。利用者の tmux server には接続せず、従来の合成データと表示を維持します。
+
+共有 consumer は実際の server 不在を空と区別し、tmux の外の終了でも cleanup が退役を完了します。unsafe・timeout・読取不能は保持します。不在は直接の lstat の ENOENT に限定し、親 directory の権限喪失も不明として保持します。
+
+### Background terminal の表示がある capacity 停止も親へ知らせる
+
+Codex の容量エラーと入力欄の間に background terminal の件数表示があると、停止を見逃して親への通知が出ない問題を修正しました。単数・複数の固定表示1行だけを許し、通常の出力・作業中・引用を停止とみなさない条件は維持します。
+
+### 子の model 容量停止を親へ自動通知
+
+legacy dashboard が Codex CLI の capacity エラーによる入力待ちを継続観測し、停止した子の既存 identity から親へ ORRERY Mail を1回だけ送ります。DECK に `MODEL CAPACITY`、NETWORK に `CAPACITY` を表示します。ブラウザを閉じていても観測し、自動再開はしません。作業再開を観測するまで再通知せず、同じ停止の通知状態は dashboard 再起動後も保持します。
+
+API 世代を18から19へ上げ、legacy agents / graph に nullable な `provider_stall` を追加しました。送達不明時は重複を避けて再送せず `delivery_unknown` を表示します。global mode は未対応・後続です。[詳細](docs/dashboard.md#provider-停止の自動通知legacy)。
+
+無変化の巡回では状態ファイルを書き直さず、容量停止の候補が無ければファイルや lock を作りません。Mail の明確な拒否は `failed` として区別します。古い capture で新しい停止を解除・確認することを防ぎ、未観測の終了世代を期限付きで削除します。
+
+### dashboard の明示再起動で選択済み mode/config を反映
+
+macOS の `agentctl.sh restart` が既存の launchd job を kickstart するだけで旧 mode/config を残す問題を修正しました。`start` と同じ描画・再設置の処理を使い、設定が同じ場合も job を再設置します。supervised-background の再起動手順は維持します。 この HOME に plist がなく同じ label の job が load 済みの場合は、別の install を置き換えず明示エラーで停止します。
+
+### client の mutex file を作成途中に読むと壊れて見える race を修正
+
+client root の operation mutex と local mutex は、file を `O_EXCL` で作ってから JSON を書きます。その間に別の caller が同じ file を読むと、空の file を読んで `PRIVATE_JSON_INVALID` で失敗していました（同じ client root を並行して prepare したときなど）。
+
+作成の方法は今までと同じ（同じ path への `O_EXCL`）にしたまま、読む側が、内容が揃うまで最大10秒待つようにしました。一度作られた inode は置き換えないので、更新の途中で旧版の client と重なっても、同じ inode の lock で排他します。作成者が書込みの前に止まって空の file が残った場合は、`MUTEX_INCOMPLETE`（読取専用の観測は `OBSERVATION_BUSY`）で止まります。client はこの file を自動で消しません。その client root を使う process がすべて止まっていることを確かめてから、operator がその file を消してください。手順は[global runtime client](docs/global-runtime-client.md)にあります。
+
+### launchd の dashboard 設定を install・再起動のどちらでも正しく書き出す
+
+installer が runtime mode と global server config の placeholder を未置換で plist に残し、dashboard が `RUNTIME_MODE_INVALID` で再起動を繰り返す問題を修正しました。`agentctl.sh` による書き出しでも、spawn 先、Codex の子の設定・実行ファイル・model catalog、portrait、persistent profile の計 11 項目を正しく引き継ぎます。
+
+template の全 placeholder と両 plist writer の置換集合を照合し、隔離 HOME で実際に生成した launchd plist / systemd unit に未置換 token がないこと、設定値と XML の特殊文字が保たれることを回帰試験で確認します。API generation の変更はありません。
+
+### tmux の接続先と旧 consumer の対象保護を共有
+
+- 固定 client root の既存 launch/live を読取だけで照合する共有 helper を追加しました。旧 consumer が global pane に作用する操作や、所属を確認できない対象への操作を理由つきで拒否できます。
+- 対象の拒否と helper 自体の失敗を分け、配置の修復に使う読取診断を提供します。CLI の成功応答も共有 schema で検証します。
+- 既定 legacy・activation=false を維持し、専用 global 起動はこの段階では有効にしません。公開 Mail tool と dashboard API の変更はありません。
+- [共有境界の契約](docs/runtime-tmux.md) と [English contract](docs/runtime-tmux.en.md) を追加しました。
+- 長時間動く consumer は共有コードを一度だけ読み込み、literal 設定の読取結果を file 属性が同じ間だけ再利用します。配置 snapshot は呼出しごとに読み直します。
+- window 選択でも現在の全 pane を共通の前後照合で確認し、元 session の証明で別の窓を操作しない契約を追加しました。
+
+### 子が MCP tool の承認拒否を親に報告して停止
+
+Codex・Claude に配布する managed 指示に、MCP tool から承認拒否のメッセージが返った場合の報告手順を追加しました。子は利用者の設定を書き換えず、正確な tool 名と拒否メッセージ原文を ORRERY Mail で親へ1行報告して停止します。親が無い場合や Mail を使えない場合は利用者に伝えて停止します。修復手段は報告で断定せず、[子に渡す道具](docs/delegation.md)から既存の承認・overlay・再開の制限・人の許可の手順を参照します。
+
+### mode の選択を client・dashboard・service で共通化
+
+- mode の選択を owner の認証から分離し、context のない operator/service が global 選択後に旧 Mail へ戻らないようにしました。既定の legacy と activation=false は維持します。
+- 新規 process は既存の設定から mode を一度選び、稼働中の hook・worker は継承します。明示 mode と context/config の食い違いは理由付きで拒否します。
+- context のない watcher は既存の route ごとに共通配送処理を使い、不正な宛先を分離します。詳しくは [global delivery client](docs/global-delivery-client.md) を参照してください。
+- system controller の installed default と稼働中の hook の継承を分け、App/直接 bootstrap の partial 配置・設定競合を共通入口で拒否します。一時的な watcher の通信断は再試行します。
+- 新しい pane へ mode を渡し、直接 bootstrap の project 設定を保持します。旧 helper の部分配置と watcher の明示 server config も共通選択へ揃えます。
+- 起動と子登録の bootstrap に明示 context を引き継ぎ、既定の旧 mode との誤った衝突を防ぎます。
+- 未固定の継続で配置済みの既定を確認できない場合は停止し、古い helper から旧登録へ戻ることを防ぎます。説明文中の `--literal` は installer の指定と区別します。
+
+- global service の起動専用の環境は子 process へ直接渡し、起動に失敗しても呼出し元の環境へ設定を残しません。
+
+### 起動時に agent 名を clipboard へ入れる処理を削除
+
+`agent-start`・`agentstack-codex-bootstrap`・`agentstack-gemini-bootstrap` と SessionStart hook の `set-ghostty-title.sh` は、terminal のタブ名に手で貼るために agent 名を `pbcopy` で clipboard へ入れていました。この用途は無くなったので、4か所とも削除しました。opt-in の設定も残していません。起動しても clipboard の内容は変わりません。tmux session の rename、pane metadata、managed agent list の更新は従来どおりです。
+
+### global network の稼働状態を既存の session から読み取る
+
+隔離 global dashboard の network に、本人・binding・PID/start/pane を照合した working / waiting、context 使用率、親子の色を表示します。観測は既存 mutex の共有・非待機読取だけで、ファイルや活動の台帳を作りません。証明できない状態と Codex App は unknown、複数 session の activity は合成しません。
+
+capability・Lock・Mail 表示・登録回復の browser controller を共通化し、API 18 の対応能力と非秘密の operator probe を追加しました。既定の旧 mode と activation=false は維持します。
+
+Mail の視点を選ばない network と deck でも稼働状態を表示し、確認済みの不在と観測不能を区別します。古い launch の不在 slot と退役した祖先が現在の表示を隠さないようにし、operator probe の loopback 通信では環境 HTTP proxy を使用しません。
+
+観測だけが失敗しても Unlock・Mail・登録は維持し、その回の稼働状態を unknown に戻します。認証拒否は引き続き Lock し、観測内部の予期しない例外も unknown として隔離します。
+
+### 登録 pending が無い場合の明示解消
+
+利用者向けの登録解消で root または pending が無いときは、503 ではなく404 `TARGET_UNAVAILABLE` を返します。HTTP の認可、既存 file の検証、digest の一致確認は維持します。
+
+### global dashboard の返信と指示の案内（API 17）
+
+隔離 global mode の既存 Mail 欄に message ID による返信の流れ・一部省略・keyset 継続を表示します。古い指示 block は共通の検出結果を使い、起動時の候補観測と現在の disk 状態を分けて、日英 docs と片付け command のコピーへ案内します。operator 認可・数値の視点・固定 client slot を使い、folder と Mail の scope を分けます。成果物は明示 root のみです。既定の旧 mode と activation=false は維持します。
+
+登録 pending の同 intent 再送を status の操作ボタンから実行し、表示時の digest を照合します。Lock は通信・遅延応答・tab 引継ぎを失効させ、storage が使えない場合は memory のみで Unlock できます。指示の確認は一致した slot だけを照合し、cleanup command は検出時の HOME と install を明示します。global 用 HTML は明示した shell と共通の style/manifest だけを読み込みます。
+
+Lock 時に drawer の見出し・件数も消去します。画面で完結しない Codex trust と daemon の設定は CLI 手順へ案内し、不在の実行 profile は `PERSISTENT_EXECUTION_REQUIRED` で示します。
+
+### 隔離 dashboard の読取と登録の共通入口
+
+API 世代15に、私有 operator capability の HTTP 入場条件と管理 socket の ui_read を追加しました。公開 Mail tool は増やさず、可視集合・MAX・keyset・revision を同じ読取 transaction で確認し、dashboard は global の DB を開きません。登録と子登録は同じ pending・同じ token の再送と finalize を共用し、固定 root の状態・同名の既存 root を読取だけで確認できます。既定は旧 mode・activation=false のままで、画面と cockpit の接続は後続です。
+
+名前の重複は登録前に拒否し、異常な root は個別に診断します。provider の指示が未設定なら設定待ちの状態を返し、登録競合の明示解消は同じ pending と digest の照合を HTTP でも利用できます。operator capability の CLI は隔離 HOME の明示を必須にしました。
+
+### 未リリースの変更を PR ごとの断片に分けました
+
+未リリースの変更は `changelog.d/` に1 PR につき1ファイルを追加します。release 時に `scripts/changelog-release.py` が6桁の PR 番号の降順で版の節にまとめ、使った断片を削除します。`CHANGELOG.md` の同じ節を各 PR が編集して衝突することを避け、直接の Unreleased 追加は検査で拒否します。VERSION と API の互換世代の決め方は変えません。
+
+### 利用者単位の指示 block と移行の復旧
+
+旧 source の hardlink は計画時に拒否し、purge は history を含む全 receipt の未解消 marker を確認します。明示 cleanup は指定した1件だけに限定し、通常 uninstall は異常な file を保持・警告して残りを続けます。同意の説明を1契約へ集約し、移行 notice を参加 session に限り、setup の明示 project key を優先します。
+
+- Claude の既定を利用者の CLAUDE.md へ統一し、Codex と共通の parser・renderer・read-only plan・receipt に接続しました。既知の旧 block は新 target の検証後に marker 間だけ撤去し、複数 source の全文 backup を個別に保持します。
+- doctor／SessionStart の祖先検出、記録済み marker の uninstall、未解消時の purge 拒否を追加しました。symlink は固定解決先の CAS、hardlink は固定拒否で手動 copy を案内します。
+- identity の無い bare session の raw 自動登録を止め、既存 identity の復旧と非参加の案内を共通 catalog から表示します。編集 guard の block／warn-open は維持します。Mail の既定は旧 mode・activation=false のままです。
+
+
+履歴も含めた receipt の plan hash 検証を共通化し、破損時は purge 前に停止して backup を保持します。自動検出した marker の無い hardlink は変更せず飛ばし、無関係な利用者の指示で setup が止まる後退を修正しました。
+
+### daemon binding の相手を一覧にする（orrery-daemon-binding-v2）
+
+固定 daemon の profile の単数 `peer_name` / `peer_id` を、name と数値 ID の組の一覧 `peers`（1〜16件）に置き換えました。旧 v1 profile は一覧と並べて読まず `profile-legacy-v1` で止め、operator が1回書き換えます。whois と送信は一覧の相手ごとに数値 row を照合し、一覧外の送り主・別 project は ACK 前に拒否します。一覧の name で数値 ID が違う Mail は保留用にそのまま返し、1人の入替で他の相手を止めません。相手が Mail に無いときは `daemon-peer-missing`、別 ID は `daemon-peer-changed` とし、`PEER_STATUS` だけがこの2つを「その相手だけ使えない」と定めます。他の失敗は障害のままです。name は Mail の正規形（英字で始まる英数字）に揃えました。global client の profile と公開 Mail tool は変わりません。
+
+### 隔離 global client の起動・配送を接続
+
+起動終了の部分保存は同じ解消で完了するまで次起動を拒否します。古い配送 intent と個別の異常は他の通知を止めず、待機中の不要な取得を避けます。通知 event / 2秒 poll と既存 App 設定 reader を共有し、固定 provider 導出設定は gate 内で再生成します。
+
+空になった通知 slot は既存 lock の出口で削除し、以前に残った空 slot も1回の走査で片付けます。並行 prepare の intent を保持し、完了した通知の総数に比例する hook の遅延を取り除きました。数値互換は先頭0のない10進と5境界に限定し、先頭0を旧 watcher は8進、global は10進で扱う差を日英に明記しました。
+
+通知 intent の列挙は候補名だけにし、個別の不正 slot を診断へ出して他の通知を継続します。importance 未満・自己送信の intent は対応待ちと数えず、hint が消えたら片付けます。Claude の生成 hooks を既定 settings.json から分離し、Gemini の既存設定は Mail entry だけ更新します。旧 shell の数値検証との境界比較を追加し、signals directory が未作成なら作らず待機します。
+
+既定の旧 mode と activation=false を維持し、新規 window の owner 束縛、global proxy の bootstrap、provider の起動 receipt と通知 consumer を接続しました。consumer は client 側の固定 layout に置き、既存 server 設定との isolation・binding 照合で分岐を防ぎます。window は context、現在の process は既存 session 記録、配送完了は server の notification fact に統一しました。注入や bot の応答が不明なら同 intent を再試行し、確定後は completion だけを再送します。起動の不明状態は status の digest を使う明示解消へ戻せます。persistent の実行設定は固定 profile の typed execution を operator が指定します。dashboard の明示 global 実行入口に合わせ API 世代を14にしました。
+
+### global client の子登録・再開・hook を準備
+
+既定の旧 mode を維持し、固定 client root を使う明示 prepare-only の子登録・再開を追加しました。登録の中断は同じ name/token の再送と owner 照合で回収し、SessionEnd と cleanup を共通化しました。予約は期限の閾値以下だけ更新し、応答喪失時は次の hook が同じ UUID を再送します。schema・拒否表・message intent は server と共有します。既存 standalone の子への転用を拒否し、global 選択後・owner material の前に Mail 無効化を確認します。解放は旧 grace 設定（既定90秒）と lease ごとの slot を使い、更新された予約を保ちます。次の編集 hook は保存済みの全種類の mutation を再送し、通常の context 判定と partial install の admission は各1か所へ集約しました。context が無いときの mode 判定では Python を起動せず、旧 runtime が select 未対応でも旧経路を保ちます。実行と wake は後続のまま、activation=false・公開 Mail tool31個は不変です。dashboard の明示 global resume 入力に合わせ API 世代を13にしました。
+
+### 未使用の診断 backup と restore を削除
+
+呼出し元のない診断 backup／restore／一覧の3関数と専用 manifest、および空になる節を削除し、SQLite の raw copy を再び利用する入口を減らしました。global server の監査表は、内部 candidate manifest と rehearsal の raw hash も接続の寿命とともに明記しています。公開 tool・既定の旧 mode の動作は変わりません。
+
+### installer の Codex 探索・確認を launcher・doctor と共通化
+
+installer が独自に持っていた Codex の探索 PATH・`--version` 確認・probe の後始末を削除し、同梱の共通処理を読み込んで判定します。候補を実行する PATH も launcher・doctor と同じ文脈（子の login shell・resolve した候補の隣の node）に揃え、nvm・npm-global 配下などで3か所の判定が揃うようにしました。承認の流れ、保存する値と形式、明示 `--codex-bin` が使えないときの失敗は変えません。候補の確認全体（保存済み候補の再確認も含む）に共有の時間上限を設け、同じ候補を二度確認しません。時間切れで確認し切れなかった場合は「何も見つからなかった」とは別の表示にして、値を書かずに止まります。
+
+### global SQLite の POSIX lock を保つ
+
+S1 からの不具合を修正しました。main DB と sidecar の安全確認、および source の形式確認で独立した fd を開閉せず、`lstat` を使います。同じ process の SQLite lock が解除され、並行処理で DB が壊れる経路を取り除きました。別 process が保持中の writer lock を取得できない回帰と、DB/sidecar の raw open を禁止する回帰を追加しました。監査結果は日英の global server ガイドに記録しています。
+
+### 隔離 global server の予約・contact welcome を準備
+
+S2c の schema5 に7つの公開 tool と既存 handshake の welcome を追加しました。予約は SQLite の未解放・期限前の行だけを ACTIVE とし、期限切れ履歴を書き換えません。旧 candidate の別 engine と activity/collector を削除し、共通 normalizer、S2b の transaction/receipt、通知の経路を共有します。更新・解放の省略選択、退役解放、管理 inspect/force/purge、歓迎 message の承認と中断後の再送を固定しました。
+
+path による更新・解放を自己 ACTIVE だけに限定し、他 owner と自己の履歴が選択へ混ざらないようにしました。path・省略による解放は該当0件でも成功し、繰り返し実行できます。明示 ID の不存在・他 owner は全件拒否を維持します。session macro の inbox は共通の metadata 読取を使い、既知の coverage witness と dangling-anchor の回帰を保持します。
+
+完成した receipt を持つ新規 candidate だけを起動し、旧 root は不変で拒否します。時刻の instant・ID・旧長 reason を保存する fresh proof と各保存境界の回帰を追加しました。既定旧 mode・既存 profile・activation=false は維持し、client/hook の結線と切替は後続です。[S2c の契約と移設](docs/global-reservations.md)を参照してください。
+
+### nvm の Codex を dashboard の最小 PATH から起動できます
+
+選んだ Codex の解決先、または npm shim と同じ bin にある node を、確認と起動に共通の PATH 処理で使います。doctor も子の login shell と同じ処理で CLI を確認し、起動失敗の表示は launcher の原因を登録の後始末より先に出します。既存 CLI の版の確認だけを一時 HOME で行う WSL 用 runner を追加しました。API の field と世代は変えません。
+
+### project 廃止に向けた message と通知の server 契約を準備
+
+明示した隔離 schema4 に送信・返信・既読・ack・検索・topic・digest の8 toolを追加しました。本文・添付 blob・FTS・監査 receipt と通知の再照合印を同じ DB transaction で確定し、応答喪失は同 UUID で回収します。外部出力は固定 layout の signal だけに絞り、archive・Git・保存 summary の第二正本を作りません。通知の消費を1列にまとめ、旧 hint と配送 row がない過去の message は時刻を捏造せず消費済みとして import します。可視集合の keyset、巨大な旧添付の metadata 読取、準備・通知の各中断点と明示再照合を追加しました。
+
+未通知の判定と inbox/retire の tool 定義を共通化し、旧保管物を `provenance/` に集約して purge の対象から外しました。返信件名は既存 prefix を維持し、入力だけを制限して旧方式の長い件名も引き継ぎます。再照合の未選択件数、schema keyword の値の型、記録済み MIME 型も検証し、孤立配送の拒否は準備の共通処理に一本化しました。
+
+既定の旧 mode・S1/S2a・activation=false は維持します。新規 BCC も他の宛先と同じ signal を受けます。実 client・watcher の接続と切替は後続です。詳細は[隔離 global message](docs/global-messages.md)を参照してください。
+
+### 隔離 global server の登録更新・window・contact を準備
+
+S2a の明示した schema3 設定に9つの公開 tool と capability を追加しました。program/model を保つ登録更新、read-only の window 照合、単調な活動更新、相手 owner が承認する contact を扱います。request の canonical preimage と結果を同じ transaction に保存し、共通 client は固定 slot の UUID を引き継いで再送します。owner 別 quota、receipt を使わない touch、同じ read snapshot と write tracker を照合します。 mapped reconnect から policy の自動書込みを分け、quota/pending があっても活動更新を継続します。応答 schema は server/client の共通正本で確認し、不適合な応答では pending を消さず同 UUID の replay を待ちます。
+
+確定した拒否は自身の pending を解除し、結果不明だけを保持します。preimage・既定値・DDL・authority/fence の重複を共通の正本へ寄せました。全件検証は起動時と明示 inspect に限り、通常の書込みと replay は対象行だけを検証します。UUID が別の意図と衝突した場合も pending を保持し、明示した operator の解消へ回します。FTS の検証用コピーは candidate 内の私有 directory に限り、成功時も例外時も削除します。次の検査は固定 directory の lock 下で、自分の命名規則と所有条件に一致する強制終了後の残留コピーだけを回収します。installer は共通 schema と fixture の不足を配備前に知らせ、更新試験も同じ配布元を含めます。payload のコピー元の宣言も一か所にまとめ、切り出した配備処理と通常 installer で共有します。
+
+既存 schema2 は SQLite 接続前に不変で拒否し、別 workspace に source から schema3 を新規準備します。in-place upgrade・旧 authority 復帰・epoch repin は含みません。preparation と明示 quarantine は各保存境界の中断から再実行し、旧 root の書込みを自動移行・破棄しません。新 client root へ env/wrapper/hook/profile を向け直す手順と、旧 mode との contact 判定差を日英で記載しました。既定の旧 mode と S1 の契約・activation=false は維持します。送信と通知は S2b、予約は S2c、実切替は PR7 に残します。詳細は[global server の準備](docs/global-server.md#s2a-schema3-の新規準備)を参照してください。
+
+### project 廃止に向けた runtime client の登録・復旧・待機を準備
+
+明示した隔離 context で S1 server に接続する共通 client を追加しました。既定は旧 mode、activation は false のままです。stable ID と credential・instance・candidate・authority epoch を照合し、旧 project/name env を routing に使いません。原子的な名前競合、能力に応じた contact policy、専用 HOME の operator 復旧、window/session index と profile の再接続入口を準備しました。proxy/daemon の実行は4c、子の manifest/skill は4b、実切替と全 writer 停止は PR7 に残します。再接続時は program/model の明示値・保存値を維持し、保存値が無ければ observe のみとします。保存先の役割重複と broken context を拒否し、通信障害の待機を継続します。固定の親の直下にある client 名から layout を導出し、任意の root/role path を登録前に拒否します。provider の HOME や履歴を探索せず、通常のファイル増加で停止しません。明示 operator の復旧は pending・credential・server を照合し、各保存段階の中断から同じ ID を回収します。local credential の無い未 claim の row も、中断後の同じ pending で回収できます。Codex の再登録は環境指定を優先し、Claude の再登録は claude-code を明示します。client の保存先を Mail の状態領域から分け、既存ファイルの形式・owner を network 前と rename 前に検査します。program/model は別ファイルに保存し、observe のみの再登録は表示と終了コードを区別します。詳細は[global runtime client の準備](docs/global-runtime-client.md)を参照してください。
+
+### project 廃止に向けた隔離 global server の登録・復旧能力を準備
+
+明示した一時設定でだけ起動する S1 server を追加しました。実 HTTP の登録・既存 token の再接続・自己 inbox・window owner 照合と管理 socket の enrollment を、stable ID と世代で確認します。candidate 世代、書込みカウンタ、runtime authority epoch を分け、切替中や退役した root の操作を拒否します。既定は旧 mode の25 tool、activation は false のままです。送信・返信・contact・予約・archive/signal writer の結線は S2 に残します。詳細は[global server の準備](docs/global-server.md)を参照してください。
+
+SQLite の main DB と sidecar の symlink・複数 hardlink・owner/mode を初回と各操作の open 前・直後・commit 前に照合し、検査時に見つけた危険な状態を拒否します。起動後の main DB の hardlink も、別名が残っていて検査時に複数 link を検出できる間は拒否し、別名経由で commit した WAL を保持します。別名を削除した後に残った WAL は対象外です。協調 writer の共通 lock を対象とする検査で、同じ UID の非協調 process が検査と open/commit の間に path を変える競合は残ります。起動時の authority lock の inode を固定して差し替えを拒否し、非 ASCII の保存済み credential も同値で認証できます。日英の案内に passthrough の起動前提、実 HTTP・管理 socket の合成 fixture を自分で確かめる手順と、残余競合の境界を追加しました。
+
+### project 廃止に向けた Mail と配送の記録の移行候補を準備
+
+明示した隔離 snapshot から、複数 project の Mail と配送の DB、archive・添付・signal・履歴・window・binding を統合する候補を追加しました。ID・token・read / ack・監査・旧 thread の reply_to・配送の全 status と試行、policy と backoff を保存し、最終差分の反映後にも全内容を照合します。同名 agent・window UUID・曖昧な予約は利用者の決定を要求します。全 phase と pointer 更新直後の強制中断から再実行でき、新しい書込みの後の rollback は拒否します。
+
+metadata を省略した旧 per-message signal も file 名の ID と宛先を照合して移行し、同 ID の旧単一 signal との共存は別の出力で保持します。無効な signal は計画に表示します。予約の Mail 活動は日時を UTC の時点に変換してから最新を選び、offset の表記差で早期解放しません。
+
+永続 candidate で返信と purge、予約、配送の世代確認を試験します。既定の公開 tool・実 DB・installer・hook・daemon は旧方式のままで、activation は false です。切替は private workspace 内の練習のみです。実サービスの writer 制御・managed block・archive と signal の配送配線・非 ASCII path の制限解決は後続に残ります。詳細は[記録の移行と復旧](docs/namespace-state-migration.md)を参照してください。
+
+### Codex plugin の導入処理を共通化
+
+- Codex の専用 installer を再利用できる処理へ分け、共有 HOME・cache の所有情報と対象 hook の承認結果を記録します。
+- 承認済みの対象定義だけを公式 API で信頼し、未確認なら `/hooks` へ案内します。Mac/Linux/WSL の隔離確認 script を追加します。本体 install への接続は後続です。
+- 解除前に現在の registry と service の所有を照合します。別の root や再利用された PID、確認不能な状態では削除・停止を拒否し、途中の解除を再実行できる情報を保持します。
+- Linux/WSL の service は boot ID と kernel の起動 tick で照合し、表示時刻の揺れを比較から除きます。起動途中の command は記録せず、runner の一致を再取得してから所有情報を保存します。
+- macOS の終了途中に `ps` が `(bash)` を返す場合は、所有確認を済ませて signal を送った後の待機だけ、同じ UID・起動時刻と実行名の一致を確認して終了を待ちます。全 signal 直前の厳密な所有照合と、未確認時の記録保持は維持します。
+
+### project 廃止に向けた絶対 path 予約の候補を準備
+
+候補の Unicode 比較は対象 filesystem の規則を read-only で確かめ、Mac の未作成 NFC/NFD 別名と glob の活動を見落とさないようにしました。Linux の別 file は区別し、規則が不明なら取得と早期回収を止めます。候補 release hook も失敗・blocked の結果では予約を保ちます。case-insensitive な filesystem の非 ASCII path は case table を保証できないため取得を拒否し、glob の探査も unknown として早期回収を止めます。
+
+共通の path 正規化、認証と owner を確かめる候補 server、bound proxy・hook・CLI の adapter、予約ごとの filesystem/Git 活動と GC を追加しました。別 cwd の同じ相対名を分け、同一 file と glob 内の symlink の先の新規 file は競合させます。未知の探査結果では早期解放せず、TTL と owner release は維持します。候補は明示した隔離 store で試験し、既定の公開 tool・DB・installer・既存 hook は旧 mode のままです。永続化と切替は後続 PR で行います。詳細は[絶対 path の予約候補](docs/absolute-reservations.md)を参照してください。
+
+### project 廃止に向けた契約と移行計画を準備
+
+旧 scope 引数を受けて無視する candidate adapter、message ごとの reply_to と旧数字 thread の変換、名前付き旧値の読取、agent 名と window UUID の衝突・解決を追加しました。返信は元 message ごとの送信者・宛先で照合し、残る子が参照する親は purge から保留します。候補の会話・旧ラベル読取は、可視結果数と探索量の上限を分け、不透明な cursor で続きを取得できます。最終 snapshot の再検証と固定した予定 writer 集合に結び付く receipt/gate も fixture で確かめます。
+
+これは準備の PR で、公開中の tool・project ごとの配送・DB・installer・hook は従来どおりです。新 API は明示した candidate だけで使い、gate が ready でも切替は有効になりません。詳細は[契約と移行計画](docs/project-removal-plan.md)を参照してください。
+
+### 常駐 daemon が Mail の識別子を確認し、共通の通知待機を使えます
+
+同梱 Mail の `health_check` に、管理 socket と同じ永続的な `server_instance_id` を追加します。秘密ではない UUID で、別の Mail への誤接続を拒否できます。利用する側が必要な field を判定できるよう、互換世代を11から12に上げました。API 11の watcher health と古い signal の扱いは保ちます。
+
+`agentstack-await-reply` の認証済み fetch を渡せる待機処理を共通化し、取消しに対応しました。常駐 daemon 用の厳密な binding profile と operator 専用 CLI は、同じ owner・数値ID・project・固定送信先を照合します。待機は本文取得や ACK を行いません。CLI は固定 source から実行する対象で、一般の installer には追加しません。identity 作成と実際の配備は operator が別途確認します。
+
+### session の無い宛先の古い Mail signal で health が red になる誤警報を修正
+
+watcher は `session_not_found` の signal を再試行用に残していました。health は24時間以上古く、tmux session が無いと確認できた signal を残留数として別に報告します。生きている宛先・直近24時間・headless runtime の未配送は従来どおり数え、50件超なら red にします。測定に失敗した場合も除外しません。doctor は残留数と確認・削除のコマンドを warn で示しますが、この残留だけでは終了コードを1にしません。
+
+片付け用の `dashboard/mail_signals.py` は既定で候補を表示し、`--prune` で削除前にも session 不在を確認して、signals 配下の古い通常ファイルだけを削除します。Mail の DB と inbox は変更しません。全数・判定対象数・残留数・session 確認可否を API に追加したため互換世代を11に上げました。
+
+## 2026.10.06
+
+### Codex の既定モデルを、そのアカウントで使えるものに下げます
+
+モデルを省略した Codex の子と NEW AGENT の既定は `gpt-6.1-sol` でした。無料の ChatGPT の plan など、このモデルを使えないアカウントでは、起動の直後に 400 で止まっていました。選択された `CODEX_HOME` の CLI ローカル cache にその ID が無ければ、`gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna` の順で、掲載されている次の候補へ下げます。既定を下げる判断には期限切れの cache も使い、変更があれば provider の `model_note` に変更前後と理由を返します（API 10）。
+
+正式 ID の明示要求は置き換えません。cache の `identity` は現在のログインと照合しておらず、fallback は利用権限の証明ではありません。2026-10-06、無料の ChatGPT の Codex（`gpt-6-luna` medium）で、Full tour のしりとりが最後まで通ることを確かめました。詳しくは [設定](docs/configuration.md#codex-model-catalog) を参照してください。
+
+### Codex でも `$delegate` と `$log` を使えます
+
+installer は `delegate` と `log` の skill を、`~/.claude/skills` に加えて Codex の skills（`$CODEX_HOME/skills`、既定は `~/.codex/skills`）にもリンクし、manifest に記録します。Codex の入力欄では `/` から始まる語が Codex 自身のコマンドとして扱われ、skill が無いと `/delegate` は `Unrecognized command` になっていました。Codex では `$delegate` / `$log` と書きます。`~/.codex/AGENTS.md` の managed block もこの書き方に合わせました。
+
+同じ名前の skill がすでにあれば上書きせず、installer が warn を出します。uninstall は ORRERY が作ったリンクだけを取り除きます。
+
+### Codex の子が、選んだ MCP の起動を待つようにしました
+
+ブラウザなどの MCP server が起動中のまま最初の道具一覧から省略され、子が道具を持たずに作業を始める場合がありました。`--tools` と installer の既定で選んだ browser・computer use・`mcp:<name>` の server は、子の生成設定だけで `required = true` とし、起動待ちを最低60秒にします。既存の長い timeout は保ち、初期化に失敗すれば Codex の起動・resume を止めます。
+
+選択しない継承 server と ORRERY Mail の待機設定は変えず、利用者の設定も変更しません。installer の既定で設定を解決できない項目は従来どおり外しますが、採用された server の実行時の初期化失敗は停止として扱います。Chrome 側の接続許可は別で、人が答える必要があります。Codex 0.159.2 の途中の道具追加が呼び出しに反映されない制限は、この変更では解決しません。
+
+### Claude の browser 子の tool を、起動ごとに承認します
+
+Claude in Chrome を付けた子は、既知の22 tool を1本の `--allowed-tools` にまとめ、Claude Code 側で承認します。`javascript_tool`・`computer`・`file_upload`・`upload_image`・`form_input` も含みます。`--tools browser`、installer の browser 既定、旧 `claude_chrome` 指定とその resume に適用し、利用者の設定は変えません。新しい名前の tool は自動承認しません。
+
+Claude in Chrome 自身の操作確認は別です。タブを開く等の操作では **人が Chrome 側の Allow を押す**必要があり、headless の子はその確認で止まります。拡張の接続・アクセス許可も人の操作のままです。2026-10-06、WSL2 の Ubuntu、Claude Code 2.1.290 でも、22 tool の承認後にこの確認で停止することを実測しました。
+
+### Codex の子に chrome-devtools の browser を渡せるようにしました
+
+Codex の `--tools browser` は、利用者の設定にある chrome-devtools MCP server を選び、既知の全30 tool を公開して個別に承認します。Codex と既知固定版の Claude の `screen:operate:<server>` でも、chrome-devtools の同じ30 tool を承認します。任意 JavaScript 実行、ホストへのファイル保存、ローカルファイルの upload を含む許可です。未知の新しい tool は公開・承認しません。
+
+読み取りに絞る `screen:read:<server>` は8 tool を公開し、保存引数を持つ tool や任意 JavaScript・upload は含めません。Claude の chrome-devtools 選択は既知固定版が必要です。browser と別の computer use server は、それぞれの承認範囲で併用できます。詳しくは [delegation](docs/delegation.md#子に渡す道具を選ぶ--base----tools) を参照してください。
+
+### 子に渡す道具の既定を installer で選べるようにしました
+
+`--child-default-tools` / `AGENTSTACK_CHILD_DEFAULT_TOOLS` は `--tools` と同じ文法で、既定は空です。明示の `--base` / `--tools` / `--codex-mcp` が優先します。使えない既定の項目だけを外し、起動の出力と子の最初の指示に残します。子の記録には実際の選択を保存し、resume 時に現在の既定を追加しません。
+
+API 8 では `/api/spawn` の `tools: {}` または `base: "default"` がこの既定を抑止します。CLI で base・tools・MCP profile を省略した新規起動に既定を適用します。dashboard/API ではフォームの選択を正とし、installer の env を黙って追加しません。
+
+### 停止した子の道具を変更して同じ会話を再開できます
+
+API 9 の `/api/jump` に `base` / `tools` を追加し、`agentstack-resume` と `/delegate --resume` の手順を用意しました。作業の区切りで EXIT した子を、同じ名前・会話・作業ディレクトリで再開します。`tools` は全置換、`{}` は追加の道具の解除、base 省略は現在の base を維持します。両方省略した resume と UI は従来のままです。動作中・状態不明・道具の記録が無い子などは変更を拒否します。
+
+変更は子ごとに直列化し、端末が起動を受け付ける前の失敗には、その変更の道具記録と生成設定を戻します。API の成功は端末の起動受理を意味し、その後の認証や MCP 呼び出しの成功を保証しません。起動受理後の失敗には新しい選択が残るため、再開した子から同じ会話と実際の道具の呼び出しを報告してもらってください。
+
+Claude Code 2.1.289 では、同じ会話の native resume で新しい chrome-devtools MCP を呼び出せることを実測しました。**Codex 0.159.2 は、途中で追加した道具が呼び出しに反映されない既知の制限が未解決です。** この版の API 世代は、2026.10.05 の 7 から、既定の道具で 8、道具変更 resume で 9、Codex の既定モデルの `model_note` で 10 に上がります。
+
+### ブラウザと computer use の届き方、人が行う許可をまとめました
+
+日英 [delegation](docs/delegation.md#ブラウザと-computer-use-何が届くか人がやること) に Claude / Codex × Mac / Windows（WSL2）の8通りと、子・NEW AGENT・resume ごとの届き方をまとめ、README から案内します。「画面全体」「画面操作」の表記は computer use に揃え、WSL 側の道具は Windows-MCP と明記しました。指定名の `screen` は変わりません。
+
+Chrome の接続許可は接続のたびに人が答え、Mac の computer use のアプリ単位の許可も人が出します。Claude の組み込み computer use は Mac 全体で同時に1セッションだけです。ロックは computer use を一度使ったセッションが終わるまで外れず、その間に起動した子は `Computer use is in use by another Claude session` で止まります。Windows-MCP は RDP などの対話セッションで動かす必要があります。英語 README 冒頭の agent の数を限定する表現も直しました。
+
+### Gemini の dry-run テストの不安定な判定を直しました
+
+試験用の Git repository に自動 maintenance の lock が生成されると、dry-run の副作用と誤判定していました。試験用 repository の自動 maintenance と gc を止め、Git のメタデータも含めた副作用の確認を保ちます。製品の Gemini の起動や dry-run の動作は変わりません。
+
+## 2026.10.05
+
+### 新しい環境で、ワークショップのしりとりが「作業フォルダの外を読むか」の確認で止まっていました
+
+しりとりの prompt は、親に installer が置いた `/delegate` skill（`~/.agentstack/skills/delegate/SKILL.md`）を読ませます。この path は作業フォルダの外なので、Claude Code が初回に「外を読んでよいか」を確認し、答えるまで親が止まっていました（Full tour の録画で約 10 分止まった）。
+
+installer は、ORRERY が置いた skill の場所だけを `permissions.additionalDirectories` に足します。対象は `~/.agentstack/skills` と、そこを指す `~/.claude/skills/<name>` の symlink だけで、利用者が置いた同名の skill は入れません。同じ場所への `Edit` は deny にして、読み取りだけに絞っています。uninstall では、manifest にある分だけを外します。
+
+- この deny が止めるのは file の道具（Edit・Write など）と、それと分かる Bash の書き込みです。sandbox なしの Python や Node を通した間接的な書き込みまでは覆いません（[docs/install.md](docs/install.md)）。
+- 既知の制限: 再 install の後に uninstall すると、installer が足した設定が残ります（allow・deny・hooks と同じ既存の構造。gyroid-eth/orrery-telemetry#205 で直します）。
+
+### NEW AGENT の既定の作業フォルダを、project folder にしました
+
+1 行の install（fresh install）は `AGENTSTACK_SPAWN_DIRS` を空で書き、dashboard は空のとき NEW AGENT の候補を `~` だけにしていました。そのため NEW AGENT で起動した agent が home で動き、project folder の `CLAUDE.md`（ORRERY の指示）を読まず、`/delegate` を使わないので親子の線も出ませんでした（2 人目の Mac 利用者の試走で見つかった）。
+
+- `AGENTSTACK_SPAWN_DIRS` が空なら、候補は project folder、`~` の順になります。明示した `--spawn-dirs` は変わりません。
+
+### README の入口を作り直しました
+
+冒頭に 1 行の install を置き、入るもの・置き場所の表、作業フォルダの変え方（Obsidian の vault を project key にする）、完全に消す手順を足しました。Telemetry 単独の install と、cockpit との関係、両方を入れる 1 行の順に並べ、cockpit と Telemetry の関係図を入れました。
+
+### 開いたままの詳細パネルのボタンが、agent の状態に合わせて変わるようにしました
+
+詳細パネルの OPEN IN COCKPIT／RESUME IN COCKPIT と Exit のボタンは、パネルを開いた時点の状態のまま変わりませんでした。パネルを開いたまま子を Resume すると、ボタンは RESUME IN COCKPIT のまま残り、cockpit の Full tour の「Return to your agent」の輪が、パネルの Close に付いていました。ボタンは、Deck の一覧か Network の graph のどちらかを受け取るたびに、新しい方の状態で描き直します（送信中の Exit はそのまま）。どちらにも agent が無くなったときは、ボタンを押せない「NO LONGER LISTED」にします。また、Full tour の「Return」の段は Close を指さなくなりました。running の agent の OPEN IN COCKPIT が無いときは輪を出さず、tour の欄の文で案内します。
+
+### mail watcher の lock を利用者ごとにし、doctor が watcher の停止を検出するようにしました
+
+1 台の Mac に 2 人目の利用者が fresh install すると、既定の lock dir（`/tmp/orrery-mail-watcher.lock`）が全利用者で共通だったため、先にいる利用者の watcher が持つ lock を 2 人目が取れず、`mkdir: ... Permission denied` → 「Stale watcher lock detected; taking ownership」を 5 秒おきに繰り返して一度も動きませんでした。入力待ちの agent に Mail が届いても起こされず、`agentstack-doctor` は全項目 ok のまま watcher の停止を報告しませんでした（dashboard の `/api/mail-watcher-health` は `watcher_running: false`・status red を返していました）。
+
+- watcher の lock の既定を利用者ごと（`$AGENTSTACK_RUNTIME_DIR/mail-watcher.lock`）にしました。既定が利用者ごとになったので、他人の lock に当たるのは `AGENTSTACK_MAIL_WATCHER_LOCK_DIR`・`_PIDFILE`・`_HEARTBEAT` を明示で他人の物に向けたときだけです
+- 所有者が自分でない path（lock dir・pidfile・heartbeat の親 dir とそれぞれの既存 file、symlink ならその参照先も）には、何も書かず（別の場所への切り替えもせず）、そのことを一度だけ log に出して止まります。黙って別の場所へ切り替えると、同じ override を見ている dashboard や agent-start が元の（他人の）path を読み続け、watcher は動いているのに「止まっている」と誤って報告するため
+- 2026-10-05 より前の既定（`/tmp/orrery-mail-watcher.lock`）に自分の watcher がまだ生きていれば（pid の process が自分の UID で command line が `watch_agent_mail_signals.sh` のときだけ。pid が再利用された無関係の process は stale 扱い）、新しい path では起動せず、旧 watcher を止める案内を出して止まります（二重配送の防止）。update 時、同じ旧既定に自分の物で使われていない lock が残っていれば片付けます。どちらも他人の物には触れません
+- 所有者 UID の取得は GNU（Linux/WSL）と BSD（macOS）の両方で UID だけを安全に取れる順に直しました（GNU の `stat -f` は「ファイルシステム情報」を意味し、未知の directive でも stdout を汚してから失敗するため、所有者比較が常に不一致になるおそれがありました）
+- `agentstack-doctor` が、dashboard の `/api/mail-watcher-health` と同じ判定で watcher の停止・status の red/yellow・heartbeat の停滞を warn するようになりました（`watcher_running` だけでは、signal が溜まっていたり直近の配送が無かったりする red/yellow な watcher を ok と報告していました）
+
+### EXIT を確定した直後、隣のカードを誤って EXIT しないようにしました
+
+EXIT した agent のカードが LIVE から消えたり finished の区画へ移ったりすると、後ろのカードが詰まり、直前に押した位置へ次のカードの EXIT が来ます。そこをもう一度押すと、別の agent の EXIT を構えてしまいました（Full tour の録画で、子を EXIT した直後に親の EXIT がカーソルの下に来た）。EXIT を確定してから 2 秒間、またその後 30 秒の間にそのカードが動いたり区画が変わったり消えたりしたときはその時点から 2 秒間、EXIT を押しても受け付けません。その間は EXIT ボタンを薄く表示し、カーソルも「押せない」形にして、効かない理由が見えるようにしました。
+
+### cockpit の Full tour の後半で、Telemetry の中の押すボタンを示せるようにしました
+
+cockpit の tour は、次に押す control をシアンの脈打つ輪と HERE の札で示します。Full tour の後半の 7 段（EXIT、Network の edge、Select、Replay、Resume、Network の Settings、Open in cockpit）は、cockpit に埋め込んだ Telemetry の中のボタンを押す段です。cockpit はその中に手を出せないので、これまでは Telemetry の画面全体を指すだけでした。
+
+Telemetry は、cockpit から段の名前（`orrery-tour-cue`）を受け取り、自分の画面の該当するボタンに同じ輪と札を描くようになりました（`dashboard/tour_cue.js`）。
+
+- 段ごとに候補を順に試し、画面に出ていて覆われていない最初のものを指します。ボタンがまだ出ていなければ、そこへ行く手前の操作（Deck／Network の切り替え、card）を指します。
+- 受け取るのは埋め込みのときだけで、送り主が親の cockpit・同じ origin の場合に限ります。cockpit の tour の欄がかぶる範囲を受け取れば、札はそこを避けます。
+- 指すのは「その種類のボタン」です。どの agent のボタンかまでは分かりません。EXIT なら画面で最初に見つかった EXIT を指すので、段の文が言う「しりとりの子」のものとは限りません。
+
+cockpit 側から段の名前を送る変更は、gyroid-eth/orrery に入っています。
+
+### Full tour の録画で見つかった、Telemetry の中の輪と札の置き場所を直しました
+
+- **Network の edge の段**は、cockpit がしりとりの親と子の名前（`pair`）を送ったときだけ、その 2 人の edge を指します。名前が来ない、またはその edge が画面にないときは、edge は指さずに Deck／Network の切り替えを指します。これまでは画面で最初に見つかった edge を指したので、関係ない 2 人の edge に輪が付くことがありました。
+- **HERE の札**は、ほかのボタンや入力欄に重なる側を避けます。どの側も空いていなければ、輪だけを出します。
+- **通知（toast）**は、選択の操作バー（selection bar）が出ている間はその上に出ます。Replay の件数の通知が、操作バーの RESUME を隠していました。
+- tour の段が進んでいる間は、右側に開いている edge の drawer・agent の詳細・Settings の範囲を cockpit に知らせます（`orrery-tour-cover`）。cockpit の tour の欄は、それに重なる間は自動で畳まれます（cockpit 側は gyroid-eth/orrery に入っています）。
+
+## 2026.10.04
+
+### agent の詳細パネルを開いている間、Help map を押せませんでした
+
+詳細パネルの背景は header より上に重なるため、header の「Help map」は見えていても押せませんでした。help map には、パネルを開いているときにパネルの 3 か所（History と Output、Exit・Open・Close、Role）を注記する機能がありますが、その入口が塞がれていました。
+
+パネルの操作の列に「HELP MAP」を置きました。header の Help map と同じ map を開き、パネルの注記が出ます。閉じると、開いたボタンに focus が戻ります。
+
+### Deck で EXIT した後も、カードが LIVE に数秒残り、もう一度押すと 400 になっていました
+
+EXIT が届いた後も、tmux の session が終わるまでの数秒間、カードは「↩ EXIT」に戻ったまま LIVE に残っていました。もう一度押すと `/api/exit` に再び届き、すでに終わりかけの agent に対して 400 が返っていました。
+
+EXIT が届いたカードは「exiting…」の表示にし、押せないようにしました。この表示は再描画しても続きます。agent が LIVE から外れた時点で状態を外し、30 秒経っても残っている場合は、その旨を知らせて EXIT を押せる状態に戻します。終わった agent への EXIT が 400 になった場合は、サーバーの文面をそのまま出すのではなく「<名前> has already exited」と知らせます。
+
+### 詳細パネルの Exit と、選択の一括 EXIT で、Full tour の「Exit」の段が進みませんでした
+
+cockpit に埋め込んだ Telemetry の Full tour は、EXIT が届いた知らせで「Exit」の段を完了にします。この知らせを出していたのは Deck のカードの EXIT だけで、詳細パネルの「↩ Exit」と、選択した agent の一括 EXIT からは出ていませんでした。
+
+EXIT が届いた時の知らせを 1 つの関数にまとめ、3 つの経路すべてから呼びます。知らせを出す条件は 3 つとも同じで、次のすべてを満たすときです。
+
+- 応答が成功している（`ok`）
+- 実際に送られた（`exit-sent`）か、終わった agent が shell に残っていて `exit` を打ち込んだ（`shell-exit-sent`）
+
+### Claude Code の初回設定が終わっていないと、子が理由を告げずに消えていました
+
+初回設定（text style・ログイン・Security notes・フォルダの信頼）を途中で閉じると、`~/.claude.json` に `hasCompletedOnboarding` が付きません。そのまま NEW AGENT で子を起動すると、子は最初の text style の画面で止まっていました。launcher はこの画面を選択画面と見分けられず 60 秒待ってから子を片付け、cockpit には「closed」としか出ませんでした。
+
+- launcher は初回設定の画面（text style・login method・Login successful・Security notes）を見分け、キーを送らずにすぐ止めます。答えは利用者の設定なので、ORRERY は代わりに答えません。
+- 止めた理由は `[spawn_child] reason:` の 1 行で出します。dashboard はそれを spawn の error の先頭に入れるので、cockpit の失敗の知らせに「端末で `claude` を一度起動し、入力欄が出るまで進めてから /exit」と表示されます。Claude in Chrome の一度きりの質問も同じ扱いです。
+- doctor は `hasCompletedOnboarding` が無いと warn します（値そのものは表示しません）。
+
+あわせて直したこと:
+
+- 子が最初の prompt に返答した後に一度きりの質問（「Try the new fullscreen renderer?」）が出ると、10 秒後に「unrecognised choice screen」として、動いていた子を片付けていました。prompt の echo の下に Claude の返答（`⏺`、WSL では `●`）があれば起動は成功として扱い、質問は子の pane で利用者が答えるものとして残します。返答の前にこの質問が出た場合は、キーを送らずに止め、理由を返します。
+- 親のいない（standalone の）子についても最初の turn を見張り、普通に返事をしただけで「declined; could not tell the parent by Mail: no parent to tell」と記録していました。知らせる相手がいないので、standalone では見張りません。
+
+### 「子を作って話して」と頼むと、Claude Code の組み込み Agent と SendMessage で済ませていました
+
+managed block が context に無いセッションでは（block は `--project-key` の dir の CLAUDE.md に入るため、それ以外の dir で起動した場合）、「Start one child agent and play shiritori with it over 3 turns」に対して 3 回とも組み込みの Agent が子を作り、SendMessage でしりとりを最後まで進めていました。ORRERY Mail には何も残らず、dashboard にも出ません。Claude Code 2.1.224 以降の組み込み `SendMessage` / `ListAgents` は、tmux の ORRERY child にも直接届きます。そのため、`/delegate` で作った子と話すときにも、同じ回避の経路がありました。`/delegate` skill の description の先頭に、子を作るのも子と話すのも組み込みの道具ではなく `/delegate` と `send_message` で、と書きました。block の禁止文にも `SendMessage`・`ListAgents`・agent teams を足しました。skill の description は block の外でも context に入ることが多く、その場合は道具を選ぶ手掛かりになります。ただし skill の一覧が予算を超えると description は削られるので、どのセッションでも入るとは限りません。入っているかは `/context` や `/doctor` で確かめられます。確実に通すには、明示の `/delegate` を使います。修正後は同じ条件で、3 回とも `/delegate` から始めました（stub の Mail を使った少数回の比較で、全セッションでの保証ではありません）。tmux の子への送信も 3 回とも `send_message` でした。組み込みの経路を設定で断る deny rule は、組み込み subagent への送信も消すので既定では入れず、[docs/launchers.md](docs/launchers.md) に opt-in として書きました。
+
+### Telemetry にも help map を付け、README と docs の索引を画面のガイド中心に作り直しました
+
+- Telemetry の header に「HELP MAP」を置きました。cockpit の help map と同じ見た目（金の角括弧と引き出し線）で、Deck・Network・詳細パネルの主な操作に注記します。置き場所が足りない狭い窓では凡例にします。
+- README（日英）を、何ができるか → 1 行の install → 画面のガイド → 退出した agent を再開する、の順に作り直しました。冒頭に Mail が流れる NETWORK の GIF、「退出した agent を再開する」に RESUME の GIF を置きました。
+- docs の索引（日英）を目的別に作り、全文書を載せました。索引の漏れと存在しないリンクは検査で止まります。
+- 詳細パネルの「HELP MAP」の案内を README と索引に足しました。
+
+## 2026.10.03.1
+
+### Mail を更新した後、前から開いていた端末からの update が止まっていました
+
+`--mail update` で Mail を差し替えると、`env.sh` の `AGENTSTACK_MAIL_ENV` は新しい render を指します。差し替えの前に開いた端末（`env.sh` を読み込む shell）は古い render を export したままで、その端末から update（`./scripts/install.sh`、cockpit の update・setup）を実行すると `AGENTSTACK_MAIL_ENV must equal the native service env` で止まっていました。この installer が `env.sh` に書いた値と等しいときだけ許していたためです。`env.sh` の値も引き継いだ値も、この installation の render の置き場所にある render なら、自分の出力として扱って許します。`AGENTSTACK_MAIL_SERVICE_ENV` で固定した場合や、置き場所の外の path は従来どおり止まります。
+
+## 2026.10.03
+
+### cockpit に埋め込んだ dashboard の RESUME が何もしていませんでした
+
+ORRERY アプリの cockpit に埋め込まれた dashboard では、RESUME（と VERIFY & RESUME）が cockpit に名前を渡すだけで、この server に再開を頼んでいませんでした。cockpit は tmux に session が現れるのを待つだけなので、retire 済み・gone・husk の agent は何も起きずに戻っていました。埋め込みでは、先に `/api/jump` を `open: false`（端末を開かない）で呼び、server が自分の状態で決めます（動いている session はそのまま、動いていなければ再開、husk なら置き換え）。成功したら cockpit に渡し、断られたら理由を表示して渡しません。画面の DECK や NETWORK の古い表示で判断しません。 `/api/jump` に `open: false` を渡したときは、Codex App の agent でも App を前面に出さず `already_running` を返します（埋め込みの cockpit は従来どおり「Codex App で動いている」と表示します。単独の dashboard の OPEN は変わりません）。埋め込みでの bulk の RESUME も `open: false` で頼みます。単独の dashboard の挙動は変わりません。
+
+### 起動時の回復が、子の state でない file にも tmux を呼んでいました
+
+PC の再起動の後に子を再開できる state に戻す処理（前の項目）は、`child-agents/` の JSON を 1 つずつ見て、`*.mcp.json`（proxy の設定）や正常に retire した子にも「session が生きているか」を tmux に尋ねていました（数百回）。動いていた子・再開の途中の子だけに尋ねるようにしました。state を書き換える条件は変わりません。試験の process でこの処理が本物の runtime を読み、後の試験の stub を呼んでいた点も直しました。
+
+### Codex の hook が大きな payload で「Hook failed（exit 141）」になっていました
+
+ORRERY の Codex App plugin の hook（`run-hook.sh`、子の Codex にも入る）は、payload を pipe で Python に渡します。Python 側が 64 KiB の上限を超えた payload や使わない payload を読み切らずに終わると、書いている側が SIGPIPE で死に、`set -o pipefail` によって hook が exit 141 で終わっていました（162nd のセミナーで、digest-paper の実行中にレビュー役の Codex に複数回）。道具の出力を含む PostToolUse の payload は数百 KB〜数 MB になります。`hook_entry.py` と session の索引の recorder は、使わない payload も最後まで読んでから終わります。recorder が読まずに終わったときに出ていた誤った `recorder_process_failed` も出なくなります。
+
+### PC の再起動・強制終了の後に、子の Resume が拒否されていました
+
+`/delegate` の子の state は、正常に終わったときに retire されます。PC が落ちると retire されないまま残り、dashboard の RESUME も端末の `claude --resume` も `retired_at is missing` で拒否していました（162nd のセミナー: 再起動のたびに手で retire してから戻していた）。dashboard は起動時（と 1 時間ごと）に、この machine が起動する前に書かれたまま、session も生きた lease も無い「動作中」の state と、終わらなかった再開を、再開できる state に戻します。拒否の文も「正常に終わらなかった（PC の強制終了など）」と言い、どうすれば戻るかを示します。起動の前に書かれた live-session の lease は、PID が再利用されうるので生きている印に数えません（[troubleshooting](docs/troubleshooting.md)）。
+
+### agentstack-doctor: 動いている ORRERY Mail に足りない機能を知らせます
+
+Mail が install より古いと、health は通り、ほかの検査もすべて通るのに、dashboard や launcher が頼る機能だけが欠けていました（2026-10-02: `register_agent` に `existing_agent_id` が無く、Claude の再開が Mail の無い会話だけになった）。doctor は動いている Mail の `tools/list` を 1 回読み、`scripts/lib/mail_required_features.json` の機能のうち欠けているものごとに `warn:` と直し方（`--update-mail`）を出します。Mail そのものは動いているので exit status は変えません。最後に `mail-features: status=<ok|missing|unknown> missing=<…> running=<commit>` を 1 行出し、setup.sh はこれを読めます。
+
+install.sh も、この run で差し替えなかった Mail がこの checkout の build より古いと分かるとき（動いている build の commit が checkout の祖先）、結果行の前に同じ案内を出します。動いている Mail の方が新しい・どちらが新しいか分からないときは、そう出すだけで、この checkout からの更新は勧めません。欠けている機能はどの場合も知らせますが、それだけでは「この checkout から更新すれば直る」根拠にしません。案内は、足りない機能、更新の仕方（`--mail update`）、更新のリスク（止まるのは通常は数秒だが、新しい build が起動しないと数分かかりうる。子と Codex は自分で戻るが、top level の Claude Code は戻らないことがあり、Claude Code 2.1.287 の試験では 18 秒と 19 秒の停止で戻らなかった）、戻らなかったときの操作（その session で `/mcp` → orrery-mail → Reconnect）です。文は `scripts/lib/mail_update_notice.py` の 1 か所にあり、差し替えの後の案内もここから出します。cockpit の setup.sh は `install.sh --print-mail-update-advice`（読むだけ）で同じ文を出せます。 更新を承認してもらう前の画面には、リスクと戻し方だけを `scripts/lib/mail_update_notice.py risk`（引数なし・読むだけ・常に exit 0）で出せます。
+### install.sh: ORRERY Mail の扱いを 3 値にし、結果を 1 行で出します
+
+再実行で、稼働中の ORRERY Mail をどうするかを選べるようにしました。既定は従来どおり差し替えません。
+
+- `--keep-mail`（既定）: 差し替えず、build が違えば `notice:` で示す
+- `--update-mail`: 従来どおり差し替える。できなければ exit 1
+- `AGENTSTACK_MAIL_UPDATE=auto`（opt-in）: `agentstack-mailctl` 管理の配置で、検証が通り、止まる時間の見込みが `AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET`（既定 8 秒）以内のときだけ差し替える。だめなら今の build を残して exit 0
+
+選び方は `--mail auto|update|keep` で、`--update-mail` / `--keep-mail` はその別名です。option は `AGENTSTACK_MAIL_UPDATE` より優先し、`env.sh` には記録しません。どの場合も最後に `mail-result: <installed|switched|kept|unchanged|refused|rolled-back> mode=… from=… to=… running=… outage_s=… reason=<code>` を 1 行出します（`--dry-run` では `mail-plan:`）。`install.sh --print-mail-plan` は、何をするかを `mail-plan:` の 1 行で出して終わります（読むだけ・project key 不要・常に exit 0）。差し替えや rollback の後には、止まっていた秒数と、動いている Claude Code の session で `/mcp` の接続と小さい呼び出しを確かめる手順、止まっている間に失敗した操作は繰り返す前に実行済みかを確かめること、を出します。`install-state.json` の `agent_mail.update` には mode・reason の code・止まっていた秒数も残ります。setup.sh・update.sh は、文の grep ではなくこの行を読めます。
+
+`auto` を既定にするのは、rollback まで含めた停止時間の上限と、更新後の database で前の build が動くことの確認を入れてからです（[設計メモ](docs/agentstack-mail-update-design.md)）。
+
+### `sonnet` が Sonnet 5.5 を起動するようになりました。別名の行き先を固定しません
+
+「Sonnet 5.5 の子を」と頼まれた agent が `--model sonnet` を渡すと、`claude-sonnet-5` が起動していました。launcher が `opus` / `sonnet` / `haiku` / `fable` の行き先を固定値で持っていたためです（dashboard の一覧は #90 でローカルの catalog に追従していましたが、launcher の別名と warm pool の照合は固定のままでした）。いまは、この 4 つの別名と省略時の既定を、Claude Code のローカル model catalog（`~/.claude/cache/model-catalog/`）がその系統の現行として示すモデル（系統ごとに 1 つの `main` 行）に解決します。手元の Claude Code 2.1.287 が `--model sonnet` などを解決した結果とは一致しました（provider の設定や model の上書きがあると、CLI の解決は変わり得ます）。catalog が無い・読めない・系統の行が 1 つに決まらないとき、子が使う Claude Code がそのモデルに必要な版より古いときは、`dashboard/claude_models.py` の同梱の表を使います。固定の値はこの表 1 か所だけで、warm pool の照合と NEW AGENT の既定も同じ解決の結果を使います。
+
+- どこから解決したか（catalog か同梱の表か、catalog が古いか）を、launcher は起動時に、`agentstack-doctor` は 1 行で出します
+- 版つきの別名は世代を固定するためのものなので、追従しません。`sonnet-5-5` / `sonnet55` / `sonnet5.5` / `Sonnet 5.5` を足しました（`claude-sonnet-5-5`）。`sonnet-5` は引き続き `claude-sonnet-5` です。`opus-5-5`・`haiku-4-5`・`fable-5-1` も同じ形で受け付けます
+- 省略時の既定は catalog の並び順の先頭ではなく、catalog が現行の Opus として指定したモデルに追従します。`AGENTSTACK_CLAUDE_MODELS` の許可リストの扱いは変わりません
+- Claude Code は catalog を取得から 1 時間で古いと印を付けます。新しい catalog だけを使うと、ほとんどの起動が同梱の表に戻ってしまうので、別名の解決には古い catalog も使います。ただし古い catalog が同梱の表より古い世代を示すときは、同梱の表を使います。古い catalog は NEW AGENT の候補を増やすのには使いませんが、別名が今起動するモデルは候補に入れるので、画面の既定と launcher は一致します
+- 版の確認と起動は同じ binary で行います。`hooks/claude-child-bin.sh` が子の login shell で `~/.local/bin` を先頭にして `claude` を探し、launcher はその版で別名を決め、子はその path を実行します。dashboard も起動時とモデル省略の起動の前に同じ script を実行するので、dashboard と子で PATH が違っても、既定は子の `claude` が動かせるモデルになります
+- warm pool は、status がその種類の行に要求モデルの正式 ID を括弧で示し（例 `opus ready (claude-opus-5-5)`）、`claim-model <種類> <子> <正式 ID>` がそのモデルの session を不可分に claim できたときだけ使います。`claim-model` の無い pool・別のモデルで事前起動した pool は cold start、別のモデルを報告した claim は起動を中止します
+- catalog は profile の中で最も新しいものを使い、今ログインしている account のものかは確かめません
+
+### Mail なしの再開で、理由と直し方が見えるようにしました
+
+古い（`existing_agent_id` を受け付けない）ORRERY Mail のもとでは、旧形式の state を持つ Claude は、親の有無にかかわらず会話だけで再開されます（MCP なし・hook 無効・Mail なし）。この判定は変えていません。変えたのは見え方です。これまでは理由（`mail_schema_unsupported`）が出ても、直し方は書かれていませんでした。また再開後は、Mail 側の行が retired で `program` が空になるため、走っている行に MAIL UNAVAILABLE が出ていませんでした。いまは、
+
+- `mail_message` と新しい `mail_remedy` に、`./scripts/install.sh --update-mail --dry-run`、続けて `--update-mail` を実行し、会話だけのセッションを終えてから再開し直す手順が入ります。これはこの installer が入れた Mail に当てはまる手順で、dry-run が拒否したら止まって [Mail の更新手順](docs/agentstack-mail-update.md) に従うこと、更新しなければ会話だけの再開のままであることも書きます。再開前の要約、再開の結果、端末に出る notice のどれにも出ます。会話の中の agent には、その更新を自分で実行しないよう伝えます
+- 再開の button は、会話だけになる場合 `RESUME WITHOUT MAIL`（確認が要る場合は `VERIFY & RESUME WITHOUT MAIL`）と表示し、title に理由と直し方を出します
+- 走っている行は、`program` が空でも、tmux の目印から MAIL UNAVAILABLE を出します。codex など、ほかの program の行は従来どおりです
+
+credential が無い・保持期限切れの場合は dashboard から直せないので、`mail_remedy` は付きません。
+
+### 登録のたびに、contact policy の設定が 1 回失敗していました（#51）
+
+登録の helper は `set_contact_policy` を owner token 付きで先に呼んでいました。同梱の ORRERY Mail の `set_contact_policy` は `registration_token` を受け付けないので、この呼び出しは毎回失敗し、token なしの呼び直しで設定されていました。token なしを先に呼び、失敗したときだけ token 付きで呼び直すようにしました。owner token を求める古い Mail にも、2 回目で設定されます。
+
+### worktree の Codex の子が「hooks need review」で止まっていました
+
+`--worktree` で起動した Codex の子は、利用者が元の checkout で信頼した project の hook を、別の path なので信頼済みと見なされず、Codex の review の画面で止まっていました（2026-10-01 の通しで 4.5 分）。その間は hook も動いていませんでした。launcher は子の `CODEX_HOME` の設定にだけ、元の checkout の hook の信頼を worktree の path でも書き足します。Codex は hook の中身の hash で照合するので、中身が同じ hook だけが信頼されます。利用者の `~/.codex/config.toml` は変えません。dashboard からの再開でも同じです。
+
+## 2026.10.01.1
+
+### 計算の待ちに上限を付け、失敗した計算が重ならないようにしました（#161 のレビュー、API 世代6）
+
+`/api/agents` と `/api/graph` で、ほかの request の計算を待つ時間が 30 秒を超えると `503`（`Retry-After: 1`、`{"error":"busy","retry":true}`）を返します。利用側が扱う新しい応答なので、`/api/version` の `api` を6にしました。共有の計算が失敗したときは、待っていた request がそれぞれ計算し直すのではなく、次の 1 回の計算をまとめて待ちます。失敗し続ける場合も、再試行の途中に新しい request が来た場合も、同時に走る計算は 1 本です。表示の鮮度は変わりません。
+
+### codex の検査が、すぐ終わった失敗も時間切れのように表示していました（#121）
+
+installer・`agentstack-doctor`・子の launcher が `codex --version` を確かめるとき、失敗はすべて「did not succeed within 10s」と表示していました。0.04 秒でエラー終了した場合（PATH の node が Codex を入れた版と違うなど）も、時間切れのように読めました。いまは、時間切れなら `did not finish within Ns and was stopped`、エラー終了なら `exited with status N after Ns:` に続けて stderr の先頭 1 行を表示します。
+
+### vault の外の Claude の子が、渡したタスクを断っていました
+
+launcher はタスクを入力欄に貼り付けていたため、Claude Code はそれを `<pasted_content>` として扱っていました。vault の外の Sonnet 5 の子は、文面によらず断りました（2026-10-01 の測定で 6 回中 6 回）。Claude の子には、タスクを `claude [prompt]` の引数（利用者の最初の発言）で渡し、同じ起動コマンドの `--append-system-prompt` で、誰がこの session を起動したかを運用者の設定として伝えるようにしました。同じ条件で 3 回中 3 回実行しました。
+
+launcher は、子の最初の turn が親への報告で終わったかを transcript で確かめます。文章だけで終わった、tool を呼んだが報告せずに終わった、既定 180 秒（`AGENTSTACK_CHILD_START_WAIT_SECONDS`）の間に応答が無い、のいずれかなら、親に `[launcher]` で始まる Mail を送ります。180 秒の時点でまだ考えている子は分けて知らせ、後で始めたらもう 1 通送ります。子が黙って止まることはなくなりました。1 引数に収まらない長いタスクは、子だけが読める file 経由で渡します。
+
+報告の道具は ORRERY Mail の `send_message` と名前で書くようにしました（Claude Code の SendMessage で報告する子がいたため）。モデルが変わったときに回す `scripts/canary-embed-task.sh` を足しました。
+
+### 製品が起動する Codex で、起動時の更新案内を出さないようにしました（#60）
+
+Codex の起動時の更新案内は、既定の選択が `npm install -g @openai/codex` です。無人の child では断る人がいません。以前の launcher は案内の Enter を sign-in と取り違えて押しており、更新の途中で child を止めると、機体の `codex` が旧版も新版も使えない状態で残りました。Enter の取り違えはすでに直っています（trust 画面だけを全体の配置で見分ける）。今回、child・dashboard の再開・`agent-start-codex`・Windows の launcher の全部で `-c check_for_update_on_startup=false` を付け、案内そのものが出ないようにしました。Codex の更新は利用者が行ってください。また、起動に失敗した child を片付けるとき（launcher の 2 つの経路と dashboard の spawn）、画面に `Updating Codex via` が出ていれば session を止めずに残し、そのことを知らせます。
+
+### 子に渡す道具を起動時に選べるようにしました（API 世代7）
+
+`/delegate` と `spawn_child.sh` に `--base default|mail-only` と `--tools`（`browser[:<deviceId>]`・`screen[:read|:operate]`・`screen:<read|operate>:<server>`・`mcp:<server>`）を、`POST /api/spawn` に `base` と `tools` を足しました。利用者が頼る field を足したため `/api/version` の `api` を7にしました。`--base` も `--tools` も指定しない（道具の選択がない）起動は、コマンドも引数も従来と同じです。
+
+- `mail-only` の child には ORRERY Mail と選んだものだけを渡します。Claude はブラウザを選ばなければ `--no-chrome` も付け、Codex は `orrery-only` と同じ無効化の後で選んだ server だけを有効にします
+- 選んだ server は Claude では利用者の定義を strict の設定に写し、Codex では子の `config.toml` で有効にします。承認は child の起動の中だけで、分類表で分かる tool ごとに渡し、server 全体は承認しません。利用者の設定ファイルと全体の承認方針は変えません
+- 分類表（今は Windows-MCP 0.8.6）は tool を「読む」「画面を操作する」「画面ではない」に分けます。`screen:read` は読む tool だけを、`screen:operate` は画面の tool だけを公開・承認し、PowerShell・Registry・FileSystem などは `mcp:<server>:all` を別に指定したときだけ承認します。表に無い版では tool を承認しないので、resume の前に server の版が上がっても承認は広がりません
+- dashboard の resume の見込み（`resume_capability`）も、道具の選択を戻せるかを見ます。戻せなければ `config_unrestorable` です
+- 選択のある child は、指定どおりにできなければ起動しません。Mail の proxy が無い、server を写せない（見つからない・`env` や `headers` を持つ・コマンドが絶対パスでない）、Mac で computer use が有効な project での `mail-only`、などです。選択の無い child の fallback は従来どおりです
+- WSL で画面の server を選ぶと、Windows のセッション0（ssh から起動した WSL。画面を取れない）を検出して警告します
+- 選択は Claude では会話に結び付いた起動の記録（version 3）に、Codex では `child-agents/<name>.tools.json` に残し、resume は同じ設定を作り直すか、できなければ止めます。Claude child の MCP 設定は、launcher と dashboard の resume が同じ `hooks/child_tools.py` で作るようになりました
+
+これは child への方針であって、技術的な隔離ではありません。動いている child への追加、resume での変更、roster・DECK の表示、NEW AGENT の欄はまだありません（[子に渡す道具を選ぶ](docs/delegation.md#子に渡す道具を選ぶ--base----tools)）。
+
+### 並行の hook と bridge の起動で、時間しだいで重複・拒否が起きていました（#55・#122）
+
+Mail に届かないときの警告は、session ごとに 10 分に 1 回だけ出す設計でしたが、10 分の枠を `date +%s` から決めて `mkdir` で取っていたため、並行に走る hook の時計が枠の境目をまたぐと 2 つの枠を取り、同じ警告が 2 回出ました。session と状態ごとに 1 つの記録を `flock` の下で読み書きし、前回の報告から 600 秒経つまで出さないようにしました（#55）。
+
+Codex App の bridge は、Unix socket を正式なパスに bind してから権限を変え、listen していました。その間に接続した hook は拒否され、socket が既定の権限のまま見える瞬間もありました。短い一時の名前で bind・権限の設定・listen を済ませてから、正式なパスに rename して公開します（#122）。同じ issue のもう 1 つ（lock を待つ時間の検査）はテストの前提の誤りで、子の起動からではなく、子が記録を始めてから数えるように直しました。
+
+### テストがこの Mac の launchd に job を残していました
+
+installer を走らせるテストの後片付けは dashboard の job だけを外していたため、同じ install が読み込んだ Mail の autostart と watcher が launchd に残り、消えた一時ディレクトリを指して再起動を繰り返しました（exit 78/127）。後片付けは、test 用の prefix の下にあり、plist か program がそのテストの HOME の中にある job を全部外します。それ以外の prefix（本物の `org.agentstack` を含む）は launchctl を呼ぶ前に拒否し、同じ prefix で並行して走る他のテストの job には触れません。
+
+## 2026.10.01
+
+### Claude の access token が更新されると、USAGE が dashboard を再起動するまで止まっていました（#53）
+
+Claude Code が定期的に access token を更新すると、同じ account なのに Claude の quota が `account_identity_changed` になり、cockpit の USAGE は最後の値のまま数時間止まることがありました。account が変わったかどうかは、token ではなく Claude Code が記録した account（`~/.claude.json` の `oauthAccount` の account と organization）で判断するようにしました。記録が読めない場合（`CLAUDE_CODE_OAUTH_TOKEN` を使う場合を含む）は従来どおり token で判断します。記録が読めず token だけで判断した場合（`credential_changed_unverified`。多くは token の更新）は、前の値は消したうえで、その後に status line が観測した値を表示します。記録で account が変わったと分かった場合は、新しい account の値が届くまで status line の値も出しません（前の account で動いている session が書いた値が混ざるため）。`~/.claude.json` は版（mtime と大きさ）ごとに 1 回だけ読み、16 MB を超えるときは読まずに token で判断します。account の取得に失敗するたびに、理由・失敗の種類・次に取りに行くまでの秒数を dashboard の log に 1 行出します（token は出しません）。
+
+### cockpit を開いていると、dashboard が CPU を数コア使っていました
+
+ORRERY cockpit は `/api/graph?all=1&spawn_only=1` を 6 秒ごとに呼びます。dashboard はそのたびに全 agent（約 2,000 行）の resume の可否を計算して捨て、行ごとに SQLite を開き直していました（1 回あたり約 3,000 回）。複数の poll が重なると 1 本が 10 秒を超え、cockpit の timeout で取り直しが積み上がっていました。
+
+- `spawn_only` は親子の線だけを返し、行ごとの計算をしません。返す内容は以前と同じです
+- graph と agents の 1 回の計算では、Mail の登録を 1 回の問い合わせで読みます
+- 同じ graph / agents の計算は同時に 1 本だけにします。計算中に来た問い合わせは、その計算が終わった直後に始まる次の 1 回の結果を、ほかの問い合わせとまとめて受け取ります。どの問い合わせも自分が来た後に始まった計算の結果を受け取り、結果は時間で使い回さないので、表示が以前より古くなることはありません
+
+2,000 行での計測: `spawn_only` 1 回 0.94 秒 → 0.01 秒、`all=1` 0.83 秒 → 0.21 秒、`/api/agents?days=all` 1.08 秒 → 0.20 秒。4 本同時の `spawn_only` は最長 3.65 秒・CPU 7.9 秒 → 0.01 秒未満。API と表示の内容は変わりません。
+
+### 入れ直しで、前回変えた設定が既定値に戻っていました（#137）
+
+`git pull && ./scripts/install.sh` を環境変数のない端末で実行すると、port・label prefix・terminal・MCP URL・service の `PATH`・Python・ORRERY Mail の state root（DB の場所）・`LANG` / `MURMUR` / `DELIVERABLE_ROOTS`・`AGENTSTACK_VAULT` などが既定値に戻り、dashboard が別の port・別の launchd label で登録し直されていました。installer はすべての設定を「明示した値（option・環境変数）> 前回の `env.sh` > 既定値」の順で決めるようにしました。`AGENTSTACK_VAULT` は明示しても env.sh・service に空で書かれていたので、明示した値も届くようにしました。`AGENTSTACK_MANAGED_AGENTS_FILE`・dashboard の log と再起動の設定・Mail の management socket も引き継ぎます。引き継ぐのは選んだ値だけです（`env.sh` に `AGENTSTACK_CHOSEN_SETTINGS` として記録します）。書き出された既定値は固定されず、次の版で既定値が変われば新しい既定値になります。1 つだけ既定値に戻すには空の値を明示し（`AGENTSTACK_VAULT=`、`--codex-add-dirs ""`）、まとめて戻すには `--reset-settings`（`AGENTSTACK_RESET_SETTINGS=1`）を使います。project key・protected roots・Mail の state / service root と management socket・label prefix・Mail の launchd label・MCP URL は、データの置き場所とそこで動く service の名前なので reset でも引き継ぎます（reset で戻すと、前の Mail が残ったまま同じ DB に 2 つ目の Mail が立ちえました）。`env.sh` と同じ値の環境変数（`env.sh` を読み込んだ shell や cockpit の更新 script から来たもの）は新しい選択として扱いません。`AGENTSTACK_CLAUDE_JSON` は試験用の差し替え口なので引き継ぎません。dashboard の plist に入れる値はすべて XML として escape し、`&` や `"` を含む path（vault など）でも plist が壊れないようにしました。前回記録した Python が無くなっていた場合は通知して探し直します。dry-run の冒頭に port・label prefix・terminal・MCP URL を表示します。
+
+### launcher が、明示した project key を install 時の値で上書きしていました（#33）
+
+`agent-start`・`agent-start-codex`・`agent-start-gemini` が起動の途中で `env.sh` を source し、起動前に設定した `AGENTSTACK_PROJECT_KEY` などを install 時の値に戻していました。起動前に設定された値は `env.sh` より優先し、明示した project key に合わせて protected roots も決めます。明示しなければ従来どおり `env.sh` の値を使います。
+
+この順序は `hooks/project-context.sh`（`AGENTSTACK_INHERITED_SETTINGS`）の 1 か所で定義し、installer と launcher の両方が使います。`env.sh` を shell の起動時に読み込んでいる場合、その shell の値は明示した値として扱われるため、入れ直した後は新しい shell を開いてください。
+
+### installer が稼働中の ORRERY Mail を新しい build に差し替えられるようになりました
+
+これまで `install.sh` の再実行は稼働中の Mail を採用し、build には触れませんでした。そのため Mail 側の変更（2026.09.30.4 の `register_agent(existing_agent_id=…)` など）は普通の update では届かず、以前の版の Claude の子は会話だけの resume になっていました。
+
+`./scripts/install.sh --update-mail` は次の順で差し替えます。まず稼働中の Mail を止めずに、新しい build の用意、scratch port で database の snapshot に対する検証、database の backup を済ませます。そのうえで切り替え、新しい build が共有 database で応答しなければ前の build を起動し直します。`env.sh`・autostart・`install-state.json` は、実際に動いている方の build で書きます。差し替えなかったときと戻したときは、終了 status 1 で知らせます。途中で Ctrl-C などで止めた場合も、検証用の snapshot と server を残さず、Mail は前の build か新しい build のどちらかで `env.sh` と一致した状態で終わります。稼働中の接続・token・enrollment の pin・database は失いません。systemd の timer（WSL2 など）でも同じです。`--update-mail` を付けない再実行は、これまでどおり稼働中の build を使い続けます。build が違うときは `notice:` でそれを示します。手順と影響は [docs/agentstack-mail-update.md](docs/agentstack-mail-update.md#--update-mail-による差し替え) を参照してください。
+
+### resume すると whois の model が claude-code に変わっていました（#144）
+
+resume した Claude の SessionStart hook は shell から再登録しますが、model を受け取っていなかったため、登録済みの model（例: `opus-5.5`）を `claude-code`、または tmux server の環境に残った別の agent の model で上書きしていました。resume は登録済みの model（無ければ `claude-code`）をその session の `CLAUDE_CHILD_MODEL` として渡し、SessionStart の再登録はこれを `AGENTSTACK_CLAUDE_MODEL` より優先します。
+
+### resume の前に、Mail まで戻るのか会話だけなのかが分かるようにしました（#145、API 世代5）
+
+`resume_capability: ready` は会話だけの resume でも出るため、resume した体が Mail を使えるかは `/api/jump` を実行した後の応答でしか分かりませんでした。`/api/agents` / `/api/graph` の resume できる Claude row（`ready` / `verification_required`）に `resume_mode` を追加し、`mail`（owner を認証して unretire する。できなければ起動しない）か `conversation_only`（Mail に触れない。`mail_reason` 付き）かを resume の前に出します。`/api/jump` も Mail まで戻した場合に `resume_mode: mail` を返します。`resume_capability` の code と意味は変えていません。利用側が頼る field を足したため `/api/version` の `api` を5にしました。
+
+### token だけの Claude を resume して exit すると、Mail の row が active のまま残っていました（#143）
+
+子の state が無く owner token だけを持つ Claude を resume すると、resume は Mail の row を unretire しますが、exit の後に retired へ戻す処理がありませんでした（子の state を持つ体だけが cleanup で戻っていました）。resume の前に retired だった体は、CLI が正常に終了した後に同じ token で再 retire します。reservation の解放は SessionEnd hook に任せ、同じ identity が別の tmux pane や端末の session で生きている間は retire もしません。token は削除せず次の resume に残します。元から active だった体は retire しません。
+
+対になる側として、端末から `claude --resume` で開き直した体も（`/clear` や compaction では、動いている間に意図して retire した状態を戻しません）、SessionStart が保存した owner credential で本人を確かめ、retained（保持期間内）の子か token だけの体なら unretire します（これまでは dashboard の resume だけが unretire していました）。旧形式・期限切れ・purge 済みは retired のままです。
+
+### session binding の receipt が無い環境で、長い応答の Codex の子の起動が約 90 秒待っていました（#118）
+
+receipt が無い環境（WSL など）では、launcher は Codex の画面を見て、最初の task が始まったことが分かった時点で待つのをやめます。手掛かりは実行中の表示と、task の末尾の後に続く応答です。ところが長い応答では、実行中の表示は約 2 秒、task の末尾は数秒しか画面に出ません。3 秒ごとの確認が両方を逃すと、上限の 90 秒まで待っていました。Codex 0.158 は、task が画面の外に出たあと、その 1 行目を `…` で切って画面の 1 行目に固定表示します。この行がこの task の 1 行目（16 文字以上）と一致し、入力欄が空になっていれば、応答が出ていると判断します。task の末尾が折り返しで 2 行に分かれていても見つけます。WSL で 1 秒ごとに採った実画面で、どの位相から確認を始めても 3〜6 秒で終わることを確かめました（以前は最長 90 秒）。この判定は待ちを終えるためだけに使い、キーは送りません。task が始まった証拠にもしません。
+
+### 以前の版の Claude の子を、同じ名前で起動し直せるようになりました（WSL2 の報告の問題 3）
+
+`spawn_child.sh --pre-registered` は、以前の版の 3 項目の state を「child state belongs to another registration」で拒否し、preregister のやり直しを勧めていました。やり直すと別の名前が登録され、同じ役割の体が二重になりました。旧 state を見つけたら、whois で得た ID で `register_agent(existing_agent_id=…)` を呼び、保存済みの credential を照合します。照合できたときだけ 5 項目の state に移して起動します。照合できなければ state と token を変えずに止め、dashboard の再開を案内します。
+
+### 子の lineage に親を示すようになりました（WSL2 の報告の問題 4）
+
+launcher が子に渡す proxy（direct binding）は親を知らず、`runtime_status` の lineage は常に root でした。`PARENT_AGENT` 付きの Codex の子は、正本の親と食い違うとして起動処理を止めていました。proxy は `AGENTSTACK_PROXY_PARENT_AGENT` を受け、lineage を `kind: child`・`parent_agent: <親>` にします。親を反映できない組み合わせは、CLI の起動前に止めます。
+
+### 子の proxy が、schema に無い引数で落ちていました（WSL2 の報告の問題 2）
+
+direct binding の proxy は、モデルが付けた `sender_name` などで `TypeError` になっていました。binding と一致する値は捨て、食い違う値は理由を返して拒否します。モデルが渡した token は Mail へ送りません。schema に無い引数は、受け付ける引数の一覧つきで拒否します。direct binding の `runtime_status` は `bound` を返します。
+
+### retire された子を起動し直すと、retired のまま動いていました（#153）
+
+`--pre-registered` で以前に動いた子を起動するとき、起動前に Mail の `retired_at` を確かめます。retired なら子自身の token で `unretire_agent` を呼び、active に戻ったことを確かめてから起動します。戻せなければ起動しません。起動に失敗したら retire し直します。
+
+## 2026.09.30.4
+
+### 以前の版で作った Claude child が resume できなくなっていました（#140）
+
+2026.09.30.3 が旧3項目形式の state を `identity_mismatch` と拒否していた回帰を修正しました。既存の正式 Claude 登録・owner と private token を検証し、明示 resume の token 認証が成功した後だけ同じ identity を新形式へ移行します。表示 GET は移行しません。保持期限は認証移行時点から設定日数（既定30日）、設定0では移行を拒否します。認証・起動の失敗では旧 material と元の Mail / husk を保持し、世代付き undo で古い rollback が新しい試行を消すのを防ぎます。会話だけの再開と Mail 不可の表示 field を追加したため API 世代は4です。
+
+bundled Mail の `register_agent` に既存 owner だけを認証する optional `existing_agent_id` を追加しました。旧形式の移行はこのガードを必須とし、古い Mail では登録を代用せず、会話だけ再開します。Mail まで復帰するには dashboard と bundled Mail を一緒に更新・再起動してください。通常の登録と名前生成の動作は変えません。
+
+旧形式の子を exit した際に cleanup が state と token を削除する回帰も修正しました。private な旧3項目 state と一致する token を元のまま保持し、明示 resume で認証して移行します。旧 material の検証エラーでは削除に進まず、保持設定0だけは従来の opt-out に従います。
+
+通常の更新が稼働中の古い Mail を採用する環境でも、以前できていた Claude の会話 resume を戻しました。実 token 欠落・検証済み期限切れ・schema で確認した旧 Mail では、Mail を遮断して会話だけ再開し、応答・DECK・NETWORK・端末に Mail 不可と固定 reason を表示します。既存 material の安全性と identity/pending を先に検査し、認証拒否・不一致・unsafe・破損・明示 purge・schema 取得失敗は拒否します。対応した Mail では認証付きの完全な復帰を維持します。追加 field のため API 世代を4へ上げ、既存 `ok` / `action` / `detail` / `resume_capability` は保持します。
+
+## 2026.09.30.3
+
+### resume も子の窓の自動表示設定に従います（#138、API 世代3）
+
+`AGENTSTACK_AUTO_OPEN_CHILD=0` の Claude / Codex resume は detached tmux で実行し、OS の窓を開きません。未設定 / `1` は従来どおりです。`POST /api/jump` に boolean `open` を明示すると設定より優先します。後から Open tmux や cockpit で開けます。この利用側 field を追加したため `/api/version` の `api` を3にしました。
+
+### Claude の resume 後に Mail を送受信できるようにしました（#135・#136）
+
+正常終了した Claude の子も、Codex と同じく再開用 state と owner credential を既定30日、0600で保持します。dashboard の Claude resume は保存済みの正式 ID と credential を検証し、子専用 Mail proxy config を再生成、同じ identity の再登録・unretire を完了してから起動します。top-level も既存 token で復帰します。credential 欠落、期限切れ、purge、認証や unretire の失敗では起動しません。incoming receipt の provider 不一致や metadata 不備を保存前に拒否し、起動失敗でも既存 credential を保持します。undo は起動ごとの nonce で照合し、purge 後の再試行を旧 launcher の cleanup が消しません。Claude の起動準備が失敗した場合は元の husk と Mail の状態を戻し、元から active だった identity を retire しません。Codex の top-level resume で unretire を飛ばしていた箇所も直しました。履歴は保持・purge の対象外です。
+
+## 2026.09.30.2
+
+### Codex を子としてしか使わない環境で、正常終了した子の会話の記録が消えていました（#133）
+
+子の Codex home は、利用者の `~/.codex` にある項目だけを link で映します。Codex を直接起動したことが無い環境（新しく入れた WSL など）では `sessions/`・`history.jsonl`・`session_index.jsonl` が無く、子は会話の記録を自分の home の中に書き、正常終了の片付けで home ごと消していました。そのため、きちんと終わった子ほど resume できませんでした。子の home を作る前に、この 3 つを利用者の Codex home に用意してから link します。既にあるものは開かずにそのまま残し、欠けたものだけを作ります（読み取り専用の履歴でも子を起動できます）。片付けで実体の記録を消す前には警告を出します。
+
+### `/api/spawn` の `dry_run` を実装し、知らない指定を拒否するようにしました（#132）
+
+これまで `/api/spawn` は `dry_run` を処理せず、知らない指定を黙って捨てて、本当に agent を登録・起動していました。`"dry_run": true` を付けると、登録・予約・Mail・tmux・起動・一時ファイルの作成を一切行わず、組み立てた起動の内容（argv と解決した provider・model・effort・dir）だけを返します。Codex の版を確かめる読み取り専用の `--version` だけは走ります。知らない指定は 400 で拒否します。cockpit の NEW AGENT が送る指定はすべて受け付けます。
+
+### `/api/version` の `api` を 2 にし、利用者との互換の世代として運用し始めました（#134）
+
+ORRERY cockpit は、orrery-telemetry が必要な版かどうかを、日付ではなく `api` で判定します。`api` は、利用者が頼る endpoint や field を足す・意味を変えるときだけ上げます（[docs/api.md](docs/api.md#get-apiversion)）。これより前の版は、中身にかかわらずどれも 1 を返していたので、この版で 2 にしました。`agentstack-doctor` と Windows の確認は、`api` が 1 以上であれば ORRERY Telemetry と認めます（世代は問いません）。
+
+## 2026.09.30.1
+
+### Codex の既定と「sol」を GPT-6.1 Sol にしました（#128）
+
+NEW AGENT と `/delegate` の Codex の既定、別名 `sol` を `gpt-6.1-sol` にしました。GPT-6.1 Sol は Codex CLI 0.159.0 以上でしか使えないので、使えるかどうかは、実際に子を起動する Codex CLI（`AGENTSTACK_CODEX_BIN`、子と同じ login shell と PATH で解決）の版で決めます。`~/.codex/models_cache.json` は最後に一覧を取った Codex の版で上書きされ、古い Codex の session が残っていると数分ごとに 6.1 の有無が入れ替わるので、この一覧には頼りません。CLI が古い環境では既定を `gpt-6-sol` に戻し、`agentstack-doctor` が Codex CLI の更新を促します。dashboard の API と `/delegate` は、選んだ CLI と正式なモデル ID を組で固定して起動に渡します。Gemini や Claude の起動では Codex CLI を起動しません。`python3 ~/.agentstack/dashboard/codex_models.py resolve sol` で、選ばれるモデル・CLI・版・判断の理由を確かめられます。
+
+### Codex の子の resume が必ず失敗し、失敗すると resume できなくなっていました（#127）
+
+telemetry の deck から Codex の子を resume すると、tmux の session が 1 秒ほどで消え、cockpit にも出ませんでした。resume の起動処理が program を `codex` と書いて照合し、子の記録（receipt）の `codex-cli` と一致しなかったためです。さらに、拒否の前に登録をやり直していたので、一度失敗するとその子は二度と resume できなくなっていました。照合は、照らし合わせた元の receipt の表記を基準にし、書き込まずに照合してから再登録するようにしました。resume して何も入力せずに閉じても、次の resume はできるままです。
+
+### docs
+
+- 「Obsidian と一緒に使う」のページを足しました（`docs/obsidian.md`、#119）
+- README 冒頭の GIF を今の画面で撮り直しました（#124）。紹介動画「Orrery」への案内を足し、英語の README は英語版を指します（#126・#130）
+
+## 2026.09.30
+
+### WSL で、Codex の子の起動の確定に毎回約90秒かかっていました（#117・#120）
+
+Codex の子は、task が始まったことを Codex の記録（receipt）で確かめてから起動を確定します。WSL では Codex の連携（lifecycle hooks）が入っていないことが多く、receipt が無いので、launcher が上限の90秒まで見張ってから「確認できない」と確定していました。子は動いていましたが、spawn の完了と次の操作がその間待たされました。
+
+- **連携を入れれば約7秒になります（根本の対処）。** `scripts/install-codex-app-integration.sh` が WSL でも動くようにしました。これまでは PATH の先頭にある Windows 側の `codex`（`/mnt/c/...`）を拾っていたので、core の installer と同じ規則（WSL では `/mnt` 配下を除き、`--version` に答えるものだけ）で選びます。macOS 以外では launchd の service を作らない `--no-service` が既定です。入れた後に Codex で一度 `/hooks` を開き、AgentStack の hooks を承認してください。手順と画面は [docs/codex-app.md](docs/codex-app.md) にあります。承認の後、長い task でも起動の確定は約7秒でした（実機で 7.1〜7.3 秒）
+- **連携が無い環境でも、短い task は早く確定します。** receipt が無いとき、子の画面に Codex の実行中の表示か応答の表示が出たら、そこで確定します（93秒 → 約10秒）。長い応答の途中で task の文面が画面の外に出ると、これまでどおり90秒待つことがあります（#118 で追跡中）
+
+### WSL で窓を閉じたときの説明を、実測に合わせました（#116）
+
+docs は「Windows Terminal を閉じると WSL が止まり、agent も止まる」と説明していましたが、これは ssh から起こした場合だけでした。デスクトップ（Windows Terminal など）から起こした tmux や dashboard は、窓を閉じても動き続けます。止めるには `wsl --shutdown` を使いますが、これはすべての distro を止めるので、その範囲も書き添えました。
+
+## 2026.09.29
+
+### Claude の子が、利用者向けの質問画面に答えずに60秒待って失敗していました（#110）
+
+Claude の子の起動直後に、1回限りの質問（「Claude in Chrome extension detected」など）が出ると、準備完了の判定がこの画面を認識できず、何も押さないまま60秒待って失敗していました。この答えは利用者の今後の既定になりうるので、launcher は答えません。質問画面を検出したらキーを送らずにすぐ止め、「通常の端末で `claude` を一度開いて答えてから、もう一度起動してください」と案内し、失敗の時点の画面を記録に残します。trust の画面は、いま選ばれている選択肢を画面の構造から読み、trust のときだけキーを送ります。
+
+### bound proxy の親が /delegate を断っていました。古い managed block も検出します（#113）
+
+dashboard から起動した Codex の親が、自分の接続（bound proxy）に `register_agent` などの道具が無いことを理由に、`/delegate` を断っていました。子の登録は shell の helper（`agentstack-preregister-child`）が別の identity として行うので、親の接続にそれらが無いのは正常です。delegate の skill、managed block、起動の案内をそのように書き直しました。あわせて、`~/.codex/AGENTS.md` や project の `CLAUDE.md` に古い managed block が残っていると、doctor と installer が知らせ、更新のコマンドを示すようにしました（これまでは block があるだけで `ok` でした）。
+
+### dashboard の肖像の来歴を、実際のとおりに記録しました（#114）
+
+dashboard の肖像（`portraits_64`・`portraits_pixel`）は、作者が画像生成で文章だけから作ったドット絵です。Wikimedia Commons の写真ではありません。これまでの記録は Commons の写真だと説明していたので、`docs/third-party.md` と各 manifest、公開デモの説明を実際のとおりに直しました。画像そのものは変えていません。ドット絵は repo と同じ条件で配布します。
 
 ### WSL で、agent が起動した Codex の子が Windows の codex を使って即終了していました
 

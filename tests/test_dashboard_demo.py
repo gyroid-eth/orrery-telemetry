@@ -151,3 +151,15 @@ def test_dashboard_demo_refuses_live_port_and_unowned_directory(tmp_path: Path):
     assert result.returncode != 0
     assert "refusing to overwrite non-demo directory" in result.stderr
     assert sentinel.read_text(encoding="utf-8") == "user data"
+
+
+def test_demo_mode_is_literal_legacy_and_does_not_inherit_global_owner(tmp_path,monkeypatch):
+    import runpy
+    api=runpy.run_path(str(SCRIPT))
+    monkeypatch.setenv('AGENTSTACK_RUNTIME_MODE','global')
+    monkeypatch.setenv('AGENTSTACK_CLIENT_CONFIG','/unreadable/context')
+    monkeypatch.setenv('AGENTSTACK_GLOBAL_SERVER_CONFIG','/unreadable/config')
+    env=api['_server_env'](tmp_path,12345,'fixture')
+    assert env['AGENTSTACK_RUNTIME_MODE']=='legacy'
+    assert 'AGENTSTACK_CLIENT_CONFIG' not in env
+    assert 'AGENTSTACK_GLOBAL_SERVER_CONFIG' not in env

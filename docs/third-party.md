@@ -21,6 +21,37 @@ license は [`AGENTSTACK_LICENSE`](../packages/agentstack_mail/AGENTSTACK_LICENS
 | Claude Code / Codex CLI | user install | agent runtime | vendor terms |
 | tmux / uv / git / Python | user environment | local runtime dependency | 各 upstream |
 
+## provider のロゴ
+
+dashboard（と ORRERY cockpit の usage の表示）が Claude・Codex（OpenAI）・Gemini を示すのに使うロゴです。cockpit の repository も、Claude と OpenAI の 2 つを同じ file で同梱しています。
+
+| 配置 | マーク | 出典 | License |
+| --- | --- | --- | --- |
+| `dashboard/assets/anthropic.svg` | Claude | Simple Icons（Iconify の `simple-icons:claude`） | CC0 1.0 |
+| `dashboard/assets/openai.svg` | OpenAI | SVG Logos（Gil Barbara 作、Iconify の `logos:openai-icon`） | CC0 1.0 |
+| `dashboard/assets/google.svg` | Gemini | 出典の記録なし（dd6376a で追加。上の 2 つの icon 集のどちらとも一致しない、4 点の星の単純な図形） | — |
+
+変更点: 塗りの色を `#ece2cc` にした。各ロゴは各社の商標で、provider を識別するためだけに使います。
+
+> Provider logos: `dashboard/assets/anthropic.svg` (Claude) is from Simple Icons (Iconify `simple-icons:claude`) and `dashboard/assets/openai.svg` (OpenAI) from SVG Logos by Gil Barbara (Iconify `logos:openai-icon`), both CC0 1.0; `dashboard/assets/google.svg` (Gemini) has no recorded source. Changes: fill colour set to `#ece2cc`. Each logo is a trademark of its company and is used only to identify the provider.
+
+DeepSeekとQwenの利用は運営者の判断（2026-10-19）。
+DeepSeekは [公式integration配布元](https://github.com/deepseek-ai/awesome-deepseek-integration/tree/main/docs/_logo%20svg)
+の [ICON.svg](https://raw.githubusercontent.com/deepseek-ai/awesome-deepseek-integration/main/docs/_logo%20svg/ICON.svg)
+を形状不変でboneにした。配置は `integrations/dsh/assets/deepseek.svg`、明示opt-in時だけ配信する。
+Qwenは [公式組織](https://github.com/QwenLM) の
+[avatar PNG](https://avatars.githubusercontent.com/u/141221163?v=4) を形状・alphaを保って
+`dashboard/assets/qwen.svg` に埋め込み、bone filterを適用した。再描画はしていない。
+専用許諾を確認できたとの主張ではなく、code licenseもlogoの許諾として扱わない。
+確認した利用条件と加工の記録は、各asset近傍のREADMEに残す。
+
+GLMの利用は運営者の判断（2026-11-08）。
+公式 [Z.aiサイト](https://chat.z.ai/) の [logo SVG](https://z-cdn.chatglm.cn/z-ai/static/logo.svg) を
+`dashboard/assets/glm.svg` に埋め込み、独立した背景path（`st194`、枠を含む）だけを透明にした。前景の形状とviewBoxは保ち、Qwenと同じalpha filterでboneにした。トレース・再描画はしていない。lightは既存の黒logo filterを使う。
+[公式organizationのavatar](https://avatars.githubusercontent.com/u/223098841?v=4) は背景が不透明なため、このSVGを選んだ。
+確認した [Z.ai Terms of Use](https://chat.z.ai/legal-agreement/terms-of-service)（更新日2026-04-14）のV.2は、事前の書面の同意なしのlogo・商標等の利用を制限している。
+専用の再配布・再着色の許可は確認した公式資料では見つからなかった。この制限を承知の上で、運営者が2026-11-08にbone色の公式ロゴを使うと決めた記録であり、権利者からの許諾を主張しない。
+
 ## 肖像画像
 
 dashboard が agent 名の科学者に対応させて表示する肖像は、第三者の画像ではありません。

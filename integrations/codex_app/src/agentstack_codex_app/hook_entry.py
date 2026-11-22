@@ -337,15 +337,130 @@ def hook_output(
     }
 
 
+def _drain_stdin() -> None:
+    """Read and discard the rest of stdin.
+
+    run-hook.sh pipes the payload in under `set -o pipefail`; leaving part of
+    it unread kills the writer with SIGPIPE and Codex reports the hook failed
+    with exit 141 (seen at the 162nd seminar while digest-paper ran: a
+    PostToolUse payload carries the tool's output and can be megabytes).
+    """
+    try:
+        while sys.stdin.buffer.read(1 << 16):
+            pass
+    except (OSError, ValueError):
+        pass
+
+
+def fresh_hook(payload: Mapping[str, Any]) -> int:
+    """Bounded Desktop IPC path: no Mail client/ORM import or credential read."""
+    if (not os.environ.get('AGENTSTACK_FRESH_CLIENT_CONTEXT')
+            or os.environ.get('AGENTSTACK_RUNTIME_MODE','legacy') not in ('legacy','fresh')
+            or os.environ.get('AGENTSTACK_CLIENT_CONFIG') or os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG')):
+        raise ValueError('fresh context conflict')
+    runtime=Path(os.environ.get('AGENTSTACK_CODEX_APP_RUNTIME_DIR',''))
+    home=Path(os.environ.get('CODEX_HOME',''))
+    if not runtime.is_absolute() or runtime.resolve()!=runtime or not home.is_absolute():
+        raise ValueError('fresh App preparation required')
+    info=runtime.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.getuid() or info.st_mode & 0o077:
+        raise ValueError('unsafe App runtime')
+    fd=os.open(runtime/'settings.json',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    with os.fdopen(fd,'rb') as handle:
+        info=os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_mode & 0o077 or info.st_nlink!=1:
+            raise ValueError('unsafe App settings')
+        raw=handle.read(65537)
+    if len(raw)>65536:raise ValueError('invalid App settings')
+    settings=json.loads(raw)
+    if (settings.get('kind')!='orrery-fresh-app-v1'
+            or settings.get('template_context')!=os.environ['AGENTSTACK_FRESH_CLIENT_CONTEXT']
+            or settings.get('codex_home')!=str(home) or settings.get('runtime_dir')!=str(runtime)):
+        raise ValueError('fresh App settings changed')
+    if not is_codex_desktop_payload(payload,codex_home=home):
+        raise ValueError('Desktop transcript required')
+    event=normalize_event(payload)
+    response=handle_payload(event,socket_path=runtime/'bridge.sock',spool_path=runtime/'hook-events.jsonl')
+    state='queued' if response and response.get('ok') else 'spooled'
+    if event['hook_event_name'] in {'SessionStart','SubagentStart'}:
+        reference=json.dumps(dict(session_id=event['session_id'],agent_id=event['agent_id']))
+        text='Desktop lifecycle '+state+'. Call bootstrap with '+reference+'. Unprepared coordination is refused.'
+        print(json.dumps({'hookSpecificOutput':{'hookEventName':event['hook_event_name'],'additionalContext':text}}),flush=True)
+    notice=response.get('fresh_notification') if response else None
+    if notice is not None:
+        if (notice.get('session_id')!=event['session_id'] or notice.get('agent_id')!=event['agent_id']
+                or not isinstance(notice.get('receipt'),str) or not isinstance(notice.get('notifications'),list)
+                or not all(isinstance(v,str) for v in notice['notifications'])):
+            raise ValueError('invalid notification receipt')
+        sys.stdout.write(json.dumps({'hookSpecificOutput':{'hookEventName':event['hook_event_name'],
+            'additionalContext':'\n'.join(notice['notifications'])}},ensure_ascii=False)+'\n')
+        sys.stdout.flush()
+        # The worker does Mail I/O. Losing this bounded IPC leaves facts pending.
+        receipt=dict(fresh_receipt=notice['receipt'],session_id=event['session_id'],agent_id=event['agent_id'])
+        try:
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
+                connection.settimeout(.15);connection.connect(str(runtime/'bridge.sock'))
+                connection.sendall(json.dumps(receipt).encode()+b'\n')
+                _recv_line(connection,MAX_EVENT_BYTES)
+        except (OSError,TimeoutError):pass
+    return 0
+
+
 def main() -> int:
     """Read one hook payload from stdin and fail open for the Codex task."""
 
     try:
         raw = sys.stdin.buffer.read(MAX_EVENT_BYTES + 1)
         if len(raw) > MAX_EVENT_BYTES:
+            _drain_stdin()
             return 0
         payload = json.loads(raw)
         if not isinstance(payload, dict):
+            return 0
+        if 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in os.environ or os.environ.get('AGENTSTACK_RUNTIME_MODE')=='fresh':
+            # Desktop has no CLI launch nonce. The existing transcript proves
+            # surface; the worker prepares its own protected child context.
+            try:
+                return fresh_hook(payload)
+            except (ValueError,OSError):
+                print('FRESH_APP_UNAVAILABLE',file=sys.stderr)
+                return 2
+        if __package__ in {None, ''}:
+            sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+            from agentstack_codex_app.global_runtime import selected_client
+        else:
+            from .global_runtime import selected_client
+        selected = selected_client()
+        if selected is not None:
+            api, client = selected
+            if is_codex_desktop_payload(payload) and not os.environ.get('AGENTSTACK_LAUNCH_ID'):
+                event=normalize_event(payload)
+                directory=api['runtime_delivery'](client).directory(client.runtime_dir/'codex-app')
+                response=handle_payload(event,socket_path=directory/'bridge.sock',spool_path=directory/'hook-events.jsonl')
+                if response is not None and response.get('ok'):
+                    target=api['runtime_delivery'](client).external_client(event['session_id'],event['agent_id'])
+                    delivery=api['runtime_delivery'](target)
+                    notices=response.get('notifications',[])
+                    context=('Call bootstrap with '+json.dumps({'session_id':event['session_id'],'agent_id':event['agent_id']})+' before coordination tools.') if event['hook_event_name'] in ('SessionStart','SubagentStart') else ''
+                    if notices:context+='\n'+'\n'.join(n['notification'] for n in notices)
+                    sys.stdout.write(json.dumps({'hookSpecificOutput':{'hookEventName':event['hook_event_name'],'additionalContext':context}})+'\n');sys.stdout.flush()
+                    for notice in notices:delivery.callback(notice['message_id'],notice['attempt_id'],confirmed=True)
+                return 0
+            delivery = api['runtime_delivery'](client)
+            event = payload.get('hook_event_name')
+            if event == 'SessionStart':
+                result = delivery.session_start(payload)
+            elif event == 'SessionEnd':
+                result = client.end_session(payload)
+            else:
+                result = {'ok': True}
+            notices = delivery.hook_notifications('codex-hook') if event in ('SessionStart','PostToolUse') else []
+            if notices:
+                result['hookSpecificOutput'] = {'hookEventName':event, 'additionalContext':'\n'.join(n['notification'] for n in notices)}
+            sys.stdout.write(json.dumps(result)+'\n')
+            sys.stdout.flush()
+            for notice in notices:
+                delivery.callback(notice['message_id'], notice['attempt_id'], confirmed=True)
             return 0
         if not is_codex_desktop_payload(payload):
             return 0
@@ -359,7 +474,7 @@ def main() -> int:
         if output is not None:
             sys.stdout.write(json.dumps(output, separators=(",", ":")) + "\n")
             sys.stdout.flush()
-    except (HookEventError, OSError, json.JSONDecodeError):
+    except (HookEventError, OSError, json.JSONDecodeError, RuntimeError):
         # Lifecycle telemetry must never prevent the user's Codex turn.
         return 0
     return 0

@@ -5,15 +5,11 @@ you install anything. The rules below are repeated here because they are the
 ones that cause real damage when skipped, and you should not have to follow a
 link to learn them.
 
-**Approvals belong to the human.** The installer asks before merging into
-`~/.claude/settings.json`, before adding the `orrery-mail` entry to
-`~/.claude.json`, and before adding a managed block to their `CLAUDE.md` or
-`AGENTS.md` — four typed confirmations, plus one to reuse a running
-agent-mail. Note that those are the user's own files elsewhere on disk, not
-this one. Run non-interactively, it skips those steps instead of assuming
-consent — the install "succeeds", the dashboard starts, and the skills
-silently do not work. Hand the terminal back so the user can answer, or pass
-`--assume-yes` **only because they told you to**, never to get a clean run.
+**Approvals belong to the human.** Follow the single
+[consent contract](docs/instruction-migration.en.md#consent). Use
+`--assume-yes` only when the user explicitly chose it. Without explicit approval, non-interactive installs
+skip approval steps and can report success while skills remain unavailable;
+hand the terminal back to the user for those steps.
 
 **Never invent a value to get past an error.** The installer stops when it
 cannot determine which database ORRERY Mail uses, whether the port is free, or

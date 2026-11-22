@@ -1,0 +1,6 @@
+{
+  "generation_receipt": "<ABS_DSH_GENERATION_RECEIPT>",
+  "node": "<ABS_PINNED_NODE>",
+  "runtime": "<ABS_DSH_RUNTIME>",
+  "backend_file": "<ABS_DSH_BACKENDS_JSON>"
+}

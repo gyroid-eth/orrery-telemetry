@@ -883,3 +883,41 @@ def test_an_installed_home_without_a_pid_file_still_looks(tmp_path: Path) -> Non
     finally:
         service_teardown._run_command = original_run
     assert any(args and args[0] == "pgrep" for args in asked), asked
+
+
+@pytest.mark.parametrize("gone,empty", [(True, False), (False, False), (False, True)])
+def test_runtime_fixture_inventory_failure_does_not_skip_other_cleanup(tmp_path, monkeypatch, gone, empty):
+    import itertools
+    import test_runtime_defaults as rehearsal
+    home = tmp_path / "home"
+    pidfile = home / ".agentstack/mail-service/runtime/agentstack-mail.pid"
+    pidfile.parent.mkdir(parents=True)
+    pidfile.write_text(f"424242\n{home}/fixture-runner\n")
+    harness = tmp_path / "dashboard-service.pid"
+    harness.write_text("fixture")
+    cleaned = []
+    def probe(pid, sig):
+        assert (pid, sig) == (424242, 0)
+        if gone:
+            raise ProcessLookupError()
+    def inventory(*a, **k):
+        if gone:
+            pytest.fail("A positively absent PID needs no process inventory")
+        if empty:
+            return rehearsal.subprocess.CompletedProcess(a[0], 0, stdout="", stderr="")
+        raise PermissionError("fixture inventory unavailable")
+    monkeypatch.setattr(rehearsal.os, "kill", probe)
+    monkeypatch.setattr(rehearsal.subprocess, "run", inventory)
+    ticks = itertools.count(0, 10)
+    monkeypatch.setattr(rehearsal.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(rehearsal, "_stop_pid_recorded_by_the_harness",
+                        lambda *args: cleaned.append(args))
+    teardown = rehearsal._stop_any_dashboard_this_module_started.__wrapped__(tmp_path)
+    next(teardown)
+    if gone:
+        with pytest.raises(StopIteration):
+            next(teardown)
+    else:
+        with pytest.raises(AssertionError, match="cannot inspect recorded Mail runner"):
+            next(teardown)
+    assert cleaned == [(harness, home)]

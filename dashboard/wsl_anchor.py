@@ -1,30 +1,24 @@
 #!/usr/bin/env python3
 """Keep the WSL distro running while ORRERY has work, and only then.
 
-WSL stops a distro about 15 s after its last Windows-side client (wsl.exe, a
-Windows Terminal tab) exits, whatever runs inside it: closing every Ubuntu
-window stopped tmux, the dashboard and every agent (WSL 2.7.13, 2026-09-29).
-Setting `[general] instanceIdleTimeout=-1` in the Windows .wslconfig prevents
-that for every distro, forever, so the user has to `wsl --shutdown` by hand.
+On WSL 2.7.13, a distro started through the Windows SSH server stops about
+15 s after its last Windows-side client exits. Desktop windows can leave a
+wslhost.exe behind, which can keep the distro running.
 
-Instead, while there is work, the dashboard keeps one hidden Windows `wsl.exe`
-running for this distro. That process is a client WSL counts; it runs the
-`hold` loop below (the anchor) in the foreground and ends by itself when the
-work is gone, after which WSL's default idle stop applies again. Nothing here
-runs `wsl --shutdown` / `--terminate` or changes .wslconfig. Checked on the
-real machine: a hidden `wsl.exe` started through interop with
-`Start-Process` outlives its launcher and holds the distro until it exits.
+While there is work, the dashboard starts one hidden Windows wsl.exe for this
+distro. The client runs the hold loop below in the foreground. It exits after
+the grace period, leaving WSL to stop when its remaining clients are done.
+The hold leaves Windows configuration and other distros untouched.
 
-Work, for the 10/1 scope:
+Work:
 - a live agent process (claude / codex / antigravity) in a tmux session,
   including one waiting for approval or a reply: only its exit ends it;
 - a launch reservation under `<state>/reservations/`, made before a launch
   starts (dashboard NEW AGENT, agent-start) and removed when it settles, or
   expired after RESERVATION_SECONDS;
-- a visible ORRERY page (the dashboard, also inside the cockpit): the page
-  renews a lease under `<state>/leases/` while it is shown and drops it when
-  it is closed. A tmux control-mode client is not a viewer: the cockpit keeps
-  a recorder attached to every session whether or not anyone looks.
+- a visible dashboard page renews a lease under `<state>/leases/`. It drops
+  the lease when hidden or closed. A tmux recorder can stay attached without
+  any viewer, so control-mode clients do not count.
 The dashboard, Mail, the watcher and the anchor itself are never work, or the
 distro would never stop.
 

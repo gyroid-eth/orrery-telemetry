@@ -805,3 +805,18 @@ def test_decision_ledger_mutations_fail_closed(
 
     with pytest.raises(SystemExit, match=re.escape(expected_message)):
         _verify(manifest)
+
+
+@pytest.mark.parametrize('field,value,reason',[
+    ('id','reservation.unknown','allowlist ids changed'),
+    ('category','scenario_payload_field','static divergence allowance changed'),
+    ('selector','checkpoints.**.conflict_check','static divergence allowance changed'),
+    ('core','any value is acceptable','static divergence allowance changed'),
+    ('comparator_disposition','allow','is not allowed'),
+])
+def test_scoped_renew_addition_cannot_widen_the_ledger(field,value,reason):
+    manifest=_canonical_manifest()
+    entry=next(row for row in manifest['intentional_differences']['allowlisted_entries']
+               if row['id']=='reservation.renew_scoped_conflict_check')
+    entry[field]=value
+    with pytest.raises(SystemExit,match=reason):_verify(manifest)

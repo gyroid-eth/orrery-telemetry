@@ -44,6 +44,7 @@ from .wake import (
     WakeCoordinator,
     WakePolicy,
     validate_codex_binary,
+    codex_provider_home,
 )
 
 
@@ -83,14 +84,14 @@ class BridgeConfig:
     project_slug: str | None = None
     delivery_db_path: Path | None = None
     cold_wake_enabled: bool = True
-    wake_poll_seconds: float = 0.25
-    wake_coalesce_seconds: float = 2.0
-    wake_lease_seconds: float = 900.0
-    wake_base_backoff_seconds: float = 2.0
-    wake_max_backoff_seconds: float = 300.0
-    wake_max_attempts: int = 5
-    wake_limit_per_hour: int = 12
-    wake_timeout_seconds: float = 900.0
+    wake_poll_seconds: float = WakePolicy().poll_seconds
+    wake_coalesce_seconds: float = WakePolicy().coalesce_seconds
+    wake_lease_seconds: float = WakePolicy().lease_seconds
+    wake_base_backoff_seconds: float = WakePolicy().base_backoff_seconds
+    wake_max_backoff_seconds: float = WakePolicy().max_backoff_seconds
+    wake_max_attempts: int = WakePolicy().max_attempts
+    wake_limit_per_hour: int = WakePolicy().wakes_per_hour
+    wake_timeout_seconds: float = WakePolicy().process_timeout_seconds
     codex_binary: str = "codex"
     plugin_id: str = "agentstack-codex-app@agentstack-local"
     skip_git_repo_check: bool = False
@@ -152,88 +153,11 @@ class BridgeConfig:
                 "AGENTSTACK_CODEX_APP_RETRY_MAX_BACKOFF_SECONDS must not be "
                 "less than AGENTSTACK_CODEX_APP_RETRY_SECONDS"
             )
-        codex_home = Path(
-            (env.get("CODEX_HOME") or "~/.codex").strip()
-        ).expanduser()
-        cold_wake_enabled = _env_bool(
-            env.get("AGENTSTACK_CODEX_APP_COLD_WAKE", "1"),
-            "AGENTSTACK_CODEX_APP_COLD_WAKE",
-        )
-        wake_poll_seconds = _env_float(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_POLL_SECONDS",
-            0.25,
-            minimum=0.05,
-            maximum=5,
-        )
-        wake_coalesce_seconds = _env_float(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_COALESCE_SECONDS",
-            2,
-            minimum=0,
-            maximum=10,
-        )
-        wake_timeout_seconds = _env_float(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_TIMEOUT_SECONDS",
-            900,
-            minimum=30,
-            maximum=7200,
-        )
-        wake_lease_seconds = _env_float(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_LEASE_SECONDS",
-            900,
-            minimum=30,
-            maximum=7200,
-        )
-        wake_base_backoff_seconds = _env_float(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_BASE_BACKOFF_SECONDS",
-            2,
-            minimum=0.1,
-            maximum=300,
-        )
-        wake_max_backoff_seconds = _env_float(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_MAX_BACKOFF_SECONDS",
-            300,
-            minimum=1,
-            maximum=3600,
-        )
-        if wake_max_backoff_seconds < wake_base_backoff_seconds:
-            raise ValueError(
-                "AGENTSTACK_CODEX_APP_WAKE_MAX_BACKOFF_SECONDS must not be "
-                "less than the base backoff"
-            )
-        wake_limit_per_hour = _env_int(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR",
-            12,
-            minimum=1,
-            maximum=120,
-        )
-        wake_max_attempts = _env_int(
-            env,
-            "AGENTSTACK_CODEX_APP_WAKE_MAX_ATTEMPTS",
-            5,
-            minimum=1,
-            maximum=20,
-        )
+        codex_home = codex_provider_home(env)
+        execution_settings = wake_execution_settings(env)
+        timing_settings = wake_timing_settings(env)
         delivery_value = (
             env.get("AGENTSTACK_CODEX_APP_DELIVERY_DB") or ""
-        ).strip()
-        codex_binary = validate_codex_binary(
-            env.get("AGENTSTACK_CODEX_BINARY") or "codex",
-            setting_name="AGENTSTACK_CODEX_BINARY",
-        )
-        skip_git_repo_check = _env_bool(
-            env.get("AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK", "0"),
-            "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK",
-        )
-        plugin_id = (
-            env.get("AGENTSTACK_CODEX_APP_PLUGIN_ID")
-            or "agentstack-codex-app@agentstack-local"
         ).strip()
         stale_after_seconds = _env_float(
             env,
@@ -267,20 +191,101 @@ class BridgeConfig:
                 if delivery_value
                 else runtime_dir / "delivery.sqlite3"
             ),
-            cold_wake_enabled=cold_wake_enabled,
-            wake_poll_seconds=wake_poll_seconds,
-            wake_coalesce_seconds=wake_coalesce_seconds,
-            wake_lease_seconds=wake_lease_seconds,
-            wake_base_backoff_seconds=wake_base_backoff_seconds,
-            wake_max_backoff_seconds=wake_max_backoff_seconds,
-            wake_max_attempts=wake_max_attempts,
-            wake_limit_per_hour=wake_limit_per_hour,
-            wake_timeout_seconds=wake_timeout_seconds,
-            codex_binary=codex_binary,
-            plugin_id=plugin_id,
-            skip_git_repo_check=skip_git_repo_check,
+            cold_wake_enabled=execution_settings["cold_wake_enabled"],
+            **timing_settings,
+            codex_binary=execution_settings["codex_binary"],
+            plugin_id=execution_settings["plugin_id"],
+            skip_git_repo_check=execution_settings["skip_git_repo_check"],
             stale_after_seconds=stale_after_seconds,
         )
+
+
+def wake_timing_settings(env: Mapping[str, str]) -> dict[str, Any]:
+    """One reader/defaults source for legacy and global wake timing."""
+    wake_poll_seconds = _env_float(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_POLL_SECONDS",
+        WakePolicy().poll_seconds,
+        minimum=0.05,
+        maximum=5,
+    )
+    wake_coalesce_seconds = _env_float(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_COALESCE_SECONDS",
+        WakePolicy().coalesce_seconds,
+        minimum=0,
+        maximum=10,
+    )
+    wake_timeout_seconds = _env_float(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_TIMEOUT_SECONDS",
+        WakePolicy().process_timeout_seconds,
+        minimum=30,
+        maximum=7200,
+    )
+    wake_lease_seconds = _env_float(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_LEASE_SECONDS",
+        WakePolicy().lease_seconds,
+        minimum=30,
+        maximum=7200,
+    )
+    wake_base_backoff_seconds = _env_float(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_BASE_BACKOFF_SECONDS",
+        WakePolicy().base_backoff_seconds,
+        minimum=0.1,
+        maximum=300,
+    )
+    wake_max_backoff_seconds = _env_float(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_MAX_BACKOFF_SECONDS",
+        WakePolicy().max_backoff_seconds,
+        minimum=1,
+        maximum=3600,
+    )
+    if wake_max_backoff_seconds < wake_base_backoff_seconds:
+        raise ValueError(
+            "AGENTSTACK_CODEX_APP_WAKE_MAX_BACKOFF_SECONDS must not be "
+            "less than the base backoff"
+        )
+    wake_limit_per_hour = _env_int(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_LIMIT_PER_HOUR",
+        WakePolicy().wakes_per_hour,
+        minimum=1,
+        maximum=120,
+    )
+    wake_max_attempts = _env_int(
+        env,
+        "AGENTSTACK_CODEX_APP_WAKE_MAX_ATTEMPTS",
+        WakePolicy().max_attempts,
+        minimum=1,
+        maximum=20,
+    )
+    return {
+        'wake_poll_seconds':wake_poll_seconds,
+        'wake_coalesce_seconds':wake_coalesce_seconds,
+        'wake_lease_seconds':wake_lease_seconds,
+        'wake_base_backoff_seconds':wake_base_backoff_seconds,
+        'wake_max_backoff_seconds':wake_max_backoff_seconds,
+        'wake_max_attempts':wake_max_attempts,
+        'wake_limit_per_hour':wake_limit_per_hour,
+        'wake_timeout_seconds':wake_timeout_seconds,
+    }
+
+
+def wake_execution_settings(env: Mapping[str, str]) -> dict[str, Any]:
+    """The execution switches shared by both App delivery routes."""
+    return {
+        "cold_wake_enabled": _env_bool(
+            env.get("AGENTSTACK_CODEX_APP_COLD_WAKE", "1"), "AGENTSTACK_CODEX_APP_COLD_WAKE"),
+        "codex_binary": validate_codex_binary(
+            env.get("AGENTSTACK_CODEX_BINARY") or "codex", setting_name="AGENTSTACK_CODEX_BINARY"),
+        "plugin_id": (env.get("AGENTSTACK_CODEX_APP_PLUGIN_ID") or "agentstack-codex-app@agentstack-local").strip(),
+        "skip_git_repo_check": _env_bool(
+            env.get("AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK", "0"), "AGENTSTACK_CODEX_APP_SKIP_GIT_CHECK"),
+    }
 
 
 class BridgeDaemon:
@@ -738,9 +743,7 @@ class BridgeDaemon:
         _diagnostic("bridge_start", pid=os.getpid())
         self._start_worker()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
-            listener.bind(os.fspath(self.config.socket_path))
-            os.chmod(self.config.socket_path, 0o600)
-            listener.listen(32)
+            self._bind_and_publish(listener)
             listener.settimeout(0.25)
             self.queue_spool(self.config.spool_path)
             try:
@@ -956,6 +959,36 @@ class BridgeDaemon:
             if not stat.S_ISSOCK(mode):
                 raise OSError("refusing to replace non-socket bridge path")
             self.config.socket_path.unlink()
+
+    def _bind_and_publish(self, listener: socket.socket) -> None:
+        """Make the socket path appear only once it is private and listening.
+
+        Binding the final path directly exposed it before chmod() and listen():
+        a hook that connected as soon as the path existed was refused, or met
+        the socket with its umask permissions (#122). The socket is bound under
+        a short private name next to it and renamed into place, which keeps
+        the binding."""
+        final = self.config.socket_path
+        staging = final.parent / f".{os.getpid()}.s"
+        if len(os.fsencode(staging)) >= 100:
+            staging = final
+        try:
+            staging.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            listener.bind(os.fspath(staging))
+            os.chmod(staging, 0o600)
+            listener.listen(32)
+            if staging != final:
+                os.replace(staging, final)
+        except BaseException:
+            if staging != final:
+                try:
+                    staging.unlink()
+                except FileNotFoundError:
+                    pass
+            raise
 
     def _remove_socket(self) -> None:
         try:
@@ -1196,6 +1229,17 @@ def _recv_payload(connection: socket.socket) -> dict[str, Any]:
 def serve() -> None:
     """Build the configured Bridge and serve until interrupted."""
 
+    if 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in os.environ or os.environ.get('AGENTSTACK_RUNTIME_MODE')=='fresh':
+        from .fresh_bridge import selected, AppContext, FreshBridge
+        selected()  # Fail closed before legacy/global imports.
+        FreshBridge(AppContext(create=True)).serve_forever()
+        return
+    from .global_runtime import selected_client
+    selected=selected_client()
+    if selected is not None:
+        from .global_bridge import GlobalBridge
+        GlobalBridge(*selected).serve_forever()
+        return
     config = BridgeConfig.from_env()
     transport = HttpJsonRpcTransport(
         config.agent_mail_endpoint,

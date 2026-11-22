@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Explicit local root preparation/status; browser uses the admitted dashboard."""
+import argparse
+import json
+import os
+from pathlib import Path
+import runpy
+import sys
+
+api=runpy.run_path(str(Path(__file__).resolve().parent/'lib/runtime_operator.py'))
+p=argparse.ArgumentParser()
+p.add_argument('--server-config',default=os.environ.get('AGENTSTACK_GLOBAL_SERVER_CONFIG'))
+p.add_argument('action',choices=('status','clients','prepare-root','register','finalize-registration','registration-abandon'))
+p.add_argument('--client-name')
+p.add_argument('--name')
+p.add_argument('--program')
+p.add_argument('--model')
+p.add_argument('--expected-digest')
+a=p.parse_args()
+try:
+    operator=api['RuntimeOperator'](a.server_config)
+    if a.action=='clients':value=operator.lookup(a.name)
+    elif a.action=='status':value=operator.status(a.client_name)
+    elif a.action=='prepare-root':
+        operator.prepare(a.client_name);value=operator.status(a.client_name)
+    elif a.action=='register':
+        if not all((a.name,a.program,a.model)):p.error('register needs --name, --program and --model')
+        value=operator.create(a.client_name,agent_name=a.name,program=a.program,model=a.model)
+    elif a.action=='registration-abandon':
+        if not a.expected_digest:p.error('registration-abandon needs --expected-digest')
+        value=operator.client(a.client_name).abandon_registration(a.expected_digest)
+    else:
+        client=operator.client(a.client_name)
+        pending=operator.api['read_json'](client.outputs['registration'])
+        client.finalize_registration(pending['row']['agent_id'])
+        value=operator.status(a.client_name)
+    print(json.dumps(value))
+    raise SystemExit(0 if value.get('ok') else 2)
+except (OSError,ValueError,RuntimeError,KeyError,TypeError) as exc:
+    print('ui-client: '+str(exc),file=sys.stderr)
+    raise SystemExit(2)

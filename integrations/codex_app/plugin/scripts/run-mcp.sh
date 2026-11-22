@@ -5,6 +5,13 @@ PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALL_DIR="${AGENTSTACK_CODEX_APP_INSTALL_DIR:-$HOME/.agentstack/integrations/codex_app}"
 ENV_FILE="$INSTALL_DIR/env.sh"
 
+# Fresh selection is resolved before the Desktop machine env can clobber it.
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  SOURCE_ROOT="$PLUGIN_ROOT/src"
+  [[ -d "$SOURCE_ROOT/agentstack_codex_app" ]] || SOURCE_ROOT="$(cd "$PLUGIN_ROOT/../src" && pwd)"
+  exec "${AGENTSTACK_PYTHON:-python3}" "$SOURCE_ROOT/agentstack_codex_app/mcp_server.py"
+fi
+
 # The installed env.sh belongs to the Codex App bridge and uses plain `export`,
 # so sourcing it would clobber values the CALLER set. spawn_child.sh launches
 # this runner per child with that child's identity, project and endpoint in the

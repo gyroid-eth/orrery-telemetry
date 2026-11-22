@@ -5,8 +5,8 @@
 # there is the Windows npm shim: run by the Linux node it dies at once with
 # "Missing optional dependency @openai/codex-linux-x64". A candidate is
 # therefore used only if it is not under a Windows drive mount (WSL only) and
-# answers `--version` within a short time. These are the same rules as
-# scripts/install.sh ("codex launcher resolution") and scripts/doctor.sh.
+# answers `--version` within a short time. The launch policy, doctor and
+# installer share these functions.
 #
 # Sourcing defines functions and two settings only; it runs nothing. A caller
 # that runs codex under another PATH sets CODEX_PROBE_RUNNER to a command that
@@ -19,6 +19,7 @@ CODEX_VERSION_TIMEOUT_SECONDS=10
 CODEX_PROBE_BUDGET_SECONDS=15
 CODEX_PROBE_DEADLINE=""
 CODEX_JUDGED=":"
+CODEX_POLICY_FD=""
 
 codex_probe_budget_start() {
   CODEX_PROBE_DEADLINE=$((SECONDS + CODEX_PROBE_BUDGET_SECONDS))
@@ -32,25 +33,64 @@ running_under_wsl() {
 # Succeeds when `$1 --version` exits 0 within the timeout (portable: no
 # coreutils `timeout` on macOS).
 codex_version_answers() {
-  local bin="$1" pid secs="$CODEX_VERSION_TIMEOUT_SECONDS" end
+  local bin="$1" pid secs="$CODEX_VERSION_TIMEOUT_SECONDS" end started err="" status=0
+  # Why it failed, for codex_version_failure (#121): running out of time and
+  # exiting at once with an error need different fixes.
+  CODEX_VERSION_STATUS=""
+  CODEX_VERSION_ERROR=""
+  CODEX_VERSION_ELAPSED=""
+  CODEX_VERSION_LIMIT=""
   if [[ -n "$CODEX_PROBE_DEADLINE" ]] && (( CODEX_PROBE_DEADLINE - SECONDS < secs )); then
     secs=$((CODEX_PROBE_DEADLINE - SECONDS))
   fi
-  (( secs >= 1 )) || return 1
+  CODEX_VERSION_LIMIT="$secs"
+  if (( secs < 1 )); then
+    CODEX_VERSION_STATUS=timeout
+    return 1
+  fi
+  started=$SECONDS
   # Wall-clock, not a count of sleeps: the limit holds whatever `sleep` does.
   end=$((SECONDS + secs))
   # CODEX_PROBE_RUNNER, when set, runs the candidate the way the launcher will
   # (spawn_child.sh: the child's login shell and PATH setup).
-  ${CODEX_PROBE_RUNNER:-} "$bin" --version </dev/null >/dev/null 2>&1 &
+  # A policy caller captures each probe over a pipe, never a temporary file.
+  if [[ -n "${CODEX_POLICY_FD:-}" ]]; then
+    printf '\0' >&3
+    ${CODEX_PROBE_RUNNER:-} "$bin" --version </dev/null >&3 2>/dev/null &
+  else
+    # The first stderr line goes into the warning; the policy path above
+    # keeps to its pipe and reports the exit status alone.
+    err="$(mktemp "${TMPDIR:-/tmp}/agentstack-codex-stderr.XXXXXX" 2>/dev/null || true)"
+    ${CODEX_PROBE_RUNNER:-} "$bin" --version </dev/null >"${CODEX_VERSION_OUTPUT:-/dev/null}" 2>"${err:-/dev/null}" &
+  fi
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     if (( SECONDS >= end )); then
       codex_probe_stop "$pid"
+      CODEX_VERSION_STATUS=timeout
+      [[ -n "$err" ]] && rm -f "$err"
       return 1
     fi
     sleep 0.1
   done
-  wait "$pid"
+  wait "$pid" || status=$?
+  CODEX_VERSION_STATUS="$status"
+  CODEX_VERSION_ELAPSED=$((SECONDS - started))
+  if [[ -n "$err" ]]; then
+    CODEX_VERSION_ERROR="$(sed -n '/[^[:space:]]/{p;q;}' "$err" 2>/dev/null | cut -c1-200 || true)"
+    rm -f "$err"
+  fi
+  return "$status"
+}
+
+# One line saying why the last codex_version_answers failed.
+codex_version_failure() {
+  local bin="$1"
+  if [[ "$CODEX_VERSION_STATUS" == timeout ]]; then
+    echo "'$bin --version' did not finish within ${CODEX_VERSION_LIMIT:-$CODEX_VERSION_TIMEOUT_SECONDS}s and was stopped"
+  else
+    echo "'$bin --version' exited with status ${CODEX_VERSION_STATUS:-unknown} after ${CODEX_VERSION_ELAPSED:-0}s: ${CODEX_VERSION_ERROR:-(no error output)}"
+  fi
 }
 
 # Stop a probe that overran. Every wait here is a kill -0 poll with a
@@ -148,7 +188,7 @@ codex_bin_problem() {
     return 0
   fi
   if ! codex_version_answers "$bin"; then
-    echo "'$bin --version' did not succeed within ${CODEX_VERSION_TIMEOUT_SECONDS}s"
+    codex_version_failure "$bin"
   fi
 }
 
@@ -175,3 +215,156 @@ find_usable_codex_bin_in() {
   done
   return 0
 }
+
+# Shared child execution context and binary selection. The spawner and the
+# read-only model-policy helper below call these same functions.
+
+codex_launch_shell() {
+    local shell="${AGENTSTACK_CHILD_SHELL:-}"
+    if [[ -n "$shell" && -x "$shell" ]]; then
+        printf '%s\n' "$shell"
+        return 0
+    fi
+    shell="$(command -v zsh 2>/dev/null || true)"
+    [[ -z "$shell" ]] && shell="$(command -v bash 2>/dev/null || true)"
+    if [[ -z "$shell" ]]; then
+        echo "Error: neither zsh nor bash found for the child session; set AGENTSTACK_CHILD_SHELL" >&2
+        return 1
+    fi
+    printf '%s\n' "$shell"
+}
+
+# Compute the execution PATH after the login profile has run. npm's codex
+# symlink often points into lib/node_modules, while node lives beside the shim.
+# Prefer node beside the resolved target; otherwise use the selected shim's bin.
+# Only nvm version directories outrank existing tools; shared prefixes append.
+# Do not add a different nvm version merely because it was searched.
+codex_launch_path() {
+    local bin="${1:-}" target dir link count=0 nvm_dir current_node current_dir
+    local launch_path="$HOME/.local/bin:$PATH" extra candidate
+    # No candidate yet: the same function supplies the discovery PATH.
+    if [[ -z "$bin" ]]; then
+        extra="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.nodebrew/current/bin:/opt/homebrew/bin:/usr/local/bin"
+        for candidate in "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin; do
+            [[ -d "$candidate" ]] && extra="$extra:$candidate"
+        done
+        printf '%s\n' "$PATH:$extra"
+        return 0
+    fi
+    target="$bin"
+    while [[ -L "$target" ]]; do
+        count=$((count + 1))
+        (( count <= 40 )) || break
+        link="$(readlink "$target")" || break
+        case "$link" in
+            /*) target="$link" ;;
+            *) target="${target%/*}/$link" ;;
+        esac
+    done
+    for dir in "${target%/*}" "${bin%/*}"; do
+        dir="$(cd -P "$dir" 2>/dev/null && pwd)" || continue
+        if [[ -f "$dir/node" && -x "$dir/node" ]]; then
+            current_node="$(PATH="$launch_path" command -v node 2>/dev/null || true)"
+            current_dir=""
+            if [[ "$current_node" == */* ]]; then
+                current_dir="$(cd -P "${current_node%/*}" 2>/dev/null && pwd)" || current_dir=""
+            fi
+            if [[ "$current_dir" == "$dir" ]]; then
+                printf '%s\n' "$launch_path"
+                return 0
+            fi
+            nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+            nvm_dir="$(cd -P "$nvm_dir" 2>/dev/null && pwd)" || nvm_dir=""
+            case "$dir" in
+                "$nvm_dir"/versions/node/*)
+                    [[ -n "$nvm_dir" ]] && { printf '%s\n' "$dir:$launch_path"; return 0; }
+                    ;;
+            esac
+            # Shared prefixes must not displace pyenv, local tools, etc.
+            case ":$launch_path:" in
+                *":$dir:"*) printf '%s\n' "$launch_path" ;;
+                *) printf '%s\n' "$launch_path:$dir" ;;
+            esac
+            return 0
+        fi
+    done
+    printf '%s\n' "$launch_path"
+}
+
+# Embed this one function in both tmux launch snippets and the probe shell.
+# No second PATH formula or dependency on an inherited shell function.
+codex_launch_path_setup() {
+    declare -f codex_launch_path
+    printf '%s\n' 'export PATH="$(codex_launch_path "$AGENTSTACK_CODEX_BIN")"'
+}
+
+codex_launch_runner() {
+    env CLAUDECODE=1 AGENTSTACK_RESERVED_IDENTITY=1 AGENTSTACK_CODEX_BIN="$1" \
+        "$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"'; exec "$0" "$@"' "$@"
+}
+
+codex_launch_search_path() {
+    codex_launch_path
+}
+
+# Sets CHILD_SHELL, CODEX_CHILD_PATH_SETUP and CODEX_PROBE_RUNNER: the context
+# a caller must probe (or launch) Codex under so a candidate is judged the way
+# a spawned child's own login shell actually runs it, not under the caller's
+# own PATH. spawn_child.sh, doctor, the installer and this file's own
+# `policy` entrypoint all call this once before any codex_bin_problem /
+# codex_find_bin check, so the context is one definition instead of each
+# caller repeating it (#239, #243).
+codex_launch_context() {
+    CHILD_SHELL="$(codex_launch_shell)" || return 1
+    CODEX_CHILD_PATH_SETUP="$(codex_launch_path_setup)"
+    CODEX_PROBE_RUNNER=codex_launch_runner
+}
+
+codex_find_bin() {
+    if [[ -n "${CODEX_BIN_PRIMED:-}" ]]; then
+        printf '%s\n' "$CODEX_BIN_RESOLVED"
+        return 0
+    fi
+    local codex_bin source problem
+    declare -F codex_probe_budget_start >/dev/null && codex_probe_budget_start
+    for source in environment env.sh; do
+        if [[ "$source" == environment ]]; then
+            codex_bin="${AGENTSTACK_CODEX_BIN:-}"
+        elif declare -F agentstack_installed_env_value >/dev/null; then
+            codex_bin="$(agentstack_installed_env_value AGENTSTACK_CODEX_BIN)"
+        else
+            codex_bin=""
+        fi
+        [[ -n "$codex_bin" ]] || continue
+        [[ "${CODEX_JUDGED:-:}" != *":$codex_bin:"* ]] || continue
+        CODEX_JUDGED="${CODEX_JUDGED:-:}$codex_bin:"
+        problem="$(codex_bin_problem "$codex_bin")"
+        if [[ -z "$problem" ]]; then
+            printf '%s\n' "$codex_bin"
+            return 0
+        fi
+        echo "note: skipping AGENTSTACK_CODEX_BIN from $source ($codex_bin): $problem" >&2
+    done
+    find_usable_codex_bin_in "$(codex_launch_search_path)"
+}
+
+
+# Read-only entrypoint: no registration, mailbox, tmux or application launch.
+# NUL framing keeps paths and version output separate without shell evaluation.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    [[ "${1:-}" == policy ]] || { echo "usage: codex-bin.sh policy" >&2; exit 2; }
+    set -euo pipefail
+    context="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-context.sh"
+    [[ -f "$context" ]] && . "$context"
+    codex_launch_context
+    # Keep the exact spawner defaults (10s / 15s): a slow but usable CLI
+    # must not be discarded here and then accepted after preregistration.
+    # FD 3 bypasses the nested command substitutions used for candidate
+    # errors. Probe boundaries let the reader select only the final candidate
+    # output, while failed candidates and timeout handling remain unchanged.
+    exec 3>&1
+    CODEX_POLICY_FD=3
+    printf 'policy-v2\0'
+    binary="$(codex_find_bin)"
+    printf '\0%s\0%s' "$binary" "$CHILD_SHELL"
+fi

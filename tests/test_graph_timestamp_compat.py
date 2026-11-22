@@ -229,31 +229,111 @@ def test_graph_payload_and_spawn_only_preserve_timestamp_health(monkeypatch):
         "degraded": True,
     }
     monkeypatch.setattr(server, "_raw_graph", lambda: unhealthy)
+    server.invalidate_display_reuse()  # an answer another test left must not stand in
     payload = server.graph_payload(4, True)
     assert payload["degraded"] is True
     assert payload["timestamp_diagnostics"]["invalid_count"] == 1
 
-    monkeypatch.setattr(server, "graph_payload", lambda _days, _all: {
-        **unhealthy,
-        "error": "timestamp fixture failed",
-    })
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
-    try:
+
+    def get_spawn_only():
         with urllib.request.urlopen(
             f"http://127.0.0.1:{httpd.server_port}/api/graph?spawn_only=1"
         ) as response:
-            spawn_only = json.load(response)
+            return json.load(response)
+
+    try:
+        # spawn_only reads the raw graph's health without the per-row payload.
+        spawn_only = get_spawn_only()
+        assert "error" not in spawn_only
+        assert spawn_only["degraded"] is True
+        assert spawn_only["timestamp_diagnostics"]["invalid_count"] == 1
+
+        def failing(_days, _all):
+            raise RuntimeError("timestamp fixture failed")
+
+        monkeypatch.setattr(server, "graph_spawn_payload", failing)
+        server.invalidate_display_reuse()  # the second request must compute again
+        spawn_only = get_spawn_only()
     finally:
         httpd.shutdown()
         thread.join()
-    assert spawn_only["error"] == "timestamp fixture failed"
-    assert spawn_only["degraded"] is True
-    assert spawn_only["timestamp_diagnostics"]["invalid_count"] == 1
+    assert spawn_only["error"] == "RuntimeError: timestamp fixture failed"
+    assert spawn_only["degraded"] is True and spawn_only["spawn_only"] is True
 
 
 def test_dashboard_startup_never_analyzes_the_foreign_mail_database():
     source = (ROOT / "dashboard" / "server.py").read_text(encoding="utf-8")
     assert "_analyze_mail_db" not in source
     assert 'con.execute("ANALYZE")' not in source
+
+
+@pytest.mark.parametrize("project_one_has_agents", (True, False))
+@pytest.mark.parametrize(
+    ("project_key", "expected_names"),
+    ((PROJECT, {"Parent", "Child"}), ("/other-project", {"Other"}),
+     ("", {"Parent", "Child"}), ("/missing-project", set())),
+)
+def test_explicit_project_never_falls_back_to_another_project(
+    monkeypatch, tmp_path, project_one_has_agents, project_key, expected_names
+):
+    """明示key不一致と未指定を、別projectにデータがあるDBで区別する。"""
+    database = _make_db(tmp_path / "projects.sqlite3", "integer", retired_at=False)
+    with sqlite3.connect(database) as connection:
+        connection.execute("INSERT INTO projects VALUES (2, '/other-project')")
+        connection.execute(
+            "INSERT INTO agents VALUES (5, 2, 'Other', 'model', 'codex', '', ?, ?)",
+            (BASE * 1_000_000, BASE * 1_000_000),
+        )
+        if not project_one_has_agents:
+            connection.execute("DELETE FROM message_recipients")
+            connection.execute("DELETE FROM messages")
+            connection.execute("DELETE FROM agents WHERE project_id = 1")
+    monkeypatch.setattr(graph_data, "DB_PATH", str(database))
+    monkeypatch.setattr(graph_data, "PROJECT_HUMAN_KEY", project_key)
+    monkeypatch.setattr(graph_data, "PROJECT_ID", 1)
+    monkeypatch.setattr(graph_data, "_live_parents", lambda: {})
+
+    data = graph_data.build_graph()
+
+    if project_key == "/missing-project":
+        assert data["nodes"] == data["edges"] == data["spawn"] == []
+        assert data["degraded"] is True
+        assert data["error"] == "Mail project not found"
+    else:
+        if not project_one_has_agents and project_key in (PROJECT, ""):
+            expected_names = set()
+        assert {node["name"] for node in data["nodes"]} == expected_names
+        assert data["degraded"] is False
+        assert "error" not in data
+
+
+@pytest.mark.parametrize("failure", ("missing-project", "sqlite-error"))
+@pytest.mark.parametrize("spawn_only", (False, True))
+def test_project_resolution_errors_survive_graph_http_wrapper(
+    monkeypatch, tmp_path, failure, spawn_only
+):
+    """DB解決の失敗理由を通常graphとspawn-onlyの両HTTP応答に残す。"""
+    database = _make_db(tmp_path / "project-error.sqlite3", "integer", retired_at=False)
+    if failure == "sqlite-error":
+        with sqlite3.connect(database) as connection:
+            connection.execute("DROP TABLE projects")
+    monkeypatch.setattr(graph_data, "DB_PATH", str(database))
+    monkeypatch.setattr(graph_data, "PROJECT_HUMAN_KEY", "/missing-project")
+    monkeypatch.setattr(graph_data, "PROJECT_ID", 1)
+    monkeypatch.setattr(graph_data, "_live_parents", lambda: {})
+    data = graph_data.build_graph()
+    assert data["nodes"] == data["edges"] == data["spawn"] == []
+    assert data["degraded"] is True
+    expected_error = (
+        "Mail project lookup failed (SQLite error)"
+        if failure == "sqlite-error" else "Mail project not found"
+    )
+    assert data["error"] == expected_error
+    monkeypatch.setattr(server, "_raw_graph", lambda: data)
+    payload = server._graph_response(4, True, spawn_only)
+    assert payload["nodes"] == payload["edges"] == payload["spawn"] == []
+    assert payload["degraded"] is True
+    assert payload["error"] == expected_error

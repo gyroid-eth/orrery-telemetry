@@ -1,0 +1,34 @@
+› ORRERY Mail notification: message from ProOpus [normal]: #257・#51 merge 済み → 次の段階（R2-T の残り／R3）の…
+• Ran gh api repos/gyroid-eth/orrery-telemetry/compare/a83e5947c8196c3ed0fe361f5bc6056ba7db8af6...bc570dd77f780f…
+  └ tests/test_dashboard_startup.py    modified
+    tests/test_provider_stalls.py    added
+    LOAD 13.78955078125
+    + 10 lines (ctrl+t to expand)
+
+• Ran python3 - <<'PY' …
+  └ branch 'issue213-r2-next-plan' set up to track 'origin/master'.
+    bc570dd77f780fbb51a0093c0f4858253936ab60
+    false
+    + 7 lines (ctrl+t to expand)
+
+• Ran tail -45 AGENTS.md; sed -n '1,48p' CONTRIBUTING.md; git status --short; git show 38d33ce --format='%h %s' …
+  └ ORRERY Mail database, virtual environment, or running service. Keeping an
+    existing installation working alongside local state is important, but it comes
+    38d33ce Merge pull request #257 from gyroid-eth/issue213-r2-transport
+    + 91 lines (ctrl+t to expand)
+
+• Ran rg -n 'tmux|runtime_tmux|pane_evidence|session_liveness|end_session|replay-end|send-compact' bin/lib/runti…
+  └                         if now - _CACHE[old][0] >= 4.5:
+                                del _CACHE[old]
+                        _CACHE[key] = (now, state, sample)
+    + 141 lines (ctrl+t to expand)
+
+■ Selected model is at capacity. Please try a different model.
+
+  3 background terminals running · /ps to view · /stop to close
+
+
+› Ask Codex to do anything
+
+  GPT-6.1-Sol medium · Context 36% left · ~/OSS · weekly 79% left
+  ? for shortcuts                                                                      ⚠ 4 warnings · f2 to view

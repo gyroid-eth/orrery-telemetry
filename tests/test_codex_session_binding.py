@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from _cleanup_mail import cleanup_mail_server
+
 import fcntl
 import importlib.util
 import json
 import os
+import shlex
 import signal
 import shutil
 import sqlite3
@@ -19,6 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
+from _installed_client_payload import copy_client_library  # noqa: E402
 
 from dashboard import server
 
@@ -387,14 +391,18 @@ def _adopt_child_handoff(
 
     spawn = (ROOT / "hooks" / "spawn_child.sh").read_text(encoding="utf-8")
     start = spawn.index("child_token_file_path() {")
-    end = spawn.index("\n# Restore the canonical token file", start)
+    end = spawn.index("\n# Verify that a Codex token", start)
     sidecar = token.with_name(token.name + ".binding.json")
     script = (
         f'RUNTIME_DIR="{runtime}"\n'
+        f'HOOKS_DIR="{ROOT / "hooks"}"\n'
+        f'PROJECT_KEY="{project_key}"\n'
         'CHILD_STATE_DIR="$RUNTIME_DIR/child-agents"\n'
+        'CHILD_REGISTRATION_GENERATION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
         + spawn[start:end]
-        + f'\nadopt_child_token_file "{agent_name}" "{project_key}" '
-        f'"{token}" true "{sidecar}"\n'
+        + f'\nstage_child_registration "{agent_name}" codex "{token}"\n'
+        + f'finish_child_registration "{agent_name}"\n'
+        + f'rm -f "{token}" "{sidecar}"\n'
     )
     adopted = subprocess.run(
         ["bash", "-c", script], text=True, capture_output=True, check=False
@@ -421,11 +429,11 @@ def _codex_entrypoint_layout(tmp_path: Path, layout: str) -> dict[str, Path]:
         root = ROOT
     else:
         root = tmp_path / "installed-agentstack"
+        copy_client_library(root)
         for relative in (
             "bin/agentstack-preregister-child",
-            "bin/lib/agentstack-register.sh",
-            "bin/lib/agentstack-scientists.sh",
             "hooks/spawn_child.sh",
+            "hooks/codex-bin.sh",
             "dashboard/codex_models.py",
             "hooks/child_resume.py",
             "hooks/prepare-codex-session-binding.py",
@@ -466,7 +474,11 @@ def _fake_codex_launch_env(
         "printf '\\035\\n'; } >> \"$FAKE_TMUX_LOG\"\n"
         "case \"${1:-}\" in\n"
         "  new-session) : > \"$FAKE_TMUX_ALIVE\" ;;\n"
-        "  capture-pane) printf '\\ngpt-5.6-terra medium · ~/workspace\\n' ;;\n"
+        # This binding fixture launches a running child. An idle model header
+        # alone makes the launcher exhaust its initial-task watch; fake sleep
+        # removes the delays but still leaves 30 polls near the outer timeout.
+        "  capture-pane) printf '\\ngpt-5.6-terra medium · ~/workspace\\n"
+        "Working (1s • esc to interrupt)\\n' ;;\n"
         "  has-session) [[ -f \"$FAKE_TMUX_ALIVE\" ]] ;;\n"
         "  kill-session) rm -f \"$FAKE_TMUX_ALIVE\" ;;\n"
         "  display-message) printf 'ParentAgent\\n' ;;\n"
@@ -547,6 +559,8 @@ def _fake_codex_launch_env(
             "FAKE_TMUX_ALIVE": str(tmux_alive),
         }
     )
+    from _fake_tmux_transport import add_transport_evidence
+    add_transport_evidence(fake_bin, env)
     return env, workdir
 
 
@@ -818,15 +832,16 @@ def test_normal_child_cleanup_keeps_spawned_codex_history_bound(
     assert receipt["codex_mcp_profile"] == "inherit"
     assert "registration_token" not in receipt
 
-    cleaned = subprocess.run(
-        ["/bin/bash", str(ROOT / "hooks" / "cleanup-child-agent.sh"), AGENT],
-        cwd=ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=30,
-    )
+    with cleanup_mail_server() as mail_url:
+        cleaned = subprocess.run(
+            ["/bin/bash", str(ROOT / "hooks" / "cleanup-child-agent.sh"), AGENT],
+            cwd=ROOT,
+            env={**env, "AGENTSTACK_MCP_URL": mail_url},
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
     assert cleaned.returncode == 0, cleaned.stderr
     assert not child_home.exists()
     assert rollout.is_file()
@@ -1048,6 +1063,8 @@ def test_no_arg_codex_spawn_rejects_untrusted_canonical_state_before_cli(
             empty_hooks = tmp_path / "hooks-without-prepare"
             empty_hooks.mkdir()
             shutil.copy2(ROOT / "hooks" / "child_resume.py", empty_hooks)
+            shutil.copy2(ROOT / "hooks" / "codex-bin.sh", empty_hooks)
+            copy_client_library(tmp_path)
             env["AGENTSTACK_HOOKS_DIR"] = str(empty_hooks)
     env["AGENTSTACK_CODEX_LAUNCH_BINDING"] = "/parent/launch.json"
     env["AGENTSTACK_CODEX_LAUNCH_ID"] = "parent-launch"
@@ -1656,6 +1673,14 @@ def test_session_start_deadline_survives_a_one_second_lock_wait(
     payload = json.dumps(
         _payload(binding_env["transcript"], cwd=str(binding_env["project"]))
     )
+    # A slow interpreter start (a loaded CI runner) is part of the second
+    # scenario: the recorder reaches the lock half a second late (#122).
+    slow_python = tmp_path / "slow-python"
+    slow_python.write_text(
+        f"#!/bin/bash\nsleep 0.5\nexec {shlex.quote(sys.executable)} \"$@\"\n",
+        encoding="utf-8",
+    )
+    slow_python.chmod(0o755)
     environment = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": str(tmp_path),
@@ -1699,6 +1724,16 @@ def test_session_start_deadline_survives_a_one_second_lock_wait(
     fcntl.flock(descriptor, fcntl.LOCK_EX)
 
     def release_lock() -> None:
+        # Hold the lock for 1.25 s after the recorder has started, not after
+        # this test started it: the recorder logs "started" before it waits
+        # for the lock, so the wait it measures is at least that long however
+        # slowly the interpreter came up (#122).
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            lines = log_path.read_text(encoding="utf-8").splitlines()
+            if len(lines) > len(first_events):
+                break
+            time.sleep(0.01)
         time.sleep(1.25)
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
@@ -1710,11 +1745,11 @@ def test_session_start_deadline_survives_a_one_second_lock_wait(
         input=payload,
         capture_output=True,
         text=True,
-        env=environment,
+        env={**environment, "AGENTSTACK_PYTHON": str(slow_python)},
         timeout=timeout_seconds,
         check=False,
     )
-    releaser.join(timeout=2)
+    releaser.join(timeout=5)
 
     assert completed.returncode == 0, completed.stderr
     assert receipt_path.is_file()
@@ -1880,6 +1915,11 @@ def test_deck_new_agent_handoff_reaches_recorder_and_reader(
     monkeypatch.setattr(server, "_spawn_name_status", lambda _name: "available")
     monkeypatch.setattr(server, "_mcp_call", mcp)
     monkeypatch.setattr(server, "_runtime_agent_token", lambda _name: "parent-owner-token")
+    # This handoff/recorder test isolates launch policy, which has real-process
+    # integration coverage in test_spawn_child_codex_bin.py.
+    monkeypatch.setattr(server.codex_models, "resolve_launcher", lambda: server.codex_models.LauncherPolicy())
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, tmp_path, server, lambda *a, **kw: subprocess.CompletedProcess([], 0, "", ""))
     with monkeypatch.context() as process_patch:
         process_patch.setattr(
             server.subprocess, "Popen", lambda args, **_kwargs: launched.append(args)
@@ -1934,3 +1974,185 @@ def test_deck_badges_are_only_wired_in_the_card_renderer() -> None:
     assert "— NO HISTORY" in card
     assert html.count("? UNBOUND") == 1
     assert html.count("— NO HISTORY") == 1
+
+
+# --- #125: a dashboard-spawned child (registered as "codex-cli") resumes
+# through the bootstrap, which prepares with `--program codex`. -----------------
+
+
+def _bound_codex_cli_child(env: dict) -> dict:
+    """Bind one child launch whose registration spelled the program codex-cli."""
+
+    registration = {**env["registration"], "program": "codex-cli"}
+    launch_path, launch_id = prepare_mod.prepare(
+        env["runtime"],
+        registration,
+        launch_kind="startup",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+        now=100.0,
+    )
+    assert _record(env, launch_path, launch_id) == "bound"
+    receipt_path = env["runtime"] / "session_index" / f"{AGENT_ID}.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["program"] == "codex-cli"
+    return receipt
+
+
+def test_codex_cli_child_resumes_with_the_bootstrap_program_spelling(
+    binding_env: dict,
+) -> None:
+    receipt = _bound_codex_cli_child(binding_env)
+
+    # The same arguments agentstack-codex-bootstrap passes: --program codex.
+    launch_path, launch_id = prepare_mod.prepare(
+        binding_env["runtime"],
+        {**binding_env["registration"], "program": "codex"},
+        launch_kind="resume",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+        resume_session_id=SESSION_ID,
+        now=200.0,
+    )
+
+    launch = json.loads(launch_path.read_text(encoding="utf-8"))
+    assert launch["launch_id"] == launch_id
+    assert launch["launch_kind"] == "resume"
+    assert launch["fallback_launch_id"] == receipt["launch_id"]
+    assert launch["fallback_receipt_id"] == receipt["receipt_id"]
+
+
+def test_resume_check_only_accepts_the_other_spelling_and_writes_nothing(
+    binding_env: dict,
+) -> None:
+    receipt = _bound_codex_cli_child(binding_env)
+    runtime = binding_env["runtime"]
+    launch_path = runtime / "codex_launches" / f"{AGENT_ID}.json"
+    receipt_path = runtime / "session_index" / f"{AGENT_ID}.json"
+    launch_before = launch_path.read_bytes()
+    receipt_before = receipt_path.read_bytes()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "hooks" / "prepare-codex-session-binding.py"),
+            "--check-only",
+            "--runtime-dir", str(runtime),
+            "--agent-id", str(AGENT_ID),
+            "--agent-name", AGENT,
+            "--project-key", binding_env["registration"]["project_key"],
+            "--program", "codex",
+            "--launch-kind", "resume",
+            "--launch-origin", "child",
+            "--codex-mcp-profile", "orrery-only",
+            "--resume-session-id", SESSION_ID,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    # The verified receipt's spelling, which the bootstrap then keeps.
+    assert result.stdout == "codex-cli\n"
+    assert launch_path.read_bytes() == launch_before
+    assert receipt_path.read_bytes() == receipt_before
+    assert prepare_mod.check_resume(
+        runtime,
+        {**binding_env["registration"], "program": "codex"},
+        resume_session_id=SESSION_ID,
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+    ) == (receipt["launch_id"], receipt["receipt_id"], "codex-cli")
+
+
+def test_resume_check_only_refuses_a_mismatch_without_writing(
+    binding_env: dict,
+) -> None:
+    _bound_codex_cli_child(binding_env)
+    runtime = binding_env["runtime"]
+    launch_path = runtime / "codex_launches" / f"{AGENT_ID}.json"
+    launch_before = launch_path.read_bytes()
+
+    with pytest.raises(ValueError, match="does not match a verified prior receipt"):
+        prepare_mod.check_resume(
+            runtime,
+            {**binding_env["registration"], "program": "codex"},
+            resume_session_id="11111111-2222-3333-4444-555555555555",
+            launch_origin="child",
+            codex_mcp_profile="orrery-only",
+        )
+    # Another program family is still refused.
+    with pytest.raises(ValueError, match="not for Codex CLI"):
+        prepare_mod.check_resume(
+            runtime,
+            {**binding_env["registration"], "program": "claude-code"},
+            resume_session_id=SESSION_ID,
+            launch_origin="child",
+            codex_mcp_profile="orrery-only",
+        )
+    assert launch_path.read_bytes() == launch_before
+
+
+@pytest.mark.parametrize("original", ["codex-cli", "codex"])
+def test_resume_closed_before_first_input_stays_resumable(
+    binding_env: dict, monkeypatch: pytest.MonkeyPatch, original: str
+) -> None:
+    """#125 acceptance: resume, close before any prompt (no new SessionStart
+    receipt), and the next dashboard resume is still ready."""
+
+    monkeypatch.setattr(server, "_terminal_adapter", lambda: "macos")
+    with sqlite3.connect(server.DB_PATH) as connection:
+        connection.execute(
+            "UPDATE agents SET program=? WHERE id=?", (original, AGENT_ID)
+        )
+    registration = {**binding_env["registration"], "program": original}
+    launch_path, launch_id = prepare_mod.prepare(
+        binding_env["runtime"],
+        registration,
+        launch_kind="startup",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+        now=100.0,
+    )
+    assert _record(binding_env, launch_path, launch_id) == "bound"
+    # This fixture carries no retained child credential, so the capability
+    # stops at that later gate; what matters is that the history gate before
+    # it (the one that failed in #125 with no_history) passes before and after.
+    before = server._resume_capability(AGENT, original, category="retired")
+    assert before != "no_history"
+
+    # The bootstrap's check does not know the spelling in advance ...
+    *_nonces, program = prepare_mod.check_resume(
+        binding_env["runtime"],
+        {**binding_env["registration"], "program": "codex"},
+        resume_session_id=SESSION_ID,
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+    )
+    assert program == original
+    # ... and re-registers and prepares under the verified receipt's spelling.
+    with sqlite3.connect(server.DB_PATH) as connection:
+        connection.execute(
+            "UPDATE agents SET program=? WHERE id=?", (program, AGENT_ID)
+        )
+    prepare_mod.prepare(
+        binding_env["runtime"],
+        {**binding_env["registration"], "program": program},
+        launch_kind="resume",
+        history_mode="enabled",
+        launch_origin="child",
+        codex_mcp_profile="orrery-only",
+        resume_session_id=SESSION_ID,
+        now=200.0,
+    )
+
+    # No SessionStart(resume) arrives: the prior receipt stays authoritative.
+    state = server._codex_history_binding(AGENT, now=250.0)
+    assert state["history_binding"] == "bound", state
+    after = server._resume_capability(AGENT, program, category="retired")
+    assert after == before
+    assert after != "no_history"

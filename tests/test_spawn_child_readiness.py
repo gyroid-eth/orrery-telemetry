@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 import pathlib
 import stat
 import subprocess
@@ -58,6 +59,11 @@ def test_fresh_workdir_trust_prompt_is_accepted_without_waiting_out_timeout(tmp_
     handoff = tmp_path / "child-token"
     handoff.write_text("child-owner-token", encoding="utf-8")
     handoff.chmod(0o600)
+    binding = handoff.with_name(handoff.name + ".binding.json")
+    binding.write_text(json.dumps({"agent_id": 73, "agent_name": "Fresh-Curie",
+                                   "project_key": "/shared/project", "program": "claude-code"}), encoding="utf-8")
+    binding.chmod(0o600)
+
 
     env = os.environ.copy()
     env.update({
@@ -79,6 +85,8 @@ def test_fresh_workdir_trust_prompt_is_accepted_without_waiting_out_timeout(tmp_
     })
     pathlib.Path(env["HOME"]).mkdir()
 
+    from _fake_tmux_transport import add_transport_evidence
+    add_transport_evidence(bindir,env)
     result = subprocess.run(
         [
             "/bin/bash", str(SPAWN),
@@ -99,7 +107,10 @@ def test_fresh_workdir_trust_prompt_is_accepted_without_waiting_out_timeout(tmp_
     assert result.stdout.strip() == "Fresh-Curie"
     assert "Claude trust dialog detected" in result.stderr
     calls = tmux_log.read_text(encoding="utf-8").splitlines()
-    assert sum(call.endswith(" C-m") for call in calls) >= 2
+    # The one Enter accepts the trust dialog. The task is the launch argument,
+    # so nothing is pasted or submitted afterwards.
+    assert sum(call.endswith(" C-m") for call in calls) == 1
+    assert not any(call.startswith(("paste-buffer", "load-buffer")) for call in calls)
     # Waiting out the 60s timeout would take 30 polls of 2s; accepting the
     # trust dialog and seeing the prompt takes about five (deterministic:
     # sleep is faked), so 10 leaves room without hiding a wait-out.

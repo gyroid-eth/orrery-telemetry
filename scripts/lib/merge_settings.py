@@ -20,8 +20,9 @@ from typing import Any
 
 HOOKS_TOKEN = "__AGENTSTACK_HOOKS_DIR__"
 BIN_TOKEN = "__AGENTSTACK_BIN_DIR__"
+SKILLS_TOKEN = "__AGENTSTACK_SKILLS_DIR__"
 IRREVERSIBLE_SESSION_END_WORDS = ("retire", "kill", "hard_delete")
-PERMISSION_KINDS = ("allow", "deny")
+PERMISSION_KINDS = ("allow", "deny", "additionalDirectories")
 PRODUCT_MCP_PREFIX = "mcp__orrery-mail__"
 LEGACY_PRODUCT_MCP_PREFIXES = ("mcp__mcp-agent-mail__", "mcp__agent_mail__")
 
@@ -40,7 +41,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bin-dir", help="Installed bin directory (for permission rules)")
     parser.add_argument(
         "--skills-dir",
-        help="Installed skills directory (used to remove the legacy unsupported setting)",
+        help="Installed skills directory (made readable to agents; also used to "
+        "remove the legacy unsupported setting)",
+    )
+    parser.add_argument(
+        "--claude-skills-dir",
+        help="Claude Code skills directory whose links into --skills-dir are "
+        "made readable too",
     )
     parser.add_argument("--backup-dir", required=True, help="Backup root directory")
     parser.add_argument("--manifest", help="Manifest whose recorded entries constrain --remove")
@@ -96,7 +103,8 @@ def read_settings(path: pathlib.Path) -> tuple[dict[str, Any], bytes | None]:
 
 
 def render_template(path: pathlib.Path, hooks_dir: pathlib.Path,
-                    bin_dir: pathlib.Path | None) -> dict[str, Any]:
+                    bin_dir: pathlib.Path | None,
+                    skills_dir: pathlib.Path | None = None) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
@@ -107,6 +115,10 @@ def render_template(path: pathlib.Path, hooks_dir: pathlib.Path,
         if bin_dir is None:
             raise MergeError(f"template uses {BIN_TOKEN} but --bin-dir was not given")
         rendered = rendered.replace(BIN_TOKEN, str(bin_dir))
+    if SKILLS_TOKEN in rendered:
+        if skills_dir is None:
+            raise MergeError(f"template uses {SKILLS_TOKEN} but --skills-dir was not given")
+        rendered = rendered.replace(SKILLS_TOKEN, str(skills_dir))
     try:
         data = json.loads(rendered)
     except json.JSONDecodeError as exc:
@@ -515,6 +527,26 @@ def manifest_permissions(path: pathlib.Path | None) -> dict[str, list[str]]:
     return result
 
 
+def linked_skill_directories(
+    skills_dir: pathlib.Path,
+    claude_skills_dir: pathlib.Path,
+) -> list[str]:
+    """Claude skill links the installer made into the installed skills.
+
+    Claude Code checks both the path it was given and the symlink's target, so
+    a read through ~/.claude/skills/<name> needs that link listed as well as
+    the installed directory.  A user's own skill of the same name is not a
+    link into the install, and is never listed.
+    """
+    linked: list[str] = []
+    for skill_file in sorted(skills_dir.glob("*/SKILL.md")):
+        source = skill_file.parent
+        link = claude_skills_dir / source.name
+        if link.is_symlink() and os.path.realpath(link) == os.path.realpath(source):
+            linked.append(str(link))
+    return linked
+
+
 def skills_dir_key(skills_dir: pathlib.Path) -> str:
     return str(skills_dir)
 
@@ -835,6 +867,9 @@ def run() -> int:
     hooks_dir = pathlib.Path(args.hooks_dir).expanduser()
     bin_dir = pathlib.Path(args.bin_dir).expanduser() if args.bin_dir else None
     skills_dir = pathlib.Path(args.skills_dir).expanduser() if args.skills_dir else None
+    claude_skills_dir = (
+        pathlib.Path(args.claude_skills_dir).expanduser() if args.claude_skills_dir else None
+    )
     backup_dir = pathlib.Path(args.backup_dir).expanduser()
     manifest_path = pathlib.Path(args.manifest).expanduser() if args.manifest else None
 
@@ -858,9 +893,14 @@ def run() -> int:
         operation = "remove"
     else:
         template_path = pathlib.Path(args.template).expanduser()
-        template = render_template(template_path, hooks_dir, bin_dir)
+        template = render_template(template_path, hooks_dir, bin_dir, skills_dir)
         template_hooks = load_template_hooks(template, template_path)
         template_permissions = load_template_permissions(template, template_path)
+        if skills_dir and claude_skills_dir:
+            template_permissions["additionalDirectories"] = [
+                *template_permissions["additionalDirectories"],
+                *linked_skill_directories(skills_dir, claude_skills_dir),
+            ]
         migrated_original = copy.deepcopy(original)
         migrated_matchers = migrate_legacy_hook_matchers(
             migrated_original, template_hooks

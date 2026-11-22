@@ -47,52 +47,91 @@
   },
   "created_at": "2026-01-01T00:00:00Z",
   "env": {
+    "AGENTSTACK_AUTO_OPEN_CHILD": "1",
+    "AGENTSTACK_CHILD_DEFAULT_TOOLS": "",
+    "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "30",
     "AGENTSTACK_CLAUDE_JSON": "/home/alice/.claude.json",
     "AGENTSTACK_CLAUDE_MODELS": "",
+    "AGENTSTACK_CODEX_ADD_DIRS": "",
+    "AGENTSTACK_CODEX_BIN": "/home/alice/.local/bin/codex",
+    "AGENTSTACK_CODEX_CHILD_APPROVAL": "never",
+    "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "",
     "AGENTSTACK_CODEX_MODELS": "",
+    "AGENTSTACK_CODEX_NETWORK": "on",
+    "AGENTSTACK_CODEX_SANDBOX": "workspace-write",
+    "AGENTSTACK_CODEX_DEFAULT_MODEL": "",
+    "AGENTSTACK_CODEX_DEFAULT_EFFORT": "",
     "AGENTSTACK_CUSTOM_PORTRAITS": "",
+    "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS": "",
     "AGENTSTACK_DASHBOARD_LOG": "/home/alice/.agentstack/runtime/dashboard.log",
     "AGENTSTACK_DASHBOARD_LOG_BACKUPS": "3",
     "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES": "5242880",
     "AGENTSTACK_DASHBOARD_RESTART_DELAY": "5",
     "AGENTSTACK_DELIVERABLE_ROOTS": "",
+    "AGENTSTACK_DSH_NODE": "",
+    "AGENTSTACK_EXTRA_PROTECTED_ROOTS": "",
     "AGENTSTACK_HOOKS_DIR": "/home/alice/.agentstack/hooks",
     "AGENTSTACK_LABEL_PREFIX": "org.agentstack",
     "AGENTSTACK_LANG": "",
     "AGENTSTACK_MAIL_DB": "/home/alice/.agentstack/mail/storage.sqlite3",
     "AGENTSTACK_MAIL_DIR": "/home/alice/.agentstack/mail-service",
-    "AGENTSTACK_MAIL_ENV": "/home/alice/.agentstack/mail-service/renders/<render>/service.env",
     "AGENTSTACK_MAIL_ENROLL_BIN": "/home/alice/.agentstack/mail-service/candidates/868ba0ac97553adb45d31abd6dde8b5ee3291b3c/venv/bin/agentstack-enroll",
+    "AGENTSTACK_MAIL_ENV": "/home/alice/.agentstack/mail-service/renders/<render>/service.env",
     "AGENTSTACK_MAIL_HOME": "/home/alice/.agentstack/mail",
     "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "disabled",
     "AGENTSTACK_MAIL_LAUNCHD_LABEL": "",
     "AGENTSTACK_MAIL_STATE_ROOT": "/home/alice/.agentstack/mail",
+    "AGENTSTACK_MANAGED_SPAWN_CONFIG": "",
     "AGENTSTACK_MCP_URL": "http://127.0.0.1:18765/mcp",
     "AGENTSTACK_MURMUR": "",
+    "AGENTSTACK_PERSISTENT_PROFILES_DIR": "/home/alice/.agentstack/profiles",
     "AGENTSTACK_PORT": "8770",
     "AGENTSTACK_PORTRAITS_DIR": "",
-    "AGENTSTACK_PERSISTENT_PROFILES_DIR": "/home/alice/.agentstack/profiles",
     "AGENTSTACK_PROJECT_KEY": "/home/alice/project",
-    "AGENTSTACK_PROTECTED_ROOTS": "/home/alice/project",
     "AGENTSTACK_RUNTIME_DIR": "/home/alice/.agentstack/runtime",
     "AGENTSTACK_SIGNALS_DIR": "/home/alice/.agentstack/mail/signals",
     "AGENTSTACK_SKILLS_DIR": "/home/alice/.agentstack/skills",
     "AGENTSTACK_SPAWN_DIRS": "",
     "AGENTSTACK_SPAWN_ROOTS": "",
-    "AGENTSTACK_WORKTREE_ROOT": "/home/alice/.agentstack/worktrees",
-    "AGENTSTACK_CODEX_CHILD_APPROVAL": "never",
-    "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "",
-    "AGENTSTACK_CODEX_NETWORK": "on",
-    "AGENTSTACK_CODEX_ADD_DIRS": "",
-    "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "30",
-    "AGENTSTACK_CODEX_BIN": "/home/alice/.local/bin/codex",
-    "AGENTSTACK_AUTO_OPEN_CHILD": "1",
-    "AGENTSTACK_TERMINAL": "auto"
+    "AGENTSTACK_TERMINAL": "auto",
+    "AGENTSTACK_WORKTREE_ROOT": "/home/alice/.agentstack/worktrees"
   },
+  "example_dirs": [
+    "/home/alice/.agentstack/examples",
+    "/home/alice/.agentstack/examples/native-harnesses"
+  ],
+  "example_files": [
+    {
+      "path": "/home/alice/.agentstack/examples/native-harnesses/README.md",
+      "sha256": "f3688270be9dc318ed8f5c60b34990d4560624620f2161cccb2d087b6269a607"
+    },
+    {
+      "path": "/home/alice/.agentstack/examples/native-harnesses/README.en.md",
+      "sha256": "9a7911a65852506af6f144828224f33e3e5f5f9536f7ffac34e6f183b4db9d72"
+    },
+    {
+      "path": "/home/alice/.agentstack/examples/native-harnesses/manifest.example.json",
+      "sha256": "0497220df2edc5bb192cc1fdf9733948fb234052dbb04c1e56f78c8ea1b4a81c"
+    },
+    {
+      "path": "/home/alice/.agentstack/examples/native-harnesses/dsh-config.example.json",
+      "sha256": "b1af74e6721062ac18892bf0090ee431e5682107955a3e31fe90079d6b686962"
+    },
+    {
+      "path": "/home/alice/.agentstack/examples/native-harnesses/dsh-backends.example.json",
+      "sha256": "d8189e0ac52cdc3cbf5fbab9e9b81717b7497a8647bc7b62298a93da1d5fc78d"
+    },
+    {
+      "path": "/home/alice/.agentstack/examples/native-harnesses/hermes-config.example.json",
+      "sha256": "cbd73c600544fd089aac26b16d27924934745596e37e284f201b94324a98caa0"
+    }
+  ],
   "install_dir": "/home/alice/.agentstack",
+  "instruction_receipts": [],
+  "managed_harness_roots": [],
   "notes": [
     "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
-    "Claude skills use manifest-owned symlinks under ~/.claude/skills; existing conflicts are preserved.",
+    "Claude and Codex skills use manifest-owned symlinks; existing conflicts are preserved.",
     "Dashboard service logs persist under runtime with bounded rotation and crash restart diagnostics.",
     "Claude MCP user config uses an explicit-confirm, fixed-name structural merge."
   ],
@@ -106,6 +145,10 @@
     "/home/alice/.agentstack/dashboard",
     "/home/alice/.agentstack/dashboard/assets",
     "/home/alice/.agentstack/dashboard/demo",
+    "/home/alice/.agentstack/dashboard/mobile",
+    "/home/alice/.agentstack/dashboard/mobile/assets",
+    "/home/alice/.agentstack/dashboard/mobile/fonts",
+    "/home/alice/.agentstack/dashboard/mobile/icons",
     "/home/alice/.agentstack/dashboard/portraits_64",
     "/home/alice/.agentstack/dashboard/portraits_pixel",
     "/home/alice/.agentstack/dashboard/providers",
@@ -137,6 +180,8 @@
     "/home/alice/.agentstack/runtime/claude-mcp-merge-result.json",
     "/home/alice/.claude/skills/delegate",
     "/home/alice/.claude/skills/log",
+    "/home/alice/.codex/skills/delegate",
+    "/home/alice/.codex/skills/log",
     "/home/alice/.config/systemd/user/org.agentstack.agentdashboard.service",
     "/home/alice/.config/systemd/user/org.agentstack.mail-watcher.service"
   ],
@@ -218,6 +263,11 @@
         "matcher": "mcp__orrery-mail__file_reservation_paths|mcp__mcp-agent-mail__file_reservation_paths|mcp__agent_mail__file_reservation_paths|mcp__orrery-mail__macro_file_reservation_cycle|mcp__mcp-agent-mail__macro_file_reservation_cycle|mcp__agent_mail__macro_file_reservation_cycle|mcp__orrery-mail__renew_file_reservations|mcp__mcp-agent-mail__renew_file_reservations|mcp__agent_mail__renew_file_reservations"
       },
       {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/deny-llm-key-read.sh",
+        "event": "PreToolUse",
+        "matcher": "Bash"
+      },
+      {
         "command": "/bin/bash /home/alice/.agentstack/hooks/release-file-reservation.sh",
         "event": "PostToolUse",
         "matcher": "Edit|Write"
@@ -268,6 +318,11 @@
         "matcher": "mcp__orrery-mail__file_reservation_paths|mcp__mcp-agent-mail__file_reservation_paths|mcp__agent_mail__file_reservation_paths|mcp__orrery-mail__macro_file_reservation_cycle|mcp__mcp-agent-mail__macro_file_reservation_cycle|mcp__agent_mail__macro_file_reservation_cycle|mcp__orrery-mail__renew_file_reservations|mcp__mcp-agent-mail__renew_file_reservations|mcp__agent_mail__renew_file_reservations"
       },
       {
+        "command": "/bin/bash /home/alice/.agentstack/hooks/deny-llm-key-read.sh",
+        "event": "PreToolUse",
+        "matcher": "Bash"
+      },
+      {
         "command": "/bin/bash /home/alice/.agentstack/hooks/release-file-reservation.sh",
         "event": "PostToolUse",
         "matcher": "Edit|Write"
@@ -288,9 +343,13 @@
     "operation": "merge",
     "permissions": {
       "added": {
+        "additionalDirectories": [
+          "/home/alice/.agentstack/skills"
+        ],
         "allow": [
           "mcp__orrery-mail__health_check",
           "mcp__orrery-mail__runtime_status",
+          "mcp__orrery-mail__show_files",
           "mcp__orrery-mail__ensure_project",
           "mcp__orrery-mail__register_agent",
           "mcp__orrery-mail__whois",
@@ -315,14 +374,17 @@
         "deny": [
           "mcp__orrery-mail__hard_delete_agent",
           "mcp__orrery-mail__hard_delete_project",
-          "mcp__orrery-mail__purge_old_messages"
+          "mcp__orrery-mail__purge_old_messages",
+          "Edit(//home/alice/.agentstack/skills/**)"
         ]
       },
       "migrated_legacy": {
+        "additionalDirectories": [],
         "allow": [],
         "deny": []
       },
       "skipped_existing": {
+        "additionalDirectories": [],
         "allow": [],
         "deny": []
       }
@@ -344,6 +406,14 @@
     },
     {
       "path": "/home/alice/.claude/skills/log",
+      "target": "/home/alice/.agentstack/skills/log"
+    },
+    {
+      "path": "/home/alice/.codex/skills/delegate",
+      "target": "/home/alice/.agentstack/skills/delegate"
+    },
+    {
+      "path": "/home/alice/.codex/skills/log",
       "target": "/home/alice/.agentstack/skills/log"
     }
   ],

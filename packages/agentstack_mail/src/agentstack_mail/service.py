@@ -1416,22 +1416,60 @@ def foreground(
     server_executable: Path,
     env_file: Path,
     state_root: Path,
+    fresh_config: Path | None = None,
+    fresh_port: int | None = None,
 ) -> int:
     """Hold the service writer lock, supervise the server, and forward signals."""
 
+    requested_executable = Path(server_executable).expanduser()
     server_executable = _require_absolute_executable(server_executable, "server executable")
-    config = runtime_config(env_file, state_root)
-    if not config.database.is_file() or not config.archive.is_dir():
-        raise ServiceError("verified migrated database and archive must exist before service start")
-    if (config.state_root / MIGRATION_STAGING_MARKER).exists():
+    command = [str(server_executable)]
+    if fresh_config is not None:
+        # Keep the venv entry path: resolving its Python symlink would select
+        # the base interpreter and lose the candidate's installed modules.
+        command = [str(requested_executable)]
+        from .fresh_runtime import read_config, mail_port_allowed, _directory
+        from .storage_origin_contract import B1Error
+        try:
+            root, prepared = read_config(fresh_config)
+            values = _read_env_file(env_file)
+            if (prepared['mode'] != 'fresh' or root != state_root
+                    or values.get('AGENTSTACK_RUNTIME_MODE') != 'fresh'
+                    or values.get('AGENTSTACK_FRESH_SERVER_CONFIG') != str(fresh_config)
+                    or values.get('ORRERY_FRESH_MAIL_INSTANCE_ID') != prepared['instance_id']
+                    or not mail_port_allowed(fresh_port, 'fresh')):
+                raise ServiceError('FRESH_SERVICE_CONFIG_MISMATCH')
+            database = Path(prepared['database']);info = database.lstat()
+            if (database.resolve() != database or not stat.S_ISREG(info.st_mode)
+                    or info.st_uid != os.getuid() or info.st_mode & 0o077):
+                raise ServiceError('FRESH_SERVICE_DATABASE_UNSAFE')
+            command += ['-m', 'agentstack_mail.fresh_cli', 'serve', '--config', str(fresh_config),
+                        '--port', str(fresh_port)]
+        except (B1Error, OSError, ValueError):
+            raise ServiceError('FRESH_SERVICE_CONFIG_INVALID') from None
+    else:
+        if fresh_port is not None:raise ServiceError('FRESH_SERVICE_CONFIG_REQUIRED')
+        config = runtime_config(env_file, state_root)
+        if not config.database.is_file() or not config.archive.is_dir():
+            raise ServiceError("verified migrated database and archive must exist before service start")
+        root = config.state_root
+    if (root / MIGRATION_STAGING_MARKER).exists():
         raise ServiceError(
             "migration publication is unconfirmed; rerun migration copy before service start"
         )
-    runtime_dir = config.state_root / "runtime"
+    runtime_dir = root / "runtime"
     runtime_dir.mkdir(mode=0o700, exist_ok=True)
-    os.chmod(runtime_dir, 0o700)
+    if fresh_config is not None:_directory(runtime_dir)
+    else:os.chmod(runtime_dir, 0o700)
     lock_path = runtime_dir / "authority.lock"
-    lock_handle = lock_path.open("a+")
+    if fresh_config is not None:
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        lock_handle = os.fdopen(descriptor, 'r+')
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or info.st_nlink != 1):
+            lock_handle.close();raise ServiceError('FRESH_SERVICE_LOCK_UNSAFE')
+    else:lock_handle = lock_path.open("a+")
     try:
         try:
             fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1439,11 +1477,15 @@ def foreground(
             raise ServiceError("another service process owns this state root") from exc
         environment = os.environ.copy()
         environment["AGENTSTACK_MAIL_ENV_FILE"] = str(env_file.resolve(strict=False))
+        if fresh_config is not None:
+            for key in ('AGENTSTACK_FRESH_CLIENT_CONTEXT', 'AGENTSTACK_CLIENT_CONFIG', 'AGENTSTACK_GLOBAL_SERVER_CONFIG'):
+                environment.pop(key, None)
+            environment['AGENTSTACK_RUNTIME_MODE'] = 'fresh'
         # The child keeps the authority lock descriptor open.  If the wrapper
         # disappears, a replacement wrapper still cannot start a second writer
         # for this state root while the original server remains alive.
         process = subprocess.Popen(
-            [str(server_executable)],
+            command,
             env=environment,
             start_new_session=True,
             pass_fds=(lock_handle.fileno(),),
@@ -1496,6 +1538,8 @@ def _parser() -> argparse.ArgumentParser:
     foreground_parser.add_argument("--server-executable", required=True)
     foreground_parser.add_argument("--env-file", required=True)
     foreground_parser.add_argument("--state-root", required=True)
+    foreground_parser.add_argument("--fresh-config")
+    foreground_parser.add_argument("--fresh-port", type=int)
     for name in ("start", "stop", "status"):
         command = subparsers.add_parser(name)
         command.add_argument("--ownership-manifest", required=True)
@@ -1523,6 +1567,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                     server_executable=Path(args.server_executable),
                     env_file=Path(args.env_file),
                     state_root=Path(args.state_root),
+                    fresh_config=Path(args.fresh_config) if args.fresh_config else None,
+                    fresh_port=args.fresh_port,
                 )
             )
         elif args.command == "start":

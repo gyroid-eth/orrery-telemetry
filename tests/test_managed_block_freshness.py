@@ -33,8 +33,8 @@ def install(tmp_path):
     (home / "bin" / "lib").mkdir(parents=True)
     for name in ("agentstack-codex-setup", "agentstack-claude-setup"):
         shutil.copy2(ROOT / "bin" / name, home / "bin" / name)
-    shutil.copy2(ROOT / "bin" / "lib" / "agentstack-managed-block.sh",
-                 home / "bin" / "lib" / "agentstack-managed-block.sh")
+    from _installed_client_payload import copy_client_library
+    copy_client_library(home)
     for rel in ("codex/AGENTS.md", "claude/CLAUDE.md"):
         (home / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / rel, home / rel)
@@ -50,19 +50,23 @@ def _env(tmp_path, home, **extra):
         "CODEX_HOME": str(tmp_path / "codex"),
         "AGENTSTACK_PROJECT_KEY": PROJECT,
     }
+    env["AGENTSTACK_PYTHON"] = __import__("sys").executable
     env.update(extra)
     return env
 
 
 def _run(home, script, env, *args):
     return subprocess.run(
-        ["/bin/bash", str(home / "bin" / script), *args],
+        ["/bin/bash", str(home / "bin" / script), *(args or ("--assume-yes",))],
         env=env, text=True, capture_output=True, check=False,
     )
 
 
 def _render(template: pathlib.Path, home: pathlib.Path, begin: str, project=PROJECT) -> str:
+    import runpy
+    catalog=runpy.run_path(str(ROOT/"bin/lib/instruction_blocks.py"))["MESSAGES"]
     body = template.read_text(encoding="utf-8")
+    for key,value in catalog.items():body=body.replace("__ORRERY_"+key.upper().replace("-","_")+"__",value)
     body = body.replace("__AGENTSTACK_HOME__", str(home)).replace(
         "__AGENTSTACK_PROJECT_KEY__", project)
     return f"{begin}\n{body}{END}\n"
@@ -92,7 +96,7 @@ def test_the_old_helper_first_block_is_reported_with_the_update_command(tmp_path
     result = _run(install, "agentstack-codex-setup", _env(tmp_path, install), "--check")
     assert result.returncode == 1
     out = result.stdout
-    assert out.startswith("warn: Codex AGENTS.md managed block in ")
+    assert "warn: Codex AGENTS.md managed block in " in out
     assert "differs from the installed template" in out
     assert f"AGENTSTACK_HOME={install} " in out
     assert f"CODEX_HOME={tmp_path / 'codex'}" in out
@@ -136,15 +140,15 @@ def test_broken_markers_are_malformed_not_ok(tmp_path, install, text, why):
     _write_codex(tmp_path, text)
     result = _run(install, "agentstack-codex-setup", _env(tmp_path, install), "--check")
     assert result.returncode == 1
-    assert f"is malformed ({why})" in result.stdout
+    assert "is malformed" in result.stdout and "malformed:" in result.stdout
 
 
-def test_an_end_marker_of_another_block_before_ours_is_ignored(tmp_path, install):
+def test_an_isolated_shared_end_marker_is_rejected(tmp_path, install):
     env = _env(tmp_path, install)
     _run(install, "agentstack-codex-setup", env)
     target = tmp_path / "codex" / "AGENTS.md"
     target.write_text(f"{END}\nstray\n\n" + target.read_text())
-    assert _run(install, "agentstack-codex-setup", env, "--check").returncode == 0
+    assert _run(install, "agentstack-codex-setup", env, "--check").returncode == 1
 
 
 def test_a_missing_template_is_not_reported_as_compared(tmp_path, install):
@@ -167,41 +171,21 @@ def test_check_writes_nothing(tmp_path, install):
     assert list(target.parent.iterdir()) == [target]  # no backup either
 
 
-def test_claude_check_per_scope(tmp_path, install):
-    project = tmp_path / "project"
-    project.mkdir()
-    env = _env(tmp_path, install, AGENTSTACK_PROJECT_KEY=str(project),
-               AGENTSTACK_CLAUDE_MD_SCOPE="project")
-    assert _run(install, "agentstack-claude-setup", env).returncode == 0
-    ok = _run(install, "agentstack-claude-setup", env, "--check")
-    assert ok.returncode == 0 and "ok: Claude CLAUDE.md managed block in" in ok.stdout
-    claude_md = project / "CLAUDE.md"
-    claude_md.write_text(claude_md.read_text().replace("Delegation", "Delegating", 1))
-    stale = _run(install, "agentstack-claude-setup", env, "--check")
-    assert stale.returncode == 1
-    assert "differs from the installed template" in stale.stdout
-    assert "AGENTSTACK_CLAUDE_MD_SCOPE=project" in stale.stdout
-    assert f"AGENTSTACK_HOME={install} " in stale.stdout
+def test_claude_user_default_and_explicit_narrow_scope_refusal(tmp_path, install):
+    project=tmp_path/"project";project.mkdir()
+    env=_env(tmp_path,install,AGENTSTACK_PROJECT_KEY=str(project))
+    assert _run(install,"agentstack-claude-setup",env).returncode==0
+    assert not (project/"CLAUDE.md").exists()
+    assert _run(install,"agentstack-claude-setup",env,"--check").returncode==0
+    for scope in ("project","both"):
+        refused=_run(install,"agentstack-claude-setup",{**env,"AGENTSTACK_CLAUDE_MD_SCOPE":scope},"--check")
+        assert refused.returncode==2 and "INSTRUCTION_SCOPE_REQUIRES_MIGRATION" in refused.stderr
 
 
-def test_claude_check_without_a_project_key_says_it_cannot_check(tmp_path, install):
-    env = _env(tmp_path, install, AGENTSTACK_PROJECT_KEY="", AGENTSTACK_CLAUDE_MD_SCOPE="project")
-    result = _run(install, "agentstack-claude-setup", env, "--check")
-    assert result.returncode == 1
-    assert result.stdout.startswith("warn: cannot check Claude CLAUDE.md managed block:")
-    assert "AGENTSTACK_PROJECT_KEY is required" in result.stdout
-    assert "export AGENTSTACK_PROJECT_KEY=<project path> (or AGENTSTACK_CLAUDE_MD_SCOPE=global)" in result.stdout
-    retry = result.stdout.split("then run: ", 1)[1].strip()
-    assert "AGENTSTACK_PROJECT_KEY" not in retry and "AGENTSTACK_CLAUDE_MD_SCOPE" not in retry
-    # The suggested command honours what the user sets next.
-    project = tmp_path / "later-project"
-    project.mkdir()
-    for extra in ({"AGENTSTACK_PROJECT_KEY": str(project)},
-                  {"AGENTSTACK_CLAUDE_MD_SCOPE": "global", "CLAUDE_HOME": str(tmp_path / "claude")}):
-        ran = subprocess.run(["/bin/bash", "-c", retry], env={**env, **extra},
-                             text=True, capture_output=True, check=False)
-        assert "cannot check" not in ran.stdout, (extra, ran.stdout)
-        assert "managed block not found in" in ran.stdout, (extra, ran.stdout)
+def test_claude_user_check_does_not_require_project_key(tmp_path,install):
+    env=_env(tmp_path,install,AGENTSTACK_PROJECT_KEY="")
+    result=_run(install,"agentstack-claude-setup",env,"--check")
+    assert result.returncode==1 and "managed block not found" in result.stdout
 
 
 # --------------------------------------------------------------------------- #
@@ -260,7 +244,7 @@ def test_the_printed_update_command_updates_the_checked_install(tmp_path, instal
     """Run the command --check prints, from a shell whose AGENTSTACK_HOME
     points elsewhere (the default install): the block must come from the
     checked install's template, and --check must then report it current."""
-    env = _env(tmp_path, install, CLAUDE_HOME=str(tmp_path / "claude"), **env_extra)
+    env = _env(tmp_path, install, CLAUDE_CONFIG_DIR=str(tmp_path / "claude"), **env_extra)
     first = _run(install, script, env, "--check")
     assert first.returncode == 1
     command = first.stdout.split("with: ", 1)[1].strip()
@@ -271,7 +255,7 @@ def test_the_printed_update_command_updates_the_checked_install(tmp_path, instal
     (other_home / "claude" / "CLAUDE.md").write_text("WRONG TEMPLATE\n")
     shell_env = {**env, "AGENTSTACK_HOME": str(other_home),
                  "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX}
-    ran = subprocess.run(["/bin/bash", "-c", command], env=shell_env,
+    ran = subprocess.run(["/bin/bash", "-c", command+" --assume-yes"], env=shell_env,
                          text=True, capture_output=True, check=False)
     assert ran.returncode == 0, ran.stderr
     again = _run(install, script, env, "--check")

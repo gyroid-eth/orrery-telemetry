@@ -1,11 +1,8 @@
 """WSL: keep the distro running while agents work, and only then.
 
-WSL stops a distro about 15 s after its last Windows-side client exits, with
-tmux, the dashboard and every agent inside it (WSL 2.7.13, 2026-09-29). The
-dashboard keeps one hidden Windows `wsl.exe` running a foreground anchor while
-there is work, and lets it end once the work is gone, so WSL's own idle stop
-applies again and nobody has to `wsl --shutdown`. The Windows .wslconfig is
-never written.
+The dashboard keeps one hidden Windows `wsl.exe` running a foreground
+anchor while there is work. It releases that client after the grace period.
+Other Windows clients can still keep WSL running.
 
 Nothing here reaches Windows: `powershell.exe`, `cmd.exe` and `wslpath` are
 fakes, the anchor runs as a local subprocess where `wsl.exe` would start it,
@@ -414,12 +411,12 @@ def test_interop_falls_back_to_a_live_socket_when_the_inherited_one_is_gone(tmp_
 
 # --- what counts as work, in the dashboard --------------------------------------
 
-def _fake_run(outputs):
-    """subprocess.run stand-in for `tmux ...`: outputs maps argv[1] to a result."""
+def _fake_tmux_run(outputs):
+    """Dashboard tmux transport stand-in, keyed by tmux subcommand."""
     from types import SimpleNamespace
 
     def run(argv, **kwargs):
-        result = outputs[argv[1]]
+        result = outputs[argv[0]]
         if isinstance(result, Exception):
             raise result
         return SimpleNamespace(**result)
@@ -439,7 +436,7 @@ def test_work_counts_live_agent_processes_not_recorders(monkeypatch):
     names = {100: "bash", 101: "claude", 200: "bash", 201: "codex", 300: "bash",
              400: "bash", 401: "claude", 500: "bash", 501: "claude"}
     children = {100: [101], 200: [201], 400: [401], 500: [501]}
-    monkeypatch.setattr(server.subprocess, "run", _fake_run({"list-panes": {"returncode": 0, "stdout": panes, "stderr": ""}}))
+    monkeypatch.setattr(server, "_tmux_run", _fake_tmux_run({"list-panes": {"returncode": 0, "stdout": panes, "stderr": ""}}))
     monkeypatch.setattr(server, "_process_tree_snapshot", lambda: (names, children))
     monkeypatch.setattr(wsl_anchor, "process_start_ticks", lambda pid: pid * 10)
     monkeypatch.setattr(server, "_wsl_anchor_module", lambda: wsl_anchor)
@@ -457,23 +454,23 @@ def test_work_that_cannot_be_observed_is_unknown_not_empty(monkeypatch):
     # No tmux server: nothing can be running in it (known, empty).
     for err in ("no server running on /tmp/tmux-1000/default\n",
                 "error connecting to /tmp/tmux-1000/default (No such file or directory)\n"):
-        monkeypatch.setattr(server.subprocess, "run", _fake_run({"list-panes": {
+        monkeypatch.setattr(server, "_tmux_run", _fake_tmux_run({"list-panes": {
             "returncode": 1, "stdout": "", "stderr": err}}))
         assert server._wsl_anchor_work() == ({"agents": 0}, [], True)
     # A socket that cannot be opened, or tmux missing right now: unknown.
-    monkeypatch.setattr(server.subprocess, "run", _fake_run({"list-panes": {
+    monkeypatch.setattr(server, "_tmux_run", _fake_tmux_run({"list-panes": {
         "returncode": 1, "stdout": "", "stderr": "error connecting to /tmp/tmux-1000/default (Permission denied)\n"}}))
     assert server._wsl_anchor_work()[2] is False
-    monkeypatch.setattr(server.subprocess, "run", _fake_run({"list-panes": FileNotFoundError("tmux")}))
+    monkeypatch.setattr(server, "_tmux_run", _fake_tmux_run({"list-panes": FileNotFoundError("tmux")}))
     assert server._wsl_anchor_work()[2] is False
     # tmux fails or hangs: unknown.
-    monkeypatch.setattr(server.subprocess, "run", _fake_run({"list-panes": {
+    monkeypatch.setattr(server, "_tmux_run", _fake_tmux_run({"list-panes": {
         "returncode": 1, "stdout": "", "stderr": "lost server"}}))
     assert server._wsl_anchor_work()[2] is False
-    monkeypatch.setattr(server.subprocess, "run", _fake_run({"list-panes": sp.TimeoutExpired("tmux", 5)}))
+    monkeypatch.setattr(server, "_tmux_run", _fake_tmux_run({"list-panes": sp.TimeoutExpired("tmux", 5)}))
     assert server._wsl_anchor_work()[2] is False
     # tmux answers but ps does not: unknown.
-    monkeypatch.setattr(server.subprocess, "run", _fake_run({"list-panes": {
+    monkeypatch.setattr(server, "_tmux_run", _fake_tmux_run({"list-panes": {
         "returncode": 0, "stdout": f"RedCurie{sep}100", "stderr": ""}}))
     monkeypatch.setattr(server, "_process_tree_snapshot", lambda: None)
     assert server._wsl_anchor_work()[2] is False
@@ -527,6 +524,21 @@ def test_a_hold_that_did_not_start_is_reported_with_the_launch(tmp_path, monkeyp
         assert answer["error"] in hold["error"] and "Ubuntu window" in hold["hint"]
 
 
+def test_dry_run_skips_the_hold_and_reservation_failure_keeps_launching(tmp_path, monkeypatch):
+    fake = FakeController(tmp_path / "file" / "state")
+    fake.dir.parent.write_text("not a directory")
+    monkeypatch.setitem(server._WSL_ANCHOR, "controller", fake)
+    monkeypatch.setattr(server, "_wsl_anchor_module", lambda: wsl_anchor)
+    monkeypatch.setattr(server, "do_spawn", lambda payload: {"ok": True})
+
+    assert server.do_spawn_held({"dry_run": True}) == {"ok": True}
+    result = server.do_spawn_held({})
+    assert result["ok"]
+    assert result["wsl_hold"]["state"] == "failed"
+    assert "cannot reserve" in result["wsl_hold"]["error"]
+    assert fake.settled_calls == []
+
+
 def test_a_status_from_before_the_launch_is_not_its_answer(tmp_path):
     wsl_anchor._write_json(tmp_path / "status.json", {"state": "holding", "updated": time.time() - 30})
     assert wsl_anchor.wait_settled(tmp_path, time.time(), 0.3)["state"] == "timeout"
@@ -536,7 +548,7 @@ def test_a_status_from_before_the_launch_is_not_its_answer(tmp_path):
 
 
 def test_a_real_async_launch_keeps_its_reservation_until_it_settles(tmp_path, monkeypatch):
-    """The real do_spawn: only Mail, Popen and the launcher are stand-ins."""
+    """Run the real do_spawn with stand-ins for external dependencies."""
     import threading
     from types import SimpleNamespace
     from unittest import mock
@@ -574,9 +586,10 @@ def test_a_real_async_launch_keeps_its_reservation_until_it_settles(tmp_path, mo
                              LEGACY_ANNOT_PATH=str(tmp_path / "legacy.json")), \
             mock.patch.object(server, "_project_key", return_value="/project"), \
             mock.patch.object(server, "_spawn_name_status", return_value="available"), \
+            mock.patch.object(server, "_bind_claude_child_cli_path", return_value="/fake/claude"), \
             mock.patch.object(server, "_mcp_call", side_effect=mcp), \
             mock.patch.object(server.subprocess, "Popen", return_value=Proc()), \
-            mock.patch.object(server.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="", stderr="")), \
+            mock.patch.object(server, "_tmux_run", return_value=SimpleNamespace(returncode=0, stdout="", stderr="")), \
             mock.patch.object(server, "_spawn_launch_record", side_effect=record), \
             mock.patch.dict(server._SPAWN_LAUNCHES, {}, clear=True):
         result = server.do_spawn_held({"standalone": True, "name": "QuietCurie", "task": "work",

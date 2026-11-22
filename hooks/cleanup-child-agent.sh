@@ -1,4 +1,22 @@
 #!/bin/bash
+
+# Decide explicit global context before loading any legacy environment/state.
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader"
+_ags_legacy_consumer="$(dirname "$_ags_global_loader")/legacy-tmux-consumer.sh"
+if [[ -f "$_ags_legacy_consumer" ]]; then . "$_ags_legacy_consumer"; fi || exit 2
+if declare -F ags_client_entry >/dev/null; then
+  if ags_client_entry end-session "$@"; then exit 0; else _ags_global_rc=$?; fi
+  if [[ "$_ags_global_rc" != 125 ]]; then
+    exit "$_ags_global_rc"
+  fi
+
+fi
+
+# Conversation-only resume must not touch ORRERY Mail or owner material.
+if [[ "${AGENTSTACK_MAIL_DISABLED:-0}" == "1" ]]; then
+    exit 0
+fi
 set -euo pipefail
 
 # A SessionEnd hook may run outside the child process and therefore inherit no
@@ -88,6 +106,31 @@ if [[ ! "$AGENT_NAME" =~ ^[A-Za-z0-9_.-]+$ ]]; then
     exit 0
 fi
 
+confirm_cleanup_rpc() {
+    "${AGENTSTACK_PYTHON:-python3}" -c '
+import json,sys
+method,name,project=sys.argv[1:]
+def unwrap(value):
+    if not isinstance(value,dict) or value.get("error") or value.get("isError"):
+        raise ValueError("RPC failed")
+    for key in ("result","structuredContent"):
+        if key in value:return unwrap(value[key])
+    if "content" in value:
+        for block in value["content"]:
+            if block.get("type")=="text":
+                try:return unwrap(json.loads(block["text"]))
+                except json.JSONDecodeError:pass
+        raise ValueError("RPC result missing")
+    return value
+try:
+    value=unwrap(json.load(sys.stdin))
+    if method=="release":ok=type(value.get("released")) is int and value["released"]>=0
+    elif method=="retire":ok=value.get("status")=="retired" and value.get("agent_name")==name and value.get("project_key")==project
+    else:ok=value.get("name")==name and bool(value.get("retired_at"))
+    sys.exit(0 if ok else 1)
+except (ValueError,TypeError,KeyError):sys.exit(1)
+' "$1" "$AGENT_NAME" "$PROJECT_KEY"
+}
 STATE_FILE="$STATE_DIR/${AGENT_NAME}.json"
 TOKEN_KEY="$(printf '%s' "$AGENT_NAME" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
 TOKEN_FILE="$RUNTIME_DIR/agent_token_$TOKEN_KEY"
@@ -130,10 +173,10 @@ else
     TOKEN=""
 fi
 if [[ "$bearer_status" == "2" ]]; then
-    exit 0
+    exit 1
 fi
 if [[ "$bearer_status" == "0" && -z "$TOKEN" ]]; then
-    exit 0
+    exit 1
 fi
 
 call_mcp() {
@@ -174,6 +217,59 @@ conn.close()
 ' "$method" "$MCP_URL"
 }
 
+# Is this identity still live in another session? Only the retire-only exit of
+# a resumed top-level Claude asks: exiting one copy must not release the
+# reservations of, or retire, a copy still in use (#143 review). Evidence is a
+# live tmux pane other than ours whose pane metadata names the agent, or a
+# SessionStart lease whose provider PID is still running (ours has exited).
+# When tmux cannot be read, the answer is unknown: keep the identity.
+identity_live_elsewhere() {
+    local name="$1" panes pane key lease pid
+    if panes="$(tmux list-panes -a -F '#{pane_id}' 2>/dev/null)"; then
+        while IFS= read -r pane; do
+            [[ -n "$pane" && "$pane" != "${TMUX_PANE:-}" ]] || continue
+            key="${pane//%/_}"
+            if [[ -f "$RUNTIME_DIR/agent_name_${key}" ]] &&
+                [[ "$(tr -d '[:space:]' < "$RUNTIME_DIR/agent_name_${key}" 2>/dev/null)" == "$name" ]]; then
+                return 0
+            fi
+        done <<< "$panes"
+    else
+        return 0
+    fi
+    # A lease written before this machine booted names a PID that may now be
+    # another process; child_resume.py ignores those (162nd seminar: after a
+    # forced shutdown, stale leases made identities look alive).
+    local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}" rc=2
+    if [[ -f "$helper" ]]; then
+        "${AGENTSTACK_PYTHON:-$(agentstack_installed_env_value AGENTSTACK_PYTHON 2>/dev/null || true)}" "$helper" live-lease --runtime-dir "$RUNTIME_DIR" \
+            --agent-name "$name" >/dev/null 2>&1 && rc=0 || rc=$?
+        case "$rc" in
+            0) return 0 ;;
+            1) return 1 ;;
+        esac
+    fi
+    for lease in "$RUNTIME_DIR/live-sessions/$name"/*; do
+        [[ -f "$lease" ]] || continue
+        pid="${lease##*/}"
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        if kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+        rm -f "$lease"
+    done
+    return 1
+}
+
+if [[ "${AGENTSTACK_CLEANUP_RETIRE_ONLY:-0}" == "1" ]]; then
+    if identity_live_elsewhere "$AGENT_NAME"; then
+        echo "[cleanup-child-agent] '$AGENT_NAME' is still live in another session; leaving its Mail row and reservations as they are" >&2
+        exit 0
+    fi
+fi
+
+# Reservations of a retire-only exit belong to its SessionEnd hook.
+if [[ "${AGENTSTACK_CLEANUP_RETIRE_ONLY:-0}" != "1" ]]; then
 release_args=$(python3 -c "
 import json, sys
 print(json.dumps({
@@ -181,7 +277,12 @@ print(json.dumps({
     'agent_name': sys.argv[2],
 }))
 " "$PROJECT_KEY" "$AGENT_NAME")
-call_mcp "release_file_reservations" "$release_args" > /dev/null 2>&1 || true
+if ! release_result=$(call_mcp "release_file_reservations" "$release_args") || \
+    ! printf '%s' "$release_result" | confirm_cleanup_rpc release; then
+    echo "[cleanup-child-agent] reservation release unconfirmed; keeping private state" >&2
+    exit 1
+fi
+fi
 
 retire_args=$(python3 -c '
 import json
@@ -208,7 +309,28 @@ print(json.dumps({
 }))
 ' "$PROJECT_KEY" "$AGENT_NAME" "$TOKEN_FILE" "$STATE_FILE") || retire_args=""
 if [[ -n "$retire_args" ]]; then
-    call_mcp "retire_agent" "$retire_args" > /dev/null 2>&1 || true
+    if ! retire_result=$(call_mcp "retire_agent" "$retire_args") || \
+        ! printf '%s' "$retire_result" | confirm_cleanup_rpc retire; then
+        echo "[cleanup-child-agent] retirement unconfirmed; keeping private state" >&2
+        exit 1
+    fi
+else
+    echo "[cleanup-child-agent] owner credential unavailable; keeping private state" >&2
+    exit 1
+fi
+
+whois_args=$(python3 -c 'import json,sys; print(json.dumps({"project_key":sys.argv[1],"agent_name":sys.argv[2]}))' "$PROJECT_KEY" "$AGENT_NAME")
+if ! whois_result=$(call_mcp "whois" "$whois_args") || \
+    ! printf '%s' "$whois_result" | confirm_cleanup_rpc whois; then
+    echo "[cleanup-child-agent] retired identity not confirmed; keeping private state" >&2
+    exit 1
+fi
+
+# A resumed top-level Claude (owner token, no child state) only gives back the
+# retirement its resume undid. Its token is not child material to retain or
+# delete, and it was never in the managed list.
+if [[ "${AGENTSTACK_CLEANUP_RETIRE_ONLY:-0}" == "1" ]]; then
+    exit 0
 fi
 
 python3 - "$MANAGED_FILE" "$AGENT_NAME" <<'PYEOF' 2>/dev/null || true
@@ -225,10 +347,14 @@ path.write_text("\n".join(line for line in lines if line != name) + "\n", encodi
 PYEOF
 
 # The generated home contains only rebuildable config/proxy runtime and is
-# never reused.  A valid Codex child keeps its private owner credential and
-# schema-tagged state for the configured resume window; all other children and
-# a retention setting of 0 keep the historical full-delete behavior.
+# never reused.  A valid Claude/Codex child keeps its private owner credential and
+# schema-tagged state for the configured resume window. Known legacy material
+# stays unchanged until explicit authenticated migration; unsupported children
+# and a retention setting of 0 keep the historical full-delete behavior.
 rm -f "$MCP_CONFIG_FILE"
+if [[ -d "$CODEX_HOME_DIR/sessions" && ! -L "$CODEX_HOME_DIR/sessions" ]]; then
+    echo "[cleanup-child-agent] WARNING: deleting unshared Codex sessions at $CODEX_HOME_DIR/sessions; conversation history may be lost (expected a symlink to the user's Codex home)." >&2
+fi
 rm -rf "$CODEX_HOME_DIR"
 case "$CHILD_RESUME_RETENTION_DAYS" in
     ''|*[!0-9]*)

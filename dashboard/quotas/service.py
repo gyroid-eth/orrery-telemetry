@@ -52,19 +52,21 @@ class QuotaService:
         self._provider_locks = {name: threading.Lock() for name in names}
 
     def read_all(self) -> dict[str, object]:
-        if len(self.providers) <= 1:
-            snapshots = [self._read_provider(provider) for provider in self.providers]
+        providers = [provider for provider in self.providers
+                     if not hasattr(provider, "is_enabled") or provider.is_enabled()]
+        if len(providers) <= 1:
+            snapshots = [self._read_provider(provider) for provider in providers]
         else:
             with ThreadPoolExecutor(
-                max_workers=len(self.providers),
+                max_workers=len(providers),
                 thread_name_prefix="quota-refresh",
             ) as pool:
-                futures = [pool.submit(self._read_provider, provider) for provider in self.providers]
+                futures = [pool.submit(self._read_provider, provider) for provider in providers]
                 snapshots = [future.result() for future in futures]
         now = self._clock()
         snapshots = [
             self._bounded_snapshot(provider, snapshot, now)
-            for provider, snapshot in zip(self.providers, snapshots)
+            for provider, snapshot in zip(providers, snapshots)
         ]
         return {
             "ts": int(now),
@@ -78,7 +80,7 @@ class QuotaService:
     def _snapshot_payload(self, snapshot: QuotaSnapshot, now: float) -> dict[str, object]:
         payload = snapshot.to_dict()
         previous = self._last_success.get(snapshot.provider)
-        has_observation = bool(snapshot.buckets) or snapshot.reason in {
+        has_observation = bool(snapshot.buckets) or snapshot.balance is not None or snapshot.reason in {
             "observation_stale", "observation_expired",
         }
         observed = snapshot.observed_at if has_observation else (
@@ -120,7 +122,7 @@ class QuotaService:
                 )
                 snapshot = self._failure_snapshot(provider, now)
             else:
-                if snapshot.status in {"ok", "degraded"} and snapshot.buckets:
+                if snapshot.status in {"ok", "degraded"} and (snapshot.buckets or snapshot.balance is not None):
                     self._last_success[name] = snapshot
                 elif snapshot.status == "unavailable" and not getattr(
                     provider, "manages_fallback", False
@@ -151,13 +153,14 @@ class QuotaService:
             return snapshot
         max_age = min(self.stale_seconds, getattr(provider, "max_age_seconds", self.stale_seconds))
         age = now - snapshot.observed_at
-        if snapshot.buckets and (age < 0 or age > max_age):
+        if (snapshot.buckets or snapshot.balance is not None) and (age < 0 or age > max_age):
             return QuotaSnapshot(
                 provider=provider.provider_name,
                 source=provider.source_name,
                 observed_at=snapshot.observed_at,
                 status="unavailable",
                 reason="observation_expired" if age >= 0 else "observation_in_future",
+                measurement_kind=snapshot.measurement_kind,
             )
         if snapshot.buckets and any(
             bucket.resets_at is not None and bucket.resets_at <= now
@@ -183,6 +186,7 @@ class QuotaService:
                 reason="provider_read_failed",
                 degraded=True,
                 partial=True,
+                measurement_kind=getattr(provider, "measurement_kind", "quota"),
             )
         return self._stale_or_unavailable(provider, now, "provider_read_failed")
 
@@ -210,4 +214,5 @@ class QuotaService:
             observed_at=int(now),
             status="unavailable",
             reason=reason,
+            measurement_kind=getattr(provider, "measurement_kind", "quota"),
         )

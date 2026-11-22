@@ -15,6 +15,9 @@
 #   50 - tmux session killed
 
 set -euo pipefail
+_ags_monitor_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)"
+if [[ -f "$_ags_monitor_lib/global-client-loader.sh" ]]; then . "$_ags_monitor_lib/global-client-loader.sh"; fi
+if [[ -f "$_ags_monitor_lib/legacy-tmux-consumer.sh" ]]; then . "$_ags_monitor_lib/legacy-tmux-consumer.sh"; fi
 
 CHILD_NAME=""
 RISK_LEVEL=""
@@ -110,16 +113,7 @@ send_interrupt_stop() {
 }
 
 freeze_process_group() {
-  local pane_pid
-  local pgid
-  pane_pid=$(tmux list-panes -t "$TMUX_TARGET" -F '#{pane_pid}' 2>/dev/null | head -1)
-  if [[ -n "$pane_pid" ]]; then
-    pgid=$(ps -o pgid= -p "$pane_pid" 2>/dev/null | tr -d ' ')
-    if [[ -n "$pgid" ]]; then
-      kill -STOP -"$pgid" 2>/dev/null || true
-      echo "[monitor] SIGSTOP sent to PGID $pgid / PGID $pgid に SIGSTOP を送信" >&2
-    fi
-  fi
+  python3 "$_ags_monitor_lib/runtime_tmux_consumer.py" stop-group "$TMUX_TARGET"
 }
 
 if ! tmux has-session -t "$TMUX_TARGET" 2>/dev/null; then

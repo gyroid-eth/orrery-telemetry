@@ -6,12 +6,15 @@ import http.server
 import os
 import pathlib
 import re
+import shlex
 import socket
 import subprocess
 import sys
 import threading
 
 import tomllib
+
+import pytest
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -305,6 +308,33 @@ def _env_for_a_complete_dry_run(tmp_path: pathlib.Path) -> dict[str, str]:
     return env
 
 
+def test_child_default_tools_accepts_cli_grammar_before_installing(tmp_path):
+    env = _env_for_a_complete_dry_run(tmp_path)
+    selection = "browser,screen:operate;dsh=;hermes=mcp:notes"
+    result = _run(env, "--dry-run", "--child-default-tools", selection)
+    assert result.returncode == 0, result.stderr
+    assert f"child default tools: {selection}" in result.stdout
+
+
+def test_child_default_tools_rejects_invalid_syntax_before_writing(tmp_path):
+    env = _env_for_a_complete_dry_run(tmp_path)
+    result = _run(env, "--dry-run", "--child-default-tools", "browser,shell")
+    assert result.returncode != 0
+    assert "--child-default-tools must use the --tools grammar" in result.stderr
+    assert not pathlib.Path(env["AGENTSTACK_HOME"]).exists()
+
+
+@pytest.mark.parametrize("override, expected", [(None, "browser"), ("", "none"),
+                                               ("mcp:notes", "mcp:notes")])
+def test_child_default_tools_upgrade_preserves_saved_choice_and_explicit_clear(tmp_path, override, expected):
+    env = _env_for_a_complete_dry_run(tmp_path)
+    _installed_env_sh(env, 'export AGENTSTACK_CHILD_DEFAULT_TOOLS="browser"\n')
+    flags = [] if override is None else ["--child-default-tools", override]
+    result = _run(env, "--dry-run", *flags)
+    assert result.returncode == 0, result.stderr
+    assert f"child default tools: {expected}" in result.stdout
+
+
 def test_upgrade_survives_the_managed_mail_env_its_own_env_sh_exported(tmp_path):
     """`git pull && ./scripts/install.sh` must not die on the installer's output.
 
@@ -325,6 +355,60 @@ def test_upgrade_survives_the_managed_mail_env_its_own_env_sh_exported(tmp_path)
     assert "must equal the native service env" not in result.stderr
     assert "ignoring a managed AGENTSTACK_MAIL_ENV" in result.stdout
     assert "Dry-run complete" in result.stdout
+
+
+def test_upgrade_survives_a_shell_opened_before_the_last_mail_switch(tmp_path):
+    """A terminal opened before `--mail update` still exports the render that was
+    current then; env.sh already names the newer one. Both are this
+    installation's own output, so the next update must not die on the older
+    one (2026-10-03: an update from such a terminal stopped here)."""
+    env = _env_for_a_complete_dry_run(tmp_path)
+    current = _managed_render_env(env, "render-after-the-switch")
+    stale = _managed_render_env(env, "render-before-the-switch")
+    _installed_env_sh(env, f"export AGENTSTACK_MAIL_ENV={current}\n")
+    env["AGENTSTACK_MAIL_ENV"] = stale
+
+    result = _run(env, "--dry-run")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "must equal the native service env" not in result.stderr
+    assert "ignoring a managed AGENTSTACK_MAIL_ENV" in result.stdout
+    assert "Dry-run complete" in result.stdout
+
+
+def test_a_stale_managed_value_needs_an_installed_managed_render_too(tmp_path):
+    """The waiver rests on this installation having written a managed render
+    into env.sh; a managed-looking value next to an env.sh that names some other
+    path stays an error."""
+    env = _env_for_a_complete_dry_run(tmp_path)
+    stale = _managed_render_env(env, "render-before-the-switch")
+    _installed_env_sh(env, f"export AGENTSTACK_MAIL_ENV={tmp_path / 'elsewhere' / 'service.env'}\n")
+    env["AGENTSTACK_MAIL_ENV"] = stale
+
+    result = _run(env, "--dry-run")
+
+    assert result.returncode != 0
+    assert "must equal the native service env" in result.stderr
+
+
+@pytest.mark.parametrize("middle", ["$(printf old)", "$WH_RENDER", "`printf old`", "${OLD}x", "old render", "-old", "old;x"])
+def test_an_env_sh_that_only_names_a_render_when_run_is_not_evidence(tmp_path, middle):
+    """#187 review: shlex leaves "$(...)" in the literal, which used to pass as a
+    render directory name; only names an install writes count."""
+    env = _env_for_a_complete_dry_run(tmp_path)
+    stale = _managed_render_env(env, "render-before-the-switch")
+    renders = pathlib.Path(stale).parent.parent
+    _installed_env_sh(env, f'export AGENTSTACK_MAIL_ENV="{renders}/{middle}/service.env"\n')
+    env["AGENTSTACK_MAIL_ENV"] = stale
+    env_file = pathlib.Path(env["AGENTSTACK_HOME"]) / "env.sh"
+    before = env_file.read_bytes()
+
+    result = _run(env, "--dry-run")
+
+    assert result.returncode != 0
+    assert "must equal the native service env" in result.stderr
+    assert env_file.read_bytes() == before
+    assert "ignoring a managed AGENTSTACK_MAIL_ENV" not in result.stdout
 
 
 def test_a_matching_explicit_native_pair_is_left_alone(tmp_path):
@@ -385,15 +469,22 @@ def test_nothing_in_env_sh_is_executed_to_produce_the_evidence(tmp_path):
     env = _env_for_a_complete_dry_run(tmp_path)
     inherited = _managed_render_env(env, "previous-render-id")
     parent = str(pathlib.Path(inherited).parent)
+    sentinel = tmp_path / "env-sh-executed"
     _installed_env_sh(
-        env, f'export AGENTSTACK_MAIL_ENV="$(printf %s {parent})/service.env"\n'
+        env, f'export AGENTSTACK_MAIL_ENV="$(touch {shlex.quote(str(sentinel))}; printf %s {parent})/service.env"\n'
     )
+    env_file = pathlib.Path(env["AGENTSTACK_HOME"]) / "env.sh"
+    before = env_file.read_bytes()
     env["AGENTSTACK_MAIL_ENV"] = inherited
 
     result = _run(env, "--dry-run")
 
     assert result.returncode != 0
+    # With no protection declarations, the original Mail evidence check owns
+    # this rejection. The installed file remains data, never executed shell.
     assert "must equal the native service env" in result.stderr
+    assert env_file.read_bytes() == before
+    assert not sentinel.exists()
     assert "ignoring a managed AGENTSTACK_MAIL_ENV" not in result.stdout
 
 
@@ -416,3 +507,58 @@ def test_an_empty_mail_env_is_still_rejected(tmp_path):
 
     assert result.returncode != 0
     assert "AGENTSTACK_MAIL_ENV was set but empty" in result.stderr
+
+
+def test_existing_protection_settings_use_explicit_python_before_preflight(tmp_path):
+    env = _env_with_working_deps(tmp_path)
+    _installed_env_sh(env, "export AGENTSTACK_PROTECTED_ROOTS='/vault'\n")
+    result = _run(env, "--dry-run")
+    assert "python3: command not found" not in result.stderr
+    assert "preflight: passed" in result.stdout
+    assert "would migrate installed AGENTSTACK_PROTECTED_ROOTS" in result.stdout
+
+
+def test_invalid_installed_protection_still_stops_with_only_explicit_python(tmp_path):
+    env = _env_with_working_deps(tmp_path)
+    _installed_env_sh(env, 'export AGENTSTACK_PROTECTED_ROOTS="$HOME/vault"\n')
+    path = pathlib.Path(env["AGENTSTACK_HOME"]) / "env.sh"
+    before = path.read_bytes()
+    result = _run(env, "--dry-run")
+    assert result.returncode == 2
+    assert "expansion inside double quotes" in result.stderr
+    assert path.read_bytes() == before
+    assert "preflight: passed" not in result.stdout
+
+
+@pytest.mark.parametrize("name", ["AGENTSTACK_PROTECTED_ROOTS", "AGENTSTACK_EXTRA_PROTECTED_ROOTS"])
+@pytest.mark.parametrize("first", ["OTHER=value", "OTHER=value MORE=value"])
+def test_multiple_export_operands_stop_real_dry_run_without_writing(tmp_path, name, first):
+    env = _env_with_working_deps(tmp_path)
+    _installed_env_sh(env, f"export {first} {name}=/previous/scope\n")
+    path = pathlib.Path(env["AGENTSTACK_HOME"]) / "env.sh"
+    before = path.read_bytes()
+
+    result = _run(env, "--dry-run")
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "multiple export operands" in result.stderr
+    assert path.read_bytes() == before
+    assert not (path.parent / "install-state.json").exists()
+    assert not list(path.parent.glob("env.sh.*"))
+    assert "preflight: passed" not in result.stdout
+
+
+@pytest.mark.parametrize("kind", ["directory", "dangling-symlink"])
+def test_existing_nonregular_protection_file_is_not_absence(tmp_path, kind):
+    env = _env_with_working_deps(tmp_path)
+    path = pathlib.Path(env["AGENTSTACK_HOME"]) / "env.sh"
+    path.parent.mkdir()
+    if kind == "directory":
+        path.mkdir()
+    else:
+        path.symlink_to(tmp_path / "missing-target")
+    result = _run(env, "--dry-run")
+    assert result.returncode == 2
+    assert "env.sh must be a readable regular file" in result.stderr
+    assert "preflight: passed" not in result.stdout
+    assert path.is_dir() if kind == "directory" else path.is_symlink()

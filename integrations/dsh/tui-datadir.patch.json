@@ -1,0 +1,6 @@
+{
+  "variant": "plain-datadir",
+  "file": "lib/types/utils/paths.js",
+  "old": "export const DATA_DIR = join(homeDir(), '.dsh-tui');",
+  "new": "export const DATA_DIR = process.env.DSH_TUI_DATA_DIR || join(homeDir(), '.dsh-tui');"
+}

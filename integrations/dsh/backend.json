@@ -1,0 +1,28 @@
+{
+  "backends": {
+    "deepseek": {
+      "base_url": "",
+      "model": "deepseek-flash",
+      "keychain": {
+        "service": "orrery-dsh-deepseek",
+        "account": ""
+      },
+      "model_definition": null,
+      "auxiliary": null
+    },
+    "strata": {
+      "base_url": "",
+      "model": "qwen3.8-flash-next-iq3_xxs",
+      "keychain": {
+        "service": "orrery-dsh-strata",
+        "account": ""
+      },
+      "model_definition": {
+        "id": "qwen3.8-flash-next-iq3_xxs",
+        "name": "Strata Qwen",
+        "contextWindow": 131072
+      },
+      "auxiliary": null
+    }
+  }
+}

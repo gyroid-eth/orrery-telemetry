@@ -12,6 +12,7 @@ import plistlib
 import pty
 import re
 import shutil
+import shlex
 import signal
 import socket
 import subprocess
@@ -22,11 +23,13 @@ import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from service_teardown import TEST_LABEL_PREFIX  # noqa: E402
+from _installed_client_payload import runtime_contract_sources  # noqa: E402
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "dashboard" / "service_runner.py"
 PLIST_TEMPLATE = ROOT / "dashboard" / "agentdashboard.plist.template"
+RUNTIME_CONTRACT_SOURCES = runtime_contract_sources()
 
 
 class _DashboardVersionHandler(http.server.BaseHTTPRequestHandler):
@@ -89,11 +92,13 @@ def _runner_env(tmp_path: pathlib.Path) -> dict[str, str]:
 def _isolated_installer_repo(tmp_path: pathlib.Path) -> pathlib.Path:
     repo = tmp_path / "installer-repo"
     repo.mkdir()
-    for directory in ("bin", "dashboard", "scripts"):
+    for directory in ("bin", "dashboard", "scripts", "hooks", "examples"):
         shutil.copytree(ROOT / directory, repo / directory)
-    (repo / "hooks").mkdir()
-    shutil.copy2(ROOT / "hooks" / "project-context.sh", repo / "hooks")
     shutil.copy2(ROOT / "VERSION", repo / "VERSION")
+    for name in RUNTIME_CONTRACT_SOURCES:
+        destination = repo / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, destination)
     return repo
 
 
@@ -228,6 +233,7 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     assert plist["EnvironmentVariables"]["AGENTSTACK_WORKTREE_ROOT"] == "__WORKTREE_ROOT__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_CHILD_APPROVAL"] == "__CODEX_CHILD_APPROVAL__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_NETWORK"] == "__CODEX_NETWORK__"
+    assert plist["EnvironmentVariables"]["AGENTSTACK_CHILD_DEFAULT_TOOLS"] == "__CHILD_DEFAULT_TOOLS__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_ADD_DIRS"] == "__CODEX_ADD_DIRS__"
     assert (
         plist["EnvironmentVariables"]["AGENTSTACK_CHILD_RESUME_RETENTION_DAYS"]
@@ -241,7 +247,7 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     # Resolved to a codex that runs (tests/test_install_codex_bin.py covers the rules).
     assert 'CODEX_BIN_SETTING="$(find_usable_codex_bin)"' in installer_text
     assert installer_text.count('"AGENTSTACK_CODEX_BIN": "$CODEX_BIN_SETTING"') >= 3
-    assert '"__CODEX_BIN__": "$CODEX_BIN_SETTING"' in installer_text
+    assert '__CODEX_BIN__ "$CODEX_BIN_SETTING"' in installer_text
     assert plist["EnvironmentVariables"]["AGENTSTACK_PORTRAITS_DIR"] == "__PORTRAITS_DIR__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CUSTOM_PORTRAITS"] == "__CUSTOM_PORTRAITS__"
     assert plist["EnvironmentVariables"]["AGENTSTACK_CLAUDE_MODELS"] == "__CLAUDE_MODELS__"
@@ -252,6 +258,69 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     assert 'ExecStart={esc(\'$PYTHON_BIN\')} {esc(\'$DASHBOARD_DIR/service_runner.py\')}' in installer
     assert '"Restart=always"' in installer
     assert "AGENTSTACK_DASHBOARD_SELF_RESTART=1" in installer
+
+
+def test_core_copy_distributes_the_standalone_authority_parser(tmp_path):
+    source = (ROOT / "scripts/install.sh").read_text()
+    block = source[source.index("OPTIONAL_PROVIDER_PAYLOAD=("):source.index("\n# The child MCP proxy")]
+    staged = tmp_path / "source"
+    staged.mkdir()
+    module = ROOT / "dashboard/legacy_http_admission.py"
+    shutil.copy2(module, staged)
+    (staged / "provider_server.py").write_text("# optional fixture")
+    installed = tmp_path / "installed"
+    result = subprocess.run(["/bin/bash", "-euc", 'DRY_RUN=false\nplan() { :; }\n' + block +
+                             '\ncopy_core_tree "$1" "$2" dashboard\n', "fixture", str(staged), str(installed)],
+                            env={"HOME": str(tmp_path), "PATH": os.environ["PATH"]},
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert (installed / module.name).read_bytes() == module.read_bytes()
+    assert not (installed / "provider_server.py").exists()
+    result = subprocess.run([sys.executable, "-c", 'import runpy,sys; print(runpy.run_path(sys.argv[1])["configured_origins"](sys.argv[2]))',
+                             str(installed / module.name), "https://dashboard.example"],
+                            capture_output=True, text=True, check=True)
+    assert "dashboard.example" in result.stdout
+
+
+@pytest.mark.parametrize("writer", ["installer", "controller", "systemd"])
+def test_dashboard_origins_survive_each_service_writer(tmp_path, writer):
+    from test_install_launchd_placeholders import _render
+    value = "http://dashboard.example:19878 https://dashboard.example"
+    output = _render(tmp_path, writer, "legacy", "", {"DASHBOARD_ALLOWED_ORIGINS_SETTING": value})
+    if writer == "systemd":
+        values = dict(re.findall(r'^Environment="([^=]+)=(.*)"$', output.read_text(), re.MULTILINE))
+    else:
+        values = plistlib.loads(output.read_bytes())["EnvironmentVariables"]
+    assert values["AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS"] == value
+
+
+def test_dashboard_origins_reach_foreground_and_background_environment(tmp_path):
+    stack = tmp_path / "stack"
+    dashboard = stack / "dashboard"
+    dashboard.mkdir(parents=True)
+    shutil.copytree(ROOT / "bin/lib", stack / "bin/lib")
+    shutil.copy2(ROOT / "dashboard/agentctl.sh", dashboard)
+    value = "https://dashboard.example http://dashboard.example:19878"
+    env_file = stack / "env.sh"
+    env_file.write_text("export AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS=" + shlex.quote(value) + "\n")
+    (dashboard / "server.py").write_text('import os; print(os.environ["AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS"])')
+    env = {"HOME": str(tmp_path / "home"), "PATH": os.environ["PATH"],
+           "AGENTSTACK_ENV_FILE": str(env_file), "AGENTSTACK_PYTHON": sys.executable}
+    result = subprocess.run(["/bin/bash", str(dashboard / "agentctl.sh"), "fg"],
+                            env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == value
+    source = (ROOT / "dashboard/agentctl.sh").read_text()
+    start = source.index("export_background_env() {")
+    function = source[start:source.index("\nstart_background() {", start)]
+    variables = set(re.findall(r'\$([A-Z][A-Z_0-9]*)', function))
+    env.update({name: "" for name in variables})
+    env["DASHBOARD_ALLOWED_ORIGINS_SETTING"] = value
+    result = subprocess.run(["/bin/bash", "-euc", function +
+                             '\nexport_background_env\nexec "$1" -c \'import os; print(os.environ["AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS"])\'',
+                             "fixture", sys.executable], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == value
 
 
 def test_launchd_install_explicitly_kickstarts_before_checking_health(
@@ -305,6 +374,114 @@ def test_launchd_install_explicitly_kickstarts_before_checking_health(
     bootstrap = next(i for i, line in enumerate(dashboard_lines) if " bootstrap " in line)
     kickstart = next(i for i, line in enumerate(dashboard_lines) if " kickstart " in line)
     assert enable < bootout < wait < bootstrap < kickstart
+
+
+@pytest.mark.parametrize("old_mode,old_config,new_mode,new_config", [
+    ("legacy", None, "global", "first"),
+    ("global", "first", "global", "second"),
+    ("global", "first", "legacy", None),
+    ("legacy", None, "legacy", None),
+])
+def test_agentctl_restart_reinstalls_selected_launchd_environment(
+    tmp_path, old_mode, old_config, new_mode, new_config,
+):
+    from test_install_launchd_placeholders import PLACEHOLDER
+
+    stack = tmp_path / "stack"
+    dashboard = stack / "dashboard"
+    dashboard.mkdir(parents=True)
+    shutil.copytree(ROOT / "bin/lib", stack / "bin/lib")
+    for name in ("agentctl.sh", "agentdashboard.plist.template"):
+        shutil.copy2(ROOT / "dashboard" / name, dashboard / name)
+    configs = {name: tmp_path / (name + "-server-config.json")
+               for name in ("first", "second")}
+    for path in configs.values():
+        path.write_text(json.dumps({"kind": "orrery-global-server-s2c-v1"}))
+        path.chmod(0o600)
+    env_file = stack / "env.sh"
+
+    def select(mode, config, origins):
+        env_file.write_text(
+            "export AGENTSTACK_RUNTIME_MODE=" + mode + "\n" +
+            "export AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS=" + shlex.quote(origins) + "\n" +
+            ("export AGENTSTACK_GLOBAL_SERVER_CONFIG=" +
+             shlex.quote(str(configs[config])) + "\n" if config else "")
+        )
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    state = tmp_path / "loaded-environment.json"
+    calls = tmp_path / "launchctl-calls.jsonl"
+    stub = fake_bin / "launchctl.py"
+    # launchd caches the environment at bootstrap. Reading the plist at
+    # kickstart would incorrectly let a render-only repair pass this test.
+    stub.write_text(r"""from pathlib import Path
+import json, os, plistlib, sys
+state = Path(os.environ['TEST_LAUNCHCTL_STATE'])
+calls = Path(os.environ['TEST_LAUNCHCTL_CALLS'])
+op = sys.argv[1]
+if op == 'print':
+    sys.exit(0 if state.exists() else 1)
+record = {'op': op}
+if op == 'bootout':
+    state.unlink(missing_ok=True)
+elif op == 'bootstrap':
+    environment = plistlib.loads(Path(sys.argv[3]).read_bytes())['EnvironmentVariables']
+    state.write_text(json.dumps(environment))
+elif op == 'kickstart':
+    record['environment'] = json.loads(state.read_text())
+elif op != 'enable':
+    raise SystemExit(99)
+with calls.open('a') as stream:
+    stream.write(json.dumps(record) + '\n')
+""")
+    launchctl = fake_bin / "launchctl"
+    launchctl.write_text("#!/bin/sh\nexec " + shlex.join([sys.executable, str(stub)]) + ' "$@"\n')
+    launchctl.chmod(0o755)
+    uname = fake_bin / "uname"
+    uname.write_text("#!/bin/sh\necho Darwin\n")
+    uname.chmod(0o755)
+    env = {
+        "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
+        "HOME": str(tmp_path / "home"),
+        "AGENTSTACK_HOME": str(stack),
+        "AGENTSTACK_ENV_FILE": str(env_file),
+        "AGENTSTACK_PYTHON": sys.executable,
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX + ".restart",
+        "AGENTSTACK_RUNTIME_DIR": str(tmp_path / "runtime"),
+        "AGENTSTACK_PORT": "19878",
+        "TEST_LAUNCHCTL_STATE": str(state),
+        "TEST_LAUNCHCTL_CALLS": str(calls),
+    }
+
+    def run(action):
+        result = subprocess.run(
+            ["/bin/bash", str(dashboard / "agentctl.sh"), action],
+            env=env, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "launchd mode" in result.stdout
+
+    select(old_mode, old_config, "http://old.example:19878")
+    run("start")
+    assert json.loads(state.read_text())["AGENTSTACK_RUNTIME_MODE"] == old_mode
+    assert json.loads(state.read_text())["AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS"] == "http://old.example:19878"
+    calls.write_text("")
+    select(new_mode, new_config, "https://dashboard.example http://dashboard.example:19878")
+    run("restart")
+    events = [json.loads(row) for row in calls.read_text().splitlines()]
+    environment = events[-1]["environment"]
+    assert environment["AGENTSTACK_RUNTIME_MODE"] == new_mode
+    assert environment["AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS"] == "https://dashboard.example http://dashboard.example:19878"
+    assert environment["AGENTSTACK_GLOBAL_SERVER_CONFIG"] == (
+        str(configs[new_config]) if new_config else ""
+    )
+    assert [event["op"] for event in events] == [
+        "enable", "bootout", "bootstrap", "kickstart",
+    ]
+    plist = (pathlib.Path(env["HOME"]) / "Library/LaunchAgents" /
+             (env["AGENTSTACK_LABEL_PREFIX"] + ".agentdashboard.plist"))
+    assert not PLACEHOLDER.findall(plist.read_text()), "unexpanded restart placeholders"
 
 
 def test_agentctl_enables_then_waits_for_bootout_before_bootstrap(tmp_path):
@@ -437,6 +614,7 @@ exit 0
     env, install_dir = _installer_upgrade_env(tmp_path, fake_bin, port)
     old_server = tmp_path / "old-dashboard.py"
     _write_marker_dashboard(old_server, "old-launchd")
+    env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser,screen:read:windows-mcp"
     old_process = subprocess.Popen(
         [sys.executable, str(old_server)],
         env=env,
@@ -475,11 +653,18 @@ exit 0
             (install_dir / "install-state.json").read_text(encoding="utf-8")
         )
         assert manifest["services"][0]["kind"] == "launchd"
+        assert manifest["env"]["AGENTSTACK_CHILD_DEFAULT_TOOLS"] == "browser,screen:read:windows-mcp"
+        with open(manifest["services"][0]["path"], "rb") as handle:
+            installed_plist = plistlib.load(handle)
+        assert installed_plist["EnvironmentVariables"]["AGENTSTACK_CHILD_DEFAULT_TOOLS"] == \
+            "browser,screen:read:windows-mcp"
     finally:
-        subprocess.run(
-            [str(install_dir / "bin" / "agentstack-mailctl"), "stop"],
-            env=env, text=True, capture_output=True, check=False,
-        )
+        mailctl = install_dir / "bin" / "agentstack-mailctl"
+        if mailctl.exists():
+            subprocess.run(
+                [str(mailctl), "stop"],
+                env=env, text=True, capture_output=True, check=False,
+            )
         if new_pidfile.exists():
             try:
                 os.kill(int(new_pidfile.read_text().strip()), signal.SIGTERM)
@@ -781,6 +966,20 @@ def test_doctor_rejects_loaded_but_not_running_launchd_job(tmp_path):
         assert "dashboard endpoint serving" in running.stdout
         assert "dashboard service mode launchd" in running.stdout
         assert "running" in running.stdout
+
+        # 2026-09-30: the API generation went to 2; doctor only asks whether
+        # the port serves ORRERY Telemetry, so any generation 1+ is serving.
+        for api, serving in ((2, True), (3, True), (0, False), ("1", False), (None, False)):
+            payload = {"name": "orrery-telemetry", "version": "test"}
+            if api is not None:
+                payload["api"] = api
+            version_server.version_payload = payload
+            report = subprocess.run(
+                ["bash", str(ROOT / "scripts" / "doctor.sh"), "--install-dir", str(install_dir)],
+                env=env, text=True, capture_output=True,
+            )
+            assert ("dashboard endpoint serving" in report.stdout) is serving, (api, report.stdout)
+            assert ("dashboard endpoint is not serving" in report.stdout) is not serving, api
     finally:
         version_server.shutdown()
         version_thread.join()
@@ -977,9 +1176,9 @@ exit 0
         assert "<!-- >>> claude-agent-stack (managed: agentstack-codex-setup) -->" in (
             home / ".codex" / "AGENTS.md"
         ).read_text(encoding="utf-8")
-        assert "<!-- >>> claude-agent-stack (managed: agentstack-claude-setup) -->" in (
-            project / "CLAUDE.md"
-        ).read_text(encoding="utf-8")
+        claude_target = home / ".claude" / "CLAUDE.md"
+        assert "<!-- >>> claude-agent-stack (managed: agentstack-claude-setup) -->" in claude_target.read_text(encoding="utf-8")
+        assert not (project / "CLAUDE.md").exists()
 
         status = subprocess.run(
             ["bash", str(install_dir / "dashboard" / "agentctl.sh"), "status"],
@@ -1091,8 +1290,17 @@ esac
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
 
+    test_home = tmp_path / "home"
+    test_home.mkdir()
+    install_home = test_home / ".agentstack"
     env = os.environ.copy()
+    env.pop("TMUX", None)
+    env.pop("TMUX_TMPDIR", None)
     env.update({
+        "HOME": str(test_home),
+        "AGENTSTACK_HOME": str(install_home),
+        "AGENTSTACK_HOOKS_DIR": str(install_home / "hooks"),
+        "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "PATH": f"{fake_bin}:{env['PATH']}",
         "AGENTSTACK_PORT": str(port),
         "AGENTSTACK_MAIL_DB": str(database),
@@ -1370,3 +1578,43 @@ while True:
 
     state = pathlib.Path(env["AGENTSTACK_DASHBOARD_RUN_STATE"])
     assert state.exists(), "SIGKILL must leave a marker for the next service-manager restart"
+
+
+@pytest.mark.parametrize("missing", RUNTIME_CONTRACT_SOURCES)
+def test_installer_refuses_missing_runtime_contract_before_writing(tmp_path, missing):
+    repo = _isolated_installer_repo(tmp_path)
+    (repo / missing).unlink()
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "tmux": "#!/bin/sh\nexit 0\n",
+        "uname": "#!/bin/sh\necho Linux\n",
+        "uv": "#!/bin/sh\nexit 0\n",
+    }.items():
+        path = fake_bin / name
+        path.write_text(body)
+        path.chmod(0o755)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    env, install_dir = _installer_upgrade_env(tmp_path, fake_bin, port)
+    result = subprocess.run(
+        ["bash", str(repo / "scripts/install.sh"), "--dashboard-only", "--dry-run"],
+        env=env, cwd=repo, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert f"missing runtime client contract: {missing}" in result.stderr
+    assert not install_dir.exists()
+
+
+def test_runtime_contract_sources_survive_source_archive():
+    import io
+    import tarfile
+
+    archive = subprocess.check_output(
+        ["git", "archive", "--format=tar", "HEAD", "--", *RUNTIME_CONTRACT_SOURCES],
+        cwd=ROOT,
+    )
+    with tarfile.open(fileobj=io.BytesIO(archive)) as source:
+        for name in RUNTIME_CONTRACT_SOURCES:
+            assert source.extractfile(name).read() == (ROOT / name).read_bytes()

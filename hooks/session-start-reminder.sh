@@ -1,4 +1,57 @@
 #!/bin/bash
+
+# A second provider in the hook's ancestry identifies a nested launch even
+# through shell wrappers and with the CLAUDECODE value inherited from tmux.
+is_nested_claude_session() {
+    local pid="$PPID" depth row parent command args executable script seen_claude=0
+    for ((depth = 0; pid > 1 && depth < 16; depth++)); do
+        row="$(ps -ww -p "$pid" -o ppid= -o comm= 2>/dev/null)" || return 1
+        read -r parent command <<< "$row"
+        case "$parent" in ''|*[!0-9]*) return 1 ;; esac
+        case "$command" in */claude/versions/*) command=claude ;; esac
+        command="${command##*/}"
+        case "$command" in
+            node|[0-9]*.[0-9]*.[0-9]*)
+                # Confirm npm and versioned installs by the executable or script path.
+                args="$(ps -ww -p "$pid" -o args= 2>/dev/null)" || args=""
+                read -r executable script _ <<< "$args"
+                case "$executable" in claude|*/claude|*/claude/versions/*) command=claude ;; esac
+                case "$script" in */node_modules/@anthropic-ai/claude-code/cli.js) command=claude ;; esac
+                ;;
+        esac
+        case "$command" in
+            claude)
+                [[ "$seen_claude" == 0 ]] || return 0
+                seen_claude=1
+                ;;
+            codex|codex-*)
+                [[ "$seen_claude" == 1 ]] && return 0
+                return 1
+                ;;
+        esac
+        pid="$parent"
+    done
+    # Preserve existing starts when the ancestry is missing or inconclusive.
+    return 1
+}
+
+# Exit only this hook, before either registration path can claim the session.
+if is_nested_claude_session; then
+    exit 0
+fi
+
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)/global-client-loader.sh"
+. "$_ags_global_loader" || exit 2
+if declare -F ags_client_entry >/dev/null; then
+  if ags_client_entry session-start "$@"; then exit 0; else _ags_global_rc=$?; fi
+  [[ "$_ags_global_rc" == 125 ]] || exit "$_ags_global_rc"
+
+fi
+
+# Conversation-only resume must not touch ORRERY Mail or owner material.
+if [[ "${AGENTSTACK_MAIL_DISABLED:-0}" == "1" ]]; then
+    exit 0
+fi
 # session-start-reminder.sh
 # SessionStart hook for startup/resume/clear/compact.
 #
@@ -134,12 +187,41 @@ except Exception:
     print("")
 ' 2>/dev/null || echo "")"
     export AGENTSTACK_SESSION_ID
+    SESSION_START_SOURCE="$(printf '%s' "$SESSION_START_INPUT" | python3 -c '
+import json, sys
+try:
+    value = json.loads(sys.stdin.read(262144)).get("source", "")
+    print(value if isinstance(value, str) else "")
+except Exception:
+    print("")
+' 2>/dev/null || echo "")"
 fi
 
 if [ -f "$HOOKS_DIR/resolve-agent-name.sh" ]; then
     # shellcheck disable=SC1091
     source "$HOOKS_DIR/resolve-agent-name.sh"
 fi
+
+# Keep the exact SessionStart fields available to a later Bash recovery even
+# when Mail is not up yet. This is session-local provider state, not a receipt
+# or proof of registration. Do not discover a transcript from an old receipt.
+persist_recovery_context() {
+    printf '%s' "${SESSION_START_INPUT:-}" | python3 -c '
+import json, shlex, sys
+context = ""
+try:
+    start = json.load(sys.stdin)
+    fields = {key: start.get(key) for key in ("session_id", "transcript_path", "cwd")}
+    if all(isinstance(value, str) and value for value in fields.values()) and sys.argv[2] and sys.argv[3]:
+        fields.update(agent_name=sys.argv[2], project_key=sys.argv[3])
+        context = json.dumps(fields)
+except (ValueError, AttributeError):
+    pass
+# An empty value also clears a context inherited from a previous session.
+with open(sys.argv[1], "a", encoding="utf-8") as handle:
+    handle.write("export AGENTSTACK_CLAUDE_SESSION_CONTEXT=" + shlex.quote(context) + "\n")
+' "$CLAUDE_ENV_FILE" "$RESOLVED_AGENT" "$PROJECT_KEY" 2>/dev/null || true
+}
 
 find_register_lib() {
     local candidate
@@ -174,14 +256,7 @@ child_has_mcp_proxy_config() {
 }
 
 shell_register_resolved_agent() {
-    local register_lib restored_token work_dir model
-    [ -n "$RESOLVED_AGENT" ] || return 1
-    [ -n "$PROJECT_KEY" ] || return 1
-    register_lib="$(find_register_lib)" || return 1
-    # shellcheck disable=SC1090
-    . "$register_lib" || return 1
-
-    ags_mail_load_token
+    local restored_token work_dir model
     restored_token="${CHILD_REGISTRATION_TOKEN:-}"
     if [ -z "$restored_token" ]; then
         restored_token="$(ags_load_registration_token "$RESOLVED_AGENT" 2>/dev/null || true)"
@@ -198,7 +273,9 @@ shell_register_resolved_agent() {
     # it this re-registration overwrote the pre-registered model with the
     # program name, and the dashboard lost the provider (no logo, chip said
     # "CLAUDE-CODE" — seen on WSL2, where no pane model is parsed either).
-    model="${AGENTSTACK_CLAUDE_MODEL:-${CLAUDE_CHILD_MODEL:-claude-code}}"
+    # The session's own model wins over the install-wide label; a dashboard
+    # resume hands the registered one the same way (#144).
+    model="${CLAUDE_CHILD_MODEL:-${AGENTSTACK_CLAUDE_MODEL:-claude-code}}"
     ags_register_session "$PROJECT_KEY" "claude-code" "$model" "cc" "$work_dir" "$RESOLVED_AGENT" "reserved" >/dev/null 2>&1
     register_status=$?
     if [ "$register_status" -ne 0 ]; then
@@ -209,6 +286,102 @@ shell_register_resolved_agent() {
     fi
     SHELL_REGISTERED_AGENT="${AGS_REGISTERED_AGENT_NAME:-$RESOLVED_AGENT}"
     record_shell_registration_index
+    restore_retired_identity
+    return 0
+}
+
+# A session reopened from a terminal (`claude --resume`) came back with its row
+# still retired: only the dashboard resume unretired it (TRIAGE 5a, #143). The
+# owner credential has just authenticated; reuse the dashboard's retained
+# state checks and protect the child from expiry before unretiring it.
+restore_retired_identity() {
+    SHELL_UNRETIRE_NOTE=""
+    [ -n "${AGS_REGISTERED_RETIRED_AT:-}" ] || return 0
+    # Only a session being opened (again) may come back. On /clear or
+    # compaction the identity was already running, so a retirement seen here
+    # was made deliberately while it ran and must stand (#152 review N-1).
+    case "${SESSION_START_SOURCE:-}" in
+        startup|resume) ;;
+        *)
+            SHELL_UNRETIRE_NOTE="この identity は ORRERY Mail で retired です。/clear や compaction では active に戻しません。受信を再開するには dashboard から resume してください。"
+            return 0
+            ;;
+    esac
+    local helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}" python_bin eligibility
+    local -a resume_target
+    resume_target=(--runtime-dir "$RUNTIME_DIR" --agent-name "$SHELL_REGISTERED_AGENT"
+                   --agent-id "${AGS_REGISTERED_AGENT_ID:-}" --project-key "$PROJECT_KEY")
+    # A terminal session may not carry the installer's interpreter; the
+    # helper needs a newer Python than the system one on macOS.
+    python_bin="${AGENTSTACK_PYTHON:-$(agentstack_installed_env_value AGENTSTACK_PYTHON 2>/dev/null)}"
+    if [ ! -f "$helper" ] || [ -z "${AGS_REGISTERED_AGENT_ID:-}" ] ||
+        ! eligibility=$("${python_bin:-python3}" "$helper" resume-eligibility \
+            "${resume_target[@]}" --program claude-code 2>/dev/null); then
+        SHELL_UNRETIRE_NOTE="この identity は ORRERY Mail で retired のままです（保持期間外・旧形式・purge 済み、または確認できませんでした）。受信するには dashboard から resume してください。"
+        return 0
+    fi
+    if [ "$eligibility" = retained ] && ! "${python_bin:-python3}" "$helper" begin-resume \
+        "${resume_target[@]}" --program claude-code >/dev/null 2>&1; then
+        SHELL_UNRETIRE_NOTE="この identity は ORRERY Mail で retired のままです（子の再開状態を確保できませんでした）。受信するには dashboard から resume してください。"
+        return 0
+    fi
+    if ags_unretire_owned_identity "$PROJECT_KEY" "$SHELL_REGISTERED_AGENT" >/dev/null 2>&1; then
+        SHELL_UNRETIRE_NOTE="retired だったこの identity を、保存した owner credential で確かめて active に戻しました。"
+    else
+        if [ "$eligibility" = retained ]; then
+            "${python_bin:-python3}" "$helper" cancel-resume "${resume_target[@]}" >/dev/null 2>&1 || true
+        fi
+        SHELL_UNRETIRE_NOTE="この identity は ORRERY Mail で retired のままです（unretire に失敗しました）。受信するには dashboard から resume してください。"
+    fi
+}
+
+# Tell exit-time cleanup that this identity is live in this process, however it
+# was opened. The lease names the first non-shell ancestor (the provider CLI);
+# a dead PID is simply not a live session.
+write_live_session_lease() {
+    local name="$1" pid="$PPID" comm depth=0 lease helper lease_python
+    # The leases share a lock with recovery and pruning (child_resume.py). Only
+    # a missing helper falls back to plain shell; a helper that runs and fails
+    # writes nothing rather than go around the lock (#182 review).
+    helper="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
+    lease_python="${AGENTSTACK_PYTHON:-$(agentstack_installed_env_value AGENTSTACK_PYTHON 2>/dev/null)}"
+    lease_python="${lease_python:-python3}"
+    # Leases outlive their sessions; drop the ones whose CLI has ended, for
+    # every identity, so they do not pile up (#152 review P3-a).
+    # Also leases from before this machine booted: their PID may now be an
+    # unrelated process (child_resume.py prune-leases).
+    if [ -f "$helper" ]; then
+        "$lease_python" "$helper" prune-leases --runtime-dir "$RUNTIME_DIR" >/dev/null 2>&1 || :
+    else
+        for lease in "$RUNTIME_DIR"/live-sessions/*/*; do
+            [ -f "$lease" ] || continue
+            case "${lease##*/}" in ''|*[!0-9]*) continue ;; esac
+            kill -0 "${lease##*/}" 2>/dev/null || rm -f "$lease"
+        done
+        rmdir "$RUNTIME_DIR"/live-sessions/*/ 2>/dev/null
+    fi
+    case "$name" in ''|*[!A-Za-z0-9_.-]*) return 0 ;; esac
+    while [ "$depth" -lt 6 ] && [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
+        comm="$(ps -o comm= -p "$pid" 2>/dev/null)"
+        comm="${comm##*/}"; comm="${comm#-}"
+        case "$comm" in
+            ''|bash|sh|zsh|dash|fish|ksh|tcsh|csh) ;;
+            *)
+                # Under the lease lock that recovery and pruning also take
+                # (child_resume.py write-lease); the plain write is the fallback.
+                if [ -f "$helper" ]; then
+                    "$lease_python" "$helper" write-lease --runtime-dir "$RUNTIME_DIR" \
+                        --agent-name "$name" --pid "$pid" >/dev/null 2>&1 || :
+                else
+                    mkdir -p "$RUNTIME_DIR/live-sessions/$name" 2>/dev/null &&
+                        : > "$RUNTIME_DIR/live-sessions/$name/$pid" 2>/dev/null
+                fi
+                return 0
+                ;;
+        esac
+        pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+        depth=$((depth + 1))
+    done
     return 0
 }
 
@@ -244,6 +417,28 @@ print(json.dumps({
         python3 "$HOOKS_DIR/record-session-index.py" >/dev/null 2>&1 || true
 }
 
+MAIL_SERVER_ANSWERING=0
+CLAUDE_REGISTRATION_CONFIRMED=0
+if mail_server_is_answering; then
+    MAIL_SERVER_ANSWERING=1
+    if [ -n "$RESOLVED_AGENT" ] && [ -n "$PROJECT_KEY" ] && REGISTER_LIB="$(find_register_lib)"; then
+        # shellcheck disable=SC1090
+        if . "$REGISTER_LIB"; then
+            ags_mail_load_token
+            # A nested CLI can inherit both the name and owner credential. Check
+            # the existing profile before using the credential or writing a lease.
+            if ! REGISTERED_PROGRAM="$(ags_registered_program "$PROJECT_KEY" "$RESOLVED_AGENT" 2>/dev/null)"; then
+                echo "ORRERY Mail の登録済み provider を確認できなかったため、Claude の shell 再登録を省きました。"
+                exit 0
+            fi
+            case "$REGISTERED_PROGRAM" in
+                claude|claude-code) CLAUDE_REGISTRATION_CONFIRMED=1 ;;
+                *) exit 0 ;;
+            esac
+        fi
+    fi
+fi
+
 mkdir -p "$RUNTIME_DIR" 2>/dev/null
 if [ -n "${TMUX_PANE:-}" ]; then
     CURRENT_SESSION=$(tmux display-message -t "$TMUX_PANE" -p '#S' 2>/dev/null)
@@ -257,9 +452,18 @@ printf '%s src=%s resolved=%q AGENT_NAME=%q TMUX_PANE=%q TMUX=%s sess=%q\n' \
     "${CURRENT_SESSION:-}" \
     >> "$RUNTIME_DIR/session-start-resolve.log" 2>/dev/null
 
-if mail_server_is_answering; then
-    if [ -n "$RESOLVED_AGENT" ] && shell_register_resolved_agent; then
+INSTRUCTION_ENGINE="$HOOKS_DIR/../bin/lib/instruction_blocks.py"
+if [[ -f "$INSTRUCTION_ENGINE" ]] &&
+   command -v agentstack_instruction_admission >/dev/null 2>&1 &&
+   [[ "$(agentstack_instruction_admission)" != unrelated ]]; then
+    "${AGENTSTACK_PYTHON:-python3}" "$INSTRUCTION_ENGINE" --provider claude --session-notices 2>/dev/null || true
+fi
+write_live_session_lease "${RESOLVED_AGENT:-}"
+
+if [ "$MAIL_SERVER_ANSWERING" = 1 ]; then
+    if [ "$CLAUDE_REGISTRATION_CONFIRMED" = 1 ] && shell_register_resolved_agent; then
         echo "ORRERY Mail server is running. This session is already registered."
+        [ -n "${SHELL_UNRETIRE_NOTE:-}" ] && echo "$SHELL_UNRETIRE_NOTE"
         echo "あなたは「${SHELL_REGISTERED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。shell hook で登録済みです。"
         echo "接続経路は正本の明示契約と、提供された tool の説明・引数 schema で判定し、最初に一致した経路だけを使ってください。"
         echo "正本 embed-task が登録済み・儀式不要を明示している場合はそれが最優先です。parent の有無を問わず task を開始し、起動儀式として inbox を取得しないでください。"
@@ -279,7 +483,7 @@ if mail_server_is_answering; then
     elif [ -n "$RESOLVED_AGENT" ]; then
         echo "ORRERY Mail server is running, but shell registration did not complete."
         if [ -n "$SHELL_REGISTRATION_ERROR" ]; then
-            echo "ERROR: $SHELL_REGISTRATION_ERROR。identity split を避けるため停止しました。別名を生成・採用せず、この不一致を operator に報告してください。"
+            echo "ERROR: ${SHELL_REGISTRATION_ERROR}。identity split を避けるため停止しました。別名を生成・採用せず、この不一致を operator に報告してください。"
         elif [ "$SHELL_REGISTRATION_REASON" = "credential-unavailable" ]; then
             echo "あなたは「${RESOLVED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。local credential がありません。"
             echo "このsessionからenrollを実行せず停止し、operatorに docs/persistent-agents.md#credential-unavailable のinspect→claim/recover確認を依頼してください。"
@@ -293,7 +497,12 @@ if mail_server_is_answering; then
         fi
     else
         echo "ORRERY Mail server is running, but no existing identity was resolved."
-        echo "提供 tool schema を確認してください。bound proxy なら登録せずその schema に従い、confirmed raw/direct の新規未登録 session だけ ensure_project -> register_agent -> fetch_inbox を使ってください。"
+        if command -v agentstack_instruction_admission >/dev/null 2>&1 &&
+           [ "$(agentstack_instruction_admission)" = unrelated ]; then
+            agentstack_instruction_message identity-unavailable
+        else
+            agentstack_instruction_message identity-binding-unresolved
+        fi
     fi
 else
     echo "ORRERY Mail server is not running; skip registration until it is available."
@@ -304,6 +513,16 @@ else
         echo "あなたは既に「${RESOLVED_AGENT}」です（source: ${RESOLVED_AGENT_SRC}）。復旧後も新しい名前を生成せず、提供された接続 schema に対応する同じ identity の経路だけを使ってください。"
     fi
     echo "この間、ファイル予約は取得も確認もできません。他のエージェントと同じファイルを編集しても衝突は検出されません。"
+fi
+
+# Healthy starts already wrote their receipt. Avoid an extra Python process on
+# that common path; clear inherited recovery data with a shell builtin only.
+if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+    if [ -n "$SHELL_REGISTERED_AGENT" ] || [ -z "$RESOLVED_AGENT" ]; then
+        printf "export AGENTSTACK_CLAUDE_SESSION_CONTEXT=''\n" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
+    else
+        persist_recovery_context
+    fi
 fi
 
 # A child started with --claude-chrome gets its browser policy again at every

@@ -1,7 +1,9 @@
 """Non-secret Codex CLI catalog discovery and the shared child model contract.
 
-Discovery is not account authorization. No CLI, network, credentials or model
-instruction text is consulted; only bounded local catalog metadata is used.
+Discovery is not account authorization. Fresh local metadata supplies choices
+and effort policy; older snapshots can lower the implicit default. Bounded,
+cached probes use the spawner's CLI resolver and child environment
+to select the default; no network, credentials or model instruction text is read.
 """
 from __future__ import annotations
 
@@ -11,20 +13,35 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
+import signal
+import subprocess
 import stat
 import sys
+import threading
 import time
 
-DEFAULT_MODEL = "gpt-6-sol"  # Deliberately independent of catalog ordering.
+DEFAULT_MODEL = "gpt-6.1-sol"  # Preferred default, independent of catalog ordering.
+FALLBACK_MODEL = "gpt-6-sol"
+# Keep the preferred Sol generation first, then the observed working free-plan
+# Luna, then older Terra/Luna coding models. This is product preference, not
+# cache order or a claim that a plan always authorizes these IDs.
+DEFAULT_CANDIDATES = (DEFAULT_MODEL, FALLBACK_MODEL, "gpt-6-luna",
+                      "gpt-5.6-terra", "gpt-5.6-luna")
+DEFAULT_MODEL_NOTE = (
+    "GPT-6.1 Sol is unavailable in the selected CLI or fresh local catalog; the omitted model "
+    "starts from gpt-6-sol. Update Codex CLI to 0.159.0 or later "
+    "(npm install -g @openai/codex@latest), then refresh its model catalog."
+)
 DEFAULT_MODELS = (
-    DEFAULT_MODEL, "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra",
+    DEFAULT_MODEL, FALLBACK_MODEL, "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra",
     "gpt-5.6-luna", "gpt-6-luna",
 )
 # Listed models shown under NEW AGENT's "more models" fold. A fixed table (a product
 # call), not a version comparison; the default is never folded, and models the
 # catalog hides (`visibility` other than "list") never reach this list at all.
 BUNDLED_OVERFLOW = ("gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5")
-ALIASES = {"sol": "gpt-6-sol", "luna": "gpt-6-luna",
+ALIASES = {"sol": DEFAULT_MODEL, "luna": "gpt-6-luna",
            "astra": "gpt-6-astra", "terra": "gpt-5.6-terra"}
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 DEFAULT_EFFORT = "xhigh"
@@ -33,6 +50,120 @@ MAX_BYTES = 2 * 1024 * 1024
 MAX_MODELS = 256
 CACHE_TTL_SECONDS = 300  # Codex CLI rust-v0.154.0 models-manager default.
 MAX_CACHE_LINK_HOPS = 8  # Nesting depth of Codex children whose catalog is still read.
+
+CLI_MIN_VERSION = (0, 159, 0)
+CLI_VERSION_TIMEOUT_SECONDS = 2
+CLI_POLICY_TIMEOUT_SECONDS = 18  # Same 15s selection budget as spawn, plus cleanup.
+CLI_VERSION_CACHE_SECONDS = 60
+
+
+@dataclass(frozen=True)
+class LauncherPolicy:
+    binary: str = ""
+    version: tuple[int, int, int] | None = None
+    shell: str = ""
+
+
+_VERSION_CACHE: dict[tuple, tuple[float, LauncherPolicy, tuple]] = {}
+_VERSION_LOCK = threading.Lock()
+
+
+def _file_identity(path: str | Path) -> tuple:
+    try:
+        info = os.stat(path)
+        return (os.path.realpath(path), info.st_dev, info.st_ino, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
+    except OSError:
+        return ()
+
+
+def _capture(command: list[str], timeout: float) -> bytes | None:
+    process = None
+    try:
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   start_new_session=os.name == "posix")
+        output, _ = process.communicate(timeout=timeout)
+        return output if process.returncode == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        if process is not None:
+            try:
+                if os.name == "posix":
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+            except ProcessLookupError:
+                pass
+            process.communicate()
+        return None
+
+
+def _parse_version(output: bytes | None) -> tuple[int, int, int] | None:
+    if output is None:
+        return None
+    match = re.search(rb"^codex-cli ([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+][^\s]+)?\s*$", output, re.MULTILINE)
+    try:
+        return tuple(int(part) for part in match.groups()) if match else None
+    except ValueError:
+        return None
+
+
+def _native_cli_version(binary: str) -> tuple[int, int, int] | None:
+    return _parse_version(_capture([binary, "--version"], CLI_VERSION_TIMEOUT_SECONDS))
+
+
+def _probe_launcher() -> LauncherPolicy:
+    if os.name != "posix":
+        # Native Windows is the experimental lane; its launcher supplies a path.
+        binary = os.environ.get("AGENTSTACK_CODEX_BIN", "").strip()
+        return LauncherPolicy(binary, _native_cli_version(binary)) if os.path.isabs(binary) else LauncherPolicy()
+    hooks = Path(os.environ.get("AGENTSTACK_HOOKS_DIR", "") or str(Path(__file__).resolve().parents[1] / "hooks"))
+    helper = hooks / "codex-bin.sh"
+    output = _capture(["/bin/bash", str(helper), "policy"], CLI_POLICY_TIMEOUT_SECONDS)
+    if output is None:
+        return LauncherPolicy()
+    if output.startswith(b"policy-v2\0"):
+        # The helper streams candidate outputs over a pipe to avoid even
+        # transient filesystem writes. Only the selected (last) probe counts.
+        fields = output.rsplit(b"\0", 2)
+        if len(fields) == 3:
+            fields = [fields[1], fields[0].rsplit(b"\0", 1)[-1], fields[2]]
+    else:
+        fields = output.split(b"\0", 2)  # Compatibility with installed older helpers.
+    if len(fields) != 3:
+        return LauncherPolicy()
+    try:
+        binary, shell = os.fsdecode(fields[0]), os.fsdecode(fields[2])
+        return LauncherPolicy(binary, _parse_version(fields[1]) if binary else None, shell)
+    except ValueError:
+        return LauncherPolicy()
+
+
+def resolve_launcher() -> LauncherPolicy:
+    """Use the spawner's environment -> saved env.sh -> usable PATH resolver.
+
+    All probes run under the same child login shell, PATH setup and guards.
+    Memoize successes/failures for 60s; context or executable changes invalidate.
+    """
+    names = ("HOME", "PATH", "NVM_DIR", "AGENTSTACK_HOME", "AGENTSTACK_HOOKS_DIR",
+             "AGENTSTACK_CODEX_BIN", "AGENTSTACK_CHILD_SHELL")
+    context = tuple(os.environ.get(name, "") for name in names)
+    env_file = Path(os.environ.get("AGENTSTACK_HOME", "") or "~/.agentstack").expanduser() / "env.sh"
+    key = (context, _file_identity(env_file), _file_identity(context[5]))
+    with _VERSION_LOCK:
+        now = time.monotonic()
+        cached = _VERSION_CACHE.get(key)
+        if (cached is not None and now - cached[0] < CLI_VERSION_CACHE_SECONDS
+                and cached[2] == _file_identity(cached[1].binary)):
+            return cached[1]
+        policy = _probe_launcher()
+        _VERSION_CACHE.clear()
+        _VERSION_CACHE[key] = (time.monotonic(), policy, _file_identity(policy.binary))
+        return policy
+
+
+def cli_version() -> tuple[int, int, int] | None:
+    return resolve_launcher().version
 
 
 @dataclass(frozen=True)
@@ -44,7 +175,7 @@ class EffortPolicy:
 _STANDARD = ("low", "medium", "high", "xhigh", "max", "ultra")
 BUNDLED_EFFORTS = {
     model: EffortPolicy(_STANDARD, DEFAULT_EFFORT)
-    for model in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-sol")
+    for model in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-sol", DEFAULT_MODEL)
 }
 BUNDLED_EFFORTS.update({
     model: EffortPolicy(_STANDARD[:-1], DEFAULT_EFFORT)
@@ -60,6 +191,16 @@ class ModelCatalog:
     efforts: dict[str, EffortPolicy]
     error: str = ""
     overflow: tuple[str, ...] = ()
+    default_model: str = FALLBACK_MODEL
+    note: str = ""
+    aliases: dict[str, str] | None = None
+
+
+@dataclass(frozen=True)
+class CacheSnapshot:
+    models: frozenset[str]
+    fetched_at: str
+    fresh: bool
 
 
 def is_model_id(value: object) -> bool:
@@ -78,12 +219,47 @@ def _allow_list() -> tuple[str, ...] | None:
     return tuple(dict.fromkeys(values))
 
 
-def normalize_model(raw: str = "") -> str:
+def read_launcher_setting(name: str, *, install_home: str = "~/.agentstack") -> str:
+    """Read the installer's literal assignment when the environment is empty.
+
+    Direct delegate/launcher calls do not necessarily source env.sh. Match the
+    project-context reader: never evaluate shell syntax or unrelated settings.
+    """
+    value = os.environ.get(name, "")
+    if value:
+        return value
+    path = Path(os.environ.get("AGENTSTACK_HOME", "") or install_home).expanduser() / "env.sh"
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            match = re.match(r"^\s*export\s+" + re.escape(name) + r"=(.*)$", line)
+            if match:
+                values = shlex.split(match[1], comments=True, posix=True)
+                return values[0] if len(values) == 1 else ""
+    except (OSError, UnicodeError, ValueError):
+        pass
+    return ""
+
+
+def normalize_model(raw: str = "", *, launcher: LauncherPolicy | None = None,
+                    catalog: ModelCatalog | None = None) -> str:
     """Only unprefixed friendly names are aliases; formal IDs remain exact."""
     if not isinstance(raw, str):
         raise ValueError("invalid Codex model ID")
     value = raw.strip()
-    model = ALIASES.get(value.lower(), value) if value else DEFAULT_MODEL
+    if not value:
+        catalog = resolve_catalog(launcher=launcher) if catalog is None else catalog
+        if catalog.error:
+            raise ValueError(catalog.error)
+        model = catalog.default_model
+    elif value.lower() in ALIASES:
+        catalog = resolve_catalog(launcher=launcher) if catalog is None else catalog
+        if catalog.error and "AGENTSTACK_CODEX_DEFAULT_MODEL" not in catalog.error:
+            raise ValueError(catalog.error)
+        model = (catalog.aliases or ALIASES)[value.lower()]
+        if not model:
+            raise ValueError(f"Codex catalog has no eligible {value.lower()} model")
+    else:
+        model = ALIASES.get(value.lower(), value)
     if not is_model_id(model):
         raise ValueError("invalid Codex model ID; use sol / luna / astra / terra / gpt-<id>")
     allowed = _allow_list()
@@ -135,9 +311,12 @@ def _cache_open_path(path: Path) -> Path | None:
 
 
 def _read_cache(path: Path, now: float,
-                hidden_out: set[str] | None = None) -> dict[str, EffortPolicy]:
+                hidden_out: set[str] | None = None,
+                snapshot_out: list[CacheSnapshot] | None = None) -> dict[str, EffortPolicy]:
     """Listed models' effort policies; `hidden_out` receives the models a valid
-    snapshot explicitly hides (a row with a visibility other than "list")."""
+    snapshot explicitly hides (a row with a visibility other than "list").
+    `snapshot_out` also receives valid older snapshots for default selection.
+    """
     try:
         open_path = _cache_open_path(path)
         if open_path is None:
@@ -167,16 +346,22 @@ def _read_cache(path: Path, now: float,
         if fetched.tzinfo is None:
             return {}
         age = now - fetched.timestamp()
-        if not 0 <= age <= CACHE_TTL_SECONDS:
+        if age < 0:
+            return {}
+        fresh = age <= CACHE_TTL_SECONDS
+        if not fresh and snapshot_out is None:
             return {}
         rows = data.get("models")
         if not isinstance(rows, list) or not rows or len(rows) > MAX_MODELS:
             return {}
         policies: dict[str, EffortPolicy] = {}
         hidden: set[str] = set()
+        available: set[str] = set()
         for row in rows:
             if not isinstance(row, dict):
                 return {}
+            if is_model_id(row.get("slug")):
+                available.add(row["slug"])
             if row.get("visibility") != "list":
                 if "visibility" in row and is_model_id(row.get("slug")):
                     hidden.add(row["slug"])
@@ -195,6 +380,14 @@ def _read_cache(path: Path, now: float,
             if model in policies and policies[model] != policy:
                 return {}  # Conflicting duplicate metadata is not a trustworthy snapshot.
             policies[model] = policy
+        if snapshot_out is not None:
+            # Presence is independent of picker visibility and effort schema.
+            # An older snapshot may lower a default (a working lower tier is
+            # preferable to a child that fails on its first request), but must
+            # never add picker choices or advertise stale effort metadata.
+            snapshot_out.append(CacheSnapshot(frozenset(available), data["fetched_at"], fresh))
+        if not fresh:
+            return {}
         if hidden_out is not None:
             hidden_out.update(hidden - set(policies))
         return policies
@@ -203,50 +396,117 @@ def _read_cache(path: Path, now: float,
 
 
 def discover_models(now: float | None = None,
-                    hidden_out: set[str] | None = None) -> dict[str, EffortPolicy]:
+                    hidden_out: set[str] | None = None,
+                    snapshot_out: list[CacheSnapshot] | None = None) -> dict[str, EffortPolicy]:
     """Read one observed-schema cache; do not identify the current account."""
     try:
         root = Path(os.environ.get("CODEX_HOME", "").strip() or "~/.codex").expanduser()
         if not root.is_absolute():
             return {}
-        return _read_cache(root / "models_cache.json", time.time() if now is None else now, hidden_out)
+        return _read_cache(root / "models_cache.json", time.time() if now is None else now,
+                           hidden_out, snapshot_out)
     except (OSError, RuntimeError, ValueError):
         return {}
 
 
-def resolve_catalog(now: float | None = None) -> ModelCatalog:
+def resolve_catalog(now: float | None = None, *, launcher: LauncherPolicy | None = None) -> ModelCatalog:
     try:
         allowed = _allow_list()
     except ValueError as exc:
         return ModelCatalog((), "override", {}, str(exc))
     hidden: set[str] = set()
-    discovered = discover_models(now, hidden)
+    snapshots: list[CacheSnapshot] = []
+    discovered = discover_models(now, hidden, snapshots)
+    snapshot = snapshots[0] if snapshots else None
+    available = snapshot.models if snapshot is not None else frozenset()
     policies = {**BUNDLED_EFFORTS, **discovered}
-    # A fresh catalog that hides a bundled candidate removes it from the menu.
-    # The default stays: it is the launcher's fixed contract. An explicit
-    # allow-list is the operator's own menu and wins over the catalog.
-    bundled = tuple(model for model in DEFAULT_MODELS if model == DEFAULT_MODEL or model not in hidden)
-    models = allowed if allowed is not None else tuple(dict.fromkeys((*bundled, *discovered)))
+    # Old, still-running CLI sessions overwrite the shared catalog periodically.
+    # Trust the binary selected for NEW AGENT over that snapshot's client_version.
+    # If its version cannot be read, use positive fresh catalog evidence instead.
+    version = launcher.version if launcher is not None else cli_version()
+    supported = version >= CLI_MIN_VERSION if version is not None else DEFAULT_MODEL in discovered
+    default = DEFAULT_MODEL if supported else FALLBACK_MODEL
+    note = "" if supported else DEFAULT_MODEL_NOTE
+    if available and default not in available:
+        # The CLI version remains the compatibility ceiling: an old CLI must
+        # never be upgraded to GPT-6.1 just because another CLI wrote the cache.
+        replacement = next((model for model in DEFAULT_CANDIDATES[
+            DEFAULT_CANDIDATES.index(default) + 1:] if model in available), default)
+        if replacement != default:
+            freshness = "fresh" if snapshot.fresh else "stale"
+            cache_note = (f"Codex default model changed from {default} to {replacement}: "
+                          f"the {freshness} local models_cache.json does not contain the preferred model.")
+            if not snapshot.fresh:
+                cache_note += (f" Cache fetched_at: {snapshot.fetched_at}. "
+                               "Start codex once to refresh the model list.")
+            note = " ".join(part for part in (note, cache_note) if part)
+            default = replacement
+    bundled = tuple(model for model in DEFAULT_MODELS
+                    if (model != DEFAULT_MODEL or supported)
+                    and (model == default or model not in hidden))
+    listed = tuple(model for model in discovered if model != DEFAULT_MODEL or supported)
+    aliases = dict(ALIASES)
+    aliases["sol"] = DEFAULT_MODEL if supported else FALLBACK_MODEL
+    for family in aliases:
+        matches = []
+        for model in listed:
+            match = re.fullmatch(r"gpt-([0-9]+(?:\.[0-9]+)*)-" + family, model)
+            if match and (allowed is None or model in allowed):
+                matches.append((tuple(map(int, match[1].split('.'))), model))
+        if matches:
+            aliases[family] = max(matches)[1]
+        elif snapshot is not None and snapshot.fresh:
+            aliases[family] = ""
+    configured = read_launcher_setting("AGENTSTACK_CODEX_DEFAULT_MODEL").strip()
+    config_error = ""
+    if configured:
+        configured_model = aliases.get(configured.lower(), configured)
+        if not is_model_id(configured_model):
+            config_error = (f"AGENTSTACK_CODEX_DEFAULT_MODEL: catalog has no eligible {configured.lower()} model"
+                            if configured.lower() in aliases else "invalid AGENTSTACK_CODEX_DEFAULT_MODEL")
+        else:
+            default = configured_model
+            note = ""
+    models = allowed if allowed is not None else tuple(dict.fromkeys((*bundled, *listed, *((default,) if configured else ()))))
     source = "override" if allowed is not None else ("local_cache" if discovered else "bundled")
     # An explicit allow-list is the operator's own menu and is not folded,
     # matching the Claude provider.
     overflow = () if allowed is not None else tuple(
-        model for model in models if model in BUNDLED_OVERFLOW and model != DEFAULT_MODEL)
-    return ModelCatalog(models, source, policies, overflow=overflow)
+        model for model in models if model in BUNDLED_OVERFLOW and model != default)
+    return ModelCatalog(models, source, policies, error=config_error, overflow=overflow, default_model=default,
+                        note=note, aliases=aliases)
+
+
+def candidate_models() -> tuple[str, ...]:
+    """Known IDs for collision checks, independently of the current default.
+
+    A bundled ID belongs to Codex even when a CLI/catalog hides its UI choice.
+    Read only non-secret local metadata; do not probe a launch target.
+    """
+    try:
+        allowed = _allow_list()
+    except ValueError:
+        return ()
+    if allowed is not None:
+        return allowed
+    return tuple(dict.fromkeys((*DEFAULT_MODELS, *sorted(discover_models()))))
 
 
 def resolve_effort(model: str, raw: str = "", catalog: ModelCatalog | None = None) -> str:
     """Unknown metadata leaves an omitted effort to Codex; never guesses a tier."""
-    model = normalize_model(model)
+    model = normalize_model(model, catalog=catalog)
     if not isinstance(raw, str):
         raise ValueError("invalid Codex reasoning effort")
     effort = raw.strip().lower()
-    catalog = resolve_catalog() if catalog is None else catalog
-    if catalog.error:
+    # Effort metadata does not need a launch-target/version probe.
+    catalog = resolve_catalog(launcher=LauncherPolicy()) if catalog is None else catalog
+    if catalog.error and not catalog.error.startswith(("invalid AGENTSTACK_CODEX_DEFAULT_MODEL", "AGENTSTACK_CODEX_DEFAULT_MODEL:")):
         raise ValueError(catalog.error)
     policy = catalog.efforts.get(model)
     if not effort:
-        return policy.default if policy else ""
+        effort = read_launcher_setting("AGENTSTACK_CODEX_DEFAULT_EFFORT").strip().lower()
+        if not effort:
+            return policy.default if policy else ""
     if effort not in EFFORTS:
         raise ValueError("unknown Codex reasoning effort")
     # Explicit effort remains the operator choice; Codex validates it at launch.
@@ -255,25 +515,53 @@ def resolve_effort(model: str, raw: str = "", catalog: ModelCatalog | None = Non
 
 def provider_catalog() -> dict:
     catalog = resolve_catalog()
+    configured_effort = read_launcher_setting("AGENTSTACK_CODEX_DEFAULT_EFFORT").strip().lower()
+    effort_error = "invalid AGENTSTACK_CODEX_DEFAULT_EFFORT" if configured_effort and configured_effort not in EFFORTS else ""
     return {
         "id": "codex", "label": "Codex", "program": "codex-cli",
-        "models": list(catalog.models), "default_model": DEFAULT_MODEL,
-        "model_source": catalog.source, "model_error": catalog.error,
+        "models": list(catalog.models), "default_model": "" if catalog.error and "AGENTSTACK_CODEX_DEFAULT_MODEL" in catalog.error else catalog.default_model,
+        "model_source": catalog.source, "model_error": catalog.error if "AGENTSTACK_CODEX_DEFAULT_MODEL" not in catalog.error else "",
+        "default_error": catalog.error if "AGENTSTACK_CODEX_DEFAULT_MODEL" in catalog.error else "",
+        "default_effort_error": effort_error,
+        "model_note": catalog.note,
         "overflow_models": list(catalog.overflow),
-        "efforts": list(_STANDARD), "effort_default": DEFAULT_EFFORT,
+        "efforts": list(_STANDARD), "effort_default": configured_effort or DEFAULT_EFFORT,
         "model_efforts": {model: list(catalog.efforts[model].supported) if model in catalog.efforts else [] for model in catalog.models},
-        "model_effort_defaults": {model: catalog.efforts[model].default if model in catalog.efforts else "" for model in catalog.models},
+        "model_effort_defaults": {model: configured_effort or (catalog.efforts[model].default if model in catalog.efforts else "") for model in catalog.models},
     }
 
 
 def main() -> int:
     try:
         if len(sys.argv) == 3 and sys.argv[1] == "normalize":
-            print(normalize_model(sys.argv[2]))
+            raw = sys.argv[2]
+            catalog = resolve_catalog() if not raw.strip() or raw.strip().lower() in ALIASES else None
+            print(normalize_model(raw, catalog=catalog))
+            if catalog is not None and catalog.note and not raw.strip():
+                print(f"note: {catalog.note}", file=sys.stderr)
+        elif len(sys.argv) == 3 and sys.argv[1] == "resolve":
+            policy = resolve_launcher()
+            raw = sys.argv[2]
+            catalog = resolve_catalog(launcher=policy)
+            model = normalize_model(raw, catalog=catalog)
+            result = {"model": model, "codex_bin": policy.binary,
+                      "cli_version": ".".join(map(str, policy.version)) if policy.version else "",
+                      "default_source": "cli_version" if policy.version else "local_catalog"}
+            if not raw.strip() and catalog.note:
+                result["model_note"] = catalog.note
+                # /delegate captures the JSON before registration, then passes
+                # the formal ID to spawn. Stderr keeps the change visible even
+                # though that later formal-ID launch must not be rewritten.
+                print(f"note: {catalog.note}", file=sys.stderr)
+            print(json.dumps(result))
+        elif len(sys.argv) == 2 and sys.argv[1] == "note":
+            note = resolve_catalog().note
+            if note:
+                print(f"note: {note}")
         elif len(sys.argv) == 4 and sys.argv[1] == "effort":
             print(resolve_effort(sys.argv[2], sys.argv[3]))
         else:
-            raise ValueError("usage: codex_models.py normalize MODEL | effort MODEL EFFORT")
+            raise ValueError("usage: codex_models.py normalize MODEL | resolve MODEL | effort MODEL EFFORT | note")
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

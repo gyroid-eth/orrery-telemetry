@@ -95,7 +95,7 @@ Primary options:
 | --- | --- |
 | `--install-dir PATH` | Location for integration source and manifest |
 | `--runtime-dir PATH` | Location for the private socket, bindings, snapshot, delivery database, and logs |
-| `--no-service` | Start neither launchd nor supervised background. Required outside macOS |
+| `--no-service` | Start neither launchd nor supervised background. The default outside macOS (no service is installed even without it) |
 | `--no-plugin` | Build the marketplace without registering the Codex plugin |
 | `--refresh-plugin-only` | Reinstall only an existing enabled Codex plugin from the deployed payload, without changing Bridge state |
 | `--wake-limit COUNT` | Cold-wake limit per root task per hour |
@@ -154,7 +154,7 @@ Both launchd and supervised-background logs are in the following locations by de
 
 The `SessionStart` / `SubagentStart` hooks add context instructing the agent to first call `agentstack.bootstrap` with the current `session_id` and, when needed, `agent_id`. The first bootstrap pins an MCP process to one Bridge binding. Subsequent tool calls do not accept the project key, agent name, or owner token from the agent.
 
-The proxy exposes these nine tools:
+The proxy exposes these ten tools:
 
 - `bootstrap`
 - `fetch_inbox`
@@ -164,11 +164,22 @@ The proxy exposes these nine tools:
 - `renew_reservations`
 - `release_reservations`
 - `runtime_status`
+- `show_files` (turns files or images you created or changed into chips in the cockpit's History; see below)
 - `whois` (to confirm a recipient name; names are case-sensitive)
+
+`show_files` stays inside the proxy. It sends nothing to the Mail server, writes nothing and does not read the files. Like the other local tools, it works only after the binding (bootstrap). It checks 1 to 8 paths with `lstat` only and returns whether each exists, whether it is a regular file or an image, and its size (`present` lists the regular files). Relative paths are checked only against the agent's working folder when the binding knows it (a Codex App snapshot); the proxy's own cwd is never used. Otherwise a relative path is not checked (`checked: false`), while an absolute path is. When the working folder is known, a path outside it is not even lstat'ed and is reported as `outside_working_folder: true`. The cockpit turns this recorded call into History chips; the preview keeps doing its own checks (inside the working folder, kind and size). The managed instructions for Claude, Codex, dsh and Hermes and the bundled `/log` and `/delegate` ask agents to call it before their final report when there is a file to show. Claude's settings template allows it without a prompt.
+
+`reserve_files`, `renew_reservations`, and `release_reservations` accept physical absolute paths and forward them unchanged under the same bound identity and Mail namespace. In managed `workspace-v1` sessions, acquire using the physical absolute path with symlinks resolved (for example, `str(Path(target).resolve())`), then use that same path to renew/release. Guard denials also display the required path. Existing relative paths and glob patterns remain accepted unchanged for legacy sessions; the proxy does not derive a cwd from the project key or protected roots. Absolute globs also pass through unchanged, so use a physical path for their fixed prefix. Parent `..` components, invalid characters, empty strings, and batch/length limit violations remain rejected.
+
+Managed sessions that acquired only relative reservations must load the updated proxy through the normal resume/restart procedure, release obsolete leases by ID as their owner, and reacquire physical absolute paths. Existing leases are not migrated automatically. This does not activate the candidate/global/fresh server or change the binding, sandbox, or editing permissions.
 
 When a tool call fails, the proxy returns the first line of the Mail server's own error (anything that looks like a token is replaced with `[redacted]`, and the line is cut at 600 characters). It used to return only the fixed text "ORRERY Mail tool call failed", so a child hit by a plain validation error such as a misspelled recipient never learned why and gave up instead of correcting the name.
 
 A root task passes only `session_id`. A subagent passes the same `session_id` and its own `agent_id`; bindings that do not match the parent lineage recorded by the Bridge are rejected.
+
+The proxy a launcher such as `spawn_child.sh` gives a child does not use the Bridge: it is bound directly to the child's name, project and token at startup. Its `lineage` is not a Codex App lineage. `parent_agent` names the ORRERY parent the launcher passed in `AGENTSTACK_PROXY_PARENT_AGENT` (`kind` is `child`); an agent with no parent, such as `--standalone`, is `kind: root` with `parent_agent: null`. The launcher also records the parent in the child's private state (`parent_agent` in `child-agents/<name>.json`), so a dashboard resume that rebuilds the proxy config passes the same parent. The launcher stops before the CLI starts when the generated proxy could not state the parent: a parent name the proxy does not accept, or no proxy prepared while the inherited Codex config enables the Bridge plugin.
+
+A proxy a launcher bound at startup also accepts arguments shaped for raw ORRERY Mail, because a conversation resumed after using raw Mail keeps calling the tools that way. `project_key`, `agent_name` and `sender_name` are ignored when they match the binding and refused with the reason when they do not. In a raw-style `whois`, `agent_name` is taken as the agent to look up. A `registration_token` or `sender_token` from the model is never used or forwarded. Any other argument outside the schema is refused with the list of accepted arguments. For this proxy `runtime_status` reports `state: bound` (the binding exists) without contacting Mail.
 
 ## Inbox notifications and cold wake
 

@@ -138,25 +138,31 @@ systemctl --user daemon-reload
 
 In environments without systemd user support and on WSL, the installer falls back to `nohup` plus a pidfile. The localhost dashboard and browser terminal can work. On WSL2 the dashboard's jump opens a new Windows Terminal (`wt.exe`) tab that attaches to tmux through `wsl.exe -d <distro>` (`AGENTSTACK_TERMINAL=auto` picks `wt`); on plain Linux jump stays unsupported.
 
-### On WSL2, closing every Ubuntu window stops the agents
+### On WSL2, closing the Ubuntu windows
 
-By default WSL stops a distro about 15 seconds after its last Windows-side client (`wsl.exe`, a Windows Terminal Ubuntu tab) exits, even while tmux, the dashboard and agents are running inside it; Mail, the dashboard and every agent go with it (checked on WSL 2.7.13: stopped 13-16 s after the last window closed). `[wsl2] vmIdleTimeout=-1` only keeps the VM, and neither linger nor systemd keeps the distro.
+**The legacy dashboard keeps WSL running automatically while agents work.** It starts a single hidden `wsl.exe` on Windows and releases it after 60 idle seconds. `agentstack-doctor` reads the Windows `.wslconfig` without modifying it.
 
-**The dashboard keeps WSL running while agents work, and only then.** While there is work it keeps one hidden `wsl.exe` on the Windows side and ends it by itself once the work is gone; WSL then stops as usual, about 15 seconds after the last window closes. Nobody has to run `wsl --shutdown`, and the Windows `.wslconfig` is not changed.
+- A Claude, Codex or Antigravity process running in tmux keeps the hold, including while waiting for approval or a reply.
+- NEW AGENT in the dashboard and `agent-start` / `agent-start-codex` reserve a hold before launching. If they cannot confirm the hold, the launch continues and reports why in the dashboard response's `wsl_hold` or the shell's `WSL hold: ...` line. Leftover reservations expire after three minutes.
+- A visible dashboard page also keeps the hold. Hiding or closing the page drops that reason. The dashboard service, Mail, watcher and tmux recorder connections do not count on their own.
+- The header shows the reason as `WSL kept · 2 agents` or the countdown as `WSL hold ends in 42s`. Run `agentstack-doctor` for reasons, the Windows PID and status freshness.
+- If tmux or the process list cannot be read, the hold stays for the agents last seen and the header shows `WSL kept · state unknown`. After more than 30 seconds without an update, the header shows `WSL status stale`.
+- If the hidden `wsl.exe` exits early, the dashboard tries to restart it. After three consecutive failures it waits five minutes before retrying. If the dashboard itself exits, the hold continues while the last observed agents are alive.
 
-- **Held while**: an agent process (claude / codex / antigravity) runs in tmux, including one waiting for approval or a reply
-- **While starting**: the dashboard's NEW AGENT and `agent-start` / `agent-start-codex` put a reservation down before they start and wait until the hold is in place or has visibly failed. If it did not start, the launch goes on and says why (`wsl_hold` in the dashboard's response, a `WSL hold: ...` line in the shell); keep one Ubuntu window open until that agent is done. A reservation goes when the launch settles and expires after three minutes at the latest
-- **While a page is shown**: a visible dashboard page (also inside the cockpit) holds; hiding or closing it lets go
-- **Not counted**: the dashboard, Mail, the watcher, the anchor itself and tmux control clients. The cockpit keeps a recorder attached to every session whether anyone looks or not, so counting those would keep WSL up forever
-- **When it cannot tell**: if tmux or ps does not answer, that is not read as "everything exited"; the hold stays for the agents last seen, and the header says `WSL kept · state unknown`
-- **Release**: after 60 seconds with none of the above. While held, the header shows why (`WSL kept · 2 agents`); during the 60 seconds it shows `WSL hold ends in 42s`; afterwards it disappears. Ending the hold does not stop WSL while another window or program still uses it
-- **Freshness**: if the hold state has not been updated for 30 seconds, the header shows `WSL status stale`
-- **Failures**: if the hidden `wsl.exe` ends early, the dashboard starts it again within seconds (after three failures in a row it waits five minutes). If it cannot, the header shows `WSL not kept` with the reason; keep one Ubuntu window open meanwhile. If the dashboard dies, the anchor keeps holding while the agent processes it last heard about are alive
-- **After WSL stops**: the dashboard stops with it. Open Ubuntu in Windows Terminal and start the dashboard as usual
-- **Checking**: `agentstack-doctor` shows the state (reasons, Windows PID, last update)
-- **Turning it off**: install with `--no-wsl-anchor` (or `AGENTSTACK_WSL_ANCHOR=0`). The choice is kept in `env.sh`; `--wsl-anchor` turns it back on
+**If automatic hold is unavailable, keep one Ubuntu window open on Windows while agents work.** Use this fallback if the header shows `WSL not kept` or if you disabled the hold. Install with `--no-wsl-anchor` or `AGENTSTACK_WSL_ANCHOR=0` to disable it, and `--wsl-anchor` to restore it. The installer saves the choice in `env.sh`.
 
-If an earlier installer build or a manual edit put `[general] instanceIdleTimeout=-1` in `.wslconfig`, every distro runs until `wsl --shutdown`. It is no longer needed; `agentstack-doctor` points it out with how to undo it (delete that line, then run `wsl --shutdown` once when no agent is working). The same goes for `[wsl2] vmIdleTimeout=-1`: the VM keeps running after the distros stop and can keep using memory (the default cap is 50% of physical memory).
+Programs started from a desktop window such as Windows Terminal can leave a Windows `wslhost.exe` running after the last window closes (observed for more than 90 seconds on WSL 2.7.13). When programs are started through the Windows SSH server, that `wslhost.exe` goes away when the connection closes. With no automatic hold or other Windows client, WSL stopped about 15 seconds after the last connection closed on WSL 2.7.13. Connecting directly to an sshd inside WSL has not been checked.
+
+If WSL stays running after the hold ends and you want to stop it immediately, run the following in PowerShell. It stops **every distro and the WSL VM immediately**. Save and close the agents' work and anything else running in WSL, including other distros, first.
+
+```powershell
+wsl --shutdown
+```
+
+The next time Ubuntu opens, the Mail timer starts Mail one minute after boot. Re-run `install.sh` to bring back the dashboard.
+
+- To keep the systemd user manager (the Mail timer and watcher) after logout, run `loginctl enable-linger "$USER"` inside WSL.
+- If you previously set `[general] instanceIdleTimeout=-1` or `[wsl2] vmIdleTimeout=-1` in `.wslconfig`, the first keeps distros running and the second keeps the VM running after distros stop. Automatic hold does not need these settings. Follow the guidance from `agentstack-doctor`, delete those lines and run `wsl --shutdown` once with the precautions above.
 
 If the native Windows helper (`scripts/windows/`) also runs on the same PC: WSL2 forwards 8770 to the Windows localhost, so a leftover native dashboard on the same port answers the browser instead and the WSL agents never appear. Change one of the ports, or stop the native side before opening the page.
 
@@ -192,6 +198,16 @@ Additional checks:
 
 ## Mail watcher is yellow / red
 
+Signals older than 24 hours with a confirmed absent tmux recipient are reported as `orphan_signal_count` and excluded from health backlog. The watcher now removes a notification signal once a successful session inventory confirms the recipient is absent, without changing the Mail message or inbox. Leftovers from older watchers or uncertain tmux lookups can still remain; retained signals alone do not prove a delivery failure. Live recipients, recent signals, headless runtime manifests and unknown tmux measurements remain actionable. Doctor warns with the orphan count and cleanup instructions; this warning alone does not fail a green health check.
+
+Preview candidates after loading the installed environment. Add `--prune` to recheck session absence immediately before deleting only old regular signal files beneath signals. The helper never opens the Mail DB or modifies inboxes or notify-state, follows no symlinks, and refuses deletion when tmux cannot be measured. Resume a recipient first if it should receive the retained notification.
+
+```sh
+source ~/.agentstack/env.sh
+"${AGENTSTACK_PYTHON:-python3}" ~/.agentstack/dashboard/mail_signals.py
+"${AGENTSTACK_PYTHON:-python3}" ~/.agentstack/dashboard/mail_signals.py --prune
+```
+
 ```bash
 curl -s http://127.0.0.1:8770/api/mail-watcher-health
 ```
@@ -214,11 +230,13 @@ Confirm that `AGENTSTACK_MAIL_HOME` and `AGENTSTACK_SIGNALS_DIR` match between s
 **If mail reaches inboxes but nothing is injected into tmux, and the log repeats `Stale watcher lock detected; taking ownership` followed by `mkdir: ... File exists` every few seconds**, the watcher is failing to take over its lock and the service manager keeps restarting it. A previous watcher that died without running its EXIT trap (SIGKILL, a host crash, a deploy that replaced the process) leaves its heartbeat inside the lock dir, and watchers before 2026-09-12 could not clear it. A `runs` count in the thousands under `launchctl print` is the tell. Recovery is removing the lock dir; keepalive picks it up on the next start:
 
 ```bash
-rm -rf /tmp/orrery-mail-watcher.lock   # or your AGENTSTACK_MAIL_WATCHER_LOCK_DIR
+rm -rf ~/.agentstack/runtime/mail-watcher.lock   # or your AGENTSTACK_MAIL_WATCHER_LOCK_DIR
 tail -3 ~/.agentstack/runtime/mail-watcher.log
 ```
 
 Update the repo and re-run `bash scripts/install.sh`; from then on takeover succeeds regardless of leftovers.
+
+**If a second account on the same Mac has a watcher that never runs, with the log alternating `Permission denied` and `Stale watcher lock detected` every few seconds**, the lock dir is shared with another user's watcher (before 2026-10-05 the default was the shared `/tmp/orrery-mail-watcher.lock`, so a second account on the same Mac could never take the first account's lock and retried forever). The default is now per user (`$AGENTSTACK_RUNTIME_DIR/mail-watcher.lock`); update the repo and re-run `bash scripts/install.sh`. If you pointed `AGENTSTACK_MAIL_WATCHER_LOCK_DIR`, `_PIDFILE`, or `_HEARTBEAT` at another account's path (somewhere shared under `/tmp`, say), the watcher **writes nothing and does not switch to another location**: it stops and logs once that the path belongs to another user and that you should remove the override or use your own path. Remove the setting (or point it somewhere only you can write) and it starts. If your own old watcher from before 2026-10-05 is still running on the old default, the new watcher also refuses to start, to avoid delivering mail twice, and tells you to stop the old one (a pid that is not a watcher process is treated as stale). `agentstack-doctor` also warns when the watcher is not running, its status is red or yellow, or its heartbeat is stale.
 
 ## Dashboard spawn disappears immediately
 
@@ -315,6 +333,8 @@ Without creating another name, run:
 AGENTSTACK_PROJECT_KEY=/absolute/project/path \
   ~/.agentstack/bin/agentstack-reregister "$AGENT_NAME"
 ```
+
+In an explicit global context, exit 3 means `observed` without refreshing registration; pass program/model and rerun the helper.
 
 On failure, stderr contains a fixed, secret-free diagnostic. For example,
 `stage=ensure_project reason=transport-failed curl_exit=7` identifies the first
@@ -474,13 +494,19 @@ If stale top-level environment may have been inherited, relaunch from a new term
 
 An agent with no transcript may show only its mail timeline.
 
+## Resume is refused after a reboot or a forced shutdown
+
+A `/delegate` child's state says "running" while it runs; a normal exit retires it, and it can then be resumed for the retention period. When the computer goes down (forced off, power loss, or an OS restart that skips the exit), the child is never retired, and both the dashboard's RESUME and a terminal `claude --resume` refuse it with "This child did not end normally …". A resume cut off right after it launched is refused with "A resume of this child started and did not finish …".
+
+When the dashboard starts (and hourly after that), it makes resumable again any "running" state, and any unfinished resume, **last written before this machine booted**. It changes nothing while a tmux session of that name exists, while a live-session lease written since the boot names a live process, when the tmux state cannot be read, while a registration or legacy migration is pending, or when the owner credential does not match the state. With the dashboard running after a reboot, no manual retire is needed. If a resume is still refused, check whether a tmux session of that child is still there.
+
+A live-session lease (`runtime/live-sessions/<name>/<pid>`) written before the boot does not count as alive: a reboot may have given that PID to an unrelated process.
+
 ## Terminal does not open
 
 - check `AGENTSTACK_TERMINAL`
 - check Ghostty / iTerm2 / Terminal.app installation paths
 - `tmux has-session -t '<name>'`
-- for a browser terminal, check `ttyd` is on PATH
-- inspect the error from `/api/ptty?session=<name>`
 
 `AGENTSTACK_TERMINAL=none` performs no OS-terminal open.
 

@@ -2,6 +2,11 @@
 name: coordinate
 description: Coordinate a Codex App task or identify its current ORRERY Mail identity through the session-bound AgentStack bridge.
 ---
+## Explicit global preparation
+
+When `AGENTSTACK_CLIENT_CONFIG` selects global mode, use the fixed client context and stable IDs. Do not apply the legacy project/name/raw-token registration procedure below. Child preparation uses `agentstack-preregister-child --child-client-name child_01 --name ChildAlpha --program codex --model explicit-model --task-description "Task summary" --prepare-only`; repeat the same command to recover its saved registration intent. Registration dispatch remains in `bin/lib/agentstack-register.sh`. Global child execution/proxy/wake is pending4c: ordinary spawn/resume refuses, and prepare-only never means a running child. Do not use another launcher to bypass that refusal. Message writes use typed JSON through `agentstack-runtime-client call-json send_message` with `to_agent_ids`; replay saved message bytes with `replay-pending`. Follow the actual bound proxy schema when proxy tools are provided. See `docs/global-child-client.md` / `docs/global-child-client.en.md`.
+
+
 
 # Coordinate through AgentStack
 

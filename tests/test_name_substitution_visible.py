@@ -148,7 +148,9 @@ def test_the_ui_states_the_requested_name_in_both_views():
     """
     markup = INDEX.read_text(encoding="utf-8")
     assert "a.requested_name" in markup, "the deck card never mentions it"
-    assert "g.requested_name" in markup, "the graph node never mentions it"
+    graph = (INDEX.parent / "network_node.js").read_text(encoding="utf-8")
+    assert "window.OrreryNetworkNode.render(name,g," in markup
+    assert "g.requested_name" in graph, "the graph node never mentions it"
     assert "nlab-subst" in markup and ".node .nlab-subst" in markup
     assert "subst-note" in markup and ".subst-note{" in markup
 

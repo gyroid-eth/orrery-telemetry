@@ -10,6 +10,17 @@ nothing the installer writes reads it, but a machine that once used it may
 still carry its units and pointer file, so the pre-flight below checks for
 them instead of assuming they are gone.
 
+**Start with `--update-mail`.** With `--update-mail` the installer replaces
+the running Mail with this checkout's build (see
+"[Replacing the build with `--update-mail`](#replacing-the-build-with---update-mail)"
+below). It builds the candidate, verifies it on a scratch port and backs up the
+database while the running Mail keeps serving, then switches, and puts the
+previous build back if the new one does not answer. A re-run without it
+(default `keep`) does not switch and reports the difference with a `notice:`.
+`AGENTSTACK_MAIL_UPDATE=auto` (opt-in) switches only when it safely can, and
+otherwise keeps the running build and lets the install succeed. The manual procedure below is for
+layouts `--update-mail` refuses, and for checking what each stage does.
+
 **Scope.** The commands assume the default layout: install dir `~/.agentstack`,
 no `--install-dir`, and no `AGENTSTACK_MAIL_*` overrides at install time. A
 custom install is out of scope: the values this document reads from `env.sh`
@@ -27,8 +38,13 @@ pre-flight (step 0) and the offline verification (step 3) were then re-run
 exactly as written here against the installed service, and the stop
 conditions of steps 2 and 3 were exercised in a harmless bash control with
 stubbed `uv`, `git` and `lsof`, including a stale value left in the parent shell, a failing `git`, and a missing or failing `lsof`. Steps 4 to 7 as written here follow that live run
-but have not been re-executed as a whole. The rollback section is read from
-the installer's source and has not been executed.
+but have not been re-executed as a whole. The manual rollback in the rollback
+section is read from the installer's source and has not been executed.
+`--update-mail` is exercised by tests that start real servers on a temporary
+HOME, a temporary state root and free ports (`tests/test_install_mail_update.py`):
+the switch, going back to the previous build, the automatic rollback when the
+new build does not answer, and not stopping anything when offline verification
+fails. It has not yet been run on a live machine.
 
 ## What the installer does, and does not do
 
@@ -40,8 +56,11 @@ autostart units on every run. For ORRERY Mail it takes one of two paths:
   expected state database, the listener is adopted: its render is recorded in
   `env.sh` and the service is **not** touched. If the port is occupied but the
   occupant does not answer as ORRERY Mail, or serves a different database, the
-  run stops with an error. This adoption path is every ordinary re-run, which
-  is why a re-run alone never switches the Mail build. The dashboard's
+  run stops with an error. Once adopted, a running build that differs from
+  this checkout's is, by default (`keep`), only reported with a `notice:`, and
+  the service is **not** touched. `--update-mail` and `auto` go on to the
+  switch below (none of them does anything when the package tree is identical
+  in both commits). The dashboard's
   `/api/version` reports the package version, not the build behind the port.
 - **Nothing answers.** The installer provisions a candidate for the checkout's
   exact commit (an absent candidate is built; an existing but incomplete one
@@ -49,8 +68,196 @@ autostart units on every run. For ORRERY Mail it takes one of two paths:
   `agentstack-mailctl`, points `env.sh` and the autostart unit at the render,
   and checks that the served database is the shared one.
 
-An update is therefore "stop the old service, then run the installer", with
-the autostart unit held back so it cannot restart the old build in between.
+A manual update is therefore "stop the old service, then run the installer",
+with the autostart unit held back so it cannot restart the old build in
+between. A switch (`auto` or `--update-mail`) performs the step between those
+two paths inside the installer.
+
+## Replacing the build with `--update-mail`
+
+```bash
+./scripts/install.sh --print-mail-plan         # what would happen to Mail, one line (reads only)
+./scripts/install.sh --dry-run                 # show the whole plan
+./scripts/install.sh --update-mail             # switch (exit 1 if it cannot)
+AGENTSTACK_MAIL_UPDATE=auto ./scripts/install.sh   # switch only when it safely can (opt-in)
+./scripts/install.sh                           # never switch (default keep, same as --keep-mail)
+```
+
+| Option | When the running build differs | When it cannot switch or the switch fails |
+| --- | --- | --- |
+| `AGENTSTACK_MAIL_UPDATE=auto` (opt-in) | switch through steps 1 to 5 below, but only for a deployment managed by `agentstack-mailctl`, after verification passes, and when the expected outage is within `AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET` (default 8 s) | keep the running build, warn, exit 0 |
+| `--update-mail` (`AGENTSTACK_MAIL_UPDATE=update`) | switch; the outage budget does not apply (a person chose the time) | exit 1 |
+| none, `--keep-mail` (`AGENTSTACK_MAIL_UPDATE=keep`) | do not switch; a `notice:` reports the difference | — |
+
+The option is `--mail auto|update|keep` (or `--mail=VALUE`); `--update-mail`
+and `--keep-mail` are aliases. An option wins over `AGENTSTACK_MAIL_UPDATE`
+(cockpit's update.sh passes an option, so an outer environment value cannot
+override it). `AGENTSTACK_MAIL_UPDATE` is a
+per-run choice and is never recorded in `env.sh`, so a value chosen once does
+not stick to every later update. `auto` is not the default yet: before it
+becomes one, it needs an outage deadline that covers a rollback, and a check
+that the previous build still runs on the updated database
+([design note](agentstack-mail-update-design.en.md)). The
+expected outage is the time the candidate took to answer against the database
+snapshot during verification, plus 1.5 s for the stop and the health poll.
+
+The run ends with one machine-readable line; `--dry-run` prints the same
+fields as `mail-plan:`. No value contains a space, and the reason is a fixed
+code.
+
+```text
+mail-result: <installed|switched|kept|unchanged|refused|rolled-back> mode=<auto|update|keep> from=<commit> to=<commit> running=<commit> outage_s=<seconds> reason=<code>
+mail-plan: <install|switch|keep|unchanged|refuse> mode=<…> running=<commit> to=<commit> reason=<code>
+```
+
+`from` is the build serving before this run (empty when there was none or it
+could not be identified), `to` is this checkout's build, and `running` is the
+build serving now (`to` after switched or installed, otherwise `from`). A
+failed rollback, a refused `--update-mail`, or an interruption prints no line
+and exits non-zero: a reader must treat a missing line as a failure.
+
+Reason codes: `no_running_mail`, `newer_build`, `same_candidate`,
+`same_package`, `keep_default`, `keep_requested`, `not_mailctl_managed`,
+`deployment_unidentified`, `verify_failed`, `outage_over_budget`, `outage_unknown`,
+`backup_failed`, `start_failed_rolled_back`, `adopted`, and (from
+`--print-mail-plan` only) `plan_unavailable`. `--print-mail-plan` reads only the
+pidfile, the render and git, needs no project key, and always exits 0 with one
+line. It is a plan, not a promise: the real run may keep the running build
+after verification.
+
+Once the adoption path has identified the running deployment, and this
+checkout's candidate (`candidates/<commit>/venv`) differs from it, the
+installer proceeds in this order. The running Mail keeps serving through
+steps 1 to 4.
+
+1. **Prepare the candidate.** A complete one is reused; an absent one is built
+   from a clean commit (an incomplete one stops the run). A new render is
+   written.
+2. **Verify it offline.** A snapshot of the shared database is taken with the
+   SQLite backup API into `/tmp/orrery-mail-verify.*` (mode 700), and the
+   candidate is started on a free loopback port (fixed with
+   `AGENTSTACK_MAIL_UPDATE_VERIFY_PORT`) in an empty process environment. If
+   that port is in use, or is the running Mail's own port, nothing is started
+   and the result is `not-switched`, so that whatever answers there is never
+   read as the candidate. The scratch service env comes from the same function as the
+   production render, so database, archive, signals and management socket all
+   point into the scratch directory. `health_check` on both `/mcp` and `/api`
+   must return the scratch database, the startup DDL must not have removed or
+   redefined an existing table, column, index or trigger, and
+   `PRAGMA quick_check` must be `ok`. Progress is printed every 10 s while it
+   waits. The snapshot is deleted whatever the outcome; only the server log is
+   kept, at `mail-service/runtime/mail-update-verify.log`. Interrupted during
+   verification by Ctrl-C or SIGTERM, the installer stops the scratch server and
+   deletes the snapshot before exiting (status 130; the running Mail was never
+   stopped).
+3. **Back up the database** to
+   `mail-service/backups/storage-<UTC>-before-<commit>.sqlite3` (mode 600); the
+   three most recent are kept (`AGENTSTACK_MAIL_UPDATE_BACKUPS`). Only the build
+   is rolled back automatically, never the database. The backup is for a person
+   to use if the new build turns out to have damaged data.
+4. **Switch.** `agentstack-mailctl stop` stops the previous runner (its stop
+   marker holds the autostart sweep back), and `agentstack-mailctl start` runs
+   the new render. Health on the endpoint must name the shared database and the
+   pidfile must name the new runner.
+5. **Put it back if it does not answer.** The new runner is stopped, the
+   previous render is started again, and the same checks are made. The previous
+   candidate, render and runner are immutable and were never rewritten.
+
+`env.sh`, the autostart unit, `connections/local.json` and
+`install-state.json` are then written from whichever deployment is actually
+serving. `agent_mail.update` in `install-state.json` records the result
+(`switched`, `rolled-back`, `not-switched`), the reason and its code, the
+mode, how long Mail was actually down (`outage_seconds`), the previous and
+requested render and candidate, and the backup path.
+
+| Result | Mail | Exit status (`auto`) | Exit status (`--update-mail`) |
+| --- | --- | --- | --- |
+| `switched` | the new build | 0 | 0 |
+| `not-switched` (failed in 1 to 3, or the expected outage is over budget) | the previous build, never stopped | 0 (warning) | 1 |
+| `rolled-back` (4 failed, 5 succeeded) | the previous build, after an outage of seconds up to the start grace | 0 (warning) | 1 |
+| rollback failed | possibly down; the error states the state and the next action | 1 (immediately) | 1 (immediately) |
+| interrupted during the switch (Ctrl-C, SIGTERM, terminal closed) | left as is if `env.sh` already names the new build; otherwise the previous build is put back | 130 | 130 |
+
+With `not-switched` and `rolled-back` the rest of the install still completes
+against the previous build. With `--update-mail`, exit status 1 says that the
+update that was asked for did not happen. Under `auto` no update was asked
+for, so the run exits 0 and reports it through a warning and the result line.
+
+**Going back to the previous build.** Pin the previous candidate and run the
+same operation. Its render comes from the same inputs, has the same path, and
+is reused as it is.
+
+```bash
+AGENTSTACK_MAIL_CANDIDATE_ID=<previous commit> \
+AGENTSTACK_MAIL_SERVICE_VENV=~/.agentstack/mail-service/candidates/<previous commit>/venv \
+  ./scripts/install.sh --update-mail
+```
+
+**What is and is not affected.**
+
+- **Connections.** The server uses stateless HTTP, so a switch loses no
+  session. Requests that arrive between the stop and the new server answering
+  (12 s in the earlier manual run) are refused. How a client comes back
+  differs (measured on 2026-10-02 with a temporary HOME and a separate port):
+  the stdio proxy a launcher binds (Claude and Codex children) connects per
+  call and works again from the next call. Top-level Codex (`url` in
+  `~/.codex/config.toml`) came back on its next call even after 71 s.
+  Top-level Claude Code (`type: http` in `~/.claude.json`) reconnected by
+  itself after outages up to 15 s, but stayed disconnected after 18 s or more
+  until orrery-mail was reconnected from `/mcp`. After every stop, however
+  short, the installer prints how long Mail was down and what to check in each
+  running Claude Code session (`/mcp` shows orrery-mail as connected, and a
+  small call such as health_check succeeds). A Mail call that failed during the
+  stop may still have been carried out, with only the answer lost, so check
+  before repeating it (a send in the recipient's inbox or your outbox, a
+  registration with `whois`, a spawn or resume in the dashboard). The canonical
+  text is `mail_update_reconnect_hint` in `scripts/install.sh`; setup.sh shows
+  the same lines. The installer's health check and
+  a selftest show that Mail answers, not that a session that was already
+  running got its connection back.
+- **Tokens and credentials.** Agent tokens live in the shared database, and the
+  client-side files (`~/.agentstack/runtime` and the like) are not touched. A
+  build change does not change them.
+- **Running sessions and bound proxies.** Nothing needs restarting or
+  re-registering. The tests check that an agent registered before the switch
+  sends and receives with the same owner token afterwards, and that a wrong
+  token is refused. The `runtime_status` of a proxy a launcher bound
+  returns `state: "bound"` and `agent_id: null`. That says only that the
+  binding exists; Mail is not contacted. To see whether Mail is reachable,
+  call `fetch_inbox` or another tool (a proxy from 2026.09.30.4 or earlier
+  returned `state: "registering"` here even in normal operation, which was no
+  evidence of being stuck either).
+- **systemd timer (WSL2 and others).** The unit only reads `env.sh` and runs
+  `agentstack-mailctl start`; it names no render. A timer firing after the
+  switch finds the new build and does nothing (the tests run the unit's command
+  as written to check this).
+- **Enrollment.** `server_instance_id` is stored in the database's
+  `mail_instances`, so it keeps its value. `expected_server_instance_id` in
+  `connections/local.json` is preserved and only `mail_env` is rewritten to the
+  new render. The management socket path is derived from the state root and
+  stays the same.
+- **Database, archive, signals.** The same state root stays in use. Only
+  additive startup DDL is accepted; a build that removes or redefines an
+  existing table, column, index or trigger stops at verification.
+- **Autostart.** The stop marker holds the sweep back during the switch, and
+  `start` clears it. The unit reads `env.sh`, so it starts the new render as
+  soon as the installer has rewritten `env.sh`.
+
+**Out of scope.** Only a runner started by `agentstack-mailctl` (the pidfile
+names a live runner) is replaced. A listener whose deployment cannot be
+identified and a service supervised directly by launchd are out of scope, and
+nothing is stopped: `--update-mail` ends with an error, and `auto` keeps the
+running build and carries on (`refused`). Overrides of the state root,
+service root and endpoint (`AGENTSTACK_MAIL_*`, `AGENTSTACK_MCP_URL`) take the
+same path, and the tests run with them overridden. A non-default
+`--install-dir` is not refused either, but is not itself tested.
+
+Time limits: waiting for the verification server,
+`AGENTSTACK_MAIL_UPDATE_VERIFY_TIMEOUT` (default 120 s); waiting for the new
+build to start, `AGENTSTACK_MAIL_UPDATE_START_GRACE` (default: the
+controller's `AGENTSTACK_MAIL_START_GRACE`, 180 s). The rollback start waits
+with the controller's default grace. The longest expected outage `auto` will
+switch with: `AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET` (default 8 s).
 
 ## Layout
 
@@ -379,6 +586,9 @@ pre-flight has also been checked under `zsh`.
 
 ## Rollback
 
+Going back with `--update-mail` and the previous candidate pinned is the route
+the tests exercise (section above). What follows is the manual route.
+
 **Read from the installer's source; not executed.** Treat it as a plan to
 verify on a scratch install before relying on it.
 
@@ -425,6 +635,44 @@ requests. Measuring the runner and concluding "the fix is live" is a mistake
 that has already been made here. So is reading the dashboard's `/api/version`:
 that is the package version, and it changes on every re-run whether or not
 Mail was switched.
+
+**What the running build lacks.** `agentstack-doctor` reads the running Mail's
+`tools/list` once, and for each feature this install relies on
+(`scripts/lib/mail_required_features.json`; for example `existing_agent_id` on
+`register_agent`, which lets an old-format Claude child resume with Mail) that
+is missing, prints a `warn:` with the fix (`--update-mail`). Mail itself works,
+so doctor's exit status does not change. It ends with one line for setup.sh to
+read:
+
+```text
+mail-features: status=<ok|missing|unknown> missing=<tool.parameter,...> running=<commit>
+```
+
+`unknown` means Mail could not be asked, not that every feature is present.
+
+**The notice about an old Mail.** When the Mail this run did not replace is
+**shown to be** older than this checkout's build (its commit is an ancestor of
+the checkout's), install.sh prints a short notice before the result line. When
+the running build is newer, it says that the checkout is older and should be
+pulled before updating Mail from it; when which is newer cannot be told
+(diverged, or not a commit of this checkout), it says so. Neither suggests an
+update from this checkout, since an update from an older checkout would take
+Mail back. A missing feature is reported in every case, but it is not proof
+that updating from this checkout adds it, so then the notice says to update
+from a checkout at least as new as the running build. The notice gives what does not work, how to update
+(`./scripts/install.sh --mail update` / `./scripts/setup.sh --mail update`),
+the risk of updating (Mail usually stops for a few seconds, but if the new
+build does not start, the switch and the return to the old one can take
+minutes, with no short limit guaranteed; Mail calls fail meanwhile; children
+and Codex reconnect by themselves; a top-level Claude Code session may not:
+with Claude Code 2.1.287 in testing, stops of 8 s and 15 s reconnected by
+themselves and stops of 18 s and 19 s did not), and
+what to do then (in that session, `/mcp`, choose orrery-mail, shown as
+"✘ failed", then Reconnect, not Authenticate). doctor prints the same notice
+when a feature is missing. The text lives in `scripts/lib/mail_update_notice.py`;
+the cockpit's setup.sh shows it through `install.sh --print-mail-update-advice`
+(reads only, always exits 0, prints only when Mail is shown to be older, and
+leaves out the update command lines).
 
 ## History
 

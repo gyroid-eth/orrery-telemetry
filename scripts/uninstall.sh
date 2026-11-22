@@ -61,8 +61,13 @@ if [[ ! -x "$MCP_MERGE_TOOL" && -f "$SCRIPT_DIR/lib/merge_claude_mcp.py" ]]; the
   MCP_MERGE_TOOL="$SCRIPT_DIR/lib/merge_claude_mcp.py"
 fi
 
+# env.sh is removed below, so read the work folder first.
+# The line is only for the closing note: a missing or odd env.sh must not stop the uninstall.
+PROJECT_FOLDER="$({ sed -n 's/^export AGENTSTACK_PROJECT_KEY=//p' "$INSTALL_DIR/env.sh" 2>/dev/null | head -n 1 | tr -d "'\"" ; } || true)"
+
 python3 - "$MANIFEST" "$DRY_RUN" "$PURGE_DATA" "$MERGE_TOOL" \
-  "$MCP_MERGE_TOOL" <<'PY'
+  "$MCP_MERGE_TOOL" "$SCRIPT_DIR/lib/install_examples.py" <<'PY'
+import importlib.util
 import json
 import os
 import pathlib
@@ -168,6 +173,19 @@ def remove_claude_mcp():
         argv.append("--dry-run")
     subprocess.run(argv, check=True)
 
+# Before removing services/files, validate and remove only recorded marker spans.
+# Older installs without receipts retain the old manual-cleanup notice.
+instruction_refs = data.get("instruction_receipts", [])
+# A crash after receipt completion but before install-state publication must
+# not hide pending work from purge. The fixed ledger remains the sole record.
+ledger_root = pathlib.Path(data.get("install_dir", "")) / "backups/instruction-migration"
+instruction_refs = sorted(set(instruction_refs) | {str(p) for p in ledger_root.glob("*/*/receipt.json")})
+instruction_engine = pathlib.Path(data.get("install_dir", "")) / "bin/lib/instruction_blocks.py"
+if instruction_refs:
+    import runpy
+    engine = runpy.run_path(str(instruction_engine))
+    engine["uninstall_recorded"](data["install_dir"], instruction_refs, dry_run=dry_run, purge=purge_data)
+
 for svc in data.get("services", []):
     kind = svc.get("kind")
     if kind == "launchd":
@@ -215,8 +233,64 @@ for svc in data.get("services", []):
                         except ProcessLookupError:
                             pass
 
+# The phone reader job is created later by `agentstack-mobile`, not by the
+# installer, so it is not in the services list. There is one such plist per
+# HOME, whichever install wrote it, so stop it and remove it only when it
+# belongs to the install being removed: the default install under this HOME,
+# a manifest that records it, or a job whose --config is this install's
+# mobile.json or whose relay script is inside this install (launchd would keep
+# restarting a script that is about to be removed). Uninstalling an install
+# elsewhere (--install-dir) leaves it.
+MOBILE_LABEL = "org.agentstack.mobile-relay"
+mobile_plist = pathlib.Path.home() / f"Library/LaunchAgents/{MOBILE_LABEL}.plist"
+
+def same_path(a, b):
+    try:
+        return pathlib.Path(a).expanduser().resolve() == pathlib.Path(b).expanduser().resolve()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+def mobile_job_belongs_here():
+    install_dir = manifest_path.parent
+    if same_path(install_dir, pathlib.Path.home() / ".agentstack"):
+        return True
+    if any(same_path(f, mobile_plist) for f in data.get("owned_files", []) if isinstance(f, str)):
+        return True
+    if any(isinstance(svc, dict) and svc.get("label") == MOBILE_LABEL for svc in data.get("services", [])):
+        return True
+    try:
+        import plistlib
+        args = [a for a in plistlib.loads(mobile_plist.read_bytes()).get("ProgramArguments") or [] if isinstance(a, str)]
+    except Exception:
+        return False
+    if "--config" in args[:-1] and same_path(args[args.index("--config") + 1], install_dir / "mobile.json"):
+        return True
+    try:
+        script = pathlib.Path(args[1]).expanduser().resolve()
+        return len(args) > 1 and script.is_relative_to(install_dir.resolve())
+    except (IndexError, OSError, RuntimeError, ValueError):
+        return False
+
+if mobile_plist.is_file() and not mobile_plist.is_symlink() and mobile_job_belongs_here():
+    run(["launchctl", "bootout", f"gui/{os.getuid()}/org.agentstack.mobile-relay"])
+    if dry_run:
+        print(f"DRY-RUN would remove: {mobile_plist}")
+    else:
+        mobile_plist.unlink(missing_ok=True)
+
 remove_claude_mcp()
 remove_settings_hooks()
+
+# Examples have separate content ownership. Run before the library itself is
+# removed with the ordinary bin payload; never recursively purge this subtree.
+if data.get("example_files") or data.get("example_dirs"):
+    # This module lives inside the installed payload. Bytecode caches must not
+    # create unowned files that prevent a clean uninstall.
+    sys.dont_write_bytecode = True
+    example_spec = importlib.util.spec_from_file_location("install_examples", sys.argv[6])
+    example_module = importlib.util.module_from_spec(example_spec)
+    example_spec.loader.exec_module(example_module)
+    example_module.remove_examples(data, dry_run=dry_run)
 
 owned_files = [safe_path(p) for p in data.get("owned_files", [])]
 if manifest_path not in owned_files:
@@ -246,6 +320,41 @@ for record in data.get("skill_links", []):
     if not dry_run:
         path.unlink()
 
+for raw in data.get("managed_harness_roots", []):
+    path = safe_path(raw)
+    install_root = pathlib.Path(data["install_dir"]).resolve()
+    bases = {install_root / "harnesses" / h for h in ("dsh", "hermes")}
+    if path.resolve().parent not in bases or path.name == "profiles":
+        raise RuntimeError("refusing unexpected managed harness root")
+    if not path.exists():
+        continue
+    receipt = path / ".orrery-managed-install.json"
+    if not receipt.is_file() or json.loads(receipt.read_text()).get("complete") is not True:
+        raise RuntimeError("managed harness ownership receipt missing; retained root")
+    say("remove installer-owned managed harness", path)
+    if not dry_run:
+        for child in path.iterdir():
+            if child.name == "profiles" and child.is_dir() and not child.is_symlink():
+                print(f"kept user profiles: {child}")
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+        current = path.parent / "current.json"
+        if current.is_file() and json.loads(current.read_text()).get("generation") == path.name:
+            current.unlink()
+        # Empty scaffolding can go; profiles with memories/skills remain.
+        for directory in (path.parent / "profiles", path.parent, path.parent.parent):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+
 for path in owned_files:
     if path in skill_link_paths:
         continue
@@ -259,6 +368,11 @@ for path in owned_files:
             raise RuntimeError(f"manifest owned_files entry is a directory: {path}")
 
 if purge_data:
+    instruction_backups = pathlib.Path(data.get("install_dir", "")) / "backups/instruction-migration"
+    if instruction_refs:
+        say("purge private full-file instruction backups", instruction_backups)
+        if not dry_run and instruction_backups.exists():
+            shutil.rmtree(instruction_backups)
     for raw in data.get("purge_paths", []):
         path = safe_path(raw)
         say("purge exact path", path)
@@ -282,3 +396,12 @@ for raw in sorted(data.get("owned_dirs", []), key=lambda p: len(str(p)), reverse
         except OSError:
             print(f"kept non-empty directory: {path}", file=sys.stderr)
 PY
+
+echo
+if [[ "$DRY_RUN" == true ]]; then echo "Left in place (dry run; nothing was removed above):"; else echo "Left in place:"; fi
+echo "  source folders  ~/orrery-telemetry, and the folder you cloned this from if elsewhere (remove: rm -rf ~/orrery-telemetry)"
+if [[ -n "$PROJECT_FOLDER" ]]; then
+  echo "  work folder     $PROJECT_FOLDER   (yours; unrecorded or edited instruction blocks remain for manual review)"
+fi
+echo "  ORRERY cockpit  ~/orrery   (stop it first, then: rm -rf ~/orrery)"
+echo "  uv              ~/.local/bin/uv, if the installer added it"

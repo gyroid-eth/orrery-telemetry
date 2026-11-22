@@ -1,0 +1,903 @@
+from __future__ import annotations
+
+import copy
+import io
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+
+import pytest
+
+from service_teardown import TEST_LABEL_PREFIX
+
+ROOT = Path(__file__).resolve().parents[1]
+SPEC = importlib.util.spec_from_file_location('codex_plugin_trust', ROOT/'scripts/codex_plugin_trust.py')
+trust = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(trust)
+OWN_SPEC = importlib.util.spec_from_file_location('codex_plugin_ownership', ROOT/'scripts/codex_plugin_ownership.py')
+ownership = importlib.util.module_from_spec(OWN_SPEC)
+OWN_SPEC.loader.exec_module(ownership)
+
+
+@pytest.fixture
+def fresh_python_entry(tmp_path):
+    """Synthetic module and login shell: no Mail, native process or credentials."""
+    package = tmp_path/'agentstack_mail';package.mkdir()
+    (package/'__init__.py').write_text('')
+    (package/'fresh_client.py').write_text(
+        'import json,sys\njson.load(sys.stdin)\nprint(sys.executable)\n')
+    core = tmp_path/'core';(core/'hooks').mkdir(parents=True)
+    runtime = tmp_path/'launch/runtime';runtime.mkdir(parents=True)
+    home = tmp_path/'providers/codex';home.mkdir(parents=True)
+    for name in ('check-codex-file-reservation.py','deny-llm-key-read.py'):
+        (core/'hooks'/name).write_text(
+            'import json,sys\nv=json.load(sys.stdin)\nprint(sys.executable)\nsys.exit(2 if v.get("deny") else 0)\n')
+    (core/'hooks/deny-llm-key-read.sh').write_bytes((ROOT/'hooks/deny-llm-key-read.sh').read_bytes())
+    old = tmp_path/'old-python'
+    old.write_text('#!/bin/bash\nprintf old-python-used >&2\nexit 73\n');old.chmod(0o700)
+    login = tmp_path/'synthetic-login-shell'
+    login.write_text('#!/bin/bash\nexport AGENTSTACK_PYTHON='+shlex.quote(str(old))
+                     +'\nexec /bin/bash -c "$2"\n');login.chmod(0o700)
+    env = dict(os.environ, PYTHONPATH=str(tmp_path), AGENTSTACK_RUNTIME_MODE='fresh',
+               AGENTSTACK_FRESH_CLIENT_CONTEXT=str(tmp_path/'unused-context'),
+               AGENTSTACK_FRESH_LAUNCH_ID='synthetic-launch', AGENTSTACK_FRESH_LAUNCH_NONCE='synthetic-nonce',
+               AGENTSTACK_FRESH_PYTHON=sys.executable,
+               AGENTSTACK_FRESH_WRAPPER_ROOT=str(core), AGENTSTACK_FRESH_RUNTIME_DIR=str(runtime),
+               AGENTSTACK_FRESH_CODEX_HOME=str(home), AGENTSTACK_FRESH_CODEX_BIN=sys.executable,
+               AGENTSTACK_HOME=str(core), AGENTSTACK_LABEL_PREFIX=TEST_LABEL_PREFIX)
+    for key in ('AGENTSTACK_CLIENT_CONFIG','AGENTSTACK_GLOBAL_SERVER_CONFIG'):
+        env.pop(key,None)
+    return login, env
+
+
+def fresh_python_argv(entry):
+    if entry == 'session-hook':return ['/bin/bash',str(ROOT/'bin/agentstack-runtime-client'),entry]
+    name = {'hook':'run-hook.sh','reservation':'run-reservation-guard.sh','key-read':'run-key-read-guard.sh'}[entry]
+    return ['/bin/bash',str(ROOT/'integrations/codex_app/plugin/scripts'/name)]
+
+
+@pytest.mark.parametrize('entry', ['hook','session-hook','reservation','key-read'])
+def test_fresh_codex_restores_owned_environment_after_login_override(fresh_python_entry, tmp_path, entry):
+    login, env = fresh_python_entry
+    fields = {'AGENTSTACK_PYTHON':env['AGENTSTACK_FRESH_PYTHON'],
+              'AGENTSTACK_HOME':env['AGENTSTACK_FRESH_WRAPPER_ROOT'],
+              'AGENTSTACK_LABEL_PREFIX':TEST_LABEL_PREFIX,
+              'AGENTSTACK_RUNTIME_DIR':env['AGENTSTACK_FRESH_RUNTIME_DIR'],
+              'AGENTSTACK_HOOKS_DIR':str(Path(env['AGENTSTACK_FRESH_WRAPPER_ROOT'])/'hooks'),
+              'AGENTSTACK_CODEX_BIN':env['AGENTSTACK_FRESH_CODEX_BIN'],
+              'CODEX_HOME':env['AGENTSTACK_FRESH_CODEX_HOME'], 'AGENTSTACK_RUNTIME_MODE':'fresh'}
+    probe = 'import os,json,sys\njson.load(sys.stdin)\nprint(json.dumps({k:os.environ.get(k) for k in '+repr(list(fields))+'}))\n'
+    if entry in ('hook','session-hook'):(tmp_path/'agentstack_mail/fresh_client.py').write_text(probe)
+    else:
+        name = 'check-codex-file-reservation.py' if entry == 'reservation' else 'deny-llm-key-read.py'
+        (Path(env['AGENTSTACK_HOME'])/'hooks'/name).write_text(probe)
+    # Keep the test service label while overwriting only launch-owned values.
+    overwritten = [k+'='+('/wrong' if k!='AGENTSTACK_RUNTIME_MODE' else 'legacy')
+                   for k in fields if k!='AGENTSTACK_LABEL_PREFIX']
+    login.write_text('#!/bin/bash\nexport '+shlex.join(overwritten)+'\nexec /bin/bash -c "$2"\n')
+    result = subprocess.run(['/bin/bash',str(login),'-lc',shlex.join(fresh_python_argv(entry))],env=env,
+        input='{"hook_event_name":"SessionStart"}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == fields
+
+
+@pytest.mark.parametrize('entry', ['hook','session-hook','reservation','key-read'])
+def test_fresh_codex_hook_uses_pinned_python_after_login_override(fresh_python_entry, entry):
+    login, env = fresh_python_entry
+    argv = fresh_python_argv(entry)
+    result = subprocess.run([str(login),'-lc',shlex.join(argv)],env=env,
+        input=json.dumps({'hook_event_name':'SessionStart'}),capture_output=True,text=True,timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == sys.executable
+    assert 'old-python-used' not in result.stderr
+
+
+@pytest.mark.parametrize('entry', ['hook','session-hook','reservation','key-read'])
+@pytest.mark.parametrize('invalid', ['missing','empty','relative','absent','nonexecutable','directory'])
+def test_fresh_codex_hook_rejects_missing_or_invalid_python(fresh_python_entry, tmp_path, entry, invalid):
+    login, env = fresh_python_entry
+    blocked = tmp_path/'not-executable';blocked.write_text('not an interpreter');blocked.chmod(0o600)
+    if invalid == 'missing':env.pop('AGENTSTACK_FRESH_PYTHON')
+    else:env['AGENTSTACK_FRESH_PYTHON'] = {
+        'empty':'','relative':'relative/python','absent':str(tmp_path/'absent'),
+        'nonexecutable':str(blocked),'directory':str(tmp_path)}[invalid]
+    argv = fresh_python_argv(entry)
+    result = subprocess.run([str(login),'-lc',shlex.join(argv)],env=env,
+        input=json.dumps({'hook_event_name':'SessionStart'}),capture_output=True,text=True,timeout=10)
+    assert result.returncode == 2
+    assert result.stderr == 'FRESH_CODEX_PYTHON_UNAVAILABLE\n'
+    assert result.stdout == ''
+
+
+@pytest.mark.parametrize('entry', ['hook','session-hook','reservation','key-read'])
+@pytest.mark.parametrize('damage', ['root-missing','home-missing','runtime-mismatch','binary-missing','nonce-missing'])
+def test_fresh_codex_refuses_incomplete_or_inconsistent_environment(fresh_python_entry, tmp_path, entry, damage):
+    _, env = fresh_python_entry
+    if damage == 'root-missing':env.pop('AGENTSTACK_FRESH_WRAPPER_ROOT')
+    elif damage == 'home-missing':env['AGENTSTACK_FRESH_CODEX_HOME']=str(tmp_path/'absent-home')
+    elif damage == 'runtime-mismatch':env['AGENTSTACK_FRESH_RUNTIME_DIR']=str(tmp_path)
+    elif damage == 'binary-missing':env['AGENTSTACK_FRESH_CODEX_BIN']=str(tmp_path/'absent')
+    else:env.pop('AGENTSTACK_FRESH_LAUNCH_NONCE')
+    result=subprocess.run(fresh_python_argv(entry),env=env,input='{}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == 2 and result.stderr == 'FRESH_CODEX_ENV_UNAVAILABLE\n'
+    assert result.stdout == ''
+
+
+@pytest.mark.parametrize('entry', ['hook','session-hook','reservation','key-read'])
+def test_fresh_codex_refuses_legacy_context_conflict(fresh_python_entry, entry):
+    _, env = fresh_python_entry
+    env['AGENTSTACK_GLOBAL_SERVER_CONFIG']='/unrelated-legacy-context'
+    result=subprocess.run(fresh_python_argv(entry),env=env,input='{}',capture_output=True,text=True,timeout=10)
+    expected = 'FRESH_CONTEXT_REQUIRED' if entry == 'session-hook' else 'FRESH_CONTEXT_CONFLICT'
+    assert result.returncode == 2 and result.stderr == expected+'\n'
+    assert result.stdout == ''
+
+
+@pytest.mark.parametrize('entry', ['hook','reservation','key-read'])
+def test_fresh_codex_missing_payload_prelude_is_closed(fresh_python_entry, tmp_path, entry):
+    _, env = fresh_python_entry
+    runner=tmp_path/'orphan-runner.sh';runner.write_bytes(Path(fresh_python_argv(entry)[1]).read_bytes())
+    result=subprocess.run(['/bin/bash',str(runner)],env=env,input='{}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == 2 and result.stderr == 'FRESH_CODEX_ENV_UNAVAILABLE\n'
+
+
+@pytest.mark.parametrize('entry', ['hook','session-hook','reservation','key-read'])
+def test_fresh_codex_accepts_launch_pinned_shared_provider_home(fresh_python_entry, tmp_path, entry):
+    _, env = fresh_python_entry
+    shared=tmp_path/'parent-client/providers/codex';shared.mkdir(parents=True)
+    env['AGENTSTACK_FRESH_CODEX_HOME']=str(shared)
+    result=subprocess.run(fresh_python_argv(entry),env=env,
+        input='{"hook_event_name":"SessionStart"}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == sys.executable
+
+
+@pytest.mark.parametrize('entry', ['reservation','key-read'])
+def test_fresh_codex_guard_import_failure_is_closed(fresh_python_entry, entry):
+    login, env = fresh_python_entry
+    name = 'check-codex-file-reservation.py' if entry == 'reservation' else 'deny-llm-key-read.py'
+    (Path(env['AGENTSTACK_HOME'])/'hooks'/name).write_text('raise ImportError("synthetic broken interpreter environment")\n')
+    # Preserve the chosen Python while still exercising each guard's import failure.
+    result = subprocess.run(fresh_python_argv(entry),env=dict(env,AGENTSTACK_PYTHON=sys.executable),
+        input='{}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == 2
+    assert 'FRESH_CODEX_GUARD_UNAVAILABLE' in result.stderr
+
+
+@pytest.mark.parametrize('entry', ['reservation','key-read'])
+def test_fresh_codex_guard_policy_denial_stays_closed(fresh_python_entry, entry):
+    login, env = fresh_python_entry
+    result = subprocess.run([str(login),'-lc',shlex.join(fresh_python_argv(entry))],env=env,
+        input='{"deny":true}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == 2
+    assert result.stdout.strip() == sys.executable
+
+
+@pytest.mark.parametrize('entry', ['reservation','key-read'])
+def test_legacy_guard_interpreter_failure_keeps_existing_behavior(fresh_python_entry, entry):
+    _, env = fresh_python_entry
+    env = dict(env, AGENTSTACK_RUNTIME_MODE='legacy', AGENTSTACK_PYTHON=str(Path(env['PYTHONPATH'])/'old-python'))
+    for key in ('AGENTSTACK_FRESH_CLIENT_CONTEXT','AGENTSTACK_FRESH_LAUNCH_ID','AGENTSTACK_FRESH_PYTHON'):
+        env.pop(key,None)
+    result = subprocess.run(fresh_python_argv(entry),env=env,input='{}',capture_output=True,text=True,timeout=10)
+    assert result.returncode == (2 if entry == 'reservation' else 0)
+    assert 'old-python-used' in result.stderr
+
+
+@pytest.mark.parametrize('entry', ['hook','reservation','key-read'])
+def test_fresh_desktop_hook_without_cli_launch_keeps_existing_python(tmp_path, entry):
+    plugin = tmp_path/'plugin';(plugin/'scripts').mkdir(parents=True)
+    runner = plugin/'scripts/run-hook.sh'
+    runner.write_bytes(Path(fresh_python_argv(entry)[1]).read_bytes())
+    source = plugin/'src/agentstack_codex_app';source.mkdir(parents=True)
+    (source/'hook_entry.py').write_text('import sys\nprint(sys.executable)\n')
+    (source/'__init__.py').write_text('')
+    (source/'fresh_bridge.py').write_text('import sys\nprint(sys.executable)\n')
+    core = tmp_path/'core';(core/'hooks').mkdir(parents=True)
+    (core/'hooks/deny-llm-key-read.sh').write_text('#!/bin/bash\nprintf "%s\\n" '+shlex.quote(sys.executable)+'\n')
+    env = dict(os.environ,AGENTSTACK_RUNTIME_MODE='fresh',AGENTSTACK_PYTHON=sys.executable,
+               AGENTSTACK_HOME=str(core), AGENTSTACK_LABEL_PREFIX=TEST_LABEL_PREFIX,
+               AGENTSTACK_FRESH_CLIENT_CONTEXT=str(tmp_path/'unused-context'),
+               AGENTSTACK_CODEX_APP_RUNTIME_DIR=str(tmp_path/'desktop-runtime'))
+    for key in ('AGENTSTACK_FRESH_LAUNCH_ID','AGENTSTACK_FRESH_PYTHON',
+                'AGENTSTACK_CLIENT_CONFIG','AGENTSTACK_GLOBAL_SERVER_CONFIG'):
+        env.pop(key,None)
+    result = subprocess.run(['/bin/bash',str(runner)],env=env,capture_output=True,text=True,timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == sys.executable
+
+
+def test_read_transport_optional_context_keeps_trust_defaults(tmp_path, monkeypatch):
+    calls = []
+    class Process:
+        stdin = io.BytesIO();stdout = io.BytesIO()
+        def poll(self):return 0
+    class Selector:
+        def register(self, *args):pass
+        def close(self):pass
+    def start(argv, **kwargs):
+        calls.append((argv, kwargs));return Process()
+    monkeypatch.setattr(trust.subprocess, 'Popen', start)
+    monkeypatch.setattr(trust.selectors, 'DefaultSelector', Selector)
+    monkeypatch.setenv('TRUST_DEFAULT_SENTINEL', 'kept')
+    server = trust.AppServer('/native', tmp_path, tmp_path);server.close()
+    assert calls[0][0] == ['/native', 'app-server']
+    assert calls[0][1]['env']['TRUST_DEFAULT_SENTINEL'] == 'kept'
+    explicit = {'AGENTSTACK_RUNTIME_MODE': 'fresh'}
+    server = trust.AppServer('/native', tmp_path, tmp_path,
+                            argv=['/native', '-c', 'owned=true', 'app-server'], environment=explicit)
+    server.close()
+    assert calls[1][0] == ['/native', '-c', 'owned=true', 'app-server']
+    assert calls[1][1]['env'] == {**explicit, 'CODEX_HOME': str(tmp_path)}
+    assert explicit == {'AGENTSTACK_RUNTIME_MODE': 'fresh'}
+PLUGIN_ID = 'agentstack-codex-app@agentstack-local'
+
+
+@pytest.mark.parametrize('failure', ['selector', 'spawn', 'register'])
+@pytest.mark.parametrize('cleanup_failure', [None, 'selector-close', 'stdin-close'])
+def test_constructor_failure_preserves_error_and_closes_available_resources(
+        tmp_path, monkeypatch, failure, cleanup_failure):
+    calls = []
+    original = OSError('original-constructor-failure')
+    class Pipe:
+        def __init__(self, name):self.name = name;self.closed = False
+        def close(self):
+            self.closed = True;calls.append(self.name + '-close')
+            if cleanup_failure == self.name + '-close':raise OSError('cleanup-failure')
+    class Process:
+        pid = 123456
+        stdin = Pipe('stdin');stdout = Pipe('stdout')
+        def poll(self):return None
+        def wait(self, **kwargs):calls.append(('wait', kwargs));return 0
+    process = Process()
+    class Selector:
+        def __init__(self):
+            calls.append('selector')
+            if failure == 'selector':raise original
+        def register(self, *args):calls.append('register');raise original
+        def close(self):
+            calls.append('selector-close')
+            if cleanup_failure == 'selector-close':raise OSError('cleanup-failure')
+    def spawn(*args, **kwargs):
+        calls.append('spawn')
+        if failure == 'spawn':raise original
+        return process
+    monkeypatch.setattr(trust.selectors, 'DefaultSelector', Selector)
+    monkeypatch.setattr(trust.subprocess, 'Popen', spawn)
+    monkeypatch.setattr(trust.os, 'killpg', lambda pid, sig: calls.append(('killpg', pid, sig)))
+    with pytest.raises(OSError) as error:trust.AppServer('/native', tmp_path, tmp_path)
+    assert error.value is original
+    if failure == 'selector':assert calls == ['selector']
+    elif failure == 'spawn':assert calls == ['selector', 'spawn', 'selector-close']
+    else:
+        assert calls == ['selector', 'spawn', 'register', 'selector-close',
+            ('killpg', process.pid, trust.signal.SIGTERM), ('wait', {'timeout': 2}),
+            'stdin-close', 'stdout-close']
+        assert process.stdin.closed and process.stdout.closed
+
+
+@pytest.fixture
+def runtime(tmp_path, monkeypatch):
+    import shutil
+    root = tmp_path/'plugin'
+    shutil.copytree(ROOT/'integrations/codex_app/plugin', root)
+    home = tmp_path/'codex'; home.mkdir()
+    cwd = tmp_path/'project'; cwd.mkdir()
+    definitions = json.loads((root/'hooks/hooks.json').read_text())['hooks']
+    hooks = []
+    for event, groups in definitions.items():
+        for group in groups:
+            for handler in group['hooks']:
+                n = len(hooks)
+                hooks.append({'key': f'owned:{n}', 'eventName': event,
+                              'handler': {'type': 'command', 'command': handler['command'],
+                                          'async': handler['async']},
+                              'isManaged': False, 'source': 'plugin',
+                              'sourcePath': str(root/'hooks/hooks.json'),
+                              'pluginId': PLUGIN_ID, 'timeoutSec': handler['timeoutSec'],
+                              'currentHash': f'sha256:{n}', 'trustStatus': 'untrusted', 'enabled': False})
+    state = {'hooks': hooks, 'config': {'other': {'trusted_hash': 'preserved', 'enabled': False}},
+             'writes': [], 'requests': [], 'reject': False, 'verify': True}
+
+    class Server:
+        def __init__(self, binary, selected_home, selected_cwd):
+            assert selected_home == home and selected_cwd == cwd
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def request(self, method, params):
+            state['requests'].append(method)
+            if method == 'hooks/list':
+                return {'data': [{'cwd': str(cwd), 'hooks': copy.deepcopy(state['hooks']), 'errors': []}]}
+            if method == 'config/read':
+                return {'layers': [{'name': {'type': 'user'}, 'version': 'user-version'}]}
+            assert method == 'config/batchWrite', 'no model/thread/login or other write requests'
+            assert params['expectedVersion'] == 'user-version'
+            if state['reject']: raise trust.TrustUnavailable('config/batchWrite rejected')
+            state['writes'].append(params)
+            edit = params['edits'][0]
+            assert edit['keyPath'] == 'hooks.state' and edit['mergeStrategy'] == 'upsert'
+            state['config'].update(edit['value'])
+            if state['verify']:
+                for h in state['hooks']:
+                    if h['key'] in edit['value']:
+                        h.update(enabled=True, trustStatus='trusted')
+            return {'status': 'ok'}
+
+    monkeypatch.setattr(trust, 'AppServer', Server)
+    return root, home, cwd, state
+
+
+def plan_for(runtime):
+    root, home, cwd, state = runtime
+    return trust.capture_plan('/fixture/codex', home, cwd, root, PLUGIN_ID)
+
+
+def test_review_plan_is_not_consent(runtime):
+    plan = plan_for(runtime)
+    with pytest.raises(trust.TrustUnavailable, match='approval'):
+        trust.apply_trust(plan)
+    assert not runtime[3]['writes']
+
+
+def test_only_reviewed_owned_hooks_are_enabled_and_trusted(runtime):
+    plan = plan_for(runtime); plan['approved'] = True
+    result = trust.apply_trust(plan)
+    state = runtime[3]
+    assert result['hook_trust'] == 'observed_current' and result['history'] == 'unobserved'
+    assert len(state['writes']) == 1
+    assert state['config']['other'] == {'trusted_hash': 'preserved', 'enabled': False}
+    assert set(state['writes'][0]['edits'][0]['value']) == {h['key'] for h in plan['hooks']}
+
+
+@pytest.mark.parametrize('field,value', [('currentHash', 'changed'), ('timeoutSec', 999),
+                                         ('source', 'user'), ('pluginId', 'other@local'),
+                                         ('sourcePath', '/unowned/hooks.json')])
+def test_changed_or_unowned_definition_prevents_writes(runtime, field, value):
+    plan = plan_for(runtime); plan['approved'] = True
+    runtime[3]['hooks'][0][field] = value
+    with pytest.raises(trust.TrustUnavailable): trust.apply_trust(plan)
+    assert not runtime[3]['writes']
+
+
+def test_script_change_with_same_hook_hash_prevents_trust(runtime):
+    plan = plan_for(runtime); plan['approved'] = True
+    (runtime[0]/'scripts/run-hook.sh').write_text('changed script')
+    with pytest.raises(trust.TrustUnavailable, match='payload changed'): trust.apply_trust(plan)
+    assert not runtime[3]['writes']
+
+
+def test_policy_or_version_conflict_falls_back_without_claiming_trust(runtime):
+    plan = plan_for(runtime); plan['approved'] = True; runtime[3]['reject'] = True
+    with pytest.raises(trust.TrustUnavailable, match='rejected'): trust.apply_trust(plan)
+    assert not runtime[3]['writes']
+
+
+def test_write_acknowledgement_alone_is_not_verified_trust(runtime):
+    plan = plan_for(runtime); plan['approved'] = True; runtime[3]['verify'] = False
+    with pytest.raises(trust.TrustUnavailable, match='not observed'): trust.apply_trust(plan)
+
+
+def test_library_source_has_no_side_effects_or_shell_option_changes(tmp_path):
+    result = subprocess.run(['/bin/bash', '-c', 'set +u; source "$1"; '
+                             'type agentstack_codex_app_plan >/dev/null; '
+                             'type agentstack_codex_app_remove_registration >/dev/null; '
+                             'echo "${UNSET_VALUE}source-only"', 'bash',
+                             str(ROOT/'scripts/lib/codex-app-integration.sh')],
+                            cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0 and result.stdout == 'source-only\n'
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_remove_registration_failure_retains_payload_and_runtime(tmp_path):
+    install = tmp_path/'integration'; install.mkdir()
+    runtime = tmp_path/'runtime'; runtime.mkdir()
+    binary = tmp_path/'codex'; binary.write_text('#!/bin/sh\nexit 1\n'); binary.chmod(0o755)
+    manifest = {'tool': 'agentstack-codex-app', 'install_dir': str(install), 'runtime_dir': str(runtime),
+                'shared_codex_home': str(tmp_path/'codex-home'), 'codex_binary': str(binary),
+                'plugin': {'enabled': True, 'id': PLUGIN_ID, 'marketplace_name': 'agentstack-local'},
+                'service': {'kind': 'disabled'}}
+    (install/'install-state.json').write_text(json.dumps(manifest))
+    result = subprocess.run([str(ROOT/'scripts/uninstall-codex-app-integration.sh'), '--install-dir', str(install)],
+                            env=dict(os.environ, HOME=str(tmp_path)), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert (install/'install-state.json').exists() and runtime.exists()
+
+
+def test_registration_only_removal_targets_saved_home_and_keeps_proxy(tmp_path):
+    fixture = removal_fixture(tmp_path)
+    install, runtime, state_path, log_path = fixture
+    result = remove_fixture(fixture, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert (install/'run-mcp.sh').read_text() == 'core proxy' and runtime.exists()
+    calls = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert {call['home'] for call in calls} == {str(tmp_path/'shared-home')}
+    assert calls[0]['argv'] == ['plugin', 'list', '--json']
+    assert calls[1]['argv'] == ['plugin', 'marketplace', 'list', '--json']
+    assert json.loads(state_path.read_text())['installed'] == []
+    assert json.loads((install/'install-state.json').read_text())['plugin']['enabled'] is False
+
+
+def test_flat_metadata_from_cli_0161_is_reviewed_and_verified(runtime):
+    for hook in runtime[3]['hooks']:
+        handler = hook.pop('handler')
+        hook.update(handlerType=handler['type'], command=handler['command'],
+                    **{'async': handler['async']}, timeoutSec=600)
+    plan = plan_for(runtime)
+    assert all(h['timeoutSec'] == 600 for h in plan['hooks'])
+    assert plan['declared_hooks']['hooks']['SessionStart'][0]['hooks'][0]['timeoutSec'] == 5
+    plan['approved'] = True
+    assert trust.apply_trust(plan)['hook_trust'] == 'observed_current'
+
+
+def test_isolated_check_failure_still_produces_json_and_exit_code(tmp_path):
+    broken = tmp_path/'codex'; broken.write_text('#!/bin/sh\nexit 7\n'); broken.chmod(0o755)
+    output = tmp_path/'result.json'
+    result = subprocess.run([sys.executable, str(ROOT/'scripts/check-codex-plugin-isolated.py'),
+                             '--codex-binary', str(broken), '--output', str(output),
+                             '--timeout-seconds', '5'], capture_output=True, text=True, timeout=15)
+    report = json.loads(output.read_text())
+    assert result.returncode == report['exit_code'] == 1
+    assert report['phase'] == 'version' and report['model_thread_login_requested'] is False
+    assert report['history'] == 'unobserved'
+
+
+def removal_fixture(tmp_path):
+    install = tmp_path/'integration'; install.mkdir()
+    runtime = tmp_path/'runtime'; runtime.mkdir()
+    (install/'run-mcp.sh').write_text('core proxy')
+    market = install/'marketplace'; market.mkdir()
+    entry = {'pluginId': PLUGIN_ID, 'marketplaceName': 'agentstack-local',
+             'marketplaceSource': {'sourceType': 'local', 'source': str(market)},
+             'source': {'source': 'local', 'path': str(market/'plugins/agentstack-codex-app')}}
+    state_path, log_path = tmp_path/'registry.json', tmp_path/'commands.jsonl'
+    state_path.write_text(json.dumps({'installed': [entry], 'marketplaces': [
+        {'name': 'agentstack-local', 'root': str(market), 'marketplaceSource': entry['marketplaceSource']}]}))
+    binary = tmp_path/'codex'
+    binary.write_text('#!'+sys.executable+'\n'
+                     'import json, os, sys\nfrom pathlib import Path\n'
+                     f'STATE=Path({str(state_path)!r})\nLOG=Path({str(log_path)!r})\n'+r'''
+state=json.loads(STATE.read_text())
+argv=sys.argv[1:]
+with LOG.open('a') as stream:
+    stream.write(json.dumps({'argv': argv, 'home': os.environ['CODEX_HOME']})+'\n')
+if state.get('malformed'):
+    print('invalid registry'); raise SystemExit(0)
+if argv[:3] == ['plugin', 'marketplace', 'list']:
+    print(json.dumps({'marketplaces': state['marketplaces']}))
+elif argv[:2] == ['plugin', 'list']:
+    print(json.dumps({'installed': state['installed']}))
+elif argv[:2] == ['plugin', 'remove']:
+    if state.get('fail_plugin'):
+        raise SystemExit(6)
+    state['installed']=[p for p in state['installed'] if p['pluginId'] != argv[2]]
+elif argv[:3] == ['plugin', 'marketplace', 'remove']:
+    if state.pop('fail_market_once', False):
+        STATE.write_text(json.dumps(state)); raise SystemExit(7)
+    state['marketplaces']=[m for m in state['marketplaces'] if m['name'] != argv[3]]
+else:
+    raise SystemExit(9)
+STATE.write_text(json.dumps(state))
+''')
+    binary.chmod(0o755)
+    manifest = {'tool': 'agentstack-codex-app', 'install_dir': str(install), 'runtime_dir': str(runtime),
+                'shared_codex_home': str(tmp_path/'shared-home'), 'codex_binary': str(binary),
+                'ownership': {'marketplace_root': str(market)},
+                'plugin': {'enabled': True, 'id': PLUGIN_ID, 'marketplace_name': 'agentstack-local'},
+                'service': {'kind': 'disabled'}}
+    (install/'install-state.json').write_text(json.dumps(manifest))
+    return install, runtime, state_path, log_path
+
+
+def remove_fixture(fixture, tmp_path, registration_only=True):
+    operation = 'agentstack_codex_app_remove_registration' if registration_only else 'agentstack_codex_app_remove'
+    return subprocess.run(['/bin/bash', '-c', f'source "$1"; {operation} --install-dir "$2"',
+                           'bash', str(ROOT/'scripts/lib/codex-app-integration.sh'), str(fixture[0])],
+                          env=dict(os.environ, HOME=str(tmp_path), CODEX_HOME=str(tmp_path/'ambient-wrong-home')),
+                          capture_output=True, text=True)
+
+
+@pytest.mark.parametrize('bad_registry', ['foreign_root', 'duplicate_id', 'malformed'])
+def test_current_unowned_or_unknown_registry_prevents_all_removals(tmp_path, bad_registry):
+    fixture = removal_fixture(tmp_path)
+    state = json.loads(fixture[2].read_text())
+    if bad_registry == 'foreign_root':
+        root = tmp_path/'foreign-marketplace'
+        state['marketplaces'][0].update(root=str(root), marketplaceSource={'sourceType': 'local', 'source': str(root)})
+        state['installed'][0].update(marketplaceSource={'sourceType': 'local', 'source': str(root)},
+                                     source={'source': 'local', 'path': str(root/'plugins/agentstack-codex-app')})
+    elif bad_registry == 'duplicate_id':
+        state['installed'].append(copy.deepcopy(state['installed'][0]))
+    else:
+        state['malformed'] = True
+    fixture[2].write_text(json.dumps(state))
+    manifest_before = (fixture[0]/'install-state.json').read_bytes()
+    result = remove_fixture(fixture, tmp_path, registration_only=False)
+    assert result.returncode != 0
+    calls = [json.loads(line)['argv'] for line in fixture[3].read_text().splitlines()]
+    assert all('remove' not in call for call in calls)
+    assert json.loads(fixture[2].read_text()) == state
+    assert (fixture[0]/'install-state.json').read_bytes() == manifest_before
+    assert fixture[1].exists()
+
+
+def test_retry_after_partial_plugin_removal_keeps_payload_until_observed(tmp_path):
+    fixture = removal_fixture(tmp_path)
+    state = json.loads(fixture[2].read_text()); state['fail_market_once'] = True
+    fixture[2].write_text(json.dumps(state))
+    first = remove_fixture(fixture, tmp_path)
+    assert first.returncode != 0 and (fixture[0]/'run-mcp.sh').exists() and fixture[1].exists()
+    assert json.loads(fixture[2].read_text())['installed'] == []
+    second = remove_fixture(fixture, tmp_path)
+    assert second.returncode == 0, second.stderr
+    calls = [json.loads(line)['argv'] for line in fixture[3].read_text().splitlines()]
+    assert sum(call[:2] == ['plugin', 'remove'] for call in calls) == 1
+    assert json.loads(fixture[2].read_text())['marketplaces'] == []
+
+
+def test_owned_plugin_command_failure_retains_registry_payload_and_runtime(tmp_path):
+    fixture = removal_fixture(tmp_path)
+    state = json.loads(fixture[2].read_text()); state['fail_plugin'] = True
+    fixture[2].write_text(json.dumps(state))
+    manifest_before = (fixture[0]/'install-state.json').read_bytes()
+    result = remove_fixture(fixture, tmp_path, registration_only=False)
+    assert result.returncode != 0
+    calls = [json.loads(line)['argv'] for line in fixture[3].read_text().splitlines()]
+    assert any(call[:2] == ['plugin', 'remove'] for call in calls)
+    assert not any(call[:3] == ['plugin', 'marketplace', 'remove'] for call in calls)
+    assert json.loads(fixture[2].read_text()) == state
+    assert (fixture[0]/'install-state.json').read_bytes() == manifest_before
+    assert (fixture[0]/'run-mcp.sh').exists() and fixture[1].exists()
+
+
+def test_shared_marketplace_retains_other_plugin_and_snapshot_payload(tmp_path):
+    fixture = removal_fixture(tmp_path)
+    state = json.loads(fixture[2].read_text())
+    other = dict(state['installed'][0], pluginId='other@agentstack-local')
+    state['installed'].append(other); fixture[2].write_text(json.dumps(state))
+    result = remove_fixture(fixture, tmp_path, registration_only=False)
+    assert result.returncode == 0, result.stderr
+    final = json.loads(fixture[2].read_text())
+    assert final['installed'] == [other] and final['marketplaces'] == state['marketplaces']
+    report = json.loads(result.stdout.splitlines()[-1])
+    assert report['marketplace_retained'] is True and report['payload_removed'] is False
+    assert (fixture[0]/'run-mcp.sh').read_text() == 'core proxy'
+    again = remove_fixture(fixture, tmp_path, registration_only=False)
+    assert again.returncode == 0, again.stderr
+    assert json.loads(fixture[2].read_text()) == final
+    assert (fixture[0]/'run-mcp.sh').exists()
+
+
+@pytest.mark.parametrize('difference', ['uid', 'command', 'start', 'unknown', 'legacy'])
+def test_unowned_or_unknown_pid_never_receives_a_stop_signal(tmp_path, monkeypatch, difference):
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    current = dict(saved)
+    if difference in {'uid', 'command', 'start'}:
+        current[difference] = {'uid': os.getuid()+1, 'command': '/bin/bash /unrelated/runner', 'start': 'new-start'}[difference]
+    def probe(pid):
+        if difference == 'unknown': raise ownership.OwnershipUnknown('inspection unavailable')
+        return current
+    monkeypatch.setattr(ownership, 'process_identity', probe)
+    signals = []; monkeypatch.setattr(ownership.os, 'kill', lambda pid, sig: signals.append(sig))
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    with pytest.raises(ownership.OwnershipUnknown):
+        ownership.stop_supervisor(pidfile, runner, None if difference == 'legacy' else saved)
+    assert signals == [] and pidfile.exists()
+
+
+def test_verified_supervisor_stops_and_clears_only_its_owned_receipt(tmp_path, monkeypatch):
+    import signal
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    state = {'current': saved}
+    monkeypatch.setattr(ownership, 'process_identity', lambda pid: state['current'])
+    signals = []
+    def send(pid, sig):
+        signals.append((pid, sig)); state['current'] = None
+    monkeypatch.setattr(ownership.os, 'kill', send)
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    identity_path = Path(str(pidfile)+'.identity.json'); identity_path.write_text(json.dumps(saved))
+    ownership.stop_supervisor(pidfile, runner, saved)
+    assert signals == [(424242, signal.SIGTERM)] and not pidfile.exists() and not identity_path.exists()
+
+
+def test_pid_identity_changed_after_term_is_preserved_without_kill(tmp_path, monkeypatch):
+    import signal
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    state = {'current': dict(saved)}
+    monkeypatch.setattr(ownership, 'process_identity', lambda pid: state['current'])
+    signals = []
+    def send(pid, sig):
+        signals.append(sig); state['current']['start'] = 'replacement-start'
+    monkeypatch.setattr(ownership.os, 'kill', send)
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    with pytest.raises(ownership.OwnershipUnknown):
+        ownership.stop_supervisor(pidfile, runner, saved)
+    assert signals == [signal.SIGTERM] and pidfile.exists()
+
+
+def test_after_term_command_fallback_waits_for_observed_exit_without_more_signals(tmp_path, monkeypatch):
+    import signal
+    monkeypatch.setattr(ownership.sys, 'platform', 'darwin')
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    receipt = Path(str(pidfile)+'.identity.json'); receipt.write_text(json.dumps(saved))
+    state = {'signalled': False}
+    exiting = iter([dict(saved, command='(bash)'), dict(saved, command='(bash)')])
+    observations = []
+    def inspect(pid):
+        if not state['signalled']:
+            return saved
+        current = next(exiting, None)
+        observations.append(current)
+        if current is not None:
+            assert pidfile.exists() and receipt.exists()
+        return current
+    monkeypatch.setattr(ownership, 'process_identity', inspect)
+    signals = []
+    def send(pid, sig):
+        signals.append(sig); state['signalled'] = True
+    monkeypatch.setattr(ownership.os, 'kill', send)
+    monkeypatch.setattr(ownership.time, 'sleep', lambda delay: None)
+    ownership.stop_supervisor(pidfile, runner, saved)
+    assert signals == [signal.SIGTERM]
+    assert observations[0]['command'] == '(bash)' and observations[1]['command'] == '(bash)'
+    assert None in observations and not pidfile.exists() and not receipt.exists()
+
+
+@pytest.mark.parametrize('changed_command', ['/bin/bash /unrelated/runner', '(bash)'])
+def test_changed_command_after_term_never_authorizes_kill_or_receipt_removal(tmp_path, monkeypatch, changed_command):
+    import signal
+    monkeypatch.setattr(ownership.sys, 'platform', 'darwin')
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    state = {'current': dict(saved)}
+    monkeypatch.setattr(ownership, 'process_identity', lambda pid: state['current'])
+    signals = []
+    def send(pid, sig):
+        signals.append(sig); state['current']['command'] = changed_command
+    monkeypatch.setattr(ownership.os, 'kill', send)
+    clock = iter([0, 6]); monkeypatch.setattr(ownership.time, 'monotonic', lambda: next(clock))
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    receipt = Path(str(pidfile)+'.identity.json'); receipt.write_text(json.dumps(saved))
+    with pytest.raises(ownership.OwnershipUnknown, match='changed: command'):
+        ownership.stop_supervisor(pidfile, runner, saved)
+    assert signals == [signal.SIGTERM] and pidfile.exists() and receipt.exists()
+
+
+def test_command_fallback_before_term_never_authorizes_a_signal(tmp_path, monkeypatch):
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    monkeypatch.setattr(ownership, 'process_identity', lambda pid: dict(saved, command='(bash)'))
+    signals = []; monkeypatch.setattr(ownership.os, 'kill', lambda pid, sig: signals.append(sig))
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    with pytest.raises(ownership.OwnershipUnknown, match='changed: command'):
+        ownership.stop_supervisor(pidfile, runner, saved)
+    assert signals == [] and pidfile.exists()
+
+
+@pytest.mark.parametrize('difference', ['uid', 'start', 'unknown', 'wrong_name', 'other_command'])
+def test_after_term_fallback_never_bypasses_replacement_or_unknown(tmp_path, monkeypatch, difference):
+    import signal
+    monkeypatch.setattr(ownership.sys, 'platform', 'darwin')
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'fixture-start', 'command': '/bin/bash '+str(runner)}
+    current = dict(saved, command='(bash)')
+    if difference == 'uid': current['uid'] += 1
+    elif difference == 'start': current['start'] = 'replacement-start'
+    elif difference == 'wrong_name': current['command'] = '(python)'
+    elif difference == 'other_command': current['command'] = '/bin/bash /unrelated/runner'
+    state = {'signalled': False}
+    def inspect(pid):
+        if not state['signalled']: return saved
+        if difference == 'unknown': raise ownership.OwnershipUnknown('inspection unavailable')
+        return current
+    monkeypatch.setattr(ownership, 'process_identity', inspect)
+    signals = []
+    def send(pid, sig):
+        signals.append(sig); state['signalled'] = True
+    monkeypatch.setattr(ownership.os, 'kill', send)
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    receipt = Path(str(pidfile)+'.identity.json'); receipt.write_text(json.dumps(saved))
+    with pytest.raises(ownership.OwnershipUnknown):
+        ownership.stop_supervisor(pidfile, runner, saved)
+    assert signals == [signal.SIGTERM] and pidfile.exists() and receipt.exists()
+
+
+@pytest.mark.parametrize('foreign', ['plist', 'loaded_job', 'unknown'])
+def test_launchd_label_alone_does_not_authorize_stopping(tmp_path, monkeypatch, foreign):
+    import plistlib
+    from types import SimpleNamespace
+    root = tmp_path/'integration'; root.mkdir()
+    expected = ['/bin/bash', str(root/'bin/run-bridge')]
+    definition = {'Label': 'fixture.bridge', 'ProgramArguments': expected}
+    if foreign == 'plist': definition['ProgramArguments'] = ['/bin/bash', '/unrelated/runner']
+    plist = tmp_path/'bridge.plist'; plist.write_bytes(plistlib.dumps(definition))
+    args = ['/bin/bash', '/unrelated/runner'] if foreign == 'loaded_job' else expected
+    result = SimpleNamespace(returncode=1 if foreign == 'unknown' else 0,
+                             stderr='inspection unavailable', stdout='\n arguments = {\n'+'\n'.join(args)+'\n }\n')
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv); return result
+    monkeypatch.setattr(ownership.subprocess, 'run', run)
+    with pytest.raises(ownership.OwnershipUnknown):
+        ownership.check_launchd({'label': 'fixture.bridge', 'path': str(plist)}, root)
+    assert all(call[:2] == ['launchctl', 'print'] for call in calls) and plist.exists()
+
+
+def test_verified_launchd_definition_and_observed_absence_are_distinct(tmp_path, monkeypatch):
+    import plistlib
+    from types import SimpleNamespace
+    root = tmp_path/'integration'; root.mkdir()
+    args = ['/bin/bash', str(root/'bin/run-bridge')]
+    plist = tmp_path/'bridge.plist'
+    plist.write_bytes(plistlib.dumps({'Label': 'fixture.bridge', 'ProgramArguments': args}))
+    result = SimpleNamespace(returncode=0, stderr='', stdout='\n arguments = {\n'+'\n'.join(args)+'\n }\n')
+    monkeypatch.setattr(ownership.subprocess, 'run', lambda *a, **kw: result)
+    assert ownership.check_launchd({'label': 'fixture.bridge', 'path': str(plist)}, root) is True
+    result.returncode = 113; result.stderr = 'Could not find service "fixture.bridge" in domain for user gui'
+    assert ownership.check_launchd({'label': 'fixture.bridge', 'path': str(plist)}, root) is False
+
+
+def test_linux_kernel_start_token_preserves_ticks_and_boot_identity(tmp_path):
+    proc = tmp_path/'proc'; (proc/'424242').mkdir(parents=True)
+    boot = proc/'sys/kernel/random/boot_id'; boot.parent.mkdir(parents=True)
+    boot.write_text('fixture-boot\n')
+    fields = ['S']+['0']*18+['987654321']
+    (proc/'424242/stat').write_text('424242 (runner ) with spaces) '+' '.join(fields))
+    assert ownership.linux_start_token(424242, proc) == 'linux:fixture-boot:987654321'
+    boot.write_text('different-boot\n')
+    assert ownership.linux_start_token(424242, proc) == 'linux:different-boot:987654321'
+
+
+def test_linux_displayed_start_time_jitter_does_not_change_process_identity(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(ownership.sys, 'platform', 'linux')
+    monkeypatch.setattr(ownership, 'linux_start_token', lambda pid: 'linux:fixture-boot:987654321')
+    times = iter(['Wed Oct 8 22:20:00 2026', 'Wed Oct 8 22:20:01 2026'])
+    def inspect(*args, **kwargs):
+        assert '-ww' in args[0]
+        return SimpleNamespace(returncode=0, stdout=f'{os.getuid()} {next(times)} S /bin/bash /fixture/runner\n')
+    monkeypatch.setattr(ownership.subprocess, 'run', inspect)
+    first = ownership.process_identity(424242)
+    second = ownership.process_identity(424242)
+    assert first == second and first['start'] == 'linux:fixture-boot:987654321'
+
+
+def test_linux_pid_replacement_during_inspection_is_rejected(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(ownership.sys, 'platform', 'linux')
+    tokens = iter(['linux:fixture-boot:100', 'linux:fixture-boot:101'])
+    monkeypatch.setattr(ownership, 'linux_start_token', lambda pid: next(tokens))
+    monkeypatch.setattr(ownership.subprocess, 'run', lambda *a, **kw: SimpleNamespace(
+        returncode=0, stdout=f'{os.getuid()} Wed Oct 8 22:20:00 2026 S /bin/bash /fixture/runner\n'))
+    with pytest.raises(ownership.OwnershipUnknown, match='changed during inspection'):
+        ownership.process_identity(424242)
+
+
+def test_linux_missing_or_incomplete_kernel_identity_is_not_owned(tmp_path, monkeypatch):
+    def absent(pid, sig):
+        assert sig == 0
+        raise ProcessLookupError()
+    monkeypatch.setattr(ownership.os, 'kill', absent)
+    proc = tmp_path/'proc'; proc.mkdir()
+    assert ownership.linux_start_token(424242, proc) is None
+    (proc/'424242').mkdir()
+    with pytest.raises(ownership.OwnershipUnknown, match='unavailable'):
+        ownership.linux_start_token(424242, proc)
+
+
+@pytest.mark.parametrize('view', ['missing_root', 'hidden_pid', 'permission_denied'])
+def test_unavailable_proc_view_preserves_live_or_unknown_process_receipts(tmp_path, monkeypatch, view):
+    proc = tmp_path/'proc'
+    if view == 'hidden_pid':
+        proc.mkdir()
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'linux:fixture-boot:100',
+             'command': '/bin/bash '+str(runner)}
+    pidfile = tmp_path/'service.pid'; pidfile.write_text('424242\n')
+    receipt = Path(str(pidfile)+'.identity.json'); receipt.write_text(json.dumps(saved))
+    monkeypatch.setattr(ownership.sys, 'platform', 'linux')
+    token = ownership.linux_start_token
+    monkeypatch.setattr(ownership, 'linux_start_token', lambda pid: token(pid, proc))
+    calls = []
+    def probe(pid, sig):
+        calls.append((pid, sig))
+        assert sig == 0, 'never signal a live or unknown process'
+        if view == 'permission_denied':
+            raise PermissionError()
+    monkeypatch.setattr(ownership.os, 'kill', probe)
+    def forbid_ps(*args, **kwargs):
+        raise AssertionError('missing kernel identity cannot authorize stop through ps')
+    monkeypatch.setattr(ownership.subprocess, 'run', forbid_ps)
+    with pytest.raises(ownership.OwnershipUnknown):
+        ownership.stop_supervisor(pidfile, runner)
+    assert calls == [(424242, 0)]
+    assert pidfile.read_text() == '424242\n' and json.loads(receipt.read_text()) == saved
+
+
+def test_missing_proc_view_only_confirms_exit_after_kernel_liveness_esrch(tmp_path, monkeypatch):
+    proc = tmp_path/'unavailable-proc'
+    runner = tmp_path/'bin/run-bridge'
+    saved = {'pid': 424242, 'uid': os.getuid(), 'start': 'linux:fixture-boot:100',
+             'command': '/bin/bash '+str(runner)}
+    pidfile = tmp_path/'service.pid'; pidfile.write_text('424242\n')
+    receipt = Path(str(pidfile)+'.identity.json'); receipt.write_text(json.dumps(saved))
+    monkeypatch.setattr(ownership.sys, 'platform', 'linux')
+    token = ownership.linux_start_token
+    monkeypatch.setattr(ownership, 'linux_start_token', lambda pid: token(pid, proc))
+    calls = []
+    def absent(pid, sig):
+        calls.append((pid, sig)); assert sig == 0
+        raise ProcessLookupError()
+    monkeypatch.setattr(ownership.os, 'kill', absent)
+    ownership.stop_supervisor(pidfile, runner)
+    assert calls == [(424242, 0)] and not pidfile.exists() and not receipt.exists()
+
+
+def test_process_record_waits_for_exec_and_only_persists_verified_runner(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT/'scripts'))
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    runner = tmp_path/'bin/run-bridge'
+    expected = {'pid': 424242, 'uid': os.getuid(), 'start': 'linux:fixture-boot:100',
+                'command': '/bin/bash '+str(runner)}
+    observations = iter([dict(expected, command='/bin/bash /installer'), expected, expected])
+    monkeypatch.setattr(ownership, 'process_identity', lambda pid: next(observations))
+    waits = []; monkeypatch.setattr(ownership.time, 'sleep', lambda delay: waits.append(delay))
+    assert ownership.record_process(pidfile, runner) == expected
+    assert waits == [.05]
+    assert json.loads(Path(str(pidfile)+'.identity.json').read_text()) == expected
+
+
+def test_unstable_process_record_never_persists_unverified_identity(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT/'scripts'))
+    pidfile = tmp_path/'supervisor.pid'; pidfile.write_text('424242\n')
+    runner = tmp_path/'bin/run-bridge'
+    expected = {'pid': 424242, 'uid': os.getuid(), 'start': 'linux:fixture-boot:100',
+                'command': '/bin/bash '+str(runner)}
+    observations = iter([expected, dict(expected, start='linux:fixture-boot:101')]*20)
+    monkeypatch.setattr(ownership, 'process_identity', lambda pid: next(observations))
+    waits = []; monkeypatch.setattr(ownership.time, 'sleep', lambda delay: waits.append(delay))
+    with pytest.raises(ownership.OwnershipUnknown, match='changed: start'):
+        ownership.record_process(pidfile, runner)
+    assert len(waits) == 19 and not Path(str(pidfile)+'.identity.json').exists()
+
+
+def test_both_pre_tool_use_hooks_are_in_the_reviewed_trust_write(runtime):
+    """同一イベントの予約guardと鍵読取guardを別々の所有hookとして確認する。"""
+    plan = plan_for(runtime)
+    guards = [h for h in plan['hooks'] if h['eventName'] == 'PreToolUse']
+    assert len(guards) == 2
+    assert {h['handler']['command'] for h in guards} == {
+        '"$PLUGIN_ROOT/scripts/run-reservation-guard.sh"',
+        '"$PLUGIN_ROOT/scripts/run-key-read-guard.sh"',
+    }
+    assert plan['approved'] is False
+    plan['approved'] = True
+    trust.apply_trust(plan)
+    written = runtime[3]['writes'][0]['edits'][0]['value']
+    assert all(written[h['key']] == {'trusted_hash': h['currentHash'], 'enabled': True}
+               for h in guards)
+
+
+@pytest.mark.parametrize('damage', ['missing', 'duplicate', 'unowned-command'])
+def test_new_pre_tool_use_guard_must_be_present_unique_and_owned(runtime, damage):
+    """fixtureだけを増やして所有確認や重複拒否を弱めない。"""
+    hooks = runtime[3]['hooks']
+    guard = next(h for h in hooks if 'run-key-read-guard.sh' in h['handler']['command'])
+    if damage == 'missing':
+        hooks.remove(guard)
+    elif damage == 'duplicate':
+        reservation = next(h for h in hooks if 'run-reservation-guard.sh' in h['handler']['command'])
+        guard['handler'] = copy.deepcopy(reservation['handler'])
+    else:
+        guard['handler']['command'] = '"$PLUGIN_ROOT/scripts/unreviewed.sh"'
+    with pytest.raises(trust.TrustUnavailable):
+        plan_for(runtime)
+    assert not runtime[3]['writes']

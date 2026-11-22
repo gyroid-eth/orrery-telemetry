@@ -20,6 +20,9 @@ import stat
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
+
+import pytest
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SPAWN = _ROOT / "hooks" / "spawn_child.sh"
@@ -70,6 +73,7 @@ def _worktree_base_assignment() -> str:
 def _run_bash(script: str, env: dict[str, str] | None = None,
               check: bool = False) -> subprocess.CompletedProcess[str]:
     run_env = os.environ.copy()
+    run_env["_ags_global_loader"] = str(_ROOT / "bin/lib/global-client-loader.sh")
     if env:
         run_env.update(env)
     result = subprocess.run(
@@ -185,6 +189,14 @@ def test_approval_policy_comes_from_the_installer_setting():
     # Empty setting is the product default, not "let codex decide".
     assert _flags_with_env(_MODERN_HELP, {"AGENTSTACK_CODEX_CHILD_APPROVAL": ""}) == \
         "--ask-for-approval never"
+
+
+@pytest.mark.parametrize("policy", [None, "never", "untrusted"])
+def test_standalone_codex_has_no_approval_arguments(policy):
+    env = {"USE_CODEX": "true", "STANDALONE": "true"}
+    if policy is not None:
+        env["AGENTSTACK_CODEX_CHILD_APPROVAL"] = policy
+    assert _flags_with_env(_MODERN_HELP, env) == ""
 
 
 def test_missing_codex_on_the_spawner_path_still_pins_the_policy():
@@ -432,7 +444,7 @@ def test_launcher_owns_the_codex_flags_and_never_hands_off_to_a_user_launcher():
     ), "spawn_child.sh still defers to the user's ~/.codex/bin launcher"
     # Both launch paths apply network flags and the resolved writable roots.
     # (Written in the zsh/bash-shared subset: see test_child_shell_portability.)
-    assert text.count('$(printf "%s" "$AGENTSTACK_CODEX_APPROVAL") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS")') == 2
+    assert text.count('$(printf "%s" "$AGENTSTACK_CODEX_PERMISSION_FLAGS") $(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS")') == 2
     assert text.count('for d in $(printf "%s" "$AGENTSTACK_CODEX_ADD_DIRS_RESOLVED"); do') == 2
     assert text.count('-e "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED=$(codex_child_add_dirs "$CHILD_CODEX_HOME")"') == 2
     assert text.count('CHILD_CODEX_BIN="$(resolve_codex_bin)"') == 2
@@ -441,17 +453,20 @@ def test_launcher_owns_the_codex_flags_and_never_hands_off_to_a_user_launcher():
     assert 'env -u OPENAI_API_KEY codex -C "$PWD"' not in text
 
 
-def _model_call(function: str, *args: str) -> subprocess.CompletedProcess[str]:
+def _model_call(function: str, *args: str, extra_env=None, prelude: str = "") -> subprocess.CompletedProcess[str]:
     functions = ["normalize_claude_model", "normalize_codex_model",
                  "validate_codex_effort"]
     script = _model_catalog() + "\n" + "\n".join(
         _extract(name) for name in functions
     )
     command = " ".join([function, *(shlex.quote(arg) for arg in args)])
-    return _run_bash(script + "\n" + command + "\n", {"HOOKS_DIR": str(_ROOT / "hooks"), "CODEX_MODEL_HELPER": str(_ROOT / "dashboard/codex_models.py"), "AGENTSTACK_PYTHON": sys.executable, "CODEX_HOME": str(_ROOT / ".missing-test-codex-home")})
+    if function == "normalize_claude_model":
+        # As both launch paths do: resolve the aliases in the launching shell first.
+        prelude = prelude or "load_claude_aliases || exit 1"
+    return _run_bash(script + "\n" + prelude + "\n" + command + "\n", {"HOOKS_DIR": str(_ROOT / "hooks"), "CODEX_MODEL_HELPER": str(_ROOT / "dashboard/codex_models.py"), "CLAUDE_MODEL_HELPER": str(_ROOT / "dashboard/claude_models.py"), "CLAUDE_CONFIG_DIR": str(_ROOT / ".missing-test-claude-config"), "AGENTSTACK_PYTHON": sys.executable, "CODEX_HOME": str(_ROOT / ".missing-test-codex-home"), "AGENTSTACK_CODEX_BIN": "", **(extra_env or {})})
 
 
-def test_model_catalog_tracks_current_generations_without_dropping_old_ids():
+def test_model_catalog_fallback_preserves_aliases_and_old_ids_without_cli_version():
     expected = {
         ("normalize_claude_model", ""): "claude-opus-5-5",
         ("normalize_claude_model", "opus"): "claude-opus-5-5",
@@ -463,7 +478,24 @@ def test_model_catalog_tracks_current_generations_without_dropping_old_ids():
         ("normalize_claude_model", "opus-5-5[1m]"): "claude-opus-5-5[1m]",
         ("normalize_claude_model", "opus-5-5-1m"): "claude-opus-5-5[1m]",
         ("normalize_claude_model", "opus55[1m]"): "claude-opus-5-5[1m]",
-        ("normalize_claude_model", "sonnet"): "claude-sonnet-5",
+        ("normalize_claude_model", "sonnet"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "Sonnet 5.5"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "sonnet-5-5"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "sonnet55"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "sonnet5.5"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "sonnet-5.5"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "claude-sonnet-5-5"): "claude-sonnet-5-5",
+        ("normalize_claude_model", "sonnet-5"): "claude-sonnet-5",
+        ("normalize_claude_model", "sonnet5"): "claude-sonnet-5",
+        ("normalize_claude_model", "claude-sonnet-5"): "claude-sonnet-5",
+        ("normalize_claude_model", "opus-5-5"): "claude-opus-5-5",
+        ("normalize_claude_model", "opus55"): "claude-opus-5-5",
+        ("normalize_claude_model", "Opus 5.5"): "claude-opus-5-5",
+        ("normalize_claude_model", "haiku"): "claude-haiku-4-5-20251001",
+        ("normalize_claude_model", "haiku-4-5"): "claude-haiku-4-5-20251001",
+        ("normalize_claude_model", "Haiku 4.5"): "claude-haiku-4-5-20251001",
+        ("normalize_claude_model", "fable-5-1"): "claude-fable-5-1",
+        ("normalize_claude_model", "Fable 5.1"): "claude-fable-5-1",
         ("normalize_claude_model", "sonnet-4-6"): "claude-sonnet-4-6",
         ("normalize_claude_model", "fable"): "claude-fable-5-1",
         ("normalize_claude_model", "claude-fable-5"): "claude-fable-5",
@@ -477,9 +509,133 @@ def test_model_catalog_tracks_current_generations_without_dropping_old_ids():
         ("normalize_codex_model", "gpt-5.5"): "gpt-5.5",
     }
     for (function, raw), normalized in expected.items():
-        result = _model_call(function, raw)
+        result = _model_call(function, raw, extra_env={"AGENTSTACK_CHILD_SHELL": "/usr/bin/false"})
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == normalized
+
+
+def _claude_catalog_profile(tmp_path, rows, stale_in_ms=3_600_000):
+    """A Claude Code model catalog whose "main" rows name newer models."""
+    import time
+    now = int(time.time() * 1000)
+    models = [{"id": model, "section": section, "short_name": family, **extra}
+              for model, section, family, extra in rows]
+    path = tmp_path / "claude" / "cache" / "model-catalog" / "cache.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": 2, "fetchedAt": now - 1000, "staleAt": now + stale_in_ms,
+                                "catalog": {"surface": "cc", "config": {"models": models}}}))
+    return str(tmp_path / "claude")
+
+
+_NEWER = [("claude-opus-6", "main", "Opus", {}), ("claude-sonnet-6", "main", "Sonnet", {}),
+          ("claude-haiku-5", "main", "Haiku", {}), ("claude-fable-6", "main", "Fable", {}),
+          ("claude-sonnet-5-5", "overflow", "Sonnet", {})]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("", "claude-opus-6"), ("opus", "claude-opus-6"), ("sonnet", "claude-sonnet-6"),
+    ("haiku", "claude-haiku-5"), ("fable", "claude-fable-6"),
+    # Versioned aliases pin a generation and do not follow the catalog.
+    ("sonnet-5-5", "claude-sonnet-5-5"), ("sonnet-5", "claude-sonnet-5"), ("opus-5-5", "claude-opus-5-5"),
+    ("haiku-4-5", "claude-haiku-4-5-20251001"), ("opus[1m]", "claude-opus-4-8[1m]"),
+])
+def test_unversioned_aliases_follow_the_local_claude_catalog(tmp_path, raw, expected):
+    profile = _claude_catalog_profile(tmp_path, _NEWER)
+    result = _model_call("normalize_claude_model", raw, extra_env={"CLAUDE_CONFIG_DIR": profile})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
+
+
+def test_warm_pool_identities_and_report_follow_the_same_resolution(tmp_path):
+    profile = _claude_catalog_profile(tmp_path, _NEWER, stale_in_ms=-1)
+    result = _model_call(
+        "report_claude_alias", "Sonnet", "claude-sonnet-6",
+        extra_env={"CLAUDE_CONFIG_DIR": profile},
+        prelude='load_claude_aliases || exit 1; printf "%s %s\\n" "$CLAUDE_WARM_OPUS_MODEL" "$CLAUDE_WARM_SONNET_MODEL"')
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "claude-opus-6 claude-sonnet-6"
+    assert "Claude model sonnet -> claude-sonnet-6 (local_catalog: catalog is stale)" in result.stderr
+
+
+def test_alias_report_names_the_bundled_table_and_why():
+    result = _model_call("report_claude_alias", "", "claude-opus-5-5",
+                         prelude="load_claude_aliases || exit 1")
+    assert result.returncode == 0, result.stderr
+    assert ("Claude model (default opus) -> claude-opus-5-5 "
+            "(bundled: no readable local Claude Code model catalog)") in result.stderr
+    pinned = _model_call("report_claude_alias", "sonnet-5", "claude-sonnet-5",
+                         prelude="load_claude_aliases || exit 1")
+    assert pinned.stderr == ""
+
+
+def _versioned_claude(path: pathlib.Path, version: str) -> pathlib.Path:
+    # Native installs link `claude` to .../claude/versions/<version>.
+    target = path.parent.parent / f"share-{version}" / "claude" / "versions" / version
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("#!/bin/sh\nexit 99\n")
+    target.chmod(0o755)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.symlink_to(target)
+    return path
+
+
+def test_versions_are_checked_against_the_claude_the_child_runs(tmp_path):
+    """~/.local/bin wins in the child; a newer claude elsewhere on PATH or in
+    AGENTSTACK_CLAUDE_BIN must not unlock a model the child cannot run."""
+    profile = _claude_catalog_profile(
+        tmp_path, [("claude-sonnet-6", "main", "Sonnet", {"min_claude_code_version": "8.0.0"})])
+    home = tmp_path / "home"
+    child_claude = _versioned_claude(home / ".local/bin/claude", "2.0.0")
+    newer = _versioned_claude(tmp_path / "pathbin/claude", "9.0.0")
+    env = {"CLAUDE_CONFIG_DIR": profile, "HOME": str(home), "CHILD_SHELL": "/bin/bash",
+           "PATH": f"{newer.parent}:/usr/bin:/bin", "AGENTSTACK_CLAUDE_BIN": str(newer)}
+    result = _model_call("normalize_claude_model", "sonnet", extra_env=env,
+                         prelude='load_claude_aliases || exit 1; echo "bin=$CLAUDE_CHILD_BIN" >&2')
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "claude-sonnet-5-5"
+    assert f"bin={child_claude}" in result.stderr
+
+    # The same binary is the one the child's command runs.
+    launch = _run_bash(_extract("claude_child_launch_command") + "\nclaude_child_launch_command\n",
+                       {"CHILD_SHELL": "/bin/bash"})
+    assert '"${CLAUDE_CHILD_BIN:-claude}" --model "$CLAUDE_CHILD_MODEL"' in launch.stdout
+    text = _SPAWN.read_text(encoding="utf-8")
+    assert text.count('-e "CLAUDE_CHILD_BIN=$CLAUDE_CHILD_BIN"') == 2
+
+    # With the child's claude new enough, the catalog row is used.
+    (home / ".local/bin/claude").unlink()
+    _versioned_claude(home / ".local/bin/claude", "8.0.0")
+    result = _model_call("normalize_claude_model", "sonnet", extra_env=env)
+    assert result.stdout.strip() == "claude-sonnet-6", result.stderr
+
+
+@pytest.mark.parametrize("status,warm_type,model,claims", [
+    ("opus ready (claude-opus-5-5)", "opus", "claude-opus-5-5", True),
+    # Started before the catalog moved on: not the requested model.
+    ("opus ready (claude-opus-5-5)", "opus", "claude-opus-6", False),
+    # A pool that does not say which model it started is not trusted.
+    ("opus ready", "opus", "claude-opus-5-5", False),
+    ("sonnet ready (claude-opus-6)", "opus", "claude-opus-6", False),
+    ("opus starting (claude-opus-6)", "opus", "claude-opus-6", False),
+    ("opus ready (claude-opus-6[1m])", "opus", "claude-opus-6", False),
+    ("opus ready (claude-opus-6)\nsonnet ready (claude-sonnet-6)", "sonnet", "claude-sonnet-6", True),
+    ("opus ready (claude-opus-6)", "__skip_warm__", "claude-opus-6", False),
+])
+def test_warm_pool_is_claimed_only_for_the_model_it_started(status, warm_type, model, claims):
+    result = _run_bash(_model_catalog() + f"\nwarm_pool_has_model {shlex.quote(warm_type)} {shlex.quote(model)} {shlex.quote(status)}\n")
+    assert (result.returncode == 0) is claims, result.stderr
+    assert 'warm_pool_has_model "$WARM_TYPE" "$CHILD_MODEL" "$WARM_STATUS"' in _SPAWN.read_text(encoding="utf-8")
+
+
+def test_unresolvable_aliases_stop_the_launch_instead_of_guessing():
+    result = _model_call("normalize_claude_model", "sonnet",
+                         extra_env={"AGENTSTACK_PYTHON": "/usr/bin/false"})
+    assert result.returncode != 0
+    assert "could not resolve the Claude model aliases" in result.stderr
+    unloaded = _model_call("normalize_claude_model", "sonnet", prelude=":")
+    assert unloaded.returncode != 0
+    assert "load_claude_aliases must run first" in unloaded.stderr
+    assert unloaded.stdout.strip() == ""
 
 
 def test_model_specific_effort_constraints_are_enforced():
@@ -508,14 +664,19 @@ def test_both_launch_paths_use_the_shared_model_catalog():
     assert '${CLAUDE_MODEL:-gpt-5.5}' not in text
     assert '"$CLAUDE_WARM_OPUS_MODEL")' in text
     assert '"$CLAUDE_WARM_SONNET_MODEL")' in text
+    # Both Claude paths resolve the aliases first and say where they pointed.
+    assert text.count("load_claude_aliases || exit 1") == 2
+    assert text.count('report_claude_alias "$CLAUDE_MODEL" "$CHILD_MODEL"') == 2
+    # No generation of an unversioned alias is fixed in the launcher.
+    assert not re.search(r'^CLAUDE_(DEFAULT|WARM)_\w*MODEL="claude-', text, re.M)
 
 
 def test_launcher_no_longer_hardcodes_full_auto():
     text = _SPAWN.read_text(encoding="utf-8")
     assert "--full-auto \\" not in text, "hardcoded --full-auto still in a launch line"
     # Both launch paths take the probed flags from the child environment.
-    assert text.count('--sandbox workspace-write $(printf "%s" "$AGENTSTACK_CODEX_APPROVAL")') == 2
-    assert text.count('-e "AGENTSTACK_CODEX_APPROVAL=$(codex_approval_flags)"') == 2
+    assert text.count('$(printf "%s" "$AGENTSTACK_CODEX_PERMISSION_FLAGS")') == 2
+    assert text.count('-e "AGENTSTACK_CODEX_PERMISSION_FLAGS=$(codex_permission_flags)"') == 2
 
 
 def test_dead_child_fails_fast_instead_of_waiting_out_the_timeout():
@@ -523,6 +684,23 @@ def test_dead_child_fails_fast_instead_of_waiting_out_the_timeout():
     # The shared Codex watch checks liveness; both cold paths abort on it.
     assert "codex_session_alive" in _extract("codex_watch_initial_task")
     assert text.count("exited before starting its task") == 2
+
+
+def test_unproven_mcp_error_is_not_explicit_session_absence():
+    # An error string alone proves neither process death nor task startup.
+    script = (
+        'sleep() { :; }\n'
+        'tmux() { echo "Error: required MCP server chosen failed to initialize"; return 1; }\n'
+        'codex_initial_task_status() { echo unknown; }\n'
+        'spawn_note() { printf "%s\\n" "$*"; }\n'
+        + _extract("codex_session_alive") + "\n"
+        + _extract("codex_watch_initial_task")
+        + '\nSECONDS=0; codex_watch_initial_task Child task test /l id\n'
+    )
+    result = _run_bash(script)
+    assert result.returncode == 3
+    assert "died" not in result.stderr
+    assert "confirmation unknown" in result.stdout
 
 
 def test_trust_dialog_uses_carriage_return_and_has_a_hard_attempt_limit():
@@ -606,10 +784,13 @@ def test_prompt_injection_is_verified_in_every_launch_path():
     text = _SPAWN.read_text(encoding="utf-8")
     verifier = _extract("verify_injection")
 
-    # Claude paths verify the paste; Codex cold paths watch for the argv task.
-    assert text.count('verify_injection "$CHILD_NAME"') == 2
+    # Only a claimed warm Claude session still receives a paste, and verifies
+    # it. Cold Claude starts take the prompt as their argv and, like Codex,
+    # are watched until they act on it.
+    assert text.count('verify_injection "$CHILD_NAME"') == 1
+    assert text.count('flush_queued_prompt "$CHILD_NAME"') == 1
     assert text.count('codex_watch_initial_task "$CHILD_NAME"') == 2
-    assert text.count('flush_queued_prompt "$CHILD_NAME"') == 2
+    assert text.count('claude_watch_initial_task "$CHILD_NAME"') == 2
     assert "capture-pane" in verifier and "-S -1000" in verifier
     assert "kill-session" not in verifier
 
@@ -954,6 +1135,18 @@ def _main() -> int:
     return 1 if failures else 0
 
 
+def test_launcher_normalization_uses_configured_cli_version():
+    for version, expected in [("0.158.0", "gpt-6-sol"), ("0.159.0", "gpt-6.1-sol"), ("0.159.1", "gpt-6.1-sol")]:
+        with tempfile.TemporaryDirectory() as directory:
+            binary = pathlib.Path(directory) / "codex"
+            binary.write_text(f'#!/bin/sh\n[ "$1" = --version ] || exit 2\necho "codex-cli {version}"\n')
+            binary.chmod(0o755)
+            for requested in ("", "sol"):
+                result = _model_call("normalize_codex_model", requested, extra_env={"AGENTSTACK_CODEX_BIN": str(binary)})
+                assert result.returncode == 0, result.stderr
+                assert result.stdout.strip() == expected
+
+
 if __name__ == "__main__":
     sys.exit(_main())
 
@@ -1099,7 +1292,7 @@ def test_codex_polls_capture_the_visible_screen_only():
     assert 'capture-pane -t "$CHILD_NAME" -p -S -30' not in text
     # The shared Claude wait plus the shared Codex watch.
     assert 'pane_text=$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)' in _extract("wait_for_claude_ready")
-    assert 'pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null || true)"' in _extract("codex_watch_initial_task")
+    assert 'if pane_text="$(tmux capture-pane -t "$session_name" -p 2>/dev/null)"; then' in _extract("codex_watch_initial_task")
 
 
 def test_child_shell_never_sources_a_user_bootstrap():
@@ -1115,13 +1308,17 @@ def test_child_proxy_configs_carry_the_bearer_mode():
     child_home_helper = (_ROOT / "hooks" / "child_resume.py").read_text(
         encoding="utf-8"
     )
-    assert "AGENTSTACK_MAIL_HTTP_BEARER_MODE=bearer_mode," in text
+    # The Claude child's config is written by hooks/child_tools.py for both
+    # the launcher and the dashboard resume.
+    assert "hooks/child_tools.py" in text or "child_tools.py\" claude-config" in text
+    child_tools_text = (_ROOT / "hooks" / "child_tools.py").read_text(encoding="utf-8")
+    assert "AGENTSTACK_MAIL_HTTP_BEARER_MODE=args.bearer_mode," in child_tools_text
     assert (
         '"AGENTSTACK_MAIL_HTTP_BEARER_MODE = " + _toml_string(bearer_mode)'
         in child_home_helper
     )
     run_mcp = (_ROOT / "integrations" / "codex_app" / "plugin" / "scripts" / "run-mcp.sh").read_text(encoding="utf-8")
-    assert 'server_env["AGENTSTACK_PYTHON"] = python_bin' in text
+    assert 'env["AGENTSTACK_PYTHON"] = args.python_bin' in child_tools_text
     assert (
         'lines.append("AGENTSTACK_PYTHON = " + _toml_string(python_bin))'
         in child_home_helper
@@ -1130,7 +1327,13 @@ def test_child_proxy_configs_carry_the_bearer_mode():
     assert "  AGENTSTACK_PYTHON\n" in run_mcp
 
 
-def test_actual_codex_launch_commands_keep_models_and_optional_efforts():
+@pytest.mark.parametrize("permissions", [
+    "--sandbox workspace-write",
+    "--sandbox workspace-write --ask-for-approval never",
+    "--sandbox danger-full-access --ask-for-approval never",
+])
+def test_actual_codex_launch_commands_keep_models_and_optional_efforts(permissions, monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTSTACK_HOME", str(tmp_path / "agentstack"))
     text = _SPAWN.read_text(encoding="utf-8")
     snippets = re.findall(r'EXTRA_ARGS=\(\)\n.*?--model "\$AGENTSTACK_CODEX_MODEL" -- "\$AGENTSTACK_CODEX_TASK"', text, re.S)
     assert len(snippets) == 2
@@ -1154,11 +1357,12 @@ def test_actual_codex_launch_commands_keep_models_and_optional_efforts():
                     "AGENTSTACK_CODEX_MODEL": model,
                     "AGENTSTACK_CODEX_EFFORT": validated.stdout.strip(),
                     "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED": "",
-                    "AGENTSTACK_CODEX_APPROVAL": "--ask-for-approval never",
+                    "AGENTSTACK_CODEX_PERMISSION_FLAGS": permissions,
                     "AGENTSTACK_CODEX_NETWORK_FLAGS": "",
                 })
                 assert result.returncode == 0, result.stderr
                 argv = json.loads(result.stdout)
+                assert argv[2:argv.index("-c")] == permissions.split()
                 assert argv[argv.index("--model")+1] == model
                 assert [x for x in argv if x.startswith("model_reasoning_effort=")] == (
                     ["model_reasoning_effort="+effort] if effort else [])
@@ -1270,3 +1474,146 @@ def test_codex_empty_or_unrecognised_capture_is_never_confirmed():
 def test_codex_trust_heading_is_not_mistaken_for_the_selected_row():
     heading = "> Trust this folder?\n  1. Trust and continue\n› 2. Quit\n"
     assert _codex_accept_with_screens([heading, heading]) == ["KEYS:send-keys -t Child Up"]
+
+
+# --- #60: no startup update screen in a product-launched Codex ----------------
+# Codex's "Update available" screen defaults to `npm install -g @openai/codex`.
+# An unattended child has nobody to decline it, and a launcher that stops the
+# child mid-install leaves the machine's codex half replaced.
+
+_NO_UPDATE = "check_for_update_on_startup=false"
+
+
+def test_every_codex_launch_turns_off_the_startup_update_check():
+    spawn = _SPAWN.read_text(encoding="utf-8")
+    assert spawn.count(
+        '$(printf "%s" "$AGENTSTACK_CODEX_NETWORK_FLAGS") -c ' + _NO_UPDATE + " \\\n"
+    ) == 2
+    windows = (_ROOT / "scripts" / "windows" / "codex_launcher.py").read_text(encoding="utf-8")
+    assert f"'-c', '{_NO_UPDATE}'" in windows
+
+
+def test_agent_start_codex_turns_off_the_startup_update_check():
+    text = (_ROOT / "bin" / "agent-start-codex").read_text(encoding="utf-8")
+    function = text[text.index("build_codex_cmd() {"):text.index("\n}\n", text.index("build_codex_cmd() {")) + 3]
+    result = subprocess.run(
+        ["/bin/bash", "-c",
+         "set -euo pipefail\nCODEX_BIN=codex\nSANDBOX=workspace-write\nAPPROVAL=on-request\n"
+         + function + '\nbuild_codex_cmd /tmp\n'],
+        text=True, capture_output=True, check=True,
+    )
+    assert f"-c {_NO_UPDATE}" in result.stdout
+
+
+def test_dashboard_resume_turns_off_the_startup_update_check(monkeypatch):
+    sys.path.insert(0, str(_ROOT / "dashboard"))
+    import server  # noqa: PLC0415
+
+    for network in ("on", "off"):
+        monkeypatch.setenv("AGENTSTACK_CODEX_NETWORK", network)
+        assert f"-c {_NO_UPDATE}" in server._codex_child_launch_flags()
+
+
+def test_the_dashboard_never_kills_a_codex_updating_itself(monkeypatch):
+    # #60: a spawn that fails while Codex runs `npm install -g` must leave the
+    # session alone, or the machine's codex is left half replaced.
+    from dashboard import server
+
+    screens = {"updating": "Updating Codex via `npm install -g @openai/codex`...\n", "idle": "› Ask Codex\n"}
+    for name, screen in screens.items():
+        monkeypatch.setattr(server, "_tmux_run",
+                            lambda argv, s=screen, **_kw: server.subprocess.CompletedProcess(argv, 0, s, ""))
+        assert server._codex_self_update_on_screen("Child") is (name == "updating")
+    source = (_ROOT / "dashboard" / "server.py").read_text(encoding="utf-8")
+    body = source[source.index("    def kill_spawn_session() -> bool:"):]
+    body = body[:body.index("\n\n")]
+    assert body.index("_codex_self_update_on_screen") < body.index("'kill-session'")
+
+
+@pytest.mark.parametrize("parent, started", [("", False), ("ParentAgent", True)])
+def test_the_first_turn_watch_runs_only_when_there_is_a_parent_to_tell(tmp_path, parent, started):
+    """A standalone child is not asked to report; watching its first turn only
+    produced "declined; could not tell the parent by Mail: no parent to tell"
+    for a child that was working as asked (2026-10-04)."""
+    mark = tmp_path / "watch-started"
+    fake_python = tmp_path / "python"
+    fake_python.write_text(f"#!/bin/sh\ntouch '{mark}'\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    script = _extract("claude_watch_initial_task") + "\n" + (
+        'claude_prompt_head() { printf "%s" "$1"; }\n'
+        f'claude_watch_initial_task Probe-Curie "{parent}" /nonexistent "task text"\n'
+        "wait\n"
+    )
+    result = _run_bash(script, {"AGENTSTACK_CHILD_START_CHECK": "1",
+                                "AGENTSTACK_PYTHON": str(fake_python), "HOOKS_DIR": str(tmp_path)})
+    assert result.returncode == 0, result.stderr
+    import time
+    deadline = time.monotonic() + 5
+    while started and not mark.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert mark.exists() is started
+
+
+@pytest.mark.parametrize("age", [0, 3600])
+def test_delegate_launcher_default_falls_back_and_prints_notice(tmp_path, age):
+    binary = tmp_path / "codex"
+    binary.write_text('#!/bin/sh\n[ "$1" = --version ] || exit 2\necho "codex-cli 0.160.1"\n')
+    binary.chmod(0o755)
+    fetched = (datetime.now(timezone.utc) - timedelta(seconds=age)).isoformat()
+    (tmp_path / "models_cache.json").write_text(json.dumps({
+        "fetched_at": fetched, "models": [{"slug": "gpt-6-luna"}],
+    }))
+    env = {"AGENTSTACK_CODEX_BIN": str(binary), "CODEX_HOME": str(tmp_path)}
+    for requested in ("", "sol"):
+        result = _model_call("normalize_codex_model", requested, extra_env=env)
+        if requested == "sol" and age == 0:
+            assert result.returncode != 0 and "no eligible sol" in result.stderr
+            continue
+        assert result.returncode == 0, result.stderr
+        if requested == "sol":
+            assert result.stdout.strip() == "gpt-6.1-sol"
+            assert result.stderr == ""
+        else:
+            assert result.stdout.strip() == "gpt-6-luna"
+            assert "from gpt-6.1-sol to gpt-6-luna" in result.stderr
+            if age:
+                assert fetched in result.stderr and "Start codex once" in result.stderr
+    explicit = _model_call("normalize_codex_model", "gpt-6.1-sol", extra_env=env)
+    assert explicit.stdout.strip() == "gpt-6.1-sol"
+    assert explicit.stderr == ""
+    # /delegate captures resolve's JSON before preregistration and later passes
+    # its formal ID to the launcher. The note must survive that capture.
+    resolve_env = {**os.environ, **env, "AGENTSTACK_CHILD_SHELL": "/bin/bash"}
+    for requested in ("", "sol", "gpt-6.1-sol"):
+        result = subprocess.run([sys.executable, str(_ROOT / "dashboard/codex_models.py"),
+                                 "resolve", requested], env=resolve_env,
+                                capture_output=True, text=True, timeout=20)
+        if requested == "sol" and age == 0:
+            assert result.returncode != 0 and "no eligible sol" in result.stderr
+            continue
+        assert result.returncode == 0, result.stderr
+        policy = json.loads(result.stdout)
+        if requested:
+            assert policy["model"] == ("gpt-6.1-sol" if requested == "sol" else requested)
+            assert "model_note" not in policy and result.stderr == ""
+        else:
+            assert policy["model"] == "gpt-6-luna"
+            assert policy["model_note"] in result.stderr
+
+
+def test_delegate_example_omits_effort_and_launcher_resolves_configured_default(tmp_path):
+    skill = (_ROOT / 'skills/delegate/SKILL.md').read_text()
+    example = skill.split('AGENTSTACK_CODEX_BIN="$CODEX_BIN" PARENT_AGENT=', 1)[1].split('```', 1)[0]
+    assert '--model "$CODEX_MODEL"' in example
+    assert '--effort' not in example
+    stack = tmp_path / 'stack'
+    stack.mkdir()
+    (stack / 'env.sh').write_text('export AGENTSTACK_CODEX_DEFAULT_EFFORT=high\n')
+    result = _model_call('validate_codex_effort', 'gpt-6-sol', '',
+                         extra_env={'AGENTSTACK_HOME': str(stack), 'AGENTSTACK_LABEL_PREFIX': 'org.agentstack.test.codex-default-effort'})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'high'
+    explicit = _model_call('validate_codex_effort', 'gpt-6-sol', 'medium',
+                           extra_env={'AGENTSTACK_HOME': str(stack), 'AGENTSTACK_LABEL_PREFIX': 'org.agentstack.test.codex-default-effort'})
+    assert explicit.returncode == 0, explicit.stderr
+    assert explicit.stdout.strip() == 'medium'

@@ -1,0 +1,648 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "provider": {
+      "enum": [
+        "claude",
+        "codex"
+      ]
+    },
+    "action": {
+      "enum": [
+        "print",
+        "check",
+        "plan",
+        "apply",
+        "resume",
+        "replan",
+        "uninstall",
+        "remove-legacy-block"
+      ]
+    },
+    "stage": {
+      "enum": [
+        "planned",
+        "backed_up",
+        "writing",
+        "target_verified",
+        "sources_pending",
+        "complete",
+        "retained",
+        "uninstalled"
+      ]
+    },
+    "finding_kind": {
+      "enum": [
+        "current",
+        "legacy",
+        "duplicate",
+        "missing",
+        "unknown",
+        "edited",
+        "malformed"
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "render_inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "install_home": {
+          "type": "string"
+        },
+        "project_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "renderer_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "install_home",
+        "project_key",
+        "renderer_id"
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/finding_kind"
+        },
+        "template_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "block_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cleanup_argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "source_path",
+        "kind",
+        "template_id",
+        "block_sha256",
+        "reason",
+        "cleanup_argv"
+      ]
+    },
+    "file_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requested_path": {
+          "type": "string"
+        },
+        "resolved_path": {
+          "type": "string"
+        },
+        "before_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "after_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "before_block_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "after_block_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "template_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "render_inputs": {
+          "$ref": "#/$defs/render_inputs"
+        },
+        "git_state": {
+          "enum": [
+            "tracked",
+            "untracked",
+            "unknown",
+            "not-source"
+          ]
+        },
+        "strategy": {
+          "enum": [
+            "atomic-referent",
+            "read-only"
+          ]
+        },
+        "link_chain": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "dev": {
+                "type": "integer"
+              },
+              "ino": {
+                "type": "integer"
+              },
+              "link_text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "dev",
+              "ino",
+              "link_text"
+            ]
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dev": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ino": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mode": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "nlink": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "acl_sha256": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/sha256"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "xattr_sha256": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/sha256"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "dev",
+            "ino",
+            "mode",
+            "nlink",
+            "acl_sha256",
+            "xattr_sha256"
+          ]
+        }
+      },
+      "required": [
+        "requested_path",
+        "resolved_path",
+        "before_sha256",
+        "after_sha256",
+        "before_block_sha256",
+        "after_block_sha256",
+        "template_id",
+        "render_inputs",
+        "git_state",
+        "strategy",
+        "link_chain",
+        "metadata"
+      ]
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "resolved_home": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/file_plan"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/file_plan"
+          }
+        },
+        "selection_argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "template_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "provider",
+        "resolved_home",
+        "target",
+        "sources",
+        "selection_argv",
+        "template_sha256"
+      ]
+    },
+    "source_progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "backup": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stage": {
+          "$ref": "#/$defs/stage"
+        }
+      },
+      "required": [
+        "path_sha256",
+        "backup",
+        "stage"
+      ]
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "orrery-instruction-migration-v2"
+        },
+        "plan_id": {
+          "$ref": "#/$defs/sha256"
+        },
+        "plan": {
+          "$ref": "#/$defs/plan"
+        },
+        "consent": {
+          "enum": [
+            "interactive-remove",
+            "interactive-keep",
+            "assume-yes-known-only",
+            "not-required"
+          ]
+        },
+        "stage": {
+          "$ref": "#/$defs/stage"
+        },
+        "target_backup": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sources_progress": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source_progress"
+          }
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "kind",
+        "plan_id",
+        "plan",
+        "consent",
+        "stage",
+        "target_backup",
+        "sources_progress",
+        "supersedes",
+        "updated_at"
+      ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/action"
+        },
+        "provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "plan_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_plan_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "supersede_plan_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "assume_yes": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action",
+        "provider",
+        "plan_id",
+        "expected_plan_id",
+        "supersede_plan_id",
+        "source_paths",
+        "cwd",
+        "dry_run",
+        "assume_yes"
+      ]
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "action": {
+          "$ref": "#/$defs/action"
+        },
+        "provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "target_path": {
+          "type": "string"
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/stage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plan_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/plan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "apply_argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "action",
+        "provider",
+        "target_path",
+        "stage",
+        "plan_id",
+        "plan",
+        "apply_argv",
+        "findings",
+        "reason",
+        "next_argv"
+      ]
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "enum": [
+            "claude",
+            "codex",
+            null
+          ]
+        },
+        "target_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "checked_at": {
+          "type": "string"
+        },
+        "disk_state": {
+          "enum": [
+            "unknown",
+            "needs_review",
+            "legacy_present",
+            "update_required",
+            "clean",
+            "not_configured"
+          ]
+        },
+        "session_state": {
+          "enum": [
+            "unknown",
+            "reload_required",
+            "candidates_unchanged"
+          ]
+        },
+        "evidence_kind": {
+          "const": "candidate-observation-not-effective-load"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "target_path",
+        "findings",
+        "checked_at",
+        "disk_state",
+        "session_state",
+        "evidence_kind",
+        "reason"
+      ]
+    }
+  }
+}

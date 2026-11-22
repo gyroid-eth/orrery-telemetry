@@ -4,9 +4,61 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${AGENTSTACK_ENV_FILE:-$HERE/../env.sh}"
-if [[ -f "$ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  . "$ENV_FILE"
+# Keep presence separate from value: sourcing an old env.sh must not turn an
+# absent EXTRAS into an empty process override before an installer update.
+EXTRA_PROTECTED_ROOTS_GIVEN="${AGENTSTACK_EXTRA_PROTECTED_ROOTS+x}"
+EXTRA_PROTECTED_ROOTS_LIVE="${AGENTSTACK_EXTRA_PROTECTED_ROOTS-}"
+_ags_mode_loader="$HERE/../bin/lib/global-client-loader.sh"
+if [[ -f "$_ags_mode_loader" ]]; then
+  . "$_ags_mode_loader"
+  _ags_reader="$HERE/../hooks/project-context.sh"
+  _ags_saved_mode=""
+  if [[ -f "$_ags_reader" && -f "$ENV_FILE" ]]; then
+    "${AGENTSTACK_PYTHON:-python3}" - "$ENV_FILE" "$_ags_reader" <<'PY_SAFE' || exit 2
+import os,stat,sys
+from pathlib import Path
+for raw in sys.argv[1:]:
+    p=Path(os.path.abspath(raw));info=p.lstat()
+    if p.resolve()!=p or not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_mode&0o022:
+        raise SystemExit('FRESH_STARTUP_SETTINGS_UNAVAILABLE')
+PY_SAFE
+    . "$_ags_reader"
+    _ags_saved_mode="$(agentstack_installed_env_value AGENTSTACK_RUNTIME_MODE "$ENV_FILE")"
+  fi
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-$_ags_saved_mode}" == fresh ]]; then
+    [[ -z "$_ags_saved_mode" || "$_ags_saved_mode" == fresh ]] || { printf '%s\n' FRESH_CONTEXT_CONFLICT >&2; exit 2; }
+    [[ -f "$_ags_reader" && -f "$ENV_FILE" ]] || { printf '%s\n' FRESH_STARTUP_SETTINGS_UNAVAILABLE >&2; exit 2; }
+    [[ -z "${AGENTSTACK_CLIENT_CONFIG:-}" && -z "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}" ]] || { printf '%s\n' FRESH_CONTEXT_CONFLICT >&2; exit 2; }
+    for _ags_setting in $AGENTSTACK_INHERITED_SETTINGS; do
+      if [[ -z "${!_ags_setting:-}" ]]; then
+        _ags_assignment="$(agentstack_installed_env_value "$_ags_setting" "$ENV_FILE" --shell)" || exit 2
+        [[ -z "$_ags_assignment" ]] || eval "$_ags_assignment"
+      fi
+    done
+    for _ags_setting in AGENTSTACK_HOME AGENTSTACK_RUNTIME_MODE AGENTSTACK_FRESH_CLIENT_CONTEXT \
+        AGENTSTACK_FRESH_DASHBOARD_SOCKET AGENTSTACK_FRESH_SERVER_CONFIG ORRERY_FRESH_MAIL_INSTANCE_ID; do
+      _ags_assignment="$(agentstack_installed_env_value "$_ags_setting" "$ENV_FILE" --shell)" || exit 2
+      [[ -z "$_ags_assignment" ]] || eval "$_ags_assignment"
+    done
+    "${AGENTSTACK_PYTHON:-python3}" - "${AGENTSTACK_FRESH_CLIENT_CONTEXT:-}" \
+        "${ORRERY_FRESH_MAIL_INSTANCE_ID:-}" "${AGENTSTACK_FRESH_SERVER_CONFIG:-}" <<'PY_PLAN' || exit 2
+import sys
+from agentstack_mail.fresh_client import startup_projection
+try:
+    value=startup_projection(sys.argv[1])
+    if (value['mail_instance_id'],value['server_config'])!=tuple(sys.argv[2:]):raise ValueError
+except Exception:raise SystemExit('FRESH_STARTUP_SETTINGS_UNAVAILABLE') from None
+PY_PLAN
+  else
+    ags_client_bootstrap "$ENV_FILE" --system "$@" || exit $?
+  fi
+else
+  printf '%s\n' GLOBAL_ENTRY_UNAVAILABLE >&2
+  exit 2
+fi
+
+if [[ "$EXTRA_PROTECTED_ROOTS_GIVEN" == x ]]; then
+  export AGENTSTACK_EXTRA_PROTECTED_ROOTS="$EXTRA_PROTECTED_ROOTS_LIVE"
 fi
 
 LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}"
@@ -14,6 +66,7 @@ LABEL="$LABEL_PREFIX.agentdashboard"
 PLIST_TEMPLATE="$HERE/agentdashboard.plist.template"
 PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
 PORT="${AGENTSTACK_PORT:-8770}"
+DASHBOARD_ALLOWED_ORIGINS_SETTING="${AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS:-}"
 PYTHON="${AGENTSTACK_PYTHON:-/usr/bin/python3}"
 TERMINAL="${AGENTSTACK_TERMINAL:-auto}"
 AUTO_OPEN_CHILD_SETTING="${AGENTSTACK_AUTO_OPEN_CHILD:-1}"
@@ -24,7 +77,7 @@ MAIL_HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
 SIGNALS_DIR="${AGENTSTACK_SIGNALS_DIR:-$MAIL_HOME/signals}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
-PROTECTED_ROOTS="${AGENTSTACK_PROTECTED_ROOTS:-$PROJECT_KEY}"
+EXTRA_PROTECTED_ROOTS="${AGENTSTACK_EXTRA_PROTECTED_ROOTS-}"
 DELIVERABLE_ROOTS="${AGENTSTACK_DELIVERABLE_ROOTS:-}"
 LANG_SETTING="${AGENTSTACK_LANG:-}"
 MURMUR_SETTING="${AGENTSTACK_MURMUR:-}"
@@ -33,11 +86,16 @@ SPAWN_ROOTS_SETTING="${AGENTSTACK_SPAWN_ROOTS:-}"
 WORKTREE_ROOT_SETTING="${AGENTSTACK_WORKTREE_ROOT:-$HERE/../worktrees}"
 CODEX_CHILD_APPROVAL_SETTING="${AGENTSTACK_CODEX_CHILD_APPROVAL:-}"
 CODEX_NETWORK_SETTING="${AGENTSTACK_CODEX_NETWORK:-}"
+CHILD_DEFAULT_TOOLS_SETTING="${AGENTSTACK_CHILD_DEFAULT_TOOLS:-}"
 CODEX_ADD_DIRS_SETTING="${AGENTSTACK_CODEX_ADD_DIRS:-}"
 PORTRAITS_DIR_SETTING="${AGENTSTACK_PORTRAITS_DIR:-}"
 CUSTOM_PORTRAITS_SETTING="${AGENTSTACK_CUSTOM_PORTRAITS:-}"
 CLAUDE_MODELS_SETTING="${AGENTSTACK_CLAUDE_MODELS:-}"
 CODEX_MODELS_SETTING="${AGENTSTACK_CODEX_MODELS:-}"
+CODEX_DEFAULT_MODEL_SETTING="${AGENTSTACK_CODEX_DEFAULT_MODEL:-}"
+CODEX_DEFAULT_EFFORT_SETTING="${AGENTSTACK_CODEX_DEFAULT_EFFORT:-}"
+DSH_NODE_SETTING="${AGENTSTACK_DSH_NODE:-}"
+MANAGED_SPAWN_CONFIG_SETTING="${AGENTSTACK_MANAGED_SPAWN_CONFIG:-}"
 HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$HOME/.agentstack/hooks}"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 MANAGED_AGENTS_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
@@ -70,7 +128,10 @@ render_plist() {
     -e "s|__LABEL_PREFIX__|$(sed_escape "$LABEL_PREFIX")|g" \
     -e "s|__INSTALL_DIR__|$(sed_escape "$HERE")|g" \
     -e "s|__PYTHON__|$(sed_escape "$PYTHON")|g" \
+    -e "s|__RUNTIME_MODE__|$(xml_sed_escape "${AGENTSTACK_RUNTIME_MODE:-legacy}")|g" \
+    -e "s|__GLOBAL_SERVER_CONFIG__|$(xml_sed_escape "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}")|g" \
     -e "s|__PORT__|$(sed_escape "$PORT")|g" \
+    -e "s|__DASHBOARD_ALLOWED_ORIGINS__|$(xml_sed_escape "${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}")|g" \
     -e "s|__MAIL_DB__|$(sed_escape "$MAIL_DB")|g" \
     -e "s|__MAIL_ENV__|$(sed_escape "$MAIL_ENV")|g" \
     -e "s|__MAIL_HOME__|$(sed_escape "$MAIL_HOME")|g" \
@@ -80,22 +141,49 @@ render_plist() {
     -e "s|__TERMINAL__|$(sed_escape "$TERMINAL")|g" \
     -e "s|__AUTO_OPEN_CHILD__|$(sed_escape "$AUTO_OPEN_CHILD_SETTING")|g" \
     -e "s|__PROJECT_KEY__|$(sed_escape "$PROJECT_KEY")|g" \
-    -e "s|__PROTECTED_ROOTS__|$(sed_escape "$PROTECTED_ROOTS")|g" \
+    -e "s|__EXTRA_PROTECTED_ROOTS__|$(xml_sed_escape "$EXTRA_PROTECTED_ROOTS")|g" \
     -e "s|__DELIVERABLE_ROOTS__|$(sed_escape "$DELIVERABLE_ROOTS")|g" \
     -e "s|__LANG__|$(sed_escape "$LANG_SETTING")|g" \
     -e "s|__MURMUR__|$(sed_escape "$MURMUR_SETTING")|g" \
+    -e "s|__SPAWN_DIRS__|$(xml_sed_escape "$SPAWN_DIRS_SETTING")|g" \
+    -e "s|__SPAWN_ROOTS__|$(xml_sed_escape "$SPAWN_ROOTS_SETTING")|g" \
+    -e "s|__CODEX_CHILD_APPROVAL__|$(xml_sed_escape "$CODEX_CHILD_APPROVAL_SETTING")|g" \
+    -e "s|__CODEX_NETWORK__|$(xml_sed_escape "$CODEX_NETWORK_SETTING")|g" \
+    -e "s|__CODEX_ADD_DIRS__|$(xml_sed_escape "$CODEX_ADD_DIRS_SETTING")|g" \
+    -e "s|__CHILD_RESUME_RETENTION_DAYS__|$(xml_sed_escape "${AGENTSTACK_CHILD_RESUME_RETENTION_DAYS:-30}")|g" \
+    -e "s|__CODEX_BIN__|$(xml_sed_escape "${AGENTSTACK_CODEX_BIN:-}")|g" \
+    -e "s|__PORTRAITS_DIR__|$(xml_sed_escape "$PORTRAITS_DIR_SETTING")|g" \
+    -e "s|__CUSTOM_PORTRAITS__|$(xml_sed_escape "$CUSTOM_PORTRAITS_SETTING")|g" \
+    -e "s|__CODEX_MODELS__|$(xml_sed_escape "$CODEX_MODELS_SETTING")|g" \
+    -e "s|__CODEX_DEFAULT_MODEL__|$(xml_sed_escape "$CODEX_DEFAULT_MODEL_SETTING")|g" \
+    -e "s|__CODEX_DEFAULT_EFFORT__|$(xml_sed_escape "$CODEX_DEFAULT_EFFORT_SETTING")|g" \
     -e "s|__CLAUDE_MODELS__|$(xml_sed_escape "$CLAUDE_MODELS_SETTING")|g" \
+    -e "s|__CHILD_DEFAULT_TOOLS__|$(xml_sed_escape "$CHILD_DEFAULT_TOOLS_SETTING")|g" \
     -e "s|__WORKTREE_ROOT__|$(sed_escape "$WORKTREE_ROOT_SETTING")|g" \
     -e "s|__HOOKS_DIR__|$(sed_escape "$HOOKS_DIR")|g" \
     -e "s|__RUNTIME_DIR__|$(sed_escape "$RUNTIME_DIR")|g" \
+    -e "s|__PERSISTENT_PROFILES_DIR__|$(xml_sed_escape "${AGENTSTACK_PERSISTENT_PROFILES_DIR:-$HOME/.agentstack/profiles}")|g" \
     -e "s|__DASHBOARD_LOG__|$(sed_escape "$DASHBOARD_LOG")|g" \
     -e "s|__DASHBOARD_LOG_MAX_BYTES__|$(sed_escape "$DASHBOARD_LOG_MAX_BYTES")|g" \
     -e "s|__DASHBOARD_LOG_BACKUPS__|$(sed_escape "$DASHBOARD_LOG_BACKUPS")|g" \
     -e "s|__DASHBOARD_RESTART_DELAY__|$(sed_escape "$DASHBOARD_RESTART_DELAY")|g" \
     -e "s|__MANAGED_AGENTS_FILE__|$(sed_escape "$MANAGED_AGENTS_FILE")|g" \
+    -e "s|__DSH_NODE__|$(xml_sed_escape "$DSH_NODE_SETTING")|g" \
+    -e "s|__MANAGED_SPAWN_CONFIG__|$(xml_sed_escape "$MANAGED_SPAWN_CONFIG_SETTING")|g" \
     -e "s|__VAULT__|$(sed_escape "$VAULT")|g" \
     -e "s|__PATH__|$(sed_escape "$PATH_VALUE")|g" \
     "$PLIST_TEMPLATE" > "$PLIST_DST"
+  if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+    "$PYTHON" - "$PLIST_DST" <<'PY_FRESH'
+import os,plistlib,sys
+from pathlib import Path
+p=Path(sys.argv[1]);value=plistlib.loads(p.read_bytes())
+for key in ('AGENTSTACK_HOME','AGENTSTACK_RUNTIME_MODE','AGENTSTACK_FRESH_CLIENT_CONTEXT',
+            'AGENTSTACK_FRESH_DASHBOARD_SOCKET','AGENTSTACK_FRESH_SERVER_CONFIG','ORRERY_FRESH_MAIL_INSTANCE_ID'):
+    value['EnvironmentVariables'][key]=os.environ[key]
+p.write_bytes(plistlib.dumps(value))
+PY_FRESH
+  fi
 }
 
 background_pid() {
@@ -127,6 +215,7 @@ wait_for_launchd_unload() {
 
 export_background_env() {
   export AGENTSTACK_PORT="$PORT"
+  export AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS="$DASHBOARD_ALLOWED_ORIGINS_SETTING"
   export AGENTSTACK_LABEL_PREFIX="$LABEL_PREFIX"
   export AGENTSTACK_MAIL_DB="$MAIL_DB"
   export AGENTSTACK_MAIL_ENV="$MAIL_ENV"
@@ -137,7 +226,10 @@ export_background_env() {
   export AGENTSTACK_TERMINAL="$TERMINAL"
   export AGENTSTACK_AUTO_OPEN_CHILD="$AUTO_OPEN_CHILD_SETTING"
   export AGENTSTACK_PROJECT_KEY="$PROJECT_KEY"
-  export AGENTSTACK_PROTECTED_ROOTS="$PROTECTED_ROOTS"
+  # Managed children compute their own roots. Only explicit extras are service
+  # configuration; do not export a cached session ROOTS value from env.sh.
+  unset AGENTSTACK_PROTECTED_ROOTS
+  export AGENTSTACK_EXTRA_PROTECTED_ROOTS="$EXTRA_PROTECTED_ROOTS"
   export AGENTSTACK_DELIVERABLE_ROOTS="$DELIVERABLE_ROOTS"
   export AGENTSTACK_LANG="$LANG_SETTING"
   export AGENTSTACK_MURMUR="$MURMUR_SETTING"
@@ -146,11 +238,16 @@ export_background_env() {
   export AGENTSTACK_WORKTREE_ROOT="$WORKTREE_ROOT_SETTING"
   export AGENTSTACK_CODEX_CHILD_APPROVAL="$CODEX_CHILD_APPROVAL_SETTING"
   export AGENTSTACK_CODEX_NETWORK="$CODEX_NETWORK_SETTING"
+  export AGENTSTACK_CHILD_DEFAULT_TOOLS="$CHILD_DEFAULT_TOOLS_SETTING"
   export AGENTSTACK_CODEX_ADD_DIRS="$CODEX_ADD_DIRS_SETTING"
   export AGENTSTACK_PORTRAITS_DIR="$PORTRAITS_DIR_SETTING"
   export AGENTSTACK_CUSTOM_PORTRAITS="$CUSTOM_PORTRAITS_SETTING"
   export AGENTSTACK_CLAUDE_MODELS="$CLAUDE_MODELS_SETTING"
   export AGENTSTACK_CODEX_MODELS="$CODEX_MODELS_SETTING"
+  export AGENTSTACK_CODEX_DEFAULT_MODEL="$CODEX_DEFAULT_MODEL_SETTING"
+  export AGENTSTACK_CODEX_DEFAULT_EFFORT="$CODEX_DEFAULT_EFFORT_SETTING"
+  export AGENTSTACK_DSH_NODE="$DSH_NODE_SETTING"
+  export AGENTSTACK_MANAGED_SPAWN_CONFIG="$MANAGED_SPAWN_CONFIG_SETTING"
   export AGENTSTACK_HOOKS_DIR="$HOOKS_DIR"
   export AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR"
   export AGENTSTACK_MANAGED_AGENTS_FILE="$MANAGED_AGENTS_FILE"
@@ -158,6 +255,7 @@ export_background_env() {
   export AGENTSTACK_DASHBOARD_LOG_MAX_BYTES="$DASHBOARD_LOG_MAX_BYTES"
   export AGENTSTACK_DASHBOARD_LOG_BACKUPS="$DASHBOARD_LOG_BACKUPS"
   export AGENTSTACK_DASHBOARD_RESTART_DELAY="$DASHBOARD_RESTART_DELAY"
+  export AGENTSTACK_VAULT="$VAULT"
 }
 
 start_background() {
@@ -272,10 +370,13 @@ case "${1:-status}" in
     if background_running; then
       stop_background
       start_background
-    elif launchd_loaded; then
-      launchctl kickstart -k "$GUI/$LABEL"
-      echo "restarted in launchd mode"
+    elif [[ ! -f "$PLIST_DST" ]] && launchd_loaded; then
+      # Match stop_all's HOME ownership guard before rendering or unloading.
+      echo "refusing to restart launchd job without a plist owned by this HOME: $PLIST_DST" >&2
+      exit 1
     else
+      # Reinstall launchd jobs through the start path so selected mode/config
+      # reaches the loaded job, even when its label is already present.
       start_any
     fi
     ;;
@@ -286,6 +387,7 @@ case "${1:-status}" in
     open "$URL"
     ;;
   fg)
+    export_background_env
     SERVER="$HERE/provider_server.py"
     [[ -f "$SERVER" ]] || SERVER="$HERE/server.py"
     exec "$PYTHON" "$SERVER"

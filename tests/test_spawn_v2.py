@@ -19,6 +19,23 @@ import pytest
 import dashboard.server as server
 
 
+@pytest.fixture(autouse=True)
+def _no_real_claude_catalog(monkeypatch, tmp_path):
+    """The real ~/.claude model catalog would decide the aliases and the default,
+    and a child claude found by an earlier test would decide its versions.
+
+    Nor do the installed hooks: server.HOOKS_DIR defaults to ~/.agentstack/hooks,
+    and once an install carries hooks/claude-child-bin.sh, do_spawn binds the
+    child's claude through a login shell -- into the subprocess.run stub of
+    whichever test runs, which has no stdout. Where nothing is installed (CI)
+    the script is absent and the answer is "unknown". Every test starts there;
+    the ones about the binding give their own hooks dir."""
+    from dashboard import claude_models
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-config"))
+    monkeypatch.setattr(claude_models, "_bound_child_path", None)
+    monkeypatch.setattr(server, "HOOKS_DIR", str(tmp_path / "no-installed-hooks"))
+
+
 def _set_annotation_paths(monkeypatch, tmp_path):
     path = tmp_path / "runtime" / "annotations.json"
     legacy = tmp_path / "dashboard" / "annotations.json"
@@ -125,14 +142,41 @@ def test_spawn_names_uses_launcher_scientist_source(monkeypatch, tmp_path):
     assert "emoji" not in data
 
 
-def test_new_agent_claude_default_matches_cli_launcher():
-    """NEW AGENT preselects the model the CLI launcher uses when none is given."""
-    spawn = (pathlib.Path(__file__).resolve().parent.parent / "hooks/spawn_child.sh").read_text(encoding="utf-8")
-    launcher_default = re.search(r'^CLAUDE_DEFAULT_MODEL="([^"]+)"', spawn, re.M).group(1)
-    assert server._CLAUDE_SPAWN_DEFAULT_MODEL == launcher_default
-    assert server._CLAUDE_SPAWN_DEFAULT_MODEL in server._SPAWN_MODELS
+def _launcher_default(env) -> str:
+    """What spawn_child.sh resolves for an omitted model, run through its own code."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    spawn = (root / "hooks/spawn_child.sh").read_text(encoding="utf-8")
+    catalog = spawn[spawn.index("# --- Child model catalog"):spawn.index("normalize_codex_model() {")]
+    import os, sys
+    result = subprocess.run(
+        ["bash", "-c", catalog + '\nload_claude_aliases || exit 1\nnormalize_claude_model ""\n'],
+        env={**os.environ, **env, "CLAUDE_MODEL_HELPER": str(root / "dashboard/claude_models.py"),
+             "AGENTSTACK_PYTHON": sys.executable},
+        capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+
+
+def test_new_agent_claude_default_matches_cli_launcher(monkeypatch, tmp_path):
+    """NEW AGENT preselects the model the CLI launcher uses when none is given,
+    with or without a local catalog that names a newer Opus."""
+    import os
+    assert _launcher_default({"CLAUDE_CONFIG_DIR": os.environ["CLAUDE_CONFIG_DIR"]}) == "claude-opus-5-5"
     claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
-    assert claude["default_model"] == launcher_default
+    assert claude["default_model"] == "claude-opus-5-5"
+    assert "claude-opus-5-5" in server._SPAWN_MODELS
+
+    profile = tmp_path / "claude"
+    path = profile / "cache/model-catalog/cache.json"
+    path.parent.mkdir(parents=True)
+    now = int(time.time() * 1000)
+    path.write_text(json.dumps({"version": 2, "fetchedAt": now - 1000, "staleAt": now + 3_600_000, "catalog": {
+        "surface": "cc", "config": {"models": [{"id": "claude-opus-6", "section": "main", "short_name": "Opus"}]}}}))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
+    assert _launcher_default({"CLAUDE_CONFIG_DIR": str(profile)}) == "claude-opus-6"
+    claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
+    assert claude["default_model"] == "claude-opus-6"
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    assert server.do_spawn({"parent": "Parent", "task": "work"}) == {"model": "claude-opus-6"}
 
 
 def test_spawn_names_status_means_any_adjective_pair_is_free(monkeypatch, tmp_path):
@@ -175,9 +219,26 @@ def test_spawn_name_status_fails_closed_when_db_missing(monkeypatch):
 
 def test_spawn_names_keeps_home_preset_symbolic(monkeypatch):
     monkeypatch.delenv("AGENTSTACK_SPAWN_DIRS", raising=False)
+    monkeypatch.setattr(server, "PROJECT_KEY", "")
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Curie\\n"})())
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
     assert server.spawn_names_payload()["dirs"] == ["~"]
+
+
+def test_spawn_names_defaults_to_the_project_folder_first(monkeypatch):
+    monkeypatch.delenv("AGENTSTACK_SPAWN_DIRS", raising=False)
+    monkeypatch.setattr(server, "PROJECT_KEY", "/work/proj")
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Curie\\n"})())
+    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+    assert server.spawn_names_payload()["dirs"] == ["/work/proj", "~"]
+
+
+def test_spawn_names_keeps_an_explicit_spawn_dirs_unchanged(monkeypatch):
+    monkeypatch.setenv("AGENTSTACK_SPAWN_DIRS", "/a:/b")
+    monkeypatch.setattr(server, "PROJECT_KEY", "/work/proj")
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Curie\\n"})())
+    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+    assert server.spawn_names_payload()["dirs"] == ["/a", "/b"]
 
 
 def test_spawn_names_advertises_codex_provider(monkeypatch):
@@ -186,8 +247,10 @@ def test_spawn_names_advertises_codex_provider(monkeypatch):
     providers = server.spawn_names_payload()["providers"]
     assert next(provider for provider in providers if provider["id"] == "codex") == {
         "id": "codex", "label": "Codex", "program": "codex-cli",
-        "models": ["gpt-test-a", "gpt-test-b"], "default_model": "gpt-6-sol",
-        "model_source": "override", "model_error": "", "overflow_models": [],
+        "models": ["gpt-test-a", "gpt-test-b"], "default_model": "gpt-6.1-sol",
+        "model_source": "override", "model_error": "", "default_error": "",
+        "default_effort_error": "", "overflow_models": [],
+        "model_note": "",
         "model_efforts": {"gpt-test-a": [], "gpt-test-b": []},
         "model_effort_defaults": {"gpt-test-a": "", "gpt-test-b": ""},
         "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"], "effort_default": "xhigh",
@@ -198,7 +261,7 @@ def test_spawn_names_uses_current_codex_defaults(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
     assert server._codex_models() == [
-        "gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra",
+        "gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra",
         "gpt-5.6-luna", "gpt-6-luna",
     ]
 
@@ -246,9 +309,9 @@ def test_claude_overflow_models_are_listed_without_the_default(monkeypatch):
     monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})
     claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
     assert claude["default_model"] == "claude-opus-5-5"
-    # opus-4-8 from the catalog; opus-5 from the bundled table (the catalog
-    # does not list it as main); the default is never folded.
-    assert claude["overflow_models"] == ["claude-opus-5", "claude-opus-4-8"]
+    # opus-4-8 from the catalog; opus-5 and sonnet-5 from the bundled table
+    # (the catalog does not list them as main); the default is never folded.
+    assert claude["overflow_models"] == ["claude-sonnet-5", "claude-opus-5", "claude-opus-4-8"]
     assert "claude-opus-4-8" in claude["models"]
 
 
@@ -364,12 +427,32 @@ def test_mcp_call_shapes_credentials_to_the_live_server_schema(monkeypatch):
     }
 
 
-@pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6-pro"])
-def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path, model):
+@pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6-pro", "", "sol"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path, model, asynchronous):
     launcher = tmp_path / "spawn_child.sh"
     launcher.write_text("#!/bin/bash\n")
     launcher.chmod(0o755)
     calls, launched, environments = [], [], []
+    records = []
+    settled = threading.Event()
+    resolved = "gpt-6.1-sol" if model == "sol" else (model or "gpt-6-luna")
+    if model == "sol":
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-catalog"))
+        monkeypatch.setattr(server.codex_models, "resolve_launcher", lambda: server.codex_models.LauncherPolicy(version=(0, 160, 1)))
+    if not model:
+        cache_home = tmp_path / "codex"
+        cache_home.mkdir()
+        monkeypatch.setenv("CODEX_HOME", str(cache_home))
+        (cache_home / "models_cache.json").write_text(json.dumps({
+            "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "models": [{"slug": "gpt-6-luna"}],
+        }))
+    def record(name, result):
+        records.append(result)
+        if not result.get("pending"):
+            settled.set()
+    monkeypatch.setattr(server, "_spawn_launch_record", record)
     monkeypatch.delenv("AGENTSTACK_PYTHON", raising=False)
 
     def mcp(method, args, timeout=15):
@@ -395,9 +478,20 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
     monkeypatch.setattr(server.time, "sleep", lambda _: None)
     monkeypatch.setattr(server.subprocess, "Popen", lambda args, **kwargs: (environments.append(kwargs["env"]), launched.append(args))[-1])
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
-    result = server.do_spawn({"parent": "Parent", "name": "Sunny-Curie", "task": "work", "dir": str(tmp_path), "provider": "codex", "model": model, "effort": "high"})
+    result = server.do_spawn({"parent": "Parent", "name": "Sunny-Curie", "task": "work", "dir": str(tmp_path), "provider": "codex", "model": model, "effort": "high", "async": asynchronous})
 
     assert result["ok"] is True
+    assert result["model"] == resolved
+    if asynchronous:
+        assert settled.wait(2), "mock launcher did not settle"
+        assert records[-1]["model"] == resolved
+    if not model:
+        assert "from gpt-6.1-sol to gpt-6-luna" in result["model_note"]
+        assert result["model_note"] in (tmp_path / "logs/spawn.log").read_text()
+        if asynchronous:
+            assert records[0]["model_note"] == records[-1]["model_note"] == result["model_note"]
+    else:
+        assert "model_note" not in result
     assert environments[0]["AGENTSTACK_PYTHON"] == server.sys.executable
     assert result["requested_name"] == "Sunny-Curie"
     assert result["child_name"] == "SunnyCurie"
@@ -418,7 +512,7 @@ def test_codex_spawn_passes_model_effort_and_readback_name(monkeypatch, tmp_path
         "project_key": "/project",
         "program": "codex-cli",
     }
-    assert launched[0][1:] == ["--pre-registered", "SunnyCurie", "--child-token-file", launched[0][4], "--codex", "--model", model, "--effort", "high", "work", str(tmp_path)]
+    assert launched[0][1:] == ["--pre-registered", "SunnyCurie", "--child-token-file", launched[0][4], "--codex", "--model", resolved, "--effort", "high", "work", str(tmp_path)]
 
 
 def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path):
@@ -433,6 +527,7 @@ def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path)
         return {
             "ok": True,
             "data": {
+                "id": 73,
                 "name": "Zesty-Curie",
                 "registration_token": "server-child-token",
             } if method == "register_agent" else {},
@@ -451,14 +546,15 @@ def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path)
     monkeypatch.setattr(server.subprocess, "Popen", lambda args, **kwargs: launched.append(args))
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
 
-    result = server.do_spawn({"parent": "Parent", "task": "work", "dir": str(tmp_path)})
+    task = "work\r\n\n## Task summary\twith details"
+    result = server.do_spawn({"parent": "Parent", "task": task, "dir": str(tmp_path)})
 
     assert result["ok"] is True
     assert result["requested_name"] == "Zesty-Curie"
     assert result["name_substituted"] is False
     assert calls[0] == ("register_agent", {
         "project_key": "/project", "program": "claude-code", "model": "claude-opus-5-5",
-        "task_description": "work", "registration_token": calls[0][1]["registration_token"],
+        "task_description": task, "registration_token": calls[0][1]["registration_token"],
         "name": "Zesty-Curie",
     })
     assert calls[1] == ("set_contact_policy", {
@@ -467,6 +563,9 @@ def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path)
     })
     assert calls[2][0] == "send_message"
     assert calls[2][1]["sender_token"] == "parent-owner-token"
+    assert calls[2][1]["subject"] == "タスク依頼: work ## Task summary with details"
+    assert calls[2][1]["cc"] == ["Parent"]
+    assert task in calls[2][1]["body_md"]
     assert pathlib.Path(launched[0][4]).read_text() == "server-child-token"
     assert launched[0][2] == "Zesty-Curie"
 
@@ -483,6 +582,7 @@ def test_standalone_spawn_skips_mail_injects_full_task_and_drops_parent_env(
         return {
             "ok": True,
             "data": {
+                "id": 73,
                 "name": "QuietCurie",
                 "registration_token": "server-child-token",
             } if method == "register_agent" else {},
@@ -591,6 +691,127 @@ def test_spawn_dirs_rejects_traversal_external_and_symlink_escape(monkeypatch, t
     assert [item["name"] for item in result["dirs"]] == ["alpha", "zulu"]
 
 
+def test_spawn_directory_search_scope_order_and_cache(monkeypatch, tmp_path):
+    root = tmp_path / "root"
+    preset = tmp_path / "preset"
+    home = tmp_path / "home"
+    for parent, dirs in (
+        (root, ["Project", "team/myproject", "a/b/c/Project-depth",
+                "a/b/c/d/Project-too-deep", "Library/Project-mac",
+                "node_modules/Project-dependency", ".cache/Project-hidden"]),
+        (preset, ["PROJECT-preset", "Cafe\u0301"]),
+        (home, ["Project-home"]),
+    ):
+        for path in dirs:
+            (parent / path).mkdir(parents=True)
+    (root / "Project-link").symlink_to(home, target_is_directory=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("AGENTSTACK_SPAWN_ROOTS", str(root))
+    monkeypatch.setenv("AGENTSTACK_SPAWN_DIRS", str(preset))
+    monkeypatch.setattr(server, "_spawn_search_cache", None)
+
+    def names(query):
+        return [item["name"] for item in server.spawn_directory_search(query)["dirs"]]
+
+    assert names(" ProJECT ") == ["Project", "Project-depth", "PROJECT-preset", "myproject"]
+    assert len(names("CafÉ")) == 1
+    (root / "Project-new").mkdir()
+    assert names("new") == []
+    scope, _, paths, truncated = server._spawn_search_cache
+    server._spawn_search_cache = (scope, 0.0, paths, truncated)
+    assert names("new") == ["Project-new"]
+    monkeypatch.delenv("AGENTSTACK_SPAWN_DIRS")
+    assert names("preset") == []
+    assert names("Project-home") == []
+
+
+def test_scoped_directory_search_reuses_limits_exclusion_and_cache(monkeypatch, tmp_path):
+    root = tmp_path / "roots"
+    vault = root / "Vault"
+    projects = vault / "21_Coding Projects"
+    alternate = vault / "other"
+    outside = tmp_path / "outside"
+    for folder in (
+        projects / "tm3000",
+        projects / "one" / "two" / "three" / "tm3000-level-four",
+        projects / "one" / "two" / "three" / "four" / "tm3000-too-deep",
+        projects / "vendor" / "sub" / "tm3000-vendor",
+        projects / ".hidden" / "tm3000-hidden",
+        alternate / "tm3000-other",
+        outside / "tm3000-outside",
+    ):
+        folder.mkdir(parents=True)
+    (projects / "tm3000-link").symlink_to(outside, target_is_directory=True)
+    (projects / "alias").symlink_to(alternate, target_is_directory=True)
+    monkeypatch.setenv("AGENTSTACK_SPAWN_ROOTS", str(root))
+    monkeypatch.setenv("AGENTSTACK_SPAWN_DIRS", str(outside))
+    monkeypatch.setattr(server, "_spawn_search_cache", None)
+
+    def names(under, query="tm3000"):
+        return [row["name"] for row in server.spawn_directory_search(query, str(under))["dirs"]]
+
+    assert names(projects) == ["tm3000", "tm3000-level-four"]
+    assert names(vault) == ["tm3000", "tm3000-other"]
+    assert names(projects, "21_coding") == []
+    assert names(projects / "alias") == ["tm3000-other"]
+    assert names(projects / "vendor" / "sub") == []
+    assert names(projects / ".hidden") == []
+    for invalid in ("", outside, projects / "tm3000-link", str(projects) + "/..", projects / "missing"):
+        with pytest.raises(ValueError, match="QUERY_INVALID"):
+            names(invalid)
+    assert names(projects) == ["tm3000", "tm3000-level-four"]
+    (projects / "tm3000-new").mkdir()
+    assert names(projects) == ["tm3000", "tm3000-level-four"]
+    key, _, paths, truncated = server._spawn_search_cache
+    server._spawn_search_cache = key, 0, paths, truncated
+    assert names(projects) == ["tm3000", "tm3000-level-four", "tm3000-new"]
+
+
+def test_spawn_directory_search_reports_truncation(monkeypatch, tmp_path):
+    for name in ("MatchOne", "MatchTwo", "MatchThree"):
+        (tmp_path / name).mkdir()
+    monkeypatch.setenv("AGENTSTACK_SPAWN_ROOTS", str(tmp_path))
+    monkeypatch.setattr(server, "_spawn_search_cache", None)
+    monkeypatch.setattr(server, "_SPAWN_SEARCH_RESULT_CAP", 2)
+    result = server.spawn_directory_search("match")
+    assert result["truncated"] and len(result["dirs"]) == 2
+    monkeypatch.setattr(server, "_spawn_search_cache", None)
+    monkeypatch.setattr(server, "_SPAWN_SEARCH_ENTRY_CAP", 1)
+    result = server.spawn_directory_search("match")
+    assert result["truncated"] and len(result["dirs"]) == 1
+
+
+def test_spawn_directory_search_http_preserves_browsing(monkeypatch, tmp_path):
+    found = tmp_path / "group" / "FindMe"
+    found.mkdir(parents=True)
+    monkeypatch.setenv("AGENTSTACK_SPAWN_ROOTS", str(tmp_path))
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{httpd.server_port}/api/fs"
+    try:
+        with urllib.request.urlopen(base + "/dir-search?q=find") as response:
+            assert json.load(response) == {
+                "dirs": [{"name": "FindMe", "path": str(found.resolve())}],
+                "truncated": False,
+            }
+        from urllib.parse import urlencode
+        under = urlencode({"q": "find", "under": str(found.parent)})
+        with urllib.request.urlopen(base + "/dir-search?" + under) as response:
+            assert [row["name"] for row in json.load(response)["dirs"]] == ["FindMe"]
+        with urllib.request.urlopen(base + "/dirs") as response:
+            assert [item["name"] for item in json.load(response)["dirs"]] == ["group"]
+        for query in ("q=find&q=other", "q=find&under=", "q=find&under=/&under=/", "q=find&under=%00",
+                      urlencode({"q": "find", "under": str(tmp_path.parent)})):
+            with pytest.raises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(base + "/dir-search?" + query)
+            assert error.value.code == 400
+    finally:
+        httpd.shutdown()
+        thread.join()
+        httpd.server_close()
+
+
 def test_async_spawn_returns_pending_and_settles_in_the_background(monkeypatch, tmp_path):
     """The page closes its modal at once; the verdict arrives via spawn-status."""
     import threading as _threading
@@ -669,7 +890,7 @@ cleanup() {
   : > "$TEST_MARK.cleanup-started"
   # Stands in for a mail release/retire or worktree removal still in progress.
   sleep "$TEST_CLEANUP_SECONDS"
-  rm -f "$TEST_RUNTIME/agent_token_$name"
+  # The fixture common cleanup owns credential deletion after stop proof.
   : > "$TEST_MARK.cleanup-done"
 }
 trap cleanup EXIT
@@ -680,11 +901,23 @@ while :; do sleep 0.05; done
 """
 
 
+def _successful_fake_cleanup(monkeypatch, tmp_path):
+    """A fixture cleanup owns deletion, as the product helper does."""
+    def cleanup(script, name, environment):
+        runtime = pathlib.Path(environment['AGENTSTACK_RUNTIME_DIR'])
+        assert runtime == tmp_path / 'runtime'
+        (runtime / ('agent_token_' + name)).unlink(missing_ok=True)
+        (runtime / 'child-agents' / (name + '.json')).unlink(missing_ok=True)
+        return True
+    monkeypatch.setattr(server, '_failed_spawn_cleanup', cleanup)
+
+
 def _prepare_real_spawn(monkeypatch, tmp_path, script=_CLEANUP_LAUNCHER):
     launcher = tmp_path / "launcher.sh"
     launcher.write_text(script, encoding="utf-8")
     launcher.chmod(0o755)
     runtime = tmp_path / "runtime"
+    _successful_fake_cleanup(monkeypatch, tmp_path)
 
     def mcp(method, args, timeout=15):
         data = {"id": 73, "name": "QuietCurie", "registration_token": "child-owner-token"} \
@@ -696,7 +929,7 @@ def _prepare_real_spawn(monkeypatch, tmp_path, script=_CLEANUP_LAUNCHER):
     monkeypatch.setattr(server, "_project_key", lambda: "/project")
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
     monkeypatch.setattr(server, "_mcp_call", mcp)
-    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 1})())
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 1, "stderr": "can't find session: QuietCurie"})())
     real_popen = server.subprocess.Popen
     pid_mark = tmp_path / "mark.pid"
 
@@ -769,6 +1002,40 @@ def test_process_group_launcher_cleanup_outlives_the_canonical_5s_grace(monkeypa
     assert _group_gone(int((tmp_path / "mark.pid").read_text()))
 
 
+_REASON_LAUNCHER = """#!/bin/bash
+echo $$ > "$TEST_MARK.pid"
+echo "[spawn_child] Claude Code's first-run setup is not finished; not answered by the launcher (QuietCurie). Last screen:" >&2
+echo "[spawn_child] reason: Run 'claude' once in a terminal and finish its setup." >&2
+echo "[spawn_child] WARNING: session QuietCurie ended before prompt injection was verified" >&2
+exit 1
+"""
+
+
+def test_a_launcher_reason_line_becomes_the_error_the_cockpit_shows(monkeypatch, tmp_path):
+    launcher, runtime = _prepare_real_spawn(monkeypatch, tmp_path, script=_REASON_LAUNCHER)
+    monkeypatch.setattr(server, "_SPAWN_READINESS_TIMEOUT_SECONDS", 20)
+    spec = _cleanup_spec(launcher, tmp_path, cleanup_seconds=0)
+    result = server.spawn_with_launch_spec(
+        {"standalone": True, "name": "QuietCurie", "task": "work", "dir": str(tmp_path)}, spec)
+    assert result["ok"] is False
+    assert result["error"].startswith(
+        "Run 'claude' once in a terminal and finish its setup. "
+        "(spawn launcher exited with status 1); child registration 'QuietCurie'")
+    assert "ended before prompt injection was verified" in result["detail"]
+
+
+def test_without_a_reason_line_the_error_is_the_exit_status_as_before(monkeypatch, tmp_path):
+    script = _REASON_LAUNCHER.replace(
+        'echo "[spawn_child] reason: Run \'claude\' once in a terminal and finish its setup." >&2\n', "")
+    assert "reason:" not in script
+    launcher, runtime = _prepare_real_spawn(monkeypatch, tmp_path, script=script)
+    monkeypatch.setattr(server, "_SPAWN_READINESS_TIMEOUT_SECONDS", 20)
+    spec = _cleanup_spec(launcher, tmp_path, cleanup_seconds=0)
+    result = server.spawn_with_launch_spec(
+        {"standalone": True, "name": "QuietCurie", "task": "work", "dir": str(tmp_path)}, spec)
+    assert result["error"].startswith("spawn launcher exited with status 1; child registration")
+
+
 def test_cleanup_killed_past_its_grace_is_reported_and_keeps_owner_credential(monkeypatch, tmp_path):
     import time as _time
     launcher, runtime = _prepare_real_spawn(monkeypatch, tmp_path)
@@ -808,7 +1075,8 @@ def test_canonical_launcher_timeout_keeps_5s_grace_and_removes_credentials(monke
     launcher.chmod(0o755)
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    (runtime / "agent_token_QuietCurie").write_text("child-owner-token")
+    _successful_fake_cleanup(monkeypatch, tmp_path)
+    (runtime / "agent_token_QuietCurie").write_text("tok")
     events = []
 
     class StuckProc:
@@ -836,7 +1104,7 @@ def test_canonical_launcher_timeout_keeps_5s_grace_and_removes_credentials(monke
 
     for payload in ({"provider": "claude"}, {"provider": "codex", "model": server._codex_models()[0]}):
         events.clear()
-        (runtime / "agent_token_QuietCurie").write_text("child-owner-token")
+        (runtime / "agent_token_QuietCurie").write_text("tok")
         result = server.do_spawn({"standalone": True, "name": "QuietCurie", "task": "work",
                                   "dir": str(tmp_path), **payload})
         assert result["ok"] is False
@@ -1073,9 +1341,9 @@ def test_verdict_deadline_covers_each_launchers_worst_case():
         worst = (server._SPAWN_READINESS_TIMEOUT_SECONDS + server._spawn_termination_grace(spec)
                  + server._SPAWN_KILL_REAP_SECONDS)
         assert server._spawn_verdict_deadline_seconds(spec) >= worst + 2
-    assert server._spawn_verdict_deadline_seconds(canonical) == 140
-    assert server._spawn_verdict_deadline_seconds(group) == 285
-    assert server._spawn_verdict_deadline_seconds(tuned) == 435
+    assert server._spawn_verdict_deadline_seconds(canonical) == 170
+    assert server._spawn_verdict_deadline_seconds(group) == 315
+    assert server._spawn_verdict_deadline_seconds(tuned) == 465
 
 
 def test_async_pending_deadline_comes_from_the_spec_not_the_payload(monkeypatch, tmp_path):
@@ -1103,12 +1371,17 @@ def test_async_pending_deadline_comes_from_the_spec_not_the_payload(monkeypatch,
     try:
         for extra in ({"provider": "claude"},
                       {"provider": "codex", "model": server._codex_models()[0]}):
-            pending = server.do_spawn({**spoofed, **extra})
+            assert server.do_spawn({**spoofed, **extra}) == {
+                "ok": False, "error": "unknown spawn fields: verdict_deadline_seconds",
+            }
+            valid = {key: value for key, value in spoofed.items()
+                     if key != "verdict_deadline_seconds"}
+            pending = server.do_spawn({**valid, **extra})
             assert pending["pending"] is True
-            assert pending["verdict_deadline_seconds"] == 140
+            assert pending["verdict_deadline_seconds"] == 170
         group = server.SpawnLaunchSpec(provider="gemini", program="antigravity", model="m",
                                        script=str(launcher), signal_process_group=True)
-        pending = server.spawn_with_launch_spec({**spoofed, "verdict_deadline_seconds": 1}, group)
+        pending = server.spawn_with_launch_spec(valid, group)
         assert pending["pending"] is True
         assert pending["verdict_deadline_seconds"] == server._spawn_verdict_deadline_seconds(group)
         assert pending["verdict_deadline_seconds"] >= (
@@ -1144,8 +1417,8 @@ async function run(pending,verdictSeconds){
   const out={};
   out.groupWorst=await run({verdict_deadline_seconds:GROUP_DEADLINE},GROUP_WORST);
   out.groupWithoutDeadline=await run({},GROUP_WORST);
-  out.canonicalWorst=await run({verdict_deadline_seconds:140},CANONICAL_WORST);
-  out.canonicalLate=await run({verdict_deadline_seconds:140},150);
+  out.canonicalWorst=await run({verdict_deadline_seconds:CANONICAL_DEADLINE},CANONICAL_WORST);
+  out.canonicalLate=await run({verdict_deadline_seconds:CANONICAL_DEADLINE},CANONICAL_DEADLINE+10);
   out.legacyLate=await run({},150);
   now=0;toasts.length=0;verdictAt=150000;
   await watchSpawnLaunch('QuietCurie','/repo');
@@ -1185,13 +1458,15 @@ def test_rendered_watcher_waits_for_the_server_verdict_deadline():
     base = dict(provider="p", program="x", model="m", script="/bin/true")
     group = server.SpawnLaunchSpec(**base, signal_process_group=True)
     group_worst = (server._SPAWN_READINESS_TIMEOUT_SECONDS + server._SPAWN_CLEANUP_GRACE_SECONDS
-                   + server._SPAWN_KILL_REAP_SECONDS)
+                   + server._SPAWN_KILL_REAP_SECONDS + server._SPAWN_FAILURE_CLEANUP_SECONDS)
+    canonical = server.SpawnLaunchSpec(**base)
     canonical_worst = (server._SPAWN_READINESS_TIMEOUT_SECONDS + server._SPAWN_TERMINATE_GRACE_SECONDS
-                       + server._SPAWN_KILL_REAP_SECONDS)
+                       + server._SPAWN_KILL_REAP_SECONDS + server._SPAWN_FAILURE_CLEANUP_SECONDS)
     harness = (_WATCH_HARNESS
                .replace("GROUP_DEADLINE", str(server._spawn_verdict_deadline_seconds(group)))
                .replace("GROUP_WORST", repr(group_worst))
-               .replace("CANONICAL_WORST", repr(canonical_worst)))
+               .replace("CANONICAL_WORST", repr(canonical_worst))
+               .replace("CANONICAL_DEADLINE", str(server._spawn_verdict_deadline_seconds(canonical))))
     result = _REAL_RUN(["node", "-e", "\n".join(parts) + "\n" + harness],
                        capture_output=True, text=True, timeout=20, check=False)
     assert result.returncode == 0, result.stderr
@@ -1203,9 +1478,11 @@ def test_rendered_watcher_waits_for_the_server_verdict_deadline():
     # where the old fixed 140s watch had already given up.
     assert out["groupWorst"]["toasts"] == spawned
     assert out["groupWithoutDeadline"]["toasts"] == timed_out
-    # Claude/Codex keep exactly the 140s watch, with or without the field.
+    # New server budgets include the final shared cleanup; legacy replies keep 140s.
     assert out["canonicalWorst"]["toasts"] == spawned
-    for key in ("canonicalLate", "legacyLate", "defaultArgument"):
+    assert out["canonicalLate"]["toasts"] == [["✕ SPAWN", "> QuietCurie :: no verdict after 170s", True]]
+    assert 170000 <= out["canonicalLate"]["elapsed"] < 172100
+    for key in ("legacyLate", "defaultArgument"):
         assert out[key]["toasts"] == timed_out, key
         assert 140000 <= out[key]["elapsed"] < 142100, key
     limits = out["limits"]
@@ -1261,10 +1538,289 @@ def test_codex_api_default_excluded_by_allowlist_never_selects_first(monkeypatch
     monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-6-luna,gpt-5.6-sol")
     monkeypatch.setattr(server, "spawn_with_launch_spec", lambda *a: pytest.fail("disallowed default must not launch"))
     result = server.do_spawn({"standalone": True, "task": "work", "provider": "codex"})
-    assert not result["ok"] and "gpt-6-sol" in result["error"]
+    assert not result["ok"] and "gpt-6.1-sol" in result["error"]
 
 
 @pytest.fixture(autouse=True)
 def isolate_codex_discovery_cache(monkeypatch, tmp_path):
+    monkeypatch.setattr(server.codex_models, "cli_version", lambda: (0, 159, 1))
+    monkeypatch.setattr(server.codex_models, "resolve_launcher", lambda: server.codex_models.LauncherPolicy(version=(0, 159, 1)))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "isolated-codex-cache"))
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
+
+
+@pytest.mark.parametrize("version, expected", [((0, 158, 0), "gpt-6-sol"), ((0, 159, 1), "gpt-6.1-sol")])
+@pytest.mark.parametrize("requested", [None, "sol"])
+def test_api_omission_and_sol_use_the_same_cli_default(monkeypatch, version, expected, requested):
+    monkeypatch.setattr(server.codex_models, "cli_version", lambda: version)
+    monkeypatch.setattr(server.codex_models, "resolve_launcher", lambda: server.codex_models.LauncherPolicy(version=version))
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"ok": True, "model": spec.model})
+    payload = {"standalone": True, "task": "work", "provider": "codex"}
+    if requested is not None:
+        payload["model"] = requested
+    assert server.do_spawn(payload) == {"ok": True, "model": expected}
+
+
+def _stale_new_opus_catalog(tmp_path, monkeypatch):
+    profile = tmp_path / "stale-claude"
+    path = profile / "cache/model-catalog/cache.json"
+    path.parent.mkdir(parents=True)
+    now = int(time.time() * 1000)
+    path.write_text(json.dumps({"version": 2, "fetchedAt": now - 7_200_000, "staleAt": now - 3_600_000, "catalog": {
+        "surface": "cc", "config": {"models": [{"id": "claude-opus-6", "section": "main", "short_name": "Opus"}]}}}))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
+    launcher_default = _launcher_default({"CLAUDE_CONFIG_DIR": str(profile)})
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Sunny\n\036Curie\n"})())
+    monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    return launcher_default
+
+
+def test_stale_catalog_keeps_picker_default_and_launcher_in_step(monkeypatch, tmp_path):
+    """A stale catalog adds no candidates, but what the aliases launch is listed."""
+    launcher_default = _stale_new_opus_catalog(tmp_path, monkeypatch)
+    monkeypatch.delenv("AGENTSTACK_CLAUDE_MODELS", raising=False)
+    claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
+    assert "claude-opus-6" in claude["models"]
+    assert claude["default_model"] == "claude-opus-6"
+    assert server.do_spawn({"parent": "Parent", "task": "work"}) == {"model": "claude-opus-6"}
+    assert launcher_default == "claude-opus-6"
+
+
+@pytest.mark.parametrize("override,default", [
+    ("claude-opus-5-5,claude-sonnet-5-5", ""),
+    ("claude-opus-6,claude-sonnet-5-5", "claude-opus-6"),
+])
+def test_an_explicit_allow_list_is_not_widened_by_the_aliases(monkeypatch, tmp_path, override, default):
+    _stale_new_opus_catalog(tmp_path, monkeypatch)
+    monkeypatch.setenv("AGENTSTACK_CLAUDE_MODELS", override)
+    claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
+    assert claude["models"] == override.split(",")
+    assert claude["default_model"] == default
+
+
+def test_ui_api_and_launcher_check_the_same_child_claude(monkeypatch, tmp_path):
+    """The dashboard's PATH has a new claude, the child's login shell an old
+    one, and there is no ~/.local/bin/claude: the omitted model must be one
+    the child's claude can run, the same in the picker, the API and the CLI."""
+    import os
+    from dashboard import claude_models
+
+    def native(directory, version):
+        path = tmp_path / directory / "claude" / "versions" / version
+        path.parent.mkdir(parents=True)
+        path.write_text("#!/bin/sh\nexit 99\n")
+        path.chmod(0o755)
+        return path
+
+    old, new = native("child", "2.0.0"), native("service", "9.0.0")
+    (tmp_path / "service-bin").mkdir()
+    (tmp_path / "service-bin/claude").symlink_to(new)
+    login_shell = tmp_path / "login-shell"
+    login_shell.write_text(f"#!/bin/sh\n# what the child's login profile puts first on PATH\necho {old}\n")
+    login_shell.chmod(0o755)
+    profile = tmp_path / "claude"
+    path = profile / "cache/model-catalog/cache.json"
+    path.parent.mkdir(parents=True)
+    now = int(time.time() * 1000)
+    path.write_text(json.dumps({"version": 2, "fetchedAt": now - 1000, "staleAt": now + 3_600_000, "catalog": {
+        "surface": "cc", "config": {"models": [
+            {"id": "claude-opus-6", "section": "main", "short_name": "Opus", "min_claude_code_version": "8.0.0"}]}}}))
+    env = {"CLAUDE_CONFIG_DIR": str(profile), "HOME": str(tmp_path / "home"),
+           "AGENTSTACK_CHILD_SHELL": str(login_shell),
+           "PATH": f"{tmp_path / 'service-bin'}:/usr/bin:/bin"}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    hooks = pathlib.Path(__file__).resolve().parent.parent / "hooks"
+    monkeypatch.setattr(server, "HOOKS_DIR", str(hooks))
+
+    # Before the dashboard has asked the child's shell, it can only guess from its own PATH.
+    assert claude_models.child_cli_path() == str(tmp_path / "service-bin/claude")
+    cli_default = _launcher_default({**env, "CHILD_SHELL": str(login_shell), "HOOKS_DIR": str(hooks)})
+    assert cli_default == "claude-opus-5-5"
+
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    assert server.do_spawn({"parent": "Parent", "task": "work"}) == {"model": cli_default}
+    assert claude_models.child_cli_path() == str(old)
+    names = server.subprocess.run
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Sunny\n\036Curie\n"})())
+    monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})
+    claude = next(p for p in server.spawn_names_payload()["providers"] if p["id"] == "claude")
+    assert claude["default_model"] == cli_default
+    monkeypatch.setattr(server.subprocess, "run", names)
+    # A dry run starts no process and uses what was found.
+    preview = server.do_spawn({"parent": "Parent", "task": "work", "dry_run": True})
+    assert preview["model"] == cli_default, preview
+
+
+@pytest.mark.parametrize("failure", ["timeout", "oserror"])
+def test_a_failed_child_claude_check_stops_before_registration(monkeypatch, tmp_path, failure):
+    """An old answer (9.0.0) must not decide the model when the re-check fails."""
+    from dashboard import claude_models
+    monkeypatch.setattr(claude_models, "_bound_child_path", "/old/claude/versions/9.0.0")
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "claude-child-bin.sh").write_text("#!/bin/bash\n")
+
+    def broken(*args, **kwargs):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args[0], 10)
+        raise OSError("no shell")
+
+    monkeypatch.setattr(claude_models.subprocess, "run", broken)
+    monkeypatch.setattr(server, "HOOKS_DIR", str(hooks))
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda *a: pytest.fail("registered without a checked binary"))
+    result = server.do_spawn({"parent": "Parent", "task": "work"})
+    assert result["ok"] is False
+    assert "could not find the claude a child would run" in result["error"]
+    assert claude_models._bound_child_path is None  # The old answer is not reused later.
+
+
+def test_an_explicit_model_or_a_dry_run_does_not_need_the_check(monkeypatch, tmp_path):
+    from dashboard import claude_models
+    monkeypatch.setattr(claude_models.subprocess, "run", lambda *a, **k: pytest.fail("started a process"))
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "claude-child-bin.sh").write_text("#!/bin/bash\n")
+    monkeypatch.setattr(server, "HOOKS_DIR", str(hooks))
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    assert server.do_spawn({"parent": "Parent", "task": "work", "model": "claude-sonnet-5-5"}) == {"model": "claude-sonnet-5-5"}
+    assert server.do_spawn({"parent": "Parent", "task": "work", "dry_run": True}) == {"model": "claude-opus-5-5"}
+
+
+def test_hooks_without_the_script_count_as_unknown_on_both_sides(monkeypatch, tmp_path):
+    from dashboard import claude_models
+    monkeypatch.setattr(claude_models, "_bound_child_path", "/old/claude/versions/9.0.0")
+    monkeypatch.setattr(server, "HOOKS_DIR", str(tmp_path / "old-hooks"))
+    monkeypatch.setattr(server, "spawn_with_launch_spec", lambda payload, spec: {"model": spec.model})
+    assert server.do_spawn({"parent": "Parent", "task": "work"}) == {"model": "claude-opus-5-5"}
+    assert claude_models._bound_child_path == ""
+
+
+def test_nvm_node_failure_precedes_registration_cleanup_in_spawn_error(monkeypatch, tmp_path):
+    script = '''#!/bin/bash
+echo $$ > "$TEST_MARK.pid"
+echo "note: skipping codex /synthetic/nvm/bin/codex: '/synthetic/nvm/bin/codex --version' exited with status 127: env: node: No such file or directory" >&2
+echo "Error: no usable Codex CLI found" >&2
+exit 1
+'''
+    launcher, runtime = _prepare_real_spawn(monkeypatch, tmp_path, script=script)
+    monkeypatch.setattr(server, "_SPAWN_READINESS_TIMEOUT_SECONDS", 20)
+    result = server.spawn_with_launch_spec(
+        {"standalone": True, "name": "QuietCurie", "task": "work", "dir": str(tmp_path)},
+        _cleanup_spec(launcher, tmp_path, cleanup_seconds=0))
+    assert not result["ok"]
+    assert result["error"].startswith("note: skipping codex /synthetic/nvm/bin/codex:")
+    assert result["error"].index("node: No such file") < result["error"].index("child registration")
+    assert "no permission to delete" in result["error"]
+
+
+def test_first_launcher_reason_is_retained_before_later_cleanup_reason(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("[spawn_child] reason: original failure\n[spawn_child] reason: cleanup failure\n")
+    _, reason = server._spawn_log_tail_and_reason(log)
+    assert reason == "original failure"
+
+
+def test_readiness_reason_outranks_an_earlier_rejected_candidate(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("note: skipping codex /synthetic/obsolete: rejected\n"
+                   "[spawn_child] reason: selected CLI needs setup\n")
+    assert server._spawn_log_tail_and_reason(log)[1] == "selected CLI needs setup"
+
+
+def test_replaced_codex_candidate_does_not_hide_the_actual_launch_error(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("note: skipping codex /synthetic/obsolete: missing node\n"
+                   "Error: could not prepare the Codex MCP profile\n"
+                   "Error: cleanup failed\n")
+    assert server._spawn_log_tail_and_reason(log)[1] == (
+        "Error: could not prepare the Codex MCP profile")
+
+
+def test_all_codex_candidates_failed_keeps_node_detail_before_cleanup(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("note: skipping codex /synthetic/obsolete: missing node\n"
+                   "Error: no usable Codex CLI found\n"
+                   "Error: cleanup failed\n")
+    assert server._spawn_log_tail_and_reason(log)[1] == (
+        "note: skipping codex /synthetic/obsolete: missing node; "
+        "Error: no usable Codex CLI found")
+
+
+def test_discarded_codex_note_alone_is_not_a_launch_failure_reason(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("note: skipping codex /synthetic/obsolete: missing node\n")
+    assert server._spawn_log_tail_and_reason(log)[1] == ""
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+@pytest.mark.parametrize("old_line", [
+    "[spawn_child] reason: obsolete setup failure\n",
+    "note: skipping codex /synthetic/windows: obsolete Windows install\n",
+])
+def test_spawn_failure_reads_only_the_current_append_interval(monkeypatch, tmp_path, returncode, old_line):
+    script = ('#!/bin/bash\necho $$ > "$TEST_MARK.pid"\n'
+              'echo "Error: current launch failure" >&2\n'
+              f"exit {returncode}\n")
+    launcher, _ = _prepare_real_spawn(monkeypatch, tmp_path, script=script)
+    log = tmp_path / "logs/spawn.log"
+    log.parent.mkdir()
+    log.write_text("過去の起動\n" + old_line)
+    result = server.spawn_with_launch_spec(
+        {"standalone": True, "name": "QuietCurie", "task": "work", "dir": str(tmp_path)},
+        _cleanup_spec(launcher, tmp_path, cleanup_seconds=0))
+    assert not result["ok"]
+    assert result["error"].startswith("Error: current launch failure")
+    assert "obsolete" not in result["error"] + result["detail"]
+    assert "過去の起動" not in result["detail"]
+    assert old_line in log.read_text()  # The shared historical log is retained.
+
+
+def test_all_failed_candidates_keep_windows_and_node_notes_in_order(tmp_path):
+    log = tmp_path / "spawn.log"
+    notes = ["note: skipping codex /mnt/c/npm/codex: Windows shim",
+             "note: skipping codex /synthetic/nvm/bin/codex: env: node: No such file or directory"]
+    log.write_text("\n".join([*notes, "Error: no usable Codex CLI found"]))
+    assert server._spawn_log_tail_and_reason(log)[1] == "; ".join(
+        [*notes, "Error: no usable Codex CLI found"])
+
+
+def test_all_failed_candidates_report_omitted_count_within_limit(tmp_path):
+    log = tmp_path / "spawn.log"
+    notes = [f"note: skipping codex /synthetic/{index}: " + "x" * 130 for index in range(8)]
+    log.write_text("\n".join([*notes, "Error: no usable Codex CLI found"]))
+    reason = server._spawn_log_tail_and_reason(log)[1]
+    assert reason == ("; ".join(notes[:2]) + "; (+6 more skipped candidates); "
+                      "Error: no usable Codex CLI found")
+    assert len(reason) <= 500
+
+
+def test_a_single_oversized_candidate_still_leaves_room_for_omitted_count(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("note: skipping codex /" + "x" * 600 +
+                   "\nnote: skipping codex /second: missing node\nError: no usable Codex CLI found")
+    reason = server._spawn_log_tail_and_reason(log)[1]
+    assert reason.startswith("note: skipping codex /")
+    assert reason.endswith("…; (+1 more skipped candidates); Error: no usable Codex CLI found")
+    assert len(reason) == 500
+
+
+def test_single_oversized_candidate_keeps_final_resolution_error(tmp_path):
+    log = tmp_path / "spawn.log"
+    log.write_text("note: skipping codex /" + "x" * 600 +
+                   "\nError: no usable Codex CLI found")
+    reason = server._spawn_log_tail_and_reason(log)[1]
+    assert reason.startswith("note: skipping codex /")
+    assert reason.endswith("…; Error: no usable Codex CLI found")
+    assert "more skipped" not in reason
+    assert len(reason) == 500
+
+
+def test_long_error_remains_whole_when_candidate_count_exceeds_budget(tmp_path):
+    log = tmp_path / "spawn.log"
+    error = "Error: no usable Codex CLI found " + "E" * 438
+    assert len(error) == 471
+    log.write_text("note: skipping codex /first: " + "x" * 600 +
+                   "\nnote: skipping codex /second: missing node\n" + error)
+    assert server._spawn_log_tail_and_reason(log)[1] == error

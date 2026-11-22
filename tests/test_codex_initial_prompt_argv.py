@@ -79,6 +79,11 @@ def _run_child(tmp_path, shell, script, task_file):
         "AGENTSTACK_CODEX_ADD_DIRS_RESOLVED": "",
         "AGENTSTACK_HOOKS_DIR": str(tmp_path / "hooks"),
         "AGENTSTACK_CODEX_PROMPT_FILE": str(task_file),
+        "AGENTSTACK_PYTHON": sys.executable,
+        "AGENTSTACK_LAUNCH_WORK_DIR": str(workdir),
+        "AGENTSTACK_LAUNCH_PROJECT_KEY": "fixture-mail-namespace",
+        "AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS": "",
+        "AGENTSTACK_LAUNCH_CONTEXT_HELPER": str(ROOT / "hooks" / "project-context.sh"),
     }
     result = subprocess.run([shell, "-c", script], cwd=workdir, env=env,
                             capture_output=True, text=True, timeout=20)
@@ -145,7 +150,9 @@ def _extract(func: str) -> str:
 
 def _launcher_functions() -> str:
     names = ("pane_nonblank_tail", "pane_normalize_nbsp", "codex_trust_row_selected",
-             "codex_accept_trust_dialog", "codex_trust_screen_up", "codex_watch_initial_task")
+             "codex_accept_trust_dialog", "codex_trust_screen_up", "codex_turn_running_on_screen",
+             "injection_utf8_locale", "codex_task_pinned_on_screen", "codex_turn_finished_on_screen",
+             "codex_watch_initial_task")
     return "\n".join(_extract(name) for name in names)
 
 
@@ -185,6 +192,8 @@ def _watch(tmp_path, screens: list[str], statuses: list[str] | None = None, aliv
         '  printf "%s\\n" "$*" >> "$DIR/calls"\n'
         '  case "$1" in\n'
         "    capture-pane)\n"
+        + ('' if alive else '      return 1  # a dead session cannot yield an admitted screen\n')
+        +
         '      local idx; idx="$(cat "$DIR/idx")"\n'
         '      if [[ -f "$DIR/advance" ]] && (( idx + 1 < SCREENS )); then idx=$((idx + 1)); printf %s "$idx" > "$DIR/idx"; fi\n'
         '      rm -f "$DIR/advance"; cat "$DIR/screen$idx" ;;\n'
@@ -224,8 +233,60 @@ def test_without_a_binding_the_start_is_unknown_not_a_failure(tmp_path):
     result, keys, notes = _watch(tmp_path, [PROVISIONAL, PROVISIONAL, TRUST, STARTED])
     assert "STATUS=3 VERIFIED=false" in result.stdout
     assert keys == ["send-keys -t Child C-m"]
-    assert "Codex started (Child); first-task confirmation unknown" in notes
+    assert "Codex started (Child); a running first turn was seen on screen" in notes
+    assert "First-task confirmation unknown" in notes
     assert "WARNING" not in notes
+
+
+def _waited(notes: str) -> int:
+    import re
+
+    return int(re.search(r"(?:after|before) (\d+)s", notes).group(1))
+
+
+def test_without_a_receipt_a_running_turn_ends_the_wait_early(tmp_path):
+    # Where the history binding is not installed, every Codex spawn used to
+    # wait the full 90 s bound (WSL, 2026-09-29). A visibly running turn ends
+    # it one poll later; still no key and no success claimed.
+    result, keys, notes = _watch(tmp_path, [PROVISIONAL, STARTED])
+    assert "STATUS=3 VERIFIED=false" in result.stdout
+    assert keys == []
+    assert _waited(notes) <= 12
+
+
+def test_without_a_receipt_and_no_running_turn_the_full_bound_still_applies(tmp_path):
+    result, keys, notes = _watch(tmp_path, [PROVISIONAL])
+    assert "STATUS=3" in result.stdout
+    assert "Codex started (Child); first-task confirmation unknown" in notes
+
+
+def test_a_bound_session_waits_for_its_rollout_even_with_a_running_turn(tmp_path):
+    result, keys, notes = _watch(tmp_path, [STARTED], ["bound"])
+    assert "STATUS=3" in result.stdout and keys == []
+    assert "WARNING: first task not yet recorded (Child)" in notes
+
+
+def test_the_rollout_still_confirms_when_it_arrives_with_the_turn(tmp_path):
+    result, keys, notes = _watch(tmp_path, [STARTED], ["unknown", "started"])
+    assert "STATUS=0 VERIFIED=true" in result.stdout
+    assert "recorded in this launch's rollout" in notes
+
+
+def test_the_running_turn_line_must_be_at_the_bottom():
+    body = (_extract("pane_nonblank_tail") + _extract("pane_normalize_nbsp")
+            + _extract("codex_turn_running_on_screen") + '\ncodex_turn_running_on_screen "$SCREEN"\n')
+
+    def check(screen):
+        return subprocess.run(["/bin/bash", "-c", body], env=dict(os.environ, SCREEN=screen),
+                              capture_output=True, text=True, timeout=10).returncode
+
+    assert check(STARTED) == 0
+    assert check(STARTED.replace("(1s •", "(1m 05s •")) == 0
+    assert check(PROVISIONAL) != 0
+    assert check(TRUST) != 0
+    # Quoted high up in a long conversation, with an idle composer below.
+    quoted = "• Working (1s • esc to interrupt)\n" + "\n".join(f"line {i}" for i in range(12)) + PROVISIONAL
+    assert check(quoted) != 0
 
 
 def test_a_task_on_screen_is_not_a_success_without_the_rollout(tmp_path):
@@ -329,3 +390,416 @@ def test_prompt_file_is_private_and_oversized_tasks_fail_visibly(tmp_path):
     assert oct((tmp_path / "state").stat().st_mode & 0o777) == "0o700"
     assert "BIG_FAIL" in result.stdout
     assert "passed as one command-line argument" in result.stderr
+
+
+# --- real Codex 0.158 frames captured on WSL (2026-09-28) ---------------------
+FIXTURES = pathlib.Path(__file__).with_name("fixtures")
+RUNNING = (FIXTURES / "codex-0.158-running-frame.txt").read_text(encoding="utf-8")
+FINISHED = (FIXTURES / "codex-0.158-finished-frame.txt").read_text(encoding="utf-8")
+FINISHED_TASK = ("You are OrangeMendeleev, a standalone agent with no parent. Start it immediately:\n\n"
+                 "最終確認2です。STARTED とだけ答えて待機してください。")
+
+
+def test_the_real_running_frame_ends_the_wait_early(tmp_path):
+    # The status line is 7 lines above the bottom, blank lines included.
+    result, keys, notes = _watch(tmp_path, [RUNNING])
+    assert "STATUS=3 VERIFIED=false" in result.stdout and keys == []
+    assert "a running first turn was seen on screen" in notes
+    assert _waited(notes) <= 12
+
+
+def test_a_status_line_with_more_after_it_still_counts(tmp_path):
+    screen = RUNNING.replace("(1s • esc to interrupt)", "(1s • esc to interrupt) · 2 background terminals")
+    result, keys, notes = _watch(tmp_path, [screen])
+    assert _waited(notes) <= 12 and keys == []
+
+
+def test_a_short_turn_already_over_ends_the_wait_at_once(tmp_path):
+    # "Reply STARTED" is done before the next poll: reply, time, idle composer.
+    result, keys, notes = _watch(tmp_path, [FINISHED], prompt=FINISHED_TASK)
+    assert "STATUS=3 VERIFIED=false" in result.stdout and keys == []
+    assert "a reply to its first task is on screen" in notes
+    assert _waited(notes) <= 6
+
+
+def test_a_trust_screen_after_a_running_line_is_answered_first(tmp_path):
+    result, keys, notes = _watch(tmp_path, [RUNNING, TRUST, PROVISIONAL])
+    assert keys == ["send-keys -t Child C-m"]
+    # The trust screen reset the early end: nothing ran after it, so the
+    # watch ran to its bound instead of ending on the old running line.
+    assert "a running first turn was seen" not in notes
+    assert "first-task confirmation unknown" in notes
+
+
+def _finished(screen: str, prompt: str) -> int:
+    body = ("\n".join(_extract(n) for n in ("pane_nonblank_tail", "pane_normalize_nbsp", "codex_trust_row_selected",
+                                           "codex_trust_screen_up", "injection_utf8_locale",
+                                           "codex_task_pinned_on_screen", "codex_turn_finished_on_screen"))
+            + '\ncodex_turn_finished_on_screen "$SCREEN" "$PROMPT"\n')
+    return subprocess.run(["/bin/bash", "-c", body], env=dict(os.environ, SCREEN=screen, PROMPT=prompt),
+                          capture_output=True, text=True, timeout=10).returncode
+
+
+def test_the_finished_turn_needs_the_task_a_reply_after_it_and_an_idle_composer():
+    assert _finished(FINISHED, FINISHED_TASK) == 0
+    # Another task on screen: not this launch's turn.
+    assert _finished(FINISHED, "Reply with the current date and nothing else.") != 0
+    # Still running, or no reply below the task yet.
+    assert _finished(RUNNING, PROMPT) != 0
+    no_reply = FINISHED.replace("• STARTED", "")
+    assert _finished(no_reply, FINISHED_TASK) != 0
+    # A bullet inside the task itself is not a reply.
+    bulleted = "Do these:\n• one\n• two"
+    screen = "› Do these:\n  • one\n  • two\n\n" + PROVISIONAL
+    assert _finished(screen, bulleted) != 0
+    # A trust screen up: never "finished".
+    assert _finished(FINISHED.replace("› Ask Codex to do anything", "") + TRUST, FINISHED_TASK) != 0
+
+
+STREAMING = (FIXTURES / "codex-0.158-streaming-frame.txt").read_text(encoding="utf-8")
+LONG_TASK = "Start it immediately:\n\n1〜200 の素数を1行ずつ理由つきで書き出してください"
+
+
+def test_a_streaming_reply_ends_the_wait_even_without_the_status_line():
+    # While a reply streams, Codex hides "Working (...)": reply lines and an
+    # idle-looking composer are what the screen shows (real frame, 2026-09-29).
+    # The note therefore says a reply is on screen, not that the turn is over.
+    assert _finished(STREAMING, LONG_TASK) == 0
+
+
+# --- #118: a long reply, captured once a second on WSL (2026-09-30) ------------
+# Frames 005-040 of one standalone spawn (Codex 0.158, gpt-6-luna low, 80x24, no
+# receipt): banner, task, the reply streaming with no status line, then the task
+# pushed off the screen while Codex pins its first line, cut with "…", as the
+# first line. Polled every 3 s, the end of the task and the running line are
+# each on screen for only a few seconds; missing both, the watch ran to its
+# 90 s bound (90.3 s measured).
+LONG_FRAMES = (FIXTURES / "codex-0.158-long-reply-frames.txt").read_text(encoding="utf-8").split("\f\n")
+LONG_REPLY_TASK = ("You are PureBose, a standalone agent with no parent. The name PureBose is already "
+                   "reserved and registered; do not register another identity, do not re-register yourself "
+                   "(no agentstack-reregister), and do not fetch the inbox as a startup ritual. Starting child "
+                   "agents of your own later is allowed. This prompt is the canonical task. Start it "
+                   "immediately:\n\n1〜200 の素数を1行ずつ理由つきで書き出してください")
+
+
+@pytest.mark.parametrize("offset", range(3))
+@pytest.mark.parametrize("start", [5, 12, 15], ids=["from-banner", "task-scrolling", "task-gone"])
+def test_a_long_reply_ends_the_wait_whatever_the_poll_phase(tmp_path, start, offset):
+    # One poll every 3 frames; the last frame repeats, as the screen then stays.
+    frames = LONG_FRAMES[start - 5 + offset::3]
+    result, keys, notes = _watch(tmp_path, frames, prompt=LONG_REPLY_TASK)
+    assert "STATUS=3 VERIFIED=false" in result.stdout and keys == []
+    assert "First-task confirmation unknown" in notes
+    # Before the fix the pinned-task frames (016 on) matched nothing: 90 s.
+    assert _waited(notes) <= 9, notes
+
+
+def test_the_pinned_task_line_must_be_this_tasks_first_line():
+    pinned = LONG_FRAMES[-1]
+    assert pinned.splitlines()[0].endswith("…")
+    assert _finished(pinned, LONG_REPLY_TASK) == 0
+    # Another child's task pinned there is not this launch's turn.
+    other = LONG_REPLY_TASK.replace("PureBose", "BlueLake")
+    assert _finished(pinned, other) != 0
+    # Too short a prefix to tell tasks apart.
+    short = pinned.replace(pinned.splitlines()[0], "You are…", 1)
+    assert _finished(short, "You are somebody else entirely") != 0
+    # A pinned line alone is not enough without the idle composer.
+    assert _finished(pinned.replace("› Ask Codex to do anything", ""), LONG_REPLY_TASK) != 0
+
+
+def test_a_task_end_wrapped_across_lines_is_still_found():
+    # The last 24 characters of the task can straddle a terminal wrap.
+    prompt = "Start it immediately: write the primes up to two hundred, each with its reason"
+    wrapped = ("› Start it immediately: write the primes up to two hundred, each with\n"
+               "  its reason\n\n• 2 — prime\n" + PROVISIONAL)
+    assert _finished(wrapped, prompt) == 0
+    # Regex characters in the task are taken literally.
+    tricky = "Answer [yes] or no? (a.b*c) ^$ \\ done"
+    screen = "› " + tricky + "\n\n• yes\n" + PROVISIONAL
+    assert _finished(screen, tricky) == 0
+    assert _finished("› something else\n\n• yes\n" + PROVISIONAL, tricky) != 0
+
+
+# --- #60: Codex's own update screen, and a self-update in progress -------------
+# Built from the strings in the Codex 0.159.2 binary; the exact layout has not
+# been captured on a real screen. Its default choice ran `npm install -g`.
+UPDATE_SCREEN = (
+    "\n  ✨ Update available! 0.158.0 -> 0.159.2\n\n"
+    "  Release notes: https://github.com/openai/codex/releases/latest\n\n"
+    "› 1. Update now (runs `npm install -g @openai/codex`)\n"
+    "  2. Skip\n"
+    "  3. Skip until next version\n\n"
+    "  Press enter to continue\n"
+)
+
+
+def test_the_update_screen_gets_no_key(tmp_path):
+    # "Press enter to continue" alone once read as a sign-in screen, and the
+    # Enter started the update (#60). Only a trust screen, by its whole
+    # layout, is answered.
+    result, keys, notes = _watch(tmp_path, [UPDATE_SCREEN])
+    assert keys == []
+    assert "STATUS=3 VERIFIED=false" in result.stdout
+
+
+def _cleanup(tmp_path, screen: str, which: str) -> list[str]:
+    """Run one launcher cleanup with tmux showing `screen`; return tmux calls."""
+    calls = tmp_path / "calls"
+    (tmp_path / "screen").write_text(screen, encoding="utf-8")
+    spawn = SPAWN.read_text(encoding="utf-8")
+    if which == "pre-registered":
+        body = spawn[spawn.index("    cleanup_preregister_failure() {"):spawn.index("    trap cleanup_preregister_failure EXIT")]
+        state = ("PRE_REGISTERED_SUCCESS=false\nPRE_REGISTERED_ADOPTION_PENDING=false\n"
+                 "PRE_REGISTERED_SESSION_STARTED=true\nPRE_REGISTERED_MANAGED_ADDED=false\n")
+        call = "cleanup_preregister_failure"
+    else:
+        body = spawn[spawn.index("cleanup_on_failure() {"):spawn.index("\n}\n", spawn.index("cleanup_on_failure() {")) + 3]
+        state = "SPAWN_COMPLETED=false\nCHILD_SESSION_STARTED=true\nRESOURCES=\nPROJECT_KEY=/p\n"
+        call = "cleanup_on_failure"
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "cleanup-child-agent.sh").write_text(
+        'printf "confirmed-cleanup\\n" >> "$DIR/calls"\n', encoding="utf-8")
+    script = (
+        f"export DIR={shlex.quote(str(tmp_path))}\nHOOKS_DIR=\"$DIR/hooks\"\nCHILD_NAME=Child\nUSE_CODEX=true\n" + state
+        + 'tmux() { printf "%s\\n" "$*" >> "$DIR/calls"; case "$1" in capture-pane) cat "$DIR/screen" ;; kill-session) : > "$DIR/killed" ;; has-session) [[ ! -f "$DIR/killed" ]] ;; esac; }\n'
+        + "warn_if_uninjected() { :; }\ndiscard_claude_launch_record() { :; }\n"
+        + "call_mcp() { :; }\nretire_agent_with_token_file() { :; }\nspawn_note() { printf '%s\\n' \"$1\" >&2; }\n"
+        + f"SPAWN_INCIDENT_LOG={shlex.quote(str(tmp_path / 'incidents'))}\nAGENTSTACK_CODEX_UPDATE_WATCH_SECONDS=0\n"
+        + "\n".join(_extract(n) for n in ("codex_self_update_on_screen", "codex_update_watch",
+                                          "leave_updating_codex_child", "cleanup_worktree"))
+        + "\n" + body + "\n" + call + "\nwait\n"
+    )
+    subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=20)
+    return calls.read_text().splitlines() if calls.exists() else []
+
+
+@pytest.mark.parametrize("which", ["pre-registered", "direct"])
+def test_cleanup_never_kills_a_codex_updating_itself(tmp_path, which):
+    # Killing the session mid `npm install -g` left neither the old nor the
+    # new codex usable on the machine (#60).
+    updating = "Updating Codex via `npm install -g @openai/codex`...\n\nadded 1 package in 41s\n"
+    calls = _cleanup(tmp_path, updating, which)
+    assert not any(c.startswith("kill-session") for c in calls)
+    assert "confirmed-cleanup" not in calls
+
+
+@pytest.mark.parametrize("which", ["pre-registered", "direct"])
+def test_cleanup_still_kills_an_ordinary_half_started_child(tmp_path, which):
+    calls = _cleanup(tmp_path, PROVISIONAL, which)
+    assert any(c.startswith("kill-session") for c in calls)
+    if which == "direct":
+        assert "confirmed-cleanup" in calls
+
+
+# --- #165 review P2-1: who closes a child left updating ------------------------
+# The launcher's cleanup goes on after leaving the session: the registration is
+# rolled back. A codex that kept running the task after its update would work
+# as a retired identity, in a worktree the cleanup had removed. The worktree is
+# now handed to a watcher, which closes the session once the update is over.
+
+def _update_watch(tmp_path, screens: list[str], *, alive_polls: int = 99, limit: int = 30,
+                  capture_fails: bool = False, kill_fails: bool = False):
+    """Run codex_update_watch with tmux replaying `screens` (last repeats)."""
+    for i, screen in enumerate(screens):
+        (tmp_path / f"screen{i}").write_text(screen, encoding="utf-8")
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    script = (
+        f"DIR={shlex.quote(str(tmp_path))}; SCREENS={len(screens)}; ALIVE={alive_polls}\n"
+        f"CAPTURE_FAILS={int(capture_fails)}; KILL_FAILS={int(kill_fails)}\n"
+        'printf 0 > "$DIR/i"\n'
+        "tmux() {\n"
+        '  printf "%s\\n" "$*" >> "$DIR/calls"\n'
+        '  local i; i="$(cat "$DIR/i")"\n'
+        '  case "$1" in\n'
+        '    has-session) if [[ -f "$DIR/killed" ]] || (( i >= ALIVE )); then echo "can\'t find session: Child" >&2; return 1; fi ;;\n'
+        '    capture-pane) (( CAPTURE_FAILS )) && return 1; cat "$DIR/screen$(( i < SCREENS ? i : SCREENS - 1 ))" ;;\n'
+        '    kill-session) (( KILL_FAILS )) && return 1; : > "$DIR/killed" ;;\n'
+        "  esac\n"
+        "}\n"
+        'sleep() { printf %s "$(( $(cat "$DIR/i") + 1 ))" > "$DIR/i"; }\n'
+        'git() { printf "git %s\\n" "$*" >> "$DIR/calls"; }\n'
+        f'SPAWN_INCIDENT_LOG={shlex.quote(str(tmp_path / "incidents"))}\n'
+        + _extract("codex_update_watch")
+        + f"\ncodex_update_watch Child {shlex.quote(str(worktree))} /src Child {limit} 5\n"
+    )
+    subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=20)
+    calls = (tmp_path / "calls").read_text().splitlines()
+    notes = (tmp_path / "incidents").read_text() if (tmp_path / "incidents").exists() else ""
+    return calls, notes
+
+
+UPDATING = "Updating Codex via `npm install -g @openai/codex`...\n"
+
+
+def test_the_watch_closes_a_child_that_went_on_after_its_update(tmp_path):
+    calls, notes = _update_watch(tmp_path, [UPDATING, UPDATING, PROVISIONAL])
+    assert "kill-session -t =Child" in calls
+    assert any(c.startswith("git -C /src worktree remove --force") for c in calls)
+    assert "update finished" in notes
+
+
+def test_the_watch_only_tidies_up_after_a_child_that_closed_itself(tmp_path):
+    calls, notes = _update_watch(tmp_path, [UPDATING], alive_polls=2)
+    assert not any(c.startswith("kill-session") for c in calls)
+    assert any(c.startswith("git -C /src worktree remove --force") for c in calls)
+
+
+def test_a_child_still_updating_at_the_limit_is_left_and_reported(tmp_path):
+    calls, notes = _update_watch(tmp_path, [UPDATING], limit=15)
+    assert not any(c.startswith("kill-session") for c in calls)
+    # Its worktree is its working directory: never removed under a live codex.
+    assert not any(c.startswith("git ") for c in calls)
+    assert "still updating" in notes and "tmux kill-session -t Child" in notes
+
+
+@pytest.mark.parametrize("which", ["pre-registered", "direct"])
+def test_leaving_an_updating_child_hands_its_worktree_to_the_watch(tmp_path, which):
+    spawn = SPAWN.read_text(encoding="utf-8")
+    start = spawn.index("    cleanup_preregister_failure() {") if which == "pre-registered" else spawn.index("cleanup_on_failure() {")
+    body = spawn[start:spawn.index("\n}\n", start)]
+    guarded = body[body.index("codex_self_update_on_screen"):]
+    assert "leave_updating_codex_child" in guarded.split("kill-session")[0]
+    worktree = spawn[spawn.index("cleanup_worktree() {"):]
+    worktree = worktree[:worktree.index("\n}\n")]
+    assert "CODEX_UPDATE_LEFT_RUNNING" in worktree
+
+
+def test_a_failed_capture_is_not_taken_as_the_update_being_over(tmp_path):
+    # #165 re-review P2-R1: an empty capture has no "Updating Codex via" in it.
+    calls, notes = _update_watch(tmp_path, [UPDATING], capture_fails=True, limit=15)
+    assert not any(c.startswith("kill-session") for c in calls)
+    assert not any(c.startswith("git ") for c in calls)
+    assert "still updating" in notes
+
+
+def test_a_child_that_survived_the_kill_keeps_its_worktree(tmp_path):
+    # #165 re-review P2-R2: never remove the working directory of a live codex.
+    calls, notes = _update_watch(tmp_path, [UPDATING, PROVISIONAL], kill_fails=True)
+    assert any(c.startswith("kill-session") for c in calls)
+    assert not any(c.startswith("git ") for c in calls)
+    assert "could not be closed" in notes
+
+
+@pytest.mark.parametrize("probe_rc,diagnostic", [
+    (2, "TMUX_TARGET_UNAVAILABLE"),
+    (2, "GLOBAL_TARGET_OWNERSHIP_UNKNOWN"),
+    (1, "ps: Operation not permitted"),
+    (124, "timeout"),
+    (1, ""),
+])
+def test_target_observation_failure_keeps_child_and_never_retries_or_sends_keys(tmp_path, probe_rc, diagnostic):
+    calls = tmp_path / "calls"
+    script = (
+        "sleep() { :; }\n"
+        + 'tmux() { printf "%s\\n" "$1" >> "$CALLS"; printf "%s" "$DIAG" >&2; return "$PROBE_RC"; }\n'
+        + "codex_initial_task_status() { echo unknown; }\n"
+        + 'spawn_note() { printf "%s\\n" "$*"; }\n'
+        + _extract("codex_session_alive") + "\n" + _launcher_functions()
+        + '\nINJECTION_VERIFIED=false; status=0; codex_watch_initial_task Child task test /l id || status=$?; printf "STATUS=%s VERIFIED=%s\\n" "$status" "$INJECTION_VERIFIED"\n'
+    )
+    result = subprocess.run(["/bin/bash", "-c", script], env={**os.environ, "CALLS":str(calls), "DIAG":diagnostic, "PROBE_RC":str(probe_rc)},capture_output=True,text=True,timeout=10)
+    assert "STATUS=3 VERIFIED=false" in result.stdout, result.stderr
+    assert "confirmation unknown" in result.stdout
+    assert "retained" in result.stdout
+    assert "died" not in result.stdout + result.stderr
+    assert calls.read_text().splitlines() == ["capture-pane", "has-session"]
+    assert "ps: Operation not permitted" not in result.stdout + result.stderr
+    if diagnostic.isupper() and "_" in diagnostic:
+        assert "reason=" + diagnostic in result.stdout
+
+
+def test_verified_rollout_start_does_not_need_pane_or_process_observation(tmp_path):
+    script = (
+        "sleep() { :; }\n"
+        + 'tmux() { echo forbidden-pane-or-process-probe >&2; return 99; }\n'
+        + "codex_initial_task_status() { echo started; }\n"
+        + 'spawn_note() { printf "%s\\n" "$*"; }\n'
+        + _launcher_functions()
+        + '\nINJECTION_VERIFIED=false; codex_watch_initial_task Child task test /l id; printf "VERIFIED=%s\\n" "$INJECTION_VERIFIED"\n'
+    )
+    result = subprocess.run(["/bin/bash", "-c", script],capture_output=True,text=True,timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert "VERIFIED=true" in result.stdout
+    assert "forbidden" not in result.stderr
+
+
+@pytest.mark.parametrize("diagnostic", ["can't find session: Child", "no sessions", "no server running on /private/tmp/test/default", "error connecting to /private/tmp/test/default (No such file or directory)"])
+def test_explicit_absence_is_still_a_failed_start(tmp_path, diagnostic):
+    script = (
+        "sleep() { :; }\n"
+        + 'tmux() { printf "%s" "$DIAG" >&2; return 1; }\n'
+        + "codex_initial_task_status() { echo unknown; }\n"
+        + _extract("codex_session_alive") + "\n" + _launcher_functions()
+        + '\ncodex_watch_initial_task Child task test /l id\n'
+    )
+    result = subprocess.run(["/bin/bash", "-c", script],env={**os.environ,"DIAG":diagnostic},capture_output=True,text=True,timeout=10)
+    assert result.returncode == 2, result.stderr
+    assert "explicit session absence" in result.stderr
+
+
+def test_observation_diagnostic_does_not_publish_arbitrary_stderr(tmp_path):
+    script = (
+        'tmux() { printf "%s" "$DIAG" >&2; return 2; }\n'
+        + _extract("codex_session_alive")
+        + '\ncodex_session_alive Child; printf "reason=%s\\n" "$CODEX_SESSION_OBSERVATION_REASON"\n'
+    )
+    result = subprocess.run(["/bin/bash", "-c", script],env={**os.environ,"DIAG":"TMUX_TARGET_UNAVAILABLE\nprivate-task-sentinel"},capture_output=True,text=True,timeout=10)
+    assert result.stdout == "reason=unknown\n"
+    assert "private-task-sentinel" not in result.stdout + result.stderr
+
+
+def test_unknown_target_does_not_open_an_automatic_terminal(tmp_path):
+    marker=tmp_path/'terminal-was-opened'
+    script=(
+        'AUTO_OPEN_CHILD=1; CODEX_TARGET_OBSERVATION_UNAVAILABLE=true\n'
+        + '_open_child_terminal() { touch "$MARKER"; }\n'
+        + _extract('open_child_terminal')
+        + '\nopen_child_terminal Child\n'
+    )
+    result=subprocess.run(['/bin/bash','-c',script],env={**os.environ,'MARKER':str(marker)},capture_output=True,text=True,timeout=10)
+    assert result.returncode==0
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize('present',[False,True])
+def test_capture_failure_can_recover_through_the_same_launch_receipt(tmp_path,present):
+    calls=tmp_path/'calls';counter=tmp_path/'counter';counter.write_text('0')
+    script=(
+        'sleep() { :; }\n'
+        + 'tmux() { printf "%s\\n" "$1" >> "$CALLS"; if [[ "$1" == has-session && "$PRESENT" == true ]]; then return 0; fi; echo TMUX_TARGET_UNAVAILABLE >&2; return 2; }\n'
+        + 'codex_initial_task_status() { local n; n=$(cat "$COUNTER"); n=$((n+1)); echo "$n" > "$COUNTER"; if [[ "$n" == 3 ]]; then echo started; else echo unknown; fi; }\n'
+        + 'spawn_note() { printf "%s\\n" "$*"; }\n'
+        + _extract('codex_session_alive')+'\n'+_launcher_functions()
+        + '\nINJECTION_VERIFIED=false; codex_watch_initial_task Child task test /l id; printf "VERIFIED=%s\\n" "$INJECTION_VERIFIED"\n'
+    )
+    result=subprocess.run(['/bin/bash','-c',script],env={**os.environ,'CALLS':str(calls),'COUNTER':str(counter),'PRESENT':str(present).lower()},capture_output=True,text=True,timeout=10)
+    assert result.returncode==0,result.stderr
+    assert 'VERIFIED=true' in result.stdout
+    assert 'died' not in result.stderr
+    expected=['capture-pane','has-session']*(2 if present else 1)
+    assert calls.read_text().splitlines()==expected
+
+
+@pytest.mark.parametrize('preregistered',[True,False])
+def test_unknown_target_blocks_even_a_later_failure_cleanup(tmp_path,preregistered):
+    text=SPAWN.read_text()
+    if preregistered:
+        body=re.search(r'(?ms)^    cleanup_preregister_failure\(\) \{.*?^    \}',text).group()
+        setup='PRE_REGISTERED_SUCCESS=false; cleanup_preregister_failure'
+    else:
+        body=_extract('cleanup_on_failure');setup='SPAWN_COMPLETED=false; cleanup_on_failure'
+    marker=tmp_path/'unwanted-effect'
+    script=(
+        'CODEX_TARGET_OBSERVATION_UNAVAILABLE=true\n'
+        + 'spawn_note() { printf "%s\\n" "$*"; }\n'
+        + 'tmux() { touch "$MARKER"; }\n'
+        + 'finish_child_registration() { touch "$MARKER"; }\n'
+        + body+'\n'+setup+'\n'
+    )
+    result=subprocess.run(['/bin/bash','-c',script],env={**os.environ,'MARKER':str(marker)},capture_output=True,text=True,timeout=10)
+    assert result.returncode==1
+    assert 'cleanup withheld' in result.stdout
+    assert not marker.exists()

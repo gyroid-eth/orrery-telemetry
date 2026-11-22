@@ -58,12 +58,18 @@ def build(
     ):
         raise SystemExit("marketplace name must use lowercase letters, digits, and hyphens")
 
+    shared_loader = source_package / "agentstack_codex_app" / "_global-client-loader.sh"
+    if not shared_loader.is_file():
+        shared_loader = Path(__file__).resolve().parents[1] / "bin" / "lib" / "global-client-loader.sh"
+    if not shared_loader.is_file():
+        raise SystemExit("GLOBAL_ENTRY_UNAVAILABLE: missing shared client loader")
     if destination.exists():
         shutil.rmtree(destination)
     plugin_destination = destination / "plugins" / PLUGIN_NAME
     copy_tree(plugin_source, plugin_destination)
     copy_tree(source_package, plugin_destination / "src")
     copy_tree(schemas, plugin_destination / "schemas")
+    shutil.copyfile(shared_loader, plugin_destination / "src" / "agentstack_codex_app" / "_global-client-loader.sh")
 
     manifest = json.loads(
         (plugin_destination / ".codex-plugin" / "plugin.json").read_text(

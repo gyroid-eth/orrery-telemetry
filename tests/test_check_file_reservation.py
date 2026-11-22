@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 
 
+from _installed_client_payload import copy_client_library
+
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "hooks" / "check-file-reservation.sh"
 RESOLVER = ROOT / "hooks" / "resolve-agent-name.sh"
@@ -24,11 +26,14 @@ RESOLVER = ROOT / "hooks" / "resolve-agent-name.sh"
 class _Server:
     def __init__(self, responder: Callable[[int], tuple[int, bytes]]) -> None:
         self.requests: list[dict[str, Any]] = []
+        self.resource_requests: list[dict[str, Any]] = []
         parent = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                request = json.loads(body)
+                assert request['method'] == 'tools/call'
                 parent.requests.append(
                     {
                         "headers": {key.lower(): value for key, value in self.headers.items()},
@@ -36,6 +41,7 @@ class _Server:
                     }
                 )
                 status, response = responder(len(parent.requests))
+                response = _scope_response(response, request)
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(response)))
@@ -91,7 +97,7 @@ class _OneShotZeroServer:
                     content_length = int(line.split(b":", 1)[1].strip())
             while len(body) < content_length:
                 body += connection.recv(4096)
-            response = _mcp_result(0)
+            response = _scope_response(_mcp_result(0), json.loads(body[:content_length]))
             connection.sendall(
                 b"HTTP/1.1 200 OK\r\n"
                 b"Content-Type: application/json\r\n"
@@ -113,12 +119,24 @@ class _OneShotZeroServer:
         self.thread.join(timeout=2)
 
 
+def _scope_response(response, request):
+    try:
+        document = json.loads(response)
+        check = document['result']['structuredContent'].get('conflict_check')
+        if isinstance(check, dict) and check.get('project_key') == '__request__':
+            check.update(project_key=request['params']['arguments']['project_key'], paths=request['params']['arguments']['paths'])
+            return json.dumps(document).encode()
+    except (ValueError, KeyError, TypeError):
+        pass
+    return response
+
+
 def _mcp_result(renewed: Any) -> bytes:
     return json.dumps(
         {
             "jsonrpc": "2.0",
             "id": "reservation-guard",
-            "result": {"structuredContent": {"renewed": renewed}},
+            "result": {"structuredContent": {"renewed": renewed, "conflict_check": {"version":1,"project_key":"__request__","paths":[],"conflicts":[]}}},
         }
     ).encode()
 
@@ -199,6 +217,7 @@ class ReservationHookTests(unittest.TestCase):
         runtime.mkdir(exist_ok=True)
         hooks.mkdir(exist_ok=True)
         if install_resolver:
+            copy_client_library(root)
             (hooks / "resolve-agent-name.sh").write_bytes(
                 RESOLVER.read_bytes() if resolver_bytes is None else resolver_bytes
             )
@@ -273,6 +292,7 @@ class ReservationHookTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(server.requests), 1)
+        self.assertEqual(len(server.resource_requests), 0)
         request = server.requests[0]
         self.assertEqual(
             request["headers"]["accept"], "application/json, text/event-stream"

@@ -49,6 +49,8 @@ def _patch_agent_inputs(monkeypatch, process_tree):
             },
         }, {}),
     )
+    # The single-agent lookup (exit/kill/jump) reads the same registration.
+    monkeypatch.setattr(server, "_mail_agent_for", lambda name: server.agentmail_state()[0].get(name))
     monkeypatch.setattr(server, "_process_tree_snapshot", lambda: process_tree)
     monkeypatch.setattr(server, "_codex_app_runtimes", lambda: {})
     monkeypatch.setattr(server, "_deliverables_index", lambda: {})
@@ -140,6 +142,8 @@ def _exit(monkeypatch, process_tree):
         raise AssertionError(f"unexpected command: {argv}")
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, None, server, fake_run)
     return server.do_exit("MintBoltzmann"), sent
 
 

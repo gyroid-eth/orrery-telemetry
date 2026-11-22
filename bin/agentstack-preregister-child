@@ -1,4 +1,22 @@
 #!/usr/bin/env bash
+
+if [[ "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then
+  _ags_fresh_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  exec "${AGENTSTACK_PYTHON:-python3}" -m agentstack_mail.fresh_client child-preregister \
+    --wrapper-root "$_ags_fresh_root" "$@"
+fi
+
+# Decide explicit global context before loading any legacy environment/state.
+_ags_global_loader="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/global-client-loader.sh"
+. "$_ags_global_loader" || exit 2
+ags_client_bootstrap "${AGENTSTACK_ENV_FILE:-${AGENTSTACK_HOME:-$(dirname "$_ags_global_loader")/../..}/env.sh}" "$@" || exit 2
+if declare -F ags_client_entry >/dev/null; then
+  if ags_client_entry preregister-child "$@"; then exit 0; else _ags_global_rc=$?; fi
+  if [[ "$_ags_global_rc" != 125 ]]; then
+    exit "$_ags_global_rc"
+  fi
+
+fi
 # Pre-register a delegated child agent without exposing its registration token.
 #
 # Usage:
@@ -16,10 +34,14 @@ die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+export AGENTSTACK_RUNTIME_MODE=legacy
+
 load_env_file() {
   local envf="$1"
   # shellcheck disable=SC1090
-  [[ -n "$envf" && -f "$envf" ]] && . "$envf"
+  if [[ -n "$envf" && -f "$envf" ]]; then
+    ags_client_bootstrap "$envf" || exit 2
+  fi
   return 0
 }
 
@@ -255,11 +277,11 @@ PY
 # that non-secret registration receipt beside the one-shot token so
 # spawn_child.sh can consume both without querying by name later. Also persist
 # the same formal receipt with the canonical runtime token for the documented
-# no-argument launch path. Codex launchers fail closed when either copy is
+# no-argument launch path. Claude/Codex launchers fail closed when either copy is
 # unavailable; preregistration must therefore not report success without both.
-if [[ "$program" == "codex" || "$program" == "codex-cli" ]]; then
+if [[ "$program" == "codex" || "$program" == "codex-cli" || "$program" == "claude" || "$program" == "claude-code" ]]; then
   [[ "$registered_id" =~ ^[1-9][0-9]*$ ]] \
-    || die "register_agent returned no positive numeric id for Codex child $registered"
+    || die "register_agent returned no positive numeric id for child $registered"
   binding_file="${token_file_out}.binding.json"
   if ! "${AGENTSTACK_PYTHON:-python3}" - "$binding_file" "$registered_id" "$registered" "$project_key" "$program" <<'PY'
 import json
@@ -285,11 +307,11 @@ os.replace(temporary, path)
 os.chmod(path, 0o600)
 PY
   then
-    die "could not persist the one-shot Codex registration binding"
+    die "could not persist the one-shot child registration binding"
   fi
   persist_codex_registration_state \
     "$registered" "$registered_id" "$project_key" "$program" "$token_file_out" \
-    || die "could not persist canonical Codex registration token and metadata"
+    || die "could not persist canonical child registration token and metadata"
 else
   ags_store_registration_token "$registered" "$effective_token" || true
 fi

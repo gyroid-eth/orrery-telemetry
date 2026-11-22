@@ -41,6 +41,28 @@ def test_delegation_is_an_example_of_the_general_rule_not_an_exception():
     assert "report the exact failure and stop delegation" in skill
 
 
+def test_children_are_created_and_talked_to_through_orrery_not_built_ins():
+    """Without the block in context, Sonnet 5 created the child with the
+    built-in Agent tool and played shiritori over SendMessage (3/3), and sent
+    to an ORRERY child in tmux with ListAgents + SendMessage (3/3). The skill
+    description is usually listed outside the block too (it can be cut when the
+    skill listing is over budget), so it carries the rule up front; the block
+    repeats it for sessions that load it."""
+    claude = _read("claude/CLAUDE.md")
+    skill = _read("skills/delegate/SKILL.md")
+    description = next(
+        line for line in skill.splitlines() if line.startswith("description:")
+    )
+
+    for name in ("Agent or Task tool", "agent teams", "send_message", "SendMessage"):
+        assert name in description, name
+    assert "report that exact failure and stop; do not fall back to a built-in agent" in skill
+    assert "follows the connection's actual schema" in skill
+    assert "Talk to ORRERY agents over ORRERY Mail only." in claude
+    assert "`SendMessage` and `ListAgents`" in claude
+    assert "Talking to a child is part of the same rule" in claude
+
+
 def test_both_blocks_carry_the_operational_rules_learned_in_production():
     """Rules that only lived in one maintainer's vault until 2026-09-03.
 
@@ -70,6 +92,27 @@ def test_both_blocks_carry_the_operational_rules_learned_in_production():
     assert "Nothing releases for you" in codex
 
 
+def test_claude_bash_release_guidance_and_codex_manual_release_stay_separate():
+    expected = """- **In Claude Code, use `Edit`/`Write` for reserved files.** Its reservation
+  hooks neither check nor release reservations for writes through `Bash`,
+  scripts, or other tools. If you write that way, release the reserved files
+  yourself immediately after writing: bound proxy `release_reservations`,
+  raw/direct `release_file_reservations`.
+"""
+    for path in ("claude/CLAUDE.md", "codex/AGENTS.md"):
+        text = _read(path)
+        # Restrict the assertion to the reservation section, not another example.
+        start = text.lower().index("## file reservations")
+        reservations = text[start:].split("\n## ", 1)[0]
+        if path.startswith("claude/"):
+            assert reservations.count(expected) == 1, path
+        else:
+            assert "In Claude Code, use `Edit`/`Write` for reserved files." not in reservations
+            normalized = " ".join(reservations.split())
+            assert "Nothing releases for you after an edit" in normalized
+            assert "renew long edits and release the reservation when done." in normalized
+
+
 def test_notification_shapes_in_the_blocks_match_the_watcher():
     watcher = (ROOT / "hooks" / "watch_agent_mail_signals.sh").read_text(encoding="utf-8")
     for phrase in (
@@ -88,7 +131,7 @@ def test_delegate_skill_reads_bare_model_words_as_models_not_names():
     "never a name" rule must ship with the skill."""
     skill = _read("skills/delegate/SKILL.md")
     assert "### How to read the arguments" in skill
-    for word in ("`sol`, `terra`, `luna`, `astra`", "gpt-5.6-terra", "gpt-6-astra"):
+    for word in ("`sol`, `terra`, `luna`, `astra`", "newest eligible version of its family", "Explicit formal IDs are never substituted"):
         assert word in skill
     assert "A word such as `terra` is a model, not a name." in skill
     assert "The child's name is never taken from the arguments." in skill
@@ -102,7 +145,7 @@ def test_codex_coordination_routes_are_ordered_and_do_not_force_raw_recovery():
         "### 2. Bound ORRERY proxy",
         "### 3. Raw/direct connection after shell registration",
         "### 4. Recovering an existing identity over raw/direct MCP",
-        "### 5. Registering a genuinely new raw/direct session",
+        "### 5. Sessions without an existing identity",
         "### Shared boundaries",
     )
     offsets = [codex.index(heading) for heading in headings]
@@ -127,7 +170,7 @@ def test_claude_coordination_routes_are_ordered_and_keep_hook_contract():
         "### 2. Bound ORRERY proxy",
         "### 3. Raw/direct connection after shell registration",
         "### 4. Recovering an existing identity over raw/direct MCP",
-        "### 5. Registering a genuinely new raw/direct session",
+        "### 5. Sessions without an existing identity",
         "### Shared boundaries",
         "### Claude Code hook boundary",
     )
@@ -142,7 +185,7 @@ def test_claude_coordination_routes_are_ordered_and_keep_hook_contract():
     assert "proxy binding, not ORRERY Mail reachability" in claude
     assert "A generic `register_agent failed` does not by itself prove" in claude
     assert "set `AGENT_NAME` to that exact existing name" in claude
-    assert 'program="claude-code"' in claude
+    assert 'agentstack-reregister "$AGENT_NAME" claude-code' in claude
     assert "proxy use alone does not prove that a flag exists" in claude
     assert "Sessions with a resolved `AGENT_NAME` are separately exempt" in claude
     assert spawn.count("Follow the child-agent startup procedure in CLAUDE.md") == 2
@@ -161,7 +204,7 @@ def test_claude_setup_renders_routes_and_reservations_once_in_an_isolated_home(
     project = tmp_path / "project"
     claude_home.mkdir(parents=True)
     project.mkdir()
-    target = project / "CLAUDE.md"
+    target = claude_home / "CLAUDE.md"
     target.write_text("# Personal project instructions\n", encoding="utf-8")
     env = {
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -171,12 +214,12 @@ def test_claude_setup_renders_routes_and_reservations_once_in_an_isolated_home(
         "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_TEMPLATE_HOME": str(ROOT),
         "AGENTSTACK_PROJECT_KEY": str(project),
-        "AGENTSTACK_CLAUDE_MD_SCOPE": "project",
+        "AGENTSTACK_CLAUDE_MD_SCOPE": "global",
     }
 
     for _ in range(2):
         result = subprocess.run(
-            ["/bin/bash", str(ROOT / "bin" / "agentstack-claude-setup")],
+            ["/bin/bash", str(ROOT / "bin" / "agentstack-claude-setup"), "--assume-yes"],
             cwd=ROOT,
             env=env,
             capture_output=True,
@@ -184,7 +227,7 @@ def test_claude_setup_renders_routes_and_reservations_once_in_an_isolated_home(
             timeout=30,
         )
         assert result.returncode == 0, result.stderr
-        assert "installed managed block into" in result.stdout
+        assert "instruction migration: complete" in result.stdout
 
     generated = target.read_text(encoding="utf-8")
     assert generated.count("<!-- >>> claude-agent-stack") == 1
@@ -223,7 +266,7 @@ def test_codex_setup_renders_the_routes_once_in_an_isolated_home(
 
     for _ in range(2):
         result = subprocess.run(
-            ["/bin/bash", str(ROOT / "bin" / "agentstack-codex-setup")],
+            ["/bin/bash", str(ROOT / "bin" / "agentstack-codex-setup"), "--assume-yes"],
             cwd=ROOT,
             env=env,
             capture_output=True,
@@ -231,7 +274,7 @@ def test_codex_setup_renders_the_routes_once_in_an_isolated_home(
             timeout=30,
         )
         assert result.returncode == 0, result.stderr
-        assert "installed managed block into" in result.stdout
+        assert "instruction migration: complete" in result.stdout
 
     generated = target.read_text(encoding="utf-8")
     assert generated.count("<!-- >>> claude-agent-stack") == 1
@@ -298,3 +341,33 @@ def test_delegate_naming_checklist_does_not_expect_a_startup_inbox_read():
     skill = _read("skills/delegate/SKILL.md")
     assert "inbox-read startup" not in skill
     assert "there is no startup fetch to check" in skill
+
+
+def test_children_report_approval_refusals_without_editing_configuration():
+    expected = """## MCP tool approval refusals
+
+If an MCP tool returns a refusal message (for example, Codex's
+`approval policy is never`, a Claude tool missing from `--allowed-tools`, or
+a denied browser or OS permission), stop the blocked work and report it.
+A pending Allow prompt blocks the tool call. If a person presses Allow, the
+call continues; if permission is denied and a refusal message returns,
+report that message then. Do not attempt to report while the call is waiting.
+Do not edit configuration files such as `~/.codex/config.toml` or
+`~/.claude/settings.json` to bypass it, and do not grant permission on the
+user's behalf.
+Send your parent one line through ORRERY Mail `send_message`, following the
+selected connection's actual schema:
+
+`MCP tool <tool-name> is blocked: <exact message>.`
+
+Replace `<tool-name>` with the exact blocked tool name and `<exact message>`
+with the verbatim refusal message. Report facts only;
+the parent chooses the documented recovery. Do not resume yourself or create
+a replacement child.
+If you have no parent (standalone), tell the user the same line and stop.
+If `send_message` is also refused or unavailable, show the line to the user
+and stop; do not change settings or invent another messaging path.
+
+"""
+    for path in ("codex/AGENTS.md", "claude/CLAUDE.md"):
+        assert _read(path).count(expected) == 1, path

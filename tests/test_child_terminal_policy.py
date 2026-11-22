@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import re
 import shlex
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -91,7 +93,7 @@ def test_spawn_keeps_detached_session_and_propagates_observer_policy(
     tmp_path, codex, setting,
 ):
     env, workdir = _fake_launch_env(tmp_path, codex=codex)
-    env.update(AGENTSTACK_TERMINAL="ghostty", AGENTSTACK_PYTHON=sys.executable)
+    env.update(AGENTSTACK_TERMINAL="ghostty", AGENTSTACK_PYTHON=sys.executable, FAKE_CODEX_START_RUNNING="1")
     env.pop("AGENTSTACK_AUTO_OPEN_CHILD", None)
     if setting is not None:
         env["AGENTSTACK_AUTO_OPEN_CHILD"] = setting
@@ -100,6 +102,11 @@ def test_spawn_keeps_detached_session_and_propagates_observer_policy(
     _fake_terminals(tmp_path / "terminal-bin", env, log)
     child = "QuietCurie"
     handoff = _codex_handoff(tmp_path, child)
+    if not codex:
+        binding = handoff.with_name(handoff.name + ".binding.json")
+        receipt = json.loads(binding.read_text())
+        receipt["program"] = "claude-code"
+        binding.write_text(json.dumps(receipt))
     task = tmp_path / "task.md"
     task.write_text("Report completion without changing files.")
     args = ["/bin/bash", str(SPAWN), "--pre-registered", child,
@@ -134,9 +141,15 @@ def test_manual_deck_terminal_open_ignores_automatic_policy(monkeypatch, setting
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(server.subprocess, "run", run)
+    class Admitted:
+        home=ROOT
+        transport=SimpleNamespace(identity=('fixture',1),path=Path('/fixture/socket'),server_pid=7)
+        def admitted_argv(self,args):return ['tmux',*args]
+    monkeypatch.setattr(server, '_legacy_tmux_consumer', lambda:Admitted())
     result = server._open_terminal_tmux(["tmux", "attach", "-t", "=QuietCurie"], "QuietCurie")
     assert result == {"ok": True, "adapter": "ghostty"}
-    assert commands[0][-4:] == ["tmux", "attach", "-t", "=QuietCurie"]
+    assert commands[0][-4:] == [str(ROOT / "bin/lib/runtime_tmux_consumer.py"), "attach", "-t", "=QuietCurie"]
+    assert 'TMUX=/fixture/socket,7,0' in commands[0]
 
 
 @pytest.mark.parametrize("explicit,saved,expected", [
@@ -148,8 +161,12 @@ def test_installer_preserves_valid_saved_policy_and_explicit_override(
     tmp_path, explicit, saved, expected,
 ):
     text = INSTALL.read_text()
-    start = text.index('if [[ -z "$AUTO_OPEN_CHILD_SETTING" ]]; then')
-    saved_resolution = text[start:text.index("\nfi", start) + 3]
+    start = text.index("resolve_setting AUTO_OPEN_CHILD_SETTING AGENTSTACK_AUTO_OPEN_CHILD")
+    saved_resolution = "\n".join([
+        'OPTION_GIVEN="" RESET_SETTINGS=0',
+        text[text.index("# --- setting resolution"):text.index("# --- end setting resolution ---")],
+        text[start:text.index("\n", start)],
+    ])
     start = text.index('case "$AUTO_OPEN_CHILD_SETTING" in')
     validation = text[start:text.index("\nesac", start) + 5]
     env_file = tmp_path / "env.sh"

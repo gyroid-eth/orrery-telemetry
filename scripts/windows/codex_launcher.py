@@ -322,11 +322,11 @@ def configure_proxy(home: Path, spec: dict) -> None:
         'AGENTSTACK_CODEX_APP_RUNTIME_DIR': str(home / 'proxy-runtime'),
     }
     lines.extend(f'{key} = {quote(value)}' for key, value in values.items())
-    # Keep in step with TOOL_DEFINITIONS in integrations/codex_app (nine tools
-    # since `whois`, 58525ed); tests/test_child_mcp_config.py pins the same list.
+    # Keep in step with TOOL_DEFINITIONS in integrations/codex_app (ten tools
+    # since `show_files`); tests/test_child_mcp_config.py pins the same list.
     for tool in ('bootstrap', 'fetch_inbox', 'send_message', 'acknowledge_message',
                  'reserve_files', 'renew_reservations', 'release_reservations', 'runtime_status',
-                 'whois'):
+                 'show_files', 'whois'):
         lines.extend([f'[mcp_servers.orrery-mail.tools.{tool}]', 'approval_mode = "approve"'])
     write_private_text(target, '\n'.join(lines) + '\n', exclusive=True)
 
@@ -367,7 +367,9 @@ def child(spec_path: Path) -> int:
     env = child_environment(spec)
     command = [spec['codex'], '-C', spec['cwd'], '--sandbox', 'workspace-write',
                '--ask-for-approval', spec['approval'], '--model', spec['model'],
-               '-c', f'model_reasoning_effort="{spec["effort"]}"']
+               '-c', f'model_reasoning_effort="{spec["effort"]}"',
+               # No startup update screen in an unattended child (#60).
+               '-c', 'check_for_update_on_startup=false']
     process = None
     job = OwnedJob()
     try:
@@ -479,6 +481,7 @@ def wait_until_ready_and_submit(spec: dict, state: Path, ready_timeout: float) -
 
 def resume(state: Path, ready_timeout: float) -> dict:
     """Continue a non-interactive launch after its trust decision is made."""
+    reject_global_preparation()
     if not math.isfinite(ready_timeout) or not 1 <= ready_timeout <= 300:
         raise ValueError('Ready timeout must be between 1 and 300 seconds')
     require_private(state)
@@ -516,6 +519,7 @@ def resume(state: Path, ready_timeout: float) -> dict:
 
 
 def launch(args: argparse.Namespace) -> dict:
+    reject_global_preparation()
     if sys.platform != 'win32':
         raise RuntimeError('This experimental launcher requires native Windows')
     if not re.fullmatch(r'[A-Z][A-Za-z]{1,63}(?:-[A-Z][A-Za-z]{1,63})?', args.name):
@@ -634,7 +638,48 @@ def launch(args: argparse.Namespace) -> dict:
         return result
 
 
+def reject_global_preparation() -> None:
+    """Inspect explicit authority but never route S1 through legacy project.
+
+    No Unix socket/flock substitute is introduced for native Windows. Its
+    actual global-runtime protocol requires a separate platform design.
+    """
+    explicit = os.environ.get('AGENTSTACK_CLIENT_CONFIG')
+    context = Path(explicit) if explicit else ROOT / 'runtime-client.json'
+    if not context.exists() and not context.is_symlink() and not explicit:
+        return
+    try:
+        require_private(context)
+        value = json.loads(context.read_text(encoding='utf-8'))
+        if (value.get('kind') != 'orrery-runtime-client-s1'
+                or value.get('mode') not in {'legacy', 'global'}
+                or value.get('activation_enabled') is not False):
+            raise ValueError
+        authority_path = Path(value['authority'])
+        require_private(authority_path)
+        authority = json.loads(authority_path.read_text(encoding='utf-8'))
+        expected = {'kind': 'orrery-global-authority-v1', 'phase': 'active',
+                    'root_status': 'active', 'runtime_root': value['runtime_root'],
+                    'mail_instance_id': value['expected_server_instance_id'],
+                    'candidate_generation': value['candidate_generation'],
+                    'authority_epoch': value['authority_epoch']}
+        if any(authority.get(k) != v for k, v in expected.items()):
+            raise RuntimeError('WRITER_FENCED')
+    except RuntimeError:
+        raise
+    except Exception:
+        raise RuntimeError('GLOBAL_CONTEXT_INVALID') from None
+    if value['mode'] == 'global':
+        raise RuntimeError('GLOBAL_S1_UNIX_CONTRACT_UNSUPPORTED')
+    raise RuntimeError('LEGACY_CONTEXT_REQUIRES_PR7')
+
+
 def main() -> int:
+    try:
+        reject_global_preparation()
+    except RuntimeError as exc:
+        print(json.dumps({'ok': False, 'error': str(exc)}))
+        return 1
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     start = sub.add_parser('launch')

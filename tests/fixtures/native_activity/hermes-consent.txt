@@ -1,0 +1,17 @@
+Help improve Hermes?
+Asking once more: an earlier version could save "No thanks" before you saw this
+Shared metrics are bounded counters: activity, outcomes, error classes (with a
+fixed-list reason when a memory write, compression, update or install fails),
+model routes, token totals, feature use and coarse machine facts. A failed or
+finished fresh install is noted on this machine and counted only if you opt in.
+Never prompts, files, paths,
+setting values or error text. Collection stays on this machine; sending to Nous
+a separate choice, and apart from that install note, data from before you opt i
+is never sent.
+Details: https://hermes-agent.nousresearch.com/docs/developer-guide/relay-share
+Change it any time: hermes setup telemetry
+  ↑↓ navigate  ENTER/SPACE select  ESC cancel
+
+   (○) Collect and send to Nous
+   (○) Collect locally only
+ → (●) No thanks

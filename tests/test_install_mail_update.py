@@ -1,0 +1,1201 @@
+"""install.sh --update-mail: replace a running ORRERY Mail and roll back.
+
+Every test here runs real installs against a real isolated Mail server: a
+temporary HOME, a temporary state root, free loopback ports, and a label
+prefix of the test's own. Candidates are directories whose executables link to
+this checkout's dev venv, so switching between them is a real stop/start of a
+different runner without building a venv per test.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import pathlib
+import sqlite3
+import secrets
+import shlex
+import signal
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
+
+import pytest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from service_teardown import TEST_LABEL_PREFIX, stop_dashboard
+from test_install_agentstack_mail import (
+    INSTALLER,
+    ROOT,
+    _base_env,
+    _fake_linux_bin,
+    _free_port,
+    _generated_env,
+    _stop_mail,
+    _wait_health,
+    _write_command,
+)
+
+sys.path.insert(0, str(ROOT / "integrations" / "codex_app" / "src"))
+from agentstack_codex_app.agent_mail_client import (  # noqa: E402
+    AgentMailClient,
+    AgentMailError,
+    HttpJsonRpcTransport,
+)
+
+ENTRYPOINTS = (
+    "agentstack-mail",
+    "agentstack-mail-service",
+    "agentstack-mail-migrate",
+    "agentstack-enroll",
+)
+
+
+def _candidate(
+    service_root: pathlib.Path, source: str, *, broken: dict[str, str] | None = None
+) -> pathlib.Path:
+    actual_bin = pathlib.Path(sys.executable).parent
+    venv = service_root / "candidates" / source / "venv"
+    (venv / "bin").mkdir(parents=True)
+    for name in ENTRYPOINTS:
+        if broken and name in broken:
+            _write_command(venv / "bin", name, broken[name])
+        else:
+            assert (actual_bin / name).is_file(), name
+            (venv / "bin" / name).symlink_to(actual_bin / name)
+    return venv
+
+
+class Stack:
+    def __init__(self, tmp_path: pathlib.Path) -> None:
+        self.home = tmp_path / "home"
+        self.home.mkdir()
+        self.env = _base_env(tmp_path, self.home, _fake_linux_bin(tmp_path))
+        self.service_root = self.home / ".agentstack" / "mail-service"
+        self.state_root = tmp_path / "mail-state"
+        self.mail_port = _free_port()
+        self.mail_url = f"http://127.0.0.1:{self.mail_port}/mcp"
+        self.env.update(
+            {
+                "AGENTSTACK_MAIL_STATE_ROOT": str(self.state_root),
+                "AGENTSTACK_MAIL_SERVICE_ROOT": str(self.service_root),
+                "AGENTSTACK_MCP_URL": self.mail_url,
+                "AGENTSTACK_PORT": str(_free_port()),
+                "AGENTSTACK_LABEL_PREFIX": (
+                    f"{TEST_LABEL_PREFIX}.mail-update-{self.mail_port}"
+                ),
+            }
+        )
+        self.pidfile = self.service_root / "runtime" / "agentstack-mail.pid"
+
+    def install(
+        self,
+        source: str,
+        *args: str,
+        venv: pathlib.Path | None = None,
+        extra: dict[str, str] | None = None,
+    ):
+        env = {**self.env, **(extra or {})}
+        env["AGENTSTACK_MAIL_CANDIDATE_ID"] = source
+        if venv is not None:
+            env["AGENTSTACK_MAIL_SERVICE_VENV"] = str(venv)
+        return subprocess.run(
+            ["/bin/bash", str(INSTALLER), "--assume-yes", *args],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=100,
+        )
+
+    def runner(self) -> str:
+        return self.pidfile.read_text(encoding="utf-8").splitlines()[1]
+
+    def pid(self) -> int:
+        return int(self.pidfile.read_text(encoding="utf-8").split()[0])
+
+    def render_of(self, source: str) -> pathlib.Path:
+        (render,) = (self.service_root / "renders").glob(f"{source}-*")
+        return render
+
+    def manifest(self) -> dict:
+        return json.loads(
+            (self.home / ".agentstack" / "install-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def instance_id(self) -> str:
+        with sqlite3.connect(self.state_root / "storage.sqlite3") as db:
+            return db.execute("SELECT instance_id FROM mail_instances").fetchone()[0]
+
+    def teardown(self) -> None:
+        _stop_mail(self.home, self.state_root, self.mail_port)
+        # This fixture runs the installer with a Linux uname stub; it cannot
+        # create launchd jobs even when pytest itself runs on macOS.
+        stop_dashboard(self.home, label_prefix=self.env["AGENTSTACK_LABEL_PREFIX"], launchd=False)
+
+
+def _ensure_project(url: str, project_key: str) -> None:
+    body = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "ensure_project", "arguments": {"human_key": project_key}},
+    }).encode()
+    request = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    })
+    with urllib.request.urlopen(request, timeout=10) as response:
+        assert b'"isError":true' not in response.read()
+
+
+def _first_install(stack: Stack) -> tuple[dict, pathlib.Path]:
+    first = stack.install("fixture-old")
+    assert first.returncode == 0, first.stdout + first.stderr
+    health = _wait_health(stack.mail_url)
+    old_render = stack.render_of("fixture-old")
+    assert stack.runner() == str(old_render / "run-agentstack-mail.sh")
+    return health, old_render
+
+
+@pytest.mark.parametrize("keep,code", [
+    ((), "keep_default"),
+    (("--keep-mail",), "keep_requested"),
+    ({"AGENTSTACK_MAIL_UPDATE": "keep"}, "keep_requested"),
+    # An option wins over the environment (setup.sh/update.sh pass options).
+    ((("--keep-mail",), {"AGENTSTACK_MAIL_UPDATE": "auto"}), "keep_requested"),
+])
+def test_a_rerun_keeps_the_running_build_by_default_and_a_dry_run_changes_nothing(tmp_path, keep, code):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        _, old_render = _first_install(stack)
+        old_pid = stack.pid()
+
+        if isinstance(keep, dict):
+            kept = stack.install("fixture-new", extra=keep)
+        elif keep and isinstance(keep[0], tuple):
+            kept = stack.install("fixture-new", *keep[0], extra=keep[1])
+        else:
+            kept = stack.install("fixture-new", *keep)
+        assert kept.returncode == 0, kept.stdout + kept.stderr
+        assert "Re-run with --update-mail to switch" in kept.stdout
+        # Fixture builds are not commits: which is newer cannot be told, so the
+        # run says that and suggests no update (the git cases are below).
+        assert "ORRERY Mail runs fixture-old, a different build from this checkout (fixture-new)" in kept.stdout
+        assert "out of date" not in kept.stdout and "--mail update" not in kept.stdout
+        assert kept.stdout.splitlines()[-1] == (
+            "mail-result: kept mode=keep from=fixture-old to=fixture-new running=fixture-old"
+            f" outage_s=0 reason={code}"
+        ), kept.stdout
+        assert stack.pid() == old_pid
+        assert _generated_env(stack.home)["AGENTSTACK_MAIL_ENV"] == str(
+            old_render / "service.env"
+        )
+        # A per-run choice: env.sh never records it, so it does not stick.
+        assert "AGENTSTACK_MAIL_UPDATE" not in (stack.home / ".agentstack" / "env.sh").read_text()
+
+        planned = subprocess.run(
+            ["/bin/bash", str(INSTALLER), "--update-mail", "--dry-run"],
+            cwd=ROOT,
+            env={**stack.env, "AGENTSTACK_MAIL_CANDIDATE_ID": "fixture-new"},
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=100,
+        )
+        assert planned.returncode == 0, planned.stdout + planned.stderr
+        assert "will switch from fixture-old" in planned.stdout
+        assert "DRY-RUN would verify candidate" in planned.stdout
+        assert "restore the previous build if the new one is not serving" in planned.stdout
+        assert not list((stack.service_root / "renders").glob("fixture-new-*"))
+        assert not (stack.service_root / "backups").exists()
+        assert stack.pid() == old_pid
+
+        # The Mail roots and endpoint now come from env.sh (and survive
+        # --reset-settings): with none of them in the environment the update
+        # must still target the same deployment, not a default one.
+        inherited = {
+            key: value for key, value in stack.env.items()
+            if not key.startswith("AGENTSTACK_MAIL_") and key != "AGENTSTACK_MCP_URL"
+        }
+        for extra_args in ((), ("--reset-settings",)):
+            replanned = subprocess.run(
+                ["/bin/bash", str(INSTALLER), "--update-mail", "--dry-run", *extra_args],
+                cwd=ROOT,
+                env={**inherited, "AGENTSTACK_MAIL_CANDIDATE_ID": "fixture-new"},
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=100,
+            )
+            assert replanned.returncode == 0, replanned.stdout + replanned.stderr
+            assert (
+                f"will switch from fixture-old ({stack.service_root}/candidates/fixture-old/venv)"
+                in replanned.stdout
+            ), replanned.stdout
+            assert replanned.stdout.splitlines()[-1] == (
+                "mail-plan: switch mode=update running=fixture-old to=fixture-new reason=newer_build"
+            )
+            assert f"stop ORRERY Mail {old_render}/service.env" in replanned.stdout
+        assert stack.pid() == old_pid
+    finally:
+        stack.teardown()
+
+
+def test_update_switches_the_running_build_and_keeps_state(tmp_path):
+    stack = Stack(tmp_path)
+    old_venv = _candidate(stack.service_root, "fixture-old")
+    new_venv = _candidate(stack.service_root, "fixture-new")
+    try:
+        health, old_render = _first_install(stack)
+        old_pid = stack.pid()
+        instance = stack.instance_id()
+        # An enrollment pin must survive the switch: the instance id lives in
+        # the shared database, not in the build.
+        connection = stack.home / ".agentstack" / "connections" / "local.json"
+        pinned = json.loads(connection.read_text(encoding="utf-8"))
+        pinned["expected_server_instance_id"] = instance
+        connection.write_text(json.dumps(pinned) + "\n", encoding="utf-8")
+        connection.chmod(0o600)
+        # Two agents registered through the client a bound proxy uses, with a
+        # message in flight: after the switch the same owner tokens must still
+        # authenticate, with nothing re-registered and no proxy restarted.
+        project = stack.env["AGENTSTACK_PROJECT_KEY"]
+        _ensure_project(stack.mail_url, project)
+        client = AgentMailClient(HttpJsonRpcTransport(stack.mail_url))
+        tokens = {name: secrets.token_hex(24) for name in ("BlueCurie", "GreenNoether")}
+        for name, token in tokens.items():
+            client.register_agent(
+                project_key=project, model="test", registration_token=token,
+                agent_name=name,
+            )
+        client.send_message(
+            project_key=project, agent_name="BlueCurie",
+            registration_token=tokens["BlueCurie"], to=["GreenNoether"],
+            subject="before the switch", body_md="sent to the old build",
+        )
+
+        scratch_port = _free_port()
+        updated = stack.install(
+            "fixture-new", "--update-mail",
+            extra={"AGENTSTACK_MAIL_UPDATE_VERIFY_PORT": str(scratch_port)},
+        )
+        assert updated.returncode == 0, updated.stdout + updated.stderr
+        assert f"on scratch port {scratch_port}" in updated.stdout
+        assert "candidate verified offline" in updated.stdout
+        assert "ORRERY Mail switched from fixture-old to fixture-new" in updated.stdout
+        new_render = stack.render_of("fixture-new")
+        assert stack.runner() == str(new_render / "run-agentstack-mail.sh")
+        assert stack.pid() != old_pid
+        assert _wait_health(stack.mail_url)["database_url"] == health["database_url"]
+        assert stack.instance_id() == instance
+        client.send_message(
+            project_key=project, agent_name="BlueCurie",
+            registration_token=tokens["BlueCurie"], to=["GreenNoether"],
+            subject="after the switch", body_md="sent to the new build",
+        )
+        inbox = client.fetch_inbox(
+            project_key=project, agent_name="GreenNoether",
+            registration_token=tokens["GreenNoether"],
+        )
+        subjects = {item["subject"] for item in inbox}
+        assert {"before the switch", "after the switch"} <= subjects
+        # The server still checks the token: authentication is not simply off.
+        try:
+            client.send_message(
+                project_key=project, agent_name="BlueCurie",
+                registration_token=tokens["GreenNoether"], to=["GreenNoether"],
+                subject="wrong token", body_md="must be refused",
+            )
+        except AgentMailError:
+            pass
+        else:
+            raise AssertionError("a wrong owner token was accepted after the switch")
+        generated = _generated_env(stack.home)
+        assert generated["AGENTSTACK_MAIL_ENV"] == str(new_render / "service.env")
+        assert generated["AGENTSTACK_MAIL_ENROLL_BIN"] == str(
+            new_venv / "bin" / "agentstack-enroll"
+        )
+        profile = json.loads(connection.read_text(encoding="utf-8"))
+        assert profile["mail_env"] == str(new_render / "service.env")
+        assert profile["expected_server_instance_id"] == instance
+        manifest = stack.manifest()
+        assert manifest["agent_mail"]["service_env"] == str(new_render / "service.env")
+        update = manifest["agent_mail"]["update"]
+        assert update["result"] == "switched"
+        assert update["previous_service_env"] == str(old_render / "service.env")
+        backup = pathlib.Path(update["database_backup"])
+        assert backup.is_file() and backup.stat().st_mode & 0o777 == 0o600
+        assert backup.parent == stack.service_root / "backups"
+        with sqlite3.connect(backup) as db:
+            assert (
+                db.execute("SELECT instance_id FROM mail_instances").fetchone()[0]
+                == instance
+            )
+        # The previous candidate and render are untouched: they are the way back.
+        assert (old_venv / "bin" / "agentstack-mail").exists()
+        assert (old_render / "run-agentstack-mail.sh").is_file()
+        # The autostart sweep is not left held down by the update's stop.
+        assert not (stack.service_root / "runtime" / "agentstack-mail.stopped").exists()
+
+        same = stack.install("fixture-new", "--update-mail")
+        assert same.returncode == 0, same.stdout + same.stderr
+        assert "already uses candidate" in same.stdout
+    finally:
+        stack.teardown()
+
+
+def test_update_back_to_the_previous_candidate_reuses_its_render(tmp_path):
+    stack = Stack(tmp_path)
+    old_venv = _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        health, old_render = _first_install(stack)
+        forward = stack.install("fixture-new", "--update-mail")
+        assert forward.returncode == 0, forward.stdout + forward.stderr
+
+        # Going back is the same operation with the previous candidate pinned;
+        # its render is immutable and is reused as it was.
+        back = stack.install("fixture-old", "--update-mail", venv=old_venv)
+        assert back.returncode == 0, back.stdout + back.stderr
+        assert "ORRERY Mail switched from fixture-new to fixture-old" in back.stdout
+        assert stack.runner() == str(old_render / "run-agentstack-mail.sh")
+        assert _wait_health(stack.mail_url)["database_url"] == health["database_url"]
+        assert _generated_env(stack.home)["AGENTSTACK_MAIL_ENV"] == str(
+            old_render / "service.env"
+        )
+        assert len(list((stack.service_root / "renders").glob("fixture-old-*"))) == 1
+    finally:
+        stack.teardown()
+
+
+def test_update_rolls_back_when_the_new_build_does_not_serve(tmp_path):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    # Passes the offline check (the server entrypoint works) but its
+    # supervisor entrypoint never serves, as a build broken in production would.
+    _candidate(
+        stack.service_root,
+        "fixture-broken-start",
+        broken={"agentstack-mail-service": "#!/bin/sh\nexit 1\n"},
+    )
+    try:
+        health, old_render = _first_install(stack)
+        old_runner = str(old_render / "run-agentstack-mail.sh")
+
+        # How long the update waits for the new build before giving up on it.
+        rolled = stack.install(
+            "fixture-broken-start",
+            "--update-mail",
+            extra={"AGENTSTACK_MAIL_UPDATE_START_GRACE": "4"},
+        )
+        assert rolled.returncode == 1, rolled.stdout + rolled.stderr
+        assert "candidate verified offline" in rolled.stdout
+        assert "restoring the previous ORRERY Mail build" in rolled.stderr
+        assert "restored ORRERY Mail" in rolled.stdout
+        assert "ORRERY Mail update rolled-back" in rolled.stderr
+        # A strict update that did not happen prints no result line (exit 1 says it).
+        assert "mail-result:" not in rolled.stdout
+        assert "/mcp shows orrery-mail as connected" in rolled.stdout
+        assert stack.runner() == old_runner
+        assert _wait_health(stack.mail_url)["database_url"] == health["database_url"]
+        assert _generated_env(stack.home)["AGENTSTACK_MAIL_ENV"] == str(
+            old_render / "service.env"
+        )
+        manifest = stack.manifest()
+        assert manifest["agent_mail"]["service_env"] == str(old_render / "service.env")
+        assert manifest["agent_mail"]["update"]["result"] == "rolled-back"
+        assert not (stack.service_root / "runtime" / "agentstack-mail.stopped").exists()
+    finally:
+        stack.teardown()
+
+
+def test_update_that_fails_offline_never_stops_the_running_build(tmp_path):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(
+        stack.service_root,
+        "fixture-broken-server",
+        broken={"agentstack-mail": "#!/bin/sh\necho broken server >&2\nexit 3\n"},
+    )
+    try:
+        _, old_render = _first_install(stack)
+        pid_before = stack.pid()
+        refused = stack.install("fixture-broken-server", "--update-mail")
+        assert refused.returncode == 1, refused.stdout + refused.stderr
+        assert "ORRERY Mail was not switched" in refused.stderr
+        assert "ORRERY Mail update not-switched" in refused.stderr
+        assert "mail-result:" not in refused.stdout
+        # Never stopped: same runner process, no backup taken.
+        assert stack.pid() == pid_before
+        assert stack.runner() == str(old_render / "run-agentstack-mail.sh")
+        assert not (stack.service_root / "backups").exists()
+        assert "broken server" in (
+            stack.service_root / "runtime" / "mail-update-verify.log"
+        ).read_text(encoding="utf-8")
+        assert stack.manifest()["agent_mail"]["update"]["result"] == "not-switched"
+        _wait_health(stack.mail_url)
+    finally:
+        stack.teardown()
+
+
+def test_update_refuses_a_deployment_it_cannot_identify(tmp_path):
+    """No pidfile and no env.sh: the listener is not ours to stop."""
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        first = stack.install("fixture-old")
+        assert first.returncode == 0, first.stdout + first.stderr
+        pid = stack.pid()
+        # Forget the deployment while it keeps serving.
+        runner_line = stack.pidfile.read_text(encoding="utf-8")
+        (stack.home / ".agentstack" / "env.sh").unlink()
+        stack.pidfile.unlink()
+        refused = stack.install("fixture-new", "--update-mail")
+        stack.pidfile.write_text(runner_line, encoding="utf-8")
+        assert refused.returncode == 1, refused.stdout + refused.stderr
+        assert "deployment is not identifiable; nothing was stopped" in refused.stderr
+        assert stack.pid() == pid
+        _wait_health(stack.mail_url)
+    finally:
+        stack.teardown()
+
+
+def test_package_tree_comparison_decides_whether_a_new_build_differs(tmp_path):
+    """A new commit that leaves packages/agentstack_mail alone is the same build."""
+    repo = tmp_path / "repo"
+    (repo / "packages" / "agentstack_mail").mkdir(parents=True)
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(repo), *args],
+            text=True,
+            capture_output=True,
+            check=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
+        ).stdout.strip()
+
+    git("init", "-q")
+    (repo / "packages" / "agentstack_mail" / "a.py").write_text("1\n")
+    (repo / "README").write_text("1\n")
+    git("add", "-A")
+    git("commit", "-qm", "a")
+    first = git("rev-parse", "HEAD")
+    (repo / "README").write_text("2\n")
+    git("commit", "-qam", "b")
+    docs_only = git("rev-parse", "HEAD")
+    (repo / "packages" / "agentstack_mail" / "a.py").write_text("2\n")
+    git("commit", "-qam", "c")
+    package_change = git("rev-parse", "HEAD")
+
+    script = (
+        "set -euo pipefail\n"
+        f"REPO_ROOT={repo}\n"
+        f"NATIVE_MAIL_PACKAGE_SOURCE={repo}/packages/agentstack_mail\n"
+        f"eval \"$(sed -n '/^mail_package_unchanged()/,/^}}/p' {INSTALLER})\"\n"
+        'mail_package_unchanged "$1" "$2" && echo same || echo different\n'
+    )
+
+    def compare(old: str, new: str) -> str:
+        return subprocess.run(
+            ["/bin/bash", "-c", script, "compare", old, new],
+            text=True, capture_output=True, check=True,
+        ).stdout.strip()
+
+    assert compare(first, docs_only) == "same"
+    assert compare(first, package_change) == "different"
+    assert compare("fixture-old", first) == "different"
+
+
+def test_update_on_a_systemd_install_leaves_the_timer_starting_the_new_build(tmp_path):
+    """Linux with a systemd user timer, as on WSL2.
+
+    systemctl is a recorder here: the units are rendered and "enabled", but
+    nothing fires them. The test then runs the rendered service's command
+    itself, the way the timer would, and checks that it finds the new build
+    running rather than starting the one it was installed with.
+    """
+    stack = Stack(tmp_path)
+    fake_bin = pathlib.Path(stack.env["PATH"].split(":", 1)[0])
+    calls = tmp_path / "systemctl.calls"
+    _write_command(
+        fake_bin,
+        "systemctl",
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {calls}\n"
+        # The dashboard falls back to a supervised process at once instead of
+        # waiting on a unit nothing will start; only the Mail timer is kept.
+        'case "$*" in *agentdashboard*) exit 1 ;; *is-active*|*is-enabled*) exit 3 ;; esac\n'
+        "exit 0\n",
+    )
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        _, old_render = _first_install(stack)
+        label = f"{stack.env['AGENTSTACK_LABEL_PREFIX']}.mail"
+        unit = stack.home / ".config" / "systemd" / "user" / f"{label}.service"
+        assert unit.is_file()
+        assert f"enable --now {label}.timer" in calls.read_text(encoding="utf-8")
+
+        updated = stack.install("fixture-new", "--update-mail")
+        assert updated.returncode == 0, updated.stdout + updated.stderr
+        new_runner = str(stack.render_of("fixture-new") / "run-agentstack-mail.sh")
+        assert stack.runner() == new_runner
+        # The unit names no render: it follows env.sh, which now names the new one.
+        text = unit.read_text(encoding="utf-8")
+        assert "renders/" not in text
+        assert str(old_render) not in text
+
+        environment = {}
+        exec_start: list[str] = []
+        for line in text.splitlines():
+            if line.startswith("Environment="):
+                key, value = line.removeprefix("Environment=").split("=", 1)
+                environment[key] = shlex.split(value)[0]
+            elif line.startswith("ExecStart="):
+                exec_start = shlex.split(line.removeprefix("ExecStart="))
+        assert environment.get("AGENTSTACK_MAILCTL_SWEEP") == "1"
+        assert exec_start[-1] == "start"
+        fired = subprocess.run(
+            exec_start,
+            env={**environment, "PATH": f"{fake_bin}:/usr/bin:/bin",
+                 "AGENTSTACK_LABEL_PREFIX": stack.env["AGENTSTACK_LABEL_PREFIX"],
+                 "AGENTSTACK_MAIL_LAUNCHD_LABEL": f"{label}-service"},
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        assert fired.returncode == 0, fired.stdout + fired.stderr
+        assert stack.runner() == new_runner
+        _wait_health(stack.mail_url)
+    finally:
+        stack.teardown()
+
+
+def test_update_never_uses_an_occupied_scratch_port_or_the_live_one(tmp_path):
+    """The scratch server gets a port of its own or the update does not run.
+
+    Whatever already holds the chosen port could answer health_check, and that
+    answer must never be read as the candidate's; the live Mail port is the
+    extreme case of the same mistake.
+    """
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    occupant = socket.socket()
+    try:
+        _, old_render = _first_install(stack)
+        pid_before = stack.pid()
+        occupant.bind(("127.0.0.1", 0))
+        occupant.listen(16)
+        busy = occupant.getsockname()[1]
+
+        refused = stack.install(
+            "fixture-new", "--update-mail",
+            extra={"AGENTSTACK_MAIL_UPDATE_VERIFY_PORT": str(busy)},
+        )
+        assert refused.returncode == 1, refused.stdout + refused.stderr
+        assert f"the scratch port {busy} is in use; nothing was started on it" in refused.stderr
+        assert "ORRERY Mail update not-switched" in refused.stderr
+        assert "mail-result:" not in refused.stdout
+
+        live = stack.install(
+            "fixture-new", "--update-mail",
+            extra={"AGENTSTACK_MAIL_UPDATE_VERIFY_PORT": str(stack.mail_port)},
+        )
+        assert live.returncode == 1, live.stdout + live.stderr
+        assert "is the live ORRERY Mail port" in live.stderr
+
+        # Neither run stopped Mail, took a backup, or disturbed the occupant.
+        assert stack.pid() == pid_before
+        assert stack.runner() == str(old_render / "run-agentstack-mail.sh")
+        assert not (stack.service_root / "backups").exists()
+        with socket.create_connection(("127.0.0.1", busy), timeout=2):
+            pass
+        _wait_health(stack.mail_url)
+    finally:
+        occupant.close()
+        stack.teardown()
+
+
+def _install_until(stack: Stack, source: str, marker: str, extra: dict[str, str]):
+    """Start an --update-mail install in its own session; return it once `marker` is printed."""
+    env = {**stack.env, **extra, "AGENTSTACK_MAIL_CANDIDATE_ID": source}
+    process = subprocess.Popen(
+        ["/bin/bash", str(INSTALLER), "--assume-yes", "--update-mail"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    seen: list[str] = []
+    deadline = time.monotonic() + 80
+    assert process.stdout is not None
+    while time.monotonic() < deadline:
+        line = process.stdout.readline()
+        if not line:
+            break
+        seen.append(line)
+        if marker in line:
+            return process, seen
+    process.kill()
+    raise AssertionError(f"{marker!r} never appeared:\n" + "".join(seen))
+
+
+def _interrupt(process: subprocess.Popen, how: str) -> tuple[int, str, str]:
+    if how == "SIGINT":
+        # What Ctrl-C does: the whole foreground process group.
+        os.killpg(process.pid, signal.SIGINT)
+    else:
+        os.kill(process.pid, signal.SIGTERM)
+    out, err = process.communicate(timeout=60)
+    return process.returncode, out, err
+
+
+@pytest.mark.parametrize("how", ["SIGINT", "SIGTERM"])
+def test_an_interrupted_verification_leaves_no_snapshot_and_no_server(tmp_path, how):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    server_pid_file = tmp_path / "candidate-server.pid"
+    # A candidate server that never answers, so the installer is still
+    # waiting on it when the signal arrives.
+    _candidate(
+        stack.service_root,
+        "fixture-slow",
+        broken={"agentstack-mail": f"#!/bin/sh\necho $$ > {server_pid_file}\nexec sleep 300\n"},
+    )
+    try:
+        _, old_render = _first_install(stack)
+        pid_before = stack.pid()
+        process, seen = _install_until(stack, "fixture-slow", "verifying candidate", {})
+        scratch = pathlib.Path(seen[-1].split(" in ", 1)[1].split(" (waits", 1)[0])
+        assert scratch.name.startswith("orrery-mail-verify.")
+        assert scratch.is_dir()
+        deadline = time.monotonic() + 10
+        while not server_pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        server_pid = int(server_pid_file.read_text(encoding="utf-8"))
+
+        code, _, err = _interrupt(process, how)
+        assert code == 130, err
+        assert "the scratch server and snapshot were removed" in err
+        assert not scratch.exists()
+        try:
+            os.kill(server_pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            os.kill(server_pid, signal.SIGKILL)
+            raise AssertionError("the candidate server outlived the interrupted check")
+        # The running Mail was never stopped and still owns env.sh.
+        assert stack.pid() == pid_before
+        assert _generated_env(stack.home)["AGENTSTACK_MAIL_ENV"] == str(
+            old_render / "service.env"
+        )
+        assert not (stack.service_root / "backups").exists()
+        _wait_health(stack.mail_url)
+    finally:
+        stack.teardown()
+
+
+@pytest.mark.parametrize("how", ["SIGINT", "SIGTERM"])
+def test_an_interrupted_switch_restores_the_previous_build(tmp_path, how):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    # Verifies offline, then never answers in production, so the installer is
+    # inside the switch when the signal arrives.
+    _candidate(
+        stack.service_root,
+        "fixture-hangs",
+        broken={"agentstack-mail-service": "#!/bin/sh\nexec sleep 300\n"},
+    )
+    try:
+        health, old_render = _first_install(stack)
+        process, _ = _install_until(
+            stack, "fixture-hangs", "starting ORRERY Mail",
+            {"AGENTSTACK_MAIL_UPDATE_START_GRACE": "8"},
+        )
+        code, out, err = _interrupt(process, how)
+        assert code == 130, out + err
+        assert "ORRERY Mail was restored to" in err
+        # Mail was stopped, so running sessions need the same check as after a switch.
+        assert "/mcp shows orrery-mail as connected" in out
+        assert "check before repeating it" in out
+        assert "mail-result:" not in out
+        assert stack.runner() == str(old_render / "run-agentstack-mail.sh")
+        assert _wait_health(stack.mail_url)["database_url"] == health["database_url"]
+        assert _generated_env(stack.home)["AGENTSTACK_MAIL_ENV"] == str(
+            old_render / "service.env"
+        )
+        assert not (stack.service_root / "runtime" / "agentstack-mail.stopped").exists()
+        profile = json.loads(
+            (stack.home / ".agentstack" / "connections" / "local.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert profile["mail_env"] == str(old_render / "service.env")
+    finally:
+        stack.teardown()
+
+
+def _schema_helper(tmp_path: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:
+    script = (
+        "set -euo pipefail\n"
+        f"PYTHON_BIN={shlex.quote(sys.executable)}\n"
+        f"eval \"$(sed -n '/^mail_update_helper()/,/^}}/p' {INSTALLER})\"\n"
+        'mail_update_helper "$@"\n'
+    )
+    return subprocess.run(
+        ["/bin/bash", "-c", script, "helper", *args],
+        text=True, capture_output=True, check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("change", "verdict"),
+    [
+        ("ALTER TABLE agents ADD COLUMN extra TEXT", "ok"),
+        ("CREATE INDEX ix_extra ON agents(name, id)", "ok"),
+        ("DROP INDEX ux_agents_name", "removed schema the running build uses: index ux_agents_name"),
+        ("DROP TRIGGER tr_agents", "removed schema the running build uses: trigger tr_agents"),
+        (
+            "DROP INDEX ux_agents_name; CREATE UNIQUE INDEX ux_agents_name ON agents(id, name)",
+            "redefined schema the running build uses: index ux_agents_name",
+        ),
+    ],
+)
+def test_schema_check_refuses_removed_or_redefined_indexes_and_triggers(
+    tmp_path, change, verdict
+):
+    live = tmp_path / "live.sqlite3"
+    with sqlite3.connect(live) as db:
+        db.executescript(
+            "CREATE TABLE agents (id INTEGER PRIMARY KEY, name TEXT);"
+            "CREATE UNIQUE INDEX ux_agents_name ON agents(name);"
+            "CREATE TRIGGER tr_agents AFTER INSERT ON agents BEGIN SELECT 1; END;"
+        )
+    snapshot = tmp_path / "snapshot.sqlite3"
+    schema = tmp_path / "schema.json"
+    taken = _schema_helper(tmp_path, "snapshot", str(live), str(snapshot), str(schema))
+    assert taken.returncode == 0, taken.stderr
+    with sqlite3.connect(snapshot) as db:
+        db.executescript(change)
+    checked = _schema_helper(tmp_path, "schema-kept", str(schema), str(snapshot))
+    if verdict == "ok":
+        assert checked.returncode == 0, checked.stderr
+        assert checked.stdout.startswith("schema additions: ")
+    else:
+        assert checked.returncode == 1
+        assert verdict in checked.stderr
+
+
+def test_reinstalling_the_same_build_with_mail_stopped_reuses_its_render(tmp_path):
+    """The inherited management socket must render exactly as it did.
+
+    On macOS /tmp is a symlink; normalizing the path env.sh recorded turned
+    /tmp/orrery-mail-<uid>/… into /private/tmp/…, and the immutable render of
+    the same inputs was then refused.
+    """
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    try:
+        _, old_render = _first_install(stack)
+        stopped = subprocess.run(
+            [str(stack.home / ".agentstack" / "bin" / "agentstack-mailctl"), "stop"],
+            env=stack.env, text=True, capture_output=True, check=False, timeout=60,
+        )
+        assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+        again = stack.install("fixture-old")
+        assert again.returncode == 0, again.stdout + again.stderr
+        assert "refusing to rewrite immutable service env" not in again.stderr
+        assert stack.runner() == str(old_render / "run-agentstack-mail.sh")
+        assert len(list((stack.service_root / "renders").glob("fixture-old-*"))) == 1
+        _wait_health(stack.mail_url)
+    finally:
+        stack.teardown()
+
+
+# --- auto (opt-in) and the result line ---------------------------------------
+#
+# AGENTSTACK_MAIL_UPDATE=auto switches to a newer build when it safely can, and
+# otherwise keeps the running one without failing the run. setup.sh and
+# update.sh read the last `mail-result:` line, so its format is part of the
+# contract.
+
+AUTO = {"AGENTSTACK_MAIL_UPDATE": "auto"}
+
+
+def _result_line(output: str) -> dict[str, str]:
+    (line,) = [line for line in output.splitlines() if line.startswith("mail-result: ")]
+    head, *pairs = line[len("mail-result: "):].split(" ")
+    assert all(pair.count("=") == 1 for pair in pairs), line
+    return {"result": head, **dict(pair.split("=", 1) for pair in pairs)}
+
+
+def test_auto_switches_to_a_newer_build(tmp_path):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        first = stack.install("fixture-old")
+        assert _result_line(first.stdout) == {
+            "result": "installed", "mode": "keep", "from": "", "to": "fixture-old",
+            "running": "fixture-old", "outage_s": "0", "reason": "no_running_mail"}
+        health = _wait_health(stack.mail_url)
+        old_pid = stack.pid()
+
+        switched = stack.install("fixture-new", extra=AUTO)
+        assert switched.returncode == 0, switched.stdout + switched.stderr
+        assert "Mail is unavailable for about" in switched.stdout
+        # Every switch says how to check running sessions, however short.
+        assert "/mcp shows orrery-mail as connected" in switched.stdout
+        assert "check before repeating it" in switched.stdout
+        line = _result_line(switched.stdout)
+        assert {key: line[key] for key in ("result", "mode", "from", "to", "running", "reason")} == {
+            "result": "switched", "mode": "auto", "from": "fixture-old", "to": "fixture-new",
+            "running": "fixture-new", "reason": "newer_build"}
+        # This node checks switching and reporting, not the former <10s smoke
+        # performance condition. docs/agentstack-mail-update.md defines auto's
+        # budget as an estimate; mail_update_notice._risk guarantees no short
+        # outage limit. The observed 13.3s smoke failure remains a performance
+        # failure, not evidence that a 10s target has been met.
+        outage = float(line["outage_s"])
+        assert math.isfinite(outage) and outage > 0, line
+        assert switched.stdout.rstrip().splitlines()[-1].startswith("mail-result: ")
+        assert stack.pid() != old_pid
+        assert stack.runner() == str(stack.render_of("fixture-new") / "run-agentstack-mail.sh")
+        assert _wait_health(stack.mail_url)["database_url"] == health["database_url"]
+        update = stack.manifest()["agent_mail"]["update"]
+        assert update["result"] == "switched" and update["mode"] == "auto"
+        assert update["outage_seconds"] == line["outage_s"]
+
+        again = stack.install("fixture-new", extra=AUTO)
+        assert _result_line(again.stdout)["result"] == "unchanged"
+        assert _result_line(again.stdout)["reason"] == "same_candidate"
+    finally:
+        stack.teardown()
+
+
+def test_auto_keeps_the_running_build_when_the_outage_would_be_too_long(tmp_path):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        _first_install(stack)
+        pid = stack.pid()
+        kept = stack.install("fixture-new", extra={**AUTO, "AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET": "0"})
+        assert kept.returncode == 0, kept.stdout + kept.stderr
+        assert "over the 0s budget" in kept.stderr
+        assert _result_line(kept.stdout)["result"] == "refused"
+        assert _result_line(kept.stdout)["reason"] == "outage_over_budget"
+        assert stack.pid() == pid
+        assert not (stack.service_root / "backups").exists()
+        # --update-mail is the operator choosing the outage: the budget does not apply.
+        forced = stack.install("fixture-new", "--update-mail",
+                               extra={**AUTO, "AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET": "0"})
+        assert forced.returncode == 0, forced.stdout + forced.stderr
+        assert _result_line(forced.stdout)["result"] == "switched"
+        assert _result_line(forced.stdout)["mode"] == "update"
+    finally:
+        stack.teardown()
+
+
+@pytest.mark.parametrize("broken,result,reason", [
+    ({"agentstack-mail": "#!/bin/sh\nexit 3\n"}, "refused", "verify_failed"),
+    ({"agentstack-mail-service": "#!/bin/sh\nexit 1\n"}, "rolled-back", "start_failed_rolled_back"),
+])
+def test_auto_that_cannot_switch_keeps_the_running_build_and_succeeds(tmp_path, broken, result, reason):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-broken", broken=broken)
+    try:
+        _, old_render = _first_install(stack)
+        run = stack.install("fixture-broken", extra={**AUTO, "AGENTSTACK_MAIL_UPDATE_START_GRACE": "4"})
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert "ORRERY Mail was not updated" in run.stderr
+        assert "install.sh --update-mail" in run.stderr
+        assert _result_line(run.stdout)["result"] == result
+        assert _result_line(run.stdout)["reason"] == reason
+        assert _result_line(run.stdout)["running"] == "fixture-old"
+        assert stack.runner() == str(old_render / "run-agentstack-mail.sh")
+        _wait_health(stack.mail_url)
+    finally:
+        stack.teardown()
+
+
+def test_auto_keeps_a_deployment_it_cannot_identify_without_failing(tmp_path):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        first = stack.install("fixture-old")
+        assert first.returncode == 0, first.stdout + first.stderr
+        pid = stack.pid()
+        runner_line = stack.pidfile.read_text(encoding="utf-8")
+        (stack.home / ".agentstack" / "env.sh").unlink()
+        stack.pidfile.unlink()
+        kept = stack.install("fixture-new", extra=AUTO)
+        stack.pidfile.write_text(runner_line, encoding="utf-8")
+        assert kept.returncode == 0, kept.stdout + kept.stderr
+        assert _result_line(kept.stdout)["result"] == "refused"
+        assert _result_line(kept.stdout)["reason"] == "deployment_unidentified"
+        assert stack.pid() == pid
+    finally:
+        stack.teardown()
+
+
+def _plan(stack: Stack, source: str, *args: str, extra: dict[str, str] | None = None):
+    env = {key: value for key, value in stack.env.items() if key != "AGENTSTACK_PROJECT_KEY"}
+    env.update(extra or {}, AGENTSTACK_MAIL_CANDIDATE_ID=source)
+    done = subprocess.run(["/bin/bash", str(INSTALLER), "--print-mail-plan", *args],
+                          cwd=ROOT, env=env, text=True, capture_output=True, check=False, timeout=30)
+    assert done.returncode == 0, done.stdout + done.stderr
+    (line,) = done.stdout.splitlines()
+    return line
+
+
+def test_print_mail_plan_reads_only_and_always_answers(tmp_path):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        # Nothing installed: no project key needed, nothing created.
+        assert _plan(stack, "fixture-old") == (
+            "mail-plan: install mode=keep running= to=fixture-old reason=no_running_mail")
+        assert not (stack.home / ".agentstack" / "env.sh").exists()
+        _first_install(stack)
+        pid = stack.pid()
+        assert _plan(stack, "fixture-new") == (
+            "mail-plan: keep mode=keep running=fixture-old to=fixture-new reason=keep_default")
+        assert _plan(stack, "fixture-new", extra=AUTO) == (
+            "mail-plan: switch mode=auto running=fixture-old to=fixture-new reason=newer_build")
+        for keep in (("--keep-mail",), ("--mail", "keep"), ("--mail=keep",)):
+            assert _plan(stack, "fixture-new", *keep) == (
+                "mail-plan: keep mode=keep running=fixture-old to=fixture-new reason=keep_requested")
+        # The option wins over the environment, as update.sh relies on.
+        assert _plan(stack, "fixture-new", "--mail", "auto", extra={"AGENTSTACK_MAIL_UPDATE": "keep"}) == (
+            "mail-plan: switch mode=auto running=fixture-old to=fixture-new reason=newer_build")
+        assert _plan(stack, "fixture-new", extra={"AGENTSTACK_MAIL_UPDATE": "update"}) == (
+            "mail-plan: switch mode=update running=fixture-old to=fixture-new reason=newer_build")
+        assert _plan(stack, "fixture-old") == (
+            "mail-plan: unchanged mode=keep running=fixture-old to=fixture-old reason=same_candidate")
+        advice = subprocess.run(["/bin/bash", str(INSTALLER), "--print-mail-update-advice"], cwd=ROOT,
+                                env={**stack.env, "AGENTSTACK_MAIL_CANDIDATE_ID": "fixture-new"},
+                                text=True, capture_output=True, check=False, timeout=30)
+        assert advice.returncode == 0, advice.stderr
+        assert advice.stdout == ""  # different, but not shown to be older
+        same = subprocess.run(["/bin/bash", str(INSTALLER), "--print-mail-update-advice"], cwd=ROOT,
+                              env={**stack.env, "AGENTSTACK_MAIL_CANDIDATE_ID": "fixture-old"},
+                              text=True, capture_output=True, check=False, timeout=30)
+        assert same.returncode == 0 and same.stdout == ""
+        assert stack.pid() == pid
+        assert not list((stack.service_root / "renders").glob("fixture-new-*"))
+    finally:
+        stack.teardown()
+
+
+@pytest.mark.parametrize("args", [
+    ("--update-mail", "--keep-mail"), ("--mail", "auto", "--keep-mail"), ("--mail=update", "--mail", "keep"),
+])
+def test_conflicting_mail_options_are_refused(args):
+    both = subprocess.run(["/bin/bash", str(INSTALLER), *args, "--print-mail-plan"],
+                          cwd=ROOT, text=True, capture_output=True, check=False, timeout=30)
+    assert both.returncode == 2 and "conflicting ORRERY Mail options" in both.stderr
+
+
+@pytest.mark.parametrize("args", [("--mail", "sometimes"), ("--mail=",), ("--mail",)])
+def test_an_unknown_mail_option_value_is_refused(args):
+    bad = subprocess.run(["/bin/bash", str(INSTALLER), *args, "--print-mail-plan"] if args != ("--mail",)
+                         else ["/bin/bash", str(INSTALLER), "--mail"],
+                         cwd=ROOT, text=True, capture_output=True, check=False, timeout=30)
+    assert bad.returncode == 2 and "auto, update or keep" in bad.stderr
+
+
+def test_unknown_mail_mode_in_the_environment_is_refused():
+    bad = subprocess.run(["/bin/bash", str(INSTALLER), "--print-mail-plan"], cwd=ROOT,
+                         env={**os.environ, "AGENTSTACK_MAIL_UPDATE": "sometimes"},
+                         text=True, capture_output=True, check=False, timeout=30)
+    assert bad.returncode == 2 and "must be auto, update or keep" in bad.stderr
+
+
+@pytest.mark.parametrize("budget", ["09", "0009"])
+def test_a_budget_with_a_leading_zero_is_read_as_decimal(tmp_path, budget):
+    """bash reads 09 as a bad octal number; an arithmetic error in a test is
+    false, which once let auto switch over budget (#176 review)."""
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    real = pathlib.Path(sys.executable).parent / "agentstack-mail"
+    # Answers health after about 8 s offline, so the expected outage is 10 s or
+    # more: over a nine-second budget.
+    _candidate(stack.service_root, "fixture-slow",
+               broken={"agentstack-mail": f"#!/bin/sh\nsleep 7\nexec {real} \"$@\"\n"})
+    try:
+        _first_install(stack)
+        pid = stack.pid()
+        run = stack.install("fixture-slow", "--mail", "auto",
+                            extra={"AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET": budget})
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert "value too great for base" not in run.stderr
+        assert _result_line(run.stdout)["result"] == "refused", run.stdout
+        assert _result_line(run.stdout)["reason"] == "outage_over_budget"
+        assert f"over the {budget}s budget" in run.stderr
+        assert stack.pid() == pid
+        assert not (stack.service_root / "backups").exists()
+    finally:
+        stack.teardown()
+
+
+@pytest.mark.parametrize("budget", ["8s", "-1", "99999", "1e3"])
+def test_a_budget_that_is_not_a_small_decimal_refuses_before_stopping(tmp_path, budget):
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, "fixture-old")
+    _candidate(stack.service_root, "fixture-new")
+    try:
+        _first_install(stack)
+        pid = stack.pid()
+        run = stack.install("fixture-new", "--mail", "auto",
+                            extra={"AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET": budget})
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert _result_line(run.stdout)["reason"] == "outage_over_budget"
+        assert "is not a number of seconds" in run.stderr
+        assert stack.pid() == pid
+    finally:
+        stack.teardown()
+
+
+def _handler(serving: bool) -> subprocess.CompletedProcess[str]:
+    """The real interrupt handler, with the controller and probes stubbed."""
+    functions = ("mail_update_switch_interrupted mail_update_interrupted_hint "
+                 "mail_update_reconnect_hint mail_update_clock mail_update_elapsed")
+    current = "/new/service.env" if serving else "/old/service.env"
+    script = "\n".join([
+        "set -uo pipefail",
+        f"PYTHON_BIN={shlex.quote(sys.executable)}",
+        f"SCRIPT_DIR={shlex.quote(str(INSTALLER.parent))}",
+        f"for f in {functions}; do eval \"$(sed -n \"/^$f()/,/^}}/p\" {INSTALLER})\"; done",
+        "say() { printf '%s\\n' \"$*\"; }",
+        "warn() { printf 'warning: %s\\n' \"$*\" >&2; }",
+        "NATIVE_MAIL_ENV=/new/service.env NATIVE_MAIL_RUNNER=/new/run",
+        f"installed_env_mail_env() {{ echo {current}; }}",
+        "native_mail_serving_render() { return 0; }",
+        "rollback_native_mail() { echo ROLLED_BACK; }",
+        "mail_update_use() { NATIVE_MAIL_ENV=/old/service.env; }",
+        "write_enrollment_connection_profile() { :; }",
+        "MAIL_UPDATE_STOPPED_AT=$(mail_update_clock)",
+        "mail_update_switch_interrupted",
+    ])
+    return subprocess.run(["/bin/bash", "-c", script], text=True, capture_output=True, check=False)
+
+
+@pytest.mark.parametrize("serving", [True, False])
+def test_an_interrupted_switch_always_says_how_to_check_running_sessions(serving):
+    done = _handler(serving)
+    assert done.returncode == 130, done.stdout + done.stderr
+    assert ("ROLLED_BACK" in done.stdout) is not serving
+    assert "/mcp shows orrery-mail as connected" in done.stdout
+    assert "check before repeating it" in done.stdout
+    assert "ORRERY Mail was unavailable for 0." in done.stdout
+
+
+def _auto_outage_budget_probe(measured: str, *, budget: str | None = None):
+    """Run the real auto gate; abort at backup before any service operation."""
+    script = "\n".join([
+        "set -uo pipefail",
+        f"PYTHON_BIN={shlex.quote(sys.executable)}",
+        f"eval \"$(sed -n '/^update_native_mail()/,/^}}/p' {INSTALLER})\"",
+        "say() { printf '%s\\n' \"$*\"; }",
+        "warn() { printf 'warning: %s\\n' \"$*\" >&2; }",
+        "plan() { :; }; ensure_native_mail_candidate() { :; }; write_native_mail_env() { :; }",
+        "mail_update_use() { echo USE_$1; }",
+        f"verify_native_mail_candidate_offline() {{ MAIL_UPDATE_START_SECONDS={shlex.quote(measured)}; }}",
+        # Backup runs in command substitution: record arrival on stderr.
+        'mail_update_helper() { printf "BACKUP_REACHED estimate=%s budget=%s\\n" "$estimate" "$budget" >&2; return 1; }',
+        "DRY_RUN=false MAIL_UPDATE_MODE=auto MAIL_DB=/db NATIVE_MAIL_SERVICE_ROOT=/svc",
+        "NATIVE_MAIL_SOURCE_ID=new NATIVE_MAIL_VENV=/v OLD_NATIVE_MAIL_ENV=/old NATIVE_MAIL_ENV=/new OLD_NATIVE_MAIL_SOURCE_ID=old",
+        ("unset AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET" if budget is None else
+         f"AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET={shlex.quote(budget)}"),
+        "MAIL_UPDATE_RESULT= MAIL_RESULT_CODE=",
+        "update_native_mail",
+        "echo \"RESULT=$MAIL_UPDATE_RESULT CODE=$MAIL_RESULT_CODE\"",
+    ])
+    return subprocess.run(["/bin/bash", "-c", script], text=True, capture_output=True, check=False)
+
+
+@pytest.mark.parametrize("measured,estimate,reason", [
+    ("6.5", "8", "backup_failed"),
+    ("6.6", "9", "outage_over_budget"),
+])
+def test_auto_outage_estimate_respects_default_budget(measured, estimate, reason):
+    done = _auto_outage_budget_probe(measured)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert f"RESULT=not-switched CODE={reason}" in done.stdout, done.stdout + done.stderr
+    assert "USE_OLD" in done.stdout
+    if measured == "6.5":
+        # Reaching backup proves admission, not successful real switching.
+        assert f"BACKUP_REACHED estimate={estimate} budget=8" in done.stderr
+    else:
+        assert "BACKUP_REACHED" not in done.stdout + done.stderr
+        assert f"about {estimate}s, over the 8s budget" in done.stderr
+
+
+@pytest.mark.parametrize("measured", ["", "not-a-number", "inf"])
+def test_auto_refuses_when_the_outage_cannot_be_estimated(measured):
+    """No measured start means no estimate; no budget, even 9999, allows that."""
+    done = _auto_outage_budget_probe(measured, budget="9999")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "RESULT=not-switched CODE=outage_unknown" in done.stdout, done.stdout + done.stderr
+    assert "BACKUP_REACHED" not in done.stdout
+    assert "BACKUP_REACHED" not in done.stderr
+    assert "USE_OLD" in done.stdout
+
+
+def _package_commits() -> tuple[str, str]:
+    """Two commits of this checkout whose Mail packages differ, older first."""
+    newer = subprocess.run(["git", "-C", str(ROOT), "log", "-1", "--format=%H", "--", "packages/agentstack_mail"],
+                           text=True, capture_output=True, check=True).stdout.strip()
+    older = subprocess.run(["git", "-C", str(ROOT), "rev-parse", f"{newer}^"],
+                           text=True, capture_output=True, check=True).stdout.strip()
+    return older, newer
+
+
+@pytest.mark.parametrize("direction", ["older", "newer"])
+def test_only_a_running_mail_older_than_the_checkout_is_called_out_of_date(tmp_path, direction):
+    older, newer = _package_commits()
+    running, checkout = (older, newer) if direction == "older" else (newer, older)
+    stack = Stack(tmp_path)
+    _candidate(stack.service_root, running)
+    _candidate(stack.service_root, checkout)
+    try:
+        first = stack.install(running)
+        assert first.returncode == 0, first.stdout + first.stderr
+        _wait_health(stack.mail_url)
+        kept = stack.install(checkout)
+        assert kept.returncode == 0, kept.stdout + kept.stderr
+        advice = subprocess.run(["/bin/bash", str(INSTALLER), "--print-mail-update-advice"], cwd=ROOT,
+                                env={**stack.env, "AGENTSTACK_MAIL_CANDIDATE_ID": checkout},
+                                text=True, capture_output=True, check=False, timeout=30)
+        assert advice.returncode == 0, advice.stderr
+        if direction == "older":
+            assert f"ORRERY Mail is out of date (running {running[:7]}, this checkout {checkout[:7]})." in kept.stdout
+            assert "./scripts/install.sh --mail update" in kept.stdout
+            assert "then Reconnect (not Authenticate)" in kept.stdout
+            assert advice.stdout.startswith("ORRERY Mail is out of date")
+            assert "--mail update" not in advice.stdout
+        else:
+            # Updating from this older checkout would go back: never suggested.
+            assert "newer than this checkout" in kept.stdout
+            assert "out of date" not in kept.stdout and "--mail update" not in kept.stdout
+            assert advice.stdout == ""
+    finally:
+        stack.teardown()

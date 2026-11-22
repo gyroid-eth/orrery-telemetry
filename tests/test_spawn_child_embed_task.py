@@ -44,18 +44,29 @@ def _fake_launch_env(
         "    for arg in \"$@\"; do case \"$arg\" in AGENTSTACK_CODEX_PROMPT_FILE=*)\n"
         "      printf 'ARGV_TASK\\034' >> \"$FAKE_TMUX_LOG\"; cat \"${arg#*=}\" >> \"$FAKE_TMUX_LOG\"\n"
         # Codex then shows the task it was started with, as the real one does.
-        "      { printf '› '; cat \"${arg#*=}\"; printf '\\n'; } > \"$FAKE_TMUX_LOG.screen\" ;; esac; done ;;\n"
+        "      { printf '› '; cat \"${arg#*=}\"; printf '\\n'; } > \"$FAKE_TMUX_LOG.screen\" ;;\n"
+        # A Claude child reads its first prompt from the file named in its env
+        # (the launch argument); record what it would have received and its mode.
+        "      CLAUDE_CHILD_PROMPT_FILE=*) printf 'ARGV_TASK\\034%s\\034' \"$(stat -c %a \"${arg#*=}\" 2>/dev/null || stat -f %Lp \"${arg#*=}\")\" >> \"$FAKE_TMUX_LOG\"\n"
+        "      cat \"${arg#*=}\" >> \"$FAKE_TMUX_LOG\" ;; esac; done ;;\n"
         "  capture-pane)\n"
         "    if [[ \"${FAKE_CODEX:-0}\" == 1 ]]; then\n"
         "      [[ -f \"$FAKE_TMUX_LOG.screen\" ]] && cat \"$FAKE_TMUX_LOG.screen\"\n"
         "      printf '\\ngpt-5.5 xhigh · ~/workspace\\n'\n"
+        "      [[ \"${FAKE_CODEX_START_RUNNING:-0}\" == 1 ]] && printf '• Working (1s • esc to interrupt)\\n'\n"
         "    else\n"
         "      printf '\\n❯ \\n'\n"
-        "    fi ;;\n"
+        "    fi; exit 0 ;;\n"
         "  has-session) [[ -f \"$FAKE_TMUX_ALIVE\" ]] ;;\n"
         "  kill-session) rm -f \"$FAKE_TMUX_ALIVE\" ;;\n"
         "  load-buffer) cat \"$4\" >> \"$FAKE_TMUX_LOG\" ;;\n"
-        "  display-message) printf 'ParentAgent\\n' ;;\n"
+        "  display-message)\n"
+        "    if [[ -f \"$FAKE_TMUX_LOG.warm-name\" ]]; then\n"
+        "      name=$(cat \"$FAKE_TMUX_LOG.warm-name\")\n"
+        "      if [[ \"$*\" == *\"-t =$name\"* && \"$*\" == *'#{pane_id}'* ]]; then printf '%s\\n' '%warm-fixture'; exit 0; fi\n"
+        "      if [[ \"$*\" == *'-t %warm-fixture'* ]]; then printf '%s\\n' \"${FAKE_WARM_IDENTITY_OVERRIDE:-$name}\"; exit 0; fi\n"
+        "    fi\n"
+        "    printf 'ParentAgent\\n' ;;\n"
         "esac\n",
     )
     _executable(bindir / "sleep", "#!/bin/bash\nexit 0\n")
@@ -89,11 +100,16 @@ def _fake_launch_env(
             ROOT / "bin" / "lib" / "agentstack-register.sh"
         ),
         "AGENTSTACK_MCP_PROXY": str(tmp_path / "missing-proxy"),
+        # A relaunched retired child is unretired through Mail; never let a
+        # fixture reach a Mail that happens to run on the default port.
+        "AGENTSTACK_MCP_URL": "http://127.0.0.1:9/mcp",
         "AGENTSTACK_TERMINAL": "none",
         "FAKE_TMUX_LOG": str(tmux_log),
         "FAKE_TMUX_ALIVE": str(tmux_alive),
         "FAKE_CODEX": "1" if codex else "0",
     })
+    from _fake_tmux_transport import add_transport_evidence
+    add_transport_evidence(bindir,env)
     return env, workdir
 
 
@@ -213,12 +229,25 @@ def test_orrery_only_stops_before_cli_when_profile_home_cannot_be_built(
     )
 
 
-@pytest.mark.parametrize("prompt_path", ["embed", "mail", "standalone"])
+@pytest.mark.parametrize("prompt_path,approval_override,full_access,expected_flags", [
+    ("embed", "untrusted", False, "--sandbox workspace-write --ask-for-approval untrusted"),
+    ("mail", None, False, "--sandbox workspace-write --ask-for-approval never"),
+    ("standalone", "never", False, "--sandbox workspace-write"),
+    ("embed", "on-request", True, "--sandbox danger-full-access --ask-for-approval never"),
+    ("standalone", None, True, "--sandbox danger-full-access --ask-for-approval never"),
+])
 def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
-    tmp_path: pathlib.Path, prompt_path: str,
+    tmp_path: pathlib.Path, prompt_path: str, approval_override: str | None,
+    full_access: bool, expected_flags: str,
 ) -> None:
     env, workdir = _fake_launch_env(tmp_path, codex=True)
     _enable_fake_codex_profile(tmp_path, env)
+    if approval_override is not None:
+        env["AGENTSTACK_CODEX_CHILD_APPROVAL"] = approval_override
+    if full_access:
+        install_home = pathlib.Path(env["AGENTSTACK_HOME"])
+        install_home.mkdir(exist_ok=True)
+        (install_home / "env.sh").write_text("export AGENTSTACK_CODEX_SANDBOX=danger-full-access\n")
     child_name = f"Profile-{prompt_path}"
     handoff = _codex_handoff(tmp_path, child_name)
     args = [
@@ -251,10 +280,12 @@ def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
 
     assert result.returncode == 0, result.stderr
     injected = pathlib.Path(env["FAKE_TMUX_LOG"]).read_text(encoding="utf-8")
+    assert f"\034AGENTSTACK_CODEX_PERMISSION_FLAGS={expected_flags}\034" in injected
     # The task went in as the child's argv, never through a paste buffer. No
     # history-binding receipt exists here, so its start is reported as unknown.
     assert "ARGV_TASK" in injected
-    assert "first-task confirmation unknown" in result.stderr
+    assert "first-task confirmation unknown" in result.stderr.lower()
+    assert "start_unconfirmed:" in result.stderr
     assert "\034load-buffer" not in injected and "\034paste-buffer" not in injected
     assert "shell/files and authenticated ORRERY Mail remain available" in injected
     assert "Other inherited MCP servers and plugins are disabled" in injected
@@ -359,18 +390,14 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
     handoff.write_text("child-owner-token", encoding="utf-8")
     handoff.chmod(0o600)
     child_name = "EmbedCodex" if codex else "EmbedClaude"
-    if codex:
-        binding = handoff.with_name(handoff.name + ".binding.json")
-        binding.write_text(
-            json.dumps({
-                "agent_id": 73,
-                "agent_name": child_name,
-                "project_key": "/shared/project",
-                "program": "codex",
-            }),
-            encoding="utf-8",
-        )
-        binding.chmod(0o600)
+    binding = handoff.with_name(handoff.name + ".binding.json")
+    binding.write_text(
+        json.dumps({
+            "agent_id": 73, "agent_name": child_name,
+            "project_key": "/shared/project", "program": "codex" if codex else "claude-code",
+        }), encoding="utf-8",
+    )
+    binding.chmod(0o600)
 
     args = [
         "/bin/bash", str(SPAWN),
@@ -404,19 +431,250 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
     assert result.stdout.strip() == child_name
     injected = pathlib.Path(env["FAKE_TMUX_LOG"]).read_text(encoding="utf-8")
     assert task in injected
+    # Both get the task as their argv, never as a paste: a pasted task reaches
+    # a Claude child as <pasted_content>, which it may decline to act on.
+    assert "ARGV_TASK" in injected
+    assert "\034paste-buffer" not in injected
     if codex:
-        # Codex gets the task as its argv; Claude keeps the pasted prompt.
-        assert "ARGV_TASK" in injected
-        assert "\034paste-buffer" not in injected
-        assert "first-task confirmation unknown" in result.stderr
+        assert "first-task confirmation unknown" in result.stderr.lower()
+    else:
+        assert "ARGV_TASK\034600\034" in injected, "the first prompt file must be private"
     assert "IGNORED POSITIONAL TASK" not in injected
     assert "登録は親が完了済み・儀式不要です" in injected
     assert "ensure_project・register_agent・fetch_inbox は実行しないでください" in injected
     assert f"あなたは {child_name}（親: ParentAgent）" in injected
     assert "現在時刻:" in injected
     assert "project_key は /shared/project" in injected
-    assert "send_message で ParentAgent に報告してください" in injected
+    assert "ORRERY Mail の send_message（Claude Code の SendMessage ではない）で ParentAgent に報告してください" in injected
     assert "Capability notice:" not in injected
     assert "launch prompt is canonical; do not send task mail" in result.stderr
     assert not backtick_marker.exists()
     assert not dollar_marker.exists()
+
+
+@pytest.mark.parametrize('codex', [False, True], ids=['claude', 'codex'])
+@pytest.mark.parametrize('damage', ['missing', 'corrupt', 'wrong_provider', 'wrong_name', 'wrong_project', 'unsafe'])
+def test_invalid_handoff_preserves_original_registration_before_tmux(tmp_path, codex, damage):
+    env, workdir = _fake_launch_env(tmp_path, codex=codex)
+    env['AGENTSTACK_CODEX_BIN'] = str(tmp_path / 'bin' / 'codex')
+    name = 'PreservedOwner'
+    handoff = _codex_handoff(tmp_path, name)
+    binding = handoff.with_name(handoff.name + '.binding.json')
+    data = json.loads(binding.read_text())
+    data['program'] = 'codex' if codex else 'claude-code'
+    if damage == 'wrong_provider':
+        data['program'] = 'claude-code' if codex else 'codex'
+    elif damage == 'wrong_name':
+        data['agent_name'] = 'AnotherOwner'
+    elif damage == 'wrong_project':
+        data['project_key'] = '/other/project'
+    binding.write_text(json.dumps(data))
+    if damage == 'missing':
+        binding.unlink()
+    elif damage == 'corrupt':
+        binding.write_text('{broken')
+    elif damage == 'unsafe':
+        binding.chmod(0o644)
+    runtime = pathlib.Path(env['AGENTSTACK_RUNTIME_DIR'])
+    canonical = runtime / ('agent_token_' + name)
+    state = runtime / 'child-agents' / (name + '.json')
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    state.parent.mkdir(parents=True, exist_ok=True)
+    canonical.write_text('original-owner-token')
+    canonical.chmod(0o600)
+    state.write_text(json.dumps({'agent_id': 73, 'agent_name': name, 'project_key': '/shared/project',
+                                'program': 'codex' if codex else 'claude-code',
+                                'registration_token': 'original-owner-token'}))
+    state.chmod(0o600)
+    managed = runtime / 'managed_agents.txt'
+    managed.write_text(name + '\nAnotherOwner\n')
+    originals = {p: (p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_mode) for p in (canonical, state, handoff, managed)}
+    args = ['/bin/bash', str(SPAWN), '--pre-registered', name, '--child-token-file', str(handoff)]
+    if codex:
+        args.append('--codex')
+    result = subprocess.run([*args, 'fixture task', str(workdir)], env=env, capture_output=True, text=True, timeout=20)
+    assert result.returncode != 0, result
+    log = pathlib.Path(env['FAKE_TMUX_LOG'])
+    assert not log.exists() or 'new-session' not in log.read_text()
+    for path, before in originals.items():
+        assert (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_mode) == before
+    assert not list(state.parent.glob('*.registration-pending.json'))
+
+
+@pytest.mark.parametrize('codex', [False, True], ids=['claude', 'codex'])
+def test_failed_startup_restores_existing_registration_and_keeps_handoff(tmp_path, codex):
+    from hooks import child_resume
+    env, workdir = _fake_launch_env(tmp_path, codex=codex)
+    env['AGENTSTACK_CODEX_BIN'] = str(tmp_path / 'bin' / 'codex')
+    name = 'FailedStartup'
+    handoff = _codex_handoff(tmp_path, name)
+    binding = handoff.with_name(handoff.name + '.binding.json')
+    data = json.loads(binding.read_text())
+    data['program'] = 'codex' if codex else 'claude-code'
+    binding.write_text(json.dumps(data))
+    runtime = pathlib.Path(env['AGENTSTACK_RUNTIME_DIR'])
+    canonical = runtime / ('agent_token_' + name)
+    state = runtime / 'child-agents' / (name + '.json')
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    state.parent.mkdir(parents=True, exist_ok=True)
+    canonical.write_text('original-owner-token')
+    canonical.chmod(0o600)
+    state.write_text(json.dumps({**data, 'registration_token': 'original-owner-token'}))
+    state.chmod(0o600)
+    child_resume.prepare_active_state(runtime, name, project_key='/shared/project', mcp_profile='inherit')
+    assert child_resume.mark_retired(runtime, name, retention_days=30)
+    originals = {p: (p.read_bytes(), p.stat().st_mode) for p in (canonical, state, handoff, binding)}
+    # Startup refuses before a real CLI can run. The child is retired, and the
+    # fixture's Mail is a closed port, so both stop before tmux when it cannot
+    # be made active again; the tmux fixture below would reject Claude anyway.
+    if not codex:
+        _executable(tmp_path / 'bin' / 'tmux', '#!/bin/bash\n[[ "$1" != new-session ]] || exit 1\nexit 0\n')
+    args = ['/bin/bash', str(SPAWN), '--pre-registered', name, '--child-token-file', str(handoff)]
+    if codex:
+        args.extend(['--codex', '--codex-mcp', 'orrery-only'])
+    result = subprocess.run([*args, 'fixture task', str(workdir)], env=env, capture_output=True, text=True, timeout=20)
+    assert result.returncode != 0, result
+    for path, before in originals.items():
+        assert (path.read_bytes(), path.stat().st_mode) == before
+    assert not list(state.parent.glob('.*.registration-pending.json'))
+
+
+@pytest.mark.parametrize('program', ['claude', 'claude-code', 'codex', 'codex-cli'])
+def test_valid_registration_staging_commits_the_expected_provider(tmp_path, program):
+    from hooks import child_resume
+    name = 'VerifiedProvider'
+    handoff = _codex_handoff(tmp_path, name)
+    binding = handoff.with_name(handoff.name + '.binding.json')
+    data = json.loads(binding.read_text())
+    data['program'] = program
+    binding.write_text(json.dumps(data))
+    runtime = tmp_path / 'runtime'
+    token = child_resume.stage_registration(runtime, name, project_key='/shared/project', program=program, generation='a' * 32,
+                                           source=handoff, binding=binding)
+    state = child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program=program, generation='a' * 32)
+    child_resume.finish_registration(runtime, name, generation='a' * 32, rollback=False)
+    assert token.read_text() == 'child-owner-token'
+    assert state['program'] == program and state['provider'] == ('codex' if program.startswith('codex') else 'claude')
+    assert handoff.exists() and binding.exists()  # Consumption belongs to the successful launcher.
+    assert token.stat().st_mode & 0o777 == 0o600
+    assert not list((runtime / 'child-agents').glob('.*.registration-pending.json'))
+
+
+@pytest.mark.parametrize('program', ['claude-code', 'codex'])
+@pytest.mark.parametrize('rollback', [False, True], ids=['late-commit', 'late-rollback'])
+def test_purged_attempt_cannot_finalize_or_prepare_the_same_identity_retry(tmp_path, program, rollback):
+    from hooks import child_resume
+    runtime = tmp_path / 'runtime'
+    name = 'GenerationOwner'
+    handoff = _codex_handoff(tmp_path, name)
+    binding = handoff.with_name(handoff.name + '.binding.json')
+    data = json.loads(binding.read_text())
+    data['program'] = program
+    binding.write_text(json.dumps(data))
+    old, new = 'a' * 32, 'b' * 32
+    def stage(generation):
+        child_resume.stage_registration(runtime, name, project_key='/shared/project', program=program,
+                                        generation=generation, source=handoff, binding=binding)
+        child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program=program,
+                                          generation=generation)
+    stage(old)
+    assert child_resume.purge_one(runtime, name, reason='purged')
+    stage(new)  # Same name, numeric ID, owner token and provider; only the attempt differs.
+    token = runtime / ('agent_token_' + name)
+    state = runtime / 'child-agents' / (name + '.json')
+    pending = state.with_name('.' + name + '.registration-pending.json')
+    tombstone = runtime / 'child-resume-tombstones' / '73.json'
+    before = {p: (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) for p in (token, state, pending, handoff, binding)}
+    assert not child_resume.finish_registration(runtime, name, generation=old, rollback=rollback)
+    with pytest.raises(child_resume.ResumeStateError, match='attempt has changed'):
+        child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program=program, generation=old)
+    for path, saved in before.items():
+        assert (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns) == saved
+    assert json.loads(pending.read_text())['generation'] == new
+    # Positive control: the retry can finish its own transaction.
+    assert child_resume.finish_registration(runtime, name, generation=new, rollback=rollback)
+    assert not pending.exists()
+    if rollback:
+        assert not token.exists() and not state.exists() and tombstone.exists()
+    else:
+        assert token.read_text() == 'child-owner-token' and state.exists() and not tombstone.exists()
+
+
+def test_late_launcher_exit_skips_the_new_attempt_session_registry_and_worktree(tmp_path):
+    from hooks import child_resume
+    env, _workdir = _fake_launch_env(tmp_path, codex=False)
+    runtime = pathlib.Path(env['AGENTSTACK_RUNTIME_DIR'])
+    name = 'GenerationOwner'
+    handoff = _codex_handoff(tmp_path, name)
+    binding = handoff.with_name(handoff.name + '.binding.json')
+    data = json.loads(binding.read_text())
+    data['program'] = 'claude-code'
+    binding.write_text(json.dumps(data))
+    for generation in ('a' * 32, 'b' * 32):
+        child_resume.stage_registration(runtime, name, project_key='/shared/project', program='claude-code',
+                                        generation=generation, source=handoff, binding=binding)
+        child_resume.prepare_active_state(runtime, name, project_key='/shared/project', program='claude-code', generation=generation)
+        if generation == 'a' * 32:
+            assert child_resume.purge_one(runtime, name, reason='purged')
+    managed = runtime / 'managed_agents.txt'
+    managed.write_text(name + '\nOtherOwner\n')
+    before = {p: (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) for p in runtime.rglob('*') if p.is_file()}
+    spawn = SPAWN.read_text()
+    wrappers = spawn[spawn.index('stage_child_registration() {'):spawn.index('# Verify that a Codex token')]
+    cleanup = spawn[spawn.index('    cleanup_preregister_failure() {'):spawn.index('    trap cleanup_preregister_failure EXIT')]
+    marker = tmp_path / 'unwanted-shared-cleanup'
+    script = ('set -eu\n' +
+              'RUNTIME_DIR=' + str(runtime) + '\nHOOKS_DIR=' + str(ROOT / 'hooks') + '\n' +
+              'CHILD_NAME=' + name + '\nCHILD_REGISTRATION_GENERATION=' + 'a' * 32 + '\n' +
+              'PRE_REGISTERED_SUCCESS=false\nPRE_REGISTERED_ADOPTION_PENDING=true\n' +
+              'PRE_REGISTERED_SESSION_STARTED=true\nPRE_REGISTERED_MANAGED_ADDED=true\n' +
+              'MANAGED_FILE=' + str(managed) + '\n' +
+              'warn_if_uninjected() { :; }\n' +
+              'discard_claude_launch_record() { touch ' + str(marker) + '; }\n' +
+              'cleanup_worktree() { touch ' + str(marker) + '; }\n' +
+              wrappers + cleanup + '\ncleanup_preregister_failure\n')
+    result = subprocess.run(['/bin/bash', '-c', script], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert 'nothing changed' in result.stderr
+    assert not marker.exists() and not pathlib.Path(env['FAKE_TMUX_LOG']).exists()
+    for path, saved in before.items():
+        assert (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns) == saved
+
+
+@pytest.mark.parametrize('capture_ok,alive,expected,captures,has_calls',[
+    (True,False,3,2,0),
+    (False,False,3,1,1),
+])
+def test_initial_watch_reuses_successful_capture_but_rechecks_failure(
+    tmp_path,capture_ok,alive,expected,captures,has_calls,
+):
+    import re
+    body=re.search(r'(?ms)^codex_watch_initial_task\(\) \{.*?^\}',SPAWN.read_text()).group()
+    alive_body=re.search(r'(?ms)^codex_session_alive\(\) \{.*?^\}',SPAWN.read_text()).group()
+    log=tmp_path/'calls';script=tmp_path/'watch.sh'
+    script.write_text("""#!/bin/bash
+sleep() { :; }
+tmux() {
+  printf '%s\n' "$1" >> "$CALL_LOG"
+  if [[ "$1" == capture-pane ]]; then
+    printf '%s\n' '• Working (1s • esc to interrupt)'
+    [[ "$CAPTURE_OK" == 1 ]]; return $?
+  fi
+  [[ "$ALIVE" == 1 ]]
+}
+codex_initial_task_status() { echo unknown; }
+codex_trust_screen_up() { return 1; }
+codex_turn_running_on_screen() { return 0; }
+codex_turn_finished_on_screen() { return 1; }
+pane_nonblank_tail() { cat; }
+spawn_note() { printf '%s\n' "$*"; }
+"""+alive_body+"\n"+body+"\ncodex_watch_initial_task Fixture task watch '' ''\n")
+    env={**os.environ,'CALL_LOG':str(log),'CAPTURE_OK':str(int(capture_ok)),'ALIVE':str(int(alive))}
+    result=subprocess.run(['/bin/bash',str(script)],env=env,text=True,capture_output=True,timeout=10)
+    assert result.returncode==expected,result.stderr
+    calls=log.read_text().splitlines()
+    assert calls.count('capture-pane')==captures
+    assert calls.count('has-session')==has_calls
+    assert not set(calls)-{'capture-pane','has-session'}
+    if expected==3:assert 'confirmation unknown' in result.stdout.lower()
+    else:assert 'died' in result.stderr

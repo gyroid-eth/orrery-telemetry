@@ -1,7 +1,12 @@
 """Antigravity uses the shared process matcher and preserves child cleanup on EXIT."""
 from __future__ import annotations
 
+import os
 import signal
+import sys
+from types import SimpleNamespace
+
+import pytest
 
 from dashboard import server
 
@@ -11,6 +16,14 @@ TREE = (
     {ROOT: "bash", 73010: "agy"},
     {ROOT: [73010]},
 )
+
+
+def _capture_exit_kills(monkeypatch, killed) -> None:
+    # os is shared with subprocess/finalizers. Replace only this module's
+    # reference so unrelated cleanup keeps its original kill implementation.
+    monkeypatch.setattr(server, "os", SimpleNamespace(**{
+        **vars(server.os), "kill": lambda pid, sig: killed.append((pid, sig)),
+    }))
 
 
 def test_antigravity_process_pid_uses_shared_program_matcher() -> None:
@@ -24,14 +37,14 @@ def test_dashboard_exit_interrupts_only_delegated_antigravity_runtime(monkeypatc
 
     monkeypatch.setattr(
         server,
-        "build_agents",
-        lambda history_days=None: [
+        "lookup_agent",
+        lambda name, _rows=[
             {
                 "name": "GrayKepler",
                 "category": "agent",
                 "attached": False,
             }
-        ],
+        ]: next((r for r in _rows if r['name'] == name), None),
     )
     monkeypatch.setattr(server, "_has_session", lambda _name: True)
     monkeypatch.setattr(server, "_agent_program", lambda _name: "antigravity")
@@ -41,7 +54,7 @@ def test_dashboard_exit_interrupts_only_delegated_antigravity_runtime(monkeypatc
         lambda _name, key: "1" if key == "AGENTSTACK_RESERVED_IDENTITY" else "",
     )
     monkeypatch.setattr(server, "_fresh_agent_process_pid", lambda *_args: 73010)
-    monkeypatch.setattr(server.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    _capture_exit_kills(monkeypatch, killed)
 
     class _Done:
         returncode = 0
@@ -54,6 +67,8 @@ def test_dashboard_exit_interrupts_only_delegated_antigravity_runtime(monkeypatc
         return _Done()
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, None, server, fake_run)
 
     result = server.do_exit("GrayKepler")
 
@@ -64,19 +79,72 @@ def test_dashboard_exit_interrupts_only_delegated_antigravity_runtime(monkeypatc
     assert "provider-headless:antigravity" in result["actions"]
 
 
+def test_exit_kill_capture_rejects_shared_mock_contamination_and_extra_exit_signals(monkeypatch) -> None:
+    original_os, original_kill = server.os, os.kill
+    original_exit, scoped_capture = server.do_exit, _capture_exit_kills
+    cleanup_signals = [(84001, signal.SIGTERM), (84002, signal.SIGTERM)]
+
+    for mode in ("scoped", "shared-mutant", "extra-exit-signal"):
+        with monkeypatch.context() as case:
+            cleanup_calls: list[tuple[int, signal.Signals]] = []
+            captures: list[list[tuple[int, signal.Signals]]] = []
+            # A synthetic shared os keeps this control from ever replacing
+            # real os.kill or sending a signal to any real process.
+            cleanup_os = SimpleNamespace(**{
+                **vars(original_os), "kill": lambda pid, sig: cleanup_calls.append((pid, sig)),
+            })
+            case.setattr(server, "os", cleanup_os)
+
+            def capture(patch, killed):
+                captures.append(killed)
+                if mode == "shared-mutant":
+                    # Exact old aliasing shape: external cleanup holds the
+                    # same os object and therefore hits the EXIT recorder.
+                    patch.setattr(server.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+                else:
+                    scoped_capture(patch, killed)
+
+            def exit_with_cleanup(session):
+                assert os.kill is original_kill
+                for pid, sig in cleanup_signals:
+                    cleanup_os.kill(pid, sig)
+                if mode == "extra-exit-signal":
+                    server.os.kill(73010, signal.SIGTERM)
+                return original_exit(session)
+
+            case.setattr(sys.modules[__name__], "_capture_exit_kills", capture)
+            case.setattr(server, "do_exit", exit_with_cleanup)
+            if mode == "scoped":
+                test_dashboard_exit_interrupts_only_delegated_antigravity_runtime(case)
+            else:
+                # Exercise the original test's full-signal assertion, not a
+                # separate SIGINT-only filter or a different expected oracle.
+                with pytest.raises(AssertionError):
+                    test_dashboard_exit_interrupts_only_delegated_antigravity_runtime(case)
+            expected = [(73010, signal.SIGINT)]
+            if mode == "shared-mutant":
+                expected = cleanup_signals + expected
+            elif mode == "extra-exit-signal":
+                expected = [(73010, signal.SIGTERM)] + expected
+            assert captures == [expected]
+            assert cleanup_calls == ([] if mode == "shared-mutant" else cleanup_signals)
+            assert os.kill is original_kill
+        assert server.os is original_os
+
+
 def test_interactive_antigravity_keeps_existing_slash_exit_path(monkeypatch) -> None:
     sent: list[list[str]] = []
 
     monkeypatch.setattr(
         server,
-        "build_agents",
-        lambda history_days=None: [
+        "lookup_agent",
+        lambda name, _rows=[
             {
                 "name": "GrayHopper",
                 "category": "agent",
                 "attached": False,
             }
-        ],
+        ]: next((r for r in _rows if r['name'] == name), None),
     )
     monkeypatch.setattr(server, "_has_session", lambda _name: True)
     monkeypatch.setattr(server, "_agent_program", lambda _name: "antigravity")
@@ -99,6 +167,8 @@ def test_interactive_antigravity_keeps_existing_slash_exit_path(monkeypatch) -> 
         raise AssertionError(f"unexpected command: {argv}")
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, None, server, fake_run)
 
     result = server.do_exit("GrayHopper")
 
@@ -144,8 +214,8 @@ def test_jump_preserves_finished_antigravity_shell_instead_of_resuming(monkeypat
     monkeypatch.setattr(server, "_focus_existing_terminal", lambda _name: False)
     monkeypatch.setattr(
         server,
-        "build_agents",
-        lambda history_days=None: [{"name": "GrayHopper", "category": "finished"}],
+        "lookup_agent",
+        lambda name, _rows=[{"name": "GrayHopper", "category": "finished"}]: next((r for r in _rows if r['name'] == name), None),
     )
 
     def forbidden_resume(_session):
@@ -170,6 +240,8 @@ def test_jump_preserves_finished_antigravity_shell_instead_of_resuming(monkeypat
         return {"ok": True, "adapter": "terminal"}
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
+    from _legacy_dashboard_transport import install_legacy_transport
+    install_legacy_transport(monkeypatch, None, server, fake_run, sessions={"$1": "GrayHopper"})
     monkeypatch.setattr(server, "_open_terminal_tmux", fake_open)
 
     result = server.do_jump("GrayHopper")

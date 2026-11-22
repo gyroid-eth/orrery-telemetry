@@ -153,25 +153,31 @@ systemctl --user daemon-reload
 
 systemd user が使えない環境と WSL では installer が `nohup` と pidfile に fallback します。localhost dashboard と browser terminal は利用できます。WSL2 では dashboard の jump が Windows Terminal（`wt.exe`）の新しいタブを開いて `wsl.exe -d <distro>` 経由で tmux に attach します（`AGENTSTACK_TERMINAL=auto` が `wt` を選ぶ）。素の Linux では jump は未対応のままです。
 
-### WSL2 で Ubuntu の窓を全部閉じると agent が止まる
+### WSL2 で Ubuntu の窓を閉じたとき
 
-WSL は、Windows 側の最後の client（`wsl.exe`、Windows Terminal の Ubuntu タブ）が終わると、既定では約15秒後に distro を停止します。中で tmux・dashboard・agent が動いていても止まり、Mail・dashboard・全 agent が一緒に消えます（WSL 2.7.13 で確認: 最後の窓を閉じて13〜16秒後に停止）。`[wsl2] vmIdleTimeout=-1` が止めないのは VM だけで、linger や systemd でも distro は維持されません。
+**従来モードの dashboard は、agent の作業中に WSL を自動で保持します。** Windows 側で隠れた `wsl.exe` を1つ起動し、無活動が60秒続くと手放します。`agentstack-doctor` は Windows の `.wslconfig` を読み取り、設定は変更しません。
 
-**dashboard は、agent が働いている間だけ WSL を動かし続けます。** 仕事があるあいだ、Windows 側に隠れた `wsl.exe` を1つ持ち、仕事が無くなるとそれを自分で終わらせます。そのあとは WSL の既定どおり、窓が1つも無ければ約15秒で止まります。利用者が `wsl --shutdown` を打つ必要はなく、Windows の `.wslconfig` も変更しません。
+- tmux の agent process（Claude、Codex、Antigravity）が動いている間は保持します。承認や返答を待っている agent も含みます。
+- dashboard の NEW AGENT や `agent-start` / `agent-start-codex` は、起動前に保持を予約します。開始を確認できない場合も agent の起動は続き、dashboard の応答の `wsl_hold` または shell の `WSL hold: ...` で理由を確認できます。残った予約は3分で失効します。
+- dashboard のページを表示している間も保持します。ページを隠すか閉じると、この保持理由が外れます。dashboard、Mail、watcher、tmux の記録用接続はそれだけでは保持理由になりません。
+- header の `WSL kept · 2 agents` は保持理由、`WSL hold ends in 42s` は解除までの秒数です。`agentstack-doctor` で理由、Windows 側の PID、状態の鮮度を確認できます。
+- tmux やプロセス一覧を読み取れない場合は、最後に確認した agent に対する保持を続け、`WSL kept · state unknown` と表示します。状態の更新が30秒を超えて途絶えると `WSL status stale` と表示します。
+- 隠れた `wsl.exe` が早く終了すると dashboard が再起動を試みます。失敗が3回続くと次の試行まで5分待ちます。dashboard 自体が終了しても、最後に確認した agent が生きている間は保持が続きます。
 
-- **保持する間**: agent の process（claude / codex / antigravity）が tmux の中で動いている間。承認待ち・返答待ちでも process が生きていれば保持します
-- **起動中**: dashboard の NEW AGENT と `agent-start` / `agent-start-codex` は、起動を始める前に予約を置き、保持が始まるか失敗が分かるまで待ってから起動します。保持が始まらなかったときは、起動は続けたうえで理由を表示します（dashboard は応答の `wsl_hold`、shell は `WSL hold: ...` の行）。その場合は agent が終わるまで Ubuntu の窓を1つ開けておいてください。予約は起動が済むと外れ、残っても3分で失効します
-- **画面を見ている間**: dashboard のページ（cockpit の中に表示されたものを含む）が表示されている間は保持します。ページが隠れる・閉じると外れます
-- **保持しないもの**: dashboard・Mail・watcher・anchor 自身と、tmux の control client。cockpit は誰も見ていなくても全 session に記録用の接続を持つので、これを数えると WSL が止まらなくなります
-- **確かめられないとき**: tmux や ps が答えないときは「全部終わった」とは扱わず、最後に確認できた agent のために保持を続けます。header には `WSL kept · state unknown` と出ます
-- **解除**: 上のどれも無い状態が60秒続いたら、保持をやめます。保持しているあいだは header に `WSL kept · 2 agents` のように理由を出し、解除までの60秒は `WSL hold ends in 42s`、解除後は表示を消します。保持をやめても、他の窓やプログラムが WSL を使っていれば WSL は止まりません
-- **状態の鮮度**: 保持の状態が30秒以上更新されないと、header は `WSL status stale` を出します
-- **故障時**: 隠れた `wsl.exe` が早く終わったら、dashboard が数秒のうちに起動し直します（失敗が3回続いたら5分待ってから再試行）。起動できないときは header に `WSL not kept` と理由を出します。この間は Ubuntu の窓を1つ開けておいてください。dashboard が落ちても、anchor は最後に知らされた agent の process が生きている間は保持を続けます
-- **止まったあとの再開**: WSL が止まると dashboard も止まります。Windows Terminal で Ubuntu を開き、いつもの手順で dashboard を起動してください
-- **確認**: `agentstack-doctor` が保持の状態（理由・Windows 側の PID・更新時刻）を出します
-- **やめる**: `--no-wsl-anchor`（または `AGENTSTACK_WSL_ANCHOR=0`）で install します。選択は `env.sh` に残り、`--wsl-anchor` で戻せます
+**自動保持が効かないときは、作業中は Windows 側で Ubuntu の窓を1つ開けておきます。** header に `WSL not kept` が出た場合、または自動保持を無効にした場合に使えます。`--no-wsl-anchor` または installer 実行時の `AGENTSTACK_WSL_ANCHOR=0` で無効になり、`--wsl-anchor` で戻せます。設定は `env.sh` に保存されます。
 
-以前の版の installer や手作業で、`.wslconfig` に `[general] instanceIdleTimeout=-1` を入れた場合、全 distro が `wsl --shutdown` まで止まらなくなります。今は不要です。`agentstack-doctor` がこれを見つけると、外し方（その行を消して、agent が動いていないときに一度 `wsl --shutdown`）を案内します。`[wsl2] vmIdleTimeout=-1` も同様で、distro が止まっても VM は動き続け、メモリを使い続けることがあります（上限の既定は物理メモリの50%）。
+Windows Terminal などのデスクトップの窓から起動したものは、最後の窓を閉じても Windows 側に `wslhost.exe` が残り、WSL が動き続けることがあります（WSL 2.7.13 で90秒以上 Running を確認）。Windows の SSH サーバー経由で起動した場合は、接続終了時にその `wslhost.exe` が片付けられます。自動保持や他の Windows クライアントが無ければ、最後の接続から約15秒で止まることを WSL 2.7.13 で確認しています。WSL 内の sshd への直接接続は未検証です。
+
+保持が解除された後も WSL が動き続けていてすぐに止めたい場合は、PowerShell で次を実行します。**すべての distro と WSL の VM がすぐに止まる**ので、agent と他の distro を含む WSL 上の作業を先に保存・終了してください。
+
+```powershell
+wsl --shutdown
+```
+
+次に Ubuntu を開くと、Mail は起動1分後に timer が立て直します。dashboard は `install.sh` を再実行して立て直します。
+
+- ログアウト後も systemd user manager（Mail の timer と watcher）を残すには、WSL の中で `loginctl enable-linger "$USER"` を設定します。
+- 以前の案内で `.wslconfig` に `[general] instanceIdleTimeout=-1` や `[wsl2] vmIdleTimeout=-1` を設定した場合、前者は distro を、後者は distro の停止後も VM を動かし続けます。自動保持には不要です。`agentstack-doctor` の案内に従い、該当行を消してから上の注意のとおり一度 `wsl --shutdown` を実行します。
 
 同じ PC で native Windows の helper（`scripts/windows/`）も動かしている場合、WSL2 の 8770 は Windows の localhost に転送されるので、Windows 側に同じ port の dashboard が残っているとブラウザはそちらに繋がり、WSL の agent が見えません。どちらかの port を変えるか、native 側を止めてから開きます。
 
@@ -207,6 +213,16 @@ Codex REPL では `Enter` keysym が submit にならない場合があるため
 
 ## Mail watcher が yellow / red
 
+24時間以上古く、宛先の tmux session が無い signal は `orphan_signal_count` に分け、health の滞留判定から除外します。新しいwatcherは、session一覧で宛先不在を確認すると通知signalだけを取り下げ、再試行を止めます。Mail本体・inboxはそのままです。古いwatcherが残した通知や、tmuxの確認に失敗して残した通知は存在し得るため、残留だけでは配送障害と断定しません。生きている宛先・新しい signal・headless runtime は除外せず、tmux の確認に失敗した場合も全数を判定に残します。doctor は古い残留数と片付け方を warn に出しますが、health が green ならこの warn だけで exit 1 にはしません。
+
+必要なら、インストールの環境を読み込んで候補を確認します。`--prune` を付けると、削除直前にも session が無いことを確認し、signals 配下の24時間以上古い通常ファイルだけを削除します。Mail の DB・inbox・notify-state は触りません。symlink は辿らず、tmux の測定に失敗した場合は削除しません。session を再開する予定の宛先は、先に再開してください。
+
+```sh
+source ~/.agentstack/env.sh
+"${AGENTSTACK_PYTHON:-python3}" ~/.agentstack/dashboard/mail_signals.py
+"${AGENTSTACK_PYTHON:-python3}" ~/.agentstack/dashboard/mail_signals.py --prune
+```
+
 ```bash
 curl -s http://127.0.0.1:8770/api/mail-watcher-health
 ```
@@ -229,11 +245,13 @@ tail ~/.agentstack/runtime/mail-watcher.log
 **mail は inbox に届くのに tmux に通知が入らず、log に `Stale watcher lock detected; taking ownership` と `mkdir: ... File exists` が数秒おきに並ぶ**なら、watcher が lock の取り直しに失敗して service manager に再起動され続けています。前の watcher が EXIT trap を通らずに死ぬ（SIGKILL、host のクラッシュ、process を差し替える deploy）と lock dir に heartbeat が残り、2026-09-12 より前の watcher はそれを片付けられませんでした。`launchctl print` の `runs` が数千になっているのが目印です。復旧は lock dir を消すだけです（keepalive が次の起動で取り直します）:
 
 ```bash
-rm -rf /tmp/orrery-mail-watcher.lock   # AGENTSTACK_MAIL_WATCHER_LOCK_DIR を変えていればそのパス
+rm -rf ~/.agentstack/runtime/mail-watcher.lock   # AGENTSTACK_MAIL_WATCHER_LOCK_DIR を変えていればそのパス
 tail -3 ~/.agentstack/runtime/mail-watcher.log
 ```
 
 repo を更新して `bash scripts/install.sh` を再実行すれば、以後の takeover は残り物があっても通ります。
+
+**1 台の Mac に複数の利用者がいて、`log` に `Permission denied` と `Stale watcher lock detected` が交互に数秒おきに並び、watcher が一度も動かない**なら、lock dir を他人の watcher と共有しています（2026-10-05 以前は既定が `/tmp/orrery-mail-watcher.lock` で全利用者共通だったため、1 台の Mac の 2 人目の利用者が先にいる利用者の lock を取れず無限リトライしていました）。既定は利用者ごと（`$AGENTSTACK_RUNTIME_DIR/mail-watcher.lock`）になっており、repo を更新して `bash scripts/install.sh` を再実行すれば解決します。`AGENTSTACK_MAIL_WATCHER_LOCK_DIR`・`_PIDFILE`・`_HEARTBEAT` を手で他人の path（`/tmp` 配下の共有 path など）に向けている場合、watcher は**何も書かず、別の場所へ切り替えもせず**に止まり、log に「この path は別の利用者の物。override を外すか自分の path に」と一度だけ出します。設定を外す（または自分だけが書ける場所に変える）と動きます。2026-10-05 より前の既定に自分の古い watcher がまだ生きている場合も、二重配送を避けるため新しい watcher は起動せず、止める案内を出します（その pid が watcher の process でなければ、stale として扱います）。`agentstack-doctor` も、watcher が動いていない・status が red / yellow・heartbeat が古い場合に warn します。
 
 ## Dashboard spawn がすぐ消える
 
@@ -337,6 +355,8 @@ AGENTSTACK_PROJECT_KEY=/absolute/project/path \
 ```
 
 を実行します。
+
+明示 global context の exit 3 は `observed`（登録は未更新）です。program/model を指定して helper を再実行してください。
 
 失敗時の stderr は、秘密を含まない定型診断です。たとえば
 `stage=ensure_project reason=transport-failed curl_exit=7` は通信前半、
@@ -493,13 +513,19 @@ stale な top-level environment を継承した可能性がある場合は、新
 
 transcript が存在しない agent は mail timeline だけが見えることがあります。
 
+## PC の再起動・強制終了の後に Resume が拒否される
+
+`/delegate` の子は、動いている間は state が「動作中」で、正常に終わると retire され、保持期間のあいだ再開できる state になります。PC が落ちる（強制終了・電源断・OS の再起動で終了の処理が走らない）と retire されないまま残り、dashboard の RESUME も端末の `claude --resume` も「This child did not end normally …」で拒否します。再開を起動した直後に落ちた場合は「A resume of this child started and did not finish …」です。
+
+dashboard は起動したとき（と、その後 1 時間ごと）に、**この machine が起動する前に書かれたまま**の「動作中」の state と、終わらなかった再開を、再開できる state に戻します。その名前の tmux session があるとき、起動の後に書かれた live-session の lease の process が生きているとき、tmux の状態が分からないとき、登録や旧形式の移行が途中のとき、owner credential が state と一致しないときは何も変えません。再起動の後に dashboard が動いていれば、手で retire する必要はありません。まだ拒否されるなら、その子の tmux session が残っていないかを確かめてください。
+
+起動の前に書かれた live-session の lease（`runtime/live-sessions/<name>/<pid>`）は、PID が別の process に再利用されていることがあるので、生きている印として数えません。
+
 ## Terminal が開かない
 
 - `AGENTSTACK_TERMINAL` の値を確認
 - Ghostty / iTerm2 / Terminal.app の install path を確認
 - `tmux has-session -t '<name>'`
-- browser terminal なら `ttyd` が PATH にあるか
-- `/api/ptty?session=<name>` の error
 
 `AGENTSTACK_TERMINAL=none` では OS terminal open を行いません。
 
@@ -534,3 +560,15 @@ manifest がない状態で推測削除は行いません。settings や mail da
 - [Codex App 統合](codex-app.md)
 - [Dashboard](dashboard.md)
 - [設定](configuration.md)
+
+## nvm の Codex で node が見つからない
+
+dashboard の最小 PATH に nvm がなくても、検出した Codex と同じ bin（または symlink の解決先）に node があれば、確認と起動の両方で同じ PATH を使います。doctor の `Codex launcher binary` も同じ環境で `--version` に答えるかを確かめます。node がどちらにもなく login shell の PATH にもなければ、理由付きで候補を拒否します。
+
+WSL の検査は、対象の checkout で次を実行します。
+
+```bash
+bash scripts/check-codex-nvm-wsl.sh /absolute/path/to/codex python3
+```
+
+Python 3.11 以上が必要です。追加 package は不要です。既にある CLI と Node.js だけを使い、一時 HOME / CODEX_HOME、最小 PATH で `--version` を確認します。model、login、thread、子の登録や tmux session は起動しません。通常の実 HOME に対する設定変更はありません。

@@ -100,7 +100,7 @@ launchd の可否はログイン情報から推測せず、`gui/$UID` への boo
 | --- | --- |
 | `--install-dir PATH` | integration source と manifest の配置先 |
 | `--runtime-dir PATH` | private socket、binding、snapshot、delivery DB、log の配置先 |
-| `--no-service` | launchd と supervised background のどちらも起動しない。macOS 以外では必須 |
+| `--no-service` | launchd と supervised background のどちらも起動しない。macOS 以外では既定（指定しなくても service は入れない） |
 | `--no-plugin` | marketplace は構築するが Codex plugin を登録しない |
 | `--refresh-plugin-only` | 配置済み payload から、既存の有効な Codex plugin だけを再導入。Bridge state は変更しない |
 | `--wake-limit COUNT` | root task ごとの cold wake 上限回数 / 時 |
@@ -159,7 +159,7 @@ launchd / supervised background の log はどちらも既定で次にありま�
 
 `SessionStart` / `SubagentStart` hook は、現在の `session_id` と必要なら `agent_id` を使って最初に `agentstack.bootstrap` を呼ぶよう additional context を渡します。最初の bootstrap が MCP process を一つの Bridge binding に固定し、その後の tool call では project key、agent 名、owner token を agent から受け取りません。
 
-proxy の公開 tool は次の9個です。
+proxy の公開 tool は次の10個です。
 
 - `bootstrap`
 - `fetch_inbox`
@@ -169,11 +169,22 @@ proxy の公開 tool は次の9個です。
 - `renew_reservations`
 - `release_reservations`
 - `runtime_status`
+- `show_files`（作った・直した file や画像を、cockpit の History の chip にする。下を参照）
 - `whois`（宛先名の確認用。名前は大文字小文字を区別します）
+
+`show_files` は proxy の中だけで完結します。Mail server へは何も送らず、何も書かず、file の中身も読みません。ほかの local tool と同じく、束縛（bootstrap）の後でだけ使えます。1〜8個の path を `lstat` だけで確かめ、在るか・通常の file か画像か・大きさを返します（`present` は通常の file として在るもの）。相対 path を確かめる基準にするのは、agent の作業 folder が束縛から分かるとき（Codex App の snapshot）だけで、proxy 自身の cwd は使いません。分からないときは相対 path を確かめず `checked: false` を返し、絶対 path は確かめます。作業 folder が分かるときは、その外の path を `lstat` もせず `outside_working_folder: true` とします。cockpit は記録に残ったこの呼び出しから History に chip を出し、作業 folder の中・種類・大きさの確認は preview の側で従来どおり行います。Claude・Codex・dsh・Hermes の managed な指示と、同梱の `/log`・`/delegate` が、見せたい file があるとき最後の報告の前に呼ぶよう案内します。Claude の設定の雛形は、この tool を確認なしで許可します。
+
+`reserve_files`・`renew_reservations`・`release_reservations` は物理絶対 path を受け取り、同じ bound identity / Mail namespace へそのまま送ります。managed `workspace-v1` では、symlink を解決した物理絶対 path（例: `str(Path(target).resolve())`）で取得し、同じ path で更新・解放してください。guard の拒否理由にも必要な path を表示します。既存の相対 path / glob は旧 session 互換として無変換で受け付けますが、cwd・project key・保護 root から絶対化しません。絶対 glob も無変換なので、固定部分には物理 path を使ってください。`..` component、不正文字、空文字、件数・長さの上限違反は引き続き拒否します。
+
+相対予約だけを取得していた managed session は、更新した proxy を正規の resume/restart 手順で読み直し、本人が不要な旧予約を ID で解放して物理絶対 path で取り直してください。既存予約の自動移行はしません。この対応で candidate/global/fresh server への切替や、binding・sandbox・編集権限の変更はありません。
 
 tool call が失敗したとき、proxy は Mail server のエラー 1 行目をそのまま返します（token に見える文字列は `[redacted]` に置き換え、600 文字で切ります）。以前は固定文 "ORRERY Mail tool call failed" だけを返していたため、宛先名の綴り違いのような検証エラーでも child は理由を知れず、直さずに諦めていました。
 
 root task は `session_id` だけを渡します。subagent は同じ `session_id` と自分の `agent_id` を渡し、Bridge が記録した parent lineage と一致しない binding は拒否されます。
+
+`spawn_child.sh` などの launcher が子に渡す proxy は Bridge を使わず、起動時に名前・project・token を直接 bind します。この binding の `lineage` は Codex App の lineage ではなく、launcher が `AGENTSTACK_PROXY_PARENT_AGENT` で渡した ORRERY の親を `parent_agent` に示します（`kind` は `child`）。`--standalone` など親のない agent は `kind: root`・`parent_agent: null` です。launcher は親を子の private な state（`child-agents/<name>.json` の `parent_agent`）にも記録します。dashboard から再開して proxy の設定を作り直すときも、同じ親を渡します。launcher は、生成した proxy が親を示せない組み合わせ（proxy が受け付けない親の名前、proxy を用意できず継承した Codex 設定が Bridge の plugin を有効にしている場合）では、CLI を起動する前に止まります。
+
+launcher が起動時に bind した proxy は、raw の ORRERY Mail と同じ形の引数も受けます。raw で使った会話を再開すると、モデルは以前の形のまま呼ぶためです。`project_key`・`agent_name`・`sender_name` は binding と一致すれば無視し、食い違えばその理由を返します。raw の `whois` の `agent_name` は、調べる相手として扱います。モデルが渡した `registration_token`・`sender_token` は使わず、Mail へも送りません。schema にないその他の引数は、受け付ける引数の一覧をつけて拒否します。この proxy の `runtime_status` の `state` は `bound`（binding がある）で、Mail には問い合わせません。
 
 ## Inbox 通知と cold wake
 

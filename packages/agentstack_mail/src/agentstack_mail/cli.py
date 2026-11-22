@@ -9,6 +9,7 @@ from typing import Any
 
 from .config import get_settings
 from .path_alias import PathAliasMiddleware, expand_alias_paths
+from .local_http import LocalPageMiddleware
 
 
 _GRACEFUL_SHUTDOWN_SECONDS = 8.0
@@ -39,6 +40,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", metavar="HOST", help="loopback bind host")
     parser.add_argument("--port", metavar="PORT", type=int, help="HTTP listen port")
     parser.add_argument("--path", metavar="PATH", help="MCP HTTP path")
+    parser.add_argument(
+        "--global-config",
+        metavar="FILE",
+        help="explicit isolated global S1 preparation configuration",
+    )
     return parser
 
 
@@ -76,10 +82,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         )
 
     canonical_path = _normalized_path(path)
-    middleware = []
-    if expand_alias_paths(canonical_path, settings.http.path_aliases):
-        from starlette.middleware import Middleware
+    from starlette.middleware import Middleware
 
+    middleware = [Middleware(LocalPageMiddleware)]
+    if expand_alias_paths(canonical_path, settings.http.path_aliases):
         middleware.append(
             Middleware(
                 PathAliasMiddleware,
@@ -88,7 +94,13 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
         )
 
-    _build_mcp_server().run(
+    if args.global_config is None:
+        server = _build_mcp_server()
+    else:
+        from .global_server import build_global_server
+
+        server = build_global_server(args.global_config)
+    server.run(
         transport="streamable-http",
         host=host,
         port=port,

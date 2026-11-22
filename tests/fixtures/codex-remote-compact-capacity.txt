@@ -1,0 +1,5 @@
+■ Error running remote compact task: Selected model is at capacity. Please try a different model.
+  3 background terminals running · /ps to view · /stop to close
+› Ask Codex to do anything
+  GPT-6.1-Sol medium · Context 32% left · ~/OSS · weekly 71% left
+  ? for shortcuts                                                                      ⚠ 4 warnings · f2 to view

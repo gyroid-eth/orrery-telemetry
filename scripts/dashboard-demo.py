@@ -502,7 +502,7 @@ def _reset(root: Path) -> None:
 
 def _copy_tracked_payload(root: Path) -> None:
     result = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", "dashboard", "bin/lib/agentstack-scientists.sh"],
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", "dashboard", "bin/lib", "hooks/native_connections.py"],
         capture_output=True,
         check=True,
     )
@@ -858,12 +858,38 @@ def _create_command_shims(root: Path, now: datetime) -> None:
     # slower system Python and risk the API's 3-second verification timeout.
     tmux_script = f"""#!{sys.executable}
 import json
+import os
 import sys
 
 SESSIONS = json.loads({json.dumps(json.dumps(sessions, ensure_ascii=False))})
 SEP = chr(31)
 args = sys.argv[1:]
+socket_path = None
+if args[:1] == ['-S']:
+    socket_path = args[1]
+    args = args[2:]
 command = args[0] if args else ""
+names = list(SESSIONS)
+target = args[args.index('-t') + 1] if '-t' in args else ''
+if target.startswith(('$', '%')) and target[1:].isdigit():
+    index = int(target[1:]) - 1
+    target = names[index] if 0 <= index < len(names) else ''
+target = target.lstrip('=')
+if command == 'display-message':
+    if args[-1] == '#{{socket_path}}\\t#{{pid}}':
+        print(str(socket_path) + '\\t' + str(os.getppid()))
+    elif target in SESSIONS:
+        index = names.index(target) + 1
+        print('$' + str(index) + '\\t' + target + '\\t%' + str(index) + '\\t11')
+    else:
+        raise SystemExit(1)
+    raise SystemExit(0)
+if command == 'list-panes' and '#{{session_id}}' in args[-1]:
+    if target not in SESSIONS:
+        raise SystemExit(1)
+    index = names.index(target) + 1
+    print('$' + str(index) + '\\t' + target + '\\t%' + str(index) + '\\t11')
+    raise SystemExit(0)
 if command == "list-sessions":
     for name, data in SESSIONS.items():
         print(SEP.join((name, str(data["created"]), str(data["activity"]))))
@@ -873,15 +899,12 @@ elif command == "list-panes":
 elif command == "list-clients":
     print(SEP.join(("Bright-Curie", "/dev/ttys-demo")))
 elif command == "capture-pane":
-    target = args[args.index("-t") + 1] if "-t" in args else ""
-    target = target.lstrip("=")
     data = SESSIONS.get(target)
     if data is None:
         raise SystemExit(1)
     print(data["capture"], end="")
 elif command == "has-session":
-    target = args[args.index("-t") + 1] if "-t" in args else ""
-    raise SystemExit(0 if target.lstrip("=") in SESSIONS else 1)
+    raise SystemExit(0 if target in SESSIONS else 1)
 else:
     raise SystemExit(1)
 """
@@ -902,12 +925,31 @@ import json
 import os
 import sys
 import threading
+import runpy
+import socket
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
 dashboard = Path(__file__).resolve().parent / "dashboard"
 sys.path.insert(0, str(dashboard))
 import server
+
+# This read-only documentation process has fictional panes, not native tmux.
+# Supply its existing fixture observations to the shared consumer; never use
+# the user's default server or relax the production admission implementation.
+api = runpy.run_path(str(dashboard.parent / 'bin/lib/runtime_tmux.py'))
+temporary = tempfile.TemporaryDirectory(prefix='demo-tmux-', dir='/private/tmp' if Path('/private/tmp').is_dir() else None)
+socket_path = Path(temporary.name).resolve() / 's'
+fixture_socket = socket.socket(socket.AF_UNIX)
+fixture_socket.bind(str(socket_path))
+socket_path.chmod(0o600)
+transport = api['Transport'](socket_path, binary=str(Path(os.environ['HOME']).parent / 'bin/tmux'))
+transport.server_pid = os.getpid()
+consumer = api['LegacyConsumer'](Path(os.environ['HOME']), transport=transport,
+    api={'process_start': lambda pid, **kw: 'documentation-fixture' if pid == 11 else None},
+    proof_reader=lambda *a, **kw: [])
+server._legacy_tmux_consumer = lambda: consumer
 
 class ReadOnlyDemoHandler(server.Handler):
     def do_GET(self):
@@ -933,8 +975,12 @@ class ReadOnlyDemoHandler(server.Handler):
 def main():
     srv = server.ThreadingHTTPServer((server.BIND_HOST, server.PORT), ReadOnlyDemoHandler)
     print(f"agent-dashboard demo listening on http://{server.BIND_HOST}:{server.PORT}/", flush=True)
-    srv.serve_forever()
-    srv.server_close()
+    try:
+        srv.serve_forever()
+    finally:
+        srv.server_close()
+        fixture_socket.close()
+        temporary.cleanup()
 
 if __name__ == "__main__":
     main()
@@ -947,12 +993,15 @@ if __name__ == "__main__":
 
 def _server_env(root: Path, port: int, control_token: str) -> dict[str, str]:
     env = os.environ.copy()
+    for key in ('AGENTSTACK_CLIENT_CONFIG', 'AGENTSTACK_GLOBAL_SERVER_CONFIG'):
+        env.pop(key, None)
     env.update(
         {
             "HOME": str(root / "home"),
             "PATH": os.pathsep.join((str(root / "bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin")),
             "PYTHONDONTWRITEBYTECODE": "1",
             "TMUX": "",
+            "AGENTSTACK_RUNTIME_MODE": "legacy",
             "AGENTSTACK_PORT": str(port),
             "AGENTSTACK_BIND_HOST": "127.0.0.1",
             "AGENTSTACK_MAIL_DB": str(root / "mail" / "storage.sqlite3"),

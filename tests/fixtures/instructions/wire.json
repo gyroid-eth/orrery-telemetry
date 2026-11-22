@@ -1,0 +1,219 @@
+{
+  "base": "dec6761bf5179173f1af655fc1d03acce4fd079d",
+  "activation": false,
+  "mail_mode_default": "legacy",
+  "public_mail_tools_added": [],
+  "dashboard_api_changed": false,
+  "changes_from_v2_3": [
+    [
+      "枠なし P2-1",
+      "採用",
+      "flag無しfallbackは非参加ではなく同identity復旧keyへ。A08にtmux identityあり/clear後flag無しで非参加案内無しを追加。"
+    ]
+  ],
+  "state_transitions": [
+    [
+      "S0",
+      "plan",
+      "read-only計画/digest/apply_argv",
+      "別processは同argv+digest再計算。変化ならwrite0"
+    ],
+    [
+      "S1",
+      "planned",
+      "確認後receiptを保存",
+      "承認前中断は何も保存しない、planから再開"
+    ],
+    [
+      "S2",
+      "backed_up",
+      "対象ごとpath hash名でO_EXCL backup、bytes/hash照合",
+      "2件目の前後で中断しても各backupを一致時だけ再利用"
+    ],
+    [
+      "S3",
+      "writing",
+      "targetのatomic rename前にstage=writingをdurable保存",
+      "rename前後はbefore/after bytes+metadataで回復。hardlinkは計画時拒否でこの状態へ入らない"
+    ],
+    [
+      "S4",
+      "target_verified",
+      "block hash/render inputsとoutside bytes確認",
+      "targetが変わったらsource未除去のまま止める"
+    ],
+    [
+      "S5",
+      "sources_pending",
+      "known sourceをsourceごとCAS→span除去→receipt",
+      "targetを再確認してから各source。tracked/unknownはassume-yes retained。source後receipt前はafter一致で回収"
+    ],
+    [
+      "S6",
+      "complete",
+      "receipt確定、manifestは参照だけ投影",
+      "manifest前中断は参照修復のみ。session再起動案内"
+    ],
+    [
+      "SX",
+      "replan",
+      "未知bytes/home変化ならresume拒否→同oldIDの明示replan",
+      "対話で旧をhistoryへ、新currentへ。history/current途中もdigest一致で不足分確定、古いbackup保持"
+    ],
+    [
+      "SN",
+      "next generation",
+      "complete後template変更→新plan",
+      "現在blockを旧block hashで証明、outside編集を許して新世代、pendingへ暗黙移行しない"
+    ],
+    [
+      "SU",
+      "uninstall/purge",
+      "現在block hashだけ確認→marker限定除去",
+      "outside追加しても成功。編集済みは保持、purgeは未解消時write0拒否、全解消後固定ledger削除"
+    ]
+  ],
+  "acceptance": [
+    [
+      "A01",
+      "known旧2source+target、2件目backup前後中断",
+      "path別backup各元bytes一致、再開完了、outside CRLF/BOM/末尾改行保持"
+    ],
+    [
+      "A02",
+      "plan別process apply、入力不足、source/target/git/link metadata変更",
+      "同argv同digestだけ成功、他はwrite0。read-only planはfile/lock作成0"
+    ],
+    [
+      "A03",
+      "書込後outside編集でresume停止→明示replan→apply supersede、世代更新中断",
+      "人のoutside編集保持、旧backup/history保持、次template block更新/uninstall成功"
+    ],
+    [
+      "A04",
+      "symlink chain受理、target/明示path/marker有りsource nlink>1、symlink先hardlink、plan時single-link→mutation直前にhardlink追加",
+      "symlink/mode/ACL/xattr保持。hardlinkは理由付き拒否・全alias bytes不変、backup/write0。手動独立copy後再plan可。直前再照合でrename0、元file/全alias bytes不変（既に作成した退避/receiptは従来の中断契約）"
+    ],
+    [
+      "A05",
+      "既存block外へ指示追加→uninstall",
+      "block hash一致で撤去、外の指示不変。再実行no-op"
+    ],
+    [
+      "A06",
+      "custom runtime、normal uninstall、purge pending/retained/complete",
+      "ledgerはruntime外、未解消purge拒否write0、完了purgeだけfull backup除去"
+    ],
+    [
+      "A07",
+      "default/config dir/CLAUDE_HOME一致と不一致、child HOME",
+      "実読込target一致、launch env変化0、home変更resume拒否"
+    ],
+    [
+      "A08",
+      "bare sessionが他owner予約fileを編集、既定/明示block、明示warn-open、registered flagだけ残る、tmux identityあり/clear後flag無し",
+      "blockは既存guardが拒否、warn-openは既存警告/方針維持。Mail自動登録/通知だけskip。flagありはunresolvedで他identity登録0。実guardのstderrでregister_agent/ensure_project無し、unrelatedはcatalogのlauncher案内、flagありは同identity回復の別key。block/rcはmasterと同一、警告だけで許可へ変えない。identityありflag無しfallbackは復旧key、非参加/agent-start案内無し"
+    ],
+    [
+      "A09",
+      "legacy blockあり既定SessionStart、無block、disabled、context無し",
+      "件数案内だけの意図したstdout差、cleanup命令なし。登録/rcと非診断部分はmaster比較"
+    ],
+    [
+      "A10",
+      "tracked/untracked/unknown git sources×interactive/assume-yes",
+      "追跡共有の1問説明、assume-yesはtracked/unknownを保持warn、非tracked knownだけ除去"
+    ],
+    [
+      "A11",
+      "歴史的sed renderer: &,backslash,delimiter、双方BEGIN入れ子",
+      "実旧setup出力と一致proof、旧失敗はunknown、入れ子malformed"
+    ],
+    [
+      "A12",
+      "explicit project/both/global/unspecified、祖先AGENTS",
+      "明示狭scope固定拒否、新規はuser。AGENTS祖先はdetectのみ、自動移行0"
+    ],
+    [
+      "A13",
+      "全S1-S6効果直前直後で中断、target/source同実体",
+      "同receiptから復旧、同実体backup/write1回、未知bytes拒否"
+    ],
+    [
+      "A14",
+      "provider-owned configure、旧child symlink、通常launch不足/stale",
+      "user migration ledger無し、生成物のみ同render、通常launch固定拒否、元user指示不変"
+    ],
+    [
+      "A15",
+      "installer/source archive/missinghelper/partial install",
+      "payload宣言1か所・layout共通helper・sys.executable、Linux短tmp fallback"
+    ],
+    [
+      "A16",
+      "1異常source+正常source、cwd親とsibling",
+      "異常隔離、sibling open0、unknownをabsenceと呼ばない"
+    ],
+    [
+      "A17",
+      "実agent-start/picker失敗×register成功/失敗/transport outage",
+      "正常registeredまたは有効candidateのみprovider exec。両方無しは固定理由拒否、placeholder exec0/登録再試行0"
+    ],
+    [
+      "A18",
+      "実Codex/Gemini bootstrap・予約済みchild・dashboard spawn、Desktop新task/retry/degraded",
+      "開始前identityの実argv/envをfixtureで検査。既存reservedは同名、失敗でraw route5へfallback0。Desktopは正規hookがbindingを保存→既存登録、retry/degradedも同binding、no-identity案内0"
+    ],
+    [
+      "A19",
+      "optional warm claim-model出力一致でもactual child session不一致、warm/pendingのまま",
+      "handoff前拒否。正規claim actual identity一致は許可。外部warm実装が無いcontrolは既存cold fallback"
+    ],
+    [
+      "A20",
+      "cockpit shell pane/bare Claude・Ghostty attach/resume・route4/旧route5 template",
+      "shellを作るだけでは登録無し、existing resume identity保持。無identity案内はdoctorとtemplate/reminderで同一正本、raw new案内残り0"
+    ],
+    [
+      "A21",
+      "Desktop CLI/proxy/binding失敗、persistent/windows pre-registration",
+      "参加状態を既存binding/profile/specから解決。不正時bare route5へ戻らない、既存identity保持。native Windows実起動は今回未検証と表示"
+    ]
+  ],
+  "implementation_review_r1": [
+    [
+      "source hardlink",
+      "plan拒否、backup/write0。targetと同じsnapshot判定"
+    ],
+    [
+      "history retention",
+      "current/historyの全receiptのsource markerが無くなるまでpurge拒否"
+    ],
+    [
+      "explicit cleanup",
+      "指定1sourceだけ。current user target未検証ならsetupを案内してwrite0"
+    ],
+    [
+      "uninstall",
+      "非purgeは1fileの異常をwarn/保持して次へ。purgeは事前拒否"
+    ],
+    [
+      "notices/consent/env",
+      "参加admissionだけnotice。同意はdocsの1契約。明示project keyがenv.shに優先"
+    ]
+  ],
+  "implementation_review_r2": [
+    [
+      "receipt integrity",
+      "current/historyを同じschema/kind/plan hash検証つきreaderで読む。破損はINSTRUCTION_PLAN_CHANGED、削除前に拒否しledger/backup保持"
+    ],
+    [
+      "automatic unrelated hardlink",
+      "marker無し自動sourceは変更せず飛ばす。marker有りsource・明示path・targetはhardlink拒否を維持"
+    ],
+    [
+      "noninteractive notice",
+      "非対話の承認step skipはinstall成功でもskill未設定を残す。利用者へ端末を返す注意を入口にも記載"
+    ]
+  ]
+}

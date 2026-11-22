@@ -1,0 +1,12 @@
+{
+  "backends": {
+    "deepseek": {
+      "base_url": "https://api.deepseek.com/anthropic",
+      "model": "deepseek-flash",
+      "keychain": {
+        "service": "orrery-dsh-deepseek",
+        "account": "api-key"
+      }
+    }
+  }
+}

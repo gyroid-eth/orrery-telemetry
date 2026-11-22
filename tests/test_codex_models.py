@@ -19,12 +19,17 @@ NOW = 1_800_000_000.0
 @pytest.fixture(autouse=True)
 def isolated_catalog(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("AGENTSTACK_HOME", str(tmp_path / "stack"))
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
+    monkeypatch.delenv("AGENTSTACK_CODEX_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("AGENTSTACK_CODEX_DEFAULT_EFFORT", raising=False)
     monkeypatch.delenv("AGENTSTACK_RUNTIME_DIR", raising=False)
     monkeypatch.setattr(models.time, "time", lambda: NOW)
+    monkeypatch.delenv("AGENTSTACK_CODEX_BIN", raising=False)
+    monkeypatch.setattr(models, "cli_version", lambda: (0, 159, 1))
 
 
-def row(model="gpt-6-sol", efforts=("low", "medium", "high", "xhigh", "max", "ultra"), **extra):
+def row(model="gpt-6.1-sol", efforts=("low", "medium", "high", "xhigh", "max", "ultra"), **extra):
     return {"slug": model, "visibility": "list", "default_reasoning_level": efforts[0] if efforts else "none",
             "supported_reasoning_levels": [{"effort": effort, "description": "unused"} for effort in efforts], **extra}
 
@@ -45,7 +50,7 @@ def test_fresh_cache_adds_gpt6_and_unknown_future_models_without_changing_defaul
     assert "gpt-9-future.1" in catalog.models
     assert "gpt-6-sol" in catalog.models and "gpt-6-luna" in catalog.models
     provider = models.provider_catalog()
-    assert provider["default_model"] == "gpt-6-sol"
+    assert provider["default_model"] == "gpt-6.1-sol"
     assert "ultra" not in provider["model_efforts"]["gpt-6-luna"]
     assert "ultra" in provider["model_efforts"]["gpt-6-sol"]
 
@@ -111,6 +116,7 @@ def test_cache_failure_is_bundled_fallback(failure):
     result = models.resolve_catalog()
     assert result.models == models.DEFAULT_MODELS
     assert result.source == "bundled" and result.error == ""
+    assert result.default_model == models.DEFAULT_MODEL
     assert models.normalize_model("gpt-future-outside-cache") == "gpt-future-outside-cache"
 
 
@@ -332,7 +338,7 @@ def test_invalid_allowlist_is_visible_error_not_silent_fallback(monkeypatch, ove
         models.normalize_model("gpt-6-sol")
 
 
-@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6-pro", "gpt-6", "gpt-5.6", "gpt-5.6-sol", "gpt-unknown-new-generation"])
+@pytest.mark.parametrize("model", ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6-pro", "gpt-6", "gpt-5.6", "gpt-5.6-sol", "gpt-unknown-new-generation"])
 def test_formal_ids_remain_exact_even_when_cache_disappears(model):
     path = cache([row(model)])
     assert models.normalize_model(model) == model
@@ -341,8 +347,8 @@ def test_formal_ids_remain_exact_even_when_cache_disappears(model):
 
 
 def test_explicit_aliases_are_separate_from_omitted_default():
-    assert models.normalize_model() == "gpt-6-sol"
-    assert models.normalize_model("sol") == "gpt-6-sol"
+    assert models.normalize_model() == "gpt-6.1-sol"
+    assert models.normalize_model("sol") == "gpt-6.1-sol"
     assert models.normalize_model(" LUNA ") == "gpt-6-luna"
     assert models.normalize_model("astra") == "gpt-6-astra"
     assert models.normalize_model("terra") == "gpt-5.6-terra"
@@ -388,7 +394,7 @@ def test_bundled_overflow_folds_only_the_fixed_table():
     catalog = models.resolve_catalog()
     assert catalog.overflow == ("gpt-5.6-sol", "gpt-5.6-luna")
     front = [model for model in catalog.models if model not in catalog.overflow]
-    assert front == ["gpt-6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-6-luna"]
+    assert front == ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-6-luna"]
     assert models.provider_catalog()["overflow_models"] == ["gpt-5.6-sol", "gpt-5.6-luna"]
 
 
@@ -439,3 +445,282 @@ def test_explicit_allowlist_keeps_a_model_the_cache_hides(monkeypatch):
     cache([row(), row("gpt-5.6-sol", visibility="hide")])
     monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-6-sol,gpt-5.6-sol")
     assert models.resolve_catalog().models == ("gpt-6-sol", "gpt-5.6-sol")
+
+
+@pytest.mark.parametrize("version", [(0, 158, 0), (0, 159, 0), (0, 159, 1), (1, 0, 0), None])
+def test_cli_version_caps_default_and_cache_can_lower_it(monkeypatch, version):
+    monkeypatch.setattr(models, "cli_version", lambda: version)
+    for client, rows in [("0.159.1", [row()]), ("0.158.0", [row("gpt-6-sol")]),
+                         ("0.159.0", [row()]), ("0.157.0", [row("gpt-6-sol")])]:
+        cache(rows, client_version=client)
+        preferred = version >= models.CLI_MIN_VERSION if version else client.startswith("0.159")
+        expected = models.DEFAULT_MODEL if preferred and client.startswith("0.159") else models.FALLBACK_MODEL
+        catalog = models.resolve_catalog()
+        assert catalog.default_model == expected
+        assert models.normalize_model() == expected
+        if not catalog.aliases["sol"]:
+            with pytest.raises(ValueError, match="no eligible sol"):
+                models.normalize_model(" SoL ")
+        else:
+            assert models.normalize_model(" SoL ") == expected
+        assert models.provider_catalog()["default_model"] == expected
+        assert (models.DEFAULT_MODEL in catalog.models) is preferred
+        assert models.FALLBACK_MODEL in catalog.models
+        assert expected not in catalog.overflow
+        assert bool(catalog.note) is (expected != models.DEFAULT_MODEL)
+        if not preferred:
+            assert "0.159.0 or later" in catalog.note
+        # Formal IDs remain exact, including a deliberate request on an old CLI.
+        assert models.normalize_model(models.DEFAULT_MODEL) == models.DEFAULT_MODEL
+
+
+@pytest.mark.parametrize("age", [0, models.CACHE_TTL_SECONDS, models.CACHE_TTL_SECONDS + 1, 86_400])
+def test_free_account_cache_lowers_implicit_default_and_notifies(age):
+    path = cache([row("gpt-5.6-luna"), row("gpt-5.6-terra"), row("gpt-6-luna"),
+                  row("gpt-reserve"), row("gpt-5.5"), {"slug": "codex-auto-review"}],
+                 age=age, identity="opaque-free-account")
+    catalog = models.resolve_catalog()
+    assert models.normalize_model() == "gpt-6-luna"
+    if age <= models.CACHE_TTL_SECONDS:
+        with pytest.raises(ValueError, match="no eligible sol"):
+            models.normalize_model(" SoL ")
+    else:
+        assert models.normalize_model(" SoL ") == models.DEFAULT_MODEL
+    assert catalog.default_model == models.provider_catalog()["default_model"] == "gpt-6-luna"
+    assert catalog.default_model not in catalog.overflow
+    assert "from gpt-6.1-sol to gpt-6-luna" in catalog.note
+    assert "does not contain" in catalog.note
+    assert models.provider_catalog()["model_note"] == catalog.note
+    if age > models.CACHE_TTL_SECONDS:
+        assert "stale" in catalog.note
+        assert json.loads(path.read_text())["fetched_at"] in catalog.note
+        assert "Start codex once" in catalog.note
+        assert "gpt-reserve" not in catalog.models
+        assert catalog.source == "bundled"
+    else:
+        assert "fresh" in catalog.note
+        assert "gpt-reserve" in catalog.models
+
+
+@pytest.mark.parametrize("age", [0, 86_400])
+def test_paid_account_cache_keeps_preferred_default(age):
+    cache([row("gpt-6-luna"), row("gpt-6-sol"), row(), row("gpt-6-astra")],
+          age=age, identity="opaque-paid-account")
+    assert models.normalize_model() == models.normalize_model("sol") == models.DEFAULT_MODEL
+    assert models.provider_catalog()["model_note"] == ""
+
+
+@pytest.mark.parametrize("available,expected", [
+    (["gpt-6-sol", "gpt-6-luna"], "gpt-6-sol"),
+    (["gpt-5.6-luna", "gpt-5.6-terra"], "gpt-5.6-terra"),
+    (["gpt-5.6-luna"], "gpt-5.6-luna"),
+    (["gpt-reserve"], models.DEFAULT_MODEL),
+])
+def test_default_preference_uses_slug_presence_not_cache_order_or_effort_schema(available, expected):
+    cache([{"slug": model} for model in reversed(available)])
+    assert models.normalize_model() == expected
+
+
+@pytest.mark.parametrize("version", [(0, 158, 0), (0, 159, 1), None])
+@pytest.mark.parametrize("age", [0, 86_400])
+def test_free_cache_fallback_respects_cli_compatibility_ceiling(monkeypatch, version, age):
+    monkeypatch.setattr(models, "cli_version", lambda: version)
+    cache([row("gpt-6-luna"), row("gpt-5.6-terra")], age=age)
+    assert models.normalize_model() == "gpt-6-luna"
+    assert models.normalize_model("gpt-6.1-sol") == "gpt-6.1-sol"
+
+
+@pytest.mark.parametrize("requested", ["gpt-6.1-sol", "gpt-6-sol", "astra", "terra", "luna"])
+def test_free_cache_preserves_explicit_requests(requested):
+    cache([row("gpt-6-luna")])
+    if requested in ("astra", "terra"):
+        with pytest.raises(ValueError, match="no eligible"):
+            models.normalize_model(requested)
+    else:
+        assert models.normalize_model(requested) == models.ALIASES.get(requested, requested)
+
+
+def test_stale_snapshot_cannot_add_models_hide_models_or_override_efforts():
+    cache([row("gpt-6-luna", ("medium",)), row("gpt-6-sol", visibility="hide"),
+           row("gpt-new-cache-only")], age=86_400)
+    catalog = models.resolve_catalog()
+    # Presence includes hidden IDs, so the next Sol is preferred over Luna.
+    assert catalog.default_model == "gpt-6-sol"
+    assert "gpt-new-cache-only" not in catalog.models
+    assert catalog.efforts["gpt-6-luna"] == models.BUNDLED_EFFORTS["gpt-6-luna"]
+    assert models.discover_models() == {}
+
+
+def test_unreadable_cache_keeps_version_default(monkeypatch):
+    cache([row("gpt-6-luna")])
+    monkeypatch.setattr(models.os, "open", lambda *a, **kw: (_ for _ in ()).throw(PermissionError()))
+    assert models.normalize_model() == models.DEFAULT_MODEL
+
+
+def test_cache_fallback_does_not_bypass_explicit_allowlist(monkeypatch):
+    cache([row("gpt-6-luna")])
+    monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", models.DEFAULT_MODEL)
+    with pytest.raises(ValueError, match="gpt-6-luna"):
+        models.normalize_model()
+
+
+@pytest.mark.parametrize("failure", ["missing", "expired", "malformed", "hidden"])
+def test_unknown_version_and_unusable_catalog_use_legacy_default(monkeypatch, failure):
+    monkeypatch.setattr(models, "cli_version", lambda: None)
+    if failure == "expired":
+        cache(age=models.CACHE_TTL_SECONDS + 1)
+    elif failure == "malformed":
+        cache().write_text("{")
+    elif failure == "hidden":
+        cache([row(visibility="hide")])
+    catalog = models.resolve_catalog()
+    assert catalog.default_model == models.FALLBACK_MODEL
+    assert models.DEFAULT_MODEL not in catalog.models
+    if failure == "hidden":
+        with pytest.raises(ValueError, match="no eligible sol"):
+            models.normalize_model("sol")
+    else:
+        assert models.normalize_model("sol") == models.FALLBACK_MODEL
+
+
+def test_fallback_still_respects_explicit_allowlist(monkeypatch):
+    monkeypatch.setattr(models, "cli_version", lambda: (0, 158, 0))
+    monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", models.DEFAULT_MODEL)
+    cache()
+    assert models.resolve_catalog().models == (models.DEFAULT_MODEL,)
+    with pytest.raises(ValueError, match=models.FALLBACK_MODEL):
+        models.normalize_model("")
+    with pytest.raises(ValueError, match="no eligible sol"):
+        models.normalize_model("sol")
+
+
+# Preserve the real probe before the autouse fixture replaces it.
+_real_cli_version = models.cli_version
+
+
+def _version_binary(tmp_path, body):
+    binary = tmp_path / "codex-cli"
+    binary.write_text(f"#!{sys.executable}\n" + body)
+    binary.chmod(0o755)
+    return binary
+
+
+def _configure_version_binary(monkeypatch, binary):
+    monkeypatch.setenv("AGENTSTACK_CODEX_BIN", str(binary))
+    monkeypatch.setattr(models, "_probe_launcher",
+                        lambda: models.LauncherPolicy(str(binary), models._native_cli_version(str(binary))))
+    if os.name == "nt":
+        # Windows cannot execute a shebang fixture. Run it with the native
+        # Python executable while keeping the real Popen/timeout/cache behavior.
+        real_popen = models.subprocess.Popen
+        monkeypatch.setattr(models.subprocess, "Popen",
+                            lambda args, **kwargs: real_popen([sys.executable, *args], **kwargs))
+
+
+def test_version_probe_is_cached_and_invalidated_on_binary_replacement(monkeypatch, tmp_path):
+    binary = _version_binary(tmp_path, "print('codex-cli 0.159.1')\n")
+    _configure_version_binary(monkeypatch, binary)
+    models._VERSION_CACHE.clear()
+    assert _real_cli_version() == (0, 159, 1)
+    with monkeypatch.context() as m:
+        m.setattr(models.subprocess, "Popen", lambda *a, **kw: pytest.fail("cached version must not execute CLI"))
+        assert _real_cli_version() == (0, 159, 1)
+    _version_binary(tmp_path, "print('codex-cli 0.158.0')\n")
+    assert _real_cli_version() == (0, 158, 0)
+    monkeypatch.setattr(models.time, "monotonic", lambda: 1e20)
+    real_popen = models.subprocess.Popen
+    calls = []
+    def tracked_popen(*args, **kwargs):
+        calls.append(args[0])
+        return real_popen(*args, **kwargs)
+    monkeypatch.setattr(models.subprocess, "Popen", tracked_popen)
+    assert _real_cli_version() == (0, 158, 0)
+    assert calls == [[str(binary), "--version"]]  # expired memo probes again
+
+
+@pytest.mark.parametrize("body", ["print('codex-cli dev-build')", "raise SystemExit(2)",
+                                  "import time; time.sleep(30)"])
+def test_failed_version_probe_is_bounded_cached_and_uses_catalog(monkeypatch, tmp_path, body):
+    binary = _version_binary(tmp_path, body + "\n")
+    _configure_version_binary(monkeypatch, binary)
+    monkeypatch.setattr(models, "CLI_VERSION_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(models, "cli_version", _real_cli_version)
+    models._VERSION_CACHE.clear()
+    assert _real_cli_version() is None
+    with monkeypatch.context() as m:
+        m.setattr(models.subprocess, "Popen", lambda *a, **kw: pytest.fail("failed probes must be cached"))
+        cache()
+        assert models.resolve_catalog().default_model == models.DEFAULT_MODEL
+        cache([row("gpt-6-sol")])
+        assert models.resolve_catalog().default_model == models.FALLBACK_MODEL
+
+
+def test_discovery_does_not_probe_cli(monkeypatch):
+    cache()
+    monkeypatch.setattr(models.subprocess, "Popen", lambda *a, **kw: pytest.fail("catalog reading must not execute CLI"))
+    assert models.DEFAULT_MODEL in models.discover_models()
+
+
+def test_aliases_follow_fresh_catalog_numeric_versions_and_ignore_order(monkeypatch):
+    cache([row("gpt-9-sol"), row("gpt-10.1-sol"), row("gpt-10-sol"),
+           row("gpt-12-terra"), row("gpt-11-luna"), row("gpt-8-astra"),
+           row("gpt-99-sol", visibility="hide")])
+    assert models.normalize_model("sol") == "gpt-10.1-sol"
+    assert models.normalize_model("terra") == "gpt-12-terra"
+    assert models.normalize_model("luna") == "gpt-11-luna"
+    assert models.normalize_model("astra") == "gpt-8-astra"
+    assert models.normalize_model("gpt-9-sol") == "gpt-9-sol"
+    monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-9-sol,gpt-10-sol")
+    assert models.normalize_model("sol") == "gpt-10-sol"
+
+def test_configured_defaults_and_explicit_precedence(monkeypatch):
+    cache([row("gpt-10-terra")])
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_MODEL", "terra")
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_EFFORT", "high")
+    catalog = models.resolve_catalog()
+    assert catalog.default_model == models.normalize_model("", catalog=catalog) == "gpt-10-terra"
+    assert models.normalize_model("gpt-5.6-sol", catalog=catalog) == "gpt-5.6-sol"
+    assert models.resolve_effort("gpt-5.6-sol", "", catalog) == "high"
+    assert models.resolve_effort("gpt-5.6-sol", "medium", catalog) == "medium"
+    assert models.provider_catalog()["model_effort_defaults"]["gpt-10-terra"] == "high"
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_MODEL", "bad!")
+    with pytest.raises(ValueError, match="AGENTSTACK_CODEX_DEFAULT_MODEL"):
+        models.normalize_model()
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_MODEL", "gpt-9-sol")
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_EFFORT", "bad")
+    with pytest.raises(ValueError, match="reasoning effort"):
+        models.resolve_effort("gpt-9-sol")
+    assert models.resolve_effort("gpt-9-sol", "low") == "low"
+
+def test_alias_stale_invalid_and_old_cli_fallback(monkeypatch):
+    cache([row("gpt-20-sol"), row("gpt-20-terra")], age=301)
+    assert models.normalize_model("terra") == models.ALIASES["terra"]
+    cache([row("gpt-6.1-sol"), row("gpt-6-sol")])
+    monkeypatch.setattr(models, "cli_version", lambda: (0, 158, 0))
+    assert models.normalize_model("sol") == "gpt-6-sol"
+    cache().write_text("{broken")
+    assert models.normalize_model("terra") == models.ALIASES["terra"]
+
+
+def test_saved_defaults_are_literal_and_environment_wins(monkeypatch, tmp_path):
+    home = tmp_path / "stack"
+    home.mkdir()
+    (home / "env.sh").write_text("export AGENTSTACK_CODEX_DEFAULT_MODEL=terra\nexport AGENTSTACK_CODEX_DEFAULT_EFFORT=high\n")
+    assert models.normalize_model() == models.ALIASES["terra"]
+    assert models.resolve_effort("gpt-5.6-sol") == "high"
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_MODEL", "gpt-9-sol")
+    monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_EFFORT", "low")
+    assert models.normalize_model() == "gpt-9-sol"
+    assert models.resolve_effort("gpt-9-sol") == "low"
+    monkeypatch.delenv("AGENTSTACK_CODEX_DEFAULT_MODEL")
+    marker = tmp_path / "executed"
+    (home / "env.sh").write_text(f"export AGENTSTACK_CODEX_DEFAULT_MODEL=$(touch {marker})\n")
+    assert models.normalize_model() == models.DEFAULT_MODEL
+    assert not marker.exists()
+
+
+def test_fresh_catalog_missing_family_rejects_alias_but_formal_id_remains_explicit():
+    cache([row("gpt-6-luna")])
+    with pytest.raises(ValueError, match="no eligible terra"):
+        models.normalize_model("terra")
+    assert models.normalize_model("gpt-5.6-terra") == "gpt-5.6-terra"

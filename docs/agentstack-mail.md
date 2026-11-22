@@ -306,6 +306,13 @@ archive を書く tool は、返る前に SQLite を確実に更新し、audit f
 挙動に戻せます。この kill switch は、deployment で queue や commit の
 失敗が観測された場合に備えて残してあります。
 
+macOS では archive の stage と commit に native Git を使い、大きな index を
+Python で読み書きする CPU 負荷を減らします。author・committer・message・
+Agent trailer と commit の順序、既存の commit hook の呼び出しと失敗の扱いは
+維持します。非同期 queue・batch のまとめ方・lock・retry と、macOS 以外の
+分岐は変更しません。index の形式や Git の利用者設定も変更しません。
+監査fileはignoreやtext/clean filterを通さず、生bytesとfile modeをindexへ登録します。
+
 trade-off は Git の projection に限られます。process や machine の
 hard shutdown は、tool が返った後で commit を取り消してしまうことが
 あります。database は commit されたままで、audit file は archive の
@@ -415,3 +422,128 @@ selection は allowance ではなく、選択された挙動を必ず assert し
   timing-normalization の blind spot を埋めるために必要な、独立した
   measurement boundary を規定します。これは design であって、実装済みの
   budget や release gate ではありません。
+
+## 通知端末までの遅延を採取する
+
+`scripts/measure_mail_notice.py` は手動の計測器です。watcherの配送・timer・
+state schemaや製品の既定は変更しません。モデルやproviderを使わず、通知が
+測定用端末の入力へsubmitされた時刻を記録します。実CLIのターン開始や応答の
+速さの保証ではありません。実サービス・identityの準備と採取はoperatorが行います。
+
+### 準備と観測点
+
+正規の登録手順で使い捨ての送信者・受信者を1体ずつ用意し、programを両方とも
+`mail-notice-measure` にします。Claude/Codexとして偽装登録しません。送信者の
+既存bound proxyへ接続する環境を正規のlauncherと同じ方法で準備してください。
+計測器は製品の `integrations/codex_app/plugin/scripts/run-mcp.sh` を使い、
+`runtime_status`・`whois`でprogramと宛先を照合してから `send_message` を呼びます。
+登録・fetch・token file読取・独自のMail HTTP transportは実装していません。
+必要なbindingが用意できない場合は固定reasonと非0で止まり、別経路へ切り替えません。
+既存direct proxyのhandoffは `AGENTSTACK_PROXY_AGENT_NAME`、
+`AGENTSTACK_PROXY_TOKEN_FILE`、`AGENTSTACK_PROXY_PROGRAM=mail-notice-measure`、
+`AGENTSTACK_PROJECT_KEY` と、正規の接続先 `AGENTSTACK_MCP_URL` です。
+token fileは正規登録が保存した送信者本人のものをproxyだけが読みます。計測器へは
+fileのpathを環境で引き継ぎ、tokenの値を読んだり引数へ写したりしません。
+programも正規登録時に一致させます。通常のClaude/Codexの名前・資格を流用しないでください。
+この準備の実運用での確認とcleanupはoperatorが担当し、合成proxy試験の成功では代替しません。
+
+同じhost・bootで作成したrun UUIDとclock-domain UUIDを両側へ渡します。
+`MEASURE_SENDER` / `MEASURE_RECIPIENT` は正規登録が返した名前、`MEASURE_DIR` は
+自分の新しい測定用directoryです。資格情報の値を引数へ渡さないでください。
+
+まずcollectorを起動します（下の390秒は100通の採取例であり、製品の寿命ではありません）。
+
+```sh
+python3 scripts/measure_mail_notice.py collect \
+  --run-id "$MEASURE_RUN" --clock-id "$MEASURE_CLOCK" \
+  --sender "$MEASURE_SENDER" --recipient "$MEASURE_RECIPIENT" \
+  --fifo "$MEASURE_DIR/notice.fifo" --out "$MEASURE_DIR/receiver.jsonl" --seconds 390
+```
+
+collectorがfile/FIFOを作った後、正しい受信者名の測定用tmux session内でsinkを起動します。
+sessionとconsumerの設定は正規の配送先に合わせます。新しいwatcherを起動する手順ではありません。
+
+```sh
+python3 scripts/measure_mail_notice.py sink \
+  --run-id "$MEASURE_RUN" --clock-id "$MEASURE_CLOCK" \
+  --sender "$MEASURE_SENDER" --recipient "$MEASURE_RECIPIENT" \
+  --event-fifo "$MEASURE_DIR/notice.fifo"
+```
+
+画面は `measurement-ready` の固定表示です。raw/no-echoとbracketed pasteを有効にし、
+閉じたpaste frameの後のCRだけで到達を記録します。通知を画面へechoしないため、
+watcherの入力残留検査を自分で誘発しません。画面stdoutとevent FDを分離しています。
+`--event-fd` は既に継承できている専用pipe用です。tmux clientのFDがpaneへ自動継承されるとは
+仮定しないでください。collectorのready eventを確認してから送信します。
+
+```sh
+python3 scripts/measure_mail_notice.py send \
+  --run-id "$MEASURE_RUN" --clock-id "$MEASURE_CLOCK" \
+  --sender "$MEASURE_SENDER" --recipient "$MEASURE_RECIPIENT" \
+  --receiver-events "$MEASURE_DIR/receiver.jsonl" --out "$MEASURE_DIR/sender.jsonl" \
+  --phase normal --count 100 --interval 3 --jitter 0.5 --seed 0
+```
+
+sendは対応するsink_readyを要求します。送信が未確認なら自動再送せず停止します。
+warmupは別の出力fileで `--phase warmup --count 5`、burstは `--phase burst --count 30
+--interval 0.25 --jitter 0` として通常分布から分離します。phaseを変えても登録をやり直しません。
+receiverは通知前にfetchせず、`agentstack-await-reply`も到達の観測には使いません。
+
+collector終了後に集計します。全て新しいfileへ書き、既存のfileは上書きしません。
+
+```sh
+python3 scripts/measure_mail_notice.py analyze \
+  "$MEASURE_DIR/sender.jsonl" "$MEASURE_DIR/receiver.jsonl"
+```
+
+同hostの単調時計によるcall→通知と、成功応答→通知のp50/p95/maxを別々に出します。
+通知が応答より先ならack差は負値のまま残します。成功応答時刻はDB commit時刻ではありません。
+attempted/accepted/not_attempted/unconfirmed、missing-at-deadline、late、duplicateも残します。
+unconfirmedは明示の未確認markerに加え、callだけが残り成功応答の無い送信も1件として数えます。
+送信途中の中断とmarkerの両方があっても重複して数えず、再送はしません。
+collectorの終了証拠がなければ観測未完了で、到達なしを0秒にしません。非0は遅延の退行だけでなく
+証拠不足も表すため、内訳を読んでください。raw MCP応答・本文・token・pane全文は保存しません。
+
+### 合成seedとJSON処理量
+
+`seed --root NEW_ROOT --epoch T` は新規directoryだけに、4宛先61signalと状態を生成します。
+retry期限後のsession_not_found 20件、cooldown内15件、success15件、未判定11件です。
+追加の合成success履歴で状態を4,900,000 UTF-8 byte以上にし、正確な件数・byte数と正規化digestを
+seed.jsonへ記録します。`--empty` は空の対照、`verify-seed --root ROOT` は開始状態の照合です。
+内容に加えて開始時の保存byteも照合するため、片側だけJSONをcompact化したseedは拒否します。
+旧観測を模すfixtureであり、現在のliveの件数ではありません。実runtimeをコピーしません。
+
+対になる前後armは別の新規rootから作り、epochを相対ageへ正規化したdigestを揃えます。
+warmupは別の空rootで行い、初回scanと次scanを別phaseにします。cooldownの境界を跨いだrunは
+同条件と呼びません。連続する2identityの運用採取とseed復元する隔離比較は別runです。
+
+`io-wrappers --root ROOT --phase first --python PYTHON` は隔離fixture用のPython wrapperを作ります。
+指定rootのinline state helperだけを観測し、他のPython呼出しは同じinterpreterへexecします。
+返却したpath_prefixをfixtureのPATH先頭へ、persistent_deliverをfixtureの
+AGENTSTACK_PERSISTENT_DELIVERへ設定します。wrapperは既存の製品helperを実行し、配送を代替しません。
+`io-mark --root ROOT --phase first --edge begin/end` で、全workerの完了を挟んでphaseを区切り、
+`io-summary --root ROOT --phase first` で候補・除外・worker・JSON read/write回数と論理byteを集計します。
+begin/endが揃わない場合や、記録済みhelperの終了がendを超える場合はcompleteになりません。
+inline観測は開始を実行前に残し、終了と同じIDで対応付けます。開始後の中断や終了の未記録は
+`observations_unfinished`、不整合な対応は `observation_pair_invalid` に残してincompleteとします。
+初回はseedの候補件数を観測したことも要求し、wrapperの設定漏れによる0件を完了としません。
+次scanは同じrootでphaseをnextにして作成・記録し、初回の結果と分離します。
+
+`io-worker` の口で分かるのはpersistent helperへ移る前の開始だけです。そのhelperの終了や
+後続のstate書込は、lease解放等を含む配送worker全体の終了証拠には読み替えません。
+現在はworker開始を観測したrunを `worker_unconfirmed` に数えてincompleteのまま残します。
+eligible判定後でworkerの入口をまだ観測していない場合も、
+`worker_dispatch_unconfirmed` に宛先/messageの組数を残してincompleteとします。
+operatorがendを記録しても解除されず、このrunのI/Oを完全な前後比較や削減の証拠に使えません。
+全inline観測が終了しworkerの未確認が無いrunだけがcompleteの候補です。
+latencyの採取・集計は別の観測なので、この制約から成功や失敗を推測しないでください。
+
+このI/O probeは固定baselineのinline helper用です。watcherのsource hashが変わった場合は
+`io_coverage_requires_new_helper_probe` で止め、新しい候補helperの観測範囲を整えてから比較します。
+ゼロ件の未観測を削減と報告しません。対象stateの反復readとatomic保存前のtemp writeを数え、
+rename・lock・signal/log/sourceのbyteは混ぜません。これは物理ディスクI/Oではありません。
+latencyしか採れなかったrunでJSON処理量の削減や支配要因を確定しないでください。
+
+前後はmode、source、Python/OS、fswatch、consumer、端末、通知設定、本文長、seedを固定し、
+同時にtimerやlog/state/guardのcleanupを変えません。最後にoperatorが正規のcleanup/retireを確認します。
+この計測器自身は実identityや実サービスを作成・撤去しません。

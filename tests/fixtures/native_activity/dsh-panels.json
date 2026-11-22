@@ -1,0 +1,65 @@
+{
+  "source": "dsh-tui 0.16.1: native Divider and source-extracted title/hint expressions; 200 columns, no TUI imported",
+  "cases": [
+    {
+      "id": "en-expanded-options",
+      "state": "question",
+      "text": "─────────────────────────────────────────────────────────────────────────────────────▾  📋 Question 1/2  · 2 left  ─────────────────────────────────────────────────────────────────────────────────────\nFixture question\n↑/↓ select · Ctrl+V paste · Type text to attach an answer · Enter submit · Esc cancel · Ctrl+Q to fold / click the header\nesc to interrupt\n"
+    },
+    {
+      "id": "en-expanded-input",
+      "state": "question",
+      "text": "─────────────────────────────────────────────────────────────────────────────────────▾  📋 Question 1/2  · 2 left  ─────────────────────────────────────────────────────────────────────────────────────\nFixture question\nType answer · Ctrl+V paste · Enter submit · ↑ back to options · Esc cancel · Ctrl+Q to fold / click the header\nesc to interrupt\n"
+    },
+    {
+      "id": "en-folded-false",
+      "state": "question",
+      "text": "▸   📋 Question 1/2  · 2 left   Fixture question\n  Waiting for your answer — Ctrl+Q to expand\nesc to interrupt\n"
+    },
+    {
+      "id": "en-folded-true",
+      "state": "question",
+      "text": "▸   📋 Question 1/2  · 2 left   Fixture question\n⏸ Waiting for your answer — Ctrl+Q to expand\nesc to interrupt\n"
+    },
+    {
+      "id": "en-approval-false",
+      "state": "ask",
+      "text": "─────────────────────────────────────────────────────────────────────────────────── Awaiting approval · fixture-tool ───────────────────────────────────────────────────────────────────────────────────\nFixture operation\n↑/↓ select · Enter confirm · Esc reject\nesc to interrupt\n"
+    },
+    {
+      "id": "en-approval-true",
+      "state": "ask",
+      "text": "─────────────────────────────────────────────────────────────────────────────────── Awaiting approval · fixture-tool ───────────────────────────────────────────────────────────────────────────────────\nFixture operation\n↑/↓/Tab select · Enter confirm · on No, type a reason · Esc reject\nesc to interrupt\n"
+    },
+    {
+      "id": "zh-expanded-options",
+      "state": "question",
+      "text": "──────────────────────────────────────────────────────────────────────────────────▾  📋 提问 · 第 1/2 题 · 还剩 2 题  ──────────────────────────────────────────────────────────────────────────────────\nFixture question\n↑/↓ 选择 · Ctrl+V 粘贴 · 输入文字附带回答 · Enter 提交 · Esc 中断 · Ctrl+Q 折叠 / 点标题行收起\nesc to interrupt\n"
+    },
+    {
+      "id": "zh-expanded-input",
+      "state": "question",
+      "text": "──────────────────────────────────────────────────────────────────────────────────▾  📋 提问 · 第 1/2 题 · 还剩 2 题  ──────────────────────────────────────────────────────────────────────────────────\nFixture question\n输入回答 · Ctrl+V 粘贴 · Enter 提交 · ↑ 返回选项 · Esc 中断 · Ctrl+Q 折叠 / 点标题行收起\nesc to interrupt\n"
+    },
+    {
+      "id": "zh-folded-false",
+      "state": "question",
+      "text": "▸   📋 提问 · 第 1/2 题 · 还剩 2 题   Fixture question\n  正在等你回答 — Ctrl+Q 展开\nesc to interrupt\n"
+    },
+    {
+      "id": "zh-folded-true",
+      "state": "question",
+      "text": "▸   📋 提问 · 第 1/2 题 · 还剩 2 题   Fixture question\n⏸ 正在等你回答 — Ctrl+Q 展开\nesc to interrupt\n"
+    },
+    {
+      "id": "zh-approval-false",
+      "state": "ask",
+      "text": "────────────────────────────────────────────────────────────────────────────────────── ⏳ 等待审批 · fixture-tool ──────────────────────────────────────────────────────────────────────────────────────\nFixture operation\n↑/↓ 选择 · Enter 确认 · Esc 拒绝\nesc to interrupt\n"
+    },
+    {
+      "id": "zh-approval-true",
+      "state": "ask",
+      "text": "────────────────────────────────────────────────────────────────────────────────────── ⏳ 等待审批 · fixture-tool ──────────────────────────────────────────────────────────────────────────────────────\nFixture operation\n↑/↓/Tab 选择 · Enter 确认 · 选中拒绝后可输入理由 · Esc 拒绝\nesc to interrupt\n"
+    }
+  ]
+}

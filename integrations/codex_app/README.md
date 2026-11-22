@@ -4,7 +4,9 @@ This directory is the source of truth for the optional Codex App bridge. It
 keeps experimental app-server control isolated from ORRERY Mail identities and
 from the dashboard's tmux runtime path.
 
-The current P3 implementation provides:
+With an explicit global client context, the bridge uses the common client's fixed layout, stable agent IDs, shared proxy, and S2b notification facts. It opens no legacy identity or delivery database. See [global delivery client](../../docs/global-delivery-client.en.md) ([日本語](../../docs/global-delivery-client.md)) for configuration, unknown outcomes, operator recovery and fixture-only App cold-wake verification. The existing default remains legacy mode; activation is false.
+
+The legacy implementation provides:
 
 - a synchronous JSON-RPC client for `codex app-server` over stdio;
 - versioned runtime-event and binding schemas plus delivery-state migration;

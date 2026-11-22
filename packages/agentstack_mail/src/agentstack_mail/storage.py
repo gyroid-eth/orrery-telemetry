@@ -27,6 +27,8 @@ import os
 import random
 import re
 import sys
+import stat
+import tempfile
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -37,6 +39,8 @@ from typing import Any, AsyncIterator, Iterable, Sequence, TypeVar, cast
 
 from filelock import SoftFileLock, Timeout
 from git import Actor, Repo
+from git.index.fun import run_commit_hook
+from git.exc import GitCommandError
 from git.objects.tree import Tree
 from PIL import Image
 
@@ -1899,6 +1903,72 @@ class GitIndexLockError(Exception):
         self.attempts = attempts
 
 
+def _native_archive_git(repo: Repo, command: str, *args: str, **kwargs: Any) -> Any:
+    """Use the selected Git binary, preserving the existing index-lock retry."""
+    try:
+        return getattr(repo.git, command)(*args, **kwargs)
+    except GitCommandError as exc:
+        if "index.lock" in (exc.stderr or "").lower():
+            # Native Git reports lock contention through stderr rather than
+            # GitPython's OSError. Feed only that case into the same retry loop.
+            import errno
+
+            raise FileExistsError(errno.EEXIST, "Git index.lock contention") from exc
+        raise
+
+
+def _stage_archive_bytes(repo: Repo, rel_paths: Sequence[str]) -> None:
+    """Stage raw audit bytes without ignore, clean, or newline conversion."""
+    root = Path(repo.working_tree_dir)
+    files: list[tuple[str, int]] = []
+
+    def add_file(path: Path) -> None:
+        mode = path.lstat().st_mode
+        index_mode = 0o120000 if stat.S_ISLNK(mode) else (0o100755 if mode & stat.S_IXUSR else 0o100644)
+        files.append((os.path.relpath(path, root), index_mode))
+
+    def walk_error(error: OSError) -> None:
+        raise error
+
+    for relative in rel_paths:
+        path = root / relative
+        mode = path.lstat().st_mode  # Explicit missing paths must fail.
+        if stat.S_ISDIR(mode):
+            for directory, dirs, names in os.walk(path, onerror=walk_error):
+                # The archive's Git administration is not audit content.
+                dirs[:] = [name for name in dirs if name != ".git"]
+                for name in names:
+                    add_file(Path(directory) / name)
+        else:
+            add_file(path)
+
+    if not files:
+        return
+    with tempfile.TemporaryFile() as index_info:
+        regular = [(path, mode) for path, mode in files if mode != 0o120000]
+        # Bound argv size for heal batches; no index entries are loaded in Python.
+        for start in range(0, len(regular), 64):
+            batch = regular[start:start + 64]
+            hashes = _native_archive_git(repo, "hash_object", "-w", "--no-filters", "--",
+                                         *(path for path, _ in batch)).splitlines()
+            for (path, mode), sha in zip(batch, hashes, strict=True):
+                index_info.write(f"{mode:o} {sha}\t".encode("ascii") + os.fsencode(path) + b"\0")
+        for path, mode in files:
+            if mode != 0o120000:
+                continue
+            # hash-object on a path follows a symlink; its blob must instead
+            # contain the link text, just like IndexFile._store_path.
+            with tempfile.TemporaryFile() as link_text:
+                link_text.write(os.fsencode(os.readlink(root / path)))
+                link_text.seek(0)
+                sha = _native_archive_git(repo, "hash_object", "-w", "--no-filters", "--stdin",
+                                           istream=link_text).strip()
+            index_info.write(f"{mode:o} {sha}\t".encode("ascii") + os.fsencode(path) + b"\0")
+        index_info.seek(0)
+        _native_archive_git(repo, "update_index", "--add", "--replace", "-z", "--index-info",
+                            istream=index_info)
+
+
 async def _commit_direct(
     repo_root: Path,
     settings: Settings,
@@ -1939,7 +2009,9 @@ async def _commit_direct(
         # Async commits can otherwise overlap across worker threads and restore
         # the wrong cwd even when they target different repositories.
         with _GITPYTHON_INDEX_OPERATION_LOCK:
-            if sys.platform == "win32":
+            if sys.platform == "darwin":
+                _stage_archive_bytes(target_repo, rel_paths)
+            elif sys.platform == "win32":
                 # GitPython's IndexFile.add() calls os.lstat() on each relative
                 # path before invoking Git. That call still hits MAX_PATH on
                 # native Windows. Git itself supports these paths once the
@@ -1973,7 +2045,36 @@ async def _commit_direct(
                 final_message = message
                 if trailers:
                     final_message = message + "\n\n" + "\n".join(trailers) + "\n"
-                target_repo.index.commit(final_message, author=actor, committer=actor)
+                if sys.platform == "darwin":
+                    # Match IndexFile.commit's three hooks and failure semantics:
+                    # native Git otherwise adds prepare-commit-msg and ignores
+                    # a failed post-commit. These helpers never read index entries.
+                    index = target_repo.index
+                    run_commit_hook("pre-commit", index)
+                    index._write_commit_editmsg(final_message)
+                    run_commit_hook("commit-msg", index, index._commit_editmsg_filepath())
+                    final_message = index._read_commit_editmsg()
+                    index._remove_commit_editmsg()
+                    # Pass message bytes through stdin, never argv. Verbatim
+                    # cleanup retains whitespace and existing trailer bytes.
+                    with tempfile.TemporaryFile() as message_file:
+                        message_file.write(final_message.encode("utf-8"))
+                        message_file.seek(0)
+                        with target_repo.git.custom_environment(
+                            GIT_AUTHOR_NAME=actor.name, GIT_AUTHOR_EMAIL=actor.email,
+                            GIT_COMMITTER_NAME=actor.name, GIT_COMMITTER_EMAIL=actor.email,
+                        ):
+                            # One-command override; do not change repo/user config
+                            # or run the hooks above a second time.
+                            target_repo.git(c="core.hooksPath=/dev/null")
+                            _native_archive_git(
+                                target_repo, "commit", "--quiet", "--allow-empty",
+                                "--allow-empty-message", "--cleanup=verbatim",
+                                "--no-gpg-sign", "--file=-", istream=message_file,
+                            )
+                    run_commit_hook("post-commit", index)
+                else:
+                    target_repo.index.commit(final_message, author=actor, committer=actor)
 
     commit_lock_path = _commit_lock_path(repo_root, rel_paths)
     await _to_thread(commit_lock_path.parent.mkdir, parents=True, exist_ok=True)
@@ -3081,305 +3182,6 @@ async def get_historical_inbox_snapshot(
 
     result: dict[str, Any] = await _to_thread(_get_snapshot)
     return result
-
-
-# =============================================================================
-# Doctor Backup Infrastructure
-# =============================================================================
-
-
-@dataclass(slots=True)
-class BackupManifest:
-    """Manifest describing a diagnostic backup."""
-
-    version: int
-    created_at: str
-    reason: str
-    database_path: str | None
-    project_bundles: list[str]
-    storage_root: str
-    restore_instructions: str
-
-
-async def create_diagnostic_backup(
-    settings: Settings,
-    project_slug: str | None = None,
-    backup_dir: Path | None = None,
-    reason: str = "doctor-repair",
-) -> Path:
-    """Create a timestamped backup before repair operations.
-
-    Format: Git bundle + SQLite copy (fast, complete, restorable)
-
-    Args:
-        settings: Application settings
-        project_slug: Specific project to backup, or None for all projects
-        backup_dir: Directory to store backup, or None for default
-        reason: Reason for backup (included in manifest)
-
-    Returns:
-        Path to backup directory containing:
-        - {project_slug}.bundle (git bundle of project archive)
-        - database.sqlite3 (copy of full database)
-        - manifest.json (what was backed up, when, why, restore instructions)
-    """
-    import shutil
-
-    from .db import get_database_path
-
-    # Create backup directory
-    if backup_dir is None:
-        backup_dir = Path(settings.storage.root) / "backups"
-    backup_dir = backup_dir.expanduser().resolve()
-
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-    backup_path = backup_dir / f"{timestamp}_{reason}"
-    backup_path.mkdir(parents=True, exist_ok=True)
-
-    project_bundles: list[str] = []
-    database_copied: str | None = None
-
-    # Get the archive repo
-    archive_root = Path(settings.storage.root).expanduser().resolve()
-    if not archive_root.exists():
-        raise ValueError(f"Storage root does not exist: {archive_root}")
-
-    # Copy database
-    db_path = get_database_path(settings)
-    if db_path and db_path.exists():
-        db_backup = backup_path / "database.sqlite3"
-
-        def _copy_db() -> None:
-            # Use shutil.copy2 to preserve metadata
-            shutil.copy2(db_path, db_backup)
-            # Also copy WAL and SHM files if they exist
-            wal_path = db_path.with_suffix(".sqlite3-wal")
-            shm_path = db_path.with_suffix(".sqlite3-shm")
-            if wal_path.exists():
-                shutil.copy2(wal_path, backup_path / wal_path.name)
-            if shm_path.exists():
-                shutil.copy2(shm_path, backup_path / shm_path.name)
-
-        await _to_thread(_copy_db)
-        database_copied = str(db_backup)
-
-    # Create git bundles for projects
-    repo_path = archive_root
-    if repo_path.exists() and (repo_path / ".git").exists():
-
-        def _create_bundles() -> list[str]:
-            bundles: list[str] = []
-            repo = Repo(repo_path)
-            try:
-                if project_slug:
-                    # Single project bundle
-                    bundle_path = backup_path / f"{project_slug}.bundle"
-                    try:
-                        # Create bundle of the entire repo (includes all history)
-                        repo.git.bundle("create", str(bundle_path), "--all")
-                        bundles.append(str(bundle_path))
-                    except Exception:
-                        pass  # Skip if bundle creation fails
-                else:
-                    # Bundle entire archive
-                    bundle_path = backup_path / "archive.bundle"
-                    try:
-                        repo.git.bundle("create", str(bundle_path), "--all")
-                        bundles.append(str(bundle_path))
-                    except Exception:
-                        pass
-            finally:
-                repo.close()
-
-            return bundles
-
-        project_bundles = await _to_thread(_create_bundles)
-
-    # Write manifest
-    manifest = BackupManifest(
-        version=1,
-        created_at=datetime.now(timezone.utc).isoformat(),
-        reason=reason,
-        database_path=database_copied,
-        project_bundles=project_bundles,
-        storage_root=str(archive_root),
-        restore_instructions=(
-            "To restore:\n"
-            "1. Stop any running MCP Agent Mail processes\n"
-            "2. Copy database.sqlite3 back to original location\n"
-            "3. Use 'git clone --bare <bundle> <target>' to restore archive\n"
-            "4. Restart MCP Agent Mail"
-        ),
-    )
-
-    manifest_path = backup_path / "manifest.json"
-
-    def _write_manifest() -> None:
-        with manifest_path.open("w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "version": manifest.version,
-                    "created_at": manifest.created_at,
-                    "reason": manifest.reason,
-                    "database_path": manifest.database_path,
-                    "project_bundles": manifest.project_bundles,
-                    "storage_root": manifest.storage_root,
-                    "restore_instructions": manifest.restore_instructions,
-                },
-                f,
-                indent=2,
-            )
-
-    await _to_thread(_write_manifest)
-
-    return backup_path
-
-
-async def list_backups(settings: Settings) -> list[dict[str, Any]]:
-    """List all available diagnostic backups.
-
-    Returns:
-        List of backup info dicts with path, created_at, reason, size
-    """
-    backup_dir = Path(settings.storage.root).expanduser().resolve() / "backups"
-    if not backup_dir.exists():
-        return []
-
-    backups: list[dict[str, Any]] = []
-
-    def _scan_backups() -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        for entry in sorted(backup_dir.iterdir(), reverse=True):
-            if entry.is_dir():
-                manifest_path = entry / "manifest.json"
-                if manifest_path.exists():
-                    try:
-                        with manifest_path.open(encoding="utf-8") as f:
-                            manifest_data = json.load(f)
-                        # Calculate total size
-                        total_size = sum(
-                            p.stat().st_size for p in entry.rglob("*") if p.is_file()
-                        )
-                        results.append({
-                            "path": str(entry),
-                            "created_at": manifest_data.get("created_at"),
-                            "reason": manifest_data.get("reason"),
-                            "size_bytes": total_size,
-                            "has_database": manifest_data.get("database_path") is not None,
-                            "bundle_count": len(manifest_data.get("project_bundles", [])),
-                        })
-                    except (json.JSONDecodeError, OSError):
-                        pass
-        return results
-
-    backups = await _to_thread(_scan_backups)
-    return backups
-
-
-async def restore_from_backup(
-    settings: Settings,
-    backup_path: Path,
-    target_project: str | None = None,
-    *,
-    dry_run: bool = False,
-) -> dict[str, Any]:
-    """Restore from a diagnostic backup.
-
-    Args:
-        settings: Application settings
-        backup_path: Path to backup directory
-        target_project: Specific project to restore, or None for all
-        dry_run: If True, only report what would be restored
-
-    Returns:
-        Dict with restoration results
-    """
-    import shutil
-
-    from .db import get_database_path
-
-    manifest_path = backup_path / "manifest.json"
-    if not manifest_path.exists():
-        raise ValueError(f"No manifest.json found in {backup_path}")
-
-    def _read_manifest() -> dict[str, Any]:
-        with manifest_path.open(encoding="utf-8") as f:
-            return json.load(f)
-
-    manifest_data = await _to_thread(_read_manifest)
-
-    results: dict[str, Any] = {
-        "backup_path": str(backup_path),
-        "created_at": manifest_data.get("created_at"),
-        "reason": manifest_data.get("reason"),
-        "dry_run": dry_run,
-        "database_restored": False,
-        "bundles_restored": [],
-        "errors": [],
-    }
-
-    if dry_run:
-        results["would_restore_database"] = manifest_data.get("database_path") is not None
-        results["would_restore_bundles"] = manifest_data.get("project_bundles", [])
-        return results
-
-    # Restore database
-    db_backup = backup_path / "database.sqlite3"
-    if db_backup.exists():
-        db_path = get_database_path(settings)
-        if db_path:
-            try:
-
-                def _restore_db() -> None:
-                    # Backup current DB first (safety)
-                    if db_path.exists():
-                        shutil.copy2(db_path, db_path.with_suffix(".sqlite3.pre-restore"))
-                    shutil.copy2(db_backup, db_path)
-                    # Also restore WAL and SHM if present in backup
-                    for suffix in ["-wal", "-shm"]:
-                        backup_file = backup_path / f"database.sqlite3{suffix}"
-                        target_file = db_path.with_suffix(f".sqlite3{suffix}")
-                        if backup_file.exists():
-                            shutil.copy2(backup_file, target_file)
-
-                await _to_thread(_restore_db)
-                results["database_restored"] = True
-            except Exception as e:
-                results["errors"].append(f"Database restore failed: {e}")
-
-    # Restore git bundles
-    bundles = manifest_data.get("project_bundles", [])
-    archive_root = Path(settings.storage.root).expanduser().resolve()
-
-    def _restore_bundle(bundle_to_restore: Path, target_root: Path) -> None:
-        """Restore a git bundle to target directory."""
-        # Backup current archive
-        if target_root.exists():
-            backup_archive = target_root.with_suffix(".pre-restore")
-            if backup_archive.exists():
-                shutil.rmtree(backup_archive)
-            shutil.copytree(target_root, backup_archive)
-            shutil.rmtree(target_root)
-
-        # Clone from bundle
-        Repo.clone_from(str(bundle_to_restore), str(target_root))
-
-    for bundle_path_str in bundles:
-        bundle_path = Path(bundle_path_str)
-        if not bundle_path.exists():
-            # Try relative to backup_path
-            bundle_path = backup_path / bundle_path.name
-        if not bundle_path.exists():
-            results["errors"].append(f"Bundle not found: {bundle_path_str}")
-            continue
-
-        try:
-            await _to_thread(_restore_bundle, bundle_path, archive_root)
-            results["bundles_restored"].append(str(bundle_path))
-        except Exception as e:
-            results["errors"].append(f"Bundle restore failed for {bundle_path}: {e}")
-
-    return results
 
 
 # -------------------------------------------------------------------------------------------------

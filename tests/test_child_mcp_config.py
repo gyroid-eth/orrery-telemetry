@@ -13,6 +13,8 @@ Runnable two ways (no third-party dependency required):
 """
 from __future__ import annotations
 
+from _cleanup_mail import cleanup_mail_server
+
 import json
 import os
 import pathlib
@@ -21,6 +23,8 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+
+from _installed_client_payload import copy_client_library
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SPAWN = _ROOT / "hooks" / "spawn_child.sh"
@@ -33,6 +37,7 @@ _CODEX_PROXY_TOOLS = (
     "renew_reservations",
     "release_reservations",
     "runtime_status",
+    "show_files",
     "whois",
 )
 
@@ -98,7 +103,7 @@ def _run_helper(tmpdir: pathlib.Path, *, runner_executable: bool = True,
 
     script = (
         'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
-        + _extract("write_child_mcp_config")
+        + f'HOOKS_DIR="{_ROOT / "hooks"}"\n' + _extract("write_child_mcp_config")
         + '\nwrite_child_mcp_config "Red-Euler" "$1"\n'
     )
     env = os.environ.copy()
@@ -158,6 +163,9 @@ def _run_codex_home_process(
     overlay_path: pathlib.Path | None = None,
     corrupt_emitted_candidate: bool = False,
     mcp_profile: str = "inherit",
+    with_sessions: bool = True,
+    shared_records: dict[str, str] | None = None,
+    shared_record_mode: int = 0o640,
 ) -> subprocess.CompletedProcess[str]:
     runner = tmpdir / "run-mcp.sh"
     runner.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
@@ -172,7 +180,14 @@ def _run_codex_home_process(
     source_home = tmpdir / "codex-home"
     source_home.mkdir()
     (source_home / "auth.json").write_text('{"token": "secret"}', encoding="utf-8")
-    (source_home / "sessions").mkdir()
+    if with_sessions:
+        (source_home / "sessions").mkdir()
+    for name, records in (shared_records or {}).items():
+        path = source_home / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(records, encoding="utf-8")
+        path.chmod(shared_record_mode)
+        os.utime(path, ns=(1_000_000_000, 1_000_000_000))
     if with_sandbox_metadata:
         for name in (".git", ".agents", ".codex"):
             (source_home / name).mkdir()
@@ -196,7 +211,15 @@ def _run_codex_home_process(
     env["HOOKS_DIR"] = str(_ROOT / "hooks")
     env["CODEX_HOME"] = str(source_home)
     if corrupt_emitted_candidate:
-        altered = tmpdir / "child_resume_corrupt.py"
+        altered_root = tmpdir / "altered-payload"
+        (altered_root / "hooks").mkdir(parents=True)
+        (altered_root / "hooks" / "child_tools.py").write_bytes(
+            (_ROOT / "hooks" / "child_tools.py").read_bytes()
+        )
+        library = altered_root / "bin" / "lib"
+        library.mkdir(parents=True)
+        copy_client_library(altered_root)
+        altered = altered_root / "hooks" / "child_resume.py"
         source = (_ROOT / "hooks" / "child_resume.py").read_text(encoding="utf-8")
         altered.write_text(
             source.replace(
@@ -609,6 +632,84 @@ def test_codex_child_home_works_when_the_user_has_no_config():
         _assert_proxy_tool_approvals(config, ("orrery-mail", "agentstack"))
 
 
+def test_fresh_codex_child_shares_records_that_survive_cleanup():
+    """A child-only install has no shared history until the home is built."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        result = _run_codex_home_process(tmpdir, with_sessions=False)
+        assert result.returncode == 0 and result.stdout.strip(), result.stderr
+        home = pathlib.Path(result.stdout.strip())
+        source = tmpdir / "codex-home"
+        for name in ("sessions", "history.jsonl", "session_index.jsonl"):
+            assert (home / name).is_symlink()
+            assert (home / name).resolve() == (source / name).resolve()
+            assert (source / name).exists()
+            assert stat.S_IMODE((source / name).stat().st_mode) == (
+                0o700 if name == "sessions" else 0o600)
+        (home / "sessions" / "rollout.jsonl").write_text("transcript\n", encoding="utf-8")
+        (home / "history.jsonl").write_text("history\n", encoding="utf-8")
+        (home / "session_index.jsonl").write_text("index\n", encoding="utf-8")
+        runtime = tmpdir / "runtime"
+        token = runtime / "agent_token_Red-Euler"
+        token.write_text("child-owner-token", encoding="utf-8")
+        token.chmod(0o600)
+        env = os.environ.copy()
+        env.update({
+            "AGENTSTACK_HOOKS_DIR": str(_ROOT / "hooks"),
+            "AGENTSTACK_RUNTIME_DIR": str(runtime),
+            "AGENTSTACK_PROJECT_KEY": "/workspace/example",
+            "AGENTSTACK_MANAGED_AGENTS_FILE": str(runtime / "managed_agents.txt"),
+            "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "disabled",
+            "AGENTSTACK_MCP_URL": "http://127.0.0.1:1/mcp",
+        })
+        with cleanup_mail_server() as mail_url:
+            cleanup = subprocess.run(
+                ["/bin/bash", str(_ROOT / "hooks" / "cleanup-child-agent.sh"), "Red-Euler"],
+                env={**env, "AGENTSTACK_MCP_URL": mail_url}, text=True, capture_output=True, timeout=30)
+        assert cleanup.returncode == 0, cleanup.stderr
+        assert not home.exists()
+        assert "deleting unshared Codex sessions" not in cleanup.stderr
+        assert (source / "sessions" / "rollout.jsonl").read_text() == "transcript\n"
+        assert (source / "history.jsonl").read_text() == "history\n"
+        assert (source / "session_index.jsonl").read_text() == "index\n"
+
+
+def test_codex_home_build_preserves_existing_shared_records():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        records = {"history.jsonl": "history\n", "session_index.jsonl": "index\n",
+                   "sessions/rollout.jsonl": "transcript\n"}
+        result = _run_codex_home_process(tmpdir, shared_records=records)
+        assert result.returncode == 0 and result.stdout.strip(), result.stderr
+        home = pathlib.Path(result.stdout.strip())
+        source = tmpdir / "codex-home"
+        for name, contents in records.items():
+            assert (home / name).read_text() == contents
+            path = source / name
+            assert path.read_text() == contents
+            assert path.stat().st_mtime_ns == 1_000_000_000
+            assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+
+def test_codex_home_build_preserves_read_only_shared_records():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        records = {"history.jsonl": "read-only history\n",
+                   "session_index.jsonl": "read-only index\n"}
+        result = _run_codex_home_process(
+            tmpdir, shared_records=records, shared_record_mode=0o400)
+        assert result.returncode == 0 and result.stdout.strip(), result.stderr
+        home = pathlib.Path(result.stdout.strip())
+        source = tmpdir / "codex-home"
+        for name, contents in records.items():
+            assert (home / name).is_symlink()
+            assert (home / name).read_text() == contents
+            path = source / name
+            assert path.read_text() == contents
+            assert path.stat().st_mtime_ns == 1_000_000_000
+            assert stat.S_IMODE(path.stat().st_mode) == 0o400
+
+
 def test_codex_child_home_falls_back_when_proxy_or_token_is_missing():
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = pathlib.Path(tmp)
@@ -822,7 +923,7 @@ def _claude_child_config(tmpdir, claude_json: str | None) -> dict:
 
     script = (
         'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
-        + _extract("write_child_mcp_config")
+        + f'HOOKS_DIR="{_ROOT / "hooks"}"\n' + _extract("write_child_mcp_config")
         + '\nwrite_child_mcp_config "Dark-Feynman" "$1"\n'
     )
     env = os.environ.copy()
@@ -886,7 +987,7 @@ def test_claude_child_keeps_default_name_on_new_endpoint():
         token.chmod(0o600)
         script = (
             'RUNTIME_DIR="$1"; PROJECT_KEY="$2"; MCP_URL="$3"; MAIL_ENV="$4"; shift 4\n'
-            + _extract("write_child_mcp_config")
+            + f'HOOKS_DIR="{_ROOT / "hooks"}"\n' + _extract("write_child_mcp_config")
             + '\nwrite_child_mcp_config "Dark-Feynman" "$1"\n'
         )
         env = os.environ.copy()

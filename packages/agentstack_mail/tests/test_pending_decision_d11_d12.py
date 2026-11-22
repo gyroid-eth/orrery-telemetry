@@ -1259,6 +1259,7 @@ def _watcher_shell(functions: str, *, deliver: bool) -> str:
     )
     return f"""set -euo pipefail
 STATE_FILE="$TEST_STATE_FILE"
+STATE_DIR="$(dirname "$STATE_FILE")"
 LEASE_DIR="$TEST_LEASE_DIR"
 RETRY_COOLDOWN=30
 HEADLESS_REPLY_TIMEOUT=300
@@ -1280,10 +1281,11 @@ run_to() {{
     fi
     printf '%s\n' "$*" >> "$FAKE_COMMAND_LOG"
     case "$2" in
-        has-session)
-            if [[ "${{FAIL_HAS_SESSION:-0}}" == "1" ]]; then
+        list-sessions)
+            if [[ "${{FAIL_SESSION_LOOKUP:-0}}" == "1" ]]; then
                 return 1
             fi
+            printf '%s\n' "$TEST_AGENT"
             return 0
             ;;
         capture-pane) printf 'Claude ❯\n'; return 0 ;;
@@ -1302,7 +1304,7 @@ def _run_watcher_state_machine(
     crash_point: str,
     *,
     command_log: Path | None = None,
-    fail_has_session: bool = False,
+    fail_session_lookup: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path, Path]:
     functions, _source = _instrumented_watcher_functions()
     agent = str(signal_payload["agent"])
@@ -1323,7 +1325,7 @@ def _run_watcher_state_machine(
         "TEST_LEASE_DIR": str(lease_dir),
         "FAKE_COMMAND_LOG": str(command_log),
         "CRASH_POINT": crash_point,
-        "FAIL_HAS_SESSION": "1" if fail_has_session else "0",
+        "FAIL_SESSION_LOOKUP": "1" if fail_session_lookup else "0",
     }
     completed = subprocess.run(
         ["/bin/bash", "-c", _watcher_shell(functions, deliver=True)],
@@ -1469,14 +1471,14 @@ def test_d12_selected_parity_watcher_failure_cooldown_retries_without_loss(
         case_root,
         signal_payload,
         "",
-        fail_has_session=True,
+        fail_session_lookup=True,
     )
     assert failed.returncode == 0, failed.stderr
     assert signal_path.exists()
     assert not lease_path.exists()
     state = json.loads(state_file.read_text(encoding="utf-8"))
     key = f"BlueLake:{signal_payload['message']['id']}"
-    assert state[key]["last_result"] == "session_not_found"
+    assert state[key]["last_result"] == "session_lookup_failed"
     assert _state_should_attempt(case_root, signal_payload).returncode == 1
 
     state[key]["last_attempt_epoch"] = 0

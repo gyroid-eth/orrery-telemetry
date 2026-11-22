@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import sys
 import time
 from dataclasses import dataclass
@@ -66,6 +67,10 @@ class ProxyConfig:
     project_key: str | None = None
     token_file: Path | None = None
     program: str = "claude-code"
+    # The ORRERY parent the launcher started this child for. Without it a
+    # direct binding can only call itself a root, which a child told "your
+    # parent is X" reads as an identity mismatch (WSL2 report, 2026-10-01).
+    parent_agent: str | None = None
 
     @property
     def is_direct(self) -> bool:
@@ -88,6 +93,16 @@ class ProxyConfig:
             raise ValueError(
                 "AGENTSTACK_PROXY_AGENT_NAME requires AGENTSTACK_PROJECT_KEY"
             )
+        direct_parent = (env.get("AGENTSTACK_PROXY_PARENT_AGENT") or "").strip() or None
+        if direct_parent is not None:
+            if not direct_agent:
+                raise ValueError(
+                    "AGENTSTACK_PROXY_PARENT_AGENT requires AGENTSTACK_PROXY_AGENT_NAME"
+                )
+            if _AGENT_NAME.fullmatch(direct_parent) is None:
+                raise ValueError(
+                    "AGENTSTACK_PROXY_PARENT_AGENT is not a valid agent name"
+                )
         wait_value = (env.get("AGENTSTACK_CODEX_APP_BOOTSTRAP_WAIT") or "1").strip()
         try:
             wait_seconds = float(wait_value)
@@ -108,6 +123,7 @@ class ProxyConfig:
             project_key=direct_project,
             token_file=direct_token_file,
             program=direct_program,
+            parent_agent=direct_parent,
         )
 
 
@@ -132,6 +148,28 @@ class AgentStackProxy:
         self.sleeper = sleeper
         self._binding: dict[str, Any] | None = None
         self._owner_token: str | None = None
+
+    def candidate_reservations(
+        self,
+        session_id: str,
+        *,
+        cwd: Path,
+        dispatch: Callable[[str, Mapping[str, Any]], Any],
+        agent_id: str | None = None,
+    ) -> Any:
+        """Explicit PR2 adapter, never selected by tools/call or environment.
+
+        Import stays lazy: the default stdlib proxy does not acquire a Mail
+        package dependency. The later cutover must supply its candidate backend
+        and Bridge-observed cwd, rather than guessing from the project key.
+        """
+        from agentstack_mail.reservation_clients import Binding, ReservationClient
+
+        def resolve() -> Binding:
+            binding, token = self._resolve(session_id, agent_id)
+            return Binding(binding["agent_name"], token)
+
+        return ReservationClient(resolve, dispatch, cwd=cwd)
 
     def bootstrap(
         self, session_id: str, agent_id: str | None = None
@@ -342,6 +380,21 @@ class AgentStackProxy:
             registration_token=owner_token,
         )
 
+    def show_files(
+        self, session_id: str, paths: list[str], *, agent_id: str | None = None
+    ) -> dict[str, Any]:
+        """Name files for the cockpit's History; nothing is sent, written or read.
+
+        The recorded call itself is what the cockpit turns into preview chips,
+        under its own checks (working folder, kind, size). This only tells the
+        agent whether each path is there, so it can fix a typo at once.
+        """
+        binding = self._resolve(session_id, agent_id)[0]  # identity only; no token use
+        # Only a Bridge-observed snapshot knows the agent's working folder.
+        snapshot = self.snapshots.get(binding["external_id"])
+        base = snapshot.get("cwd") if isinstance(snapshot, dict) else None
+        return show_files_result(paths, base if isinstance(base, str) else None)
+
     def runtime_status(
         self, session_id: str, agent_id: str | None = None
     ) -> dict[str, Any]:
@@ -352,6 +405,12 @@ class AgentStackProxy:
             "root_external_id": external_id_for(binding["session_id"]),
             "parent_external_id": binding["parent_external_id"],
         }
+        if binding["surface"] == "direct":
+            # A direct binding has no Codex App lineage; its parent is the
+            # ORRERY agent the launcher named, or none for a standalone agent.
+            parent_agent = binding.get("parent_agent")
+            lineage["kind"] = "child" if parent_agent else "root"
+            lineage["parent_agent"] = parent_agent
         return {
             "external_id": binding["external_id"],
             "surface": binding["surface"],
@@ -361,7 +420,14 @@ class AgentStackProxy:
             "agent_name": binding["agent_name"],
             "project_key": binding["project_key"],
             "program": binding["program"],
-            "state": snapshot["state"] if snapshot is not None else "registering",
+            # Only the Codex App Bridge writes snapshots. A launcher binding
+            # never gets one, so "registering" would never change; say what is
+            # known instead: the binding exists. Mail is not contacted here.
+            "state": (
+                snapshot["state"] if snapshot is not None
+                else "bound" if binding["surface"] == "direct"
+                else "registering"
+            ),
             "last_seen_at": (
                 snapshot["last_seen_at"]
                 if snapshot is not None
@@ -377,6 +443,7 @@ class AgentStackProxy:
         project_key: str,
         owner_token: str,
         program: str = "claude-code",
+        parent_agent: str | None = None,
     ) -> dict[str, Any]:
         """Bind this process to an agent the launcher already registered.
 
@@ -389,6 +456,8 @@ class AgentStackProxy:
 
         if not agent_name or not project_key or not owner_token:
             raise ProxyError("direct binding needs agent_name, project_key and token")
+        if parent_agent is not None and _AGENT_NAME.fullmatch(parent_agent) is None:
+            raise ProxyError("direct binding parent is not a valid agent name")
         # external_id_for rejects colons, so the synthetic id uses a dash.
         session_id = f"direct-{agent_name}"
         self._binding = {
@@ -401,6 +470,7 @@ class AgentStackProxy:
             "project_key": project_key,
             "program": program,
             "last_seen_at": None,
+            "parent_agent": parent_agent,
         }
         self._owner_token = owner_token
         return dict(self._binding)
@@ -535,12 +605,30 @@ def _dispatch(
         "renew_reservations": proxy.renew_reservations,
         "release_reservations": proxy.release_reservations,
         "runtime_status": proxy.runtime_status,
+        "show_files": proxy.show_files,
         "whois": proxy.whois,
     }
     handler = handlers.get(name)
     if handler is None:
         raise ProxyError("tool is not allowlisted")
     call_arguments = dict(arguments)
+    # A conversation first run against raw ORRERY Mail keeps calling these
+    # tools the way raw Mail takes them after it is resumed on this proxy
+    # (WSL2 report, 2026-10-01): whois names its target in `agent_name`, and
+    # model-held credentials ride along. The target is not the caller, and the
+    # proxy authenticates with its own token, so translate and drop first.
+    if name == "whois" and "agent_name" in call_arguments:
+        target = call_arguments.pop("agent_name")
+        if "name" in call_arguments and call_arguments["name"] != target:
+            raise ProxyError(
+                "whois got two different agents to look up (name and agent_name)"
+            )
+        call_arguments["name"] = target
+    if name == "whois":
+        for option in _RAW_WHOIS_OPTIONS:
+            call_arguments.pop(option, None)
+    for credential in _MODEL_SUPPLIED_CREDENTIALS:
+        call_arguments.pop(credential, None)
     if name != "bootstrap" and proxy.bound_session_id is None:
         raise ProxyError(
             "call bootstrap before using coordination tools; runtime identity "
@@ -557,6 +645,7 @@ def _dispatch(
             "agent_id",
             "project_key",
             "agent_name",
+            "sender_name",
         }.intersection(call_arguments)
         if supplied_identity:
             raise ProxyError(
@@ -614,19 +703,46 @@ def _dispatch(
     # "unexpected keyword argument" on a child's very first call. Accept them
     # when they agree with the binding, and refuse only a real mismatch — which
     # is someone trying to act as another agent or project.
+    # Raw send_message names its sender in `sender_name`; it is the same claim.
     binding = proxy.bound_binding
-    for field in ("project_key", "agent_name"):
+    for field, bound_field in (
+        ("project_key", "project_key"),
+        ("agent_name", "agent_name"),
+        ("sender_name", "agent_name"),
+    ):
         if field not in call_arguments:
             continue
         supplied = call_arguments.pop(field)
         if supplied is None or binding is None:
             continue
-        if str(supplied) != str(binding[field]):
+        if str(supplied) != str(binding[bound_field]):
             raise ProxyError(
                 f"{field} does not match this connection's binding: "
                 f"this process serves {binding['agent_name']!r}"
             )
+    # Anything else the schema does not list would reach the handler as
+    # "unexpected keyword argument", which names neither the cause nor the fix.
+    accepted = _accepted_arguments(name)
+    unknown = sorted(set(call_arguments) - accepted - {"session_id", "agent_id"})
+    if unknown:
+        raise ProxyError(
+            f"{name} on this ORRERY Mail connection does not accept "
+            f"{', '.join(unknown)}; it accepts: "
+            f"{', '.join(sorted(accepted)) or '(no arguments)'}"
+        )
     return handler(**call_arguments)
+
+
+# Raw ORRERY Mail arguments with no meaning on a bound connection.
+_MODEL_SUPPLIED_CREDENTIALS = ("registration_token", "sender_token")
+_RAW_WHOIS_OPTIONS = ("include_recent_commits", "commit_limit", "format")
+
+
+def _accepted_arguments(name: str) -> set[str]:
+    for tool in TOOL_DEFINITIONS:
+        if tool["name"] == name:
+            return set(tool["inputSchema"]["properties"])
+    return set()
 
 
 def _required_text(value: Any, field: str, maximum: int) -> str:
@@ -665,6 +781,11 @@ def _agent_names(
 def _reservation_paths(
     values: Any, *, required: bool = False
 ) -> list[str]:
+    """Keep Mail patterns unchanged; managed callers supply physical absolute paths.
+
+    Relative patterns remain available for legacy sessions. Neither the Mail
+    namespace nor a protected root is a reliable cwd for converting them.
+    """
     if values is None:
         if required:
             raise ProxyError("paths is required")
@@ -678,10 +799,74 @@ def _reservation_paths(
     normalized: list[str] = []
     for value in values:
         _required_text(value, "path", 1024)
-        if Path(value).is_absolute() or ".." in Path(value).parts:
-            raise ProxyError("reservation paths must stay project-relative")
+        if ".." in Path(value).parts:
+            raise ProxyError("reservation paths must not contain '..' components")
         normalized.append(value)
     return normalized
+
+
+# show_files: the cockpit's History turns the paths of this recorded call into
+# preview chips. Keep the wording and the result identical to
+# agentstack_mail/show_files.py (tests compare them). `base` is the agent's
+# working folder only when the binding knows it (a Codex App snapshot); the
+# proxy's own cwd is never used, so without a base relative paths are not
+# checked here, and with one a path outside it is not even lstat'ed.
+SHOW_FILES_DESCRIPTION = (
+    "Show files or images to the person in the ORRERY cockpit: each path becomes "
+    "a chip in the conversation's History that opens a preview (Markdown is "
+    "drawn, images are shown). Call it when you created or changed a file or "
+    "image the person should look at (a report, a figure, a screenshot, a log), "
+    "usually right before your final message. Use paths inside your working "
+    "folder, relative or absolute. Nothing is sent or written, and the file is "
+    "not read into your context."
+)
+_SHOW_FILES_NOTE = (
+    "Each path is shown as a chip in the cockpit's History; the cockpit checks it against your "
+    "working folder, kind and size when it is opened. checked:false means this connection does "
+    "not know your working folder, so a relative path was not checked here; an absolute path is."
+)
+_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+
+def _inside(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def show_files_result(values: Any, base: str | None = None) -> dict[str, Any]:
+    """Check paths with lstat only; never open, read or follow them."""
+    if not isinstance(values, list) or not 1 <= len(values) <= 8:
+        raise ProxyError("paths must be a list of 1 to 8 paths")
+    for value in values:
+        _required_text(value, "path", 4096)
+        if re.search(r"[\x00-\x1f\x7f]", value) or "://" in value or value.startswith("~"):
+            raise ProxyError("paths must be plain file paths (no URL, ~ or control character)")
+    root = os.path.normpath(base) if isinstance(base, str) and os.path.isabs(base) else None
+    roots = {root, os.path.realpath(root)} if root else set()
+    files: list[dict[str, Any]] = []
+    for value in values:
+        if os.path.isabs(value):
+            target = os.path.normpath(value)
+        elif root:
+            target = os.path.normpath(os.path.join(root, value))
+        else:
+            files.append({"path": value, "checked": False})
+            continue
+        if roots and not any(_inside(target, item) for item in roots):
+            files.append({"path": value, "outside_working_folder": True})
+            continue
+        try:
+            info = os.lstat(target)
+        except OSError:
+            files.append({"path": value, "exists": False})
+            continue
+        regular = stat.S_ISREG(info.st_mode)
+        kind = ("image" if os.path.splitext(target)[1].lower() in _IMAGE_SUFFIXES else "file") if regular else "other"
+        files.append({"path": value, "exists": True, "kind": kind, "bytes": info.st_size if regular else None})
+    return {
+        "present": [item["path"] for item in files if item.get("kind") in {"file", "image"}],
+        "files": files,
+        "note": _SHOW_FILES_NOTE,
+    }
 
 
 def _positive_ids(values: Any, field: str) -> list[int]:
@@ -796,7 +981,12 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "reserve_files",
-        "description": "Reserve project-relative files for this bound agent.",
+        "description": (
+            "Reserve files for this bound agent. Managed workspace-v1 sessions "
+            "must supply physical absolute paths (resolve symlinks first). "
+            "Legacy relative paths and glob patterns are accepted unchanged; "
+            "no cwd or project-key conversion is performed."
+        ),
         "inputSchema": _schema(
             {
                 "paths": {"type": "array", "items": {"type": "string"}, "minItems": 1},
@@ -809,7 +999,11 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "renew_reservations",
-        "description": "Renew selected reservations owned by this bound agent.",
+        "description": (
+            "Renew selected reservations owned by this bound agent. Use the same "
+            "physical absolute paths as acquisition in managed workspace-v1 "
+            "sessions; legacy relative paths and globs are accepted unchanged."
+        ),
         "inputSchema": _schema(
             {
                 "extend_seconds": {
@@ -828,7 +1022,11 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "release_reservations",
-        "description": "Release selected or all reservations owned by this bound agent.",
+        "description": (
+            "Release selected or all reservations owned by this bound agent. "
+            "Use the same physical absolute paths as acquisition in managed "
+            "workspace-v1 sessions; legacy relative paths and globs are accepted unchanged."
+        ),
         "inputSchema": _schema(
             {
                 "paths": {"type": ["array", "null"], "items": {"type": "string"}},
@@ -844,9 +1042,27 @@ TOOL_DEFINITIONS = [
         "name": "runtime_status",
         "description": (
             "Return this process binding's authoritative runtime identity, state, "
-            "and parent lineage. Takes no caller-supplied identity."
+            "and parent lineage. For a launcher-started agent, lineage.parent_agent "
+            "is its ORRERY parent (null when standalone), and the state is "
+            "\"bound\": the binding exists; ORRERY Mail is not contacted. Takes "
+            "no caller-supplied identity."
         ),
         "inputSchema": _schema({}, []),
+    },
+    {
+        "name": "show_files",
+        "description": SHOW_FILES_DESCRIPTION,
+        "inputSchema": _schema(
+            {
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "minItems": 1,
+                    "maxItems": 8,
+                },
+            },
+            ["paths"],
+        ),
     },
     {
         "name": "whois",
@@ -865,6 +1081,23 @@ TOOL_DEFINITIONS = [
 def serve() -> None:
     """Start the allowlisted MCP proxy over stdio."""
 
+    if 'AGENTSTACK_FRESH_CLIENT_CONTEXT' in os.environ or os.environ.get('AGENTSTACK_RUNTIME_MODE')=='fresh':
+        if __package__ in {None, ''}:
+            from agentstack_codex_app.fresh_bridge import selected, proxy
+        else:
+            from .fresh_bridge import selected, proxy
+        selected()
+        proxy()
+        return
+    if __package__ in {None, ''}:
+        from agentstack_codex_app.global_runtime import selected_client
+    else:
+        from .global_runtime import selected_client
+    selected = selected_client()
+    if selected is not None:
+        api, client = selected
+        api['runtime_delivery'](client).proxy()
+        return
     config = ProxyConfig.from_env()
     identities = IdentityStore(config.runtime_dir / "identity")
     snapshots = SnapshotStore(config.runtime_dir / "snapshot.json")
@@ -884,6 +1117,7 @@ def serve() -> None:
             project_key=config.project_key or "",
             owner_token=load_direct_owner_token(config),
             program=config.program,
+            parent_agent=config.parent_agent,
         )
     StdioMcpServer(proxy).serve_forever()
 
