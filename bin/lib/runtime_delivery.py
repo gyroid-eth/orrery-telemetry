@@ -797,8 +797,9 @@ class RuntimeDelivery(RuntimeFiles):
                     value = {**value, 'enabled':False} if policy_api['looks_like_agent_mail'](name) else value
                     flags += ['-c', 'mcp_servers.'+json.dumps(name)+'='+serializer['_toml_value'](value)]
                 for name, value in config.get('plugins', {}).items():
-                    if isinstance(value,dict) and value.get('enabled') is False:
-                        flags += ['-c', 'plugins.'+json.dumps(name)+'.enabled=false']
+                    if isinstance(value,dict) and (name == policy_api['CODEX_CHROME_PLUGIN']
+                                                   or value.get('enabled') is False):
+                        flags += ['-c', 'plugins.'+json.dumps(name)+'.enabled='+json.dumps(value['enabled'])]
                 return {}, flags, prompt
             return {}, [], prompt
         except (ValueError, RuntimeError, KeyError, TypeError, OSError):

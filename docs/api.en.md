@@ -89,7 +89,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":43}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":44}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -811,6 +811,8 @@ The ordinary DeepSeek / Local catalog shares plain-generation admission and gene
 dsh / Hermes accept `base` / `tools` only when the selection can be represented in native configuration. They copy stdio / HTTP MCP servers and reject built-in computer use, Chrome devices, and unrepresentable per-tool approvals or filters with a reason. A successful launch does not imply those approvals are enabled.
 
 Since API 41, the standard `/api/spawn` applies the installer's `AGENTSTACK_CHILD_DEFAULT_TOOLS` to Claude, Codex, dsh and Hermes when both `base` and `tools` are omitted. NEW AGENT uses this path. The launcher evaluates defaults for the provider and final working directory, and reports any unavailable items it omits. Explicit selections take precedence. An empty `tools: {}` or `base: "default"` with no extra tools still passes `--base default`, as in API 8, to suppress installer defaults. Unavailable explicit tools stop the launch.
+
+Since API 44, `{"tools":{"chrome_extension":true}}` enables the configured `chrome@openai-bundled` plugin for a Codex child in `/api/spawn` and tool-changing `/api/jump`. Combining it with `orrery-screen` is rejected.
 
 A child with a `base` or `tools` selection is not started when the selection cannot be applied (no Mail proxy, a server that cannot be copied, `mail-only` in a project where the computer use is enabled, ...). Malformed selections return 400 here; errors that depend on the child's directory are returned as a launcher failure. Other providers such as Gemini reject `mail-only` and `tools`.
 

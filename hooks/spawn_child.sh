@@ -47,7 +47,7 @@ fi
 #   --base default|mail-only   default の明示は installer の既定を抑止。mail-only は ORRERY Mail と
 #                              --tools で選んだものだけを渡す（Claude は --no-chrome も付ける）
 #   --tools SPEC               繰り返し・カンマ区切り可: browser[:deviceId] / screen[:read|:operate]
-#                              / screen:<read|operate>:<server> / mcp:<server>
+#                              / screen:<read|operate>:<server> / mcp:<server> / chrome-extension (Codex)
 #   base・tools・MCP profile の省略時は installer の既定から使える項目を選ぶ。
 #   選択（mail-only かいずれかの tools）がある子は fail closed: Mail の proxy が作れない、
 #   選んだ server を写せない、computer use が有効な project での mail-only などは起動しない。
