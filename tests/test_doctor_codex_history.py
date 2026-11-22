@@ -409,7 +409,14 @@ def test_doctor_model_default_reports_fallback_from_selected_cli(tmp_path, versi
     binary = _script(tmp_path / "bin" / "codex", f"echo 'codex-cli {version}'\n")
     script = f"set -euo pipefail\nPYTHON_BIN={shlex.quote(sys.executable)}\nCODEX_LAUNCHER_BIN={shlex.quote(str(binary))}\n" + function
     script += '\nreport_codex_model_default "$1" "$2"\n'
-    result = subprocess.run(["/bin/bash", "-c", script, "doctor-models", str(ROOT / "dashboard/codex_models.py"), str(tmp_path / "codex-home")], capture_output=True, text=True, timeout=5)
+    # The catalog reads the installed env.sh separately from CODEX_HOME.
+    result = subprocess.run(
+        ["/bin/bash", "-c", script, "doctor-models", str(ROOT / "dashboard/codex_models.py"), str(tmp_path / "codex-home")],
+        env={"HOME": str(tmp_path), "PATH": os.defpath},
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
     assert result.returncode == 0, result.stderr
     assert ("starts from gpt-6-sol" in result.stdout) is noted
     if noted:
