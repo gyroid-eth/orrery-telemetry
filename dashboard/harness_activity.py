@@ -1,7 +1,7 @@
 """Observe native activity from the current pane footer, without I/O.
 
 Pinned formats: dsh-tui 0.16.1 ApprovalPanel/AskUserQuestionPanel/StatusLine;
-Hermes d923a5eb cli_tui_mixin and bundled en/ja catalogs. These are display
+Hermes d923a5eb cli_tui_mixin, Ink composer and bundled catalogs. These are display
 observations, not authenticated events. Missing evidence stays unknown.
 """
 import re
@@ -33,6 +33,7 @@ _HERMES_ANSWER = re.compile(
     r'|回答を入力して Enter を押してください|↑/↓ で選択、Enter で確定、Tab で次の質問)' + _COUNTDOWN)
 _HERMES_BUSY = re.compile(r'☤(?:\s+❯)?(?:\s.*)?')
 _HERMES_IDLE = re.compile(r'(?:[\w.-]+\s+)?❯(?:\s.*)?')
+_HERMES_INK_READY = re.compile(r'─ ready │ \S.*')
 _HERMES_APPROVAL_PROMPT = re.compile(r'⚠\ufe0f?(?:\s+❯)?(?:\s.*)?')
 _HERMES_QUESTION_PROMPT = re.compile(r'[?✎](?:\s+❯)?(?:\s.*)?')
 _DSH_DURATION = r'(?:\d+h(?: \d+m)?(?: \d+s)?|\d+m(?: \d+s)?|\d+s)'
@@ -90,6 +91,10 @@ def _hermes_prompt(lines):
         top, prompt, bottom = rows[-3:]
         if top == bottom and re.fullmatch(r'─{8,}', top):
             return prompt
+    # The managed Ink TUI puts its ready status directly above the empty
+    # composer. Drafts and views with controls below it lack this pair.
+    if len(rows) >= 2 and rows[-1] == '❯' and _HERMES_INK_READY.fullmatch(rows[-2]):
+        return rows[-1]
     return None
 
 
