@@ -174,6 +174,10 @@ child の Claude / Codex command の後段へ連結され、REPL が戻った時
 
 dashboard は30秒間隔で子の終了状態を確認します。終了処理を通らずに停止した子は、起動や再開から60秒が経過し、tmux セッションや生きている lease が見つからず、保留中の登録・移行・道具変更がなく、保存済みの認証情報が一致した時点で、再開用の状態を修復します。今のマシン起動中に書かれた状態は、別の tmux サーバーに残っている子を保護するため、端末に接続されたプロセスに子の名前がないことも確認します。子が起動した端末のない GUI アプリやサーバーは再開を妨げません。プロセスの有無を判定できない場合は修復を見送ります。中断された再開の保持期限は元のままです。ORRERY Mail の復帰は実際に再開するときに行います。
 
+ダッシュボードの毎時の期限切れ削除と `agentstack-purge-child-resume --expired` は、tmux セッション、生きている lease、端末に接続された子のプロセスを調べ、停止が確認できた子だけを削除します。最後の lease 確認は、資格を削除する処理と同じ lock の内側で行います。
+
+端末から保持期間内の Claude の子を再開する際は、SessionStart が Mail の退役を解除する前に `resume_in_progress_at` を記録します。退役解除に失敗した場合はマーカーを取り消します。
+
 これは Claude Code `SessionEnd` hook ではありません。`SessionEnd` は crash や resume でも発生しうるため、remote identity の retire をその event へ結びつけていません。
 
 ### `monitor_child_agent.sh`

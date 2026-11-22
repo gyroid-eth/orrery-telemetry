@@ -165,6 +165,10 @@ Claude / Codex children configured with `AGENTSTACK_CHILD_RESUME_RETENTION_DAYS=
 
 The shared `child_resume.py` helper uses one lock and validation path for fresh-spawn / resume state preparation, private-material checks, rebuilding a child home from the current source home, expiry maintenance, and explicit purge. Before building a Codex child home, it creates `sessions/`, `history.jsonl`, and `session_index.jsonl` in the user's Codex home (`CODEX_HOME`, or `~/.codex` when unset), then shares them through symlinks. Existing records are never overwritten. Records survive cleanup even on a fresh machine that only runs Codex through children. If a legacy child home contains a real `sessions/` directory, cleanup warns on stderr that conversation history may be lost and shows the path before deleting it. Operator entry points are `agentstack-purge-child-resume <agent>` and `agentstack-purge-child-resume --expired`. `agentstack-doctor` reports expired entries but never invokes purge.
 
+The dashboard's hourly expiry sweep and `agentstack-purge-child-resume --expired` check for a tmux session, a live lease, and a terminal-attached child process. They only delete material for children confirmed to be stopped. The final lease check and credential removal hold the same lock.
+
+When a terminal restarts a Claude child within its retention period, SessionStart records `resume_in_progress_at` before unretiring Mail. It clears the marker if unretire fails.
+
 This is not a Claude Code `SessionEnd` hook. Because `SessionEnd` can occur during a crash or resume, remote identity retirement is not tied to that event.
 
 ### `monitor_child_agent.sh`
