@@ -206,6 +206,7 @@
   "schema_version": 1,
   "services": [
     {
+      "interpreter": "/usr/bin/python3",
       "kind": "systemd-user",
       "path": "/home/alice/.config/systemd/user/org.agentstack.agentdashboard.service",
       "unit": "org.agentstack.agentdashboard.service"

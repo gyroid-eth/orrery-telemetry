@@ -26,6 +26,7 @@ import urllib.request
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _fake_systemd import DASHBOARD_BUSCTL, DASHBOARD_UNIT_SHOW
 from service_teardown import TEST_LABEL_PREFIX, stop_dashboard
 from test_install_agentstack_mail import (
     INSTALLER,
@@ -531,11 +532,13 @@ def test_update_on_a_systemd_install_leaves_the_timer_starting_the_new_build(tmp
         "systemctl",
         "#!/bin/sh\n"
         f"printf '%s\\n' \"$*\" >> {calls}\n"
+        + DASHBOARD_UNIT_SHOW
         # The dashboard falls back to a supervised process at once instead of
-        # waiting on a unit nothing will start; only the Mail timer is kept.
-        'case "$*" in *agentdashboard*) exit 1 ;; *is-active*|*is-enabled*) exit 3 ;; esac\n'
-        "exit 0\n",
+        # waiting on a unit nothing will start. The Mail timer stays enabled.
+        + 'case "$*" in *agentdashboard*) [ "$2" != restart ] || exit 1 ;; '
+        '*is-active*|*is-enabled*) exit 3 ;; esac\nexit 0\n',
     )
+    _write_command(fake_bin, "busctl", DASHBOARD_BUSCTL)
     _candidate(stack.service_root, "fixture-old")
     _candidate(stack.service_root, "fixture-new")
     try:

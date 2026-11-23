@@ -8,6 +8,7 @@ import hashlib
 import os
 import re
 import pathlib
+import shlex
 import signal
 import socket
 import subprocess
@@ -17,6 +18,7 @@ import pytest
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _fake_systemd import DASHBOARD_BUSCTL, DASHBOARD_UNIT_SHOW
 from service_teardown import (  # noqa: E402
     TEST_LABEL_PREFIX,
     stop_dashboard,
@@ -39,12 +41,12 @@ SOURCE_ONLY_ENTRIES = frozenset({"bin/agentstack-daemon"})
 
 def _fake_systemctl() -> str:
     """Start/stop the installed dashboard for isolated installer tests."""
-    return """#!/bin/sh
+    return "#!/bin/sh\n" + DASHBOARD_UNIT_SHOW + """
 case "$2" in
   show-environment|daemon-reload)
     exit 0
     ;;
-  enable)
+  restart)
     case "$*" in
       *agentdashboard*) ;;
       *) exit 0 ;;
@@ -450,6 +452,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
     fake_bin.mkdir()
     for name, body in {
         "systemctl": _fake_systemctl(),
+        "busctl": DASHBOARD_BUSCTL,
         "tmux": "#!/bin/sh\nexit 0\n",
         "uname": "#!/bin/sh\necho Linux\n",
         "uv": "#!/bin/sh\nexit 0\n",
@@ -759,6 +762,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     fake_bin.mkdir()
     for name, body in {
         "systemctl": _fake_systemctl(),
+        "busctl": DASHBOARD_BUSCTL,
         "tmux": "#!/bin/sh\nexit 0\n",
         "uname": "#!/bin/sh\necho Linux\n",
         "uv": "#!/bin/sh\nexit 0\n",
@@ -947,12 +951,14 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     exec_start = next(
         line for line in systemd_unit.splitlines() if line.startswith("ExecStart=")
     )
-    assert exec_start.split()[-1] == str(install_dir / "dashboard" / "service_runner.py")
+    python_arg, runner_arg = shlex.split(exec_start.removeprefix("ExecStart="))
+    assert runner_arg == str(install_dir / "dashboard" / "service_runner.py")
     # The unit must hand the installer-selected interpreter to dashboard children,
     # mirroring the launchd plist (PR #29); otherwise providers spawned from the
     # service fall back to whatever python3 is first on PATH.
-    unit_python = exec_start[len("ExecStart="):].split()[0]
+    unit_python = python_arg.removeprefix(":")
     assert f'Environment="AGENTSTACK_PYTHON={unit_python}"' in systemd_unit
+    assert manifest["services"][0]["interpreter"] == unit_python
     assert "Restart=always" in systemd_unit
     assert (
         f'Environment="AGENTSTACK_DASHBOARD_LOG={install_dir}/runtime/dashboard.log"'
@@ -1065,8 +1071,11 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         "AGENTSTACK_MAIL_ENROLL_BIN"
     ]
     assert normalized_env == sample["env"]
-    for key in ("retained_paths", "purge_paths", "notes", "services", "skill_links"):
+    for key in ("retained_paths", "purge_paths", "notes", "skill_links"):
         assert _normalize_sample_paths(manifest[key], manifest) == sample[key]
+    services = _normalize_sample_paths(manifest["services"], manifest)
+    services[0]["interpreter"] = "/usr/bin/python3"
+    assert services == sample["services"]
     normalized_expected_dirs = _normalize_sample_paths(
         _expected_owned_dirs(install_dir), manifest
     )
@@ -1200,6 +1209,7 @@ def test_installer_preserves_conflicting_user_skill(tmp_path):
     fake_bin.mkdir()
     for name, body in {
         "systemctl": _fake_systemctl(),
+        "busctl": DASHBOARD_BUSCTL,
         "tmux": "#!/bin/sh\nexit 0\n",
         "uname": "#!/bin/sh\necho Linux\n",
         "uv": "#!/bin/sh\nexit 0\n",
@@ -1310,6 +1320,7 @@ def test_an_explicit_mail_label_is_not_overwritten_by_the_derived_one(tmp_path):
     fake_bin.mkdir()
     for name, body in {
         "systemctl": _fake_systemctl(),
+        "busctl": DASHBOARD_BUSCTL,
         "tmux": "#!/bin/sh\nexit 0\n",
         "uname": "#!/bin/sh\necho Linux\n",
         "uv": "#!/bin/sh\nexit 0\n",
