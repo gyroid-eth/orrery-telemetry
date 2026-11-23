@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 44
+API_GENERATION = 45
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -2204,6 +2204,8 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                     isolated = plan.get("inherit") is False and bool(spec and spec["base"] == "mail-only")
         computer, browser = agent_card.tool_permissions(
             spec, servers if isinstance(servers, dict) else {}, chrome=chrome, isolated=isolated)
+        if kind == "claude" and spec and spec.get("browser_disabled"):
+            browser = False
         if managed_screen and row.get("running"):
             computer = _card_claude_screen_mode(screen_launch, servers.get("orrery-screen"), registration["project_key"])
 
@@ -3991,6 +3993,8 @@ def _claude_child_tools(session: str, sid: str) -> tuple[dict | None, str]:
     if state is None:
         return None, ""
     spec = {"base": state["base"], "tools": state["tools"]}
+    if state.get("browser_disabled"):
+        spec["browser_disabled"] = True
     return (spec if state["version"] == 4 or tools_module.restrictive(spec) else None), ""
 
 
@@ -4008,6 +4012,8 @@ def _claude_resume_tools(session: str, sid: str, cwd: str,
         plan = tools_module.claude_plan(
             spec, cwd=cwd, chrome=chrome,
             claude_json=_env_path("AGENTSTACK_CLAUDE_JSON", "~/.claude.json"))
+        if spec.get("browser_disabled") and "--no-chrome" not in plan["flags"]:
+            plan["flags"].append("--no-chrome")
     except tools_module.ToolsError as exc:
         return spec, None, f"the tools this conversation was started with cannot be restored: {exc}"
     return spec, plan, ""
@@ -4036,7 +4042,7 @@ def _claude_resume_tools_capability(session: str, sid: str, transcript: str) -> 
 
 
 def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: bool = False,
-              conversation_tools: dict | None = None) -> dict:
+              conversation_tools: dict | None = None, expected_history_session_id: str | None = None) -> dict:
     """retire 済み / 過去セッションを tmux 再開する。
 
     Claude は `claude --resume <sid>`、Codex は `codex resume <sid>`。
@@ -4049,6 +4055,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
       する別 agent(=子)の transcript」を誤マッチする(親 agent が子 agent の
       会話で復元される事故の実績あり)。program で先に分岐して回避する。"""
     program = _agent_program(session)
+    if expected_history_session_id is not None and program not in _CODEX_PROGRAMS | {"claude", "claude-code"}:
+        return {"ok": False, "error": "The child's provider changed before resume"}
     if conversation_tools is not None and program not in {"claude", "claude-code"}:
         return {"ok": False, "error": "Claude resume prerequisites changed"}
     if program in harness_runtime.HARNESSES:
@@ -4064,6 +4072,9 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     if program == "codex-app" and session in _codex_app_runtimes():
         return _open_codex_app(session)
     if program.startswith("codex"):
+        if expected_history_session_id is not None:
+            return _do_resume_codex(session, open_terminal=open_terminal,
+                                    expected_history_session_id=expected_history_session_id)
         return _do_resume_codex(session) if open_terminal is None else _do_resume_codex(session, open_terminal=open_terminal)
     if not program.startswith("claude"):
         return {
@@ -4075,6 +4086,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
         return {"ok": False,
                 "error": f"'{session}' の会話ログが見つからず再開できません"}
     sid = os.path.basename(path)[:-6]  # 末尾 .jsonl を除去
+    if expected_history_session_id is not None and sid != expected_history_session_id:
+        return {"ok": False, "error": "The child's conversation changed before resume"}
     if not re.fullmatch(r"[0-9A-Fa-f-]{8,}", sid):
         return {"ok": False, "error": f"sessionId 不正: {sid}"}
     cwd = _transcript_cwd(path)
@@ -4086,6 +4099,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     try:
         _, conversation_reason = _claude_conversation_reason(session)
         if conversation_reason:
+            if expected_history_session_id is not None:
+                raise _ResumeCapabilityError("identity_mismatch", "The child's saved permissions are no longer available")
             return _launch_claude_conversation(session, sid, path, cwd, conversation_reason,
                                                open_terminal=open_terminal, replace_husk=replace_husk,
                                                tools=conversation_tools)
@@ -5656,7 +5671,8 @@ def _rebuild_codex_child_home(
         )
 
 
-def _do_resume_codex(session: str, *, open_terminal: bool | None = None) -> dict:
+def _do_resume_codex(session: str, *, open_terminal: bool | None = None,
+                     expected_history_session_id: str | None = None) -> dict:
     """Codex agent を `codex resume <sid>` で tmux 再開する。
 
     rollout は ~/.codex/sessions/.../rollout-*.jsonl。session_meta.payload の
@@ -5671,6 +5687,8 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None) -> dict
         return {"ok": False,
                 "error": f"'{session}' の Codex rollout 対応付けを確認できず再開できません"}
     sid, cwd = _codex_meta(path)
+    if expected_history_session_id is not None and sid != expected_history_session_id:
+        return {"ok": False, "error": "The child's conversation changed before resume"}
     if not sid or not re.fullmatch(r"[0-9A-Fa-f-]{8,}", sid):
         return {"ok": False, "error": f"Codex session id 不正: {sid}"}
     if not cwd:
@@ -5688,6 +5706,8 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None) -> dict
     if provenance_error:
         return _resume_unavailable(provenance_error)
     launch_origin = provenance.get("launch_origin") if provenance else None
+    if expected_history_session_id is not None and launch_origin != "child":
+        return {"ok": False, "error": "The child's launch origin changed before resume"}
     child_home = ""
     child_profile = ""
     try:
@@ -5695,6 +5715,8 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None) -> dict
             child_home, child_profile, codex_standalone = _codex_resume_child_home(
                 session, registration
             )
+            if expected_history_session_id is not None and codex_standalone:
+                return {"ok": False, "error": "Standalone agents cannot use permission-changing resume"}
             _rebuild_codex_child_home(
                 session, registration, child_home, child_profile, cwd or ""
             )
@@ -5800,11 +5822,14 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None) -> dict
         for key, value in resume_environment.items()
         for argument in ("-e", f"{key}={value}")
     ]
+    # Confirm a new session was created before optionally opening a window.
+    # An attach-on-duplicate launch cannot acknowledge a permission change.
+    permission_resume = expected_history_session_id is not None
     launch = _launch_resume_tmux(
         [
             "tmux",
             "new-session",
-            "-A",
+            "-d" if permission_resume else "-A",
             "-s",
             session,
             "-c",
@@ -5815,16 +5840,23 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None) -> dict
             inner,
         ],
         title=session,
-        open_terminal=open_terminal,
+        open_terminal=False if permission_resume else open_terminal,
     )
     if launch.get("ok"):
         detail = f"Codex 会話を tmux で再開 (sid {sid[:8]}… / {cwd})"
-        return {
+        result = {
             "ok": True,
             "action": "resumed",
             "detail": detail,
             "terminal": launch.get("adapter"),
         }
+        if permission_resume and _resume_opens_terminal(open_terminal):
+            opened = _open_terminal_tmux(["tmux", "attach-session", "-t", f"={session}"], title=session)
+            if opened.get("ok"):
+                result["terminal"] = opened.get("adapter")
+            else:
+                result["warning"] = "Codex resumed detached; the terminal window could not be opened"
+        return result
     return {"ok": False, "error": f"codex resume 起動失敗: {launch.get('error')}"}
 
 
@@ -7711,11 +7743,23 @@ _TOOLS_UNSET = object()
 
 
 def do_jump(session: str, *, open_terminal: bool | None = None,
-            base=_TOOLS_UNSET, tools=_TOOLS_UNSET) -> dict:
+            base=_TOOLS_UNSET, tools=_TOOLS_UNSET, permission=_TOOLS_UNSET) -> dict:
     """A tools request selects tools for a stopped agent's next launch."""
     if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_.\-]+", session):
         return {"ok": False, "error": "invalid session name"}
     requested = base is not _TOOLS_UNSET or tools is not _TOOLS_UNSET
+    if permission is not _TOOLS_UNSET:
+        if requested:
+            return {"ok": False, "error": "permission cannot be combined with base or tools"}
+        if (not isinstance(permission, dict)
+                or not isinstance(permission.get("history_session_id"), str)
+                or not re.fullmatch(r"[0-9A-Fa-f-]{8,128}", permission["history_session_id"])
+                or not ((set(permission) == {"history_session_id", "computer_use"}
+                         and permission["computer_use"] in ("off", "view", "control"))
+                        or (set(permission) == {"history_session_id", "browser_use"}
+                            and type(permission["browser_use"]) is bool))):
+            return {"ok": False, "error": "permission requires a history_session_id and one valid computer_use or browser_use value"}
+        requested = True
     if not requested and not os.path.lexists(os.path.join(RUNTIME_DIR, "child-agents", f"{session}.json")):
         return _do_jump(session, open_terminal=open_terminal)
     try:
@@ -7723,24 +7767,28 @@ def do_jump(session: str, *, open_terminal: bool | None = None,
         with module.tools_change_lock(pathlib.Path(RUNTIME_DIR), session):
             if requested:
                 return _jump_with_tools(session, module, base=base, tools=tools,
+                                        permission=None if permission is _TOOLS_UNSET else permission,
                                         open_terminal=open_terminal)
             return _do_jump(session, open_terminal=open_terminal)
     except (ValueError, OSError) as exc:
         return {"ok": False, "error": str(exc), "resume_capability": "config_unrestorable"}
 
 
-def _jump_with_tools(session, module, *, base, tools, open_terminal):
+def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=None):
     program = _agent_program(session)
     provider = "codex" if program in _CODEX_PROGRAMS else "claude" if program in {"claude", "claude-code"} else None
     if provider is None:
         return {"ok": False, "error": "Tools changes require a retained Claude or Codex CLI child"}
-    live = _child_session_live(session, module.boot_time())
+    boot = module.boot_time()
+    live = _child_session_live(session, boot)
     if live is None:
         return {"ok": False, "error": "Cannot confirm whether the child has stopped"}
     if live:
-        found = lookup_agent(session)
+        found = None if permission is not None else lookup_agent(session)
         if not found or found.get("category") != "finished":
             return {"ok": False, "error": "Exit the child and confirm it has stopped before changing tools"}
+    if permission is not None and session in _persistent_profiles():
+        return {"ok": False, "error": "Persistent agents cannot use permission-changing resume"}
     selection = _child_tools_module()
     if base is not _TOOLS_UNSET and base not in ("default", "mail-only"):
         return {"ok": False, "error": "base must be default or mail-only"}
@@ -7759,10 +7807,15 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal):
         state = module.inspect_retained(runtime, session, agent_id=registration["agent_id"],
                                         project_key=registration["project_key"], program=registration["program"])
         record = runtime / "child-agents" / f"{session}.tools.json"
-        old = selection.read_codex_record(str(record)) or {
+        saved = selection.read_codex_record(str(record))
+        if permission is not None and state.get("codex_standalone"):
+            return {"ok": False, "error": "Standalone agents cannot use permission-changing resume"}
+        old = saved or {
             "base": "mail-only" if state["codex_mcp_profile"] == "orrery-only" else "default", "tools": {}}
     else:
         if _claude_conversation_reason(session)[1]:
+            if permission is not None:
+                return {"ok": False, "error": "The conversation-only launch has no saved permissions"}
             if base not in (_TOOLS_UNSET, "default"):
                 return {"ok": False, "error": "Conversation-only resume requires base default"}
             return _do_jump(session, open_terminal=open_terminal,
@@ -7778,12 +7831,21 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal):
         policy = _claude_chrome_policy_module()
         record = pathlib.Path(policy.session_path(str(runtime / "child-agents"), session, sid))
         prior = policy.session_record(str(record.parent), session, sid)
+        saved = prior
+        if permission is not None and prior and prior["standalone"]:
+            return {"ok": False, "error": "Standalone agents cannot use permission-changing resume"}
         old = {"base": prior["base"], "tools": prior["tools"]} if prior else {"base": "default", "tools": {}}
         if prior and prior["claude_chrome"] and "browser" not in old["tools"]:
             old["tools"] = {**old["tools"], "browser": {"device": prior["chrome_device"]}}
-    spec = selection.normalize(old["base"] if base is _TOOLS_UNSET else base,
-                               old["tools"] if tools is _TOOLS_UNSET else tools)
-    selection.check_provider(spec, provider)
+    if permission is not None:
+        if permission["history_session_id"] != sid:
+            return {"ok": False, "error": "The child's conversation changed before resume"}
+        if saved is None:
+            return {"ok": False, "error": "The child's saved tool selection cannot be verified"}
+    else:
+        spec = selection.normalize(old["base"] if base is _TOOLS_UNSET else base,
+                                   old["tools"] if tools is _TOOLS_UNSET else tools)
+        selection.check_provider(spec, provider)
     if provider == "codex":
         source = pathlib.Path(os.path.expanduser(os.environ.get("CODEX_HOME", "").strip() or "~/.codex"))
         config_path = source / "config.toml"
@@ -7796,23 +7858,46 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal):
                 module._deep_merge(config, extra)
             except (ValueError, OSError):
                 pass  # Same optional overlay contract as build-home.
+    claude_json = _env_path("AGENTSTACK_CLAUDE_JSON", "~/.claude.json")
+    keep_browser_off = (provider == "claude" and bool(saved and saved.get("browser_disabled"))
+                        and tools is _TOOLS_UNSET)
+    if permission is not None:
+        servers = (config.get("mcp_servers") if provider == "codex" else
+                   selection.claude_mcp_definitions(claude_json, cwd))
+        spec = selection.normalize(old["base"], selection.change_permission(old["tools"], permission, servers))
+        selection.check_provider(spec, provider)
+        if provider == "claude":
+            if "browser_use" in permission:
+                keep_browser_off = not permission["browser_use"]
+            if (permission.get("computer_use") in ("off", "view") and sys.platform == "darwin"
+                    and selection.computer_use_enabled(selection._load_claude_settings(claude_json), cwd)):
+                return {"ok": False, "error": "Disable the project's built-in computer use before changing this permission"}
+    if provider == "codex":
         selection.codex_apply(config, spec)
         candidate = {"version": selection.CODEX_RECORD_VERSION, **spec}
         profile = "orrery-only" if spec["base"] == "mail-only" else "inherit"
     else:
         chrome = "browser" in spec["tools"]
-        selection.claude_plan(spec, cwd=cwd, chrome=chrome,
-                             claude_json=_env_path("AGENTSTACK_CLAUDE_JSON", "~/.claude.json"))
+        selection.claude_plan(spec, cwd=cwd, chrome=chrome, claude_json=claude_json)
         candidate = {"version": 4, "agent_name": session, "session_id": sid,
                      "launch_id": secrets.token_hex(16), "standalone": False,
                      "claude_chrome": chrome,
                      "chrome_device": spec["tools"].get("browser", {}).get("device", ""), **spec}
+        if keep_browser_off:
+            candidate["browser_disabled"] = True
         profile = None
     generation = module.begin_tools_change(runtime, session, state, record, candidate, profile)
     try:
         with module.owned_tools_change(generation):
             _invalidate_resume_capability_cache(session)
-            result = _do_jump(session, open_terminal=open_terminal)
+            if permission is None:
+                result = _do_jump(session, open_terminal=open_terminal)
+            elif _child_session_live(session, boot) is not False:
+                result = {"ok": False, "error": "Cannot confirm that the child is still stopped"}
+            else:
+                capability = _resume_capability(session, program, category="gone", open_terminal=open_terminal)
+                result = (_resume_unavailable(capability) if capability != "ready" else
+                          do_resume(session, open_terminal=open_terminal, expected_history_session_id=sid))
         if result.get("ok") and result.get("action") != "resumed":
             result = {"ok": False, "error": "The child became active before the tools-changing resume"}
     except Exception:
@@ -10955,6 +11040,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:payload=json.loads(self.rfile.read(length))
                 except (json.JSONDecodeError,UnicodeDecodeError) as exc:
                     raise BackendError('QUERY_INVALID',400) from exc
+                if path == "/api/jump" and isinstance(payload, dict) and "permission" in payload:
+                    raise BackendError('QUERY_INVALID',400)
                 def cwd(value):
                     if not os.path.isabs(value) or not os.path.isdir(value):raise BackendError('SPAWN_DIRECTORY_INVALID',400)
                     resolved=os.path.realpath(value)
@@ -11032,7 +11119,9 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
         if FRESH_MODE:
-            if path=='/api/spawn':result=do_spawn(body)
+            if path == "/api/jump" and "permission" in body:
+                result = {"ok": False, "error": "Permission changes require a legacy CLI child"}
+            elif path=='/api/spawn':result=do_spawn(body)
             elif path in {'/api/jump','/api/exit','/api/kill'}:
                 try:
                     result=asyncio.run(_fresh_backend().target_action(path,body,opener=_open_terminal_tmux,
@@ -11043,12 +11132,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         session = body.get("session", "")
         if path == "/api/jump":
-            if body.get('runtime_mode') == 'global':
+            if "permission" in body and body.get("runtime_mode") not in (None, "legacy"):
+                result = {"ok": False, "error": "Permission changes require a legacy CLI child"}
+            elif body.get('runtime_mode') == 'global':
                 result = global_child_resume(body)
             elif "open" in body and type(body["open"]) is not bool:
                 result = {"ok": False, "error": "open must be a boolean"}
             else:
-                options = {key: body[key] for key in ("base", "tools") if key in body}
+                options = {key: body[key] for key in ("base", "tools", "permission") if key in body}
                 if "open" in body:
                     options["open_terminal"] = body["open"]
                 result = do_jump(session, **options)

@@ -824,6 +824,56 @@ def _codex_chrome_server(name: str, definition: dict) -> bool:
     return name == "chrome-devtools" or _direct_chrome_package(definition) is not None
 
 
+def claude_mcp_definitions(claude_json: str, cwd: str) -> dict:
+    settings = _load_claude_settings(claude_json)
+    user = settings.get("mcpServers")
+    project = _project_entry(settings, cwd).get("mcpServers")
+    return {**(user if isinstance(user, dict) else {}), **(project if isinstance(project, dict) else {})}
+
+
+def change_permission(tools: dict, permission: dict, definitions: dict | None) -> dict:
+    """Patch one permission in a saved, normalized selection."""
+    definitions = definitions if isinstance(definitions, dict) else {}
+
+    def definition(name):
+        value = definitions.get(name)
+        return value if isinstance(value, dict) else {}
+
+    screen = tools.get("screen", {}).get("server")
+    if screen and _codex_chrome_server(screen, definition(screen)):
+        raise ToolsError("The saved screen and browser share an MCP server")
+
+    changed = dict(tools)
+    mcp = list(tools.get("mcp", ()))
+    if "computer_use" in permission:
+        mode = permission["computer_use"]
+        removed = {name for name in mcp if _cua_server(name, definition(name))}
+        changed.pop("screen", None)
+        if mode == "view" or (mode == "control" and (screen == SCREEN_SERVER or SCREEN_SERVER in mcp)):
+            changed["screen"] = {"server": SCREEN_SERVER, "access": "read" if mode == "view" else "operate"}
+        elif mode == "control":
+            direct = next((name for name in mcp if name in removed), "cua-driver")
+            if direct not in mcp:
+                mcp.append(direct)
+            removed.discard(direct)
+    elif permission["browser_use"]:
+        changed.setdefault("browser", {})
+        return changed
+    else:
+        if tools.get("chrome_extension"):
+            raise ToolsError("Disable the separately configured Chrome extension before setting Browser Off")
+        changed.pop("browser", None)
+        removed = {name for name in mcp if _codex_chrome_server(name, definition(name))}
+
+    for key, values in (("mcp", mcp), ("approve_all", tools.get("approve_all", ()))):
+        kept = [name for name in values if name not in removed]
+        if kept:
+            changed[key] = kept
+        else:
+            changed.pop(key, None)
+    return changed
+
+
 def codex_browser_server(servers: dict) -> str:
     """The name of the user's browser MCP server in a Codex config.toml.
 

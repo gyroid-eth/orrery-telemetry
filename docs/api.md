@@ -88,7 +88,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":44}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":45}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -695,6 +695,14 @@ API 43 から、停止した Claude の `resume_mode: conversation_only` でも�
 ```json
 {"session":"SampleAgent","open":false,"tools":{"browser":{"device":"browser-device-id"},"screen":{"server":"orrery-screen","access":"operate"}}}
 ```
+
+API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、停止を確認できる Claude／Codex CLI の子に `permission` を指定できます。一覧の `history_binding: bound` の `history_session_id` と、`computer_use`（`off`、`view`、`control`）または `browser_use`（真偽値）の片方だけを渡します。`open` も指定できます。サーバーは会話の一致と tmux セッション・稼働中の lease がないことを照合します。シェルが残っている場合は先に終了してください。
+
+```json
+{"session":"SampleAgent","open":false,"permission":{"history_session_id":"01234567-1234-1234-1234-012345678901","browser_use":true}}
+```
+
+子ごとの設定変更ロック内で保存値を読み、元の `base` と変更対象以外の道具・承認を維持します。`permission` と `base`／`tools` の併用は拒否します。standalone、常駐 agent、会話のみの再開、CLI 以外の子は対象外です。画面とブラウザーが同じ MCP を共有する場合や、選んだ構成を用意できない場合は理由を返し、保存値を維持します。Claude の Browser Off は元の `base` が `default` でも適用されます。Codex の Chrome 拡張を別に設定している場合は先に解除してください。成功応答には `tools_changed: true`、`base`、変更後の `tools` が含まれます。
 
 ## POST `/api/exit`
 
