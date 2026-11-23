@@ -440,6 +440,7 @@ def generate(document):
         if telegram is not None:
             overlay['telegram'] = telegram
             overlay['plugins']['enabled'].append('orrery-telegram')
+            overlay['plugins']['entries'] = {'orrery-telegram': {'allow_gateway_injection': True}}
         if search:
             settings_file = state / 'web-search.json'
             _save(settings_file, search)
