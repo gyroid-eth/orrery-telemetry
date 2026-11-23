@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 43
+API_GENERATION = 44
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -9089,6 +9089,8 @@ def _spawn_tools_args(payload: dict, provider: str, chrome: bool,
     if "browser" in tools:
         device = tools["browser"]["device"]
         args += ["--tools", "browser:" + device if device else "browser"]
+    if "chrome_extension" in tools:
+        args += ["--tools", "chrome-extension"]
     if "screen" in tools:
         screen = tools["screen"]
         value = "screen:" + screen["access"]

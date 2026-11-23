@@ -219,18 +219,28 @@ class Targets:
 
     async def history(self, query, limit, read_events):
         selected=await self.select(query)
-        path=self.transcript(selected)
-        # The caller supplies the existing fixed parser, never a browser path.
-        events,more=read_events(path,selected.intent['provider'],max(1,min(200,int(limit))))
+        provider=selected.intent['provider']
+        # Managed-native homes belong to the selected client, including children.
+        database=selected.client.path.parent/'providers/hermes/state.db' if provider=='hermes' else None
+        path=database if database is not None else self.transcript(selected)
+        limit=max(1,min(200,int(limit)))
+        if database is not None:
+            from .fresh_hermes_history import read_history
+            events,more=read_history(path,selected.receipt['native_session_id'],limit)
+        else:
+            # The caller supplies the existing fixed parser, never a browser path.
+            events,more=read_events(path,provider,limit)
         projected=[];budget=262144;truncated=False
         for event in events:
             if event.get('role') not in {'user','assistant'} or event.get('kind')!='text':continue
-            text,cut=self.public_text(selected,event['text'],min(65536,budget))
+            text=event['text']
+            if database is not None:text=text.replace(str(database),'[private]')
+            text,cut=self.public_text(selected,text,min(65536,budget))
             if not budget:truncated=True;break
             budget-=len(text.encode());truncated|=cut
             projected.append(dict(role=event['role'],kind='text',text=text,ts=str(event.get('ts',''))[:128]))
         await self.again(selected)
-        return dict(ok=True,source=selected.intent['provider'],events=projected,total=len(projected),
+        return dict(ok=True,source=provider,events=projected,total=len(projected),
             shown=len(projected),history_window='tail',has_more=bool(more or truncated),truncated=truncated,
             history_binding='bound',history_binding_reason='',**selected.public())
 

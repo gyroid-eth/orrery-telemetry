@@ -12,6 +12,7 @@ Run the fresh dashboard and Cockpit on the same host and UID with the same verif
 
 | Scope | Current coverage and remaining work |
 |---|---|
+| Persistent bots | Fresh startup is implemented for Claude Channels and Hermes Telegram. Check Telegram, Mail and Reader for each bot before cutover. The current fresh Reader API refuses Hermes conversations, so Hermes Reader acceptance remains open. [API contract](api.en.md) |
 | Automatic children, New Agent, managed/Local | Limited checks cover the same I with distinct A/contexts through existing entries and Mail to the specified parent. Real endpoints and human login/trust need separate acceptance |
 | Mail/graph, PC Terminal, R4, ended cleanup | Limited checks cover finite readers, selected-pane input/output, same-native resume, confirmed input and same-pane cleanup after refusing attached clients. They do not guarantee the whole real UI or real providers |
 | App | Synthetic fixtures cover notifications, waiting-root wake and external-child adapters. Real Desktop/human trust remain unaccepted |
@@ -24,16 +25,32 @@ Neither API34 nor a documentation update is a cutover signal.
 
 | Step | Agent work | Operator step | Verification |
 |---|---|---|---|
+| 0 | Hand over cutover control if a persistent bot is leading it | Open Claude or Codex in a separate terminal and take over maintenance | The separate terminal can direct the cutover and recovery while the bot loses Mail |
 | 1 | Record continuing work, unread messages, pending replies, file owners, the old version, and start/stop/recovery procedures | Choose what to carry over | A handoff note without credentials and a recovery procedure exist |
 | 2 | Identify every writer and restart source; prepare shutdown | Approve shutdown while present; take over the maintenance terminal if the agent must stop too | Work agents, Mail, proxies, watchers, GC, and restart sources have stopped |
 | 3 | Preserve the stopped installation and distribute the approved version | Confirm the archive destination and update | The old installation is preserved unchanged; the recovery version/settings are available |
 | 4 | Initialize an explicit separate root, check health, and serve in the foreground | Confirm the endpoint and startup action | A different Mail instance and empty registration namespace, separate from old connections |
 | 5 | Register again, prepare the client, and check provider preparation | Login, instruction changes requiring consent, and Codex hook trust approval | Current reconnect identifies the same new owner; incomplete preparation stops launch |
 | 6 | Find selected old content through the archive CLI; send new Mail or reserve a note before editing it | Confirm selected content | New messages have new IDs/timestamps; the archive state is unchanged |
-| 7 | Acquire new reservations; check messages, notifications, and edits across folders | Decide whether to resume work | Conflicting access to the same file is refused; owner, recipient, and target paths match |
+| 7 | Acquire new reservations, check messages, notifications and edits across folders, then start and recheck persistent bots | Test in Telegram and decide whether to resume work | Conflicting access to the same file is refused. Owner, recipient and target paths match. Telegram, Mail and Reader work for each bot |
 | 8 | On failure, stop and preserve the new side too; recover the old operation by procedure | Decide whether to recover | Old and new sides do not run together; unfinished new work is recorded |
 
+## 0. Hand over control to a separate terminal
+
+- **Operator** opens a separate terminal and hands over to Claude or Codex if a persistent bot is leading the cutover. Use a terminal outside the tmux sessions of the bots and services being stopped.
+- **Agent** gives the separate terminal the verified current connection details, ongoing work, stop and recovery procedures, and the agreed stop criteria. Keep credentials out of the handoff. The bot leading the cutover will lose Mail during shutdown, so direct the remaining steps from the separate terminal.
+- **Verify** that the handoff is open in the separate terminal and the next action and recovery procedure are available while Mail is down.
+- **Recover** from a failed handoff by continuing on the old setup and postponing shutdown.
+
 ## 1–3. Preserve a way back before stopping
+
+### Rehearse, stop and preserve persistent bots
+
+- **Agent** records each Claude Channels or Hermes Telegram bot's old registration, working directory, profile, startup, shutdown and restart manager, plus the version, settings and destination needed for recovery. Record only the reference to the Telegram credential. Before stopping the old setup, rehearse through [startup and acceptance](#start-and-accept-persistent-bots) on the intended release with a separate temporary HOME, a test fresh Mail instance on a free port, and a dedicated test Telegram bot and chat.
+- **Operator** provides the test bot credential through the usual credential store and sends the input in the test chat. Approve the maintenance window and recovery criteria once every bot in scope passes rehearsal.
+- **Agent** stops the bots and their restart sources through the existing service procedures after approval and before stopping old Mail. Check that the old pollers and related processes have exited, then preserve the old version and the settings that will change.
+- **Verify** that each rehearsal has a Telegram, Mail and Reader result, no old poller remains after shutdown, and the saved version and settings have a recovery procedure. Stop if acceptance or shutdown remains unconfirmed.
+- **Recover** from a failed rehearsal by stopping the test setup and continuing on the old setup. Once the old setup has been stopped, follow [step 8](#8-recover-by-procedure-after-a-failure).
 
 ### Explicit dashboard and Cockpit preparation (ordinary service cutover is incomplete)
 
@@ -150,6 +167,19 @@ orrery_context='/absolute/path/returned/as/context_path'
 printf '%s\n' '{}' | "$orrery_python" -m agentstack_mail.fresh_client call-json \
   --context "$orrery_context" --tool reconnect
 ```
+
+### Register and prepare each persistent bot
+
+- **Operator** follows the registration and client preparation above for each bot on the new Mail instance. Select the same bot as in the old setup and approve provider login, hooks or plugins, and use of the credential store as needed. Use the test registration and credential store entry during rehearsal.
+- **Agent** creates a `0600` fresh profile with each bot's own context. Carry over the working directory, model, Telegram allowlist and interactive operation. Follow the product's profile examples for the required references.
+
+  | Provider | Prepare before startup |
+  |---|---|
+  | Claude Channels | Configure the existing Channels plugin and selector in the prepared Claude HOME, then point to the corresponding Channels state. [Claude Channels setup](persistent-agents.en.md#claude-channels-in-fresh-mode) |
+  | Hermes Telegram | Provision the verified TUI with the managed installer. Set the managed manifest, Telegram credential reference and allowlist, and place any needed non-secret settings in the dedicated Hermes HOME. [Hermes Telegram setup](persistent-agents.en.md#fresh-hermes-telegram-interactive) |
+
+- **Verify** the new Mail instance and bot ID with `reconnect`, then run `agentstack-persistent inspect --profile` on each profile as described in the [persistent agent guide](persistent-agents.en.md#claude-channels-in-fresh-mode). Use the verified Python and matching installed launcher. Check that the preserved old settings and new profile are separate.
+- **Recover** from a preparation failure by recording the result and withholding startup. If the old production setup has already stopped, follow [step 8](#8-recover-by-procedure-after-a-failure).
 
 ### Install user-level fresh instructions with the existing setup CLI
 
@@ -422,7 +452,28 @@ The known Codex empty placeholder `› Ask Codex to do anything` counts as empty
 
 Notification completion records the stdout/pane handoff operation, not read/ACK, understanding, or task completion. External input and the DB update are not guaranteed to happen exactly once; uncertain outcomes can produce another notification. For a Codex patch affecting multiple files, refusal on a later file can leave an earlier file's lease extended. Editing is still refused, but expiry timestamps are not guaranteed unchanged across the entire patch. Claude MultiEdit/NotebookEdit are currently refused.
 
+### Start and accept persistent bots
+
+- **Agent** confirms the new Mail instance, watcher and interface are available and the old poller for the same Telegram bot has exited. Update the existing service manager's startup command to use `agentstack-persistent run --profile` from the verified release with the new profile, then start it. During rehearsal, run it in a dedicated test tmux foreground pane with the watcher for test Mail. Before requesting a Telegram message, confirm the current run's Channels plugin connection or Hermes `telegram-ready` state.
+- **Operator** sends a short, recognizable ordinary message in the bot's Telegram chat and confirms the reply from that bot. Use the dedicated test chat during rehearsal.
+- **Agent** sends a Mail message with a test identifier and reply destination from another registration on the new instance while the bot has an empty composer and is idle. Confirm that the regular watcher wakes the bot and that a reply with the same identifier returns to the new instance. Open the bot's Reader with the operator and check that this conversation shows the Telegram input and reply just exchanged.
+- **Verify** one Telegram round trip, one Mail round trip and the Reader conversation for every bot. A running process or a ready poller alone is insufficient. These one-time checks confirm that users can still exchange and read messages after changing the registration and launch path.
+- **Recover** from any failed check before proceeding to the next bot or resuming use. Stop the test setup during rehearsal. During cutover, follow [step 8](#8-recover-by-procedure-after-a-failure).
+
+| Once | At each normal startup |
+|---|---|
+| Prepare the new registration and profile, then replace the existing startup configuration. Verify Telegram, Mail and Reader during rehearsal and after cutover | The existing manager starts the bot with the same registration and profile. The operator has no additional steps |
+
 ## 8. Recover by procedure after a failure
+
+### Restore persistent bots
+
+- **Operator** uses the separate maintenance terminal to confirm which steps completed and decide whether to restore the old setup.
+- **Agent** stops each running new bot's restart source. If its launcher is still running, send SIGTERM and wait. Confirm the owned processes and poller have exited for each recorded startup entry. If termination is uncertain, report the reason and keep the old poller stopped. See [how to handle unfinished persistent runs](persistent-agents.en.md#close-an-unfinished-fresh-run). Follow the shared recovery procedure below to preserve the new setup and restore old Mail and related services, then relaunch each bot through its original manager with the preserved version and settings.
+- **Verify** exactly one poller per Telegram bot and Mail send/receive as the old registration. Recheck Telegram, Mail and Reader, comparing Reader with its state before cutover.
+- **Recover** from a failed old-bot restart by stopping its restart source and preserving the old and new records. Keep directing recovery from the separate terminal and resume when the state is confirmed.
+
+### Restore shared services and saved data
 
 Use the service management procedures recorded before cutover to stop the new providers, proxies, Mail, watchers, and restart sources. **Preserve the entire new root too; do not delete it.** Only after the operator chooses recovery, follow the saved procedure using the old version/settings/installation. Keep the archive unchanged and use a separate recovery destination rather than making the read-only archive writable. Stop if the exact destination or startup commands are missing.
 

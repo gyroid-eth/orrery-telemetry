@@ -48,7 +48,7 @@ def test_fresh_runtime_modules_match_artifact_inventory():
     assert {path.name for path in source.glob('*.py')} == expected
     assert {name for name in expected if name.startswith('fresh_') or name == 'archive_cli.py'} == {
         'archive_cli.py', 'fresh_child.py', 'fresh_cli.py', 'fresh_client.py', 'fresh_delivery.py', 'fresh_guard.py',
-        'fresh_harness.py', 'fresh_targets.py', 'fresh_end.py',
+        'fresh_harness.py', 'fresh_hermes_history.py', 'fresh_targets.py', 'fresh_end.py',
         'fresh_launch.py', 'fresh_notifications.py', 'fresh_persistent.py', 'fresh_proxy.py', 'fresh_reservations.py',
         'fresh_runtime.py', 'fresh_server.py'}
 

@@ -12,6 +12,7 @@ fresh dashboardとCockpitは同じhost・UIDで、同じ確認済み `AGENTSTACK
 
 | 範囲 | 現在の確認と残作業 |
 |---|---|
+| 常駐 bot | Claude Channels と Hermes Telegram の fresh 起動を実装済み。各 bot の Telegram・Mail・Reader を切替前に確認する。現行の fresh Reader API は Hermes の会話を拒否するため、Hermes の Reader は未受入。[API 契約](api.md) |
 | 自動子・New Agent・managed/Local | 既存入口での同I内の別A・context、指定親へのMailを限定確認。実接続先・本人のlogin/trustは別確認 |
 | Mail/graph・PC Terminal・R4・終了済み整理 | 有限reader、選択pane入出力・同native resume、本人確認送信、通常client拒否後の同pane整理を限定確認。実画面全体・実providerの保証ではない |
 | App | 通知・waiting root wake・外部子adapterを合成fixtureで確認。実Desktop/本人trustは未受入 |
@@ -24,16 +25,32 @@ API34や文書更新だけを根拠に切り替えません。
 
 | 段 | agent が進めること | 本人の段 | 確認方法 |
 |---|---|---|---|
+| 0 | 常駐 bot が指揮している場合は別端末へ引き継ぐ | 別の端末で Claude または Codex を開き、保守作業を引き受ける | bot が Mail を失っても、別端末で作業と復旧を指揮できる |
 | 1 | 続ける仕事・未読・返信待ち・担当fileを控え、旧版と起動／停止／復旧方法を記録 | 持ち越す仕事を選ぶ | 資格値を含まない引継ぎメモと復旧手順がある |
 | 2 | 全writerと起動元を列挙し、停止を準備 | 在席で停止を判断。agent自身が停止対象なら保守端末を引き受ける | 作業agent・Mail・proxy・watcher・GC・自動再起動元が止まった |
 | 3 | 停止後の旧一式を保全し、承認済みの版を配布 | 保存先と更新内容を確認 | 旧一式を変更しない保管と、戻す版／設定が揃う |
 | 4 | 別rootを明示して初期化・health確認・foreground serve | 接続先と起動操作を確認 | 別の Mail instance、空の新登録先、旧接続との分離 |
 | 5 | 新規登録・client prepare・provider準備の確認 | login、指示変更の確認、Codex hook の信頼承認 | 同じ新本人に reconnect。準備不足なら停止 |
 | 6 | 保管庫 CLI で必要分を探し、新Mailへ送る／新予約後にノートへ残す | 持ち越し内容を確認 | 新ID・新時刻の受信、旧側の状態は変わらない |
-| 7 | 新しい予約を取得し、別folderで送受信・通知・編集を確認 | 利用再開を判断 | 同じfileの競合拒否、本人／宛先／対象pathが一致 |
+| 7 | 新しい予約を取得し、別folderで送受信・通知・編集を確認。常駐 bot を起動して受入を再確認 | Telegram で試し、利用再開を判断 | 同じfileの競合拒否、本人／宛先／対象pathが一致。各 bot の Telegram・Mail・Reader が通る |
 | 8 | 失敗時は新側も停止・保全し、手順で旧運用を復旧 | 復旧するかを判断 | 新旧が同時に動かず、新側の未完仕事も控えた |
 
+## 0. 指揮を別の端末に渡す
+
+- **本人**　常駐 bot から切替を指揮している場合は、自分で別の端末を開き、Claude または Codex に引き継ぎます。この端末は停止対象の bot やサービスの tmux に置きません。
+- **agent**　現行接続の確認結果、続ける仕事、停止・復旧の手順と停止判断を、鍵を含めず別端末へ渡します。指揮していた bot も停止時に Mail を失うので、以降の判断は別端末で行います。
+- **確かめ方**　別端末で引継ぎメモを開き、停止・復旧手順と次の操作が Mail の停止中にも分かることを確認します。
+- **戻し方**　引き継げなければ停止に入らず、旧運用で作業を続けます。
+
 ## 1–3. 止める前に、戻せる形を残す
+
+### 常駐 bot の試行・停止・保存
+
+- **agent**　Claude Channels と Hermes Telegram の対象ごとに、旧登録、作業先、profile、起動・停止と自動再起動の管理元、復旧に使う版・設定・保存先を記録します。Telegram の資格は保存先の参照だけを控えます。停止前に別の一時 HOME、空きポートの試験用 fresh Mail、試験専用の Telegram bot と会話で、予定版を使って [起動と受入](#常駐-bot-の起動と受入) まで試します。
+- **本人**　試験用 bot の資格を既存の保管方法で用意し、試験会話に入力します。全対象の試行が通ったら、停止枠と戻す条件を承認します。
+- **agent**　承認後、旧 Mail より先に、対象 bot の自動再起動元と bot を既存手順で停止します。旧 poller と関連 process の終了を確認して、旧版と変更対象の設定を保全します。
+- **確かめ方**　各試行で Telegram・Mail・Reader の結果が揃い、旧側の停止後に poller が残っておらず、旧版と設定を戻す手順が手元にあります。試行の未受入や停止の不明点があればそこで止めます。
+- **戻し方**　試行の失敗時は試験側を止め、旧運用を続けます。旧側の停止後は [8. 復旧](#8-失敗したら手順で戻す) で戻します。
 
 ### dashboardとCockpitの明示準備（通常service切替は未完）
 
@@ -150,6 +167,19 @@ orrery_context='/absolute/path/returned/as/context_path'
 printf '%s\n' '{}' | "$orrery_python" -m agentstack_mail.fresh_client call-json \
   --context "$orrery_context" --tool reconnect
 ```
+
+### 常駐 bot の新しい登録と起動準備
+
+- **本人**　上の登録・準備手順で、対象 bot ごとに新 Mail の登録と client を用意します。旧版と同じ bot を選び、provider のログイン、hook／plugin の確認、必要な資格保管先の利用を承認します。試行時は試験用の登録・保存先を選びます。
+- **agent**　各 bot の専用 context を使い、`0600` の fresh profile を作ります。今の作業先、モデル、許可する Telegram 利用者、対話型の運用を引き継ぎます。製品の profile 例に従って必要な参照を設定します。
+
+  | 対象 | 起動前に用意するもの |
+  |---|---|
+  | Claude Channels | 準備済みの Claude HOME に現行の Channels plugin と selector を設定し、対応する Channels state を指定する。[Claude Channels の設定](persistent-agents.md#fresh-の-claude-channels) |
+  | Hermes Telegram | 管理 installer で検証済みの TUI を用意し、managed manifest と Telegram 資格の参照・allowlist を設定する。必要な非秘密の設定を専用 Hermes HOME に置く。[Hermes Telegram の設定](persistent-agents.md#fresh-の-hermes-telegraminteractive) |
+
+- **確かめ方**　`reconnect` で新 Mail の instance と対象 bot の ID を照合し、[常駐 agent の手順](persistent-agents.md#fresh-の-claude-channels)にある `agentstack-persistent inspect --profile` を各 profile に実行します。確認済みの Python と配布版の launcher を使い、保存した旧設定と新 profile が別であることを確認します。
+- **戻し方**　準備が通らなければ起動せず、結果を控えます。本番の旧側を停止済みなら [8. 復旧](#8-失敗したら手順で戻す) へ進みます。
 
 ### 利用者単位のfresh指示を、既存setupで置く
 
@@ -422,7 +452,28 @@ Codexの既知の空欄表示 `› Ask Codex to do anything` は空欄として�
 
 通知completionはstdout／paneへの受渡し処理の記録で、read／ACKやagentの理解・仕事完了ではありません。外部入力とDB更新を一度だけにする保証はなく、不明な結果では再通知の可能性があります。Codexの複数file patchは後のfileで拒否されても先行fileのleaseだけ延長される場合があります。編集は許可されませんが、patch全体で時刻が不変とは保証しません。ClaudeのMultiEdit／NotebookEditは現在拒否されます。
 
+### 常駐 bot の起動と受入
+
+- **agent**　新 Mail と対応する watcher・画面が使え、同じ Telegram bot の旧 poller が終了していることを確認します。既存の常駐管理元の起動コマンドを、確認済みの配布版の `agentstack-persistent run --profile` と新 profile へ切り替えて起動します。試行では試験専用 tmux の前景 pane から起動し、試験 Mail の watcher を使います。Telegram の入力を頼む前に、Channels plugin の接続または Hermes の `telegram-ready` を今回の起動で確認します。
+- **本人**　対象の Telegram 会話に見分けられる短い通常メッセージを送り、同じ bot の返信を確認します。試行時は試験専用の会話を使います。
+- **agent**　bot の入力欄が空で待機している間に、新 Mail の別の登録から試験番号と返信先を含む Mail を 1 通送ります。通常の watcher が bot を起こし、同じ番号の返信が新 Mail に戻ることを確認します。対象 bot の Reader を開き、直前の Telegram 入力と返信が今回の会話に表示されることを本人と確認します。
+- **確かめ方**　各 bot の Telegram の 1 往復、Mail の 1 往復、Reader の表示を記録します。新 run の起動や poller の ready だけでは合格にしません。初回に三つを確認するのは、登録・起動の切替後も利用者が同じ経路で会話を続けて読めると確かめるためです。
+- **戻し方**　どれかが通らなければ、次の bot や利用再開へ進みません。試行では試験側を停止し、切替中は [8. 復旧](#8-失敗したら手順で戻す) へ進みます。
+
+| 一度だけ | 通常の起動ごと |
+|---|---|
+| 新登録と profile を準備し、既存の起動設定を差し替える。試行と切替直後に Telegram・Mail・Reader を確認する | 既存の管理元が同じ登録と profile で起動する。本人の追加操作は不要 |
+
 ## 8. 失敗したら手順で戻す
+
+### 常駐 bot を戻す
+
+- **本人**　別の保守端末で、どこまで切り替わったかを確認し、復旧するかを判断します。
+- **agent**　新 bot が動いていれば、新側の再起動元を止め、launcher がまだ動いていれば SIGTERM で終了を待ちます。記録した起動元ごとに所有 process と poller の終了を確認します。終了が確定しなければ旧 poller を起動せず、理由を報告します。[常駐 agent の未終了 run の扱い](persistent-agents.md#fresh-の未終了-run-を閉じる)を参照してください。下の共通手順で新側を保全して旧 Mail と関連サービスを復旧してから、保全した旧版・設定を使って元の管理元で bot ごとに起動します。
+- **確かめ方**　各 Telegram bot に poller が 1 つだけあり、旧 Mail の本人として送受信できることを確かめます。Telegram・Mail・Reader をもう一度確認し、Reader は切替前の状態と照合します。
+- **戻し方**　旧 bot の復旧にも失敗したら対象の再起動元を停止し、旧側と新側の記録を保全します。別の端末で指揮を続け、状態が確定してから再開します。
+
+### 共通サービスと保存データを戻す
 
 切替前に記録した管理方法で、新provider・proxy・Mail・watcherと再起動元を止めます。**新rootも削除せず一式を保全**し、本人が戻すことを選んだ場合だけ、保存した旧実行版／設定／旧一式を用いた復旧手順を進めます。読取専用の保管コピーをそのまま書込み先にせず、元の保管を保持した復旧先を使います。正確な戻し先や起動コマンドが無ければ止めます。
 

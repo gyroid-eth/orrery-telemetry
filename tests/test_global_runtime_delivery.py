@@ -619,6 +619,28 @@ def test_child_tool_selection_uses_existing_policy_and_fixed_provider_home(serve
     assert servers=={'fixture-server':definition}
 
 
+def test_codex_child_only_enables_chrome_extension_when_selected(server):
+    parent=context(server,'chrome-parent',window=False)
+    prepared=parent.prepare_child({'child_client_name':'chrome-child','name':'ChromeChild',
+        'program':'codex','model':'fixture','task_description':'fixture','prepare_only':True})
+    child=api['RuntimeClient'](Path(prepared['client_config']))
+    delivery=api['runtime_delivery'](child)
+    home=delivery.directory(child.runtime_dir/'provider-home/codex')
+    config=home/'config.toml'
+    source='[plugins."chrome@openai-bundled"]\nenabled=true\n[plugins."browser@openai-bundled"]\nenabled=true\n'
+    api['atomic_bytes'](config,source.encode())
+    _, flags, _ = delivery.child_tool_plan('codex',home,str(child.isolation))
+    assert flags == ['-c', 'plugins."chrome@openai-bundled".enabled=false']
+
+    state=api['read_json'](child.outputs['child'])
+    state['tools_selection']={'base':'default','tools':{'chrome_extension':True}}
+    child.write_output(child.outputs['child'],state,'child')
+    _, flags, prompt = delivery.child_tool_plan('codex',home,str(child.isolation))
+    assert flags == ['-c', 'plugins."chrome@openai-bundled".enabled=true']
+    assert 'Chrome extension plugin' in prompt
+    assert config.read_text() == source
+
+
 def test_mail_task_replay_uses_single_parent_intent_and_never_embeds_body(server,monkeypatch):
     parent=context(server,'mail-task-parent',window=False)
     prepared=parent.prepare_child({'child_client_name':'mail-task-child','name':'MailTaskChild',

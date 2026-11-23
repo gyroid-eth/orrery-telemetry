@@ -38,7 +38,15 @@ def _configuration(ctx) -> dict:
         # Read the plugin manager's profile config explicitly.
         with _plugin_home_scope(ctx._manager.home_path):
             cfg = load_config_readonly() or {}
-        return settings.validate_configuration(cfg.get("telegram"))
+        telegram = cfg.get("telegram")
+        if not isinstance(telegram, dict):
+            return {}
+        # Hermes merges its own Telegram defaults into this effective config.
+        # Validate only the fields owned by the ORRERY plugin here.
+        return settings.validate_configuration({
+            "token_ref": telegram["token_ref"],
+            "allow_from": telegram["allow_from"],
+        })
     except Exception:
         return {}
 

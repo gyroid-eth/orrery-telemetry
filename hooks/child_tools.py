@@ -8,11 +8,13 @@ A selection has two parts:
     a Claude child gets ORRERY Mail as its only configured MCP server, while
     Claude in Chrome and the built-in macOS computer use still follow the
     user's own settings and the child's working directory; a Codex child
-    inherits the user's MCP servers. ``"mail-only"`` promises that the child
+    inherits the user's MCP servers with direct screen and Chrome access
+    requiring selection. ``"mail-only"`` promises that the child
     gets nothing beyond ORRERY Mail except what ``tools`` names.
 
 ``tools``
-    ``browser`` (Claude in Chrome, optionally a deviceId), ``screen`` (
+    ``browser`` (Claude in Chrome, optionally a deviceId), ``chrome_extension``
+    (the bundled Chrome extension plugin in Codex), ``screen`` (
     computer use, ``read`` or ``operate``; either the built-in macOS computer
     use of Claude Code or a user MCP server such as Windows-MCP), ``mcp``
     (user MCP servers chosen by name) and ``approve_all`` (servers in ``mcp``
@@ -71,7 +73,8 @@ from typing import Any
 
 BASES = ("default", "mail-only")
 ACCESS = ("read", "operate")
-TOOL_KINDS = ("browser", "screen", "mcp", "approve_all")
+TOOL_KINDS = ("browser", "chrome_extension", "screen", "mcp", "approve_all")
+CODEX_CHROME_PLUGIN = "chrome@openai-bundled"
 SERVER_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 DEVICE_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 # Claude Code's built-in computer use server (macOS only). It is enabled per
@@ -257,6 +260,11 @@ def normalize(base: Any = None, tools: Any = None) -> dict:
             raise ToolsError("tools.browser.device must match [A-Za-z0-9._:-]{1,128}")
         result["browser"] = {"device": device}
 
+    if "chrome_extension" in tools:
+        if tools["chrome_extension"] is not True:
+            raise ToolsError("tools.chrome_extension must be true")
+        result["chrome_extension"] = True
+
     if "screen" in tools:
         screen = tools["screen"]
         if isinstance(screen, str):
@@ -305,7 +313,7 @@ def parse_cli(values: list[str]) -> dict:
     """Turn /delegate --tools values into a ``tools`` object.
 
     Accepted forms (comma separated or repeated): ``browser``,
-    ``browser:<deviceId>``, ``screen`` (= operate), ``screen:read``,
+    ``browser:<deviceId>``, ``chrome-extension``, ``screen`` (= operate), ``screen:read``,
     ``screen:operate``, ``screen:<read|operate>:<server>``, ``mcp:<server>``
     and ``mcp:<server>:all`` (also approve every tool of that server)."""
     tools: dict[str, Any] = {}
@@ -318,6 +326,10 @@ def parse_cli(values: list[str]) -> dict:
                 if "browser" in tools:
                     raise ToolsError("--tools browser given twice")
                 tools["browser"] = {"device": rest}
+            elif item == "chrome-extension":
+                if "chrome_extension" in tools:
+                    raise ToolsError("--tools chrome-extension given twice")
+                tools["chrome_extension"] = True
             elif kind == "screen":
                 if "screen" in tools:
                     raise ToolsError("--tools screen given twice")
@@ -337,7 +349,7 @@ def parse_cli(values: list[str]) -> dict:
                     tools.setdefault("approve_all", []).append(name)
             else:
                 raise ToolsError(
-                    f"unknown --tools entry {item!r} (browser[:deviceId], "
+                    f"unknown --tools entry {item!r} (browser[:deviceId], chrome-extension, "
                     "screen[:read|:operate[:server]], mcp:<server>[:all])")
     return tools
 
@@ -349,6 +361,11 @@ def restrictive(spec: dict) -> bool:
 
 def check_provider(spec: dict, provider: str) -> None:
     tools = spec["tools"]
+    if "chrome_extension" in tools:
+        if provider != "codex":
+            raise ToolsError("chrome-extension is available only for Codex children")
+        if screen_mode(spec) is not None:
+            raise ToolsError("chrome-extension cannot be combined with orrery-screen")
     if provider == "codex":
         browser = tools.get("browser")
         if browser is not None and browser["device"]:
@@ -449,6 +466,8 @@ def _describe(spec: dict, provider: str = "claude") -> list[str]:
         parts.append("browser (Claude in Chrome"
                      + (f", deviceId {browser['device']})" if browser["device"] else ")")
                      if provider != "codex" else "browser (the chrome-devtools MCP server)")
+    if "chrome_extension" in tools:
+        parts.append("Chrome extension plugin")
     screen = tools.get("screen")
     if screen is not None:
         where = f"MCP server {screen['server']}" if screen["server"] else "computer use"
@@ -801,6 +820,10 @@ def write_private_json(path: str, payload: dict) -> None:
 # --------------------------------------------------------------------------- #
 # Codex
 # --------------------------------------------------------------------------- #
+def _codex_chrome_server(name: str, definition: dict) -> bool:
+    return name == "chrome-devtools" or _direct_chrome_package(definition) is not None
+
+
 def codex_browser_server(servers: dict) -> str:
     """The name of the user's browser MCP server in a Codex config.toml.
 
@@ -809,8 +832,7 @@ def codex_browser_server(servers: dict) -> str:
     found = [name for name, definition in servers.items()
              if isinstance(definition, dict)
              and name != "agentstack" and not looks_like_agent_mail(name)
-             and (name == "chrome-devtools" or (
-                 (table_entry(definition) or ("",))[0] in NAME_CLASSIFIED))]
+             and _codex_chrome_server(name, definition)]
     if "chrome-devtools" in found:
         return "chrome-devtools"
     if len(found) == 1:
@@ -842,18 +864,29 @@ def codex_apply(config: dict, spec: dict, *, managed_screen: dict | None = None)
     for name, server in list(servers.items()):
         if name in names:
             _check_screen_source(spec, name, server)
-        elif isinstance(server, dict) and _cua_server(name, server):
+        elif isinstance(server, dict) and (
+                _cua_server(name, server) or _codex_chrome_server(name, server)):
             servers[name] = {**server, "enabled": False}
     plugins = config.get("plugins")
-    for plugin_id, plugin in plugins.items() if isinstance(plugins, dict) else ():
+    if not isinstance(plugins, dict):
+        plugins = {}
+    chrome_extension = "chrome_extension" in tools
+    if chrome_extension and not isinstance(plugins.get(CODEX_CHROME_PLUGIN), dict):
+        raise ToolsError(f"Plugin {CODEX_CHROME_PLUGIN!r} is not in the user's Codex config.toml")
+    for plugin_id, plugin in plugins.items():
         if not isinstance(plugin, dict):
             continue
         plugin_servers = plugin.get("mcp_servers")
         known_cua = isinstance(plugin_servers, dict) and any(
             _cua_server(name, definition) for name, definition in plugin_servers.items()
         )
-        if (_cua_server(plugin_id.split("@", 1)[0]) or known_cua
-                or (screen_mode(spec) is not None and not plugin_id.startswith("agentstack-codex-app@"))):
+        blocked = (_cua_server(plugin_id.split("@", 1)[0]) or known_cua
+                   or (screen_mode(spec) is not None and not plugin_id.startswith("agentstack-codex-app@")))
+        if plugin_id == CODEX_CHROME_PLUGIN:
+            if chrome_extension and blocked:
+                raise ToolsError("chrome-extension cannot be combined with a direct Cua Driver server in the plugin")
+            plugin["enabled"] = chrome_extension
+        elif blocked:
             plugin["enabled"] = False
     if SCREEN_SERVER in names:
         names.remove(SCREEN_SERVER)
