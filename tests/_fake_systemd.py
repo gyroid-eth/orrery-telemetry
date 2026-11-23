@@ -2,6 +2,7 @@
 
 import shlex
 import sys
+from pathlib import Path
 
 
 DASHBOARD_UNIT_SHOW = r'''
@@ -48,3 +49,20 @@ else:
                       "data": [[argv[0], argv, False, 0, 0, 0, 0, 0, 0, 0]]}))
 PY
 '''
+
+
+def stub_dashboard_readiness(fake_bin: Path) -> str:
+    """Let a recorder represent the dashboard while the installer runs normally."""
+    helper = Path(__file__).resolve().parents[1] / "dashboard/systemd_dashboard.py"
+    python = fake_bin / "dashboard-test-python"
+    python.write_text(
+        "#!/bin/sh\n"
+        f'if [ "${{1:-}}" = {shlex.quote(str(helper))} ] && [ "${{2:-}}" = ready ]; then\n'
+        '  test -f "$HOME/.config/systemd/user/$AGENTSTACK_LABEL_PREFIX.agentdashboard.service"\n'
+        '  exit $?\n'
+        'fi\n'
+        f'exec {shlex.quote(sys.executable)} "$@"\n',
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    return str(python)

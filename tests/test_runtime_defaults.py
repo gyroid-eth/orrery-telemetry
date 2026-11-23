@@ -18,7 +18,7 @@ import pytest
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from _fake_systemd import DASHBOARD_BUSCTL, DASHBOARD_UNIT_SHOW
+from _fake_systemd import DASHBOARD_BUSCTL, DASHBOARD_UNIT_SHOW, stub_dashboard_readiness
 from service_teardown import (  # noqa: E402
     TEST_LABEL_PREFIX,
     stop_dashboard,
@@ -39,9 +39,12 @@ INSTALL_STATE_SAMPLE = ROOT / "scripts" / "install-state.sample.json"
 SOURCE_ONLY_ENTRIES = frozenset({"bin/agentstack-daemon"})
 
 
-def _fake_systemctl() -> str:
-    """Start/stop the installed dashboard for isolated installer tests."""
-    return "#!/bin/sh\n" + DASHBOARD_UNIT_SHOW + """
+def _fake_systemctl(*, start_dashboard: bool = True) -> str:
+    """Represent the user manager, with a real dashboard for lifecycle tests."""
+    script = "#!/bin/sh\n" + DASHBOARD_UNIT_SHOW
+    if not start_dashboard:
+        return script + "exit 0\n"
+    return script + """
 case "$2" in
   show-environment|daemon-reload)
     exit 0
@@ -451,7 +454,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     for name, body in {
-        "systemctl": _fake_systemctl(),
+        "systemctl": _fake_systemctl(start_dashboard=False),
         "busctl": DASHBOARD_BUSCTL,
         "tmux": "#!/bin/sh\nexit 0\n",
         "uname": "#!/bin/sh\necho Linux\n",
@@ -483,7 +486,7 @@ def test_noninteractive_assume_yes_is_explicit_audited_approval(tmp_path):
         mail_port = probe.getsockname()[1]
     env.update({
         "PATH": f"{fake_bin}:{env['PATH']}",
-        "AGENTSTACK_PYTHON": sys.executable,
+        "AGENTSTACK_PYTHON": stub_dashboard_readiness(fake_bin),
         "AGENTSTACK_HOME": str(install_dir),
         "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_MAIL_STATE_ROOT": str(mail_dir),
@@ -1319,7 +1322,7 @@ def test_an_explicit_mail_label_is_not_overwritten_by_the_derived_one(tmp_path):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     for name, body in {
-        "systemctl": _fake_systemctl(),
+        "systemctl": _fake_systemctl(start_dashboard=False),
         "busctl": DASHBOARD_BUSCTL,
         "tmux": "#!/bin/sh\nexit 0\n",
         "uname": "#!/bin/sh\necho Linux\n",
@@ -1344,6 +1347,7 @@ def test_an_explicit_mail_label_is_not_overwritten_by_the_derived_one(tmp_path):
     explicit = f"{TEST_LABEL_PREFIX}.chosen-by-the-operator"
     env.update({
         "PATH": f"{fake_bin}:{env['PATH']}",
+        "AGENTSTACK_PYTHON": stub_dashboard_readiness(fake_bin),
         "AGENTSTACK_HOME": str(install_dir),
         "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_MAIL_LAUNCHD_LABEL": explicit,
