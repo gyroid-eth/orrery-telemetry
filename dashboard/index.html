@@ -35082,8 +35082,13 @@ function tipShow(name,ev){
     : '';
   const ROLE={parent:'parent (delegator)',child:'child (delegated)',
     both:'both',none:'none'};
-  const roleRow=`<div class="gt-row"><b>role</b><span>`+
-    `${ROLE[g.role]||'—'}</span></div>`;
+  // "role" is the role a person assigned (the same one NETWORK shows); the
+  // delegation position (parent/child) is a separate row.
+  const assignedRole=g.annot&&g.annot.role||'';
+  const roleRow=(assignedRole
+    ? `<div class="gt-row"><b>role</b><span>${esc(assignedRole)}</span></div>`
+    : '')+
+    `<div class="gt-row"><b>lineage</b><span>${ROLE[g.role]||'—'}</span></div>`;
   const dv=+g.deliv||0;
   const delivRow=dv>0
     ? `<div class="gt-row"><b>out</b><span>¶ ${dv} logs</span></div>`
@@ -37240,7 +37245,11 @@ function renderPanelSummary(name, a, g){
     rows.push(`<div class="ts-row"><b>mail</b><span>UNAVAILABLE · ${esc(a.mail_reason||g.mail_reason||'')}<br>${esc(a.mail_message||g.mail_message||'This agent cannot send or receive ORRERY Mail')}</span></div>`);
   const ROLE={parent:'parent (delegator)',child:'child (delegated)',
     both:'both',none:'none'};
-  if(role) rows.push(`<div class="ts-row"><b>role</b><span>${ROLE[role]||'—'}</span></div>`);
+  // The assigned role (the one NETWORK shows) first; the delegation position
+  // used to be labelled "role" too and looked like a stale assignment.
+  const assignedRole=(a.annot&&a.annot.role)||(g.annot&&g.annot.role)||'';
+  if(assignedRole) rows.push(`<div class="ts-row"><b>role</b><span>${esc(assignedRole)}</span></div>`);
+  if(role) rows.push(`<div class="ts-row"><b>lineage</b><span>${ROLE[role]||'—'}</span></div>`);
   const resumeCategory=a.category||
     (a.retired?'retired':(a.state||(a.running?'run':a.present?'finished':'gone')));
   if(isResumeCategory(resumeCategory)){
