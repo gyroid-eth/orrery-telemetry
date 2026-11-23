@@ -497,7 +497,7 @@ class Controller:
             client = _read_json(self.dir / "client.json")
             if client.get("nonce") and client.get("nonce") == _read_json(self.dir / "anchor.json").get("nonce"):
                 self.windows_pid = client.get("windows_pid")
-        if holding and running:
+        if running:
             if "unknown" in reasons:
                 state = "unknown"
             else:
@@ -515,9 +515,12 @@ class Controller:
             "anchor": _read_json(self.dir / "anchor.json") if running else {},
             "error": self.error if state == "failed" else "",
             "grace_seconds_left": (
-                max(0, round(GRACE_SECONDS - (now - self.last_busy))) if state == "releasing" else 0
+                max(0, round(GRACE_SECONDS - (now - self.last_busy))) if state == "releasing" and grace else 0
             ),
-            "updated": now,
+            # A launch must match an observation after its reservation, even
+            # if PowerShell delayed publication of that observation.
+            "observed_at": now,
+            "updated": self.clock(),
         }
         _write_json(self.dir / "status.json", status)
         return status
@@ -547,7 +550,7 @@ SETTLED_STATES = ("holding", "unknown", "failed", "error")
 
 
 def wait_settled(directory: pathlib.Path, since: float, timeout: float, nudge=None) -> dict:
-    """The first status written at or after `since` that holds or has failed.
+    """The first holding or failed status based on an observation since `since`.
 
     An older status says nothing about this launch, so it is never returned:
     on timeout the answer is {"state": "timeout"}.
@@ -555,7 +558,8 @@ def wait_settled(directory: pathlib.Path, since: float, timeout: float, nudge=No
     deadline = time.time() + timeout
     while True:
         status = _read_json(directory / "status.json")
-        if float(status.get("updated") or 0) >= since and status.get("state") in SETTLED_STATES:
+        observed_at = status.get("observed_at", status.get("updated"))
+        if float(observed_at or 0) >= since and status.get("state") in SETTLED_STATES:
             return status
         if time.time() >= deadline:
             return {"state": "timeout", "error": "the WSL hold did not start in time"}

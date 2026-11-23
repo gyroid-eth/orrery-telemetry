@@ -183,7 +183,7 @@ def test_hold_while_agents_run_then_release_after_the_grace(tmp_path, monkeypatc
         assert wsl_anchor.anchor_running(tmp_path)
         clock.now += wsl_anchor.GRACE_SECONDS
         status = controller.tick()
-        assert status["state"] == "idle"
+        assert status["state"] == ("releasing" if status["anchor_running"] else "idle")
         assert wsl_anchor._read_json(tmp_path / "wanted.json")["hold"] is False
         starter.procs[0].wait(timeout=10)  # the anchor ended by itself
         assert not wsl_anchor.anchor_running(tmp_path)
@@ -191,6 +191,60 @@ def test_hold_while_agents_run_then_release_after_the_grace(tmp_path, monkeypatc
         assert len(starter.calls) == 1
     finally:
         starter.stop()
+
+
+def test_release_stays_releasing_until_the_anchor_unlocks(tmp_path):
+    clock, starter = Clock(), LocalStarter()
+    controller = _controller(tmp_path, lambda: ({}, [], True), starter, clock)
+    # An anchor left running across a dashboard restart has no local grace
+    # clock. Its Windows PID is recovered from the matching nonce.
+    wsl_anchor._write_json(tmp_path / "anchor.json", {"nonce": "fixture"})
+    wsl_anchor._write_json(tmp_path / "client.json", {"nonce": "fixture", "windows_pid": 4242})
+    with (tmp_path / "lock").open("wb") as lock:
+        wsl_anchor.fcntl.flock(lock, wsl_anchor.fcntl.LOCK_EX)
+        status = controller.tick()
+        assert status["state"] == "releasing"
+        assert status["grace_seconds_left"] == 0
+        assert status["anchor_running"] is True
+        assert status["windows_pid"] == 4242
+        assert wsl_anchor._read_json(tmp_path / "wanted.json")["hold"] is False
+
+    status = controller.tick()
+    assert status["state"] == "idle"
+    assert status["anchor_running"] is False
+    assert status["windows_pid"] is None
+    assert not starter.calls
+
+
+def test_a_slow_start_publishes_a_fresh_status(tmp_path, monkeypatch):
+    directory = tmp_path / "wsl-anchor"
+    clock = Clock()
+    observed_at = clock.now
+    running = False
+
+    def slow_start(_distro, argv):
+        nonlocal running
+        clock.now += 60
+        wsl_anchor._write_json(directory / "anchor.json", {"nonce": argv[-1]})
+        running = True
+        return 4242, ""
+
+    monkeypatch.setattr(wsl_anchor, "anchor_running", lambda _: running)
+    controller = _controller(directory, lambda: ({"agents": 1}, [], True), slow_start, clock)
+    status = controller.tick()
+    assert status["observed_at"] == observed_at
+    assert status["updated"] == clock.now
+    assert status["state"] == "holding" and status["windows_pid"] == 4242
+    assert wsl_anchor._read_json(directory / "status.json") == status
+
+    monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_is_wsl", lambda: True)
+    monkeypatch.setattr(server, "_wsl_anchor_module", lambda: wsl_anchor)
+    monkeypatch.setitem(server._WSL_ANCHOR, "controller", controller)
+    monkeypatch.setattr(server.time, "time", clock)
+    public_status = server.wsl_anchor_status()
+    assert public_status["age"] == 0
+    assert "observed_at" not in public_status
 
 
 def test_nothing_is_started_without_work(tmp_path):
@@ -245,8 +299,10 @@ def test_unobservable_work_keeps_the_last_confirmed_hold_and_says_so(tmp_path, m
         clock.now += 5
         assert controller.tick()["state"] == "releasing"
         clock.now += wsl_anchor.GRACE_SECONDS
-        assert controller.tick()["state"] == "idle"
+        controller.tick()
+        assert wsl_anchor._read_json(tmp_path / "wanted.json")["hold"] is False
         starter.procs[0].wait(timeout=10)
+        assert controller.tick()["state"] == "idle"
     finally:
         starter.stop()
 
@@ -575,6 +631,10 @@ def test_a_status_from_before_the_launch_is_not_its_answer(tmp_path):
     since = time.time()
     wsl_anchor._write_json(tmp_path / "status.json", {"state": "failed", "error": "x", "updated": since + 0.01})
     assert wsl_anchor.wait_settled(tmp_path, since, 1)["state"] == "failed"
+    wsl_anchor._write_json(tmp_path / "status.json", {
+        "state": "holding", "observed_at": since - 1, "updated": since + 0.01,
+    })
+    assert wsl_anchor.wait_settled(tmp_path, since, 0)["state"] == "timeout"
 
 
 def test_a_real_async_launch_keeps_its_reservation_until_it_settles(tmp_path, monkeypatch):

@@ -11334,6 +11334,7 @@ def wsl_anchor_status() -> dict:
         return {"ok": True, "state": "starting"}
     # The header must not keep showing an old "kept" when ticks stopped.
     age = max(0, round(time.time() - float(status.get("updated") or 0)))
+    status.pop("observed_at", None)  # Internal to launch reservation checks.
     return {"ok": True, **status, "age": age}
 
 

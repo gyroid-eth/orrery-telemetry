@@ -109,11 +109,11 @@ Get-CimInstance Win32_Process -Filter "Name='wsl.exe'" |
 wsl.exe --list --verbose
 ```
 
-## 3. 解除と停止 / Release and stop
+## 3. ORRERY の保持解除 / ORRERY hold release
 
-下の段階で試験用セッションだけを終了します。dashboard が `releasing` に変わり、約60秒の無活動で `idle` に移ることをログで確認します。Windows 側でも手順2で記録した PID が消え、他のクライアントが無い場合は distro が `Stopped` になることを確認します。観測中は Windows 側のプロセス一覧と `wsl --list --verbose` を使います。distro に入ると別の WSL クライアントになります。
+下の段階で試験用セッションだけを終了します。ログで `releasing` を経て、約60秒の無活動後に `state=idle`、`anchor_running=false`、`windows_pid=null` がそろうことを確認します。手順2で記録した Windows の保持用 PID が消えれば、ORRERY の保持解除は完了です。
 
-End only the test session. Check the log for `releasing` followed by `idle` after about 60 seconds of inactivity. Verify on Windows that the PID recorded in step 2 exits and that the distro becomes `Stopped` if there are no other clients. Observe using the Windows process list and `wsl --list --verbose`. Opening a new shell in the distro adds a WSL client.
+End only the test session. Check the log for `releasing`, followed after about 60 seconds of inactivity by `state=idle`, `anchor_running=false`, and `windows_pid=null` together. Verify that the Windows hold PID recorded in step 2 exits to complete the ORRERY hold-release check.
 
 ```powershell
 Start-WslCheck release @'
@@ -124,7 +124,12 @@ for ((i=0; i<80; i++)); do
 import json, sys
 status = json.load(sys.stdin)
 print(status)
-sys.exit(status["state"] != "idle")
+released = (
+    status["state"] == "idle"
+    and status["anchor_running"] is False
+    and status["windows_pid"] is None
+)
+sys.exit(0 if released else 1)
 '; then exit 0; fi
     sleep 1
 done
@@ -132,6 +137,34 @@ exit 1
 '@
 ```
 
-保持用 PID の消滅後も distro が残る場合は、Windows の `wsl.exe` と `wslhost.exe` の PID とコマンドラインを記録します。元に戻す場合は `.wslconfig` の試験変更を戻します。
+## 4. WSL の自然停止と対照 / WSL idle shutdown and control
 
-If the distro remains running after the hold PID exits, record the PIDs and command lines of `wsl.exe` and `wslhost.exe` on Windows. Restore any temporary `.wslconfig` changes after the test.
+手順3の Windows 起動役が終了した後、Windows からだけ distro の状態と `wsl.exe`・`wslhost.exe` の一覧を記録します。60秒後と120秒後にも採取します。Linux 側へ入ると観測自体が WSL クライアントになります。ORRERY の保持を解除しても、WSL が別のクライアントを追跡していれば distro は `Running` のままです。
+
+After the Windows release launcher exits, record the distro state and the `wsl.exe` and `wslhost.exe` processes from Windows only. Take further snapshots after 60 and 120 seconds. Entering Linux would add another WSL client. The distro can remain `Running` after ORRERY releases its hold while WSL tracks other clients.
+
+```powershell
+function Show-WslCheckState {
+    Get-Date -Format o
+    Get-CimInstance Win32_Process -Filter "Name='wsl.exe' OR Name='wslhost.exe'" |
+        Select-Object ProcessId, ParentProcessId, CreationDate, CommandLine
+    wsl.exe --list --verbose
+}
+Show-WslCheckState
+```
+
+対照は別の cold start で採ります。ORRERY や agent が動かない試験用 distro を選び、systemd や idle timeout は本試験と同じ設定にします。同じ distro で導入前に採っても構いません。WMI から `/bin/true` だけを起動し、その `wsl.exe` が終了した後に同じ間隔で `Show-WslCheckState` を実行します。distro の停止と `wslhost.exe` の残り方を手順3の観測と比べ、ORRERY の保持解除の結果とは別に記録します。
+
+Take a separate cold-start control in a test distro without ORRERY or agents running, using the same systemd and idle-timeout settings. You can run it in the same distro before installation. Launch only `/bin/true` via WMI. After its `wsl.exe` exits, run `Show-WslCheckState` at the same intervals. Compare distro shutdown and any remaining `wslhost.exe` processes with step 3, and record the comparison separately from the ORRERY hold-release result.
+
+```powershell
+$ControlDistro = 'Ubuntu'
+$Wsl = "$env:SystemRoot\System32\wsl.exe"
+$Control = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+    CommandLine = ('"{0}" -d "{1}" --exec /bin/true' -f $Wsl, $ControlDistro)
+}
+if ($Control.ReturnValue -ne 0) { throw "Win32_Process.Create returned $($Control.ReturnValue)" }
+"Control wsl.exe PID $($Control.ProcessId)"
+```
+
+試験後は `.wslconfig` の一時変更を戻します。Restore any temporary `.wslconfig` changes after the test.
