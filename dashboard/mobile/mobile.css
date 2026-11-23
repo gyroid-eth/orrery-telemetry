@@ -612,6 +612,10 @@ html.graph-fullscreen #settings{z-index:40}
 .conversation-thumbnail-label{grid-row:2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px var(--mono)}
 .conversation-thumbnail-status{grid-row:3;color:var(--ink-dim);font:9px/1.5 var(--mono)}
 .conversation-thumbnail:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.mobile .conversation-markdown-image{display:inline-grid;grid-template-rows:none;width:min(360px,100%);max-width:100%;margin:2px 0;padding:7px;vertical-align:top}
+.conversation-markdown-image > *{grid-row:auto}
+.conversation-markdown-image .conversation-thumbnail-image{height:auto;max-height:220px}
+.conversation-markdown-image .conversation-thumbnail-label{white-space:normal;overflow-wrap:anywhere;font:inherit}
 .conversation-chip{padding:3px 7px;border:1px solid var(--hair);border-radius:5px;font:10px var(--mono);color:var(--ink-dim);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mobile .conversation-time{display:block;margin-top:4px;font:9px var(--mono);color:var(--ink-dim)}
 .conversation-compose-hint{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;padding-top:9px;border-top:1px solid var(--hair);font:10px var(--mono);color:var(--ink-dim)}

@@ -90,6 +90,48 @@ def test_preview_calls_the_fixed_cockpit_route_for_a_mobile_rendition():
                       'truncated': False, 'notice': 'Current file · may differ from the recorded edit'}
 
 
+def test_markdown_images_relay_distinct_visible_targets_and_use_the_existing_preview():
+    local = '/private/tmp/plot.png'
+    home = '~/reports/図 1.JPEG'
+    hidden = '/private/tmp/unshown.png'
+    remote = 'https://fixture.invalid/remote.png'
+    home_ref = 'Home' + 'a' * 28
+    raw = event(1, text=f'![Graph]({local}) ![Web]({remote})',
+                mail=[dict(direction='received', body=f'![図](<{home}>)')],
+                markdown_images=[
+                    {'target': local, 'id': COCKPIT_REF},
+                    {'target': local, 'id': 'b' * 32},
+                    {'target': home, 'id': home_ref},
+                    {'target': hidden, 'id': 'c' * 32},
+                    {'target': remote, 'id': 'd' * 32},
+                ])
+
+    def reply(query):
+        if 'ref' in query:
+            return 200, image()
+        return 200, dict(ok=True, events=[raw])
+
+    with cockpit(reply) as port:
+        client = history.HistoryClient(port)
+        with serving(reader(client=client)) as relay_port:
+            status, body = get(relay_port, '/view/conversation?name=Vega')
+            assert status == 200
+            refs = json.loads(body)['events'][0]['markdown_images']
+            assert [item['target'] for item in refs] == [local, home]
+            assert all(history.TOKEN.fullmatch(item['ref']) for item in refs)
+            assert all(secret not in body.decode() for secret in (COCKPIT_REF, home_ref, hidden))
+            Cockpit.requests.clear()
+            other_route = '/view/conversation/preview?name=Atlas&ref=' + refs[0]['ref']
+            assert get(relay_port, other_route)[0] == 410
+            assert Cockpit.requests == []
+            route = '/view/conversation/preview?name=Vega&ref=' + refs[1]['ref'] + '&thumbnail=1'
+            status, body = get(relay_port, route)
+    path, _ = Cockpit.requests[0]
+    assert urlsplit(path).path == '/telemetry/conversation/preview'
+    assert parse_qs(urlsplit(path).query) == {'ref': [home_ref], 'mobile': ['1'], 'thumbnail': ['1']}
+    assert status == 200 and json.loads(body)['kind'] == 'image'
+
+
 @pytest.mark.parametrize('query,status', [
     ('name=Vega&ref=' + 'a' * 32 + '&path=/tmp/x', 400), ('name=Vega&ref=' + COCKPIT_REF, 400),
     ('name=Vega&ref=/Users/x/notes.md', 400), ('name=Vega', 400), ('ref=' + 'a' * 32, 400),

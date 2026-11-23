@@ -94,6 +94,67 @@ def test_ordinary_paths_and_ungranted_images_do_not_auto_load(phone):
     assert not any('thumbnail=1' in p for p in state['get_calls'])
 
 
+def test_markdown_images_use_event_refs_in_reader_and_mail(phone):
+    _, js, wait, state = phone
+    local = '/private/tmp/plot.png'
+    home = '~/reports/図 1.JPEG'
+    missing = '/private/tmp/missing.png'
+    remote = 'https://fixture.invalid/remote.png'
+    expired = '/private/tmp/expired.png'
+    raw_html = '<img src="https://fixture.invalid/raw.png">'
+    state['events'] = [
+        dict(id='markdown', kind='text', role='assistant', ts='',
+             text=f'![Chart]({local})\n\n![Missing]({missing})\n\n![Expired]({expired})\n\n![Online]({remote})\n\n{raw_html}',
+             markdown_images=[dict(target=local, ref='a'*32), dict(target=expired, ref='c'*32)]),
+        dict(id='markdown-mail', kind='mail', role='assistant', ts='',
+             mail=[dict(direction='received', subject='With chart', sender='Vega', recipients=['SampleAgent'],
+                        coverage='complete', body=f'![図](<{home}>)')],
+             markdown_images=[dict(target=home, ref='b'*32)]),
+    ]
+    state['file_preview'] = image()
+    # Exercise the existing fallback when the shared Chrome does not schedule
+    # IntersectionObserver frames. Viewport deferral is tested independently.
+    js("""window.IntersectionObserver=undefined;window.lastFetch=window.fetch;window.expireExpanded=false;
+          window.fetch=async (...args)=>{
+            const url=new URL(args[0],location.href);
+            if(url.searchParams.get('ref')==='c'.repeat(32)&&!url.searchParams.has('thumbnail')&&expireExpanded)
+              return new Response(JSON.stringify({ok:false,error:'preview_expired'}),{status:410});
+            return lastFetch(...args);
+          };
+          OrreryMobileTerminal.close();""")
+    wait("!document.querySelector('#terminal-sheet').open")
+    js("OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelector('[data-id=markdown] .conversation-markdown-image img')?.naturalWidth===3")
+    assert js("document.querySelector('[data-id=markdown] .conversation-markdown-image').getAttribute('aria-label')") == 'Open image: Chart'
+    assert js("document.querySelector('[data-id=markdown] .conversation-markdown-image .conversation-thumbnail-status').hidden")
+    assert js("Array.from(document.querySelectorAll('[data-id=markdown] .markdown-image')).map(e=>e.textContent)") == [
+        f'Missing ({missing})', f'Online ({remote})']
+    assert js("document.querySelector('[data-id=markdown] a.markdown-image').href") == remote
+    assert js("document.querySelector('[data-id=markdown] .conversation-text').textContent.includes(" + json.dumps(raw_html) + ")")
+    assert js("document.querySelector('[data-id=markdown] img[src^=https]')===null")
+    assert js("performance.getEntriesByType('resource').every(e=>!e.name.startsWith('https://fixture.invalid/'))")
+    assert not any('ref=' + 'b'*32 in p for p in state['get_calls'])
+
+    js("document.querySelector('[data-id=markdown] .conversation-markdown-image').click()")
+    wait("document.querySelector('.conversation-preview-image')?.naturalWidth===3")
+    js("document.querySelector('.conversation-preview-close').click()")
+
+    wait("Array.from(document.querySelectorAll('[data-id=markdown] .conversation-markdown-image img')).every(img=>img.naturalWidth===3)")
+    js("expireExpanded=true; document.querySelectorAll('[data-id=markdown] .conversation-markdown-image')[1].click()")
+    wait("document.querySelector('.conversation-preview-status')?.textContent.includes('expired')")
+    assert js("document.querySelectorAll('[data-id=markdown] .conversation-markdown-image')[1].textContent").startswith(f'Expired ({expired})')
+    assert js("document.querySelectorAll('[data-id=markdown] .conversation-markdown-image img')[1].hidden")
+    js("document.querySelector('.conversation-preview-close').click()")
+
+    js("document.querySelector('[data-id=markdown-mail] .conversation-mail-toggle').click()")
+    wait("document.querySelector('[data-id=markdown-mail] .conversation-markdown-image img')?.naturalWidth===3")
+    assert js("document.querySelector('[data-id=markdown-mail] .conversation-markdown-image img').alt") == '図'
+    preview_paths = [p for p in state['get_calls'] if p.startswith('/view/conversation/preview?')]
+    assert any('ref=' + 'a'*32 in p and 'thumbnail=1' not in p for p in preview_paths)
+    assert any('ref=' + 'b'*32 in p and 'thumbnail=1' in p for p in preview_paths)
+    assert all('path=' not in p for p in preview_paths)
+
+
 def test_offscreen_thumbnail_waits_until_the_reader_scrolls_to_it(phone):
     client,js,wait,state=phone
     shown(state)
