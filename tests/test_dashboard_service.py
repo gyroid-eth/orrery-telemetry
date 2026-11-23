@@ -496,7 +496,8 @@ def test_agentctl_uses_installed_systemd_dashboard_unit(tmp_path):
         command = fake_bin / name
         command.write_text(f"#!/bin/sh\n{body}\n")
         command.chmod(0o755)
-    label = "example.agentdashboard.service"
+    label_prefix = TEST_LABEL_PREFIX + ".systemd"
+    label = f"{label_prefix}.agentdashboard.service"
     unit = tmp_path / ".config" / "systemd" / "user" / label
     unit.parent.mkdir(parents=True)
     unit.touch()
@@ -504,7 +505,7 @@ def test_agentctl_uses_installed_systemd_dashboard_unit(tmp_path):
     env = {
         "HOME": str(tmp_path), "AGENTSTACK_HOME": str(tmp_path),
         "AGENTSTACK_ENV_FILE": str(tmp_path / "env.sh"),
-        "AGENTSTACK_LABEL_PREFIX": "example", "AGENTSTACK_PORT": "19878",
+        "AGENTSTACK_LABEL_PREFIX": label_prefix, "AGENTSTACK_PORT": "19878",
         "PATH": f"{fake_bin}:/usr/bin:/bin", "SYSTEMCTL_LOG": str(log),
     }
     for action in ("start", "status", "restart", "stop", "uninstall"):

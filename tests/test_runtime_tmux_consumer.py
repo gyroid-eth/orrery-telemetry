@@ -323,8 +323,11 @@ def test_actual_terminal_caller_and_child_recheck_effect_and_endpoint(consumer,m
     def modules(path):return API if str(path).endswith('runtime_tmux.py') else {'LegacyConsumer':lambda *a,**kw:c}
     monkeypatch.setitem(cli['main'].__globals__,'runpy',SimpleNamespace(run_path=modules))
     monkeypatch.setattr(os,'execvpe',lambda binary,argv,env:effects.append(argv))
+    interop_env = {'WSL_INTEROP': '/fixture/wsl-interop'}
     def terminal(argv,**kw):
-        if adapter=='wt':argv=launch[-1]
+        if adapter == 'wt':
+            assert kw['env'] == interop_env
+            argv = launch[-1]
         index=argv.index(str(ROOT/'bin/lib/runtime_tmux_consumer.py'))
         assert 'TMUX='+str(c.transport.path)+',123,0' in argv
         state['global']=foreign
@@ -334,12 +337,15 @@ def test_actual_terminal_caller_and_child_recheck_effect_and_endpoint(consumer,m
     nodes=[node for node in source.body if isinstance(node,ast.FunctionDef) and node.name in ('_open_terminal_tmux','_legacy_terminal_argv')]
     ns=dict(Path=Path,sys=sys,HOOKS_DIR=str(ROOT/'hooks'),_terminal_adapter=lambda:adapter,_wsl_distro=lambda:'FixtureWSL',
         _write_wt_launcher=lambda argv,title:launch.append(argv) or '/fixture/launch.sh',
+        _wsl_anchor_module=lambda:SimpleNamespace(interop_env=lambda:interop_env),
         _legacy_tmux_consumer=lambda:c,subprocess=SimpleNamespace(run=terminal))
     exec(compile(ast.Module(body=nodes,type_ignores=[]),str(ROOT/'dashboard/server.py'),'exec'),ns)
     args=['tmux','attach-session','-t','Alpha'] if operation=='attach-session' else ['tmux','new-session','-A','-s','Alpha']
     result=ns['_open_terminal_tmux'](args,'Alpha')
-    assert result['ok'] is not foreign
-    if foreign:assert effects==[]
+    assert result['ok'] is not foreign, result
+    if foreign:
+        assert result['error'] == 'refused'
+        assert effects == []
     else:
         assert len(effects)==1
         assert effects[0][:3]==['fixture-tmux','-S',str(c.transport.path)]
