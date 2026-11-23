@@ -1112,6 +1112,7 @@ REQUIRED_RUNTIME_MODULES = {
     "fresh_end.py",
     "fresh_guard.py",
     "fresh_harness.py",
+    "fresh_hermes_history.py",
     "fresh_launch.py",
     "fresh_notifications.py",
     "fresh_persistent.py",
