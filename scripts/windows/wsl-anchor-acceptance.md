@@ -6,9 +6,9 @@ Use a test Ubuntu distro on Windows 11 / WSL2 with systemd and Windows interop e
 
 ## Windows 側の起動関数 / Windows launcher
 
-Windows 上の PowerShell で定義します。Windows OpenSSH 経由でも `Win32_Process.Create` が接続の外に起動します。各段階の結果は Windows の一時ディレクトリに残ります。SSH を切ってから読み直すときは、同じ Windows ユーザーを使います。
+Windows 上の PowerShell で定義します。Windows OpenSSH 経由でも `Win32_Process.Create` が接続の外に起動します。非ログインシェルでも `uv` などを見つけられるように、各段階で `~/.local/bin` を PATH に加えます。各段階の結果は Windows の一時ディレクトリに残ります。SSH を切ってから読み直すときは、同じ Windows ユーザーを使います。
 
-Define this in Windows PowerShell. `Win32_Process.Create` launches outside the Windows OpenSSH session, and each stage leaves a log in the Windows temp directory. Reconnect as the same Windows user to read it.
+Define this in Windows PowerShell. `Win32_Process.Create` launches outside the Windows OpenSSH session. Each stage adds `~/.local/bin` to PATH so the non-login shell can find tools such as `uv`, and leaves a log in the Windows temp directory. Reconnect as the same Windows user to read it.
 
 ```powershell
 $Distro = 'Ubuntu'
@@ -17,10 +17,11 @@ New-Item -ItemType Directory -Path $Logs -Force | Out-Null
 
 function Start-WslCheck([string]$Stage, [string]$Bash) {
     $Log = Join-Path $Logs "$Stage.log"
+    $Script = 'export PATH="$HOME/.local/bin:$PATH"' + "`n" + $Bash.Replace("`r", '')
     $Payload = @{
         distro = $Distro
         log = $Log
-        script = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Bash.Replace("`r", '')))
+        script = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Script))
     } | ConvertTo-Json -Compress
     $Payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Payload))
     $Command = @'
