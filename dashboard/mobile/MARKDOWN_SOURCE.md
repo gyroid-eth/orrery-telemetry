@@ -18,5 +18,7 @@ PYTHONPATH=. .venv/bin/python -m pytest -q tests/test_mobile_markdown_source.py
 
 The checksum always runs. The byte comparison skips if no upstream source is
 supplied. Both run without a network request or an upstream checkout dependency.
-The phone keeps local paths inert because file access uses only relay-issued
-preview references; ordinary HTTP(S)/mailto links retain the renderer's rules.
+The mobile Reader decorates the renderer's `span.markdown-image` markers.
+Local raster images use only preview IDs issued for their conversation event.
+HTTP(S) image targets become links, while ordinary local path candidates keep
+the renderer's inert text behavior.

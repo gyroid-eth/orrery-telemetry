@@ -1,19 +1,17 @@
 """Opt-in, read-only conversation history for the mobile reader.
 
 No connection or process starts on import. The phone supplies only a canonical
-agent name and, for older pages, an opaque token this reader issued. It never
-supplies or receives a file path, transcript cursor or cockpit reference. The
+agent name and, for older pages, an opaque token this reader issued. The phone
+supplies no file path, transcript cursor or cockpit reference. The
 reader calls one fixed loopback cockpit route, which resolves the dashboard's
 bound record itself and rechecks it after reading; it does not mask text. This
 module keeps an explicit allow-list of event fields and bounds every page.
 
-File and image previews follow the same rule. Cockpit attaches its own
-reference IDs to tool events; this reader keeps them and gives the phone a
-different opaque ID per reference. A preview asks the fixed cockpit preview
-route, which rechecks the record, the root, the canonical path, the type, the
-size and the pixel count on every read, and refuses nothing by name. This module then bounds
-the answer again: text keeps its start, images pass only as a plain PNG
-(IHDR, IDAT and IEND chunks) within side, pixel and byte limits.
+File and image previews follow the same rule. The relay replaces cockpit IDs
+on tool events and Markdown images with its own opaque IDs. The fixed cockpit
+preview route rechecks the bound record and applies the preview policy on every
+read. The relay bounds the answer again: text keeps its start and images pass
+only as a plain PNG (IHDR, IDAT and IEND chunks) within side, pixel and byte limits.
 """
 from __future__ import annotations
 
@@ -39,6 +37,7 @@ UPSTREAM_CURSOR = re.compile(r'[A-Za-z0-9:_.-]{1,160}\Z')
 REASON_CODE = re.compile(r'[a-z0-9_]{1,64}\Z')
 # Cockpit's own reference IDs (secrets.token_urlsafe(24)). They stay here.
 COCKPIT_REF = re.compile(r'[A-Za-z0-9_-]{32}\Z')
+MARKDOWN_IMAGE_TARGET = re.compile(r'(?:/(?!/)|~/)[^\x00-\x1f\x7f<>]*\.(?:png|jpe?g|gif|webp)\Z', re.IGNORECASE)
 PAGE_EVENTS = 40
 MAX_UPSTREAM_BYTES = 8 * 1024 * 1024
 MAX_TEXT = 16 * 1024
@@ -155,10 +154,29 @@ def project_step(raw, boundary=False):
     return value
 
 
+def project_markdown_images(raw, bodies, issue):
+    """Expose only literal targets already present in the projected body."""
+    if issue is None or not isinstance(raw, list):
+        return []
+    projected, seen = [], set()
+    for item in raw[:8]:
+        if not isinstance(item, dict):
+            continue
+        target, ref = item.get('target'), item.get('id')
+        if (not isinstance(target, str) or len(target) > 2000 or target in seen
+                or not MARKDOWN_IMAGE_TARGET.fullmatch(target)
+                or not isinstance(ref, str) or not COCKPIT_REF.fullmatch(ref)
+                or not any(target in body for body in bodies)):
+            continue
+        seen.add(target)
+        projected.append({'target': target, 'ref': issue(ref)})
+    return projected
+
+
 def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None):
-    """Only displayed fields. Diffs, cockpit reference IDs, cursors and paths
-    never pass. ``issue`` turns a well-formed cockpit reference into this
-    reader's own opaque ID; without it a file is a label only."""
+    """Only displayed fields. Diffs, cockpit reference IDs, cursors and tool
+    paths stay on the PC. ``issue`` turns a cockpit reference into this reader's
+    own opaque ID; without it a file is a label only."""
     if not isinstance(raw, dict):
         return None
     kind, role = raw.get('kind'), raw.get('role')
@@ -202,6 +220,12 @@ def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None
         return None
     if mail:
         result['mail'] = mail
+    image_bodies = [m['body'] for m in mail]
+    if kind == 'text' and role == 'assistant':
+        image_bodies.append(text)
+    images = project_markdown_images(raw.get('markdown_images'), image_bodies, issue)
+    if images:
+        result['markdown_images'] = images
     refs = raw.get('references') if isinstance(raw.get('references'), list) else []
     chips = []
     for r in refs[:8]:

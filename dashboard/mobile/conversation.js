@@ -432,13 +432,16 @@ function layoutMailRoutes(){
  }
  for(const card of list.querySelectorAll('.conversation-mail'))layoutMailThread(card);
 }
-function body(text,assistant=false){
+function body(text,assistant=false,images){
  const box=make('div','conversation-text'),m=markdown();
- if(m&&assistant)m.renderDocument(text,box,{codeControls:true});
+ if(m&&assistant){
+  m.renderDocument(text,box,{codeControls:true});
+  renderMarkdownImages(box,images,m);
+ }
  else if(m)m.renderText(text,box);else box.textContent=text;
  return box;
 }
-function mailCard(m,ts){
+function mailCard(m,ts,images){
  const card=make('div','conversation-mail '+m.direction);
  const head=make('div','conversation-mail-head'),route=make('div','conversation-mail-route');
  const peer=(value,strong)=>{const p=make('button','conversation-mail-peer'+(strong?' is-counterpart':'')),mark=make('span','conversation-mail-mark');p.type='button';mark.dataset.peerName=value||'';mark.hidden=true;p.title=value||'unknown';p.setAttribute('aria-label','Open '+(value||'unknown')+' conversation');p.disabled=!window.OrreryMobileProfile?.forName(value);p.onclick=e=>{e.stopPropagation();if(value&&value!==name)window.OrreryMobileTerminal?.open(value,window.OrreryMobileIdentity?.forName(value),'conversation');};p.append(mark,make('span','conversation-mail-peer-name',value||'unknown'));return p;};
@@ -461,8 +464,9 @@ function mailCard(m,ts){
  const closedNote=note.textContent;
  card.onclick=event=>{
   if(detail.contains(event.target))return;
-  if(detail.hidden&&!detail.hasChildNodes())detail.append(body(m.body,true));
+  if(detail.hidden&&!detail.hasChildNodes())detail.append(body(m.body,true,images));
   detail.hidden=!detail.hidden;
+  if(!detail.hidden)loadThumbnails();
   card.setAttribute('aria-expanded',String(!detail.hidden));
   toggle.setAttribute('aria-expanded',String(!detail.hidden));
   card.querySelector('.conversation-mail-chevron').textContent=detail.hidden?'▸':'▾';
@@ -475,14 +479,14 @@ function mailCard(m,ts){
 // Edit, apply_patch, SendUserFile...), so a tool row carries chips too.
 function files(e,r){if(Array.isArray(e.files)&&e.files.length){const f=make('div','conversation-files');e.files.forEach(x=>f.append(chip(x)));r.append(f);}}
 function row(e){
- if(e.kind==='tool'){const r=make('div','conversation-tool');r.append(make('span','conversation-tool-label',e.text));r.dataset.id=e.id;files(e,r);if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts)));return r;}
- if(e.kind==='mail'){const r=make('div','conversation-mails');r.dataset.id=e.id;e.mail.forEach(m=>r.append(mailCard(m,e.ts)));return r;}
+ if(e.kind==='tool'){const r=make('div','conversation-tool');r.append(make('span','conversation-tool-label',e.text));r.dataset.id=e.id;files(e,r);if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));return r;}
+ if(e.kind==='mail'){const r=make('div','conversation-mails');r.dataset.id=e.id;e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));return r;}
  const command=e.role==='user'&&markdown()?.commandRecord(e.text);
  const r=make('div',command?.shell?'conversation-shell':'conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
- if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(e.text,r);}else{if(e.role==='assistant')r.append(speaker(e));r.append(body(e.text,e.role==='assistant'));}
+ if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(e.text,r);}else{if(e.role==='assistant')r.append(speaker(e));r.append(body(e.text,e.role==='assistant',e.markdown_images));}
  if(command||e.role==='assistant')window.OrreryReaderReplyMotion?.enhanceCopies?.(r);
 
- if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts)));
+ if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));
  files(e,r);
  const meta=[e.role==='assistant'&&!command?'':clock(e.ts),e.truncated?'shortened':''].filter(Boolean).join(' · ');if(meta)r.append(make('small','conversation-time',meta));
  return r;
@@ -503,20 +507,58 @@ function shownFiles(e){
   if(x.kind!=='image'||typeof x.ref!=='string'||!REF.test(x.ref)){
    box.append(make('span','conversation-chip',x.label));continue;
   }
-  const button=make('button','conversation-thumbnail');button.type='button';button.setAttribute('aria-label','画像を拡大: '+x.label);
-  const image=make('img','conversation-thumbnail-image');image.alt=x.label;image.hidden=true;
-  const hint=make('small','conversation-thumbnail-status','画像を読み込み中…');
-  button.append(image,make('span','conversation-thumbnail-label',x.label),hint);button.onclick=()=>openPreview(x);box.append(button);
-  const item={button,image,hint,x,state:'waiting',visible:typeof IntersectionObserver!=='function',controller:null};thumbnails.set(button,item);
-  if(typeof IntersectionObserver==='function'){
-   if(!thumbnailObserver)thumbnailObserver=new IntersectionObserver(entries=>{
-    for(const entry of entries){const item=thumbnails.get(entry.target);if(item)item.visible=entry.isIntersecting;}
-    loadThumbnails();
-   },{root:list,rootMargin:'160px'});
-   thumbnailObserver.observe(button);
-  }
+  box.append(thumbnail(x));
  }
  return box;
+}
+function thumbnail(x,alt=x.label,fallback=alt){
+ const button=make('button','conversation-thumbnail'+(x.markdown?' conversation-markdown-image':''));
+ button.type='button';button.setAttribute('aria-label',(x.markdown?'Open image: ':'画像を拡大: ')+alt);
+ if(x.markdown)button.title='Open image';
+ const image=make('img','conversation-thumbnail-image');image.alt=alt;image.hidden=true;
+ const label=make('span','conversation-thumbnail-label',fallback);
+ const hint=make('small','conversation-thumbnail-status',x.markdown?'Loading image…':'画像を読み込み中…');
+ button.append(image,label,hint);button.onclick=()=>openPreview(x);
+ const item={button,image,label,hint,x,alt,fallback,state:'waiting',visible:typeof IntersectionObserver!=='function',observed:false,controller:null};
+ thumbnails.set(button,item);
+ return button;
+}
+function observeThumbnail(button){
+ if(typeof IntersectionObserver==='function'){
+  if(!thumbnailObserver)thumbnailObserver=new IntersectionObserver(entries=>{
+   for(const entry of entries){const item=thumbnails.get(entry.target);if(item)item.visible=entry.isIntersecting;}
+   loadThumbnails();
+  },{root:list,rootMargin:'160px'});
+  thumbnailObserver.observe(button);
+ }
+}
+function renderMarkdownImages(host,images,renderer){
+ const refs=new Map();
+ if(Array.isArray(images))for(const item of images.slice(0,8)){
+  if(typeof item?.target==='string'&&typeof item.ref==='string'&&REF.test(item.ref))refs.set(item.target,item.ref);
+ }
+ // The bundled renderer already recognizes images and keeps raw HTML literal.
+ // Only the Reader can resolve its image markers against this event's IDs.
+ for(const marker of host.querySelectorAll('span.markdown-image[title]')){
+  if(marker.parentElement.closest('a,[data-path-label],.markdown-link-text'))continue;
+  const target=marker.title,text=marker.textContent;
+  const alt=text.startsWith('[image: ')?text.slice(8,-1):'';
+  const caption=alt?alt+' ('+target+')':target;
+  if(/^https?:\/\//i.test(target)){
+   const destination=/[<>]/.test(target)?target:'<'+target+'>';
+   const fragment=document.createDocumentFragment();
+   renderer.renderDocument('[Image]('+destination+')',fragment);
+   const link=fragment.querySelector('a');
+   if(!link)continue;
+   link.className='markdown-image';link.textContent=caption;
+   marker.replaceWith(link);continue;
+  }
+  if(!/^(?:\/(?!\/)|~\/)[^\x00-\x1f\x7f<>]*\.(?:png|jpe?g|gif|webp)$/i.test(target))continue;
+  const ref=refs.get(target),label=target.split('/').pop();
+  if(ref){
+   marker.replaceWith(thumbnail({ref,label,markdown:true},alt||label,caption));
+  }else marker.textContent=caption;
+ }
 }
 function forgetThumbnails(node){
  for(const [button,item] of thumbnails)if(!node||node.contains(button)){
@@ -526,12 +568,19 @@ function forgetThumbnails(node){
 }
 function clearImage(img){img.src='';}
 function paintImage(img,v){img.src=pngSource(v);}
+function thumbnailFailed(item){
+ if(!item.image.hidden){clearImage(item.image);item.image.hidden=true;}
+ item.label.textContent=item.fallback;item.hint.hidden=false;
+ item.hint.textContent=item.x.markdown?'Image unavailable':'画像を取得できません。タップして開く';
+ item.state='failed';
+}
 function loadThumbnails(){
  if(!root||document.hidden)return;
  let active=[...thumbnails.values()].filter(x=>x.state==='loading').length;
  for(const item of thumbnails.values()){
-  if(active>=2)break;
-  if(item.state!=='waiting'||!item.visible||!item.button.isConnected)continue;
+  if(!item.button.isConnected)continue;
+  if(!item.observed){item.observed=true;observeThumbnail(item.button);}
+  if(active>=2||item.state!=='waiting'||!item.visible)continue;
   active++;loadThumbnail(item);
  }
 }
@@ -544,14 +593,20 @@ async function loadThumbnail(item){
   const raw=await response.text();if(raw.length>MAX_PREVIEW_BYTES)throw Error('unavailable');
   if(response.ok)value=JSON.parse(raw);
  }catch(_){}finally{clearTimeout(t);item.controller=null;}
- if(!thumbnails.has(item.button))return;
+ if(!thumbnails.has(item.button)||item.state!=='loading')return;
  if(g!==gen||document.hidden){item.state='waiting';loadThumbnails();return;}
+ const follow=item.x.markdown&&atBottom()&&!selectionInRecord();
  if(value?.ok===true&&pngSource(value)){
-  paintImage(item.image,value);item.image.hidden=false;item.hint.textContent='タップして拡大';item.state='done';
- }else{item.hint.textContent='画像を取得できません。タップして開く';item.state='failed';}
+  if(item.x.markdown){item.image.width=value.width;item.image.height=value.height;}
+  paintImage(item.image,value);item.image.hidden=false;item.label.textContent=item.alt;
+  if(item.x.markdown)item.hint.hidden=true;
+  else item.hint.textContent='タップして拡大';
+  item.state='done';
+ }else thumbnailFailed(item);
  // Keep only a small number of decoded thumbnails as the reader scrolls.
  const loaded=[...thumbnails.values()].filter(x=>x.state==='done');
  for(const old of loaded){if(loaded.filter(x=>x.state==='done').length<=24)break;if(!old.visible){clearImage(old.image);old.image.hidden=true;old.state='waiting';}}
+ if(follow)list.scrollTop=list.scrollHeight;
  loadThumbnails();
 }
 /* Checked again here: a PNG data URL from strict base64 within the relay's
@@ -612,7 +667,7 @@ async function openPreview(x){
  if(g!==gen||panel!==box)return;
  previewRequest=null;
  if(status===410)v={ok:false,error:'preview_expired'};
- if(v?.ok===true&&v.kind==='text'&&typeof v.text==='string'){
+ if(v?.ok===true&&v.kind==='text'&&typeof v.text==='string'&&!x.markdown){
   state.textContent=v.truncated===true?'Showing the start of the file.':'';
   view.append(make('pre','conversation-preview-text',v.text));
   const text=v.text;saveButton(head,close,x.label,()=>new Blob([text],{type:'text/plain;charset=utf-8'}));
@@ -621,6 +676,9 @@ async function openPreview(x){
   paintImage(img,v);state.textContent='';view.append(img);
   const data=v.data,blob=()=>new Blob([pngBytes(data)],{type:'image/png'});blob.image=true;saveButton(head,close,x.label,blob);
  }else{
+  if(x.markdown)for(const item of thumbnails.values())if(item.x.markdown&&item.x.ref===x.ref){
+   item.controller?.abort();thumbnailFailed(item);
+  }
   state.textContent=previewMessages[v?.error]||messages[v?.error]||'Preview unavailable right now.';return;
  }
  if(typeof v.notice==='string'&&v.notice)box.append(make('small','conversation-preview-notice',v.notice));
@@ -727,6 +785,7 @@ function dropEvent(id){
  for(const part of [...node.children].filter(x=>x.dataset.id!==undefined)){
   part.className='conversation-shell';part.insertBefore(make('small','conversation-speaker','SHELL'),part.firstChild);node.parentNode.insertBefore(part,node);
  }
+ forgetThumbnails(node);
  if(node.contains?.(document.activeElement))list.focus?.({preventScroll:true});node.remove();
 }
 function append(page,replySince){
