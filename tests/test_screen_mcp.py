@@ -159,7 +159,10 @@ async def _relay_stops_and_never_replays(upstream, scenario):
     config, log = upstream
     authority = Authority()
     authority.mode = "control"
-    relay = Relay(SCHEMAS["darwin"], authority, lambda: config(scenario), timeout=2)
+    # The same limit also covers starting the fixture driver (Python and the
+    # mcp import). On a slow runner that alone took over 2 seconds, so the
+    # click never reached the driver. Only "hang" waits for the full limit.
+    relay = Relay(SCHEMAS["darwin"], authority, lambda: config(scenario), timeout=10)
     server = ScreenServer(relay)
     async with server._lifespan_manager():
         assert (await server._call_tool_mcp("click", {"pid": 2})).isError
