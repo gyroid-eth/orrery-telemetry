@@ -1,0 +1,51 @@
+/* Expanded Mail bodies in the desktop drawer and the isolated reply view. */
+#edrawer .ed-msg.expanded .ed-prev { display: none; }
+
+#edrawer .mail-markdown {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--ink);
+  font: 11px/1.65 var(--mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  cursor: auto;
+}
+
+#edrawer .mail-markdown :is(.markdown-heading, p, ul, ol, blockquote) { margin: 0 0 8px; }
+#edrawer .mail-markdown .markdown-heading { font: 600 14px/1.45 var(--serif); }
+#edrawer .mail-markdown :is(ul, ol) { padding-left: 20px; }
+#edrawer .mail-markdown li p { margin: 0; }
+#edrawer .mail-markdown blockquote { padding-left: 10px; border-left: 2px solid var(--hair); }
+#edrawer .mail-markdown a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+#edrawer .mail-markdown :is(.conversation-code, .conversation-table) { margin: 8px 0; }
+#edrawer .mail-markdown :is(.conversation-table-scroll, pre) {
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior-x: contain;
+}
+#edrawer .mail-markdown table { width: max-content; min-width: 100%; border-collapse: collapse; }
+#edrawer .mail-markdown :is(th, td) {
+  max-width: 26ch;
+  padding: 4px 7px;
+  border: 1px solid var(--hair);
+  white-space: normal;
+  text-align: left;
+  vertical-align: top;
+}
+#edrawer .mail-markdown .conversation-code { border: 1px solid var(--hair); }
+#edrawer .mail-markdown .conversation-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 7px;
+  border-bottom: 1px solid var(--hair);
+}
+#edrawer .mail-markdown :is(.conversation-code-copy, .conversation-table-copy) {
+  color: var(--ink-dim);
+  background: none;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+#edrawer .mail-markdown .conversation-table-copy { display: block; margin: 0 0 4px auto; }
+#edrawer .mail-markdown pre { padding: 7px; white-space: pre; overflow-wrap: normal; }

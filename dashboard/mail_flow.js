@@ -43,7 +43,11 @@ function render(root,{messages=[],selected=null,incomplete=false,next=null,onSel
   const reference=element('div','reply-to');
   if(m.reply_to!=null)reference.append(button('↳ Reply to #'+m.reply_to,()=>onSelect(m.reply_to),'reply-link'));
   else reference.textContent='#'+m.id+' · visible conversation starts here';
-  item.append(reference,element('h3','reply-subject',m.subject||'(no subject)'),element('div','reply-body',m.body_md??'Body not loaded.'));
+  const body=element('div','reply-body'),markdown=window.OrreryConversationMarkdown;
+  if(selected===m.id&&typeof m.body_md==='string'&&markdown){
+   body.classList.add('mail-markdown');markdown.renderDocument(m.body_md,body,{codeControls:true});
+  }else body.textContent=m.body_md??'Body not loaded.';
+  item.append(reference,element('h3','reply-subject',m.subject||'(no subject)'),body);
   const more=element('div','reply-more');more.append(button(selected===m.id?'Collapse message':'Read message',()=>onSelect(selected===m.id?null:m.id),'reply-link'));item.append(more);flow.append(item);
  }
  if(next&&onMore)root.append(button('Load more visible mail',onMore,'reply-load'));

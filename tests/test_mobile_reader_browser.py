@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from mobile_reader_browser import AREA, phone  # noqa: F401
+from mobile_reader_browser import AREA, MAIL_MARKDOWN, assert_mail_markdown, phone  # noqa: F401
 
 
 @pytest.mark.parametrize('theme',['dark','light'])
@@ -432,6 +432,23 @@ def test_working_shows_only_an_upstream_duration(phone):
     wait("document.querySelector('.conversation-activity').textContent==='Working · 2m05s'", 12)
 
 
+def test_reader_mail_uses_the_conversation_markdown_and_keeps_links_interactive(phone):
+    _, js, wait, state = phone
+    state['events'].append(dict(id='markdown-mail', kind='mail', role='assistant', text='', ts='2026-01-01T08:47:00Z',
+                               mail=[dict(direction='sent', sender='SampleAgent', recipients=['OtherAgent'],
+                                          subject='Fixture subject', body=MAIL_MARKDOWN, coverage='full')]))
+    card = '[data-id=markdown-mail] .conversation-mail'
+    wait(f"document.querySelector('{card} .conversation-mail-toggle')!==null", 8)
+    js(f"document.querySelector('{card} .conversation-mail-toggle').click()")
+    assert_mail_markdown(js, card + ' .conversation-mail-body')
+    js(f"""(()=>{{const a=document.querySelector('{card} .conversation-mail-body a');
+        a.addEventListener('click',event=>event.preventDefault(),{{once:true}});a.click();}})()""")
+    assert js(f"document.querySelector('{card}').getAttribute('aria-expanded')==='true'")
+    assert js(f"document.querySelector('{card} .conversation-mail-subject').textContent==='Fixture subject'")
+    js(f"document.querySelector('{card} .conversation-mail-toggle').click()")
+    assert js(f"document.querySelector('{card} .conversation-mail-body').hidden")
+
+
 @pytest.mark.parametrize('view', ['activity', 'graph'])
 def test_mail_detail_fetches_and_displays_body_from_both_views(phone, view):
     _, js, wait, state = phone
@@ -442,6 +459,7 @@ def test_mail_detail_fetches_and_displays_body_from_both_views(phone, view):
     state['snapshot']['graph']['nodes'].append(peer)
     event = dict(key='a'*32, source='SampleAgent', target='OtherAgent', kind='to', event_at=time.time())
     state['mail'] = event
+    state['message_body'] = MAIL_MARKDOWN
     state['snapshot']['timeline']['mail'] = [event]
     state['snapshot']['graph']['edges'] = [dict(source='SampleAgent', target='OtherAgent', kind='to', count=1, last_ts=event['event_at'])]
     js("window.__mailErrors=[];addEventListener('unhandledrejection',e=>{__mailErrors.push(String(e.reason));e.preventDefault()});document.dispatchEvent(new Event('visibilitychange'))")
@@ -454,10 +472,11 @@ def test_mail_detail_fetches_and_displays_body_from_both_views(phone, view):
         js("document.querySelector('#pair-events .mail-route').click()")
     else:
         js("document.querySelector('[data-view=activity]').click();document.querySelector('#events .mail-route').click()")
-    wait("__mailErrors.length>0||document.querySelector('#message-body').textContent!==''")
+    wait("__mailErrors.length>0||document.querySelector('#message-body table')!==null")
     assert js('window.__mailErrors') == []
     assert [p for p in state['get_calls'] if p.startswith('/view/message?')] == ['/view/message?window=day&event=' + event['key']]
-    assert js("document.querySelector('#message-sheet').open&&document.querySelector('#message-subject').textContent==='Fixture subject'&&document.querySelector('#message-body').textContent==='Fixture message body'")
+    assert js("document.querySelector('#message-sheet').open&&document.querySelector('#message-subject').textContent==='Fixture subject'")
+    assert_mail_markdown(js, '#message-body')
     assert js("history.state?.orreryConversation!==true")
 
 
