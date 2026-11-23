@@ -99,12 +99,12 @@ def test_markdown_images_use_event_refs_in_reader_and_mail(phone):
     local = '/private/tmp/plot.png'
     home = '~/reports/図 1.JPEG'
     missing = '/private/tmp/missing.png'
-    remote = 'https://fixture.invalid/remote.png'
+    remote = 'https://fixture.invalid/remote (draft).png'
     expired = '/private/tmp/expired.png'
     raw_html = '<img src="https://fixture.invalid/raw.png">'
     state['events'] = [
         dict(id='markdown', kind='text', role='assistant', ts='',
-             text=f'![Chart]({local})\n\n![Missing]({missing})\n\n![Expired]({expired})\n\n![Online]({remote})\n\n{raw_html}',
+             text=f'![Chart]({local})\n\n![Missing]({missing})\n\n![Expired]({expired})\n\n![Online](<{remote}>)\n\n{raw_html}',
              markdown_images=[dict(target=local, ref='a'*32), dict(target=expired, ref='c'*32)]),
         dict(id='markdown-mail', kind='mail', role='assistant', ts='',
              mail=[dict(direction='received', subject='With chart', sender='Vega', recipients=['SampleAgent'],
@@ -129,7 +129,9 @@ def test_markdown_images_use_event_refs_in_reader_and_mail(phone):
     assert js("document.querySelector('[data-id=markdown] .conversation-markdown-image .conversation-thumbnail-status').hidden")
     assert js("Array.from(document.querySelectorAll('[data-id=markdown] .markdown-image')).map(e=>e.textContent)") == [
         f'Missing ({missing})', f'Online ({remote})']
-    assert js("document.querySelector('[data-id=markdown] a.markdown-image').href") == remote
+    link = "document.querySelector('[data-id=markdown] a.markdown-image')"
+    assert js(f"[{link}.href,{link}.rel,{link}.referrerPolicy]") == [
+        remote.replace(' ', '%20'), 'noopener noreferrer', 'no-referrer']
     assert js("document.querySelector('[data-id=markdown] .conversation-text').textContent.includes(" + json.dumps(raw_html) + ")")
     assert js("document.querySelector('[data-id=markdown] img[src^=https]')===null")
     assert js("performance.getEntriesByType('resource').every(e=>!e.name.startsWith('https://fixture.invalid/'))")

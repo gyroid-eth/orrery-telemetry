@@ -436,7 +436,7 @@ function body(text,assistant=false,images){
  const box=make('div','conversation-text'),m=markdown();
  if(m&&assistant){
   m.renderDocument(text,box,{codeControls:true});
-  renderMarkdownImages(box,images);
+  renderMarkdownImages(box,images,m);
  }
  else if(m)m.renderText(text,box);else box.textContent=text;
  return box;
@@ -532,7 +532,7 @@ function observeThumbnail(button){
   thumbnailObserver.observe(button);
  }
 }
-function renderMarkdownImages(host,images){
+function renderMarkdownImages(host,images,renderer){
  const refs=new Map();
  if(Array.isArray(images))for(const item of images.slice(0,8)){
   if(typeof item?.target==='string'&&typeof item.ref==='string'&&REF.test(item.ref))refs.set(item.target,item.ref);
@@ -545,9 +545,12 @@ function renderMarkdownImages(host,images){
   const alt=text.startsWith('[image: ')?text.slice(8,-1):'';
   const caption=alt?alt+' ('+target+')':target;
   if(/^https?:\/\//i.test(target)){
-   let url;try{url=new URL(target);}catch(_){continue;}
-   const link=make('a','markdown-image',caption);
-   link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';link.referrerPolicy='no-referrer';
+   const destination=/[<>]/.test(target)?target:'<'+target+'>';
+   const fragment=document.createDocumentFragment();
+   renderer.renderDocument('[Image]('+destination+')',fragment);
+   const link=fragment.querySelector('a');
+   if(!link)continue;
+   link.className='markdown-image';link.textContent=caption;
    marker.replaceWith(link);continue;
   }
   if(!/^(?:\/(?!\/)|~\/)[^\x00-\x1f\x7f<>]*\.(?:png|jpe?g|gif|webp)$/i.test(target))continue;
