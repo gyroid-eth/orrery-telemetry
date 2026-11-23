@@ -56,6 +56,7 @@ GRACE_SECONDS = 60.0
 # dashboard dies, the anchor still holds while the recorded agents live.
 LEASE_SECONDS = 90.0
 READY_TIMEOUT_SECONDS = 20.0
+WINDOWS_START_TIMEOUT_SECONDS = 60.0
 # A launch reservation that nobody removed (the launcher died) stops counting.
 RESERVATION_SECONDS = 180.0
 # A page lease is renewed every ~15 s while the page is visible.
@@ -327,7 +328,8 @@ def start_script(distro: str, argv: list[str]) -> str:
     payload = base64.b64encode(json.dumps([distro, *argv]).encode("utf-8")).decode("ascii")
     return rf'''
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $a = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{payload}')) | ConvertFrom-Json
 $dir = Join-Path $env:TEMP 'orrery-wsl-anchor'
 [void](New-Item -ItemType Directory -Force -Path $dir)
@@ -336,11 +338,21 @@ $p = Start-Process -FilePath "$env:SystemRoot\System32\wsl.exe" -ArgumentList $l
   -WorkingDirectory $env:TEMP -WindowStyle Hidden -PassThru `
   -RedirectStandardOutput (Join-Path $dir 'stdout.txt') `
   -RedirectStandardError (Join-Path $dir 'stderr.txt')
-[pscustomobject]@{{pid=$p.Id}} | ConvertTo-Json -Compress
+[Console]::WriteLine()
+[Console]::WriteLine("ORRERY_WSL_PID=$($p.Id)")
+[Console]::Out.Flush()
 '''
 
 
-def start_windows_client(distro: str, argv: list[str], timeout: float = 30.0) -> tuple[int | None, str]:
+def _windows_client_pid(output: bytes) -> int | None:
+    for line in reversed(output.splitlines(keepends=True)):
+        match = re.fullmatch(rb"ORRERY_WSL_PID=([1-9][0-9]{0,9})\r?\n", line)
+        if match:
+            return int(match[1])
+    return None
+
+
+def start_windows_client(distro: str, argv: list[str], timeout: float = WINDOWS_START_TIMEOUT_SECONDS) -> tuple[int | None, str]:
     """Start the hidden wsl.exe. Returns (Windows PID, error)."""
     for arg in [distro, *argv]:
         if not _SAFE_ARG.match(arg):
@@ -354,17 +366,20 @@ def start_windows_client(distro: str, argv: list[str], timeout: float = 30.0) ->
             [shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
             cwd="/", capture_output=True, timeout=timeout, env=interop_env(),
         )
-    except (OSError, subprocess.SubprocessError) as exc:
+    except subprocess.TimeoutExpired as exc:
+        # PowerShell or the interop bridge can linger after Start-Process
+        # succeeded. Keep the PID if it was already written to the pipe.
+        pid = _windows_client_pid(exc.stdout or b"")
+        return (pid, "") if pid else (None, f"powershell.exe printed no PID within {timeout:g}s")
+    except OSError as exc:
         return None, f"powershell.exe failed: {exc}"
+    pid = _windows_client_pid(result.stdout)
+    if pid is not None:
+        return pid, ""
     out = result.stdout.decode("utf-8", errors="replace").strip()
     if result.returncode != 0:
         err = result.stderr.decode("utf-8", errors="replace").strip().splitlines()
         return None, f"powershell.exe exited {result.returncode}: {err[-1] if err else out}"
-    for line in reversed(out.splitlines()):
-        try:
-            return int(json.loads(line)["pid"]), ""
-        except (ValueError, KeyError, TypeError):
-            continue
     return None, f"powershell.exe printed no PID: {out[:200]}"
 
 

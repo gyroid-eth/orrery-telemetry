@@ -3386,7 +3386,8 @@ def _open_terminal_tmux(tmux_args: list[str], title: str) -> dict:
                 "wt.exe", "-w", "0", "new-tab", "--title", title,
                 "wsl.exe", "-d", _wsl_distro(), "--exec", "bash", script,
             ]
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=8,
+                               env=_wsl_anchor_module().interop_env())
         else:
             shell_cmd = _shell_join(
                 ["env", "-u", "TMUX", "-u", "TMUX_PANE"] + tmux_args

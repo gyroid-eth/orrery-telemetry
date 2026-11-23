@@ -2376,11 +2376,24 @@ launchd_dashboard_pid() {
     sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\).*$/\1/p' | sed -n '1p'
 }
 
+systemd_dashboard_pid() {
+  [[ "$PREFLIGHT_OS" == "Linux" ]] || return 1
+  local unit="$HOME/.config/systemd/user/$LABEL.service"
+  [[ -f "$unit" ]] || return 1
+  local properties fragment pid
+  properties="$(systemctl --user show -p FragmentPath -p MainPID "$LABEL.service")" || return 1
+  fragment="$(sed -n 's/^FragmentPath=//p' <<< "$properties")"
+  pid="$(sed -n 's/^MainPID=//p' <<< "$properties")"
+  [[ "$fragment" == "$unit" && "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s\n' "$pid"
+}
+
 supervised_dashboard_pid() {
   local pidfile="$RUNTIME_DIR/dashboard.pid" pid
   pid="$(sed -n '1p' "$pidfile" 2>/dev/null || true)"
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   kill -0 "$pid" 2>/dev/null || return 1
+  supervised_pid_runs_dashboard "$pid" || return 1
   printf '%s\n' "$pid"
 }
 
@@ -2389,6 +2402,9 @@ MANAGED_SUPERVISED_PID=""
 listener_is_managed_dashboard() {
   local listener_pid="$1" manager_pid
   manager_pid="$(launchd_dashboard_pid || true)"
+  if [[ -z "$manager_pid" ]]; then
+    manager_pid="$(systemd_dashboard_pid 2>/dev/null || true)"
+  fi
   if [[ -n "$manager_pid" ]] && pid_is_same_or_descendant "$listener_pid" "$manager_pid"; then
     return 0
   fi
@@ -2430,10 +2446,6 @@ check_port() {
 detect_service_kind() {
   if [[ "$PREFLIGHT_OS" == "Darwin" ]]; then
     echo "launchd"
-    return
-  fi
-  if [[ -r /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; then
-    echo "nohup"
     return
   fi
   if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
@@ -4922,6 +4934,7 @@ render_systemd_unit() {
     AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL="${CODEX_DEFAULT_MODEL_SETTING:-}" \
     AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT="${CODEX_DEFAULT_EFFORT_SETTING:-}" \
     AGENTSTACK_INSTALL_DASHBOARD_ORIGINS="${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}" \
+    AGENTSTACK_INSTALL_WSL_WT="$(command -v wt.exe || true)" \
     "$PYTHON_BIN" - "$unit" <<PY
 import os
 import pathlib
@@ -4943,6 +4956,7 @@ env = {
     "AGENTSTACK_MCP_URL": "$MCP_URL",
     "AGENTSTACK_TERMINAL": "$TERMINAL",
     "AGENTSTACK_AUTO_OPEN_CHILD": "$AUTO_OPEN_CHILD_SETTING",
+    "AGENTSTACK_WSL_ANCHOR": "${WSL_ANCHOR_SETTING:-1}",
     "AGENTSTACK_PROJECT_KEY": "$PROJECT_KEY",
     "AGENTSTACK_EXTRA_PROTECTED_ROOTS": os.environ["AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS"],
     "AGENTSTACK_DELIVERABLE_ROOTS": "$DELIVERABLE_ROOTS",
@@ -4978,6 +4992,13 @@ env = {
     "AGENTSTACK_VAULT": "$VAULT_SETTING",
     "PATH": "$PATH_VALUE",
 }
+# The user manager starts without the WSL login shell. Preserve the distro
+# name and, when present, the directory containing the Windows Terminal shim.
+if distro := os.environ.get("WSL_DISTRO_NAME"):
+    env["WSL_DISTRO_NAME"] = distro
+    wt_dir = os.path.dirname(os.environ["AGENTSTACK_INSTALL_WSL_WT"])
+    if wt_dir and wt_dir not in env["PATH"].split(os.pathsep):
+        env["PATH"] += os.pathsep + wt_dir
 if env['AGENTSTACK_RUNTIME_MODE']=='fresh':
     env.update(__import__('json').loads(os.environ['AGENTSTACK_INSTALL_FRESH_ENV']))
 def esc(v):
@@ -5000,6 +5021,9 @@ for key, value in env.items():
     lines.append(f'Environment="{key}={esc(value)}"')
 lines.extend([
     f"ExecStart={esc('$PYTHON_BIN')} {esc('$DASHBOARD_DIR/service_runner.py')}",
+    # The runner shuts down the server. A tmux server launched by the dashboard
+    # may share its cgroup and must survive a dashboard restart.
+    "KillMode=process",
     "Restart=always",
     "RestartSec=5",
     "",
@@ -5054,22 +5078,33 @@ start_service() {
       start_supervised_background || true
       ;;
     systemd-user)
+      if [[ "$DRY_RUN" != true ]]; then
+        stop_supervised_background || die "could not hand over the dashboard to systemd"
+      fi
       render_systemd_unit
       if [[ "$DRY_RUN" == true ]]; then
+        plan "stop any previous supervised background dashboard before switching to systemd"
         run systemctl --user daemon-reload
-        run systemctl --user enable --now "$LABEL.service"
+        run systemctl --user enable "$LABEL.service"
+        run systemctl --user restart "$LABEL.service"
         ACTIVE_SERVICE_KIND="systemd-user"
         return
       fi
       if systemctl --user daemon-reload && \
-         systemctl --user enable --now "$LABEL.service"
+         systemctl --user enable "$LABEL.service" && \
+         systemctl --user restart "$LABEL.service"
       then
         ACTIVE_SERVICE_KIND="systemd-user"
+        if [[ -n "${WSL_DISTRO_NAME:-}" ]] && \
+           [[ "$(loginctl show-user "$(id -u)" --property=Linger --value 2>/dev/null)" != yes ]]; then
+          say 'WSL: for dashboard and Mail at boot and after logout, run loginctl enable-linger "$USER" inside WSL'
+        fi
         return
       fi
       warn "systemd user service setup failed; falling back to supervised background mode"
       systemctl --user disable --now "$LABEL.service" 2>/dev/null || true
       rm -f "$SERVICE_PATH"
+      systemctl --user daemon-reload 2>/dev/null || true
       SERVICE_FALLBACK_USED=true
       start_supervised_background || true
       ;;
@@ -5131,11 +5166,18 @@ raise SystemExit(0 if recorded == expected else 1)
 PY
 }
 
+supervised_pid_runs_dashboard() {
+  local command_line
+  command_line="$(ps -ww -o command= -p "$1" 2>/dev/null)" || return 1
+  [[ "$command_line" == *" $DASHBOARD_DIR/service_runner.py" ]]
+}
+
 stop_supervised_background() {
   local pid attempts=0
   pid="$(sed -n '1p' "$RUNTIME_DIR/dashboard.pid" 2>/dev/null || true)"
   if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
-    if [[ "$pid" != "$MANAGED_SUPERVISED_PID" ]] && ! supervised_pid_matches_state "$pid"; then
+    if ! supervised_pid_runs_dashboard "$pid" || \
+       { [[ "$pid" != "$MANAGED_SUPERVISED_PID" ]] && ! supervised_pid_matches_state "$pid"; }; then
       warn "refusing to stop unverified process $pid from $RUNTIME_DIR/dashboard.pid"
       ACTIVE_SERVICE_KIND="manual"
       SERVICE_PATH=""

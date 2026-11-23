@@ -147,11 +147,11 @@ installer は使用中 port を検出すると service 登録前に停止しま�
 systemd user session が使える場合:
 
 ```bash
-systemctl --user status agentstack-dashboard.service
+systemctl --user status org.agentstack.agentdashboard.service
 systemctl --user daemon-reload
 ```
 
-systemd user が使えない環境と WSL では installer が `nohup` と pidfile に fallback します。localhost dashboard と browser terminal は利用できます。WSL2 では dashboard の jump が Windows Terminal（`wt.exe`）の新しいタブを開いて `wsl.exe -d <distro>` 経由で tmux に attach します（`AGENTSTACK_TERMINAL=auto` が `wt` を選ぶ）。素の Linux では jump は未対応のままです。
+WSL2 でも systemd user が使えれば installer が dashboard の unit を有効にします。systemd user が使えない環境では `nohup` と pidfile に fallback します。localhost dashboard と browser terminal は利用できます。WSL2 では dashboard の jump が Windows Terminal（`wt.exe`）の新しいタブを開いて `wsl.exe -d <distro>` 経由で tmux に attach します（`AGENTSTACK_TERMINAL=auto` が `wt` を選ぶ）。素の Linux では jump は未対応のままです。
 
 ### WSL2 で Ubuntu の窓を閉じたとき
 
@@ -174,9 +174,9 @@ Windows Terminal などのデスクトップの窓から起動したものは、
 wsl --shutdown
 ```
 
-次に Ubuntu を開くと、Mail は起動1分後に timer が立て直します。dashboard は `install.sh` を再実行して立て直します。
+次に Ubuntu を開くと、systemd user manager が dashboard を起動し、Mail の timer が約1分後に Mail を立て直します。supervised background の dashboard は `agentctl.sh start` で起動します。
 
-- ログアウト後も systemd user manager（Mail の timer と watcher）を残すには、WSL の中で `loginctl enable-linger "$USER"` を設定します。
+- Ubuntu の起動時に systemd user manager を起動し、ログアウト後も dashboard、Mail の timer と watcher を動かすには、WSL の中で `loginctl enable-linger "$USER"` を設定します。
 - 以前の案内で `.wslconfig` に `[general] instanceIdleTimeout=-1` や `[wsl2] vmIdleTimeout=-1` を設定した場合、前者は distro を、後者は distro の停止後も VM を動かし続けます。自動保持には不要です。`agentstack-doctor` の案内に従い、該当行を消してから上の注意のとおり一度 `wsl --shutdown` を実行します。
 
 同じ PC で native Windows の helper（`scripts/windows/`）も動かしている場合、WSL2 の 8770 は Windows の localhost に転送されるので、Windows 側に同じ port の dashboard が残っているとブラウザはそちらに繋がり、WSL の agent が見えません。どちらかの port を変えるか、native 側を止めてから開きます。

@@ -14,6 +14,8 @@ import shlex
 import subprocess
 from contextlib import contextmanager
 
+import pytest
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 INSTALLER = ROOT / "scripts" / "install.sh"
@@ -102,6 +104,56 @@ def _installer_function(name):
     following=re.search(r'^\w+\(\) \{',text[start+len(name)+5:],re.M)
     block=text[start:] if following is None else text[start:start+len(name)+5+following.start()]
     return block[:block.rindex('\n}')+2]
+
+
+@pytest.mark.parametrize("user_manager", [True, False])
+def test_wsl_dashboard_uses_systemd_only_with_a_user_manager(tmp_path, user_manager):
+    proc_version = tmp_path / "proc-version"
+    proc_version.write_text("Linux version 6.6.0-microsoft-standard-WSL2\n")
+    detect_service = _installer_function("detect_service_kind").replace(
+        "/proc/version", shlex.quote(str(proc_version))
+    )
+    script = "\n".join([
+        "set -eu",
+        "PREFLIGHT_OS=Linux DRY_RUN=false LABEL=example.dashboard",
+        f"systemctl() {{ echo \"$*\" >&2; [[ \"$2\" != show-environment ]] || return {0 if user_manager else 1}; }}",
+        'stop_supervised_background() { echo "stop prior background"; }',
+        'start_supervised_background() { echo "start background"; ACTIVE_SERVICE_KIND=nohup; }',
+        'render_systemd_unit() { echo "render unit"; }',
+        detect_service,
+        _installer_function("start_service"),
+        'start_service "$(detect_service_kind)"',
+        'echo "$ACTIVE_SERVICE_KIND"',
+    ])
+    result = subprocess.run(["/bin/bash", "-c", script], env={"PATH": "/usr/bin:/bin"},
+                            cwd=tmp_path, capture_output=True, text=True, check=True)
+    if user_manager:
+        assert result.stdout.splitlines() == ["stop prior background", "render unit", "systemd-user"]
+        assert result.stderr.splitlines() == [
+            "--user daemon-reload", "--user enable example.dashboard.service", "--user restart example.dashboard.service",
+        ]
+    else:
+        assert result.stdout.splitlines() == ["start background", "nohup"]
+        assert not result.stderr
+
+
+def test_wsl_dashboard_unit_keeps_distro_and_anchor_setting(tmp_path):
+    windows_bin = tmp_path / "windows-bin"
+    windows_bin.mkdir()
+    terminal = windows_bin / "wt.exe"
+    terminal.write_text("#!/bin/sh\n")
+    terminal.chmod(0o755)
+    _fresh_render(tmp_path, "fresh_environment_json", "render_systemd_unit",
+                  commands="export WSL_DISTRO_NAME=ExampleDistro WSL_INTEROP=/run/WSL/123_interop\nrender_systemd_unit\n",
+                  overrides={"AGENTSTACK_RUNTIME_MODE": "legacy", "WSL_ANCHOR_SETTING": "0",
+                             "PATH": f"{windows_bin}:/usr/bin:/bin"})
+    unit = (tmp_path / ".config/systemd/user/org.orrery.test.normal.dashboard.service").read_text()
+    assert 'Environment="WSL_DISTRO_NAME=ExampleDistro"' in unit
+    assert 'Environment="AGENTSTACK_WSL_ANCHOR=0"' in unit
+    assert f'Environment="PATH=/usr/bin:/bin:{windows_bin}"' in unit
+    assert "WSL_INTEROP" not in unit
+    assert "WantedBy=default.target" in unit
+    assert "KillMode=process" in unit
 
 
 def _fresh_render(tmp_path,*functions,commands='',overrides=None):

@@ -186,6 +186,8 @@ On Windows, install inside a WSL2 Ubuntu. Inside Ubuntu it is Linux, so the step
 
 **The legacy dashboard enables automatic WSL hold by default.** It holds a hidden `wsl.exe` while an agent runs or starts, or while the dashboard is visible. It releases after 60 idle seconds. Other Windows programs can keep WSL running. See [WSL2 troubleshooting](troubleshooting.en.md#on-wsl2-closing-the-ubuntu-windows) for the status display and manual recovery.
 
+When `systemctl --user` is available on WSL, the installer enables the dashboard user unit. Run `loginctl enable-linger "$USER"` inside Ubuntu to start the dashboard and Mail at distro boot and keep them running after the last login closes. Systemd services alone do not keep WSL running.
+
 ## Non-interactive installation (`--assume-yes`)
 
 See the [consent contract](instruction-migration.en.md#consent) for confirmation conditions and non-interactive behavior. Use the following option only after the user personally reviewed the repository and preview and granted approval in advance.

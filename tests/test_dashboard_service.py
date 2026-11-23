@@ -484,6 +484,42 @@ with calls.open('a') as stream:
     assert not PLACEHOLDER.findall(plist.read_text()), "unexpanded restart placeholders"
 
 
+def test_agentctl_uses_installed_systemd_dashboard_unit(tmp_path):
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "uname": "echo Linux",
+        "launchctl": "exit 1",
+        "curl": "echo 200",
+        "systemctl": 'echo "$*" >> "$SYSTEMCTL_LOG"',
+    }.items():
+        command = fake_bin / name
+        command.write_text(f"#!/bin/sh\n{body}\n")
+        command.chmod(0o755)
+    label = "example.agentdashboard.service"
+    unit = tmp_path / ".config" / "systemd" / "user" / label
+    unit.parent.mkdir(parents=True)
+    unit.touch()
+    log = tmp_path / "systemctl.log"
+    env = {
+        "HOME": str(tmp_path), "AGENTSTACK_HOME": str(tmp_path),
+        "AGENTSTACK_ENV_FILE": str(tmp_path / "env.sh"),
+        "AGENTSTACK_LABEL_PREFIX": "example", "AGENTSTACK_PORT": "19878",
+        "PATH": f"{fake_bin}:/usr/bin:/bin", "SYSTEMCTL_LOG": str(log),
+    }
+    for action in ("start", "status", "restart", "stop", "uninstall"):
+        result = subprocess.run(["/bin/bash", str(ROOT / "dashboard/agentctl.sh"), action],
+                                env=env, cwd=tmp_path, capture_output=True, text=True, check=True)
+        if action == "status":
+            assert "service mode: systemd-user" in result.stdout
+    assert log.read_text().splitlines() == [
+        f"--user start {label}", f"--user show -p ActiveState -p MainPID {label}",
+        f"--user restart {label}", f"--user stop {label}", f"--user disable --now {label}",
+        "--user daemon-reload",
+    ]
+    assert not unit.exists()
+
+
 def test_agentctl_enables_then_waits_for_bootout_before_bootstrap(tmp_path):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()

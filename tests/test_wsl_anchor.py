@@ -381,6 +381,8 @@ def test_the_powershell_starts_a_hidden_foreground_wsl_exe():
     assert "Start-Process" in script and "-WindowStyle Hidden" in script and "-PassThru" in script
     assert "-Wait" not in script and "-NoNewWindow" not in script
     assert "--exec" in script and "wsl.exe" in script
+    assert "$ProgressPreference = 'SilentlyContinue'" in script
+    assert 'WriteLine("ORRERY_WSL_PID=$($p.Id)")' in script
     payload = re.search(r"FromBase64String\('([^']+)'\)", script).group(1)
     assert json.loads(base64.b64decode(payload)) == ["Ubuntu", "/usr/bin/python3", "/a/wsl_anchor.py", "hold", "/s", "n"]
     for forbidden in ("--shutdown", "--terminate", ".wslconfig"):
@@ -389,7 +391,7 @@ def test_the_powershell_starts_a_hidden_foreground_wsl_exe():
 
 def test_start_windows_client_reads_the_pid_and_refuses_unsafe_arguments(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
-    _script(bin_dir / "powershell.exe", 'echo "{\\"pid\\":31337}"\n')
+    _script(bin_dir / "powershell.exe", 'echo ORRERY_WSL_PID=31337\n')
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
     assert wsl_anchor.start_windows_client("Ubuntu", ["/usr/bin/python3", "x"]) == (31337, "")
     pid, error = wsl_anchor.start_windows_client("Ubuntu", ["/home/a b/python3"])
@@ -397,6 +399,34 @@ def test_start_windows_client_reads_the_pid_and_refuses_unsafe_arguments(tmp_pat
     _script(bin_dir / "powershell.exe", "echo boom >&2\nexit 1\n")
     pid, error = wsl_anchor.start_windows_client("Ubuntu", ["x"])
     assert pid is None and "boom" in error
+
+
+def test_start_windows_client_waits_for_slow_powershell_and_recovers_a_published_pid(monkeypatch):
+    import subprocess
+
+    cli_xml = b"#< CLIXML\r\n<Objs>Preparing modules for first use.</Objs>\r\n"
+    monkeypatch.setattr(wsl_anchor, "_powershell", lambda: "/fixture/powershell.exe")
+
+    def slow_powershell(argv, *, timeout, **kwargs):
+        assert timeout >= 60  # Cold PowerShell exceeded the former 30-second deadline.
+        return subprocess.CompletedProcess(argv, 0, cli_xml + b"ORRERY_WSL_PID=31337\r\n", cli_xml)
+
+    monkeypatch.setattr(wsl_anchor.subprocess, "run", slow_powershell)
+    assert wsl_anchor.start_windows_client("TestDistro", ["hold"]) == (31337, "")
+
+    def linger_after_pid(argv, *, timeout, **kwargs):
+        raise subprocess.TimeoutExpired(argv, timeout, output=cli_xml + b"ORRERY_WSL_PID=31337\r\n")
+
+    monkeypatch.setattr(wsl_anchor.subprocess, "run", linger_after_pid)
+    assert wsl_anchor.start_windows_client("TestDistro", ["hold"]) == (31337, "")
+
+    def timeout_before_pid(argv, *, timeout, **kwargs):
+        raise subprocess.TimeoutExpired(argv, timeout, output=cli_xml + b"ORRERY_WSL_PID=31")
+
+    monkeypatch.setattr(wsl_anchor.subprocess, "run", timeout_before_pid)
+    assert wsl_anchor.start_windows_client("TestDistro", ["hold"]) == (
+        None, "powershell.exe printed no PID within 60s",
+    )
 
 
 def test_interop_falls_back_to_a_live_socket_when_the_inherited_one_is_gone(tmp_path, monkeypatch):
