@@ -602,7 +602,7 @@ html.graph-fullscreen #settings{z-index:40}
 .conversation-mails{display:flex;flex-direction:column;gap:6px}
 .mobile .conversation-mail{display:block;width:100%;text-align:left;border:1px solid var(--hair);border-left:3px solid var(--ln-local,#7aa7ff);border-radius:8px;padding:8px 10px;background:var(--bg);color:var(--ink);font:12px/1.5 var(--mono);margin-top:6px}
 .mobile .conversation-mail.sent{border-left-color:var(--amber)}
-.conversation-mail small{display:block;color:var(--ink-dim);font:10px/1.6 var(--mono)}.conversation-mail strong{display:block;font-weight:500;overflow-wrap:anywhere}
+.conversation-mail .conversation-mail-note{display:block;color:var(--ink-dim);font:10px/1.6 var(--mono)}.conversation-mail .conversation-mail-subject{display:block;font-weight:500;overflow-wrap:anywhere}
 .mobile .conversation-mail-body{margin:7px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.6 var(--mono);color:var(--ink)}
 .conversation-files{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
 .conversation-shown-files{display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px;padding:6px 0 12px}
@@ -654,16 +654,20 @@ html.graph-fullscreen #settings{z-index:40}
 .reader-fullscreen .conversation-bubble.assistant{align-self:stretch;max-width:100%;padding:0;background:none;border:0;border-radius:0;font:13px/1.7 var(--mono)}
 .reader-fullscreen .conversation-bubble.user{max-width:90%;padding:7px 10px}
 .reader-fullscreen .conversation-text p{margin:0 0 10px;white-space:pre-wrap}
-.reader-fullscreen .conversation-text h1,.reader-fullscreen .conversation-text h2,.reader-fullscreen .conversation-text h3,.reader-fullscreen .conversation-text h4,.reader-fullscreen .conversation-text h5,.reader-fullscreen .conversation-text h6{font:600 14px/1.6 var(--mono);margin:12px 0 8px}
+.reader-fullscreen .conversation-text :is(h1,h2,h3,h4,h5,h6),#message-body .markdown-heading{font:600 14px/1.6 var(--mono);margin:12px 0 8px}
 .conversation-text ul,.conversation-text ol{padding-left:22px;margin:8px 0}.conversation-text li p{margin:0}.conversation-text blockquote{margin:8px 0;padding-left:12px;border-left:2px solid var(--hair);color:var(--ink-dim)}
 .conversation-text a{color:var(--ink);text-decoration:underline;text-underline-offset:3px}.conversation-text code{font-family:var(--mono);background:color-mix(in srgb,var(--hair) 40%,transparent);border-radius:3px}
-.mobile .reader-fullscreen .conversation-code{padding:0;margin:8px 0;background:var(--bg);border:1px solid var(--hair);border-radius:6px;overflow:hidden;white-space:normal}
+.mobile .reader-fullscreen .conversation-code,.mobile #message-body .conversation-code{padding:0;margin:8px 0;background:var(--bg);border:1px solid var(--hair);border-radius:6px;overflow:hidden;white-space:normal}
 .conversation-code-head{display:flex;align-items:center;gap:8px;padding:5px 9px;border-bottom:1px solid var(--hair);color:var(--ink-dim);font:9.5px var(--mono)}
 .conversation-code-language{flex:1}.mobile .conversation-code-copy,.mobile .conversation-table-copy,.mobile .conversation-output-toggle,.mobile .conversation-dismiss{border:0;background:none;color:var(--ink-dim);font:9.5px var(--mono);min-height:28px;padding:3px 5px;text-transform:uppercase}
 .mobile .conversation-code pre{margin:0;padding:8px 10px;overflow:auto;white-space:pre;font:11px/1.7 var(--mono);color:var(--ink);background:none;border:0;overflow-wrap:normal}.conversation-code code{background:none}
 .mobile .conversation-code pre.conversation-output-collapsed{max-height:168px}
 .reader-fullscreen .conversation-table{display:block;margin:8px 0;font:11px/1.6 var(--mono)}.conversation-table-scroll{overflow:auto}.conversation-table table{width:100%;border-collapse:collapse}.conversation-table th,.conversation-table td{padding:6px 8px}
 .conversation-table-copy{display:block;margin-left:auto}
+:is(.conversation-mail-body,#message-body) .conversation-table{display:block;max-width:100%;margin:8px 0}
+:is(.conversation-mail-body,#message-body) .conversation-table-scroll{max-width:100%;overscroll-behavior-x:contain}
+:is(.conversation-mail-body,#message-body) .conversation-table table{width:max-content;min-width:100%}
+:is(.conversation-mail-body,#message-body) .conversation-table :is(th,td){max-width:26ch;white-space:normal;overflow-wrap:anywhere}
 .reader-composer{position:absolute;z-index:6;inset:auto 0 0;padding:14px 16px calc(14px + env(safe-area-inset-bottom));border-top:1px solid var(--hair);background:var(--panel);max-height:calc(100% - 48px - env(safe-area-inset-top));overflow:auto;overscroll-behavior:contain}
 .reader-composer .terminal-compose-label{clear:both}.reader-composer .terminal-pane-button{margin-bottom:8px;max-width:calc(100% - 40px);overflow-wrap:anywhere}.reader-composer .terminal-help,.reader-composer .terminal-input-meta>span:first-child{display:none}.mobile .reader-composer .terminal-text{height:86px;font-size:16px}
 .mobile .reader-fullscreen>.terminal-message:empty{display:none}.mobile .reader-fullscreen>.terminal-message:not(:empty){position:static;order:-1;flex:none;margin:calc(48px + env(safe-area-inset-top)) 0 0;background:var(--panel);border:1px solid var(--alert);color:var(--ink);padding:7px 10px;max-height:25%;overflow:auto}
@@ -718,6 +722,7 @@ html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-l
 .conversation-mail-importance[data-importance=urgent]{background:var(--alert)}
 .mobile .conversation-mail-note{margin:4px 0 7px;padding-left:15px;font:10px/1.7 var(--mono)}
 .mobile .conversation-mail-body{padding-left:15px;font:12px/1.8 var(--mono);margin:0}
+.mobile .conversation-mail-body:not([hidden]){display:flow-root}
 
 .reader-fullscreen:has(>.terminal-message:not(:empty)) .conversation-status:not([hidden]){padding-top:7px}
 .reader-fullscreen:has(>.terminal-message:not(:empty)) .conversation-list,.reader-fullscreen .conversation:has(>.conversation-status:not([hidden])) .conversation-list{padding-top:14px}

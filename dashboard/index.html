@@ -2654,11 +2654,13 @@
 .effort-not-supported{display:block;font:12px/1.5 var(--sans);color:var(--ink-dim);padding:4px 0}
 </style>
 <link rel="stylesheet" href="theme_light.css">
+<link rel="stylesheet" href="mail_markdown.css">
 <link rel="stylesheet" href="help_map.css">
 <script src="network_node.js"></script>
 <script src="network_core.js"></script>
 <script src="theme_core.js"></script>
 <script src="theme_controller.js"></script>
+<script src="conversation_markdown.js" defer></script>
 <script src="help_map.js" defer></script>
 <link rel="stylesheet" href="tour_cue.css">
 <script src="tour_cue.js" defer></script>
@@ -35042,7 +35044,7 @@ function renderDrawerThread(j){
     const imp=mailImportance(m.importance);
     const ackBadge=m.ack_required && !m.ack_ts ? '<span class="ed-ack">◬ ACK</span>' : '';
     const prev=(m.body||'').trim();
-    return `<div class="ed-msg" onclick="toggleMsg(event)">
+    return `<div class="ed-msg">
       <div class="ed-meta">
         <span class="ed-ts">${esc(ts)}</span>
         <span class="ed-dir">${esc(m.sender)} → ${esc(m.recipient)}</span>
@@ -35050,12 +35052,23 @@ function renderDrawerThread(j){
       </div>
       <div class="ed-subj">${esc(m.subject||'(no subject)')}</div>
       <div class="ed-prev">${esc(prev)}</div>
+      <div class="mail-markdown" hidden></div>
     </div>`;
   }).join('');
   root.innerHTML=html;
-}
-function toggleMsg(ev){
-  ev.currentTarget.classList.toggle('expanded');
+  root.querySelectorAll('.ed-msg').forEach((card,i)=>{
+    const body=card.querySelector('.mail-markdown');
+    card.addEventListener('click',event=>{
+      if(body.contains(event.target))return;
+      const expanded=card.classList.toggle('expanded');
+      if(expanded&&!body.hasChildNodes()){
+        const text=j.messages[i].body||'',markdown=window.OrreryConversationMarkdown;
+        if(markdown)markdown.renderDocument(text,body,{codeControls:true});
+        else body.textContent=text;
+      }
+      body.hidden=!expanded;
+    });
+  });
 }
 // close on ESC / outside-click (network area only — deck の他の UI と干渉しない)
 document.addEventListener('keydown',ev=>{

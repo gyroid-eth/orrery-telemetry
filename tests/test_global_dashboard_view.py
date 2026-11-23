@@ -225,6 +225,10 @@ def test_global_shell_allows_only_declared_markup_and_assets():
     assert not p.handlers
     assert 'future-legacy' not in p.ids and 'spawnmd' not in p.ids and 'term' not in p.ids
     assert not any(x.get('id')=='unapproved' or x.get('src')=='new-legacy.js' for x in p.scripts)
+    sources=[attrs.get('src') for attrs in p.scripts]
+    assert sources.index('conversation_markdown.js') < sources.index('mail_flow.js')
+    assert '/conversation_markdown.js' in dashboard.THEME_ASSETS
+    assert '/mail_markdown.css' in dashboard.THEME_ASSETS
 
 
 def test_instruction_matches_local_identity_without_full_lookup(launch,ui,monkeypatch):

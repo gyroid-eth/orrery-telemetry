@@ -453,12 +453,22 @@ function mailCard(m,ts){
  if(['high','urgent'].includes(m.importance)){const dot=make('span','conversation-mail-importance');dot.dataset.importance=m.importance;dot.title=dot.ariaLabel=m.importance==='high'?'High importance':'Urgent importance';dot.setAttribute('role','img');subject.append(dot);}
  subject.append(make('strong','conversation-mail-subject',m.subject||'(no subject)'));
  card.append(make('div','conversation-mail-label','Mail · '+(m.direction==='received'?'Received':'Sent')),head);
- const detail=make('pre','conversation-mail-body',m.body);detail.hidden=true;
+ const detail=make('div','conversation-mail-body');detail.hidden=true;
  const note=make('small','conversation-mail-note',m.coverage==='preview'?'Recorded preview only':m.coverage==='unavailable'?'Body not in the record':m.truncated?'Shortened':'Tap to show the recorded body');
  const line=make('span','conversation-mail-thread');line.hidden=true;line.setAttribute('aria-hidden','true');
  const toggle=make('button','conversation-mail-toggle');toggle.type='button';toggle.append(subject,note);toggle.setAttribute('aria-expanded','false');
  card.append(toggle,detail,line);card.setAttribute('aria-expanded','false');
- const closedNote=note.textContent;card.onclick=()=>{detail.hidden=!detail.hidden;card.setAttribute('aria-expanded',String(!detail.hidden));toggle.setAttribute('aria-expanded',String(!detail.hidden));card.querySelector('.conversation-mail-chevron').textContent=detail.hidden?'▸':'▾';note.textContent=detail.hidden?closedNote:'Recorded body · tap to hide';layoutMailThread(card);};
+ const closedNote=note.textContent;
+ card.onclick=event=>{
+  if(detail.contains(event.target))return;
+  if(detail.hidden&&!detail.hasChildNodes())detail.append(body(m.body,true));
+  detail.hidden=!detail.hidden;
+  card.setAttribute('aria-expanded',String(!detail.hidden));
+  toggle.setAttribute('aria-expanded',String(!detail.hidden));
+  card.querySelector('.conversation-mail-chevron').textContent=detail.hidden?'▸':'▾';
+  note.textContent=detail.hidden?closedNote:'Recorded body · tap to hide';
+  layoutMailThread(card);
+ };
  return card;
 }
 // The cockpit puts file references on the file tool calls (Read, Write,

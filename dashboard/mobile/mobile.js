@@ -458,7 +458,10 @@ async function openMessage(event,period){
   const data=await response.json();
   if(generation!==detailGeneration||document.hidden||!sheet.open)return;
   if(!response.ok||!data.event||['key','source','target','kind','event_at'].some(k=>data.event[k]!==event[k])||typeof data.subject!=='string'||typeof data.body!=='string')throw Error('unavailable');
-  $('#message-title').textContent='Message';$('#message-subject').textContent=data.subject||'(No subject)';$('#message-body').textContent=data.body;
+  $('#message-title').textContent='Message';$('#message-subject').textContent=data.subject||'(No subject)';
+  const body=$('#message-body'),markdown=window.OrreryConversationMarkdown;
+  if(markdown)markdown.renderDocument(data.body,body,{codeControls:true});
+  else body.textContent=data.body;
   $('#message-status').textContent=[data.subject_truncated?'Subject shortened to 512 characters.':'',data.body_truncated?'Body shortened to 64 KiB.':'','Read only · no read receipt or acknowledgement sent.'].filter(Boolean).join(' ');
  }catch(_){if(generation===detailGeneration&&sheet.open){$('#message-title').textContent='Message unavailable';$('#message-status').textContent='This event expired, changed or could not be read. Close and refresh its metadata.';}}
  finally{clearTimeout(timeout);if(generation===detailGeneration)detailController=null;}

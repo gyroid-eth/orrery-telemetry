@@ -19,6 +19,52 @@ ROOT = Path(__file__).resolve().parents[1]
 RESULT = '**Benchmark result**\n\nThe larger cache improves throughput on long inputs. The short runs stay stable.\n\n| Input | Small | Large |\n|---|---:|---:|\n| 512 | 151 | 149 |\n| 4K | 573 | 588 |\n| 16K | 996 | 985 |\n\nRun the same inputs with `--repeat 3`:\n\n```sh\npython bench.py --repeat 3\n  --cache 512K\n```'
 
 
+MAIL_MARKDOWN = '''## Release checks
+
+**Ready** for review.
+
+| Check | Previous package | Current signed package | Regression threshold | Follow-up owner |
+| --- | --- | --- | --- | --- |
+| Browser reconnect | 8 of 8 | 8 of 8 | All runs pass | Browser QA |
+| Keyboard focus | Needs review | Verified | Focus restored | Accessibility |
+
+- Confirm the signed archive.
+- Keep the rollout on hold.
+
+```sh
+python verify.py --release staging
+```
+
+[Report](/workspace/release/report.md) and [Release guide](https://example.test/guide).
+
+Literal HTML: <em data-fixture>sample</em>.
+'''
+
+def assert_mail_markdown(js, selector):
+    result = js("""(selector => {
+        const body=document.querySelector(selector), table=body.querySelector('.conversation-table-scroll');
+        const path=body.querySelector('[data-path-candidate="/workspace/release/report.md"]');
+        const link=body.querySelector('a');
+        const width=table.clientWidth;
+        table.scrollLeft=table.scrollWidth;
+        return {
+            heading:body.querySelector('h2').textContent,
+            emphasis:[body.querySelector('strong').textContent,getComputedStyle(body.querySelector('strong')).display],
+            rows:body.querySelectorAll('table tr').length,
+            items:body.querySelectorAll('li').length,
+            code:body.querySelector('pre').textContent,
+            path:[path.textContent,path.tagName,path.getAttribute('href')],
+            link:[link.href,link.rel],
+            literal:body.textContent.includes('<em data-fixture>sample</em>')&&!body.querySelector('[data-fixture]'),
+            contained:table.scrollLeft>0&&table.scrollWidth>width&&body.scrollWidth<=body.clientWidth+1,
+        };
+    })(""" + json.dumps(selector) + ')')
+    assert result == dict(heading='Release checks', emphasis=['Ready', 'inline'], rows=3, items=2,
+                         code='python verify.py --release staging\n', path=['Report', 'SPAN', None],
+                         link=['https://example.test/guide', 'noopener noreferrer'], literal=True,
+                         contained=True), result
+
+
 @pytest.fixture
 def phone(request):
     cdp = os.environ.get('ORRERY_CDP_URL')
@@ -59,7 +105,7 @@ def phone(request):
                 filename={'/demo-mask.js':'demo_mask.js','/demo-mode.js':'demo_mode.js'}[path]
                 return self.send((Path(os.environ['ORRERY_DEMO_BRIDGE_ROOT'])/filename).read_bytes(),'text/javascript')
             if path == '/view/message' and state['mail']:
-                return self.send(dict(event=state['mail'], subject='Fixture subject', body='Fixture message body', subject_truncated=False, body_truncated=False))
+                return self.send(dict(event=state['mail'], subject='Fixture subject', body=state.get('message_body','Fixture message body'), subject_truncated=False, body_truncated=False))
             if path == '/view/mail' and state['mail']:
                 return self.send(dict(window='day', direction='both', events=[state['mail']], next_cursor=None))
             if path == '/view/history':

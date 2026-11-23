@@ -35,4 +35,4 @@ def render(source):
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&amp;family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&amp;display=swap" rel="stylesheet">
 '''
     shell=Path(__file__).with_name('global_shell.html').read_text()
-    return (head+''.join(shared.parts)+'<link rel="stylesheet" href="theme_light.css"><link rel="stylesheet" href="mail_flow.css"><link rel="stylesheet" href="global_ui.css"></head>'+shell+'</html>').encode()
+    return (head+''.join(shared.parts)+'<link rel="stylesheet" href="theme_light.css"><link rel="stylesheet" href="mail_flow.css"><link rel="stylesheet" href="mail_markdown.css"><link rel="stylesheet" href="global_ui.css"></head>'+shell+'</html>').encode()
