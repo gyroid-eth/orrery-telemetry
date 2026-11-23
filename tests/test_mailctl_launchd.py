@@ -813,6 +813,81 @@ def cold_boot(harness):
             _reap(state["env"])
 
 
+@pytest.mark.parametrize("case", ["reused", "recent", "backdated", "unknown", "live-runner"])
+def test_start_only_recovers_from_proven_pid_reuse(cold_boot, tmp_path, case):
+    import sys
+
+    env, pidfile = cold_boot(delay=0)
+    runner = Path(env["AGENTSTACK_MAIL_ENV"]).with_name("run-agentstack-mail.sh")
+    if case == "live-runner":
+        runner.write_text("read -r input\n")
+        command = ["/bin/bash", str(runner)]
+    else:
+        command = ["/bin/sleep", "90"]
+    with subprocess.Popen(command, stdin=subprocess.PIPE) as process:
+        try:
+            pidfile.parent.mkdir()
+            pidfile.write_text(f"{process.pid}\n{runner}\n")
+            pidfile.chmod(0o600)
+            if case == "backdated":
+                os.utime(pidfile, ns=(0, 0))
+            old_record = pidfile.read_bytes()
+
+            # Exercise the real controller and pidfile. Supply a Linux proc
+            # snapshot to the timestamp check so it can run on macOS CI too.
+            python = tmp_path / "proc-fixture-python"
+            python.write_text(f"#!{sys.executable}\n" + r"""
+import os
+from pathlib import Path
+import sys
+import time
+
+pidfile = Path(os.environ["TEST_PIDFILE"])
+if sys.argv[1:3] != ["-", str(pidfile)]:
+    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+
+case = os.environ["TEST_PID_CASE"]
+proc = Path("/proc") / sys.argv[3]
+hz = os.sysconf("SC_CLK_TCK")
+read_bytes = Path.read_bytes
+
+def read_proc(path):
+    if path == proc / "cmdline":
+        if case == "unknown":
+            raise OSError("process command unavailable")
+        return b"/bin/sleep\x0090\x00"
+    if path == proc / "stat":
+        return b"1200 (fixture ) name) S " + b"0 " * 18 + str(60 * hz).encode()
+    return read_bytes(path)
+
+Path.read_bytes = read_proc
+sys.platform = "linux"
+ctime = pidfile.stat().st_ctime_ns
+time.time_ns = lambda: ctime + (2_000_000_000 if case == "reused" else 0)
+time.CLOCK_BOOTTIME = 7
+time.clock_gettime_ns = lambda _: 61_000_000_000
+sys.argv = sys.argv[1:]
+exec(compile(sys.stdin.read(), "<controller probe>", "exec"))
+""")
+            python.chmod(0o700)
+            env.update(AGENTSTACK_PYTHON=str(python), TEST_PIDFILE=str(pidfile), TEST_PID_CASE=case)
+            result = _mailctl(env, "start")
+            assert process.poll() is None, "controller signaled the process named by the old record"
+            if case == "reused":
+                assert result.returncode == 0, result.stdout + result.stderr
+                assert "discarding stale pidfile" in result.stdout
+                assert "ORRERY Mail started" in result.stdout
+                assert _runner_pid(pidfile) != process.pid
+            else:
+                assert result.returncode == 1, result.stdout + result.stderr
+                reason = "alive but not listening yet" if case == "live-runner" else "other than the rendered runner"
+                assert reason in result.stderr
+                assert pidfile.read_bytes() == old_record
+                assert not _ledger_pids(env), "controller started a second runner"
+        finally:
+            process.terminate()
+
+
 def test_port_grace_is_separate_from_health_grace(cold_boot) -> None:
     """Health is allowed only 2 s once the port is open -- the shape of a single
     short window -- while the runner takes 6 s to listen. The port grace is

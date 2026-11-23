@@ -321,6 +321,48 @@ pid_is_managed_runner() {
   esac
 }
 
+pidfile_predates_process() {
+  "$PYTHON_BIN" - "$PIDFILE" "$1" "$MAIL_RUNNER" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+import time
+
+if sys.platform != "linux":
+    raise SystemExit(1)
+
+pidfile, pid, runner = sys.argv[1:]
+try:
+    fd = os.open(pidfile, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as record:
+        info = os.fstat(record.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+            raise SystemExit(1)
+        if record.read(4096) != os.fsencode(f"{pid}\n{runner}\n"):
+            raise SystemExit(1)
+
+    proc = Path("/proc") / pid
+    command_line = (proc / "cmdline").read_bytes()
+    if not command_line or os.fsencode(runner) in command_line:
+        raise SystemExit(1)
+    # /proc/PID/stat field 22 is start time in clock ticks since boot.
+    # Only discard a record that pre-dates the current process, including a
+    # legacy two-line record from before reboot. ctime also catches a record
+    # newly written with a backdated mtime.
+    ticks = int((proc / "stat").read_bytes().rsplit(b")", 1)[1].split()[19])
+    started_since_boot = ticks * 10**9 // os.sysconf("SC_CLK_TCK")
+    now = time.time_ns()
+    uptime = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
+except (AttributeError, IndexError, OSError, ValueError):
+    raise SystemExit(1)
+
+earliest_start = now - uptime + started_since_boot
+stale = 0 <= started_since_boot <= uptime and max(info.st_ctime_ns, info.st_mtime_ns) < earliest_start
+raise SystemExit(0 if stale else 1)
+PY
+}
+
 endpoint_port_open() {
   "$PYTHON_BIN" - "$MCP_URL" <<'PY'
 import socket
@@ -575,9 +617,7 @@ start_service() {
   [[ -f "$MAIL_ENV" ]] || die "service env is missing: $MAIL_ENV"
   [[ -f "$MAIL_RUNNER" ]] || die "rendered service runner is missing: $MAIL_RUNNER"
   pid="$(read_pid)"
-  if pid_running "$pid"; then
-    pid_is_managed_runner "$pid" || \
-      die "pidfile points to a process other than the rendered runner (pid $pid)"
+  if pid_running "$pid" && pid_is_managed_runner "$pid"; then
     if ! health_ok; then
       # A start that ran out of grace leaves its runner alive on purpose, and
       # this is the start (the timer's or the operator's) that finds it. Do not
@@ -602,9 +642,13 @@ start_service() {
     fi
     [[ "$SWEEP" == "1" ]] || say "ORRERY Mail already running (pid $pid, endpoint $MCP_URL)"
     return
+  elif pid_running "$pid"; then
+    pidfile_predates_process "$pid" || \
+      die "pidfile points to a process other than the rendered runner (pid $pid)"
+    say "discarding stale pidfile (PID $pid was reused)"
   fi
   if [[ -n "$pid" ]]; then
-    rm -f "$PIDFILE"
+    rm -f "$PIDFILE" || die "could not remove the stale pidfile: $PIDFILE"
   fi
   case "$(launchd_state)" in
     foreign)
