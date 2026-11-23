@@ -199,7 +199,7 @@ def test_release_stays_releasing_until_the_anchor_unlocks(tmp_path):
     # An anchor left running across a dashboard restart has no local grace
     # clock. Its Windows PID is recovered from the matching nonce.
     wsl_anchor._write_json(tmp_path / "anchor.json", {"nonce": "fixture"})
-    wsl_anchor._write_json(tmp_path / "client.json", {"nonce": "fixture", "windows_pid": 4242})
+    wsl_anchor._write_json(tmp_path / "client.json", {"nonce": "fixture", "windows_pid": 4242, "launcher": "wmi"})
     with (tmp_path / "lock").open("wb") as lock:
         wsl_anchor.fcntl.flock(lock, wsl_anchor.fcntl.LOCK_EX)
         status = controller.tick()
@@ -224,12 +224,18 @@ def test_a_slow_start_publishes_a_fresh_status(tmp_path, monkeypatch):
 
     def slow_start(_distro, argv):
         nonlocal running
+        pending = wsl_anchor._read_json(directory / "status.json")
+        assert pending["state"] == "starting"
+        assert pending["anchor_running"] is False and pending["windows_pid"] is None
         clock.now += 60
         wsl_anchor._write_json(directory / "anchor.json", {"nonce": argv[-1]})
         running = True
         return 4242, ""
 
     monkeypatch.setattr(wsl_anchor, "anchor_running", lambda _: running)
+    wsl_anchor._write_json(directory / "status.json", {
+        "state": "holding", "windows_pid": 5678, "updated": clock.now,
+    })
     controller = _controller(directory, lambda: ({"agents": 1}, [], True), slow_start, clock)
     status = controller.tick()
     assert status["observed_at"] == observed_at
@@ -245,6 +251,39 @@ def test_a_slow_start_publishes_a_fresh_status(tmp_path, monkeypatch):
     public_status = server.wsl_anchor_status()
     assert public_status["age"] == 0
     assert "observed_at" not in public_status
+
+
+@pytest.mark.parametrize("receipt", ["missing", "old-launcher", "wrong-nonce", "matching"])
+def test_holding_requires_the_ready_nonce_and_detached_pid(tmp_path, monkeypatch, receipt):
+    clock = Clock()
+    running = False
+
+    def starter(_distro, argv):
+        nonlocal running
+        running = True
+        nonce = argv[-1]
+        wsl_anchor._write_json(tmp_path / "anchor.json", {"nonce": nonce, "pid": 101})
+        clock.now += wsl_anchor.WINDOWS_START_TIMEOUT_SECONDS
+        if receipt == "matching":
+            return 4242, ""
+        if receipt == "wrong-nonce":
+            wsl_anchor._write_json(tmp_path / "client.json", {
+                "nonce": "other", "windows_pid": 4242, "launcher": "wmi",
+            })
+        if receipt == "old-launcher":
+            wsl_anchor._write_json(tmp_path / "client.json", {"nonce": nonce, "windows_pid": 4242})
+        return None, "powershell.exe printed no PID within 60s"
+
+    monkeypatch.setattr(wsl_anchor, "anchor_running", lambda _: running)
+    controller = _controller(tmp_path, lambda: ({"agents": 1}, [], True), starter, clock)
+    status = controller.tick()
+    assert status["anchor_running"] is True
+    if receipt == "matching":
+        assert status["state"] == "holding" and status["windows_pid"] == 4242
+    else:
+        assert status["state"] == "failed" and status["windows_pid"] is None
+        assert "no PID" in status["error"]
+        assert controller.tick()["state"] == "failed"
 
 
 def test_nothing_is_started_without_work(tmp_path):
@@ -433,15 +472,17 @@ def test_an_unreadable_wanted_file_does_not_end_the_anchor(tmp_path):
 # --- starting the Windows client ------------------------------------------------
 
 def test_the_powershell_starts_a_hidden_foreground_wsl_exe():
-    script = wsl_anchor.start_script("Ubuntu", ["/usr/bin/python3", "/a/wsl_anchor.py", "hold", "/s", "n"])
-    assert "Start-Process" in script and "-WindowStyle Hidden" in script and "-PassThru" in script
-    assert "-Wait" not in script and "-NoNewWindow" not in script
-    assert "--exec" in script and "wsl.exe" in script
+    script = wsl_anchor.start_script("Example Ubuntu", ["/usr/bin/python3", "/a b/wsl_anchor.py", "hold", "/s", "n"])
+    assert "Invoke-CimMethod -ClassName Win32_Process -MethodName Create" in script
+    assert "ShowWindow=[uint16]0" in script and "CreateFlags=[uint32]16" in script
+    assert "ProcessStartupInformation = $startup" in script
+    assert "$p.ReturnValue -ne 0" in script
+    assert "wsl.exe" in script
     assert "$ProgressPreference = 'SilentlyContinue'" in script
-    assert 'WriteLine("ORRERY_WSL_PID=$($p.Id)")' in script
+    assert 'WriteLine("ORRERY_WSL_PID=$($p.ProcessId)")' in script
     payload = re.search(r"FromBase64String\('([^']+)'\)", script).group(1)
-    assert json.loads(base64.b64decode(payload)) == ["Ubuntu", "/usr/bin/python3", "/a/wsl_anchor.py", "hold", "/s", "n"]
-    for forbidden in ("--shutdown", "--terminate", ".wslconfig"):
+    assert base64.b64decode(payload).decode() == '-d "Example Ubuntu" --exec /usr/bin/python3 "/a b/wsl_anchor.py" hold /s n'
+    for forbidden in ("Start-Process", "--shutdown", "--terminate", ".wslconfig"):
         assert forbidden not in script
 
 
@@ -450,8 +491,9 @@ def test_start_windows_client_reads_the_pid_and_refuses_unsafe_arguments(tmp_pat
     _script(bin_dir / "powershell.exe", 'echo ORRERY_WSL_PID=31337\n')
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
     assert wsl_anchor.start_windows_client("Ubuntu", ["/usr/bin/python3", "x"]) == (31337, "")
-    pid, error = wsl_anchor.start_windows_client("Ubuntu", ["/home/a b/python3"])
-    assert pid is None and "spaces or quotes" in error
+    assert wsl_anchor.start_windows_client("Ubuntu", ["/home/a b/python3"]) == (31337, "")
+    pid, error = wsl_anchor.start_windows_client("Ubuntu", ["bad\nargument"])
+    assert pid is None and "invalid" in error
     _script(bin_dir / "powershell.exe", "echo boom >&2\nexit 1\n")
     pid, error = wsl_anchor.start_windows_client("Ubuntu", ["x"])
     assert pid is None and "boom" in error
@@ -530,6 +572,31 @@ def test_work_counts_live_agent_processes_not_recorders(monkeypatch):
     assert known and reasons == {"agents": 2}
     assert sorted(pids) == [[101, 1010], [201, 2010]]
     assert "list-clients" not in server._wsl_anchor_work.__code__.co_consts
+
+
+def test_work_counts_the_claude_npm_entrypoint_but_not_other_node(tmp_path, monkeypatch):
+    proc = tmp_path / "proc"
+    for pid in (101, 102):
+        (proc / str(pid)).mkdir(parents=True)
+    cli = tmp_path / "node_modules/@anthropic-ai/claude-code/cli.js"
+    cli.parent.mkdir(parents=True)
+    cli.touch()
+    shim = tmp_path / "claude"
+    shim.symlink_to(cli)
+    (proc / "101/cmdline").write_bytes(b"/usr/bin/node\0/fixture/dev-server.js\0")
+    (proc / "102/cmdline").write_bytes(b"/usr/bin/node\0" + os.fsencode(shim) + b"\0")
+    monkeypatch.setattr(server, "Path", lambda path: proc if path == "/proc" else pathlib.Path(path))
+    names = {100: "bash", 101: "node", 102: "node"}
+    children = {100: [101]}
+    monkeypatch.setattr(server, "_tmux_run", _fake_tmux_run({"list-panes": {
+        "returncode": 0, "stdout": f"fixture{server.SEP}100", "stderr": "",
+    }}))
+    monkeypatch.setattr(server, "_process_tree_snapshot", lambda: (names, children))
+    monkeypatch.setattr(server, "_wsl_anchor_module", lambda: wsl_anchor)
+    monkeypatch.setattr(wsl_anchor, "process_start_ticks", lambda pid: pid * 10)
+    assert server._wsl_anchor_work() == ({"agents": 0}, [], True)
+    children[100] = [102, 101]  # The unrelated Node is visited first.
+    assert server._wsl_anchor_work() == ({"agents": 1}, [[102, 1020]], True)
 
 
 def test_work_that_cannot_be_observed_is_unknown_not_empty(monkeypatch):
@@ -810,6 +877,21 @@ def test_status_is_unsupported_outside_wsl(monkeypatch):
     assert server.wsl_anchor_status()["state"] == "disabled"
 
 
+def test_status_waits_for_this_controller_before_reusing_a_saved_hold(tmp_path, monkeypatch):
+    clock = Clock()
+    directory = tmp_path / "wsl-anchor"
+    wsl_anchor._write_json(directory / "status.json", {"state": "holding", "windows_pid": 4242,
+                                                      "updated": clock() - 1})
+    controller = _controller(directory, lambda: ({}, [], True), LocalStarter(), clock)
+    monkeypatch.setenv("AGENTSTACK_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_is_wsl", lambda: True)
+    monkeypatch.setattr(server, "_wsl_anchor_module", lambda: wsl_anchor)
+    monkeypatch.setitem(server._WSL_ANCHOR, "controller", controller)
+    assert server.wsl_anchor_status()["state"] == "starting"
+    controller.tick()
+    assert server.wsl_anchor_status()["state"] == "idle"
+
+
 def test_the_anchor_is_not_started_outside_wsl_or_when_off(monkeypatch):
     monkeypatch.setitem(server._WSL_ANCHOR, "controller", None)
     monkeypatch.setattr(server, "_is_wsl", lambda: False)
@@ -983,7 +1065,7 @@ def test_doctor_explains_a_global_idle_setting_and_how_to_undo_it(tmp_path):
                   wslconfig=b"[wsl2]\r\nvmIdleTimeout=-1\r\n\r\n[general]\r\ninstanceIdleTimeout=-1\r\n").stdout
     assert "instanceIdleTimeout=-1: every distro keeps running until 'wsl --shutdown'" in out
     assert "vmIdleTimeout=-1: the WSL VM keeps running" in out
-    assert "to undo: delete that line" in out
+    assert "after verifying the automatic hold" in out
     out = _doctor(tmp_path / "odd", status=status, wslconfig=b"[general]\r\ninstanceIdleTimeout=-1 ; x\r\n").stdout
     assert "cannot tell how WSL reads instanceIdleTimeout" in out
     out = _doctor(tmp_path / "plain", status=status, wslconfig=b"[wsl2]\r\nmemory=8GB\r\n").stdout

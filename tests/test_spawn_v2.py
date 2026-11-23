@@ -1408,9 +1408,9 @@ function clearSpawnTaskDraft(){}
 function tick(){}
 function netTick(){}
 let view='deck';
-async function run(pending,verdictSeconds){
+async function run(pending,verdictSeconds,wslWarning){
   now=0;fetches=0;toasts.length=0;verdictAt=verdictSeconds*1000;
-  await watchSpawnLaunch('QuietCurie','/repo',spawnWatchLimitMs(pending));
+  await watchSpawnLaunch('QuietCurie','/repo',spawnWatchLimitMs(pending),wslWarning);
   return {toasts:toasts.slice(),elapsed:now};
 }
 (async()=>{
@@ -1420,6 +1420,7 @@ async function run(pending,verdictSeconds){
   out.canonicalWorst=await run({verdict_deadline_seconds:CANONICAL_DEADLINE},CANONICAL_WORST);
   out.canonicalLate=await run({verdict_deadline_seconds:CANONICAL_DEADLINE},CANONICAL_DEADLINE+10);
   out.legacyLate=await run({},150);
+  out.wslWarning=await run({},2,' · powershell timed out · keep an Ubuntu window open');
   now=0;toasts.length=0;verdictAt=150000;
   await watchSpawnLaunch('QuietCurie','/repo');
   out.defaultArgument={toasts:toasts.slice(),elapsed:now};
@@ -1444,7 +1445,7 @@ def test_rendered_watcher_waits_for_the_server_verdict_deadline():
         pytest.skip("node is required to run the dashboard watcher")
     source = (pathlib.Path(server.__file__).parent / "index.html").read_bytes()
     rendered = server._render_dashboard_index(source).decode("utf-8")
-    assert "watchSpawnLaunch(j.child_name,payload.dir,spawnWatchLimitMs(j));" in rendered
+    assert "watchSpawnLaunch(j.child_name,payload.dir,spawnWatchLimitMs(j),wslWarning);" in rendered
     parts = []
     for constant in ("SPAWN_WATCH_DEFAULT_MS", "SPAWN_WATCH_MAX_MS"):
         match = re.search(rf"\nconst {constant}=[^;]+;", rendered)
@@ -1477,6 +1478,10 @@ def test_rendered_watcher_waits_for_the_server_verdict_deadline():
     # A process-group launcher's worst-case verdict lands inside its deadline,
     # where the old fixed 140s watch had already given up.
     assert out["groupWorst"]["toasts"] == spawned
+    assert out["wslWarning"]["toasts"] == [[
+        "▸ SPAWNED · WSL NOT KEPT",
+        "> QuietCurie :: tmux session ready · powershell timed out · keep an Ubuntu window open", True,
+    ]]
     assert out["groupWithoutDeadline"]["toasts"] == timed_out
     # New server budgets include the final shared cleanup; legacy replies keep 140s.
     assert out["canonicalWorst"]["toasts"] == spawned
@@ -1490,6 +1495,47 @@ def test_rendered_watcher_waits_for_the_server_verdict_deadline():
     for key in ("string", "boolean", "negative", "nan", "infinite", "shorter", "none"):
         assert limits[key] == 140000, key
     assert limits["huge"] == 3600000
+
+
+def test_new_agent_surfaces_wsl_hold_failure_with_the_launch():
+    if shutil.which("node") is None:
+        pytest.skip("node is required to run the NEW AGENT handler")
+    text = (pathlib.Path(server.__file__).parent / "index.html").read_text()
+    submit = re.search(r"\nasync function submitSpawn\(\)\{.*?\n\}", text, re.DOTALL).group(0)
+    harness = r"""
+let spmBusy=false,spmReady=true,spmSelectedName='',spmDraftDir='',spmDraftRestored=false;
+let spmProviders=[],reply,notice,watch;
+const SPM=()=>({classList:{add(){},remove(){}},value:'fixture task'});
+const buildSpawnPayload=()=>({task:'fixture task',dir:'/fixture',provider:'fixture',model:'fixture'});
+const spawnProviderRequirementsMissing=()=>null, saveSpawnTaskDraft=()=>true;
+const setSpawnStat=()=>{}, updateSpawnButton=()=>{}, closeSpawnModal=()=>{}, clearSpawnTaskDraft=()=>{};
+const spawnWatchLimitMs=()=>140000;
+const watchSpawnLaunch=(...args)=>{watch=args;};
+const toast=(...args)=>{notice=args;};
+globalThis.fetch=async()=>({json:async()=>reply});
+globalThis.setTimeout=()=>0;
+(async()=>{
+  const out=[];
+  for(const pending of [true,false]){
+    notice=watch=null;
+    reply={ok:true,pending,child_name:'FixtureAgent',wsl_hold:{
+      ok:false,state:'timeout',error:'PowerShell timed out',hint:'keep an Ubuntu window open'
+    }};
+    await submitSpawn();
+    out.push({notice,watch});
+  }
+  process.stdout.write(JSON.stringify(out));
+})().catch(error=>{console.error(error);process.exit(1);});
+"""
+    result = _REAL_RUN(["node", "-e", submit + "\n" + harness], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    pending, immediate = json.loads(result.stdout)
+    for outcome in (pending, immediate):
+        title, message, warning, duration = outcome["notice"]
+        assert "WSL NOT KEPT" in title
+        assert "PowerShell timed out" in message and "keep an Ubuntu window open" in message
+        assert warning and duration >= 10000
+    assert pending["watch"][-1].endswith("keep an Ubuntu window open")
 
 
 def test_invalid_override_remains_a_visible_provider_in_the_api(monkeypatch):

@@ -106,46 +106,83 @@ def _installer_function(name):
     return block[:block.rindex('\n}')+2]
 
 
-@pytest.mark.parametrize("user_manager", [True, False])
-def test_wsl_dashboard_uses_systemd_only_with_a_user_manager(tmp_path, user_manager):
-    proc_version = tmp_path / "proc-version"
-    proc_version.write_text("Linux version 6.6.0-microsoft-standard-WSL2\n")
-    detect_service = _installer_function("detect_service_kind").replace(
-        "/proc/version", shlex.quote(str(proc_version))
-    )
+@pytest.mark.parametrize("user_manager,linger,ready", [
+    (True, "yes", True), (True, "no", True), (True, "", True), (False, "yes", True),
+    (True, "yes", False),
+])
+def test_wsl_dashboard_requires_a_lingering_manager_and_http_readiness(tmp_path, user_manager, linger, ready):
     script = "\n".join([
         "set -eu",
-        "PREFLIGHT_OS=Linux DRY_RUN=false LABEL=example.dashboard",
+        "PREFLIGHT_OS=Linux DRY_RUN=false LABEL=example.dashboard HOME=" + shlex.quote(str(tmp_path)),
         f"systemctl() {{ echo \"$*\" >&2; [[ \"$2\" != show-environment ]] || return {0 if user_manager else 1}; }}",
+        "dashboard_under_wsl() { return 0; }",
+        f"loginctl() {{ printf '%s\\n' {shlex.quote(linger)}; }}",
+        'warn() { echo "$*" >&2; }',
+        'require_systemd_dashboard_slot() { echo "check unit slot"; }',
+        'systemd_dashboard_probe() { return 0; }',
         'stop_supervised_background() { echo "stop prior background"; }',
         'start_supervised_background() { echo "start background"; ACTIVE_SERVICE_KIND=nohup; }',
         'render_systemd_unit() { echo "render unit"; }',
-        detect_service,
+        'remove_systemd_dashboard() { echo "remove owned unit"; }',
+        f'verify_dashboard_service() {{ echo "check HTTP"; return {0 if ready else 1}; }}',
+        _installer_function("detect_service_kind"),
         _installer_function("start_service"),
         'start_service "$(detect_service_kind)"',
         'echo "$ACTIVE_SERVICE_KIND"',
     ])
     result = subprocess.run(["/bin/bash", "-c", script], env={"PATH": "/usr/bin:/bin"},
                             cwd=tmp_path, capture_output=True, text=True, check=True)
-    if user_manager:
-        assert result.stdout.splitlines() == ["stop prior background", "render unit", "systemd-user"]
+    if user_manager and linger == "yes" and ready:
+        assert result.stdout.splitlines() == ["check unit slot", "stop prior background", "render unit",
+                                              "check HTTP", "systemd-user"]
         assert result.stderr.splitlines() == [
-            "--user daemon-reload", "--user enable example.dashboard.service", "--user restart example.dashboard.service",
+            "--user daemon-reload", "--user enable -- example.dashboard.service",
+            "--user restart -- example.dashboard.service", "--user is-active --quiet -- example.dashboard.service",
         ]
+    elif not ready:
+        assert result.stdout.splitlines() == ["check unit slot", "stop prior background", "render unit",
+                                              "check HTTP", "remove owned unit", "start background", "nohup"]
+        assert "falling back" in result.stderr
     else:
         assert result.stdout.splitlines() == ["start background", "nohup"]
-        assert not result.stderr
+        assert ("enable-linger" in result.stderr) is user_manager
+
+
+def test_installer_refuses_a_foreign_label_before_stopping_or_rendering(tmp_path):
+    script = "\n".join([
+        "set -eu",
+        "PREFLIGHT_OS=Linux DRY_RUN=false LABEL=example.dashboard",
+        'die() { echo "$*" >&2; exit 1; }',
+        'systemd_dashboard_probe() { return 2; }',
+        'stop_supervised_background() { echo "stop prior background"; }',
+        'render_systemd_unit() { echo "render unit"; }',
+        _installer_function("require_systemd_dashboard_slot"),
+        _installer_function("start_service"),
+        'start_service systemd-user',
+    ])
+    result = subprocess.run(["/bin/bash", "-c", script], env={"PATH": "/usr/bin:/bin"},
+                            cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert "refusing to replace the unverified systemd dashboard" in result.stderr
+    assert not result.stdout
 
 
 def test_wsl_dashboard_unit_keeps_distro_and_anchor_setting(tmp_path):
+    import sys
+
     windows_bin = tmp_path / "windows-bin"
     windows_bin.mkdir()
     terminal = windows_bin / "wt.exe"
     terminal.write_text("#!/bin/sh\n")
     terminal.chmod(0o755)
+    python = tmp_path / "Python Tools" / "python3"
+    python.parent.mkdir()
+    python.symlink_to(sys.executable)
+    dashboard = tmp_path / "Dashboard Files"
     _fresh_render(tmp_path, "fresh_environment_json", "render_systemd_unit",
                   commands="export WSL_DISTRO_NAME=ExampleDistro WSL_INTEROP=/run/WSL/123_interop\nrender_systemd_unit\n",
                   overrides={"AGENTSTACK_RUNTIME_MODE": "legacy", "WSL_ANCHOR_SETTING": "0",
+                             "PYTHON_BIN": str(python), "DASHBOARD_DIR": str(dashboard),
                              "PATH": f"{windows_bin}:/usr/bin:/bin"})
     unit = (tmp_path / ".config/systemd/user/org.orrery.test.normal.dashboard.service").read_text()
     assert 'Environment="WSL_DISTRO_NAME=ExampleDistro"' in unit
@@ -154,6 +191,7 @@ def test_wsl_dashboard_unit_keeps_distro_and_anchor_setting(tmp_path):
     assert "WSL_INTEROP" not in unit
     assert "WantedBy=default.target" in unit
     assert "KillMode=process" in unit
+    assert f'ExecStart=":{python}" "{dashboard / "service_runner.py"}"' in unit
 
 
 def _fresh_render(tmp_path,*functions,commands='',overrides=None):

@@ -34123,11 +34123,11 @@ function reattachMurmurs(){
 }
 const {portURL,portraitFallback}=window.OrreryNetworkNode;
 
-function toast(prefix,msg,err){
+function toast(prefix,msg,err,displayMs=3400){
   const t=document.getElementById('toast');
   t.innerHTML=`<span class="p">${esc(prefix)}</span> ${esc(msg)}`;
   t.className='on'+(err?' err':'');
-  clearTimeout(t._t); t._t=setTimeout(()=>t.className='',3400);
+  clearTimeout(t._t); t._t=setTimeout(()=>t.className='',displayMs);
 }
 
 async function jump(name,ev){
@@ -37665,6 +37665,9 @@ function wslAnchorView(d){
       title:'The dashboard has not updated the WSL hold for '+d.age+'s. Keep an Ubuntu window open while agents work.'};
   }
   switch(state){
+    case 'starting':
+      return {show:true,status:'yellow',label:'WSL hold starting',
+        title:'Keep an Ubuntu window open until the detached Windows client is confirmed.'};
     case 'holding':
       return {show:true,status:'green',label:'WSL kept · '+(why.join(' · ')||'working'),
         title:'ORRERY keeps WSL running while agents work, so closing the Ubuntu windows does not stop them. It lets go when they are done.'};
@@ -38617,7 +38620,7 @@ function spawnWatchLimitMs(pending){
 }
 
 // Poll the background verdict of an async spawn and report it as a toast.
-async function watchSpawnLaunch(name,dir,limitMs=SPAWN_WATCH_DEFAULT_MS){
+async function watchSpawnLaunch(name,dir,limitMs=SPAWN_WATCH_DEFAULT_MS,wslWarning=''){
   const started=Date.now();
   while(Date.now()-started<limitMs){
     await new Promise(r=>setTimeout(r,2000));
@@ -38629,7 +38632,8 @@ async function watchSpawnLaunch(name,dir,limitMs=SPAWN_WATCH_DEFAULT_MS){
     if(!j||!j.ok||j.state==='launching')continue;
     if(j.state==='ready'){
       clearSpawnTaskDraft(dir);
-      toast('▸ SPAWNED','> '+name+' :: tmux session ready');
+      toast(wslWarning?'▸ SPAWNED · WSL NOT KEPT':'▸ SPAWNED',
+        '> '+name+' :: tmux session ready'+wslWarning,!!wslWarning,wslWarning?10000:undefined);
       setTimeout(()=>{ if(view==='deck') tick(); else netTick(); },300);
     }else{
       toast('✕ SPAWN FAILED','> '+name+' :: '+(j.error||'launcher failed')+' · task draft saved',true);
@@ -39331,15 +39335,21 @@ async function submitSpawn(){
       updateSpawnButton();
       return;
     }
+    const hold=j.wsl_hold;
+    const wslWarning=hold&&hold.ok===false
+      ? ' · '+(hold.error||'WSL hold could not be confirmed')+
+        ' · '+(hold.hint||'keep an Ubuntu window open until this agent has finished')
+      : '';
     if(j.pending){
       spmDraftRestored=false;
       const adjusted=j.name_substituted
         ? ' · identity changed from '+(j.requested_name||'?') : '';
-      toast(j.name_substituted?'▸ LAUNCHING · NAME CHANGED':'▸ LAUNCHING',
-        '> '+(j.child_name||'')+adjusted+' :: registered · waiting for the REPL');
+      toast(wslWarning?'▸ LAUNCHING · WSL NOT KEPT':j.name_substituted?'▸ LAUNCHING · NAME CHANGED':'▸ LAUNCHING',
+        '> '+(j.child_name||'')+adjusted+' :: registered · waiting for the REPL'+wslWarning,
+        !!wslWarning,wslWarning?10000:undefined);
       updateSpawnButton();
       closeSpawnModal();
-      watchSpawnLaunch(j.child_name,payload.dir,spawnWatchLimitMs(j));
+      watchSpawnLaunch(j.child_name,payload.dir,spawnWatchLimitMs(j),wslWarning);
       return;
     }
     clearSpawnTaskDraft(payload.dir);
@@ -39347,9 +39357,10 @@ async function submitSpawn(){
     const adjusted=j.name_substituted
       ? ' · identity changed from '+(j.requested_name||'?') : '';
     setSpawnStat('▸ SPAWNED '+(j.child_name||'')+adjusted+
-      (j.worktree?' · worktree exp/'+j.child_name:''),'ok');
-    toast(j.name_substituted?'▸ SPAWNED · NAME CHANGED':'▸ SPAWNED',
-      '> '+(j.child_name||'')+adjusted+' :: tmux session opening');
+      (j.worktree?' · worktree exp/'+j.child_name:'')+wslWarning,wslWarning?'err':'ok');
+    toast(wslWarning?'▸ SPAWNED · WSL NOT KEPT':j.name_substituted?'▸ SPAWNED · NAME CHANGED':'▸ SPAWNED',
+      '> '+(j.child_name||'')+adjusted+' :: tmux session opening'+wslWarning,
+      !!wslWarning,wslWarning?10000:undefined);
     // 1.2s 余韻を見せてから自動クローズ
     setTimeout(()=>{
       updateSpawnButton();

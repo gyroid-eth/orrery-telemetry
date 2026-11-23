@@ -41,6 +41,10 @@ Add-Content -LiteralPath $Config.log -Value "wsl exit=$LASTEXITCODE"
 
 ## 1. 導入と起動し直し / Install and cold start
 
+linger が無効な場合は、先に試験用アカウントのログインシェルで `systemctl --user show-environment` が成功し、`loginctl show-user "$USER" --property=Linger --value` が `no` を返すことを確認します。そのまま installer を実行し、`dashboard/agentctl.sh status` の `service mode: supervised-background` と `/api/version` の応答を確認します。次に下の手順で linger を有効にし、同じ導入先を更新します。
+
+If linger is disabled, first confirm from the test account's login shell that `systemctl --user show-environment` succeeds and `loginctl show-user "$USER" --property=Linger --value` returns `no`. Run the installer in that shell and check for `service mode: supervised-background` in `dashboard/agentctl.sh status` and a response from `/api/version`. Then enable linger and update the same installation below.
+
 試験用 checkout で #115 の修正を導入します。Mail の修正も実機で見る場合は、別ブランチの commit を試験用 checkout に取り込んでから導入します。以下では既存 Mail を再利用します。追加の導入操作が必要なときはその確認を行える端末で済ませます。既存 dashboard が supervised background なら、その PID が消えて user unit が `enabled` / `active` になることを確認します。
 
 Install the #115 fix from the test checkout. To exercise the Mail fix as well, apply its separate commit to the test checkout before installing. This example reuses an existing Mail install. Complete any interactive setup in a terminal first. When replacing a supervised-background dashboard, verify that its PID disappears and the user unit becomes `enabled` and `active`.
@@ -49,8 +53,8 @@ Install the #115 fix from the test checkout. To exercise the Mail fix as well, a
 Start-WslCheck install @'
 set -eu
 cd "$HOME/work/orrery-telemetry"
-scripts/install.sh --keep-mail --wsl-anchor
 loginctl enable-linger "$USER"
+scripts/install.sh --keep-mail --wsl-anchor
 systemctl --user is-enabled org.agentstack.agentdashboard.service org.agentstack.mail.timer
 systemctl --user is-active org.agentstack.agentdashboard.service org.agentstack.mail.timer
 '@
@@ -107,6 +111,25 @@ test "$ok" = 1
 Get-CimInstance Win32_Process -Filter "Name='wsl.exe'" |
     Select-Object ProcessId, ParentProcessId, CommandLine
 wsl.exe --list --verbose
+```
+
+### Windows OpenSSH から直接起動する確認 / Direct Windows OpenSSH acceptance
+
+手順2の WMI 起動とは別の回で、既存の保持を解放し、他の Ubuntu の窓を閉じます。Windows OpenSSH に接続し、接続内から `wsl.exe -d Ubuntu` で Ubuntu に入ります。`/api/wsl-anchor` が `idle` を返すことを確認し、手順2の Bash 本文をそのシェルで実行して保持用 PID を記録します。Windows の別の観測経路で、その PID の `wsl.exe` と対象 distro を確認してから、元の SSH 接続を切ります。45秒以上経過した後、Windows 側だけから保持用 PID と distro の `Running` を再確認します。その確認が済んでから下の短いコマンドを WMI で起動し、試験用 tmux と同じ保持用 PID を確認します。手順3で同じ保持を解放します。
+
+Run this separately from the WMI launch in step 2. Release any previous hold and close other Ubuntu windows. Connect through Windows OpenSSH and enter Ubuntu with `wsl.exe -d Ubuntu` from that connection. Confirm that `/api/wsl-anchor` returns `idle`, then run the Bash body of step 2 in that shell and record the hold PID. From a separate Windows observation channel, confirm the hold process and distro, then disconnect the original SSH session. After at least 45 seconds, confirm the same Windows PID and `Running` state from Windows alone. Then use the short WMI-launched probe below to confirm the test tmux session and the same hold PID. Release the same hold in step 3.
+
+```powershell
+Start-WslCheck ssh-survived @'
+set -eu
+tmux has-session -t =wsl-anchor-acceptance
+curl -fsS http://127.0.0.1:8770/api/wsl-anchor | python3 -c '
+import json, sys
+status = json.load(sys.stdin)
+assert status["state"] == "holding" and status["reasons"]["agents"] > 0
+print(status["windows_pid"])
+'
+'@
 ```
 
 ## 3. ORRERY の保持解除 / ORRERY hold release

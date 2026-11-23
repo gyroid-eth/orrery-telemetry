@@ -1031,6 +1031,8 @@ def _agent_process_pid(
     pane_pid: object,
     process_tree: tuple[dict[int, str], dict[int, list[int]]] | None,
     program: str | None,
+    *,
+    match=None,
 ) -> int | None:
     """Return the matching provider PID under a pane, or None when absent/unknown."""
     if not _supports_agent_process_liveness(program):
@@ -1054,7 +1056,8 @@ def _agent_process_pid(
         if pid in seen:
             continue
         seen.add(pid)
-        if _is_agent_process_name(names.get(pid, ""), program):
+        name = names.get(pid, "")
+        if _is_agent_process_name(name, program) and (match is None or match(pid, name, program)):
             return pid
         stack.extend(children.get(pid, ()))
     return None
@@ -11285,6 +11288,24 @@ def _tmux_observed(args: list[str]) -> str | None:
     return None
 
 
+def _wsl_agent_command_matches(pid: int, name: str, program: str) -> bool:
+    if program != "claude" or os.path.basename(name).lower() != "node":
+        return True
+    # The general Claude matcher is used for panes already associated with
+    # Claude. Here we scan *all* panes, so check the npm entrypoint itself.
+    try:
+        proc = Path("/proc") / str(pid)
+        argv = (proc / "cmdline").read_bytes().split(b"\0")
+        if len(argv) < 3 or not argv[1]:
+            return False
+        script = Path(os.fsdecode(argv[1]))
+        if not script.is_absolute():
+            script = (proc / "cwd") / script
+        return script.resolve().parts[-3:] == ("@anthropic-ai", "claude-code", "cli.js")
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def _wsl_anchor_work() -> tuple[dict, list, bool]:
     """What keeps the distro running now (see dashboard/wsl_anchor.py).
 
@@ -11312,7 +11333,7 @@ def _wsl_anchor_work() -> tuple[dict, list, bool]:
     seen: set[int] = set()
     for parts in rows:
         for program in ("claude", "codex", "antigravity"):
-            pid = _agent_process_pid(parts[1], tree, program)
+            pid = _agent_process_pid(parts[1], tree, program, match=_wsl_agent_command_matches)
             if pid and pid not in seen:
                 seen.add(pid)
                 pids.append([pid, anchor.process_start_ticks(pid)])
@@ -11327,13 +11348,15 @@ def wsl_anchor_status() -> dict:
     anchor = _wsl_anchor_module()
     if not anchor.enabled():
         return {"ok": True, "state": "disabled"}
-    if _WSL_ANCHOR["controller"] is None:
+    controller = _WSL_ANCHOR["controller"]
+    if controller is None:
         return {"ok": True, "state": "stopped"}
     status = anchor._read_json(anchor.state_dir() / "status.json")
-    if not status:
+    updated = float(status.get("updated") or 0)
+    if not status or updated < controller.started_at:
         return {"ok": True, "state": "starting"}
     # The header must not keep showing an old "kept" when ticks stopped.
-    age = max(0, round(time.time() - float(status.get("updated") or 0)))
+    age = max(0, round(time.time() - updated))
     status.pop("observed_at", None)  # Internal to launch reservation checks.
     return {"ok": True, **status, "age": age}
 

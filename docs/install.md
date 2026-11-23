@@ -191,7 +191,7 @@ Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux �
 
 **WSL の自動保持は従来モードの dashboard で既定で有効です。** agent の稼働・起動中や dashboard の表示中は、隠れた `wsl.exe` で WSL を保持します。無活動が60秒続くと dashboard は保持を手放します。他の Windows プログラムが使っていれば WSL は動き続けます。状態表示と手動での対処は [troubleshooting の WSL2 節](troubleshooting.md#wsl2-で-ubuntu-の窓を閉じたとき) を参照してください。
 
-`systemctl --user` が使える WSL では installer が dashboard の user unit を有効にします。Ubuntu の起動時から使い、最後のログインを閉じた後も dashboard と Mail を動かすには、Ubuntu 内で `loginctl enable-linger "$USER"` を実行します。systemd サービスだけでは WSL は保持されません。
+`systemctl --user` が使えて linger が有効な WSL では、installer が dashboard の user unit を有効にします。Ubuntu の起動時から使うには、Ubuntu 内で `loginctl enable-linger "$USER"` を実行してから導入してください。linger を確認できない環境では supervised background で起動します。WSL の自動保持は Windows 側のクライアントが担います。
 
 ## 非対話で入れる（`--assume-yes`）
 

@@ -65,9 +65,6 @@ MAX_START_FAILURES = 3
 RETRY_AFTER_FAILURE_SECONDS = 300.0
 ANCHOR_POLL_SECONDS = 2.0
 
-_SAFE_ARG = re.compile(r"^[A-Za-z0-9_./:@+,=-]+$")
-
-
 def enabled() -> bool:
     return os.environ.get("AGENTSTACK_WSL_ANCHOR", "1").strip() != "0"
 
@@ -319,27 +316,26 @@ def interop_env(run_dir: str = "/run/WSL") -> dict:
 
 
 def start_script(distro: str, argv: list[str]) -> str:
-    """PowerShell that starts a hidden wsl.exe running argv and prints its PID.
-
-    Start-Process joins ArgumentList with spaces and does not quote, so every
-    argument must be a plain token (checked by the caller). The distro name is
-    passed through base64 so no quoting layer can change it.
-    """
-    payload = base64.b64encode(json.dumps([distro, *argv]).encode("utf-8")).decode("ascii")
+    """Ask the local WMI provider to create wsl.exe outside the caller's job."""
+    arguments = subprocess.list2cmdline(["-d", distro, "--exec", *argv])
+    payload = base64.b64encode(arguments.encode("utf-8")).decode("ascii")
     return rf'''
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-$a = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{payload}')) | ConvertFrom-Json
-$dir = Join-Path $env:TEMP 'orrery-wsl-anchor'
-[void](New-Item -ItemType Directory -Force -Path $dir)
-$list = @('-d', $a[0], '--exec') + @($a | Select-Object -Skip 1)
-$p = Start-Process -FilePath "$env:SystemRoot\System32\wsl.exe" -ArgumentList $list `
-  -WorkingDirectory $env:TEMP -WindowStyle Hidden -PassThru `
-  -RedirectStandardOutput (Join-Path $dir 'stdout.txt') `
-  -RedirectStandardError (Join-Path $dir 'stderr.txt')
+$arguments = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{payload}'))
+# CREATE_NEW_CONSOLE (16), hidden by SW_HIDE (0).
+$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{{ShowWindow=[uint16]0; CreateFlags=[uint32]16}}
+$p = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{
+    CommandLine = ('"{{0}}\System32\wsl.exe" {{1}}' -f $env:SystemRoot, $arguments)
+    CurrentDirectory = $env:TEMP
+    ProcessStartupInformation = $startup
+}}
+if ($p.ReturnValue -ne 0 -or $p.ProcessId -le 0) {{
+    throw "Win32_Process.Create did not start wsl.exe (return value $($p.ReturnValue))"
+}}
 [Console]::WriteLine()
-[Console]::WriteLine("ORRERY_WSL_PID=$($p.Id)")
+[Console]::WriteLine("ORRERY_WSL_PID=$($p.ProcessId)")
 [Console]::Out.Flush()
 '''
 
@@ -354,9 +350,8 @@ def _windows_client_pid(output: bytes) -> int | None:
 
 def start_windows_client(distro: str, argv: list[str], timeout: float = WINDOWS_START_TIMEOUT_SECONDS) -> tuple[int | None, str]:
     """Start the hidden wsl.exe. Returns (Windows PID, error)."""
-    for arg in [distro, *argv]:
-        if not _SAFE_ARG.match(arg):
-            return None, f"cannot pass {arg!r} to wsl.exe (spaces or quotes); install under a plain path"
+    if not distro or not argv or any(any(ch in arg for ch in "\0\r\n") for arg in [distro, *argv]):
+        return None, "invalid wsl.exe arguments"
     shell = _powershell()
     if not shell:
         return None, "powershell.exe is not reachable (Windows interop off?)"
@@ -367,8 +362,8 @@ def start_windows_client(distro: str, argv: list[str], timeout: float = WINDOWS_
             cwd="/", capture_output=True, timeout=timeout, env=interop_env(),
         )
     except subprocess.TimeoutExpired as exc:
-        # PowerShell or the interop bridge can linger after Start-Process
-        # succeeded. Keep the PID if it was already written to the pipe.
+        # PowerShell or the interop bridge can linger after WMI succeeds.
+        # Keep the PID if it was already written to the pipe.
         pid = _windows_client_pid(exc.stdout or b"")
         return (pid, "") if pid else (None, f"powershell.exe printed no PID within {timeout:g}s")
     except OSError as exc:
@@ -403,12 +398,12 @@ class Controller:
         self.anchor_argv = anchor_argv  # nonce -> argv run by wsl.exe --exec
         self.starter = starter
         self.clock = clock
+        self.started_at = clock()
         self.sleep_ready = sleep_ready
         self.last_busy: float | None = None
         self.failures = 0
         self.last_failure = 0.0
         self.error = ""
-        self.windows_pid: int | None = None
         self.last_pids: list = []
         self.wake = threading.Event()
 
@@ -422,16 +417,13 @@ class Controller:
             self.sleep_ready(0.5)
 
     def _start(self) -> None:
-        now = self.clock()
-        if self.failures >= MAX_START_FAILURES and now - self.last_failure < RETRY_AFTER_FAILURE_SECONDS:
-            return
         nonce = uuid.uuid4().hex
+        # Retire the previous receipt before launching a new Linux anchor.
+        receipt = {"nonce": nonce, "launcher": "wmi"}
+        _write_json(self.dir / "client.json", receipt)
         pid, error = self.starter(self.distro, self.anchor_argv(nonce))
-        if pid is not None:
-            # Keep it even if ready comes late: the client exists, and the
-            # status must say which Windows process holds WSL.
-            self.windows_pid = pid
-            _write_json(self.dir / "client.json", {"windows_pid": pid, "nonce": nonce, "started": time.time()})
+        if pid is not None and not error:
+            _write_json(self.dir / "client.json", {**receipt, "windows_pid": pid})
         if pid is not None and not error and self._ready(nonce):
             self.failures = 0
             self.error = ""
@@ -483,46 +475,47 @@ class Controller:
                 "updated": now,
             })
         running = anchor_running(self.dir)
-        if holding and not running:
+        status_file = self.dir / "status.json"
+        # Reserve checks use the observation time; status age uses publication.
+        status = {"reasons": reasons, "agents": reasons.get("agents", 0), "observed_at": now}
+        retry_due = (self.failures < MAX_START_FAILURES
+                     or now - self.last_failure >= RETRY_AFTER_FAILURE_SECONDS)
+        if holding and not running and retry_due:
+            # Publish the lost hold before starting a potentially slow probe.
+            _write_json(status_file, {**status, "state": "starting", "anchor_running": False,
+                                     "windows_pid": None, "updated": self.clock()})
             self._start()
             running = anchor_running(self.dir)
         if not holding:
             self.failures = 0
             self.error = ""
-        if not running:
-            self.windows_pid = None
-        elif self.windows_pid is None:
-            # Started by an earlier dashboard, or ready came after a timeout:
-            # the client that started the running anchor is on record.
+        anchor = _read_json(self.dir / "anchor.json") if running else {}
+        windows_pid = None
+        if nonce := anchor.get("nonce"):
             client = _read_json(self.dir / "client.json")
-            if client.get("nonce") and client.get("nonce") == _read_json(self.dir / "anchor.json").get("nonce"):
-                self.windows_pid = client.get("windows_pid")
-        if running:
-            if "unknown" in reasons:
-                state = "unknown"
-            else:
-                state = "holding" if reasons else "releasing"
+            pid = client.get("windows_pid")
+            if client.get("nonce") == nonce and client.get("launcher") == "wmi" and type(pid) is int and pid > 0:
+                windows_pid = pid
+        if running and not holding:
+            state = "releasing"
+        elif running and windows_pid is not None:
+            state = "unknown" if "unknown" in reasons else "holding" if reasons else "releasing"
         elif holding:
             state = "failed"
         else:
             state = "idle"
-        status = {
+        status.update({
             "state": state,
-            "reasons": reasons,
-            "agents": reasons.get("agents", 0),
             "anchor_running": running,
-            "windows_pid": self.windows_pid,
-            "anchor": _read_json(self.dir / "anchor.json") if running else {},
-            "error": self.error if state == "failed" else "",
+            "windows_pid": windows_pid,
+            "anchor": anchor,
+            "error": (self.error or "the anchor's detached Windows PID could not be confirmed") if state == "failed" else "",
             "grace_seconds_left": (
                 max(0, round(GRACE_SECONDS - (now - self.last_busy))) if state == "releasing" and grace else 0
             ),
-            # A launch must match an observation after its reservation, even
-            # if PowerShell delayed publication of that observation.
-            "observed_at": now,
             "updated": self.clock(),
-        }
-        _write_json(self.dir / "status.json", status)
+        })
+        _write_json(status_file, status)
         return status
 
     def run_forever(self) -> None:

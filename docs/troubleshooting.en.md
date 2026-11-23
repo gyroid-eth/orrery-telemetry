@@ -136,14 +136,14 @@ systemctl --user status org.agentstack.agentdashboard.service
 systemctl --user daemon-reload
 ```
 
-The installer enables the dashboard's systemd user unit on WSL2 when the user manager is available. In environments without systemd user support, it falls back to `nohup` plus a pidfile. The localhost dashboard and browser terminal can work. On WSL2 the dashboard's jump opens a new Windows Terminal (`wt.exe`) tab that attaches to tmux through `wsl.exe -d <distro>` (`AGENTSTACK_TERMINAL=auto` picks `wt`); on plain Linux jump stays unsupported.
+The installer enables the dashboard's systemd user unit on WSL2 when the user manager is available and lingering is enabled. It uses `nohup` plus a pidfile when the user manager is unavailable or it cannot confirm lingering on WSL2. The localhost dashboard and browser terminal can work. On WSL2 the dashboard's jump opens a new Windows Terminal (`wt.exe`) tab that attaches to tmux through `wsl.exe -d <distro>` (`AGENTSTACK_TERMINAL=auto` picks `wt`); on plain Linux jump stays unsupported.
 
 ### On WSL2, closing the Ubuntu windows
 
-**The legacy dashboard keeps WSL running automatically while agents work.** It starts a single hidden `wsl.exe` on Windows and releases it after 60 idle seconds. `agentstack-doctor` reads the Windows `.wslconfig` without modifying it.
+**The legacy dashboard keeps WSL running automatically while agents work.** It uses WMI to create a hidden `wsl.exe` independently of the originating Windows connection and releases it after 60 idle seconds. `agentstack-doctor` reads the Windows `.wslconfig` without modifying it.
 
 - A Claude, Codex or Antigravity process running in tmux keeps the hold, including while waiting for approval or a reply.
-- NEW AGENT in the dashboard and `agent-start` / `agent-start-codex` reserve a hold before launching. If they cannot confirm the hold, the launch continues and reports why in the dashboard response's `wsl_hold` or the shell's `WSL hold: ...` line. Leftover reservations expire after three minutes.
+- NEW AGENT in the dashboard and `agent-start` / `agent-start-codex` reserve a hold before launching. If they cannot confirm the hold, the launch continues and the NEW AGENT notification or the shell's `WSL hold: ...` line explains why. Leftover reservations expire after three minutes.
 - A visible dashboard page also keeps the hold. Hiding or closing the page drops that reason. The dashboard service, Mail, watcher and tmux recorder connections do not count on their own.
 - The header shows the reason as `WSL kept · 2 agents` or the countdown as `WSL hold ends in 42s`. Run `agentstack-doctor` for reasons, the Windows PID and status freshness.
 - If tmux or the process list cannot be read, the hold stays for the agents last seen and the header shows `WSL kept · state unknown`. After more than 30 seconds without an update, the header shows `WSL status stale`.
@@ -159,10 +159,10 @@ If WSL stays running after the hold ends and you want to stop it immediately, ru
 wsl --shutdown
 ```
 
-The next time Ubuntu opens, the systemd user manager starts the dashboard and the Mail timer starts Mail about one minute later. If the dashboard uses supervised background mode, start it with `agentctl.sh start`.
+The next time Ubuntu opens, the enabled systemd user unit starts the dashboard and the Mail timer attempts to start Mail about one minute later. If the dashboard uses supervised background mode, start it with `agentctl.sh start`.
 
-- To start the systemd user manager at distro boot and keep the dashboard, the Mail timer and the watcher running after logout, run `loginctl enable-linger "$USER"` inside WSL.
-- If you previously set `[general] instanceIdleTimeout=-1` or `[wsl2] vmIdleTimeout=-1` in `.wslconfig`, the first keeps distros running and the second keeps the VM running after distros stop. Automatic hold does not need these settings. Follow the guidance from `agentstack-doctor`, delete those lines and run `wsl --shutdown` once with the precautions above.
+- To start the systemd user manager at distro boot and keep the dashboard, the Mail timer and the watcher running after logout, run `loginctl enable-linger "$USER"` inside WSL before running the installer.
+- In `.wslconfig`, `[general] instanceIdleTimeout=-1` keeps distros running and `[wsl2] vmIdleTimeout=-1` keeps the VM running after distros stop. After verifying that automatic hold survives disconnecting in your usual setup, you can remove these settings. Follow the guidance from `agentstack-doctor` and run `wsl --shutdown` once with the precautions above.
 
 If the native Windows helper (`scripts/windows/`) also runs on the same PC: WSL2 forwards 8770 to the Windows localhost, so a leftover native dashboard on the same port answers the browser instead and the WSL agents never appear. Change one of the ports, or stop the native side before opening the page.
 

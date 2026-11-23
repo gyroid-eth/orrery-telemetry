@@ -296,7 +296,7 @@ stop_background() {
 
 start_any() {
   if systemd_unit_installed; then
-    systemctl --user start "$SYSTEMD_UNIT"
+    systemd_start start
     echo "started in systemd-user mode -> $URL"
     return
   fi
@@ -328,12 +328,29 @@ start_any() {
 }
 
 systemd_unit_installed() {
-  [[ "$(uname -s)" == Linux && -f "$SYSTEMD_UNIT_PATH" ]] && command -v systemctl >/dev/null 2>&1
+  [[ "$(uname -s)" == Linux ]] || return 1
+  if [[ ! -e "$SYSTEMD_UNIT_PATH" && ! -L "$SYSTEMD_UNIT_PATH" ]] && \
+     ! systemctl --user show-environment >/dev/null 2>&1; then
+    return 1
+  fi
+  local rc=0
+  "$PYTHON" "$HERE/systemd_dashboard.py" inspect "$SYSTEMD_UNIT_PATH" "$HERE/service_runner.py" "$PYTHON" >/dev/null || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    3) return 1 ;;
+    *) echo "refusing to operate on the unverified systemd dashboard $SYSTEMD_UNIT" >&2; exit 1 ;;
+  esac
+}
+
+systemd_start() {
+  systemctl --user "$1" -- "$SYSTEMD_UNIT"
+  "$PYTHON" "$HERE/systemd_dashboard.py" ready "$PORT"
+  systemctl --user is-active --quiet -- "$SYSTEMD_UNIT"
 }
 
 stop_all() {
   if systemd_unit_installed; then
-    systemctl --user stop "$SYSTEMD_UNIT"
+    systemctl --user stop -- "$SYSTEMD_UNIT"
     return
   fi
   stop_background
@@ -355,7 +372,7 @@ status_service() {
     launchctl print "$GUI/$LABEL" 2>/dev/null | grep -E "state =|pid =" || true
   elif systemd_unit_installed; then
     echo "service mode: systemd-user"
-    systemctl --user show -p ActiveState -p MainPID "$SYSTEMD_UNIT"
+    systemctl --user show -p ActiveState -p MainPID -- "$SYSTEMD_UNIT"
   elif background_running; then
     echo "service mode: supervised-background"
     echo "pid = $(background_pid)"
@@ -381,7 +398,7 @@ case "${1:-status}" in
     ;;
   uninstall)
     if systemd_unit_installed; then
-      systemctl --user disable --now "$SYSTEMD_UNIT"
+      systemctl --user disable --now -- "$SYSTEMD_UNIT"
       rm -f "$SYSTEMD_UNIT_PATH"
       systemctl --user daemon-reload
     else
@@ -392,7 +409,7 @@ case "${1:-status}" in
     ;;
   restart)
     if systemd_unit_installed; then
-      systemctl --user restart "$SYSTEMD_UNIT"
+      systemd_start restart
       echo "restarted in systemd-user mode -> $URL"
     elif background_running; then
       stop_background

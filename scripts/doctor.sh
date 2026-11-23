@@ -979,6 +979,8 @@ reasons = ", ".join(f"{k} {v}" for k, v in sorted((s.get("reasons") or {}).items
 state = s.get("state")
 if age > 60:
     print(f"warn: WSL anchor: status is {age} s old; the dashboard is not updating it (is it running?)")
+elif state == "starting":
+    print("note: WSL anchor: starting a detached Windows client; keep an Ubuntu window open until holding is confirmed")
 elif state == "failed":
     print(f"warn: WSL anchor: cannot keep WSL running for the agents: {s.get('error') or 'unknown error'}")
     print("      keep an Ubuntu window open while agents work; the dashboard retries on its own")
@@ -1006,7 +1008,8 @@ PYANCHOR
   "$PYTHON_BIN" - "$config" "$parsed" <<'PYCONFIG'
 import json, sys
 config, parsed = sys.argv[1], json.loads(sys.argv[2])
-fix = f"to undo: delete that line from {config} (in PowerShell: notepad $env:USERPROFILE\\.wslconfig), then run 'wsl --shutdown' once when no agent is working"
+fix = (f"after verifying the automatic hold with your way of closing Ubuntu, delete that line from {config} "
+       "(in PowerShell: notepad $env:USERPROFILE\\.wslconfig), then run 'wsl --shutdown' once when no agent is working")
 inst, vm = parsed["instanceIdleTimeout"], parsed["vmIdleTimeout"]
 if inst["state"] == "set" and inst["value"] < 0:
     print(f"note: {config} has [general] instanceIdleTimeout={inst['value']}: every distro keeps running until 'wsl --shutdown'. ORRERY no longer needs it")

@@ -2290,6 +2290,7 @@ validate_repo_assets() {
   [[ -f "$SCRIPT_DIR/lib/mcp_endpoint.py" ]] || die "missing scripts/lib/mcp_endpoint.py"
   [[ -f "$SCRIPT_DIR/lib/wslconfig.py" ]] || die "missing scripts/lib/wslconfig.py"
   [[ -f "$REPO_ROOT/dashboard/wsl_anchor.py" ]] || die "missing dashboard/wsl_anchor.py"
+  [[ -f "$REPO_ROOT/dashboard/systemd_dashboard.py" ]] || die "missing dashboard/systemd_dashboard.py"
   [[ -f "$SCRIPT_DIR/lib/mail_required_features.json" ]] || die "missing scripts/lib/mail_required_features.json"
   [[ -f "$SCRIPT_DIR/lib/mail_update_notice.py" ]] || die "missing scripts/lib/mail_update_notice.py"
   [[ -f "$SCRIPT_DIR/lib/agentstack-persistent-launcher.sh" ]] || \
@@ -2378,14 +2379,30 @@ launchd_dashboard_pid() {
 
 systemd_dashboard_pid() {
   [[ "$PREFLIGHT_OS" == "Linux" ]] || return 1
-  local unit="$HOME/.config/systemd/user/$LABEL.service"
-  [[ -f "$unit" ]] || return 1
-  local properties fragment pid
-  properties="$(systemctl --user show -p FragmentPath -p MainPID "$LABEL.service")" || return 1
-  fragment="$(sed -n 's/^FragmentPath=//p' <<< "$properties")"
-  pid="$(sed -n 's/^MainPID=//p' <<< "$properties")"
-  [[ "$fragment" == "$unit" && "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  local pid
+  pid="$(systemd_dashboard_probe)" || return 1
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
   printf '%s\n' "$pid"
+}
+
+systemd_dashboard_probe() {
+  "$PYTHON_BIN" "$REPO_ROOT/dashboard/systemd_dashboard.py" inspect \
+    "$HOME/.config/systemd/user/$LABEL.service" "$DASHBOARD_DIR/service_runner.py" \
+    "$PYTHON_BIN" "${SYSTEMD_DASHBOARD_PREVIOUS_PYTHON:-}"
+}
+
+require_systemd_dashboard_slot() {
+  [[ "$DRY_RUN" != true ]] || return 0
+  local rc=0
+  systemd_dashboard_probe >/dev/null || rc=$?
+  [[ "$rc" == 0 || "$rc" == 3 ]] || die "refusing to replace the unverified systemd dashboard $LABEL.service"
+}
+
+remove_systemd_dashboard() {
+  systemd_dashboard_probe >/dev/null || die "refusing to stop the unverified systemd dashboard $LABEL.service"
+  systemctl --user disable --now -- "$LABEL.service" || die "could not disable $LABEL.service"
+  rm -f "$HOME/.config/systemd/user/$LABEL.service"
+  systemctl --user daemon-reload || die "could not reload systemd after removing $LABEL.service"
 }
 
 supervised_dashboard_pid() {
@@ -2443,12 +2460,24 @@ check_port() {
   fi
 }
 
+dashboard_under_wsl() {
+  [[ -r /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null
+}
+
 detect_service_kind() {
   if [[ "$PREFLIGHT_OS" == "Darwin" ]]; then
     echo "launchd"
     return
   fi
   if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+    if dashboard_under_wsl; then
+      local linger
+      if ! linger="$(loginctl show-user "$(id -u)" --property=Linger --value 2>/dev/null)" || [[ "$linger" != yes ]]; then
+        warn 'WSL: using supervised background; to enable dashboard startup at boot, run loginctl enable-linger "$USER" and reinstall'
+        echo "nohup"
+        return
+      fi
+    fi
     echo "systemd-user"
     return
   fi
@@ -2459,7 +2488,7 @@ detect_service_kind() {
 # WSL running after the dashboard releases its own hold.
 report_wsl_anchor() {
   [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" == legacy ]] || return 0
-  [[ -r /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null || return 0
+  dashboard_under_wsl || return 0
   if [[ "$WSL_ANCHOR_SETTING" == "1" ]]; then
     say "WSL: the dashboard holds WSL while agents work and releases its hold after 60 idle seconds (--no-wsl-anchor to turn off)"
   else
@@ -4935,14 +4964,15 @@ render_systemd_unit() {
     AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT="${CODEX_DEFAULT_EFFORT_SETTING:-}" \
     AGENTSTACK_INSTALL_DASHBOARD_ORIGINS="${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}" \
     AGENTSTACK_INSTALL_WSL_WT="$(command -v wt.exe || true)" \
-    "$PYTHON_BIN" - "$unit" <<PY
+    "$PYTHON_BIN" - "$unit" "$PYTHON_BIN" "$DASHBOARD_DIR" <<PY
 import os
 import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
+python_bin, dashboard_dir = sys.argv[2:]
 env = {
-    "AGENTSTACK_PYTHON": "$PYTHON_BIN",
+    "AGENTSTACK_PYTHON": python_bin,
     "AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS": os.environ.get("AGENTSTACK_INSTALL_DASHBOARD_ORIGINS", ""),
     "AGENTSTACK_RUNTIME_MODE": "${AGENTSTACK_RUNTIME_MODE:-legacy}",
     "AGENTSTACK_GLOBAL_SERVER_CONFIG": "${AGENTSTACK_GLOBAL_SERVER_CONFIG:-}",
@@ -5015,12 +5045,12 @@ lines = [
     "",
     "[Service]",
     "Type=simple",
-    f"WorkingDirectory={esc('$DASHBOARD_DIR')}",
+    f"WorkingDirectory={esc(dashboard_dir)}",
 ]
 for key, value in env.items():
     lines.append(f'Environment="{key}={esc(value)}"')
 lines.extend([
-    f"ExecStart={esc('$PYTHON_BIN')} {esc('$DASHBOARD_DIR/service_runner.py')}",
+    f'ExecStart=":{esc(python_bin)}" "{esc(os.path.join(dashboard_dir, "service_runner.py"))}"',
     # The runner shuts down the server. A tmux server launched by the dashboard
     # may share its cgroup and must survive a dashboard restart.
     "KillMode=process",
@@ -5078,6 +5108,7 @@ start_service() {
       start_supervised_background || true
       ;;
     systemd-user)
+      require_systemd_dashboard_slot
       if [[ "$DRY_RUN" != true ]]; then
         stop_supervised_background || die "could not hand over the dashboard to systemd"
       fi
@@ -5085,30 +5116,34 @@ start_service() {
       if [[ "$DRY_RUN" == true ]]; then
         plan "stop any previous supervised background dashboard before switching to systemd"
         run systemctl --user daemon-reload
-        run systemctl --user enable "$LABEL.service"
-        run systemctl --user restart "$LABEL.service"
+        run systemctl --user enable -- "$LABEL.service"
+        run systemctl --user restart -- "$LABEL.service"
         ACTIVE_SERVICE_KIND="systemd-user"
         return
       fi
       if systemctl --user daemon-reload && \
-         systemctl --user enable "$LABEL.service" && \
-         systemctl --user restart "$LABEL.service"
+         systemd_dashboard_probe >/dev/null && \
+         systemctl --user enable -- "$LABEL.service" && \
+         systemctl --user restart -- "$LABEL.service" && \
+         verify_dashboard_service && systemctl --user is-active --quiet -- "$LABEL.service"
       then
         ACTIVE_SERVICE_KIND="systemd-user"
-        if [[ -n "${WSL_DISTRO_NAME:-}" ]] && \
-           [[ "$(loginctl show-user "$(id -u)" --property=Linger --value 2>/dev/null)" != yes ]]; then
-          say 'WSL: for dashboard and Mail at boot and after logout, run loginctl enable-linger "$USER" inside WSL'
-        fi
         return
       fi
       warn "systemd user service setup failed; falling back to supervised background mode"
-      systemctl --user disable --now "$LABEL.service" 2>/dev/null || true
-      rm -f "$SERVICE_PATH"
-      systemctl --user daemon-reload 2>/dev/null || true
+      remove_systemd_dashboard
+      SERVICE_HEALTHY=false
       SERVICE_FALLBACK_USED=true
-      start_supervised_background || true
+      start_supervised_background || die "dashboard could not be started in supervised background mode"
       ;;
     nohup)
+      if [[ "${PREFLIGHT_OS:-}" == "Linux" && -f "$HOME/.config/systemd/user/$LABEL.service" ]] && dashboard_under_wsl; then
+        if [[ "$DRY_RUN" == true ]]; then
+          plan "disable previous dashboard systemd unit after verifying ownership"
+        else
+          remove_systemd_dashboard
+        fi
+      fi
       start_supervised_background || true
       ;;
     *)
@@ -5212,35 +5247,14 @@ verify_dashboard_service() {
   if [[ "$DRY_RUN" == true ]]; then
     return
   fi
-  if "$PYTHON_BIN" - "$PORT" <<'PY'
-import sys
-import time
-import urllib.error
-import urllib.request
-
-port = int(sys.argv[1])
-url = f"http://127.0.0.1:{port}/api/agents"
-deadline = time.monotonic() + 15
-last_error = "no response"
-while time.monotonic() < deadline:
-    try:
-        with urllib.request.urlopen(url, timeout=1) as response:
-            if response.status == 200:
-                raise SystemExit(0)
-            last_error = f"HTTP {response.status}"
-    except (OSError, urllib.error.URLError) as exc:
-        last_error = str(exc)
-    time.sleep(0.25)
-print(f"dashboard health check failed: {last_error}", file=sys.stderr)
-raise SystemExit(1)
-PY
-  then
+  if "$PYTHON_BIN" "$REPO_ROOT/dashboard/systemd_dashboard.py" ready "$PORT"; then
     SERVICE_HEALTHY=true
     say "dashboard healthy: http://127.0.0.1:$PORT/api/agents"
   else
     SERVICE_HEALTHY=false
     warn "dashboard service did not become healthy; install files and managed blocks were still completed"
     warn "inspect $DASHBOARD_LOG and start the dashboard manually"
+    return 1
   fi
 }
 
@@ -5268,6 +5282,7 @@ write_manifest() {
   AGENTSTACK_INSTALL_EXTRA_PROTECTED_ROOTS="${EXTRA_PROTECTED_ROOTS-}" \
   AGENTSTACK_INSTALL_MAIL_UPDATE="$mail_update" \
   AGENTSTACK_INSTALL_FRESH_ENV="${AGENTSTACK_INSTALL_FRESH_ENV:-}" \
+  AGENTSTACK_INSTALL_DASHBOARD_PYTHON="$PYTHON_BIN" \
   AGENTSTACK_INSTALL_CODEX_DEFAULT_MODEL="${CODEX_DEFAULT_MODEL_SETTING:-}" \
   AGENTSTACK_INSTALL_CODEX_DEFAULT_EFFORT="${CODEX_DEFAULT_EFFORT_SETTING:-}" \
   AGENTSTACK_INSTALL_DASHBOARD_ORIGINS="${DASHBOARD_ALLOWED_ORIGINS_SETTING:-}" \
@@ -5394,7 +5409,8 @@ services = []
 if service_kind == "launchd":
     services.append({"kind": "launchd", "label": "$LABEL", "path": service_path})
 elif service_kind == "systemd-user":
-    services.append({"kind": "systemd-user", "unit": "$LABEL.service", "path": service_path})
+    services.append({"kind": "systemd-user", "unit": "$LABEL.service", "path": service_path,
+                     "interpreter": os.environ["AGENTSTACK_INSTALL_DASHBOARD_PYTHON"]})
 elif service_kind == "nohup":
     services.append({"kind": "nohup", "pidfile": service_path})
 if mail_service_kind == "nohup" and mail_service_path:
@@ -5634,6 +5650,14 @@ PY
   fi
   check_dependencies
   if [[ "${AGENTSTACK_RUNTIME_MODE:-legacy}" == fresh ]]; then prepare_fresh_install; fi
+  if [[ "$PREFLIGHT_OS" == "Linux" ]]; then
+    SYSTEMD_DASHBOARD_PREVIOUS_PYTHON="$(agentstack_installed_env_value AGENTSTACK_PYTHON "$ENV_FILE")"
+  fi
+  local service_kind
+  service_kind="$(detect_service_kind)"
+  if [[ "$service_kind" == "systemd-user" ]]; then
+    require_systemd_dashboard_slot
+  fi
   check_port
   # A legacy listener can answer health_check but report its database relative
   # to its own working directory. Honor the explicit retirement choice before
@@ -5643,8 +5667,6 @@ PY
   if ! check_agent_mail_provisioning_dependencies; then
     exit 1
   fi
-  local service_kind
-  service_kind="$(detect_service_kind)"
   # detect_service_kind knows which manager to try, not whether it will work:
   # the bootstrap below is the capability probe. Say "planned" so a dry-run,
   # which never reaches that probe, cannot be read as a promise.
@@ -5686,7 +5708,9 @@ PY
   start_service "$service_kind"
   write_manifest "${ACTIVE_SERVICE_KIND:-manual}" "${SERVICE_PATH:-}" \
     "${AGENT_MAIL_SERVICE_KIND:-}" "${AGENT_MAIL_SERVICE_PATH:-}"
-  verify_dashboard_service
+  if [[ "$SERVICE_HEALTHY" != true ]] && ! verify_dashboard_service && [[ "$service_kind" == "systemd-user" ]]; then
+    die "dashboard failed to become ready after systemd migration"
+  fi
   if [[ "$DRY_RUN" == true ]]; then
     say "Dry-run complete: no files were written."
   else

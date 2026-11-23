@@ -151,14 +151,14 @@ systemctl --user status org.agentstack.agentdashboard.service
 systemctl --user daemon-reload
 ```
 
-WSL2 でも systemd user が使えれば installer が dashboard の unit を有効にします。systemd user が使えない環境では `nohup` と pidfile に fallback します。localhost dashboard と browser terminal は利用できます。WSL2 では dashboard の jump が Windows Terminal（`wt.exe`）の新しいタブを開いて `wsl.exe -d <distro>` 経由で tmux に attach します（`AGENTSTACK_TERMINAL=auto` が `wt` を選ぶ）。素の Linux では jump は未対応のままです。
+WSL2 では systemd user と linger が使える場合に installer が dashboard の unit を有効にします。systemd user が使えない場合や、WSL2 で linger を確認できない場合は、`nohup` と pidfile で起動します。localhost dashboard と browser terminal は利用できます。WSL2 では dashboard の jump が Windows Terminal（`wt.exe`）の新しいタブを開いて `wsl.exe -d <distro>` 経由で tmux に attach します（`AGENTSTACK_TERMINAL=auto` が `wt` を選ぶ）。素の Linux では jump は未対応のままです。
 
 ### WSL2 で Ubuntu の窓を閉じたとき
 
-**従来モードの dashboard は、agent の作業中に WSL を自動で保持します。** Windows 側で隠れた `wsl.exe` を1つ起動し、無活動が60秒続くと手放します。`agentstack-doctor` は Windows の `.wslconfig` を読み取り、設定は変更しません。
+**従来モードの dashboard は、agent の作業中に WSL を自動で保持します。** Windows の WMI で元の接続とは独立した非表示の `wsl.exe` を起動し、無活動が60秒続くと手放します。`agentstack-doctor` は Windows の `.wslconfig` を読み取り、設定は変更しません。
 
 - tmux の agent process（Claude、Codex、Antigravity）が動いている間は保持します。承認や返答を待っている agent も含みます。
-- dashboard の NEW AGENT や `agent-start` / `agent-start-codex` は、起動前に保持を予約します。開始を確認できない場合も agent の起動は続き、dashboard の応答の `wsl_hold` または shell の `WSL hold: ...` で理由を確認できます。残った予約は3分で失効します。
+- dashboard の NEW AGENT や `agent-start` / `agent-start-codex` は、起動前に保持を予約します。保持を確認できない場合も agent の起動は続き、NEW AGENT の通知または shell の `WSL hold: ...` に理由が出ます。残った予約は3分で失効します。
 - dashboard のページを表示している間も保持します。ページを隠すか閉じると、この保持理由が外れます。dashboard、Mail、watcher、tmux の記録用接続はそれだけでは保持理由になりません。
 - header の `WSL kept · 2 agents` は保持理由、`WSL hold ends in 42s` は解除までの秒数です。`agentstack-doctor` で理由、Windows 側の PID、状態の鮮度を確認できます。
 - tmux やプロセス一覧を読み取れない場合は、最後に確認した agent に対する保持を続け、`WSL kept · state unknown` と表示します。状態の更新が30秒を超えて途絶えると `WSL status stale` と表示します。
@@ -174,10 +174,10 @@ Windows Terminal などのデスクトップの窓から起動したものは、
 wsl --shutdown
 ```
 
-次に Ubuntu を開くと、systemd user manager が dashboard を起動し、Mail の timer が約1分後に Mail を立て直します。supervised background の dashboard は `agentctl.sh start` で起動します。
+次に Ubuntu を開くと、有効にした systemd user unit が dashboard を起動し、Mail の timer が約1分後に Mail の起動を試みます。supervised background の dashboard は `agentctl.sh start` で起動します。
 
-- Ubuntu の起動時に systemd user manager を起動し、ログアウト後も dashboard、Mail の timer と watcher を動かすには、WSL の中で `loginctl enable-linger "$USER"` を設定します。
-- 以前の案内で `.wslconfig` に `[general] instanceIdleTimeout=-1` や `[wsl2] vmIdleTimeout=-1` を設定した場合、前者は distro を、後者は distro の停止後も VM を動かし続けます。自動保持には不要です。`agentstack-doctor` の案内に従い、該当行を消してから上の注意のとおり一度 `wsl --shutdown` を実行します。
+- Ubuntu の起動時に systemd user manager を起動し、ログアウト後も dashboard、Mail の timer と watcher を動かすには、WSL の中で `loginctl enable-linger "$USER"` を設定してから installer を実行します。
+- `.wslconfig` の `[general] instanceIdleTimeout=-1` は distro を、`[wsl2] vmIdleTimeout=-1` は distro の停止後も VM を動かし続けます。普段の接続経路で自動保持と切断後の稼働を確認できた場合に、これらの設定を外せます。`agentstack-doctor` の案内に従い、該当行を消して一度 `wsl --shutdown` を実行します。
 
 同じ PC で native Windows の helper（`scripts/windows/`）も動かしている場合、WSL2 の 8770 は Windows の localhost に転送されるので、Windows 側に同じ port の dashboard が残っているとブラウザはそちらに繋がり、WSL の agent が見えません。どちらかの port を変えるか、native 側を止めてから開きます。
 
