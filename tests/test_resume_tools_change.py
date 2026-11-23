@@ -42,6 +42,7 @@ def stopped(request, tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_agent_program", lambda name: request.param)
     monkeypatch.setattr(server, "_has_session", lambda name: False)
     monkeypatch.setattr(server, "_child_session_live", lambda name, boot: False)
+    monkeypatch.setattr(server, "_persistent_profiles", lambda: {})
     monkeypatch.setattr(server, "_resume_capability", lambda *a, **k: "ready")
     registration = {k: state[k] for k in ["agent_id", "project_key", "program"]}
     transcript = project / f"{SID}.jsonl"
@@ -79,6 +80,131 @@ def stopped(request, tmp_path, monkeypatch):
     home.joinpath("auth-fixture").symlink_to(target)
     child_resume._atomic_bytes(directory / f"{NAME}.mcp.json", b"old-generated")
     return runtime, record, request.param, state
+
+
+def save_selection(record, provider, base, tools):
+    selection = child_tools.normalize(base, tools)
+    if provider == "codex":
+        child_tools.write_codex_record(str(record), selection)
+    else:
+        saved = json.loads(record.read_text())
+        chrome = selection["tools"].get("browser")
+        saved.update(selection, claude_chrome=chrome is not None, chrome_device=(chrome or {}).get("device", ""))
+        claude_chrome_policy._write(str(record), saved)
+
+
+def configure_fixture_browser(provider):
+    if provider == "codex":
+        config = Path(os.environ["CODEX_HOME"]) / "config.toml"
+        with config.open("a") as handle:
+            handle.write('[mcp_servers.chrome-devtools]\ncommand="/usr/bin/npx"\n'
+                         'args=["chrome-devtools-mcp@1.10.1"]\n[mcp_servers.unselected]\ncommand="/bin/true"\n')
+
+
+def test_permission_browser_on_keeps_mail_only_and_the_other_tools(stopped, monkeypatch):
+    runtime, record, provider, state = stopped
+    configure_fixture_browser(provider)
+    # Model the reviewed case: the child has an explicitly selected screen
+    # and a separate MCP and was launched with an isolated base.
+    screen = {"server": "orrery-screen", "access": "read"}
+    save_selection(record, provider, "mail-only", {"screen": screen, "mcp": ["reader"]})
+    calls = []
+
+    def resume(name, **options):
+        calls.append((name, options))
+        if provider == "codex":
+            current = child_resume.inspect_retained(runtime, name, agent_id=7,
+                project_key=state["project_key"], program=provider)
+            assert current["codex_mcp_profile"] == "orrery-only"
+        return {"ok": True, "action": "resumed"}
+
+    monkeypatch.setattr(server, "do_resume", resume)
+    result = server.do_jump(NAME, open_terminal=False, permission={"history_session_id": SID, "browser_use": True})
+    assert result["ok"] and result["tools_changed"], result
+    assert result["base"] == "mail-only"
+    assert result["tools"] == {"browser": {"device": ""}, "screen": screen, "mcp": ["reader"]}
+    assert calls == [(NAME, {"open_terminal": False, "expected_history_session_id": SID})]
+
+
+def test_permission_computer_view_preserves_browser_settings(stopped, monkeypatch):
+    _, record, provider, _ = stopped
+    configure_fixture_browser(provider)
+    browser = {"device": "fixture-browser" if provider == "claude" else ""}
+    save_selection(record, provider, "default", {"browser": browser, "mcp": ["reader"]})
+    monkeypatch.setattr(server, "do_resume", lambda *a, **k: {"ok": True, "action": "resumed"})
+    result = server.do_jump(NAME, permission={"history_session_id": SID, "computer_use": "view"})
+    assert result["ok"] and result["base"] == "default", result
+    assert result["tools"] == {"browser": browser, "mcp": ["reader"],
+                               "screen": {"server": "orrery-screen", "access": "read"}}
+
+
+def test_claude_explicit_browser_off_survives_a_computer_change(stopped, monkeypatch):
+    _, record, provider, _ = stopped
+    if provider != "claude":
+        pytest.skip("Claude Chrome can inherit through the default base")
+    save_selection(record, provider, "default", {"browser": {}, "mcp": ["reader"]})
+    monkeypatch.setattr(server, "do_resume", lambda *a, **k: {"ok": True, "action": "resumed"})
+    assert server.do_jump(NAME, permission={"history_session_id": SID, "browser_use": False})["ok"]
+    assert server.do_jump(NAME, permission={"history_session_id": SID, "computer_use": "view"})["ok"]
+    spec, plan, error = server._claude_resume_tools(NAME, SID, "/workspace", False)
+    assert not error and spec["base"] == "default" and spec["browser_disabled"] is True
+    assert "--no-chrome" in plan["flags"] and "browser" not in spec["tools"]
+
+
+@pytest.mark.parametrize("condition", ["live", "unknown", "stale", "raced", "unavailable", "browser_missing"])
+def test_permission_refuses_unverified_or_unavailable_resume(stopped, monkeypatch, condition):
+    runtime, record, provider, _ = stopped
+    before = record.read_bytes()
+    permission = {"history_session_id": SID, "computer_use": "off"}
+    if condition in {"live", "unknown"}:
+        monkeypatch.setattr(server, "_child_session_live", lambda *a: True if condition == "live" else None)
+    if condition == "stale":
+        permission["history_session_id"] = "11234567-1234-1234-1234-012345678901"
+    if condition == "raced":
+        probes = iter((False, True))
+        monkeypatch.setattr(server, "_child_session_live", lambda *a: next(probes))
+    if condition == "unavailable":
+        permission["computer_use"] = "control"  # no Cua Driver definition in this fixture
+    if condition == "browser_missing":
+        if provider != "codex":
+            pytest.skip("Only Codex requires a Chrome MCP definition")
+        permission = {"history_session_id": SID, "browser_use": True}
+    monkeypatch.setattr(server, "lookup_agent", lambda *a: pytest.fail("permission must not trust a husk category"))
+    monkeypatch.setattr(server, "do_resume", lambda *a, **k: pytest.fail("must not launch"))
+    result = server.do_jump(NAME, permission=permission)
+    assert not result["ok"] and result["error"]
+    assert record.read_bytes() == before
+    assert not child_resume._tools_journal(runtime / "child-agents" / f"{NAME}.json").exists()
+
+
+def test_permission_codex_resume_creates_a_session_before_trying_to_open_it(stopped, monkeypatch):
+    runtime, _, provider, _ = stopped
+    if provider != "codex":
+        pytest.skip("Codex uses a different launch path than Claude")
+    monkeypatch.setenv("AGENTSTACK_HOME", str(ROOT))
+    monkeypatch.setattr(server, "_codex_resume_child_home", lambda *a: (str(runtime), "orrery-only", False))
+    monkeypatch.setattr(server, "_rebuild_codex_child_home", lambda *a: None)
+    monkeypatch.setattr(server, "_codex_child_launch_flags", lambda *a, **k: "")
+    monkeypatch.setattr(server, "_open_terminal_tmux", lambda *a, **k: pytest.fail("must not attach to a replacement"))
+
+    def duplicate(args, *, title, open_terminal):
+        assert args[:5] == ["tmux", "new-session", "-d", "-s", NAME]
+        assert open_terminal is False
+        return {"ok": False, "error": "duplicate session"}
+
+    monkeypatch.setattr(server, "_launch_resume_tmux", duplicate)
+    result = server.do_resume(NAME, expected_history_session_id=SID, open_terminal=True)
+    assert not result["ok"] and "duplicate session" in result["error"]
+
+
+def test_permission_rejects_whole_selection_and_invalid_patch_values(monkeypatch):
+    monkeypatch.setattr(server, "_child_resume_module", lambda: pytest.fail("must not acquire a lock"))
+    browser = {"history_session_id": SID, "browser_use": True}
+    for options in ({"permission": browser, "base": "mail-only"}, {"permission": browser, "tools": {}},
+                    {"permission": {**browser, "computer_use": "off"}},
+                    {"permission": {"history_session_id": SID, "browser_use": 1}},
+                    {"permission": {"computer_use": "view"}}):
+        assert not server.do_jump(NAME, **options)["ok"]
 
 
 @pytest.mark.parametrize("selection", [{}, {"mcp": ["reader"]}])
@@ -255,6 +381,8 @@ def test_cli_uses_api_full_replacement_and_surfaces_failure(tmp_path):
     ({"session": NAME, "tools": {}}, {"tools": {}}),
     ({"session": NAME, "base": "mail-only", "tools": {"browser": True}, "open": False},
      {"base": "mail-only", "tools": {"browser": True}, "open_terminal": False}),
+    ({"session": NAME, "permission": {"history_session_id": SID, "browser_use": False}},
+     {"permission": {"history_session_id": SID, "browser_use": False}}),
 ])
 def test_http_forwards_only_explicit_tools_fields(monkeypatch, body, options):
     calls = []

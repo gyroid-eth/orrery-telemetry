@@ -164,6 +164,9 @@ def read_record(path: str, agent: str) -> dict | None:
             raise RecordError(f"invalid tools: {exc}") from exc
         if spec != {"base": state.get("base"), "tools": state.get("tools")}:
             raise RecordError("tools are not in normal form")
+        if "browser_disabled" in state and (state["version"] != RESUME_TOOLS_VERSION
+                or state["browser_disabled"] is not True or state["claude_chrome"] or "browser" in spec["tools"]):
+            raise RecordError("invalid explicit browser disable")
         if state["version"] == TOOLS_VERSION and not state["claude_chrome"] and not tools.restrictive(spec):
             raise RecordError("records neither Chrome nor a tools selection")
     device = state.get("chrome_device")
