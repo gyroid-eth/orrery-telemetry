@@ -10,6 +10,76 @@
 
 ---
 
+## 2026.11.23
+
+### Hermes の常駐 bot が Telegram の入力を TUI に渡せるように修正
+
+Telegram を設定した常駐 bot の起動時に、同梱の Telegram plugin に TUI への入力許可を設定します。
+
+### WSL・Linux で古い Mail の pidfile から復旧する
+
+ORRERY Mail の起動時、管理対象の runner を記録した pidfile よりも後に同じ PID の別プロセスが始まったと確認できれば、古い pidfile を片付けて起動を続ける。稼働中の runner と判別できない場合や、PID の再利用を確認できない場合の起動保護は維持する。
+
+### 画面操作の中継の試験が遅い CI で落ちないように
+
+- 中継が止まって再送しないことを確かめる試験で、偽の driver の起動にかかる時間を制限時間に含めても足りるように、制限時間を延ばしました。
+
+### Fresh Hermes の会話履歴を表示
+
+確認済みの native receipt で選んだ Hermes の TUI 会話を、ダッシュボードの履歴から読めるようにしました。Telegram への返信が tool の記録にだけ残った場合は、成功した送信の本文を会話に表示します。
+
+### 空の Mail へ切り替える手順に常駐 bot を追加
+
+Claude Channels と Hermes Telegram の指揮引継ぎ、試行、新しい登録での起動と受入、失敗時の復旧を[切替手順](docs/fresh-global-update.md)に追加しました。
+
+### Hermes の Telegram bot が管理設定を読めるように修正
+
+Hermes の既定値を含む設定から、常駐 bot の資格参照と許可リストを読み取ります。
+
+### Hermes の常駐 TUI が待機中に Mail を受け取れるように修正
+
+管理 TUI の準備表示と空の入力欄を確認して、待機中の Hermes に通知を届けます。
+
+### Codex child の Chrome MCP を明示選択に変更
+
+Codex child の生成設定では、`chrome-devtools` と `chrome-devtools-mcp` を直接起動する別名の server を、道具として選んだ場合だけ有効にします。
+
+Chrome 拡張と連携する `chrome@openai-bundled` も、`--tools chrome-extension` で選んだ場合だけ有効にします。Dashboard API 世代 44 では `tools.chrome_extension: true` で選択できます。
+
+### doctor のモデル案内の試験を利用者設定から隔離
+
+- 旧版 Codex CLI の代替モデル案内を、一時ホームと試験用 CLI で検証するようにしました。
+
+### doctor が Codex の予約の確認を誤って「不明」と出さないように
+
+doctor は Codex の plugin の状態を、まず既定の手元の marketplace（`agentstack-local`）だけに問い合わせる。全体の一覧は外の marketplace にも問い合わせるので 1 分以上かかることがあり、5 秒の待ち時間を超えて「不明」になっていた。手元で見つからないときだけ、これまでどおり全体の一覧で確かめる。apply_patch の予約の確認も、子と同じ login shell の PATH で Codex を起動する。
+
+### 稼働中の子を保管期限切れの削除から保護
+
+期限切れの一括削除は tmux、lease、端末上のプロセスを確認し、停止を確認できた子だけを対象にする。端末から保持済みの Claude の子を再開する場合も、Mail の退役解除前に再開中の状態を記録する。
+
+### 保管期限切れの Claude を operator の資格復旧後に DECK から再開
+
+保管期限切れのあとに operator が同じ Mail identity の資格を復旧済みなら、対応する Claude の会話を DECK から Mail 付きで再開できる。DECK は期限切れの記録より新しい復旧 receipt と現在の資格を照合する。[復旧手順](docs/persistent-agents.md#期限切れの-claude-を-deck-で再開する)
+
+### スマホ Reader の作業ステップを発言や Mail で区切る
+
+発言、Mail、システム通知の前後にある作業ステップを別々のカードに表示します。履歴を開いたときも、表示中に新着を受け取ったときも同じ順で並びます。
+
+### 作業中の表示と最後の記録時刻を分けて読む
+
+DECK は所要時間や context が取れない作業状態にも `WORKING` を表示します。ライトテーマの作業badge文字は既存の amber token で表示し、背景との区別を保ちます。footer と detail は最後に記録されたイベントを `LAST EVENT` / `last event` と明示し、長い tool 実行中に時刻が古いままでも現在の状態と区別できます。表示用の要約が無い場合は `NO LIVE SUMMARY` と示し、作業中に待機・停止と矛盾する文言を出しません。
+
+既存 provider の状態分類（Codex App の登録中を含む）を表示し、実際の進捗を保証しません。`last_active` の計算・履歴期間・並び順と API 世代34 は変更しません。
+
+### master の試験は連続マージでも実行を継続
+
+- 新しいマージで master の試験が始まっても、実行中の master の試験を中止しません。PR では新しい実行が古い実行を中止します。
+
+### Claude Code の端末再開時にモデルを保持
+
+- 端末で再開したセッションを再登録するとき、起動時のモデル指定が無ければ、SessionStart が報告したモデルか登録済みのモデルを使います。
+
 ## 2026.11.21
 
 ### Mail を使わずに再開する Claude にブラウザと画面操作を付ける
