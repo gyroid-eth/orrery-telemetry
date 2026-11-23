@@ -26,6 +26,7 @@ import urllib.request
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _fake_systemd import DASHBOARD_BUSCTL, DASHBOARD_UNIT_SHOW, stub_dashboard_readiness
 from service_teardown import TEST_LABEL_PREFIX, stop_dashboard
 from test_install_agentstack_mail import (
     INSTALLER,
@@ -518,10 +519,9 @@ def test_package_tree_comparison_decides_whether_a_new_build_differs(tmp_path):
 def test_update_on_a_systemd_install_leaves_the_timer_starting_the_new_build(tmp_path):
     """Linux with a systemd user timer, as on WSL2.
 
-    systemctl is a recorder here: the units are rendered and "enabled", but
-    nothing fires them. The test then runs the rendered service's command
-    itself, the way the timer would, and checks that it finds the new build
-    running rather than starting the one it was installed with.
+    systemctl records the unit operations and the dashboard health check uses
+    the test unit. The test then runs the rendered Mail service's command and
+    checks that it finds the new build already running.
     """
     stack = Stack(tmp_path)
     fake_bin = pathlib.Path(stack.env["PATH"].split(":", 1)[0])
@@ -530,12 +530,13 @@ def test_update_on_a_systemd_install_leaves_the_timer_starting_the_new_build(tmp
         fake_bin,
         "systemctl",
         "#!/bin/sh\n"
-        f"printf '%s\\n' \"$*\" >> {calls}\n"
-        # The dashboard falls back to a supervised process at once instead of
-        # waiting on a unit nothing will start; only the Mail timer is kept.
-        'case "$*" in *agentdashboard*) exit 1 ;; *is-active*|*is-enabled*) exit 3 ;; esac\n'
-        "exit 0\n",
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n"
+        + DASHBOARD_UNIT_SHOW
+        + 'case "$*" in *agentdashboard*) exit 0 ;; '
+        '*is-active*|*is-enabled*) exit 3 ;; esac\nexit 0\n',
     )
+    _write_command(fake_bin, "busctl", DASHBOARD_BUSCTL)
+    stack.env["AGENTSTACK_PYTHON"] = stub_dashboard_readiness(fake_bin)
     _candidate(stack.service_root, "fixture-old")
     _candidate(stack.service_root, "fixture-new")
     try:

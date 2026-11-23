@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import pathlib
 import plistlib
+import shlex
+import sys
+
+from test_install_service_path import _fresh_render
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -21,10 +25,16 @@ def test_launchd_exports_installer_selected_python_to_dashboard_children():
     assert '__PYTHON__ "$PYTHON_BIN"' in installer
 
 
-def test_systemd_unit_exports_installer_selected_python_to_dashboard_children():
-    # Linux / WSL2 render a systemd user unit instead of the plist; the same
-    # handoff has to be present there or the fix only covers macOS.
-    installer = INSTALLER.read_text(encoding="utf-8")
-    unit_block = installer[installer.index('render systemd user unit $unit"') :]
-    unit_block = unit_block[: unit_block.index("WantedBy=default.target")]
-    assert '"AGENTSTACK_PYTHON": "$PYTHON_BIN",' in unit_block
+def test_systemd_unit_exports_installer_selected_python_to_dashboard_children(tmp_path):
+    python = tmp_path / "Python Tools" / "python3"
+    python.parent.mkdir()
+    python.symlink_to(sys.executable)
+    _fresh_render(tmp_path, "fresh_environment_json", "render_systemd_unit",
+                  commands="render_systemd_unit\n",
+                  overrides={"AGENTSTACK_RUNTIME_MODE": "legacy", "PYTHON_BIN": str(python)})
+
+    unit = (tmp_path / ".config/systemd/user/org.orrery.test.normal.dashboard.service").read_text()
+    (exec_start,) = [line.removeprefix("ExecStart=") for line in unit.splitlines()
+                     if line.startswith("ExecStart=")]
+    assert shlex.split(exec_start)[0].removeprefix(":") == str(python)
+    assert f'Environment="AGENTSTACK_PYTHON={python}"' in unit.splitlines()

@@ -255,7 +255,7 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
     assert plist["EnvironmentVariables"]["AGENTSTACK_CODEX_MODELS"] == "__CODEX_MODELS__"
 
     installer = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
-    assert 'ExecStart={esc(\'$PYTHON_BIN\')} {esc(\'$DASHBOARD_DIR/service_runner.py\')}' in installer
+    assert 'ExecStart=":{esc(python_bin)}" "{esc(os.path.join(dashboard_dir, "service_runner.py"))}"' in installer
     assert '"Restart=always"' in installer
     assert "AGENTSTACK_DASHBOARD_SELF_RESTART=1" in installer
 
@@ -482,6 +482,102 @@ with calls.open('a') as stream:
     plist = (pathlib.Path(env["HOME"]) / "Library/LaunchAgents" /
              (env["AGENTSTACK_LABEL_PREFIX"] + ".agentdashboard.plist"))
     assert not PLACEHOLDER.findall(plist.read_text()), "unexpanded restart placeholders"
+
+
+@pytest.mark.parametrize("mode", ["owned", "foreign-fragment", "foreign-exec", "no-http"])
+def test_agentctl_uses_installed_systemd_dashboard_unit(tmp_path, mode):
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "uname": "echo Linux",
+        "launchctl": "exit 1",
+        "curl": "echo 200",
+        "systemctl": """
+if [ "$2" = show ] && [ "$3" = --all ]; then
+  printf 'LoadState=loaded\nFragmentPath=%s\nMainPID=101\n' "$TEST_FRAGMENT"
+else
+  echo "$*" >> "$SYSTEMCTL_LOG"
+fi
+""",
+        "busctl": """
+if [ "$3" = call ]; then
+  printf '%s\n' '{"type":"o","data":["/fixture/unit"]}'
+else
+  printf '%s\n' "$TEST_EXEC_START"
+fi
+""",
+        "python": 'if [ "$2" = ready ]; then exit "$TEST_READY"; fi\n'
+                  + "exec " + shlex.quote(sys.executable) + ' "$@"',
+    }.items():
+        command = fake_bin / name
+        command.write_text(f"#!/bin/sh\n{body}\n")
+        command.chmod(0o755)
+    label_prefix = TEST_LABEL_PREFIX + ".systemd"
+    label = f"{label_prefix}.agentdashboard.service"
+    unit = tmp_path / ".config" / "systemd" / "user" / label
+    unit.parent.mkdir(parents=True)
+    unit.touch()
+    log = tmp_path / "systemctl.log"
+    python = fake_bin / "python"
+    runner = ROOT / "dashboard/service_runner.py"
+    fragment = unit
+    if mode == "foreign-fragment":
+        fragment = tmp_path / "different.config" / label
+    if mode == "foreign-exec":
+        runner = tmp_path / "Foreign Dashboard" / "service_runner.py"
+    env = {
+        "HOME": str(tmp_path), "AGENTSTACK_HOME": str(tmp_path),
+        "AGENTSTACK_ENV_FILE": str(tmp_path / "env.sh"),
+        "AGENTSTACK_LABEL_PREFIX": label_prefix, "AGENTSTACK_PORT": "19878",
+        "PATH": f"{fake_bin}:/usr/bin:/bin", "SYSTEMCTL_LOG": str(log),
+        "AGENTSTACK_PYTHON": str(python), "TEST_FRAGMENT": str(fragment),
+        "TEST_READY": "1" if mode == "no-http" else "0",
+        "TEST_EXEC_START": json.dumps({"type": "a(sasbttttuii)", "data": [
+            [str(python), [str(python), str(runner)], False, 0, 0, 0, 0, 0, 0, 0],
+        ]}),
+    }
+    if mode in ("foreign-fragment", "foreign-exec"):
+        for action in ("start", "restart", "stop", "uninstall"):
+            result = subprocess.run(["/bin/bash", str(ROOT / "dashboard/agentctl.sh"), action],
+                                    env=env, cwd=tmp_path, capture_output=True, text=True)
+            assert result.returncode == 1
+            assert "refusing to operate on the unverified systemd dashboard" in result.stderr
+        stack = tmp_path / "installed"
+        stack.mkdir()
+        manifest = stack / "install-state.json"
+        manifest.write_text(json.dumps({
+            "install_dir": str(stack), "owned_files": [str(unit)],
+            "services": [{"kind": "systemd-user", "unit": label, "path": str(unit),
+                          "interpreter": str(python)}],
+        }))
+        # The manifest-based uninstaller must apply the same check as agentctl.
+        uninstall = subprocess.run(["/bin/bash", str(ROOT / "scripts/uninstall.sh"), "--install-dir", str(stack)],
+                                   env=env, cwd=tmp_path, capture_output=True, text=True)
+        assert uninstall.returncode == 1
+        assert "refusing to uninstall the unverified systemd dashboard" in uninstall.stderr
+        assert manifest.exists()
+        assert unit.exists() and not log.exists()
+        return
+    if mode == "no-http":
+        for action in ("start", "restart"):
+            result = subprocess.run(["/bin/bash", str(ROOT / "dashboard/agentctl.sh"), action],
+                                    env=env, cwd=tmp_path, capture_output=True, text=True)
+            assert result.returncode == 1
+            assert "started" not in result.stdout
+        return
+    for action in ("start", "status", "restart", "stop", "uninstall"):
+        result = subprocess.run(["/bin/bash", str(ROOT / "dashboard/agentctl.sh"), action],
+                                env=env, cwd=tmp_path, capture_output=True, text=True, check=True)
+        if action == "status":
+            assert "service mode: systemd-user" in result.stdout
+    assert log.read_text().splitlines() == [
+        f"--user start -- {label}", f"--user is-active --quiet -- {label}",
+        f"--user show -p ActiveState -p MainPID -- {label}", f"--user restart -- {label}",
+        f"--user is-active --quiet -- {label}", f"--user stop -- {label}",
+        f"--user disable --now -- {label}",
+        "--user daemon-reload",
+    ]
+    assert not unit.exists()
 
 
 def test_agentctl_enables_then_waits_for_bootout_before_bootstrap(tmp_path):

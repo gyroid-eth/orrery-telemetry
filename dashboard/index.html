@@ -2652,6 +2652,7 @@
 #spm-effort-row .effort-caption{margin:0;font:11px/1.4 var(--sans);color:var(--ink-dim)}
 #spm-effort-row .effort-reset{min-height:24px;border:0;background:none;color:var(--amber);font:11px var(--sans);letter-spacing:0;text-transform:none;padding:3px 0 3px 5px;cursor:pointer}
 .effort-not-supported{display:block;font:12px/1.5 var(--sans);color:var(--ink-dim);padding:4px 0}
+  #wsl-anchor[hidden]{display:none}
 </style>
 <link rel="stylesheet" href="theme_light.css">
 <link rel="stylesheet" href="mail_markdown.css">
@@ -2705,6 +2706,11 @@
   </div>
   <div id="mail-health" class="mail-health" title="mail health: checking...">
     <span class="mh-dot"></span><span class="mh-label">mail</span>
+  </div>
+  <!-- WSL only (GET /api/wsl-anchor): shown while ORRERY keeps the distro
+       running for live agents, hidden once it lets WSL stop by itself. -->
+  <div id="wsl-anchor" class="mail-health" hidden title="WSL">
+    <span class="mh-dot"></span><span class="mh-label" id="wsl-anchor-label">WSL</span>
   </div>
   <!-- Account usage left per provider (GET /api/quotas). Hidden until the
        quota API answers; the popover lists every window the provider returned. -->
@@ -32186,7 +32192,7 @@ OFF = legacy snapshot+comet mode">
   },
   "rules_digest": "df26f9d872ccd641021665fa8c09a5b071e42251b9bc7a4e272cccc6ebecebfb",
   "schema_version": 1,
-  "source_digest": "9b1e0125ebf14a9785693264210995ef456495d3cdc92c7a1cc319c5fcf8c5c0"
+  "source_digest": "eea638a5a0c8b0b0bf20a1ca94cd31867ba00399251a4733e1b8a3cd0e827655"
 }
 </script>
 <script>
@@ -34119,11 +34125,11 @@ function reattachMurmurs(){
 }
 const {portURL,portraitFallback}=window.OrreryNetworkNode;
 
-function toast(prefix,msg,err){
+function toast(prefix,msg,err,displayMs=3400){
   const t=document.getElementById('toast');
   t.innerHTML=`<span class="p">${esc(prefix)}</span> ${esc(msg)}`;
   t.className='on'+(err?' err':'');
-  clearTimeout(t._t); t._t=setTimeout(()=>t.className='',3400);
+  clearTimeout(t._t); t._t=setTimeout(()=>t.className='',displayMs);
 }
 
 async function jump(name,ev){
@@ -37667,6 +37673,80 @@ async function mailHealthTick(){
 mailHealthTick();
 setInterval(()=>{ if(document.hidden||netSuspended)return; mailHealthTick(); },10000);
 
+// ── WSL anchor (GET /api/wsl-anchor) ───────────────────────
+function wslAnchorView(d){
+  const r=(d&&d.reasons)||{};
+  const why=[];
+  if(r.agents) why.push(r.agents+(r.agents===1?' agent':' agents'));
+  if(r.launching) why.push(r.launching+' starting');
+  if(r.pages) why.push('page open');
+  const state=d&&d.state;
+  // A status nobody renewed says nothing about now.
+  if(['holding','releasing','unknown','failed'].includes(state)&&d.age>30){
+    return {show:true,status:'red',label:'WSL status stale',
+      title:'The dashboard has not updated the WSL hold for '+d.age+'s. Keep an Ubuntu window open while agents work.'};
+  }
+  switch(state){
+    case 'starting':
+      return {show:true,status:'yellow',label:'WSL hold starting',
+        title:'Keep an Ubuntu window open until the detached Windows client is confirmed.'};
+    case 'holding':
+      return {show:true,status:'green',label:'WSL kept · '+(why.join(' · ')||'working'),
+        title:'ORRERY keeps WSL running while agents work, so closing the Ubuntu windows does not stop them. It lets go when they are done.'};
+    case 'releasing':
+      return {show:true,status:'yellow',label:'WSL hold ends in '+(d.grace_seconds_left||0)+'s',
+        title:'No agent is running. ORRERY stops keeping WSL after a short wait. WSL itself stops only if no window or other program still uses it.'};
+    case 'unknown':
+      return {show:true,status:'yellow',label:'WSL kept · state unknown',
+        title:'Could not read which agents are running (tmux or ps did not answer). WSL stays kept for the agents last seen until it can tell.'};
+    case 'failed':
+      return {show:true,status:'red',label:'WSL not kept',
+        title:'Could not keep WSL running: '+(d.error||'unknown error')+'. Keep an Ubuntu window open while agents work.'};
+    case 'error':
+      return {show:true,status:'red',label:'WSL hold error',
+        title:'The WSL hold check failed: '+(d.error||'unknown error')+'. Keep an Ubuntu window open while agents work.'};
+    default:
+      return {show:false,status:'unknown',label:'WSL',title:'WSL'};
+  }
+}
+let wslAnchorSupported;
+async function wslAnchorTick(){
+  if(wslAnchorSupported===false)return;
+  try{
+    const r=await fetch('/api/wsl-anchor');
+    if(r.status===404){wslAnchorSupported=false;return;}
+    if(!r.ok)return;
+    const data=await r.json();
+    const wasSupported=wslAnchorSupported===true;
+    wslAnchorSupported=!['unsupported','disabled','stopped'].includes(data.state);
+    if(wslAnchorSupported&&!wasSupported&&!document.hidden)wslPageLease(false);
+    const v=wslAnchorView(data);
+    const el=document.getElementById('wsl-anchor');
+    if(!el) return;
+    el.hidden=!v.show;
+    el.dataset.status=v.status;
+    el.title=v.title;
+    const label=document.getElementById('wsl-anchor-label');
+    if(label) label.textContent=v.label;
+  }catch(e){}
+}
+// While this page is shown, it counts as ORRERY being used (WSL only; the
+// server ignores it elsewhere). Hidden or closed, the lease lapses or goes.
+const WSL_PAGE_ID=Math.random().toString(36).slice(2,14);
+function wslPageLease(release){
+  if(!wslAnchorSupported)return;
+  try{
+    fetch('/api/wsl-anchor/lease',{method:'POST',keepalive:true,
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:WSL_PAGE_ID,release:!!release})}).catch(()=>{});
+  }catch(e){}
+}
+wslAnchorTick();
+setInterval(()=>{ if(document.hidden||netSuspended)return; wslAnchorTick(); },5000);
+setInterval(()=>{ if(!document.hidden) wslPageLease(false); },15000);
+document.addEventListener('visibilitychange',()=>wslPageLease(document.hidden));
+window.addEventListener('pagehide',()=>wslPageLease(true));
+
 // ── account usage left (GET /api/quotas) ───────────────────────
 // The quota layer (dashboard/quotas, contributed in #31) answers with one
 // snapshot per provider: status ok / degraded / stale / unavailable, the
@@ -38562,7 +38642,7 @@ function spawnWatchLimitMs(pending){
 }
 
 // Poll the background verdict of an async spawn and report it as a toast.
-async function watchSpawnLaunch(name,dir,limitMs=SPAWN_WATCH_DEFAULT_MS){
+async function watchSpawnLaunch(name,dir,limitMs=SPAWN_WATCH_DEFAULT_MS,wslWarning=''){
   const started=Date.now();
   while(Date.now()-started<limitMs){
     await new Promise(r=>setTimeout(r,2000));
@@ -38574,7 +38654,8 @@ async function watchSpawnLaunch(name,dir,limitMs=SPAWN_WATCH_DEFAULT_MS){
     if(!j||!j.ok||j.state==='launching')continue;
     if(j.state==='ready'){
       clearSpawnTaskDraft(dir);
-      toast('▸ SPAWNED','> '+name+' :: tmux session ready');
+      toast(wslWarning?'▸ SPAWNED · WSL NOT KEPT':'▸ SPAWNED',
+        '> '+name+' :: tmux session ready'+wslWarning,!!wslWarning,wslWarning?10000:undefined);
       setTimeout(()=>{ if(view==='deck') tick(); else netTick(); },300);
     }else{
       toast('✕ SPAWN FAILED','> '+name+' :: '+(j.error||'launcher failed')+' · task draft saved',true);
@@ -39276,15 +39357,21 @@ async function submitSpawn(){
       updateSpawnButton();
       return;
     }
+    const hold=j.wsl_hold;
+    const wslWarning=hold&&hold.ok===false
+      ? ' · '+(hold.error||'WSL hold could not be confirmed')+
+        ' · '+(hold.hint||'keep an Ubuntu window open until this agent has finished')
+      : '';
     if(j.pending){
       spmDraftRestored=false;
       const adjusted=j.name_substituted
         ? ' · identity changed from '+(j.requested_name||'?') : '';
-      toast(j.name_substituted?'▸ LAUNCHING · NAME CHANGED':'▸ LAUNCHING',
-        '> '+(j.child_name||'')+adjusted+' :: registered · waiting for the REPL');
+      toast(wslWarning?'▸ LAUNCHING · WSL NOT KEPT':j.name_substituted?'▸ LAUNCHING · NAME CHANGED':'▸ LAUNCHING',
+        '> '+(j.child_name||'')+adjusted+' :: registered · waiting for the REPL'+wslWarning,
+        !!wslWarning,wslWarning?10000:undefined);
       updateSpawnButton();
       closeSpawnModal();
-      watchSpawnLaunch(j.child_name,payload.dir,spawnWatchLimitMs(j));
+      watchSpawnLaunch(j.child_name,payload.dir,spawnWatchLimitMs(j),wslWarning);
       return;
     }
     clearSpawnTaskDraft(payload.dir);
@@ -39292,9 +39379,10 @@ async function submitSpawn(){
     const adjusted=j.name_substituted
       ? ' · identity changed from '+(j.requested_name||'?') : '';
     setSpawnStat('▸ SPAWNED '+(j.child_name||'')+adjusted+
-      (j.worktree?' · worktree exp/'+j.child_name:''),'ok');
-    toast(j.name_substituted?'▸ SPAWNED · NAME CHANGED':'▸ SPAWNED',
-      '> '+(j.child_name||'')+adjusted+' :: tmux session opening');
+      (j.worktree?' · worktree exp/'+j.child_name:'')+wslWarning,wslWarning?'err':'ok');
+    toast(wslWarning?'▸ SPAWNED · WSL NOT KEPT':j.name_substituted?'▸ SPAWNED · NAME CHANGED':'▸ SPAWNED',
+      '> '+(j.child_name||'')+adjusted+' :: tmux session opening'+wslWarning,
+      !!wslWarning,wslWarning?10000:undefined);
     // 1.2s 余韻を見せてから自動クローズ
     setTimeout(()=>{
       updateSpawnButton();

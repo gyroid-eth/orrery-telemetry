@@ -1035,6 +1035,8 @@ def _agent_process_pid(
     pane_pid: object,
     process_tree: tuple[dict[int, str], dict[int, list[int]]] | None,
     program: str | None,
+    *,
+    match=None,
 ) -> int | None:
     """Return the matching provider PID under a pane, or None when absent/unknown."""
     if not _supports_agent_process_liveness(program):
@@ -1058,7 +1060,8 @@ def _agent_process_pid(
         if pid in seen:
             continue
         seen.add(pid)
-        if _is_agent_process_name(names.get(pid, ""), program):
+        name = names.get(pid, "")
+        if _is_agent_process_name(name, program) and (match is None or match(pid, name, program)):
             return pid
         stack.extend(children.get(pid, ()))
     return None
@@ -3392,7 +3395,8 @@ def _open_terminal_tmux(tmux_args: list[str], title: str) -> dict:
                 "wt.exe", "-w", "0", "new-tab", "--title", title,
                 "wsl.exe", "-d", _wsl_distro(), "--exec", "bash", script,
             ]
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=8,
+                               env=_wsl_anchor_module().interop_env())
         else:
             shell_cmd = _shell_join(
                 ["env", "-u", "TMUX", "-u", "TMUX_PANE"] + tmux_args
@@ -8793,6 +8797,8 @@ def _spawn_launch_record(name: str, result: dict) -> None:
             "state": state,
             "result": result,
         }
+    if state != "launching":
+        _wsl_anchor_settle(name)
 
 
 _SPAWN_REASON_PREFIX = "[spawn_child] reason: "
@@ -10704,6 +10710,9 @@ class Handler(BaseHTTPRequestHandler):
             # missing before their own handlers (which would say 501 or 503).
             self._send(404, b'{"ok":false,"error":"agent_unavailable"}', "application/json; charset=utf-8")
             return
+        if (FRESH_MODE or GLOBAL_MODE) and path == "/api/wsl-anchor":
+            self._send(404, b'{"ok":false,"state":"unsupported"}', "application/json; charset=utf-8")
+            return
         if FRESH_MODE and self._fresh_get(path):return
         if path in {"/api/mobile-mail","/api/mobile-portrait","/api/mobile-message","/api/mobile-mail-page","/api/mobile-cache-page"} and GLOBAL_MODE:
             self._send(501, b'{"status":"unavailable","error":"mobile_global_unsupported"}', "application/json; charset=utf-8")
@@ -11008,6 +11017,13 @@ class Handler(BaseHTTPRequestHandler):
                 json.dumps(payload, ensure_ascii=False).encode(),
                 "application/json; charset=utf-8",
             )
+        elif path == "/api/wsl-anchor":
+            payload = wsl_anchor_status()
+            self._send(
+                200,
+                json.dumps(payload, ensure_ascii=False).encode(),
+                "application/json; charset=utf-8",
+            )
         elif path == "/api/mail-watcher-health":
             payload = mail_watcher_health()
             self._send(
@@ -11058,7 +11074,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path not in ("/api/jump", "/api/kill", "/api/exit",
                         "/api/annotate", "/api/spawn", "/api/reactivate",
-                        "/api/jserr"):
+                        "/api/jserr", "/api/wsl-anchor/lease"):
             self._send(404, b"not found", "text/plain")
             return
 
@@ -11158,7 +11174,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/jserr":
             result = _log_js_error(body)
         elif path == "/api/spawn":
-            result = do_spawn(body)
+            result = do_spawn_held(body)
+        elif path == "/api/wsl-anchor/lease":
+            result = wsl_anchor_page_lease(body)
         elif path == "/api/reactivate":
             result = do_reactivate(session)
         else:
@@ -11332,6 +11350,215 @@ def _start_child_resume_maintenance() -> None:
     ).start()
 
 
+def _wsl_anchor_module():
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    import wsl_anchor  # noqa: PLC0415
+
+    return wsl_anchor
+
+
+_WSL_ANCHOR: dict = {"controller": None}
+
+
+def _tmux_observed(args: list[str]) -> str | None:
+    """tmux output, "" when no server runs (nothing to see), None on failure.
+
+    `_tmux` returns "" for both, and a failed observation must not read as
+    "every agent has exited".
+    """
+    try:
+        out = _tmux_run(args, capture_output=True, text=True, timeout=5)
+    except Exception:  # noqa: BLE001 - tmux missing now, timeout...: unknown
+        return None
+    if out.returncode == 0:
+        return out.stdout
+    err = (out.stderr or "").lower()
+    # Only "there is no server" is a measurement of nothing running. A socket
+    # that exists but cannot be opened (permission denied, ...) is not.
+    if err.startswith("no server running on ") or (
+        err.startswith("error connecting to ") and "(no such file or directory)" in err
+    ):
+        return ""
+    return None
+
+
+def _wsl_agent_command_matches(pid: int, name: str, program: str) -> bool:
+    if program != "claude" or os.path.basename(name).lower() != "node":
+        return True
+    # The general Claude matcher is used for panes already associated with
+    # Claude. Here we scan *all* panes, so check the npm entrypoint itself.
+    try:
+        proc = Path("/proc") / str(pid)
+        argv = (proc / "cmdline").read_bytes().split(b"\0")
+        if len(argv) < 3 or not argv[1]:
+            return False
+        script = Path(os.fsdecode(argv[1]))
+        if not script.is_absolute():
+            script = (proc / "cwd") / script
+        return script.resolve().parts[-3:] == ("@anthropic-ai", "claude-code", "cli.js")
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _wsl_anchor_work() -> tuple[dict, list, bool]:
+    """What keeps the distro running now (see dashboard/wsl_anchor.py).
+
+    A live claude / codex / antigravity process in any pane of any tmux
+    session except infra and warm-up pools. Only the process's exit ends it,
+    so an agent waiting for approval or a reply keeps holding. The dashboard,
+    Mail, the watcher and tmux control clients do not count. A recorder
+    may stay attached even when nobody is viewing the session.
+    Launch reservations and page leases are counted by the controller.
+    Returns known=False when tmux or ps could not be read.
+    """
+    anchor = _wsl_anchor_module()
+    fmt = SEP.join(["#{session_name}", "#{pane_pid}"])
+    panes = _tmux_observed(["list-panes", "-a", "-F", fmt])
+    if panes is None:
+        return {}, [], False
+    rows = [parts for parts in (_split_tmux_fields(line) for line in panes.splitlines())
+            if len(parts) >= 2 and parts[0] not in INFRA_NAMES and parts[0] not in WARMUP_NAMES]
+    if not rows:
+        return {"agents": 0}, [], True
+    tree = _process_tree_snapshot()
+    if tree is None:
+        return {}, [], False
+    pids: list = []
+    seen: set[int] = set()
+    for parts in rows:
+        for program in ("claude", "codex", "antigravity"):
+            pid = _agent_process_pid(parts[1], tree, program, match=_wsl_agent_command_matches)
+            if pid and pid not in seen:
+                seen.add(pid)
+                pids.append([pid, anchor.process_start_ticks(pid)])
+                break
+    return {"agents": len(pids)}, pids, True
+
+
+def wsl_anchor_status() -> dict:
+    """Header / doctor view. Only meaningful under WSL with the anchor on."""
+    if GLOBAL_MODE or FRESH_MODE or not _is_wsl():
+        return {"ok": True, "state": "unsupported"}
+    anchor = _wsl_anchor_module()
+    if not anchor.enabled():
+        return {"ok": True, "state": "disabled"}
+    controller = _WSL_ANCHOR["controller"]
+    if controller is None:
+        return {"ok": True, "state": "stopped"}
+    status = anchor._read_json(anchor.state_dir() / "status.json")
+    updated = float(status.get("updated") or 0)
+    if not status or updated < controller.started_at:
+        return {"ok": True, "state": "starting"}
+    # The header must not keep showing an old "kept" when ticks stopped.
+    age = max(0, round(time.time() - updated))
+    status.pop("observed_at", None)  # Internal to launch reservation checks.
+    return {"ok": True, **status, "age": age}
+
+
+@contextlib.contextmanager
+def _wsl_anchor_launch():
+    """Hold WSL for a launch before it starts, until it settles.
+
+    Reserve, then wait for the controller to establish a hold or report a
+    failure. Yield the reservation token with the outcome so the caller can
+    report a failed hold or pass a live reservation to an asynchronous launch.
+    """
+    controller = _WSL_ANCHOR["controller"]
+    if controller is None:
+        yield None
+        return
+    anchor = _wsl_anchor_module()
+    token = f"spawn-{secrets.token_hex(6)}"
+    since = time.time()
+    try:
+        anchor.reserve(controller.dir, token)
+    except OSError as exc:
+        yield (None, {}, {"state": "failed", "error": f"cannot reserve the WSL hold: {exc}"})
+        return
+    handed = {"on": False}
+    try:
+        controller.wake.set()
+        status = controller.settled(since, anchor.READY_TIMEOUT_SECONDS + 15)
+        yield (token, handed, status)
+    finally:
+        if not handed["on"]:
+            anchor.release_reservation(controller.dir, token)
+
+
+_WSL_ANCHOR_ASYNC: dict[str, str] = {}
+
+
+def _wsl_anchor_settle(name: str) -> None:
+    token = _WSL_ANCHOR_ASYNC.pop(name, None)
+    controller = _WSL_ANCHOR["controller"]
+    if token and controller is not None:
+        _wsl_anchor_module().release_reservation(controller.dir, token)
+
+
+def do_spawn_held(payload: dict) -> dict:
+    """do_spawn, with WSL held from before the launch until it settles."""
+    if payload.get("dry_run") is True:
+        return do_spawn(payload)
+    with _wsl_anchor_launch() as reservation:
+        result = do_spawn(payload)
+        if not reservation:
+            return result
+        token, handed, status = reservation
+        state = (status or {}).get("state")
+        if state in ("holding", "unknown", "releasing"):
+            result["wsl_hold"] = {"ok": True, "state": state}
+        else:
+            # The launch still runs (a window may be open), but nothing is
+            # known to keep WSL for it: say so instead of reporting success.
+            result["wsl_hold"] = {
+                "ok": False,
+                "state": state or "timeout",
+                "error": (status or {}).get("error") or "the WSL hold did not start in time",
+                "hint": "keep an Ubuntu window open until this agent has finished",
+            }
+        name = str(result.get("child_name") or result.get("name") or "")
+        if token and result.get("pending") and name:
+            # An asynchronous launch settles later: _spawn_launch_record
+            # releases the reservation then (or it expires).
+            _WSL_ANCHOR_ASYNC[name] = token
+            handed["on"] = True
+            if _SPAWN_LAUNCHES.get(name, {}).get("state") not in (None, "launching"):
+                _wsl_anchor_settle(name)
+        return result
+
+
+def wsl_anchor_page_lease(body: dict) -> dict:
+    """A visible ORRERY page renews its lease; closing it drops the lease."""
+    controller = _WSL_ANCHOR["controller"]
+    if controller is None:
+        return {"ok": True, "active": False}
+    token = str(body.get("id") or "")
+    ok = _wsl_anchor_module().touch_page_lease(controller.dir, f"page-{token}", bool(body.get("release")))
+    if ok and not body.get("release"):
+        controller.wake.set()
+    return {"ok": ok, "active": True} if ok else {"ok": False, "error": "bad lease id"}
+
+
+def _start_wsl_anchor() -> None:
+    """Under WSL, hold the distro while agents work; let it stop afterwards."""
+    if not _is_wsl() or not _wsl_distro():
+        return
+    anchor = _wsl_anchor_module()
+    if not anchor.enabled():
+        return
+    directory = anchor.state_dir()
+    script = os.path.join(HERE, "wsl_anchor.py")
+    controller = anchor.Controller(
+        _wsl_anchor_work,
+        directory,
+        _wsl_distro(),
+        lambda nonce: [sys.executable, script, "hold", str(directory), nonce],
+    )
+    _WSL_ANCHOR["controller"] = controller
+    threading.Thread(target=controller.run_forever, name="wsl-anchor", daemon=True).start()
+
+
 JS_ERROR_LOG = os.path.join(HERE, "logs", "js-errors.log")
 
 
@@ -11398,6 +11625,7 @@ def main():
     legacy_http_admission.configured_origins(os.environ.get(legacy_http_admission.SETTING, ""))
     _start_supervisor_watchdog()
     _start_child_resume_maintenance()
+    _start_wsl_anchor()
     _start_provider_stall_monitor()
 
     # The picker's Claude default checks the claude a child runs; find it once

@@ -43,3 +43,32 @@ def digest_files(paths) -> dict[Path, str | None]:
         except FileNotFoundError:
             digests[path] = None
     return digests
+
+
+def running_under_wsl() -> bool:
+    try:
+        return "microsoft" in Path("/proc/version").read_text(errors="replace").lower()
+    except OSError:
+        return False
+
+
+def real_windows_wslconfig() -> Path | None:
+    """The real Windows %USERPROFILE%\\.wslconfig when the suite runs in WSL.
+
+    Nothing in the product writes it any more; the suite still checks that no
+    test does. Never raises: an undecodable or missing profile is None.
+    """
+    if not running_under_wsl():
+        return None
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_wslconfig_for_tests", Path(__file__).resolve().parents[1] / "scripts" / "lib" / "wslconfig.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        profile = module.windows_profile()
+    except Exception:  # noqa: BLE001 - the guard must install whatever happens
+        return None
+    return profile / ".wslconfig" if profile else None

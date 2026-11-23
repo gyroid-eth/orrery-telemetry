@@ -1,5 +1,5 @@
 #!/bin/bash
-# Agent Dashboard service control for launchd and headless/background installs.
+# Agent Dashboard service control for launchd, systemd and background installs.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -65,6 +65,8 @@ LABEL_PREFIX="${AGENTSTACK_LABEL_PREFIX:-org.agentstack}"
 LABEL="$LABEL_PREFIX.agentdashboard"
 PLIST_TEMPLATE="$HERE/agentdashboard.plist.template"
 PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
+SYSTEMD_UNIT="$LABEL.service"
+SYSTEMD_UNIT_PATH="$HOME/.config/systemd/user/$SYSTEMD_UNIT"
 PORT="${AGENTSTACK_PORT:-8770}"
 DASHBOARD_ALLOWED_ORIGINS_SETTING="${AGENTSTACK_DASHBOARD_ALLOWED_ORIGINS:-}"
 PYTHON="${AGENTSTACK_PYTHON:-/usr/bin/python3}"
@@ -293,6 +295,11 @@ stop_background() {
 }
 
 start_any() {
+  if systemd_unit_installed; then
+    systemd_start start
+    echo "started in systemd-user mode -> $URL"
+    return
+  fi
   if background_running; then
     echo "already running in supervised-background mode (pid $(background_pid))"
     return 0
@@ -320,7 +327,32 @@ start_any() {
   start_background
 }
 
+systemd_unit_installed() {
+  [[ "$(uname -s)" == Linux ]] || return 1
+  if [[ ! -e "$SYSTEMD_UNIT_PATH" && ! -L "$SYSTEMD_UNIT_PATH" ]] && \
+     ! systemctl --user show-environment >/dev/null 2>&1; then
+    return 1
+  fi
+  local rc=0
+  "$PYTHON" "$HERE/systemd_dashboard.py" inspect "$SYSTEMD_UNIT_PATH" "$HERE/service_runner.py" "$PYTHON" >/dev/null || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    3) return 1 ;;
+    *) echo "refusing to operate on the unverified systemd dashboard $SYSTEMD_UNIT" >&2; exit 1 ;;
+  esac
+}
+
+systemd_start() {
+  systemctl --user "$1" -- "$SYSTEMD_UNIT"
+  "$PYTHON" "$HERE/systemd_dashboard.py" ready "$PORT"
+  systemctl --user is-active --quiet -- "$SYSTEMD_UNIT"
+}
+
 stop_all() {
+  if systemd_unit_installed; then
+    systemctl --user stop -- "$SYSTEMD_UNIT"
+    return
+  fi
   stop_background
   # Only unload a label whose plist we wrote under this HOME. launchd labels
   # live in the user domain and ignore HOME, so a run pointed at a scratch
@@ -338,6 +370,9 @@ status_service() {
   if launchd_loaded; then
     echo "service mode: launchd"
     launchctl print "$GUI/$LABEL" 2>/dev/null | grep -E "state =|pid =" || true
+  elif systemd_unit_installed; then
+    echo "service mode: systemd-user"
+    systemctl --user show -p ActiveState -p MainPID -- "$SYSTEMD_UNIT"
   elif background_running; then
     echo "service mode: supervised-background"
     echo "pid = $(background_pid)"
@@ -362,12 +397,21 @@ case "${1:-status}" in
     echo "stopped"
     ;;
   uninstall)
-    stop_all
-    rm -f "$PLIST_DST"
+    if systemd_unit_installed; then
+      systemctl --user disable --now -- "$SYSTEMD_UNIT"
+      rm -f "$SYSTEMD_UNIT_PATH"
+      systemctl --user daemon-reload
+    else
+      stop_all
+      rm -f "$PLIST_DST"
+    fi
     echo "uninstalled"
     ;;
   restart)
-    if background_running; then
+    if systemd_unit_installed; then
+      systemd_start restart
+      echo "restarted in systemd-user mode -> $URL"
+    elif background_running; then
       stop_background
       start_background
     elif [[ ! -f "$PLIST_DST" ]] && launchd_loaded; then

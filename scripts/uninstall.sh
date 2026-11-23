@@ -66,7 +66,7 @@ fi
 PROJECT_FOLDER="$({ sed -n 's/^export AGENTSTACK_PROJECT_KEY=//p' "$INSTALL_DIR/env.sh" 2>/dev/null | head -n 1 | tr -d "'\"" ; } || true)"
 
 python3 - "$MANIFEST" "$DRY_RUN" "$PURGE_DATA" "$MERGE_TOOL" \
-  "$MCP_MERGE_TOOL" "$SCRIPT_DIR/lib/install_examples.py" <<'PY'
+  "$MCP_MERGE_TOOL" "$SCRIPT_DIR/lib/install_examples.py" "$SCRIPT_DIR/../dashboard/systemd_dashboard.py" <<'PY'
 import importlib.util
 import json
 import os
@@ -193,7 +193,32 @@ for svc in data.get("services", []):
         run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
     elif kind == "systemd-user":
         unit = svc.get("unit", "")
-        run(["systemctl", "--user", "disable", "--now", unit])
+        if unit.endswith(".agentdashboard.service") and not dry_run:
+            if pathlib.Path(svc["path"]).name != unit:
+                raise SystemExit(f"dashboard manifest does not identify unit {unit}")
+            dashboard = manifest_path.parent / "dashboard"
+            helper = dashboard / "systemd_dashboard.py"
+            if not helper.is_file():
+                helper = pathlib.Path(sys.argv[7])
+            interpreter = svc.get("interpreter")
+            if not interpreter:
+                reader = manifest_path.parent / "hooks/installed-env.py"
+                if reader.is_file():
+                    interpreter = subprocess.check_output([
+                        sys.executable, str(reader), "value", "AGENTSTACK_PYTHON",
+                        str(manifest_path.parent / "env.sh"),
+                    ], text=True)
+            checked = subprocess.run([
+                sys.executable, str(helper), "inspect", svc["path"],
+                str(dashboard / "service_runner.py"), interpreter or sys.executable,
+            ], stdout=subprocess.DEVNULL)
+            if checked.returncode == 3:  # Unit and fragment are already absent.
+                continue
+            if checked.returncode != 0:
+                raise SystemExit(f"refusing to uninstall the unverified systemd dashboard {unit}")
+            subprocess.run(["systemctl", "--user", "disable", "--now", "--", unit], check=True)
+        else:
+            run(["systemctl", "--user", "disable", "--now", unit])
         run(["systemctl", "--user", "daemon-reload"])
     elif kind == "nohup":
         pidfile = svc.get("pidfile", "")

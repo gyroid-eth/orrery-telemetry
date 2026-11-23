@@ -147,31 +147,37 @@ installer は使用中 port を検出すると service 登録前に停止しま�
 systemd user session が使える場合:
 
 ```bash
-systemctl --user status agentstack-dashboard.service
+systemctl --user status org.agentstack.agentdashboard.service
 systemctl --user daemon-reload
 ```
 
-systemd user が使えない環境と WSL では installer が `nohup` と pidfile に fallback します。localhost dashboard と browser terminal は利用できます。WSL2 では dashboard の jump が Windows Terminal（`wt.exe`）の新しいタブを開いて `wsl.exe -d <distro>` 経由で tmux に attach します（`AGENTSTACK_TERMINAL=auto` が `wt` を選ぶ）。素の Linux では jump は未対応のままです。
+WSL2 では systemd user と linger が使える場合に installer が dashboard の unit を有効にします。systemd user が使えない場合や、WSL2 で linger を確認できない場合は、`nohup` と pidfile で起動します。localhost dashboard と browser terminal は利用できます。WSL2 では dashboard の jump が Windows Terminal（`wt.exe`）の新しいタブを開いて `wsl.exe -d <distro>` 経由で tmux に attach します（`AGENTSTACK_TERMINAL=auto` が `wt` を選ぶ）。素の Linux では jump は未対応のままです。
 
 ### WSL2 で Ubuntu の窓を閉じたとき
 
-**Windows Terminal など、デスクトップの窓から起こしたものは、窓を全部閉じても動き続けます。** tmux の agent、dashboard、Mail は止まりません（WSL 2.7.13 で確認: 窓を全部閉じたあと90秒以上 Running のまま）。起動元の窓が Windows 側に `wslhost.exe` を残し、それが WSL を動かし続けるためです。そのあいだ WSL はメモリを使い続けます。
+**従来モードの dashboard は、agent の作業中に WSL を自動で保持します。** Windows の WMI で元の接続とは独立した非表示の `wsl.exe` を起動し、無活動が60秒続くと手放します。`agentstack-doctor` は Windows の `.wslconfig` を読み取り、設定は変更しません。
 
-使い終わって WSL を止めたいときは、PowerShell で次を実行します。これは ORRERY の Ubuntu だけでなく、**動いているすべての distro と WSL の VM をすぐに止めます**。agent が作業していないことに加え、他の distro を含む WSL 上の作業を保存・終了してから実行してください。tmux の agent・dashboard・Mail もすべて止まります。
+- tmux の agent process（Claude、Codex、Antigravity）が動いている間は保持します。承認や返答を待っている agent も含みます。
+- dashboard の NEW AGENT や `agent-start` / `agent-start-codex` は、起動前に保持を予約します。保持を確認できない場合も agent の起動は続き、NEW AGENT の通知または shell の `WSL hold: ...` に理由が出ます。残った予約は3分で失効します。
+- dashboard のページを表示している間も保持します。ページを隠すか閉じると、この保持理由が外れます。dashboard、Mail、watcher、tmux の記録用接続はそれだけでは保持理由になりません。
+- header の `WSL kept · 2 agents` は保持理由、`WSL hold ends in 42s` は解除までの秒数です。`agentstack-doctor` で理由、Windows 側の PID、状態の鮮度を確認できます。
+- tmux やプロセス一覧を読み取れない場合は、最後に確認した agent に対する保持を続け、`WSL kept · state unknown` と表示します。状態の更新が30秒を超えて途絶えると `WSL status stale` と表示します。
+- 隠れた `wsl.exe` が早く終了すると dashboard が再起動を試みます。失敗が3回続くと次の試行まで5分待ちます。dashboard 自体が終了しても、最後に確認した agent が生きている間は保持が続きます。
+
+**自動保持が効かないときは、作業中は Windows 側で Ubuntu の窓を1つ開けておきます。** header に `WSL not kept` が出た場合、または自動保持を無効にした場合に使えます。`--no-wsl-anchor` または installer 実行時の `AGENTSTACK_WSL_ANCHOR=0` で無効になり、`--wsl-anchor` で戻せます。設定は `env.sh` に保存されます。
+
+Windows Terminal などのデスクトップの窓から起動したものは、最後の窓を閉じても Windows 側に `wslhost.exe` が残り、WSL が動き続けることがあります（WSL 2.7.13 で90秒以上 Running を確認）。Windows の SSH サーバー経由で起動した場合は、接続終了時にその `wslhost.exe` が片付けられます。自動保持や他の Windows クライアントが無ければ、最後の接続から約15秒で止まることを WSL 2.7.13 で確認しています。WSL 内の sshd への直接接続は未検証です。
+
+保持が解除された後も WSL が動き続けていてすぐに止めたい場合は、PowerShell で次を実行します。**すべての distro と WSL の VM がすぐに止まる**ので、agent と他の distro を含む WSL 上の作業を先に保存・終了してください。
 
 ```powershell
 wsl --shutdown
 ```
 
-次に Ubuntu を開いたら、Mail は起動1分後に timer が立て直します。dashboard は `install.sh` を再実行して立て直します。
+次に Ubuntu を開くと、有効にした systemd user unit が dashboard を起動し、Mail の timer が約1分後に Mail の起動を試みます。supervised background の dashboard は `agentctl.sh start` で起動します。
 
-**例外: Windows の SSH サーバー経由でだけ使う場合。** Windows の SSH サーバーに接続し、そこから `wsl.exe` で起こしたものは、ssh の接続が切れると Windows 側の `wslhost.exe` が片付けられます。他に WSL を使っているものが無ければ、WSL は最後の接続が切れてから約15秒で止まり、agent と dashboard も止まります（WSL 2.7.13・既定の設定で確認）。この使い方のときは、作業中は Windows 側で Ubuntu の窓を1つ開けておいてください。WSL の中で動かした sshd に直接接続する場合は確かめていません。
-
-補足:
-
-- ログアウト後も systemd user manager（Mail の timer と watcher）を残すには、WSL の中で `loginctl enable-linger "$USER"` を設定しておきます
-- 以前この節で勧めていた `.wslconfig` の `[wsl2] vmIdleTimeout=-1` は、この使い方では不要です。これは distro が止まった後も WSL の VM を動かし続ける設定です。以前の案内で入れた場合は、その行を消し、上の注意のとおり一度 `wsl --shutdown` すると外れます
-- 未検証（仮説）: systemd の user service として起動したものは、窓の子孫ではないので `wslhost.exe` を残さず、窓を全部閉じると止まるはずです。今の installer は WSL では dashboard を nohup で起動するので、通常はこれに当たりません
+- Ubuntu の起動時に systemd user manager を起動し、ログアウト後も dashboard、Mail の timer と watcher を動かすには、WSL の中で `loginctl enable-linger "$USER"` を設定してから installer を実行します。
+- `.wslconfig` の `[general] instanceIdleTimeout=-1` は distro を、`[wsl2] vmIdleTimeout=-1` は distro の停止後も VM を動かし続けます。普段の接続経路で自動保持と切断後の稼働を確認できた場合に、これらの設定を外せます。`agentstack-doctor` の案内に従い、該当行を消して一度 `wsl --shutdown` を実行します。
 
 同じ PC で native Windows の helper（`scripts/windows/`）も動かしている場合、WSL2 の 8770 は Windows の localhost に転送されるので、Windows 側に同じ port の dashboard が残っているとブラウザはそちらに繋がり、WSL の agent が見えません。どちらかの port を変えるか、native 側を止めてから開きます。
 
