@@ -438,10 +438,15 @@ def test_phone_tool_group_range_uses_earliest_and_latest_when_middle_arrives_lat
 def test_conversation_source_has_no_html_sinks():
     import re
     source = re.sub(r'/\*.*?\*/', '', (ROOT / 'dashboard/mobile/conversation.js').read_text(), flags=re.S)
-    # Preview and thumbnails share the checked PNG source and cleanup.
-    assert source.count('.src=') == 2 and "img.src=pngSource(v);" in source and "img.src='';" in source
+    # Preview and thumbnails share the checked PNG source and cleanup. The
+    # pending bubble also shows the image the person just picked, from an
+    # object URL of that local File only.
+    assert source.count('.src=') == 3 and "img.src=pngSource(v);" in source and "img.src='';" in source
     assert source.count("'data:image/png;base64,'+v.data") == 1
+    assert source.count('const url=URL.createObjectURL(attachment.file)') == 1
+    assert "img.src=url;" in source
     source = source.replace('img.src=pngSource(v);', '').replace("img.src='';", '')
+    source = source.replace('const url=URL.createObjectURL(attachment.file)', '').replace('img.src=url;', '')
     # The one link is Save's hidden download anchor to the object URL it made
     # from the bytes the preview already shows.
     assert source.count('.href') == 1 and source.count('createObjectURL') == 1
