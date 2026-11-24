@@ -197,7 +197,7 @@ def test_background_during_commit_preserves_unknown_receipt_and_never_retries(ph
     js("pwaHidden=false;document.dispatchEvent(new Event('visibilitychange'))")
     wait("document.querySelector('.reader-receipt.unknown')!==null")
     assert js("document.querySelector('#terminal-text').disabled")
-    assert js("document.querySelector('.reader-input-target').disabled")
+    assert js("document.querySelector('.reader-input-target')===null")
     js("[...document.querySelectorAll('button')].find(b=>b.textContent==='Check receipt').click()")
     wait("document.querySelector('.terminal-message').textContent.includes('Receipt unavailable')")
     assert sum(op=='commit' for op,_ in state['calls'])==1

@@ -656,6 +656,7 @@ const readerMotion=window.OrreryReaderSendMotion;
 const sendFeedback=readerMotion?.createSendFeedback();
 const busy=()=>['sending','preparing'].includes(phase);
 const fresh=()=>capability?.api===34;
+const hasPanePicker=()=>!fresh()&&choices.length>1;
 const ref=value=>value&&/^[a-f0-9]{32}$/.test(value.mail_instance_id)&&Number.isSafeInteger(value.mail_agent_id)&&value.mail_agent_id>0?{mail_instance_id:value.mail_instance_id,mail_agent_id:value.mail_agent_id}:null;
 const rowRef=row=>ref({mail_instance_id:row.dataset.mailInstanceId,mail_agent_id:Number(row.dataset.mailAgentId)});
 const sameTarget=value=>!fresh()||!!ref(value)&&!!selector&&value.mail_instance_id===selector.mail_instance_id&&value.mail_agent_id===selector.mail_agent_id;
@@ -796,7 +797,7 @@ async function list(){
   if(fresh()&&!selector)throw Error('unavailable');
   const data=await request('targets',{epoch:capability.epoch,name,...(fresh()?selector:{})},controller);
   if(g!==generation||document.hidden||!sheet.open)return;
-  if(!Array.isArray(data.targets)||data.targets.length>128||data.targets.some(t=>t.name!==name||!sameTarget(t)||typeof t.choice!=='string'||typeof t.pane_label!=='string'))throw Error('unavailable');
+  if(!Array.isArray(data.targets)||data.targets.length>(fresh()?1:128)||data.targets.some(t=>t.name!==name||!sameTarget(t)||typeof t.choice!=='string'||typeof t.pane_label!=='string'))throw Error('unavailable');
   choices=data.targets;message=data.truncated?'Some panes are omitted. Refresh to see available choices.':'';
   if(choices.length===1){choose(choices[0]);return;}
   phase=choices.length?'choose':'unavailable';render();
@@ -1177,7 +1178,7 @@ function dismissLayer(){
  return false;
 }
 function changePane(){if(busy()||phase==='unknown')return;window.OrreryMobileComposer?.fold();composer=false;tab='terminal';return list();}
-function paneButton(label){const b=action(label,'terminal-pane-button',changePane);b.disabled=busy()||phase==='unknown';return b;}
+function paneButton(label,cls=''){const b=action(label,'terminal-pane-button '+cls,changePane);b.disabled=busy()||phase==='unknown';return b;}
 function readerBar(){
  const bar=make('div','reader-bar'),who=make('div','reader-person'),portrait=make('img');portrait.src=window.AGENTSTACK_DEMO.portraitURL(name);portrait.alt='';portrait.onerror=()=>{portrait.remove();};
  const initials=make('span','reader-initials',name.slice(0,2)),title=make('h2','',name);title.id='terminal-title';who.append(initials,portrait,title,make('span','reader-state'));bar.append(who);
@@ -1260,8 +1261,21 @@ function readerInputBar(){
  const panel=make('div','reader-composer reader-input-bar'+(phase==='review'?' reader-review':''));panel.setAttribute('role','region');panel.setAttribute('aria-label',phase==='review'?'Review input':'Write input');
  let receiptBox=null;
  panel.classList.toggle('has-reference',!!replyReference);
- const shown=phase==='review'?prepared.target:choice;
- const destination=paneButton((shown?shown.name+' · '+shown.pane_label:'Choose pane')+' ⌄');destination.className+=' reader-input-target';destination.setAttribute('aria-label','Change pane for '+name+(shown?' · '+shown.pane_label:''));
+ const destination=make('div','reader-input-destination');
+ panel.refreshDestination=()=>{
+  destination.replaceChildren();
+  const shown=phase==='review'?prepared.target:choice;
+  if(phase==='changed'||!shown&&phase!=='loading'){
+   destination.append(paneButton('Refresh panes','reader-pane-recovery'));
+  }else if(shown&&hasPanePicker()){
+   const label=shown.pane_label;
+   const picker=paneButton(label+' ⌄','reader-input-target');
+   picker.setAttribute('aria-label','Change pane for '+name+' · '+label);
+   destination.append(picker);
+  }
+  layoutInputBar(panel);
+ };
+ panel.refreshDestination();
  panel.append(destination);
  if(replyReference&&phase!=='review'){
   const r=replyReference.value,card=make('section','reader-reference-card');card.setAttribute('aria-label','Reply reference');
@@ -1282,7 +1296,7 @@ function readerInputBar(){
  }else{
   if(['sending','accepted','unknown','refused'].includes(phase))receiptBox=readerReceipt(panel);
   const available=!!choice&&['editing','accepted','refused'].includes(phase),label=make('label','reader-input-label','Your input');label.htmlFor='terminal-text';
-  const row=make('div','reader-input-row'),field=make('textarea','terminal-text');field.id='terminal-text';field.rows=1;field.value=text;field.placeholder=choice?'Write one line…':'Choose a pane first';field.autocomplete='off';field.spellcheck=false;field.disabled=!available;
+  const row=make('div','reader-input-row'),field=make('textarea','terminal-text');field.id='terminal-text';field.rows=1;field.value=text;field.placeholder=choice?'Write one line…':'Waiting for a verified pane';field.autocomplete='off';field.spellcheck=false;field.disabled=!available;
   const review=action(phase==='preparing'?'…':'↑','terminal-primary reader-input-send',reviewInput);review.id='terminal-review';review.title='Review input';review.setAttribute('aria-label','Review input');review.disabled=!available||!previewOK||!!attachmentController||!inputValid();
   const count=make('span','reader-input-count',new TextEncoder().encode(inputText()).length+' / 4096 bytes');count.hidden=!inputText();
   const error=inputErrorNote();field.setAttribute('aria-describedby','terminal-input-error');
@@ -1293,7 +1307,6 @@ function readerInputBar(){
    text=field.value;count.textContent=new TextEncoder().encode(inputText()).length+' / 4096 bytes';count.hidden=!inputText();review.disabled=!previewOK||!!attachmentController||!inputValid();refreshReference();fitInput(field,!!inputObserver);layoutInputBar(panel);
   };
   field.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing)e.preventDefault();};
-  if(!choice)panel.append(make('p','terminal-help','Choose a verified pane in Terminal to write.'));
   renderAttachments(panel,true);attachmentPicker(panel,row,available);row.append(field,review);panel.append(label,row,count,error);
  }
  sheet.append(panel);
@@ -1326,7 +1339,7 @@ function render({restoreFocus=true}={}){
  if(history)readerBar();else{
  const header=make('div','terminal-header'),title=make('h2','',phase==='review'?'Review input':reading?'Conversation':'Terminal');title.id='terminal-title';header.append(title,action('Close','terminal-close',close));sheet.append(header);
  const who=make('div','terminal-identity'),copy=make('div'),portrait=make('img');portrait.src=window.AGENTSTACK_DEMO.portraitURL(name);portrait.alt='';portrait.onerror=()=>portrait.remove();copy.append(make('strong','',name),make('small','',reading?'Conversation record · read-only':'Cockpit session'));who.append(portrait,copy);
- if(choice)who.append(paneButton(choice.pane_label+' ⌄'));
+ if(choice&&hasPanePicker())who.append(paneButton(choice.pane_label+' ⌄'));
  sheet.append(who);
  if(history&&enabled){
   const tabs=make('div','conversation-tabs');tabs.setAttribute('role','tablist');
@@ -1388,7 +1401,7 @@ function render({restoreFocus=true}={}){
   const label=make('label','terminal-compose-label','Your input');label.htmlFor='terminal-text';const field=make('textarea','terminal-text');field.id='terminal-text';field.rows=2;field.value=text;field.placeholder='Write one line…';field.autocomplete='off';field.spellcheck=false;field.disabled=phase==='preparing';
   const count=make('span','',new TextEncoder().encode(inputText()).length+' / 4096 bytes'),meta=make('div','terminal-input-meta');meta.append(make('span','','One line + Enter'),count);
   const error=inputErrorNote();field.setAttribute('aria-describedby','terminal-input-error');
-  scroll.append(label,field,meta,error,make('p','terminal-help',reading?'Sends to '+choice.pane_label+'. Review the destination and exact text before sending.':'Check the terminal above before sending.'));
+  scroll.append(label,field,meta,error,make('p','terminal-help','Check the terminal above before sending.'));
   const actions=make('div','terminal-actions'),review=action(phase==='preparing'?'Preparing…':'Review input','terminal-primary',reviewInput);review.id='terminal-review';review.disabled=phase==='preparing'||!previewOK||!validText(inputText());
   field.oninput=()=>{text=field.value;count.textContent=new TextEncoder().encode(inputText()).length+' / 4096 bytes';review.disabled=!previewOK||!validText(inputText());error.refresh();};field.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};actions.append(action('Cancel','',close),review);actionsHost.append(actions);
  }else if(phase==='review'){
@@ -1427,9 +1440,16 @@ async function resumeView(){
   // compare the selected pane's full revision in the existing preview path.
   const data=await request('targets',{epoch:capability.epoch,name,...(fresh()?selector:{})},controller);
   if(g!==generation||resumeController!==controller||document.hidden||!sheet.open)return;
+  if(fresh()&&data.targets?.length>1){invalidate('Could not verify a unique pane. Refresh panes and review again.');return;}
   const candidates=Array.isArray(data.targets)?data.targets.filter(t=>t.name===name&&t.pane_label===old.pane_label&&sameTarget(t)):[];
   if(candidates.length!==1){invalidate('Pane changed. Refresh panes and review again.');return;}
-  choice=candidates[0];await poll();
+  const hadPicker=hasPanePicker();
+  choices=data.targets;choice=candidates[0];
+  if(hadPicker!==hasPanePicker()){
+   if(history)q('.reader-input-bar')?.refreshDestination();
+   else render();
+  }
+  await poll();
  }catch(_){if(g===generation&&!document.hidden&&sheet.open){
   // A transport failure does not establish that the pane changed. Retain the
   // draft/receipt, keep input disabled, and renew the catalog before polling.

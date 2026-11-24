@@ -186,6 +186,13 @@ def test_workspace_keeps_the_same_reader_and_private_draft_across_layouts(phone)
     js("paneDoc('SampleAgent').querySelector('.workspace-compose-button').click()")
     wait("workspaceFrame('SampleAgent').dataset.composerOverlay === 'true' && workspaceFrame('SampleAgent').getBoundingClientRect().width > 350")
     assert js("""(() => {
+        const doc=paneDoc('SampleAgent'),header=doc.querySelector('.reader-bar .reader-person');
+        return header.getClientRects().length>0 && header.querySelector('h2').textContent==='SampleAgent'
+            && header.querySelector('.reader-initials').getClientRects().length>0
+            && !doc.querySelector('.reader-input-target')
+            && !doc.querySelector('.reader-input-bar').innerText.includes('SampleAgent');
+    })()""")
+    assert js("""(() => {
         const frame=workspaceFrame('SampleAgent');
         return {width:frame.offsetWidth, position:getComputedStyle(frame).position, viewport:innerWidth};
     })()""") == {'width':366,'position':'fixed','viewport':390}
@@ -243,10 +250,22 @@ def test_workspace_keeps_the_same_reader_and_private_draft_across_layouts(phone)
     js("paneDoc('SampleAgent').querySelector('#terminal-review').click()")
     wait("!!paneDoc('SampleAgent').querySelector('.reader-review')")
     assert state['prepared_target']['name'] == 'SampleAgent'
+    assert state['prepared_target']['choice'] == 'fixture-choice'
     assert state['draft'].startswith('Private draft for SampleAgent [image: ')
     assert js("!!paneDoc('SampleAgent').querySelector('.reader-review .reader-image-thumb')")
     assert not any(op == 'commit' for op, _ in state['calls'])
     assert js("!paneDoc('Peer').querySelector('.reader-review')")
+    js("Array.from(paneDoc('SampleAgent').querySelectorAll('.reader-review button')).find(b=>b.textContent==='Edit').click()")
+    js("paneDoc('SampleAgent').querySelector('.workspace-collapse-button').click()")
+    wait("!workspaceFrame('SampleAgent').hasAttribute('data-composer-overlay')")
+    js("paneDoc('Peer').querySelector('.reader-bar .terminal-close').click()")
+    wait("!workspaceFrame('Peer')&&paneDoc('SampleAgent').documentElement.dataset.workspaceComposer==='standard'")
+    assert js("""(() => {
+        const doc=paneDoc('SampleAgent');
+        return !doc.querySelector('.reader-input-target')
+            && !doc.querySelector('.reader-input-bar').innerText.includes('SampleAgent')
+            && doc.querySelector('#terminal-text').value==='Private draft for SampleAgent';
+    })()""")
 
 
 def test_successful_receipt_disappears_but_unknown_waits_for_a_status_check(phone):

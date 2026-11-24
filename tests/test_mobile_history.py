@@ -773,7 +773,8 @@ def test_review_from_the_conversation_tab_shows_only_the_target_and_text():
       await q('#terminal-review').onclick();await settle();
       assert.equal(q('#terminal-output'),null,'review omits the terminal tail');
       assert.equal(q('.terminal-observed'),null);
-      assert.match(q('.reader-input-target').textContent,/ScrollFixture.*Pane 1/);
+      assert.equal(q('.reader-input-target').textContent,'Pane 1 ⌄');
+      assert.equal(q('.reader-input-target')['aria-label'],'Change pane for ScrollFixture · Pane 1');
       assert.equal(q('.terminal-exact').textContent,'synthetic line');
       assert.ok(button('Send once'));
       context.OrreryMobileTerminal.close();

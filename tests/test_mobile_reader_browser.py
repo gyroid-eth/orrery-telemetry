@@ -7,6 +7,27 @@ import pytest
 from mobile_reader_browser import AREA, MAIL_MARKDOWN, assert_mail_markdown, phone  # noqa: F401
 
 
+def two_pane_targets():
+    return [
+        dict(choice='fixture-choice', name='SampleAgent', pane_label='Window 0 · pane 0',
+             revision='fixture-revision'),
+        dict(choice='fixture-second', name='SampleAgent', pane_label='Window 2 · pane 2',
+             revision='fixture-second-revision'),
+    ]
+
+
+def open_with_two_panes(phone):
+    _, js, wait, state = phone
+    state['targets'] = two_pane_targets()
+    js('OrreryMobileTerminal.close()')
+    wait("!document.querySelector('#terminal-sheet').open&&history.state?.orreryConversation!==true")
+    js("OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelectorAll('.terminal-choices button').length===2")
+    assert js("document.querySelector('#terminal-text').disabled&&document.querySelector('.reader-input-target')===null")
+    js("document.querySelector('.terminal-choices button').click()")
+    wait("document.querySelector('#terminal-text')?.disabled===false")
+
+
 @pytest.mark.parametrize('theme',['dark','light'])
 def test_image_path_uses_existing_review_and_once_send(phone,tmp_path,theme):
     import base64
@@ -570,7 +591,7 @@ def test_mail_detail_fetches_and_displays_body_from_both_views(phone, view):
 @pytest.mark.parametrize(('operation', 'outcome'), [('prepare', 'accepted'), ('commit', 'accepted'), ('commit', 'unknown')])
 def test_pending_send_cannot_change_pane_or_discard_its_receipt(phone, operation, outcome):
     _, js, wait, state = phone
-    wait("document.querySelector('#terminal-text')?.disabled===false")
+    open_with_two_panes(phone)
     js("document.querySelector('#terminal-text').focus();window.__oldPaneAction=document.querySelector('.reader-composer .terminal-pane-button').onclick")
     js("window.__realFetch=fetch;window.__release=null;window.fetch=async(...args)=>{const response=await __realFetch(...args);if(String(args[0]).endsWith('/'+" + json.dumps(operation) + "))return new Promise((resolve,reject)=>{__release=()=>" + ("reject(Error('Fixture response lost'))" if outcome == 'unknown' else "resolve(response)") + "});return response};const field=document.querySelector('#terminal-text');field.value='One fixture action';field.dispatchEvent(new Event('input',{bubbles:true}))")
     wait("document.querySelector('#terminal-review').disabled===false")
@@ -598,7 +619,7 @@ def test_pending_send_cannot_change_pane_or_discard_its_receipt(phone, operation
         assert sum(op == 'commit' for op, _ in state['calls']) == 1
         assert not any(op == 'cancel' for op, _ in state['calls'])
         if outcome == 'unknown':
-            state['targets']=[dict(choice='fixture-choice',name='SampleAgent',pane_label='Window 0 · pane 0',revision='changed-revision')]
+            state['targets'][0]['revision']='changed-revision'
             wait("document.querySelector('.terminal-message').innerText.includes('Receipt retained')",8)
             assert js("document.querySelector('.reader-receipt.unknown')!==null&&document.querySelector('#terminal-text').disabled&&document.querySelector('.reader-input-target').disabled")
             js('__oldPaneAction()')
@@ -615,14 +636,16 @@ def test_review_stays_on_its_tab_and_send_returns_to_conversation_tail(phone, in
     wait("document.querySelector('#terminal-text')?.disabled===false")
     if initial_tab == 'Terminal':
         js("document.querySelector('.reader-bar [aria-label=Terminal]').click()")
+    assert js("document.querySelector('.reader-input-target')===null")
+    assert not js("document.querySelector('.reader-input-bar').innerText.includes('SampleAgent')")
     js("document.querySelector('#terminal-text').focus();const field=document.querySelector('#terminal-text');field.value='A fixture reply';field.dispatchEvent(new Event('input',{bubbles:true}))")
     wait("document.querySelector('#terminal-review').disabled===false")
     js("document.querySelector('#terminal-review').click()")
     wait("[...document.querySelectorAll('button')].some(b=>b.textContent==='Send once')")
     assert js("document.querySelector('.reader-review .terminal-preview')===null")
     assert js("document.querySelector('.reader-bar [aria-label="+initial_tab+"]').getAttribute('aria-pressed')==='true'")
-    assert js("document.querySelector('.reader-composer').innerText.includes('Window 0 · pane 0')")
-    for expected in ['SampleAgent — send this input?', 'SampleAgent · Window 0 · pane 0', 'Not sent yet',
+    assert js("!document.querySelector('.reader-input-target')&&!document.querySelector('.reader-review').innerText.includes('Window 0 · pane 0')")
+    for expected in ['SampleAgent — send this input?', 'Not sent yet',
                      'A fixture reply', 'After this text', 'Enter', 'It may be a shell.', 'Edit', 'Send once']:
         assert js("document.querySelector('.reader-review').innerText.includes("+json.dumps(expected)+")")
     for omitted in ['Terminal tail', 'Updating every 3s', 'Latest 120 lines', 'Shown ', 'Generated terminal tail']:
@@ -864,24 +887,49 @@ def test_terminal_metadata_keeps_held_snapshot_position_and_pending_update(phone
     assert js("(()=>{const p=document.querySelector('#terminal-output');return p.scrollHeight-p.clientHeight-p.scrollTop<=2&&document.querySelector('.reader-terminal-state').textContent==='';})()")
 
 
-def test_no_info_button_and_review_target_can_change_pane(phone):
+def test_legacy_multi_pane_reader_requires_selection_and_can_still_change_panes(phone):
     _,js,wait,state=phone
     assert js("document.querySelector('.reader-info-toggle')===null&&document.querySelector('.reader-info')===null")
-    state['targets']=[dict(choice='fixture-choice',name='SampleAgent',pane_label='Window 0 · pane 0',revision='fixture-revision'),
-                      dict(choice='fixture-second',name='SampleAgent',pane_label='Window 0 · pane 1',revision='fixture-second-revision')]
-    wait("document.querySelector('#terminal-text')?.disabled===false")
+    open_with_two_panes(phone)
+    assert js("document.querySelector('.reader-input-target').innerText==='Window 0 · pane 0 ⌄'")
     js("document.querySelector('#terminal-text').focus();const field=document.querySelector('#terminal-text');field.value='Original pane draft';field.dispatchEvent(new Event('input',{bubbles:true}))")
     wait("!document.querySelector('#terminal-review').disabled")
     js("document.querySelector('#terminal-review').click()")
     wait("document.querySelector('.reader-review')!==null")
-    assert js("document.querySelector('.reader-input-target').matches('button')&&document.querySelector('.reader-input-target').innerText.includes('SampleAgent · Window 0 · pane 0')")
+    assert js("document.querySelector('.reader-input-target').matches('button')&&document.querySelector('.reader-input-target').innerText==='Window 0 · pane 0 ⌄'")
     js("document.querySelector('.reader-input-target').click()")
     wait("document.querySelector('.terminal-choices')!==null")
     assert any(op=='cancel' for op,_ in state['calls'])
     assert not any(op=='commit' for op,_ in state['calls'])
-    js("[...document.querySelectorAll('.terminal-choices button')].find(b=>b.innerText.includes('pane 1')).click()")
-    wait("document.querySelector('#terminal-text')!==null")
-    assert js("document.querySelector('#terminal-text').value===''&&document.querySelector('.reader-input-bar').innerText.includes('pane 1')")
+    js("document.querySelectorAll('.terminal-choices button')[1].click()")
+    wait("document.querySelector('#terminal-text')?.disabled===false")
+    assert js("document.querySelector('#terminal-text').value===''")
+    assert js("(()=>{const b=document.querySelector('.reader-input-target');return b.innerText==='Window 2 · pane 2 ⌄'&&b.getAttribute('aria-label')==='Change pane for SampleAgent · Window 2 · pane 2';})()")
+    js("const f=document.querySelector('#terminal-text');f.value='Input for the second pane';f.dispatchEvent(new Event('input',{bubbles:true}))")
+    wait("document.querySelector('#terminal-review')?.disabled===false")
+    js("document.querySelector('#terminal-review').click()")
+    wait("document.querySelector('.reader-review')!==null")
+    assert [p['choice'] for op,p in state['calls'] if op=='prepare']==['fixture-choice','fixture-second']
+
+
+def test_pane_picker_follows_refreshed_catalog_without_resetting_the_draft(phone):
+    _,js,wait,state=phone
+    wait("document.querySelector('#terminal-review')!==null")
+    js("""window.draftField=document.querySelector('#terminal-text');
+        draftField.value='Keep this draft on pane zero';draftField.dispatchEvent(new Event('input'));
+        window.fixtureHidden=false;
+        Object.defineProperty(document,'hidden',{configurable:true,get:()=>fixtureHidden});""")
+    assert js("document.querySelector('.reader-input-target')===null")
+    for targets, expected in [(two_pane_targets(), "'Window 0 · pane 0 ⌄'"), (two_pane_targets()[:1], 'undefined')]:
+        state['targets']=targets
+        js("""fixtureHidden=true;document.dispatchEvent(new Event('visibilitychange'));
+            fixtureHidden=false;document.dispatchEvent(new Event('visibilitychange'));""")
+        wait("document.querySelector('.reader-input-target')?.innerText==="+expected+
+             "&&document.querySelector('#terminal-review')?.disabled===false")
+        assert js("draftField===document.querySelector('#terminal-text')&&draftField.value==='Keep this draft on pane zero'")
+    js("document.querySelector('#terminal-review').click()")
+    wait("document.querySelector('.reader-review')!==null")
+    assert next(p['choice'] for op,p in state['calls'] if op=='prepare')=='fixture-choice'
 
 
 def test_terminal_metadata_is_visible_without_an_info_button(phone):
@@ -901,13 +949,13 @@ def test_unselected_pane_shows_guidance_with_disabled_persistent_input(phone):
     js("OrreryMobileTerminal.open('SampleAgent')")
     wait("document.querySelector('.reader-input-bar #terminal-text')!==null")
     assert js("document.querySelector('#terminal-text').disabled")
-    assert js("document.querySelector('.reader-composer .terminal-help').innerText==='Choose a verified pane in Terminal to write.'")
-    assert js("document.querySelector('.reader-input-bar .terminal-help').getClientRects().length>0&&document.querySelector('#terminal-review').disabled")
-    assert js("document.querySelector('.reader-input-bar .terminal-help').getBoundingClientRect().bottom<=document.querySelector('#terminal-text').getBoundingClientRect().top")
-    assert js("(()=>{const b=[...document.querySelectorAll('#terminal-sheet button')].find(b=>b.textContent==='Refresh panes');return !b||b.getBoundingClientRect().bottom<=document.querySelector('.reader-input-bar').getBoundingClientRect().top;})()")
+    assert js("document.querySelector('.reader-input-target')===null")
+    assert js("document.querySelector('.reader-pane-recovery').innerText==='Refresh panes'&&document.querySelector('#terminal-review').disabled")
+    assert js("document.querySelector('.reader-pane-recovery').getBoundingClientRect().bottom<=document.querySelector('#terminal-text').getBoundingClientRect().top")
+    assert js("(()=>{const b=[...document.querySelectorAll('.terminal-scroll button')].find(b=>b.textContent==='Refresh panes');return !b||b.getBoundingClientRect().bottom<=document.querySelector('.reader-input-bar').getBoundingClientRect().top;})()")
     assert not any(op in ('prepare','commit') for op,_ in state['calls'])
     state['targets']=[dict(choice='fixture-choice',name='SampleAgent',pane_label='Window 0 · pane 0',revision='fixture-revision')]
-    js("document.querySelector('.reader-input-target').click()")
+    js("document.querySelector('.reader-pane-recovery').click()")
     wait("document.querySelector('#terminal-text')?.disabled===false")
     client.call('Input.dispatchKeyEvent',type='keyDown',key='Escape',code='Escape',windowsVirtualKeyCode=27)
     client.call('Input.dispatchKeyEvent',type='keyUp',key='Escape',code='Escape',windowsVirtualKeyCode=27)
@@ -982,9 +1030,7 @@ def test_input_bar_is_persistent_and_reviews_in_place_before_one_commit(phone,ta
 def test_input_bar_discards_old_confirmation_when_target_changes(phone,change):
     _,js,wait,state=phone
     assert js("document.querySelector('.reader-input-bar')!==null")
-    wait("document.querySelector('#terminal-text')?.disabled===false")
-    state['targets']=[dict(choice='fixture-choice',name='SampleAgent',pane_label='Window 0 · pane 0',revision='fixture-revision'),
-                      dict(choice='fixture-second',name='SampleAgent',pane_label='Window 0 · pane 1',revision='fixture-second-revision')]
+    open_with_two_panes(phone)
     js("const f=document.querySelector('#terminal-text');f.value='Discard this old confirmation';f.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#terminal-review').click()")
     wait("document.querySelector('.reader-input-bar .terminal-exact')!==null")
     if change=='revision':
@@ -993,9 +1039,9 @@ def test_input_bar_discards_old_confirmation_when_target_changes(phone,change):
     else:
         js("document.querySelector('.reader-input-target').click()")
         wait("document.querySelector('.terminal-choices')!==null")
-        js("[...document.querySelectorAll('.terminal-choices button')].find(b=>b.innerText.includes('pane 1')).click()")
+        js("document.querySelectorAll('.terminal-choices button')[1].click()")
         wait("document.querySelector('#terminal-text')?.disabled===false")
-        assert js("document.querySelector('.reader-input-target').innerText.includes('pane 1')")
+        assert js("document.querySelector('.reader-input-target').innerText==='Window 2 · pane 2 ⌄'")
     assert js("document.querySelector('#terminal-text').value===''")
     assert any(op=='cancel' for op,_ in state['calls'])
     assert not any(op=='commit' for op,_ in state['calls'])
@@ -1040,9 +1086,9 @@ def test_input_bar_growth_and_review_keep_the_held_terminal_character(phone):
 
 def test_input_bar_confirmation_uses_the_prepared_destination_label(phone):
     _,js,wait,state=phone
-    wait("document.querySelector('#terminal-text')?.disabled===false")
+    open_with_two_panes(phone)
     js("window.oldFetch=fetch;window.fetch=async(...args)=>{const r=await oldFetch(...args);if(!String(args[0]).endsWith('/prepare'))return r;const data=await r.json();data.target.pane_label='Window 2 · pane 3';return new Response(JSON.stringify(data),{status:200})};const f=document.querySelector('#terminal-text');f.value='Check the prepared destination';f.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#terminal-review').click()")
     wait("document.querySelector('.reader-review')!==null")
-    assert js("document.querySelector('.reader-input-target').innerText.includes('Window 2 · pane 3')")
+    assert js("document.querySelector('.reader-input-target').innerText==='Window 2 · pane 3 ⌄'")
     assert not any(op=='commit' for op,_ in state['calls'])
 
