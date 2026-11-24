@@ -5927,12 +5927,6 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None,
             f'exec env -u OPENAI_API_KEY codex resume {sid} '
             f'-C {shlex.quote(cwd)} {_codex_child_launch_flags()}'
         )
-    # Claude in Chrome defaults (possibly in the tmux server env) belong to
-    # Claude children; a Codex child must not hand them on to its own spawns.
-    inner = (
-        'unset AGENTSTACK_CLAUDE_CHILD_CHROME AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE; '
-        + inner
-    )
     resume_environment = {
         "AGENTSTACK_HOME": install_home,
         "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR,
@@ -5955,6 +5949,16 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None,
     configured_python = os.environ.get("AGENTSTACK_PYTHON", "").strip()
     if configured_python:
         resume_environment["AGENTSTACK_PYTHON"] = configured_python
+    if launch_origin == "child":
+        # Apply the verified child settings after the login profile runs, as
+        # Claude does. The bootstrap uses the environment to locate its owner.
+        exports = "".join(
+            f"export {key}={shlex.quote(value)}; " for key, value in resume_environment.items()
+        )
+        inner = exports + inner
+    # Claude in Chrome defaults (possibly in the tmux server env) belong to
+    # Claude children; a Codex child must not hand them on to its own spawns.
+    inner = 'unset AGENTSTACK_CLAUDE_CHILD_CHROME AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE; ' + inner
     tmux_environment = [
         argument
         for key, value in resume_environment.items()

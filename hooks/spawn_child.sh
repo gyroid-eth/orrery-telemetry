@@ -1395,6 +1395,24 @@ append_child_workspace_environment() {
         -e "AGENTSTACK_LAUNCH_CONTEXT_HELPER=$PROJECT_CONTEXT_HELPER")
 }
 
+codex_child_environment_exports_quoted() {
+    # Login profiles can reload the default install. Restore the launcher
+    # settings inside the login command, before workspace resolution or hooks.
+    local setting assignment exports="" single_quote="'" quote_escape="'\"'\"'"
+    for setting in "${TMUX_ENV_ARGS[@]}"; do
+        case "${setting%%=*}" in
+            PROJECT_KEY|AGENTSTACK_PROJECT_KEY|AGENTSTACK_HOME|AGENTSTACK_HOOKS_DIR|AGENTSTACK_RUNTIME_DIR|\
+            AGENTSTACK_MCP_URL|AGENTSTACK_MAIL_ENV|AGENTSTACK_MAIL_HTTP_BEARER_MODE|\
+            AGENTSTACK_PYTHON|AGENTSTACK_CHILD_RESUME_RETENTION_DAYS)
+                printf -v assignment 'export %s=%q; ' "${setting%%=*}" "${setting#*=}"
+                exports+="$assignment"
+                ;;
+        esac
+    done
+    # tmux evaluates the single-quoted login command in an outer shell.
+    printf '%s' "${exports//$single_quote/$quote_escape}"
+}
+
 codex_search_path() {
     codex_launch_search_path "$@"
 }
@@ -3600,6 +3618,7 @@ ${TASK}"
             -c "$WORK_DIR" \
             "${TMUX_ENV_ARGS[@]}" \
             "$CHILD_SHELL"' -lc '"'"'
+                '"$(codex_child_environment_exports_quoted)"'
                 '"$CODEX_CHILD_PATH_SETUP_QUOTED"';
                 cd "$AGENTSTACK_LAUNCH_WORK_DIR" || exit $?; _ags_workspace_context="$(AGENTSTACK_EXTRA_PROTECTED_ROOTS="$AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS" /bin/bash "$AGENTSTACK_LAUNCH_CONTEXT_HELPER" workspace-context-exports "$PWD" "$AGENTSTACK_LAUNCH_PROJECT_KEY")" || exit $?; eval "$_ags_workspace_context"; unset _ags_workspace_context AGENTSTACK_LAUNCH_WORK_DIR AGENTSTACK_LAUNCH_PROJECT_KEY AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS AGENTSTACK_LAUNCH_CONTEXT_HELPER;
                 # The child never sources a user-side bootstrap: identity comes
@@ -4502,6 +4521,7 @@ elif [[ "$USE_CODEX" == true ]]; then
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
         "$CHILD_SHELL"' -lc '"'"'
+                '"$(codex_child_environment_exports_quoted)"'
                 '"$CODEX_CHILD_PATH_SETUP_QUOTED"';
                 cd "$AGENTSTACK_LAUNCH_WORK_DIR" || exit $?; _ags_workspace_context="$(AGENTSTACK_EXTRA_PROTECTED_ROOTS="$AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS" /bin/bash "$AGENTSTACK_LAUNCH_CONTEXT_HELPER" workspace-context-exports "$PWD" "$AGENTSTACK_LAUNCH_PROJECT_KEY")" || exit $?; eval "$_ags_workspace_context"; unset _ags_workspace_context AGENTSTACK_LAUNCH_WORK_DIR AGENTSTACK_LAUNCH_PROJECT_KEY AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS AGENTSTACK_LAUNCH_CONTEXT_HELPER;
             # See the pre-registered path: no user-side bootstrap is sourced.
