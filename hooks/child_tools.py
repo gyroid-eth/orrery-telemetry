@@ -75,7 +75,7 @@ from typing import Any
 
 BASES = ("default", "mail-only")
 ACCESS = ("read", "operate")
-TOOL_KINDS = ("browser", "chrome_extension", "screen", "mcp", "approve_all")
+TOOL_KINDS = ("browser", "browser_off", "chrome_extension", "screen", "mcp", "approve_all")
 CODEX_CHROME_PLUGIN = "chrome@openai-bundled"
 CODEX_NATIVE_CUA_PLUGIN = "unified-computer-use@openai-bundled"
 SERVER_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -282,6 +282,13 @@ def normalize_selection(base: Any = None, tools: Any = None) -> dict:
             raise ToolsError("tools.chrome_extension must be true")
         result["chrome_extension"] = True
 
+    if "browser_off" in tools:
+        if tools["browser_off"] is not True:
+            raise ToolsError("tools.browser_off must be true")
+        if "browser" in tools or "chrome_extension" in tools:
+            raise ToolsError("Browser Off cannot be combined with a browser selection")
+        result["browser_off"] = True
+
     if "screen" in tools:
         screen = tools["screen"]
         if isinstance(screen, str):
@@ -305,6 +312,8 @@ def normalize_selection(base: Any = None, tools: Any = None) -> dict:
         checked = [_server_name(name, "tools.mcp entry") for name in names]
         if len(set(checked)) != len(checked):
             raise ToolsError("tools.mcp lists a server twice")
+        if result.get("browser_off") and "chrome-devtools" in checked:
+            raise ToolsError("Browser Off cannot be combined with chrome-devtools")
         screen_server = (result.get("screen") or {}).get("server")
         if screen_server in checked:
             raise ToolsError(
@@ -371,6 +380,8 @@ def parse_cli(values: list[str]) -> dict:
                 if "browser" in tools:
                     raise ToolsError("--tools browser given twice")
                 tools["browser"] = {"device": rest}
+            elif item == "no-browser":
+                tools["browser_off"] = True
             elif item == "chrome-extension":
                 if "chrome_extension" in tools:
                     raise ToolsError("--tools chrome-extension given twice")
@@ -394,7 +405,7 @@ def parse_cli(values: list[str]) -> dict:
                     tools.setdefault("approve_all", []).append(name)
             else:
                 raise ToolsError(
-                    f"unknown --tools entry {item!r} (browser[:deviceId], chrome-extension, "
+                    f"unknown --tools entry {item!r} (browser[:deviceId], no-browser, chrome-extension, "
                     "screen[:read|:operate[:server]], mcp:<server>[:all])")
     return tools
 
@@ -442,6 +453,8 @@ def merge_chrome(spec: dict, chrome: bool, device: str) -> tuple[bool, str]:
 
     Both may be given only when they agree on the deviceId."""
     browser = spec["tools"].get("browser")
+    if spec["tools"].get("browser_off") and (chrome or device):
+        raise ToolsError("Browser Off cannot be combined with Claude in Chrome")
     if browser is None:
         return chrome, device
     if chrome and device and browser["device"] and device != browser["device"]:
@@ -689,7 +702,7 @@ def claude_plan(spec: dict, *, cwd: str, chrome: bool, claude_json: str,
         allowed += [f"mcp__{name}__{tool}" for tool in exposed]
         disallowed += [f"mcp__{name}__{tool}" for tool in hidden]
 
-    if mail_only and not chrome:
+    if (mail_only or tools.get("browser_off")) and not chrome:
         flags.append("--no-chrome")
     if allowed:
         flags += ["--allowed-tools", ",".join(allowed)]
@@ -753,7 +766,7 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
     if selected_chrome and selected_chrome[0] != 'chrome-devtools' and selected_chrome[0] in names:
         raise ToolsError('native_mcp_selection_unsupported: Chrome selected twice')
     codex_browser = None
-    if spec['base'] == 'default' or 'browser' in tools:
+    if (spec['base'] == 'default' and not tools.get('browser_off')) or 'browser' in tools:
         codex_browser = _native_codex_browser(codex_config or {})
     if spec['base'] == 'default' and codex_browser:
         servers[codex_browser[0]] = codex_browser[1]
@@ -939,6 +952,7 @@ def change_permission(tools: dict, permission: dict, definitions: dict | None) -
                 mcp.append(direct)
             removed.discard(direct)
     elif permission["browser_use"]:
+        changed.pop("browser_off", None)
         changed.setdefault("browser", {})
         return changed
     else:
@@ -1174,12 +1188,17 @@ def prompt_text(spec: dict, provider: str, standalone: bool = False) -> str:
     report_to = "the operator" if standalone else "your parent agent"
     given = _describe(spec, provider)
     if spec["base"] == "mail-only":
-        head = ("Tools: this child was started with base mail-only: besides "
-                "shell/files and authenticated ORRERY Mail it was given only "
-                + (", ".join(given) if given else "nothing else") + ".")
-    else:
+        head = ("Tools: base mail-only limits added MCP servers to authenticated ORRERY Mail"
+                + (" and these explicit selections: " + ", ".join(given) if given else "") + ".")
+    elif given:
         head = ("Tools: in addition to the default ones, this child was given "
                 + ", ".join(given) + ".")
+    else:
+        head = "Tools: the harness's standard tool configuration is in use."
+    if spec["base"] == "mail-only" or spec["tools"].get("browser_off"):
+        head += " Use the harness's built-in tools, including web search or fetch when available."
+    if spec["tools"].get("browser_off"):
+        head += " The browser integration is off for this launch."
     screen = spec["tools"].get("screen")
     if screen_mode(spec) is not None:
         head += " The operator can change the orrery-screen permission while this child is running."

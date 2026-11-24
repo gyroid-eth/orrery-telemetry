@@ -203,8 +203,11 @@ def test_local_launch_forwards_only_tools_available_in_the_selected_directory(ha
             assert path == '/api/spawn' and submitted['harness'] == harness
             assert submitted['provider'] == 'strata-epyc' and submitted['model'] == 'inkling-2-mini'
             assert submitted['url_index'] == 0 and submitted['url_key'] == 'a' * 64
-            assert submitted['tools'] == {'mcp': expected}
-            assert (submitted.get('base') == 'mail-only') is ('chrome-devtools' not in expected)
+            expected_tools = {'mcp': expected}
+            if 'chrome-devtools' not in expected:
+                expected_tools['browser_off'] = True
+            assert submitted['tools'] == expected_tools
+            assert 'base' not in submitted
 
 
 @pytest.mark.parametrize('codex_browser', [False, True])

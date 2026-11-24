@@ -8822,6 +8822,7 @@ def spawn_names_payload() -> dict:
         "naming": "adjective-scientist",
         "dirs": dirs,
         "native_browser_dirs": _native_browser_directories(dirs) if local_catalog and not FRESH_MODE else [],
+        "supports_browser_off": not FRESH_MODE,
         "models": list(claude_models),
         "default_model": claude_default,
         "providers": [
@@ -9437,6 +9438,8 @@ def _spawn_tools_args(payload: dict, provider: str, chrome: bool,
     if "browser" in tools:
         device = tools["browser"]["device"]
         args += ["--tools", "browser:" + device if device else "browser"]
+    if tools.get("browser_off"):
+        args += ["--tools", "no-browser"]
     if "chrome_extension" in tools:
         args += ["--tools", "chrome-extension"]
     if "screen" in tools:

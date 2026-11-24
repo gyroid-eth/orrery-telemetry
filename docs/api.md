@@ -771,6 +771,8 @@ taskの上書きだけを外す例（省略したrole・emoji・groupは維持�
 
 ## POST `/api/spawn`
 
+通常起動の Browser を外すには、既定の `base` のまま `tools.browser_off: true`（CLI の `--tools no-browser`）を指定します。ハーネスの標準の道具は使えます。`GET /api/spawn-names` の `supports_browser_off: true` で対応を確認できます。
+
 parent ありの Claude child:
 
 ```bash

@@ -153,13 +153,13 @@ def _options(model, route, directory, task, role, effort, computer, browser, con
     mcp = ['cua-driver'] if computer else []
     if browser and native:
         mcp.append('chrome-devtools')
-    if not browser or route['key'] == 'codex' and not computer:
-        payload['base'] = 'mail-only'
     payload['tools'] = {}
     if mcp:
         payload['tools']['mcp'] = mcp
     if browser and not native:
         payload['tools']['browser'] = {}
+    if not browser:
+        payload['tools']['browser_off'] = True
     return payload
 
 

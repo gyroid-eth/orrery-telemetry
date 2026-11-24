@@ -768,6 +768,8 @@ Clear only the task override (omitted role, emoji, and group retain their values
 
 ## POST `/api/spawn`
 
+To start a standard child with the browser integration off, keep the default `base` and send `tools.browser_off: true` (`--tools no-browser` on the CLI). Built-in harness tools remain available. `GET /api/spawn-names` advertises this option with `supports_browser_off: true`.
+
 Claude child with a parent:
 
 ```bash

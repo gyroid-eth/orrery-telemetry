@@ -110,6 +110,26 @@ def test_named_chrome_selection_refuses_to_drop_codex_tool_controls(tmp_path):
         browser_plan(tmp_path, spec, {'chrome-devtools': {**CHROME, 'enabled_tools': ['list_pages']}})
 
 
+def test_browser_off_keeps_standard_base_and_built_in_tools(tmp_path):
+    spec = tools.normalize(tools=tools.parse_cli(['no-browser', 'mcp:reader']))
+    assert spec['base'] == 'default'
+    plan = browser_plan(tmp_path, spec, {'chrome-devtools': CHROME})
+    assert plan['inherit'] is True and set(plan['servers']) == {'reader'}
+    assert 'including web search or fetch' in tools.prompt_text(spec, 'dsh')
+    assert '--no-chrome' in tools.claude_plan(spec, cwd=str(tmp_path), chrome=False,
+                                               claude_json=settings(tmp_path))['flags']
+    codex = {'mcp_servers': {'chrome-devtools': CHROME, 'reader': {'command':'/fixture/reader'}}}
+    tools.codex_apply(codex, spec)
+    assert not codex['mcp_servers']['chrome-devtools']['enabled']
+    assert codex['mcp_servers']['reader']['enabled']
+
+
+def test_deliberate_mail_only_keeps_built_in_tools_in_the_prompt():
+    prompt = tools.prompt_text(tools.normalize('mail-only'), 'dsh')
+    assert 'base mail-only limits added MCP servers to authenticated ORRERY Mail' in prompt
+    assert 'including web search or fetch' in prompt
+
+
 def test_browser_discovery_ambiguity_is_not_silently_ignored(tmp_path):
     with pytest.raises(tools.ToolsError, match='several match'):
         browser_plan(tmp_path, servers={'first': CHROME, 'second': CHROME})

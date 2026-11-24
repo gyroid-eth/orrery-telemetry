@@ -171,7 +171,7 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 `/delegate "<task>" --base mail-only --tools screen:read:windows-mcp` のように、child に渡す道具を起動時に選べます。`/api/spawn` では `base` と `tools` です（[API](api.md#post-apispawn)）。解釈は `hooks/child_tools.py` が一手に行います。
 
 - **`--base` を省く・`default`**: Claude child の MCP は ORRERY Mail だけで、ブラウザ（Claude in Chrome）は利用者の Claude 設定に従います。Codex child は上記の `inherit` に従います。dsh・Hermes child は認証済み Mail に加え、Codex の有効な Chrome MCP 定義だけを継承します（下記）。`--tools` で選んだものはこれに足します
-- **`--base mail-only`**: ORRERY Mail と `--tools` で選んだものだけを渡します。Claude child はブラウザを選ばなければ `--no-chrome` も付けます。Codex child は `--codex-mcp orrery-only` と同じ無効化をしてから、選んだ server や plugin を有効にします（`--codex-mcp inherit` との併用は拒否します）
+- **`--base mail-only`**: 追加する MCP は ORRERY Mail と `--tools` で明示したものです。ハーネス標準の道具（利用可能な web 検索、fetch など）は使えます。Claude child はブラウザを選ばなければ `--no-chrome` も付けます。Codex child は `--codex-mcp orrery-only` と同じ無効化をしてから、選んだ server や plugin を有効にします（`--codex-mcp inherit` との併用は拒否します）
 
 | `--tools` | Claude child | Codex child |
 |---|---|---|
