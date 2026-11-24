@@ -115,8 +115,17 @@ def phone(request):
             if path == '/view/snapshot':
                 return self.send(snapshot)
             if path == '/view/conversation':
-                agent=parse_qs(urlsplit(self.path).query).get('name',['SampleAgent'])[0]
-                return self.send(dict(ok=False, error=state['error']) if state['error'] else dict(ok=True, agent=agent, provider=state.get('provider', ''), events=state['events'], older=None, limited=False, tail_only=False))
+                query=parse_qs(urlsplit(self.path).query)
+                agent=query.get('name',['SampleAgent'])[0]
+                if state['error']:
+                    return self.send(dict(ok=False, error=state['error']))
+                token=query.get('page',[None])[0]
+                page=(state.get('conversation_pages',{}).get(token) if token else
+                      dict(events=state['events'], older=state.get('older')))
+                if page is None:
+                    return self.send(dict(ok=False, error='page_expired'), status=410)
+                return self.send(dict(ok=True, agent=agent, provider=state.get('provider',''),
+                                      limited=False, tail_only=False, **page))
             if path == '/view/terminal':
                 return self.send(dict(contract, api=31, supported='legacy-managed-pane', enabled=True, ack='tmux-command-accepted'))
             if path == '/view/conversation/preview':

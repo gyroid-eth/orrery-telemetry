@@ -589,6 +589,16 @@ html.graph-fullscreen #settings{z-index:40}
 .conversation-bubble.user{align-self:flex-end;background:color-mix(in srgb,var(--amber) 12%,var(--bg));border:1px solid color-mix(in srgb,var(--amber) 35%,transparent);border-bottom-right-radius:3px}
 .conversation-bubble.assistant{align-self:flex-start;background:var(--bg);border:1px solid var(--hair);border-bottom-left-radius:3px}
 .conversation-pending{opacity:.65;border-style:dashed}
+.mobile .conversation-reply-reference{display:block;width:100%;min-height:44px;margin:0 0 7px;padding:5px 8px;
+  border:0;border-inline-start:2px solid var(--amber);border-radius:4px;background:var(--panel);color:var(--ink);text-align:left}
+.conversation-reply-reference-head{display:flex;align-items:baseline;gap:7px;color:var(--ink-dim);font:10px/1.5 var(--mono)}
+.conversation-reply-reference-agent{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.conversation-reply-reference-time,.conversation-reply-reference-icon{flex:none;white-space:nowrap}
+.conversation-reply-reference-icon{margin-inline-start:auto;color:var(--amber);font-size:13px}
+.conversation-reply-reference-quote{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;
+  overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.5 var(--mono)}
+.mobile .conversation-reply-reference[aria-disabled=true]{border-inline-start-color:var(--hair);cursor:default}
+.conversation-reply-reference[aria-disabled=true] .conversation-reply-reference-icon{visibility:hidden}
 .conversation-text p{margin:0 0 6px;white-space:pre-wrap}.conversation-text p:last-child{margin-bottom:0}
 .mobile .conversation-code{margin:4px 0 6px;padding:7px 8px;background:color-mix(in srgb,var(--shade) 25%,transparent);border-radius:6px;font:10.5px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
 .conversation-table-wrap{overflow-x:auto;margin:4px 0 6px}.conversation-table{border-collapse:collapse;font:10.5px/1.5 var(--mono)}
@@ -657,6 +667,9 @@ html.graph-fullscreen #settings{z-index:40}
 .reader-fullscreen .conversation-list{padding:calc(60px + env(safe-area-inset-top)) 0 calc(82px + env(safe-area-inset-bottom));gap:14px;scrollbar-width:none;scroll-padding-top:calc(60px + env(safe-area-inset-top));scroll-padding-bottom:calc(82px + env(safe-area-inset-bottom))}
 .reader-fullscreen .conversation-bubble.assistant{align-self:stretch;max-width:100%;padding:0;background:none;border:0;border-radius:0;font:13px/1.7 var(--mono)}
 .reader-fullscreen .conversation-bubble.user{max-width:90%;padding:7px 10px}
+.mobile .conversation-list .conversation-reference-target{box-shadow:inset 0 1px var(--amber),inset 0 -1px var(--amber);
+  background:color-mix(in srgb,var(--amber) 9%,var(--bg))}
+.mobile .conversation-list [data-id][tabindex="-1"]:focus-visible{outline:1px solid var(--amber);outline-offset:2px}
 .reader-fullscreen .conversation-text p{margin:0 0 10px;white-space:pre-wrap}
 .reader-fullscreen .conversation-text :is(h1,h2,h3,h4,h5,h6),#message-body .markdown-heading{font:600 14px/1.6 var(--mono);margin:12px 0 8px}
 .conversation-text ul,.conversation-text ol{padding-left:22px;margin:8px 0}.conversation-text li p{margin:0}.conversation-text blockquote{margin:8px 0;padding-left:12px;border-left:2px solid var(--hair);color:var(--ink-dim)}
