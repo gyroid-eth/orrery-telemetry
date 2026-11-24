@@ -365,10 +365,10 @@ def test_mobile_compaction_observation_and_record(phone, provider, elapsed):
       .filter(el=>el.textContent.startsWith('Compacting context…'))"""
     wait(label + '.length===1')
     wait("document.querySelector('[data-id=" + sequence[0]['id'] + "]')!==null")
+    assert js(label + "[0].className") == 'conversation-activity'
+    assert js(label + '[0].textContent') == 'Compacting context…' + (' · '+elapsed if elapsed else '')
     if provider in {'claude', 'codex'}:
-        assert js("document.querySelector('.conversation-steps:not([hidden]) .conversation-steps-time').textContent") == elapsed
-    else:
-        assert js(label + '[0].textContent') == 'Compacting context…' + (' · '+elapsed if elapsed else '')
+        assert js("document.querySelector('.conversation-steps:not([hidden]) .conversation-steps-heading').textContent") == ''
     assert js(label + "[0].getBoundingClientRect().width<=document.querySelector('.conversation-list').clientWidth")
     capture('active')
 

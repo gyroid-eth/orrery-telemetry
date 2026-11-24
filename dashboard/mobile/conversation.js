@@ -213,9 +213,9 @@ SOFTWARE.
         card.working=working;card.waiting=waiting;
         const compacting=working&&current.reader_phase==='compacting';
         const finished=g.closed?(g.duration??card.lastWork):(card.lastWork??g.duration);
-        title(card,working?(compacting?'Compacting context…':'Working…'):waiting?'Waiting for you':
+        title(card,working?(compacting?'':'Working…'):waiting?'Waiting for you':
           finished!==null?'Worked for '+duration(finished):'Recorded work',working&&!compacting);
-        changed(card.clock,compacting?current.reader_phase_elapsed||'':working&&card.lastWork!==null?duration(card.lastWork):'');
+        changed(card.clock,working&&!compacting&&card.lastWork!==null?duration(card.lastWork):'');
         changed(card.count,'· '+g.steps.length+(g.steps.length===1?' step':' steps'));
         card.node.classList.toggle('is-paused',!visible);
         card.node.hidden=!g.steps.length&&!g.orphans&&!now;
@@ -306,7 +306,9 @@ function selectionReply(){
  const button=replySelection||make('button','reader-selection-reference','Reply with reference');button.type='button';
  button.style.left=Math.max(12,Math.min(box.left,innerWidth-238))+'px';button.style.top=top+'px';
  button.onpointerdown=event=>event.preventDefault();button.onmousedown=event=>event.preventDefault();
- button.onclick=()=>{if(terminal.reference(value)){selection.removeAllRanges();dismissReferenceSelection();}};
+ button.onclick=()=>terminal.reference(value,()=>{
+  selection.removeAllRanges();dismissReferenceSelection();
+ });
  if(!replySelection)document.querySelector('#terminal-sheet').append(button);replySelection=button;
 }
 document.addEventListener('selectionchange',selectionReply);
@@ -807,7 +809,7 @@ function activity(){
  const stepActivity=stepView?.activity(context,stepsVisible()),compacting=context.reader_phase==='compacting';
  list.querySelector('.conversation-activity')?.remove();
  const box=make('div','conversation-activity');
- if(compacting&&!(stepActivity&&a.state==='work')){
+ if(compacting){
   const elapsed=context.reader_phase_elapsed;
   box.textContent='Compacting context…'+(elapsed?' · '+elapsed:'');
  }else if(context.running&&a.state==='work'&&!stepActivity)box.textContent='Working'+(a.workDisplay?' · '+a.workDisplay:'');

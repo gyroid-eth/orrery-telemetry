@@ -90,6 +90,19 @@ def test_remove_reference_keeps_the_reply(phone):
     assert js("document.querySelector('#terminal-text').value")=='Keep this reply unchanged.'
 
 
+def test_reference_tap_keeps_the_composer_focused_at_the_end(phone):
+    client,js,wait,_=setup(phone)
+    text='This is the current draft'
+    draft(js,text)
+    js("document.querySelector('#terminal-text').setSelectionRange(3,3)")
+    stage(client,js,wait)
+    assert js("document.activeElement===document.querySelector('#terminal-text')"), js("document.activeElement.outerHTML.slice(0,160)")
+    assert js("getSelection().isCollapsed&&document.activeElement.selectionStart===document.activeElement.value.length")
+    capture(client,'mobile-caret')
+    client.call('Input.insertText', text='!')
+    assert js("document.querySelector('#terminal-text').value")==text+'!'
+
+
 def test_reference_and_reply_share_the_byte_limit(phone):
     client,js,wait,state=setup(phone)
     stage(client,js,wait)

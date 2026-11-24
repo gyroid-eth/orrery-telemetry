@@ -664,11 +664,14 @@ let replyReference=null,preparedReference=null;
 const referenceTarget=()=>target?JSON.stringify([name,capability?.epoch,target.choice,target.revision,selector?.mail_instance_id,selector?.mail_agent_id]):'';
 const referenceCurrent=value=>!value||value.target===referenceTarget()&&value.value.isCurrent();
 const referenceError=()=>replyReference&&!referenceCurrent(replyReference)?'Target or conversation changed. Remove this reference and select again.':'';
-function addReference(value){
+function addReference(value,beforeFocus){
  if(phase!=='editing'||!previewOK||!target||value.agent!==name||!value.isCurrent())return false;
+ beforeFocus?.();
  replyReference={value:{...value,text:value.text.replace(/\s+/gu,' ').trim()},target:referenceTarget()};
- render();window.OrreryReaderReplyMotion?.confirmReference?.(sheet.querySelector('.reader-reference-card'));
- q('#terminal-text')?.focus({preventScroll:true});return true;
+ render({restoreFocus:false});window.OrreryReaderReplyMotion?.confirmReference?.(sheet.querySelector('.reader-reference-card'));
+ const field=q('#terminal-text');
+ field?.focus({preventScroll:true});field?.setSelectionRange(field.value.length,field.value.length);
+ return true;
 }
 function refreshReference(){
  if(replyReference&&phase==='review'&&!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='';render();return;}
@@ -1287,11 +1290,11 @@ function readerReceipt(host){
  if(unknown)box.append(action('Check receipt','',status));
  host.append(box);return box;
 }
-function render(){
+function render({restoreFocus=true}={}){
  conversation()?.dismissReferenceSelection?.();
  rememberView();
  inputObserver?.disconnect();inputObserver=null;
- const focus=document.activeElement,hadFocus=focus&&sheet.contains?.(focus);if(hadFocus){sheet.tabIndex=-1;sheet.focus({preventScroll:true});}
+ const focus=document.activeElement,hadFocus=restoreFocus&&focus&&sheet.contains?.(focus);if(hadFocus){sheet.tabIndex=-1;sheet.focus({preventScroll:true});}
  const previous=q('#terminal-output');
  // Review/edit rebuild the sheet for the same pane. Choosing a pane and
  // reopening clear output first, so their new preview still opens at its tail.
