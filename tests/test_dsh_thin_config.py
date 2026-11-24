@@ -127,6 +127,26 @@ class ThinTests(unittest.TestCase):
         self.assertEqual(row['name'], '@deepseek-ai/dsh-mcp-client')
         self.assertEqual(row['config'], {'serverName': 'chrome-devtools', 'transport': 'stdio', **definition})
 
+    def test_mac_control_projects_only_the_managed_screen_client(self):
+        from hooks import child_tools
+
+        definition = {'command': '/fixture/python', 'args': ['-m', 'agentstack_mail.screen_mcp'],
+                      'env': {'AGENTSTACK_SCREEN_BINDING_FILE': '/fixture/binding.json'}}
+        spec = child_tools.normalize(tools={'mcp': ['cua-driver']}, platform='darwin')
+        selected = child_tools.native_plan(spec, cwd=str(self.root),
+            claude_json=str(self.root / 'absent.json'), managed_screen=definition, platform='darwin')
+        mcp = thin.read(self.doc['mcp_config'])
+        mcp['mcpServers'].update(selected['servers'])
+        thin.save(self.doc['mcp_config'], mcp)
+        plan = thin.generate({**self.doc, 'mcp_selection': selected})
+        clients = {row['config']['serverName']: row['config']
+                   for parent in self.rows(plan) for row in parent.get('insert', [])
+                   if row['name'] == '@deepseek-ai/dsh-mcp-client'}
+        self.assertEqual(set(clients), {*mcp['mcpServers']})
+        self.assertEqual(clients['orrery-screen'], {
+            'serverName': 'orrery-screen', 'transport': 'stdio', 'cwd': str(self.root), **definition,
+        })
+
     def test_dynamic_url_model_context_and_resume_pin_without_communication(self):
         manifest = thin.read(self.manifest)
         manifest['backends']['strata'] = {'model_source': 'server', 'urls': [

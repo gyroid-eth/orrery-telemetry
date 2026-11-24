@@ -170,13 +170,13 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 
 You can choose a child's tools when you start it, for example `/delegate "<task>" --base mail-only --tools screen:read:windows-mcp`. In `/api/spawn` the fields are `base` and `tools` ([API](api.en.md#post-apispawn)). `hooks/child_tools.py` is the single interpreter of both.
 
-- **`--base` omitted or `default`**: a Claude child's only MCP server is ORRERY Mail, while the browser (Claude in Chrome) and the macOS computer use still depend on the user's Claude settings and the child's working directory. A Codex child follows the `inherit` profile above. dsh and Hermes children inherit only the enabled Chrome MCP definition from Codex, alongside authenticated Mail (see below). Whatever `--tools` selects is added on top
+- **`--base` omitted or `default`**: a Claude child's only MCP server is ORRERY Mail, while the browser (Claude in Chrome) still depends on the user's Claude settings. A Codex child follows the `inherit` profile above. dsh and Hermes children inherit only the enabled Chrome MCP definition from Codex, alongside authenticated Mail (see below). Whatever `--tools` selects is added on top
 - **`--base mail-only`**: the child gets ORRERY Mail and only what `--tools` selects. A Claude child also gets `--no-chrome` unless a browser was selected. A Codex child gets the same disabling as `--codex-mcp orrery-only`, and then enables the selected servers and plugins (combining it with `--codex-mcp inherit` is rejected)
 
 | `--tools` | Claude child | Codex child |
 |---|---|---|
 | `browser` / `browser:<deviceId>` | `--chrome`, Claude Code approval for the 22 known tools, plus the deviceId instruction; browser-operation prompts still require a person to press Allow, and stop a headless child (the same as [Claude in Chrome](#claude-children-and-browser-control-claude-in-chrome); rejected when it names a different deviceId than `--claude-chrome-device`) | Enables the user's chrome-devtools server from `config.toml` (named `chrome-devtools`, or the one server that runs `chrome-devtools-mcp`), exposes only the tools in the table below and approves them one by one. A deviceId is Claude-only and is rejected. The launch stops when there is no such server or a wrapper script keeps the tools from being classified |
-| `screen` / `screen:operate` | The built-in macOS computer use. Starts only when it is enabled for the project of the child's directory (listed in `projects[<dir>].enabledMcpServers` of `~/.claude.json` and not in `disabledMcpServers`); otherwise the launch stops | Not available (a server name is required) |
+| `screen` / `screen:operate` / `screen:read` | On macOS, `orrery-screen` runs Cua Driver in Control or View mode | Same as Claude |
 | `screen:<read\|operate>:<server>` | Copies the user's screen server (such as Windows-MCP on WSL) into the strict config | Enables that server in the child's `config.toml` |
 | `mcp:<server>` | Copies the user's server definition into the strict config (no tool approved) | Enables that server in the child's `config.toml` (no tool approved) |
 | `mcp:<server>:all` | The same, and approves every tool the table knows | The same, and approves every tool the table knows, tool by tool |
@@ -251,15 +251,15 @@ What a screen selection exposes and approves is decided by the classification ta
 - `mcp:chrome-devtools:all` still needs a known pinned definition (`chrome-devtools-mcp@1.10.1`); Codex browser/operate approves the known names even without a version pin
 - This is Codex's tool approval only. The Chrome-side `--autoConnect` connection permission is separate, and a person still answers the Chrome connection prompt
 
-- The built-in macOS computer use and the macOS Codex screen and browser (which go through `node_repl`, a tool that runs arbitrary JS) cannot be read only, because their reading and operating are not separate tools
+[For the Mac screen relay and its View and Control permissions, see Computer use.](computer-use.md)
 
 ### Installer defaults
 
-`--child-default-tools 'mcp:cua-driver'` writes `AGENTSTACK_CHILD_DEFAULT_TOOLS` into env.sh, the service definition and install-state. The default is empty. Standard new launches of Claude, Codex, dsh and Hermes use it when the CLI omits `--base`, `--tools` and `--codex-mcp`, or when `/api/spawn` (including NEW AGENT) omits both `base` and `tools`.
+`--child-default-tools 'mcp:notes'` writes `AGENTSTACK_CHILD_DEFAULT_TOOLS` into env.sh, the service definition and install-state. The default is empty. Standard new launches of Claude, Codex, dsh and Hermes use it when the CLI omits `--base`, `--tools` and `--codex-mcp`, or when `/api/spawn` (including NEW AGENT) omits both `base` and `tools`.
 
-Append `;claude=SPEC`, `;codex=SPEC`, `;dsh=SPEC` or `;hermes=SPEC` after the common list to replace that provider's defaults. Each list uses the `--tools` grammar. Providers without an override use the common list. An empty override clears the installer defaults for that provider. For example, `--child-default-tools 'mcp:cua-driver;dsh='` gives `cua-driver` to Claude, Codex and Hermes and clears the installer defaults for dsh.
+Append `;claude=SPEC`, `;codex=SPEC`, `;dsh=SPEC` or `;hermes=SPEC` after the common list to replace that provider's defaults. Each list uses the `--tools` grammar. Providers without an override use the common list. An empty override clears the installer defaults for that provider. For example, `--child-default-tools 'mcp:notes;dsh='` gives `notes` to Claude, Codex and Hermes and clears the installer defaults for dsh.
 
-Defaults are checked for the provider and final directory, one item at a time. Applicable items remain, and omissions appear in spawn output and the child's first instructions. Explicit base/tools/MCP profiles take precedence. To suppress installer defaults, pass `--base default` on the CLI, or `base: "default"` or `tools: {}` in the API. Unavailable explicit tools and Mail proxy, authentication or startup failures stop the launch. Resume uses the selection recorded at launch and does not add current installer defaults. On macOS Codex, `screen:operate` without a named server is omitted and node_repl is not automatically approved.
+Defaults are checked for the provider and final directory, one item at a time. Applicable items remain, and omissions appear in spawn output and the child's first instructions. Explicit base/tools/MCP profiles take precedence. To suppress installer defaults, pass `--base default` on the CLI, or `base: "default"` or `tools: {}` in the API. Unavailable explicit tools and Mail proxy, authentication or startup failures stop the launch. Resume uses the selection recorded at launch and does not add current installer defaults. The macOS relay requires an explicit selection on each launch.
 
 ### Approval
 
@@ -283,10 +283,8 @@ A child started with `--base mail-only` or any `--tools` is stopped before tmux 
 
 - the ORRERY Mail proxy is unavailable (a child without a selection still falls back to the shared endpoint)
 - a selected server is missing or fails the checks above, or is not in the Codex `config.toml`
-- `mail-only` without the computer use selected, in a project where the computer use is enabled (macOS). The strict config does not remove the computer use, and a way to remove it has not been verified yet. Start the child in another directory or select `screen:operate`
 - `screen:read` or `mcp:<server>:all` with a server or version that is not in the table
 
-A `--worktree` child runs in its own directory (its own project), so the macOS computer use normally does not reach it.
 
 ### Screen on WSL and the Windows session
 
@@ -320,7 +318,7 @@ Native CLI verification (2026-10-05): Claude Code 2.1.289 resumed the same conve
 
 This is a policy for the child, not technical isolation. The child runs with the user's permissions and can edit its own config files and records, and the dashboard API does not authenticate its callers. Put the real guard for computer use where it is enforced: the per-application permission of the macOS computer use (granted by a person on screen), and the side that starts Windows-MCP (which tools it publishes).
 
-Tools changes use EXIT and resume. Adding tools in a running process and UI tool fields remain unavailable.
+Tool selections can change on resume. The operator can change the existing screen relay permission on a running launch. [Computer use API](api.en.md#computer-use-api)
 
 ## Browser and computer use: what is reachable, and what a person does
 
@@ -329,17 +327,17 @@ Agents that ORRERY starts (children and NEW AGENT) were checked for whether brow
 | | Mac | Windows (WSL2) |
 |---|---|---|
 | Claude × browser | Reachable; the 22 tools are approved in Claude Code per Chrome launch. Extension connection and access, and Allow for browser-operation prompts, require a person; a headless child stops at the prompt | Reachable; a deviceId is required. The 22 Claude Code approvals do not skip Claude in Chrome's Allow/Deny prompt (`tabs_create_mcp`, measured on 2026-10-06 with Ubuntu on WSL2 and Claude Code 2.1.290); a person must press Allow and a headless child stops |
-| Claude × computer use | Reachable only when computer use is enabled for the launch directory's project. The tool responded; operating it was not tried (each app is allowed by a person). | Hand Windows-MCP (an alternative to computer use) or similar over with `--tools screen:operate:<server>` ([selection](#choosing-the-tools-a-child-gets---base----tools) above). Successful operation was measured with a `claude -p` whose strict config had Windows-MCP added outside the product, not through this `--tools` path |
+| Claude × computer use | Use `orrery-screen` with Cua Driver. | Hand Windows-MCP (an alternative to computer use) or similar over with `--tools screen:operate:<server>` ([selection](#choosing-the-tools-a-child-gets---base----tools) above). Successful operation was measured with a `claude -p` whose strict config had Windows-MCP added outside the product, not through this `--tools` path |
 | Codex × browser | Selecting `--tools browser` adds child-only `required = true` and at least 60 seconds of startup wait to chrome-devtools; initialization failure stops startup. Tool approval is also needed ([approvals](#codex-children-and-mcp-approvals) above) | Provide the server through user config or an overlay. Selecting `--tools browser` adds child-only `required = true` and at least 60 seconds of startup wait; initialization failure stops startup. Tool approval and Chrome connection permission are separate |
-| Codex × computer use | Goes through `node_repl` and the bundled plugin. Listing apps was confirmed; each app is allowed by a person | Hand Windows-MCP (an alternative to computer use) over with `screen:<read\|operate>:<server>`; the selected server receives child-only `required = true` and at least 60 seconds of startup wait |
+| Codex × computer use | Use `orrery-screen` with Cua Driver. | Hand Windows-MCP (an alternative to computer use) over with `screen:<read\|operate>:<server>`; the selected server receives child-only `required = true` and at least 60 seconds of startup wait |
 
 How each launch path is affected:
 
 | Path | What reaches it |
 |---|---|
 | `/delegate` child | `--tools`, `--claude-chrome(-device)` and the overlay apply |
-| NEW AGENT (no parent, `--standalone`) | Codex builds the same generated home as a child, so the overlay and a `--tools` record apply. The approval policy comes from Codex configuration. Claude uses only what the NEW AGENT form says and ignores the `AGENTSTACK_CLAUDE_CHILD_CHROME` environment default. NEW AGENT has no `--tools` field yet |
-| resume | Codex rebuilds the home on every launch and resume, so the overlay applies. Claude restores the same settings from the launch record (a child without a record gets no ORRERY selection restored and simply inherits the user's Claude settings; that does not mean browser or computer use is absent) |
+| NEW AGENT (no parent, `--standalone`) | Codex builds the same generated home as a child, so the overlay and a `--tools` record apply. The approval policy comes from Codex configuration. Claude uses only what the NEW AGENT form says and ignores the `AGENTSTACK_CLAUDE_CHILD_CHROME` environment default. On macOS the Computer use field offers Off, View, and Control |
+| resume | Codex rebuilds the home on every launch and resume, so the overlay applies. Claude restores the same settings from the launch record (a child without a record inherits the user's Claude browser settings) |
 | `claude` / `codex` a person starts directly in a terminal | Out of scope. Only the real `~/.claude` and `~/.codex` settings decide, and ORRERY does not change them |
 
 If a person starting Codex directly wants the same permission, they write `default_tools_approval_mode = "approve"` (or a per-tool `approval_mode`) under `[mcp_servers.chrome-devtools]` in their own `~/.codex/config.toml`. That approves every tool of the server, including `evaluate_script`, which runs arbitrary page script. In an interactive launch where a person is watching, leaving it unset and answering the approval prompt is safer.
@@ -350,8 +348,7 @@ Besides setup, a person answers Claude in Chrome browser-operation prompts and c
 
 - **Claude in Chrome**: install the extension in the browser, sign in and keep it connected (a stopped extension fails even with correct agent settings). Pick a deviceId when several browsers are connected. A person must press Allow for its browser-operation prompts; the 22 Claude Code tool approvals do not let a headless child continue past them
 - **chrome-devtools (Codex)**: start the Chrome that `--autoConnect` attaches to (once). The connection permission is not once: Chrome asks a person each time the MCP server requests a connection, so a new child or a reconnect needs an answer. Approving the tool in Codex does not skip this Chrome prompt. The tools may be visible, but an unattended child cannot get a call to proceed until the Chrome connection prompt is answered
-- **Computer use (Mac)**: the per-app permission (`request_access`) is granted by a person on screen. It is separate from Codex's approval policy and is the same under `never` and `on-request`; an agent cannot proceed in an app that was not allowed beforehand. Screen Recording and Accessibility are granted once in macOS settings. Claude’s built-in computer use runs in one session at a time across the whole Mac. The lock is held until the Claude session that once used the computer use ends. Even when that session is not calling the computer use now, the child stops with `Computer use is in use by another Claude session` and no permission prompt appears (measured on 2026-10-06 with Claude Code on Mac)
-- **Claude computer use (Mac)**: enable it for the project you will launch in, from `/mcp` (`projects[<dir>].enabledMcpServers` in `~/.claude.json`)
+- **Computer use (Mac)** uses the Cua Driver app’s Screen Recording and Accessibility permissions. The operator sets Off, View, or Control per ORRERY launch. [Setup and permission changes](computer-use.md)
 - **Windows computer use (Windows-MCP)**: run Windows-MCP in an interactive session such as RDP. WSL started from ssh is in session 0 and cannot capture the screen
 
 Use the overlay for shared approvals and `--tools` to select the Chrome MCP server for a child. The overlay's `default_tools_approval_mode = "approve"` approves every tool of that server, including chrome-devtools' `evaluate_script`.

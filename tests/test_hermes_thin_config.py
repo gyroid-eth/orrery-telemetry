@@ -109,6 +109,31 @@ class ThinConfig(unittest.TestCase):
         overlay = config.read(Path(plan['config_dir']) / 'config.yaml')
         self.assertEqual(overlay['mcp_servers']['chrome-devtools'], {'enabled': True, **definition})
 
+    def test_mac_overlays_disable_bundled_computer_use_and_only_expose_managed_screen(self):
+        from hooks import child_tools
+
+        self.save(self.profile / 'config.yaml', {
+            'agent': {'disabled_toolsets': "['memory']"},
+            'mcp_servers': {'cua-driver': {'command': '/fixture/old-driver'}},
+        })
+        mcp = config.read(self.document['mcp_config'])
+        with patch.object(config.sys, 'platform', 'darwin'):
+            for screen in ({}, {'screen': 'operate'}):
+                definition = {'command': '/fixture/python', 'args': ['-m', 'agentstack_mail.screen_mcp']}
+                selection = child_tools.native_plan(child_tools.normalize(tools=screen),
+                    cwd=str(self.base), claude_json=str(self.base / 'absent.json'), managed_screen=definition)
+                self.save(Path(self.document['mcp_config']), {'mcpServers': {
+                    **mcp['mcpServers'], **selection['servers'],
+                }})
+                plan = self.generate(mcp_selection=selection)
+                overlay = config.read(Path(plan['config_dir']) / 'config.yaml')
+                self.assertEqual(overlay['agent']['disabled_toolsets'], ['memory', 'computer_use'])
+                self.assertEqual(overlay['mcp_servers']['cua-driver'], {'enabled': False})
+                if screen:
+                    self.assertEqual(overlay['mcp_servers']['orrery-screen'], {'enabled': True, **definition})
+                else:
+                    self.assertNotIn('orrery-screen', overlay['mcp_servers'])
+
     def test_dynamic_selected_url_and_model_ignore_old_per_model_settings(self):
         self.template_data['profiles']['strata'] = {'provider': 'fixture-api', 'key_cmd': self.profile_spec['key_cmd']}
         self.save(self.template, self.template_data)

@@ -21,13 +21,11 @@ def native_section():
 
 
 def test_claude_codex_procedure_remains_byte_identical():
-    # Protect the reviewed Claude/Codex procedure after the Codex defaults change.
-    # Since then the only intended change is show_files: the child template asks
-    # for it before reporting, and step 7 calls it when reporting to the user.
+    # Protect the reviewed procedure, including show_files and the macOS screen options.
     before, remainder = SKILL.read_bytes().split(START.encode(), 1)
     _, after = remainder.split(END.encode(), 1)
     assert hashlib.sha256(before + after).hexdigest() == (
-        '04407ac616c9e9df260e3d465cf7c98cc0c6b6d7937ade8e36c94f6c5d17477e')
+        '24647c264bd6958b4ae0ee1825ff8c7f2eb69cdd94454e85b6ffc46377baaced')
 
 
 def test_documented_request_uses_current_public_api_contract():

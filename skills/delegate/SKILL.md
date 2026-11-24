@@ -131,7 +131,7 @@ Users type this skill tersely, often without flags: `/delegate codex terra fix t
 | `--claude-chrome` | Start a Claude child with `--chrome` (Claude in Chrome). Claude children only |
 | `--claude-chrome-device <deviceId>` | Same, and tell the child which connected browser to use |
 | `--base mail-only` | Give the child ORRERY Mail and only what `--tools` selects (Claude also gets `--no-chrome` unless a browser is selected; Codex gets the `orrery-only` profile) |
-| `--tools <spec>` | Add a tool; repeatable or comma separated: `browser[:<deviceId>]` (Claude in Chrome on Claude; chrome-devtools on Codex), `screen` / `screen:operate` (macOS computer use, Claude only), `screen:<read\|operate>:<server>`, `mcp:<server>` (copied, no tool approved), `mcp:<server>:all` (every tool approved, including arbitrary code on that host; only when the user asked for it) |
+| `--tools <spec>` | Add a tool; repeatable or comma separated: `browser[:<deviceId>]` (Claude in Chrome on Claude; chrome-devtools on Codex), `screen` / `screen:operate` (macOS Control via `orrery-screen`), `screen:read` (macOS View via `orrery-screen`), `screen:<read\|operate>:<server>`, `mcp:<server>` (copied, no tool approved), `mcp:<server>:all` (every tool approved, including arbitrary code on that host; only when the user asked for it) |
 | anything else | part of the task text |
 
 The child's name is never taken from the arguments. Only an explicit `--name <Adjective-Scientist>` names a child; otherwise the registration helper picks one. A word such as `terra` is a model, not a name.

@@ -2979,7 +2979,9 @@ claude_child_launch_command() {
         inner+=' "$(cat "$CLAUDE_CHILD_PROMPT_FILE"; rm -f "$CLAUDE_CHILD_PROMPT_FILE")"'
     fi
     inner+='; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'
-    printf "%s -lc '%s'" "$CHILD_SHELL" "$inner"
+    # tmux evaluates this single command argument through a shell first.
+    local single_quote="'" quote_escape="'\"'\"'"
+    printf "%s -lc '%s'" "$CHILD_SHELL" "${inner//$single_quote/$quote_escape}"
 }
 
 # Appended to the child's first prompt when --claude-chrome is on. The same
@@ -2999,7 +3001,10 @@ claude_chrome_prompt_block() {
 # the selection cannot be honoured; the caller then stops before tmux.
 claude_tools_plan() {
     CLAUDE_CHILD_TOOL_FLAGS=""
-    [[ "$CHILD_TOOLS_RESTRICTIVE" == true || "$CLAUDE_CHILD_CHROME" == true ]] || return 0
+    if [[ "$CHILD_TOOLS_RESTRICTIVE" != true && "$CLAUDE_CHILD_CHROME" != true \
+          && "$(uname -s)" != Darwin ]]; then
+        return 0
+    fi
     local flags spec
     spec="$CHILD_TOOLS_SPEC"
     # Legacy --claude-chrome requests have no parsed base/tools selection.
@@ -3008,10 +3013,7 @@ claude_tools_plan() {
         --cwd "$WORK_DIR" \
         --chrome "$([[ "$CLAUDE_CHILD_CHROME" == true ]] && echo 1 || echo 0)" \
         --claude-json "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}")" || return 1
-    if ! [[ "$flags" =~ ^[A-Za-z0-9_,.:\ -]*$ ]]; then
-        echo "Error: unexpected characters in the child's tool flags" >&2
-        return 1
-    fi
+    # child_tools emits a shell-quoted argv from a validated tool selection.
     CLAUDE_CHILD_TOOL_FLAGS="$flags"
 }
 
@@ -3716,7 +3718,7 @@ ${TASK}"
         WARM_CLAIMED=false
         WARM_STATUS=$(bash "$WARM_POOL" status 2>/dev/null || true)
         if [[ "$CLAUDE_CHILD_CHROME" != true && "$CHILD_TOOLS_RESTRICTIVE" != true \
-                && -z "$CHILD_DEFAULT_TOOLS_NOTICE" && -f "$WARM_POOL" ]] \
+                && -z "$CLAUDE_CHILD_TOOL_FLAGS" && -z "$CHILD_DEFAULT_TOOLS_NOTICE" && -f "$WARM_POOL" ]] \
             && warm_pool_has_model "$WARM_TYPE" "$CHILD_MODEL" "$WARM_STATUS"; then
             echo "[spawn_child/pre-reg] Claiming warm pool session ($WARM_TYPE, $CHILD_MODEL)..." >&2
             WARM_CLAIM_STATUS=0
