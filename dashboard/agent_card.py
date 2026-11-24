@@ -132,14 +132,18 @@ def tool_permissions(spec, servers, *, chrome=False, isolated=False):
 
 
 def _cua_control(server):
-    # The standard local transport exposes control. A filter, capability
-    # manifest, or wrapper leaves its actual mode unspecified here.
+    # A relay can pass through the standard local command. Filters and
+    # environment overrides still leave the mode unspecified.
     if not isinstance(server, dict):
         return False
-    command, env = server.get("command"), server.get("env", {})
+    command, args, env = server.get("command"), server.get("args"), server.get("env", {})
+    if not isinstance(command, str) or not command or not isinstance(args, list) or not args:
+        return False
+    if not all(isinstance(arg, str) for arg in args):
+        return False
+    argv = [command, *args]
     return (server.get("enabled") is not False
-            and isinstance(command, str) and os.path.basename(command) == "cua-driver"
-            and server.get("args") == ["mcp"]
+            and os.path.basename(argv[-2]) == "cua-driver" and argv[-1] == "mcp"
             and not any(key in server for key in ("enabled_tools", "disabled_tools", "tools", "omit_tools_from"))
             and isinstance(env, dict)
             and not any(key.startswith("CUA_DRIVER_") for key in env)
