@@ -99,7 +99,8 @@ def test_owner_and_outer_authority_accept_originless_get_and_assets(reader):
     assert status==200 and b'OrreryNetworkNode' in body
     status,_,css=request(port,'/network.css')
     assert status==200 and b'--serif:' in css and b'--ln-local:' in css
-    for font in ('fraunces-normal','fraunces-italic','ibm-plex-mono-400','ibm-plex-mono-500','ibm-plex-mono-600'):
+    for font in ('fraunces-normal','fraunces-italic','ibm-plex-mono-400','ibm-plex-mono-500','ibm-plex-mono-600',
+                 'ibm-plex-sans','ibm-plex-sans-jp-400'):
         status,headers,body=request(port,'/fonts/'+font+'.woff2')
         assert status==200 and headers['Content-Type']=='font/woff2' and body[:4]==b'wOF2'
         assert request(port,'/fonts/'+font+'.woff2',headers={'Host':'viewer.example.ts.net:9443'})[0]==403

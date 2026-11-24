@@ -23,6 +23,9 @@ html[data-demo="on"] .reader-person::after,html[data-demo="on"] .mobile-brand::a
 @font-face{font-family:'IBM Plex Mono';src:url('/fonts/ibm-plex-mono-400.woff2') format('woff2');font-style:normal;font-weight:400;font-display:swap}
 @font-face{font-family:'IBM Plex Mono';src:url('/fonts/ibm-plex-mono-500.woff2') format('woff2');font-style:normal;font-weight:500;font-display:swap}
 @font-face{font-family:'IBM Plex Mono';src:url('/fonts/ibm-plex-mono-600.woff2') format('woff2');font-style:normal;font-weight:600;font-display:swap}
+@font-face{font-family:'IBM Plex Sans';src:url('/fonts/ibm-plex-sans.woff2') format('woff2');font-style:normal;font-weight:400 600;font-display:swap}
+@font-face{font-family:'IBM Plex Sans JP';src:url('/fonts/ibm-plex-sans-jp-400.woff2') format('woff2');font-style:normal;font-weight:400;font-display:swap;
+  unicode-range:U+3000-30FF,U+31F0-31FF,U+3400-9FFF,U+F900-FAFF,U+FF00-FFEF,U+20000-2FA1F}
 html {
   background:var(--bg);
   color-scheme:dark;
@@ -583,21 +586,34 @@ html.graph-fullscreen #settings{z-index:40}
 .conversation-mode>*{flex:none}.conversation-mode>.conversation{flex:1;min-height:120px;display:flex;flex-direction:column}
 .mobile .conversation-status{flex:none;margin:0 0 6px;font:9px/1.6 var(--mono);color:var(--ink-dim)}
 .conversation-list{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:10px;padding:2px 0 10px;scrollbar-width:thin}
+.conversation-list{--reader-sans:'IBM Plex Sans','IBM Plex Sans JP',system-ui,sans-serif;--reader-text-size:13px}
+@media(max-width:420px){.conversation-list{--reader-text-size:12.5px}}
 .conversation-list>*{flex:none}
 .mobile .conversation-older{align-self:center;border:1px solid var(--hair);border-radius:6px;background:none;color:var(--ink-dim);font:10px var(--mono);padding:7px 11px}
 .conversation-bubble{max-width:86%;padding:9px 11px;border-radius:12px;font:12px/1.65 var(--mono);color:var(--ink);overflow-wrap:anywhere}
-.conversation-bubble.user{align-self:flex-end;background:color-mix(in srgb,var(--amber) 12%,var(--bg));border:1px solid color-mix(in srgb,var(--amber) 35%,transparent);border-bottom-right-radius:3px}
+.conversation-bubble.user{align-self:flex-end;min-width:0;max-width:84%;padding:0;border:0;border-radius:0}
+.conversation-bubble.user:not(.conversation-has-reference),.conversation-reference-body{
+  box-sizing:border-box;width:fit-content;max-width:100%;margin-inline-start:auto;padding:9px 12px 9px 26px;
+  background:linear-gradient(270deg,rgb(var(--theme-accent-rgb) / .115),rgb(var(--theme-accent-rgb) / .05) 62%,transparent);
+  overflow-wrap:anywhere;text-align:right;
+}
+.conversation-bubble.user:not(.conversation-has-reference){max-width:84%}
+.conversation-bubble>.conversation-text,.conversation-reference-body>.conversation-text{font:var(--reader-text-size)/1.7 var(--reader-sans)}
 .conversation-bubble.assistant{align-self:flex-start;background:var(--bg);border:1px solid var(--hair);border-bottom-left-radius:3px}
 .conversation-pending{opacity:.65;border-style:dashed}
-.mobile .conversation-reply-reference{display:block;width:100%;min-height:44px;margin:0 0 7px;padding:5px 8px;
-  border:0;border-inline-start:2px solid var(--amber);border-radius:4px;background:var(--panel);color:var(--ink);text-align:left}
-.conversation-reply-reference-head{display:flex;align-items:baseline;gap:7px;color:var(--ink-dim);font:10px/1.5 var(--mono)}
-.conversation-reply-reference-agent{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
-.conversation-reply-reference-time,.conversation-reply-reference-icon{flex:none;white-space:nowrap}
-.conversation-reply-reference-icon{margin-inline-start:auto;color:var(--amber);font-size:13px}
-.conversation-reply-reference-quote{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;
-  overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.5 var(--mono)}
-.mobile .conversation-reply-reference[aria-disabled=true]{border-inline-start-color:var(--hair);cursor:default}
+.mobile .conversation-reply-reference{
+  display:flex;align-items:center;gap:6px;max-width:100%;min-height:32px;margin:0 0 2px auto;padding:2px 10px;
+  border:0;border-radius:0;background:none;color:var(--ink-dim);font:11px/1.45 var(--reader-sans);text-align:left;
+}
+.mobile .conversation-reply-reference:hover:not([aria-disabled=true]){color:var(--ink)}
+.mobile .conversation-reply-reference[aria-disabled=true]{cursor:default}
+.mobile .conversation-reply-reference[aria-busy=true]{cursor:progress}
+.conversation-reply-reference .conversation-avatar{flex:none;width:16px;height:16px}
+.conversation-reply-reference .conversation-avatar .initials{font-size:9px}
+.conversation-reply-reference .conversation-avatar .badge{display:none}
+.conversation-reply-reference-agent,.conversation-reply-reference-quote{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conversation-reply-reference-agent{flex:0 0 auto;max-width:40%;font-weight:600}
+.conversation-reply-reference-icon{flex:none;margin-inline-start:auto;font:15px/1 system-ui,sans-serif}
 .conversation-reply-reference[aria-disabled=true] .conversation-reply-reference-icon{visibility:hidden}
 .conversation-text p{margin:0 0 6px;white-space:pre-wrap}.conversation-text p:last-child{margin-bottom:0}
 .mobile .conversation-code{margin:4px 0 6px;padding:7px 8px;background:color-mix(in srgb,var(--shade) 25%,transparent);border-radius:6px;font:10.5px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
@@ -666,9 +682,11 @@ html.graph-fullscreen #settings{z-index:40}
 .reader-fullscreen .conversation-mode>.conversation{min-height:0}
 .reader-fullscreen .conversation-list{padding:calc(60px + env(safe-area-inset-top)) 0 calc(82px + env(safe-area-inset-bottom));gap:14px;scrollbar-width:none;scroll-padding-top:calc(60px + env(safe-area-inset-top));scroll-padding-bottom:calc(82px + env(safe-area-inset-bottom))}
 .reader-fullscreen .conversation-bubble.assistant{align-self:stretch;max-width:100%;padding:0;background:none;border:0;border-radius:0;font:13px/1.7 var(--mono)}
-.reader-fullscreen .conversation-bubble.user{max-width:90%;padding:7px 10px}
-.mobile .conversation-list .conversation-reference-target{box-shadow:inset 0 1px var(--amber),inset 0 -1px var(--amber);
-  background:color-mix(in srgb,var(--amber) 9%,var(--bg))}
+.mobile .conversation-list .conversation-reference-target{animation:conversation-reference-flash 1.55s ease-out both}
+@keyframes conversation-reference-flash{from{background-color:rgb(var(--theme-accent-rgb) / .20)}to{background-color:transparent}}
+@media(prefers-reduced-motion:reduce){
+  .mobile .conversation-list .conversation-reference-target{animation:none;background-color:rgb(var(--theme-accent-rgb) / .14)}
+}
 .mobile .conversation-list [data-id][tabindex="-1"]:focus-visible{outline:1px solid var(--amber);outline-offset:2px}
 .reader-fullscreen .conversation-text p{margin:0 0 10px;white-space:pre-wrap}
 .reader-fullscreen .conversation-text :is(h1,h2,h3,h4,h5,h6),#message-body .markdown-heading{font:600 14px/1.6 var(--mono);margin:12px 0 8px}
@@ -703,7 +721,7 @@ html.graph-fullscreen #settings{z-index:40}
 html[data-color-theme=light] .conversation-byline .provider-logo,html[data-color-theme=light] .conversation-mail-mark .provider-logo{filter:brightness(0)}
 html[data-color-theme=light] .conversation-avatar .provider-seat{fill:var(--panel)}
 html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-local-ring){stroke:var(--hair)}
-.conversation-speaker-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 12px/1.6 var(--mono)}
+.conversation-speaker-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 12px/1.55 var(--reader-sans)}
 .mobile .conversation-speaker-time{flex:none;margin-left:auto;white-space:nowrap;font:9px var(--mono);color:var(--ink-dim)}
 
 /* Mail is a route and recorded content, separate from a human message. */

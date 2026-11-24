@@ -36,14 +36,22 @@ def test_recorded_reply_separates_literal_quote_and_preserves_body(phone):
     observed = js(f"""(()=>{{const card={CARD},bubble=card.closest('[data-id]'),
       quote=card.querySelector('.conversation-reply-reference-quote'),body=bubble.querySelector('.conversation-text');
       return {{quote:quote.textContent,title:card.title,label:card.getAttribute('aria-label'),
-        clock:card.querySelector('time').textContent,body:body.textContent,link:body.querySelector('a').href,
-        literal:quote.childElementCount===0,ordered:card.nextElementSibling===body,
-        lines:getComputedStyle(quote).webkitLineClamp,
-        optionalClock:!!document.querySelector('[data-id=no-clock] .conversation-reply-reference time')}};
+        portrait:new URL(card.querySelector('.conversation-avatar img')?.src||location.href).searchParams.get('name'),
+        fallback:card.querySelector('.conversation-avatar .initials')?.textContent??'',
+        arrow:card.lastElementChild.textContent,body:body.textContent,link:body.querySelector('a').href,
+        literal:quote.childElementCount===0,ordered:card.nextElementSibling===body.parentElement,
+        whiteSpace:getComputedStyle(quote).whiteSpace,overflow:getComputedStyle(quote).textOverflow,
+        hasTime:!!card.querySelector('time'),
+        noClock:document.querySelector('[data-id=no-clock] .conversation-reply-reference').getAttribute('aria-label')}};
     }})()""")
-    assert observed == dict(quote=quote, title=quote, label='Jump to quoted message from SampleAgent at 09:35 JST',
-                            clock='09:35', body=body, link='https://example.test/report', literal=True,
-                            ordered=True, lines='3', optionalClock=False)
+    assert observed['portrait'] == 'SampleAgent' or observed['fallback'] == 'S'
+    observed.pop('portrait')
+    observed.pop('fallback')
+    assert observed == dict(quote=quote.split('\n')[0], title='quoted message from SampleAgent at 09:35 JST\n'+quote,
+                            label='Jump to quoted message from SampleAgent at 09:35 JST',
+                            arrow='↗', body=body, link='https://example.test/report', literal=True, ordered=True,
+                            whiteSpace='nowrap', overflow='ellipsis', hasTime=False,
+                            noClock='Jump to quoted message from SampleAgent')
 
 
 def test_incomplete_or_non_user_replies_stay_literal(phone):
@@ -110,3 +118,50 @@ def test_reference_outside_loaded_record_reports_unavailable(phone, older):
     assert js(f"""(()=>{{const list=document.querySelector('.conversation-list'),top=list.scrollTop;
       {CARD}.click();return list.scrollTop===top&&!list.querySelector('.conversation-reference-target');}})()""")
     assert sum('page=' in path for path in state['get_calls']) == before
+
+
+@pytest.mark.parametrize('theme', ['dark', 'light'])
+def test_thread_and_wash_use_the_cockpit_layout_on_a_phone(phone, theme):
+    _, js, _, state = phone
+    if theme == 'light':
+        js("document.getElementById('mobile-theme').click()")
+    publish(phone, event('first', '確認用の画像をもう一度見せてください。', 'user'),
+            event('reply', reply('result', '色数を減らし、凡例が読み取れるようにします。' * 5,
+                                'その配置で進めて。ラベルの字も少し大きくしてほしい。'), 'user'))
+    structure = js(f"""(async()=>{{await document.fonts.ready;
+      const card={CARD},wash=card.nextElementSibling,first=document.querySelector('[data-id=first]');
+      const layout=node=>{{const style=getComputedStyle(node);return {{
+        radius:style.borderRadius,border:style.borderRightWidth,fill:style.backgroundImage,font:style.fontFamily,
+        width:node.clientWidth,right:node.getBoundingClientRect().right
+      }}}};
+      const q=card.querySelector('.conversation-reply-reference-quote');
+      const name=card.querySelector('.conversation-reply-reference-agent');
+      return {{theme:document.documentElement.dataset.colorTheme,screen:innerWidth,
+        fontPx:getComputedStyle(wash.querySelector('.conversation-text')).fontSize,
+        latin:document.fonts.check('400 12.5px "IBM Plex Sans"','Reader'),
+        jp:document.fonts.check('400 12.5px "IBM Plex Sans JP"','確認'),
+        first:layout(first),wash:layout(wash),card:layout(card),quoteTruncates:q.clientWidth<q.scrollWidth,
+        nameFits:name.clientWidth>=name.scrollWidth,
+        gap:wash.getBoundingClientRect().top-card.getBoundingClientRect().bottom}};
+    }})()""")
+    assert structure['theme'] == theme and structure['screen'] == 390
+    assert structure['fontPx'] == '12.5px' and structure['latin'] and structure['jp']
+    assert '/fonts/ibm-plex-sans.woff2' in state['get_calls']
+    assert '/fonts/ibm-plex-sans-jp-400.woff2' in state['get_calls']
+    assert structure['quoteTruncates'] and structure['nameFits'] and structure['gap'] <= 3
+    for part in ['first', 'wash', 'card']:
+        assert structure[part]['border'] == '0px' and structure[part]['radius'] == '0px'
+    assert structure['first']['fill'].startswith('linear-gradient(270deg')
+    assert structure['wash']['fill'] == structure['first']['fill']
+    assert structure['card']['fill'] == 'none'
+    assert structure['card']['right'] == structure['wash']['right'] == structure['first']['right']
+
+
+def test_jump_remains_highlighted_briefly_with_reduced_motion(phone):
+    client, js, wait, _ = phone
+    client.call('Emulation.setEmulatedMedia', features=[dict(name='prefers-reduced-motion', value='reduce')])
+    publish(phone, event('reply', reply('result'), 'user'))
+    js(CARD + '.click()')
+    assert js("getComputedStyle(document.querySelector('.conversation-reference-target')).animationName") == 'none'
+    assert js("getComputedStyle(document.querySelector('.conversation-reference-target')).backgroundColor") != 'rgba(0, 0, 0, 0)'
+    wait("!document.querySelector('.conversation-reference-target')", 4)

@@ -467,7 +467,7 @@ function updateReferenceCards(){
   const ref=referenceCards.get(card);
   const available=recordConfirmed&&(referenceRow(ref.id)||older&&events.length<MAX_KEPT&&older!==ref.failedCursor);
   card.setAttribute('aria-disabled',String(!available));
-  card.title=available?ref.quote:ref.quote+'\n\n'+missingReference;
+  card.title=ref.label+'\n'+ref.quote+(available?'':'\n\n'+missingReference);
   card.setAttribute('aria-label',available?'Jump to '+ref.label:ref.label+'. '+missingReference);
  }
 }
@@ -496,24 +496,26 @@ async function jumpReference(card,ref){
   following=atBottom();savedTop=list.scrollTop;
   target.tabIndex=-1;target.focus({preventScroll:true});
   clearReferenceFlash();referenceFlash=target;target.classList.add('conversation-reference-target');
-  referenceTimer=setTimeout(clearReferenceFlash,1800);
+  referenceTimer=setTimeout(clearReferenceFlash,1550);
  }finally{
   if(referenceJump===card)referenceJump=null;
   card.removeAttribute('aria-busy');if(current())updateReferenceCards();
  }
 }
 function referenceCard(ref){
- const card=make('button','conversation-reply-reference'),head=make('span','conversation-reply-reference-head');
+ const card=make('button','conversation-reply-reference');
  card.type='button';
- const name=make('strong','conversation-reply-reference-agent',ref.agent),arrow=make('span','conversation-reply-reference-icon','↖');
- name.title=ref.agent;arrow.setAttribute('aria-hidden','true');head.append(name);
  const at=ref.ts?referenceClock.format(Date.parse(ref.ts)):'';
- if(at){const time=make('time','conversation-reply-reference-time',at);time.dateTime=ref.ts;time.title=at+' JST';head.append(time);}
- head.append(arrow);
- const quote=make('span','conversation-reply-reference-quote',ref.quote);
+ const portrait=/^[A-Za-z0-9_-]{1,64}$/.test(ref.agent)&&window.OrreryMobileProfile?.face(ref.agent);
+ const avatar=portrait||make('span','face');
+ if(!portrait)avatar.append(make('span','initials',Array.from(ref.agent)[0]));
+ avatar.classList.add('conversation-avatar');avatar.setAttribute('aria-hidden','true');
+ const name=make('span','conversation-reply-reference-agent',ref.agent);
+ const quote=make('span','conversation-reply-reference-quote',ref.quote.trimStart().split('\n',1)[0].trimEnd());
  quote.id='reader-reply-quote-'+(++referenceSerial);card.setAttribute('aria-describedby',quote.id);
+ const arrow=make('span','conversation-reply-reference-icon','↗');arrow.setAttribute('aria-hidden','true');
  ref.label='quoted message from '+ref.agent+(at?' at '+at+' JST':'');
- referenceCards.set(card,ref);card.append(head,quote);card.onclick=()=>jumpReference(card,ref);
+ referenceCards.set(card,ref);card.append(avatar,name,quote,arrow);card.onclick=()=>jumpReference(card,ref);
  return card;
 }
 function mailCard(m,ts,images){
@@ -557,19 +559,26 @@ function row(e){
  if(e.kind==='tool'){const r=make('div','conversation-tool');r.append(make('span','conversation-tool-label',e.text));r.dataset.id=e.id;files(e,r);if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));return r;}
  if(e.kind==='mail'){const r=make('div','conversation-mails');r.dataset.id=e.id;e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));return r;}
  const command=e.role==='user'&&markdown()?.commandRecord(e.text);
+ const human=e.kind==='text'&&e.role==='user'&&!command;
  const r=make('div',command?.shell?'conversation-shell':'conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
+ const time=clock(e.ts);
+ if(human)r.title=time?'You · '+time:'You';
  if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(e.text,r);}
  else{
-  const reference=e.role==='user'&&e.kind==='text'&&!e.truncated&&replyReference(e.text);
+  const reference=human&&!e.truncated&&replyReference(e.text);
   if(e.role==='assistant')r.append(speaker(e));
-  if(reference)r.append(referenceCard(reference));
-  r.append(body(reference?reference.reply:e.text,e.role==='assistant',e.markdown_images));
+  const text=body(reference?reference.reply:e.text,e.role==='assistant',e.markdown_images);
+  if(reference){
+   r.classList.add('conversation-has-reference');
+   const wash=make('div','conversation-reference-body');wash.append(text);
+   r.append(referenceCard(reference),wash);
+  }else r.append(text);
  }
  if(command||e.role==='assistant')window.OrreryReaderReplyMotion?.enhanceCopies?.(r);
 
  if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));
  files(e,r);
- const meta=[e.role==='assistant'&&!command?'':clock(e.ts),e.truncated?'shortened':''].filter(Boolean).join(' · ');if(meta)r.append(make('small','conversation-time',meta));
+ const meta=[human||e.role==='assistant'&&!command?'':time,e.truncated?'shortened':''].filter(Boolean).join(' · ');if(meta)r.append(make('small','conversation-time',meta));
  return r;
 }
 function chip(x){

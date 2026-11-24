@@ -237,7 +237,8 @@ def static_assets(root=HERE):
     }
     for icon in ('orbit-192.png','orbit-512.png','orbit-maskable-512.png','apple-touch-icon.png'):
         fixed['/icons/'+icon]=(root/'mobile/icons'/icon,'image/png')
-    for font in ('fraunces-normal','fraunces-italic','ibm-plex-mono-400','ibm-plex-mono-500','ibm-plex-mono-600'):
+    for font in ('fraunces-normal','fraunces-italic','ibm-plex-mono-400','ibm-plex-mono-500','ibm-plex-mono-600',
+                 'ibm-plex-sans','ibm-plex-sans-jp-400'):
         fixed['/fonts/'+font+'.woff2']=(root/'mobile/fonts'/(font+'.woff2'),'font/woff2')
     for logo in ('orbit','orbit-light','anthropic','openai','google','qwen','glm'):
         fixed['/assets/'+logo+'.svg']=(root/'assets'/(logo+'.svg'),'image/svg+xml')
