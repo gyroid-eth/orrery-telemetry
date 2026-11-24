@@ -961,11 +961,11 @@ function inputError(value){
 function validText(value){return typeof value==='string'&&value.trim()&&!inputError(value);}
 function clearAttachments(){for(const attachment of attachments)if(attachment.url)URL.revokeObjectURL(attachment.url);attachments=[];}
 const draftText=()=>[text.replace(/[\r\n]+$/u,''),...attachments.map(attachment=>attachment.marker)].filter(Boolean).join(' ');
-const inputText=()=>{
- if(!replyReference)return draftText();
+const inputText=(draft=draftText())=>{
+ if(!replyReference)return draft;
  const r=replyReference.value;
  const heading=r.agent+' · '+r.role+(r.ts?' · '+r.ts:'');
- return 'Reference: '+heading+' | Recorded message: '+r.eventId+' | Quote: '+JSON.stringify(r.text)+' | Reply: '+draftText();
+ return 'Reference: '+heading+' | Recorded message: '+r.eventId+' | Quote: '+JSON.stringify(r.text)+' | Reply: '+draft;
 };
 const inputValid=()=>validText(draftText())&&validText(inputText())&&referenceCurrent(replyReference);
 function inputErrorNote(){
@@ -1067,13 +1067,14 @@ async function uploadAttachments(files,source){
    const data=await readAttachment(file,controller.signal);
    if(g!==generation||controller.signal.aborted)return;
    const result=await request(kind,{epoch:capability.epoch,choice:t.choice,revision:t.revision,
+    ...(file.name&&{label:file.name.slice(0,256)}),
     [kind]:kind==='image'?data:{format:type.format,data}},controller,30000);
    if(g!==generation||!sheet.open||document.hidden)return;
    if(result.enabled!==true||result.target?.choice!==t.choice||result.target?.revision!==t.revision||
     !sameTarget(result.target)||typeof result.path!=='string'||!result.path.startsWith('/'))throw Error('unavailable');
    const quoted="'"+result.path.replaceAll("'","'\\''")+"'",marker='['+kind+': '+quoted+']';
    if(!validText([inputText(),marker].filter(Boolean).join(' ')))throw Error(kind+'_text_too_large');
-   attachments.push({kind,marker,label:file.name,url:kind==='image'?URL.createObjectURL(file):null});
+   attachments.push({kind,marker,label:file.name,file,url:kind==='image'?URL.createObjectURL(file):null});
   }
   message='';
  }catch(error){
@@ -1115,11 +1116,12 @@ async function send(){
  sendFeedback?.begin(q('.reader-send-confirm'));
  const box=q('.terminal-exact')?.getBoundingClientRect();
  const origin=box&&{top:box.top,right:box.right,width:box.width};
+ const display={text:inputText(text.replace(/[\r\n]+$/u,'')),attachments:attachments.map(({kind,label,file})=>({kind,label,file}))};
  const p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target,
-  text:prepared.text,origin,at:Date.now(),display:null};
+  text:prepared.text,origin,at:Date.now(),display,pending:null};
  prepared=null;preparedReference=replyReference=null;receipt=p;text='';clearAttachments();clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,controller=new AbortController();operationController=controller;phase='sending';message='';render();
- if(history&&tab==='conversation')p.display=conversation()?.beginPending(p.text,origin);
+ if(history&&tab==='conversation')p.pending=conversation()?.beginPending(p.text,origin,p.display);
  try{
   const result=await request('commit',{epoch:p.epoch,intent:p.intent,confirmation:p.confirmation},controller,7000);
   if(g!==generation||!sheet.open||document.hidden)return;
@@ -1137,10 +1139,11 @@ function showSendReceipt(p){
   const reader=conversation();
   // The verified record remains authoritative. The local copy only shows
   // this send while terminal confirmation and the matching record arrive.
-  if(p.display)reader?.finishPending(p.display,accepted);
-  else if(accepted)reader?.addPending(p.text,p.origin,p.at);
+  if(p.pending)reader?.finishPending(p.pending,accepted);
+  else if(accepted)reader?.addPending(p.text,p.origin,p.display,p.at);
   if(accepted)window.OrreryReaderReplyMotion?.acknowledge(q('.reader-bar h2'));
  }
+ if(phase!=='unknown')p.display=null;
  if(accepted)scheduleReceiptDismissal();
 }
 function scheduleReceiptDismissal(){
