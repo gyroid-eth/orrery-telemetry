@@ -61,7 +61,7 @@ def test_incomplete_or_non_user_replies_stay_literal(phone):
                valid.replace('\n> ', '\n>'), valid.replace('\n\n', '\n'),
                valid.replace('2026-11-24T00:35:14.342Z', 'not a time'), 'Leading text\n'+valid,
                reply('result', quote=' '), reply('result', body=' \n'), valid.rsplit('\n', 2)[0],
-               'Reference: SampleAgent · assistant · 2026-11-24T00:35:14Z | Recorded message: result | Quote: "sample" | Reply: answer']
+               r'Reference: SampleAgent · assistant · 2026-11-24T00:35:14Z | Recorded message: result | Quote: "\q" | Reply: answer']
     events = [event(f'bad-{i}', text, 'user') for i, text in enumerate(invalid)]
     events += [event('bad-assistant', valid), event('bad-truncated', valid, 'user', truncated=True)]
     publish(phone, *events)

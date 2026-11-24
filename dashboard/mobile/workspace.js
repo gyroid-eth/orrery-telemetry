@@ -716,8 +716,8 @@
       fold(true);
     }, true);
     const reference = OrreryMobileTerminal.reference;
-    OrreryMobileTerminal.reference = value => {
-      const accepted = reference(value);
+    OrreryMobileTerminal.reference = (value, beforeFocus) => {
+      const accepted = reference(value, beforeFocus);
       if (accepted && compact) open(true);
       return accepted;
     };

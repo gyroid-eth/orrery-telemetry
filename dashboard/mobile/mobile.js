@@ -22,7 +22,15 @@ let readingView='graph',tabletLayout=tabletView.matches;
 let snapshot=null,kind='all',agentFilter='',desiredWindow='day',timer=0,active=null,pending=false,receivedAt=0,lastNotices=[];
 const mailRef=a=>a&&/^[a-f0-9]{32}$/.test(a.mail_instance_id)&&Number.isSafeInteger(a.mail_agent_id)&&a.mail_agent_id>0?{mail_instance_id:a.mail_instance_id,mail_agent_id:a.mail_agent_id}:null;
 function markRef(element,value){if(typeof value?.name==='string')element.dataset.agentName=value.name;const ref=mailRef(value);if(ref){element.dataset.mailInstanceId=ref.mail_instance_id;element.dataset.mailAgentId=String(ref.mail_agent_id);}}
-window.OrreryMobileAgent={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?{state:rows[0].act_state,running:rows[0].running,workDisplay:typeof rows[0].work_disp==='string'?rows[0].work_disp:'',stale:snapshot.sources.agents.status!=='available'||snapshot.sources.agents.age_seconds===null||snapshot.sources.agents.age_seconds+(performance.now()-receivedAt)/1000>30}:null;}};
+window.OrreryMobileAgent={forName(name){
+ const rows=(snapshot?.agents||[]).filter(a=>a.name===name);
+ if(rows.length!==1)return null;
+ const [a]=rows;
+ return {state:a.act_state,running:a.running,workDisplay:typeof a.work_disp==='string'?a.work_disp:'',
+  readerPhase:a.reader_phase,readerPhaseElapsed:a.reader_phase_elapsed,
+  stale:snapshot.sources.agents.status!=='available'||snapshot.sources.agents.age_seconds===null||
+   snapshot.sources.agents.age_seconds+(performance.now()-receivedAt)/1000>30};
+}};
 window.OrreryMobileIdentity={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?mailRef(rows[0]):null;},roster(){const source=snapshot?.sources.agents;return source?.status==='available'&&source.age_seconds!==null&&source.age_seconds+(performance.now()-receivedAt)/1000<=30?snapshot.agents:null;}};
 let mailPage=null,mailPositions=[null],mailPosition=0,mailController=null,mailGeneration=0;
 let pair=null,pairController=null,pairGeneration=0,detailController=null,detailGeneration=0;
@@ -656,11 +664,14 @@ let replyReference=null,preparedReference=null;
 const referenceTarget=()=>target?JSON.stringify([name,capability?.epoch,target.choice,target.revision,selector?.mail_instance_id,selector?.mail_agent_id]):'';
 const referenceCurrent=value=>!value||value.target===referenceTarget()&&value.value.isCurrent();
 const referenceError=()=>replyReference&&!referenceCurrent(replyReference)?'Target or conversation changed. Remove this reference and select again.':'';
-function addReference(value){
+function addReference(value,beforeFocus){
  if(phase!=='editing'||!previewOK||!target||value.agent!==name||!value.isCurrent())return false;
+ beforeFocus?.();
  replyReference={value:{...value,text:value.text.replace(/\s+/gu,' ').trim()},target:referenceTarget()};
- render();window.OrreryReaderReplyMotion?.confirmReference?.(sheet.querySelector('.reader-reference-card'));
- q('#terminal-text')?.focus({preventScroll:true});return true;
+ render({restoreFocus:false});window.OrreryReaderReplyMotion?.confirmReference?.(sheet.querySelector('.reader-reference-card'));
+ const field=q('#terminal-text');
+ field?.focus({preventScroll:true});field?.setSelectionRange(field.value.length,field.value.length);
+ return true;
 }
 function refreshReference(){
  if(replyReference&&phase==='review'&&!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='';render();return;}
@@ -1101,20 +1112,35 @@ async function send(){
  if(phase!=='review'||!prepared||!previewOK)return;
  if(!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='';render();return;}
  sendFeedback?.begin(q('.reader-send-confirm'));
- const sentText=prepared.text,p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target};
+ const box=q('.terminal-exact')?.getBoundingClientRect();
+ const origin=box&&{top:box.top,right:box.right,width:box.width};
+ const p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target,
+  text:prepared.text,origin,at:Date.now(),display:null};
  prepared=null;preparedReference=replyReference=null;receipt=p;text='';clearAttachments();clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,controller=new AbortController();operationController=controller;phase='sending';message='';render();
+ if(history&&tab==='conversation')p.display=conversation()?.beginPending(p.text,origin);
  try{
   const result=await request('commit',{epoch:p.epoch,intent:p.intent,confirmation:p.confirmation},controller,7000);
   if(g!==generation||!sheet.open||document.hidden)return;
   if(result.intent!==p.intent||result.target?.revision!==p.target.revision||!sameTarget(result.target))throw Error('unavailable');
   phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';
-  // Local display only, until the same words appear in the verified record.
-  if(phase==='accepted'&&history){tab='conversation';composer=false;conversation()?.addPending(sentText);}
-  if(phase==='accepted')scheduleReceiptDismissal();
-  render();
- }catch(_){if(g===generation&&sheet.open){phase='unknown';render();}}
+  showSendReceipt(p);
+ }catch(_){if(g===generation&&sheet.open){phase='unknown';showSendReceipt(p);}}
  finally{if(g===generation){operationController=null;if(!document.hidden&&sheet.open)poll();}}
+}
+function showSendReceipt(p){
+ const accepted=phase==='accepted';
+ if(accepted&&history){tab='conversation';composer=false;}
+ render();
+ if(history){
+  const reader=conversation();
+  // The verified record remains authoritative. The local copy only shows
+  // this send while terminal confirmation and the matching record arrive.
+  if(p.display)reader?.finishPending(p.display,accepted);
+  else if(accepted)reader?.addPending(p.text,p.origin,p.at);
+  if(accepted)window.OrreryReaderReplyMotion?.acknowledge(q('.reader-bar h2'));
+ }
+ if(accepted)scheduleReceiptDismissal();
 }
 function scheduleReceiptDismissal(){
  clearTimeout(receiptTimer);
@@ -1130,8 +1156,7 @@ async function status(){
   if(g!==generation||!sheet.open)return;
   if(result.intent!==p.intent||result.target?.revision!==p.target.revision||!sameTarget(result.target))throw Error('unavailable');
   phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';
-  if(phase==='accepted')scheduleReceiptDismissal();
-  render();
+  showSendReceipt(p);
  }catch(_){if(g===generation&&sheet.open){message='Receipt unavailable. Input was not sent again.';render();}}
  finally{if(g===generation)operationController=null;}
 }
@@ -1279,11 +1304,11 @@ function readerReceipt(host){
  if(unknown)box.append(action('Check receipt','',status));
  host.append(box);return box;
 }
-function render(){
+function render({restoreFocus=true}={}){
  conversation()?.dismissReferenceSelection?.();
  rememberView();
  inputObserver?.disconnect();inputObserver=null;
- const focus=document.activeElement,hadFocus=focus&&sheet.contains?.(focus);if(hadFocus){sheet.tabIndex=-1;sheet.focus({preventScroll:true});}
+ const focus=document.activeElement,hadFocus=restoreFocus&&focus&&sheet.contains?.(focus);if(hadFocus){sheet.tabIndex=-1;sheet.focus({preventScroll:true});}
  const previous=q('#terminal-output');
  // Review/edit rebuild the sheet for the same pane. Choosing a pane and
  // reopening clear output first, so their new preview still opens at its tail.
@@ -1383,7 +1408,7 @@ function pauseView(){
  attachmentController?.abort();attachmentController=null;operationController?.abort();operationController=null;generation++;
  // Settle the visible phase even if an already resolved response reaches its
  // hidden-page guard without rejecting the aborted request.
- if(phase==='sending'){phase='unknown';render();}
+ if(phase==='sending'){phase='unknown';showSendReceipt(receipt);}
  else if(phase==='preparing'){phase='editing';message='Input was not sent. Review again.';render();}
  previewOK=false;
  const review=q('#terminal-review');if(review)review.disabled=true;

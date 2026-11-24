@@ -46,6 +46,113 @@ _STALL_WORK = re.compile(r"(?im)^\s*[•▌●]\s*(?:Working|Thinking)\b[^\n]*\(
 def normalize(text):
     return _ANSI.sub('', text).replace('\r','').replace('\xa0',' ')
 
+_COMPACT_DURATION = re.compile(r'(?:[0-9]{1,4}h(?: [0-9]{1,3}m)?(?: [0-9]{1,2}s)?|[0-9]{1,3}m(?: [0-9]{1,2}s)?|[0-9]{1,2}s)')
+_CLAUDE_COMPACT = re.compile(r'[✢✳✶✻✽·]\s+Compacting conversation… \(([^()]+)\)')
+_CODEX_COMPACT = re.compile(r'[•▌●]\s+Compacting context\s*\(([0-9hms ]+)\s*[•·]\s*esc to interrupt\)')
+_DSH_COMPACT = re.compile(
+    r'\S{1,10}\s+(?:Summarizing earlier turns…|正在压缩会话…) · '
+    r'(?:(?:reading context…|读取上下文…|↓ [\d.]+[kmb]? tokens) · )?'
+    r'([^·]+?)(?: · (?:Esc cancels|Esc 取消))?')
+_DSH_COMPACT_BUSY = re.compile(r'\S{1,10}\s+.+…\s*\((?:compacting|压缩中) · ([\dhms ]+)(?: · [^()]*)?\)')
+_DSH_COMPACT_TOTAL = re.compile(r'\S{1,10}\s+.+(?:total |总)([\dhms ]+).* · (?:compacting|压缩中)')
+_HERMES_COMPACT = re.compile(r'─\s+.+?\s+compacting…\s*·\s*([^│]+?)\s*│\s*\S.*')
+_HERMES_COMPRESS = re.compile(
+    r'─\s+(?:⠋ compressing \d+ messages \(~[\d,]+ tok\)|'
+    r'🗜️ Compacting context — (?:still )?summarizing earlier conversation).*\s│\s+\S.*')
+_COMPACT_RULE = re.compile(r'[─━═]{8,}(?: +[^─━═\s].*? +[─━═]+)?')
+
+
+def _claude_compaction(lines):
+    for input_at in range(len(lines) - 1, 0, -1):
+        if re.match(r'\s*❯(?:\s|$)', lines[input_at]) and _COMPACT_RULE.fullmatch(lines[input_at - 1].strip()):
+            break
+    else:
+        return None
+    lower = next((i for i in range(input_at + 1, len(lines))
+                  if _COMPACT_RULE.fullmatch(lines[i].strip())), None)
+    if lower is None or not re.search(r'(?:^|·)\s*esc to interrupt\s*(?:·|$)', ' '.join(lines[lower + 1:]).strip()):
+        return None
+    block = [row for row in lines[:input_at - 1]
+             if row.strip() and not re.fullmatch(r'\s+● \S+ · /effort', row)]
+    for i in range(len(block) - 1, -1, -1):
+        if re.match(r'\s+⎿\s+Tip:', block[i]) and all(re.match(r' {4,}\S', row) for row in block[i+1:]):
+            block = block[:i]
+            break
+    return _CLAUDE_COMPACT.fullmatch(block[-1]) if block else None
+
+
+def _codex_compaction(lines):
+    for i in range(len(lines) - 1, -1, -1):
+        if re.match(r'\s*›(?:\s|$)', lines[i]):
+            break
+    else:
+        return None
+    if not any(pattern.match(row.strip()) for row in lines[i+1:] for pattern in (
+        _CODEX_MODEL_FOOTER_RE, _CODEX_SHORTCUT_FOOTER_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE,
+    )):
+        return None
+    block = [row.strip() for row in lines[max(0, i - 5):i] if row.strip()]
+    if block and block[-1] == 'Making room to continue.':
+        block.pop()
+    for width in range(1, min(3, len(block)) + 1):
+        match = _CODEX_COMPACT.fullmatch(' '.join(block[-width:]))
+        if match:
+            return match
+    return None
+
+
+def _dsh_compaction(rows):
+    for i in range(len(rows) - 3, max(0, len(rows) - 10), -1):
+        if (re.fullmatch(r'╭─{8,}.*╮', rows[i])
+                and re.match(r'(?:⌸\s+)?❯(?:\s|$)', rows[i+1])
+                and re.fullmatch(r'╰─{8,}╯', rows[i+2])):
+            status = rows[i-1]
+            return (_DSH_COMPACT.fullmatch(status) or _DSH_COMPACT_BUSY.fullmatch(status)
+                    or _DSH_COMPACT_TOTAL.fullmatch(status))
+    return None
+
+
+def reader_compaction(text, programs):
+    """Current compact widget, matching the cockpit's reader_activity.js.
+
+    Only recognized current composer chrome counts. Return the harness and
+    the observed duration (empty for an untimed Hermes /compress notice).
+    """
+    if len(text) > 65536:
+        return None
+    lines = [row.rstrip() for row in normalize(text).split('\n')[-40:]]
+    for program in programs:
+        if program == 'claude':
+            match = _claude_compaction(lines)
+        elif program == 'codex':
+            match = _codex_compaction(lines)
+        elif program == 'dsh':
+            match = _dsh_compaction([row.strip() for row in lines if row.strip()])
+        elif program == 'hermes':
+            rows = [row.strip() for row in lines if row.strip()]
+            for i in range(len(rows) - 1, -1, -1):
+                if re.match(r'(?:\S+\s+)?❯(?:\s|$)', rows[i]):
+                    break
+            else:
+                continue
+            for status in (*rows[max(0, i-1):i], *rows[i+1:i+2]):
+                match = _HERMES_COMPACT.fullmatch(status)
+                if match and _COMPACT_DURATION.fullmatch(match[1]):
+                    return program, match[1]
+                if _HERMES_COMPRESS.fullmatch(status):
+                    return program, ''
+            continue
+        else:
+            continue
+        if match:
+            elapsed = ' '.join(match[1].split())
+            if program == 'dsh':
+                elapsed = re.sub(r'([hm])(?=[0-9])', r'\1 ', elapsed)
+            if _COMPACT_DURATION.fullmatch(elapsed):
+                return program, elapsed
+    return None
+
+
 def context_used(text):
     for pattern, left in ((_CTX_RE,False),(_CTX_CODEX_LEFT_RE,True),(_CTX_CODEX_USED_RE,False)):
         match=pattern.search(text)

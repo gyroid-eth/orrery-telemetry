@@ -213,9 +213,9 @@ SOFTWARE.
         card.working=working;card.waiting=waiting;
         const compacting=working&&current.reader_phase==='compacting';
         const finished=g.closed?(g.duration??card.lastWork):(card.lastWork??g.duration);
-        title(card,working?(compacting?'Compacting context…':'Working…'):waiting?'Waiting for you':
+        title(card,working?(compacting?'':'Working…'):waiting?'Waiting for you':
           finished!==null?'Worked for '+duration(finished):'Recorded work',working&&!compacting);
-        changed(card.clock,working&&card.lastWork!==null?duration(card.lastWork):'');
+        changed(card.clock,working&&!compacting&&card.lastWork!==null?duration(card.lastWork):'');
         changed(card.count,'· '+g.steps.length+(g.steps.length===1?' step':' steps'));
         card.node.classList.toggle('is-paused',!visible);
         card.node.hidden=!g.steps.length&&!g.orphans&&!now;
@@ -280,6 +280,8 @@ const WAIT=20000;
 const controllers={poll:null,older:null,preview:null};
 let panel=null,saveUrl='',previewFocus=null,previewRequest=null,previewRetry=false;
 let events=[],seen=new Set(),older=null,pending=[],failures=0,olderLoad=null,following=true,savedTop=0;
+const pendingRows=new WeakMap(),matchedSends=new Set();
+const replyMotion=()=>window.OrreryReaderReplyMotion;
 let lastRecordPoll=null;
 let recordVersion=0,recordConfirmed=false,replySelection=null;
 const referenceCards=new WeakMap();
@@ -306,7 +308,9 @@ function selectionReply(){
  const button=replySelection||make('button','reader-selection-reference','Reply with reference');button.type='button';
  button.style.left=Math.max(12,Math.min(box.left,innerWidth-238))+'px';button.style.top=top+'px';
  button.onpointerdown=event=>event.preventDefault();button.onmousedown=event=>event.preventDefault();
- button.onclick=()=>{if(terminal.reference(value)){selection.removeAllRanges();dismissReferenceSelection();}};
+ button.onclick=()=>terminal.reference(value,()=>{
+  selection.removeAllRanges();dismissReferenceSelection();
+ });
  if(!replySelection)document.querySelector('#terminal-sheet').append(button);replySelection=button;
 }
 document.addEventListener('selectionchange',selectionReply);
@@ -315,7 +319,12 @@ window.visualViewport?.addEventListener('resize',selectionReply);
 let mailResize=null,mailWidth=0;
 let toolGroups=[],toolGroupFor=new Map(),toolSerial=0;
 let stepView=null,provider='';
-function stepContext(){const a=window.OrreryMobileAgent?.forName(name);return {running:a?.stale?false:a?.running===true,act_state:a?.state,work_disp:a?.workDisplay};}
+function stepContext(a=window.OrreryMobileAgent?.forName(name)){
+ const running=a?.running===true&&!a.stale;
+ const compacting=running&&a.readerPhase==='compacting';
+ return {running,act_state:a?.state,work_disp:a?.workDisplay,
+  reader_phase:compacting?'compacting':'',reader_phase_elapsed:compacting?a.readerPhaseElapsed:''};
+}
 function stepsVisible(){return !!root?.isConnected&&!document.hidden;}
 const thumbnails=new Map();let thumbnailObserver=null;
 const messages={
@@ -448,10 +457,16 @@ function body(text,assistant=false,images){
 function replyReference(text){
  if(typeof text!=='string'||!text.startsWith('Reference: '))return null;
  const lines=text.replace(/\r\n?/g,'\n').split('\n');
- const fields=lines[0].slice(11).split(' · '),[agent,role,ts]=fields;
- const id=/^Recorded message: (\S+)$/.exec(lines[1]||'')?.[1];
+ const single=lines.length===1&&/^Reference: (.+?) \| Recorded message: (\S+) \| Quote: ("(?:[^"\\]|\\.)*") \| Reply: (.+)$/u.exec(text);
+ const fields=(single?.[1]??lines[0].slice(11)).split(' · '),[agent,role,stamp]=fields;
+ const ts=single?(stamp||undefined):stamp;
+ const id=single?.[2]??/^Recorded message: (\S+)$/.exec(lines[1]||'')?.[1];
  if(!id||!agent||agent.trim()!==agent||!/^\S+$/.test(role||'')||fields.length<2||fields.length>3)return null;
- if(fields.length===3&&(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(ts)||!Number.isFinite(Date.parse(ts))))return null;
+ if((single?ts!==undefined:fields.length===3)&&(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(ts)||!Number.isFinite(Date.parse(ts))))return null;
+ if(single){
+  try{const quote=JSON.parse(single[3]),reply=single[4];return quote.trim()&&reply.trim()?{agent,ts,id,quote,reply}:null;}
+  catch(_){return null;}
+ }
  let end=2;
  while(lines[end]?.startsWith('> '))end++;
  if(end===2||lines[end]!=='')return null;
@@ -555,15 +570,30 @@ function mailCard(m,ts,images){
 // The cockpit puts file references on the file tool calls (Read, Write,
 // Edit, apply_patch, SendUserFile...), so a tool row carries chips too.
 function files(e,r){if(Array.isArray(e.files)&&e.files.length){const f=make('div','conversation-files');e.files.forEach(x=>f.append(chip(x)));r.append(f);}}
+const terminalCSI=/(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]/g;
+function localCommand(e){
+ const command=markdown()?.commandRecord(e.text);
+ const localOutput=command&&!command.shell&&command.outputs.length>0;
+ const output=localOutput?e.text.replace(terminalCSI,''):e.text;
+ const compact=provider==='Claude'&&!e.truncated&&command&&(
+  command.command==='/compact'||command.command?.startsWith('/compact ')||
+  command.outputs.length===1&&command.outputs[0].label==='output'&&
+   command.outputs[0].text.replace(terminalCSI,'').trimStart().split(/\r?\n/,1)[0].trimEnd()==='Compacted (ctrl+o to see full summary)');
+ return {command,output,compact};
+}
+const compactRecord=e=>e?.kind==='tool'&&e.step_boundary===true&&e.text==='Context compacted';
 function row(e){
  if(e.kind==='tool'){const r=make('div','conversation-tool');r.append(make('span','conversation-tool-label',e.text));r.dataset.id=e.id;files(e,r);if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));return r;}
  if(e.kind==='mail'){const r=make('div','conversation-mails');r.dataset.id=e.id;e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));return r;}
- const command=e.role==='user'&&markdown()?.commandRecord(e.text);
+ const record=e.role==='user'?localCommand(e):null,command=record?.command;
+ if(record?.compact){
+  const r=make('div','conversation-compact-envelope');r.dataset.id=e.id;r.hidden=true;return r;
+ }
  const human=e.kind==='text'&&e.role==='user'&&!command;
  const r=make('div',command?.shell?'conversation-shell':'conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
  const time=clock(e.ts);
  if(human)r.title=time?'You · '+time:'You';
- if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(e.text,r);}
+ if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(record.output,r);}
  else{
   const reference=human&&!e.truncated&&replyReference(e.text);
   if(e.role==='assistant')r.append(speaker(e));
@@ -773,30 +803,85 @@ async function openPreview(x){
  }
  if(typeof v.notice==='string'&&v.notice)box.append(make('small','conversation-preview-notice',v.notice));
 }
-function atBottom(){return !list||(list.isConnected?list.scrollHeight-list.clientHeight-list.scrollTop<=24:following);}
+function atBottom(){return !list||replyMotion()?.followingReply()||(list.isConnected?list.scrollHeight-list.clientHeight-list.scrollTop<=24:following);}
 /* The sheet rebuilds its children; detaching resets scrollTop. Restore the
    reader's place (or the tail) after each reattachment. */
-function restore(){if(!list||!list.isConnected)return;stepView?.activity(stepContext(),stepsVisible());list.scrollTop=following?list.scrollHeight:savedTop;loadThumbnails();}
+function restore(){
+ if(!list||!list.isConnected)return;
+ stepView?.activity(stepContext(),stepsVisible());
+ if(!replyMotion()?.keepReplyInView())list.scrollTop=following?list.scrollHeight:savedTop;
+ loadThumbnails();
+}
 function setStatus(text){if(!status)return;status.textContent=text;
  // Routine explanations live in Information; failures remain on the surface.
  status.hidden=/^(?:Read-only record · updating|Latest record · updating|New messages below · paused while you read)$/.test(text);
 }
 function activity(){
- if(!list)return;const stepActivity=stepView?.activity(stepContext(),stepsVisible());list.querySelector('.conversation-activity')?.remove();
- const a=window.OrreryMobileAgent?.forName(name),box=make('div','conversation-activity');
- if(a?.running&&a.state==='work'&&!a.stale&&!stepActivity)box.textContent='Working'+(a.workDisplay?' · '+a.workDisplay:'');
- else{if(a?.running&&['ask','question'].includes(a.state)&&!a.stale&&!stepActivity){box.className+=' reply-needed';box.textContent=a.state==='ask'?'Reply needed · approval':'Reply needed · question';}else if(a?.stale)box.textContent='Activity observation unavailable';}
+ if(!list)return;
+ const a=window.OrreryMobileAgent?.forName(name),context=stepContext(a);
+ const stepActivity=stepView?.activity(context,stepsVisible()),compacting=context.reader_phase==='compacting';
+ list.querySelector('.conversation-activity')?.remove();
+ const box=make('div','conversation-activity');
+ if(compacting){
+  const elapsed=context.reader_phase_elapsed;
+  box.textContent='Compacting context…'+(elapsed?' · '+elapsed:'');
+ }else if(context.running&&a.state==='work'&&!stepActivity)box.textContent='Working'+(a.workDisplay?' · '+a.workDisplay:'');
+ else{if(context.running&&['ask','question'].includes(a.state)&&!stepActivity){box.className+=' reply-needed';box.textContent=a.state==='ask'?'Reply needed · approval':'Reply needed · question';}else if(a?.stale)box.textContent='Activity observation unavailable';}
  if(box.textContent)list.append(box);
  const dot=document.querySelector?.('.reader-state');if(dot&&root?.isConnected){dot.dataset.state=a?.stale?'unknown':a?.state||'unknown';dot.title=a?.stale?'Activity observation unavailable':a?.state==='work'?'Working':a?.state==='ask'?'Approval needed':a?.state==='question'?'Reply needed':'Waiting';dot.setAttribute('aria-label',dot.title);}
 }
 
 function renderPending(){
- list?.querySelectorAll(':scope > .conversation-pending').forEach(x=>{if(x.contains?.(document.activeElement))list.focus?.({preventScroll:true});x.remove();});
- for(const p of pending){const r=make('div','conversation-bubble user conversation-pending');r.append(body(p.text),make('small','conversation-time','Sent to terminal · not yet in the record'));const dismiss=make('button','conversation-dismiss','Dismiss');dismiss.type='button';dismiss.onclick=()=>{list.tabIndex=-1;list.focus?.({preventScroll:true});pending=pending.filter(x=>x!==p);renderPending();activity();};r.append(dismiss);list.append(r);}
+ if(!list)return;
+ const kept=new Set();
+ let addedReference=false;
+ for(const p of pending){
+  let entry=pendingRows.get(p);
+  if(!entry){
+   const row=make('div','conversation-bubble user conversation-pending'),reference=replyReference(p.text);
+   let wash=row;
+   if(reference){
+    row.classList.add('conversation-has-reference');wash=make('div','conversation-reference-body');
+    row.append(referenceCard(reference),wash);
+    addedReference=true;
+   }
+   const label=make('small','conversation-time'),dismiss=make('button','conversation-dismiss','Dismiss');
+   label.setAttribute('role','status');dismiss.type='button';
+   dismiss.onclick=()=>{list.focus({preventScroll:true});pending=pending.filter(x=>x!==p);renderPending();activity();};
+   wash.append(body(reference?.reply??p.text),label,dismiss);
+   entry={row,label,dismiss};pendingRows.set(p,entry);
+  }
+  const {row,label,dismiss}=entry;
+  kept.add(row);
+  const status=p.accepted?'Sent to terminal · not yet in the record':'Sending…';
+  if(label.textContent!==status)label.textContent=status;
+  row.dataset.state=p.accepted?'accepted':'sending';dismiss.hidden=!p.accepted;
+  if(row.parentElement!==list)list.insertBefore(row,list.querySelector(':scope > .conversation-activity'));
+ }
+ for(const row of list.querySelectorAll(':scope > .conversation-pending')){
+  if(!kept.has(row)){if(row.contains(document.activeElement))list.focus({preventScroll:true});row.remove();}
+ }
+ if(addedReference)updateReferenceCards();
 }
 function settlePending(){
  const now=Date.now();
- pending=pending.filter(p=>now-p.at<180000&&!events.some(e=>!p.before.has(e.id)&&e.role==='user'&&e.kind==='text'&&(markdown()?.submissionText(e.text)||e.text).trim()===p.text.trim()));
+ pending=pending.filter(p=>now-p.at<180000);
+ const landings=[];
+ for(const event of events){
+  if(!pending.length)break;
+  if(event.role!=='user'||event.kind!=='text'||matchedSends.has(event.id))continue;
+  const text=(markdown()?.submissionText(event.text)||event.text).trim();
+  const item=pending.find(p=>!p.before.has(event.id)&&text===p.text.trim());
+  if(!item)continue;
+  const from=replyMotion()?.promptPosition(pendingRows.get(item)?.row);
+  const record=list.querySelector('[data-id="'+CSS.escape(event.id)+'"]');
+  if(from&&record)landings.push({record,from});
+  item.recorded=true;matchedSends.add(event.id);pending.splice(pending.indexOf(item),1);
+ }
+ return landings;
+}
+function flyLandings(landings){
+ for(const {record,from} of landings)replyMotion()?.flyPrompt(record,from,from.remaining);
 }
 function groupShellRows(){
  let owner=null;
@@ -854,6 +939,7 @@ function regroupTools(focused=toolGroups.find(g=>g.button===document.activeEleme
   if(row.className==='conversation-shown-files'){finish();continue;}
   if(row.dataset.id===undefined)continue;
   const e=byId.get(row.dataset.id);
+  if(row.className==='conversation-compact-envelope'||compactRecord(e)){finish();continue;}
   if(e&&stepRows.has(e.id)){finish();row.classList.add('conversation-step-record');row.hidden=!row.querySelector('.conversation-files')&&!row.querySelector('.conversation-mail');continue;}
   if(row.className.includes('conversation-step-record'))row.className=row.className.replace(' conversation-step-record','');
   if(e?.kind==='tool'&&!e.mail?.length)run.push(row);else{finish();row.hidden=false;}
@@ -880,28 +966,42 @@ function dropEvent(id){
 }
 function append(page,replySince){
  const follow=atBottom()&&!selectionInRecord(),fresh=page.filter(e=>!seen.has(e.id));
- const motion=follow&&replySince!==null&&window.OrreryReaderReplyMotion;
+ for(const item of pending){
+  if(!item.awaitingBaseline)continue;
+  // When sending from a detached Terminal, the first Reader page can
+  // include an older submission with exactly the same text.
+  const earliest=Math.floor(item.at/1000)*1000;
+  for(const event of page)if(!(Date.parse(event.ts)>=earliest))item.before.add(event.id);
+  item.awaitingBaseline=false;
+ }
+ const motion=follow&&replySince!==null&&replyMotion();
  // Use the known tail and the poll time to avoid animating backfilled records.
- const replies=motion?new Set(page.slice(page.findLastIndex(e=>seen.has(e.id))+1)
-  .filter(e=>e.kind==='text'&&e.role==='assistant'&&Date.parse(e.ts)>=replySince).slice(-3)):null;
+ const arrivals=motion?new Set(page.slice(page.findLastIndex(e=>seen.has(e.id))+1)
+  .filter(e=>Date.parse(e.ts)>=replySince)):null;
+ const animations=[];
  for(const e of fresh){
   seen.add(e.id);events.push(e);
   const anchor=list.querySelector(':scope > .conversation-pending'),node=row(e);
   list.insertBefore(node,anchor);
-  if(replies?.has(e))motion.revealReply?.(node.querySelector('.conversation-text'));
+  if(arrivals?.has(e))animations.push({event:e,node});
   const shown=shownFiles(e);if(shown)list.insertBefore(shown,anchor);
  }
  let dropped=false;
- while(events.length>MAX_KEPT){const gone=events.shift();seen.delete(gone.id);dropEvent(gone.id);older=null;dropped=true;}
+ while(events.length>MAX_KEPT){const gone=events.shift();seen.delete(gone.id);matchedSends.delete(gone.id);dropEvent(gone.id);older=null;dropped=true;}
  groupShellRows();
  regroupTools();
  refreshProfiles();
  // An omitted marker belongs to its page's old edge. Only when that edge's
  // messages are dropped at the kept limit does a marker above them go too.
  if(dropped)for(const n of [...list.children]){if(n.dataset?.id!==undefined)break;if(n.className==='conversation-omitted')n.remove();}
- settlePending();renderPending();activity();
- if(follow){following=true;list.scrollTop=list.scrollHeight;}
+ const landings=settlePending();renderPending();activity();
+ for(const {event,node} of animations){
+  if(event.kind==='text'&&event.role==='assistant'&&event.variant!=='update')motion.revealReply(node.querySelector('.conversation-text'),list);
+  if(event.mail?.length)motion.revealMail(node);
+ }
+ if(follow){following=true;if(!replyMotion()?.keepReplyInView())list.scrollTop=list.scrollHeight;}
  else if(fresh.length)setStatus('New messages below · paused while you read');
+ flyLandings(landings);
  loadThumbnails();
 }
 /* An older page is oldest-first. At the kept limit keep its newest part, the
@@ -922,6 +1022,7 @@ function prepend(page,omitted){
  loadThumbnails();
 }
 function reset(){
+ replyMotion()?.finishReplies();matchedSends.clear();
  stepView?.reset();provider='';lastRecordPoll=null;recordVersion++;
  controllers.older?.abort();olderLoad=null;referenceJump=null;clearReferenceFlash();
  dismissReferenceSelection();closePreview();forgetThumbnails();clearToolGroups();
@@ -991,7 +1092,11 @@ function mount(n){
  status=make('p','conversation-status','Loading the record…');status.setAttribute('role','status');
  olderButton=make('button','conversation-older','Show older');olderButton.type='button';olderButton.hidden=true;olderButton.onclick=loadOlder;
  list=make('div','conversation-list');list.tabIndex=-1;list.setAttribute('aria-label','Conversation record for '+n);
- list.addEventListener('scroll',()=>{if(!list.isConnected)return;following=list.scrollHeight-list.clientHeight-list.scrollTop<=24;savedTop=list.scrollTop;if(following&&/paused/.test(status.textContent))setStatus('Read-only record · updating');selectionReply();},{passive:true});
+ list.addEventListener('scroll',()=>{if(!list.isConnected)return;following=atBottom();savedTop=list.scrollTop;if(following&&/paused/.test(status.textContent))setStatus('Read-only record · updating');selectionReply();},{passive:true});
+ for(const type of ['touchstart','wheel'])list.addEventListener(type,()=>replyMotion()?.stopFollowing(),{passive:true});
+ list.addEventListener('keydown',event=>{
+  if(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key))replyMotion()?.stopFollowing();
+ });
  retryButton=make('button','conversation-retry','Retry');retryButton.type='button';retryButton.hidden=true;
  retryButton.onclick=()=>{retryButton.hidden=true;setStatus('Loading the record…');return poll();};
  list.append(olderButton);root.append(status,retryButton,list);
@@ -1000,8 +1105,24 @@ function mount(n){
  const g=gen;document.fonts?.ready?.then(()=>{if(g===gen)layoutMailRoutes();});poll();return root;
 }
 function element(){return root;}
-function addPending(text){if(!root||typeof text!=='string'||!text.trim())return;pending.push({text,at:Date.now(),before:new Set(seen)});renderPending();following=true;restore();}
+function beginPending(text,origin,accepted=false,at=Date.now()){
+ if(!root||typeof text!=='string'||!text.trim())return null;
+ const item={text,at,before:new Set(seen),owner:root,accepted,awaitingBaseline:!recordConfirmed};
+ pending.push(item);renderPending();following=true;restore();
+ if(origin)replyMotion()?.flyPrompt(pendingRows.get(item)?.row,origin);
+ return item;
+}
+function finishPending(item,accepted){
+ if(!item||item.owner!==root||item.recorded)return;
+ if(accepted){
+  if(!pending.includes(item))pending.push(item);
+  item.accepted=true;
+ }else pending=pending.filter(p=>p!==item);
+ const landings=settlePending();renderPending();restore();flyLandings(landings);
+}
+function addPending(text,origin=null,at=Date.now()){const item=beginPending(text,origin,true,at);if(item)finishPending(item,true);}
 function unmount(){
+ replyMotion()?.finishReplies();matchedSends.clear();
  stepView?.reset();stepView=null;provider='';
  recordVersion++;recordConfirmed=false;lastRecordPoll=null;referenceJump=null;clearReferenceFlash();dismissReferenceSelection();
  gen++;clearTimeout(timer);timer=0;closePreview();forgetThumbnails();for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
@@ -1024,5 +1145,5 @@ document.addEventListener('visibilitychange',()=>{
   restore();poll();
  }
 });window.addEventListener('pagehide',unmount);
-window.OrreryMobileConversation={enabled,mount,element,unmount,addPending,restore,dismissPreview,refreshActivity:activity,refreshProfiles,dismissReferenceSelection};
+window.OrreryMobileConversation={enabled,mount,element,unmount,addPending,beginPending,finishPending,restore,dismissPreview,refreshActivity:activity,refreshProfiles,dismissReferenceSelection};
 })();
