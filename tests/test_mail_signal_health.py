@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from dashboard import server
 from _installed_client_payload import copy_client_library
+from _tmux_prompt_editor import editor_command, wait_for_prompt
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -68,7 +69,9 @@ def retired_signals(tmp_path, monkeypatch):
         return path
     try:
         call('new-session', '-d', '-s', 'Control', 'sleep 300')
-        call('new-session', '-d', '-s', 'RetiredRecipient', "printf 'Claude\\n'; cat")
+        pane = call('new-session', '-d', '-P', '-F', '#{pane_id}', '-s', 'RetiredRecipient',
+                    editor_command(tmp_path/'watcher-submissions.jsonl')).stdout.strip()
+        wait_for_prompt([str(wrapper)], pane)
         write_signal(1)
         completed = subprocess.run(['/bin/bash', str(runner)], capture_output=True, text=True, timeout=45)
         assert completed.returncode == 0, completed.stderr

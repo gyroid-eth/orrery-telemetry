@@ -12,6 +12,12 @@ def main(argv):
         factory=runpy.run_path(str(Path(__file__).with_name('legacy_consumer.py')))['LegacyConsumer']
         consumer=factory(home,transport_api=api)
         if argv and argv[0]=='stop-group':consumer.stop_group(argv[1]);return 0
+        if argv and argv[0]=='submit-input':
+            if len(argv)!=3:return 2
+            with Path(argv[2]).open(encoding='utf-8') as handle:
+                text=handle.read(262145)
+            if not text.strip() or len(text.encode('utf-8'))>262144:return 2
+            return {'accepted':0,'refused':3,'unknown':4}[consumer.submit_text(argv[1],text)]
         if argv and (argv[0] in ('attach','attach-session') or (argv[0]=='new-session' and '-A' in argv)):
             if argv[0]=='new-session' and consumer.transport.identity is None:
                 api['private_directory'](consumer.transport.path.parent,create=True)
