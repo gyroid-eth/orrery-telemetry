@@ -536,7 +536,9 @@ def run_sheet(body, terminal=True):
         ("vm.runInNewContext(SOURCE,context);", """let convRoot=null;const mounted=[],pend=[];let unmounts=0;
 context.queueMicrotask=queueMicrotask;
 context.OrreryMobileConversation={enabled:async()=>true,mount(n){convRoot=new Element('div','conversation');convRoot.id='conversation';mounted.push(n);return convRoot;},
- element(){return convRoot;},unmount(){if(convRoot)unmounts++;convRoot=null;},addPending(t){pend.push(t);},restore(){}};
+ element(){return convRoot;},unmount(){if(convRoot)unmounts++;convRoot=null;},
+ beginPending(text,origin){const item={text,origin:{...origin},beforeCommit:!calls.some(c=>c.op==='commit')};pend.push(item);return item;},
+ finishPending(item,accepted){item.accepted=accepted;},restore(){}};
 vm.runInNewContext(SOURCE,context);"""),
         ("(async()=>{await settle();await open();BODY;context.OrreryMobileTerminal.close();console.log('ok');})()",
          "(async()=>{await settle();BODY;console.log('ok');})()"),
@@ -545,7 +547,6 @@ vm.runInNewContext(SOURCE,context);"""),
         harness = harness.replace(old, new)
     harness = harness.replace("setAttribute(){}", "setAttribute(k,v){this[k]=v;}")
     harness = harness.replace("setProperty(key,value){this[key]=value;}", "setProperty(key,value){this[key]=value;},getPropertyValue(key){return this[key]||'';}")
-    harness = harness.replace("focus(){}", "focus(){}getBoundingClientRect(){return {height:80};}")
     harness = harness.replace("createElement:t=>new Element(t)", "createElement:t=>new Element(t),createElementNS:(_ns,t)=>new Element(t)")
     harness = harness.replace("document:doc,console", "history:{state:null,pushState(v){this.state=v;},back(){}},document:doc,console")
     source = (ROOT / 'dashboard/mobile/mobile.js').read_text()
@@ -575,7 +576,8 @@ def test_sheet_opens_on_conversation_and_sends_only_through_the_reviewed_termina
       assert.ok(!calls.some(c=>c.op==='commit'),'nothing is sent before Send once');
       await button('Send once').onclick();await settle();
       assert.deepEqual(calls.filter(c=>c.op==='commit').length,1);
-      assert.deepEqual(pend,['synthetic line']);
+      assert.deepEqual(pend,[{text:'synthetic line',origin:{top:0,right:viewWidth,width:viewWidth},
+        beforeCommit:true,accepted:true}]);
       context.OrreryMobileTerminal.close();assert.ok(unmounts>=1);assert.equal(q('#conversation'),null);
     ''')
 
