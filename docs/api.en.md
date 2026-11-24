@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":46}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":47}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -940,6 +940,8 @@ API 25: legacy managed `attempt_id` spawn/status requests are retired and return
 ## Mobile reader (API 30)
 
 From API 39, snapshot agents optionally include `work_disp` only while running with `act_state: work` and a validated compact upstream duration such as `2m05s`. The field is omitted for stopped agents, other states, missing or invalid values. The viewer does not invent elapsed time.
+
+In legacy mode, API 47 adds optional `reader_phase: "compacting"` to `/api/agents` and the corresponding mobile snapshot row when the current tmux screen of a running Claude Code, Codex CLI, dsh, or Hermes agent shows a native compaction control. An observed timer is included as `reader_phase_elapsed` (for example, `2m 05s`). This uses existing screen sampling and sends only the phase and timer to the phone.
 
 `GET /api/mobile-mail?window=<period>` is a legacy, loopback-only metadata endpoint. The default is `day` (24h). Allowed values are `all`, `day`, `15m`, and `m<N>` for integer minutes from 15 to 43200 divisible by 15; leading zeros and fractions are rejected. It keeps the existing dashboard Host admission. Missing DB or project/schema/read failure returns 503; unsupported global mode is explicitly refused (501 after admission, or the existing global admission refusal). It never falls back to a legacy DB from global mode. Unknown or repeated query fields return 400.
 

@@ -56,7 +56,7 @@ def test_scoped_legacy_list_status_and_get_keep_stopped_agents():
             invoke("orrery_get_agent", {"name": name}, backend, "legacy", project_key=PROJECT)
 
 
-@pytest.mark.parametrize("api", [999, 47, 0, -1, True, "39", None])
+@pytest.mark.parametrize("api", [999, 48, 0, -1, True, "39", None])
 def test_unknown_generations_fail_before_reading_any_roster(api):
     backend = Backend({**VERSION, "api": api})
     with pytest.raises(DashboardError):
@@ -64,7 +64,7 @@ def test_unknown_generations_fail_before_reading_any_roster(api):
     assert backend.calls == ["/api/version"]
 
 
-@pytest.mark.parametrize("api", [37, 38, 39, 40, 41, 42, 43, 44, 45, 46])
+@pytest.mark.parametrize("api", [37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47])
 def test_supported_legacy_generations_preserve_project_scope(api):
     data = snapshot(Backend({**VERSION, "api": api}), "legacy", project_key=PROJECT)
     assert data.api == api

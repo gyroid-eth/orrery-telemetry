@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":46}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":47}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -944,6 +944,8 @@ API 25: 旧 managed の `attempt_id` による起動・状態照会は廃止し�
 ## スマホ閲覧用（API 30）
 
 API 39から、snapshotのagentに任意の`work_disp`を含めます。稼働中かつ`act_state: work`で、上流の短い経過表示（例`2m05s`）を検証できたときだけです。停止・別状態・欠損・不正値では欄を付けず、表示側で経過を推測しません。
+
+API 47 の旧運用では、稼働中の Claude Code・Codex CLI・dsh・Hermes の現在の tmux 画面に compact の操作表示を確認できた場合、`/api/agents` とスマホの snapshot の該当行に `reader_phase: "compacting"` を含めます。経過表示があれば `reader_phase_elapsed`（例 `2m 05s`）も含めます。既存の画面観測を使い、スマホには状態と経過表示だけを渡します。
 
 `GET /api/mobile-mail?window=<period>`はlegacy modeのloopback専用metadata endpointです。期間の既定は`day`（24h）。`all`、`day`、`15m`と、15〜43200の15の倍数を表す`m<N>`（分）だけを受け付け、先頭ゼロや小数は拒否します。既存のHost admissionを維持します。DB不在・project/schema/読取失敗は503、global modeは明示拒否（admission通過後501、または既存global admissionの拒否）です。globalから旧DBへfallbackしません。不明・重複queryは400です。
 

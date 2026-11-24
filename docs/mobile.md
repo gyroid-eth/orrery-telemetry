@@ -92,6 +92,8 @@ badgeが**ON**になり、Setupの手順は消えます。**自分で確かめ�
 
 Claude・Codex の会話には、PC の Reader と同じ **Agent steps** を表示します。発言、Mail、システム通知を挟むと、その前後の作業は別のカードに分かれます。記録された完了操作を段で追加し、作業中は **Working…** と経過時間、終了後は **Worked for … · N steps** に畳みます。押すと開き、過去のターンは最初は畳んで表示します。明示された失敗だけを **Failed**、結果が記録されないものを **Observed** とします。Codex の実行途中の内側の操作は推測せず、完了記録が届いてから追加します。狭い画面では対象の要約を1行に省略します。
 
+旧運用の dashboard と更新済みの cockpit を使う場合、Claude Code・Codex CLI・dsh・Hermes の Reader で圧縮中に **Compacting context…** を表示します。端末に経過が出ていれば一緒に表示し、履歴に記録されると **Context compacted** が 1 行残ります。
+
 段になった道具のラベルは重ねず、ファイル・画像・Mail と未対応の道具のまとまりは残します。古いページで Claude の対応する要求が見つからない場合は **Load earlier** の説明を表示します。段に必要な短い道具名・対象の要約・時刻・状態・opaque ID とターン区切りだけを中継し、生の引数や出力、path、cockpit の参照 ID は追加しません。ページ数・bytes 上限は同じです。Demo でも動作し、対象は他の本文と同じ既存の規則で伏せます。背景化で動き・時計を止め、Close で解除します。OS の reduced motion に従います。動きは [kokonutUI AI Loading](https://kokonutui.com/)（MIT）の PC 版を流用し、ライセンスを source に保持しています。
 
 スマホで、手順2の**Address on the phone**（`https://…:9443/`）を開き、agentを開きます。最初のHTTPSは、証明書の発行で数秒かかることがあります。**Conversation** tabが出れば、会話の記録まで届いています（[会話の記録を読む](#スマホでagentの会話の記録を読む)）。
