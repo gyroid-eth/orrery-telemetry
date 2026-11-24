@@ -4,6 +4,8 @@
 #
 # Antigravity CLI reads global MCP servers from ~/.gemini/config/mcp_config.json.
 # This script owns only the "orrery-mail" key and preserves all other entries.
+# It also manages the ORRERY Reader group in the sibling hooks.json when the
+# installed dashboard supports Antigravity Reader.
 # The config stores no ORRERY owner token; agentstack-gemini-mcp resolves the
 # current AGENT_NAME's mode-0600 token file at process start.
 #
@@ -25,6 +27,8 @@ TARGET="${AGENTSTACK_GEMINI_MCP_CONFIG:-$HOME/.gemini/config/mcp_config.json}"
 SERVER_KEY="orrery-mail"
 MCP_COMMAND="${AGENTSTACK_GEMINI_MCP_RUNNER:-$AGENTSTACK_HOME/bin/agentstack-gemini-mcp}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-python3}"
+HISTORY_HELPER="$AGENTSTACK_HOME/dashboard/agy_history.py"
+HISTORY_HOOKS="$(dirname "$TARGET")/hooks.json"
 
 mode="install"
 case "${1:-}" in
@@ -114,6 +118,10 @@ fi
 if [[ "$mode" == "print" ]]; then
   cat "$TMP"
   exit 0
+fi
+
+if [[ -f "$HISTORY_HELPER" ]]; then
+  "$PYTHON_BIN" "$HISTORY_HELPER" configure "$mode" "$HISTORY_HOOKS"
 fi
 
 mkdir -p "$(dirname "$TARGET")"

@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 47
+API_GENERATION = 48
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -114,11 +114,12 @@ except ModuleNotFoundError:  # direct script execution
 
 
 try:
-    from dashboard import agent_card, legacy_http_admission, claude_history
+    from dashboard import agent_card, legacy_http_admission, claude_history, agy_history
 except ModuleNotFoundError:  # direct script execution
     import agent_card
     import legacy_http_admission
     import claude_history
+    import agy_history
 
 
 def _same_origin_request(handler) -> bool:
@@ -1978,6 +1979,12 @@ def _history_binding_fields(row: dict, *, now: float, claude_index=None, session
     `reuse_stopped` lets the roster poll reuse the verdict of a row that is not
     running for a short while; the light route never does.
     """
+    program = row.get("program")
+    if program in agy_history.PROGRAMS:
+        if FRESH_MODE or GLOBAL_MODE:
+            return agy_history.unbound("protected_history_required")
+        return agy_history.binding(RUNTIME_DIR, row["name"],
+                                   _resume_registration(row["name"], agy_history.PROGRAMS), session_state)
     if reuse_stopped and row.get("running") is False:
         key = (row.get("name"), row.get("program"), row.get("category"), row.get("created"))
         cached = _STOPPED_BINDING_REUSE.get(key)
@@ -1986,7 +1993,6 @@ def _history_binding_fields(row: dict, *, now: float, claude_index=None, session
             cached = _history_binding_fields(row, now=now, claude_index=claude_index)
             _STOPPED_BINDING_REUSE.put(key, cached, mark)
         return dict(cached)
-    program = row.get("program")
     if program in {"codex", "codex-cli"}:
         return _codex_history_binding(row["name"], now=now)
     if program in {"claude", "claude-code"}:

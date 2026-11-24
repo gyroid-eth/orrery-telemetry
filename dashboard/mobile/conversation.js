@@ -978,7 +978,7 @@ async function poll(){
    // a slow answer is only a delay and leaves it open.
    if(v.error!=='history_slow'){recordConfirmed=false;lastRecordPoll=null;recordVersion++;dismissReferenceSelection();window.OrreryMobileTerminal?.refreshReference?.();closePreview();}showError(v);if(v.error==='history_changed')reset();}
   else{
-   recordConfirmed=true;provider=({claude:'Claude',codex:'Codex'})[v.provider]||'';
+   recordConfirmed=true;provider=({claude:'Claude',codex:'Codex',antigravity:'Antigravity'})[v.provider]||'';
    failures=0;slow(false);if(!events.length&&v.omitted===true)list.insertBefore(gap(),list.querySelector(':scope > .conversation-pending'));
    const replySince=lastRecordPoll===null?null:Math.max(lastRecordPoll,started-2*POLL)-POLL;
    append(v.events,replySince);lastRecordPoll=started;

@@ -81,6 +81,10 @@ test -d "$quota_runtime" && touch "$quota_runtime/antigravity-quota.enabled"
 この対話起動は legacy runtime 用です。global runtime の
 `GEMINI_INTERACTIVE_RUNTIME_UNSUPPORTED` が出る場合は、対応する委任経路を使います。
 
+### Reader
+
+API 48 対応の Telemetry と Cockpit で、管理された対話型 `agy` の会話を Desktop とスマホの Reader から読めます。既存の `--configure-mcp` が `hooks.json` に `orrery-reader` グループを追加します。管理グループ以外の設定は保持します。設定後に起動したセッションで、最初の入力から履歴が表示されます。本文は Antigravity が記録した時点で表示し、compact の完了は **Context compacted** として表示します。同じ起動で異なる会話 UUID を検出したときは、次の管理された起動まで binding を保留します。
+
 Defaults:
 
 - binary: `agy`

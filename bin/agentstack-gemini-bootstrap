@@ -16,6 +16,7 @@
 WORK_DIR="${1:-.}"
 if [ -n "${BASH_SOURCE:-}" ]; then _ags_bootstrap_src="${BASH_SOURCE[0]}"; else _ags_bootstrap_src="$0"; fi
 SCRIPT_DIR="$(cd "$(dirname "$_ags_bootstrap_src")" && pwd)"
+unset AGENTSTACK_AGY_HISTORY_LAUNCH
 . "$SCRIPT_DIR/lib/global-client-loader.sh" || { return 2 2>/dev/null || exit 2; }
 ags_client_bootstrap "$SCRIPT_DIR/../env.sh" --continue "$@" || { return 2 2>/dev/null || exit 2; }
 ags_client_select "$@" && _ags_selected_rc=0 || _ags_selected_rc=$?
@@ -170,4 +171,14 @@ else
 fi
 if [[ -n "${TMUX:-}" && -n "${AGENT_NAME:-}" && "$TMUX_IDENTITY_MATCHED" != "1" ]]; then
   return 1 2>/dev/null || exit 1
+fi
+
+# Only a verified registration in this tmux session can issue a Reader receipt.
+_ags_agy_history="$SCRIPT_DIR/../dashboard/agy_history.py"
+if [[ -n "$REGISTERED_AGENT_NAME" && "$TMUX_IDENTITY_MATCHED" == 1 && -n "${TMUX_PANE:-}" &&
+      -n "${AGS_REGISTERED_AGENT_ID:-}" && -f "$_ags_agy_history" ]]; then
+  if _ags_agy_tmux="$("$TMUX_BIN" display-message -p -t "$TMUX_PANE" '#{session_name}|#{session_id}|#{session_created}|#{pid}')" &&
+      AGENTSTACK_AGY_HISTORY_LAUNCH="$("${AGENTSTACK_PYTHON:-python3}" "$_ags_agy_history" prepare "$AGS_REGISTERED_AGENT_ID" "$_ags_agy_tmux")"; then
+    export AGENTSTACK_AGY_HISTORY_LAUNCH
+  fi
 fi
