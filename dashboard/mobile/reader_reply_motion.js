@@ -155,6 +155,9 @@
 
   function revealReply(body) {
     if (!canAnimate(body)) return;
+    const demo = window.OrreryDemo?.on ? window.OrreryDemo : null;
+    if (demo && !demo.projectText) return;
+    demo?.maskContent(body);
     const skip = 'pre, code, button, a, table, .conversation-code, .conversation-table, [aria-hidden="true"]';
     const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
       acceptNode: node => node.parentElement.closest(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
@@ -162,32 +165,39 @@
     const runs = [];
     let wordCount = 0, chars = 0;
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      chars += node.length;
+      const projection = demo?.projectText(node), shown = projection?.text ?? node.data;
+      chars += shown.length;
       if (chars > 4000 || runs.length >= 32) return;
-      const words = Array.from(node.data.matchAll(/\S+/gu));
+      const words = Array.from(shown.matchAll(/\S+/gu));
       if (!words.length) continue;
-      runs.push({node, words});
+      runs.push({node, words, shown, projection});
       wordCount += words.length;
     }
 
     // Keep the stagger short by revealing groups in longer replies.
     const perStep = Math.ceil(wordCount / maxSteps);
     let index = 0;
-    for (const {node, words} of runs) {
+    for (const {node, words, shown, projection} of runs) {
       const fragment = document.createDocumentFragment();
       const cues = [];
+      const part = (from, to) => {
+        const text = document.createTextNode(shown.slice(from, to));
+        projection?.write(text, from, to);
+        return text;
+      };
       let offset = 0;
       for (let i = 0; i < words.length;) {
         const count = Math.min(words.length - i, perStep - index % perStep);
         const first = words[i], last = words[i + count - 1], end = last.index + last[0].length;
-        const cue = span('reader-reply-word', node.data.slice(first.index, end));
-        fragment.append(node.data.slice(offset, first.index), cue);
+        const cue = span('reader-reply-word');
+        cue.append(part(first.index, end));
+        fragment.append(part(offset, first.index), cue);
         cues.push({cue, delay: Math.floor(index / perStep) * stagger});
         offset = end;
         i += count;
         index += count;
       }
-      fragment.append(node.data.slice(offset));
+      fragment.append(part(offset, shown.length));
       node.replaceWith(fragment);
       for (const {cue, delay} of cues) {
         animate(cue, word, value => ({

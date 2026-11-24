@@ -10,6 +10,29 @@ import pytest
 from mobile_reader_browser import phone  # noqa: F401
 
 
+def test_new_mobile_reply_is_masked_before_the_first_motion_frame(phone):
+    if not os.environ.get('ORRERY_DEMO_BRIDGE_ROOT'):
+        pytest.skip('paired Demo scripts required')
+    _,js,wait,state=phone
+    state['demo'] = dict(version=1,supported=True,on=True,words=['Fixture Person'],
+                         identity=dict(users=['fixture-user'],hosts=['fixture-host']))
+    js('OrreryMobileDemo.refresh()')
+    wait("document.documentElement.dataset.demoSync==='ready'&&window.OrreryDemo?.on")
+    js("""window.replyFirstFrames=[];
+      const animate=Element.prototype.animate;
+      Element.prototype.animate=function(...args){
+        if(this.className==='reader-reply-word')replyFirstFrames.push(this.closest('.conversation-text').textContent);
+        return animate.apply(this,args);
+      };
+    """)
+    from datetime import datetime, timezone
+    state['events'].append(dict(id='new-draft-reply',kind='text',role='assistant',
+        text='Fixture Person checked the labels on fixture-host.',ts=datetime.now(timezone.utc).isoformat()))
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait('replyFirstFrames.length>0')
+    assert set(js('replyFirstFrames')) == {'************** checked the labels on ************.'}
+
+
 def mail_event(sender='', recipients=None):
     return dict(id='followup-mail',kind='mail',role='assistant',text='',ts='',mail=[dict(
         direction='sent',sender=sender,recipients=recipients or ['RecipientAgent'],
