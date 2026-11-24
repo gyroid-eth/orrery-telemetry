@@ -134,6 +134,33 @@ def test_read_only_relay_denies_spawn_before_upstream():
         assert request(port,'POST','/view/spawn',{})[0] == 405
 
 
+def test_antigravity_models_are_listed_without_forwarding_an_invalid_standalone_launch():
+    catalog_source = {**CATALOG, 'providers': [*CATALOG['providers'],
+        {'id': 'gemini', 'label': 'Antigravity',
+         'capabilities': {'effort_required': True, 'standalone': False, 'resources_required': True},
+         'models': [{'id': f'gemini-fixture-{i}'} for i in range(17)],
+         'harnesses': [{'id': 'antigravity', 'available': True, 'default': True}], 'efforts': ['low', 'high']},
+        {'id': 'deepseek', 'label': 'DeepSeek',
+         'models': [{'id': 'deepseek-fixture', 'harnesses': [{'id': 'dsh', 'available': True},
+                                                             {'id': 'hermes', 'available': True}]}]},
+        {'id': 'local', 'label': 'Local',
+         'models': [{'id': 'local-fixture', 'url_index': 1, 'url_key': 'fixture-key',
+                     'harnesses': [{'id': 'hermes', 'available': True}]}]},
+    ]}
+    submitted = []
+    store = MobileSpawn(lambda: catalog_source, submitted.append, lambda _: {})
+    catalog = store.catalog('a'*32, configurable=True)
+    models = catalog['models']
+    gemini = [model for model in models if model['provider'] == 'gemini']
+    assert len(gemini) == 17
+    assert all(model['harnesses'][0]['launch_blocked'] for model in gemini)
+    assert [(m['provider'], [h['key'] for h in m['harnesses']]) for m in models[-2:]] == [
+        ('deepseek', ['dsh', 'hermes']), ('local', ['hermes'])]
+    with pytest.raises(relay.mobile_spawn.SpawnError, match='invalid_launch'):
+        store.launch('a'*32, {**payload(catalog), 'model': models.index(gemini[0]), 'harness': 'antigravity'})
+    assert not submitted
+
+
 def test_lost_acknowledgement_stays_unknown_even_if_confirmation_is_repeated():
     submitted = []
     submitted_event = threading.Event()

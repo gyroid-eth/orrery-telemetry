@@ -66,7 +66,9 @@
     notice.hidden = !message;
     notice.textContent = message;
     title.textContent = view === 'review' ? 'Review launch' : 'New agent';
-    if (view !== 'editor') {
+    if (view === 'editor') {
+      canReview();
+    } else {
       if (settings.open) settings.close();
       for (const control of selects.values()) control?.close();
       dismissToolHelp();
@@ -126,7 +128,11 @@
     [...effortMark.children].forEach((mark, index) => mark.classList.toggle('active', index < filled));
     modelChip.title = level < 0 ? name : name + ' · ' + effortLabel(value);
     modelChip.setAttribute('aria-label', 'Model settings: ' + modelChip.title);
-    reviewButton.disabled = !task.value.trim() || !next || !catalog?.directories.length
+    if (!editor.hidden) {
+      notice.textContent = next?.launch_blocked ? 'Antigravity needs a parent agent and declared resources. Set these in the Telemetry dashboard.' : '';
+      notice.hidden = !notice.textContent;
+    }
+    reviewButton.disabled = !task.value.trim() || !next || next.launch_blocked || !catalog?.directories.length
       || (next.effort_required && !effort.value);
   }
 
