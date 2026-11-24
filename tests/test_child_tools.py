@@ -1,10 +1,8 @@
 """Choosing the tools a child is given: ``base`` and ``tools`` (stage 1).
 
-- ``base`` omitted/"default" keeps today's launch byte for byte.
+- The default base preserves unrelated launch settings.
 - ``base: mail-only`` gives only ORRERY Mail plus what ``tools`` names.
-- Any selection fails closed: no Mail proxy, a server that cannot be copied,
-  or a project where computer use is on for a mail-only child stops the
-  launch before tmux starts.
+- A requested selection fails closed if its proxy or configuration is unavailable.
 - "Read only" screen access exposes only the classification table's tools.
 
 Every test runs with a temporary HOME, runtime and fake tmux/claude/codex; no
@@ -15,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shlex
 import subprocess
 import sys
 import tomllib
@@ -122,7 +121,8 @@ def test_claude_browser_and_screen_share_one_allowed_flag(tmp_path):
     (["browser"], {"browser": {"device": ""}}),
     (["browser:win-brave"], {"browser": {"device": "win-brave"}}),
     (["chrome-extension"], {"chrome_extension": True}),
-    (["screen"], {"screen": {"access": "operate", "server": None}}),
+    (["screen"], {"screen": {"access": "operate",
+                            "server": "orrery-screen" if sys.platform == "darwin" else None}}),
     (["screen:read:windows-mcp"], {"screen": {"access": "read", "server": "windows-mcp"}}),
     (["mcp:b,mcp:a"], {"mcp": ["a", "b"]}),
 ])
@@ -170,16 +170,17 @@ def test_codex_browser_is_chrome_devtools_and_has_no_device_or_builtin_screen():
     with pytest.raises(child_tools.ToolsError, match="deviceId"):
         child_tools.check_provider(_spec(None, {"browser": {"device": "d"}}), "codex")
     with pytest.raises(child_tools.ToolsError, match="no built-in screen"):
-        child_tools.check_provider(_spec(None, {"screen": "operate"}), "codex")
+        child_tools.check_provider(child_tools.normalize(tools={"screen": "operate"}, platform="linux"), "codex")
 
 
-def test_chrome_extension_selection_requires_codex_and_a_configured_plugin():
+def test_chrome_extension_selection_requires_codex_and_a_configured_plugin(monkeypatch):
     spec = _spec(None, {"chrome_extension": True})
     for provider in ("claude", "dsh", "hermes"):
         with pytest.raises(child_tools.ToolsError, match="only for Codex"):
             child_tools.check_provider(spec, provider)
     with pytest.raises(child_tools.ToolsError, match="is not in the user's Codex config"):
         child_tools.codex_apply({}, spec)
+    monkeypatch.setattr(sys, "platform", "linux")
     with pytest.raises(child_tools.ToolsError, match="cannot be combined with orrery-screen"):
         child_tools.check_provider(_spec(None, {"chrome_extension": True, "mcp": ["orrery-screen"]}), "codex")
 
@@ -190,10 +191,10 @@ def test_chrome_extension_selection_requires_codex_and_a_configured_plugin():
 def test_mail_only_adds_no_chrome_unless_a_browser_was_chosen(tmp_path):
     cj = _claude_json(tmp_path / "c.json")
     plan = child_tools.claude_plan(_spec("mail-only"), cwd=str(tmp_path), chrome=False,
-                                   claude_json=cj, platform="darwin")
+                                   claude_json=cj, platform="linux")
     assert plan == {"servers": {}, "flags": ["--no-chrome"]}
     plan = child_tools.claude_plan(_spec("mail-only", {"browser": True}), cwd=str(tmp_path),
-                                   chrome=True, claude_json=cj, platform="darwin")
+                                   chrome=True, claude_json=cj, platform="linux")
     assert plan["flags"] == ["--allowed-tools", ",".join(child_tools.claude_chrome_allowed_tools())]
 
 
@@ -206,21 +207,21 @@ def test_default_base_with_a_server_does_not_touch_chrome(tmp_path):
     assert plan == {"servers": {"notes": {"command": "/usr/bin/notes"}}, "flags": []}
 
 
-@pytest.mark.parametrize("project, stops", [
-    ({"enabledMcpServers": ["computer-use"]}, True),
-    ({"enabledMcpServers": ["computer-use"], "disabledMcpServers": ["computer-use"]}, False),
-    ({"enabledMcpServers": ["other"]}, False),
-    ({}, False),
+@pytest.mark.parametrize("project", [
+    {"enabledMcpServers": ["computer-use"]},
+    {"enabledMcpServers": ["computer-use"], "disabledMcpServers": ["computer-use"]},
+    {},
 ])
-def test_mail_only_stops_where_computer_use_is_enabled(tmp_path, project, stops):
+def test_mac_mail_only_denies_native_computer_use_at_launch(tmp_path, project):
     cj = _claude_json(tmp_path / "c.json", projects={str(tmp_path): project})
-    call = lambda: child_tools.claude_plan(  # noqa: E731
+    plan = child_tools.claude_plan(
         _spec("mail-only"), cwd=str(tmp_path), chrome=False, claude_json=cj, platform="darwin")
-    if stops:
-        with pytest.raises(child_tools.ToolsError, match="computer use is enabled"):
-            call()
-    else:
-        assert call()["flags"] == ["--no-chrome"]
+    assert plan["servers"] == {}
+    flags = plan["flags"]
+    assert json.loads(flags[flags.index("--settings") + 1]) == {
+        "deniedMcpServers": [{"serverName": "computer-use"}]}
+    assert flags[flags.index("--disallowed-tools") + 1] == "mcp__computer-use"
+    assert "--no-chrome" in flags
 
 
 def test_mail_only_on_linux_does_not_read_computer_use(tmp_path):
@@ -231,22 +232,25 @@ def test_mail_only_on_linux_does_not_read_computer_use(tmp_path):
     assert plan["flags"] == ["--no-chrome"]
 
 
-def test_builtin_screen_needs_macos_operate_and_an_enabled_project(tmp_path):
-    enabled = _claude_json(tmp_path / "on.json",
-                           projects={str(tmp_path): {"enabledMcpServers": ["computer-use"]}})
-    off = _claude_json(tmp_path / "off.json")
-    operate = _spec("mail-only", {"screen": "operate"})
-    assert child_tools.claude_plan(operate, cwd=str(tmp_path), chrome=False,
-                                   claude_json=enabled, platform="darwin")["servers"] == {}
-    with pytest.raises(child_tools.ToolsError, match="not enabled for"):
-        child_tools.claude_plan(operate, cwd=str(tmp_path), chrome=False,
-                                claude_json=off, platform="darwin")
-    with pytest.raises(child_tools.ToolsError, match="only on macOS"):
-        child_tools.claude_plan(operate, cwd=str(tmp_path), chrome=False,
-                                claude_json=enabled, platform="linux")
-    with pytest.raises(child_tools.ToolsError, match="not in the classification table"):
-        child_tools.claude_plan(_spec(None, {"screen": "read"}), cwd=str(tmp_path),
-                                chrome=False, claude_json=enabled, platform="darwin")
+@pytest.mark.parametrize("access", ["read", "operate"])
+@pytest.mark.parametrize("source", [None, "cua-driver", "orrery-screen"])
+def test_mac_claude_first_prompt_config_only_has_managed_screen(tmp_path, source, access):
+    native = {"command": "/fixture/native-computer-use"}
+    relay = {"command": "/fixture/relay", "args": ["-m", "agentstack_mail.screen_mcp"]}
+    config = _claude_json(tmp_path / "on.json", servers={
+        "computer-use": native, "cua-driver": {"command": "/fixture/cua-driver"},
+    }, projects={str(tmp_path): {"enabledMcpServers": ["computer-use"]}})
+    spec = child_tools.normalize("mail-only", {"screen": {"access": access, "server": source}},
+                                 platform="darwin")
+    plan = child_tools.claude_plan(spec, cwd=str(tmp_path), chrome=False,
+                                   claude_json=config, platform="darwin", managed_screen=relay)
+    projected = child_tools.claude_config({"command": "/fixture/mail"}, claude_json=config,
+                                          servers=plan["servers"])
+    assert projected["mcpServers"] == {"orrery-mail": {"command": "/fixture/mail"},
+                                        "orrery-screen": relay}
+    assert "mcp__computer-use" in plan["flags"]
+    assert "mcp__orrery-screen__get_window_state" in " ".join(plan["flags"])
+    assert "computer-use" not in child_tools.prompt_text(spec, "claude", False)
 
 
 def test_read_only_windows_mcp_allows_only_the_table_tools(tmp_path):
@@ -706,11 +710,23 @@ def _launch(tmp_path, env, workdir, name, *flags, codex=False):
 
 def _inner(env) -> str:
     command = _new_session(env)[-1]
-    return command.split(" -lc '", 1)[1][:-1]
+    return shlex.split(command)[-1]
 
 
 def _launched(extra: str = "") -> str:
     """The launch command with tool flags ``extra`` and the first prompt."""
+    if sys.platform == "darwin":
+        settings = '{"deniedMcpServers":[{"serverName":"computer-use"}]}'
+        args = shlex.split(extra)
+        chrome = bool(args and args[-1] == "--chrome")
+        if chrome:
+            args.pop()
+        if "--disallowed-tools" in args:
+            index = args.index("--disallowed-tools") + 1
+            args[index] = "mcp__computer-use," + args[index]
+        else:
+            args += ["--disallowed-tools", "mcp__computer-use"]
+        extra = " " + shlex.join(["--settings", settings, *args, *(["--chrome"] if chrome else [])])
     return PRE_CHROME_INNER.replace(
         '"${MCP_ARGS[@]}";', '"${MCP_ARGS[@]}"' + extra + ARGV_PROMPT + ";")
 
@@ -736,7 +752,7 @@ def test_defaults_keep_available_browser_and_omit_only_unavailable_tools(tmp_pat
     assert "mcp:missing" in result["omitted"][1]
 
 
-def test_defaults_check_computer_use_in_final_worktree_directory(tmp_path):
+def test_managed_screen_requires_an_explicit_launch_selection_in_each_directory(tmp_path):
     original = str(tmp_path / "source")
     worktree = str(tmp_path / "worktree")
     cj = _claude_json(tmp_path / "c.json",
@@ -745,9 +761,8 @@ def test_defaults_check_computer_use_in_final_worktree_directory(tmp_path):
         cwd=original, claude_json=cj, platform="darwin")
     moved = child_tools.resolve_defaults("browser,screen:operate", "claude",
         cwd=worktree, claude_json=cj, platform="darwin")
-    assert set(ready["spec"]["tools"]) == {"browser", "screen"}
-    assert set(moved["spec"]["tools"]) == {"browser"}
-    assert len(moved["omitted"]) == 1
+    assert set(ready["spec"]["tools"]) == set(moved["spec"]["tools"]) == {"browser"}
+    assert len(ready["omitted"]) == len(moved["omitted"]) == 1
 
 
 def test_invalid_default_does_not_remove_other_choices_or_echo_its_contents(tmp_path):
@@ -902,15 +917,15 @@ def test_launcher_without_selection_still_falls_back_without_the_proxy(tmp_path)
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="the built-in computer use is macOS only")
-def test_launcher_stops_mail_only_where_computer_use_is_enabled(tmp_path):
+def test_launcher_denies_enabled_project_computer_use_in_the_child(tmp_path):
     env, workdir = _env(tmp_path)
     cj = _claude_json(tmp_path / "c.json",
                       projects={str(workdir): {"enabledMcpServers": ["computer-use"]}})
     env["AGENTSTACK_CLAUDE_JSON"] = cj
     result = _launch(tmp_path, env, workdir, "CuChild", "--base", "mail-only")
-    assert result.returncode != 0
-    assert "computer use is enabled" in result.stderr
-    assert _no_launch(env)
+    assert result.returncode == 0, result.stderr
+    assert '"serverName":"computer-use"' in _inner(env)
+    assert _inner(env) == _launched(" --no-chrome")
 
 
 def test_launcher_stops_when_a_server_cannot_be_copied(tmp_path):
@@ -1110,9 +1125,10 @@ def test_api_passes_base_and_tools_to_the_launcher(monkeypatch):
         "tools": {"browser": {"device": "win-brave"}, "screen": "operate",
                   "mcp": ["notes"]}})
     assert result == {"ok": True}
+    screen = "screen:operate:orrery-screen" if sys.platform == "darwin" else "screen:operate"
     assert captured[0].provider_args == (
         "--base", "mail-only", "--tools", "browser:win-brave",
-        "--tools", "screen:operate", "--tools", "mcp:notes")
+        "--tools", screen, "--tools", "mcp:notes")
     captured.clear()
     assert server.do_spawn({"task": "t", "model": "claude-opus-5-5",
                             "tools": {"mcp": ["a", "b"], "approve_all": ["b"]}}) == {"ok": True}
@@ -1192,7 +1208,11 @@ def test_resume_rebuilds_the_selected_config_and_flags(resume, monkeypatch, tmp_
     result = server.do_resume(NAME)
     assert result["ok"], result
     inner = launches[0][-1]
-    assert f"--strict-mcp-config --no-chrome --resume {SID} -n {NAME}" in inner
+    assert "--strict-mcp-config" in inner
+    assert "--no-chrome" in inner
+    assert f"--resume {SID} -n {NAME}" in inner
+    if sys.platform == "darwin":
+        assert "--disallowed-tools mcp__computer-use" in inner
     assert "--chrome" not in inner.replace("--no-chrome", "")
     assert f"export AGENTSTACK_CLAUDE_LAUNCH_ID={RESUME_LAUNCH}; " in inner
     config = json.loads((runtime / "child-agents" / f"{NAME}.mcp.json").read_text())
@@ -1408,7 +1428,8 @@ def test_screen_codex_home_filters_source_overlay_and_plugins(tmp_path, monkeypa
     home = build("a" * 32)
     config = tomllib.loads((home / "config.toml").read_text())
     screen = config["mcp_servers"]["orrery-screen"]
-    assert screen["required"] and config["plugins"]["third-party@market"]["enabled"] is False
+    assert screen["required"]
+    assert config["plugins"]["third-party@market"]["enabled"] is (sys.platform == "darwin")
     assert set(screen["enabled_tools"]) == set(screen_state.TOOLS)
     assert all(tool["approval_mode"] == "approve" for tool in screen["tools"].values())
     for alias in ("alias", "cua-driver"):
@@ -1421,3 +1442,61 @@ def test_screen_codex_home_filters_source_overlay_and_plugins(tmp_path, monkeypa
     assert config["plugins"]["third-party@market"]["enabled"] is True
     assert screen_state.Store(runtime).list() == []
     assert (source / "config.toml").read_text() == config_text
+
+
+@pytest.mark.parametrize("access", [None, "operate"])
+def test_mac_codex_first_prompt_config_filters_gui_only(tmp_path, monkeypatch, access):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    config = {"mcp_servers": {
+        "node_repl": {"command": "/Applications/App.app/Contents/Resources/cua_node/bin/node_repl"},
+        "normal_repl": {"command": "/fixture/node_repl"},
+        "computer-use": {"command": "/fixture/native"},
+        "chrome-devtools": dict(CHROME_DEVTOOLS),
+        "cua-driver": {"command": "/fixture/cua-driver"},
+    }, "plugins": {
+        "unified-computer-use@openai-bundled": {"enabled": True},
+        "browser@openai-bundled": {"enabled": True},
+        "unrelated@market": {"enabled": True},
+    }}
+    spec = child_tools.normalize(tools={"browser": True, **({"screen": access} if access else {})})
+    relay = {"command": "/fixture/relay", "args": ["-m", "agentstack_mail.screen_mcp"]}
+    child_tools.codex_apply(config, spec, managed_screen=relay if access else None)
+    servers = config["mcp_servers"]
+    assert {name for name, definition in servers.items() if definition.get("enabled", True)} == {
+        "normal_repl", "chrome-devtools", *({"orrery-screen"} if access else set())}
+    assert config["plugins"]["unified-computer-use@openai-bundled"]["enabled"] is False
+    assert config["plugins"]["browser@openai-bundled"]["enabled"] is True
+    assert config["plugins"]["unrelated@market"]["enabled"] is True
+
+
+def test_mac_agy_workspace_declares_only_the_managed_screen(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    config_path = tmp_path / ".gemini" / "config" / "mcp_config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps({"mcpServers": {
+        "raw": {"command": "/fixture/cua-driver", "disabled": True},
+        "other": {"command": "/fixture/other"},
+    }}))
+    raw = config_path.read_bytes()
+    monkeypatch.setattr(child_tools, "screen_definition", lambda *a, **k: {
+        "command": "/fixture/python", "args": ["-m", "agentstack_mail.screen_mcp"]})
+    config = child_tools.agy_config("/fixture/mail", child_tools.normalize(tools={"screen": "operate"}),
+                                    runtime=tmp_path, project="fixture", child="FixtureAgent",
+                                    mail_env="", home=tmp_path)
+    servers = config["mcpServers"]
+    assert {name for name, definition in servers.items() if not definition.get("disabled")} == {
+        "orrery-mail", "orrery-screen"}
+    assert "get_window_state" in servers["orrery-screen"]["enabledTools"]
+    assert config_path.read_bytes() == raw
+
+
+@pytest.mark.parametrize("access", [None, "operate"])
+def test_mac_agy_detects_active_global_desktop_mcp_before_launch(tmp_path, monkeypatch, access):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    config_path = tmp_path / ".gemini" / "config" / "mcp_config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps({"mcpServers": {"old-desktop": {"command": "/fixture/cua-driver"}}}))
+    spec = child_tools.normalize(tools={"screen": access} if access else {})
+    with pytest.raises(child_tools.ToolsError, match="Disable the global Antigravity MCP server 'old-desktop'"):
+        child_tools.agy_config("/fixture/mail", spec, runtime=tmp_path, project="fixture",
+                              child="FixtureAgent", mail_env="", home=tmp_path)

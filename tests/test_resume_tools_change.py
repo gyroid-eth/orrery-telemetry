@@ -164,7 +164,9 @@ def test_permission_refuses_unverified_or_unavailable_resume(stopped, monkeypatc
         probes = iter((False, True))
         monkeypatch.setattr(server, "_child_session_live", lambda *a: next(probes))
     if condition == "unavailable":
-        permission["computer_use"] = "control"  # no Cua Driver definition in this fixture
+        # Without the macOS managed default, Control still needs a named Cua Driver definition.
+        monkeypatch.setattr(child_tools.sys, "platform", "linux")
+        permission["computer_use"] = "control"
     if condition == "browser_missing":
         if provider != "codex":
             pytest.skip("Only Codex requires a Chrome MCP definition")

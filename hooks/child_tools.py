@@ -6,17 +6,17 @@ A selection has two parts:
 ``base``
     ``"default"`` keeps the launch as it was before this option existed:
     a Claude child gets ORRERY Mail as its only configured MCP server, while
-    Claude in Chrome and the built-in macOS computer use still follow the
-    user's own settings and the child's working directory; a Codex child
-    inherits the user's MCP servers with direct screen and Chrome access
+    Claude in Chrome follows the launch selection. On macOS the generated
+    relay provides computer use. A Codex child inherits the user's unrelated
+    MCP servers, with desktop and Chrome access
     requiring selection. ``"mail-only"`` promises that the child
     gets nothing beyond ORRERY Mail except what ``tools`` names.
 
 ``tools``
     ``browser`` (Claude in Chrome, optionally a deviceId), ``chrome_extension``
     (the bundled Chrome extension plugin in Codex), ``screen`` (
-    computer use, ``read`` or ``operate``; either the built-in macOS computer
-    use of Claude Code or a user MCP server such as Windows-MCP), ``mcp``
+    computer use, ``read`` or ``operate``; the generated relay on macOS,
+    or a named MCP server such as Windows-MCP), ``mcp``
     (user MCP servers chosen by name) and ``approve_all`` (servers in ``mcp``
     whose every tool is approved; the CLI form is ``mcp:<server>:all``).
 
@@ -63,10 +63,12 @@ import copy
 import json
 import os
 import re
+import shlex
 import runpy
 import subprocess
 import sys
 import tempfile
+import uuid
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -75,6 +77,7 @@ BASES = ("default", "mail-only")
 ACCESS = ("read", "operate")
 TOOL_KINDS = ("browser", "chrome_extension", "screen", "mcp", "approve_all")
 CODEX_CHROME_PLUGIN = "chrome@openai-bundled"
+CODEX_NATIVE_CUA_PLUGIN = "unified-computer-use@openai-bundled"
 SERVER_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 DEVICE_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 # Claude Code's built-in computer use server (macOS only). It is enabled per
@@ -204,9 +207,27 @@ def _cua_server(name: str, definition=None) -> bool:
     return False
 
 
-def _check_screen_source(spec, name, definition):
-    if screen_mode(spec) is not None and name != SCREEN_SERVER and _cua_server(name, definition):
+def _check_screen_source(spec, name, definition, *, platform=None):
+    if name == SCREEN_SERVER:
+        return
+    if (platform or sys.platform) == "darwin" and (
+            _cua_server(name, definition) or _native_desktop_server(name, definition)):
+        raise ToolsError("Use orrery-screen for Computer use on macOS")
+    if screen_mode(spec) is not None and _cua_server(name, definition):
         raise ToolsError("orrery-screen cannot be combined with a direct Cua Driver server")
+
+
+def _gui_node_repl(definition: dict) -> bool:
+    command = definition.get("command")
+    if not isinstance(command, str) or Path(command).name not in {"node_repl", "node_repl.exe"}:
+        return False
+    env = definition.get("env")
+    return "cua_node" in Path(command).parts or (isinstance(env, dict) and any(
+        key in env for key in ("SKY_CUA_SERVICE_PATH", "NODE_REPL_INSTRUCTIONS_USE_CASE_COMPUTER_USE")))
+
+
+def _native_desktop_server(name: str, definition: dict) -> bool:
+    return name in (BUILTIN_SCREEN, "cua_repl") or _gui_node_repl(definition)
 
 
 def looks_like_agent_mail(name: str) -> bool:
@@ -227,12 +248,12 @@ def _server_name(value: Any, what: str) -> str:
 # --------------------------------------------------------------------------- #
 # the selection
 # --------------------------------------------------------------------------- #
-def normalize(base: Any = None, tools: Any = None) -> dict:
+def normalize(base: Any = None, tools: Any = None, *, platform: str | None = None) -> dict:
     """Validate an API/CLI selection and return {"base", "tools"}.
 
     ``tools`` holds only the kinds that were selected: ``browser`` as
-    {"device": str}, ``screen`` as {"access", "server"} (server None means the
-    built-in computer use) and ``mcp`` as a sorted list of server names."""
+    {"device": str}, ``screen`` as {"access", "server"}, and ``mcp`` as a
+    sorted list of server names. macOS uses the managed Cua Driver relay."""
     if base is None:
         base = "default"
     if base not in BASES:
@@ -306,6 +327,27 @@ def normalize(base: Any = None, tools: Any = None) -> dict:
         if SCREEN_SERVER in checked:
             raise ToolsError("orrery-screen already has a fixed per-tool approval list")
         result["approve_all"] = sorted(checked)
+    if platform is None:
+        platform = sys.platform
+    if platform == "darwin":
+        screen = result.get("screen")
+        names = result.get("mcp", [])
+        direct = {name for name in names if name != SCREEN_SERVER and _cua_server(name)}
+        if screen and (screen["server"] is None or _cua_server(screen["server"])):
+            screen["server"] = SCREEN_SERVER
+        if direct:
+            if screen and screen["server"] != SCREEN_SERVER:
+                raise ToolsError("Select one screen server")
+            result.setdefault("screen", {"access": "operate", "server": SCREEN_SERVER})
+        if SCREEN_SERVER == result.get("screen", {}).get("server"):
+            direct.add(SCREEN_SERVER)
+        for key in ("mcp", "approve_all"):
+            if key in result:
+                remaining = [name for name in result[key] if name not in direct]
+                if remaining:
+                    result[key] = remaining
+                else:
+                    result.pop(key)
     return {"base": base, "tools": result}
 
 
@@ -364,7 +406,7 @@ def check_provider(spec: dict, provider: str) -> None:
     if "chrome_extension" in tools:
         if provider != "codex":
             raise ToolsError("chrome-extension is available only for Codex children")
-        if screen_mode(spec) is not None:
+        if sys.platform != "darwin" and screen_mode(spec) is not None:
             raise ToolsError("chrome-extension cannot be combined with orrery-screen")
     if provider == "codex":
         browser = tools.get("browser")
@@ -380,6 +422,13 @@ def check_provider(spec: dict, provider: str) -> None:
                 "screen server (screen:<read|operate>:<server>)")
     elif provider in ("dsh", "hermes"):
         return
+    elif provider in ("gemini", "antigravity", "agy") and sys.platform == "darwin":
+        names = tools.get("mcp", [])
+        screen = tools.get("screen")
+        if (spec["base"] != "default" or set(tools) - {"screen", "mcp"}
+                or (screen and screen["server"] != SCREEN_SERVER)
+                or any(name != SCREEN_SERVER for name in names)):
+            raise ToolsError("Antigravity supports only the managed Computer use selection")
     elif provider != "claude":
         if restrictive(spec):
             raise ToolsError(f"base and tools are not supported for provider: {provider}")
@@ -538,18 +587,6 @@ def _project_entry(settings: dict, cwd: str) -> dict:
     return {}
 
 
-def computer_use_enabled(settings: dict, cwd: str) -> bool:
-    """Whether Claude Code offers its built-in computer use in this directory.
-
-    Measured 2026-09-30 (Claude Code 2.1.285): the server reaches a child only
-    when the child's project has it in enabledMcpServers."""
-    project = _project_entry(settings, cwd)
-    enabled = project.get("enabledMcpServers")
-    disabled = project.get("disabledMcpServers")
-    return (isinstance(enabled, list) and BUILTIN_SCREEN in enabled
-            and not (isinstance(disabled, list) and BUILTIN_SCREEN in disabled))
-
-
 def _copyable_definition(name: str, settings: dict, cwd: str) -> dict:
     """The user's definition of one server, checked so a copy works and holds no secret."""
     project = _project_entry(settings, cwd).get("mcpServers")
@@ -587,6 +624,13 @@ def _copyable_definition(name: str, settings: dict, cwd: str) -> dict:
     return dict(definition)
 
 
+def claude_native_screen_flags(platform=None) -> list[str]:
+    if (platform or sys.platform) != "darwin":
+        return []
+    deny = json.dumps({"deniedMcpServers": [{"serverName": BUILTIN_SCREEN}]}, separators=(",", ":"))
+    return ["--settings", deny, "--disallowed-tools", f"mcp__{BUILTIN_SCREEN}"]
+
+
 def claude_chrome_allowed_tools() -> list[str]:
     """Known Claude in Chrome tools approved only for a Chrome launch."""
     return [f"mcp__claude-in-chrome__{tool}" for tool in CLAUDE_CHROME_TOOLS]
@@ -598,6 +642,7 @@ def claude_plan(spec: dict, *, cwd: str, chrome: bool, claude_json: str,
 
     Raises ToolsError whenever the selection cannot be honoured."""
     platform = platform or sys.platform
+    spec = normalize(spec["base"], spec["tools"], platform=platform)
     tools = spec["tools"]
     chrome = chrome or "browser" in tools
     mail_only = spec["base"] == "mail-only"
@@ -608,28 +653,13 @@ def claude_plan(spec: dict, *, cwd: str, chrome: bool, claude_json: str,
     disallowed: list[str] = []
 
     screen = tools.get("screen")
-    builtin_screen = screen is not None and screen["server"] is None
-    if builtin_screen:
-        if platform != "darwin":
-            raise ToolsError(
-                "the built-in computer use exists only on macOS; on this OS name "
-                "the screen server: screen:<read|operate>:<server>")
-        if screen["access"] == "read":
-            raise ToolsError(
-                "computer use is not in the classification table, so it can only be "
-                "given as operate (screen:operate)")
-        if not computer_use_enabled(settings, cwd):
-            raise ToolsError(
-                f"computer use is not enabled for {cwd}. Claude Code offers it only "
-                "in projects where it was enabled with /mcp; enable it there or "
-                "start the child in such a directory (a --worktree child has its "
-                "own directory)")
-    elif mail_only and platform == "darwin" and computer_use_enabled(settings, cwd):
-        raise ToolsError(
-            f"computer use is enabled for {cwd}, and there is not yet a verified "
-            "way to keep it from a mail-only child. Start the child in another "
-            "directory, or select screen:operate")
+    if screen and screen["server"] is None:
+        raise ToolsError("The built-in computer use exists only on macOS; on this OS name "
+                         "the screen server: screen:<read|operate>:<server>")
 
+    if platform == "darwin":
+        flags += claude_native_screen_flags(platform)[:2]
+        disallowed.append(f"mcp__{BUILTIN_SCREEN}")
     names = list(tools.get("mcp", ()))
     if screen is not None and screen["server"] is not None:
         names.append(screen["server"])
@@ -639,7 +669,7 @@ def claude_plan(spec: dict, *, cwd: str, chrome: bool, claude_json: str,
                 servers[name] = managed_screen
             continue
         servers[name] = _copyable_definition(name, settings, cwd)
-        _check_screen_source(spec, name, servers[name])
+        _check_screen_source(spec, name, servers[name], platform=platform)
 
     for name in names:
         if name == SCREEN_SERVER:
@@ -703,9 +733,10 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
                 codex_config: dict | None = None,
                 transports=("stdio", "http"),
                 tool_filtering=False, tool_approval=False,
-                managed_screen: dict | None = None) -> dict:
+                managed_screen: dict | None = None,
+                platform: str | None = None) -> dict:
     """Project the same selection; refuse any promise the CLI cannot express."""
-    spec = normalize(spec.get('base'), spec.get('tools'))
+    spec = normalize(spec.get('base'), spec.get('tools'), platform=platform)
     tools = spec['tools']
     screen = tools.get('screen')
     if screen and screen['server'] is None:
@@ -745,7 +776,7 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
             continue
         definition = codex_browser[1] if codex_browser and name == browser_server \
             else _copyable_definition(name, settings, cwd)
-        _check_screen_source(spec, name, definition)
+        _check_screen_source(spec, name, definition, platform=platform)
         if definition.get('type','stdio') not in transports:
             raise ToolsError('native_mcp_transport_unsupported')
         allow, hide = _approval(spec, name, definition, browser_server)
@@ -782,6 +813,36 @@ def mail_alias_names(settings: dict) -> list[str]:
             names.update(name for name in scope
                          if isinstance(name, str) and looks_like_agent_mail(name))
     return sorted(names)
+
+
+def agy_config(mail_command, spec, *, runtime, project, child, mail_env, home=None):
+    """Project a managed screen server into an Antigravity child's workspace."""
+    check_provider(spec, "gemini")
+    servers = {"orrery-mail": {"command": mail_command, "args": []}}
+    if sys.platform != "darwin":
+        return {"mcpServers": servers}
+    if home is None:
+        home = Path.home()
+    # Antigravity loads global servers alongside workspace entries even when
+    # the workspace disables the same name. Detect this before launching.
+    inherited_path = home / ".gemini" / "config" / "mcp_config.json"
+    try:
+        inherited = json.loads(inherited_path.read_text()).get("mcpServers", {})
+    except FileNotFoundError:
+        inherited = {}
+    except (ValueError, AttributeError) as exc:
+        raise ToolsError("Cannot check Antigravity's inherited MCP servers") from exc
+    if not isinstance(inherited, dict):
+        raise ToolsError("Cannot check Antigravity's inherited MCP servers")
+    for name, definition in inherited.items():
+        if (isinstance(definition, dict) and definition.get("disabled") is not True
+                and (_cua_server(name, definition) or _native_desktop_server(name, definition))):
+            raise ToolsError(f"Disable the global Antigravity MCP server {name!r} before launching this child; "
+                             "ORRERY uses orrery-screen for Computer use")
+    screen = screen_definition(spec, runtime, project, child, uuid.uuid4().hex, mail_env=mail_env)
+    if screen is not None:
+        servers[SCREEN_SERVER] = {**screen, "enabledTools": list(_screen_state()["TOOLS"])}
+    return {"mcpServers": servers}
 
 
 def claude_config(proxy: dict, *, claude_json: str, servers: dict | None = None) -> dict:
@@ -849,7 +910,15 @@ def change_permission(tools: dict, permission: dict, definitions: dict | None) -
         mode = permission["computer_use"]
         removed = {name for name in mcp if _cua_server(name, definition(name))}
         changed.pop("screen", None)
-        if mode == "view" or (mode == "control" and (screen == SCREEN_SERVER or SCREEN_SERVER in mcp)):
+        if sys.platform == "darwin":
+            removed.add(SCREEN_SERVER)
+            if mode == "off":
+                if SCREEN_SERVER not in mcp:
+                    mcp.append(SCREEN_SERVER)
+                removed.discard(SCREEN_SERVER)
+            else:
+                changed["screen"] = {"server": SCREEN_SERVER, "access": "read" if mode == "view" else "operate"}
+        elif mode == "view" or (mode == "control" and (screen == SCREEN_SERVER or SCREEN_SERVER in mcp)):
             changed["screen"] = {"server": SCREEN_SERVER, "access": "read" if mode == "view" else "operate"}
         elif mode == "control":
             direct = next((name for name in mcp if name in removed), "cua-driver")
@@ -902,8 +971,10 @@ def codex_apply(config: dict, spec: dict, *, managed_screen: dict | None = None)
     table's screen tools of the screen server, and approves every tool of a
     server in approve_all. Selected non-Mail servers must initialize before
     the task starts. A server-wide approval is never written."""
+    spec = normalize(spec["base"], spec["tools"])
     tools = spec["tools"]
     check_provider(spec, "codex")
+    mac = sys.platform == "darwin"
     servers = config.get("mcp_servers")
     if not isinstance(servers, dict):
         servers = {}
@@ -912,7 +983,11 @@ def codex_apply(config: dict, spec: dict, *, managed_screen: dict | None = None)
     if screen is not None:
         names.append(screen["server"])
     for name, server in list(servers.items()):
-        if name in names:
+        if mac and isinstance(server, dict) and _native_desktop_server(name, server):
+            if name in names:
+                raise ToolsError("Use orrery-screen for Computer use on macOS")
+            servers[name] = {**server, "enabled": False}
+        elif name in names:
             _check_screen_source(spec, name, server)
         elif isinstance(server, dict) and (
                 _cua_server(name, server) or _codex_chrome_server(name, server)):
@@ -931,7 +1006,9 @@ def codex_apply(config: dict, spec: dict, *, managed_screen: dict | None = None)
             _cua_server(name, definition) for name, definition in plugin_servers.items()
         )
         blocked = (_cua_server(plugin_id.split("@", 1)[0]) or known_cua
-                   or (screen_mode(spec) is not None and not plugin_id.startswith("agentstack-codex-app@")))
+                   or (mac and plugin_id == CODEX_NATIVE_CUA_PLUGIN)
+                   or (not mac and screen_mode(spec) is not None
+                       and not plugin_id.startswith("agentstack-codex-app@")))
         if plugin_id == CODEX_CHROME_PLUGIN:
             if chrome_extension and blocked:
                 raise ToolsError("chrome-extension cannot be combined with a direct Cua Driver server in the plugin")
@@ -1149,7 +1226,7 @@ def resolve_defaults(selection: str, provider: str, *, cwd: str,
         try:
             normalize(None, parse_cli([item]))
             label = item  # validated names/device IDs contain no shell delimiters
-            candidate = normalize(None, parse_cli(accepted + [item]))
+            candidate = normalize(None, parse_cli(accepted + [item]), platform=platform)
             if screen_mode(candidate) is not None:
                 raise ToolsError("orrery-screen requires an explicit child selection")
             check_provider(candidate, provider)
@@ -1158,7 +1235,7 @@ def resolve_defaults(selection: str, provider: str, *, cwd: str,
                 codex_apply(copy.deepcopy(codex_config or {}), candidate)
             elif provider in ("dsh", "hermes"):
                 native_plan(candidate, cwd=cwd, claude_json=claude_json,
-                            codex_config=codex_config)
+                            codex_config=codex_config, platform=platform)
             else:
                 claude_plan(candidate, cwd=cwd, chrome=chrome,
                             claude_json=claude_json, platform=platform)
@@ -1252,6 +1329,10 @@ def main(argv: list[str]) -> int:
     cfg.add_argument("--parent-agent", default="")
     cfg.add_argument("--screen-generation", default="")
     cfg.add_argument("--program", default="claude-code", choices=("claude-code","dsh","hermes"))
+    agy = sub.add_parser("agy-config")
+    for name in ("--out", "--runner", "--child", "--project-key", "--runtime-dir", "--mail-env"):
+        agy.add_argument(name, required=True)
+    agy.add_argument("--tools", action="append", default=[])
     rec = sub.add_parser("codex-record")
     rec.add_argument("--spec", required=True)
     rec.add_argument("--out", required=True)
@@ -1292,7 +1373,7 @@ def main(argv: list[str]) -> int:
         if args.command == "claude-plan":
             result = claude_plan(_spec_arg(args.spec), cwd=args.cwd,
                                  chrome=args.chrome == "1", claude_json=args.claude_json)
-            sys.stdout.write(" ".join(result["flags"]) + "\n")
+            sys.stdout.write(shlex.join(result["flags"]) + "\n")
             return 0
         if args.command == "claude-config":
             spec = _spec_arg(args.spec)
@@ -1324,6 +1405,12 @@ def main(argv: list[str]) -> int:
             proxy = dict(command=args.runner, args=[], env=env)
             write_private_json(args.out, claude_config(
                 proxy, claude_json=args.claude_json, servers=servers))
+            return 0
+        if args.command == "agy-config":
+            spec = normalize(tools=parse_cli(args.tools))
+            config = agy_config(args.runner, spec, runtime=args.runtime_dir,
+                                project=args.project_key, child=args.child, mail_env=args.mail_env)
+            write_private_json(args.out, config)
             return 0
         if args.command == "codex-record":
             write_codex_record(args.out, _spec_arg(args.spec))

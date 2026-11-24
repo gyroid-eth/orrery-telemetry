@@ -45,12 +45,13 @@ WORK_DIR=""
 MAIL_HELPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-child-mail"
 STREAM_HELPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-stream"
 MCP_WRAPPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-mcp"
+GEMINI_TOOLS=()
 CLEANUP_HELPER="$HOOKS_DIR/cleanup-child-agent.sh"
 
 usage() {
   cat >&2 <<'EOF'
 Usage: spawn_gemini_preregistered.sh --pre-registered NAME --child-token-file FILE \
-  [--worktree] [--worktree-base REV] --model MODEL [TASK_SHORT] [WORKDIR]
+  [--worktree] [--worktree-base REV] [--tools SPEC] --model MODEL [TASK_SHORT] [WORKDIR]
 EOF
 }
 
@@ -58,6 +59,9 @@ while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --pre-registered) CHILD_NAME="${2:-}"; shift 2 ;;
     --child-token-file|--token-file) CHILD_TOKEN_FILE="${2:-}"; shift 2 ;;
+    --tools)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      GEMINI_TOOLS+=(--tools "$2"); shift 2 ;;
     --model) MODEL="${2:-}"; shift 2 ;;
     --worktree) shift ;;
     --worktree-base) WORKTREE_BASE_REV="${2:-}"; shift 2 ;;
@@ -79,6 +83,10 @@ WORK_DIR="${2:-$PWD}"
 [[ -n "$TASK_FILE" && -s "$TASK_FILE" ]] || { echo "$PROG: full task handoff file is missing" >&2; exit 2; }
 [[ -d "$WORK_DIR" ]] || { echo "$PROG: workdir does not exist: $WORK_DIR" >&2; exit 2; }
 case "$EFFORT" in low|medium|high) ;; *) echo "$PROG: invalid effort: $EFFORT" >&2; exit 2 ;; esac
+if [[ ${#GEMINI_TOOLS[@]} -gt 0 ]]; then
+  "$PYTHON_BIN" "$HOOKS_DIR/child_tools.py" parse --provider gemini "${GEMINI_TOOLS[@]}" >/dev/null || exit 2
+fi
+
 command -v tmux >/dev/null 2>&1 || { echo "$PROG: tmux not found" >&2; exit 1; }
 command -v "$GEMINI_BIN" >/dev/null 2>&1 || { echo "$PROG: Antigravity CLI not found (expected agy)" >&2; exit 1; }
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || [[ -x "$PYTHON_BIN" ]] || { echo "$PROG: selected Python is unavailable" >&2; exit 1; }
@@ -405,6 +413,12 @@ if git -C "$WORKTREE_DIR" ls-files --error-unmatch .agents/mcp_config.json >/dev
 fi
 mkdir -p "$WORKTREE_DIR/.agents"
 MCP_CONFIG="$WORKTREE_DIR/.agents/mcp_config.json"
+if [[ "$(uname -s)" == Darwin ]]; then
+  "$PYTHON_BIN" "$HOOKS_DIR/child_tools.py" agy-config \
+    --out "$MCP_CONFIG" --runner "$MCP_WRAPPER" --child "$CHILD_NAME" \
+    --project-key "$PROJECT_KEY" --runtime-dir "$RUNTIME_DIR" --mail-env "$MAIL_ENV" \
+    ${GEMINI_TOOLS[@]+"${GEMINI_TOOLS[@]}"}
+else
 AGS_GEMINI_MCP_PATH="$MCP_CONFIG" \
 AGS_GEMINI_MCP_COMMAND="$MCP_WRAPPER" \
 "$PYTHON_BIN" - <<'PY'
@@ -418,6 +432,7 @@ entry = {
 path.write_text(json.dumps({"mcpServers": {"orrery-mail": entry}}, indent=2) + "\n", encoding="utf-8")
 os.chmod(path, 0o600)
 PY
+fi
 
 "$PYTHON_BIN" - "$TASK_FILE" "$TASK_EVENT_FILE" "$CHILD_NAME" "$PARENT_AGENT" "$RESOURCES" "$WORKTREE_DIR" "$SOURCE_REPO" <<'PY'
 import json, os, sys

@@ -29,7 +29,8 @@ def test_default_inherits_and_plain_mcp_copies_same_definition(tmp_path):
 ])
 def test_unrepresentable_native_approval_is_rejected(tmp_path,spec):
     with pytest.raises(tools.ToolsError):
-        tools.native_plan(tools.normalize(tools=spec),cwd=str(tmp_path),claude_json=settings(tmp_path))
+        tools.native_plan(tools.normalize(tools=spec, platform='linux'), cwd=str(tmp_path),
+                          claude_json=settings(tmp_path), platform='linux')
 
 
 def test_missing_selected_server_is_not_silently_dropped(tmp_path):
@@ -99,14 +100,16 @@ def test_browser_discovery_ambiguity_is_not_silently_ignored(tmp_path):
         browser_plan(tmp_path, servers={'first': CHROME, 'second': CHROME})
 
 
-def test_native_screen_has_product_definition_and_no_inherited_cua(tmp_path):
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_native_screen_has_product_definition_and_no_inherited_cua(tmp_path, platform):
     from agentstack_mail import screen_contract
-    spec = tools.normalize(tools={"screen": {"access": "read", "server": "orrery-screen"}})
+    spec = tools.normalize(tools={"screen": {"access": "read", "server": "orrery-screen"}},
+                           platform=platform)
     definition = {"command": "/fixture/python", "args": ["-m", "agentstack_mail.screen_mcp"],
                   "env": {"AGENTSTACK_SCREEN_BINDING_FILE": "/fixture/binding.json"}}
     config = settings(tmp_path)
     plan = tools.native_plan(spec, cwd=str(tmp_path), claude_json=config,
-                             managed_screen=definition)
+                             managed_screen=definition, platform=platform)
     assert plan["servers"] == {"orrery-screen": definition}
     assert tuple(plan["managed_screen"]) == screen_contract.TOOLS
     assert plan["approved"] == plan["enabled_tools"] == {}
@@ -115,6 +118,6 @@ def test_native_screen_has_product_definition_and_no_inherited_cua(tmp_path):
     settings_path.write_text(json.dumps({"mcpServers": {
         "alias": {"command": "/fixture/wrapper", "args": ["/fixture/cua-driver"]}}}))
     conflicting = tools.normalize(tools={"mcp": ["orrery-screen", "alias"]})
-    with pytest.raises(tools.ToolsError, match="direct Cua Driver"):
+    with pytest.raises(tools.ToolsError, match="orrery-screen"):
         tools.native_plan(conflicting, cwd=str(tmp_path), claude_json=str(settings_path),
-                          managed_screen=definition)
+                          managed_screen=definition, platform=platform)

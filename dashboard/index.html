@@ -3023,6 +3023,14 @@ OFF = legacy snapshot+comet mode">
         <input type="text" id="spm-resources" placeholder="src/**,tests/**" autocomplete="off">
         <div class="spm-hint">Comma-separated repository paths reserved for providers that require resource isolation.</div>
       </div>
+      <div class="spm-row full" id="spm-computer-use-row" style="display:none">
+        <label class="spm-lab" for="spm-computer-use">Computer use</label>
+        <select id="spm-computer-use" disabled>
+          <option value="">Off</option>
+          <option value="read">View</option>
+          <option value="operate">Control</option>
+        </select>
+      </div>
       <details class="spm-row full spm-advanced" id="spm-advanced">
         <summary>
           <span>advanced</span>
@@ -39135,6 +39143,9 @@ async function loadSpawnCatalog(seq){
     selectSpawnName('');
     renderSpawnProviders(providers);
     renderSpawnDirs(catalog.dirs);
+    const computerUse=SPM('spm-computer-use');
+    computerUse.disabled=catalog.computer_use!==true||catalog.capabilities?.tools===false;
+    SPM('spm-computer-use-row').style.display=computerUse.disabled?'none':'grid';
     setSpawnDraftStatus(spmDraftRestored);
     spmReady=true;
     updateSpawnButton();
@@ -39188,6 +39199,9 @@ function openSpawnModal(){
   SPM('spm-role').value='';
   SPM('spm-worktree').checked=false;
   resetSpawnProviderCapabilities();
+  SPM('spm-computer-use').value='';
+  SPM('spm-computer-use').disabled=true;
+  SPM('spm-computer-use-row').style.display='none';
   SPM('spm-wt-base').classList.remove('on');
   SPM('spm-worktree-base').value='';
   spmBusy=false;spmReady=false;spmSelectedName='';
@@ -39300,6 +39314,9 @@ function buildSpawnPayload(){
     const device=(SPM('spm-chrome-device').value||'').trim();
     if(device)payload.claude_chrome_device=device;
   }
+  const computerUse=SPM('spm-computer-use');
+  if(computerUse&&!computerUse.disabled&&computerUse.value)
+    payload.tools={screen:{access:computerUse.value,server:'orrery-screen'}};
   if(SPM('spm-worktree').checked){
     payload.worktree=true;
     const base=SPM('spm-worktree-base').value.trim();
