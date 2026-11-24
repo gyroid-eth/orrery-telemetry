@@ -121,6 +121,12 @@ def test_results_are_metadata_only_and_do_not_create_preview_grants():
     assert history.project_event(raw('old-result', 'tool_result')) is None
 
 
+def test_projected_tool_call_id_only_accepts_opaque_ids_on_tool_rows():
+    assert history.project_event(raw('request', tool_call_id='a'*32))['tool_call_id'] == 'a'*32
+    assert 'tool_call_id' not in history.project_event(raw('request', tool_call_id='provider-call-id'))
+    assert 'tool_call_id' not in history.project_event(raw('message', 'text', tool_call_id='a'*32))
+
+
 @pytest.mark.parametrize('change', [dict(id='raw-call-id'), dict(id='A'*32), dict(phase='execute'), dict(phase=[]), dict(tool=''), dict(id=9)])
 def test_invalid_metadata_leaves_original_tool_fallback(change):
     step = dict(id='a'*32, phase='complete', tool='Read', detail='report.md', status='done')
