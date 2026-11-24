@@ -370,7 +370,11 @@ def test_jump_conversation_tools_use_strict_config_and_fresh_screen_permissions(
         assert '--strict-mcp-config' in args
         assert ('--chrome' in args) is chrome
         assert ('--no-chrome' in args) is not chrome
-        assert json.loads(args[args.index('--settings') + 1]) == {'disableAllHooks': True}
+        settings = {'disableAllHooks': True}
+        if server.sys.platform == 'darwin':
+            settings['deniedMcpServers'] = [{'serverName': 'computer-use'}]
+        assert args.count('--settings') == 1
+        assert json.loads(args[args.index('--settings') + 1]) == settings
         assert 'AGENTSTACK_MAIL_DISABLED=1' in launches[-1]
         assert 'cleanup-child-agent.sh' not in command
         servers = json.loads(args[args.index('--mcp-config') + 1])['mcpServers']
@@ -468,8 +472,9 @@ def test_conversation_tools_reach_agents_response(conversation_jump, monkeypatch
 
 
 @pytest.mark.parametrize('tools', [{'mcp': ['orrery-mail']}, {'mcp': ['cua-driver']}, {'screen': 'operate'}])
-def test_jump_conversation_refuses_other_tools(conversation_jump, tools):
+def test_jump_conversation_refuses_other_tools_on_linux(conversation_jump, tools, monkeypatch):
     name, runtime, launches = conversation_jump
+    monkeypatch.setattr(child_tools.sys, 'platform', 'linux')
     assert not server.do_jump(name, tools=tools, open_terminal=False)['ok']
     assert not launches and not screen_state.Store(runtime).path.exists()
 

@@ -319,6 +319,93 @@ def test_compact_record_stays_a_short_activity_line(phone):
     assert js("document.querySelector('[data-id=compact] .conversation-speaker-name')===null")
 
 
+@pytest.mark.parametrize('provider,elapsed', [
+    ('claude', '12s'), ('codex', '2m 03s'), ('dsh', '7s'), ('dsh', '1m 3s'),
+    ('hermes', '9s'), ('hermes', ''),
+])
+def test_mobile_compaction_observation_and_record(phone, provider, elapsed):
+    import base64
+    import os
+    from pathlib import Path
+    from dashboard.mobile_history import project_page
+    from dashboard.mobile_projection import project_agent
+    from test_mobile_steps import fixtures, raw
+
+    client, js, wait, state = phone
+    sequence = fixtures(provider)[:3] if provider in {'claude', 'codex'} else [
+        {**raw('prompt', 'text', 'user'), 'text': 'Please keep the main findings.'}]
+
+    def set_record():
+        state.update(provider=provider, events=project_page(dict(
+            ok=True, provider=provider, events=sequence))[0])
+
+    def refresh():
+        js("document.dispatchEvent(new Event('visibilitychange'))")
+
+    folder = os.environ.get('MOBILE_COMPACTION_CAPTURE_DIR')
+
+    def capture(stage):
+        if folder and elapsed:
+            for theme in ('dark', 'light'):
+                js("if(document.documentElement.dataset.colorTheme!==" + json.dumps(theme) + ")document.querySelector('#mobile-theme').click()")
+                js('document.fonts.ready')
+                image = client.call('Page.captureScreenshot', format='png', captureBeyondViewport=False)['data']
+                (Path(folder) / f'{provider}-{elapsed.split()[0]}-{theme}-{stage}.png').write_bytes(base64.b64decode(image))
+
+    roster = state['snapshot']['agents']
+    base = {**roster[0], 'work_disp': '41s'}
+    if provider in {'dsh', 'hermes'}:
+        # Their general activity probe can be unknown during manual compaction.
+        base['act_state'] = None
+    roster[0] = project_agent({**base, 'reader_phase': 'compacting', 'reader_phase_elapsed': elapsed})
+    set_record()
+    js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
+    refresh()
+    label = """[...document.querySelectorAll('.conversation-activity, .conversation-steps:not([hidden]) .conversation-steps-heading')]
+      .filter(el=>el.textContent.startsWith('Compacting context…'))"""
+    wait(label + '.length===1')
+    wait("document.querySelector('[data-id=" + sequence[0]['id'] + "]')!==null")
+    assert js(label + "[0].className") == 'conversation-activity'
+    assert js(label + '[0].textContent') == 'Compacting context…' + (' · '+elapsed if elapsed else '')
+    if provider in {'claude', 'codex'}:
+        assert js("document.querySelector('.conversation-steps:not([hidden]) .conversation-steps-heading').textContent") == ''
+    assert js(label + "[0].getBoundingClientRect().width<=document.querySelector('.conversation-list').clientWidth")
+    capture('active')
+
+    # Stale roster data must not continue to advertise compaction.
+    if not elapsed:
+        state['snapshot']['sources']['agents'] = {**state['snapshot']['sources']['agents'], 'status': 'stale'}
+        refresh()
+        wait(label + '.length===0')
+
+    finished = {**raw('compacted', 'system', 'system'), 'text': 'Context compacted',
+                'detail': 'Earlier context was summarized.'}
+    sequence.append(finished)
+    if provider == 'claude':
+        sequence.extend([
+            {**raw('compact-command', 'text', 'user'), 'text':
+                '<command-name>/compact</command-name><command-message>compact</command-message><command-args>Keep findings</command-args>'},
+            {**raw('compact-output', 'text', 'user'), 'text':
+                '<local-command-stdout>\x1b[32mCompacted (ctrl+o to see full summary)\x1b[0m</local-command-stdout>'},
+            {**raw('other-output', 'text', 'user'), 'text':
+                '<local-command-stdout>\x1b[32mReady\x1b[0m</local-command-stdout><local-command-stderr>\x9b1mWarning\x9b0m</local-command-stderr>'},
+        ])
+    # A completion must stay visible among adjacent tools.
+    sequence.extend([{**raw('next-tool'), 'text': 'Read'}, {**raw('next-tool-2'), 'text': 'Read'}])
+    roster[0] = project_agent({**base, 'act_state': 'wait'})
+    set_record()
+    refresh()
+    wait("document.querySelector('[data-id=compacted]')!==null&&"+label+'.length===0')
+    assert js("document.querySelector('[data-id=compacted]').innerText") == 'Context compacted'
+    assert not js("document.querySelector('[data-id=compacted]').hidden")
+    assert js("document.querySelectorAll('.conversation-tool-label').length") >= 3
+    if provider == 'claude':
+        for element in ('compact-command', 'compact-output'):
+            assert js(f"document.querySelector('[data-id={element}]').hidden")
+        assert js("[...document.querySelectorAll('[data-id=other-output] code')].map(c=>c.textContent)") == ['Ready', 'Warning']
+    capture('record')
+
+
 @pytest.mark.parametrize('phone', [(390, 844), (360, 800)], indirect=True)
 def test_body_uses_at_least_eighty_percent(phone):
     _, js, _, _ = phone

@@ -22,7 +22,15 @@ let readingView='graph',tabletLayout=tabletView.matches;
 let snapshot=null,kind='all',agentFilter='',desiredWindow='day',timer=0,active=null,pending=false,receivedAt=0,lastNotices=[];
 const mailRef=a=>a&&/^[a-f0-9]{32}$/.test(a.mail_instance_id)&&Number.isSafeInteger(a.mail_agent_id)&&a.mail_agent_id>0?{mail_instance_id:a.mail_instance_id,mail_agent_id:a.mail_agent_id}:null;
 function markRef(element,value){if(typeof value?.name==='string')element.dataset.agentName=value.name;const ref=mailRef(value);if(ref){element.dataset.mailInstanceId=ref.mail_instance_id;element.dataset.mailAgentId=String(ref.mail_agent_id);}}
-window.OrreryMobileAgent={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?{state:rows[0].act_state,running:rows[0].running,workDisplay:typeof rows[0].work_disp==='string'?rows[0].work_disp:'',stale:snapshot.sources.agents.status!=='available'||snapshot.sources.agents.age_seconds===null||snapshot.sources.agents.age_seconds+(performance.now()-receivedAt)/1000>30}:null;}};
+window.OrreryMobileAgent={forName(name){
+ const rows=(snapshot?.agents||[]).filter(a=>a.name===name);
+ if(rows.length!==1)return null;
+ const [a]=rows;
+ return {state:a.act_state,running:a.running,workDisplay:typeof a.work_disp==='string'?a.work_disp:'',
+  readerPhase:a.reader_phase,readerPhaseElapsed:a.reader_phase_elapsed,
+  stale:snapshot.sources.agents.status!=='available'||snapshot.sources.agents.age_seconds===null||
+   snapshot.sources.agents.age_seconds+(performance.now()-receivedAt)/1000>30};
+}};
 window.OrreryMobileIdentity={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?mailRef(rows[0]):null;},roster(){const source=snapshot?.sources.agents;return source?.status==='available'&&source.age_seconds!==null&&source.age_seconds+(performance.now()-receivedAt)/1000<=30?snapshot.agents:null;}};
 let mailPage=null,mailPositions=[null],mailPosition=0,mailController=null,mailGeneration=0;
 let pair=null,pairController=null,pairGeneration=0,detailController=null,detailGeneration=0;
@@ -656,11 +664,14 @@ let replyReference=null,preparedReference=null;
 const referenceTarget=()=>target?JSON.stringify([name,capability?.epoch,target.choice,target.revision,selector?.mail_instance_id,selector?.mail_agent_id]):'';
 const referenceCurrent=value=>!value||value.target===referenceTarget()&&value.value.isCurrent();
 const referenceError=()=>replyReference&&!referenceCurrent(replyReference)?'Target or conversation changed. Remove this reference and select again.':'';
-function addReference(value){
+function addReference(value,beforeFocus){
  if(phase!=='editing'||!previewOK||!target||value.agent!==name||!value.isCurrent())return false;
+ beforeFocus?.();
  replyReference={value:{...value,text:value.text.replace(/\s+/gu,' ').trim()},target:referenceTarget()};
- render();window.OrreryReaderReplyMotion?.confirmReference?.(sheet.querySelector('.reader-reference-card'));
- q('#terminal-text')?.focus({preventScroll:true});return true;
+ render({restoreFocus:false});window.OrreryReaderReplyMotion?.confirmReference?.(sheet.querySelector('.reader-reference-card'));
+ const field=q('#terminal-text');
+ field?.focus({preventScroll:true});field?.setSelectionRange(field.value.length,field.value.length);
+ return true;
 }
 function refreshReference(){
  if(replyReference&&phase==='review'&&!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='';render();return;}
@@ -1279,11 +1290,11 @@ function readerReceipt(host){
  if(unknown)box.append(action('Check receipt','',status));
  host.append(box);return box;
 }
-function render(){
+function render({restoreFocus=true}={}){
  conversation()?.dismissReferenceSelection?.();
  rememberView();
  inputObserver?.disconnect();inputObserver=null;
- const focus=document.activeElement,hadFocus=focus&&sheet.contains?.(focus);if(hadFocus){sheet.tabIndex=-1;sheet.focus({preventScroll:true});}
+ const focus=document.activeElement,hadFocus=restoreFocus&&focus&&sheet.contains?.(focus);if(hadFocus){sheet.tabIndex=-1;sheet.focus({preventScroll:true});}
  const previous=q('#terminal-output');
  // Review/edit rebuild the sheet for the same pane. Choosing a pane and
  // reopening clear output first, so their new preview still opens at its tail.

@@ -232,6 +232,8 @@ Claude の子も正常終了後、state と owner credential を既定30日、mo
 
 Claude、Codex、dsh、Hermes の標準 launcher で `--tools mcp:orrery-screen` または `--tools screen:read:orrery-screen` を選べます。実行中の権限を変える場合は operator API を使います。 [Cua Driver の準備、権限と確認手順](computer-use.md)
 
+macOS の子は NEW AGENT の Computer use、または `--tools screen:read`（View）、`--tools screen:operate`（Control）、`--tools mcp:orrery-screen`（Off で待機）を使います。Claude Code、Codex CLI、dsh、Hermes、Antigravity CLI のいずれも既存の `orrery-screen` から Cua Driver を呼びます。従来の `screen:operate:cua-driver` も同じ relay を選びます。Windows／WSL の名前付き MCP 指定は従来どおりです。
+
 ## Codex 固有の起動
 
 `agent-start-codex` は次を行います。

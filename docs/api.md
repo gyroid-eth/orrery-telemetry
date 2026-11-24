@@ -71,6 +71,8 @@ POST の Origin は、検証済み Host に対応する固定 origin とだけ�
 
 API 42 の computer use は、標準の子が `orrery-screen` を選択したときに利用できます。[準備と確認手順](computer-use.md)
 
+macOS の legacy `POST /api/spawn` は、生成する Claude Code、Codex CLI、dsh、Hermes、Antigravity CLI で `tools.screen` の `read`／`operate` を既存の `orrery-screen` に割り当てます。サーバー名省略、`orrery-screen`、従来の `cua-driver` 指定で同じ経路を使います。`tools.mcp:["orrery-screen"]` は初期値 Off です。
+
 | Method | Path | 資格 | Request と Response |
 | --- | --- | --- | --- |
 | GET | `/api/computer-use` | operator | クエリなしで `{launches: [...]}`。対象の4項目を指定すると、その起動の権限を返す。 |
@@ -830,17 +832,17 @@ request:
 | `claude_chrome` | Claude only | boolean。`true` で child に `--chrome` を付ける。省略・`false` は inherit（利用者の Claude 設定に従う）。launcher の env 既定は使わない。[Claude in Chrome](delegation.md#claude-child-とブラウザ操作claude-in-chrome) |
 | `claude_chrome_device` | Claude only | 使うブラウザの deviceId（`[A-Za-z0-9._:-]{1,128}`）。指定すると `claude_chrome: true` と同じ。`claude_chrome: false` との併用は拒否 |
 | `base` | Claude / Codex / dsh / Hermes | `"default"`（明示すると installer の道具の既定を適用しない）または `"mail-only"`（ORRERY Mail と `tools` で選んだものだけ）。api 7 から |
-| `tools` | Claude / Codex / dsh / Hermes | object。`browser`（`true` は Claude/Codex、`{"device": "<deviceId>"}` の deviceId は Claude only）、`screen`（`"read"` / `"operate"` または `{"access": ..., "server": "<name>"}`。server を省くと Mac の computer use で Claude only）、`mcp`（server 名の配列。tool は承認しない）、`approve_all`（`mcp` のうち全 tool を承認する server。表に無い版は拒否）。`claude_chrome_device` と deviceId が食い違えば拒否。api 7 から。[子に渡す道具を選ぶ](delegation.md#子に渡す道具を選ぶ--base----tools) |
+| `tools` | Claude / Codex / dsh / Hermes | object。`browser`（`true` は Claude/Codex、`{"device": "<deviceId>"}` の deviceId は Claude only）、`screen`（`"read"` / `"operate"` または `{"access": ..., "server": "<name>"}`。macOS で server を省くと `orrery-screen`）、`mcp`（server 名の配列。tool は承認しない）、`approve_all`（`mcp` のうち全 tool を承認する server。表に無い版は拒否）。`claude_chrome_device` と deviceId が食い違えば拒否。api 7 から。[子に渡す道具を選ぶ](delegation.md#子に渡す道具を選ぶ--base----tools) |
 
 DeepSeek / Local の通常 catalog は、plain 世代の識別と generator の静的検査を launcher と共用します。旧 managed 世代を自動で利用可能にはしません。effort は選択した model × harness の検証済み cache を使用し、不明は不明のまま返します。生存判定は pane の子プロセスに native CLI があるかを確認し、確認不能を終了済みにはしません。provider は子の明示的な harness_backend から読み、モデル名から推測しません。
 
-dsh / Hermes では、選択を native config で表せる場合だけ `base` / `tools` を受け付けます。stdio / HTTP の MCP server を写し、内蔵 computer use・Chrome device・表せない tool 単位の承認やフィルターは理由つきで拒否します。起動できたことを、それらの承認が有効になった意味にはしません。
+dsh / Hermes では、選択を native config で表せる場合だけ `base` / `tools` を受け付けます。stdio / HTTP の MCP server を写し、Chrome device・表せない tool 単位の承認やフィルターは理由つきで拒否します。起動できたことを、それらの承認が有効になった意味にはしません。
 
 API 41 から、標準の `/api/spawn` で `base` と `tools` を両方省略すると、Claude・Codex・dsh・Hermes に installer の `AGENTSTACK_CHILD_DEFAULT_TOOLS` を適用します。NEW AGENT もこの経路を使います。launcher は最終の作業フォルダと provider に合わせて使えない既定の項目を外し、通知します。明示した選択を優先し、追加の道具を指定しない `tools: {}` や `base: "default"` は API 8 と同じく `--base default` を渡して installer の既定を抑止します。明示した道具が使えなければ起動を止めます。
 
-API 44 から、Codex child の `/api/spawn` と道具を変更する `/api/jump` で `{"tools":{"chrome_extension":true}}` を指定すると、設定済みの `chrome@openai-bundled` を有効にします。`orrery-screen` との併用は拒否します。
+API 44 から、Codex child の `/api/spawn` と道具を変更する `/api/jump` で `{"tools":{"chrome_extension":true}}` を指定すると、設定済みの `chrome@openai-bundled` を有効にします。macOS では `orrery-screen` と併用できます。
 
-`base` か `tools` で選択した child は、選択どおりにできなければ（Mail の proxy が無い、server を写せない、computer use が有効な project での `mail-only` など）起動しません。形の誤りはここで 400、child の起動ディレクトリで決まる誤りは launcher の失敗として返ります。Gemini など他の provider では、`mail-only` と `tools` を拒否します。
+`base` か `tools` で選択した child は、選択どおりにできなければ（Mail の proxy が無い、server を写せないなど）起動しません。形の誤りはここで 400、child の起動ディレクトリで決まる誤りは launcher の失敗として返ります。macOS の Antigravity では管理 relay の画面指定を受け付けます。ほかの指定の対象は表のとおりです。
 
 未知の request field はモデル解決や起動の前に HTTP 400 で拒否します。任意の Gemini provider を導入した環境では `resources` も受け付けます（[Gemini の委任](delegation.md)を参照）。他の provider では拒否します。
 
@@ -946,6 +948,8 @@ API 25: 旧 managed の `attempt_id` による起動・状態照会は廃止し�
 ## スマホ閲覧用（API 30）
 
 API 39から、snapshotのagentに任意の`work_disp`を含めます。稼働中かつ`act_state: work`で、上流の短い経過表示（例`2m05s`）を検証できたときだけです。停止・別状態・欠損・不正値では欄を付けず、表示側で経過を推測しません。
+
+API 47 の旧運用では、稼働中の Claude Code・Codex CLI・dsh・Hermes の現在の tmux 画面に compact の操作表示を確認できた場合、`/api/agents` とスマホの snapshot の該当行に `reader_phase: "compacting"` を含めます。経過表示があれば `reader_phase_elapsed`（例 `2m 05s`）も含めます。既存の画面観測を使い、スマホには状態と経過表示だけを渡します。
 
 `GET /api/mobile-mail?window=<period>`はlegacy modeのloopback専用metadata endpointです。期間の既定は`day`（24h）。`all`、`day`、`15m`と、15〜43200の15の倍数を表す`m<N>`（分）だけを受け付け、先頭ゼロや小数は拒否します。既存のHost admissionを維持します。DB不在・project/schema/読取失敗は503、global modeは明示拒否（admission通過後501、または既存global admissionの拒否）です。globalから旧DBへfallbackしません。不明・重複queryは400です。
 
