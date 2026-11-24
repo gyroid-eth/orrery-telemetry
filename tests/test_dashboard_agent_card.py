@@ -100,12 +100,23 @@ def test_card_ignores_stale_claude_transcript(tmp_path, monkeypatch):
     assert (bound["model_id"], bound["effort"]) == ("claude-opus-5-5", "medium")
 
 
-def test_card_permissions_distinguish_selection_and_configuration(monkeypatch):
+@pytest.fixture
+def without_cua_overrides(monkeypatch):
     for key in agent_card.os.environ.copy():
         if key.startswith("CUA_DRIVER_"):
             monkeypatch.delenv(key)
+
+
+_DIRECT_CUA = {"command": "cua-driver", "args": ["mcp"]}
+_WRAPPED_CUA = {
+    "command": "/usr/bin/python3",
+    "args": ["/fixture/cua_relay.py", "--", "/fixture/cua-driver", "mcp"],
+}
+
+
+@pytest.mark.parametrize('cua', [_DIRECT_CUA, _WRAPPED_CUA], ids=['direct', 'wrapped'])
+def test_card_permissions_distinguish_selection_and_configuration(without_cua_overrides, cua):
     spec = {"base": "mail-only", "tools": {}}
-    cua = {"command": "cua-driver", "args": ["mcp"]}
     assert agent_card.tool_permissions(None, {}) == (None, None)
     assert agent_card.tool_permissions(spec, {}, isolated=True) == ("off", False)
     assert agent_card.tool_permissions(spec, {"cua-driver": cua}) == ("control", None)
@@ -116,9 +127,61 @@ def test_card_permissions_distinguish_selection_and_configuration(monkeypatch):
     assert agent_card.tool_permissions(chosen, {"cua-driver": cua}) == ("view", True)
 
 
+@pytest.mark.parametrize('key', ['enabled_tools', 'disabled_tools', 'tools', 'omit_tools_from'])
+def test_card_wrapped_cua_with_filter_stays_unknown(without_cua_overrides, key):
+    server = dict(_WRAPPED_CUA, **{key: []})
+    assert agent_card.tool_permissions(None, {'cua-driver': server}) == (None, None)
+
+
+@pytest.mark.parametrize('tail', [
+    ['/fixture/not-cua-driver', 'mcp'],
+    ['/fixture/cua-driver', 'inspect'],
+    ['/fixture/cua-driver', 'mcp', '--extra'],
+    ['mcp'],
+])
+def test_card_wrapped_cua_requires_standard_tail(without_cua_overrides, tail):
+    server = dict(_WRAPPED_CUA, args=['/fixture/cua_relay.py', '--', *tail])
+    assert agent_card.tool_permissions(None, {'cua-driver': server}) == (None, None)
+
+
+def test_card_wrapped_cua_with_inherited_override_stays_unknown(without_cua_overrides, monkeypatch):
+    monkeypatch.setenv('CUA_DRIVER_PERMISSION_MODE', 'bounded')
+    assert agent_card.tool_permissions(None, {'cua-driver': _WRAPPED_CUA}) == (None, None)
+
+
 def _write_private_json(path, data):
     path.write_text(json.dumps(data))
     path.chmod(0o600)
+
+
+@pytest.mark.parametrize('program', ['codex', 'claude-code'])
+def test_bound_card_reads_wrapped_cua_definition(tmp_path, monkeypatch, without_cua_overrides, program):
+    name, sid = 'WrappedCardFixture', '0432dc16-e219-4b20-8bb2-519f2f9d428a'
+    monkeypatch.setattr(server, 'RUNTIME_DIR', str(tmp_path))
+    children = tmp_path / 'child-agents'
+    children.mkdir()
+    if program == 'codex':
+        _write_private_json(children / f'{name}.json', {
+            'agent_id': 1, 'agent_name': name, 'program': program, 'project_key': 'test', 'launch_origin': 'child',
+        })
+        monkeypatch.setattr(server, '_card_codex_provenance', lambda *_: {'launch_origin': 'child'})
+        config = children / f'{name}.codex-home' / 'config.toml'
+        config.parent.mkdir()
+        config.write_text('[mcp_servers.cua-driver]\n'
+                          f'command = {json.dumps(_WRAPPED_CUA["command"])}\n'
+                          f'args = {json.dumps(_WRAPPED_CUA["args"])}\n')
+        config.chmod(0o600)
+    else:
+        _write_private_json(children / f'{name}.claude-launch.{sid}.json', {
+            'version': claude_chrome_policy.TOOLS_VERSION, 'launch_id': 'card-fixture-launch',
+            'agent_name': name, 'session_id': sid, 'claude_chrome': False, 'chrome_device': '',
+            'standalone': True, 'base': 'default', 'tools': {'mcp': ['cua-driver']},
+        })
+        _write_private_json(children / f'{name}.mcp.json', {'mcpServers': {'cua-driver': _WRAPPED_CUA}})
+    row = dict(name=name, program=program, running=True, history_binding='bound',
+               history_session_id=sid, transcript_path=str(tmp_path / 'transcript.jsonl'))
+    registration = dict(agent_id=1, project_key='test', program=program)
+    assert server._agent_card_fields(row, {}, {}, registration, ())['computer_use'] == 'control'
 
 
 @pytest.mark.parametrize(('tools', 'initial'), [

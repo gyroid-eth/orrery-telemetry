@@ -98,6 +98,28 @@ def test_antigravity_marker_enables_read_only_usage_poll(tmp_path):
     ]
 
 
+def test_antigravity_accepts_current_usage_command_envelope():
+    def runner(argv, **_):
+        if argv[-1] == '--version':
+            return subprocess.CompletedProcess(argv, 0, '1.5.15\n', '')
+        assert argv[1:] == ['-p', '/usage', '--output-format', 'json']
+        groups = [{'name': 'Gemini Models', 'buckets': [
+            {'id': 'gemini-weekly', 'name': 'Weekly Limit Remaining', 'window': 'weekly',
+             'remaining_fraction': 0.625, 'reset_time': '2030-01-01T00:00:00Z'},
+            {'id': 'gemini-five-hour', 'name': 'Five Hour Limit Remaining', 'window': '5h',
+             'remaining_fraction': 0.75, 'reset_time': '2030-01-01T05:00:00Z'},
+        ]}]
+        payload = {'status': 'SUCCESS', 'response': 'Human-readable quota report',
+                   'command': {'name': 'usage', 'data': {'groups': groups}}}
+        return subprocess.CompletedProcess(argv, 0, json.dumps(payload), '')
+
+    snapshot = AntigravityQuotaProvider(command='/fixture/agy', enabled=True, runner=runner).read()
+    assert snapshot.status == 'ok'
+    assert [(bucket.label, bucket.remaining_percent) for bucket in snapshot.buckets] == [
+        ('Gemini Models · 7d', 62.5), ('Gemini Models · 5h', 75),
+    ]
+
+
 def test_codex_adapter_accepts_injected_transport_without_spawning_process():
     calls: list[tuple[str, float]] = []
 
