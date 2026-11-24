@@ -8,6 +8,8 @@ The mobile reader shows agents needing attention, a Mail timeline and NETWORK in
 
 With the ORRERY cockpit you can turn it on and off from **Settings → Phone** ([next section](#turn-it-on-from-cockpit-settings)). The table after it and [Enable manually](#enable-manually) are for setting it up by hand without the cockpit.
 
+For Windows with WSL2, follow [Use Phone access on WSL2](#use-phone-access-on-wsl2) for the Serve step and service checks.
+
 ## Phone notifications (optional, Android Chrome)
 
 Notifications are off by default. Complete Phone access's owner and policy review, then prepare the optional dependencies through the regular installer. Review `bash scripts/install.sh --with-mobile-push --dry-run`, then use `--with-mobile-push` for the same installation with its normal approval steps. Ordinary installation does not install these dependencies. Do not pip-install into production Python by hand.
@@ -66,7 +68,7 @@ The first press **leaves the switch off**. Right under the switch it says "Not o
 
 ### Step 3: Serve 9443 → reader (you, terminal)
 
-**Copy** the `tailscale serve --https=9443 http://127.0.0.1:8781` shown in step 3, run it once in a terminal, then press **Check again**. ORRERY only reads Serve and never changes it.
+On macOS, **Copy** the `tailscale serve --https=9443 http://127.0.0.1:8781` shown in step 3, run it once in a terminal, then press **Check again**. On WSL2, use [Telemetry Settings](#use-phone-access-on-wsl2) to preview and confirm the change.
 
 **Check:** **Check again** puts a ✓ on step 3. If it does not, read the output of `tailscale serve`. With HTTPS Certificates off, it asks you to enable them here ([Before you start](#before-you-start-you-once)).
 
@@ -114,16 +116,27 @@ Once it is set up, you can go back to demo mode and the switch keeps working. Th
 Behind it runs Telemetry's `~/.agentstack/bin/agentstack-mobile`. The cockpit only calls that command and never writes Telemetry's files itself.
 
 - Settings live in `~/.agentstack/mobile.json` (mode 0600): `access`, `send`, `owner_login`, `public_origin`, `policy_reviewed_at` and three ports. It holds no keys or tokens.
-- The reader runs as the launchd job `org.agentstack.mobile-relay`, as `mobile_relay.py --config ~/.agentstack/mobile.json`, logging to `~/.agentstack/logs/mobile-relay.log`. A change reloads the job; turning Phone access off removes the job and its plist. Installation only places the command and creates no job. Uninstall stops the job and removes the plist.
+- The reader runs `mobile_relay.py --config ~/.agentstack/mobile.json`. On macOS the launchd job is `org.agentstack.mobile-relay`, with logs in `~/.agentstack/logs/mobile-relay.log`. On WSL2 it is the user unit `org.agentstack.mobile-relay.service`, with logs in the journal. Settings changes reload the service. Turning Phone access off or uninstalling stops and removes the managed service. Installation only places the command.
 - While a reader you started by hand holds 8781, the badge says **MANUAL** and Status says **A reader not started from Settings is running on 127.0.0.1:8781**. The phone can still read that reader. Settings cannot control it, so its switches are disabled, and `agentstack-mobile apply` answers `port_in_use` and changes nothing. To move to Settings, stop that reader in the terminal that started it (Ctrl-C), then turn **Phone access** on. The hand flags map like this: `--enable-terminal` is **Send from phone**, `--phone-policy-reviewed` is **I reviewed the policy** in step 4, and History is part of **Phone access**.
 - **Send from phone** also switches the cockpit side at once and saves it as `enable_mobile_terminal` in `~/.orrery/config.json`; no backend restart is needed. A change made in a terminal (`agentstack-mobile off`) is picked up the next time Settings is opened. While a reader started by hand is running, and until Settings has been used once, `enable_mobile_terminal` is left as it is.
 - Changing the login or the address withdraws the step 4 review; conversations and Send stop until you review again. To withdraw it yourself, run `echo '{"policy_reviewed": false}' | agentstack-mobile apply`.
 - If launchd cannot start the reader, Phone access goes back off and neither the job nor its plist is left behind (so nothing starts by itself at the next login).
 - The job runs the reader with the Python that was in use when you turned it on. If that Python goes away (a venv, or an older Homebrew version), Status says **The Python this reader was set up with is gone**. Turn Phone access off and on to rebuild the job with the current one.
 - In cockpit demo mode the Phone section does not put the login, the address or the Serve URL on the page (demo mode itself hides only user and host names). Turn demo mode off to set them up or change them ([In demo mode](#in-demo-mode)).
-- Tailscale Serve and Funnel are only read. It warns when Funnel is on. It never changes the policy or Serve.
+- The Phone switches read Serve and Funnel status. The WSL2 Serve controls are separate. Access policy and Funnel settings are managed in Tailscale.
 
 Without the cockpit, use `agentstack-mobile status` to see the state, `echo '{"access": true, "owner_login": "owner@example.com", "public_origin": "https://computer.example.ts.net:9443", "policy_reviewed": true}' | agentstack-mobile apply` to turn it on, and `agentstack-mobile off` to turn it off.
+
+## Use Phone access on WSL2
+
+Use an updated WSL2 distro with systemd enabled and a running user manager. Check `systemctl --user show-environment` inside the distro. Keep the distro running while the phone needs it. A systemd service alone does not keep WSL awake or start the distro at Windows sign-in. [Microsoft WSL systemd guide](https://learn.microsoft.com/windows/wsl/systemd)
+
+1. Sign in to Tailscale and enable MagicDNS and HTTPS Certificates as above. Telemetry uses `tailscale` in WSL when installed. Otherwise it uses Windows `tailscale.exe` from PATH or the standard Tailscale installation under Windows Program Files. With Windows Tailscale, WSL interop and Windows-to-WSL localhost forwarding must work. Check `agentstack-mobile status` for the sign-in and suggested address. [Microsoft WSL interop](https://learn.microsoft.com/windows/wsl/filesystems#run-windows-tools-from-linux), [Microsoft WSL networking](https://learn.microsoft.com/windows/wsl/networking)
+2. In Cockpit, go to **Settings → Phone**, check the suggested owner and address, and press **Confirm and turn on**. In WSL, check `systemctl --user status org.agentstack.mobile-relay.service` and `journalctl --user -u org.agentstack.mobile-relay.service`. When using Windows Tailscale, run `curl.exe -i http://127.0.0.1:8781/` in Windows PowerShell. A `403` with `request_denied` confirms the relay is reachable and requires the Serve identity.
+3. Save the current Serve configuration with `tailscale.exe serve status --json` in Windows PowerShell (or `tailscale serve status --json` when using Linux Tailscale). Open Telemetry directly at its local dashboard address, select **Network → Settings → Phone access → Review Serve**, and check the preview for **HTTPS 9443 → http://127.0.0.1:8781**. Press **Add Serve** to apply it. Use **Cancel** to leave the preview. HTTPS 9443 must be free for this action. The other listeners, including 443 and 8443, are outside the operation. Avoid editing Tailscale's port 9443 in another window while confirming.
+4. Return to Cockpit and press **Check again**. Finish reviewing the tailnet policy in step 4 above, then open the suggested address on the phone. If Tailscale refuses the change, check its Serve status, HTTPS settings and local CLI permissions before trying again. [Tailscale Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve)
+
+To undo, open **Review Serve** again, check the preview, and press **Remove Serve**. The dashboard can remove the dedicated entry it created while that entry still matches. Compare the remaining Serve configuration with the saved output. Turn **Phone access** off in Cockpit or run `agentstack-mobile off` and verify the systemd unit is gone. Off and uninstall stop the relay. Use the separate confirmation to remove its Serve entry.
 
 ## Ask your agent to set it up
 
@@ -373,7 +386,7 @@ To disable History only, add `--disable-history` to a reader started by hand (re
 
 ## Disable and restore
 
-If you turned it on in cockpit Settings, turn **Phone access** off (or run `agentstack-mobile off`); the launchd job and its plist are removed. If you started the reader by hand, press Ctrl-C in its terminal. Either way, remove the Serve listener yourself.
+For the WSL2 Settings workflow, follow [the undo steps above](#use-phone-access-on-wsl2). On macOS, turn **Phone access** off in cockpit Settings (or run `agentstack-mobile off`) to remove the launchd job and its plist. If you started the reader by hand, press Ctrl-C in its terminal. For a Serve listener you added by hand, remove that entry with the matching command.
 
 ```sh
 tailscale serve --https=9443 off

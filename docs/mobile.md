@@ -8,6 +8,8 @@
 
 ORRERYのcockpitがあれば、**Settings → Phone**からオン・オフできます（[次節](#cockpitのsettingsからオンにする)）。その下の表と[手動で有効にする](#手動で有効にする)は、cockpitを使わずに手で設定する場合の手順です。
 
+WindowsのWSL2を使う場合は、[WSL2でPhone accessを使う](#wsl2でphone-accessを使う)に沿ってServeの設定とサービスの確認を進めます。
+
 ## スマホへ通知する（Android Chrome・任意）
 
 通知は既定でオフです。Phone accessの本人確認とpolicy確認を済ませた後、正規installerでoptional依存を用意します。まず `bash scripts/install.sh --with-mobile-push --dry-run` で計画を確認し、同じinstall先への `--with-mobile-push` 付きinstallを通常の承認手順で実行します。通常のinstallにはこの依存を追加しません。productionのPythonへ手でpipを実行しないでください。
@@ -66,7 +68,7 @@ cockpitの画面からは変えられない前提が2つあります。どちら
 
 ### 手順3: Serve 9443 → reader（本人・terminal）
 
-手順3に出ている`tailscale serve --https=9443 http://127.0.0.1:8781`を**Copy**し、terminalで1回実行してから**Check again**を押します。ORRERYはServeを読むだけで、変更しません。
+macOSでは手順3に出ている`tailscale serve --https=9443 http://127.0.0.1:8781`を**Copy**し、terminalで1回実行してから**Check again**を押します。WSL2では[TelemetryのSettings](#wsl2でphone-accessを使う)で変更内容を見てから確定します。
 
 **確かめる:** **Check again**で手順3に✓が付く。付かないときは、`tailscale serve`の出力を読みます。HTTPS Certificatesが無効なら、ここで有効にするよう求められます（[始める前に](#始める前に本人1回)）。
 
@@ -114,16 +116,27 @@ loginとaddressをまだ設定していない状態でdemo modeのまま**Phone 
 裏ではTelemetryの`~/.agentstack/bin/agentstack-mobile`が動きます。cockpitはこのcommandを呼ぶだけで、Telemetryのfileを直接は書きません。
 
 - 設定は`~/.agentstack/mobile.json`（mode 0600）に置きます。keyは`access`・`send`・`owner_login`・`public_origin`・`policy_reviewed_at`と3つのportで、鍵やtokenは入りません。
-- readerはlaunchdのjob `org.agentstack.mobile-relay`として、`mobile_relay.py --config ~/.agentstack/mobile.json`で動きます。logは`~/.agentstack/logs/mobile-relay.log`です。設定を変えるとjobを入れ直し、Phone accessを切るとjobとplistを消します。installはcommandを置くだけで、jobは作りません。uninstallはjobを止めてplistを消します。
+- readerは`mobile_relay.py --config ~/.agentstack/mobile.json`で動きます。macOSではlaunchdのjob `org.agentstack.mobile-relay`で、logは`~/.agentstack/logs/mobile-relay.log`です。WSL2ではsystemdのuser unit `org.agentstack.mobile-relay.service`で、logはjournalに入ります。設定を変更すると再起動します。Phone accessを切るかuninstallすると、管理しているサービスを停止して削除します。installはcommandを置くだけです。
 - 手で起動したreaderが8781を使っている間は、badgeが**MANUAL**になり、Statusに**A reader not started from Settings is running on 127.0.0.1:8781**と出ます。スマホからはそのreaderを今も読めます。Settingsのスイッチはそのreaderを動かせないので、押せなくなり、`agentstack-mobile apply`も`port_in_use`で何も変えません。Settingsへ移るには、そのreaderを起動したterminalで止め（Ctrl-C）、**Phone access**を入れます。手のflagは次のように置き換わります: `--enable-terminal`は**Send from phone**、`--phone-policy-reviewed`は4の**I reviewed the policy**、Historyは**Phone access**に含まれます。
 - **Send from phone**は、cockpit側の受け口もその場で切り替わり、`~/.orrery/config.json`の`enable_mobile_terminal`に保存されます。backendの再起動はいりません。terminalで`agentstack-mobile off`などを実行した場合は、次にSettingsを開いたときに揃います。手で起動したreaderが動いている間と、Settingsを一度も使っていない間は、`enable_mobile_terminal`を今の値のまま変えません。
 - loginかaddressを変えると、4の確認は取り消され、会話とSendは確認し直すまで止まります。確認を自分で取り消すには`echo '{"policy_reviewed": false}' | agentstack-mobile apply`を実行します。
 - launchdがreaderを起動できなかったときは、Phone accessをオフに戻し、jobもplistも残しません（次のloginで勝手に起動しないように）。
 - jobは、オンにしたときのPythonでreaderを動かします。そのPython（venvやHomebrewの古い版）を消すと、Statusに**The Python this reader was set up with is gone**と出ます。Phone accessを一度切って入れ直すと、今のPythonで作り直します。
 - cockpitのdemo modeでは、Phoneの節はlogin・address・ServeのURLを画面に出しません（demo modeが隠すのはユーザー名と機械名だけなので）。設定と変更はdemo modeを切って行います（[demo modeのとき](#demo-modeのとき)）。
-- Tailscale ServeとFunnelは読むだけです。Funnelが有効なら警告を出します。policyとServeは変更しません。
+- PhoneのスイッチはServeとFunnelの状態を読み取ります。WSL2のServeの追加・削除は別の操作です。policyとFunnelはTailscaleで管理します。
 
 cockpitなしで同じことをするには、`agentstack-mobile status`で状態を見て、`echo '{"access": true, "owner_login": "owner@example.com", "public_origin": "https://computer.example.ts.net:9443", "policy_reviewed": true}' | agentstack-mobile apply`で入れ、`agentstack-mobile off`で切ります。
+
+## WSL2でPhone accessを使う
+
+systemdを有効にした最新のWSL2ディストリビューションが必要です。WSL内の`systemctl --user show-environment`が成功することを確かめます。スマホから使う間はディストリビューションを動かしておきます。systemdのサービスだけではWSLを起動し続けたり、Windowsへのサインイン時にWSLを起動したりできません。[MicrosoftのWSL systemdガイド](https://learn.microsoft.com/windows/wsl/systemd)
+
+1. Tailscaleにサインインし、上の手順でMagicDNSとHTTPS Certificatesを有効にします。WSL内に`tailscale`があればそれを使います。無ければPATHまたはWindowsのProgram Filesにある`tailscale.exe`を使います。Windows側を使う場合はWSL interopとWindowsからWSLへのlocalhost転送が必要です。`agentstack-mobile status`でサインインと候補のアドレスを確かめます。[WSL interop](https://learn.microsoft.com/windows/wsl/filesystems#run-windows-tools-from-linux)、[WSLのネットワーク](https://learn.microsoft.com/windows/wsl/networking)
+2. Cockpitの**Settings → Phone**で本人のloginとアドレスを確かめ、**Confirm and turn on**を押します。WSL内の`systemctl --user status org.agentstack.mobile-relay.service`と`journalctl --user -u org.agentstack.mobile-relay.service`で起動を確かめます。Windows側のTailscaleを使う場合は、Windows PowerShellで`curl.exe -i http://127.0.0.1:8781/`を実行します。`403`と`request_denied`が返れば、転送がリレーに届き、Serveの本人情報が必要なことを確認できます。
+3. Windows PowerShellの`tailscale.exe serve status --json`（Linux版の場合はWSL内の`tailscale serve status --json`）で現在のServe設定を保存します。ローカルのTelemetry dashboardを直接開き、**Network → Settings → Phone access → Review Serve**を押します。**HTTPS 9443 → http://127.0.0.1:8781**を確認して**Add Serve**を押します。取り消す場合は**Cancel**です。HTTPS 9443が空いている場合だけ追加でき、443や8443などの既存の待受は対象外です。確定中は別の画面でTailscaleの9443を編集しないでください。
+4. Cockpitに戻り**Check again**を押し、上の手順4でtailnetのpolicyを確認してからスマホで候補のアドレスを開きます。変更に失敗した場合は、Serveの状態、HTTPS Certificates、CLIの権限を確認します。[Tailscale Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve)
+
+戻す場合は、再び**Review Serve**を押して、プレビューを確認し**Remove Serve**を押します。Telemetryで追加し、そのままの設定が残っている専用のServeだけを削除できます。残ったServe設定を手順3で保存した内容と比較してください。Cockpitで**Phone access**を切るか`agentstack-mobile off`を実行し、user unitが消えたことを確かめます。Phone accessを切る場合もuninstallする場合も、Serveの削除には別途確認ボタンを使います。
 
 ## エージェントに設定を頼む
 
@@ -375,7 +388,7 @@ Historyだけを止めるには、手で起動するreaderに`--disable-history`
 
 ## 止める・戻す
 
-cockpitのSettingsで入れた場合は、**Phone access**を切ります（または`agentstack-mobile off`）。launchdのjobとplistが消えます。手で起動した場合は、readerを実行したターミナルでCtrl-Cを押します。どちらの場合も、専用Serveは自分で外します。
+WSL2のSettingsで設定した場合は[上の戻し方](#wsl2でphone-accessを使う)に従います。macOSではCockpitの**Phone access**を切るか`agentstack-mobile off`を実行することで、launchdのjobとplistが消えます。手で起動した場合は、readerを実行したターミナルでCtrl-Cを押します。手で追加したServeは、元の設定に対応するコマンドで外します。
 
 ```sh
 tailscale serve --https=9443 off
