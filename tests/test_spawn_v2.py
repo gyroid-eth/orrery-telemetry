@@ -1150,7 +1150,8 @@ def test_canonical_launcher_timeout_keeps_5s_grace_and_removes_credentials(monke
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
     monkeypatch.setattr(server, "_mcp_call", lambda m, a, timeout=15: {"ok": True, "data": {"id": 73, "name": "QuietCurie", "registration_token": "tok"} if m == "register_agent" else {}})
     monkeypatch.setattr(server.subprocess, "Popen", lambda *a, **k: StuckProc())
-    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
+    monkeypatch.setattr(server.subprocess, "run",
+                        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout="", stderr=""))
     monkeypatch.setattr(server.os, "killpg", lambda *a: events.append(("killpg", a)))
 
     for payload in ({"provider": "claude"}, {"provider": "codex", "model": server._codex_models()[0]}):
