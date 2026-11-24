@@ -88,7 +88,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":45}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":46}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -696,13 +696,19 @@ API 43 から、停止した Claude の `resume_mode: conversation_only` でも�
 {"session":"SampleAgent","open":false,"tools":{"browser":{"device":"browser-device-id"},"screen":{"server":"orrery-screen","access":"operate"}}}
 ```
 
-API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、停止を確認できる Claude／Codex CLI の子に `permission` を指定できます。一覧の `history_binding: bound` の `history_session_id` と、`computer_use`（`off`、`view`、`control`）または `browser_use`（真偽値）の片方だけを渡します。`open` も指定できます。サーバーは会話の一致と tmux セッション・稼働中の lease がないことを照合します。シェルが残っている場合は先に終了してください。
+API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、停止を確認できる Claude／Codex CLI の子に `permission` を指定できます。API 46 は、同じ条件を満たす親なしで生成されたエージェントにも対応します。直接起動、常駐、Codex App、会話のみの再開、fresh／global は対象外です。旧運用の一覧は `permission_resume_supported` と短い英語の `permission_resume_reason` を返します。直接起動などで設定の記録がない場合の理由は `No saved launch settings; use Resume` です。
+
+稼働中の対象には、まず `check_only:true` を付けてリクエストします。`history_binding: bound` の `history_session_id` と、`computer_use`（`off`、`view`、`control`）または `browser_use`（真偽値）の片方だけを指定します。この確認に成功すると `{"ok":true,"action":"validated"}` を返し、設定と Mail 登録はそのままです。
 
 ```json
-{"session":"SampleAgent","open":false,"permission":{"history_session_id":"01234567-1234-1234-1234-012345678901","browser_use":true}}
+{"session":"SampleAgent","open":false,"check_only":true,"permission":{"history_session_id":"01234567-1234-1234-1234-012345678901","browser_use":true}}
 ```
 
-子ごとの設定変更ロック内で保存値を読み、元の `base` と変更対象以外の道具・承認を維持します。`permission` と `base`／`tools` の併用は拒否します。standalone、常駐 agent、会話のみの再開、CLI 以外の子は対象外です。画面とブラウザーが同じ MCP を共有する場合や、選んだ構成を用意できない場合は理由を返し、保存値を維持します。Claude の Browser Off は元の `base` が `default` でも適用されます。Codex の Chrome 拡張を別に設定している場合は先に解除してください。成功応答には `tools_changed: true`、`base`、変更後の `tools` が含まれます。
+次に `POST /api/exit` へ同じ `session` と `history_session_id` を渡します。両方のリクエストで、対象の会話、Mail 登録、保存された起動経路を照合します。Cockpit は停止を待ち、同じ `/api/jump` を `check_only` を省いて送ります。サーバーは会話・登録を再検証して、対象の tmux セッションと稼働中の lease がないことを確認します。`open:false` は端末ウィンドウを開かずに再開します。
+
+設定変更ロック内で元の `base` と変更対象以外の道具・承認を維持します。`permission` と `base`／`tools` の併用は拒否します。画面とブラウザーが同じ MCP を共有する場合や選んだ構成を用意できない場合は理由を返し、元の設定を維持します。Claude の Browser Off は元の `base` が `default` でも適用します。Codex の Chrome 拡張を別に設定している場合は先に解除してください。
+
+成功応答には `action:"resumed"`、`tools_changed:true`、`base`、変更後の `tools` が含まれます。Codex の再開では会話の binding と待機プロンプトを最大15秒待ちます。確認できず停止を確認した場合は設定を戻します。再開も停止も確認できない場合は `ok:false`、`error`、`resume_confirmation_pending:true` を返します。この場合は再試行前にセッションの状態を確認してください。
 
 ## POST `/api/exit`
 
@@ -719,6 +725,8 @@ response:
 ```
 
 `running / finished` category かつ実在 tmux session だけが対象です。`warm-*` / `pending-*` は拒否します。attached session は処理を止めず `warn-attached` を actions に加えます。
+
+API 46 の旧運用では `history_session_id` を指定できます。指定すると、稼働中の tmux セッションと保存された会話・登録・起動経路の一致を確認してから終了します。
 
 ## POST `/api/kill`
 

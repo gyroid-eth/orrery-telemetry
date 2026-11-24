@@ -988,7 +988,9 @@ def inspect_retained(
     project_key: str,
     program: str,
     now: datetime | None = None,
+    allow_active: bool = False,
 ) -> dict[str, Any]:
+    """Verify saved state and credentials, including an active launch during preflight."""
     state_path, token_path, _home, _mcp, lock_path = _paths(runtime_dir, agent_name)
     if not state_path.exists():
         tombstone_path = runtime_dir / "child-resume-tombstones" / f"{agent_id}.json"
@@ -1029,15 +1031,16 @@ def inspect_retained(
             raise ResumeStateError(
                 "config_unrestorable", "child resume state is incomplete"
             )
-        if state.get("resume_in_progress_at") is not None:
-            raise ResumeStateError("config_unrestorable", RESUME_NOT_FINISHED)
-        require_retired(state)
-        _parse_timestamp(state.get("retired_at"), "retired_at")
-        expires_at = _parse_timestamp(state.get("resume_expires_at"), "resume_expires_at")
-        if _utc_now(now) >= expires_at:
-            raise ResumeStateError(
-                "retention_expired", "child resume retention has expired"
-            )
+        resumed = state.get("resume_in_progress_at") is not None
+        active = state.get("retired_at") is None or resumed
+        if not (allow_active and active):
+            if resumed:
+                raise ResumeStateError("config_unrestorable", RESUME_NOT_FINISHED)
+            require_retired(state)
+            _parse_timestamp(state.get("retired_at"), "retired_at")
+            expires_at = _parse_timestamp(state.get("resume_expires_at"), "resume_expires_at")
+            if _utc_now(now) >= expires_at:
+                raise ResumeStateError("retention_expired", "child resume retention has expired")
         state_token = state.get("registration_token")
         try:
             canonical = _read_private(
@@ -1303,7 +1306,7 @@ def child_session_live(
     # Only these mean "no such session". Any other failure, such as a server
     # socket this user cannot open ("error connecting … (permission denied)"),
     # says nothing about the session and must not be read as "gone".
-    gone = ("can't find session" in reason or "no server running" in reason
+    gone = (reason.strip() == "no sessions" or "can't find session" in reason or "no server running" in reason
             or ("error connecting" in reason and "no such file or directory" in reason))
     if not gone:
         return None

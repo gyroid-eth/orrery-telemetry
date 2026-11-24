@@ -61,6 +61,10 @@ def stopped(request, tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_transcript_path", lambda name: str(transcript))
     monkeypatch.setattr(server, "_transcript_cwd", lambda path: str(project))
     monkeypatch.setattr(server, "_claude_conversation_reason", lambda name: (None, ""))
+    monkeypatch.setattr(server, "_claude_registration", lambda name: registration)
+    monkeypatch.setattr(server, "_claude_history_binding", lambda *a, **k: {
+        "history_binding": "bound", "history_session_id": SID, "transcript_path": str(transcript),
+        "history_receipt_ts": "2026-10-01T10:00:00"})
     monkeypatch.setattr(server, "_claude_resume_material", lambda name: (registration, "fixture-owner",
         child_resume.inspect_retained(runtime, NAME, **registration)))
     old = child_tools.normalize("mail-only", {"mcp": ["reader"]})
@@ -188,7 +192,8 @@ def test_permission_codex_resume_creates_a_session_before_trying_to_open_it(stop
     monkeypatch.setattr(server, "_open_terminal_tmux", lambda *a, **k: pytest.fail("must not attach to a replacement"))
 
     def duplicate(args, *, title, open_terminal):
-        assert args[:5] == ["tmux", "new-session", "-d", "-s", NAME]
+        assert args[:8] == ["tmux", "new-session", "-d", "-P", "-F",
+                            "#{session_id}|#{session_created}|#{pid}", "-s", NAME]
         assert open_terminal is False
         return {"ok": False, "error": "duplicate session"}
 
@@ -203,7 +208,9 @@ def test_permission_rejects_whole_selection_and_invalid_patch_values(monkeypatch
     for options in ({"permission": browser, "base": "mail-only"}, {"permission": browser, "tools": {}},
                     {"permission": {**browser, "computer_use": "off"}},
                     {"permission": {"history_session_id": SID, "browser_use": 1}},
-                    {"permission": {"computer_use": "view"}}):
+                    {"permission": {"computer_use": "view"}},
+                    {"check_only": True},
+                    {"permission": browser, "check_only": "true"}):
         assert not server.do_jump(NAME, **options)["ok"]
 
 
@@ -383,6 +390,8 @@ def test_cli_uses_api_full_replacement_and_surfaces_failure(tmp_path):
      {"base": "mail-only", "tools": {"browser": True}, "open_terminal": False}),
     ({"session": NAME, "permission": {"history_session_id": SID, "browser_use": False}},
      {"permission": {"history_session_id": SID, "browser_use": False}}),
+    ({"session": NAME, "check_only": True, "permission": {"history_session_id": SID, "browser_use": False}},
+     {"check_only": True, "permission": {"history_session_id": SID, "browser_use": False}}),
 ])
 def test_http_forwards_only_explicit_tools_fields(monkeypatch, body, options):
     calls = []
@@ -647,3 +656,179 @@ def test_accepted_launch_cleanup_error_is_pending_success(stopped, monkeypatch):
     child_resume.finish_tools_change(runtime, NAME, saved["generation"], commit=False)
     assert json.loads(record.read_text())["tools"] == {}
     assert not journal.exists()
+
+
+def mark_generated_standalone(stopped):
+    runtime, record, provider, state = stopped
+    if provider == "codex":
+        state["codex_standalone"] = True
+        child_resume._atomic_json(runtime / "child-agents" / f"{NAME}.json", state)
+    else:
+        saved = json.loads(record.read_text())
+        claude_chrome_policy._write(str(record), {**saved, "standalone": True})
+
+
+def test_permission_resume_preserves_generated_standalone(stopped, monkeypatch):
+    runtime, record, provider, state = stopped
+    mark_generated_standalone(stopped)
+    configure_fixture_browser(provider)
+
+    def resume(name, **options):
+        assert (name, options) == (NAME, {"open_terminal": False, "expected_history_session_id": SID})
+        assert json.loads(record.read_text())["tools"] == {"browser": {"device": ""}, "mcp": ["reader"]}
+        if provider == "claude":
+            assert json.loads(record.read_text())["standalone"] is True
+        else:
+            updated = json.loads((runtime / "child-agents" / f"{NAME}.json").read_text())
+            assert updated["codex_standalone"] is True
+            assert updated["codex_mcp_profile"] == state["codex_mcp_profile"]
+            assert "parent_agent" not in updated
+        return {"ok": True, "action": "resumed"}
+
+    monkeypatch.setattr(server, "do_resume", resume)
+    result = server.do_jump(NAME, open_terminal=False, permission={"history_session_id": SID, "browser_use": True})
+    assert result["ok"] and result["tools_changed"], result
+
+
+def test_preflight_and_exit_verify_same_active_standalone(stopped, monkeypatch):
+    runtime, record, provider, state = stopped
+    mark_generated_standalone(stopped)
+    configure_fixture_browser(provider)
+    state_file = runtime / "child-agents" / f"{NAME}.json"
+    child_resume._atomic_json(state_file, {**state, "retired_at": None, "resume_expires_at": None})
+    live = {"session_id": "$17", "created": 25, "server_pid": "101"}
+    monkeypatch.setattr(server, "tmux_state", lambda: {NAME: live})
+    monkeypatch.setattr(server, "_child_session_live", lambda *a: True)
+    monkeypatch.setattr(server, "_card_codex_provenance", lambda *a: {"launch_origin": "child"})
+    monkeypatch.setattr(server, "_codex_resume_child_home", lambda *a, **k: (str(runtime), "orrery-only", True))
+    monkeypatch.setattr(server.shutil, "which", lambda command: "/bin/true")
+    monkeypatch.setenv("AGENTSTACK_HOME", str(ROOT))
+    monkeypatch.setattr(server, "ABS_CLAUDE", sys.executable)
+    monkeypatch.setattr(server, "HOOKS_DIR", str(ROOT / "hooks"))
+    monkeypatch.setattr(server, "_claude_resume_proxy_runner", lambda: sys.executable)
+    monkeypatch.setattr(server, "_tmux_session_env", lambda *args: "old-launch-id")
+    monkeypatch.setattr(server, "_mcp_tool_parameters", lambda tool: {"existing_agent_id"})
+    monkeypatch.setattr(server, "_mcp_call", lambda *a, **k: pytest.fail("preflight must not change Mail"))
+    monkeypatch.setattr(server, "do_resume", lambda *a, **k: pytest.fail("preflight must not launch"))
+    calls = []
+    monkeypatch.setattr(server, "lookup_agent", lambda name, **kw: {
+        "name": name, "category": "agent", "program": provider, "running": True, "attached": False})
+    monkeypatch.setattr(server, "_tmux", lambda args: f"{NAME}|25|101")
+    monkeypatch.setattr(server, "_tmux_run", lambda args, **kw:
+        calls.append(args) or subprocess.CompletedProcess(args, 0, provider, ""))
+    monkeypatch.setattr(server.time, "sleep", lambda seconds: None)
+    permission = {"history_session_id": SID, "browser_use": True}
+    before = (state_file.read_bytes(), record.read_bytes())
+    assert server.do_jump(NAME, check_only=True, permission=permission) == {"ok": True, "action": "validated"}
+    assert (state_file.read_bytes(), record.read_bytes()) == before
+    assert calls == []
+    stale = {"history_session_id": "11234567-1234-1234-1234-012345678901"}
+    assert not server.do_jump(NAME, check_only=True, permission={**permission, **stale})["ok"]
+    assert not server.do_exit(NAME, **stale)["ok"]
+    assert calls == []
+    active_state = json.loads(state_file.read_text())
+    child_resume._atomic_json(state_file, {**active_state, "agent_id": 999})
+    assert not server.do_jump(NAME, check_only=True, permission=permission)["ok"]
+    assert not server.do_exit(NAME, history_session_id=SID)["ok"]
+    assert calls == []
+    child_resume._atomic_json(state_file, active_state)
+    assert server.do_exit(NAME, history_session_id=SID)["ok"]
+    assert any(args[0] == "send-keys" for args in calls)
+    assert all(args[2] == "$17" for args in calls)
+    calls.clear()
+    monkeypatch.setattr(server, "_tmux", lambda args: f"{NAME}|26|101")
+    assert not server.do_exit(NAME, history_session_id=SID)["ok"]
+    assert calls == []
+
+
+def test_permission_resumes_only_with_saved_selection(stopped, monkeypatch):
+    runtime, record, provider, state = stopped
+    mark_generated_standalone(stopped)
+    row = {"name": NAME, "program": provider, "history_binding": "bound", "history_session_id": SID,
+           "transcript_path": str(runtime.parent / "project" / f"{SID}.jsonl")}
+    assert server._agent_card_fields(row, {}, {}, state, ())["permission_resume_supported"] is True
+    record.unlink()
+    fields = server._agent_card_fields(row, {}, {}, state, ())
+    assert fields["permission_resume_supported"] is False
+    assert fields["permission_resume_reason"] == "No saved launch settings; use Resume"
+    permission = {"history_session_id": SID, "browser_use": True}
+    assert server.do_jump(NAME, check_only=True, permission=permission)["error"] == fields["permission_resume_reason"]
+
+
+def test_codex_permission_readiness_waits_for_own_binding_and_prompt(stopped, monkeypatch):
+    runtime, _, provider, state = stopped
+    if provider != "codex":
+        pytest.skip("Codex has a separate readiness path")
+    monkeypatch.setattr(server, "CODEX_LAUNCH_DIR", str(runtime))
+    launch = {"launch_kind": "resume", "launch_origin": "child", "resume_session_id": SID, "expected_at": 30,
+              **{key: state[key] for key in ("agent_id", "agent_name", "project_key", "program")}}
+    child_resume._atomic_json(runtime / "7.json", launch)
+    times = iter([0, 0, 0, 0, 1, 1, 1])
+    monkeypatch.setattr(server.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(server.time, "sleep", lambda _: None)
+    screens = iter(["Use existing model", "› Ask Codex to do anything\n  gpt-5.5 high\n  ? for shortcuts"])
+    calls = []
+
+    def tmux(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, next(screens) if args[0] == "capture-pane" else "", "")
+
+    monkeypatch.setattr(server, "_tmux_run", tmux)
+    assert server._await_codex_permission_resume(NAME, state, SID, "$17|30|101", timeout=2)
+    assert [args[0] for args in calls] == ["has-session", "capture-pane", "has-session", "capture-pane"]
+    assert all(args[-1] == "$17" for args in calls)
+    monkeypatch.setattr(server.time, "monotonic", lambda: 0)
+    assert not server._await_codex_permission_resume(NAME, state, SID, "$17|30|101", timeout=0)
+
+
+def test_unconfirmed_codex_resume_releases_only_the_new_session(stopped, monkeypatch):
+    runtime, _, provider, state = stopped
+    if provider != "codex":
+        pytest.skip("Codex has a separate readiness path")
+    state_file = runtime / "child-agents" / f"{NAME}.json"
+    child_resume._atomic_json(state_file, {**state, "resume_in_progress_at": "2026-11-24T00:00:00Z"})
+    monkeypatch.setattr(server, "_tmux", lambda args: f"{NAME}|$17|30|101")
+    commands = []
+    monkeypatch.setattr(server, "_tmux_run", lambda args, **kw: commands.append(args))
+    restored = []
+    monkeypatch.setattr(server, "_set_claude_mail_retired", lambda name, row, *, retired: restored.append(name))
+    result = server._unconfirmed_codex_permission_resume(NAME, state, "$17|30|101")
+    assert result == {"ok": False, "error": "Could not confirm Codex resumed"}
+    assert commands == [["kill-session", "-t", "$17"]]
+    assert "resume_in_progress_at" not in json.loads(state_file.read_text())
+    assert restored == [NAME]
+
+    monkeypatch.setattr(server, "_tmux", lambda args: f"{NAME}|$17|30|102")
+    monkeypatch.setattr(server, "_child_session_live", lambda *a: None)
+    commands.clear()
+    result = server._unconfirmed_codex_permission_resume(NAME, state, "$17|30|101")
+    assert result["resume_confirmation_pending"] is True
+    assert commands == []
+
+
+def test_http_forwards_history_sid_only_when_exit_is_guarded(monkeypatch):
+    calls = []
+    monkeypatch.setattr(server, "do_exit", lambda name, **kwargs:
+        calls.append((name, kwargs)) or {"ok": True})
+    http = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+    thread = threading.Thread(target=http.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for fields in ({}, {"history_session_id": SID}):
+            req = urllib.request.Request(f"http://127.0.0.1:{http.server_port}/api/exit",
+                data=json.dumps({"session": NAME, **fields}).encode(),
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                assert response.status == 200
+        assert calls == [(NAME, {}), (NAME, {"history_session_id": SID})]
+    finally:
+        http.shutdown()
+        http.server_close()
+        thread.join(timeout=5)
+
+
+def test_empty_tmux_server_can_confirm_stop(tmp_path):
+    def empty_tmux(args, **kwargs):
+        return subprocess.CompletedProcess(args, 1, "", "no sessions\n")
+
+    assert child_resume.child_session_live(tmp_path, NAME, boot=None, tmux_run=empty_tmux) is False
